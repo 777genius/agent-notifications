@@ -80,7 +80,39 @@ for scenario in staged staged_corrupt offline fresh_offline download checksum mi
         eval "$(declare -f download_binary | sed '1s/download_binary/real_download_binary/')"
         MAX_RETRIES=1 RETRY_DELAY=0
         download_checksums() {
-            printf '#!/bin/bash\necho claude-notifications-new-version\nexit 0\n' > "$SCRIPT_DIR/payload"
+            cat > "$SCRIPT_DIR/payload" <<'PAYLOAD'
+#!/bin/bash
+# agent-notifications-managed-writer-protocol-v1
+if [ "$1" = internal-install-runtime ]; then
+    stage="" target=""
+    shift
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --stage) stage=$2; shift 2 ;;
+            --target) target=$2; shift 2 ;;
+            --entry|--control-root|--consumer) shift 2 ;;
+            --require-native|--refresh|--remove|--purge-native) shift ;;
+            *) shift ;;
+        esac
+    done
+    [ -n "$stage" ] && [ -n "$target" ] || exit 2
+    for f in "$stage"/*; do
+        [ -e "$f" ] || continue
+        base=$(basename "$f")
+        case "$base" in .install-stage.*|old-*|unusable-*) continue ;; esac
+        if [ -d "$f" ]; then
+            rm -rf "$target/$base"
+            cp -R "$f" "$target/$base"
+        else
+            cp "$f" "$target/$base"
+            chmod +x "$target/$base" 2>/dev/null || true
+        fi
+    done
+    exit 0
+fi
+echo claude-notifications-new-version
+exit 0
+PAYLOAD
             [ "$scenario" != executable ] || printf '#!/bin/bash\nexit 1\n' > "$SCRIPT_DIR/payload"
             head -c 1000000 /dev/zero >> "$SCRIPT_DIR/payload"
             [ "$scenario" != missing_checksum ] || return 1
@@ -103,10 +135,14 @@ for scenario in staged staged_corrupt offline fresh_offline download checksum mi
             if [ "$scenario" = interrupt ]; then sh -c 'kill -TERM "$PPID"'; fi
         }
         download_terminal_notifier_modern() {
-            [ "$scenario" = fresh_success ] || return 1
+            case "$scenario" in
+                success|fresh_success|staged|optional_interrupt) ;;
+                *) return 1 ;;
+            esac
             mkdir -p "$SCRIPT_DIR/ClaudeNotifier.app/Contents/MacOS"
             printf '#!/bin/bash\necho new-notifier\n' > "$SCRIPT_DIR/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern"
             chmod +x "$SCRIPT_DIR/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern"
+            printf '{"SchemaVersion":1,"ProtocolVersion":1,"DecoderFloor":1,"ExecutableSHA256":"test"}\n' > "$SCRIPT_DIR/ClaudeNotifier.app.managed-runtime.json"
         }
         download_terminal_notifier() {
             [ "$scenario" = legacy_fallback ] || return 1
@@ -141,22 +177,19 @@ for scenario in staged staged_corrupt offline fresh_offline download checksum mi
     case "$scenario" in
         staged|success|fresh_success|optional_interrupt)
             "$binary" | grep -q new-version
-            [ -x "$case_dir/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern" ] ;;
+            [ -x "$case_dir/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern" ]
+            assert_output new-notifier 'attested modern notifier must be published' "$case_dir/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern"
+            [ -f "$case_dir/ClaudeNotifier.app.managed-runtime.json" ] ;;
         legacy_fallback|retained_legacy)
-            [ "$status" = 0 ]
-            "$binary" | grep -q new-version
-            # Match runtime discovery: prefer the modern path if it exists.
-            selected="$case_dir/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern"
-            [ -e "$selected" ] || selected="$case_dir/terminal-notifier.app/Contents/MacOS/terminal-notifier"
-            [ "$("$selected")" = legacy-notifier ]
-            [ ! -e "$case_dir/ClaudeNotifier.app" ] ;;
+            [ "$status" != 0 ]
+            assert_output old-version 'existing binary was not preserved' "$binary" ;;
         fresh_desktop|fresh_offline) [ ! -e "$binary" ]; [ "$status" != 0 ] ;;
         *) assert_output old-version 'existing binary was not preserved' "$binary"
            assert_output old-version 'existing binary symlink was not preserved' "$case_dir/claude-notifications" ;;
     esac
     [ "$scenario" != staged_corrupt ] || assert 'corrupt staged binary must fail installation' test "$status" != 0
     assert_output utility 'existing utility was not preserved' cat "$case_dir/sound-preview"
-    if [[ "$scenario" != fresh_* && "$scenario" != desktop && "$scenario" != *legacy* && "$scenario" != *fallback ]]; then
+    if [[ "$scenario" != fresh_* && "$scenario" != desktop && "$scenario" != *legacy* && "$scenario" != *fallback && "$scenario" != success && "$scenario" != staged && "$scenario" != optional_interrupt ]]; then
         assert_output old-notifier 'existing notifier was not preserved' "$case_dir/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern"
     fi
     if [ "$scenario" = failed_fallback ]; then

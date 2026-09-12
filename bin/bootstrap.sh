@@ -47,6 +47,9 @@ _KEEP_CONFIG_STAGE=false
 PRODUCT=""
 BOOTSTRAP_TAG=""
 _BOOTSTRAP_TMP=""  # temp file path for trap (set -u safe)
+CONFIGURE_NOTIFICATIONS=true
+CONFIGURE_BINARY=""
+CONFIGURE_ARGS=()
 
 # ──────────────────────────────────────────────
 
@@ -979,17 +982,72 @@ print_success() {
 
 # Product selection must precede any filesystem or host CLI mutation.
 select_product() {
+    local seen_agent_notify=false seen_skip_agent_notify=false
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --product)
                 [ "$#" -ge 2 ] && [ -z "$PRODUCT" ] || { echo "Use --product claude|codex|both once." >&2; return 1; }
                 PRODUCT="$2"; shift 2 ;;
+            --agent-notify)
+                seen_agent_notify=true
+                CONFIGURE_NOTIFICATIONS=true
+                shift ;;
+            --skip-agent-notify)
+                seen_skip_agent_notify=true
+                CONFIGURE_NOTIFICATIONS=false
+                shift ;;
+            --navigation|--app|--team-id|--allow-unknown-caller|--allow-caller-asserted|--codex-home)
+                [ "$#" -ge 2 ] || { echo "Missing value for $1" >&2; return 1; }
+                case "$1" in
+                    --navigation)
+                        [ "$2" = none ] || { echo "Invalid navigation: $2" >&2; return 1; } ;;
+                    --app)
+                        case "$2" in
+                            /*) ;;
+                            *) echo "App path must be absolute." >&2; return 1 ;;
+                        esac
+                        case "$2" in
+                            *..*) echo "App path must be a physical path." >&2; return 1 ;;
+                        esac ;;
+                    --codex-home)
+                        case "$2" in
+                            /*) ;;
+                            *) echo "codex-home must be absolute." >&2; return 1 ;;
+                        esac ;;
+                esac
+                CONFIGURE_ARGS+=("$1" "$2")
+                shift 2 ;;
+            --request-permission|--json)
+                CONFIGURE_ARGS+=("$1")
+                shift ;;
             --help|-h)
-                echo "Usage: bash bootstrap.sh [--product claude|codex|both]"
+                echo "Usage: bash bootstrap.sh [--product claude|codex|both] [--agent-notify|--skip-agent-notify] [--navigation none]"
                 exit 0 ;;
             *) echo "Unknown option: $1" >&2; return 1 ;;
         esac
     done
+    if [ "$seen_agent_notify" = true ] && [ "$seen_skip_agent_notify" = true ]; then
+        echo "--agent-notify and --skip-agent-notify are mutually exclusive." >&2
+        return 1
+    fi
+    if [ "$CONFIGURE_NOTIFICATIONS" = true ]; then
+        local has_route=false arg
+        if [ "${#CONFIGURE_ARGS[@]}" -gt 0 ]; then
+            for arg in "${CONFIGURE_ARGS[@]}"; do
+                case "$arg" in
+                    --navigation|--app|--team-id|--allow-unknown-caller|--allow-caller-asserted)
+                        has_route=true ;;
+                esac
+            done
+        fi
+        if [ "$has_route" != true ]; then
+            CONFIGURE_ARGS+=(--navigation none --allow-unknown-caller true --allow-caller-asserted false)
+        fi
+    fi
+    if [ "$CONFIGURE_NOTIFICATIONS" != true ] && [ "${#CONFIGURE_ARGS[@]}" -ne 0 ]; then
+        echo "Route flags require --agent-notify." >&2
+        return 1
+    fi
     if [ -z "$PRODUCT" ]; then
         if ! { exec 3<>/dev/tty; } 2>/dev/null; then
             echo "No controlling TTY. Specify --product claude|codex|both." >&2
@@ -1279,9 +1337,35 @@ install_codex() {
     [ "$actual" = "claude-notifications v$version" ] || {
         echo "Binary must match $tag and support setup-codex." >&2; return 1;
     }
-    CN_PRODUCT=codex "$binary" setup-codex --plugin-root "$bundle" --dry-run </dev/null || return 1
+    local setup_codex_home="" i=0
+    while [ "$i" -lt "${#CONFIGURE_ARGS[@]}" ]; do
+        if [ "${CONFIGURE_ARGS[$i]}" = "--codex-home" ]; then
+            i=$((i + 1))
+            setup_codex_home="${CONFIGURE_ARGS[$i]}"
+        fi
+        i=$((i + 1))
+    done
+    run_codex_setup() {
+        if [ -n "$setup_codex_home" ]; then
+            CN_PRODUCT=codex "$binary" setup-codex --plugin-root "$bundle" --skip-agent-notify --codex-home "$setup_codex_home" "$@" </dev/null
+        else
+            CN_PRODUCT=codex "$binary" setup-codex --plugin-root "$bundle" --skip-agent-notify "$@" </dev/null
+        fi
+    }
+    run_codex_setup --dry-run || return 1
     config_preflight || return 1
-    CN_PRODUCT=codex "$binary" setup-codex --plugin-root "$bundle" </dev/null || return $?
+    run_codex_setup || return $?
+    if [ -n "$setup_codex_home" ]; then
+        CONFIGURE_BINARY="$setup_codex_home/claude-notifications-go/bin/claude-notifications"
+    else
+        CONFIGURE_BINARY="${CODEX_HOME:-$HOME/.codex}/claude-notifications-go/bin/claude-notifications"
+    fi
+    if [ ! -x "$CONFIGURE_BINARY" ]; then
+        echo "Committed Codex runtime binary missing after setup-codex." >&2
+        return 1
+    fi
+    rm -rf "$_BOOTSTRAP_STAGE"
+    _BOOTSTRAP_STAGE=""
     echo "Codex installed. Start Codex, run /hooks, review and trust the entries."
 }
 
@@ -1292,6 +1376,7 @@ install_claude() {
     find_plugin_root || return 1
     download_binary || return 1
     setup_iterm2_venv || return 1
+    CONFIGURE_BINARY="${PLUGIN_ROOT}/bin/claude-notifications"
     if [ "$PRODUCT" = both ]; then
     echo "Agent Notifications installed; continuing with Codex."
     fi
@@ -1326,7 +1411,27 @@ main() {
         fi
     fi
     initialize_config || return 1
+    configure_agent_notify
     [ "$PRODUCT" != claude ] || print_success
+}
+
+# Agent-notify is default-on, but a failed configure must not undo hooks/plugin install.
+configure_agent_notify() {
+    [ "$CONFIGURE_NOTIFICATIONS" = true ] || return 0
+    if [ -z "$CONFIGURE_BINARY" ]; then
+        CONFIGURE_BINARY="${PLUGIN_ROOT}/bin/claude-notifications"
+    fi
+    if [ ! -x "$CONFIGURE_BINARY" ]; then
+        echo -e "${YELLOW}⚠ Agent-notify setup skipped; installer binary not found.${NC}" >&2
+        echo -e "${YELLOW}  Plugin/hooks install succeeded. Retry after the binary is available.${NC}" >&2
+        return 0
+    fi
+    if ! "$CONFIGURE_BINARY" setup-notifications configure --provider "$PRODUCT" "${CONFIGURE_ARGS[@]}"; then
+        echo -e "${YELLOW}⚠ Agent-notify setup failed; plugin/hooks install succeeded.${NC}" >&2
+        echo -e "${YELLOW}  Desktop/hook notifications still work. Retry:${NC}" >&2
+        echo -e "${YELLOW}  \"$CONFIGURE_BINARY\" setup-notifications configure --provider ${PRODUCT} ${CONFIGURE_ARGS[*]}${NC}" >&2
+    fi
+    return 0
 }
 
 main "$@"

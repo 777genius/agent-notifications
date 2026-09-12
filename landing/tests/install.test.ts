@@ -9,6 +9,10 @@ test("verified bootstrap contract for each product and supported target", () => 
         product;
       assert.equal(command(product, target, "install"), expected);
       assert.equal(command(product, target, "update"), expected);
+      assert.equal(
+        command(product, target, "install", false),
+        expected + " --skip-agent-notify",
+      );
       assert.equal(command(product, target, "configure"), null);
     }
   assert.equal(command("claude", "unknown", "install"), null);

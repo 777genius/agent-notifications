@@ -137,9 +137,19 @@ if args==['--version']:
 if args[0]=='setup-codex':
     if os.environ.get('FAIL_REGISTER')=='1': sys.exit(1)
     if '--dry-run' not in args:
-        p=pathlib.Path(os.environ['CODEX_HOME']); p.mkdir(exist_ok=True)
+        p=pathlib.Path(os.environ['CODEX_HOME'])
+        if '--codex-home' in args:
+            p=pathlib.Path(args[args.index('--codex-home')+1])
+        p.mkdir(parents=True, exist_ok=True)
         (p/'fixture-registration').write_text('registered')
+        dest=p/'claude-notifications-go'/'bin'
+        dest.mkdir(parents=True, exist_ok=True)
+        target=dest/'claude-notifications'
+        target.write_bytes(pathlib.Path(sys.argv[0]).read_bytes())
+        target.chmod(0o755)
         if os.environ.get('FAIL_SETUP_INIT')=='1': sys.exit(3)
+    sys.exit()
+if args[0]=='setup-notifications':
     sys.exit()
 assert args[0]=='config'
 legacy=pathlib.Path(os.environ['HOME'])/'.claude/claude-notifications-go/config.json'

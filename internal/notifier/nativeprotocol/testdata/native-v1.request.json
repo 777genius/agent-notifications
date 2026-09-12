@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "correlationID": "00000000-0000-4000-8000-000000000001",
+  "nonce": "00000000-0000-4000-8000-000000000002",
+  "bootID": "fixture-only",
+  "notAfter": 110,
+  "title": "--help",
+  "body": "-launchedViaLaunchServices",
+  "subtitle": "-title",
+  "category": "info",
+  "action": "none",
+  "silent": true
+}

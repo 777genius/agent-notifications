@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,10 +13,12 @@ import (
 )
 
 type setupCodexOptions struct {
-	codexHome  string
-	pluginRoot string
-	print      bool
-	dryRun     bool
+	codexHome     string
+	pluginRoot    string
+	print         bool
+	dryRun        bool
+	configure     bool
+	configureArgs []string
 }
 
 // runSetupCodex registers this plugin's hooks with the Codex CLI.
@@ -88,6 +92,18 @@ func runSetupCodex(args []string) {
 		fmt.Printf("  preserved:   %d hook handler(s) from other tools\n", result.ForeignKept)
 	}
 	fmt.Println()
+	if opts.configure {
+		configure := append([]string{"--provider", "codex"}, opts.configureArgs...)
+		retryArgs := opts.configureArgs
+		if home := filepath.Clean(result.CodexHome); home != "" && filepath.IsAbs(home) {
+			configure = append([]string{"--provider", "codex", "--codex-home", home}, opts.configureArgs...)
+			retryArgs = append([]string{"--codex-home", home}, opts.configureArgs...)
+		}
+		code := executeNotificationConfigure(context.Background(), configure, os.Stdout, result.InstallDir)
+		if code != 0 {
+			reportAgentNotifySetupFailure(os.Stderr, "codex", retryArgs)
+		}
+	}
 	fmt.Println("Next step: start Codex, run /hooks, review the entries and trust them.")
 	fmt.Println("Codex asks for this once; the registration keeps working across plugin updates.")
 	fmt.Println("After updating the plugin, rerun setup-codex from the updated bundle to refresh the copy.")
@@ -99,12 +115,23 @@ func runSetupCodex(args []string) {
 
 func parseSetupCodexOptions(args []string) (setupCodexOptions, error) {
 	var opts setupCodexOptions
+	opts.configure = true
+	explicit, skip := false, false
+	var rest []string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--print":
 			opts.print = true
 		case "--dry-run":
 			opts.dryRun = true
+		case "--remove":
+			return opts, fmt.Errorf("unknown option: --remove")
+		case "--agent-notify":
+			explicit = true
+			opts.configure = true
+		case "--skip-agent-notify":
+			skip = true
+			opts.configure = false
 		case "--codex-home":
 			if i+1 >= len(args) {
 				return opts, fmt.Errorf("--codex-home requires a path")
@@ -118,11 +145,40 @@ func parseSetupCodexOptions(args []string) (setupCodexOptions, error) {
 			i++
 			opts.pluginRoot = args[i]
 		default:
-			return opts, fmt.Errorf("unknown option: %s", args[i])
+			rest = append(rest, args[i])
 		}
+	}
+	if explicit && skip {
+		return opts, fmt.Errorf("--agent-notify and --skip-agent-notify are mutually exclusive")
 	}
 	if opts.print && opts.dryRun {
 		return opts, fmt.Errorf("--print and --dry-run are mutually exclusive")
 	}
+	if opts.configure && (opts.print || opts.dryRun) {
+		if explicit {
+			return opts, fmt.Errorf("incompatible flags")
+		}
+		opts.configure = false
+	}
+	if opts.configure {
+		if len(rest) == 0 {
+			rest = agentNotifyDefaultNoneArgs()
+		}
+		opts.configureArgs = rest
+		_, _, err := parseNotificationConfigure(append([]string{"--provider", "codex"}, rest...))
+		return opts, err
+	}
+	if len(rest) != 0 {
+		return opts, fmt.Errorf("unknown option: %s", rest[0])
+	}
 	return opts, nil
+}
+
+func reportAgentNotifySetupFailure(w io.Writer, provider string, args []string) {
+	retry := "claude-notifications"
+	if executable, err := os.Executable(); err == nil {
+		retry = executable
+	}
+	fmt.Fprintf(w, "setup-codex: agent-notify setup failed; Codex hooks remain registered.\n")
+	fmt.Fprintf(w, "Retry: %s setup-notifications configure --provider %s %s\n", retry, provider, strings.Join(args, " "))
 }

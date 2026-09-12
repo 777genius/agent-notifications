@@ -210,7 +210,13 @@ jobs:
       - name: Create zip artifact
         run: |
           cd swift-notifier
+          if [ ! -f ClaudeNotifier.app.managed-runtime.json ]; then
+            echo "missing managed runtime attestation sidecar" >&2
+            exit 1
+          fi
           ditto -c -k --keepParent ClaudeNotifier.app ClaudeNotifier.app.zip
+          zip -u ClaudeNotifier.app.zip ClaudeNotifier.app.managed-runtime.json
+          unzip -l ClaudeNotifier.app.zip | grep -F ClaudeNotifier.app.managed-runtime.json
           ls -lh ClaudeNotifier.app.zip
 
       - name: Upload notifier artifact

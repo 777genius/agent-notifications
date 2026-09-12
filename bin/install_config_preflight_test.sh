@@ -21,9 +21,35 @@ functions = box/'functions.sh'
 functions.write_text((root/'install.sh').read_text().replace('main "$@"', ''))
 helper = box/'helper'
 helper.write_text("""#!/usr/bin/env python3
-import json,os,sys
+# agent-notifications-managed-writer-protocol-v1
+import json,os,shutil,sys
 if sys.argv[1:]==['--version']:
     print('claude-notifications 0.0.1'); sys.exit(0)
+if sys.argv[1:2]==['internal-install-runtime']:
+    stage=target=''
+    args=sys.argv[2:]
+    i=0
+    while i<len(args):
+        if args[i]=='--stage' and i+1<len(args):
+            stage=args[i+1]; i+=2
+        elif args[i]=='--target' and i+1<len(args):
+            target=args[i+1]; i+=2
+        elif args[i] in ('--entry','--control-root','--consumer') and i+1<len(args):
+            i+=2
+        else:
+            i+=1
+    assert stage and target
+    os.makedirs(target, exist_ok=True)
+    for name in os.listdir(stage):
+        src=os.path.join(stage,name)
+        dst=os.path.join(target,name)
+        if os.path.isdir(src):
+            if os.path.exists(dst):
+                shutil.rmtree(dst)
+            shutil.copytree(src,dst)
+        elif os.path.isfile(src):
+            shutil.copy2(src,dst)
+    sys.exit(0)
 assert sys.argv[1:]==['config','preflight-update','--stdin','--json']
 r=json.load(sys.stdin)
 with open(os.environ['TRACE'],'a') as f: f.write(json.dumps(r)+'\\n')
@@ -153,7 +179,7 @@ binary.chmod(0o755)
 plugin=box/'.claude-plugin'; plugin.mkdir()
 (plugin/'plugin.json').write_text('{"version":"9.9.9"}')
 installer=case/'install.sh'
-installer.write_text('#!/bin/bash\nsource '+q(functions)+'\ndetect_platform\nINSTALL_CONFIG_HELPER='+q(helper)+'\n'+isolation+iterm)
+installer.write_text('#!/bin/bash\n# agent-notifications-managed-writer-protocol-v1\nsource '+q(functions)+'\ndetect_platform\nINSTALL_CONFIG_HELPER='+q(helper)+'\n'+isolation+iterm)
 installer.chmod(0o755)
 env=dict(os.environ,AGENT_NOTIFICATIONS_CONFIG=str(config),TRACE=str(case/'trace'))
 before=binary.read_bytes()

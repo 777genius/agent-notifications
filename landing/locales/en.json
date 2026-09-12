@@ -194,6 +194,10 @@
     "help": "Installation help",
     "claudeHelp": "Claude installation help",
     "installationInstructions": "Installation instructions",
-    "configureSettings": "⚙ Configure settings"
+    "configureSettings": "⚙ Configure settings",
+    "agentNotify": {
+      "label": "Let agents send you notifications when they need your attention",
+      "hint": "Adds a tool so an agent can notify you during a task, not only when work stops."
+    }
   }
 }

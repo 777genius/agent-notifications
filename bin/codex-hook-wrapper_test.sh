@@ -27,6 +27,7 @@ if [ "$1" = version ]; then cat "$(dirname "$0")/version"; else cat "$(dirname "
 BIN
  cat > "$product/bin/install.sh" <<'INSTALL'
 #!/bin/sh
+# agent-notifications-managed-writer-protocol-v1
 echo install >> "$ROOT/installs"
 echo 1.42.0 > "$INSTALL_TARGET_DIR/version"
 INSTALL

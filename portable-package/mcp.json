@@ -1,0 +1,11 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "agent-notify": {
+      "type": "stdio",
+      "command": "./bin/claude-notifications",
+      "args": [],
+      "env": {}
+    }
+  }
+}

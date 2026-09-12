@@ -206,13 +206,17 @@ Run these commands in the bundle directory. If you have explicitly added the bin
 `PATH`, `agent-notifications setup-codex --plugin-root <bundle-directory>` also works.
 
 It installs a self-contained copy of the plugin at `~/.codex/claude-notifications-go` and writes
-the hook entries into `~/.codex/hooks.json`. Existing foreign hook definitions and unknown fields are preserved,
-and every run saves a uniquely named backup of the previous file next to it.
+the hook entries into `~/.codex/hooks.json`. Agent-initiated notify (MCP) is enabled by default
+with `--navigation none --allow-unknown-caller true --allow-caller-asserted false`. Pass `--skip-agent-notify` for hooks only. Existing foreign hook
+definitions and unknown fields are preserved, and every run saves a uniquely named backup of
+the previous file next to it.
 
-Then start Codex, run `/hooks`, review the entries and trust them.
+Then start Codex, run `/hooks`, review the entries and trust them. Open a new session so MCP
+can start; `/mcp` should list `agent_notifications`.
 
 Useful flags: `--dry-run` shows what would change, `--print` outputs the JSON so you can merge it
-yourself, `--codex-home` and `--plugin-root` override the paths.
+yourself, `--codex-home` and `--plugin-root` override the paths, `--skip-agent-notify` skips MCP
+registration. If agent-notify setup fails, hook registration remains in place.
 
 For manual updates, run the registration command again to refresh the installed copy.
 Unchanged hook definitions retain trust; changed definitions require review again.

@@ -1,6 +1,7 @@
 #!/bin/bash
 # install.sh - Auto-installer for claude-notifications binaries
 # Downloads the appropriate binary from GitHub Releases
+# agent-notifications-managed-writer-protocol-v1
 
 set -e
 
@@ -732,6 +733,9 @@ check_existing() {
         return 1
     fi
     if [ -f "$BINARY_PATH" ]; then
+        if ! LC_ALL=C grep -aqF 'agent-notifications-managed-writer-protocol-v1' "$BINARY_PATH"; then
+            return 1
+        fi
         if ! desktop_runtime_usable; then
             return 1
         fi
@@ -747,6 +751,33 @@ check_existing() {
         return 0
     fi
     return 1
+}
+
+# In-place refresh of an already compatible runtime. Historical writers are
+# never executed: the protocol marker is required in the existing bytes first.
+refresh_existing_runtime() {
+    [ -f "$BINARY_PATH" ] || return 1
+    LC_ALL=C grep -aqF 'agent-notifications-managed-writer-protocol-v1' "$BINARY_PATH" || return 1
+    "$BINARY_PATH" internal-install-runtime --refresh --stage "$SCRIPT_DIR" --target "$SCRIPT_DIR" --entry "$BINARY_NAME"
+}
+
+# Disposable acquisition refuses an existing or unclean destination before any
+# download. Bootstrap uses this to keep the live runtime untouched.
+validate_acquire_output() {
+    local out="${ACQUIRE_OUTPUT-}"
+    [ -n "$out" ] || return 1
+    case "$out" in
+        /*) ;;
+        *) return 1 ;;
+    esac
+    case "$out" in
+        *..*|*/) return 1 ;;
+    esac
+    if [ -e "$out" ] || [ -L "$out" ]; then
+        echo "Acquire destination already exists; existing runtime preserved." >&2
+        return 1
+    fi
+    return 0
 }
 
 # Download a utility binary (sound-preview, list-devices)
@@ -1161,8 +1192,10 @@ verify_executable() {
         echo -e "${RED}✗ Binary failed to execute (exit code: ${exit_code})${NC}" >&2
         echo -e "${RED}  Output: ${output}${NC}" >&2
         echo -e "${YELLOW}The downloaded file may be corrupted or incompatible.${NC}" >&2
-        guard_download_paths "$BINARY_PATH"
-        rm -f "$BINARY_PATH"
+        if [ "${INSTALL_PRIVATE_DOWNLOAD:-false}" = true ]; then
+            guard_download_paths "$BINARY_PATH"
+            rm -f "$BINARY_PATH"
+        fi
         return 1
     fi
 
@@ -1171,12 +1204,24 @@ verify_executable() {
         echo -e "${RED}✗ Binary output unexpected${NC}" >&2
         echo -e "${RED}  Output: ${output}${NC}" >&2
         echo -e "${YELLOW}This doesn't appear to be the correct binary.${NC}" >&2
-        guard_download_paths "$BINARY_PATH"
-        rm -f "$BINARY_PATH"
+        if [ "${INSTALL_PRIVATE_DOWNLOAD:-false}" = true ]; then
+            guard_download_paths "$BINARY_PATH"
+            rm -f "$BINARY_PATH"
+        fi
         return 1
     fi
 
     echo -e "${GREEN}✓ Binary executes correctly${NC}"
+
+    if ! LC_ALL=C grep -aqF 'agent-notifications-managed-writer-protocol-v1' "$BINARY_PATH"; then
+        echo -e "${RED}✗ Binary is below the managed writer protocol floor${NC}" >&2
+        if [ "${INSTALL_PRIVATE_DOWNLOAD:-false}" = true ]; then
+            guard_download_paths "$BINARY_PATH"
+            rm -f "$BINARY_PATH"
+        fi
+        return 1
+    fi
+
     return 0
 }
 
@@ -1194,6 +1239,7 @@ windows_hooks_path() {
 windows_native_hooks_json() {
     [ "$PLATFORM" = "windows" ] || return 1
     [ -f "$BINARY_PATH" ] || return 1
+    LC_ALL=C grep -aqF 'agent-notifications-managed-writer-protocol-v1' "$BINARY_PATH" || return 1
 
     local exe_path="$BINARY_PATH"
     if command -v cygpath >/dev/null 2>&1; then
@@ -1244,6 +1290,9 @@ create_named_launcher() {
         local bat_path="${final_bat_path}.tmp.$$"
 
         guard_install_paths "$bat_path" "$final_bat_path"
+        if [ -e "$final_bat_path" ]; then
+            return 0
+        fi
         # Remove old .bat file if exists
         rm -f "$bat_path" 2>/dev/null || true
 
@@ -1272,6 +1321,9 @@ EOF
     local final_symlink_path="${SCRIPT_DIR}/${launcher_name}"
     local symlink_path="${final_symlink_path}.tmp.$$"
     guard_install_paths "$final_symlink_path" "$symlink_path"
+    if [ -e "$final_symlink_path" ]; then
+        return 0
+    fi
     # Remove old symlink if exists
     rm -f "$symlink_path" 2>/dev/null || true
 
@@ -1403,7 +1455,7 @@ download_terminal_notifier_modern() {
     rm -f "$TEMP_ZIP"
 
     # Verify extraction
-    if [ -d "$MODERN_APP" ] && [ -x "$MODERN_APP/Contents/MacOS/terminal-notifier-modern" ]; then
+    if [ -d "$MODERN_APP" ] && [ -x "$MODERN_APP/Contents/MacOS/terminal-notifier-modern" ] && [ -f "${MODERN_APP}.managed-runtime.json" ]; then
         # Remove quarantine attribute (downloaded files are flagged by Gatekeeper)
         xattr -cr "$MODERN_APP" 2>/dev/null || true
         # Verify code signature (notarized builds have valid Developer ID signature)
@@ -1924,6 +1976,29 @@ desktop_runtime_usable() {
     esac
 }
 
+copy_verified_stage() {
+    local src="$1" dest="$2" item base
+    for item in "$src"/*; do
+        [ -e "$item" ] || continue
+        base=$(basename "$item")
+        case "$base" in
+            .install-stage.*|checksums.txt|.checksums.txt|*.sha256) continue ;;
+        esac
+        if [ -L "$item" ]; then
+            continue
+        fi
+        if [ -d "$item" ]; then
+            mkdir -p "$dest/$base" || return 1
+            copy_verified_stage "$item" "$dest/$base" || return 1
+        elif [ -f "$item" ]; then
+            cp "$item" "$dest/$base" || return 1
+            if [ -x "$item" ]; then
+                chmod +x "$dest/$base" || return 1
+            fi
+        fi
+    done
+}
+
 stage_and_promote_runtime() (
     local live_dir="$SCRIPT_DIR"
     local live_binary="$BINARY_PATH"
@@ -1949,32 +2024,9 @@ stage_and_promote_runtime() (
     INSTALL_CONFIG_HELPER="$BINARY_PATH"
 
     if [ "$PLATFORM" = "darwin" ]; then
-        if ! [ -x "$live_dir/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern" ] &&
-           ! [ -x "$live_dir/terminal-notifier.app/Contents/MacOS/terminal-notifier" ]; then
-            download_terminal_notifier_modern || download_terminal_notifier || exit 1
-            local app
-            for app in ClaudeNotifier.app terminal-notifier.app; do
-                case "$app" in
-                    ClaudeNotifier.app) [ -x "$stage/$app/Contents/MacOS/terminal-notifier-modern" ] || continue ;;
-                    terminal-notifier.app) [ -x "$stage/$app/Contents/MacOS/terminal-notifier" ] || continue ;;
-                esac
-                # Only an unusable bundle can be displaced here. A valid live
-                # notifier never has a rename gap, including during SIGKILL.
-                guard_install_paths "$live_dir/$app"
-                if [ -e "$live_dir/$app" ]; then
-                    mv "$live_dir/$app" "$stage/old-$app" || exit 1
-                fi
-                mv "$stage/$app" "$live_dir/$app" || exit 1
-            done
-        fi
-        # Runtime discovery prefers a present modern executable path, even if
-        # it cannot execute. Remove that shadow only after legacy is ready.
-        if ! [ -x "$live_dir/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern" ] &&
-           [ -x "$live_dir/terminal-notifier.app/Contents/MacOS/terminal-notifier" ] &&
-           { [ -e "$live_dir/ClaudeNotifier.app" ] || [ -L "$live_dir/ClaudeNotifier.app" ]; }; then
-            guard_install_paths "$live_dir/ClaudeNotifier.app"
-            mv "$live_dir/ClaudeNotifier.app" "$stage/unusable-ClaudeNotifier.app" || exit 1
-        fi
+        download_terminal_notifier_modern || exit 1
+        [ -x "$stage/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern" ] || exit 1
+        [ -f "$stage/ClaudeNotifier.app.managed-runtime.json" ] || exit 1
     elif [ "$PLATFORM" = "windows" ]; then
         # Click-to-focus is part of the runtime, not an optional sound utility.
         local main_name="$BINARY_NAME" main_path="$BINARY_PATH"
@@ -1982,17 +2034,32 @@ stage_and_promote_runtime() (
         BINARY_PATH="$FOCUS_HANDLER_PATH"
         download_and_verify_binary || exit 1
         chmod +x "$BINARY_PATH" || exit 1
-        guard_install_paths "$live_dir/$BINARY_NAME"
-        mv -f "$BINARY_PATH" "$live_dir/$BINARY_NAME" || exit 1
         BINARY_NAME="$main_name"
         BINARY_PATH="$main_path"
-    elif [ "$PLATFORM" = "linux" ]; then
+    fi
+
+    # Kernel publication mutates the live directory. Downloads used a private
+    # stage, so re-check the selected config against the real destination.
+    live_published="$live_dir/$BINARY_NAME"
+    guard_install_paths "$live_dir" "$live_published" || exit 1
+
+    if [ "${CN_PRODUCT:-claude}" = "codex" ]; then
+        # Acquisition into a disposable Codex bundle must not Commit a live
+        # consumer. setup-codex registers the durable runtime afterwards.
+        copy_verified_stage "$stage" "$live_dir" || exit 1
+    elif [ "$PLATFORM" = "darwin" ]; then
+        "$BINARY_PATH" internal-install-runtime --stage "$stage" --target "$live_dir" --entry "$BINARY_NAME" --require-native || exit 1
+    else
+        "$BINARY_PATH" internal-install-runtime --stage "$stage" --target "$live_dir" --entry "$BINARY_NAME" || exit 1
+    fi
+
+    if [ "$PLATFORM" = "linux" ]; then
+        SCRIPT_DIR="$live_dir"
+        BINARY_PATH="$live_published"
         install_linux_notification_desktop_entry || exit 1
     fi
 
-    guard_install_paths "$live_binary"
-    mv -f "$BINARY_PATH" "$live_binary" || exit 1
-    INSTALL_CONFIG_HELPER="$live_binary"
+    INSTALL_CONFIG_HELPER="$live_published"
 )
 
 # Main installation flow
@@ -2019,6 +2086,14 @@ main() {
     echo -e "${BLUE}Platform:${NC} ${PLATFORM}-${ARCH}"
     echo -e "${BLUE}Binary:${NC}   ${BINARY_NAME}"
     echo ""
+
+    if [ "${ACQUIRE_ONLY:-false}" = true ]; then
+        validate_acquire_output || exit 1
+        mkdir -p "$ACQUIRE_OUTPUT" || exit 1
+        SCRIPT_DIR="$ACQUIRE_OUTPUT"
+        INSTALL_TARGET_DIR="$ACQUIRE_OUTPUT"
+        detect_platform
+    fi
 
     # Offline forced updates must stop before any installation work.
     if [ "$FORCE_UPDATE" = true ] && [ -z "${INSTALL_STAGED_ASSETS:-}" ]; then

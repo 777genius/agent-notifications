@@ -7,7 +7,17 @@ private let notificationTimeoutSeconds = 10.0
 
 let arguments = Array(CommandLine.arguments.dropFirst())
 
-if ArgumentParser.isHelpRequest(arguments) {
+let options = PermissionSetupRequest.optionPositions(arguments)
+
+if options.contains("--request-permission-json") {
+    StructuredRuntime.requestPermission(arguments: arguments)
+} else if options.contains("--capabilities-json") {
+    StructuredRuntime.capabilities(arguments: arguments)
+} else if options.contains("--setup") || options.contains("--correlation-id") || options.contains("--nonce") {
+    exit(1)
+} else if options.contains("--send-json") {
+    StructuredRuntime.send(arguments: arguments)
+} else if ArgumentParser.isHelpRequest(arguments) {
     print("Usage: terminal-notifier-modern -title <title> -message <message> [options]")
     print("")
     print("  -title          Notification title (required)")
@@ -37,7 +47,7 @@ func runSendMode(arguments: [String]) {
         return
     }
 
-    guard arguments.contains(launchServicesMarker) else {
+    guard ArgumentParser.optionPositions(arguments).contains(launchServicesMarker) else {
         failAndExit("ClaudeNotifier must be launched via LaunchServices (use 'open -W -n ClaudeNotifier.app --args ...')")
         return
     }
@@ -126,9 +136,7 @@ func runCallbackMode() {
     app.delegate = appDelegate
     UNUserNotificationCenter.current().delegate = appDelegate
 
-    DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
-        NSApplication.shared.terminate(nil)
-    }
+    appDelegate.lifecycle.start()
 
     withExtendedLifetime(appDelegate) {
         app.run()

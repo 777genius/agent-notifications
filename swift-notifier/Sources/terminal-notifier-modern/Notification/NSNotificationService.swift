@@ -48,14 +48,16 @@ final class NSNotificationDelegate: NSObject, NSUserNotificationCenterDelegate {
         _ center: NSUserNotificationCenter,
         didActivate notification: NSUserNotification
     ) {
-        if let actionJSON = notification.userInfo?["action"] as? String,
-           let action = ClickAction.fromJSON(actionJSON) {
-            actionExecutor.execute(action)
+        let handle = { [self] in
+            let clicked = notification.activationType == .contentsClicked ||
+                          notification.activationType == .actionButtonClicked
+            CallbackHandler(lifecycle: ProcessCallbackLifecycle.shared, legacy: actionExecutor).receive(
+                identifier: clicked ? "OPEN" : "DISMISS", defaultIdentifier: "OPEN",
+                notificationID: notification.identifier ?? "", userInfo: notification.userInfo ?? [:],
+                completion: {})
         }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            NSApplication.shared.terminate(nil)
-        }
+        if Thread.isMainThread { handle() }
+        else { DispatchQueue.main.async(execute: handle) }
     }
 
     func userNotificationCenter(

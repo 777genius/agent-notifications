@@ -33,3 +33,66 @@ Existing valid config is a byte/mode/mtime-preserving no-op. Existing invalid co
 If assets/registration succeeded but init failed, report partial success and the safe error/path. Retry only `config init` after resolving the cause; do not repeat downloads or registration. Do not claim success after a failed command. Do not add config writes to low-level asset installers.
 
 Then run `/claude-notifications-go:settings` for [private revision-checked edits](settings.md). Save diagnostics privately; never print raw configuration or expanded secrets.
+
+After a successful plugin install, agent-notify configure runs by default
+(`--navigation none --allow-unknown-caller true --allow-caller-asserted false`
+unless a route is supplied). Pass `--skip-agent-notify` to
+keep hooks-only setup. If agent-notify setup fails, the plugin install still
+counts as success; retry `setup-notifications configure` after fixing the cause.
+
+```bash
+SKIP_AGENT_NOTIFY=false
+SEEN_AGENT_NOTIFY=false
+CONFIGURE_ARGS=()
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --skip-agent-notify) SKIP_AGENT_NOTIFY=true; shift ;;
+    --agent-notify) SEEN_AGENT_NOTIFY=true; shift ;;
+    --navigation|--app|--team-id|--allow-unknown-caller|--allow-caller-asserted)
+      [ "$#" -ge 2 ] || { echo "Missing value for $1" >&2; exit 1; }
+      case "$1" in
+        --navigation) [ "$2" = none ] || { echo "Invalid navigation: $2" >&2; exit 1; } ;;
+        --app)
+          case "$2" in /*) ;; *) echo "App path must be absolute." >&2; exit 1 ;; esac
+          case "$2" in *..*) echo "App path must be a physical path." >&2; exit 1 ;; esac ;;
+      esac
+      CONFIGURE_ARGS+=("$1" "$2"); shift 2 ;;
+    --request-permission|--json) CONFIGURE_ARGS+=("$1"); shift ;;
+    *) echo "unknown option: $1" >&2; exit 1 ;;
+  esac
+done
+if [ "$SEEN_AGENT_NOTIFY" = true ] && [ "$SKIP_AGENT_NOTIFY" = true ]; then
+  echo "--agent-notify and --skip-agent-notify are mutually exclusive." >&2
+  exit 1
+fi
+if [ "$SKIP_AGENT_NOTIFY" = true ] && [ "${#CONFIGURE_ARGS[@]}" -ne 0 ]; then
+  echo "Route flags require --agent-notify." >&2
+  exit 1
+fi
+if [ "$SKIP_AGENT_NOTIFY" != true ]; then
+  has_route=false
+  if [ "${#CONFIGURE_ARGS[@]}" -gt 0 ]; then
+    for arg in "${CONFIGURE_ARGS[@]}"; do
+      case "$arg" in
+        --navigation|--app|--team-id|--allow-unknown-caller|--allow-caller-asserted)
+          has_route=true ;;
+      esac
+    done
+  fi
+  if [ "$has_route" != true ]; then
+    CONFIGURE_ARGS+=(--navigation none --allow-unknown-caller true --allow-caller-asserted false)
+  fi
+fi
+INSTALLER="${CLAUDE_PLUGIN_ROOT}/bin/install.sh"
+curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/main/bin/install.sh -o "$INSTALLER"
+chmod +x "$INSTALLER"
+"$INSTALLER"
+if [ "$SKIP_AGENT_NOTIFY" != true ]; then
+  NOTIFY_BIN="${CLAUDE_PLUGIN_ROOT}/bin/claude-notifications"
+  if [ ! -x "$NOTIFY_BIN" ]; then
+    echo "agent-notify setup skipped; installer binary not found. Plugin install succeeded." >&2
+  elif ! "$NOTIFY_BIN" setup-notifications configure --provider claude "${CONFIGURE_ARGS[@]}"; then
+    echo "agent-notify setup failed; plugin install succeeded. Retry: \"$NOTIFY_BIN\" setup-notifications configure --provider claude ${CONFIGURE_ARGS[*]}" >&2
+  fi
+fi
+```

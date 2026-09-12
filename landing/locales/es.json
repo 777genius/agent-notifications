@@ -1,16 +1,234 @@
 {
-  "seo": { "title": "Agent Notifications - Mantén el ritmo", "description": "Notificaciones de escritorio para Claude Code y la beta de Codex CLI. Entérate de cuándo termina el trabajo, cuándo una pregunta te necesita o cuándo algo sale mal." },
-  "language": { "label": "Idioma", "current": "Idioma actual: {language}", "search": "Buscar idiomas", "noResults": "No se encontraron idiomas", "switchError": "No se pudo cambiar el idioma. Inténtalo de nuevo." },
-  "accessibility": { "skip": "Ir al contenido", "platforms": "Sistemas operativos compatibles" },
-  "brand": { "tagline": "PARA TUS AGENTES DE PROGRAMACIÓN" },
-  "nav": { "ariaLabel": "Principal", "features": "Funciones", "install": "Instalar", "faq": "Preguntas frecuentes" },
-  "hero": { "eyebrow": "MENOS VIGILAR. MÁS CREAR.", "title": "Mantén el ritmo", "emphasis": "Te avisaremos", "leadFirst": "Deja que tu agente trabaje. Sabrás cuándo termina.", "leadSecond": "Sonidos, notificaciones de escritorio y webhooks para Claude Code y Codex CLI.", "primary": "Configurar notificaciones", "secondary": "Ver en GitHub", "note": "Código abierto · Se ejecuta localmente · Beta de Codex CLI" },
-  "common": { "now": "ahora", "beta": "beta" },
-  "features": { "eyebrow": "LA SEÑAL ADECUADA. EN EL MOMENTO ADECUADO.", "titleFirst": "Conserva la concentración", "titleSecond": "Deja de comprobar constantemente", "items": { "1": { "label": "NOTIFICACIONES DE ESCRITORIO", "title": "Aléjate sin perderte nada", "text": "Recibe una notificación cuando tu agente termina o necesita tu atención. Pasa menos tiempo mirando la terminal." }, "2": { "label": "CONTROLES DE SONIDO", "title": "Un sonido para cada momento", "text": "Elige sonidos, ajusta el volumen y selecciona un dispositivo de audio. Conserva las señales que quieres y silencia el resto." }, "3": { "label": "INTEGRACIONES WEBHOOK", "title": "Tu flujo de trabajo, conectado", "text": "Envía actualizaciones a Slack, Discord, Telegram, Teams y más. Configura webhooks donde trabajes." } }, "preview": { "done": "Tu agente ha terminado", "ready": "Listo cuando tú lo estés.", "sound": "Tu sonido. Tu volumen.", "event": "Evento del agente" }, "foot": "La compatibilidad para enfocar al hacer clic depende de tu terminal y sistema operativo.", "details": "Ver detalles de la plataforma" },
-  "faq": { "eyebrow": "ALGUNAS COSAS QUE DEBES SABER", "title": "Preguntas frecuentes", "subtitle": "Todo lo que necesitas para volver al trabajo.", "items": { "1": { "question": "¿Necesito tener instalados ambos agentes?", "answer": "No. Elige Claude Code, Codex CLI o ambos. Instala primero la CLI del agente seleccionado; el comando instala este plugin de notificaciones." }, "2": { "question": "¿Los hooks de Codex se instalan automáticamente?", "answer": "Sí. El instalador registra los hooks y guarda una copia estable del runtime. Abre /hooks en Codex para revisarlos y confiar en ellos. Las definiciones modificadas deben revisarse otra vez." }, "3": { "question": "¿Una actualización restablecerá mis ajustes?", "answer": "El instalador conserva tu configuración compartida y los hooks externos de Codex. Instalar y actualizar usan el mismo comando. Reinicia el agente seleccionado después de actualizar." }, "4": { "question": "¿Puedo elegir qué produce un sonido?", "answer": "Sí. Configura sonidos, volumen, dispositivo de audio y canales de notificación. Elige Configurar en la guía para ver los pasos de tu agente." }, "5": { "question": "¿Funciona el enfoque al hacer clic en todas partes?", "answer": "La compatibilidad varía según el sistema operativo y terminal. iTerm2 necesita su API de Python para dirigirse a una pestaña concreta. Windows enfoca una ventana, no una pestaña exacta.", "link": "Consulta los entornos compatibles." }, "6": { "question": "¿Qué pasa si no recibo una notificación?", "answer": "Comprueba los permisos de notificaciones del sistema operativo y los canales elegidos. Para Codex, confirma que los hooks sean de confianza.", "link": "Sigue la solución de problemas específica de tu plataforma." } } },
-  "closing": { "eyebrow": "DEJA QUE TU AGENTE DÉ EL SIGUIENTE PASO", "title": "Tu atención es valiosa", "action": "Haz que cada notificación cuente" },
-  "footer": { "builtBy": "Creado por", "afterBuilder": ". Código abierto.", "license": "Licencia", "source": "Código fuente" },
-  "preview": { "ariaLabel": "Ejemplos de notificaciones de agente", "heading": "TU AGENTE TIENE UNA ACTUALIZACIÓN", "pause": "Pausar", "resume": "Reanudar", "next": "Siguiente", "workspace": "main · notification_plugin_go", "items": { "question": { "title": "❓ Pregunta", "body": "¿Cómo quieres llamar al archivo de prueba en /tmp/?" }, "plan": { "title": "📋 Plan", "body": "Plan: crear un archivo de prueba en /tmp/" }, "completed": { "title": "✅ Completado", "body": "Listo. La instalación ahora aparece justo después de la sección principal.", "detail": "✏️ 3 ediciones  ⏱ 35 s" }, "review": { "title": "🔍 Revisión", "body": "Revisión completada. No se encontraron problemas en el instalador actualizado." }, "permission": { "title": "🔐 Solicitud de permiso", "body": "Se requiere aprobación: shell" }, "limit": { "title": "⏱️ Límite de sesión alcanzado", "body": "Se alcanzó el límite de sesión. Espera antes de continuar." }, "error": { "title": "🔴 Error de API: 401", "body": "La autenticación caducó. Inicia sesión de nuevo." } } },
-  "select": { "scrollUp": "Desplazar opciones hacia arriba", "scrollDown": "Desplazar opciones hacia abajo" },
-  "install": { "title": "Configurar notificaciones", "intro": "Sigue estos pasos para añadir notificaciones de escritorio a {agent}.", "chooseAgent": "Elige tu agente", "requires": "Requiere {agent}", "bothAgents": "Ambos agentes", "bothSelected": "✓ Ambos agentes seleccionados", "installBoth": "Instalar para ambos agentes", "chooseComputer": "Elige el equipo donde se ejecuta tu agente", "selected": "Seleccionado", "detected": "Detectado automáticamente", "change": "Cambiar", "targetOs": "Sistema operativo de destino", "products": { "claude": "Claude Code", "codex": "Codex CLI · beta", "both": "Ambos agentes" }, "targets": { "unknown": "Elige el sistema operativo", "macos": "macOS", "linux": "Linux", "windows": "Windows · Git Bash", "manual": "Instrucciones manuales" }, "prerequisiteTitle": "Beta de Codex CLI - requisito de lanzamiento.", "prerequisiteText": "Requiere una versión estable publicada del plugin ≥1.42.0. Esa versión es actualmente un borrador; el instalador de Codex no estará disponible hasta que se publique.", "checkReleases": "Ver versiones", "configure": { "title": "Haz que suene como tú", "claudeBefore": "Dentro del chat de Claude Code, ejecuta", "claudeAfter": "Es un comando slash de Claude, no un comando de shell.", "codexBefore": "Para Codex, edita el archivo de configuración compartido", "codexMiddle": "mediante la", "codexLink": "configuración manual documentada", "codexAfter": "Claude Code no es necesario para una configuración solo de Codex.", "shared": "Ambos agentes comparten esta configuración. Tus ajustes se conservan al actualizar." }, "manual": { "title": "Sigue la ruta manual", "claude": "Instalación manual de Claude", "codex": "Registro manual de Codex" }, "chooseTarget": "Elige un sistema operativo de destino para mostrar tu comando. Los navegadores móviles y desconocidos necesitan una elección explícita.", "commandLabel": "Comando de {intent}", "copyCommand": "Copiar comando", "updatingInstead": "¿Quieres actualizar?", "copied": "Copiado. Pégalo en la terminal de destino cuando estés listo.", "copyUnavailable": "No se puede copiar. Selecciona el comando y cópialo manualmente.", "updateNote": "Instalar y actualizar usan el mismo comando. Tus ajustes existentes se conservan.", "intents": { "install": "Instalar", "update": "Actualizar", "configure": "Configurar" }, "steps": { "label1": "SIGUIENTE PASO 1", "label2": "SIGUIENTE PASO 2", "runBash": "Ejecutar en Git Bash", "runTerminal": "Ejecutar en Terminal", "windowsTitle": "Ejecuta en Git Bash en Windows.", "windowsText": "No uses WSL ni pegues esta tubería en PowerShell.", "terminalText": "Abre tu terminal y ejecuta el comando anterior.", "restart": "Reinicia {agent}", "bothAgents": "ambos agentes", "restartClaude": "Cierra y vuelve a abrir Claude Code para activar las notificaciones.", "restartCodex": "Reinicia Codex, abre /hooks y luego revisa y confía en los hooks instalados. Las definiciones modificadas deben revisarse de nuevo; la confianza nunca es automática." }, "help": "Ayuda de instalación", "claudeHelp": "Ayuda de instalación de Claude", "installationInstructions": "Instrucciones de instalación", "configureSettings": "⚙ Configurar ajustes" }
+  "seo": {
+    "title": "Agent Notifications - Mantén el ritmo",
+    "description": "Notificaciones de escritorio para Claude Code y la beta de Codex CLI. Entérate de cuándo termina el trabajo, cuándo una pregunta te necesita o cuándo algo sale mal."
+  },
+  "language": {
+    "label": "Idioma",
+    "current": "Idioma actual: {language}",
+    "search": "Buscar idiomas",
+    "noResults": "No se encontraron idiomas",
+    "switchError": "No se pudo cambiar el idioma. Inténtalo de nuevo."
+  },
+  "accessibility": {
+    "skip": "Ir al contenido",
+    "platforms": "Sistemas operativos compatibles"
+  },
+  "brand": {
+    "tagline": "PARA TUS AGENTES DE PROGRAMACIÓN"
+  },
+  "nav": {
+    "ariaLabel": "Principal",
+    "features": "Funciones",
+    "install": "Instalar",
+    "faq": "Preguntas frecuentes"
+  },
+  "hero": {
+    "eyebrow": "MENOS VIGILAR. MÁS CREAR.",
+    "title": "Mantén el ritmo",
+    "emphasis": "Te avisaremos",
+    "leadFirst": "Deja que tu agente trabaje. Sabrás cuándo termina.",
+    "leadSecond": "Sonidos, notificaciones de escritorio y webhooks para Claude Code y Codex CLI.",
+    "primary": "Configurar notificaciones",
+    "secondary": "Ver en GitHub",
+    "note": "Código abierto · Se ejecuta localmente · Beta de Codex CLI"
+  },
+  "common": {
+    "now": "ahora",
+    "beta": "beta"
+  },
+  "features": {
+    "eyebrow": "LA SEÑAL ADECUADA. EN EL MOMENTO ADECUADO.",
+    "titleFirst": "Conserva la concentración",
+    "titleSecond": "Deja de comprobar constantemente",
+    "items": {
+      "1": {
+        "label": "NOTIFICACIONES DE ESCRITORIO",
+        "title": "Aléjate sin perderte nada",
+        "text": "Recibe una notificación cuando tu agente termina o necesita tu atención. Pasa menos tiempo mirando la terminal."
+      },
+      "2": {
+        "label": "CONTROLES DE SONIDO",
+        "title": "Un sonido para cada momento",
+        "text": "Elige sonidos, ajusta el volumen y selecciona un dispositivo de audio. Conserva las señales que quieres y silencia el resto."
+      },
+      "3": {
+        "label": "INTEGRACIONES WEBHOOK",
+        "title": "Tu flujo de trabajo, conectado",
+        "text": "Envía actualizaciones a Slack, Discord, Telegram, Teams y más. Configura webhooks donde trabajes."
+      }
+    },
+    "preview": {
+      "done": "Tu agente ha terminado",
+      "ready": "Listo cuando tú lo estés.",
+      "sound": "Tu sonido. Tu volumen.",
+      "event": "Evento del agente"
+    },
+    "foot": "La compatibilidad para enfocar al hacer clic depende de tu terminal y sistema operativo.",
+    "details": "Ver detalles de la plataforma"
+  },
+  "faq": {
+    "eyebrow": "ALGUNAS COSAS QUE DEBES SABER",
+    "title": "Preguntas frecuentes",
+    "subtitle": "Todo lo que necesitas para volver al trabajo.",
+    "items": {
+      "1": {
+        "question": "¿Necesito tener instalados ambos agentes?",
+        "answer": "No. Elige Claude Code, Codex CLI o ambos. Instala primero la CLI del agente seleccionado; el comando instala este plugin de notificaciones."
+      },
+      "2": {
+        "question": "¿Los hooks de Codex se instalan automáticamente?",
+        "answer": "Sí. El instalador registra los hooks y guarda una copia estable del runtime. Abre /hooks en Codex para revisarlos y confiar en ellos. Las definiciones modificadas deben revisarse otra vez."
+      },
+      "3": {
+        "question": "¿Una actualización restablecerá mis ajustes?",
+        "answer": "El instalador conserva tu configuración compartida y los hooks externos de Codex. Instalar y actualizar usan el mismo comando. Reinicia el agente seleccionado después de actualizar."
+      },
+      "4": {
+        "question": "¿Puedo elegir qué produce un sonido?",
+        "answer": "Sí. Configura sonidos, volumen, dispositivo de audio y canales de notificación. Elige Configurar en la guía para ver los pasos de tu agente."
+      },
+      "5": {
+        "question": "¿Funciona el enfoque al hacer clic en todas partes?",
+        "answer": "La compatibilidad varía según el sistema operativo y terminal. iTerm2 necesita su API de Python para dirigirse a una pestaña concreta. Windows enfoca una ventana, no una pestaña exacta.",
+        "link": "Consulta los entornos compatibles."
+      },
+      "6": {
+        "question": "¿Qué pasa si no recibo una notificación?",
+        "answer": "Comprueba los permisos de notificaciones del sistema operativo y los canales elegidos. Para Codex, confirma que los hooks sean de confianza.",
+        "link": "Sigue la solución de problemas específica de tu plataforma."
+      }
+    }
+  },
+  "closing": {
+    "eyebrow": "DEJA QUE TU AGENTE DÉ EL SIGUIENTE PASO",
+    "title": "Tu atención es valiosa",
+    "action": "Haz que cada notificación cuente"
+  },
+  "footer": {
+    "builtBy": "Creado por",
+    "afterBuilder": ". Código abierto.",
+    "license": "Licencia",
+    "source": "Código fuente"
+  },
+  "preview": {
+    "ariaLabel": "Ejemplos de notificaciones de agente",
+    "heading": "TU AGENTE TIENE UNA ACTUALIZACIÓN",
+    "pause": "Pausar",
+    "resume": "Reanudar",
+    "next": "Siguiente",
+    "workspace": "main · notification_plugin_go",
+    "items": {
+      "question": {
+        "title": "❓ Pregunta",
+        "body": "¿Cómo quieres llamar al archivo de prueba en /tmp/?"
+      },
+      "plan": {
+        "title": "📋 Plan",
+        "body": "Plan: crear un archivo de prueba en /tmp/"
+      },
+      "completed": {
+        "title": "✅ Completado",
+        "body": "Listo. La instalación ahora aparece justo después de la sección principal.",
+        "detail": "✏️ 3 ediciones  ⏱ 35 s"
+      },
+      "review": {
+        "title": "🔍 Revisión",
+        "body": "Revisión completada. No se encontraron problemas en el instalador actualizado."
+      },
+      "permission": {
+        "title": "🔐 Solicitud de permiso",
+        "body": "Se requiere aprobación: shell"
+      },
+      "limit": {
+        "title": "⏱️ Límite de sesión alcanzado",
+        "body": "Se alcanzó el límite de sesión. Espera antes de continuar."
+      },
+      "error": {
+        "title": "🔴 Error de API: 401",
+        "body": "La autenticación caducó. Inicia sesión de nuevo."
+      }
+    }
+  },
+  "select": {
+    "scrollUp": "Desplazar opciones hacia arriba",
+    "scrollDown": "Desplazar opciones hacia abajo"
+  },
+  "install": {
+    "title": "Configurar notificaciones",
+    "intro": "Sigue estos pasos para añadir notificaciones de escritorio a {agent}.",
+    "chooseAgent": "Elige tu agente",
+    "requires": "Requiere {agent}",
+    "bothAgents": "Ambos agentes",
+    "bothSelected": "✓ Ambos agentes seleccionados",
+    "installBoth": "Instalar para ambos agentes",
+    "chooseComputer": "Elige el equipo donde se ejecuta tu agente",
+    "selected": "Seleccionado",
+    "detected": "Detectado automáticamente",
+    "change": "Cambiar",
+    "targetOs": "Sistema operativo de destino",
+    "products": {
+      "claude": "Claude Code",
+      "codex": "Codex CLI · beta",
+      "both": "Ambos agentes"
+    },
+    "targets": {
+      "unknown": "Elige el sistema operativo",
+      "macos": "macOS",
+      "linux": "Linux",
+      "windows": "Windows · Git Bash",
+      "manual": "Instrucciones manuales"
+    },
+    "prerequisiteTitle": "Beta de Codex CLI - requisito de lanzamiento.",
+    "prerequisiteText": "Requiere una versión estable publicada del plugin ≥1.42.0. Esa versión es actualmente un borrador; el instalador de Codex no estará disponible hasta que se publique.",
+    "checkReleases": "Ver versiones",
+    "configure": {
+      "title": "Haz que suene como tú",
+      "claudeBefore": "Dentro del chat de Claude Code, ejecuta",
+      "claudeAfter": "Es un comando slash de Claude, no un comando de shell.",
+      "codexBefore": "Para Codex, edita el archivo de configuración compartido",
+      "codexMiddle": "mediante la",
+      "codexLink": "configuración manual documentada",
+      "codexAfter": "Claude Code no es necesario para una configuración solo de Codex.",
+      "shared": "Ambos agentes comparten esta configuración. Tus ajustes se conservan al actualizar."
+    },
+    "manual": {
+      "title": "Sigue la ruta manual",
+      "claude": "Instalación manual de Claude",
+      "codex": "Registro manual de Codex"
+    },
+    "chooseTarget": "Elige un sistema operativo de destino para mostrar tu comando. Los navegadores móviles y desconocidos necesitan una elección explícita.",
+    "commandLabel": "Comando de {intent}",
+    "copyCommand": "Copiar comando",
+    "updatingInstead": "¿Quieres actualizar?",
+    "copied": "Copiado. Pégalo en la terminal de destino cuando estés listo.",
+    "copyUnavailable": "No se puede copiar. Selecciona el comando y cópialo manualmente.",
+    "updateNote": "Instalar y actualizar usan el mismo comando. Tus ajustes existentes se conservan.",
+    "intents": {
+      "install": "Instalar",
+      "update": "Actualizar",
+      "configure": "Configurar"
+    },
+    "steps": {
+      "label1": "SIGUIENTE PASO 1",
+      "label2": "SIGUIENTE PASO 2",
+      "runBash": "Ejecutar en Git Bash",
+      "runTerminal": "Ejecutar en Terminal",
+      "windowsTitle": "Ejecuta en Git Bash en Windows.",
+      "windowsText": "No uses WSL ni pegues esta tubería en PowerShell.",
+      "terminalText": "Abre tu terminal y ejecuta el comando anterior.",
+      "restart": "Reinicia {agent}",
+      "bothAgents": "ambos agentes",
+      "restartClaude": "Cierra y vuelve a abrir Claude Code para activar las notificaciones.",
+      "restartCodex": "Reinicia Codex, abre /hooks y luego revisa y confía en los hooks instalados. Las definiciones modificadas deben revisarse de nuevo; la confianza nunca es automática."
+    },
+    "help": "Ayuda de instalación",
+    "claudeHelp": "Ayuda de instalación de Claude",
+    "installationInstructions": "Instrucciones de instalación",
+    "configureSettings": "⚙ Configurar ajustes",
+    "agentNotify": {
+      "label": "Permite que los agentes te envíen notificaciones cuando necesiten tu atención",
+      "hint": "Añade una herramienta para que un agente pueda avisarte durante una tarea, no solo cuando el trabajo termina."
+    }
+  }
 }

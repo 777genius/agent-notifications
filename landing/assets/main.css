@@ -1447,6 +1447,47 @@ footer .brand {
 .install-prerequisite a {
   text-decoration: underline;
 }
+.agent-notify-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin: 0 40px 22px;
+  padding: 16px 18px;
+  color: #f0f1f7;
+  background: linear-gradient(115deg, #0e1420, #090c13);
+  border: 1px solid #293648;
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: left;
+}
+.agent-notify-option:has(input:checked) {
+  border-color: #32bfff;
+  box-shadow:
+    0 0 0 1px #32bfff25,
+    0 0 24px #0873eb19;
+}
+.agent-notify-option input {
+  margin-top: 3px;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  accent-color: #52b6ff;
+}
+.agent-notify-option span {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.agent-notify-option strong {
+  font-size: 15px;
+  font-weight: 650;
+}
+.agent-notify-option small {
+  color: #9eafc9;
+  font-size: 13px;
+  line-height: 1.45;
+}
 .update-note {
   margin: 12px 0 0;
   font-size: 12px;
@@ -1474,6 +1515,9 @@ footer .brand {
   .environment-row {
     margin-inline: 0;
     flex-wrap: wrap;
+  }
+  .agent-notify-option {
+    margin-inline: 0;
   }
   .os-picker {
     margin-inline: 0;

@@ -145,6 +145,42 @@ func TestGetTerminalNotifierPath_ClaudeNotifier(t *testing.T) {
 	t.Logf("ClaudeNotifier found at: %s", path)
 }
 
+func TestGetTerminalNotifierPathFollowsStableAlias(t *testing.T) {
+	root := t.TempDir()
+	generation := filepath.Join(root, "generation-test.app")
+	binary := filepath.Join(generation, "Contents", "MacOS", "terminal-notifier-modern")
+	if err := os.MkdirAll(filepath.Dir(binary), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binary, []byte("fixture"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	plugin := filepath.Join(root, "plugin")
+	bin := filepath.Join(plugin, "bin")
+	if err := os.MkdirAll(bin, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(generation, filepath.Join(bin, "ClaudeNotifier.app")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_PLUGIN_ROOT", plugin)
+	path, err := GetTerminalNotifierPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := filepath.EvalSymlinks(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved != want {
+		t.Fatalf("hook path %s, want %s", resolved, want)
+	}
+}
+
 func TestGetTerminalBundleID_AllMappings(t *testing.T) {
 	// Test all known terminal mappings
 	testCases := []struct {

@@ -15,7 +15,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - go: '1.22'
+          - go: '1.25'
             os: macos-15
           - go: '1.26'
             os: macos-26
