@@ -299,6 +299,56 @@ func readControlDocument(path string) ([]byte, error) {
 	return readRegularFileLimit(path, maxControlDocument)
 }
 
+// ReadConfinedDocument reads a regular non-reparse file through the same NT
+// relative opens as Fingerprint. A missing path returns nil data.
+func ReadConfinedDocument(path string, limit int64) ([]byte, Identity, error) {
+	handles, _, err := windowsParents(path, false)
+	defer closeWindowsParents(handles)
+	if os.IsNotExist(err) {
+		return nil, Identity{}, nil
+	}
+	if err != nil {
+		return nil, Identity{}, err
+	}
+	f, err := windowsRegularAt(handles[len(handles)-1], filepath.Base(path), false)
+	if os.IsNotExist(err) {
+		return nil, Identity{}, nil
+	}
+	if err != nil {
+		return nil, Identity{}, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, Identity{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, Identity{}, fmt.Errorf("managed input must be a regular non-link file")
+	}
+	if limit <= 0 || info.Size() < 0 || info.Size() > limit {
+		return nil, Identity{}, fmt.Errorf("managed input exceeds size limit")
+	}
+	data, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil {
+		return nil, Identity{}, err
+	}
+	if int64(len(data)) > limit {
+		return nil, Identity{}, fmt.Errorf("managed input exceeds size limit")
+	}
+	return data, identity(data, uint32(info.Mode().Perm())), nil
+}
+
+// ConfinedDirectory reports a non-reparse directory. A missing path returns
+// os.ErrNotExist after Windows status mapping.
+func ConfinedDirectory(path string) error {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return fmt.Errorf("managed path must be absolute and clean")
+	}
+	handles, _, err := windowsParents(filepath.Join(path, "entry"), false)
+	defer closeWindowsParents(handles)
+	return err
+}
+
 func readRegularFileLimit(path string, limit int64) ([]byte, error) {
 	handles, _, err := windowsParents(path, false)
 	defer closeWindowsParents(handles)
