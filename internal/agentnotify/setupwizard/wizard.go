@@ -13,6 +13,7 @@ import (
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/providers"
 
+	"github.com/777genius/agent-notifications/install/uapinstaller"
 	"github.com/777genius/agent-notifications/internal/agentnotify/clientsetup"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portablesetup"
@@ -140,6 +141,13 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 		return plan, ev.err
 	}
 	if req.Action == ActionInstall {
+		planned := req
+		var releasePackage func()
+		defer func() {
+			if releasePackage != nil {
+				releasePackage()
+			}
+		}()
 		for _, agent := range ev.notifyAgents {
 			if !explicitAbs(clientConfig(req, agent)) {
 				ev.out.Outcome, ev.out.Reason = "incomplete", "client_config_required"
@@ -154,8 +162,24 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 			if others, err := otherLiveClients(req, ev.snap, ev.runtimeRoot, req.InstallationID, string(agent)); err == nil && len(others) > 0 {
 				text += " required-update=" + strings.Join(others, ",")
 			}
-			if explicitAbs(req.PackageRoot) {
-				digest, err := previewNotifyDigest(ctx, req, ev.snap, ev.runtimeRoot, agent)
+		}
+		if len(ev.notifyAgents) > 0 {
+			acquired, release, err := acquirePlanPackage(ctx, req, ev.notifyAgents)
+			if err != nil {
+				reason := "package_acquisition_failed"
+				if strings.Contains(err.Error(), "package_required") {
+					reason = "package_required"
+				} else if strings.Contains(err.Error(), "recorded_package_unavailable") {
+					reason = "recorded_package_unavailable"
+				}
+				ev.out.Outcome, ev.out.Reason = "incomplete", reason
+				plan.Result = attachCommand(req, ev.out)
+				return plan, err
+			}
+			releasePackage = release
+			planned = acquired
+			for _, agent := range ev.notifyAgents {
+				digest, err := previewNotifyDigest(ctx, planned, ev.snap, ev.runtimeRoot, agent)
 				if err != nil {
 					ev.out.Outcome, ev.out.Reason = "incomplete", "portable_preflight_failed"
 					plan.Result = attachCommand(req, ev.out)
@@ -163,8 +187,17 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 				}
 				if digest != "" {
 					text += " source-digest=" + digest
+					break
 				}
 			}
+		}
+	}
+	if view, err := inspectUAPState(ctx, req); err == nil && view.Recovery.Required {
+		ids := recoveryIDs(view)
+		if len(ids) > 0 {
+			text += " recovery-pending=" + strings.Join(ids, ",")
+		} else if view.Recovery.Reason != "" {
+			text += " recovery-pending=untrusted"
 		}
 	}
 	ev.out.Outcome, ev.out.Reason = "ready", ""
@@ -317,6 +350,54 @@ func previewNotifyDigest(ctx context.Context, req Request, snap installruntime.I
 		return "", err
 	}
 	return preview.TreeDigest, nil
+}
+
+func acquirePlanPackage(ctx context.Context, req Request, notifyAgents []portable.Integration) (Request, func(), error) {
+	cleanup := func() {}
+	if len(notifyAgents) == 0 {
+		return req, cleanup, nil
+	}
+	recordedPath, recordedVersion := desiredPackage(req)
+	if !explicitAbs(req.PackageRoot) && recordedPath == "" && recordedVersion != "" && req.ReleaseDownloadRoot == "" && req.PackageFetcher == nil {
+		return req, cleanup, fmt.Errorf("%w: recorded_package_unavailable", ErrRefused)
+	}
+	packageRoot, release, err := resolvePackageRoot(ctx, req, recordedPath, recordedVersion)
+	if err != nil {
+		return req, cleanup, err
+	}
+	req.PackageRoot = packageRoot
+	return req, release, nil
+}
+
+func inspectUAPState(ctx context.Context, req Request) (uapinstaller.Inspection, error) {
+	if !explicitAbs(req.ControlRoot) {
+		return uapinstaller.Inspection{}, nil
+	}
+	stateRoot := filepath.Join(filepath.Dir(req.ControlRoot), "uap", "state")
+	eng, err := uapinstaller.New(uapinstaller.Config{StateRoot: stateRoot})
+	if err != nil {
+		return uapinstaller.Inspection{}, err
+	}
+	return eng.Inspect(ctx)
+}
+
+func recoveryIDs(view uapinstaller.Inspection) []string {
+	seen := map[string]bool{}
+	var ids []string
+	add := func(id string) {
+		if id == "" || seen[id] {
+			return
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	for _, journal := range view.Recovery.Journals {
+		add(journal.OperationID)
+	}
+	for _, receipt := range view.Recovery.Receipts {
+		add(receipt.OperationID)
+	}
+	return ids
 }
 
 func resumeFromPendingIntent(req Request, agents []portable.Integration, snap installruntime.InstalledSnapshot, out Result) (Request, []portable.Integration, Result, bool, error) {
@@ -532,6 +613,18 @@ func inspect(ctx context.Context, req Request, agents []portable.Integration, sn
 			outcome = "installed"
 		}
 		out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "direct-mcp", Outcome: outcome})
+	}
+	view, err := inspectUAPState(ctx, req)
+	if err != nil {
+		out.Outcome, out.Reason = "incomplete", "recovery_required"
+		out.NextActions = append(out.NextActions, NextAction{Kind: "recover", Reason: err.Error()})
+		return out, err
+	}
+	if view.Recovery.Required {
+		out.Outcome, out.Reason = "incomplete", "recovery_required"
+		out.NextActions = append(out.NextActions, NextAction{
+			Kind: "recover", Reason: strings.Join(recoveryIDs(view), ","),
+		})
 	}
 	return out, nil
 }

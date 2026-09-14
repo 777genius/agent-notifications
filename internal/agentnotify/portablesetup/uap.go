@@ -342,7 +342,7 @@ func (m Materializer) previewInstall(ctx context.Context, req MaterializeRequest
 		return uapinstaller.Plan{}, err
 	}
 	if recover {
-		if err := eng.Recover(ctx); err != nil {
+		if _, err := eng.RecoverCurrent(ctx); err != nil {
 			return uapinstaller.Plan{}, err
 		}
 	}

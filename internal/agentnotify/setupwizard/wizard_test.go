@@ -4,6 +4,8 @@ package setupwizard
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -16,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/dirswap"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/ports"
 
 	"github.com/777genius/agent-notifications/internal/agentnotify/clientsetup"
@@ -174,6 +177,135 @@ func TestPlanShowsSourceDigestWithoutMutating(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(control), "uap", "state", "state-v2.json")); !os.IsNotExist(err) {
 		t.Fatal("plan wrote UAP state")
+	}
+}
+
+func TestPlanOmittedPackageRequiresAcquisition(t *testing.T) {
+	control, runtime, global, primary, _ := managedRuntime(t)
+	off := false
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := Plan(testCtx(t), Request{
+		Action: ActionInstall, Agents: []string{"codex"},
+		Hooks: &off, AgentNotify: boolPtr(true),
+		ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: primary, Helper: primary,
+	})
+	if plan.Ready || plan.Result.Reason != "package_required" {
+		t.Fatalf("omitted package: %+v %v", plan, err)
+	}
+}
+
+func TestPlanAcquiresHostPackageForDigest(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtimeRoot, global, _, gen := managedRuntime(t)
+	probe := buildProbe(t)
+	base := filepath.Dir(control)
+	pkg := filepath.Join(base, "release-pkg")
+	archive := filepath.Join(base, portableasset.AssetName(runtime.GOOS, runtime.GOARCH))
+	built, err := portableasset.Build(portableasset.BuildRequest{
+		Version: "1.43.0", GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
+		Executable: probe, OutputRoot: pkg, Archive: archive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	zipBytes, err := os.ReadFile(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asset := portableasset.AssetName(runtime.GOOS, runtime.GOARCH)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1.43.0/checksums.txt":
+			_, _ = io.WriteString(w, built.ArchiveSHA256+"  "+asset+"\n")
+		case "/v1.43.0/" + asset:
+			_, _ = w.Write(zipBytes)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	codexConfig := filepath.Join(base, "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	plan, err := Plan(ctx, Request{
+		Action: ActionInstall, Agents: []string{"codex"},
+		Hooks: &off, AgentNotify: boolPtr(true),
+		ControlRoot: control, RuntimeRoot: runtimeRoot, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot:      filepath.Join(base, "scope"),
+		ReleaseVersion: "1.43.0", ReleaseDownloadRoot: srv.URL,
+	})
+	if err != nil || !plan.Ready {
+		t.Fatalf("acquired plan: %+v %v", plan, err)
+	}
+	if !strings.Contains(plan.Text, "source-digest=") {
+		t.Fatalf("missing acquired digest: %s", plan.Text)
+	}
+	if explicitAbs(plan.Request.PackageRoot) {
+		t.Fatalf("plan leaked acquired path: %s", plan.Request.PackageRoot)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil || snap.Ledger.PendingMutation != nil || snap.Ledger.Generation != gen {
+		t.Fatalf("acquired plan mutated ledger: %+v %v", snap.Ledger, err)
+	}
+}
+
+func TestWizardInspectReportsPendingJournal(t *testing.T) {
+	control, runtime, global, primary, _ := managedRuntime(t)
+	plantWizardJournal(t, control)
+	got, err := Run(testCtx(t), Request{
+		Action: ActionInspect, Agents: []string{"codex"},
+		ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global, Helper: primary,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Outcome != "incomplete" || got.Reason != "recovery_required" {
+		t.Fatalf("inspect recovery: %+v", got)
+	}
+	found := false
+	for _, next := range got.NextActions {
+		if next.Kind == "recover" && strings.Contains(next.Reason, "wizard-pending-op") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missing recover action: %+v", got.NextActions)
+	}
+}
+
+func plantWizardJournal(t *testing.T, controlRoot string) {
+	t.Helper()
+	owned := filepath.Join(filepath.Dir(controlRoot), "uap", "managed")
+	staging := filepath.Join(owned, ".agentplugins-staging-pending")
+	if err := os.MkdirAll(staging, 0700); err != nil {
+		t.Fatal(err)
+	}
+	opID := "wizard-pending-op"
+	sum := sha256.Sum256([]byte(opID))
+	receipt := dirswap.Receipt{
+		SchemaVersion: 3, Operation: dirswap.OperationSwap, OperationID: opID,
+		ClientBindingID: "client-binding-1", Sequence: 1, OwnedBase: owned,
+		ActivePath: filepath.Join(owned, "plugin"), StagingPath: staging,
+		BackupPath: filepath.Join(owned, ".agentplugins-backup-"+hex.EncodeToString(sum[:8])),
+		Phase:      dirswap.PhaseIntent,
+	}
+	body, err := json.MarshalIndent(receipt, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ops := filepath.Join(filepath.Dir(controlRoot), "uap", "state", "operations")
+	if err := os.MkdirAll(ops, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ops, opID+".json"), append(body, '\n'), 0600); err != nil {
+		t.Fatal(err)
 	}
 }
 
