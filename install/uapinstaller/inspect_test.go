@@ -48,6 +48,33 @@ func TestInspectDoesNotRunHelperOrCreateState(t *testing.T) {
 	}
 }
 
+func TestRecoverDoesNotActivateClient(t *testing.T) {
+	eng, _ := plantPendingJournal(t)
+	runner := &countingRunner{}
+	commits := 0
+	recovered, err := New(Config{
+		StateRoot: eng.cfg.StateRoot, Runner: runner,
+		HelperExecutable: filepath.Join(t.TempDir(), "helper"),
+		OnCommittedBinding: func(context.Context, BindingFacts) error {
+			commits++
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := recovered.Inspect(testCtx(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := recovered.Recover(testCtx(t), view); err != nil {
+		t.Fatal(err)
+	}
+	if runner.n != 0 || commits != 0 {
+		t.Fatalf("recover activated client runner=%d commits=%d", runner.n, commits)
+	}
+}
+
 func TestInspectReportsPendingJournalWithoutMutating(t *testing.T) {
 	eng, journal := plantPendingJournal(t)
 	view, err := eng.Inspect(testCtx(t))

@@ -280,6 +280,36 @@ func TestWizardInspectReportsPendingJournal(t *testing.T) {
 	}
 }
 
+func TestPlanShowsPendingRecoveryWithoutMutating(t *testing.T) {
+	control, runtime, global, _, gen := managedRuntime(t)
+	plantWizardJournal(t, control)
+	off := false
+	plan, err := Plan(testCtx(t), Request{
+		Action: ActionInstall, Agents: []string{"codex"},
+		Hooks: boolPtr(true), AgentNotify: &off,
+		ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+	})
+	if err != nil || !plan.Ready {
+		t.Fatalf("plan: %+v %v", plan, err)
+	}
+	if !strings.Contains(plan.Text, "recovery-pending=wizard-pending-op") {
+		t.Fatalf("missing recovery text: %s", plan.Text)
+	}
+	found := false
+	for _, next := range plan.Result.NextActions {
+		if next.Kind == "recover" && strings.Contains(next.Reason, "wizard-pending-op") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("plan recover action: %+v", plan.Result.NextActions)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil || snap.Ledger.PendingMutation != nil || snap.Ledger.Generation != gen {
+		t.Fatalf("plan recovered journal: %+v %v", snap.Ledger, err)
+	}
+}
+
 func plantWizardJournal(t *testing.T, controlRoot string) {
 	t.Helper()
 	owned := filepath.Join(filepath.Dir(controlRoot), "uap", "managed")

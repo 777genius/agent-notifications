@@ -192,11 +192,16 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 	}
 	if view, err := inspectUAPState(ctx, req); err == nil && view.Recovery.Required {
 		ids := recoveryIDs(view)
+		reason := strings.Join(ids, ",")
+		if reason == "" {
+			reason = view.Recovery.Reason
+		}
 		if len(ids) > 0 {
 			text += " recovery-pending=" + strings.Join(ids, ",")
 		} else if view.Recovery.Reason != "" {
 			text += " recovery-pending=untrusted"
 		}
+		ev.out.NextActions = append(ev.out.NextActions, NextAction{Kind: "recover", Reason: reason})
 	}
 	ev.out.Outcome, ev.out.Reason = "ready", ""
 	plan.Ready = true
