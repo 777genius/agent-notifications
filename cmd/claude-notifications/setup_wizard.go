@@ -78,7 +78,7 @@ func executeSetupWizardWith(ctx context.Context, args []string, out io.Writer, i
 		req.ControlRoot = root
 	}
 	if req.Action == "" {
-		if !(tty && !jsonOut) {
+		if !tty || jsonOut {
 			if jsonOut {
 				_ = json.NewEncoder(out).Encode(setupwizard.Result{Outcome: "invalid", Reason: "invalid_arguments"})
 			} else {
