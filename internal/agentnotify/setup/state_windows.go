@@ -18,12 +18,14 @@ import (
 // installruntime.syncDir.
 func syncOpenedDir(*os.File) error { return nil }
 
-// setupDirAccess walks ancestors with list/traverse only. The leaf also
-// requests GENERIC_WRITE so FILE_ADD_FILE works on the pinned directory handle.
+// setupDirAccess walks ancestors with list/traverse only. NtCreateFile does
+// not map GENERIC_* bits, so the private leaf requests FILE_GENERIC_WRITE
+// (FILE_ADD_FILE/FILE_ADD_SUBDIRECTORY). GENERIC_WRITE (0x40000000) is outside
+// FILE_ALL_ACCESS and is ACCESS_DENIED against a restricted DACL.
 func setupDirAccess(leaf bool) uint32 {
 	access := uint32(windows.FILE_LIST_DIRECTORY | windows.FILE_READ_ATTRIBUTES | windows.FILE_TRAVERSE | windows.READ_CONTROL)
 	if leaf {
-		access |= windows.GENERIC_WRITE
+		access |= windows.FILE_GENERIC_WRITE
 	}
 	return access
 }
@@ -149,7 +151,7 @@ func matches(f *os.File, want string) error {
 }
 
 func createLock(dir *os.File) error {
-	h, err := setupOpenAt(windows.Handle(dir.Fd()), ".spool.lock", windows.GENERIC_WRITE|windows.WRITE_DAC|windows.WRITE_OWNER|windows.DELETE|windows.READ_CONTROL, windows.FILE_CREATE, windows.FILE_NON_DIRECTORY_FILE)
+	h, err := setupOpenAt(windows.Handle(dir.Fd()), ".spool.lock", windows.FILE_GENERIC_WRITE|windows.WRITE_DAC|windows.WRITE_OWNER|windows.DELETE, windows.FILE_CREATE, windows.FILE_NON_DIRECTORY_FILE)
 	if err != nil {
 		return err
 	}
@@ -175,7 +177,7 @@ func checkLock(dir *os.File) error {
 }
 
 func privateFile(parent *os.File, name string, limit int64) (*os.File, error) {
-	h, err := setupOpenAt(windows.Handle(parent.Fd()), name, windows.GENERIC_READ, windows.FILE_OPEN, windows.FILE_NON_DIRECTORY_FILE)
+	h, err := setupOpenAt(windows.Handle(parent.Fd()), name, windows.FILE_GENERIC_READ, windows.FILE_OPEN, windows.FILE_NON_DIRECTORY_FILE)
 	if err != nil {
 		return nil, err
 	}

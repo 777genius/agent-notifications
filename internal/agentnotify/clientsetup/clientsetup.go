@@ -203,7 +203,7 @@ func calculate(ctx context.Context, r Request, fault func(string) error, inspect
 		}
 		_, installed := l.Consumers[id]
 		want, tracked := l.Files[path]
-		if installed != tracked || installed != si.Exists || (tracked && (want != si || si.Mode != 0600)) {
+		if installed != tracked || installed != si.Exists || (tracked && (want != si || si.Mode != installruntime.IdentityMode(0600))) {
 			return nil, ErrConflict
 		}
 		var prev *registration.Ownership

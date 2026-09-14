@@ -31,12 +31,14 @@ const (
 // installruntime.syncDir.
 func journalSyncDir(*os.File) error { return nil }
 
-// journalDirAccess walks ancestors with list/traverse only. The leaf also
-// requests GENERIC_WRITE so FILE_ADD_FILE works on the pinned directory handle.
+// journalDirAccess walks ancestors with list/traverse only. NtCreateFile does
+// not map GENERIC_* bits, so the private leaf requests FILE_GENERIC_WRITE
+// (FILE_ADD_FILE/FILE_ADD_SUBDIRECTORY). GENERIC_WRITE (0x40000000) is outside
+// FILE_ALL_ACCESS and is ACCESS_DENIED against a restricted DACL.
 func journalDirAccess(leaf bool) uint32 {
 	access := uint32(windows.FILE_LIST_DIRECTORY | windows.FILE_READ_ATTRIBUTES | windows.FILE_TRAVERSE | windows.READ_CONTROL)
 	if leaf {
-		access |= windows.GENERIC_WRITE
+		access |= windows.FILE_GENERIC_WRITE
 	}
 	return access
 }
@@ -56,7 +58,7 @@ func openRoot(path string) (*os.File, error) {
 	}
 	h, err := windows.CreateFile(name, windows.FILE_LIST_DIRECTORY|windows.FILE_READ_ATTRIBUTES|windows.FILE_TRAVERSE|windows.READ_CONTROL, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open volume root: %w", err)
 	}
 	parts := strings.Split(strings.TrimPrefix(path, parent), `\`)
 	for i, part := range parts {
@@ -67,13 +69,13 @@ func openRoot(path string) (*os.File, error) {
 		next, err := journalOpenAt(h, part, journalDirAccess(i == len(parts)-1), windows.FILE_OPEN, windows.FILE_DIRECTORY_FILE, true)
 		windows.CloseHandle(h)
 		if err != nil {
-			return nil, wrap(err)
+			return nil, fmt.Errorf("open %s: %w", part, wrap(err))
 		}
 		h = next
 		info, err := journalFileInfo(h)
 		if err != nil {
 			windows.CloseHandle(h)
-			return nil, err
+			return nil, fmt.Errorf("stat %s: %w", part, err)
 		}
 		if info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 || info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0 {
 			windows.CloseHandle(h)
@@ -91,12 +93,12 @@ func openRoot(path string) (*os.File, error) {
 
 func openFile(dir *os.File, name string, flags int) (*os.File, error) {
 	acc := flags & 0x3
-	access := uint32(windows.GENERIC_READ | windows.READ_CONTROL)
+	access := uint32(windows.FILE_GENERIC_READ)
 	switch acc {
 	case oWRONLY:
-		access = windows.GENERIC_WRITE | windows.READ_CONTROL
+		access = windows.FILE_GENERIC_WRITE
 	case oRDWR:
-		access = windows.GENERIC_READ | windows.GENERIC_WRITE | windows.READ_CONTROL
+		access = windows.FILE_GENERIC_READ | windows.FILE_GENERIC_WRITE
 	}
 	create := flags&oCREAT != 0
 	excl := flags&oEXCL != 0
@@ -111,7 +113,7 @@ func openFile(dir *os.File, name string, flags int) (*os.File, error) {
 	share := uint32(windows.FILE_SHARE_READ)
 	if name == "lock" {
 		share = windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE
-		access |= windows.GENERIC_READ | windows.GENERIC_WRITE
+		access |= windows.FILE_GENERIC_READ | windows.FILE_GENERIC_WRITE
 	}
 	h, err := journalOpenAt(windows.Handle(dir.Fd()), name, access, disposition, windows.FILE_NON_DIRECTORY_FILE, share == windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE)
 	if err != nil {
@@ -384,7 +386,7 @@ func (s *Store) write(ctx context.Context, dir *os.File, d *disk) error {
 func (s *Store) bootstrap(ctx context.Context) error {
 	dir, e := openRoot(s.root)
 	if e != nil {
-		return e
+		return fmt.Errorf("open journal root: %w", e)
 	}
 	defer func() { _ = dir.Close() }()
 	for _, name := range []string{"namespace", "journal.json", "snapshot.tmp"} {
@@ -394,17 +396,17 @@ func (s *Store) bootstrap(ctx context.Context) error {
 			return ErrRepair
 		}
 		if !journalNotExist(err) {
-			return wrap(err)
+			return fmt.Errorf("probe journal %s: %w", name, wrap(err))
 		}
 	}
 	l, e := lock(ctx, dir, true)
 	if e != nil {
-		return e
+		return fmt.Errorf("create journal lock: %w", e)
 	}
 	defer func() { _ = l.Close() }()
 	names, e := dir.Readdirnames(-1)
 	if e != nil {
-		return e
+		return fmt.Errorf("list journal root: %w", e)
 	}
 	for _, n := range names {
 		if n != "lock" {
@@ -417,14 +419,14 @@ func (s *Store) bootstrap(ctx context.Context) error {
 	}
 	f, e := openFile(dir, "namespace", oWRONLY|oCREAT|oEXCL)
 	if e != nil {
-		return e
+		return fmt.Errorf("create journal namespace: %w", e)
 	}
 	defer func() { _ = f.Close() }()
 	if _, e = f.WriteString(ns + "\n"); e != nil {
-		return e
+		return fmt.Errorf("write journal namespace: %w", e)
 	}
 	if e = f.Sync(); e != nil {
-		return e
+		return fmt.Errorf("sync journal namespace: %w", e)
 	}
 	if e = journalSyncDir(dir); e != nil {
 		return e
@@ -437,7 +439,10 @@ func (s *Store) bootstrap(ctx context.Context) error {
 	if _, e = s.advance(d); e != nil {
 		return e
 	}
-	return s.write(ctx, dir, d)
+	if e = s.write(ctx, dir, d); e != nil {
+		return fmt.Errorf("write journal: %w", e)
+	}
+	return nil
 }
 
 func unlinkAt(dir *os.File, name string) error {

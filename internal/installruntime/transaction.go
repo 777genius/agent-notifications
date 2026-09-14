@@ -111,6 +111,10 @@ func Fingerprint(path string) (Identity, error) {
 	return safeFingerprint(path)
 }
 
+// IdentityMode is the permission bits the host retains for mode. Windows keeps
+// 0666/0444 for writable/read-only files; Unix keeps mode & 0777.
+func IdentityMode(mode uint32) uint32 { return identityMode(mode) }
+
 func identity(data []byte, mode uint32) Identity {
 	sum := sha256.Sum256(data)
 	return Identity{Exists: true, SHA256: hex.EncodeToString(sum[:]), Mode: identityMode(mode)}
