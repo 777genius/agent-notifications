@@ -1279,8 +1279,15 @@ test_windows_native_hooks_real_exec_launch() {
     printf '{"hooks":{}}\n' > "$hooks_dir/hooks.json"
 
     local exe_path="$stage_dir/claude-notifications-windows-amd64.exe"
-    if ! (cd "$REPO_ROOT" && go build -o "$exe_path" ./cmd/claude-notifications); then
+    if ! (cd "$REPO_ROOT" && go build -ldflags="-s -w" -trimpath -o "$exe_path" ./cmd/claude-notifications); then
         fail_test "Build real Windows notification binary" "go build failed"
+        cleanup_test_dir
+        return
+    fi
+    local exe_size
+    exe_size=$(wc -c < "$exe_path")
+    if [ "$exe_size" -gt $((32 * 1024 * 1024)) ]; then
+        fail_test "Build real Windows notification binary" "fixture exceeds 32MiB managed cap ($exe_size bytes)"
         cleanup_test_dir
         return
     fi
