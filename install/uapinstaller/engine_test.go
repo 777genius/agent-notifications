@@ -98,6 +98,15 @@ func TestNewRejectsRelativeStateRootAndDoesNotCreateDirs(t *testing.T) {
 	}
 }
 
+func TestNewRejectsWindowsUNCStateRoot(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("UNC volume names are a Windows path form")
+	}
+	if _, err := New(Config{StateRoot: `\\server\share\uap`}); err == nil {
+		t.Fatal("UNC StateRoot accepted")
+	}
+}
+
 func skipWindowsLauncherExecuteBit(t *testing.T) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -205,6 +214,86 @@ func TestInstallInspectRepeatRemove(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestInstallSecondClientPreservesFirst(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package source")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(base, "codex config")
+	claudeConfig := filepath.Join(base, "claude config")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eng, err := New(Config{
+		StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe,
+		Runner: listingRunner{configRoot: claudeConfig},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "00000000-0000-4000-8000-000000000062"
+	install := func(client, config, op string) {
+		t.Helper()
+		prepared, err := eng.Prepare(ctx, Request{
+			Operation: OpInstall, PackageRoot: pkg, ClientID: client, ClientConfigRoot: config,
+			ClientExecutable: probe, InstallationID: id, OperationID: op,
+			RequiredComponents: []string{"mcp", "skills"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := eng.Apply(ctx, prepared, Decision{Confirmed: true}); err != nil {
+			t.Fatal(err)
+		}
+		_ = prepared.Close()
+	}
+	install("codex", codexConfig, "codex-add")
+	install("claude", claudeConfig, "claude-add")
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 2 {
+		t.Fatalf("both clients: %+v %v", view, err)
+	}
+	clients := map[string]bool{}
+	for _, binding := range view.Installations[0].Bindings {
+		clients[binding.ClientID] = true
+	}
+	if !clients["codex"] || !clients["claude"] {
+		t.Fatalf("bindings: %+v", view.Installations[0].Bindings)
+	}
+	rm, err := eng.Prepare(ctx, Request{
+		Operation: OpRemove, ClientID: "claude", ClientConfigRoot: claudeConfig, ClientExecutable: probe,
+		InstallationID: id, OperationID: "claude-remove",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, rm, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = rm.Close()
+	view, err = eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 {
+		t.Fatalf("after claude remove: %+v %v", view, err)
+	}
+	clients = map[string]bool{}
+	for _, binding := range view.Installations[0].Bindings {
+		clients[binding.ClientID] = true
+	}
+	if !clients["codex"] {
+		t.Fatal("codex binding lost")
+	}
+	if clients["claude"] {
+		t.Fatal("claude binding survived")
 	}
 }
 
