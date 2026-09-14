@@ -2,6 +2,7 @@ package uapinstaller
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -331,5 +332,59 @@ func TestRecoverEmptyRoot(t *testing.T) {
 	view, err := eng.Inspect(testCtx(t))
 	if err != nil || view.Recovery.Required || view.StateRoot != root {
 		t.Fatalf("empty inspect: %+v %v", view, err)
+	}
+}
+
+func TestApplyRejectsClosedWrongAndRepeatedHandles(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-000000000045",
+		OperationID: "handle-reuse", RequiredComponents: []string{"mcp", "skills"},
+	}
+	closed, err := eng.Prepare(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := closed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, closed, Decision{Confirmed: true}); !errors.Is(err, ErrHandleClosed) {
+		t.Fatalf("apply after close: %v", err)
+	}
+	other, err := New(Config{StateRoot: filepath.Join(base, "other")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := eng.Prepare(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = prepared.Close() }()
+	if _, err := other.Apply(ctx, prepared, Decision{Confirmed: true}); !errors.Is(err, ErrInvalidHandle) {
+		t.Fatalf("foreign engine: %v", err)
+	}
+	result, err := eng.Apply(ctx, prepared, Decision{Confirmed: true})
+	if err != nil || result.Outcome != OutcomeCompleted {
+		t.Fatalf("first apply: %+v %v", result, err)
+	}
+	if _, err := eng.Apply(ctx, prepared, Decision{Confirmed: true}); !errors.Is(err, ErrAlreadyApplied) {
+		t.Fatalf("double apply: %v", err)
 	}
 }

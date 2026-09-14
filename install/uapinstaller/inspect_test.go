@@ -1,6 +1,7 @@
 package uapinstaller
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -13,7 +14,66 @@ import (
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/statev2"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/transaction"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/ports"
 )
+
+type countingRunner struct {
+	n int
+}
+
+func (r *countingRunner) Run(context.Context, ports.Command) (ports.CommandResult, error) {
+	r.n++
+	return ports.CommandResult{}, errors.New("unexpected runner call")
+}
+
+func TestInspectDoesNotRunHelperOrCreateState(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "missing-state")
+	runner := &countingRunner{}
+	eng, err := New(Config{
+		StateRoot: root, Runner: runner,
+		HelperExecutable: filepath.Join(t.TempDir(), "helper"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := eng.Inspect(testCtx(t))
+	if err != nil || view.Recovery.Required {
+		t.Fatalf("inspect: %+v %v", view, err)
+	}
+	if runner.n != 0 {
+		t.Fatalf("inspect ran helper %d times", runner.n)
+	}
+	if _, err := os.Lstat(root); !os.IsNotExist(err) {
+		t.Fatal("inspect created state root")
+	}
+}
+
+func TestRecoverDoesNotActivateClient(t *testing.T) {
+	eng, _ := plantPendingJournal(t)
+	runner := &countingRunner{}
+	commits := 0
+	recovered, err := New(Config{
+		StateRoot: eng.cfg.StateRoot, Runner: runner,
+		HelperExecutable: filepath.Join(t.TempDir(), "helper"),
+		OnCommittedBinding: func(context.Context, BindingFacts) error {
+			commits++
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := recovered.Inspect(testCtx(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := recovered.Recover(testCtx(t), view); err != nil {
+		t.Fatal(err)
+	}
+	if runner.n != 0 || commits != 0 {
+		t.Fatalf("recover activated client runner=%d commits=%d", runner.n, commits)
+	}
+}
 
 func TestInspectReportsPendingJournalWithoutMutating(t *testing.T) {
 	eng, journal := plantPendingJournal(t)
