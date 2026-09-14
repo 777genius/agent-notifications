@@ -125,6 +125,22 @@ func findInstallation(state domain.StateFileV2, id string) (domain.Installation,
 	return domain.Installation{}, false
 }
 
+// RetainedEmpty reports a data_retained installation with zero live clients.
+func (m Materializer) RetainedEmpty(installationID string) (bool, error) {
+	if installationID == "" {
+		return false, nil
+	}
+	state, err := m.Store.Load()
+	if err != nil {
+		return false, err
+	}
+	installation, ok := findInstallation(state, installationID)
+	if !ok {
+		return false, nil
+	}
+	return installation.DataRetained && len(installation.Clients) == 0, nil
+}
+
 func explicitAbs(p string) bool {
 	return p != "" && filepath.IsAbs(p) && filepath.Clean(p) == p
 }
@@ -396,14 +412,17 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 	if ctx == nil {
 		return ErrPreflight
 	}
-	if err := m.validate(req, false); err != nil {
-		return err
-	}
 	state, err := m.Store.Load()
 	if err != nil {
 		return err
 	}
 	installation, ok := findInstallation(state, req.Identity.InstallationID)
+	if ok && installation.DataRetained && len(installation.Clients) == 0 {
+		return nil
+	}
+	if err := m.validate(req, false); err != nil {
+		return err
+	}
 	if !ok {
 		return fmt.Errorf("%w: portable binding is not installed", ErrPreflight)
 	}
