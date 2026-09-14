@@ -88,6 +88,9 @@ func (e *Engine) prepareInstall(ctx context.Context, req Request) (*PreparedOper
 	if req.PackageRoot == "" || !validRoot(req.PackageRoot) {
 		return nil, fmt.Errorf("%w: PackageRoot must be an explicit absolute clean path", ErrInvalidRequest)
 	}
+	if overlappingRoots(e.cfg.TempRoot, req.PackageRoot) {
+		return nil, fmt.Errorf("%w: TempRoot must not overlap PackageRoot", ErrInvalidRequest)
+	}
 	if err := os.MkdirAll(e.cfg.TempRoot, 0700); err != nil {
 		return nil, err
 	}

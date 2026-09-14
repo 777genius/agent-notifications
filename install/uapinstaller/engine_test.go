@@ -111,6 +111,103 @@ func TestNewRejectsWindowsUNCStateRoot(t *testing.T) {
 	}
 }
 
+func TestPrepareRejectsTempRootOverlappingSource(t *testing.T) {
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{StateRoot: filepath.Join(base, "uap"), TempRoot: pkg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-000000000065",
+		OperationID: "overlap-temp", RequiredComponents: []string{"mcp", "skills"},
+	})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("overlapping temp: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(pkg, "plugin.json")); err != nil {
+		t.Fatal("prepare mutated overlapping source")
+	}
+}
+
+func TestPrepareRejectsCaseAliasTempRoot(t *testing.T) {
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "Pkg")
+	writePackage(t, pkg, probe)
+	alias := filepath.Join(base, "pkg")
+	info, err := os.Stat(pkg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliasInfo, aliasErr := os.Stat(alias)
+	if aliasErr != nil || !os.SameFile(info, aliasInfo) {
+		t.Skip("filesystem is case-sensitive")
+	}
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{StateRoot: filepath.Join(base, "uap"), TempRoot: alias})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-000000000066",
+		OperationID: "case-alias-temp", RequiredComponents: []string{"mcp", "skills"},
+	})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("case alias temp: %v", err)
+	}
+}
+
+func TestPrepareRejectsSymlinkAliasTempRoot(t *testing.T) {
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	link := filepath.Join(base, "tmp-link")
+	if err := os.Symlink(pkg, link); err != nil {
+		t.Skip("symlink not permitted")
+	}
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{StateRoot: filepath.Join(base, "uap"), TempRoot: link})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-000000000067",
+		OperationID: "symlink-alias-temp", RequiredComponents: []string{"mcp", "skills"},
+	})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("symlink alias temp: %v", err)
+	}
+}
+
 func skipWindowsLauncherExecuteBit(t *testing.T) {
 	t.Helper()
 	if runtime.GOOS == "windows" {

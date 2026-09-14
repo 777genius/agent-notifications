@@ -3,7 +3,9 @@ package uapinstaller
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"unicode/utf8"
 
@@ -90,4 +92,38 @@ func validRoot(p string) bool {
 	}
 	volume := filepath.VolumeName(p)
 	return !strings.HasPrefix(volume, `\\`) && !strings.HasPrefix(volume, `//`)
+}
+
+// overlappingRoots reports whether two owned paths are the same location or
+// nested, including case and symlink aliases on case-insensitive volumes.
+func overlappingRoots(a, b string) bool {
+	left, right := canonicalRoot(a), canonicalRoot(b)
+	if left == "" || right == "" {
+		return false
+	}
+	if left == right {
+		return true
+	}
+	return containedRoot(left, right) || containedRoot(right, left)
+}
+
+func containedRoot(root, p string) bool {
+	rel, err := filepath.Rel(root, p)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+}
+
+func canonicalRoot(p string) string {
+	p = filepath.Clean(p)
+	if eval, err := filepath.EvalSymlinks(p); err == nil {
+		p = eval
+	}
+	switch runtime.GOOS {
+	case "windows", "darwin":
+		return strings.ToLower(p)
+	default:
+		return p
+	}
 }
