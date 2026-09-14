@@ -3,8 +3,10 @@
 package portablesetup
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -215,5 +217,98 @@ func TestUAPMaterializerTwoClientsShareDataIndependentLocators(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(codex.RuntimeRoot, codex.Primary)); err != nil {
 		t.Fatal("shared runtime removed")
+	}
+	if err := mat.Remove(testCtx(t), MaterializeRequest{
+		Identity: id, Integration: portable.Claude, ExpectedGeneration: snap.Ledger.Generation,
+		ClientConfigRoot: filepath.Join(root, "home", "claude config"), ClientExecutable: probe,
+		OperationID: "portable-claude-remove-again",
+	}); err == nil || !errors.Is(err, ErrPreflight) {
+		t.Fatalf("removed Claude while Codex is live: %v", err)
+	}
+}
+
+func TestUAPMaterializerRepeatedRemoveOfRetainedInstallationIsAlreadyAbsent(t *testing.T) {
+	codex, ledger := bindingFixture(t)
+	probe := buildProbe(t)
+	root := filepath.Dir(codex.ControlRoot)
+	pkg := filepath.Join(root, "package source with spaces")
+	writePackage(t, pkg, probe)
+	uapRoot := filepath.Join(root, "uap")
+	mat, err := NewMaterializer(UAPRoots{
+		StateFile:        filepath.Join(uapRoot, "state", "state-v2.json"),
+		LockFile:         filepath.Join(uapRoot, "state", "mutation.lock"),
+		OperationsDir:    filepath.Join(uapRoot, "state", "operations"),
+		PluginDataBase:   filepath.Join(uapRoot, "plugin data"),
+		ManagedRoot:      filepath.Join(uapRoot, "managed"),
+		HelperExecutable: probe,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := Identity{
+		InstallationID: "00000000-0000-4000-8000-000000000008",
+		ComponentID:    codex.ComponentID, Owner: codex.Owner, ScopeRoot: codex.ScopeRoot,
+		ControlRoot: codex.ControlRoot, GlobalConfig: codex.GlobalConfig, RuntimeRoot: codex.RuntimeRoot,
+		Primary: codex.Primary,
+	}
+	config := filepath.Join(root, "home", "codex config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mat.Install(testCtx(t), MaterializeRequest{
+		Identity: id, Integration: portable.Codex, ExpectedGeneration: ledger.Generation,
+		PackageRoot: pkg, ClientConfigRoot: config, ClientExecutable: probe,
+		OperationID: "portable-codex-install",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(codex.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mat.Remove(testCtx(t), MaterializeRequest{
+		Identity: id, Integration: portable.Codex, ExpectedGeneration: snap.Ledger.Generation,
+		ClientConfigRoot: config, ClientExecutable: probe, OperationID: "portable-codex-remove",
+		ExternalUninstalled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	empty, err := mat.RetainedEmpty(id.InstallationID)
+	if err != nil || !empty {
+		t.Fatalf("last-client remove did not retain empty installation: %v empty=%v", err, empty)
+	}
+	before, err := os.ReadFile(mat.Roots.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err = installruntime.ReadInstalledSnapshot(codex.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation := snap.Ledger.Generation
+	lockBefore, lockBeforeErr := os.Stat(mat.Roots.LockFile)
+	if err := mat.Remove(testCtx(t), MaterializeRequest{
+		Identity: id, Integration: portable.Codex, ExpectedGeneration: generation,
+		OperationID: "portable-codex-remove-again",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(mat.Roots.StateFile)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("already_absent mutated UAP state")
+	}
+	snap, err = installruntime.ReadInstalledSnapshot(codex.ControlRoot)
+	if err != nil || snap.Ledger.Generation != generation {
+		t.Fatalf("already_absent mutated generation: %+v %v", snap.Ledger, err)
+	}
+	if snap.Ledger.PendingMutation != nil {
+		t.Fatalf("already_absent left pending mutation: %+v", snap.Ledger.PendingMutation)
+	}
+	lockAfter, lockAfterErr := os.Stat(mat.Roots.LockFile)
+	if os.IsNotExist(lockBeforeErr) != os.IsNotExist(lockAfterErr) {
+		t.Fatalf("already_absent changed UAP lock presence: before=%v after=%v", lockBeforeErr, lockAfterErr)
+	}
+	if lockBefore != nil && lockAfter != nil && (lockBefore.Size() != lockAfter.Size() || !lockBefore.ModTime().Equal(lockAfter.ModTime())) {
+		t.Fatal("already_absent rewrote UAP lock")
 	}
 }

@@ -31,15 +31,16 @@ type UAPRoots struct {
 
 // MaterializeRequest selects one client. Integration is never taken from clientInfo.
 type MaterializeRequest struct {
-	Identity           Identity
-	Integration        portable.Integration
-	ExpectedGeneration uint64
-	PackageRoot        string
-	ClientConfigRoot   string
-	ClientExecutable   string
-	Discovery          Discovery
-	OperationID        string
-	HelperExecutable   string
+	Identity            Identity
+	Integration         portable.Integration
+	ExpectedGeneration  uint64
+	PackageRoot         string
+	ClientConfigRoot    string
+	ClientExecutable    string
+	Discovery           Discovery
+	OperationID         string
+	HelperExecutable    string
+	ExternalUninstalled bool
 }
 
 type Materializer struct {
@@ -92,6 +93,22 @@ func findInstallation(state domain.StateFileV2, id string) (domain.Installation,
 		}
 	}
 	return domain.Installation{}, false
+}
+
+// RetainedEmpty reports a data_retained installation with zero live clients.
+func (m Materializer) RetainedEmpty(installationID string) (bool, error) {
+	if installationID == "" {
+		return false, nil
+	}
+	state, err := m.Store.Load()
+	if err != nil {
+		return false, err
+	}
+	installation, ok := findInstallation(state, installationID)
+	if !ok {
+		return false, nil
+	}
+	return installation.DataRetained && len(installation.Clients) == 0, nil
 }
 
 func explicitAbs(p string) bool {
@@ -255,14 +272,17 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 	if ctx == nil {
 		return ErrPreflight
 	}
-	if err := m.validate(req, false); err != nil {
-		return err
-	}
 	state, err := m.Store.Load()
 	if err != nil {
 		return err
 	}
 	installation, ok := findInstallation(state, req.Identity.InstallationID)
+	if ok && installation.DataRetained && len(installation.Clients) == 0 {
+		return nil
+	}
+	if err := m.validate(req, false); err != nil {
+		return err
+	}
 	if !ok {
 		return fmt.Errorf("%w: portable binding is not installed", ErrPreflight)
 	}
@@ -312,6 +332,7 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 		Operation: uapinstaller.OpRemove, ClientID: string(req.Integration),
 		ClientConfigRoot: req.ClientConfigRoot, ClientExecutable: req.ClientExecutable,
 		InstallationID: req.Identity.InstallationID, OperationID: req.OperationID,
+		ExternalUninstalled: req.ExternalUninstalled,
 	}); err != nil {
 		return err
 	}
