@@ -135,6 +135,9 @@ func TestExtractRejectsUnexpectedEntry(t *testing.T) {
 }
 
 func TestBuildPackageInstallsThroughPublicInstaller(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("UAP managedstdio.NewSource requires Perm()&0111; Go Windows FileMode does not set execute bits on regular files")
+	}
 	probe := buildProbe(t)
 	base, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
