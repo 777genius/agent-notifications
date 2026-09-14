@@ -42,6 +42,7 @@ type Request struct {
 	GlobalConfig, CodexHome, ClaudeConfig             string
 	ClientExecutable, ScopeRoot, Helper               string
 	ClientExecutables                                 map[string]string
+	PackageSHA256                                     string
 	InstallationID, Primary                           string
 	MCPConfig                                         map[string]string
 	ClaudeHooks, CodexHooks                           *bool
@@ -243,6 +244,13 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		out.Outcome, out.Reason = "incomplete", "package_required"
 		return out, ErrRefused
 	}
+	packageRoot, releasePackage, err := resolvePackageRoot(req)
+	if err != nil {
+		out.Outcome, out.Reason = "incomplete", "package_acquisition_failed"
+		return out, err
+	}
+	defer releasePackage()
+	req.PackageRoot = packageRoot
 	mat, err := materializer(req, snap, runtimeRoot)
 	if err != nil {
 		out.Outcome, out.Reason = "incomplete", err.Error()

@@ -62,6 +62,27 @@ wizard="$SANDBOX/wizard-cli"
 printf '%s\n' '#!/bin/sh' 'echo "setup-notifications wizard"' > "$wizard"
 chmod +x "$wizard"
 cli_has_setup_wizard "$wizard" || { echo "wizard-cli missing wizard"; exit 1; }
+read -r _os _arch < <(bootstrap_release_os_arch)
+case "$_os" in linux|darwin|windows) ;; *) echo "unexpected os $_os"; exit 1 ;; esac
+case "$_arch" in amd64|arm64) ;; *) echo "unexpected arch $_arch"; exit 1 ;; esac
+_portable_stage="$SANDBOX/portable-stage"
+mkdir -p "$_portable_stage" "$SANDBOX/portable-src"
+_asset="agent-notify-portable-${_os}-${_arch}.zip"
+printf 'portable-zip-fixture' > "$SANDBOX/portable-src/$_asset"
+python3 -I - "$SANDBOX/portable-src" "$_asset" <<'PY'
+import hashlib, pathlib, sys
+root, name = pathlib.Path(sys.argv[1]), sys.argv[2]
+digest = hashlib.sha256((root/name).read_bytes()).hexdigest()
+(root/'checksums.txt').write_text(digest+'  '+name+'\n')
+PY
+BOOTSTRAP_TAG=v1.43.0
+_CONFIG_STAGE="$_portable_stage"
+fetch_bootstrap_file() { cp "$SANDBOX/portable-src/$(basename "$1")" "$2"; }
+acquire_wizard_portable_asset
+[ "$WIZARD_PACKAGE_ROOT" = "$_portable_stage/$_asset" ] || { echo "portable asset path $WIZARD_PACKAGE_ROOT"; exit 1; }
+BOOTSTRAP_TAG=""
+_CONFIG_STAGE=""
+WIZARD_PACKAGE_ROOT=""
 # setup_marketplace self-heals a marketplace declared under a retired repo
 # name, but leaves an unrelated source conflict alone.
 (

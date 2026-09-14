@@ -8,12 +8,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/ports"
 
+	"github.com/777genius/agent-notifications/internal/agentnotify/portableasset"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/testenv"
 )
@@ -35,7 +37,11 @@ func main() { json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true}) }
 `), 0600); err != nil {
 		t.Fatal(err)
 	}
-	out := filepath.Join(dir, "probe")
+	name := "probe"
+	if runtime.GOOS == "windows" {
+		name = "probe.exe"
+	}
+	out := filepath.Join(dir, name)
 	cmd := exec.Command("go", "build", "-o", out, src)
 	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
 	if body, err := cmd.CombinedOutput(); err != nil {
@@ -164,6 +170,44 @@ func TestWizardInstallInspectUninstall(t *testing.T) {
 		if target.Unit == "agent-notify" && target.Outcome == "installed" {
 			t.Fatalf("portable binding survived uninstall: %+v", view.Targets)
 		}
+	}
+}
+
+func TestWizardInstallFromReleaseZip(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtimeRoot, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	base := filepath.Dir(control)
+	pkg := filepath.Join(base, "release-pkg")
+	archive := filepath.Join(base, portableasset.AssetName(runtime.GOOS, runtime.GOARCH))
+	built, err := portableasset.Build(portableasset.BuildRequest{
+		Version: "1.43.0", GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
+		Executable: probe, OutputRoot: pkg, Archive: archive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	codexConfig := filepath.Join(base, "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true,
+		Hooks: boolPtr(false), PackageRoot: archive, PackageSHA256: built.ArchiveSHA256,
+		ControlRoot: control, RuntimeRoot: runtimeRoot, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe, ScopeRoot: filepath.Join(base, "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("zip install: %+v %v", installed, err)
+	}
+	req.PackageSHA256 = strings.Repeat("0", 64)
+	blocked, err := Run(ctx, req)
+	if err == nil || blocked.Reason != "package_acquisition_failed" {
+		t.Fatalf("checksum: %+v %v", blocked, err)
 	}
 }
 

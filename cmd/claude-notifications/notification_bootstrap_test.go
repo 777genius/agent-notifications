@@ -3,6 +3,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -197,6 +199,90 @@ main --product both
 	}
 	if !strings.Contains(body, "--claude-executable "+filepath.Join(binDir, "claude")) || !strings.Contains(body, "--codex-executable "+filepath.Join(binDir, "codex")) {
 		t.Fatal(body)
+	}
+}
+
+func TestNotificationBootstrapWizardReleaseZip(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join(notificationRepoRoot(t), "bin", "bootstrap.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := strings.TrimSuffix(strings.TrimSpace(string(source)), `main "$@"`)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	t.Setenv("CODEX_HOME", filepath.Join(home, "codex"))
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	binDir := filepath.Join(home, "bin")
+	if err := os.MkdirAll(binDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"claude", "codex"} {
+		if err := os.WriteFile(filepath.Join(binDir, name), []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	binary := filepath.Join(home, "fake-binary")
+	helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then printf '%s\\n' 'setup-notifications wizard' 'setup-notifications' '--skip-agent-notify'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n"
+	if err := os.WriteFile(binary, []byte(helper), 0700); err != nil {
+		t.Fatal(err)
+	}
+	asset := fmt.Sprintf("agent-notify-portable-%s-%s.zip", runtime.GOOS, runtime.GOARCH)
+	release := filepath.Join(home, "release")
+	if err := os.Mkdir(release, 0700); err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("portable-zip-fixture")
+	if err := os.WriteFile(filepath.Join(release, asset), payload, 0600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(payload)
+	checksums := hex.EncodeToString(sum[:]) + "  " + asset + "\n"
+	if err := os.WriteFile(filepath.Join(release, "checksums.txt"), []byte(checksums), 0600); err != nil {
+		t.Fatal(err)
+	}
+	script := prefix + `
+print_header() { :; }
+abort_if_wsl_environment() { :; }
+check_prerequisites() { :; }
+detect_platform() { :; }
+install_cleanup_traps() { :; }
+resolve_bootstrap_release() { BOOTSTRAP_TAG=v1.43.0; }
+stage_config_helper() { :; }
+stage_historical_baselines() { :; }
+config_preflight() { :; }
+initialize_config() { :; }
+fetch_bootstrap_file() {
+  case "$1" in
+    *checksums.txt) cp "$HOME/release/checksums.txt" "$2" ;;
+    *agent-notify-portable-*) cp "$HOME/release/$(basename "$1")" "$2" ;;
+    *) echo "unexpected fetch $1" >&2; return 1 ;;
+  esac
+}
+install_claude() { echo claude >> "$HOME/installs"; PLUGIN_ROOT="$HOME/bundle"; mkdir -p "$PLUGIN_ROOT"; }
+install_codex() { echo codex >> "$HOME/installs"; CONFIGURE_BINARY="$HOME/fake-binary"; return 0; }
+main --product both
+`
+	command := exec.Command("bash", "-c", script)
+	command.Dir = home
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v: %s", err, output)
+	}
+	calls, err := os.ReadFile(filepath.Join(home, "calls"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(calls)
+	if strings.Contains(body, "setup-notifications configure") {
+		t.Fatal("wizard path called configure", body)
+	}
+	if !strings.Contains(body, "--package ") || !strings.Contains(body, asset) {
+		t.Fatal(body)
+	}
+	if strings.Contains(body, "portable-package") {
+		t.Fatal("used git template instead of release zip", body)
 	}
 }
 

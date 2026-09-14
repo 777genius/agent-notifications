@@ -31,7 +31,7 @@ TTY stdin prompts for agents and confirmation when those flags are omitted.
   --codex-agent-notify true|false
   --yes                       Required for mutation without a TTY
   --json
-  --package PATH              Local standard package root (plugin.json + MCP/skills)
+  --package PATH              Local standard package root or same-release zip
   --plugin-root PATH          Existing plugin bundle for Codex hooks-only setup
   --control-root PATH         Existing managed control directory
   --runtime-root PATH         Existing managed runtime (default: ledger runtime)

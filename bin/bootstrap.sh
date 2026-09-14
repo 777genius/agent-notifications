@@ -48,6 +48,7 @@ PLUGIN_ROOT=""
 _BOOTSTRAP_STAGE=""
 _CONFIG_STAGE=""
 _CONFIG_HELPER=""
+_PORTABLE_STAGE=""
 _KEEP_CONFIG_STAGE=false
 PRODUCT=""
 BOOTSTRAP_TAG=""
@@ -1114,6 +1115,7 @@ select_product() {
 bootstrap_cleanup() {
     [ -z "$_BOOTSTRAP_TMP" ] || rm -f "$_BOOTSTRAP_TMP"
     [ -z "$_BOOTSTRAP_STAGE" ] || rm -rf "$_BOOTSTRAP_STAGE"
+    [ -z "$_PORTABLE_STAGE" ] || rm -rf "$_PORTABLE_STAGE"
     if [ "$_KEEP_CONFIG_STAGE" != true ]; then
         [ -z "$_CONFIG_STAGE" ] || rm -rf "$_CONFIG_STAGE"
     fi
@@ -1552,9 +1554,45 @@ bootstrap_abs_command() {
     esac
 }
 
+bootstrap_release_os_arch() {
+    local os arch
+    os=$(uname -s | tr '[:upper:]' '[:lower:]')
+    case "$os" in darwin|linux) ;; mingw*|msys*|cygwin*) os=windows ;; *) return 1 ;; esac
+    case "$(uname -m)" in x86_64|amd64) arch=amd64 ;; arm64|aarch64) arch=arm64 ;; *) return 1 ;; esac
+    printf '%s %s\n' "$os" "$arch"
+}
+
+# Same-tag portable zip is the install source for agent-notify. Git templates
+# without the release binary are only a last-resort offline fallback.
+acquire_wizard_portable_asset() {
+    local os arch asset base stage
+    [ -n "${BOOTSTRAP_TAG:-}" ] || return 1
+    read -r os arch < <(bootstrap_release_os_arch) || return 1
+    asset="agent-notify-portable-${os}-${arch}.zip"
+    stage="${_CONFIG_STAGE:-}"
+    if [ -z "$stage" ]; then
+        _PORTABLE_STAGE=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-portable-XXXXXX") || return 1
+        stage="$_PORTABLE_STAGE"
+    fi
+    base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG"
+    if [ ! -f "$stage/checksums.txt" ]; then
+        fetch_bootstrap_file "$base/checksums.txt" "$stage/checksums.txt" || return 1
+    fi
+    fetch_bootstrap_file "$base/$asset" "$stage/$asset" || return 1
+    python3 -I - "$stage" "$asset" <<'PYVERIFY' || return 1
+import hashlib, pathlib, sys
+root, name = pathlib.Path(sys.argv[1]), sys.argv[2]
+entries = [line.split() for line in (root/'checksums.txt').read_text().splitlines()]
+expected = [e[0] for e in entries if len(e)==2 and e[1].lstrip('*')==name]
+assert len(expected)==1 and hashlib.sha256((root/name).read_bytes()).hexdigest()==expected[0].lower(), 'Portable package checksum mismatch'
+PYVERIFY
+    WIZARD_PACKAGE_ROOT="$stage/$asset"
+}
+
 setup_agent_notify_wizard() {
     local agents package_root install_root wizard_codex_home="" i=0
     local claude_exec="" codex_exec="" plugin_root
+    WIZARD_PACKAGE_ROOT=""
     case "$PRODUCT" in
         claude) agents=claude ;;
         codex) agents=codex ;;
@@ -1572,7 +1610,15 @@ setup_agent_notify_wizard() {
     if [ -z "$plugin_root" ]; then
         plugin_root=$(cd "$(dirname "$CONFIGURE_BINARY")/.." && pwd)
     fi
-    if [ -f "$plugin_root/portable-package/plugin.json" ]; then
+    if [ -n "${BOOTSTRAP_TAG:-}" ]; then
+        if ! acquire_wizard_portable_asset; then
+            echo -e "${YELLOW}⚠ Agent-notify wizard skipped; portable package is missing from $BOOTSTRAP_TAG.${NC}" >&2
+            echo -e "${YELLOW}  Plugin/hooks install succeeded. Retry:${NC}" >&2
+            echo -e "${YELLOW}  \"$CONFIGURE_BINARY\" setup-notifications wizard --action install --agents ${agents} --hooks false --agent-notify true --yes${NC}" >&2
+            return 1
+        fi
+        package_root="$WIZARD_PACKAGE_ROOT"
+    elif [ -f "$plugin_root/portable-package/plugin.json" ]; then
         package_root="$plugin_root/portable-package"
     else
         install_root=$(cd "$(dirname "$CONFIGURE_BINARY")/.." && pwd)
@@ -1582,7 +1628,7 @@ setup_agent_notify_wizard() {
         fi
     fi
     if [ -z "${package_root:-}" ]; then
-        echo -e "${YELLOW}⚠ Agent-notify wizard skipped; portable-package is missing from the installed bundle.${NC}" >&2
+        echo -e "${YELLOW}⚠ Agent-notify wizard skipped; portable package is missing from the accepted release.${NC}" >&2
         echo -e "${YELLOW}  Plugin/hooks install succeeded. Retry:${NC}" >&2
         echo -e "${YELLOW}  \"$CONFIGURE_BINARY\" setup-notifications wizard --action install --agents ${agents} --hooks false --agent-notify true --yes${NC}" >&2
         return 1
