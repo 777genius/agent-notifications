@@ -34,11 +34,14 @@ If assets/registration succeeded but init failed, report partial success and the
 
 Then run `/claude-notifications-go:settings` for [private revision-checked edits](settings.md). Save diagnostics privately; never print raw configuration or expanded secrets.
 
-After a successful plugin install, agent-notify configure runs by default
-(`--navigation none --allow-unknown-caller true --allow-caller-asserted false`
-unless a route is supplied). Pass `--skip-agent-notify` to
-keep hooks-only setup. If agent-notify setup fails, the plugin install still
-counts as success; retry `setup-notifications configure` after fixing the cause.
+After a successful plugin install, agent-notify configure is default-on only
+where this installer can configure MCP (macOS). Auto-default on another OS
+keeps hooks-only setup and reports `unsupported_platform`; it is not a full
+MCP installation. Pass `--skip-agent-notify` to skip MCP on a supported OS.
+Explicit `--agent-notify` without a supported OS or configure API is an
+error. If a supported configure attempt fails, the plugin/hooks install still
+counts as committed; the overall result is incomplete/nonzero with a retry
+command.
 
 ```bash
 SKIP_AGENT_NOTIFY=false
@@ -112,10 +115,21 @@ chmod +x "$INSTALLER"
 "$INSTALLER"
 if [ "$SKIP_AGENT_NOTIFY" != true ]; then
   NOTIFY_BIN="${CLAUDE_PLUGIN_ROOT}/bin/claude-notifications"
-  if [ ! -x "$NOTIFY_BIN" ]; then
+  os=$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]' || true)
+  if [ "$os" != darwin ]; then
+    if [ "$SEEN_AGENT_NOTIFY" = true ]; then
+      echo "agent-notify MCP is unsupported on this OS; this installer supports macOS. Plugin install succeeded. Not a full MCP installation." >&2
+      exit 1
+    fi
+    echo "agent-notify MCP skipped: unsupported_platform (this installer supports macOS). Plugin install succeeded. Not a full MCP installation." >&2
+  elif [ ! -x "$NOTIFY_BIN" ]; then
     echo "agent-notify setup skipped; installer binary not found. Plugin install succeeded." >&2
+    if [ "$SEEN_AGENT_NOTIFY" = true ]; then
+      exit 1
+    fi
   elif ! "$NOTIFY_BIN" setup-notifications configure --provider claude "${CONFIGURE_ARGS[@]}"; then
     echo "agent-notify setup failed; plugin install succeeded. Retry: \"$NOTIFY_BIN\" setup-notifications configure --provider claude ${CONFIGURE_ARGS[*]}" >&2
+    exit 1
   fi
 fi
 ```

@@ -21,10 +21,10 @@ for args in '--product invalid' '--product' '--unknown' '--product claude --prod
 done
 if ( PRODUCT=""; CONFIGURE_ARGS=(); select_product --product codex --navigation none ); then echo "accepted incomplete none"; exit 1; fi
 if ( PRODUCT=""; CONFIGURE_ARGS=(); select_product --product codex --allow-unknown-caller true ); then echo "accepted partial consent"; exit 1; fi
-PRODUCT=""; CONFIGURE_ARGS=(); CONFIGURE_NOTIFICATIONS=true
+PRODUCT=""; CONFIGURE_ARGS=(); CONFIGURE_NOTIFICATIONS=true; AGENT_NOTIFY_REQUEST=auto
 select_product --product codex --navigation none --allow-unknown-caller true --allow-caller-asserted false
 [ "${#CONFIGURE_ARGS[@]}" -eq 6 ]
-PRODUCT=""; CONFIGURE_ARGS=(); CONFIGURE_NOTIFICATIONS=true
+PRODUCT=""; CONFIGURE_ARGS=(); CONFIGURE_NOTIFICATIONS=true; AGENT_NOTIFY_REQUEST=auto
 select_product --product claude
 [ "${CONFIGURE_ARGS[*]}" = "--navigation none --allow-unknown-caller true --allow-caller-asserted false" ]
 for tag in v1.42.0 v1.43.2 v2.0.0; do
