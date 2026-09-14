@@ -7,18 +7,20 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/777genius/agent-notifications/internal/codexsetup"
 )
 
 type setupCodexOptions struct {
-	codexHome     string
-	pluginRoot    string
-	print         bool
-	dryRun        bool
-	configure     bool
-	configureArgs []string
+	codexHome      string
+	pluginRoot     string
+	print          bool
+	dryRun         bool
+	configure      bool
+	explicitNotify bool
+	configureArgs  []string
 }
 
 // runSetupCodex registers this plugin's hooks with the Codex CLI.
@@ -92,16 +94,30 @@ func runSetupCodex(args []string) {
 		fmt.Printf("  preserved:   %d hook handler(s) from other tools\n", result.ForeignKept)
 	}
 	fmt.Println()
+	incomplete := false
 	if opts.configure {
-		configure := append([]string{"--provider", "codex"}, opts.configureArgs...)
-		retryArgs := opts.configureArgs
-		if home := filepath.Clean(result.CodexHome); home != "" && filepath.IsAbs(home) {
-			configure = append([]string{"--provider", "codex", "--codex-home", home}, opts.configureArgs...)
-			retryArgs = append([]string{"--codex-home", home}, opts.configureArgs...)
-		}
-		code := executeNotificationConfigure(context.Background(), configure, os.Stdout, result.InstallDir)
-		if code != 0 {
-			reportAgentNotifySetupFailure(os.Stderr, "codex", retryArgs)
+		if !agentNotifySetupSupported() {
+			_, _ = fmt.Fprintln(os.Stderr, "setup-codex: agent-notify MCP skipped: unsupported_platform (macOS or Linux required). Hooks remain registered. This is not a full MCP installation.")
+			if opts.explicitNotify {
+				retryArgs := opts.configureArgs
+				if home := filepath.Clean(result.CodexHome); home != "" && filepath.IsAbs(home) {
+					retryArgs = append([]string{"--codex-home", home}, opts.configureArgs...)
+				}
+				reportAgentNotifySetupFailure(os.Stderr, "codex", retryArgs)
+				incomplete = true
+			}
+		} else {
+			configure := append([]string{"--provider", "codex"}, opts.configureArgs...)
+			retryArgs := opts.configureArgs
+			if home := filepath.Clean(result.CodexHome); home != "" && filepath.IsAbs(home) {
+				configure = append([]string{"--provider", "codex", "--codex-home", home}, opts.configureArgs...)
+				retryArgs = append([]string{"--codex-home", home}, opts.configureArgs...)
+			}
+			code := executeNotificationConfigure(context.Background(), configure, os.Stdout, result.InstallDir)
+			if code != 0 {
+				reportAgentNotifySetupFailure(os.Stderr, "codex", retryArgs)
+				incomplete = true
+			}
 		}
 	}
 	fmt.Println("Next step: start Codex, run /hooks, review the entries and trust them.")
@@ -111,6 +127,9 @@ func runSetupCodex(args []string) {
 		fmt.Printf("Setup executable (no PATH entry required): %s\n", executable)
 	}
 	fmt.Println("You can also run setup-codex from the installed bundle to repair hook registration.")
+	if incomplete {
+		os.Exit(1)
+	}
 }
 
 func parseSetupCodexOptions(args []string) (setupCodexOptions, error) {
@@ -151,6 +170,7 @@ func parseSetupCodexOptions(args []string) (setupCodexOptions, error) {
 	if explicit && skip {
 		return opts, fmt.Errorf("--agent-notify and --skip-agent-notify are mutually exclusive")
 	}
+	opts.explicitNotify = explicit
 	if opts.print && opts.dryRun {
 		return opts, fmt.Errorf("--print and --dry-run are mutually exclusive")
 	}
@@ -181,4 +201,8 @@ func reportAgentNotifySetupFailure(w io.Writer, provider string, args []string) 
 	}
 	_, _ = fmt.Fprintf(w, "setup-codex: agent-notify setup failed; Codex hooks remain registered.\n")
 	_, _ = fmt.Fprintf(w, "Retry: %s setup-notifications configure --provider %s %s\n", retry, provider, strings.Join(args, " "))
+}
+
+func agentNotifySetupSupported() bool {
+	return runtime.GOOS == "darwin" || runtime.GOOS == "linux"
 }

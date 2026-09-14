@@ -409,14 +409,14 @@ func TestSetupCodexE2EConfigureNotifications(t *testing.T) {
 	installDir := filepath.Join(f.home, ".codex", "claude-notifications-go")
 	command := filepath.Join(installDir, "bin", "claude-notifications")
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
-		if err != nil {
-			t.Fatalf("hooks install should survive agent-notify failure: %v %s", err, out)
+		if err == nil {
+			t.Fatal("explicit --agent-notify on unsupported OS must be incomplete", out)
 		}
 		if !strings.Contains(out, "Codex notifications registered") {
 			t.Fatal("hooks not registered", out)
 		}
-		if !strings.Contains(out, "agent-notify setup failed") {
-			t.Fatal("missing agent-notify warning", out)
+		if !strings.Contains(out, "unsupported_platform") && !strings.Contains(out, "agent-notify") {
+			t.Fatal("missing agent-notify unsupported result", out)
 		}
 		hooks := e2eRead(t, filepath.Join(f.home, ".codex", "hooks.json"))
 		if !strings.Contains(string(hooks), "codex-hook-wrapper") {
