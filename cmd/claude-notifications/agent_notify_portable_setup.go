@@ -141,6 +141,6 @@ func agentPortableSetupMain(command string, args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	fmt.Fprintf(os.Stdout, "portable binding published: %s\n", name)
+	_, _ = fmt.Fprintf(os.Stdout, "portable binding published: %s\n", name)
 	return 0
 }

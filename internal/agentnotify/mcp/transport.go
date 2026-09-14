@@ -70,7 +70,7 @@ func newConnection(ctx context.Context, owned io.ReadWriteCloser, clock agentnot
 	c := &connection{io: owned, reader: bufio.NewReaderSize(owned, MaxFrame+1), clock: clock, ctx: ctx, cancel: cancel, pending: make(map[jsonrpc.ID]*frameState), busy: make(map[jsonrpc.ID]string), output: make(chan outbound, outputLimit), writerDone: make(chan struct{}), watchDone: make(chan struct{})}
 	go c.writeLoop()
 	go c.watchDeadlines()
-	go func() { <-ctx.Done(); c.Close() }()
+	go func() { <-ctx.Done(); _ = c.Close() }()
 	return c
 }
 func (c *connection) Connect(context.Context) (sdk.Connection, error) { return c, nil }
@@ -98,7 +98,7 @@ func (c *connection) Read(ctx context.Context) (jsonrpc.Message, error) {
 		// ReadSlice uses a fixed buffer; oversized whitespace never reaches a JSON decoder.
 		raw, err := c.reader.ReadSlice('\n')
 		if err != nil {
-			c.Close()
+			_ = c.Close()
 			if err == io.EOF && len(raw) == 0 {
 				return nil, io.EOF
 			}
@@ -107,22 +107,22 @@ func (c *connection) Read(ctx context.Context) (jsonrpc.Message, error) {
 		deadline := c.clock.Now()
 		deadline.NotAfter += 15
 		if len(raw) > MaxFrame || strictjson.Validate(raw, strictjson.Budget{Bytes: MaxFrame, Depth: 16, Entries: 10000}) != nil {
-			c.Close()
+			_ = c.Close()
 			return nil, errProtocol
 		}
 		if !bytes.HasPrefix(bytes.TrimSpace(raw), []byte("{")) {
-			c.Close()
+			_ = c.Close()
 			return nil, errProtocol
 		}
 
 		var envelope map[string]json.RawMessage
 		if json.Unmarshal(raw, &envelope) != nil {
-			c.Close()
+			_ = c.Close()
 			return nil, errProtocol
 		}
 		wireID, err := exactID(envelope["id"])
 		if err != nil {
-			c.Close()
+			_ = c.Close()
 			return nil, errProtocol
 		}
 		// Hide every caller ID from the SDK float decoder and private namespace.
@@ -132,12 +132,12 @@ func (c *connection) Read(ctx context.Context) (jsonrpc.Message, error) {
 		}
 		msg, err := jsonrpc.DecodeMessage(raw)
 		if err != nil {
-			c.Close()
+			_ = c.Close()
 			return nil, errProtocol
 		}
 		req, ok := msg.(*jsonrpc.Request)
 		if !ok { // This tools-only server never initiates client requests.
-			c.Close()
+			_ = c.Close()
 			return nil, errProtocol
 		}
 		if !req.ID.IsValid() {
@@ -148,12 +148,12 @@ func (c *connection) Read(ctx context.Context) (jsonrpc.Message, error) {
 					RequestID json.RawMessage `json:"requestId"`
 				}
 				if json.Unmarshal(req.Params, &p) != nil {
-					c.Close()
+					_ = c.Close()
 					return nil, errProtocol
 				}
 				id, e := exactID(p.RequestID)
 				if e != nil || id == "" {
-					c.Close()
+					_ = c.Close()
 					return nil, errProtocol
 				}
 				c.mu.Lock()
@@ -174,7 +174,7 @@ func (c *connection) Read(ctx context.Context) (jsonrpc.Message, error) {
 				}
 				continue
 			case "tools/call":
-				c.Close()
+				_ = c.Close()
 				return nil, errProtocol
 			default:
 				continue // Unknown notifications have no reply or queued work.
@@ -215,13 +215,13 @@ func (c *connection) Read(ctx context.Context) (jsonrpc.Message, error) {
 		}
 		if duplicate {
 			c.mu.Unlock()
-			c.Close()
+			_ = c.Close()
 			return nil, errProtocol
 		}
 		// Never reuse a private ID on counter exhaustion.
 		if c.sequence == ^uint64(0) {
 			c.mu.Unlock()
-			c.Close()
+			_ = c.Close()
 			return nil, errProtocol
 		}
 		c.sequence++
@@ -230,7 +230,7 @@ func (c *connection) Read(ctx context.Context) (jsonrpc.Message, error) {
 		if len(c.pending) >= pendingLimit {
 			if len(c.busy) >= outputLimit+1 {
 				c.mu.Unlock()
-				c.Close()
+				_ = c.Close()
 				return nil, errBackpressure
 			}
 			c.busy[req.ID] = wireID
@@ -286,7 +286,7 @@ func (c *connection) Write(ctx context.Context, msg jsonrpc.Message) error {
 	}
 	data, err := jsonrpc.EncodeMessage(msg)
 	if err != nil || len(data)+1 > MaxFrame {
-		c.Close()
+		_ = c.Close()
 		return errProtocol
 	}
 	item := outbound{}
@@ -307,7 +307,7 @@ func (c *connection) Write(ctx context.Context, msg jsonrpc.Message) error {
 		c.mu.Unlock()
 	}
 	if err != nil || len(data)+1 > MaxFrame {
-		c.Close()
+		_ = c.Close()
 		return errProtocol
 	}
 	item.bytes = append(data, '\n')
@@ -320,7 +320,7 @@ func (c *connection) Write(ctx context.Context, msg jsonrpc.Message) error {
 	case c.output <- item:
 		return nil
 	default:
-		c.Close()
+		_ = c.Close()
 		return errBackpressure
 	}
 }
@@ -339,7 +339,7 @@ func (c *connection) writeLoop() {
 			for len(data) > 0 {
 				n, e := c.io.Write(data)
 				if e != nil || n <= 0 {
-					c.Close()
+					_ = c.Close()
 					return
 				}
 				data = data[n:]
@@ -384,7 +384,7 @@ func (c *connection) watchDeadlines() {
 			}
 			c.mu.Unlock()
 			if stalled {
-				c.Close()
+				_ = c.Close()
 				return
 			}
 		}

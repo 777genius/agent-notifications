@@ -31,11 +31,11 @@ func openLock(path string, create bool) (*os.File, error) {
 	f := os.NewFile(uintptr(fd), path)
 	var st unix.Stat_t
 	if err = unix.Fstat(fd, &st); err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, err
 	}
 	if st.Mode&unix.S_IFMT != unix.S_IFREG || st.Uid != uint32(os.Geteuid()) || st.Mode&07777 != 0600 || st.Nlink != 1 {
-		f.Close()
+		_ = f.Close()
 		return nil, fmt.Errorf("installation lock requires an owned private regular inode")
 	}
 	return f, nil
@@ -46,7 +46,7 @@ func privateDirectory(path string) error {
 	if err != nil {
 		return err
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 	var st unix.Stat_t
 	if err := unix.Fstat(fd, &st); err != nil {
 		return err

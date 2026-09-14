@@ -187,13 +187,14 @@ func TestLocatorRefusals(t *testing.T) {
 				if e = json.Unmarshal(data, &l); e != nil {
 					t.Fatal(e)
 				}
-				if kind == "ledger-owner" {
+				switch kind {
+				case "ledger-owner":
 					l.Owner = "foreign-owner"
-				} else if kind == "decoder-floor" {
+				case "decoder-floor":
 					l.DecoderFloor = 999
-				} else if kind == "floor" {
+				case "floor":
 					l.WriterFloor = 999
-				} else {
+				default:
 					l.ID = "another-component"
 				}
 				data, e = json.Marshal(l)

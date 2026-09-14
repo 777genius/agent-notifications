@@ -42,18 +42,18 @@ func sdkFixtureKind(t *testing.T, b Backend, kind string) (*sdk.ClientSession, c
 	session, e := client.Connect(ctx, &sdk.IOTransport{Reader: peer, Writer: peer}, nil)
 	if e != nil {
 		cancel()
-		peer.Close()
+		_ = peer.Close()
 		t.Fatal(e)
 	}
 	t.Cleanup(func() {
 		cancel()
-		peer.Close()
+		_ = peer.Close()
 		select {
 		case <-done:
 		case <-time.After(time.Second):
 			t.Error("Run failed to join")
 		}
-		session.Close()
+		_ = session.Close()
 	})
 	return session, ctx
 }

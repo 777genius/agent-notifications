@@ -48,14 +48,14 @@ func anchoredParent(path string, create bool) (*os.File, []PathAnchor, error) {
 			}
 		}
 		if e != nil {
-			f.Close()
+			_ = f.Close()
 			return nil, anchors, e
 		}
-		f.Close()
+		_ = f.Close()
 		f = os.NewFile(uintptr(next), parent)
 		var st unix.Stat_t
 		if e = unix.Fstat(next, &st); e != nil {
-			f.Close()
+			_ = f.Close()
 			return nil, anchors, e
 		}
 		anchors = append(anchors, PathAnchor{Path: parent, Identity: fmt.Sprintf("%d:%d", st.Dev, st.Ino)})
@@ -86,7 +86,7 @@ func anchoredFingerprint(parent *os.File, name string) (Identity, error) {
 		return Identity{}, err
 	}
 	f := os.NewFile(uintptr(fd), name)
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	info, err := f.Stat()
 	if err != nil {
 		return Identity{}, err
@@ -108,7 +108,7 @@ func safeFingerprint(path string) (Identity, error) {
 	if err != nil {
 		return Identity{}, err
 	}
-	defer parent.Close()
+	defer func() { _ = parent.Close() }()
 	return anchoredFingerprint(parent, filepath.Base(path))
 }
 func safePublish(file File, cas bool) error {
@@ -116,7 +116,7 @@ func safePublish(file File, cas bool) error {
 	if err != nil {
 		return err
 	}
-	defer parent.Close()
+	defer func() { _ = parent.Close() }()
 	if err = checkAnchors(file.Parents, anchors); err != nil {
 		return err
 	}
@@ -145,7 +145,7 @@ func safePublish(file File, cas bool) error {
 		return err
 	}
 	temp := ".runtime-" + hex.EncodeToString(random[:])
-	defer unix.Unlinkat(int(parent.Fd()), temp, 0)
+	defer func() { _ = unix.Unlinkat(int(parent.Fd()), temp, 0) }()
 	if file.Link != "" {
 		err = unix.Symlinkat(file.Link, int(parent.Fd()), temp)
 	} else {
@@ -178,7 +178,7 @@ func safePublish(file File, cas bool) error {
 func pathAnchors(path string, create bool) ([]PathAnchor, error) {
 	f, a, err := anchoredParent(path, create)
 	if f != nil {
-		f.Close()
+		_ = f.Close()
 	}
 	if !create && os.IsNotExist(err) {
 		err = nil
@@ -194,7 +194,7 @@ func safeRemoveDirectory(path, want string, anchors []PathAnchor) error {
 	if err != nil {
 		return err
 	}
-	defer parent.Close()
+	defer func() { _ = parent.Close() }()
 	if err = checkAnchors(anchors, got); err != nil {
 		return err
 	}
@@ -239,13 +239,13 @@ func readRegularFileLimit(path string, limit int64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer parent.Close()
+	defer func() { _ = parent.Close() }()
 	fd, err := unix.Openat(int(parent.Fd()), filepath.Base(path), unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, err
 	}
 	f := os.NewFile(uintptr(fd), path)
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	info, err := f.Stat()
 	if err != nil {
 		return nil, err
@@ -271,7 +271,7 @@ func regularObjectID(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer parent.Close()
+	defer func() { _ = parent.Close() }()
 	var st unix.Stat_t
 	if err := unix.Fstatat(int(parent.Fd()), filepath.Base(path), &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 		return "", err
@@ -290,7 +290,7 @@ func removePhysicalDirectory(path string) error {
 	if err != nil {
 		return err
 	}
-	defer parent.Close()
+	defer func() { _ = parent.Close() }()
 	fd, err := unix.Openat(int(parent.Fd()), filepath.Base(path), unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err == unix.ENOENT {
 		return nil
@@ -299,7 +299,7 @@ func removePhysicalDirectory(path string) error {
 		return fmt.Errorf("transaction blob directory is not a physical directory: %w", err)
 	}
 	f := os.NewFile(uintptr(fd), path)
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	names, err := f.Readdirnames(-1)
 	if err != nil {
 		return err

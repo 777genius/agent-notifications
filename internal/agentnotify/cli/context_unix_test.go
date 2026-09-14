@@ -35,7 +35,9 @@ func TestSecureContext(t *testing.T) {
 			t.Fatalf("accepted mode %o", mode)
 		}
 	}
-	os.Chmod(path, 0600)
+	if e = os.Chmod(path, 0600); e != nil {
+		t.Fatal(e)
+	}
 	link := filepath.Join(root, "link")
 	if e = os.Symlink(path, link); e != nil {
 		t.Fatal(e)
@@ -44,7 +46,9 @@ func TestSecureContext(t *testing.T) {
 		t.Fatal("symlink accepted")
 	}
 	parent := filepath.Join(root, "parent")
-	os.Symlink(root, parent)
+	if e = os.Symlink(root, parent); e != nil {
+		t.Fatal(e)
+	}
 	if _, e = ReadSecureContext(context.Background(), filepath.Join(parent, "context.json")); e == nil {
 		t.Fatal("ancestor symlink accepted")
 	}
@@ -64,7 +68,9 @@ func TestSecureContext(t *testing.T) {
 	if _, e = ReadSecureContext(context.Background(), fifo); e == nil {
 		t.Fatal("fifo accepted")
 	}
-	os.WriteFile(path, []byte(raw), 0600)
+	if e = os.WriteFile(path, []byte(raw), 0600); e != nil {
+		t.Fatal(e)
+	}
 	hard := filepath.Join(root, "hard")
 	if e = os.Link(path, hard); e != nil {
 		t.Fatal(e)
@@ -72,7 +78,9 @@ func TestSecureContext(t *testing.T) {
 	if _, e = ReadSecureContext(context.Background(), path); e == nil {
 		t.Fatal("hardlink accepted")
 	}
-	os.Remove(hard)
+	if e = os.Remove(hard); e != nil {
+		t.Fatal(e)
+	}
 	if os.Geteuid() == 0 {
 		if e = os.Chown(path, 65534, -1); e != nil {
 			t.Fatal(e)

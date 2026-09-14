@@ -27,7 +27,7 @@ func read(path string, limit int) ([]byte, installruntime.Identity, error) {
 		return nil, zero, e
 	}
 	parent := os.NewFile(uintptr(fd), "/")
-	defer func() { parent.Close() }()
+	defer func() { _ = parent.Close() }()
 	for _, part := range strings.Split(strings.TrimPrefix(filepath.Dir(path), "/"), "/") {
 		if part == "" {
 			continue
@@ -39,7 +39,7 @@ func read(path string, limit int) ([]byte, installruntime.Identity, error) {
 		if e != nil {
 			return nil, zero, e
 		}
-		parent.Close()
+		_ = parent.Close()
 		parent = os.NewFile(uintptr(n), part)
 	}
 	fd, e = unix.Openat(int(parent.Fd()), filepath.Base(path), unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
@@ -50,7 +50,7 @@ func read(path string, limit int) ([]byte, installruntime.Identity, error) {
 		return nil, zero, e
 	}
 	f := os.NewFile(uintptr(fd), path)
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	info, e := f.Stat()
 	if e != nil {
 		return nil, zero, e
@@ -90,7 +90,7 @@ func requireDirectory(path string) error {
 		return e
 	}
 	parent := os.NewFile(uintptr(fd), "/")
-	defer parent.Close()
+	defer func() { _ = parent.Close() }()
 	for _, part := range strings.Split(strings.TrimPrefix(path, "/"), "/") {
 		if part == "" {
 			continue
@@ -102,7 +102,7 @@ func requireDirectory(path string) error {
 		if e != nil {
 			return ErrConflict
 		}
-		parent.Close()
+		_ = parent.Close()
 		parent = os.NewFile(uintptr(n), part)
 	}
 	return nil

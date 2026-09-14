@@ -229,7 +229,7 @@ func tree(t *testing.T, root string) map[string]string {
 	return m
 }
 func recoverKernel(f fixture, rollback bool) (installruntime.Ledger, error) {
-	return installruntime.Commit(f.ctx, installruntime.Request{ControlRoot: f.r.ControlRoot, Owner: Managed, RuntimeRoot: f.r.RuntimeRoot, ConsumerID: "legacy-hooks", RefreshOnly: true, RollbackPending: rollback, Prepare: func() ([]installruntime.File, error) { return nil, unchanged }})
+	return installruntime.Commit(f.ctx, installruntime.Request{ControlRoot: f.r.ControlRoot, Owner: Managed, RuntimeRoot: f.r.RuntimeRoot, ConsumerID: "legacy-hooks", RefreshOnly: true, RollbackPending: rollback, Prepare: func() ([]installruntime.File, error) { return nil, errUnchanged }})
 }
 func TestRecovery(t *testing.T) {
 	for _, boundary := range []string{"transaction", "config", "state", "ledger"} {
@@ -255,7 +255,7 @@ func TestRecovery(t *testing.T) {
 					t.Fatal("did not require recovery", e)
 				}
 				_, e := recoverKernel(f, rollback)
-				if e != nil && !errors.Is(e, unchanged) {
+				if e != nil && !errors.Is(e, errUnchanged) {
 					t.Fatal(e)
 				}
 				s, e := installruntime.ReadInstalledSnapshot(f.r.ControlRoot)
@@ -378,7 +378,7 @@ func TestNonrootReadDenied(t *testing.T) {
 	if e := os.Chmod(f.r.ConfigPath, 0000); e != nil {
 		t.Fatal(e)
 	}
-	defer os.Chmod(f.r.ConfigPath, 0600)
+	defer func() { _ = os.Chmod(f.r.ConfigPath, 0600) }()
 	if _, e := Apply(f.ctx, f.r); e == nil {
 		t.Fatal("read denied ignored")
 	}
@@ -489,7 +489,7 @@ func TestRemovalRecovery(t *testing.T) {
 			}); e == nil {
 				t.Fatal("missing removal fault")
 			}
-			if _, e := recoverKernel(f, rollback); e != nil && !errors.Is(e, unchanged) {
+			if _, e := recoverKernel(f, rollback); e != nil && !errors.Is(e, errUnchanged) {
 				t.Fatal(e)
 			}
 			s, e := installruntime.ReadInstalledSnapshot(f.r.ControlRoot)
@@ -522,7 +522,7 @@ func TestConfigParentSymlinkAndWriteDenial(t *testing.T) {
 				if e := os.Chmod(parent, 0500); e != nil {
 					t.Fatal(e)
 				}
-				defer os.Chmod(parent, 0700)
+				defer func() { _ = os.Chmod(parent, 0700) }()
 			} else {
 				alias := filepath.Join(filepath.Dir(parent), "client-alias")
 				if e := os.Symlink(parent, alias); e != nil {

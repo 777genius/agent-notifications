@@ -51,7 +51,7 @@ func ReadSecureContext(ctx context.Context, path string) ([]byte, error) {
 		return nil, errContext
 	}
 	f := os.NewFile(uintptr(opened), "context")
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var st unix.Stat_t
 	if unix.Fstat(opened, &st) != nil || !privateFile(st) || st.Dev != before.Dev || st.Ino != before.Ino {
 		return nil, errContext

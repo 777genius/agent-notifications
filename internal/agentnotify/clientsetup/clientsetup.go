@@ -24,7 +24,7 @@ const maxState = 16384
 
 var ErrConflict = errors.New("client registration ownership conflict; reconcile managed/portable registration explicitly")
 var ErrRecovery = errors.New("installer recovery required before client registration; use kernel recovery and reread generation")
-var unchanged = errors.New("registration unchanged")
+var errUnchanged = errors.New("registration unchanged")
 
 // Request is trusted installer input. All paths are explicit, absolute, clean,
 // physical paths. Command must be a ledger-owned executable within RuntimeRoot.
@@ -279,14 +279,14 @@ func calculate(ctx context.Context, r Request, fault func(string) error, inspect
 			}
 		}
 		if len(files) == 0 && (installed == !r.Remove) {
-			return nil, unchanged
+			return nil, errUnchanged
 		}
 		if r.Remove && !installed {
-			return nil, unchanged
+			return nil, errUnchanged
 		}
 		return files, nil
 	}
-	if _, e = prepare(); e != nil && !errors.Is(e, unchanged) {
+	if _, e = prepare(); e != nil && !errors.Is(e, errUnchanged) {
 		return result, e
 	}
 	if inspection != nil {
@@ -304,7 +304,7 @@ func calculate(ctx context.Context, r Request, fault func(string) error, inspect
 	lockedPrepare := func() ([]installruntime.File, error) { prepared = true; locked = true; return prepare() }
 	l, e := installruntime.Commit(ctx, installruntime.Request{ControlRoot: r.ControlRoot, Owner: Managed, RuntimeRoot: r.RuntimeRoot, ConsumerID: id, Consumer: installruntime.Consumer{Registration: r.ConfigPath, Commands: []string{r.Command}}, RemoveConsumer: r.Remove, ExpectedGeneration: &r.ExpectedGeneration, ConfigPaths: configPaths, Prepare: lockedPrepare, Fault: fault})
 	result.Ledger = l
-	if errors.Is(e, unchanged) {
+	if errors.Is(e, errUnchanged) {
 		return result, nil
 	}
 	if e != nil {

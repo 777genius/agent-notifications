@@ -18,7 +18,7 @@ func verifyNativePlatform(ctx context.Context, bundle string) error {
 		want = macho.CpuArm64
 	}
 	if fat, err := macho.OpenFat(path); err == nil {
-		defer fat.Close()
+		defer func() { _ = fat.Close() }()
 		for _, arch := range fat.Arches {
 			if arch.Cpu == want {
 				return nil
@@ -30,7 +30,7 @@ func verifyNativePlatform(ctx context.Context, bundle string) error {
 	if err != nil {
 		return err
 	}
-	defer thin.Close()
+	defer func() { _ = thin.Close() }()
 	if thin.Cpu != want {
 		return fmt.Errorf("native architecture mismatch")
 	}

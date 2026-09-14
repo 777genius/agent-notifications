@@ -204,7 +204,7 @@ func TestAgentNotifyProcessSignalRead(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer in.Close()
+			defer func() { _ = in.Close() }()
 			var out, diag bytes.Buffer
 			cmd.Stdout = &out
 			cmd.Stderr = &diag
@@ -231,8 +231,8 @@ func TestAgentNotifyOSPipeCloseUnblocks(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer r.Close()
-			defer w.Close()
+			defer func() { _ = r.Close() }()
+			defer func() { _ = w.Close() }()
 			source := r
 			if write {
 				source = w
@@ -273,7 +273,7 @@ func TestAgentNotifyProcessMCP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 	out, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -324,8 +324,8 @@ func TestAgentNotifyProcessBlockedHelp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer r.Close()
-	defer w.Close()
+	defer func() { _ = r.Close() }()
+	defer func() { _ = w.Close() }()
 	if err = agentNotifyFillPipe(w); err != nil {
 		t.Fatal(err)
 	}
@@ -347,8 +347,8 @@ func TestAgentNotifyProcessBlockedMCP(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer r.Close()
-			defer w.Close()
+			defer func() { _ = r.Close() }()
+			defer func() { _ = w.Close() }()
 			if err = agentNotifyFillPipe(w); err != nil {
 				t.Fatal(err)
 			}
@@ -359,7 +359,7 @@ func TestAgentNotifyProcessBlockedMCP(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer in.Close()
+			defer func() { _ = in.Close() }()
 			if err = cmd.Start(); err != nil {
 				t.Fatal(err)
 			}
@@ -397,8 +397,8 @@ func TestAgentNotifyOSPipeWriteDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer r.Close()
-	defer w.Close()
+	defer func() { _ = r.Close() }()
+	defer func() { _ = w.Close() }()
 	stream, err := agentNotifyFile(w)
 	if err != nil {
 		t.Fatal(err)

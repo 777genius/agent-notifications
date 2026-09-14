@@ -179,6 +179,6 @@ func reportAgentNotifySetupFailure(w io.Writer, provider string, args []string) 
 	if executable, err := os.Executable(); err == nil {
 		retry = executable
 	}
-	fmt.Fprintf(w, "setup-codex: agent-notify setup failed; Codex hooks remain registered.\n")
-	fmt.Fprintf(w, "Retry: %s setup-notifications configure --provider %s %s\n", retry, provider, strings.Join(args, " "))
+	_, _ = fmt.Fprintf(w, "setup-codex: agent-notify setup failed; Codex hooks remain registered.\n")
+	_, _ = fmt.Fprintf(w, "Retry: %s setup-notifications configure --provider %s %s\n", retry, provider, strings.Join(args, " "))
 }

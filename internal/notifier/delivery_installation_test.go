@@ -24,7 +24,9 @@ func pr3ManagedFixture(t *testing.T) ManagedInstallation {
 func pr3ProducedFixture(t *testing.T, qualified bool) ManagedInstallation {
 	t.Helper()
 	root := t.TempDir()
-	os.Chmod(root, 0700)
+	if err := os.Chmod(root, 0700); err != nil {
+		t.Fatal(err)
+	}
 	root, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		t.Fatal(err)
@@ -104,13 +106,21 @@ func TestPR3ManagedOldAndTamperedTreesNeverProbe(t *testing.T) {
 			case "old":
 				m.Expected.Ledger.Native.DecoderFloor = 0
 			case "fingerprint":
-				os.WriteFile(filepath.Join(m.Expected.Ledger.Native.Path, "Contents/MacOS/terminal-notifier-modern"), []byte("replacement"), 0755)
+				if err := os.WriteFile(filepath.Join(m.Expected.Ledger.Native.Path, "Contents/MacOS/terminal-notifier-modern"), []byte("replacement"), 0755); err != nil {
+					t.Fatal(err)
+				}
 			case "mode":
-				os.Chmod(filepath.Join(m.Expected.Ledger.Native.Path, "Contents/MacOS/terminal-notifier-modern"), 0644)
+				if err := os.Chmod(filepath.Join(m.Expected.Ledger.Native.Path, "Contents/MacOS/terminal-notifier-modern"), 0644); err != nil {
+					t.Fatal(err)
+				}
 			case "symlink":
-				os.Symlink("missing", filepath.Join(m.Expected.Ledger.Native.Path, "foreign"))
+				if err := os.Symlink("missing", filepath.Join(m.Expected.Ledger.Native.Path, "foreign")); err != nil {
+					t.Fatal(err)
+				}
 			case "manifest":
-				os.Remove(filepath.Join(m.Expected.Ledger.Native.Path, "Contents/Resources/managed-runtime.json"))
+				if err := os.Remove(filepath.Join(m.Expected.Ledger.Native.Path, "Contents/Resources/managed-runtime.json")); err != nil {
+					t.Fatal(err)
+				}
 			case "outside":
 				m.ControlRoot = t.TempDir()
 			}
@@ -143,7 +153,9 @@ func TestPR3ManagedLockConsumesOriginalDeadline(t *testing.T) {
 }
 func TestPR3StaleCleanupPreservesNewNonce(t *testing.T) {
 	root := t.TempDir()
-	os.Chmod(root, 0700)
+	if err := os.Chmod(root, 0700); err != nil {
+		t.Fatal(err)
+	}
 	s := &PrivateNativeSpool{Root: root, Clock: &pr3Clock{now: 100}}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -171,7 +183,9 @@ func TestPR3StaleCleanupPreservesNewNonce(t *testing.T) {
 }
 func TestPR3SpoolCapacityAndConcurrentAttempts(t *testing.T) {
 	root := t.TempDir()
-	os.Chmod(root, 0700)
+	if err := os.Chmod(root, 0700); err != nil {
+		t.Fatal(err)
+	}
 	s := &PrivateNativeSpool{Root: root, Clock: &pr3Clock{now: 100}}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

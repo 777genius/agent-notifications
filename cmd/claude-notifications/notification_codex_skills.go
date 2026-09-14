@@ -35,14 +35,14 @@ func probeNotificationCodexSkills(ctx context.Context, home string) ([]notificat
 	if err = command.Start(); err != nil {
 		return nil, err
 	}
-	defer func() { input.Close(); cancel(); command.Wait() }()
+	defer func() { _ = input.Close(); cancel(); _ = command.Wait() }()
 	return notificationCodexSkillsExchangeContext(child, input, output, home)
 }
 
 // Closing both pipes on cancellation also fences a descendant retaining stdout:
 // WaitDelay alone cannot help while the exchange has not yet returned to Wait.
 func notificationCodexSkillsExchangeContext(ctx context.Context, input io.WriteCloser, output io.ReadCloser, home string) ([]notificationCodexSkill, error) {
-	stop := context.AfterFunc(ctx, func() { input.Close(); output.Close() })
+	stop := context.AfterFunc(ctx, func() { _ = input.Close(); _ = output.Close() })
 	defer stop()
 	if err := ctx.Err(); err != nil {
 		return nil, err

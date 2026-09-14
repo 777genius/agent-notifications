@@ -134,15 +134,17 @@ func TestPrepareMissingAndSymlinks(t *testing.T) {
 	if _, e := PrepareGlobalConfig(context.Background(), c, l, d); e == nil {
 		t.Fatal("legacy symlink accepted")
 	}
-	os.Remove(l)
+	_ = os.Remove(l)
 	if e := os.Symlink(d, c); e != nil {
 		t.Fatal(e)
 	}
 	if _, e := PrepareGlobalConfig(context.Background(), c, l, d); e == nil {
 		t.Fatal("canonical symlink accepted")
 	}
-	os.Remove(c)
-	os.Rename(filepath.Dir(c), filepath.Dir(c)+"-old")
+	_ = os.Remove(c)
+	if err := os.Rename(filepath.Dir(c), filepath.Dir(c)+"-old"); err != nil {
+		t.Fatal(err)
+	}
 	if e := os.Symlink(filepath.Dir(d), filepath.Dir(c)); e != nil {
 		t.Fatal(e)
 	}
@@ -156,9 +158,13 @@ func TestPrepareParentSubstitution(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer r.Close()
-	os.Rename(filepath.Dir(c), filepath.Dir(c)+"-old")
-	os.Mkdir(filepath.Dir(c), 0700)
+	defer func() { _ = r.Close() }()
+	if err := os.Rename(filepath.Dir(c), filepath.Dir(c)+"-old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Dir(c), 0700); err != nil {
+		t.Fatal(err)
+	}
 	if samePreparedParent(r, c) == nil {
 		t.Fatal("substitution accepted")
 	}

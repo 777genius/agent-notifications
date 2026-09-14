@@ -295,9 +295,9 @@ func installRuntime(args []string, output io.Writer) error {
 	}
 	ledger, err := installruntime.Commit(ctx, req)
 	if err == nil {
-		fmt.Fprintf(output, "managed-runtime committed generation=%d\n", ledger.Generation)
+		_, _ = fmt.Fprintf(output, "managed-runtime committed generation=%d\n", ledger.Generation)
 		if *purge {
-			fmt.Fprintln(output, "Callback entrypoint purge completed; pending notifications may no longer open targets. Running callbacks are not stopped.")
+			_, _ = fmt.Fprintln(output, "Callback entrypoint purge completed; pending notifications may no longer open targets. Running callbacks are not stopped.")
 		}
 	}
 	return err

@@ -142,25 +142,25 @@ func physicalParent(path string, create bool) (*os.Root, error) {
 			}
 		}
 		if e != nil {
-			root.Close()
+			_ = root.Close()
 			return nil, e
 		}
 		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			root.Close()
+			_ = root.Close()
 			return nil, fmt.Errorf("config parent is not physical")
 		}
 		next, e := root.OpenRoot(part)
 		if e != nil {
-			root.Close()
+			_ = root.Close()
 			return nil, e
 		}
 		actual, e := next.Stat(".")
 		if e != nil || !os.SameFile(info, actual) {
-			next.Close()
-			root.Close()
+			_ = next.Close()
+			_ = root.Close()
 			return nil, fmt.Errorf("config parent changed")
 		}
-		root.Close()
+		_ = root.Close()
 		root = next
 	}
 	return root, nil
@@ -210,7 +210,7 @@ func readPrepared(root *os.Root, name string) ([]byte, os.FileInfo, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	actual, err := f.Stat()
 	if err != nil || !os.SameFile(info, actual) {
 		return nil, nil, errGlobalConfig
@@ -227,7 +227,7 @@ func samePreparedParent(root *os.Root, path string) error {
 	if err != nil {
 		return err
 	}
-	defer current.Close()
+	defer func() { _ = current.Close() }()
 	a, err := root.Stat(".")
 	if err != nil {
 		return err
@@ -262,7 +262,7 @@ func PrepareGlobalConfig(ctx context.Context, canonicalPath, legacyPath, default
 	if err != nil {
 		return result, err
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	if err = samePreparedParent(root, canonicalPath); err != nil {
 		return
 	}
@@ -288,7 +288,7 @@ func PrepareGlobalConfig(ctx context.Context, canonicalPath, legacyPath, default
 				if e == nil {
 					e = samePreparedParent(source, p)
 				}
-				source.Close()
+				_ = source.Close()
 			}
 			if i == 0 && os.IsNotExist(e) {
 				continue
@@ -321,7 +321,7 @@ func PrepareGlobalConfig(ctx context.Context, canonicalPath, legacyPath, default
 		if e != nil {
 			return result, e
 		}
-		defer root.Remove(temp)
+		defer func() { _ = root.Remove(temp) }()
 		_, e = f.Write(out)
 		if e == nil && !absent {
 			e = f.Chmod(info.Mode())
@@ -400,7 +400,7 @@ func InspectGlobalConfig(ctx context.Context, paths ...string) ([]byte, error) {
 			if err == nil {
 				err = samePreparedParent(root, p)
 			}
-			root.Close()
+			_ = root.Close()
 		}
 		if os.IsNotExist(err) && i < 2 {
 			continue

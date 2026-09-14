@@ -31,8 +31,12 @@ func TestPR3SharedRequestAndTypedAction(t *testing.T) {
 		t.Fatal(err)
 	}
 	var a, b any
-	json.Unmarshal(original, &a)
-	json.Unmarshal(data, &b)
+	if err := json.Unmarshal(original, &a); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &b); err != nil {
+		t.Fatal(err)
+	}
 	if !reflect.DeepEqual(a, b) {
 		t.Fatal("native no-action fixture mismatch")
 	}
@@ -58,7 +62,9 @@ func TestPR3SharedRequestAndTypedAction(t *testing.T) {
 		t.Fatal(err)
 	}
 	var encoded struct{ Action DesktopThreadAction }
-	json.Unmarshal(data, &encoded)
+	if err := json.Unmarshal(data, &encoded); err != nil {
+		t.Fatal(err)
+	}
 	if !reflect.DeepEqual(encoded.Action, *r.Action) {
 		t.Fatal("typed action bytes changed")
 	}
@@ -68,7 +74,7 @@ func TestPR3SharedRequestAndTypedAction(t *testing.T) {
 	}
 }
 func TestPR3LiteralBytesAndBounds(t *testing.T) {
-	for _, literal := range []string{"--help", "-execute", "[important]", "👩‍💻 می‌روم 🏴\U000e0067\U000e0062\U000e007f", `"$()<> &`} {
+	for _, literal := range []string{"--help", "-execute", "[important]", "👩‍💻 می\u200cروم 🏴\U000e0067\U000e0062\U000e007f", `"$()<> &`} {
 		r := requestFixture(t)
 		r.Title = literal
 		r.Body = literal + "\n\tline\u2028\u2029"
@@ -78,7 +84,9 @@ func TestPR3LiteralBytesAndBounds(t *testing.T) {
 			t.Fatal(err)
 		}
 		var actual struct{ Title, Body, Subtitle string }
-		json.Unmarshal(data, &actual)
+		if err := json.Unmarshal(data, &actual); err != nil {
+			t.Fatal(err)
+		}
 		if actual.Title != r.Title || actual.Body != r.Body || actual.Subtitle != r.Subtitle {
 			t.Fatal("literal bytes changed")
 		}

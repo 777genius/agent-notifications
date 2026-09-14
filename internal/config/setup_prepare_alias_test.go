@@ -25,11 +25,12 @@ func desktopAliasCases() map[string]string {
 		for _, alias := range aliases {
 			wrap := func(body string) string { return `{"notifications":{"desktop":{` + body + `}}}` }
 			value, canonical := `false`, `true`
-			if key == "notifications" {
+			switch key {
+			case "notifications":
 				wrap = func(body string) string { return `{` + body + `}` }
 				value = `{"desktop":` + full + `}`
 				canonical = `{"desktop":{"enabled":true,"sound":true,"clickToFocus":true}}`
-			} else if key == "desktop" {
+			case "desktop":
 				wrap = func(body string) string { return `{"notifications":{` + body + `}}` }
 				value = full
 				canonical = `{"enabled":true,"sound":true,"clickToFocus":true}`
@@ -114,7 +115,7 @@ func TestDesktopAliasPrepareRejectsWithoutWriting(t *testing.T) {
 					t.Fatal(err)
 				}
 				for _, entry := range entries {
-					if entry.Name() != "config.json.lock" && !(source == "canonical" && entry.Name() == "config.json") {
+					if entry.Name() != "config.json.lock" && (source != "canonical" || entry.Name() != "config.json") {
 						t.Errorf("unexpected file: %s", entry.Name())
 					}
 				}

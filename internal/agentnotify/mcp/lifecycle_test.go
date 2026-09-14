@@ -42,7 +42,7 @@ func rawFixture(t *testing.T, b Backend, clock agentnotify.Clock, closeResources
 	go func() {
 		f.done <- Run(ctx, owned, Options{Backend: b, Status: statusFake{}, Clock: clock, AdapterKind: "codex", CloseResources: closeResources})
 	}()
-	t.Cleanup(func() { cancel(); peer.Close() })
+	t.Cleanup(func() { cancel(); _ = peer.Close() })
 	f.send(t, `{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"raw","version":"1"}}}`)
 	f.receive(t)
 	f.send(t, `{"jsonrpc":"2.0","method":"notifications/initialized"}`)
@@ -50,14 +50,14 @@ func rawFixture(t *testing.T, b Backend, clock agentnotify.Clock, closeResources
 }
 func (f *wireFixture) send(t *testing.T, s string) {
 	t.Helper()
-	f.peer.SetWriteDeadline(time.Now().Add(3 * time.Second))
+	_ = f.peer.SetWriteDeadline(time.Now().Add(3 * time.Second))
 	if _, e := io.WriteString(f.peer, s+"\n"); e != nil {
 		t.Fatal(e)
 	}
 }
 func (f *wireFixture) receive(t *testing.T) map[string]json.RawMessage {
 	t.Helper()
-	f.peer.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_ = f.peer.SetReadDeadline(time.Now().Add(3 * time.Second))
 	line, e := f.reader.ReadBytes('\n')
 	if e != nil {
 		t.Fatal(e)
@@ -84,66 +84,69 @@ func await(t *testing.T, c <-chan struct{}) {
 }
 
 func TestSDKSaturationCancellationFloodAndDrain(t *testing.T) {
-	var calls, active, closed atomic.Int32
-	started := make(chan struct{}, pendingLimit)
-	canceled := make(chan struct{}, pendingLimit)
-	release := make(chan struct{})
-	backend := backendFunc(func(ctx context.Context, _ agentnotify.Payload, _ origin.Context, _ notification.Deadline) agentnotify.Receipt {
-		calls.Add(1)
-		active.Add(1)
-		defer active.Add(-1)
-		started <- struct{}{}
-		<-ctx.Done()
-		canceled <- struct{}{}
-		<-release
-		return agentnotify.Receipt{Status: "unknown"}
-	})
-	f := rawFixture(t, backend, fixedClock(), func() error {
-		if active.Load() != 0 {
-			t.Error("resources closed before handler drain")
+	synctest.Test(t, func(t *testing.T) {
+		var calls, active, closed atomic.Int32
+		started := make(chan struct{}, pendingLimit)
+		canceled := make(chan struct{}, pendingLimit)
+		release := make(chan struct{})
+		backend := backendFunc(func(ctx context.Context, _ agentnotify.Payload, _ origin.Context, _ notification.Deadline) agentnotify.Receipt {
+			calls.Add(1)
+			active.Add(1)
+			defer active.Add(-1)
+			started <- struct{}{}
+			<-ctx.Done()
+			canceled <- struct{}{}
+			<-release
+			return agentnotify.Receipt{Status: "unknown"}
+		})
+		f := rawFixture(t, backend, fixedClock(), func() error {
+			if active.Load() != 0 {
+				t.Error("resources closed before handler drain")
+			}
+			closed.Add(1)
+			return nil
+		})
+		// Wait until handshake and the deadline watcher are blocked so tools/call
+		// occupies pending slots instead of racing initialize.
+		synctest.Wait()
+		baseline := runtime.NumGoroutine()
+		for i := 1; i <= pendingLimit; i++ {
+			f.send(t, callFrame(i))
+			await(t, started)
 		}
-		closed.Add(1)
-		return nil
-	})
-	baseline := runtime.NumGoroutine()
-	for i := 1; i <= pendingLimit; i++ {
-		f.send(t, callFrame(i))
-	}
-	for i := 0; i < pendingLimit; i++ {
-		await(t, started)
-	}
-	f.send(t, callFrame(99))
-	busy := f.receive(t)
-	if string(busy["id"]) != "99" || len(busy["error"]) == 0 {
-		t.Fatalf("not busy: %s", busy)
-	}
-	for i := 0; i < 1000; i++ {
-		f.send(t, `{"jsonrpc":"2.0","method":"notifications/unknown","params":{"opaque":"data"}}`)
-		f.send(t, `{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1}}`)
-	}
-	await(t, canceled)
-	if runtime.NumGoroutine() > baseline+4*pendingLimit+10 {
-		t.Fatal("unbounded goroutines")
-	}
-	if calls.Load() != pendingLimit {
-		t.Fatal("overflow caused effect")
-	}
-	f.peer.Close()
-	for i := 1; i < pendingLimit; i++ {
+		f.send(t, callFrame(99))
+		busy := f.receive(t)
+		if string(busy["id"]) != "99" || len(busy["error"]) == 0 {
+			t.Fatalf("not busy: %s", busy)
+		}
+		for i := 0; i < 1000; i++ {
+			f.send(t, `{"jsonrpc":"2.0","method":"notifications/unknown","params":{"opaque":"data"}}`)
+			f.send(t, `{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1}}`)
+		}
 		await(t, canceled)
-	}
-	if closed.Load() != 0 {
-		t.Fatal("early resource close")
-	}
-	close(release)
-	select {
-	case <-f.done:
-	case <-time.After(3 * time.Second):
-		t.Fatal("shutdown failed")
-	}
-	if closed.Load() != 1 || f.owned.closes.Load() != 1 {
-		t.Fatal("resources not closed exactly once")
-	}
+		if runtime.NumGoroutine() > baseline+4*pendingLimit+10 {
+			t.Fatal("unbounded goroutines")
+		}
+		if calls.Load() != pendingLimit {
+			t.Fatal("overflow caused effect")
+		}
+		_ = f.peer.Close()
+		for i := 1; i < pendingLimit; i++ {
+			await(t, canceled)
+		}
+		if closed.Load() != 0 {
+			t.Fatal("early resource close")
+		}
+		close(release)
+		select {
+		case <-f.done:
+		case <-time.After(3 * time.Second):
+			t.Fatal("shutdown failed")
+		}
+		if closed.Load() != 1 || f.owned.closes.Load() != 1 {
+			t.Fatal("resources not closed exactly once")
+		}
+	})
 }
 func TestSDKOriginalDeadlineExpiredBeforeHandler(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
@@ -168,7 +171,9 @@ func TestSDKOriginalDeadlineExpiredBeforeHandler(t *testing.T) {
 		var result struct {
 			IsError bool `json:"isError"`
 		}
-		json.Unmarshal(r["result"], &result)
+		if err := json.Unmarshal(r["result"], &result); err != nil {
+			t.Fatal(err)
+		}
 		if !result.IsError || calls.Load() != 0 {
 			t.Fatal("original deadline was reset")
 		}
@@ -187,8 +192,8 @@ func TestSDKIdlePartialAndOutputClose(t *testing.T) {
 				return agentnotify.Receipt{Status: "submitted"}
 			}), fixedClock(), nil)
 			if mode == "partial" {
-				f.peer.SetWriteDeadline(time.Now().Add(time.Second))
-				io.WriteString(f.peer, `{"jsonrpc":`)
+				_ = f.peer.SetWriteDeadline(time.Now().Add(time.Second))
+				_, _ = io.WriteString(f.peer, `{"jsonrpc":`)
 			}
 			if mode == "write" {
 				f.send(t, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
@@ -244,7 +249,9 @@ func TestSDKUnknownMethodsAndSanitizedErrors(t *testing.T) {
 			Code    int
 			Message string
 		}
-		json.Unmarshal(r["error"], &e)
+		if err := json.Unmarshal(r["error"], &e); err != nil {
+			t.Fatal(err)
+		}
 		if e.Code != -32601 || e.Message != "protocol_error" {
 			t.Fatalf("unsanitized/nonstandard error: %s", r["error"])
 		}
@@ -284,7 +291,7 @@ func TestSDKSingleMessageVersionNegotiation(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			a, peer := net.Pipe()
-			defer peer.Close()
+			defer func() { _ = peer.Close() }()
 			done := make(chan error, 1)
 			go func() {
 				done <- Run(ctx, a, Options{Backend: backendFunc(func(context.Context, agentnotify.Payload, origin.Context, notification.Deadline) agentnotify.Receipt {

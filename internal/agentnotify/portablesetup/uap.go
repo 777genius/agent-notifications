@@ -139,7 +139,7 @@ func LoadPackage(ctx context.Context, root string) (domain.PackageEnvelope, erro
 	if err != nil {
 		return domain.PackageEnvelope{}, err
 	}
-	defer snap.Close()
+	defer func() { _ = snap.Close() }()
 	return (loader.Loader{Registry: reg}).Load(ctx, domain.LoadInput{
 		SnapshotRoot: root, TreeDigest: snap.Digest,
 		Source: domain.SourceIdentity{RequestedSource: root, CanonicalSource: root},

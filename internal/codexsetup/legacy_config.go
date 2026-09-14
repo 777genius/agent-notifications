@@ -31,7 +31,7 @@ func createLegacyDefaults(ctx context.Context, source, destination string) error
 	if err != nil {
 		return err
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	rel := filepath.Join("config", "config.json")
 	if _, err := root.Lstat(rel); err == nil {
 		return nil
@@ -42,7 +42,7 @@ func createLegacyDefaults(ctx context.Context, source, destination string) error
 	if err != nil {
 		return err
 	}
-	defer sourceRoot.Close()
+	defer func() { _ = sourceRoot.Close() }()
 	data, err := sourceRoot.ReadFile(rel)
 	if os.IsNotExist(err) {
 		return nil
@@ -56,7 +56,7 @@ func createLegacyDefaults(ctx context.Context, source, destination string) error
 	if err != nil {
 		return err
 	}
-	defer configRoot.Close()
+	defer func() { _ = configRoot.Close() }()
 	// CreateTemp's path is not used for publication; exclusive relative creation
 	// below avoids following a substituted destination parent.
 	for attempt := 0; attempt < 100; attempt++ {
@@ -68,7 +68,7 @@ func createLegacyDefaults(ctx context.Context, source, destination string) error
 		if err != nil {
 			return err
 		}
-		defer configRoot.Remove(name)
+		defer func() { _ = configRoot.Remove(name) }()
 		_, err = file.Write(data)
 		if err == nil {
 			err = file.Sync()
@@ -95,7 +95,7 @@ func createLegacyDefaults(ctx context.Context, source, destination string) error
 		if err != nil {
 			return err
 		}
-		defer dir.Close()
+		defer func() { _ = dir.Close() }()
 		return dir.Sync()
 	}
 	return fmt.Errorf("legacy config default staging busy; retry setup")

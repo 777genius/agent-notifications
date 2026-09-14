@@ -57,7 +57,7 @@ func TestHelpAndFlags(t *testing.T) {
 		in := &input{Reader: strings.NewReader(good)}
 		var out bytes.Buffer
 		closes := 0
-		code := Run(nil, args, in, &out, io.Discard, Options{CloseResources: func() error { closes++; return nil }})
+		code := Run(context.TODO(), args, in, &out, io.Discard, Options{CloseResources: func() error { closes++; return nil }})
 		if code != 0 || in.reads != 0 || in.closes != 1 || closes != 1 || !strings.Contains(out.String(), "Usage:") {
 			t.Fatal(code, in, closes)
 		}
@@ -185,7 +185,7 @@ func TestCancellationJoinsReader(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatal("reader did not join")
 		}
-		w.Close()
+		_ = w.Close()
 	}
 }
 func TestOriginalDeadlineAndContinuousCancellation(t *testing.T) {

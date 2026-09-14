@@ -16,7 +16,7 @@ func swapBundles(staged, live string, expected ...[]PathAnchor) error {
 	if err != nil {
 		return err
 	}
-	defer parent.Close()
+	defer func() { _ = parent.Close() }()
 	if len(expected) != 0 {
 		if err := checkAnchors(expected[0], anchors); err != nil {
 			return err

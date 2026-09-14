@@ -32,7 +32,7 @@ func readGlobal(path string) ([]byte, error) {
 	if e != nil {
 		return nil, e
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	actual, e := f.Stat()
 	if e != nil || !os.SameFile(info, actual) {
 		return nil, errConfig

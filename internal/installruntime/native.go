@@ -73,14 +73,14 @@ func treeFingerprint(root string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer tree.Close()
+	defer func() { _ = tree.Close() }()
 	hash := sha256.New()
 	err = walkNativeTree(tree, func(rel string, info os.FileInfo, f *os.File) error {
 		size := info.Size()
 		if info.IsDir() {
 			size = 0
 		}
-		fmt.Fprintf(hash, "%d:%s:%o:%d\n", len(rel), rel, info.Mode().Perm(), size)
+		_, _ = fmt.Fprintf(hash, "%d:%s:%o:%d\n", len(rel), rel, info.Mode().Perm(), size)
 		if f == nil {
 			return nil
 		}
@@ -130,7 +130,7 @@ func stageNative(ctx context.Context, control, source string, sourceTrusted bool
 	if err != nil {
 		return nil, err
 	}
-	defer sourceRoot.Close()
+	defer func() { _ = sourceRoot.Close() }()
 	parent := filepath.Join(control, "native")
 	initialAnchors, err := pathAnchors(filepath.Join(parent, ".identity"), true)
 	if err != nil {
@@ -529,7 +529,7 @@ func allocateNativeStage(ctx context.Context, parent string, expected []PathAnch
 	if err != nil {
 		return "", "", err
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	if err = checkOpenedNativeRoot(root, expected); err != nil {
 		return "", "", err
 	}
@@ -543,7 +543,7 @@ func allocateNativeStage(ctx context.Context, parent string, expected []PathAnch
 		return "", "", err
 	}
 	entries, err := directory.ReadDir(-1)
-	directory.Close()
+	_ = directory.Close()
 	if err != nil {
 		return "", "", err
 	}
@@ -570,7 +570,7 @@ func allocateNativeStage(ctx context.Context, parent string, expected []PathAnch
 		return "", "", err
 	}
 	id, err := openedDirectoryIdentity(child)
-	child.Close()
+	_ = child.Close()
 	if err != nil {
 		return "", "", err
 	}
@@ -579,7 +579,7 @@ func allocateNativeStage(ctx context.Context, parent string, expected []PathAnch
 
 func installedNativeHash(bundleHash string, evidence []byte) string {
 	h := sha256.New()
-	fmt.Fprintf(h, "managed-native-v1:%s:%d:", bundleHash, len(evidence))
+	_, _ = fmt.Fprintf(h, "managed-native-v1:%s:%d:", bundleHash, len(evidence))
 	h.Write(evidence)
 	return hex.EncodeToString(h.Sum(nil))
 }

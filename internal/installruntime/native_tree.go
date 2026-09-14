@@ -35,7 +35,7 @@ func walkNativeTree(root *os.Root, visit func(string, os.FileInfo, *os.File) err
 		if err != nil {
 			return err
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 		opened, err := f.Stat()
 		if err != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
 			return fmt.Errorf("native file identity changed: %s", rel)
@@ -49,7 +49,7 @@ func copyNativeTree(source, destination string, expectedID ...string) error {
 	if err != nil {
 		return err
 	}
-	defer sourceRoot.Close()
+	defer func() { _ = sourceRoot.Close() }()
 	return copyOpenedNativeTree(sourceRoot, destination, expectedID...)
 }
 
@@ -58,7 +58,7 @@ func copyOpenedNativeTree(sourceRoot *os.Root, destination string, expectedID ..
 	if err != nil {
 		return err
 	}
-	defer targetRoot.Close()
+	defer func() { _ = targetRoot.Close() }()
 	if len(expectedID) != 0 {
 		if err := checkOpenedNativeRoot(targetRoot, []PathAnchor{{Identity: expectedID[0]}}); err != nil {
 			return err
@@ -149,11 +149,11 @@ func openNativeRoot(path string) (*os.Root, error) {
 	}
 	opened, err := root.Stat(".")
 	if err != nil || !os.SameFile(before, opened) {
-		root.Close()
+		_ = root.Close()
 		return nil, fmt.Errorf("native root identity changed")
 	}
 	if err := checkOpenedNativeRoot(root, expected); err != nil {
-		root.Close()
+		_ = root.Close()
 		return nil, err
 	}
 	current, err := pathAnchors(filepath.Join(path, ".identity"), false)
@@ -161,7 +161,7 @@ func openNativeRoot(path string) (*os.Root, error) {
 		err = checkAnchors(expected, current)
 	}
 	if err != nil {
-		root.Close()
+		_ = root.Close()
 		return nil, err
 	}
 	return root, nil
@@ -172,7 +172,7 @@ func syncNativeTree(path string) error {
 	if err != nil {
 		return err
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	var directories []string
 	err = walkNativeTree(root, func(rel string, info os.FileInfo, _ *os.File) error {
 		if info.IsDir() {
@@ -189,7 +189,7 @@ func syncNativeTree(path string) error {
 			return err
 		}
 		err = f.Sync()
-		f.Close()
+		_ = f.Close()
 		if err != nil {
 			return err
 		}
@@ -244,7 +244,7 @@ func checkOpenedNativeRoot(root *os.Root, expected []PathAnchor) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	identity, err := openedDirectoryIdentity(f)
 	if err != nil {
 		return err
@@ -265,28 +265,28 @@ func lockNativeStage(ctx context.Context, root *os.Root) (func(), error) {
 	}
 	for {
 		if err := ctx.Err(); err != nil {
-			f.Close()
+			_ = f.Close()
 			return nil, err
 		}
 		held, err := tryLock(f)
 		if err != nil {
-			f.Close()
+			_ = f.Close()
 			return nil, err
 		}
 		if held {
 			opened, e1 := f.Stat()
 			named, e2 := root.Lstat(".staging.lock")
 			if e1 != nil || e2 != nil || !os.SameFile(opened, named) {
-				f.Close()
+				_ = f.Close()
 				return nil, fmt.Errorf("native staging lock inode changed")
 			}
-			return func() { f.Close() }, nil
+			return func() { _ = f.Close() }, nil
 		}
 		timer := time.NewTimer(10 * time.Millisecond)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			f.Close()
+			_ = f.Close()
 			return nil, ctx.Err()
 		case <-timer.C:
 		}

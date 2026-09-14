@@ -23,7 +23,7 @@ func StageFiles(source, destination string, allow func(string) bool) ([]File, er
 	if err != nil {
 		return nil, err
 	}
-	defer sourceRoot.Close()
+	defer func() { _ = sourceRoot.Close() }()
 	var files []File
 	err = filepath.WalkDir(source, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -81,7 +81,7 @@ func StageFiles(source, destination string, allow func(string) bool) ([]File, er
 		}
 		opened, err := f.Stat()
 		if err != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
-			f.Close()
+			_ = f.Close()
 			return fmt.Errorf("staged source identity changed: %s", path)
 		}
 		data, err := io.ReadAll(io.LimitReader(f, int64(maxManagedFile)+1))

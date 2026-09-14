@@ -54,7 +54,7 @@ func isUUID(s string) bool {
 			if c != '-' {
 				return false
 			}
-		} else if !(c >= '0' && c <= '9') && !(c >= 'a' && c <= 'f') && !(c >= 'A' && c <= 'F') {
+		} else if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
 			return false
 		}
 	}
@@ -65,7 +65,7 @@ func readPrivate(path string, limit int) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	info, err := f.Stat()
 	if err != nil || info.Size() <= 0 || info.Size() > int64(limit) {
 		return nil, errors.New("invalid private file size")
@@ -103,7 +103,7 @@ func (s *PrivateNativeSpool) root() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	f.Close()
+	_ = f.Close()
 	return root, nil
 }
 
@@ -119,7 +119,7 @@ func (s *PrivateNativeSpool) sweepLocked(ctx context.Context, root string) (int,
 		return 0, 0, err
 	}
 	entries, err := f.ReadDir(maxSpoolAttempts + 2)
-	f.Close()
+	_ = f.Close()
 	if err != nil && err != io.EOF {
 		return 0, 0, err
 	}
@@ -180,7 +180,7 @@ func (s *PrivateNativeSpool) sweepLocked(ctx context.Context, root string) (int,
 			return 0, 0, err
 		}
 		files, err := df.ReadDir(9)
-		df.Close()
+		_ = df.Close()
 		if (err != nil && err != io.EOF) || len(files) > 8 {
 			return 0, 0, errors.New("spool attempt full")
 		}
@@ -314,7 +314,7 @@ func (s *PrivateNativeSpool) removeAttempt(directory, nonce string) error {
 		return err
 	}
 	files, err := f.ReadDir(9)
-	f.Close()
+	_ = f.Close()
 	if (err != nil && err != io.EOF) || len(files) > 8 {
 		return errors.New("unsafe attempt")
 	}

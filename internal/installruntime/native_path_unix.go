@@ -17,7 +17,7 @@ func renameNative(from, to string, expected []PathAnchor, sourceID ...string) er
 	if err != nil {
 		return err
 	}
-	defer parent.Close()
+	defer func() { _ = parent.Close() }()
 	if err := checkAnchors(expected, anchors); err != nil {
 		return err
 	}
@@ -43,11 +43,11 @@ func openNativeStageLock(root *os.Root) (*os.File, error) {
 	}
 	var st unix.Stat_t
 	if err = unix.Fstat(int(f.Fd()), &st); err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, err
 	}
 	if st.Mode&unix.S_IFMT != unix.S_IFREG || st.Uid != uint32(os.Geteuid()) || st.Mode&07777 != 0600 || st.Nlink != 1 {
-		f.Close()
+		_ = f.Close()
 		return nil, fmt.Errorf("native staging lock requires an owned private regular inode")
 	}
 	return f, nil

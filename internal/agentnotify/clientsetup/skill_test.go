@@ -302,7 +302,7 @@ func TestSkillRecovery(t *testing.T) {
 					if _, e := Apply(f.ctx, f.r); !errors.Is(e, ErrRecovery) {
 						t.Fatal("recovery not required", e)
 					}
-					if _, e := recoverKernel(f, rollback); e != nil && !errors.Is(e, unchanged) {
+					if _, e := recoverKernel(f, rollback); e != nil && !errors.Is(e, errUnchanged) {
 						t.Fatal(e)
 					}
 					snapshot, e := installruntime.ReadInstalledSnapshot(f.r.ControlRoot)
@@ -511,7 +511,7 @@ func TestSkillFinalRemovalRecovery(t *testing.T) {
 				t.Fatal("fault missed")
 			}
 			// Recovery precedes Prepare; stop there without creating a consumer.
-			_, _ = installruntime.Commit(f.ctx, installruntime.Request{ControlRoot: f.r.ControlRoot, Owner: Managed, RuntimeRoot: f.r.RuntimeRoot, ConsumerID: consumerID(f.r.Provider, f.r.ConfigPath), RollbackPending: rollback, Prepare: func() ([]installruntime.File, error) { return nil, unchanged }})
+			_, _ = installruntime.Commit(f.ctx, installruntime.Request{ControlRoot: f.r.ControlRoot, Owner: Managed, RuntimeRoot: f.r.RuntimeRoot, ConsumerID: consumerID(f.r.Provider, f.r.ConfigPath), RollbackPending: rollback, Prepare: func() ([]installruntime.File, error) { return nil, errUnchanged }})
 			snapshot, e := installruntime.ReadInstalledSnapshot(f.r.ControlRoot)
 			if e != nil || snapshot.Recovery {
 				t.Fatal("recovery incomplete", e)

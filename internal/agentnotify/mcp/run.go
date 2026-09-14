@@ -56,7 +56,7 @@ func Run(ctx context.Context, owned io.ReadWriteCloser, o Options) error {
 		return errors.New("invalid_options")
 	}
 	c := newConnection(ctx, owned, o.Clock)
-	defer func() { c.Close(); <-c.writerDone; <-c.watchDone }()
+	defer func() { _ = c.Close(); <-c.writerDone; <-c.watchDone }()
 	s := sdk.NewServer(&sdk.Implementation{Name: "agent-notifications", Version: "phase5"}, &sdk.ServerOptions{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	s.AddReceivingMiddleware(func(next sdk.MethodHandler) sdk.MethodHandler {
 		return func(ctx context.Context, method string, req sdk.Request) (result sdk.Result, err error) {
@@ -145,7 +145,7 @@ func Run(ctx context.Context, owned io.ReadWriteCloser, o Options) error {
 	if err == nil {
 		err = session.Wait()
 	}
-	c.Close()
+	_ = c.Close()
 	<-c.writerDone
 	<-c.watchDone
 	if o.CloseResources != nil {

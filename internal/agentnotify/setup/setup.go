@@ -334,7 +334,7 @@ func (o Options) validatePrepared(ctx context.Context, s installruntime.PolicySn
 			return fail("invalid_route", fmt.Errorf("select an absolute local .app and its verified ten-character team ID"))
 		}
 		for _, c := range a.TeamID {
-			if !(c >= 'A' && c <= 'Z') && !(c >= '0' && c <= '9') {
+			if (c < 'A' || c > 'Z') && (c < '0' || c > '9') {
 				return fail("invalid_route", fmt.Errorf("invalid team ID"))
 			}
 		}

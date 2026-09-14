@@ -35,7 +35,7 @@ func verifyAgentNotifyApplicationWith(ctx context.Context, app notifysetup.Appli
 		return errAgentNotifyApplication
 	}
 	for _, c := range app.TeamID {
-		if !(c >= 'A' && c <= 'Z') && !(c >= '0' && c <= '9') {
+		if (c < 'A' || c > 'Z') && (c < '0' || c > '9') {
 			return errAgentNotifyApplication
 		}
 	}

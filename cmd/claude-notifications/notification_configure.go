@@ -381,7 +381,7 @@ func configureParents(ctx context.Context, path string) error {
 	if e != nil {
 		return e
 	}
-	defer func() { root.Close() }()
+	defer func() { _ = root.Close() }()
 	rel := ""
 	if filepath.Clean(filepath.Dir(path)) != filepath.Clean(rootPath) {
 		rel, e = filepath.Rel(rootPath, filepath.Dir(path))
@@ -415,10 +415,10 @@ func configureParents(ctx context.Context, path string) error {
 		}
 		actual, e := next.Stat(".")
 		if e != nil || !os.SameFile(info, actual) {
-			next.Close()
+			_ = next.Close()
 			return errors.New("parent_changed")
 		}
-		root.Close()
+		_ = root.Close()
 		root = next
 	}
 	return nil
@@ -427,7 +427,7 @@ func configureParents(ctx context.Context, path string) error {
 func executeNotificationConfigure(ctx context.Context, args []string, out io.Writer, bundle string) int {
 	request, jsonOutput, err := parseNotificationConfigure(args)
 	if err != nil {
-		json.NewEncoder(out).Encode(agentNotifySetupResult{Reason: "invalid_arguments", Permission: "not_checked", Activation: "not_verified"})
+		_ = json.NewEncoder(out).Encode(agentNotifySetupResult{Reason: "invalid_arguments", Permission: "not_checked", Activation: "not_verified"})
 		return 2
 	}
 	home, err := os.UserHomeDir()
@@ -458,7 +458,7 @@ func executeNotificationConfigure(ctx context.Context, args []string, out io.Wri
 			return 1
 		}
 	} else {
-		json.NewEncoder(out).Encode(result)
+		_ = json.NewEncoder(out).Encode(result)
 	}
 	if err != nil {
 		return 1

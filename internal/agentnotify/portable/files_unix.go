@@ -33,7 +33,7 @@ func directory(path string) (*os.File, error) {
 			continue
 		}
 		next, e := unix.Openat(int(f.Fd()), part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
-		f.Close()
+		_ = f.Close()
 		if e != nil {
 			return nil, e
 		}
@@ -46,7 +46,7 @@ func physicalDirectory(path string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var st unix.Stat_t
 	if unix.Fstat(int(f.Fd()), &st) != nil || st.Uid != uint32(os.Geteuid()) || st.Mode&0022 != 0 {
 		return ErrInvalid
@@ -58,7 +58,7 @@ func openFile(parent, name string, private bool) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer p.Close()
+	defer func() { _ = p.Close() }()
 	var st unix.Stat_t
 	if unix.Fstat(int(p.Fd()), &st) != nil || st.Uid != uint32(os.Geteuid()) || st.Mode&0022 != 0 || (private && st.Mode&0077 != 0) {
 		return nil, ErrInvalid
@@ -69,7 +69,7 @@ func openFile(parent, name string, private bool) (*os.File, error) {
 	}
 	f := os.NewFile(uintptr(fd), name)
 	if unix.Fstat(fd, &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFREG || st.Uid != uint32(os.Geteuid()) || st.Nlink != 1 || st.Mode&07022 != 0 || (private && (st.Mode&0777 != 0600 || st.Size > MaxBytes)) {
-		f.Close()
+		_ = f.Close()
 		return nil, ErrInvalid
 	}
 	return f, nil
@@ -79,7 +79,7 @@ func readPrivate(parent, name string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(f, MaxBytes+1))
 	if len(raw) > MaxBytes {
 		return nil, ErrInvalid
@@ -105,7 +105,7 @@ func writePrivate(parent, name string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	defer dir.Close()
+	defer func() { _ = dir.Close() }()
 	tmp := "." + name + ".tmp"
 	_ = unix.Unlinkat(int(dir.Fd()), tmp, 0)
 	fd, err := unix.Openat(int(dir.Fd()), tmp, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0600)
@@ -145,7 +145,7 @@ func removePrivate(parent, name string) error {
 	if err != nil {
 		return err
 	}
-	defer dir.Close()
+	defer func() { _ = dir.Close() }()
 	if err := unix.Unlinkat(int(dir.Fd()), name, 0); err != nil && err != unix.ENOENT {
 		return ErrInvalid
 	}

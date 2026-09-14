@@ -176,10 +176,10 @@ func TestNotificationCodexSkillsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	inputReader, inputWriter := io.Pipe()
 	outputReader, outputWriter := io.Pipe()
-	defer inputReader.Close()
-	defer inputWriter.Close()
-	defer outputReader.Close()
-	defer outputWriter.Close()
+	defer func() { _ = inputReader.Close() }()
+	defer func() { _ = inputWriter.Close() }()
+	defer func() { _ = outputReader.Close() }()
+	defer func() { _ = outputWriter.Close() }()
 	defer cancel()
 	started := make(chan struct{})
 	go func() {
@@ -187,7 +187,7 @@ func TestNotificationCodexSkillsCancellation(t *testing.T) {
 		if _, err := inputReader.Read(b[:]); err == nil {
 			close(started)
 		}
-		io.Copy(io.Discard, inputReader)
+		_, _ = io.Copy(io.Discard, inputReader)
 	}()
 	finished := make(chan error, 1)
 	home := t.TempDir()

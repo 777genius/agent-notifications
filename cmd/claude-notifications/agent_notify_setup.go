@@ -231,7 +231,7 @@ func parseAgentNotifySetup(args []string) (a agentNotifySetupArgs, help bool, er
 			return bad()
 		}
 		for _, c := range a.values["team-id"] {
-			if !(c >= 'A' && c <= 'Z') && !(c >= '0' && c <= '9') {
+			if (c < 'A' || c > 'Z') && (c < '0' || c > '9') {
 				return bad()
 			}
 		}
@@ -315,7 +315,7 @@ func agentNotifySetupExecute(ctx context.Context, args []string, out io.Writer, 
 					Changed bool `json:"changed"`
 					Ready   bool `json:"ready"`
 				}{r, r.Changed, r.Ready})
-			} else if code != 0 && !(a.operation == "status" && r.Configuration != "") {
+			} else if code != 0 && (a.operation != "status" || r.Configuration == "") {
 				err = json.NewEncoder(out).Encode(struct {
 					Reason     string `json:"reason"`
 					Generation uint64 `json:"generation,omitempty"`

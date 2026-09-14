@@ -46,19 +46,19 @@ func lock(ctx context.Context, path string, create bool) (func(), error) {
 	}
 	for {
 		if err := ctx.Err(); err != nil {
-			f.Close()
+			_ = f.Close()
 			return nil, err
 		}
 		acquired, err := tryLock(f)
 		if err != nil {
-			f.Close()
+			_ = f.Close()
 			return nil, err
 		}
 		if acquired {
 			info, statErr := f.Stat()
 			named, nameErr := os.Lstat(path)
 			if statErr != nil || nameErr != nil || !os.SameFile(info, named) {
-				f.Close()
+				_ = f.Close()
 				return nil, fmt.Errorf("installation lock inode changed")
 			}
 			return func() { _ = f.Close() }, nil
@@ -67,7 +67,7 @@ func lock(ctx context.Context, path string, create bool) (func(), error) {
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			f.Close()
+			_ = f.Close()
 			return nil, ctx.Err()
 		case <-timer.C:
 		}

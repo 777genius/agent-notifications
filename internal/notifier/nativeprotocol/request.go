@@ -44,7 +44,7 @@ func ValidText(s string, limit int, multiline bool) bool {
 		return false
 	}
 	for _, r := range s {
-		if unicode.IsControl(r) && !(multiline && (r == '\n' || r == '\t')) {
+		if unicode.IsControl(r) && (!multiline || (r != '\n' && r != '\t')) {
 			return false
 		}
 		if !multiline && (r == '\u2028' || r == '\u2029') {
@@ -61,7 +61,7 @@ func (a DesktopThreadAction) valid(correlation string) bool {
 		return false
 	}
 	for _, r := range a.TeamID {
-		if !(r >= 'A' && r <= 'Z') && !(r >= '0' && r <= '9') {
+		if (r < 'A' || r > 'Z') && (r < '0' || r > '9') {
 			return false
 		}
 	}

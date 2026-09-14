@@ -159,7 +159,9 @@ func TestPR3NavigationSelectionAndSoundOptOut(t *testing.T) {
 			Action string
 			Silent bool
 		}
-		json.Unmarshal(h.wire, &wire)
+		if err := json.Unmarshal(h.wire, &wire); err != nil {
+			t.Fatal(err)
+		}
 		if got.Status != "submitted" || got.Navigation.Capability != "disabled" || wire.Action != "none" || !wire.Silent {
 			t.Fatalf("opt-out overridden %+v", got)
 		}
@@ -288,7 +290,9 @@ func TestPR3PrivateSpoolPhysicalPathsAndCleanup(t *testing.T) {
 		t.Skip("private spool enabled on qualified unix hosts only")
 	}
 	root := t.TempDir()
-	os.Chmod(root, 0700)
+	if err := os.Chmod(root, 0700); err != nil {
+		t.Fatal(err)
+	}
 	alias := filepath.Join(t.TempDir(), "alias")
 	if err := os.Symlink(root, alias); err != nil {
 		t.Fatal(err)
@@ -348,7 +352,9 @@ func TestPR3SpoolReclaimsInterruptedPublication(t *testing.T) {
 		t.Skip("private spool enabled on qualified unix hosts only")
 	}
 	root := t.TempDir()
-	os.Chmod(root, 0700)
+	if err := os.Chmod(root, 0700); err != nil {
+		t.Fatal(err)
+	}
 	s := &PrivateNativeSpool{Root: root, Clock: &pr3Clock{now: 100}}
 	for _, prefix := range []string{".prepare.", ".expired."} {
 		for _, partial := range []bool{false, true} {
@@ -378,7 +384,9 @@ func TestPR3SpoolRejectsUnsafeReceiptAndFullRoot(t *testing.T) {
 		t.Skip("private spool enabled on qualified unix hosts only")
 	}
 	root := t.TempDir()
-	os.Chmod(root, 0700)
+	if err := os.Chmod(root, 0700); err != nil {
+		t.Fatal(err)
+	}
 	s := &PrivateNativeSpool{Root: root, Clock: &pr3Clock{now: 100}}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -387,15 +395,21 @@ func TestPR3SpoolRejectsUnsafeReceiptAndFullRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	foreign := filepath.Join(t.TempDir(), "receipt")
-	os.WriteFile(foreign, pr3Receipt("submitted", "os_accepted"), 0600)
+	if err = os.WriteFile(foreign, pr3Receipt("submitted", "os_accepted"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if err = os.Symlink(foreign, a.ReceiptPath); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = s.Receipt(a); err == nil {
 		t.Fatal("symlink receipt accepted")
 	}
-	os.Remove(a.ReceiptPath)
-	os.WriteFile(a.ReceiptPath, make([]byte, nativeprotocol.MaxEnvelopeBytes+1), 0600)
+	if err = os.Remove(a.ReceiptPath); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(a.ReceiptPath, make([]byte, nativeprotocol.MaxEnvelopeBytes+1), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = s.Receipt(a); err == nil {
 		t.Fatal("oversized receipt accepted")
 	}

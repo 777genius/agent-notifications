@@ -160,7 +160,7 @@ func TestNoNavigationPersistedRuntimeService(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer b.Close(contextFor(t))
+	defer func() { _ = b.Close(contextFor(t)) }()
 	p := agentnotify.Payload{Title: "Information", Body: "Finished", Category: "info", Navigation: notification.None}
 	caller := origin.Context{Provider: "claude", Namespace: "mcp", AnonymousCaller: "shared_mcp", Provenance: origin.ClientMetadata, Locality: origin.LocalityUnknown, Interface: origin.InterfaceUnknown}
 	deadline := notification.Deadline{BootID: "fixture", NotAfter: 115}
@@ -222,7 +222,7 @@ func TestClaudeNoNavigationConsumerChain(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			defer b.Close(contextFor(t))
+			defer func() { _ = b.Close(contextFor(t)) }()
 			ctx := contextFor(t)
 			a, peer := net.Pipe()
 			done := make(chan error, 1)
@@ -235,8 +235,8 @@ func TestClaudeNoNavigationConsumerChain(t *testing.T) {
 				t.Fatal(e)
 			}
 			defer func() {
-				peer.Close()
-				session.Close()
+				_ = peer.Close()
+				_ = session.Close()
 				select {
 				case <-done:
 				case <-time.After(time.Second):

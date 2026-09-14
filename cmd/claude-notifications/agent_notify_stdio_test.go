@@ -74,7 +74,7 @@ func TestAgentNotifyProcessFiles(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer in.Close()
+			defer func() { _ = in.Close() }()
 			outputPath := filepath.Join(root, "receipt.json")
 			if c.nullOut {
 				outputPath = os.DevNull
@@ -83,7 +83,7 @@ func TestAgentNotifyProcessFiles(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer out.Close()
+			defer func() { _ = out.Close() }()
 			diagPath := filepath.Join(root, "diagnostic.log")
 			if c.nullErr {
 				diagPath = os.DevNull
@@ -92,7 +92,7 @@ func TestAgentNotifyProcessFiles(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer diag.Close()
+			defer func() { _ = diag.Close() }()
 			cmd := agentNotifyTestCommand(t, c.args...)
 			if c.production {
 				cmd.Env = append(cmd.Env, "AGENT_NOTIFY_TEST_HELPER=production")
@@ -139,14 +139,14 @@ func TestAgentNotifyInheritedFlags(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer r.Close()
-				defer w.Close()
+				defer func() { _ = r.Close() }()
+				defer func() { _ = w.Close() }()
 				ir, iw, err := agentNotifyBlockingPipe()
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer ir.Close()
-				defer iw.Close()
+				defer func() { _ = ir.Close() }()
+				defer func() { _ = iw.Close() }()
 				// Capture raw numbers before setting flags, never call Fd while leased.
 				wfd := int(w.Fd())
 				if err = unix.SetNonblock(wfd, nonblock); err != nil {
@@ -180,7 +180,7 @@ func TestAgentNotifyInheritedFlags(t *testing.T) {
 					if e != nil {
 						t.Fatal(e)
 					}
-					defer dir.Close()
+					defer func() { _ = dir.Close() }()
 					cmd.Stdin = dir
 				}
 				if err = cmd.Start(); err != nil {
@@ -222,8 +222,8 @@ func TestAgentNotifyLeasePreservesOtherFlags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer r.Close()
-	defer w.Close()
+	defer func() { _ = r.Close() }()
+	defer func() { _ = w.Close() }()
 	fd := int(w.Fd())
 	if err = unix.SetNonblock(fd, false); err != nil {
 		t.Fatal(err)
@@ -257,7 +257,7 @@ func TestAgentNotifyProcessIncompleteFrame(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 	var out, diag bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &diag
@@ -303,12 +303,12 @@ func TestAgentNotifyNonpollableSetupCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	before := agentNotifyFlagsOf(t, f)
 	for i := 0; i < 20; i++ {
 		s, err := agentNotifyFile(f)
 		if err == nil {
-			s.Close()
+			_ = s.Close()
 			s.release()
 			t.Fatal("accepted nonpollable device")
 		}
@@ -327,7 +327,7 @@ func TestAgentNotifyFileCloseKeepsBorrowedOpen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	before := agentNotifyFlagsOf(t, f)
 	s, err := agentNotifyFile(f)
 	if err != nil {

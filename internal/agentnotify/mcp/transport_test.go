@@ -21,14 +21,14 @@ func testConnection(t *testing.T) (*connection, net.Conn) {
 	t.Helper()
 	a, b := net.Pipe()
 	c := newConnection(context.Background(), a, agentnotify.ClockFunc(func() notification.Deadline { return notification.Deadline{BootID: "test", NotAfter: 100} }))
-	t.Cleanup(func() { c.Close(); b.Close(); <-c.writerDone; <-c.watchDone })
+	t.Cleanup(func() { _ = c.Close(); _ = b.Close(); <-c.writerDone; <-c.watchDone })
 	return c, b
 }
 func TestFrameRejectBeforeSDK(t *testing.T) {
 	for _, raw := range []string{strings.Repeat(" ", MaxFrame) + "\n", `{"jsonrpc":"2.0","method":"ping","id":1,"id":2}` + "\n", `{"jsonrpc":"2.0","method":"\ud800","id":1}` + "\n", `[]` + "\n", `{"jsonrpc":"2.0","method":"tools/call"}` + "\n"} {
 		t.Run("invalid", func(t *testing.T) {
 			c, peer := testConnection(t)
-			go io.WriteString(peer, raw)
+			go func() { _, _ = io.WriteString(peer, raw) }()
 			if _, e := c.Read(context.Background()); e == nil {
 				t.Fatal("accepted invalid frame")
 			}
@@ -38,7 +38,7 @@ func TestFrameRejectBeforeSDK(t *testing.T) {
 func TestCarrierAndDuplicateID(t *testing.T) {
 	c, peer := testConnection(t)
 	raw := `{"jsonrpc":"2.0","method":"ping","id":1,"Extra":{"Header":{"X-Agent-Notify-Local-Frame":["forged"]}}}` + "\n"
-	go io.WriteString(peer, raw+raw)
+	go func() { _, _ = io.WriteString(peer, raw+raw) }()
 	msg, e := c.Read(context.Background())
 	if e != nil {
 		t.Fatal(e)
@@ -57,7 +57,9 @@ func TestCarrierAndDuplicateID(t *testing.T) {
 }
 func TestCancellationConsumedWithoutSDKQueue(t *testing.T) {
 	c, peer := testConnection(t)
-	go io.WriteString(peer, `{"jsonrpc":"2.0","method":"ping","id":"a"}`+"\n"+`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"a"}}`+"\n"+`{"jsonrpc":"2.0","method":"ping","id":"b"}`+"\n")
+	go func() {
+		_, _ = io.WriteString(peer, `{"jsonrpc":"2.0","method":"ping","id":"a"}`+"\n"+`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"a"}}`+"\n"+`{"jsonrpc":"2.0","method":"ping","id":"b"}`+"\n")
+	}()
 	first, e := c.Read(context.Background())
 	if e != nil {
 		t.Fatal(e)
@@ -92,7 +94,7 @@ func TestExactFrameBudget(t *testing.T) {
 		c, p := testConnection(t)
 		value := `{"jsonrpc":"2.0","method":"ping","id":1}`
 		raw := value + strings.Repeat(" ", size-len(value)-1) + "\n"
-		go io.WriteString(p, raw)
+		go func() { _, _ = io.WriteString(p, raw) }()
 		_, err := c.Read(context.Background())
 		if (err == nil) != (size == MaxFrame) {
 			t.Fatal("incorrect exact frame boundary")
@@ -146,10 +148,10 @@ func TestResponseIDReuseWriteFence(t *testing.T) {
 				a, peer := net.Pipe()
 				w := &holdReturnConn{Conn: a, release: make(chan struct{}), stopped: make(chan struct{})}
 				c := newConnection(context.Background(), w, fixedClock())
-				t.Cleanup(func() { c.Close(); peer.Close(); <-c.writerDone; <-c.watchDone })
-				peer.SetDeadline(time.Now().Add(5 * time.Second))
+				t.Cleanup(func() { _ = c.Close(); _ = peer.Close(); <-c.writerDone; <-c.watchDone })
+				_ = peer.SetDeadline(time.Now().Add(5 * time.Second))
 				raw := `{"jsonrpc":"2.0","method":"ping","id":` + wireID + "}\n"
-				go io.WriteString(peer, raw)
+				go func() { _, _ = io.WriteString(peer, raw) }()
 				first, err := c.Read(context.Background())
 				if err != nil {
 					t.Fatal(err)
@@ -200,7 +202,7 @@ func TestResponseIDReuseWriteFence(t *testing.T) {
 				case "cancel":
 					cancel()
 				case "close":
-					c.Close()
+					_ = c.Close()
 				}
 				var r result
 				select {
@@ -247,10 +249,10 @@ func TestResponseIDReuseWriteFence(t *testing.T) {
 
 func TestQueuedResponseDuplicateRejected(t *testing.T) {
 	c, peer := testConnection(t)
-	peer.SetDeadline(time.Now().Add(5 * time.Second))
+	_ = peer.SetDeadline(time.Now().Add(5 * time.Second))
 	// The first response blocks in net.Pipe.Write because the peer never reads.
 	for _, id := range []string{"1", "2"} {
-		go io.WriteString(peer, `{"jsonrpc":"2.0","method":"ping","id":`+id+"}\n")
+		go func() { _, _ = io.WriteString(peer, `{"jsonrpc":"2.0","method":"ping","id":`+id+"}\n") }()
 		msg, err := c.Read(context.Background())
 		if err != nil {
 			t.Fatal(err)
@@ -260,7 +262,7 @@ func TestQueuedResponseDuplicateRejected(t *testing.T) {
 		}
 	}
 	// ID 2 is queued, never the response currently in Write.
-	go io.WriteString(peer, `{"jsonrpc":"2.0","method":"ping","id":2}`+"\n")
+	go func() { _, _ = io.WriteString(peer, `{"jsonrpc":"2.0","method":"ping","id":2}`+"\n") }()
 	if _, err := c.Read(context.Background()); err != errProtocol {
 		t.Fatalf("queued duplicate: %v", err)
 	}

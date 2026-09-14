@@ -31,7 +31,7 @@ func agentNotifyFile(source *os.File) (*agentNotifyStream, error) {
 	}
 	var stat unix.Stat_t
 	if err = unix.Fstat(fd, &stat); err != nil {
-		unix.Close(fd)
+		_ = unix.Close(fd)
 		return nil, err
 	}
 	kind := stat.Mode & unix.S_IFMT
@@ -42,21 +42,21 @@ func agentNotifyFile(source *os.File) (*agentNotifyStream, error) {
 	}
 	// Only pipes, sockets and deadline-capable terminals take the poller path.
 	if !local && kind != unix.S_IFIFO && kind != unix.S_IFSOCK && kind != unix.S_IFCHR {
-		unix.Close(fd)
+		_ = unix.Close(fd)
 		return nil, errors.New("stdio_unavailable")
 	}
 	release := func() {}
 	if !local {
 		flags, e := unix.FcntlInt(uintptr(fd), unix.F_GETFL, 0)
 		if e != nil {
-			unix.Close(fd)
+			_ = unix.Close(fd)
 			return nil, e
 		}
 		if flags&unix.O_NONBLOCK == 0 {
 			// Keep an owned reference for restoration after Close has joined OS I/O.
 			anchor, e := unix.FcntlInt(uintptr(fd), unix.F_DUPFD_CLOEXEC, 0)
 			if e != nil {
-				unix.Close(fd)
+				_ = unix.Close(fd)
 				return nil, e
 			}
 			var once sync.Once
@@ -71,7 +71,7 @@ func agentNotifyFile(source *os.File) (*agentNotifyStream, error) {
 				})
 			}
 			if e = unix.SetNonblock(fd, true); e != nil {
-				unix.Close(fd)
+				_ = unix.Close(fd)
 				release()
 				return nil, e
 			}
@@ -79,7 +79,7 @@ func agentNotifyFile(source *os.File) (*agentNotifyStream, error) {
 	}
 	file := os.NewFile(uintptr(fd), "explicit-notify-stdio")
 	if file == nil {
-		unix.Close(fd)
+		_ = unix.Close(fd)
 		release()
 		return nil, errors.New("stdio_unavailable")
 	}

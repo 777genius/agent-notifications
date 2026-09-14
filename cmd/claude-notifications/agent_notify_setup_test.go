@@ -296,7 +296,7 @@ func TestSetupNotificationsParserNoEffects(t *testing.T) {
 	}
 	for _, a := range [][]string{{"--help"}, {"enable", "--help"}, {"status", "--help"}} {
 		var out bytes.Buffer
-		if agentNotifySetupExecute(nil, a, &out, agentNotifySetupComposition{}) != 0 || !strings.Contains(out.String(), "activation-required") {
+		if agentNotifySetupExecute(context.TODO(), a, &out, agentNotifySetupComposition{}) != 0 || !strings.Contains(out.String(), "activation-required") {
 			t.Fatal("help")
 		}
 	}
@@ -502,8 +502,8 @@ func TestSetupNotificationsStdioFlagsAndBoundedOutput(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			defer read.Close()
-			defer write.Close()
+			defer func() { _ = read.Close() }()
+			defer func() { _ = write.Close() }()
 			fd := int(write.Fd())
 			if tc.blocked {
 				if e = agentNotifyFillPipe(write); e != nil {

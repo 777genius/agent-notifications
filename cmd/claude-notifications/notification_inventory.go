@@ -243,7 +243,7 @@ func inventoryRead(ctx context.Context, path string, evidence notificationInvent
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	actual, err := f.Stat()
 	if err != nil || !os.SameFile(info, actual) {
 		return nil, errors.New("inventory_changed")

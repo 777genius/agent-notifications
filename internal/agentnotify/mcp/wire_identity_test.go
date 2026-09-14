@@ -95,7 +95,7 @@ func TestExactAdjacentCancellation(t *testing.T) {
 {"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":9007199254740993}}
 {"jsonrpc":"2.0","method":"ping","id":"local-1"}
 `
-	go io.WriteString(peer, frames)
+	go func() { _, _ = io.WriteString(peer, frames) }()
 	a, err := c.Read(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -122,7 +122,7 @@ func TestUnsupportedWireIDs(t *testing.T) {
 			if cancel {
 				frame = `{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":` + id + `}}` + "\n"
 			}
-			go io.WriteString(peer, frame)
+			go func() { _, _ = io.WriteString(peer, frame) }()
 			if _, err := c.Read(context.Background()); err == nil {
 				t.Fatalf("accepted %s cancellation=%v", id, cancel)
 			}
@@ -133,7 +133,9 @@ func TestUnsupportedWireIDs(t *testing.T) {
 func TestMappingRetainedUntilOutputAndBoundedClose(t *testing.T) {
 	c, peer := testConnection(t)
 	for i := 0; i < pendingLimit; i++ {
-		go io.WriteString(peer, fmt.Sprintf("{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":%d}\n", i))
+		go func() {
+			_, _ = io.WriteString(peer, fmt.Sprintf("{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":%d}\n", i))
+		}()
 		if _, err := c.Read(context.Background()); err != nil {
 			t.Fatal(err)
 		}
@@ -168,7 +170,9 @@ func TestMappingRetainedUntilOutputAndBoundedClose(t *testing.T) {
 func TestNormalizedDuplicateWireIDs(t *testing.T) {
 	for _, pair := range [][2]string{{"0", "-0"}, {`"a"`, `"\u0061"`}, {"9007199254740993", "9007199254740993"}} {
 		c, peer := testConnection(t)
-		go io.WriteString(peer, `{"jsonrpc":"2.0","method":"ping","id":`+pair[0]+"}\n"+`{"jsonrpc":"2.0","method":"ping","id":`+pair[1]+"}\n")
+		go func() {
+			_, _ = io.WriteString(peer, `{"jsonrpc":"2.0","method":"ping","id":`+pair[0]+"}\n"+`{"jsonrpc":"2.0","method":"ping","id":`+pair[1]+"}\n")
+		}()
 		if _, err := c.Read(context.Background()); err != nil {
 			t.Fatal(err)
 		}
@@ -193,7 +197,9 @@ func TestSDKAdjacentOutstandingWireIDs(t *testing.T) {
 
 func TestMappingOutputLifecycle(t *testing.T) {
 	c, peer := testConnection(t)
-	go io.WriteString(peer, "{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":9223372036854775807}\n")
+	go func() {
+		_, _ = io.WriteString(peer, "{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":9223372036854775807}\n")
+	}()
 	msg, err := c.Read(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -213,7 +219,9 @@ func TestMappingOutputLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out map[string]json.RawMessage
-	json.Unmarshal(line, &out)
+	if err := json.Unmarshal(line, &out); err != nil {
+		t.Fatal(err)
+	}
 	if string(out["id"]) != "9223372036854775807" {
 		t.Fatal(string(line))
 	}

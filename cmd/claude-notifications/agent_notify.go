@@ -102,7 +102,7 @@ func agentNotifyExecute(ctx context.Context, command string, args []string, opti
 	if err != nil {
 		return notifycli.ExitInvalid
 	}
-	defer diagnostic.Close()
+	defer func() { _ = diagnostic.Close() }()
 	fail := func(reason string) int { _, _ = diagnostic.Write([]byte(reason + "\n")); return notifycli.ExitInvalid }
 	if !valid {
 		return fail("invalid_flags")
@@ -111,7 +111,7 @@ func agentNotifyExecute(ctx context.Context, command string, args []string, opti
 	if err != nil {
 		return fail("stdio_unavailable")
 	}
-	defer output.Close()
+	defer func() { _ = output.Close() }()
 	if help {
 		text := agentNotifyHelp
 		if command == "mcp-server" {
@@ -140,7 +140,7 @@ func agentNotifyExecute(ctx context.Context, command string, args []string, opti
 		return fail("stdio_unavailable")
 	}
 	owned := &agentNotifyIO{input: input, output: output}
-	defer owned.Close()
+	defer func() { _ = owned.Close() }()
 	done, joined := make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(joined)

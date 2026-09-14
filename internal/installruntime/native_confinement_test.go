@@ -242,7 +242,7 @@ func TestNativeCopyUsesOpenedSourceAfterPathReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer held.Close()
+	defer func() { _ = held.Close() }()
 	if err = os.Rename(source, source+"-original"); err != nil {
 		t.Fatal(err)
 	}

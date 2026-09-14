@@ -193,7 +193,7 @@ func TestSetupNotificationsPermissionTextHelpAndOutput(t *testing.T) {
 	}
 	for _, op := range []string{"permission-status", "request-permission"} {
 		out.Reset()
-		if agentNotifySetupExecute(nil, []string{op, "--help"}, &out, f.composition) != 0 {
+		if agentNotifySetupExecute(context.TODO(), []string{op, "--help"}, &out, f.composition) != 0 {
 			t.Fatal("help failed")
 		}
 		for _, want := range []string{"3 minutes", "130", "does not prove", "--expected-generation"} {

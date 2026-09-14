@@ -1273,32 +1273,53 @@ test_windows_native_hooks_real_exec_launch() {
 
     local plugin_root="$TEST_DIR/plugin"
     local bin_dir="$plugin_root/bin"
+    local stage_dir="$TEST_DIR/stage"
     local hooks_dir="$plugin_root/hooks"
-    mkdir -p "$bin_dir" "$hooks_dir"
+    mkdir -p "$bin_dir" "$stage_dir" "$hooks_dir"
     printf '{"hooks":{}}\n' > "$hooks_dir/hooks.json"
 
-    local exe_path="$bin_dir/claude-notifications-windows-amd64.exe"
+    local exe_path="$stage_dir/claude-notifications-windows-amd64.exe"
     if ! (cd "$REPO_ROOT" && go build -o "$exe_path" ./cmd/claude-notifications); then
         fail_test "Build real Windows notification binary" "go build failed"
         cleanup_test_dir
         return
     fi
 
-    printf '#!/bin/sh\nexit 0\n' > "$bin_dir/claude-notifications-windows-amd64-focus.exe"
-    chmod +x "$bin_dir/claude-notifications-windows-amd64-focus.exe"
+    printf '#!/bin/sh\nexit 0\n' > "$stage_dir/claude-notifications-windows-amd64-focus.exe"
+    chmod +x "$stage_dir/claude-notifications-windows-amd64-focus.exe"
 
-    touch "$bin_dir/sound-preview-windows-amd64.exe"
-    touch "$bin_dir/list-devices-windows-amd64.exe"
-    touch "$bin_dir/list-sounds-windows-amd64.exe"
+    local appdata_dir="$TEST_DIR/appdata"
+    mkdir -p "$appdata_dir"
+    local native_stage native_target native_appdata
+    native_stage="$stage_dir"
+    native_target="$bin_dir"
+    native_appdata="$appdata_dir"
+    if command -v cygpath >/dev/null 2>&1; then
+        native_stage=$(cygpath -w "$stage_dir")
+        native_target=$(cygpath -w "$bin_dir")
+        native_appdata=$(cygpath -w "$appdata_dir")
+    fi
 
-    if ! "$exe_path" internal-install-runtime --stage "$bin_dir" --target "$bin_dir" --entry "claude-notifications-windows-amd64.exe"; then
-        fail_test "Register managed Windows runtime" "internal-install-runtime failed"
+    local register_out
+    if ! register_out=$(APPDATA="$native_appdata" "$exe_path" internal-install-runtime --stage "$native_stage" --target "$native_target" --entry "claude-notifications-windows-amd64.exe" 2>&1); then
+        fail_test "Register managed Windows runtime" "$register_out"
         cleanup_test_dir
         return
     fi
 
+    # Installer skips GitHub utility downloads when these exceed the size floor.
+    # Keep them out of the stage so the kernel does not adopt dummy bytes.
+    dd if=/dev/zero of="$bin_dir/sound-preview-windows-amd64.exe" bs=1024 count=100 status=none 2>/dev/null || \
+        dd if=/dev/zero of="$bin_dir/sound-preview-windows-amd64.exe" bs=1024 count=100 2>/dev/null
+    dd if=/dev/zero of="$bin_dir/list-devices-windows-amd64.exe" bs=1024 count=100 status=none 2>/dev/null || \
+        dd if=/dev/zero of="$bin_dir/list-devices-windows-amd64.exe" bs=1024 count=100 2>/dev/null
+    dd if=/dev/zero of="$bin_dir/list-sounds-windows-amd64.exe" bs=1024 count=100 status=none 2>/dev/null || \
+        dd if=/dev/zero of="$bin_dir/list-sounds-windows-amd64.exe" bs=1024 count=100 2>/dev/null
+
+    exe_path="$bin_dir/claude-notifications-windows-amd64.exe"
+
     local output exit_code
-    output=$(INSTALL_TARGET_DIR="$bin_dir" bash "$INSTALL_SCRIPT" 2>&1)
+    output=$(APPDATA="$native_appdata" INSTALL_TARGET_DIR="$bin_dir" bash "$INSTALL_SCRIPT" 2>&1)
     exit_code=$?
 
     assert_exit_code 0 $exit_code "Installer succeeds with real Windows binary"
@@ -1316,7 +1337,7 @@ test_windows_native_hooks_real_exec_launch() {
     assert_contains "$hooks_json" '"Stop"' "real hooks.json contains Stop hook"
 
     set +e
-    output=$(printf '{"session_id":"ci-win","transcript_path":"","cwd":""}\n' | "$exe_path" handle-hook Stop 2>&1)
+    output=$(printf '{"session_id":"ci-win","transcript_path":"","cwd":""}\n' | APPDATA="$native_appdata" "$exe_path" handle-hook Stop 2>&1)
     exit_code=$?
     set +e
 

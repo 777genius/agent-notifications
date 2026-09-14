@@ -38,7 +38,7 @@ func provision(ctx context.Context, o Options, s installruntime.PolicySnapshot, 
 	if e != nil {
 		return s, pre, "", fail("unsafe_state", e)
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	var owner ownership
 	raw, exists := s.Fields["setupState"]
 	if exists {
@@ -64,7 +64,7 @@ func provision(ctx context.Context, o Options, s installruntime.PolicySnapshot, 
 			return s, pre, "", fail("unsafe_state", e)
 		}
 		id, e := directoryID(stage)
-		stage.Close()
+		_ = stage.Close()
 		if e != nil {
 			return s, pre, "", e
 		}
@@ -90,23 +90,23 @@ func provision(ctx context.Context, o Options, s installruntime.PolicySnapshot, 
 			return s, pre, "", fail("unsafe_state", e)
 		}
 		if e = matches(stage, owner.DirectoryID); e != nil {
-			stage.Close()
+			_ = stage.Close()
 			return s, pre, "", fail("unsafe_state", e)
 		}
 		j, e := mkdir(stage, "journal")
 		if e != nil {
-			stage.Close()
+			_ = stage.Close()
 			return s, pre, "", fail("initialization_interrupted", e)
 		}
-		j.Close()
+		_ = j.Close()
 		spool, e := mkdir(stage, "native-spool")
 		if e != nil {
-			stage.Close()
+			_ = stage.Close()
 			return s, pre, "", fail("initialization_interrupted", e)
 		}
 		e = createLock(spool)
-		spool.Close()
-		stage.Close()
+		_ = spool.Close()
+		_ = stage.Close()
 		if e != nil {
 			return s, pre, "", fail("initialization_interrupted", e)
 		}
@@ -131,7 +131,7 @@ func provision(ctx context.Context, o Options, s installruntime.PolicySnapshot, 
 	if e != nil {
 		return s, pre, "", fail("initialization_recovery_required", fmt.Errorf("expected owned state is missing or unsafe: %w", e))
 	}
-	defer state.Close()
+	defer func() { _ = state.Close() }()
 	if e = matches(state, owner.DirectoryID); e != nil {
 		return s, pre, "", fail("initialization_recovery_required", e)
 	}
@@ -145,7 +145,7 @@ func provision(ctx context.Context, o Options, s installruntime.PolicySnapshot, 
 		return s, pre, "", fail("initialization_recovery_required", e)
 	}
 	e = checkLock(spool)
-	spool.Close()
+	_ = spool.Close()
 	if e != nil {
 		return s, pre, "", fail("initialization_recovery_required", e)
 	}
@@ -177,7 +177,7 @@ func provision(ctx context.Context, o Options, s installruntime.PolicySnapshot, 
 			return s, pre, "", fail("unsafe_state", e)
 		}
 		e = matches(named, owner.DirectoryID)
-		named.Close()
+		_ = named.Close()
 		if e != nil {
 			return s, pre, "", fail("unsafe_state", e)
 		}
@@ -229,20 +229,20 @@ func openRoot(path string) (*os.File, error) {
 	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
 	for i, name := range parts {
 		next, err := unix.Openat(fd, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
-		unix.Close(fd)
+		_ = unix.Close(fd)
 		if err != nil {
 			return nil, err
 		}
 		fd = next
 		var st unix.Stat_t
 		if e = unix.Fstat(fd, &st); e != nil {
-			unix.Close(fd)
+			_ = unix.Close(fd)
 			return nil, e
 		}
 		own := st.Uid == uint32(os.Geteuid())
 		trusted := own || st.Uid == 0
 		if !trusted || (st.Mode&0022 != 0 && st.Mode&unix.S_ISVTX == 0) || (i == len(parts)-1 && (!own || st.Mode&07777 != 0700)) {
-			unix.Close(fd)
+			_ = unix.Close(fd)
 			return nil, fmt.Errorf("unsafe setup directory")
 		}
 	}
@@ -256,11 +256,11 @@ func openChild(parent *os.File, name string) (*os.File, error) {
 	f := os.NewFile(uintptr(fd), name)
 	var st unix.Stat_t
 	if e = unix.Fstat(fd, &st); e != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, e
 	}
 	if st.Uid != uint32(os.Geteuid()) || st.Mode&07777 != 0700 {
-		f.Close()
+		_ = f.Close()
 		return nil, fmt.Errorf("unsafe private directory %s", name)
 	}
 	return f, nil
@@ -307,7 +307,7 @@ func createLock(dir *os.File) error {
 	}
 	f := os.NewFile(uintptr(fd), ".spool.lock")
 	e = f.Sync()
-	f.Close()
+	_ = f.Close()
 	if e != nil {
 		return e
 	}
@@ -318,7 +318,7 @@ func checkLock(dir *os.File) error {
 	if e != nil {
 		return e
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 	var st unix.Stat_t
 	if e = unix.Fstat(fd, &st); e != nil {
 		return e
@@ -341,12 +341,12 @@ func checkProvisioned(o Options, s installruntime.PolicySnapshot) error {
 	if e != nil {
 		return fail("unsafe_state", e)
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	state, e := openChild(root, "state")
 	if e != nil {
 		return fail("initialization_recovery_required", e)
 	}
-	defer state.Close()
+	defer func() { _ = state.Close() }()
 	if e = matches(state, owner.DirectoryID); e != nil {
 		return fail("initialization_recovery_required", e)
 	}
@@ -354,7 +354,7 @@ func checkProvisioned(o Options, s installruntime.PolicySnapshot) error {
 	if e != nil {
 		return fail("initialization_recovery_required", e)
 	}
-	defer j.Close()
+	defer func() { _ = j.Close() }()
 	for _, name := range []string{"namespace", "journal.json", "lock"} {
 		f, e := privateFile(j, name, 8*1024*1024)
 		if e != nil {
@@ -364,17 +364,17 @@ func checkProvisioned(o Options, s installruntime.PolicySnapshot) error {
 			b := make([]byte, 66)
 			n, err := f.Read(b)
 			if err != nil || string(b[:n]) != owner.Namespace+"\n" {
-				f.Close()
+				_ = f.Close()
 				return fail("initialization_recovery_required", fmt.Errorf("namespace changed before policy commit"))
 			}
 		}
-		f.Close()
+		_ = f.Close()
 	}
 	spool, e := openChild(state, "native-spool")
 	if e != nil {
 		return fail("initialization_recovery_required", e)
 	}
-	defer spool.Close()
+	defer func() { _ = spool.Close() }()
 	if e = checkLock(spool); e != nil {
 		return fail("initialization_recovery_required", e)
 	}
@@ -388,11 +388,11 @@ func privateFile(parent *os.File, name string, limit int64) (*os.File, error) {
 	f := os.NewFile(uintptr(fd), name)
 	var st unix.Stat_t
 	if e = unix.Fstat(fd, &st); e != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, e
 	}
 	if st.Uid != uint32(os.Geteuid()) || st.Mode&unix.S_IFMT != unix.S_IFREG || st.Mode&07777 != 0600 || st.Nlink != 1 || st.Size > limit {
-		f.Close()
+		_ = f.Close()
 		return nil, fmt.Errorf("unsafe private file %s", name)
 	}
 	return f, nil
@@ -402,7 +402,7 @@ func checkPolicy(root string) error {
 	if e != nil {
 		return e
 	}
-	defer dir.Close()
+	defer func() { _ = dir.Close() }()
 	f, e := privateFile(dir, "agent-notifications.json", 64*1024)
 	if os.IsNotExist(e) {
 		return nil
