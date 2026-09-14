@@ -21,8 +21,8 @@ import (
 
 const setupWizardHelp = `Usage: claude-notifications setup-notifications wizard [OPTIONS]
 Master for hooks plus portable MCP/skill.
-TTY stdin prompts for agents, an existing-install action, and confirmation when those flags are omitted.
---json never prompts. No TTY and no --agents/--yes is invalid, not a hang.
+TTY stdin prompts for agents, an existing-install action, units, and confirmation when those flags are omitted.
+--json never prompts. Progress phases go to stderr. No TTY and no --agents/--yes is invalid, not a hang.
 Without --action, a new machine defaults to install; an existing portable
 installation is offered inspect, add/reinstall, or uninstall.
   --action install|uninstall|inspect
@@ -55,10 +55,10 @@ Update and repair are not published in this checkpoint.
 `
 
 func executeSetupWizard(ctx context.Context, args []string, out io.Writer) int {
-	return executeSetupWizardWith(ctx, args, out, os.Stdin, stdinIsCharDevice())
+	return executeSetupWizardWith(ctx, args, out, os.Stderr, os.Stdin, stdinIsCharDevice())
 }
 
-func executeSetupWizardWith(ctx context.Context, args []string, out io.Writer, in io.Reader, tty bool) int {
+func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.Writer, in io.Reader, tty bool) int {
 	if len(args) == 1 && args[0] == "--help" {
 		_, err := io.WriteString(out, setupWizardHelp)
 		if err != nil {
@@ -95,6 +95,11 @@ func executeSetupWizardWith(ctx context.Context, args []string, out io.Writer, i
 	}
 	if req.ReleaseDownloadRoot == "" {
 		req.ReleaseDownloadRoot = portableasset.DefaultReleaseDownloadRoot
+	}
+	if errOut != nil {
+		req.Progress = func(phase string) {
+			_, _ = fmt.Fprintln(errOut, "phase", phase)
+		}
 	}
 	needsPrompt := tty && !jsonOut && (req.Action == "" || (req.Action != setupwizard.ActionInspect && (len(req.Agents) == 0 || !req.Yes)))
 	if needsPrompt {

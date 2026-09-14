@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -14,16 +15,16 @@ func TestSetupWizardHelpAndYesRequired(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var out bytes.Buffer
-	if code := executeSetupWizard(ctx, []string{"--help"}, &out); code != 0 || !strings.Contains(out.String(), "setup-notifications wizard") {
+	if code := executeSetupWizard(ctx, []string{"--help"}, &out); code != 0 || !strings.Contains(out.String(), "setup-notifications wizard") || !strings.Contains(out.String(), "units") || !strings.Contains(out.String(), "stderr") {
 		t.Fatalf("help: %d %s", code, out.String())
 	}
 	out.Reset()
-	if code := executeSetupWizardWith(ctx, []string{"--action", "install", "--agents", "codex"}, &out, strings.NewReader(""), false); code != 2 {
+	if code := executeSetupWizardWith(ctx, []string{"--action", "install", "--agents", "codex"}, &out, io.Discard, strings.NewReader(""), false); code != 2 {
 		t.Fatalf("missing yes: %d %s", code, out.String())
 	}
 	out.Reset()
 	root := setupCommandRoot(t)
-	if code := executeSetupWizardWith(ctx, []string{"--action", "install", "--agents", "codex", "--yes", "--control-root", root, "--json"}, &out, strings.NewReader(""), false); code != 1 {
+	if code := executeSetupWizardWith(ctx, []string{"--action", "install", "--agents", "codex", "--yes", "--control-root", root, "--json"}, &out, io.Discard, strings.NewReader(""), false); code != 1 {
 		t.Fatalf("missing runtime: %d %s", code, out.String())
 	}
 	if !strings.Contains(out.String(), "managed_runtime_required") {
@@ -35,12 +36,12 @@ func TestSetupWizardTTYSelectsAndCancels(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var out bytes.Buffer
-	if code := executeSetupWizardWith(ctx, []string{"--action", "install"}, &out, strings.NewReader("\n"), true); code != 0 || !strings.Contains(out.String(), "cancelled") {
+	if code := executeSetupWizardWith(ctx, []string{"--action", "install"}, &out, io.Discard, strings.NewReader("\n"), true); code != 0 || !strings.Contains(out.String(), "cancelled") {
 		t.Fatalf("tty cancel: %d %s", code, out.String())
 	}
 	out.Reset()
 	root := setupCommandRoot(t)
-	if code := executeSetupWizardWith(ctx, []string{"--action", "install", "--control-root", root}, &out, strings.NewReader("2\ny\n"), true); code != 1 {
+	if code := executeSetupWizardWith(ctx, []string{"--action", "install", "--control-root", root}, &out, io.Discard, strings.NewReader("2\n3\ny\n"), true); code != 1 {
 		t.Fatalf("tty confirm still needs runtime: %d %s", code, out.String())
 	}
 	if !strings.Contains(out.String(), "managed_runtime_required") || !strings.Contains(out.String(), "retry:") {
@@ -53,13 +54,13 @@ func TestSetupWizardTTYOmitsActionDefaultsInstall(t *testing.T) {
 	defer cancel()
 	var out bytes.Buffer
 	root := setupCommandRoot(t)
-	if code := executeSetupWizardWith(ctx, []string{"--control-root", root}, &out, strings.NewReader("2\ny\n"), true); code != 1 {
+	if code := executeSetupWizardWith(ctx, []string{"--control-root", root}, &out, io.Discard, strings.NewReader("2\n3\ny\n"), true); code != 1 {
 		t.Fatalf("omitted action: %d %s", code, out.String())
 	}
 	if strings.Contains(out.String(), "Existing agent-notify") {
 		t.Fatalf("new machine prompted existing action: %s", out.String())
 	}
-	if !strings.Contains(out.String(), "Plan: action=install") || !strings.Contains(out.String(), "managed_runtime_required") {
+	if !strings.Contains(out.String(), "Units:") || !strings.Contains(out.String(), "Plan: action=install") || !strings.Contains(out.String(), "managed_runtime_required") {
 		t.Fatalf("omitted action flow: %s", out.String())
 	}
 }
@@ -68,10 +69,13 @@ func TestSetupWizardJSONDoesNotPrompt(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var out bytes.Buffer
-	if code := executeSetupWizardWith(ctx, []string{"--action", "install", "--agents", "codex", "--json"}, &out, strings.NewReader("y\n"), true); code != 2 {
+	if code := executeSetupWizardWith(ctx, []string{"--action", "install", "--agents", "codex", "--json"}, &out, io.Discard, strings.NewReader("y\n"), true); code != 2 {
 		t.Fatalf("json prompt: %d %s", code, out.String())
 	}
 	if !strings.Contains(out.String(), "noninteractive_requires_yes") {
 		t.Fatalf("json must not consume TTY confirm: %s", out.String())
+	}
+	if strings.Contains(out.String(), "phase ") {
+		t.Fatalf("json stdout included progress: %s", out.String())
 	}
 }

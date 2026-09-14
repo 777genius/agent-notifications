@@ -64,6 +64,9 @@ type Request struct {
 	// PackageFetcher downloads one URL. Production uses HTTPS; tests inject
 	// a local server. Never parsed from CLI flags.
 	PackageFetcher func(context.Context, string) ([]byte, error)
+	// Progress reports large confirmed phases to the host. JSON stdout stays
+	// one result; the CLI writes these lines to stderr. Nil is silent.
+	Progress func(string)
 }
 
 type TargetResult struct {
@@ -438,6 +441,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 	mat := portablesetup.Materializer{}
 	if len(notifyAgents) > 0 {
 		recordedPath, recordedVersion := desiredPackage(req)
+		reportProgress(req, "prepare")
 		if !explicitAbs(req.PackageRoot) && recordedPath == "" && recordedVersion != "" && req.ReleaseDownloadRoot == "" && req.PackageFetcher == nil {
 			out.Outcome, out.Reason = "incomplete", "recorded_package_unavailable"
 			return out, ErrRefused
@@ -498,6 +502,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 			}
 		}
 	}
+	reportProgress(req, "preflight")
 	snap, err := publishWizardIntent(ctx, req, snap, runtimeRoot, hookAgents, notifyAgents, true)
 	if err != nil {
 		if conflict, handled := pendingIntentConflict(req, err, out); handled {
@@ -508,6 +513,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 	}
 	out.Generation = snap.Ledger.Generation
 	if len(hookAgents) > 0 {
+		reportProgress(req, "hooks")
 		out, err = applyHooks(ctx, req, hookAgents, snap, false, out)
 		if err != nil || out.Outcome == "incomplete" || out.Outcome == "invalid" {
 			return out, err
@@ -522,8 +528,10 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 	}
 	if len(notifyAgents) == 0 {
 		out.Outcome = "completed"
+		reportProgress(req, "complete")
 		return out, nil
 	}
+	reportProgress(req, "agent-notify")
 	generation := snap.Ledger.Generation
 	for _, agent := range notifyAgents {
 		materialize := portablesetup.MaterializeRequest{
@@ -557,6 +565,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		id.InstallationID = got.InstallationID
 	}
 	out.Outcome = "completed"
+	reportProgress(req, "complete")
 	return out, nil
 }
 
@@ -602,6 +611,7 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 			}
 		}
 	}
+	reportProgress(req, "preflight")
 	snap, err := publishWizardIntent(ctx, req, snap, runtimeRoot, hookAgents, notifyAgents, portablePresent)
 	if err != nil {
 		if conflict, handled := pendingIntentConflict(req, err, out); handled {
@@ -612,6 +622,7 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 	}
 	out.Generation = snap.Ledger.Generation
 	if len(hookAgents) > 0 {
+		reportProgress(req, "hooks")
 		out, err = applyHooks(ctx, req, hookAgents, snap, true, out)
 		if err != nil || out.Outcome == "incomplete" || out.Outcome == "invalid" {
 			return out, err
@@ -626,12 +637,15 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 	}
 	if len(notifyAgents) == 0 {
 		out.Outcome = "completed"
+		reportProgress(req, "complete")
 		return out, nil
 	}
 	if id.InstallationID == "" {
 		out.Outcome, out.Reason = "unchanged", "portable_absent"
+		reportProgress(req, "complete")
 		return out, nil
 	}
+	reportProgress(req, "agent-notify")
 	generation := snap.Ledger.Generation
 	removed := 0
 	for _, agent := range notifyAgents {
@@ -680,9 +694,11 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 	}
 	if removed == 0 {
 		out.Outcome = "unchanged"
+		reportProgress(req, "complete")
 		return out, nil
 	}
 	out.Outcome = "completed"
+	reportProgress(req, "complete")
 	return out, nil
 }
 
@@ -1113,6 +1129,12 @@ func offerPostSetupActions(req Request, agents []portable.Integration, out Resul
 		})
 	}
 	return out
+}
+
+func reportProgress(req Request, phase string) {
+	if req.Progress != nil {
+		req.Progress(phase)
+	}
 }
 
 func explicitAbs(p string) bool {

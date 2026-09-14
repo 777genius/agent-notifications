@@ -19,6 +19,7 @@ var (
 type Prompter interface {
 	SelectAgents(context.Context) ([]string, error)
 	SelectExistingAction(context.Context) (Action, error)
+	SelectUnits(context.Context) (hooks, notify bool, err error)
 	Confirm(context.Context, string) (bool, error)
 }
 
@@ -86,6 +87,31 @@ func (p *LinePrompt) SelectExistingAction(ctx context.Context) (Action, error) {
 	}
 }
 
+func (p *LinePrompt) SelectUnits(ctx context.Context) (bool, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, false, err
+	}
+	if _, err := io.WriteString(p.Out, "Units: 1) Hooks  2) Agent-initiated notify (MCP+skill)  3) Both\nChoice: "); err != nil {
+		return false, false, err
+	}
+	line, err := readLine(ctx, p.reader())
+	if err != nil {
+		return false, false, err
+	}
+	switch strings.TrimSpace(line) {
+	case "1":
+		return true, false, nil
+	case "2":
+		return false, true, nil
+	case "3":
+		return true, true, nil
+	case "":
+		return false, false, ErrPromptCanceled
+	default:
+		return false, false, fmt.Errorf("%w: invalid_choice", ErrPromptCanceled)
+	}
+}
+
 func (p *LinePrompt) Confirm(ctx context.Context, summary string) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -146,6 +172,14 @@ func FillInteractive(ctx context.Context, req Request, p Prompter, existing func
 	}
 	if req.Action == ActionInspect {
 		return req, nil
+	}
+	if unitFlagsOmitted(req) && !req.Yes {
+		hooks, notify, err := p.SelectUnits(ctx)
+		if err != nil {
+			return req, err
+		}
+		req.Hooks = boolPtr(hooks)
+		req.AgentNotify = boolPtr(notify)
 	}
 	if !req.Yes {
 		ok, err := p.Confirm(ctx, confirmPlan(req))

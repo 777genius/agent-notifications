@@ -16,17 +16,56 @@ func promptCtx(t *testing.T) context.Context {
 }
 
 func TestFillInteractiveSelectsBothAndConfirms(t *testing.T) {
-	in := strings.NewReader("3\ny\n")
+	in := strings.NewReader("3\n3\ny\n")
 	var out strings.Builder
 	got, err := FillInteractive(promptCtx(t), Request{Action: ActionInstall}, &LinePrompt{In: in, Out: &out}, nil)
 	if err != nil || !got.Yes || strings.Join(got.Agents, ",") != "claude,codex" {
 		t.Fatalf("fill: %+v %v", got, err)
 	}
+	if got.Hooks == nil || !*got.Hooks || got.AgentNotify == nil || !*got.AgentNotify {
+		t.Fatalf("units: hooks=%v notify=%v", got.Hooks, got.AgentNotify)
+	}
 	if !strings.Contains(out.String(), "Claude Code") || !strings.Contains(out.String(), "[y/N]") {
 		t.Fatalf("prompt text: %s", out.String())
 	}
-	if !strings.Contains(out.String(), "Plan: action=install agents=claude,codex hooks=on agent-notify=on") {
+	if !strings.Contains(out.String(), "Units:") || !strings.Contains(out.String(), "Agent-initiated notify") {
+		t.Fatalf("units prompt: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "Plan: action=install agents=claude,codex hooks=true agent-notify=true") {
 		t.Fatalf("plan: %s", out.String())
+	}
+}
+
+func TestFillInteractiveSelectsNotifyOnly(t *testing.T) {
+	in := strings.NewReader("1\n2\ny\n")
+	var out strings.Builder
+	got, err := FillInteractive(promptCtx(t), Request{Action: ActionInstall}, &LinePrompt{In: in, Out: &out}, nil)
+	if err != nil || strings.Join(got.Agents, ",") != "claude" || got.Hooks == nil || *got.Hooks || got.AgentNotify == nil || !*got.AgentNotify {
+		t.Fatalf("notify-only: %+v %v", got, err)
+	}
+}
+
+func TestFillInteractiveEmptyUnitsCancels(t *testing.T) {
+	in := strings.NewReader("1\n\n")
+	var out strings.Builder
+	_, err := FillInteractive(promptCtx(t), Request{Action: ActionInstall}, &LinePrompt{In: in, Out: &out}, nil)
+	if err != ErrPromptCanceled {
+		t.Fatalf("cancel units: %v", err)
+	}
+}
+
+func TestFillInteractiveSkipsUnitsWhenFlagsSet(t *testing.T) {
+	off, on := false, true
+	in := strings.NewReader("y\n")
+	var out strings.Builder
+	got, err := FillInteractive(promptCtx(t), Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Hooks: &on, AgentNotify: &off,
+	}, &LinePrompt{In: in, Out: &out}, nil)
+	if err != nil || !got.Yes || got.Hooks == nil || !*got.Hooks || got.AgentNotify == nil || *got.AgentNotify {
+		t.Fatalf("preset units: %+v %v", got, err)
+	}
+	if strings.Contains(out.String(), "Units:") {
+		t.Fatalf("prompted units despite flags: %s", out.String())
 	}
 }
 
@@ -88,7 +127,7 @@ func TestFillInteractiveNilPrompter(t *testing.T) {
 }
 
 func TestFillInteractiveOmitsActionInstallsNew(t *testing.T) {
-	in := strings.NewReader("2\ny\n")
+	in := strings.NewReader("2\n3\ny\n")
 	var out strings.Builder
 	got, err := FillInteractive(promptCtx(t), Request{}, &LinePrompt{In: in, Out: &out}, nil)
 	if err != nil || got.Action != ActionInstall || strings.Join(got.Agents, ",") != "codex" || !got.Yes {
@@ -114,7 +153,7 @@ func TestFillInteractiveExistingSelectsInspect(t *testing.T) {
 }
 
 func TestFillInteractiveExistingSelectsUninstall(t *testing.T) {
-	in := strings.NewReader("3\ny\n")
+	in := strings.NewReader("3\n3\ny\n")
 	got, err := FillInteractive(promptCtx(t), Request{Agents: []string{"claude"}}, &LinePrompt{In: in, Out: io.Discard}, func([]string) []string {
 		return []string{"claude"}
 	})

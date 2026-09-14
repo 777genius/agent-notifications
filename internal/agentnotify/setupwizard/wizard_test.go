@@ -134,12 +134,19 @@ func TestWizardInstallInspectUninstall(t *testing.T) {
 		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
 		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe, ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
 	}
+	var phases []string
+	req.Progress = func(phase string) {
+		phases = append(phases, phase)
+	}
 	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
 		t.Fatal(err)
 	}
 	installed, err := Run(ctx, req)
 	if err != nil || installed.Outcome != "completed" {
 		t.Fatalf("install: %+v %v", installed, err)
+	}
+	if strings.Join(phases, ",") != "prepare,preflight,agent-notify,complete" {
+		t.Fatalf("install phases: %v", phases)
 	}
 	if len(installed.Readiness) == 0 || installed.Readiness[0].Delivery != "not_verified" {
 		t.Fatalf("delivery treated as proven: %+v", installed.Readiness)
@@ -346,15 +353,22 @@ func TestWizardCodexHooksWithoutConfigure(t *testing.T) {
 		t.Fatal(err)
 	}
 	off := false
+	var phases []string
 	req := Request{
 		Action: ActionInstall, Agents: []string{"codex"}, Yes: true,
 		Hooks: boolPtr(true), AgentNotify: &off,
 		PluginRoot: bundle, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
 		CodexHome: home,
+		Progress: func(phase string) {
+			phases = append(phases, phase)
+		},
 	}
 	installed, err := Run(ctx, req)
 	if err != nil || installed.Outcome != "completed" {
 		t.Fatalf("hooks install: %+v %v", installed, err)
+	}
+	if strings.Join(phases, ",") != "preflight,hooks,complete" {
+		t.Fatalf("install phases: %v", phases)
 	}
 	hooks := filepath.Join(home, "hooks.json")
 	data, err := os.ReadFile(hooks)
@@ -384,9 +398,13 @@ func TestWizardCodexHooksWithoutConfigure(t *testing.T) {
 	}
 	req.Action = ActionUninstall
 	req.Yes = true
+	phases = nil
 	removed, err := Run(ctx, req)
 	if err != nil || removed.Outcome != "completed" {
 		t.Fatalf("hooks uninstall: %+v %v", removed, err)
+	}
+	if strings.Join(phases, ",") != "preflight,hooks,complete" {
+		t.Fatalf("uninstall phases: %v", phases)
 	}
 	data, err = os.ReadFile(hooks)
 	if err == nil && strings.Contains(string(data), "codex-hook-wrapper") {
