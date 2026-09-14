@@ -95,16 +95,55 @@ func validRoot(p string) bool {
 }
 
 // overlappingRoots reports whether two owned paths are the same location or
-// nested, including case and symlink aliases on case-insensitive volumes.
+// nested, including case, symlink, and Unicode aliases when the filesystem
+// presents them as the same identity.
 func overlappingRoots(a, b string) bool {
 	left, right := canonicalRoot(a), canonicalRoot(b)
-	if left == "" || right == "" {
+	if left != "" && right != "" {
+		if left == right || containedRoot(left, right) || containedRoot(right, left) {
+			return true
+		}
+	}
+	return identityOverlap(a, b)
+}
+
+func identityOverlap(a, b string) bool {
+	if a == "" || b == "" {
 		return false
 	}
-	if left == right {
-		return true
+	for cur := filepath.Clean(a); ; {
+		if sameExistingFile(cur, b) {
+			return true
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			break
+		}
+		cur = parent
 	}
-	return containedRoot(left, right) || containedRoot(right, left)
+	for cur := filepath.Clean(b); ; {
+		if sameExistingFile(cur, a) {
+			return true
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			break
+		}
+		cur = parent
+	}
+	return false
+}
+
+func sameExistingFile(a, b string) bool {
+	left, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	right, err := os.Stat(b)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(left, right)
 }
 
 func containedRoot(root, p string) bool {

@@ -208,6 +208,45 @@ func TestPrepareRejectsSymlinkAliasTempRoot(t *testing.T) {
 	}
 }
 
+func TestPrepareRejectsUnicodeAliasTempRoot(t *testing.T) {
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "caf\u00e9")
+	writePackage(t, pkg, probe)
+	alias := filepath.Join(base, "cafe\u0301")
+	info, err := os.Stat(pkg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliasInfo, aliasErr := os.Stat(alias)
+	if aliasErr != nil || !os.SameFile(info, aliasInfo) {
+		t.Skip("filesystem does not alias Unicode NFC/NFD names")
+	}
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{StateRoot: filepath.Join(base, "uap"), TempRoot: alias})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-000000000068",
+		OperationID: "unicode-alias-temp", RequiredComponents: []string{"mcp", "skills"},
+	})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("unicode alias temp: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(pkg, "plugin.json")); err != nil {
+		t.Fatal("prepare mutated unicode-aliased source")
+	}
+}
+
 func skipWindowsLauncherExecuteBit(t *testing.T) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
