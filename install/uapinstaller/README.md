@@ -36,8 +36,9 @@ client deactivation. Last-client remove retains PLUGIN_DATA and reports
 
 Confirmed Apply re-reads live target/ownership before mutation and returns
 `plan_changed` instead of applying a stale confirmation. Discover reports
-supported Claude/Codex user-scope metadata without creating state. Inspect and
-Result expose per-client materialization/activation/authentication/verification.
+supported Claude/Codex user-scope metadata and executable presence without
+creating state or executing found files. Inspect and Result expose per-client
+materialization/activation/authentication/verification.
 
 Codex artifact removal requires `Request.ExternalUninstalled`. Confirmed Apply
 does not invent that attestation. A missing or relative helper is rejected
