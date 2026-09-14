@@ -150,8 +150,8 @@ func Apply(ctx context.Context, o Options, r Request) (result Result, err error)
 		}
 		return result, nil
 	}
-	if o.Platform != "darwin" {
-		return result, fail("unsupported_platform", fmt.Errorf("explicit setup supports macOS"))
+	if !setupOSSupported(o.Platform) {
+		return result, fail("unsupported_platform", fmt.Errorf("explicit setup supports macOS and Linux"))
 	}
 	// Read and validate before creating even the setup lock. Missing canonical
 	// global configuration must leave all roots and settings byte-for-byte intact.
@@ -252,10 +252,17 @@ func qualified(s installruntime.PolicySnapshot, o Options, g uint64) error {
 			registered = true
 		}
 	}
-	if !registered || l.Native == nil || l.Native.DecoderFloor < 1 {
+	if !registered {
+		return fail("qualified_runtime_required", fmt.Errorf("install a qualified managed runtime first"))
+	}
+	if o.Platform == "darwin" && (l.Native == nil || l.Native.DecoderFloor < 1) {
 		return fail("qualified_runtime_required", fmt.Errorf("install a qualified managed native runtime first"))
 	}
 	return nil
+}
+
+func setupOSSupported(platform string) bool {
+	return platform == "darwin" || platform == "linux"
 }
 func changes(r Request) (map[string]json.RawMessage, error) {
 	m := map[string]json.RawMessage{}
@@ -328,6 +335,9 @@ func (o Options) validatePrepared(ctx context.Context, s installruntime.PolicySn
 	if e != nil {
 		return fail("configuration_invalid", e)
 	}
+	if o.Platform == "linux" && p.Route.LocalRouting {
+		return fail("unsupported_platform", fmt.Errorf("linux explicit setup supports navigation none"))
+	}
 	if p.Route.LocalRouting {
 		a := Application{p.Route.ApplicationPath, p.Route.TeamID}
 		if !origin.Text(a.Path, 1024, true) || !filepath.IsAbs(a.Path) || filepath.Clean(a.Path) != a.Path || filepath.Ext(a.Path) != ".app" || len(a.Path) > 1024 || len(a.TeamID) != 10 {
@@ -375,8 +385,8 @@ func Inspect(ctx context.Context, o Options, r Request, preparedGlobal []byte) e
 	if err != nil {
 		return err
 	}
-	if o.Platform != "darwin" {
-		return fail("unsupported_platform", fmt.Errorf("explicit setup supports macOS"))
+	if !setupOSSupported(o.Platform) {
+		return fail("unsupported_platform", fmt.Errorf("explicit setup supports macOS and Linux"))
 	}
 	s, _, err := readSnapshot(ctx, o.ControlRoot)
 	if err != nil {

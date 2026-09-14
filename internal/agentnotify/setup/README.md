@@ -17,7 +17,8 @@ members, including nested route/rate members, remain intact. Enable requires a
 chosen verified local application; disable is a separate operation that needs no
 app, native availability, journal, global config, or supported OS.
 
-The initial supported OS is macOS. `Platform` and `JournalClock` are trusted hosted
+The initial supported OS is macOS. Linux session delivery (`navigation=none`)
+does not require the macOS native helper. `Platform` and `JournalClock` are trusted hosted
 test seams, not notification payload fields. `ControlRoot` defaults to
 `os.UserConfigDir()/agent-notifications`; journal and spool locations are fixed
 under it at `state/journal` and `state/native-spool`. The default global config is
