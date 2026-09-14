@@ -376,6 +376,9 @@ func TestNotificationShellHelper(t *testing.T) {
 	}
 	args = args[1:]
 	switch args[0] {
+	case "--help", "help":
+		fmt.Println("setup-codex [--skip-agent-notify] [--agent-notify]")
+		fmt.Println("setup-notifications [--help]")
 	case "--version":
 		fmt.Println("claude-notifications v" + config.ConsumerVersion)
 	case "setup-codex":
