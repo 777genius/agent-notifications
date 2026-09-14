@@ -1224,6 +1224,22 @@ func TestWizardUninstallOmittedUnitsRemovesManagedWithoutPackage(t *testing.T) {
 	if err != nil || removed.Outcome != "completed" {
 		t.Fatalf("uninstall: %+v %v", removed, err)
 	}
+	generation := removed.Generation
+	req.Hooks = &off
+	req.PackageFetcher = func(context.Context, string) ([]byte, error) {
+		t.Fatal("second uninstall fetched a package")
+		return nil, nil
+	}
+	again, err := Run(ctx, req)
+	if err != nil || again.ExitCode() != 0 {
+		t.Fatalf("second uninstall: %+v %v", again, err)
+	}
+	if again.Outcome != "unchanged" || again.Reason != "already_absent" {
+		t.Fatalf("second uninstall: %+v %v", again, err)
+	}
+	if again.Generation != generation {
+		t.Fatalf("already_absent mutated generation: %d -> %d", generation, again.Generation)
+	}
 	req.Action = ActionInspect
 	req.Yes = false
 	view, err := Run(ctx, req)

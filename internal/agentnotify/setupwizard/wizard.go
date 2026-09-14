@@ -828,7 +828,16 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 		}
 		req.InstallationID = id.InstallationID
 	}
-	portablePresent := id.InstallationID != ""
+	retainedEmpty := false
+	if id.InstallationID != "" {
+		var emptyErr error
+		retainedEmpty, emptyErr = mat.RetainedEmpty(id.InstallationID)
+		if emptyErr != nil {
+			out.Outcome, out.Reason = "incomplete", emptyErr.Error()
+			return out, emptyErr
+		}
+	}
+	portablePresent := id.InstallationID != "" && !retainedEmpty
 	if portablePresent {
 		for _, agent := range notifyAgents {
 			if !explicitAbs(clientConfig(req, agent)) {
@@ -874,6 +883,16 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 	}
 	if id.InstallationID == "" {
 		out.Outcome, out.Reason = "unchanged", "portable_absent"
+		reportProgress(req, "complete")
+		return out, nil
+	}
+	if retainedEmpty {
+		for _, agent := range notifyAgents {
+			out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "unchanged", Reason: "already_absent"})
+		}
+		if out.Outcome == "" {
+			out.Outcome, out.Reason = "unchanged", "already_absent"
+		}
 		reportProgress(req, "complete")
 		return out, nil
 	}
