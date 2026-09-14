@@ -4,6 +4,7 @@ package portablesetup
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -210,6 +211,12 @@ func TestInstallRemovesOwnedGlobalMCPBeforePortable(t *testing.T) {
 	if err != nil || facts.Registered {
 		t.Fatalf("owned MCP survived portable handoff: %+v %v", facts, err)
 	}
+	if snap.Ledger.PendingMutation != nil || snap.Ledger.WriterFloor != installruntime.ReservationWriterFloor || snap.Ledger.Schema != 3 {
+		t.Fatalf("handoff did not terminalize reservation: %+v", snap.Ledger)
+	}
+	if _, err := os.Lstat(IntentPath(b.ControlRoot)); !os.IsNotExist(err) {
+		t.Fatal("intent retained after successful handoff")
+	}
 }
 
 func TestHandoffReverseRefusesWhileLocatorExistsThenRestoresOwnedMCP(t *testing.T) {
@@ -357,5 +364,107 @@ func TestCommitBindingPublishFailureKeepsExistingConsumer(t *testing.T) {
 	}
 	if _, ok := snap.Ledger.Consumers[key]; !ok {
 		t.Fatal("publish failure unregistered existing portable consumer")
+	}
+}
+
+func ownedMCP(t *testing.T, b portable.Binding, ledger installruntime.Ledger) (string, string, installruntime.Ledger) {
+	t.Helper()
+	config := filepath.Join(filepath.Dir(b.ControlRoot), "client", "config")
+	if err := os.MkdirAll(filepath.Dir(config), 0700); err != nil {
+		t.Fatal(err)
+	}
+	cmd := filepath.Join(b.RuntimeRoot, b.Primary)
+	result, err := clientsetup.Apply(testCtx(t), clientsetup.Request{
+		ControlRoot: b.ControlRoot, RuntimeRoot: b.RuntimeRoot, Command: cmd, ConfigPath: config,
+		Provider: registration.Codex, Mode: clientsetup.Managed, ExpectedGeneration: ledger.Generation,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return config, cmd, result.Ledger
+}
+
+func TestHandoffReservationIsPublishedBeforeDirectRemove(t *testing.T) {
+	b, ledger := bindingFixture(t)
+	config, cmd, ledger := ownedMCP(t, b, ledger)
+	svc := Service{}
+	req := Request{Binding: b, ExpectedGeneration: ledger.Generation, Discovery: Discovery{ConfigPath: config, Command: cmd}}
+	published, res, err := svc.publishHandoffReservation(testCtx(t), req, ledger.Generation)
+	if err != nil || res == nil {
+		t.Fatalf("publish: %+v %v", res, err)
+	}
+	if _, err := os.Stat(config); err != nil {
+		t.Fatal("direct MCP removed before reservation")
+	}
+	if published.PendingMutation == nil || published.WriterFloor != installruntime.ReservationWriterFloor {
+		t.Fatalf("reservation not durable: %+v", published)
+	}
+	if _, err := os.Lstat(IntentPath(b.ControlRoot)); err != nil {
+		t.Fatal("intent missing before direct remove")
+	}
+	extra := filepath.Join(b.RuntimeRoot, "hijack")
+	if _, err := installruntime.Commit(testCtx(t), installruntime.Request{
+		ControlRoot: b.ControlRoot, Owner: b.Owner, RuntimeRoot: b.RuntimeRoot, ConsumerID: "hijack",
+		Files: []installruntime.File{{Path: extra, Data: []byte("x"), Mode: 0700}}, ExpectedGeneration: &published.Generation,
+	}); !errors.Is(err, installruntime.ErrReservationConflict) {
+		t.Fatalf("unmatched writer during reservation: %v", err)
+	}
+	uap := &fakeUAP{}
+	name, err := b.Filename()
+	if err != nil {
+		t.Fatal(err)
+	}
+	uap.stage = func(Envelope) (Receipt, error) {
+		return Receipt{BindingID: b.BindingID, DataRoot: b.DataRoot, LocatorArg: name}, nil
+	}
+	svc.Stager, svc.Activator, svc.Remover = uap, uap, uap
+	if _, err := svc.Install(testCtx(t), Request{
+		Binding: b, ExpectedGeneration: ledger.Generation, Discovery: req.Discovery,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts, err := clientsetup.Inspect(testCtx(t), clientsetup.Request{
+		ControlRoot: b.ControlRoot, RuntimeRoot: b.RuntimeRoot, Command: cmd, ConfigPath: config,
+		Provider: registration.Codex, Mode: clientsetup.Managed, ExpectedGeneration: snap.Ledger.Generation,
+	})
+	if err != nil || facts.Registered {
+		t.Fatalf("resume did not retire direct MCP: %+v %v", facts, err)
+	}
+	if snap.Ledger.PendingMutation != nil {
+		t.Fatal("reservation survived resumed install")
+	}
+}
+
+func TestHandoffNoopDoesNotCreateIntent(t *testing.T) {
+	b, ledger := bindingFixture(t)
+	uap := &fakeUAP{}
+	name, err := b.Filename()
+	if err != nil {
+		t.Fatal(err)
+	}
+	uap.stage = func(Envelope) (Receipt, error) {
+		return Receipt{BindingID: b.BindingID, DataRoot: b.DataRoot, LocatorArg: name}, nil
+	}
+	svc := Service{Stager: uap, Activator: uap, Remover: uap}
+	config := filepath.Join(filepath.Dir(b.ControlRoot), "client", "absent.json")
+	if _, err := svc.Install(testCtx(t), Request{
+		Binding: b, ExpectedGeneration: ledger.Generation,
+		Discovery: Discovery{ConfigPath: config, Command: filepath.Join(b.RuntimeRoot, b.Primary)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(IntentPath(b.ControlRoot)); !os.IsNotExist(err) {
+		t.Fatal("noop created handoff intent")
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Ledger.PendingMutation != nil || snap.Ledger.WriterFloor != 1 {
+		t.Fatalf("noop raised reservation protocol: %+v", snap.Ledger)
 	}
 }

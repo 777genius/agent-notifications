@@ -405,8 +405,15 @@ func TestAgentNotifyProcessBlockedMCP(t *testing.T) {
 				t.Fatalf("blocked output did not join: %v %v", time.Since(start), err)
 			}
 			if err != nil {
-				e, ok := err.(*exec.ExitError)
-				if !ok || e.ExitCode() != 2 {
+				e, isExit := err.(*exec.ExitError)
+				signaled := false
+				if isExit {
+					if status, ok := e.Sys().(syscall.WaitStatus); ok {
+						signaled = status.Signaled() && status.Signal() == syscall.SIGTERM
+					}
+				}
+				joined := isExit && (e.ExitCode() == 2 || (finish == "signal" && signaled))
+				if !joined {
 					t.Fatalf("shutdown failed: %v", err)
 				}
 			}

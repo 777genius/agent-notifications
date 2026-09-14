@@ -173,5 +173,6 @@ func mergePolicyFields(fields, changes map[string]json.RawMessage) error {
 func policyDisableOnly(r Request) bool {
 	return r.RefreshOnly && r.PolicyEnabled != nil && !*r.PolicyEnabled && r.ExpectedGeneration != nil &&
 		len(r.PolicyFields) == 0 && len(r.Files) == 0 && r.Prepare == nil && r.Native == nil &&
-		!r.RemoveConsumer && !r.PurgeNative && !r.RetireNative && !r.RollbackPending
+		!r.RemoveConsumer && !r.PurgeNative && !r.RetireNative && !r.RollbackPending &&
+		r.Reservation == nil && !r.ClearReservation
 }

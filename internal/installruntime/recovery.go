@@ -174,7 +174,7 @@ func decodeTransactionBlobs(data []byte, blobDir string) (transaction, error) {
 			}
 		}
 	}
-	if (tx.Schema != transactionSchemaV1 && tx.Schema != transactionSchemaV2) || tx.After.Generation <= tx.Before.Generation || tx.After.PolicyGeneration <= tx.Before.PolicyGeneration || tx.After.ID == "" || tx.After.Consumers == nil || tx.After.Files == nil || tx.Before.Consumers == nil || tx.Before.Files == nil {
+	if !acceptedTransactionSchema(tx.Schema) || tx.After.Generation <= tx.Before.Generation || tx.After.PolicyGeneration <= tx.Before.PolicyGeneration || tx.After.ID == "" || tx.After.Consumers == nil || tx.After.Files == nil || tx.Before.Consumers == nil || tx.Before.Files == nil {
 		return tx, fmt.Errorf("invalid transaction schema")
 	}
 	seen := map[string]bool{}
@@ -222,7 +222,21 @@ func reverseTransaction(current Ledger, tx transaction) (transaction, error) {
 	}
 	after := tx.Before
 	after.Enabled = false
-	after.WriterFloor = WriterFloor
+	if after.WriterFloor < tx.After.WriterFloor {
+		after.WriterFloor = tx.After.WriterFloor
+	}
+	if after.WriterFloor < tx.Before.WriterFloor {
+		after.WriterFloor = tx.Before.WriterFloor
+	}
+	if after.Schema < tx.After.Schema {
+		after.Schema = tx.After.Schema
+	}
+	if after.PendingMutation != nil || tx.After.PendingMutation != nil || after.WriterFloor >= ReservationWriterFloor {
+		after.Schema = ledgerSchemaV3
+		if after.WriterFloor < ReservationWriterFloor {
+			after.WriterFloor = ReservationWriterFloor
+		}
+	}
 	after.Generation = tx.After.Generation + 1
 	after.PolicyGeneration = tx.After.PolicyGeneration + 1
 	if after.ID == "" {
@@ -261,7 +275,7 @@ func reverseTransaction(current Ledger, tx transaction) (transaction, error) {
 			}
 		}
 	}
-	reverse := transaction{Schema: transactionSchemaV2, Before: current, After: after, ConfigPaths: tx.ConfigPaths, Rollback: true}
+	reverse := transaction{Schema: transactionSchemaFor(after, Request{}), Before: current, After: after, ConfigPaths: tx.ConfigPaths, Rollback: true}
 	if tx.Native != nil && after.Native != nil {
 		parents, err := pathAnchors(after.Native.Path, false)
 		if err != nil {
