@@ -262,3 +262,29 @@ func TestWindowsTransactionRecoversEvacuatedPreimage(t *testing.T) {
 		t.Fatal("redo bytes", err)
 	}
 }
+
+func TestWindowsReadConfinedDocumentAndDirectory(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "doc.json")
+	if err := os.WriteFile(path, []byte(`{"ok":true}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	data, id, err := ReadConfinedDocument(path, 4096)
+	if err != nil || string(data) != `{"ok":true}` || !id.Exists {
+		t.Fatal(string(data), id, err)
+	}
+	fp, err := Fingerprint(path)
+	if err != nil || fp != id {
+		t.Fatal(fp, id, err)
+	}
+	missing, id, err := ReadConfinedDocument(filepath.Join(root, "absent.json"), 4096)
+	if err != nil || missing != nil || id.Exists {
+		t.Fatal(missing, id, err)
+	}
+	if err = ConfinedDirectory(root); err != nil {
+		t.Fatal(err)
+	}
+	if err = ConfinedDirectory(filepath.Join(root, "no-such-dir")); !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+}
