@@ -10,8 +10,11 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/pathpolicy"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/packagedigest"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/planner"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/providers"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/usecase"
 )
 
@@ -160,6 +163,9 @@ func (e *Engine) prepareRemove(ctx context.Context, req Request) (*PreparedOpera
 	if !ok {
 		return nil, fmt.Errorf("%w: client %s is not installed", ErrInvalidRequest, client.ClientID)
 	}
+	if err := e.removalPreflight(ctx, client, binding); err != nil {
+		return nil, err
+	}
 	handle := &PreparedOperation{engine: e, req: req, client: client}
 	handle.plan = Plan{
 		Operation: OpRemove, ClientID: string(client.ClientID), ConfigRoot: req.ClientConfigRoot,
@@ -172,6 +178,36 @@ func (e *Engine) prepareRemove(ctx context.Context, req Request) (*PreparedOpera
 		DataRoot: receipt.Locator, DataReceiptID: binding.DataReceiptID, OperationID: req.OperationID,
 	}
 	return handle, nil
+}
+
+// removalPreflight is the §5.5.2 read-only check: exact target, persisted path,
+// and managed artifact digest. It does not lock, recover, EnsureData, invoke a
+// helper, or deactivate the client. Apply repeats it before UAP Remove.
+func (e *Engine) removalPreflight(ctx context.Context, client domain.DetectedClient, binding domain.ClientBinding) error {
+	digest := managedPackageDigest(binding)
+	if digest == "" {
+		return fmt.Errorf("%w: managed package digest is missing; refusing removal", ErrInvalidRequest)
+	}
+	target, err := (planner.Planner{ManagedRoot: e.cfg.ManagedRoot}).ResolveTarget(ctx, client, domain.ScopeUser, binding.PhysicalArtifact)
+	if err != nil {
+		return fmt.Errorf("%w: resolve managed removal target: %v", ErrInvalidRequest, err)
+	}
+	if err := pathpolicy.RequireExactPath(target.ActivePath, binding.TargetLocator); err != nil {
+		return fmt.Errorf("%w: refuse removal from untrusted persisted target: %v", ErrInvalidRequest, err)
+	}
+	if err := (providers.Stager{}).Verify(ctx, binding.TargetLocator, digest); err != nil {
+		return fmt.Errorf("%w: managed package was changed or is missing; refusing silent removal", ErrInvalidRequest)
+	}
+	return nil
+}
+
+func managedPackageDigest(client domain.ClientBinding) string {
+	for _, object := range client.NativeObjects {
+		if object.Kind == "managed_package_directory" && object.ManagedDigest != "" {
+			return object.ManagedDigest
+		}
+	}
+	return ""
 }
 
 // snapshotLocalPackage uses packagedigest executable overrides so Windows

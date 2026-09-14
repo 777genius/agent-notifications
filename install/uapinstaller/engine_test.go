@@ -388,3 +388,312 @@ func TestApplyRejectsClosedWrongAndRepeatedHandles(t *testing.T) {
 		t.Fatalf("double apply: %v", err)
 	}
 }
+
+func TestNewCopiesConfigAndRejectsRelativeHelper(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "state")
+	helper := filepath.Join(t.TempDir(), "helper")
+	cfg := Config{StateRoot: root, HelperExecutable: helper}
+	eng, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.StateRoot = filepath.Join(t.TempDir(), "other")
+	cfg.HelperExecutable = filepath.Join(t.TempDir(), "other")
+	if eng.cfg.StateRoot != root || eng.cfg.HelperExecutable != helper {
+		t.Fatal("New did not copy Config")
+	}
+	if _, err := New(Config{StateRoot: root, HelperExecutable: "relative-helper"}); err == nil {
+		t.Fatal("relative HelperExecutable accepted")
+	}
+}
+
+func TestPrepareCopiesRequestAndPlan(t *testing.T) {
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{StateRoot: filepath.Join(base, "uap")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-000000000046",
+		OperationID: "copy-request", RequiredComponents: []string{"mcp", "skills"},
+	}
+	prepared, err := eng.Prepare(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = prepared.Close() }()
+	if prepared.Plan().DigestAlgorithm != "agentplugins-tree-sha256-v1" || prepared.Plan().TreeDigest == "" {
+		t.Fatalf("canonical tree digest: %+v", prepared.Plan())
+	}
+	req.RequiredComponents[0] = "mutated"
+	req.PackageRoot = filepath.Join(base, "other")
+	req.ClientID = "claude"
+	plan := prepared.Plan()
+	plan.TreeDigest = "tampered"
+	plan.RequiredMissing = []string{"x"}
+	got := prepared.Plan()
+	if got.TreeDigest == "tampered" || got.ClientID != "codex" || prepared.req.PackageRoot != pkg {
+		t.Fatalf("prepare did not seal request/plan: %+v", got)
+	}
+	if prepared.req.RequiredComponents[0] != "mcp" {
+		t.Fatal("caller slice mutation changed prepared request")
+	}
+}
+
+func TestFailedPrepareRemovesOwnedSnapshot(t *testing.T) {
+	ctx := testCtx(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	if err := os.MkdirAll(pkg, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(base, "uap")
+	eng, err := New(Config{StateRoot: state})
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	_, err = eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: filepath.Join(base, "missing-client"), InstallationID: "00000000-0000-4000-8000-000000000047",
+		OperationID: "failed-prepare",
+	})
+	if err == nil {
+		t.Fatal("invalid package accepted")
+	}
+	tmp := filepath.Join(state, "tmp")
+	entries, readErr := os.ReadDir(tmp)
+	if readErr == nil && len(entries) != 0 {
+		t.Fatalf("failed prepare left snapshots: %v", names(entries))
+	}
+}
+
+func TestInvalidHelperRejectedBeforeStateFile(t *testing.T) {
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(base, "uap")
+	missing := filepath.Join(base, "missing-helper")
+	eng, err := New(Config{StateRoot: state, HelperExecutable: missing})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-000000000048",
+		OperationID: "missing-helper", RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = prepared.Close() }()
+	if _, err := eng.Apply(ctx, prepared, Decision{Confirmed: true}); err == nil {
+		t.Fatal("missing helper accepted")
+	}
+	if _, err := os.Lstat(eng.cfg.StateFile); !os.IsNotExist(err) {
+		t.Fatal("invalid helper wrote state")
+	}
+}
+
+func TestApplyUsesSealedSnapshotAfterSourceRemoved(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-000000000049",
+		OperationID: "deleted-source", RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = prepared.Close() }()
+	if err := os.RemoveAll(pkg); err != nil {
+		t.Fatal(err)
+	}
+	result, err := eng.Apply(ctx, prepared, Decision{Confirmed: true})
+	if err != nil || result.Outcome != OutcomeCompleted {
+		t.Fatalf("apply after source delete: %+v %v", result, err)
+	}
+}
+
+func TestPrepareRemoveRejectsCorruptArtifactBeforeDeactivate(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(base, "uap")
+	eng, err := New(Config{StateRoot: state, HelperExecutable: probe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-000000000050",
+		OperationID: "remove-preflight", RequiredComponents: []string{"mcp", "skills"},
+	}
+	prepared, err := eng.Prepare(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, prepared, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = prepared.Close()
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 1 {
+		t.Fatalf("inspect: %+v %v", view, err)
+	}
+	target := view.Installations[0].Bindings[0].TargetPath
+	if err := os.WriteFile(filepath.Join(target, "tampered"), []byte("corrupt"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	runner := &countingRunner{}
+	check, err := New(Config{StateRoot: state, HelperExecutable: probe, Runner: runner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = check.Prepare(ctx, Request{
+		Operation: OpRemove, ClientID: "codex", ClientConfigRoot: config, ClientExecutable: probe,
+		InstallationID: req.InstallationID, OperationID: "remove-corrupt", ExternalUninstalled: true,
+	})
+	if err == nil {
+		t.Fatal("corrupt managed artifact accepted")
+	}
+	if runner.n != 0 {
+		t.Fatalf("remove preflight deactivated client: %d", runner.n)
+	}
+}
+
+func TestPrepareRemoveDoesNotRunHelper(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(base, "uap")
+	eng, err := New(Config{StateRoot: state, HelperExecutable: probe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-000000000051",
+		OperationID: "remove-preview", RequiredComponents: []string{"mcp", "skills"},
+	}
+	prepared, err := eng.Prepare(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, prepared, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = prepared.Close()
+	runner := &countingRunner{}
+	check, err := New(Config{StateRoot: state, HelperExecutable: probe, Runner: runner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rm, err := check.Prepare(ctx, Request{
+		Operation: OpRemove, ClientID: "codex", ClientConfigRoot: config, ClientExecutable: probe,
+		InstallationID: req.InstallationID, OperationID: "remove-preview", ExternalUninstalled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rm.Close() }()
+	if runner.n != 0 {
+		t.Fatalf("prepare remove ran helper %d times", runner.n)
+	}
+}
+
+func TestExampleModuleStaysExternal(t *testing.T) {
+	mod, err := os.ReadFile(filepath.Join("example", "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(mod)
+	if strings.Contains(body, "replace ") || strings.Contains(body, "internal/") {
+		t.Fatalf("example module is not external:\n%s", body)
+	}
+	src, err := os.ReadFile(filepath.Join("example", "main.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(src)
+	if !strings.Contains(text, `"github.com/777genius/agent-notifications/install/uapinstaller"`) {
+		t.Fatal("example does not import public installer API")
+	}
+	if strings.Contains(text, "internal/") || strings.Contains(text, "plugin-kit-ai/install/integrationctl/agentplugins/transaction") {
+		t.Fatal("example imports raw Store/Kernel types")
+	}
+}
+
+func names(entries []os.DirEntry) []string {
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, entry.Name())
+	}
+	return out
+}
