@@ -4,8 +4,7 @@ Step-by-step guide for publishing a new version.
 
 ## 0. Pre-release risk checklist
 
-Blocking items for the first release that ships Codex support; steps 1-4 stay useful for every
-later release that touches the hook pipeline.
+Run these checks for releases that touch the hook pipeline.
 
 1. **Assets before the bump.** Follow the release-branch order in steps 4-5: tag and publish
    assets first, land the bump on `main` last. Rationale in the callout under step 4.
@@ -19,13 +18,12 @@ later release that touches the hook pipeline.
    turn reaches a local recording sink. Test repeated setup and an existing Claude config.
    Record desktop banner/sound checks separately from webhook delivery. Do not also register
    the native plugin: duplicate registration can deliver twice. Destroy the sandbox afterwards.
-4. **Release notes must state**, in user-facing wording:
-   - Codex support is **beta**;
-   - the `permission_request` status requires this version or newer (older binaries reject it
-     in `suppressFilters` validation);
+4. **Release notes must state**, when relevant to the update:
+   - minimum runtime versions required by new statuses or settings (older binaries may reject
+     unknown statuses in `suppressFilters` validation);
    - both products share one config file, so an existing webhook now also receives Codex
      notifications;
-   - Windows support for the Codex route is not declared yet.
+   - any concrete platform or hook limitations introduced or changed by the release.
 5. **Watch issues for the first day** after publishing.
 
 Rollback: a bad binary is fixed forward (revert the code, ship a patch tag — the wrapper
