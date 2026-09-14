@@ -65,9 +65,7 @@ func removeCodexPlugin(ctx context.Context, executable, codexHome, spec string) 
 
 func runCodexPluginJSON(ctx context.Context, executable, codexHome string, args ...string) ([]byte, bool) {
 	cmd := exec.CommandContext(ctx, executable, args...)
-	if explicitAbs(codexHome) {
-		cmd.Env = append(os.Environ(), "CODEX_HOME="+codexHome)
-	}
+	cmd.Env = codexChildEnv(codexHome)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -80,6 +78,22 @@ func runCodexPluginJSON(ctx context.Context, executable, codexHome string, args 
 		return append(body, stderr.Bytes()...), false
 	}
 	return body, true
+}
+
+// codexChildEnv is a dedicated allowlist. It does not inherit the parent
+// process environment or call os.Setenv. CODEX_HOME is the explicit profile
+// only; HOME is not a fallback.
+func codexChildEnv(codexHome string) []string {
+	env := make([]string, 0, 10)
+	for _, key := range []string{"PATH", "SystemRoot", "WINDIR", "ComSpec", "PATHEXT", "TMP", "TEMP", "TMPDIR"} {
+		if value, ok := os.LookupEnv(key); ok {
+			env = append(env, key+"="+value)
+		}
+	}
+	if explicitAbs(codexHome) {
+		env = append(env, "CODEX_HOME="+codexHome)
+	}
+	return env
 }
 
 func parseCodexPluginList(body []byte) (codexListStatus, []string) {

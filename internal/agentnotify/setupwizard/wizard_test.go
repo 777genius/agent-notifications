@@ -203,8 +203,8 @@ func TestPlanShowsSourceDigestWithoutMutating(t *testing.T) {
 	if err != nil || !plan.Ready {
 		t.Fatalf("plan: %+v %v", plan, err)
 	}
-	if !strings.Contains(plan.Text, "source-digest=") {
-		t.Fatalf("missing source digest: %s", plan.Text)
+	if !strings.Contains(plan.Text, "source-digest=") || !strings.Contains(plan.Text, "helper-digest=") || !strings.Contains(plan.Text, "helper-version=") {
+		t.Fatalf("missing helper identity: %s", plan.Text)
 	}
 	snap, err := installruntime.ReadInstalledSnapshot(control)
 	if err != nil || snap.Ledger.PendingMutation != nil || snap.Ledger.Generation != gen {
@@ -279,7 +279,7 @@ func TestPlanAcquiresHostPackageForDigest(t *testing.T) {
 	if err != nil || !plan.Ready {
 		t.Fatalf("acquired plan: %+v %v", plan, err)
 	}
-	if !strings.Contains(plan.Text, "source-digest=") {
+	if !strings.Contains(plan.Text, "source-digest=") || !strings.Contains(plan.Text, "helper-digest=") {
 		t.Fatalf("missing acquired digest: %s", plan.Text)
 	}
 	if explicitAbs(plan.Request.PackageRoot) {
@@ -1076,6 +1076,7 @@ func TestWizardResumeRestoresOmittedParamsFromPendingIntent(t *testing.T) {
 			Client: "codex", InstallationID: "inst-codex", Profile: codexConfig, Units: []string{"direct-mcp"},
 		}},
 	})
+	t.Setenv("CODEX_HOME", filepath.Join(filepath.Dir(control), "later-env-codex"))
 	got, err := Run(ctx, Request{
 		Action: ActionInstall, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
 		ClientExecutable: probe, Helper: probe, ScopeRoot: scope,

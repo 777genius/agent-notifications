@@ -143,3 +143,10 @@ func TestParseSetupWizardRejectsRelativeEnvProfile(t *testing.T) {
 		t.Fatal("relative CODEX_HOME accepted")
 	}
 }
+
+func TestQuoteWizardArgsQuotesPathsWithSpaces(t *testing.T) {
+	got := quoteWizardArgs([]string{"setup-notifications", "wizard", "--codex-home", `/tmp/codex home`, "--yes"})
+	if len(got) != 5 || got[3] != `"/tmp/codex home"` || got[4] != "--yes" {
+		t.Fatalf("quoted: %#v", got)
+	}
+}

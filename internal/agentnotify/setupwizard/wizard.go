@@ -185,14 +185,22 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 			}
 			releasePackage = release
 			for _, agent := range ev.notifyAgents {
-				digest, err := previewNotifyDigest(ctx, acquired, ev.snap, ev.runtimeRoot, agent)
+				preview, err := previewNotifyPlan(ctx, acquired, ev.snap, ev.runtimeRoot, agent)
 				if err != nil {
 					ev.out.Outcome, ev.out.Reason = "incomplete", "portable_preflight_failed"
 					plan.Result = attachCommand(req, ev.out)
 					return plan, err
 				}
-				if digest != "" {
-					text += " source-digest=" + digest
+				if preview.TreeDigest != "" {
+					text += " source-digest=" + preview.TreeDigest
+				}
+				if preview.HelperDigest != "" {
+					text += " helper-digest=" + preview.HelperDigest
+				}
+				if preview.HelperVersion != "" {
+					text += " helper-version=" + preview.HelperVersion
+				}
+				if preview.TreeDigest != "" || preview.HelperDigest != "" {
 					break
 				}
 			}
@@ -364,24 +372,20 @@ func liveNotifyClient(mat portablesetup.Materializer, installationID, clientID s
 	return false
 }
 
-func previewNotifyDigest(ctx context.Context, req Request, snap installruntime.InstalledSnapshot, runtimeRoot string, agent portable.Integration) (string, error) {
+func previewNotifyPlan(ctx context.Context, req Request, snap installruntime.InstalledSnapshot, runtimeRoot string, agent portable.Integration) (uapinstaller.Plan, error) {
 	mat, err := materializer(req, snap, runtimeRoot)
 	if err != nil {
-		return "", err
+		return uapinstaller.Plan{}, err
 	}
 	id, err := identity(req, snap, runtimeRoot, mat, true)
 	if err != nil {
-		return "", err
+		return uapinstaller.Plan{}, err
 	}
-	preview, err := mat.PreviewPlan(ctx, portablesetup.MaterializeRequest{
+	return mat.PreviewPlan(ctx, portablesetup.MaterializeRequest{
 		Identity: id, Integration: agent, PackageRoot: req.PackageRoot,
 		ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
 		OperationID: "wizard-plan-" + string(agent),
 	})
-	if err != nil {
-		return "", err
-	}
-	return preview.TreeDigest, nil
 }
 
 func acquirePlanPackage(ctx context.Context, req Request, notifyAgents []portable.Integration) (Request, func(), error) {
