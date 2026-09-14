@@ -541,7 +541,7 @@ func journalRestrictPrivate(h windows.Handle) error {
 	if err != nil {
 		return err
 	}
-	return windows.SetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, acl, nil)
+	return windows.SetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, sid, nil, acl, nil)
 }
 
 func journalRequirePrivate(h windows.Handle) error {
@@ -557,7 +557,7 @@ func journalRequirePrivate(h windows.Handle) error {
 	if err != nil {
 		return err
 	}
-	if owner == nil || !owner.Equals(user.User.Sid) {
+	if owner == nil || (!owner.Equals(user.User.Sid) && owner.String() != "S-1-5-18" && owner.String() != "S-1-5-32-544") {
 		return fmt.Errorf("managed inode owner mismatch")
 	}
 	acl, _, err := sd.DACL()
@@ -571,6 +571,9 @@ func journalRequirePrivate(h windows.Handle) error {
 		var ace *windows.ACCESS_ALLOWED_ACE
 		if err := windows.GetAce(acl, i, &ace); err != nil {
 			return err
+		}
+		if ace.Header.AceFlags&windows.INHERIT_ONLY_ACE != 0 {
+			continue
 		}
 		if ace.Header.AceType == windows.ACCESS_DENIED_ACE_TYPE {
 			continue

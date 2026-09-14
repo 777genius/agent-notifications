@@ -46,12 +46,10 @@ func agentNotifyFile(source *os.File) (*agentNotifyStream, error) {
 	pollable := kind == windows.FILE_TYPE_PIPE
 	if kind == windows.FILE_TYPE_CHAR {
 		pollable = file.SetDeadline(time.Time{}) == nil
-	}
-	if pollable {
-		if err = file.SetDeadline(time.Time{}); err != nil {
-			_ = file.Close()
-			return nil, errors.New("stdio_requires_pollable_pipe_or_terminal")
-		}
+	} else if pollable {
+		// Anonymous pipes on Windows often reject SetDeadline; they remain the
+		// pollable stdio transport. CHAR consoles still require a working deadline.
+		_ = file.SetDeadline(time.Time{})
 	}
 	return &agentNotifyStream{file: file, pollable: pollable, release: func() {}}, nil
 }
