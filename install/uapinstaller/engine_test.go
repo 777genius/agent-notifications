@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/dirswap"
 )
 
 func testCtx(t *testing.T) context.Context {
@@ -687,6 +689,110 @@ func TestExampleModuleStaysExternal(t *testing.T) {
 	}
 	if strings.Contains(text, "internal/") || strings.Contains(text, "plugin-kit-ai/install/integrationctl/agentplugins/transaction") {
 		t.Fatal("example imports raw Store/Kernel types")
+	}
+}
+
+func TestApplyRefusesPendingJournalWithoutRecovering(t *testing.T) {
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	eng, receipt := plantPendingJournal(t)
+	pkg := filepath.Join(eng.cfg.StateRoot, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(eng.cfg.StateRoot, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-000000000052",
+		OperationID: "blocked-by-journal", RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = prepared.Close() }()
+	result, err := eng.Apply(ctx, prepared, Decision{Confirmed: true})
+	if !errors.Is(err, ErrRecoveryRequired) || result.Outcome != OutcomeRecovery {
+		t.Fatalf("pending journal apply: %+v %v", result, err)
+	}
+	open, listErr := dirswap.Manager{JournalDir: eng.cfg.OperationsDir}.ListOpen()
+	if listErr != nil || len(open) != 1 || open[0].OperationID != receipt.OperationID {
+		t.Fatalf("apply recovered journal: %+v %v", open, listErr)
+	}
+}
+
+func TestCloseDuringApplyReturnsBusyWithoutReleasingSnapshot(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	eng, err := New(Config{
+		StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe,
+		OnCommittedBinding: func(context.Context, BindingFacts) error {
+			close(started)
+			<-release
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-000000000053",
+		OperationID: "busy-handle", RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = prepared.Close() }()
+	applyErr := make(chan error, 1)
+	go func() {
+		_, err := eng.Apply(ctx, prepared, Decision{Confirmed: true})
+		applyErr <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(20 * time.Second):
+		close(release)
+		t.Fatal("apply did not reach committed-binding callback")
+	}
+	busy := make(chan error, 1)
+	go func() {
+		_, err := eng.Apply(ctx, prepared, Decision{Confirmed: true})
+		busy <- err
+	}()
+	select {
+	case err := <-busy:
+		if !errors.Is(err, ErrHandleBusy) {
+			close(release)
+			t.Fatalf("concurrent apply: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("concurrent apply blocked on the in-flight mutex")
+	}
+	if err := prepared.Close(); !errors.Is(err, ErrHandleBusy) {
+		close(release)
+		t.Fatalf("close during apply: %v", err)
+	}
+	close(release)
+	if err := <-applyErr; err != nil {
+		t.Fatalf("in-flight apply: %v", err)
+	}
+	if _, err := eng.Apply(ctx, prepared, Decision{Confirmed: true}); !errors.Is(err, ErrAlreadyApplied) {
+		t.Fatalf("after busy apply: %v", err)
 	}
 }
 

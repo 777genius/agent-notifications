@@ -10,48 +10,71 @@ import (
 
 // Apply executes a prepared operation. A cancelled decision returns before usecase
 // mutation, recovery, and callbacks. Result is populated even when err != nil.
-func (e *Engine) Apply(ctx context.Context, prepared *PreparedOperation, decision Decision) (Result, error) {
+// Close during Apply returns ErrHandleBusy without releasing the snapshot.
+func (e *Engine) Apply(ctx context.Context, prepared *PreparedOperation, decision Decision) (result Result, err error) {
 	if prepared == nil || prepared.engine != e {
 		return Result{}, ErrInvalidHandle
 	}
 	prepared.mu.Lock()
-	defer prepared.mu.Unlock()
 	if prepared.closed {
+		prepared.mu.Unlock()
 		return Result{}, ErrHandleClosed
 	}
 	if prepared.applied {
+		prepared.mu.Unlock()
 		return Result{}, ErrAlreadyApplied
 	}
 	if prepared.busy {
+		prepared.mu.Unlock()
 		return Result{}, ErrHandleBusy
 	}
 	if !decision.Confirmed {
-		return Result{Operation: prepared.req.Operation, Outcome: OutcomeCancelled, Reason: "host cancelled"}, ErrCancelled
+		op := prepared.req.Operation
+		prepared.mu.Unlock()
+		return Result{Operation: op, Outcome: OutcomeCancelled, Reason: "host cancelled"}, ErrCancelled
 	}
 	prepared.busy = true
-	defer func() { prepared.busy = false }()
-	if prepared.req.Operation == OpInstall {
-		if _, err := e.helper(); err != nil {
-			return Result{Operation: OpInstall, Outcome: OutcomeIncomplete, Reason: err.Error()}, err
+	op := prepared.req.Operation
+	prepared.mu.Unlock()
+	defer func() {
+		prepared.mu.Lock()
+		prepared.busy = false
+		if err == nil {
+			prepared.applied = true
+		}
+		prepared.mu.Unlock()
+	}()
+	view, inspectErr := e.Inspect(ctx)
+	if inspectErr != nil || view.Recovery.Required {
+		reason := view.Recovery.Reason
+		if reason == "" && inspectErr != nil {
+			reason = inspectErr.Error()
+		}
+		if reason == "" {
+			reason = "pending transactions remain"
+		}
+		result = Result{Operation: op, Outcome: OutcomeRecovery, Reason: reason}
+		err = fmt.Errorf("%w: %s", ErrRecoveryRequired, reason)
+		return result, err
+	}
+	if op == OpInstall {
+		if _, err = e.helper(); err != nil {
+			result = Result{Operation: OpInstall, Outcome: OutcomeIncomplete, Reason: err.Error()}
+			return result, err
 		}
 	}
-	if err := e.ensureDirs(); err != nil {
-		return Result{Operation: prepared.req.Operation, Outcome: OutcomeIncomplete, Reason: err.Error()}, err
+	if err = e.ensureDirs(); err != nil {
+		result = Result{Operation: op, Outcome: OutcomeIncomplete, Reason: err.Error()}
+		return result, err
 	}
-	var (
-		result Result
-		err    error
-	)
-	switch prepared.req.Operation {
+	switch op {
 	case OpInstall:
 		result, err = e.applyInstall(ctx, prepared)
 	case OpRemove:
 		result, err = e.applyRemove(ctx, prepared)
 	default:
-		return Result{}, fmt.Errorf("%w: %s", ErrUnsupported, prepared.req.Operation)
-	}
-	if err == nil {
-		prepared.applied = true
+		err = fmt.Errorf("%w: %s", ErrUnsupported, op)
+		return Result{}, err
 	}
 	return result, err
 }
