@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/planner"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/usecase"
 )
 
@@ -56,6 +57,14 @@ func (e *Engine) Apply(ctx context.Context, prepared *PreparedOperation, decisio
 		}
 		result = Result{Operation: op, Outcome: OutcomeRecovery, Reason: reason}
 		err = fmt.Errorf("%w: %s", ErrRecoveryRequired, reason)
+		return result, err
+	}
+	if err = e.confirmPreparedPlan(ctx, prepared); err != nil {
+		reason := "plan_changed"
+		if errors.Is(err, ErrUpdateRequired) {
+			reason = "update_required"
+		}
+		result = Result{Operation: op, Outcome: OutcomeConflict, Reason: reason}
 		return result, err
 	}
 	if op == OpInstall {
@@ -126,6 +135,11 @@ func (e *Engine) applyInstall(ctx context.Context, prepared *PreparedOperation) 
 					DataRoot: receipt.Locator, DataReceiptID: binding.DataReceiptID,
 					OperationID: prepared.req.OperationID, TreeDigest: prepared.plan.TreeDigest,
 				}
+				result.Client = ClientResult{
+					ClientID: binding.ClientID, BindingID: binding.ClientBindingID,
+					Materialization: string(binding.Materialization), Activation: string(binding.Activation),
+					Authentication: string(binding.Authentication), Verification: string(binding.Verification),
+				}
 			}
 		}
 	}
@@ -180,4 +194,56 @@ func (e *Engine) applyRemove(ctx context.Context, prepared *PreparedOperation) (
 		result.Reason = err.Error()
 	}
 	return result, err
+}
+
+func (e *Engine) confirmPreparedPlan(ctx context.Context, prepared *PreparedOperation) error {
+	plan := prepared.plan
+	if plan.Operation == OpInstall {
+		if err := e.refuseRecordedDigestRewrite(plan.InstallationID, plan.TreeDigest); err != nil {
+			return err
+		}
+		if prepared.artifact != "" {
+			target, err := (planner.Planner{ManagedRoot: e.cfg.ManagedRoot}).ResolveTarget(ctx, prepared.client, domain.ScopeUser, prepared.artifact)
+			if err != nil {
+				return fmt.Errorf("%w: %v", ErrPlanChanged, err)
+			}
+			if plan.TargetPath != "" && target.ActivePath != plan.TargetPath {
+				return fmt.Errorf("%w: live target does not match confirmed plan", ErrPlanChanged)
+			}
+		}
+	}
+	state, err := e.store.Load()
+	if err != nil {
+		return nil
+	}
+	installation, ok := findInstall(state, plan.InstallationID)
+	if !ok {
+		if plan.Operation == OpRemove {
+			return fmt.Errorf("%w: installation is not installed", ErrPlanChanged)
+		}
+		return nil
+	}
+	binding, _, ok := findBinding(installation, prepared.client.ClientID)
+	if plan.Operation == OpRemove {
+		if !ok {
+			return fmt.Errorf("%w: client is not installed", ErrPlanChanged)
+		}
+		if plan.BindingID != "" && binding.ClientBindingID != plan.BindingID {
+			return fmt.Errorf("%w: live binding does not match confirmed plan", ErrPlanChanged)
+		}
+		if plan.TargetPath != "" && binding.TargetLocator != plan.TargetPath {
+			return fmt.Errorf("%w: live target does not match confirmed plan", ErrPlanChanged)
+		}
+		return nil
+	}
+	if !ok {
+		return nil
+	}
+	if plan.TargetPath != "" && binding.TargetLocator != "" && binding.TargetLocator != plan.TargetPath {
+		return fmt.Errorf("%w: live target does not match confirmed plan", ErrPlanChanged)
+	}
+	if plan.BindingID != "" && binding.ClientBindingID != "" && binding.ClientBindingID != plan.BindingID {
+		return fmt.Errorf("%w: live binding does not match confirmed plan", ErrPlanChanged)
+	}
+	return nil
 }

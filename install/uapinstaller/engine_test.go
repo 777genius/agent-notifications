@@ -1145,6 +1145,104 @@ func TestProgressReportsCoarsePhases(t *testing.T) {
 	}
 }
 
+func TestDiscoverDoesNotCreateStateOrRunHelper(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "missing-state")
+	runner := &countingRunner{}
+	eng, err := New(Config{
+		StateRoot: root, Runner: runner,
+		HelperExecutable: filepath.Join(t.TempDir(), "helper"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := eng.Discover()
+	if len(got) != 2 || got[0].ClientID != "claude" || got[1].ClientID != "codex" {
+		t.Fatalf("discover: %+v", got)
+	}
+	if runner.n != 0 {
+		t.Fatalf("discover ran helper %d times", runner.n)
+	}
+	if _, err := os.Lstat(root); !os.IsNotExist(err) {
+		t.Fatal("discover created state root")
+	}
+}
+
+func TestRemoveApplyPlanChangedWhenLiveTargetMoves(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-000000000061",
+		OperationID: "plan-install", RequiredComponents: []string{"mcp", "skills"},
+	}
+	prepared, err := eng.Prepare(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := eng.Apply(ctx, prepared, Decision{Confirmed: true})
+	_ = prepared.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Client.Materialization == "" || result.Client.ClientID != "codex" {
+		t.Fatalf("install omitted client result: %+v", result.Client)
+	}
+	rm, err := eng.Prepare(ctx, Request{
+		Operation: OpRemove, ClientID: "codex", ClientConfigRoot: config, ClientExecutable: probe,
+		InstallationID: req.InstallationID, OperationID: "plan-remove", ExternalUninstalled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rm.Close() }()
+	store := statev2.Store{Path: eng.cfg.StateFile}
+	state, err := store.Load()
+	if err != nil || len(state.Installations) != 1 {
+		t.Fatalf("load: %+v %v", state, err)
+	}
+	for id, binding := range state.Installations[0].Clients {
+		binding.TargetLocator = filepath.Join(base, "moved-target")
+		state.Installations[0].Clients[id] = binding
+	}
+	if err := store.Save(state); err != nil {
+		t.Fatal(err)
+	}
+	planted, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved, err := eng.Apply(ctx, rm, Decision{Confirmed: true})
+	if !errors.Is(err, ErrPlanChanged) || moved.Outcome != OutcomeConflict || moved.Reason != "plan_changed" {
+		t.Fatalf("stale remove apply: %+v %v", moved, err)
+	}
+	after, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil || !bytes.Equal(planted, after) {
+		t.Fatalf("plan_changed mutated state: %v", err)
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 1 {
+		t.Fatalf("inspect after plan_changed: %+v %v", view, err)
+	}
+	if view.Installations[0].Bindings[0].TargetPath != filepath.Join(base, "moved-target") {
+		t.Fatalf("plan_changed mutated binding: %+v", view.Installations[0].Bindings[0])
+	}
+}
+
 func names(entries []os.DirEntry) []string {
 	out := make([]string, 0, len(entries))
 	for _, entry := range entries {

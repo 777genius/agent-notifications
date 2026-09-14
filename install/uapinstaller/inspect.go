@@ -33,6 +33,8 @@ func (e *Engine) observe() (Inspection, error) {
 			item.Bindings = append(item.Bindings, InspectedBinding{
 				ClientID: binding.ClientID, BindingID: binding.ClientBindingID, Scope: binding.Scope,
 				TargetPath: binding.TargetLocator, DataRoot: receipt.Locator,
+				Materialization: string(binding.Materialization), Activation: string(binding.Activation),
+				Authentication: string(binding.Authentication), Verification: string(binding.Verification),
 			})
 			bindingIndex[binding.ClientBindingID] = observedBinding{
 				InstallationID: installation.InstallationID,
