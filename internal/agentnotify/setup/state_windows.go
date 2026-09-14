@@ -13,6 +13,17 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// setupDirAccess walks ancestors with list/traverse only. The leaf handle is
+// later passed to os.File.Sync, which on Windows is FlushFileBuffers and
+// requires GENERIC_WRITE. Unix fsync works on O_RDONLY directory descriptors.
+func setupDirAccess(leaf bool) uint32 {
+	access := uint32(windows.FILE_LIST_DIRECTORY | windows.FILE_READ_ATTRIBUTES | windows.FILE_TRAVERSE | windows.READ_CONTROL)
+	if leaf {
+		access |= windows.GENERIC_WRITE
+	}
+	return access
+}
+
 func openRoot(path string) (*os.File, error) {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return nil, fmt.Errorf("unsafe setup directory")
@@ -36,7 +47,7 @@ func openRoot(path string) (*os.File, error) {
 			windows.CloseHandle(h)
 			return nil, fmt.Errorf("unsafe setup directory")
 		}
-		next, err := setupOpenAt(h, part, windows.FILE_LIST_DIRECTORY|windows.FILE_READ_ATTRIBUTES|windows.FILE_TRAVERSE|windows.READ_CONTROL, windows.FILE_OPEN, windows.FILE_DIRECTORY_FILE)
+		next, err := setupOpenAt(h, part, setupDirAccess(i == len(parts)-1), windows.FILE_OPEN, windows.FILE_DIRECTORY_FILE)
 		windows.CloseHandle(h)
 		if err != nil {
 			return nil, err
@@ -62,7 +73,7 @@ func openRoot(path string) (*os.File, error) {
 }
 
 func openChild(parent *os.File, name string) (*os.File, error) {
-	h, err := setupOpenAt(windows.Handle(parent.Fd()), name, windows.FILE_LIST_DIRECTORY|windows.FILE_READ_ATTRIBUTES|windows.FILE_TRAVERSE|windows.READ_CONTROL, windows.FILE_OPEN, windows.FILE_DIRECTORY_FILE)
+	h, err := setupOpenAt(windows.Handle(parent.Fd()), name, setupDirAccess(true), windows.FILE_OPEN, windows.FILE_DIRECTORY_FILE)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +93,7 @@ func openChild(parent *os.File, name string) (*os.File, error) {
 }
 
 func mkdir(parent *os.File, name string) (*os.File, error) {
-	h, err := setupOpenAt(windows.Handle(parent.Fd()), name, windows.FILE_LIST_DIRECTORY|windows.FILE_READ_ATTRIBUTES|windows.FILE_TRAVERSE|windows.WRITE_DAC|windows.WRITE_OWNER|windows.READ_CONTROL, windows.FILE_CREATE, windows.FILE_DIRECTORY_FILE)
+	h, err := setupOpenAt(windows.Handle(parent.Fd()), name, setupDirAccess(true)|windows.WRITE_DAC|windows.WRITE_OWNER, windows.FILE_CREATE, windows.FILE_DIRECTORY_FILE)
 	if err != nil {
 		return nil, err
 	}
