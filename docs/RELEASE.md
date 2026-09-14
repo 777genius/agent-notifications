@@ -206,7 +206,7 @@ Description of what was added and why.
 
 ---
 
-📦 **[Installation](https://github.com/777genius/agent-notifications#installation)** · 🔄 **[Updating](https://github.com/777genius/agent-notifications#updating)**
+📦 **[Installation](https://github.com/777genius/agent-notifications/blob/main/docs/INSTALLATION.md)** · 🔄 **[Updating](https://github.com/777genius/agent-notifications/blob/main/docs/INSTALLATION.md#updating)**
 
 **Full Changelog**: https://github.com/777genius/agent-notifications/compare/vPREV...vX.Y.Z
 NOTES_EOF
