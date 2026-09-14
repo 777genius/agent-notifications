@@ -48,6 +48,22 @@ func TestSetupWizardTTYSelectsAndCancels(t *testing.T) {
 	}
 }
 
+func TestSetupWizardTTYOmitsActionDefaultsInstall(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var out bytes.Buffer
+	root := setupCommandRoot(t)
+	if code := executeSetupWizardWith(ctx, []string{"--control-root", root}, &out, strings.NewReader("2\ny\n"), true); code != 1 {
+		t.Fatalf("omitted action: %d %s", code, out.String())
+	}
+	if strings.Contains(out.String(), "Existing agent-notify") {
+		t.Fatalf("new machine prompted existing action: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "Proceed with install") || !strings.Contains(out.String(), "managed_runtime_required") {
+		t.Fatalf("omitted action flow: %s", out.String())
+	}
+}
+
 func TestSetupWizardJSONDoesNotPrompt(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

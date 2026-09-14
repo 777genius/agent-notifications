@@ -18,7 +18,7 @@ func promptCtx(t *testing.T) context.Context {
 func TestFillInteractiveSelectsBothAndConfirms(t *testing.T) {
 	in := strings.NewReader("3\ny\n")
 	var out strings.Builder
-	got, err := FillInteractive(promptCtx(t), Request{Action: ActionInstall}, &LinePrompt{In: in, Out: &out})
+	got, err := FillInteractive(promptCtx(t), Request{Action: ActionInstall}, &LinePrompt{In: in, Out: &out}, nil)
 	if err != nil || !got.Yes || strings.Join(got.Agents, ",") != "claude,codex" {
 		t.Fatalf("fill: %+v %v", got, err)
 	}
@@ -30,7 +30,7 @@ func TestFillInteractiveSelectsBothAndConfirms(t *testing.T) {
 func TestFillInteractiveCancelIsEmptySelection(t *testing.T) {
 	in := strings.NewReader("\n")
 	var out strings.Builder
-	_, err := FillInteractive(promptCtx(t), Request{Action: ActionInstall}, &LinePrompt{In: in, Out: &out})
+	_, err := FillInteractive(promptCtx(t), Request{Action: ActionInstall}, &LinePrompt{In: in, Out: &out}, nil)
 	if err != ErrPromptCanceled {
 		t.Fatalf("cancel: %v", err)
 	}
@@ -39,14 +39,14 @@ func TestFillInteractiveCancelIsEmptySelection(t *testing.T) {
 func TestFillInteractiveEOF(t *testing.T) {
 	in := strings.NewReader("")
 	var out strings.Builder
-	_, err := FillInteractive(promptCtx(t), Request{Action: ActionInstall}, &LinePrompt{In: in, Out: &out})
+	_, err := FillInteractive(promptCtx(t), Request{Action: ActionInstall}, &LinePrompt{In: in, Out: &out}, nil)
 	if err != ErrPromptInputClosed {
 		t.Fatalf("eof: %v", err)
 	}
 }
 
 func TestFillInteractiveLeavesInspectAlone(t *testing.T) {
-	got, err := FillInteractive(promptCtx(t), Request{Action: ActionInspect, Agents: []string{"codex"}}, &LinePrompt{In: strings.NewReader("1\n"), Out: io.Discard})
+	got, err := FillInteractive(promptCtx(t), Request{Action: ActionInspect, Agents: []string{"codex"}}, &LinePrompt{In: strings.NewReader("1\n"), Out: io.Discard}, nil)
 	if err != nil || got.Yes || strings.Join(got.Agents, ",") != "codex" {
 		t.Fatalf("inspect: %+v %v", got, err)
 	}
@@ -78,8 +78,44 @@ func TestRunAttachesRetryCommandOnIncomplete(t *testing.T) {
 }
 
 func TestFillInteractiveNilPrompter(t *testing.T) {
-	_, err := FillInteractive(context.Background(), Request{Action: ActionInstall}, nil)
+	_, err := FillInteractive(context.Background(), Request{Action: ActionInstall}, nil, nil)
 	if err != ErrPromptUnavailable {
 		t.Fatalf("nil: %v", err)
+	}
+}
+
+func TestFillInteractiveOmitsActionInstallsNew(t *testing.T) {
+	in := strings.NewReader("2\ny\n")
+	var out strings.Builder
+	got, err := FillInteractive(promptCtx(t), Request{}, &LinePrompt{In: in, Out: &out}, nil)
+	if err != nil || got.Action != ActionInstall || strings.Join(got.Agents, ",") != "codex" || !got.Yes {
+		t.Fatalf("new: %+v %v", got, err)
+	}
+	if strings.Contains(out.String(), "Existing agent-notify") {
+		t.Fatalf("new install prompted existing action: %s", out.String())
+	}
+}
+
+func TestFillInteractiveExistingSelectsInspect(t *testing.T) {
+	in := strings.NewReader("1\n")
+	var out strings.Builder
+	got, err := FillInteractive(promptCtx(t), Request{Agents: []string{"codex"}}, &LinePrompt{In: in, Out: &out}, func([]string) []string {
+		return []string{"codex"}
+	})
+	if err != nil || got.Action != ActionInspect || got.Yes {
+		t.Fatalf("inspect: %+v %v", got, err)
+	}
+	if !strings.Contains(out.String(), "Existing agent-notify") || strings.Contains(out.String(), "[y/N]") {
+		t.Fatalf("inspect prompt: %s", out.String())
+	}
+}
+
+func TestFillInteractiveExistingSelectsUninstall(t *testing.T) {
+	in := strings.NewReader("3\ny\n")
+	got, err := FillInteractive(promptCtx(t), Request{Agents: []string{"claude"}}, &LinePrompt{In: in, Out: io.Discard}, func([]string) []string {
+		return []string{"claude"}
+	})
+	if err != nil || got.Action != ActionUninstall || !got.Yes {
+		t.Fatalf("uninstall: %+v %v", got, err)
 	}
 }

@@ -13,14 +13,18 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/777genius/agent-notifications/internal/agentnotify/portableasset"
 	"github.com/777genius/agent-notifications/internal/agentnotify/setupwizard"
+	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 )
 
 const setupWizardHelp = `Usage: claude-notifications setup-notifications wizard [OPTIONS]
 Master for hooks plus portable MCP/skill.
-TTY stdin prompts for agents and confirmation when those flags are omitted.
+TTY stdin prompts for agents, an existing-install action, and confirmation when those flags are omitted.
 --json never prompts. No TTY and no --agents/--yes is invalid, not a hang.
+Without --action, a new machine defaults to install; an existing portable
+installation is offered inspect, add/reinstall, or uninstall.
   --action install|uninstall|inspect
   --agents claude,codex
   --hooks true|false          Omit on install to include hooks; omit on uninstall to select all units
@@ -77,19 +81,25 @@ func executeSetupWizardWith(ctx context.Context, args []string, out io.Writer, i
 		}
 		req.ControlRoot = root
 	}
-	if req.Action == "" {
-		if !tty || jsonOut {
-			if jsonOut {
-				_ = json.NewEncoder(out).Encode(setupwizard.Result{Outcome: "invalid", Reason: "invalid_arguments"})
-			} else {
-				_, _ = fmt.Fprintln(out, "invalid_arguments")
-			}
-			return 2
+	if req.Action == "" && (!tty || jsonOut) {
+		if jsonOut {
+			_ = json.NewEncoder(out).Encode(setupwizard.Result{Outcome: "invalid", Reason: "invalid_arguments"})
+		} else {
+			_, _ = fmt.Fprintln(out, "invalid_arguments")
 		}
-		req.Action = setupwizard.ActionInstall
+		return 2
 	}
-	if !jsonOut && req.Action != setupwizard.ActionInspect && (len(req.Agents) == 0 || !req.Yes) && tty {
-		filled, e := setupwizard.FillInteractive(ctx, req, &setupwizard.LinePrompt{In: in, Out: out})
+	if req.ReleaseVersion == "" {
+		req.ReleaseVersion = config.ConsumerVersion
+	}
+	if req.ReleaseDownloadRoot == "" {
+		req.ReleaseDownloadRoot = portableasset.DefaultReleaseDownloadRoot
+	}
+	needsPrompt := tty && !jsonOut && (req.Action == "" || (req.Action != setupwizard.ActionInspect && (len(req.Agents) == 0 || !req.Yes)))
+	if needsPrompt {
+		filled, e := setupwizard.FillInteractive(ctx, req, &setupwizard.LinePrompt{In: in, Out: out}, func(agents []string) []string {
+			return setupwizard.LiveNotifyClients(req.ControlRoot, agents)
+		})
 		if e != nil {
 			reason, code, outcome := "prompt_canceled", 0, "cancelled"
 			if errors.Is(e, setupwizard.ErrPromptInputClosed) {

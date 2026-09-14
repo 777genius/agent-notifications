@@ -5,6 +5,9 @@ package setupwizard
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -154,6 +157,9 @@ func TestWizardInstallInspectUninstall(t *testing.T) {
 	if !found {
 		t.Fatalf("inspect missed portable binding: %+v", view.Targets)
 	}
+	if live := LiveNotifyClients(control, []string{"codex", "claude"}); strings.Join(live, ",") != "codex" {
+		t.Fatalf("live clients: %v", live)
+	}
 	req.Action = ActionUninstall
 	req.Yes = true
 	removed, err := Run(ctx, req)
@@ -208,6 +214,68 @@ func TestWizardInstallFromReleaseZip(t *testing.T) {
 	blocked, err := Run(ctx, req)
 	if err == nil || blocked.Reason != "package_acquisition_failed" {
 		t.Fatalf("checksum: %+v %v", blocked, err)
+	}
+}
+
+func TestWizardOmittedPackageRequiresHostAcquisition(t *testing.T) {
+	control, runtimeRoot, global, _, _ := managedRuntime(t)
+	got, err := Run(testCtx(t), Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: boolPtr(false),
+		ControlRoot: control, RuntimeRoot: runtimeRoot, GlobalConfig: global,
+		CodexHome: filepath.Join(filepath.Dir(control), "codex"), ClientExecutable: "/bin/true",
+		Helper: filepath.Join(runtimeRoot, "primary"), ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	})
+	if err == nil || got.Reason != "package_required" {
+		t.Fatalf("omitted: %+v %v", got, err)
+	}
+}
+
+func TestWizardInstallFromHostAcquisition(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtimeRoot, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	base := filepath.Dir(control)
+	pkg := filepath.Join(base, "release-pkg")
+	archive := filepath.Join(base, portableasset.AssetName(runtime.GOOS, runtime.GOARCH))
+	built, err := portableasset.Build(portableasset.BuildRequest{
+		Version: "1.43.0", GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
+		Executable: probe, OutputRoot: pkg, Archive: archive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	zipBytes, err := os.ReadFile(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asset := portableasset.AssetName(runtime.GOOS, runtime.GOARCH)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1.43.0/checksums.txt":
+			_, _ = io.WriteString(w, built.ArchiveSHA256+"  "+asset+"\n")
+		case "/v1.43.0/" + asset:
+			_, _ = w.Write(zipBytes)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	codexConfig := filepath.Join(base, "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: boolPtr(false),
+		ControlRoot: control, RuntimeRoot: runtimeRoot, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe, ScopeRoot: filepath.Join(base, "scope"),
+		ReleaseVersion: "1.43.0", ReleaseDownloadRoot: srv.URL,
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("acquired install: %+v %v", installed, err)
 	}
 }
 

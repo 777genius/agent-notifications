@@ -18,6 +18,7 @@ var (
 // Prompter is the thin TTY port. It only fills Request fields; Run owns rules.
 type Prompter interface {
 	SelectAgents(context.Context) ([]string, error)
+	SelectExistingAction(context.Context) (Action, error)
 	Confirm(context.Context, string) (bool, error)
 }
 
@@ -60,6 +61,31 @@ func (p *LinePrompt) SelectAgents(ctx context.Context) ([]string, error) {
 	}
 }
 
+func (p *LinePrompt) SelectExistingAction(ctx context.Context) (Action, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if _, err := io.WriteString(p.Out, "Existing agent-notify installation found.\n1) Inspect  2) Add/reinstall  3) Uninstall\nChoice: "); err != nil {
+		return "", err
+	}
+	line, err := readLine(ctx, p.reader())
+	if err != nil {
+		return "", err
+	}
+	switch strings.TrimSpace(line) {
+	case "1":
+		return ActionInspect, nil
+	case "2":
+		return ActionInstall, nil
+	case "3":
+		return ActionUninstall, nil
+	case "":
+		return "", ErrPromptCanceled
+	default:
+		return "", fmt.Errorf("%w: invalid_choice", ErrPromptCanceled)
+	}
+}
+
 func (p *LinePrompt) Confirm(ctx context.Context, summary string) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -85,15 +111,14 @@ func (p *LinePrompt) Confirm(ctx context.Context, summary string) (bool, error) 
 }
 
 // FillInteractive copies req and asks only for omitted mutation choices.
-func FillInteractive(ctx context.Context, req Request, p Prompter) (Request, error) {
+// existing reports live portable bindings for the selected agents; nil means
+// treat the machine as new. Detection stays outside this adapter.
+func FillInteractive(ctx context.Context, req Request, p Prompter, existing func([]string) []string) (Request, error) {
 	if p == nil {
 		return req, ErrPromptUnavailable
 	}
 	if ctx == nil {
 		return req, ErrRefused
-	}
-	if req.Action == "" {
-		req.Action = ActionInstall
 	}
 	if req.Action == ActionInspect {
 		return req, nil
@@ -107,6 +132,20 @@ func FillInteractive(ctx context.Context, req Request, p Prompter) (Request, err
 	}
 	if len(req.Agents) == 0 {
 		return req, ErrPromptCanceled
+	}
+	if req.Action == "" {
+		if existing != nil && len(existing(req.Agents)) > 0 {
+			action, err := p.SelectExistingAction(ctx)
+			if err != nil {
+				return req, err
+			}
+			req.Action = action
+		} else {
+			req.Action = ActionInstall
+		}
+	}
+	if req.Action == ActionInspect {
+		return req, nil
 	}
 	if !req.Yes {
 		ok, err := p.Confirm(ctx, "Proceed with "+string(req.Action)+"?")

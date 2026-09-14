@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	processadapter "github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/process"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
@@ -51,6 +52,15 @@ type Request struct {
 	// nil so the OS process runner is used. Isolated tests inject a listing
 	// fixture; the field is never parsed from CLI flags.
 	ClaudeRunner providers.CommandRunner
+	// ReleaseVersion is the accepted master revision without a leading v.
+	// Empty means this binary's compiled consumer version, set by the CLI.
+	ReleaseVersion string
+	// ReleaseDownloadRoot is the directory that contains v{version}/ assets.
+	// Empty disables host fetch so tests that omit --package stay offline.
+	ReleaseDownloadRoot string
+	// PackageFetcher downloads one URL. Production uses HTTPS; tests inject
+	// a local server. Never parsed from CLI flags.
+	PackageFetcher func(context.Context, string) ([]byte, error)
 }
 
 type TargetResult struct {
@@ -240,13 +250,18 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		out.Outcome = "completed"
 		return out, nil
 	}
-	if !explicitAbs(req.PackageRoot) {
-		out.Outcome, out.Reason = "incomplete", "package_required"
+	recordedPath, recordedVersion := desiredPackage(req)
+	if !explicitAbs(req.PackageRoot) && recordedPath == "" && recordedVersion != "" && req.ReleaseDownloadRoot == "" && req.PackageFetcher == nil {
+		out.Outcome, out.Reason = "incomplete", "recorded_package_unavailable"
 		return out, ErrRefused
 	}
-	packageRoot, releasePackage, err := resolvePackageRoot(req)
+	packageRoot, releasePackage, err := resolvePackageRoot(ctx, req, recordedPath, recordedVersion)
 	if err != nil {
-		out.Outcome, out.Reason = "incomplete", "package_acquisition_failed"
+		reason := "package_acquisition_failed"
+		if strings.Contains(err.Error(), "package_required") {
+			reason = "package_required"
+		}
+		out.Outcome, out.Reason = "incomplete", reason
 		return out, err
 	}
 	defer releasePackage()
