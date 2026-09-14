@@ -25,6 +25,9 @@ func TestFillInteractiveSelectsBothAndConfirms(t *testing.T) {
 	if !strings.Contains(out.String(), "Claude Code") || !strings.Contains(out.String(), "[y/N]") {
 		t.Fatalf("prompt text: %s", out.String())
 	}
+	if !strings.Contains(out.String(), "Plan: action=install agents=claude,codex hooks=on agent-notify=on") {
+		t.Fatalf("plan: %s", out.String())
+	}
 }
 
 func TestFillInteractiveCancelIsEmptySelection(t *testing.T) {
@@ -117,5 +120,16 @@ func TestFillInteractiveExistingSelectsUninstall(t *testing.T) {
 	})
 	if err != nil || got.Action != ActionUninstall || !got.Yes {
 		t.Fatalf("uninstall: %+v %v", got, err)
+	}
+}
+
+func TestConfirmPlanShowsMixedPerClientFlags(t *testing.T) {
+	off, on := false, true
+	got := confirmPlan(Request{
+		Action: ActionInstall, Agents: []string{"claude", "codex"},
+		Hooks: &off, ClaudeAgentNotify: &off, CodexAgentNotify: &on,
+	})
+	if !strings.Contains(got, "agents=claude,codex") || !strings.Contains(got, "hooks=false") || !strings.Contains(got, "claude-agent-notify=false") || !strings.Contains(got, "codex-agent-notify=true") {
+		t.Fatalf("mixed plan: %s", got)
 	}
 }

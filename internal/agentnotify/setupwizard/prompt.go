@@ -148,7 +148,7 @@ func FillInteractive(ctx context.Context, req Request, p Prompter, existing func
 		return req, nil
 	}
 	if !req.Yes {
-		ok, err := p.Confirm(ctx, "Proceed with "+string(req.Action)+"?")
+		ok, err := p.Confirm(ctx, confirmPlan(req))
 		if err != nil {
 			return req, err
 		}
@@ -158,6 +158,39 @@ func FillInteractive(ctx context.Context, req Request, p Prompter, existing func
 		}
 	}
 	return req, nil
+}
+
+func confirmPlan(req Request) string {
+	action := string(req.Action)
+	if action == "" {
+		action = string(ActionInstall)
+	}
+	agents := strings.Join(req.Agents, ",")
+	if agents == "" {
+		agents = "none"
+	}
+	unit := func(flag *bool, installDefault string) string {
+		if flag == nil {
+			if req.Action == ActionUninstall {
+				return "all-managed"
+			}
+			return installDefault
+		}
+		return boolFlag(*flag)
+	}
+	summary := fmt.Sprintf("Plan: action=%s agents=%s hooks=%s agent-notify=%s",
+		action, agents, unit(req.Hooks, "on"), unit(req.AgentNotify, "on"))
+	perClient := func(name string, flag *bool) {
+		if flag == nil {
+			return
+		}
+		summary += fmt.Sprintf(" %s=%s", name, boolFlag(*flag))
+	}
+	perClient("claude-hooks", req.ClaudeHooks)
+	perClient("codex-hooks", req.CodexHooks)
+	perClient("claude-agent-notify", req.ClaudeAgentNotify)
+	perClient("codex-agent-notify", req.CodexAgentNotify)
+	return summary + ". Proceed?"
 }
 
 func readLine(ctx context.Context, reader *bufio.Reader) (string, error) {

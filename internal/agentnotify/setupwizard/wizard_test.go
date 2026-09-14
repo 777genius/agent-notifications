@@ -141,6 +141,22 @@ func TestWizardInstallInspectUninstall(t *testing.T) {
 	if err != nil || installed.Outcome != "completed" {
 		t.Fatalf("install: %+v %v", installed, err)
 	}
+	if len(installed.Readiness) == 0 || installed.Readiness[0].Delivery != "not_verified" {
+		t.Fatalf("delivery treated as proven: %+v", installed.Readiness)
+	}
+	kinds := map[string]bool{}
+	for _, next := range installed.NextActions {
+		kinds[next.Kind] = true
+		if next.Kind == "test-notification" && (len(next.Command) == 0 || next.Command[0] != "notify" || next.Reason != "delivery_not_verified") {
+			t.Fatalf("test action: %+v", next)
+		}
+		if next.Kind == "request-permission" && (len(next.Command) < 2 || next.Command[1] != "request-permission") {
+			t.Fatalf("permission action: %+v", next)
+		}
+	}
+	if !kinds["test-notification"] || !kinds["request-permission"] || !kinds["restart-client"] {
+		t.Fatalf("install next actions: %+v", installed.NextActions)
+	}
 	req.Action = ActionInspect
 	req.Yes = false
 	view, err := Run(ctx, req)
@@ -165,6 +181,11 @@ func TestWizardInstallInspectUninstall(t *testing.T) {
 	removed, err := Run(ctx, req)
 	if err != nil || removed.Outcome != "completed" {
 		t.Fatalf("uninstall: %+v %v", removed, err)
+	}
+	for _, next := range removed.NextActions {
+		if next.Kind == "test-notification" || next.Kind == "request-permission" {
+			t.Fatalf("uninstall offered setup action: %+v", removed.NextActions)
+		}
 	}
 	req.Action = ActionInspect
 	req.Yes = false

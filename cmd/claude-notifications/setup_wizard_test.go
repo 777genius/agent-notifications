@@ -59,7 +59,7 @@ func TestSetupWizardTTYOmitsActionDefaultsInstall(t *testing.T) {
 	if strings.Contains(out.String(), "Existing agent-notify") {
 		t.Fatalf("new machine prompted existing action: %s", out.String())
 	}
-	if !strings.Contains(out.String(), "Proceed with install") || !strings.Contains(out.String(), "managed_runtime_required") {
+	if !strings.Contains(out.String(), "Plan: action=install") || !strings.Contains(out.String(), "managed_runtime_required") {
 		t.Fatalf("omitted action flow: %s", out.String())
 	}
 }

@@ -192,7 +192,7 @@ func run(ctx context.Context, req *Request) (Result, error) {
 	}
 	if req.Action == ActionInspect {
 		got, err := inspect(ctx, *req, agents, snap, runtimeRoot, out)
-		return attachReadiness(agents, got, false), err
+		return attachReadiness(*req, agents, got, false), err
 	}
 	hookAgents, notifyAgents := selectedUnits(*req, agents)
 	if len(hookAgents) == 0 && len(notifyAgents) == 0 {
@@ -203,11 +203,11 @@ func run(ctx context.Context, req *Request) (Result, error) {
 	if req.Action == ActionInstall {
 		got, err = install(ctx, *req, snap, runtimeRoot, hookAgents, notifyAgents, out)
 		got, err = finishWizardIntent(ctx, *req, runtimeRoot, got, err)
-		return attachReadiness(agents, got, true), err
+		return attachReadiness(*req, agents, got, true), err
 	}
 	got, err = uninstall(ctx, *req, snap, runtimeRoot, hookAgents, notifyAgents, out)
 	got, err = finishWizardIntent(ctx, *req, runtimeRoot, got, err)
-	return attachReadiness(agents, got, false), err
+	return attachReadiness(*req, agents, got, false), err
 }
 
 func resumeFromPendingIntent(req Request, agents []portable.Integration, snap installruntime.InstalledSnapshot, out Result) (Request, []portable.Integration, Result, bool, error) {
@@ -1026,7 +1026,7 @@ func unitOn(flag *bool, defaultOn bool) bool {
 	return *flag
 }
 
-func attachReadiness(agents []portable.Integration, out Result, mutationInstall bool) Result {
+func attachReadiness(req Request, agents []portable.Integration, out Result, mutationInstall bool) Result {
 	if out.Outcome == "invalid" || out.Outcome == "cancelled" {
 		return out
 	}
@@ -1034,6 +1034,7 @@ func attachReadiness(agents []portable.Integration, out Result, mutationInstall 
 	if out.Reason == "managed_runtime_required" {
 		runtime = "absent"
 	}
+	restartPending := false
 	for _, agent := range agents {
 		fact := ReadinessFact{
 			Client:     string(agent),
@@ -1062,8 +1063,54 @@ func attachReadiness(agents []portable.Integration, out Result, mutationInstall 
 		}
 		if mutationInstall && fact.MCP == "installed" && out.Outcome == "completed" {
 			fact.Restart = "pending"
+			restartPending = true
 		}
 		out.Readiness = append(out.Readiness, fact)
+	}
+	if out.Outcome == "completed" || out.Outcome == "unchanged" {
+		out = offerPostSetupActions(req, agents, out, restartPending)
+	}
+	return out
+}
+
+func offerPostSetupActions(req Request, agents []portable.Integration, out Result, restartPending bool) Result {
+	if req.Action == ActionUninstall {
+		return out
+	}
+	names := make([]string, len(agents))
+	for i, agent := range agents {
+		names[i] = string(agent)
+	}
+	has := func(kind string) bool {
+		for _, next := range out.NextActions {
+			if next.Kind == kind {
+				return true
+			}
+		}
+		return false
+	}
+	if restartPending && !has("restart-client") {
+		out.NextActions = append(out.NextActions, NextAction{
+			Kind: "restart-client", Agents: names, Reason: "pending_client_restart",
+		})
+	}
+	if req.Action != ActionInspect && explicitAbs(req.ControlRoot) && out.Generation != 0 && !has("request-permission") {
+		out.NextActions = append(out.NextActions, NextAction{
+			Kind:   "request-permission",
+			Agents: names,
+			Command: []string{
+				"setup-notifications", "request-permission",
+				"--control-root", req.ControlRoot,
+				"--expected-generation", fmt.Sprintf("%d", out.Generation),
+			},
+			Reason: "permission_explicit_phase",
+		})
+	}
+	if !has("test-notification") {
+		out.NextActions = append(out.NextActions, NextAction{
+			Kind: "test-notification", Agents: names, Command: []string{"notify"},
+			Reason: "delivery_not_verified",
+		})
 	}
 	return out
 }
