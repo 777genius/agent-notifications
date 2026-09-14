@@ -68,6 +68,7 @@ func (e *Engine) Apply(ctx context.Context, prepared *PreparedOperation, decisio
 		result = Result{Operation: op, Outcome: OutcomeIncomplete, Reason: err.Error()}
 		return result, err
 	}
+	e.report(ProgressPreflight)
 	switch op {
 	case OpInstall:
 		result, err = e.applyInstall(ctx, prepared)
@@ -86,6 +87,7 @@ func (e *Engine) applyInstall(ctx context.Context, prepared *PreparedOperation) 
 		return Result{Operation: OpInstall, Outcome: OutcomeIncomplete, Reason: err.Error()}, err
 	}
 	svc := e.lifecycle(helper, prepared.facts)
+	e.report(ProgressStage)
 	added, err := svc.Add(ctx, usecase.AddInput{
 		Envelope: prepared.envelope, Client: prepared.client, Scope: domain.ScopeUser, Confirmed: true,
 		InstallationID: prepared.req.InstallationID, OperationID: prepared.req.OperationID,
@@ -103,6 +105,10 @@ func (e *Engine) applyInstall(ctx context.Context, prepared *PreparedOperation) 
 		result.NoChange = true
 	} else if err == nil {
 		result.Outcome = OutcomeCompleted
+		e.report(ProgressCommit)
+		e.report(ProgressActivate)
+		e.report(ProgressVerify)
+		e.report(ProgressComplete)
 	} else {
 		result.Outcome = OutcomeIncomplete
 		result.Reason = err.Error()
@@ -144,6 +150,7 @@ func (e *Engine) applyRemove(ctx context.Context, prepared *PreparedOperation) (
 	}
 	helper, _ := e.helper()
 	svc := e.lifecycle(helper, prepared.facts)
+	e.report(ProgressStage)
 	removed, err := svc.Remove(ctx, usecase.RemoveInput{
 		Selector: prepared.plan.InstallationID, Client: prepared.client, Scope: domain.ScopeUser,
 		Confirmed: true, OperationID: prepared.req.OperationID, BackendExecutable: prepared.req.ClientExecutable,
@@ -155,6 +162,18 @@ func (e *Engine) applyRemove(ctx context.Context, prepared *PreparedOperation) (
 		if !removed.Mutated {
 			result.Outcome = OutcomeUnchanged
 			result.NoChange = true
+		} else {
+			e.report(ProgressCommit)
+			e.report(ProgressActivate)
+			e.report(ProgressVerify)
+			e.report(ProgressComplete)
+		}
+		if view, inspectErr := e.observe(); inspectErr == nil {
+			for _, installation := range view.Installations {
+				if installation.InstallationID == result.InstallationID {
+					result.DataRetained = installation.DataRetained
+				}
+			}
 		}
 	} else {
 		result.Outcome = OutcomeIncomplete
