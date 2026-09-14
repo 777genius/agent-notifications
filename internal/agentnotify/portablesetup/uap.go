@@ -280,7 +280,7 @@ func IsUpdateRequired(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, ErrUpdateRequired) {
+	if errors.Is(err, ErrUpdateRequired) || errors.Is(err, uapinstaller.ErrUpdateRequired) {
 		return true
 	}
 	msg := err.Error()
@@ -294,7 +294,7 @@ func wrapUpdateRequired(err error) error {
 		return nil
 	}
 	if IsUpdateRequired(err) && !errors.Is(err, ErrUpdateRequired) {
-		return fmt.Errorf("%w: %v", ErrUpdateRequired, err)
+		return fmt.Errorf("%w: %w", ErrUpdateRequired, err)
 	}
 	return err
 }
