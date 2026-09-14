@@ -62,6 +62,9 @@ type Request struct {
 	Reservation        *installruntime.PendingMutation
 	SourceRevision     string
 	SourceDigest       string
+	// Profile is the resolved client config root for this target. Empty keeps
+	// the published handoff intent without a profile path.
+	Profile string
 }
 
 type Service struct {
@@ -434,6 +437,7 @@ func (s Service) publishHandoffReservation(ctx context.Context, req Request, gen
 			Client:         string(req.Binding.Integration),
 			BindingID:      req.Binding.BindingID,
 			InstallationID: req.Binding.InstallationID,
+			Profile:        req.Profile,
 			Units:          []string{"direct-mcp"},
 		}},
 	}

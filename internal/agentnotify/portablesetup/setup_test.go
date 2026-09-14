@@ -505,6 +505,27 @@ func TestPendingInstallDifferentDigestConflicts(t *testing.T) {
 	}
 }
 
+func TestHandoffIntentRecordsResolvedProfile(t *testing.T) {
+	b, ledger := bindingFixture(t)
+	config, cmd, ledger := ownedMCP(t, b, ledger)
+	profile := filepath.Join(filepath.Dir(b.ControlRoot), "codex-profile")
+	svc := Service{}
+	req := Request{
+		Binding: b, ExpectedGeneration: ledger.Generation, Discovery: Discovery{ConfigPath: config, Command: cmd},
+		Profile: profile,
+	}
+	if _, _, err := svc.publishHandoffReservation(testCtx(t), req, ledger.Generation); err != nil {
+		t.Fatal(err)
+	}
+	intent, err := ReadIntent(b.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(intent.Targets) != 1 || intent.Targets[0].Client != "codex" || intent.Targets[0].Profile != profile {
+		t.Fatalf("intent: %+v", intent)
+	}
+}
+
 func TestHandoffNoopDoesNotCreateIntent(t *testing.T) {
 	b, ledger := bindingFixture(t)
 	uap := &fakeUAP{}

@@ -111,11 +111,11 @@ func (r Result) ExitCode() int {
 }
 
 func Run(ctx context.Context, req Request) (Result, error) {
-	out, err := run(ctx, req)
+	out, err := run(ctx, &req)
 	return attachCommand(req, out), err
 }
 
-func run(ctx context.Context, req Request) (Result, error) {
+func run(ctx context.Context, req *Request) (Result, error) {
 	out := Result{Action: string(req.Action)}
 	if ctx == nil {
 		out.Outcome, out.Reason = "invalid", "context_required"
@@ -135,24 +135,46 @@ func run(ctx context.Context, req Request) (Result, error) {
 		out.Outcome, out.Reason = "invalid", err.Error()
 		return out, ErrRefused
 	}
-	if len(agents) == 0 {
+	if req.Action == ActionInspect && len(agents) == 0 {
 		out.Outcome, out.Reason = "cancelled", "empty_selection"
 		return out, nil
 	}
-	if req.Action != ActionInspect && !req.Yes {
-		out.Outcome, out.Reason = "invalid", "noninteractive_requires_yes"
-		return out, ErrRefused
+	var snap installruntime.InstalledSnapshot
+	haveSnap := false
+	if explicitAbs(req.ControlRoot) {
+		snap, err = installruntime.ReadInstalledSnapshot(req.ControlRoot)
+		if err == nil {
+			haveSnap = true
+			out.Generation = snap.Ledger.Generation
+		}
+	}
+	if req.Action != ActionInspect {
+		resumed := false
+		if haveSnap {
+			restored, nextAgents, nextOut, didResume, resumeErr := resumeFromPendingIntent(*req, agents, snap, out)
+			*req = restored
+			agents, out, err = nextAgents, nextOut, resumeErr
+			if err != nil {
+				return out, err
+			}
+			if out.Outcome == "conflict" {
+				return out, ErrRefused
+			}
+			resumed = didResume
+		}
+		if !req.Yes && !resumed {
+			out.Outcome, out.Reason = "invalid", "noninteractive_requires_yes"
+			return out, ErrRefused
+		}
 	}
 	if !explicitAbs(req.ControlRoot) {
 		out.Outcome, out.Reason = "invalid", "control_root_required"
 		return out, ErrRefused
 	}
-	snap, err := installruntime.ReadInstalledSnapshot(req.ControlRoot)
-	if err != nil {
+	if !haveSnap {
 		out.Outcome, out.Reason = "incomplete", "managed_runtime_required"
 		return out, err
 	}
-	out.Generation = snap.Ledger.Generation
 	runtimeRoot := req.RuntimeRoot
 	if runtimeRoot == "" {
 		runtimeRoot = snap.Ledger.RuntimeRoot
@@ -161,22 +183,191 @@ func run(ctx context.Context, req Request) (Result, error) {
 		out.Outcome, out.Reason = "invalid", "runtime_root_required"
 		return out, ErrRefused
 	}
+	if len(agents) == 0 {
+		out.Outcome, out.Reason = "cancelled", "empty_selection"
+		return out, nil
+	}
 	if req.Action == ActionInspect {
-		got, err := inspect(ctx, req, agents, snap, runtimeRoot, out)
+		got, err := inspect(ctx, *req, agents, snap, runtimeRoot, out)
 		return attachReadiness(agents, got, false), err
 	}
-	hookAgents, notifyAgents := selectedUnits(req, agents)
+	hookAgents, notifyAgents := selectedUnits(*req, agents)
 	if len(hookAgents) == 0 && len(notifyAgents) == 0 {
 		out.Outcome, out.Reason = "cancelled", "empty_units"
 		return out, nil
 	}
 	var got Result
 	if req.Action == ActionInstall {
-		got, err = install(ctx, req, snap, runtimeRoot, hookAgents, notifyAgents, out)
+		got, err = install(ctx, *req, snap, runtimeRoot, hookAgents, notifyAgents, out)
 		return attachReadiness(agents, got, true), err
 	}
-	got, err = uninstall(ctx, req, snap, runtimeRoot, hookAgents, notifyAgents, out)
+	got, err = uninstall(ctx, *req, snap, runtimeRoot, hookAgents, notifyAgents, out)
 	return attachReadiness(agents, got, false), err
+}
+
+func resumeFromPendingIntent(req Request, agents []portable.Integration, snap installruntime.InstalledSnapshot, out Result) (Request, []portable.Integration, Result, bool, error) {
+	pending := snap.Ledger.PendingMutation
+	if pending == nil || pending.Owner != "existing-installer" {
+		return req, agents, out, false, nil
+	}
+	intent, err := portablesetup.ReadIntent(req.ControlRoot)
+	if err != nil || intent.SetupIntentID != pending.ID {
+		out.Outcome, out.Reason = "incomplete", "pending_intent_unreadable"
+		if err == nil {
+			err = ErrRefused
+		}
+		return req, agents, out, false, err
+	}
+	if intent.Action != string(req.Action) {
+		conflict, _ := pendingIntentConflict(req, portablesetup.ErrIntentConflict, out)
+		return req, agents, conflict, false, ErrRefused
+	}
+	req, agents, err = restoreOmittedFromIntent(req, agents, intent)
+	if err != nil {
+		if errors.Is(err, portablesetup.ErrIntentConflict) {
+			conflict, _ := pendingIntentConflict(req, err, out)
+			return req, agents, conflict, false, ErrRefused
+		}
+		out.Outcome, out.Reason = "invalid", err.Error()
+		return req, agents, out, false, ErrRefused
+	}
+	return req, agents, out, len(agents) > 0, nil
+}
+
+func restoreOmittedFromIntent(req Request, agents []portable.Integration, intent portablesetup.Intent) (Request, []portable.Integration, error) {
+	intentAgents := intentClients(intent)
+	if len(agents) == 0 {
+		if len(intentAgents) == 0 {
+			return req, agents, nil
+		}
+		req.Agents = intentAgents
+		next, err := normalizeAgents(intentAgents)
+		if err != nil {
+			return req, agents, err
+		}
+		agents = next
+	} else if len(intentAgents) > 0 {
+		names := make([]string, len(agents))
+		for i, agent := range agents {
+			names[i] = string(agent)
+		}
+		if !sameStringSet(names, intentAgents) {
+			return req, agents, portablesetup.ErrIntentConflict
+		}
+	}
+	if req.PackageSHA256 == "" {
+		req.PackageSHA256 = intent.SourceDigest
+	} else if intent.SourceDigest != "" && req.PackageSHA256 != intent.SourceDigest {
+		return req, agents, portablesetup.ErrIntentConflict
+	}
+	if req.ReleaseVersion == "" {
+		req.ReleaseVersion = intent.SourceRevision
+	} else if intent.SourceRevision != "" && req.ReleaseVersion != intent.SourceRevision {
+		return req, agents, portablesetup.ErrIntentConflict
+	}
+	for _, target := range intent.Targets {
+		if target.InstallationID != "" {
+			if req.InstallationID == "" {
+				req.InstallationID = target.InstallationID
+			} else if req.InstallationID != target.InstallationID {
+				return req, agents, portablesetup.ErrIntentConflict
+			}
+		}
+		if target.Profile == "" {
+			continue
+		}
+		switch target.Client {
+		case "codex":
+			if req.CodexHome == "" {
+				req.CodexHome = target.Profile
+			} else if req.CodexHome != target.Profile {
+				return req, agents, portablesetup.ErrIntentConflict
+			}
+		case "claude":
+			if req.ClaudeConfig == "" {
+				req.ClaudeConfig = target.Profile
+			} else if req.ClaudeConfig != target.Profile {
+				return req, agents, portablesetup.ErrIntentConflict
+			}
+		}
+	}
+	req, err := restoreUnitsFromIntent(req, agents, intent)
+	if err != nil {
+		return req, agents, err
+	}
+	return req, agents, nil
+}
+
+func restoreUnitsFromIntent(req Request, agents []portable.Integration, intent portablesetup.Intent) (Request, error) {
+	hooks, notify, specified := intentUnitSelection(intent)
+	if !specified {
+		return req, nil
+	}
+	if unitFlagsOmitted(req) {
+		req.Hooks = boolPtr(hooks)
+		req.AgentNotify = boolPtr(notify)
+		return req, nil
+	}
+	gotHooks, gotNotify := selectedUnits(req, agents)
+	if hooks != (len(gotHooks) > 0) || notify != (len(gotNotify) > 0) {
+		return req, portablesetup.ErrIntentConflict
+	}
+	return req, nil
+}
+
+func intentClients(intent portablesetup.Intent) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, target := range intent.Targets {
+		if target.Client == "" || seen[target.Client] {
+			continue
+		}
+		seen[target.Client] = true
+		out = append(out, target.Client)
+	}
+	return out
+}
+
+func intentUnitSelection(intent portablesetup.Intent) (hooks, notify, specified bool) {
+	for _, target := range intent.Targets {
+		if len(target.Units) > 0 {
+			specified = true
+		}
+		for _, unit := range target.Units {
+			switch unit {
+			case "hooks":
+				hooks = true
+			case "direct-mcp", "agent-notify", "mcp", "skills":
+				notify = true
+			}
+		}
+	}
+	return hooks, notify, specified
+}
+
+func unitFlagsOmitted(req Request) bool {
+	return req.Hooks == nil && req.AgentNotify == nil && req.ClaudeHooks == nil && req.CodexHooks == nil && req.ClaudeAgentNotify == nil && req.CodexAgentNotify == nil
+}
+
+func sameStringSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := map[string]int{}
+	for _, item := range a {
+		seen[item]++
+	}
+	for _, item := range b {
+		if seen[item] == 0 {
+			return false
+		}
+		seen[item]--
+	}
+	return true
+}
+
+func boolPtr(v bool) *bool {
+	return &v
 }
 
 func inspect(ctx context.Context, req Request, agents []portable.Integration, snap installruntime.InstalledSnapshot, runtimeRoot string, out Result) (Result, error) {
@@ -435,21 +626,45 @@ func pendingIntentConflict(req Request, err error, out Result) (Result, bool) {
 	if readErr != nil {
 		return out, true
 	}
+	out.Command = RetryCommand(retryRequestFromIntent(req, intent))
+	return out, true
+}
+
+func retryRequestFromIntent(req Request, intent portablesetup.Intent) Request {
 	retry := req
 	retry.Action = Action(intent.Action)
-	if len(intent.Targets) > 0 {
-		agents := make([]string, 0, len(intent.Targets))
-		for _, target := range intent.Targets {
-			if target.Client != "" {
-				agents = append(agents, target.Client)
+	if clients := intentClients(intent); len(clients) > 0 {
+		retry.Agents = clients
+	}
+	if intent.SourceDigest != "" {
+		retry.PackageSHA256 = intent.SourceDigest
+	}
+	if intent.SourceRevision != "" {
+		retry.ReleaseVersion = intent.SourceRevision
+	}
+	if hooks, notify, specified := intentUnitSelection(intent); specified {
+		retry.Hooks = boolPtr(hooks)
+		retry.AgentNotify = boolPtr(notify)
+		retry.ClaudeHooks, retry.CodexHooks = nil, nil
+		retry.ClaudeAgentNotify, retry.CodexAgentNotify = nil, nil
+	}
+	for _, target := range intent.Targets {
+		if target.InstallationID != "" {
+			retry.InstallationID = target.InstallationID
+		}
+		switch target.Client {
+		case "codex":
+			if target.Profile != "" {
+				retry.CodexHome = target.Profile
+			}
+		case "claude":
+			if target.Profile != "" {
+				retry.ClaudeConfig = target.Profile
 			}
 		}
-		if len(agents) > 0 {
-			retry.Agents = agents
-		}
 	}
-	out.Command = RetryCommand(retry)
-	return out, true
+	retry.Yes = true
+	return retry
 }
 
 func updateRequired(req Request, adding portable.Integration, others []string, out Result, err error) (Result, error) {

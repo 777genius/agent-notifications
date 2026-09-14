@@ -229,6 +229,7 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 	gen, res, err := m.Kernel.handoffForward(ctx, Request{
 		Binding: template, ExpectedGeneration: req.ExpectedGeneration, Discovery: req.Discovery,
 		SourceRevision: req.SourceRevision, SourceDigest: req.SourceDigest,
+		Profile: req.ClientConfigRoot,
 	})
 	if err != nil {
 		return portable.Binding{}, err

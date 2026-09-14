@@ -284,8 +284,6 @@ func TestWizardUnsupportedUpdate(t *testing.T) {
 	}
 }
 
-func boolPtr(v bool) *bool { return &v }
-
 func writePluginBundle(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -725,24 +723,117 @@ func TestWizardUninstallConflictsWithPendingInstallIntent(t *testing.T) {
 
 func plantPendingInstallIntent(t *testing.T, ctx context.Context, control, runtime string, generation uint64) {
 	t.Helper()
-	intentID := "pending-install-intent"
-	intent := portablesetup.Intent{
-		Version: 1, SetupIntentID: intentID, Action: "install", Stage: "retire-direct",
+	plantPendingIntent(t, ctx, control, runtime, generation, portablesetup.Intent{
+		Version: 1, SetupIntentID: "pending-install-intent", Action: "install", Stage: "retire-direct",
 		ExpectedGeneration: generation,
 		Targets:            []portablesetup.IntentTarget{{Client: "codex", Units: []string{"direct-mcp"}}},
+	})
+}
+
+func plantPendingIntent(t *testing.T, ctx context.Context, control, runtime string, generation uint64, intent portablesetup.Intent) {
+	t.Helper()
+	if intent.SetupIntentID == "" {
+		intent.SetupIntentID = "pending-install-intent"
 	}
 	payload, err := json.Marshal(intent)
 	if err != nil {
 		t.Fatal(err)
 	}
 	path := portablesetup.IntentPath(control)
-	res := installruntime.PendingMutation{ID: intentID, Owner: "existing-installer", IntentRef: path}
+	res := installruntime.PendingMutation{ID: intent.SetupIntentID, Owner: "existing-installer", IntentRef: path}
 	if _, err := installruntime.Commit(ctx, installruntime.Request{
 		ControlRoot: control, Owner: "existing-installer", RuntimeRoot: runtime, ConsumerID: "existing",
 		RefreshOnly: true, ExpectedGeneration: &generation, Reservation: &res,
 		Files: []installruntime.File{{Path: path, Data: append(payload, '\n'), Mode: 0600}},
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestWizardResumeRestoresOmittedParamsFromPendingIntent(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, gen := managedRuntime(t)
+	probe := buildProbe(t)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	scope := filepath.Join(filepath.Dir(control), "scope")
+	if err := os.MkdirAll(scope, 0700); err != nil {
+		t.Fatal(err)
+	}
+	plantPendingIntent(t, ctx, control, runtime, gen, portablesetup.Intent{
+		Version: 1, SetupIntentID: "pending-install-intent", Action: "install", Stage: "retire-direct",
+		ExpectedGeneration: gen, SourceRevision: "1.43.0", SourceDigest: strings.Repeat("a", 64),
+		Targets: []portablesetup.IntentTarget{{
+			Client: "codex", InstallationID: "inst-codex", Profile: codexConfig, Units: []string{"direct-mcp"},
+		}},
+	})
+	got, err := Run(ctx, Request{
+		Action: ActionInstall, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		ClientExecutable: probe, Helper: probe, ScopeRoot: scope,
+	})
+	if got.Outcome == "cancelled" || got.Reason == "empty_selection" {
+		t.Fatalf("did not restore pending agents: %+v %v", got, err)
+	}
+	if got.Reason == "noninteractive_requires_yes" {
+		t.Fatalf("matching pending intent still required --yes: %+v %v", got, err)
+	}
+	if got.Reason == "client_config_required" {
+		t.Fatalf("did not restore pending profile: %+v %v", got, err)
+	}
+	if got.Reason != "package_required" {
+		t.Fatalf("resume: %+v %v", got, err)
+	}
+	joined := strings.Join(got.Command, " ")
+	for _, want := range []string{"--agents codex", "--codex-home " + codexConfig, "--hooks false", "--agent-notify true", "--installation-id inst-codex"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("retry omitted %q: %v", want, got.Command)
+		}
+	}
+}
+
+func TestWizardEmptyUninstallConflictsWithPendingInstall(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, _, _, gen := managedRuntime(t)
+	plantPendingInstallIntent(t, ctx, control, runtime, gen)
+	got, err := Run(ctx, Request{Action: ActionUninstall, Yes: true, ControlRoot: control, RuntimeRoot: runtime})
+	if err == nil || got.Outcome != "conflict" || got.Reason != "pending_intent_conflict" {
+		t.Fatalf("empty uninstall: %+v %v", got, err)
+	}
+	joined := strings.Join(got.Command, " ")
+	if !strings.Contains(joined, "--action install") || !strings.Contains(joined, "--agents codex") {
+		t.Fatalf("retry must keep pending install: %v", got.Command)
+	}
+}
+
+func TestWizardResumeRejectsDifferentAgents(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, _, _, gen := managedRuntime(t)
+	plantPendingInstallIntent(t, ctx, control, runtime, gen)
+	got, err := Run(ctx, Request{
+		Action: ActionInstall, Agents: []string{"claude"}, Yes: true,
+		ControlRoot: control, RuntimeRoot: runtime,
+	})
+	if err == nil || got.Outcome != "conflict" || got.Reason != "pending_intent_conflict" {
+		t.Fatalf("different agents: %+v %v", got, err)
+	}
+}
+
+func TestWizardResumeRejectsDifferentDigest(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, _, _, gen := managedRuntime(t)
+	plantPendingIntent(t, ctx, control, runtime, gen, portablesetup.Intent{
+		Version: 1, SetupIntentID: "pending-install-intent", Action: "install", Stage: "retire-direct",
+		ExpectedGeneration: gen, SourceDigest: strings.Repeat("a", 64),
+		Targets: []portablesetup.IntentTarget{{Client: "codex", Units: []string{"direct-mcp"}}},
+	})
+	got, err := Run(ctx, Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true,
+		ControlRoot: control, RuntimeRoot: runtime, PackageSHA256: strings.Repeat("b", 64),
+	})
+	if err == nil || got.Outcome != "conflict" || got.Reason != "pending_intent_conflict" {
+		t.Fatalf("different digest: %+v %v", got, err)
 	}
 }
 

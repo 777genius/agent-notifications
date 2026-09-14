@@ -33,7 +33,7 @@ installation is offered inspect, add/reinstall, or uninstall.
   --codex-hooks true|false
   --claude-agent-notify true|false
   --codex-agent-notify true|false
-  --yes                       Required for mutation without a TTY
+  --yes                       Required for mutation without a TTY unless a matching pending intent exists
   --json
   --package PATH              Local standard package root or same-release zip
   --plugin-root PATH          Existing plugin bundle for Codex hooks-only setup
