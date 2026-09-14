@@ -46,11 +46,13 @@ export function command(
   if (intent === "configure" || target === "unknown" || target === "manual")
     return null;
   return [
-    "set -euo pipefail",
-    "repo=777genius/agent-notifications",
-    `tag=$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" | python3 -I -c '${tagParser}')`,
-    `commit=$(curl -fsSL "https://api.github.com/repos/$repo/commits/$tag" | python3 -I -c '${commitParser}')`,
-    'raw="https://raw.githubusercontent.com/$repo/$commit/bin"',
-    `curl -fsSL "$raw/bootstrap.sh" | env BOOTSTRAP_RELEASE_TAG="$tag" BOOTSTRAP_RELEASE_COMMIT="$commit" INSTALL_SCRIPT_URL="$raw/install.sh" bash -s -- --product ${product}`,
+    "(",
+    "  set -euo pipefail",
+    "  repo=777genius/agent-notifications",
+    `  tag=$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" | python3 -I -c '${tagParser}')`,
+    `  commit=$(curl -fsSL "https://api.github.com/repos/$repo/commits/$tag" | python3 -I -c '${commitParser}')`,
+    '  raw="https://raw.githubusercontent.com/$repo/$commit/bin"',
+    `  curl -fsSL "$raw/bootstrap.sh" | env BOOTSTRAP_RELEASE_TAG="$tag" BOOTSTRAP_RELEASE_COMMIT="$commit" INSTALL_SCRIPT_URL="$raw/install.sh" bash -s -- --product ${product}`,
+    ")",
   ].join("\n");
 }

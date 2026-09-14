@@ -239,7 +239,7 @@ async function copy() {
             :value="displaySnippet"
             readonly
             spellcheck="false"
-            rows="6"
+            rows="8"
             wrap="off"
           />
         </div>

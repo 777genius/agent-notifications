@@ -6,14 +6,14 @@ test("verified bootstrap contract for each product and supported target", () => 
     for (const target of ["macos", "linux", "windows"] as const) {
       const install = command(product, target, "install");
       assert.equal(command(product, target, "update"), install);
-      assert.match(install ?? "", /^set -euo pipefail\n/);
+      assert.match(install ?? "", /^\(\n  set -euo pipefail\n/);
       assert.match(install ?? "", /\/releases\/latest/);
       assert.match(install ?? "", /\/commits\/\$tag/);
       assert.match(install ?? "", /\$commit\/bin/);
       assert.match(install ?? "", /python3 -I -c/);
       assert.ok((install ?? "").includes('v+"\\n"'));
       assert.ok(!(install ?? "").includes('v+"\\\\n"'));
-      assert.match(install ?? "", new RegExp(`--product ${product}$`));
+      assert.match(install ?? "", new RegExp(`--product ${product}\\n\\)$`));
       assert.doesNotMatch(install ?? "", /\/main\/bin\/bootstrap\.sh/);
       assert.equal(command(product, target, "configure"), null);
     }

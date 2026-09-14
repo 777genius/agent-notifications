@@ -46,7 +46,7 @@ test("production command matrix, aftercare, clipboard and configuration", async 
         expect(value).toContain("/commits/$tag");
         expect(value).toContain("/$commit/bin");
         expect(value).not.toContain("/main/bin/bootstrap.sh");
-        expect(value).toMatch(new RegExp(`--product ${product}$`));
+        expect(value).toMatch(new RegExp(`--product ${product}\\n\\)$`));
       }
       if (os === "windows")
         await expect(
