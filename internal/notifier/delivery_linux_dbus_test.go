@@ -7,17 +7,17 @@ import (
 	"context"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/godbus/dbus/v5"
 )
 
-type testNotifications struct{ last uint32 }
+type testNotifications struct{ last atomic.Uint32 }
 
 func (s *testNotifications) Notify(string, uint32, string, string, string, []string, map[string]dbus.Variant, int32) (uint32, *dbus.Error) {
-	s.last++
-	return s.last, nil
+	return s.last.Add(1), nil
 }
 
 func startTestSessionBus(t *testing.T) string {
@@ -75,7 +75,7 @@ func TestFreedesktopSessionBusSubmit(t *testing.T) {
 		t.Fatal(ready)
 	}
 	receipt := d.Deliver(ctx, req)
-	if receipt.Status != "submitted" || receipt.Reason != "session_notification" || server.last != 1 {
-		t.Fatal(receipt, server.last)
+	if receipt.Status != "submitted" || receipt.Reason != "session_notification" || server.last.Load() != 1 {
+		t.Fatal(receipt, server.last.Load())
 	}
 }
