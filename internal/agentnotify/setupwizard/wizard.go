@@ -141,7 +141,6 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 		return plan, ev.err
 	}
 	if req.Action == ActionInstall {
-		planned := req
 		var releasePackage func()
 		defer func() {
 			if releasePackage != nil {
@@ -177,9 +176,8 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 				return plan, err
 			}
 			releasePackage = release
-			planned = acquired
 			for _, agent := range ev.notifyAgents {
-				digest, err := previewNotifyDigest(ctx, planned, ev.snap, ev.runtimeRoot, agent)
+				digest, err := previewNotifyDigest(ctx, acquired, ev.snap, ev.runtimeRoot, agent)
 				if err != nil {
 					ev.out.Outcome, ev.out.Reason = "incomplete", "portable_preflight_failed"
 					plan.Result = attachCommand(req, ev.out)
