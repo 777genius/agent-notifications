@@ -121,29 +121,102 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	return attachCommand(req, out), err
 }
 
+// SetupPlan is the read-only preflight shown before TTY confirmation.
+// Ready means the application service can mutate after --yes; it is not a
+// committed installation result.
+type SetupPlan struct {
+	Text    string
+	Ready   bool
+	Request Request
+	Result  Result
+}
+
+// Plan preflights without publishing intent or applying hooks/MCP.
+func Plan(ctx context.Context, req Request) (SetupPlan, error) {
+	ev := evaluate(ctx, &req, false)
+	text := confirmPlan(req)
+	plan := SetupPlan{Text: text, Request: req, Result: attachCommand(req, ev.out)}
+	if ev.stop {
+		return plan, ev.err
+	}
+	if req.Action == ActionInstall {
+		for _, agent := range ev.notifyAgents {
+			if !explicitAbs(clientConfig(req, agent)) {
+				ev.out.Outcome, ev.out.Reason = "incomplete", "client_config_required"
+				plan.Result = attachCommand(req, ev.out)
+				return plan, ErrRefused
+			}
+			if !explicitAbs(clientExecutable(req, agent)) {
+				ev.out.Outcome, ev.out.Reason = "incomplete", "client_executable_required"
+				plan.Result = attachCommand(req, ev.out)
+				return plan, ErrRefused
+			}
+			if others, err := otherLiveClients(req, ev.snap, ev.runtimeRoot, req.InstallationID, string(agent)); err == nil && len(others) > 0 {
+				text += " required-update=" + strings.Join(others, ",")
+			}
+		}
+	}
+	ev.out.Outcome, ev.out.Reason = "ready", ""
+	plan.Ready = true
+	plan.Text = text
+	plan.Result = ev.out
+	return plan, nil
+}
+
 func run(ctx context.Context, req *Request) (Result, error) {
+	ev := evaluate(ctx, req, true)
+	if ev.stop {
+		return ev.out, ev.err
+	}
+	if req.Action == ActionInspect {
+		got, err := inspect(ctx, *req, ev.agents, ev.snap, ev.runtimeRoot, ev.out)
+		return attachReadiness(*req, ev.agents, got, false), err
+	}
+	var got Result
+	var err error
+	if req.Action == ActionInstall {
+		got, err = install(ctx, *req, ev.snap, ev.runtimeRoot, ev.hookAgents, ev.notifyAgents, ev.out)
+		got, err = finishWizardIntent(ctx, *req, ev.runtimeRoot, got, err)
+		return attachReadiness(*req, ev.agents, got, true), err
+	}
+	got, err = uninstall(ctx, *req, ev.snap, ev.runtimeRoot, ev.hookAgents, ev.notifyAgents, ev.out)
+	got, err = finishWizardIntent(ctx, *req, ev.runtimeRoot, got, err)
+	return attachReadiness(*req, ev.agents, got, false), err
+}
+
+type evaluated struct {
+	agents                   []portable.Integration
+	snap                     installruntime.InstalledSnapshot
+	runtimeRoot              string
+	hookAgents, notifyAgents []portable.Integration
+	out                      Result
+	err                      error
+	stop                     bool
+}
+
+func evaluate(ctx context.Context, req *Request, requireYes bool) evaluated {
 	out := Result{Action: string(req.Action)}
 	if ctx == nil {
 		out.Outcome, out.Reason = "invalid", "context_required"
-		return out, ErrRefused
+		return evaluated{out: out, err: ErrRefused, stop: true}
 	}
 	switch req.Action {
 	case ActionInstall, ActionUninstall, ActionInspect:
 	case ActionUpdate, ActionRepair:
 		out.Outcome, out.Reason = "incomplete", "action_not_published"
-		return out, fmt.Errorf("%w: %s", ErrRefused, req.Action)
+		return evaluated{out: out, err: fmt.Errorf("%w: %s", ErrRefused, req.Action), stop: true}
 	default:
 		out.Outcome, out.Reason = "invalid", "invalid_action"
-		return out, ErrRefused
+		return evaluated{out: out, err: ErrRefused, stop: true}
 	}
 	agents, err := normalizeAgents(req.Agents)
 	if err != nil {
 		out.Outcome, out.Reason = "invalid", err.Error()
-		return out, ErrRefused
+		return evaluated{out: out, err: ErrRefused, stop: true}
 	}
 	if req.Action == ActionInspect && len(agents) == 0 {
 		out.Outcome, out.Reason = "cancelled", "empty_selection"
-		return out, nil
+		return evaluated{out: out, stop: true}
 	}
 	var snap installruntime.InstalledSnapshot
 	haveSnap := false
@@ -161,25 +234,25 @@ func run(ctx context.Context, req *Request) (Result, error) {
 			*req = restored
 			agents, out, err = nextAgents, nextOut, resumeErr
 			if err != nil {
-				return out, err
+				return evaluated{out: out, err: err, stop: true}
 			}
 			if out.Outcome == "conflict" {
-				return out, ErrRefused
+				return evaluated{out: out, err: ErrRefused, stop: true}
 			}
 			resumed = didResume
 		}
-		if !req.Yes && !resumed {
+		if requireYes && !req.Yes && !resumed {
 			out.Outcome, out.Reason = "invalid", "noninteractive_requires_yes"
-			return out, ErrRefused
+			return evaluated{out: out, err: ErrRefused, stop: true}
 		}
 	}
 	if !explicitAbs(req.ControlRoot) {
 		out.Outcome, out.Reason = "invalid", "control_root_required"
-		return out, ErrRefused
+		return evaluated{out: out, err: ErrRefused, stop: true}
 	}
 	if !haveSnap {
 		out.Outcome, out.Reason = "incomplete", "managed_runtime_required"
-		return out, err
+		return evaluated{out: out, err: err, stop: true}
 	}
 	runtimeRoot := req.RuntimeRoot
 	if runtimeRoot == "" {
@@ -187,30 +260,32 @@ func run(ctx context.Context, req *Request) (Result, error) {
 	}
 	if !explicitAbs(runtimeRoot) {
 		out.Outcome, out.Reason = "invalid", "runtime_root_required"
-		return out, ErrRefused
+		return evaluated{out: out, err: ErrRefused, stop: true}
 	}
 	if len(agents) == 0 {
 		out.Outcome, out.Reason = "cancelled", "empty_selection"
-		return out, nil
+		return evaluated{agents: agents, snap: snap, runtimeRoot: runtimeRoot, out: out, stop: true}
 	}
 	if req.Action == ActionInspect {
-		got, err := inspect(ctx, *req, agents, snap, runtimeRoot, out)
-		return attachReadiness(*req, agents, got, false), err
+		return evaluated{agents: agents, snap: snap, runtimeRoot: runtimeRoot, out: out}
 	}
 	hookAgents, notifyAgents := selectedUnits(*req, agents)
 	if len(hookAgents) == 0 && len(notifyAgents) == 0 {
 		out.Outcome, out.Reason = "cancelled", "empty_units"
-		return out, nil
+		return evaluated{agents: agents, snap: snap, runtimeRoot: runtimeRoot, out: out, stop: true}
 	}
-	var got Result
-	if req.Action == ActionInstall {
-		got, err = install(ctx, *req, snap, runtimeRoot, hookAgents, notifyAgents, out)
-		got, err = finishWizardIntent(ctx, *req, runtimeRoot, got, err)
-		return attachReadiness(*req, agents, got, true), err
+	return evaluated{
+		agents: agents, snap: snap, runtimeRoot: runtimeRoot,
+		hookAgents: hookAgents, notifyAgents: notifyAgents, out: out,
 	}
-	got, err = uninstall(ctx, *req, snap, runtimeRoot, hookAgents, notifyAgents, out)
-	got, err = finishWizardIntent(ctx, *req, runtimeRoot, got, err)
-	return attachReadiness(*req, agents, got, false), err
+}
+
+func otherLiveClients(req Request, snap installruntime.InstalledSnapshot, runtimeRoot, installationID, adding string) ([]string, error) {
+	mat, err := materializer(req, snap, runtimeRoot)
+	if err != nil {
+		return nil, err
+	}
+	return mat.OtherLiveClients(installationID, adding)
 }
 
 func resumeFromPendingIntent(req Request, agents []portable.Integration, snap installruntime.InstalledSnapshot, out Result) (Request, []portable.Integration, Result, bool, error) {

@@ -21,7 +21,7 @@ import (
 
 const setupWizardHelp = `Usage: claude-notifications setup-notifications wizard [OPTIONS]
 Master for hooks plus portable MCP/skill.
-TTY stdin prompts for agents, an existing-install action, units, and confirmation when those flags are omitted.
+TTY stdin prompts for agents, an existing-install action, and units when those flags are omitted, then shows a preflight plan and asks for confirmation.
 --json never prompts. Progress phases go to stderr. No TTY and no --agents/--yes is invalid, not a hang.
 Without --action, a new machine defaults to install; an existing portable
 installation is offered inspect, add/reinstall, or uninstall.
@@ -102,32 +102,55 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 		}
 	}
 	needsPrompt := tty && !jsonOut && (req.Action == "" || (req.Action != setupwizard.ActionInspect && (len(req.Agents) == 0 || !req.Yes)))
+	prompt := &setupwizard.LinePrompt{In: in, Out: out}
 	if needsPrompt {
-		filled, e := setupwizard.FillInteractive(ctx, req, &setupwizard.LinePrompt{In: in, Out: out}, func(agents []string) []string {
+		filled, e := setupwizard.FillInteractive(ctx, req, prompt, func(agents []string) []string {
 			return setupwizard.LiveNotifyClients(req.ControlRoot, agents)
 		})
 		if e != nil {
-			reason, code, outcome := "prompt_canceled", 0, "cancelled"
-			if errors.Is(e, setupwizard.ErrPromptInputClosed) {
-				reason = "prompt_closed"
-			} else if errors.Is(e, setupwizard.ErrPromptUnavailable) {
-				reason, code, outcome = "prompt_unavailable", 2, "invalid"
-			} else if !errors.Is(e, setupwizard.ErrPromptCanceled) {
-				reason, code, outcome = "prompt_failed", 2, "invalid"
-			} else if strings.Contains(e.Error(), "invalid_choice") {
-				reason, code, outcome = "invalid_choice", 2, "invalid"
-			}
-			result := setupwizard.Result{Action: string(req.Action), Outcome: outcome, Reason: reason}
-			if jsonOut {
-				_ = json.NewEncoder(out).Encode(result)
-			} else {
-				_, _ = fmt.Fprintf(out, "%s; reason=%s.\n", result.Outcome, result.Reason)
-			}
-			return code
+			return writeSetupWizardPromptError(out, jsonOut, req, e)
 		}
 		req = filled
 	}
+	if req.Action != setupwizard.ActionInspect && !req.Yes && tty && !jsonOut {
+		plan, e := setupwizard.Plan(ctx, req)
+		req = plan.Request
+		if !plan.Ready {
+			if plan.Text != "" {
+				_, _ = fmt.Fprintln(out, plan.Text)
+			}
+			return writeSetupWizardResult(out, jsonOut, plan.Result, e)
+		}
+		ok, e := prompt.Confirm(ctx, plan.Text)
+		if e != nil {
+			return writeSetupWizardPromptError(out, jsonOut, req, e)
+		}
+		if !ok {
+			result := setupwizard.Result{Action: string(req.Action), Outcome: "cancelled", Reason: "prompt_canceled"}
+			return writeSetupWizardResult(out, jsonOut, result, nil)
+		}
+		req.Yes = true
+	}
 	result, err := setupwizard.Run(ctx, req)
+	return writeSetupWizardResult(out, jsonOut, result, err)
+}
+
+func writeSetupWizardPromptError(out io.Writer, jsonOut bool, req setupwizard.Request, e error) int {
+	reason, outcome := "prompt_canceled", "cancelled"
+	if errors.Is(e, setupwizard.ErrPromptInputClosed) {
+		reason = "prompt_closed"
+	} else if errors.Is(e, setupwizard.ErrPromptUnavailable) {
+		reason, outcome = "prompt_unavailable", "invalid"
+	} else if !errors.Is(e, setupwizard.ErrPromptCanceled) {
+		reason, outcome = "prompt_failed", "invalid"
+	} else if strings.Contains(e.Error(), "invalid_choice") {
+		reason, outcome = "invalid_choice", "invalid"
+	}
+	result := setupwizard.Result{Action: string(req.Action), Outcome: outcome, Reason: reason}
+	return writeSetupWizardResult(out, jsonOut, result, e)
+}
+
+func writeSetupWizardResult(out io.Writer, jsonOut bool, result setupwizard.Result, err error) int {
 	if jsonOut {
 		if e := json.NewEncoder(out).Encode(result); e != nil {
 			return 1
@@ -151,7 +174,7 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 	if result.ExitCode() != 0 {
 		return result.ExitCode()
 	}
-	if err != nil && result.Outcome != "completed" && result.Outcome != "unchanged" && result.Outcome != "cancelled" {
+	if err != nil && result.Outcome != "completed" && result.Outcome != "unchanged" && result.Outcome != "cancelled" && result.Outcome != "ready" {
 		return 1
 	}
 	return 0

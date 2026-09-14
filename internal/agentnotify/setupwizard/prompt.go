@@ -181,16 +181,6 @@ func FillInteractive(ctx context.Context, req Request, p Prompter, existing func
 		req.Hooks = boolPtr(hooks)
 		req.AgentNotify = boolPtr(notify)
 	}
-	if !req.Yes {
-		ok, err := p.Confirm(ctx, confirmPlan(req))
-		if err != nil {
-			return req, err
-		}
-		req.Yes = ok
-		if !ok {
-			return req, ErrPromptCanceled
-		}
-	}
 	return req, nil
 }
 
@@ -224,6 +214,24 @@ func confirmPlan(req Request) string {
 	perClient("codex-hooks", req.CodexHooks)
 	perClient("claude-agent-notify", req.ClaudeAgentNotify)
 	perClient("codex-agent-notify", req.CodexAgentNotify)
+	if req.CodexHome != "" {
+		summary += " codex-profile=" + req.CodexHome
+	}
+	if req.ClaudeConfig != "" {
+		summary += " claude-profile=" + req.ClaudeConfig
+	}
+	if req.ReleaseVersion != "" {
+		summary += " revision=" + req.ReleaseVersion
+	}
+	if req.PackageSHA256 != "" {
+		summary += " digest=" + req.PackageSHA256
+	}
+	switch req.Action {
+	case ActionUninstall:
+		summary += " required=none permission-dialog=skipped"
+	case ActionInstall, "":
+		summary += " required=restart,request-permission,test-notification permission-dialog=explicit delivery=not_verified"
+	}
 	return summary + ". Proceed?"
 }
 

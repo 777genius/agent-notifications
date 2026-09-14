@@ -110,6 +110,40 @@ func TestWizardRejectsMutationWithoutYes(t *testing.T) {
 	}
 }
 
+func TestPlanDoesNotRequireYesOrMutate(t *testing.T) {
+	control, runtime, global, _, gen := managedRuntime(t)
+	off := false
+	plan, err := Plan(testCtx(t), Request{
+		Action: ActionInstall, Agents: []string{"codex"},
+		Hooks: boolPtr(true), AgentNotify: &off,
+		ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+	})
+	if err != nil || !plan.Ready || plan.Result.Outcome != "ready" {
+		t.Fatalf("plan: %+v %v", plan, err)
+	}
+	if !strings.Contains(plan.Text, "Plan: action=install") || !strings.Contains(plan.Text, "permission-dialog=explicit") {
+		t.Fatalf("text: %s", plan.Text)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil || snap.Ledger.PendingMutation != nil || snap.Ledger.Generation != gen {
+		t.Fatalf("preflight mutated ledger: gen=%d pending=%v err=%v", snap.Ledger.Generation, snap.Ledger.PendingMutation, err)
+	}
+}
+
+func TestPlanNotifyRequiresClientExecutable(t *testing.T) {
+	control, runtime, global, _, _ := managedRuntime(t)
+	off := false
+	plan, err := Plan(testCtx(t), Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: false,
+		Hooks: &off, AgentNotify: boolPtr(true),
+		ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: filepath.Join(filepath.Dir(control), "codex-profile"),
+	})
+	if plan.Ready || plan.Result.Reason != "client_executable_required" {
+		t.Fatalf("executable: %+v %v", plan, err)
+	}
+}
+
 func TestWizardEmptyAgentsCancels(t *testing.T) {
 	control, _, _, _, _ := managedRuntime(t)
 	got, err := Run(testCtx(t), Request{Action: ActionInstall, Yes: true, ControlRoot: control})

@@ -16,28 +16,25 @@ func promptCtx(t *testing.T) context.Context {
 }
 
 func TestFillInteractiveSelectsBothAndConfirms(t *testing.T) {
-	in := strings.NewReader("3\n3\ny\n")
+	in := strings.NewReader("3\n3\n")
 	var out strings.Builder
 	got, err := FillInteractive(promptCtx(t), Request{Action: ActionInstall}, &LinePrompt{In: in, Out: &out}, nil)
-	if err != nil || !got.Yes || strings.Join(got.Agents, ",") != "claude,codex" {
+	if err != nil || got.Yes || strings.Join(got.Agents, ",") != "claude,codex" {
 		t.Fatalf("fill: %+v %v", got, err)
 	}
 	if got.Hooks == nil || !*got.Hooks || got.AgentNotify == nil || !*got.AgentNotify {
 		t.Fatalf("units: hooks=%v notify=%v", got.Hooks, got.AgentNotify)
 	}
-	if !strings.Contains(out.String(), "Claude Code") || !strings.Contains(out.String(), "[y/N]") {
+	if !strings.Contains(out.String(), "Claude Code") || strings.Contains(out.String(), "[y/N]") {
 		t.Fatalf("prompt text: %s", out.String())
 	}
 	if !strings.Contains(out.String(), "Units:") || !strings.Contains(out.String(), "Agent-initiated notify") {
 		t.Fatalf("units prompt: %s", out.String())
 	}
-	if !strings.Contains(out.String(), "Plan: action=install agents=claude,codex hooks=true agent-notify=true") {
-		t.Fatalf("plan: %s", out.String())
-	}
 }
 
 func TestFillInteractiveSelectsNotifyOnly(t *testing.T) {
-	in := strings.NewReader("1\n2\ny\n")
+	in := strings.NewReader("1\n2\n")
 	var out strings.Builder
 	got, err := FillInteractive(promptCtx(t), Request{Action: ActionInstall}, &LinePrompt{In: in, Out: &out}, nil)
 	if err != nil || strings.Join(got.Agents, ",") != "claude" || got.Hooks == nil || *got.Hooks || got.AgentNotify == nil || !*got.AgentNotify {
@@ -56,16 +53,11 @@ func TestFillInteractiveEmptyUnitsCancels(t *testing.T) {
 
 func TestFillInteractiveSkipsUnitsWhenFlagsSet(t *testing.T) {
 	off, on := false, true
-	in := strings.NewReader("y\n")
-	var out strings.Builder
 	got, err := FillInteractive(promptCtx(t), Request{
 		Action: ActionInstall, Agents: []string{"codex"}, Hooks: &on, AgentNotify: &off,
-	}, &LinePrompt{In: in, Out: &out}, nil)
-	if err != nil || !got.Yes || got.Hooks == nil || !*got.Hooks || got.AgentNotify == nil || *got.AgentNotify {
+	}, &LinePrompt{In: strings.NewReader(""), Out: io.Discard}, nil)
+	if err != nil || got.Yes || got.Hooks == nil || !*got.Hooks || got.AgentNotify == nil || *got.AgentNotify {
 		t.Fatalf("preset units: %+v %v", got, err)
-	}
-	if strings.Contains(out.String(), "Units:") {
-		t.Fatalf("prompted units despite flags: %s", out.String())
 	}
 }
 
@@ -127,10 +119,10 @@ func TestFillInteractiveNilPrompter(t *testing.T) {
 }
 
 func TestFillInteractiveOmitsActionInstallsNew(t *testing.T) {
-	in := strings.NewReader("2\n3\ny\n")
+	in := strings.NewReader("2\n3\n")
 	var out strings.Builder
 	got, err := FillInteractive(promptCtx(t), Request{}, &LinePrompt{In: in, Out: &out}, nil)
-	if err != nil || got.Action != ActionInstall || strings.Join(got.Agents, ",") != "codex" || !got.Yes {
+	if err != nil || got.Action != ActionInstall || strings.Join(got.Agents, ",") != "codex" || got.Yes {
 		t.Fatalf("new: %+v %v", got, err)
 	}
 	if strings.Contains(out.String(), "Existing agent-notify") {
@@ -153,11 +145,11 @@ func TestFillInteractiveExistingSelectsInspect(t *testing.T) {
 }
 
 func TestFillInteractiveExistingSelectsUninstall(t *testing.T) {
-	in := strings.NewReader("3\n3\ny\n")
+	in := strings.NewReader("3\n3\n")
 	got, err := FillInteractive(promptCtx(t), Request{Agents: []string{"claude"}}, &LinePrompt{In: in, Out: io.Discard}, func([]string) []string {
 		return []string{"claude"}
 	})
-	if err != nil || got.Action != ActionUninstall || !got.Yes {
+	if err != nil || got.Action != ActionUninstall || got.Yes {
 		t.Fatalf("uninstall: %+v %v", got, err)
 	}
 }
@@ -170,5 +162,22 @@ func TestConfirmPlanShowsMixedPerClientFlags(t *testing.T) {
 	})
 	if !strings.Contains(got, "agents=claude,codex") || !strings.Contains(got, "hooks=false") || !strings.Contains(got, "claude-agent-notify=false") || !strings.Contains(got, "codex-agent-notify=true") {
 		t.Fatalf("mixed plan: %s", got)
+	}
+}
+
+func TestConfirmPlanShowsProfilesRevisionAndRequiredActions(t *testing.T) {
+	got := confirmPlan(Request{
+		Action: ActionInstall, Agents: []string{"codex"},
+		CodexHome: "/tmp/codex", ReleaseVersion: "1.44.0", PackageSHA256: "abc",
+	})
+	if !strings.Contains(got, "codex-profile=/tmp/codex") || !strings.Contains(got, "revision=1.44.0") || !strings.Contains(got, "digest=abc") {
+		t.Fatalf("identity: %s", got)
+	}
+	if !strings.Contains(got, "required=restart,request-permission,test-notification") || !strings.Contains(got, "permission-dialog=explicit") {
+		t.Fatalf("required actions: %s", got)
+	}
+	uninstall := confirmPlan(Request{Action: ActionUninstall, Agents: []string{"codex"}})
+	if !strings.Contains(uninstall, "permission-dialog=skipped") {
+		t.Fatalf("uninstall plan: %s", uninstall)
 	}
 }
