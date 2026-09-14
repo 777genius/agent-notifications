@@ -54,6 +54,58 @@ func TestWindowsApplyAcceptsIdentityModeWithoutUnixExecute(t *testing.T) {
 	}
 }
 
+func TestWindowsSkillInspectAfterApply(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root = filepath.Clean(strings.TrimPrefix(root, `\\?\`))
+	runtimeRoot := filepath.Join(root, "runtime")
+	control := filepath.Join(root, "control")
+	client := filepath.Join(root, "client")
+	for _, p := range []string{runtimeRoot, control, client} {
+		if err := os.Mkdir(p, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	restrictPrivate(t, control)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	t.Cleanup(cancel)
+	command := filepath.Join(runtimeRoot, "bin", "claude-notifications.bat")
+	source := filepath.Join(runtimeRoot, "skills", "agent-notify", "SKILL.md")
+	destination := filepath.Join(client, "skills", "agent-notify", "SKILL.md")
+	l, err := installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: control, Owner: Managed, RuntimeRoot: runtimeRoot, ConsumerID: "legacy-hooks",
+		Consumer: installruntime.Consumer{Registration: filepath.Join(client, "hooks.json"), Commands: []string{"legacy hook"}},
+		Files: []installruntime.File{
+			{Path: command, Data: installruntime.WindowsLauncherScript("claude-notifications", "claude-notifications-windows-amd64.exe"), Mode: 0755},
+			{Path: source, Data: []byte("canonical test skill\n"), Mode: 0600},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := Request{
+		ControlRoot: control, RuntimeRoot: runtimeRoot, Command: command,
+		ConfigPath: filepath.Join(client, "config.toml"), Provider: registration.Codex,
+		Mode: Managed, ExpectedGeneration: l.Generation,
+		SkillProjection: &SkillProjection{SourcePath: source, DestinationPath: destination},
+	}
+	got, err := Apply(ctx, req)
+	if err != nil || !got.Changed {
+		t.Fatal(got, err)
+	}
+	req.ExpectedGeneration = got.Ledger.Generation
+	facts, err := Inspect(ctx, req)
+	if err != nil || !facts.Registered || !facts.SkillProjected {
+		t.Fatalf("inspect after skill apply: %+v %v", facts, err)
+	}
+	again, err := Apply(ctx, req)
+	if err != nil || again.Changed {
+		t.Fatalf("skill no-op: %+v %v", again, err)
+	}
+}
+
 func restrictPrivate(t *testing.T, path string) {
 	t.Helper()
 	name, err := windows.UTF16PtrFromString(path)

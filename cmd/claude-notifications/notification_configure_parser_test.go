@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"path/filepath"
+	"runtime"
+	"testing"
+)
 
 func TestNotificationConfigureParserAndSetupOptIn(t *testing.T) {
 	for _, args := range [][]string{{}, {"--provider", "auto"}, {"--provider", "both", "--codex-home", "relative"}, {"--provider", "claude", "--navigation", "none", "--app", "/A.app"}} {
@@ -19,7 +23,7 @@ func TestNotificationConfigureParserAndSetupOptIn(t *testing.T) {
 	if _, err := parseSetupCodexOptions([]string{"--agent-notify", "--skip-agent-notify"}); err == nil {
 		t.Fatal("conflicting opt-in")
 	}
-	if opts, err := parseSetupCodexOptions(nil); err != nil || !opts.configure || len(opts.configureArgs) != 6 {
+	if opts, err := parseSetupCodexOptions(nil); err != nil || !opts.configure || opts.explicitNotify || len(opts.configureArgs) != 6 {
 		t.Fatal("default agent-notify", opts, err)
 	}
 	if opts, err := parseSetupCodexOptions([]string{"--json"}); err != nil || !opts.configure || len(opts.configureArgs) != 7 || opts.configureArgs[6] != "--json" {
@@ -31,7 +35,7 @@ func TestNotificationConfigureParserAndSetupOptIn(t *testing.T) {
 	if _, err := parseSetupCodexOptions([]string{"--agent-notify", "--navigation", "none"}); err == nil {
 		t.Fatal("navigation none without consent")
 	}
-	if _, err := parseSetupCodexOptions(append([]string{"--agent-notify"}, agentNotifyDefaultNoneArgs()...)); err != nil {
+	if opts, err := parseSetupCodexOptions(append([]string{"--agent-notify"}, agentNotifyDefaultNoneArgs()...)); err != nil || !opts.explicitNotify {
 		t.Fatal(err)
 	}
 	home := t.TempDir()
@@ -56,5 +60,13 @@ func TestNotificationConfigureParserAndSetupOptIn(t *testing.T) {
 	}
 	if opts, err := parseSetupCodexOptions([]string{"--print"}); err != nil || opts.configure {
 		t.Fatal("print should skip agent-notify", opts, err)
+	}
+	command := managedNotificationCommand(t.TempDir())
+	want := "claude-notifications"
+	if runtime.GOOS == "windows" {
+		want += ".bat"
+	}
+	if filepath.Base(command) != want {
+		t.Fatal(command)
 	}
 }

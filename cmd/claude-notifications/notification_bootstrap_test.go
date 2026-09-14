@@ -33,22 +33,23 @@ func TestNotificationBootstrapOffline(t *testing.T) {
 		t.Fatal("install_codex must only pass --skip-agent-notify when the published CLI advertises it")
 	}
 	prefix := strings.TrimSuffix(strings.TrimSpace(string(source)), `main "$@"`)
+	supported := agentNotifySetupSupported()
 	for _, test := range []struct {
-		name, args    string
-		fail          bool
-		wantConfigure bool
+		name, args           string
+		installFail, wantErr bool
+		wantConfigure        bool
 	}{
-		{"ordinary", "--product both", false, true},
-		{"both", "--product both --agent-notify --navigation none --allow-unknown-caller true --allow-caller-asserted false", false, true},
-		{"codex_home", "", false, true},
-		{"skip", "--product both --skip-agent-notify", false, false},
-		{"configure_failed", "--product both", false, true},
-		{"last_failed", "--product both --agent-notify --navigation none --allow-unknown-caller true --allow-caller-asserted false", true, false},
-		{"bad_none", "--product both --agent-notify --navigation none", false, false},
-		{"bad_app", "--product both --agent-notify --app /Applications/../Codex.app --team-id TEAM123456 --allow-unknown-caller true --allow-caller-asserted false", false, false},
-		{"bad_route", "--product both --agent-notify --navigation invalid", false, false},
-		{"bad_alias", "--product both --configure-notifications", false, false},
-		{"bad_conflict", "--product both --agent-notify --skip-agent-notify", false, false},
+		{"ordinary", "--product both", false, false, supported},
+		{"both", "--product both --agent-notify --navigation none --allow-unknown-caller true --allow-caller-asserted false", false, !supported, supported},
+		{"codex_home", "", false, false, supported},
+		{"skip", "--product both --skip-agent-notify", false, false, false},
+		{"configure_failed", "--product both", false, supported, supported},
+		{"last_failed", "--product both --agent-notify --navigation none --allow-unknown-caller true --allow-caller-asserted false", true, true, false},
+		{"bad_none", "--product both --agent-notify --navigation none", false, true, false},
+		{"bad_app", "--product both --agent-notify --app /Applications/../Codex.app --team-id TEAM123456 --allow-unknown-caller true --allow-caller-asserted false", false, true, false},
+		{"bad_route", "--product both --agent-notify --navigation invalid", false, true, false},
+		{"bad_alias", "--product both --configure-notifications", false, true, false},
+		{"bad_conflict", "--product both --agent-notify --skip-agent-notify", false, true, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			home := t.TempDir()
@@ -77,7 +78,7 @@ config_preflight() { :; }
 initialize_config() { :; }
 install_claude() { echo claude >> "$HOME/installs"; PLUGIN_ROOT="$HOME/bundle"; }
 install_codex() { echo codex >> "$HOME/installs"; CONFIGURE_BINARY="$HOME/fake-binary"; return `
-			if test.fail {
+			if test.installFail {
 				script += "1"
 			} else {
 				script += "0"
@@ -90,7 +91,7 @@ install_codex() { echo codex >> "$HOME/installs"; CONFIGURE_BINARY="$HOME/fake-b
 			command := exec.Command("bash", "-c", script)
 			command.Dir = home
 			output, err := command.CombinedOutput()
-			if (test.fail || strings.HasPrefix(test.name, "bad_")) != (err != nil) {
+			if test.wantErr != (err != nil) {
 				t.Fatalf("%v: %s", err, output)
 			}
 			calls, _ := os.ReadFile(filepath.Join(home, "calls"))
@@ -109,13 +110,23 @@ install_codex() { echo codex >> "$HOME/installs"; CONFIGURE_BINARY="$HOME/fake-b
 				t.Fatal("unexpected configure", string(calls))
 			}
 			if test.name == "configure_failed" {
-				if !strings.Contains(string(output), "Agent-notify setup failed") {
-					t.Fatal("missing configure warning", string(output))
+				if supported {
+					if !strings.Contains(string(output), "Agent-notify setup failed") {
+						t.Fatal("missing configure warning", string(output))
+					}
+				} else if !strings.Contains(string(output), "unsupported_platform") {
+					t.Fatal("auto-default must skip unsupported MCP", string(output))
 				}
 				installs, err := os.ReadFile(filepath.Join(home, "installs"))
 				if err != nil || !strings.Contains(string(installs), "claude") || !strings.Contains(string(installs), "codex") {
 					t.Fatal("configure failure rolled back install", err, string(installs))
 				}
+			}
+			if test.name == "ordinary" && !supported && !strings.Contains(string(output), "unsupported_platform") {
+				t.Fatal("auto-default must report skipped MCP", string(output))
+			}
+			if test.name == "both" && !supported && !strings.Contains(string(output), "unsupported") {
+				t.Fatal("explicit --agent-notify must refuse unsupported OS", string(output))
 			}
 			if strings.HasPrefix(test.name, "bad_") {
 				if _, err := os.Stat(filepath.Join(home, "installs")); !os.IsNotExist(err) {
@@ -123,6 +134,53 @@ install_codex() { echo codex >> "$HOME/installs"; CONFIGURE_BINARY="$HOME/fake-b
 				}
 			}
 		})
+	}
+}
+
+func TestNotificationBootstrapWindowsGitBashUname(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join(notificationRepoRoot(t), "bin", "bootstrap.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := strings.TrimSuffix(strings.TrimSpace(string(source)), `main "$@"`)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	t.Setenv("CODEX_HOME", filepath.Join(home, "codex"))
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	binary := filepath.Join(home, "fake-binary")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then printf '%s\\n' 'setup-notifications' '--skip-agent-notify'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	script := prefix + `
+uname() { echo MINGW64_NT-10.0-26100; }
+print_header() { :; }
+abort_if_wsl_environment() { :; }
+check_prerequisites() { :; }
+detect_platform() { :; }
+install_cleanup_traps() { :; }
+resolve_bootstrap_release() { :; }
+stage_config_helper() { :; }
+stage_historical_baselines() { :; }
+config_preflight() { :; }
+initialize_config() { :; }
+install_claude() { echo claude >> "$HOME/installs"; PLUGIN_ROOT="$HOME/bundle"; }
+install_codex() { echo codex >> "$HOME/installs"; CONFIGURE_BINARY="$HOME/fake-binary"; return 0; }
+main --product both
+`
+	command := exec.Command("bash", "-c", script)
+	command.Dir = home
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v: %s", err, output)
+	}
+	calls, err := os.ReadFile(filepath.Join(home, "calls"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "setup-notifications configure --provider both --navigation none --allow-unknown-caller true --allow-caller-asserted false"
+	if strings.Count(string(calls), want) != 1 {
+		t.Fatal(string(calls))
 	}
 }
 
@@ -143,6 +201,7 @@ func TestNotificationInitOfflineBranch(t *testing.T) {
 	if body == "" {
 		t.Fatal("missing init configure script")
 	}
+	supported := agentNotifySetupSupported()
 	for _, test := range []struct {
 		name                      string
 		args                      []string
@@ -150,8 +209,8 @@ func TestNotificationInitOfflineBranch(t *testing.T) {
 	}{
 		{name: "default", install: true},
 		{name: "skip", args: []string{"--skip-agent-notify"}, install: true},
-		{name: "configure", args: []string{"--agent-notify", "--navigation", "none", "--allow-unknown-caller", "true", "--allow-caller-asserted", "false"}, install: true},
-		{name: "failed", failHelper: true, install: true},
+		{name: "configure", args: []string{"--agent-notify", "--navigation", "none", "--allow-unknown-caller", "true", "--allow-caller-asserted", "false"}, fail: !supported, install: true},
+		{name: "failed", failHelper: true, fail: supported, install: true},
 		{name: "incomplete_none", args: []string{"--agent-notify", "--navigation", "none"}, fail: true},
 		{name: "bad_alias", args: []string{"--configure-notifications"}, fail: true},
 		{name: "bad_route", args: []string{"--navigation", "invalid"}, fail: true},
@@ -198,6 +257,20 @@ func TestNotificationInitOfflineBranch(t *testing.T) {
 			if test.name == "skip" {
 				if len(calls) != 0 {
 					t.Fatal("skip configured", string(calls))
+				}
+				return
+			}
+			if !supported {
+				if len(calls) != 0 {
+					t.Fatal("unsupported OS configured", string(calls))
+				}
+				if test.name == "default" || test.name == "failed" {
+					if !strings.Contains(string(output), "unsupported_platform") {
+						t.Fatal("auto-default must skip MCP", string(output))
+					}
+				}
+				if test.name == "configure" && !strings.Contains(string(output), "unsupported") {
+					t.Fatal("explicit --agent-notify must refuse unsupported OS", string(output))
 				}
 				return
 			}

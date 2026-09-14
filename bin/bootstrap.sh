@@ -53,6 +53,7 @@ PRODUCT=""
 BOOTSTRAP_TAG=""
 _BOOTSTRAP_TMP=""  # temp file path for trap (set -u safe)
 CONFIGURE_NOTIFICATIONS=true
+AGENT_NOTIFY_REQUEST=auto
 CONFIGURE_BINARY=""
 CONFIGURE_ARGS=()
 
@@ -1042,10 +1043,12 @@ select_product() {
                 PRODUCT="$2"; shift 2 ;;
             --agent-notify)
                 seen_agent_notify=true
+                AGENT_NOTIFY_REQUEST=explicit
                 CONFIGURE_NOTIFICATIONS=true
                 shift ;;
             --skip-agent-notify)
                 seen_skip_agent_notify=true
+                AGENT_NOTIFY_REQUEST=skip
                 CONFIGURE_NOTIFICATIONS=false
                 shift ;;
             --navigation|--app|--team-id|--allow-unknown-caller|--allow-caller-asserted|--codex-home)
@@ -1505,30 +1508,60 @@ main() {
         fi
     fi
     initialize_config || return 1
-    configure_agent_notify
+    configure_agent_notify || return 1
     [ "$PRODUCT" != claude ] || print_success
 }
 
-# Agent-notify is default-on, but a failed configure must not undo hooks/plugin install.
+agent_notify_platform_supported() {
+    local os
+    os=$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]' || true)
+    case "$os" in
+        darwin) return 0 ;;
+        mingw*|msys*|cygwin*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Agent-notify is default-on only where this installer can actually configure MCP.
+# Auto-default on an unsupported OS or old CLI is hooks-only, not a full MCP install.
+# Explicit --agent-notify and a failed configure of a supported capability are incomplete.
 configure_agent_notify() {
     [ "$CONFIGURE_NOTIFICATIONS" = true ] || return 0
+    local retry=""
     if [ -z "$CONFIGURE_BINARY" ]; then
         CONFIGURE_BINARY="${PLUGIN_ROOT}/bin/claude-notifications"
+    fi
+    if [ -n "$CONFIGURE_BINARY" ]; then
+        retry="\"$CONFIGURE_BINARY\" setup-notifications configure --provider ${PRODUCT} ${CONFIGURE_ARGS[*]}"
+    fi
+    if ! agent_notify_platform_supported; then
+        if [ "$AGENT_NOTIFY_REQUEST" = explicit ]; then
+            echo -e "${YELLOW}⚠ Agent-notify MCP is unsupported on this OS; this installer supports macOS and Windows.${NC}" >&2
+            echo -e "${YELLOW}  Plugin/hooks install succeeded. Not a full MCP installation.${NC}" >&2
+            [ -z "$retry" ] || echo -e "${YELLOW}  Retry on macOS or Windows: ${retry}${NC}" >&2
+            return 1
+        fi
+        echo -e "${YELLOW}⚠ Agent-notify MCP skipped: unsupported_platform (this installer supports macOS and Windows).${NC}" >&2
+        echo -e "${YELLOW}  Plugin/hooks install succeeded. Not a full MCP installation.${NC}" >&2
+        return 0
     fi
     if [ ! -x "$CONFIGURE_BINARY" ]; then
         echo -e "${YELLOW}⚠ Agent-notify setup skipped; installer binary not found.${NC}" >&2
         echo -e "${YELLOW}  Plugin/hooks install succeeded. Retry after the binary is available.${NC}" >&2
+        [ "$AGENT_NOTIFY_REQUEST" = explicit ] && return 1
         return 0
     fi
     if ! cli_has_setup_notifications "$CONFIGURE_BINARY"; then
         echo -e "${YELLOW}⚠ Agent-notify setup skipped; this published CLI does not support setup-notifications.${NC}" >&2
         echo -e "${YELLOW}  Plugin/hooks install succeeded. Desktop/hook notifications still work.${NC}" >&2
+        [ "$AGENT_NOTIFY_REQUEST" = explicit ] && return 1
         return 0
     fi
     if ! "$CONFIGURE_BINARY" setup-notifications configure --provider "$PRODUCT" "${CONFIGURE_ARGS[@]}"; then
         echo -e "${YELLOW}⚠ Agent-notify setup failed; plugin/hooks install succeeded.${NC}" >&2
         echo -e "${YELLOW}  Desktop/hook notifications still work. Retry:${NC}" >&2
-        echo -e "${YELLOW}  \"$CONFIGURE_BINARY\" setup-notifications configure --provider ${PRODUCT} ${CONFIGURE_ARGS[*]}${NC}" >&2
+        echo -e "${YELLOW}  ${retry}${NC}" >&2
+        return 1
     fi
     return 0
 }
