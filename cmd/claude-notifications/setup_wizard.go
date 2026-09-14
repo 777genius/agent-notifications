@@ -41,8 +41,8 @@ installation is offered inspect, add/reinstall, or uninstall.
   --control-root PATH         Existing managed control directory
   --runtime-root PATH         Existing managed runtime (default: ledger runtime)
   --global-config PATH
-  --codex-home PATH           Explicit Codex UAP client config root
-  --claude-config PATH        Explicit Claude UAP client config root
+  --codex-home PATH           Explicit Codex UAP client config root; else CODEX_HOME once
+  --claude-config PATH        Explicit Claude UAP client config root; else CLAUDE_CONFIG_DIR once
   --client-executable PATH    Selected client executable; never launched from PATH
   --claude-executable PATH    Claude executable when installing both clients
   --codex-executable PATH     Codex executable when installing both clients
@@ -320,6 +320,7 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 	req.GlobalConfig = values["global-config"]
 	req.CodexHome = values["codex-home"]
 	req.ClaudeConfig = values["claude-config"]
+	req = setupwizard.ApplyEnvDefaults(req)
 	req.ClientExecutable = values["client-executable"]
 	if values["claude-executable"] != "" || values["codex-executable"] != "" {
 		req.ClientExecutables = map[string]string{}

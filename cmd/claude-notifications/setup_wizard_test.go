@@ -99,3 +99,47 @@ func TestSetupWizardTTYShowsDiscoverCapabilities(t *testing.T) {
 		t.Fatalf("discover labels: %s", out.String())
 	}
 }
+
+func TestParseSetupWizardResolvesEnvOnce(t *testing.T) {
+	envCodex := filepath.Join(t.TempDir(), "env-codex")
+	envClaude := filepath.Join(t.TempDir(), "env-claude")
+	explicit := filepath.Join(t.TempDir(), "explicit")
+	home := filepath.Join(t.TempDir(), "home")
+	t.Setenv("CODEX_HOME", envCodex)
+	t.Setenv("CLAUDE_CONFIG_DIR", envClaude)
+	t.Setenv("HOME", home)
+	req, _, err := parseSetupWizard([]string{"--action", "inspect"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.CodexHome != envCodex || req.ClaudeConfig != envClaude {
+		t.Fatalf("env defaults: %+v", req)
+	}
+	t.Setenv("CODEX_HOME", filepath.Join(t.TempDir(), "later"))
+	if req.CodexHome != envCodex {
+		t.Fatal("parsed request reread env")
+	}
+	flagged, _, err := parseSetupWizard([]string{"--action", "inspect", "--codex-home", explicit})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if flagged.CodexHome != explicit {
+		t.Fatalf("explicit lost: %+v", flagged)
+	}
+	t.Setenv("CODEX_HOME", "")
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	empty, _, err := parseSetupWizard([]string{"--action", "inspect"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if empty.CodexHome != "" || empty.ClaudeConfig != "" {
+		t.Fatalf("HOME used as profile fallback: %+v", empty)
+	}
+}
+
+func TestParseSetupWizardRejectsRelativeEnvProfile(t *testing.T) {
+	t.Setenv("CODEX_HOME", "relative-codex")
+	if _, _, err := parseSetupWizard([]string{"--action", "inspect"}); err == nil {
+		t.Fatal("relative CODEX_HOME accepted")
+	}
+}

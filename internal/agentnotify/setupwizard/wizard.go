@@ -42,14 +42,17 @@ type Request struct {
 	Hooks, AgentNotify                                *bool
 	Yes                                               bool
 	PackageRoot, PluginRoot, ControlRoot, RuntimeRoot string
-	GlobalConfig, CodexHome, ClaudeConfig             string
-	ClientExecutable, ScopeRoot, Helper               string
-	ClientExecutables                                 map[string]string
-	PackageSHA256                                     string
-	InstallationID, Primary                           string
-	MCPConfig                                         map[string]string
-	ClaudeHooks, CodexHooks                           *bool
-	ClaudeAgentNotify, CodexAgentNotify               *bool
+	// CodexHome and ClaudeConfig are explicit UAP client profile roots.
+	// The CLI fills omitted values from CODEX_HOME / CLAUDE_CONFIG_DIR once;
+	// Run and Plan do not reread the process environment.
+	GlobalConfig, CodexHome, ClaudeConfig string
+	ClientExecutable, ScopeRoot, Helper   string
+	ClientExecutables                     map[string]string
+	PackageSHA256                         string
+	InstallationID, Primary               string
+	MCPConfig                             map[string]string
+	ClaudeHooks, CodexHooks               *bool
+	ClaudeAgentNotify, CodexAgentNotify   *bool
 	// ExternalUninstalled is host attestation that Codex already removed the
 	// native plugin, or never activated it. --yes does not set this.
 	ExternalUninstalled bool

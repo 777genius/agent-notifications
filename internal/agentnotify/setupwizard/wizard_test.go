@@ -147,6 +147,41 @@ func TestPlanNotifyRequiresClientExecutable(t *testing.T) {
 	}
 }
 
+func TestPlanDoesNotRereadEnvDefaults(t *testing.T) {
+	control, runtime, global, _, _ := managedRuntime(t)
+	explicit := filepath.Join(filepath.Dir(control), "explicit-codex")
+	envHome := filepath.Join(filepath.Dir(control), "env-home")
+	envCodex := filepath.Join(filepath.Dir(control), "env-codex")
+	for _, dir := range []string{explicit, envHome, envCodex} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOME", envHome)
+	t.Setenv("CODEX_HOME", envCodex)
+	off := false
+	plan, err := Plan(testCtx(t), Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: false,
+		Hooks: &off, AgentNotify: boolPtr(true),
+		ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: explicit,
+	})
+	if plan.Ready || plan.Result.Reason != "client_executable_required" {
+		t.Fatalf("executable: %+v %v", plan, err)
+	}
+	if plan.Request.CodexHome != explicit {
+		t.Fatalf("plan reread env: %+v", plan.Request)
+	}
+	omitted, err := Plan(testCtx(t), Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: false,
+		Hooks: &off, AgentNotify: boolPtr(true),
+		ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+	})
+	if err == nil && omitted.Request.CodexHome == envCodex {
+		t.Fatal("plan filled CodexHome from env")
+	}
+}
+
 func TestPlanShowsSourceDigestWithoutMutating(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, _, gen := managedRuntime(t)
