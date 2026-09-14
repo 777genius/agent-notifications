@@ -134,6 +134,60 @@ func TestExtractRejectsUnexpectedEntry(t *testing.T) {
 	}
 }
 
+func TestExtractRejectsSymlinkAndAbsolutePath(t *testing.T) {
+	base := t.TempDir()
+	linkZip := filepath.Join(base, "link.zip")
+	f, err := os.Create(linkZip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := zip.NewWriter(f)
+	hdr := &zip.FileHeader{Name: "bin/claude-notifications"}
+	hdr.SetMode(os.ModeSymlink | 0777)
+	w, err := zw.CreateHeader(hdr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("/tmp/evil")); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := Extract(linkZip, filepath.Join(base, "link-out")); err == nil || !errors.Is(err, ErrUnsafeArchive) {
+		t.Fatalf("want symlink rejection, got %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(base, "link-out", "bin", "claude-notifications")); !os.IsNotExist(err) {
+		t.Fatal("symlink archive wrote an entry")
+	}
+
+	absZip := filepath.Join(base, "abs.zip")
+	f, err = os.Create(absZip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw = zip.NewWriter(f)
+	w, err = zw.Create("/tmp/evil.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("no")); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := Extract(absZip, filepath.Join(base, "abs-out")); err == nil || !errors.Is(err, ErrUnsafeArchive) {
+		t.Fatalf("want absolute-path rejection, got %v", err)
+	}
+}
+
 func TestBuildPackageInstallsThroughPublicInstaller(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("UAP managedstdio.NewSource requires Perm()&0111; Go Windows FileMode does not set execute bits on regular files")
