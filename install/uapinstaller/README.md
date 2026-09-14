@@ -17,7 +17,9 @@ result, err := engine.Apply(ctx, prepared, uapinstaller.Decision{Confirmed: true
 ```
 
 `New` validates paths and does not create directories, open a journal, or run a
-helper. Directories are created on Recover or a confirmed Apply. Host seams may
+helper. ClientConfigRoot is an explicit request path; CODEX_HOME,
+CLAUDE_CONFIG_DIR, and HOME are not read as profile defaults. Directories are
+created on Recover or a confirmed Apply. Host seams may
 replace args of one declared MCP server and observe a committed binding before
 client activation. Optional `Config.Assess` is digest-bound: block and
 unavailable never become allow. Nil assessor keeps the trusted-local MVP and
@@ -34,7 +36,8 @@ Remove Prepare verifies the managed artifact and persisted target before any
 client deactivation. Last-client remove retains PLUGIN_DATA and reports
 `data_retained`. A later remove of that retained empty installation returns
 `already_absent` without creating a journal. Plan includes the helper protocol
-version. Result.NextActions cover recover, update, and reprepare.
+version and SHA-256 of the helper bytes; UAP managedstdio stores the same
+digest. Result.NextActions cover recover, update, and reprepare.
 
 Confirmed Apply re-reads live target/ownership before mutation and returns
 `plan_changed` instead of applying a stale confirmation. Discover reports

@@ -3,6 +3,9 @@ package uapinstaller
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -14,6 +17,7 @@ import (
 
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/dirswap"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/statev2"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/managedstdio"
 )
 
 func testCtx(t *testing.T) context.Context {
@@ -294,6 +298,217 @@ func TestInstallSecondClientPreservesFirst(t *testing.T) {
 	}
 	if clients["claude"] {
 		t.Fatal("claude binding survived")
+	}
+}
+
+func isolateClientEnv(t *testing.T, base string) (home, codex, claude string) {
+	t.Helper()
+	home = filepath.Join(base, "env-home")
+	codex = filepath.Join(base, "env-codex")
+	claude = filepath.Join(base, "env-claude")
+	for _, dir := range []string{home, codex, claude} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "keep.txt"), []byte("keep\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("CODEX_HOME", codex)
+	t.Setenv("CLAUDE_CONFIG_DIR", claude)
+	t.Setenv("CLAUDE_HOME", claude)
+	return home, codex, claude
+}
+
+func assertEnvSentinelsUnchanged(t *testing.T, dirs ...string) {
+	t.Helper()
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 1 || entries[0].Name() != "keep.txt" {
+			t.Fatalf("env default %s mutated: %v", dir, names(entries))
+		}
+		got, err := os.ReadFile(filepath.Join(dir, "keep.txt"))
+		if err != nil || string(got) != "keep\n" {
+			t.Fatalf("env sentinel %s: %s %v", dir, got, err)
+		}
+	}
+}
+
+func TestInstallUsesExplicitConfigRootNotEnv(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	envHome, envCodex, envClaude := isolateClientEnv(t, base)
+	explicit := filepath.Join(base, "explicit-codex")
+	if err := os.MkdirAll(explicit, 0700); err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	eng, err := New(Config{StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: explicit,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-000000000063",
+		OperationID: "explicit-profile", RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = prepared.Close() }()
+	if prepared.Plan().ConfigRoot != explicit {
+		t.Fatalf("plan mixed env default: %+v", prepared.Plan())
+	}
+	if _, err := eng.Apply(ctx, prepared, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	claudeRoot := filepath.Join(base, "explicit-claude")
+	if err := os.MkdirAll(claudeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng.cfg.Runner = listingRunner{configRoot: claudeRoot}
+	second, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "claude", ClientConfigRoot: claudeRoot,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-000000000063",
+		OperationID: "explicit-claude", RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = second.Close() }()
+	if second.Plan().ConfigRoot != claudeRoot {
+		t.Fatalf("claude plan mixed env default: %+v", second.Plan())
+	}
+	if _, err := eng.Apply(ctx, second, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 2 {
+		t.Fatalf("inspect: %+v %v", view, err)
+	}
+	for _, binding := range view.Installations[0].Bindings {
+		for _, envDir := range []string{envHome, envCodex, envClaude} {
+			if binding.TargetPath == envDir || strings.HasPrefix(binding.TargetPath, envDir+string(os.PathSeparator)) {
+				t.Fatalf("binding used env default %s: %+v", envDir, binding)
+			}
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(claudeRoot, "skills")); err != nil {
+		t.Fatalf("explicit claude profile was not written: %v", err)
+	}
+	assertEnvSentinelsUnchanged(t, envHome, envCodex, envClaude)
+}
+
+func TestInstallStoresHelperIdentityInManagedSource(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	body, err := os.ReadFile(probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(body)
+	wantDigest := hex.EncodeToString(sum[:])
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-000000000064",
+		OperationID: "helper-identity", RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = prepared.Close() }()
+	plan := prepared.Plan()
+	if plan.HelperVersion != "uap-installer-helper-v1" || plan.HelperDigest != wantDigest {
+		t.Fatalf("plan helper identity: %+v want %s", plan, wantDigest)
+	}
+	if _, err := eng.Apply(ctx, prepared, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	claudeRoot := filepath.Join(base, "claude")
+	if err := os.MkdirAll(claudeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng.cfg.Runner = listingRunner{configRoot: claudeRoot}
+	second, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "claude", ClientConfigRoot: claudeRoot,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-000000000064",
+		OperationID: "helper-claude", RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = second.Close() }()
+	if second.Plan().HelperDigest != wantDigest {
+		t.Fatalf("claude plan helper digest: %+v want %s", second.Plan(), wantDigest)
+	}
+	if _, err := eng.Apply(ctx, second, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 {
+		t.Fatalf("inspect: %+v %v", view, err)
+	}
+	var meta []byte
+	for _, binding := range view.Installations[0].Bindings {
+		if binding.ClientID != "claude" || binding.TargetPath == "" {
+			continue
+		}
+		err := filepath.WalkDir(binding.TargetPath, func(path string, d os.DirEntry, walkErr error) error {
+			if walkErr != nil || d.IsDir() || d.Name() != "metadata.json" {
+				return walkErr
+			}
+			if !strings.Contains(filepath.ToSlash(path), managedstdio.RelativeDirectory) {
+				return nil
+			}
+			body, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return readErr
+			}
+			meta = body
+			return filepath.SkipAll
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(meta) == 0 {
+		t.Fatal("managed helper metadata missing from Claude projection")
+	}
+	var stored struct {
+		SHA256  string `json:"sha256"`
+		Version string `json:"cliVersion"`
+	}
+	if err := json.Unmarshal(meta, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.SHA256 != wantDigest || stored.Version != plan.HelperVersion {
+		t.Fatalf("managed helper identity: %+v plan=%+v", stored, plan)
 	}
 }
 
@@ -607,8 +822,8 @@ func TestPrepareCopiesRequestAndPlan(t *testing.T) {
 	if prepared.Plan().DigestAlgorithm != "agentplugins-tree-sha256-v1" || prepared.Plan().TreeDigest == "" {
 		t.Fatalf("canonical tree digest: %+v", prepared.Plan())
 	}
-	if prepared.Plan().HelperVersion != "uap-installer-helper-v1" {
-		t.Fatalf("helper version: %+v", prepared.Plan())
+	if prepared.Plan().HelperVersion != "uap-installer-helper-v1" || prepared.Plan().HelperDigest != "" {
+		t.Fatalf("helper identity without executable: %+v", prepared.Plan())
 	}
 	req.RequiredComponents[0] = "mutated"
 	req.PackageRoot = filepath.Join(base, "other")
@@ -1363,6 +1578,21 @@ func TestDiscoverDoesNotCreateStateOrRunHelper(t *testing.T) {
 	if _, err := os.Lstat(root); !os.IsNotExist(err) {
 		t.Fatal("discover created state root")
 	}
+}
+
+func TestDiscoverDoesNotCreateEnvHomes(t *testing.T) {
+	base := t.TempDir()
+	envHome, envCodex, envClaude := isolateClientEnv(t, base)
+	root := filepath.Join(base, "missing-state")
+	eng, err := New(Config{StateRoot: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = eng.Discover()
+	if _, err := os.Lstat(root); !os.IsNotExist(err) {
+		t.Fatal("discover created state root")
+	}
+	assertEnvSentinelsUnchanged(t, envHome, envCodex, envClaude)
 }
 
 func TestDiscoverReportsExecutablePresenceWithoutExecuting(t *testing.T) {
