@@ -592,7 +592,7 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 		remove := portablesetup.MaterializeRequest{
 			Identity: id, Integration: agent, ExpectedGeneration: generation,
 			ClientConfigRoot: configPath, ClientExecutable: executable,
-			Discovery:   discovery(req, agent, runtimeRoot, snap),
+			// User uninstall does not restore a retired direct MCP.
 			OperationID: "wizard-remove-" + string(agent), ExternalUninstalled: req.ExternalUninstalled,
 			HoldOnly: agent == portable.Codex && !req.ExternalUninstalled,
 		}

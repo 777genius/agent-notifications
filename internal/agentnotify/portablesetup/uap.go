@@ -57,6 +57,24 @@ type Materializer struct {
 	Roots  UAPRoots
 }
 
+func (m Materializer) beginMutation(ctx context.Context, req *MaterializeRequest) (func(), error) {
+	release, err := installruntime.AcquireCoordinatorLease(ctx, req.Identity.ControlRoot)
+	if err != nil {
+		return nil, err
+	}
+	if _, err = installruntime.Recover(ctx, req.Identity.ControlRoot); err != nil {
+		release()
+		return nil, err
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(req.Identity.ControlRoot)
+	if err != nil {
+		release()
+		return nil, err
+	}
+	req.ExpectedGeneration = snap.Ledger.Generation
+	return release, nil
+}
+
 func physicalRoot(path string) string {
 	got, err := installruntime.PhysicalPath(path)
 	if err != nil {
@@ -208,21 +226,11 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 	if err != nil {
 		return portable.Binding{}, err
 	}
-	if req.Discovery.ConfigPath != "" {
-		release, err := installruntime.AcquireCoordinatorLease(ctx, req.Identity.ControlRoot)
-		if err != nil {
-			return portable.Binding{}, err
-		}
-		defer release()
-		if _, err = installruntime.Recover(ctx, req.Identity.ControlRoot); err != nil {
-			return portable.Binding{}, err
-		}
-		snap, err := installruntime.ReadInstalledSnapshot(req.Identity.ControlRoot)
-		if err != nil {
-			return portable.Binding{}, err
-		}
-		req.ExpectedGeneration = snap.Ledger.Generation
+	release, err := m.beginMutation(ctx, &req)
+	if err != nil {
+		return portable.Binding{}, err
 	}
+	defer release()
 	eng, err := m.engine(req, new(uint64), nil)
 	if err != nil {
 		return portable.Binding{}, err
@@ -398,21 +406,11 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 	if err != nil {
 		return err
 	}
-	if req.Discovery.ConfigPath != "" {
-		release, err := installruntime.AcquireCoordinatorLease(ctx, req.Identity.ControlRoot)
-		if err != nil {
-			return err
-		}
-		defer release()
-		if _, err = installruntime.Recover(ctx, req.Identity.ControlRoot); err != nil {
-			return err
-		}
-		snap, err := installruntime.ReadInstalledSnapshot(req.Identity.ControlRoot)
-		if err != nil {
-			return err
-		}
-		req.ExpectedGeneration = snap.Ledger.Generation
+	release, err := m.beginMutation(ctx, &req)
+	if err != nil {
+		return err
 	}
+	defer release()
 	eng, err := m.engine(req, &req.ExpectedGeneration, nil)
 	if err != nil {
 		return err

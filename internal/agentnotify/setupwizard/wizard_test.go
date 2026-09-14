@@ -18,8 +18,10 @@ import (
 
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/ports"
 
+	"github.com/777genius/agent-notifications/internal/agentnotify/clientsetup"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portableasset"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portablesetup"
+	"github.com/777genius/agent-notifications/internal/agentnotify/registration"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/testenv"
 )
@@ -985,4 +987,87 @@ func installationIDFromState(t *testing.T, path string) string {
 		t.Fatalf("installations: %s", body)
 	}
 	return state.Installations[0].InstallationID
+}
+
+func TestWizardUninstallDoesNotRestoreDirectMCP(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, primary, gen := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	mcpConfig := filepath.Join(filepath.Dir(control), "client", "config")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(mcpConfig), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := clientsetup.Apply(ctx, clientsetup.Request{
+		ControlRoot: control, RuntimeRoot: runtime, Command: primary, ConfigPath: mcpConfig,
+		Provider: registration.Codex, Mode: clientsetup.Managed, ExpectedGeneration: gen,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+		MCPConfig: map[string]string{"codex": mcpConfig},
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	req.Action = ActionInspect
+	req.Yes = false
+	view, err := Run(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var notify, direct string
+	for _, target := range view.Targets {
+		if target.Unit == "agent-notify" {
+			notify = target.Outcome
+		}
+		if target.Unit == "direct-mcp" {
+			direct = target.Outcome
+		}
+	}
+	if notify != "installed" || direct != "absent" {
+		t.Fatalf("handoff inspect: notify=%s direct=%s targets=%+v", notify, direct, view.Targets)
+	}
+	req.Action = ActionUninstall
+	req.Yes = true
+	req.ExternalUninstalled = true
+	removed, err := Run(ctx, req)
+	if err != nil || removed.Outcome != "completed" {
+		t.Fatalf("uninstall: %+v %v", removed, err)
+	}
+	req.Action = ActionInspect
+	req.Yes = false
+	view, err = Run(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notify, direct = "", ""
+	for _, target := range view.Targets {
+		if target.Unit == "agent-notify" {
+			notify = target.Outcome
+		}
+		if target.Unit == "direct-mcp" {
+			direct = target.Outcome
+		}
+	}
+	if notify == "installed" {
+		t.Fatalf("portable survived uninstall: %+v", view.Targets)
+	}
+	if direct == "installed" {
+		t.Fatalf("uninstall restored direct MCP: %+v", view.Targets)
+	}
 }

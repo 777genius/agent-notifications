@@ -104,21 +104,19 @@ func (s Service) Install(ctx context.Context, req Request) (portable.Binding, er
 	if err := s.preflight(req.Binding); err != nil {
 		return portable.Binding{}, err
 	}
-	if req.Discovery.ConfigPath != "" {
-		release, err := installruntime.AcquireCoordinatorLease(ctx, req.Binding.ControlRoot)
-		if err != nil {
-			return portable.Binding{}, err
-		}
-		defer release()
-		if _, err = installruntime.Recover(ctx, req.Binding.ControlRoot); err != nil {
-			return portable.Binding{}, err
-		}
-		snap, err := installruntime.ReadInstalledSnapshot(req.Binding.ControlRoot)
-		if err != nil {
-			return portable.Binding{}, err
-		}
-		req.ExpectedGeneration = snap.Ledger.Generation
+	release, err := installruntime.AcquireCoordinatorLease(ctx, req.Binding.ControlRoot)
+	if err != nil {
+		return portable.Binding{}, err
 	}
+	defer release()
+	if _, err = installruntime.Recover(ctx, req.Binding.ControlRoot); err != nil {
+		return portable.Binding{}, err
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(req.Binding.ControlRoot)
+	if err != nil {
+		return portable.Binding{}, err
+	}
+	req.ExpectedGeneration = snap.Ledger.Generation
 	gen, res, err := s.handoffForward(ctx, req)
 	if err != nil {
 		return portable.Binding{}, err
@@ -249,21 +247,19 @@ func (s Service) Remove(ctx context.Context, req Request) error {
 	if ctx == nil || s.Remover == nil {
 		return ErrPreflight
 	}
-	if req.Discovery.ConfigPath != "" {
-		release, err := installruntime.AcquireCoordinatorLease(ctx, req.Binding.ControlRoot)
-		if err != nil {
-			return err
-		}
-		defer release()
-		if _, err = installruntime.Recover(ctx, req.Binding.ControlRoot); err != nil {
-			return err
-		}
-		snap, err := installruntime.ReadInstalledSnapshot(req.Binding.ControlRoot)
-		if err != nil {
-			return err
-		}
-		req.ExpectedGeneration = snap.Ledger.Generation
+	release, err := installruntime.AcquireCoordinatorLease(ctx, req.Binding.ControlRoot)
+	if err != nil {
+		return err
 	}
+	defer release()
+	if _, err = installruntime.Recover(ctx, req.Binding.ControlRoot); err != nil {
+		return err
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(req.Binding.ControlRoot)
+	if err != nil {
+		return err
+	}
+	req.ExpectedGeneration = snap.Ledger.Generation
 	res, err := s.matchingReservation(req, "uninstall")
 	if err != nil {
 		return err
@@ -286,7 +282,7 @@ func (s Service) Remove(ctx context.Context, req Request) error {
 	if req.Discovery.ConfigPath == "" {
 		return s.finishHandoff(ctx, req, res)
 	}
-	snap, err := installruntime.ReadInstalledSnapshot(req.Binding.ControlRoot)
+	snap, err = installruntime.ReadInstalledSnapshot(req.Binding.ControlRoot)
 	if err != nil {
 		return err
 	}
