@@ -54,6 +54,7 @@ PRODUCT=""
 BOOTSTRAP_TAG=""
 _BOOTSTRAP_TMP=""  # temp file path for trap (set -u safe)
 CONFIGURE_NOTIFICATIONS=true
+AGENT_NOTIFY_REQUEST=auto
 CONFIGURE_BINARY=""
 CONFIGURE_ARGS=()
 
@@ -1043,10 +1044,12 @@ select_product() {
                 PRODUCT="$2"; shift 2 ;;
             --agent-notify)
                 seen_agent_notify=true
+                AGENT_NOTIFY_REQUEST=explicit
                 CONFIGURE_NOTIFICATIONS=true
                 shift ;;
             --skip-agent-notify)
                 seen_skip_agent_notify=true
+                AGENT_NOTIFY_REQUEST=skip
                 CONFIGURE_NOTIFICATIONS=false
                 shift ;;
             --navigation|--app|--team-id|--allow-unknown-caller|--allow-caller-asserted|--codex-home)
@@ -1545,6 +1548,20 @@ configure_agent_notify() {
     return 0
 }
 
+# Same-tag portable zip is the wizard source. Auto-default without that asset is
+# hooks-only, not a full MCP install. Explicit --agent-notify is incomplete.
+report_wizard_portable_missing() {
+    local reason="$1"
+    local agents="$2"
+    echo -e "${YELLOW}⚠ Agent-notify wizard skipped; ${reason}.${NC}" >&2
+    echo -e "${YELLOW}  Plugin/hooks install succeeded. Retry:${NC}" >&2
+    echo -e "${YELLOW}  \"$CONFIGURE_BINARY\" setup-notifications wizard --action install --agents ${agents} --hooks false --agent-notify true --yes${NC}" >&2
+    if [ "$AGENT_NOTIFY_REQUEST" = explicit ]; then
+        return 1
+    fi
+    return 0
+}
+
 bootstrap_abs_command() {
     local found
     found=$(command -v "$1" 2>/dev/null) || return 1
@@ -1612,9 +1629,7 @@ setup_agent_notify_wizard() {
     fi
     if [ -n "${BOOTSTRAP_TAG:-}" ]; then
         if ! acquire_wizard_portable_asset; then
-            echo -e "${YELLOW}⚠ Agent-notify wizard skipped; portable package is missing from $BOOTSTRAP_TAG.${NC}" >&2
-            echo -e "${YELLOW}  Plugin/hooks install succeeded. Retry:${NC}" >&2
-            echo -e "${YELLOW}  \"$CONFIGURE_BINARY\" setup-notifications wizard --action install --agents ${agents} --hooks false --agent-notify true --yes${NC}" >&2
+            report_wizard_portable_missing "portable package is missing from $BOOTSTRAP_TAG" "$agents" && return 0
             return 1
         fi
         package_root="$WIZARD_PACKAGE_ROOT"
@@ -1628,9 +1643,7 @@ setup_agent_notify_wizard() {
         fi
     fi
     if [ -z "${package_root:-}" ]; then
-        echo -e "${YELLOW}⚠ Agent-notify wizard skipped; portable package is missing from the accepted release.${NC}" >&2
-        echo -e "${YELLOW}  Plugin/hooks install succeeded. Retry:${NC}" >&2
-        echo -e "${YELLOW}  \"$CONFIGURE_BINARY\" setup-notifications wizard --action install --agents ${agents} --hooks false --agent-notify true --yes${NC}" >&2
+        report_wizard_portable_missing "portable package is missing from the accepted release" "$agents" && return 0
         return 1
     fi
     if [ "$PRODUCT" != codex ]; then

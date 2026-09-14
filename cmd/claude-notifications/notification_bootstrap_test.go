@@ -286,6 +286,67 @@ main --product both
 	}
 }
 
+func TestNotificationBootstrapWizardMissingPortable(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join(notificationRepoRoot(t), "bin", "bootstrap.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := strings.TrimSuffix(strings.TrimSpace(string(source)), `main "$@"`)
+	for _, test := range []struct {
+		name, args string
+		wantErr    bool
+	}{
+		{name: "auto", args: "--product both"},
+		{name: "explicit", args: "--product both --agent-notify --navigation none --allow-unknown-caller true --allow-caller-asserted false", wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+			t.Setenv("CODEX_HOME", filepath.Join(home, "codex"))
+			t.Setenv("CLAUDE_CONFIG_DIR", "")
+			binary := filepath.Join(home, "fake-binary")
+			helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then printf '%s\\n' 'setup-notifications wizard' 'setup-notifications' '--skip-agent-notify'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n"
+			if err := os.WriteFile(binary, []byte(helper), 0700); err != nil {
+				t.Fatal(err)
+			}
+			script := prefix + `
+print_header() { :; }
+abort_if_wsl_environment() { :; }
+check_prerequisites() { :; }
+detect_platform() { :; }
+install_cleanup_traps() { :; }
+resolve_bootstrap_release() { BOOTSTRAP_TAG=v9.9.9; }
+stage_config_helper() { :; }
+stage_historical_baselines() { :; }
+config_preflight() { :; }
+initialize_config() { :; }
+fetch_bootstrap_file() { echo curl: 404 >&2; return 1; }
+install_claude() { echo claude >> "$HOME/installs"; PLUGIN_ROOT="$HOME/bundle"; mkdir -p "$PLUGIN_ROOT"; }
+install_codex() { echo codex >> "$HOME/installs"; CONFIGURE_BINARY="$HOME/fake-binary"; return 0; }
+main ` + test.args + `
+`
+			command := exec.Command("bash", "-c", script)
+			command.Dir = home
+			output, err := command.CombinedOutput()
+			if test.wantErr != (err != nil) {
+				t.Fatalf("%v: %s", err, output)
+			}
+			if !strings.Contains(string(output), "portable package is missing") {
+				t.Fatal(string(output))
+			}
+			calls, _ := os.ReadFile(filepath.Join(home, "calls"))
+			if len(calls) != 0 {
+				t.Fatal("missing portable still invoked wizard", string(calls))
+			}
+			installs, err := os.ReadFile(filepath.Join(home, "installs"))
+			if err != nil || !strings.Contains(string(installs), "claude") || !strings.Contains(string(installs), "codex") {
+				t.Fatal("missing portable rolled back install", err, string(installs))
+			}
+		})
+	}
+}
+
 func TestNotificationInitOfflineBranch(t *testing.T) {
 	source, err := os.ReadFile(filepath.Join(notificationRepoRoot(t), "commands", "init.md"))
 	if err != nil {

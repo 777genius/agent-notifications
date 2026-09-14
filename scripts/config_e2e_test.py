@@ -418,7 +418,7 @@ shutil.copytree(os.environ['SOURCE'],root,dirs_exist_ok=True)
         try:
             with lock.open('r+') as held:
                 fcntl.flock(held, fcntl.LOCK_EX)
-                install = start(['/bin/bash', ROOT / 'bin/bootstrap.sh', '--product', 'both'],
+                install = start(['/bin/bash', ROOT / 'bin/bootstrap.sh', '--product', 'both', '--skip-agent-notify'],
                                 subprocess.DEVNULL)
                 assert self.asset_gate_entered.wait(15), 'installer did not reach asset barrier'
                 settings = start(
