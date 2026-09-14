@@ -65,6 +65,7 @@ type Plan struct {
 	InstallationID  string
 	BindingID       string
 	HelperVersion   string
+	HelperDigest    string
 	RequiredMissing []string
 	NoChange        bool
 }

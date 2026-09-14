@@ -1,6 +1,8 @@
 package uapinstaller
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -69,6 +71,22 @@ func (e *Engine) helper() (*managedstdio.Source, error) {
 		return nil, fmt.Errorf("%w: HelperExecutable is required for this operation", ErrInvalidConfig)
 	}
 	return managedstdio.NewSource(e.cfg.HelperExecutable, e.cfg.HelperVersion)
+}
+
+// helperIdentity is the version plus SHA-256 of the helper bytes. UAP
+// managedstdio.Source stores the same digest; Prepare reports it without
+// requiring execute bits that Go Windows FileMode omits on regular files.
+func (e *Engine) helperIdentity() (version, digest string) {
+	version = e.cfg.HelperVersion
+	if e.cfg.HelperExecutable == "" {
+		return version, ""
+	}
+	body, err := os.ReadFile(e.cfg.HelperExecutable)
+	if err != nil {
+		return version, ""
+	}
+	sum := sha256.Sum256(body)
+	return version, hex.EncodeToString(sum[:])
 }
 
 func (e *Engine) ensureDirs() error {

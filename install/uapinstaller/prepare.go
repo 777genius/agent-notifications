@@ -130,13 +130,14 @@ func (e *Engine) prepareInstall(ctx context.Context, req Request) (*PreparedOper
 		return nil, wrapLifecycleError(err)
 	}
 	missing := missingRequired(envelope, req.RequiredComponents)
+	helperVersion, helperDigest := e.helperIdentity()
 	handle.plan = Plan{
 		Operation: OpInstall, SourceRoot: req.PackageRoot, TreeDigest: snapshot.TreeDigest,
 		DigestAlgorithm: snapshot.DigestAlgorithm, ClientID: string(client.ClientID),
 		ConfigRoot: req.ClientConfigRoot, TargetPath: preview.Plan.ActivePath,
-		InstallationID:  firstNonEmpty(req.InstallationID, preview.InstallationID),
-		BindingID:       domain.ComputeClientBindingID(firstNonEmpty(req.InstallationID, preview.InstallationID), string(preview.Plan.ClientID), string(preview.Plan.Scope), preview.Plan.ActivePath),
-		HelperVersion:   e.cfg.HelperVersion,
+		InstallationID: firstNonEmpty(req.InstallationID, preview.InstallationID),
+		BindingID:      domain.ComputeClientBindingID(firstNonEmpty(req.InstallationID, preview.InstallationID), string(preview.Plan.ClientID), string(preview.Plan.Scope), preview.Plan.ActivePath),
+		HelperVersion:  helperVersion, HelperDigest: helperDigest,
 		RequiredMissing: missing, NoChange: preview.NoChange,
 	}
 	handle.facts = BindingFacts{
@@ -180,9 +181,11 @@ func (e *Engine) prepareRemove(ctx context.Context, req Request) (*PreparedOpera
 		e.report(ProgressPrepare)
 		e.report(ProgressPreflight)
 		handle := &PreparedOperation{engine: e, req: req, client: client}
+		helperVersion, helperDigest := e.helperIdentity()
 		handle.plan = Plan{
 			Operation: OpRemove, ClientID: string(client.ClientID), ConfigRoot: req.ClientConfigRoot,
-			InstallationID: installation.InstallationID, HelperVersion: e.cfg.HelperVersion, NoChange: true,
+			InstallationID: installation.InstallationID, HelperVersion: helperVersion,
+			HelperDigest: helperDigest, NoChange: true,
 		}
 		handle.facts = BindingFacts{
 			InstallationID: installation.InstallationID, ClientID: string(client.ClientID),
@@ -196,10 +199,11 @@ func (e *Engine) prepareRemove(ctx context.Context, req Request) (*PreparedOpera
 		return nil, err
 	}
 	handle := &PreparedOperation{engine: e, req: req, client: client}
+	helperVersion, helperDigest := e.helperIdentity()
 	handle.plan = Plan{
 		Operation: OpRemove, ClientID: string(client.ClientID), ConfigRoot: req.ClientConfigRoot,
 		TargetPath: binding.TargetLocator, InstallationID: installation.InstallationID,
-		BindingID: binding.ClientBindingID, HelperVersion: e.cfg.HelperVersion,
+		BindingID: binding.ClientBindingID, HelperVersion: helperVersion, HelperDigest: helperDigest,
 	}
 	handle.facts = BindingFacts{
 		InstallationID: installation.InstallationID, ClientID: string(client.ClientID),
