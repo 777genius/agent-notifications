@@ -229,7 +229,7 @@ func readSnapshot(ctx context.Context, root string) (installruntime.PolicySnapsh
 		return installruntime.PolicySnapshot{}, installruntime.Identity{}, e
 	}
 	s, e := installruntime.ReadPolicySnapshot(ctx, root)
-	if e == nil && s.Preimage.Exists && s.Preimage.Mode != 0600 {
+	if e == nil && s.Preimage.Exists && s.Preimage.Mode != installruntime.IdentityMode(0600) {
 		e = fmt.Errorf("explicit policy must remain private")
 	}
 	return s, s.Preimage, e
