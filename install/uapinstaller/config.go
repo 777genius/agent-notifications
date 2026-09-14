@@ -31,6 +31,10 @@ type Config struct {
 	// Progress reports coarse phases. It must not return an error, prompt, or
 	// start a nested installer.
 	Progress func(ProgressEvent)
+	// ClientExecutables are optional explicit client paths Discover Lstats
+	// without executing. Empty entries fall back to PATH presence of the
+	// well-known binary name. New copies the map.
+	ClientExecutables map[string]string
 }
 
 func (c Config) resolved() (Config, error) {
@@ -66,6 +70,16 @@ func (c Config) resolved() (Config, error) {
 	}
 	if out.HelperExecutable != "" && !validRoot(out.HelperExecutable) {
 		return Config{}, fmt.Errorf("%w: HelperExecutable must be an explicit absolute clean path", ErrInvalidConfig)
+	}
+	if out.ClientExecutables != nil {
+		cloned := make(map[string]string, len(out.ClientExecutables))
+		for id, p := range out.ClientExecutables {
+			if p != "" && !validRoot(p) {
+				return Config{}, fmt.Errorf("%w: ClientExecutables[%s] must be an explicit absolute clean path", ErrInvalidConfig, id)
+			}
+			cloned[id] = p
+		}
+		out.ClientExecutables = cloned
 	}
 	return out, nil
 }

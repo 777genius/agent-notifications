@@ -1159,11 +1159,94 @@ func TestDiscoverDoesNotCreateStateOrRunHelper(t *testing.T) {
 	if len(got) != 2 || got[0].ClientID != "claude" || got[1].ClientID != "codex" {
 		t.Fatalf("discover: %+v", got)
 	}
+	if len(got[0].Scopes) != 1 || got[0].Scopes[0] != "user" {
+		t.Fatalf("scopes: %+v", got)
+	}
 	if runner.n != 0 {
 		t.Fatalf("discover ran helper %d times", runner.n)
 	}
 	if _, err := os.Lstat(root); !os.IsNotExist(err) {
 		t.Fatal("discover created state root")
+	}
+}
+
+func TestDiscoverReportsExecutablePresenceWithoutExecuting(t *testing.T) {
+	binDir := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "executed")
+	name := "claude"
+	body := "#!/bin/sh\ntouch " + marker + "\n"
+	if runtime.GOOS == "windows" {
+		name = "claude.bat"
+		body = "@echo off\r\necho.>" + marker + "\r\n"
+	}
+	path := filepath.Join(binDir, name)
+	if err := os.WriteFile(path, []byte(body), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	if runtime.GOOS == "windows" {
+		t.Setenv("PATHEXT", ".BAT;.COM;.EXE")
+	}
+	runner := &countingRunner{}
+	root := filepath.Join(t.TempDir(), "missing-state")
+	eng, err := New(Config{StateRoot: root, Runner: runner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := eng.Discover()
+	if runner.n != 0 {
+		t.Fatalf("discover ran helper %d times", runner.n)
+	}
+	if _, err := os.Lstat(marker); !os.IsNotExist(err) {
+		t.Fatal("discover executed PATH candidate")
+	}
+	if _, err := os.Lstat(root); !os.IsNotExist(err) {
+		t.Fatal("discover created state root")
+	}
+	if len(got) != 2 || !got[0].ExecutablePresent || got[0].ClientID != "claude" {
+		t.Fatalf("claude presence: %+v", got)
+	}
+	if got[0].ExecutablePath != path {
+		t.Fatalf("claude path: %s want %s", got[0].ExecutablePath, path)
+	}
+	if got[1].ExecutablePresent || got[1].ExecutablePath != "" {
+		t.Fatalf("codex should be absent: %+v", got[1])
+	}
+}
+
+func TestDiscoverLstatsExplicitPathWithoutExecuting(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "executed")
+	path := filepath.Join(dir, "codex-probe")
+	body := "#!/bin/sh\ntouch " + marker + "\n"
+	if runtime.GOOS == "windows" {
+		path = filepath.Join(dir, "codex-probe.bat")
+		body = "@echo off\r\necho.>" + marker + "\r\n"
+	}
+	if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", filepath.Join(dir, "empty-path"))
+	caller := map[string]string{"codex": path, "claude": filepath.Join(dir, "missing-claude")}
+	root := filepath.Join(t.TempDir(), "missing-state")
+	runner := &countingRunner{}
+	eng, err := New(Config{StateRoot: root, Runner: runner, ClientExecutables: caller})
+	if err != nil {
+		t.Fatal(err)
+	}
+	caller["codex"] = filepath.Join(dir, "mutated")
+	got := eng.Discover()
+	if runner.n != 0 {
+		t.Fatalf("discover ran helper %d times", runner.n)
+	}
+	if _, err := os.Lstat(marker); !os.IsNotExist(err) {
+		t.Fatal("discover executed explicit path")
+	}
+	if got[0].ExecutablePresent || got[0].ExecutablePath != "" {
+		t.Fatalf("missing explicit claude: %+v", got[0])
+	}
+	if !got[1].ExecutablePresent || got[1].ExecutablePath != path {
+		t.Fatalf("explicit codex: %+v", got[1])
 	}
 }
 
