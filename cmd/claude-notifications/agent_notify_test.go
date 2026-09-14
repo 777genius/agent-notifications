@@ -412,7 +412,8 @@ func TestAgentNotifyProcessBlockedMCP(t *testing.T) {
 						signaled = status.Signaled() && status.Signal() == syscall.SIGTERM
 					}
 				}
-				if !isExit || (e.ExitCode() != 2 && !(finish == "signal" && signaled)) {
+				joined := isExit && (e.ExitCode() == 2 || (finish == "signal" && signaled))
+				if !joined {
 					t.Fatalf("shutdown failed: %v", err)
 				}
 			}
