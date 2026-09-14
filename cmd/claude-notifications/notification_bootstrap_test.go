@@ -137,6 +137,53 @@ install_codex() { echo codex >> "$HOME/installs"; CONFIGURE_BINARY="$HOME/fake-b
 	}
 }
 
+func TestNotificationBootstrapWindowsGitBashUname(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join(notificationRepoRoot(t), "bin", "bootstrap.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := strings.TrimSuffix(strings.TrimSpace(string(source)), `main "$@"`)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	t.Setenv("CODEX_HOME", filepath.Join(home, "codex"))
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	binary := filepath.Join(home, "fake-binary")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then printf '%s\\n' 'setup-notifications' '--skip-agent-notify'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	script := prefix + `
+uname() { echo MINGW64_NT-10.0-26100; }
+print_header() { :; }
+abort_if_wsl_environment() { :; }
+check_prerequisites() { :; }
+detect_platform() { :; }
+install_cleanup_traps() { :; }
+resolve_bootstrap_release() { :; }
+stage_config_helper() { :; }
+stage_historical_baselines() { :; }
+config_preflight() { :; }
+initialize_config() { :; }
+install_claude() { echo claude >> "$HOME/installs"; PLUGIN_ROOT="$HOME/bundle"; }
+install_codex() { echo codex >> "$HOME/installs"; CONFIGURE_BINARY="$HOME/fake-binary"; return 0; }
+main --product both
+`
+	command := exec.Command("bash", "-c", script)
+	command.Dir = home
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v: %s", err, output)
+	}
+	calls, err := os.ReadFile(filepath.Join(home, "calls"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "setup-notifications configure --provider both --navigation none --allow-unknown-caller true --allow-caller-asserted false"
+	if strings.Count(string(calls), want) != 1 {
+		t.Fatal(string(calls))
+	}
+}
+
 func TestNotificationInitOfflineBranch(t *testing.T) {
 	source, err := os.ReadFile(filepath.Join(notificationRepoRoot(t), "commands", "init.md"))
 	if err != nil {

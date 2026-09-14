@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/testenv"
 	"io"
 	"net/http"
@@ -385,18 +386,13 @@ func TestSetupCodexE2EInstalledLaunchersSurviveReplacement(t *testing.T) {
 
 func TestSetupCodexE2EConfigureNotifications(t *testing.T) {
 	bin := buildCLIBinary(t)
-	if info, err := os.Stat(bin); err != nil {
-		t.Fatal(err)
-	} else if info.Size() > 32<<20 {
-		t.Skip("coverage-instrumented test executable exceeds the 32 MiB managed staging cap")
-	}
 	f := newSetupE2E(t)
-	body, err := os.ReadFile(bin)
-	if err != nil {
-		t.Fatal(err)
+	platform := "claude-notifications-" + runtime.GOOS + "-" + runtime.GOARCH
+	if runtime.GOOS == "windows" {
+		platform += ".exe"
 	}
-	e2eWrite(t, filepath.Join(f.bundle, "bin", "claude-notifications"), body)
-	if err := os.Chmod(filepath.Join(f.bundle, "bin", "claude-notifications"), 0700); err != nil {
+	e2eWrite(t, filepath.Join(f.bundle, "bin", platform), []byte("inert fixture "+installruntime.WriterProtocolMarker+"\n"))
+	if err := os.Chmod(filepath.Join(f.bundle, "bin", platform), 0700); err != nil {
 		t.Fatal(err)
 	}
 	e2eWrite(t, filepath.Join(f.bundle, "config", "config.json"), []byte(`{"notifications":{"desktop":{"enabled":false,"sound":false,"clickToFocus":false}}}`))
@@ -407,7 +403,7 @@ func TestSetupCodexE2EConfigureNotifications(t *testing.T) {
 	source := f.bundle
 	out, err := f.run(t, "", bin, "setup-codex", "--plugin-root", source, "--agent-notify", "--navigation", "none", "--allow-unknown-caller", "true", "--allow-caller-asserted", "false")
 	installDir := filepath.Join(f.home, ".codex", "claude-notifications-go")
-	command := filepath.Join(installDir, "bin", "claude-notifications")
+	command := managedNotificationCommand(installDir)
 	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
 		if err == nil {
 			t.Fatal("explicit --agent-notify on unsupported OS must be incomplete", out)

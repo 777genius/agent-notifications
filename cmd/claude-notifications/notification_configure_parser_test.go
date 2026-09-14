@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"path/filepath"
+	"runtime"
+	"testing"
+)
 
 func TestNotificationConfigureParserAndSetupOptIn(t *testing.T) {
 	for _, args := range [][]string{{}, {"--provider", "auto"}, {"--provider", "both", "--codex-home", "relative"}, {"--provider", "claude", "--navigation", "none", "--app", "/A.app"}} {
@@ -56,5 +60,13 @@ func TestNotificationConfigureParserAndSetupOptIn(t *testing.T) {
 	}
 	if opts, err := parseSetupCodexOptions([]string{"--print"}); err != nil || opts.configure {
 		t.Fatal("print should skip agent-notify", opts, err)
+	}
+	command := managedNotificationCommand(t.TempDir())
+	want := "claude-notifications"
+	if runtime.GOOS == "windows" {
+		want += ".bat"
+	}
+	if filepath.Base(command) != want {
+		t.Fatal(command)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -202,7 +203,7 @@ func configureNotifications(ctx context.Context, request notificationConfigureRe
 		if inv.State != "clear" {
 			return result, fail("inventory_" + inv.State)
 		}
-		r := clientsetup.Request{ControlRoot: deps.ControlRoot, RuntimeRoot: primary, Command: filepath.Join(primary, "bin", "claude-notifications"), ConfigPath: path, Provider: provider, Mode: clientsetup.Managed, ExpectedGeneration: result.Generation}
+		r := clientsetup.Request{ControlRoot: deps.ControlRoot, RuntimeRoot: primary, Command: managedNotificationCommand(primary), ConfigPath: path, Provider: provider, Mode: clientsetup.Managed, ExpectedGeneration: result.Generation}
 		facts, e := clientsetup.Inspect(ctx, r)
 		if e != nil {
 			return result, e
@@ -525,4 +526,15 @@ func parseNotificationConfigure(args []string) (r notificationConfigureRequest, 
 	a, _, err := parseAgentNotifySetup(route)
 	r.Route = a.route
 	return r, jsonOutput, err
+}
+
+// managedNotificationCommand is the ledger-owned stable alias. Unix keeps the
+// symlink name; Windows uses the generated BAT wrapper because identityMode
+// never stores Unix execute bits on the platform executable.
+func managedNotificationCommand(runtimeRoot string) string {
+	name := "claude-notifications"
+	if runtime.GOOS == "windows" {
+		name += ".bat"
+	}
+	return filepath.Join(runtimeRoot, "bin", name)
 }
