@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -27,7 +28,11 @@ func main() { json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true}) }
 `), 0600); err != nil {
 		t.Fatal(err)
 	}
-	out := filepath.Join(dir, "probe")
+	name := "probe"
+	if runtime.GOOS == "windows" {
+		name = "probe.exe"
+	}
+	out := filepath.Join(dir, name)
 	cmd := exec.Command("go", "build", "-o", out, src)
 	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
 	if body, err := cmd.CombinedOutput(); err != nil {
