@@ -14,4 +14,5 @@ var (
 	ErrPlanChanged      = errors.New("installer recovery plan changed")
 	ErrInvalidRequest   = errors.New("installer request rejected")
 	ErrIncomplete       = errors.New("required components missing from plan")
+	ErrUpdateRequired   = errors.New("install cannot change an active revision; use update")
 )

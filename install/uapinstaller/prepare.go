@@ -116,7 +116,7 @@ func (e *Engine) prepareInstall(ctx context.Context, req Request) (*PreparedOper
 	})
 	if err != nil {
 		_ = handle.closeLocked()
-		return nil, err
+		return nil, wrapLifecycleError(err)
 	}
 	missing := missingRequired(envelope, req.RequiredComponents)
 	handle.plan = Plan{
@@ -336,4 +336,17 @@ func findBinding(installation domain.Installation, client domain.ClientID) (doma
 		return binding, installation.DataReceipts[binding.DataReceiptID], true
 	}
 	return domain.ClientBinding{}, domain.DataReceipt{}, false
+}
+
+func wrapLifecycleError(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "run update separately") ||
+		strings.Contains(msg, "at a different revision; use update") ||
+		strings.Contains(msg, "use switch to change source") {
+		return fmt.Errorf("%w: %v", ErrUpdateRequired, err)
+	}
+	return err
 }
