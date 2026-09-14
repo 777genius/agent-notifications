@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -476,6 +477,31 @@ func TestPendingInstallForOtherClientConflicts(t *testing.T) {
 	req.Binding.Integration = portable.Claude
 	if _, err := svc.matchingReservation(req, "install"); !errors.Is(err, ErrIntentConflict) {
 		t.Fatalf("other client: %v", err)
+	}
+}
+
+func TestPendingInstallDifferentDigestConflicts(t *testing.T) {
+	b, ledger := bindingFixture(t)
+	config, cmd, ledger := ownedMCP(t, b, ledger)
+	svc := Service{}
+	req := Request{
+		Binding: b, ExpectedGeneration: ledger.Generation, Discovery: Discovery{ConfigPath: config, Command: cmd},
+		SourceDigest: strings.Repeat("a", 64),
+	}
+	if _, _, err := svc.publishHandoffReservation(testCtx(t), req, ledger.Generation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.matchingReservation(req, "install"); err != nil {
+		t.Fatal(err)
+	}
+	omitted := req
+	omitted.SourceDigest = ""
+	if _, err := svc.matchingReservation(omitted, "install"); err != nil {
+		t.Fatalf("omitted digest: %v", err)
+	}
+	req.SourceDigest = strings.Repeat("b", 64)
+	if _, err := svc.matchingReservation(req, "install"); !errors.Is(err, ErrIntentConflict) {
+		t.Fatalf("different digest: %v", err)
 	}
 }
 

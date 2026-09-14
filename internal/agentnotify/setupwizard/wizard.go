@@ -293,6 +293,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		materialize := portablesetup.MaterializeRequest{
 			Identity: id, Integration: agent, ExpectedGeneration: generation,
 			PackageRoot: req.PackageRoot, ClientConfigRoot: configPath, ClientExecutable: executable,
+			SourceRevision: req.ReleaseVersion, SourceDigest: req.PackageSHA256,
 			Discovery:   discovery(req, agent, runtimeRoot, snap),
 			OperationID: "wizard-install-" + string(agent),
 		}
