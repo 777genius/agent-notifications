@@ -2,8 +2,10 @@ package portablesetup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/statev2"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
@@ -240,7 +242,7 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 		RequiredComponents: []string{"mcp", "skills"},
 	})
 	if err != nil {
-		return portable.Binding{}, err
+		return portable.Binding{}, wrapUpdateRequired(err)
 	}
 	pb, err := Complete(req.Identity, req.Integration, result.Binding.ClientID, result.Binding.Scope, result.Binding.TargetPath, result.Binding.DataRoot)
 	if err != nil {
@@ -250,6 +252,94 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 		return portable.Binding{}, err
 	}
 	return pb, nil
+}
+
+func IsUpdateRequired(err error) bool {
+	return errors.Is(err, ErrUpdateRequired) || (err != nil && strings.Contains(err.Error(), "run update separately"))
+}
+
+func wrapUpdateRequired(err error) error {
+	if err == nil {
+		return nil
+	}
+	if IsUpdateRequired(err) && !errors.Is(err, ErrUpdateRequired) {
+		return fmt.Errorf("%w: %v", ErrUpdateRequired, err)
+	}
+	return err
+}
+
+func (m Materializer) OtherLiveClients(installationID, adding string) ([]string, error) {
+	if installationID == "" {
+		return nil, nil
+	}
+	state, err := m.Store.Load()
+	if err != nil {
+		return nil, err
+	}
+	installation, ok := findInstallation(state, installationID)
+	if !ok {
+		return nil, nil
+	}
+	var others []string
+	for _, binding := range installation.Clients {
+		if binding.ClientID != adding {
+			others = append(others, binding.ClientID)
+		}
+	}
+	return others, nil
+}
+
+func (m Materializer) PreviewInstall(ctx context.Context, req MaterializeRequest) (uapinstaller.Plan, error) {
+	if ctx == nil {
+		return uapinstaller.Plan{}, ErrPreflight
+	}
+	if err := m.validate(req, true); err != nil {
+		return uapinstaller.Plan{}, err
+	}
+	eng, err := m.engine(req, new(uint64), nil)
+	if err != nil {
+		return uapinstaller.Plan{}, err
+	}
+	if err := eng.Recover(ctx); err != nil {
+		return uapinstaller.Plan{}, err
+	}
+	prepared, err := eng.Prepare(ctx, uapinstaller.Request{
+		Operation: uapinstaller.OpInstall, PackageRoot: req.PackageRoot, ClientID: string(req.Integration),
+		ClientConfigRoot: req.ClientConfigRoot, ClientExecutable: req.ClientExecutable,
+		InstallationID: req.Identity.InstallationID, OperationID: req.OperationID + "-preview",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		return uapinstaller.Plan{}, wrapUpdateRequired(err)
+	}
+	defer func() { _ = prepared.Close() }()
+	return prepared.Plan(), nil
+}
+
+func (m Materializer) GuardSecondClient(ctx context.Context, req MaterializeRequest) error {
+	others, err := m.OtherLiveClients(req.Identity.InstallationID, string(req.Integration))
+	if err != nil {
+		return err
+	}
+	if len(others) == 0 {
+		return nil
+	}
+	plan, err := m.PreviewInstall(ctx, req)
+	if err != nil {
+		return wrapUpdateRequired(err)
+	}
+	state, err := m.Store.Load()
+	if err != nil {
+		return err
+	}
+	installation, ok := findInstallation(state, req.Identity.InstallationID)
+	if !ok {
+		return nil
+	}
+	if installation.Source.TreeDigest != "" && plan.TreeDigest != "" && installation.Source.TreeDigest != plan.TreeDigest {
+		return fmt.Errorf("%w: recorded digest %s desired %s", ErrUpdateRequired, installation.Source.TreeDigest, plan.TreeDigest)
+	}
+	return nil
 }
 
 func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error {

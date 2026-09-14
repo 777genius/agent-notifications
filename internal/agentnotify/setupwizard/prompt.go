@@ -162,6 +162,18 @@ func RetryCommand(req Request) []string {
 	if req.AgentNotify != nil {
 		cmd = append(cmd, "--agent-notify", boolFlag(*req.AgentNotify))
 	}
+	if req.ClaudeHooks != nil {
+		cmd = append(cmd, "--claude-hooks", boolFlag(*req.ClaudeHooks))
+	}
+	if req.CodexHooks != nil {
+		cmd = append(cmd, "--codex-hooks", boolFlag(*req.CodexHooks))
+	}
+	if req.ClaudeAgentNotify != nil {
+		cmd = append(cmd, "--claude-agent-notify", boolFlag(*req.ClaudeAgentNotify))
+	}
+	if req.CodexAgentNotify != nil {
+		cmd = append(cmd, "--codex-agent-notify", boolFlag(*req.CodexAgentNotify))
+	}
 	appendPath := func(flag, value string) {
 		if value != "" {
 			cmd = append(cmd, flag, value)
@@ -175,6 +187,10 @@ func RetryCommand(req Request) []string {
 	appendPath("--codex-home", req.CodexHome)
 	appendPath("--claude-config", req.ClaudeConfig)
 	appendPath("--client-executable", req.ClientExecutable)
+	if req.ClientExecutables != nil {
+		appendPath("--claude-executable", req.ClientExecutables["claude"])
+		appendPath("--codex-executable", req.ClientExecutables["codex"])
+	}
 	appendPath("--helper", req.Helper)
 	appendPath("--scope-root", req.ScopeRoot)
 	if req.InstallationID != "" {

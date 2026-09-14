@@ -4,12 +4,15 @@ package setupwizard
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/ports"
 
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/testenv"
@@ -258,4 +261,250 @@ func TestWizardCodexHooksWithoutConfigure(t *testing.T) {
 	if err == nil && strings.Contains(string(data), "codex-hook-wrapper") {
 		t.Fatalf("hooks survived uninstall: %s", data)
 	}
+}
+
+type listingRunner struct {
+	configRoot string
+}
+
+func (r listingRunner) Run(_ context.Context, _ ports.Command) (ports.CommandResult, error) {
+	root := filepath.Join(r.configRoot, "skills")
+	entries, err := os.ReadDir(root)
+	if os.IsNotExist(err) {
+		return ports.CommandResult{Stdout: []byte("[]")}, nil
+	}
+	if err != nil {
+		return ports.CommandResult{}, err
+	}
+	listed := make([]map[string]any, 0)
+	for _, entry := range entries {
+		if !entry.IsDir() || entry.Name()[0] == '.' {
+			continue
+		}
+		path := filepath.Join(root, entry.Name())
+		body, readErr := os.ReadFile(filepath.Join(path, ".claude-plugin", "plugin.json"))
+		if readErr != nil {
+			continue
+		}
+		var manifest map[string]any
+		if json.Unmarshal(body, &manifest) != nil {
+			continue
+		}
+		name, _ := manifest["name"].(string)
+		listed = append(listed, map[string]any{
+			"id": name + "@skills-dir", "version": manifest["version"], "scope": "user",
+			"enabled": true, "installPath": path,
+		})
+	}
+	body, err := json.Marshal(listed)
+	return ports.CommandResult{Stdout: body}, err
+}
+
+func TestWizardMixedPerClientOptOuts(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	claudeConfig := filepath.Join(filepath.Dir(control), "claude-profile")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	off, on := false, true
+	req := Request{
+		Action: ActionInstall, Agents: []string{"claude", "codex"}, Yes: true,
+		Hooks: &off, ClaudeAgentNotify: &off, CodexAgentNotify: &on,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClaudeConfig: claudeConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("mixed install: %+v %v", installed, err)
+	}
+	req.Action = ActionInspect
+	req.Yes = false
+	view, err := Run(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var claudeMCP, codexMCP string
+	for _, target := range view.Targets {
+		if target.Unit != "agent-notify" {
+			continue
+		}
+		switch target.Client {
+		case "claude":
+			claudeMCP = target.Outcome
+		case "codex":
+			codexMCP = target.Outcome
+		}
+	}
+	if claudeMCP == "installed" || codexMCP != "installed" {
+		t.Fatalf("mixed opt-outs: %+v", view.Targets)
+	}
+	if len(view.Readiness) == 0 {
+		t.Fatal("inspect omitted readiness")
+	}
+	for _, fact := range view.Readiness {
+		if fact.Permission != "unsupported" || fact.Delivery != "not_verified" {
+			t.Fatalf("readiness mixed download with delivery: %+v", fact)
+		}
+	}
+}
+
+func TestWizardSecondClientAddDoesNotReviseExisting(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	claudeConfig := filepath.Join(filepath.Dir(control), "claude-profile")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	off := false
+	base := Request{
+		Action: ActionInstall, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClaudeConfig: claudeConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot:    filepath.Join(filepath.Dir(control), "scope"),
+		ClaudeRunner: listingRunner{configRoot: claudeConfig},
+	}
+	if err := os.MkdirAll(base.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	claudeReq := base
+	claudeReq.Agents = []string{"claude"}
+	installed, err := Run(ctx, claudeReq)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("claude: %+v %v", installed, err)
+	}
+	if installed.Readiness[0].Restart != "pending" || installed.Readiness[0].Delivery != "not_verified" {
+		t.Fatalf("install readiness: %+v", installed.Readiness)
+	}
+	claudeBinding := ""
+	for _, target := range installed.Targets {
+		if target.Unit == "agent-notify" {
+			claudeBinding = target.Reason
+		}
+	}
+	otherPkg := filepath.Join(filepath.Dir(control), "other-package")
+	writePackage(t, otherPkg, probe)
+	if err := os.WriteFile(filepath.Join(otherPkg, "skills", "agent-notify", "SKILL.md"), []byte("---\nname: agent-notify\ndescription: Revised\n---\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	mismatch := base
+	mismatch.Agents = []string{"codex"}
+	mismatch.PackageRoot = otherPkg
+	blocked, err := Run(ctx, mismatch)
+	if err == nil || blocked.Outcome != "incomplete" || blocked.Reason != "update_required" {
+		t.Fatalf("mismatch: %+v %v", blocked, err)
+	}
+	if len(blocked.NextActions) != 2 || blocked.NextActions[0].Kind != "update" || blocked.NextActions[1].Kind != "install" {
+		t.Fatalf("next: %+v", blocked.NextActions)
+	}
+	codexReq := base
+	codexReq.Agents = []string{"codex"}
+	added, err := Run(ctx, codexReq)
+	if err != nil || added.Outcome != "completed" {
+		t.Fatalf("codex add: %+v %v", added, err)
+	}
+	inspectReq := base
+	inspectReq.Action = ActionInspect
+	inspectReq.Yes = false
+	inspectReq.Agents = []string{"claude", "codex"}
+	view, err := Run(ctx, inspectReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var claudeOK, codexOK bool
+	for _, target := range view.Targets {
+		if target.Unit != "agent-notify" || target.Outcome != "installed" {
+			continue
+		}
+		if target.Client == "claude" {
+			if target.Reason != claudeBinding {
+				t.Fatalf("claude binding revised: %s vs %s", claudeBinding, target.Reason)
+			}
+			claudeOK = true
+		}
+		if target.Client == "codex" {
+			codexOK = true
+		}
+	}
+	if !claudeOK || !codexOK {
+		t.Fatalf("second client inspect: %+v", view.Targets)
+	}
+}
+
+func TestWizardReinstallRetainsInstallation(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	statePath := filepath.Join(filepath.Dir(control), "uap", "state", "state-v2.json")
+	firstID := installationIDFromState(t, statePath)
+	req.Action = ActionUninstall
+	removed, err := Run(ctx, req)
+	if err != nil || removed.Outcome != "completed" {
+		t.Fatalf("uninstall: %+v %v", removed, err)
+	}
+	req.Action = ActionInstall
+	req.InstallationID = firstID
+	reinstalled, err := Run(ctx, req)
+	if err != nil || reinstalled.Outcome != "completed" {
+		t.Fatalf("reinstall: %+v %v", reinstalled, err)
+	}
+	if got := installationIDFromState(t, statePath); got != firstID {
+		t.Fatalf("retained installation lost: %s vs %s", firstID, got)
+	}
+}
+
+func installationIDFromState(t *testing.T, path string) string {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state struct {
+		Installations []struct {
+			InstallationID string `json:"installation_id"`
+		} `json:"installations"`
+	}
+	if err := json.Unmarshal(body, &state); err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Installations) != 1 || state.Installations[0].InstallationID == "" {
+		t.Fatalf("installations: %s", body)
+	}
+	return state.Installations[0].InstallationID
 }

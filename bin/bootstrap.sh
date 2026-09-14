@@ -1275,6 +1275,10 @@ cli_has_setup_notifications() {
     cli_help "$1" | grep -Fq -- 'setup-notifications'
 }
 
+cli_has_setup_wizard() {
+    cli_help "$1" | grep -Fq -- 'setup-notifications wizard'
+}
+
 # Optional exact-version release templates. Releases without this verified asset
 # intentionally leave baseline unknown and require explicit historical import.
 stage_historical_baselines() {
@@ -1505,11 +1509,12 @@ main() {
         fi
     fi
     initialize_config || return 1
-    configure_agent_notify
+    configure_agent_notify || return 1
     [ "$PRODUCT" != claude ] || print_success
 }
 
-# Agent-notify is default-on, but a failed configure must not undo hooks/plugin install.
+# Agent-notify is default-on. A failed setup must not undo hooks/plugin install,
+# but it is incomplete: bootstrap does not print overall success.
 configure_agent_notify() {
     [ "$CONFIGURE_NOTIFICATIONS" = true ] || return 0
     if [ -z "$CONFIGURE_BINARY" ]; then
@@ -1520,6 +1525,10 @@ configure_agent_notify() {
         echo -e "${YELLOW}  Plugin/hooks install succeeded. Retry after the binary is available.${NC}" >&2
         return 0
     fi
+    if cli_has_setup_wizard "$CONFIGURE_BINARY"; then
+        setup_agent_notify_wizard
+        return $?
+    fi
     if ! cli_has_setup_notifications "$CONFIGURE_BINARY"; then
         echo -e "${YELLOW}⚠ Agent-notify setup skipped; this published CLI does not support setup-notifications.${NC}" >&2
         echo -e "${YELLOW}  Plugin/hooks install succeeded. Desktop/hook notifications still work.${NC}" >&2
@@ -1529,6 +1538,79 @@ configure_agent_notify() {
         echo -e "${YELLOW}⚠ Agent-notify setup failed; plugin/hooks install succeeded.${NC}" >&2
         echo -e "${YELLOW}  Desktop/hook notifications still work. Retry:${NC}" >&2
         echo -e "${YELLOW}  \"$CONFIGURE_BINARY\" setup-notifications configure --provider ${PRODUCT} ${CONFIGURE_ARGS[*]}${NC}" >&2
+        return 1
+    fi
+    return 0
+}
+
+bootstrap_abs_command() {
+    local found
+    found=$(command -v "$1" 2>/dev/null) || return 1
+    case "$found" in
+        /*|[A-Za-z]:/*|[A-Za-z]:\\*) printf '%s\n' "$found" ;;
+        *) return 1 ;;
+    esac
+}
+
+setup_agent_notify_wizard() {
+    local agents package_root install_root wizard_codex_home="" i=0
+    local claude_exec="" codex_exec="" plugin_root
+    case "$PRODUCT" in
+        claude) agents=claude ;;
+        codex) agents=codex ;;
+        both) agents=claude,codex ;;
+        *) echo "invalid product for wizard: $PRODUCT" >&2; return 1 ;;
+    esac
+    while [ "$i" -lt "${#CONFIGURE_ARGS[@]}" ]; do
+        if [ "${CONFIGURE_ARGS[$i]}" = "--codex-home" ]; then
+            i=$((i + 1))
+            wizard_codex_home="${CONFIGURE_ARGS[$i]}"
+        fi
+        i=$((i + 1))
+    done
+    plugin_root="$PLUGIN_ROOT"
+    if [ -z "$plugin_root" ]; then
+        plugin_root=$(cd "$(dirname "$CONFIGURE_BINARY")/.." && pwd)
+    fi
+    if [ -f "$plugin_root/portable-package/plugin.json" ]; then
+        package_root="$plugin_root/portable-package"
+    else
+        install_root=$(cd "$(dirname "$CONFIGURE_BINARY")/.." && pwd)
+        if [ -f "$install_root/portable-package/plugin.json" ]; then
+            package_root="$install_root/portable-package"
+            plugin_root="$install_root"
+        fi
+    fi
+    if [ -z "${package_root:-}" ]; then
+        echo -e "${YELLOW}⚠ Agent-notify wizard skipped; portable-package is missing from the installed bundle.${NC}" >&2
+        echo -e "${YELLOW}  Plugin/hooks install succeeded. Retry:${NC}" >&2
+        echo -e "${YELLOW}  \"$CONFIGURE_BINARY\" setup-notifications wizard --action install --agents ${agents} --hooks false --agent-notify true --yes${NC}" >&2
+        return 1
+    fi
+    if [ "$PRODUCT" != codex ]; then
+        claude_exec=$(bootstrap_abs_command claude) || true
+    fi
+    if [ "$PRODUCT" != claude ]; then
+        codex_exec=$(bootstrap_abs_command codex) || true
+    fi
+    set -- setup-notifications wizard --action install --agents "$agents" --hooks false --agent-notify true --yes \
+        --package "$package_root" --plugin-root "$plugin_root" --helper "$CONFIGURE_BINARY"
+    [ -z "$wizard_codex_home" ] || set -- "$@" --codex-home "$wizard_codex_home"
+    [ -z "${CLAUDE_CONFIG_DIR:-}" ] || set -- "$@" --claude-config "$CLAUDE_CONFIG_DIR"
+    [ -z "$claude_exec" ] || set -- "$@" --claude-executable "$claude_exec"
+    [ -z "$codex_exec" ] || set -- "$@" --codex-executable "$codex_exec"
+    if [ "$PRODUCT" != both ] && [ -n "$claude_exec$codex_exec" ]; then
+        if [ -n "$claude_exec" ]; then
+            set -- "$@" --client-executable "$claude_exec"
+        else
+            set -- "$@" --client-executable "$codex_exec"
+        fi
+    fi
+    if ! "$CONFIGURE_BINARY" "$@"; then
+        echo -e "${YELLOW}⚠ Agent-notify setup failed; plugin/hooks install succeeded.${NC}" >&2
+        echo -e "${YELLOW}  Desktop/hook notifications still work. Retry:${NC}" >&2
+        echo -e "${YELLOW}  \"$CONFIGURE_BINARY\" $*${NC}" >&2
+        return 1
     fi
     return 0
 }

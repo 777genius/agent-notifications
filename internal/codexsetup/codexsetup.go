@@ -671,7 +671,7 @@ func writeHooksFile(path string, content hooksFile, expected []byte, existed boo
 // Only runtime assets belong in the installed bundle. User config and logs
 // at the installation root are never refreshed from the source.
 func runtimeEntry(name string) bool {
-	return name == "bin" || name == "sounds" || name == "config" || name == "skills" || name == "claude_icon.png" || name == ".claude-plugin"
+	return name == "bin" || name == "sounds" || name == "config" || name == "skills" || name == "claude_icon.png" || name == ".claude-plugin" || name == "portable-package"
 }
 
 func validateInstallPath(path string) error {

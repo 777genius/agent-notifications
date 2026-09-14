@@ -54,12 +54,15 @@ func TestFillInteractiveLeavesInspectAlone(t *testing.T) {
 
 func TestRetryCommandIncludesYesAndPaths(t *testing.T) {
 	off := false
+	claudeOff := false
 	cmd := RetryCommand(Request{
-		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
-		ControlRoot: "/tmp/control", CodexHome: "/tmp/codex",
+		Action: ActionInstall, Agents: []string{"claude", "codex"}, Yes: true, Hooks: &off,
+		ClaudeAgentNotify: &claudeOff,
+		ControlRoot:       "/tmp/control", CodexHome: "/tmp/codex",
+		ClientExecutables: map[string]string{"claude": "/bin/claude", "codex": "/bin/codex"},
 	})
 	joined := strings.Join(cmd, " ")
-	if !strings.Contains(joined, "--action install") || !strings.Contains(joined, "--agents codex") || !strings.Contains(joined, "--yes") || !strings.Contains(joined, "--hooks false") {
+	if !strings.Contains(joined, "--agents claude,codex") || !strings.Contains(joined, "--claude-executable /bin/claude") || !strings.Contains(joined, "--codex-executable /bin/codex") || !strings.Contains(joined, "--claude-agent-notify false") {
 		t.Fatalf("command: %v", cmd)
 	}
 }

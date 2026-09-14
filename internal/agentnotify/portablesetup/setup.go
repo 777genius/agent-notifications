@@ -15,7 +15,10 @@ import (
 	"github.com/777genius/agent-notifications/internal/installruntime"
 )
 
-var ErrPreflight = errors.New("portable setup refused")
+var (
+	ErrPreflight      = errors.New("portable setup refused")
+	ErrUpdateRequired = errors.New("existing clients require explicit update before add")
+)
 
 // Envelope is the root MCP command projected for one explicit integration.
 type Envelope struct {

@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"path/filepath"
 
+	processadapter "github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/process"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/providers"
 
 	"github.com/777genius/agent-notifications/internal/agentnotify/clientsetup"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
@@ -39,21 +41,49 @@ type Request struct {
 	PackageRoot, PluginRoot, ControlRoot, RuntimeRoot string
 	GlobalConfig, CodexHome, ClaudeConfig             string
 	ClientExecutable, ScopeRoot, Helper               string
+	ClientExecutables                                 map[string]string
 	InstallationID, Primary                           string
 	MCPConfig                                         map[string]string
+	ClaudeHooks, CodexHooks                           *bool
+	ClaudeAgentNotify, CodexAgentNotify               *bool
+	// ClaudeRunner overrides Claude activation probing. Production leaves it
+	// nil so the OS process runner is used. Isolated tests inject a listing
+	// fixture; the field is never parsed from CLI flags.
+	ClaudeRunner providers.CommandRunner
 }
 
 type TargetResult struct {
 	Client, Unit, Outcome, Reason string
 }
 
+// ReadinessFact is independent of binary download. Inspect and mutation both
+// report these fields; not_verified/unsupported are not installation failure.
+type ReadinessFact struct {
+	Client     string `json:"client"`
+	Runtime    string `json:"runtime"`
+	Hooks      string `json:"hooks"`
+	MCP        string `json:"mcp"`
+	Permission string `json:"permission"`
+	Restart    string `json:"restart"`
+	Delivery   string `json:"delivery"`
+}
+
+type NextAction struct {
+	Kind    string   `json:"kind"`
+	Agents  []string `json:"agents,omitempty"`
+	Command []string `json:"command,omitempty"`
+	Reason  string   `json:"reason,omitempty"`
+}
+
 type Result struct {
-	Action     string         `json:"action"`
-	Outcome    string         `json:"outcome"`
-	Reason     string         `json:"reason,omitempty"`
-	Generation uint64         `json:"generation,omitempty"`
-	Command    []string       `json:"command,omitempty"`
-	Targets    []TargetResult `json:"targets,omitempty"`
+	Action      string          `json:"action"`
+	Outcome     string          `json:"outcome"`
+	Reason      string          `json:"reason,omitempty"`
+	Generation  uint64          `json:"generation,omitempty"`
+	Command     []string        `json:"command,omitempty"`
+	Targets     []TargetResult  `json:"targets,omitempty"`
+	Readiness   []ReadinessFact `json:"readiness,omitempty"`
+	NextActions []NextAction    `json:"nextActions,omitempty"`
 }
 
 func (r Result) ExitCode() int {
@@ -120,23 +150,22 @@ func run(ctx context.Context, req Request) (Result, error) {
 		out.Outcome, out.Reason = "invalid", "runtime_root_required"
 		return out, ErrRefused
 	}
-	hooks := unitOn(req.Hooks, req.Action != ActionInspect)
-	notify := unitOn(req.AgentNotify, req.Action != ActionInspect)
 	if req.Action == ActionInspect {
-		hooks, notify = true, true
+		got, err := inspect(ctx, req, agents, snap, runtimeRoot, out)
+		return attachReadiness(agents, got, false), err
 	}
-	if !hooks && !notify {
+	hookAgents, notifyAgents := selectedUnits(req, agents)
+	if len(hookAgents) == 0 && len(notifyAgents) == 0 {
 		out.Outcome, out.Reason = "cancelled", "empty_units"
 		return out, nil
 	}
-	switch req.Action {
-	case ActionInspect:
-		return inspect(ctx, req, agents, snap, runtimeRoot, out)
-	case ActionInstall:
-		return install(ctx, req, agents, snap, runtimeRoot, hooks, notify, out)
-	default:
-		return uninstall(ctx, req, agents, snap, runtimeRoot, hooks, notify, out)
+	var got Result
+	if req.Action == ActionInstall {
+		got, err = install(ctx, req, snap, runtimeRoot, hookAgents, notifyAgents, out)
+		return attachReadiness(agents, got, true), err
 	}
+	got, err = uninstall(ctx, req, snap, runtimeRoot, hookAgents, notifyAgents, out)
+	return attachReadiness(agents, got, false), err
 }
 
 func inspect(ctx context.Context, req Request, agents []portable.Integration, snap installruntime.InstalledSnapshot, runtimeRoot string, out Result) (Result, error) {
@@ -191,10 +220,10 @@ func inspect(ctx context.Context, req Request, agents []portable.Integration, sn
 	return out, nil
 }
 
-func install(ctx context.Context, req Request, agents []portable.Integration, snap installruntime.InstalledSnapshot, runtimeRoot string, hooks, notify bool, out Result) (Result, error) {
-	if hooks {
+func install(ctx context.Context, req Request, snap installruntime.InstalledSnapshot, runtimeRoot string, hookAgents, notifyAgents []portable.Integration, out Result) (Result, error) {
+	if len(hookAgents) > 0 {
 		var err error
-		out, err = applyHooks(ctx, req, agents, snap, false, out)
+		out, err = applyHooks(ctx, req, hookAgents, snap, false, out)
 		if err != nil || out.Outcome == "incomplete" || out.Outcome == "invalid" {
 			return out, err
 		}
@@ -206,16 +235,12 @@ func install(ctx context.Context, req Request, agents []portable.Integration, sn
 		out.Generation = generation
 		snap.Ledger.Generation = generation
 	}
-	if !notify {
+	if len(notifyAgents) == 0 {
 		out.Outcome = "completed"
 		return out, nil
 	}
 	if !explicitAbs(req.PackageRoot) {
 		out.Outcome, out.Reason = "incomplete", "package_required"
-		return out, ErrRefused
-	}
-	if req.ClientExecutable == "" || !filepath.IsAbs(req.ClientExecutable) {
-		out.Outcome, out.Reason = "incomplete", "client_executable_required"
 		return out, ErrRefused
 	}
 	mat, err := materializer(req, snap, runtimeRoot)
@@ -229,20 +254,45 @@ func install(ctx context.Context, req Request, agents []portable.Integration, sn
 		return out, err
 	}
 	generation := snap.Ledger.Generation
-	for _, agent := range agents {
+	for _, agent := range notifyAgents {
 		configPath := clientConfig(req, agent)
 		if !explicitAbs(configPath) {
 			out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: "client_config_required"})
 			out.Outcome, out.Reason = "incomplete", "client_config_required"
 			return out, ErrRefused
 		}
-		got, err := mat.Install(ctx, portablesetup.MaterializeRequest{
+		executable := clientExecutable(req, agent)
+		if !explicitAbs(executable) {
+			out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: "client_executable_required"})
+			out.Outcome, out.Reason = "incomplete", "client_executable_required"
+			return out, ErrRefused
+		}
+		materialize := portablesetup.MaterializeRequest{
 			Identity: id, Integration: agent, ExpectedGeneration: generation,
-			PackageRoot: req.PackageRoot, ClientConfigRoot: configPath, ClientExecutable: req.ClientExecutable,
+			PackageRoot: req.PackageRoot, ClientConfigRoot: configPath, ClientExecutable: executable,
 			Discovery:   discovery(req, agent, runtimeRoot, snap),
 			OperationID: "wizard-install-" + string(agent),
-		})
+		}
+		if others, err := mat.OtherLiveClients(id.InstallationID, string(agent)); err != nil {
+			out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: err.Error()})
+			out.Outcome, out.Reason = "incomplete", "portable_inspect_failed"
+			return out, err
+		} else if len(others) > 0 {
+			if err := mat.GuardSecondClient(ctx, materialize); err != nil {
+				if portablesetup.IsUpdateRequired(err) {
+					return updateRequired(req, agent, others, out, err)
+				}
+				out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: err.Error()})
+				out.Outcome, out.Reason = "incomplete", "portable_install_failed"
+				return out, err
+			}
+		}
+		got, err := mat.Install(ctx, materialize)
 		if err != nil {
+			if portablesetup.IsUpdateRequired(err) {
+				others, _ := mat.OtherLiveClients(id.InstallationID, string(agent))
+				return updateRequired(req, agent, others, out, err)
+			}
 			out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: err.Error()})
 			out.Outcome, out.Reason = "incomplete", "portable_install_failed"
 			return out, err
@@ -260,10 +310,10 @@ func install(ctx context.Context, req Request, agents []portable.Integration, sn
 	return out, nil
 }
 
-func uninstall(ctx context.Context, req Request, agents []portable.Integration, snap installruntime.InstalledSnapshot, runtimeRoot string, hooks, notify bool, out Result) (Result, error) {
-	if hooks {
+func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSnapshot, runtimeRoot string, hookAgents, notifyAgents []portable.Integration, out Result) (Result, error) {
+	if len(hookAgents) > 0 {
 		var err error
-		out, err = applyHooks(ctx, req, agents, snap, true, out)
+		out, err = applyHooks(ctx, req, hookAgents, snap, true, out)
 		if err != nil || out.Outcome == "incomplete" || out.Outcome == "invalid" {
 			return out, err
 		}
@@ -275,13 +325,9 @@ func uninstall(ctx context.Context, req Request, agents []portable.Integration, 
 		out.Generation = generation
 		snap.Ledger.Generation = generation
 	}
-	if !notify {
+	if len(notifyAgents) == 0 {
 		out.Outcome = "completed"
 		return out, nil
-	}
-	if req.ClientExecutable == "" || !filepath.IsAbs(req.ClientExecutable) {
-		out.Outcome, out.Reason = "incomplete", "client_executable_required"
-		return out, ErrRefused
 	}
 	mat, err := materializer(req, snap, runtimeRoot)
 	if err != nil {
@@ -309,16 +355,22 @@ func uninstall(ctx context.Context, req Request, agents []portable.Integration, 
 	}
 	generation := snap.Ledger.Generation
 	removed := 0
-	for _, agent := range agents {
+	for _, agent := range notifyAgents {
 		configPath := clientConfig(req, agent)
 		if !explicitAbs(configPath) {
 			out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: "client_config_required"})
 			out.Outcome, out.Reason = "incomplete", "client_config_required"
 			return out, ErrRefused
 		}
+		executable := clientExecutable(req, agent)
+		if !explicitAbs(executable) {
+			out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: "client_executable_required"})
+			out.Outcome, out.Reason = "incomplete", "client_executable_required"
+			return out, ErrRefused
+		}
 		err := mat.Remove(ctx, portablesetup.MaterializeRequest{
 			Identity: id, Integration: agent, ExpectedGeneration: generation,
-			ClientConfigRoot: configPath, ClientExecutable: req.ClientExecutable,
+			ClientConfigRoot: configPath, ClientExecutable: executable,
 			Discovery:   discovery(req, agent, runtimeRoot, snap),
 			OperationID: "wizard-remove-" + string(agent), ExternalUninstalled: true,
 		})
@@ -344,6 +396,21 @@ func uninstall(ctx context.Context, req Request, agents []portable.Integration, 
 	return out, nil
 }
 
+func updateRequired(req Request, adding portable.Integration, others []string, out Result, err error) (Result, error) {
+	out.Targets = append(out.Targets, TargetResult{Client: string(adding), Unit: "agent-notify", Outcome: "incomplete", Reason: "update_required"})
+	out.Outcome, out.Reason = "incomplete", "update_required"
+	updateReq := req
+	updateReq.Action = ActionUpdate
+	updateReq.Agents = others
+	addReq := req
+	addReq.Agents = []string{string(adding)}
+	out.NextActions = []NextAction{
+		{Kind: "update", Agents: others, Command: RetryCommand(updateReq), Reason: "update_existing_before_add"},
+		{Kind: "install", Agents: []string{string(adding)}, Command: RetryCommand(addReq), Reason: "add_after_update"},
+	}
+	return out, err
+}
+
 func materializer(req Request, snap installruntime.InstalledSnapshot, runtimeRoot string) (portablesetup.Materializer, error) {
 	helper := req.Helper
 	if helper == "" {
@@ -351,6 +418,10 @@ func materializer(req Request, snap installruntime.InstalledSnapshot, runtimeRoo
 	}
 	if !explicitAbs(helper) {
 		return portablesetup.Materializer{}, fmt.Errorf("%w: helper must be explicit", ErrRefused)
+	}
+	runner := req.ClaudeRunner
+	if runner == nil {
+		runner = processadapter.OS{}
 	}
 	uapRoot := filepath.Join(filepath.Dir(req.ControlRoot), "uap")
 	return portablesetup.NewMaterializer(portablesetup.UAPRoots{
@@ -360,6 +431,7 @@ func materializer(req Request, snap installruntime.InstalledSnapshot, runtimeRoo
 		PluginDataBase:   filepath.Join(uapRoot, "plugin-data"),
 		ManagedRoot:      filepath.Join(uapRoot, "managed"),
 		HelperExecutable: helper,
+		ClaudeRunner:     runner,
 	})
 }
 
@@ -424,6 +496,15 @@ func clientConfig(req Request, agent portable.Integration) string {
 	}
 }
 
+func clientExecutable(req Request, agent portable.Integration) string {
+	if req.ClientExecutables != nil {
+		if path := req.ClientExecutables[string(agent)]; path != "" {
+			return path
+		}
+	}
+	return req.ClientExecutable
+}
+
 func discoveryProvider(agent portable.Integration) registration.Provider {
 	switch agent {
 	case portable.Codex:
@@ -465,11 +546,95 @@ func normalizeAgents(agents []string) ([]portable.Integration, error) {
 	return out, nil
 }
 
+func selectedUnits(req Request, agents []portable.Integration) (hooks, notify []portable.Integration) {
+	defaultOn := req.Action != ActionInspect
+	for _, agent := range agents {
+		if agentUnit(req.Hooks, perClientHooks(req, agent), defaultOn) {
+			hooks = append(hooks, agent)
+		}
+		if agentUnit(req.AgentNotify, perClientNotify(req, agent), defaultOn) {
+			notify = append(notify, agent)
+		}
+	}
+	return hooks, notify
+}
+
+func perClientHooks(req Request, agent portable.Integration) *bool {
+	switch agent {
+	case portable.Claude:
+		return req.ClaudeHooks
+	case portable.Codex:
+		return req.CodexHooks
+	default:
+		return nil
+	}
+}
+
+func perClientNotify(req Request, agent portable.Integration) *bool {
+	switch agent {
+	case portable.Claude:
+		return req.ClaudeAgentNotify
+	case portable.Codex:
+		return req.CodexAgentNotify
+	default:
+		return nil
+	}
+}
+
+func agentUnit(global, perClient *bool, defaultOn bool) bool {
+	if perClient != nil {
+		return *perClient
+	}
+	return unitOn(global, defaultOn)
+}
+
 func unitOn(flag *bool, defaultOn bool) bool {
 	if flag == nil {
 		return defaultOn
 	}
 	return *flag
+}
+
+func attachReadiness(agents []portable.Integration, out Result, mutationInstall bool) Result {
+	if out.Outcome == "invalid" || out.Outcome == "cancelled" {
+		return out
+	}
+	runtime := "installed"
+	if out.Reason == "managed_runtime_required" {
+		runtime = "absent"
+	}
+	for _, agent := range agents {
+		fact := ReadinessFact{
+			Client:     string(agent),
+			Runtime:    runtime,
+			Hooks:      "absent",
+			MCP:        "absent",
+			Permission: "unsupported",
+			Restart:    "not_required",
+			Delivery:   "not_verified",
+		}
+		for _, target := range out.Targets {
+			if target.Client != string(agent) {
+				continue
+			}
+			switch target.Unit {
+			case "hooks":
+				fact.Hooks = target.Outcome
+			case "agent-notify":
+				switch target.Outcome {
+				case "completed", "installed":
+					fact.MCP = "installed"
+				default:
+					fact.MCP = target.Outcome
+				}
+			}
+		}
+		if mutationInstall && fact.MCP == "installed" && out.Outcome == "completed" {
+			fact.Restart = "pending"
+		}
+		out.Readiness = append(out.Readiness, fact)
+	}
+	return out
 }
 
 func explicitAbs(p string) bool {

@@ -25,6 +25,10 @@ TTY stdin prompts for agents and confirmation when those flags are omitted.
   --agents claude,codex
   --hooks true|false          Omit on install to include hooks; omit on uninstall to select all units
   --agent-notify true|false   Omit on install to include portable MCP+skill
+  --claude-hooks true|false   Per-client override; mixed Claude/Codex opt-outs are not collapsed
+  --codex-hooks true|false
+  --claude-agent-notify true|false
+  --codex-agent-notify true|false
   --yes                       Required for mutation without a TTY
   --json
   --package PATH              Local standard package root (plugin.json + MCP/skills)
@@ -35,6 +39,8 @@ TTY stdin prompts for agents and confirmation when those flags are omitted.
   --codex-home PATH           Explicit Codex UAP client config root
   --claude-config PATH        Explicit Claude UAP client config root
   --client-executable PATH    Selected client executable; never launched from PATH
+  --claude-executable PATH    Claude executable when installing both clients
+  --codex-executable PATH     Codex executable when installing both clients
   --helper PATH               Managed stdio helper (default: runtime primary)
   --scope-root PATH
   --installation-id ID
@@ -115,6 +121,13 @@ func executeSetupWizardWith(ctx context.Context, args []string, out io.Writer, i
 		for _, target := range result.Targets {
 			_, _ = fmt.Fprintf(out, "%s %s: %s %s\n", target.Client, target.Unit, target.Outcome, target.Reason)
 		}
+		for _, fact := range result.Readiness {
+			_, _ = fmt.Fprintf(out, "%s readiness: runtime=%s hooks=%s mcp=%s permission=%s restart=%s delivery=%s\n",
+				fact.Client, fact.Runtime, fact.Hooks, fact.MCP, fact.Permission, fact.Restart, fact.Delivery)
+		}
+		for _, next := range result.NextActions {
+			_, _ = fmt.Fprintf(out, "next %s: %s\n", next.Kind, strings.Join(quoteWizardArgs(next.Command), " "))
+		}
 		if len(result.Command) > 0 {
 			_, _ = fmt.Fprintf(out, "retry: %s\n", strings.Join(quoteWizardArgs(result.Command), " "))
 		}
@@ -147,9 +160,11 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 	jsonOut := false
 	allowed := map[string]bool{
 		"action": true, "agents": true, "hooks": true, "agent-notify": true,
+		"claude-hooks": true, "codex-hooks": true, "claude-agent-notify": true, "codex-agent-notify": true,
 		"package": true, "plugin-root": true, "control-root": true, "runtime-root": true, "global-config": true,
 		"codex-home": true, "claude-config": true, "client-executable": true, "helper": true,
 		"scope-root": true, "installation-id": true, "mcp-config": true, "claude-mcp-config": true,
+		"claude-executable": true, "codex-executable": true,
 	}
 	for i := 0; i < len(args); i++ {
 		token := args[i]
@@ -221,6 +236,34 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 		}
 		req.AgentNotify = &on
 	}
+	if v, ok := values["claude-hooks"]; ok {
+		on, err := parseBoolFlag(v)
+		if err != nil {
+			return req, jsonOut, err
+		}
+		req.ClaudeHooks = &on
+	}
+	if v, ok := values["codex-hooks"]; ok {
+		on, err := parseBoolFlag(v)
+		if err != nil {
+			return req, jsonOut, err
+		}
+		req.CodexHooks = &on
+	}
+	if v, ok := values["claude-agent-notify"]; ok {
+		on, err := parseBoolFlag(v)
+		if err != nil {
+			return req, jsonOut, err
+		}
+		req.ClaudeAgentNotify = &on
+	}
+	if v, ok := values["codex-agent-notify"]; ok {
+		on, err := parseBoolFlag(v)
+		if err != nil {
+			return req, jsonOut, err
+		}
+		req.CodexAgentNotify = &on
+	}
 	req.PackageRoot = values["package"]
 	req.PluginRoot = values["plugin-root"]
 	req.ControlRoot = values["control-root"]
@@ -229,6 +272,15 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 	req.CodexHome = values["codex-home"]
 	req.ClaudeConfig = values["claude-config"]
 	req.ClientExecutable = values["client-executable"]
+	if values["claude-executable"] != "" || values["codex-executable"] != "" {
+		req.ClientExecutables = map[string]string{}
+		if values["claude-executable"] != "" {
+			req.ClientExecutables["claude"] = values["claude-executable"]
+		}
+		if values["codex-executable"] != "" {
+			req.ClientExecutables["codex"] = values["codex-executable"]
+		}
+	}
 	req.Helper = values["helper"]
 	req.ScopeRoot = values["scope-root"]
 	req.InstallationID = values["installation-id"]
@@ -241,7 +293,7 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 			req.MCPConfig["claude"] = values["claude-mcp-config"]
 		}
 	}
-	for _, p := range []string{req.PackageRoot, req.PluginRoot, req.ControlRoot, req.RuntimeRoot, req.GlobalConfig, req.CodexHome, req.ClaudeConfig, req.ClientExecutable, req.Helper, req.ScopeRoot} {
+	for _, p := range []string{req.PackageRoot, req.PluginRoot, req.ControlRoot, req.RuntimeRoot, req.GlobalConfig, req.CodexHome, req.ClaudeConfig, req.ClientExecutable, req.Helper, req.ScopeRoot, req.ClientExecutables["claude"], req.ClientExecutables["codex"]} {
 		if p != "" && (!filepath.IsAbs(p) || filepath.Clean(p) != p) {
 			return req, jsonOut, errors.New("invalid_arguments")
 		}

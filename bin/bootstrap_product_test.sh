@@ -51,11 +51,17 @@ printf '%s\n' '#!/bin/sh' 'echo "setup-codex [--print] [--dry-run] [--codex-home
 chmod +x "$legacy"
 if cli_has_setup_codex_skip_agent_notify "$legacy"; then echo "legacy advertised skip"; exit 1; fi
 if cli_has_setup_notifications "$legacy"; then echo "legacy advertised setup-notifications"; exit 1; fi
+if cli_has_setup_wizard "$legacy"; then echo "legacy advertised wizard"; exit 1; fi
 capable="$SANDBOX/capable-cli"
 printf '%s\n' '#!/bin/sh' 'echo "[--agent-notify|--skip-agent-notify]"' 'echo "setup-notifications [--help]"' > "$capable"
 chmod +x "$capable"
 cli_has_setup_codex_skip_agent_notify "$capable" || { echo "capable missing skip"; exit 1; }
 cli_has_setup_notifications "$capable" || { echo "capable missing setup-notifications"; exit 1; }
+if cli_has_setup_wizard "$capable"; then echo "narrow help advertised wizard"; exit 1; fi
+wizard="$SANDBOX/wizard-cli"
+printf '%s\n' '#!/bin/sh' 'echo "setup-notifications wizard"' > "$wizard"
+chmod +x "$wizard"
+cli_has_setup_wizard "$wizard" || { echo "wizard-cli missing wizard"; exit 1; }
 # setup_marketplace self-heals a marketplace declared under a retired repo
 # name, but leaves an unrelated source conflict alone.
 (
