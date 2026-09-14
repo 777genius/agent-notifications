@@ -123,7 +123,7 @@ func (e *Engine) prepareInstall(ctx context.Context, req Request) (*PreparedOper
 	preview, err := svc.Add(ctx, usecase.AddInput{
 		Envelope: envelope, Client: client, Scope: domain.ScopeUser, DryRun: true, Confirmed: false,
 		PersistAuthoritativeObservations: e.persistObservations,
-		InstallationID: req.InstallationID, OperationID: req.OperationID, BackendExecutable: req.ClientExecutable,
+		InstallationID:                   req.InstallationID, OperationID: req.OperationID, BackendExecutable: req.ClientExecutable,
 	})
 	if err != nil {
 		_ = handle.closeLocked()
