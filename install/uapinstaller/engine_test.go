@@ -207,6 +207,40 @@ func TestInstallInspectRepeatRemove(t *testing.T) {
 	}
 }
 
+func TestPrepareMissingRequiredComponentsDoesNotCreateState(t *testing.T) {
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	if err := os.RemoveAll(filepath.Join(pkg, "skills")); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(base, "uap")
+	eng, err := New(Config{StateRoot: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	_, err = eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-000000000071",
+		OperationID: "missing-skills", RequiredComponents: []string{"mcp", "skills"},
+	})
+	if !errors.Is(err, ErrIncomplete) {
+		t.Fatalf("missing skills: %v", err)
+	}
+	if _, err := os.Lstat(eng.cfg.StateFile); !os.IsNotExist(err) {
+		t.Fatal("incomplete prepare wrote state")
+	}
+}
+
 func TestUnsupportedUpdateRejectedBeforeMutation(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "state")
 	eng, err := New(Config{StateRoot: root})
@@ -443,6 +477,9 @@ func TestPrepareCopiesRequestAndPlan(t *testing.T) {
 	defer func() { _ = prepared.Close() }()
 	if prepared.Plan().DigestAlgorithm != "agentplugins-tree-sha256-v1" || prepared.Plan().TreeDigest == "" {
 		t.Fatalf("canonical tree digest: %+v", prepared.Plan())
+	}
+	if prepared.Plan().HelperVersion != "uap-installer-helper-v1" {
+		t.Fatalf("helper version: %+v", prepared.Plan())
 	}
 	req.RequiredComponents[0] = "mutated"
 	req.PackageRoot = filepath.Join(base, "other")
@@ -720,6 +757,9 @@ func TestApplyRefusesPendingJournalWithoutRecovering(t *testing.T) {
 	if !errors.Is(err, ErrRecoveryRequired) || result.Outcome != OutcomeRecovery {
 		t.Fatalf("pending journal apply: %+v %v", result, err)
 	}
+	if len(result.NextActions) != 1 || result.NextActions[0].Kind != "recover" {
+		t.Fatalf("recovery next actions: %+v", result.NextActions)
+	}
 	open, listErr := dirswap.Manager{JournalDir: eng.cfg.OperationsDir}.ListOpen()
 	if listErr != nil || len(open) != 1 || open[0].OperationID != receipt.OperationID {
 		t.Fatalf("apply recovered journal: %+v %v", open, listErr)
@@ -973,6 +1013,29 @@ func TestRemoveRetainsPluginDataAfterLastClient(t *testing.T) {
 	}
 	if len(view.Installations[0].DataRoots) == 0 {
 		t.Fatal("inspect omitted retained data roots")
+	}
+	before, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := eng.Prepare(ctx, Request{
+		Operation: OpRemove, ClientID: "codex", ClientConfigRoot: config, ClientExecutable: probe,
+		InstallationID: req.InstallationID, OperationID: "retain-remove-again", ExternalUninstalled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !again.Plan().NoChange {
+		t.Fatalf("repeated remove plan: %+v", again.Plan())
+	}
+	absent, err := eng.Apply(ctx, again, Decision{Confirmed: true})
+	_ = again.Close()
+	if err != nil || absent.Outcome != OutcomeUnchanged || absent.Reason != "already_absent" || !absent.NoChange {
+		t.Fatalf("already_absent: %+v %v", absent, err)
+	}
+	after, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("already_absent mutated state")
 	}
 }
 
@@ -1283,6 +1346,47 @@ func TestDiscoverReportsCurrentBindingsWithoutMutating(t *testing.T) {
 	}
 }
 
+func TestRemoveAlreadyAbsentDoesNotRunHelperOrMutateState(t *testing.T) {
+	eng := plantRetainedInstallation(t)
+	before, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(t.TempDir(), "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	rm, err := eng.Prepare(testCtx(t), Request{
+		Operation: OpRemove, ClientID: "codex", ClientConfigRoot: config,
+		InstallationID: "00000000-0000-4000-8000-000000000070", OperationID: "already-absent",
+		ExternalUninstalled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rm.Close() }()
+	if !rm.Plan().NoChange || rm.Plan().HelperVersion != "uap-installer-helper-v1" {
+		t.Fatalf("already_absent plan: %+v", rm.Plan())
+	}
+	result, err := eng.Apply(testCtx(t), rm, Decision{Confirmed: true})
+	if err != nil || result.Outcome != OutcomeUnchanged || result.Reason != "already_absent" || !result.NoChange || !result.DataRetained {
+		t.Fatalf("already_absent apply: %+v %v", result, err)
+	}
+	if len(result.NextActions) != 0 {
+		t.Fatalf("already_absent next actions: %+v", result.NextActions)
+	}
+	after, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("already_absent mutated state")
+	}
+	if runner, ok := eng.cfg.Runner.(*countingRunner); ok && runner.n != 0 {
+		t.Fatalf("already_absent ran helper %d times", runner.n)
+	}
+	if _, err := os.Lstat(eng.cfg.LockFile); !os.IsNotExist(err) {
+		t.Fatal("already_absent acquired mutation lock file")
+	}
+}
+
 func TestRemoveApplyPlanChangedWhenLiveTargetMoves(t *testing.T) {
 	skipWindowsLauncherExecuteBit(t)
 	ctx := testCtx(t)
@@ -1345,6 +1449,9 @@ func TestRemoveApplyPlanChangedWhenLiveTargetMoves(t *testing.T) {
 	moved, err := eng.Apply(ctx, rm, Decision{Confirmed: true})
 	if !errors.Is(err, ErrPlanChanged) || moved.Outcome != OutcomeConflict || moved.Reason != "plan_changed" {
 		t.Fatalf("stale remove apply: %+v %v", moved, err)
+	}
+	if len(moved.NextActions) != 1 || moved.NextActions[0].Kind != "reprepare" {
+		t.Fatalf("plan_changed next actions: %+v", moved.NextActions)
 	}
 	after, err := os.ReadFile(eng.cfg.StateFile)
 	if err != nil || !bytes.Equal(planted, after) {
