@@ -1071,3 +1071,127 @@ func TestWizardUninstallDoesNotRestoreDirectMCP(t *testing.T) {
 		t.Fatalf("uninstall restored direct MCP: %+v", view.Targets)
 	}
 }
+
+func TestWizardInstallClearsConfirmationIntent(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil || snap.Ledger.PendingMutation != nil {
+		t.Fatalf("completed install left reservation: %+v %v", snap.Ledger.PendingMutation, err)
+	}
+	if _, err := os.Lstat(portablesetup.IntentPath(control)); !os.IsNotExist(err) {
+		t.Fatal("completed install retained intent")
+	}
+}
+
+func TestWizardConfirmationIntentSurvivesFailedHooks(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Run(ctx, req)
+	if err == nil || got.Outcome != "incomplete" || got.Reason != "plugin_root_required" {
+		t.Fatalf("hooks preflight: %+v %v", got, err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil || snap.Ledger.PendingMutation == nil {
+		t.Fatalf("failed hooks dropped intent: %+v %v", snap.Ledger.PendingMutation, err)
+	}
+	intent, err := portablesetup.ReadIntent(control)
+	if err != nil || intent.Action != "install" || intent.Stage != "confirmed" {
+		t.Fatalf("intent: %+v %v", intent, err)
+	}
+	if len(intent.Targets) != 1 || intent.Targets[0].Client != "codex" {
+		t.Fatalf("targets: %+v", intent.Targets)
+	}
+	resume := req
+	resume.Agents = nil
+	resume.Yes = false
+	again, err := Run(ctx, resume)
+	if again.Reason == "empty_selection" || again.Reason == "noninteractive_requires_yes" {
+		t.Fatalf("resume ignored confirmation intent: %+v %v", again, err)
+	}
+	if again.Outcome != "incomplete" || again.Reason != "plugin_root_required" {
+		t.Fatalf("resume: %+v %v", again, err)
+	}
+}
+
+func TestWizardCodexUninstallAttestsFromEmptyPluginList(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	req.Action = ActionUninstall
+	req.ClientExecutable = writeCodexListStub(t, filepath.Dir(control), `{"installed":[]}`)
+	removed, err := Run(ctx, req)
+	if err != nil || removed.Outcome != "completed" {
+		t.Fatalf("observed uninstall: %+v %v", removed, err)
+	}
+	if strings.Contains(strings.Join(removed.Command, " "), "--external-uninstalled") && removed.Outcome != "completed" {
+		t.Fatalf("empty list still required flag: %v", removed.Command)
+	}
+}
+
+func writeCodexListStub(t *testing.T, dir, listJSON string) string {
+	t.Helper()
+	path := filepath.Join(dir, "codex-stub")
+	script := "#!/bin/sh\ncase \"$*\" in\n  \"plugin list --json\") printf '%s\\n' '" + listJSON + "';;\n  \"plugin remove \"*) echo '{\"ok\":true}';;\n  *) exit 1;;\nesac\n"
+	if err := os.WriteFile(path, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}

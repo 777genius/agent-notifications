@@ -425,6 +425,140 @@ func (s Service) publishHandoffReservation(ctx context.Context, req Request, gen
 	return s.publishIntent(ctx, req, gen, "install", "retire-direct", []string{"direct-mcp"})
 }
 
+func existingConsumerID(ledger installruntime.Ledger, runtimeRoot string) (string, error) {
+	if runtimeRoot == "" {
+		return "", fmt.Errorf("%w: runtime root required", ErrPreflight)
+	}
+	if consumer, ok := ledger.Consumers["existing"]; ok && (consumer.RuntimeRoot == "" || consumer.RuntimeRoot == runtimeRoot) {
+		return "existing", nil
+	}
+	for id, consumer := range ledger.Consumers {
+		if consumer.RuntimeRoot == runtimeRoot {
+			return id, nil
+		}
+	}
+	return "", fmt.Errorf("%w: no consumer at runtime root", ErrPreflight)
+}
+
+// PublishConfirmedIntent records the confirmed SetupIntent and kernel
+// reservation before live hooks/MCP mutation. It takes the coordinator lease.
+func (s Service) PublishConfirmedIntent(ctx context.Context, req ConfirmedIntent) (installruntime.Ledger, *installruntime.PendingMutation, error) {
+	if ctx == nil {
+		return installruntime.Ledger{}, nil, ErrPreflight
+	}
+	if req.ControlRoot == "" || req.RuntimeRoot == "" || req.Owner == "" || req.Action == "" || len(req.Targets) == 0 {
+		return installruntime.Ledger{}, nil, fmt.Errorf("%w: incomplete confirmed intent", ErrPreflight)
+	}
+	release, err := installruntime.AcquireCoordinatorLease(ctx, req.ControlRoot)
+	if err != nil {
+		return installruntime.Ledger{}, nil, err
+	}
+	defer release()
+	if _, err = installruntime.Recover(ctx, req.ControlRoot); err != nil {
+		return installruntime.Ledger{}, nil, err
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(req.ControlRoot)
+	if err != nil {
+		return installruntime.Ledger{}, nil, err
+	}
+	if pending := snap.Ledger.PendingMutation; pending != nil {
+		intent, readErr := ReadIntent(req.ControlRoot)
+		if readErr != nil || !intentMatches(intent, pending.ID, req.Action, req.Targets[0].Client, req.SourceDigest) {
+			return installruntime.Ledger{}, nil, fmt.Errorf("%w: pending %s", ErrIntentConflict, intent.Action)
+		}
+		cp := *pending
+		return snap.Ledger, &cp, nil
+	}
+	consumerID, err := existingConsumerID(snap.Ledger, req.RuntimeRoot)
+	if err != nil {
+		return installruntime.Ledger{}, nil, err
+	}
+	intentID, err := newIntentID()
+	if err != nil {
+		return installruntime.Ledger{}, nil, err
+	}
+	stage := req.Stage
+	if stage == "" {
+		stage = "confirmed"
+	}
+	intent := Intent{
+		Version:            intentVersion,
+		SetupIntentID:      intentID,
+		Action:             req.Action,
+		Stage:              stage,
+		ExpectedGeneration: snap.Ledger.Generation,
+		SourceRevision:     req.SourceRevision,
+		SourceDigest:       req.SourceDigest,
+		Targets:            req.Targets,
+	}
+	payload, err := marshalIntent(intent)
+	if err != nil {
+		return installruntime.Ledger{}, nil, err
+	}
+	res := reservationFrom(intent, req.ControlRoot)
+	path := IntentPath(req.ControlRoot)
+	before, err := installruntime.Fingerprint(path)
+	if err != nil {
+		return installruntime.Ledger{}, nil, err
+	}
+	gen := snap.Ledger.Generation
+	ledger, err := installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: req.ControlRoot, Owner: req.Owner, RuntimeRoot: req.RuntimeRoot,
+		ConsumerID: consumerID, RefreshOnly: true, ExpectedGeneration: &gen, Reservation: &res,
+		Files: []installruntime.File{{Path: path, Before: before, Data: payload, Mode: 0600}},
+	})
+	if err != nil {
+		return installruntime.Ledger{}, nil, fmt.Errorf("%w: publish confirmed intent: %v", ErrPreflight, err)
+	}
+	return ledger, &res, nil
+}
+
+// FinishConfirmedIntent removes a matching reservation after the whole wizard
+// mutation finished. Incomplete HoldOnly/external uninstall leaves it in place.
+func (s Service) FinishConfirmedIntent(ctx context.Context, req ConfirmedIntent, res *installruntime.PendingMutation) error {
+	if ctx == nil || res == nil {
+		return nil
+	}
+	release, err := installruntime.AcquireCoordinatorLease(ctx, req.ControlRoot)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if _, err = installruntime.Recover(ctx, req.ControlRoot); err != nil {
+		return err
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(req.ControlRoot)
+	if err != nil {
+		return err
+	}
+	if snap.Ledger.PendingMutation == nil {
+		return nil
+	}
+	consumerID, err := existingConsumerID(snap.Ledger, req.RuntimeRoot)
+	if err != nil {
+		return err
+	}
+	path := IntentPath(req.ControlRoot)
+	before, err := installruntime.Fingerprint(path)
+	if err != nil {
+		return err
+	}
+	var files []installruntime.File
+	if before.Exists {
+		files = []installruntime.File{{Path: path, Before: before, Remove: true}}
+	}
+	gen := snap.Ledger.Generation
+	_, err = installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: req.ControlRoot, Owner: req.Owner, RuntimeRoot: req.RuntimeRoot,
+		ConsumerID: consumerID, RefreshOnly: true, ExpectedGeneration: &gen, Reservation: res, ClearReservation: true,
+		Files: files,
+	})
+	if err != nil {
+		return fmt.Errorf("%w: clear confirmed intent: %v", ErrPreflight, err)
+	}
+	return nil
+}
+
 func (s Service) publishIntent(ctx context.Context, req Request, gen uint64, action, stage string, units []string) (installruntime.Ledger, *installruntime.PendingMutation, error) {
 	key, _, _, err := req.Binding.Registration()
 	if err != nil {

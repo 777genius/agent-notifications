@@ -202,9 +202,11 @@ func run(ctx context.Context, req *Request) (Result, error) {
 	var got Result
 	if req.Action == ActionInstall {
 		got, err = install(ctx, *req, snap, runtimeRoot, hookAgents, notifyAgents, out)
+		got, err = finishWizardIntent(ctx, *req, runtimeRoot, got, err)
 		return attachReadiness(agents, got, true), err
 	}
 	got, err = uninstall(ctx, *req, snap, runtimeRoot, hookAgents, notifyAgents, out)
+	got, err = finishWizardIntent(ctx, *req, runtimeRoot, got, err)
 	return attachReadiness(agents, got, false), err
 }
 
@@ -426,8 +428,86 @@ func inspect(ctx context.Context, req Request, agents []portable.Integration, sn
 }
 
 func install(ctx context.Context, req Request, snap installruntime.InstalledSnapshot, runtimeRoot string, hookAgents, notifyAgents []portable.Integration, out Result) (Result, error) {
+	var releasePackage func()
+	defer func() {
+		if releasePackage != nil {
+			releasePackage()
+		}
+	}()
+	id := portablesetup.Identity{}
+	mat := portablesetup.Materializer{}
+	if len(notifyAgents) > 0 {
+		recordedPath, recordedVersion := desiredPackage(req)
+		if !explicitAbs(req.PackageRoot) && recordedPath == "" && recordedVersion != "" && req.ReleaseDownloadRoot == "" && req.PackageFetcher == nil {
+			out.Outcome, out.Reason = "incomplete", "recorded_package_unavailable"
+			return out, ErrRefused
+		}
+		packageRoot, release, err := resolvePackageRoot(ctx, req, recordedPath, recordedVersion)
+		if err != nil {
+			reason := "package_acquisition_failed"
+			if strings.Contains(err.Error(), "package_required") {
+				reason = "package_required"
+			}
+			out.Outcome, out.Reason = "incomplete", reason
+			return out, err
+		}
+		releasePackage = release
+		req.PackageRoot = packageRoot
+		mat, err = materializer(req, snap, runtimeRoot)
+		if err != nil {
+			out.Outcome, out.Reason = "incomplete", err.Error()
+			return out, err
+		}
+		id, err = identity(req, snap, runtimeRoot, mat, true)
+		if err != nil {
+			out.Outcome, out.Reason = "incomplete", err.Error()
+			return out, err
+		}
+		req.InstallationID = id.InstallationID
+		for _, agent := range notifyAgents {
+			if !explicitAbs(clientConfig(req, agent)) {
+				out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: "client_config_required"})
+				out.Outcome, out.Reason = "incomplete", "client_config_required"
+				return out, ErrRefused
+			}
+			if !explicitAbs(clientExecutable(req, agent)) {
+				out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: "client_executable_required"})
+				out.Outcome, out.Reason = "incomplete", "client_executable_required"
+				return out, ErrRefused
+			}
+			materialize := portablesetup.MaterializeRequest{
+				Identity: id, Integration: agent, ExpectedGeneration: snap.Ledger.Generation,
+				PackageRoot: req.PackageRoot, ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
+				SourceRevision: req.ReleaseVersion, SourceDigest: req.PackageSHA256,
+				Discovery:   discovery(req, agent, runtimeRoot, snap),
+				OperationID: "wizard-install-" + string(agent),
+			}
+			if others, err := mat.OtherLiveClients(id.InstallationID, string(agent)); err != nil {
+				out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: err.Error()})
+				out.Outcome, out.Reason = "incomplete", "portable_inspect_failed"
+				return out, err
+			} else if len(others) > 0 {
+				if err := mat.GuardSecondClient(ctx, materialize); err != nil {
+					if portablesetup.IsUpdateRequired(err) {
+						return updateRequired(req, agent, others, out, err)
+					}
+					out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: err.Error()})
+					out.Outcome, out.Reason = "incomplete", "portable_install_failed"
+					return out, err
+				}
+			}
+		}
+	}
+	snap, err := publishWizardIntent(ctx, req, snap, runtimeRoot, hookAgents, notifyAgents, true)
+	if err != nil {
+		if conflict, handled := pendingIntentConflict(req, err, out); handled {
+			return conflict, err
+		}
+		out.Outcome, out.Reason = "incomplete", err.Error()
+		return out, err
+	}
+	out.Generation = snap.Ledger.Generation
 	if len(hookAgents) > 0 {
-		var err error
 		out, err = applyHooks(ctx, req, hookAgents, snap, false, out)
 		if err != nil || out.Outcome == "incomplete" || out.Outcome == "invalid" {
 			return out, err
@@ -444,66 +524,15 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		out.Outcome = "completed"
 		return out, nil
 	}
-	recordedPath, recordedVersion := desiredPackage(req)
-	if !explicitAbs(req.PackageRoot) && recordedPath == "" && recordedVersion != "" && req.ReleaseDownloadRoot == "" && req.PackageFetcher == nil {
-		out.Outcome, out.Reason = "incomplete", "recorded_package_unavailable"
-		return out, ErrRefused
-	}
-	packageRoot, releasePackage, err := resolvePackageRoot(ctx, req, recordedPath, recordedVersion)
-	if err != nil {
-		reason := "package_acquisition_failed"
-		if strings.Contains(err.Error(), "package_required") {
-			reason = "package_required"
-		}
-		out.Outcome, out.Reason = "incomplete", reason
-		return out, err
-	}
-	defer releasePackage()
-	req.PackageRoot = packageRoot
-	mat, err := materializer(req, snap, runtimeRoot)
-	if err != nil {
-		out.Outcome, out.Reason = "incomplete", err.Error()
-		return out, err
-	}
-	id, err := identity(req, snap, runtimeRoot, mat, true)
-	if err != nil {
-		out.Outcome, out.Reason = "incomplete", err.Error()
-		return out, err
-	}
 	generation := snap.Ledger.Generation
 	for _, agent := range notifyAgents {
-		configPath := clientConfig(req, agent)
-		if !explicitAbs(configPath) {
-			out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: "client_config_required"})
-			out.Outcome, out.Reason = "incomplete", "client_config_required"
-			return out, ErrRefused
-		}
-		executable := clientExecutable(req, agent)
-		if !explicitAbs(executable) {
-			out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: "client_executable_required"})
-			out.Outcome, out.Reason = "incomplete", "client_executable_required"
-			return out, ErrRefused
-		}
 		materialize := portablesetup.MaterializeRequest{
 			Identity: id, Integration: agent, ExpectedGeneration: generation,
-			PackageRoot: req.PackageRoot, ClientConfigRoot: configPath, ClientExecutable: executable,
+			PackageRoot: req.PackageRoot, ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
 			SourceRevision: req.ReleaseVersion, SourceDigest: req.PackageSHA256,
-			Discovery:   discovery(req, agent, runtimeRoot, snap),
-			OperationID: "wizard-install-" + string(agent),
-		}
-		if others, err := mat.OtherLiveClients(id.InstallationID, string(agent)); err != nil {
-			out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: err.Error()})
-			out.Outcome, out.Reason = "incomplete", "portable_inspect_failed"
-			return out, err
-		} else if len(others) > 0 {
-			if err := mat.GuardSecondClient(ctx, materialize); err != nil {
-				if portablesetup.IsUpdateRequired(err) {
-					return updateRequired(req, agent, others, out, err)
-				}
-				out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: err.Error()})
-				out.Outcome, out.Reason = "incomplete", "portable_install_failed"
-				return out, err
-			}
+			Discovery:       discovery(req, agent, runtimeRoot, snap),
+			OperationID:     "wizard-install-" + string(agent),
+			KeepReservation: true,
 		}
 		got, err := mat.Install(ctx, materialize)
 		if err != nil {
@@ -532,8 +561,57 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 }
 
 func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSnapshot, runtimeRoot string, hookAgents, notifyAgents []portable.Integration, out Result) (Result, error) {
-	if len(hookAgents) > 0 {
+	mat := portablesetup.Materializer{}
+	id := portablesetup.Identity{}
+	if len(notifyAgents) > 0 {
 		var err error
+		mat, err = materializer(req, snap, runtimeRoot)
+		if err != nil {
+			out.Outcome, out.Reason = "incomplete", err.Error()
+			return out, err
+		}
+		id, err = identity(req, snap, runtimeRoot, mat, false)
+		if err != nil {
+			out.Outcome, out.Reason = "incomplete", err.Error()
+			return out, err
+		}
+		if id.InstallationID == "" {
+			state, loadErr := mat.Store.Load()
+			if loadErr != nil {
+				out.Outcome, out.Reason = "incomplete", loadErr.Error()
+				return out, loadErr
+			}
+			if len(state.Installations) == 1 {
+				id.InstallationID = state.Installations[0].InstallationID
+			}
+		}
+		req.InstallationID = id.InstallationID
+	}
+	portablePresent := id.InstallationID != ""
+	if portablePresent {
+		for _, agent := range notifyAgents {
+			if !explicitAbs(clientConfig(req, agent)) {
+				out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: "client_config_required"})
+				out.Outcome, out.Reason = "incomplete", "client_config_required"
+				return out, ErrRefused
+			}
+			if !explicitAbs(clientExecutable(req, agent)) {
+				out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: "client_executable_required"})
+				out.Outcome, out.Reason = "incomplete", "client_executable_required"
+				return out, ErrRefused
+			}
+		}
+	}
+	snap, err := publishWizardIntent(ctx, req, snap, runtimeRoot, hookAgents, notifyAgents, portablePresent)
+	if err != nil {
+		if conflict, handled := pendingIntentConflict(req, err, out); handled {
+			return conflict, err
+		}
+		out.Outcome, out.Reason = "incomplete", err.Error()
+		return out, err
+	}
+	out.Generation = snap.Ledger.Generation
+	if len(hookAgents) > 0 {
 		out, err = applyHooks(ctx, req, hookAgents, snap, true, out)
 		if err != nil || out.Outcome == "incomplete" || out.Outcome == "invalid" {
 			return out, err
@@ -550,26 +628,6 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 		out.Outcome = "completed"
 		return out, nil
 	}
-	mat, err := materializer(req, snap, runtimeRoot)
-	if err != nil {
-		out.Outcome, out.Reason = "incomplete", err.Error()
-		return out, err
-	}
-	id, err := identity(req, snap, runtimeRoot, mat, false)
-	if err != nil {
-		out.Outcome, out.Reason = "incomplete", err.Error()
-		return out, err
-	}
-	if id.InstallationID == "" {
-		state, loadErr := mat.Store.Load()
-		if loadErr != nil {
-			out.Outcome, out.Reason = "incomplete", loadErr.Error()
-			return out, loadErr
-		}
-		if len(state.Installations) == 1 {
-			id.InstallationID = state.Installations[0].InstallationID
-		}
-	}
 	if id.InstallationID == "" {
 		out.Outcome, out.Reason = "unchanged", "portable_absent"
 		return out, nil
@@ -577,24 +635,18 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 	generation := snap.Ledger.Generation
 	removed := 0
 	for _, agent := range notifyAgents {
-		configPath := clientConfig(req, agent)
-		if !explicitAbs(configPath) {
-			out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: "client_config_required"})
-			out.Outcome, out.Reason = "incomplete", "client_config_required"
-			return out, ErrRefused
-		}
-		executable := clientExecutable(req, agent)
-		if !explicitAbs(executable) {
-			out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: "client_executable_required"})
-			out.Outcome, out.Reason = "incomplete", "client_executable_required"
-			return out, ErrRefused
+		if agent == portable.Codex && !req.ExternalUninstalled {
+			if attestCodexExternalUninstall(ctx, clientExecutable(req, agent), req.CodexHome) {
+				req.ExternalUninstalled = true
+			}
 		}
 		remove := portablesetup.MaterializeRequest{
 			Identity: id, Integration: agent, ExpectedGeneration: generation,
-			ClientConfigRoot: configPath, ClientExecutable: executable,
+			ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
 			// User uninstall does not restore a retired direct MCP.
 			OperationID: "wizard-remove-" + string(agent), ExternalUninstalled: req.ExternalUninstalled,
-			HoldOnly: agent == portable.Codex && !req.ExternalUninstalled,
+			HoldOnly:        agent == portable.Codex && !req.ExternalUninstalled,
+			KeepReservation: true,
 		}
 		err := mat.Remove(ctx, remove)
 		if err != nil {
@@ -810,6 +862,97 @@ func rereadGeneration(controlRoot string) (uint64, error) {
 		return 0, err
 	}
 	return snap.Ledger.Generation, nil
+}
+
+func wizardWillMutate(hookAgents, notifyAgents []portable.Integration, portablePresent bool, install bool) bool {
+	for _, agent := range hookAgents {
+		if agent == portable.Codex {
+			return true
+		}
+	}
+	if len(notifyAgents) == 0 {
+		return false
+	}
+	if install {
+		return true
+	}
+	return portablePresent
+}
+
+func wizardIntentTargets(req Request, hookAgents, notifyAgents []portable.Integration) []portablesetup.IntentTarget {
+	byClient := map[string]*portablesetup.IntentTarget{}
+	var order []string
+	add := func(agent portable.Integration, unit string) {
+		id := string(agent)
+		target, ok := byClient[id]
+		if !ok {
+			target = &portablesetup.IntentTarget{
+				Client:         id,
+				InstallationID: req.InstallationID,
+				Profile:        clientConfig(req, agent),
+			}
+			byClient[id] = target
+			order = append(order, id)
+		}
+		target.Units = append(target.Units, unit)
+	}
+	for _, agent := range hookAgents {
+		add(agent, "hooks")
+	}
+	for _, agent := range notifyAgents {
+		add(agent, "agent-notify")
+	}
+	out := make([]portablesetup.IntentTarget, 0, len(order))
+	for _, id := range order {
+		out = append(out, *byClient[id])
+	}
+	return out
+}
+
+func publishWizardIntent(ctx context.Context, req Request, snap installruntime.InstalledSnapshot, runtimeRoot string, hookAgents, notifyAgents []portable.Integration, portablePresent bool) (installruntime.InstalledSnapshot, error) {
+	if snap.Ledger.PendingMutation != nil {
+		return snap, nil
+	}
+	if !wizardWillMutate(hookAgents, notifyAgents, portablePresent, req.Action == ActionInstall) {
+		return snap, nil
+	}
+	targets := wizardIntentTargets(req, hookAgents, notifyAgents)
+	if len(targets) == 0 {
+		return snap, nil
+	}
+	if _, _, err := (portablesetup.Service{}).PublishConfirmedIntent(ctx, portablesetup.ConfirmedIntent{
+		ControlRoot: req.ControlRoot, RuntimeRoot: runtimeRoot, Owner: snap.Ledger.Owner,
+		ExpectedGeneration: snap.Ledger.Generation, Action: string(req.Action), Stage: "confirmed",
+		SourceRevision: req.ReleaseVersion, SourceDigest: req.PackageSHA256, Targets: targets,
+	}); err != nil {
+		return snap, err
+	}
+	return installruntime.ReadInstalledSnapshot(req.ControlRoot)
+}
+
+func finishWizardIntent(ctx context.Context, req Request, runtimeRoot string, out Result, err error) (Result, error) {
+	if out.Outcome != "completed" && out.Outcome != "unchanged" {
+		return out, err
+	}
+	snap, readErr := installruntime.ReadInstalledSnapshot(req.ControlRoot)
+	if readErr != nil {
+		out.Outcome, out.Reason = "incomplete", readErr.Error()
+		return out, readErr
+	}
+	if snap.Ledger.PendingMutation == nil {
+		return out, err
+	}
+	cp := *snap.Ledger.PendingMutation
+	if finishErr := (portablesetup.Service{}).FinishConfirmedIntent(ctx, portablesetup.ConfirmedIntent{
+		ControlRoot: req.ControlRoot, RuntimeRoot: runtimeRoot, Owner: snap.Ledger.Owner,
+	}, &cp); finishErr != nil {
+		out.Outcome, out.Reason = "incomplete", "intent_cleanup_failed"
+		return out, finishErr
+	}
+	if gen, readErr := rereadGeneration(req.ControlRoot); readErr == nil {
+		out.Generation = gen
+	}
+	return out, err
 }
 
 func normalizeAgents(agents []string) ([]portable.Integration, error) {

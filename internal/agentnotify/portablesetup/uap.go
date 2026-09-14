@@ -49,6 +49,10 @@ type MaterializeRequest struct {
 	// revoke or UAP mutation. Wizard uses it to keep a Codex removal pending
 	// until the host attests ExternalUninstalled.
 	HoldOnly bool
+	// KeepReservation leaves the kernel pending mutation in place. Wizard
+	// publishes one SetupIntent for the whole confirmed operation and clears
+	// it after the last target, including when several clients share it.
+	KeepReservation bool
 }
 
 type Materializer struct {
@@ -264,8 +268,10 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 	if err != nil {
 		return portable.Binding{}, err
 	}
-	if err := m.Kernel.finishHandoff(ctx, Request{Binding: pb, ExpectedGeneration: generation, Reservation: res}, res); err != nil {
-		return portable.Binding{}, err
+	if !req.KeepReservation {
+		if err := m.Kernel.finishHandoff(ctx, Request{Binding: pb, ExpectedGeneration: generation, Reservation: res}, res); err != nil {
+			return portable.Binding{}, err
+		}
 	}
 	return pb, nil
 }
@@ -449,6 +455,9 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 		ExternalUninstalled: req.ExternalUninstalled,
 	}); err != nil {
 		return err
+	}
+	if req.KeepReservation {
+		return nil
 	}
 	if req.Discovery.ConfigPath == "" {
 		return m.Kernel.finishHandoff(ctx, kernelReq, res)

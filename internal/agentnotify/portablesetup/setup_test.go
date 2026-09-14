@@ -610,3 +610,38 @@ func TestHandoffNoopDoesNotCreateIntent(t *testing.T) {
 		t.Fatalf("noop raised reservation protocol: %+v", snap.Ledger)
 	}
 }
+
+func TestPublishConfirmedIntentRecordsTargetsAndClears(t *testing.T) {
+	b, ledger := bindingFixture(t)
+	ctx := testCtx(t)
+	profile := filepath.Join(filepath.Dir(b.ControlRoot), "codex-profile")
+	svc := Service{}
+	published, res, err := svc.PublishConfirmedIntent(ctx, ConfirmedIntent{
+		ControlRoot: b.ControlRoot, RuntimeRoot: b.RuntimeRoot, Owner: b.Owner,
+		ExpectedGeneration: ledger.Generation, Action: "install", Stage: "confirmed",
+		SourceDigest: "abc", Targets: []IntentTarget{{
+			Client: "codex", InstallationID: "uap-install", Profile: profile,
+			Units: []string{"hooks", "agent-notify"},
+		}},
+	})
+	if err != nil || res == nil || published.PendingMutation == nil {
+		t.Fatalf("publish: %+v %v %v", published.PendingMutation, res, err)
+	}
+	intent, err := ReadIntent(b.ControlRoot)
+	if err != nil || intent.Action != "install" || intent.Stage != "confirmed" || intent.SourceDigest != "abc" {
+		t.Fatalf("intent: %+v %v", intent, err)
+	}
+	if len(intent.Targets) != 1 || intent.Targets[0].Profile != profile || strings.Join(intent.Targets[0].Units, ",") != "hooks,agent-notify" {
+		t.Fatalf("targets: %+v", intent.Targets)
+	}
+	if err := svc.FinishConfirmedIntent(ctx, ConfirmedIntent{ControlRoot: b.ControlRoot, RuntimeRoot: b.RuntimeRoot, Owner: b.Owner}, res); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
+	if err != nil || snap.Ledger.PendingMutation != nil {
+		t.Fatalf("finish left reservation: %+v %v", snap.Ledger.PendingMutation, err)
+	}
+	if _, err := os.Lstat(IntentPath(b.ControlRoot)); !os.IsNotExist(err) {
+		t.Fatal("finish retained intent file")
+	}
+}

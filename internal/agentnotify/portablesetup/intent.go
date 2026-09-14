@@ -34,6 +34,16 @@ type IntentTarget struct {
 	Units          []string `json:"units,omitempty"`
 }
 
+// ConfirmedIntent is the host-normalized SetupIntent published before the first
+// wizard mutation. Handoff still uses one target; the wizard may record many.
+type ConfirmedIntent struct {
+	ControlRoot, RuntimeRoot, Owner string
+	ExpectedGeneration              uint64
+	Action, Stage                   string
+	SourceRevision, SourceDigest    string
+	Targets                         []IntentTarget
+}
+
 func IntentPath(controlRoot string) string {
 	return filepath.Join(controlRoot, "portable-handoff.json")
 }
