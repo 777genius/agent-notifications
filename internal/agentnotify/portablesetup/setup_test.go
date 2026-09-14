@@ -526,6 +526,61 @@ func TestHandoffIntentRecordsResolvedProfile(t *testing.T) {
 	}
 }
 
+func TestUninstallPublishesIntentBeforeFirstEffect(t *testing.T) {
+	b, ledger := bindingFixture(t)
+	uap := &fakeUAP{}
+	name, err := b.Filename()
+	if err != nil {
+		t.Fatal(err)
+	}
+	uap.stage = func(Envelope) (Receipt, error) {
+		return Receipt{BindingID: b.BindingID, DataRoot: b.DataRoot, LocatorArg: name}, nil
+	}
+	svc := Service{Stager: uap, Activator: uap, Remover: uap}
+	if _, err := svc.Install(testCtx(t), Request{Binding: b, ExpectedGeneration: ledger.Generation}); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := filepath.Join(filepath.Dir(b.ControlRoot), "codex-profile")
+	uap.remove = func(string) error {
+		held, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
+		if err != nil || held.Ledger.PendingMutation == nil {
+			t.Fatalf("remove without uninstall reservation: %+v %v", held.Ledger.PendingMutation, err)
+		}
+		intent, err := ReadIntent(b.ControlRoot)
+		if err != nil || intent.Action != "uninstall" || len(intent.Targets) == 0 || intent.Targets[0].Profile != profile {
+			t.Fatalf("intent: %+v %v", intent, err)
+		}
+		return nil
+	}
+	if err := svc.Remove(testCtx(t), Request{Binding: b, ExpectedGeneration: snap.Ledger.Generation, Profile: profile}); err != nil {
+		t.Fatal(err)
+	}
+	snap, err = installruntime.ReadInstalledSnapshot(b.ControlRoot)
+	if err != nil || snap.Ledger.PendingMutation != nil {
+		t.Fatalf("uninstall left reservation: %+v %v", snap.Ledger.PendingMutation, err)
+	}
+	if _, err := os.Lstat(IntentPath(b.ControlRoot)); !os.IsNotExist(err) {
+		t.Fatal("uninstall retained intent")
+	}
+}
+
+func TestInstallConflictsWithPendingUninstall(t *testing.T) {
+	b, ledger := bindingFixture(t)
+	config, cmd, ledger := ownedMCP(t, b, ledger)
+	svc := Service{}
+	req := Request{Binding: b, ExpectedGeneration: ledger.Generation, Discovery: Discovery{ConfigPath: config, Command: cmd}}
+	if _, _, err := svc.publishIntent(testCtx(t), req, ledger.Generation, "uninstall", "revoke-locator", []string{"direct-mcp"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.matchingReservation(req, "install"); !errors.Is(err, ErrIntentConflict) {
+		t.Fatalf("install during uninstall: %v", err)
+	}
+}
+
 func TestHandoffNoopDoesNotCreateIntent(t *testing.T) {
 	b, ledger := bindingFixture(t)
 	uap := &fakeUAP{}

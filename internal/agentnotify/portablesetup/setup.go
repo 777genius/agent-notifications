@@ -267,6 +267,14 @@ func (s Service) Remove(ctx context.Context, req Request) error {
 	if err != nil {
 		return err
 	}
+	if res == nil {
+		published, created, err := s.publishIntent(ctx, req, req.ExpectedGeneration, "uninstall", "revoke-locator", []string{"direct-mcp"})
+		if err != nil {
+			return err
+		}
+		req.ExpectedGeneration = published.Generation
+		res = created
+	}
 	req.Reservation = res
 	if err := s.RevokeBinding(ctx, req); err != nil {
 		return err
@@ -417,6 +425,10 @@ func (s Service) handoffForward(ctx context.Context, req Request) (uint64, *inst
 }
 
 func (s Service) publishHandoffReservation(ctx context.Context, req Request, gen uint64) (installruntime.Ledger, *installruntime.PendingMutation, error) {
+	return s.publishIntent(ctx, req, gen, "install", "retire-direct", []string{"direct-mcp"})
+}
+
+func (s Service) publishIntent(ctx context.Context, req Request, gen uint64, action, stage string, units []string) (installruntime.Ledger, *installruntime.PendingMutation, error) {
 	key, _, _, err := req.Binding.Registration()
 	if err != nil {
 		return installruntime.Ledger{}, nil, err
@@ -428,8 +440,8 @@ func (s Service) publishHandoffReservation(ctx context.Context, req Request, gen
 	intent := Intent{
 		Version:            intentVersion,
 		SetupIntentID:      intentID,
-		Action:             "install",
-		Stage:              "retire-direct",
+		Action:             action,
+		Stage:              stage,
 		ExpectedGeneration: gen,
 		SourceRevision:     req.SourceRevision,
 		SourceDigest:       req.SourceDigest,
@@ -438,7 +450,7 @@ func (s Service) publishHandoffReservation(ctx context.Context, req Request, gen
 			BindingID:      req.Binding.BindingID,
 			InstallationID: req.Binding.InstallationID,
 			Profile:        req.Profile,
-			Units:          []string{"direct-mcp"},
+			Units:          units,
 		}},
 	}
 	payload, err := marshalIntent(intent)
@@ -457,7 +469,7 @@ func (s Service) publishHandoffReservation(ctx context.Context, req Request, gen
 		Files: []installruntime.File{{Path: path, Before: before, Data: payload, Mode: 0600}},
 	})
 	if err != nil {
-		return installruntime.Ledger{}, nil, fmt.Errorf("%w: publish handoff reservation: %v", ErrPreflight, err)
+		return installruntime.Ledger{}, nil, fmt.Errorf("%w: publish %s reservation: %v", ErrPreflight, action, err)
 	}
 	return ledger, &res, nil
 }

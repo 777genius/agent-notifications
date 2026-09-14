@@ -837,6 +837,27 @@ func TestWizardResumeRejectsDifferentDigest(t *testing.T) {
 	}
 }
 
+func TestWizardResumeRestoresOmittedUninstallFromPendingIntent(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, _, _, gen := managedRuntime(t)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	plantPendingIntent(t, ctx, control, runtime, gen, portablesetup.Intent{
+		Version: 1, SetupIntentID: "pending-uninstall-intent", Action: "uninstall", Stage: "revoke-locator",
+		ExpectedGeneration: gen,
+		Targets:            []portablesetup.IntentTarget{{Client: "codex", Profile: codexConfig, Units: []string{"direct-mcp"}}},
+	})
+	got, err := Run(ctx, Request{Action: ActionUninstall, ControlRoot: control, RuntimeRoot: runtime})
+	if got.Outcome == "cancelled" || got.Reason == "empty_selection" {
+		t.Fatalf("did not restore pending uninstall: %+v %v", got, err)
+	}
+	if got.Reason == "noninteractive_requires_yes" {
+		t.Fatalf("matching pending uninstall still required --yes: %+v %v", got, err)
+	}
+	if got.Outcome != "unchanged" || got.Reason != "portable_absent" {
+		t.Fatalf("resume uninstall: %+v %v", got, err)
+	}
+}
+
 func TestWizardUninstallOmittedUnitsRemovesManagedWithoutPackage(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, _, _ := managedRuntime(t)

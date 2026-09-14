@@ -416,7 +416,25 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 	if err := eng.Recover(ctx); err != nil {
 		return err
 	}
-	if err := m.Kernel.RevokeBinding(ctx, Request{Binding: pb, ExpectedGeneration: req.ExpectedGeneration}); err != nil {
+	kernelReq := Request{
+		Binding: pb, ExpectedGeneration: req.ExpectedGeneration, Discovery: req.Discovery,
+		SourceRevision: req.SourceRevision, SourceDigest: req.SourceDigest, Profile: req.ClientConfigRoot,
+	}
+	res, err := m.Kernel.matchingReservation(kernelReq, "uninstall")
+	if err != nil {
+		return err
+	}
+	if res == nil {
+		published, created, err := m.Kernel.publishIntent(ctx, kernelReq, req.ExpectedGeneration, "uninstall", "revoke-locator", []string{"direct-mcp"})
+		if err != nil {
+			return err
+		}
+		kernelReq.ExpectedGeneration = published.Generation
+		req.ExpectedGeneration = published.Generation
+		res = created
+	}
+	kernelReq.Reservation = res
+	if err := m.Kernel.RevokeBinding(ctx, kernelReq); err != nil {
 		return err
 	}
 	if _, err := m.apply(ctx, eng, uapinstaller.Request{
@@ -428,18 +446,14 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 		return err
 	}
 	if req.Discovery.ConfigPath == "" {
-		return m.Kernel.finishHandoff(ctx, Request{Binding: pb, ExpectedGeneration: req.ExpectedGeneration}, nil)
+		return m.Kernel.finishHandoff(ctx, kernelReq, res)
 	}
 	snap, err := installruntime.ReadInstalledSnapshot(req.Identity.ControlRoot)
 	if err != nil {
 		return err
 	}
-	reqBody := Request{Binding: pb, ExpectedGeneration: snap.Ledger.Generation, Discovery: req.Discovery}
+	reqBody := Request{Binding: pb, ExpectedGeneration: snap.Ledger.Generation, Discovery: req.Discovery, Reservation: res, Profile: req.ClientConfigRoot}
 	if _, err = m.Kernel.HandoffReverse(ctx, reqBody); err != nil {
-		return err
-	}
-	res, err := m.Kernel.matchingReservation(reqBody, "uninstall")
-	if err != nil {
 		return err
 	}
 	return m.Kernel.finishHandoff(ctx, reqBody, res)
