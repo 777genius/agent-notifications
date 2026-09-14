@@ -1,10 +1,10 @@
 {
-  "seo": { "title": "Agent Notifications - حافظ على تركيزك", "description": "إشعارات سطح المكتب لـ Claude Code وCodex CLI التجريبي. اعرف متى ينتهي العمل، أو يحتاج سؤال إلى تدخلك، أو تحدث مشكلة." },
+  "seo": { "title": "Agent Notifications - حافظ على تركيزك", "description": "إشعارات سطح المكتب لـ Claude Code وCodex CLI. اعرف متى ينتهي العمل، أو يحتاج سؤال إلى تدخلك، أو تحدث مشكلة." },
   "language": { "label": "اللغة", "current": "اللغة الحالية: {language}", "search": "ابحث عن لغة", "noResults": "لم يتم العثور على لغات", "switchError": "تعذر تغيير اللغة. يرجى المحاولة مجددًا." },
   "accessibility": { "skip": "انتقل إلى المحتوى", "platforms": "أنظمة التشغيل المدعومة" },
   "brand": { "tagline": "لوكلاء البرمجة لديك" },
   "nav": { "ariaLabel": "الرئيسية", "features": "المزايا", "install": "التثبيت", "faq": "الأسئلة الشائعة" },
-  "hero": { "eyebrow": "مراقبة أقل. إنجاز أكثر.", "title": "حافظ على تركيزك", "emphasis": "سننبهك عند الحاجة", "leadFirst": "دع وكيلك يعمل. واعرف متى ينتهي.", "leadSecond": "أصوات وإشعارات سطح المكتب وخطافات ويب لـ Claude Code وCodex CLI.", "primary": "إعداد الإشعارات", "secondary": "استكشف على GitHub", "note": "مفتوح المصدر · يعمل محليًا · Codex CLI تجريبي" },
+  "hero": { "eyebrow": "مراقبة أقل. إنجاز أكثر.", "title": "حافظ على تركيزك", "emphasis": "سننبهك عند الحاجة", "leadFirst": "دع وكيلك يعمل. واعرف متى ينتهي.", "leadSecond": "أصوات وإشعارات سطح المكتب وخطافات ويب لـ Claude Code وCodex CLI.", "primary": "إعداد الإشعارات", "secondary": "استكشف على GitHub", "note": "مفتوح المصدر · يعمل محليًا" },
   "common": { "now": "الآن", "beta": "تجريبي" },
   "features": {
     "eyebrow": "التنبيه المناسب. في الوقت المناسب.", "titleFirst": "حافظ على انتباهك", "titleSecond": "تخلص من التحقق المستمر",
@@ -44,9 +44,9 @@
   "select": { "scrollUp": "تمرير الخيارات إلى الأعلى", "scrollDown": "تمرير الخيارات إلى الأسفل" },
   "install": {
     "title": "إعداد الإشعارات", "intro": "اتبع الخطوات أدناه لإضافة إشعارات سطح المكتب إلى {agent}.", "chooseAgent": "اختر وكيلك", "requires": "يتطلب {agent}", "bothAgents": "كلا الوكيلين", "bothSelected": "✓ تم اختيار كلا الوكيلين", "installBoth": "التثبيت لكلا الوكيلين", "chooseComputer": "اختر الحاسوب الذي يعمل عليه وكيلك", "selected": "محدد", "detected": "تم اكتشافه تلقائيًا", "change": "تغيير", "targetOs": "نظام التشغيل المستهدف",
-    "products": { "claude": "Claude Code", "codex": "Codex CLI · تجريبي", "both": "كلا الوكيلين" },
+    "products": { "claude": "Claude Code", "codex": "Codex CLI", "both": "كلا الوكيلين" },
     "targets": { "unknown": "اختر نظام التشغيل المستهدف", "macos": "macOS", "linux": "Linux", "windows": "Windows · Git Bash", "manual": "التعليمات اليدوية" },
-    "prerequisiteTitle": "Codex CLI التجريبي - متطلب الإصدار.", "prerequisiteText": "يتطلب إصدارًا مستقرًا منشورًا من الإضافة ≥1.42.0. هذا الإصدار مسودة حاليًا؛ لن يتوفر مثبّت Codex حتى يُنشر.", "checkReleases": "تحقق من الإصدارات",
+    "prerequisiteTitle": "Codex CLI", "prerequisiteText": "يتطلب إصدارًا مستقرًا منشورًا من الإضافة ≥1.42.0.", "checkReleases": "تحقق من الإصدارات",
     "configure": { "title": "اختر الصوت الذي يناسبك", "claudeBefore": "داخل محادثة Claude Code، شغّل", "claudeAfter": "هذا أمر شرطة مائلة في Claude، وليس أمرًا للصدفة.", "codexBefore": "بالنسبة إلى Codex، عدّل ملف الإعدادات المشتركة", "codexMiddle": "باتباع", "codexLink": "تعليمات الإعداد اليدوي الموثقة", "codexAfter": "لا يلزم Claude Code عند إعداد Codex وحده.", "shared": "يشترك كلا الوكيلين في هذا الإعداد. تُحفَظ إعداداتك عند التحديث." },
     "manual": { "title": "اتبع الطريقة اليدوية", "claude": "تثبيت Claude يدويًا", "codex": "تسجيل Codex يدويًا" },
     "chooseTarget": "اختر نظام التشغيل المستهدف لإظهار الأمر. تتطلب الأجهزة المحمولة والمتصفحات غير المعروفة اختيارًا صريحًا.", "commandLabel": "أمر {intent}", "copyCommand": "نسخ الأمر", "updatingInstead": "هل تريد التحديث بدلًا من ذلك؟", "copied": "تم النسخ. الصق الأمر في الطرفية المستهدفة عندما تكون جاهزًا.", "copyUnavailable": "النسخ غير متاح. حدد الأمر وانسخه يدويًا.", "updateNote": "يستخدم التثبيت والتحديث الأمر نفسه. تُحفَظ إعداداتك الحالية.",

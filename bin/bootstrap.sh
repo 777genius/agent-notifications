@@ -1,6 +1,6 @@
 #!/bin/bash
 # bootstrap.sh - One-command install/update for claude-notifications plugin
-# Usage: curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/main/bin/bootstrap.sh | bash
+# Usage: see https://777genius.github.io/agent-notifications/#install
 
 set -euo pipefail
 
@@ -18,7 +18,7 @@ MARKETPLACE_SOURCE="${BOOTSTRAP_MARKETPLACE_SOURCE:-$REPO}"
 MARKETPLACE_NAME="claude-notifications-go"
 PLUGIN_NAME="claude-notifications-go"
 PLUGIN_KEY="${PLUGIN_NAME}@${MARKETPLACE_NAME}"
-INSTALL_SCRIPT_URL="${INSTALL_SCRIPT_URL:-https://raw.githubusercontent.com/${REPO}/main/bin/install.sh}"
+INSTALL_SCRIPT_URL="${INSTALL_SCRIPT_URL:-}"
 
 # Retired GitHub repo name(s) this marketplace was previously declared under.
 # Users who added the marketplace before a rename have this baked into their
@@ -46,6 +46,7 @@ _CONFIG_HELPER=""
 _KEEP_CONFIG_STAGE=false
 PRODUCT=""
 BOOTSTRAP_TAG=""
+BOOTSTRAP_COMMIT=""
 _BOOTSTRAP_TMP=""  # temp file path for trap (set -u safe)
 
 # ──────────────────────────────────────────────
@@ -87,11 +88,10 @@ abort_if_wsl_environment() {
     echo -e "${YELLOW}This command is running inside WSL, so it would install Linux binaries under /home instead of Windows binaries.${NC}" >&2
     echo -e "${YELLOW}If you started this from PowerShell or Windows Terminal, your bash command is probably WSL bash, not Git Bash.${NC}" >&2
     echo "" >&2
-    echo -e "${YELLOW}For Windows Claude Code, open Git Bash from the Start menu and run:${NC}" >&2
-    echo -e "  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/bin/bootstrap.sh | bash" >&2
+    echo -e "${YELLOW}For Windows Claude Code, open Git Bash and use the installer at:${NC}" >&2
+    echo -e "  https://777genius.github.io/agent-notifications/#install" >&2
     echo "" >&2
-    echo -e "${YELLOW}If you intentionally use Claude Code inside WSL, rerun with:${NC}" >&2
-    echo -e "  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/bin/bootstrap.sh | env CLAUDE_NOTIFICATIONS_ALLOW_WSL=1 bash" >&2
+    echo -e "${YELLOW}For an intentional WSL install, set CLAUDE_NOTIFICATIONS_ALLOW_WSL=1 on the final bash command.${NC}" >&2
     echo "" >&2
     exit 1
 }
@@ -963,8 +963,8 @@ print_success() {
     echo ""
     print_iterm2_python_api_notice
     echo ""
-    echo -e "${BLUE}One-liner to update in the future (same as install):${NC}"
-    echo -e "  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/bin/bootstrap.sh | bash"
+    echo -e "${BLUE}To update later, use the current installer at:${NC}"
+    echo -e "  https://777genius.github.io/agent-notifications/#install"
     echo ""
     echo -e "${YELLOW}────────────────────────────────────────────${NC}"
     echo -e "${YELLOW}★${NC} ${BOLD}Boost your productivity${NC}"
@@ -1066,6 +1066,29 @@ resolve_bootstrap_release() {
         echo "Agent Notifications requires published release v1.42.0 or newer (the shared config preflight needs it, for every product); found $BOOTSTRAP_TAG." >&2
         return 1
     fi
+
+    BOOTSTRAP_COMMIT="${BOOTSTRAP_RELEASE_COMMIT:-}"
+    if [ -z "$BOOTSTRAP_COMMIT" ]; then
+        _BOOTSTRAP_TMP=$(mktemp "${TMPDIR:-/tmp}/bootstrap-commit-XXXXXX") || return 1
+        fetch_bootstrap_file "${BOOTSTRAP_COMMIT_API_BASE_URL:-https://api.github.com/repos/${REPO}/commits}/$BOOTSTRAP_TAG" "$_BOOTSTRAP_TMP" || return 1
+        BOOTSTRAP_COMMIT=$(
+            python3 -I - "$_BOOTSTRAP_TMP" <<'PYCOMMIT'
+import json, re, sys
+with open(sys.argv[1], encoding='utf-8') as stream:
+    value = json.load(stream).get('sha', '')
+if not isinstance(value, str) or re.fullmatch(r'[0-9a-f]{40}', value) is None:
+    raise SystemExit('Release tag did not resolve to a commit SHA')
+sys.stdout.buffer.write((value + '\n').encode('ascii'))
+PYCOMMIT
+        ) || return 1
+        rm -f "$_BOOTSTRAP_TMP"
+        _BOOTSTRAP_TMP=""
+    fi
+    printf '%s\n' "$BOOTSTRAP_COMMIT" | grep -Eq '^[0-9a-f]{40}$' || {
+        echo "Invalid release commit SHA: $BOOTSTRAP_COMMIT" >&2; return 1;
+    }
+
+    INSTALL_SCRIPT_URL="${INSTALL_SCRIPT_URL:-${BOOTSTRAP_RAW_BASE_URL:-https://raw.githubusercontent.com/${REPO}}/$BOOTSTRAP_COMMIT/bin/install.sh}"
 }
 
 # Only release-verified bytes execute before host registration. Never use an old
@@ -1249,12 +1272,12 @@ report_config_init_failure() {
 
 install_codex() {
     local tag="$BOOTSTRAP_TAG" version="${BOOTSTRAP_TAG#v}"
-    local source_base="${BOOTSTRAP_SOURCE_BASE_URL:-https://github.com/${REPO}/archive/refs/tags}"
+    local source_base="${BOOTSTRAP_SOURCE_BASE_URL:-https://github.com/${REPO}/archive}"
     local release_base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}"
     _BOOTSTRAP_STAGE=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-codex-XXXXXX") || return 1
     local bundle="$_BOOTSTRAP_STAGE/bundle"
     mkdir "$bundle" || return 1
-    fetch_bootstrap_file "$source_base/$tag.tar.gz" "$_BOOTSTRAP_STAGE/source.tar.gz" || return 1
+    fetch_bootstrap_file "$source_base/$BOOTSTRAP_COMMIT.tar.gz" "$_BOOTSTRAP_STAGE/source.tar.gz" || return 1
     tar -xzf "$_BOOTSTRAP_STAGE/source.tar.gz" --strip-components=1 -C "$bundle" || return 1
     [ "$(get_manifest_version "$bundle/.claude-plugin/plugin.json")" = "$version" ] || {
         echo "Source bundle must match Codex-capable release $tag (minimum v1.42.0)." >&2; return 1;

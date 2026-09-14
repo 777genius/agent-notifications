@@ -127,17 +127,9 @@ PowerShell and Windows Terminal can resolve `bash` to WSL. In that case the inst
 
 ### Fix
 
-Open Git Bash from the Start menu and run the bootstrap command there. Do not run the bootstrap `curl ... | bash` command from PowerShell if it opens WSL.
+Open Git Bash from the Start menu and run the [secure install command](INSTALLATION.md#quick-install-recommended) there. Do not run it from PowerShell if `bash` opens WSL.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/main/bin/bootstrap.sh | bash
-```
-
-If you intentionally use Claude Code inside WSL, opt in explicitly:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/main/bin/bootstrap.sh | env CLAUDE_NOTIFICATIONS_ALLOW_WSL=1 bash
-```
+For an intentional WSL installation, add `CLAUDE_NOTIFICATIONS_ALLOW_WSL=1` to the `env` invocation on the final line of that command.
 
 ## Windows: install issues related to `%TEMP%` / `%TMP%` location
 

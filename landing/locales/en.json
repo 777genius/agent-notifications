@@ -1,7 +1,7 @@
 {
   "seo": {
     "title": "Agent Notifications - Stay in flow",
-    "description": "Desktop notifications for Claude Code and Codex CLI beta. Know when work finishes, a question needs you, or something goes wrong."
+    "description": "Desktop notifications for Claude Code and Codex CLI. Know when work finishes, a question needs you, or something goes wrong."
   },
   "language": {
     "label": "Language",
@@ -29,7 +29,7 @@
     "leadSecond": "Sounds, desktop notifications and webhooks for Claude Code and Codex CLI.",
     "primary": "Set up notifications",
     "secondary": "Explore on GitHub",
-    "note": "Open source · Runs locally · Codex CLI beta"
+    "note": "Open source · Runs locally"
   },
   "common": { "now": "now", "beta": "beta" },
   "features": {
@@ -142,7 +142,7 @@
     "targetOs": "Target operating system",
     "products": {
       "claude": "Claude Code",
-      "codex": "Codex CLI · beta",
+      "codex": "Codex CLI",
       "both": "Both agents"
     },
     "targets": {
@@ -152,8 +152,8 @@
       "windows": "Windows · Git Bash",
       "manual": "Manual instructions"
     },
-    "prerequisiteTitle": "Codex CLI beta — release prerequisite.",
-    "prerequisiteText": "Requires a published stable plugin release ≥1.42.0. That release is currently draft; the Codex installer is not available until it is published.",
+    "prerequisiteTitle": "Codex CLI",
+    "prerequisiteText": "Requires a published stable plugin release ≥1.42.0.",
     "checkReleases": "Check releases",
     "configure": {
       "title": "Make it sound like you",

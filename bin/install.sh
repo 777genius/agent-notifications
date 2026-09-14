@@ -211,11 +211,10 @@ abort_if_wsl_environment() {
     echo -e "${YELLOW}This installer is running inside WSL, so it would install Linux binaries under /home instead of Windows binaries.${NC}" >&2
     echo -e "${YELLOW}If you started this from PowerShell or Windows Terminal, your bash command is probably WSL bash, not Git Bash.${NC}" >&2
     echo "" >&2
-    echo -e "${YELLOW}For Windows Claude Code, open Git Bash from the Start menu and run:${NC}" >&2
-    echo -e "  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/bin/bootstrap.sh | bash" >&2
+    echo -e "${YELLOW}For Windows Claude Code, open Git Bash and use the installer at:${NC}" >&2
+    echo -e "  https://777genius.github.io/agent-notifications/#install" >&2
     echo "" >&2
-    echo -e "${YELLOW}If you intentionally use Claude Code inside WSL, rerun with:${NC}" >&2
-    echo -e "  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/bin/bootstrap.sh | env CLAUDE_NOTIFICATIONS_ALLOW_WSL=1 bash" >&2
+    echo -e "${YELLOW}For an intentional WSL install, set CLAUDE_NOTIFICATIONS_ALLOW_WSL=1 on the final bash command.${NC}" >&2
     echo "" >&2
     exit 1
 }

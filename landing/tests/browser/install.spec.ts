@@ -30,7 +30,7 @@ test("production command matrix, aftercare, clipboard and configuration", async 
   );
   for (const [name, product] of [
     ["Claude Code", "claude"],
-    ["Codex CLI · beta", "codex"],
+    ["Codex CLI", "codex"],
     ["Both agents", "both"],
   ]) {
     await page.getByRole("button", { name, exact: true }).click();
@@ -41,22 +41,18 @@ test("production command matrix, aftercare, clipboard and configuration", async 
           await page.getByRole("button", { name: intent, exact: true }).count()
         )
           await page.getByRole("button", { name: intent, exact: true }).click();
-        await expect(page.getByLabel(intent + " command")).toHaveValue(
-          "curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/main/bin/bootstrap.sh |\nbash -s -- --product " +
-            product,
-        );
+        const value = await page.getByLabel(intent + " command").inputValue();
+        expect(value).toContain("/releases/latest");
+        expect(value).toContain("/commits/$tag");
+        expect(value).toContain("/$commit/bin");
+        expect(value).not.toContain("/main/bin/bootstrap.sh");
+        expect(value).toMatch(new RegExp(`--product ${product}$`));
       }
       if (os === "windows")
         await expect(
           page.getByText("Run in Git Bash on Windows.", { exact: true }),
         ).toBeVisible();
     }
-    if (product !== "claude")
-      await expect(
-        page.getByText("Codex CLI beta — release prerequisite.", {
-          exact: true,
-        }),
-      ).toBeVisible();
     await page.getByRole("button", { name: "Configure", exact: true }).click();
     await expect(
       page.getByRole("button", { name: "Copy command" }),
@@ -191,31 +187,54 @@ test("language switch localizes content, URL, metadata and persists the choice",
   page,
 }) => {
   await page.goto("?source=i18n#features");
-  await page.getByRole("button", { name: "Codex CLI · beta", exact: true }).click();
+  await page.getByRole("button", { name: "Codex CLI", exact: true }).click();
   await chooseOS(page, "windows");
-  await expect(page.getByLabel("Install command")).toHaveValue(/--product codex$/);
+  await expect(page.getByLabel("Install command")).toHaveValue(
+    /--product codex$/,
+  );
   await chooseLanguage(page, /Current language/, "简体中文");
-  await expect(page).toHaveURL(/\/agent-notifications\/zh\/?\?source=i18n#features$/);
-  await expect(page.getByRole("heading", { level: 1 })).toContainText("保持专注");
+  await expect(page).toHaveURL(
+    /\/agent-notifications\/zh\/?\?source=i18n#features$/,
+  );
+  await expect(page.getByRole("heading", { level: 1 })).toContainText(
+    "保持专注",
+  );
   await expect(page.locator("html")).toHaveAttribute("lang", "zh-CN");
-  await expect(page).toHaveTitle("Agent Notifications - 专注工作，及时获知进展");
+  await expect(page).toHaveTitle(
+    "Agent Notifications - 专注工作，及时获知进展",
+  );
   await expect(page.locator('meta[name="description"]')).toHaveAttribute(
     "content",
     /桌面通知/,
   );
-  await expect(page.locator('meta[property="og:type"]')).toHaveAttribute("content", "website");
+  await expect(page.locator('meta[property="og:type"]')).toHaveAttribute(
+    "content",
+    "website",
+  );
   expect(
     await page.locator('script[type="application/ld+json"]').textContent(),
   ).toContain("SoftwareApplication");
   await expect(page.getByLabel("安装命令")).toHaveValue(/--product codex$/);
-  await expect(page.getByText("请在 Windows 的 Git Bash 中运行。", { exact: true })).toBeVisible();
-  expect((await page.context().cookies()).find((cookie) => cookie.name === "agent_notifications_locale")?.value).toBe("zh");
+  await expect(
+    page.getByText("请在 Windows 的 Git Bash 中运行。", { exact: true }),
+  ).toBeVisible();
+  expect(
+    (await page.context().cookies()).find(
+      (cookie) => cookie.name === "agent_notifications_locale",
+    )?.value,
+  ).toBe("zh");
 
   await page.reload();
-  await expect(page.getByRole("heading", { level: 1 })).toContainText("保持专注");
+  await expect(page.getByRole("heading", { level: 1 })).toContainText(
+    "保持专注",
+  );
   await chooseLanguage(page, /当前语言/, "English");
-  await expect(page).toHaveURL(/\/agent-notifications\/?\?source=i18n#features$/);
-  await expect(page.getByRole("heading", { level: 1 })).toContainText("Stay in flow");
+  await expect(page).toHaveURL(
+    /\/agent-notifications\/?\?source=i18n#features$/,
+  );
+  await expect(page.getByRole("heading", { level: 1 })).toContainText(
+    "Stay in flow",
+  );
 });
 test("failed locale payload keeps the working language and reports the error", async ({
   page,
@@ -226,7 +245,9 @@ test("failed locale payload keeps the working language and reports the error", a
   await expect(page.getByRole("alert")).toContainText(
     "Unable to change language",
   );
-  await expect(page.getByRole("heading", { level: 1 })).toContainText("Stay in flow");
+  await expect(page.getByRole("heading", { level: 1 })).toContainText(
+    "Stay in flow",
+  );
   await expect(page).toHaveURL(/\/agent-notifications\/?$/);
 });
 test("language menu is searchable, keyboard accessible and closes outside", async ({
@@ -241,12 +262,16 @@ test("language menu is searchable, keyboard accessible and closes outside", asyn
   await expect(page.getByRole("option", { name: "简体中文" })).toBeVisible();
   await expect(page.getByRole("option", { name: "English" })).toHaveCount(0);
   await search.fill("missing");
-  await expect(page.getByText("No languages found", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("No languages found", { exact: true }),
+  ).toBeVisible();
   await search.press("Escape");
   await expect(search).toHaveCount(0);
   await trigger.click();
   await page.locator("main").click({ position: { x: 5, y: 5 } });
-  await expect(page.getByRole("searchbox", { name: "Search languages" })).toHaveCount(0);
+  await expect(
+    page.getByRole("searchbox", { name: "Search languages" }),
+  ).toHaveCount(0);
 });
 test("notification sequence covers statuses and agents, pause and reduced motion", async ({
   page,
