@@ -27,7 +27,7 @@ installer:
 /plugin marketplace remove claude-notifications-go
 ```
 
-then run the [installer](../README.md#quick-install-recommended) again.
+then run the [installer](INSTALLATION.md#quick-install-recommended) again.
 
 ## macOS: VS Code click-to-focus focuses the wrong window
 
