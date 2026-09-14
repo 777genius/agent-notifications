@@ -35,6 +35,10 @@ var (
 )
 
 func main() {
+	if handled, code := dispatchManagedStdio(os.Args[1:], os.Stderr); handled {
+		os.Exit(code)
+	}
+
 	if len(os.Args) > 1 && (os.Args[1] == "portable-launch" || os.Args[1] == "portable-primary") {
 		os.Exit(agentPortableMain(os.Args[1], os.Args[2:]))
 	}
