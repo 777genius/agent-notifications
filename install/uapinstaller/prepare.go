@@ -2,12 +2,15 @@ package uapinstaller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"path"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/packagedigest"
-	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/sourceacquisition"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/usecase"
 )
@@ -84,8 +87,7 @@ func (e *Engine) prepareInstall(ctx context.Context, req Request) (*PreparedOper
 	if err := os.MkdirAll(e.cfg.TempRoot, 0700); err != nil {
 		return nil, err
 	}
-	acq := sourceacquisition.Acquirer{TempRoot: e.cfg.TempRoot}
-	snapshot, err := acq.AcquireLocal(ctx, req.PackageRoot)
+	snapshot, err := snapshotLocalPackage(ctx, e.cfg.TempRoot, req.PackageRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -170,6 +172,70 @@ func (e *Engine) prepareRemove(ctx context.Context, req Request) (*PreparedOpera
 		DataRoot: receipt.Locator, DataReceiptID: binding.DataReceiptID, OperationID: req.OperationID,
 	}
 	return handle, nil
+}
+
+// snapshotLocalPackage uses packagedigest executable overrides so Windows
+// host FileMode (no 0111 on regular files) does not drop logical bin/ helpers
+// from TreeDigest. AcquireLocal hashes POSIX bits from the checkout.
+func snapshotLocalPackage(ctx context.Context, tempRoot, packageRoot string) (domain.PackageSnapshot, error) {
+	absolute, err := filepath.Abs(packageRoot)
+	if err != nil {
+		return domain.PackageSnapshot{}, fmt.Errorf("acquire local package: resolve source failed")
+	}
+	executables, err := declaredPackageExecutables(absolute)
+	if err != nil {
+		return domain.PackageSnapshot{}, err
+	}
+	source := domain.SourceIdentity{RequestedSource: packageRoot, CanonicalSource: filepath.Clean(absolute), SourceBindingHint: "direct-local"}
+	snapshot, err := (packagedigest.Builder{TempRoot: tempRoot}).SnapshotWithExecutables(ctx, absolute, source, executables)
+	if err != nil {
+		return domain.PackageSnapshot{}, fmt.Errorf("acquire local package: snapshot package content failed")
+	}
+	return snapshot, nil
+}
+
+func declaredPackageExecutables(root string) ([]string, error) {
+	seen := map[string]struct{}{}
+	var out []string
+	add := func(rel string) {
+		rel = path.Clean(strings.TrimPrefix(filepath.ToSlash(rel), "./"))
+		if rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
+			return
+		}
+		info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil || !info.Mode().IsRegular() {
+			return
+		}
+		if _, ok := seen[rel]; ok {
+			return
+		}
+		seen[rel] = struct{}{}
+		out = append(out, rel)
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "mcp.json"))
+	if err == nil {
+		var mcp struct {
+			Servers map[string]struct {
+				Command string `json:"command"`
+			} `json:"mcpServers"`
+		}
+		if json.Unmarshal(raw, &mcp) == nil {
+			for _, server := range mcp.Servers {
+				add(server.Command)
+			}
+		}
+	}
+	entries, err := os.ReadDir(filepath.Join(root, "bin"))
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		add(path.Join("bin", entry.Name()))
+	}
+	return out, nil
 }
 
 func detectedClient(req Request) (domain.DetectedClient, error) {
