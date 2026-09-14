@@ -417,16 +417,23 @@ func promoteNative(change *NativeChange) error {
 }
 
 // NativeAlias retains every pre-existing concrete bundle path. Hook discovery
-// uses the stable ClaudeNotifier.app and terminal-notifier.app names, retargeted
-// at the active published generation. Retargeting those aliases does not swap
-// the queued callback inode.
+// uses the stable ClaudeNotifier.app name, plus terminal-notifier.app when that
+// optional legacy alias is free. A foreign legacy symlink is left untouched so
+// an available modern alias can still be published. Retargeting those aliases
+// does not swap the queued callback inode.
 func NativeAlias(change *NativeChange, bin string) ([]File, error) {
 	if change == nil {
 		return nil, nil
 	}
 	var files []File
-	for _, name := range []string{"ClaudeNotifier.app", "terminal-notifier.app"} {
-		next, err := nativeHookAlias(change, filepath.Join(bin, name))
+	for _, alias := range []struct {
+		name     string
+		optional bool
+	}{
+		{name: "ClaudeNotifier.app"},
+		{name: "terminal-notifier.app", optional: true},
+	} {
+		next, err := nativeHookAlias(change, filepath.Join(bin, alias.name), alias.optional)
 		if err != nil {
 			return nil, err
 		}
@@ -435,7 +442,7 @@ func NativeAlias(change *NativeChange, bin string) ([]File, error) {
 	return files, nil
 }
 
-func nativeHookAlias(change *NativeChange, path string) ([]File, error) {
+func nativeHookAlias(change *NativeChange, path string, optional bool) ([]File, error) {
 	info, err := os.Lstat(path)
 	if err == nil && info.IsDir() {
 		return nil, nil
@@ -448,6 +455,9 @@ func nativeHookAlias(change *NativeChange, path string) ([]File, error) {
 		return nil, err
 	}
 	if before.Exists && before.Link != change.After.Path && !ownedNativeAlias(before.Link, change) {
+		if optional {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("foreign native alias cannot be replaced")
 	}
 	return []File{{Path: path, Before: before, Link: change.After.Path}}, nil

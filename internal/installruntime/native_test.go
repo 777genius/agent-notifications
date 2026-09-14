@@ -142,6 +142,69 @@ func TestNativeAliasPreservesConcreteLegacyBundle(t *testing.T) {
 	}
 }
 
+func TestNativeAliasPreservesUnmanagedLegacySymlink(t *testing.T) {
+	ctx, r := request(t)
+	if err := os.MkdirAll(r.RuntimeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	foreign := filepath.Join(t.TempDir(), "unmanaged.app")
+	if err := os.Mkdir(foreign, 0700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(r.RuntimeRoot, "terminal-notifier.app")
+	if err := os.Symlink(foreign, legacy); err != nil {
+		t.Fatal(err)
+	}
+	change, err := StageNative(ctx, r.ControlRoot, nativeFixture(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliases, err := NativeAlias(change, r.RuntimeRoot)
+	if err != nil || len(aliases) != 1 || filepath.Base(aliases[0].Path) != "ClaudeNotifier.app" || aliases[0].Link != change.After.Path {
+		t.Fatalf("expected only the free conventional name: %v %+v", err, aliases)
+	}
+	r.Native = change
+	r.Files = aliases
+	if _, err := Commit(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.Readlink(legacy)
+	if err != nil || got != foreign {
+		t.Fatalf("legacy symlink %s %v", got, err)
+	}
+	published, err := os.Readlink(filepath.Join(r.RuntimeRoot, "ClaudeNotifier.app"))
+	if err != nil || published != change.After.Path {
+		t.Fatalf("modern alias %s %v", published, err)
+	}
+}
+
+func TestNativeAliasRefusesForeignModernSymlink(t *testing.T) {
+	ctx, r := request(t)
+	if err := os.MkdirAll(r.RuntimeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	foreign := filepath.Join(t.TempDir(), "unmanaged.app")
+	if err := os.Mkdir(foreign, 0700); err != nil {
+		t.Fatal(err)
+	}
+	modern := filepath.Join(r.RuntimeRoot, "ClaudeNotifier.app")
+	if err := os.Symlink(foreign, modern); err != nil {
+		t.Fatal(err)
+	}
+	change, err := StageNative(ctx, r.ControlRoot, nativeFixture(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliases, err := NativeAlias(change, r.RuntimeRoot)
+	if err == nil || !strings.Contains(err.Error(), "foreign native alias cannot be replaced") {
+		t.Fatalf("modern foreign alias accepted: %v %+v", err, aliases)
+	}
+	got, err := os.Readlink(modern)
+	if err != nil || got != foreign {
+		t.Fatalf("modern symlink %s %v", got, err)
+	}
+}
+
 func hookAliasNames() []string {
 	return []string{"ClaudeNotifier.app", "terminal-notifier.app"}
 }

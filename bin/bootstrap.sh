@@ -18,7 +18,12 @@ MARKETPLACE_SOURCE="${BOOTSTRAP_MARKETPLACE_SOURCE:-$REPO}"
 MARKETPLACE_NAME="claude-notifications-go"
 PLUGIN_NAME="claude-notifications-go"
 PLUGIN_KEY="${PLUGIN_NAME}@${MARKETPLACE_NAME}"
-INSTALL_SCRIPT_URL="${INSTALL_SCRIPT_URL:-https://raw.githubusercontent.com/${REPO}/main/bin/install.sh}"
+# Public installs pair install.sh with the same published tag as the binary.
+# main/bin/install.sh is only used for already-managed runtimes that already
+# have an ownership ledger; never mix that writer with a pre-floor release.
+INSTALL_SCRIPT_URL="${INSTALL_SCRIPT_URL:-}"
+MANAGED_INSTALL_SCRIPT_URL="${MANAGED_INSTALL_SCRIPT_URL:-https://raw.githubusercontent.com/${REPO}/main/bin/install.sh}"
+BOOTSTRAP_RAW_CONTENT_URL="${BOOTSTRAP_RAW_CONTENT_URL:-https://raw.githubusercontent.com/${REPO}}"
 
 # Retired GitHub repo name(s) this marketplace was previously declared under.
 # Users who added the marketplace before a rename have this baked into their
@@ -1220,7 +1225,40 @@ import json, sys
 v=json.load(open(sys.argv[1]))
 assert isinstance(v,dict) and isinstance(v.get('path'),str) and v['path'], 'Missing config path capability'
 PYCAP
-    fetch_bootstrap_file "$INSTALL_SCRIPT_URL" "$_CONFIG_STAGE/install.sh" || return 1
+    fetch_bootstrap_file "$(select_bootstrap_install_script)" "$_CONFIG_STAGE/install.sh" || return 1
+}
+
+bootstrap_control_root() {
+    case "$(uname -s 2>/dev/null)" in
+        Darwin)
+            printf '%s\n' "$HOME/Library/Application Support/agent-notifications"
+            ;;
+        MINGW*|MSYS*|CYGWIN*|Windows_NT)
+            printf '%s\n' "${APPDATA:-$HOME/AppData/Roaming}/agent-notifications"
+            ;;
+        *)
+            printf '%s\n' "${XDG_CONFIG_HOME:-$HOME/.config}/agent-notifications"
+            ;;
+    esac
+}
+
+bootstrap_has_managed_ledger() {
+    local ledger
+    ledger="$(bootstrap_control_root)/ownership.json"
+    [ -f "$ledger" ] || return 1
+    [ ! -L "$ledger" ]
+}
+
+select_bootstrap_install_script() {
+    if [ -n "$INSTALL_SCRIPT_URL" ]; then
+        printf '%s\n' "$INSTALL_SCRIPT_URL"
+        return 0
+    fi
+    if bootstrap_has_managed_ledger; then
+        printf '%s\n' "$MANAGED_INSTALL_SCRIPT_URL"
+        return 0
+    fi
+    printf '%s\n' "$BOOTSTRAP_RAW_CONTENT_URL/${BOOTSTRAP_TAG}/bin/install.sh"
 }
 
 # Optional exact-version release templates. Releases without this verified asset

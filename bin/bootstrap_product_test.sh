@@ -34,6 +34,18 @@ done
 for tag in v1.41.0 v0.99.0 v1.42.0-rc1 v01.42.0 v1.042.0 v1.42.00 v99999999999999999999.0.0 main; do
     if BOOTSTRAP_RELEASE_TAG="$tag" resolve_bootstrap_release; then exit 1; fi
 done
+INSTALL_SCRIPT_URL=""
+BOOTSTRAP_TAG=v1.43.0
+BOOTSTRAP_RAW_CONTENT_URL="http://example.test"
+MANAGED_INSTALL_SCRIPT_URL="http://example.test/main/bin/install.sh"
+[ "$(select_bootstrap_install_script)" = "http://example.test/v1.43.0/bin/install.sh" ]
+mkdir -p "$(bootstrap_control_root)"
+printf '{}\n' > "$(bootstrap_control_root)/ownership.json"
+[ "$(select_bootstrap_install_script)" = "http://example.test/main/bin/install.sh" ]
+INSTALL_SCRIPT_URL="http://example.test/override.sh"
+[ "$(select_bootstrap_install_script)" = "http://example.test/override.sh" ]
+rm -f "$(bootstrap_control_root)/ownership.json"
+INSTALL_SCRIPT_URL=""
 # setup_marketplace self-heals a marketplace declared under a retired repo
 # name, but leaves an unrelated source conflict alone.
 (
@@ -200,6 +212,16 @@ for tag in ['v1.42.0', 'v1.43.0']:
     import hashlib
     (dest / 'checksums.txt').write_bytes((hashlib.sha256(payload).hexdigest()+'  '+asset_name+'\n').encode('ascii'))
 (web/'install.sh').write_bytes(installer.encode('utf-8'))
+def write_origin_installer(path, origin):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(installer.replace(
+        'chmod +x "$INSTALL_TARGET_DIR/claude-notifications"',
+        'printf %s\\\\n '+origin+' > "$INSTALL_TARGET_DIR/script-origin"\nchmod +x "$INSTALL_TARGET_DIR/claude-notifications"',
+        1,
+    ))
+for tag in ['v1.42.0', 'v1.43.0']:
+    write_origin_installer(web / tag / 'bin' / 'install.sh', tag)
+write_origin_installer(web / 'main' / 'bin' / 'install.sh', 'managed')
 request_paths=[]
 class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
@@ -234,6 +256,30 @@ assert 'codex CLI not found' in run(['--product', 'codex'], 1)
 (cli / 'absent').rename(cli / 'codex')
 run(['--product', 'codex']); run(['--product', 'codex'])
 run(['--product', 'codex'], extra={'BOOTSTRAP_RELEASE_TAG':'v1.43.0'})
+pairing={'INSTALL_SCRIPT_URL':'','BOOTSTRAP_RAW_CONTENT_URL':base,'MANAGED_INSTALL_SCRIPT_URL':base+'/main/bin/install.sh'}
+request_paths.clear()
+run(['--product', 'codex'], extra=dict(pairing, BOOTSTRAP_RELEASE_TAG='v1.43.0'))
+assert sum(path.endswith('/v1.43.0/bin/install.sh') for path in request_paths)==1
+assert not any(path.endswith('/main/bin/install.sh') for path in request_paths)
+home=pathlib.Path(env['HOME'])
+xdg=sandbox/'xdg-config'
+appdata=sandbox/'appdata'
+if sys.platform=='darwin':
+    ledger=home/'Library/Application Support'/'agent-notifications'/'ownership.json'
+    managed_env={}
+elif os.name=='nt':
+    ledger=appdata/'agent-notifications'/'ownership.json'
+    managed_env={'APPDATA':str(appdata)}
+else:
+    ledger=xdg/'agent-notifications'/'ownership.json'
+    managed_env={'XDG_CONFIG_HOME':str(xdg)}
+ledger.parent.mkdir(parents=True, exist_ok=True)
+ledger.write_text('{"schema":1,"id":"fixture","generation":1,"consumers":{},"files":{}}\n')
+request_paths.clear()
+run(['--product', 'codex'], extra=dict(pairing, BOOTSTRAP_RELEASE_TAG='v1.43.0', **managed_env))
+assert sum(path.endswith('/main/bin/install.sh') for path in request_paths)==1
+assert not any(path.endswith('/v1.43.0/bin/install.sh') for path in request_paths)
+ledger.unlink()
 registration = pathlib.Path(env['CODEX_HOME']) / 'fixture-registration'
 before = registration.read_bytes()
 # Reject mixed binary/source releases before registration and retain live state.
