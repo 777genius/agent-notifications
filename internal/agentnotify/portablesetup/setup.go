@@ -55,6 +55,7 @@ type Request struct {
 	ExpectedGeneration uint64
 	Envelope           Envelope
 	Discovery          Discovery
+	Reservation        *installruntime.PendingMutation
 }
 
 type Service struct {
@@ -93,11 +94,27 @@ func (s Service) Install(ctx context.Context, req Request) (portable.Binding, er
 	if err := s.preflight(req.Binding); err != nil {
 		return portable.Binding{}, err
 	}
-	gen, err := s.handoffForward(ctx, req)
+	if req.Discovery.ConfigPath != "" {
+		release, err := installruntime.AcquireCoordinatorLease(ctx, req.Binding.ControlRoot)
+		if err != nil {
+			return portable.Binding{}, err
+		}
+		defer release()
+		if _, err = installruntime.Recover(ctx, req.Binding.ControlRoot); err != nil {
+			return portable.Binding{}, err
+		}
+		snap, err := installruntime.ReadInstalledSnapshot(req.Binding.ControlRoot)
+		if err != nil {
+			return portable.Binding{}, err
+		}
+		req.ExpectedGeneration = snap.Ledger.Generation
+	}
+	gen, res, err := s.handoffForward(ctx, req)
 	if err != nil {
 		return portable.Binding{}, err
 	}
 	req.ExpectedGeneration = gen
+	req.Reservation = res
 	name, err := req.Binding.Filename()
 	if err != nil {
 		return portable.Binding{}, err
@@ -115,10 +132,32 @@ func (s Service) Install(ctx context.Context, req Request) (portable.Binding, er
 	if _, err = s.CommitBinding(ctx, req); err != nil {
 		return portable.Binding{}, err
 	}
+	if err = s.finishHandoff(ctx, req, res); err != nil {
+		return portable.Binding{}, err
+	}
 	if err = s.Activator.Activate(ctx, receipt); err != nil {
 		return portable.Binding{}, err
 	}
 	return req.Binding, nil
+}
+
+func (s Service) matchingReservation(req Request) (*installruntime.PendingMutation, error) {
+	if req.Reservation != nil {
+		return req.Reservation, nil
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(req.Binding.ControlRoot)
+	if err != nil {
+		return nil, err
+	}
+	pending := snap.Ledger.PendingMutation
+	if pending == nil {
+		return nil, nil
+	}
+	if pending.Owner != req.Binding.Owner {
+		return nil, fmt.Errorf("%w: pending reservation owned by %s", ErrPreflight, pending.Owner)
+	}
+	cp := *pending
+	return &cp, nil
 }
 
 func (s Service) CommitBinding(ctx context.Context, req Request) (portable.Binding, error) {
@@ -128,6 +167,11 @@ func (s Service) CommitBinding(ctx context.Context, req Request) (portable.Bindi
 	if err := s.preflight(req.Binding); err != nil {
 		return portable.Binding{}, err
 	}
+	res, err := s.matchingReservation(req)
+	if err != nil {
+		return portable.Binding{}, err
+	}
+	req.Reservation = res
 	key, consumer, _, err := req.Binding.Registration()
 	if err != nil {
 		return portable.Binding{}, err
@@ -140,7 +184,7 @@ func (s Service) CommitBinding(ctx context.Context, req Request) (portable.Bindi
 	gen := req.ExpectedGeneration
 	ledger, err := installruntime.Commit(ctx, installruntime.Request{
 		ControlRoot: req.Binding.ControlRoot, Owner: req.Binding.Owner, RuntimeRoot: req.Binding.RuntimeRoot,
-		ConsumerID: key, Consumer: consumer, ExpectedGeneration: &gen, RefreshOnly: false,
+		ConsumerID: key, Consumer: consumer, ExpectedGeneration: &gen, RefreshOnly: false, Reservation: res,
 	})
 	if err != nil {
 		return portable.Binding{}, err
@@ -150,7 +194,7 @@ func (s Service) CommitBinding(ctx context.Context, req Request) (portable.Bindi
 			next := ledger.Generation
 			_, _ = installruntime.Commit(ctx, installruntime.Request{
 				ControlRoot: req.Binding.ControlRoot, Owner: req.Binding.Owner, RuntimeRoot: req.Binding.RuntimeRoot,
-				ConsumerID: key, RemoveConsumer: true, ExpectedGeneration: &next,
+				ConsumerID: key, RemoveConsumer: true, ExpectedGeneration: &next, Reservation: res,
 			})
 		}
 		return portable.Binding{}, err
@@ -165,6 +209,11 @@ func (s Service) RevokeBinding(ctx context.Context, req Request) error {
 	if err := s.preflight(req.Binding); err != nil {
 		return err
 	}
+	res, err := s.matchingReservation(req)
+	if err != nil {
+		return err
+	}
+	req.Reservation = res
 	key, _, _, err := req.Binding.Registration()
 	if err != nil {
 		return err
@@ -172,7 +221,7 @@ func (s Service) RevokeBinding(ctx context.Context, req Request) error {
 	gen := req.ExpectedGeneration
 	if _, err = installruntime.Commit(ctx, installruntime.Request{
 		ControlRoot: req.Binding.ControlRoot, Owner: req.Binding.Owner, RuntimeRoot: req.Binding.RuntimeRoot,
-		ConsumerID: key, RemoveConsumer: true, ExpectedGeneration: &gen,
+		ConsumerID: key, RemoveConsumer: true, ExpectedGeneration: &gen, Reservation: res,
 	}); err != nil {
 		return err
 	}
@@ -183,6 +232,26 @@ func (s Service) Remove(ctx context.Context, req Request) error {
 	if ctx == nil || s.Remover == nil {
 		return ErrPreflight
 	}
+	if req.Discovery.ConfigPath != "" {
+		release, err := installruntime.AcquireCoordinatorLease(ctx, req.Binding.ControlRoot)
+		if err != nil {
+			return err
+		}
+		defer release()
+		if _, err = installruntime.Recover(ctx, req.Binding.ControlRoot); err != nil {
+			return err
+		}
+		snap, err := installruntime.ReadInstalledSnapshot(req.Binding.ControlRoot)
+		if err != nil {
+			return err
+		}
+		req.ExpectedGeneration = snap.Ledger.Generation
+	}
+	res, err := s.matchingReservation(req)
+	if err != nil {
+		return err
+	}
+	req.Reservation = res
 	if err := s.RevokeBinding(ctx, req); err != nil {
 		return err
 	}
@@ -190,15 +259,17 @@ func (s Service) Remove(ctx context.Context, req Request) error {
 		return err
 	}
 	if req.Discovery.ConfigPath == "" {
-		return nil
+		return s.finishHandoff(ctx, req, res)
 	}
 	snap, err := installruntime.ReadInstalledSnapshot(req.Binding.ControlRoot)
 	if err != nil {
 		return err
 	}
 	req.ExpectedGeneration = snap.Ledger.Generation
-	_, err = s.HandoffReverse(ctx, req)
-	return err
+	if _, err = s.HandoffReverse(ctx, req); err != nil {
+		return err
+	}
+	return s.finishHandoff(ctx, req, res)
 }
 
 // HandoffReverse recreates the exact owned global MCP only after the portable
@@ -238,10 +309,15 @@ func (s Service) HandoffReverse(ctx context.Context, req Request) (uint64, error
 	if err != nil {
 		return 0, err
 	}
+	res, err := s.matchingReservation(req)
+	if err != nil {
+		return 0, err
+	}
 	result, err := clientsetup.Apply(ctx, clientsetup.Request{
 		ControlRoot: req.Binding.ControlRoot, RuntimeRoot: req.Binding.RuntimeRoot, Command: command,
 		ConfigPath: req.Discovery.ConfigPath, Provider: provider, Mode: clientsetup.Managed,
 		ExpectedGeneration: req.ExpectedGeneration, SkillProjection: req.Discovery.Skill,
+		Reservation: res,
 	})
 	if err != nil {
 		return 0, fmt.Errorf("%w: reverse discovery handoff: %v", ErrPreflight, err)
@@ -249,9 +325,9 @@ func (s Service) HandoffReverse(ctx context.Context, req Request) (uint64, error
 	return result.Ledger.Generation, nil
 }
 
-func (s Service) handoffForward(ctx context.Context, req Request) (uint64, error) {
+func (s Service) handoffForward(ctx context.Context, req Request) (uint64, *installruntime.PendingMutation, error) {
 	if req.Discovery.ConfigPath == "" {
-		return req.ExpectedGeneration, nil
+		return req.ExpectedGeneration, nil, nil
 	}
 	command := req.Discovery.Command
 	if command == "" {
@@ -259,7 +335,7 @@ func (s Service) handoffForward(ctx context.Context, req Request) (uint64, error
 	}
 	provider, err := discoveryProvider(req.Binding.Integration)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	r := clientsetup.Request{
 		ControlRoot: req.Binding.ControlRoot, RuntimeRoot: req.Binding.RuntimeRoot, Command: command,
@@ -268,17 +344,125 @@ func (s Service) handoffForward(ctx context.Context, req Request) (uint64, error
 	}
 	facts, err := clientsetup.Inspect(ctx, r)
 	if err != nil {
-		return 0, fmt.Errorf("%w: %v", ErrPreflight, err)
+		return 0, nil, fmt.Errorf("%w: %v", ErrPreflight, err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(req.Binding.ControlRoot)
+	if err != nil {
+		return 0, nil, err
+	}
+	pending := snap.Ledger.PendingMutation
+	if pending != nil && pending.Owner != req.Binding.Owner {
+		return 0, nil, fmt.Errorf("%w: pending reservation owned by %s", ErrPreflight, pending.Owner)
 	}
 	if !facts.Registered && !facts.SkillProjected {
-		return req.ExpectedGeneration, nil
+		if pending == nil {
+			return req.ExpectedGeneration, nil, nil
+		}
+		return snap.Ledger.Generation, pending, nil
 	}
+	var res *installruntime.PendingMutation
+	gen := req.ExpectedGeneration
+	if pending != nil {
+		if _, err = os.Lstat(pending.IntentRef); err != nil {
+			return 0, nil, fmt.Errorf("%w: pending handoff intent missing: %v", ErrPreflight, err)
+		}
+		res = pending
+		gen = snap.Ledger.Generation
+	} else {
+		published, created, err := s.publishHandoffReservation(ctx, req, gen)
+		if err != nil {
+			return 0, nil, err
+		}
+		res = created
+		gen = published.Generation
+	}
+	r.ExpectedGeneration = gen
 	r.Remove = true
+	r.Reservation = res
 	result, err := clientsetup.Apply(ctx, r)
 	if err != nil {
-		return 0, fmt.Errorf("%w: owned discovery handoff: %v", ErrPreflight, err)
+		return 0, nil, fmt.Errorf("%w: owned discovery handoff: %v", ErrPreflight, err)
 	}
-	return result.Ledger.Generation, nil
+	return result.Ledger.Generation, res, nil
+}
+
+func (s Service) publishHandoffReservation(ctx context.Context, req Request, gen uint64) (installruntime.Ledger, *installruntime.PendingMutation, error) {
+	key, _, _, err := req.Binding.Registration()
+	if err != nil {
+		return installruntime.Ledger{}, nil, err
+	}
+	intentID, err := newIntentID()
+	if err != nil {
+		return installruntime.Ledger{}, nil, err
+	}
+	intent := Intent{
+		Version:            intentVersion,
+		SetupIntentID:      intentID,
+		Action:             "install",
+		Stage:              "retire-direct",
+		ExpectedGeneration: gen,
+		Targets: []IntentTarget{{
+			Client:         string(req.Binding.Integration),
+			BindingID:      req.Binding.BindingID,
+			InstallationID: req.Binding.InstallationID,
+			Units:          []string{"direct-mcp"},
+		}},
+	}
+	payload, err := marshalIntent(intent)
+	if err != nil {
+		return installruntime.Ledger{}, nil, err
+	}
+	res := reservationFrom(intent, req.Binding.ControlRoot)
+	path := IntentPath(req.Binding.ControlRoot)
+	before, err := installruntime.Fingerprint(path)
+	if err != nil {
+		return installruntime.Ledger{}, nil, err
+	}
+	ledger, err := installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: req.Binding.ControlRoot, Owner: req.Binding.Owner, RuntimeRoot: req.Binding.RuntimeRoot,
+		ConsumerID: key, RefreshOnly: true, ExpectedGeneration: &gen, Reservation: &res,
+		Files: []installruntime.File{{Path: path, Before: before, Data: payload, Mode: 0600}},
+	})
+	if err != nil {
+		return installruntime.Ledger{}, nil, fmt.Errorf("%w: publish handoff reservation: %v", ErrPreflight, err)
+	}
+	return ledger, &res, nil
+}
+
+func (s Service) finishHandoff(ctx context.Context, req Request, res *installruntime.PendingMutation) error {
+	if res == nil {
+		return nil
+	}
+	key, _, _, err := req.Binding.Registration()
+	if err != nil {
+		return err
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(req.Binding.ControlRoot)
+	if err != nil {
+		return err
+	}
+	if snap.Ledger.PendingMutation == nil {
+		return nil
+	}
+	path := IntentPath(req.Binding.ControlRoot)
+	before, err := installruntime.Fingerprint(path)
+	if err != nil {
+		return err
+	}
+	var files []installruntime.File
+	if before.Exists {
+		files = []installruntime.File{{Path: path, Before: before, Remove: true}}
+	}
+	gen := snap.Ledger.Generation
+	_, err = installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: req.Binding.ControlRoot, Owner: req.Binding.Owner, RuntimeRoot: req.Binding.RuntimeRoot,
+		ConsumerID: key, RefreshOnly: true, ExpectedGeneration: &gen, Reservation: res, ClearReservation: true,
+		Files: files,
+	})
+	if err != nil {
+		return fmt.Errorf("%w: clear handoff reservation: %v", ErrPreflight, err)
+	}
+	return nil
 }
 
 func discoveryProvider(i portable.Integration) (registration.Provider, error) {

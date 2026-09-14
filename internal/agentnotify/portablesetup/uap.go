@@ -206,6 +206,7 @@ type locatorActivator struct {
 	integration portable.Integration
 	kernel      Service
 	generation  *uint64
+	reservation *installruntime.PendingMutation
 }
 
 func (a locatorActivator) Activate(ctx context.Context, request domain.ActivationRequest) (domain.ActivationOutcome, error) {
@@ -235,7 +236,7 @@ func (a locatorActivator) Activate(ctx context.Context, request domain.Activatio
 			if pb.BindingID != binding.ClientBindingID {
 				return domain.ActivationOutcome{}, fmt.Errorf("%w: binding identity does not match committed UAP client", ErrPreflight)
 			}
-			if _, err := a.kernel.CommitBinding(ctx, Request{Binding: pb, ExpectedGeneration: *a.generation}); err != nil {
+			if _, err := a.kernel.CommitBinding(ctx, Request{Binding: pb, ExpectedGeneration: *a.generation, Reservation: a.reservation}); err != nil {
 				return domain.ActivationOutcome{}, err
 			}
 			snap, err := installruntime.ReadInstalledSnapshot(pb.ControlRoot)
@@ -253,7 +254,7 @@ func (a locatorActivator) Deactivate(ctx context.Context, request domain.Deactiv
 	return a.inner.Deactivate(ctx, request)
 }
 
-func (m Materializer) composed(req MaterializeRequest, generation *uint64) usecase.Service {
+func (m Materializer) composed(req MaterializeRequest, generation *uint64, res *installruntime.PendingMutation) usecase.Service {
 	helper := m.Roots.HelperExecutable
 	if req.HelperExecutable != "" {
 		helper = req.HelperExecutable
@@ -270,6 +271,7 @@ func (m Materializer) composed(req MaterializeRequest, generation *uint64) useca
 	activator := locatorActivator{
 		inner: inner, store: m.Store, data: m.Data, identity: req.Identity,
 		integration: req.Integration, kernel: m.Kernel, generation: generation,
+		reservation: res,
 	}
 	svc := m.UAP
 	svc.Stager = stager
@@ -306,7 +308,22 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 		// ScopeRoot/ControlRoot are operator paths used only to pass Registration() here.
 		return portable.Binding{}, err
 	}
-	gen, err := m.Kernel.handoffForward(ctx, Request{
+	if req.Discovery.ConfigPath != "" {
+		release, err := installruntime.AcquireCoordinatorLease(ctx, req.Identity.ControlRoot)
+		if err != nil {
+			return portable.Binding{}, err
+		}
+		defer release()
+		if _, err = installruntime.Recover(ctx, req.Identity.ControlRoot); err != nil {
+			return portable.Binding{}, err
+		}
+		snap, err := installruntime.ReadInstalledSnapshot(req.Identity.ControlRoot)
+		if err != nil {
+			return portable.Binding{}, err
+		}
+		req.ExpectedGeneration = snap.Ledger.Generation
+	}
+	gen, res, err := m.Kernel.handoffForward(ctx, Request{
 		Binding: template, ExpectedGeneration: req.ExpectedGeneration, Discovery: req.Discovery,
 	})
 	if err != nil {
@@ -321,7 +338,7 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 		return portable.Binding{}, err
 	}
 	generation := gen
-	svc := m.composed(req, &generation)
+	svc := m.composed(req, &generation, res)
 	result, err := svc.Add(ctx, usecase.AddInput{
 		Envelope: envelope, Client: client, Scope: domain.ScopeUser, Confirmed: true,
 		InstallationID: req.Identity.InstallationID, OperationID: req.OperationID,
@@ -346,7 +363,14 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 		if !ok {
 			return portable.Binding{}, fmt.Errorf("%w: UAP data receipt missing after add", ErrPreflight)
 		}
-		return Complete(req.Identity, req.Integration, binding.ClientID, binding.Scope, result.Plan.ActivePath, receipt.Locator)
+		pb, err := Complete(req.Identity, req.Integration, binding.ClientID, binding.Scope, result.Plan.ActivePath, receipt.Locator)
+		if err != nil {
+			return portable.Binding{}, err
+		}
+		if err := m.Kernel.finishHandoff(ctx, Request{Binding: pb, ExpectedGeneration: generation, Reservation: res}, res); err != nil {
+			return portable.Binding{}, err
+		}
+		return pb, nil
 	}
 	return portable.Binding{}, fmt.Errorf("%w: UAP client binding missing after add", ErrPreflight)
 }
@@ -384,6 +408,21 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 	if err != nil {
 		return err
 	}
+	if req.Discovery.ConfigPath != "" {
+		release, err := installruntime.AcquireCoordinatorLease(ctx, req.Identity.ControlRoot)
+		if err != nil {
+			return err
+		}
+		defer release()
+		if _, err = installruntime.Recover(ctx, req.Identity.ControlRoot); err != nil {
+			return err
+		}
+		snap, err := installruntime.ReadInstalledSnapshot(req.Identity.ControlRoot)
+		if err != nil {
+			return err
+		}
+		req.ExpectedGeneration = snap.Ledger.Generation
+	}
 	if err := m.Kernel.RevokeBinding(ctx, Request{Binding: pb, ExpectedGeneration: req.ExpectedGeneration}); err != nil {
 		return err
 	}
@@ -397,14 +436,19 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 		return err
 	}
 	if req.Discovery.ConfigPath == "" {
-		return nil
+		return m.Kernel.finishHandoff(ctx, Request{Binding: pb, ExpectedGeneration: req.ExpectedGeneration}, nil)
 	}
 	snap, err := installruntime.ReadInstalledSnapshot(req.Identity.ControlRoot)
 	if err != nil {
 		return err
 	}
-	_, err = m.Kernel.HandoffReverse(ctx, Request{
-		Binding: pb, ExpectedGeneration: snap.Ledger.Generation, Discovery: req.Discovery,
-	})
-	return err
+	reqBody := Request{Binding: pb, ExpectedGeneration: snap.Ledger.Generation, Discovery: req.Discovery}
+	if _, err = m.Kernel.HandoffReverse(ctx, reqBody); err != nil {
+		return err
+	}
+	res, err := m.Kernel.matchingReservation(reqBody)
+	if err != nil {
+		return err
+	}
+	return m.Kernel.finishHandoff(ctx, reqBody, res)
 }

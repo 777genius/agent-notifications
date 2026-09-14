@@ -20,8 +20,10 @@ import (
 const (
 	ledgerSchemaV1      = 1
 	ledgerSchemaV2      = 2
+	ledgerSchemaV3      = 3
 	transactionSchemaV1 = 1
 	transactionSchemaV2 = 2
+	transactionSchemaV3 = 3
 )
 
 // NativeGeneration is one published callback identity. Paths and inodes stay

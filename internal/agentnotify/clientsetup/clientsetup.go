@@ -35,6 +35,8 @@ type Request struct {
 	Provider                                      registration.Provider
 	Mode                                          string
 	ExpectedGeneration                            uint64
+	Reservation                                   *installruntime.PendingMutation
+	ClearReservation                              bool
 	Remove                                        bool
 	SkillProjection                               *SkillProjection
 }
@@ -302,7 +304,7 @@ func calculate(ctx context.Context, r Request, fault func(string) error, inspect
 	}
 	prepared := false
 	lockedPrepare := func() ([]installruntime.File, error) { prepared = true; locked = true; return prepare() }
-	l, e := installruntime.Commit(ctx, installruntime.Request{ControlRoot: r.ControlRoot, Owner: Managed, RuntimeRoot: r.RuntimeRoot, ConsumerID: id, Consumer: installruntime.Consumer{Registration: r.ConfigPath, Commands: []string{r.Command}}, RemoveConsumer: r.Remove, ExpectedGeneration: &r.ExpectedGeneration, ConfigPaths: configPaths, Prepare: lockedPrepare, Fault: fault})
+	l, e := installruntime.Commit(ctx, installruntime.Request{ControlRoot: r.ControlRoot, Owner: Managed, RuntimeRoot: r.RuntimeRoot, ConsumerID: id, Consumer: installruntime.Consumer{Registration: r.ConfigPath, Commands: []string{r.Command}}, RemoveConsumer: r.Remove, ExpectedGeneration: &r.ExpectedGeneration, ConfigPaths: configPaths, Prepare: lockedPrepare, Fault: fault, Reservation: r.Reservation, ClearReservation: r.ClearReservation})
 	result.Ledger = l
 	if errors.Is(e, errUnchanged) {
 		return result, nil

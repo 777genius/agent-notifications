@@ -57,6 +57,7 @@ type Ledger struct {
 	Consumers        map[string]Consumer
 	Files            map[string]Identity
 	DecoderFloor     int
+	PendingMutation  *PendingMutation `json:",omitempty"`
 }
 type transaction struct {
 	ConfigPaths []string
@@ -103,6 +104,13 @@ type Request struct {
 	Files                                       []File
 	ConfigPaths                                 []string
 	Prepare                                     func() ([]File, error)
+	// RecoverOnly replays a pending journal and returns without refresh, install,
+	// or consumer registration. It does not require owner/runtime/package.
+	RecoverOnly bool
+	// Reservation publishes or continues a kernel-owned pending mutation.
+	Reservation *PendingMutation
+	// ClearReservation removes a matching pending mutation. Floor/schema stay.
+	ClearReservation bool
 	// Fault is a test seam; returning an error intentionally leaves recovery data.
 	Fault func(string) error
 }
@@ -134,7 +142,7 @@ func readLedger(root string) (Ledger, error) {
 		return l, err
 	}
 	err = json.Unmarshal(data, &l)
-	if err == nil && ((l.Schema != ledgerSchemaV1 && l.Schema != ledgerSchemaV2) || l.ID == "" || l.Generation == 0 || l.Consumers == nil || l.Files == nil) {
+	if err == nil && (!acceptedLedgerSchema(l.Schema) || l.ID == "" || l.Generation == 0 || l.Consumers == nil || l.Files == nil) {
 		err = fmt.Errorf("invalid ownership ledger")
 	}
 	return l, err
@@ -155,7 +163,10 @@ func writeJSON(path string, value any) error {
 // order. The durable redo record precedes every live mutation. Recovery checks
 // every identity before changing anything and refuses ambiguous foreign edits.
 func Commit(ctx context.Context, r Request) (Ledger, error) {
-	if r.PolicyOnly && (!r.RefreshOnly || r.ExpectedGeneration == nil || len(r.Files) != 0 || r.Native != nil || r.RemoveConsumer || r.PurgeNative || r.RetireNative || r.RollbackPending) {
+	if err := reservationRequestInvalid(r); err != nil {
+		return Ledger{}, err
+	}
+	if r.PolicyOnly && (!r.RefreshOnly || r.ExpectedGeneration == nil || len(r.Files) != 0 || r.Native != nil || r.RemoveConsumer || r.PurgeNative || r.RetireNative || r.RollbackPending || r.Reservation != nil || r.ClearReservation) {
 		return Ledger{}, fmt.Errorf("policy-only transaction requires existing generation and no asset or consumer mutation")
 	}
 	root := r.ControlRoot
@@ -170,6 +181,11 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 		r.RuntimeRoot, err = CanonicalPath(r.RuntimeRoot)
 		if err != nil {
 			return Ledger{}, err
+		}
+	}
+	if r.RecoverOnly {
+		if _, journalErr := os.Lstat(filepath.Join(root, "transaction.json")); os.IsNotExist(journalErr) {
+			return recoverOnlyNoJournal(root)
 		}
 	}
 	lockComponent := Lock
@@ -244,7 +260,7 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 	if err != nil {
 		return l, err
 	}
-	if l.WriterFloor > WriterFloor {
+	if l.WriterFloor > ReservationWriterFloor {
 		return l, fmt.Errorf("installed writer floor requires a newer compatible kernel")
 	}
 	if err := validateWriterFiles(r.Files); err != nil {
@@ -277,13 +293,20 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 			return l, err
 		}
 		l = pending.After
+		if r.RecoverOnly {
+			return l, nil
+		}
 	} else {
 		if err := checkPolicyGeneration(root, l); err != nil {
 			return l, err
 		}
-		if r.RollbackPending {
+		if r.RollbackPending || r.RecoverOnly {
 			return l, nil
 		}
+	}
+
+	if err := reservationAllows(r, l); err != nil {
+		return l, err
 	}
 
 	if l.Native != nil && !policyDisableOnly(r) {
@@ -365,8 +388,12 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 		}
 		next.ID = hex.EncodeToString(id[:])
 	}
-	next.WriterFloor = WriterFloor
-	next.Schema = ledgerSchemaV2
+	next.WriterFloor = l.WriterFloor
+	next.Schema = l.Schema
+	applyReservationProtocol(&next, r, l)
+	if err := applyReservationState(&next, r, l); err != nil {
+		return l, err
+	}
 	next.Owner = r.Owner
 	if next.RuntimeRoot == "" {
 		next.RuntimeRoot = r.RuntimeRoot
@@ -565,7 +592,7 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 			}
 		}
 	}
-	tx := transaction{Schema: transactionSchemaV2, Before: l, After: next, Files: files, Native: native, ConfigPaths: r.ConfigPaths}
+	tx := transaction{Schema: transactionSchemaFor(next, r), Before: l, After: next, Files: files, Native: native, ConfigPaths: r.ConfigPaths}
 	if err := writeTransaction(marker, tx); err != nil {
 		return l, err
 	}

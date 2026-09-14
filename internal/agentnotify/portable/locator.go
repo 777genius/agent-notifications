@@ -216,7 +216,7 @@ func Acquire(ctx context.Context, data, name string) (*Lease, error) {
 // consumer on every policy read. Revocation does not require deleting shared data.
 func (b Binding) CheckSnapshot(snapshot installruntime.InstalledSnapshot) error {
 	ledger := snapshot.Ledger
-	if snapshot.Recovery || ledger.ID != b.ComponentID || ledger.Owner != b.Owner || !samePhysicalPath(ledger.RuntimeRoot, b.RuntimeRoot) || ledger.WriterFloor > installruntime.WriterFloor || ledger.DecoderFloor > 1 {
+	if snapshot.Recovery || ledger.ID != b.ComponentID || ledger.Owner != b.Owner || !samePhysicalPath(ledger.RuntimeRoot, b.RuntimeRoot) || ledger.WriterFloor > installruntime.ReservationWriterFloor || ledger.DecoderFloor > 1 {
 		return ErrInvalid
 	}
 	key, want, _, err := b.Registration()
