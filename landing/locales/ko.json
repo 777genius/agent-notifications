@@ -1,1 +1,234 @@
-{"seo":{"title":"Agent Notifications - 흐름을 유지하세요","description":"Claude Code 및 Codex CLI 베타용 데스크톱 알림입니다. 작업 완료, 질문이 필요한 시점, 오류 발생을 바로 알 수 있습니다."},"language":{"label":"언어","current":"현재 언어: {language}","search":"언어 검색","noResults":"언어를 찾을 수 없습니다","switchError":"언어를 변경할 수 없습니다. 다시 시도하세요."},"accessibility":{"skip":"본문으로 건너뛰기","platforms":"지원 운영체제"},"brand":{"tagline":"코딩 에이전트를 위한 알림"},"nav":{"ariaLabel":"메인","features":"기능","install":"설치","faq":"자주 묻는 질문"},"hero":{"eyebrow":"지켜보기는 줄이고, 만들기는 늘리세요.","title":"흐름을 유지하세요","emphasis":"필요할 때 알려 드립니다","leadFirst":"에이전트에게 맡기세요. 완료되면 바로 알 수 있습니다.","leadSecond":"Claude Code와 Codex CLI를 위한 사운드, 데스크톱 알림 및 웹훅.","primary":"알림 설정","secondary":"GitHub에서 보기","note":"오픈 소스 · 로컬 실행 · Codex CLI 베타"},"common":{"now":"지금","beta":"베타"},"features":{"eyebrow":"적절한 신호를, 적절한 때에.","titleFirst":"집중력을 유지하세요","titleSecond":"계속 확인하지 마세요","items":{"1":{"label":"데스크톱 알림","title":"자리를 비워도 소식을 받아보세요","text":"에이전트가 작업을 마치거나 도움이 필요할 때 데스크톱 알림을 받으세요. 터미널을 지켜보는 시간을 줄일 수 있습니다."},"2":{"label":"사운드 설정","title":"상황마다 원하는 소리로","text":"소리와 음량, 오디오 장치를 선택하세요. 필요한 알림음만 켜고 나머지는 끌 수 있습니다."},"3":{"label":"웹훅 연동","title":"작업 도구와 연결하세요","text":"Slack, Discord, Telegram, Teams 등으로 소식을 보내세요. 어디서 일하든 웹훅으로 연결할 수 있습니다."}},"preview":{"done":"에이전트가 작업을 마쳤습니다","ready":"준비되시면 이어서 진행하세요.","sound":"원하는 소리와 음량으로.","event":"에이전트 이벤트"},"foot":"알림을 클릭해 터미널로 이동하는 기능은 터미널과 운영체제에 따라 지원 여부가 다릅니다.","details":"플랫폼별 지원 정보 보기"},"faq":{"eyebrow":"알아두면 좋은 점","title":"자주 묻는 질문","subtitle":"업무로 돌아가는 데 필요한 모든 것.","items":{"1":{"question":"두 에이전트를 모두 설치해야 하나요?","answer":"아니요. Claude Code, Codex CLI 또는 둘 다 선택할 수 있습니다. 선택한 에이전트의 CLI를 먼저 설치하세요. 안내된 명령어는 이 알림 플러그인을 설치합니다."},"2":{"question":"Codex 훅은 자동으로 설치되나요?","answer":"네. 설치 프로그램이 훅을 등록하고 실행에 사용할 복사본을 고정된 위치에 저장합니다. Codex에서 /hooks를 열어 검토하고 신뢰를 승인하세요. 훅 정의가 변경되면 다시 검토해야 합니다."},"3":{"question":"업데이트하면 설정이 초기화되나요?","answer":"설치 프로그램은 공유 설정과 다른 Codex 훅을 보존합니다. 설치와 업데이트에 같은 명령어를 사용합니다. 업데이트 후 선택한 에이전트를 다시 시작하세요."},"4":{"question":"어떤 알림에 소리를 낼지 선택할 수 있나요?","answer":"네. 소리, 음량, 오디오 장치, 알림 채널을 설정할 수 있습니다. 안내에서 설정을 선택하면 에이전트별 설정 방법을 볼 수 있습니다."},"5":{"question":"클릭해서 터미널로 이동하는 기능은 어디서나 작동하나요?","answer":"운영체제와 터미널에 따라 다릅니다. iTerm2에서 정확한 탭으로 이동하려면 Python API가 필요합니다. Windows에서는 특정 탭이 아닌 창으로 이동합니다.","link":"지원 환경을 확인하세요."},"6":{"question":"알림이 오지 않으면 어떻게 하나요?","answer":"운영체제의 알림 권한과 선택한 채널을 확인하세요. Codex에서는 훅의 신뢰가 승인되었는지 확인하세요.","link":"문제 해결 안내에서 플랫폼별 확인 사항을 살펴보세요."}}},"closing":{"eyebrow":"에이전트에게 다음 차례를 맡기세요","title":"당신의 집중은 소중합니다","action":"모든 알림을 의미 있게"},"footer":{"builtBy":"제작:","afterBuilder":". 오픈 소스.","license":"라이선스","source":"소스 코드"},"preview":{"ariaLabel":"에이전트 알림 예시","heading":"에이전트의 새로운 소식","pause":"일시 정지","resume":"계속 재생","next":"다음","workspace":"main · notification_plugin_go","items":{"question":{"title":"❓ 질문","body":"/tmp/에 만들 테스트 파일의 이름을 무엇으로 할까요?"},"plan":{"title":"📋 계획","body":"계획: /tmp/에 테스트 파일 만들기"},"completed":{"title":"✅ 완료","body":"완료했습니다. 설치 안내가 이제 첫 화면 바로 다음에 나옵니다.","detail":"✏️ 3개 수정  ⏱ 35초"},"review":{"title":"🔍 검토","body":"검토를 마쳤습니다. 업데이트된 설치 프로그램에서 문제가 발견되지 않았습니다."},"permission":{"title":"🔐 권한 요청","body":"승인 필요: 셸"},"limit":{"title":"⏱️ 세션 한도 도달","body":"세션 한도에 도달했습니다. 잠시 기다린 후 계속하세요."},"error":{"title":"🔴 API 오류: 401","body":"인증이 만료되었습니다. 다시 로그인하세요."}}},"select":{"scrollUp":"옵션 목록 위로 스크롤","scrollDown":"옵션 목록 아래로 스크롤"},"install":{"title":"알림 설정하기","intro":"아래 단계에 따라 {agent}에 데스크톱 알림을 추가하세요.","chooseAgent":"에이전트 선택","requires":"{agent} 필요","bothAgents":"두 에이전트 모두","bothSelected":"✓ 두 에이전트 모두 선택됨","installBoth":"두 에이전트 모두에 설치","chooseComputer":"에이전트를 실행하는 컴퓨터 선택","selected":"선택됨","detected":"자동 감지됨","change":"변경","targetOs":"대상 운영체제","products":{"claude":"Claude Code","codex":"Codex CLI · 베타","both":"두 에이전트 모두"},"targets":{"unknown":"대상 운영체제 선택","macos":"macOS","linux":"Linux","windows":"Windows · Git Bash","manual":"수동 설치 안내"},"prerequisiteTitle":"Codex CLI 베타: 필요한 플러그인 릴리스.","prerequisiteText":"공개된 안정 버전의 플러그인 릴리스 ≥1.42.0이 필요합니다. 현재 해당 릴리스는 초안 상태이므로 공개되기 전까지 Codex 설치 프로그램을 사용할 수 없습니다.","checkReleases":"릴리스 확인","configure":{"title":"나에게 맞는 소리로 설정하세요","claudeBefore":"Claude Code 채팅에서 실행하세요:","claudeAfter":"셸 명령어가 아닌 Claude 슬래시 명령어입니다.","codexBefore":"Codex에서는 다음 공유 설정 파일을 수정하세요:","codexMiddle":"참고:","codexLink":"수동 설정 문서","codexAfter":"Codex만 설정하는 경우 Claude Code는 필요하지 않습니다.","shared":"두 에이전트가 이 설정을 공유합니다. 업데이트해도 설정은 유지됩니다."},"manual":{"title":"수동으로 설치하세요","claude":"Claude 수동 설치","codex":"Codex 수동 등록"},"chooseTarget":"대상 운영체제를 선택하면 명령어가 표시됩니다. 모바일 또는 인식되지 않는 브라우저에서는 직접 선택해야 합니다.","commandLabel":"{intent} 명령어","copyCommand":"명령어 복사","updatingInstead":"업데이트하려고 하시나요?","copied":"복사했습니다. 준비되면 대상 컴퓨터의 터미널에 붙여넣으세요.","copyUnavailable":"복사 기능을 사용할 수 없습니다. 명령어를 선택해 직접 복사하세요.","updateNote":"설치와 업데이트에 같은 명령어를 사용합니다. 기존 설정은 유지됩니다.","intents":{"install":"설치","update":"업데이트","configure":"설정"},"steps":{"label1":"다음 단계 1","label2":"다음 단계 2","runBash":"Git Bash에서 실행","runTerminal":"터미널에서 실행","windowsTitle":"Windows의 Git Bash에서 실행하세요.","windowsText":"WSL을 사용하거나 이 파이프 명령어를 PowerShell에 붙여넣지 마세요.","terminalText":"터미널을 열고 위 명령어를 실행하세요.","restart":"{agent} 다시 시작","bothAgents":"두 에이전트 모두","restartClaude":"알림을 활성화하려면 Claude Code를 닫았다가 다시 여세요.","restartCodex":"Codex를 다시 시작하고 /hooks를 연 다음 설치된 훅을 검토하고 신뢰를 승인하세요. 정의가 변경되면 다시 검토해야 하며, 신뢰는 자동으로 승인되지 않습니다."},"help":"설치 도움말","claudeHelp":"Claude 설치 도움말","installationInstructions":"설치 안내","configureSettings":"⚙ 설정 변경"}}
+{
+  "seo": {
+    "title": "Agent Notifications - 흐름을 유지하세요",
+    "description": "Claude Code 및 Codex CLI 베타용 데스크톱 알림입니다. 작업 완료, 질문이 필요한 시점, 오류 발생을 바로 알 수 있습니다."
+  },
+  "language": {
+    "label": "언어",
+    "current": "현재 언어: {language}",
+    "search": "언어 검색",
+    "noResults": "언어를 찾을 수 없습니다",
+    "switchError": "언어를 변경할 수 없습니다. 다시 시도하세요."
+  },
+  "accessibility": {
+    "skip": "본문으로 건너뛰기",
+    "platforms": "지원 운영체제"
+  },
+  "brand": {
+    "tagline": "코딩 에이전트를 위한 알림"
+  },
+  "nav": {
+    "ariaLabel": "메인",
+    "features": "기능",
+    "install": "설치",
+    "faq": "자주 묻는 질문"
+  },
+  "hero": {
+    "eyebrow": "지켜보기는 줄이고, 만들기는 늘리세요.",
+    "title": "흐름을 유지하세요",
+    "emphasis": "필요할 때 알려 드립니다",
+    "leadFirst": "에이전트에게 맡기세요. 완료되면 바로 알 수 있습니다.",
+    "leadSecond": "Claude Code와 Codex CLI를 위한 사운드, 데스크톱 알림 및 웹훅.",
+    "primary": "알림 설정",
+    "secondary": "GitHub에서 보기",
+    "note": "오픈 소스 · 로컬 실행 · Codex CLI 베타"
+  },
+  "common": {
+    "now": "지금",
+    "beta": "베타"
+  },
+  "features": {
+    "eyebrow": "적절한 신호를, 적절한 때에.",
+    "titleFirst": "집중력을 유지하세요",
+    "titleSecond": "계속 확인하지 마세요",
+    "items": {
+      "1": {
+        "label": "데스크톱 알림",
+        "title": "자리를 비워도 소식을 받아보세요",
+        "text": "에이전트가 작업을 마치거나 도움이 필요할 때 데스크톱 알림을 받으세요. 터미널을 지켜보는 시간을 줄일 수 있습니다."
+      },
+      "2": {
+        "label": "사운드 설정",
+        "title": "상황마다 원하는 소리로",
+        "text": "소리와 음량, 오디오 장치를 선택하세요. 필요한 알림음만 켜고 나머지는 끌 수 있습니다."
+      },
+      "3": {
+        "label": "웹훅 연동",
+        "title": "작업 도구와 연결하세요",
+        "text": "Slack, Discord, Telegram, Teams 등으로 소식을 보내세요. 어디서 일하든 웹훅으로 연결할 수 있습니다."
+      }
+    },
+    "preview": {
+      "done": "에이전트가 작업을 마쳤습니다",
+      "ready": "준비되시면 이어서 진행하세요.",
+      "sound": "원하는 소리와 음량으로.",
+      "event": "에이전트 이벤트"
+    },
+    "foot": "알림을 클릭해 터미널로 이동하는 기능은 터미널과 운영체제에 따라 지원 여부가 다릅니다.",
+    "details": "플랫폼별 지원 정보 보기"
+  },
+  "faq": {
+    "eyebrow": "알아두면 좋은 점",
+    "title": "자주 묻는 질문",
+    "subtitle": "업무로 돌아가는 데 필요한 모든 것.",
+    "items": {
+      "1": {
+        "question": "두 에이전트를 모두 설치해야 하나요?",
+        "answer": "아니요. Claude Code, Codex CLI 또는 둘 다 선택할 수 있습니다. 선택한 에이전트의 CLI를 먼저 설치하세요. 안내된 명령어는 이 알림 플러그인을 설치합니다."
+      },
+      "2": {
+        "question": "Codex 훅은 자동으로 설치되나요?",
+        "answer": "네. 설치 프로그램이 훅을 등록하고 실행에 사용할 복사본을 고정된 위치에 저장합니다. Codex에서 /hooks를 열어 검토하고 신뢰를 승인하세요. 훅 정의가 변경되면 다시 검토해야 합니다."
+      },
+      "3": {
+        "question": "업데이트하면 설정이 초기화되나요?",
+        "answer": "설치 프로그램은 공유 설정과 다른 Codex 훅을 보존합니다. 설치와 업데이트에 같은 명령어를 사용합니다. 업데이트 후 선택한 에이전트를 다시 시작하세요."
+      },
+      "4": {
+        "question": "어떤 알림에 소리를 낼지 선택할 수 있나요?",
+        "answer": "네. 소리, 음량, 오디오 장치, 알림 채널을 설정할 수 있습니다. 안내에서 설정을 선택하면 에이전트별 설정 방법을 볼 수 있습니다."
+      },
+      "5": {
+        "question": "클릭해서 터미널로 이동하는 기능은 어디서나 작동하나요?",
+        "answer": "운영체제와 터미널에 따라 다릅니다. iTerm2에서 정확한 탭으로 이동하려면 Python API가 필요합니다. Windows에서는 특정 탭이 아닌 창으로 이동합니다.",
+        "link": "지원 환경을 확인하세요."
+      },
+      "6": {
+        "question": "알림이 오지 않으면 어떻게 하나요?",
+        "answer": "운영체제의 알림 권한과 선택한 채널을 확인하세요. Codex에서는 훅의 신뢰가 승인되었는지 확인하세요.",
+        "link": "문제 해결 안내에서 플랫폼별 확인 사항을 살펴보세요."
+      }
+    }
+  },
+  "closing": {
+    "eyebrow": "에이전트에게 다음 차례를 맡기세요",
+    "title": "당신의 집중은 소중합니다",
+    "action": "모든 알림을 의미 있게"
+  },
+  "footer": {
+    "builtBy": "제작:",
+    "afterBuilder": ". 오픈 소스.",
+    "license": "라이선스",
+    "source": "소스 코드"
+  },
+  "preview": {
+    "ariaLabel": "에이전트 알림 예시",
+    "heading": "에이전트의 새로운 소식",
+    "pause": "일시 정지",
+    "resume": "계속 재생",
+    "next": "다음",
+    "workspace": "main · notification_plugin_go",
+    "items": {
+      "question": {
+        "title": "❓ 질문",
+        "body": "/tmp/에 만들 테스트 파일의 이름을 무엇으로 할까요?"
+      },
+      "plan": {
+        "title": "📋 계획",
+        "body": "계획: /tmp/에 테스트 파일 만들기"
+      },
+      "completed": {
+        "title": "✅ 완료",
+        "body": "완료했습니다. 설치 안내가 이제 첫 화면 바로 다음에 나옵니다.",
+        "detail": "✏️ 3개 수정  ⏱ 35초"
+      },
+      "review": {
+        "title": "🔍 검토",
+        "body": "검토를 마쳤습니다. 업데이트된 설치 프로그램에서 문제가 발견되지 않았습니다."
+      },
+      "permission": {
+        "title": "🔐 권한 요청",
+        "body": "승인 필요: 셸"
+      },
+      "limit": {
+        "title": "⏱️ 세션 한도 도달",
+        "body": "세션 한도에 도달했습니다. 잠시 기다린 후 계속하세요."
+      },
+      "error": {
+        "title": "🔴 API 오류: 401",
+        "body": "인증이 만료되었습니다. 다시 로그인하세요."
+      }
+    }
+  },
+  "select": {
+    "scrollUp": "옵션 목록 위로 스크롤",
+    "scrollDown": "옵션 목록 아래로 스크롤"
+  },
+  "install": {
+    "title": "알림 설정하기",
+    "intro": "아래 단계에 따라 {agent}에 데스크톱 알림을 추가하세요.",
+    "chooseAgent": "에이전트 선택",
+    "requires": "{agent} 필요",
+    "bothAgents": "두 에이전트 모두",
+    "bothSelected": "✓ 두 에이전트 모두 선택됨",
+    "installBoth": "두 에이전트 모두에 설치",
+    "chooseComputer": "에이전트를 실행하는 컴퓨터 선택",
+    "selected": "선택됨",
+    "detected": "자동 감지됨",
+    "change": "변경",
+    "targetOs": "대상 운영체제",
+    "products": {
+      "claude": "Claude Code",
+      "codex": "Codex CLI · 베타",
+      "both": "두 에이전트 모두"
+    },
+    "targets": {
+      "unknown": "대상 운영체제 선택",
+      "macos": "macOS",
+      "linux": "Linux",
+      "windows": "Windows · Git Bash",
+      "manual": "수동 설치 안내"
+    },
+    "prerequisiteTitle": "Codex CLI 베타: 필요한 플러그인 릴리스.",
+    "prerequisiteText": "공개된 안정 버전의 플러그인 릴리스 ≥1.42.0이 필요합니다. 현재 해당 릴리스는 초안 상태이므로 공개되기 전까지 Codex 설치 프로그램을 사용할 수 없습니다.",
+    "checkReleases": "릴리스 확인",
+    "configure": {
+      "title": "나에게 맞는 소리로 설정하세요",
+      "claudeBefore": "Claude Code 채팅에서 실행하세요:",
+      "claudeAfter": "셸 명령어가 아닌 Claude 슬래시 명령어입니다.",
+      "codexBefore": "Codex에서는 다음 공유 설정 파일을 수정하세요:",
+      "codexMiddle": "참고:",
+      "codexLink": "수동 설정 문서",
+      "codexAfter": "Codex만 설정하는 경우 Claude Code는 필요하지 않습니다.",
+      "shared": "두 에이전트가 이 설정을 공유합니다. 업데이트해도 설정은 유지됩니다."
+    },
+    "manual": {
+      "title": "수동으로 설치하세요",
+      "claude": "Claude 수동 설치",
+      "codex": "Codex 수동 등록"
+    },
+    "chooseTarget": "대상 운영체제를 선택하면 명령어가 표시됩니다. 모바일 또는 인식되지 않는 브라우저에서는 직접 선택해야 합니다.",
+    "commandLabel": "{intent} 명령어",
+    "copyCommand": "명령어 복사",
+    "updatingInstead": "업데이트하려고 하시나요?",
+    "copied": "복사했습니다. 준비되면 대상 컴퓨터의 터미널에 붙여넣으세요.",
+    "copyUnavailable": "복사 기능을 사용할 수 없습니다. 명령어를 선택해 직접 복사하세요.",
+    "updateNote": "설치와 업데이트에 같은 명령어를 사용합니다. 기존 설정은 유지됩니다.",
+    "intents": {
+      "install": "설치",
+      "update": "업데이트",
+      "configure": "설정"
+    },
+    "steps": {
+      "label1": "다음 단계 1",
+      "label2": "다음 단계 2",
+      "runBash": "Git Bash에서 실행",
+      "runTerminal": "터미널에서 실행",
+      "windowsTitle": "Windows의 Git Bash에서 실행하세요.",
+      "windowsText": "WSL을 사용하거나 이 파이프 명령어를 PowerShell에 붙여넣지 마세요.",
+      "terminalText": "터미널을 열고 위 명령어를 실행하세요.",
+      "restart": "{agent} 다시 시작",
+      "bothAgents": "두 에이전트 모두",
+      "restartClaude": "알림을 활성화하려면 Claude Code를 닫았다가 다시 여세요.",
+      "restartCodex": "Codex를 다시 시작하고 /hooks를 연 다음 설치된 훅을 검토하고 신뢰를 승인하세요. 정의가 변경되면 다시 검토해야 하며, 신뢰는 자동으로 승인되지 않습니다."
+    },
+    "help": "설치 도움말",
+    "claudeHelp": "Claude 설치 도움말",
+    "installationInstructions": "설치 안내",
+    "configureSettings": "⚙ 설정 변경",
+    "agentNotify": {
+      "label": "에이전트가 주의가 필요할 때 알림을 보내도록 허용",
+      "hint": "작업이 멈출 때뿐 아니라 작업 중에도 에이전트가 알릴 수 있는 도구를 추가합니다."
+    }
+  }
+}

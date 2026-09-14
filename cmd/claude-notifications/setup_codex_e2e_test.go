@@ -102,7 +102,7 @@ func TestSetupCodexE2EDocumentedRelativeBundle(t *testing.T) {
 		t.Fatal("dry run changed sandbox")
 	}
 	for i := 0; i < 2; i++ {
-		out, err = f.runAt(t, f.bundle, "", bin, "setup-codex", "--plugin-root", ".")
+		out, err = f.runAt(t, f.bundle, "", bin, "setup-codex", "--plugin-root", ".", "--skip-agent-notify")
 		if err != nil || !strings.Contains(out, "Codex notifications registered") {
 			t.Fatalf("documented setup run %d: %v %s", i, err, out)
 		}
@@ -190,8 +190,12 @@ func TestSetupCodexE2ERegistrationAndDelivery(t *testing.T) {
 	// All hook invocations forward unchanged to the real built binary. This is
 	// registration/launcher proof, NOT proof that the shipped 1.41.0 passes 1.42.0.
 	shimSource := `package main
-import("os";"os/exec";"fmt")
-func main(){if len(os.Args)==2&&os.Args[1]=="version"{fmt.Println("claude-notifications v9.9.9");return}; c:=exec.Command(os.Getenv("E2E_REAL_BINARY"),os.Args[1:]...);c.Stdin=os.Stdin;c.Stdout=os.Stdout;c.Stderr=os.Stderr;c.Env=os.Environ();if c.Run()!=nil{os.Exit(1)}}`
+import("fmt";"os";"os/exec")
+func main(){
+if os.Getenv("AGENT_NOTIFICATIONS_WRITER_PROTOCOL_PROBE")=="1"{fmt.Print("agent-notifications-managed-writer-protocol-v1");return}
+if len(os.Args)==2&&os.Args[1]=="version"{fmt.Println("claude-notifications v9.9.9");return}
+c:=exec.Command(os.Getenv("E2E_REAL_BINARY"),os.Args[1:]...);c.Stdin=os.Stdin;c.Stdout=os.Stdout;c.Stderr=os.Stderr;c.Env=os.Environ();if c.Run()!=nil{os.Exit(1)}
+}`
 	src := filepath.Join(f.root, "version_fixture.go")
 	e2eWrite(t, src, []byte(shimSource))
 	name := "claude-notifications"
@@ -207,7 +211,7 @@ func main(){if len(os.Args)==2&&os.Args[1]=="version"{fmt.Println("claude-notifi
 	}
 	f.env = append(f.env, "E2E_REAL_BINARY="+bin)
 	for i := 0; i < 2; i++ {
-		if out, err := f.run(t, "", bin, "setup-codex", "--plugin-root", f.bundle); err != nil {
+		if out, err := f.run(t, "", bin, "setup-codex", "--plugin-root", f.bundle, "--skip-agent-notify"); err != nil {
 			t.Fatalf("setup: %v %s", err, out)
 		}
 		if i == 0 {
@@ -310,7 +314,7 @@ func TestSetupCodexE2EPartialInitializationExitStatus(t *testing.T) {
 	}
 	canonical := filepath.Join(parent, "config.json")
 	f.env = append(f.env, "AGENT_NOTIFICATIONS_CONFIG="+canonical)
-	out, err := f.run(t, "", binary, "setup-codex", "--plugin-root", f.bundle)
+	out, err := f.run(t, "", binary, "setup-codex", "--plugin-root", f.bundle, "--skip-agent-notify")
 	exit, ok := err.(*exec.ExitError)
 	if !ok || exit.ExitCode() != 3 || !strings.Contains(out, "config init") {
 		t.Fatalf("partial setup status: %v %s", err, out)
@@ -333,6 +337,11 @@ func TestSetupCodexE2EPartialInitializationExitStatus(t *testing.T) {
 
 func TestSetupCodexE2EInstalledLaunchersSurviveReplacement(t *testing.T) {
 	binary := buildCLIBinary(t)
+	if info, err := os.Stat(binary); err != nil {
+		t.Fatal(err)
+	} else if info.Size() > 32<<20 {
+		t.Skip("coverage-instrumented test executable exceeds the 32 MiB managed staging cap")
+	}
 	f := newSetupE2E(t)
 	platformName := "claude-notifications-" + runtime.GOOS + "-" + runtime.GOARCH
 	extension := ""
@@ -344,7 +353,7 @@ func TestSetupCodexE2EInstalledLaunchersSurviveReplacement(t *testing.T) {
 	e2eWrite(t, filepath.Join(f.bundle, "bin", platformName), e2eRead(t, binary))
 	installed := filepath.Join(f.home, ".codex", "claude-notifications-go", "bin")
 	for pass := 0; pass < 2; pass++ {
-		output, err := f.run(t, "", binary, "setup-codex", "--plugin-root", f.bundle)
+		output, err := f.run(t, "", binary, "setup-codex", "--plugin-root", f.bundle, "--skip-agent-notify")
 		if err != nil {
 			t.Fatalf("setup pass %d: %s %v", pass, output, err)
 		}
@@ -371,5 +380,64 @@ func TestSetupCodexE2EInstalledLaunchersSurviveReplacement(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+	}
+}
+
+func TestSetupCodexE2EConfigureNotifications(t *testing.T) {
+	bin := buildCLIBinary(t)
+	if info, err := os.Stat(bin); err != nil {
+		t.Fatal(err)
+	} else if info.Size() > 32<<20 {
+		t.Skip("coverage-instrumented test executable exceeds the 32 MiB managed staging cap")
+	}
+	f := newSetupE2E(t)
+	body, err := os.ReadFile(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e2eWrite(t, filepath.Join(f.bundle, "bin", "claude-notifications"), body)
+	if err := os.Chmod(filepath.Join(f.bundle, "bin", "claude-notifications"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	e2eWrite(t, filepath.Join(f.bundle, "config", "config.json"), []byte(`{"notifications":{"desktop":{"enabled":false,"sound":false,"clickToFocus":false}}}`))
+	e2eWrite(t, filepath.Join(f.bundle, "skills", "agent-notify", "SKILL.md"), []byte("canonical test skill"))
+	if runtime.GOOS == "darwin" {
+		installerNativeFixture(t, filepath.Join(f.bundle, "bin"))
+	}
+	source := f.bundle
+	out, err := f.run(t, "", bin, "setup-codex", "--plugin-root", source, "--agent-notify", "--navigation", "none", "--allow-unknown-caller", "true", "--allow-caller-asserted", "false")
+	installDir := filepath.Join(f.home, ".codex", "claude-notifications-go")
+	command := filepath.Join(installDir, "bin", "claude-notifications")
+	if runtime.GOOS != "darwin" {
+		if err != nil {
+			t.Fatalf("hooks install should survive agent-notify failure: %v %s", err, out)
+		}
+		if !strings.Contains(out, "Codex notifications registered") {
+			t.Fatal("hooks not registered", out)
+		}
+		if !strings.Contains(out, "agent-notify setup failed") {
+			t.Fatal("missing agent-notify warning", out)
+		}
+		hooks := e2eRead(t, filepath.Join(f.home, ".codex", "hooks.json"))
+		if !strings.Contains(string(hooks), "codex-hook-wrapper") {
+			t.Fatal("hooks missing after agent-notify failure")
+		}
+		if strings.Contains(out, "installed_bundle_required") {
+			t.Fatal("configure used the source plugin root", out)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("setup-codex configure: %v %s", err, out)
+	}
+	if err := os.RemoveAll(source); err != nil {
+		t.Fatal(err)
+	}
+	raw := string(e2eRead(t, filepath.Join(f.home, ".codex", "config.toml")))
+	if !strings.Contains(raw, command) || strings.Contains(raw, source) {
+		t.Fatalf("configure command is not the committed runtime: %s", raw)
+	}
+	if string(e2eRead(t, filepath.Join(f.home, ".codex", "skills", "agent-notify", "SKILL.md"))) != "canonical test skill" {
+		t.Fatal("skill missing after source bundle removal")
 	}
 }

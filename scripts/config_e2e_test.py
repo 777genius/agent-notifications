@@ -66,11 +66,21 @@ class Suite:
         put(self.bundle / '.claude-plugin/plugin.json', json.dumps({'name': 'claude-notifications-go', 'version': TAG[1:]}))
         for name in ('success', 'error', 'question', 'warning', 'complete'):
             put(self.bundle / ('sounds/' + name + '.mp3'), b'fixture audio')
-        self.installer = '''#!/bin/bash
-set -eu
-mkdir -p "$INSTALL_TARGET_DIR"
-cp "$INSTALL_STAGED_ASSETS"/claude-notifications-* "$INSTALL_TARGET_DIR/claude-notifications"
-chmod +x "$INSTALL_TARGET_DIR/claude-notifications"
+        production = (ROOT / 'bin/install.sh').read_text()
+        stripped = production.strip()
+        if not stripped.endswith('main "$@"'):
+            raise AssertionError('production installer entrypoint changed')
+        # Production publication through the kernel, with isolated acquisition
+        # seams: staged/local assets only, no network, no desktop integrations.
+        self.installer = stripped[:-len('main "$@"')] + '''
+download_utilities() { :; }
+configure_windows_native_hooks() { :; }
+create_claude_notifications_app() { :; }
+setup_iterm2_venv() { :; }
+install_linux_notification_desktop_entry() { :; }
+install_gnome_activate_window_extension() { :; }
+check_github_availability() { return 0; }
+main "$@"
 '''
         put(self.bundle / 'bin/install.sh', self.installer, 0o755)
         self.asset = 'claude-notifications-' + platform.system().lower() + '-' + ('arm64' if platform.machine() in ('arm64', 'aarch64') else 'amd64')

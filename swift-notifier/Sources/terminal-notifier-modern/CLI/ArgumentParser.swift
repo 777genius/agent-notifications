@@ -139,8 +139,24 @@ enum ArgumentParser {
         )
     }
 
+    // Consume values before classifying options. A value is literal even when it
+    // happens to be another flag (including the LaunchServices marker).
+    static func optionPositions(_ arguments: [String]) -> [String] {
+        let valued: Set<String> = ["-title", "-message", "-subtitle", "-activate",
+                                   "-execute", "-group", "-threadID",
+                                   "--request-file", "--receipt-file"]
+        var options: [String] = []
+        var i = 0
+        while i < arguments.count {
+            let value = arguments[i]
+            options.append(value)
+            i += valued.contains(value) ? 2 : 1
+        }
+        return options
+    }
+
     static func isSendMode(_ arguments: [String]) -> Bool {
-        return arguments.contains("-title")
+        return optionPositions(arguments).contains("-title")
     }
 
     /// Recognizes only a standalone help invocation (`-help` or `--help` as the

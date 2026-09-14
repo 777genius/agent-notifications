@@ -4,7 +4,7 @@ Thank you for your interest in contributing to Agent Notifications!
 
 ## Prerequisites
 
-- **Go 1.21+** (tested with 1.25)
+- **Go 1.25.0+** (CI covers the minimum Go 1.25 and Go 1.26; automatic toolchain switching is disabled)
 - **Make** (for build commands)
 - **Claude Code** (tested on v2.0.15)
 

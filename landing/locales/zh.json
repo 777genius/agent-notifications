@@ -14,7 +14,9 @@
     "skip": "跳到主要内容",
     "platforms": "支持的操作系统"
   },
-  "brand": { "tagline": "为你的编程智能体而生" },
+  "brand": {
+    "tagline": "为你的编程智能体而生"
+  },
   "nav": {
     "ariaLabel": "主导航",
     "features": "功能",
@@ -31,7 +33,10 @@
     "secondary": "在 GitHub 上查看",
     "note": "开源 · 本地运行 · Codex CLI 测试版"
   },
-  "common": { "now": "刚刚", "beta": "测试版" },
+  "common": {
+    "now": "刚刚",
+    "beta": "测试版"
+  },
   "features": {
     "eyebrow": "恰到好处的信号，出现在恰当的时刻。",
     "titleFirst": "专注当下",
@@ -114,13 +119,35 @@
     "next": "下一个",
     "workspace": "main · notification_plugin_go",
     "items": {
-      "question": { "title": "❓ 问题", "body": "你想把 /tmp/ 中的测试文件命名为什么？" },
-      "plan": { "title": "📋 计划", "body": "计划：在 /tmp/ 中创建测试文件" },
-      "completed": { "title": "✅ 已完成", "body": "完成。安装引导现在紧跟在首屏之后。", "detail": "✏️ 已编辑 3 处  ⏱ 35 秒" },
-      "review": { "title": "🔍 审查", "body": "审查完成，更新后的安装程序未发现问题。" },
-      "permission": { "title": "🔐 权限请求", "body": "需要批准：shell" },
-      "limit": { "title": "⏱️ 已达到会话限制", "body": "已达到会话限制，请稍后再继续。" },
-      "error": { "title": "🔴 API 错误：401", "body": "身份验证已过期，请重新登录。" }
+      "question": {
+        "title": "❓ 问题",
+        "body": "你想把 /tmp/ 中的测试文件命名为什么？"
+      },
+      "plan": {
+        "title": "📋 计划",
+        "body": "计划：在 /tmp/ 中创建测试文件"
+      },
+      "completed": {
+        "title": "✅ 已完成",
+        "body": "完成。安装引导现在紧跟在首屏之后。",
+        "detail": "✏️ 已编辑 3 处  ⏱ 35 秒"
+      },
+      "review": {
+        "title": "🔍 审查",
+        "body": "审查完成，更新后的安装程序未发现问题。"
+      },
+      "permission": {
+        "title": "🔐 权限请求",
+        "body": "需要批准：shell"
+      },
+      "limit": {
+        "title": "⏱️ 已达到会话限制",
+        "body": "已达到会话限制，请稍后再继续。"
+      },
+      "error": {
+        "title": "🔴 API 错误：401",
+        "body": "身份验证已过期，请重新登录。"
+      }
     }
   },
   "select": {
@@ -177,7 +204,11 @@
     "copied": "已复制。准备好后粘贴到目标终端中。",
     "copyUnavailable": "无法复制。请选择命令并手动复制。",
     "updateNote": "安装与更新使用同一条命令。现有设置会被保留。",
-    "intents": { "install": "安装", "update": "更新", "configure": "配置" },
+    "intents": {
+      "install": "安装",
+      "update": "更新",
+      "configure": "配置"
+    },
     "steps": {
       "label1": "下一步 1",
       "label2": "下一步 2",
@@ -194,6 +225,10 @@
     "help": "安装帮助",
     "claudeHelp": "Claude 安装帮助",
     "installationInstructions": "安装说明",
-    "configureSettings": "⚙ 配置设置"
+    "configureSettings": "⚙ 配置设置",
+    "agentNotify": {
+      "label": "允许智能体在需要你关注时发送通知",
+      "hint": "会安装一个工具，让智能体在任务进行中通知你，而不仅在工作结束时。"
+    }
   }
 }

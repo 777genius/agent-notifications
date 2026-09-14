@@ -1,1 +1,234 @@
-{"seo":{"title":"Agent Notifications - 集中を保つ","description":"Claude Code と Codex CLI ベータ向けのデスクトップ通知。作業の完了、質問への対応、エラーの発生をすぐに把握できます。"},"language":{"label":"言語","current":"現在の言語: {language}","search":"言語を検索","noResults":"言語が見つかりません","switchError":"言語を変更できません。もう一度お試しください。"},"accessibility":{"skip":"コンテンツへ移動","platforms":"対応オペレーティングシステム"},"brand":{"tagline":"コーディングエージェントのために"},"nav":{"ariaLabel":"メイン","features":"機能","install":"インストール","faq":"よくある質問"},"hero":{"eyebrow":"見張りを減らし、創造を増やす。","title":"集中を保つ","emphasis":"必要なときにお知らせします","leadFirst":"エージェントに任せましょう。完了したらすぐに分かります。","leadSecond":"Claude Code と Codex CLI のためのサウンド、デスクトップ通知、Webhook。","primary":"通知を設定","secondary":"GitHub で見る","note":"オープンソース · ローカルで動作 · Codex CLI ベータ"},"common":{"now":"たった今","beta":"ベータ"},"features":{"eyebrow":"適切な合図を、適切なタイミングで。","titleFirst":"集中を維持","titleSecond":"何度も確認する必要はありません","items":{"1":{"label":"デスクトップ通知","title":"席を離れても状況を把握","text":"エージェントの作業が完了したときや、対応が必要なときにデスクトップ通知が届きます。ターミナルを見張る時間を減らせます。"},"2":{"label":"サウンド設定","title":"場面に合ったサウンドを","text":"サウンド、音量、オーディオデバイスを選べます。必要な合図だけを残し、それ以外は静かに。"},"3":{"label":"Webhook 連携","title":"作業の流れをつなぐ","text":"Slack、Discord、Telegram、Teams などに更新情報を送信できます。いつもの作業環境に合わせて Webhook を設定しましょう。"}},"preview":{"done":"エージェントの作業が完了しました","ready":"いつでも再開できます。","sound":"好みのサウンドを、好みの音量で。","event":"エージェントのイベント"},"foot":"クリックによるフォーカス切り替えの対応状況は、ターミナルと OS によって異なります。","details":"プラットフォームの詳細を見る"},"faq":{"eyebrow":"知っておきたいこと","title":"よくある質問","subtitle":"作業に戻るために必要なすべて。","items":{"1":{"question":"両方のエージェントをインストールする必要がありますか？","answer":"いいえ。Claude Code、Codex CLI、または両方を選べます。選択したエージェントの CLI を先にインストールしてください。このコマンドは通知プラグインをインストールします。"},"2":{"question":"Codex のフックは自動でインストールされますか？","answer":"はい。インストーラーがフックを登録し、安定して使える実行用のコピーを保存します。Codex で /hooks を開き、内容を確認して信頼を許可してください。定義が変わった場合は再確認が必要です。"},"3":{"question":"更新すると設定がリセットされますか？","answer":"インストーラーは共有設定と、ほかのツールが登録した Codex フックを保持します。インストールと更新には同じコマンドを使います。更新後は選択したエージェントを再起動してください。"},"4":{"question":"どの通知で音を鳴らすか選べますか？","answer":"はい。サウンド、音量、オーディオデバイス、通知チャネルを設定できます。ガイドで「設定」を選ぶと、エージェントに応じた手順が表示されます。"},"5":{"question":"クリックによるフォーカス切り替えはどこでも使えますか？","answer":"対応状況は OS とターミナルによって異なります。iTerm2 で特定のタブに切り替えるには Python API が必要です。Windows では特定のタブではなく、ウィンドウにフォーカスが移ります。","link":"対応環境を確認する。"},"6":{"question":"通知が届かない場合はどうすればよいですか？","answer":"OS の通知権限と、選択した通知チャネルを確認してください。Codex ではフックの信頼が許可されているかも確認してください。","link":"トラブルシューティングで環境別の確認手順をご覧ください。"}}},"closing":{"eyebrow":"エージェントに次の手番を任せる","title":"あなたの注意は貴重です","action":"すべての通知を価値あるものに"},"footer":{"builtBy":"開発者：","afterBuilder":"。オープンソースです。","license":"ライセンス","source":"ソースコード"},"preview":{"ariaLabel":"エージェント通知の例","heading":"エージェントからのお知らせ","pause":"一時停止","resume":"再開","next":"次へ","workspace":"main · notification_plugin_go","items":{"question":{"title":"❓ 質問","body":"/tmp/ に作成するテストファイルの名前をどうしますか？"},"plan":{"title":"📋 計画","body":"計画：/tmp/ にテストファイルを作成"},"completed":{"title":"✅ 完了","body":"完了しました。インストール欄がメインビジュアルの直後に表示されるようになりました。","detail":"✏️ 3 件編集  ⏱ 35 秒"},"review":{"title":"🔍 レビュー","body":"レビューが完了しました。更新したインストーラーに問題は見つかりませんでした。"},"permission":{"title":"🔐 権限のリクエスト","body":"承認が必要です：シェル"},"limit":{"title":"⏱️ セッション上限に到達","body":"セッションの上限に達しました。しばらく待ってから続行してください。"},"error":{"title":"🔴 API エラー：401","body":"認証の有効期限が切れました。再度ログインしてください。"}}},"select":{"scrollUp":"選択肢を上にスクロール","scrollDown":"選択肢を下にスクロール"},"install":{"title":"通知を設定","intro":"以下の手順で {agent} にデスクトップ通知を追加します。","chooseAgent":"エージェントを選択","requires":"{agent} が必要です","bothAgents":"両方のエージェント","bothSelected":"✓ 両方のエージェントを選択済み","installBoth":"両方のエージェントにインストール","chooseComputer":"エージェントを実行するコンピューターを選択","selected":"選択済み","detected":"自動検出","change":"変更","targetOs":"対象のオペレーティングシステム","products":{"claude":"Claude Code","codex":"Codex CLI · ベータ","both":"両方のエージェント"},"targets":{"unknown":"対象の OS を選択","macos":"macOS","linux":"Linux","windows":"Windows · Git Bash","manual":"手動の手順"},"prerequisiteTitle":"Codex CLI ベータ - 必要なリリース条件。","prerequisiteText":"バージョン 1.42.0 以上の公開済み安定版プラグインが必要です。該当リリースは現在ドラフトのため、公開されるまで Codex インストーラーは利用できません。","checkReleases":"リリースを確認","configure":{"title":"サウンドを自分好みに","claudeBefore":"Claude Code のチャット内で実行：","claudeAfter":"これは Claude のスラッシュコマンドです。シェルコマンドではありません。","codexBefore":"Codex では、共有設定ファイルを編集します：","codexMiddle":"手順はこちら：","codexLink":"手動設定のドキュメント","codexAfter":"Codex のみを設定する場合、Claude Code は必要ありません。","shared":"両方のエージェントでこの設定を共有します。更新時も設定は保持されます。"},"manual":{"title":"手動で設定する","claude":"Claude の手動インストール","codex":"Codex の手動登録"},"chooseTarget":"対象の OS を選択するとコマンドが表示されます。モバイル端末や判別できないブラウザーでは、手動で選択してください。","commandLabel":"{intent}用コマンド","copyCommand":"コマンドをコピー","updatingInstead":"更新する場合は？","copied":"コピーしました。準備ができたら対象のターミナルに貼り付けてください。","copyUnavailable":"コピーできません。コマンドを選択して手動でコピーしてください。","updateNote":"インストールと更新には同じコマンドを使います。既存の設定は保持されます。","intents":{"install":"インストール","update":"更新","configure":"設定"},"steps":{"label1":"次の手順 1","label2":"次の手順 2","runBash":"Git Bash で実行","runTerminal":"ターミナルで実行","windowsTitle":"Windows の Git Bash で実行してください。","windowsText":"WSL は使用しないでください。また、このパイプ付きコマンドを PowerShell に貼り付けないでください。","terminalText":"ターミナルを開き、上のコマンドを実行してください。","restart":"{agent}を再起動","bothAgents":"両方のエージェント","restartClaude":"通知を有効にするには、Claude Code を閉じて開き直してください。","restartCodex":"Codex を再起動して /hooks を開き、インストールされたフックを確認して信頼を許可してください。定義が変わった場合は再確認が必要です。信頼が自動で許可されることはありません。"},"help":"インストールのヘルプ","claudeHelp":"Claude インストールのヘルプ","installationInstructions":"インストール手順","configureSettings":"⚙ 設定を変更"}}
+{
+  "seo": {
+    "title": "Agent Notifications - 集中を保つ",
+    "description": "Claude Code と Codex CLI ベータ向けのデスクトップ通知。作業の完了、質問への対応、エラーの発生をすぐに把握できます。"
+  },
+  "language": {
+    "label": "言語",
+    "current": "現在の言語: {language}",
+    "search": "言語を検索",
+    "noResults": "言語が見つかりません",
+    "switchError": "言語を変更できません。もう一度お試しください。"
+  },
+  "accessibility": {
+    "skip": "コンテンツへ移動",
+    "platforms": "対応オペレーティングシステム"
+  },
+  "brand": {
+    "tagline": "コーディングエージェントのために"
+  },
+  "nav": {
+    "ariaLabel": "メイン",
+    "features": "機能",
+    "install": "インストール",
+    "faq": "よくある質問"
+  },
+  "hero": {
+    "eyebrow": "見張りを減らし、創造を増やす。",
+    "title": "集中を保つ",
+    "emphasis": "必要なときにお知らせします",
+    "leadFirst": "エージェントに任せましょう。完了したらすぐに分かります。",
+    "leadSecond": "Claude Code と Codex CLI のためのサウンド、デスクトップ通知、Webhook。",
+    "primary": "通知を設定",
+    "secondary": "GitHub で見る",
+    "note": "オープンソース · ローカルで動作 · Codex CLI ベータ"
+  },
+  "common": {
+    "now": "たった今",
+    "beta": "ベータ"
+  },
+  "features": {
+    "eyebrow": "適切な合図を、適切なタイミングで。",
+    "titleFirst": "集中を維持",
+    "titleSecond": "何度も確認する必要はありません",
+    "items": {
+      "1": {
+        "label": "デスクトップ通知",
+        "title": "席を離れても状況を把握",
+        "text": "エージェントの作業が完了したときや、対応が必要なときにデスクトップ通知が届きます。ターミナルを見張る時間を減らせます。"
+      },
+      "2": {
+        "label": "サウンド設定",
+        "title": "場面に合ったサウンドを",
+        "text": "サウンド、音量、オーディオデバイスを選べます。必要な合図だけを残し、それ以外は静かに。"
+      },
+      "3": {
+        "label": "Webhook 連携",
+        "title": "作業の流れをつなぐ",
+        "text": "Slack、Discord、Telegram、Teams などに更新情報を送信できます。いつもの作業環境に合わせて Webhook を設定しましょう。"
+      }
+    },
+    "preview": {
+      "done": "エージェントの作業が完了しました",
+      "ready": "いつでも再開できます。",
+      "sound": "好みのサウンドを、好みの音量で。",
+      "event": "エージェントのイベント"
+    },
+    "foot": "クリックによるフォーカス切り替えの対応状況は、ターミナルと OS によって異なります。",
+    "details": "プラットフォームの詳細を見る"
+  },
+  "faq": {
+    "eyebrow": "知っておきたいこと",
+    "title": "よくある質問",
+    "subtitle": "作業に戻るために必要なすべて。",
+    "items": {
+      "1": {
+        "question": "両方のエージェントをインストールする必要がありますか？",
+        "answer": "いいえ。Claude Code、Codex CLI、または両方を選べます。選択したエージェントの CLI を先にインストールしてください。このコマンドは通知プラグインをインストールします。"
+      },
+      "2": {
+        "question": "Codex のフックは自動でインストールされますか？",
+        "answer": "はい。インストーラーがフックを登録し、安定して使える実行用のコピーを保存します。Codex で /hooks を開き、内容を確認して信頼を許可してください。定義が変わった場合は再確認が必要です。"
+      },
+      "3": {
+        "question": "更新すると設定がリセットされますか？",
+        "answer": "インストーラーは共有設定と、ほかのツールが登録した Codex フックを保持します。インストールと更新には同じコマンドを使います。更新後は選択したエージェントを再起動してください。"
+      },
+      "4": {
+        "question": "どの通知で音を鳴らすか選べますか？",
+        "answer": "はい。サウンド、音量、オーディオデバイス、通知チャネルを設定できます。ガイドで「設定」を選ぶと、エージェントに応じた手順が表示されます。"
+      },
+      "5": {
+        "question": "クリックによるフォーカス切り替えはどこでも使えますか？",
+        "answer": "対応状況は OS とターミナルによって異なります。iTerm2 で特定のタブに切り替えるには Python API が必要です。Windows では特定のタブではなく、ウィンドウにフォーカスが移ります。",
+        "link": "対応環境を確認する。"
+      },
+      "6": {
+        "question": "通知が届かない場合はどうすればよいですか？",
+        "answer": "OS の通知権限と、選択した通知チャネルを確認してください。Codex ではフックの信頼が許可されているかも確認してください。",
+        "link": "トラブルシューティングで環境別の確認手順をご覧ください。"
+      }
+    }
+  },
+  "closing": {
+    "eyebrow": "エージェントに次の手番を任せる",
+    "title": "あなたの注意は貴重です",
+    "action": "すべての通知を価値あるものに"
+  },
+  "footer": {
+    "builtBy": "開発者：",
+    "afterBuilder": "。オープンソースです。",
+    "license": "ライセンス",
+    "source": "ソースコード"
+  },
+  "preview": {
+    "ariaLabel": "エージェント通知の例",
+    "heading": "エージェントからのお知らせ",
+    "pause": "一時停止",
+    "resume": "再開",
+    "next": "次へ",
+    "workspace": "main · notification_plugin_go",
+    "items": {
+      "question": {
+        "title": "❓ 質問",
+        "body": "/tmp/ に作成するテストファイルの名前をどうしますか？"
+      },
+      "plan": {
+        "title": "📋 計画",
+        "body": "計画：/tmp/ にテストファイルを作成"
+      },
+      "completed": {
+        "title": "✅ 完了",
+        "body": "完了しました。インストール欄がメインビジュアルの直後に表示されるようになりました。",
+        "detail": "✏️ 3 件編集  ⏱ 35 秒"
+      },
+      "review": {
+        "title": "🔍 レビュー",
+        "body": "レビューが完了しました。更新したインストーラーに問題は見つかりませんでした。"
+      },
+      "permission": {
+        "title": "🔐 権限のリクエスト",
+        "body": "承認が必要です：シェル"
+      },
+      "limit": {
+        "title": "⏱️ セッション上限に到達",
+        "body": "セッションの上限に達しました。しばらく待ってから続行してください。"
+      },
+      "error": {
+        "title": "🔴 API エラー：401",
+        "body": "認証の有効期限が切れました。再度ログインしてください。"
+      }
+    }
+  },
+  "select": {
+    "scrollUp": "選択肢を上にスクロール",
+    "scrollDown": "選択肢を下にスクロール"
+  },
+  "install": {
+    "title": "通知を設定",
+    "intro": "以下の手順で {agent} にデスクトップ通知を追加します。",
+    "chooseAgent": "エージェントを選択",
+    "requires": "{agent} が必要です",
+    "bothAgents": "両方のエージェント",
+    "bothSelected": "✓ 両方のエージェントを選択済み",
+    "installBoth": "両方のエージェントにインストール",
+    "chooseComputer": "エージェントを実行するコンピューターを選択",
+    "selected": "選択済み",
+    "detected": "自動検出",
+    "change": "変更",
+    "targetOs": "対象のオペレーティングシステム",
+    "products": {
+      "claude": "Claude Code",
+      "codex": "Codex CLI · ベータ",
+      "both": "両方のエージェント"
+    },
+    "targets": {
+      "unknown": "対象の OS を選択",
+      "macos": "macOS",
+      "linux": "Linux",
+      "windows": "Windows · Git Bash",
+      "manual": "手動の手順"
+    },
+    "prerequisiteTitle": "Codex CLI ベータ - 必要なリリース条件。",
+    "prerequisiteText": "バージョン 1.42.0 以上の公開済み安定版プラグインが必要です。該当リリースは現在ドラフトのため、公開されるまで Codex インストーラーは利用できません。",
+    "checkReleases": "リリースを確認",
+    "configure": {
+      "title": "サウンドを自分好みに",
+      "claudeBefore": "Claude Code のチャット内で実行：",
+      "claudeAfter": "これは Claude のスラッシュコマンドです。シェルコマンドではありません。",
+      "codexBefore": "Codex では、共有設定ファイルを編集します：",
+      "codexMiddle": "手順はこちら：",
+      "codexLink": "手動設定のドキュメント",
+      "codexAfter": "Codex のみを設定する場合、Claude Code は必要ありません。",
+      "shared": "両方のエージェントでこの設定を共有します。更新時も設定は保持されます。"
+    },
+    "manual": {
+      "title": "手動で設定する",
+      "claude": "Claude の手動インストール",
+      "codex": "Codex の手動登録"
+    },
+    "chooseTarget": "対象の OS を選択するとコマンドが表示されます。モバイル端末や判別できないブラウザーでは、手動で選択してください。",
+    "commandLabel": "{intent}用コマンド",
+    "copyCommand": "コマンドをコピー",
+    "updatingInstead": "更新する場合は？",
+    "copied": "コピーしました。準備ができたら対象のターミナルに貼り付けてください。",
+    "copyUnavailable": "コピーできません。コマンドを選択して手動でコピーしてください。",
+    "updateNote": "インストールと更新には同じコマンドを使います。既存の設定は保持されます。",
+    "intents": {
+      "install": "インストール",
+      "update": "更新",
+      "configure": "設定"
+    },
+    "steps": {
+      "label1": "次の手順 1",
+      "label2": "次の手順 2",
+      "runBash": "Git Bash で実行",
+      "runTerminal": "ターミナルで実行",
+      "windowsTitle": "Windows の Git Bash で実行してください。",
+      "windowsText": "WSL は使用しないでください。また、このパイプ付きコマンドを PowerShell に貼り付けないでください。",
+      "terminalText": "ターミナルを開き、上のコマンドを実行してください。",
+      "restart": "{agent}を再起動",
+      "bothAgents": "両方のエージェント",
+      "restartClaude": "通知を有効にするには、Claude Code を閉じて開き直してください。",
+      "restartCodex": "Codex を再起動して /hooks を開き、インストールされたフックを確認して信頼を許可してください。定義が変わった場合は再確認が必要です。信頼が自動で許可されることはありません。"
+    },
+    "help": "インストールのヘルプ",
+    "claudeHelp": "Claude インストールのヘルプ",
+    "installationInstructions": "インストール手順",
+    "configureSettings": "⚙ 設定を変更",
+    "agentNotify": {
+      "label": "エージェントが注意を必要とするときに通知できるようにする",
+      "hint": "作業の停止時だけでなく、タスクの途中でもエージェントが通知できるツールを追加します。"
+    }
+  }
+}

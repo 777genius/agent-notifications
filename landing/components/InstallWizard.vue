@@ -48,8 +48,9 @@ const osLabel = computed(
 );
 const copyStatus = ref("");
 const commandField = ref<HTMLTextAreaElement>();
+const agentNotify = ref(true);
 const snippet = computed(() =>
-  command(product.value, target.value, intent.value),
+  command(product.value, target.value, intent.value, agentNotify.value),
 );
 const displaySnippet = computed(() => snippet.value?.replace(" | ", " |\n"));
 onMounted(() => {
@@ -57,7 +58,7 @@ onMounted(() => {
   if (!manualOverride.value) target.value = detected.value;
   showOSPicker.value = target.value === "unknown";
 });
-watch([product, target, intent], () => {
+watch([product, target, intent, agentNotify], () => {
   copyStatus.value = "";
 });
 async function copy() {
@@ -159,6 +160,21 @@ async function copy() {
       {{ t("install.prerequisiteText") }}
       <a :href="repo + '/releases'">{{ t("install.checkReleases") }}</a>.
     </p>
+
+    <label
+      v-if="intent !== 'configure' && target !== 'manual' && target !== 'unknown'"
+      class="agent-notify-option"
+    >
+      <input
+        v-model="agentNotify"
+        type="checkbox"
+        :aria-label="t('install.agentNotify.label')"
+      />
+      <span>
+        <strong>{{ t("install.agentNotify.label") }}</strong>
+        <small>{{ t("install.agentNotify.hint") }}</small>
+      </span>
+    </label>
 
     <div
       v-if="intent === 'configure'"

@@ -12,6 +12,7 @@ package codexsetup
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,6 +21,9 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"time"
+
+	"github.com/777genius/agent-notifications/internal/installruntime"
 )
 
 // InstallDirName is the stable directory (inside the Codex home) that holds
@@ -44,6 +48,15 @@ var registeredEvents = []struct {
 
 // Options controls a setup run.
 type Options struct {
+	// RequireNative rejects an unqualified explicit notification install before hook commit.
+	// Ordinary hook-only installation retains its existing behavior.
+	RequireNative bool
+	// Remove unregisters this consumer; last removal cleans only ledger-owned files.
+	Remove bool
+	// ControlRoot overrides shared runtime state for isolated tests.
+	ControlRoot string
+	// Context optionally supplies the complete setup deadline.
+	Context context.Context
 	// CodexHome overrides the Codex home directory (default: $CODEX_HOME,
 	// then <user home>/.codex).
 	CodexHome string
@@ -281,6 +294,9 @@ func Run(opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	if opts.Remove {
+		opts.PluginRoot = filepath.Join(codexHome, InstallDirName)
+	}
 	if opts.PluginRoot == "" {
 		return Result{}, fmt.Errorf("plugin root is required")
 	}
@@ -288,7 +304,7 @@ func Run(opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("resolve plugin root: %w", err)
 	}
-	if _, err := os.Stat(filepath.Join(pluginRoot, "bin", "codex-hook-wrapper.sh")); err != nil {
+	if _, err := os.Stat(filepath.Join(pluginRoot, "bin", "codex-hook-wrapper.sh")); err != nil && !opts.Remove {
 		return Result{}, fmt.Errorf("plugin root %q does not look like a claude-notifications bundle: %w", pluginRoot, err)
 	}
 
@@ -304,6 +320,13 @@ func Run(opts Options) (Result, error) {
 		result.Events = append(result.Events, e.event)
 	}
 
+	physicalHome, err := canonicalPath(codexHome)
+	if err != nil {
+		return Result{}, err
+	}
+	hooksPath = filepath.Join(physicalHome, "hooks.json")
+	result.HooksPath = hooksPath
+
 	if err := validateInstallPath(installDir); err != nil {
 		return Result{}, err
 	}
@@ -316,8 +339,6 @@ func Run(opts Options) (Result, error) {
 		return Result{}, err
 	}
 	self := sameDir(source, destination)
-	// A final-root alias does not establish ownership of a third bundle.
-	// Self-registration does not refresh assets; symlinked parents are safe.
 	if info, err := os.Lstat(installDir); err != nil && !os.IsNotExist(err) {
 		return Result{}, err
 	} else if err == nil && info.Mode()&os.ModeSymlink != 0 && !self {
@@ -326,11 +347,14 @@ func Run(opts Options) (Result, error) {
 	if !self && (within(source, destination) || within(destination, source)) {
 		return Result{}, fmt.Errorf("source and destination overlap")
 	}
+	if _, err := readHooksFile(hooksPath); err != nil {
+		return Result{}, err
+	}
 	if !opts.DryRun {
-		if err := os.MkdirAll(codexHome, 0700); err != nil {
+		if err := os.MkdirAll(physicalHome, 0700); err != nil {
 			return Result{}, err
 		}
-		lock := filepath.Join(codexHome, ".claude-notifications-setup.lock")
+		lock := filepath.Join(physicalHome, ".claude-notifications-setup.lock")
 		f, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 		if err != nil {
 			return Result{}, fmt.Errorf("setup lock (remove only after confirming no setup is running): %w", err)
@@ -341,53 +365,141 @@ func Run(opts Options) (Result, error) {
 		}
 		defer func() { _ = os.Remove(lock) }()
 	}
-	before, readErr := os.ReadFile(hooksPath)
-	if readErr != nil && !os.IsNotExist(readErr) {
-		return Result{}, readErr
-	}
-	if err := checkHooksSnapshot(hooksPath, before, readErr == nil); err != nil {
-		return Result{}, err
-	}
-	existing, err := readHooksFile(hooksPath)
-	if err != nil {
-		return Result{}, err
-	}
-	merged, replaced, foreign := mergeHooks(existing, installDir)
-	result.Replaced = replaced
-	result.ForeignKept = foreign
-
-	if opts.DryRun {
-		return result, nil
-	}
-
-	if err := preflightConfig(source, destination, !self, hooksPath); err != nil {
-		return result, err
-	}
-
-	rollback := func() error { return nil }
-	finish := func() {}
-	if !self {
-		rollback, finish, err = stageBundle(source, destination)
-		if err != nil {
-			return Result{}, fmt.Errorf("failed to install plugin copy: %w", err)
+	var native *installruntime.NativeChange
+	if !opts.DryRun && !opts.Remove {
+		for _, name := range []string{"ClaudeNotifier.app", "terminal-notifier.app"} {
+			candidate := filepath.Join(source, "bin", name)
+			if _, e := os.Stat(candidate); os.IsNotExist(e) {
+				continue
+			} else if e != nil {
+				return Result{}, e
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			native, err = installruntime.StageNative(ctx, opts.ControlRoot, candidate)
+			cancel()
+			if err != nil {
+				return Result{}, err
+			}
+			break
 		}
 	}
-	defer finish()
-	current, currentErr := os.ReadFile(hooksPath)
-	if !bytes.Equal(before, current) || os.IsNotExist(readErr) != os.IsNotExist(currentErr) || (currentErr != nil && !os.IsNotExist(currentErr)) {
-		return Result{}, fmt.Errorf("hooks.json changed during setup; rollback: %v", rollback())
+	if native != nil {
+		defer func() {
+			cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_ = installruntime.DiscardNative(cleanup, opts.ControlRoot, native)
+		}()
 	}
-	backup, err := writeHooksFile(hooksPath, merged, before, readErr == nil)
-	if err != nil {
-		return Result{}, fmt.Errorf("%w; bundle rollback: %v", err, rollback())
+	if opts.RequireNative && !opts.DryRun && !opts.Remove {
+		if native == nil || native.After.DecoderFloor < 1 || len(native.After.Attestation) == 0 {
+			return Result{}, fmt.Errorf("qualified native notification runtime required")
+		}
 	}
-	result.BackupPath = backup
-	retryBinary := filepath.Join(destination, "bin", "claude-notifications-"+runtime.GOOS+"-"+runtime.GOARCH)
-	if runtime.GOOS == "windows" {
-		retryBinary += ".exe"
+	if !opts.DryRun && !opts.Remove {
+		if err := preflightConfig(source, destination, !self, hooksPath); err != nil {
+			return Result{}, err
+		}
 	}
-	if err := initializeConfig(source, retryBinary); err != nil {
+	var files []installruntime.File
+	if !opts.DryRun && !self && !opts.Remove {
+		files, err = stageRuntimeFiles(source, destination)
+		if err != nil {
+			return Result{}, err
+		}
+		files, err = appendBundleLauncherFiles(destination, files)
+		if err != nil {
+			return Result{}, err
+		}
+	}
+	if native != nil {
+		aliases, e := installruntime.NativeAlias(native, filepath.Join(destination, "bin"))
+		if e != nil {
+			return Result{}, e
+		}
+		files = append(files, aliases...)
+	}
+	prepare := func() ([]installruntime.File, error) {
+		snapshot, _ := installruntime.ReadInstalledSnapshot(opts.ControlRoot)
+		for p := range snapshot.Ledger.Files {
+			if filepath.Base(p) == "config.json" && filepath.Base(filepath.Dir(p)) == "config" {
+				return nil, fmt.Errorf("legacy user config is recorded as immutable; a compatible kernel must migrate its ownership to mutable config before repair/removal (user bytes preserved)")
+			}
+		}
+		before, err := installruntime.Fingerprint(hooksPath)
+		if err != nil {
+			return nil, err
+		}
+		existing, err := readHooksFile(hooksPath)
+		if err != nil {
+			return nil, err
+		}
+		merged, replaced, foreign := mergeHooksMode(existing, installDir, !opts.Remove)
+		result.Replaced, result.ForeignKept = replaced, foreign
+		data, err := json.MarshalIndent(merged, "", "  ")
+		if err != nil {
+			return nil, err
+		}
+		if !opts.DryRun && before.Exists {
+			old, err := os.ReadFile(hooksPath)
+			if err != nil {
+				return nil, err
+			}
+			backup, err := os.CreateTemp(filepath.Dir(hooksPath), "hooks.json.backup-*")
+			if err != nil {
+				return nil, err
+			}
+			result.BackupPath = backup.Name()
+			_, err = backup.Write(old)
+			if err == nil {
+				err = backup.Sync()
+			}
+			closeErr := backup.Close()
+			if err != nil {
+				return nil, err
+			}
+			if closeErr != nil {
+				return nil, closeErr
+			}
+		}
+		return []installruntime.File{{Path: hooksPath, Before: before, Data: append(data, '\n'), Mode: 0600}}, nil
+	}
+	if opts.DryRun {
+		_, err = prepare()
 		return result, err
+	}
+	ctx := opts.Context
+	if ctx == nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+	}
+	commands := []string{}
+	for _, event := range registeredEvents {
+		posix, windows := HookCommands(installDir, event.event)
+		commands = append(commands, posix, windows)
+	}
+	_, err = installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: opts.ControlRoot, Owner: "existing-installer", RuntimeRoot: destination,
+		RemoveConsumer: opts.Remove, ConsumerID: "codex:" + hooksPath, Consumer: installruntime.Consumer{Registration: hooksPath, Commands: commands},
+		Native: native, Files: files, ConfigPaths: []string{hooksPath}, Prepare: prepare,
+	})
+	if err != nil {
+		return Result{}, err
+	}
+	if !opts.Remove && !self {
+		if err := dropStaleBinFiles(destination, files); err != nil {
+			return Result{}, err
+		}
+		if err := createLegacyDefaults(ctx, source, destination); err != nil {
+			return Result{}, err
+		}
+		retryBinary := filepath.Join(destination, "bin", "claude-notifications-"+runtime.GOOS+"-"+runtime.GOARCH)
+		if runtime.GOOS == "windows" {
+			retryBinary += ".exe"
+		}
+		if err := initializeConfig(source, retryBinary); err != nil {
+			return result, err
+		}
 	}
 	return result, nil
 }
@@ -404,6 +516,10 @@ func RenderHooksJSON(installDir string) ([]byte, error) {
 }
 
 func mergeHooks(existing hooksFile, installDir string) (hooksFile, bool, int) {
+	return mergeHooksMode(existing, installDir, true)
+}
+
+func mergeHooksMode(existing hooksFile, installDir string, register bool) (hooksFile, bool, int) {
 	out := hooksFile{Hooks: map[string][]hookGroup{}, extra: map[string]json.RawMessage{}}
 	for k, v := range existing.extra {
 		out.extra[k] = v
@@ -411,8 +527,6 @@ func mergeHooks(existing hooksFile, installDir string) (hooksFile, bool, int) {
 	replaced := false
 	foreign := 0
 
-	// Copy every event, dropping only handlers this plugin owns; foreign
-	// handlers (and foreign groups) survive untouched.
 	for event, groups := range existing.Hooks {
 		var kept []hookGroup
 		if groups != nil {
@@ -440,12 +554,11 @@ func mergeHooks(existing hooksFile, installDir string) (hooksFile, bool, int) {
 		out.Hooks[event] = kept
 	}
 
+	if !register {
+		return out, replaced, foreign
+	}
 	for _, spec := range registeredEvents {
 		posix, windows := HookCommands(installDir, spec.event)
-		// Deliberately synchronous. Measured against Codex v0.152.0: an
-		// `async: true` handler never runs under `codex exec`, which exits as
-		// soon as the turn ends, so the notification is silently lost. The
-		// hook is fast and fail-open, and the timeout caps the worst case.
 		group := hookGroup{
 			Matcher: spec.matcher,
 			Hooks: []hookHandler{{
@@ -554,7 +667,7 @@ func writeHooksFile(path string, content hooksFile, expected []byte, existed boo
 // Only runtime assets belong in the installed bundle. User config and logs
 // at the installation root are never refreshed from the source.
 func runtimeEntry(name string) bool {
-	return name == "bin" || name == "sounds" || name == "config" || name == "claude_icon.png" || name == ".claude-plugin"
+	return name == "bin" || name == "sounds" || name == "config" || name == "skills" || name == "claude_icon.png" || name == ".claude-plugin"
 }
 
 func validateInstallPath(path string) error {
@@ -565,23 +678,111 @@ func validateInstallPath(path string) error {
 }
 
 func canonicalPath(path string) (string, error) {
-	absolute, err := filepath.Abs(path)
+	return installruntime.CanonicalPath(path)
+}
+
+func stageRuntimeFiles(source, destination string) ([]installruntime.File, error) {
+	source, err := canonicalPath(source)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	resolved, err := filepath.EvalSymlinks(absolute)
-	if err == nil {
-		return resolved, nil
+	destination, err = canonicalPath(destination)
+	if err != nil {
+		return nil, err
 	}
-	if !os.IsNotExist(err) {
-		return "", err
+	if within(source, destination) || within(destination, source) {
+		return nil, fmt.Errorf("source and destination overlap")
 	}
-	parent := filepath.Dir(absolute)
-	if parent == absolute {
-		return "", err
+	return installruntime.StageFiles(source, destination, func(rel string) bool {
+		parts := strings.Split(rel, string(filepath.Separator))
+		if !runtimeEntry(parts[0]) {
+			return false
+		}
+		if parts[0] == "config" {
+			return false
+		}
+		if parts[0] == "skills" {
+			return len(parts) == 1 || (parts[1] == "agent-notify" && (len(parts) == 2 || (len(parts) == 3 && parts[2] == "SKILL.md")))
+		}
+		if parts[0] == "bin" && len(parts) > 1 {
+			return !strings.HasSuffix(parts[1], ".app") && runtimeBinary(parts[1])
+		}
+		return parts[0] != ".claude-plugin" || len(parts) == 1 || parts[1] == "plugin.json"
+	})
+}
+
+func appendBundleLauncherFiles(destination string, files []installruntime.File) ([]installruntime.File, error) {
+	destination, err := canonicalPath(destination)
+	if err != nil {
+		return nil, err
 	}
-	resolved, err = canonicalPath(parent)
-	return filepath.Join(resolved, filepath.Base(absolute)), err
+	bin := filepath.Join(destination, "bin")
+	binary := "claude-notifications-" + runtime.GOOS + "-" + runtime.GOARCH
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	found := false
+	present := map[string]bool{}
+	for _, file := range files {
+		present[file.Path] = true
+		if filepath.Dir(file.Path) == bin && filepath.Base(file.Path) == binary && file.Link == "" && !file.Remove {
+			found = true
+		}
+	}
+	if !found {
+		return files, nil
+	}
+	for _, name := range []string{"claude-notifications", "agent-notifications"} {
+		path := filepath.Join(bin, name)
+		launcher := installruntime.File{Link: binary, Mode: 0755}
+		if runtime.GOOS == "windows" {
+			path += ".bat"
+			launcher.Link = ""
+			launcher.Data = installruntime.WindowsLauncherScript(name, binary)
+		}
+		if present[path] {
+			continue
+		}
+		before, err := installruntime.Fingerprint(path)
+		if err != nil {
+			return nil, err
+		}
+		launcher.Path = path
+		launcher.Before = before
+		files = append(files, launcher)
+	}
+	return files, nil
+}
+
+func dropStaleBinFiles(destination string, files []installruntime.File) error {
+	bin := filepath.Join(destination, "bin")
+	entries, err := os.ReadDir(bin)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	keep := map[string]bool{}
+	for _, file := range files {
+		if filepath.Dir(file.Path) == bin {
+			keep[filepath.Base(file.Path)] = true
+		}
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if keep[name] || strings.HasSuffix(name, ".app") || runtimeBinary(name) {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			continue
+		}
+		if err := os.Remove(filepath.Join(bin, name)); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 func within(parent, child string) bool {
@@ -873,8 +1074,7 @@ func installBundleLaunchers(bin, platform, arch string) error {
 			return err
 		}
 		if platform == "windows" {
-			content := "@echo off\r\nsetlocal\r\nset AGENT_NOTIFICATIONS_LAUNCHER=" + name + "\r\n\"%~dp0" + binary + "\" %*\r\n"
-			if err := os.WriteFile(target, []byte(content), 0755); err != nil {
+			if err := os.WriteFile(target, installruntime.WindowsLauncherScript(name, binary), 0755); err != nil {
 				return err
 			}
 		} else if err := os.Symlink(binary, target); err != nil {

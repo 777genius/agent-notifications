@@ -67,6 +67,19 @@ test("production command matrix, aftercare, clipboard and configuration", async 
       ).toHaveCount(0);
   }
   await page.getByRole("button", { name: "Install", exact: true }).click();
+  await chooseOS(page, "linux");
+  const agentNotify = page.getByRole("checkbox", {
+    name: /Let agents send you notifications when they need your attention/,
+  });
+  await expect(agentNotify).toBeChecked();
+  await expect(page.getByLabel("Install command")).toHaveValue(
+    /--product both$/,
+  );
+  await agentNotify.uncheck();
+  await expect(page.getByLabel("Install command")).toHaveValue(
+    /--skip-agent-notify$/,
+  );
+  await agentNotify.check();
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.getByRole("button", { name: "Copy command" }).click();
   await expect(page.getByRole("status")).toContainText("Copied");

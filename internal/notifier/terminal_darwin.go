@@ -101,27 +101,19 @@ func GetTerminalNotifierPath() (string, error) {
 	pluginRoot := os.Getenv("CLAUDE_PLUGIN_ROOT")
 
 	if pluginRoot != "" {
-		// 1. Check ClaudeNotifier (preferred — modern UNUserNotificationCenter with Claude icon)
-		modernPath := filepath.Join(pluginRoot, "bin",
-			"ClaudeNotifier.app", "Contents", "MacOS", "terminal-notifier-modern")
-		if platform.FileExists(modernPath) {
-			return modernPath, nil
-		}
-
-		// Development checkout fallback: make build-notifier writes the bundle to
-		// swift-notifier/ClaudeNotifier.app, while plugin-dir runs set
-		// CLAUDE_PLUGIN_ROOT to the repo root.
-		devPath := filepath.Join(pluginRoot, "swift-notifier",
-			"ClaudeNotifier.app", "Contents", "MacOS", "terminal-notifier-modern")
-		if platform.FileExists(devPath) {
-			return devPath, nil
-		}
-
-		// 2. Check legacy terminal-notifier
-		legacyPath := filepath.Join(pluginRoot, "bin",
-			"terminal-notifier.app", "Contents", "MacOS", "terminal-notifier")
-		if platform.FileExists(legacyPath) {
-			return legacyPath, nil
+		// Conventional hook names may alias the same managed generation, which
+		// can contain either the modern or the legacy helper.
+		for _, parts := range [][]string{
+			{"bin", "ClaudeNotifier.app", "Contents", "MacOS", "terminal-notifier-modern"},
+			{"swift-notifier", "ClaudeNotifier.app", "Contents", "MacOS", "terminal-notifier-modern"},
+			{"bin", "ClaudeNotifier.app", "Contents", "MacOS", "terminal-notifier"},
+			{"bin", "terminal-notifier.app", "Contents", "MacOS", "terminal-notifier-modern"},
+			{"bin", "terminal-notifier.app", "Contents", "MacOS", "terminal-notifier"},
+		} {
+			path := filepath.Join(append([]string{pluginRoot}, parts...)...)
+			if platform.FileExists(path) {
+				return path, nil
+			}
 		}
 	}
 
