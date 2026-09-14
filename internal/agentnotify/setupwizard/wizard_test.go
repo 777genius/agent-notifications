@@ -597,6 +597,129 @@ func TestWizardReinstallRetainsInstallation(t *testing.T) {
 	}
 }
 
+func TestWizardUninstallExplicitFalsePreservesNotifyWithoutPackage(t *testing.T) {
+	ctx := testCtx(t)
+	envHome := t.TempDir()
+	testenv.Set(t, envHome)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	bundle := writePluginBundle(t)
+	canonical := filepath.Join(envHome, "fixture-config.json")
+	if err := os.WriteFile(canonical, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENT_NOTIFICATIONS_CONFIG", canonical)
+	home := filepath.Join(envHome, "codex-home")
+	if err := os.MkdirAll(home, 0700); err != nil {
+		t.Fatal(err)
+	}
+	on := true
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true,
+		Hooks: &on, AgentNotify: &on,
+		PackageRoot: pkg, PluginRoot: bundle, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: home, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	off := false
+	req.Action = ActionUninstall
+	req.Hooks = nil
+	req.AgentNotify = &off
+	req.PackageRoot = ""
+	req.PackageFetcher = func(context.Context, string) ([]byte, error) {
+		t.Fatal("uninstall fetched a package")
+		return nil, nil
+	}
+	removed, err := Run(ctx, req)
+	if err != nil || removed.Outcome != "completed" {
+		t.Fatalf("uninstall: %+v %v", removed, err)
+	}
+	if len(removed.Readiness) == 0 {
+		t.Fatal("uninstall omitted readiness")
+	}
+	for _, fact := range removed.Readiness {
+		if fact.Permission != "unsupported" || fact.Delivery != "not_verified" {
+			t.Fatalf("uninstall required permission/delivery: %+v", fact)
+		}
+	}
+	req.Action = ActionInspect
+	req.Yes = false
+	view, err := Run(ctx, req)
+	if err != nil || view.Outcome != "completed" || view.ExitCode() != 0 {
+		t.Fatalf("inspect: %+v %v", view, err)
+	}
+	var hooksInstalled, notifyInstalled bool
+	for _, target := range view.Targets {
+		if target.Unit == "hooks" && target.Outcome == "installed" {
+			hooksInstalled = true
+		}
+		if target.Unit == "agent-notify" && target.Outcome == "installed" {
+			notifyInstalled = true
+		}
+	}
+	if hooksInstalled || !notifyInstalled {
+		t.Fatalf("explicit false did not keep notify: %+v", view.Targets)
+	}
+}
+
+func TestWizardUninstallOmittedUnitsRemovesManagedWithoutPackage(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	req.Action = ActionUninstall
+	req.Hooks = nil
+	req.AgentNotify = nil
+	req.PackageRoot = ""
+	req.PackageFetcher = func(context.Context, string) ([]byte, error) {
+		t.Fatal("uninstall fetched a package")
+		return nil, nil
+	}
+	removed, err := Run(ctx, req)
+	if err != nil || removed.Outcome != "completed" {
+		t.Fatalf("uninstall: %+v %v", removed, err)
+	}
+	req.Action = ActionInspect
+	req.Yes = false
+	view, err := Run(ctx, req)
+	if err != nil || view.ExitCode() != 0 {
+		t.Fatalf("inspect: %+v %v", view, err)
+	}
+	for _, target := range view.Targets {
+		if target.Unit == "agent-notify" && target.Outcome == "installed" {
+			t.Fatalf("omitted uninstall left notify: %+v", view.Targets)
+		}
+	}
+}
+
 func installationIDFromState(t *testing.T, path string) string {
 	t.Helper()
 	body, err := os.ReadFile(path)
