@@ -255,7 +255,16 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 }
 
 func IsUpdateRequired(err error) bool {
-	return errors.Is(err, ErrUpdateRequired) || (err != nil && strings.Contains(err.Error(), "run update separately"))
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrUpdateRequired) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "run update separately") ||
+		strings.Contains(msg, "use switch to change source") ||
+		strings.Contains(msg, "is sticky to")
 }
 
 func wrapUpdateRequired(err error) error {
@@ -338,6 +347,13 @@ func (m Materializer) GuardSecondClient(ctx context.Context, req MaterializeRequ
 	}
 	if installation.Source.TreeDigest != "" && plan.TreeDigest != "" && installation.Source.TreeDigest != plan.TreeDigest {
 		return fmt.Errorf("%w: recorded digest %s desired %s", ErrUpdateRequired, installation.Source.TreeDigest, plan.TreeDigest)
+	}
+	recorded := installation.Source.CanonicalSource
+	if recorded == "" {
+		recorded = installation.Source.RequestedSource
+	}
+	if recorded != "" && plan.SourceRoot != "" && filepath.Clean(recorded) != filepath.Clean(plan.SourceRoot) {
+		return fmt.Errorf("%w: existing source %s", ErrUpdateRequired, recorded)
 	}
 	return nil
 }
