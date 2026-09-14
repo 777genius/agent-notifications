@@ -17,7 +17,7 @@ func dispatchManagedStdio(args []string, stderr io.Writer) (bool, int) {
 		return true, code
 	}
 	if len(args) > 0 && strings.HasPrefix(args[0], "--internal-stdio-") {
-		fmt.Fprintln(stderr, "managed stdio: unknown protocol version")
+		_, _ = fmt.Fprintln(stderr, "managed stdio: unknown protocol version")
 		return true, 126
 	}
 	return false, 0
