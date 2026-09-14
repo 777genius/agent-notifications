@@ -335,6 +335,12 @@ test("installation order, sticky header and custom select keyboard behavior", as
       nodes.map((n) => (n as HTMLImageElement).naturalWidth),
     ))
     expect(logo).toBeGreaterThan(0);
+  for (const logo of await page
+    .locator(".brand-icon, .notification-brand-logo")
+    .evaluateAll((nodes) =>
+      nodes.map((n) => (n as HTMLImageElement).naturalWidth),
+    ))
+    expect(logo).toBeGreaterThan(0);
 });
 
 test("hero headline remains a single unclipped line at narrow widths", async ({

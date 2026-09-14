@@ -3,11 +3,20 @@ import { repo } from "~/data/install";
 
 const { t } = useI18n();
 const localeHead = useLocaleHead({ seo: true });
+const base = useRuntimeConfig().app.baseURL;
+const brandLogo = `${base}agent-notifications-logo.png`;
+const publicBrandLogo =
+  "https://777genius.github.io/agent-notifications/agent-notifications-logo.png";
 
 useHead(() => ({
   title: t("seo.title"),
   htmlAttrs: localeHead.value.htmlAttrs,
-  link: localeHead.value.link,
+  link: [
+    ...(localeHead.value.link ?? []),
+    { rel: "icon", type: "image/png", href: brandLogo },
+    { rel: "apple-touch-icon", href: brandLogo },
+    { rel: "manifest", href: `${base}site.webmanifest` },
+  ],
   meta: [
     ...(localeHead.value.meta ?? []),
     { name: "description", content: t("seo.description") },
@@ -15,9 +24,11 @@ useHead(() => ({
     { property: "og:description", content: t("seo.description") },
     { property: "og:type", content: "website" },
     { property: "og:site_name", content: "Agent Notifications" },
+    { property: "og:image", content: publicBrandLogo },
     { name: "twitter:card", content: "summary" },
     { name: "twitter:title", content: t("seo.title") },
     { name: "twitter:description", content: t("seo.description") },
+    { name: "twitter:image", content: publicBrandLogo },
     { name: "theme-color", content: "#080b12" },
   ],
   script: [
@@ -37,6 +48,7 @@ useHead(() => ({
           priceCurrency: "USD",
         },
         url: "https://777genius.github.io/agent-notifications/",
+        image: publicBrandLogo,
         downloadUrl: repo,
       }),
     },
@@ -67,12 +79,7 @@ const faqIcons = [
     <a class="skip" href="#main">{{ t("accessibility.skip") }}</a>
     <header class="header">
       <a class="brand" href="#">
-        <span class="brand-icon" aria-hidden="true">
-          <svg width="28" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
-            <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9Z" />
-            <path d="M9 21h6M12 1v2" />
-          </svg>
-        </span>
+        <img class="brand-icon" :src="brandLogo" alt="" width="38" height="38" />
         <span>Agent Notifications<small>{{ t("brand.tagline") }}</small></span>
       </a>
       <nav :aria-label="t('nav.ariaLabel')">
@@ -176,7 +183,7 @@ const faqIcons = [
     </main>
 
     <footer>
-      <a class="brand" href="#">Agent Notifications</a>
+      <a class="brand" href="#"><img class="brand-icon" :src="brandLogo" alt="" width="32" height="32" />Agent Notifications</a>
       <span>{{ t("footer.builtBy") }} <a href="https://github.com/777genius">777genius</a>{{ t("footer.afterBuilder") }}</span>
       <a :href="repo + '/blob/main/LICENSE'">{{ t("footer.license") }}</a>
       <a :href="repo">{{ t("footer.source") }} ↗</a>

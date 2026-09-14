@@ -7,7 +7,9 @@
     <key>CFBundleExecutable</key>
     <string>terminal-notifier-modern</string>
     <key>CFBundleName</key>
-    <string>Claude Notifier</string>
+    <string>Agent Notifications</string>
+    <key>CFBundleDisplayName</key>
+    <string>Agent Notifications</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleVersion</key>

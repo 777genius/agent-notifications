@@ -111,7 +111,7 @@ What to collect:
 3. The last lines from `notification-debug.log` in the repo root.
 4. The output of the built binary's `version` command.
 5. Relevant OS notification settings:
-   - macOS: `System Settings > Notifications > Claude Notifier`
+   - macOS: `System Settings > Notifications > Agent Notifications`
    - Linux: desktop-environment notification settings and whether the session is local desktop vs headless/remote
    - Windows: `Settings > System > Notifications > Claude Code Notifications`
 6. On macOS / Linux, if click-to-focus is part of the report, whether clicking the notification activates the expected window.

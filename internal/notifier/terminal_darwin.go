@@ -101,7 +101,7 @@ func GetTerminalNotifierPath() (string, error) {
 	pluginRoot := os.Getenv("CLAUDE_PLUGIN_ROOT")
 
 	if pluginRoot != "" {
-		// 1. Check ClaudeNotifier (preferred — modern UNUserNotificationCenter with Claude icon)
+		// 1. Check ClaudeNotifier (preferred — modern UNUserNotificationCenter with the Agent Notifications icon)
 		modernPath := filepath.Join(pluginRoot, "bin",
 			"ClaudeNotifier.app", "Contents", "MacOS", "terminal-notifier-modern")
 		if platform.FileExists(modernPath) {
