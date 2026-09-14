@@ -64,6 +64,7 @@ type Plan struct {
 	TargetPath      string
 	InstallationID  string
 	BindingID       string
+	HelperVersion   string
 	RequiredMissing []string
 	NoChange        bool
 }
@@ -79,6 +80,13 @@ type Result struct {
 	NoChange       bool
 	DataRetained   bool
 	Client         ClientResult
+	NextActions    []NextAction
+}
+
+// NextAction is a structured follow-up. It is not a bool and not a retry token.
+type NextAction struct {
+	Kind   string
+	Reason string
 }
 
 // ClientResult is the public per-client lifecycle view. Mapping is not a bool.

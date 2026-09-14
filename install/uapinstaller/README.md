@@ -32,7 +32,9 @@ not the installed packagesnapshot ArtifactDigest. An existing record whose
 digest in that field, returns `ErrUpdateRequired` without rewriting state.
 Remove Prepare verifies the managed artifact and persisted target before any
 client deactivation. Last-client remove retains PLUGIN_DATA and reports
-`data_retained`.
+`data_retained`. A later remove of that retained empty installation returns
+`already_absent` without creating a journal. Plan includes the helper protocol
+version. Result.NextActions cover recover, update, and reprepare.
 
 Confirmed Apply re-reads live target/ownership before mutation and returns
 `plan_changed` instead of applying a stale confirmation. Discover reports

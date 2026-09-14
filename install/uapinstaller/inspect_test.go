@@ -280,3 +280,41 @@ func plantStateCommittedReceipt(t *testing.T) (*Engine, domain.MutationReceipt) 
 	}
 	return eng, receipt
 }
+
+func plantRetainedInstallation(t *testing.T) *Engine {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "state")
+	runner := &countingRunner{}
+	eng, err := New(Config{StateRoot: root, Runner: runner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := domain.StateFileV2{
+		SchemaVersion: domain.StateSchemaVersion,
+		Installations: []domain.Installation{{
+			InstallationID: "00000000-0000-4000-8000-000000000070",
+			DeclaredName:   "demo",
+			DataRetained:   true,
+			Source: domain.SourceBinding{
+				SourceBindingID: "src_demo", RequestedSource: "demo", CanonicalSource: "https://example.com/demo",
+				ResolvedRevision: "abc", TreeDigest: "sha256:tree",
+			},
+			Package: domain.PackageBinding{
+				LoaderKind: domain.LoaderKindAgentPlugins, FormatID: domain.FormatIDAgentPluginsV1,
+				SchemaURI: domain.PluginSchemaV1, DeclaredName: "demo", ManifestDigest: "sha256:manifest",
+			},
+			Clients: map[string]domain.ClientBinding{},
+			DataReceipts: map[string]domain.DataReceipt{
+				"data_demo": {
+					DataReceiptID: "data_demo", PhysicalBackend: "local", Scope: "user",
+					Locator: filepath.Join(root, "plugin-data", "keep"), OwnershipDigest: "sha256:retained",
+					State: domain.DataReceiptOwned,
+				},
+			},
+		}},
+	}
+	if err := (statev2.Store{Path: eng.cfg.StateFile}).Save(state); err != nil {
+		t.Fatal(err)
+	}
+	return eng
+}

@@ -57,6 +57,7 @@ func (e *Engine) Apply(ctx context.Context, prepared *PreparedOperation, decisio
 		}
 		result = Result{Operation: op, Outcome: OutcomeRecovery, Reason: reason}
 		err = fmt.Errorf("%w: %s", ErrRecoveryRequired, reason)
+		attachNextActions(&result)
 		return result, err
 	}
 	if err = e.confirmPreparedPlan(ctx, prepared); err != nil {
@@ -65,17 +66,22 @@ func (e *Engine) Apply(ctx context.Context, prepared *PreparedOperation, decisio
 			reason = "update_required"
 		}
 		result = Result{Operation: op, Outcome: OutcomeConflict, Reason: reason}
+		attachNextActions(&result)
 		return result, err
 	}
-	if op == OpInstall {
-		if _, err = e.helper(); err != nil {
-			result = Result{Operation: OpInstall, Outcome: OutcomeIncomplete, Reason: err.Error()}
+	if !prepared.plan.NoChange {
+		if op == OpInstall {
+			if _, err = e.helper(); err != nil {
+				result = Result{Operation: OpInstall, Outcome: OutcomeIncomplete, Reason: err.Error()}
+				attachNextActions(&result)
+				return result, err
+			}
+		}
+		if err = e.ensureDirs(); err != nil {
+			result = Result{Operation: op, Outcome: OutcomeIncomplete, Reason: err.Error()}
+			attachNextActions(&result)
 			return result, err
 		}
-	}
-	if err = e.ensureDirs(); err != nil {
-		result = Result{Operation: op, Outcome: OutcomeIncomplete, Reason: err.Error()}
-		return result, err
 	}
 	e.report(ProgressPreflight)
 	switch op {
@@ -87,6 +93,7 @@ func (e *Engine) Apply(ctx context.Context, prepared *PreparedOperation, decisio
 		err = fmt.Errorf("%w: %s", ErrUnsupported, op)
 		return Result{}, err
 	}
+	attachNextActions(&result)
 	return result, err
 }
 
@@ -148,6 +155,13 @@ func (e *Engine) applyInstall(ctx context.Context, prepared *PreparedOperation) 
 }
 
 func (e *Engine) applyRemove(ctx context.Context, prepared *PreparedOperation) (Result, error) {
+	if prepared.plan.NoChange {
+		return Result{
+			Operation: OpRemove, InstallationID: prepared.plan.InstallationID,
+			Outcome: OutcomeUnchanged, Reason: "already_absent", NoChange: true,
+			DataRetained: true, Binding: prepared.facts,
+		}, nil
+	}
 	state, err := e.store.Load()
 	if err != nil {
 		return Result{Operation: OpRemove, Outcome: OutcomeIncomplete, Reason: err.Error()}, err
@@ -226,6 +240,12 @@ func (e *Engine) confirmPreparedPlan(ctx context.Context, prepared *PreparedOper
 	}
 	binding, _, ok := findBinding(installation, prepared.client.ClientID)
 	if plan.Operation == OpRemove {
+		if plan.NoChange {
+			if ok {
+				return fmt.Errorf("%w: live target does not match confirmed plan", ErrPlanChanged)
+			}
+			return nil
+		}
 		if !ok {
 			return fmt.Errorf("%w: client is not installed", ErrPlanChanged)
 		}
@@ -247,4 +267,18 @@ func (e *Engine) confirmPreparedPlan(ctx context.Context, prepared *PreparedOper
 		return fmt.Errorf("%w: live binding does not match confirmed plan", ErrPlanChanged)
 	}
 	return nil
+}
+
+func attachNextActions(result *Result) {
+	if result == nil || len(result.NextActions) > 0 {
+		return
+	}
+	switch {
+	case result.Outcome == OutcomeRecovery:
+		result.NextActions = []NextAction{{Kind: "recover", Reason: result.Reason}}
+	case result.Reason == "update_required":
+		result.NextActions = []NextAction{{Kind: "update", Reason: result.Reason}}
+	case result.Reason == "plan_changed":
+		result.NextActions = []NextAction{{Kind: "reprepare", Reason: result.Reason}}
+	}
 }
