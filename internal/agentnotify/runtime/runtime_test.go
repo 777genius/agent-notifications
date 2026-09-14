@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	goruntime "runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -404,15 +405,22 @@ func TestProductionFactoryAndStrictReader(t *testing.T) {
 	o.ReadGlobal = nil
 	b := backend(t, o)
 	m := notifier.ManagedInstallation{ControlRoot: o.ControlRoot, Expected: snapshot("A").Installation}
-	d, ok := b.opts.DeliveryFactory(m, o.SpoolRoot, o.BootClock).(*notifier.StructuredDelivery)
-	if !ok {
-		t.Fatal("not production delivery")
-	}
-	if !reflect.DeepEqual(d.Installation, m) {
-		t.Fatal("installation refreshed")
-	}
-	if d.Spool.(*notifier.PrivateNativeSpool).Root != o.SpoolRoot {
-		t.Fatal("wrong spool")
+	d := b.opts.DeliveryFactory(m, o.SpoolRoot, o.BootClock)
+	if goruntime.GOOS == "linux" {
+		if _, ok := d.(*notifier.StructuredDelivery); ok {
+			t.Fatal("linux still using macos native delivery")
+		}
+	} else {
+		sd, ok := d.(*notifier.StructuredDelivery)
+		if !ok {
+			t.Fatal("not production delivery")
+		}
+		if !reflect.DeepEqual(sd.Installation, m) {
+			t.Fatal("installation refreshed")
+		}
+		if sd.Spool.(*notifier.PrivateNativeSpool).Root != o.SpoolRoot {
+			t.Fatal("wrong spool")
+		}
 	}
 	if e := os.WriteFile(o.GlobalConfig, []byte(global), 0600); e != nil {
 		t.Fatal(e)

@@ -1,10 +1,12 @@
 package installruntime
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestUserPolicyRepairAndRemoval(t *testing.T) {
@@ -107,7 +109,9 @@ func TestUserPolicyInvalidAndMissingNoCreate(t *testing.T) {
 func TestPolicyDisableRecoveryRevokesStaleRequest(t *testing.T) {
 	for _, boundary := range []string{"transaction", "policy-promotion", "ledger"} {
 		t.Run(boundary, func(t *testing.T) {
-			ctx, r := request(t)
+			_, r := request(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			t.Cleanup(cancel)
 			ledger, err := Commit(ctx, r)
 			if err != nil {
 				t.Fatal(err)
