@@ -39,6 +39,8 @@ func openRoot(path string) (*os.File, error) {
 	}
 	return os.NewFile(uintptr(fd), path), nil
 }
+
+func syncOpenedDir(f *os.File) error { return f.Sync() }
 func openChild(parent *os.File, name string) (*os.File, error) {
 	fd, e := unix.Openat(int(parent.Fd()), name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if e != nil {

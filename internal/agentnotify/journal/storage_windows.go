@@ -26,9 +26,13 @@ const (
 	oEXCL   = 0x80
 )
 
-// journalDirAccess walks ancestors with list/traverse only. The leaf handle is
-// later passed to os.File.Sync, which on Windows is FlushFileBuffers and
-// requires GENERIC_WRITE. Unix fsync works on O_RDONLY directory descriptors.
+// journalSyncDir is a no-op. FlushFileBuffers does not support directory
+// handles; file contents are already flushed before rename. Same contract as
+// installruntime.syncDir.
+func journalSyncDir(*os.File) error { return nil }
+
+// journalDirAccess walks ancestors with list/traverse only. The leaf also
+// requests GENERIC_WRITE so FILE_ADD_FILE works on the pinned directory handle.
 func journalDirAccess(leaf bool) uint32 {
 	access := uint32(windows.FILE_LIST_DIRECTORY | windows.FILE_READ_ATTRIBUTES | windows.FILE_TRAVERSE | windows.READ_CONTROL)
 	if leaf {
@@ -371,7 +375,7 @@ func (s *Store) write(ctx context.Context, dir *os.File, d *disk) error {
 	if e = s.fail("after_rename"); e != nil {
 		return e
 	}
-	if e = dir.Sync(); e != nil {
+	if e = journalSyncDir(dir); e != nil {
 		return e
 	}
 	return s.fail("after_directory_sync")
@@ -422,7 +426,7 @@ func (s *Store) bootstrap(ctx context.Context) error {
 	if e = f.Sync(); e != nil {
 		return e
 	}
-	if e = dir.Sync(); e != nil {
+	if e = journalSyncDir(dir); e != nil {
 		return e
 	}
 	if e = s.fail("after_namespace_sync"); e != nil {

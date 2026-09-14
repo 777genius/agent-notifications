@@ -182,7 +182,7 @@ func provision(ctx context.Context, o Options, s installruntime.PolicySnapshot, 
 		if e = renameExclusive(int(root.Fd()), stageName, "state"); e != nil {
 			return s, pre, "", fail("initialization_recovery_required", e)
 		}
-		if e = root.Sync(); e != nil {
+		if e = syncOpenedDir(root); e != nil {
 			return s, pre, "", fail("initialization_interrupted", e)
 		}
 	}
