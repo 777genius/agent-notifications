@@ -183,7 +183,7 @@ shutil.copytree(os.environ['SOURCE'],root,dirs_exist_ok=True)
         return self.run(env, [self.binary, 'config', *args], expected, data)
 
     def boot(self, env, product, expected=0):
-        return self.run(env, ['/bin/bash', ROOT / 'bin/bootstrap.sh', '--product', product], expected)
+        return self.run(env, ['/bin/bash', ROOT / 'bin/bootstrap.sh', '--product', product, '--skip-agent-notify'], expected)
 
     def paths(self, env):
         return (Path(env['HOME']) / '.claude/claude-notifications-go/config.json',
