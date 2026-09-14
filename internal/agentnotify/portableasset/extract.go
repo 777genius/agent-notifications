@@ -160,7 +160,7 @@ func extractEntry(destRoot string, f *zip.File, seen map[string]bool) (int64, er
 	if err != nil {
 		return 0, err
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	mode := f.Mode().Perm()
 	if mode == 0 {
 		mode = 0600
