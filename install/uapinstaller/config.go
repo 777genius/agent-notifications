@@ -24,6 +24,13 @@ type Config struct {
 	// deterministic. A missing declared server or a callback error fails staging.
 	ProjectArgs        func(BindingFacts) ([]string, error)
 	OnCommittedBinding func(context.Context, BindingFacts) error
+	// Assess is optional and digest-bound. Nil keeps the trusted-local MVP:
+	// constructor does not start a download scanner, and missing evaluator is
+	// not a hidden allow. When set, block and unavailable never become allow.
+	Assess func(context.Context, string, string) (Assessment, error)
+	// Progress reports coarse phases. It must not return an error, prompt, or
+	// start a nested installer.
+	Progress func(ProgressEvent)
 }
 
 func (c Config) resolved() (Config, error) {

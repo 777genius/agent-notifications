@@ -19,13 +19,20 @@ result, err := engine.Apply(ctx, prepared, uapinstaller.Decision{Confirmed: true
 `New` validates paths and does not create directories, open a journal, or run a
 helper. Directories are created on Recover or a confirmed Apply. Host seams may
 replace args of one declared MCP server and observe a committed binding before
-client activation. The engine does not import Notifications types and does not
+client activation. Optional `Config.Assess` is digest-bound: block and
+unavailable never become allow. Nil assessor keeps the trusted-local MVP and
+does not start a download scanner. Coarse `Config.Progress` phases are
+observational. The engine does not import Notifications types and does not
 query a live Claude/Codex identity by default.
 
 Prepare copies `Request` and reports canonical `Plan.TreeDigest` with algorithm
 `agentplugins-tree-sha256-v1`. That value is the packagedigest source identity,
-not the installed packagesnapshot ArtifactDigest. Remove Prepare verifies the
-managed artifact and persisted target before any client deactivation.
+not the installed packagesnapshot ArtifactDigest. An existing record whose
+`TreeDigest` does not match the snapshot, including an old-bridge artifact
+digest in that field, returns `ErrUpdateRequired` without rewriting state.
+Remove Prepare verifies the managed artifact and persisted target before any
+client deactivation. Last-client remove retains PLUGIN_DATA and reports
+`data_retained`.
 
 Codex artifact removal requires `Request.ExternalUninstalled`. Confirmed Apply
 does not invent that attestation. A missing or relative helper is rejected

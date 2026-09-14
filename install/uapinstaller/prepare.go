@@ -90,11 +90,20 @@ func (e *Engine) prepareInstall(ctx context.Context, req Request) (*PreparedOper
 	if err := os.MkdirAll(e.cfg.TempRoot, 0700); err != nil {
 		return nil, err
 	}
+	e.report(ProgressPrepare)
 	snapshot, err := snapshotLocalPackage(ctx, e.cfg.TempRoot, req.PackageRoot)
 	if err != nil {
 		return nil, err
 	}
 	handle := &PreparedOperation{engine: e, req: req, snapshot: snapshot, client: client}
+	if err := e.assessSnapshot(ctx, snapshot); err != nil {
+		_ = handle.closeLocked()
+		return nil, err
+	}
+	if err := e.refuseRecordedDigestRewrite(req.InstallationID, snapshot.TreeDigest); err != nil {
+		_ = handle.closeLocked()
+		return nil, err
+	}
 	ldr, err := newLoader()
 	if err != nil {
 		_ = handle.closeLocked()
@@ -163,6 +172,8 @@ func (e *Engine) prepareRemove(ctx context.Context, req Request) (*PreparedOpera
 	if !ok {
 		return nil, fmt.Errorf("%w: client %s is not installed", ErrInvalidRequest, client.ClientID)
 	}
+	e.report(ProgressPrepare)
+	e.report(ProgressPreflight)
 	if err := e.removalPreflight(ctx, client, binding); err != nil {
 		return nil, err
 	}
@@ -336,6 +347,49 @@ func findBinding(installation domain.Installation, client domain.ClientID) (doma
 		return binding, installation.DataReceipts[binding.DataReceiptID], true
 	}
 	return domain.ClientBinding{}, domain.DataReceipt{}, false
+}
+
+func (e *Engine) assessSnapshot(ctx context.Context, snapshot domain.PackageSnapshot) error {
+	if e.cfg.Assess == nil {
+		return nil
+	}
+	got, err := e.cfg.Assess(ctx, snapshot.Root, snapshot.TreeDigest)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrAssessmentRejected, err)
+	}
+	if got.TreeDigest != snapshot.TreeDigest {
+		return fmt.Errorf("%w: assessment digest %s snapshot %s", ErrAssessmentRejected, got.TreeDigest, snapshot.TreeDigest)
+	}
+	if got.Outcome != AssessmentAllow {
+		reason := got.Reason
+		if reason == "" {
+			reason = string(got.Outcome)
+		}
+		if reason == "" {
+			reason = "unavailable"
+		}
+		return fmt.Errorf("%w: %s", ErrAssessmentRejected, reason)
+	}
+	return nil
+}
+
+func (e *Engine) refuseRecordedDigestRewrite(installationID, desired string) error {
+	if installationID == "" || desired == "" {
+		return nil
+	}
+	state, err := e.store.Load()
+	if err != nil {
+		return nil
+	}
+	installation, ok := findInstall(state, installationID)
+	if !ok {
+		return nil
+	}
+	recorded := installation.Source.TreeDigest
+	if recorded != "" && recorded != desired {
+		return fmt.Errorf("%w: recorded digest %s desired %s", ErrUpdateRequired, recorded, desired)
+	}
+	return nil
 }
 
 func wrapLifecycleError(err error) error {

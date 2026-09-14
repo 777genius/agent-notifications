@@ -1,6 +1,7 @@
 package uapinstaller
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/dirswap"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/statev2"
 )
 
 func testCtx(t *testing.T) context.Context {
@@ -898,6 +900,248 @@ func TestProjectionSeamReplacesDeclaredServerArgs(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "portable-launch") || !strings.Contains(string(body), "bound") {
 		t.Fatalf("projection args missing: %s", body)
+	}
+}
+
+func TestRemoveRetainsPluginDataAfterLastClient(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-000000000056",
+		OperationID: "retain-data", RequiredComponents: []string{"mcp", "skills"},
+	}
+	prepared, err := eng.Prepare(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := eng.Apply(ctx, prepared, Decision{Confirmed: true})
+	_ = prepared.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Binding.DataRoot == "" {
+		t.Fatal("install omitted data root")
+	}
+	sentinel := filepath.Join(result.Binding.DataRoot, "keep.txt")
+	if err := os.WriteFile(sentinel, []byte("retain\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	rm, err := eng.Prepare(ctx, Request{
+		Operation: OpRemove, ClientID: "codex", ClientConfigRoot: config, ClientExecutable: probe,
+		InstallationID: req.InstallationID, OperationID: "retain-remove", ExternalUninstalled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed, err := eng.Apply(ctx, rm, Decision{Confirmed: true})
+	_ = rm.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !removed.DataRetained {
+		t.Fatalf("remove result omitted data_retained: %+v", removed)
+	}
+	got, err := os.ReadFile(sentinel)
+	if err != nil || string(got) != "retain\n" {
+		t.Fatalf("PLUGIN_DATA sentinel: %s %v", got, err)
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 || !view.Installations[0].DataRetained {
+		t.Fatalf("inspect retained: %+v %v", view, err)
+	}
+	if len(view.Installations[0].Bindings) != 0 {
+		t.Fatalf("live binding survived last-client remove: %+v", view.Installations[0].Bindings)
+	}
+	if len(view.Installations[0].DataRoots) == 0 {
+		t.Fatal("inspect omitted retained data roots")
+	}
+}
+
+func TestAssessBlockAndUnavailableNeverBecomeAllow(t *testing.T) {
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, outcome := range []AssessmentOutcome{AssessmentBlock, AssessmentUnavailable} {
+		eng, err := New(Config{
+			StateRoot: filepath.Join(base, "uap-"+string(outcome)), HelperExecutable: probe,
+			Assess: func(_ context.Context, _, digest string) (Assessment, error) {
+				return Assessment{TreeDigest: digest, Outcome: outcome, Reason: string(outcome)}, nil
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = eng.Prepare(ctx, Request{
+			Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+			ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-000000000057",
+			OperationID: "assess-" + string(outcome), RequiredComponents: []string{"mcp", "skills"},
+		})
+		if !errors.Is(err, ErrAssessmentRejected) {
+			t.Fatalf("%s assess: %v", outcome, err)
+		}
+		if _, err := os.Lstat(eng.cfg.StateFile); !os.IsNotExist(err) {
+			t.Fatalf("%s assess wrote state", outcome)
+		}
+	}
+}
+
+func TestAssessDigestMismatchRefuses(t *testing.T) {
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{
+		StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe,
+		Assess: func(context.Context, string, string) (Assessment, error) {
+			return Assessment{TreeDigest: "sha256:" + strings.Repeat("ab", 32), Outcome: AssessmentAllow}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-000000000058",
+		OperationID: "assess-mismatch", RequiredComponents: []string{"mcp", "skills"},
+	})
+	if !errors.Is(err, ErrAssessmentRejected) {
+		t.Fatalf("mismatched assess: %v", err)
+	}
+}
+
+func TestOldBridgeTreeDigestRefusesWithoutRewrite(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-000000000059",
+		OperationID: "bridge-install", RequiredComponents: []string{"mcp", "skills"},
+	}
+	prepared, err := eng.Prepare(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, prepared, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = prepared.Close()
+	store := statev2.Store{Path: eng.cfg.StateFile}
+	state, err := store.Load()
+	if err != nil || len(state.Installations) != 1 {
+		t.Fatalf("load: %+v %v", state, err)
+	}
+	state.Installations[0].Source.TreeDigest = "sha256:" + strings.Repeat("cd", 32)
+	if err := store.Save(state); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: req.InstallationID,
+		OperationID: "bridge-rewrite", RequiredComponents: []string{"mcp", "skills"},
+	})
+	if !errors.Is(err, ErrUpdateRequired) {
+		t.Fatalf("old-bridge prepare: %v", err)
+	}
+	after, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("old-bridge rewrote state: %v", err)
+	}
+}
+
+func TestProgressReportsCoarsePhases(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	var phases []ProgressPhase
+	eng, err := New(Config{
+		StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe,
+		Progress: func(event ProgressEvent) { phases = append(phases, event.Phase) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-000000000060",
+		OperationID: "progress", RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, prepared, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = prepared.Close()
+	joined := ""
+	for _, phase := range phases {
+		joined += string(phase) + ","
+	}
+	for _, want := range []ProgressPhase{ProgressPrepare, ProgressPreflight, ProgressStage, ProgressCommit, ProgressActivate, ProgressVerify, ProgressComplete} {
+		if !strings.Contains(joined, string(want)+",") {
+			t.Fatalf("missing phase %s in %s", want, joined)
+		}
 	}
 }
 

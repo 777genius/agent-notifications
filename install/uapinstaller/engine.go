@@ -54,6 +54,13 @@ func (e *Engine) lifecycle(helper *managedstdio.Source, facts BindingFacts) usec
 	}
 }
 
+func (e *Engine) report(phase ProgressPhase) {
+	if e.cfg.Progress == nil {
+		return
+	}
+	e.cfg.Progress(ProgressEvent{Phase: phase})
+}
+
 func (e *Engine) helper() (*managedstdio.Source, error) {
 	if e.cfg.HelperExecutable == "" {
 		return nil, fmt.Errorf("%w: HelperExecutable is required for this operation", ErrInvalidConfig)

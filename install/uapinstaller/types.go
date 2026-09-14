@@ -77,6 +77,41 @@ type Result struct {
 	ManualActions  []string
 	Reason         string
 	NoChange       bool
+	DataRetained   bool
+}
+
+// Assessment is a digest-bound content verdict. It is not a filesystem plan.
+type Assessment struct {
+	TreeDigest string
+	Outcome    AssessmentOutcome
+	Reason     string
+}
+
+// AssessmentOutcome is the host-visible scanner verdict.
+type AssessmentOutcome string
+
+const (
+	AssessmentAllow       AssessmentOutcome = "allow"
+	AssessmentBlock       AssessmentOutcome = "block"
+	AssessmentUnavailable AssessmentOutcome = "unavailable"
+)
+
+// ProgressPhase is a coarse installer phase. Percent complete is not invented.
+type ProgressPhase string
+
+const (
+	ProgressPrepare   ProgressPhase = "prepare"
+	ProgressPreflight ProgressPhase = "preflight"
+	ProgressStage     ProgressPhase = "stage"
+	ProgressCommit    ProgressPhase = "commit"
+	ProgressActivate  ProgressPhase = "activate"
+	ProgressVerify    ProgressPhase = "verify"
+	ProgressComplete  ProgressPhase = "complete"
+)
+
+// ProgressEvent is an observational checkpoint. The observer does not decide.
+type ProgressEvent struct {
+	Phase ProgressPhase
 }
 
 // Inspection is a read-only view of owned UAP state. Recovery facts are
@@ -111,6 +146,8 @@ type PendingReceipt struct {
 type InspectedInstallation struct {
 	InstallationID string
 	Bindings       []InspectedBinding
+	DataRetained   bool
+	DataRoots      []string
 }
 
 // InspectedBinding is a public subset of one client binding.
