@@ -151,7 +151,7 @@ func matches(f *os.File, want string) error {
 }
 
 func createLock(dir *os.File) error {
-	h, err := setupOpenAt(windows.Handle(dir.Fd()), ".spool.lock", windows.FILE_GENERIC_WRITE|windows.WRITE_DAC|windows.WRITE_OWNER|windows.DELETE, windows.FILE_CREATE, windows.FILE_NON_DIRECTORY_FILE)
+	h, err := setupOpenAt(windows.Handle(dir.Fd()), ".spool.lock", windows.FILE_GENERIC_READ|windows.FILE_GENERIC_WRITE|windows.WRITE_DAC|windows.WRITE_OWNER|windows.DELETE, windows.FILE_CREATE, windows.FILE_NON_DIRECTORY_FILE)
 	if err != nil {
 		return err
 	}

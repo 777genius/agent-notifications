@@ -96,7 +96,7 @@ func openFile(dir *os.File, name string, flags int) (*os.File, error) {
 	access := uint32(windows.FILE_GENERIC_READ)
 	switch acc {
 	case oWRONLY:
-		access = windows.FILE_GENERIC_WRITE
+		access = windows.FILE_GENERIC_WRITE | windows.FILE_READ_ATTRIBUTES
 	case oRDWR:
 		access = windows.FILE_GENERIC_READ | windows.FILE_GENERIC_WRITE
 	}
@@ -105,10 +105,10 @@ func openFile(dir *os.File, name string, flags int) (*os.File, error) {
 	disposition := uint32(windows.FILE_OPEN)
 	if create && excl {
 		disposition = windows.FILE_CREATE
-		access |= windows.WRITE_DAC | windows.WRITE_OWNER | windows.DELETE
+		access |= windows.FILE_GENERIC_READ | windows.WRITE_DAC | windows.WRITE_OWNER | windows.DELETE
 	} else if create {
 		disposition = windows.FILE_OPEN_IF
-		access |= windows.WRITE_DAC | windows.WRITE_OWNER
+		access |= windows.FILE_GENERIC_READ | windows.WRITE_DAC | windows.WRITE_OWNER
 	}
 	share := uint32(windows.FILE_SHARE_READ)
 	if name == "lock" {
@@ -117,12 +117,12 @@ func openFile(dir *os.File, name string, flags int) (*os.File, error) {
 	}
 	h, err := journalOpenAt(windows.Handle(dir.Fd()), name, access, disposition, windows.FILE_NON_DIRECTORY_FILE, share == windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open %s: %w", name, err)
 	}
 	if create {
 		if err = journalRestrictPrivate(h); err != nil {
 			windows.CloseHandle(h)
-			return nil, err
+			return nil, fmt.Errorf("restrict %s: %w", name, err)
 		}
 	}
 	info, err := journalFileInfo(h)
