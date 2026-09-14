@@ -100,9 +100,7 @@ func New(o Options) (*Backend, error) {
 		o.OpenJournal = journal.Open
 	}
 	if o.DeliveryFactory == nil {
-		o.DeliveryFactory = func(m notifier.ManagedInstallation, p string, c notifier.BootClock) Delivery {
-			return &notifier.StructuredDelivery{Installation: m, Clock: c, Process: notifier.ManagedNativeProcess{}, Spool: &notifier.PrivateNativeSpool{Root: p, Clock: c}}
-		}
+		o.DeliveryFactory = defaultDeliveryFactory
 	}
 	b := &Backend{opts: o, clock: Clock{o.BootClock}, drained: make(chan struct{})}
 	ports := requestPorts{b}
