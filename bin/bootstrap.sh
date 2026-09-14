@@ -1515,7 +1515,7 @@ main() {
 agent_notify_platform_supported() {
     local os
     os=$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]' || true)
-    [ "$os" = darwin ]
+    [ "$os" = darwin ] || [ "$os" = linux ]
 }
 
 # Agent-notify is default-on only where this installer can actually configure MCP.
@@ -1532,12 +1532,12 @@ configure_agent_notify() {
     fi
     if ! agent_notify_platform_supported; then
         if [ "$AGENT_NOTIFY_REQUEST" = explicit ]; then
-            echo -e "${YELLOW}⚠ Agent-notify MCP is unsupported on this OS; this installer supports macOS.${NC}" >&2
+            echo -e "${YELLOW}⚠ Agent-notify MCP is unsupported on this OS; this installer supports macOS and Linux.${NC}" >&2
             echo -e "${YELLOW}  Plugin/hooks install succeeded. Not a full MCP installation.${NC}" >&2
-            [ -z "$retry" ] || echo -e "${YELLOW}  Retry on macOS: ${retry}${NC}" >&2
+            [ -z "$retry" ] || echo -e "${YELLOW}  Retry on macOS or Linux: ${retry}${NC}" >&2
             return 1
         fi
-        echo -e "${YELLOW}⚠ Agent-notify MCP skipped: unsupported_platform (this installer supports macOS).${NC}" >&2
+        echo -e "${YELLOW}⚠ Agent-notify MCP skipped: unsupported_platform (this installer supports macOS and Linux).${NC}" >&2
         echo -e "${YELLOW}  Plugin/hooks install succeeded. Not a full MCP installation.${NC}" >&2
         return 0
     fi

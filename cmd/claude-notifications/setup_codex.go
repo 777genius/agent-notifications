@@ -97,7 +97,7 @@ func runSetupCodex(args []string) {
 	incomplete := false
 	if opts.configure {
 		if !agentNotifySetupSupported() {
-			_, _ = fmt.Fprintln(os.Stderr, "setup-codex: agent-notify MCP skipped: unsupported_platform (macOS required). Hooks remain registered. This is not a full MCP installation.")
+			_, _ = fmt.Fprintln(os.Stderr, "setup-codex: agent-notify MCP skipped: unsupported_platform (macOS or Linux required). Hooks remain registered. This is not a full MCP installation.")
 			if opts.explicitNotify {
 				retryArgs := opts.configureArgs
 				if home := filepath.Clean(result.CodexHome); home != "" && filepath.IsAbs(home) {
@@ -204,5 +204,5 @@ func reportAgentNotifySetupFailure(w io.Writer, provider string, args []string) 
 }
 
 func agentNotifySetupSupported() bool {
-	return runtime.GOOS == "darwin"
+	return runtime.GOOS == "darwin" || runtime.GOOS == "linux"
 }
