@@ -29,8 +29,8 @@ func TestNotificationBootstrapOffline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(source), `setup-codex --plugin-root "$bundle" --skip-agent-notify`) {
-		t.Fatal("install_codex must keep setup-codex hooks-only so bootstrap configures once")
+	if !strings.Contains(string(source), "cli_has_setup_codex_skip_agent_notify") {
+		t.Fatal("install_codex must only pass --skip-agent-notify when the published CLI advertises it")
 	}
 	prefix := strings.TrimSuffix(strings.TrimSpace(string(source)), `main "$@"`)
 	for _, test := range []struct {
@@ -57,7 +57,7 @@ func TestNotificationBootstrapOffline(t *testing.T) {
 			t.Setenv("CODEX_HOME", filepath.Join(home, "codex"))
 			t.Setenv("CLAUDE_CONFIG_DIR", "")
 			binary := filepath.Join(home, "fake-binary")
-			helper := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n"
+			helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then printf '%s\\n' 'setup-notifications' '--skip-agent-notify'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n"
 			if test.name == "configure_failed" {
 				helper += "exit 1\n"
 			}

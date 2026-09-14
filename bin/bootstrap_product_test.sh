@@ -46,6 +46,16 @@ INSTALL_SCRIPT_URL="http://example.test/override.sh"
 [ "$(select_bootstrap_install_script)" = "http://example.test/override.sh" ]
 rm -f "$(bootstrap_control_root)/ownership.json"
 INSTALL_SCRIPT_URL=""
+legacy="$SANDBOX/legacy-cli"
+printf '%s\n' '#!/bin/sh' 'echo "setup-codex [--print] [--dry-run] [--codex-home <dir>] [--plugin-root <dir>]"' > "$legacy"
+chmod +x "$legacy"
+if cli_has_setup_codex_skip_agent_notify "$legacy"; then echo "legacy advertised skip"; exit 1; fi
+if cli_has_setup_notifications "$legacy"; then echo "legacy advertised setup-notifications"; exit 1; fi
+capable="$SANDBOX/capable-cli"
+printf '%s\n' '#!/bin/sh' 'echo "[--agent-notify|--skip-agent-notify]"' 'echo "setup-notifications [--help]"' > "$capable"
+chmod +x "$capable"
+cli_has_setup_codex_skip_agent_notify "$capable" || { echo "capable missing skip"; exit 1; }
+cli_has_setup_notifications "$capable" || { echo "capable missing setup-notifications"; exit 1; }
 # setup_marketplace self-heals a marketplace declared under a retired repo
 # name, but leaves an unrelated source conflict alone.
 (
@@ -150,11 +160,29 @@ cp "$INSTALL_TARGET_DIR/claude-notifications" "$INSTALL_TARGET_DIR/claude-notifi
 binary = '''#!/usr/bin/env python3
 import json, os, pathlib, sys
 args=sys.argv[1:]
+if not args:
+    sys.exit(2)
+if args[0] in ('--help', 'help', '-h'):
+    print('Usage:')
+    print('  setup-codex [--print] [--dry-run] [--codex-home <dir>] [--plugin-root <dir>]')
+    sys.exit()
 if os.environ.get('FIXTURE_TRACE'):
     with open(os.environ['FIXTURE_TRACE'],'a') as f: f.write(json.dumps(args)+'\\n')
 if args==['--version']:
     print('claude-notifications v1.42.0'); sys.exit()
 if args[0]=='setup-codex':
+    i=1
+    known={'--print','--dry-run','--codex-home','--plugin-root'}
+    takes_value={'--codex-home','--plugin-root'}
+    while i < len(args):
+        if args[i] not in known:
+            print('setup-codex: unknown option: '+args[i], file=sys.stderr)
+            sys.exit(1)
+        if args[i] in takes_value:
+            i += 1
+            if i >= len(args):
+                sys.exit(1)
+        i += 1
     if os.environ.get('FAIL_REGISTER')=='1': sys.exit(1)
     if '--dry-run' not in args:
         p=pathlib.Path(os.environ['CODEX_HOME'])
@@ -170,7 +198,8 @@ if args[0]=='setup-codex':
         if os.environ.get('FAIL_SETUP_INIT')=='1': sys.exit(3)
     sys.exit()
 if args[0]=='setup-notifications':
-    sys.exit()
+    print('Error: unknown command: setup-notifications', file=sys.stderr)
+    sys.exit(1)
 assert args[0]=='config'
 legacy=pathlib.Path(os.environ['HOME'])/'.claude/claude-notifications-go/config.json'
 neutral=pathlib.Path(os.environ['XDG_CONFIG_HOME'])/'agent-notifications/config.json'
@@ -211,6 +240,25 @@ for tag in ['v1.42.0', 'v1.43.0']:
     (dest / asset_name).write_bytes(payload)
     import hashlib
     (dest / 'checksums.txt').write_bytes((hashlib.sha256(payload).hexdigest()+'  '+asset_name+'\n').encode('ascii'))
+capable = binary.replace(
+    '  setup-codex [--print] [--dry-run] [--codex-home <dir>] [--plugin-root <dir>]',
+    '  setup-codex [--print] [--dry-run] [--codex-home <dir>] [--plugin-root <dir>]\\n                          [--agent-notify|--skip-agent-notify]\\n  setup-notifications',
+).replace(
+    "known={'--print','--dry-run','--codex-home','--plugin-root'}",
+    "known={'--print','--dry-run','--codex-home','--plugin-root','--skip-agent-notify','--agent-notify'}",
+).replace(
+    "print('Error: unknown command: setup-notifications', file=sys.stderr)\n    sys.exit(1)",
+    "sys.exit(0)",
+)
+with tarfile.open(web / 'v2.0.0.tar.gz', 'w:gz') as archive:
+    for name, data in {'bin/install.sh': installer, '.claude-plugin/plugin.json': '{"version":"2.0.0"}'}.items():
+        data = data.encode('utf-8'); entry = tarfile.TarInfo('bundle/' + name); entry.size = len(data); entry.mode = 0o755
+        archive.addfile(entry, io.BytesIO(data))
+dest = web / 'download' / 'v2.0.0'; dest.mkdir(parents=True)
+payload=capable.replace('v1.42.0', 'v2.0.0').encode('utf-8')
+(dest / 'binary').write_bytes(payload)
+(dest / asset_name).write_bytes(payload)
+(dest / 'checksums.txt').write_bytes((hashlib.sha256(payload).hexdigest()+'  '+asset_name+'\n').encode('ascii'))
 (web/'install.sh').write_bytes(installer.encode('utf-8'))
 def write_origin_installer(path, origin):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -219,7 +267,7 @@ def write_origin_installer(path, origin):
         'printf %s\\\\n '+origin+' > "$INSTALL_TARGET_DIR/script-origin"\nchmod +x "$INSTALL_TARGET_DIR/claude-notifications"',
         1,
     ))
-for tag in ['v1.42.0', 'v1.43.0']:
+for tag in ['v1.42.0', 'v1.43.0', 'v2.0.0']:
     write_origin_installer(web / tag / 'bin' / 'install.sh', tag)
 write_origin_installer(web / 'main' / 'bin' / 'install.sh', 'managed')
 request_paths=[]
@@ -246,7 +294,7 @@ bash = shutil.which('bash'); assert bash
 env['PATH'] = str(cli) + os.pathsep + (os.environ['PATH'] if os.name == 'nt' else '/usr/bin:/bin')
 script = str(root / 'bin/bootstrap.sh')
 def run(args, expected=0, extra=None):
-    result = subprocess.run([bash, script]+args, env=dict(env, **(extra or {})), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True, timeout=20)
+    result = subprocess.run([bash, script]+args, env=dict(env, **(extra or {})), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True, timeout=40)
     assert (result.returncode == 0) == (expected == 0), result.stdout.decode()
     return result.stdout.decode()
 assert 'No controlling TTY' in run([], 1)
@@ -256,6 +304,7 @@ assert 'codex CLI not found' in run(['--product', 'codex'], 1)
 (cli / 'absent').rename(cli / 'codex')
 run(['--product', 'codex']); run(['--product', 'codex'])
 run(['--product', 'codex'], extra={'BOOTSTRAP_RELEASE_TAG':'v1.43.0'})
+run(['--product', 'codex'], extra={'BOOTSTRAP_RELEASE_TAG':'v2.0.0'})
 pairing={'INSTALL_SCRIPT_URL':'','BOOTSTRAP_RAW_CONTENT_URL':base,'MANAGED_INSTALL_SCRIPT_URL':base+'/main/bin/install.sh'}
 request_paths.clear()
 run(['--product', 'codex'], extra=dict(pairing, BOOTSTRAP_RELEASE_TAG='v1.43.0'))

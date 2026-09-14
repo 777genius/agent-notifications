@@ -1261,6 +1261,20 @@ select_bootstrap_install_script() {
     printf '%s\n' "$BOOTSTRAP_RAW_CONTENT_URL/${BOOTSTRAP_TAG}/bin/install.sh"
 }
 
+# Released CLIs before agent-notify pairing reject unknown setup-codex flags and
+# have no setup-notifications command. Probe advertised help, never guess.
+cli_help() {
+    "$1" --help </dev/null 2>/dev/null || "$1" help </dev/null 2>/dev/null || true
+}
+
+cli_has_setup_codex_skip_agent_notify() {
+    cli_help "$1" | grep -Fq -- '--skip-agent-notify'
+}
+
+cli_has_setup_notifications() {
+    cli_help "$1" | grep -Fq -- 'setup-notifications'
+}
+
 # Optional exact-version release templates. Releases without this verified asset
 # intentionally leave baseline unknown and require explicit historical import.
 stage_historical_baselines() {
@@ -1423,10 +1437,13 @@ install_codex() {
         i=$((i + 1))
     done
     run_codex_setup() {
+        if cli_has_setup_codex_skip_agent_notify "$binary"; then
+            set -- --skip-agent-notify "$@"
+        fi
         if [ -n "$setup_codex_home" ]; then
-            CN_PRODUCT=codex "$binary" setup-codex --plugin-root "$bundle" --skip-agent-notify --codex-home "$setup_codex_home" "$@" </dev/null
+            CN_PRODUCT=codex "$binary" setup-codex --plugin-root "$bundle" --codex-home "$setup_codex_home" "$@" </dev/null
         else
-            CN_PRODUCT=codex "$binary" setup-codex --plugin-root "$bundle" --skip-agent-notify "$@" </dev/null
+            CN_PRODUCT=codex "$binary" setup-codex --plugin-root "$bundle" "$@" </dev/null
         fi
     }
     run_codex_setup --dry-run || return 1
@@ -1501,6 +1518,11 @@ configure_agent_notify() {
     if [ ! -x "$CONFIGURE_BINARY" ]; then
         echo -e "${YELLOW}⚠ Agent-notify setup skipped; installer binary not found.${NC}" >&2
         echo -e "${YELLOW}  Plugin/hooks install succeeded. Retry after the binary is available.${NC}" >&2
+        return 0
+    fi
+    if ! cli_has_setup_notifications "$CONFIGURE_BINARY"; then
+        echo -e "${YELLOW}⚠ Agent-notify setup skipped; this published CLI does not support setup-notifications.${NC}" >&2
+        echo -e "${YELLOW}  Plugin/hooks install succeeded. Desktop/hook notifications still work.${NC}" >&2
         return 0
     fi
     if ! "$CONFIGURE_BINARY" setup-notifications configure --provider "$PRODUCT" "${CONFIGURE_ARGS[@]}"; then
