@@ -31,15 +31,16 @@ type UAPRoots struct {
 
 // MaterializeRequest selects one client. Integration is never taken from clientInfo.
 type MaterializeRequest struct {
-	Identity           Identity
-	Integration        portable.Integration
-	ExpectedGeneration uint64
-	PackageRoot        string
-	ClientConfigRoot   string
-	ClientExecutable   string
-	Discovery          Discovery
-	OperationID        string
-	HelperExecutable   string
+	Identity            Identity
+	Integration         portable.Integration
+	ExpectedGeneration  uint64
+	PackageRoot         string
+	ClientConfigRoot    string
+	ClientExecutable    string
+	Discovery           Discovery
+	OperationID         string
+	HelperExecutable    string
+	ExternalUninstalled bool
 }
 
 type Materializer struct {
@@ -312,6 +313,7 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 		Operation: uapinstaller.OpRemove, ClientID: string(req.Integration),
 		ClientConfigRoot: req.ClientConfigRoot, ClientExecutable: req.ClientExecutable,
 		InstallationID: req.Identity.InstallationID, OperationID: req.OperationID,
+		ExternalUninstalled: req.ExternalUninstalled,
 	}); err != nil {
 		return err
 	}
