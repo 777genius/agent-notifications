@@ -22,6 +22,7 @@ import threading
 
 ROOT = Path(__file__).resolve().parents[1]
 TAG = 'v9.9.9'
+COMMIT = '9' * 40
 CANARY = 'synthetic-' + hashlib.sha256(b'config-e2e-private').hexdigest()
 
 
@@ -79,7 +80,7 @@ chmod +x "$INSTALL_TARGET_DIR/claude-notifications"
         template = (ROOT / 'config/config.json').read_bytes()
         put(dest / 'config.json', template)
         put(dest / 'checksums.txt', ''.join(hashlib.sha256((dest / n).read_bytes()).hexdigest() + '  ' + n + '\n' for n in (self.asset, 'config.json')))
-        with tarfile.open(self.web / (TAG + '.tar.gz'), 'w:gz') as archive:
+        with tarfile.open(self.web / (COMMIT + '.tar.gz'), 'w:gz') as archive:
             archive.add(self.bundle, arcname='bundle')
         put(self.web / 'install.sh', self.installer)
         self.requests = []
@@ -133,7 +134,8 @@ shutil.copytree(os.environ['SOURCE'],root,dirs_exist_ok=True)
             put(clis / name, body, 0o755)
         env.update(PATH=str(clis) + ':/usr/bin:/bin', TRACE=str(base / 'trace'),
                    EFFECTS=str(base / 'effects'), SOURCE=str(self.bundle), LOCAL_URL=self.url,
-                   BOOTSTRAP_RELEASE_TAG=TAG, BOOTSTRAP_SOURCE_BASE_URL=self.url,
+                   BOOTSTRAP_RELEASE_TAG=TAG, BOOTSTRAP_RELEASE_COMMIT=COMMIT,
+                   BOOTSTRAP_SOURCE_BASE_URL=self.url,
                    BOOTSTRAP_RELEASES_BASE_URL=self.url, INSTALL_SCRIPT_URL=self.url + '/install.sh')
         return env
 

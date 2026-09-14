@@ -13,10 +13,17 @@
 
 Prefer a guided setup? [Open the installation guide](https://777genius.github.io/agent-notifications/#install) to choose your agent, OS and task.
 
-One command to install or update the notifications plugin for Claude Code, Codex, or both. The interactive menu asks you to choose:
+The command below resolves the latest stable release to its immutable commit SHA, then downloads both installer scripts from that commit. The interactive menu asks you to choose:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/main/bin/bootstrap.sh | bash
+(
+  set -euo pipefail
+  repo=777genius/agent-notifications
+  tag=$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" | python3 -I -c 'import json,re,sys; v=json.load(sys.stdin).get("tag_name",""); re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)",v) or sys.exit("Invalid stable release tag"); sys.stdout.buffer.write((v+"\n").encode("ascii"))')
+  commit=$(curl -fsSL "https://api.github.com/repos/$repo/commits/$tag" | python3 -I -c 'import json,re,sys; v=json.load(sys.stdin).get("sha",""); re.fullmatch(r"[0-9a-f]{40}",v) or sys.exit("Invalid release commit"); sys.stdout.buffer.write((v+"\n").encode("ascii"))')
+  raw="https://raw.githubusercontent.com/$repo/$commit/bin"
+  curl -fsSL "$raw/bootstrap.sh" | env BOOTSTRAP_RELEASE_TAG="$tag" BOOTSTRAP_RELEASE_COMMIT="$commit" INSTALL_SCRIPT_URL="$raw/install.sh" bash
+)
 ```
 
 > Windows users: open Git Bash from the Start menu and run this command there. Do not run the `curl ... | bash` command from PowerShell or Windows Terminal if `bash` opens WSL, because that targets Linux paths and binaries instead of Windows.
@@ -24,7 +31,14 @@ curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/main/
 For automation or terminals without a controlling TTY, choose explicitly:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/main/bin/bootstrap.sh | bash -s -- --product codex
+(
+  set -euo pipefail
+  repo=777genius/agent-notifications
+  tag=$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" | python3 -I -c 'import json,re,sys; v=json.load(sys.stdin).get("tag_name",""); re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)",v) or sys.exit("Invalid stable release tag"); sys.stdout.buffer.write((v+"\n").encode("ascii"))')
+  commit=$(curl -fsSL "https://api.github.com/repos/$repo/commits/$tag" | python3 -I -c 'import json,re,sys; v=json.load(sys.stdin).get("sha",""); re.fullmatch(r"[0-9a-f]{40}",v) or sys.exit("Invalid release commit"); sys.stdout.buffer.write((v+"\n").encode("ascii"))')
+  raw="https://raw.githubusercontent.com/$repo/$commit/bin"
+  curl -fsSL "$raw/bootstrap.sh" | env BOOTSTRAP_RELEASE_TAG="$tag" BOOTSTRAP_RELEASE_COMMIT="$commit" INSTALL_SCRIPT_URL="$raw/install.sh" bash -s -- --product codex
+)
 ```
 
 Use `claude`, `codex`, or `both`. This installs the notifications plugin; the selected Claude Code / Codex CLI must already be on `PATH`.
@@ -69,11 +83,7 @@ Run these slash commands in the Claude Code chat, not in your system terminal:
 
 ### Updating
 
-Run the same command and choose the product(s) you want to update:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/main/bin/bootstrap.sh | bash
-```
+Run the [secure install command](#quick-install-recommended) again and choose the product(s) you want to update.
 
 For Claude, restart Claude Code. For Codex, restart Codex and inspect `/hooks`; changed hook definitions may need trust approval again. The installer refreshes the Codex runtime and registration automatically. Existing foreign hooks and shared settings in the file selected by `config path` are preserved.
 

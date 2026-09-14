@@ -19,13 +19,37 @@ done
 for args in '--product invalid' '--product' '--unknown' '--product claude --product codex'; do
     if ( PRODUCT=""; select_product $args ); then echo "accepted $args"; exit 1; fi
 done
+TEST_RELEASE_COMMIT="0123456789abcdef0123456789abcdef01234567"
+BOOTSTRAP_RAW_BASE_URL="https://raw.example.invalid/repository"
 for tag in v1.42.0 v1.43.2 v2.0.0; do
-    BOOTSTRAP_RELEASE_TAG="$tag" resolve_bootstrap_release
+    BOOTSTRAP_RELEASE_TAG="$tag"
+    BOOTSTRAP_RELEASE_COMMIT="$TEST_RELEASE_COMMIT"
+    INSTALL_SCRIPT_URL=""
+    resolve_bootstrap_release
     [ "$BOOTSTRAP_TAG" = "$tag" ]
+    [ "$BOOTSTRAP_COMMIT" = "$TEST_RELEASE_COMMIT" ]
+    case "$BOOTSTRAP_COMMIT" in *$'\r'*) echo "release commit contains CR"; exit 1 ;; esac
+    [ "$INSTALL_SCRIPT_URL" = "$BOOTSTRAP_RAW_BASE_URL/$TEST_RELEASE_COMMIT/bin/install.sh" ]
 done
 for tag in v1.41.0 v0.99.0 v1.42.0-rc1 v01.42.0 v1.042.0 v1.42.00 v99999999999999999999.0.0 main; do
     if BOOTSTRAP_RELEASE_TAG="$tag" resolve_bootstrap_release; then exit 1; fi
 done
+for commit in short 0123456789abcdef0123456789abcdef0123456g 0123456789ABCDEF0123456789ABCDEF01234567; do
+    if BOOTSTRAP_RELEASE_TAG=v1.42.0 BOOTSTRAP_RELEASE_COMMIT="$commit" resolve_bootstrap_release; then exit 1; fi
+done
+unset BOOTSTRAP_RELEASE_TAG BOOTSTRAP_RELEASE_COMMIT BOOTSTRAP_RAW_BASE_URL INSTALL_SCRIPT_URL
+# The production archive endpoint accepts a commit SHA directly, outside refs/tags.
+(
+    PRODUCT=codex
+    BOOTSTRAP_TAG=v1.42.0
+    BOOTSTRAP_COMMIT="$TEST_RELEASE_COMMIT"
+    TMPDIR="$SANDBOX/archive-test"; mkdir -p "$TMPDIR"
+    request="$TMPDIR/request"
+    fetch_bootstrap_file() { printf '%s\n' "$1" > "$request"; return 1; }
+    install_cleanup_traps
+    if install_codex; then exit 1; fi
+    [ "$(cat "$request")" = "https://github.com/${REPO}/archive/$TEST_RELEASE_COMMIT.tar.gz" ]
+)
 # setup_marketplace self-heals a marketplace declared under a retired repo
 # name, but leaves an unrelated source conflict alone.
 (
@@ -115,6 +139,10 @@ root, sandbox = map(pathlib.Path, sys.argv[1:])
 web = sandbox / 'http'; web.mkdir()
 (web / 'bootstrap.sh').write_bytes((root / 'bin/bootstrap.sh').read_bytes())
 (web / 'latest').write_text('{"tag_name":"v1.42.0"}')
+release_commits = {'v1.42.0': 'a' * 40, 'v1.43.0': 'b' * 40}
+(web / 'commits').mkdir()
+for tag, commit in release_commits.items():
+    (web / 'commits' / tag).write_text(json.dumps({'sha': commit}))
 uname_os=subprocess.check_output(['uname','-s'],text=True).strip().lower()
 uname_arch=subprocess.check_output(['uname','-m'],text=True).strip().lower()
 asset_os='windows' if uname_os.startswith(('mingw','msys','cygwin')) else uname_os
@@ -170,8 +198,8 @@ if changed:
     p.parent.mkdir(parents=True,exist_ok=True); p.write_text('{}')
 print(json.dumps(dict(selected,changed=changed)))
 '''
-for tag in ['v1.42.0', 'v1.43.0']:
-    with tarfile.open(web / (tag + '.tar.gz'), 'w:gz') as archive:
+for tag, commit in release_commits.items():
+    with tarfile.open(web / (commit + '.tar.gz'), 'w:gz') as archive:
         for name, data in {'bin/install.sh': installer, '.claude-plugin/plugin.json': '{"version":"'+tag[1:]+'"}'}.items():
             data = data.encode('utf-8'); entry = tarfile.TarInfo('bundle/' + name); entry.size = len(data); entry.mode = 0o755
             archive.addfile(entry, io.BytesIO(data))
@@ -181,7 +209,8 @@ for tag in ['v1.42.0', 'v1.43.0']:
     (dest / asset_name).write_bytes(payload)
     import hashlib
     (dest / 'checksums.txt').write_bytes((hashlib.sha256(payload).hexdigest()+'  '+asset_name+'\n').encode('ascii'))
-(web/'install.sh').write_bytes(installer.encode('utf-8'))
+    raw = web / 'raw' / commit / 'bin'; raw.mkdir(parents=True)
+    (raw / 'install.sh').write_bytes(installer.encode('utf-8'))
 request_paths=[]
 class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
@@ -199,7 +228,7 @@ env_keys = (
     'CLAUDE_CONFIG_DIR', 'TMP', 'TEMP', 'TMPDIR',
 )
 env = {key: os.environ[key] for key in env_keys if key in os.environ}
-env.update(INSTALL_SCRIPT_URL=base+'/install.sh', BOOTSTRAP_LATEST_RELEASE_API_URL=base+'/latest', BOOTSTRAP_SOURCE_BASE_URL=base, BOOTSTRAP_RELEASES_BASE_URL=base)
+env.update(BOOTSTRAP_LATEST_RELEASE_API_URL=base+'/latest', BOOTSTRAP_COMMIT_API_BASE_URL=base+'/commits', BOOTSTRAP_RAW_BASE_URL=base+'/raw', BOOTSTRAP_SOURCE_BASE_URL=base, BOOTSTRAP_RELEASES_BASE_URL=base)
 cli = sandbox / 'clis'; cli.mkdir()
 (cli / 'codex').write_bytes(b'#!/bin/sh\nexit 99\n'); (cli / 'codex').chmod(0o755)
 bash = shutil.which('bash'); assert bash
@@ -215,6 +244,10 @@ assert 'claude CLI not found' in run(['--product', 'both'], 1)
 assert 'codex CLI not found' in run(['--product', 'codex'], 1)
 (cli / 'absent').rename(cli / 'codex')
 run(['--product', 'codex']); run(['--product', 'codex'])
+assert '/commits/v1.42.0' in request_paths
+assert '/raw/' + release_commits['v1.42.0'] + '/bin/install.sh' in request_paths
+assert '/' + release_commits['v1.42.0'] + '.tar.gz' in request_paths
+assert not any('/refs/tags/' + commit in path for commit in release_commits.values() for path in request_paths)
 run(['--product', 'codex'], extra={'BOOTSTRAP_RELEASE_TAG':'v1.43.0'})
 registration = pathlib.Path(env['CODEX_HOME']) / 'fixture-registration'
 before = registration.read_bytes()
@@ -234,7 +267,7 @@ live = sandbox / 'live claude'; (live / 'bin').mkdir(parents=True); (live / '.cl
 (live / '.claude-plugin/plugin.json').write_text('{"version":"1.42.0"}')
 (live / 'bin/install.sh').write_bytes(installer.encode('utf-8'))
 (live / 'bin/claude-notifications').write_text('stale')
-command = 'source '+shlex.quote(str(sandbox/'functions.sh'))+'; PRODUCT=both; PLUGIN_ROOT='+shlex.quote(str(live))+'; BOOTSTRAP_TAG=v1.42.0; install_cleanup_traps; stage_config_helper; config_preflight; install_codex'
+command = 'source '+shlex.quote(str(sandbox/'functions.sh'))+'; PRODUCT=both; PLUGIN_ROOT='+shlex.quote(str(live))+'; BOOTSTRAP_TAG=v1.42.0; BOOTSTRAP_COMMIT='+release_commits['v1.42.0']+'; INSTALL_SCRIPT_URL='+shlex.quote(base+'/raw/'+release_commits['v1.42.0']+'/bin/install.sh')+'; install_cleanup_traps; stage_config_helper; config_preflight; install_codex'
 r = subprocess.run([bash,'-c',command],env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=20)
 assert r.returncode == 0, r.stdout.decode()
 assert (live/'bin/claude-notifications').read_text() == 'stale'
