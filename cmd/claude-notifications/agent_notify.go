@@ -17,6 +17,10 @@ import (
 const agentNotifyHelp = "Usage: notify [--context-file PATH] [--help]\nRead one literal notification JSON document from stdin through EOF.\nUnknown outcomes must never be retried automatically.\n"
 const agentMCPHelp = "Usage: mcp-server --integration codex|claude [--help]\nServe explicit notifications over newline-delimited JSON-RPC stdio.\nIntegration is operator configuration, not notification content.\n"
 
+// Tests replace this to observe that SIGTERM is already subscribed. Production
+// keeps the no-op so signal setup stays on the same path as a real invocation.
+var agentNotifyAfterSignalSetup = func() {}
+
 // Validate before opening stdio, resolving runtime paths, or consulting configuration.
 // Keep notify's public grammar identical to the adapter's bounded grammar.
 func agentNotifyFlags(command string, args []string) (integration string, help, valid bool) {
@@ -75,6 +79,7 @@ func agentNotifyMain(command string, args []string, options notifyruntime.Option
 	}()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	agentNotifyAfterSignalSetup()
 	return agentNotifyExecute(ctx, command, args, options)
 }
 func agentNotifyExecute(ctx context.Context, command string, args []string, options notifyruntime.Options) int {

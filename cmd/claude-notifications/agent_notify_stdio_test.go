@@ -12,7 +12,6 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -172,6 +171,10 @@ func TestAgentNotifyInheritedFlags(t *testing.T) {
 				}
 				beforeOut, beforeIn := agentNotifyFlagsOf(t, w), agentNotifyFlagsOf(t, ir)
 				cmd := agentNotifyTestCommand(t, args...)
+				ready := ""
+				if mode == "cancel" {
+					ready = agentNotifyArmReady(t, cmd)
+				}
 				cmd.Stdout = w
 				cmd.Stderr = w // aliases of the SAME open description
 				cmd.Stdin = ir
@@ -187,7 +190,7 @@ func TestAgentNotifyInheritedFlags(t *testing.T) {
 					t.Fatal(err)
 				}
 				if mode == "cancel" {
-					time.Sleep(150 * time.Millisecond)
+					agentNotifyAwaitReady(t, ready)
 					_ = cmd.Process.Signal(syscall.SIGTERM)
 				}
 				err = cmd.Wait()
@@ -253,6 +256,7 @@ func TestAgentNotifyLeasePreservesOtherFlags(t *testing.T) {
 
 func TestAgentNotifyProcessIncompleteFrame(t *testing.T) {
 	cmd := agentNotifyTestCommand(t, "notify")
+	ready := agentNotifyArmReady(t, cmd)
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -264,8 +268,8 @@ func TestAgentNotifyProcessIncompleteFrame(t *testing.T) {
 	if err = cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	agentNotifyAwaitReady(t, ready)
 	_, _ = in.Write([]byte(`{"title":"T","body":"B","category":"info","navigation":"none"}`))
-	time.Sleep(150 * time.Millisecond)
 	_ = cmd.Process.Signal(syscall.SIGTERM)
 	_ = cmd.Wait()
 	if out.Len() != 0 {

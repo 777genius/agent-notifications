@@ -49,6 +49,9 @@ func TestAgentNotifyProcessHelper(t *testing.T) {
 	options := notifyruntime.Options{BootClock: agentNotifyTestBoot{}, DeliveryFactory: func(notifier.ManagedInstallation, string, notifier.BootClock) notifyruntime.Delivery {
 		panic("native effects forbidden")
 	}}
+	if p := os.Getenv("AGENT_NOTIFY_TEST_READY"); p != "" {
+		agentNotifyAfterSignalSetup = func() { _ = os.WriteFile(p, []byte("ready"), 0600) }
+	}
 	if mode == "leak-check" {
 		baseline := runtime.NumGoroutine()
 		for i := 0; i < 20; i++ {
@@ -116,6 +119,27 @@ func agentNotifyTestCommand(t *testing.T, args ...string) *exec.Cmd {
 	cmd.Env = agentNotifyTestEnv(t)
 	cmd.WaitDelay = time.Second
 	return cmd
+}
+
+func agentNotifyArmReady(t *testing.T, cmd *exec.Cmd) string {
+	t.Helper()
+	ready := filepath.Join(t.TempDir(), "ready")
+	cmd.Env = append(cmd.Env, "AGENT_NOTIFY_TEST_READY="+ready)
+	return ready
+}
+
+func agentNotifyAwaitReady(t *testing.T, ready string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(ready); err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("helper did not subscribe to SIGTERM")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 func TestAgentNotifyFlags(t *testing.T) {
 	cases := []struct {
@@ -200,6 +224,7 @@ func TestAgentNotifyProcessSignalRead(t *testing.T) {
 	for _, args := range [][]string{{"notify"}, {"mcp-server", "--integration", "codex"}} {
 		t.Run(args[0], func(t *testing.T) {
 			cmd := agentNotifyTestCommand(t, args...)
+			ready := agentNotifyArmReady(t, cmd)
 			in, err := cmd.StdinPipe()
 			if err != nil {
 				t.Fatal(err)
@@ -211,7 +236,7 @@ func TestAgentNotifyProcessSignalRead(t *testing.T) {
 			if err = cmd.Start(); err != nil {
 				t.Fatal(err)
 			}
-			time.Sleep(150 * time.Millisecond)
+			agentNotifyAwaitReady(t, ready)
 			start := time.Now()
 			_ = cmd.Process.Signal(syscall.SIGTERM)
 			err = cmd.Wait()
