@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,7 +53,11 @@ func windowsRestrictPath(t *testing.T, path string) {
 
 func windowsNoneFixture(t *testing.T) (Options, Request) {
 	t.Helper()
-	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root = filepath.Clean(strings.TrimPrefix(root, `\\?\`))
 	o := Options{
 		ControlRoot:  filepath.Join(root, "control"),
 		RuntimeRoot:  filepath.Join(root, "runtime"),

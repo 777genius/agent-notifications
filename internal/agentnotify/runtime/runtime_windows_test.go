@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,7 +41,11 @@ func (f windowsFakeDelivery) Deliver(_ context.Context, r notification.Request) 
 
 func windowsOptions(t *testing.T) Options {
 	t.Helper()
-	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root = filepath.Clean(strings.TrimPrefix(root, `\\?\`))
 	return Options{
 		ControlRoot:  filepath.Join(root, "control"),
 		JournalRoot:  filepath.Join(root, "journal"),
@@ -76,24 +81,35 @@ func windowsRestrict(t *testing.T, path string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	system, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
+	var info windows.ByHandleFileInformation
+	if err = windows.GetFileInformationByHandle(h, &info); err != nil {
+		t.Fatal(err)
+	}
+	inherit := ""
+	if info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0 {
+		inherit = "OICI"
+	}
+	user := sid.User.Sid
+	sd, err := windows.SecurityDescriptorFromString("O:" + user.String() + "D:P(A;" + inherit + ";FA;;;" + user.String() + ")(A;" + inherit + ";FA;;;SY)(A;" + inherit + ";FA;;;BA)")
 	if err != nil {
 		t.Fatal(err)
 	}
-	admins, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
+	owner, _, err := sd.Owner()
 	if err != nil {
 		t.Fatal(err)
 	}
-	entries := []windows.EXPLICIT_ACCESS{
-		{AccessPermissions: windows.GENERIC_ALL, AccessMode: windows.GRANT_ACCESS, Inheritance: windows.NO_INHERITANCE, Trustee: windows.TRUSTEE{TrusteeForm: windows.TRUSTEE_IS_SID, TrusteeType: windows.TRUSTEE_IS_USER, TrusteeValue: windows.TrusteeValueFromSID(sid.User.Sid)}},
-		{AccessPermissions: windows.GENERIC_ALL, AccessMode: windows.GRANT_ACCESS, Inheritance: windows.NO_INHERITANCE, Trustee: windows.TRUSTEE{TrusteeForm: windows.TRUSTEE_IS_SID, TrusteeType: windows.TRUSTEE_IS_USER, TrusteeValue: windows.TrusteeValueFromSID(system)}},
-		{AccessPermissions: windows.GENERIC_ALL, AccessMode: windows.GRANT_ACCESS, Inheritance: windows.NO_INHERITANCE, Trustee: windows.TRUSTEE{TrusteeForm: windows.TRUSTEE_IS_SID, TrusteeType: windows.TRUSTEE_IS_GROUP, TrusteeValue: windows.TrusteeValueFromSID(admins)}},
-	}
-	acl, err := windows.ACLFromEntries(entries, nil)
-	if err != nil {
+	acl, _, err := sd.DACL()
+	if err != nil || acl == nil {
 		t.Fatal(err)
 	}
-	if err = windows.SetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, sid.User.Sid, nil, acl, nil); err != nil {
+	flags := windows.SECURITY_INFORMATION(windows.OWNER_SECURITY_INFORMATION | windows.DACL_SECURITY_INFORMATION | windows.PROTECTED_DACL_SECURITY_INFORMATION)
+	if err = windows.SetSecurityInfo(h, windows.SE_FILE_OBJECT, flags, owner, nil, acl, nil); err == nil {
+		return
+	}
+	if e := windows.SetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION, owner, nil, nil, nil); e != nil {
+		t.Fatal(err)
+	}
+	if err = windows.SetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, acl, nil); err != nil {
 		t.Fatal(err)
 	}
 }

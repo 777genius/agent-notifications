@@ -39,7 +39,7 @@ func openRoot(path string) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	h, err := windows.CreateFile(name, windows.FILE_LIST_DIRECTORY|windows.FILE_READ_ATTRIBUTES|windows.FILE_TRAVERSE, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
+	h, err := windows.CreateFile(name, windows.FILE_LIST_DIRECTORY|windows.FILE_READ_ATTRIBUTES|windows.FILE_TRAVERSE|windows.READ_CONTROL, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -49,7 +49,7 @@ func openRoot(path string) (*os.File, error) {
 			windows.CloseHandle(h)
 			return nil, ErrInvalid
 		}
-		next, err := journalOpenAt(h, part, windows.FILE_LIST_DIRECTORY|windows.FILE_READ_ATTRIBUTES|windows.FILE_TRAVERSE, windows.FILE_OPEN, windows.FILE_DIRECTORY_FILE, true)
+		next, err := journalOpenAt(h, part, windows.FILE_LIST_DIRECTORY|windows.FILE_READ_ATTRIBUTES|windows.FILE_TRAVERSE|windows.READ_CONTROL, windows.FILE_OPEN, windows.FILE_DIRECTORY_FILE, true)
 		windows.CloseHandle(h)
 		if err != nil {
 			return nil, wrap(err)
@@ -76,12 +76,12 @@ func openRoot(path string) (*os.File, error) {
 
 func openFile(dir *os.File, name string, flags int) (*os.File, error) {
 	acc := flags & 0x3
-	access := uint32(windows.GENERIC_READ)
+	access := uint32(windows.GENERIC_READ | windows.READ_CONTROL)
 	switch acc {
 	case oWRONLY:
-		access = windows.GENERIC_WRITE
+		access = windows.GENERIC_WRITE | windows.READ_CONTROL
 	case oRDWR:
-		access = windows.GENERIC_READ | windows.GENERIC_WRITE
+		access = windows.GENERIC_READ | windows.GENERIC_WRITE | windows.READ_CONTROL
 	}
 	create := flags&oCREAT != 0
 	excl := flags&oEXCL != 0
@@ -524,24 +524,39 @@ func journalRestrictPrivate(h windows.Handle) error {
 	if err != nil {
 		return err
 	}
-	system, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
+	info, err := journalFileInfo(h)
 	if err != nil {
 		return err
 	}
-	admins, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
+	inherit := ""
+	if info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0 {
+		inherit = "OICI"
+	}
+	// FA is FILE_ALL_ACCESS. GENERIC_ALL ACEs make SetSecurityInfo return
+	// ERROR_INVALID_PARAMETER on GitHub Windows runners.
+	sd, err := windows.SecurityDescriptorFromString("O:" + sid.String() + "D:P(A;" + inherit + ";FA;;;" + sid.String() + ")(A;" + inherit + ";FA;;;SY)(A;" + inherit + ";FA;;;BA)")
 	if err != nil {
 		return err
 	}
-	entries := []windows.EXPLICIT_ACCESS{
-		{AccessPermissions: windows.GENERIC_ALL, AccessMode: windows.GRANT_ACCESS, Inheritance: windows.NO_INHERITANCE, Trustee: windows.TRUSTEE{TrusteeForm: windows.TRUSTEE_IS_SID, TrusteeType: windows.TRUSTEE_IS_USER, TrusteeValue: windows.TrusteeValueFromSID(sid)}},
-		{AccessPermissions: windows.GENERIC_ALL, AccessMode: windows.GRANT_ACCESS, Inheritance: windows.NO_INHERITANCE, Trustee: windows.TRUSTEE{TrusteeForm: windows.TRUSTEE_IS_SID, TrusteeType: windows.TRUSTEE_IS_USER, TrusteeValue: windows.TrusteeValueFromSID(system)}},
-		{AccessPermissions: windows.GENERIC_ALL, AccessMode: windows.GRANT_ACCESS, Inheritance: windows.NO_INHERITANCE, Trustee: windows.TRUSTEE{TrusteeForm: windows.TRUSTEE_IS_SID, TrusteeType: windows.TRUSTEE_IS_GROUP, TrusteeValue: windows.TrusteeValueFromSID(admins)}},
-	}
-	acl, err := windows.ACLFromEntries(entries, nil)
+	owner, _, err := sd.Owner()
 	if err != nil {
 		return err
 	}
-	return windows.SetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, sid, nil, acl, nil)
+	dacl, _, err := sd.DACL()
+	if err != nil || dacl == nil {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("managed inode requires a private DACL")
+	}
+	flags := windows.SECURITY_INFORMATION(windows.OWNER_SECURITY_INFORMATION | windows.DACL_SECURITY_INFORMATION | windows.PROTECTED_DACL_SECURITY_INFORMATION)
+	if err = windows.SetSecurityInfo(h, windows.SE_FILE_OBJECT, flags, owner, nil, dacl, nil); err == nil {
+		return nil
+	}
+	if e := windows.SetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION, owner, nil, nil, nil); e != nil {
+		return err
+	}
+	return windows.SetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
 }
 
 func journalRequirePrivate(h windows.Handle) error {

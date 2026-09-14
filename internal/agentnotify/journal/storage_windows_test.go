@@ -5,6 +5,8 @@ package journal
 import (
 	"context"
 	"crypto/sha256"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,7 +22,11 @@ func windowsJournalContext(t *testing.T) context.Context {
 
 func privateJournalRoot(t *testing.T) string {
 	t.Helper()
-	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root = filepath.Clean(strings.TrimPrefix(root, `\\?\`))
 	name, err := windows.UTF16PtrFromString(root)
 	if err != nil {
 		t.Fatal(err)
