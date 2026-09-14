@@ -7,7 +7,7 @@
 - Linux (x64 & ARM64)
 - Windows 10+ (x64)
 
-**No additional dependencies:**
+**Self-contained runtime after setup:**
 - ✅ Binaries auto-download from GitHub Releases
 - ✅ Pure Go - no C compiler needed
 - ✅ All libraries bundled

@@ -101,6 +101,6 @@ If the binary auto-update didn't work (e.g. no internet at the time), run `/clau
 
 Optionally also remove the marketplace registration: `/plugin marketplace remove claude-notifications-go`.
 
-**Codex:** Codex has no plugin manager, so removal is manual. Delete the hook entries this installer added from `~/.codex/hooks.json` (`%USERPROFILE%\.codex\hooks.json` on Windows), then remove the installed copy at `~/.codex/claude-notifications-go` (`%USERPROFILE%\.codex\claude-notifications-go` on Windows). This does not touch hooks you registered yourself for other tools.
+**Codex:** remove the hooks and runtime registered by this installer manually. Use the same Codex home selected during setup: the explicit `--codex-home` path, otherwise `CODEX_HOME`, otherwise `~/.codex` (`%USERPROFILE%\.codex` on Windows). In that directory, delete only this installer's entries from `hooks.json`, then remove the `claude-notifications-go` directory. Preserve hooks registered for other tools.
 
 **Configuration:** uninstalling does not delete your saved settings. Run `agent-notifications config path` to find the active file, and remove it yourself if you no longer want it.
