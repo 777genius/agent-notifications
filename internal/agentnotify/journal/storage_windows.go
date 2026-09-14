@@ -26,6 +26,17 @@ const (
 	oEXCL   = 0x80
 )
 
+// journalDirAccess walks ancestors with list/traverse only. The leaf handle is
+// later passed to os.File.Sync, which on Windows is FlushFileBuffers and
+// requires GENERIC_WRITE. Unix fsync works on O_RDONLY directory descriptors.
+func journalDirAccess(leaf bool) uint32 {
+	access := uint32(windows.FILE_LIST_DIRECTORY | windows.FILE_READ_ATTRIBUTES | windows.FILE_TRAVERSE | windows.READ_CONTROL)
+	if leaf {
+		access |= windows.GENERIC_WRITE
+	}
+	return access
+}
+
 func openRoot(path string) (*os.File, error) {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return nil, ErrInvalid
@@ -49,7 +60,7 @@ func openRoot(path string) (*os.File, error) {
 			windows.CloseHandle(h)
 			return nil, ErrInvalid
 		}
-		next, err := journalOpenAt(h, part, windows.FILE_LIST_DIRECTORY|windows.FILE_READ_ATTRIBUTES|windows.FILE_TRAVERSE|windows.READ_CONTROL, windows.FILE_OPEN, windows.FILE_DIRECTORY_FILE, true)
+		next, err := journalOpenAt(h, part, journalDirAccess(i == len(parts)-1), windows.FILE_OPEN, windows.FILE_DIRECTORY_FILE, true)
 		windows.CloseHandle(h)
 		if err != nil {
 			return nil, wrap(err)
