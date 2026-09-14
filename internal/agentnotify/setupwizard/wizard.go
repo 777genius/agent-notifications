@@ -154,6 +154,17 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 			if others, err := otherLiveClients(req, ev.snap, ev.runtimeRoot, req.InstallationID, string(agent)); err == nil && len(others) > 0 {
 				text += " required-update=" + strings.Join(others, ",")
 			}
+			if explicitAbs(req.PackageRoot) {
+				digest, err := previewNotifyDigest(ctx, req, ev.snap, ev.runtimeRoot, agent)
+				if err != nil {
+					ev.out.Outcome, ev.out.Reason = "incomplete", "portable_preflight_failed"
+					plan.Result = attachCommand(req, ev.out)
+					return plan, err
+				}
+				if digest != "" {
+					text += " source-digest=" + digest
+				}
+			}
 		}
 	}
 	ev.out.Outcome, ev.out.Reason = "ready", ""
@@ -286,6 +297,26 @@ func otherLiveClients(req Request, snap installruntime.InstalledSnapshot, runtim
 		return nil, err
 	}
 	return mat.OtherLiveClients(installationID, adding)
+}
+
+func previewNotifyDigest(ctx context.Context, req Request, snap installruntime.InstalledSnapshot, runtimeRoot string, agent portable.Integration) (string, error) {
+	mat, err := materializer(req, snap, runtimeRoot)
+	if err != nil {
+		return "", err
+	}
+	id, err := identity(req, snap, runtimeRoot, mat, true)
+	if err != nil {
+		return "", err
+	}
+	preview, err := mat.PreviewPlan(ctx, portablesetup.MaterializeRequest{
+		Identity: id, Integration: agent, PackageRoot: req.PackageRoot,
+		ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
+		OperationID: "wizard-plan-" + string(agent),
+	})
+	if err != nil {
+		return "", err
+	}
+	return preview.TreeDigest, nil
 }
 
 func resumeFromPendingIntent(req Request, agents []portable.Integration, snap installruntime.InstalledSnapshot, out Result) (Request, []portable.Integration, Result, bool, error) {

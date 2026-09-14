@@ -144,6 +144,39 @@ func TestPlanNotifyRequiresClientExecutable(t *testing.T) {
 	}
 }
 
+func TestPlanShowsSourceDigestWithoutMutating(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, gen := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	plan, err := Plan(ctx, Request{
+		Action: ActionInstall, Agents: []string{"codex"},
+		Hooks: &off, AgentNotify: boolPtr(true),
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	})
+	if err != nil || !plan.Ready {
+		t.Fatalf("plan: %+v %v", plan, err)
+	}
+	if !strings.Contains(plan.Text, "source-digest=") {
+		t.Fatalf("missing source digest: %s", plan.Text)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil || snap.Ledger.PendingMutation != nil || snap.Ledger.Generation != gen {
+		t.Fatalf("preflight mutated ledger: %+v %v", snap.Ledger, err)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(control), "uap", "state", "state-v2.json")); !os.IsNotExist(err) {
+		t.Fatal("plan wrote UAP state")
+	}
+}
+
 func TestWizardEmptyAgentsCancels(t *testing.T) {
 	control, _, _, _, _ := managedRuntime(t)
 	got, err := Run(testCtx(t), Request{Action: ActionInstall, Yes: true, ControlRoot: control})

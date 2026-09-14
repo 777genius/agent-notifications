@@ -321,6 +321,16 @@ func (m Materializer) OtherLiveClients(installationID, adding string) ([]string,
 }
 
 func (m Materializer) PreviewInstall(ctx context.Context, req MaterializeRequest) (uapinstaller.Plan, error) {
+	return m.previewInstall(ctx, req, true)
+}
+
+// PreviewPlan is read-only Prepare for host confirmation. It does not recover
+// journals, publish intent, or Apply.
+func (m Materializer) PreviewPlan(ctx context.Context, req MaterializeRequest) (uapinstaller.Plan, error) {
+	return m.previewInstall(ctx, req, false)
+}
+
+func (m Materializer) previewInstall(ctx context.Context, req MaterializeRequest, recover bool) (uapinstaller.Plan, error) {
 	if ctx == nil {
 		return uapinstaller.Plan{}, ErrPreflight
 	}
@@ -331,8 +341,10 @@ func (m Materializer) PreviewInstall(ctx context.Context, req MaterializeRequest
 	if err != nil {
 		return uapinstaller.Plan{}, err
 	}
-	if err := eng.Recover(ctx); err != nil {
-		return uapinstaller.Plan{}, err
+	if recover {
+		if err := eng.Recover(ctx); err != nil {
+			return uapinstaller.Plan{}, err
+		}
 	}
 	prepared, err := eng.Prepare(ctx, uapinstaller.Request{
 		Operation: uapinstaller.OpInstall, PackageRoot: req.PackageRoot, ClientID: string(req.Integration),
