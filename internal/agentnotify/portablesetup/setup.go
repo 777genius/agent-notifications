@@ -164,7 +164,7 @@ func (s Service) matchingReservation(req Request, action string) (*installruntim
 	if err != nil {
 		return nil, fmt.Errorf("%w: pending handoff intent missing: %v", ErrPreflight, err)
 	}
-	if intent.SetupIntentID != pending.ID || intent.Action != action {
+	if !intentMatches(intent, pending.ID, action, string(req.Binding.Integration)) {
 		return nil, fmt.Errorf("%w: pending %s", ErrIntentConflict, intent.Action)
 	}
 	cp := *pending
@@ -373,7 +373,7 @@ func (s Service) handoffForward(ctx context.Context, req Request) (uint64, *inst
 		if err != nil {
 			return 0, nil, fmt.Errorf("%w: pending handoff intent missing: %v", ErrPreflight, err)
 		}
-		if intent.SetupIntentID != pending.ID || intent.Action != "install" {
+		if !intentMatches(intent, pending.ID, "install", string(req.Binding.Integration)) {
 			return 0, nil, fmt.Errorf("%w: pending %s", ErrIntentConflict, intent.Action)
 		}
 		return snap.Ledger.Generation, pending, nil
@@ -388,7 +388,7 @@ func (s Service) handoffForward(ctx context.Context, req Request) (uint64, *inst
 		if err != nil {
 			return 0, nil, fmt.Errorf("%w: pending handoff intent missing: %v", ErrPreflight, err)
 		}
-		if intent.SetupIntentID != pending.ID || intent.Action != "install" {
+		if !intentMatches(intent, pending.ID, "install", string(req.Binding.Integration)) {
 			return 0, nil, fmt.Errorf("%w: pending %s", ErrIntentConflict, intent.Action)
 		}
 		res = pending

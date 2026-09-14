@@ -462,6 +462,23 @@ func TestPendingInstallReservationConflictsWithRemove(t *testing.T) {
 	}
 }
 
+func TestPendingInstallForOtherClientConflicts(t *testing.T) {
+	b, ledger := bindingFixture(t)
+	config, cmd, ledger := ownedMCP(t, b, ledger)
+	svc := Service{}
+	req := Request{Binding: b, ExpectedGeneration: ledger.Generation, Discovery: Discovery{ConfigPath: config, Command: cmd}}
+	if _, _, err := svc.publishHandoffReservation(testCtx(t), req, ledger.Generation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.matchingReservation(req, "install"); err != nil {
+		t.Fatal(err)
+	}
+	req.Binding.Integration = portable.Claude
+	if _, err := svc.matchingReservation(req, "install"); !errors.Is(err, ErrIntentConflict) {
+		t.Fatalf("other client: %v", err)
+	}
+}
+
 func TestHandoffNoopDoesNotCreateIntent(t *testing.T) {
 	b, ledger := bindingFixture(t)
 	uap := &fakeUAP{}

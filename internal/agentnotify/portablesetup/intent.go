@@ -75,3 +75,18 @@ func ReadIntent(controlRoot string) (Intent, error) {
 	}
 	return intent, nil
 }
+
+func intentMatches(intent Intent, pendingID, action, client string) bool {
+	if intent.SetupIntentID != pendingID || intent.Action != action {
+		return false
+	}
+	if client == "" || len(intent.Targets) == 0 {
+		return true
+	}
+	for _, target := range intent.Targets {
+		if target.Client == client {
+			return true
+		}
+	}
+	return false
+}
