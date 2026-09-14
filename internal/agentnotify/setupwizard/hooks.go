@@ -33,6 +33,18 @@ func inspectHooks(req Request, agent portable.Integration, out Result) Result {
 	return out
 }
 
+func hooksManaged(req Request, agent portable.Integration) bool {
+	if agent == portable.Claude {
+		return false
+	}
+	home := clientConfig(req, agent)
+	if !explicitAbs(home) {
+		return false
+	}
+	data, err := os.ReadFile(filepath.Join(home, "hooks.json"))
+	return err == nil && strings.Contains(string(data), "codex-hook-wrapper")
+}
+
 func applyHooks(ctx context.Context, req Request, agents []portable.Integration, snap installruntime.InstalledSnapshot, remove bool, out Result) (Result, error) {
 	var reservation *installruntime.PendingMutation
 	if snap.Ledger.PendingMutation != nil {

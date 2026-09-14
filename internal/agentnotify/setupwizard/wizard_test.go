@@ -1225,7 +1225,6 @@ func TestWizardUninstallOmittedUnitsRemovesManagedWithoutPackage(t *testing.T) {
 		t.Fatalf("uninstall: %+v %v", removed, err)
 	}
 	generation := removed.Generation
-	req.Hooks = &off
 	req.PackageFetcher = func(context.Context, string) ([]byte, error) {
 		t.Fatal("second uninstall fetched a package")
 		return nil, nil

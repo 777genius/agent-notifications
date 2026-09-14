@@ -340,6 +340,27 @@ func otherLiveClients(req Request, snap installruntime.InstalledSnapshot, runtim
 	return mat.OtherLiveClients(installationID, adding)
 }
 
+func liveNotifyClient(mat portablesetup.Materializer, installationID, clientID string) bool {
+	if installationID == "" || clientID == "" {
+		return false
+	}
+	state, err := mat.Store.Load()
+	if err != nil {
+		return false
+	}
+	for _, installation := range state.Installations {
+		if installation.InstallationID != installationID {
+			continue
+		}
+		for _, binding := range installation.Clients {
+			if binding.ClientID == clientID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func previewNotifyDigest(ctx context.Context, req Request, snap installruntime.InstalledSnapshot, runtimeRoot string, agent portable.Integration) (string, error) {
 	mat, err := materializer(req, snap, runtimeRoot)
 	if err != nil {
@@ -835,6 +856,29 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 		if emptyErr != nil {
 			out.Outcome, out.Reason = "incomplete", emptyErr.Error()
 			return out, emptyErr
+		}
+	}
+	if unitFlagsOmitted(req) {
+		var managedHooks []portable.Integration
+		for _, agent := range hookAgents {
+			if hooksManaged(req, agent) {
+				managedHooks = append(managedHooks, agent)
+			}
+		}
+		hookAgents = managedHooks
+		if id.InstallationID != "" && !retainedEmpty {
+			var managedNotify []portable.Integration
+			for _, agent := range notifyAgents {
+				if liveNotifyClient(mat, id.InstallationID, string(agent)) {
+					managedNotify = append(managedNotify, agent)
+				}
+			}
+			notifyAgents = managedNotify
+		}
+		if len(hookAgents) == 0 && len(notifyAgents) == 0 {
+			out.Outcome, out.Reason = "cancelled", "empty_units"
+			reportProgress(req, "complete")
+			return out, nil
 		}
 	}
 	portablePresent := id.InstallationID != "" && !retainedEmpty
