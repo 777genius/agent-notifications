@@ -15,9 +15,17 @@ var (
 	ErrPromptInputClosed = errors.New("prompt input closed before a complete answer")
 )
 
+// AgentCapability is the Claude/Codex surface shown by the TTY picker.
+// Presence comes from Engine.Discover; the renderer does not search PATH.
+type AgentCapability struct {
+	ID      string
+	Present bool
+	Path    string
+}
+
 // Prompter is the thin TTY port. It only fills Request fields; Run owns rules.
 type Prompter interface {
-	SelectAgents(context.Context) ([]string, error)
+	SelectAgents(context.Context, []AgentCapability) ([]string, error)
 	SelectExistingAction(context.Context) (Action, error)
 	SelectUnits(context.Context) (hooks, notify bool, err error)
 	Confirm(context.Context, string) (bool, error)
@@ -37,11 +45,16 @@ func (p *LinePrompt) reader() *bufio.Reader {
 	return p.br
 }
 
-func (p *LinePrompt) SelectAgents(ctx context.Context) ([]string, error) {
+func (p *LinePrompt) SelectAgents(ctx context.Context, clients []AgentCapability) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if _, err := io.WriteString(p.Out, "Install notifications for: 1) Claude Code  2) Codex  3) Both\nChoice: "); err != nil {
+	claude, codex := "Claude Code", "Codex"
+	if len(clients) > 0 {
+		claude = agentChoiceLabel(clients, "claude", claude)
+		codex = agentChoiceLabel(clients, "codex", codex)
+	}
+	if _, err := io.WriteString(p.Out, "Install notifications for: 1) "+claude+"  2) "+codex+"  3) Both\nChoice: "); err != nil {
 		return nil, err
 	}
 	line, err := readLine(ctx, p.reader())
@@ -150,7 +163,11 @@ func FillInteractive(ctx context.Context, req Request, p Prompter, existing func
 		return req, nil
 	}
 	if len(req.Agents) == 0 {
-		agents, err := p.SelectAgents(ctx)
+		var clients []AgentCapability
+		if req.DiscoverAgents != nil {
+			clients = req.DiscoverAgents()
+		}
+		agents, err := p.SelectAgents(ctx, clients)
 		if err != nil {
 			return req, err
 		}
@@ -233,6 +250,19 @@ func confirmPlan(req Request) string {
 		summary += " required=restart,request-permission,test-notification permission-dialog=explicit delivery=not_verified"
 	}
 	return summary + ". Proceed?"
+}
+
+func agentChoiceLabel(clients []AgentCapability, id, name string) string {
+	for _, client := range clients {
+		if client.ID != id {
+			continue
+		}
+		if client.Present {
+			return name + " (executable present)"
+		}
+		return name + " (executable not found)"
+	}
+	return name
 }
 
 func readLine(ctx context.Context, reader *bufio.Reader) (string, error) {

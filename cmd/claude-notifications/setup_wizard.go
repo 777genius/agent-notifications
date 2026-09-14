@@ -104,6 +104,9 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 	needsPrompt := tty && !jsonOut && (req.Action == "" || (req.Action != setupwizard.ActionInspect && (len(req.Agents) == 0 || !req.Yes)))
 	prompt := &setupwizard.LinePrompt{In: in, Out: out}
 	if needsPrompt {
+		req.DiscoverAgents = func() []setupwizard.AgentCapability {
+			return setupwizard.DiscoverAgents(req)
+		}
 		filled, e := setupwizard.FillInteractive(ctx, req, prompt, func(agents []string) []string {
 			return setupwizard.LiveNotifyClients(req.ControlRoot, agents)
 		})

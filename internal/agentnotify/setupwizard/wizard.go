@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -68,6 +69,10 @@ type Request struct {
 	// Progress reports large confirmed phases to the host. JSON stdout stays
 	// one result; the CLI writes these lines to stderr. Nil is silent.
 	Progress func(string)
+	// DiscoverAgents supplies Claude/Codex executable presence for the TTY
+	// picker. Production sets this from Engine.Discover. Nil skips presence
+	// labels. The function must not execute found files.
+	DiscoverAgents func() []AgentCapability
 }
 
 type TargetResult struct {
@@ -382,6 +387,28 @@ func inspectUAPState(ctx context.Context, req Request) (uapinstaller.Inspection,
 		return uapinstaller.Inspection{}, err
 	}
 	return eng.Inspect(ctx)
+}
+
+// DiscoverAgents reports Claude/Codex user-scope metadata and executable
+// presence without creating UAP state or executing found files.
+func DiscoverAgents(req Request) []AgentCapability {
+	stateRoot := filepath.Join(filepath.Dir(req.ControlRoot), "uap", "state")
+	if !explicitAbs(req.ControlRoot) {
+		stateRoot = filepath.Join(os.TempDir(), "uapinstaller-discover-absent")
+	}
+	eng, err := uapinstaller.New(uapinstaller.Config{
+		StateRoot:         stateRoot,
+		ClientExecutables: req.ClientExecutables,
+	})
+	if err != nil {
+		return nil
+	}
+	found := eng.Discover()
+	out := make([]AgentCapability, 0, len(found))
+	for _, item := range found {
+		out = append(out, AgentCapability{ID: item.ClientID, Present: item.ExecutablePresent, Path: item.ExecutablePath})
+	}
+	return out
 }
 
 func recoveryIDs(view uapinstaller.Inspection) []string {

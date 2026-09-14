@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -77,5 +79,23 @@ func TestSetupWizardJSONDoesNotPrompt(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "phase ") {
 		t.Fatalf("json stdout included progress: %s", out.String())
+	}
+}
+
+func TestSetupWizardTTYShowsDiscoverCapabilities(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "codex"), []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	var out bytes.Buffer
+	root := setupCommandRoot(t)
+	if code := executeSetupWizardWith(ctx, []string{"--control-root", root}, &out, io.Discard, strings.NewReader("\n"), true); code != 0 {
+		t.Fatalf("tty discover cancel: %d %s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "Claude Code (executable not found)") || !strings.Contains(out.String(), "Codex (executable present)") {
+		t.Fatalf("discover labels: %s", out.String())
 	}
 }

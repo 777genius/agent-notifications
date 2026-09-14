@@ -181,3 +181,23 @@ func TestConfirmPlanShowsProfilesRevisionAndRequiredActions(t *testing.T) {
 		t.Fatalf("uninstall plan: %s", uninstall)
 	}
 }
+
+func TestFillInteractiveShowsDiscoverCapabilities(t *testing.T) {
+	in := strings.NewReader("1\n3\n")
+	var out strings.Builder
+	got, err := FillInteractive(promptCtx(t), Request{
+		Action: ActionInstall,
+		DiscoverAgents: func() []AgentCapability {
+			return []AgentCapability{
+				{ID: "claude", Present: true, Path: "/bin/claude"},
+				{ID: "codex", Present: false},
+			}
+		},
+	}, &LinePrompt{In: in, Out: &out}, nil)
+	if err != nil || strings.Join(got.Agents, ",") != "claude" {
+		t.Fatalf("discover picker: %+v %v", got, err)
+	}
+	if !strings.Contains(out.String(), "Claude Code (executable present)") || !strings.Contains(out.String(), "Codex (executable not found)") {
+		t.Fatalf("capability labels: %s", out.String())
+	}
+}

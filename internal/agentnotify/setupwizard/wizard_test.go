@@ -1463,3 +1463,31 @@ func writeCodexListStub(t *testing.T, dir, listJSON string) string {
 	}
 	return path
 }
+
+func TestDiscoverAgentsReportsPresenceWithoutExecuting(t *testing.T) {
+	control := filepath.Join(t.TempDir(), "control")
+	if err := os.MkdirAll(control, 0700); err != nil {
+		t.Fatal(err)
+	}
+	binDir := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "executed")
+	path := filepath.Join(binDir, "claude")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\ntouch "+marker+"\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	got := DiscoverAgents(Request{ControlRoot: control})
+	if _, err := os.Lstat(marker); !os.IsNotExist(err) {
+		t.Fatal("discover executed PATH candidate")
+	}
+	state := filepath.Join(filepath.Dir(control), "uap", "state")
+	if _, err := os.Lstat(state); !os.IsNotExist(err) {
+		t.Fatal("discover created UAP state")
+	}
+	if len(got) != 2 || got[0].ID != "claude" || !got[0].Present || got[0].Path != path {
+		t.Fatalf("claude: %+v", got)
+	}
+	if got[1].Present || got[1].Path != "" {
+		t.Fatalf("codex should be absent: %+v", got[1])
+	}
+}
