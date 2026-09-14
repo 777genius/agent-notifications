@@ -29,7 +29,10 @@ managed artifact and persisted target before any client deactivation.
 
 Codex artifact removal requires `Request.ExternalUninstalled`. Confirmed Apply
 does not invent that attestation. A missing or relative helper is rejected
-before the state file is written.
+before the state file is written. Confirmed Apply returns `recovery_required`
+when Inspect sees a pending journal or unfinished receipt; it does not recover
+as a side effect of install/remove. Close during Apply returns `ErrHandleBusy`
+without releasing the sealed snapshot.
 
 ## External sample
 
