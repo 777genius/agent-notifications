@@ -35,9 +35,10 @@ If assets/registration succeeded but init failed, report partial success and the
 Then run `/claude-notifications-go:settings` for [private revision-checked edits](settings.md). Save diagnostics privately; never print raw configuration or expanded secrets.
 
 After a successful plugin install, agent-notify configure is default-on only
-where this installer can configure MCP (macOS). Auto-default on another OS
-keeps hooks-only setup and reports `unsupported_platform`; it is not a full
-MCP installation. Pass `--skip-agent-notify` to skip MCP on a supported OS.
+where this installer can configure MCP (macOS and Windows, `navigation=none` on
+Windows). Auto-default on another OS keeps hooks-only setup and reports
+`unsupported_platform`; it is not a full MCP installation. Pass
+`--skip-agent-notify` to skip MCP on a supported OS.
 Explicit `--agent-notify` without a supported OS or configure API is an
 error. If a supported configure attempt fails, the plugin/hooks install still
 counts as committed; the overall result is incomplete/nonzero with a retry
@@ -116,12 +117,14 @@ chmod +x "$INSTALLER"
 if [ "$SKIP_AGENT_NOTIFY" != true ]; then
   NOTIFY_BIN="${CLAUDE_PLUGIN_ROOT}/bin/claude-notifications"
   os=$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]' || true)
-  if [ "$os" != darwin ]; then
+  supported=false
+  case "$os" in darwin|mingw*|msys*|cygwin*) supported=true ;; esac
+  if [ "$supported" != true ]; then
     if [ "$SEEN_AGENT_NOTIFY" = true ]; then
-      echo "agent-notify MCP is unsupported on this OS; this installer supports macOS. Plugin install succeeded. Not a full MCP installation." >&2
+      echo "agent-notify MCP is unsupported on this OS; this installer supports macOS and Windows. Plugin install succeeded. Not a full MCP installation." >&2
       exit 1
     fi
-    echo "agent-notify MCP skipped: unsupported_platform (this installer supports macOS). Plugin install succeeded. Not a full MCP installation." >&2
+    echo "agent-notify MCP skipped: unsupported_platform (this installer supports macOS and Windows). Plugin install succeeded. Not a full MCP installation." >&2
   elif [ ! -x "$NOTIFY_BIN" ]; then
     echo "agent-notify setup skipped; installer binary not found. Plugin install succeeded." >&2
     if [ "$SEEN_AGENT_NOTIFY" = true ]; then

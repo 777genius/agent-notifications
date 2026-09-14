@@ -33,17 +33,17 @@ func TestNotificationBootstrapOffline(t *testing.T) {
 		t.Fatal("install_codex must only pass --skip-agent-notify when the published CLI advertises it")
 	}
 	prefix := strings.TrimSuffix(strings.TrimSpace(string(source)), `main "$@"`)
-	darwin := runtime.GOOS == "darwin"
+	supported := runtime.GOOS == "darwin" || runtime.GOOS == "windows"
 	for _, test := range []struct {
 		name, args           string
 		installFail, wantErr bool
 		wantConfigure        bool
 	}{
-		{"ordinary", "--product both", false, false, darwin},
-		{"both", "--product both --agent-notify --navigation none --allow-unknown-caller true --allow-caller-asserted false", false, !darwin, darwin},
-		{"codex_home", "", false, false, darwin},
+		{"ordinary", "--product both", false, false, supported},
+		{"both", "--product both --agent-notify --navigation none --allow-unknown-caller true --allow-caller-asserted false", false, !supported, supported},
+		{"codex_home", "", false, false, supported},
 		{"skip", "--product both --skip-agent-notify", false, false, false},
-		{"configure_failed", "--product both", false, darwin, darwin},
+		{"configure_failed", "--product both", false, supported, supported},
 		{"last_failed", "--product both --agent-notify --navigation none --allow-unknown-caller true --allow-caller-asserted false", true, true, false},
 		{"bad_none", "--product both --agent-notify --navigation none", false, true, false},
 		{"bad_app", "--product both --agent-notify --app /Applications/../Codex.app --team-id TEAM123456 --allow-unknown-caller true --allow-caller-asserted false", false, true, false},
@@ -110,7 +110,7 @@ install_codex() { echo codex >> "$HOME/installs"; CONFIGURE_BINARY="$HOME/fake-b
 				t.Fatal("unexpected configure", string(calls))
 			}
 			if test.name == "configure_failed" {
-				if darwin {
+				if supported {
 					if !strings.Contains(string(output), "Agent-notify setup failed") {
 						t.Fatal("missing configure warning", string(output))
 					}
@@ -122,10 +122,10 @@ install_codex() { echo codex >> "$HOME/installs"; CONFIGURE_BINARY="$HOME/fake-b
 					t.Fatal("configure failure rolled back install", err, string(installs))
 				}
 			}
-			if test.name == "ordinary" && !darwin && !strings.Contains(string(output), "unsupported_platform") {
+			if test.name == "ordinary" && !supported && !strings.Contains(string(output), "unsupported_platform") {
 				t.Fatal("auto-default must report skipped MCP", string(output))
 			}
-			if test.name == "both" && !darwin && !strings.Contains(string(output), "unsupported") {
+			if test.name == "both" && !supported && !strings.Contains(string(output), "unsupported") {
 				t.Fatal("explicit --agent-notify must refuse unsupported OS", string(output))
 			}
 			if strings.HasPrefix(test.name, "bad_") {
@@ -154,7 +154,7 @@ func TestNotificationInitOfflineBranch(t *testing.T) {
 	if body == "" {
 		t.Fatal("missing init configure script")
 	}
-	darwin := runtime.GOOS == "darwin"
+	supported := runtime.GOOS == "darwin" || runtime.GOOS == "windows"
 	for _, test := range []struct {
 		name                      string
 		args                      []string
@@ -162,8 +162,8 @@ func TestNotificationInitOfflineBranch(t *testing.T) {
 	}{
 		{name: "default", install: true},
 		{name: "skip", args: []string{"--skip-agent-notify"}, install: true},
-		{name: "configure", args: []string{"--agent-notify", "--navigation", "none", "--allow-unknown-caller", "true", "--allow-caller-asserted", "false"}, fail: !darwin, install: true},
-		{name: "failed", failHelper: true, fail: darwin, install: true},
+		{name: "configure", args: []string{"--agent-notify", "--navigation", "none", "--allow-unknown-caller", "true", "--allow-caller-asserted", "false"}, fail: !supported, install: true},
+		{name: "failed", failHelper: true, fail: supported, install: true},
 		{name: "incomplete_none", args: []string{"--agent-notify", "--navigation", "none"}, fail: true},
 		{name: "bad_alias", args: []string{"--configure-notifications"}, fail: true},
 		{name: "bad_route", args: []string{"--navigation", "invalid"}, fail: true},
@@ -213,7 +213,7 @@ func TestNotificationInitOfflineBranch(t *testing.T) {
 				}
 				return
 			}
-			if !darwin {
+			if !supported {
 				if len(calls) != 0 {
 					t.Fatal("unsupported OS configured", string(calls))
 				}

@@ -408,7 +408,7 @@ func TestSetupCodexE2EConfigureNotifications(t *testing.T) {
 	out, err := f.run(t, "", bin, "setup-codex", "--plugin-root", source, "--agent-notify", "--navigation", "none", "--allow-unknown-caller", "true", "--allow-caller-asserted", "false")
 	installDir := filepath.Join(f.home, ".codex", "claude-notifications-go")
 	command := filepath.Join(installDir, "bin", "claude-notifications")
-	if runtime.GOOS != "darwin" {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
 		if err == nil {
 			t.Fatal("explicit --agent-notify on unsupported OS must be incomplete", out)
 		}
