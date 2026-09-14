@@ -434,7 +434,7 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 	if _, err = m.Kernel.HandoffReverse(ctx, reqBody); err != nil {
 		return err
 	}
-	res, err := m.Kernel.matchingReservation(reqBody)
+	res, err := m.Kernel.matchingReservation(reqBody, "uninstall")
 	if err != nil {
 		return err
 	}

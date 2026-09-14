@@ -19,6 +19,7 @@ import (
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/ports"
 
 	"github.com/777genius/agent-notifications/internal/agentnotify/portableasset"
+	"github.com/777genius/agent-notifications/internal/agentnotify/portablesetup"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/testenv"
 )
@@ -668,6 +669,80 @@ func TestWizardUninstallExplicitFalsePreservesNotifyWithoutPackage(t *testing.T)
 	}
 	if hooksInstalled || !notifyInstalled {
 		t.Fatalf("explicit false did not keep notify: %+v", view.Targets)
+	}
+}
+
+func TestWizardUninstallConflictsWithPendingInstallIntent(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	plantPendingInstallIntent(t, ctx, control, runtime, installed.Generation)
+	req.Action = ActionUninstall
+	req.PackageRoot = ""
+	got, err := Run(ctx, req)
+	if err == nil || got.Outcome != "conflict" || got.Reason != "pending_intent_conflict" || got.ExitCode() != 1 {
+		t.Fatalf("conflict: %+v %v", got, err)
+	}
+	if len(got.Command) < 4 || got.Command[2] != "--action" || got.Command[3] != "install" {
+		t.Fatalf("retry must keep pending install: %v", got.Command)
+	}
+	req.Action = ActionInspect
+	req.Yes = false
+	view, err := Run(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, target := range view.Targets {
+		if target.Unit == "agent-notify" && target.Outcome == "installed" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("conflict uninstalled portable binding: %+v", view.Targets)
+	}
+}
+
+func plantPendingInstallIntent(t *testing.T, ctx context.Context, control, runtime string, generation uint64) {
+	t.Helper()
+	intentID := "pending-install-intent"
+	intent := portablesetup.Intent{
+		Version: 1, SetupIntentID: intentID, Action: "install", Stage: "retire-direct",
+		ExpectedGeneration: generation,
+		Targets:            []portablesetup.IntentTarget{{Client: "codex", Units: []string{"direct-mcp"}}},
+	}
+	payload, err := json.Marshal(intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := portablesetup.IntentPath(control)
+	res := installruntime.PendingMutation{ID: intentID, Owner: "existing-installer", IntentRef: path}
+	if _, err := installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: control, Owner: "existing-installer", RuntimeRoot: runtime, ConsumerID: "existing",
+		RefreshOnly: true, ExpectedGeneration: &generation, Reservation: &res,
+		Files: []installruntime.File{{Path: path, Data: append(payload, '\n'), Mode: 0600}},
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 

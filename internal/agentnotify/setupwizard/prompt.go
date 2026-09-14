@@ -182,7 +182,9 @@ func attachCommand(req Request, out Result) Result {
 	case "completed", "cancelled", "unchanged":
 		return out
 	}
-	out.Command = RetryCommand(req)
+	if len(out.Command) == 0 {
+		out.Command = RetryCommand(req)
+	}
 	return out
 }
 

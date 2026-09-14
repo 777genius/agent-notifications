@@ -316,6 +316,9 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 				others, _ := mat.OtherLiveClients(id.InstallationID, string(agent))
 				return updateRequired(req, agent, others, out, err)
 			}
+			if conflict, handled := pendingIntentConflict(req, err, out); handled {
+				return conflict, err
+			}
 			out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: err.Error()})
 			out.Outcome, out.Reason = "incomplete", "portable_install_failed"
 			return out, err
@@ -398,6 +401,9 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 			OperationID: "wizard-remove-" + string(agent), ExternalUninstalled: true,
 		})
 		if err != nil {
+			if conflict, handled := pendingIntentConflict(req, err, out); handled {
+				return conflict, err
+			}
 			out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: err.Error()})
 			out.Outcome, out.Reason = "incomplete", "portable_remove_failed"
 			return out, err
@@ -417,6 +423,32 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 	}
 	out.Outcome = "completed"
 	return out, nil
+}
+
+func pendingIntentConflict(req Request, err error, out Result) (Result, bool) {
+	if !errors.Is(err, portablesetup.ErrIntentConflict) {
+		return out, false
+	}
+	out.Outcome, out.Reason = "conflict", "pending_intent_conflict"
+	intent, readErr := portablesetup.ReadIntent(req.ControlRoot)
+	if readErr != nil {
+		return out, true
+	}
+	retry := req
+	retry.Action = Action(intent.Action)
+	if len(intent.Targets) > 0 {
+		agents := make([]string, 0, len(intent.Targets))
+		for _, target := range intent.Targets {
+			if target.Client != "" {
+				agents = append(agents, target.Client)
+			}
+		}
+		if len(agents) > 0 {
+			retry.Agents = agents
+		}
+	}
+	out.Command = RetryCommand(retry)
+	return out, true
 }
 
 func updateRequired(req Request, adding portable.Integration, others []string, out Result, err error) (Result, error) {

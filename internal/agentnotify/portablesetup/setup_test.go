@@ -439,6 +439,29 @@ func TestHandoffReservationIsPublishedBeforeDirectRemove(t *testing.T) {
 	}
 }
 
+func TestPendingInstallReservationConflictsWithRemove(t *testing.T) {
+	b, ledger := bindingFixture(t)
+	config, cmd, ledger := ownedMCP(t, b, ledger)
+	svc := Service{Remover: &fakeUAP{}}
+	req := Request{Binding: b, ExpectedGeneration: ledger.Generation, Discovery: Discovery{ConfigPath: config, Command: cmd}}
+	published, res, err := svc.publishHandoffReservation(testCtx(t), req, ledger.Generation)
+	if err != nil || res == nil || published.PendingMutation == nil {
+		t.Fatalf("publish: %+v %v", res, err)
+	}
+	if err := svc.Remove(testCtx(t), Request{
+		Binding: b, ExpectedGeneration: published.Generation, Discovery: req.Discovery,
+	}); !errors.Is(err, ErrIntentConflict) {
+		t.Fatalf("remove during install reservation: %v", err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
+	if err != nil || snap.Ledger.PendingMutation == nil {
+		t.Fatalf("conflict consumed install reservation: %+v %v", snap.Ledger.PendingMutation, err)
+	}
+	if _, err := os.Stat(config); err != nil {
+		t.Fatal("conflict retired direct MCP")
+	}
+}
+
 func TestHandoffNoopDoesNotCreateIntent(t *testing.T) {
 	b, ledger := bindingFixture(t)
 	uap := &fakeUAP{}

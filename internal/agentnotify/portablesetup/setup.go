@@ -18,6 +18,7 @@ import (
 var (
 	ErrPreflight      = errors.New("portable setup refused")
 	ErrUpdateRequired = errors.New("existing clients require explicit update before add")
+	ErrIntentConflict = errors.New("pending setup intent conflict")
 )
 
 // Envelope is the root MCP command projected for one explicit integration.
@@ -144,7 +145,7 @@ func (s Service) Install(ctx context.Context, req Request) (portable.Binding, er
 	return req.Binding, nil
 }
 
-func (s Service) matchingReservation(req Request) (*installruntime.PendingMutation, error) {
+func (s Service) matchingReservation(req Request, action string) (*installruntime.PendingMutation, error) {
 	if req.Reservation != nil {
 		return req.Reservation, nil
 	}
@@ -159,6 +160,13 @@ func (s Service) matchingReservation(req Request) (*installruntime.PendingMutati
 	if pending.Owner != req.Binding.Owner {
 		return nil, fmt.Errorf("%w: pending reservation owned by %s", ErrPreflight, pending.Owner)
 	}
+	intent, err := ReadIntent(req.Binding.ControlRoot)
+	if err != nil {
+		return nil, fmt.Errorf("%w: pending handoff intent missing: %v", ErrPreflight, err)
+	}
+	if intent.SetupIntentID != pending.ID || intent.Action != action {
+		return nil, fmt.Errorf("%w: pending %s", ErrIntentConflict, intent.Action)
+	}
 	cp := *pending
 	return &cp, nil
 }
@@ -170,7 +178,7 @@ func (s Service) CommitBinding(ctx context.Context, req Request) (portable.Bindi
 	if err := s.preflight(req.Binding); err != nil {
 		return portable.Binding{}, err
 	}
-	res, err := s.matchingReservation(req)
+	res, err := s.matchingReservation(req, "install")
 	if err != nil {
 		return portable.Binding{}, err
 	}
@@ -212,7 +220,7 @@ func (s Service) RevokeBinding(ctx context.Context, req Request) error {
 	if err := s.preflight(req.Binding); err != nil {
 		return err
 	}
-	res, err := s.matchingReservation(req)
+	res, err := s.matchingReservation(req, "uninstall")
 	if err != nil {
 		return err
 	}
@@ -250,7 +258,7 @@ func (s Service) Remove(ctx context.Context, req Request) error {
 		}
 		req.ExpectedGeneration = snap.Ledger.Generation
 	}
-	res, err := s.matchingReservation(req)
+	res, err := s.matchingReservation(req, "uninstall")
 	if err != nil {
 		return err
 	}
@@ -312,7 +320,7 @@ func (s Service) HandoffReverse(ctx context.Context, req Request) (uint64, error
 	if err != nil {
 		return 0, err
 	}
-	res, err := s.matchingReservation(req)
+	res, err := s.matchingReservation(req, "uninstall")
 	if err != nil {
 		return 0, err
 	}
@@ -361,6 +369,13 @@ func (s Service) handoffForward(ctx context.Context, req Request) (uint64, *inst
 		if pending == nil {
 			return req.ExpectedGeneration, nil, nil
 		}
+		intent, err := ReadIntent(req.Binding.ControlRoot)
+		if err != nil {
+			return 0, nil, fmt.Errorf("%w: pending handoff intent missing: %v", ErrPreflight, err)
+		}
+		if intent.SetupIntentID != pending.ID || intent.Action != "install" {
+			return 0, nil, fmt.Errorf("%w: pending %s", ErrIntentConflict, intent.Action)
+		}
 		return snap.Ledger.Generation, pending, nil
 	}
 	var res *installruntime.PendingMutation
@@ -368,6 +383,13 @@ func (s Service) handoffForward(ctx context.Context, req Request) (uint64, *inst
 	if pending != nil {
 		if _, err = os.Lstat(pending.IntentRef); err != nil {
 			return 0, nil, fmt.Errorf("%w: pending handoff intent missing: %v", ErrPreflight, err)
+		}
+		intent, err := ReadIntent(req.Binding.ControlRoot)
+		if err != nil {
+			return 0, nil, fmt.Errorf("%w: pending handoff intent missing: %v", ErrPreflight, err)
+		}
+		if intent.SetupIntentID != pending.ID || intent.Action != "install" {
+			return 0, nil, fmt.Errorf("%w: pending %s", ErrIntentConflict, intent.Action)
 		}
 		res = pending
 		gen = snap.Ledger.Generation

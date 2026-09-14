@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/777genius/agent-notifications/internal/installruntime"
@@ -58,4 +59,19 @@ func marshalIntent(intent Intent) ([]byte, error) {
 
 func reservationFrom(intent Intent, controlRoot string) installruntime.PendingMutation {
 	return installruntime.PendingMutation{ID: intent.SetupIntentID, Owner: "existing-installer", IntentRef: IntentPath(controlRoot)}
+}
+
+func ReadIntent(controlRoot string) (Intent, error) {
+	var intent Intent
+	data, err := os.ReadFile(IntentPath(controlRoot))
+	if err != nil {
+		return intent, err
+	}
+	if err := json.Unmarshal(data, &intent); err != nil {
+		return intent, err
+	}
+	if intent.Version != intentVersion || intent.SetupIntentID == "" || intent.Action == "" {
+		return Intent{}, fmt.Errorf("%w: incomplete handoff intent", ErrPreflight)
+	}
+	return intent, nil
 }
