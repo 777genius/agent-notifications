@@ -24,4 +24,18 @@ func TestPlatformClockInjectedBootFile(t *testing.T) {
 	if (PlatformClock{}).Sample().Available {
 		t.Fatal("implicit filesystem root")
 	}
+	if _, _, _, ok := LinuxBootSample(""); ok {
+		t.Fatal("empty path")
+	}
+}
+
+func TestDefaultClockUsesTrustedBootID(t *testing.T) {
+	c, ok := DefaultClock().(PlatformClock)
+	if !ok || c.BootIDPath != TrustedBootIDPath {
+		t.Fatal(c, ok)
+	}
+	a, b := c.Sample(), c.Sample()
+	if !a.Available || a.Boot == "" || b.Boot != a.Boot || b.Seconds < a.Seconds {
+		t.Fatal(a, b)
+	}
 }

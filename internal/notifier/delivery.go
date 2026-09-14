@@ -57,13 +57,20 @@ type StructuredDelivery struct {
 
 var _ notification.DeliveryPort = (*StructuredDelivery)(nil)
 
-func (d *StructuredDelivery) remaining(r notification.Request) (time.Duration, error) {
-	boot, now, err := d.Clock.Now()
+func remainingBudget(clock BootClock, r notification.Request) (time.Duration, error) {
+	if clock == nil {
+		return 0, errors.New("expired")
+	}
+	boot, now, err := clock.Now()
 	seconds := r.Deadline.NotAfter - now
 	if err != nil || boot == "" || boot != r.Deadline.BootID || math.IsNaN(now) || math.IsInf(now, 0) || now < 0 || math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds <= 0 || seconds > 15 {
 		return 0, errors.New("expired")
 	}
 	return time.Duration(seconds * float64(time.Second)), nil
+}
+
+func (d *StructuredDelivery) remaining(r notification.Request) (time.Duration, error) {
+	return remainingBudget(d.Clock, r)
 }
 
 func (d *StructuredDelivery) Deliver(ctx context.Context, r notification.Request) notification.Receipt {

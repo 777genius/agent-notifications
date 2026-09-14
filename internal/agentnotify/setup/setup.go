@@ -90,7 +90,7 @@ func (o Options) normalized() (Options, error) {
 		o.GlobalConfig = filepath.Join(home, ".claude", "claude-notifications-go", "config.json")
 	}
 	if o.JournalClock == nil {
-		o.JournalClock = journal.PlatformClock{}
+		o.JournalClock = journal.DefaultClock()
 	}
 	if o.Platform == "" {
 		o.Platform = runtime.GOOS
