@@ -5,7 +5,9 @@ package journal
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -76,4 +78,62 @@ func TestWindowsInitializeRefusesExistingState(t *testing.T) {
 	if _, err := Initialize(windowsJournalContext(t), Options{Root: root, Clock: clock}); err == nil {
 		t.Fatal("reinitialize accepted")
 	}
+}
+
+func windowsAdmission(id string) Admission {
+	return Admission{Key: Key{Source: "codex/local", Session: "session", Kind: Explicit, Request: id}, Digest: sha256.Sum256([]byte("payload-" + id)), TrackingID: "tracking-" + id}
+}
+
+func windowsMustAdmit(t *testing.T, s *Store, a Admission) {
+	t.Helper()
+	got, err := s.Admit(windowsJournalContext(t), a)
+	if err != nil || !got.Fresh {
+		t.Fatal(got, err)
+	}
+}
+
+func TestWindowsRateLimitPersistsClockAcrossSyntheticReboot(t *testing.T) {
+	root := privateJournalRoot(t)
+	cur := Sample{Boot: "boot-A", Seconds: 100, Available: true}
+	clock := ClockFunc(func() Sample { return cur })
+	s, err := Initialize(windowsJournalContext(t), Options{Root: root, Clock: clock})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		windowsMustAdmit(t, s, windowsAdmission("burst-"+strconv.Itoa(i)))
+	}
+	if _, err = s.Admit(windowsJournalContext(t), windowsAdmission("full")); !errors.Is(err, ErrRate) {
+		t.Fatal(err)
+	}
+	cur = Sample{Boot: "boot-B", Seconds: 9_000_000, Available: true}
+	if _, err = s.Admit(windowsJournalContext(t), windowsAdmission("reboot")); !errors.Is(err, ErrRate) {
+		t.Fatal(err)
+	}
+	opened, err := Open(windowsJournalContext(t), Options{Root: root, Clock: clock})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cur.Seconds += 61
+	windowsMustAdmit(t, opened, windowsAdmission("recovered"))
+}
+
+func TestWindowsUnavailableClockKeepsRateLimit(t *testing.T) {
+	root := privateJournalRoot(t)
+	cur := Sample{Boot: "boot-A", Seconds: 100, Available: true}
+	clock := ClockFunc(func() Sample { return cur })
+	s, err := Initialize(windowsJournalContext(t), Options{Root: root, Clock: clock})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		windowsMustAdmit(t, s, windowsAdmission(strconv.Itoa(i)))
+	}
+	cur.Available = false
+	if _, err = s.Admit(windowsJournalContext(t), windowsAdmission("clock-missing")); !errors.Is(err, ErrRate) {
+		t.Fatal(err)
+	}
+	cur.Available = true
+	cur.Seconds += 61
+	windowsMustAdmit(t, s, windowsAdmission("after-window"))
 }
