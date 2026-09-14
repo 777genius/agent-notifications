@@ -85,6 +85,7 @@ type Result struct {
 type ClientResult struct {
 	ClientID, BindingID                                       string
 	Materialization, Activation, Authentication, Verification string
+	RequiredComponents                                        []string
 }
 
 // Assessment is a digest-bound content verdict. It is not a filesystem plan.
@@ -169,4 +170,5 @@ type ClientMetadata struct {
 	Scopes            []string
 	ExecutablePresent bool
 	ExecutablePath    string
+	Bindings          []InspectedBinding
 }

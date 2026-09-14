@@ -139,6 +139,7 @@ func (e *Engine) applyInstall(ctx context.Context, prepared *PreparedOperation) 
 					ClientID: binding.ClientID, BindingID: binding.ClientBindingID,
 					Materialization: string(binding.Materialization), Activation: string(binding.Activation),
 					Authentication: string(binding.Authentication), Verification: string(binding.Verification),
+					RequiredComponents: append([]string(nil), prepared.req.RequiredComponents...),
 				}
 			}
 		}

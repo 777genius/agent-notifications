@@ -7,17 +7,25 @@ import (
 )
 
 // Discover returns metadata of this beta's supported providers, including
-// whether a client executable is present. It does not create state, run a
+// executable presence and current bindings. It does not create state, run a
 // helper, or execute a found file.
 func (e *Engine) Discover() []ClientMetadata {
+	byClient := map[string][]InspectedBinding{}
+	if view, err := e.observe(); err == nil || len(view.Installations) > 0 {
+		for _, installation := range view.Installations {
+			for _, binding := range installation.Bindings {
+				byClient[binding.ClientID] = append(byClient[binding.ClientID], binding)
+			}
+		}
+	}
 	return []ClientMetadata{
-		e.clientMetadata("claude"),
-		e.clientMetadata("codex"),
+		e.clientMetadata("claude", byClient["claude"]),
+		e.clientMetadata("codex", byClient["codex"]),
 	}
 }
 
-func (e *Engine) clientMetadata(id string) ClientMetadata {
-	meta := ClientMetadata{ClientID: id, Scopes: []string{"user"}}
+func (e *Engine) clientMetadata(id string, bindings []InspectedBinding) ClientMetadata {
+	meta := ClientMetadata{ClientID: id, Scopes: []string{"user"}, Bindings: append([]InspectedBinding(nil), bindings...)}
 	explicit := ""
 	if e.cfg.ClientExecutables != nil {
 		explicit = e.cfg.ClientExecutables[id]
