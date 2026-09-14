@@ -1,5 +1,6 @@
 <script setup lang="ts">
 const { t } = useI18n();
+const brandLogo = `${useRuntimeConfig().app.baseURL}agent-notifications-logo.png`;
 const notificationDefinitions = [
   { key: "question", agent: "claude" },
   { key: "plan", agent: "claude" },
@@ -80,7 +81,13 @@ onUnmounted(() => {
         :key="id"
         class="notification-card"
       >
-        <AgentLogo :agent="item.agent" />
+        <img
+          class="notification-brand-logo"
+          :src="brandLogo"
+          alt="Agent Notifications"
+          width="48"
+          height="48"
+        />
         <div class="notification-copy">
           <div class="notification-title">
             <h3>{{ item.title }}</h3>

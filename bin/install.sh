@@ -1521,11 +1521,11 @@ create_claude_notifications_app() {
 
     # Check if icon exists
     if [ ! -f "$ICON_SRC" ]; then
-        echo -e "${YELLOW}⚠ Claude icon not found at ${ICON_SRC}${NC}"
+        echo -e "${YELLOW}⚠ Agent Notifications icon not found at ${ICON_SRC}${NC}"
         return 1
     fi
 
-    echo -e "${BLUE}🎨 Creating ClaudeNotifications.app (notification icon)...${NC}"
+    echo -e "${BLUE}🎨 Creating Agent Notifications icon app...${NC}"
 
     guard_install_paths "$APP_DIR" \
         "$APP_DIR/Contents/Info.plist" "$APP_DIR/Contents/MacOS/claude-notify" \
@@ -1599,7 +1599,7 @@ EXEC_EOF
     # Register with Launch Services
     /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP_DIR" 2>/dev/null || true
 
-    echo -e "${GREEN}✓${NC} ClaudeNotifications.app created (Claude icon in notifications)"
+    echo -e "${GREEN}✓${NC} Agent Notifications icon app created"
     return 0
 }
 
@@ -2149,7 +2149,7 @@ main() {
         else
             echo -e "${GREEN}✓${NC} terminal-notifier installed (click-to-focus)"
         fi
-        echo -e "${GREEN}✓${NC} Claude icon configured for notifications"
+        echo -e "${GREEN}✓${NC} Agent Notifications icon configured"
     fi
     if [ "$PLATFORM" = "linux" ]; then
         if [ "$GNOME_EXT_INSTALLED" = true ]; then

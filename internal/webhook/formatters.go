@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	discordEmbedAuthorLimit = 256
-	discordEmbedFooterLimit = 2048
+	discordEmbedAuthorLimit   = 256
+	discordEmbedFooterLimit   = 2048
+	agentNotificationsLogoURL = "https://777genius.github.io/agent-notifications/agent-notifications-logo.png"
 )
 
 // normalizeAgentSource returns the machine-readable agent identity used in
@@ -68,7 +69,7 @@ func (f *SlackFormatter) Format(ctx SendContext, statusInfo config.StatusInfo) (
 				"title":       statusInfo.Title,
 				"text":        ctx.Message,
 				"footer":      fmt.Sprintf("Session: %s | %s", ctx.SessionID, agentDisplayName(ctx.AgentSource)),
-				"footer_icon": "https://claude.ai/favicon.ico",
+				"footer_icon": agentNotificationsLogoURL,
 				"ts":          time.Now().Unix(),
 				"mrkdwn_in":   []string{"text"},
 			},
@@ -109,8 +110,9 @@ func (f *DiscordFormatter) Format(ctx SendContext, statusInfo config.StatusInfo)
 	}
 
 	return map[string]interface{}{
-		"username": agentDisplayName(ctx.AgentSource),
-		"embeds":   []map[string]interface{}{embed},
+		"username":   agentDisplayName(ctx.AgentSource),
+		"avatar_url": agentNotificationsLogoURL,
+		"embeds":     []map[string]interface{}{embed},
 	}, nil
 }
 
