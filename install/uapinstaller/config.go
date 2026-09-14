@@ -85,5 +85,9 @@ func (c Config) resolved() (Config, error) {
 }
 
 func validRoot(p string) bool {
-	return p != "" && utf8.ValidString(p) && len(p) <= 4096 && filepath.IsAbs(p) && filepath.Clean(p) == p && !strings.ContainsRune(p, 0)
+	if p == "" || !utf8.ValidString(p) || len(p) > 4096 || !filepath.IsAbs(p) || filepath.Clean(p) != p || strings.ContainsRune(p, 0) {
+		return false
+	}
+	volume := filepath.VolumeName(p)
+	return !strings.HasPrefix(volume, `\\`) && !strings.HasPrefix(volume, `//`)
 }

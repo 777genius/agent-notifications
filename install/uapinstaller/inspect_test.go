@@ -26,6 +26,43 @@ func (r *countingRunner) Run(context.Context, ports.Command) (ports.CommandResul
 	return ports.CommandResult{}, errors.New("unexpected runner call")
 }
 
+type listingRunner struct {
+	configRoot string
+}
+
+func (r listingRunner) Run(_ context.Context, _ ports.Command) (ports.CommandResult, error) {
+	root := filepath.Join(r.configRoot, "skills")
+	entries, err := os.ReadDir(root)
+	if os.IsNotExist(err) {
+		return ports.CommandResult{Stdout: []byte("[]")}, nil
+	}
+	if err != nil {
+		return ports.CommandResult{}, err
+	}
+	listed := make([]map[string]any, 0)
+	for _, entry := range entries {
+		if !entry.IsDir() || entry.Name()[0] == '.' {
+			continue
+		}
+		path := filepath.Join(root, entry.Name())
+		body, readErr := os.ReadFile(filepath.Join(path, ".claude-plugin", "plugin.json"))
+		if readErr != nil {
+			continue
+		}
+		var manifest map[string]any
+		if json.Unmarshal(body, &manifest) != nil {
+			continue
+		}
+		name, _ := manifest["name"].(string)
+		listed = append(listed, map[string]any{
+			"id": name + "@skills-dir", "version": manifest["version"], "scope": "user",
+			"enabled": true, "installPath": path,
+		})
+	}
+	body, err := json.Marshal(listed)
+	return ports.CommandResult{Stdout: body}, err
+}
+
 func TestInspectDoesNotRunHelperOrCreateState(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "missing-state")
 	runner := &countingRunner{}
