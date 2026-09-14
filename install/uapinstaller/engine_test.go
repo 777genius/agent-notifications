@@ -85,7 +85,15 @@ func TestNewRejectsRelativeStateRootAndDoesNotCreateDirs(t *testing.T) {
 	}
 }
 
+func skipWindowsLauncherExecuteBit(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("UAP managedstdio.NewSource requires Perm()&0111; Go Windows FileMode does not set execute bits on regular files")
+	}
+}
+
 func TestInstallInspectRepeatRemove(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
 	ctx := testCtx(t)
 	probe := buildProbe(t)
 	base, err := filepath.EvalSymlinks(t.TempDir())
@@ -198,6 +206,7 @@ func TestUnsupportedUpdateRejectedBeforeMutation(t *testing.T) {
 }
 
 func TestPrepareSnapshotIgnoresLaterSourceMutation(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
 	ctx := testCtx(t)
 	probe := buildProbe(t)
 	base, err := filepath.EvalSymlinks(t.TempDir())
