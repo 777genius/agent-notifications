@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -16,12 +18,14 @@ import (
 )
 
 const setupWizardHelp = `Usage: claude-notifications setup-notifications wizard [OPTIONS]
-Noninteractive master for hooks plus portable MCP/skill. It does not prompt.
+Master for hooks plus portable MCP/skill.
+TTY stdin prompts for agents and confirmation when those flags are omitted.
+--json never prompts. No TTY and no --agents/--yes is invalid, not a hang.
   --action install|uninstall|inspect
   --agents claude,codex
   --hooks true|false          Omit on install to include hooks; omit on uninstall to select all units
   --agent-notify true|false   Omit on install to include portable MCP+skill
-  --yes                       Required for mutation
+  --yes                       Required for mutation without a TTY
   --json
   --package PATH              Local standard package root (plugin.json + MCP/skills)
   --plugin-root PATH          Existing plugin bundle for Codex hooks-only setup
@@ -40,6 +44,10 @@ Update and repair are not published in this checkpoint.
 `
 
 func executeSetupWizard(ctx context.Context, args []string, out io.Writer) int {
+	return executeSetupWizardWith(ctx, args, out, os.Stdin, stdinIsCharDevice())
+}
+
+func executeSetupWizardWith(ctx context.Context, args []string, out io.Writer, in io.Reader, tty bool) int {
 	if len(args) == 1 && args[0] == "--help" {
 		_, err := io.WriteString(out, setupWizardHelp)
 		if err != nil {
@@ -63,6 +71,40 @@ func executeSetupWizard(ctx context.Context, args []string, out io.Writer) int {
 		}
 		req.ControlRoot = root
 	}
+	if req.Action == "" {
+		if !(tty && !jsonOut) {
+			if jsonOut {
+				_ = json.NewEncoder(out).Encode(setupwizard.Result{Outcome: "invalid", Reason: "invalid_arguments"})
+			} else {
+				_, _ = fmt.Fprintln(out, "invalid_arguments")
+			}
+			return 2
+		}
+		req.Action = setupwizard.ActionInstall
+	}
+	if !jsonOut && req.Action != setupwizard.ActionInspect && (len(req.Agents) == 0 || !req.Yes) && tty {
+		filled, e := setupwizard.FillInteractive(ctx, req, &setupwizard.LinePrompt{In: in, Out: out})
+		if e != nil {
+			reason, code, outcome := "prompt_canceled", 0, "cancelled"
+			if errors.Is(e, setupwizard.ErrPromptInputClosed) {
+				reason = "prompt_closed"
+			} else if errors.Is(e, setupwizard.ErrPromptUnavailable) {
+				reason, code, outcome = "prompt_unavailable", 2, "invalid"
+			} else if !errors.Is(e, setupwizard.ErrPromptCanceled) {
+				reason, code, outcome = "prompt_failed", 2, "invalid"
+			} else if strings.Contains(e.Error(), "invalid_choice") {
+				reason, code, outcome = "invalid_choice", 2, "invalid"
+			}
+			result := setupwizard.Result{Action: string(req.Action), Outcome: outcome, Reason: reason}
+			if jsonOut {
+				_ = json.NewEncoder(out).Encode(result)
+			} else {
+				_, _ = fmt.Fprintf(out, "%s; reason=%s.\n", result.Outcome, result.Reason)
+			}
+			return code
+		}
+		req = filled
+	}
 	result, err := setupwizard.Run(ctx, req)
 	if jsonOut {
 		if e := json.NewEncoder(out).Encode(result); e != nil {
@@ -72,6 +114,9 @@ func executeSetupWizard(ctx context.Context, args []string, out io.Writer) int {
 		_, _ = fmt.Fprintf(out, "%s; reason=%s; generation=%d.\n", result.Outcome, result.Reason, result.Generation)
 		for _, target := range result.Targets {
 			_, _ = fmt.Fprintf(out, "%s %s: %s %s\n", target.Client, target.Unit, target.Outcome, target.Reason)
+		}
+		if len(result.Command) > 0 {
+			_, _ = fmt.Fprintf(out, "retry: %s\n", strings.Join(quoteWizardArgs(result.Command), " "))
 		}
 	}
 	if result.ExitCode() != 0 {
@@ -156,7 +201,6 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 	case "repair":
 		req.Action = setupwizard.ActionRepair
 	case "":
-		return req, jsonOut, errors.New("invalid_arguments")
 	default:
 		return req, jsonOut, errors.New("invalid_arguments")
 	}
@@ -214,4 +258,21 @@ func parseBoolFlag(v string) (bool, error) {
 	default:
 		return false, errors.New("invalid_arguments")
 	}
+}
+
+func stdinIsCharDevice() bool {
+	info, err := os.Stdin.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
+func quoteWizardArgs(args []string) []string {
+	out := make([]string, len(args))
+	for i, arg := range args {
+		if arg == "" || strings.ContainsAny(arg, " \t\n'\"") {
+			out[i] = strconv.Quote(arg)
+			continue
+		}
+		out[i] = arg
+	}
+	return out
 }

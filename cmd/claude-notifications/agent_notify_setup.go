@@ -29,7 +29,7 @@ import (
 const agentNotifySetupHelp = `Usage: claude-notifications setup-notifications OPERATION [OPTIONS]
 Operations: configure | wizard | prepare | status | register | remove | enable | disable | permission-status | request-permission
 Configure requires --provider codex|claude|both and an explicit fresh route.
-Wizard is a separate noninteractive master: setup-notifications wizard --help
+Wizard is a separate master: setup-notifications wizard --help
   --codex-home ABS and --request-permission are configure-only choices.
   Configure resolves primary runtime, generation and canonical global internally.
   --control-root PATH       Existing managed control directory (OS config default)

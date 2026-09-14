@@ -1,5 +1,5 @@
 // Package setupwizard is the P6 application service for setup-notifications wizard.
-// It does not prompt. Missing noninteractive choices return a structured result.
+// Run does not prompt. FillInteractive is a thin TTY adapter that only fills Request.
 package setupwizard
 
 import (
@@ -52,6 +52,7 @@ type Result struct {
 	Outcome    string         `json:"outcome"`
 	Reason     string         `json:"reason,omitempty"`
 	Generation uint64         `json:"generation,omitempty"`
+	Command    []string       `json:"command,omitempty"`
 	Targets    []TargetResult `json:"targets,omitempty"`
 }
 
@@ -69,6 +70,11 @@ func (r Result) ExitCode() int {
 }
 
 func Run(ctx context.Context, req Request) (Result, error) {
+	out, err := run(ctx, req)
+	return attachCommand(req, out), err
+}
+
+func run(ctx context.Context, req Request) (Result, error) {
 	out := Result{Action: string(req.Action)}
 	if ctx == nil {
 		out.Outcome, out.Reason = "invalid", "context_required"
