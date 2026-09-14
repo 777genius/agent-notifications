@@ -406,7 +406,10 @@ func DiscoverAgents(req Request) []AgentCapability {
 	found := eng.Discover()
 	out := make([]AgentCapability, 0, len(found))
 	for _, item := range found {
-		out = append(out, AgentCapability{ID: item.ClientID, Present: item.ExecutablePresent, Path: item.ExecutablePath})
+		out = append(out, AgentCapability{
+			ID: item.ClientID, Present: item.ExecutablePresent, Path: item.ExecutablePath,
+			Bound: len(item.Bindings) > 0,
+		})
 	}
 	return out
 }

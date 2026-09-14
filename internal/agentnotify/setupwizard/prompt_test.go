@@ -189,7 +189,7 @@ func TestFillInteractiveShowsDiscoverCapabilities(t *testing.T) {
 		Action: ActionInstall,
 		DiscoverAgents: func() []AgentCapability {
 			return []AgentCapability{
-				{ID: "claude", Present: true, Path: "/bin/claude"},
+				{ID: "claude", Present: true, Path: "/bin/claude", Bound: true},
 				{ID: "codex", Present: false},
 			}
 		},
@@ -197,7 +197,7 @@ func TestFillInteractiveShowsDiscoverCapabilities(t *testing.T) {
 	if err != nil || strings.Join(got.Agents, ",") != "claude" {
 		t.Fatalf("discover picker: %+v %v", got, err)
 	}
-	if !strings.Contains(out.String(), "Claude Code (executable present)") || !strings.Contains(out.String(), "Codex (executable not found)") {
+	if !strings.Contains(out.String(), "Claude Code (executable present, installed)") || !strings.Contains(out.String(), "Codex (executable not found)") {
 		t.Fatalf("capability labels: %s", out.String())
 	}
 }

@@ -16,11 +16,13 @@ var (
 )
 
 // AgentCapability is the Claude/Codex surface shown by the TTY picker.
-// Presence comes from Engine.Discover; the renderer does not search PATH.
+// Presence and bindings come from Engine.Discover; the renderer does not
+// search PATH.
 type AgentCapability struct {
 	ID      string
 	Present bool
 	Path    string
+	Bound   bool
 }
 
 // Prompter is the thin TTY port. It only fills Request fields; Run owns rules.
@@ -257,10 +259,16 @@ func agentChoiceLabel(clients []AgentCapability, id, name string) string {
 		if client.ID != id {
 			continue
 		}
-		if client.Present {
+		switch {
+		case client.Present && client.Bound:
+			return name + " (executable present, installed)"
+		case client.Present:
 			return name + " (executable present)"
+		case client.Bound:
+			return name + " (executable not found, installed)"
+		default:
+			return name + " (executable not found)"
 		}
-		return name + " (executable not found)"
 	}
 	return name
 }

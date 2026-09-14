@@ -1487,7 +1487,7 @@ func TestDiscoverAgentsReportsPresenceWithoutExecuting(t *testing.T) {
 	if len(got) != 2 || got[0].ID != "claude" || !got[0].Present || got[0].Path != path {
 		t.Fatalf("claude: %+v", got)
 	}
-	if got[1].Present || got[1].Path != "" {
-		t.Fatalf("codex should be absent: %+v", got[1])
+	if got[1].Present || got[1].Path != "" || got[0].Bound || got[1].Bound {
+		t.Fatalf("codex should be absent: %+v", got)
 	}
 }
