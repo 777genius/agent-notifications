@@ -2,6 +2,7 @@ package uapinstaller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
@@ -90,7 +91,13 @@ func (e *Engine) applyInstall(ctx context.Context, prepared *PreparedOperation) 
 		InstallationID: prepared.req.InstallationID, OperationID: prepared.req.OperationID,
 		BackendExecutable: prepared.req.ClientExecutable,
 	})
+	err = wrapLifecycleError(err)
 	result := Result{Operation: OpInstall, InstallationID: added.InstallationID, Binding: prepared.facts}
+	if errors.Is(err, ErrUpdateRequired) {
+		result.Outcome = OutcomeConflict
+		result.Reason = "update_required"
+		return result, err
+	}
 	if added.NoChange {
 		result.Outcome = OutcomeUnchanged
 		result.NoChange = true

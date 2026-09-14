@@ -796,6 +796,111 @@ func TestCloseDuringApplyReturnsBusyWithoutReleasingSnapshot(t *testing.T) {
 	}
 }
 
+func TestInstallDifferentDigestRejectedBeforeMutation(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	foreign := filepath.Join(config, "foreign.txt")
+	if err := os.WriteFile(foreign, []byte("keep\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-000000000054",
+		OperationID: "first-revision", RequiredComponents: []string{"mcp", "skills"},
+	}
+	prepared, err := eng.Prepare(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, prepared, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = prepared.Close()
+	other := filepath.Join(base, "other")
+	writePackage(t, other, probe)
+	if err := os.WriteFile(filepath.Join(other, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"sample-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	req.PackageRoot = other
+	req.OperationID = "other-revision"
+	_, err = eng.Prepare(ctx, req)
+	if !errors.Is(err, ErrUpdateRequired) {
+		t.Fatalf("different digest prepare: %v", err)
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 {
+		t.Fatalf("inspect after rejected revision: %+v %v", view, err)
+	}
+	got, err := os.ReadFile(foreign)
+	if err != nil || string(got) != "keep\n" {
+		t.Fatalf("foreign entry: %s %v", got, err)
+	}
+}
+
+func TestProjectionSeamReplacesDeclaredServerArgs(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{
+		StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe,
+		ServerName: "sample-notify",
+		ProjectArgs: func(BindingFacts) ([]string, error) {
+			return []string{"portable-launch", "--locator", "bound"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-000000000055",
+		OperationID: "projection-seam", RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = prepared.Close() }()
+	if _, err := eng.Apply(ctx, prepared, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 1 {
+		t.Fatalf("inspect: %+v %v", view, err)
+	}
+	body, err := os.ReadFile(filepath.Join(view.Installations[0].Bindings[0].TargetPath, "mcp.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "portable-launch") || !strings.Contains(string(body), "bound") {
+		t.Fatalf("projection args missing: %s", body)
+	}
+}
+
 func names(entries []os.DirEntry) []string {
 	out := make([]string, 0, len(entries))
 	for _, entry := range entries {
