@@ -417,14 +417,25 @@ func promoteNative(change *NativeChange) error {
 }
 
 // NativeAlias retains every pre-existing concrete bundle path. Hook discovery
-// uses a stable ClaudeNotifier.app name that is retargeted at the active
-// published generation. Retargeting that alias does not swap the queued
-// callback inode.
+// uses the stable ClaudeNotifier.app and terminal-notifier.app names, retargeted
+// at the active published generation. Retargeting those aliases does not swap
+// the queued callback inode.
 func NativeAlias(change *NativeChange, bin string) ([]File, error) {
 	if change == nil {
 		return nil, nil
 	}
-	path := filepath.Join(bin, "ClaudeNotifier.app")
+	var files []File
+	for _, name := range []string{"ClaudeNotifier.app", "terminal-notifier.app"} {
+		next, err := nativeHookAlias(change, filepath.Join(bin, name))
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, next...)
+	}
+	return files, nil
+}
+
+func nativeHookAlias(change *NativeChange, path string) ([]File, error) {
 	info, err := os.Lstat(path)
 	if err == nil && info.IsDir() {
 		return nil, nil

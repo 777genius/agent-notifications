@@ -75,12 +75,10 @@ func TestNativeAliasRetargetsStableHookName(t *testing.T) {
 		t.Fatal(err)
 	}
 	aliases, err := NativeAlias(first, r.RuntimeRoot)
-	if err != nil || len(aliases) != 1 {
+	if err != nil {
 		t.Fatalf("alias: %v %+v", err, aliases)
 	}
-	if filepath.Base(aliases[0].Path) != "ClaudeNotifier.app" || aliases[0].Link != first.After.Path {
-		t.Fatalf("stable alias: %+v", aliases[0])
-	}
+	requireHookAliases(t, aliases, first.After.Path)
 	r.Native = first
 	r.Files = aliases
 	if _, err := Commit(ctx, r); err != nil {
@@ -94,25 +92,86 @@ func TestNativeAliasRetargetsStableHookName(t *testing.T) {
 		t.Fatal("update reused callback identity")
 	}
 	aliases, err = NativeAlias(second, r.RuntimeRoot)
-	if err != nil || len(aliases) != 1 {
+	if err != nil {
 		t.Fatalf("retarget: %v %+v", err, aliases)
 	}
-	if aliases[0].Link != second.After.Path || filepath.Base(aliases[0].Path) != "ClaudeNotifier.app" {
-		t.Fatalf("retargeted alias: %+v", aliases[0])
-	}
+	requireHookAliases(t, aliases, second.After.Path)
 	r.Native = second
 	r.Files = aliases
 	if _, err := Commit(ctx, r); err != nil {
 		t.Fatal(err)
 	}
-	got, err := os.Readlink(filepath.Join(r.RuntimeRoot, "ClaudeNotifier.app"))
-	if err != nil || got != second.After.Path {
-		t.Fatalf("hook alias %s %v", got, err)
-	}
+	requirePublishedHookAliases(t, r.RuntimeRoot, second.After.Path)
 	if _, err := os.Stat(first.After.Path); err != nil {
 		t.Fatal("generation A disappeared when alias retargeted")
 	}
 }
+
+func TestNativeAliasPreservesConcreteLegacyBundle(t *testing.T) {
+	ctx, r := request(t)
+	if err := os.MkdirAll(r.RuntimeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(r.RuntimeRoot, "terminal-notifier.app", "Contents", "MacOS", "terminal-notifier")
+	if err := os.MkdirAll(filepath.Dir(legacy), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, []byte("old helper"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	change, err := StageNative(ctx, r.ControlRoot, nativeFixture(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliases, err := NativeAlias(change, r.RuntimeRoot)
+	if err != nil || len(aliases) != 1 || filepath.Base(aliases[0].Path) != "ClaudeNotifier.app" || aliases[0].Link != change.After.Path {
+		t.Fatalf("expected only the free conventional name: %v %+v", err, aliases)
+	}
+	r.Native = change
+	r.Files = aliases
+	if _, err := Commit(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(legacy)
+	if err != nil || string(got) != "old helper" {
+		t.Fatal("concrete legacy helper changed")
+	}
+	published, err := os.Readlink(filepath.Join(r.RuntimeRoot, "ClaudeNotifier.app"))
+	if err != nil || published != change.After.Path {
+		t.Fatalf("modern alias %s %v", published, err)
+	}
+}
+
+func hookAliasNames() []string {
+	return []string{"ClaudeNotifier.app", "terminal-notifier.app"}
+}
+
+func requireHookAliases(t *testing.T, aliases []File, target string) {
+	t.Helper()
+	got := map[string]string{}
+	for _, alias := range aliases {
+		got[filepath.Base(alias.Path)] = alias.Link
+	}
+	for _, name := range hookAliasNames() {
+		if got[name] != target {
+			t.Fatalf("stable alias %s: got %q want %s from %+v", name, got[name], target, aliases)
+		}
+	}
+	if len(got) != len(hookAliasNames()) {
+		t.Fatalf("alias: %+v", aliases)
+	}
+}
+
+func requirePublishedHookAliases(t *testing.T, bin, target string) {
+	t.Helper()
+	for _, name := range hookAliasNames() {
+		got, err := os.Readlink(filepath.Join(bin, name))
+		if err != nil || got != target {
+			t.Fatalf("hook alias %s -> %s want %s %v", name, got, target, err)
+		}
+	}
+}
+
 func TestNativeRetentionAndExplicitPurge(t *testing.T) {
 	ctx, r := request(t)
 	change, err := StageNative(ctx, r.ControlRoot, nativeFixture(t))
