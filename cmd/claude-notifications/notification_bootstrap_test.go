@@ -33,7 +33,7 @@ func TestNotificationBootstrapOffline(t *testing.T) {
 		t.Fatal("install_codex must only pass --skip-agent-notify when the published CLI advertises it")
 	}
 	prefix := strings.TrimSuffix(strings.TrimSpace(string(source)), `main "$@"`)
-	supported := runtime.GOOS == "darwin" || runtime.GOOS == "windows"
+	supported := agentNotifySetupSupported()
 	for _, test := range []struct {
 		name, args           string
 		installFail, wantErr bool
@@ -201,7 +201,7 @@ func TestNotificationInitOfflineBranch(t *testing.T) {
 	if body == "" {
 		t.Fatal("missing init configure script")
 	}
-	supported := runtime.GOOS == "darwin" || runtime.GOOS == "windows"
+	supported := agentNotifySetupSupported()
 	for _, test := range []struct {
 		name                      string
 		args                      []string
