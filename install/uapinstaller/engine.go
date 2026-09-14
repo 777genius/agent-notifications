@@ -21,6 +21,9 @@ import (
 type Engine struct {
 	cfg   Config
 	store statev2.Store
+	// persistObservations enables the §5.4 PersistAuthoritativeObservations
+	// seam. Prepare still uses DryRun and does not persist.
+	persistObservations bool
 }
 
 // New validates Config and copies it. It does not create directories, open a

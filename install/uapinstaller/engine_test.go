@@ -141,8 +141,9 @@ func TestInstallInspectRepeatRemove(t *testing.T) {
 	if _, err := os.ReadFile(foreign); err != nil {
 		t.Fatal("prepare mutated foreign client file")
 	}
-	if _, err := eng.Apply(ctx, prepared, Decision{}); err == nil {
-		t.Fatal("unconfirmed apply accepted")
+	cancelled, err := eng.Apply(ctx, prepared, Decision{})
+	if !errors.Is(err, ErrCancelled) || cancelled.Outcome != OutcomeCancelled || cancelled.Reason != "host cancelled" {
+		t.Fatalf("cancelled apply: %+v %v", cancelled, err)
 	}
 	if _, err := os.Lstat(eng.cfg.StateFile); !os.IsNotExist(err) {
 		t.Fatal("cancelled apply wrote state")
@@ -204,6 +205,45 @@ func TestInstallInspectRepeatRemove(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestPrepareDoesNotPersistWhenObservationSeamEnabled(t *testing.T) {
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "client config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(base, "uap")
+	eng, err := New(Config{StateRoot: root, HelperExecutable: probe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng.persistObservations = true
+	prepared, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-000000000061",
+		OperationID: "observe-prepare", RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = prepared.Close() }()
+	if _, err := os.Lstat(eng.cfg.StateFile); !os.IsNotExist(err) {
+		t.Fatal("prepare persisted authoritative observations")
+	}
+	if _, err := os.Lstat(eng.cfg.LockFile); !os.IsNotExist(err) {
+		t.Fatal("prepare acquired mutation lock")
+	}
+	if _, err := os.Lstat(eng.cfg.OperationsDir); !os.IsNotExist(err) {
+		t.Fatal("prepare created operations journal dir")
 	}
 }
 
