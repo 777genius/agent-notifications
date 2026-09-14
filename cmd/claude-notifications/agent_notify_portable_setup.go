@@ -39,6 +39,7 @@ Required:
 Optional:
   --mcp-config PATH         Owned global MCP: retire before install; restore after remove only once the locator is gone
   --operation-id ID         Explicit UAP operation identity
+  --external-uninstalled    Codex native plugin already removed or never activated
 `
 
 func agentPortableSetupMain(command string, args []string) int {
@@ -64,6 +65,7 @@ func agentPortableSetupMain(command string, args []string) int {
 	helper := flags.String("helper", "", "")
 	mcp := flags.String("mcp-config", "", "")
 	operation := flags.String("operation-id", "", "")
+	externalUninstalled := flags.Bool("external-uninstalled", false, "")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -116,6 +118,7 @@ func agentPortableSetupMain(command string, args []string) int {
 		ClientConfigRoot: *clientConfig, ClientExecutable: *clientExec,
 		Discovery:   portablesetup.Discovery{ConfigPath: *mcp, Command: filepath.Join(*runtimeRoot, *primary)},
 		OperationID: *operation, HelperExecutable: helperPath,
+		ExternalUninstalled: *externalUninstalled,
 	}
 	if req.OperationID == "" {
 		req.OperationID = command + "-" + string(kind)

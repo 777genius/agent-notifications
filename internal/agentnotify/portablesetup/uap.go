@@ -45,6 +45,10 @@ type MaterializeRequest struct {
 	OperationID         string
 	HelperExecutable    string
 	ExternalUninstalled bool
+	// HoldOnly publishes the uninstall reservation and returns without locator
+	// revoke or UAP mutation. Wizard uses it to keep a Codex removal pending
+	// until the host attests ExternalUninstalled.
+	HoldOnly bool
 }
 
 type Materializer struct {
@@ -434,6 +438,9 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 		res = created
 	}
 	kernelReq.Reservation = res
+	if req.HoldOnly {
+		return fmt.Errorf("%w: %w", ErrPreflight, ErrExternalUninstall)
+	}
 	if err := m.Kernel.RevokeBinding(ctx, kernelReq); err != nil {
 		return err
 	}

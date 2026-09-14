@@ -244,6 +244,9 @@ func RetryCommand(req Request) []string {
 	if req.Action != ActionInspect {
 		cmd = append(cmd, "--yes")
 	}
+	if req.ExternalUninstalled {
+		cmd = append(cmd, "--external-uninstalled")
+	}
 	return cmd
 }
 

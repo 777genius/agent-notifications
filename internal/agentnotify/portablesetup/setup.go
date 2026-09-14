@@ -16,9 +16,10 @@ import (
 )
 
 var (
-	ErrPreflight      = errors.New("portable setup refused")
-	ErrUpdateRequired = errors.New("existing clients require explicit update before add")
-	ErrIntentConflict = errors.New("pending setup intent conflict")
+	ErrPreflight         = errors.New("portable setup refused")
+	ErrUpdateRequired    = errors.New("existing clients require explicit update before add")
+	ErrIntentConflict    = errors.New("pending setup intent conflict")
+	ErrExternalUninstall = errors.New("external uninstall required")
 )
 
 // Envelope is the root MCP command projected for one explicit integration.

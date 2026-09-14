@@ -48,6 +48,9 @@ type Request struct {
 	MCPConfig                                         map[string]string
 	ClaudeHooks, CodexHooks                           *bool
 	ClaudeAgentNotify, CodexAgentNotify               *bool
+	// ExternalUninstalled is host attestation that Codex already removed the
+	// native plugin, or never activated it. --yes does not set this.
+	ExternalUninstalled bool
 	// ClaudeRunner overrides Claude activation probing. Production leaves it
 	// nil so the OS process runner is used. Isolated tests inject a listing
 	// fixture; the field is never parsed from CLI flags.
@@ -586,15 +589,29 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 			out.Outcome, out.Reason = "incomplete", "client_executable_required"
 			return out, ErrRefused
 		}
-		err := mat.Remove(ctx, portablesetup.MaterializeRequest{
+		remove := portablesetup.MaterializeRequest{
 			Identity: id, Integration: agent, ExpectedGeneration: generation,
 			ClientConfigRoot: configPath, ClientExecutable: executable,
 			Discovery:   discovery(req, agent, runtimeRoot, snap),
-			OperationID: "wizard-remove-" + string(agent), ExternalUninstalled: true,
-		})
+			OperationID: "wizard-remove-" + string(agent), ExternalUninstalled: req.ExternalUninstalled,
+			HoldOnly: agent == portable.Codex && !req.ExternalUninstalled,
+		}
+		err := mat.Remove(ctx, remove)
 		if err != nil {
 			if conflict, handled := pendingIntentConflict(req, err, out); handled {
 				return conflict, err
+			}
+			if errors.Is(err, portablesetup.ErrExternalUninstall) {
+				retry := req
+				retry.ExternalUninstalled = true
+				out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: "external_uninstall_required"})
+				out.Outcome, out.Reason = "incomplete", "external_uninstall_required"
+				out.Command = RetryCommand(retry)
+				out.NextActions = []NextAction{{
+					Kind: "external-uninstall", Agents: []string{string(agent)},
+					Command: RetryCommand(retry), Reason: "attest_codex_plugin_removed",
+				}}
+				return out, err
 			}
 			out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: err.Error()})
 			out.Outcome, out.Reason = "incomplete", "portable_remove_failed"

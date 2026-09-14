@@ -159,6 +159,7 @@ func TestWizardInstallInspectUninstall(t *testing.T) {
 	}
 	req.Action = ActionUninstall
 	req.Yes = true
+	req.ExternalUninstalled = true
 	removed, err := Run(ctx, req)
 	if err != nil || removed.Outcome != "completed" {
 		t.Fatalf("uninstall: %+v %v", removed, err)
@@ -581,6 +582,7 @@ func TestWizardReinstallRetainsInstallation(t *testing.T) {
 	statePath := filepath.Join(filepath.Dir(control), "uap", "state", "state-v2.json")
 	firstID := installationIDFromState(t, statePath)
 	req.Action = ActionUninstall
+	req.ExternalUninstalled = true
 	removed, err := Run(ctx, req)
 	if err != nil || removed.Outcome != "completed" {
 		t.Fatalf("uninstall: %+v %v", removed, err)
@@ -858,6 +860,63 @@ func TestWizardResumeRestoresOmittedUninstallFromPendingIntent(t *testing.T) {
 	}
 }
 
+func TestWizardCodexUninstallDoesNotInventExternalAttestation(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	req.Action = ActionUninstall
+	got, err := Run(ctx, req)
+	if err == nil || got.Outcome != "incomplete" || got.Reason != "external_uninstall_required" {
+		t.Fatalf("yes invented attestation: %+v %v", got, err)
+	}
+	joined := strings.Join(got.Command, " ")
+	if !strings.Contains(joined, "--external-uninstalled") {
+		t.Fatalf("retry omitted attestation flag: %v", got.Command)
+	}
+	req.Action = ActionInspect
+	req.Yes = false
+	view, err := Run(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, target := range view.Targets {
+		if target.Unit == "agent-notify" && target.Outcome == "installed" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("refused uninstall removed portable binding: %+v", view.Targets)
+	}
+	req.Action = ActionUninstall
+	req.Yes = true
+	req.ExternalUninstalled = true
+	removed, err := Run(ctx, req)
+	if err != nil || removed.Outcome != "completed" {
+		t.Fatalf("attested uninstall: %+v %v", removed, err)
+	}
+}
+
 func TestWizardUninstallOmittedUnitsRemovesManagedWithoutPackage(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, _, _ := managedRuntime(t)
@@ -886,6 +945,7 @@ func TestWizardUninstallOmittedUnitsRemovesManagedWithoutPackage(t *testing.T) {
 	req.Hooks = nil
 	req.AgentNotify = nil
 	req.PackageRoot = ""
+	req.ExternalUninstalled = true
 	req.PackageFetcher = func(context.Context, string) ([]byte, error) {
 		t.Fatal("uninstall fetched a package")
 		return nil, nil

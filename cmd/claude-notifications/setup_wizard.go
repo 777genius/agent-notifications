@@ -34,6 +34,7 @@ installation is offered inspect, add/reinstall, or uninstall.
   --claude-agent-notify true|false
   --codex-agent-notify true|false
   --yes                       Required for mutation without a TTY unless a matching pending intent exists
+  --external-uninstalled      Codex native plugin already removed or never activated; --yes does not set this
   --json
   --package PATH              Local standard package root or same-release zip
   --plugin-root PATH          Existing plugin bundle for Codex hooks-only setup
@@ -183,6 +184,13 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 				return req, jsonOut, errors.New("invalid_arguments")
 			}
 			req.Yes = true
+			continue
+		}
+		if token == "--external-uninstalled" {
+			if req.ExternalUninstalled {
+				return req, jsonOut, errors.New("invalid_arguments")
+			}
+			req.ExternalUninstalled = true
 			continue
 		}
 		if token == "--json" {
