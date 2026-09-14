@@ -40,12 +40,26 @@ func skillPathsValid(r Request, source, destination string) bool {
 		!within(r.RuntimeRoot, destination) && !within(r.ControlRoot, destination)
 }
 
+// recordedSkillIdentity keeps POSIX 0600 in consumer state. Windows fingerprints
+// map that private file through IdentityMode, so live CAS/Inspect compare the
+// host-retained mode without rewriting the stored record.
+func skillIdentitiesEqual(got, want installruntime.Identity) bool {
+	if got.Exists != want.Exists || got.SHA256 != want.SHA256 || got.Link != want.Link {
+		return false
+	}
+	if !got.Exists || got.Link != "" {
+		return true
+	}
+	return installruntime.IdentityMode(got.Mode) == installruntime.IdentityMode(want.Mode)
+}
+
 // Called twice: read-only preflight and under the existing kernel locks. External
 // skills are config mutations, never generic ledger assets. Exact ownership is
 // retained in the consumer state, including across final-consumer cleanup.
 func projectSkill(r Request, l installruntime.Ledger, old *skillOwnership, inspect bool) ([]installruntime.File, *skillOwnership, []string, error) {
 	var files []installruntime.File
 	var paths []string
+	var liveOld installruntime.Identity
 	if old != nil {
 		if !skillPathsValid(r, old.SourcePath, old.DestinationPath) || !old.Identity.Exists || old.Identity.Mode != 0600 || old.Identity.Link != "" {
 			return nil, nil, nil, ErrConflict
@@ -57,9 +71,10 @@ func projectSkill(r Request, l installruntime.Ledger, old *skillOwnership, inspe
 		if e != nil {
 			return nil, nil, nil, e
 		}
-		if got != old.Identity {
+		if !skillIdentitiesEqual(got, old.Identity) {
 			return nil, nil, nil, ErrConflict
 		}
+		liveOld = got
 		paths = append(paths, old.DestinationPath)
 	}
 	selected := r.SkillProjection
@@ -81,7 +96,7 @@ func projectSkill(r Request, l installruntime.Ledger, old *skillOwnership, inspe
 			return nil, nil, nil, ErrConflict
 		}
 		if old != nil {
-			files = append(files, installruntime.File{Path: old.DestinationPath, Before: old.Identity, Remove: true})
+			files = append(files, installruntime.File{Path: old.DestinationPath, Before: liveOld, Remove: true})
 		}
 		return files, nil, paths, nil
 	}
@@ -117,15 +132,15 @@ func projectSkill(r Request, l installruntime.Ledger, old *skillOwnership, inspe
 		}
 		paths = append(paths, selected.DestinationPath)
 		if old != nil {
-			files = append(files, installruntime.File{Path: old.DestinationPath, Before: old.Identity, Remove: true})
+			files = append(files, installruntime.File{Path: old.DestinationPath, Before: liveOld, Remove: true})
 		}
-	} else if before != old.Identity {
+	} else if !skillIdentitiesEqual(before, old.Identity) {
 		return nil, nil, nil, ErrConflict
 	}
 	hash := sha256.Sum256(source)
 	identity := installruntime.Identity{Exists: true, SHA256: hex.EncodeToString(hash[:]), Mode: 0600}
 	next := &skillOwnership{selected.SourcePath, selected.DestinationPath, identity}
-	if before != identity {
+	if !skillIdentitiesEqual(before, identity) {
 		files = append(files, installruntime.File{Path: selected.DestinationPath, Before: before, Data: source, Mode: 0600})
 	}
 	return files, next, paths, nil
