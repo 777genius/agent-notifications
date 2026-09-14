@@ -218,7 +218,7 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 	if err != nil {
 		return portable.Binding{}, err
 	}
-	if err := eng.Recover(ctx); err != nil {
+	if _, err := eng.RecoverCurrent(ctx); err != nil {
 		return portable.Binding{}, err
 	}
 	gen, res, err := m.Kernel.handoffForward(ctx, Request{
@@ -302,7 +302,7 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 	if err != nil {
 		return err
 	}
-	if err := eng.Recover(ctx); err != nil {
+	if _, err := eng.RecoverCurrent(ctx); err != nil {
 		return err
 	}
 	if err := m.Kernel.RevokeBinding(ctx, Request{Binding: pb, ExpectedGeneration: req.ExpectedGeneration}); err != nil {

@@ -5,4 +5,6 @@
 // This module path is a Notifications-hosted beta until that package can be
 // published from the UAP repository. Callers must not import raw Store/Kernel
 // types through this package; composition stays inside New.
+// Inspect reports pending journals and unfinished state receipts without
+// recovering them. Recover takes that observation and refuses a changed scope.
 package uapinstaller

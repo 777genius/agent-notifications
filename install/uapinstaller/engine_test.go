@@ -325,7 +325,11 @@ func TestRecoverEmptyRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Recover(testCtx(t)); err != nil {
+	if _, err := eng.RecoverCurrent(testCtx(t)); err != nil {
 		t.Fatal(err)
+	}
+	view, err := eng.Inspect(testCtx(t))
+	if err != nil || view.Recovery.Required || view.StateRoot != root {
+		t.Fatalf("empty inspect: %+v %v", view, err)
 	}
 }
