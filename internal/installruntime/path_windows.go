@@ -3,6 +3,7 @@ package installruntime
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -452,4 +453,78 @@ func removePhysicalDirectory(path string) error {
 		return nil
 	}
 	return err
+}
+
+// WriteConfinedExclusive creates name under dir with FILE_CREATE. An existing
+// name returns os.ErrExist. The new file gets a private DACL and is flushed
+// before the non-replacing rename.
+func WriteConfinedExclusive(dir, name string, data []byte) error {
+	if len(data) == 0 {
+		return fmt.Errorf("managed write requires bytes")
+	}
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `\/:`) {
+		return fmt.Errorf("invalid relative Windows component")
+	}
+	handles, _, err := windowsParents(filepath.Join(dir, name), false)
+	defer closeWindowsParents(handles)
+	if err != nil {
+		return err
+	}
+	parent := handles[len(handles)-1]
+	var random [16]byte
+	if _, err = rand.Read(random[:]); err != nil {
+		return err
+	}
+	tmp := ".portable-" + hex.EncodeToString(random[:])
+	handle, err := windowsOpenAt(parent, tmp, windows.GENERIC_READ|windows.GENERIC_WRITE|windows.DELETE|windows.WRITE_DAC|windows.WRITE_OWNER|windows.READ_CONTROL, windows.FILE_CREATE, windows.FILE_NON_DIRECTORY_FILE)
+	if err != nil {
+		return err
+	}
+	f := os.NewFile(uintptr(handle), tmp)
+	published := false
+	defer func() {
+		if !published {
+			_ = windowsDeleteHandle(handle)
+		}
+		_ = f.Close()
+	}()
+	if err = restrictPrivateWindowsHandle(handle); err != nil {
+		return err
+	}
+	if _, err = f.Write(data); err != nil {
+		return err
+	}
+	if err = f.Sync(); err != nil {
+		return err
+	}
+	err = windowsRenameHandle(handle, parent, name, false)
+	if err != nil {
+		if errors.Is(err, windows.ERROR_ALREADY_EXISTS) || errors.Is(err, os.ErrExist) {
+			return os.ErrExist
+		}
+		return err
+	}
+	published = true
+	return nil
+}
+
+// RemoveConfinedName deletes a regular non-reparse child. Missing names succeed.
+func RemoveConfinedName(dir, name string) error {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `\/:`) {
+		return fmt.Errorf("invalid relative Windows component")
+	}
+	handles, _, err := windowsParents(filepath.Join(dir, name), false)
+	defer closeWindowsParents(handles)
+	if err != nil {
+		return err
+	}
+	f, err := windowsRegularAt(handles[len(handles)-1], name, true)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return windowsDeleteHandle(windows.Handle(f.Fd()))
 }

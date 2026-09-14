@@ -13,9 +13,13 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// setupDirAccess walks ancestors with list/traverse only. The leaf handle is
-// later passed to os.File.Sync, which on Windows is FlushFileBuffers and
-// requires GENERIC_WRITE. Unix fsync works on O_RDONLY directory descriptors.
+// syncOpenedDir is a no-op. FlushFileBuffers does not support directory
+// handles; file contents are already flushed before rename. Same contract as
+// installruntime.syncDir.
+func syncOpenedDir(*os.File) error { return nil }
+
+// setupDirAccess walks ancestors with list/traverse only. The leaf also
+// requests GENERIC_WRITE so FILE_ADD_FILE works on the pinned directory handle.
 func setupDirAccess(leaf bool) uint32 {
 	access := uint32(windows.FILE_LIST_DIRECTORY | windows.FILE_READ_ATTRIBUTES | windows.FILE_TRAVERSE | windows.READ_CONTROL)
 	if leaf {
@@ -104,7 +108,7 @@ func mkdir(parent *os.File, name string) (*os.File, error) {
 		return nil, err
 	}
 	windows.CloseHandle(h)
-	if err = parent.Sync(); err != nil {
+	if err = syncOpenedDir(parent); err != nil {
 		return nil, err
 	}
 	return openChild(parent, name)
@@ -159,7 +163,7 @@ func createLock(dir *os.File) error {
 	if err != nil {
 		return err
 	}
-	return dir.Sync()
+	return syncOpenedDir(dir)
 }
 
 func checkLock(dir *os.File) error {
