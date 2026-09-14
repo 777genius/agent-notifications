@@ -2,24 +2,14 @@ package portablesetup
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 
-	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/dirswap"
-	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/loader"
-	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/processlock"
-	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/specregistry"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/statev2"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
-	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/managedstdio"
-	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/planner"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/providers"
-	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/transaction"
-	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/usecase"
-	"github.com/777genius/plugin-kit-ai/install/integrationctl/packagesnapshot"
 
+	"github.com/777genius/agent-notifications/install/uapinstaller"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 )
@@ -54,9 +44,7 @@ type MaterializeRequest struct {
 
 type Materializer struct {
 	Kernel Service
-	UAP    usecase.Service
 	Store  statev2.Store
-	Data   providers.PluginDataManager
 	Roots  UAPRoots
 }
 
@@ -91,31 +79,10 @@ func NewMaterializer(roots UAPRoots) (Materializer, error) {
 			return Materializer{}, fmt.Errorf("%w: UAP roots must be explicit absolute paths", ErrPreflight)
 		}
 	}
-	for _, dir := range []string{filepath.Dir(roots.StateFile), filepath.Dir(roots.LockFile), roots.OperationsDir, roots.PluginDataBase, roots.ManagedRoot} {
-		if err := os.MkdirAll(dir, 0700); err != nil {
-			return Materializer{}, err
-		}
+	if roots.HelperVersion == "" {
+		roots.HelperVersion = "agent-notify-portable-v1"
 	}
-	store := statev2.Store{Path: roots.StateFile}
-	data := providers.PluginDataManager{Base: roots.PluginDataBase}
-	plan := planner.Planner{ManagedRoot: roots.ManagedRoot}
-	version := roots.HelperVersion
-	if version == "" {
-		version = "agent-notify-portable-v1"
-	}
-	roots.HelperVersion = version
-	helper, err := managedstdio.NewSource(roots.HelperExecutable, version)
-	if err != nil {
-		return Materializer{}, err
-	}
-	stager := providers.Stager{LauncherSource: helper}
-	activator := providers.Activator{Runner: roots.ClaudeRunner}
-	svc := usecase.Service{
-		StateStore: store, Planner: plan, Targets: plan, Stager: stager, Activator: activator,
-		PluginData: data, Lock: processlock.Lock{Path: roots.LockFile},
-		Kernel: transaction.Kernel{Directory: dirswap.Manager{JournalDir: roots.OperationsDir}},
-	}
-	return Materializer{Kernel: Service{}, UAP: svc, Store: store, Data: data, Roots: roots}, nil
+	return Materializer{Kernel: Service{}, Store: statev2.Store{Path: roots.StateFile}, Roots: roots}, nil
 }
 
 func findInstallation(state domain.StateFileV2, id string) (domain.Installation, bool) {
@@ -127,185 +94,109 @@ func findInstallation(state domain.StateFileV2, id string) (domain.Installation,
 	return domain.Installation{}, false
 }
 
-func LoadPackage(ctx context.Context, root string) (domain.PackageEnvelope, error) {
-	if root == "" || !filepath.IsAbs(root) || filepath.Clean(root) != root {
-		return domain.PackageEnvelope{}, fmt.Errorf("%w: package root must be an explicit absolute path", ErrPreflight)
-	}
-	reg, err := specregistry.New()
-	if err != nil {
-		return domain.PackageEnvelope{}, err
-	}
-	snap, err := (packagesnapshot.Builder{}).Build(ctx, root)
-	if err != nil {
-		return domain.PackageEnvelope{}, err
-	}
-	defer func() { _ = snap.Close() }()
-	return (loader.Loader{Registry: reg}).Load(ctx, domain.LoadInput{
-		SnapshotRoot: root, TreeDigest: snap.Digest,
-		Source: domain.SourceIdentity{RequestedSource: root, CanonicalSource: root},
-	})
+func explicitAbs(p string) bool {
+	return p != "" && filepath.IsAbs(p) && filepath.Clean(p) == p
 }
 
-func injectLocator(envelope domain.PackageEnvelope, name string) (domain.PackageEnvelope, error) {
-	raw, err := json.Marshal(envelope.MCP.Servers)
-	if err != nil {
-		return domain.PackageEnvelope{}, err
+func (m Materializer) validate(req MaterializeRequest, install bool) error {
+	switch req.Integration {
+	case portable.Codex, portable.Claude:
+	default:
+		return ErrPreflight
 	}
-	var servers map[string]domain.MCPServer
-	if err := json.Unmarshal(raw, &servers); err != nil {
-		return domain.PackageEnvelope{}, err
+	if !explicitAbs(req.ClientConfigRoot) {
+		return fmt.Errorf("%w: client config root must be explicit", ErrPreflight)
 	}
-	server, ok := servers[portableServerName]
-	if !ok {
-		return domain.PackageEnvelope{}, fmt.Errorf("%w: package is missing %s MCP server", ErrPreflight, portableServerName)
+	if req.ClientExecutable == "" || !filepath.IsAbs(req.ClientExecutable) {
+		return fmt.Errorf("%w: client executable must be explicit", ErrPreflight)
 	}
-	if server.Decoded == nil {
-		server.Decoded = map[string]any{}
+	if install && !explicitAbs(req.PackageRoot) {
+		return fmt.Errorf("%w: package root must be an explicit absolute path", ErrPreflight)
 	}
-	server.Decoded["args"] = []any{"portable-launch", "--locator", name}
-	server.Raw, err = json.Marshal(server.Decoded)
-	if err != nil {
-		return domain.PackageEnvelope{}, err
-	}
-	servers[portableServerName] = server
-	envelope.MCP.Servers = servers
-	return envelope, nil
-}
-
-type locatorStager struct {
-	providers.Stager
-	identity    Identity
-	integration portable.Integration
-}
-
-func (s locatorStager) Stage(context.Context, domain.PackageEnvelope, domain.DeliveryPlan, string, domain.CompatibilityHints) (domain.StagedDelivery, error) {
-	return domain.StagedDelivery{}, fmt.Errorf("%w: locator projection requires owned plugin data", ErrPreflight)
-}
-
-func (s locatorStager) StageWithPluginData(ctx context.Context, envelope domain.PackageEnvelope, plan domain.DeliveryPlan, operationID string, hints domain.CompatibilityHints, data string) (domain.StagedDelivery, error) {
-	b, err := Complete(s.identity, s.integration, string(plan.ClientID), string(plan.Scope), plan.ActivePath, data)
-	if err != nil {
-		return domain.StagedDelivery{}, err
-	}
-	name, err := b.Filename()
-	if err != nil {
-		return domain.StagedDelivery{}, err
-	}
-	envelope, err = injectLocator(envelope, name)
-	if err != nil {
-		return domain.StagedDelivery{}, err
-	}
-	return s.Stager.StageWithPluginData(ctx, envelope, plan, operationID, hints, data)
-}
-
-type locatorActivator struct {
-	inner       providers.Activator
-	store       statev2.Store
-	data        providers.PluginDataManager
-	identity    Identity
-	integration portable.Integration
-	kernel      Service
-	generation  *uint64
-	reservation *installruntime.PendingMutation
-}
-
-func (a locatorActivator) Activate(ctx context.Context, request domain.ActivationRequest) (domain.ActivationOutcome, error) {
-	state, err := a.store.Load()
-	if err != nil {
-		return domain.ActivationOutcome{}, err
-	}
-	for _, installation := range state.Installations {
-		if installation.InstallationID != a.identity.InstallationID {
-			continue
+	helper := m.Roots.HelperExecutable
+	if req.HelperExecutable != "" {
+		if !explicitAbs(req.HelperExecutable) {
+			return fmt.Errorf("%w: helper override must be explicit", ErrPreflight)
 		}
-		for _, binding := range installation.Clients {
-			if binding.TargetLocator != request.Plan.ActivePath || binding.ClientID != string(request.Plan.ClientID) {
-				continue
-			}
-			receipt, ok := installation.DataReceipts[binding.DataReceiptID]
-			if !ok {
-				return domain.ActivationOutcome{}, fmt.Errorf("%w: missing committed data receipt", ErrPreflight)
-			}
-			if err := a.data.ValidateData(ctx, receipt); err != nil {
-				return domain.ActivationOutcome{}, err
-			}
-			pb, err := Complete(a.identity, a.integration, binding.ClientID, binding.Scope, request.Plan.ActivePath, receipt.Locator)
-			if err != nil {
-				return domain.ActivationOutcome{}, err
-			}
-			if pb.BindingID != binding.ClientBindingID {
-				return domain.ActivationOutcome{}, fmt.Errorf("%w: binding identity does not match committed UAP client", ErrPreflight)
-			}
-			if _, err := a.kernel.CommitBinding(ctx, Request{Binding: pb, ExpectedGeneration: *a.generation, Reservation: a.reservation}); err != nil {
-				return domain.ActivationOutcome{}, err
-			}
-			snap, err := installruntime.ReadInstalledSnapshot(pb.ControlRoot)
-			if err != nil {
-				return domain.ActivationOutcome{}, err
-			}
-			*a.generation = snap.Ledger.Generation
-			return a.inner.Activate(ctx, request)
-		}
+		helper = req.HelperExecutable
 	}
-	return domain.ActivationOutcome{}, fmt.Errorf("%w: committed binding not found", ErrPreflight)
+	if !explicitAbs(helper) {
+		return fmt.Errorf("%w: helper must be explicit", ErrPreflight)
+	}
+	return nil
 }
 
-func (a locatorActivator) Deactivate(ctx context.Context, request domain.DeactivationRequest) (domain.DeactivationOutcome, error) {
-	return a.inner.Deactivate(ctx, request)
-}
-
-func (m Materializer) composed(req MaterializeRequest, generation *uint64, res *installruntime.PendingMutation) usecase.Service {
+func (m Materializer) engine(req MaterializeRequest, generation *uint64, res *installruntime.PendingMutation) (*uapinstaller.Engine, error) {
 	helper := m.Roots.HelperExecutable
 	if req.HelperExecutable != "" {
 		helper = req.HelperExecutable
 	}
-	source, err := managedstdio.NewSource(helper, m.Roots.HelperVersion)
-	if err != nil {
-		source, _ = managedstdio.NewSource(m.Roots.HelperExecutable, m.Roots.HelperVersion)
+	runner := m.Roots.ClaudeRunner
+	if req.Integration != portable.Claude {
+		runner = nil
 	}
-	stager := locatorStager{Stager: providers.Stager{LauncherSource: source}, identity: req.Identity, integration: req.Integration}
-	inner := providers.Activator{}
-	if req.Integration == portable.Claude {
-		inner.Runner = m.Roots.ClaudeRunner
-	}
-	activator := locatorActivator{
-		inner: inner, store: m.Store, data: m.Data, identity: req.Identity,
-		integration: req.Integration, kernel: m.Kernel, generation: generation,
-		reservation: res,
-	}
-	svc := m.UAP
-	svc.Stager = stager
-	svc.Activator = activator
-	return svc
+	return uapinstaller.New(uapinstaller.Config{
+		StateRoot:        filepath.Dir(m.Roots.StateFile),
+		StateFile:        m.Roots.StateFile,
+		LockFile:         m.Roots.LockFile,
+		OperationsDir:    m.Roots.OperationsDir,
+		PluginDataBase:   m.Roots.PluginDataBase,
+		ManagedRoot:      m.Roots.ManagedRoot,
+		TempRoot:         filepath.Join(filepath.Dir(m.Roots.StateFile), "tmp"),
+		HelperExecutable: helper,
+		HelperVersion:    m.Roots.HelperVersion,
+		Runner:           runner,
+		ServerName:       portableServerName,
+		ProjectArgs: func(facts uapinstaller.BindingFacts) ([]string, error) {
+			b, err := Complete(req.Identity, req.Integration, facts.ClientID, facts.Scope, facts.TargetPath, facts.DataRoot)
+			if err != nil {
+				return nil, err
+			}
+			name, err := b.Filename()
+			if err != nil {
+				return nil, err
+			}
+			return []string{"portable-launch", "--locator", name}, nil
+		},
+		OnCommittedBinding: func(ctx context.Context, facts uapinstaller.BindingFacts) error {
+			pb, err := Complete(req.Identity, req.Integration, facts.ClientID, facts.Scope, facts.TargetPath, facts.DataRoot)
+			if err != nil {
+				return err
+			}
+			if pb.BindingID != facts.BindingID && facts.BindingID != "" {
+				return fmt.Errorf("%w: binding identity does not match committed UAP client", ErrPreflight)
+			}
+			if _, err := m.Kernel.CommitBinding(ctx, Request{Binding: pb, ExpectedGeneration: *generation, Reservation: res}); err != nil {
+				return err
+			}
+			snap, err := installruntime.ReadInstalledSnapshot(pb.ControlRoot)
+			if err != nil {
+				return err
+			}
+			*generation = snap.Ledger.Generation
+			return nil
+		},
+	})
 }
 
-func (m Materializer) client(req MaterializeRequest) (domain.DetectedClient, error) {
-	var id domain.ClientID
-	switch req.Integration {
-	case portable.Codex:
-		id = domain.ClientCodex
-	case portable.Claude:
-		id = domain.ClientClaude
-	default:
-		return domain.DetectedClient{}, ErrPreflight
+func (m Materializer) apply(ctx context.Context, eng *uapinstaller.Engine, req uapinstaller.Request) (uapinstaller.Result, error) {
+	prepared, err := eng.Prepare(ctx, req)
+	if err != nil {
+		return uapinstaller.Result{}, err
 	}
-	if req.ClientConfigRoot == "" || !filepath.IsAbs(req.ClientConfigRoot) || filepath.Clean(req.ClientConfigRoot) != req.ClientConfigRoot {
-		return domain.DetectedClient{}, fmt.Errorf("%w: client config root must be explicit", ErrPreflight)
-	}
-	if req.ClientExecutable == "" || !filepath.IsAbs(req.ClientExecutable) {
-		return domain.DetectedClient{}, fmt.Errorf("%w: client executable must be explicit", ErrPreflight)
-	}
-	return domain.DetectedClient{ClientID: id, Status: domain.DetectionDetected, ConfigRoot: req.ClientConfigRoot, ExecutablePath: req.ClientExecutable}, nil
+	defer func() { _ = prepared.Close() }()
+	return eng.Apply(ctx, prepared, uapinstaller.Decision{Confirmed: true})
 }
 
 func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (portable.Binding, error) {
 	if ctx == nil {
 		return portable.Binding{}, ErrPreflight
 	}
+	if err := m.validate(req, true); err != nil {
+		return portable.Binding{}, err
+	}
 	template, err := Complete(req.Identity, req.Integration, string(req.Integration), string(domain.ScopeUser), req.Identity.ScopeRoot, req.Identity.ControlRoot)
 	if err != nil {
-		// BindingID/DataRoot placeholders must still be valid absolute paths for Complete;
-		// ScopeRoot/ControlRoot are operator paths used only to pass Registration() here.
 		return portable.Binding{}, err
 	}
 	if req.Discovery.ConfigPath != "" {
@@ -323,64 +214,48 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 		}
 		req.ExpectedGeneration = snap.Ledger.Generation
 	}
+	eng, err := m.engine(req, new(uint64), nil)
+	if err != nil {
+		return portable.Binding{}, err
+	}
+	if err := eng.Recover(ctx); err != nil {
+		return portable.Binding{}, err
+	}
 	gen, res, err := m.Kernel.handoffForward(ctx, Request{
 		Binding: template, ExpectedGeneration: req.ExpectedGeneration, Discovery: req.Discovery,
 	})
 	if err != nil {
 		return portable.Binding{}, err
 	}
-	envelope, err := LoadPackage(ctx, req.PackageRoot)
-	if err != nil {
-		return portable.Binding{}, err
-	}
-	client, err := m.client(req)
-	if err != nil {
-		return portable.Binding{}, err
-	}
 	generation := gen
-	svc := m.composed(req, &generation, res)
-	result, err := svc.Add(ctx, usecase.AddInput{
-		Envelope: envelope, Client: client, Scope: domain.ScopeUser, Confirmed: true,
+	eng, err = m.engine(req, &generation, res)
+	if err != nil {
+		return portable.Binding{}, err
+	}
+	result, err := m.apply(ctx, eng, uapinstaller.Request{
+		Operation: uapinstaller.OpInstall, PackageRoot: req.PackageRoot, ClientID: string(req.Integration),
+		ClientConfigRoot: req.ClientConfigRoot, ClientExecutable: req.ClientExecutable,
 		InstallationID: req.Identity.InstallationID, OperationID: req.OperationID,
-		BackendExecutable: req.ClientExecutable,
+		RequiredComponents: []string{"mcp", "skills"},
 	})
 	if err != nil {
 		return portable.Binding{}, err
 	}
-	state, err := m.Store.Load()
+	pb, err := Complete(req.Identity, req.Integration, result.Binding.ClientID, result.Binding.Scope, result.Binding.TargetPath, result.Binding.DataRoot)
 	if err != nil {
 		return portable.Binding{}, err
 	}
-	installation, ok := findInstallation(state, req.Identity.InstallationID)
-	if !ok {
-		return portable.Binding{}, fmt.Errorf("%w: UAP installation missing after add", ErrPreflight)
+	if err := m.Kernel.finishHandoff(ctx, Request{Binding: pb, ExpectedGeneration: generation, Reservation: res}, res); err != nil {
+		return portable.Binding{}, err
 	}
-	for _, binding := range installation.Clients {
-		if binding.TargetLocator != result.Plan.ActivePath || binding.ClientID != string(result.Plan.ClientID) {
-			continue
-		}
-		receipt, ok := installation.DataReceipts[binding.DataReceiptID]
-		if !ok {
-			return portable.Binding{}, fmt.Errorf("%w: UAP data receipt missing after add", ErrPreflight)
-		}
-		pb, err := Complete(req.Identity, req.Integration, binding.ClientID, binding.Scope, result.Plan.ActivePath, receipt.Locator)
-		if err != nil {
-			return portable.Binding{}, err
-		}
-		if err := m.Kernel.finishHandoff(ctx, Request{Binding: pb, ExpectedGeneration: generation, Reservation: res}, res); err != nil {
-			return portable.Binding{}, err
-		}
-		return pb, nil
-	}
-	return portable.Binding{}, fmt.Errorf("%w: UAP client binding missing after add", ErrPreflight)
+	return pb, nil
 }
 
 func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error {
 	if ctx == nil {
 		return ErrPreflight
 	}
-	client, err := m.client(req)
-	if err != nil {
+	if err := m.validate(req, false); err != nil {
 		return err
 	}
 	state, err := m.Store.Load()
@@ -423,16 +298,21 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 		}
 		req.ExpectedGeneration = snap.Ledger.Generation
 	}
+	eng, err := m.engine(req, &req.ExpectedGeneration, nil)
+	if err != nil {
+		return err
+	}
+	if err := eng.Recover(ctx); err != nil {
+		return err
+	}
 	if err := m.Kernel.RevokeBinding(ctx, Request{Binding: pb, ExpectedGeneration: req.ExpectedGeneration}); err != nil {
 		return err
 	}
-	svc := m.UAP
-	svc.Activator = providers.Activator{Runner: m.Roots.ClaudeRunner}
-	_, err = svc.Remove(ctx, usecase.RemoveInput{
-		Selector: req.Identity.InstallationID, Client: client, Scope: domain.ScopeUser,
-		Confirmed: true, OperationID: req.OperationID, BackendExecutable: req.ClientExecutable,
-	})
-	if err != nil {
+	if _, err := m.apply(ctx, eng, uapinstaller.Request{
+		Operation: uapinstaller.OpRemove, ClientID: string(req.Integration),
+		ClientConfigRoot: req.ClientConfigRoot, ClientExecutable: req.ClientExecutable,
+		InstallationID: req.Identity.InstallationID, OperationID: req.OperationID,
+	}); err != nil {
 		return err
 	}
 	if req.Discovery.ConfigPath == "" {

@@ -1,0 +1,68 @@
+package uapinstaller
+
+import (
+	"context"
+	"fmt"
+	"path/filepath"
+	"strings"
+	"unicode/utf8"
+
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/providers"
+)
+
+// Config is copied by New. Later mutation of the caller's value is ignored.
+type Config struct {
+	// StateRoot is the owned UAP namespace. It is required and must be an
+	// absolute clean path. New does not create it.
+	StateRoot                                                                 string
+	StateFile, LockFile, OperationsDir, PluginDataBase, ManagedRoot, TempRoot string
+	HelperExecutable, HelperVersion                                           string
+	Runner                                                                    providers.CommandRunner
+	// ServerName selects the declared MCP server whose args the host may replace.
+	ServerName string
+	// ProjectArgs replaces args of ServerName. It is host-owned and must be
+	// deterministic. A missing declared server or a callback error fails staging.
+	ProjectArgs        func(BindingFacts) ([]string, error)
+	OnCommittedBinding func(context.Context, BindingFacts) error
+}
+
+func (c Config) resolved() (Config, error) {
+	out := c
+	if !validRoot(out.StateRoot) {
+		return Config{}, fmt.Errorf("%w: StateRoot must be an explicit absolute clean path", ErrInvalidConfig)
+	}
+	if out.StateFile == "" {
+		out.StateFile = filepath.Join(out.StateRoot, "state-v2.json")
+	}
+	if out.LockFile == "" {
+		out.LockFile = filepath.Join(out.StateRoot, "mutation.lock")
+	}
+	if out.OperationsDir == "" {
+		out.OperationsDir = filepath.Join(out.StateRoot, "operations")
+	}
+	if out.PluginDataBase == "" {
+		out.PluginDataBase = filepath.Join(out.StateRoot, "plugin-data")
+	}
+	if out.ManagedRoot == "" {
+		out.ManagedRoot = filepath.Join(out.StateRoot, "managed")
+	}
+	if out.TempRoot == "" {
+		out.TempRoot = filepath.Join(out.StateRoot, "tmp")
+	}
+	if out.HelperVersion == "" {
+		out.HelperVersion = "uap-installer-helper-v1"
+	}
+	for _, p := range []string{out.StateFile, out.LockFile, out.OperationsDir, out.PluginDataBase, out.ManagedRoot, out.TempRoot} {
+		if !validRoot(p) {
+			return Config{}, fmt.Errorf("%w: derived or explicit path must be absolute and clean", ErrInvalidConfig)
+		}
+	}
+	if out.HelperExecutable != "" && !validRoot(out.HelperExecutable) {
+		return Config{}, fmt.Errorf("%w: HelperExecutable must be an explicit absolute clean path", ErrInvalidConfig)
+	}
+	return out, nil
+}
+
+func validRoot(p string) bool {
+	return p != "" && utf8.ValidString(p) && len(p) <= 4096 && filepath.IsAbs(p) && filepath.Clean(p) == p && !strings.ContainsRune(p, 0)
+}

@@ -1,0 +1,97 @@
+package uapinstaller
+
+// Operation is the process-local lifecycle verb. P1 publishes install and remove.
+// Update and repair are rejected until those checkpoints exist.
+type Operation string
+
+const (
+	OpInstall Operation = "install"
+	OpRemove  Operation = "remove"
+	OpUpdate  Operation = "update"
+	OpRepair  Operation = "repair"
+)
+
+// Outcome is the coarse public result. Mapping is not a bool.
+type Outcome string
+
+const (
+	OutcomeUnchanged  Outcome = "unchanged"
+	OutcomeCompleted  Outcome = "completed"
+	OutcomeIncomplete Outcome = "incomplete"
+	OutcomeRecovery   Outcome = "recovery_required"
+	OutcomeConflict   Outcome = "conflict"
+	OutcomeCancelled  Outcome = "cancelled"
+)
+
+// Request is copied by Prepare. Subsequent caller edits do not change the handle.
+type Request struct {
+	Operation          Operation
+	PackageRoot        string
+	ClientID           string
+	ClientConfigRoot   string
+	ClientExecutable   string
+	InstallationID     string
+	OperationID        string
+	Selector           string
+	RequiredComponents []string
+	// ExternalUninstalled is host attestation that the selected client's
+	// native plugin was already removed, or was never activated. Confirmed
+	// Apply does not invent this fact.
+	ExternalUninstalled bool
+}
+
+// Decision is host UI confirmation, outside mutation locks.
+type Decision struct {
+	Confirmed bool
+}
+
+// BindingFacts is the typed committed-binding view for host seams.
+type BindingFacts struct {
+	InstallationID, ClientID, BindingID, Scope string
+	TargetPath, DataRoot, DataReceiptID        string
+	OperationID, TreeDigest                    string
+}
+
+// Plan is an immutable copy for presentation. Operational paths are included
+// because the embedding host already chose explicit roots.
+type Plan struct {
+	Operation       Operation
+	SourceRoot      string
+	TreeDigest      string
+	DigestAlgorithm string
+	ClientID        string
+	ConfigRoot      string
+	TargetPath      string
+	InstallationID  string
+	BindingID       string
+	RequiredMissing []string
+	NoChange        bool
+}
+
+// Result is returned together with an error when part of the work already happened.
+type Result struct {
+	Operation      Operation
+	InstallationID string
+	Outcome        Outcome
+	Binding        BindingFacts
+	ManualActions  []string
+	Reason         string
+	NoChange       bool
+}
+
+// Inspection is a read-only view of owned UAP state.
+type Inspection struct {
+	Installations []InspectedInstallation
+	Recovery      bool
+}
+
+// InspectedInstallation is a public subset of one UAP installation.
+type InspectedInstallation struct {
+	InstallationID string
+	Bindings       []InspectedBinding
+}
+
+// InspectedBinding is a public subset of one client binding.
+type InspectedBinding struct {
+	ClientID, BindingID, Scope, TargetPath, DataRoot string
+}
