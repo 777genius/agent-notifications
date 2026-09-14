@@ -55,6 +55,10 @@ type Options struct {
 	Remove bool
 	// ControlRoot overrides shared runtime state for isolated tests.
 	ControlRoot string
+	// Reservation is required when the managed ledger already holds a pending
+	// mutation. Ordinary hook-only setup leaves it nil so a reservation is not
+	// published.
+	Reservation *installruntime.PendingMutation
 	// Context optionally supplies the complete setup deadline.
 	Context context.Context
 	// CodexHome overrides the Codex home directory (default: $CODEX_HOME,
@@ -481,7 +485,7 @@ func Run(opts Options) (Result, error) {
 	_, err = installruntime.Commit(ctx, installruntime.Request{
 		ControlRoot: opts.ControlRoot, Owner: "existing-installer", RuntimeRoot: destination,
 		RemoveConsumer: opts.Remove, ConsumerID: "codex:" + hooksPath, Consumer: installruntime.Consumer{Registration: hooksPath, Commands: commands},
-		Native: native, Files: files, ConfigPaths: []string{hooksPath}, Prepare: prepare,
+		Reservation: opts.Reservation, Native: native, Files: files, ConfigPaths: []string{hooksPath}, Prepare: prepare,
 	})
 	if err != nil {
 		return Result{}, err

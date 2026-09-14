@@ -32,15 +32,15 @@ const (
 // Request is copied by Run. Omitted unit flags are nil; install defaults both
 // units on, uninstall omitted units selects every managed unit of the agents.
 type Request struct {
-	Action                                Action
-	Agents                                []string
-	Hooks, AgentNotify                    *bool
-	Yes                                   bool
-	PackageRoot, ControlRoot, RuntimeRoot string
-	GlobalConfig, CodexHome, ClaudeConfig string
-	ClientExecutable, ScopeRoot, Helper   string
-	InstallationID, Primary               string
-	MCPConfig                             map[string]string
+	Action                                            Action
+	Agents                                            []string
+	Hooks, AgentNotify                                *bool
+	Yes                                               bool
+	PackageRoot, PluginRoot, ControlRoot, RuntimeRoot string
+	GlobalConfig, CodexHome, ClaudeConfig             string
+	ClientExecutable, ScopeRoot, Helper               string
+	InstallationID, Primary                           string
+	MCPConfig                                         map[string]string
 }
 
 type TargetResult struct {
@@ -129,7 +129,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	case ActionInstall:
 		return install(ctx, req, agents, snap, runtimeRoot, hooks, notify, out)
 	default:
-		return uninstall(ctx, req, agents, snap, runtimeRoot, notify, out)
+		return uninstall(ctx, req, agents, snap, runtimeRoot, hooks, notify, out)
 	}
 }
 
@@ -159,6 +159,7 @@ func inspect(ctx context.Context, req Request, agents []portable.Integration, sn
 		if !found {
 			out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "absent"})
 		}
+		out = inspectHooks(req, agent, out)
 		mcpPath := ""
 		if req.MCPConfig != nil {
 			mcpPath = req.MCPConfig[string(agent)]
@@ -186,11 +187,21 @@ func inspect(ctx context.Context, req Request, agents []portable.Integration, sn
 
 func install(ctx context.Context, req Request, agents []portable.Integration, snap installruntime.InstalledSnapshot, runtimeRoot string, hooks, notify bool, out Result) (Result, error) {
 	if hooks {
-		out.Targets = append(out.Targets, TargetResult{Client: "runtime", Unit: "hooks", Outcome: "unchanged", Reason: "hooks_remain_on_existing_installer"})
+		var err error
+		out, err = applyHooks(ctx, req, agents, snap, false, out)
+		if err != nil || out.Outcome == "incomplete" || out.Outcome == "invalid" {
+			return out, err
+		}
+		generation, err := rereadGeneration(req.ControlRoot)
+		if err != nil {
+			out.Outcome, out.Reason = "incomplete", err.Error()
+			return out, err
+		}
+		out.Generation = generation
+		snap.Ledger.Generation = generation
 	}
 	if !notify {
 		out.Outcome = "completed"
-		out.Reason = "hooks_only_not_switched"
 		return out, nil
 	}
 	if !explicitAbs(req.PackageRoot) {
@@ -243,9 +254,23 @@ func install(ctx context.Context, req Request, agents []portable.Integration, sn
 	return out, nil
 }
 
-func uninstall(ctx context.Context, req Request, agents []portable.Integration, snap installruntime.InstalledSnapshot, runtimeRoot string, notify bool, out Result) (Result, error) {
+func uninstall(ctx context.Context, req Request, agents []portable.Integration, snap installruntime.InstalledSnapshot, runtimeRoot string, hooks, notify bool, out Result) (Result, error) {
+	if hooks {
+		var err error
+		out, err = applyHooks(ctx, req, agents, snap, true, out)
+		if err != nil || out.Outcome == "incomplete" || out.Outcome == "invalid" {
+			return out, err
+		}
+		generation, err := rereadGeneration(req.ControlRoot)
+		if err != nil {
+			out.Outcome, out.Reason = "incomplete", err.Error()
+			return out, err
+		}
+		out.Generation = generation
+		snap.Ledger.Generation = generation
+	}
 	if !notify {
-		out.Outcome, out.Reason = "completed", "hooks_retained"
+		out.Outcome = "completed"
 		return out, nil
 	}
 	if req.ClientExecutable == "" || !filepath.IsAbs(req.ClientExecutable) {

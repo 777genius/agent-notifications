@@ -24,6 +24,7 @@ Noninteractive master for hooks plus portable MCP/skill. It does not prompt.
   --yes                       Required for mutation
   --json
   --package PATH              Local standard package root (plugin.json + MCP/skills)
+  --plugin-root PATH          Existing plugin bundle for Codex hooks-only setup
   --control-root PATH         Existing managed control directory
   --runtime-root PATH         Existing managed runtime (default: ledger runtime)
   --global-config PATH
@@ -101,7 +102,7 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 	jsonOut := false
 	allowed := map[string]bool{
 		"action": true, "agents": true, "hooks": true, "agent-notify": true,
-		"package": true, "control-root": true, "runtime-root": true, "global-config": true,
+		"package": true, "plugin-root": true, "control-root": true, "runtime-root": true, "global-config": true,
 		"codex-home": true, "claude-config": true, "client-executable": true, "helper": true,
 		"scope-root": true, "installation-id": true, "mcp-config": true, "claude-mcp-config": true,
 	}
@@ -177,6 +178,7 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 		req.AgentNotify = &on
 	}
 	req.PackageRoot = values["package"]
+	req.PluginRoot = values["plugin-root"]
 	req.ControlRoot = values["control-root"]
 	req.RuntimeRoot = values["runtime-root"]
 	req.GlobalConfig = values["global-config"]
@@ -195,7 +197,7 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 			req.MCPConfig["claude"] = values["claude-mcp-config"]
 		}
 	}
-	for _, p := range []string{req.PackageRoot, req.ControlRoot, req.RuntimeRoot, req.GlobalConfig, req.CodexHome, req.ClaudeConfig, req.ClientExecutable, req.Helper, req.ScopeRoot} {
+	for _, p := range []string{req.PackageRoot, req.PluginRoot, req.ControlRoot, req.RuntimeRoot, req.GlobalConfig, req.CodexHome, req.ClaudeConfig, req.ClientExecutable, req.Helper, req.ScopeRoot} {
 		if p != "" && (!filepath.IsAbs(p) || filepath.Clean(p) != p) {
 			return req, jsonOut, errors.New("invalid_arguments")
 		}
