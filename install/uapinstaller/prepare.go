@@ -31,6 +31,7 @@ type PreparedOperation struct {
 	envelope domain.PackageEnvelope
 	client   domain.DetectedClient
 	facts    BindingFacts
+	artifact string
 }
 
 func (p *PreparedOperation) Plan() Plan {
@@ -141,6 +142,7 @@ func (e *Engine) prepareInstall(ctx context.Context, req Request) (*PreparedOper
 		BindingID: handle.plan.BindingID, Scope: string(preview.Plan.Scope),
 		TargetPath: handle.plan.TargetPath, OperationID: req.OperationID, TreeDigest: snapshot.TreeDigest,
 	}
+	handle.artifact = preview.Plan.PhysicalArtifactID
 	if len(missing) != 0 {
 		_ = handle.closeLocked()
 		return nil, fmt.Errorf("%w: %v", ErrIncomplete, missing)
@@ -188,6 +190,7 @@ func (e *Engine) prepareRemove(ctx context.Context, req Request) (*PreparedOpera
 		BindingID: binding.ClientBindingID, Scope: binding.Scope, TargetPath: binding.TargetLocator,
 		DataRoot: receipt.Locator, DataReceiptID: binding.DataReceiptID, OperationID: req.OperationID,
 	}
+	handle.artifact = binding.PhysicalArtifact
 	return handle, nil
 }
 

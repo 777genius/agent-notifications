@@ -78,6 +78,13 @@ type Result struct {
 	Reason         string
 	NoChange       bool
 	DataRetained   bool
+	Client         ClientResult
+}
+
+// ClientResult is the public per-client lifecycle view. Mapping is not a bool.
+type ClientResult struct {
+	ClientID, BindingID                                       string
+	Materialization, Activation, Authentication, Verification string
 }
 
 // Assessment is a digest-bound content verdict. It is not a filesystem plan.
@@ -152,5 +159,12 @@ type InspectedInstallation struct {
 
 // InspectedBinding is a public subset of one client binding.
 type InspectedBinding struct {
-	ClientID, BindingID, Scope, TargetPath, DataRoot string
+	ClientID, BindingID, Scope, TargetPath, DataRoot          string
+	Materialization, Activation, Authentication, Verification string
+}
+
+// ClientMetadata is read-only provider surface. Discover does not execute files.
+type ClientMetadata struct {
+	ClientID string
+	Scopes   []string
 }
