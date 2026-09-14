@@ -79,10 +79,32 @@ type Result struct {
 	NoChange       bool
 }
 
-// Inspection is a read-only view of owned UAP state.
+// Inspection is a read-only view of owned UAP state. Recovery facts are
+// limited identities, not raw JSON and not an executable plan.
 type Inspection struct {
+	StateRoot     string
 	Installations []InspectedInstallation
-	Recovery      bool
+	Recovery      RecoveryObservation
+}
+
+// RecoveryObservation is the §5.8 read-only pending-transaction view.
+type RecoveryObservation struct {
+	Required bool
+	Journals []PendingJournal
+	Receipts []PendingReceipt
+	Reason   string
+}
+
+// PendingJournal is one open directory-swap journal.
+type PendingJournal struct {
+	OperationID, Digest, BindingID, InstallationID, TargetPath, Phase string
+}
+
+// PendingReceipt is an unfinished state receipt, including state_committed
+// after the matching journal was already removed.
+type PendingReceipt struct {
+	OperationID, BindingID, InstallationID, TargetPath, Phase string
+	JournalPresent                                            bool
 }
 
 // InspectedInstallation is a public subset of one UAP installation.

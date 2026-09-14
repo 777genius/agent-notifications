@@ -11,6 +11,7 @@ var (
 	ErrAlreadyApplied   = errors.New("prepared operation already reached a terminal apply")
 	ErrCancelled        = errors.New("installer apply cancelled")
 	ErrRecoveryRequired = errors.New("installer recovery required")
+	ErrPlanChanged      = errors.New("installer recovery plan changed")
 	ErrInvalidRequest   = errors.New("installer request rejected")
 	ErrIncomplete       = errors.New("required components missing from plan")
 )
