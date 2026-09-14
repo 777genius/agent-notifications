@@ -68,6 +68,14 @@ func writePackage(t *testing.T, root, probe string) {
 	}
 }
 
+func writePackageMode(t *testing.T, root, probe string, binMode os.FileMode) {
+	t.Helper()
+	writePackage(t, root, probe)
+	if err := os.Chmod(filepath.Join(root, "bin", "probe"), binMode); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestNewRejectsRelativeStateRootAndDoesNotCreateDirs(t *testing.T) {
 	if _, err := New(Config{StateRoot: "relative"}); err == nil {
 		t.Fatal("relative StateRoot accepted")
@@ -248,6 +256,47 @@ func TestPrepareSnapshotIgnoresLaterSourceMutation(t *testing.T) {
 	}
 	if prepared.Plan().TreeDigest != digest {
 		t.Fatal("source mutation changed owned snapshot digest")
+	}
+}
+
+func TestPrepareMarksBinExecutableWithoutHostExecuteBits(t *testing.T) {
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(base, "client")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{StateRoot: filepath.Join(base, "uap")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := func(pkg string) Request {
+		return Request{
+			Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+			ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-000000000044",
+			OperationID: "logical-exec", RequiredComponents: []string{"mcp", "skills"},
+		}
+	}
+	plain := filepath.Join(base, "plain")
+	exec := filepath.Join(base, "exec")
+	writePackageMode(t, plain, probe, 0644)
+	writePackageMode(t, exec, probe, 0755)
+	plainPrep, err := eng.Prepare(ctx, req(plain))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = plainPrep.Close() }()
+	execPrep, err := eng.Prepare(ctx, req(exec))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = execPrep.Close() }()
+	if plainPrep.Plan().TreeDigest == "" || plainPrep.Plan().TreeDigest != execPrep.Plan().TreeDigest {
+		t.Fatalf("host execute bits changed TreeDigest: %s vs %s", plainPrep.Plan().TreeDigest, execPrep.Plan().TreeDigest)
 	}
 }
 
