@@ -30,8 +30,12 @@ func TestRecoverOnlyReplaysJournalWithoutConsumer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Generation != 1 || got.Consumers["codex"].RuntimeRoot != r.RuntimeRoot {
-		t.Fatalf("recovered ledger: %+v", got)
+	wantRoot, err := CanonicalPath(r.RuntimeRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Generation != 1 || got.Consumers["codex"].RuntimeRoot != wantRoot {
+		t.Fatalf("recovered ledger: %+v want RuntimeRoot %s", got, wantRoot)
 	}
 	data, err := os.ReadFile(target)
 	if err != nil || string(data) != "new" {
