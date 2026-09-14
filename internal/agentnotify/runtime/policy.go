@@ -168,7 +168,7 @@ func (b *Backend) Status(ctx context.Context) Status {
 	out.DesktopEnabled = p.Delivery.DesktopEnabled
 	if b.clock.Now().BootID == "" {
 		out.OfflineCapability = "unsupported_platform"
-	} else if s.Installation.Enabled && !s.Installation.Recovery && s.Installation.Ledger.Native != nil && s.Installation.Ledger.Native.DecoderFloor >= 1 {
+	} else if s.Installation.Enabled && !s.Installation.Recovery && sessionDeliveryEligible(s.Installation.Ledger) {
 		out.OfflineCapability = "eligible"
 	}
 	return out
