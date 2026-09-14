@@ -22,8 +22,29 @@ replace args of one declared MCP server and observe a committed binding before
 client activation. The engine does not import Notifications types and does not
 query a live Claude/Codex identity by default.
 
+Prepare copies `Request` and reports canonical `Plan.TreeDigest` with algorithm
+`agentplugins-tree-sha256-v1`. That value is the packagedigest source identity,
+not the installed packagesnapshot ArtifactDigest. Remove Prepare verifies the
+managed artifact and persisted target before any client deactivation.
+
 Codex artifact removal requires `Request.ExternalUninstalled`. Confirmed Apply
-does not invent that attestation.
+does not invent that attestation. A missing or relative helper is rejected
+before the state file is written.
+
+## External sample
+
+`example/` is a separate Go module. It does not use `replace` or import
+`internal`. From that directory:
+
+```sh
+GOWORK=off go get github.com/777genius/agent-notifications/install/uapinstaller@<commit>
+GOWORK=off go run .
+```
+
+Or clone `example/`, run `GOWORK=off go get` of the same package path, then
+`GOWORK=off go run .`. A successful import prints `external import ok` without
+creating state. Pass `-package`, `-state`, `-config`, `-helper`, and
+`-client-exe` to run install → inspect → repeat → remove.
 
 Long-term this package moves to
 `github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/installer`.

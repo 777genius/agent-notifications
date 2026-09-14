@@ -30,6 +30,11 @@ func (e *Engine) Apply(ctx context.Context, prepared *PreparedOperation, decisio
 	}
 	prepared.busy = true
 	defer func() { prepared.busy = false }()
+	if prepared.req.Operation == OpInstall {
+		if _, err := e.helper(); err != nil {
+			return Result{Operation: OpInstall, Outcome: OutcomeIncomplete, Reason: err.Error()}, err
+		}
+	}
 	if err := e.ensureDirs(); err != nil {
 		return Result{Operation: prepared.req.Operation, Outcome: OutcomeIncomplete, Reason: err.Error()}, err
 	}
@@ -92,6 +97,21 @@ func (e *Engine) applyInstall(ctx context.Context, prepared *PreparedOperation) 
 }
 
 func (e *Engine) applyRemove(ctx context.Context, prepared *PreparedOperation) (Result, error) {
+	state, err := e.store.Load()
+	if err != nil {
+		return Result{Operation: OpRemove, Outcome: OutcomeIncomplete, Reason: err.Error()}, err
+	}
+	installation, ok := findInstall(state, prepared.plan.InstallationID)
+	if !ok {
+		return Result{Operation: OpRemove, Outcome: OutcomeIncomplete, Reason: "installation is not installed"}, fmt.Errorf("%w: installation %s is not installed", ErrInvalidRequest, prepared.plan.InstallationID)
+	}
+	binding, _, ok := findBinding(installation, prepared.client.ClientID)
+	if !ok {
+		return Result{Operation: OpRemove, Outcome: OutcomeIncomplete, Reason: "client is not installed"}, fmt.Errorf("%w: client %s is not installed", ErrInvalidRequest, prepared.client.ClientID)
+	}
+	if err := e.removalPreflight(ctx, prepared.client, binding); err != nil {
+		return Result{Operation: OpRemove, Outcome: OutcomeIncomplete, Reason: err.Error()}, err
+	}
 	helper, _ := e.helper()
 	svc := e.lifecycle(helper, prepared.facts)
 	removed, err := svc.Remove(ctx, usecase.RemoveInput{
