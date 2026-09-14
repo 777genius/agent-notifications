@@ -154,6 +154,9 @@ func TestInstallInspectRepeatRemove(t *testing.T) {
 	if result.Outcome != OutcomeCompleted || result.InstallationID != req.InstallationID {
 		t.Fatalf("install result: %+v", result)
 	}
+	if result.Client.ClientID != "codex" || strings.Join(result.Client.RequiredComponents, ",") != "mcp,skills" {
+		t.Fatalf("client result: %+v", result.Client)
+	}
 	view, err := eng.Inspect(ctx)
 	if err != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 1 {
 		t.Fatalf("inspect: %+v %v", view, err)
@@ -1247,6 +1250,36 @@ func TestDiscoverLstatsExplicitPathWithoutExecuting(t *testing.T) {
 	}
 	if !got[1].ExecutablePresent || got[1].ExecutablePath != path {
 		t.Fatalf("explicit codex: %+v", got[1])
+	}
+}
+
+func TestDiscoverReportsCurrentBindingsWithoutMutating(t *testing.T) {
+	eng, _ := plantStateCommittedReceipt(t)
+	before, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := eng.Discover()
+	after, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("discover mutated state")
+	}
+	if _, err := os.Lstat(eng.cfg.LockFile); !os.IsNotExist(err) {
+		t.Fatal("discover acquired mutation lock")
+	}
+	if len(got) != 2 || len(got[0].Bindings) != 0 {
+		t.Fatalf("claude bindings: %+v", got[0])
+	}
+	if len(got[1].Bindings) != 1 || got[1].Bindings[0].ClientID != "codex" || got[1].Bindings[0].BindingID == "" {
+		t.Fatalf("codex bindings: %+v", got[1])
+	}
+	got[1].Bindings[0].ClientID = "mutated"
+	again := eng.Discover()
+	if again[1].Bindings[0].ClientID != "codex" {
+		t.Fatalf("caller mutated discover result: %+v", again[1])
 	}
 }
 
