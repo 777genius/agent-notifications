@@ -2239,6 +2239,31 @@ func TestSetupWizardRepairMixedMissingOlderPackageE2E(t *testing.T) {
 	}
 }
 
+func TestSetupWizardTTYMixedRepairPlanShowsPerBindingDigestsE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env, _, shared := prepareMixedRevisionWizardCLI(t, ctx)
+	before := inspectWizardCLI(t, ctx, shared)
+	claudeDigest := wizardCLINotifyDigest(before, "claude")
+	codexDigest := wizardCLINotifyDigest(before, "codex")
+	if claudeDigest == "" || claudeDigest == codexDigest {
+		t.Fatalf("inspect collapsed mixed revisions: %+v", before.Targets)
+	}
+	var out bytes.Buffer
+	repair := append([]string{"--action", "repair", "--agents", "claude,codex", "--package", env.pkg}, shared...)
+	if code := executeSetupWizardWith(ctx, repair, &out, io.Discard, strings.NewReader("n\n"), true); code != 0 || !strings.Contains(out.String(), "cancelled") {
+		t.Fatalf("tty mixed repair cancel: %d %s", code, out.String())
+	}
+	text := out.String()
+	if !strings.Contains(text, "claude-source-digest="+claudeDigest) || !strings.Contains(text, "codex-source-digest="+codexDigest) {
+		t.Fatalf("tty mixed repair plan omitted digests: %s", text)
+	}
+	view := inspectWizardCLI(t, ctx, shared)
+	if wizardCLINotifyDigest(view, "claude") != claudeDigest || wizardCLINotifyDigest(view, "codex") != codexDigest {
+		t.Fatalf("tty cancel mutated mixed digests: %+v", view.Targets)
+	}
+}
+
 func TestSetupWizardMixedUninstallHoldsCodexHooksE2E(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
