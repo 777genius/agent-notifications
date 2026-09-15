@@ -2122,6 +2122,14 @@ func TestWizardUpdateBothLiveClients(t *testing.T) {
 	if !sawClaude || !sawCodex {
 		t.Fatalf("install omitted a client: %+v", installed.Targets)
 	}
+	repeat := req
+	again, err := Run(ctx, repeat)
+	if err != nil || again.Outcome != "completed" {
+		t.Fatalf("repeat install both: %+v %v", again, err)
+	}
+	if again.InstallationID != installed.InstallationID {
+		t.Fatalf("repeat install changed installation: install=%s repeat=%s", installed.InstallationID, again.InstallationID)
+	}
 	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
 		t.Fatal(err)
 	}

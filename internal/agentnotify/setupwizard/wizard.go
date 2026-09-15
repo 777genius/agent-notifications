@@ -2040,7 +2040,7 @@ func canGroupNotify(mat portablesetup.Materializer, id portablesetup.Identity, r
 	second := liveNotifyClient(mat, id.InstallationID, string(agents[1]))
 	switch req.Action {
 	case ActionInstall:
-		return !first && !second
+		return first == second
 	case ActionUpdate, ActionRepair:
 		return first && second
 	default:
