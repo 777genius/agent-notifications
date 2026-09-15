@@ -6241,6 +6241,57 @@ func TestWizardUninstallDoesNotRestoreDirectMCP(t *testing.T) {
 	}
 }
 
+func TestWizardDefaultCodexProfileHandoffsDirectMCP(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, primary, gen := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	mcpConfig := filepath.Join(codexConfig, "config.toml")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := clientsetup.Apply(ctx, clientsetup.Request{
+		ControlRoot: control, RuntimeRoot: runtime, Command: primary, ConfigPath: mcpConfig,
+		Provider: registration.Codex, Mode: clientsetup.Managed, ExpectedGeneration: gen,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("default-path handoff install: %+v %v", installed, err)
+	}
+	req.Action = ActionInspect
+	req.Yes = false
+	view, err := Run(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var notify, direct string
+	for _, target := range view.Targets {
+		if target.Unit == "agent-notify" {
+			notify = target.Outcome
+		}
+		if target.Unit == "direct-mcp" {
+			direct = target.Outcome
+		}
+	}
+	if notify != "installed" || direct != "absent" {
+		t.Fatalf("default-path handoff inspect: notify=%s direct=%s targets=%+v", notify, direct, view.Targets)
+	}
+}
+
 func TestFinishWizardIntentClearsExactRevisionRequired(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, _, _, gen := managedRuntime(t)

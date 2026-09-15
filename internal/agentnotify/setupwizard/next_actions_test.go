@@ -2,6 +2,7 @@ package setupwizard
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -242,5 +243,56 @@ func TestInspectOmittedAgentsStillReportsBoth(t *testing.T) {
 	plan, err := Plan(ctx, Request{Action: ActionInspect, ControlRoot: control})
 	if err != nil || !plan.Ready || plan.Result.Reason == "agents_required" || plan.Result.ExitCode() != 0 {
 		t.Fatalf("omitted inspect plan: %+v %v", plan, err)
+	}
+}
+
+func TestDiscoveryConfigPathUsesExistingProfileFile(t *testing.T) {
+	codexHome := filepath.Join(t.TempDir(), "codex")
+	claudeHome := filepath.Join(t.TempDir(), "claude")
+	for _, dir := range []string{codexHome, claudeHome} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	req := Request{CodexHome: codexHome, ClaudeConfig: claudeHome}
+	if got := discoveryConfigPath(req, portable.Codex); got != "" {
+		t.Fatalf("missing codex file: %s", got)
+	}
+	codexCfg := filepath.Join(codexHome, "config.toml")
+	if err := os.WriteFile(codexCfg, []byte("title = 'keep'\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := discoveryConfigPath(req, portable.Codex); got != codexCfg {
+		t.Fatalf("codex default: %s", got)
+	}
+	claudeCfg := filepath.Join(claudeHome, ".claude.json")
+	if err := os.WriteFile(claudeCfg, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := discoveryConfigPath(req, portable.Claude); got != claudeCfg {
+		t.Fatalf("claude default: %s", got)
+	}
+	explicit := filepath.Join(t.TempDir(), "explicit-mcp")
+	req.MCPConfig = map[string]string{"codex": explicit}
+	if got := discoveryConfigPath(req, portable.Codex); got != explicit {
+		t.Fatalf("explicit wins: %s", got)
+	}
+	if got := discoveryConfigPath(req, portable.Claude); got != claudeCfg {
+		t.Fatalf("claude default with other explicit: %s", got)
+	}
+	envReq := Request{EnvCodexHome: codexHome}
+	applyHostSnapshots(&envReq)
+	if got := discoveryConfigPath(envReq, portable.Codex); got != codexCfg {
+		t.Fatalf("env profile: %s", got)
+	}
+	dirHome := filepath.Join(t.TempDir(), "dir-profile")
+	if err := os.MkdirAll(filepath.Join(dirHome, "config.toml"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if got := discoveryConfigPath(Request{CodexHome: dirHome}, portable.Codex); got != "" {
+		t.Fatalf("directory is not a config file: %s", got)
+	}
+	if got := discoveryConfigPath(Request{CodexHome: "relative"}, portable.Codex); got != "" {
+		t.Fatalf("relative profile: %s", got)
 	}
 }
