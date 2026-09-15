@@ -56,7 +56,8 @@ Confirmed Apply re-reads live target/ownership before mutation and returns
 supported Claude/Codex user-scope metadata, executable presence, and current
 bindings without creating state or executing found files. Inspect and Result
 expose per-client materialization/activation/authentication/verification and
-required components.
+required components. The external sample's flagged path runs install → inspect
+→ repeat → repair → remove.
 
 Codex artifact removal requires `Request.ExternalUninstalled`. Confirmed Apply
 does not invent that attestation. A missing or relative helper is rejected

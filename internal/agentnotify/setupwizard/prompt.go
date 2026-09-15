@@ -82,7 +82,7 @@ func (p *LinePrompt) SelectExistingAction(ctx context.Context) (Action, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	if _, err := io.WriteString(p.Out, "Existing agent-notify installation found.\n1) Inspect  2) Add/reinstall  3) Uninstall\nChoice: "); err != nil {
+	if _, err := io.WriteString(p.Out, "Existing agent-notify installation found.\n1) Inspect  2) Add/reinstall  3) Uninstall  4) Update  5) Repair\nChoice: "); err != nil {
 		return "", err
 	}
 	line, err := readLine(ctx, p.reader())
@@ -96,6 +96,10 @@ func (p *LinePrompt) SelectExistingAction(ctx context.Context) (Action, error) {
 		return ActionInstall, nil
 	case "3":
 		return ActionUninstall, nil
+	case "4":
+		return ActionUpdate, nil
+	case "5":
+		return ActionRepair, nil
 	case "":
 		return "", ErrPromptCanceled
 	default:
@@ -193,7 +197,7 @@ func FillInteractive(ctx context.Context, req Request, p Prompter, existing func
 	if req.Action == ActionInspect {
 		return req, nil
 	}
-	if unitFlagsOmitted(req) && !req.Yes {
+	if unitFlagsOmitted(req) && !req.Yes && req.Action != ActionUpdate && req.Action != ActionRepair {
 		hooks, notify, err := p.SelectUnits(ctx)
 		if err != nil {
 			return req, err

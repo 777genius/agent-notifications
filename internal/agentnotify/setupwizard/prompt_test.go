@@ -185,6 +185,23 @@ func TestFillInteractiveExistingSelectsUninstall(t *testing.T) {
 	}
 }
 
+func TestFillInteractiveExistingSelectsUpdateAndRepair(t *testing.T) {
+	in := strings.NewReader("4\n")
+	got, err := FillInteractive(promptCtx(t), Request{Agents: []string{"codex"}}, &LinePrompt{In: in, Out: io.Discard}, func([]string) []string {
+		return []string{"codex"}
+	})
+	if err != nil || got.Action != ActionUpdate || got.Yes || got.Hooks != nil || got.AgentNotify != nil {
+		t.Fatalf("update: %+v %v", got, err)
+	}
+	in = strings.NewReader("5\n")
+	got, err = FillInteractive(promptCtx(t), Request{Agents: []string{"codex"}}, &LinePrompt{In: in, Out: io.Discard}, func([]string) []string {
+		return []string{"codex"}
+	})
+	if err != nil || got.Action != ActionRepair || got.Yes || got.Hooks != nil || got.AgentNotify != nil {
+		t.Fatalf("repair: %+v %v", got, err)
+	}
+}
+
 func TestConfirmPlanShowsMixedPerClientFlags(t *testing.T) {
 	off, on := false, true
 	got := confirmPlan(Request{

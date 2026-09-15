@@ -24,7 +24,7 @@ Master for hooks plus portable MCP/skill.
 TTY stdin prompts for agents, an existing-install action, and units when those flags are omitted, then shows a preflight plan and asks for confirmation.
 --json never prompts. Progress phases go to stderr. No TTY and no --agents/--yes is invalid for mutation, not a hang.
 Without --action, a new machine defaults to install; an existing portable
-installation is offered inspect, add/reinstall, or uninstall.
+installation is offered inspect, add/reinstall, uninstall, update, or repair.
   --action install|uninstall|inspect|update|repair
   --agents claude,codex   Omit on inspect to report both clients
   --hooks true|false          Omit on install to include hooks; omit on uninstall to select all units

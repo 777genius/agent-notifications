@@ -1,8 +1,9 @@
-// Command uapinstaller-sample is the P1 external consumer.
+// Command uapinstaller-sample is the external consumer of the published
+// single-client installer API.
 //
 // Default invocation only constructs the public Engine to prove the package
 // imports without a workspace, replace directive, or raw Store/Kernel types.
-// Passing explicit roots runs install → inspect → no-op repeat → remove.
+// Passing explicit roots runs install → inspect → no-op repeat → repair → remove.
 package main
 
 import (
@@ -75,6 +76,20 @@ func runDemo(state, pkg, config, helper, client string) error {
 		return err
 	}
 	fmt.Printf("repeat=%s no-change=%t\n", repeat.Outcome, repeat.NoChange)
+	repaired, err := eng.Prepare(ctx, uapinstaller.Request{
+		Operation: uapinstaller.OpRepair, PackageRoot: pkg, ClientID: "codex",
+		ClientConfigRoot: config, ClientExecutable: client, InstallationID: req.InstallationID,
+		OperationID: "sample-repair", RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = repaired.Close() }()
+	repair, err := eng.Apply(ctx, repaired, uapinstaller.Decision{Confirmed: true})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("repair=%s\n", repair.Outcome)
 	rm, err := eng.Prepare(ctx, uapinstaller.Request{
 		Operation: uapinstaller.OpRemove, ClientID: "codex", ClientConfigRoot: config,
 		ClientExecutable: client, InstallationID: req.InstallationID,

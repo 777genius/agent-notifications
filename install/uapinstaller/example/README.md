@@ -10,7 +10,7 @@ GOWORK=off go run .
 
 Prints `external import ok` and does not create `/uapinstaller-sample-state`.
 
-Install → inspect → repeat → remove requires explicit absolute roots and a
+Install → inspect → repeat → repair → remove requires explicit absolute roots and a
 standard local package plus helper:
 
 ```sh
