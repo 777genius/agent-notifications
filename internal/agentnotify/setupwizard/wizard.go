@@ -1301,6 +1301,10 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 			}
 			return portableInstallFailed(notifyAgents[0], req, out, err), err
 		}
+		if len(got) != len(notifyAgents) {
+			out.Outcome, out.Reason = "incomplete", "portable_install_failed"
+			return out, fmt.Errorf("group apply returned %d bindings", len(got))
+		}
 		generation, err = rereadGeneration(req.ControlRoot)
 		if err != nil {
 			out.Outcome, out.Reason = "incomplete", err.Error()

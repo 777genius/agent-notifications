@@ -269,10 +269,16 @@ func (e *Engine) applyGroup(ctx context.Context, prepared *PreparedOperation) (R
 		return e.applyRemoveGroup(ctx, prepared)
 	}
 	if prepared.plan.NoChange {
-		return Result{
+		result := Result{
 			Operation: prepared.req.Operation, InstallationID: prepared.plan.InstallationID,
 			Outcome: OutcomeUnchanged, NoChange: true, Binding: prepared.facts,
-		}, nil
+		}
+		for _, target := range prepared.plan.Targets {
+			result.Targets = append(result.Targets, ClientResult{
+				ClientID: target.ClientID, BindingID: target.BindingID,
+			})
+		}
+		return result, nil
 	}
 	if _, err := e.helper(); err != nil {
 		return Result{Operation: prepared.req.Operation, Outcome: OutcomeIncomplete, Reason: err.Error()}, err

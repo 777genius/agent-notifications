@@ -677,3 +677,164 @@ func TestUAPMaterializerUpdateChangesLiveRevision(t *testing.T) {
 		t.Fatalf("update changed installation: %s vs %s", installed.InstallationID, got.InstallationID)
 	}
 }
+
+func TestUAPMaterializerApplyGroupBothClientsShareDataIndependentLocators(t *testing.T) {
+	codex, ledger := bindingFixture(t)
+	probe := buildProbe(t)
+	root := filepath.Dir(codex.ControlRoot)
+	pkg := filepath.Join(root, "package source with spaces")
+	writePackage(t, pkg, probe)
+	uapRoot := filepath.Join(root, "uap")
+	claudeConfig := filepath.Join(root, "home", "claude config")
+	codexConfig := filepath.Join(root, "home", "codex config")
+	for _, dir := range []string{claudeConfig, codexConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mat, err := NewMaterializer(UAPRoots{
+		StateFile:        filepath.Join(uapRoot, "state", "state-v2.json"),
+		LockFile:         filepath.Join(uapRoot, "state", "mutation.lock"),
+		OperationsDir:    filepath.Join(uapRoot, "state", "operations"),
+		PluginDataBase:   filepath.Join(uapRoot, "plugin data"),
+		ManagedRoot:      filepath.Join(uapRoot, "managed"),
+		HelperExecutable: probe,
+		ClaudeRunner:     listingRunner{configRoot: claudeConfig},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := Identity{
+		InstallationID: "00000000-0000-4000-8000-000000000099",
+		ComponentID:    codex.ComponentID, Owner: codex.Owner, ScopeRoot: codex.ScopeRoot,
+		ControlRoot: codex.ControlRoot, GlobalConfig: codex.GlobalConfig, RuntimeRoot: codex.RuntimeRoot,
+		Primary: codex.Primary,
+	}
+	got, err := mat.ApplyGroup(testCtx(t), []MaterializeRequest{
+		{
+			Identity: id, Integration: portable.Codex, ExpectedGeneration: ledger.Generation,
+			PackageRoot: pkg, ClientConfigRoot: codexConfig, ClientExecutable: probe,
+			OperationID: "portable-group-codex",
+		},
+		{
+			Identity: id, Integration: portable.Claude, ExpectedGeneration: ledger.Generation,
+			PackageRoot: pkg, ClientConfigRoot: claudeConfig, ClientExecutable: probe,
+			OperationID: "portable-group-claude",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("group bindings: %+v", got)
+	}
+	if got[0].DataRoot != got[1].DataRoot {
+		t.Fatalf("clients did not share PLUGIN_DATA: %s vs %s", got[0].DataRoot, got[1].DataRoot)
+	}
+	codexName, err := got[0].Filename()
+	if err != nil {
+		t.Fatal(err)
+	}
+	claudeName, err := got[1].Filename()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if codexName == claudeName {
+		t.Fatal("shared data used one locator")
+	}
+	lease, err := portable.Acquire(testCtx(t), got[0].DataRoot, codexName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease.Release()
+	lease, err = portable.Acquire(testCtx(t), got[1].DataRoot, claudeName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease.Release()
+	other := filepath.Join(root, "other package")
+	if err := os.MkdirAll(other, 0700); err != nil {
+		t.Fatal(err)
+	}
+	_, err = mat.ApplyGroup(testCtx(t), []MaterializeRequest{
+		{
+			Identity: id, Integration: portable.Codex, PackageRoot: pkg,
+			ClientConfigRoot: codexConfig, ClientExecutable: probe,
+		},
+		{
+			Identity: id, Integration: portable.Claude, PackageRoot: other,
+			ClientConfigRoot: claudeConfig, ClientExecutable: probe,
+		},
+	})
+	if err == nil || !errors.Is(err, ErrPreflight) {
+		t.Fatalf("mixed package roots: %v", err)
+	}
+}
+
+func TestUAPMaterializerApplyGroupRepeatUnchanged(t *testing.T) {
+	codex, ledger := bindingFixture(t)
+	probe := buildProbe(t)
+	root := filepath.Dir(codex.ControlRoot)
+	pkg := filepath.Join(root, "package source with spaces")
+	writePackage(t, pkg, probe)
+	uapRoot := filepath.Join(root, "uap")
+	claudeConfig := filepath.Join(root, "home", "claude config")
+	codexConfig := filepath.Join(root, "home", "codex config")
+	for _, dir := range []string{claudeConfig, codexConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mat, err := NewMaterializer(UAPRoots{
+		StateFile:        filepath.Join(uapRoot, "state", "state-v2.json"),
+		LockFile:         filepath.Join(uapRoot, "state", "mutation.lock"),
+		OperationsDir:    filepath.Join(uapRoot, "state", "operations"),
+		PluginDataBase:   filepath.Join(uapRoot, "plugin data"),
+		ManagedRoot:      filepath.Join(uapRoot, "managed"),
+		HelperExecutable: probe,
+		ClaudeRunner:     listingRunner{configRoot: claudeConfig},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := Identity{
+		InstallationID: "00000000-0000-4000-8000-00000000009a",
+		ComponentID:    codex.ComponentID, Owner: codex.Owner, ScopeRoot: codex.ScopeRoot,
+		ControlRoot: codex.ControlRoot, GlobalConfig: codex.GlobalConfig, RuntimeRoot: codex.RuntimeRoot,
+		Primary: codex.Primary,
+	}
+	reqs := []MaterializeRequest{
+		{
+			Identity: id, Integration: portable.Codex, ExpectedGeneration: ledger.Generation,
+			PackageRoot: pkg, ClientConfigRoot: codexConfig, ClientExecutable: probe,
+			OperationID: "portable-group-repeat",
+		},
+		{
+			Identity: id, Integration: portable.Claude, ExpectedGeneration: ledger.Generation,
+			PackageRoot: pkg, ClientConfigRoot: claudeConfig, ClientExecutable: probe,
+			OperationID: "portable-group-repeat",
+		},
+	}
+	first, err := mat.ApplyGroup(testCtx(t), reqs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(codex.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reqs[0].ExpectedGeneration = snap.Ledger.Generation
+	reqs[1].ExpectedGeneration = snap.Ledger.Generation
+	reqs[0].OperationID = "portable-group-repeat-again"
+	reqs[1].OperationID = "portable-group-repeat-again"
+	again, err := mat.ApplyGroup(testCtx(t), reqs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(again) != 2 || again[0].InstallationID != first[0].InstallationID || again[1].InstallationID != first[1].InstallationID {
+		t.Fatalf("repeat group: first=%+v again=%+v", first, again)
+	}
+	if again[0].BindingID != first[0].BindingID || again[1].BindingID != first[1].BindingID {
+		t.Fatalf("repeat group rebound: first=%+v again=%+v", first, again)
+	}
+}

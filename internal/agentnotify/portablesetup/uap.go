@@ -461,9 +461,6 @@ func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest)
 				break
 			}
 		}
-		if facts.ClientID == "" {
-			facts = result.Binding
-		}
 		if state, loadErr := eng.Inspect(ctx); loadErr == nil {
 			for _, installation := range state.Installations {
 				if installation.InstallationID != result.InstallationID && reqs[0].Identity.InstallationID != installation.InstallationID {
@@ -480,6 +477,9 @@ func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest)
 					}
 				}
 			}
+		}
+		if facts.ClientID == "" {
+			return nil, fmt.Errorf("%w: group result omitted %s", ErrPreflight, req.Integration)
 		}
 		pb, err := Complete(req.Identity, req.Integration, facts.ClientID, facts.Scope, facts.TargetPath, facts.DataRoot)
 		if err != nil {

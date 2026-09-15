@@ -2046,6 +2046,98 @@ func TestWizardUpdateOneClientKeepsSibling(t *testing.T) {
 	}
 }
 
+func TestCanGroupNotify(t *testing.T) {
+	mat := portablesetup.Materializer{}
+	id := portablesetup.Identity{InstallationID: "00000000-0000-4000-8000-000000000001"}
+	both := []portable.Integration{portable.Claude, portable.Codex}
+	if !canGroupNotify(mat, id, Request{Action: ActionInstall}, both) {
+		t.Fatal("unbound install should group")
+	}
+	if canGroupNotify(mat, id, Request{Action: ActionUpdate}, both) {
+		t.Fatal("unbound update should not group")
+	}
+	if canGroupNotify(mat, id, Request{Action: ActionRepair}, both) {
+		t.Fatal("unbound repair should not group")
+	}
+	if canGroupNotify(mat, id, Request{Action: ActionUninstall}, both) {
+		t.Fatal("uninstall should not group")
+	}
+	if canGroupNotify(mat, id, Request{Action: ActionInstall}, []portable.Integration{portable.Codex}) {
+		t.Fatal("single client should not group")
+	}
+}
+
+func TestWizardUpdateBothLiveClients(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	claudeConfig := filepath.Join(filepath.Dir(control), "claude-profile")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"claude", "codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClaudeConfig: claudeConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot:    filepath.Join(filepath.Dir(control), "scope"),
+		ClaudeRunner: listingRunner{configRoot: claudeConfig},
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install both: %+v %v", installed, err)
+	}
+	var sawClaude, sawCodex bool
+	for _, target := range installed.Targets {
+		if target.Unit != "agent-notify" {
+			continue
+		}
+		if target.Outcome != "completed" || target.Reason == "" {
+			t.Fatalf("install target: %+v", target)
+		}
+		switch target.Client {
+		case "claude":
+			sawClaude = true
+		case "codex":
+			sawCodex = true
+		}
+	}
+	if !sawClaude || !sawCodex {
+		t.Fatalf("install omitted a client: %+v", installed.Targets)
+	}
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	req.Action = ActionUpdate
+	got, err := Run(ctx, req)
+	if err != nil || got.Outcome != "completed" {
+		t.Fatalf("update both: %+v %v", got, err)
+	}
+	if got.InstallationID != installed.InstallationID {
+		t.Fatalf("update changed installation: install=%s update=%s", installed.InstallationID, got.InstallationID)
+	}
+	live := LiveNotifyClients(control, []string{"claude", "codex"})
+	if len(live) != 2 {
+		t.Fatalf("live after group update: %v", live)
+	}
+	req.Action = ActionRepair
+	repaired, err := Run(ctx, req)
+	if err != nil || repaired.Outcome != "completed" {
+		t.Fatalf("repair both: %+v %v", repaired, err)
+	}
+	if repaired.InstallationID != installed.InstallationID {
+		t.Fatalf("repair changed installation: install=%s repair=%s", installed.InstallationID, repaired.InstallationID)
+	}
+}
+
 func liveTargetPath(t *testing.T, statePath, clientID string) string {
 	t.Helper()
 	eng, err := uapinstaller.New(uapinstaller.Config{StateRoot: filepath.Dir(statePath)})

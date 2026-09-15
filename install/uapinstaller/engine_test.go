@@ -590,6 +590,75 @@ func TestInstallGroupBothThenRemoveOne(t *testing.T) {
 	}
 }
 
+func TestInstallGroupRepeatUnchangedReportsBothTargets(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(base, "codex-config")
+	claudeConfig := filepath.Join(base, "claude-config")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eng, err := New(Config{
+		StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe,
+		Runner: listingRunner{configRoot: claudeConfig},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "00000000-0000-4000-8000-0000000000b3"
+	req := Request{
+		Operation: OpInstall, PackageRoot: pkg, InstallationID: id, OperationID: "group-repeat-install",
+		RequiredComponents: []string{"mcp", "skills"}, ClientExecutable: probe,
+		Targets: []ClientTarget{
+			{ClientID: "codex", ClientConfigRoot: codexConfig, ClientExecutable: probe},
+			{ClientID: "claude", ClientConfigRoot: claudeConfig, ClientExecutable: probe},
+		},
+	}
+	prepared, err := eng.Prepare(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, prepared, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = prepared.Close()
+	req.OperationID = "group-repeat-again"
+	again, err := eng.Prepare(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !again.Plan().NoChange {
+		t.Fatalf("repeat group plan mutated: %+v", again.Plan())
+	}
+	got, err := eng.Apply(ctx, again, Decision{Confirmed: true})
+	_ = again.Close()
+	if err != nil || got.Outcome != OutcomeUnchanged || !got.NoChange {
+		t.Fatalf("repeat group apply: %+v %v", got, err)
+	}
+	if len(got.Targets) != 2 {
+		t.Fatalf("repeat group omitted targets: %+v", got.Targets)
+	}
+	seen := map[string]bool{}
+	for _, target := range got.Targets {
+		seen[target.ClientID] = true
+		if target.BindingID == "" {
+			t.Fatalf("repeat group omitted binding: %+v", target)
+		}
+	}
+	if !seen["claude"] || !seen["codex"] {
+		t.Fatalf("repeat group clients: %+v", got.Targets)
+	}
+}
+
 func TestRepairGroupMissingOneDoesNotMutate(t *testing.T) {
 	skipWindowsLauncherExecuteBit(t)
 	ctx := testCtx(t)
