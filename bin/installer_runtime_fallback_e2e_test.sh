@@ -388,14 +388,15 @@ if HOST_NODE:
             link.symlink_to(child, target_is_directory=True)
             via_parent = str(link / '..')
             if os.path.realpath(via_parent) != os.path.realpath(plugin):
-                fail('python realpath fixture', via_parent)
-            result = subprocess.run(
-                [HOST_NODE, '-', via_parent, str(td / 'missing.json'), 'claude-notifications-go',
-                 'codex', str(td / 'cache'), str(td / 'market'), str(plugin)],
-                input=jsstage, text=True, capture_output=True, env=env, timeout=20)
-            if result.returncode == 0 or 'Staging must be outside refreshed bundles' not in result.stderr:
-                fail('JSSTAGE symlink .. overlap', describe(result) + ' tmpdir=' + via_parent)
-            pass_name('JSSTAGE rejects TMPDIR via symlink then ..')
+                print('SKIP JSSTAGE symlink .. overlap: host realpath does not follow ' + via_parent)
+            else:
+                result = subprocess.run(
+                    [HOST_NODE, '-', via_parent, str(td / 'missing.json'), 'claude-notifications-go',
+                     'codex', str(td / 'cache'), str(td / 'market'), str(plugin)],
+                    input=jsstage, text=True, capture_output=True, env=env, timeout=20)
+                if result.returncode == 0 or 'Staging must be outside refreshed bundles' not in result.stderr:
+                    fail('JSSTAGE symlink .. overlap', describe(result) + ' tmpdir=' + via_parent)
+                pass_name('JSSTAGE rejects TMPDIR via symlink then ..')
     helpers, _, _ = jsstage.partition('const argv = process.argv.slice(2);')
     drive_js = (
         "Object.defineProperty(process, 'platform', { value: 'win32' });\n"
