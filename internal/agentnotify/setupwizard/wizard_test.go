@@ -411,6 +411,14 @@ func TestPlanShowsMixedRepairPerBindingDigests(t *testing.T) {
 	if claude == "" || claude == codex {
 		t.Fatalf("plan collapsed mixed repair digests: %s", plan.Text)
 	}
+	req.Action = ActionUpdate
+	updatePlan, err := Plan(ctx, req)
+	if err != nil {
+		t.Fatalf("mixed update plan: %+v %v", updatePlan, err)
+	}
+	if inspectField(updatePlan.Text, "claude-source-digest=") != claude || inspectField(updatePlan.Text, "codex-source-digest=") != codex {
+		t.Fatalf("update plan collapsed mixed digests: %s", updatePlan.Text)
+	}
 	after, err := os.ReadFile(filepath.Join(filepath.Dir(control), "uap", "state", "state-v2.json"))
 	if err != nil || !bytes.Equal(before, after) {
 		t.Fatal("mixed repair plan mutated UAP state")

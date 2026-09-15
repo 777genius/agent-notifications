@@ -516,3 +516,31 @@ func plantRetainedInstallation(t *testing.T) *Engine {
 	}
 	return eng
 }
+
+func TestRecordedBindingDigestPrefersPackageRevision(t *testing.T) {
+	binding := domain.ClientBinding{
+		PackageRevision: &domain.ClientPackageRevision{TreeDigest: "sha256:binding"},
+	}
+	if got := recordedBindingDigest(binding, "sha256:fallback"); got != "sha256:binding" {
+		t.Fatalf("recorded digest: %s", got)
+	}
+	if got := recordedBindingDigest(domain.ClientBinding{}, "sha256:fallback"); got != "sha256:fallback" {
+		t.Fatalf("fallback digest: %s", got)
+	}
+}
+
+func TestPlanClientDigestUsesMatchingTarget(t *testing.T) {
+	plan := Plan{
+		TreeDigest: "sha256:group",
+		Targets: []PlanTarget{
+			{ClientID: "codex", TreeDigest: "sha256:codex"},
+			{ClientID: "claude", TreeDigest: "sha256:claude"},
+		},
+	}
+	if got := planClientDigest(plan, "claude"); got != "sha256:claude" {
+		t.Fatalf("claude digest: %s", got)
+	}
+	if got := planClientDigest(plan, "cursor"); got != "sha256:group" {
+		t.Fatalf("unknown client digest: %s", got)
+	}
+}

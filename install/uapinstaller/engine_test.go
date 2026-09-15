@@ -2847,6 +2847,17 @@ func TestRepairGroupMixedRevisionsUsesPerTargetPackage(t *testing.T) {
 	if claudeDigest == "" || codexDigest == "" || claudeDigest == codexDigest {
 		t.Fatalf("mixed repair plan digests: %+v", plan.Targets)
 	}
+	projected := map[string]string{}
+	eng.cfg.ServerName = "sample-notify"
+	eng.cfg.ProjectArgs = func(facts BindingFacts) ([]string, error) {
+		projected[facts.ClientID] = facts.TreeDigest
+		return []string{"portable-launch", "--locator", facts.DataRoot}, nil
+	}
+	callbacks := map[string]string{}
+	eng.cfg.OnCommittedBinding = func(_ context.Context, facts BindingFacts) error {
+		callbacks[facts.ClientID] = facts.TreeDigest
+		return nil
+	}
 	got, err = eng.Apply(ctx, repaired, Decision{Confirmed: true})
 	_ = repaired.Close()
 	if err != nil || (got.Outcome != OutcomeUnchanged && got.Outcome != OutcomeCompleted) {
@@ -2858,6 +2869,12 @@ func TestRepairGroupMixedRevisionsUsesPerTargetPackage(t *testing.T) {
 	}
 	if seen["claude"].TreeDigest != claudeDigest || seen["codex"].TreeDigest != codexDigest {
 		t.Fatalf("mixed repair result collapsed digests: %+v plan claude=%s codex=%s", got.Targets, claudeDigest, codexDigest)
+	}
+	if callbacks["claude"] != claudeDigest || callbacks["codex"] != codexDigest {
+		t.Fatalf("mixed repair callback collapsed digests: %+v plan claude=%s codex=%s", callbacks, claudeDigest, codexDigest)
+	}
+	if got.Outcome == OutcomeCompleted && (projected["claude"] != claudeDigest || projected["codex"] != codexDigest) {
+		t.Fatalf("mixed repair projection collapsed digests: %+v plan claude=%s codex=%s", projected, claudeDigest, codexDigest)
 	}
 	view, err := eng.Inspect(ctx)
 	if err != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 2 {

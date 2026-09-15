@@ -146,7 +146,7 @@ func runLifecycle(ctx context.Context, eng *uapinstaller.Engine, install, update
 	var clients []string
 	for _, installation := range view.Installations {
 		for _, binding := range installation.Bindings {
-			clients = append(clients, binding.ClientID)
+			clients = append(clients, binding.ClientID+"="+binding.TreeDigest)
 		}
 	}
 	fmt.Printf("installations=%d inspect-bindings=%d %s recovery=%t\n", len(view.Installations), len(clients), strings.Join(clients, ","), view.Recovery.Required)

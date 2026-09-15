@@ -19,6 +19,9 @@ stays `ErrUpdateRequired`. `InspectedBinding.TreeDigest` is that binding's
 recorded package digest; mixed live revisions are not collapsed to
 `InspectedInstallation.TreeDigest`. Apply `ClientResult.TreeDigest` is that
 same per-binding digest, including unchanged mixed group Repair.
+`OnCommittedBinding` receives the same per-binding digest, not the first
+group envelope. `ProjectArgs` BindingFacts use the envelope digest of the
+client being staged.
 
 ## Contract
 

@@ -29,6 +29,9 @@ func (s seamStager) StageWithPluginData(ctx context.Context, envelope domain.Pac
 	facts.DataRoot = data
 	facts.ClientID = string(plan.ClientID)
 	facts.Scope = string(plan.Scope)
+	if envelope.TreeDigest != "" {
+		facts.TreeDigest = envelope.TreeDigest
+	}
 	if facts.InstallationID != "" {
 		facts.BindingID = domain.ComputeClientBindingID(facts.InstallationID, facts.ClientID, facts.Scope, plan.ActivePath)
 	}
@@ -177,6 +180,7 @@ func (a seamActivator) committedFacts(request domain.ActivationRequest) (Binding
 		facts.DataRoot = receipt.Locator
 		facts.DataReceiptID = binding.DataReceiptID
 		facts.ClientID = binding.ClientID
+		facts.TreeDigest = recordedBindingDigest(binding, facts.TreeDigest)
 		return facts, nil
 	}
 	return facts, nil
