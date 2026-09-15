@@ -175,23 +175,24 @@ func (e *Engine) Recover(ctx context.Context, observed Inspection) (Result, erro
 	}
 	live, err := e.observe()
 	if err != nil {
-		result := Result{Outcome: OutcomeRecovery, Reason: live.Recovery.Reason}
+		result := Result{Outcome: OutcomeRecovery, Reason: live.Recovery.Reason, Recovery: classifyRecovery(observed.Recovery, live.Recovery, false, err)}
 		if result.Reason == "" {
 			result.Reason = err.Error()
 		}
 		return result, fmt.Errorf("%w: %v", ErrRecoveryRequired, err)
 	}
 	if live.Recovery.Reason != "" {
-		return Result{Outcome: OutcomeRecovery, Reason: live.Recovery.Reason}, ErrRecoveryRequired
+		return Result{Outcome: OutcomeRecovery, Reason: live.Recovery.Reason, Recovery: classifyRecovery(observed.Recovery, live.Recovery, true, ErrRecoveryRequired)}, ErrRecoveryRequired
 	}
 	if !liveWithinObserved(live.Recovery, observed.Recovery) {
-		return Result{Outcome: OutcomeConflict, Reason: "plan_changed"}, ErrPlanChanged
+		return Result{Outcome: OutcomeConflict, Reason: "plan_changed", Recovery: classifyRecovery(observed.Recovery, live.Recovery, true, ErrPlanChanged)}, ErrPlanChanged
 	}
 	if !live.Recovery.Required {
-		return Result{Outcome: OutcomeUnchanged, Reason: "already_recovered"}, nil
+		return Result{Outcome: OutcomeUnchanged, Reason: "already_recovered", Recovery: classifyRecovery(observed.Recovery, live.Recovery, true, nil)}, nil
 	}
 	if err := svc.Kernel.Recover(ctx); err != nil {
-		return Result{Outcome: OutcomeRecovery, Reason: err.Error()}, fmt.Errorf("%w: %v", ErrRecoveryRequired, err)
+		after, afterErr := e.observe()
+		return Result{Outcome: OutcomeRecovery, Reason: err.Error(), Recovery: classifyRecovery(observed.Recovery, after.Recovery, afterErr == nil, err)}, fmt.Errorf("%w: %v", ErrRecoveryRequired, err)
 	}
 	after, afterErr := e.observe()
 	if afterErr != nil || after.Recovery.Required {
@@ -202,9 +203,9 @@ func (e *Engine) Recover(ctx context.Context, observed Inspection) (Result, erro
 		if reason == "" {
 			reason = "pending transactions remain"
 		}
-		return Result{Outcome: OutcomeRecovery, Reason: reason}, fmt.Errorf("%w: %s", ErrRecoveryRequired, reason)
+		return Result{Outcome: OutcomeRecovery, Reason: reason, Recovery: classifyRecovery(observed.Recovery, after.Recovery, afterErr == nil, fmt.Errorf("%s", reason))}, fmt.Errorf("%w: %s", ErrRecoveryRequired, reason)
 	}
-	return Result{Outcome: OutcomeCompleted}, nil
+	return Result{Outcome: OutcomeCompleted, Recovery: classifyRecovery(observed.Recovery, after.Recovery, true, nil)}, nil
 }
 
 // RecoverCurrent inspects this root and recovers that exact live scope.
@@ -215,7 +216,40 @@ func (e *Engine) RecoverCurrent(ctx context.Context) (Result, error) {
 		if reason == "" {
 			reason = err.Error()
 		}
-		return Result{Outcome: OutcomeRecovery, Reason: reason}, err
+		return Result{Outcome: OutcomeRecovery, Reason: reason, Recovery: classifyRecovery(view.Recovery, view.Recovery, false, err)}, err
 	}
 	return e.Recover(ctx, view)
+}
+
+func classifyRecovery(before, after RecoveryObservation, observedAfter bool, recoverErr error) RecoveryReport {
+	afterKeys := map[string]bool{}
+	if observedAfter {
+		for _, key := range pendingIdentity(after) {
+			afterKeys[key] = true
+		}
+	}
+	report := RecoveryReport{}
+	place := func(item PendingReceipt, key string) {
+		switch {
+		case !observedAfter:
+			report.Unknown = append(report.Unknown, item)
+		case afterKeys[key]:
+			report.Remaining = append(report.Remaining, item)
+		case recoverErr != nil:
+			report.Unknown = append(report.Unknown, item)
+		default:
+			report.Resolved = append(report.Resolved, item)
+		}
+	}
+	for _, journal := range before.Journals {
+		place(PendingReceipt{
+			OperationID: journal.OperationID, BindingID: journal.BindingID,
+			InstallationID: journal.InstallationID, TargetPath: journal.TargetPath,
+			Phase: journal.Phase, JournalPresent: true,
+		}, "journal|"+journal.OperationID+"|"+journal.Phase+"|"+journal.Digest)
+	}
+	for _, receipt := range before.Receipts {
+		place(receipt, "receipt|"+receipt.OperationID+"|"+receipt.Phase+"|"+receipt.BindingID)
+	}
+	return report
 }

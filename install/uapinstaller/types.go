@@ -82,6 +82,16 @@ type Result struct {
 	DataRetained   bool
 	Client         ClientResult
 	NextActions    []NextAction
+	// Recovery classifies observed receipts after Recover. Apply leaves it empty.
+	Recovery RecoveryReport
+}
+
+// RecoveryReport is the §5.8 resolved/remaining/unknown receipt view.
+// It is populated even when Recover returns an error.
+type RecoveryReport struct {
+	Resolved  []PendingReceipt
+	Remaining []PendingReceipt
+	Unknown   []PendingReceipt
 }
 
 // NextAction is a structured follow-up. It is not a bool and not a retry token.

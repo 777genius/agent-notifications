@@ -30,7 +30,10 @@ query a live Claude/Codex identity by default.
 Prepare copies `Request` and reports canonical `Plan.TreeDigest` with algorithm
 `agentplugins-tree-sha256-v1`. That value is the packagedigest source identity,
 not the installed packagesnapshot ArtifactDigest. Scratch `TempRoot` must not
-overlap the package source, including case and symlink aliases. An existing record whose
+overlap the package source, including case, symlink, and Unicode NFC/NFD aliases
+when the filesystem presents them as the same directory. After a terminal
+remove, a later install of the missing client uses the explicit profile in the
+new request; sibling bindings and PLUGIN_DATA stay. An existing record whose
 `TreeDigest` does not match the snapshot, including an old-bridge artifact
 digest in that field, returns `ErrUpdateRequired` without rewriting state.
 Remove Prepare verifies the managed artifact and persisted target before any
