@@ -267,13 +267,17 @@ func plantPendingJournal(t *testing.T) (*Engine, dirswap.Receipt) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	owned := filepath.Join(root, "managed")
+	return eng, plantOpenJournal(t, eng, "pending-journal-op")
+}
+
+func plantOpenJournal(t *testing.T, eng *Engine, opID string) dirswap.Receipt {
+	t.Helper()
+	owned := eng.cfg.ManagedRoot
 	active := filepath.Join(owned, "plugin")
 	staging := filepath.Join(owned, ".agentplugins-staging-pending")
 	if err := os.MkdirAll(staging, 0700); err != nil {
 		t.Fatal(err)
 	}
-	opID := "pending-journal-op"
 	sum := sha256.Sum256([]byte(opID))
 	receipt := dirswap.Receipt{
 		SchemaVersion: 3, Operation: dirswap.OperationSwap, OperationID: opID,
@@ -292,7 +296,7 @@ func plantPendingJournal(t *testing.T) (*Engine, dirswap.Receipt) {
 	if err := os.WriteFile(filepath.Join(eng.cfg.OperationsDir, opID+".json"), append(body, '\n'), 0600); err != nil {
 		t.Fatal(err)
 	}
-	return eng, receipt
+	return receipt
 }
 
 func plantStateCommittedReceipt(t *testing.T) (*Engine, domain.MutationReceipt) {

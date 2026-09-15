@@ -1232,6 +1232,198 @@ func TestUpdateOneClientKeepsSibling(t *testing.T) {
 	}
 }
 
+func TestUpdateAndRepairCancelledBeforeMutation(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	for _, tc := range []struct {
+		op Operation
+		id string
+	}{
+		{OpUpdate, "00000000-0000-4000-8000-000000000093"},
+		{OpRepair, "00000000-0000-4000-8000-000000000094"},
+	} {
+		t.Run(string(tc.op), func(t *testing.T) {
+			ctx := testCtx(t)
+			probe := buildProbe(t)
+			base, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			pkg := filepath.Join(base, "package")
+			writePackage(t, pkg, probe)
+			config := filepath.Join(base, "config")
+			if err := os.MkdirAll(config, 0700); err != nil {
+				t.Fatal(err)
+			}
+			eng, err := New(Config{StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe})
+			if err != nil {
+				t.Fatal(err)
+			}
+			installed, err := eng.Prepare(ctx, Request{
+				Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+				ClientExecutable: probe, InstallationID: tc.id, OperationID: string(tc.op) + "-install",
+				RequiredComponents: []string{"mcp", "skills"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := eng.Apply(ctx, installed, Decision{Confirmed: true}); err != nil {
+				t.Fatal(err)
+			}
+			_ = installed.Close()
+			before, err := os.ReadFile(eng.cfg.StateFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			prepared, err := eng.Prepare(ctx, Request{
+				Operation: tc.op, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+				ClientExecutable: probe, InstallationID: tc.id, OperationID: string(tc.op) + "-cancel",
+				RequiredComponents: []string{"mcp", "skills"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cancelled, err := eng.Apply(ctx, prepared, Decision{})
+			_ = prepared.Close()
+			if !errors.Is(err, ErrCancelled) || cancelled.Outcome != OutcomeCancelled {
+				t.Fatalf("cancelled %s: %+v %v", tc.op, cancelled, err)
+			}
+			after, err := os.ReadFile(eng.cfg.StateFile)
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatalf("cancelled %s mutated state: %v", tc.op, err)
+			}
+		})
+	}
+}
+
+func TestUpdateAndRepairRefusePendingJournalWithoutRecovering(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	for _, tc := range []struct {
+		op Operation
+		id string
+	}{
+		{OpUpdate, "00000000-0000-4000-8000-000000000095"},
+		{OpRepair, "00000000-0000-4000-8000-000000000096"},
+	} {
+		t.Run(string(tc.op), func(t *testing.T) {
+			ctx := testCtx(t)
+			probe := buildProbe(t)
+			base, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			pkg := filepath.Join(base, "package")
+			writePackage(t, pkg, probe)
+			config := filepath.Join(base, "config")
+			if err := os.MkdirAll(config, 0700); err != nil {
+				t.Fatal(err)
+			}
+			eng, err := New(Config{StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe})
+			if err != nil {
+				t.Fatal(err)
+			}
+			installed, err := eng.Prepare(ctx, Request{
+				Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+				ClientExecutable: probe, InstallationID: tc.id, OperationID: string(tc.op) + "-journal-install",
+				RequiredComponents: []string{"mcp", "skills"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := eng.Apply(ctx, installed, Decision{Confirmed: true}); err != nil {
+				t.Fatal(err)
+			}
+			_ = installed.Close()
+			receipt := plantOpenJournal(t, eng, string(tc.op)+"-pending")
+			prepared, err := eng.Prepare(ctx, Request{
+				Operation: tc.op, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+				ClientExecutable: probe, InstallationID: tc.id, OperationID: string(tc.op) + "-journal-blocked",
+				RequiredComponents: []string{"mcp", "skills"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := eng.Apply(ctx, prepared, Decision{Confirmed: true})
+			_ = prepared.Close()
+			if !errors.Is(err, ErrRecoveryRequired) || result.Outcome != OutcomeRecovery {
+				t.Fatalf("pending journal %s: %+v %v", tc.op, result, err)
+			}
+			open, listErr := dirswap.Manager{JournalDir: eng.cfg.OperationsDir}.ListOpen()
+			if listErr != nil || len(open) != 1 || open[0].OperationID != receipt.OperationID {
+				t.Fatalf("%s recovered journal: %+v %v", tc.op, open, listErr)
+			}
+		})
+	}
+}
+
+func TestUpdateStalePlanChanged(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "00000000-0000-4000-8000-000000000097"
+	installed, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: id, OperationID: "update-plan-install",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, installed, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = installed.Close()
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"sample-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := eng.Prepare(ctx, Request{
+		Operation: OpUpdate, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: id, OperationID: "update-plan-stale",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = updated.Close() }()
+	store := statev2.Store{Path: eng.cfg.StateFile}
+	state, err := store.Load()
+	if err != nil || len(state.Installations) != 1 {
+		t.Fatalf("load: %+v %v", state, err)
+	}
+	for bindingID, binding := range state.Installations[0].Clients {
+		binding.TargetLocator = filepath.Join(base, "moved-target")
+		state.Installations[0].Clients[bindingID] = binding
+	}
+	if err := store.Save(state); err != nil {
+		t.Fatal(err)
+	}
+	planted, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved, err := eng.Apply(ctx, updated, Decision{Confirmed: true})
+	if !errors.Is(err, ErrPlanChanged) || moved.Outcome != OutcomeConflict || moved.Reason != "plan_changed" {
+		t.Fatalf("stale update apply: %+v %v", moved, err)
+	}
+	after, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil || !bytes.Equal(planted, after) {
+		t.Fatalf("plan_changed mutated state: %v", err)
+	}
+}
+
 func TestPrepareSnapshotIgnoresLaterSourceMutation(t *testing.T) {
 	skipWindowsLauncherExecuteBit(t)
 	ctx := testCtx(t)

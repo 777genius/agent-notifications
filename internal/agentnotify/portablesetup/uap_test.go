@@ -621,3 +621,59 @@ func TestUAPMaterializerInstallRefusesConfirmedDigestDrift(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestUAPMaterializerUpdateChangesLiveRevision(t *testing.T) {
+	codex, ledger := bindingFixture(t)
+	probe := buildProbe(t)
+	root := filepath.Dir(codex.ControlRoot)
+	pkg := filepath.Join(root, "package source with spaces")
+	writePackage(t, pkg, probe)
+	uapRoot := filepath.Join(root, "uap")
+	mat, err := NewMaterializer(UAPRoots{
+		StateFile:        filepath.Join(uapRoot, "state", "state-v2.json"),
+		LockFile:         filepath.Join(uapRoot, "state", "mutation.lock"),
+		OperationsDir:    filepath.Join(uapRoot, "state", "operations"),
+		PluginDataBase:   filepath.Join(uapRoot, "plugin data"),
+		ManagedRoot:      filepath.Join(uapRoot, "managed"),
+		HelperExecutable: probe,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := Identity{
+		InstallationID: "00000000-0000-4000-8000-000000000098",
+		ComponentID:    codex.ComponentID, Owner: codex.Owner, ScopeRoot: codex.ScopeRoot,
+		ControlRoot: codex.ControlRoot, GlobalConfig: codex.GlobalConfig, RuntimeRoot: codex.RuntimeRoot,
+		Primary: codex.Primary,
+	}
+	config := filepath.Join(root, "home", "codex config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := mat.Install(testCtx(t), MaterializeRequest{
+		Identity: id, Integration: portable.Codex, ExpectedGeneration: ledger.Generation,
+		PackageRoot: pkg, ClientConfigRoot: config, ClientExecutable: probe,
+		OperationID: "portable-update-install",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(codex.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := mat.Update(testCtx(t), MaterializeRequest{
+		Identity: id, Integration: portable.Codex, ExpectedGeneration: snap.Ledger.Generation,
+		PackageRoot: pkg, ClientConfigRoot: config, ClientExecutable: probe,
+		OperationID: "portable-update-apply",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.InstallationID != installed.InstallationID {
+		t.Fatalf("update changed installation: %s vs %s", installed.InstallationID, got.InstallationID)
+	}
+}
