@@ -81,6 +81,32 @@ def recorded_install(case):
     return ran
 
 
+def with_noglob(env):
+    # Git Bash bash.exe is Win32: its CRT globs a bare "*" argv before the
+    # script runs. noglob plus a quoted -c command line keep the literal.
+    msys = env.get('MSYS', '')
+    if 'noglob' not in msys.split():
+        env = dict(env, MSYS=(msys + ' noglob').strip())
+    return env
+
+
+def run_loader(args, env, piped=False, documented=False):
+    env = with_noglob(env)
+    setup_sh = bash_path(root / 'bin/setup.sh')
+    if documented:
+        command = [HOST_BASH, '-c', public_command.replace(
+            '| bash)', '| bash -s -- ' + ' '.join(map(shlex.quote, args)) + ')')]
+        stdin = None
+    elif piped:
+        command = [HOST_BASH, '-c', 'exec ' + ' '.join(
+            shlex.quote(x) for x in [bash_path(HOST_BASH), '-s', '--'] + args)]
+        stdin = loader
+    else:
+        command = [HOST_BASH, '-c', 'exec ' + ' '.join(shlex.quote(x) for x in [setup_sh] + args)]
+        stdin = None
+    return subprocess.run(command, input=stdin, text=True, capture_output=True, env=env, timeout=20)
+
+
 def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, piped=False, documented=False):
     with tempfile.TemporaryDirectory(prefix='setup-test-', dir=os.environ['TMPDIR']) as tmp:
         case = Path(tmp)
@@ -98,13 +124,7 @@ def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, pipe
                    BOOTSTRAP_RELEASE_TAG='untrusted', BOOTSTRAP_RELEASE_COMMIT='untrusted',
                    INSTALL_SCRIPT_URL='https://example.invalid/not-used')
         args = ['--product', 'both', 'argument with spaces', '*']
-        command = [HOST_BASH, '-s', '--'] if piped else [HOST_BASH, str(root / 'bin/setup.sh')]
-        command += args
-        if documented:
-            command = [HOST_BASH, '-c', public_command.replace(
-                '| bash)', '| bash -s -- ' + ' '.join(map(shlex.quote, args)) + ')')]
-        result = subprocess.run(command, input=loader if piped else None,
-                                text=True, capture_output=True, env=env, timeout=20)
+        result = run_loader(args, env, piped=piped, documented=documented)
         if expected is None:
             assert result.returncode != 0, (name, result.stdout, result.stderr)
             assert not (case / 'ran.json').exists(), name + ': installer ran on failure'
