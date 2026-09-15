@@ -2128,6 +2128,12 @@ func TestWizardCodexHooksWithoutConfigure(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(filepath.Dir(control), "uap", "state", "state-v2.json")); !os.IsNotExist(err) {
 		t.Fatal("hooks-only install opened UAP state")
 	}
+	if live := LiveSetupClients(req, []string{"codex", "claude"}); strings.Join(live, ",") != "codex" {
+		t.Fatalf("hooks-only live clients: %v", live)
+	}
+	if live := LiveNotifyClients(control, []string{"codex"}); len(live) != 0 {
+		t.Fatalf("hooks-only reported notify live: %v", live)
+	}
 	req.Action = ActionInspect
 	req.Yes = false
 	view, err := Run(ctx, req)

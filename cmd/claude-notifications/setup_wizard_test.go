@@ -771,6 +771,31 @@ func TestSetupWizardTTYMixedAddKeepsPerClientUnits(t *testing.T) {
 	if !strings.Contains(out.String(), "hooks=per-client") || !strings.Contains(out.String(), "claude-agent-notify=false") || !strings.Contains(out.String(), "codex-agent-notify=true") {
 		t.Fatalf("mixed tty plan: %s", out.String())
 	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, shared, &out, io.Discard, strings.NewReader("2\n1\ny\n"), true); code != 0 || !strings.Contains(out.String(), "completed") {
+		t.Fatalf("mixed tty keep run: %d %s", code, out.String())
+	}
+	out.Reset()
+	inspect := append([]string{"--action", "inspect", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, inspect, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect after keep: %d %s", code, out.String())
+	}
+	view := decodeWizardJSON(t, out)
+	var claudeMCP, codexMCP string
+	hooksInstalled := false
+	for _, target := range view.Targets {
+		switch {
+		case target.Unit == "agent-notify" && target.Client == "claude":
+			claudeMCP = target.Outcome
+		case target.Unit == "agent-notify" && target.Client == "codex":
+			codexMCP = target.Outcome
+		case target.Unit == "hooks" && target.Outcome == "installed":
+			hooksInstalled = true
+		}
+	}
+	if claudeMCP == "installed" || codexMCP != "installed" || hooksInstalled {
+		t.Fatalf("keep mutated mixed units: %+v", view.Targets)
+	}
 }
 
 func TestSetupWizardSpaceContainingRootsE2E(t *testing.T) {
