@@ -1519,6 +1519,121 @@ func TestRemoveRetainsPluginDataAfterLastClient(t *testing.T) {
 	}
 }
 
+func TestReinstallAfterRemoveUsesExplicitProfile(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	codexOld := filepath.Join(base, "codex-old")
+	codexNew := filepath.Join(base, "codex-new")
+	claudeConfig := filepath.Join(base, "claude-config")
+	for _, dir := range []string{codexOld, codexNew, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eng, err := New(Config{
+		StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe,
+		Runner: listingRunner{configRoot: claudeConfig},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "00000000-0000-4000-8000-000000000069"
+	install := func(client, config, op string) Result {
+		t.Helper()
+		prepared, err := eng.Prepare(ctx, Request{
+			Operation: OpInstall, PackageRoot: pkg, ClientID: client, ClientConfigRoot: config,
+			ClientExecutable: probe, InstallationID: id, OperationID: op,
+			RequiredComponents: []string{"mcp", "skills"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := eng.Apply(ctx, prepared, Decision{Confirmed: true})
+		_ = prepared.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	codexFirst := install("codex", codexOld, "codex-first")
+	if codexFirst.Binding.DataRoot == "" {
+		t.Fatal("install omitted data root")
+	}
+	sentinel := filepath.Join(codexFirst.Binding.DataRoot, "keep.txt")
+	if err := os.WriteFile(sentinel, []byte("retain\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	claudeFirst := install("claude", claudeConfig, "claude-first")
+	if claudeFirst.Binding.BindingID == "" {
+		t.Fatal("claude binding omitted")
+	}
+	rm, err := eng.Prepare(ctx, Request{
+		Operation: OpRemove, ClientID: "codex", ClientConfigRoot: codexOld, ClientExecutable: probe,
+		InstallationID: id, OperationID: "codex-remove", ExternalUninstalled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, rm, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = rm.Close()
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 {
+		t.Fatalf("after codex remove: %+v %v", view, err)
+	}
+	if len(view.Installations[0].Bindings) != 1 || view.Installations[0].Bindings[0].ClientID != "claude" {
+		t.Fatalf("claude binding lost: %+v", view.Installations[0].Bindings)
+	}
+	if view.Installations[0].Bindings[0].BindingID != claudeFirst.Binding.BindingID {
+		t.Fatalf("claude binding revised: %s vs %s", claudeFirst.Binding.BindingID, view.Installations[0].Bindings[0].BindingID)
+	}
+	prepared, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: codexNew,
+		ClientExecutable: probe, InstallationID: id, OperationID: "codex-reinstall",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.Plan().ConfigRoot != codexNew || prepared.Plan().InstallationID != id {
+		t.Fatalf("reinstall plan reused old profile: %+v", prepared.Plan())
+	}
+	reinstalled, err := eng.Apply(ctx, prepared, Decision{Confirmed: true})
+	_ = prepared.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reinstalled.InstallationID != id {
+		t.Fatalf("retained installation lost: %+v", reinstalled)
+	}
+	got, err := os.ReadFile(sentinel)
+	if err != nil || string(got) != "retain\n" {
+		t.Fatalf("PLUGIN_DATA sentinel: %s %v", got, err)
+	}
+	view, err = eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 2 {
+		t.Fatalf("reinstall inspect: %+v %v", view, err)
+	}
+	clients := map[string]string{}
+	for _, binding := range view.Installations[0].Bindings {
+		clients[binding.ClientID] = binding.BindingID
+	}
+	if clients["claude"] != claudeFirst.Binding.BindingID {
+		t.Fatalf("claude binding changed after reinstall: %+v", view.Installations[0].Bindings)
+	}
+	if clients["codex"] == "" {
+		t.Fatal("codex binding missing after reinstall")
+	}
+}
+
 func TestAssessBlockAndUnavailableNeverBecomeAllow(t *testing.T) {
 	ctx := testCtx(t)
 	probe := buildProbe(t)

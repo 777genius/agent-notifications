@@ -147,6 +147,12 @@ func TestRecoverMatchingPendingJournal(t *testing.T) {
 	if err != nil || result.Outcome != OutcomeCompleted {
 		t.Fatalf("recover: %+v %v", result, err)
 	}
+	if len(result.Recovery.Resolved) != 1 || result.Recovery.Resolved[0].OperationID != view.Recovery.Journals[0].OperationID {
+		t.Fatalf("resolved receipts: %+v", result.Recovery)
+	}
+	if len(result.Recovery.Remaining) != 0 || len(result.Recovery.Unknown) != 0 {
+		t.Fatalf("leftover receipts: %+v", result.Recovery)
+	}
 	open, err := dirswap.Manager{JournalDir: eng.cfg.OperationsDir}.ListOpen()
 	if err != nil || len(open) != 0 {
 		t.Fatalf("journal survived recover: %+v %v", open, err)
@@ -198,6 +204,12 @@ func TestRecoverFinalizesStateCommittedReceipt(t *testing.T) {
 	if err != nil || result.Outcome != OutcomeCompleted {
 		t.Fatalf("recover: %+v %v", result, err)
 	}
+	if len(result.Recovery.Resolved) != 1 || result.Recovery.Resolved[0].OperationID != view.Recovery.Receipts[0].OperationID {
+		t.Fatalf("resolved receipts: %+v", result.Recovery)
+	}
+	if len(result.Recovery.Remaining) != 0 || len(result.Recovery.Unknown) != 0 {
+		t.Fatalf("leftover receipts: %+v", result.Recovery)
+	}
 	state, err := statev2.Store{Path: eng.cfg.StateFile}.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -235,6 +247,13 @@ func TestInspectCorruptJournalIsUntrustworthy(t *testing.T) {
 	view, err := eng.Inspect(testCtx(t))
 	if err == nil || !view.Recovery.Required || view.Recovery.Reason == "" {
 		t.Fatalf("corrupt journal: %+v %v", view, err)
+	}
+	result, recoverErr := eng.RecoverCurrent(testCtx(t))
+	if recoverErr == nil || result.Outcome != OutcomeRecovery {
+		t.Fatalf("corrupt recover: %+v %v", result, recoverErr)
+	}
+	if len(result.Recovery.Resolved) != 0 {
+		t.Fatalf("corrupt recover claimed resolved: %+v", result.Recovery)
 	}
 }
 
