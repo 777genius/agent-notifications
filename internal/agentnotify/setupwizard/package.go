@@ -146,12 +146,10 @@ func desiredPackage(req Request) (localPath, version string) {
 	if version == "" {
 		version = strings.TrimPrefix(strings.TrimSpace(installation.Source.ResolvedRevision), "v")
 	}
-	path := installation.Source.CanonicalSource
-	if path == "" {
-		path = installation.Source.RequestedSource
-	}
-	if packageStillUsable(path) {
-		return path, version
+	for _, path := range []string{installation.Source.CanonicalSource, installation.Source.RequestedSource} {
+		if packageStillUsable(path) {
+			return path, version
+		}
 	}
 	return "", version
 }
@@ -180,7 +178,8 @@ func packageStillUsable(path string) bool {
 		return false
 	}
 	if info.IsDir() {
-		return portableasset.VerifyLayout(path) == nil
+		plugin, err := os.Lstat(filepath.Join(path, "plugin.json"))
+		return err == nil && plugin.Mode().IsRegular() && plugin.Size() > 0
 	}
 	return info.Mode().IsRegular() && strings.EqualFold(filepath.Ext(path), ".zip")
 }

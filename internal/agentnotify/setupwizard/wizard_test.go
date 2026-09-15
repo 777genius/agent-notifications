@@ -1159,6 +1159,81 @@ func TestWizardRepairOmittedUnitsPreservesNotifyOnly(t *testing.T) {
 	}
 }
 
+func TestWizardRepairOmittedPackageUsesRecordedSource(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	statePath := filepath.Join(filepath.Dir(control), "uap", "state", "state-v2.json")
+	target := liveTargetPath(t, statePath, "codex")
+	if err := os.RemoveAll(target); err != nil {
+		t.Fatal(err)
+	}
+	req.Action = ActionRepair
+	req.PackageRoot = ""
+	got, err := Run(ctx, req)
+	if err != nil || got.Outcome != "completed" {
+		t.Fatalf("omitted package repair: %+v %v", got, err)
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("repair did not restore target from recorded source: %v", err)
+	}
+}
+
+func TestWizardRepairMissingRecordedPackageIsUnavailable(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	if err := os.RemoveAll(pkg); err != nil {
+		t.Fatal(err)
+	}
+	req.Action = ActionRepair
+	req.PackageRoot = ""
+	got, err := Run(ctx, req)
+	if err == nil || got.Reason != "recorded_package_unavailable" {
+		t.Fatalf("missing recorded package: %+v %v", got, err)
+	}
+}
+
 func TestWizardRepairExplicitNewHooksRequiresInstall(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, _, _ := managedRuntime(t)
