@@ -93,6 +93,9 @@ type Request struct {
 	// picker. Production sets this from Engine.Discover. Nil skips presence
 	// labels. The function must not execute found files.
 	DiscoverAgents func() []AgentCapability
+	// LiveUnits reports managed hooks/notify for the TTY mixed-opt-out
+	// display. Nil uses LiveClientUnits from control-root state.
+	LiveUnits func([]string) []ClientUnits
 }
 
 type TargetResult struct {

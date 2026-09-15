@@ -202,6 +202,84 @@ func TestFillInteractiveExistingSelectsUpdateAndRepair(t *testing.T) {
 	}
 }
 
+func TestFillInteractiveExistingAddSelectsUnits(t *testing.T) {
+	in := strings.NewReader("2\n3\n")
+	var out strings.Builder
+	got, err := FillInteractive(promptCtx(t), Request{Agents: []string{"codex"}}, &LinePrompt{In: in, Out: &out}, func([]string) []string {
+		return []string{"codex"}
+	})
+	if err != nil || got.Action != ActionInstall || got.Hooks == nil || !*got.Hooks || got.AgentNotify == nil || !*got.AgentNotify {
+		t.Fatalf("add units: %+v %v", got, err)
+	}
+	if !strings.Contains(out.String(), "Units:") || strings.Contains(out.String(), "differ per client") {
+		t.Fatalf("uniform add used mixed picker: %s", out.String())
+	}
+}
+
+func mixedLiveUnits() []ClientUnits {
+	return []ClientUnits{
+		{Client: "claude", Hooks: false, Notify: false},
+		{Client: "codex", Hooks: false, Notify: true},
+	}
+}
+
+func TestFillInteractiveKeepsMixedLiveUnits(t *testing.T) {
+	in := strings.NewReader("2\n1\n")
+	var out strings.Builder
+	got, err := FillInteractive(promptCtx(t), Request{
+		Agents:    []string{"claude", "codex"},
+		LiveUnits: func([]string) []ClientUnits { return mixedLiveUnits() },
+	}, &LinePrompt{In: in, Out: &out}, func([]string) []string {
+		return []string{"codex"}
+	})
+	if err != nil || got.Action != ActionInstall || got.Yes {
+		t.Fatalf("keep mixed: %+v %v", got, err)
+	}
+	if got.Hooks != nil || got.AgentNotify != nil {
+		t.Fatalf("keep collapsed to global flags: %+v", got)
+	}
+	if got.ClaudeHooks == nil || *got.ClaudeHooks || got.ClaudeAgentNotify == nil || *got.ClaudeAgentNotify {
+		t.Fatalf("claude keep: hooks=%v notify=%v", got.ClaudeHooks, got.ClaudeAgentNotify)
+	}
+	if got.CodexHooks == nil || *got.CodexHooks || got.CodexAgentNotify == nil || !*got.CodexAgentNotify {
+		t.Fatalf("codex keep: hooks=%v notify=%v", got.CodexHooks, got.CodexAgentNotify)
+	}
+	if !strings.Contains(out.String(), "differ per client") || !strings.Contains(out.String(), "claude: hooks=false agent-notify=false") || !strings.Contains(out.String(), "codex: hooks=false agent-notify=true") || !strings.Contains(out.String(), "unchecked = keep unchanged") {
+		t.Fatalf("mixed prompt: %s", out.String())
+	}
+	if strings.Contains(out.String(), "Units: 1) Hooks") {
+		t.Fatalf("mixed collapsed to one bool: %s", out.String())
+	}
+}
+
+func TestFillInteractiveMixedUnitsExplicitBoth(t *testing.T) {
+	in := strings.NewReader("4\n")
+	got, err := FillInteractive(promptCtx(t), Request{
+		Action:    ActionInstall,
+		Agents:    []string{"claude", "codex"},
+		LiveUnits: func([]string) []ClientUnits { return mixedLiveUnits() },
+	}, &LinePrompt{In: in, Out: io.Discard}, func([]string) []string {
+		return []string{"codex"}
+	})
+	if err != nil || got.Hooks == nil || !*got.Hooks || got.AgentNotify == nil || !*got.AgentNotify {
+		t.Fatalf("explicit both: %+v %v", got, err)
+	}
+	if got.ClaudeHooks != nil || got.CodexAgentNotify != nil {
+		t.Fatalf("explicit both also stamped per-client: %+v", got)
+	}
+}
+
+func TestFillInteractiveMixedUnitsCancel(t *testing.T) {
+	_, err := FillInteractive(promptCtx(t), Request{
+		Action:    ActionInstall,
+		Agents:    []string{"claude", "codex"},
+		LiveUnits: func([]string) []ClientUnits { return mixedLiveUnits() },
+	}, &LinePrompt{In: strings.NewReader("\n"), Out: io.Discard}, nil)
+	if err != ErrPromptCanceled {
+		t.Fatalf("cancel mixed: %v", err)
+	}
+}
+
 func TestConfirmPlanShowsMixedPerClientFlags(t *testing.T) {
 	off, on := false, true
 	got := confirmPlan(Request{
@@ -210,6 +288,17 @@ func TestConfirmPlanShowsMixedPerClientFlags(t *testing.T) {
 	})
 	if !strings.Contains(got, "agents=claude,codex") || !strings.Contains(got, "hooks=false") || !strings.Contains(got, "claude-agent-notify=false") || !strings.Contains(got, "codex-agent-notify=true") {
 		t.Fatalf("mixed plan: %s", got)
+	}
+}
+
+func TestConfirmPlanInstallOmittedGlobalShowsPerClient(t *testing.T) {
+	off, on := false, true
+	got := confirmPlan(Request{
+		Action: ActionInstall, Agents: []string{"claude", "codex"},
+		ClaudeHooks: &off, CodexHooks: &off, ClaudeAgentNotify: &off, CodexAgentNotify: &on,
+	})
+	if !strings.Contains(got, "hooks=per-client") || !strings.Contains(got, "agent-notify=per-client") || strings.Contains(got, "hooks=on") || !strings.Contains(got, "claude-agent-notify=false") || !strings.Contains(got, "codex-agent-notify=true") {
+		t.Fatalf("omitted mixed install plan: %s", got)
 	}
 }
 

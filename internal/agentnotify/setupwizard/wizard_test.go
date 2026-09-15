@@ -2248,6 +2248,10 @@ func TestWizardMixedPerClientOptOuts(t *testing.T) {
 	if claudeMCP == "installed" || codexMCP != "installed" {
 		t.Fatalf("mixed opt-outs: %+v", view.Targets)
 	}
+	units := LiveClientUnits(req, []string{"claude", "codex"})
+	if len(units) != 2 || units[0].Client != "claude" || units[0].Notify || units[0].Hooks || units[1].Client != "codex" || !units[1].Notify || units[1].Hooks {
+		t.Fatalf("live units: %+v", units)
+	}
 	if len(view.Readiness) == 0 {
 		t.Fatal("inspect omitted readiness")
 	}

@@ -26,11 +26,20 @@ type AgentCapability struct {
 	Profile string
 }
 
+// ClientUnits is the live hooks/notify fact for one selected client. The TTY
+// shows these when Claude and Codex differ so omission is not one bool.
+type ClientUnits struct {
+	Client string
+	Hooks  bool
+	Notify bool
+}
+
 // Prompter is the thin TTY port. It only fills Request fields; Run owns rules.
 type Prompter interface {
 	SelectAgents(context.Context, []AgentCapability) ([]string, error)
 	SelectExistingAction(context.Context) (Action, error)
 	SelectUnits(context.Context) (hooks, notify bool, err error)
+	SelectLiveUnits(context.Context, []ClientUnits) (keep, hooks, notify bool, err error)
 	Confirm(context.Context, string) (bool, error)
 }
 
@@ -132,6 +141,45 @@ func (p *LinePrompt) SelectUnits(ctx context.Context) (bool, bool, error) {
 	}
 }
 
+func (p *LinePrompt) SelectLiveUnits(ctx context.Context, live []ClientUnits) (bool, bool, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, false, false, err
+	}
+	var b strings.Builder
+	b.WriteString("Current units differ per client; omitted flags keep each target (unchecked = keep unchanged):\n")
+	for _, unit := range live {
+		b.WriteString("  ")
+		b.WriteString(unit.Client)
+		b.WriteString(": hooks=")
+		b.WriteString(boolFlag(unit.Hooks))
+		b.WriteString(" agent-notify=")
+		b.WriteString(boolFlag(unit.Notify))
+		b.WriteByte('\n')
+	}
+	b.WriteString("1) Keep current per client  2) Hooks for all  3) Agent-initiated notify for all  4) Both for all\nChoice: ")
+	if _, err := io.WriteString(p.Out, b.String()); err != nil {
+		return false, false, false, err
+	}
+	line, err := readLine(ctx, p.reader())
+	if err != nil {
+		return false, false, false, err
+	}
+	switch strings.TrimSpace(line) {
+	case "1":
+		return true, false, false, nil
+	case "2":
+		return false, true, false, nil
+	case "3":
+		return false, false, true, nil
+	case "4":
+		return false, true, true, nil
+	case "":
+		return false, false, false, ErrPromptCanceled
+	default:
+		return false, false, false, fmt.Errorf("%w: invalid_choice", ErrPromptCanceled)
+	}
+}
+
 func (p *LinePrompt) Confirm(ctx context.Context, summary string) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -198,14 +246,59 @@ func FillInteractive(ctx context.Context, req Request, p Prompter, existing func
 		return req, nil
 	}
 	if unitFlagsOmitted(req) && !req.Yes && req.Action != ActionUpdate && req.Action != ActionRepair {
-		hooks, notify, err := p.SelectUnits(ctx)
-		if err != nil {
-			return req, err
+		live := lookupLiveUnits(req)
+		if req.Action == ActionInstall && mixedClientUnits(live) {
+			keep, hooks, notify, err := p.SelectLiveUnits(ctx, live)
+			if err != nil {
+				return req, err
+			}
+			if keep {
+				applyLiveClientFlags(&req, live)
+			} else {
+				req.Hooks = boolPtr(hooks)
+				req.AgentNotify = boolPtr(notify)
+			}
+		} else {
+			hooks, notify, err := p.SelectUnits(ctx)
+			if err != nil {
+				return req, err
+			}
+			req.Hooks = boolPtr(hooks)
+			req.AgentNotify = boolPtr(notify)
 		}
-		req.Hooks = boolPtr(hooks)
-		req.AgentNotify = boolPtr(notify)
 	}
 	return req, nil
+}
+
+func lookupLiveUnits(req Request) []ClientUnits {
+	if req.LiveUnits != nil {
+		return req.LiveUnits(req.Agents)
+	}
+	return LiveClientUnits(req, req.Agents)
+}
+
+func mixedClientUnits(units []ClientUnits) bool {
+	if len(units) < 2 {
+		return false
+	}
+	for _, unit := range units[1:] {
+		if unit.Hooks != units[0].Hooks || unit.Notify != units[0].Notify {
+			return true
+		}
+	}
+	return false
+}
+
+func applyLiveClientFlags(req *Request, live []ClientUnits) {
+	for _, unit := range live {
+		hooks, notify := boolPtr(unit.Hooks), boolPtr(unit.Notify)
+		switch unit.Client {
+		case "claude":
+			req.ClaudeHooks, req.ClaudeAgentNotify = hooks, notify
+		case "codex":
+			req.CodexHooks, req.CodexAgentNotify = hooks, notify
+		}
+	}
 }
 
 func confirmPlan(req Request) string {
@@ -217,7 +310,7 @@ func confirmPlan(req Request) string {
 	if agents == "" {
 		agents = "none"
 	}
-	unit := func(flag *bool, installDefault string) string {
+	unit := func(flag *bool, perClient bool, installDefault string) string {
 		if flag == nil {
 			switch req.Action {
 			case ActionUninstall:
@@ -225,13 +318,18 @@ func confirmPlan(req Request) string {
 			case ActionUpdate, ActionRepair:
 				return "unchanged"
 			default:
+				if perClient {
+					return "per-client"
+				}
 				return installDefault
 			}
 		}
 		return boolFlag(*flag)
 	}
+	hooksPerClient := req.ClaudeHooks != nil || req.CodexHooks != nil
+	notifyPerClient := req.ClaudeAgentNotify != nil || req.CodexAgentNotify != nil
 	summary := fmt.Sprintf("Plan: action=%s agents=%s hooks=%s agent-notify=%s",
-		action, agents, unit(req.Hooks, "on"), unit(req.AgentNotify, "on"))
+		action, agents, unit(req.Hooks, hooksPerClient, "on"), unit(req.AgentNotify, notifyPerClient, "on"))
 	perClient := func(name string, flag *bool) {
 		if flag == nil {
 			return

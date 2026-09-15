@@ -22,14 +22,15 @@ import (
 const setupWizardHelp = `Usage: claude-notifications setup-notifications wizard [OPTIONS]
 Master for hooks plus portable MCP/skill.
 TTY stdin prompts for agents, an existing-install action, and units when those flags are omitted, then shows a preflight plan and asks for confirmation.
+When Claude and Codex already have different units, the TTY shows both and does not collapse omission to one bool.
 --json never prompts. Progress phases go to stderr. No TTY and no --agents/--yes is invalid for mutation, not a hang.
 Inspect exit 0 means the report was read; readiness stays in result fields.
 Without --action, a new machine defaults to install; an existing portable
 installation is offered inspect, add/reinstall, uninstall, update, or repair.
   --action install|uninstall|inspect|update|repair
   --agents claude,codex   Omit on inspect to report both clients
-  --hooks true|false          Omit on install to include hooks; omit on update/repair to keep live units; omit on uninstall to select all units
-  --agent-notify true|false   Omit on install to include portable MCP+skill; omit on update/repair to keep live units
+  --hooks true|false          Omit on install of new targets to include hooks; omit on update/repair to keep live units; omit on uninstall to select all units
+  --agent-notify true|false   Omit on install of new targets to include portable MCP+skill; omit on update/repair to keep live units
   --claude-hooks true|false   Per-client override; mixed Claude/Codex opt-outs are not collapsed
   --codex-hooks true|false
   --claude-agent-notify true|false
@@ -109,7 +110,7 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 			return setupwizard.DiscoverAgents(req)
 		}
 		filled, e := setupwizard.FillInteractive(ctx, req, prompt, func(agents []string) []string {
-			return setupwizard.LiveNotifyClients(req.ControlRoot, agents)
+			return setupwizard.LiveSetupClients(req, agents)
 		})
 		if e != nil {
 			return writeSetupWizardPromptError(out, jsonOut, req, e)

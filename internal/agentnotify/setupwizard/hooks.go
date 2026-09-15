@@ -45,6 +45,46 @@ func hooksManaged(req Request, agent portable.Integration) bool {
 	return err == nil && strings.Contains(string(data), "codex-hook-wrapper")
 }
 
+// LiveClientUnits reports currently managed hooks/notify for each selected
+// client. A missing binding is off, not a collapsed global default.
+func LiveClientUnits(req Request, agents []string) []ClientUnits {
+	notify := map[string]bool{}
+	for _, id := range LiveNotifyClients(req.ControlRoot, agents) {
+		notify[id] = true
+	}
+	out := make([]ClientUnits, 0, len(agents))
+	for _, agent := range agents {
+		if agent == "" {
+			continue
+		}
+		out = append(out, ClientUnits{
+			Client: agent,
+			Hooks:  hooksManaged(req, portable.Integration(agent)),
+			Notify: notify[agent],
+		})
+	}
+	return out
+}
+
+// LiveSetupClients returns selected agents that already have a portable
+// binding or managed Codex hooks. Missing state is "none".
+func LiveSetupClients(req Request, agents []string) []string {
+	found := LiveNotifyClients(req.ControlRoot, agents)
+	seen := map[string]bool{}
+	for _, id := range found {
+		seen[id] = true
+	}
+	for _, agent := range agents {
+		if agent == "" || seen[agent] {
+			continue
+		}
+		if hooksManaged(req, portable.Integration(agent)) {
+			found = append(found, agent)
+		}
+	}
+	return found
+}
+
 func applyHooks(ctx context.Context, req Request, agents []portable.Integration, snap installruntime.InstalledSnapshot, remove bool, out Result) (Result, error) {
 	var reservation *installruntime.PendingMutation
 	if snap.Ledger.PendingMutation != nil {

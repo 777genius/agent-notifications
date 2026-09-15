@@ -736,6 +736,43 @@ func TestSetupWizardMixedPerClientOptOutsE2E(t *testing.T) {
 	}
 }
 
+func TestSetupWizardTTYMixedAddKeepsPerClientUnits(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	shared := []string{
+		"--agents", "claude,codex", "--package", env.pkg, "--control-root", env.control,
+		"--runtime-root", env.runtime, "--global-config", env.global,
+		"--codex-home", env.codexHome, "--claude-config", env.claudeConfig,
+		"--claude-executable", env.probe, "--codex-executable", env.probe,
+		"--helper", env.probe, "--scope-root", env.scope,
+	}
+	var out bytes.Buffer
+	install := append([]string{
+		"--action", "install", "--hooks", "false", "--claude-agent-notify", "false",
+		"--codex-agent-notify", "true", "--yes", "--json",
+	}, shared...)
+	if code := executeSetupWizardWith(ctx, install, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("mixed install: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "completed" {
+		t.Fatalf("mixed install result: %+v", got)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, shared, &out, io.Discard, strings.NewReader("2\n1\nn\n"), true); code != 0 || !strings.Contains(out.String(), "cancelled") {
+		t.Fatalf("mixed tty keep: %d %s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "differ per client") || !strings.Contains(out.String(), "claude: hooks=false agent-notify=false") || !strings.Contains(out.String(), "codex: hooks=false agent-notify=true") {
+		t.Fatalf("mixed tty hid differences: %s", out.String())
+	}
+	if strings.Contains(out.String(), "Units: 1) Hooks") || strings.Contains(out.String(), "hooks=on") {
+		t.Fatalf("mixed tty collapsed omission: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "hooks=per-client") || !strings.Contains(out.String(), "claude-agent-notify=false") || !strings.Contains(out.String(), "codex-agent-notify=true") {
+		t.Fatalf("mixed tty plan: %s", out.String())
+	}
+}
+
 func TestSetupWizardSpaceContainingRootsE2E(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
