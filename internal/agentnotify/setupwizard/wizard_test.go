@@ -1198,6 +1198,57 @@ func TestWizardRepairExplicitNewHooksRequiresInstall(t *testing.T) {
 	}
 }
 
+func TestWizardRepairBothClientsMissingOneDoesNotMutateLive(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	claudeConfig := filepath.Join(filepath.Dir(control), "claude-profile")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"claude", "codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClaudeConfig: claudeConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot:    filepath.Join(filepath.Dir(control), "scope"),
+		ClaudeRunner: listingRunner{configRoot: claudeConfig},
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	removed, err := Run(ctx, Request{
+		Action: ActionUninstall, Agents: []string{"claude"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClaudeConfig: claudeConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: req.ScopeRoot, ClaudeRunner: listingRunner{configRoot: claudeConfig},
+	})
+	if err != nil || (removed.Outcome != "completed" && removed.Outcome != "unchanged") {
+		t.Fatalf("uninstall claude: %+v %v", removed, err)
+	}
+	req.Action = ActionRepair
+	got, err := Run(ctx, req)
+	if err == nil || got.Reason != "not_installed" {
+		t.Fatalf("repair missing sibling: %+v %v", got, err)
+	}
+	if len(got.NextActions) != 2 || got.NextActions[0].Kind != "install" || got.NextActions[1].Kind != "repair" {
+		t.Fatalf("repair missing sibling next actions: %+v", got.NextActions)
+	}
+	live := LiveNotifyClients(control, []string{"claude", "codex"})
+	if len(live) != 1 || live[0] != "codex" {
+		t.Fatalf("repair mutated live sibling: %v", live)
+	}
+}
+
 func TestWizardUpdateOmittedUnitsPreservesNotifyOnly(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, _, _ := managedRuntime(t)

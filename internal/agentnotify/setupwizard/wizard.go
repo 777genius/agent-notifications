@@ -213,7 +213,7 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 			req.InstallationID = id.InstallationID
 			acquired.InstallationID = id.InstallationID
 			if req.Action == ActionUpdate || req.Action == ActionRepair {
-				if mapped, bindErr := requireLiveNotifyBindings(mat, id, ev.notifyAgents, ev.out); bindErr != nil {
+				if mapped, bindErr := requireLiveNotifyBindings(req, mat, id, ev.notifyAgents, ev.out); bindErr != nil {
 					plan.Result = attachCommand(req, mapped)
 					return plan, bindErr
 				}
@@ -1074,7 +1074,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		req.InstallationID = id.InstallationID
 		out.InstallationID = id.InstallationID
 		if req.Action == ActionUpdate || req.Action == ActionRepair {
-			if mapped, bindErr := requireLiveNotifyBindings(mat, id, notifyAgents, out); bindErr != nil {
+			if mapped, bindErr := requireLiveNotifyBindings(req, mat, id, notifyAgents, out); bindErr != nil {
 				return mapped, bindErr
 			}
 		}
@@ -1748,16 +1748,32 @@ func mapPreviewFailure(req Request, agent portable.Integration, mat portablesetu
 	return out, err
 }
 
-func requireLiveNotifyBindings(mat portablesetup.Materializer, id portablesetup.Identity, agents []portable.Integration, out Result) (Result, error) {
+func requireLiveNotifyBindings(req Request, mat portablesetup.Materializer, id portablesetup.Identity, agents []portable.Integration, out Result) (Result, error) {
+	var missing, live []string
 	for _, agent := range agents {
 		if liveNotifyClient(mat, id.InstallationID, string(agent)) {
+			live = append(live, string(agent))
 			continue
 		}
+		missing = append(missing, string(agent))
 		out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: "not_installed"})
-		out.Outcome, out.Reason = "incomplete", "not_installed"
-		return out, uapinstaller.ErrNotInstalled
 	}
-	return out, nil
+	if len(missing) == 0 {
+		return out, nil
+	}
+	out.Outcome, out.Reason = "incomplete", "not_installed"
+	if len(live) > 0 {
+		installReq := req
+		installReq.Action = ActionInstall
+		installReq.Agents = append([]string(nil), missing...)
+		subset := req
+		subset.Agents = append([]string(nil), live...)
+		out.NextActions = []NextAction{
+			{Kind: "install", Agents: missing, Command: RetryCommand(installReq), Reason: "install_missing"},
+			{Kind: string(req.Action), Agents: live, Command: RetryCommand(subset), Reason: "continue_installed_only"},
+		}
+	}
+	return out, uapinstaller.ErrNotInstalled
 }
 
 func mapAmbiguous(err error, out Result) (Result, bool) {
