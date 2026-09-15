@@ -3058,6 +3058,37 @@ func TestWizardCodexHooksWithoutConfigure(t *testing.T) {
 	}
 }
 
+func TestWizardNotifyInstallReportsProgress(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	var phases []string
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+		Progress:  func(phase string) { phases = append(phases, phase) },
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	if strings.Join(phases, ",") != "prepare,preflight,agent-notify,complete" {
+		t.Fatalf("install phases: %v", phases)
+	}
+}
+
 type listingRunner struct {
 	configRoot string
 }
@@ -4225,6 +4256,121 @@ func TestWizardRetainedDifferentDigestRequiresUpdate(t *testing.T) {
 	}
 	if got := installationIDFromState(t, statePath); got != firstID {
 		t.Fatalf("retained installation lost: %s vs %s", firstID, got)
+	}
+}
+
+func prepareRetainedCodexWizard(t *testing.T, ctx context.Context) (Request, string, string) {
+	t.Helper()
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	statePath := filepath.Join(filepath.Dir(control), "uap", "state", "state-v2.json")
+	firstID := installed.InstallationID
+	if firstID == "" {
+		firstID = installationIDFromState(t, statePath)
+	}
+	dataRoot := retainedDataRoot(t, statePath)
+	sentinel := filepath.Join(dataRoot, "keep.txt")
+	if err := os.WriteFile(sentinel, []byte("retain\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	req.Action = ActionUninstall
+	req.ExternalUninstalled = true
+	removed, err := Run(ctx, req)
+	if err != nil || removed.Outcome != "completed" {
+		t.Fatalf("uninstall: %+v %v", removed, err)
+	}
+	other := filepath.Join(filepath.Dir(control), "other-package")
+	writePackage(t, other, probe)
+	if err := os.WriteFile(filepath.Join(other, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	req.Action = ActionInstall
+	req.PackageRoot = other
+	req.ExternalUninstalled = false
+	req.Yes = false
+	req.InstallationID = firstID
+	return req, statePath, sentinel
+}
+
+func TestWizardPlanRetainedDifferentDigestShowsTwoPhases(t *testing.T) {
+	ctx := testCtx(t)
+	req, statePath, sentinel := prepareRetainedCodexWizard(t, ctx)
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := Plan(ctx, req)
+	if plan.Ready || plan.Result.Reason != "update_required" {
+		t.Fatalf("retained digest plan: %+v %v", plan, err)
+	}
+	if len(plan.Result.NextActions) != 2 || plan.Result.NextActions[0].Kind != "update" || plan.Result.NextActions[1].Kind != "install" {
+		t.Fatalf("retained plan phases: %+v", plan.Result.NextActions)
+	}
+	if !strings.Contains(plan.Text, "required-update=codex") || !strings.Contains(plan.Text, "phases=1-update:codex;2-add:codex") {
+		t.Fatalf("retained plan omitted two phases: %s", plan.Text)
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("retained plan rewrote state")
+	}
+	body, err := os.ReadFile(sentinel)
+	if err != nil || string(body) != "retain\n" {
+		t.Fatalf("PLUGIN_DATA sentinel: %s %v", body, err)
+	}
+}
+
+func TestWizardPlanRetainedUpdateIsMetadataOnly(t *testing.T) {
+	ctx := testCtx(t)
+	req, statePath, sentinel := prepareRetainedCodexWizard(t, ctx)
+	req.Action = ActionUpdate
+	req.Yes = false
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := Plan(ctx, req)
+	if err != nil || !plan.Ready {
+		t.Fatalf("retained update plan: %+v %v", plan, err)
+	}
+	if !strings.Contains(plan.Text, "data_retained=true") || !strings.Contains(plan.Text, "metadata-only") {
+		t.Fatalf("retained update plan omitted metadata-only: %s", plan.Text)
+	}
+	if !strings.Contains(plan.Text, "phases=1-update:codex") || strings.Contains(plan.Text, "2-add:") {
+		t.Fatalf("retained update plan showed add: %s", plan.Text)
+	}
+	if !strings.Contains(plan.Text, "required=none") || !strings.Contains(plan.Text, "permission-dialog=skipped") {
+		t.Fatalf("retained update plan required client install: %s", plan.Text)
+	}
+	if !strings.Contains(plan.Text, "source-digest=") || plan.Request.TreeDigest == "" {
+		t.Fatalf("retained update plan omitted desired digest: %s req=%s", plan.Text, plan.Request.TreeDigest)
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("retained update plan rewrote state")
+	}
+	body, err := os.ReadFile(sentinel)
+	if err != nil || string(body) != "retain\n" {
+		t.Fatalf("PLUGIN_DATA sentinel: %s %v", body, err)
 	}
 }
 

@@ -336,6 +336,33 @@ func managedPackageDigest(client domain.ClientBinding) string {
 // snapshotLocalPackage uses packagedigest executable overrides so Windows
 // host FileMode (no 0111 on regular files) does not drop logical bin/ helpers
 // from TreeDigest. AcquireLocal hashes POSIX bits from the checkout.
+// LocalPackageTreeDigest is the canonical TreeDigest of a local package root.
+// It snapshots into TempRoot, does not write installer state, and does not
+// report Progress. Optional Assess still binds that digest.
+func (e *Engine) LocalPackageTreeDigest(ctx context.Context, packageRoot string) (string, error) {
+	if ctx == nil {
+		return "", fmt.Errorf("%w: context is required", ErrInvalidRequest)
+	}
+	if packageRoot == "" || !validRoot(packageRoot) {
+		return "", fmt.Errorf("%w: PackageRoot must be an explicit absolute clean path", ErrInvalidRequest)
+	}
+	if overlappingRoots(e.cfg.TempRoot, packageRoot) {
+		return "", fmt.Errorf("%w: TempRoot must not overlap PackageRoot", ErrInvalidRequest)
+	}
+	if err := os.MkdirAll(e.cfg.TempRoot, 0700); err != nil {
+		return "", err
+	}
+	snapshot, err := snapshotLocalPackage(ctx, e.cfg.TempRoot, packageRoot)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = packagedigest.Remove(snapshot) }()
+	if err := e.assessSnapshot(ctx, snapshot); err != nil {
+		return "", err
+	}
+	return snapshot.TreeDigest, nil
+}
+
 func snapshotLocalPackage(ctx context.Context, tempRoot, packageRoot string) (domain.PackageSnapshot, error) {
 	absolute, err := filepath.Abs(packageRoot)
 	if err != nil {

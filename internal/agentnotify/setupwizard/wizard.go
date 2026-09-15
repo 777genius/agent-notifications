@@ -260,7 +260,20 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 					text += " " + string(agent) + "-binding-id=" + bid
 				}
 			}
-			if !retainedMetadataUpdate(mat, id, req.Action) {
+			if retainedMetadataUpdate(mat, id, req.Action) {
+				digest, err := retainedUpdateTreeDigest(ctx, mat, acquired.PackageRoot)
+				if err != nil {
+					ev.out.Outcome, ev.out.Reason = "incomplete", err.Error()
+					plan.Result = attachCommand(req, ev.out)
+					return plan, err
+				}
+				if err := bindIdentityField(&req.TreeDigest, digest); err != nil {
+					ev.out.Outcome, ev.out.Reason = "incomplete", "source_identity_drift"
+					plan.Result = attachCommand(req, ev.out)
+					return plan, err
+				}
+				text = annotateRetainedMetadataUpdate(text, ev.notifyAgents)
+			} else {
 				failed, reason, err := bindNotifyPreviews(ctx, &req, acquired, ev.snap, ev.runtimeRoot, ev.notifyAgents)
 				if err != nil {
 					if reason == "" {
@@ -2020,6 +2033,27 @@ func updateRequired(req Request, adding portable.Integration, others []string, o
 		{Kind: "install", Agents: []string{string(adding)}, Command: RetryCommand(addReq), Reason: "add_after_update"},
 	}
 	return out, err
+}
+
+func annotateRetainedMetadataUpdate(text string, agents []portable.Integration) string {
+	text = strings.Replace(text, "required=restart,request-permission,test-notification permission-dialog=explicit delivery=not_verified", "required=none permission-dialog=skipped delivery=not_verified", 1)
+	text += " data_retained=true metadata-only"
+	var names []string
+	for _, agent := range agents {
+		names = append(names, string(agent))
+	}
+	if len(names) > 0 {
+		text += " phases=1-update:" + strings.Join(names, ",")
+	}
+	return text
+}
+
+func retainedUpdateTreeDigest(ctx context.Context, mat portablesetup.Materializer, packageRoot string) (string, error) {
+	eng, err := installerEngine(mat)
+	if err != nil {
+		return "", err
+	}
+	return eng.LocalPackageTreeDigest(ctx, packageRoot)
 }
 
 func annotateRequiredUpdate(text string, out Result) string {

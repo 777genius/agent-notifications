@@ -5050,6 +5050,46 @@ func TestOldBridgeTreeDigestRefusesWithoutRewrite(t *testing.T) {
 	}
 }
 
+func TestLocalPackageTreeDigestMatchesPrepareAndWritesNoState(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := eng.LocalPackageTreeDigest(ctx, pkg)
+	if err != nil || digest == "" {
+		t.Fatalf("digest: %s %v", digest, err)
+	}
+	if _, err := os.Lstat(eng.cfg.StateFile); !os.IsNotExist(err) {
+		t.Fatal("digest wrote state")
+	}
+	prepared, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-0000000000d9",
+		OperationID: "digest-match", RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := prepared.Plan().TreeDigest
+	_ = prepared.Close()
+	if got != digest {
+		t.Fatalf("digest %s vs plan %s", digest, got)
+	}
+}
+
 func TestProgressReportsCoarsePhases(t *testing.T) {
 	skipWindowsLauncherExecuteBit(t)
 	ctx := testCtx(t)
@@ -5156,6 +5196,37 @@ func TestCancelledApplyDoesNotReportMutationPhases(t *testing.T) {
 	for _, blocked := range []ProgressPhase{ProgressStage, ProgressCommit, ProgressActivate, ProgressVerify, ProgressComplete} {
 		if strings.Contains(joined, string(blocked)+",") {
 			t.Fatalf("cancelled apply reported %s: %s", blocked, joined)
+		}
+	}
+}
+
+func TestCancelledGroupApplyDoesNotReportMutationPhases(t *testing.T) {
+	ctx, eng, _, pkg, probe, codexConfig, claudeConfig := newBothClientSandbox(t)
+	var phases []ProgressPhase
+	eng.cfg.Progress = func(event ProgressEvent) { phases = append(phases, event.Phase) }
+	prepared, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, InstallationID: "00000000-0000-4000-8000-0000000000da",
+		OperationID: "group-cancel-progress", RequiredComponents: []string{"mcp", "skills"}, ClientExecutable: probe,
+		Targets: bothClientTargets(codexConfig, claudeConfig, probe),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelled, err := eng.Apply(ctx, prepared, Decision{})
+	_ = prepared.Close()
+	if !errors.Is(err, ErrCancelled) || cancelled.Outcome != OutcomeCancelled {
+		t.Fatalf("cancelled group apply: %+v %v", cancelled, err)
+	}
+	joined := ""
+	for _, phase := range phases {
+		joined += string(phase) + ","
+	}
+	if !strings.Contains(joined, string(ProgressPrepare)+",") {
+		t.Fatalf("prepare missing: %s", joined)
+	}
+	for _, blocked := range []ProgressPhase{ProgressStage, ProgressCommit, ProgressActivate, ProgressVerify, ProgressComplete} {
+		if strings.Contains(joined, string(blocked)+",") {
+			t.Fatalf("cancelled group apply reported %s: %s", blocked, joined)
 		}
 	}
 }
