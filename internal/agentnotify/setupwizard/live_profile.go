@@ -7,13 +7,14 @@ import (
 
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
 
+	"github.com/777genius/agent-notifications/install/uapinstaller"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portablesetup"
 )
 
 // liveProfileFile lives in PLUGIN_DATA, not the locator JSON. Codex TargetLocator
 // is under managed/clients, so the live profile has to be recorded separately
 // without changing Registration() bytes.
-const liveProfileFile = "live-profiles.json"
+const liveProfileFile = uapinstaller.LiveProfilesFile
 
 func recordLiveProfile(dataRoot, clientID, profile string) error {
 	if dataRoot == "" || clientID == "" || profile == "" {

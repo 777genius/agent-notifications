@@ -32,7 +32,7 @@ func (e *Engine) observe() (Inspection, error) {
 			receipt := installation.DataReceipts[binding.DataReceiptID]
 			item.Bindings = append(item.Bindings, InspectedBinding{
 				ClientID: binding.ClientID, BindingID: binding.ClientBindingID, Scope: binding.Scope,
-				TargetPath: binding.TargetLocator, DataRoot: receipt.Locator,
+				TargetPath: binding.TargetLocator, DataRoot: receipt.Locator, Profile: liveProfile(receipt.Locator, binding.ClientID),
 				Materialization: string(binding.Materialization), Activation: string(binding.Activation),
 				Authentication: string(binding.Authentication), Verification: string(binding.Verification),
 			})

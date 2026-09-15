@@ -82,7 +82,7 @@ type Request struct {
 }
 
 type TargetResult struct {
-	Client, Unit, Outcome, Reason string
+	Client, Unit, Outcome, Reason, Profile string
 }
 
 // ReadinessFact is independent of binary download. Inspect and mutation both
@@ -446,10 +446,19 @@ func DiscoverAgents(req Request) []AgentCapability {
 	for _, item := range found {
 		out = append(out, AgentCapability{
 			ID: item.ClientID, Present: item.ExecutablePresent, Path: item.ExecutablePath,
-			Bound: len(item.Bindings) > 0,
+			Bound: len(item.Bindings) > 0, Profile: firstBindingProfile(item.Bindings),
 		})
 	}
 	return out
+}
+
+func firstBindingProfile(bindings []uapinstaller.InspectedBinding) string {
+	for _, binding := range bindings {
+		if binding.Profile != "" {
+			return binding.Profile
+		}
+	}
+	return ""
 }
 
 func recoveryIDs(view uapinstaller.Inspection) []string {
@@ -656,7 +665,11 @@ func inspect(ctx context.Context, req Request, agents []portable.Integration, sn
 					continue
 				}
 				found = true
-				out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "installed", Reason: binding.ClientBindingID})
+				profile, _ := recordedLiveProfile(installation.DataReceipts[binding.DataReceiptID].Locator, string(agent))
+				out.Targets = append(out.Targets, TargetResult{
+					Client: string(agent), Unit: "agent-notify", Outcome: "installed",
+					Reason: binding.ClientBindingID, Profile: profile,
+				})
 			}
 		}
 		if !found {

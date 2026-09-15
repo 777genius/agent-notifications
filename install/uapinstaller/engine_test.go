@@ -313,6 +313,10 @@ func TestInstallInspectRepeatRemove(t *testing.T) {
 	if err != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 1 {
 		t.Fatalf("inspect: %+v %v", view, err)
 	}
+	reserved, err := eng.ReserveIdentity(IdentityRequest{ClientID: "codex", Allocate: false})
+	if err != nil || reserved.InstallationID != req.InstallationID || reserved.BindingID != view.Installations[0].Bindings[0].BindingID {
+		t.Fatalf("reserve existing: %+v %v", reserved, err)
+	}
 	again, err := eng.Prepare(ctx, req)
 	if err != nil {
 		t.Fatal(err)

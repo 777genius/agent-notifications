@@ -23,6 +23,7 @@ type AgentCapability struct {
 	Present bool
 	Path    string
 	Bound   bool
+	Profile string
 }
 
 // Prompter is the thin TTY port. It only fills Request fields; Run owns rules.
@@ -261,16 +262,23 @@ func agentChoiceLabel(clients []AgentCapability, id, name string) string {
 		}
 		switch {
 		case client.Present && client.Bound:
-			return name + " (executable present, installed)"
+			return agentInstalledLabel(name+" (executable present, installed)", client.Profile)
 		case client.Present:
 			return name + " (executable present)"
 		case client.Bound:
-			return name + " (executable not found, installed)"
+			return agentInstalledLabel(name+" (executable not found, installed)", client.Profile)
 		default:
 			return name + " (executable not found)"
 		}
 	}
 	return name
+}
+
+func agentInstalledLabel(base, profile string) string {
+	if profile == "" {
+		return base
+	}
+	return base + " profile=" + profile
 }
 
 func readLine(ctx context.Context, reader *bufio.Reader) (string, error) {

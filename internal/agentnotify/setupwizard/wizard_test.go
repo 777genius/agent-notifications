@@ -458,6 +458,9 @@ func TestWizardInstallInspectUninstall(t *testing.T) {
 	for _, target := range view.Targets {
 		if target.Unit == "agent-notify" && target.Outcome == "installed" {
 			found = true
+			if target.Profile != codexConfig {
+				t.Fatalf("inspect omitted live profile: %+v", target)
+			}
 		}
 	}
 	if !found {
