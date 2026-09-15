@@ -181,51 +181,6 @@ shutil.copytree(os.environ['SOURCE'],root,dirs_exist_ok=True)
                    BOOTSTRAP_SOURCE_BASE_URL=self.url,
                    BOOTSTRAP_RELEASES_BASE_URL=self.url, INSTALL_SCRIPT_URL=self.url + '/install.sh')
         return env
-        self.index += 1
-        base = self.base / ('case-' + str(self.index))
-        env = environment(base)
-        clis = base / 'clis'
-        clis.mkdir()
-        # Any host invocation is recorded. Only plugin metadata operations exist.
-        put(clis / 'claude', '''#!/usr/bin/python3
-import json, os, pathlib, shutil, sys
-args=sys.argv[1:]
-with open(os.environ['TRACE'],'a') as f: f.write(json.dumps(args)+'\\n')
-assert args and args[0]=='plugin'
-if os.environ.get('FAIL_REGISTER'): sys.exit(1)
-home=pathlib.Path(os.environ['CLAUDE_CONFIG_DIR'])
-market=home/'plugins/marketplaces/claude-notifications-go/.claude-plugin'
-market.mkdir(parents=True,exist_ok=True)
-(market/'plugin.json').write_text('{"version":"9.9.9"}')
-if args[1]=='marketplace': sys.exit()
-root=home/'plugins/cache/claude-notifications-go/claude-notifications-go/9.9.9'
-shutil.copytree(os.environ['SOURCE'],root,dirs_exist_ok=True)
-(home/'plugins/installed_plugins.json').write_text(json.dumps({'plugins':{'claude-notifications-go@claude-notifications-go':[{'installPath':str(root),'version':'9.9.9'}]}}))
-''', 0o755)
-        for name in ('codex', 'notify-send', 'osascript', 'paplay', 'aplay', 'curl'):
-            if name == 'curl':
-                # Bootstrap can download only from the fixture HTTP server.
-                body = '#!/usr/bin/python3\nimport os,sys\nassert all(not a.startswith(("http:","https:")) or a.startswith(os.environ["LOCAL_URL"]+"/") for a in sys.argv[1:])\nos.execv("/usr/bin/curl",["curl"]+sys.argv[1:])\n'
-            else:
-                body = '#!/bin/sh\necho invoked >> "$EFFECTS"\nexit 97\n'
-            put(clis / name, body, 0o755)
-        runtime = base / 'runtime-bin'
-        runtime.mkdir()
-        names = ['bash', 'sh', 'mktemp', 'rm', 'cat', 'chmod', 'mkdir', 'ln', 'uname',
-                 'tr', 'head', 'cp', 'mv', 'env', 'true', 'false', 'grep', 'sed', 'awk',
-                 'tar', 'gzip', 'curl', 'cut', 'basename', 'dirname', 'touch']
-        if python:
-            names.append('python3')
-        if node:
-            names.append('node')
-        for name in names:
-            place_runtime_cmd(runtime / name, host_cmd(name))
-        env.update(PATH=str(clis) + os.pathsep + str(runtime), TRACE=str(base / 'trace'),
-                   EFFECTS=str(base / 'effects'), SOURCE=str(self.bundle), LOCAL_URL=self.url,
-                   BOOTSTRAP_RELEASE_TAG=TAG, BOOTSTRAP_RELEASE_COMMIT=COMMIT,
-                   BOOTSTRAP_SOURCE_BASE_URL=self.url,
-                   BOOTSTRAP_RELEASES_BASE_URL=self.url, INSTALL_SCRIPT_URL=self.url + '/install.sh')
-        return env
 
     def open_canary_watch(self):
         # Linux inotify reports reads as well as writes to the sibling canary.

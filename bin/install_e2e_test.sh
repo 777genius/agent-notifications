@@ -194,19 +194,31 @@ real_network_tests_supported() {
     return 0
 }
 
-# Cross-platform timeout command
-# macOS doesn't have timeout by default, use gtimeout if available or run without timeout
+# Cross-platform timeout command.
+# Git Bash on Windows often resolves `timeout` to timeout.exe, which is a
+# countdown timer and rejects redirected stdin. Use GNU timeout only.
 run_with_timeout() {
     local seconds="$1"
     shift
-    if command -v timeout &>/dev/null; then
+    if command -v timeout >/dev/null 2>&1 && timeout --version >/dev/null 2>&1; then
         timeout "$seconds" "$@"
-    elif command -v gtimeout &>/dev/null; then
-        gtimeout "$seconds" "$@"
-    else
-        # No timeout available, run without it
-        "$@"
+        return
     fi
+    if command -v gtimeout >/dev/null 2>&1; then
+        gtimeout "$seconds" "$@"
+        return
+    fi
+    if command -v python3 >/dev/null 2>&1; then
+        python3 -c 'import subprocess, sys
+seconds = int(sys.argv[1])
+try:
+    raise SystemExit(subprocess.run(sys.argv[2:], timeout=seconds).returncode)
+except subprocess.TimeoutExpired:
+    raise SystemExit(124)
+' "$seconds" "$@"
+        return
+    fi
+    "$@"
 }
 
 # Use the same executable payload and checksum as the main Windows fixture.
@@ -1178,6 +1190,13 @@ test_windows_native_hooks_real_exec_launch() {
     printf '{"hooks":{}}\n' > "$hooks_dir/hooks.json"
 
     local exe_path="$bin_dir/claude-notifications-windows-amd64.exe"
+    local go_proxy
+    go_proxy=$(go env GOPROXY)
+    if [ "$go_proxy" != "off" ]; then
+        fail_test "Isolated Windows go build stays offline" "GOPROXY=$go_proxy want off"
+        cleanup_test_dir
+        return
+    fi
     if ! (cd "$REPO_ROOT" && go build -o "$exe_path" ./cmd/claude-notifications); then
         fail_test "Build real Windows notification binary" "go build failed"
         cleanup_test_dir
@@ -1192,7 +1211,7 @@ test_windows_native_hooks_real_exec_launch() {
     touch "$bin_dir/list-sounds-windows-amd64.exe"
 
     local output exit_code
-    output=$(INSTALL_TARGET_DIR="$bin_dir" bash "$INSTALL_SCRIPT" 2>&1)
+    output=$(INSTALL_TARGET_DIR="$bin_dir" run_with_timeout 30 bash "$INSTALL_SCRIPT" 2>&1)
     exit_code=$?
 
     assert_exit_code 0 $exit_code "Installer succeeds with real Windows binary"
@@ -1209,8 +1228,11 @@ test_windows_native_hooks_real_exec_launch() {
     assert_contains "$hooks_json" '"handle-hook"' "real hooks.json calls hook handler"
     assert_contains "$hooks_json" '"Stop"' "real hooks.json contains Stop hook"
 
+    # Judge mode skips WinRT/PowerShell toast delivery, which can stall hosted
+    # Windows runners. The assertion is that the exec-form exe launches.
     set +e
-    output=$(printf '{"session_id":"ci-win","transcript_path":"","cwd":""}\n' | "$exe_path" handle-hook Stop 2>&1)
+    output=$(printf '{"session_id":"ci-win","transcript_path":"","cwd":""}\n' | \
+        env CLAUDE_HOOK_JUDGE_MODE=true run_with_timeout 20 "$exe_path" handle-hook Stop 2>&1)
     exit_code=$?
     set +e
 
@@ -1251,6 +1273,11 @@ test_windows_real_hook_schedules_lazy_update() {
     cp "$INSTALL_SCRIPT" "$bin_dir/install.sh"
 
     local exe_path="$bin_dir/claude-notifications-windows-amd64.exe"
+    if [ "$(go env GOPROXY)" != "off" ]; then
+        fail_test "Isolated Windows lazy-update go build stays offline" "GOPROXY=$(go env GOPROXY) want off"
+        cleanup_test_dir
+        return
+    fi
     if ! (cd "$REPO_ROOT" && go build -o "$exe_path" ./cmd/claude-notifications); then
         fail_test "Build real Windows notification binary for lazy update" "go build failed"
         cleanup_test_dir
@@ -1310,7 +1337,7 @@ FAKE_BASH_GO_EOF
             CLAUDE_NOTIFICATIONS_BASH="$fake_bash_for_windows" \
             FAKE_BASH_LOG="$fake_bash_log_for_windows" \
             CLAUDE_HOOK_JUDGE_MODE=true \
-            "$exe_path" handle-hook Stop 2>&1)
+            run_with_timeout 20 "$exe_path" handle-hook Stop 2>&1)
     exit_code=$?
     set +e
 
