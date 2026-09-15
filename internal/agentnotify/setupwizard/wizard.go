@@ -1604,17 +1604,24 @@ func updateRequired(req Request, adding portable.Integration, others []string, o
 }
 
 func annotateRequiredUpdate(text string, out Result) string {
-	var others []string
+	var updates, adds []string
 	for _, next := range out.NextActions {
-		if next.Kind != "update" {
-			continue
+		switch next.Kind {
+		case "update":
+			updates = append(updates, next.Agents...)
+		case "install":
+			adds = append(adds, next.Agents...)
 		}
-		others = append(others, next.Agents...)
 	}
-	if len(others) == 0 {
+	if len(updates) == 0 {
 		return text
 	}
-	return text + " required-update=" + strings.Join(others, ",")
+	text += " required-update=" + strings.Join(updates, ",")
+	text += " phases=1-update:" + strings.Join(updates, ",")
+	if len(adds) > 0 {
+		text += ";2-add:" + strings.Join(adds, ",")
+	}
+	return text
 }
 
 func materializer(req Request, snap installruntime.InstalledSnapshot, runtimeRoot string) (portablesetup.Materializer, error) {

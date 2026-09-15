@@ -380,3 +380,27 @@ func TestFillInteractiveShowsDiscoverCapabilities(t *testing.T) {
 		t.Fatalf("capability labels: %s", out.String())
 	}
 }
+
+func TestFillInteractiveSanitizesDiscoverProfile(t *testing.T) {
+	in := strings.NewReader("1\n3\n")
+	var out strings.Builder
+	_, err := FillInteractive(promptCtx(t), Request{
+		Action: ActionInstall,
+		DiscoverAgents: func() []AgentCapability {
+			return []AgentCapability{
+				{ID: "claude", Present: true, Bound: true, Profile: "/tmp/claude\n2) Injected\rchoice"},
+				{ID: "codex", Present: false},
+			}
+		},
+	}, &LinePrompt{In: in, Out: &out}, nil)
+	if err != nil {
+		t.Fatalf("sanitize fill: %v", err)
+	}
+	got := out.String()
+	if strings.Contains(got, "\n2) Injected") || strings.Contains(got, "\r") {
+		t.Fatalf("prompt injected control chars: %q", got)
+	}
+	if !strings.Contains(got, "profile=/tmp/claude 2) Injected choice") {
+		t.Fatalf("sanitized profile: %s", got)
+	}
+}

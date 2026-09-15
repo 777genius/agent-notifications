@@ -2364,6 +2364,9 @@ func TestWizardSecondClientAddDoesNotReviseExisting(t *testing.T) {
 	if !strings.Contains(blockedPlan.Text, "required-update=claude") {
 		t.Fatalf("mismatch plan omitted required-update: %s", blockedPlan.Text)
 	}
+	if !strings.Contains(blockedPlan.Text, "phases=1-update:claude;2-add:codex") {
+		t.Fatalf("mismatch plan omitted two phases: %s", blockedPlan.Text)
+	}
 	samePlan, err := Plan(ctx, Request{
 		Action: ActionInstall, Agents: []string{"codex"}, Hooks: &off, AgentNotify: boolPtr(true),
 		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,

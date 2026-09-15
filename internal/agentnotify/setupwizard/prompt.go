@@ -388,10 +388,29 @@ func agentChoiceLabel(clients []AgentCapability, id, name string) string {
 }
 
 func agentInstalledLabel(base, profile string) string {
+	profile = sanitizePromptText(profile)
 	if profile == "" {
 		return base
 	}
 	return base + " profile=" + profile
+}
+
+// sanitizePromptText strips control characters from Discover labels so a
+// foreign profile/path cannot inject extra TTY lines.
+func sanitizePromptText(s string) string {
+	if s == "" {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if r < 32 || r == 127 {
+			b.WriteByte(' ')
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return strings.Join(strings.Fields(b.String()), " ")
 }
 
 func readLine(ctx context.Context, reader *bufio.Reader) (string, error) {

@@ -1190,6 +1190,17 @@ func TestSetupWizardSecondClientDifferentDigestE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 	out.Reset()
+	ttyMismatch := append([]string{"--action", "install", "--agents", "codex", "--package", other}, shared...)
+	if code := executeSetupWizardWith(ctx, ttyMismatch, &out, io.Discard, strings.NewReader(""), true); code != 1 {
+		t.Fatalf("tty mismatch exit: %d %s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "required-update=claude") || !strings.Contains(out.String(), "phases=1-update:claude;2-add:codex") {
+		t.Fatalf("tty mismatch hid two phases: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "next update:") || !strings.Contains(out.String(), "next install:") {
+		t.Fatalf("tty mismatch hid phase commands: %s", out.String())
+	}
+	out.Reset()
 	mismatch := append([]string{"--action", "install", "--agents", "codex", "--package", other, "--yes", "--json"}, shared...)
 	if code := executeSetupWizardWith(ctx, mismatch, &out, io.Discard, strings.NewReader(""), false); code != 1 {
 		t.Fatalf("mismatch exit: %d %s", code, out.String())
