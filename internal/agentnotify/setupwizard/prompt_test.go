@@ -101,6 +101,27 @@ func TestRetryCommandIncludesYesAndPaths(t *testing.T) {
 	}
 }
 
+func TestRetryCommandOmitsInternalIdentity(t *testing.T) {
+	cmd := RetryCommand(Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true,
+		InstallationID: "inst-1",
+		TreeDigest:     "tree-secret",
+		HelperDigest:   "helper-secret",
+		HelperVersion:  "1.43.0",
+		BindingIDs:     map[string]string{"codex": "bind-secret"},
+		DataReceiptIDs: map[string]string{"codex": "receipt-secret"},
+	})
+	joined := strings.Join(cmd, " ")
+	if !strings.Contains(joined, "--installation-id inst-1") {
+		t.Fatalf("installation id: %v", cmd)
+	}
+	for _, secret := range []string{"tree-secret", "helper-secret", "1.43.0", "bind-secret", "receipt-secret"} {
+		if strings.Contains(joined, secret) {
+			t.Fatalf("retry leaked %q: %v", secret, cmd)
+		}
+	}
+}
+
 func TestRunAttachesRetryCommandOnIncomplete(t *testing.T) {
 	got, err := Run(promptCtx(t), Request{Action: ActionUpdate, Agents: []string{"codex"}, Yes: true, ControlRoot: "/tmp/control"})
 	if err == nil || got.Outcome != "incomplete" || len(got.Command) == 0 {

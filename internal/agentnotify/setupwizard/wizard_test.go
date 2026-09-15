@@ -1796,6 +1796,151 @@ func TestWizardResumeRejectsDifferentHelperVersion(t *testing.T) {
 	}
 }
 
+func TestWizardResumeRejectsDifferentUnits(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, _, _, gen := managedRuntime(t)
+	plantPendingIntent(t, ctx, control, runtime, gen, portablesetup.Intent{
+		Version: 1, SetupIntentID: "pending-install-intent", Action: "install", Stage: "retire-direct",
+		ExpectedGeneration: gen,
+		Targets:            []portablesetup.IntentTarget{{Client: "codex", Units: []string{"direct-mcp"}}},
+	})
+	on, off := true, false
+	got, err := Run(ctx, Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &on, AgentNotify: &on,
+		ControlRoot: control, RuntimeRoot: runtime,
+	})
+	if err == nil || got.Outcome != "conflict" || got.Reason != "pending_intent_conflict" {
+		t.Fatalf("different units: %+v %v", got, err)
+	}
+	matched, err := Run(ctx, Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off, AgentNotify: &on,
+		ControlRoot: control, RuntimeRoot: runtime,
+	})
+	if matched.Reason == "pending_intent_conflict" {
+		t.Fatalf("matching units rejected: %+v %v", matched, err)
+	}
+}
+
+func TestWizardResumeRejectsDifferentRevision(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, _, _, gen := managedRuntime(t)
+	plantPendingIntent(t, ctx, control, runtime, gen, portablesetup.Intent{
+		Version: 1, SetupIntentID: "pending-install-intent", Action: "install", Stage: "retire-direct",
+		ExpectedGeneration: gen, SourceRevision: "1.43.0",
+		Targets: []portablesetup.IntentTarget{{Client: "codex", Units: []string{"direct-mcp"}}},
+	})
+	got, err := Run(ctx, Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true,
+		ControlRoot: control, RuntimeRoot: runtime, ReleaseVersion: "1.44.0",
+	})
+	if err == nil || got.Outcome != "conflict" || got.Reason != "pending_intent_conflict" {
+		t.Fatalf("different revision: %+v %v", got, err)
+	}
+	matched, err := Run(ctx, Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true,
+		ControlRoot: control, RuntimeRoot: runtime, ReleaseVersion: "1.43.0",
+	})
+	if matched.Reason == "pending_intent_conflict" {
+		t.Fatalf("matching revision rejected: %+v %v", matched, err)
+	}
+}
+
+func TestWizardResumeRejectsDifferentProfile(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, _, _, gen := managedRuntime(t)
+	plantPendingIntent(t, ctx, control, runtime, gen, portablesetup.Intent{
+		Version: 1, SetupIntentID: "pending-install-intent", Action: "install", Stage: "retire-direct",
+		ExpectedGeneration: gen,
+		Targets: []portablesetup.IntentTarget{{
+			Client: "codex", Profile: "/pending/codex-home", Units: []string{"direct-mcp"},
+		}},
+	})
+	got, err := Run(ctx, Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true,
+		ControlRoot: control, RuntimeRoot: runtime, CodexHome: "/other/codex-home",
+	})
+	if err == nil || got.Outcome != "conflict" || got.Reason != "pending_intent_conflict" {
+		t.Fatalf("different profile: %+v %v", got, err)
+	}
+	matched, err := Run(ctx, Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true,
+		ControlRoot: control, RuntimeRoot: runtime, CodexHome: "/pending/codex-home",
+	})
+	if matched.Reason == "pending_intent_conflict" {
+		t.Fatalf("matching profile rejected: %+v %v", matched, err)
+	}
+}
+
+func TestWizardResumeRestoresMixedPerClientUnits(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, gen := managedRuntime(t)
+	probe := buildProbe(t)
+	claudeConfig := filepath.Join(filepath.Dir(control), "claude-profile")
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	scope := filepath.Join(filepath.Dir(control), "scope")
+	for _, dir := range []string{claudeConfig, codexConfig, scope} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plantPendingIntent(t, ctx, control, runtime, gen, portablesetup.Intent{
+		Version: 1, SetupIntentID: "pending-install-intent", Action: "install", Stage: "retire-direct",
+		ExpectedGeneration: gen,
+		Targets: []portablesetup.IntentTarget{
+			{Client: "claude", Profile: claudeConfig, Units: []string{"hooks"}},
+			{Client: "codex", Profile: codexConfig, Units: []string{"agent-notify"}},
+		},
+	})
+	t.Setenv("CODEX_HOME", filepath.Join(filepath.Dir(control), "later-env-codex"))
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(filepath.Dir(control), "later-env-claude"))
+	got, err := Run(ctx, Request{
+		Action: ActionInstall, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		ClientExecutable: probe, Helper: probe, ScopeRoot: scope,
+	})
+	if got.Outcome == "cancelled" || got.Reason == "empty_selection" {
+		t.Fatalf("did not restore pending agents: %+v %v", got, err)
+	}
+	if got.Reason == "noninteractive_requires_yes" {
+		t.Fatalf("matching pending intent still required --yes: %+v %v", got, err)
+	}
+	joined := strings.Join(got.Command, " ")
+	for _, want := range []string{
+		"--agents claude,codex",
+		"--claude-hooks true",
+		"--codex-hooks false",
+		"--claude-agent-notify false",
+		"--codex-agent-notify true",
+		"--claude-config " + claudeConfig,
+		"--codex-home " + codexConfig,
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("retry omitted %q: %v", want, got.Command)
+		}
+	}
+	if strings.Contains(joined, "--hooks ") || strings.Contains(joined, "--agent-notify ") {
+		t.Fatalf("mixed units collapsed to global flags: %v", got.Command)
+	}
+	on, off := true, false
+	conflict, err := Run(ctx, Request{
+		Action: ActionInstall, Agents: []string{"claude", "codex"}, Yes: true,
+		Hooks: &on, AgentNotify: &on,
+		ControlRoot: control, RuntimeRoot: runtime,
+	})
+	if err == nil || conflict.Outcome != "conflict" || conflict.Reason != "pending_intent_conflict" {
+		t.Fatalf("global units matched mixed intent: %+v %v", conflict, err)
+	}
+	matched, err := Run(ctx, Request{
+		Action: ActionInstall, Agents: []string{"claude", "codex"}, Yes: true,
+		ClaudeHooks: &on, CodexHooks: &off, ClaudeAgentNotify: &off, CodexAgentNotify: &on,
+		ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		ClaudeConfig: claudeConfig, CodexHome: codexConfig,
+		ClientExecutable: probe, Helper: probe, ScopeRoot: scope,
+	})
+	if matched.Reason == "pending_intent_conflict" {
+		t.Fatalf("matching mixed units rejected: %+v %v", matched, err)
+	}
+}
+
 func TestWizardResumeRestoresOmittedUninstallFromPendingIntent(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, _, _, gen := managedRuntime(t)

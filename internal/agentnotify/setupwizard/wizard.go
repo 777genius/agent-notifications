@@ -703,20 +703,117 @@ func restoreOmittedFromIntent(req Request, agents []portable.Integration, intent
 }
 
 func restoreUnitsFromIntent(req Request, agents []portable.Integration, intent portablesetup.Intent) (Request, error) {
-	hooks, notify, specified := intentUnitSelection(intent)
+	want, specified := intentClientUnits(intent)
 	if !specified {
 		return req, nil
 	}
 	if unitFlagsOmitted(req) {
-		req.Hooks = boolPtr(hooks)
-		req.AgentNotify = boolPtr(notify)
-		return req, nil
+		return applyIntentUnits(req, want), nil
 	}
-	gotHooks, gotNotify := selectedUnits(req, agents)
-	if hooks != (len(gotHooks) > 0) || notify != (len(gotNotify) > 0) {
+	got := requestClientUnits(req, agents)
+	if !sameClientUnits(want, got) {
 		return req, portablesetup.ErrIntentConflict
 	}
 	return req, nil
+}
+
+type unitSelection struct {
+	hooks, notify bool
+}
+
+func intentClientUnits(intent portablesetup.Intent) (map[string]unitSelection, bool) {
+	out := map[string]unitSelection{}
+	specified := false
+	for _, target := range intent.Targets {
+		if target.Client == "" {
+			continue
+		}
+		if len(target.Units) > 0 {
+			specified = true
+		}
+		sel := out[target.Client]
+		for _, unit := range target.Units {
+			switch unit {
+			case "hooks":
+				sel.hooks = true
+			case "direct-mcp", "agent-notify", "mcp", "skills":
+				sel.notify = true
+			}
+		}
+		out[target.Client] = sel
+	}
+	return out, specified
+}
+
+func requestClientUnits(req Request, agents []portable.Integration) map[string]unitSelection {
+	out := map[string]unitSelection{}
+	for _, agent := range agents {
+		out[string(agent)] = unitSelection{}
+	}
+	hooks, notify := selectedUnits(req, agents)
+	for _, agent := range hooks {
+		sel := out[string(agent)]
+		sel.hooks = true
+		out[string(agent)] = sel
+	}
+	for _, agent := range notify {
+		sel := out[string(agent)]
+		sel.notify = true
+		out[string(agent)] = sel
+	}
+	return out
+}
+
+func sameClientUnits(want, got map[string]unitSelection) bool {
+	if len(want) != len(got) {
+		return false
+	}
+	for client, sel := range want {
+		other, ok := got[client]
+		if !ok || other != sel {
+			return false
+		}
+	}
+	return true
+}
+
+func unitsUniform(want map[string]unitSelection) (unitSelection, bool) {
+	var first unitSelection
+	seen := false
+	for _, sel := range want {
+		if !seen {
+			first = sel
+			seen = true
+			continue
+		}
+		if sel != first {
+			return unitSelection{}, false
+		}
+	}
+	return first, seen
+}
+
+func applyIntentUnits(req Request, want map[string]unitSelection) Request {
+	if uniform, ok := unitsUniform(want); ok {
+		req.Hooks = boolPtr(uniform.hooks)
+		req.AgentNotify = boolPtr(uniform.notify)
+		req.ClaudeHooks, req.CodexHooks = nil, nil
+		req.ClaudeAgentNotify, req.CodexAgentNotify = nil, nil
+		return req
+	}
+	req.Hooks, req.AgentNotify = nil, nil
+	req.ClaudeHooks, req.CodexHooks = nil, nil
+	req.ClaudeAgentNotify, req.CodexAgentNotify = nil, nil
+	for client, sel := range want {
+		hooks, notify := boolPtr(sel.hooks), boolPtr(sel.notify)
+		switch client {
+		case "claude":
+			req.ClaudeHooks, req.ClaudeAgentNotify = hooks, notify
+		case "codex":
+			req.CodexHooks, req.CodexAgentNotify = hooks, notify
+		}
+	}
+	return req
 }
 
 func intentClients(intent portablesetup.Intent) []string {
@@ -730,23 +827,6 @@ func intentClients(intent portablesetup.Intent) []string {
 		out = append(out, target.Client)
 	}
 	return out
-}
-
-func intentUnitSelection(intent portablesetup.Intent) (hooks, notify, specified bool) {
-	for _, target := range intent.Targets {
-		if len(target.Units) > 0 {
-			specified = true
-		}
-		for _, unit := range target.Units {
-			switch unit {
-			case "hooks":
-				hooks = true
-			case "direct-mcp", "agent-notify", "mcp", "skills":
-				notify = true
-			}
-		}
-	}
-	return hooks, notify, specified
 }
 
 func unitFlagsOmitted(req Request) bool {
@@ -1288,11 +1368,8 @@ func retryRequestFromIntent(req Request, intent portablesetup.Intent) Request {
 	if intent.ExternalUninstalled {
 		retry.ExternalUninstalled = true
 	}
-	if hooks, notify, specified := intentUnitSelection(intent); specified {
-		retry.Hooks = boolPtr(hooks)
-		retry.AgentNotify = boolPtr(notify)
-		retry.ClaudeHooks, retry.CodexHooks = nil, nil
-		retry.ClaudeAgentNotify, retry.CodexAgentNotify = nil, nil
+	if want, specified := intentClientUnits(intent); specified {
+		retry = applyIntentUnits(retry, want)
 	}
 	for _, target := range intent.Targets {
 		if target.InstallationID != "" {
