@@ -880,6 +880,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 				Identity: id, Integration: agent, ExpectedGeneration: snap.Ledger.Generation,
 				PackageRoot: req.PackageRoot, ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
 				SourceRevision: req.ReleaseVersion, SourceDigest: req.PackageSHA256,
+				TreeDigest: req.TreeDigest, HelperDigest: req.HelperDigest, HelperVersion: req.HelperVersion,
 				Discovery:   discovery(req, agent, runtimeRoot, snap),
 				OperationID: "wizard-install-" + string(agent),
 			}
@@ -903,6 +904,10 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		preview, err := previewNotifyPlan(ctx, req, snap, runtimeRoot, notifyAgents[0])
 		if err != nil {
 			return mapPreviewFailure(req, notifyAgents[0], mat, id, err, out)
+		}
+		if reserved := req.BindingIDs[string(notifyAgents[0])]; reserved != "" && preview.BindingID != "" && preview.BindingID != reserved {
+			out.Outcome, out.Reason = "incomplete", "binding_id_drift"
+			return out, ErrRefused
 		}
 		if err := bindSourceIdentity(&req, preview); err != nil {
 			out.Outcome, out.Reason = "incomplete", "source_identity_drift"
@@ -945,6 +950,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 			Identity: id, Integration: agent, ExpectedGeneration: generation,
 			PackageRoot: req.PackageRoot, ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
 			SourceRevision: req.ReleaseVersion, SourceDigest: req.PackageSHA256,
+			TreeDigest: req.TreeDigest, HelperDigest: req.HelperDigest, HelperVersion: req.HelperVersion,
 			Discovery:       discovery(req, agent, runtimeRoot, snap),
 			OperationID:     "wizard-install-" + string(agent),
 			KeepReservation: true,
@@ -954,6 +960,10 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 			if portablesetup.IsUpdateRequired(err) {
 				others, _ := mat.OtherLiveClients(id.InstallationID, string(agent))
 				return updateRequired(req, agent, others, out, err)
+			}
+			if errors.Is(err, portablesetup.ErrSourceIdentityDrift) {
+				out.Outcome, out.Reason = "incomplete", "source_identity_drift"
+				return out, err
 			}
 			if conflict, handled := pendingIntentConflict(req, err, out); handled {
 				return conflict, err

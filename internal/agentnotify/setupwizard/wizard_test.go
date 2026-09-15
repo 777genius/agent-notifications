@@ -323,6 +323,34 @@ func TestWizardRunRefusesPlanDigestDrift(t *testing.T) {
 	}
 }
 
+func TestWizardRunRejectsReservedBindingIDDrift(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	scope := filepath.Join(filepath.Dir(control), "scope")
+	if err := os.MkdirAll(scope, 0700); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Run(ctx, Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true,
+		Hooks: &off, AgentNotify: boolPtr(true),
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot:  scope,
+		BindingIDs: map[string]string{"codex": "not-the-reserved-binding"},
+	})
+	if err == nil || got.Outcome != "incomplete" || got.Reason != "binding_id_drift" {
+		t.Fatalf("reserved binding drift: %+v %v", got, err)
+	}
+}
+
 func TestPlanOmittedPackageRequiresAcquisition(t *testing.T) {
 	control, runtime, global, primary, _ := managedRuntime(t)
 	off := false

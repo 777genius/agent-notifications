@@ -505,3 +505,70 @@ func TestGuardSecondClientDoesNotRecoverPendingJournal(t *testing.T) {
 		t.Fatalf("guard recovered journal: %+v %v", open, err)
 	}
 }
+
+func TestUAPMaterializerInstallRefusesConfirmedDigestDrift(t *testing.T) {
+	codex, ledger := bindingFixture(t)
+	probe := buildProbe(t)
+	root := filepath.Dir(codex.ControlRoot)
+	pkg := filepath.Join(root, "package source with spaces")
+	writePackage(t, pkg, probe)
+	uapRoot := filepath.Join(root, "uap")
+	mat, err := NewMaterializer(UAPRoots{
+		StateFile:        filepath.Join(uapRoot, "state", "state-v2.json"),
+		LockFile:         filepath.Join(uapRoot, "state", "mutation.lock"),
+		OperationsDir:    filepath.Join(uapRoot, "state", "operations"),
+		PluginDataBase:   filepath.Join(uapRoot, "plugin data"),
+		ManagedRoot:      filepath.Join(uapRoot, "managed"),
+		HelperExecutable: probe,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := Identity{
+		InstallationID: "00000000-0000-4000-8000-000000000083",
+		ComponentID:    codex.ComponentID, Owner: codex.Owner, ScopeRoot: codex.ScopeRoot,
+		ControlRoot: codex.ControlRoot, GlobalConfig: codex.GlobalConfig, RuntimeRoot: codex.RuntimeRoot,
+		Primary: codex.Primary,
+	}
+	config := filepath.Join(root, "home", "codex config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	previewReq := MaterializeRequest{
+		Identity: id, Integration: portable.Codex, PackageRoot: pkg,
+		ClientConfigRoot: config, ClientExecutable: probe, OperationID: "portable-digest-preview",
+	}
+	plan, err := mat.PreviewPlan(testCtx(t), previewReq)
+	if err != nil || plan.TreeDigest == "" || plan.HelperDigest == "" {
+		t.Fatalf("preview: %+v %v", plan, err)
+	}
+	drift := MaterializeRequest{
+		Identity: id, Integration: portable.Codex, ExpectedGeneration: ledger.Generation,
+		PackageRoot: pkg, ClientConfigRoot: config, ClientExecutable: probe,
+		TreeDigest: "deadbeef", HelperDigest: plan.HelperDigest, HelperVersion: plan.HelperVersion,
+		OperationID: "portable-digest-drift",
+	}
+	if _, err := mat.Install(testCtx(t), drift); !errors.Is(err, ErrSourceIdentityDrift) {
+		t.Fatalf("wrong tree digest: %v", err)
+	}
+	state, err := mat.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := findInstallation(state, id.InstallationID); ok {
+		t.Fatal("digest drift created installation")
+	}
+	drift.TreeDigest = plan.TreeDigest
+	drift.HelperDigest = "deadbeef"
+	drift.OperationID = "portable-helper-drift"
+	if _, err := mat.Install(testCtx(t), drift); !errors.Is(err, ErrSourceIdentityDrift) {
+		t.Fatalf("wrong helper digest: %v", err)
+	}
+	matched := drift
+	matched.HelperDigest = plan.HelperDigest
+	matched.HelperVersion = plan.HelperVersion
+	matched.OperationID = "portable-digest-match"
+	if _, err := mat.Install(testCtx(t), matched); err != nil {
+		t.Fatal(err)
+	}
+}

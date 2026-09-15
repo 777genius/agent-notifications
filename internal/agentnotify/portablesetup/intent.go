@@ -93,11 +93,14 @@ func ReadIntent(controlRoot string) (Intent, error) {
 	return intent, nil
 }
 
-func intentMatches(intent Intent, pendingID, action, client, digest string) bool {
+func intentMatches(intent Intent, pendingID, action, client, digest, treeDigest string) bool {
 	if intent.SetupIntentID != pendingID || intent.Action != action {
 		return false
 	}
 	if digest != "" && intent.SourceDigest != "" && digest != intent.SourceDigest {
+		return false
+	}
+	if treeDigest != "" && intent.TreeDigest != "" && treeDigest != intent.TreeDigest {
 		return false
 	}
 	if client == "" || len(intent.Targets) == 0 {

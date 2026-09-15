@@ -17,11 +17,12 @@ import (
 )
 
 var (
-	ErrPreflight         = errors.New("portable setup refused")
-	ErrUpdateRequired    = errors.New("existing clients require explicit update before add")
-	ErrIntentConflict    = errors.New("pending setup intent conflict")
-	ErrExternalUninstall = errors.New("external uninstall required")
-	ErrAlreadyAbsent     = errors.New("portable binding is already absent")
+	ErrPreflight           = errors.New("portable setup refused")
+	ErrUpdateRequired      = errors.New("existing clients require explicit update before add")
+	ErrIntentConflict      = errors.New("pending setup intent conflict")
+	ErrExternalUninstall   = errors.New("external uninstall required")
+	ErrAlreadyAbsent       = errors.New("portable binding is already absent")
+	ErrSourceIdentityDrift = errors.New("confirmed source identity drifted")
 )
 
 // Envelope is the root MCP command projected for one explicit integration.
@@ -65,6 +66,9 @@ type Request struct {
 	Reservation        *installruntime.PendingMutation
 	SourceRevision     string
 	SourceDigest       string
+	TreeDigest         string
+	HelperDigest       string
+	HelperVersion      string
 	// Profile is the resolved client config root for this target. Empty keeps
 	// the published handoff intent without a profile path.
 	Profile string
@@ -170,7 +174,7 @@ func (s Service) matchingReservation(req Request, action string) (*installruntim
 	if err != nil {
 		return nil, fmt.Errorf("%w: pending handoff intent missing: %v", ErrPreflight, err)
 	}
-	if !intentMatches(intent, pending.ID, action, string(req.Binding.Integration), req.SourceDigest) {
+	if !intentMatches(intent, pending.ID, action, string(req.Binding.Integration), req.SourceDigest, req.TreeDigest) {
 		return nil, fmt.Errorf("%w: pending %s", ErrIntentConflict, intent.Action)
 	}
 	cp := *pending
@@ -391,7 +395,7 @@ func (s Service) handoffForward(ctx context.Context, req Request) (uint64, *inst
 		if err != nil {
 			return 0, nil, fmt.Errorf("%w: pending handoff intent missing: %v", ErrPreflight, err)
 		}
-		if !intentMatches(intent, pending.ID, "install", string(req.Binding.Integration), req.SourceDigest) {
+		if !intentMatches(intent, pending.ID, "install", string(req.Binding.Integration), req.SourceDigest, req.TreeDigest) {
 			return 0, nil, fmt.Errorf("%w: pending %s", ErrIntentConflict, intent.Action)
 		}
 		return snap.Ledger.Generation, pending, nil
@@ -406,7 +410,7 @@ func (s Service) handoffForward(ctx context.Context, req Request) (uint64, *inst
 		if err != nil {
 			return 0, nil, fmt.Errorf("%w: pending handoff intent missing: %v", ErrPreflight, err)
 		}
-		if !intentMatches(intent, pending.ID, "install", string(req.Binding.Integration), req.SourceDigest) {
+		if !intentMatches(intent, pending.ID, "install", string(req.Binding.Integration), req.SourceDigest, req.TreeDigest) {
 			return 0, nil, fmt.Errorf("%w: pending %s", ErrIntentConflict, intent.Action)
 		}
 		res = pending
@@ -471,7 +475,7 @@ func (s Service) PublishConfirmedIntent(ctx context.Context, req ConfirmedIntent
 	}
 	if pending := snap.Ledger.PendingMutation; pending != nil {
 		intent, readErr := ReadIntent(req.ControlRoot)
-		if readErr != nil || !intentMatches(intent, pending.ID, req.Action, req.Targets[0].Client, req.SourceDigest) {
+		if readErr != nil || !intentMatches(intent, pending.ID, req.Action, req.Targets[0].Client, req.SourceDigest, req.TreeDigest) {
 			return installruntime.Ledger{}, nil, fmt.Errorf("%w: pending %s", ErrIntentConflict, intent.Action)
 		}
 		cp := *pending
@@ -681,6 +685,9 @@ func (s Service) publishIntent(ctx context.Context, req Request, gen uint64, act
 		ExpectedGeneration: gen,
 		SourceRevision:     req.SourceRevision,
 		SourceDigest:       req.SourceDigest,
+		TreeDigest:         req.TreeDigest,
+		HelperDigest:       req.HelperDigest,
+		HelperVersion:      req.HelperVersion,
 		Targets: []IntentTarget{{
 			Client:         string(req.Binding.Integration),
 			BindingID:      req.Binding.BindingID,

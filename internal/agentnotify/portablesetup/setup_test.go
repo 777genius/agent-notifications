@@ -587,6 +587,35 @@ func TestPendingInstallDifferentDigestConflicts(t *testing.T) {
 	}
 }
 
+func TestPendingInstallDifferentTreeDigestConflicts(t *testing.T) {
+	b, ledger := bindingFixture(t)
+	config, cmd, ledger := ownedMCP(t, b, ledger)
+	svc := Service{}
+	req := Request{
+		Binding: b, ExpectedGeneration: ledger.Generation, Discovery: Discovery{ConfigPath: config, Command: cmd},
+		SourceDigest: strings.Repeat("a", 64), TreeDigest: "tree-a",
+	}
+	if _, _, err := svc.publishHandoffReservation(testCtx(t), req, ledger.Generation); err != nil {
+		t.Fatal(err)
+	}
+	intent, err := ReadIntent(b.ControlRoot)
+	if err != nil || intent.TreeDigest != "tree-a" || intent.SourceDigest != req.SourceDigest {
+		t.Fatalf("intent omitted tree digest: %+v %v", intent, err)
+	}
+	if _, err := svc.matchingReservation(req, "install"); err != nil {
+		t.Fatal(err)
+	}
+	omitted := req
+	omitted.TreeDigest = ""
+	if _, err := svc.matchingReservation(omitted, "install"); err != nil {
+		t.Fatalf("omitted tree digest: %v", err)
+	}
+	req.TreeDigest = "tree-b"
+	if _, err := svc.matchingReservation(req, "install"); !errors.Is(err, ErrIntentConflict) {
+		t.Fatalf("different tree digest: %v", err)
+	}
+}
+
 func TestHandoffIntentRecordsResolvedProfile(t *testing.T) {
 	b, ledger := bindingFixture(t)
 	config, cmd, ledger := ownedMCP(t, b, ledger)

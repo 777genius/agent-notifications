@@ -43,6 +43,9 @@ type MaterializeRequest struct {
 	ClientExecutable    string
 	SourceRevision      string
 	SourceDigest        string
+	TreeDigest          string
+	HelperDigest        string
+	HelperVersion       string
 	Discovery           Discovery
 	OperationID         string
 	HelperExecutable    string
@@ -273,13 +276,33 @@ func (m Materializer) engine(req MaterializeRequest, generation *uint64, res *in
 	})
 }
 
-func (m Materializer) apply(ctx context.Context, eng *uapinstaller.Engine, req uapinstaller.Request) (uapinstaller.Result, error) {
+func (m Materializer) apply(ctx context.Context, eng *uapinstaller.Engine, req uapinstaller.Request, expected MaterializeRequest) (uapinstaller.Result, error) {
 	prepared, err := eng.Prepare(ctx, req)
 	if err != nil {
 		return uapinstaller.Result{}, err
 	}
 	defer func() { _ = prepared.Close() }()
+	if err := confirmPreparedIdentity(expected, prepared.Plan()); err != nil {
+		return uapinstaller.Result{}, err
+	}
 	return eng.Apply(ctx, prepared, uapinstaller.Decision{Confirmed: true})
+}
+
+func confirmPreparedIdentity(req MaterializeRequest, plan uapinstaller.Plan) error {
+	if err := matchOptionalIdentity("tree digest", req.TreeDigest, plan.TreeDigest); err != nil {
+		return err
+	}
+	if err := matchOptionalIdentity("helper digest", req.HelperDigest, plan.HelperDigest); err != nil {
+		return err
+	}
+	return matchOptionalIdentity("helper version", req.HelperVersion, plan.HelperVersion)
+}
+
+func matchOptionalIdentity(name, expected, got string) error {
+	if expected == "" || got == "" || expected == got {
+		return nil
+	}
+	return fmt.Errorf("%w: %s %s desired %s", ErrSourceIdentityDrift, name, expected, got)
 }
 
 func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (portable.Binding, error) {
@@ -307,6 +330,7 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 	gen, res, err := m.Kernel.handoffForward(ctx, Request{
 		Binding: template, ExpectedGeneration: req.ExpectedGeneration, Discovery: req.Discovery,
 		SourceRevision: req.SourceRevision, SourceDigest: req.SourceDigest,
+		TreeDigest: req.TreeDigest, HelperDigest: req.HelperDigest, HelperVersion: req.HelperVersion,
 		Profile: req.ClientConfigRoot,
 	})
 	if err != nil {
@@ -322,7 +346,7 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 		ClientConfigRoot: req.ClientConfigRoot, ClientExecutable: req.ClientExecutable,
 		InstallationID: req.Identity.InstallationID, OperationID: req.OperationID,
 		RequiredComponents: []string{"mcp", "skills"},
-	})
+	}, req)
 	if err != nil {
 		return portable.Binding{}, persistResult(result, wrapUpdateRequired(err))
 	}
@@ -564,7 +588,7 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 		ClientConfigRoot: req.ClientConfigRoot, ClientExecutable: req.ClientExecutable,
 		InstallationID: req.Identity.InstallationID, OperationID: req.OperationID,
 		ExternalUninstalled: req.ExternalUninstalled,
-	})
+	}, req)
 	if err != nil {
 		return persistResult(removed, err)
 	}
