@@ -2244,6 +2244,69 @@ func TestSetupWizardFailedHooksKeepsPendingIntentE2E(t *testing.T) {
 	}
 }
 
+func TestSetupWizardResumeRejectsDifferentAgentsE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	snap, err := installruntime.ReadInstalledSnapshot(env.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plantWizardCLIPendingIntent(t, ctx, env.control, env.runtime, snap.Ledger.Generation, portablesetup.Intent{
+		Version: 1, SetupIntentID: "pending-install-intent", Action: "install", Stage: "retire-direct",
+		ExpectedGeneration: snap.Ledger.Generation,
+		Targets:            []portablesetup.IntentTarget{{Client: "codex", Units: []string{"direct-mcp"}}},
+	})
+	var out bytes.Buffer
+	args := []string{
+		"--action", "install", "--agents", "claude", "--yes", "--json",
+		"--control-root", env.control, "--runtime-root", env.runtime, "--helper", env.probe,
+	}
+	if code := executeSetupWizardWith(ctx, args, &out, io.Discard, strings.NewReader(""), false); code != 1 {
+		t.Fatalf("different agents exit: %d %s", code, out.String())
+	}
+	got := decodeWizardJSON(t, out)
+	if got.Outcome != "conflict" || got.Reason != "pending_intent_conflict" {
+		t.Fatalf("different agents: %+v", got)
+	}
+	joined := strings.Join(got.Command, " ")
+	if !strings.Contains(joined, "--action install") || !strings.Contains(joined, "--agents codex") {
+		t.Fatalf("retry dropped pending codex install: %v", got.Command)
+	}
+}
+
+func TestSetupWizardResumeRejectsDifferentProfileE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	other := filepath.Join(env.root, "other-codex")
+	if err := os.MkdirAll(other, 0700); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(env.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plantWizardCLIPendingIntent(t, ctx, env.control, env.runtime, snap.Ledger.Generation, portablesetup.Intent{
+		Version: 1, SetupIntentID: "pending-install-intent", Action: "install", Stage: "retire-direct",
+		ExpectedGeneration: snap.Ledger.Generation,
+		Targets:            []portablesetup.IntentTarget{{Client: "codex", Profile: env.codexHome, Units: []string{"direct-mcp"}}},
+	})
+	var out bytes.Buffer
+	args := []string{
+		"--action", "install", "--agents", "codex", "--yes", "--json",
+		"--control-root", env.control, "--runtime-root", env.runtime,
+		"--codex-home", other, "--helper", env.probe,
+	}
+	if code := executeSetupWizardWith(ctx, args, &out, io.Discard, strings.NewReader(""), false); code != 1 {
+		t.Fatalf("different profile exit: %d %s", code, out.String())
+	}
+	got := decodeWizardJSON(t, out)
+	if got.Outcome != "conflict" || got.Reason != "pending_intent_conflict" {
+		t.Fatalf("different profile: %+v", got)
+	}
+}
+
 func buildWizardProbe(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
