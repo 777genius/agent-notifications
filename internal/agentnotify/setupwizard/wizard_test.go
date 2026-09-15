@@ -496,6 +496,13 @@ func TestPlanAcquiresHostPackageForDigest(t *testing.T) {
 	}
 }
 
+func TestWizardInspectInvalidStillExitsTwo(t *testing.T) {
+	got, err := Run(testCtx(t), Request{Action: ActionInspect, Agents: []string{"codex"}})
+	if err == nil || got.Outcome != "invalid" || got.Reason != "control_root_required" || got.ExitCode() != 2 {
+		t.Fatalf("invalid inspect: %+v %v", got, err)
+	}
+}
+
 func TestWizardInspectReportsPendingJournal(t *testing.T) {
 	control, runtime, global, primary, _ := managedRuntime(t)
 	plantWizardJournal(t, control)
@@ -506,7 +513,7 @@ func TestWizardInspectReportsPendingJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Outcome != "incomplete" || got.Reason != "recovery_required" {
+	if got.Outcome != "incomplete" || got.Reason != "recovery_required" || got.ExitCode() != 0 {
 		t.Fatalf("inspect recovery: %+v", got)
 	}
 	found := false

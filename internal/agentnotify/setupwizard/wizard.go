@@ -131,6 +131,11 @@ type Result struct {
 }
 
 func (r Result) ExitCode() int {
+	// Read-only inspect reports readiness in result fields. A successful
+	// report is exit 0 even when Outcome is incomplete (§9.2).
+	if r.Action == string(ActionInspect) && r.Outcome != "invalid" {
+		return 0
+	}
 	switch r.Outcome {
 	case "completed", "unchanged":
 		return 0

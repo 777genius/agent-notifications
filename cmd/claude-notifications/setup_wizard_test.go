@@ -5,6 +5,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"os"
@@ -13,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/dirswap"
 
 	"github.com/777genius/agent-notifications/install/uapinstaller"
 	"github.com/777genius/agent-notifications/internal/agentnotify/clientsetup"
@@ -1418,6 +1422,261 @@ func TestSetupWizardUpdateOneClientKeepsSiblingE2E(t *testing.T) {
 	}
 }
 
+func TestSetupWizardInspectPendingJournalE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	plantWizardCLIPendingJournal(t, env.control)
+	var out bytes.Buffer
+	inspect := []string{
+		"--action", "inspect", "--json", "--control-root", env.control,
+		"--runtime-root", env.runtime, "--helper", env.probe,
+	}
+	if code := executeSetupWizardWith(ctx, inspect, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("pending journal inspect exit: %d %s", code, out.String())
+	}
+	view := decodeWizardJSON(t, out)
+	if view.Outcome != "incomplete" || view.Reason != "recovery_required" {
+		t.Fatalf("pending journal inspect: %+v", view)
+	}
+	found := false
+	for _, next := range view.NextActions {
+		if next.Kind == "recover" && strings.Contains(next.Reason, "wizard-pending-op") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("inspect omitted recover action: %+v", view.NextActions)
+	}
+}
+
+func TestSetupWizardRepairDifferentDigestRequiresUpdateE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	flags := func(action string, extra ...string) []string {
+		args := []string{
+			"--action", action, "--agents", "codex", "--hooks", "false",
+			"--package", env.pkg, "--control-root", env.control, "--runtime-root", env.runtime,
+			"--global-config", env.global, "--codex-home", env.codexHome,
+			"--client-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+		}
+		return append(args, extra...)
+	}
+	var out bytes.Buffer
+	if code := executeSetupWizardWith(ctx, flags("install", "--yes", "--json"), &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("install: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "completed" {
+		t.Fatalf("install: %+v", got)
+	}
+	if err := os.WriteFile(filepath.Join(env.pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, flags("repair", "--yes", "--json"), &out, io.Discard, strings.NewReader(""), false); code != 1 {
+		t.Fatalf("repair exit: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "incomplete" || got.Reason != "update_required" {
+		t.Fatalf("repair rewrote revision: %+v", got)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, flags("inspect", "--json"), &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect after refused repair: %d %s", code, out.String())
+	}
+	view := decodeWizardJSON(t, out)
+	found := false
+	for _, target := range view.Targets {
+		if target.Unit == "agent-notify" && target.Outcome == "installed" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("refused repair dropped binding: %+v", view.Targets)
+	}
+}
+
+func TestSetupWizardMixedUninstallHoldsCodexHooksE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	envHome := t.TempDir()
+	testenv.Set(t, envHome)
+	canonical := filepath.Join(envHome, "fixture-config.json")
+	if err := os.WriteFile(canonical, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENT_NOTIFICATIONS_CONFIG", canonical)
+	env := newWizardCLIEnv(t, ctx, false)
+	bundle := writeWizardPluginBundle(t)
+	shared := []string{
+		"--package", env.pkg, "--plugin-root", bundle, "--control-root", env.control, "--runtime-root", env.runtime,
+		"--global-config", env.global, "--codex-home", env.codexHome, "--claude-config", env.claudeConfig,
+		"--claude-executable", env.probe, "--codex-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+	}
+	var out bytes.Buffer
+	install := append([]string{"--action", "install", "--agents", "claude,codex", "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, install, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("install both: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "completed" {
+		t.Fatalf("install both: %+v", got)
+	}
+	hooks := filepath.Join(env.codexHome, "hooks.json")
+	data, err := os.ReadFile(hooks)
+	if err != nil || !strings.Contains(string(data), "codex-hook-wrapper") {
+		t.Fatalf("hooks.json after install: %s %v", data, err)
+	}
+	out.Reset()
+	hold := append([]string{"--action", "uninstall", "--agents", "claude,codex", "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, hold, &out, io.Discard, strings.NewReader(""), false); code != 1 {
+		t.Fatalf("hold exit: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "incomplete" || got.Reason != "external_uninstall_required" {
+		t.Fatalf("hold: %+v", got)
+	}
+	data, err = os.ReadFile(hooks)
+	if err != nil || !strings.Contains(string(data), "codex-hook-wrapper") {
+		t.Fatalf("Codex hooks removed before attestation: %s %v", data, err)
+	}
+}
+
+func TestSetupWizardRetainedDifferentDigestRequiresUpdateE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	flags := func(pkg, action string, extra ...string) []string {
+		args := []string{
+			"--action", action, "--agents", "codex", "--hooks", "false",
+			"--package", pkg, "--control-root", env.control, "--runtime-root", env.runtime,
+			"--global-config", env.global, "--codex-home", env.codexHome,
+			"--client-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+		}
+		return append(args, extra...)
+	}
+	var out bytes.Buffer
+	if code := executeSetupWizardWith(ctx, flags(env.pkg, "install", "--yes", "--json"), &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("install: %d %s", code, out.String())
+	}
+	installed := decodeWizardJSON(t, out)
+	if installed.Outcome != "completed" {
+		t.Fatalf("install: %+v", installed)
+	}
+	eng, err := uapinstaller.New(uapinstaller.Config{StateRoot: filepath.Join(env.root, "uap", "state")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	uapView, err := eng.Inspect(ctx)
+	if err != nil || len(uapView.Installations) != 1 || len(uapView.Installations[0].Bindings) == 0 {
+		t.Fatalf("uap inspect: %+v %v", uapView, err)
+	}
+	dataRoot := uapView.Installations[0].Bindings[0].DataRoot
+	if dataRoot == "" {
+		t.Fatal("missing plugin data root")
+	}
+	sentinel := filepath.Join(dataRoot, "keep.txt")
+	if err := os.WriteFile(sentinel, []byte("retain\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, flags(env.pkg, "uninstall", "--yes", "--json", "--external-uninstalled"), &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("uninstall: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "completed" {
+		t.Fatalf("uninstall: %+v", got)
+	}
+	other := filepath.Join(env.root, "other-package")
+	writeWizardPackage(t, other, env.probe)
+	if err := os.WriteFile(filepath.Join(other, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, flags(other, "install", "--yes", "--json"), &out, io.Discard, strings.NewReader(""), false); code != 1 {
+		t.Fatalf("retained digest exit: %d %s", code, out.String())
+	}
+	got := decodeWizardJSON(t, out)
+	if got.Outcome != "incomplete" || got.Reason != "update_required" {
+		t.Fatalf("retained digest mismatch: %+v", got)
+	}
+	if len(got.NextActions) != 2 || got.NextActions[0].Kind != "update" || got.NextActions[1].Kind != "install" {
+		t.Fatalf("retained update phases: %+v", got.NextActions)
+	}
+	body, err := os.ReadFile(sentinel)
+	if err != nil || string(body) != "retain\n" {
+		t.Fatalf("PLUGIN_DATA sentinel: %s %v", body, err)
+	}
+	out.Reset()
+	inspect := []string{
+		"--action", "inspect", "--json", "--control-root", env.control,
+		"--runtime-root", env.runtime, "--helper", env.probe,
+	}
+	if code := executeSetupWizardWith(ctx, inspect, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect after retained mismatch: %d %s", code, out.String())
+	}
+	for _, target := range decodeWizardJSON(t, out).Targets {
+		if target.Unit == "agent-notify" && target.Outcome == "installed" {
+			t.Fatalf("hidden retained migration: %+v", target)
+		}
+	}
+}
+
+func TestSetupWizardRepairOmittedUnitsPreservesNotifyE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	shared := []string{
+		"--agents", "codex", "--package", env.pkg, "--control-root", env.control, "--runtime-root", env.runtime,
+		"--global-config", env.global, "--codex-home", env.codexHome,
+		"--client-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+	}
+	var out bytes.Buffer
+	install := append([]string{"--action", "install", "--hooks", "false", "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, install, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("install: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "completed" {
+		t.Fatalf("install: %+v", got)
+	}
+	eng, err := uapinstaller.New(uapinstaller.Config{StateRoot: filepath.Join(env.root, "uap", "state")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	uapView, err := eng.Inspect(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := ""
+	for _, installation := range uapView.Installations {
+		for _, binding := range installation.Bindings {
+			if binding.ClientID == "codex" && binding.TargetPath != "" {
+				target = binding.TargetPath
+			}
+		}
+	}
+	if target == "" {
+		t.Fatal("missing live target")
+	}
+	if err := os.RemoveAll(target); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	repair := append([]string{"--action", "repair", "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, repair, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("omitted-unit repair: %d %s", code, out.String())
+	}
+	repaired := decodeWizardJSON(t, out)
+	if repaired.Outcome != "completed" {
+		t.Fatalf("omitted-unit repair: %+v", repaired)
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("repair did not restore target: %v", err)
+	}
+	for _, item := range repaired.Targets {
+		if item.Unit == "hooks" && item.Outcome != "absent" && item.Outcome != "" {
+			t.Fatalf("omitted repair added hooks: %+v", repaired.Targets)
+		}
+	}
+}
+
 func buildWizardProbe(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -1557,6 +1816,35 @@ func plantWizardCLIPendingIntent(t *testing.T, ctx context.Context, control, run
 		RefreshOnly: true, ExpectedGeneration: &generation, Reservation: &res,
 		Files: []installruntime.File{{Path: path, Data: append(payload, '\n'), Mode: 0600}},
 	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func plantWizardCLIPendingJournal(t *testing.T, controlRoot string) {
+	t.Helper()
+	owned := filepath.Join(filepath.Dir(controlRoot), "uap", "managed")
+	staging := filepath.Join(owned, ".agentplugins-staging-pending")
+	if err := os.MkdirAll(staging, 0700); err != nil {
+		t.Fatal(err)
+	}
+	opID := "wizard-pending-op"
+	sum := sha256.Sum256([]byte(opID))
+	receipt := dirswap.Receipt{
+		SchemaVersion: 3, Operation: dirswap.OperationSwap, OperationID: opID,
+		ClientBindingID: "client-binding-1", Sequence: 1, OwnedBase: owned,
+		ActivePath: filepath.Join(owned, "plugin"), StagingPath: staging,
+		BackupPath: filepath.Join(owned, ".agentplugins-backup-"+hex.EncodeToString(sum[:8])),
+		Phase:      dirswap.PhaseIntent,
+	}
+	body, err := json.MarshalIndent(receipt, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ops := filepath.Join(filepath.Dir(controlRoot), "uap", "state", "operations")
+	if err := os.MkdirAll(ops, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ops, opID+".json"), append(body, '\n'), 0600); err != nil {
 		t.Fatal(err)
 	}
 }

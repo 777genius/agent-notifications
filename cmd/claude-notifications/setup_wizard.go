@@ -177,6 +177,9 @@ func writeSetupWizardResult(out io.Writer, jsonOut bool, result setupwizard.Resu
 	if result.ExitCode() != 0 {
 		return result.ExitCode()
 	}
+	if result.Action == string(setupwizard.ActionInspect) {
+		return 0
+	}
 	if err != nil && result.Outcome != "completed" && result.Outcome != "unchanged" && result.Outcome != "cancelled" && result.Outcome != "ready" {
 		return 1
 	}
