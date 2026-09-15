@@ -1105,6 +1105,133 @@ func TestRepairDifferentDigestRequiresUpdate(t *testing.T) {
 	}
 }
 
+func TestUpdateSameDigestIsUnchanged(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "00000000-0000-4000-8000-000000000091"
+	installed, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: id, OperationID: "update-same-install",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := eng.Apply(ctx, installed, Decision{Confirmed: true})
+	_ = installed.Close()
+	if err != nil || first.Outcome != OutcomeCompleted {
+		t.Fatalf("install: %+v %v", first, err)
+	}
+	updated, err := eng.Prepare(ctx, Request{
+		Operation: OpUpdate, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: id, OperationID: "update-same-apply",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := eng.Apply(ctx, updated, Decision{Confirmed: true})
+	_ = updated.Close()
+	if err != nil {
+		t.Fatalf("same-digest update: %+v %v", got, err)
+	}
+	if got.Outcome != OutcomeUnchanged && got.Outcome != OutcomeCompleted {
+		t.Fatalf("same-digest update: %+v", got)
+	}
+	if got.InstallationID != id {
+		t.Fatalf("update changed installation: %s", got.InstallationID)
+	}
+}
+
+func TestUpdateOneClientKeepsSibling(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(base, "codex-config")
+	claudeConfig := filepath.Join(base, "claude-config")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eng, err := New(Config{
+		StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe,
+		Runner: listingRunner{configRoot: claudeConfig},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "00000000-0000-4000-8000-000000000092"
+	install := func(client, config, op string) {
+		t.Helper()
+		prepared, err := eng.Prepare(ctx, Request{
+			Operation: OpInstall, PackageRoot: pkg, ClientID: client, ClientConfigRoot: config,
+			ClientExecutable: probe, InstallationID: id, OperationID: op,
+			RequiredComponents: []string{"mcp", "skills"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := eng.Apply(ctx, prepared, Decision{Confirmed: true}); err != nil {
+			t.Fatal(err)
+		}
+		_ = prepared.Close()
+	}
+	install("codex", codexConfig, "sibling-codex-install")
+	install("claude", claudeConfig, "sibling-claude-install")
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"sample-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := eng.Prepare(ctx, Request{
+		Operation: OpUpdate, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: codexConfig,
+		ClientExecutable: probe, InstallationID: id, OperationID: "sibling-codex-update",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := eng.Apply(ctx, updated, Decision{Confirmed: true})
+	_ = updated.Close()
+	if err != nil || got.Outcome != OutcomeCompleted {
+		t.Fatalf("codex update: %+v %v", got, err)
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 2 {
+		t.Fatalf("sibling inspect: %+v %v", view, err)
+	}
+	clients := map[string]bool{}
+	for _, binding := range view.Installations[0].Bindings {
+		clients[binding.ClientID] = true
+	}
+	if !clients["codex"] || !clients["claude"] {
+		t.Fatalf("sibling lost: %+v", view.Installations[0].Bindings)
+	}
+	if view.Installations[0].InstallationID != id {
+		t.Fatalf("installation id: %s", view.Installations[0].InstallationID)
+	}
+}
+
 func TestPrepareSnapshotIgnoresLaterSourceMutation(t *testing.T) {
 	skipWindowsLauncherExecuteBit(t)
 	ctx := testCtx(t)

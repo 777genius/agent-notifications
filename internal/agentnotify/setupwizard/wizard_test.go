@@ -970,6 +970,43 @@ func TestWizardUpdateChangesLiveRevision(t *testing.T) {
 	}
 }
 
+func TestWizardUpdateSameDigestIsUnchanged(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	req.Action = ActionUpdate
+	got, err := Run(ctx, req)
+	if err != nil {
+		t.Fatalf("same-digest update: %+v %v", got, err)
+	}
+	if got.Outcome != "completed" && got.Outcome != "unchanged" {
+		t.Fatalf("same-digest update: %+v", got)
+	}
+	if got.InstallationID != installed.InstallationID {
+		t.Fatalf("update changed installation: install=%s update=%s", installed.InstallationID, got.InstallationID)
+	}
+}
+
 func TestWizardRepairRematerializesMissingTarget(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, _, _ := managedRuntime(t)
@@ -1125,6 +1162,52 @@ func TestWizardUpdateOmittedUnitsPreservesNotifyOnly(t *testing.T) {
 		if target.Unit == "hooks" && target.Outcome == "installed" {
 			t.Fatalf("omitted update installed hooks: %+v", view.Targets)
 		}
+	}
+}
+
+func TestWizardUpdateOneClientKeepsSibling(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	claudeConfig := filepath.Join(filepath.Dir(control), "claude-profile")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"claude", "codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClaudeConfig: claudeConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot:    filepath.Join(filepath.Dir(control), "scope"),
+		ClaudeRunner: listingRunner{configRoot: claudeConfig},
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	req.Action = ActionUpdate
+	req.Agents = []string{"codex"}
+	got, err := Run(ctx, req)
+	if err != nil || got.Outcome != "completed" {
+		t.Fatalf("codex update: %+v %v", got, err)
+	}
+	if got.InstallationID != installed.InstallationID {
+		t.Fatalf("update changed installation: install=%s update=%s", installed.InstallationID, got.InstallationID)
+	}
+	live := LiveNotifyClients(control, []string{"claude", "codex"})
+	if len(live) != 2 {
+		t.Fatalf("sibling lost: %v", live)
 	}
 }
 
