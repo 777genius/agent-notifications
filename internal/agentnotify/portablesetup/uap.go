@@ -1,9 +1,11 @@
 package portablesetup
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -124,6 +126,28 @@ func Complete(id Identity, integration portable.Integration, clientID, scope, ac
 	return b, nil
 }
 
+func refuseConflictingLocator(b portable.Binding) error {
+	name, err := b.Filename()
+	if err != nil {
+		return err
+	}
+	body, err := os.ReadFile(filepath.Join(b.DataRoot, name))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	_, _, raw, err := b.Registration()
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(body, raw) {
+		return fmt.Errorf("%w: existing locator identity does not match committed binding", ErrPreflight)
+	}
+	return nil
+}
+
 func NewMaterializer(roots UAPRoots) (Materializer, error) {
 	for _, p := range []string{roots.StateFile, roots.LockFile, roots.OperationsDir, roots.PluginDataBase, roots.ManagedRoot, roots.HelperExecutable} {
 		if p == "" || !filepath.IsAbs(p) || filepath.Clean(p) != p {
@@ -232,6 +256,9 @@ func (m Materializer) engine(req MaterializeRequest, generation *uint64, res *in
 			}
 			if pb.BindingID != facts.BindingID && facts.BindingID != "" {
 				return fmt.Errorf("%w: binding identity does not match committed UAP client", ErrPreflight)
+			}
+			if err := refuseConflictingLocator(pb); err != nil {
+				return err
 			}
 			if _, err := m.Kernel.CommitBinding(ctx, Request{Binding: pb, ExpectedGeneration: *generation, Reservation: res}); err != nil {
 				return err

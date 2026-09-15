@@ -319,6 +319,22 @@ func TestWizardInspectReportsPendingJournal(t *testing.T) {
 	}
 }
 
+func TestWizardInspectDoesNotAcquirePackage(t *testing.T) {
+	control, runtime, global, primary, _ := managedRuntime(t)
+	got, err := Run(testCtx(t), Request{
+		Action: ActionInspect, Agents: []string{"codex"},
+		ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global, Helper: primary,
+		ReleaseVersion: "1.43.0", ReleaseDownloadRoot: "https://example.invalid/missing",
+		PackageFetcher: func(context.Context, string) ([]byte, error) {
+			t.Fatal("inspect fetched a package")
+			return nil, nil
+		},
+	})
+	if err != nil || got.Outcome != "completed" || got.ExitCode() != 0 {
+		t.Fatalf("inspect: %+v %v", got, err)
+	}
+}
+
 func TestPlanShowsPendingRecoveryWithoutMutating(t *testing.T) {
 	control, runtime, global, _, gen := managedRuntime(t)
 	plantWizardJournal(t, control)
@@ -580,6 +596,14 @@ func TestWizardUnsupportedUpdate(t *testing.T) {
 	got, err := Run(testCtx(t), Request{Action: ActionUpdate, Agents: []string{"codex"}, Yes: true, ControlRoot: control})
 	if err == nil || got.Outcome != "incomplete" || got.Reason != "action_not_published" {
 		t.Fatalf("update: %+v %v", got, err)
+	}
+}
+
+func TestWizardUnsupportedRepair(t *testing.T) {
+	control, _, _, _, _ := managedRuntime(t)
+	got, err := Run(testCtx(t), Request{Action: ActionRepair, Agents: []string{"codex"}, Yes: true, ControlRoot: control})
+	if err == nil || got.Outcome != "incomplete" || got.Reason != "action_not_published" {
+		t.Fatalf("repair: %+v %v", got, err)
 	}
 }
 
@@ -1718,17 +1742,20 @@ func TestPortableInstallFailedKeepsActivationIncomplete(t *testing.T) {
 		},
 		Err: errors.New("host seam refused after managed commit"),
 	}
-	got := portableInstallFailed(portable.Codex, Result{Action: "install"}, err)
+	got := portableInstallFailed(portable.Codex, Request{Action: ActionInstall, Agents: []string{"codex"}, ControlRoot: "/tmp/control"}, Result{Action: "install"}, err)
 	if got.Outcome != "incomplete" || got.Reason != "activation_incomplete" {
 		t.Fatalf("incomplete mapping: %+v", got)
 	}
 	if len(got.NextActions) != 1 || got.NextActions[0].Kind != "activate" || got.NextActions[0].Agents[0] != "codex" {
 		t.Fatalf("activate action: %+v", got.NextActions)
 	}
+	if len(got.NextActions[0].Command) < 2 || got.NextActions[0].Command[0] != "setup-notifications" || got.NextActions[0].Command[1] != "wizard" {
+		t.Fatalf("activate retry command: %v", got.NextActions[0].Command)
+	}
 	if got.Targets[0].Outcome != "incomplete" {
 		t.Fatalf("target: %+v", got.Targets)
 	}
-	plain := portableInstallFailed(portable.Codex, Result{Action: "install"}, errors.New("missing helper"))
+	plain := portableInstallFailed(portable.Codex, Request{Action: ActionInstall}, Result{Action: "install"}, errors.New("missing helper"))
 	if plain.Reason != "portable_install_failed" || len(plain.NextActions) != 0 {
 		t.Fatalf("pre-commit failure: %+v", plain)
 	}

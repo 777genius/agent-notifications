@@ -415,6 +415,41 @@ func TestCommitBindingSameBindingDoesNotBumpGeneration(t *testing.T) {
 	lease.Release()
 }
 
+func TestRefuseConflictingLocatorIgnoresPathMatch(t *testing.T) {
+	b, ledger := bindingFixture(t)
+	name, err := b.Filename()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(b.DataRoot, name)
+	if err := os.WriteFile(path, []byte(`{"conflict":true}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := refuseConflictingLocator(b); err == nil || !errors.Is(err, ErrPreflight) {
+		t.Fatalf("conflicting locator accepted: %v", err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Ledger.Generation != ledger.Generation {
+		t.Fatalf("preflight bumped generation %d -> %d", ledger.Generation, snap.Ledger.Generation)
+	}
+	key, _, raw, err := b.Registration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := snap.Ledger.Consumers[key]; ok {
+		t.Fatal("preflight committed portable consumer")
+	}
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := refuseConflictingLocator(b); err != nil {
+		t.Fatalf("matching locator refused: %v", err)
+	}
+}
+
 func ownedMCP(t *testing.T, b portable.Binding, ledger installruntime.Ledger) (string, string, installruntime.Ledger) {
 	t.Helper()
 	config := filepath.Join(filepath.Dir(b.ControlRoot), "client", "config")
