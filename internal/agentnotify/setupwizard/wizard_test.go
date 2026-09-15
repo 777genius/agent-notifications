@@ -1419,10 +1419,10 @@ func plantWizardKernelJournal(t *testing.T, ctx context.Context, control, runtim
 	return hook
 }
 
-func TestWizardEmptyAgentsCancels(t *testing.T) {
+func TestWizardEmptyAgentsRequiresSelection(t *testing.T) {
 	control, _, _, _, _ := managedRuntime(t)
 	got, err := Run(testCtx(t), Request{Action: ActionInstall, Yes: true, ControlRoot: control})
-	if err != nil || got.Outcome != "cancelled" || got.ExitCode() != 0 {
+	if err == nil || got.Outcome != "invalid" || got.Reason != "agents_required" || got.ExitCode() != 2 {
 		t.Fatalf("empty: %+v %v", got, err)
 	}
 }
@@ -5130,6 +5130,11 @@ func TestWizardRetainedUpdateReportsProgress(t *testing.T) {
 	}
 	if len(got.NextActions) == 0 || got.NextActions[0].Kind != "data_compatibility" {
 		t.Fatalf("retained update omitted compatibility warning: %+v", got.NextActions)
+	}
+	for _, next := range got.NextActions {
+		if next.Kind == "request-permission" || next.Kind == "test-notification" {
+			t.Fatalf("retained metadata-only update offered delivery: %+v", got.NextActions)
+		}
 	}
 	body, err := os.ReadFile(sentinel)
 	if err != nil || string(body) != "retain\n" {

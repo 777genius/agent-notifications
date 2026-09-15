@@ -20,7 +20,7 @@ func TestSetupWizardHelpAndYesRequired(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var out bytes.Buffer
-	if code := executeSetupWizard(ctx, []string{"--help"}, &out); code != 0 || !strings.Contains(out.String(), "setup-notifications wizard") || !strings.Contains(out.String(), "units") || !strings.Contains(out.String(), "stderr") || !strings.Contains(out.String(), "Omit on inspect to report both clients") || !strings.Contains(out.String(), "invalid for mutation") || !strings.Contains(out.String(), "update, or repair") || !strings.Contains(out.String(), "omit on update/repair to keep live units") || !strings.Contains(out.String(), "Inspect exit 0") || !strings.Contains(out.String(), "one group apply") || !strings.Contains(out.String(), "mixed live revisions") || !strings.Contains(out.String(), "then Add of the missing") {
+	if code := executeSetupWizard(ctx, []string{"--help"}, &out); code != 0 || !strings.Contains(out.String(), "setup-notifications wizard") || !strings.Contains(out.String(), "units") || !strings.Contains(out.String(), "stderr") || !strings.Contains(out.String(), "Omit on inspect to report both clients") || !strings.Contains(out.String(), "invalid for mutation") || !strings.Contains(out.String(), "matching pending intent") || !strings.Contains(out.String(), "update, or repair") || !strings.Contains(out.String(), "omit on update/repair to keep live units") || !strings.Contains(out.String(), "Inspect exit 0") || !strings.Contains(out.String(), "one group apply") || !strings.Contains(out.String(), "mixed live revisions") || !strings.Contains(out.String(), "then Add of the missing") {
 		t.Fatalf("help: %d %s", code, out.String())
 	}
 	out.Reset()
@@ -216,6 +216,32 @@ func TestSetupWizardUpdateAndRepairRequireManagedRuntime(t *testing.T) {
 		if result.Action != action || result.Outcome != "incomplete" || result.Reason != "managed_runtime_required" {
 			t.Fatalf("%s result: %+v", action, result)
 		}
+	}
+}
+
+func TestSetupWizardJSONOmittedAgentsIsInvalid(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	root := setupCommandRoot(t)
+	control := filepath.Join(root, "control")
+	runtime := filepath.Join(root, "runtime")
+	if _, err := installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: control, RuntimeRoot: runtime, Owner: "existing-installer", ConsumerID: "existing",
+		Files: []installruntime.File{{Path: filepath.Join(runtime, "primary"), Data: []byte("inert"), Mode: 0700}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	code := executeSetupWizardWith(ctx, []string{"--action", "install", "--yes", "--control-root", control, "--json"}, &out, io.Discard, strings.NewReader(""), false)
+	if code != 2 {
+		t.Fatalf("omitted agents: %d %s", code, out.String())
+	}
+	var result setupwizard.Result
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("json: %v %s", err, out.String())
+	}
+	if result.Action != "install" || result.Outcome != "invalid" || result.Reason != "agents_required" {
+		t.Fatalf("omitted agents result: %+v", result)
 	}
 }
 

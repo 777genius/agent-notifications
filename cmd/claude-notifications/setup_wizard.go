@@ -23,7 +23,7 @@ const setupWizardHelp = `Usage: claude-notifications setup-notifications wizard 
 Master for hooks plus portable MCP/skill.
 TTY stdin prompts for agents, an existing-install action, and units when those flags are omitted, then shows a preflight plan and asks for confirmation.
 When Claude and Codex already have different units, the TTY shows both and does not collapse omission to one bool.
---json never prompts. Progress phases go to stderr. No TTY and no --agents/--yes is invalid for mutation, not a hang.
+--json never prompts. Progress phases go to stderr. No TTY and no --agents/--yes is invalid for mutation, not a hang. Omitted --agents with --yes is still invalid unless a matching pending intent restores them.
 Inspect exit 0 means the report was read; readiness stays in result fields.
 Without --action, a new machine defaults to install; an existing portable
 installation is offered inspect, add/reinstall, uninstall, update, or repair.

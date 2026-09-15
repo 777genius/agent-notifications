@@ -443,8 +443,11 @@ func evaluate(ctx context.Context, req *Request, requireYes bool) evaluated {
 		return evaluated{out: out, err: ErrRefused, stop: true}
 	}
 	if len(agents) == 0 {
-		out.Outcome, out.Reason = "cancelled", "empty_selection"
-		return evaluated{agents: agents, snap: snap, runtimeRoot: runtimeRoot, out: out, stop: true}
+		// TTY empty choice is canceled in FillInteractive before Run.
+		// Noninteractive mutation needs explicit --agents, or a matching
+		// pending intent that already restored them (§9.2).
+		out.Outcome, out.Reason = "invalid", "agents_required"
+		return evaluated{agents: agents, snap: snap, runtimeRoot: runtimeRoot, out: out, err: ErrRefused, stop: true}
 	}
 	if req.Action == ActionInspect {
 		return evaluated{agents: agents, snap: snap, runtimeRoot: runtimeRoot, out: out}
