@@ -413,6 +413,18 @@ func TestConfirmPlanShowsExistingProfileMCP(t *testing.T) {
 	if !strings.Contains(flagged, "codex-mcp="+explicit) || strings.Contains(flagged, "codex-mcp="+codexCfg) {
 		t.Fatalf("explicit mcp: %s", flagged)
 	}
+	envReq := Request{Action: ActionInstall, Agents: []string{"codex"}, EnvCodexHome: codexHome}
+	applyHostSnapshots(&envReq)
+	if !strings.Contains(confirmPlan(envReq), "codex-mcp="+codexCfg) {
+		t.Fatalf("env snapshot plan: %s", confirmPlan(envReq))
+	}
+	cmd := strings.Join(RetryCommand(envReq), " ")
+	if !strings.Contains(cmd, "--codex-home "+codexHome) {
+		t.Fatalf("retry profile: %s", cmd)
+	}
+	if strings.Contains(cmd, "--mcp-config") {
+		t.Fatalf("retry invented mcp-config: %s", cmd)
+	}
 }
 
 func TestFillInteractiveShowsDiscoverCapabilities(t *testing.T) {
