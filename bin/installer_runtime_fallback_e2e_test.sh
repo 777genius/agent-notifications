@@ -297,15 +297,29 @@ if HOST_NODE:
         case = Path(tmp)
         functions = case / 'functions.sh'
         functions.write_text((root / 'bin/install.sh').read_text(encoding='utf-8').replace('main "$@"', ''), encoding='utf-8')
-        helper = case / 'helper'
-        helper.write_text('#!' + sys.executable + '''
-import json, os, sys
-assert sys.argv[1:] == ["config", "preflight-update", "--stdin", "--json"]
-request = json.load(sys.stdin)
-open(os.environ["TRACE"], "w").write(json.dumps(request))
-print(json.dumps({"status": "safe", "diagnostics": []}))
-''')
-        helper.chmod(0o755)
+        helper_py = case / 'helper.py'
+        helper_py.write_text(
+            'import json, os, sys\n'
+            'assert sys.argv[1:] == ["config", "preflight-update", "--stdin", "--json"]\n'
+            'request = json.load(sys.stdin)\n'
+            'open(os.environ["TRACE"], "w").write(json.dumps(request))\n'
+            'print(json.dumps({"status": "safe", "diagnostics": []}))\n',
+            encoding='utf-8')
+        python_exe = sys.executable.replace('\\', '/')
+        helper_py_posix = bash_path(helper_py)
+        if os.name == 'nt':
+            helper = case / 'helper.cmd'
+            helper.write_text(
+                '@echo off\r\n"{}" "{}" %*\r\n'.format(
+                    sys.executable.replace('"', ''), str(helper_py).replace('"', '')),
+                encoding='utf-8')
+        else:
+            helper = case / 'helper'
+            helper.write_text(
+                '#!/bin/sh\nexec {} {} "$@"\n'.format(
+                    shlex.quote(python_exe), shlex.quote(helper_py_posix)),
+                encoding='utf-8')
+            helper.chmod(0o755)
         target = case / 'outside.json'
         target.write_text('{}')
         path = runtime_path(case, node=True)
