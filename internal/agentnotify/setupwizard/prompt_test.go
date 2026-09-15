@@ -213,6 +213,21 @@ func TestConfirmPlanShowsMixedPerClientFlags(t *testing.T) {
 	}
 }
 
+func TestConfirmPlanUpdateOmittedUnitsStayUnchanged(t *testing.T) {
+	off, on := false, true
+	got := confirmPlan(Request{
+		Action: ActionUpdate, Agents: []string{"codex"},
+		CodexHooks: &off, CodexAgentNotify: &on,
+	})
+	if !strings.Contains(got, "action=update") || !strings.Contains(got, "hooks=unchanged") || !strings.Contains(got, "agent-notify=unchanged") || !strings.Contains(got, "codex-hooks=false") || !strings.Contains(got, "codex-agent-notify=true") {
+		t.Fatalf("omitted update plan: %s", got)
+	}
+	repair := confirmPlan(Request{Action: ActionRepair, Agents: []string{"codex"}})
+	if !strings.Contains(repair, "hooks=unchanged") || !strings.Contains(repair, "agent-notify=unchanged") {
+		t.Fatalf("omitted repair plan: %s", repair)
+	}
+}
+
 func TestConfirmPlanShowsProfilesRevisionAndRequiredActions(t *testing.T) {
 	got := confirmPlan(Request{
 		Action: ActionInstall, Agents: []string{"codex"},

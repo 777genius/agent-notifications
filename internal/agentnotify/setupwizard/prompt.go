@@ -219,10 +219,14 @@ func confirmPlan(req Request) string {
 	}
 	unit := func(flag *bool, installDefault string) string {
 		if flag == nil {
-			if req.Action == ActionUninstall {
+			switch req.Action {
+			case ActionUninstall:
 				return "all-managed"
+			case ActionUpdate, ActionRepair:
+				return "unchanged"
+			default:
+				return installDefault
 			}
-			return installDefault
 		}
 		return boolFlag(*flag)
 	}

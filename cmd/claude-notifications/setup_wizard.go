@@ -27,8 +27,8 @@ Without --action, a new machine defaults to install; an existing portable
 installation is offered inspect, add/reinstall, uninstall, update, or repair.
   --action install|uninstall|inspect|update|repair
   --agents claude,codex   Omit on inspect to report both clients
-  --hooks true|false          Omit on install to include hooks; omit on uninstall to select all units
-  --agent-notify true|false   Omit on install to include portable MCP+skill
+  --hooks true|false          Omit on install to include hooks; omit on update/repair to keep live units; omit on uninstall to select all units
+  --agent-notify true|false   Omit on install to include portable MCP+skill; omit on update/repair to keep live units
   --claude-hooks true|false   Per-client override; mixed Claude/Codex opt-outs are not collapsed
   --codex-hooks true|false
   --claude-agent-notify true|false

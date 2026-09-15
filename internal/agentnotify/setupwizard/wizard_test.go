@@ -1279,6 +1279,13 @@ func TestWizardUpdateOmittedUnitsPreservesNotifyOnly(t *testing.T) {
 	req.Action = ActionUpdate
 	req.Hooks = nil
 	req.AgentNotify = nil
+	plan, err := Plan(ctx, req)
+	if err != nil || !plan.Ready {
+		t.Fatalf("omitted update plan: %+v %v", plan, err)
+	}
+	if !strings.Contains(plan.Text, "hooks=unchanged") || !strings.Contains(plan.Text, "codex-agent-notify=true") || strings.Contains(plan.Text, "hooks=on") {
+		t.Fatalf("omitted update plan hid live units: %s", plan.Text)
+	}
 	got, err := Run(ctx, req)
 	if err != nil || got.Outcome != "completed" {
 		t.Fatalf("omitted-unit update: %+v %v", got, err)
