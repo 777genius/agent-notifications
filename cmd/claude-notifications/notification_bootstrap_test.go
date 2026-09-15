@@ -177,10 +177,17 @@ func TestNotificationBootstrapWizard(t *testing.T) {
 	}
 	prefix := strings.TrimSuffix(strings.TrimSpace(string(source)), `main "$@"`)
 	home := t.TempDir()
+	codexHome := filepath.Join(home, "codex")
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
-	t.Setenv("CODEX_HOME", filepath.Join(home, "codex"))
+	t.Setenv("CODEX_HOME", codexHome)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	if err := os.MkdirAll(codexHome, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte("title = 'keep'\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	binDir := filepath.Join(home, "bin")
 	if err := os.MkdirAll(binDir, 0700); err != nil {
 		t.Fatal(err)
@@ -239,6 +246,12 @@ main --product both
 	if !strings.Contains(body, "--claude-executable "+filepath.Join(binDir, "claude")) || !strings.Contains(body, "--codex-executable "+filepath.Join(binDir, "codex")) {
 		t.Fatal(body)
 	}
+	if !strings.Contains(body, "--codex-home "+codexHome) {
+		t.Fatal(body)
+	}
+	if strings.Contains(body, "--mcp-config") || strings.Contains(body, "--claude-mcp-config") {
+		t.Fatal("bootstrap must not invent MCP config paths", body)
+	}
 }
 
 func TestNotificationBootstrapWizardRetryQuotesCustomRoots(t *testing.T) {
@@ -258,6 +271,9 @@ func TestNotificationBootstrapWizardRetryQuotesCustomRoots(t *testing.T) {
 		}
 	}
 	if err := os.WriteFile(filepath.Join(bundle, "portable-package", "plugin.json"), []byte(`{"name":"agent-notify"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte("title = 'keep'\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("HOME", home)
@@ -318,6 +334,9 @@ main --product both --codex-home "$HOME/codex home"
 	}
 	if flagValue(argv, "--codex-home") != codexHome {
 		t.Fatalf("codex-home: %#v", argv)
+	}
+	if flagValue(argv, "--mcp-config") != "" || flagValue(argv, "--claude-mcp-config") != "" {
+		t.Fatalf("invented mcp-config: %#v", argv)
 	}
 }
 
