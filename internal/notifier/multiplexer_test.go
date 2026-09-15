@@ -36,7 +36,7 @@ func TestDetectMultiplexerArgs_NoMux(t *testing.T) {
 		}
 	})
 
-	args, name := detectMultiplexerArgs("Title", "Message", "com.test.app")
+	args, name := detectMultiplexerArgs("Title", "Message", "com.test.app", nil)
 	if args != nil {
 		t.Errorf("expected nil args when no multiplexer, got %v", args)
 	}
@@ -66,7 +66,7 @@ func TestDetectMultiplexerArgs_TmuxPriority(t *testing.T) {
 
 	// tmux will be detected but GetTmuxPaneTarget will fail (no real tmux server)
 	// so we expect (nil, "tmux") — detected but target capture failed
-	args, name := detectMultiplexerArgs("Title", "Message", "com.test.app")
+	args, name := detectMultiplexerArgs("Title", "Message", "com.test.app", nil)
 	if args != nil {
 		t.Errorf("expected nil args (no real tmux server), got %v", args)
 	}

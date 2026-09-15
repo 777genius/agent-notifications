@@ -94,7 +94,56 @@ Review the file before sharing it publicly, because it may include local paths a
 
 ## Multiplexers
 
-On both macOS and Linux, click-to-focus supports **tmux**, **zellij**, **WezTerm**, and **kitty** — clicking a notification switches to the correct session/pane/tab. Inside Warp, the Warp session URL is opened first so the right Warp window/tab is raised, then the multiplexer target is selected.
+Clicking a notification switches to the correct session/pane/tab, on top of raising the window.
+Inside Warp, the Warp session URL is opened first to raise the originating window/tab, then
+the supported multiplexer target is selected.
+
+| Multiplexer | macOS | Linux |
+|-------------|-------|-------|
+| tmux | ✅ | — |
+| zellij | ✅ (active tab) | ✅ (exact pane) |
+| WezTerm | ✅ | ✅ |
+| kitty | ✅ | — |
+
+Where a multiplexer is unsupported the window is still raised; only the pane/tab switch is skipped.
+
+On Linux, zellij is targeted by pane rather than by tab name: the hook records `$ZELLIJ_SESSION_NAME`
+and `$ZELLIJ_PANE_ID`, and the click runs `zellij -s <session> action focus-pane-id <pane>`. That is
+exact where a tab name is not — tab names need not be unique, and the tab that is *focused* when the
+notification fires is whichever one you switched to, not the one Claude is running in.
+
+Pane targeting is used only where it can actually work: the session has to export `$ZELLIJ_PANE_ID`
+for the action to name, and the installed zellij has to accept `focus-pane-id`. Either one missing
+falls back to `go-to-tab-name`, so no zellij version loses behaviour it previously had. Both are
+settled when the notification is sent, and the second is settled by asking the installed zellij
+whether it accepts the subcommand — not by comparing version numbers, though for reference the
+subcommand arrived in 0.44.1. macOS always uses `go-to-tab-name`.
+
+Override the choice with `zellijFocus` in `~/.config/agent-notifications/config.json`:
+
+```json
+{
+  "notifications": {
+    "desktop": {
+      "zellijFocus": "auto"
+    }
+  }
+}
+```
+
+| Value | Behaviour |
+|-------|-----------|
+| `auto` (default) | `pane` when the session exports a pane ID and the installed zellij accepts `focus-pane-id`, otherwise `tab` |
+| `pane` | Always target the pane; where there is no pane ID, or zellij rejects the subcommand, the window is raised with no switch |
+| `tab` | Always use the legacy tab-name path |
+| `off` | Raise the window only, never touch zellij |
+
+The setting is read on Linux; the macOS click path always uses the tab name.
+
+The `tab` path is approximate by nature, which is why it is only the fallback. Tab names are not
+unique, `zellij action rename-tab` can change one after the notification is sent, and a tab holds
+many panes — so it lands on whichever pane that tab last had focused, not necessarily the one Claude
+is running in.
 
 ### iTerm2 + tmux Control Mode (-CC)
 

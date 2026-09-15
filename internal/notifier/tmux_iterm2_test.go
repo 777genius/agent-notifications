@@ -223,7 +223,7 @@ func TestBuildTmuxClickArgs_Iterm2PlainTmuxUsesHelper(t *testing.T) {
 		}
 	})
 
-	args, err := buildTmuxClickArgs("Title", "Msg", iTerm2BundleID)
+	args, err := buildTmuxClickArgs("Title", "Msg", iTerm2BundleID, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -257,7 +257,7 @@ func TestBuildTmuxClickArgs_Iterm2PlainTmuxWithoutHelperErrors(t *testing.T) {
 		}
 	})
 
-	_, err := buildTmuxClickArgs("Title", "Msg", iTerm2BundleID)
+	_, err := buildTmuxClickArgs("Title", "Msg", iTerm2BundleID, nil)
 	if err == nil {
 		t.Fatal("expected error when iTerm2 helper is unavailable in plain tmux")
 	}
@@ -306,7 +306,7 @@ func TestBuildTmuxClickArgs_Iterm2ControlModeFallsBackWithoutHelper(t *testing.T
 		}
 	})
 
-	args, err := buildTmuxClickArgs("Title", "Msg", iTerm2BundleID)
+	args, err := buildTmuxClickArgs("Title", "Msg", iTerm2BundleID, nil)
 	if err != nil {
 		t.Fatalf("expected fallback args, got error: %v", err)
 	}

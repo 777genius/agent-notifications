@@ -258,7 +258,7 @@ func TestTmuxE2E(t *testing.T) {
 			}
 		})
 
-		args, err := buildTmuxClickArgs("Test", "Msg", "com.test")
+		args, err := buildTmuxClickArgs("Test", "Msg", "com.test", nil)
 		if err != nil {
 			t.Fatalf("buildTmuxClickArgs failed: %v", err)
 		}

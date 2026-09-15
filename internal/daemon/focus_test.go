@@ -119,7 +119,7 @@ func TestTryFocusWithHints_WarpURLShortCircuits(t *testing.T) {
 		return nil
 	}
 
-	if err := TryFocusWithHints("WarpTerminal", "proj", "", "", "", "", "warp://session/"+hex); err != nil {
+	if err := TryFocusWithHints(FocusHints{TerminalName: "WarpTerminal", FolderName: "proj", WarpFocusURL: "warp://session/" + hex}); err != nil {
 		t.Fatalf("TryFocusWithHints: %v", err)
 	}
 	if opened != "warp://session/"+hex {
@@ -136,5 +136,5 @@ func TestTryFocusWithHints_RejectsNonSessionWarpURL(t *testing.T) {
 	}
 
 	// Invalid URL must fall through to the compositor chain instead of xdg-open.
-	_ = TryFocusWithHints("WarpTerminal", "proj", "", "", "", "", "warp://action/new_tab")
+	_ = TryFocusWithHints(FocusHints{TerminalName: "WarpTerminal", FolderName: "proj", WarpFocusURL: "warp://action/new_tab"})
 }
