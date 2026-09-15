@@ -717,6 +717,129 @@ func TestRepairGroupMissingOneDoesNotMutate(t *testing.T) {
 	}
 }
 
+func TestInstallGroupAddsMissingSiblingSameDigest(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(base, "codex-config")
+	claudeConfig := filepath.Join(base, "claude-config")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eng, err := New(Config{
+		StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe,
+		Runner: listingRunner{configRoot: claudeConfig},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "00000000-0000-4000-8000-0000000000b4"
+	first, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: codexConfig,
+		ClientExecutable: probe, InstallationID: id, OperationID: "group-add-first",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, first, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = first.Close()
+	added, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, InstallationID: id, OperationID: "group-add-second",
+		RequiredComponents: []string{"mcp", "skills"}, ClientExecutable: probe,
+		Targets: []ClientTarget{
+			{ClientID: "codex", ClientConfigRoot: codexConfig, ClientExecutable: probe},
+			{ClientID: "claude", ClientConfigRoot: claudeConfig, ClientExecutable: probe},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := eng.Apply(ctx, added, Decision{Confirmed: true})
+	_ = added.Close()
+	if err != nil || got.Outcome != OutcomeCompleted {
+		t.Fatalf("group add second: %+v %v", got, err)
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 || view.Installations[0].InstallationID != id {
+		t.Fatalf("after group add: %+v %v", view, err)
+	}
+	if len(view.Installations[0].Bindings) != 2 {
+		t.Fatalf("missing sibling not added: %+v", view.Installations[0].Bindings)
+	}
+}
+
+func TestInstallGroupDifferentDigestWhenLiveDoesNotMutate(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(base, "codex-config")
+	claudeConfig := filepath.Join(base, "claude-config")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eng, err := New(Config{
+		StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe,
+		Runner: listingRunner{configRoot: claudeConfig},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "00000000-0000-4000-8000-0000000000b5"
+	installed, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: codexConfig,
+		ClientExecutable: probe, InstallationID: id, OperationID: "group-digest-install",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, installed, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = installed.Close()
+	before, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, InstallationID: id, OperationID: "group-digest-rewrite",
+		RequiredComponents: []string{"mcp", "skills"}, ClientExecutable: probe,
+		Targets: []ClientTarget{
+			{ClientID: "codex", ClientConfigRoot: codexConfig, ClientExecutable: probe},
+			{ClientID: "claude", ClientConfigRoot: claudeConfig, ClientExecutable: probe},
+		},
+	})
+	if !errors.Is(err, ErrUpdateRequired) {
+		t.Fatalf("group install rewrite: %v", err)
+	}
+	after, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("group install rewrite mutated state")
+	}
+}
+
 func TestInstallSameDigestDifferentDirectoryAddsSecondClient(t *testing.T) {
 	skipWindowsLauncherExecuteBit(t)
 	ctx := testCtx(t)
