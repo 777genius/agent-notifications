@@ -828,6 +828,55 @@ func TestWizardInstallRecoversPendingJournal(t *testing.T) {
 	}
 }
 
+func TestWizardInstallRecoversBothPendingJournals(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	plantWizardJournalNamed(t, control, "wizard-pending-op")
+	plantWizardJournalNamed(t, control, "wizard-pending-op-2")
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install recover both: %+v %v", installed, err)
+	}
+	ops := filepath.Join(filepath.Dir(control), "uap", "state", "operations")
+	for _, opID := range []string{"wizard-pending-op", "wizard-pending-op-2"} {
+		if _, err := os.Lstat(filepath.Join(ops, opID+".json")); !os.IsNotExist(err) {
+			t.Fatalf("install left pending journal %s: %v", opID, err)
+		}
+	}
+	req.Action = ActionInspect
+	req.Yes = false
+	view, err := Run(ctx, req)
+	if err != nil || view.Outcome == "recovery_required" || view.Reason == "recovery_required" {
+		t.Fatalf("inspect after recover both: %+v %v", view, err)
+	}
+	found := false
+	for _, target := range view.Targets {
+		if target.Unit == "agent-notify" && target.Outcome == "installed" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("install after recover both missed binding: %+v", view.Targets)
+	}
+}
+
 func TestWizardInstallRecoversKernelThenUAP(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, _, _ := managedRuntime(t)
