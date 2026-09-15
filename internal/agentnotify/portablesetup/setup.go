@@ -524,6 +524,78 @@ func (s Service) PublishConfirmedIntent(ctx context.Context, req ConfirmedIntent
 	return ledger, &res, nil
 }
 
+// PatchIntentReceipt records a known UAP data receipt on the pending host
+// intent without allocating a new SetupIntentID.
+func (s Service) PatchIntentReceipt(ctx context.Context, controlRoot, runtimeRoot, owner, client, receiptID string) error {
+	if ctx == nil || controlRoot == "" || receiptID == "" || client == "" {
+		return nil
+	}
+	release, err := installruntime.AcquireCoordinatorLease(ctx, controlRoot)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if _, err = installruntime.Recover(ctx, controlRoot); err != nil {
+		return err
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(controlRoot)
+	if err != nil {
+		return err
+	}
+	pending := snap.Ledger.PendingMutation
+	if pending == nil {
+		return nil
+	}
+	intent, err := ReadIntent(controlRoot)
+	if err != nil {
+		return err
+	}
+	if intent.SetupIntentID != pending.ID {
+		return fmt.Errorf("%w: pending %s", ErrIntentConflict, intent.Action)
+	}
+	changed := false
+	for i, target := range intent.Targets {
+		if target.Client != client {
+			continue
+		}
+		if target.DataReceiptID == receiptID {
+			return nil
+		}
+		intent.Targets[i].DataReceiptID = receiptID
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	payload, err := marshalIntent(intent)
+	if err != nil {
+		return err
+	}
+	consumerID, err := existingConsumerID(snap.Ledger, runtimeRoot)
+	if err != nil {
+		return err
+	}
+	path := IntentPath(controlRoot)
+	before, err := installruntime.Fingerprint(path)
+	if err != nil {
+		return err
+	}
+	if owner == "" {
+		owner = snap.Ledger.Owner
+	}
+	gen := snap.Ledger.Generation
+	res := *pending
+	_, err = installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: controlRoot, Owner: owner, RuntimeRoot: runtimeRoot,
+		ConsumerID: consumerID, RefreshOnly: true, ExpectedGeneration: &gen, Reservation: &res,
+		Files: []installruntime.File{{Path: path, Before: before, Data: payload, Mode: 0600}},
+	})
+	if err != nil {
+		return fmt.Errorf("%w: patch intent receipt: %v", ErrPreflight, err)
+	}
+	return nil
+}
+
 // FinishConfirmedIntent removes a matching reservation after the whole wizard
 // mutation finished. Incomplete HoldOnly/external uninstall leaves it in place.
 func (s Service) FinishConfirmedIntent(ctx context.Context, req ConfirmedIntent, res *installruntime.PendingMutation) error {

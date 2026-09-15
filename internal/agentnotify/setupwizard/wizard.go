@@ -58,7 +58,10 @@ type Request struct {
 	InstallationID, Primary                 string
 	// BindingIDs are reserved per client during Plan/identity without
 	// staging. Run and the durable intent reuse them.
-	BindingIDs                          map[string]string
+	BindingIDs map[string]string
+	// DataReceiptIDs are known UAP PLUGIN_DATA receipts. Uninstall/publish
+	// copies live receipts onto the durable intent; resume rejects a different ID.
+	DataReceiptIDs                      map[string]string
 	MCPConfig                           map[string]string
 	ClaudeHooks, CodexHooks             *bool
 	ClaudeAgentNotify, CodexAgentNotify *bool
@@ -627,6 +630,16 @@ func restoreOmittedFromIntent(req Request, agents []portable.Integration, intent
 				return req, agents, portablesetup.ErrIntentConflict
 			}
 		}
+		if target.DataReceiptID != "" {
+			if req.DataReceiptIDs == nil {
+				req.DataReceiptIDs = map[string]string{}
+			}
+			if existing := req.DataReceiptIDs[target.Client]; existing == "" {
+				req.DataReceiptIDs[target.Client] = target.DataReceiptID
+			} else if existing != target.DataReceiptID {
+				return req, agents, portablesetup.ErrIntentConflict
+			}
+		}
 		if target.Profile == "" {
 			continue
 		}
@@ -952,6 +965,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		out.Generation = generation
 		out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "completed", Reason: got.BindingID})
 		id.InstallationID = got.InstallationID
+		_ = persistKnownReceipt(ctx, req, runtimeRoot, mat, id.InstallationID, string(agent))
 		if err := recordLiveProfile(got.DataRoot, string(agent), clientConfig(req, agent)); err != nil {
 			out.Outcome, out.Reason = "incomplete", err.Error()
 			return out, err
@@ -1241,6 +1255,12 @@ func retryRequestFromIntent(req Request, intent portablesetup.Intent) Request {
 				retry.BindingIDs = map[string]string{}
 			}
 			retry.BindingIDs[target.Client] = target.BindingID
+		}
+		if target.DataReceiptID != "" {
+			if retry.DataReceiptIDs == nil {
+				retry.DataReceiptIDs = map[string]string{}
+			}
+			retry.DataReceiptIDs[target.Client] = target.DataReceiptID
 		}
 		switch target.Client {
 		case "codex":
@@ -1641,6 +1661,7 @@ func wizardIntentTargets(req Request, hookAgents, notifyAgents []portable.Integr
 				Client:         id,
 				InstallationID: req.InstallationID,
 				BindingID:      req.BindingIDs[id],
+				DataReceiptID:  req.DataReceiptIDs[id],
 				Profile:        clientConfig(req, agent),
 			}
 			byClient[id] = target
@@ -1661,6 +1682,58 @@ func wizardIntentTargets(req Request, hookAgents, notifyAgents []portable.Integr
 	return out
 }
 
+func attachKnownReceipts(req Request, snap installruntime.InstalledSnapshot, runtimeRoot string, targets []portablesetup.IntentTarget) []portablesetup.IntentTarget {
+	if len(targets) == 0 || req.InstallationID == "" {
+		return targets
+	}
+	mat, err := materializer(req, snap, runtimeRoot)
+	if err != nil {
+		return targets
+	}
+	for i, target := range targets {
+		if target.DataReceiptID != "" {
+			continue
+		}
+		id := target.InstallationID
+		if id == "" {
+			id = req.InstallationID
+		}
+		if receipt := knownReceiptID(mat, id, target.Client); receipt != "" {
+			targets[i].DataReceiptID = receipt
+		}
+	}
+	return targets
+}
+
+func persistKnownReceipt(ctx context.Context, req Request, runtimeRoot string, mat portablesetup.Materializer, installationID, client string) error {
+	receipt := knownReceiptID(mat, installationID, client)
+	if receipt == "" {
+		return nil
+	}
+	return (portablesetup.Service{}).PatchIntentReceipt(ctx, req.ControlRoot, runtimeRoot, "", client, receipt)
+}
+
+func knownReceiptID(mat portablesetup.Materializer, installationID, clientID string) string {
+	if installationID == "" || clientID == "" {
+		return ""
+	}
+	state, err := mat.Store.Load()
+	if err != nil {
+		return ""
+	}
+	for _, installation := range state.Installations {
+		if installation.InstallationID != installationID {
+			continue
+		}
+		for _, binding := range installation.Clients {
+			if binding.ClientID == clientID && binding.DataReceiptID != "" {
+				return binding.DataReceiptID
+			}
+		}
+	}
+	return ""
+}
+
 func publishWizardIntent(ctx context.Context, req Request, snap installruntime.InstalledSnapshot, runtimeRoot string, hookAgents, notifyAgents []portable.Integration, portablePresent bool) (installruntime.InstalledSnapshot, error) {
 	if snap.Ledger.PendingMutation != nil {
 		return snap, nil
@@ -1669,6 +1742,7 @@ func publishWizardIntent(ctx context.Context, req Request, snap installruntime.I
 		return snap, nil
 	}
 	targets := wizardIntentTargets(req, hookAgents, notifyAgents)
+	targets = attachKnownReceipts(req, snap, runtimeRoot, targets)
 	if len(targets) == 0 {
 		return snap, nil
 	}

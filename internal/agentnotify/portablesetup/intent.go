@@ -33,6 +33,7 @@ type IntentTarget struct {
 	Client         string   `json:"client"`
 	BindingID      string   `json:"bindingID,omitempty"`
 	InstallationID string   `json:"installationID,omitempty"`
+	DataReceiptID  string   `json:"dataReceiptID,omitempty"`
 	Profile        string   `json:"profile,omitempty"`
 	Units          []string `json:"units,omitempty"`
 }

@@ -1590,6 +1590,36 @@ func TestWizardResumeRejectsDifferentBindingID(t *testing.T) {
 	}
 }
 
+func TestWizardResumeRejectsDifferentDataReceiptID(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, _, _, gen := managedRuntime(t)
+	plantPendingIntent(t, ctx, control, runtime, gen, portablesetup.Intent{
+		Version: 1, SetupIntentID: "pending-install-intent", Action: "install", Stage: "retire-direct",
+		ExpectedGeneration: gen,
+		Targets: []portablesetup.IntentTarget{{
+			Client: "codex", InstallationID: "inst-codex", DataReceiptID: "receipt-pending", Units: []string{"direct-mcp"},
+		}},
+	})
+	got, err := Run(ctx, Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true,
+		ControlRoot: control, RuntimeRoot: runtime,
+		InstallationID: "inst-codex",
+		DataReceiptIDs: map[string]string{"codex": "receipt-other"},
+	})
+	if err == nil || got.Outcome != "conflict" || got.Reason != "pending_intent_conflict" {
+		t.Fatalf("different data receipt: %+v %v", got, err)
+	}
+	matched, err := Run(ctx, Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true,
+		ControlRoot: control, RuntimeRoot: runtime,
+		InstallationID: "inst-codex",
+		DataReceiptIDs: map[string]string{"codex": "receipt-pending"},
+	})
+	if matched.Reason == "pending_intent_conflict" {
+		t.Fatalf("matching data receipt rejected: %+v %v", matched, err)
+	}
+}
+
 func TestWizardResumeRejectsDifferentTreeDigest(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, _, _, gen := managedRuntime(t)
@@ -1694,6 +1724,10 @@ func TestWizardCodexUninstallDoesNotInventExternalAttestation(t *testing.T) {
 	got, err := Run(ctx, req)
 	if err == nil || got.Outcome != "incomplete" || got.Reason != "external_uninstall_required" {
 		t.Fatalf("yes invented attestation: %+v %v", got, err)
+	}
+	intent, err := portablesetup.ReadIntent(control)
+	if err != nil || len(intent.Targets) != 1 || intent.Targets[0].DataReceiptID == "" {
+		t.Fatalf("uninstall intent omitted known data receipt: %+v %v", intent, err)
 	}
 	joined := strings.Join(got.Command, " ")
 	if !strings.Contains(joined, "--external-uninstalled") {
