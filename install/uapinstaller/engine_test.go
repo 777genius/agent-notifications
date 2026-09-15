@@ -2079,6 +2079,65 @@ func TestPrepareMissingRequiredComponentsDoesNotCreateState(t *testing.T) {
 	}
 }
 
+func TestRequiredComponentsDoesNotStripAuthoredSkills(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-000000000072",
+		OperationID: "required-mcp-only", RequiredComponents: []string{"mcp"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := eng.Apply(ctx, prepared, Decision{Confirmed: true})
+	_ = prepared.Close()
+	if err != nil || got.Outcome != OutcomeCompleted {
+		t.Fatalf("mcp-only required install: %+v %v", got, err)
+	}
+	if strings.Join(got.Client.RequiredComponents, ",") != "mcp" {
+		t.Fatalf("required components rewritten: %+v", got.Client.RequiredComponents)
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 1 {
+		t.Fatalf("inspect: %+v %v", view, err)
+	}
+	target := view.Installations[0].Bindings[0].TargetPath
+	if _, err := os.Lstat(filepath.Join(target, "mcp.json")); err != nil {
+		t.Fatalf("mcp projection missing: %v", err)
+	}
+	foundSkill := false
+	if err := filepath.WalkDir(target, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.Name() == "SKILL.md" {
+			foundSkill = true
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !foundSkill {
+		t.Fatal("required mcp-only install stripped authored skills")
+	}
+}
+
 func TestUpdateRejectedWithoutExistingBinding(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "state")
 	eng, err := New(Config{StateRoot: root})
@@ -2890,6 +2949,84 @@ func TestRepairGroupMixedRevisionsUsesPerTargetPackage(t *testing.T) {
 	}
 }
 
+func TestRepairGroupMixedRevisionsAssessesEachSnapshot(t *testing.T) {
+	ctx, eng, _, pkg, probe, codexConfig, claudeConfig := newBothClientSandbox(t)
+	id := "00000000-0000-4000-8000-0000000000d2"
+	r1 := filepath.Join(filepath.Dir(pkg), "package-r1")
+	copyPackage(t, pkg, r1)
+	installBothClients(t, ctx, eng, r1, probe, id, "mixed-repair-assess-install", bothClientTargets(codexConfig, claudeConfig, probe))
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"sample-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := eng.Prepare(ctx, Request{
+		Operation: OpUpdate, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: codexConfig,
+		ClientExecutable: probe, InstallationID: id, OperationID: "mixed-repair-assess-codex-update",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := eng.Apply(ctx, updated, Decision{Confirmed: true})
+	_ = updated.Close()
+	if err != nil || got.Outcome != OutcomeCompleted {
+		t.Fatalf("codex update: %+v %v", got, err)
+	}
+	before, err := eng.Inspect(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claudeBefore := inspectedBinding(t, before, "claude")
+	codexBefore := inspectedBinding(t, before, "codex")
+	if claudeBefore.TreeDigest == "" || codexBefore.TreeDigest == "" || claudeBefore.TreeDigest == codexBefore.TreeDigest {
+		t.Fatalf("mixed inspect digests: claude=%s codex=%s", claudeBefore.TreeDigest, codexBefore.TreeDigest)
+	}
+	stateBefore, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]int{}
+	eng.cfg.Assess = func(_ context.Context, _, digest string) (Assessment, error) {
+		seen[digest]++
+		if digest == claudeBefore.TreeDigest {
+			return Assessment{TreeDigest: digest, Outcome: AssessmentBlock, Reason: "block-claude"}, nil
+		}
+		return Assessment{TreeDigest: digest, Outcome: AssessmentAllow}, nil
+	}
+	_, err = eng.Prepare(ctx, Request{
+		Operation: OpRepair, InstallationID: id, OperationID: "mixed-repair-assess-group",
+		RequiredComponents: []string{"mcp", "skills"}, ClientExecutable: probe,
+		Targets: []ClientTarget{
+			{ClientID: "codex", ClientConfigRoot: codexConfig, ClientExecutable: probe, PackageRoot: pkg},
+			{ClientID: "claude", ClientConfigRoot: claudeConfig, ClientExecutable: probe, PackageRoot: r1},
+		},
+	})
+	if !errors.Is(err, ErrAssessmentRejected) {
+		t.Fatalf("blocked mixed repair: %v", err)
+	}
+	if seen[codexBefore.TreeDigest] != 1 || seen[claudeBefore.TreeDigest] != 1 {
+		t.Fatalf("mixed repair assess calls: %+v claude=%s codex=%s", seen, claudeBefore.TreeDigest, codexBefore.TreeDigest)
+	}
+	stateAfter, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil || !bytes.Equal(stateBefore, stateAfter) {
+		t.Fatal("blocked mixed repair mutated state")
+	}
+	if entries, readErr := os.ReadDir(eng.cfg.TempRoot); readErr == nil && len(entries) != 0 {
+		t.Fatalf("blocked mixed repair left snapshots: %v", names(entries))
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claudeAfter := inspectedBinding(t, view, "claude")
+	codexAfter := inspectedBinding(t, view, "codex")
+	if claudeAfter.BindingID != claudeBefore.BindingID || claudeAfter.TreeDigest != claudeBefore.TreeDigest || claudeAfter.TargetPath != claudeBefore.TargetPath {
+		t.Fatalf("blocked mixed repair rewrote claude: before=%+v after=%+v", claudeBefore, claudeAfter)
+	}
+	if codexAfter.BindingID != codexBefore.BindingID || codexAfter.TreeDigest != codexBefore.TreeDigest || codexAfter.TargetPath != codexBefore.TargetPath {
+		t.Fatalf("blocked mixed repair rewrote codex: before=%+v after=%+v", codexBefore, codexAfter)
+	}
+}
+
 func TestRepairMixedRevisionRematerializesDeletedOlderSibling(t *testing.T) {
 	ctx, eng, _, pkg, probe, codexConfig, claudeConfig := newBothClientSandbox(t)
 	id := "00000000-0000-4000-8000-0000000000ed"
@@ -2991,6 +3128,64 @@ func TestRepairGroupSamePackageRefusesOlderSibling(t *testing.T) {
 	after, err := os.ReadFile(eng.cfg.StateFile)
 	if err != nil || !bytes.Equal(before, after) {
 		t.Fatal("same-root mixed repair mutated state")
+	}
+}
+
+func TestRepairGroupMixedRevisionsIncompleteOlderPackage(t *testing.T) {
+	ctx, eng, _, pkg, probe, codexConfig, claudeConfig := newBothClientSandbox(t)
+	id := "00000000-0000-4000-8000-0000000000d4"
+	r1 := filepath.Join(filepath.Dir(pkg), "package-r1")
+	copyPackage(t, pkg, r1)
+	if err := os.RemoveAll(filepath.Join(r1, "skills")); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: r1, InstallationID: id, OperationID: "mixed-repair-incomplete-install",
+		RequiredComponents: []string{"mcp"}, ClientExecutable: probe,
+		Targets: bothClientTargets(codexConfig, claudeConfig, probe),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := eng.Apply(ctx, installed, Decision{Confirmed: true})
+	_ = installed.Close()
+	if err != nil || got.Outcome != OutcomeCompleted {
+		t.Fatalf("group install: %+v %v", got, err)
+	}
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"sample-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := eng.Prepare(ctx, Request{
+		Operation: OpUpdate, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: codexConfig,
+		ClientExecutable: probe, InstallationID: id, OperationID: "mixed-repair-incomplete-codex-update",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = eng.Apply(ctx, updated, Decision{Confirmed: true})
+	_ = updated.Close()
+	if err != nil || got.Outcome != OutcomeCompleted {
+		t.Fatalf("codex update: %+v %v", got, err)
+	}
+	stateBefore, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = eng.Prepare(ctx, Request{
+		Operation: OpRepair, InstallationID: id, OperationID: "mixed-repair-incomplete-group",
+		RequiredComponents: []string{"mcp", "skills"}, ClientExecutable: probe,
+		Targets: []ClientTarget{
+			{ClientID: "codex", ClientConfigRoot: codexConfig, ClientExecutable: probe, PackageRoot: pkg},
+			{ClientID: "claude", ClientConfigRoot: claudeConfig, ClientExecutable: probe, PackageRoot: r1},
+		},
+	})
+	if !errors.Is(err, ErrIncomplete) {
+		t.Fatalf("incomplete older mixed repair: %v", err)
+	}
+	stateAfter, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil || !bytes.Equal(stateBefore, stateAfter) {
+		t.Fatal("incomplete mixed repair mutated state")
 	}
 }
 
