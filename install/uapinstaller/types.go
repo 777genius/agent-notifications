@@ -198,8 +198,8 @@ type InspectedInstallation struct {
 
 // InspectedBinding is a public subset of one client binding.
 type InspectedBinding struct {
-	ClientID, BindingID, Scope, TargetPath, DataRoot, Profile string
-	Materialization, Activation, Authentication, Verification string
+	ClientID, BindingID, Scope, TargetPath, DataRoot, Profile, TreeDigest string
+	Materialization, Activation, Authentication, Verification             string
 }
 
 // ClientMetadata is read-only provider surface. Discover does not execute files.

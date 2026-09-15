@@ -1355,11 +1355,14 @@ func TestInspectReportsBothClientsAfterGroupInstallWithoutMutating(t *testing.T)
 	}
 	claude := inspectedBinding(t, view, "claude")
 	codex := inspectedBinding(t, view, "codex")
-	if claude.BindingID == "" || claude.Profile != claudeConfig || claude.TargetPath == "" || claude.DataRoot == "" {
+	if claude.BindingID == "" || claude.Profile != claudeConfig || claude.TargetPath == "" || claude.DataRoot == "" || claude.TreeDigest == "" {
 		t.Fatalf("claude inspect: %+v", claude)
 	}
-	if codex.BindingID == "" || codex.Profile != codexConfig || codex.TargetPath == "" || codex.DataRoot == "" {
+	if codex.BindingID == "" || codex.Profile != codexConfig || codex.TargetPath == "" || codex.DataRoot == "" || codex.TreeDigest == "" {
 		t.Fatalf("codex inspect: %+v", codex)
+	}
+	if claude.TreeDigest != view.Installations[0].TreeDigest || codex.TreeDigest != view.Installations[0].TreeDigest {
+		t.Fatalf("same-revision inspect digests: installation=%s claude=%s codex=%s", view.Installations[0].TreeDigest, claude.TreeDigest, codex.TreeDigest)
 	}
 	view.Installations[0].Bindings[0].ClientID = "mutated"
 	again, err := eng.Inspect(ctx)
@@ -2691,6 +2694,9 @@ func TestRepairOlderSiblingAfterSubsetUpdate(t *testing.T) {
 	}
 	claudeBefore := inspectedBinding(t, before, "claude")
 	codexBefore := inspectedBinding(t, before, "codex")
+	if claudeBefore.TreeDigest == "" || claudeBefore.TreeDigest == codexBefore.TreeDigest {
+		t.Fatalf("inspect collapsed mixed revisions: claude=%+v codex=%+v", claudeBefore, codexBefore)
+	}
 	repaired, err := eng.Prepare(ctx, Request{
 		Operation: OpRepair, PackageRoot: r1, ClientID: "claude", ClientConfigRoot: claudeConfig,
 		ClientExecutable: probe, InstallationID: id, OperationID: "older-sibling-claude-repair",
@@ -2715,6 +2721,9 @@ func TestRepairOlderSiblingAfterSubsetUpdate(t *testing.T) {
 	}
 	if codexAfter.BindingID != codexBefore.BindingID || codexAfter.TargetPath != codexBefore.TargetPath || codexAfter.DataRoot != codexBefore.DataRoot || codexAfter.Profile != codexBefore.Profile {
 		t.Fatalf("r1 repair rewrote codex sibling: before=%+v after=%+v", codexBefore, codexAfter)
+	}
+	if claudeAfter.TreeDigest != claudeBefore.TreeDigest || codexAfter.TreeDigest != codexBefore.TreeDigest {
+		t.Fatalf("r1 repair rewrote digests: before claude=%s codex=%s after claude=%s codex=%s", claudeBefore.TreeDigest, codexBefore.TreeDigest, claudeAfter.TreeDigest, codexAfter.TreeDigest)
 	}
 }
 

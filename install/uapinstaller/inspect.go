@@ -37,10 +37,14 @@ func (e *Engine) observe() (Inspection, error) {
 		}
 		for _, binding := range installation.Clients {
 			receipt := installation.DataReceipts[binding.DataReceiptID]
+			digest := installation.Source.TreeDigest
+			if binding.PackageRevision != nil && binding.PackageRevision.TreeDigest != "" {
+				digest = binding.PackageRevision.TreeDigest
+			}
 			item.Bindings = append(item.Bindings, InspectedBinding{
 				ClientID: binding.ClientID, BindingID: binding.ClientBindingID, Scope: binding.Scope,
 				TargetPath: binding.TargetLocator, DataRoot: receipt.Locator, Profile: liveProfile(receipt.Locator, binding.ClientID),
-				Materialization: string(binding.Materialization), Activation: string(binding.Activation),
+				TreeDigest: digest, Materialization: string(binding.Materialization), Activation: string(binding.Activation),
 				Authentication: string(binding.Authentication), Verification: string(binding.Verification),
 			})
 			bindingIndex[binding.ClientBindingID] = observedBinding{
