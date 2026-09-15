@@ -888,6 +888,84 @@ func TestWizardSecondClientAddDoesNotReviseExisting(t *testing.T) {
 	}
 }
 
+func TestWizardAmbiguousInstallationsConflictWithoutID(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	claudeConfig := filepath.Join(filepath.Dir(control), "claude-profile")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	off := false
+	base := Request{
+		Action: ActionInstall, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClaudeConfig: claudeConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot:    filepath.Join(filepath.Dir(control), "scope"),
+		ClaudeRunner: listingRunner{configRoot: claudeConfig},
+	}
+	if err := os.MkdirAll(base.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	first := base
+	first.Agents = []string{"codex"}
+	first.InstallationID = "00000000-0000-4000-8000-000000000080"
+	if got, err := Run(ctx, first); err != nil || got.Outcome != "completed" {
+		t.Fatalf("first: %+v %v", got, err)
+	}
+	otherPkg := filepath.Join(filepath.Dir(control), "other-package")
+	writePackage(t, otherPkg, probe)
+	if err := os.WriteFile(filepath.Join(otherPkg, "skills", "agent-notify", "SKILL.md"), []byte("---\nname: agent-notify\ndescription: Other installation\n---\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	second := base
+	second.Agents = []string{"claude"}
+	second.InstallationID = "00000000-0000-4000-8000-000000000081"
+	second.PackageRoot = otherPkg
+	if got, err := Run(ctx, second); err != nil || got.Outcome != "completed" {
+		t.Fatalf("second: %+v %v", got, err)
+	}
+	omitted := base
+	omitted.Agents = []string{"codex"}
+	omitted.InstallationID = ""
+	got, err := Run(ctx, omitted)
+	if err == nil || got.Outcome != "conflict" || got.Reason != "ambiguous_installation" || got.ExitCode() != 1 {
+		t.Fatalf("omitted install: %+v %v", got, err)
+	}
+	if len(got.NextActions) == 0 || got.NextActions[0].Kind != "inspect" {
+		t.Fatalf("inspect action: %+v", got.NextActions)
+	}
+	plan, err := Plan(ctx, omitted)
+	if err == nil || plan.Ready || plan.Result.Outcome != "conflict" || plan.Result.Reason != "ambiguous_installation" {
+		t.Fatalf("plan: %+v %v", plan, err)
+	}
+	viewReq := omitted
+	viewReq.Action = ActionInspect
+	viewReq.Yes = false
+	viewReq.Agents = []string{"claude", "codex"}
+	view, err := Run(ctx, viewReq)
+	if err != nil || view.Outcome != "completed" {
+		t.Fatalf("inspect: %+v %v", view, err)
+	}
+	omitted.Action = ActionUninstall
+	got, err = Run(ctx, omitted)
+	if err == nil || got.Outcome != "conflict" || got.Reason != "ambiguous_installation" {
+		t.Fatalf("omitted uninstall: %+v %v", got, err)
+	}
+	explicit := omitted
+	explicit.InstallationID = first.InstallationID
+	explicit.ExternalUninstalled = true
+	removed, err := Run(ctx, explicit)
+	if err != nil || removed.Outcome != "completed" {
+		t.Fatalf("explicit uninstall: %+v %v", removed, err)
+	}
+}
+
 func TestWizardUninstallBothWhenOneBindingMissing(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, _, _ := managedRuntime(t)

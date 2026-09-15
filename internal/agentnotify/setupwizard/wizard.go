@@ -23,6 +23,7 @@ import (
 )
 
 var ErrRefused = errors.New("setup wizard refused")
+var ErrAmbiguousInstallation = errors.New("ambiguous_installation")
 
 type Action string
 
@@ -187,6 +188,10 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 			for _, agent := range ev.notifyAgents {
 				preview, err := previewNotifyPlan(ctx, acquired, ev.snap, ev.runtimeRoot, agent)
 				if err != nil {
+					if mapped, handled := mapAmbiguous(err, ev.out); handled {
+						plan.Result = attachCommand(req, mapped)
+						return plan, err
+					}
 					ev.out.Outcome, ev.out.Reason = "incomplete", "portable_preflight_failed"
 					plan.Result = attachCommand(req, ev.out)
 					return plan, err
@@ -724,6 +729,9 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		}
 		id, err = identity(req, snap, runtimeRoot, mat, true)
 		if err != nil {
+			if mapped, handled := mapAmbiguous(err, out); handled {
+				return mapped, err
+			}
 			out.Outcome, out.Reason = "incomplete", err.Error()
 			return out, err
 		}
@@ -839,6 +847,9 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 		}
 		id, err = identity(req, snap, runtimeRoot, mat, false)
 		if err != nil {
+			if mapped, handled := mapAmbiguous(err, out); handled {
+				return mapped, err
+			}
 			out.Outcome, out.Reason = "incomplete", err.Error()
 			return out, err
 		}
@@ -1127,14 +1138,19 @@ func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot st
 		if err != nil {
 			return portablesetup.Identity{}, err
 		}
-		if len(state.Installations) == 1 {
+		switch len(state.Installations) {
+		case 1:
 			id = state.Installations[0].InstallationID
-		} else if generate {
-			generated, err := domain.NewInstallationID()
-			if err != nil {
-				return portablesetup.Identity{}, err
+		case 0:
+			if generate {
+				generated, err := domain.NewInstallationID()
+				if err != nil {
+					return portablesetup.Identity{}, err
+				}
+				id = generated
 			}
-			id = generated
+		default:
+			return portablesetup.Identity{}, fmt.Errorf("%w: %d installations; pass --installation-id", ErrAmbiguousInstallation, len(state.Installations))
 		}
 	}
 	scope := req.ScopeRoot
@@ -1150,6 +1166,18 @@ func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot st
 		ScopeRoot: scope, ControlRoot: req.ControlRoot, GlobalConfig: global,
 		RuntimeRoot: runtimeRoot, Primary: primaryName(req),
 	}, nil
+}
+
+func mapAmbiguous(err error, out Result) (Result, bool) {
+	if !errors.Is(err, ErrAmbiguousInstallation) {
+		return out, false
+	}
+	out.Outcome, out.Reason = "conflict", "ambiguous_installation"
+	out.NextActions = append(out.NextActions, NextAction{
+		Kind: "inspect", Reason: err.Error(),
+		Command: []string{"setup-notifications", "wizard", "--action", "inspect", "--json"},
+	})
+	return out, true
 }
 
 func primaryName(req Request) string {
