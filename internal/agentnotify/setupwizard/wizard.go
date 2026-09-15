@@ -1328,7 +1328,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 				} else if len(others) > 0 && req.Action == ActionInstall && !liveNotifyClient(mat, id.InstallationID, string(agent)) {
 					if err := mat.GuardSecondClient(ctx, materialize); err != nil {
 						if portablesetup.IsUpdateRequired(err) {
-							return updateRequired(req, agent, others, nil, out, err)
+							return updateRequired(req, agent, others, nil, nil, out, err)
 						}
 						out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: err.Error()})
 						out.Outcome, out.Reason = "incomplete", "portable_install_failed"
@@ -1433,7 +1433,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		if err != nil {
 			if portablesetup.IsUpdateRequired(err) {
 				others, _ := mat.OtherLiveClients(id.InstallationID, string(notifyAgents[0]))
-				return updateRequired(req, notifyAgents[0], others, liveUpdateAgents(ctx, req, mat, id, notifyAgents[0]), out, err)
+				return updateRequired(req, notifyAgents[0], others, liveUpdateAgents(ctx, req, mat, id, notifyAgents[0]), unboundSelectedAgents(req, mat, id, notifyAgents[0]), out, err)
 			}
 			if errors.Is(err, portablesetup.ErrSourceIdentityDrift) {
 				out.Outcome, out.Reason = "incomplete", "source_identity_drift"
@@ -1509,7 +1509,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 			}
 			if portablesetup.IsUpdateRequired(err) {
 				others, _ := mat.OtherLiveClients(id.InstallationID, string(agent))
-				return updateRequired(req, agent, others, liveUpdateAgents(ctx, req, mat, id, agent), out, err)
+				return updateRequired(req, agent, others, liveUpdateAgents(ctx, req, mat, id, agent), unboundSelectedAgents(req, mat, id, agent), out, err)
 			}
 			if errors.Is(err, portablesetup.ErrSourceIdentityDrift) {
 				out.Outcome, out.Reason = "incomplete", "source_identity_drift"
@@ -2061,15 +2061,40 @@ func liveUpdateAgents(ctx context.Context, req Request, mat portablesetup.Materi
 	return agents
 }
 
-func updateRequired(req Request, adding portable.Integration, others []string, liveUpdate []string, out Result, err error) (Result, error) {
+func unboundSelectedAgents(req Request, mat portablesetup.Materializer, id portablesetup.Identity, fallback portable.Integration) []string {
+	selected := req.Agents
+	if len(selected) == 0 {
+		selected = []string{string(fallback)}
+	}
+	var unbound []string
+	for _, name := range selected {
+		if !liveNotifyClient(mat, id.InstallationID, name) {
+			unbound = append(unbound, name)
+		}
+	}
+	return unbound
+}
+
+func updateRequired(req Request, adding portable.Integration, others []string, liveUpdate, unbound []string, out Result, err error) (Result, error) {
 	out.Targets = append(out.Targets, TargetResult{Client: string(adding), Unit: "agent-notify", Outcome: "incomplete", Reason: "update_required"})
 	out.Outcome, out.Reason = "incomplete", "update_required"
 	updateReq := req
 	updateReq.Action = ActionUpdate
 	if len(liveUpdate) > 0 {
 		updateReq.Agents = append([]string(nil), liveUpdate...)
+		reason := "update_existing"
+		if len(unbound) > 0 {
+			reason = "update_existing_before_add"
+		}
 		out.NextActions = []NextAction{
-			{Kind: "update", Agents: updateReq.Agents, Command: RetryCommand(updateReq), Reason: "update_existing"},
+			{Kind: "update", Agents: updateReq.Agents, Command: RetryCommand(updateReq), Reason: reason},
+		}
+		if len(unbound) > 0 {
+			addReq := req
+			addReq.Agents = append([]string(nil), unbound...)
+			out.NextActions = append(out.NextActions, NextAction{
+				Kind: "install", Agents: addReq.Agents, Command: RetryCommand(addReq), Reason: "add_after_update",
+			})
 		}
 		return out, err
 	}
@@ -2423,7 +2448,7 @@ func mapPreviewFailure(ctx context.Context, req Request, agent portable.Integrat
 	}
 	if portablesetup.IsUpdateRequired(err) {
 		others, _ := mat.OtherLiveClients(id.InstallationID, string(agent))
-		return updateRequired(req, agent, others, liveUpdateAgents(ctx, req, mat, id, agent), out, err)
+		return updateRequired(req, agent, others, liveUpdateAgents(ctx, req, mat, id, agent), unboundSelectedAgents(req, mat, id, agent), out, err)
 	}
 	out.Outcome, out.Reason = "incomplete", "portable_preflight_failed"
 	return out, err

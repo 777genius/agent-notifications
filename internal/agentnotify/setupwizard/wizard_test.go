@@ -3432,6 +3432,133 @@ func TestWizardTwoPhaseUpdateThenAdd(t *testing.T) {
 	}
 }
 
+func TestWizardInstallBothMismatchedShowsTwoPhase(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	claudeConfig := filepath.Join(filepath.Dir(control), "claude-profile")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	off := false
+	base := Request{
+		Action: ActionInstall, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClaudeConfig: claudeConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot:    filepath.Join(filepath.Dir(control), "scope"),
+		ClaudeRunner: listingRunner{configRoot: claudeConfig},
+	}
+	if err := os.MkdirAll(base.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	claudeReq := base
+	claudeReq.Agents = []string{"claude"}
+	installed, err := Run(ctx, claudeReq)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("claude: %+v %v", installed, err)
+	}
+	claudeBefore := inspectedWizardBinding(t, ctx, control, "claude")
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	both := base
+	both.Agents = []string{"claude", "codex"}
+	blocked, err := Run(ctx, both)
+	if err == nil || blocked.Outcome != "incomplete" || blocked.Reason != "update_required" {
+		t.Fatalf("install both mismatched: %+v %v", blocked, err)
+	}
+	if len(blocked.NextActions) != 2 || blocked.NextActions[0].Kind != "update" || blocked.NextActions[1].Kind != "install" {
+		t.Fatalf("both mismatched next: %+v", blocked.NextActions)
+	}
+	if strings.Join(blocked.NextActions[0].Agents, ",") != "claude" || strings.Join(blocked.NextActions[1].Agents, ",") != "codex" {
+		t.Fatalf("both mismatched agents: %+v", blocked.NextActions)
+	}
+	if cmd := strings.Join(blocked.NextActions[0].Command, " "); !strings.Contains(cmd, "--action update") || !strings.Contains(cmd, "--agents claude") {
+		t.Fatalf("both mismatched update argv: %v", blocked.NextActions[0].Command)
+	}
+	if cmd := strings.Join(blocked.NextActions[1].Command, " "); !strings.Contains(cmd, "--action install") || !strings.Contains(cmd, "--agents codex") {
+		t.Fatalf("both mismatched add argv: %v", blocked.NextActions[1].Command)
+	}
+	both.Yes = false
+	plan, err := Plan(ctx, both)
+	if plan.Ready || plan.Result.Reason != "update_required" {
+		t.Fatalf("both mismatched plan: %+v %v", plan, err)
+	}
+	if !strings.Contains(plan.Text, "required-update=claude") || !strings.Contains(plan.Text, "2-add:codex") {
+		t.Fatalf("both mismatched plan omitted two phases: %s", plan.Text)
+	}
+	claudeAfter := inspectedWizardBinding(t, ctx, control, "claude")
+	if claudeAfter.BindingID != claudeBefore.BindingID || claudeAfter.TreeDigest != claudeBefore.TreeDigest {
+		t.Fatalf("mismatched both rewrote claude: %+v/%+v", claudeBefore, claudeAfter)
+	}
+}
+
+func TestWizardInstallBothWhenOneLiveMatchingAddsSibling(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	claudeConfig := filepath.Join(filepath.Dir(control), "claude-profile")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	off := false
+	base := Request{
+		Action: ActionInstall, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClaudeConfig: claudeConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot:    filepath.Join(filepath.Dir(control), "scope"),
+		ClaudeRunner: listingRunner{configRoot: claudeConfig},
+	}
+	if err := os.MkdirAll(base.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	claudeReq := base
+	claudeReq.Agents = []string{"claude"}
+	installed, err := Run(ctx, claudeReq)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("claude: %+v %v", installed, err)
+	}
+	claudeBefore := inspectedWizardBinding(t, ctx, control, "claude")
+	both := base
+	both.Agents = []string{"claude", "codex"}
+	both.Yes = false
+	plan, err := Plan(ctx, both)
+	if err != nil || !plan.Ready || strings.Contains(plan.Text, "required-update=") || strings.Contains(plan.Text, "2-add:") {
+		t.Fatalf("matching both plan: %+v %v", plan, err)
+	}
+	both.Yes = true
+	added, err := Run(ctx, both)
+	if err != nil || added.Outcome != "completed" {
+		t.Fatalf("matching both install: %+v %v", added, err)
+	}
+	inspectReq := base
+	inspectReq.Action = ActionInspect
+	inspectReq.Yes = false
+	inspectReq.Agents = []string{"claude", "codex"}
+	view, err := Run(ctx, inspectReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claudeAfter := inspectedWizardBinding(t, ctx, control, "claude")
+	codexAfter := inspectedWizardBinding(t, ctx, control, "codex")
+	if claudeAfter.BindingID != claudeBefore.BindingID {
+		t.Fatalf("matching both rewrote claude: %+v/%+v", claudeBefore, claudeAfter)
+	}
+	if claudeAfter.TreeDigest == "" || claudeAfter.TreeDigest != codexAfter.TreeDigest {
+		t.Fatalf("matching both digests: claude=%s codex=%s view=%+v", claudeAfter.TreeDigest, codexAfter.TreeDigest, view.Targets)
+	}
+}
+
 func TestWizardInstallMixedLiveDoesNotReplaceOlderSibling(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, _, _ := managedRuntime(t)
@@ -3503,6 +3630,34 @@ func TestWizardInstallMixedLiveDoesNotReplaceOlderSibling(t *testing.T) {
 	}
 	claudeBefore := inspectedWizardBinding(t, ctx, control, "claude")
 	codexBefore := inspectedWizardBinding(t, ctx, control, "codex")
+	match := req
+	match.Action = ActionInstall
+	match.Agents = []string{"claude"}
+	match.Yes = false
+	matchPlan, err := Plan(ctx, match)
+	if err != nil || !matchPlan.Ready || strings.Contains(matchPlan.Text, "required-update=") || strings.Contains(matchPlan.Text, "2-add:") {
+		t.Fatalf("matching live sibling plan: %+v %v", matchPlan, err)
+	}
+	match.Yes = true
+	matched, err := Run(ctx, match)
+	if err != nil || (matched.Outcome != "completed" && matched.Outcome != "unchanged") {
+		t.Fatalf("matching live sibling install: %+v %v", matched, err)
+	}
+	view, err = Run(ctx, inspectReq)
+	if err != nil {
+		t.Fatalf("inspect after matching sibling: %+v %v", view, err)
+	}
+	if notifyTreeDigest(view, "claude") != claudeDigest || notifyTreeDigest(view, "codex") != codexDigest {
+		t.Fatalf("matching sibling rewrote mixed digests: claude=%s/%s codex=%s/%s", claudeDigest, notifyTreeDigest(view, "claude"), codexDigest, notifyTreeDigest(view, "codex"))
+	}
+	claudeMatched := inspectedWizardBinding(t, ctx, control, "claude")
+	codexMatched := inspectedWizardBinding(t, ctx, control, "codex")
+	if claudeMatched.BindingID != claudeBefore.BindingID || codexMatched.BindingID != codexBefore.BindingID {
+		t.Fatalf("matching sibling rewrote bindings: claude=%+v/%+v codex=%+v/%+v", claudeBefore, claudeMatched, codexBefore, codexMatched)
+	}
+	if canGroupNotify(mat, id, Request{Action: ActionInstall}, groupAgents) {
+		t.Fatal("matching sibling grouped mixed live install")
+	}
 	req.Action = ActionInstall
 	req.Agents = []string{"codex"}
 	req.Yes = true
@@ -3581,6 +3736,37 @@ func TestWizardInstallMixedLiveDoesNotReplaceOlderSibling(t *testing.T) {
 	codexDone := inspectedWizardBinding(t, ctx, control, "codex")
 	if claudeDone.BindingID != claudeBefore.BindingID || codexDone.BindingID != codexBefore.BindingID {
 		t.Fatalf("behind update rewrote bindings: claude=%+v/%+v codex=%+v/%+v", claudeBefore, claudeDone, codexBefore, codexDone)
+	}
+	snap, err = installruntime.ReadInstalledSnapshot(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mat, err = materializer(req, snap, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !canGroupNotify(mat, id, Request{Action: ActionInstall}, groupAgents) {
+		t.Fatal("converged mixed live install did not group")
+	}
+	repeat := req
+	repeat.Action = ActionInstall
+	repeat.Agents = []string{"claude", "codex"}
+	repeat.Yes = true
+	again, err := Run(ctx, repeat)
+	if err != nil || (again.Outcome != "completed" && again.Outcome != "unchanged") {
+		t.Fatalf("converged mixed live install: %+v %v", again, err)
+	}
+	view, err = Run(ctx, inspectReq)
+	if err != nil {
+		t.Fatalf("inspect after converged install: %+v %v", view, err)
+	}
+	if notifyTreeDigest(view, "claude") != claudeDigest || notifyTreeDigest(view, "codex") != claudeDigest {
+		t.Fatalf("converged install rewrote digests: claude=%s/%s codex=%s", claudeDigest, notifyTreeDigest(view, "claude"), notifyTreeDigest(view, "codex"))
+	}
+	claudeRepeat := inspectedWizardBinding(t, ctx, control, "claude")
+	codexRepeat := inspectedWizardBinding(t, ctx, control, "codex")
+	if claudeRepeat.BindingID != claudeBefore.BindingID || codexRepeat.BindingID != codexBefore.BindingID {
+		t.Fatalf("converged install rewrote bindings: claude=%+v/%+v codex=%+v/%+v", claudeBefore, claudeRepeat, codexBefore, codexRepeat)
 	}
 }
 
@@ -3679,6 +3865,21 @@ func TestWizardInstallBothLiveBehindRequiresUpdateBoth(t *testing.T) {
 	codexDone := inspectedWizardBinding(t, ctx, control, "codex")
 	if claudeDone.BindingID != claudeBefore.BindingID || codexDone.BindingID != codexBefore.BindingID {
 		t.Fatalf("behind update rewrote bindings: claude=%+v/%+v codex=%+v/%+v", claudeBefore, claudeDone, codexBefore, codexDone)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mat, err := materializer(req, snap, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := portablesetup.Identity{InstallationID: installed.InstallationID}
+	if id.InstallationID == "" {
+		id.InstallationID = installationIDFromState(t, filepath.Join(filepath.Dir(control), "uap", "state", "state-v2.json"))
+	}
+	if !canGroupNotify(mat, id, Request{Action: ActionInstall}, []portable.Integration{portable.Claude, portable.Codex}) {
+		t.Fatal("converged behind install did not group")
 	}
 }
 
