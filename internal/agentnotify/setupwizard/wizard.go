@@ -279,6 +279,9 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 					return plan, err
 				}
 				text = annotateRetainedMetadataUpdate(text, ev.notifyAgents)
+				ev.out.NextActions = append(ev.out.NextActions, NextAction{
+					Kind: "data_compatibility", Reason: domain.PluginDataCompatibilityWarning,
+				})
 			} else {
 				failed, reason, err := bindNotifyPreviews(ctx, &req, acquired, ev.snap, ev.runtimeRoot, ev.notifyAgents)
 				if err != nil {
@@ -2044,7 +2047,7 @@ func updateRequired(req Request, adding portable.Integration, others []string, o
 
 func annotateRetainedMetadataUpdate(text string, agents []portable.Integration) string {
 	text = strings.Replace(text, "required=restart,request-permission,test-notification permission-dialog=explicit delivery=not_verified", "required=none permission-dialog=skipped delivery=not_verified", 1)
-	text += " data_retained=true metadata-only"
+	text += " data_retained=true metadata-only data-compatibility-warning"
 	var names []string
 	for _, agent := range agents {
 		names = append(names, string(agent))

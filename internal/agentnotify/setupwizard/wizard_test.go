@@ -4352,8 +4352,11 @@ func TestWizardPlanRetainedUpdateIsMetadataOnly(t *testing.T) {
 	if err != nil || !plan.Ready {
 		t.Fatalf("retained update plan: %+v %v", plan, err)
 	}
-	if !strings.Contains(plan.Text, "data_retained=true") || !strings.Contains(plan.Text, "metadata-only") {
+	if !strings.Contains(plan.Text, "data_retained=true") || !strings.Contains(plan.Text, "metadata-only") || !strings.Contains(plan.Text, "data-compatibility-warning") {
 		t.Fatalf("retained update plan omitted metadata-only: %s", plan.Text)
+	}
+	if len(plan.Result.NextActions) == 0 || plan.Result.NextActions[0].Kind != "data_compatibility" || plan.Result.NextActions[0].Reason == "" {
+		t.Fatalf("retained update plan omitted compatibility warning: %+v", plan.Result.NextActions)
 	}
 	if !strings.Contains(plan.Text, "phases=1-update:codex") || strings.Contains(plan.Text, "2-add:") {
 		t.Fatalf("retained update plan showed add: %s", plan.Text)
@@ -4367,6 +4370,37 @@ func TestWizardPlanRetainedUpdateIsMetadataOnly(t *testing.T) {
 	after, err := os.ReadFile(statePath)
 	if err != nil || !bytes.Equal(before, after) {
 		t.Fatal("retained update plan rewrote state")
+	}
+	body, err := os.ReadFile(sentinel)
+	if err != nil || string(body) != "retain\n" {
+		t.Fatalf("PLUGIN_DATA sentinel: %s %v", body, err)
+	}
+}
+
+func TestWizardTTYConfirmRetainedUpdateShowsWarningAndCancel(t *testing.T) {
+	ctx := testCtx(t)
+	req, statePath, sentinel, _ := prepareRetainedCodexWizard(t, ctx)
+	req.Action = ActionUpdate
+	req.Yes = false
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := Plan(ctx, req)
+	if err != nil || !plan.Ready {
+		t.Fatalf("retained update plan: %+v %v", plan, err)
+	}
+	var out strings.Builder
+	ok, err := (&LinePrompt{In: strings.NewReader("n\n"), Out: &out}).Confirm(ctx, plan.Text)
+	if err != nil || ok {
+		t.Fatalf("confirm: ok=%t err=%v text=%s", ok, err, out.String())
+	}
+	if !strings.Contains(out.String(), "metadata-only") || !strings.Contains(out.String(), "data-compatibility-warning") {
+		t.Fatalf("tty omitted retained warning: %s", out.String())
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("tty cancel rewrote retained state")
 	}
 	body, err := os.ReadFile(sentinel)
 	if err != nil || string(body) != "retain\n" {
