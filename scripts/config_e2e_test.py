@@ -129,7 +129,58 @@ chmod +x "$INSTALL_TARGET_DIR/claude-notifications"
         self.url = 'http://127.0.0.1:' + str(self.server.server_port)
         self.index = 0
 
-    def fixture(self, python=True, node=True):
+    def fixture(self, python=True, node=True, stub_python=False):
+        self.index += 1
+        base = self.base / ('case-' + str(self.index))
+        env = environment(base)
+        clis = base / 'clis'
+        clis.mkdir()
+        # Any host invocation is recorded. Only plugin metadata operations exist.
+        put(clis / 'claude', '''#!/usr/bin/python3
+import json, os, pathlib, shutil, sys
+args=sys.argv[1:]
+with open(os.environ['TRACE'],'a') as f: f.write(json.dumps(args)+'\\n')
+assert args and args[0]=='plugin'
+if os.environ.get('FAIL_REGISTER'): sys.exit(1)
+home=pathlib.Path(os.environ['CLAUDE_CONFIG_DIR'])
+market=home/'plugins/marketplaces/claude-notifications-go/.claude-plugin'
+market.mkdir(parents=True,exist_ok=True)
+(market/'plugin.json').write_text('{"version":"9.9.9"}')
+if args[1]=='marketplace': sys.exit()
+root=home/'plugins/cache/claude-notifications-go/claude-notifications-go/9.9.9'
+shutil.copytree(os.environ['SOURCE'],root,dirs_exist_ok=True)
+(home/'plugins/installed_plugins.json').write_text(json.dumps({'plugins':{'claude-notifications-go@claude-notifications-go':[{'installPath':str(root),'version':'9.9.9'}]}}))
+''', 0o755)
+        for name in ('codex', 'notify-send', 'osascript', 'paplay', 'aplay', 'curl'):
+            if name == 'curl':
+                # Bootstrap can download only from the fixture HTTP server.
+                body = '#!/usr/bin/python3\nimport os,sys\nassert all(not a.startswith(("http:","https:")) or a.startswith(os.environ["LOCAL_URL"]+"/") for a in sys.argv[1:])\nos.execv("/usr/bin/curl",["curl"]+sys.argv[1:])\n'
+            else:
+                body = '#!/bin/sh\necho invoked >> "$EFFECTS"\nexit 97\n'
+            put(clis / name, body, 0o755)
+        runtime = base / 'runtime-bin'
+        runtime.mkdir()
+        names = ['bash', 'sh', 'mktemp', 'rm', 'cat', 'chmod', 'mkdir', 'ln', 'uname',
+                 'tr', 'head', 'cp', 'mv', 'env', 'true', 'false', 'grep', 'sed', 'awk',
+                 'tar', 'gzip', 'curl', 'cut', 'basename', 'dirname', 'touch']
+        if python and not stub_python:
+            names.append('python3')
+        if node:
+            names.append('node')
+        for name in names:
+            place_runtime_cmd(runtime / name, host_cmd(name))
+        if stub_python:
+            put(runtime / 'python3',
+                '#!/bin/sh\n'
+                'echo "Python was not found; run without arguments to install from the Microsoft Store." >&2\n'
+                'exit 9009\n',
+                0o755)
+        env.update(PATH=str(clis) + os.pathsep + str(runtime), TRACE=str(base / 'trace'),
+                   EFFECTS=str(base / 'effects'), SOURCE=str(self.bundle), LOCAL_URL=self.url,
+                   BOOTSTRAP_RELEASE_TAG=TAG, BOOTSTRAP_RELEASE_COMMIT=COMMIT,
+                   BOOTSTRAP_SOURCE_BASE_URL=self.url,
+                   BOOTSTRAP_RELEASES_BASE_URL=self.url, INSTALL_SCRIPT_URL=self.url + '/install.sh')
+        return env
         self.index += 1
         base = self.base / ('case-' + str(self.index))
         env = environment(base)
@@ -232,8 +283,8 @@ shutil.copytree(os.environ['SOURCE'],root,dirs_exist_ok=True)
         put(home / 'plugins/installed_plugins.json', json.dumps({'plugins': {'claude-notifications-go@claude-notifications-go': [{'installPath': str(active), 'version': version}]}}))
         return active
 
-    def fresh(self, product, python=True, node=True):
-        env = self.fixture(python=python, node=node)
+    def fresh(self, product, python=True, node=True, stub_python=False):
+        env = self.fixture(python=python, node=node, stub_python=stub_python)
         self.requests.clear()
         self.boot(env, product)
         assert sum(p.endswith('/' + self.asset) for p in self.requests) == 1
@@ -527,6 +578,7 @@ def main():
             cases += [('fresh-codex-python-only', lambda: suite.fresh('codex', python=True, node=False))]
         if shutil.which('node'):
             cases += [('fresh-codex-node-only', lambda: suite.fresh('codex', python=False, node=True))]
+            cases += [('fresh-codex-stub-python', lambda: suite.fresh('codex', python=False, node=True, stub_python=True))]
         cases += [('legacy-exact', suite.legacy), ('explicit-import-CAS', suite.explicit_and_import_edit),
                   ('corrupt-no-fallback', suite.corrupt), ('custom-and-overlap', suite.custom_and_overlap),
                   ('setup-readonly', suite.setup_readonly), ('offline-retains-state', suite.offline), ('registration-failure', suite.registration_failure), ('hooks-no-config-writes', suite.hooks), ('partial-config-only-retry', suite.partial_retry)]
