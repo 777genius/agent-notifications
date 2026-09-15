@@ -21,7 +21,7 @@ test_env_setup() {
 test_env_enter() {
     [ "${_TEST_ENV_READY:-}" = 1 ] && return 0
     local script="$1"; shift
-    local base helper result name gomodcache
+    local base helper result name gomodcache gocache
     local -a platform_env=() toolchain_env=()
     helper="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-env.sh"
     base=$(mktemp -d /tmp/agent-notifications-fixture-XXXXXX) || exit 1
@@ -29,17 +29,23 @@ test_env_enter() {
     for name in SystemRoot SYSTEMROOT WINDIR COMSPEC PATHEXT; do
         if [ -n "${!name:-}" ]; then platform_env+=("$name=${!name}"); fi
     done
-    # Some fixtures build the real Go binary after isolation. Let those suites
-    # explicitly hand off only the already-prepared module cache; keep all
-    # other Go and user configuration inside the disposable HOME.
+    # Suites that build the real Go binary after isolation hand off the
+    # already-prepared caches, then force an offline toolchain. Isolated
+    # install e2e pins http_proxy at 127.0.0.1:1; default GOPROXY/GOSUMDB
+    # and GOTOOLCHAIN=auto would stall there (especially on Windows + Go 1.26).
     if [ "${TEST_ENV_HANDOFF_GOMODCACHE:-}" = 1 ]; then
-        gomodcache="${GOMODCACHE:-}"
-        if [ -z "$gomodcache" ] && command -v go >/dev/null 2>&1; then
+        for name in GOROOT GOPATH GOMODCACHE GOCACHE GOTMPDIR GOMAXPROCS CGO_ENABLED CC CXX; do
+            if [ -n "${!name:-}" ]; then toolchain_env+=("$name=${!name}"); fi
+        done
+        if [ -z "${GOMODCACHE:-}" ] && command -v go >/dev/null 2>&1; then
             gomodcache=$(GOTOOLCHAIN=local go env GOMODCACHE) || exit 1
+            [ -n "$gomodcache" ] && toolchain_env+=("GOMODCACHE=$gomodcache")
         fi
-        if [ -n "$gomodcache" ]; then
-            toolchain_env+=("GOMODCACHE=$gomodcache")
+        if [ -z "${GOCACHE:-}" ] && command -v go >/dev/null 2>&1; then
+            gocache=$(GOTOOLCHAIN=local go env GOCACHE) || exit 1
+            [ -n "$gocache" ] && toolchain_env+=("GOCACHE=$gocache")
         fi
+        toolchain_env+=("GOPROXY=off" "GOSUMDB=off" "GOTOOLCHAIN=local" "GOTELEMETRY=off")
     fi
     trap 'rm -rf "$base"' EXIT
     env -i PATH="$PATH" "${platform_env[@]}" "${toolchain_env[@]}" bash --noprofile --norc -c '

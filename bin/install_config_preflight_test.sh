@@ -20,13 +20,16 @@ root, box = map(pathlib.Path, sys.argv[1:])
 functions = box/'functions.sh'
 functions.write_text((root/'install.sh').read_text().replace('main "$@"', ''))
 helper = box/'helper'
-helper.write_text("""#!/usr/bin/env python3
+helper.write_text("#!" + sys.executable + """
 import json,os,sys
 if sys.argv[1:]==['--version']:
     print('claude-notifications 0.0.1'); sys.exit(0)
 assert sys.argv[1:]==['config','preflight-update','--stdin','--json']
 r=json.load(sys.stdin)
 with open(os.environ['TRACE'],'a') as f: f.write(json.dumps(r)+'\\n')
+if os.environ.get('HELPER_DIAG')=='malformed':
+    print(json.dumps(dict(status='unsafe-target',diagnostics=['invalid'])))
+    sys.exit(0)
 e=os.environ.get('AGENT_NOTIFICATIONS_CONFIG','')
 status='safe'; code=''
 if e and not os.path.isabs(e): status='invalid-config'; code='ConfigOverrideInvalid'
@@ -446,4 +449,87 @@ shutil.rmtree(venv)
 (venv/'bin/python3').chmod(0o755)
 run('working-venv',iterm,venv/'config.json')
 
+# Node-only transport: python3 is absent from PATH, Node drives preflight.
+def place_runtime_cmd(dest, src):
+    if dest.exists() or not src or not os.path.isfile(src):
+        return
+    n = src.replace('\\', '/').lower()
+    base = os.path.basename(n)
+    if base in ('python', 'python.exe', 'python3', 'python3.exe', 'node', 'node.exe') and (
+            '/windowsapps/' in n or '/system32/' in n or '/syswow64/' in n):
+        return
+    dest.write_text('#!/bin/sh\nexec {} "$@"\n'.format(shlex.quote(src.replace('\\', '/'))))
+    dest.chmod(0o755)
+if shutil.which('node'):
+    node_bin = box / 'node-only-bin'
+    node_bin.mkdir()
+    for name in ['bash', 'sh', 'mktemp', 'rm', 'cat', 'chmod', 'mkdir', 'ln', 'uname',
+                 'tr', 'head', 'cp', 'mv', 'env', 'true', 'false', 'grep', 'sed', 'node']:
+        place_runtime_cmd(node_bin / name, shutil.which(name))
+    assert not (node_bin / 'python3').exists()
+    node_isolation = """
+curl() { echo 'unexpected network request' >&2; return 99; }
+wget() { echo 'unexpected network request' >&2; return 99; }
+"""
+    orig_path = os.environ['PATH']
+
+    def run_node(name, body, e=None, ok=True, extra_env=None):
+        case = box / name
+        case.mkdir(exist_ok=True)
+        env = dict(os.environ, INSTALL_TARGET_DIR=str(case), TRACE=str(case / 'trace'),
+                   PATH=str(node_bin))
+        if e is not None:
+            env['AGENT_NOTIFICATIONS_CONFIG'] = str(e)
+        if extra_env:
+            env.update(extra_env)
+        script = 'source ' + q(functions) + '\ndetect_platform\nINSTALL_CONFIG_HELPER=' + q(helper) + '\n' + node_isolation + body
+        r = subprocess.run(['bash', '-c', script], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        assert (r.returncode == 0) == ok, (name, r.returncode, r.stderr.decode(), r.stdout.decode())
+        assert b'SECRET-CANARY' not in r.stdout + r.stderr
+        print('PASS:', name)
+        return case, r
+
+    run_node('node-only-safe', 'guard_install_paths "$SCRIPT_DIR"', outside)
+    reject_target = box / 'node-only-reject' / 'config.json'
+    reject_target.parent.mkdir()
+    reject_target.write_text('SECRET-CANARY')
+    run_node('node-only-reject', 'guard_install_paths "$SCRIPT_DIR"', reject_target, False)
+    assert reject_target.read_text() == 'SECRET-CANARY'
+    staged_case, _ = run_node(
+        'node-only-malformed-diagnostics-stages',
+        '''
+download_and_verify_binary() { printf staged > "$TRACE.staged"; return 1; }
+verify_executable() { :; }
+pin_release_urls() { :; }
+guard_install_paths "$SCRIPT_DIR"
+''',
+        outside, False, extra_env={'HELPER_DIAG': 'malformed'})
+    assert (staged_case / 'trace.staged').read_text() == 'staged'
+    stub_dir = box / 'store-stub-bin'
+    stub_dir.mkdir()
+    (stub_dir / 'python3').write_text(
+        '#!/bin/sh\n'
+        'echo "Python was not found; run without arguments to install from the Microsoft Store." >&2\n'
+        'exit 9009\n')
+    (stub_dir / 'python3').chmod(0o755)
+
+    def run_stub(name, body, e=None, ok=True, extra_env=None):
+        case = box / name
+        case.mkdir(exist_ok=True)
+        env = dict(os.environ, INSTALL_TARGET_DIR=str(case), TRACE=str(case / 'trace'),
+                   PATH=str(stub_dir) + os.pathsep + str(node_bin))
+        if e is not None:
+            env['AGENT_NOTIFICATIONS_CONFIG'] = str(e)
+        if extra_env:
+            env.update(extra_env)
+        script = 'source ' + q(functions) + '\ndetect_platform\nINSTALL_CONFIG_HELPER=' + q(helper) + '\n' + node_isolation + body
+        r = subprocess.run(['bash', '-c', script], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        assert (r.returncode == 0) == ok, (name, r.returncode, r.stderr.decode(), r.stdout.decode())
+        assert b'SECRET-CANARY' not in r.stdout + r.stderr
+        print('PASS:', name)
+        return case, r
+
+    run_stub('stub-python-falls-back-to-node', 'guard_install_paths "$SCRIPT_DIR"', outside)
+else:
+    print('SKIP node-only install preflight: node not available')
 PY

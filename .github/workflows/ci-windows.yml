@@ -75,6 +75,14 @@ jobs:
         run: ./bin/claude-notifications.exe help
         shell: bash
 
+      - name: Test one-line setup loader (isolated, offline)
+        run: bash bin/setup_test.sh
+        shell: bash
+
+      - name: Test python/node installer runtime fallback (isolated, offline)
+        run: bash bin/installer_runtime_fallback_e2e_test.sh
+        shell: bash
+
       - name: Build sound preview binary
         run: go build -o bin/sound-preview.exe ./cmd/sound-preview
 
