@@ -37,14 +37,19 @@ done
 for commit in short 0123456789abcdef0123456789abcdef0123456g 0123456789ABCDEF0123456789ABCDEF01234567; do
     if BOOTSTRAP_RELEASE_TAG=v1.42.0 BOOTSTRAP_RELEASE_COMMIT="$commit" resolve_bootstrap_release; then exit 1; fi
 done
+place_runtime_cmd() {
+    local dest="$1" src="${2:-}"
+    [ -n "$src" ] && [ -e "$src" ] || return 0
+    [ ! -e "$dest" ] || return 0
+    printf '#!/bin/sh\nexec %s "$@"\n' "$(printf "'%s'" "$(printf '%s' "$src" | sed "s/'/'\\\\''/g")")" > "$dest"
+    chmod +x "$dest"
+}
 if command -v node >/dev/null 2>&1; then
     NODE_ONLY="$SANDBOX/node-only-bin"
     mkdir -p "$NODE_ONLY"
-    ln -sf "$(command -v node)" "$NODE_ONLY/node"
-    for name in bash sh mktemp rm cat chmod mkdir ln uname tr head cp mv env true false grep sed awk; do
-        src=$(command -v "$name" || true)
-        [ -n "$src" ] || continue
-        [ -e "$NODE_ONLY/$name" ] || ln -sf "$src" "$NODE_ONLY/$name"
+    for name in node bash sh mktemp rm cat chmod mkdir ln uname tr head cp mv env true false grep sed awk; do
+        src=$(type -P "$name" 2>/dev/null || true)
+        place_runtime_cmd "$NODE_ONLY/$name" "$src"
     done
     (
         PATH="$NODE_ONLY"
@@ -521,17 +526,18 @@ trace.write_text('')
 run(['--product','both'],1,{'PYTHONOPTIMIZE':'2'})
 assert not events()
 payload_file.write_bytes(valid_payload); checksums.write_bytes(valid_checksums)
+def place_runtime_cmd(dest, src):
+    if dest.exists() or not src or not os.path.isfile(src):
+        return
+    dest.write_text('#!/bin/sh\nexec {} "$@"\n'.format(shlex.quote(src.replace('\\', '/'))))
+    dest.chmod(0o755)
 if shutil.which('node'):
     node_only = sandbox / 'http-node-only-bin'
     node_only.mkdir()
     for name in ['bash', 'sh', 'mktemp', 'rm', 'cat', 'chmod', 'mkdir', 'ln', 'uname',
                  'tr', 'head', 'cp', 'mv', 'env', 'true', 'false', 'grep', 'sed', 'awk',
                  'tar', 'gzip', 'curl', 'node']:
-        src = shutil.which(name)
-        if src:
-            dest = node_only / name
-            if not dest.exists():
-                dest.symlink_to(src)
+        place_runtime_cmd(node_only / name, shutil.which(name))
     assert not (node_only / 'python3').exists()
     reset_case()
     env['PATH'] = str(cli) + os.pathsep + str(node_only)

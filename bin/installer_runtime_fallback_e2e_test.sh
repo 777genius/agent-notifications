@@ -17,6 +17,15 @@ import tempfile
 root = Path(sys.argv[1])
 
 
+def place_runtime_cmd(dest, src):
+    # Git Bash builtins are not files, and Windows often cannot create native
+    # symlinks. Exec wrappers keep restricted PATH tests portable.
+    if dest.exists() or not src or not os.path.isfile(src):
+        return
+    dest.write_text('#!/bin/sh\nexec {} "$@"\n'.format(shlex.quote(src.replace('\\', '/'))))
+    dest.chmod(0o755)
+
+
 def runtime_path(case, python=False, node=False):
     bin_dir = case / 'runtime-bin'
     bin_dir.mkdir()
@@ -27,12 +36,16 @@ def runtime_path(case, python=False, node=False):
     if node:
         names.append('node')
     for name in names:
-        src = shutil.which(name)
-        if src:
-            dest = bin_dir / name
-            if not dest.exists():
-                dest.symlink_to(src)
+        place_runtime_cmd(bin_dir / name, shutil.which(name))
     return str(bin_dir)
+
+
+def extract_quoted_heredoc(path, marker):
+    text = path.read_text()
+    token = "<<'" + marker + "'"
+    start = text.index('\n', text.index(token)) + 1
+    end = text.index('\n' + marker + '\n', start)
+    return text[start:end]
 
 
 def pass_name(name):
@@ -41,6 +54,10 @@ def pass_name(name):
 
 def fail(name, detail):
     raise AssertionError(name + ': ' + detail)
+
+
+def describe(result):
+    return 'exit=%s stdout=%r stderr=%r' % (result.returncode, result.stdout, result.stderr)
 
 
 # --- setup.sh loader: python-only, node-only, neither, python-preferred ---
@@ -96,7 +113,7 @@ def setup_case(name, python=False, node=False, expected=0, preferred=False):
                                 text=True, capture_output=True, env=env, timeout=20)
         if expected == 0:
             if result.returncode != 0:
-                fail(name, result.stderr)
+                fail(name, describe(result))
             ran = json.loads((case / 'ran.json').read_text())
             if ran['tag'] != 'v1.43.0' or ran['sha'] != sha:
                 fail(name, repr(ran))
@@ -106,9 +123,9 @@ def setup_case(name, python=False, node=False, expected=0, preferred=False):
                     fail(name, log)
         else:
             if result.returncode == 0 or (case / 'ran.json').exists():
-                fail(name, 'installer ran without a JSON runtime')
+                fail(name, 'installer ran without a JSON runtime: ' + describe(result))
             if 'python3 or node is required' not in result.stderr:
-                fail(name, result.stderr)
+                fail(name, describe(result))
         if list((case / 'tmp space').iterdir()):
             fail(name, 'leaked staging directory')
         pass_name(name)
@@ -229,6 +246,91 @@ guard_install_paths "$PWD"
         pass_name('install.sh node-only config preflight')
 else:
     print('SKIP install.sh node-only config preflight')
+
+# Production JSSTAGE must resolve TMPDIR through a symlink ancestor, matching
+# Python os.path.realpath, so overlap into a refresh root is rejected.
+if shutil.which('node'):
+    jsstage = extract_quoted_heredoc(root / 'bin/bootstrap.sh', 'JSSTAGE')
+    with tempfile.TemporaryDirectory(prefix='jsstage-', dir=os.environ['TMPDIR']) as tmp:
+        td = Path(tmp)
+        plugin = td / 'plugin'
+        plugin.mkdir()
+        alias = td / 'alias'
+        try:
+            alias.symlink_to(plugin, target_is_directory=True)
+        except OSError:
+            print('SKIP JSSTAGE symlink ancestor overlap: cannot create symlink')
+        else:
+            scratch = alias / 'scratch'
+            env = dict(os.environ)
+            result = subprocess.run(
+                ['node', '-', str(scratch), str(td / 'missing.json'), 'claude-notifications-go',
+                 'codex', str(td / 'cache'), str(td / 'market'), str(plugin)],
+                input=jsstage, text=True, capture_output=True, env=env, timeout=20)
+            if result.returncode == 0 or 'Staging must be outside refreshed bundles' not in result.stderr:
+                fail('JSSTAGE symlink ancestor overlap', describe(result))
+            pass_name('JSSTAGE rejects TMPDIR under symlink into plugin root')
+else:
+    print('SKIP JSSTAGE symlink ancestor overlap: node not available')
+
+# Malformed diagnostics are a protocol failure (status 2), not a final reject.
+if shutil.which('node'):
+    jsinstall = extract_quoted_heredoc(root / 'bin/install.sh', 'JSINSTALL')
+    with tempfile.TemporaryDirectory(prefix='jsinstall-', dir=os.environ['TMPDIR']) as tmp:
+        case = Path(tmp)
+        helper = case / 'helper'
+        helper.write_text(
+            '#!/bin/sh\nprintf \'{"status":"unsafe-target","diagnostics":["invalid"]}\\n\'\n')
+        helper.chmod(0o755)
+        result = subprocess.run(
+            ['node', '-', str(helper), 'linux', str(case)],
+            input=jsinstall, text=True, capture_output=True, timeout=20)
+        if result.returncode != 2:
+            fail('JSINSTALL malformed diagnostics', describe(result))
+        pass_name('JSINSTALL malformed diagnostics exits 2')
+else:
+    print('SKIP JSINSTALL malformed diagnostics: node not available')
+
+# NODE_OPTIONS must not pollute plugin registry parses on node-only installs.
+if shutil.which('node'):
+    with tempfile.TemporaryDirectory(prefix='node-options-', dir=os.environ['TMPDIR']) as tmp:
+        case = Path(tmp)
+        path = runtime_path(case, node=True)
+        functions = case / 'functions.sh'
+        functions.write_text((root / 'bin/bootstrap.sh').read_text().replace('main "$@"', ''))
+        plugin = case / 'plugin'
+        plugin.mkdir()
+        installed = case / 'installed.json'
+        key = 'claude-notifications-go@claude-notifications-go'
+        installed.write_text(json.dumps({
+            'plugins': {key: [{'installPath': str(plugin), 'version': '1.42.0'}]}
+        }))
+        (case / 'preload.js').write_text('process.stdout.write("POLLUTED\\n");\n')
+        script = r'''
+source "$FUNCTIONS"
+PATH="$RUNTIME_PATH"
+command -v python3 >/dev/null && { echo python3 leaked >&2; exit 1; }
+command -v jq >/dev/null && { echo jq leaked >&2; exit 1; }
+export NODE_OPTIONS="--require=./preload.js"
+PLUGIN_KEY="claude-notifications-go@claude-notifications-go"
+INSTALLED_JSON="$INSTALLED"
+ver=$(get_installed_plugin_version)
+root=$(get_installed_plugin_root)
+printf 'ver=%s root=%s\n' "$ver" "$root"
+[ "$ver" = "1.42.0" ] || exit 1
+[ "$root" = "$PLUGIN_DIR" ] || exit 1
+'''
+        env = dict(os.environ, PATH=path, FUNCTIONS=str(functions), RUNTIME_PATH=path,
+                   INSTALLED=str(installed), PLUGIN_DIR=str(plugin), TMPDIR=str(case),
+                   HOME=str(case / 'home'))
+        (case / 'home').mkdir()
+        result = subprocess.run(['bash', '-c', script], cwd=str(case), env=env, text=True,
+                                capture_output=True, timeout=20)
+        if result.returncode != 0 or 'POLLUTED' in result.stdout:
+            fail('isolated node ignores NODE_OPTIONS', describe(result))
+        pass_name('get_installed_* ignores NODE_OPTIONS on node-only PATH')
+else:
+    print('SKIP isolated node NODE_OPTIONS: node not available')
 
 print('All installer python/node runtime e2e fixtures passed.')
 PY

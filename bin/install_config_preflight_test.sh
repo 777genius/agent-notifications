@@ -27,6 +27,9 @@ if sys.argv[1:]==['--version']:
 assert sys.argv[1:]==['config','preflight-update','--stdin','--json']
 r=json.load(sys.stdin)
 with open(os.environ['TRACE'],'a') as f: f.write(json.dumps(r)+'\\n')
+if os.environ.get('HELPER_DIAG')=='malformed':
+    print(json.dumps(dict(status='unsafe-target',diagnostics=['invalid'])))
+    sys.exit(0)
 e=os.environ.get('AGENT_NOTIFICATIONS_CONFIG','')
 status='safe'; code=''
 if e and not os.path.isabs(e): status='invalid-config'; code='ConfigOverrideInvalid'
@@ -447,16 +450,17 @@ shutil.rmtree(venv)
 run('working-venv',iterm,venv/'config.json')
 
 # Node-only transport: python3 is absent from PATH, Node drives preflight.
+def place_runtime_cmd(dest, src):
+    if dest.exists() or not src or not os.path.isfile(src):
+        return
+    dest.write_text('#!/bin/sh\nexec {} "$@"\n'.format(shlex.quote(src.replace('\\', '/'))))
+    dest.chmod(0o755)
 if shutil.which('node'):
     node_bin = box / 'node-only-bin'
     node_bin.mkdir()
     for name in ['bash', 'sh', 'mktemp', 'rm', 'cat', 'chmod', 'mkdir', 'ln', 'uname',
                  'tr', 'head', 'cp', 'mv', 'env', 'true', 'false', 'grep', 'sed', 'node']:
-        src = shutil.which(name)
-        if src:
-            dest = node_bin / name
-            if not dest.exists():
-                os.symlink(src, dest)
+        place_runtime_cmd(node_bin / name, shutil.which(name))
     assert not (node_bin / 'python3').exists()
     node_isolation = """
 curl() { echo 'unexpected network request' >&2; return 99; }
@@ -464,16 +468,18 @@ wget() { echo 'unexpected network request' >&2; return 99; }
 """
     orig_path = os.environ['PATH']
 
-    def run_node(name, body, e=None, ok=True):
+    def run_node(name, body, e=None, ok=True, extra_env=None):
         case = box / name
         case.mkdir(exist_ok=True)
         env = dict(os.environ, INSTALL_TARGET_DIR=str(case), TRACE=str(case / 'trace'),
                    PATH=str(node_bin))
         if e is not None:
             env['AGENT_NOTIFICATIONS_CONFIG'] = str(e)
+        if extra_env:
+            env.update(extra_env)
         script = 'source ' + q(functions) + '\ndetect_platform\nINSTALL_CONFIG_HELPER=' + q(helper) + '\n' + node_isolation + body
         r = subprocess.run(['bash', '-c', script], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
-        assert (r.returncode == 0) == ok, (name, r.returncode, r.stderr.decode())
+        assert (r.returncode == 0) == ok, (name, r.returncode, r.stderr.decode(), r.stdout.decode())
         assert b'SECRET-CANARY' not in r.stdout + r.stderr
         print('PASS:', name)
         return case, r
@@ -484,6 +490,16 @@ wget() { echo 'unexpected network request' >&2; return 99; }
     reject_target.write_text('SECRET-CANARY')
     run_node('node-only-reject', 'guard_install_paths "$SCRIPT_DIR"', reject_target, False)
     assert reject_target.read_text() == 'SECRET-CANARY'
+    staged_case, _ = run_node(
+        'node-only-malformed-diagnostics-stages',
+        '''
+download_and_verify_binary() { printf staged > "$TRACE.staged"; return 1; }
+verify_executable() { :; }
+pin_release_urls() { :; }
+guard_install_paths "$SCRIPT_DIR"
+''',
+        outside, False, extra_env={'HELPER_DIAG': 'malformed'})
+    assert (staged_case / 'trace.staged').read_text() == 'staged'
 else:
     print('SKIP node-only install preflight: node not available')
 PY

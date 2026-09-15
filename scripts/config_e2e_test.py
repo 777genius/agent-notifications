@@ -32,6 +32,13 @@ def put(path, data, mode=0o600):
     path.chmod(mode)
 
 
+def place_runtime_cmd(dest, src):
+    if dest.exists() or not src or not os.path.isfile(src):
+        return
+    dest.write_text('#!/bin/sh\nexec {} "$@"\n'.format(shlex.quote(src.replace('\\', '/'))))
+    dest.chmod(0o755)
+
+
 def snapshot(path):
     return (path.read_bytes(), path.stat().st_mode, path.stat().st_mtime_ns)
 
@@ -142,11 +149,7 @@ shutil.copytree(os.environ['SOURCE'],root,dirs_exist_ok=True)
         if node:
             names.append('node')
         for name in names:
-            src = shutil.which(name)
-            if src:
-                dest = runtime / name
-                if not dest.exists():
-                    os.symlink(src, dest)
+            place_runtime_cmd(runtime / name, shutil.which(name))
         env.update(PATH=str(clis) + os.pathsep + str(runtime), TRACE=str(base / 'trace'),
                    EFFECTS=str(base / 'effects'), SOURCE=str(self.bundle), LOCAL_URL=self.url,
                    BOOTSTRAP_RELEASE_TAG=TAG, BOOTSTRAP_RELEASE_COMMIT=COMMIT,

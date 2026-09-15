@@ -98,6 +98,13 @@ def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, pipe
         assert not list((case / 'tmp space').iterdir()), name + ': leaked staging directory'
         print('PASS ' + name)
 
+def place_runtime_cmd(dest, src):
+    if dest.exists() or not src or not os.path.isfile(src):
+        return
+    dest.write_text('#!/bin/sh\nexec {} "$@"\n'.format(shlex.quote(src.replace('\\', '/'))))
+    dest.chmod(0o755)
+
+
 def runtime_path(case, python=False, node=False):
     bin_dir = case / 'runtime-bin'
     bin_dir.mkdir()
@@ -108,11 +115,7 @@ def runtime_path(case, python=False, node=False):
     if node:
         names.append('node')
     for name in names:
-        src = shutil.which(name)
-        if src:
-            dest = bin_dir / name
-            if not dest.exists():
-                dest.symlink_to(src)
+        place_runtime_cmd(bin_dir / name, shutil.which(name))
     return str(case / 'bin') + os.pathsep + str(bin_dir)
 
 def run_runtime_case(name, python=False, node=False, expected=0):
