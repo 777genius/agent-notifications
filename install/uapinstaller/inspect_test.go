@@ -202,6 +202,49 @@ func TestRecoverMatchingPendingJournal(t *testing.T) {
 	if err != nil || after.Recovery.Required {
 		t.Fatalf("post-recover inspect: %+v %v", after, err)
 	}
+	again, err := eng.Recover(testCtx(t), after)
+	if err != nil || again.Outcome != OutcomeUnchanged || again.Reason != "already_recovered" {
+		t.Fatalf("clean observation after recover: %+v %v", again, err)
+	}
+}
+
+func TestRecoverDeletedJournalWithStagingIsNotUnchanged(t *testing.T) {
+	eng, journal := plantPendingJournal(t)
+	view, err := eng.Inspect(testCtx(t))
+	if err != nil || !view.Recovery.Required || len(view.Recovery.Journals) != 1 {
+		t.Fatalf("inspect: %+v %v", view, err)
+	}
+	if err := os.Remove(filepath.Join(eng.cfg.OperationsDir, journal.OperationID+".json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(journal.StagingPath); err != nil {
+		t.Fatalf("staging missing before recover: %v", err)
+	}
+	result, err := eng.Recover(testCtx(t), view)
+	if !errors.Is(err, ErrRecoveryRequired) || result.Outcome != OutcomeRecovery || result.Reason != "incomplete_recovery" {
+		t.Fatalf("deleted journal leftover staging: %+v %v", result, err)
+	}
+	if _, err := os.Stat(journal.StagingPath); err != nil {
+		t.Fatalf("recover mutated leftover staging: %v", err)
+	}
+}
+
+func TestRecoverStaleObservationWithoutLeftoverIsUnchanged(t *testing.T) {
+	eng, journal := plantPendingJournal(t)
+	view, err := eng.Inspect(testCtx(t))
+	if err != nil || !view.Recovery.Required || len(view.Recovery.Journals) != 1 {
+		t.Fatalf("inspect: %+v %v", view, err)
+	}
+	if err := os.Remove(filepath.Join(eng.cfg.OperationsDir, journal.OperationID+".json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(journal.StagingPath); err != nil {
+		t.Fatal(err)
+	}
+	result, err := eng.Recover(testCtx(t), view)
+	if err != nil || result.Outcome != OutcomeUnchanged || result.Reason != "already_recovered" {
+		t.Fatalf("vanished journal without leftover: %+v %v", result, err)
+	}
 }
 
 func TestRecoverRejectsUnobservedPendingJournal(t *testing.T) {

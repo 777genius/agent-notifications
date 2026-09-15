@@ -5,7 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/dirswap"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
@@ -145,6 +148,25 @@ func pendingIdentity(obs RecoveryObservation) []string {
 	return keys
 }
 
+func leftoverSwapArtifacts(obs RecoveryObservation) bool {
+	for _, journal := range obs.Journals {
+		if journal.TargetPath == "" {
+			return true
+		}
+		entries, err := os.ReadDir(filepath.Dir(journal.TargetPath))
+		if err != nil {
+			return true
+		}
+		for _, entry := range entries {
+			name := entry.Name()
+			if strings.HasPrefix(name, ".agentplugins-staging-") || strings.HasPrefix(name, ".agentplugins-backup-") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func liveWithinObserved(live, observed RecoveryObservation) bool {
 	want := map[string]bool{}
 	for _, key := range pendingIdentity(observed) {
@@ -192,6 +214,12 @@ func (e *Engine) Recover(ctx context.Context, observed Inspection) (Result, erro
 		return Result{Outcome: OutcomeConflict, Reason: "plan_changed", Recovery: classifyRecovery(observed.Recovery, live.Recovery, true, ErrPlanChanged)}, ErrPlanChanged
 	}
 	if !live.Recovery.Required {
+		if observed.Recovery.Required && leftoverSwapArtifacts(observed.Recovery) {
+			return Result{
+				Outcome: OutcomeRecovery, Reason: "incomplete_recovery",
+				Recovery: classifyRecovery(observed.Recovery, live.Recovery, true, ErrRecoveryRequired),
+			}, fmt.Errorf("%w: journal vanished with leftover swap artifacts", ErrRecoveryRequired)
+		}
 		return Result{Outcome: OutcomeUnchanged, Reason: "already_recovered", Recovery: classifyRecovery(observed.Recovery, live.Recovery, true, nil)}, nil
 	}
 	if err := svc.Kernel.Recover(ctx); err != nil {

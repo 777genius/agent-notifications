@@ -60,6 +60,10 @@ supported Claude/Codex user-scope metadata, executable presence, and current
 bindings without creating state or executing found files. Inspect after a group
 install reports both live bindings and TreeDigest without mutating state or
 running a helper; Recover of that clean observation is `already_recovered`.
+Recover of a stale observation whose journals vanished still requires leftover
+swap artifacts to be absent; leftover `.agentplugins-staging-*` or
+`.agentplugins-backup-*` beside the recorded target is `incomplete_recovery`,
+not success.
 Inspect and Result expose per-client materialization/activation/authentication/verification and
 required components. The external sample's flagged path runs install → inspect
 → recover → repeat → update → repair → remove. Passing `-claude-config`
