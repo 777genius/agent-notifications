@@ -59,6 +59,7 @@ func TestFocusFlowPreservesWarpAndZellij(t *testing.T) {
 					done <- err
 					return
 				}
+				server.wg.Add(1)
 				server.handleConnection(conn)
 				done <- nil
 			}()
