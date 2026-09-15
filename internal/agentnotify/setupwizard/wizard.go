@@ -469,6 +469,16 @@ func liveBindingTreeDigest(mat portablesetup.Materializer, installationID, clien
 	return ""
 }
 
+func completedNotifyTarget(mat portablesetup.Materializer, installationID, client, bindingID string) TargetResult {
+	return TargetResult{
+		Client:     client,
+		Unit:       "agent-notify",
+		Outcome:    "completed",
+		Reason:     bindingID,
+		TreeDigest: liveBindingTreeDigest(mat, installationID, client),
+	}
+}
+
 func sameLiveRepairRevision(mat portablesetup.Materializer, installationID string, agents []portable.Integration) bool {
 	digest := ""
 	for i, agent := range agents {
@@ -1419,7 +1429,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		}
 		out.Generation = generation
 		for i, agent := range notifyAgents {
-			out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "completed", Reason: got[i].BindingID})
+			out.Targets = append(out.Targets, completedNotifyTarget(mat, got[i].InstallationID, string(agent), got[i].BindingID))
 			id.InstallationID = got[i].InstallationID
 			_ = persistKnownReceipt(ctx, req, runtimeRoot, mat, id.InstallationID, string(agent))
 			if err := recordLiveProfile(got[i].DataRoot, string(agent), clientConfig(req, agent)); err != nil {
@@ -1490,7 +1500,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 			return out, err
 		}
 		out.Generation = generation
-		out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "completed", Reason: got.BindingID})
+		out.Targets = append(out.Targets, completedNotifyTarget(mat, got.InstallationID, string(agent), got.BindingID))
 		id.InstallationID = got.InstallationID
 		_ = persistKnownReceipt(ctx, req, runtimeRoot, mat, id.InstallationID, string(agent))
 		if err := recordLiveProfile(got.DataRoot, string(agent), clientConfig(req, agent)); err != nil {

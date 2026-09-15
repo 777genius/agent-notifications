@@ -2454,6 +2454,12 @@ func TestWizardRepairMixedRevisionsRepairsMatchingPackage(t *testing.T) {
 	if saw["codex"].Outcome != "completed" || saw["claude"].Outcome != "completed" {
 		t.Fatalf("mixed group repair: %+v", got.Targets)
 	}
+	if saw["claude"].TreeDigest == "" || saw["claude"].TreeDigest == saw["codex"].TreeDigest {
+		t.Fatalf("mixed repair result collapsed digests: %+v", got.Targets)
+	}
+	if saw["claude"].TreeDigest != claudeDigest || saw["codex"].TreeDigest != codexDigest {
+		t.Fatalf("mixed repair result drifted from inspect: result=%+v inspect claude=%s codex=%s", got.Targets, claudeDigest, codexDigest)
+	}
 	if live := LiveNotifyClients(control, []string{"claude", "codex"}); len(live) != 2 {
 		t.Fatalf("mixed repair lost sibling: %v", live)
 	}
@@ -2542,6 +2548,9 @@ func TestWizardRepairMixedRevisionsMissingOlderPackage(t *testing.T) {
 	if saw["claude"].Outcome != "incomplete" || saw["claude"].Reason != "exact_revision_required" {
 		t.Fatalf("claude r1 mismatch: %+v", saw["claude"])
 	}
+	if saw["codex"].TreeDigest == "" || saw["claude"].TreeDigest == "" || saw["codex"].TreeDigest == saw["claude"].TreeDigest {
+		t.Fatalf("mixed missing-package result collapsed digests: %+v", got.Targets)
+	}
 	if live := LiveNotifyClients(control, []string{"claude", "codex"}); len(live) != 2 {
 		t.Fatalf("mixed repair lost sibling: %v", live)
 	}
@@ -2610,6 +2619,9 @@ func TestWizardRepairMixedRevisionsRematerializesDeletedSibling(t *testing.T) {
 	got, err = Run(ctx, req)
 	if err != nil || (got.Outcome != "completed" && got.Outcome != "unchanged") {
 		t.Fatalf("mixed rematerialize: %+v %v", got, err)
+	}
+	if notifyTreeDigest(got, "claude") != claudeDigest || notifyTreeDigest(got, "codex") != codexDigest {
+		t.Fatalf("mixed rematerialize result collapsed digests: %+v inspect claude=%s codex=%s", got.Targets, claudeDigest, codexDigest)
 	}
 	if _, err := os.Stat(claudeBefore.TargetPath); err != nil {
 		t.Fatalf("mixed rematerialize did not restore claude: %v", err)

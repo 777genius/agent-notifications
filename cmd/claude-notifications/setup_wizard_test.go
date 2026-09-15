@@ -2140,6 +2140,9 @@ func TestSetupWizardRepairMixedRevisionsKeepsSiblingE2E(t *testing.T) {
 	if got.Outcome != "completed" && got.Outcome != "unchanged" {
 		t.Fatalf("mixed repair: %+v", got)
 	}
+	if wizardCLINotifyDigest(got, "claude") != claudeDigest || wizardCLINotifyDigest(got, "codex") != codexDigest {
+		t.Fatalf("mixed repair result collapsed digests: %+v inspect claude=%s codex=%s", got.Targets, claudeDigest, codexDigest)
+	}
 	claudeAfter := wizardCLIBinding(t, ctx, env.root, "claude")
 	codexAfter := wizardCLIBinding(t, ctx, env.root, "codex")
 	if claudeAfter.BindingID != claudeBefore.BindingID || claudeAfter.TargetPath != claudeBefore.TargetPath {
@@ -2177,6 +2180,9 @@ func TestSetupWizardRepairMixedRematerializesDeletedSiblingE2E(t *testing.T) {
 	got := decodeWizardJSON(t, out)
 	if got.Outcome != "completed" && got.Outcome != "unchanged" {
 		t.Fatalf("mixed rematerialize: %+v", got)
+	}
+	if wizardCLINotifyDigest(got, "claude") != claudeDigest || wizardCLINotifyDigest(got, "codex") != codexDigest {
+		t.Fatalf("mixed rematerialize result collapsed digests: %+v inspect claude=%s codex=%s", got.Targets, claudeDigest, codexDigest)
 	}
 	if _, err := os.Stat(claudeBefore.TargetPath); err != nil {
 		t.Fatalf("mixed rematerialize did not restore claude: %v", err)
@@ -2228,6 +2234,9 @@ func TestSetupWizardRepairMixedMissingOlderPackageE2E(t *testing.T) {
 	}
 	if saw["claude"].Outcome != "incomplete" || saw["claude"].Reason != "exact_revision_required" {
 		t.Fatalf("claude r1 mismatch: %+v", saw["claude"])
+	}
+	if saw["codex"].TreeDigest == "" || saw["claude"].TreeDigest == "" || saw["codex"].TreeDigest == saw["claude"].TreeDigest {
+		t.Fatalf("mixed missing-package result collapsed digests: %+v", got.Targets)
 	}
 	codexAfter := wizardCLIBinding(t, ctx, env.root, "codex")
 	if codexAfter.BindingID != codexBefore.BindingID {
