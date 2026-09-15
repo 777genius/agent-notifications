@@ -662,6 +662,54 @@ func TestWizardEmptyAgentsCancels(t *testing.T) {
 	}
 }
 
+func TestWizardEmptyUnitsCancelsWithoutIntent(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	empty := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off, AgentNotify: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(empty.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Run(ctx, empty)
+	if err != nil || got.Outcome != "cancelled" || got.Reason != "empty_units" || got.ExitCode() != 0 {
+		t.Fatalf("empty install units: %+v %v", got, err)
+	}
+	if _, err := os.Lstat(portablesetup.IntentPath(control)); !os.IsNotExist(err) {
+		t.Fatal("empty install units created intent")
+	}
+	empty.AgentNotify = nil
+	installed, err := Run(ctx, empty)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	empty.Action = ActionUninstall
+	empty.Hooks = &off
+	empty.AgentNotify = &off
+	empty.PackageRoot = ""
+	held, err := Run(ctx, empty)
+	if err != nil || held.Outcome != "cancelled" || held.Reason != "empty_units" {
+		t.Fatalf("empty uninstall units: %+v %v", held, err)
+	}
+	if live := LiveNotifyClients(control, []string{"codex"}); strings.Join(live, ",") != "codex" {
+		t.Fatalf("empty uninstall units mutated bindings: %v", live)
+	}
+	if _, err := os.Lstat(portablesetup.IntentPath(control)); !os.IsNotExist(err) {
+		t.Fatal("empty uninstall units created intent")
+	}
+}
+
 func TestWizardInstallInspectUninstall(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, _, _ := managedRuntime(t)
