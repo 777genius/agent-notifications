@@ -93,7 +93,7 @@ def runtime_path(case, python=False, node=False):
 
 
 def extract_quoted_heredoc(path, marker):
-    text = path.read_text()
+    text = path.read_text(encoding='utf-8')
     token = "<<'" + marker + "'"
     start = text.index('\n', text.index(token)) + 1
     end = text.index('\n' + marker + '\n', start)
@@ -129,7 +129,7 @@ pass_name('skip Windows WSL/Store python3 aliases')
 
 # --- setup.sh loader: python-only, node-only, neither, python-preferred ---
 sha = '0123456789abcdef0123456789abcdef01234567'
-loader = (root / 'bin/setup.sh').read_text()
+loader = (root / 'bin/setup.sh').read_text(encoding='utf-8')
 curl_stub = r'''#!/usr/bin/env bash
 set -eu
 output=""; url=""
@@ -216,7 +216,7 @@ if host_cmd('node'):
         case = Path(tmp)
         path = runtime_path(case, node=True)
         functions = case / 'functions.sh'
-        functions.write_text((root / 'bin/bootstrap.sh').read_text().replace('main "$@"', ''))
+        functions.write_text((root / 'bin/bootstrap.sh').read_text(encoding='utf-8').replace('main "$@"', ''), encoding='utf-8')
         commit = 'a' * 40
         script = r'''
 source "$FUNCTIONS"
@@ -277,7 +277,7 @@ if host_cmd('node'):
     with tempfile.TemporaryDirectory(prefix='install-node-', dir=os.environ['TMPDIR']) as tmp:
         case = Path(tmp)
         functions = case / 'functions.sh'
-        functions.write_text((root / 'bin/install.sh').read_text().replace('main "$@"', ''))
+        functions.write_text((root / 'bin/install.sh').read_text(encoding='utf-8').replace('main "$@"', ''), encoding='utf-8')
         helper = case / 'helper'
         helper.write_text('#!' + sys.executable + '''
 import json, os, sys
@@ -380,7 +380,7 @@ if host_cmd('node'):
         case = Path(tmp)
         path = runtime_path(case, node=True)
         functions = case / 'functions.sh'
-        functions.write_text((root / 'bin/bootstrap.sh').read_text().replace('main "$@"', ''))
+        functions.write_text((root / 'bin/bootstrap.sh').read_text(encoding='utf-8').replace('main "$@"', ''), encoding='utf-8')
         plugin = case / 'plugin'
         plugin.mkdir()
         installed = case / 'installed.json'

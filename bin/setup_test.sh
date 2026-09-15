@@ -14,8 +14,8 @@ import sys
 import tempfile
 
 root = Path(sys.argv[1])
-loader = (root / 'bin/setup.sh').read_text()
-public_command = next(line for line in (root / 'README.md').read_text().splitlines()
+loader = (root / 'bin/setup.sh').read_text(encoding='utf-8')
+public_command = next(line for line in (root / 'README.md').read_text(encoding='utf-8').splitlines()
                       if line.startswith('(set -o pipefail; curl '))
 sha = '0123456789abcdef0123456789abcdef01234567'
 raw = 'https://raw.githubusercontent.com/777genius/agent-notifications/' + sha + '/bin'
