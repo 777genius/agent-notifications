@@ -69,6 +69,14 @@ def host_cmd(name):
     return which_skip_aliases(name)
 
 
+def bash_path(p):
+    # Git Bash PATH="$VAR" does not MSYS-convert Windows paths. Use POSIX.
+    s = str(p).replace('\\', '/')
+    if len(s) >= 2 and s[1] == ':':
+        s = '/' + s[0].lower() + s[2:]
+    return s
+
+
 def place_runtime_cmd(dest, src):
     # Git Bash builtins are not files, and Windows often cannot create native
     # symlinks. Exec wrappers keep restricted PATH tests portable.
@@ -89,7 +97,11 @@ def runtime_path(case, python=False, node=False):
         names.append('node')
     for name in names:
         place_runtime_cmd(bin_dir / name, host_cmd(name))
-    return str(bin_dir)
+    if node and not (bin_dir / 'node').is_file():
+        fail('runtime_path node wrapper', repr(host_cmd('node')))
+    if python and not (bin_dir / 'python3').is_file():
+        fail('runtime_path python3 wrapper', repr(host_cmd('python3')))
+    return bash_path(bin_dir)
 
 
 def extract_quoted_heredoc(path, marker):
@@ -125,6 +137,10 @@ HOST_BASH = host_cmd('bash')
 if not HOST_BASH:
     fail('host bash', 'Git Bash / bash executable not found')
 HOST_NODE = host_cmd('node')
+if bash_path(r'C:\Temp\runtime-bin') != '/c/Temp/runtime-bin':
+    fail('bash_path', bash_path(r'C:\Temp\runtime-bin'))
+if bash_path('/tmp/foo') != '/tmp/foo':
+    fail('bash_path posix', bash_path('/tmp/foo'))
 pass_name('skip Windows WSL/Store python3 aliases')
 
 
@@ -166,7 +182,7 @@ def setup_case(name, python=False, node=False, expected=0, preferred=False):
         (case / 'latest').write_text(json.dumps({'tag_name': 'v1.43.0'}))
         (case / 'commit').write_text(json.dumps({'sha': sha}))
         (case / 'bootstrap').write_text(bootstrap_stub)
-        path = str(case / 'bin') + os.pathsep + runtime_path(case, python=python, node=node)
+        path = bash_path(case / 'bin') + ':' + runtime_path(case, python=python, node=node)
         if preferred:
             (case / 'bin/python3').write_text(
                 '#!/usr/bin/env bash\nprintf python3 >> "$CASE_DIR/runtime.log"\nexec '
@@ -176,7 +192,8 @@ def setup_case(name, python=False, node=False, expected=0, preferred=False):
                 '#!/usr/bin/env bash\nprintf node >> "$CASE_DIR/runtime.log"\nexec '
                 + shlex.quote(HOST_NODE.replace('\\', '/')) + ' "$@"\n')
             (case / 'bin/node').chmod(0o755)
-        env = dict(os.environ, PATH=path, CASE_DIR=str(case), TMPDIR=str(case / 'tmp space'))
+        env = dict(os.environ, PATH=path, CASE_DIR=bash_path(case),
+                   TMPDIR=bash_path(case / 'tmp space'))
         result = subprocess.run([HOST_BASH, str(root / 'bin/setup.sh'), '--product', 'codex'],
                                 text=True, capture_output=True, env=env, timeout=20)
         if expected == 0:
@@ -263,8 +280,8 @@ if (expected.length !== 1 || actual !== expected[0].toLowerCase()) process.exit(
 JSVERIFY
 then echo 'checksum mismatch accepted' >&2; exit 1; fi
 '''
-        env = dict(os.environ, PATH=path, FUNCTIONS=str(functions), RUNTIME_PATH=path,
-                   TMPDIR=str(case), HOME=str(case / 'home'))
+        env = dict(os.environ, PATH=path, FUNCTIONS=bash_path(functions), RUNTIME_PATH=path,
+                   TMPDIR=bash_path(case), HOME=bash_path(case / 'home'))
         (case / 'home').mkdir()
         result = subprocess.run([HOST_BASH, '-c', script], env=env, text=True, capture_output=True, timeout=20)
         if result.returncode != 0:
@@ -300,9 +317,9 @@ INSTALL_CONFIG_HELPER="$HELPER"
 AGENT_NOTIFICATIONS_CONFIG="$TARGET"
 guard_install_paths "$PWD"
 '''
-        env = dict(os.environ, PATH=path, FUNCTIONS=str(functions), RUNTIME_PATH=path,
-                   HELPER=str(helper), TARGET=str(target), TRACE=str(case / 'trace'),
-                   TMPDIR=str(case), HOME=str(case / 'home'), PWD=str(case))
+        env = dict(os.environ, PATH=path, FUNCTIONS=bash_path(functions), RUNTIME_PATH=path,
+                   HELPER=bash_path(helper), TARGET=bash_path(target), TRACE=str(case / 'trace'),
+                   TMPDIR=bash_path(case), HOME=bash_path(case / 'home'), PWD=bash_path(case))
         (case / 'home').mkdir()
         result = subprocess.run([HOST_BASH, '-c', script], cwd=str(case), env=env, text=True,
                                 capture_output=True, timeout=20)
@@ -409,7 +426,7 @@ if HOST_NODE:
         installed = case / 'installed.json'
         key = 'claude-notifications-go@claude-notifications-go'
         installed.write_text(json.dumps({
-            'plugins': {key: [{'installPath': str(plugin), 'version': '1.42.0'}]}
+            'plugins': {key: [{'installPath': bash_path(plugin), 'version': '1.42.0'}]}
         }))
         (case / 'preload.js').write_text('process.stdout.write("POLLUTED\\n");\n')
         script = r'''
@@ -426,9 +443,9 @@ printf 'ver=%s root=%s\n' "$ver" "$root"
 [ "$ver" = "1.42.0" ] || exit 1
 [ "$root" = "$PLUGIN_DIR" ] || exit 1
 '''
-        env = dict(os.environ, PATH=path, FUNCTIONS=str(functions), RUNTIME_PATH=path,
-                   INSTALLED=str(installed), PLUGIN_DIR=str(plugin), TMPDIR=str(case),
-                   HOME=str(case / 'home'))
+        env = dict(os.environ, PATH=path, FUNCTIONS=bash_path(functions), RUNTIME_PATH=path,
+                   INSTALLED=bash_path(installed), PLUGIN_DIR=bash_path(plugin),
+                   TMPDIR=bash_path(case), HOME=bash_path(case / 'home'))
         (case / 'home').mkdir()
         result = subprocess.run([HOST_BASH, '-c', script], cwd=str(case), env=env, text=True,
                                 capture_output=True, timeout=20)
@@ -465,7 +482,7 @@ if HOST_NODE:
         (claude_home / 'plugins/installed_plugins.json').write_text(json.dumps({
             'plugins': {
                 'claude-notifications-go@claude-notifications-go': [
-                    {'installPath': str(current), 'version': '1.42.0'}
+                    {'installPath': bash_path(current), 'version': '1.42.0'}
                 ]
             }
         }), encoding='utf-8')
@@ -495,10 +512,10 @@ command -v node >/dev/null || { echo node missing >&2; exit 1; }
 export NODE_OPTIONS="--require=./preload.js"
 "$HOST_BASH" "$SHIM" Stop
 '''
-        env = dict(os.environ, PATH=path, RUNTIME_PATH=path, SHIM=str(shim_path),
-                   HOST_BASH=HOST_BASH, CLAUDE_HOME=str(claude_home),
-                   CLAUDE_CONFIG_DIR=str(claude_home), HOME=str(case / 'home'),
-                   TMPDIR=str(case))
+        env = dict(os.environ, PATH=path, RUNTIME_PATH=path, SHIM=bash_path(shim_path),
+                   HOST_BASH=HOST_BASH, CLAUDE_HOME=bash_path(claude_home),
+                   CLAUDE_CONFIG_DIR=bash_path(claude_home), HOME=bash_path(case / 'home'),
+                   TMPDIR=bash_path(case))
         (case / 'home').mkdir()
         result = subprocess.run([HOST_BASH, '-c', script], cwd=str(case), env=env,
                                 text=True, capture_output=True, timeout=20)
