@@ -2437,6 +2437,12 @@ func TestUpdateOneClientKeepsSibling(t *testing.T) {
 	}
 	install("codex", codexConfig, "sibling-codex-install")
 	install("claude", claudeConfig, "sibling-claude-install")
+	before, err := eng.Inspect(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claudeBefore := inspectedBinding(t, before, "claude")
+	codexBefore := inspectedBinding(t, before, "codex")
 	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"sample-notify","version":"1.0.1"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -2457,19 +2463,13 @@ func TestUpdateOneClientKeepsSibling(t *testing.T) {
 	if err != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 2 {
 		t.Fatalf("sibling inspect: %+v %v", view, err)
 	}
-	clients := map[string]bool{}
-	for _, binding := range view.Installations[0].Bindings {
-		clients[binding.ClientID] = true
+	claudeAfter := inspectedBinding(t, view, "claude")
+	if claudeAfter.BindingID != claudeBefore.BindingID || claudeAfter.TargetPath != claudeBefore.TargetPath || claudeAfter.DataRoot != claudeBefore.DataRoot || claudeAfter.Profile != claudeBefore.Profile {
+		t.Fatalf("update rewrote untouched sibling: before=%+v after=%+v", claudeBefore, claudeAfter)
 	}
-	if !clients["codex"] || !clients["claude"] {
-		t.Fatalf("sibling lost: %+v", view.Installations[0].Bindings)
-	}
-	profiles := map[string]string{}
-	for _, binding := range view.Installations[0].Bindings {
-		profiles[binding.ClientID] = binding.Profile
-	}
-	if profiles["codex"] != codexConfig || profiles["claude"] != claudeConfig {
-		t.Fatalf("sibling profiles: %+v", profiles)
+	codexAfter := inspectedBinding(t, view, "codex")
+	if codexAfter.BindingID != codexBefore.BindingID || codexAfter.Profile != codexBefore.Profile {
+		t.Fatalf("update re-bound selected client: before=%+v after=%+v", codexBefore, codexAfter)
 	}
 	if view.Installations[0].InstallationID != id {
 		t.Fatalf("installation id: %s", view.Installations[0].InstallationID)
