@@ -163,7 +163,20 @@ func writeSetupWizardResult(out io.Writer, jsonOut bool, result setupwizard.Resu
 	} else {
 		_, _ = fmt.Fprintf(out, "%s; reason=%s; generation=%d.\n", result.Outcome, result.Reason, result.Generation)
 		for _, target := range result.Targets {
-			_, _ = fmt.Fprintf(out, "%s %s: %s %s\n", target.Client, target.Unit, target.Outcome, target.Reason)
+			line := target.Client + " " + target.Unit + ": " + target.Outcome
+			if target.Reason != "" {
+				line += " " + target.Reason
+			}
+			if target.Profile != "" {
+				line += " profile=" + target.Profile
+			}
+			if target.TreeDigest != "" {
+				line += " digest=" + target.TreeDigest
+			}
+			if target.ConfigPath != "" {
+				line += " mcp=" + target.ConfigPath
+			}
+			_, _ = fmt.Fprintln(out, line)
 		}
 		for _, fact := range result.Readiness {
 			_, _ = fmt.Fprintf(out, "%s readiness: runtime=%s hooks=%s mcp=%s permission=%s restart=%s delivery=%s\n",
