@@ -84,18 +84,22 @@ func (e *Engine) Apply(ctx context.Context, prepared *PreparedOperation, decisio
 		}
 	}
 	e.report(ProgressPreflight)
-	switch op {
-	case OpInstall:
-		result, err = e.applyInstall(ctx, prepared)
-	case OpUpdate:
-		result, err = e.applyUpdate(ctx, prepared)
-	case OpRepair:
-		result, err = e.applyRepair(ctx, prepared)
-	case OpRemove:
-		result, err = e.applyRemove(ctx, prepared)
-	default:
-		err = fmt.Errorf("%w: %s", ErrUnsupported, op)
-		return Result{}, err
+	if len(prepared.req.Targets) > 1 {
+		result, err = e.applyGroup(ctx, prepared)
+	} else {
+		switch op {
+		case OpInstall:
+			result, err = e.applyInstall(ctx, prepared)
+		case OpUpdate:
+			result, err = e.applyUpdate(ctx, prepared)
+		case OpRepair:
+			result, err = e.applyRepair(ctx, prepared)
+		case OpRemove:
+			result, err = e.applyRemove(ctx, prepared)
+		default:
+			err = fmt.Errorf("%w: %s", ErrUnsupported, op)
+			return Result{}, err
+		}
 	}
 	attachNextActions(&result)
 	return result, err
@@ -257,6 +261,9 @@ func (e *Engine) applyRemove(ctx context.Context, prepared *PreparedOperation) (
 
 func (e *Engine) confirmPreparedPlan(ctx context.Context, prepared *PreparedOperation) error {
 	plan := prepared.plan
+	if len(plan.Targets) > 1 {
+		return e.confirmGroupPlan(ctx, prepared)
+	}
 	if plan.Operation == OpInstall {
 		if err := e.refuseRecordedDigestRewrite(plan.InstallationID, plan.TreeDigest); err != nil {
 			return err

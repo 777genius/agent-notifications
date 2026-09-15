@@ -514,6 +514,140 @@ func TestInstallSecondClientPreservesFirst(t *testing.T) {
 	}
 }
 
+func TestInstallGroupBothThenRemoveOne(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(base, "codex-config")
+	claudeConfig := filepath.Join(base, "claude-config")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eng, err := New(Config{
+		StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe,
+		Runner: listingRunner{configRoot: claudeConfig},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "00000000-0000-4000-8000-0000000000b1"
+	prepared, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, InstallationID: id, OperationID: "group-install",
+		RequiredComponents: []string{"mcp", "skills"}, ClientExecutable: probe,
+		Targets: []ClientTarget{
+			{ClientID: "codex", ClientConfigRoot: codexConfig, ClientExecutable: probe},
+			{ClientID: "claude", ClientConfigRoot: claudeConfig, ClientExecutable: probe},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prepared.Plan().Targets) != 2 {
+		t.Fatalf("group plan: %+v", prepared.Plan())
+	}
+	got, err := eng.Apply(ctx, prepared, Decision{Confirmed: true})
+	_ = prepared.Close()
+	if err != nil || got.Outcome != OutcomeCompleted {
+		t.Fatalf("group install: %+v %v", got, err)
+	}
+	if len(got.Targets) != 2 {
+		t.Fatalf("group result targets: %+v", got.Targets)
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 2 {
+		t.Fatalf("both clients: %+v %v", view, err)
+	}
+	rm, err := eng.Prepare(ctx, Request{
+		Operation: OpRemove, InstallationID: id, OperationID: "group-remove-one",
+		ClientExecutable: probe,
+		Targets: []ClientTarget{
+			{ClientID: "claude", ClientConfigRoot: claudeConfig, ClientExecutable: probe},
+			{ClientID: "codex", ClientConfigRoot: codexConfig, ClientExecutable: probe, ExternalUninstalled: true},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed, err := eng.Apply(ctx, rm, Decision{Confirmed: true})
+	_ = rm.Close()
+	if err != nil || removed.Outcome != OutcomeCompleted {
+		t.Fatalf("group remove: %+v %v", removed, err)
+	}
+	view, err = eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 {
+		t.Fatalf("after group remove: %+v %v", view, err)
+	}
+	if len(view.Installations[0].Bindings) != 0 {
+		t.Fatalf("bindings survived group remove: %+v", view.Installations[0].Bindings)
+	}
+}
+
+func TestRepairGroupMissingOneDoesNotMutate(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(base, "codex-config")
+	claudeConfig := filepath.Join(base, "claude-config")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eng, err := New(Config{
+		StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe,
+		Runner: listingRunner{configRoot: claudeConfig},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "00000000-0000-4000-8000-0000000000b2"
+	installed, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: codexConfig,
+		ClientExecutable: probe, InstallationID: id, OperationID: "group-repair-install",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, installed, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = installed.Close()
+	before, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = eng.Prepare(ctx, Request{
+		Operation: OpRepair, PackageRoot: pkg, InstallationID: id, OperationID: "group-repair-missing",
+		RequiredComponents: []string{"mcp", "skills"}, ClientExecutable: probe,
+		Targets: []ClientTarget{
+			{ClientID: "codex", ClientConfigRoot: codexConfig, ClientExecutable: probe},
+			{ClientID: "claude", ClientConfigRoot: claudeConfig, ClientExecutable: probe},
+		},
+	})
+	if !errors.Is(err, ErrNotInstalled) {
+		t.Fatalf("missing sibling repair: %v", err)
+	}
+	after, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("missing sibling repair mutated state")
+	}
+}
+
 func TestInstallSameDigestDifferentDirectoryAddsSecondClient(t *testing.T) {
 	skipWindowsLauncherExecuteBit(t)
 	ctx := testCtx(t)

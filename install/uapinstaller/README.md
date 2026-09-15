@@ -2,10 +2,10 @@
 
 Public process-local installer API for a standard local Agent Plugins package
 (`plugin.json` + MCP/skills). Constructor, inspect, Recover, and prepare/apply
-for **install**, **update**, **repair**, and **remove** are published as
-single-client operations.
+for **install**, **update**, **repair**, and **remove** are published. One
+client uses `Request.ClientID`. Claude+Codex together uses `Request.Targets`
+with the same operation verb. `install-group` as an operation name is invalid.
 
-Group operations remain unpublished. Those requests fail before mutation.
 Update and repair of a missing owned binding return `ErrNotInstalled` before
 mutation. Repair rematerializes a missing target of a live binding.
 

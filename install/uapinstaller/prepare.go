@@ -30,6 +30,7 @@ type PreparedOperation struct {
 	snapshot domain.PackageSnapshot
 	envelope domain.PackageEnvelope
 	client   domain.DetectedClient
+	clients  []domain.DetectedClient
 	facts    BindingFacts
 	artifact string
 }
@@ -37,6 +38,9 @@ type PreparedOperation struct {
 func (p *PreparedOperation) Plan() Plan {
 	out := p.plan
 	out.RequiredMissing = append([]string(nil), p.plan.RequiredMissing...)
+	if len(p.plan.Targets) > 0 {
+		out.Targets = append([]PlanTarget(nil), p.plan.Targets...)
+	}
 	return out
 }
 
@@ -68,6 +72,10 @@ func (e *Engine) Prepare(ctx context.Context, req Request) (*PreparedOperation, 
 	}
 	copied := req
 	copied.RequiredComponents = append([]string(nil), req.RequiredComponents...)
+	copied.Targets = append([]ClientTarget(nil), req.Targets...)
+	if len(copied.Targets) > 1 {
+		return e.prepareGroup(ctx, copied)
+	}
 	switch copied.Operation {
 	case OpInstall:
 		return e.prepareInstall(ctx, copied)
