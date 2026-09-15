@@ -274,8 +274,7 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 		return portable.Binding{}, err
 	}
 	defer release()
-	eng, err := m.engine(req, new(uint64), nil)
-	if err != nil {
+	if _, err := m.engine(req, new(uint64), nil); err != nil {
 		return portable.Binding{}, err
 	}
 	gen, res, err := m.Kernel.handoffForward(ctx, Request{
@@ -287,7 +286,7 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 		return portable.Binding{}, err
 	}
 	generation := gen
-	eng, err = m.engine(req, &generation, res)
+	eng, err := m.engine(req, &generation, res)
 	if err != nil {
 		return portable.Binding{}, err
 	}
