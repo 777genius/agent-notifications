@@ -469,6 +469,17 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 	if err := m.validate(req, false); err != nil {
 		return err
 	}
+	if err := m.recoverOwnedJournals(ctx, req); err != nil {
+		return err
+	}
+	state, err = m.Store.Load()
+	if err != nil {
+		return err
+	}
+	installation, ok = findInstallation(state, req.Identity.InstallationID)
+	if ok && installation.DataRetained && len(installation.Clients) == 0 {
+		return nil
+	}
 	if !ok {
 		return fmt.Errorf("%w: portable binding is not installed", ErrPreflight)
 	}
@@ -483,13 +494,10 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 		receipt = installation.DataReceipts[binding.DataReceiptID]
 	}
 	if found == nil {
-		return fmt.Errorf("%w: portable binding is not installed", ErrPreflight)
+		return ErrAlreadyAbsent
 	}
 	pb, err := Complete(req.Identity, req.Integration, found.ClientID, found.Scope, found.TargetLocator, receipt.Locator)
 	if err != nil {
-		return err
-	}
-	if err := m.recoverOwnedJournals(ctx, req); err != nil {
 		return err
 	}
 	release, err := m.beginMutation(ctx, &req)

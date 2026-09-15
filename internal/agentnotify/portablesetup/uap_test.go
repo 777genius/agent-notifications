@@ -226,7 +226,7 @@ func TestUAPMaterializerTwoClientsShareDataIndependentLocators(t *testing.T) {
 		Identity: id, Integration: portable.Claude, ExpectedGeneration: snap.Ledger.Generation,
 		ClientConfigRoot: filepath.Join(root, "home", "claude config"), ClientExecutable: probe,
 		OperationID: "portable-claude-remove-again",
-	}); err == nil || !errors.Is(err, ErrPreflight) {
+	}); err == nil || !errors.Is(err, ErrAlreadyAbsent) {
 		t.Fatalf("removed Claude while Codex is live: %v", err)
 	}
 }

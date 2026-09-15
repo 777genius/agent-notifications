@@ -178,9 +178,6 @@ func (e *Engine) prepareRemove(ctx context.Context, req Request) (*PreparedOpera
 	}
 	binding, receipt, ok := findBinding(installation, client.ClientID)
 	if !ok {
-		if !installation.DataRetained || len(installation.Clients) != 0 {
-			return nil, fmt.Errorf("%w: client %s is not installed", ErrInvalidRequest, client.ClientID)
-		}
 		e.report(ProgressPrepare)
 		e.report(ProgressPreflight)
 		handle := &PreparedOperation{engine: e, req: req, client: client}

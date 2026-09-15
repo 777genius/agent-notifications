@@ -438,6 +438,102 @@ func TestInstallSecondClientPreservesFirst(t *testing.T) {
 	}
 }
 
+func TestRemoveMissingSiblingIsAlreadyAbsent(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package source")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(base, "codex config")
+	claudeConfig := filepath.Join(base, "claude config")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eng, err := New(Config{
+		StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe,
+		Runner: listingRunner{configRoot: claudeConfig},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "00000000-0000-4000-8000-000000000068"
+	install := func(client, config, op string) {
+		t.Helper()
+		prepared, err := eng.Prepare(ctx, Request{
+			Operation: OpInstall, PackageRoot: pkg, ClientID: client, ClientConfigRoot: config,
+			ClientExecutable: probe, InstallationID: id, OperationID: op,
+			RequiredComponents: []string{"mcp", "skills"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := eng.Apply(ctx, prepared, Decision{Confirmed: true}); err != nil {
+			t.Fatal(err)
+		}
+		_ = prepared.Close()
+	}
+	install("codex", codexConfig, "codex-add")
+	install("claude", claudeConfig, "claude-add")
+	rmClaude, err := eng.Prepare(ctx, Request{
+		Operation: OpRemove, ClientID: "claude", ClientConfigRoot: claudeConfig, ClientExecutable: probe,
+		InstallationID: id, OperationID: "claude-remove",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, rmClaude, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = rmClaude.Close()
+	before, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	absent, err := eng.Prepare(ctx, Request{
+		Operation: OpRemove, ClientID: "claude", ClientConfigRoot: claudeConfig, ClientExecutable: probe,
+		InstallationID: id, OperationID: "claude-absent",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = absent.Close() }()
+	if !absent.Plan().NoChange {
+		t.Fatalf("missing sibling plan: %+v", absent.Plan())
+	}
+	got, err := eng.Apply(ctx, absent, Decision{Confirmed: true})
+	if err != nil || got.Outcome != OutcomeUnchanged || got.Reason != "already_absent" || !got.NoChange {
+		t.Fatalf("missing sibling remove: %+v %v", got, err)
+	}
+	after, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("missing sibling already_absent mutated state")
+	}
+	rmCodex, err := eng.Prepare(ctx, Request{
+		Operation: OpRemove, ClientID: "codex", ClientConfigRoot: codexConfig, ClientExecutable: probe,
+		InstallationID: id, OperationID: "codex-remove", ExternalUninstalled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, rmCodex, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = rmCodex.Close()
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 {
+		t.Fatalf("after both removes: %+v %v", view, err)
+	}
+	if len(view.Installations[0].Bindings) != 0 {
+		t.Fatalf("live binding survived: %+v", view.Installations[0].Bindings)
+	}
+}
+
 func isolateClientEnv(t *testing.T, base string) (home, codex, claude string) {
 	t.Helper()
 	home = filepath.Join(base, "env-home")

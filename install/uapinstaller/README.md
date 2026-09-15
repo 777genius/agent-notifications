@@ -39,7 +39,8 @@ digest in that field, returns `ErrUpdateRequired` without rewriting state.
 Remove Prepare verifies the managed artifact and persisted target before any
 client deactivation. Last-client remove retains PLUGIN_DATA and reports
 `data_retained`. A later remove of that retained empty installation returns
-`already_absent` without creating a journal. Plan includes the helper protocol
+`already_absent` without creating a journal, including when a sibling client is
+still installed. Plan includes the helper protocol
 version and SHA-256 of the helper bytes; UAP managedstdio stores the same
 digest. Result.NextActions cover recover, update, reprepare, and activate after
 a managed commit whose client activation did not finish. Cancel before the first

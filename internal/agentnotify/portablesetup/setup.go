@@ -20,6 +20,7 @@ var (
 	ErrUpdateRequired    = errors.New("existing clients require explicit update before add")
 	ErrIntentConflict    = errors.New("pending setup intent conflict")
 	ErrExternalUninstall = errors.New("external uninstall required")
+	ErrAlreadyAbsent     = errors.New("portable binding is already absent")
 )
 
 // Envelope is the root MCP command projected for one explicit integration.

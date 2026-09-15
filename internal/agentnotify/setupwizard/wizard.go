@@ -967,6 +967,10 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 			if conflict, handled := pendingIntentConflict(req, err, out); handled {
 				return conflict, err
 			}
+			if errors.Is(err, portablesetup.ErrAlreadyAbsent) {
+				out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "unchanged", Reason: "already_absent"})
+				continue
+			}
 			if errors.Is(err, portablesetup.ErrExternalUninstall) {
 				retry := req
 				retry.ExternalUninstalled = true
@@ -993,6 +997,9 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 		out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "completed"})
 	}
 	if removed == 0 {
+		if out.Reason == "" {
+			out.Reason = "already_absent"
+		}
 		out.Outcome = "unchanged"
 		reportProgress(req, "complete")
 		return out, nil

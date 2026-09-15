@@ -864,6 +864,67 @@ func TestWizardSecondClientAddDoesNotReviseExisting(t *testing.T) {
 	}
 }
 
+func TestWizardUninstallBothWhenOneBindingMissing(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	claudeConfig := filepath.Join(filepath.Dir(control), "claude-profile")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	off := false
+	on := true
+	base := Request{
+		Action: ActionInstall, Yes: true, Hooks: &off, AgentNotify: &on,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClaudeConfig: claudeConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot:    filepath.Join(filepath.Dir(control), "scope"),
+		ClaudeRunner: listingRunner{configRoot: claudeConfig},
+	}
+	if err := os.MkdirAll(base.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	both := base
+	both.Agents = []string{"claude", "codex"}
+	installed, err := Run(ctx, both)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install both: %+v %v", installed, err)
+	}
+	dropClaude := base
+	dropClaude.Action = ActionUninstall
+	dropClaude.Agents = []string{"claude"}
+	removed, err := Run(ctx, dropClaude)
+	if err != nil || removed.Outcome != "completed" {
+		t.Fatalf("remove claude: %+v %v", removed, err)
+	}
+	both.Action = ActionUninstall
+	both.ExternalUninstalled = true
+	got, err := Run(ctx, both)
+	if err != nil || got.Outcome != "completed" {
+		t.Fatalf("remove both after one missing: %+v %v", got, err)
+	}
+	var claudeAbsent, codexRemoved bool
+	for _, target := range got.Targets {
+		if target.Unit != "agent-notify" {
+			continue
+		}
+		if target.Client == "claude" && target.Outcome == "unchanged" && target.Reason == "already_absent" {
+			claudeAbsent = true
+		}
+		if target.Client == "codex" && target.Outcome == "completed" {
+			codexRemoved = true
+		}
+	}
+	if !claudeAbsent || !codexRemoved {
+		t.Fatalf("mixed remove targets: %+v", got.Targets)
+	}
+}
+
 func TestWizardReinstallRetainsInstallation(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, _, _ := managedRuntime(t)
