@@ -412,7 +412,26 @@ func (m Materializer) SwitchRetained(ctx context.Context, req MaterializeRequest
 	if got.Outcome != uapinstaller.OutcomeCompleted && got.Outcome != uapinstaller.OutcomeUnchanged {
 		return fmt.Errorf("%w: %s", ErrPreflight, got.Reason)
 	}
-	return nil
+	view, inspectErr := eng.Inspect(ctx)
+	if inspectErr != nil {
+		return inspectErr
+	}
+	for _, installation := range view.Installations {
+		if installation.InstallationID != req.Identity.InstallationID {
+			continue
+		}
+		if got.Binding.TreeDigest != "" && installation.TreeDigest != got.Binding.TreeDigest {
+			return fmt.Errorf("%w: retained source %s desired %s", ErrPreflight, installation.TreeDigest, got.Binding.TreeDigest)
+		}
+		if installation.TreeDigest == "" {
+			return fmt.Errorf("%w: retained source digest is missing after switch", ErrPreflight)
+		}
+		if len(installation.Bindings) != 0 {
+			return fmt.Errorf("%w: retained switch materialized a client", ErrPreflight)
+		}
+		return nil
+	}
+	return fmt.Errorf("%w: installation %s", ErrPreflight, req.Identity.InstallationID)
 }
 
 func IsUpdateRequired(err error) bool {

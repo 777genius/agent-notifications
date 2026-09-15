@@ -93,7 +93,7 @@ func (e *Engine) prepareUpdate(ctx context.Context, req Request) (*PreparedOpera
 		return nil, err
 	}
 	return e.prepareMutatingPackage(ctx, req, OpUpdate, true, func(svc usecase.Service, in usecase.AddInput) (usecase.AddResult, error) {
-		return svc.Update(ctx, in)
+		return e.updateWithCompatibility(ctx, svc, req, in)
 	})
 }
 

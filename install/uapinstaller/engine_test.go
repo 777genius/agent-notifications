@@ -1241,6 +1241,19 @@ func TestSwitchRetainedCopiedPackageWithNewDigest(t *testing.T) {
 	if len(view.Installations[0].Bindings) != 0 {
 		t.Fatalf("switch materialized a client: %+v", view.Installations[0].Bindings)
 	}
+	again, err := eng.SwitchRetained(ctx, Request{
+		PackageRoot: other, InstallationID: id, OperationID: "retained-switch-again",
+	}, Decision{Confirmed: true})
+	if err != nil || again.Outcome != OutcomeCompleted {
+		t.Fatalf("idempotent switch: %+v %v", again, err)
+	}
+	if again.Binding.TreeDigest != switched.Binding.TreeDigest {
+		t.Fatalf("idempotent digest: %s vs %s", again.Binding.TreeDigest, switched.Binding.TreeDigest)
+	}
+	view, err = eng.Inspect(ctx)
+	if err != nil || view.Installations[0].TreeDigest != again.Binding.TreeDigest {
+		t.Fatalf("inspect after idempotent switch: %+v %v", view, err)
+	}
 	added, err := eng.Prepare(ctx, Request{
 		Operation: OpInstall, PackageRoot: other, ClientID: "codex", ClientConfigRoot: config,
 		ClientExecutable: probe, InstallationID: id, OperationID: "retained-switch-add",
@@ -1494,6 +1507,13 @@ func TestUpdateOneClientKeepsSibling(t *testing.T) {
 	}
 	if !clients["codex"] || !clients["claude"] {
 		t.Fatalf("sibling lost: %+v", view.Installations[0].Bindings)
+	}
+	profiles := map[string]string{}
+	for _, binding := range view.Installations[0].Bindings {
+		profiles[binding.ClientID] = binding.Profile
+	}
+	if profiles["codex"] != codexConfig || profiles["claude"] != claudeConfig {
+		t.Fatalf("sibling profiles: %+v", profiles)
 	}
 	if view.Installations[0].InstallationID != id {
 		t.Fatalf("installation id: %s", view.Installations[0].InstallationID)

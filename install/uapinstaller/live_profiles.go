@@ -11,16 +11,40 @@ import (
 const LiveProfilesFile = "live-profiles.json"
 
 func liveProfile(dataRoot, clientID string) string {
-	if dataRoot == "" || clientID == "" {
-		return ""
-	}
-	body, err := os.ReadFile(filepath.Join(dataRoot, LiveProfilesFile))
-	if err != nil {
-		return ""
-	}
-	var profiles map[string]string
-	if json.Unmarshal(body, &profiles) != nil {
+	profiles := readLiveProfiles(dataRoot)
+	if profiles == nil {
 		return ""
 	}
 	return profiles[clientID]
+}
+
+func storeLiveProfile(dataRoot, clientID, profile string) error {
+	if dataRoot == "" || clientID == "" || profile == "" {
+		return nil
+	}
+	profiles := readLiveProfiles(dataRoot)
+	if profiles == nil {
+		profiles = map[string]string{}
+	}
+	profiles[clientID] = filepath.Clean(profile)
+	body, err := json.Marshal(profiles)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dataRoot, LiveProfilesFile), body, 0600)
+}
+
+func readLiveProfiles(dataRoot string) map[string]string {
+	if dataRoot == "" {
+		return nil
+	}
+	body, err := os.ReadFile(filepath.Join(dataRoot, LiveProfilesFile))
+	if err != nil {
+		return nil
+	}
+	var profiles map[string]string
+	if json.Unmarshal(body, &profiles) != nil {
+		return nil
+	}
+	return profiles
 }

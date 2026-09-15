@@ -1245,6 +1245,26 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 			out.Outcome, out.Reason = "incomplete", "portable_preflight_failed"
 			return out, err
 		}
+		state, loadErr := mat.Store.Load()
+		if loadErr != nil {
+			out.Outcome, out.Reason = "incomplete", loadErr.Error()
+			return out, loadErr
+		}
+		recorded := ""
+		for _, installation := range state.Installations {
+			if installation.InstallationID == id.InstallationID {
+				recorded = installation.Source.TreeDigest
+				if len(installation.Clients) != 0 {
+					out.Outcome, out.Reason = "incomplete", "retained_source_not_durable"
+					return out, fmt.Errorf("retained switch materialized a client")
+				}
+				break
+			}
+		}
+		if recorded == "" {
+			out.Outcome, out.Reason = "incomplete", "retained_source_not_durable"
+			return out, fmt.Errorf("retained source digest is missing after switch")
+		}
 		out.InstallationID = id.InstallationID
 		out.Outcome, out.Reason = "completed", "retained_source_updated"
 		reportProgress(req, "complete")

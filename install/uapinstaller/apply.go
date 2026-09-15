@@ -109,7 +109,7 @@ func (e *Engine) applyInstall(ctx context.Context, prepared *PreparedOperation) 
 
 func (e *Engine) applyUpdate(ctx context.Context, prepared *PreparedOperation) (Result, error) {
 	return e.applyMutatingPackage(ctx, prepared, func(svc usecase.Service, in usecase.AddInput) (usecase.AddResult, error) {
-		return svc.Update(ctx, in)
+		return e.updateWithCompatibility(ctx, svc, prepared.req, in)
 	})
 }
 
@@ -183,6 +183,7 @@ func (e *Engine) applyMutatingPackage(ctx context.Context, prepared *PreparedOpe
 		result.NoChange = true
 	} else if err == nil {
 		result.Outcome = OutcomeCompleted
+		_ = storeLiveProfile(result.Binding.DataRoot, result.Binding.ClientID, prepared.req.ClientConfigRoot)
 		e.report(ProgressCommit)
 		e.report(ProgressActivate)
 		e.report(ProgressVerify)
@@ -341,6 +342,71 @@ func (e *Engine) liveBinding(prepared *PreparedOperation) (Result, domain.Client
 		RequiredComponents: append([]string(nil), prepared.req.RequiredComponents...),
 	}
 	return result, binding, true
+}
+
+func (e *Engine) updateWithCompatibility(ctx context.Context, svc usecase.Service, req Request, in usecase.AddInput) (usecase.AddResult, error) {
+	checks := e.compatibilityChecks(req, in)
+	if len(checks) <= 1 {
+		return svc.Update(ctx, in)
+	}
+	got, err := svc.UpdateGroup(ctx, usecase.GroupInput{
+		Targets:             []usecase.AddInput{in},
+		CompatibilityChecks: checks,
+		OperationGroupID:    firstNonEmpty(req.OperationID, "update"),
+		DryRun:              in.DryRun,
+		Confirmed:           in.Confirmed,
+	})
+	if err != nil {
+		return usecase.AddResult{InstallationID: got.InstallationID}, err
+	}
+	for _, target := range got.Targets {
+		if target.Plan.ClientID == in.Client.ClientID || target.Plan.ClientID == domain.ClientID(req.ClientID) {
+			return target, nil
+		}
+	}
+	if len(got.Targets) > 0 {
+		return got.Targets[0], nil
+	}
+	return usecase.AddResult{InstallationID: got.InstallationID, Mutated: got.Mutated}, nil
+}
+
+func (e *Engine) compatibilityChecks(req Request, target usecase.AddInput) []usecase.AddInput {
+	if req.InstallationID == "" {
+		return []usecase.AddInput{target}
+	}
+	state, err := e.store.Load()
+	if err != nil {
+		return nil
+	}
+	installation, ok := findInstall(state, req.InstallationID)
+	if !ok {
+		return []usecase.AddInput{target}
+	}
+	var checks []usecase.AddInput
+	for _, binding := range installation.Clients {
+		if binding.Materialization == domain.MaterializationAbsent {
+			continue
+		}
+		configRoot := req.ClientConfigRoot
+		if binding.ClientID != req.ClientID {
+			receipt := installation.DataReceipts[binding.DataReceiptID]
+			configRoot = liveProfile(receipt.Locator, binding.ClientID)
+			if configRoot == "" {
+				return nil
+			}
+		}
+		client, err := detectedClient(Request{
+			Operation: OpUpdate, ClientID: binding.ClientID, ClientConfigRoot: configRoot,
+			ClientExecutable: req.ClientExecutable,
+		})
+		if err != nil {
+			return nil
+		}
+		check := target
+		check.Client = client
+		checks = append(checks, check)
+	}
+	return checks
 }
 
 func attachNextActions(result *Result) {

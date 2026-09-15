@@ -77,32 +77,86 @@ func (e *Engine) SwitchRetained(ctx context.Context, req Request, decision Decis
 		return Result{Outcome: OutcomeIncomplete, Reason: err.Error()}, err
 	}
 	e.report(ProgressPreflight)
-	svc := e.lifecycle(nil, BindingFacts{})
-	got, err := svc.SwitchRetained(ctx, usecase.BindingChangeInput{
-		Selector: req.InstallationID, Envelope: envelope, Confirmed: true,
-	}, domain.OriginModeDirect, nil)
-	if err != nil {
-		reason := err.Error()
-		if strings.Contains(reason, "active installation switch requires SwitchGroup") {
-			return Result{Outcome: OutcomeConflict, Reason: "active_installation"}, fmt.Errorf("%w: %v", ErrUnsupported, err)
+	saveErr := e.persistRetainedSource(ctx, req.InstallationID, envelope)
+	recorded, digestErr := e.recordedTreeDigest(ctx, req.InstallationID)
+	if saveErr != nil {
+		if digestErr == nil && recorded == snapshot.TreeDigest {
+			saveErr = e.persistRetainedSource(ctx, req.InstallationID, envelope)
+			recorded, digestErr = e.recordedTreeDigest(ctx, req.InstallationID)
+			if saveErr == nil && digestErr == nil && recorded == snapshot.TreeDigest {
+				return e.retainedSourceUpdated(req, recorded), nil
+			}
 		}
-		if strings.Contains(reason, "preserve manifest identity") {
-			return Result{Outcome: OutcomeConflict, Reason: "package_identity"}, err
-		}
-		return Result{Outcome: OutcomeIncomplete, Reason: reason}, err
+		return switchRetainedError(req.InstallationID, saveErr)
 	}
-	result := Result{
+	if digestErr != nil || recorded != snapshot.TreeDigest {
+		if retryErr := e.persistRetainedSource(ctx, req.InstallationID, envelope); retryErr != nil {
+			if digestErr != nil {
+				return switchRetainedError(req.InstallationID, digestErr)
+			}
+			return switchRetainedError(req.InstallationID, retryErr)
+		}
+		recorded, digestErr = e.recordedTreeDigest(ctx, req.InstallationID)
+		if digestErr != nil || recorded != snapshot.TreeDigest {
+			reason := "retained_source_not_durable"
+			if digestErr != nil {
+				reason = digestErr.Error()
+			}
+			return Result{Operation: OpUpdate, InstallationID: req.InstallationID, Outcome: OutcomeIncomplete, Reason: reason}, fmt.Errorf("%w: %s", ErrIncomplete, reason)
+		}
+	}
+	return e.retainedSourceUpdated(req, recorded), nil
+}
+
+func (e *Engine) retainedSourceUpdated(req Request, digest string) Result {
+	e.report(ProgressCommit)
+	e.report(ProgressComplete)
+	return Result{
 		Operation: OpUpdate, InstallationID: req.InstallationID,
 		Outcome: OutcomeCompleted, Binding: BindingFacts{
-			InstallationID: req.InstallationID, TreeDigest: snapshot.TreeDigest,
+			InstallationID: req.InstallationID, TreeDigest: digest,
 			OperationID: req.OperationID,
 		},
 	}
-	if got.NoChange {
-		result.Outcome = OutcomeUnchanged
-		result.NoChange = true
+}
+
+func (e *Engine) persistRetainedSource(ctx context.Context, installationID string, envelope domain.PackageEnvelope) error {
+	_, err := e.lifecycle(nil, BindingFacts{}).SwitchRetained(ctx, usecase.BindingChangeInput{
+		Selector: installationID, Envelope: envelope, Confirmed: true,
+	}, domain.OriginModeDirect, nil)
+	return err
+}
+
+func (e *Engine) recordedTreeDigest(ctx context.Context, installationID string) (string, error) {
+	view, err := e.Inspect(ctx)
+	if err != nil || view.Recovery.Required {
+		reason := view.Recovery.Reason
+		if reason == "" && err != nil {
+			reason = err.Error()
+		}
+		if reason == "" {
+			reason = "pending transactions remain"
+		}
+		return "", fmt.Errorf("%w: %s", ErrRecoveryRequired, reason)
 	}
-	e.report(ProgressCommit)
-	e.report(ProgressComplete)
-	return result, nil
+	for _, installation := range view.Installations {
+		if installation.InstallationID == installationID {
+			return installation.TreeDigest, nil
+		}
+	}
+	return "", fmt.Errorf("%w: installation %s", ErrNotInstalled, installationID)
+}
+
+func switchRetainedError(installationID string, err error) (Result, error) {
+	reason := err.Error()
+	if strings.Contains(reason, "active installation switch requires SwitchGroup") {
+		return Result{Outcome: OutcomeConflict, Reason: "active_installation"}, fmt.Errorf("%w: %v", ErrUnsupported, err)
+	}
+	if strings.Contains(reason, "preserve manifest identity") {
+		return Result{Outcome: OutcomeConflict, Reason: "package_identity"}, err
+	}
+	if strings.Contains(reason, "already bound to installation") {
+		return Result{Outcome: OutcomeConflict, Reason: "source_collision"}, err
+	}
+	return Result{Operation: OpUpdate, InstallationID: installationID, Outcome: OutcomeIncomplete, Reason: reason}, err
 }
