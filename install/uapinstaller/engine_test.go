@@ -130,6 +130,40 @@ func TestPrepareUnknownAndGroupOperationsDoNotMutate(t *testing.T) {
 	}
 }
 
+func TestPrepareGroupMixedPackageRootsUnpublished(t *testing.T) {
+	ctx := testCtx(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{StateRoot: filepath.Join(base, "uap")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	codexConfig := filepath.Join(base, "codex-config")
+	claudeConfig := filepath.Join(base, "claude-config")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err = eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: filepath.Join(base, "package-a"),
+		InstallationID: "00000000-0000-4000-8000-0000000000b8", OperationID: "mixed-roots",
+		ClientExecutable: filepath.Join(base, "probe"),
+		Targets: []ClientTarget{
+			{ClientID: "codex", ClientConfigRoot: codexConfig, PackageRoot: filepath.Join(base, "package-a")},
+			{ClientID: "claude", ClientConfigRoot: claudeConfig, PackageRoot: filepath.Join(base, "package-b")},
+		},
+	})
+	if !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("mixed package roots: %v", err)
+	}
+	if _, err := os.Lstat(eng.cfg.StateFile); !os.IsNotExist(err) {
+		t.Fatal("mixed package roots created state")
+	}
+}
+
 func TestNewRejectsWindowsUNCStateRoot(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("UNC volume names are a Windows path form")
