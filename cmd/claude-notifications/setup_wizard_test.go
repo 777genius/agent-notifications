@@ -701,6 +701,68 @@ func TestSetupWizardTTYAddSecondClientKeepProposesDefaultsE2E(t *testing.T) {
 	}
 }
 
+func TestSetupWizardTTYKeepBoundMixedDoesNotMutateE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	envHome := t.TempDir()
+	testenv.Set(t, envHome)
+	canonical := filepath.Join(envHome, "fixture-config.json")
+	if err := os.WriteFile(canonical, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENT_NOTIFICATIONS_CONFIG", canonical)
+	env := newWizardCLIEnv(t, ctx, false)
+	bundle := writeWizardPluginBundle(t)
+	shared := []string{
+		"--agents", "claude,codex", "--package", env.pkg, "--plugin-root", bundle,
+		"--control-root", env.control, "--runtime-root", env.runtime,
+		"--global-config", env.global,
+		"--codex-home", env.codexHome, "--claude-config", env.claudeConfig,
+		"--claude-executable", env.probe, "--codex-executable", env.probe,
+		"--helper", env.probe, "--scope-root", env.scope,
+	}
+	var out bytes.Buffer
+	install := append([]string{
+		"--action", "install", "--claude-hooks", "false", "--codex-hooks", "true",
+		"--claude-agent-notify", "true", "--codex-agent-notify", "true", "--yes", "--json",
+	}, shared...)
+	if code := executeSetupWizardWith(ctx, install, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("bound mixed install: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "completed" {
+		t.Fatalf("bound mixed install result: %+v", got)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, shared, &out, io.Discard, strings.NewReader("2\n1\n"), true); code != 0 || !strings.Contains(out.String(), "cancelled") {
+		t.Fatalf("bound mixed keep: %d %s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "differ per client") || !strings.Contains(out.String(), "claude: hooks=false agent-notify=true") || !strings.Contains(out.String(), "codex: hooks=true agent-notify=true") {
+		t.Fatalf("bound mixed hid live units: %s", out.String())
+	}
+	if strings.Contains(out.String(), "[y/N]") {
+		t.Fatalf("bound mixed keep asked confirm: %s", out.String())
+	}
+	out.Reset()
+	inspect := append([]string{"--action", "inspect", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, inspect, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect after bound keep: %d %s", code, out.String())
+	}
+	view := decodeWizardJSON(t, out)
+	saw := map[string]string{}
+	for _, target := range view.Targets {
+		saw[target.Client+"/"+target.Unit] = target.Outcome
+	}
+	if saw["claude/agent-notify"] != "installed" || saw["codex/agent-notify"] != "installed" {
+		t.Fatalf("notify after bound keep: %+v", view.Targets)
+	}
+	if saw["codex/hooks"] != "installed" {
+		t.Fatalf("codex hooks after bound keep: %+v", view.Targets)
+	}
+	if saw["claude/hooks"] == "installed" {
+		t.Fatalf("claude hooks appeared after bound keep: %+v", view.Targets)
+	}
+}
+
 func TestSetupWizardTTYUpdateRepairOmittedKeepsMixedE2E(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()

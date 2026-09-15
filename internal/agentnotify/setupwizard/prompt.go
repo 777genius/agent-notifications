@@ -259,6 +259,9 @@ func FillInteractive(ctx context.Context, req Request, p Prompter, existing func
 				}
 				applyLiveClientFlags(&req, live)
 				req.Agents = unboundInstallAgents(req)
+				if len(req.Agents) == 0 {
+					return req, ErrPromptCanceled
+				}
 			} else {
 				req.Hooks = boolPtr(hooks)
 				req.AgentNotify = boolPtr(notify)
@@ -324,6 +327,7 @@ func applyLiveClientFlags(req *Request, live []ClientUnits) {
 
 // unboundInstallAgents keeps a mixed TTY "keep current" Install from
 // reinstalling already-bound clients when the selection also adds a new one.
+// All-bound keep returns no agents so FillInteractive can cancel as a no-op.
 // LiveSetupClients is the source of truth; the existing() callback is not,
 // because tests may report a subset while LiveUnits lists every selected client.
 func unboundInstallAgents(req Request) []string {
@@ -339,9 +343,6 @@ func unboundInstallAgents(req Request) []string {
 		if !bound[agent] {
 			unbound = append(unbound, agent)
 		}
-	}
-	if len(unbound) == 0 {
-		return req.Agents
 	}
 	return unbound
 }
