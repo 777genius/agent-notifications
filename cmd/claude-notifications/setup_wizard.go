@@ -53,7 +53,7 @@ installation is offered inspect, add/reinstall, uninstall, update, or repair.
   --installation-id ID
   --mcp-config PATH           Owned Codex MCP config to hand off (repeat not supported; use --claude-mcp-config)
   --claude-mcp-config PATH
-Update and repair require an existing owned binding; missing files remain repairable. Two Claude+Codex notify installs when both are unbound or both already live, and update/repair of two live bindings, use one group apply. Mixed Codex uninstall still needs --external-uninstalled before Claude is removed with it.
+Update and repair require an existing owned binding; missing files remain repairable. Two Claude+Codex notify installs when both are unbound, and update/repair of two live same-revision bindings, use one group apply. Install onto mixed live revisions requires Update of the behind sibling, not group Add. Mixed Codex uninstall still needs --external-uninstalled before Claude is removed with it.
 `
 
 func executeSetupWizard(ctx context.Context, args []string, out io.Writer) int {
