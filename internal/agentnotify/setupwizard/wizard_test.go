@@ -53,11 +53,7 @@ func main() { json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true}) }
 `), 0600); err != nil {
 		t.Fatal(err)
 	}
-	name := "probe"
-	if runtime.GOOS == "windows" {
-		name = "probe.exe"
-	}
-	out := filepath.Join(dir, name)
+	out := filepath.Join(dir, "probe")
 	cmd := exec.Command("go", "build", "-o", out, src)
 	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
 	if body, err := cmd.CombinedOutput(); err != nil {
@@ -2480,9 +2476,11 @@ func TestWizardTTYAddSecondClientKeepProposesNewDefaults(t *testing.T) {
 	if !strings.Contains(promptOut.String(), "codex: hooks=true agent-notify=true") || !strings.Contains(promptOut.String(), "claude: hooks=false agent-notify=true") {
 		t.Fatalf("unbound codex shown as live-off: %s", promptOut.String())
 	}
+	if strings.Join(filled.Agents, ",") != "codex" {
+		t.Fatalf("keep reinstalls bound client: %v", filled.Agents)
+	}
 	add := filled
 	add.Yes = true
-	add.Agents = []string{"codex"}
 	added, err := Run(ctx, add)
 	if err != nil || added.Outcome != "completed" {
 		t.Fatalf("add: %+v %v", added, err)
@@ -4338,11 +4336,7 @@ func writeCodexListStub(t *testing.T, dir, listJSON string) string {
 	if err := os.WriteFile(src, []byte(code), 0600); err != nil {
 		t.Fatal(err)
 	}
-	name := "codex-stub"
-	if runtime.GOOS == "windows" {
-		name += ".exe"
-	}
-	path := filepath.Join(dir, name)
+	path := filepath.Join(dir, "codex-stub")
 	cmd := exec.Command("go", "build", "-o", path, src)
 	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
 	if body, err := cmd.CombinedOutput(); err != nil {
@@ -4358,20 +4352,11 @@ func TestDiscoverAgentsReportsPresenceWithoutExecuting(t *testing.T) {
 	}
 	binDir := t.TempDir()
 	marker := filepath.Join(t.TempDir(), "executed")
-	name := "claude"
-	body := "#!/bin/sh\ntouch " + marker + "\n"
-	if runtime.GOOS == "windows" {
-		name = "claude.bat"
-		body = "@echo off\r\necho.>" + marker + "\r\n"
-	}
-	path := filepath.Join(binDir, name)
-	if err := os.WriteFile(path, []byte(body), 0700); err != nil {
+	path := filepath.Join(binDir, "claude")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\ntouch "+marker+"\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir)
-	if runtime.GOOS == "windows" {
-		t.Setenv("PATHEXT", ".BAT;.COM;.EXE")
-	}
 	got := DiscoverAgents(Request{ControlRoot: control})
 	if _, err := os.Lstat(marker); !os.IsNotExist(err) {
 		t.Fatal("discover executed PATH candidate")

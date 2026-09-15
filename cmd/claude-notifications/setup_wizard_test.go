@@ -563,40 +563,16 @@ func TestSetupWizardTTYMixedAddKeepsPerClientUnits(t *testing.T) {
 	if code := executeSetupWizardWith(ctx, shared, &out, io.Discard, strings.NewReader("2\n1\nn\n"), true); code != 0 || !strings.Contains(out.String(), "cancelled") {
 		t.Fatalf("mixed tty keep: %d %s", code, out.String())
 	}
-	if !strings.Contains(out.String(), "differ per client") || !strings.Contains(out.String(), "claude: hooks=false agent-notify=false") || !strings.Contains(out.String(), "codex: hooks=false agent-notify=true") {
+	if !strings.Contains(out.String(), "differ per client") || !strings.Contains(out.String(), "claude: hooks=true agent-notify=true") || !strings.Contains(out.String(), "codex: hooks=false agent-notify=true") {
 		t.Fatalf("mixed tty hid differences: %s", out.String())
 	}
 	if strings.Contains(out.String(), "Units: 1) Hooks") || strings.Contains(out.String(), "hooks=on") {
 		t.Fatalf("mixed tty collapsed omission: %s", out.String())
 	}
-	if !strings.Contains(out.String(), "hooks=per-client") || !strings.Contains(out.String(), "claude-agent-notify=false") || !strings.Contains(out.String(), "codex-agent-notify=true") {
+	if !strings.Contains(out.String(), "hooks=per-client") || !strings.Contains(out.String(), "agents=claude") || !strings.Contains(out.String(), "claude-agent-notify=true") || !strings.Contains(out.String(), "codex-agent-notify=true") {
 		t.Fatalf("mixed tty plan: %s", out.String())
 	}
-	out.Reset()
-	if code := executeSetupWizardWith(ctx, shared, &out, io.Discard, strings.NewReader("2\n1\ny\n"), true); code != 0 || !strings.Contains(out.String(), "completed") {
-		t.Fatalf("mixed tty keep run: %d %s", code, out.String())
-	}
-	out.Reset()
 	inspect := append([]string{"--action", "inspect", "--json"}, shared...)
-	if code := executeSetupWizardWith(ctx, inspect, &out, io.Discard, strings.NewReader(""), false); code != 0 {
-		t.Fatalf("inspect after keep: %d %s", code, out.String())
-	}
-	view := decodeWizardJSON(t, out)
-	var claudeMCP, codexMCP string
-	hooksInstalled := false
-	for _, target := range view.Targets {
-		switch {
-		case target.Unit == "agent-notify" && target.Client == "claude":
-			claudeMCP = target.Outcome
-		case target.Unit == "agent-notify" && target.Client == "codex":
-			codexMCP = target.Outcome
-		case target.Unit == "hooks" && target.Outcome == "installed":
-			hooksInstalled = true
-		}
-	}
-	if claudeMCP == "installed" || codexMCP != "installed" || hooksInstalled {
-		t.Fatalf("keep mutated mixed units: %+v", view.Targets)
-	}
 	out.Reset()
 	if code := executeSetupWizardWith(ctx, shared, &out, io.Discard, strings.NewReader("3\n3\nn\n"), true); !strings.Contains(out.String(), "differ per client") || strings.Contains(out.String(), "Units: 1) Hooks") {
 		t.Fatalf("mixed uninstall tty: %d %s", code, out.String())
@@ -615,8 +591,9 @@ func TestSetupWizardTTYMixedAddKeepsPerClientUnits(t *testing.T) {
 	if code := executeSetupWizardWith(ctx, inspect, &out, io.Discard, strings.NewReader(""), false); code != 0 {
 		t.Fatalf("inspect after uninstall keep: %d %s", code, out.String())
 	}
-	view = decodeWizardJSON(t, out)
-	claudeMCP, codexMCP, hooksInstalled = "", "", false
+	view := decodeWizardJSON(t, out)
+	var claudeMCP, codexMCP string
+	hooksInstalled := false
 	for _, target := range view.Targets {
 		switch {
 		case target.Unit == "agent-notify" && target.Client == "claude":
@@ -629,6 +606,98 @@ func TestSetupWizardTTYMixedAddKeepsPerClientUnits(t *testing.T) {
 	}
 	if claudeMCP == "installed" || codexMCP != "installed" || hooksInstalled {
 		t.Fatalf("uninstall keep mutated mixed units: %+v", view.Targets)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, shared, &out, io.Discard, strings.NewReader("2\n1\ny\n"), true); code != 0 || !strings.Contains(out.String(), "completed") {
+		t.Fatalf("mixed tty keep run: %d %s", code, out.String())
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, inspect, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect after keep add: %d %s", code, out.String())
+	}
+	view = decodeWizardJSON(t, out)
+	claudeMCP, codexMCP, hooksInstalled = "", "", false
+	for _, target := range view.Targets {
+		switch {
+		case target.Unit == "agent-notify" && target.Client == "claude":
+			claudeMCP = target.Outcome
+		case target.Unit == "agent-notify" && target.Client == "codex":
+			codexMCP = target.Outcome
+		case target.Unit == "hooks" && target.Outcome == "installed":
+			hooksInstalled = true
+		}
+	}
+	if claudeMCP != "installed" || codexMCP != "installed" || hooksInstalled {
+		t.Fatalf("keep did not add unbound claude: %+v", view.Targets)
+	}
+}
+
+func TestSetupWizardTTYAddSecondClientKeepProposesDefaultsE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	envHome := t.TempDir()
+	testenv.Set(t, envHome)
+	canonical := filepath.Join(envHome, "fixture-config.json")
+	if err := os.WriteFile(canonical, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENT_NOTIFICATIONS_CONFIG", canonical)
+	env := newWizardCLIEnv(t, ctx, false)
+	bundle := writeWizardPluginBundle(t)
+	claude := []string{
+		"--agents", "claude", "--package", env.pkg, "--plugin-root", bundle,
+		"--control-root", env.control, "--runtime-root", env.runtime,
+		"--global-config", env.global, "--claude-config", env.claudeConfig,
+		"--claude-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+	}
+	both := []string{
+		"--agents", "claude,codex", "--package", env.pkg, "--plugin-root", bundle,
+		"--control-root", env.control, "--runtime-root", env.runtime,
+		"--global-config", env.global,
+		"--codex-home", env.codexHome, "--claude-config", env.claudeConfig,
+		"--claude-executable", env.probe, "--codex-executable", env.probe,
+		"--helper", env.probe, "--scope-root", env.scope,
+	}
+	var out bytes.Buffer
+	install := append([]string{"--action", "install", "--hooks", "false", "--yes", "--json"}, claude...)
+	if code := executeSetupWizardWith(ctx, install, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("claude notify-only: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "completed" {
+		t.Fatalf("claude notify-only result: %+v", got)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, both, &out, io.Discard, strings.NewReader("2\n1\nn\n"), true); code != 0 || !strings.Contains(out.String(), "cancelled") {
+		t.Fatalf("add keep cancel: %d %s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "differ per client") || !strings.Contains(out.String(), "claude: hooks=false agent-notify=true") || !strings.Contains(out.String(), "codex: hooks=true agent-notify=true") {
+		t.Fatalf("add keep hid new defaults: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "agents=codex") {
+		t.Fatalf("add keep still planned bound claude: %s", out.String())
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, both, &out, io.Discard, strings.NewReader("2\n1\ny\n"), true); code != 0 || !strings.Contains(out.String(), "completed") {
+		t.Fatalf("add keep run: %d %s", code, out.String())
+	}
+	out.Reset()
+	inspect := append([]string{"--action", "inspect", "--json"}, both...)
+	if code := executeSetupWizardWith(ctx, inspect, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect after add: %d %s", code, out.String())
+	}
+	view := decodeWizardJSON(t, out)
+	saw := map[string]string{}
+	for _, target := range view.Targets {
+		saw[target.Client+"/"+target.Unit] = target.Outcome
+	}
+	if saw["claude/agent-notify"] != "installed" || saw["codex/agent-notify"] != "installed" {
+		t.Fatalf("notify after add: %+v", view.Targets)
+	}
+	if saw["codex/hooks"] != "installed" {
+		t.Fatalf("codex hooks after add: %+v", view.Targets)
+	}
+	if saw["claude/hooks"] == "installed" {
+		t.Fatalf("claude hooks appeared after add: %+v", view.Targets)
 	}
 }
 

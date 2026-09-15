@@ -250,6 +250,19 @@ func TestFillInteractiveKeepsMixedLiveUnits(t *testing.T) {
 	if strings.Contains(out.String(), "Units: 1) Hooks") {
 		t.Fatalf("mixed collapsed to one bool: %s", out.String())
 	}
+	if strings.Join(got.Agents, ",") != "claude,codex" {
+		t.Fatalf("keep without control-root dropped agents: %v", got.Agents)
+	}
+}
+
+func TestUnboundInstallAgentsLeavesSelectionWithoutControlRoot(t *testing.T) {
+	got := unboundInstallAgents(Request{Agents: []string{"claude", "codex"}})
+	if strings.Join(got, ",") != "claude,codex" {
+		t.Fatalf("empty control: %v", got)
+	}
+	if got := unboundInstallAgents(Request{}); len(got) != 0 {
+		t.Fatalf("empty agents: %v", got)
+	}
 }
 
 func TestFillInteractiveMixedUnitsExplicitBoth(t *testing.T) {
