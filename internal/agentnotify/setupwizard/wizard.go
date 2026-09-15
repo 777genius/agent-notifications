@@ -391,6 +391,10 @@ func evaluate(ctx context.Context, req *Request, requireYes bool) evaluated {
 		runtimeRoot = snap.Ledger.RuntimeRoot
 	}
 	if !explicitAbs(runtimeRoot) {
+		if req.RuntimeRoot == "" && snap.Ledger.RuntimeRoot == "" {
+			out.Outcome, out.Reason = "incomplete", "managed_runtime_required"
+			return evaluated{out: out, err: err, stop: true}
+		}
 		out.Outcome, out.Reason = "invalid", "runtime_root_required"
 		return evaluated{out: out, err: ErrRefused, stop: true}
 	}
