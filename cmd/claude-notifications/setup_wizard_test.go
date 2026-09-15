@@ -3,6 +3,7 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +22,7 @@ import (
 
 	"github.com/777genius/agent-notifications/install/uapinstaller"
 	"github.com/777genius/agent-notifications/internal/agentnotify/clientsetup"
+	"github.com/777genius/agent-notifications/internal/agentnotify/portableasset"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portablesetup"
 	"github.com/777genius/agent-notifications/internal/agentnotify/registration"
 	"github.com/777genius/agent-notifications/internal/agentnotify/setupwizard"
@@ -1674,6 +1677,224 @@ func TestSetupWizardRepairOmittedUnitsPreservesNotifyE2E(t *testing.T) {
 		if item.Unit == "hooks" && item.Outcome != "absent" && item.Outcome != "" {
 			t.Fatalf("omitted repair added hooks: %+v", repaired.Targets)
 		}
+	}
+}
+
+func TestSetupWizardInstallFromReleaseZipE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	pkg := filepath.Join(env.root, "release-pkg")
+	archive := filepath.Join(env.root, portableasset.AssetName(runtime.GOOS, runtime.GOARCH))
+	if _, err := portableasset.Build(portableasset.BuildRequest{
+		Version: "1.43.0", GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
+		Executable: env.probe, OutputRoot: pkg, Archive: archive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{
+		"--action", "install", "--agents", "codex", "--hooks", "false",
+		"--package", archive, "--control-root", env.control, "--runtime-root", env.runtime,
+		"--global-config", env.global, "--codex-home", env.codexHome,
+		"--client-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+		"--yes", "--json",
+	}
+	var out bytes.Buffer
+	if code := executeSetupWizardWith(ctx, args, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("zip install: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "completed" {
+		t.Fatalf("zip install: %+v", got)
+	}
+}
+
+func TestSetupWizardRefusesSymlinkPackageE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	link := filepath.Join(env.root, "package-link")
+	if err := os.Symlink(env.pkg, link); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{
+		"--action", "install", "--agents", "codex", "--hooks", "false",
+		"--package", link, "--control-root", env.control, "--runtime-root", env.runtime,
+		"--global-config", env.global, "--codex-home", env.codexHome,
+		"--client-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+		"--yes", "--json",
+	}
+	var out bytes.Buffer
+	if code := executeSetupWizardWith(ctx, args, &out, io.Discard, strings.NewReader(""), false); code != 1 {
+		t.Fatalf("symlink package exit: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Reason != "package_acquisition_failed" {
+		t.Fatalf("symlink package: %+v", got)
+	}
+}
+
+func TestSetupWizardRefusesUnsafeZipE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	archive := filepath.Join(env.root, "escape.zip")
+	f, err := os.Create(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := zip.NewWriter(f)
+	w, err := zw.Create("../escape.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("no")); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{
+		"--action", "install", "--agents", "codex", "--hooks", "false",
+		"--package", archive, "--control-root", env.control, "--runtime-root", env.runtime,
+		"--global-config", env.global, "--codex-home", env.codexHome,
+		"--client-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+		"--yes", "--json",
+	}
+	var out bytes.Buffer
+	if code := executeSetupWizardWith(ctx, args, &out, io.Discard, strings.NewReader(""), false); code != 1 {
+		t.Fatalf("unsafe zip exit: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Reason != "package_acquisition_failed" {
+		t.Fatalf("unsafe zip: %+v", got)
+	}
+	if _, err := os.Lstat(filepath.Join(env.root, "escape.txt")); !os.IsNotExist(err) {
+		t.Fatal("zip slip wrote outside dest")
+	}
+}
+
+func TestSetupWizardAmbiguousInstallationsConflictE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	shared := []string{
+		"--hooks", "false", "--package", env.pkg, "--control-root", env.control, "--runtime-root", env.runtime,
+		"--global-config", env.global, "--codex-home", env.codexHome, "--claude-config", env.claudeConfig,
+		"--claude-executable", env.probe, "--codex-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+	}
+	var out bytes.Buffer
+	first := append([]string{"--action", "install", "--agents", "codex", "--installation-id", "00000000-0000-4000-8000-000000000080", "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, first, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("first: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "completed" {
+		t.Fatalf("first: %+v", got)
+	}
+	other := filepath.Join(env.root, "other-package")
+	writeWizardPackage(t, other, env.probe)
+	if err := os.WriteFile(filepath.Join(other, "skills", "agent-notify", "SKILL.md"), []byte("---\nname: agent-notify\ndescription: Other installation\n---\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	secondShared := append([]string{}, shared...)
+	secondShared[3] = other
+	second := append([]string{"--action", "install", "--agents", "claude", "--installation-id", "00000000-0000-4000-8000-000000000081", "--yes", "--json"}, secondShared...)
+	if code := executeSetupWizardWith(ctx, second, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("second: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "completed" {
+		t.Fatalf("second: %+v", got)
+	}
+	out.Reset()
+	omitted := append([]string{"--action", "install", "--agents", "codex", "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, omitted, &out, io.Discard, strings.NewReader(""), false); code != 1 {
+		t.Fatalf("omitted install exit: %d %s", code, out.String())
+	}
+	got := decodeWizardJSON(t, out)
+	if got.Outcome != "conflict" || got.Reason != "ambiguous_installation" {
+		t.Fatalf("omitted install: %+v", got)
+	}
+	if len(got.NextActions) == 0 || got.NextActions[0].Kind != "inspect" {
+		t.Fatalf("inspect action: %+v", got.NextActions)
+	}
+	out.Reset()
+	inspect := append([]string{"--action", "inspect", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, inspect, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect: %d %s", code, out.String())
+	}
+	if view := decodeWizardJSON(t, out); view.Outcome != "completed" {
+		t.Fatalf("inspect: %+v", view)
+	}
+	out.Reset()
+	uninstall := append([]string{"--action", "uninstall", "--agents", "codex", "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, uninstall, &out, io.Discard, strings.NewReader(""), false); code != 1 {
+		t.Fatalf("omitted uninstall exit: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "conflict" || got.Reason != "ambiguous_installation" {
+		t.Fatalf("omitted uninstall: %+v", got)
+	}
+	out.Reset()
+	explicit := append([]string{"--action", "uninstall", "--agents", "codex", "--installation-id", "00000000-0000-4000-8000-000000000080", "--yes", "--json", "--external-uninstalled"}, shared...)
+	if code := executeSetupWizardWith(ctx, explicit, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("explicit uninstall: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "completed" {
+		t.Fatalf("explicit uninstall: %+v", got)
+	}
+}
+
+func TestSetupWizardCodexLiveProfileConflictE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	other := filepath.Join(env.root, "codex-other")
+	if err := os.MkdirAll(other, 0700); err != nil {
+		t.Fatal(err)
+	}
+	flags := func(home, action string, extra ...string) []string {
+		args := []string{
+			"--action", action, "--agents", "codex", "--hooks", "false",
+			"--package", env.pkg, "--control-root", env.control, "--runtime-root", env.runtime,
+			"--global-config", env.global, "--codex-home", home,
+			"--client-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+		}
+		return append(args, extra...)
+	}
+	var out bytes.Buffer
+	if code := executeSetupWizardWith(ctx, flags(env.codexHome, "install", "--yes", "--json"), &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("install: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "completed" {
+		t.Fatalf("install: %+v", got)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, flags(other, "install", "--yes", "--json"), &out, io.Discard, strings.NewReader(""), false); code != 1 {
+		t.Fatalf("mismatch install exit: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "conflict" || got.Reason != "live_profile_conflict" {
+		t.Fatalf("install mismatch: %+v", got)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, flags(other, "uninstall", "--yes", "--json", "--external-uninstalled"), &out, io.Discard, strings.NewReader(""), false); code != 1 {
+		t.Fatalf("mismatch uninstall exit: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "conflict" || got.Reason != "live_profile_conflict" {
+		t.Fatalf("uninstall mismatch: %+v", got)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, flags(env.codexHome, "uninstall", "--yes", "--json", "--external-uninstalled"), &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("matching uninstall: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "completed" {
+		t.Fatalf("matching uninstall: %+v", got)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, flags(other, "install", "--yes", "--json"), &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("reinstall other profile: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "completed" {
+		t.Fatalf("reinstall other profile: %+v", got)
 	}
 }
 
