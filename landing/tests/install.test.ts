@@ -1,20 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { command, detectTarget } from "../data/install.ts";
-test("verified bootstrap contract for each product and supported target", () => {
+test("one-line setup contract for each product and supported target", () => {
   for (const product of ["claude", "codex", "both"] as const)
     for (const target of ["macos", "linux", "windows"] as const) {
       const install = command(product, target, "install");
       assert.equal(command(product, target, "update"), install);
-      assert.match(install ?? "", /^\(\n  set -euo pipefail\n/);
-      assert.match(install ?? "", /\/releases\/latest/);
-      assert.match(install ?? "", /\/commits\/\$tag/);
-      assert.match(install ?? "", /\$commit\/bin/);
-      assert.match(install ?? "", /python3 -I -c/);
-      assert.ok((install ?? "").includes('v+"\\n"'));
-      assert.ok(!(install ?? "").includes('v+"\\\\n"'));
-      assert.match(install ?? "", new RegExp(`--product ${product}\\n\\)$`));
-      assert.doesNotMatch(install ?? "", /\/main\/bin\/bootstrap\.sh/);
+      assert.equal(
+        install,
+        `(set -o pipefail; curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/a8fbdc74ab418e6221fae2794d1dc9c3d8fc631d/bin/setup.sh | bash -s -- --product ${product})`,
+      );
       assert.equal(command(product, target, "configure"), null);
     }
   assert.equal(command("claude", "unknown", "install"), null);

@@ -39,17 +39,10 @@ Desktop notifications and sounds for **Claude Code and Codex CLI**. Know when a 
 Requires Claude Code and/or Codex CLI, plus **Python 3.6+** available as `python3`. On Windows, use **Git Bash with native Windows Python**.
 
 ```bash
-(
-  set -euo pipefail
-  repo=777genius/agent-notifications
-  tag=$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" | python3 -I -c 'import json,re,sys; v=json.load(sys.stdin).get("tag_name",""); re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)",v) or sys.exit("Invalid stable release tag"); sys.stdout.buffer.write((v+"\n").encode("ascii"))')
-  commit=$(curl -fsSL "https://api.github.com/repos/$repo/commits/$tag" | python3 -I -c 'import json,re,sys; v=json.load(sys.stdin).get("sha",""); re.fullmatch(r"[0-9a-f]{40}",v) or sys.exit("Invalid release commit"); sys.stdout.buffer.write((v+"\n").encode("ascii"))')
-  raw="https://raw.githubusercontent.com/$repo/$commit/bin"
-  curl -fsSL "$raw/bootstrap.sh" | env BOOTSTRAP_RELEASE_TAG="$tag" BOOTSTRAP_RELEASE_COMMIT="$commit" INSTALL_SCRIPT_URL="$raw/install.sh" bash
-)
+(set -o pipefail; curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/a8fbdc74ab418e6221fae2794d1dc9c3d8fc631d/bin/setup.sh | bash)
 ```
 
-The command resolves the latest stable release to its immutable commit before executing either installer script. Choose **Claude**, **Codex**, or **both**. For non-interactive setup, append `-s -- --product claude`, `codex`, or `both` after `bash` on the installer line.
+The command uses a commit-pinned setup loader and reports download failures. The small setup script resolves the latest stable release and downloads both installer scripts from its exact commit. Release lookup and validation happen automatically. Choose **Claude**, **Codex**, or **both**. For non-interactive setup, append `-s -- --product claude`, `codex`, or `both` after `bash`, before the closing `)`.
 
 - **Claude:** restart Claude Code.
 - **Codex:** restart Codex, open `/hooks`, then review and trust the installed hooks.

@@ -16,10 +16,6 @@ export const targets = [
 ] as const;
 export const intents = ["install", "update", "configure"] as const;
 export const repo = "https://github.com/777genius/agent-notifications";
-const tagParser =
-  'import json,re,sys; v=json.load(sys.stdin).get("tag_name",""); re.fullmatch(r"v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)",v) or sys.exit("Invalid stable release tag"); sys.stdout.buffer.write((v+"\\n").encode("ascii"))';
-const commitParser =
-  'import json,re,sys; v=json.load(sys.stdin).get("sha",""); re.fullmatch(r"[0-9a-f]{40}",v) or sys.exit("Invalid release commit"); sys.stdout.buffer.write((v+"\\n").encode("ascii"))';
 export function detectTarget(ua: string, touchPoints = 0): Target {
   const browser = Bowser.getParser(ua);
   if (
@@ -45,14 +41,5 @@ export function command(
 ): string | null {
   if (intent === "configure" || target === "unknown" || target === "manual")
     return null;
-  return [
-    "(",
-    "  set -euo pipefail",
-    "  repo=777genius/agent-notifications",
-    `  tag=$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" | python3 -I -c '${tagParser}')`,
-    `  commit=$(curl -fsSL "https://api.github.com/repos/$repo/commits/$tag" | python3 -I -c '${commitParser}')`,
-    '  raw="https://raw.githubusercontent.com/$repo/$commit/bin"',
-    `  curl -fsSL "$raw/bootstrap.sh" | env BOOTSTRAP_RELEASE_TAG="$tag" BOOTSTRAP_RELEASE_COMMIT="$commit" INSTALL_SCRIPT_URL="$raw/install.sh" bash -s -- --product ${product}`,
-    ")",
-  ].join("\n");
+  return `(set -o pipefail; curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/a8fbdc74ab418e6221fae2794d1dc9c3d8fc631d/bin/setup.sh | bash -s -- --product ${product})`;
 }
