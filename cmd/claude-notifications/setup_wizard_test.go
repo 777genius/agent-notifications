@@ -1694,6 +1694,67 @@ func TestSetupWizardUpdateOneClientKeepsSiblingE2E(t *testing.T) {
 	}
 }
 
+func TestSetupWizardUpdateRepairRemoveBothLiveClientsE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	shared := []string{
+		"--hooks", "false", "--package", env.pkg, "--control-root", env.control, "--runtime-root", env.runtime,
+		"--global-config", env.global, "--codex-home", env.codexHome, "--claude-config", env.claudeConfig,
+		"--claude-executable", env.probe, "--codex-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+	}
+	notify := func(result setupwizard.Result) map[string]string {
+		out := map[string]string{}
+		for _, target := range result.Targets {
+			if target.Unit == "agent-notify" {
+				out[target.Client] = target.Outcome
+			}
+		}
+		return out
+	}
+	run := func(t *testing.T, name string, args []string) setupwizard.Result {
+		t.Helper()
+		var out bytes.Buffer
+		if code := executeSetupWizardWith(ctx, args, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+			t.Fatalf("%s: %d %s", name, code, out.String())
+		}
+		got := decodeWizardJSON(t, out)
+		if got.Outcome != "completed" {
+			t.Fatalf("%s: %+v", name, got)
+		}
+		return got
+	}
+	installed := run(t, "install both", append([]string{"--action", "install", "--agents", "claude,codex", "--yes", "--json"}, shared...))
+	if err := os.WriteFile(filepath.Join(env.pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	updated := run(t, "update both", append([]string{"--action", "update", "--agents", "claude,codex", "--yes", "--json"}, shared...))
+	if updated.InstallationID != installed.InstallationID {
+		t.Fatalf("update changed installation: install=%s update=%s", installed.InstallationID, updated.InstallationID)
+	}
+	repaired := run(t, "repair both", append([]string{"--action", "repair", "--agents", "claude,codex", "--yes", "--json"}, shared...))
+	if repaired.InstallationID != installed.InstallationID {
+		t.Fatalf("repair changed installation: install=%s repair=%s", installed.InstallationID, repaired.InstallationID)
+	}
+	var out bytes.Buffer
+	inspect := append([]string{"--action", "inspect", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, inspect, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect: %d %s", code, out.String())
+	}
+	both := notify(decodeWizardJSON(t, out))
+	if both["claude"] != "installed" || both["codex"] != "installed" {
+		t.Fatalf("group update/repair lost a client: %+v", both)
+	}
+	removed := run(t, "remove both", append([]string{"--action", "uninstall", "--agents", "claude,codex", "--yes", "--json", "--external-uninstalled"}, shared...))
+	if removed.InstallationID != "" && removed.InstallationID != installed.InstallationID {
+		t.Fatalf("remove changed installation: %+v", removed)
+	}
+	absent := notify(removed)
+	if absent["claude"] != "completed" || absent["codex"] != "completed" {
+		t.Fatalf("group remove targets: %+v", removed.Targets)
+	}
+}
+
 func TestSetupWizardInspectPendingJournalE2E(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
