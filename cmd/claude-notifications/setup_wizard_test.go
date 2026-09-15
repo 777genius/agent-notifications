@@ -944,6 +944,58 @@ func TestSetupWizardOmitsPackageInspectRepairUninstallE2E(t *testing.T) {
 	}
 }
 
+func TestSetupWizardTTYExistingOmitsActionE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	shared := []string{
+		"--agents", "codex", "--control-root", env.control, "--runtime-root", env.runtime,
+		"--global-config", env.global, "--codex-home", env.codexHome,
+		"--client-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+	}
+	var out bytes.Buffer
+	install := append([]string{"--action", "install", "--hooks", "false", "--package", env.pkg, "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, install, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("install: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "completed" {
+		t.Fatalf("install result: %+v", got)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, shared, &out, io.Discard, strings.NewReader("1\n"), true); code != 0 {
+		t.Fatalf("existing inspect: %d %s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "Existing agent-notify") {
+		t.Fatalf("existing action not offered: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "codex agent-notify: installed") {
+		t.Fatalf("existing inspect missed notify: %s", out.String())
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, shared, &out, io.Discard, strings.NewReader("3\n2\nn\n"), true); code != 0 || !strings.Contains(out.String(), "cancelled") {
+		t.Fatalf("existing uninstall cancel: %d %s", code, out.String())
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, shared, &out, io.Discard, strings.NewReader("4\nn\n"), true); code != 0 || !strings.Contains(out.String(), "cancelled") {
+		t.Fatalf("existing update cancel: %d %s", code, out.String())
+	}
+	out.Reset()
+	inspect := append([]string{"--action", "inspect", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, inspect, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect after cancels: %d %s", code, out.String())
+	}
+	view := decodeWizardJSON(t, out)
+	found := false
+	for _, target := range view.Targets {
+		if target.Unit == "agent-notify" && target.Outcome == "installed" {
+			found = true
+		}
+	}
+	if view.Outcome != "completed" || !found {
+		t.Fatalf("cancels mutated install: %+v", view)
+	}
+}
+
 func buildWizardProbe(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
