@@ -1113,6 +1113,91 @@ func TestWizardRepairDifferentDigestRequiresUpdate(t *testing.T) {
 	}
 }
 
+func TestWizardRepairOmittedUnitsPreservesNotifyOnly(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	statePath := filepath.Join(filepath.Dir(control), "uap", "state", "state-v2.json")
+	target := liveTargetPath(t, statePath, "codex")
+	if err := os.RemoveAll(target); err != nil {
+		t.Fatal(err)
+	}
+	req.Action = ActionRepair
+	req.Hooks = nil
+	req.AgentNotify = nil
+	got, err := Run(ctx, req)
+	if err != nil || got.Outcome != "completed" {
+		t.Fatalf("omitted-unit repair: %+v %v", got, err)
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("repair did not restore target: %v", err)
+	}
+	for _, item := range got.Targets {
+		if item.Unit == "hooks" && item.Outcome != "absent" && item.Outcome != "" {
+			t.Fatalf("omitted repair added hooks: %+v", got.Targets)
+		}
+	}
+}
+
+func TestWizardRepairExplicitNewHooksRequiresInstall(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off, on := false, true
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	req.Action = ActionRepair
+	req.Hooks = &on
+	got, err := Run(ctx, req)
+	if err == nil || got.Reason != "install_required" {
+		t.Fatalf("repair added hooks: %+v %v", got, err)
+	}
+	if len(got.NextActions) != 1 || got.NextActions[0].Kind != "install" {
+		t.Fatalf("repair missing install next action: %+v", got.NextActions)
+	}
+	plan, err := Plan(ctx, req)
+	if plan.Ready || plan.Result.Reason != "install_required" {
+		t.Fatalf("repair plan added hooks: %+v %v", plan, err)
+	}
+}
+
 func TestWizardUpdateOmittedUnitsPreservesNotifyOnly(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, _, _ := managedRuntime(t)
@@ -1422,6 +1507,40 @@ func TestWizardMixedPerClientOptOuts(t *testing.T) {
 		if fact.Permission != "unsupported" || fact.Delivery != "not_verified" {
 			t.Fatalf("readiness mixed download with delivery: %+v", fact)
 		}
+	}
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	req.Action = ActionUpdate
+	req.Yes = true
+	req.Hooks = nil
+	req.AgentNotify = nil
+	req.ClaudeAgentNotify = nil
+	req.CodexAgentNotify = nil
+	got, err := Run(ctx, req)
+	if err != nil || got.Outcome != "completed" {
+		t.Fatalf("omitted mixed update: %+v %v", got, err)
+	}
+	req.Action = ActionInspect
+	req.Yes = false
+	view, err = Run(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claudeMCP, codexMCP = "", ""
+	var hooksInstalled bool
+	for _, target := range view.Targets {
+		switch {
+		case target.Unit == "agent-notify" && target.Client == "claude":
+			claudeMCP = target.Outcome
+		case target.Unit == "agent-notify" && target.Client == "codex":
+			codexMCP = target.Outcome
+		case target.Unit == "hooks" && target.Outcome == "installed":
+			hooksInstalled = true
+		}
+	}
+	if claudeMCP == "installed" || codexMCP != "installed" || hooksInstalled {
+		t.Fatalf("omitted mixed update changed units: %+v", view.Targets)
 	}
 }
 

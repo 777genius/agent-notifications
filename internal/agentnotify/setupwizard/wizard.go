@@ -404,6 +404,16 @@ func evaluate(ctx context.Context, req *Request, requireYes bool) evaluated {
 		out.Outcome, out.Reason = "cancelled", "empty_units"
 		return evaluated{agents: agents, snap: snap, runtimeRoot: runtimeRoot, out: out, stop: true}
 	}
+	if agent, missing := repairRequestsMissingHooks(*req, hookAgents); missing {
+		out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "hooks", Outcome: "incomplete", Reason: "install_required"})
+		out.Outcome, out.Reason = "incomplete", "install_required"
+		installReq := *req
+		installReq.Action = ActionInstall
+		out.NextActions = []NextAction{{
+			Kind: "install", Agents: []string{string(agent)}, Command: RetryCommand(installReq), Reason: "repair_does_not_add_units",
+		}}
+		return evaluated{agents: agents, snap: snap, runtimeRoot: runtimeRoot, out: out, err: ErrRefused, stop: true}
+	}
 	return evaluated{
 		agents: agents, snap: snap, runtimeRoot: runtimeRoot,
 		hookAgents: hookAgents, notifyAgents: notifyAgents, out: out,
@@ -2132,6 +2142,24 @@ func selectedUnits(req Request, agents []portable.Integration) (hooks, notify []
 		}
 	}
 	return hooks, notify
+}
+
+// repairRequestsMissingHooks reports a Codex hooks unit that repair would add.
+// Claude hooks are never managed by this wizard. A missing notify binding is
+// not_installed from requireLiveNotifyBindings, not this check.
+func repairRequestsMissingHooks(req Request, hookAgents []portable.Integration) (portable.Integration, bool) {
+	if req.Action != ActionRepair {
+		return "", false
+	}
+	for _, agent := range hookAgents {
+		if agent == portable.Claude {
+			continue
+		}
+		if !hooksManaged(req, agent) {
+			return agent, true
+		}
+	}
+	return "", false
 }
 
 // preserveLiveUnits keeps omitted update/repair unit flags on the currently
