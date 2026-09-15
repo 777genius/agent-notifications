@@ -1524,6 +1524,65 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 	}
 	reportProgress(req, "agent-notify")
 	generation := snap.Ledger.Generation
+	if canGroupRemove(mat, id, req, notifyAgents) {
+		dataRoots := make([]string, len(notifyAgents))
+		var reqs []portablesetup.MaterializeRequest
+		for i, agent := range notifyAgents {
+			dataRoots[i] = liveDataRoot(mat, id.InstallationID, string(agent))
+			reqs = append(reqs, portablesetup.MaterializeRequest{
+				Identity: id, Integration: agent, ExpectedGeneration: generation,
+				ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
+				OperationID:         wizardMutationID(req.Action, "group", generation),
+				ExternalUninstalled: req.ExternalUninstalled,
+				KeepReservation:     true,
+			})
+		}
+		got, err := mat.RemoveGroup(ctx, reqs)
+		if err != nil {
+			if conflict, handled := pendingIntentConflict(req, err, out); handled {
+				return conflict, err
+			}
+			if errors.Is(err, portablesetup.ErrExternalUninstall) {
+				return externalUninstallRequired(req, portable.Codex, out), err
+			}
+			out.Outcome, out.Reason = "incomplete", "portable_remove_failed"
+			return out, err
+		}
+		if len(got) != len(notifyAgents) {
+			out.Outcome, out.Reason = "incomplete", "portable_remove_failed"
+			return out, fmt.Errorf("group remove returned %d results", len(got))
+		}
+		removed := 0
+		for i, agent := range notifyAgents {
+			if err := clearLiveProfile(dataRoots[i], string(agent)); err != nil {
+				out.Outcome, out.Reason = "incomplete", err.Error()
+				return out, err
+			}
+			if got[i].AlreadyAbsent {
+				out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "unchanged", Reason: "already_absent"})
+				continue
+			}
+			removed++
+			out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "completed"})
+		}
+		generation, err = rereadGeneration(req.ControlRoot)
+		if err != nil {
+			out.Outcome, out.Reason = "incomplete", err.Error()
+			return out, err
+		}
+		out.Generation = generation
+		if removed == 0 {
+			if out.Reason == "" {
+				out.Reason = "already_absent"
+			}
+			out.Outcome = "unchanged"
+			reportProgress(req, "complete")
+			return out, nil
+		}
+		out.Outcome = "completed"
+		reportProgress(req, "complete")
+		return out, nil
+	}
 	removed := 0
 	for _, agent := range notifyAgents {
 		if agent == portable.Codex && !req.ExternalUninstalled {
@@ -1928,6 +1987,18 @@ func canGroupNotify(mat portablesetup.Materializer, id portablesetup.Identity, r
 	default:
 		return false
 	}
+}
+
+func canGroupRemove(mat portablesetup.Materializer, id portablesetup.Identity, req Request, agents []portable.Integration) bool {
+	if req.Action != ActionUninstall || len(agents) != 2 {
+		return false
+	}
+	for _, agent := range agents {
+		if agent == portable.Codex && !req.ExternalUninstalled && liveNotifyClient(mat, id.InstallationID, string(agent)) {
+			return false
+		}
+	}
+	return true
 }
 
 func retainedMetadataUpdate(mat portablesetup.Materializer, id portablesetup.Identity, action Action) bool {

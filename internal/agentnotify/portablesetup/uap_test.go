@@ -838,3 +838,152 @@ func TestUAPMaterializerApplyGroupRepeatUnchanged(t *testing.T) {
 		t.Fatalf("repeat group rebound: first=%+v again=%+v", first, again)
 	}
 }
+
+func TestUAPMaterializerRemoveGroupBothAndAlreadyAbsent(t *testing.T) {
+	codex, ledger := bindingFixture(t)
+	probe := buildProbe(t)
+	root := filepath.Dir(codex.ControlRoot)
+	pkg := filepath.Join(root, "package source with spaces")
+	writePackage(t, pkg, probe)
+	uapRoot := filepath.Join(root, "uap")
+	claudeConfig := filepath.Join(root, "home", "claude config")
+	codexConfig := filepath.Join(root, "home", "codex config")
+	for _, dir := range []string{claudeConfig, codexConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mat, err := NewMaterializer(UAPRoots{
+		StateFile:        filepath.Join(uapRoot, "state", "state-v2.json"),
+		LockFile:         filepath.Join(uapRoot, "state", "mutation.lock"),
+		OperationsDir:    filepath.Join(uapRoot, "state", "operations"),
+		PluginDataBase:   filepath.Join(uapRoot, "plugin data"),
+		ManagedRoot:      filepath.Join(uapRoot, "managed"),
+		HelperExecutable: probe,
+		ClaudeRunner:     listingRunner{configRoot: claudeConfig},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := Identity{
+		InstallationID: "00000000-0000-4000-8000-00000000009b",
+		ComponentID:    codex.ComponentID, Owner: codex.Owner, ScopeRoot: codex.ScopeRoot,
+		ControlRoot: codex.ControlRoot, GlobalConfig: codex.GlobalConfig, RuntimeRoot: codex.RuntimeRoot,
+		Primary: codex.Primary,
+	}
+	installed, err := mat.ApplyGroup(testCtx(t), []MaterializeRequest{
+		{
+			Identity: id, Integration: portable.Codex, ExpectedGeneration: ledger.Generation,
+			PackageRoot: pkg, ClientConfigRoot: codexConfig, ClientExecutable: probe,
+			OperationID: "portable-group-remove-install",
+		},
+		{
+			Identity: id, Integration: portable.Claude, ExpectedGeneration: ledger.Generation,
+			PackageRoot: pkg, ClientConfigRoot: claudeConfig, ClientExecutable: probe,
+			OperationID: "portable-group-remove-install",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	codexName, err := installed[0].Filename()
+	if err != nil {
+		t.Fatal(err)
+	}
+	claudeName, err := installed[1].Filename()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = mat.RemoveGroup(testCtx(t), []MaterializeRequest{
+		{
+			Identity: id, Integration: portable.Codex, HoldOnly: true,
+			ClientConfigRoot: codexConfig, ClientExecutable: probe,
+		},
+		{
+			Identity: id, Integration: portable.Claude,
+			ClientConfigRoot: claudeConfig, ClientExecutable: probe,
+		},
+	})
+	if err == nil || !errors.Is(err, ErrPreflight) {
+		t.Fatalf("hold-only group remove: %v", err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(codex.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := mat.RemoveGroup(testCtx(t), []MaterializeRequest{
+		{
+			Identity: id, Integration: portable.Codex, ExpectedGeneration: snap.Ledger.Generation,
+			ClientConfigRoot: codexConfig, ClientExecutable: probe, ExternalUninstalled: true,
+			OperationID: "portable-group-remove",
+		},
+		{
+			Identity: id, Integration: portable.Claude, ExpectedGeneration: snap.Ledger.Generation,
+			ClientConfigRoot: claudeConfig, ClientExecutable: probe,
+			OperationID: "portable-group-remove",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].AlreadyAbsent || got[1].AlreadyAbsent {
+		t.Fatalf("group remove: %+v", got)
+	}
+	if _, err := portable.Acquire(testCtx(t), installed[0].DataRoot, codexName); err == nil {
+		t.Fatal("codex locator survived group remove")
+	}
+	if _, err := portable.Acquire(testCtx(t), installed[1].DataRoot, claudeName); err == nil {
+		t.Fatal("claude locator survived group remove")
+	}
+	if _, err := os.Stat(filepath.Join(codex.RuntimeRoot, codex.Primary)); err != nil {
+		t.Fatal("shared runtime removed")
+	}
+	installed, err = mat.ApplyGroup(testCtx(t), []MaterializeRequest{
+		{
+			Identity: id, Integration: portable.Codex,
+			PackageRoot: pkg, ClientConfigRoot: codexConfig, ClientExecutable: probe,
+			OperationID: "portable-group-remove-reinstall",
+		},
+		{
+			Identity: id, Integration: portable.Claude,
+			PackageRoot: pkg, ClientConfigRoot: claudeConfig, ClientExecutable: probe,
+			OperationID: "portable-group-remove-reinstall",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err = installruntime.ReadInstalledSnapshot(codex.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mat.Remove(testCtx(t), MaterializeRequest{
+		Identity: id, Integration: portable.Claude, ExpectedGeneration: snap.Ledger.Generation,
+		ClientConfigRoot: claudeConfig, ClientExecutable: probe,
+		OperationID: "portable-group-remove-claude",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	snap, err = installruntime.ReadInstalledSnapshot(codex.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = mat.RemoveGroup(testCtx(t), []MaterializeRequest{
+		{
+			Identity: id, Integration: portable.Claude, ExpectedGeneration: snap.Ledger.Generation,
+			ClientConfigRoot: claudeConfig, ClientExecutable: probe,
+			OperationID: "portable-group-remove-mixed",
+		},
+		{
+			Identity: id, Integration: portable.Codex, ExpectedGeneration: snap.Ledger.Generation,
+			ClientConfigRoot: codexConfig, ClientExecutable: probe, ExternalUninstalled: true,
+			OperationID: "portable-group-remove-mixed",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || !got[0].AlreadyAbsent || got[1].AlreadyAbsent {
+		t.Fatalf("mixed group remove: %+v", got)
+	}
+}

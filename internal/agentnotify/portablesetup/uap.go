@@ -68,6 +68,12 @@ type Materializer struct {
 	Roots  UAPRoots
 }
 
+// GroupRemoveResult is one client's outcome from RemoveGroup.
+type GroupRemoveResult struct {
+	Integration   portable.Integration
+	AlreadyAbsent bool
+}
+
 func (m Materializer) beginMutation(ctx context.Context, req *MaterializeRequest) (func(), error) {
 	release, err := installruntime.AcquireCoordinatorLease(ctx, req.Identity.ControlRoot)
 	if err != nil {
@@ -491,6 +497,147 @@ func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest)
 			}
 		}
 		out = append(out, pb)
+	}
+	return out, nil
+}
+
+func (m Materializer) RemoveGroup(ctx context.Context, reqs []MaterializeRequest) ([]GroupRemoveResult, error) {
+	if ctx == nil || len(reqs) != 2 {
+		return nil, ErrPreflight
+	}
+	for i := range reqs {
+		if err := m.validate(reqs[i], false); err != nil {
+			return nil, err
+		}
+		if reqs[i].HoldOnly {
+			return nil, fmt.Errorf("%w: group remove does not hold a Codex attestation", ErrPreflight)
+		}
+	}
+	if err := m.recoverOwnedJournals(ctx, reqs[0]); err != nil {
+		return nil, err
+	}
+	state, err := m.Store.Load()
+	if err != nil {
+		return nil, err
+	}
+	installation, ok := findInstallation(state, reqs[0].Identity.InstallationID)
+	if !ok {
+		return nil, fmt.Errorf("%w: portable binding is not installed", ErrPreflight)
+	}
+	if installation.DataRetained && len(installation.Clients) == 0 {
+		return []GroupRemoveResult{
+			{Integration: reqs[0].Integration, AlreadyAbsent: true},
+			{Integration: reqs[1].Integration, AlreadyAbsent: true},
+		}, nil
+	}
+	release, err := m.beginMutation(ctx, &reqs[0])
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	generation := reqs[0].ExpectedGeneration
+	engineReq := reqs[0]
+	for _, req := range reqs {
+		if req.Integration == portable.Claude {
+			engineReq = req
+			break
+		}
+	}
+	eng, err := m.engine(engineReq, &generation, nil)
+	if err != nil {
+		return nil, err
+	}
+	var res *installruntime.PendingMutation
+	var lastPB portable.Binding
+	live := 0
+	out := make([]GroupRemoveResult, len(reqs))
+	for i, req := range reqs {
+		out[i].Integration = req.Integration
+		var found *domain.ClientBinding
+		var receipt domain.DataReceipt
+		for _, binding := range installation.Clients {
+			if binding.ClientID != string(req.Integration) {
+				continue
+			}
+			item := binding
+			found = &item
+			receipt = installation.DataReceipts[binding.DataReceiptID]
+		}
+		if found == nil {
+			out[i].AlreadyAbsent = true
+			continue
+		}
+		pb, err := Complete(req.Identity, req.Integration, found.ClientID, found.Scope, found.TargetLocator, receipt.Locator)
+		if err != nil {
+			return nil, err
+		}
+		kernelReq := Request{
+			Binding: pb, ExpectedGeneration: generation, Discovery: req.Discovery,
+			SourceRevision: req.SourceRevision, SourceDigest: req.SourceDigest, Profile: req.ClientConfigRoot,
+			Reservation: res,
+		}
+		matched, err := m.Kernel.matchingReservation(kernelReq, "uninstall")
+		if err != nil {
+			return nil, err
+		}
+		if matched != nil {
+			res = matched
+			kernelReq.Reservation = res
+		}
+		if res == nil {
+			published, created, err := m.Kernel.publishIntent(ctx, kernelReq, generation, "uninstall", "revoke-locator", []string{"direct-mcp"})
+			if err != nil {
+				return nil, err
+			}
+			generation = published.Generation
+			res = created
+			kernelReq.ExpectedGeneration = generation
+			kernelReq.Reservation = res
+		}
+		if err := m.Kernel.RevokeBinding(ctx, kernelReq); err != nil {
+			return nil, err
+		}
+		snap, err := installruntime.ReadInstalledSnapshot(req.Identity.ControlRoot)
+		if err != nil {
+			return nil, err
+		}
+		generation = snap.Ledger.Generation
+		lastPB = pb
+		live++
+	}
+	if live == 0 {
+		return out, nil
+	}
+	var targets []uapinstaller.ClientTarget
+	for _, req := range reqs {
+		targets = append(targets, uapinstaller.ClientTarget{
+			ClientID: string(req.Integration), ClientConfigRoot: req.ClientConfigRoot,
+			ClientExecutable: req.ClientExecutable, ExternalUninstalled: req.ExternalUninstalled,
+		})
+	}
+	removed, err := m.apply(ctx, eng, uapinstaller.Request{
+		Operation: uapinstaller.OpRemove, InstallationID: reqs[0].Identity.InstallationID,
+		OperationID: reqs[0].OperationID, ClientExecutable: engineReq.ClientExecutable,
+		ExternalUninstalled: reqs[0].ExternalUninstalled || reqs[1].ExternalUninstalled,
+		Targets:             targets,
+	}, reqs[0])
+	if err != nil {
+		return nil, persistResult(removed, err)
+	}
+	byClient := map[string]uapinstaller.ClientResult{}
+	for _, item := range removed.Targets {
+		byClient[item.ClientID] = item
+	}
+	for i, req := range reqs {
+		item, ok := byClient[string(req.Integration)]
+		if ok && item.Materialization == string(domain.MaterializationAbsent) {
+			out[i].AlreadyAbsent = true
+		}
+	}
+	if !reqs[0].KeepReservation && res != nil {
+		if err := m.Kernel.finishHandoff(ctx, Request{Binding: lastPB, ExpectedGeneration: generation, Reservation: res}, res); err != nil {
+			return nil, err
+		}
 	}
 	return out, nil
 }

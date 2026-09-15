@@ -2065,6 +2065,15 @@ func TestCanGroupNotify(t *testing.T) {
 	if canGroupNotify(mat, id, Request{Action: ActionInstall}, []portable.Integration{portable.Codex}) {
 		t.Fatal("single client should not group")
 	}
+	if !canGroupRemove(mat, id, Request{Action: ActionUninstall, ExternalUninstalled: true}, both) {
+		t.Fatal("attested uninstall should group")
+	}
+	if !canGroupRemove(mat, id, Request{Action: ActionUninstall}, both) {
+		t.Fatal("absent Codex should still group with Claude")
+	}
+	if canGroupRemove(mat, id, Request{Action: ActionInstall}, both) {
+		t.Fatal("install should not group-remove")
+	}
 }
 
 func TestWizardUpdateBothLiveClients(t *testing.T) {
