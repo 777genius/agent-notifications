@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Installer metadata and checksum validation accept **Node.js** (`node`) when `python3` is not on PATH. Python remains preferred when both are present. iTerm2 click-to-focus still needs a real Python interpreter for its optional venv.
 
 ### Fixed
-- Node-only installer paths now isolate registry JSON parses from `NODE_OPTIONS`/`NODE_PATH`, resolve staging TMPDIR by walking symlink components then `..` the same way Python `os.path.realpath` does, and treat malformed config diagnostics as a protocol failure so a capable helper can still be staged.
+- Node-only installer paths now isolate registry JSON parses from `NODE_OPTIONS`/`NODE_PATH`, resolve staging TMPDIR by walking symlink components then `..` the same way Python `os.path.realpath` does (including keeping Windows root-relative symlink targets on the symlink's drive), and treat malformed config diagnostics as a protocol failure so a capable helper can still be staged.
 - Generated cache `hook-wrapper` shims now inline isolated `node`/`python3` via quoted `-e`/`-c` scripts instead of calling `run_isolated_node` (which exists only in `bootstrap.sh`) or using heredocs inside `$(...)`, which bash treats as unquoted.
 
 ## [1.43.0] - 2026-09-11

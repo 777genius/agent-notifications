@@ -1200,7 +1200,8 @@ function walkReal(current, rest, seen) {
     if (process.platform === 'win32') {
       const n = rest.replace(/\//g, '\\');
       const d = splitdrive(n);
-      current = d[0];
+      const currentDrive = splitdrive(current)[0];
+      current = d[0] || currentDrive;
       rest = d[1];
       if (rest.startsWith('\\')) {
         current += '\\';

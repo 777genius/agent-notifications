@@ -124,6 +124,7 @@ if host_cmd('python3') != sys.executable and not (
 HOST_BASH = host_cmd('bash')
 if not HOST_BASH:
     fail('host bash', 'Git Bash / bash executable not found')
+HOST_NODE = host_cmd('node')
 pass_name('skip Windows WSL/Store python3 aliases')
 
 
@@ -173,7 +174,7 @@ def setup_case(name, python=False, node=False, expected=0, preferred=False):
             (case / 'bin/python3').chmod(0o755)
             (case / 'bin/node').write_text(
                 '#!/usr/bin/env bash\nprintf node >> "$CASE_DIR/runtime.log"\nexec '
-                + shlex.quote(host_cmd('node').replace('\\', '/')) + ' "$@"\n')
+                + shlex.quote(HOST_NODE.replace('\\', '/')) + ' "$@"\n')
             (case / 'bin/node').chmod(0o755)
         env = dict(os.environ, PATH=path, CASE_DIR=str(case), TMPDIR=str(case / 'tmp space'))
         result = subprocess.run([HOST_BASH, str(root / 'bin/setup.sh'), '--product', 'codex'],
@@ -202,16 +203,16 @@ if host_cmd('python3'):
     setup_case('setup.sh python-only', python=True)
 else:
     print('SKIP setup.sh python-only')
-if host_cmd('node'):
+if HOST_NODE:
     setup_case('setup.sh node-only', node=True)
 else:
     print('SKIP setup.sh node-only')
 setup_case('setup.sh neither runtime', expected=1)
-if host_cmd('python3') and host_cmd('node'):
+if host_cmd('python3') and HOST_NODE:
     setup_case('setup.sh python preferred', python=True, node=True, preferred=True)
 
 # --- bootstrap.sh: node-only commit parse and checksum verify ---
-if host_cmd('node'):
+if HOST_NODE:
     with tempfile.TemporaryDirectory(prefix='bootstrap-node-', dir=os.environ['TMPDIR']) as tmp:
         case = Path(tmp)
         path = runtime_path(case, node=True)
@@ -273,7 +274,7 @@ else:
     print('SKIP bootstrap.sh node-only commit parse and checksum verify')
 
 # --- install.sh: node-only config preflight transport ---
-if host_cmd('node'):
+if HOST_NODE:
     with tempfile.TemporaryDirectory(prefix='install-node-', dir=os.environ['TMPDIR']) as tmp:
         case = Path(tmp)
         functions = case / 'functions.sh'
@@ -316,7 +317,7 @@ else:
 
 # Production JSSTAGE must resolve TMPDIR through a symlink ancestor, matching
 # Python os.path.realpath, so overlap into a refresh root is rejected.
-if host_cmd('node'):
+if HOST_NODE:
     jsstage = extract_quoted_heredoc(root / 'bin/bootstrap.sh', 'JSSTAGE')
     with tempfile.TemporaryDirectory(prefix='jsstage-', dir=os.environ['TMPDIR']) as tmp:
         td = Path(tmp)
@@ -331,7 +332,7 @@ if host_cmd('node'):
             scratch = alias / 'scratch'
             env = dict(os.environ)
             result = subprocess.run(
-                ['node', '-', str(scratch), str(td / 'missing.json'), 'claude-notifications-go',
+                [HOST_NODE, '-', str(scratch), str(td / 'missing.json'), 'claude-notifications-go',
                  'codex', str(td / 'cache'), str(td / 'market'), str(plugin)],
                 input=jsstage, text=True, capture_output=True, env=env, timeout=20)
             if result.returncode == 0 or 'Staging must be outside refreshed bundles' not in result.stderr:
@@ -347,17 +348,39 @@ if host_cmd('node'):
             if os.path.realpath(via_parent) != os.path.realpath(plugin):
                 fail('python realpath fixture', via_parent)
             result = subprocess.run(
-                ['node', '-', via_parent, str(td / 'missing.json'), 'claude-notifications-go',
+                [HOST_NODE, '-', via_parent, str(td / 'missing.json'), 'claude-notifications-go',
                  'codex', str(td / 'cache'), str(td / 'market'), str(plugin)],
                 input=jsstage, text=True, capture_output=True, env=env, timeout=20)
             if result.returncode == 0 or 'Staging must be outside refreshed bundles' not in result.stderr:
                 fail('JSSTAGE symlink .. overlap', describe(result) + ' tmpdir=' + via_parent)
             pass_name('JSSTAGE rejects TMPDIR via symlink then ..')
+    helpers, _, _ = jsstage.partition('const argv = process.argv.slice(2);')
+    drive_js = (
+        "Object.defineProperty(process, 'platform', { value: 'win32' });\n"
+        + helpers
+        + r'''
+const rootRelative = walkReal('D:\\outside', '\\plugin', Object.create(null));
+if (rootRelative !== 'D:\\plugin') {
+  process.stderr.write('root-relative: ' + rootRelative + '\n');
+  process.exit(1);
+}
+const otherDrive = walkReal('D:\\outside', 'C:\\other\\bundle', Object.create(null));
+if (otherDrive !== 'C:\\other\\bundle') {
+  process.stderr.write('other-drive: ' + otherDrive + '\n');
+  process.exit(1);
+}
+'''
+    )
+    result = subprocess.run([HOST_NODE, '-'], input=drive_js, text=True,
+                            capture_output=True, timeout=20)
+    if result.returncode != 0:
+        fail('JSSTAGE Windows root-relative drive', describe(result))
+    pass_name('JSSTAGE keeps Windows root-relative symlink targets on the source drive')
 else:
     print('SKIP JSSTAGE symlink ancestor overlap: node not available')
 
 # Malformed diagnostics are a protocol failure (status 2), not a final reject.
-if host_cmd('node'):
+if HOST_NODE:
     jsinstall = extract_quoted_heredoc(root / 'bin/install.sh', 'JSINSTALL')
     with tempfile.TemporaryDirectory(prefix='jsinstall-', dir=os.environ['TMPDIR']) as tmp:
         case = Path(tmp)
@@ -366,7 +389,7 @@ if host_cmd('node'):
             '#!/bin/sh\nprintf \'{"status":"unsafe-target","diagnostics":["invalid"]}\\n\'\n')
         helper.chmod(0o755)
         result = subprocess.run(
-            ['node', '-', str(helper), 'linux', str(case)],
+            [HOST_NODE, '-', str(helper), 'linux', str(case)],
             input=jsinstall, text=True, capture_output=True, timeout=20)
         if result.returncode != 2:
             fail('JSINSTALL malformed diagnostics', describe(result))
@@ -375,7 +398,7 @@ else:
     print('SKIP JSINSTALL malformed diagnostics: node not available')
 
 # NODE_OPTIONS must not pollute plugin registry parses on node-only installs.
-if host_cmd('node'):
+if HOST_NODE:
     with tempfile.TemporaryDirectory(prefix='node-options-', dir=os.environ['TMPDIR']) as tmp:
         case = Path(tmp)
         path = runtime_path(case, node=True)
@@ -429,7 +452,7 @@ if "python3 -I -c '" not in shim or "node --no-warnings -e '" not in shim:
     fail('generated hook-wrapper shim', 'standalone shim missing quoted -c/-e parsers')
 pass_name('generated hook-wrapper shim inlines isolated node')
 
-if host_cmd('node'):
+if HOST_NODE:
     with tempfile.TemporaryDirectory(prefix='shim-node-', dir=os.environ['TMPDIR']) as tmp:
         case = Path(tmp)
         claude_home = case / 'claude'
