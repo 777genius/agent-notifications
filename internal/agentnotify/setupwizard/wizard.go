@@ -433,6 +433,54 @@ func evaluate(ctx context.Context, req *Request, requireYes bool) evaluated {
 	}
 }
 
+func liveBindingTreeDigest(mat portablesetup.Materializer, installationID, clientID string) string {
+	if installationID == "" || clientID == "" {
+		return ""
+	}
+	state, err := mat.Store.Load()
+	if err != nil {
+		return ""
+	}
+	for _, installation := range state.Installations {
+		if installation.InstallationID != installationID {
+			continue
+		}
+		for _, binding := range installation.Clients {
+			if binding.ClientID == clientID && binding.PackageRevision != nil {
+				return binding.PackageRevision.TreeDigest
+			}
+		}
+	}
+	return ""
+}
+
+func sameLiveRepairRevision(mat portablesetup.Materializer, installationID string, agents []portable.Integration) bool {
+	digest := ""
+	for i, agent := range agents {
+		got := liveBindingTreeDigest(mat, installationID, string(agent))
+		if got == "" {
+			return false
+		}
+		if i == 0 {
+			digest = got
+			continue
+		}
+		if got != digest {
+			return false
+		}
+	}
+	return digest != ""
+}
+
+func exactRepairRevision(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "repair must use the exact applied package revision") ||
+		strings.Contains(msg, "resolved repair package differs from the installed revision")
+}
+
 func liveNotifyClient(mat portablesetup.Materializer, installationID, clientID string) bool {
 	if installationID == "" || clientID == "" {
 		return false
@@ -1183,7 +1231,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 					out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: err.Error()})
 					out.Outcome, out.Reason = "incomplete", "portable_inspect_failed"
 					return out, err
-				} else if len(others) > 0 && req.Action != ActionUpdate {
+				} else if len(others) > 0 && req.Action == ActionInstall {
 					if err := mat.GuardSecondClient(ctx, materialize); err != nil {
 						if portablesetup.IsUpdateRequired(err) {
 							return updateRequired(req, agent, others, out, err)
@@ -1346,6 +1394,19 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 			got, err = mat.Install(ctx, materialize)
 		}
 		if err != nil {
+			if req.Action == ActionRepair && (exactRepairRevision(err) || portablesetup.IsUpdateRequired(err)) {
+				others, _ := mat.OtherLiveClients(id.InstallationID, string(agent))
+				if len(others) > 0 {
+					retry := req
+					retry.Agents = []string{string(agent)}
+					out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: "exact_revision_required"})
+					out.NextActions = append(out.NextActions, NextAction{
+						Kind: "repair", Agents: []string{string(agent)}, Reason: "exact_revision_required",
+						Command: RetryCommand(retry),
+					})
+					continue
+				}
+			}
 			if portablesetup.IsUpdateRequired(err) {
 				others, _ := mat.OtherLiveClients(id.InstallationID, string(agent))
 				return updateRequired(req, agent, others, out, err)
@@ -1371,6 +1432,13 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		if err := recordLiveProfile(got.DataRoot, string(agent), clientConfig(req, agent)); err != nil {
 			out.Outcome, out.Reason = "incomplete", err.Error()
 			return out, err
+		}
+	}
+	for _, target := range out.Targets {
+		if target.Unit == "agent-notify" && target.Reason == "exact_revision_required" {
+			out.Outcome, out.Reason = "incomplete", "exact_revision_required"
+			reportProgress(req, "complete")
+			return out, ErrRefused
 		}
 	}
 	out.Outcome = "completed"
@@ -2027,6 +2095,9 @@ func bindNotifyPreviews(ctx context.Context, req *Request, previewReq Request, s
 	for _, agent := range notifyAgents {
 		preview, err := previewNotifyPlan(ctx, previewReq, snap, runtimeRoot, agent)
 		if err != nil {
+			if req.Action == ActionRepair && len(notifyAgents) > 1 && (exactRepairRevision(err) || portablesetup.IsUpdateRequired(err)) {
+				continue
+			}
 			return agent, "", err
 		}
 		if reserved := req.BindingIDs[string(agent)]; reserved != "" && preview.BindingID != "" && preview.BindingID != reserved {
@@ -2046,8 +2117,10 @@ func bindSourceIdentity(req *Request, preview uapinstaller.Plan) error {
 	if req == nil {
 		return nil
 	}
-	if err := bindIdentityField(&req.TreeDigest, preview.TreeDigest); err != nil {
-		return err
+	if req.Action != ActionRepair {
+		if err := bindIdentityField(&req.TreeDigest, preview.TreeDigest); err != nil {
+			return err
+		}
 	}
 	if err := bindIdentityField(&req.HelperDigest, preview.HelperDigest); err != nil {
 		return err
@@ -2097,8 +2170,10 @@ func canGroupNotify(mat portablesetup.Materializer, id portablesetup.Identity, r
 	switch req.Action {
 	case ActionInstall:
 		return first == second
-	case ActionUpdate, ActionRepair:
+	case ActionUpdate:
 		return first && second
+	case ActionRepair:
+		return first && second && sameLiveRepairRevision(mat, id.InstallationID, agents)
 	default:
 		return false
 	}
@@ -2473,7 +2548,10 @@ func shouldFinishWizardIntent(out Result) bool {
 	case "incomplete":
 		// §7.4.1: UAP binding, locator, and runtime consumer are consistent.
 		// Manual/failed activation is a next action, not an unfinished handoff.
-		return out.Reason == "activation_incomplete"
+		// Mixed-revision Repair advertises a different package/agent retry
+		// after the matching sibling succeeded, so leftover intent would
+		// conflict with that next action.
+		return out.Reason == "activation_incomplete" || out.Reason == "exact_revision_required"
 	default:
 		return false
 	}

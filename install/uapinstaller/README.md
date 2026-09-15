@@ -11,6 +11,10 @@ keeps its exact recorded digest.
 
 Update and repair of a missing owned binding return `ErrNotInstalled` before
 mutation. Repair rematerializes a missing target of a live binding.
+Repair of one live binding uses that binding's recorded package, not the
+installation's latest Source.TreeDigest, so an older sibling can be repaired
+after a subset update. Repair of that same binding with a different digest
+stays `ErrUpdateRequired`.
 
 ## Contract
 

@@ -74,46 +74,54 @@ func (e *Engine) prepareMutatingGroup(ctx context.Context, req Request) (*Prepar
 		return nil, err
 	}
 	cachedEnvelope := map[string]domain.PackageEnvelope{}
+	cachedDigest := map[string]string{}
 	envelopes := make([]domain.PackageEnvelope, len(req.Targets))
 	for i, root := range roots {
 		if envelope, ok := cachedEnvelope[root]; ok {
 			envelopes[i] = envelope
-			continue
+		} else {
+			snapshot, err := snapshotLocalPackage(ctx, e.cfg.TempRoot, root)
+			if err != nil {
+				_ = handle.closeLocked()
+				return nil, err
+			}
+			handle.snapshots = append(handle.snapshots, snapshot)
+			if handle.snapshot.Root == "" {
+				handle.snapshot = snapshot
+			}
+			if err := e.assessSnapshot(ctx, snapshot); err != nil {
+				_ = handle.closeLocked()
+				return nil, err
+			}
+			if req.Operation == OpInstall {
+				if err := e.refuseRecordedDigestRewrite(req.InstallationID, snapshot.TreeDigest); err != nil {
+					_ = handle.closeLocked()
+					return nil, err
+				}
+			}
+			e.reuseMatchingSourceIdentity(req.InstallationID, &snapshot, req.Operation == OpUpdate)
+			handle.snapshots[len(handle.snapshots)-1] = snapshot
+			if i == 0 {
+				handle.snapshot = snapshot
+			}
+			envelope, err := ldr.Load(ctx, domain.LoadInput{
+				SnapshotRoot: snapshot.Root, TreeDigest: snapshot.TreeDigest,
+				ExecutableFiles: snapshot.ExecutableFiles, Source: snapshot.Source,
+			})
+			if err != nil {
+				_ = handle.closeLocked()
+				return nil, err
+			}
+			cachedEnvelope[root] = envelope
+			cachedDigest[root] = snapshot.TreeDigest
+			envelopes[i] = envelope
 		}
-		snapshot, err := snapshotLocalPackage(ctx, e.cfg.TempRoot, root)
-		if err != nil {
-			_ = handle.closeLocked()
-			return nil, err
-		}
-		handle.snapshots = append(handle.snapshots, snapshot)
-		if handle.snapshot.Root == "" {
-			handle.snapshot = snapshot
-		}
-		if err := e.assessSnapshot(ctx, snapshot); err != nil {
-			_ = handle.closeLocked()
-			return nil, err
-		}
-		if !mixed && req.Operation != OpUpdate {
-			if err := e.refuseRecordedDigestRewrite(req.InstallationID, snapshot.TreeDigest); err != nil {
+		if req.Operation == OpRepair {
+			if err := e.refuseRepairRevisionRewrite(req.InstallationID, req.Targets[i].ClientID, cachedDigest[root]); err != nil {
 				_ = handle.closeLocked()
 				return nil, err
 			}
 		}
-		e.reuseMatchingSourceIdentity(req.InstallationID, &snapshot, req.Operation == OpUpdate)
-		handle.snapshots[len(handle.snapshots)-1] = snapshot
-		if i == 0 {
-			handle.snapshot = snapshot
-		}
-		envelope, err := ldr.Load(ctx, domain.LoadInput{
-			SnapshotRoot: snapshot.Root, TreeDigest: snapshot.TreeDigest,
-			ExecutableFiles: snapshot.ExecutableFiles, Source: snapshot.Source,
-		})
-		if err != nil {
-			_ = handle.closeLocked()
-			return nil, err
-		}
-		cachedEnvelope[root] = envelope
-		envelopes[i] = envelope
 	}
 	handle.envelope = envelopes[0]
 	handle.envelopes = envelopes

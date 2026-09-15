@@ -90,6 +90,35 @@ func writePackage(t *testing.T, root, probe string) {
 	}
 }
 
+func copyPackage(t *testing.T, src, dst string) {
+	t.Helper()
+	err := filepath.WalkDir(src, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0700)
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, info.Mode())
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func managedRuntime(t *testing.T) (control, runtime, global, primary string, generation uint64) {
 	t.Helper()
 	root, err := filepath.EvalSymlinks(t.TempDir())
@@ -2127,6 +2156,82 @@ func TestWizardUpdateOneClientKeepsSibling(t *testing.T) {
 	live := LiveNotifyClients(control, []string{"claude", "codex"})
 	if len(live) != 2 {
 		t.Fatalf("sibling lost: %v", live)
+	}
+}
+
+func TestWizardRepairMixedRevisionsRepairsMatchingPackage(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	r1 := filepath.Join(filepath.Dir(control), "package-r1")
+	copyPackage(t, pkg, r1)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	claudeConfig := filepath.Join(filepath.Dir(control), "claude-profile")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"claude", "codex"}, Yes: true, Hooks: &off,
+		PackageRoot: r1, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClaudeConfig: claudeConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot:    filepath.Join(filepath.Dir(control), "scope"),
+		ClaudeRunner: listingRunner{configRoot: claudeConfig},
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	req.PackageRoot = pkg
+	req.Action = ActionUpdate
+	req.Agents = []string{"codex"}
+	got, err := Run(ctx, req)
+	if err != nil || got.Outcome != "completed" {
+		t.Fatalf("codex update: %+v %v", got, err)
+	}
+	req.Action = ActionRepair
+	req.Agents = []string{"claude", "codex"}
+	got, err = Run(ctx, req)
+	if err == nil || got.Outcome != "incomplete" || got.Reason != "exact_revision_required" {
+		t.Fatalf("mixed repair with r2 package: %+v %v", got, err)
+	}
+	saw := map[string]TargetResult{}
+	for _, target := range got.Targets {
+		if target.Unit == "agent-notify" {
+			saw[target.Client] = target
+		}
+	}
+	if saw["codex"].Outcome != "completed" {
+		t.Fatalf("codex r2 repair: %+v", saw["codex"])
+	}
+	if saw["claude"].Outcome != "incomplete" || saw["claude"].Reason != "exact_revision_required" {
+		t.Fatalf("claude r1 mismatch: %+v", saw["claude"])
+	}
+	if live := LiveNotifyClients(control, []string{"claude", "codex"}); len(live) != 2 {
+		t.Fatalf("mixed repair lost sibling: %v", live)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil || snap.Ledger.PendingMutation != nil {
+		t.Fatalf("mixed repair left intent: %+v %v", snap.Ledger.PendingMutation, err)
+	}
+	req.PackageRoot = r1
+	req.Agents = []string{"claude"}
+	got, err = Run(ctx, req)
+	if err != nil || (got.Outcome != "completed" && got.Outcome != "unchanged") {
+		t.Fatalf("claude r1 repair: %+v %v", got, err)
+	}
+	if live := LiveNotifyClients(control, []string{"claude", "codex"}); len(live) != 2 {
+		t.Fatalf("r1 repair lost sibling: %v", live)
 	}
 }
 
@@ -4625,6 +4730,27 @@ func TestWizardUninstallDoesNotRestoreDirectMCP(t *testing.T) {
 	}
 	if direct == "installed" {
 		t.Fatalf("uninstall restored direct MCP: %+v", view.Targets)
+	}
+}
+
+func TestFinishWizardIntentClearsExactRevisionRequired(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, _, _, gen := managedRuntime(t)
+	plantPendingIntent(t, ctx, control, runtime, gen, portablesetup.Intent{
+		Version: 1, SetupIntentID: "pending-repair-intent", Action: "repair", Stage: "confirmed",
+		ExpectedGeneration: gen,
+		Targets:            []portablesetup.IntentTarget{{Client: "claude", Units: []string{"agent-notify"}}, {Client: "codex", Units: []string{"agent-notify"}}},
+	})
+	got, err := finishWizardIntent(ctx, Request{ControlRoot: control}, runtime, Result{Outcome: "incomplete", Reason: "exact_revision_required"}, ErrRefused)
+	if got.Outcome != "incomplete" || got.Reason != "exact_revision_required" {
+		t.Fatalf("result: %+v %v", got, err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil || snap.Ledger.PendingMutation != nil {
+		t.Fatalf("exact_revision_required kept reservation: %+v %v", snap.Ledger.PendingMutation, err)
+	}
+	if _, err := os.Lstat(portablesetup.IntentPath(control)); !os.IsNotExist(err) {
+		t.Fatal("exact_revision_required retained intent")
 	}
 }
 

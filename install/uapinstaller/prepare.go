@@ -175,8 +175,14 @@ func (e *Engine) prepareMutatingPackage(ctx context.Context, req Request, op Ope
 		_ = handle.closeLocked()
 		return nil, err
 	}
-	if !allowDigestRewrite {
+	if op == OpInstall {
 		if err := e.refuseRecordedDigestRewrite(req.InstallationID, snapshot.TreeDigest); err != nil {
+			_ = handle.closeLocked()
+			return nil, err
+		}
+	}
+	if op == OpRepair {
+		if err := e.refuseRepairRevisionRewrite(req.InstallationID, string(client.ClientID), snapshot.TreeDigest); err != nil {
 			_ = handle.closeLocked()
 			return nil, err
 		}
@@ -487,6 +493,28 @@ func (e *Engine) refuseRecordedDigestRewrite(installationID, desired string) err
 	recorded := installation.Source.TreeDigest
 	if recorded != "" && recorded != desired {
 		return fmt.Errorf("%w: recorded digest %s desired %s", ErrUpdateRequired, recorded, desired)
+	}
+	return nil
+}
+
+func (e *Engine) refuseRepairRevisionRewrite(installationID, clientID, desired string) error {
+	if installationID == "" || clientID == "" || desired == "" {
+		return nil
+	}
+	state, err := e.store.Load()
+	if err != nil {
+		return nil
+	}
+	installation, ok := findInstall(state, installationID)
+	if !ok {
+		return nil
+	}
+	binding, _, ok := findBinding(installation, domain.ClientID(clientID))
+	if !ok || binding.PackageRevision == nil || binding.PackageRevision.TreeDigest == "" {
+		return nil
+	}
+	if binding.PackageRevision.TreeDigest != desired {
+		return fmt.Errorf("%w: recorded digest %s desired %s", ErrUpdateRequired, binding.PackageRevision.TreeDigest, desired)
 	}
 	return nil
 }

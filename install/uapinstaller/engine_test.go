@@ -2629,6 +2629,61 @@ func TestRepairOneClientKeepsSibling(t *testing.T) {
 	}
 }
 
+func TestRepairOlderSiblingAfterSubsetUpdate(t *testing.T) {
+	ctx, eng, _, pkg, probe, codexConfig, claudeConfig := newBothClientSandbox(t)
+	id := "00000000-0000-4000-8000-0000000000d2"
+	r1 := filepath.Join(filepath.Dir(pkg), "package-r1")
+	copyPackage(t, pkg, r1)
+	installBothClients(t, ctx, eng, r1, probe, id, "older-sibling-install", bothClientTargets(codexConfig, claudeConfig, probe))
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"sample-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := eng.Prepare(ctx, Request{
+		Operation: OpUpdate, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: codexConfig,
+		ClientExecutable: probe, InstallationID: id, OperationID: "older-sibling-codex-update",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := eng.Apply(ctx, updated, Decision{Confirmed: true})
+	_ = updated.Close()
+	if err != nil || got.Outcome != OutcomeCompleted {
+		t.Fatalf("codex update: %+v %v", got, err)
+	}
+	before, err := eng.Inspect(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claudeBefore := inspectedBinding(t, before, "claude")
+	codexBefore := inspectedBinding(t, before, "codex")
+	repaired, err := eng.Prepare(ctx, Request{
+		Operation: OpRepair, PackageRoot: r1, ClientID: "claude", ClientConfigRoot: claudeConfig,
+		ClientExecutable: probe, InstallationID: id, OperationID: "older-sibling-claude-repair",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = eng.Apply(ctx, repaired, Decision{Confirmed: true})
+	_ = repaired.Close()
+	if err != nil || (got.Outcome != OutcomeUnchanged && got.Outcome != OutcomeCompleted) {
+		t.Fatalf("claude r1 repair: %+v %v", got, err)
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 2 {
+		t.Fatalf("inspect after older sibling repair: %+v %v", view, err)
+	}
+	claudeAfter := inspectedBinding(t, view, "claude")
+	codexAfter := inspectedBinding(t, view, "codex")
+	if claudeAfter.BindingID != claudeBefore.BindingID || claudeAfter.TargetPath != claudeBefore.TargetPath || claudeAfter.DataRoot != claudeBefore.DataRoot || claudeAfter.Profile != claudeBefore.Profile {
+		t.Fatalf("r1 repair rewrote claude: before=%+v after=%+v", claudeBefore, claudeAfter)
+	}
+	if codexAfter.BindingID != codexBefore.BindingID || codexAfter.TargetPath != codexBefore.TargetPath || codexAfter.DataRoot != codexBefore.DataRoot || codexAfter.Profile != codexBefore.Profile {
+		t.Fatalf("r1 repair rewrote codex sibling: before=%+v after=%+v", codexBefore, codexAfter)
+	}
+}
+
 func TestRepairGroupIntactReportsBothTargets(t *testing.T) {
 	ctx, eng, _, pkg, probe, codexConfig, claudeConfig := newBothClientSandbox(t)
 	id := "00000000-0000-4000-8000-0000000000c9"
