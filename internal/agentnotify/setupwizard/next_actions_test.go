@@ -265,6 +265,31 @@ func TestTargetResultJSONIncludesInspectedMCPConfig(t *testing.T) {
 	}
 }
 
+func TestInspectReportsDiscoveredMCPConfigPath(t *testing.T) {
+	ctx, control := commitControlRuntime(t)
+	codexHome := filepath.Join(t.TempDir(), "codex")
+	if err := os.MkdirAll(codexHome, 0700); err != nil {
+		t.Fatal(err)
+	}
+	mcp := filepath.Join(codexHome, "config.toml")
+	if err := os.WriteFile(mcp, []byte("title = 'keep'\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Run(ctx, Request{Action: ActionInspect, Agents: []string{"codex"}, ControlRoot: control, CodexHome: codexHome})
+	if err != nil || got.ExitCode() != 0 {
+		t.Fatalf("inspect: %+v %v", got, err)
+	}
+	var mcpFile string
+	for _, target := range got.Targets {
+		if target.Unit == "direct-mcp" && target.Client == "codex" {
+			mcpFile = target.ConfigPath
+		}
+	}
+	if mcpFile != mcp {
+		t.Fatalf("inspect mcp path: %s targets=%+v", mcpFile, got.Targets)
+	}
+}
+
 func TestDiscoveryConfigPathUsesExistingProfileFile(t *testing.T) {
 	codexHome := filepath.Join(t.TempDir(), "codex")
 	claudeHome := filepath.Join(t.TempDir(), "claude")
