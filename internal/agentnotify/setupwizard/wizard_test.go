@@ -3,6 +3,7 @@
 package setupwizard
 
 import (
+	"archive/zip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -1196,6 +1197,208 @@ func TestWizardRepairOmittedPackageUsesRecordedSource(t *testing.T) {
 	}
 	if _, err := os.Stat(target); err != nil {
 		t.Fatalf("repair did not restore target from recorded source: %v", err)
+	}
+}
+
+func TestWizardRefusesSymlinkPackage(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	link := filepath.Join(filepath.Dir(control), "package-link")
+	if err := os.Symlink(pkg, link); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	got, err := Run(ctx, Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: link, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: filepath.Join(filepath.Dir(control), "codex-profile"), ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	})
+	if err == nil || got.Reason != "package_acquisition_failed" {
+		t.Fatalf("symlink package: %+v %v", got, err)
+	}
+}
+
+func TestWizardRefusesUnsafeZip(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	base := filepath.Dir(control)
+	archive := filepath.Join(base, "escape.zip")
+	f, err := os.Create(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := zip.NewWriter(f)
+	w, err := zw.Create("../escape.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("no")); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	got, err := Run(ctx, Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: archive, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: filepath.Join(base, "codex-profile"), ClientExecutable: "/bin/true", Helper: "/bin/true",
+		ScopeRoot: filepath.Join(base, "scope"),
+	})
+	if err == nil || got.Reason != "package_acquisition_failed" {
+		t.Fatalf("unsafe zip: %+v %v", got, err)
+	}
+	if _, err := os.Lstat(filepath.Join(base, "escape.txt")); !os.IsNotExist(err) {
+		t.Fatal("zip slip wrote outside dest")
+	}
+}
+
+func TestWizardRepairOmittedZipUsesDurableSource(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtimeRoot, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	base := filepath.Dir(control)
+	pkg := filepath.Join(base, "release-pkg")
+	archive := filepath.Join(base, portableasset.AssetName(runtime.GOOS, runtime.GOARCH))
+	built, err := portableasset.Build(portableasset.BuildRequest{
+		Version: "1.43.0", GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
+		Executable: probe, OutputRoot: pkg, Archive: archive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	codexConfig := filepath.Join(base, "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: archive, PackageSHA256: built.ArchiveSHA256,
+		ControlRoot: control, RuntimeRoot: runtimeRoot, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe, ScopeRoot: filepath.Join(base, "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("zip install: %+v %v", installed, err)
+	}
+	if err := os.Remove(archive); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(base, "uap", "state", "state-v2.json")
+	target := liveTargetPath(t, statePath, "codex")
+	if err := os.RemoveAll(target); err != nil {
+		t.Fatal(err)
+	}
+	req.Action = ActionRepair
+	req.PackageRoot = ""
+	req.PackageSHA256 = ""
+	got, err := Run(ctx, req)
+	if err != nil || got.Outcome != "completed" {
+		t.Fatalf("omitted zip repair: %+v %v", got, err)
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("repair did not use durable acquired source: %v", err)
+	}
+}
+
+func TestWizardRepairMissingDurableZipIsUnavailable(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtimeRoot, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	base := filepath.Dir(control)
+	pkg := filepath.Join(base, "release-pkg")
+	archive := filepath.Join(base, portableasset.AssetName(runtime.GOOS, runtime.GOARCH))
+	built, err := portableasset.Build(portableasset.BuildRequest{
+		Version: "1.43.0", GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
+		Executable: probe, OutputRoot: pkg, Archive: archive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	codexConfig := filepath.Join(base, "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: archive, PackageSHA256: built.ArchiveSHA256,
+		ControlRoot: control, RuntimeRoot: runtimeRoot, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe, ScopeRoot: filepath.Join(base, "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("zip install: %+v %v", installed, err)
+	}
+	if err := os.Remove(archive); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(base, "uap", "acquired-source")); err != nil {
+		t.Fatal(err)
+	}
+	req.Action = ActionRepair
+	req.PackageRoot = ""
+	req.PackageSHA256 = ""
+	got, err := Run(ctx, req)
+	if err == nil || got.Reason != "recorded_package_unavailable" {
+		t.Fatalf("missing durable zip: %+v %v", got, err)
+	}
+}
+
+func TestWizardUpdateAndRepairRejectWithoutYes(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	before, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []Action{ActionUpdate, ActionRepair, ActionUninstall} {
+		blocked := req
+		blocked.Action = action
+		blocked.Yes = false
+		got, err := Run(ctx, blocked)
+		if err == nil || got.Outcome != "invalid" || got.Reason != "noninteractive_requires_yes" {
+			t.Fatalf("%s without yes: %+v %v", action, got, err)
+		}
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil || snap.Ledger.PendingMutation != nil || snap.Ledger.Generation != before.Ledger.Generation {
+		t.Fatalf("denied mutation changed ledger: gen=%d pending=%v err=%v", snap.Ledger.Generation, snap.Ledger.PendingMutation, err)
 	}
 }
 

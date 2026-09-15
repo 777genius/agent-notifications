@@ -154,6 +154,25 @@ func TestSetupWizardJSONDoesNotPrompt(t *testing.T) {
 	}
 }
 
+func TestSetupWizardJSONMutationRequiresYes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, action := range []string{"update", "repair", "uninstall"} {
+		var out bytes.Buffer
+		code := executeSetupWizardWith(ctx, []string{"--action", action, "--agents", "codex", "--json"}, &out, io.Discard, strings.NewReader("y\n"), true)
+		if code != 2 {
+			t.Fatalf("%s json prompt: %d %s", action, code, out.String())
+		}
+		var result setupwizard.Result
+		if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+			t.Fatalf("%s json: %v %s", action, err, out.String())
+		}
+		if result.Action != action || result.Outcome != "invalid" || result.Reason != "noninteractive_requires_yes" {
+			t.Fatalf("%s result: %+v", action, result)
+		}
+	}
+}
+
 func TestSetupWizardTTYShowsDiscoverCapabilities(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

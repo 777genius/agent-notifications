@@ -2,8 +2,11 @@ package setupwizard
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -14,6 +17,9 @@ import (
 
 	"github.com/777genius/agent-notifications/internal/agentnotify/portableasset"
 )
+
+// acquiredExtractName matches portableasset's unpacked directory name.
+const acquiredExtractName = "root"
 
 func resolvePackageRoot(ctx context.Context, req Request, recordedPath, recordedVersion string) (string, func(), error) {
 	cleanup := func() {}
@@ -31,18 +37,23 @@ func resolvePackageRoot(ctx context.Context, req Request, recordedPath, recorded
 	if version == "" || (req.ReleaseDownloadRoot == "" && req.PackageFetcher == nil) {
 		return "", cleanup, fmt.Errorf("%w: package_required", ErrRefused)
 	}
-	parent, err := os.MkdirTemp(filepath.Dir(req.ControlRoot), "acquired-package-")
+	key := strings.Join([]string{"fetch", version, runtime.GOOS, runtime.GOARCH, req.ReleaseDownloadRoot}, "\n")
+	parent, err := durableAcquireParent(req, key)
 	if err != nil {
 		return "", cleanup, err
 	}
-	cleanup = func() { _ = os.RemoveAll(parent) }
+	extracted := filepath.Join(parent, acquiredExtractName)
+	if packageStillUsable(extracted) {
+		return extracted, cleanup, nil
+	}
+	_ = os.RemoveAll(parent)
 	root, err := portableasset.Fetch(ctx, portableasset.FetchRequest{
 		Version: version, GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
 		DestParent: parent, DownloadRoot: req.ReleaseDownloadRoot, Get: req.PackageFetcher,
 	})
 	if err != nil {
-		cleanup()
-		return "", func() {}, err
+		_ = os.RemoveAll(parent)
+		return "", cleanup, err
 	}
 	return root, cleanup, nil
 }
@@ -62,16 +73,52 @@ func openLocalPackage(req Request, source string) (string, func(), error) {
 	if !info.Mode().IsRegular() || !strings.EqualFold(filepath.Ext(source), ".zip") {
 		return "", cleanup, fmt.Errorf("%w: package must be a directory or zip archive", ErrRefused)
 	}
-	parent, err := os.MkdirTemp(filepath.Dir(req.ControlRoot), "acquired-package-")
+	parent, err := durableAcquireParent(req, source)
 	if err != nil {
 		return "", cleanup, err
 	}
+	extracted := filepath.Join(parent, acquiredExtractName)
+	if err := verifyArchiveChecksum(source, req.PackageSHA256); err != nil {
+		return "", cleanup, err
+	}
+	if packageStillUsable(extracted) {
+		return extracted, cleanup, nil
+	}
+	_ = os.RemoveAll(parent)
 	root, err := portableasset.OpenArchive(source, parent, req.PackageSHA256)
 	if err != nil {
 		_ = os.RemoveAll(parent)
 		return "", cleanup, err
 	}
-	return root, func() { _ = os.RemoveAll(parent) }, nil
+	return root, cleanup, nil
+}
+
+func durableAcquireParent(req Request, key string) (string, error) {
+	if !explicitAbs(req.ControlRoot) {
+		return "", fmt.Errorf("%w: control_root_required", ErrRefused)
+	}
+	sum := sha256.Sum256([]byte(key))
+	return filepath.Join(filepath.Dir(req.ControlRoot), "uap", "acquired-source", hex.EncodeToString(sum[:])), nil
+}
+
+func verifyArchiveChecksum(path, expected string) error {
+	if expected == "" {
+		return nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	sum := sha256.New()
+	if _, err := io.Copy(sum, f); err != nil {
+		return err
+	}
+	got := hex.EncodeToString(sum.Sum(nil))
+	if !strings.EqualFold(got, expected) {
+		return fmt.Errorf("%w: got %s", portableasset.ErrChecksumMismatch, got)
+	}
+	return nil
 }
 
 func packageDeclaredName(root string) string {
