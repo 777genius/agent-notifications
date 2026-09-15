@@ -3535,6 +3535,87 @@ func TestWizardInstallBothMismatchedShowsTwoPhase(t *testing.T) {
 	}
 }
 
+func TestWizardInstallBothMismatchedCodexLiveShowsTwoPhase(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	claudeConfig := filepath.Join(filepath.Dir(control), "claude-profile")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	off := false
+	base := Request{
+		Action: ActionInstall, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClaudeConfig: claudeConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot:    filepath.Join(filepath.Dir(control), "scope"),
+		ClaudeRunner: listingRunner{configRoot: claudeConfig},
+	}
+	if err := os.MkdirAll(base.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	codexReq := base
+	codexReq.Agents = []string{"codex"}
+	installed, err := Run(ctx, codexReq)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("codex: %+v %v", installed, err)
+	}
+	codexBefore := inspectedWizardBinding(t, ctx, control, "codex")
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	both := base
+	both.Agents = []string{"claude", "codex"}
+	blocked, err := Run(ctx, both)
+	if err == nil || blocked.Outcome != "incomplete" || blocked.Reason != "update_required" {
+		t.Fatalf("codex-live both mismatched: %+v %v", blocked, err)
+	}
+	if len(blocked.NextActions) != 2 || blocked.NextActions[0].Kind != "update" || blocked.NextActions[1].Kind != "install" {
+		t.Fatalf("codex-live both next: %+v", blocked.NextActions)
+	}
+	if strings.Join(blocked.NextActions[0].Agents, ",") != "codex" || strings.Join(blocked.NextActions[1].Agents, ",") != "claude" {
+		t.Fatalf("codex-live both agents: %+v", blocked.NextActions)
+	}
+	both.Yes = false
+	plan, err := Plan(ctx, both)
+	if plan.Ready || plan.Result.Reason != "update_required" {
+		t.Fatalf("codex-live both plan: %+v %v", plan, err)
+	}
+	if !strings.Contains(plan.Text, "required-update=codex") || !strings.Contains(plan.Text, "2-add:claude") {
+		t.Fatalf("codex-live both plan omitted two phases: %s", plan.Text)
+	}
+	codexAfter := inspectedWizardBinding(t, ctx, control, "codex")
+	if codexAfter.BindingID != codexBefore.BindingID || codexAfter.TreeDigest != codexBefore.TreeDigest {
+		t.Fatalf("codex-live both rewrote codex: %+v/%+v", codexBefore, codexAfter)
+	}
+	updateReq := base
+	updateReq.Action = ActionUpdate
+	updateReq.Agents = blocked.NextActions[0].Agents
+	updated, err := Run(ctx, updateReq)
+	if err != nil || updated.Outcome != "completed" {
+		t.Fatalf("codex-live both update: %+v %v", updated, err)
+	}
+	addReq := base
+	addReq.Agents = blocked.NextActions[1].Agents
+	added, err := Run(ctx, addReq)
+	if err != nil || added.Outcome != "completed" {
+		t.Fatalf("codex-live both add: %+v %v", added, err)
+	}
+	claudeDone := inspectedWizardBinding(t, ctx, control, "claude")
+	codexDone := inspectedWizardBinding(t, ctx, control, "codex")
+	if codexDone.BindingID != codexBefore.BindingID {
+		t.Fatalf("codex-live phases rewrote codex: %+v/%+v", codexBefore, codexDone)
+	}
+	if claudeDone.TreeDigest == "" || claudeDone.TreeDigest == codexBefore.TreeDigest || claudeDone.TreeDigest != codexDone.TreeDigest {
+		t.Fatalf("codex-live both did not converge: before=%s claude=%s codex=%s", codexBefore.TreeDigest, claudeDone.TreeDigest, codexDone.TreeDigest)
+	}
+}
+
 func TestWizardInstallBothWhenOneLiveMatchingAddsSibling(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, _, _ := managedRuntime(t)
