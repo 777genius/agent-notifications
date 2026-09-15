@@ -1557,10 +1557,18 @@ func TestWizardMixedUninstallHoldsClaudeUntilCodexAttested(t *testing.T) {
 			if !sawClaude || !sawCodex {
 				t.Fatalf("hold dropped a sibling from intent: %+v", intent.Targets)
 			}
-			req.ExternalUninstalled = true
-			removed, err := Run(ctx, req)
+			joined := strings.Join(held.Command, " ")
+			if !strings.Contains(joined, "claude") || !strings.Contains(joined, "codex") || !strings.Contains(joined, "--external-uninstalled") {
+				t.Fatalf("retry omitted mixed uninstall identity: %v", held.Command)
+			}
+			removed, err := Run(ctx, Request{
+				Action: ActionUninstall, Yes: true, ExternalUninstalled: true,
+				ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+				ClientExecutable: probe, Helper: probe,
+				ClaudeRunner: listingRunner{configRoot: claudeConfig},
+			})
 			if err != nil || removed.Outcome != "completed" {
-				t.Fatalf("attested uninstall: %+v %v", removed, err)
+				t.Fatalf("omitted resume attested uninstall: %+v %v", removed, err)
 			}
 			if remaining := LiveNotifyClients(control, []string{"claude", "codex"}); len(remaining) != 0 {
 				t.Fatalf("attested uninstall left bindings: %v", remaining)
