@@ -221,6 +221,14 @@ except subprocess.TimeoutExpired:
     "$@"
 }
 
+# env(1) looks up the next token on PATH, so a bash function cannot follow it.
+# Keep extra variables on the env command that run_with_timeout actually execs.
+run_with_timeout_env() {
+    local seconds="$1"
+    shift
+    run_with_timeout "$seconds" env "$@"
+}
+
 # Use the same executable payload and checksum as the main Windows fixture.
 prepare_focus_fixture() {
     local destination="$1" checksum="$2"
@@ -520,6 +528,21 @@ fail_test() {
 #=============================================================================
 # Category A: Offline Tests (no network required)
 #=============================================================================
+
+test_run_with_timeout_env_reaches_child() {
+    echo -e "\n${CYAN}▶ test_run_with_timeout_env_reaches_child${NC}"
+    if ! command -v python3 >/dev/null 2>&1; then
+        skip_test "run_with_timeout_env reaches child" "python3 not available"
+        return
+    fi
+    local output exit_code
+    set +e
+    output=$(run_with_timeout_env 5 CLAUDE_HOOK_JUDGE_MODE=true python3 -c 'import os; print(os.environ.get("CLAUDE_HOOK_JUDGE_MODE",""))' 2>&1)
+    exit_code=$?
+    set +e
+    assert_exit_code 0 "$exit_code" "run_with_timeout_env exits 0"
+    assert_contains "$output" "true" "run_with_timeout_env exports variables to the child"
+}
 
 test_platform_detection() {
     echo -e "\n${CYAN}▶ test_platform_detection${NC}"
@@ -1232,7 +1255,7 @@ test_windows_native_hooks_real_exec_launch() {
     # Windows runners. The assertion is that the exec-form exe launches.
     set +e
     output=$(printf '{"session_id":"ci-win","transcript_path":"","cwd":""}\n' | \
-        env CLAUDE_HOOK_JUDGE_MODE=true run_with_timeout 20 "$exe_path" handle-hook Stop 2>&1)
+        run_with_timeout_env 20 CLAUDE_HOOK_JUDGE_MODE=true "$exe_path" handle-hook Stop 2>&1)
     exit_code=$?
     set +e
 
@@ -1333,11 +1356,12 @@ FAKE_BASH_GO_EOF
     local output exit_code
     set +e
     output=$(printf '{"session_id":"ci-win","transcript_path":"","cwd":""}\n' | \
-        env AGENT_NOTIFICATIONS_CONFIG="$fixture_config_for_windows" \
+        run_with_timeout_env 20 \
+            AGENT_NOTIFICATIONS_CONFIG="$fixture_config_for_windows" \
             CLAUDE_NOTIFICATIONS_BASH="$fake_bash_for_windows" \
             FAKE_BASH_LOG="$fake_bash_log_for_windows" \
             CLAUDE_HOOK_JUDGE_MODE=true \
-            run_with_timeout 20 "$exe_path" handle-hook Stop 2>&1)
+            "$exe_path" handle-hook Stop 2>&1)
     exit_code=$?
     set +e
 
@@ -2496,6 +2520,7 @@ main() {
         # Category A: Offline Tests
         echo ""
         echo -e "${BOLD}Category A: Offline Tests${NC}"
+        test_run_with_timeout_env_reaches_child
         test_platform_detection
         test_binary_name_format
         test_wsl_guard_blocks_linux_install
