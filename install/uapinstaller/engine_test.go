@@ -1060,6 +1060,104 @@ func TestUpdateChangesLiveRevision(t *testing.T) {
 	}
 }
 
+func TestUpdateCopiedPackageWithNewDigest(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{
+		StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe,
+		Runner: listingRunner{configRoot: config},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "00000000-0000-4000-8000-000000000098"
+	installed, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "claude", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: id, OperationID: "copied-update-install",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := eng.Apply(ctx, installed, Decision{Confirmed: true})
+	before := installed.Plan().TreeDigest
+	_ = installed.Close()
+	if err != nil || first.Outcome != OutcomeCompleted || before == "" {
+		t.Fatalf("install: %+v %v", first, err)
+	}
+	store := statev2.Store{Path: eng.cfg.StateFile}
+	beforeState, err := store.Load()
+	if err != nil || len(beforeState.Installations) != 1 {
+		t.Fatalf("load: %+v %v", beforeState, err)
+	}
+	recordedCanonical := beforeState.Installations[0].Source.CanonicalSource
+	recordedRequested := beforeState.Installations[0].Source.RequestedSource
+	if recordedCanonical == "" {
+		t.Fatal("missing recorded canonical source")
+	}
+	other := filepath.Join(base, "other package")
+	writePackage(t, other, probe)
+	if err := os.WriteFile(filepath.Join(other, "skills", "sample-notify", "SKILL.md"), []byte("---\nname: sample-notify\ndescription: Revised\n---\nCopied revision.\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: other, ClientID: "claude", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: id, OperationID: "copied-update-blocked-install",
+		RequiredComponents: []string{"mcp", "skills"},
+	}); !errors.Is(err, ErrUpdateRequired) {
+		t.Fatalf("install still upserts copied digest: %v", err)
+	}
+	if _, err := eng.Prepare(ctx, Request{
+		Operation: OpRepair, PackageRoot: other, ClientID: "claude", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: id, OperationID: "copied-update-blocked-repair",
+		RequiredComponents: []string{"mcp", "skills"},
+	}); !errors.Is(err, ErrUpdateRequired) {
+		t.Fatalf("repair rewrote copied digest: %v", err)
+	}
+	updated, err := eng.Prepare(ctx, Request{
+		Operation: OpUpdate, PackageRoot: other, ClientID: "claude", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: id, OperationID: "copied-update-apply",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := eng.Apply(ctx, updated, Decision{Confirmed: true})
+	digest := updated.Plan().TreeDigest
+	_ = updated.Close()
+	if err != nil || got.Outcome != OutcomeCompleted {
+		t.Fatalf("update copied package: %+v %v", got, err)
+	}
+	if digest == "" || digest == before {
+		t.Fatalf("update kept old digest %s", digest)
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 || view.Installations[0].TreeDigest != digest {
+		t.Fatalf("inspect after copied update: %+v %v", view, err)
+	}
+	afterState, err := store.Load()
+	if err != nil || len(afterState.Installations) != 1 {
+		t.Fatalf("load after update: %+v %v", afterState, err)
+	}
+	if afterState.Installations[0].Source.CanonicalSource != recordedCanonical {
+		t.Fatalf("update rewrote canonical source: %s vs %s", recordedCanonical, afterState.Installations[0].Source.CanonicalSource)
+	}
+	if afterState.Installations[0].Source.RequestedSource != recordedRequested {
+		t.Fatalf("update rewrote requested source: %s vs %s", recordedRequested, afterState.Installations[0].Source.RequestedSource)
+	}
+}
+
 func TestRepairRematerializesMissingTarget(t *testing.T) {
 	skipWindowsLauncherExecuteBit(t)
 	ctx := testCtx(t)

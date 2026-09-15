@@ -159,7 +159,7 @@ func (e *Engine) prepareMutatingPackage(ctx context.Context, req Request, op Ope
 			return nil, err
 		}
 	}
-	e.reuseMatchingSourceIdentity(req.InstallationID, &snapshot)
+	e.reuseMatchingSourceIdentity(req.InstallationID, &snapshot, allowDigestRewrite)
 	handle.snapshot = snapshot
 	ldr, err := newLoader()
 	if err != nil {
@@ -175,7 +175,8 @@ func (e *Engine) prepareMutatingPackage(ctx context.Context, req Request, op Ope
 		return nil, err
 	}
 	handle.envelope = envelope
-	svc := e.lifecycle(nil, BindingFacts{})
+	helper, _ := e.helper()
+	svc := e.lifecycle(helper, BindingFacts{})
 	preview, err := dry(svc, usecase.AddInput{
 		Envelope: envelope, Client: client, Scope: domain.ScopeUser, DryRun: true, Confirmed: false,
 		PersistAuthoritativeObservations: e.persistObservations,
@@ -469,10 +470,11 @@ func (e *Engine) refuseRecordedDigestRewrite(installationID, desired string) err
 }
 
 // reuseMatchingSourceIdentity keeps the recorded source binding when the new
-// snapshot has the same TreeDigest. Local CanonicalSource is a capture path,
-// not revision identity; a same-bytes Add from a new directory must not become
-// a source switch.
-func (e *Engine) reuseMatchingSourceIdentity(installationID string, snapshot *domain.PackageSnapshot) {
+// snapshot is the same logical source. Local CanonicalSource is a capture
+// path, not revision identity: a same-bytes Add from a new directory must
+// not become a source switch, and an authorized Update may change TreeDigest
+// without rewriting SourceBindingID.
+func (e *Engine) reuseMatchingSourceIdentity(installationID string, snapshot *domain.PackageSnapshot, allowDigestRewrite bool) {
 	if installationID == "" || snapshot == nil || snapshot.TreeDigest == "" {
 		return
 	}
@@ -481,7 +483,10 @@ func (e *Engine) reuseMatchingSourceIdentity(installationID string, snapshot *do
 		return
 	}
 	installation, ok := findInstall(state, installationID)
-	if !ok || installation.Source.TreeDigest == "" || installation.Source.TreeDigest != snapshot.TreeDigest {
+	if !ok || installation.Source.TreeDigest == "" {
+		return
+	}
+	if !allowDigestRewrite && installation.Source.TreeDigest != snapshot.TreeDigest {
 		return
 	}
 	if installation.Source.CanonicalSource != "" {
