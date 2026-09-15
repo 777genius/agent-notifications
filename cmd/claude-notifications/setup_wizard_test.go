@@ -2307,6 +2307,97 @@ func TestSetupWizardResumeRejectsDifferentProfileE2E(t *testing.T) {
 	}
 }
 
+func TestSetupWizardResumeRestoresMixedPerClientUnitsE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	snap, err := installruntime.ReadInstalledSnapshot(env.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plantWizardCLIPendingIntent(t, ctx, env.control, env.runtime, snap.Ledger.Generation, portablesetup.Intent{
+		Version: 1, SetupIntentID: "pending-install-intent", Action: "install", Stage: "retire-direct",
+		ExpectedGeneration: snap.Ledger.Generation,
+		Targets: []portablesetup.IntentTarget{
+			{Client: "claude", Profile: env.claudeConfig, Units: []string{"hooks"}},
+			{Client: "codex", Profile: env.codexHome, Units: []string{"agent-notify"}},
+		},
+	})
+	t.Setenv("CODEX_HOME", filepath.Join(env.root, "later-env-codex"))
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(env.root, "later-env-claude"))
+	var out bytes.Buffer
+	resume := []string{
+		"--action", "install", "--json",
+		"--control-root", env.control, "--runtime-root", env.runtime, "--global-config", env.global,
+		"--claude-executable", env.probe, "--codex-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+	}
+	if code := executeSetupWizardWith(ctx, resume, &out, io.Discard, strings.NewReader(""), false); code == 2 {
+		t.Fatalf("mixed resume invalid: %s", out.String())
+	}
+	got := decodeWizardJSON(t, out)
+	if got.Outcome == "cancelled" || got.Reason == "empty_selection" {
+		t.Fatalf("did not restore pending agents: %+v", got)
+	}
+	if got.Reason == "noninteractive_requires_yes" {
+		t.Fatalf("matching pending intent still required --yes: %+v", got)
+	}
+	joined := strings.Join(got.Command, " ")
+	for _, want := range []string{
+		"--agents claude,codex",
+		"--claude-hooks true",
+		"--codex-hooks false",
+		"--claude-agent-notify false",
+		"--codex-agent-notify true",
+		"--claude-config " + env.claudeConfig,
+		"--codex-home " + env.codexHome,
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("retry omitted %q: %v", want, got.Command)
+		}
+	}
+	if strings.Contains(joined, "--hooks ") || strings.Contains(joined, "--agent-notify ") {
+		t.Fatalf("mixed units collapsed to global flags: %v", got.Command)
+	}
+	out.Reset()
+	conflict := []string{
+		"--action", "install", "--agents", "claude,codex", "--hooks", "true", "--agent-notify", "true",
+		"--yes", "--json", "--control-root", env.control, "--runtime-root", env.runtime,
+	}
+	if code := executeSetupWizardWith(ctx, conflict, &out, io.Discard, strings.NewReader(""), false); code != 1 {
+		t.Fatalf("global units exit: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "conflict" || got.Reason != "pending_intent_conflict" {
+		t.Fatalf("global units matched mixed intent: %+v", got)
+	}
+}
+
+func TestSetupWizardResumeOmittedUninstallFromPendingE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	snap, err := installruntime.ReadInstalledSnapshot(env.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plantWizardCLIPendingIntent(t, ctx, env.control, env.runtime, snap.Ledger.Generation, portablesetup.Intent{
+		Version: 1, SetupIntentID: "pending-uninstall-intent", Action: "uninstall", Stage: "revoke-locator",
+		ExpectedGeneration: snap.Ledger.Generation,
+		Targets:            []portablesetup.IntentTarget{{Client: "codex", Profile: env.codexHome, Units: []string{"direct-mcp"}}},
+	})
+	var out bytes.Buffer
+	resume := []string{"--action", "uninstall", "--json", "--control-root", env.control, "--runtime-root", env.runtime}
+	if code := executeSetupWizardWith(ctx, resume, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("resume omitted uninstall: %d %s", code, out.String())
+	}
+	got := decodeWizardJSON(t, out)
+	if got.Reason == "empty_selection" || got.Reason == "noninteractive_requires_yes" {
+		t.Fatalf("did not restore pending uninstall: %+v", got)
+	}
+	if got.Outcome != "unchanged" || got.Reason != "portable_absent" {
+		t.Fatalf("resume uninstall: %+v", got)
+	}
+}
+
 func buildWizardProbe(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
