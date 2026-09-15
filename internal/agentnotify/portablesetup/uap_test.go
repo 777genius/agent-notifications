@@ -966,6 +966,74 @@ func TestRemoveGroupRejectsMissingPluginDataBeforeRevoke(t *testing.T) {
 	requirePortableLocator(t, installed[1])
 }
 
+func TestRemoveRejectsMovedTargetBeforeRevoke(t *testing.T) {
+	codex, ledger := bindingFixture(t)
+	probe := buildProbe(t)
+	root := filepath.Dir(codex.ControlRoot)
+	pkg := filepath.Join(root, "package source with spaces")
+	writePackage(t, pkg, probe)
+	uapRoot := filepath.Join(root, "uap")
+	mat, err := NewMaterializer(UAPRoots{
+		StateFile:        filepath.Join(uapRoot, "state", "state-v2.json"),
+		LockFile:         filepath.Join(uapRoot, "state", "mutation.lock"),
+		OperationsDir:    filepath.Join(uapRoot, "state", "operations"),
+		PluginDataBase:   filepath.Join(uapRoot, "plugin data"),
+		ManagedRoot:      filepath.Join(uapRoot, "managed"),
+		HelperExecutable: probe,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := Identity{
+		InstallationID: "00000000-0000-4000-8000-0000000000ee",
+		ComponentID:    codex.ComponentID, Owner: codex.Owner, ScopeRoot: codex.ScopeRoot,
+		ControlRoot: codex.ControlRoot, GlobalConfig: codex.GlobalConfig, RuntimeRoot: codex.RuntimeRoot,
+		Primary: codex.Primary,
+	}
+	codexConfig := filepath.Join(root, "home", "codex config")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := mat.Install(testCtx(t), MaterializeRequest{
+		Identity: id, Integration: portable.Codex, ExpectedGeneration: ledger.Generation,
+		PackageRoot: pkg, ClientConfigRoot: codexConfig, ClientExecutable: probe,
+		OperationID: "portable-codex-remove-moved",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := mat.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved := false
+	for i := range state.Installations {
+		if state.Installations[i].InstallationID != id.InstallationID {
+			continue
+		}
+		for bid, binding := range state.Installations[i].Clients {
+			binding.TargetLocator = filepath.Join(root, "moved-target")
+			state.Installations[i].Clients[bid] = binding
+			moved = true
+		}
+	}
+	if !moved {
+		t.Fatal("codex target missing")
+	}
+	if err := mat.Store.Save(state); err != nil {
+		t.Fatal(err)
+	}
+	err = mat.Remove(testCtx(t), MaterializeRequest{
+		Identity: id, Integration: portable.Codex, ClientConfigRoot: codexConfig,
+		ClientExecutable: probe, OperationID: "portable-codex-remove-moved-blocked",
+		ExternalUninstalled: true,
+	})
+	if err == nil {
+		t.Fatal("moved managed target accepted")
+	}
+	requirePortableLocator(t, installed)
+}
+
 func TestGuardSecondClientAllowsCopiedSameDigest(t *testing.T) {
 	codex, ledger := bindingFixture(t)
 	probe := buildProbe(t)
@@ -1323,6 +1391,133 @@ func TestUAPMaterializerApplyGroupRepairMixedRevisions(t *testing.T) {
 	if claudeBefore == "" || got[1].BindingID != claudeBefore {
 		t.Fatalf("mixed repair rewrote claude: before=%s after=%s", claudeBefore, got[1].BindingID)
 	}
+}
+
+func TestUAPMaterializerRepairMixedRematerializeDeletedSibling(t *testing.T) {
+	codex, ledger := bindingFixture(t)
+	probe := buildProbe(t)
+	root := filepath.Dir(codex.ControlRoot)
+	pkg := filepath.Join(root, "package")
+	writePackage(t, pkg, probe)
+	r1 := filepath.Join(root, "package-r1")
+	copyPackage(t, pkg, r1)
+	uapRoot := filepath.Join(root, "uap")
+	claudeConfig := filepath.Join(root, "home", "claude-config")
+	codexConfig := filepath.Join(root, "home", "codex-config")
+	for _, dir := range []string{claudeConfig, codexConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mat, err := NewMaterializer(UAPRoots{
+		StateFile:        filepath.Join(uapRoot, "state", "state-v2.json"),
+		LockFile:         filepath.Join(uapRoot, "state", "mutation.lock"),
+		OperationsDir:    filepath.Join(uapRoot, "state", "operations"),
+		PluginDataBase:   filepath.Join(uapRoot, "plugin-data"),
+		ManagedRoot:      filepath.Join(uapRoot, "managed"),
+		HelperExecutable: probe,
+		ClaudeRunner:     listingRunner{configRoot: claudeConfig},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := Identity{
+		InstallationID: "00000000-0000-4000-8000-0000000000ef",
+		ComponentID:    codex.ComponentID, Owner: codex.Owner, ScopeRoot: codex.ScopeRoot,
+		ControlRoot: codex.ControlRoot, GlobalConfig: codex.GlobalConfig, RuntimeRoot: codex.RuntimeRoot,
+		Primary: codex.Primary,
+	}
+	installed, err := mat.ApplyGroup(testCtx(t), []MaterializeRequest{
+		{
+			Identity: id, Integration: portable.Codex, ExpectedGeneration: ledger.Generation,
+			PackageRoot: r1, ClientConfigRoot: codexConfig, ClientExecutable: probe,
+			OperationID: "portable-mixed-rematerialize-install",
+		},
+		{
+			Identity: id, Integration: portable.Claude, ExpectedGeneration: ledger.Generation,
+			PackageRoot: r1, ClientConfigRoot: claudeConfig, ClientExecutable: probe,
+			OperationID: "portable-mixed-rematerialize-install",
+		},
+	})
+	if err != nil || len(installed) != 2 {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	id.InstallationID = installed[0].InstallationID
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := mat.Update(testCtx(t), MaterializeRequest{
+		Identity: id, Integration: portable.Codex, PackageRoot: pkg,
+		ClientConfigRoot: codexConfig, ClientExecutable: probe,
+		OperationID: "portable-mixed-rematerialize-codex-update",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id.InstallationID = updated.InstallationID
+	state, err := mat.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	installation, ok := findInstallation(state, id.InstallationID)
+	if !ok {
+		t.Fatal("installation missing")
+	}
+	claudeTarget := ""
+	for _, binding := range installation.Clients {
+		if binding.ClientID == string(portable.Claude) {
+			claudeTarget = binding.TargetLocator
+		}
+	}
+	if claudeTarget == "" {
+		t.Fatal("claude target missing")
+	}
+	if err := os.RemoveAll(claudeTarget); err != nil {
+		t.Fatal(err)
+	}
+	got, err := mat.Repair(testCtx(t), MaterializeRequest{
+		Identity: id, Integration: portable.Claude, PackageRoot: r1,
+		ClientConfigRoot: claudeConfig, ClientExecutable: probe,
+		OperationID: "portable-mixed-rematerialize-claude", Operation: uapinstaller.OpRepair,
+	})
+	if err != nil {
+		t.Fatalf("mixed rematerialize: %v", err)
+	}
+	if _, err := os.Stat(claudeTarget); err != nil {
+		t.Fatalf("mixed rematerialize did not restore claude: %v", err)
+	}
+	if got.BindingID == "" || got.InstallationID != id.InstallationID {
+		t.Fatalf("mixed rematerialize claude: %+v", got)
+	}
+	claudeBefore := ""
+	codexBefore := updated.BindingID
+	for _, binding := range installed {
+		if binding.Integration == portable.Claude {
+			claudeBefore = binding.BindingID
+		}
+	}
+	if claudeBefore == "" || got.BindingID != claudeBefore {
+		t.Fatalf("mixed rematerialize rewrote claude: before=%s after=%s", claudeBefore, got.BindingID)
+	}
+	state, err = mat.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	installation, ok = findInstallation(state, id.InstallationID)
+	if !ok {
+		t.Fatal("installation missing after rematerialize")
+	}
+	codexAfter := ""
+	for _, binding := range installation.Clients {
+		if binding.ClientID == string(portable.Codex) {
+			codexAfter = binding.ClientBindingID
+		}
+	}
+	if codexAfter != codexBefore {
+		t.Fatalf("mixed rematerialize rewrote codex sibling: before=%s after=%s", codexBefore, codexAfter)
+	}
+	requirePortableLocator(t, got)
+	requirePortableLocator(t, updated)
 }
 
 func TestUAPMaterializerApplyGroupRepeatUnchanged(t *testing.T) {
