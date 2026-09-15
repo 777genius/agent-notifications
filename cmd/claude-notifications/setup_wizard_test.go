@@ -1453,6 +1453,52 @@ func TestSetupWizardInspectPendingJournalE2E(t *testing.T) {
 	}
 }
 
+func TestSetupWizardInstallRecoversPendingJournalE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	plantWizardCLIPendingJournal(t, env.control)
+	var out bytes.Buffer
+	install := []string{
+		"--action", "install", "--agents", "codex", "--hooks", "false", "--yes", "--json",
+		"--package", env.pkg, "--control-root", env.control, "--runtime-root", env.runtime,
+		"--global-config", env.global, "--codex-home", env.codexHome,
+		"--client-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+	}
+	if code := executeSetupWizardWith(ctx, install, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("install recover: %d %s", code, out.String())
+	}
+	installed := decodeWizardJSON(t, out)
+	if installed.Outcome != "completed" {
+		t.Fatalf("install recover: %+v", installed)
+	}
+	journal := filepath.Join(filepath.Dir(env.control), "uap", "state", "operations", "wizard-pending-op.json")
+	if _, err := os.Lstat(journal); !os.IsNotExist(err) {
+		t.Fatalf("install left pending journal: %v", err)
+	}
+	out.Reset()
+	inspect := []string{
+		"--action", "inspect", "--json", "--control-root", env.control,
+		"--runtime-root", env.runtime, "--helper", env.probe,
+	}
+	if code := executeSetupWizardWith(ctx, inspect, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect after recover: %d %s", code, out.String())
+	}
+	view := decodeWizardJSON(t, out)
+	if view.Outcome == "incomplete" && view.Reason == "recovery_required" {
+		t.Fatalf("inspect still recovery_required: %+v", view)
+	}
+	found := false
+	for _, target := range view.Targets {
+		if target.Unit == "agent-notify" && target.Client == "codex" && target.Outcome == "installed" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("inspect after recover missed install: %+v", view.Targets)
+	}
+}
+
 func TestSetupWizardRepairDifferentDigestRequiresUpdateE2E(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()

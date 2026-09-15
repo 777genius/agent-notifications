@@ -190,7 +190,9 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 				return plan, ErrRefused
 			}
 		}
-		if len(ev.notifyAgents) > 0 {
+		var recoveryPending bool
+		text, recoveryPending = annotatePendingRecovery(ctx, req, text, &ev.out)
+		if len(ev.notifyAgents) > 0 && !recoveryPending {
 			acquired, release, err := acquirePlanPackage(ctx, req, ev.notifyAgents)
 			if err != nil {
 				reason := "package_acquisition_failed"
@@ -270,19 +272,8 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 			acquired.HelperDigest = req.HelperDigest
 			acquired.HelperVersion = req.HelperVersion
 		}
-	}
-	if view, err := inspectUAPState(ctx, req); err == nil && view.Recovery.Required {
-		ids := recoveryIDs(view)
-		reason := strings.Join(ids, ",")
-		if reason == "" {
-			reason = view.Recovery.Reason
-		}
-		if len(ids) > 0 {
-			text += " recovery-pending=" + strings.Join(ids, ",")
-		} else if view.Recovery.Reason != "" {
-			text += " recovery-pending=untrusted"
-		}
-		ev.out.NextActions = append(ev.out.NextActions, NextAction{Kind: "recover", Reason: reason})
+	} else {
+		text, _ = annotatePendingRecovery(ctx, req, text, &ev.out)
 	}
 	if req.Action == ActionUninstall {
 		if prereqs := uninstallManualPrerequisites(ctx, req, ev.snap, ev.runtimeRoot, ev.notifyAgents); len(prereqs) > 0 {
@@ -602,6 +593,45 @@ func inspectUAPState(ctx context.Context, req Request) (uapinstaller.Inspection,
 		return uapinstaller.Inspection{}, err
 	}
 	return eng.Inspect(ctx)
+}
+
+// annotatePendingRecovery reports UAP recovery without recovering. Plan skips
+// source-dependent Prepare while a journal is pending (§7.4.2, §9.2).
+func annotatePendingRecovery(ctx context.Context, req Request, text string, out *Result) (string, bool) {
+	if out == nil {
+		return text, false
+	}
+	view, err := inspectUAPState(ctx, req)
+	if err != nil || !view.Recovery.Required {
+		return text, false
+	}
+	ids := recoveryIDs(view)
+	reason := strings.Join(ids, ",")
+	if reason == "" {
+		reason = view.Recovery.Reason
+	}
+	if len(ids) > 0 {
+		text += " recovery-pending=" + strings.Join(ids, ",")
+	} else if view.Recovery.Reason != "" {
+		text += " recovery-pending=untrusted"
+	}
+	out.NextActions = append(out.NextActions, NextAction{Kind: "recover", Reason: reason})
+	return text, true
+}
+
+func recoverWizardJournals(ctx context.Context, mat portablesetup.Materializer, id portablesetup.Identity, req Request, agents []portable.Integration) error {
+	if len(agents) == 0 {
+		return nil
+	}
+	agent := agents[0]
+	return mat.RecoverJournals(ctx, portablesetup.MaterializeRequest{
+		Identity:         id,
+		Integration:      agent,
+		PackageRoot:      req.PackageRoot,
+		ClientConfigRoot: clientConfig(req, agent),
+		ClientExecutable: clientExecutable(req, agent),
+		HelperExecutable: req.Helper,
+	})
 }
 
 // DiscoverAgents reports Claude/Codex user-scope metadata and executable
@@ -1088,6 +1118,10 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 			if mapped, bindErr := requireLiveNotifyBindings(req, mat, id, notifyAgents, out); bindErr != nil {
 				return mapped, bindErr
 			}
+		}
+		if err := recoverWizardJournals(ctx, mat, id, req, notifyAgents); err != nil {
+			out.Outcome, out.Reason = "incomplete", "recovery_required"
+			return out, err
 		}
 		if err := reserveClientBindings(&req, mat, notifyAgents); err != nil {
 			if mapped, handled := mapAmbiguous(err, out); handled {

@@ -86,6 +86,12 @@ func (m Materializer) beginMutation(ctx context.Context, req *MaterializeRequest
 	return release, nil
 }
 
+// RecoverJournals restores the Notifications kernel journal, then UAP
+// RecoverCurrent, without a new Prepare (§7.4.2).
+func (m Materializer) RecoverJournals(ctx context.Context, req MaterializeRequest) error {
+	return m.recoverOwnedJournals(ctx, req)
+}
+
 // recoverOwnedJournals restores a pending Notifications kernel journal, then
 // releases the coordinator lease before UAP Recover (§7.4.2).
 func (m Materializer) recoverOwnedJournals(ctx context.Context, req MaterializeRequest) error {

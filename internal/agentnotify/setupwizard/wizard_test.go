@@ -525,6 +525,9 @@ func TestWizardInspectReportsPendingJournal(t *testing.T) {
 	if !found {
 		t.Fatalf("missing recover action: %+v", got.NextActions)
 	}
+	if _, err := os.Lstat(wizardPendingJournalPath(control)); err != nil {
+		t.Fatalf("inspect recovered journal: %v", err)
+	}
 }
 
 func TestWizardInspectDoesNotAcquirePackage(t *testing.T) {
@@ -586,9 +589,102 @@ func TestPlanShowsPendingRecoveryWithoutMutating(t *testing.T) {
 	if !found {
 		t.Fatalf("plan recover action: %+v", plan.Result.NextActions)
 	}
+	if _, err := os.Lstat(wizardPendingJournalPath(control)); err != nil {
+		t.Fatalf("hooks plan recovered journal: %v", err)
+	}
 	snap, err := installruntime.ReadInstalledSnapshot(control)
 	if err != nil || snap.Ledger.PendingMutation != nil || snap.Ledger.Generation != gen {
 		t.Fatalf("plan recovered journal: %+v %v", snap.Ledger, err)
+	}
+}
+
+func TestPlanNotifyShowsPendingRecoveryWithoutMutating(t *testing.T) {
+	control, runtime, global, _, gen := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	plantWizardJournal(t, control)
+	off := false
+	plan, err := Plan(testCtx(t), Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+		PackageFetcher: func(context.Context, string) ([]byte, error) {
+			t.Fatal("notify plan fetched a package during pending recovery")
+			return nil, nil
+		},
+	})
+	if err != nil || !plan.Ready {
+		t.Fatalf("notify plan: %+v %v", plan, err)
+	}
+	if !strings.Contains(plan.Text, "recovery-pending=wizard-pending-op") {
+		t.Fatalf("missing notify recovery text: %s", plan.Text)
+	}
+	found := false
+	for _, next := range plan.Result.NextActions {
+		if next.Kind == "recover" && strings.Contains(next.Reason, "wizard-pending-op") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("notify plan recover action: %+v", plan.Result.NextActions)
+	}
+	if _, err := os.Lstat(wizardPendingJournalPath(control)); err != nil {
+		t.Fatalf("notify plan recovered journal: %v", err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil || snap.Ledger.PendingMutation != nil || snap.Ledger.Generation != gen {
+		t.Fatalf("notify plan mutated ledger: %+v %v", snap.Ledger, err)
+	}
+}
+
+func TestWizardInstallRecoversPendingJournal(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	plantWizardJournal(t, control)
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install recover: %+v %v", installed, err)
+	}
+	if _, err := os.Lstat(wizardPendingJournalPath(control)); !os.IsNotExist(err) {
+		t.Fatalf("install left pending journal: %v", err)
+	}
+	req.Action = ActionInspect
+	req.Yes = false
+	view, err := Run(ctx, req)
+	if err != nil || view.Outcome == "recovery_required" || view.Reason == "recovery_required" {
+		t.Fatalf("inspect after recover: %+v %v", view, err)
+	}
+	found := false
+	for _, target := range view.Targets {
+		if target.Unit == "agent-notify" && target.Outcome == "installed" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("install after recover missed binding: %+v", view.Targets)
 	}
 }
 
@@ -679,6 +775,10 @@ func plantWizardJournal(t *testing.T, controlRoot string) {
 	if err := os.WriteFile(filepath.Join(ops, opID+".json"), append(body, '\n'), 0600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func wizardPendingJournalPath(controlRoot string) string {
+	return filepath.Join(filepath.Dir(controlRoot), "uap", "state", "operations", "wizard-pending-op.json")
 }
 
 func TestWizardEmptyAgentsCancels(t *testing.T) {
