@@ -3559,6 +3559,29 @@ func TestWizardInstallMixedLiveDoesNotReplaceOlderSibling(t *testing.T) {
 	if claudeAfter.BindingID != claudeBefore.BindingID || codexAfter.BindingID != codexBefore.BindingID {
 		t.Fatalf("blocked install rewrote bindings: claude=%+v/%+v codex=%+v/%+v", claudeBefore, claudeAfter, codexBefore, codexAfter)
 	}
+	updateReq := req
+	updateReq.Action = ActionUpdate
+	updateReq.Agents = blocked.NextActions[0].Agents
+	updateReq.Yes = true
+	updatedCodex, err := Run(ctx, updateReq)
+	if err != nil || updatedCodex.Outcome != "completed" {
+		t.Fatalf("update behind sibling: %+v %v", updatedCodex, err)
+	}
+	view, err = Run(ctx, inspectReq)
+	if err != nil {
+		t.Fatalf("inspect after behind update: %+v %v", view, err)
+	}
+	if notifyTreeDigest(view, "claude") != claudeDigest {
+		t.Fatalf("behind update rewrote claude: before=%s after=%s", claudeDigest, notifyTreeDigest(view, "claude"))
+	}
+	if notifyTreeDigest(view, "codex") != claudeDigest {
+		t.Fatalf("behind update did not bring codex to r2: claude=%s codex=%s", claudeDigest, notifyTreeDigest(view, "codex"))
+	}
+	claudeDone := inspectedWizardBinding(t, ctx, control, "claude")
+	codexDone := inspectedWizardBinding(t, ctx, control, "codex")
+	if claudeDone.BindingID != claudeBefore.BindingID || codexDone.BindingID != codexBefore.BindingID {
+		t.Fatalf("behind update rewrote bindings: claude=%+v/%+v codex=%+v/%+v", claudeBefore, claudeDone, codexBefore, codexDone)
+	}
 }
 
 func TestWizardInstallBothLiveBehindRequiresUpdateBoth(t *testing.T) {
@@ -3634,6 +3657,28 @@ func TestWizardInstallBothLiveBehindRequiresUpdateBoth(t *testing.T) {
 	}
 	if notifyTreeDigest(view, "claude") != claudeBefore.TreeDigest || notifyTreeDigest(view, "codex") != codexBefore.TreeDigest {
 		t.Fatalf("behind install rewrote digests: view=%+v before claude=%s codex=%s", view.Targets, claudeBefore.TreeDigest, codexBefore.TreeDigest)
+	}
+	updateReq := req
+	updateReq.Action = ActionUpdate
+	updateReq.Agents = blocked.NextActions[0].Agents
+	updateReq.Yes = true
+	updated, err := Run(ctx, updateReq)
+	if err != nil || updated.Outcome != "completed" {
+		t.Fatalf("update both behind: %+v %v", updated, err)
+	}
+	view, err = Run(ctx, inspectReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claudeDigest := notifyTreeDigest(view, "claude")
+	codexDigest := notifyTreeDigest(view, "codex")
+	if claudeDigest == "" || claudeDigest == claudeBefore.TreeDigest || claudeDigest != codexDigest {
+		t.Fatalf("behind update did not converge: before=%s claude=%s codex=%s", claudeBefore.TreeDigest, claudeDigest, codexDigest)
+	}
+	claudeDone := inspectedWizardBinding(t, ctx, control, "claude")
+	codexDone := inspectedWizardBinding(t, ctx, control, "codex")
+	if claudeDone.BindingID != claudeBefore.BindingID || codexDone.BindingID != codexBefore.BindingID {
+		t.Fatalf("behind update rewrote bindings: claude=%+v/%+v codex=%+v/%+v", claudeBefore, claudeDone, codexBefore, codexDone)
 	}
 }
 
