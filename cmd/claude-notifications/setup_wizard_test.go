@@ -892,6 +892,81 @@ func TestSetupWizardTTYMixedAddKeepsPerClientUnits(t *testing.T) {
 	}
 }
 
+func TestSetupWizardTTYUpdateRepairOmittedKeepsMixedE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	shared := []string{
+		"--agents", "claude,codex", "--package", env.pkg, "--control-root", env.control,
+		"--runtime-root", env.runtime, "--global-config", env.global,
+		"--codex-home", env.codexHome, "--claude-config", env.claudeConfig,
+		"--claude-executable", env.probe, "--codex-executable", env.probe,
+		"--helper", env.probe, "--scope-root", env.scope,
+	}
+	mixed := func(result setupwizard.Result) (claudeMCP, codexMCP string, hooks bool) {
+		for _, target := range result.Targets {
+			switch {
+			case target.Unit == "agent-notify" && target.Client == "claude":
+				claudeMCP = target.Outcome
+			case target.Unit == "agent-notify" && target.Client == "codex":
+				codexMCP = target.Outcome
+			case target.Unit == "hooks" && target.Outcome == "installed":
+				hooks = true
+			}
+		}
+		return claudeMCP, codexMCP, hooks
+	}
+	assertMixed := func(label string, result setupwizard.Result) {
+		t.Helper()
+		claudeMCP, codexMCP, hooks := mixed(result)
+		if claudeMCP == "installed" || codexMCP != "installed" || hooks {
+			t.Fatalf("%s mutated mixed units: %+v", label, result.Targets)
+		}
+	}
+	var out bytes.Buffer
+	install := append([]string{
+		"--action", "install", "--hooks", "false", "--claude-agent-notify", "false",
+		"--codex-agent-notify", "true", "--yes", "--json",
+	}, shared...)
+	if code := executeSetupWizardWith(ctx, install, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("mixed install: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "completed" {
+		t.Fatalf("mixed install result: %+v", got)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, shared, &out, io.Discard, strings.NewReader("4\ny\n"), true); code != 0 || !strings.Contains(out.String(), "completed") {
+		t.Fatalf("tty omitted update: %d %s", code, out.String())
+	}
+	if strings.Contains(out.String(), "Units: 1) Hooks") || strings.Contains(out.String(), "differ per client") {
+		t.Fatalf("tty update asked units: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "Plan: action=update") || !strings.Contains(out.String(), "hooks=unchanged") || !strings.Contains(out.String(), "agent-notify=unchanged") {
+		t.Fatalf("tty update plan: %s", out.String())
+	}
+	out.Reset()
+	inspect := append([]string{"--action", "inspect", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, inspect, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect after tty update: %d %s", code, out.String())
+	}
+	assertMixed("tty update", decodeWizardJSON(t, out))
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, shared, &out, io.Discard, strings.NewReader("5\ny\n"), true); code != 0 || !strings.Contains(out.String(), "completed") {
+		t.Fatalf("tty omitted repair: %d %s", code, out.String())
+	}
+	if strings.Contains(out.String(), "Units: 1) Hooks") || strings.Contains(out.String(), "differ per client") {
+		t.Fatalf("tty repair asked units: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "Plan: action=repair") || !strings.Contains(out.String(), "hooks=unchanged") || !strings.Contains(out.String(), "agent-notify=unchanged") {
+		t.Fatalf("tty repair plan: %s", out.String())
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, inspect, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect after tty repair: %d %s", code, out.String())
+	}
+	assertMixed("tty repair", decodeWizardJSON(t, out))
+}
+
 func TestSetupWizardSpaceContainingRootsE2E(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
