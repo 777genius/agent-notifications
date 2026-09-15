@@ -1065,6 +1065,99 @@ func TestSetupWizardPendingIntentConflictE2E(t *testing.T) {
 	}
 }
 
+func TestSetupWizardSecondClientDifferentDigestE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	shared := []string{
+		"--hooks", "false", "--control-root", env.control, "--runtime-root", env.runtime,
+		"--global-config", env.global, "--codex-home", env.codexHome, "--claude-config", env.claudeConfig,
+		"--claude-executable", env.probe, "--codex-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+	}
+	notify := func(result setupwizard.Result) map[string]string {
+		out := map[string]string{}
+		for _, target := range result.Targets {
+			if target.Unit == "agent-notify" {
+				out[target.Client] = target.Outcome
+			}
+		}
+		return out
+	}
+	binding := func(result setupwizard.Result, client string) string {
+		for _, target := range result.Targets {
+			if target.Unit == "agent-notify" && target.Client == client {
+				return target.Reason
+			}
+		}
+		return ""
+	}
+	var out bytes.Buffer
+	claudeFlags := append([]string{"--action", "install", "--agents", "claude", "--package", env.pkg, "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, claudeFlags, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("install claude: %d %s", code, out.String())
+	}
+	claude := decodeWizardJSON(t, out)
+	if claude.Outcome != "completed" {
+		t.Fatalf("install claude result: %+v", claude)
+	}
+	claudeBinding := binding(claude, "claude")
+	if claudeBinding == "" {
+		t.Fatalf("missing claude binding: %+v", claude.Targets)
+	}
+	other := filepath.Join(env.root, "other-package")
+	writeWizardPackage(t, other, env.probe)
+	if err := os.WriteFile(filepath.Join(other, "skills", "agent-notify", "SKILL.md"), []byte("---\nname: agent-notify\ndescription: Revised\n---\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	mismatch := append([]string{"--action", "install", "--agents", "codex", "--package", other, "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, mismatch, &out, io.Discard, strings.NewReader(""), false); code != 1 {
+		t.Fatalf("mismatch exit: %d %s", code, out.String())
+	}
+	blocked := decodeWizardJSON(t, out)
+	if blocked.Outcome != "incomplete" || blocked.Reason != "update_required" {
+		t.Fatalf("mismatch: %+v", blocked)
+	}
+	if len(blocked.NextActions) != 2 || blocked.NextActions[0].Kind != "update" || blocked.NextActions[1].Kind != "install" {
+		t.Fatalf("mismatch next: %+v", blocked.NextActions)
+	}
+	if !strings.Contains(strings.Join(blocked.NextActions[0].Command, " "), "--agents claude") {
+		t.Fatalf("update command missed live client: %v", blocked.NextActions[0].Command)
+	}
+	if !strings.Contains(strings.Join(blocked.NextActions[1].Command, " "), "--agents codex") {
+		t.Fatalf("add command missed new client: %v", blocked.NextActions[1].Command)
+	}
+	out.Reset()
+	inspect := append([]string{"--action", "inspect", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, inspect, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect after mismatch: %d %s", code, out.String())
+	}
+	afterMismatch := notify(decodeWizardJSON(t, out))
+	if afterMismatch["claude"] != "installed" || afterMismatch["codex"] == "installed" {
+		t.Fatalf("mismatch mutated bindings: %+v", afterMismatch)
+	}
+	out.Reset()
+	add := append([]string{"--action", "install", "--agents", "codex", "--package", env.pkg, "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, add, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("add same digest: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "completed" || got.InstallationID != claude.InstallationID {
+		t.Fatalf("add same digest: %+v", got)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, inspect, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect after add: %d %s", code, out.String())
+	}
+	view := decodeWizardJSON(t, out)
+	both := notify(view)
+	if both["claude"] != "installed" || both["codex"] != "installed" {
+		t.Fatalf("inspect after add: %+v", view.Targets)
+	}
+	if binding(view, "claude") != claudeBinding {
+		t.Fatalf("claude binding revised: %s vs %s", claudeBinding, binding(view, "claude"))
+	}
+}
+
 func buildWizardProbe(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
