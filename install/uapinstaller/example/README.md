@@ -17,3 +17,9 @@ explicit absolute roots and a standard local package plus helper:
 GOWORK=off go run . -state /abs/uap -package /abs/pkg -config /abs/config \
   -helper /abs/helper -client-exe /abs/client
 ```
+
+Pass `-claude-config` (and optionally `-claude-exe`) to use published
+`Request.Targets` for Claude+Codex together. That path needs a trusted Claude
+Code CLI; a probe helper is enough for the Codex-only flags. Mixed package
+roots stay unpublished. Mixed Codex uninstall still needs Codex
+`ExternalUninstalled`.

@@ -1089,6 +1089,58 @@ func countPluginMutations(calls [][]string) int {
 	return n
 }
 
+func bothClientTargets(codexConfig, claudeConfig, probe string) []ClientTarget {
+	return []ClientTarget{
+		{ClientID: "codex", ClientConfigRoot: codexConfig, ClientExecutable: probe},
+		{ClientID: "claude", ClientConfigRoot: claudeConfig, ClientExecutable: probe},
+	}
+}
+
+func newBothClientSandbox(t *testing.T) (context.Context, *Engine, *capturingRunner, string, string, string, string) {
+	t.Helper()
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(base, "codex-config")
+	claudeConfig := filepath.Join(base, "claude-config")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner := &capturingRunner{inner: listingRunner{configRoot: claudeConfig}}
+	eng, err := New(Config{
+		StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe, Runner: runner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ctx, eng, runner, pkg, probe, codexConfig, claudeConfig
+}
+
+func installBothClients(t *testing.T, ctx context.Context, eng *Engine, pkg, probe, id, op string, targets []ClientTarget) Result {
+	t.Helper()
+	prepared, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, InstallationID: id, OperationID: op,
+		RequiredComponents: []string{"mcp", "skills"}, ClientExecutable: probe, Targets: targets,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := eng.Apply(ctx, prepared, Decision{Confirmed: true})
+	_ = prepared.Close()
+	if err != nil || got.Outcome != OutcomeCompleted {
+		t.Fatalf("group install: %+v %v", got, err)
+	}
+	return got
+}
+
 func TestRecoverAfterPartialGroupDoesNotInvokeHostCallback(t *testing.T) {
 	skipWindowsLauncherExecuteBit(t)
 	ctx := testCtx(t)
@@ -1147,6 +1199,164 @@ func TestRecoverAfterPartialGroupDoesNotInvokeHostCallback(t *testing.T) {
 	}
 	if calls != before {
 		t.Fatalf("recover invoked host callback: %d -> %d", before, calls)
+	}
+}
+
+func TestPrepareGroupDeniedApplyWritesNoState(t *testing.T) {
+	ctx, eng, runner, pkg, probe, codexConfig, claudeConfig := newBothClientSandbox(t)
+	called := false
+	eng.cfg.OnCommittedBinding = func(context.Context, BindingFacts) error {
+		called = true
+		return errors.New("denied apply must not invoke callbacks")
+	}
+	prepared, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, InstallationID: "00000000-0000-4000-8000-0000000000c1",
+		OperationID: "group-denied", RequiredComponents: []string{"mcp", "skills"}, ClientExecutable: probe,
+		Targets: bothClientTargets(codexConfig, claudeConfig, probe),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = prepared.Close() }()
+	if _, err := os.Lstat(eng.cfg.StateFile); !os.IsNotExist(err) {
+		t.Fatal("group prepare wrote state")
+	}
+	if _, err := os.Lstat(eng.cfg.LockFile); !os.IsNotExist(err) {
+		t.Fatal("group prepare acquired mutation lock")
+	}
+	before := len(runner.calls)
+	cancelled, err := eng.Apply(ctx, prepared, Decision{})
+	if !errors.Is(err, ErrCancelled) || cancelled.Outcome != OutcomeCancelled || cancelled.Reason != "host cancelled" {
+		t.Fatalf("denied group apply: %+v %v", cancelled, err)
+	}
+	if called {
+		t.Fatal("denied group apply invoked committed-binding callback")
+	}
+	if len(runner.calls) != before {
+		t.Fatalf("denied group apply ran helper: %d -> %d", before, len(runner.calls))
+	}
+	if _, err := os.Lstat(eng.cfg.StateFile); !os.IsNotExist(err) {
+		t.Fatal("denied group apply wrote state")
+	}
+	if _, err := os.Lstat(eng.cfg.LockFile); !os.IsNotExist(err) {
+		t.Fatal("denied group apply acquired mutation lock")
+	}
+}
+
+func TestDiscoverReportsBothClientsAfterGroupInstallWithoutMutating(t *testing.T) {
+	ctx, eng, _, pkg, probe, codexConfig, claudeConfig := newBothClientSandbox(t)
+	id := "00000000-0000-4000-8000-0000000000c2"
+	installBothClients(t, ctx, eng, pkg, probe, id, "group-discover", bothClientTargets(codexConfig, claudeConfig, probe))
+	before, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := eng.Discover()
+	after, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("discover mutated state")
+	}
+	if len(got) != 2 || got[0].ClientID != "claude" || got[1].ClientID != "codex" {
+		t.Fatalf("discover clients: %+v", got)
+	}
+	if len(got[0].Bindings) != 1 || got[0].Bindings[0].BindingID == "" {
+		t.Fatalf("claude discover bindings: %+v", got[0])
+	}
+	if len(got[1].Bindings) != 1 || got[1].Bindings[0].BindingID == "" {
+		t.Fatalf("codex discover bindings: %+v", got[1])
+	}
+	got[0].Bindings[0].ClientID = "mutated"
+	again := eng.Discover()
+	if again[0].Bindings[0].ClientID != "claude" {
+		t.Fatalf("caller mutated discover result: %+v", again[0])
+	}
+}
+
+func TestPrepareRemoveGroupDoesNotDeactivateBeforeApply(t *testing.T) {
+	ctx, eng, runner, pkg, probe, codexConfig, claudeConfig := newBothClientSandbox(t)
+	id := "00000000-0000-4000-8000-0000000000c3"
+	targets := bothClientTargets(codexConfig, claudeConfig, probe)
+	installBothClients(t, ctx, eng, pkg, probe, id, "group-remove-preview", targets)
+	before := len(runner.calls)
+	rm, err := eng.Prepare(ctx, Request{
+		Operation: OpRemove, InstallationID: id, OperationID: "group-remove-preview",
+		ClientExecutable: probe,
+		Targets: []ClientTarget{
+			{ClientID: "codex", ClientConfigRoot: codexConfig, ClientExecutable: probe, ExternalUninstalled: true},
+			{ClientID: "claude", ClientConfigRoot: claudeConfig, ClientExecutable: probe},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rm.Close() }()
+	if len(rm.Plan().Targets) != 2 || rm.Plan().NoChange {
+		t.Fatalf("group remove plan: %+v", rm.Plan())
+	}
+	if len(runner.calls) != before {
+		t.Fatalf("group remove prepare ran helper: %d -> %d %+v", before, len(runner.calls), runner.calls[before:])
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 2 {
+		t.Fatalf("prepare remove mutated bindings: %+v %v", view, err)
+	}
+	cancelled, err := eng.Apply(ctx, rm, Decision{})
+	if !errors.Is(err, ErrCancelled) || cancelled.Outcome != OutcomeCancelled {
+		t.Fatalf("denied group remove: %+v %v", cancelled, err)
+	}
+	if len(runner.calls) != before {
+		t.Fatalf("denied group remove ran helper: %d -> %d", before, len(runner.calls))
+	}
+	view, err = eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 2 {
+		t.Fatalf("denied group remove mutated bindings: %+v %v", view, err)
+	}
+}
+
+func TestApplyStaleGroupRemovePlanChangedPreservesSibling(t *testing.T) {
+	ctx, eng, _, pkg, probe, codexConfig, claudeConfig := newBothClientSandbox(t)
+	id := "00000000-0000-4000-8000-0000000000c4"
+	installBothClients(t, ctx, eng, pkg, probe, id, "group-stale-install", bothClientTargets(codexConfig, claudeConfig, probe))
+	stale, err := eng.Prepare(ctx, Request{
+		Operation: OpRemove, InstallationID: id, OperationID: "group-stale-remove",
+		ClientExecutable: probe,
+		Targets: []ClientTarget{
+			{ClientID: "codex", ClientConfigRoot: codexConfig, ClientExecutable: probe, ExternalUninstalled: true},
+			{ClientID: "claude", ClientConfigRoot: claudeConfig, ClientExecutable: probe},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = stale.Close() }()
+	live, err := eng.Prepare(ctx, Request{
+		Operation: OpRemove, ClientID: "claude", ClientConfigRoot: claudeConfig, ClientExecutable: probe,
+		InstallationID: id, OperationID: "claude-live-remove",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, live, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = live.Close()
+	moved, err := eng.Apply(ctx, stale, Decision{Confirmed: true})
+	if !errors.Is(err, ErrPlanChanged) || moved.Outcome != OutcomeConflict || moved.Reason != "plan_changed" {
+		t.Fatalf("stale group remove: %+v %v", moved, err)
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 {
+		t.Fatalf("inspect after stale group remove: %+v %v", view, err)
+	}
+	seen := map[string]bool{}
+	for _, binding := range view.Installations[0].Bindings {
+		seen[binding.ClientID] = true
+	}
+	if !seen["codex"] {
+		t.Fatal("stale group remove lost sibling")
+	}
+	if seen["claude"] {
+		t.Fatal("live claude remove did not take effect")
 	}
 }
 
@@ -2828,6 +3038,9 @@ func TestExampleModuleStaysExternal(t *testing.T) {
 	if !strings.Contains(text, "Recover(") || !strings.Contains(text, "OpUpdate") || !strings.Contains(text, "OpRepair") {
 		t.Fatal("example omits published lifecycle operations")
 	}
+	if !strings.Contains(text, "ClientTarget") || !strings.Contains(text, "Targets:") {
+		t.Fatal("example omits published group Request.Targets")
+	}
 }
 
 func TestExampleFlaggedPathRunsAgainstLocalModule(t *testing.T) {
@@ -2887,7 +3100,7 @@ func TestExampleFlaggedPathRunsAgainstLocalModule(t *testing.T) {
 		t.Fatalf("sample: %s %v", out, err)
 	}
 	text := string(out)
-	for _, want := range []string{"install=", "recover=", "repeat=", "update=", "repair=", "remove="} {
+	for _, want := range []string{"discover=", "install=", "recover=", "repeat=", "update=", "repair=", "remove="} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("sample omitted %s:\n%s", want, text)
 		}
