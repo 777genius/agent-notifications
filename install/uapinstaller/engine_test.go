@@ -2712,3 +2712,39 @@ func names(entries []os.DirEntry) []string {
 	}
 	return out
 }
+
+func TestReserveIdentityDoesNotStage(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(base, "uap")
+	temp := filepath.Join(base, "tmp")
+	eng, err := New(Config{StateRoot: state, TempRoot: temp})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := eng.ReserveIdentity(IdentityRequest{ClientID: "codex", Allocate: true})
+	if err != nil || first.InstallationID == "" || first.BindingID != "" {
+		t.Fatalf("allocate: %+v %v", first, err)
+	}
+	if _, err := os.Lstat(temp); !os.IsNotExist(err) {
+		t.Fatal("ReserveIdentity created TempRoot")
+	}
+	if _, err := os.Lstat(state); !os.IsNotExist(err) {
+		t.Fatal("ReserveIdentity created StateRoot")
+	}
+	again, err := eng.ReserveIdentity(IdentityRequest{
+		ClientID: "codex", InstallationID: first.InstallationID, Allocate: true,
+	})
+	if err != nil || again.InstallationID != first.InstallationID {
+		t.Fatalf("reuse reserved id: %+v %v", again, err)
+	}
+	absent, err := eng.ReserveIdentity(IdentityRequest{ClientID: "codex", Allocate: false})
+	if err != nil || absent.InstallationID != "" {
+		t.Fatalf("no allocate: %+v %v", absent, err)
+	}
+	if _, err := eng.ReserveIdentity(IdentityRequest{ClientID: "cursor", Allocate: true}); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("unsupported client: %v", err)
+	}
+}

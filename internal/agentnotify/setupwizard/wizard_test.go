@@ -1910,3 +1910,60 @@ func TestPortableInstallFailedKeepsActivationIncomplete(t *testing.T) {
 		t.Fatalf("pre-commit failure: %+v", plain)
 	}
 }
+
+func TestWizardCodexLiveProfileConflict(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	live := filepath.Join(filepath.Dir(control), "codex-live")
+	other := filepath.Join(filepath.Dir(control), "codex-other")
+	for _, dir := range []string{live, other} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: live, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := Run(ctx, req); err != nil || got.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", got, err)
+	}
+	mismatch := req
+	mismatch.CodexHome = other
+	got, err := Run(ctx, mismatch)
+	if err == nil || got.Outcome != "conflict" || got.Reason != "live_profile_conflict" || got.ExitCode() != 1 {
+		t.Fatalf("install mismatch: %+v %v", got, err)
+	}
+	plan, err := Plan(ctx, mismatch)
+	if err == nil || plan.Ready || plan.Result.Outcome != "conflict" || plan.Result.Reason != "live_profile_conflict" {
+		t.Fatalf("plan: %+v %v", plan, err)
+	}
+	mismatch.Action = ActionUninstall
+	mismatch.ExternalUninstalled = true
+	got, err = Run(ctx, mismatch)
+	if err == nil || got.Outcome != "conflict" || got.Reason != "live_profile_conflict" {
+		t.Fatalf("uninstall mismatch: %+v %v", got, err)
+	}
+	same := req
+	same.Action = ActionUninstall
+	same.ExternalUninstalled = true
+	removed, err := Run(ctx, same)
+	if err != nil || removed.Outcome != "completed" {
+		t.Fatalf("matching uninstall: %+v %v", removed, err)
+	}
+	reinstall := mismatch
+	reinstall.Action = ActionInstall
+	reinstall.ExternalUninstalled = false
+	if got, err := Run(ctx, reinstall); err != nil || got.Outcome != "completed" {
+		t.Fatalf("reinstall other profile: %+v %v", got, err)
+	}
+}

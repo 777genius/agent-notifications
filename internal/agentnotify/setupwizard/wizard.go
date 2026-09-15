@@ -841,6 +841,10 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		out.Generation = generation
 		out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "completed", Reason: got.BindingID})
 		id.InstallationID = got.InstallationID
+		if err := recordLiveProfile(got.DataRoot, string(agent), clientConfig(req, agent)); err != nil {
+			out.Outcome, out.Reason = "incomplete", err.Error()
+			return out, err
+		}
 	}
 	out.Outcome = "completed"
 	reportProgress(req, "complete")
@@ -992,12 +996,17 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 			HoldOnly:        agent == portable.Codex && !req.ExternalUninstalled,
 			KeepReservation: true,
 		}
+		dataRoot := liveDataRoot(mat, id.InstallationID, string(agent))
 		err := mat.Remove(ctx, remove)
 		if err != nil {
 			if conflict, handled := pendingIntentConflict(req, err, out); handled {
 				return conflict, err
 			}
 			if errors.Is(err, portablesetup.ErrAlreadyAbsent) {
+				if clearErr := clearLiveProfile(dataRoot, string(agent)); clearErr != nil {
+					out.Outcome, out.Reason = "incomplete", clearErr.Error()
+					return out, clearErr
+				}
 				out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "unchanged", Reason: "already_absent"})
 				continue
 			}
@@ -1015,6 +1024,10 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 			}
 			out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: err.Error()})
 			out.Outcome, out.Reason = "incomplete", "portable_remove_failed"
+			return out, err
+		}
+		if err := clearLiveProfile(dataRoot, string(agent)); err != nil {
+			out.Outcome, out.Reason = "incomplete", err.Error()
 			return out, err
 		}
 		removed++
@@ -1151,27 +1164,29 @@ func materializer(req Request, snap installruntime.InstalledSnapshot, runtimeRoo
 }
 
 func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot string, mat portablesetup.Materializer, generate bool) (portablesetup.Identity, error) {
-	id := req.InstallationID
-	if id == "" {
-		state, err := mat.Store.Load()
-		if err != nil {
-			return portablesetup.Identity{}, err
-		}
-		switch len(state.Installations) {
-		case 1:
-			id = state.Installations[0].InstallationID
-		case 0:
-			if generate {
-				generated, err := domain.NewInstallationID()
-				if err != nil {
-					return portablesetup.Identity{}, err
-				}
-				id = generated
-			}
-		default:
-			return portablesetup.Identity{}, fmt.Errorf("%w: %d installations; pass --installation-id", ErrAmbiguousInstallation, len(state.Installations))
-		}
+	eng, err := uapinstaller.New(uapinstaller.Config{
+		StateRoot:        filepath.Dir(mat.Roots.StateFile),
+		StateFile:        mat.Roots.StateFile,
+		LockFile:         mat.Roots.LockFile,
+		OperationsDir:    mat.Roots.OperationsDir,
+		PluginDataBase:   mat.Roots.PluginDataBase,
+		ManagedRoot:      mat.Roots.ManagedRoot,
+		HelperExecutable: mat.Roots.HelperExecutable,
+	})
+	if err != nil {
+		return portablesetup.Identity{}, err
 	}
+	reserved, err := eng.ReserveIdentity(uapinstaller.IdentityRequest{
+		InstallationID: req.InstallationID,
+		Allocate:       generate,
+	})
+	if err != nil {
+		if errors.Is(err, uapinstaller.ErrAmbiguousInstallations) {
+			return portablesetup.Identity{}, fmt.Errorf("%w: %w", ErrAmbiguousInstallation, err)
+		}
+		return portablesetup.Identity{}, err
+	}
+	id := reserved.InstallationID
 	scope := req.ScopeRoot
 	if scope == "" {
 		scope = req.ControlRoot
@@ -1244,12 +1259,24 @@ func guardLiveProfile(mat portablesetup.Materializer, installationID, clientID, 
 	if profileOwnsLive(profile, live) {
 		return nil
 	}
-	// Codex TargetLocator and native objects live under managed/clients, not
-	// CodexHome. Path-under-profile would false-conflict a matching uninstall.
-	if !clientConfigAnchored(live) {
+	if clientConfigAnchored(live) {
+		return fmt.Errorf("%w: live target %s is not under %s", ErrLiveProfileConflict, live.TargetLocator, profile)
+	}
+	// Codex TargetLocator lives under managed/clients. The live CodexHome is
+	// recorded in PLUGIN_DATA, not locator JSON, so Registration() bytes stay
+	// stable.
+	dataRoot, err := bindingDataRoot(mat, installationID, live)
+	if err != nil {
+		return err
+	}
+	recorded, err := recordedLiveProfile(dataRoot, clientID)
+	if err != nil {
+		return err
+	}
+	if recorded == "" || sameLiveProfile(profile, recorded) {
 		return nil
 	}
-	return fmt.Errorf("%w: live target %s is not under %s", ErrLiveProfileConflict, live.TargetLocator, profile)
+	return fmt.Errorf("%w: live profile %s is not %s", ErrLiveProfileConflict, recorded, profile)
 }
 
 func profileOwnsLive(profile string, binding domain.ClientBinding) bool {
