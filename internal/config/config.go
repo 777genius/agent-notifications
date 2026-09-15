@@ -42,14 +42,14 @@ type NotificationsConfig struct {
 type DesktopConfig struct {
 	Enabled          bool    `json:"enabled"`
 	Sound            bool    `json:"sound"`
-	TerminalBell     *bool   `json:"terminalBell"`     // Send BEL to /dev/tty for terminal tab indicators (default: true)
-	Volume           float64 `json:"volume"`           // Volume level 0.0-1.0, default 1.0 (full volume)
-	AudioDevice      string  `json:"audioDevice"`      // Audio output device name (empty = system default)
-	AppIcon          string  `json:"appIcon"`          // Path to app icon
-	ClickToFocus     bool    `json:"clickToFocus"`     // macOS/Linux/Windows: activate the originating terminal window on notification click (default: true)
-	ShowSessionLabel *bool   `json:"showSessionLabel"` // Include the "[name id]" session label in the notification title (default: true)
-	TerminalBundleID string  `json:"terminalBundleId"` // macOS: override auto-detected terminal bundle ID (empty = auto)
-	ZellijFocus      string  `json:"zellijFocus"`      // Linux: "auto" (default), "pane" (zellij 0.44.1+), "tab" (legacy), "off"
+	TerminalBell     *bool   `json:"terminalBell"`          // Send BEL to /dev/tty for terminal tab indicators (default: true)
+	Volume           float64 `json:"volume"`                // Volume level 0.0-1.0, default 1.0 (full volume)
+	AudioDevice      string  `json:"audioDevice"`           // Audio output device name (empty = system default)
+	AppIcon          string  `json:"appIcon"`               // Path to app icon
+	ClickToFocus     bool    `json:"clickToFocus"`          // macOS/Linux/Windows: activate the originating terminal window on notification click (default: true)
+	ShowSessionLabel *bool   `json:"showSessionLabel"`      // Include the "[name id]" session label in the notification title (default: true)
+	TerminalBundleID string  `json:"terminalBundleId"`      // macOS: override auto-detected terminal bundle ID (empty = auto)
+	ZellijFocus      string  `json:"zellijFocus,omitempty"` // Linux: "auto" (default), "pane" (zellij 0.44.1+), "tab" (legacy), "off"
 }
 
 // WebhookConfig represents webhook settings
