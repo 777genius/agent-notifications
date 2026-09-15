@@ -17,6 +17,7 @@ import (
 	"github.com/777genius/agent-notifications/install/uapinstaller"
 	"github.com/777genius/agent-notifications/internal/agentnotify/setupwizard"
 	"github.com/777genius/agent-notifications/internal/installruntime"
+	"github.com/777genius/agent-notifications/internal/testenv"
 )
 
 func TestSetupWizardHelpAndYesRequired(t *testing.T) {
@@ -510,6 +511,97 @@ func TestSetupWizardBothClientsRemoveOneE2E(t *testing.T) {
 	}
 }
 
+func TestSetupWizardHooksOnlyDoesNotOpenUAP(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	envHome := t.TempDir()
+	testenv.Set(t, envHome)
+	root := setupCommandRoot(t)
+	control := filepath.Join(root, "control")
+	runtime := filepath.Join(root, "runtime")
+	global := filepath.Join(root, "global", "config.json")
+	bundle := writeWizardPluginBundle(t)
+	canonical := filepath.Join(envHome, "fixture-config.json")
+	if err := os.WriteFile(canonical, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENT_NOTIFICATIONS_CONFIG", canonical)
+	codexHome := filepath.Join(envHome, "codex-home")
+	if err := os.MkdirAll(codexHome, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(global), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: control, RuntimeRoot: runtime, Owner: "existing-installer", ConsumerID: "existing",
+		Files: []installruntime.File{{Path: filepath.Join(runtime, "primary"), Data: []byte("inert"), Mode: 0700}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	flags := func(action string, extra ...string) []string {
+		args := []string{
+			"--action", action, "--agents", "codex", "--hooks", "true", "--agent-notify", "false",
+			"--plugin-root", bundle, "--control-root", control, "--runtime-root", runtime,
+			"--global-config", global, "--codex-home", codexHome,
+		}
+		return append(args, extra...)
+	}
+	decode := func(t *testing.T, out bytes.Buffer) setupwizard.Result {
+		t.Helper()
+		var result setupwizard.Result
+		if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+			t.Fatalf("json: %v %s", err, out.String())
+		}
+		return result
+	}
+	var out bytes.Buffer
+	if code := executeSetupWizardWith(ctx, flags("install", "--yes", "--json"), &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("hooks install: %d %s", code, out.String())
+	}
+	installed := decode(t, out)
+	if installed.Outcome != "completed" {
+		t.Fatalf("hooks install result: %+v", installed)
+	}
+	hooks := filepath.Join(codexHome, "hooks.json")
+	data, err := os.ReadFile(hooks)
+	if err != nil || !strings.Contains(string(data), "codex-hook-wrapper") {
+		t.Fatalf("hooks.json: %s %v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "uap", "state", "state-v2.json")); !os.IsNotExist(err) {
+		t.Fatal("hooks-only CLI install opened UAP state")
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, flags("inspect", "--json"), &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("hooks inspect: %d %s", code, out.String())
+	}
+	view := decode(t, out)
+	var hooksInstalled, notifyInstalled bool
+	for _, target := range view.Targets {
+		if target.Unit == "hooks" && target.Outcome == "installed" {
+			hooksInstalled = true
+		}
+		if target.Unit == "agent-notify" && target.Outcome == "installed" {
+			notifyInstalled = true
+		}
+	}
+	if !hooksInstalled || notifyInstalled {
+		t.Fatalf("inspect after hooks-only: %+v", view.Targets)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, flags("uninstall", "--yes", "--json"), &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("hooks uninstall: %d %s", code, out.String())
+	}
+	removed := decode(t, out)
+	if removed.Outcome != "completed" {
+		t.Fatalf("hooks uninstall result: %+v", removed)
+	}
+	data, err = os.ReadFile(hooks)
+	if err == nil && strings.Contains(string(data), "codex-hook-wrapper") {
+		t.Fatalf("hooks survived uninstall: %s", data)
+	}
+}
+
 func buildWizardProbe(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -591,4 +683,26 @@ func writeWizardPackage(t *testing.T, root, probe string) {
 			t.Fatal(err)
 		}
 	}
+}
+
+func writeWizardPluginBundle(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	files := map[string]string{
+		"bin/codex-hook-wrapper.sh":  "#!/bin/sh\nexit 0\n",
+		"bin/codex-hook-wrapper.cmd": "@echo off\r\nexit /b 0\r\n",
+		"bin/hook-wrapper.sh":        "#!/bin/sh\nexit 0\n",
+		"sounds/task-complete.mp3":   "not-really-audio",
+		"config/config.json":         `{"notifications":{}}`,
+	}
+	for rel, content := range files {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
 }
