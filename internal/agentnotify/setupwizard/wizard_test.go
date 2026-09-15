@@ -251,6 +251,10 @@ func TestPlanReservedIDIsReusedOnRun(t *testing.T) {
 		t.Fatalf("plan: %+v %v", plan, err)
 	}
 	reserved := plan.Request.InstallationID
+	reservedBinding := plan.Request.BindingIDs["codex"]
+	if reservedBinding == "" {
+		t.Fatal("plan omitted reserved binding id")
+	}
 	runReq := plan.Request
 	runReq.Yes = true
 	got, err := Run(ctx, runReq)
@@ -272,8 +276,8 @@ func TestPlanReservedIDIsReusedOnRun(t *testing.T) {
 	for _, binding := range state.Installations[0].Clients {
 		bindingID = binding.ClientBindingID
 	}
-	if bindingID == "" || !strings.Contains(plan.Text, "binding-id="+bindingID) {
-		t.Fatalf("run used a different binding id: plan=%s installed=%s", plan.Text, bindingID)
+	if bindingID != reservedBinding || !strings.Contains(plan.Text, "binding-id="+bindingID) {
+		t.Fatalf("run used a different binding id: plan=%s installed=%s text=%s", reservedBinding, bindingID, plan.Text)
 	}
 }
 
@@ -1854,6 +1858,9 @@ func TestWizardConfirmationIntentSurvivesFailedHooks(t *testing.T) {
 	}
 	if len(intent.Targets) != 1 || intent.Targets[0].Client != "codex" {
 		t.Fatalf("targets: %+v", intent.Targets)
+	}
+	if intent.Targets[0].InstallationID == "" || intent.Targets[0].BindingID == "" {
+		t.Fatalf("intent omitted reserved ids: %+v", intent.Targets[0])
 	}
 	resume := req
 	resume.Agents = nil

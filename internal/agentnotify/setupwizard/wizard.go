@@ -53,9 +53,12 @@ type Request struct {
 	ClientExecutables                     map[string]string
 	PackageSHA256                         string
 	InstallationID, Primary               string
-	MCPConfig                             map[string]string
-	ClaudeHooks, CodexHooks               *bool
-	ClaudeAgentNotify, CodexAgentNotify   *bool
+	// BindingIDs are reserved per client during Plan/identity without
+	// staging. Run and the durable intent reuse them.
+	BindingIDs                          map[string]string
+	MCPConfig                           map[string]string
+	ClaudeHooks, CodexHooks             *bool
+	ClaudeAgentNotify, CodexAgentNotify *bool
 	// ExternalUninstalled is host attestation that Codex already removed the
 	// native plugin, or never activated it. --yes does not set this.
 	ExternalUninstalled bool
@@ -206,8 +209,24 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 			}
 			req.InstallationID = id.InstallationID
 			acquired.InstallationID = id.InstallationID
+			if err := reserveClientBindings(&req, mat, ev.notifyAgents); err != nil {
+				if mapped, handled := mapAmbiguous(err, ev.out); handled {
+					plan.Result = attachCommand(req, mapped)
+					return plan, err
+				}
+				ev.out.Outcome, ev.out.Reason = "incomplete", err.Error()
+				plan.Result = attachCommand(req, ev.out)
+				return plan, err
+			}
+			acquired.BindingIDs = copyBindingIDs(req.BindingIDs)
 			plan.Request = req
 			text += " installation-id=" + id.InstallationID
+			for _, agent := range ev.notifyAgents {
+				if bid := req.BindingIDs[string(agent)]; bid != "" {
+					text += " binding-id=" + bid
+					break
+				}
+			}
 			for _, agent := range ev.notifyAgents {
 				preview, err := previewNotifyPlan(ctx, acquired, ev.snap, ev.runtimeRoot, agent)
 				if err != nil {
@@ -219,8 +238,10 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 					plan.Result = attachCommand(req, ev.out)
 					return plan, err
 				}
-				if preview.BindingID != "" {
-					text += " binding-id=" + preview.BindingID
+				if reserved := req.BindingIDs[string(agent)]; reserved != "" && preview.BindingID != "" && preview.BindingID != reserved {
+					ev.out.Outcome, ev.out.Reason = "incomplete", "binding_id_drift"
+					plan.Result = attachCommand(req, ev.out)
+					return plan, ErrRefused
 				}
 				if preview.TreeDigest != "" {
 					text += " source-digest=" + preview.TreeDigest
@@ -574,6 +595,16 @@ func restoreOmittedFromIntent(req Request, agents []portable.Integration, intent
 				return req, agents, portablesetup.ErrIntentConflict
 			}
 		}
+		if target.BindingID != "" {
+			if req.BindingIDs == nil {
+				req.BindingIDs = map[string]string{}
+			}
+			if existing := req.BindingIDs[target.Client]; existing == "" {
+				req.BindingIDs[target.Client] = target.BindingID
+			} else if existing != target.BindingID {
+				return req, agents, portablesetup.ErrIntentConflict
+			}
+		}
 		if target.Profile == "" {
 			continue
 		}
@@ -781,6 +812,13 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		}
 		req.InstallationID = id.InstallationID
 		out.InstallationID = id.InstallationID
+		if err := reserveClientBindings(&req, mat, notifyAgents); err != nil {
+			if mapped, handled := mapAmbiguous(err, out); handled {
+				return mapped, err
+			}
+			out.Outcome, out.Reason = "incomplete", err.Error()
+			return out, err
+		}
 		for _, agent := range notifyAgents {
 			if !explicitAbs(clientConfig(req, agent)) {
 				out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: "client_config_required"})
@@ -920,6 +958,13 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 			}
 		}
 		req.InstallationID = id.InstallationID
+		if err := reserveClientBindings(&req, mat, notifyAgents); err != nil {
+			if mapped, handled := mapAmbiguous(err, out); handled {
+				return mapped, err
+			}
+			out.Outcome, out.Reason = "incomplete", err.Error()
+			return out, err
+		}
 	}
 	retainedEmpty := false
 	if id.InstallationID != "" {
@@ -1149,6 +1194,12 @@ func retryRequestFromIntent(req Request, intent portablesetup.Intent) Request {
 		if target.InstallationID != "" {
 			retry.InstallationID = target.InstallationID
 		}
+		if target.BindingID != "" {
+			if retry.BindingIDs == nil {
+				retry.BindingIDs = map[string]string{}
+			}
+			retry.BindingIDs[target.Client] = target.BindingID
+		}
 		switch target.Client {
 		case "codex":
 			if target.Profile != "" {
@@ -1204,15 +1255,7 @@ func materializer(req Request, snap installruntime.InstalledSnapshot, runtimeRoo
 }
 
 func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot string, mat portablesetup.Materializer, generate bool) (portablesetup.Identity, error) {
-	eng, err := uapinstaller.New(uapinstaller.Config{
-		StateRoot:        filepath.Dir(mat.Roots.StateFile),
-		StateFile:        mat.Roots.StateFile,
-		LockFile:         mat.Roots.LockFile,
-		OperationsDir:    mat.Roots.OperationsDir,
-		PluginDataBase:   mat.Roots.PluginDataBase,
-		ManagedRoot:      mat.Roots.ManagedRoot,
-		HelperExecutable: mat.Roots.HelperExecutable,
-	})
+	eng, err := installerEngine(mat)
 	if err != nil {
 		return portablesetup.Identity{}, err
 	}
@@ -1252,6 +1295,63 @@ func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot st
 		ScopeRoot: scope, ControlRoot: req.ControlRoot, GlobalConfig: global,
 		RuntimeRoot: runtimeRoot, Primary: primaryName(req),
 	}, nil
+}
+
+func installerEngine(mat portablesetup.Materializer) (*uapinstaller.Engine, error) {
+	return uapinstaller.New(uapinstaller.Config{
+		StateRoot:        filepath.Dir(mat.Roots.StateFile),
+		StateFile:        mat.Roots.StateFile,
+		LockFile:         mat.Roots.LockFile,
+		OperationsDir:    mat.Roots.OperationsDir,
+		PluginDataBase:   mat.Roots.PluginDataBase,
+		ManagedRoot:      mat.Roots.ManagedRoot,
+		HelperExecutable: mat.Roots.HelperExecutable,
+	})
+}
+
+func copyBindingIDs(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return map[string]string{}
+	}
+	out := make(map[string]string, len(src))
+	for client, id := range src {
+		out[client] = id
+	}
+	return out
+}
+
+func reserveClientBindings(req *Request, mat portablesetup.Materializer, agents []portable.Integration) error {
+	if req == nil || req.InstallationID == "" || len(agents) == 0 {
+		return nil
+	}
+	eng, err := installerEngine(mat)
+	if err != nil {
+		return err
+	}
+	bindings := copyBindingIDs(req.BindingIDs)
+	for _, agent := range agents {
+		client := string(agent)
+		if bindings[client] != "" {
+			continue
+		}
+		reserved, err := eng.ReserveIdentity(uapinstaller.IdentityRequest{
+			ClientID:         client,
+			InstallationID:   req.InstallationID,
+			DeclaredName:     packageDeclaredName(req.PackageRoot),
+			ClientConfigRoot: clientConfig(*req, agent),
+		})
+		if err != nil {
+			if errors.Is(err, uapinstaller.ErrAmbiguousInstallations) {
+				return fmt.Errorf("%w: %w", ErrAmbiguousInstallation, err)
+			}
+			return err
+		}
+		if reserved.BindingID != "" {
+			bindings[client] = reserved.BindingID
+		}
+	}
+	req.BindingIDs = bindings
+	return nil
 }
 
 func mapAmbiguous(err error, out Result) (Result, bool) {
@@ -1459,6 +1559,7 @@ func wizardIntentTargets(req Request, hookAgents, notifyAgents []portable.Integr
 			target = &portablesetup.IntentTarget{
 				Client:         id,
 				InstallationID: req.InstallationID,
+				BindingID:      req.BindingIDs[id],
 				Profile:        clientConfig(req, agent),
 			}
 			byClient[id] = target
