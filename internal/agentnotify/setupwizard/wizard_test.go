@@ -671,6 +671,51 @@ func TestPlanNotifyShowsPendingRecoveryWithoutMutating(t *testing.T) {
 	}
 }
 
+func TestPlanNotifyShowsPendingKernelRecoveryWithoutMutating(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	plantWizardKernelJournal(t, ctx, control, runtime)
+	off := false
+	plan, err := Plan(ctx, Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+		PackageFetcher: func(context.Context, string) ([]byte, error) {
+			t.Fatal("notify plan fetched a package during pending kernel recovery")
+			return nil, nil
+		},
+	})
+	if err != nil || !plan.Ready {
+		t.Fatalf("notify kernel plan: %+v %v", plan, err)
+	}
+	if !strings.Contains(plan.Text, "recovery-pending=kernel-journal") {
+		t.Fatalf("missing notify kernel recovery text: %s", plan.Text)
+	}
+	if strings.Contains(plan.Text, "source-digest=") {
+		t.Fatalf("kernel plan still previewed package: %s", plan.Text)
+	}
+	found := false
+	for _, next := range plan.Result.NextActions {
+		if next.Kind == "recover" && next.Reason == "kernel-journal" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("notify kernel plan recover action: %+v", plan.Result.NextActions)
+	}
+	if _, err := os.Lstat(filepath.Join(control, "transaction.json")); err != nil {
+		t.Fatalf("notify kernel plan recovered journal: %v", err)
+	}
+}
+
 func TestPlanShowsPendingKernelRecoveryWithoutMutating(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, _, _ := managedRuntime(t)
