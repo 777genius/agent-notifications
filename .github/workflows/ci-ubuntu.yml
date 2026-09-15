@@ -66,6 +66,9 @@ jobs:
       - name: Test binary execution (help)
         run: ./bin/claude-notifications help
 
+      - name: Test one-line setup loader (isolated, offline)
+        run: bash bin/setup_test.sh
+
       - name: Run install.sh unit tests
         run: bash bin/install_test.sh
 

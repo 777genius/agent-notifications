@@ -42,11 +42,9 @@ test("production command matrix, aftercare, clipboard and configuration", async 
         )
           await page.getByRole("button", { name: intent, exact: true }).click();
         const value = await page.getByLabel(intent + " command").inputValue();
-        expect(value).toContain("/releases/latest");
-        expect(value).toContain("/commits/$tag");
-        expect(value).toContain("/$commit/bin");
-        expect(value).not.toContain("/main/bin/bootstrap.sh");
-        expect(value).toMatch(new RegExp(`--product ${product}\\n\\)$`));
+        expect(value).toBe(
+          `curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/main/bin/setup.sh | bash -s -- --product ${product}`,
+        );
       }
       if (os === "windows")
         await expect(
