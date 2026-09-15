@@ -449,6 +449,7 @@ func evaluate(ctx context.Context, req *Request, requireYes bool) evaluated {
 		out.Outcome, out.Reason = "invalid", "agents_required"
 		return evaluated{agents: agents, snap: snap, runtimeRoot: runtimeRoot, out: out, err: ErrRefused, stop: true}
 	}
+	bindDiscoveredMCP(req, agents)
 	if req.Action == ActionInspect {
 		return evaluated{agents: agents, snap: snap, runtimeRoot: runtimeRoot, out: out}
 	}
@@ -945,6 +946,16 @@ func restoreOmittedFromIntent(req Request, agents []portable.Integration, intent
 			if existing := req.DataReceiptIDs[target.Client]; existing == "" {
 				req.DataReceiptIDs[target.Client] = target.DataReceiptID
 			} else if existing != target.DataReceiptID {
+				return req, agents, portablesetup.ErrIntentConflict
+			}
+		}
+		if target.MCPConfig != "" {
+			if req.MCPConfig == nil {
+				req.MCPConfig = map[string]string{}
+			}
+			if existing := req.MCPConfig[target.Client]; existing == "" {
+				req.MCPConfig[target.Client] = target.MCPConfig
+			} else if existing != target.MCPConfig {
 				return req, agents, portablesetup.ErrIntentConflict
 			}
 		}
@@ -2718,6 +2729,24 @@ func discoveryConfigPath(req Request, agent portable.Integration) string {
 	return path
 }
 
+func bindDiscoveredMCP(req *Request, agents []portable.Integration) {
+	if req == nil {
+		return
+	}
+	for _, agent := range agents {
+		path := discoveryConfigPath(*req, agent)
+		if path == "" {
+			continue
+		}
+		if req.MCPConfig == nil {
+			req.MCPConfig = map[string]string{}
+		}
+		if req.MCPConfig[string(agent)] == "" {
+			req.MCPConfig[string(agent)] = path
+		}
+	}
+}
+
 func clientConfig(req Request, agent portable.Integration) string {
 	switch agent {
 	case portable.Codex:
@@ -2790,6 +2819,9 @@ func wizardIntentTargets(req Request, hookAgents, notifyAgents []portable.Integr
 			order = append(order, id)
 		}
 		target.Units = append(target.Units, unit)
+		if unit == "agent-notify" {
+			target.MCPConfig = discoveryConfigPath(req, agent)
+		}
 	}
 	for _, agent := range hookAgents {
 		add(agent, "hooks")

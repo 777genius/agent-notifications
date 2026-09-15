@@ -36,6 +36,7 @@ type IntentTarget struct {
 	InstallationID string   `json:"installationID,omitempty"`
 	DataReceiptID  string   `json:"dataReceiptID,omitempty"`
 	Profile        string   `json:"profile,omitempty"`
+	MCPConfig      string   `json:"mcpConfig,omitempty"`
 	Units          []string `json:"units,omitempty"`
 }
 
