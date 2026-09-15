@@ -4728,10 +4728,14 @@ func TestWizardReinstallRetainsInstallation(t *testing.T) {
 		t.Fatalf("uninstall: %+v %v", removed, err)
 	}
 	req.Action = ActionInstall
-	req.InstallationID = firstID
+	// TTY after last uninstall sees no live bindings, so it omits --installation-id.
+	req.InstallationID = ""
 	reinstalled, err := Run(ctx, req)
 	if err != nil || reinstalled.Outcome != "completed" {
 		t.Fatalf("reinstall: %+v %v", reinstalled, err)
+	}
+	if reinstalled.InstallationID != firstID {
+		t.Fatalf("omitted id did not reuse retained installation: %s vs %s", reinstalled.InstallationID, firstID)
 	}
 	if got := installationIDFromState(t, statePath); got != firstID {
 		t.Fatalf("retained installation lost: %s vs %s", firstID, got)
