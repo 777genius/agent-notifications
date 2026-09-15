@@ -83,8 +83,8 @@ type Plan struct {
 
 // PlanTarget is one client's prepared identity in a group handle.
 type PlanTarget struct {
-	ClientID, ConfigRoot, TargetPath, BindingID string
-	NoChange                                    bool
+	ClientID, ConfigRoot, TargetPath, BindingID, TreeDigest string
+	NoChange                                                bool
 }
 
 // Result is returned together with an error when part of the work already happened.

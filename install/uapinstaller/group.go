@@ -43,55 +43,81 @@ func validateGroupTargets(targets []ClientTarget) error {
 }
 
 func (e *Engine) prepareMutatingGroup(ctx context.Context, req Request) (*PreparedOperation, error) {
-	packageRoot := firstNonEmpty(req.Targets[0].PackageRoot, req.PackageRoot)
-	if packageRoot == "" || !validRoot(packageRoot) {
-		return nil, fmt.Errorf("%w: PackageRoot must be an explicit absolute clean path", ErrInvalidRequest)
-	}
-	for _, target := range req.Targets[1:] {
+	roots := make([]string, len(req.Targets))
+	for i, target := range req.Targets {
 		root := firstNonEmpty(target.PackageRoot, req.PackageRoot)
-		if root != packageRoot {
-			return nil, fmt.Errorf("%w: mixed package roots in one group are unpublished", ErrUnsupported)
+		if root == "" || !validRoot(root) {
+			return nil, fmt.Errorf("%w: PackageRoot must be an explicit absolute clean path", ErrInvalidRequest)
+		}
+		if overlappingRoots(e.cfg.TempRoot, root) {
+			return nil, fmt.Errorf("%w: TempRoot must not overlap PackageRoot", ErrInvalidRequest)
+		}
+		roots[i] = root
+	}
+	mixed := false
+	for _, root := range roots[1:] {
+		if root != roots[0] {
+			mixed = true
+			break
 		}
 	}
-	if overlappingRoots(e.cfg.TempRoot, packageRoot) {
-		return nil, fmt.Errorf("%w: TempRoot must not overlap PackageRoot", ErrInvalidRequest)
+	if mixed && req.Operation != OpRepair {
+		return nil, fmt.Errorf("%w: mixed package roots in one group are unpublished", ErrUnsupported)
 	}
 	if err := os.MkdirAll(e.cfg.TempRoot, 0700); err != nil {
 		return nil, err
 	}
 	e.report(ProgressPrepare)
-	snapshot, err := snapshotLocalPackage(ctx, e.cfg.TempRoot, packageRoot)
+	handle := &PreparedOperation{engine: e, req: req}
+	ldr, err := newLoader()
 	if err != nil {
 		return nil, err
 	}
-	handle := &PreparedOperation{engine: e, req: req, snapshot: snapshot}
-	if err := e.assessSnapshot(ctx, snapshot); err != nil {
-		_ = handle.closeLocked()
-		return nil, err
-	}
-	if req.Operation != OpUpdate {
-		if err := e.refuseRecordedDigestRewrite(req.InstallationID, snapshot.TreeDigest); err != nil {
+	cachedEnvelope := map[string]domain.PackageEnvelope{}
+	envelopes := make([]domain.PackageEnvelope, len(req.Targets))
+	for i, root := range roots {
+		if envelope, ok := cachedEnvelope[root]; ok {
+			envelopes[i] = envelope
+			continue
+		}
+		snapshot, err := snapshotLocalPackage(ctx, e.cfg.TempRoot, root)
+		if err != nil {
 			_ = handle.closeLocked()
 			return nil, err
 		}
+		handle.snapshots = append(handle.snapshots, snapshot)
+		if handle.snapshot.Root == "" {
+			handle.snapshot = snapshot
+		}
+		if err := e.assessSnapshot(ctx, snapshot); err != nil {
+			_ = handle.closeLocked()
+			return nil, err
+		}
+		if !mixed && req.Operation != OpUpdate {
+			if err := e.refuseRecordedDigestRewrite(req.InstallationID, snapshot.TreeDigest); err != nil {
+				_ = handle.closeLocked()
+				return nil, err
+			}
+		}
+		e.reuseMatchingSourceIdentity(req.InstallationID, &snapshot, req.Operation == OpUpdate)
+		handle.snapshots[len(handle.snapshots)-1] = snapshot
+		if i == 0 {
+			handle.snapshot = snapshot
+		}
+		envelope, err := ldr.Load(ctx, domain.LoadInput{
+			SnapshotRoot: snapshot.Root, TreeDigest: snapshot.TreeDigest,
+			ExecutableFiles: snapshot.ExecutableFiles, Source: snapshot.Source,
+		})
+		if err != nil {
+			_ = handle.closeLocked()
+			return nil, err
+		}
+		cachedEnvelope[root] = envelope
+		envelopes[i] = envelope
 	}
-	e.reuseMatchingSourceIdentity(req.InstallationID, &snapshot, req.Operation == OpUpdate)
-	handle.snapshot = snapshot
-	ldr, err := newLoader()
-	if err != nil {
-		_ = handle.closeLocked()
-		return nil, err
-	}
-	envelope, err := ldr.Load(ctx, domain.LoadInput{
-		SnapshotRoot: snapshot.Root, TreeDigest: snapshot.TreeDigest,
-		ExecutableFiles: snapshot.ExecutableFiles, Source: snapshot.Source,
-	})
-	if err != nil {
-		_ = handle.closeLocked()
-		return nil, err
-	}
-	handle.envelope = envelope
-	inputs, clients, err := e.groupAddInputs(req, envelope, true, false)
+	handle.envelope = envelopes[0]
+	handle.envelopes = envelopes
+	inputs, clients, err := e.groupAddInputs(req, envelopes, true, false)
 	if err != nil {
 		_ = handle.closeLocked()
 		return nil, err
@@ -115,13 +141,16 @@ func (e *Engine) prepareMutatingGroup(ctx context.Context, req Request) (*Prepar
 		_ = handle.closeLocked()
 		return nil, wrapLifecycleError(err)
 	}
-	missing := missingRequired(envelope, req.RequiredComponents)
+	missing := missingRequired(envelopes[0], req.RequiredComponents)
+	for _, envelope := range envelopes[1:] {
+		missing = append(missing, missingRequired(envelope, req.RequiredComponents)...)
+	}
 	helperVersion, helperDigest := e.helperIdentity()
 	handle.clients = clients
 	handle.client = clients[0]
 	handle.plan = Plan{
-		Operation: req.Operation, SourceRoot: packageRoot, TreeDigest: snapshot.TreeDigest,
-		DigestAlgorithm: snapshot.DigestAlgorithm, ClientID: string(clients[0].ClientID),
+		Operation: req.Operation, SourceRoot: roots[0], TreeDigest: envelopes[0].TreeDigest,
+		DigestAlgorithm: handle.snapshot.DigestAlgorithm, ClientID: string(clients[0].ClientID),
 		ConfigRoot: clients[0].ConfigRoot, InstallationID: firstNonEmpty(req.InstallationID, preview.InstallationID),
 		HelperVersion: helperVersion, HelperDigest: helperDigest, RequiredMissing: missing,
 		NoChange: groupPreviewUnchanged(preview),
@@ -135,15 +164,15 @@ func (e *Engine) prepareMutatingGroup(ctx context.Context, req Request) (*Prepar
 		client := clients[i]
 		handle.plan.Targets = append(handle.plan.Targets, PlanTarget{
 			ClientID: string(client.ClientID), ConfigRoot: client.ConfigRoot,
-			TargetPath: target.Plan.ActivePath,
-			BindingID:  domain.ComputeClientBindingID(handle.plan.InstallationID, string(target.Plan.ClientID), string(target.Plan.Scope), target.Plan.ActivePath),
-			NoChange:   target.NoChange,
+			TargetPath: target.Plan.ActivePath, TreeDigest: envelopes[i].TreeDigest,
+			BindingID: domain.ComputeClientBindingID(handle.plan.InstallationID, string(target.Plan.ClientID), string(target.Plan.Scope), target.Plan.ActivePath),
+			NoChange:  target.NoChange,
 		})
 	}
 	handle.facts = BindingFacts{
 		InstallationID: handle.plan.InstallationID, ClientID: handle.plan.ClientID,
 		BindingID: handle.plan.BindingID, TargetPath: handle.plan.TargetPath,
-		OperationID: req.OperationID, TreeDigest: snapshot.TreeDigest,
+		OperationID: req.OperationID, TreeDigest: envelopes[0].TreeDigest,
 	}
 	if len(missing) != 0 {
 		_ = handle.closeLocked()
@@ -179,10 +208,13 @@ func groupPreviewUnchanged(preview usecase.GroupResult) bool {
 	return true
 }
 
-func (e *Engine) groupAddInputs(req Request, envelope domain.PackageEnvelope, dry, confirmed bool) ([]usecase.AddInput, []domain.DetectedClient, error) {
+func (e *Engine) groupAddInputs(req Request, envelopes []domain.PackageEnvelope, dry, confirmed bool) ([]usecase.AddInput, []domain.DetectedClient, error) {
+	if len(envelopes) != len(req.Targets) {
+		return nil, nil, fmt.Errorf("%w: group envelope count", ErrInvalidRequest)
+	}
 	var inputs []usecase.AddInput
 	var clients []domain.DetectedClient
-	for _, target := range req.Targets {
+	for i, target := range req.Targets {
 		client, err := detectedClient(Request{
 			Operation: req.Operation, ClientID: target.ClientID,
 			ClientConfigRoot: target.ClientConfigRoot, ClientExecutable: firstNonEmpty(target.ClientExecutable, req.ClientExecutable),
@@ -191,7 +223,7 @@ func (e *Engine) groupAddInputs(req Request, envelope domain.PackageEnvelope, dr
 			return nil, nil, err
 		}
 		inputs = append(inputs, usecase.AddInput{
-			Envelope: envelope, Client: client, Scope: domain.ScopeUser, DryRun: dry, Confirmed: confirmed,
+			Envelope: envelopes[i], Client: client, Scope: domain.ScopeUser, DryRun: dry, Confirmed: confirmed,
 			PersistAuthoritativeObservations: e.persistObservations,
 			InstallationID:                   req.InstallationID, OperationID: req.OperationID,
 			BackendExecutable: client.ExecutablePath,
@@ -300,7 +332,14 @@ func (e *Engine) applyGroup(ctx context.Context, prepared *PreparedOperation) (R
 		return Result{Operation: prepared.req.Operation, Outcome: OutcomeIncomplete, Reason: err.Error()}, err
 	}
 	svc := e.lifecycle(helper, prepared.facts)
-	inputs, _, err := e.groupAddInputs(prepared.req, prepared.envelope, false, true)
+	envelopes := prepared.envelopes
+	if len(envelopes) == 0 {
+		envelopes = make([]domain.PackageEnvelope, len(prepared.req.Targets))
+		for i := range envelopes {
+			envelopes[i] = prepared.envelope
+		}
+	}
+	inputs, _, err := e.groupAddInputs(prepared.req, envelopes, false, true)
 	if err != nil {
 		return Result{Operation: prepared.req.Operation, Outcome: OutcomeIncomplete, Reason: err.Error()}, err
 	}

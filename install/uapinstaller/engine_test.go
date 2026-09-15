@@ -52,6 +52,35 @@ func main() { json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true}) }
 	return out
 }
 
+func copyPackage(t *testing.T, src, dst string) {
+	t.Helper()
+	err := filepath.WalkDir(src, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0700)
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, info.Mode())
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func writePackage(t *testing.T, root, probe string) {
 	t.Helper()
 	body, err := os.ReadFile(probe)
@@ -158,6 +187,18 @@ func TestPrepareGroupMixedPackageRootsUnpublished(t *testing.T) {
 	})
 	if !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("mixed package roots: %v", err)
+	}
+	_, err = eng.Prepare(ctx, Request{
+		Operation: OpUpdate, PackageRoot: filepath.Join(base, "package-a"),
+		InstallationID: "00000000-0000-4000-8000-0000000000b8", OperationID: "mixed-update",
+		ClientExecutable: filepath.Join(base, "probe"),
+		Targets: []ClientTarget{
+			{ClientID: "codex", ClientConfigRoot: codexConfig, PackageRoot: filepath.Join(base, "package-a")},
+			{ClientID: "claude", ClientConfigRoot: claudeConfig, PackageRoot: filepath.Join(base, "package-b")},
+		},
+	})
+	if !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("mixed update package roots: %v", err)
 	}
 	if _, err := os.Lstat(eng.cfg.StateFile); !os.IsNotExist(err) {
 		t.Fatal("mixed package roots created state")
@@ -2635,6 +2676,78 @@ func TestRepairGroupIntactReportsBothTargets(t *testing.T) {
 	}
 	if codexAfter.BindingID != codexBefore.BindingID || codexAfter.TargetPath != codexBefore.TargetPath || codexAfter.DataRoot != codexBefore.DataRoot || codexAfter.Profile != codexBefore.Profile {
 		t.Fatalf("intact group repair rewrote codex: before=%+v after=%+v", codexBefore, codexAfter)
+	}
+}
+
+func TestRepairGroupMixedRevisionsUsesPerTargetPackage(t *testing.T) {
+	ctx, eng, _, pkg, probe, codexConfig, claudeConfig := newBothClientSandbox(t)
+	id := "00000000-0000-4000-8000-0000000000d1"
+	r1 := filepath.Join(filepath.Dir(pkg), "package-r1")
+	copyPackage(t, pkg, r1)
+	installBothClients(t, ctx, eng, r1, probe, id, "mixed-repair-install", bothClientTargets(codexConfig, claudeConfig, probe))
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"sample-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := eng.Prepare(ctx, Request{
+		Operation: OpUpdate, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: codexConfig,
+		ClientExecutable: probe, InstallationID: id, OperationID: "mixed-repair-codex-update",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := eng.Apply(ctx, updated, Decision{Confirmed: true})
+	_ = updated.Close()
+	if err != nil || got.Outcome != OutcomeCompleted {
+		t.Fatalf("codex update: %+v %v", got, err)
+	}
+	before, err := eng.Inspect(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claudeBefore := inspectedBinding(t, before, "claude")
+	codexBefore := inspectedBinding(t, before, "codex")
+	repaired, err := eng.Prepare(ctx, Request{
+		Operation: OpRepair, InstallationID: id, OperationID: "mixed-repair-group",
+		RequiredComponents: []string{"mcp", "skills"}, ClientExecutable: probe,
+		Targets: []ClientTarget{
+			{ClientID: "codex", ClientConfigRoot: codexConfig, ClientExecutable: probe, PackageRoot: pkg},
+			{ClientID: "claude", ClientConfigRoot: claudeConfig, ClientExecutable: probe, PackageRoot: r1},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := repaired.Plan()
+	claudeDigest := ""
+	codexDigest := ""
+	for _, target := range plan.Targets {
+		switch target.ClientID {
+		case "claude":
+			claudeDigest = target.TreeDigest
+		case "codex":
+			codexDigest = target.TreeDigest
+		}
+	}
+	if claudeDigest == "" || codexDigest == "" || claudeDigest == codexDigest {
+		t.Fatalf("mixed repair plan digests: %+v", plan.Targets)
+	}
+	got, err = eng.Apply(ctx, repaired, Decision{Confirmed: true})
+	_ = repaired.Close()
+	if err != nil || (got.Outcome != OutcomeUnchanged && got.Outcome != OutcomeCompleted) {
+		t.Fatalf("mixed revision repair: %+v %v", got, err)
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 2 {
+		t.Fatalf("inspect after mixed repair: %+v %v", view, err)
+	}
+	claudeAfter := inspectedBinding(t, view, "claude")
+	codexAfter := inspectedBinding(t, view, "codex")
+	if claudeAfter.BindingID != claudeBefore.BindingID || claudeAfter.TargetPath != claudeBefore.TargetPath || claudeAfter.DataRoot != claudeBefore.DataRoot || claudeAfter.Profile != claudeBefore.Profile {
+		t.Fatalf("mixed repair rewrote claude: before=%+v after=%+v", claudeBefore, claudeAfter)
+	}
+	if codexAfter.BindingID != codexBefore.BindingID || codexAfter.TargetPath != codexBefore.TargetPath || codexAfter.DataRoot != codexBefore.DataRoot || codexAfter.Profile != codexBefore.Profile {
+		t.Fatalf("mixed repair rewrote codex: before=%+v after=%+v", codexBefore, codexAfter)
 	}
 }
 

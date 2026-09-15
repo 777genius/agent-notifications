@@ -20,19 +20,21 @@ import (
 
 // PreparedOperation owns a sealed source snapshot until Close or a terminal Apply.
 type PreparedOperation struct {
-	engine   *Engine
-	mu       sync.Mutex
-	closed   bool
-	busy     bool
-	applied  bool
-	req      Request
-	plan     Plan
-	snapshot domain.PackageSnapshot
-	envelope domain.PackageEnvelope
-	client   domain.DetectedClient
-	clients  []domain.DetectedClient
-	facts    BindingFacts
-	artifact string
+	engine    *Engine
+	mu        sync.Mutex
+	closed    bool
+	busy      bool
+	applied   bool
+	req       Request
+	plan      Plan
+	snapshot  domain.PackageSnapshot
+	snapshots []domain.PackageSnapshot
+	envelope  domain.PackageEnvelope
+	envelopes []domain.PackageEnvelope
+	client    domain.DetectedClient
+	clients   []domain.DetectedClient
+	facts     BindingFacts
+	artifact  string
 }
 
 func (p *PreparedOperation) Plan() Plan {
@@ -58,10 +60,22 @@ func (p *PreparedOperation) closeLocked() error {
 		return nil
 	}
 	p.closed = true
-	if p.snapshot.Root == "" {
-		return nil
+	seen := map[string]bool{}
+	var first error
+	remove := func(snapshot domain.PackageSnapshot) {
+		if snapshot.Root == "" || seen[snapshot.Root] {
+			return
+		}
+		seen[snapshot.Root] = true
+		if err := packagedigest.Remove(snapshot); err != nil && first == nil {
+			first = err
+		}
 	}
-	return packagedigest.Remove(p.snapshot)
+	for _, snapshot := range p.snapshots {
+		remove(snapshot)
+	}
+	remove(p.snapshot)
+	return first
 }
 
 // Prepare captures a sealed snapshot for install or inspects owned state for remove.
