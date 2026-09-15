@@ -297,28 +297,38 @@ if HOST_NODE:
         case = Path(tmp)
         functions = case / 'functions.sh'
         functions.write_text((root / 'bin/install.sh').read_text(encoding='utf-8').replace('main "$@"', ''), encoding='utf-8')
-        helper_py = case / 'helper.py'
-        helper_py.write_text(
-            'import json, os, sys\n'
-            'assert sys.argv[1:] == ["config", "preflight-update", "--stdin", "--json"]\n'
-            'request = json.load(sys.stdin)\n'
-            'open(os.environ["TRACE"], "w").write(json.dumps(request))\n'
-            'print(json.dumps({"status": "safe", "diagnostics": []}))\n',
-            encoding='utf-8')
-        python_exe = sys.executable.replace('\\', '/')
-        helper_py_posix = bash_path(helper_py)
         if os.name == 'nt':
-            helper = case / 'helper.cmd'
-            helper.write_text(
-                '@echo off\r\n"{}" "{}" %*\r\n'.format(
-                    sys.executable.replace('"', ''), str(helper_py).replace('"', '')),
+            helper = case / 'helper.exe'
+            (case / 'helper.go').write_text(
+                'package main\n'
+                'import (\n'
+                '\t"fmt"\n'
+                '\t"io"\n'
+                '\t"os"\n'
+                ')\n'
+                'func main() {\n'
+                '\tdata, err := io.ReadAll(os.Stdin)\n'
+                '\tif err != nil { os.Exit(2) }\n'
+                '\tif err := os.WriteFile(os.Getenv("TRACE"), data, 0644); err != nil { os.Exit(2) }\n'
+                '\tfmt.Println(`{"status":"safe","diagnostics":[]}`)\n'
+                '}\n',
                 encoding='utf-8')
+            (case / 'go.mod').write_text('module helper\n\ngo 1.22\n', encoding='utf-8')
+            built = subprocess.run(
+                ['go', 'build', '-o', str(helper), str(case / 'helper.go')],
+                cwd=str(case), env=dict(os.environ, GOPROXY='off', GOSUMDB='off'),
+                text=True, capture_output=True, timeout=60)
+            if built.returncode != 0 or not helper.is_file():
+                fail('install.sh node-only preflight helper build', describe(built))
         else:
             helper = case / 'helper'
-            helper.write_text(
-                '#!/bin/sh\nexec {} {} "$@"\n'.format(
-                    shlex.quote(python_exe), shlex.quote(helper_py_posix)),
-                encoding='utf-8')
+            helper.write_text('#!' + sys.executable + '''
+import json, os, sys
+assert sys.argv[1:] == ["config", "preflight-update", "--stdin", "--json"]
+request = json.load(sys.stdin)
+open(os.environ["TRACE"], "w").write(json.dumps(request))
+print(json.dumps({"status": "safe", "diagnostics": []}))
+''')
             helper.chmod(0o755)
         target = case / 'outside.json'
         target.write_text('{}')
