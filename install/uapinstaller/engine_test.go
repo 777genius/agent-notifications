@@ -900,6 +900,161 @@ func TestInstallGroupSecondHostSeamFailureKeepsFirstClient(t *testing.T) {
 	}
 }
 
+func TestInstallGroupRetryAfterSecondHostSeamFailureReconcilesWithoutDuplicatingFirst(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(base, "codex-config")
+	claudeConfig := filepath.Join(base, "claude-config")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var calls []string
+	failClaude := true
+	runner := &capturingRunner{inner: listingRunner{configRoot: claudeConfig}}
+	eng, err := New(Config{
+		StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe, Runner: runner,
+		OnCommittedBinding: func(_ context.Context, facts BindingFacts) error {
+			if facts.BindingID == "" || facts.TargetPath == "" || facts.DataRoot == "" {
+				return errors.New("committed binding missing identity")
+			}
+			calls = append(calls, facts.ClientID)
+			if failClaude && facts.ClientID == "claude" {
+				return errors.New("host seam refused claude after managed commit")
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "00000000-0000-4000-8000-0000000000b7"
+	req := Request{
+		Operation: OpInstall, PackageRoot: pkg, InstallationID: id, OperationID: "group-partial-retry",
+		RequiredComponents: []string{"mcp", "skills"}, ClientExecutable: probe,
+		Targets: []ClientTarget{
+			{ClientID: "codex", ClientConfigRoot: codexConfig, ClientExecutable: probe},
+			{ClientID: "claude", ClientConfigRoot: claudeConfig, ClientExecutable: probe},
+		},
+	}
+	prepared, err := eng.Prepare(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := eng.Apply(ctx, prepared, Decision{Confirmed: true})
+	_ = prepared.Close()
+	if err == nil || first.Outcome != OutcomeIncomplete {
+		t.Fatalf("partial group: %+v %v", first, err)
+	}
+	pluginMutations := countPluginMutations(runner.calls)
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 {
+		t.Fatalf("inspect after partial group: %+v %v", view, err)
+	}
+	codexBefore := inspectedBinding(t, view, "codex")
+	if codexBefore.BindingID == "" || codexBefore.DataRoot == "" {
+		t.Fatalf("first client missing after partial group: %+v", view.Installations[0].Bindings)
+	}
+	claudeBefore := inspectedBinding(t, view, "claude")
+	if claudeBefore.BindingID == "" || claudeBefore.DataRoot == "" {
+		t.Fatalf("second client rolled back after seam failure: %+v", view.Installations[0].Bindings)
+	}
+	beforeRetry := append([]string(nil), calls...)
+	if _, inspectErr := eng.Inspect(ctx); inspectErr != nil {
+		t.Fatal(inspectErr)
+	}
+	preview, err := eng.Prepare(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != len(beforeRetry) {
+		t.Fatalf("inspect/prepare executed host callback: %q -> %q", beforeRetry, calls)
+	}
+	failClaude = false
+	retried, err := eng.Apply(ctx, preview, Decision{Confirmed: true})
+	_ = preview.Close()
+	if err != nil || (retried.Outcome != OutcomeCompleted && retried.Outcome != OutcomeUnchanged) {
+		t.Fatalf("retry apply: %+v %v", retried, err)
+	}
+	var claudeCalls, codexCalls int
+	for _, client := range calls {
+		switch client {
+		case "claude":
+			claudeCalls++
+		case "codex":
+			codexCalls++
+		}
+	}
+	if claudeCalls < 2 {
+		t.Fatalf("retry skipped claude committed-binding reconciliation: %q", calls)
+	}
+	if codexCalls < 1 {
+		t.Fatalf("first client callback missing: %q", calls)
+	}
+	if countPluginMutations(runner.calls) != pluginMutations {
+		t.Fatalf("retry duplicated first client commit: %+v", runner.calls)
+	}
+	view, err = eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 2 {
+		t.Fatalf("inspect after retry: %+v %v", view, err)
+	}
+	codexAfter := inspectedBinding(t, view, "codex")
+	if codexAfter.BindingID != codexBefore.BindingID || codexAfter.DataRoot != codexBefore.DataRoot {
+		t.Fatalf("retry rewrote first client: %+v -> %+v", codexBefore, codexAfter)
+	}
+	claudeAfter := inspectedBinding(t, view, "claude")
+	if claudeAfter.BindingID != claudeBefore.BindingID || claudeAfter.DataRoot != claudeBefore.DataRoot {
+		t.Fatalf("retry rewrote second client commit: %+v -> %+v", claudeBefore, claudeAfter)
+	}
+	if claudeAfter.Activation == string(domain.ActivationFailed) || claudeAfter.Activation == string(domain.ActivationPrepared) || claudeAfter.Activation == "" {
+		t.Fatalf("retry left claude unactivated: %+v", claudeAfter)
+	}
+	if len(calls) != claudeCalls+codexCalls {
+		t.Fatalf("inspect after retry executed host callback: %q", calls)
+	}
+}
+
+func inspectedBinding(t *testing.T, view Inspection, clientID string) InspectedBinding {
+	t.Helper()
+	for _, installation := range view.Installations {
+		for _, binding := range installation.Bindings {
+			if binding.ClientID == clientID {
+				return binding
+			}
+		}
+	}
+	t.Fatalf("missing %s binding: %+v", clientID, view)
+	return InspectedBinding{}
+}
+
+type capturingRunner struct {
+	inner listingRunner
+	calls [][]string
+}
+
+func (r *capturingRunner) Run(ctx context.Context, cmd ports.Command) (ports.CommandResult, error) {
+	r.calls = append(r.calls, append([]string(nil), cmd.Argv...))
+	return r.inner.Run(ctx, cmd)
+}
+
+func countPluginMutations(calls [][]string) int {
+	n := 0
+	for _, argv := range calls {
+		if containsArgSeq(argv, "plugin", "marketplace", "add") || containsArgSeq(argv, "plugin", "add") {
+			n++
+		}
+	}
+	return n
+}
+
 func TestInstallSameDigestDifferentDirectoryAddsSecondClient(t *testing.T) {
 	skipWindowsLauncherExecuteBit(t)
 	ctx := testCtx(t)

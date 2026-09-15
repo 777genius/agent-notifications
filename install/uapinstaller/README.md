@@ -48,7 +48,9 @@ digest. Result.NextActions cover recover, update, reprepare, and activate after
 a managed commit whose client activation did not finish. Cancel before the first
 durable effect returns cancelled and writes no state. A host callback or context
 cancel after that commit returns incomplete with the binding retained; it is not
-a bool and does not roll the managed package back. Client.Materialization and
+a bool and does not roll the managed package back. Group retry reconciles each
+pending committed binding before the no-change shortcut and before client
+VerifyOnly; Inspect does not invoke that callback. Client.Materialization and
 Client.Activation stay separate fields.
 
 Confirmed Apply re-reads live target/ownership before mutation and returns

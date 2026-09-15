@@ -268,11 +268,20 @@ func (e *Engine) applyGroup(ctx context.Context, prepared *PreparedOperation) (R
 	if prepared.req.Operation == OpRemove {
 		return e.applyRemoveGroup(ctx, prepared)
 	}
-	if prepared.plan.NoChange {
-		result := Result{
-			Operation: prepared.req.Operation, InstallationID: prepared.plan.InstallationID,
-			Outcome: OutcomeUnchanged, NoChange: true, Binding: prepared.facts,
-		}
+	result := Result{
+		Operation: prepared.req.Operation, InstallationID: prepared.plan.InstallationID,
+		Binding: prepared.facts,
+	}
+	pending, err := e.reconcileGroupHostHandoff(ctx, prepared, &result)
+	if err != nil {
+		result.Outcome = OutcomeIncomplete
+		result.Reason = err.Error()
+		e.report(ProgressCommit)
+		return result, err
+	}
+	if prepared.plan.NoChange && !pending {
+		result.Outcome = OutcomeUnchanged
+		result.NoChange = true
 		for _, target := range prepared.plan.Targets {
 			result.Targets = append(result.Targets, ClientResult{
 				ClientID: target.ClientID, BindingID: target.BindingID,
@@ -311,7 +320,7 @@ func (e *Engine) applyGroup(ctx context.Context, prepared *PreparedOperation) (R
 		got, err = svc.AddGroup(ctx, group)
 	}
 	err = wrapLifecycleError(err)
-	result := Result{Operation: prepared.req.Operation, InstallationID: firstNonEmpty(got.InstallationID, prepared.plan.InstallationID), Binding: prepared.facts}
+	result.InstallationID = firstNonEmpty(got.InstallationID, prepared.plan.InstallationID)
 	state, loadErr := e.store.Load()
 	if loadErr != nil && err == nil && !got.Mutated && !prepared.plan.NoChange {
 		result.Outcome = OutcomeIncomplete
@@ -320,28 +329,7 @@ func (e *Engine) applyGroup(ctx context.Context, prepared *PreparedOperation) (R
 	}
 	if loadErr == nil {
 		if installation, ok := findInstall(state, result.InstallationID); ok {
-			result.InstallationID = installation.InstallationID
-			for _, client := range prepared.clients {
-				if binding, receipt, found := findBinding(installation, client.ClientID); found {
-					item := ClientResult{
-						ClientID: binding.ClientID, BindingID: binding.ClientBindingID,
-						Materialization: string(binding.Materialization), Activation: string(binding.Activation),
-						Authentication: string(binding.Authentication), Verification: string(binding.Verification),
-						RequiredComponents: append([]string(nil), prepared.req.RequiredComponents...),
-					}
-					result.Targets = append(result.Targets, item)
-					_ = storeLiveProfile(receipt.Locator, binding.ClientID, client.ConfigRoot)
-					if result.Client.ClientID == "" {
-						result.Client = item
-						result.Binding = BindingFacts{
-							InstallationID: result.InstallationID, ClientID: binding.ClientID,
-							BindingID: binding.ClientBindingID, Scope: binding.Scope, TargetPath: binding.TargetLocator,
-							DataRoot: receipt.Locator, DataReceiptID: binding.DataReceiptID,
-							OperationID: prepared.req.OperationID, TreeDigest: prepared.plan.TreeDigest,
-						}
-					}
-				}
-			}
+			e.attachLiveGroupResult(&result, prepared, installation)
 		}
 	}
 	if err != nil {
@@ -353,7 +341,12 @@ func (e *Engine) applyGroup(ctx context.Context, prepared *PreparedOperation) (R
 		}
 		return result, err
 	}
-	if prepared.plan.NoChange || (!got.Mutated && groupPreviewUnchanged(got)) {
+	if pending && e.anyGroupHostHandoffPending(prepared) {
+		result.Outcome = OutcomeIncomplete
+		result.Reason = "committed binding is not activated"
+		return result, fmt.Errorf("%s", result.Reason)
+	}
+	if !pending && (prepared.plan.NoChange || (!got.Mutated && groupPreviewUnchanged(got))) {
 		result.Outcome = OutcomeUnchanged
 		result.NoChange = true
 		return result, nil
@@ -422,6 +415,102 @@ func (e *Engine) applyRemoveGroup(ctx context.Context, prepared *PreparedOperati
 		}
 	}
 	return result, nil
+}
+
+func (e *Engine) reconcileGroupHostHandoff(ctx context.Context, prepared *PreparedOperation, result *Result) (bool, error) {
+	state, err := e.store.Load()
+	if err != nil {
+		return false, nil
+	}
+	installationID := firstNonEmpty(prepared.req.InstallationID, prepared.plan.InstallationID)
+	installation, ok := findInstall(state, installationID)
+	if !ok {
+		return false, nil
+	}
+	pending := false
+	for _, client := range prepared.clients {
+		binding, receipt, found := findBinding(installation, client.ClientID)
+		if !found {
+			continue
+		}
+		if hostHandoffPending(binding) {
+			pending = true
+		}
+		if e.cfg.OnCommittedBinding == nil {
+			continue
+		}
+		facts := BindingFacts{
+			InstallationID: firstNonEmpty(installation.InstallationID, installationID),
+			ClientID:       binding.ClientID,
+			BindingID:      binding.ClientBindingID,
+			Scope:          binding.Scope,
+			TargetPath:     binding.TargetLocator,
+			DataRoot:       receipt.Locator,
+			DataReceiptID:  binding.DataReceiptID,
+			OperationID:    prepared.req.OperationID,
+			TreeDigest:     prepared.plan.TreeDigest,
+		}
+		if err := e.cfg.OnCommittedBinding(ctx, facts); err != nil {
+			e.attachLiveGroupResult(result, prepared, installation)
+			if result.Client.ClientID == "" {
+				result.Client = ClientResult{
+					ClientID: binding.ClientID, BindingID: binding.ClientBindingID,
+					Materialization: string(binding.Materialization), Activation: string(binding.Activation),
+					Authentication: string(binding.Authentication), Verification: string(binding.Verification),
+					RequiredComponents: append([]string(nil), prepared.req.RequiredComponents...),
+				}
+				result.Binding = facts
+			}
+			return true, err
+		}
+	}
+	return pending, nil
+}
+
+func (e *Engine) anyGroupHostHandoffPending(prepared *PreparedOperation) bool {
+	state, err := e.store.Load()
+	if err != nil {
+		return false
+	}
+	installation, ok := findInstall(state, firstNonEmpty(prepared.req.InstallationID, prepared.plan.InstallationID))
+	if !ok {
+		return false
+	}
+	for _, client := range prepared.clients {
+		binding, _, found := findBinding(installation, client.ClientID)
+		if found && hostHandoffPending(binding) {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *Engine) attachLiveGroupResult(result *Result, prepared *PreparedOperation, installation domain.Installation) {
+	result.InstallationID = firstNonEmpty(installation.InstallationID, result.InstallationID)
+	result.Targets = nil
+	for _, client := range prepared.clients {
+		binding, receipt, found := findBinding(installation, client.ClientID)
+		if !found {
+			continue
+		}
+		item := ClientResult{
+			ClientID: binding.ClientID, BindingID: binding.ClientBindingID,
+			Materialization: string(binding.Materialization), Activation: string(binding.Activation),
+			Authentication: string(binding.Authentication), Verification: string(binding.Verification),
+			RequiredComponents: append([]string(nil), prepared.req.RequiredComponents...),
+		}
+		result.Targets = append(result.Targets, item)
+		_ = storeLiveProfile(receipt.Locator, binding.ClientID, client.ConfigRoot)
+		if result.Client.ClientID == "" {
+			result.Client = item
+			result.Binding = BindingFacts{
+				InstallationID: result.InstallationID, ClientID: binding.ClientID,
+				BindingID: binding.ClientBindingID, Scope: binding.Scope, TargetPath: binding.TargetLocator,
+				DataRoot: receipt.Locator, DataReceiptID: binding.DataReceiptID,
+				OperationID: prepared.req.OperationID, TreeDigest: prepared.plan.TreeDigest,
+			}
+		}
+	}
 }
 
 func (e *Engine) confirmGroupPlan(ctx context.Context, prepared *PreparedOperation) error {
