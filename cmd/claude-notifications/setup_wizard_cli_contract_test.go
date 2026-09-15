@@ -231,17 +231,30 @@ func TestSetupWizardJSONOmittedAgentsIsInvalid(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	for _, action := range []string{"install", "update", "repair", "uninstall"} {
+		var out bytes.Buffer
+		code := executeSetupWizardWith(ctx, []string{"--action", action, "--yes", "--control-root", control, "--json"}, &out, io.Discard, strings.NewReader(""), false)
+		if code != 2 {
+			t.Fatalf("%s omitted agents: %d %s", action, code, out.String())
+		}
+		var result setupwizard.Result
+		if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+			t.Fatalf("%s json: %v %s", action, err, out.String())
+		}
+		if result.Action != action || result.Outcome != "invalid" || result.Reason != "agents_required" {
+			t.Fatalf("%s omitted agents result: %+v", action, result)
+		}
+	}
 	var out bytes.Buffer
-	code := executeSetupWizardWith(ctx, []string{"--action", "install", "--yes", "--control-root", control, "--json"}, &out, io.Discard, strings.NewReader(""), false)
-	if code != 2 {
-		t.Fatalf("omitted agents: %d %s", code, out.String())
+	if code := executeSetupWizardWith(ctx, []string{"--action", "inspect", "--control-root", control, "--json"}, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("omitted inspect: %d %s", code, out.String())
 	}
 	var result setupwizard.Result
 	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
-		t.Fatalf("json: %v %s", err, out.String())
+		t.Fatalf("inspect json: %v %s", err, out.String())
 	}
-	if result.Action != "install" || result.Outcome != "invalid" || result.Reason != "agents_required" {
-		t.Fatalf("omitted agents result: %+v", result)
+	if result.Action != "inspect" || result.Outcome != "completed" || result.Reason == "agents_required" {
+		t.Fatalf("omitted inspect result: %+v", result)
 	}
 }
 
