@@ -688,6 +688,60 @@ func TestWizardInstallRecoversPendingJournal(t *testing.T) {
 	}
 }
 
+func TestWizardInstallRecoversKernelThenUAP(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	hook := filepath.Join(runtime, "hook")
+	if _, err := installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: control, RuntimeRoot: runtime,
+		Owner: "existing-installer", ConsumerID: "existing",
+		Files: []installruntime.File{{Path: hook, Data: []byte("new"), Mode: 0700}},
+		Fault: func(phase string) error {
+			if phase == "transaction" {
+				return errors.New("crash")
+			}
+			return nil
+		},
+	}); err == nil {
+		t.Fatal("kernel fault not reached")
+	}
+	if _, err := os.Lstat(filepath.Join(control, "transaction.json")); err != nil {
+		t.Fatal("missing kernel journal")
+	}
+	plantWizardJournal(t, control)
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("both journals install: %+v %v", installed, err)
+	}
+	if _, err := os.Lstat(filepath.Join(control, "transaction.json")); !os.IsNotExist(err) {
+		t.Fatal("kernel journal survived recover")
+	}
+	if _, err := os.Lstat(wizardPendingJournalPath(control)); !os.IsNotExist(err) {
+		t.Fatalf("UAP journal survived recover: %v", err)
+	}
+	got, err := os.ReadFile(hook)
+	if err != nil || string(got) != "new" {
+		t.Fatalf("kernel recover did not finish: %s %v", got, err)
+	}
+}
+
 func TestPlanUninstallListsCodexExternalPrerequisite(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, _, _ := managedRuntime(t)
