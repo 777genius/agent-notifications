@@ -302,6 +302,31 @@ func (m Materializer) apply(ctx context.Context, eng *uapinstaller.Engine, req u
 	return eng.Apply(ctx, prepared, uapinstaller.Decision{Confirmed: true})
 }
 
+// prepareRemove is the §5.5.2 read-only removal preflight. It refuses a pending
+// journal and verifies the managed artifact before locator revoke or Apply.
+func (m Materializer) prepareRemove(ctx context.Context, eng *uapinstaller.Engine, req uapinstaller.Request, expected MaterializeRequest) (*uapinstaller.PreparedOperation, error) {
+	view, err := eng.Inspect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if view.Recovery.Required {
+		reason := view.Recovery.Reason
+		if reason == "" {
+			reason = "pending transactions remain"
+		}
+		return nil, fmt.Errorf("%w: %s", uapinstaller.ErrRecoveryRequired, reason)
+	}
+	prepared, err := eng.Prepare(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if err := confirmPreparedIdentity(expected, prepared.Plan()); err != nil {
+		_ = prepared.Close()
+		return nil, err
+	}
+	return prepared, nil
+}
+
 func confirmPreparedIdentity(req MaterializeRequest, plan uapinstaller.Plan) error {
 	if err := matchOptionalIdentity("tree digest", req.TreeDigest, plan.TreeDigest); err != nil {
 		return err
@@ -503,8 +528,8 @@ func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest)
 	return out, nil
 }
 
-// RemoveGroup uninstalls both clients in one UAP RemoveGroup. It does not
-// recover journals (§7.5); callers recover first when they own that step.
+// RemoveGroup uninstalls both clients in one UAP RemoveGroup. It preflights
+// the managed artifacts and refuses pending journals before locator revoke.
 func (m Materializer) RemoveGroup(ctx context.Context, reqs []MaterializeRequest) ([]GroupRemoveResult, error) {
 	if ctx == nil || len(reqs) != 2 {
 		return nil, ErrPreflight
@@ -548,6 +573,23 @@ func (m Materializer) RemoveGroup(ctx context.Context, reqs []MaterializeRequest
 	if err != nil {
 		return nil, err
 	}
+	var targets []uapinstaller.ClientTarget
+	for _, req := range reqs {
+		targets = append(targets, uapinstaller.ClientTarget{
+			ClientID: string(req.Integration), ClientConfigRoot: req.ClientConfigRoot,
+			ClientExecutable: req.ClientExecutable, ExternalUninstalled: req.ExternalUninstalled,
+		})
+	}
+	prepared, err := m.prepareRemove(ctx, eng, uapinstaller.Request{
+		Operation: uapinstaller.OpRemove, InstallationID: reqs[0].Identity.InstallationID,
+		OperationID: reqs[0].OperationID, ClientExecutable: engineReq.ClientExecutable,
+		ExternalUninstalled: reqs[0].ExternalUninstalled || reqs[1].ExternalUninstalled,
+		Targets:             targets,
+	}, reqs[0])
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = prepared.Close() }()
 	var res *installruntime.PendingMutation
 	var lastPB portable.Binding
 	live := 0
@@ -609,19 +651,7 @@ func (m Materializer) RemoveGroup(ctx context.Context, reqs []MaterializeRequest
 	if live == 0 {
 		return out, nil
 	}
-	var targets []uapinstaller.ClientTarget
-	for _, req := range reqs {
-		targets = append(targets, uapinstaller.ClientTarget{
-			ClientID: string(req.Integration), ClientConfigRoot: req.ClientConfigRoot,
-			ClientExecutable: req.ClientExecutable, ExternalUninstalled: req.ExternalUninstalled,
-		})
-	}
-	removed, err := m.apply(ctx, eng, uapinstaller.Request{
-		Operation: uapinstaller.OpRemove, InstallationID: reqs[0].Identity.InstallationID,
-		OperationID: reqs[0].OperationID, ClientExecutable: engineReq.ClientExecutable,
-		ExternalUninstalled: reqs[0].ExternalUninstalled || reqs[1].ExternalUninstalled,
-		Targets:             targets,
-	}, reqs[0])
+	removed, err := eng.Apply(ctx, prepared, uapinstaller.Decision{Confirmed: true})
 	if err != nil {
 		return nil, persistResult(removed, err)
 	}
@@ -842,8 +872,8 @@ func (m Materializer) GuardSecondClient(ctx context.Context, req MaterializeRequ
 	return nil
 }
 
-// Remove uninstalls one live client. It does not recover journals (§7.5);
-// the wizard recovers explicitly before calling Remove.
+// Remove uninstalls one live client. It preflights the managed artifact and
+// refuses pending journals before locator revoke. The wizard recovers first.
 func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error {
 	if ctx == nil {
 		return ErrPreflight
@@ -896,6 +926,16 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 	if err != nil {
 		return err
 	}
+	prepared, err := m.prepareRemove(ctx, eng, uapinstaller.Request{
+		Operation: uapinstaller.OpRemove, ClientID: string(req.Integration),
+		ClientConfigRoot: req.ClientConfigRoot, ClientExecutable: req.ClientExecutable,
+		InstallationID: req.Identity.InstallationID, OperationID: req.OperationID,
+		ExternalUninstalled: req.ExternalUninstalled,
+	}, req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = prepared.Close() }()
 	kernelReq := Request{
 		Binding: pb, ExpectedGeneration: req.ExpectedGeneration, Discovery: req.Discovery,
 		SourceRevision: req.SourceRevision, SourceDigest: req.SourceDigest, Profile: req.ClientConfigRoot,
@@ -920,12 +960,7 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 	if err := m.Kernel.RevokeBinding(ctx, kernelReq); err != nil {
 		return err
 	}
-	removed, err := m.apply(ctx, eng, uapinstaller.Request{
-		Operation: uapinstaller.OpRemove, ClientID: string(req.Integration),
-		ClientConfigRoot: req.ClientConfigRoot, ClientExecutable: req.ClientExecutable,
-		InstallationID: req.Identity.InstallationID, OperationID: req.OperationID,
-		ExternalUninstalled: req.ExternalUninstalled,
-	}, req)
+	removed, err := eng.Apply(ctx, prepared, uapinstaller.Decision{Confirmed: true})
 	if err != nil {
 		return persistResult(removed, err)
 	}

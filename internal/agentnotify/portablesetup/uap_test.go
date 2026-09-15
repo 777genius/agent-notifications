@@ -565,11 +565,12 @@ func TestRemoveDoesNotRecoverPendingJournal(t *testing.T) {
 	if err := os.MkdirAll(codexConfig, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mat.Install(testCtx(t), MaterializeRequest{
+	installed, err := mat.Install(testCtx(t), MaterializeRequest{
 		Identity: id, Integration: portable.Codex, ExpectedGeneration: ledger.Generation,
 		PackageRoot: pkg, ClientConfigRoot: codexConfig, ClientExecutable: probe,
 		OperationID: "portable-codex-remove-journal",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 	plantUAPPendingJournal(t, ops, filepath.Join(uapRoot, "managed"), "remove-pending-journal")
@@ -585,6 +586,7 @@ func TestRemoveDoesNotRecoverPendingJournal(t *testing.T) {
 	if listErr != nil || len(open) != 1 || open[0].OperationID != "remove-pending-journal" {
 		t.Fatalf("remove recovered journal: %+v %v", open, listErr)
 	}
+	requirePortableLocator(t, installed)
 }
 
 func TestRemoveGroupDoesNotRecoverPendingJournal(t *testing.T) {
@@ -620,7 +622,7 @@ func TestRemoveGroupDoesNotRecoverPendingJournal(t *testing.T) {
 		ControlRoot: codex.ControlRoot, GlobalConfig: codex.GlobalConfig, RuntimeRoot: codex.RuntimeRoot,
 		Primary: codex.Primary,
 	}
-	if _, err := mat.ApplyGroup(testCtx(t), []MaterializeRequest{
+	installed, err := mat.ApplyGroup(testCtx(t), []MaterializeRequest{
 		{
 			Identity: id, Integration: portable.Codex, ExpectedGeneration: ledger.Generation,
 			PackageRoot: pkg, ClientConfigRoot: codexConfig, ClientExecutable: probe,
@@ -631,7 +633,8 @@ func TestRemoveGroupDoesNotRecoverPendingJournal(t *testing.T) {
 			PackageRoot: pkg, ClientConfigRoot: claudeConfig, ClientExecutable: probe,
 			OperationID: "portable-group-remove-journal-install",
 		},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 	plantUAPPendingJournal(t, ops, filepath.Join(uapRoot, "managed"), "remove-group-pending-journal")
@@ -658,6 +661,183 @@ func TestRemoveGroupDoesNotRecoverPendingJournal(t *testing.T) {
 	if listErr != nil || len(open) != 1 || open[0].OperationID != "remove-group-pending-journal" {
 		t.Fatalf("remove group recovered journal: %+v %v", open, listErr)
 	}
+	if len(installed) != 2 {
+		t.Fatalf("group install: %+v", installed)
+	}
+	requirePortableLocator(t, installed[0])
+	requirePortableLocator(t, installed[1])
+}
+
+func requirePortableLocator(t *testing.T, b portable.Binding) {
+	t.Helper()
+	name, err := b.Filename()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := portable.Acquire(testCtx(t), b.DataRoot, name)
+	if err != nil {
+		t.Fatalf("locator missing: %v", err)
+	}
+	lease.Release()
+}
+
+func TestRemoveRejectsCorruptArtifactBeforeRevoke(t *testing.T) {
+	codex, ledger := bindingFixture(t)
+	probe := buildProbe(t)
+	root := filepath.Dir(codex.ControlRoot)
+	pkg := filepath.Join(root, "package source with spaces")
+	writePackage(t, pkg, probe)
+	uapRoot := filepath.Join(root, "uap")
+	mat, err := NewMaterializer(UAPRoots{
+		StateFile:        filepath.Join(uapRoot, "state", "state-v2.json"),
+		LockFile:         filepath.Join(uapRoot, "state", "mutation.lock"),
+		OperationsDir:    filepath.Join(uapRoot, "state", "operations"),
+		PluginDataBase:   filepath.Join(uapRoot, "plugin data"),
+		ManagedRoot:      filepath.Join(uapRoot, "managed"),
+		HelperExecutable: probe,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := Identity{
+		InstallationID: "00000000-0000-4000-8000-0000000000e5",
+		ComponentID:    codex.ComponentID, Owner: codex.Owner, ScopeRoot: codex.ScopeRoot,
+		ControlRoot: codex.ControlRoot, GlobalConfig: codex.GlobalConfig, RuntimeRoot: codex.RuntimeRoot,
+		Primary: codex.Primary,
+	}
+	codexConfig := filepath.Join(root, "home", "codex config")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := mat.Install(testCtx(t), MaterializeRequest{
+		Identity: id, Integration: portable.Codex, ExpectedGeneration: ledger.Generation,
+		PackageRoot: pkg, ClientConfigRoot: codexConfig, ClientExecutable: probe,
+		OperationID: "portable-codex-remove-corrupt",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := mat.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	installation, ok := findInstallation(state, id.InstallationID)
+	if !ok || len(installation.Clients) != 1 {
+		t.Fatalf("installed: %+v", installation)
+	}
+	tampered := false
+	for _, binding := range installation.Clients {
+		if err := os.WriteFile(filepath.Join(binding.TargetLocator, "tampered"), []byte("corrupt"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		tampered = true
+	}
+	if !tampered {
+		t.Fatal("codex target missing")
+	}
+	err = mat.Remove(testCtx(t), MaterializeRequest{
+		Identity: id, Integration: portable.Codex, ClientConfigRoot: codexConfig,
+		ClientExecutable: probe, OperationID: "portable-codex-remove-corrupt-blocked",
+		ExternalUninstalled: true,
+	})
+	if err == nil {
+		t.Fatal("corrupt managed artifact accepted")
+	}
+	requirePortableLocator(t, installed)
+}
+
+func TestRemoveGroupRejectsCorruptArtifactBeforeRevoke(t *testing.T) {
+	codex, ledger := bindingFixture(t)
+	probe := buildProbe(t)
+	root := filepath.Dir(codex.ControlRoot)
+	pkg := filepath.Join(root, "package source with spaces")
+	writePackage(t, pkg, probe)
+	uapRoot := filepath.Join(root, "uap")
+	claudeConfig := filepath.Join(root, "home", "claude config")
+	codexConfig := filepath.Join(root, "home", "codex config")
+	for _, dir := range []string{claudeConfig, codexConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mat, err := NewMaterializer(UAPRoots{
+		StateFile:        filepath.Join(uapRoot, "state", "state-v2.json"),
+		LockFile:         filepath.Join(uapRoot, "state", "mutation.lock"),
+		OperationsDir:    filepath.Join(uapRoot, "state", "operations"),
+		PluginDataBase:   filepath.Join(uapRoot, "plugin data"),
+		ManagedRoot:      filepath.Join(uapRoot, "managed"),
+		HelperExecutable: probe,
+		ClaudeRunner:     listingRunner{configRoot: claudeConfig},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := Identity{
+		InstallationID: "00000000-0000-4000-8000-0000000000e6",
+		ComponentID:    codex.ComponentID, Owner: codex.Owner, ScopeRoot: codex.ScopeRoot,
+		ControlRoot: codex.ControlRoot, GlobalConfig: codex.GlobalConfig, RuntimeRoot: codex.RuntimeRoot,
+		Primary: codex.Primary,
+	}
+	installed, err := mat.ApplyGroup(testCtx(t), []MaterializeRequest{
+		{
+			Identity: id, Integration: portable.Codex, ExpectedGeneration: ledger.Generation,
+			PackageRoot: pkg, ClientConfigRoot: codexConfig, ClientExecutable: probe,
+			OperationID: "portable-group-remove-corrupt-install",
+		},
+		{
+			Identity: id, Integration: portable.Claude, ExpectedGeneration: ledger.Generation,
+			PackageRoot: pkg, ClientConfigRoot: claudeConfig, ClientExecutable: probe,
+			OperationID: "portable-group-remove-corrupt-install",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := mat.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	installation, ok := findInstallation(state, id.InstallationID)
+	if !ok || len(installation.Clients) != 2 {
+		t.Fatalf("installed: %+v", installation)
+	}
+	tampered := false
+	for _, binding := range installation.Clients {
+		if binding.ClientID != string(portable.Claude) {
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(binding.TargetLocator, "tampered"), []byte("corrupt"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		tampered = true
+	}
+	if !tampered {
+		t.Fatal("claude target missing")
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(codex.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = mat.RemoveGroup(testCtx(t), []MaterializeRequest{
+		{
+			Identity: id, Integration: portable.Codex, ExpectedGeneration: snap.Ledger.Generation,
+			ClientConfigRoot: codexConfig, ClientExecutable: probe, ExternalUninstalled: true,
+			OperationID: "portable-group-remove-corrupt",
+		},
+		{
+			Identity: id, Integration: portable.Claude, ExpectedGeneration: snap.Ledger.Generation,
+			ClientConfigRoot: claudeConfig, ClientExecutable: probe,
+			OperationID: "portable-group-remove-corrupt",
+		},
+	})
+	if err == nil {
+		t.Fatal("corrupt managed artifact accepted")
+	}
+	if len(installed) != 2 {
+		t.Fatalf("group install: %+v", installed)
+	}
+	requirePortableLocator(t, installed[0])
+	requirePortableLocator(t, installed[1])
 }
 
 func TestGuardSecondClientAllowsCopiedSameDigest(t *testing.T) {
