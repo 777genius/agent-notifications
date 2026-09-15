@@ -2505,6 +2505,79 @@ func TestWizardTTYAddSecondClientKeepProposesNewDefaults(t *testing.T) {
 	}
 }
 
+func TestWizardTTYKeepBoundMixedCancels(t *testing.T) {
+	ctx := testCtx(t)
+	envHome := t.TempDir()
+	testenv.Set(t, envHome)
+	canonical := filepath.Join(envHome, "fixture-config.json")
+	if err := os.WriteFile(canonical, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENT_NOTIFICATIONS_CONFIG", canonical)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	bundle := writePluginBundle(t)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	claudeConfig := filepath.Join(filepath.Dir(control), "claude-profile")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	off, on := false, true
+	base := Request{
+		Action: ActionInstall, Yes: true, Agents: []string{"claude", "codex"},
+		ClaudeHooks: &off, CodexHooks: &on, ClaudeAgentNotify: &on, CodexAgentNotify: &on,
+		PackageRoot: pkg, PluginRoot: bundle, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClaudeConfig: claudeConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot:    filepath.Join(filepath.Dir(control), "scope"),
+		ClaudeRunner: listingRunner{configRoot: claudeConfig},
+	}
+	if err := os.MkdirAll(base.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, base)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("bound mixed: %+v %v", installed, err)
+	}
+	var promptOut strings.Builder
+	_, err = FillInteractive(ctx, Request{
+		Action: ActionInstall, Agents: []string{"claude", "codex"},
+		PackageRoot: pkg, PluginRoot: bundle, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClaudeConfig: claudeConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot:    base.ScopeRoot,
+		ClaudeRunner: listingRunner{configRoot: claudeConfig},
+	}, &LinePrompt{In: strings.NewReader("1\n"), Out: &promptOut}, func(agents []string) []string {
+		return LiveSetupClients(base, agents)
+	})
+	if err != ErrPromptCanceled {
+		t.Fatalf("bound keep: %v prompt=%s", err, promptOut.String())
+	}
+	if !strings.Contains(promptOut.String(), "claude: hooks=false agent-notify=true") || !strings.Contains(promptOut.String(), "codex: hooks=true agent-notify=true") {
+		t.Fatalf("bound keep hid live units: %s", promptOut.String())
+	}
+	view, err := Run(ctx, Request{
+		Action: ActionInspect, Agents: []string{"claude", "codex"},
+		ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global, Helper: probe,
+		CodexHome: codexConfig, ClaudeConfig: claudeConfig, ScopeRoot: base.ScopeRoot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	saw := map[string]string{}
+	for _, target := range view.Targets {
+		saw[target.Client+"/"+target.Unit] = target.Outcome
+	}
+	if saw["claude/agent-notify"] != "installed" || saw["codex/agent-notify"] != "installed" || saw["codex/hooks"] != "installed" {
+		t.Fatalf("bound keep mutated: %+v", view.Targets)
+	}
+	if saw["claude/hooks"] == "installed" {
+		t.Fatalf("claude hooks appeared: %+v", view.Targets)
+	}
+}
+
 func TestWizardSecondClientAddFromCopiedPackage(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, _, _ := managedRuntime(t)
