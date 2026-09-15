@@ -2725,6 +2725,15 @@ func TestRepairOlderSiblingAfterSubsetUpdate(t *testing.T) {
 	if claudeAfter.TreeDigest != claudeBefore.TreeDigest || codexAfter.TreeDigest != codexBefore.TreeDigest {
 		t.Fatalf("r1 repair rewrote digests: before claude=%s codex=%s after claude=%s codex=%s", claudeBefore.TreeDigest, codexBefore.TreeDigest, claudeAfter.TreeDigest, codexAfter.TreeDigest)
 	}
+	discovered := map[string]string{}
+	for _, client := range eng.Discover() {
+		for _, binding := range client.Bindings {
+			discovered[binding.ClientID] = binding.TreeDigest
+		}
+	}
+	if discovered["claude"] != claudeAfter.TreeDigest || discovered["codex"] != codexAfter.TreeDigest {
+		t.Fatalf("discover collapsed mixed revisions: %+v inspect claude=%s codex=%s", discovered, claudeAfter.TreeDigest, codexAfter.TreeDigest)
+	}
 }
 
 func TestRepairGroupIntactReportsBothTargets(t *testing.T) {
