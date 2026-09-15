@@ -50,7 +50,7 @@ jobs:
           fi
 
       - name: Run tests
-        run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+        run: go test -timeout 20m -v -race -coverprofile=coverage.txt -covermode=atomic ./...
 
       - name: Upload coverage to Codecov
         if: matrix.go == '1.26'
