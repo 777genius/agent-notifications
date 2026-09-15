@@ -354,7 +354,7 @@ PYEOF
     fi
 
     if command -v node &>/dev/null; then
-        PLUGIN_KEY="$PLUGIN_KEY" node - "$INSTALLED_JSON" <<'JSEOF' 2>/dev/null || true
+        PLUGIN_KEY="$PLUGIN_KEY" run_isolated_node - "$INSTALLED_JSON" <<'JSEOF' 2>/dev/null || true
 const fs = require('fs');
 function parseVersion(value) {
   return String(value || '0.0.0')
@@ -454,7 +454,7 @@ PYEOF
     fi
 
     if command -v node &>/dev/null; then
-        PLUGIN_KEY="$PLUGIN_KEY" node - "$INSTALLED_JSON" <<'JSEOF' 2>/dev/null || true
+        PLUGIN_KEY="$PLUGIN_KEY" run_isolated_node - "$INSTALLED_JSON" <<'JSEOF' 2>/dev/null || true
 const fs = require('fs');
 function parseVersion(value) {
   return String(value || '0.0.0')
@@ -798,7 +798,7 @@ PYEOF
 
   # Node is very likely present because Claude Code is a Node app.
   if [ -z "$PLUGIN_ROOT" ] && command -v node >/dev/null 2>&1; then
-    PLUGIN_ROOT=$(PLUGIN_KEY="$PLUGIN_KEY" node - "$INSTALLED_JSON" <<'JSEOF' 2>/dev/null || true
+    PLUGIN_ROOT=$(PLUGIN_KEY="$PLUGIN_KEY" run_isolated_node - "$INSTALLED_JSON" <<'JSEOF' 2>/dev/null || true
 const fs = require('fs');
 function parseVersion(value) {
   return String(value || '0.0.0')
@@ -1183,7 +1183,22 @@ const fs = require('fs');
 const path = require('path');
 const osPath = process.platform === 'win32' ? path.win32 : path.posix;
 function lexists(p) { try { fs.lstatSync(p); return true; } catch (_) { return false; } }
-function real(p) { try { return fs.realpathSync(p); } catch (_) { return osPath.resolve(p); } }
+function real(p) {
+  const resolved = osPath.resolve(p);
+  let current = resolved;
+  const missing = [];
+  while (true) {
+    try {
+      const base = fs.realpathSync(current);
+      return missing.length ? osPath.join(base, ...missing.slice().reverse()) : base;
+    } catch (_) {
+      const parent = osPath.dirname(current);
+      if (parent === current) return resolved;
+      missing.push(osPath.basename(current));
+      current = parent;
+    }
+  }
+}
 function splitdrive(p) {
   if (process.platform !== 'win32') return ['', p];
   const n = p.replace(/\//g, '\\');

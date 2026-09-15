@@ -166,8 +166,11 @@ try {
     ConfigLinkedPath: 1, ConfigChanged: 1, ConfigLockTimeout: 1, ConfigMissing: 1,
     ConfigHomeUnavailable: 1, ConfigBaseUnavailable: 1,
   };
-  for (const diagnostic of response.diagnostics || []) {
-    const code = diagnostic && diagnostic.code;
+  const diagnostics = response.diagnostics === undefined ? [] : response.diagnostics;
+  if (!Array.isArray(diagnostics)) process.exit(2);
+  for (const diagnostic of diagnostics) {
+    if (!diagnostic || typeof diagnostic !== 'object' || Array.isArray(diagnostic)) process.exit(2);
+    const code = diagnostic.code;
     if (typeof code === 'string' && codes[code]) process.stderr.write(code + '\n');
   }
 } catch (e) {
