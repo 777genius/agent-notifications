@@ -71,4 +71,6 @@ The primary CLI is `agent-notifications`. Use `agent-notifications config path` 
 - [Architecture](docs/ARCHITECTURE.md) and [local development](docs/LOCAL_DEVELOPMENT.md)
 - [Contributing](CONTRIBUTING.md) and [changelog](CHANGELOG.md)
 
-GPL-3.0. See [LICENSE](LICENSE).
+GPL-3.0-or-later. See [LICENSE](LICENSE).
+
+Human pull requests must be signed under the [Contributor License Agreement](.github/CLA.md) before merge. You keep copyright. Until you sign, GitHub's Terms of Service license the pull request under GPL-3.0-or-later only. The CLA lets the project owner sublicense signed work under additional terms (for example a commercial license) while keeping the GPL-3.0-or-later grant from the submission date.
