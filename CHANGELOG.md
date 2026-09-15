@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Installer metadata and checksum validation accept **Node.js** (`node`) when `python3` is not on PATH. Python remains preferred when both are present. iTerm2 click-to-focus still needs a real Python interpreter for its optional venv.
+- Pin the documented one-line installer to the setup loader that probes `python3`/`node` and falls back from Windows Store/WSL stubs.
 
 ### Fixed
 - Node-only installer paths now isolate registry JSON parses from `NODE_OPTIONS`/`NODE_PATH`, resolve staging TMPDIR by walking symlink components then `..` the same way Python `os.path.realpath` does (including keeping Windows root-relative symlink targets on the symlink's drive), and treat malformed config diagnostics as a protocol failure so a capable helper can still be staged.

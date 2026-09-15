@@ -17,11 +17,15 @@ root = Path(sys.argv[1])
 loader = (root / 'bin/setup.sh').read_text(encoding='utf-8')
 public_command = next(line for line in (root / 'README.md').read_text(encoding='utf-8').splitlines()
                       if line.startswith('(set -o pipefail; curl '))
-PINNED_SETUP_SHA = 'a8fbdc74ab418e6221fae2794d1dc9c3d8fc631d'
+PINNED_SETUP_SHA = 'a512deb5819c3f8c7c3be8335f713cc8bb734fc3'
 PINNED_SETUP_URL = (
     'https://raw.githubusercontent.com/777genius/agent-notifications/'
     + PINNED_SETUP_SHA + '/bin/setup.sh'
 )
+assert PINNED_SETUP_SHA in public_command
+for rel in ('docs/INSTALLATION.md', 'landing/data/install.ts',
+            'landing/tests/install.test.ts', 'landing/tests/browser/install.spec.ts'):
+    assert PINNED_SETUP_SHA in (root / rel).read_text(encoding='utf-8'), rel
 STORE_PYTHON3_STUB = '''#!/usr/bin/env bash
 echo "Python was not found; run without arguments to install from the Microsoft Store, or disable this shortcut from Settings > Apps > Advanced app settings > App execution aliases." >&2
 exit 9009

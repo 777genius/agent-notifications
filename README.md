@@ -39,7 +39,7 @@ Desktop notifications and sounds for **Claude Code and Codex CLI**. Know when a 
 Requires Claude Code and/or Codex CLI, plus **Python 3.6+** (`python3`) **or** **Node.js** (`node`) for the installer. Python is used when both are present. On Windows, use **Git Bash** with native Windows Python or Node. A Microsoft Store or WSL `python3` stub is skipped when Node is available.
 
 ```bash
-(set -o pipefail; curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/a8fbdc74ab418e6221fae2794d1dc9c3d8fc631d/bin/setup.sh | bash)
+(set -o pipefail; curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/a512deb5819c3f8c7c3be8335f713cc8bb734fc3/bin/setup.sh | bash)
 ```
 
 The command uses a commit-pinned setup loader and reports download failures. The small setup script resolves the latest stable release and downloads both installer scripts from its exact commit. Release lookup and validation happen automatically. Choose **Claude**, **Codex**, or **both**. For non-interactive setup, append `-s -- --product claude`, `codex`, or `both` after `bash`, before the closing `)`.

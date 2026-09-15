@@ -16,7 +16,7 @@ Prefer a guided setup? [Open the installation guide](https://777genius.github.io
 The command pins the setup loader to a reviewed commit and reports download failures. The setup script handles release lookup and validation internally, then downloads both installer scripts from the exact release commit. Run it and choose Claude, Codex, or both:
 
 ```bash
-(set -o pipefail; curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/a8fbdc74ab418e6221fae2794d1dc9c3d8fc631d/bin/setup.sh | bash)
+(set -o pipefail; curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/a512deb5819c3f8c7c3be8335f713cc8bb734fc3/bin/setup.sh | bash)
 ```
 
 > Windows users: open Git Bash from the Start menu and run this command there. Do not run the `curl ... | bash` command from PowerShell or Windows Terminal if `bash` opens WSL, because that targets Linux paths and binaries instead of Windows.
@@ -24,7 +24,7 @@ The command pins the setup loader to a reviewed commit and reports download fail
 For automation or terminals without a controlling TTY, choose explicitly:
 
 ```bash
-(set -o pipefail; curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/a8fbdc74ab418e6221fae2794d1dc9c3d8fc631d/bin/setup.sh | bash -s -- --product codex)
+(set -o pipefail; curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/a512deb5819c3f8c7c3be8335f713cc8bb734fc3/bin/setup.sh | bash -s -- --product codex)
 ```
 
 Use `claude`, `codex`, or `both`. This installs the notifications plugin; the selected Claude Code / Codex CLI must already be on `PATH`.

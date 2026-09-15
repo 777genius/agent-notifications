@@ -43,7 +43,7 @@ test("production command matrix, aftercare, clipboard and configuration", async 
           await page.getByRole("button", { name: intent, exact: true }).click();
         const value = await page.getByLabel(intent + " command").inputValue();
         expect(value).toBe(
-          `(set -o pipefail; curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/a8fbdc74ab418e6221fae2794d1dc9c3d8fc631d/bin/setup.sh | bash -s -- --product ${product})`,
+          `(set -o pipefail; curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/a512deb5819c3f8c7c3be8335f713cc8bb734fc3/bin/setup.sh | bash -s -- --product ${product})`,
         );
       }
       if (os === "windows")
