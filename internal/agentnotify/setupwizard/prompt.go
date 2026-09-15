@@ -278,7 +278,23 @@ func lookupLiveUnits(req Request) []ClientUnits {
 	if req.LiveUnits != nil {
 		return req.LiveUnits(req.Agents)
 	}
-	return LiveClientUnits(req, req.Agents)
+	live := LiveClientUnits(req, req.Agents)
+	if req.Action == ActionUninstall {
+		return live
+	}
+	bound := map[string]bool{}
+	for _, id := range LiveSetupClients(req, req.Agents) {
+		bound[id] = true
+	}
+	for i := range live {
+		if bound[live[i].Client] {
+			continue
+		}
+		// New install targets are proposed on; live-off is only for bound clients.
+		live[i].Hooks = true
+		live[i].Notify = true
+	}
+	return live
 }
 
 func mixedClientUnits(units []ClientUnits) bool {
