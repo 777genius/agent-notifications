@@ -143,6 +143,9 @@ type Result struct {
 	Targets        []TargetResult  `json:"targets,omitempty"`
 	Readiness      []ReadinessFact `json:"readiness,omitempty"`
 	NextActions    []NextAction    `json:"nextActions,omitempty"`
+	// DataRetained is true after the last live binding is removed while
+	// PLUGIN_DATA remains. Absent inspect rows are not a license to run.
+	DataRetained bool `json:"dataRetained,omitempty"`
 }
 
 func (r Result) ExitCode() int {
@@ -1215,7 +1218,29 @@ func inspect(ctx context.Context, req Request, agents []portable.Integration, sn
 			Kind: "recover", Reason: strings.Join(recoveryIDs(view), ","),
 		})
 	}
+	out = markInspectedDataRetained(view, out)
 	return reportPendingWizardIntent(req, snap, out), nil
+}
+
+func markInspectedDataRetained(view uapinstaller.Inspection, out Result) Result {
+	for _, installation := range view.Installations {
+		if installation.DataRetained {
+			out.DataRetained = true
+			return out
+		}
+	}
+	return out
+}
+
+func markRetainedEmpty(mat portablesetup.Materializer, installationID string, out Result) Result {
+	if installationID == "" {
+		return out
+	}
+	retained, err := mat.RetainedEmpty(installationID)
+	if err == nil && retained {
+		out.DataRetained = true
+	}
+	return out
 }
 
 // reportPendingWizardIntent lists the persisted resume command without
@@ -1711,6 +1736,7 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 		if out.Outcome == "" {
 			out.Outcome, out.Reason = "unchanged", "already_absent"
 		}
+		out = markRetainedEmpty(mat, id.InstallationID, out)
 		reportProgress(req, "complete")
 		return out, nil
 	}
@@ -1767,10 +1793,12 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 				out.Reason = "already_absent"
 			}
 			out.Outcome = "unchanged"
+			out = markRetainedEmpty(mat, id.InstallationID, out)
 			reportProgress(req, "complete")
 			return out, nil
 		}
 		out.Outcome = "completed"
+		out = markRetainedEmpty(mat, id.InstallationID, out)
 		reportProgress(req, "complete")
 		return out, nil
 	}
@@ -1829,10 +1857,12 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 			out.Reason = "already_absent"
 		}
 		out.Outcome = "unchanged"
+		out = markRetainedEmpty(mat, id.InstallationID, out)
 		reportProgress(req, "complete")
 		return out, nil
 	}
 	out.Outcome = "completed"
+	out = markRetainedEmpty(mat, id.InstallationID, out)
 	reportProgress(req, "complete")
 	return out, nil
 }

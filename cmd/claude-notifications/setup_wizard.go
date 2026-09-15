@@ -161,7 +161,11 @@ func writeSetupWizardResult(out io.Writer, jsonOut bool, result setupwizard.Resu
 			return 1
 		}
 	} else {
-		_, _ = fmt.Fprintf(out, "%s; reason=%s; generation=%d.\n", result.Outcome, result.Reason, result.Generation)
+		line := fmt.Sprintf("%s; reason=%s; generation=%d", result.Outcome, result.Reason, result.Generation)
+		if result.DataRetained {
+			line += " data_retained=true"
+		}
+		_, _ = fmt.Fprintln(out, line+".")
 		for _, target := range result.Targets {
 			line := target.Client + " " + target.Unit + ": " + target.Outcome
 			if target.Reason != "" {

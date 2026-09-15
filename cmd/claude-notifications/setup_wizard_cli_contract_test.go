@@ -186,6 +186,29 @@ func TestSetupWizardInspectReportsDiscoveredMCP(t *testing.T) {
 	}
 }
 
+func TestSetupWizardReportsDataRetained(t *testing.T) {
+	var out bytes.Buffer
+	result := setupwizard.Result{
+		Action: "inspect", Outcome: "completed", Generation: 3, DataRetained: true,
+		Targets: []setupwizard.TargetResult{{Client: "codex", Unit: "agent-notify", Outcome: "absent"}},
+	}
+	if code := writeSetupWizardResult(&out, false, result, nil); code != 0 || !strings.Contains(out.String(), "data_retained=true") {
+		t.Fatalf("text: %d %s", code, out.String())
+	}
+	out.Reset()
+	if code := writeSetupWizardResult(&out, true, result, nil); code != 0 {
+		t.Fatalf("json code: %d %s", code, out.String())
+	}
+	if !strings.Contains(out.String(), `"dataRetained":true`) || strings.Contains(out.String(), `"DataRetained"`) {
+		t.Fatalf("json: %s", out.String())
+	}
+	out.Reset()
+	live := setupwizard.Result{Action: "inspect", Outcome: "completed", Generation: 2}
+	if code := writeSetupWizardResult(&out, false, live, nil); code != 0 || strings.Contains(out.String(), "data_retained") {
+		t.Fatalf("live text leaked retained: %d %s", code, out.String())
+	}
+}
+
 func TestSetupWizardJSONDoesNotPrompt(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

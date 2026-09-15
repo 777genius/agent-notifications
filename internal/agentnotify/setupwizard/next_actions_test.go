@@ -242,6 +242,9 @@ func TestInspectOmittedAgentsStillReportsBoth(t *testing.T) {
 	if saw["claude"] != "absent" || saw["codex"] != "absent" {
 		t.Fatalf("omitted inspect clients: %+v", got.Targets)
 	}
+	if got.DataRetained {
+		t.Fatalf("empty inspect reported retained data: %+v", got)
+	}
 	plan, err := Plan(ctx, Request{Action: ActionInspect, ControlRoot: control})
 	if err != nil || !plan.Ready || plan.Result.Reason == "agents_required" || plan.Result.ExitCode() != 0 {
 		t.Fatalf("omitted inspect plan: %+v %v", plan, err)
@@ -262,6 +265,23 @@ func TestTargetResultJSONIncludesInspectedMCPConfig(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "configPath") || strings.Contains(string(raw), "ConfigPath") {
 		t.Fatalf("empty config path leaked: %s", raw)
+	}
+}
+
+func TestResultJSONIncludesDataRetained(t *testing.T) {
+	raw, err := json.Marshal(Result{Action: "inspect", Outcome: "completed", DataRetained: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"dataRetained":true`) || strings.Contains(string(raw), `"DataRetained"`) {
+		t.Fatalf("inspect json omitted data_retained: %s", raw)
+	}
+	raw, err = json.Marshal(Result{Action: "inspect", Outcome: "completed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "dataRetained") || strings.Contains(string(raw), "DataRetained") {
+		t.Fatalf("empty data_retained leaked: %s", raw)
 	}
 }
 

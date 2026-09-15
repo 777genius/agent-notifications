@@ -1542,6 +1542,9 @@ func TestWizardInstallInspectUninstall(t *testing.T) {
 	if !found {
 		t.Fatalf("inspect missed portable binding: %+v", view.Targets)
 	}
+	if view.DataRetained {
+		t.Fatalf("live inspect reported retained data: %+v", view)
+	}
 	if live := LiveNotifyClients(control, []string{"codex", "claude"}); strings.Join(live, ",") != "codex" {
 		t.Fatalf("live clients: %v", live)
 	}
@@ -1551,6 +1554,9 @@ func TestWizardInstallInspectUninstall(t *testing.T) {
 	removed, err := Run(ctx, req)
 	if err != nil || removed.Outcome != "completed" {
 		t.Fatalf("uninstall: %+v %v", removed, err)
+	}
+	if !removed.DataRetained {
+		t.Fatalf("last uninstall omitted data_retained: %+v", removed)
 	}
 	for _, next := range removed.NextActions {
 		if next.Kind == "test-notification" || next.Kind == "request-permission" {
@@ -1562,6 +1568,9 @@ func TestWizardInstallInspectUninstall(t *testing.T) {
 	view, err = Run(ctx, req)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !view.DataRetained {
+		t.Fatalf("inspect omitted data_retained: %+v", view)
 	}
 	for _, target := range view.Targets {
 		if target.Unit == "agent-notify" && target.Outcome == "installed" {
@@ -6120,6 +6129,9 @@ func TestWizardUninstallOmittedUnitsRemovesManagedWithoutPackage(t *testing.T) {
 	if again.Outcome != "unchanged" || again.Reason != "already_absent" {
 		t.Fatalf("second uninstall: %+v %v", again, err)
 	}
+	if !again.DataRetained {
+		t.Fatalf("already_absent omitted data_retained: %+v", again)
+	}
 	if again.Generation != generation {
 		t.Fatalf("already_absent mutated generation: %d -> %d", generation, again.Generation)
 	}
@@ -6133,6 +6145,9 @@ func TestWizardUninstallOmittedUnitsRemovesManagedWithoutPackage(t *testing.T) {
 		if target.Unit == "agent-notify" && target.Outcome == "installed" {
 			t.Fatalf("omitted uninstall left notify: %+v", view.Targets)
 		}
+	}
+	if !view.DataRetained {
+		t.Fatalf("inspect omitted data_retained: %+v", view)
 	}
 }
 
