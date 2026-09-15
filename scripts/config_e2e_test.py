@@ -16,6 +16,7 @@ import platform
 import shlex
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import threading
@@ -32,8 +33,26 @@ def put(path, data, mode=0o600):
     path.chmod(mode)
 
 
+def is_windows_store_or_wsl_alias(src):
+    n = src.replace('\\', '/').lower()
+    base = os.path.basename(n)
+    if base not in ('python', 'python.exe', 'python3', 'python3.exe', 'node', 'node.exe'):
+        return False
+    return '/windowsapps/' in n or '/system32/' in n or '/syswow64/' in n
+
+
+def host_cmd(name):
+    if name == 'python3' and sys.executable and os.path.isfile(sys.executable) \
+            and not is_windows_store_or_wsl_alias(sys.executable):
+        return sys.executable
+    src = shutil.which(name)
+    if src and os.path.isfile(src) and not is_windows_store_or_wsl_alias(src):
+        return src
+    return None
+
+
 def place_runtime_cmd(dest, src):
-    if dest.exists() or not src or not os.path.isfile(src):
+    if dest.exists() or not src or not os.path.isfile(src) or is_windows_store_or_wsl_alias(src):
         return
     dest.write_text('#!/bin/sh\nexec {} "$@"\n'.format(shlex.quote(src.replace('\\', '/'))))
     dest.chmod(0o755)
@@ -149,7 +168,7 @@ shutil.copytree(os.environ['SOURCE'],root,dirs_exist_ok=True)
         if node:
             names.append('node')
         for name in names:
-            place_runtime_cmd(runtime / name, shutil.which(name))
+            place_runtime_cmd(runtime / name, host_cmd(name))
         env.update(PATH=str(clis) + os.pathsep + str(runtime), TRACE=str(base / 'trace'),
                    EFFECTS=str(base / 'effects'), SOURCE=str(self.bundle), LOCAL_URL=self.url,
                    BOOTSTRAP_RELEASE_TAG=TAG, BOOTSTRAP_RELEASE_COMMIT=COMMIT,

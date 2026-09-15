@@ -17,10 +17,30 @@ import tempfile
 root = Path(sys.argv[1])
 
 
+def is_windows_store_or_wsl_alias(src):
+    # GitHub Windows images expose python3.exe as a WSL/Store stub. Invoking it
+    # prints UTF-16 "Windows Subsystem for Linux has no installed distributions".
+    n = src.replace('\\', '/').lower()
+    base = os.path.basename(n)
+    if base not in ('python', 'python.exe', 'python3', 'python3.exe', 'node', 'node.exe'):
+        return False
+    return '/windowsapps/' in n or '/system32/' in n or '/syswow64/' in n
+
+
+def host_cmd(name):
+    if name == 'python3' and sys.executable and os.path.isfile(sys.executable) \
+            and not is_windows_store_or_wsl_alias(sys.executable):
+        return sys.executable
+    src = shutil.which(name)
+    if src and os.path.isfile(src) and not is_windows_store_or_wsl_alias(src):
+        return src
+    return None
+
+
 def place_runtime_cmd(dest, src):
     # Git Bash builtins are not files, and Windows often cannot create native
     # symlinks. Exec wrappers keep restricted PATH tests portable.
-    if dest.exists() or not src or not os.path.isfile(src):
+    if dest.exists() or not src or not os.path.isfile(src) or is_windows_store_or_wsl_alias(src):
         return
     dest.write_text('#!/bin/sh\nexec {} "$@"\n'.format(shlex.quote(src.replace('\\', '/'))))
     dest.chmod(0o755)
@@ -36,7 +56,7 @@ def runtime_path(case, python=False, node=False):
     if node:
         names.append('node')
     for name in names:
-        place_runtime_cmd(bin_dir / name, shutil.which(name))
+        place_runtime_cmd(bin_dir / name, host_cmd(name))
     return str(bin_dir)
 
 
@@ -58,6 +78,16 @@ def fail(name, detail):
 
 def describe(result):
     return 'exit=%s stdout=%r stderr=%r' % (result.returncode, result.stdout, result.stderr)
+
+
+if is_windows_store_or_wsl_alias(r'C:\Windows\System32\python3.exe') is not True \
+        or is_windows_store_or_wsl_alias(r'C:\Users\x\AppData\Local\Microsoft\WindowsApps\python3.exe') is not True \
+        or is_windows_store_or_wsl_alias(r'C:\hostedtoolcache\windows\Python\3.12.10\x64\python.exe'):
+    fail('wsl python3 alias detection', 'expected System32/WindowsApps stubs to be skipped')
+if host_cmd('python3') != sys.executable and not (
+        host_cmd('python3') and os.path.isfile(host_cmd('python3'))):
+    fail('host python3', repr(host_cmd('python3')))
+pass_name('skip Windows WSL/Store python3 aliases')
 
 
 # --- setup.sh loader: python-only, node-only, neither, python-preferred ---
@@ -102,11 +132,11 @@ def setup_case(name, python=False, node=False, expected=0, preferred=False):
         if preferred:
             (case / 'bin/python3').write_text(
                 '#!/usr/bin/env bash\nprintf python3 >> "$CASE_DIR/runtime.log"\nexec '
-                + shlex.quote(shutil.which('python3')) + ' "$@"\n')
+                + shlex.quote(host_cmd('python3').replace('\\', '/')) + ' "$@"\n')
             (case / 'bin/python3').chmod(0o755)
             (case / 'bin/node').write_text(
                 '#!/usr/bin/env bash\nprintf node >> "$CASE_DIR/runtime.log"\nexec '
-                + shlex.quote(shutil.which('node')) + ' "$@"\n')
+                + shlex.quote(host_cmd('node').replace('\\', '/')) + ' "$@"\n')
             (case / 'bin/node').chmod(0o755)
         env = dict(os.environ, PATH=path, CASE_DIR=str(case), TMPDIR=str(case / 'tmp space'))
         result = subprocess.run(['bash', str(root / 'bin/setup.sh'), '--product', 'codex'],
@@ -131,20 +161,20 @@ def setup_case(name, python=False, node=False, expected=0, preferred=False):
         pass_name(name)
 
 
-if shutil.which('python3'):
+if host_cmd('python3'):
     setup_case('setup.sh python-only', python=True)
 else:
     print('SKIP setup.sh python-only')
-if shutil.which('node'):
+if host_cmd('node'):
     setup_case('setup.sh node-only', node=True)
 else:
     print('SKIP setup.sh node-only')
 setup_case('setup.sh neither runtime', expected=1)
-if shutil.which('python3') and shutil.which('node'):
+if host_cmd('python3') and host_cmd('node'):
     setup_case('setup.sh python preferred', python=True, node=True, preferred=True)
 
 # --- bootstrap.sh: node-only commit parse and checksum verify ---
-if shutil.which('node'):
+if host_cmd('node'):
     with tempfile.TemporaryDirectory(prefix='bootstrap-node-', dir=os.environ['TMPDIR']) as tmp:
         case = Path(tmp)
         path = runtime_path(case, node=True)
@@ -206,7 +236,7 @@ else:
     print('SKIP bootstrap.sh node-only commit parse and checksum verify')
 
 # --- install.sh: node-only config preflight transport ---
-if shutil.which('node'):
+if host_cmd('node'):
     with tempfile.TemporaryDirectory(prefix='install-node-', dir=os.environ['TMPDIR']) as tmp:
         case = Path(tmp)
         functions = case / 'functions.sh'
@@ -249,7 +279,7 @@ else:
 
 # Production JSSTAGE must resolve TMPDIR through a symlink ancestor, matching
 # Python os.path.realpath, so overlap into a refresh root is rejected.
-if shutil.which('node'):
+if host_cmd('node'):
     jsstage = extract_quoted_heredoc(root / 'bin/bootstrap.sh', 'JSSTAGE')
     with tempfile.TemporaryDirectory(prefix='jsstage-', dir=os.environ['TMPDIR']) as tmp:
         td = Path(tmp)
@@ -274,7 +304,7 @@ else:
     print('SKIP JSSTAGE symlink ancestor overlap: node not available')
 
 # Malformed diagnostics are a protocol failure (status 2), not a final reject.
-if shutil.which('node'):
+if host_cmd('node'):
     jsinstall = extract_quoted_heredoc(root / 'bin/install.sh', 'JSINSTALL')
     with tempfile.TemporaryDirectory(prefix='jsinstall-', dir=os.environ['TMPDIR']) as tmp:
         case = Path(tmp)
@@ -292,7 +322,7 @@ else:
     print('SKIP JSINSTALL malformed diagnostics: node not available')
 
 # NODE_OPTIONS must not pollute plugin registry parses on node-only installs.
-if shutil.which('node'):
+if host_cmd('node'):
     with tempfile.TemporaryDirectory(prefix='node-options-', dir=os.environ['TMPDIR']) as tmp:
         case = Path(tmp)
         path = runtime_path(case, node=True)

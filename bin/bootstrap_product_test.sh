@@ -529,6 +529,11 @@ payload_file.write_bytes(valid_payload); checksums.write_bytes(valid_checksums)
 def place_runtime_cmd(dest, src):
     if dest.exists() or not src or not os.path.isfile(src):
         return
+    n = src.replace('\\', '/').lower()
+    base = os.path.basename(n)
+    if base in ('python', 'python.exe', 'python3', 'python3.exe', 'node', 'node.exe') and (
+            '/windowsapps/' in n or '/system32/' in n or '/syswow64/' in n):
+        return
     dest.write_text('#!/bin/sh\nexec {} "$@"\n'.format(shlex.quote(src.replace('\\', '/'))))
     dest.chmod(0o755)
 if shutil.which('node'):

@@ -98,8 +98,26 @@ def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, pipe
         assert not list((case / 'tmp space').iterdir()), name + ': leaked staging directory'
         print('PASS ' + name)
 
+def is_windows_store_or_wsl_alias(src):
+    n = src.replace('\\', '/').lower()
+    base = os.path.basename(n)
+    if base not in ('python', 'python.exe', 'python3', 'python3.exe', 'node', 'node.exe'):
+        return False
+    return '/windowsapps/' in n or '/system32/' in n or '/syswow64/' in n
+
+
+def host_cmd(name):
+    if name == 'python3' and sys.executable and os.path.isfile(sys.executable) \
+            and not is_windows_store_or_wsl_alias(sys.executable):
+        return sys.executable
+    src = shutil.which(name)
+    if src and os.path.isfile(src) and not is_windows_store_or_wsl_alias(src):
+        return src
+    return None
+
+
 def place_runtime_cmd(dest, src):
-    if dest.exists() or not src or not os.path.isfile(src):
+    if dest.exists() or not src or not os.path.isfile(src) or is_windows_store_or_wsl_alias(src):
         return
     dest.write_text('#!/bin/sh\nexec {} "$@"\n'.format(shlex.quote(src.replace('\\', '/'))))
     dest.chmod(0o755)
@@ -115,7 +133,7 @@ def runtime_path(case, python=False, node=False):
     if node:
         names.append('node')
     for name in names:
-        place_runtime_cmd(bin_dir / name, shutil.which(name))
+        place_runtime_cmd(bin_dir / name, host_cmd(name))
     return str(case / 'bin') + os.pathsep + str(bin_dir)
 
 def run_runtime_case(name, python=False, node=False, expected=0):
@@ -160,24 +178,24 @@ run_case('non-object release JSON', tag='[]')
 run_case('malformed commit JSON', commit='{broken')
 for step in ['latest', 'commit', 'bootstrap']:
     run_case('failed download with valid bytes: ' + step, fail=step)
-if shutil.which('python3'):
+if host_cmd('python3'):
     run_runtime_case('python-only loader e2e', python=True, node=False)
 else:
     print('SKIP python-only loader e2e: python3 not available')
-if shutil.which('node'):
+if host_cmd('node'):
     run_runtime_case('node-only loader e2e', python=False, node=True)
 else:
     print('SKIP node-only loader e2e: node not available')
 run_runtime_case('neither runtime loader e2e', python=False, node=False, expected=1)
-if shutil.which('python3') and shutil.which('node'):
+if host_cmd('python3') and host_cmd('node'):
     with tempfile.TemporaryDirectory(prefix='setup-pref-', dir=os.environ['TMPDIR']) as tmp:
         case = Path(tmp)
         (case / 'bin').mkdir()
         (case / 'tmp space').mkdir()
         (case / 'bin/curl').write_text(curl_stub)
         (case / 'bin/curl').chmod(0o755)
-        python_src = shutil.which('python3')
-        node_src = shutil.which('node')
+        python_src = host_cmd('python3').replace('\\', '/')
+        node_src = host_cmd('node').replace('\\', '/')
         (case / 'bin/python3').write_text(
             '#!/usr/bin/env bash\nprintf python3 >> "$CASE_DIR/runtime.log"\nexec ' + shlex.quote(python_src) + ' "$@"\n')
         (case / 'bin/python3').chmod(0o755)
