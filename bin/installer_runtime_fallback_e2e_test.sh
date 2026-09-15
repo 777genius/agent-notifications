@@ -18,23 +18,55 @@ root = Path(sys.argv[1])
 
 
 def is_windows_store_or_wsl_alias(src):
-    # GitHub Windows images expose python3.exe as a WSL/Store stub. Invoking it
-    # prints UTF-16 "Windows Subsystem for Linux has no installed distributions".
+    # GitHub Windows images expose python3.exe/bash.exe as WSL/Store stubs.
+    # CreateProcess('bash') also searches System32 before PATH.
     n = src.replace('\\', '/').lower()
     base = os.path.basename(n)
-    if base not in ('python', 'python.exe', 'python3', 'python3.exe', 'node', 'node.exe'):
+    if base not in ('python', 'python.exe', 'python3', 'python3.exe',
+                    'node', 'node.exe', 'bash', 'bash.exe', 'sh', 'sh.exe',
+                    'wsl', 'wsl.exe'):
         return False
     return '/windowsapps/' in n or '/system32/' in n or '/syswow64/' in n
+
+
+def iter_path_dirs(name):
+    seen = []
+    for directory in os.environ.get('PATH', '').split(os.pathsep):
+        if directory and directory not in seen:
+            seen.append(directory)
+            yield directory
+    if os.name == 'nt' and name in ('bash', 'bash.exe', 'sh', 'sh.exe'):
+        for key in ('ProgramFiles', 'ProgramFiles(x86)', 'LOCALAPPDATA'):
+            root = os.environ.get(key)
+            if not root:
+                continue
+            for rel in (os.path.join('Git', 'bin'), os.path.join('Programs', 'Git', 'bin')):
+                directory = os.path.join(root, rel)
+                if directory not in seen and os.path.isdir(directory):
+                    seen.append(directory)
+                    yield directory
+
+
+def which_skip_aliases(name):
+    names = [name]
+    if os.name == 'nt':
+        suffixes = [s for s in os.environ.get('PATHEXT', '.COM;.EXE;.BAT;.CMD').split(os.pathsep) if s]
+        lower = name.lower()
+        if not any(lower.endswith(s.lower()) for s in suffixes):
+            names = [name] + [name + s for s in suffixes]
+    for directory in iter_path_dirs(name):
+        for candidate_name in names:
+            candidate = os.path.join(directory, candidate_name)
+            if os.path.isfile(candidate) and not is_windows_store_or_wsl_alias(candidate):
+                return candidate
+    return None
 
 
 def host_cmd(name):
     if name == 'python3' and sys.executable and os.path.isfile(sys.executable) \
             and not is_windows_store_or_wsl_alias(sys.executable):
         return sys.executable
-    src = shutil.which(name)
-    if src and os.path.isfile(src) and not is_windows_store_or_wsl_alias(src):
-        return src
-    return None
+    return which_skip_aliases(name)
 
 
 def place_runtime_cmd(dest, src):
@@ -81,12 +113,17 @@ def describe(result):
 
 
 if is_windows_store_or_wsl_alias(r'C:\Windows\System32\python3.exe') is not True \
+        or is_windows_store_or_wsl_alias(r'C:\Windows\System32\bash.exe') is not True \
         or is_windows_store_or_wsl_alias(r'C:\Users\x\AppData\Local\Microsoft\WindowsApps\python3.exe') is not True \
-        or is_windows_store_or_wsl_alias(r'C:\hostedtoolcache\windows\Python\3.12.10\x64\python.exe'):
-    fail('wsl python3 alias detection', 'expected System32/WindowsApps stubs to be skipped')
+        or is_windows_store_or_wsl_alias(r'C:\hostedtoolcache\windows\Python\3.12.10\x64\python.exe') \
+        or is_windows_store_or_wsl_alias(r'C:\Program Files\Git\bin\bash.exe'):
+    fail('wsl alias detection', 'expected System32/WindowsApps stubs to be skipped')
 if host_cmd('python3') != sys.executable and not (
         host_cmd('python3') and os.path.isfile(host_cmd('python3'))):
     fail('host python3', repr(host_cmd('python3')))
+HOST_BASH = host_cmd('bash')
+if not HOST_BASH:
+    fail('host bash', 'Git Bash / bash executable not found')
 pass_name('skip Windows WSL/Store python3 aliases')
 
 
@@ -139,7 +176,7 @@ def setup_case(name, python=False, node=False, expected=0, preferred=False):
                 + shlex.quote(host_cmd('node').replace('\\', '/')) + ' "$@"\n')
             (case / 'bin/node').chmod(0o755)
         env = dict(os.environ, PATH=path, CASE_DIR=str(case), TMPDIR=str(case / 'tmp space'))
-        result = subprocess.run(['bash', str(root / 'bin/setup.sh'), '--product', 'codex'],
+        result = subprocess.run([HOST_BASH, str(root / 'bin/setup.sh'), '--product', 'codex'],
                                 text=True, capture_output=True, env=env, timeout=20)
         if expected == 0:
             if result.returncode != 0:
@@ -228,7 +265,7 @@ then echo 'checksum mismatch accepted' >&2; exit 1; fi
         env = dict(os.environ, PATH=path, FUNCTIONS=str(functions), RUNTIME_PATH=path,
                    TMPDIR=str(case), HOME=str(case / 'home'))
         (case / 'home').mkdir()
-        result = subprocess.run(['bash', '-c', script], env=env, text=True, capture_output=True, timeout=20)
+        result = subprocess.run([HOST_BASH, '-c', script], env=env, text=True, capture_output=True, timeout=20)
         if result.returncode != 0:
             fail('bootstrap node-only commit+checksum', result.stderr + result.stdout)
         pass_name('bootstrap.sh node-only commit parse and checksum verify')
@@ -266,7 +303,7 @@ guard_install_paths "$PWD"
                    HELPER=str(helper), TARGET=str(target), TRACE=str(case / 'trace'),
                    TMPDIR=str(case), HOME=str(case / 'home'), PWD=str(case))
         (case / 'home').mkdir()
-        result = subprocess.run(['bash', '-c', script], cwd=str(case), env=env, text=True,
+        result = subprocess.run([HOST_BASH, '-c', script], cwd=str(case), env=env, text=True,
                                 capture_output=True, timeout=20)
         if result.returncode != 0:
             fail('install.sh node-only preflight', result.stderr + result.stdout)
@@ -300,6 +337,22 @@ if host_cmd('node'):
             if result.returncode == 0 or 'Staging must be outside refreshed bundles' not in result.stderr:
                 fail('JSSTAGE symlink ancestor overlap', describe(result))
             pass_name('JSSTAGE rejects TMPDIR under symlink into plugin root')
+            child = plugin / 'child'
+            child.mkdir()
+            outside = td / 'outside'
+            outside.mkdir()
+            link = outside / 'link'
+            link.symlink_to(child, target_is_directory=True)
+            via_parent = str(link / '..')
+            if os.path.realpath(via_parent) != os.path.realpath(plugin):
+                fail('python realpath fixture', via_parent)
+            result = subprocess.run(
+                ['node', '-', via_parent, str(td / 'missing.json'), 'claude-notifications-go',
+                 'codex', str(td / 'cache'), str(td / 'market'), str(plugin)],
+                input=jsstage, text=True, capture_output=True, env=env, timeout=20)
+            if result.returncode == 0 or 'Staging must be outside refreshed bundles' not in result.stderr:
+                fail('JSSTAGE symlink .. overlap', describe(result) + ' tmpdir=' + via_parent)
+            pass_name('JSSTAGE rejects TMPDIR via symlink then ..')
 else:
     print('SKIP JSSTAGE symlink ancestor overlap: node not available')
 
@@ -354,7 +407,7 @@ printf 'ver=%s root=%s\n' "$ver" "$root"
                    INSTALLED=str(installed), PLUGIN_DIR=str(plugin), TMPDIR=str(case),
                    HOME=str(case / 'home'))
         (case / 'home').mkdir()
-        result = subprocess.run(['bash', '-c', script], cwd=str(case), env=env, text=True,
+        result = subprocess.run([HOST_BASH, '-c', script], cwd=str(case), env=env, text=True,
                                 capture_output=True, timeout=20)
         if result.returncode != 0 or 'POLLUTED' in result.stdout:
             fail('isolated node ignores NODE_OPTIONS', describe(result))

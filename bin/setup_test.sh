@@ -69,10 +69,10 @@ def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, pipe
                    BOOTSTRAP_RELEASE_TAG='untrusted', BOOTSTRAP_RELEASE_COMMIT='untrusted',
                    INSTALL_SCRIPT_URL='https://example.invalid/not-used')
         args = ['--product', 'both', 'argument with spaces', '*']
-        command = ['bash', '-s', '--'] if piped else ['bash', str(root / 'bin/setup.sh')]
+        command = [HOST_BASH, '-s', '--'] if piped else [HOST_BASH, str(root / 'bin/setup.sh')]
         command += args
         if documented:
-            command = ['bash', '-c', public_command.replace(
+            command = [HOST_BASH, '-c', public_command.replace(
                 '| bash)', '| bash -s -- ' + ' '.join(map(shlex.quote, args)) + ')')]
         result = subprocess.run(command, input=loader if piped else None,
                                 text=True, capture_output=True, env=env, timeout=20)
@@ -101,19 +101,55 @@ def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, pipe
 def is_windows_store_or_wsl_alias(src):
     n = src.replace('\\', '/').lower()
     base = os.path.basename(n)
-    if base not in ('python', 'python.exe', 'python3', 'python3.exe', 'node', 'node.exe'):
+    if base not in ('python', 'python.exe', 'python3', 'python3.exe',
+                    'node', 'node.exe', 'bash', 'bash.exe', 'sh', 'sh.exe',
+                    'wsl', 'wsl.exe'):
         return False
     return '/windowsapps/' in n or '/system32/' in n or '/syswow64/' in n
+
+
+def iter_path_dirs(name):
+    seen = []
+    for directory in os.environ.get('PATH', '').split(os.pathsep):
+        if directory and directory not in seen:
+            seen.append(directory)
+            yield directory
+    if os.name == 'nt' and name in ('bash', 'bash.exe', 'sh', 'sh.exe'):
+        for key in ('ProgramFiles', 'ProgramFiles(x86)', 'LOCALAPPDATA'):
+            root = os.environ.get(key)
+            if not root:
+                continue
+            for rel in (os.path.join('Git', 'bin'), os.path.join('Programs', 'Git', 'bin')):
+                directory = os.path.join(root, rel)
+                if directory not in seen and os.path.isdir(directory):
+                    seen.append(directory)
+                    yield directory
+
+
+def which_skip_aliases(name):
+    names = [name]
+    if os.name == 'nt':
+        suffixes = [s for s in os.environ.get('PATHEXT', '.COM;.EXE;.BAT;.CMD').split(os.pathsep) if s]
+        lower = name.lower()
+        if not any(lower.endswith(s.lower()) for s in suffixes):
+            names = [name] + [name + s for s in suffixes]
+    for directory in iter_path_dirs(name):
+        for candidate_name in names:
+            candidate = os.path.join(directory, candidate_name)
+            if os.path.isfile(candidate) and not is_windows_store_or_wsl_alias(candidate):
+                return candidate
+    return None
 
 
 def host_cmd(name):
     if name == 'python3' and sys.executable and os.path.isfile(sys.executable) \
             and not is_windows_store_or_wsl_alias(sys.executable):
         return sys.executable
-    src = shutil.which(name)
-    if src and os.path.isfile(src) and not is_windows_store_or_wsl_alias(src):
-        return src
-    return None
+    return which_skip_aliases(name)
+
+
+HOST_BASH = host_cmd('bash')
+assert HOST_BASH, 'Git Bash / bash executable not found'
 
 
 def place_runtime_cmd(dest, src):
@@ -151,7 +187,7 @@ def run_runtime_case(name, python=False, node=False, expected=0):
                    FAIL_DOWNLOAD='', BOOTSTRAP_STATUS='0',
                    BOOTSTRAP_RELEASE_TAG='untrusted', BOOTSTRAP_RELEASE_COMMIT='untrusted',
                    INSTALL_SCRIPT_URL='https://example.invalid/not-used')
-        result = subprocess.run(['bash', str(root / 'bin/setup.sh'), '--product', 'codex'],
+        result = subprocess.run([HOST_BASH, str(root / 'bin/setup.sh'), '--product', 'codex'],
                                 text=True, capture_output=True, env=env, timeout=20)
         if expected == 0:
             assert result.returncode == 0, (name, result.returncode, result.stderr)
@@ -210,7 +246,7 @@ if host_cmd('python3') and host_cmd('node'):
                    FAIL_DOWNLOAD='', BOOTSTRAP_STATUS='0',
                    BOOTSTRAP_RELEASE_TAG='untrusted', BOOTSTRAP_RELEASE_COMMIT='untrusted',
                    INSTALL_SCRIPT_URL='https://example.invalid/not-used')
-        result = subprocess.run(['bash', str(root / 'bin/setup.sh'), '--product', 'codex'],
+        result = subprocess.run([HOST_BASH, str(root / 'bin/setup.sh'), '--product', 'codex'],
                                 text=True, capture_output=True, env=env, timeout=20)
         assert result.returncode == 0, ('python preferred', result.stderr)
         log = (case / 'runtime.log').read_text()
