@@ -494,13 +494,6 @@ func (m Materializer) GuardSecondClient(ctx context.Context, req MaterializeRequ
 	if installation.Source.TreeDigest != "" && plan.TreeDigest != "" && installation.Source.TreeDigest != plan.TreeDigest {
 		return fmt.Errorf("%w: recorded digest %s desired %s", ErrUpdateRequired, installation.Source.TreeDigest, plan.TreeDigest)
 	}
-	recorded := installation.Source.CanonicalSource
-	if recorded == "" {
-		recorded = installation.Source.RequestedSource
-	}
-	if recorded != "" && plan.SourceRoot != "" && filepath.Clean(recorded) != filepath.Clean(plan.SourceRoot) {
-		return fmt.Errorf("%w: existing source %s", ErrUpdateRequired, recorded)
-	}
 	return nil
 }
 

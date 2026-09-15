@@ -506,6 +506,55 @@ func TestGuardSecondClientDoesNotRecoverPendingJournal(t *testing.T) {
 	}
 }
 
+func TestGuardSecondClientAllowsCopiedSameDigest(t *testing.T) {
+	codex, ledger := bindingFixture(t)
+	probe := buildProbe(t)
+	root := filepath.Dir(codex.ControlRoot)
+	pkg := filepath.Join(root, "package source with spaces")
+	acquired := filepath.Join(root, "acquired copy")
+	writePackage(t, pkg, probe)
+	writePackage(t, acquired, probe)
+	uapRoot := filepath.Join(root, "uap")
+	claudeConfig := filepath.Join(root, "home", "claude config")
+	mat, err := NewMaterializer(UAPRoots{
+		StateFile:        filepath.Join(uapRoot, "state", "state-v2.json"),
+		LockFile:         filepath.Join(uapRoot, "state", "mutation.lock"),
+		OperationsDir:    filepath.Join(uapRoot, "state", "operations"),
+		PluginDataBase:   filepath.Join(uapRoot, "plugin data"),
+		ManagedRoot:      filepath.Join(uapRoot, "managed"),
+		HelperExecutable: probe,
+		ClaudeRunner:     listingRunner{configRoot: claudeConfig},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := Identity{
+		InstallationID: "00000000-0000-4000-8000-000000000085",
+		ComponentID:    codex.ComponentID, Owner: codex.Owner, ScopeRoot: codex.ScopeRoot,
+		ControlRoot: codex.ControlRoot, GlobalConfig: codex.GlobalConfig, RuntimeRoot: codex.RuntimeRoot,
+		Primary: codex.Primary,
+	}
+	codexConfig := filepath.Join(root, "home", "codex config")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := mat.Install(testCtx(t), MaterializeRequest{
+		Identity: id, Integration: portable.Codex, ExpectedGeneration: ledger.Generation,
+		PackageRoot: pkg, ClientConfigRoot: codexConfig, ClientExecutable: probe,
+		OperationID: "portable-codex-copy-src",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := mat.GuardSecondClient(testCtx(t), MaterializeRequest{
+		Identity: id, Integration: portable.Claude, PackageRoot: acquired,
+		ClientConfigRoot: claudeConfig, ClientExecutable: probe, OperationID: "portable-claude-copy-src",
+	}); err != nil {
+		t.Fatalf("copied same digest: %v", err)
+	}
+}
+
 func TestUAPMaterializerInstallRefusesConfirmedDigestDrift(t *testing.T) {
 	codex, ledger := bindingFixture(t)
 	probe := buildProbe(t)

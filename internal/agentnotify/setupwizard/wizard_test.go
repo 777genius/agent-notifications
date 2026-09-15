@@ -1175,6 +1175,51 @@ func TestWizardSecondClientAddDoesNotReviseExisting(t *testing.T) {
 	}
 }
 
+func TestWizardSecondClientAddFromCopiedPackage(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	acquired := filepath.Join(filepath.Dir(control), "acquired-copy")
+	writePackage(t, pkg, probe)
+	writePackage(t, acquired, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	claudeConfig := filepath.Join(filepath.Dir(control), "claude-profile")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	off := false
+	base := Request{
+		Action: ActionInstall, Yes: true, Hooks: &off,
+		ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClaudeConfig: claudeConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot:    filepath.Join(filepath.Dir(control), "scope"),
+		ClaudeRunner: listingRunner{configRoot: claudeConfig},
+	}
+	if err := os.MkdirAll(base.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	claudeReq := base
+	claudeReq.Agents = []string{"claude"}
+	claudeReq.PackageRoot = pkg
+	installed, err := Run(ctx, claudeReq)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("claude: %+v %v", installed, err)
+	}
+	codexReq := base
+	codexReq.Agents = []string{"codex"}
+	codexReq.PackageRoot = acquired
+	added, err := Run(ctx, codexReq)
+	if err != nil || added.Outcome != "completed" {
+		t.Fatalf("copied package add: %+v %v", added, err)
+	}
+	if added.Reason == "update_required" {
+		t.Fatalf("same digest copied root forced update: %+v", added)
+	}
+}
+
 func TestWizardAmbiguousInstallationsConflictWithoutID(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, _, _ := managedRuntime(t)

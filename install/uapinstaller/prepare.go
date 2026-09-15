@@ -108,6 +108,7 @@ func (e *Engine) prepareInstall(ctx context.Context, req Request) (*PreparedOper
 		_ = handle.closeLocked()
 		return nil, err
 	}
+	e.reuseMatchingSourceIdentity(req.InstallationID, &snapshot)
 	ldr, err := newLoader()
 	if err != nil {
 		_ = handle.closeLocked()
@@ -413,6 +414,39 @@ func (e *Engine) refuseRecordedDigestRewrite(installationID, desired string) err
 		return fmt.Errorf("%w: recorded digest %s desired %s", ErrUpdateRequired, recorded, desired)
 	}
 	return nil
+}
+
+// reuseMatchingSourceIdentity keeps the recorded source binding when the new
+// snapshot has the same TreeDigest. Local CanonicalSource is a capture path,
+// not revision identity; a same-bytes Add from a new directory must not become
+// a source switch.
+func (e *Engine) reuseMatchingSourceIdentity(installationID string, snapshot *domain.PackageSnapshot) {
+	if installationID == "" || snapshot == nil || snapshot.TreeDigest == "" {
+		return
+	}
+	state, err := e.store.Load()
+	if err != nil {
+		return
+	}
+	installation, ok := findInstall(state, installationID)
+	if !ok || installation.Source.TreeDigest == "" || installation.Source.TreeDigest != snapshot.TreeDigest {
+		return
+	}
+	if installation.Source.CanonicalSource != "" {
+		snapshot.Source.CanonicalSource = installation.Source.CanonicalSource
+	}
+	if installation.Source.RequestedSource != "" {
+		snapshot.Source.RequestedSource = installation.Source.RequestedSource
+	}
+	if installation.Source.Repository != "" {
+		snapshot.Source.Repository = installation.Source.Repository
+	}
+	if installation.Source.PackageSubpath != "" {
+		snapshot.Source.PackageSubpath = installation.Source.PackageSubpath
+	}
+	if installation.Source.ResolvedRevision != "" {
+		snapshot.Source.ResolvedRevision = installation.Source.ResolvedRevision
+	}
 }
 
 func wrapLifecycleError(err error) error {

@@ -446,6 +446,63 @@ func TestInstallSecondClientPreservesFirst(t *testing.T) {
 	}
 }
 
+func TestInstallSameDigestDifferentDirectoryAddsSecondClient(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package source")
+	acquired := filepath.Join(base, "acquired copy")
+	writePackage(t, pkg, probe)
+	writePackage(t, acquired, probe)
+	codexConfig := filepath.Join(base, "codex config")
+	claudeConfig := filepath.Join(base, "claude config")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eng, err := New(Config{
+		StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe,
+		Runner: listingRunner{configRoot: claudeConfig},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "00000000-0000-4000-8000-000000000084"
+	prepared, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: codexConfig,
+		ClientExecutable: probe, InstallationID: id, OperationID: "codex-original",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, prepared, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = prepared.Close()
+	second, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: acquired, ClientID: "claude", ClientConfigRoot: claudeConfig,
+		ClientExecutable: probe, InstallationID: id, OperationID: "claude-copy",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatalf("same digest different directory: %v", err)
+	}
+	if _, err := eng.Apply(ctx, second, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = second.Close()
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 2 {
+		t.Fatalf("both clients: %+v %v", view, err)
+	}
+}
+
 func TestRemoveMissingSiblingIsAlreadyAbsent(t *testing.T) {
 	skipWindowsLauncherExecuteBit(t)
 	ctx := testCtx(t)
