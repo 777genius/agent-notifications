@@ -104,6 +104,9 @@ type Request struct {
 
 type TargetResult struct {
 	Client, Unit, Outcome, Reason, Profile, TreeDigest string
+	// ConfigPath is the owned MCP file inspect used for a direct-mcp
+	// target. Empty on hooks/notify rows so JSON omits it.
+	ConfigPath string `json:"ConfigPath,omitempty"`
 }
 
 // ReadinessFact is independent of binary download. Inspect and mutation both
@@ -1182,14 +1185,14 @@ func inspect(ctx context.Context, req Request, agents []portable.Integration, sn
 			Provider: discoveryProvider(agent), Mode: clientsetup.Managed, ExpectedGeneration: snap.Ledger.Generation,
 		})
 		if err != nil {
-			out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "direct-mcp", Outcome: "unknown", Reason: err.Error()})
+			out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "direct-mcp", Outcome: "unknown", Reason: err.Error(), ConfigPath: mcpPath})
 			continue
 		}
 		outcome := "absent"
 		if facts.Registered {
 			outcome = "installed"
 		}
-		out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "direct-mcp", Outcome: outcome})
+		out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "direct-mcp", Outcome: outcome, ConfigPath: mcpPath})
 	}
 	if snap.Recovery {
 		out.Outcome, out.Reason = "incomplete", "recovery_required"
