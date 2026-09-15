@@ -161,14 +161,30 @@ func TestOfferPostSetupActionsCompletedInstallOffersDelivery(t *testing.T) {
 	}
 }
 
-func TestRunEmptyAgentsIsInvalidWithoutIntent(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+func TestOfferPostSetupActionsUninstallSkipsDelivery(t *testing.T) {
+	req := Request{Action: ActionUninstall, ControlRoot: filepath.Join(t.TempDir(), "control"), Agents: []string{"codex"}}
+	out := Result{
+		Action: "uninstall", Outcome: "completed", Generation: 2,
+		Targets: []TargetResult{{Client: "codex", Unit: "agent-notify", Outcome: "installed"}},
+	}
+	got := offerPostSetupActions(req, []portable.Integration{portable.Codex}, out, true)
+	for _, next := range got.NextActions {
+		if next.Kind == "request-permission" || next.Kind == "test-notification" || next.Kind == "restart-client" {
+			t.Fatalf("uninstall offered delivery: %+v", got.NextActions)
+		}
+	}
+}
+
+func commitControlRuntime(t *testing.T) (ctx context.Context, control string) {
+	t.Helper()
+	var cancel context.CancelFunc
+	ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+	t.Cleanup(cancel)
 	root := t.TempDir()
 	if resolved, err := filepath.EvalSymlinks(root); err == nil {
 		root = resolved
 	}
-	control := filepath.Join(root, "control")
+	control = filepath.Join(root, "control")
 	runtime := filepath.Join(root, "runtime")
 	primary := filepath.Join(runtime, "primary")
 	if _, err := installruntime.Commit(ctx, installruntime.Request{
@@ -177,8 +193,36 @@ func TestRunEmptyAgentsIsInvalidWithoutIntent(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	got, err := Run(ctx, Request{Action: ActionInstall, Yes: true, ControlRoot: control})
-	if err == nil || got.Outcome != "invalid" || got.Reason != "agents_required" || got.ExitCode() != 2 {
-		t.Fatalf("empty agents: %+v %v", got, err)
+	return ctx, control
+}
+
+func TestRunEmptyAgentsIsInvalidWithoutIntent(t *testing.T) {
+	ctx, control := commitControlRuntime(t)
+	for _, action := range []Action{ActionInstall, ActionUpdate, ActionRepair, ActionUninstall} {
+		got, err := Run(ctx, Request{Action: action, Yes: true, ControlRoot: control})
+		if err == nil || got.Outcome != "invalid" || got.Reason != "agents_required" || got.ExitCode() != 2 {
+			t.Fatalf("%s empty agents: %+v %v", action, got, err)
+		}
+	}
+	plan, err := Plan(ctx, Request{Action: ActionInstall, ControlRoot: control})
+	if err == nil || plan.Ready || plan.Result.Outcome != "invalid" || plan.Result.Reason != "agents_required" {
+		t.Fatalf("empty agents plan: %+v %v", plan, err)
+	}
+}
+
+func TestInspectOmittedAgentsStillReportsBoth(t *testing.T) {
+	ctx, control := commitControlRuntime(t)
+	got, err := Run(ctx, Request{Action: ActionInspect, ControlRoot: control})
+	if err != nil || got.Outcome != "completed" || got.Reason == "agents_required" || got.ExitCode() != 0 {
+		t.Fatalf("omitted inspect: %+v %v", got, err)
+	}
+	saw := map[string]string{}
+	for _, target := range got.Targets {
+		if target.Unit == "agent-notify" {
+			saw[target.Client] = target.Outcome
+		}
+	}
+	if saw["claude"] != "absent" || saw["codex"] != "absent" {
+		t.Fatalf("omitted inspect clients: %+v", got.Targets)
 	}
 }
