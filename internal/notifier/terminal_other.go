@@ -5,7 +5,7 @@ package notifier
 import (
 	"fmt"
 
-	"github.com/777genius/claude-notifications/internal/config"
+	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/gen2brain/beeep"
 )
 

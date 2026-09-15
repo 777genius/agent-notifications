@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Collect Linux click-to-focus diagnostics for Claude Notifications.
+# Collect Linux click-to-focus diagnostics for Agent Notifications.
 
+set +x
 set -uo pipefail
+umask 077
 
-REPO="777genius/claude-notifications-go"
+REPO="777genius/agent-notifications"
 RAW_URL="https://raw.githubusercontent.com/${REPO}/main/scripts/linux-focus-debug.sh"
 MARKETPLACE_NAME="claude-notifications-go"
 PLUGIN_NAME="claude-notifications-go"
@@ -12,7 +14,6 @@ PLUGIN_KEY="${PLUGIN_NAME}@${MARKETPLACE_NAME}"
 CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-${CLAUDE_HOME:-$HOME/.claude}}"
 KNOWN_MARKETPLACES_JSON="${CLAUDE_HOME}/plugins/known_marketplaces.json"
 INSTALLED_JSON="${CLAUDE_HOME}/plugins/installed_plugins.json"
-STABLE_CONFIG_JSON="${CLAUDE_HOME}/claude-notifications-go/config.json"
 
 DEFAULT_REPORT_PATH="${PWD}/claude-notifications-linux-focus-report-$(date +%Y%m%d-%H%M%S).txt"
 REPORT_PATH="${REPORT_PATH:-$DEFAULT_REPORT_PATH}"
@@ -83,24 +84,18 @@ if [ "$WRITE_TO_STDOUT" -eq 1 ]; then
     REPORT_FILE="/dev/stdout"
 else
     REPORT_FILE="$REPORT_PATH"
-    if ! mkdir -p "$(dirname "$REPORT_FILE")" 2>/dev/null; then
-        warn_stderr "could not create report directory for '$REPORT_FILE'; falling back to stdout"
-        REPORT_FILE="/dev/stdout"
-    elif ! : > "$REPORT_FILE" 2>/dev/null; then
-        warn_stderr "could not write report file '$REPORT_FILE'; falling back to stdout"
-        REPORT_FILE="/dev/stdout"
+    # Refuse existing files/links; do not truncate a potentially public report.
+    if ! mkdir -p "$(dirname "$REPORT_FILE")" 2>/dev/null ||
+       ! (set -o noclobber; : > "$REPORT_FILE") 2>/dev/null; then
+        warn_stderr "cannot create a new private report; choose an unused --output path"
+        exit 1
     fi
 fi
 
 write_line() {
     if ! printf '%s\n' "$*" >> "$REPORT_FILE" 2>/dev/null; then
-        if [ "$REPORT_FILE" != "/dev/stdout" ]; then
-            warn_stderr "failed to append to '$REPORT_FILE'; switching to stdout"
-            REPORT_FILE="/dev/stdout"
-            printf '%s\n' "$*" >> "$REPORT_FILE" 2>/dev/null || printf '%s\n' "$*"
-            return 0
-        fi
-        printf '%s\n' "$*"
+        warn_stderr "failed to append diagnostic report; stopping without fallback output"
+        exit 1
     fi
 }
 
@@ -157,7 +152,7 @@ json_query() {
     fi
 
     if cmd_exists python3; then
-        python3 - "$file" "$py_expr" <<'PYEOF' 2>/dev/null || true
+        python3 -I - "$file" "$py_expr" <<'PYEOF' 2>/dev/null || true
 import json, sys
 path = [part for part in sys.argv[2].split('.') if part]
 try:
@@ -204,7 +199,7 @@ get_installed_version() {
     fi
 
     if cmd_exists python3; then
-        python3 - "$INSTALLED_JSON" "$PLUGIN_KEY" <<'PYEOF' 2>/dev/null || true
+        python3 -I - "$INSTALLED_JSON" "$PLUGIN_KEY" <<'PYEOF' 2>/dev/null || true
 import json, sys
 try:
     with open(sys.argv[1]) as f:
@@ -225,7 +220,7 @@ get_install_path() {
     fi
 
     if cmd_exists python3; then
-        python3 - "$INSTALLED_JSON" "$PLUGIN_KEY" <<'PYEOF' 2>/dev/null || true
+        python3 -I - "$INSTALLED_JSON" "$PLUGIN_KEY" <<'PYEOF' 2>/dev/null || true
 import json, sys
 try:
     with open(sys.argv[1]) as f:
@@ -333,13 +328,100 @@ run_window_identity_probe() {
 }
 
 write_relevant_processes() {
-    if cmd_exists pgrep; then
-        run_cmd "pgrep -af 'claude|terminator|gnome-terminal|kitty|wezterm|alacritty|tilix|xfce4-terminal|mate-terminal|konsole|code|gnome-shell'" \
-            pgrep -af 'claude|terminator|gnome-terminal|kitty|wezterm|alacritty|tilix|xfce4-terminal|mate-terminal|konsole|code|gnome-shell'
-    else
-        run_cmd "ps -eo pid,comm,args | grep relevant processes" sh -c \
-            "ps -eo pid,comm,args | grep -E 'claude|terminator|gnome-terminal|kitty|wezterm|alacritty|tilix|xfce4-terminal|mate-terminal|konsole|code|gnome-shell' | grep -v grep"
+    # Arguments may contain tokens or webhook URLs; collect names only.
+    run_cmd "ps -eo pid,comm" ps -eo pid,comm
+}
+
+write_safe_config_inspect() {
+    local binary="${CLAUDE_NOTIFICATIONS_BIN:-}" output
+    if [ -z "$binary" ] && [ -n "$INSTALL_PATH" ]; then
+        binary="${INSTALL_PATH}/bin/claude-notifications"
     fi
+    if [ -z "$binary" ] && cmd_exists claude-notifications; then
+        binary="$(command -v claude-notifications)"
+    fi
+    if [ -n "$binary" ] && [ -x "$binary" ]; then
+        # Do not include arbitrary stderr from an older/unsupported executable.
+        # A nonzero inspect may still emit a valid safe error projection.
+        output="$("$binary" config inspect --json 2>/dev/null)" || true
+        if cmd_exists python3; then
+            output="$(printf '%s' "$output" | python3 -I -c '
+import json, math, re, sys
+def require(ok):
+    if not ok:
+        raise ValueError()
+def fields(value, allowed):
+    require(type(value) is dict and set(value) <= set(allowed))
+def boolean(value):
+    require(type(value) is bool)
+    return value
+def pairs(items):
+    out = {}
+    for key, value in items:
+        require(key not in out)
+        out[key] = value
+    return out
+codes = set("""ConfigLegacyImportRequired ConfigOverrideInvalid ConfigHomeUnavailable
+ConfigBaseUnavailable ConfigInvalid ConfigUnsupportedSchema ConfigPermissionDenied
+ConfigRecoveryRequired ConfigMultipleCandidates ConfigLinkedPath ConfigPublicReadable
+ConfigChanged ConfigMissing ConfigEnvConflict ConfigLockTimeout ConfigConflict
+ConfigCommitUncertain ConfigLegacyAlternateFound ConfigSelected""".split())
+try:
+    x = json.load(sys.stdin, object_pairs_hook=pairs)
+    fields(x, ("selection", "revision", "schemaVersion", "valid", "errorCode", "settings"))
+    q = x["selection"]
+    fields(q, ("path", "source", "exists", "diagnostics"))
+    require(type(q["path"]) is str and type(q["source"]) is str)
+    require(q["source"] in ("explicit", "legacy", "universal"))
+    selection = dict(path=q["path"], source=q["source"], exists=boolean(q["exists"]))
+    if "diagnostics" in q:
+        require(type(q["diagnostics"]) is list)
+        diagnostics = []
+        for d in q["diagnostics"]:
+            fields(d, ("code", "path"))
+            require(type(d["code"]) is str and d["code"] in codes)
+            safe = dict(code=d["code"])
+            if "path" in d:
+                require(type(d["path"]) is str)
+                safe["path"] = d["path"]
+            diagnostics.append(safe)
+        selection["diagnostics"] = diagnostics
+    out = dict(selection=selection, valid=boolean(x["valid"]))
+    if "revision" in x:
+        require(type(x["revision"]) is str and re.fullmatch("[0-9a-f]{64}", x["revision"]) is not None)
+        out["revision"] = x["revision"]
+    if "schemaVersion" in x:
+        require(type(x["schemaVersion"]) is int and x["schemaVersion"] > 0)
+        out["schemaVersion"] = x["schemaVersion"]
+    if "errorCode" in x:
+        require(type(x["errorCode"]) is str and x["errorCode"] in codes)
+        out["errorCode"] = x["errorCode"]
+    if "settings" in x:
+        t = x["settings"]
+        fields(t, ("desktopEnabled", "desktopSound", "volume", "statuses"))
+        safe = {}
+        for key in ("desktopEnabled", "desktopSound"):
+            if key in t:
+                safe[key] = boolean(t[key])
+        if "volume" in t:
+            require(type(t["volume"]) in (int, float) and math.isfinite(t["volume"]) and 0 <= t["volume"] <= 1)
+            safe["volume"] = t["volume"]
+        if "statuses" in t:
+            fields(t["statuses"], ("task_complete", "review_complete", "question", "plan_ready",
+                                  "session_limit_reached", "api_error", "api_error_overloaded", "permission_request"))
+            statuses = {}
+            for name, value in t["statuses"].items():
+                fields(value, ("enabled", "desktopEnabled", "webhookEnabled"))
+                statuses[name] = {key: None if val is None else boolean(val) for key, val in value.items()}
+            safe["statuses"] = statuses
+        out["settings"] = safe
+    print(json.dumps(out, indent=2))
+except Exception:
+    sys.exit(1)
+' 2>/dev/null)" && { write_line "$output"; return; }
+        fi
+    fi
+    write_line "Safe config inspect unavailable. Run the installed config-capable executable with config inspect --json in this same environment; report its version if unsupported. Do not copy raw config. No config path was guessed or file initialized."
 }
 
 write_focus_tool_interpretation() {
@@ -359,7 +441,7 @@ INSTALL_PATH="$(get_install_path)"
 MARKETPLACE_SOURCE="$(get_marketplace_source)"
 PLUGIN_LOG_PATH="$(resolve_plugin_log_path "$INSTALL_PATH")"
 
-write_line "Claude Notifications Linux Focus Debug Report"
+write_line "Agent Notifications Linux Focus Debug Report"
 write_line "Generated at: $(date -Is 2>/dev/null || date)"
 write_line "Hostname: $(hostname 2>/dev/null || echo unknown)"
 
@@ -411,9 +493,8 @@ fi
 if [ -f "$INSTALLED_JSON" ]; then
     run_cmd "cat ${INSTALLED_JSON}" cat "$INSTALLED_JSON"
 fi
-if [ -f "$STABLE_CONFIG_JSON" ]; then
-    run_cmd "cat ${STABLE_CONFIG_JSON}" cat "$STABLE_CONFIG_JSON"
-fi
+write_header "Safe Configuration Inspect"
+write_safe_config_inspect
 if [ -n "$INSTALL_PATH" ] && [ -f "${INSTALL_PATH}/.claude-plugin/plugin.json" ]; then
     run_cmd "cat ${INSTALL_PATH}/.claude-plugin/plugin.json" cat "${INSTALL_PATH}/.claude-plugin/plugin.json"
 fi
@@ -455,16 +536,12 @@ if cmd_exists busctl; then
     run_cmd "busctl --user list" busctl --user list
 fi
 
-write_header "Plugin Log Tail"
-if [ -n "$PLUGIN_LOG_PATH" ] && [ -f "$PLUGIN_LOG_PATH" ]; then
-    run_cmd "tail -n 200 ${PLUGIN_LOG_PATH}" tail -n 200 "$PLUGIN_LOG_PATH"
-else
-    write_line "plugin log not found"
-fi
+write_header "Plugin Logs"
+write_line "Raw log contents omitted: they may contain webhook credentials or payloads. Review locally and share only a minimal sanitized excerpt."
 
 write_header "Notes"
 write_line "- Review the report for private paths or window titles before sharing it publicly."
-write_line "- Reproduce the failed click immediately before running this script for the most useful log tail."
+write_line "- Reproduce the failed click immediately before running this script for the most useful local investigation."
 write_line "- If WINDOWID is empty under Wayland, include that fact when reporting the issue."
 write_focus_tool_interpretation
 

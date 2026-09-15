@@ -222,4 +222,56 @@ final class ArgumentParserTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - isHelpRequest
+
+    func testIsHelpRequestStandaloneShortFlag() {
+        XCTAssertTrue(ArgumentParser.isHelpRequest(["-help"]))
+    }
+
+    func testIsHelpRequestStandaloneLongFlag() {
+        XCTAssertTrue(ArgumentParser.isHelpRequest(["--help"]))
+    }
+
+    func testIsHelpRequestFalseForNoArgs() {
+        XCTAssertFalse(ArgumentParser.isHelpRequest([]))
+    }
+
+    func testIsHelpRequestFalseWhenHelpIsTitleValue() {
+        // "-title -help -message World" is a complete, legitimate send
+        // invocation where the title text happens to be "-help". It must
+        // not be misdetected as a help request.
+        let arguments = ["-title", "-help", "-message", "World"]
+        XCTAssertFalse(ArgumentParser.isHelpRequest(arguments))
+        XCTAssertTrue(ArgumentParser.isSendMode(arguments))
+
+        let config = try? ArgumentParser.parse(arguments)
+        XCTAssertEqual(config?.title, "-help")
+        XCTAssertEqual(config?.message, "World")
+    }
+
+    func testIsHelpRequestFalseWhenHelpIsMessageValue() {
+        // "-title Hello -message --help" likewise must be parsed as a
+        // legitimate send invocation, not swallowed by the help path.
+        let arguments = ["-title", "Hello", "-message", "--help"]
+        XCTAssertFalse(ArgumentParser.isHelpRequest(arguments))
+        XCTAssertTrue(ArgumentParser.isSendMode(arguments))
+
+        let config = try? ArgumentParser.parse(arguments)
+        XCTAssertEqual(config?.title, "Hello")
+        XCTAssertEqual(config?.message, "--help")
+    }
+
+    func testIsHelpRequestFalseForNormalSendInvocation() {
+        let arguments = ["-title", "Hello", "-message", "World", "-launchedViaLaunchServices"]
+        XCTAssertFalse(ArgumentParser.isHelpRequest(arguments))
+        XCTAssertTrue(ArgumentParser.isSendMode(arguments))
+    }
+
+    func testIsHelpRequestFalseForNoArgsCallbackMode() {
+        // No-args invocation (callback mode) must not be treated as a
+        // help request and must not be treated as send mode either.
+        XCTAssertFalse(ArgumentParser.isHelpRequest([]))
+        XCTAssertFalse(ArgumentParser.isSendMode([]))
+    }
 }

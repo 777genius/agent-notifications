@@ -278,6 +278,7 @@ func (s *Server) handleNotification(req *NotifyRequest) (*NotifyResponse, error)
 		WindowTitle:   req.FocusWindowTitle,
 		WezTermPaneID: req.FocusWezTermPaneID,
 		WezTermSocket: req.FocusWezTermSocket,
+		WarpFocusURL:  req.FocusWarpURL,
 		ZellijSession: req.FocusZellijSession,
 		ZellijPaneID:  req.FocusZellijPaneID,
 		ZellijTabName: req.FocusZellijTabName,

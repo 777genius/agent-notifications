@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://777genius.github.io/agent-notifications/sitemap.xml

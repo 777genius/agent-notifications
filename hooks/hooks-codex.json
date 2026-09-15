@@ -1,0 +1,54 @@
+{
+  "description": "Desktop notifications for Codex Stop, PermissionRequest, and question events.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^request_user_input$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${PLUGIN_ROOT}/bin/codex-hook-wrapper.sh\" handle-hook PreToolUse --product codex",
+            "commandWindows": "cmd.exe /d /v:off /s /c \"\"${PLUGIN_ROOT}\\bin\\codex-hook-wrapper.cmd\" handle-hook PreToolUse --product codex\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${PLUGIN_ROOT}/bin/codex-hook-wrapper.sh\" handle-hook Stop --product codex",
+            "commandWindows": "cmd.exe /d /v:off /s /c \"\"${PLUGIN_ROOT}\\bin\\codex-hook-wrapper.cmd\" handle-hook Stop --product codex\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${PLUGIN_ROOT}/bin/codex-hook-wrapper.sh\" handle-hook SubagentStop --product codex",
+            "commandWindows": "cmd.exe /d /v:off /s /c \"\"${PLUGIN_ROOT}\\bin\\codex-hook-wrapper.cmd\" handle-hook SubagentStop --product codex\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${PLUGIN_ROOT}/bin/codex-hook-wrapper.sh\" handle-hook PermissionRequest --product codex",
+            "commandWindows": "cmd.exe /d /v:off /s /c \"\"${PLUGIN_ROOT}\\bin\\codex-hook-wrapper.cmd\" handle-hook PermissionRequest --product codex\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -6,7 +6,7 @@ import (
 	"runtime/debug"
 	"sync"
 
-	"github.com/777genius/claude-notifications/internal/logging"
+	"github.com/777genius/agent-notifications/internal/logging"
 )
 
 // ErrorHandler provides global error handling and logging
@@ -95,8 +95,12 @@ func (h *ErrorHandler) HandleCriticalError(err error, context string) {
 	// Log to file (and console if enabled via logging package)
 	logging.Error("%s", message)
 
-	// Always output critical errors to stderr as well (even if console logging is disabled)
-	fmt.Fprintf(os.Stderr, "[claude-notifications] %s\n", message)
+	// Duplicate critical errors on stderr for interactive/Claude routes.
+	// Observation routes (logToConsole=false, e.g. Codex hooks) must keep
+	// process output empty, so the file log is the only sink there.
+	if h.logToConsole {
+		fmt.Fprintf(os.Stderr, "[claude-notifications] %s\n", message)
+	}
 
 	if h.exitOnCritical {
 		os.Exit(1)
@@ -118,8 +122,11 @@ func (h *ErrorHandler) HandlePanic() {
 		// Log to file (and console if enabled via logging package)
 		logging.Error("%s", message)
 
-		// Always output panics to stderr as well
-		fmt.Fprintf(os.Stderr, "[claude-notifications] PANIC: %v\n", r)
+		// Panics reach stderr only on interactive/Claude routes; observation
+		// routes (logToConsole=false) stay silent and rely on the file log.
+		if h.logToConsole {
+			fmt.Fprintf(os.Stderr, "[claude-notifications] PANIC: %v\n", r)
+		}
 
 		if h.exitOnCritical {
 			os.Exit(1)

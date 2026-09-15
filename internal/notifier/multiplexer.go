@@ -3,8 +3,8 @@ package notifier
 import (
 	"fmt"
 
-	"github.com/777genius/claude-notifications/internal/config"
-	"github.com/777genius/claude-notifications/internal/logging"
+	"github.com/777genius/agent-notifications/internal/config"
+	"github.com/777genius/agent-notifications/internal/logging"
 )
 
 // multiplexerHandler describes a terminal multiplexer integration.
@@ -37,7 +37,7 @@ func detectMultiplexerArgs(title, message, bundleID string, cfg *config.Config) 
 			logging.Debug("%s detected but buildArgs failed: %v", mux.name, err)
 			return nil, mux.name
 		}
-		return args, mux.name
+		return injectWarpFocusURL(args), mux.name
 	}
 	return nil, ""
 }

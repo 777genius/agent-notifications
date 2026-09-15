@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/777genius/claude-notifications/internal/logging"
-	"github.com/777genius/claude-notifications/internal/state"
+	"github.com/777genius/agent-notifications/internal/logging"
+	"github.com/777genius/agent-notifications/internal/state"
 )
 
 const ghosttyFrontmostTerminalInfoTimeout = 1500 * time.Millisecond

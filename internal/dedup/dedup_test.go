@@ -13,7 +13,7 @@ import (
 )
 
 func TestCheckEarlyDuplicate(t *testing.T) {
-	mgr := NewManager()
+	mgr := &Manager{tempDir: t.TempDir()}
 
 	// First check should be false (no lock exists)
 	isDup := mgr.CheckEarlyDuplicate("test-session")
@@ -39,7 +39,7 @@ func TestCheckEarlyDuplicate(t *testing.T) {
 }
 
 func TestAcquireLock(t *testing.T) {
-	mgr := NewManager()
+	mgr := &Manager{tempDir: t.TempDir()}
 
 	// First acquisition should succeed
 	acquired, err := mgr.AcquireLock("test-session")
@@ -67,7 +67,7 @@ func TestAcquireLock(t *testing.T) {
 }
 
 func TestAcquireLockConcurrent(t *testing.T) {
-	mgr := NewManager()
+	mgr := &Manager{tempDir: t.TempDir()}
 	sessionID := "concurrent-test"
 
 	// Cleanup
@@ -100,7 +100,7 @@ func TestAcquireLockConcurrent(t *testing.T) {
 }
 
 func TestReleaseLock(t *testing.T) {
-	mgr := NewManager()
+	mgr := &Manager{tempDir: t.TempDir()}
 
 	// Acquire lock
 	acquired, err := mgr.AcquireLock("test-session")
@@ -124,7 +124,7 @@ func TestReleaseLock(t *testing.T) {
 }
 
 func TestCleanup(t *testing.T) {
-	mgr := NewManager()
+	mgr := &Manager{tempDir: t.TempDir()}
 	tempDir := mgr.tempDir
 
 	// Create old lock
@@ -156,7 +156,7 @@ func TestCleanup(t *testing.T) {
 }
 
 func TestCleanupForSession(t *testing.T) {
-	mgr := NewManager()
+	mgr := &Manager{tempDir: t.TempDir()}
 
 	sessionID := "test-session-123"
 
@@ -189,7 +189,7 @@ func TestCleanupForSession(t *testing.T) {
 }
 
 func TestGetLockPath_WithHookEvent(t *testing.T) {
-	mgr := NewManager()
+	mgr := &Manager{tempDir: t.TempDir()}
 	sessionID := "test-session-456"
 
 	// Test without hookEvent

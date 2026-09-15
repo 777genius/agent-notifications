@@ -1,0 +1,106 @@
+name: Landing
+
+on:
+  pull_request:
+    paths: ['landing/**', '.github/workflows/landing.yml']
+  push:
+    branches: [main]
+    paths: ['landing/**', '.github/workflows/landing.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: landing-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: landing
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test
+      - run: npm run generate
+        env:
+          NUXT_APP_BASE_URL: /agent-notifications/
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser
+      - uses: actions/upload-artifact@v7
+        with:
+          name: notification-landing
+          path: landing/.output/public
+          include-hidden-files: true
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: landing-test-results
+          path: landing/test-results
+
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: gh-pages
+          path: published
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: notification-landing
+          path: site
+      - name: Rebuild legacy Markdown routes
+        uses: actions/jekyll-build-pages@v1
+        with:
+          source: published
+          destination: legacy-output
+      - name: Preserve existing Pages content
+        run: |
+          test -f site/index.html
+          mkdir artifact
+          rsync -a --exclude='.git' published/ artifact/
+          cp -a legacy-output/. artifact/
+          cp -a site/. artifact/
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          import hashlib
+          for source in Path('published').rglob('*'):
+              rel = source.relative_to('published')
+              if '.git' in rel.parts or not source.is_file():
+                  continue
+              target = Path('artifact') / rel
+              assert target.is_file(), f'Missing legacy path: {rel}'
+              assert hashlib.sha256(source.read_bytes()).digest() == hashlib.sha256(target.read_bytes()).digest(), f'Legacy path changed: {rel}'
+          for source in Path('legacy-output').rglob('*'):
+              rel = source.relative_to('legacy-output')
+              if not source.is_file() or (Path('site') / rel).exists():
+                  continue
+              target = Path('artifact') / rel
+              assert target.is_file() and source.read_bytes() == target.read_bytes(), f'Legacy rendered path changed: {rel}'
+          PYTHON
+          touch artifact/.nojekyll
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: artifact
+          include-hidden-files: true
+      - name: Deploy Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

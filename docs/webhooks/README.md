@@ -1,5 +1,8 @@
 # Webhook Integration Guide
 
+Use the installed config-capable executable as `$NOTIFICATIONS_BIN`. Locate settings with `config path` and use [revision-checked leaf edits](../../commands/settings.md). JSON examples below illustrate fields, not whole-file replacements. Keep unrequested fields and literal environment templates unchanged. `config inspect --json` is the safe support output; it intentionally omits URLs, headers, payloads, free-form sounds and unknown fields. Never share raw config or assume omitted values are unset. Keep diagnostic files private and review logs for credentials before sharing.
+
+
 **Professional webhook system with enterprise-grade reliability patterns.**
 
 Send Claude Code notifications to Slack, Discord, Telegram, Lark/Feishu, or custom endpoints with built-in retry, circuit breaker, and rate limiting.
@@ -8,7 +11,7 @@ Send Claude Code notifications to Slack, Discord, Telegram, Lark/Feishu, or cust
 
 ### 1. Enable Webhooks
 
-Edit `~/.claude/claude-notifications-go/config.json`:
+Edit the shared file selected by `config path`:
 
 ```json
 {
@@ -32,7 +35,7 @@ echo '{"session_id":"test","tool_name":"ExitPlanMode"}' | \
 ### Per-Status Webhook Control
 
 If you want desktop notifications for a status but do not want webhook noise,
-use a per-status webhook override in `~/.claude/claude-notifications-go/config.json`:
+use a per-status webhook override in the shared file selected by `config path`:
 
 ```json
 {
@@ -118,7 +121,7 @@ The system automatically detects and formats these statuses:
 ## Support
 
 For issues, questions, or contributions:
-- GitHub Issues: https://github.com/777genius/claude-notifications-go/issues
+- GitHub Issues: https://github.com/777genius/agent-notifications/issues
 - Main Documentation: [README.md](../../README.md)
 
 ---

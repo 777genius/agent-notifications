@@ -3,8 +3,8 @@ package analyzer
 import (
 	"strings"
 
-	"github.com/777genius/claude-notifications/internal/config"
-	"github.com/777genius/claude-notifications/pkg/jsonl"
+	"github.com/777genius/agent-notifications/internal/config"
+	"github.com/777genius/agent-notifications/pkg/jsonl"
 )
 
 // Tool categories for state machine classification
@@ -39,6 +39,7 @@ const (
 	StatusSessionLimitReached Status = "session_limit_reached"
 	StatusAPIError            Status = "api_error"
 	StatusAPIErrorOverloaded  Status = "api_error_overloaded"
+	StatusPermissionRequest   Status = "permission_request"
 	StatusUnknown             Status = "unknown"
 )
 

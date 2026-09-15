@@ -1,5 +1,8 @@
 # Discord Webhook Integration
 
+Use the installed config-capable executable as `$NOTIFICATIONS_BIN`. Locate settings with `config path` and use [revision-checked leaf edits](../../commands/settings.md). JSON examples below illustrate fields, not whole-file replacements. Keep unrequested fields and literal environment templates unchanged. `config inspect --json` is the safe support output; it intentionally omits URLs, headers, payloads, free-form sounds and unknown fields. Never share raw config or assume omitted values are unset. Keep diagnostic files private and review logs for credentials before sharing.
+
+
 Send Claude Code notifications to Discord channels with rich embeds.
 
 ## Overview
@@ -18,7 +21,7 @@ Discord webhooks allow you to send automated messages to channels without requir
 
 ### 2. Configure Webhook
 
-1. **Name:** Set a name (e.g., "Claude Notifications")
+1. **Name:** Set a name (e.g., "Agent Notifications")
 2. **Channel:** Select the target channel from dropdown
 3. **Avatar:** (Optional) Upload a custom icon
 4. Click **"Copy Webhook URL"**
@@ -30,7 +33,7 @@ https://discord.com/api/webhooks/1234567890123456789/AbCdEfGhIjKlMnOpQrStUvWxYz-
 
 ### 3. Configure Plugin
 
-Edit `~/.claude/claude-notifications-go/config.json`:
+Edit the shared file selected by `config path`:
 
 ```json
 {
@@ -84,7 +87,7 @@ Claude Code
 [bold-cat] Created new authentication
 system with JWT tokens
 
-Session: abc-123 | Claude Notifications
+Session: abc-123 | Agent Notifications
 2025-10-19 15:30:45
 ```
 
@@ -101,7 +104,7 @@ Messages use Discord's **Embeds API**:
       "description": "[bold-cat] Created new authentication system with JWT tokens",
       "color": 2664261,
       "footer": {
-        "text": "Session: abc-123 | Claude Notifications"
+        "text": "Session: abc-123 | Agent Notifications"
       },
       "timestamp": "2025-10-19T15:30:45Z"
     }
@@ -255,8 +258,8 @@ Discord webhooks are a **common attack vector**. If an attacker gets your webhoo
 
 ## Best Practices
 
-1. **Dedicated channel** - Create a `#claude-notifications` channel
-2. **Custom avatar** - Upload Claude icon for easy identification
+1. **Dedicated channel** - Create an `#agent-notifications` channel
+2. **Custom avatar** - Upload the Agent Notifications logo for easy identification
 3. **Enable retry** - Handle transient network failures
 4. **Monitor rate limits** - Discord has stricter limits than Slack
 5. **Test thoroughly** - Use webhook.site before production

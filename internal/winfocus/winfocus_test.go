@@ -9,6 +9,7 @@ func TestEncodeDecodeURIRoundTrip(t *testing.T) {
 	cases := []FocusContext{
 		{HWND: 123456, PID: 4242, Title: "✳ Claude Code", Folder: "my-project"},
 		{HWND: 0, PID: 0, Title: "", Folder: "only-folder"},
+		{WarpURL: "warp://session/6b7be92641ae8ced80188a4d87e4b200"},
 		{Title: "spaces and / slashes & ampersands"},
 		{HWND: 9007199254740991}, // large handle value
 		{},
@@ -75,7 +76,7 @@ func TestHasTarget(t *testing.T) {
 	if (FocusContext{}).HasTarget() {
 		t.Error("zero context should not have a target")
 	}
-	for _, c := range []FocusContext{{HWND: 1}, {PID: 1}, {Title: "x"}, {Folder: "x"}} {
+	for _, c := range []FocusContext{{HWND: 1}, {PID: 1}, {Title: "x"}, {Folder: "x"}, {WarpURL: "warp://session/6b7be92641ae8ced80188a4d87e4b200"}} {
 		if !c.HasTarget() {
 			t.Errorf("%+v should have a target", c)
 		}

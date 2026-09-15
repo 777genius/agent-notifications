@@ -1,0 +1,116 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/777genius/agent-notifications/docs/webhooks/payload-schema.json",
+  "title": "Agent Notifications custom webhook payload",
+  "description": "JSON payload sent to custom webhook endpoints (notifications.webhook.preset = \"\", format = \"json\"). Slack/Discord/Telegram/Lark presets use platform-native shapes instead and are not covered by this schema. schema_version follows semantic-ish rules: a breaking change (field removed, renamed, or retyped) bumps the major-equivalent value; new optional fields do not.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "status",
+    "notification_type",
+    "agent_source",
+    "message",
+    "timestamp",
+    "session_id",
+    "source",
+    "title"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "description": "Payload contract version.",
+      "const": "1.0"
+    },
+    "status": {
+      "type": "string",
+      "description": "Notification status/type. Kept for backward compatibility; identical value to notification_type.",
+      "enum": [
+        "task_complete",
+        "review_complete",
+        "question",
+        "plan_ready",
+        "session_limit_reached",
+        "api_error",
+        "api_error_overloaded",
+        "permission_request"
+      ]
+    },
+    "notification_type": {
+      "type": "string",
+      "description": "Explicit alias for status, meant as the stable field to key off of for notification identity.",
+      "enum": [
+        "task_complete",
+        "review_complete",
+        "question",
+        "plan_ready",
+        "session_limit_reached",
+        "api_error",
+        "api_error_overloaded",
+        "permission_request"
+      ]
+    },
+    "agent_source": {
+      "type": "string",
+      "description": "Which coding agent produced the event. New agents may add new values over time; unrecognized values should be treated as forward-compatible, not an error.",
+      "examples": ["claude", "codex"]
+    },
+    "message": {
+      "type": "string",
+      "description": "Human-readable notification message, including the session name prefix."
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Unique session identifier."
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 timestamp of when the webhook was sent."
+    },
+    "source": {
+      "type": "string",
+      "description": "Identifies the plugin that sent the webhook (not the agent that triggered it).",
+      "const": "claude-notifications"
+    },
+    "title": {
+      "type": "string",
+      "description": "Status title, e.g. \"✅ Completed\"."
+    }
+  },
+  "allOf": [
+    {
+      "description": "notification_type must always equal status (see their descriptions above).",
+      "if": { "properties": { "status": { "const": "task_complete" } } },
+      "then": { "properties": { "notification_type": { "const": "task_complete" } } }
+    },
+    {
+      "if": { "properties": { "status": { "const": "review_complete" } } },
+      "then": { "properties": { "notification_type": { "const": "review_complete" } } }
+    },
+    {
+      "if": { "properties": { "status": { "const": "question" } } },
+      "then": { "properties": { "notification_type": { "const": "question" } } }
+    },
+    {
+      "if": { "properties": { "status": { "const": "plan_ready" } } },
+      "then": { "properties": { "notification_type": { "const": "plan_ready" } } }
+    },
+    {
+      "if": { "properties": { "status": { "const": "session_limit_reached" } } },
+      "then": { "properties": { "notification_type": { "const": "session_limit_reached" } } }
+    },
+    {
+      "if": { "properties": { "status": { "const": "api_error" } } },
+      "then": { "properties": { "notification_type": { "const": "api_error" } } }
+    },
+    {
+      "if": { "properties": { "status": { "const": "api_error_overloaded" } } },
+      "then": { "properties": { "notification_type": { "const": "api_error_overloaded" } } }
+    },
+    {
+      "if": { "properties": { "status": { "const": "permission_request" } } },
+      "then": { "properties": { "notification_type": { "const": "permission_request" } } }
+    }
+  ],
+  "additionalProperties": true
+}

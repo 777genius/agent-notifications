@@ -9,9 +9,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/777genius/claude-notifications/internal/config"
-	"github.com/777genius/claude-notifications/internal/daemon"
-	"github.com/777genius/claude-notifications/internal/logging"
+	"github.com/777genius/agent-notifications/internal/config"
+	"github.com/777genius/agent-notifications/internal/daemon"
+	"github.com/777genius/agent-notifications/internal/logging"
+	"github.com/777genius/agent-notifications/internal/warpfocus"
 	"github.com/gen2brain/beeep"
 )
 
@@ -101,6 +102,7 @@ func sendViaDaemon(title, body, cwd string, cfg *config.Config) error {
 
 	// Capture WezTerm pane info only when the focus target is actually WezTerm.
 	wezTermPaneID, wezTermSocket := daemon.GetWezTermFocusHints(focusTarget)
+	warpFocusURL := warpfocus.FromEnv()
 
 	hints := daemon.FocusHints{
 		TerminalName:  focusTarget,
@@ -109,6 +111,7 @@ func sendViaDaemon(title, body, cwd string, cfg *config.Config) error {
 		WindowTitle:   focusWindowTitle,
 		WezTermPaneID: wezTermPaneID,
 		WezTermSocket: wezTermSocket,
+		WarpFocusURL:  warpFocusURL,
 	}
 
 	// Zellij is not tied to a focus target the way WezTerm is: it runs inside

@@ -2,6 +2,33 @@
 
 Common installation and runtime issues.
 
+## `Failed to add marketplace: ... its network source differs from the one declared for it in settings`
+
+### Symptom
+
+Running the installer to update fails during "Setting up marketplace..." with an error
+mentioning the marketplace's network source differing from what's declared in settings.
+
+### Why it happens
+
+You installed before the project's GitHub repository was renamed from `claude-notifications-go`
+to `agent-notifications`. Claude Code remembers which repo you originally added the marketplace
+from and refuses to silently switch it to a different one under the same name — that's a
+deliberate safety check, not a bug in Claude Code.
+
+### Fix
+
+The installer (`bin/bootstrap.sh`) detects this specific case and re-registers the marketplace
+automatically; your saved notification settings are not affected. If you're still seeing this
+error (e.g. from a cached copy of an older installer script), fix it manually and re-run the
+installer:
+
+```bash
+/plugin marketplace remove claude-notifications-go
+```
+
+then run the [installer](INSTALLATION.md#quick-install-recommended) again.
+
 ## macOS: VS Code click-to-focus focuses the wrong window
 
 ### Symptom
@@ -72,7 +99,7 @@ Clicking a notification focuses the wrong terminal window, a stale Terminator wi
 Reproduce the failed click first, then run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/777genius/claude-notifications-go/main/scripts/linux-focus-debug.sh | bash
+curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/main/scripts/linux-focus-debug.sh | bash
 ```
 
 The script generates a report file in the current directory with:
@@ -100,17 +127,9 @@ PowerShell and Windows Terminal can resolve `bash` to WSL. In that case the inst
 
 ### Fix
 
-Open Git Bash from the Start menu and run the bootstrap command there. Do not run the bootstrap `curl ... | bash` command from PowerShell if it opens WSL.
+Open Git Bash from the Start menu and run the [secure install command](INSTALLATION.md#quick-install-recommended) there. Do not run it from PowerShell if `bash` opens WSL.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/777genius/claude-notifications-go/main/bin/bootstrap.sh | bash
-```
-
-If you intentionally use Claude Code inside WSL, opt in explicitly:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/777genius/claude-notifications-go/main/bin/bootstrap.sh | env CLAUDE_NOTIFICATIONS_ALLOW_WSL=1 bash
-```
+For an intentional WSL installation, add `CLAUDE_NOTIFICATIONS_ALLOW_WSL=1` to the `env` invocation on the final line of that command.
 
 ## Windows: install issues related to `%TEMP%` / `%TMP%` location
 
@@ -223,7 +242,7 @@ If you cannot run `windows-hooks`, replace the installed plugin's `hooks/hooks.j
 }
 ```
 
-This workaround is based on confirmed Windows 11 behavior from [issue #73](https://github.com/777genius/claude-notifications-go/issues/73#issuecomment-4364271319).
+This workaround is based on confirmed Windows 11 behavior from [issue #73](https://github.com/777genius/agent-notifications/issues/73#issuecomment-4364271319).
 
 ### Note about beeep logs
 

@@ -2,7 +2,15 @@
 
 package daemon
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
 
 func TestGetZellijFocusHints_InsideZellij(t *testing.T) {
 	// Zellij sets ZELLIJ=0 inside a session; the value is a marker, not a flag.
@@ -126,4 +134,131 @@ func TestIsZellijAlreadyFocused(t *testing.T) {
 			}
 		})
 	}
+}
+
+func stubZellijAction(t *testing.T, script string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "zellij"), []byte("#!/bin/sh\n"+script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	return dir
+}
+
+func TestRunZellijAction_Arguments(t *testing.T) {
+	dir := stubZellijAction(t, `printf '%s\n' "$@" > "$ZELLIJ_TEST_ARGS"`)
+	argsPath := filepath.Join(dir, "args")
+	t.Setenv("ZELLIJ_TEST_ARGS", argsPath)
+	if err := TryZellijPane("session with spaces", "42"); err != nil {
+		t.Fatal(err)
+	}
+	args, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(args), "-s\nsession with spaces\naction\nfocus-pane-id\n42\n"; got != want {
+		t.Fatalf("arguments = %q, want %q", got, want)
+	}
+	if err := TryZellijTab("another session", "tab with spaces"); err != nil {
+		t.Fatal(err)
+	}
+	args, err = os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(args), "-s\nanother session\naction\ngo-to-tab-name\ntab with spaces\n"; got != want {
+		t.Fatalf("arguments = %q, want %q", got, want)
+	}
+}
+
+func TestRunZellijAction_NonzeroExit(t *testing.T) {
+	for _, tc := range []struct {
+		name, output string
+		wantError    bool
+	}{
+		{"already focused", "Pane Terminal(2) is already focused", false},
+		{"missing pane", "Pane with id Terminal(9999) not found", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stubZellijAction(t, `printf '%s' "$ZELLIJ_TEST_OUTPUT" >&2
+exit 2
+`)
+			t.Setenv("ZELLIJ_TEST_OUTPUT", tc.output)
+			err := TryZellijPane("test-session", "2")
+			if (err != nil) != tc.wantError {
+				t.Fatalf("error = %v, wantError %v", err, tc.wantError)
+			}
+			if err != nil && !strings.Contains(err.Error(), tc.output) {
+				t.Fatalf("error lost CLI output: %v", err)
+			}
+		})
+	}
+}
+
+func TestRunZellijAction_TimeoutWithInheritedPipes(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := stubZellijAction(t, `"$ZELLIJ_TEST_EXECUTABLE" -test.run=^TestZellijPipeHolder$ &
+wait
+`)
+	release := filepath.Join(dir, "release")
+	done := filepath.Join(dir, "done")
+	t.Setenv("ZELLIJ_TEST_EXECUTABLE", executable)
+	t.Setenv("ZELLIJ_TEST_PIPE_HOLDER", dir)
+	// Release through a file, avoiding PID reuse races and orphaned sleep commands.
+	t.Cleanup(func() {
+		if err := os.WriteFile(release, nil, 0o600); err != nil {
+			t.Error(err)
+		}
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			if _, err := os.Stat(done); err == nil {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Error("pipe holder did not finish cleanup")
+	})
+	original := zellijActionTimeout
+	zellijActionTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { zellijActionTimeout = original })
+	start := time.Now()
+	err = TryZellijPane("test-session", "2")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("error = %v, want DeadlineExceeded", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("timeout took %v", elapsed)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "ready")); err != nil {
+		t.Fatal("pipe holder never started:", err)
+	}
+}
+
+// This subprocess retains both output pipes after the stub shell is killed.
+// Its success-looking output must not conceal the deadline error.
+func TestZellijPipeHolder(t *testing.T) {
+	dir := os.Getenv("ZELLIJ_TEST_PIPE_HOLDER")
+	if dir == "" {
+		return
+	}
+	_, _ = os.Stdout.WriteString("already focused\n")
+	_, _ = os.Stderr.WriteString("already focused\n")
+	if err := os.WriteFile(filepath.Join(dir, "ready"), nil, 0o600); err != nil {
+		os.Exit(2)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(filepath.Join(dir, "release")); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	_ = os.Stdout.Close()
+	_ = os.Stderr.Close()
+	_ = os.WriteFile(filepath.Join(dir, "done"), nil, 0o600)
+	os.Exit(0)
 }

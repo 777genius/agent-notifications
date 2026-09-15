@@ -15,7 +15,7 @@ import (
 // zellijActionTimeout bounds the CLI call. It runs on the D-Bus action callback,
 // so a zellij server that stops answering would otherwise wedge the daemon's
 // click handling for every later notification, not just this one.
-const zellijActionTimeout = 5 * time.Second
+var zellijActionTimeout = 5 * time.Second
 
 // TryZellijPane focuses paneID inside sessionName, switching tabs if the pane
 // lives in one that is not current.
@@ -54,7 +54,12 @@ func runZellijAction(sessionName, action, target string) error {
 	// rest of its life, so letting zellij infer the session from the environment
 	// would act on whichever session happened to start the daemon.
 	cmd := exec.CommandContext(ctx, "zellij", "-s", sessionName, "action", action, target)
+	// Bound pipe draining too: a child can retain stdout after the CLI is killed.
+	cmd.WaitDelay = 100 * time.Millisecond
 	output, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		return fmt.Errorf("zellij %s failed: %w", action, ctx.Err())
+	}
 	if err == nil || isZellijAlreadyFocused(string(output)) {
 		return nil
 	}

@@ -1,0 +1,57 @@
+name: Disabled ReviewRouter Codex
+
+# Temporarily disabled: ReviewRouter OIDC returns 403 action_repository_mismatch
+# after the GitHub rename to 777genius/agent-notifications. Re-enable after
+# re-running ReviewRouter Codex setup against the current repository identity.
+run-name: ${{ format('ReviewRouter review PR {0} at {1}', github.event.pull_request.number, github.event.pull_request.head.sha) }}
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  codex-review:
+    name: codex-review
+    if: ${{ false }}
+    concurrency:
+      group: reviewrouter-codex-oauth-${{ github.repository_id }}-codex-rotating-1079317825
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+    uses: 777genius/review-router/.github/workflows/reviewrouter-t0-reusable.yml@ac7fecabdd1fa7816c61f81d5d71d1d01f9afccd
+    with:
+      runtime_ref: "ac7fecabdd1fa7816c61f81d5d71d1d01f9afccd"
+      api_url: "https://api.reviewrouter.site"
+      runtime_config_mode: oidc
+      pr_number: ${{ format('{0}', github.event.pull_request.number) }}
+      review_head_sha: ${{ github.event.pull_request.head.sha }}
+      provider_instance_id: "codex-rotating:1079317825"
+      workflow_schema_version: 4
+      max_changed_lines: ${{ vars.REVIEW_ROUTER_MAX_CHANGED_LINES }}
+      review_timeout_minutes: ${{ fromJSON(vars.REVIEW_ROUTER_TIMEOUT_MINUTES || '60') }}
+    secrets:
+      CODEX_AUTH_JSON: ${{ secrets.REVIEWROUTER_CODEX_AUTH_JSON_R1079317825_Pc512c3cd331771e1_E1_1a8a22d99fc6e2d7f7f6ec8714dab387 }}
+
+  codex-refresh:
+    name: codex-refresh
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    concurrency:
+      group: reviewrouter-codex-oauth-${{ github.repository_id }}-codex-rotating-1079317825
+      cancel-in-progress: false
+    if: ${{ false }}
+    permissions:
+      id-token: write
+    steps:
+      - name: ReviewRouter Codex OAuth refresh
+        id: refresh_codex
+        uses: 777genius/review-router@ac7fecabdd1fa7816c61f81d5d71d1d01f9afccd
+        with:
+          mode: codex-oauth-refresh
+          api-url: "https://api.reviewrouter.site"
+          provider-instance-id: "codex-rotating:1079317825"
+          workflow-schema-version: "4"
+          auth-json: ${{ secrets.REVIEWROUTER_CODEX_AUTH_JSON_R1079317825_Pc512c3cd331771e1_E1_1a8a22d99fc6e2d7f7f6ec8714dab387 }}

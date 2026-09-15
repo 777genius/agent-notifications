@@ -1,0 +1,32 @@
+{
+  "name": "agent-notifications-landing",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev": "nuxt dev",
+    "build": "nuxt generate",
+    "generate": "nuxt generate",
+    "typecheck": "nuxt typecheck",
+    "check:i18n": "node --experimental-strip-types --test tests/i18n.test.ts",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "preview": "node scripts/serve.mjs",
+    "test:browser": "playwright test"
+  },
+  "dependencies": {
+    "@nuxtjs/i18n": "10.6.0",
+    "bowser": "2.14.1",
+    "nuxt": "3.21.11",
+    "reka-ui": "2.10.4",
+    "vue": "3.5.42",
+    "vue-i18n": "11.4.10"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/node": "22.20.2",
+    "typescript": "6.0.3",
+    "vue-tsc": "3.3.11"
+  }
+}

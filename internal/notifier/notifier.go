@@ -14,12 +14,12 @@ import (
 
 	"github.com/gen2brain/beeep"
 
-	"github.com/777genius/claude-notifications/internal/analyzer"
-	"github.com/777genius/claude-notifications/internal/audio"
-	"github.com/777genius/claude-notifications/internal/config"
-	"github.com/777genius/claude-notifications/internal/errorhandler"
-	"github.com/777genius/claude-notifications/internal/logging"
-	"github.com/777genius/claude-notifications/internal/platform"
+	"github.com/777genius/agent-notifications/internal/analyzer"
+	"github.com/777genius/agent-notifications/internal/audio"
+	"github.com/777genius/agent-notifications/internal/config"
+	"github.com/777genius/agent-notifications/internal/errorhandler"
+	"github.com/777genius/agent-notifications/internal/logging"
+	"github.com/777genius/agent-notifications/internal/platform"
 )
 
 const macOSPermissionDeniedMessage = "Notification permission denied. Enable in System Settings > Notifications."
@@ -62,7 +62,8 @@ func New(cfg *config.Config) *Notifier {
 // isTimeSensitiveStatus returns true for statuses that should break through Focus Mode
 func isTimeSensitiveStatus(status analyzer.Status) bool {
 	switch status {
-	case analyzer.StatusAPIError, analyzer.StatusAPIErrorOverloaded, analyzer.StatusSessionLimitReached:
+	case analyzer.StatusAPIError, analyzer.StatusAPIErrorOverloaded, analyzer.StatusSessionLimitReached,
+		analyzer.StatusPermissionRequest:
 		return true
 	default:
 		return false
@@ -346,12 +347,14 @@ func buildTerminalNotifierArgsWithOptions(title, message, bundleID, cwd, ghostty
 }
 
 // buildFocusScript returns the shell command for -execute in terminal-notifier.
+// For Warp: opens WARP_FOCUS_URL so Warp raises the originating window/tab/pane.
 // For Ghostty: uses AXDocument attribute (OSC 7 CWD) via Accessibility API,
 // falling back to plain app activation.
 // For all apps (including Electron editors and regular terminals): invokes the
 // binary's focus-window subcommand which uses CGS + AXTitle APIs to find and
 // raise the correct window across Spaces.
-// Returns "" when cwd is empty or unusable (caller should use -activate instead).
+// Returns "" when cwd is empty or unusable (caller should use -activate instead),
+// except Warp/iTerm2 session targeting which can work without cwd.
 func buildFocusScript(bundleID, cwd string) string {
 	return buildFocusScriptWithOptions(bundleID, cwd, "")
 }
@@ -359,6 +362,10 @@ func buildFocusScript(bundleID, cwd string) string {
 func buildFocusScriptWithOptions(bundleID, cwd, ghosttyTerminalID string) string {
 	if isIterm2BundleID(bundleID) {
 		return buildIterm2FocusScript(cwd)
+	}
+
+	if focusURL := warpFocusURL(); focusURL != "" {
+		return buildWarpFocusScript(focusURL, bundleID, cwd)
 	}
 
 	if isGhosttyBundleID(bundleID) {
@@ -386,7 +393,7 @@ func buildFocusScriptWithOptions(bundleID, cwd, ghosttyTerminalID string) string
 	// Automation permission prompts for notification click handlers — osascript fails silently.
 	// The focus-window approach uses Accessibility + Screen Recording instead of Automation,
 	// with graceful fallback to app-level activation when permissions are not granted.
-	// See: https://github.com/777genius/claude-notifications-go/issues/47
+	// See: https://github.com/777genius/agent-notifications/issues/47
 	return buildBinaryFocusScript(bundleID, cwd, "")
 }
 
@@ -491,7 +498,7 @@ func (n *Notifier) sendWithBeeep(title, message, appIcon, sound string) error {
 	// - Windows: Use fixed AppName to prevent registry pollution. Each unique AppName
 	//   creates a persistent entry in HKEY_CURRENT_USER\SOFTWARE\Microsoft\Windows\
 	//   CurrentVersion\Notifications\Settings\ that is never cleaned up.
-	//   See: https://github.com/777genius/claude-notifications-go/issues/4
+	//   See: https://github.com/777genius/agent-notifications/issues/4
 	// - macOS/Linux: Use unique AppName to prevent notification grouping/replacement,
 	//   allowing multiple notifications to be displayed simultaneously.
 	originalAppName := beeep.AppName

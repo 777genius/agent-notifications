@@ -7,7 +7,7 @@ private let notificationTimeoutSeconds = 10.0
 
 let arguments = Array(CommandLine.arguments.dropFirst())
 
-if arguments.contains("-help") || arguments.contains("--help") {
+if ArgumentParser.isHelpRequest(arguments) {
     print("Usage: terminal-notifier-modern -title <title> -message <message> [options]")
     print("")
     print("  -title          Notification title (required)")

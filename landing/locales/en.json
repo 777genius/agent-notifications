@@ -1,0 +1,199 @@
+{
+  "seo": {
+    "title": "Agent Notifications - Stay in flow",
+    "description": "Desktop notifications for Claude Code and Codex CLI. Know when work finishes, a question needs you, or something goes wrong."
+  },
+  "language": {
+    "label": "Language",
+    "current": "Current language: {language}",
+    "search": "Search languages",
+    "noResults": "No languages found",
+    "switchError": "Unable to change language. Please try again."
+  },
+  "accessibility": {
+    "skip": "Skip to content",
+    "platforms": "Supported operating systems"
+  },
+  "brand": { "tagline": "FOR YOUR CODING AGENTS" },
+  "nav": {
+    "ariaLabel": "Main",
+    "features": "Features",
+    "install": "Install",
+    "faq": "FAQ"
+  },
+  "hero": {
+    "eyebrow": "LESS WATCHING. MORE BUILDING.",
+    "title": "Stay in flow",
+    "emphasis": "We'll get your attention",
+    "leadFirst": "Let your agent work. Know when it's done.",
+    "leadSecond": "Sounds, desktop notifications and webhooks for Claude Code and Codex CLI.",
+    "primary": "Set up notifications",
+    "secondary": "Explore on GitHub",
+    "note": "Open source · Runs locally"
+  },
+  "common": { "now": "now", "beta": "beta" },
+  "features": {
+    "eyebrow": "THE RIGHT SIGNAL. AT THE RIGHT TIME.",
+    "titleFirst": "Keep your focus",
+    "titleSecond": "Lose the constant checking",
+    "items": {
+      "1": {
+        "label": "DESKTOP NOTIFICATIONS",
+        "title": "Step away, stay informed",
+        "text": "Get a desktop notification when your agent finishes or needs your attention. Spend less time watching a terminal."
+      },
+      "2": {
+        "label": "SOUND CONTROLS",
+        "title": "A sound for every moment",
+        "text": "Pick sounds, set the volume, and choose an audio device. Keep the signals you want and quiet the rest."
+      },
+      "3": {
+        "label": "WEBHOOK INTEGRATIONS",
+        "title": "Your workflow, connected",
+        "text": "Send updates to Slack, Discord, Telegram, Teams and more. Configure webhooks for wherever you work."
+      }
+    },
+    "preview": {
+      "done": "Your agent is done",
+      "ready": "Ready when you are.",
+      "sound": "Your sound. Your volume.",
+      "event": "Agent event"
+    },
+    "foot": "Click-to-focus support depends on your terminal and OS.",
+    "details": "See platform details"
+  },
+  "faq": {
+    "eyebrow": "A FEW THINGS TO KNOW",
+    "title": "Frequently asked questions",
+    "subtitle": "Everything you need to get back to work.",
+    "items": {
+      "1": {
+        "question": "Do I need both agents installed?",
+        "answer": "No. Select Claude Code, Codex CLI, or both. Install the selected agent CLI first; the command installs this notification plugin."
+      },
+      "2": {
+        "question": "Are Codex hooks installed automatically?",
+        "answer": "Yes. The installer registers the hooks and saves a stable runtime copy. Open /hooks in Codex to review and trust them. Changed definitions need review again."
+      },
+      "3": {
+        "question": "Will an update reset my settings?",
+        "answer": "The installer preserves your shared configuration and foreign Codex hooks. Install and update use the same command. Restart the selected agent after updating."
+      },
+      "4": {
+        "question": "Can I choose what makes a sound?",
+        "answer": "Yes. Configure sounds, volume, audio device and notification channels. Choose Configure in the guide for the steps specific to your agent."
+      },
+      "5": {
+        "question": "Does click-to-focus work everywhere?",
+        "answer": "Support varies by OS and terminal. iTerm2 needs its Python API for precise tab targeting. Windows focuses a window, not an exact tab.",
+        "link": "Check supported environments."
+      },
+      "6": {
+        "question": "What if I don't get a notification?",
+        "answer": "Check your OS notification permissions and chosen channels. For Codex, confirm the hooks are trusted.",
+        "link": "Follow troubleshooting for platform-specific checks."
+      }
+    }
+  },
+  "closing": {
+    "eyebrow": "LET YOUR AGENT TAKE THE NEXT TURN",
+    "title": "Your attention is valuable",
+    "action": "Make every notification count"
+  },
+  "footer": {
+    "builtBy": "Built by",
+    "afterBuilder": ". Open source.",
+    "license": "License",
+    "source": "Source"
+  },
+  "preview": {
+    "ariaLabel": "Agent notification examples",
+    "heading": "YOUR AGENT HAS AN UPDATE",
+    "pause": "Pause",
+    "resume": "Resume",
+    "next": "Next",
+    "workspace": "main · notification_plugin_go",
+    "items": {
+      "question": { "title": "❓ Question", "body": "What would you like to name the test file in /tmp/?" },
+      "plan": { "title": "📋 Plan", "body": "Plan: Create test file in /tmp/" },
+      "completed": { "title": "✅ Completed", "body": "Done. Installation now comes right after the hero.", "detail": "✏️ 3 edited  ⏱ 35s" },
+      "review": { "title": "🔍 Review", "body": "Review complete. No issues found in the updated installer." },
+      "permission": { "title": "🔐 Permission Request", "body": "Approval required: shell" },
+      "limit": { "title": "⏱️ Session Limit Reached", "body": "Session limit reached. Please wait before continuing." },
+      "error": { "title": "🔴 API Error: 401", "body": "Authentication expired. Please sign in again." }
+    }
+  },
+  "select": {
+    "scrollUp": "Scroll options up",
+    "scrollDown": "Scroll options down"
+  },
+  "install": {
+    "title": "Set up notifications",
+    "intro": "Follow the steps below to add desktop notifications to {agent}.",
+    "chooseAgent": "Choose your agent",
+    "requires": "Requires {agent}",
+    "bothAgents": "Both agents",
+    "bothSelected": "✓ Both agents selected",
+    "installBoth": "Install for both agents",
+    "chooseComputer": "Choose the computer where your agent runs",
+    "selected": "Selected",
+    "detected": "Detected automatically",
+    "change": "Change",
+    "targetOs": "Target operating system",
+    "products": {
+      "claude": "Claude Code",
+      "codex": "Codex CLI",
+      "both": "Both agents"
+    },
+    "targets": {
+      "unknown": "Choose target OS",
+      "macos": "macOS",
+      "linux": "Linux",
+      "windows": "Windows · Git Bash",
+      "manual": "Manual instructions"
+    },
+    "prerequisiteTitle": "Codex CLI",
+    "prerequisiteText": "Requires a published stable plugin release ≥1.42.0.",
+    "checkReleases": "Check releases",
+    "configure": {
+      "title": "Make it sound like you",
+      "claudeBefore": "Inside Claude Code chat, run",
+      "claudeAfter": "This is a Claude slash command, not a shell command.",
+      "codexBefore": "For Codex, locate the shared settings file with",
+      "codexMiddle": "and apply edits using the",
+      "codexLink": "documented manual configuration",
+      "codexAfter": "Claude Code is not required for Codex-only setup.",
+      "shared": "Both agents share this configuration. Your settings are preserved when updating."
+    },
+    "manual": {
+      "title": "Follow the manual route",
+      "claude": "Manual Claude installation",
+      "codex": "Manual Codex registration"
+    },
+    "chooseTarget": "Choose a target operating system to reveal your command. Mobile and unknown browsers need an explicit choice.",
+    "commandLabel": "{intent} command",
+    "copyCommand": "Copy command",
+    "updatingInstead": "Updating instead?",
+    "copied": "Copied. Paste into your target terminal when ready.",
+    "copyUnavailable": "Copy unavailable. Select the command and copy it manually.",
+    "updateNote": "Install and update use the same command. Your existing settings are preserved.",
+    "intents": { "install": "Install", "update": "Update", "configure": "Configure" },
+    "steps": {
+      "label1": "NEXT STEP 1",
+      "label2": "NEXT STEP 2",
+      "runBash": "Run in Git Bash",
+      "runTerminal": "Run in Terminal",
+      "windowsTitle": "Run in Git Bash on Windows.",
+      "windowsText": "Do not use WSL or paste this pipe into PowerShell.",
+      "terminalText": "Open your terminal and run the command above.",
+      "restart": "Restart {agent}",
+      "bothAgents": "both agents",
+      "restartClaude": "Close and reopen Claude Code for notifications to be active.",
+      "restartCodex": "Restart Codex, open /hooks, then review and trust the installed hooks. Changed definitions need review again; trust is never automatic."
+    },
+    "help": "Installation help",
+    "claudeHelp": "Claude installation help",
+    "installationInstructions": "Installation instructions",
+    "configureSettings": "⚙ Configure settings"
+  }
+}

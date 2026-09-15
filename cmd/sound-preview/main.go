@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/777genius/claude-notifications/internal/audio"
+	"github.com/777genius/agent-notifications/internal/audio"
 )
 
 func main() {

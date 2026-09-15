@@ -18,15 +18,16 @@ const ProtocolScheme = "claude-notify-focus"
 // activation argument at notify time and decoded when the user clicks the toast.
 // JSON keys are kept short because the whole struct rides inside a URI.
 type FocusContext struct {
-	HWND   int64  `json:"h,omitempty"` // top-level window handle captured at notify time
-	PID    uint32 `json:"p,omitempty"` // owning process id (validates HWND against handle reuse)
-	Title  string `json:"t,omitempty"` // window title at notify time (fallback match)
-	Folder string `json:"f,omitempty"` // project folder name (fallback match)
+	HWND    int64  `json:"h,omitempty"` // top-level window handle captured at notify time
+	PID     uint32 `json:"p,omitempty"` // owning process id (validates HWND against handle reuse)
+	Title   string `json:"t,omitempty"` // window title at notify time (fallback match)
+	Folder  string `json:"f,omitempty"` // project folder name (fallback match)
+	WarpURL string `json:"u,omitempty"` // Warp session deep link ($WARP_FOCUS_URL)
 }
 
 // HasTarget reports whether the context carries any usable focus hint.
 func (c FocusContext) HasTarget() bool {
-	return c.HWND != 0 || c.PID != 0 || c.Title != "" || c.Folder != ""
+	return c.HWND != 0 || c.PID != 0 || c.Title != "" || c.Folder != "" || c.WarpURL != ""
 }
 
 // EncodeURI renders the context as "claude-notify-focus:<base64url-json>".

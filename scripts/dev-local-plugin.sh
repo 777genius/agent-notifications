@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Local development helper for Claude Notifications plugin installs/updates.
-# Uses an isolated CLAUDE_CONFIG_DIR by default so local testing never touches
-# your real Claude installation unless you explicitly opt into that.
+# Local development helper for Agent Notifications plugin installs/updates.
+# Keeps user state and temporary files inside an explicit development sandbox.
 
 set -euo pipefail
 
@@ -13,7 +12,29 @@ PLUGIN_NAME="claude-notifications-go"
 PLUGIN_KEY="${PLUGIN_NAME}@${MARKETPLACE_NAME}"
 
 DEFAULT_DEV_HOME="${HOME}/.claude-dev/claude-notifications-go"
-DEV_CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-${DEV_CLAUDE_HOME:-$DEFAULT_DEV_HOME}}"
+if [ "${_DEV_ENV_READY:-}" != 1 ]; then
+    # Ambient agent/config overrides must never select the developer's profile.
+    dev_root="${DEV_CLAUDE_HOME:-$DEFAULT_DEV_HOME}"
+    case "$dev_root" in
+        /*) ;;
+        *) echo "DEV_CLAUDE_HOME must be an absolute sandbox path" >&2; exit 1 ;;
+    esac
+    [ "$dev_root" != / ] && [ "$dev_root" != "$HOME" ] || exit 1
+    platform_env=()
+    for name in SystemRoot SYSTEMROOT WINDIR COMSPEC PATHEXT; do
+        if [ -n "${!name:-}" ]; then platform_env+=("$name=${!name}"); fi
+    done
+    exec env -i PATH="$PATH" "${platform_env[@]}" bash --noprofile --norc -c '
+        _DEV_ENV_READY=1
+        source "$1/bin/test-env.sh"
+        test_env_setup "$2/environment"
+        export DEV_CLAUDE_HOME="$2" CLAUDE_HOME="$2" CLAUDE_CONFIG_DIR="$2"
+        shift 2
+        source "$0"
+    ' "$0" "$REPO_ROOT" "$dev_root" "$@"
+fi
+DEV_CLAUDE_HOME="$CLAUDE_CONFIG_DIR"
+DEFAULT_DEV_HOME="$DEV_CLAUDE_HOME"
 
 INSTALLED_JSON="${DEV_CLAUDE_HOME}/plugins/installed_plugins.json"
 KNOWN_MARKETPLACES_JSON="${DEV_CLAUDE_HOME}/plugins/known_marketplaces.json"
@@ -33,8 +54,7 @@ Commands:
   help       Show this help
 
 Environment:
-  DEV_CLAUDE_HOME   Override isolated Claude config dir
-  CLAUDE_CONFIG_DIR Same as DEV_CLAUDE_HOME for convenience
+  DEV_CLAUDE_HOME   Absolute sandbox root (Claude metadata plus environment/)
 
 Default isolated config dir:
   ${DEFAULT_DEV_HOME}

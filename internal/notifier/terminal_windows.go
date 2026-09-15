@@ -11,9 +11,9 @@ import (
 
 	toast "git.sr.ht/~jackmordaunt/go-toast"
 
-	"github.com/777genius/claude-notifications/internal/config"
-	"github.com/777genius/claude-notifications/internal/logging"
-	"github.com/777genius/claude-notifications/internal/winfocus"
+	"github.com/777genius/agent-notifications/internal/config"
+	"github.com/777genius/agent-notifications/internal/logging"
+	"github.com/777genius/agent-notifications/internal/winfocus"
 )
 
 // windowsToastAppID is the AppID shown in Action Center. Kept fixed (matching

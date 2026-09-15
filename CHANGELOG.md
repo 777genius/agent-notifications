@@ -5,16 +5,56 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [1.43.0] - 2026-09-11
+
+### Added
+- **Warp: exact pane/chat click-to-focus** — notification clicks open Warp's session deep link (`WARP_FOCUS_URL` / `warp://session/<uuid>`) so the originating window, tab, and pane (including the agent chat in that pane) come to the front. Falls back to the previous AXTitle `focus-window` path when the URL is absent or Warp cannot resolve it. Also works on Linux (`xdg-open`) and Windows (toast protocol), and composes with tmux/zellij inside Warp ([#175](https://github.com/777genius/agent-notifications/pull/175)).
+- **Webhook agent identity** — custom JSON payloads include `schema_version`, `notification_type`, and `agent_source` (`claude`/`codex`); Slack, Discord, Telegram, and Lark show the agent name; custom templates can use `${{agent_source}}` ([#170](https://github.com/777genius/agent-notifications/pull/170)).
+- **Landing: flag images in the language switcher** ([#173](https://github.com/777genius/agent-notifications/pull/173)).
+
+### Changed
+- Document the frozen `claude-notifications-go` Claude Code plugin identity ([#166](https://github.com/777genius/agent-notifications/pull/166)).
+- Add Uninstall instructions to the README ([#167](https://github.com/777genius/agent-notifications/pull/167)).
+
+### Fixed
+- Ignore inherited `WARP_FOCUS_URL` in Cursor/VS Code launched from Warp so notification clicks stay on the editor instead of stealing focus back to Warp ([#175](https://github.com/777genius/agent-notifications/pull/175)).
+- Drop the garbage `[unknown .]` prefix when a notification has no usable session name or folder ([#172](https://github.com/777genius/agent-notifications/pull/172)).
+- Self-heal a marketplace still declared under the retired GitHub repo name so bootstrap and updates work after the rename to `agent-notifications` ([#174](https://github.com/777genius/agent-notifications/pull/174)).
+- Clarify the bootstrap version gate and silence the shared-config baseline traceback ([#171](https://github.com/777genius/agent-notifications/pull/171)).
+- Prefix landing flag image paths with the app base URL so they load on GitHub Pages ([#173](https://github.com/777genius/agent-notifications/pull/173)).
+
+## [1.42.0] - 2026-09-11
+
+### Added
+- **Universal configuration** - agent-neutral config location for fresh installs, schema 2 per-agent overrides, and the `agent-notifications` CLI alias. Existing Claude config files remain selected without automatic migration; schema 1 remains supported.
+- **One-command setup** - choose Claude Code, Codex CLI or both, with automatic hook registration.
+- **Codex CLI support (beta)** - register Stop, PermissionRequest, experimental question hooks, and opt-in SubagentStop with `setup-codex`. Review and trust the entries in Codex `/hooks` once. Claude Code is not required.
+- **Safe Codex setup and updates** - install a stable runtime copy, preserve unrelated hooks and existing settings, save backups, and retain hook trust when registration is unchanged.
+- **`permission_request` notification status** - sound, webhook formatting, and time-sensitive desktop delivery. Approval notifications require Codex to actually request approval.
+- **Richer Codex notifications** - classify short failure messages; optionally notify on subagent completion. Question-tool hook firing remains experimental and is not guaranteed in every mode.
+
+### Changed
+- **Product and repository rebrand** - renamed the public product to Agent Notifications and the repository to `agent-notifications`; existing plugin IDs, commands, binary and release asset names, environment variables, OS integration IDs, remain unchanged for compatibility. Existing configuration paths are retained; fresh installs use an agent-neutral path.
+- **Minimum Go version is now 1.22** (was 1.21), required by the typed hook SDK.
+- **Source-neutral event pipeline** - Claude and Codex use separate decoders with a shared notification pipeline. Both products share the selected config file, with optional per-agent overrides; existing webhooks also receive Codex notifications unless overridden.
+
+### Fixed
+- Deliver macOS notifications whose text or title is `-help` or `--help` instead of interpreting their content as a CLI help request.
+- Preserve the Windows GUI focus helper when installing the stable Codex runtime.
+- Keep Codex update stamps separate from Claude, preserve distinct concurrent Codex notifications, reject destructive destination symlinks, and skip Claude iTerm2 setup during Codex installation and updates.
+
 ## [1.41.0] - 2026-08-31
 
 ### Added
-- **Optional session label in notification titles** - new `desktop.showSessionLabel` setting (default `true`) keeps existing behavior; set it to `false` to drop the `[name id]` session label from titles so the branch/folder subtitle gets the space ([#134](https://github.com/777genius/claude-notifications-go/pull/134))
-- **Linux: Alacritty click-to-focus detection** - terminal detection now recognizes `ALACRITTY_WINDOW_ID` (Alacritty deliberately sets no `TERM_PROGRAM`), so notification clicks can raise Alacritty windows instead of doing nothing ([#121](https://github.com/777genius/claude-notifications-go/pull/121))
+- **Optional session label in notification titles** - new `desktop.showSessionLabel` setting (default `true`) keeps existing behavior; set it to `false` to drop the `[name id]` session label from titles so the branch/folder subtitle gets the space ([#134](https://github.com/777genius/agent-notifications/pull/134))
+- **Linux: Alacritty click-to-focus detection** - terminal detection now recognizes `ALACRITTY_WINDOW_ID` (Alacritty deliberately sets no `TERM_PROGRAM`), so notification clicks can raise Alacritty windows instead of doing nothing ([#121](https://github.com/777genius/agent-notifications/pull/121))
 
 ### Fixed
-- **Ghostty: cwd fallback no longer switches to an arbitrary same-directory tab** - click-to-focus selects a terminal by working directory only when exactly one tab matches, leaving ambiguous sessions to the existing window-level fallback instead ([#115](https://github.com/777genius/claude-notifications-go/issues/115)).
-- **Windows: toast clicks no longer flash a console window and raise the right window across projects** - protocol activation now targets a GUI-subsystem `-focus.exe` sibling binary (no console auto-allocation, with fallback to the main binary on older installs), and window selection prefers the window whose title contains the project folder when one process owns several windows ([#118](https://github.com/777genius/claude-notifications-go/issues/118), [#120](https://github.com/777genius/claude-notifications-go/pull/120))
-- **Bootstrap: unknown registry versions no longer trigger reinstall loops** - when Claude Code records the installed plugin version as `unknown` or empty, bootstrap verifies the manifest at the recorded install path instead of treating the placeholder as a mismatch; explicit version mismatches and stale or missing manifests still fail closed ([#132](https://github.com/777genius/claude-notifications-go/issues/132), [#133](https://github.com/777genius/claude-notifications-go/pull/133))
+- **Ghostty: cwd fallback no longer switches to an arbitrary same-directory tab** - click-to-focus selects a terminal by working directory only when exactly one tab matches, leaving ambiguous sessions to the existing window-level fallback instead ([#115](https://github.com/777genius/agent-notifications/issues/115)).
+- **Windows: toast clicks no longer flash a console window and raise the right window across projects** - protocol activation now targets a GUI-subsystem `-focus.exe` sibling binary (no console auto-allocation, with fallback to the main binary on older installs), and window selection prefers the window whose title contains the project folder when one process owns several windows ([#118](https://github.com/777genius/agent-notifications/issues/118), [#120](https://github.com/777genius/agent-notifications/pull/120))
+- **Bootstrap: unknown registry versions no longer trigger reinstall loops** - when Claude Code records the installed plugin version as `unknown` or empty, bootstrap verifies the manifest at the recorded install path instead of treating the placeholder as a mismatch; explicit version mismatches and stale or missing manifests still fail closed ([#132](https://github.com/777genius/agent-notifications/issues/132), [#133](https://github.com/777genius/agent-notifications/pull/133))
 
 ## [1.40.1] - 2026-07-17
 
@@ -23,7 +63,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Audio documentation now matches the actual playback backend** - platform and format guidance reflects the current cross-platform audio implementation.
 
 ### Fixed
-- **Plugin paths resolve without an ambient `CLAUDE_PLUGIN_ROOT`** - configuration defaults use the executable-derived plugin root, preserve literal dollar signs in paths, retain omitted fields in partial status overrides, and keep explicit empty sound settings ([#107](https://github.com/777genius/claude-notifications-go/issues/107), [#109](https://github.com/777genius/claude-notifications-go/pull/109)).
+- **Plugin paths resolve without an ambient `CLAUDE_PLUGIN_ROOT`** - configuration defaults use the executable-derived plugin root, preserve literal dollar signs in paths, retain omitted fields in partial status overrides, and keep explicit empty sound settings ([#107](https://github.com/777genius/agent-notifications/issues/107), [#109](https://github.com/777genius/agent-notifications/pull/109)).
 - **macOS release binaries retain compatibility with macOS 12 and later** - Darwin builds now set and verify a 12.0 deployment target instead of inheriting the runner OS version.
 - **Windows installer guidance consistently points users to Git Bash** - bootstrap and download failures no longer suggest unsupported shell paths.
 - **Windows terminal bell fallback handles cyclic process snapshots** - ancestor discovery no longer returns or retries duplicate process IDs.
@@ -31,37 +71,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.40.0] - 2026-06-22
 
 ### Added
-- **Windows: notification click-to-focus and terminal bell support** - Windows notifications can now bring the originating terminal session back into focus, and terminal bell delivery can ring the originating Windows Terminal tab when supported ([#36](https://github.com/777genius/claude-notifications-go/issues/36), [#94](https://github.com/777genius/claude-notifications-go/pull/94))
-- **Focus-aware and delayed desktop notifications** - two independent, composable options let notifications model where your attention is. `notifyOnlyWhenUnfocused` (default `false`) skips the desktop notification only when the focused terminal window can be matched to the current Claude Code session; `notifyDelaySeconds` (default `0`, capped at 25s by the hook timeout) waits before delivering and, when paired with `notifyOnlyWhenUnfocused`, re-checks focus after the wait. Focus detection is best-effort per platform (Ghostty/session or title-matched macOS windows, exact X11 window IDs, Windows foreground ancestry plus project-title match) and degrades safely to delivering the notification when focus can't be determined. Both apply to desktop notifications only; webhook delivery is unaffected ([#93](https://github.com/777genius/claude-notifications-go/issues/93))
+- **Windows: notification click-to-focus and terminal bell support** - Windows notifications can now bring the originating terminal session back into focus, and terminal bell delivery can ring the originating Windows Terminal tab when supported ([#36](https://github.com/777genius/agent-notifications/issues/36), [#94](https://github.com/777genius/agent-notifications/pull/94))
+- **Focus-aware and delayed desktop notifications** - two independent, composable options let notifications model where your attention is. `notifyOnlyWhenUnfocused` (default `false`) skips the desktop notification only when the focused terminal window can be matched to the current Claude Code session; `notifyDelaySeconds` (default `0`, capped at 25s by the hook timeout) waits before delivering and, when paired with `notifyOnlyWhenUnfocused`, re-checks focus after the wait. Focus detection is best-effort per platform (Ghostty/session or title-matched macOS windows, exact X11 window IDs, Windows foreground ancestry plus project-title match) and degrades safely to delivering the notification when focus can't be determined. Both apply to desktop notifications only; webhook delivery is unaffected ([#93](https://github.com/777genius/agent-notifications/issues/93))
 
 ### Fixed
-- **Windows: bootstrap no longer silently installs Linux binaries from WSL** - the bootstrap and binary installer now detect WSL, stop before touching plugin/download state, and tell Windows users to rerun from Git Bash; intentional WSL installs can opt in with `CLAUDE_NOTIFICATIONS_ALLOW_WSL=1` ([#98](https://github.com/777genius/claude-notifications-go/issues/98))
-- **Hooks: subagent stops are detected from the hook event** - focus-aware notification handling now uses the Claude hook event type instead of inferring subagent stops from `transcript_path`, avoiding unsafe misclassification in edge cases ([#97](https://github.com/777genius/claude-notifications-go/issues/97))
+- **Windows: bootstrap no longer silently installs Linux binaries from WSL** - the bootstrap and binary installer now detect WSL, stop before touching plugin/download state, and tell Windows users to rerun from Git Bash; intentional WSL installs can opt in with `CLAUDE_NOTIFICATIONS_ALLOW_WSL=1` ([#98](https://github.com/777genius/agent-notifications/issues/98))
+- **Hooks: subagent stops are detected from the hook event** - focus-aware notification handling now uses the Claude hook event type instead of inferring subagent stops from `transcript_path`, avoiding unsafe misclassification in edge cases ([#97](https://github.com/777genius/agent-notifications/issues/97))
 
 ## [1.39.4] - 2026-06-13
 
 ### Fixed
-- **Windows: notification sounds now survive toast false-positive errors** - sound playback is independent from `beeep.Notify`, so Windows `doc.LoadXml(tmpl)` false positives no longer drop the audio cue while the toast is delivered ([#90](https://github.com/777genius/claude-notifications-go/issues/90), [#91](https://github.com/777genius/claude-notifications-go/pull/91))
-- **Windows: toast delivery is more resilient to go-toast COM fallback noise** - Windows beeep calls now pin the OS thread around WinRT/COM notification delivery and downgrade successful PowerShell fallback `doc.LoadXml(tmpl)` errors to warnings instead of failed desktop notifications ([#90](https://github.com/777genius/claude-notifications-go/issues/90))
-- **Linux: Konsole click-to-focus now detects KDE terminal sessions** - terminal detection recognizes `KONSOLE_VERSION` and `KONSOLE_DBUS_SESSION`, allowing KDE/Wayland focus helpers to search for the correct `konsole` window class ([#92](https://github.com/777genius/claude-notifications-go/pull/92))
+- **Windows: notification sounds now survive toast false-positive errors** - sound playback is independent from `beeep.Notify`, so Windows `doc.LoadXml(tmpl)` false positives no longer drop the audio cue while the toast is delivered ([#90](https://github.com/777genius/agent-notifications/issues/90), [#91](https://github.com/777genius/agent-notifications/pull/91))
+- **Windows: toast delivery is more resilient to go-toast COM fallback noise** - Windows beeep calls now pin the OS thread around WinRT/COM notification delivery and downgrade successful PowerShell fallback `doc.LoadXml(tmpl)` errors to warnings instead of failed desktop notifications ([#90](https://github.com/777genius/agent-notifications/issues/90))
+- **Linux: Konsole click-to-focus now detects KDE terminal sessions** - terminal detection recognizes `KONSOLE_VERSION` and `KONSOLE_DBUS_SESSION`, allowing KDE/Wayland focus helpers to search for the correct `konsole` window class ([#92](https://github.com/777genius/agent-notifications/pull/92))
 
 ## [1.39.3] - 2026-05-28
 
 ### Fixed
-- **Linux: GNOME click-to-focus now recognizes Wayland-native terminal WM classes** - GNOME focusing now uses reverse-domain WM class/app IDs for terminals such as Ghostty and WezTerm, so notification clicks can raise the correct window on Wayland sessions ([#89](https://github.com/777genius/claude-notifications-go/pull/89))
-- **Linux: WezTerm notification clicks can target the exact pane safely** - the daemon now carries WezTerm pane/socket hints from the hook process, raises the matching WezTerm window before switching panes, and ignores inherited `WEZTERM_*` variables when the focus target is not actually WezTerm ([#89](https://github.com/777genius/claude-notifications-go/pull/89))
+- **Linux: GNOME click-to-focus now recognizes Wayland-native terminal WM classes** - GNOME focusing now uses reverse-domain WM class/app IDs for terminals such as Ghostty and WezTerm, so notification clicks can raise the correct window on Wayland sessions ([#89](https://github.com/777genius/agent-notifications/pull/89))
+- **Linux: WezTerm notification clicks can target the exact pane safely** - the daemon now carries WezTerm pane/socket hints from the hook process, raises the matching WezTerm window before switching panes, and ignores inherited `WEZTERM_*` variables when the focus target is not actually WezTerm ([#89](https://github.com/777genius/agent-notifications/pull/89))
 
 ## [1.39.2] - 2026-05-27
 
 ### Fixed
-- **Windows: Stop hooks no longer corrupt non-ASCII JSON payloads** - Windows hook generation now uses direct exec-form `.exe` hooks with `args` instead of routing stdin through PowerShell/Git Bash shell pipelines, preventing locale-dependent JSON parse failures such as `invalid character '\r' in string literal` and `invalid character 'b' after object key:value pair` ([#87](https://github.com/777genius/claude-notifications-go/issues/87))
+- **Windows: Stop hooks no longer corrupt non-ASCII JSON payloads** - Windows hook generation now uses direct exec-form `.exe` hooks with `args` instead of routing stdin through PowerShell/Git Bash shell pipelines, preventing locale-dependent JSON parse failures such as `invalid character '\r' in string literal` and `invalid character 'b' after object key:value pair` ([#87](https://github.com/777genius/agent-notifications/issues/87))
 - **Plugin hooks use argument-vector execution by default** - bundled hook configuration now passes wrapper arguments via `args`, and installer validation rejects Windows hook configs that still route through shell commands, wrappers, `.bat`/`.cmd` shims, or `$input` pipes
 
 ## [1.39.1] - 2026-05-10
 
 ### Fixed
-- **macOS: notification delivery no longer steals focus** - `ClaudeNotifier.app` now launches through `open -g`, so banner delivery does not briefly bring the notifier app to the foreground before any notification click ([#82](https://github.com/777genius/claude-notifications-go/issues/82))
-- **Plugin setup commands stay out of model context** - setup/config slash commands remain manually available from the slash menu while opting out of model invocation metadata to reduce prompt overhead after setup ([#83](https://github.com/777genius/claude-notifications-go/issues/83))
+- **macOS: notification delivery no longer steals focus** - `ClaudeNotifier.app` now launches through `open -g`, so banner delivery does not briefly bring the notifier app to the foreground before any notification click ([#82](https://github.com/777genius/agent-notifications/issues/82))
+- **Plugin setup commands stay out of model context** - setup/config slash commands remain manually available from the slash menu while opting out of model invocation metadata to reduce prompt overhead after setup ([#83](https://github.com/777genius/agent-notifications/issues/83))
 
 ## [1.39.0] - 2026-05-06
 
@@ -73,13 +113,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Status config cleanup** - removed the legacy Ghostty `keywords` field from generated status configuration and aligned architecture documentation
 
 ### Fixed
-- **Windows: native hooks no longer depend on Git Bash script execution** - installer now rewrites PreToolUse, Notification, Stop, SubagentStop, and TeammateIdle hooks to call the native Windows `.exe` through PowerShell with an absolute path, avoiding silent `hook-wrapper.sh` launch failures on Windows 10/11 ([#79](https://github.com/777genius/claude-notifications-go/issues/79), [#80](https://github.com/777genius/claude-notifications-go/pull/80))
+- **Windows: native hooks no longer depend on Git Bash script execution** - installer now rewrites PreToolUse, Notification, Stop, SubagentStop, and TeammateIdle hooks to call the native Windows `.exe` through PowerShell with an absolute path, avoiding silent `hook-wrapper.sh` launch failures on Windows 10/11 ([#79](https://github.com/777genius/agent-notifications/issues/79), [#80](https://github.com/777genius/agent-notifications/pull/80))
 - **Discord embed robustness** - webhook rendering now skips empty Discord embed fields and clamps overlong author names before sending payloads
 
 ## [1.38.0] - 2026-04-18
 
 ### Added
-- **Per-channel status overrides for desktop and webhook notifications** - each `statuses.<name>` entry can now define `desktop.enabled` and `webhook.enabled` independently, so you can disable webhook delivery for specific statuses while keeping desktop notifications on, or do the reverse ([#74](https://github.com/777genius/claude-notifications-go/issues/74))
+- **Per-channel status overrides for desktop and webhook notifications** - each `statuses.<name>` entry can now define `desktop.enabled` and `webhook.enabled` independently, so you can disable webhook delivery for specific statuses while keeping desktop notifications on, or do the reverse ([#74](https://github.com/777genius/agent-notifications/issues/74))
 
 ### Fixed
 - **CI stability for async webhook tests** - relaxed an overly strict `SendAsync` timing assertion under race-enabled CI, removing a macOS false negative without weakening the async behavior guarantee
@@ -91,12 +131,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Installer: release download verification is stricter and safer** - release asset validation now rejects suspicious or incomplete downloads more defensively before replacing installed binaries, reducing the chance of ending up with a corrupted update
-- **Ghostty: click-to-focus can now switch to the correct tab, not just the window** - `focus-window` now tries Ghostty's AppleScript terminal focus first and falls back to the previous `AXDocument` window-level path if Automation is unavailable or the exact terminal cannot be resolved ([#72](https://github.com/777genius/claude-notifications-go/issues/72))
+- **Ghostty: click-to-focus can now switch to the correct tab, not just the window** - `focus-window` now tries Ghostty's AppleScript terminal focus first and falls back to the previous `AXDocument` window-level path if Automation is unavailable or the exact terminal cannot be resolved ([#72](https://github.com/777genius/agent-notifications/issues/72))
 
 ## [1.36.7] - 2026-04-10
 
 ### Fixed
-- **macOS: click-to-focus now restores minimized terminal windows before focusing them** - notification clicks no longer silently activate the app while leaving the matched window minimized in the Dock; the window is restored first and then raised on the follow-up retry, covering both the Ghostty `AXDocument` path and the generic `AXTitle` matcher ([#67](https://github.com/777genius/claude-notifications-go/issues/67), [#68](https://github.com/777genius/claude-notifications-go/pull/68))
+- **macOS: click-to-focus now restores minimized terminal windows before focusing them** - notification clicks no longer silently activate the app while leaving the matched window minimized in the Dock; the window is restored first and then raised on the follow-up retry, covering both the Ghostty `AXDocument` path and the generic `AXTitle` matcher ([#67](https://github.com/777genius/agent-notifications/issues/67), [#68](https://github.com/777genius/agent-notifications/pull/68))
 - **macOS: minimized-window restore now gets a guaranteed post-animation retry** - the internal retry loop now handles the edge case where the restore happens on the last normal attempt, ensuring the final raise still runs after the Dock animation completes
 
 ## [1.36.6] - 2026-04-07
@@ -119,26 +159,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.36.3] - 2026-04-07
 
 ### Fixed
-- **iTerm2: exact click-to-focus for tabs and split panes** — plain iTerm2 notifications now target the exact tab or split pane via the existing Python helper instead of only doing window-level focus by `cwd`; the tmux+iTerm2 path also safely targets the correct client/tab in multi-tab setups, avoiding cross-tab focus jumps and preserving fallbacks when the helper is unavailable ([#63](https://github.com/777genius/claude-notifications-go/issues/63), [#66](https://github.com/777genius/claude-notifications-go/pull/66))
+- **iTerm2: exact click-to-focus for tabs and split panes** — plain iTerm2 notifications now target the exact tab or split pane via the existing Python helper instead of only doing window-level focus by `cwd`; the tmux+iTerm2 path also safely targets the correct client/tab in multi-tab setups, avoiding cross-tab focus jumps and preserving fallbacks when the helper is unavailable ([#63](https://github.com/777genius/agent-notifications/issues/63), [#66](https://github.com/777genius/agent-notifications/pull/66))
 - **iTerm2: clearer setup remediation when Python API is disabled** — the notifier now runs a preflight healthcheck for the iTerm2 Python API and shows a throttled one-time notification telling the user to enable it in iTerm2 settings, instead of silently degrading exact targeting
-- **macOS: notification permission remediation is more robust** — native notifier permission problems now surface cleaner remediation/fallback behavior, with cross-platform tests updated to keep CI stable ([#64](https://github.com/777genius/claude-notifications-go/pull/64))
+- **macOS: notification permission remediation is more robust** — native notifier permission problems now surface cleaner remediation/fallback behavior, with cross-platform tests updated to keep CI stable ([#64](https://github.com/777genius/agent-notifications/pull/64))
 
 ## [1.36.2] - 2026-04-02
 
 ### Fixed
-- **GNOME/Wayland: notification click no longer leaves a long loading cursor** — on Ubuntu 24.04 GNOME/Wayland, notification clicks now use a hidden `claude-notifications.desktop` entry with `StartupNotify=false`, avoiding an unconsumed activation token while preserving click-to-focus behavior and the earlier Nautilus fallback fix ([#61](https://github.com/777genius/claude-notifications-go/issues/61))
+- **GNOME/Wayland: notification click no longer leaves a long loading cursor** — on Ubuntu 24.04 GNOME/Wayland, notification clicks now use a hidden `claude-notifications.desktop` entry with `StartupNotify=false`, avoiding an unconsumed activation token while preserving click-to-focus behavior and the earlier Nautilus fallback fix ([#61](https://github.com/777genius/agent-notifications/issues/61))
 
 ## [1.36.1] - 2026-04-02
 
 ### Fixed
-- **macOS: ClaudeNotifier notifications use native app attribution again** — the notifier now launches through LaunchServices instead of executing the app binary directly, preventing `UNUserNotificationCenter` from degrading into Script Editor attribution on recent macOS releases ([#59](https://github.com/777genius/claude-notifications-go/issues/59))
+- **macOS: ClaudeNotifier notifications use native app attribution again** — the notifier now launches through LaunchServices instead of executing the app binary directly, preventing `UNUserNotificationCenter` from degrading into Script Editor attribution on recent macOS releases ([#59](https://github.com/777genius/agent-notifications/issues/59))
 - **macOS: ClaudeNotifier release artifacts are signed and notarized again** — CI restored Developer ID signing, hardened runtime, notarization, and stapling for `ClaudeNotifier.app` release assets, while preserving local ad-hoc builds for development
 - **macOS: delivery fallback remains available** — native ClaudeNotifier delivery is preferred, but macOS notification fallback behavior remains available if the bundled notifier cannot be used
 
 ## [1.36.0] - 2026-03-28
 
 ### Added
-- **Team mode support** — smart notification handling for Claude Code teams ([#48](https://github.com/777genius/claude-notifications-go/issues/48)). New `teamMode` config option with three modes:
+- **Team mode support** — smart notification handling for Claude Code teams ([#48](https://github.com/777genius/agent-notifications/issues/48)). New `teamMode` config option with three modes:
   - `always` (default) — notifications work as usual, no suppression
   - `wait-all` — suppresses lead's Stop notification, waits until all teammates go idle, then sends a single consolidated notification
   - `never` — completely silent in team mode
@@ -156,17 +196,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.34.1] - 2026-03-26
 
 ### Fixed
-- **tmux: click-to-focus in multi-session setups** — notification click now correctly switches to the right tmux session before selecting the window/pane. Previously, `select-window` only searched within the current session, so clicking a notification in a multi-session setup (e.g. one session per git worktree) would stay on whichever session was last active ([#54](https://github.com/777genius/claude-notifications-go/issues/54))
+- **tmux: click-to-focus in multi-session setups** — notification click now correctly switches to the right tmux session before selecting the window/pane. Previously, `select-window` only searched within the current session, so clicking a notification in a multi-session setup (e.g. one session per git worktree) would stay on whichever session was last active ([#54](https://github.com/777genius/agent-notifications/issues/54))
 
 ## [1.34.0] - 2026-03-25
 
 ### Fixed
-- **macOS: JetBrains IDE click-to-focus** — added en-dash (`–`, U+2013) separator support to window title matching. JetBrains IDEs (PhpStorm, IntelliJ, WebStorm, etc.) use en-dash in window titles (`file.go – project – PhpStorm`), which was not recognized by the existing em-dash/hyphen matching. Now correctly finds and raises the right JetBrains window on notification click ([#50](https://github.com/777genius/claude-notifications-go/issues/50))
+- **macOS: JetBrains IDE click-to-focus** — added en-dash (`–`, U+2013) separator support to window title matching. JetBrains IDEs (PhpStorm, IntelliJ, WebStorm, etc.) use en-dash in window titles (`file.go – project – PhpStorm`), which was not recognized by the existing em-dash/hyphen matching. Now correctly finds and raises the right JetBrains window on notification click ([#50](https://github.com/777genius/agent-notifications/issues/50))
 
 ## [1.33.0] - 2026-03-15
 
 ### Fixed
-- **macOS Tahoe: click-to-focus for all terminals** — replaced AppleScript-based window activation with the `focus-window` binary subcommand (AXTitle + CGS APIs) for regular terminals (iTerm2, Terminal.app, Alacritty, Warp, Hyper, etc.). macOS Tahoe (26.x) broke Automation permission prompts for notification click handlers, causing osascript to fail silently. The new approach uses Accessibility + Screen Recording instead of Automation, with graceful fallback to app-level activation when permissions are not granted ([#47](https://github.com/777genius/claude-notifications-go/issues/47))
+- **macOS Tahoe: click-to-focus for all terminals** — replaced AppleScript-based window activation with the `focus-window` binary subcommand (AXTitle + CGS APIs) for regular terminals (iTerm2, Terminal.app, Alacritty, Warp, Hyper, etc.). macOS Tahoe (26.x) broke Automation permission prompts for notification click handlers, causing osascript to fail silently. The new approach uses Accessibility + Screen Recording instead of Automation, with graceful fallback to app-level activation when permissions are not granted ([#47](https://github.com/777genius/agent-notifications/issues/47))
 - **macOS: app always activates on click** — when window title doesn't match the project folder name, the terminal app now still gets activated (app-level focus) instead of doing nothing
 - **Symlink resolution** — `focus-window` now resolves symlinks via `filepath.EvalSymlinks` for more robust binary path handling
 
@@ -200,14 +240,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.30.0] - 2026-03-03
 
 ### Added
-- **macOS: iTerm2 + tmux -CC (control mode) click-to-focus** — when using iTerm2's tmux integration (`tmux -CC`), clicking a notification now switches to the correct iTerm2 tab via the iTerm2 Python API. Standard `tmux select-window` doesn't work in control mode; the plugin auto-detects -CC mode and falls back gracefully if the Python API is unavailable ([#41](https://github.com/777genius/claude-notifications-go/issues/41))
+- **macOS: iTerm2 + tmux -CC (control mode) click-to-focus** — when using iTerm2's tmux integration (`tmux -CC`), clicking a notification now switches to the correct iTerm2 tab via the iTerm2 Python API. Standard `tmux select-window` doesn't work in control mode; the plugin auto-detects -CC mode and falls back gracefully if the Python API is unavailable ([#41](https://github.com/777genius/agent-notifications/issues/41))
 - **Automatic iTerm2 Python venv setup** — `bootstrap.sh` and `install.sh` now create a Python venv with the `iterm2` module for tmux -CC support (macOS only, when iTerm2 and tmux are detected)
 
 ## [1.29.2] - 2026-03-03
 
 ### Fixed
-- **Linux: click-to-focus reliability** — focus methods (`activate-window-by-title`, GNOME `FocusApp`, `xdotool`) now properly validate activation results instead of silently succeeding when no window was actually focused. `xdotool windowactivate` uses `--sync` to ensure the activation request completes ([#44](https://github.com/777genius/claude-notifications-go/issues/44))
-- **Linux: terminal detection in hook process** — focus target is now detected in the hook process instead of the daemon, since the daemon may have been started from a different environment where terminal-specific env vars (e.g. `TERMINATOR_UUID`) are not available ([#44](https://github.com/777genius/claude-notifications-go/issues/44))
+- **Linux: click-to-focus reliability** — focus methods (`activate-window-by-title`, GNOME `FocusApp`, `xdotool`) now properly validate activation results instead of silently succeeding when no window was actually focused. `xdotool windowactivate` uses `--sync` to ensure the activation request completes ([#44](https://github.com/777genius/agent-notifications/issues/44))
+- **Linux: terminal detection in hook process** — focus target is now detected in the hook process instead of the daemon, since the daemon may have been started from a different environment where terminal-specific env vars (e.g. `TERMINATOR_UUID`) are not available ([#44](https://github.com/777genius/agent-notifications/issues/44))
 - **"Updated to" message shown repeatedly** — the `[claude-notifications] Updated to vX.Y.Z` system message is now shown only once per version, using a stamp file to prevent duplicates across hook invocations
 
 ### Changed
@@ -216,12 +256,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.29.1] - 2026-03-02
 
 ### Fixed
-- **Linux: click-to-focus for Terminator** — Terminator does not set `TERM_PROGRAM`, causing the daemon to fall back to generic `"Terminal"` and fail to find any Terminator window. Now detects Terminator via its `TERMINATOR_UUID` environment variable, which it always sets ([#44](https://github.com/777genius/claude-notifications-go/issues/44))
+- **Linux: click-to-focus for Terminator** — Terminator does not set `TERM_PROGRAM`, causing the daemon to fall back to generic `"Terminal"` and fail to find any Terminator window. Now detects Terminator via its `TERMINATOR_UUID` environment variable, which it always sets ([#44](https://github.com/777genius/agent-notifications/issues/44))
 
 ## [1.29.0] - 2026-03-02
 
 ### Added
-- **macOS: click-to-focus support for Cursor IDE** — Cursor (VS Code fork) is now recognized as an Electron-based editor, using the binary `focus-window` subcommand instead of AppleScript (which fails on Electron apps with error -1708). Bundle ID `com.todesktop.230313mzl4w4u92` is auto-detected via `__CFBundleIdentifier` ([#39](https://github.com/777genius/claude-notifications-go/issues/39))
+- **macOS: click-to-focus support for Cursor IDE** — Cursor (VS Code fork) is now recognized as an Electron-based editor, using the binary `focus-window` subcommand instead of AppleScript (which fails on Electron apps with error -1708). Bundle ID `com.todesktop.230313mzl4w4u92` is auto-detected via `__CFBundleIdentifier` ([#39](https://github.com/777genius/agent-notifications/issues/39))
 
 ### Changed
 - Renamed internal `isVSCodeBundleID` → `isElectronEditorBundleID` and `buildVSCodeFocusScript` → `buildElectronEditorFocusScript` to better reflect that the logic applies to all Electron-based editors, not just VS Code
@@ -229,16 +269,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.28.0] - 2026-03-02
 
 ### Added
-- **Linux: desktop-entry notification hint** — GNOME now correctly identifies the source app when clicking notifications, focusing the terminal/VS Code instead of opening Nautilus. Also adds `suppress-sound` hint to prevent duplicate notification sounds ([#42](https://github.com/777genius/claude-notifications-go/pull/42)) — contributed by [@ductrantrong](https://github.com/ductrantrong)
+- **Linux: desktop-entry notification hint** — GNOME now correctly identifies the source app when clicking notifications, focusing the terminal/VS Code instead of opening Nautilus. Also adds `suppress-sound` hint to prevent duplicate notification sounds ([#42](https://github.com/777genius/agent-notifications/pull/42)) — contributed by [@ductrantrong](https://github.com/ductrantrong)
 
 ### Fixed
-- **tmux: click-to-focus targets wrong pane** — `GetTmuxPaneTarget()` now reads `$TMUX_PANE` env var (stable, per-process) instead of `tmux display-message` (returns whichever pane is active). Fixes click-to-focus switching to the wrong tmux tab when the user has navigated away ([#41](https://github.com/777genius/claude-notifications-go/issues/41))
-- **bootstrap.sh: respect `CLAUDE_CONFIG_DIR`** — bootstrap now checks `CLAUDE_CONFIG_DIR` (official Claude Code env var) before `CLAUDE_HOME` when locating the plugins directory ([#43](https://github.com/777genius/claude-notifications-go/issues/43))
+- **tmux: click-to-focus targets wrong pane** — `GetTmuxPaneTarget()` now reads `$TMUX_PANE` env var (stable, per-process) instead of `tmux display-message` (returns whichever pane is active). Fixes click-to-focus switching to the wrong tmux tab when the user has navigated away ([#41](https://github.com/777genius/agent-notifications/issues/41))
+- **bootstrap.sh: respect `CLAUDE_CONFIG_DIR`** — bootstrap now checks `CLAUDE_CONFIG_DIR` (official Claude Code env var) before `CLAUDE_HOME` when locating the plugins directory ([#43](https://github.com/777genius/agent-notifications/issues/43))
 
 ## [1.27.0] - 2026-02-27
 
 ### Added
-- **Configurable suppress filters** — new `suppressFilters` config array lets users suppress notifications matching specific conditions (status, git branch, folder name). All specified fields in a rule must match (AND logic); omitted fields act as wildcards. Contributed by [@ekain-fr](https://github.com/ekain-fr) ([#40](https://github.com/777genius/claude-notifications-go/pull/40))
+- **Configurable suppress filters** — new `suppressFilters` config array lets users suppress notifications matching specific conditions (status, git branch, folder name). All specified fields in a rule must match (AND logic); omitted fields act as wildcards. Contributed by [@ekain-fr](https://github.com/ekain-fr) ([#40](https://github.com/777genius/agent-notifications/pull/40))
 
 ### Fixed
 - **Suppress filter check before dedup lock** — moved `ShouldFilter()` before `AcquireLock()` in hook handler to prevent filtered events from consuming dedup lock slots and blocking subsequent legitimate notifications
@@ -249,14 +289,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Suppress notifications for subagents** — new `suppressForSubagents` config option (default: `true`) detects subagent sessions by `/subagents/` in `transcript_path` and suppresses notifications from both Stop and SubagentStop hooks. Covers in-process subagents, teammates, and Task tool completions
 
 ### Fixed
-- **Cooldown `0` was impossible to set** — `ApplyDefaults()` could not distinguish "not configured" from explicit `0`, silently overwriting it with `12`. Changed `suppressQuestionAfterTaskCompleteSeconds` and `suppressQuestionAfterAnyNotificationSeconds` from `int` to `*int` so `null` = default, `0` = disabled ([#37](https://github.com/777genius/claude-notifications-go/issues/37))
+- **Cooldown `0` was impossible to set** — `ApplyDefaults()` could not distinguish "not configured" from explicit `0`, silently overwriting it with `12`. Changed `suppressQuestionAfterTaskCompleteSeconds` and `suppressQuestionAfterAnyNotificationSeconds` from `int` to `*int` so `null` = default, `0` = disabled ([#37](https://github.com/777genius/agent-notifications/issues/37))
 - **`permission_prompt` notifications never fired** — `suppressQuestionAfterAnyNotificationSeconds` default of `12` was too aggressive, suppressing mid-task question notifications. Changed default to `0` (disabled). `suppressQuestionAfterTaskCompleteSeconds` (`12s`) remains sufficient for duplicate protection
 - **Validate both cooldown fields** — `Validate()` now checks `suppressQuestionAfterAnyNotificationSeconds` for negative values (previously only checked `suppressQuestionAfterTaskCompleteSeconds`)
 
 ## [1.25.2] - 2026-02-21
 
 ### Fixed
-- **Windows: remove redundant `sh` prefix from hook commands** — Claude Code already spawns a shell for hooks; the extra `sh` was misinterpreted as a script filename on some Windows environments, causing "cannot execute binary file" ([#35](https://github.com/777genius/claude-notifications-go/pull/35))
+- **Windows: remove redundant `sh` prefix from hook commands** — Claude Code already spawns a shell for hooks; the extra `sh` was misinterpreted as a script filename on some Windows environments, causing "cannot execute binary file" ([#35](https://github.com/777genius/agent-notifications/pull/35))
 
 ## [1.25.1] - 2026-02-21
 
@@ -283,7 +323,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.23.0] - 2026-02-21
 
 ### Added
-- **Ghostty click-to-focus** — clicking a notification focuses the correct Ghostty window via AXDocument (OSC 7 CWD file:// URL) ([#34](https://github.com/777genius/claude-notifications-go/pull/34))
+- **Ghostty click-to-focus** — clicking a notification focuses the correct Ghostty window via AXDocument (OSC 7 CWD file:// URL) ([#34](https://github.com/777genius/agent-notifications/pull/34))
   - `raiseWindowByAXDocument` C function matches windows by AXDocument attribute
   - `cwdToFileURL` converts CWD to RFC-3986-compliant file:// URL via `net/url`
   - One-time Accessibility permission prompt on first use
@@ -302,7 +342,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.22.0] - 2026-02-20
 
 ### Added
-- **Zellij click-to-focus support** — clicking a notification switches to the correct zellij tab ([#33](https://github.com/777genius/claude-notifications-go/issues/33))
+- **Zellij click-to-focus support** — clicking a notification switches to the correct zellij tab ([#33](https://github.com/777genius/agent-notifications/issues/33))
   - Detects `$ZELLIJ` / `$ZELLIJ_SESSION_NAME` environment variables
   - Parses active tab name from `zellij action dump-layout` (KDL format)
   - Executes `zellij -s <session> action go-to-tab-name <tab>` on notification click
@@ -318,7 +358,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.21.0] - 2026-02-20
 
 ### Added
-- **Window-specific click-to-focus** — clicking a notification now focuses the exact project window instead of just activating the app ([#31](https://github.com/777genius/claude-notifications-go/pull/31))
+- **Window-specific click-to-focus** — clicking a notification now focuses the exact project window instead of just activating the app ([#31](https://github.com/777genius/agent-notifications/pull/31))
   - macOS VS Code: CGo AXUIElement API via `focus-window` subcommand with cross-Space support (private CGS APIs)
   - macOS other terminals: AppleScript title search by folder name with `exit repeat` fix
   - Linux: folder name threaded through daemon IPC to xdotool/wlrctl/gdbus focus methods
@@ -362,7 +402,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.19.0] - 2026-02-17
 
 ### Fixed
-- **Config survives plugin updates** — config.json moved to `~/.claude/claude-notifications-go/config.json` outside the plugin cache, so settings are no longer lost when bootstrap.sh clears the cache during updates ([#30](https://github.com/777genius/claude-notifications-go/issues/30))
+- **Config survives plugin updates** — config.json moved to `~/.claude/claude-notifications-go/config.json` outside the plugin cache, so settings are no longer lost when bootstrap.sh clears the cache during updates ([#30](https://github.com/777genius/agent-notifications/issues/30))
 - **Automatic migration** — existing config is auto-migrated from the old location on first run (atomic write with temp file + rename)
 - **Resilient fallback chain** — corrupted config never crashes the plugin; falls back to legacy path or defaults with stderr warnings
 - **Cross-platform test isolation** — `setTestHome` helper correctly sets both HOME and USERPROFILE for Windows compatibility
@@ -375,7 +415,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.18.0] - 2026-02-16
 
 ### Added
-- **ntfy.sh webhook documentation** — custom webhook example for push notifications via ntfy.sh ([#29](https://github.com/777genius/claude-notifications-go/pull/29))
+- **ntfy.sh webhook documentation** — custom webhook example for push notifications via ntfy.sh ([#29](https://github.com/777genius/agent-notifications/pull/29))
 
 ### Fixed
 - **Bootstrap: version symlinks** — after update, creates symlinks from old version dirs to the new one so running Claude Code sessions don't break before restart
@@ -399,13 +439,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.16.0] - 2026-02-16
 
 ### Added
-- **Terminal bell for tab indicators** 🔔 ([#28](https://github.com/777genius/claude-notifications-go/pull/28), thanks @retr0h!)
+- **Terminal bell for tab indicators** 🔔 ([#28](https://github.com/777genius/agent-notifications/pull/28), thanks @retr0h!)
   - Sends BEL character (`\a`) to trigger terminal tab indicators (Ghostty tab highlight, tmux window bell flag)
   - Works independently of desktop notifications — bell fires even when desktop notifications are disabled
   - New `terminalBell` config option (default: `true`)
   - Cross-platform: `/dev/tty` on Unix, `os.Stdout` on Windows
   - Graceful degradation: silently skipped if TTY unavailable (Docker, CI, piped environments)
-- **`list-sounds` CLI utility** — lists all available notification sound files ([#23](https://github.com/777genius/claude-notifications-go/issues/23))
+- **`list-sounds` CLI utility** — lists all available notification sound files ([#23](https://github.com/777genius/agent-notifications/issues/23))
 - **`/sounds` skill command** — interactive sound browser with preview from Claude Code
 
 ### Changed
@@ -414,10 +454,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.15.1] - 2026-02-15
 
 ### Added
-- **GNOME Terminal detection** — detect GNOME Terminal via `GNOME_TERMINAL_SCREEN` / `GNOME_TERMINAL_SERVICE` env vars for click-to-focus support on Linux ([#22](https://github.com/777genius/claude-notifications-go/pull/22), thanks @ductrantrong)
+- **GNOME Terminal detection** — detect GNOME Terminal via `GNOME_TERMINAL_SCREEN` / `GNOME_TERMINAL_SERVICE` env vars for click-to-focus support on Linux ([#22](https://github.com/777genius/agent-notifications/pull/22), thanks @ductrantrong)
 
 ### Fixed
-- **Windows checksum verification** — strip leading backslash from `sha256sum` output on Windows (MSYS2/Git Bash/Cygwin) which caused checksum mismatch ([#26](https://github.com/777genius/claude-notifications-go/issues/26))
+- **Windows checksum verification** — strip leading backslash from `sha256sum` output on Windows (MSYS2/Git Bash/Cygwin) which caused checksum mismatch ([#26](https://github.com/777genius/agent-notifications/issues/26))
 
 ## [1.15.0] - 2026-02-07
 
@@ -427,12 +467,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Release checklist** — added [docs/RELEASE.md](docs/RELEASE.md) with version bump locations, auto-update explanation, and full release steps
 
 ### Fixed
-- **install.sh** — `install_gnome_activate_window_extension()` now returns failure code when GNOME shell/extensions not found or extension couldn't be enabled ([#19](https://github.com/777genius/claude-notifications-go/pull/19))
+- **install.sh** — `install_gnome_activate_window_extension()` now returns failure code when GNOME shell/extensions not found or extension couldn't be enabled ([#19](https://github.com/777genius/agent-notifications/pull/19))
 
 ## [1.14.0] - 2026-01-16
 
 ### Added
-- **Per-status notification control** 🎛️ ([#16](https://github.com/777genius/claude-notifications-go/issues/16))
+- **Per-status notification control** 🎛️ ([#16](https://github.com/777genius/agent-notifications/issues/16))
   - Disable individual notification types (e.g., disable only `task_complete` while keeping others)
   - New `enabled` field in status config: `"enabled": false` to disable a specific type
   - Backward compatible: missing `enabled` field defaults to `true`
@@ -547,7 +587,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.7.1] - 2026-01-10
 
 ### Fixed
-- **Installer now downloads utility binaries** ([#14](https://github.com/777genius/claude-notifications-go/issues/14))
+- **Installer now downloads utility binaries** ([#14](https://github.com/777genius/agent-notifications/issues/14))
   - `sound-preview` and `list-devices` were missing after `/claude-notifications-go:notifications-init`
   - Installer script now downloads all three binaries
   - Creates proper symlinks for all utilities
@@ -577,7 +617,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.6.6] - 2026-01-10
 
 ### Fixed
-- **Ghost notifications after 60 seconds** 👻 ([#11](https://github.com/777genius/claude-notifications-go/issues/11))
+- **Ghost notifications after 60 seconds** 👻 ([#11](https://github.com/777genius/agent-notifications/issues/11))
   - `idle_prompt` hook was firing 60 seconds after `PreToolUse(AskUserQuestion)`
   - This caused duplicate "Question" notifications with delay
   - Now Notification hook only responds to `permission_prompt`, ignoring `idle_prompt`
@@ -698,7 +738,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.2.1] - 2025-12-14
 
 ### Fixed
-- **Webhook notifications never sent** ([#6](https://github.com/777genius/claude-notifications-go/issues/6))
+- **Webhook notifications never sent** ([#6](https://github.com/777genius/agent-notifications/issues/6))
   - `Shutdown()` now waits for in-flight HTTP requests to complete before exit
   - Added `defer webhookSvc.Shutdown(5s)` to `HandleHook()` for graceful shutdown
   - Previously: `cancel()` was called immediately, interrupting HTTP requests
@@ -852,6 +892,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Question notification cooldown system
 - Cross-platform path normalization
 
-[1.0.2]: https://github.com/777genius/claude-notifications-go/compare/v1.0.1...v1.0.2
-[1.0.1]: https://github.com/777genius/claude-notifications-go/compare/v1.0.0...v1.0.1
-[1.0.0]: https://github.com/777genius/claude-notifications-go/releases/tag/v1.0.0
+[1.0.2]: https://github.com/777genius/agent-notifications/compare/v1.0.1...v1.0.2
+[1.0.1]: https://github.com/777genius/agent-notifications/compare/v1.0.0...v1.0.1
+[1.0.0]: https://github.com/777genius/agent-notifications/releases/tag/v1.0.0

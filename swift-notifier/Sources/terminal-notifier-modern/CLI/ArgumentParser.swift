@@ -142,4 +142,12 @@ enum ArgumentParser {
     static func isSendMode(_ arguments: [String]) -> Bool {
         return arguments.contains("-title")
     }
+
+    /// Recognizes only a standalone help invocation (`-help` or `--help` as the
+    /// sole argument). This avoids false positives when `-help`/`--help` is
+    /// passed as the *value* of `-title`/`-message`/etc. in a real send invocation.
+    static func isHelpRequest(_ arguments: [String]) -> Bool {
+        guard arguments.count == 1 else { return false }
+        return arguments[0] == "-help" || arguments[0] == "--help"
+    }
 }

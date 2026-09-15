@@ -88,3 +88,6 @@ build/
 .augment/rules/byterover-rules.md
 
 .build/
+# Local Go workspace for cross-repo development; CI resolves go.mod.
+go.work
+go.work.sum

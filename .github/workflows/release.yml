@@ -38,8 +38,9 @@ jobs:
             fi
           }
 
-          check_version "Go binary" "$(sed -n 's/^const version = "\([^"]*\)"$/\1/p' cmd/claude-notifications/main.go)"
+          check_version "Go binary" "$(sed -n 's/^var ConsumerVersion = "\([^"]*\)"$/\1/p' internal/config/runtime.go)"
           check_version "Plugin manifest" "$(jq -er '.version' .claude-plugin/plugin.json)"
+          check_version "Codex plugin manifest" "$(jq -er '.version' .codex-plugin/plugin.json)"
           check_version "Marketplace metadata" "$(jq -er '.metadata.version' .claude-plugin/marketplace.json)"
           check_version "Marketplace plugin" "$(jq -er '.plugins[] | select(.name == "claude-notifications-go") | .version' .claude-plugin/marketplace.json)"
 
@@ -220,7 +221,7 @@ jobs:
           retention-days: 1
 
   create-release:
-    name: Create GitHub Release
+    name: Prepare draft GitHub Release
     needs: [build-matrix, build-notifier, test-binaries]
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -253,7 +254,7 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           files: dist/*
-          draft: false
+          draft: true
           prerelease: false
           generate_release_notes: true
         env:
@@ -291,6 +292,14 @@ jobs:
             binary: claude-notifications-windows-amd64.exe
 
     steps:
+      - name: Checkout artifact qualification tests
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
       - name: Download binary artifacts
         uses: actions/download-artifact@v8
         with:
@@ -341,4 +350,10 @@ jobs:
           list_sounds="${MAIN_BINARY/claude-notifications/list-sounds}"
           "./dist/$sound_preview" --help
           "./dist/$list_sounds" --help
+        shell: bash
+
+      - name: Qualify configuration and notification delivery
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python scripts/release-artifact-e2e.py --binary "dist/${{ matrix.binary }}" --version "$RELEASE_TAG"
         shell: bash

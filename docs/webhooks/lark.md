@@ -1,5 +1,8 @@
 # Lark/Feishu Webhook Integration
 
+Use the installed config-capable executable as `$NOTIFICATIONS_BIN`. Locate settings with `config path` and use [revision-checked leaf edits](../../commands/settings.md). JSON examples below illustrate fields, not whole-file replacements. Keep unrequested fields and literal environment templates unchanged. `config inspect --json` is the safe support output; it intentionally omits URLs, headers, payloads, free-form sounds and unknown fields. Never share raw config or assume omitted values are unset. Keep diagnostic files private and review logs for credentials before sharing.
+
+
 Send Claude Code notifications to Lark (飞书) with rich interactive cards.
 
 ## Overview
@@ -15,7 +18,7 @@ Lark is the international version of Feishu (ByteDance's enterprise collaboratio
 1. Open Lark and go to your target group chat
 2. Click **Group Settings** (gear icon) → **Add Bot** → **Custom Bot**
 3. For Feishu (Chinese version), click **群设置** → **群机器人** → **添加机器人** → **自定义机器人**
-4. Give your bot a name (e.g., "Claude Notifications")
+4. Give your bot a name (e.g., "Agent Notifications")
 5. Upload an avatar (optional)
 6. Click **Add** / **添加**
 
@@ -34,7 +37,7 @@ https://open.larksuite.com/open-apis/bot/v2/hook/XXXXXXXXXXXXXXXXXXXX
 
 ### 3. Configure Plugin
 
-Edit `~/.claude/claude-notifications-go/config.json`:
+Edit the shared file selected by `config path`:
 
 ```json
 {
@@ -199,7 +202,7 @@ Messages use Lark's **Interactive Card API**:
 
 3. **Verify config:**
    ```bash
-   cat ~/.claude/claude-notifications-go/config.json | grep -A 5 "webhook"
+   "$NOTIFICATIONS_BIN" config inspect --json
    ```
 
 ### Wrong Group
@@ -248,7 +251,7 @@ Both platforms use the same webhook API format. This plugin works with both.
 
 ## Best Practices
 
-1. **Use dedicated groups** - Create a "Claude Notifications" group
+1. **Use dedicated groups** - Create an "Agent Notifications" group
 2. **One bot per group** - Don't reuse bots across projects
 3. **Secure your URL** - Never commit webhook URLs to git
 4. **Enable retry** - Handle transient network failures

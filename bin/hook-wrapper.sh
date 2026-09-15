@@ -144,6 +144,10 @@ run_install() {
 # === Main Logic ===
 
 STAMP_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/claude-notifications-go"
+# Keep every Codex stamp write out of the legacy Claude cache.
+if [ "${CN_PRODUCT:-claude}" = "codex" ]; then
+    STAMP_DIR="$STAMP_DIR/codex"
+fi
 VERSION_CACHE="$STAMP_DIR/verified-version"
 
 NEED_INSTALL=0
@@ -160,7 +164,11 @@ else
     CACHED_VER=""
     [ -f "$VERSION_CACHE" ] && IFS= read -r CACHED_VER < "$VERSION_CACHE" 2>/dev/null
 
-    if [ -n "$PLG_VER" ] && [ "$CACHED_VER" = "$PLG_VER" ]; then
+    # The version cache is shared across plugin roots (keyed by version only),
+    # so the Codex route always queries the real binary: a cache hit earned by
+    # the Claude root must not let the old-binary guard trust a stale binary
+    # sitting in the Codex root.
+    if [ "${CN_PRODUCT:-claude}" = "claude" ] && [ -n "$PLG_VER" ] && [ "$CACHED_VER" = "$PLG_VER" ]; then
         # Cache hit — skip binary version check
         BIN_VER="$PLG_VER"
     else
@@ -223,6 +231,20 @@ if [ "$NEED_INSTALL" = 1 ]; then
     fi
 fi
 
+# Compare dotted numeric versions: succeeds when $1 >= $2.
+version_ge() {
+    [ -n "$1" ] && [ -n "$2" ] || return 1
+    _a1=$(printf '%s' "$1" | cut -d. -f1); _a2=$(printf '%s' "$1" | cut -d. -f2); _a3=$(printf '%s' "$1" | cut -d. -f3)
+    _b1=$(printf '%s' "$2" | cut -d. -f1); _b2=$(printf '%s' "$2" | cut -d. -f2); _b3=$(printf '%s' "$2" | cut -d. -f3)
+    _a1=${_a1:-0}; _a2=${_a2:-0}; _a3=${_a3:-0}; _b1=${_b1:-0}; _b2=${_b2:-0}; _b3=${_b3:-0}
+    case "$_a1$_a2$_a3$_b1$_b2$_b3" in *[!0-9]*) return 1 ;; esac
+    [ "$_a1" -gt "$_b1" ] && return 0
+    [ "$_a1" -lt "$_b1" ] && return 1
+    [ "$_a2" -gt "$_b2" ] && return 0
+    [ "$_a2" -lt "$_b2" ] && return 1
+    [ "$_a3" -ge "$_b3" ]
+}
+
 # Run hook or exit gracefully
 if binary_ok; then
     # Export plugin root so the binary can find ClaudeNotifier.app and other resources
@@ -231,24 +253,45 @@ if binary_ok; then
     fi
     export CLAUDE_PLUGIN_ROOT
 
-    # Persist a stable pointer to the current plugin root outside the plugin cache.
-    # This is a best-effort fallback for older cached paths and for shim wrappers.
-    _CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-${CLAUDE_HOME:-$HOME/.claude}}"
-    if [ -z "$_CLAUDE_HOME" ]; then
-        _CLAUDE_HOME="$HOME/.claude"
+    # Claude-only side effects. The Codex route (CN_PRODUCT=codex, set by
+    # bin/codex-hook-wrapper.sh) must never write under ~/.claude: alternating
+    # Claude/Codex plugin caches would ping-pong the pointer file and corrupt
+    # the fallback consumed by old-version shims (bin/bootstrap.sh).
+    if [ "${CN_PRODUCT:-claude}" = "claude" ]; then
+        # Persist a stable pointer to the current plugin root outside the plugin cache.
+        # This is a best-effort fallback for older cached paths and for shim wrappers.
+        _CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-${CLAUDE_HOME:-$HOME/.claude}}"
+        if [ -z "$_CLAUDE_HOME" ]; then
+            _CLAUDE_HOME="$HOME/.claude"
+        fi
+        _PTR_DIR="$_CLAUDE_HOME/claude-notifications-go"
+        _PTR_FILE="$_PTR_DIR/plugin-root"
+        mkdir -p "$_PTR_DIR" >/dev/null 2>&1 || true
+        _PREV_PTR=""
+        if [ -f "$_PTR_FILE" ]; then
+            IFS= read -r _PREV_PTR < "$_PTR_FILE" 2>/dev/null || true
+        fi
+        if [ "$_PREV_PTR" != "$CLAUDE_PLUGIN_ROOT" ]; then
+            _TMP_PTR="$_PTR_FILE.tmp.$$"
+            printf '%s\n' "$CLAUDE_PLUGIN_ROOT" > "$_TMP_PTR" 2>/dev/null && \
+                mv "$_TMP_PTR" "$_PTR_FILE" 2>/dev/null || true
+            rm -f "$_TMP_PTR" 2>/dev/null || true
+        fi
     fi
-    _PTR_DIR="$_CLAUDE_HOME/claude-notifications-go"
-    _PTR_FILE="$_PTR_DIR/plugin-root"
-    mkdir -p "$_PTR_DIR" >/dev/null 2>&1 || true
-    _PREV_PTR=""
-    if [ -f "$_PTR_FILE" ]; then
-        IFS= read -r _PREV_PTR < "$_PTR_FILE" 2>/dev/null || true
-    fi
-    if [ "$_PREV_PTR" != "$CLAUDE_PLUGIN_ROOT" ]; then
-        _TMP_PTR="$_PTR_FILE.tmp.$$"
-        printf '%s\n' "$CLAUDE_PLUGIN_ROOT" > "$_TMP_PTR" 2>/dev/null && \
-            mv "$_TMP_PTR" "$_PTR_FILE" 2>/dev/null || true
-        rm -f "$_TMP_PTR" 2>/dev/null || true
+
+    # Codex route guard: binaries older than the first Codex-capable release
+    # dispatch handle-hook on the event name alone and silently ignore
+    # "--product codex", which would misroute the Codex payload into the
+    # Claude decoder. If the install above could not produce a new-enough
+    # binary, exit silently instead of running the wrong route.
+    if [ "${CN_PRODUCT:-claude}" = "codex" ] && [ -n "${CN_CODEX_MIN_VERSION:-}" ]; then
+        _CODEX_BIN_VER="${NEW_VER:-${BIN_VER:-}}"
+        if [ -z "$_CODEX_BIN_VER" ]; then
+            _CODEX_BIN_VER=$(get_binary_version)
+        fi
+        if ! version_ge "$_CODEX_BIN_VER" "$CN_CODEX_MIN_VERSION"; then
+            exit 0
+        fi
     fi
 
     run_binary "$@" || true

@@ -49,6 +49,10 @@
     "api_error_overloaded": {
       "title": "🔴 API Error",
       "sound": "${CLAUDE_PLUGIN_ROOT}/sounds/question.mp3"
+    },
+    "permission_request": {
+      "title": "🔐 Permission Request",
+      "sound": "${CLAUDE_PLUGIN_ROOT}/sounds/question.mp3"
     }
   }
 }

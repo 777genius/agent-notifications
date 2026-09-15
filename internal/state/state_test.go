@@ -7,16 +7,25 @@ import (
 	"testing"
 	"time"
 
-	"github.com/777genius/claude-notifications/internal/analyzer"
-	"github.com/777genius/claude-notifications/internal/platform"
+	"github.com/777genius/agent-notifications/internal/analyzer"
+	"github.com/777genius/agent-notifications/internal/platform"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+// Each test owns its state directory. Other packages may clean test-session
+// files in the system temp directory while go test runs packages concurrently.
+func newTestManager(t *testing.T) *Manager {
+	t.Helper()
+	mgr := NewManager()
+	mgr.tempDir = t.TempDir()
+	return mgr
+}
+
 // === Load/Save/Delete Tests ===
 
 func TestManager_LoadNonExistent(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 
 	state, err := mgr.Load("non-existent-session")
 	require.NoError(t, err)
@@ -24,7 +33,7 @@ func TestManager_LoadNonExistent(t *testing.T) {
 }
 
 func TestManager_SaveAndLoad(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 	sessionID := "test-session-save-load"
 
 	// Clean up after test
@@ -54,7 +63,7 @@ func TestManager_SaveAndLoad(t *testing.T) {
 }
 
 func TestManager_Delete(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 	sessionID := "test-session-delete"
 
 	// Save state
@@ -78,7 +87,7 @@ func TestManager_Delete(t *testing.T) {
 }
 
 func TestManager_DeleteNonExistent(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 
 	// Should not error when deleting non-existent state
 	err := mgr.Delete("non-existent")
@@ -88,7 +97,7 @@ func TestManager_DeleteNonExistent(t *testing.T) {
 // === UpdateInteractiveTool Tests ===
 
 func TestManager_UpdateInteractiveTool_NewState(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 	sessionID := "test-interactive-new"
 	defer func() { _ = mgr.Delete(sessionID) }()
 
@@ -107,7 +116,7 @@ func TestManager_UpdateInteractiveTool_NewState(t *testing.T) {
 }
 
 func TestManager_UpdateInteractiveTool_ExistingState(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 	sessionID := "test-interactive-existing"
 	defer func() { _ = mgr.Delete(sessionID) }()
 
@@ -136,7 +145,7 @@ func TestManager_UpdateInteractiveTool_ExistingState(t *testing.T) {
 }
 
 func TestManager_UpdateGhosttyTerminalID_PreservesExistingFields(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 	sessionID := "test-ghostty-terminal-id"
 	defer func() { _ = mgr.Delete(sessionID) }()
 
@@ -163,7 +172,7 @@ func TestManager_UpdateGhosttyTerminalID_PreservesExistingFields(t *testing.T) {
 // === UpdateTaskComplete Tests ===
 
 func TestManager_UpdateTaskComplete_NewState(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 	sessionID := "test-task-new"
 	defer func() { _ = mgr.Delete(sessionID) }()
 
@@ -180,7 +189,7 @@ func TestManager_UpdateTaskComplete_NewState(t *testing.T) {
 }
 
 func TestManager_UpdateTaskComplete_ExistingState(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 	sessionID := "test-task-existing"
 	defer func() { _ = mgr.Delete(sessionID) }()
 
@@ -209,7 +218,7 @@ func TestManager_UpdateTaskComplete_ExistingState(t *testing.T) {
 // === UpdateLastNotification Tests ===
 
 func TestManager_UpdateLastNotification_NewState(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 	sessionID := "test-notif-new"
 	defer func() { _ = mgr.Delete(sessionID) }()
 
@@ -228,7 +237,7 @@ func TestManager_UpdateLastNotification_NewState(t *testing.T) {
 }
 
 func TestManager_UpdateLastNotification_ExistingState(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 	sessionID := "test-notif-existing"
 	defer func() { _ = mgr.Delete(sessionID) }()
 
@@ -259,7 +268,7 @@ func TestManager_UpdateLastNotification_ExistingState(t *testing.T) {
 // === ShouldSuppressQuestion Tests ===
 
 func TestManager_ShouldSuppressQuestion_NoState(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 
 	suppress, err := mgr.ShouldSuppressQuestion("non-existent", 5)
 	require.NoError(t, err)
@@ -267,7 +276,7 @@ func TestManager_ShouldSuppressQuestion_NoState(t *testing.T) {
 }
 
 func TestManager_ShouldSuppressQuestion_NoTaskCompleteTime(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 	sessionID := "test-suppress-no-time"
 	defer func() { _ = mgr.Delete(sessionID) }()
 
@@ -282,7 +291,7 @@ func TestManager_ShouldSuppressQuestion_NoTaskCompleteTime(t *testing.T) {
 }
 
 func TestManager_ShouldSuppressQuestion_WithinCooldown(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 	sessionID := "test-suppress-within"
 	defer func() { _ = mgr.Delete(sessionID) }()
 
@@ -301,7 +310,7 @@ func TestManager_ShouldSuppressQuestion_WithinCooldown(t *testing.T) {
 }
 
 func TestManager_ShouldSuppressQuestion_OutsideCooldown(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 	sessionID := "test-suppress-outside"
 	defer func() { _ = mgr.Delete(sessionID) }()
 
@@ -320,7 +329,7 @@ func TestManager_ShouldSuppressQuestion_OutsideCooldown(t *testing.T) {
 }
 
 func TestManager_ShouldSuppressQuestion_ZeroCooldown(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 	sessionID := "test-suppress-zero"
 	defer func() { _ = mgr.Delete(sessionID) }()
 
@@ -339,7 +348,7 @@ func TestManager_ShouldSuppressQuestion_ZeroCooldown(t *testing.T) {
 }
 
 func TestManager_ShouldSuppressQuestion_NegativeCooldown(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 
 	suppress, err := mgr.ShouldSuppressQuestion("any-session", -5)
 	require.NoError(t, err)
@@ -349,7 +358,7 @@ func TestManager_ShouldSuppressQuestion_NegativeCooldown(t *testing.T) {
 // === ShouldSuppressQuestionAfterAnyNotification Tests ===
 
 func TestManager_ShouldSuppressAfterAny_NoState(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 
 	suppress, err := mgr.ShouldSuppressQuestionAfterAnyNotification("non-existent", 5)
 	require.NoError(t, err)
@@ -357,7 +366,7 @@ func TestManager_ShouldSuppressAfterAny_NoState(t *testing.T) {
 }
 
 func TestManager_ShouldSuppressAfterAny_NoNotificationTime(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 	sessionID := "test-suppress-any-no-time"
 	defer func() { _ = mgr.Delete(sessionID) }()
 
@@ -371,7 +380,7 @@ func TestManager_ShouldSuppressAfterAny_NoNotificationTime(t *testing.T) {
 }
 
 func TestManager_ShouldSuppressAfterAny_WithinCooldown(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 	sessionID := "test-suppress-any-within"
 	defer func() { _ = mgr.Delete(sessionID) }()
 
@@ -388,7 +397,7 @@ func TestManager_ShouldSuppressAfterAny_WithinCooldown(t *testing.T) {
 }
 
 func TestManager_ShouldSuppressAfterAny_OutsideCooldown(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 	sessionID := "test-suppress-any-outside"
 	defer func() { _ = mgr.Delete(sessionID) }()
 
@@ -407,7 +416,7 @@ func TestManager_ShouldSuppressAfterAny_OutsideCooldown(t *testing.T) {
 // === UpdateState Tests ===
 
 func TestManager_UpdateState_TaskComplete(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 	sessionID := "test-update-task"
 	defer func() { _ = mgr.Delete(sessionID) }()
 
@@ -420,7 +429,7 @@ func TestManager_UpdateState_TaskComplete(t *testing.T) {
 }
 
 func TestManager_UpdateState_PlanReady(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 	sessionID := "test-update-plan"
 	defer func() { _ = mgr.Delete(sessionID) }()
 
@@ -434,7 +443,7 @@ func TestManager_UpdateState_PlanReady(t *testing.T) {
 }
 
 func TestManager_UpdateState_Question(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 	sessionID := "test-update-question"
 	defer func() { _ = mgr.Delete(sessionID) }()
 
@@ -447,7 +456,7 @@ func TestManager_UpdateState_Question(t *testing.T) {
 }
 
 func TestManager_UpdateState_UnknownStatus(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 	sessionID := "test-update-unknown"
 	defer func() { _ = mgr.Delete(sessionID) }()
 
@@ -461,7 +470,7 @@ func TestManager_UpdateState_UnknownStatus(t *testing.T) {
 }
 
 func TestManager_UpdateState_QuestionWithoutTool(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 	sessionID := "test-update-question-no-tool"
 	defer func() { _ = mgr.Delete(sessionID) }()
 
@@ -477,7 +486,7 @@ func TestManager_UpdateState_QuestionWithoutTool(t *testing.T) {
 // === Cleanup Tests ===
 
 func TestManager_Cleanup_OldFiles(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 	mgr.tempDir = t.TempDir()
 
 	// Create two state files
@@ -515,7 +524,7 @@ func TestManager_Cleanup_OldFiles(t *testing.T) {
 }
 
 func TestManager_Cleanup_EmptyDirectory(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 	mgr.tempDir = t.TempDir()
 
 	// Should not error on empty directory
@@ -526,7 +535,7 @@ func TestManager_Cleanup_EmptyDirectory(t *testing.T) {
 // === Integration Tests ===
 
 func TestManager_FullWorkflow(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 	sessionID := "test-workflow"
 	defer func() { _ = mgr.Delete(sessionID) }()
 
@@ -566,7 +575,7 @@ func TestManager_FullWorkflow(t *testing.T) {
 }
 
 func TestManager_StateFilePath(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 	sessionID := "test-abc-123"
 
 	path := mgr.getStatePath(sessionID)
@@ -583,7 +592,7 @@ func TestManager_StateFilePath(t *testing.T) {
 }
 
 func TestLoad_InvalidJSON(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 	sessionID := "test-invalid-json"
 
 	// Create a file with invalid JSON
@@ -633,7 +642,7 @@ func TestDelete_PermissionDenied(t *testing.T) {
 // === IsDuplicateMessage Tests ===
 
 func TestManager_IsDuplicateMessage_NoState(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 
 	isDuplicate, err := mgr.IsDuplicateMessage("non-existent", "test message", 180)
 	require.NoError(t, err)
@@ -641,7 +650,7 @@ func TestManager_IsDuplicateMessage_NoState(t *testing.T) {
 }
 
 func TestManager_IsDuplicateMessage_SameMessage(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 	sessionID := "test-duplicate-same"
 	defer func() { _ = mgr.Delete(sessionID) }()
 
@@ -656,7 +665,7 @@ func TestManager_IsDuplicateMessage_SameMessage(t *testing.T) {
 }
 
 func TestManager_IsDuplicateMessage_NormalizedDots(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 	sessionID := "test-duplicate-dots"
 	defer func() { _ = mgr.Delete(sessionID) }()
 
@@ -671,7 +680,7 @@ func TestManager_IsDuplicateMessage_NormalizedDots(t *testing.T) {
 }
 
 func TestManager_IsDuplicateMessage_NormalizedCase(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 	sessionID := "test-duplicate-case"
 	defer func() { _ = mgr.Delete(sessionID) }()
 
@@ -686,7 +695,7 @@ func TestManager_IsDuplicateMessage_NormalizedCase(t *testing.T) {
 }
 
 func TestManager_IsDuplicateMessage_DifferentMessage(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 	sessionID := "test-duplicate-diff"
 	defer func() { _ = mgr.Delete(sessionID) }()
 
@@ -701,7 +710,7 @@ func TestManager_IsDuplicateMessage_DifferentMessage(t *testing.T) {
 }
 
 func TestManager_IsDuplicateMessage_ZeroWindow(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 	sessionID := "test-duplicate-zero"
 	defer func() { _ = mgr.Delete(sessionID) }()
 
@@ -716,7 +725,7 @@ func TestManager_IsDuplicateMessage_ZeroWindow(t *testing.T) {
 }
 
 func TestManager_IsDuplicateMessage_EmptyLastMessage(t *testing.T) {
-	mgr := NewManager()
+	mgr := newTestManager(t)
 	sessionID := "test-duplicate-empty"
 	defer func() { _ = mgr.Delete(sessionID) }()
 

@@ -1,6 +1,18 @@
 # Contributing
 
-Thank you for your interest in contributing to Claude Notifications!
+Thank you for your interest in contributing to Agent Notifications!
+
+## Contributor License Agreement
+
+You keep copyright in what you write.
+
+GitHub's Terms of Service already license a pull request under the repository license, which is GPL-3.0-or-later. That is not enough if the project later needs Apache-2.0 or a commercial license that includes your work.
+
+This CLA keeps your copyright and grants the project owner a transferable license to sublicense that work, including commercially, while still keeping the GPL-3.0-or-later grant that applied when you submitted it. Read [.github/CLA.md](.github/CLA.md).
+
+Sign before we merge: add your legal name, GitHub login, email, and date to the **CLA signatures** table in the same PR or in a first-time CLA-only PR. Use the GitHub account that will author the commits. Every human listed in `Co-authored-by` trailers must also be on the table. If a company owns the work, the row must name that entity.
+
+Maintainers: do not merge a human contribution until every human author is on the CLA signatures table. Bots such as Dependabot do not sign.
 
 ## Prerequisites
 
@@ -13,8 +25,8 @@ Thank you for your interest in contributing to Claude Notifications!
 ### 1. Clone and build
 
 ```bash
-git clone https://github.com/777genius/claude-notifications-go
-cd claude-notifications-go
+git clone https://github.com/777genius/agent-notifications
+cd agent-notifications
 make build
 ```
 
@@ -170,4 +182,4 @@ See **[Release Checklist](docs/RELEASE.md)** for the full step-by-step guide.
 
 ## Reporting Issues
 
-Found a bug or have a feature request? [Open an issue](https://github.com/777genius/claude-notifications-go/issues).
+Found a bug or have a feature request? [Open an issue](https://github.com/777genius/agent-notifications/issues).

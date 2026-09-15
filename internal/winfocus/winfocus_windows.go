@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"unsafe"
 
+	"github.com/777genius/agent-notifications/internal/warpfocus"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
@@ -189,26 +190,30 @@ func CaptureFocusContext(cwd string) (FocusContext, bool) {
 	// that shared PID owns windows for other projects too.
 	fg, _, _ := procGetForegroundWindow.Call()
 
+	ctx := FocusContext{
+		Folder:  folder,
+		WarpURL: warpfocus.FromEnv(),
+	}
+
 	pid := windows.GetCurrentProcessId()
 	seen := map[uint32]bool{}
 	for i := 0; i < 32 && pid != 0 && !seen[pid]; i++ {
 		seen[pid] = true
 
 		if hwnd := windowForPID(list, pid, folder, fg); hwnd != 0 {
-			return FocusContext{
-				HWND:   int64(hwnd),
-				PID:    pid,
-				Title:  windowText(hwnd),
-				Folder: folder,
-			}, true
+			ctx.HWND = int64(hwnd)
+			ctx.PID = pid
+			ctx.Title = windowText(hwnd)
+			return ctx, true
 		}
 		pid = parents[pid]
 	}
 
 	// No ancestor owns a window (fully detached hook). Still hand back a
 	// folder-only context so the click handler can attempt a title match.
-	if folder != "" {
-		return FocusContext{Folder: folder}, true
+	// A Warp session URL is enough on its own to focus the originating pane.
+	if ctx.HasTarget() {
+		return ctx, true
 	}
 	return FocusContext{}, false
 }
@@ -249,6 +254,11 @@ func HideConsole() {
 
 // Focus raises the terminal window described by ctx to the foreground.
 func Focus(ctx FocusContext) error {
+	if url := warpfocus.Normalize(ctx.WarpURL); url != "" {
+		if err := warpfocus.Open(url); err == nil {
+			return nil
+		}
+	}
 	hwnd := resolveWindow(ctx)
 	if hwnd == 0 {
 		return fmt.Errorf("winfocus: no matching window for %+v", ctx)
@@ -349,7 +359,7 @@ func RegisterProtocolHandler(exe string) error {
 		return err
 	}
 	defer root.Close()
-	if err := root.SetStringValue("", "URL:Claude Notifications Focus"); err != nil {
+	if err := root.SetStringValue("", "URL:Agent Notifications Focus"); err != nil {
 		return err
 	}
 	if err := root.SetStringValue("URL Protocol", ""); err != nil {

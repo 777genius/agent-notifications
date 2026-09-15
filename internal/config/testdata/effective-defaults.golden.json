@@ -1,0 +1,84 @@
+{
+  "notifications": {
+    "desktop": {
+      "enabled": true,
+      "sound": true,
+      "terminalBell": null,
+      "volume": 1,
+      "audioDevice": "",
+      "appIcon": "ASSET_ROOT/claude_icon.png",
+      "clickToFocus": true,
+      "showSessionLabel": null,
+      "terminalBundleId": ""
+    },
+    "webhook": {
+      "enabled": false,
+      "preset": "slack",
+      "url": "",
+      "chat_id": "",
+      "format": "json",
+      "headers": {},
+      "retry": {
+        "enabled": true,
+        "maxAttempts": 3,
+        "initialBackoff": "1s",
+        "maxBackoff": "10s"
+      },
+      "circuitBreaker": {
+        "enabled": true,
+        "failureThreshold": 5,
+        "timeout": "30s",
+        "successThreshold": 2
+      },
+      "rateLimit": {
+        "enabled": true,
+        "requestsPerMinute": 10
+      }
+    },
+    "suppressQuestionAfterTaskCompleteSeconds": 12,
+    "suppressQuestionAfterAnyNotificationSeconds": 7,
+    "notifyOnSubagentStop": false,
+    "suppressForSubagents": true,
+    "notifyOnTextResponse": null,
+    "respectJudgeMode": null,
+    "notifyOnlyWhenUnfocused": null,
+    "notifyDelaySeconds": null
+  },
+  "statuses": {
+    "api_error": {
+      "title": "🔴 API Error: 401",
+      "sound": "ASSET_ROOT/sounds/question.mp3"
+    },
+    "api_error_overloaded": {
+      "title": "🔴 API Error",
+      "sound": "ASSET_ROOT/sounds/question.mp3"
+    },
+    "permission_request": {
+      "title": "🔐 Permission Request",
+      "sound": "ASSET_ROOT/sounds/question.mp3"
+    },
+    "plan_ready": {
+      "title": "📋 Plan",
+      "sound": "ASSET_ROOT/sounds/plan-ready.mp3"
+    },
+    "question": {
+      "title": "❓ Question",
+      "sound": "ASSET_ROOT/sounds/question.mp3"
+    },
+    "review_complete": {
+      "title": "🔍 Review",
+      "sound": "ASSET_ROOT/sounds/review-complete.mp3"
+    },
+    "session_limit_reached": {
+      "title": "⏱️ Session Limit Reached",
+      "sound": "ASSET_ROOT/sounds/question.mp3"
+    },
+    "task_complete": {
+      "title": "✅ Completed",
+      "sound": "ASSET_ROOT/sounds/task-complete.mp3"
+    }
+  },
+  "debug": {
+    "benchmark": false
+  }
+}

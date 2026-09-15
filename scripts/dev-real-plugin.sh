@@ -10,7 +10,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 MARKETPLACE_NAME="claude-notifications-go"
 PLUGIN_NAME="claude-notifications-go"
 PLUGIN_KEY="${PLUGIN_NAME}@${MARKETPLACE_NAME}"
-REMOTE_REPO="777genius/claude-notifications-go"
+REMOTE_REPO="777genius/agent-notifications"
 
 REAL_CLAUDE_HOME="${REAL_CLAUDE_HOME:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}"
 

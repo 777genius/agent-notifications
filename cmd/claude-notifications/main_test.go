@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"github.com/777genius/agent-notifications/internal/testenv"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -84,6 +85,25 @@ func TestLazyUpdateQuoting(t *testing.T) {
 	}
 	if got, want := powershellSingleQuoted(`C:\Users\O'Brien\bash.exe`), `'C:\Users\O''Brien\bash.exe'`; got != want {
 		t.Fatalf("powershellSingleQuoted() = %q, want %q", got, want)
+	}
+}
+
+func TestWindowsLazyUpdateCommandUsesThreadSleep(t *testing.T) {
+	command := windowsLazyUpdatePowerShellCommand(`C:\Program Files\Git\bin\bash.exe`, `echo ok`)
+
+	if strings.Contains(command, `Start-Sleep`) {
+		t.Fatalf("lazy update command uses Start-Sleep: %s", command)
+	}
+	for _, want := range []string{
+		`[System.Threading.Thread]::Sleep(750)`,
+		`for ($i = 0; $i -lt 6; $i++)`,
+		`& 'C:\Program Files\Git\bin\bash.exe' -lc 'echo ok'`,
+		`if ($LASTEXITCODE -eq 0) { break }`,
+		`[System.Threading.Thread]::Sleep(5000)`,
+	} {
+		if !strings.Contains(command, want) {
+			t.Fatalf("lazy update command missing %q: %s", want, command)
+		}
 	}
 }
 
@@ -211,9 +231,7 @@ func withIsolatedLazyUpdateGlobals(t *testing.T) {
 	t.Helper()
 
 	root := t.TempDir()
-	t.Setenv("HOME", root)
-	t.Setenv("XDG_CACHE_HOME", filepath.Join(root, ".cache"))
-	t.Setenv("LOCALAPPDATA", filepath.Join(root, "LocalAppData"))
+	testenv.Set(t, root)
 
 	oldGOOS := currentGOOS
 	oldSchedule := scheduleWindowsLazyUpdate

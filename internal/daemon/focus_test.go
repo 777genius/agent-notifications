@@ -108,3 +108,33 @@ func TestSplitWindowIDs_TrimsBlankLines(t *testing.T) {
 		t.Errorf("splitWindowIDs() = %#v, want %#v", got, want)
 	}
 }
+
+func TestTryFocusWithHints_WarpURLShortCircuits(t *testing.T) {
+	const hex = "6b7be92641ae8ced80188a4d87e4b200"
+	opened := ""
+	orig := openFocusURL
+	t.Cleanup(func() { openFocusURL = orig })
+	openFocusURL = func(url string) error {
+		opened = url
+		return nil
+	}
+
+	if err := TryFocusWithHints(FocusHints{TerminalName: "WarpTerminal", FolderName: "proj", WarpFocusURL: "warp://session/" + hex}); err != nil {
+		t.Fatalf("TryFocusWithHints: %v", err)
+	}
+	if opened != "warp://session/"+hex {
+		t.Fatalf("opened %q, want warp session URL", opened)
+	}
+}
+
+func TestTryFocusWithHints_RejectsNonSessionWarpURL(t *testing.T) {
+	orig := openFocusURL
+	t.Cleanup(func() { openFocusURL = orig })
+	openFocusURL = func(url string) error {
+		t.Fatalf("should not open non-session Warp URL %q", url)
+		return nil
+	}
+
+	// Invalid URL must fall through to the compositor chain instead of xdg-open.
+	_ = TryFocusWithHints(FocusHints{TerminalName: "WarpTerminal", FolderName: "proj", WarpFocusURL: "warp://action/new_tab"})
+}

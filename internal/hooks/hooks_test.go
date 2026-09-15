@@ -3,32 +3,28 @@ package hooks
 import (
 	"encoding/json"
 	"errors"
+	"github.com/777genius/agent-notifications/internal/testenv"
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/777genius/claude-notifications/internal/analyzer"
-	"github.com/777genius/claude-notifications/internal/config"
-	"github.com/777genius/claude-notifications/internal/dedup"
-	"github.com/777genius/claude-notifications/internal/state"
-	"github.com/777genius/claude-notifications/internal/teamstate"
-	"github.com/777genius/claude-notifications/internal/webhook"
-	"github.com/777genius/claude-notifications/pkg/jsonl"
+	"github.com/777genius/agent-notifications/internal/analyzer"
+	"github.com/777genius/agent-notifications/internal/config"
+	"github.com/777genius/agent-notifications/internal/dedup"
+	"github.com/777genius/agent-notifications/internal/state"
+	"github.com/777genius/agent-notifications/internal/teamstate"
+	"github.com/777genius/agent-notifications/internal/webhook"
+	"github.com/777genius/agent-notifications/pkg/jsonl"
 )
 
-// setTestHome sets HOME (and USERPROFILE on Windows) so that
-// os.UserHomeDir() returns the given directory on all platforms.
+// setTestHome isolates all configuration, metadata and temporary paths.
 func setTestHome(t *testing.T, dir string) {
 	t.Helper()
-	t.Setenv("HOME", dir)
-	if runtime.GOOS == "windows" {
-		t.Setenv("USERPROFILE", dir)
-	}
+	testenv.Set(t, dir)
 }
 
 // === Mock Notifier ===
@@ -1142,6 +1138,7 @@ func TestNewHandler_Success(t *testing.T) {
 	}
 
 	// Create handler
+	t.Setenv("AGENT_NOTIFICATIONS_CONFIG", configPath)
 	handler, err := NewHandler(tmpDir)
 
 	if err != nil {
@@ -1234,6 +1231,7 @@ func TestNewHandler_InvalidConfig(t *testing.T) {
 	}
 
 	// NewHandler should fail validation
+	t.Setenv("AGENT_NOTIFICATIONS_CONFIG", configPath)
 	handler, err := NewHandler(tmpDir)
 
 	if err == nil {
@@ -1244,7 +1242,7 @@ func TestNewHandler_InvalidConfig(t *testing.T) {
 		t.Error("expected handler to be nil on validation error")
 	}
 
-	if !strings.Contains(err.Error(), "invalid config") {
+	if !strings.Contains(err.Error(), "ConfigInvalid") {
 		t.Errorf("unexpected error message: %v", err)
 	}
 }
@@ -1268,23 +1266,11 @@ func TestNewHandler_MalformedJSON(t *testing.T) {
 		t.Fatalf("failed to write config: %v", err)
 	}
 
-	// Malformed JSON is now non-fatal — returns defaults (handler should succeed)
+	// Invalid canonical configuration stops before effect services are created.
+	t.Setenv("AGENT_NOTIFICATIONS_CONFIG", configPath)
 	handler, err := NewHandler(tmpDir)
-
-	if err != nil {
-		t.Fatalf("unexpected error for malformed JSON (should return defaults): %v", err)
-	}
-
-	if handler == nil {
-		t.Fatal("expected handler to be non-nil (defaults used)")
-	}
-
-	// Verify default config was actually applied
-	if !handler.cfg.IsDesktopEnabled() {
-		t.Error("expected desktop notifications enabled by default")
-	}
-	if handler.cfg.IsWebhookEnabled() {
-		t.Error("expected webhook notifications disabled by default")
+	if err == nil || handler != nil || !strings.Contains(err.Error(), "ConfigInvalid") {
+		t.Fatalf("expected typed config error and no handler: %v", err)
 	}
 }
 

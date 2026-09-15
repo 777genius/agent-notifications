@@ -19,7 +19,7 @@ import (
 	"github.com/gopxl/beep/vorbis"
 	"github.com/gopxl/beep/wav"
 
-	"github.com/777genius/claude-notifications/internal/logging"
+	"github.com/777genius/agent-notifications/internal/logging"
 )
 
 // DeviceInfo represents an audio output device

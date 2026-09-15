@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/777genius/claude-notifications/internal/config"
-	"github.com/777genius/claude-notifications/internal/platform"
+	"github.com/777genius/agent-notifications/internal/config"
+	"github.com/777genius/agent-notifications/internal/platform"
 )
 
 // terminalBundleIDMap maps TERM_PROGRAM values to macOS bundle identifiers
@@ -101,7 +101,7 @@ func GetTerminalNotifierPath() (string, error) {
 	pluginRoot := os.Getenv("CLAUDE_PLUGIN_ROOT")
 
 	if pluginRoot != "" {
-		// 1. Check ClaudeNotifier (preferred — modern UNUserNotificationCenter with Claude icon)
+		// 1. Check ClaudeNotifier (preferred — modern UNUserNotificationCenter with the Agent Notifications icon)
 		modernPath := filepath.Join(pluginRoot, "bin",
 			"ClaudeNotifier.app", "Contents", "MacOS", "terminal-notifier-modern")
 		if platform.FileExists(modernPath) {
@@ -217,7 +217,7 @@ func EnsureClaudeNotificationsApp() error {
     <key>CFBundleIdentifier</key>
     <string>com.claude.notifications</string>
     <key>CFBundleName</key>
-    <string>Claude Notifications</string>
+    <string>Agent Notifications</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleVersion</key>

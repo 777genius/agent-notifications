@@ -123,6 +123,7 @@ func TestRequest_JSONRoundtrip_Notify(t *testing.T) {
 			FocusTarget:      "code",
 			FocusWindowID:    "12345",
 			FocusWindowTitle: "project - Terminator",
+			FocusWarpURL:     "warp://session/6b7be92641ae8ced80188a4d87e4b200",
 			Timeout:          30,
 		},
 	}
@@ -160,6 +161,9 @@ func TestRequest_JSONRoundtrip_Notify(t *testing.T) {
 	}
 	if decoded.Notify.FocusWindowTitle != "project - Terminator" {
 		t.Errorf("FocusWindowTitle = %q, want %q", decoded.Notify.FocusWindowTitle, "project - Terminator")
+	}
+	if decoded.Notify.FocusWarpURL != "warp://session/6b7be92641ae8ced80188a4d87e4b200" {
+		t.Errorf("FocusWarpURL = %q, want session URL", decoded.Notify.FocusWarpURL)
 	}
 	if decoded.Notify.Timeout != 30 {
 		t.Errorf("Timeout = %d, want %d", decoded.Notify.Timeout, 30)

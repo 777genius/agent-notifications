@@ -1,5 +1,8 @@
 # Webhook Monitoring & Metrics
 
+Use the installed config-capable executable as `$NOTIFICATIONS_BIN`. Locate settings with `config path` and use [revision-checked leaf edits](../../commands/settings.md). JSON examples below illustrate fields, not whole-file replacements. Keep unrequested fields and literal environment templates unchanged. `config inspect --json` is the safe support output; it intentionally omits URLs, headers, payloads, free-form sounds and unknown fields. Never share raw config or assume omitted values are unset. Keep diagnostic files private and review logs for credentials before sharing.
+
+
 Track webhook health, debug issues, and optimize performance.
 
 ## Table of Contents
@@ -49,7 +52,7 @@ StatusCounts["session_limit_reached"] // Count of session_limit_reached notifica
 Metrics are tracked internally and accessible programmatically:
 
 ```go
-import "github.com/777genius/claude-notifications/internal/webhook"
+import "github.com/777genius/agent-notifications/internal/webhook"
 
 sender := webhook.New(cfg)
 stats := sender.GetMetrics()
@@ -221,14 +224,14 @@ Example output:
 
 If your webhook endpoint logs requests, use the `X-Request-ID` header to correlate:
 
-**Claude Notifications log:**
+**Agent Notifications log:**
 ```
 [webhook] Sending webhook: request_id=550e8400-... session=abc-123
 ```
 
 **Your webhook endpoint log:**
 ```
-Received webhook: request_id=550e8400-... from=claude-notifications
+Received webhook: request_id=550e8400-... from=agent-notifications
 ```
 
 ## Monitoring Examples

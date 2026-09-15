@@ -55,6 +55,7 @@ func (c *Client) SendNotification(
 			FocusWindowTitle:   hints.WindowTitle,
 			FocusWezTermPaneID: hints.WezTermPaneID,
 			FocusWezTermSocket: hints.WezTermSocket,
+			FocusWarpURL:       hints.WarpFocusURL,
 			FocusZellijSession: hints.ZellijSession,
 			FocusZellijPaneID:  hints.ZellijPaneID,
 			FocusZellijTabName: hints.ZellijTabName,

@@ -3,7 +3,7 @@ package notifier
 import (
 	"testing"
 
-	"github.com/777genius/claude-notifications/internal/daemon"
+	"github.com/777genius/agent-notifications/internal/daemon"
 )
 
 // Explicit values are honoured verbatim, without consulting the installed

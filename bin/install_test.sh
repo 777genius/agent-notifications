@@ -1,4 +1,7 @@
 #!/bin/bash
+TEST_ENV_HANDOFF_GOMODCACHE=1
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-env.sh"
+test_env_enter "$0" "$@"
 # install_test.sh - Tests for install.sh functions
 # Run with: bash bin/install_test.sh
 
@@ -178,8 +181,10 @@ if [ "$PLATFORM" = "windows" ]; then
     else
         echo -e "${YELLOW}SKIP${NC}: Wrapper script test (install.sh not run yet)"
     fi
-else
+elif [ -e "${SCRIPT_DIR}/claude-notifications" ]; then
     assert_file_exists "${SCRIPT_DIR}/claude-notifications" "Wrapper script should exist"
+else
+    echo -e "${YELLOW}SKIP${NC}: Generated wrapper (install.sh not run yet)"
 fi
 echo ""
 
@@ -223,7 +228,7 @@ echo ""
 
 # Test 8: GitHub repo URL format
 echo "--- Test: GitHub Repo URL ---"
-repo="777genius/claude-notifications-go"
+repo="777genius/agent-notifications"
 release_url="https://github.com/${repo}/releases/latest/download"
 
 if [[ "$release_url" == "https://github.com/"* ]] && [[ "$release_url" == *"/releases/"* ]]; then
@@ -234,6 +239,43 @@ else
     TESTS_FAILED=$((TESTS_FAILED + 1))
 fi
 echo ""
+
+# Discover the disposable product-isolation regression in the existing CI entrypoint.
+if bash "$SCRIPT_DIR/codex-hook-wrapper_test.sh"; then
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+if bash "$SCRIPT_DIR/install_config_preflight_test.sh"; then
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+if bash "$SCRIPT_DIR/install_config_native_test.sh"; then
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+if bash "$SCRIPT_DIR/install_transaction_test.sh"; then
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+if bash "$SCRIPT_DIR/bootstrap_product_test.sh"; then
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+if bash "$SCRIPT_DIR/agent-launcher_test.sh"; then
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
 
 # Summary
 echo "========================================="

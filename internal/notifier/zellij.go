@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/777genius/claude-notifications/internal/daemon"
-	"github.com/777genius/claude-notifications/internal/logging"
+	"github.com/777genius/agent-notifications/internal/daemon"
+	"github.com/777genius/agent-notifications/internal/logging"
 )
 
 // IsZellij returns true if the current process is running inside a zellij session.

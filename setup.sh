@@ -4,7 +4,7 @@
 set -e
 
 echo "=========================================="
-echo " Claude Notifications Plugin - Setup"
+echo " Agent Notifications Plugin - Setup"
 echo "=========================================="
 echo ""
 
@@ -39,7 +39,7 @@ echo ""
 echo "Run these commands inside Claude Code:"
 echo ""
 echo "1. Add marketplace:"
-echo "   /plugin marketplace add 777genius/claude-notifications-go"
+echo "   /plugin marketplace add 777genius/agent-notifications"
 echo ""
 echo "2. Install plugin:"
 echo "   /plugin install claude-notifications-go@claude-notifications-go"

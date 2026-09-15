@@ -1,0 +1,199 @@
+{
+  "seo": {
+    "title": "Agent Notifications - 专注工作，及时获知进展",
+    "description": "为 Claude Code 和 Codex CLI 提供桌面通知。任务完成、需要回答问题或发生错误时，第一时间获知。"
+  },
+  "language": {
+    "label": "语言",
+    "current": "当前语言：{language}",
+    "search": "搜索语言",
+    "noResults": "未找到语言",
+    "switchError": "无法切换语言，请重试。"
+  },
+  "accessibility": {
+    "skip": "跳到主要内容",
+    "platforms": "支持的操作系统"
+  },
+  "brand": { "tagline": "为你的编程智能体而生" },
+  "nav": {
+    "ariaLabel": "主导航",
+    "features": "功能",
+    "install": "安装",
+    "faq": "常见问题"
+  },
+  "hero": {
+    "eyebrow": "少盯屏幕，多做创造。",
+    "title": "保持专注",
+    "emphasis": "需要你时，我们会提醒",
+    "leadFirst": "让智能体安心工作，完成时你自然会知道。",
+    "leadSecond": "为 Claude Code 和 Codex CLI 提供声音、桌面通知和 Webhook。",
+    "primary": "设置通知",
+    "secondary": "在 GitHub 上查看",
+    "note": "开源 · 本地运行"
+  },
+  "common": { "now": "刚刚", "beta": "测试版" },
+  "features": {
+    "eyebrow": "恰到好处的信号，出现在恰当的时刻。",
+    "titleFirst": "专注当下",
+    "titleSecond": "告别反复查看",
+    "items": {
+      "1": {
+        "label": "桌面通知",
+        "title": "放心离开，进展尽在掌握",
+        "text": "智能体完成任务或需要你处理时，桌面通知会立即出现。无需再一直盯着终端。"
+      },
+      "2": {
+        "label": "声音控制",
+        "title": "每种时刻都有专属提示音",
+        "text": "选择声音、调节音量并指定音频设备。保留重要信号，其余保持安静。"
+      },
+      "3": {
+        "label": "WEBHOOK 集成",
+        "title": "连接你的工作流",
+        "text": "将进展发送到 Slack、Discord、Telegram、Teams 等平台，按你的工作方式配置 Webhook。"
+      }
+    },
+    "preview": {
+      "done": "智能体已完成任务",
+      "ready": "随时可以查看。",
+      "sound": "你的声音，你的音量。",
+      "event": "智能体事件"
+    },
+    "foot": "点击通知返回终端的支持情况取决于操作系统和终端。",
+    "details": "查看平台详情"
+  },
+  "faq": {
+    "eyebrow": "开始前需要了解的几件事",
+    "title": "常见问题",
+    "subtitle": "快速了解所需信息，然后继续工作。",
+    "items": {
+      "1": {
+        "question": "必须同时安装两个智能体吗？",
+        "answer": "不需要。你可以选择 Claude Code、Codex CLI 或两者。请先安装所选智能体的 CLI；此命令会安装通知插件。"
+      },
+      "2": {
+        "question": "Codex hooks 会自动安装吗？",
+        "answer": "会。安装程序会注册 hooks 并保存稳定的运行时副本。请在 Codex 中打开 /hooks，检查并信任它们。定义发生变化后需要重新检查。"
+      },
+      "3": {
+        "question": "更新会重置我的设置吗？",
+        "answer": "不会。安装程序会保留共享配置和其他 Codex hooks。安装与更新使用同一条命令。更新后请重启所选智能体。"
+      },
+      "4": {
+        "question": "可以选择哪些事件播放声音吗？",
+        "answer": "可以。你可以配置声音、音量、音频设备和通知渠道。在指南中选择“配置”，即可查看适用于所选智能体的步骤。"
+      },
+      "5": {
+        "question": "点击通知返回终端在所有环境都可用吗？",
+        "answer": "支持情况取决于操作系统和终端。iTerm2 需要启用 Python API 才能精确定位标签页。Windows 只能聚焦窗口，无法定位具体标签页。",
+        "link": "查看支持的环境。"
+      },
+      "6": {
+        "question": "收不到通知怎么办？",
+        "answer": "请检查操作系统的通知权限和所选通知渠道。使用 Codex 时，还要确认 hooks 已被信任。",
+        "link": "按照故障排除指南检查你的平台。"
+      }
+    }
+  },
+  "closing": {
+    "eyebrow": "让智能体接手下一步",
+    "title": "你的注意力很宝贵",
+    "action": "让每一次通知都有价值"
+  },
+  "footer": {
+    "builtBy": "由",
+    "afterBuilder": " 构建并开源。",
+    "license": "许可证",
+    "source": "源代码"
+  },
+  "preview": {
+    "ariaLabel": "智能体通知示例",
+    "heading": "你的智能体有新进展",
+    "pause": "暂停",
+    "resume": "继续",
+    "next": "下一个",
+    "workspace": "main · notification_plugin_go",
+    "items": {
+      "question": { "title": "❓ 问题", "body": "你想把 /tmp/ 中的测试文件命名为什么？" },
+      "plan": { "title": "📋 计划", "body": "计划：在 /tmp/ 中创建测试文件" },
+      "completed": { "title": "✅ 已完成", "body": "完成。安装引导现在紧跟在首屏之后。", "detail": "✏️ 已编辑 3 处  ⏱ 35 秒" },
+      "review": { "title": "🔍 审查", "body": "审查完成，更新后的安装程序未发现问题。" },
+      "permission": { "title": "🔐 权限请求", "body": "需要批准：shell" },
+      "limit": { "title": "⏱️ 已达到会话限制", "body": "已达到会话限制，请稍后再继续。" },
+      "error": { "title": "🔴 API 错误：401", "body": "身份验证已过期，请重新登录。" }
+    }
+  },
+  "select": {
+    "scrollUp": "向上滚动选项",
+    "scrollDown": "向下滚动选项"
+  },
+  "install": {
+    "title": "设置通知",
+    "intro": "按照以下步骤为 {agent} 添加桌面通知。",
+    "chooseAgent": "选择智能体",
+    "requires": "需要 {agent}",
+    "bothAgents": "两个智能体",
+    "bothSelected": "✓ 已选择两个智能体",
+    "installBoth": "为两个智能体安装",
+    "chooseComputer": "选择运行智能体的电脑",
+    "selected": "已选择",
+    "detected": "已自动检测",
+    "change": "更改",
+    "targetOs": "目标操作系统",
+    "products": {
+      "claude": "Claude Code",
+      "codex": "Codex CLI",
+      "both": "两个智能体"
+    },
+    "targets": {
+      "unknown": "选择目标操作系统",
+      "macos": "macOS",
+      "linux": "Linux",
+      "windows": "Windows · Git Bash",
+      "manual": "手动安装说明"
+    },
+    "prerequisiteTitle": "Codex CLI",
+    "prerequisiteText": "需要已发布的稳定版插件 ≥1.42.0。",
+    "checkReleases": "查看发布版本",
+    "configure": {
+      "title": "打造适合你的提示方式",
+      "claudeBefore": "在 Claude Code 对话中运行",
+      "claudeAfter": "这是 Claude 斜杠命令，不是 shell 命令。",
+      "codexBefore": "对于 Codex，请使用以下命令查找共享设置文件：",
+      "codexMiddle": "然后按照以下文档修改：",
+      "codexLink": "手动配置文档",
+      "codexAfter": "仅配置 Codex 时不需要 Claude Code。",
+      "shared": "两个智能体共享此配置。更新时会保留你的设置。"
+    },
+    "manual": {
+      "title": "按照手动方式安装",
+      "claude": "手动安装 Claude",
+      "codex": "手动注册 Codex"
+    },
+    "chooseTarget": "选择目标操作系统后即可显示命令。移动设备和未知浏览器需要手动选择。",
+    "commandLabel": "{intent}命令",
+    "copyCommand": "复制命令",
+    "updatingInstead": "要更新现有安装？",
+    "copied": "已复制。准备好后粘贴到目标终端中。",
+    "copyUnavailable": "无法复制。请选择命令并手动复制。",
+    "updateNote": "安装与更新使用同一条命令。现有设置会被保留。",
+    "intents": { "install": "安装", "update": "更新", "configure": "配置" },
+    "steps": {
+      "label1": "下一步 1",
+      "label2": "下一步 2",
+      "runBash": "在 Git Bash 中运行",
+      "runTerminal": "在终端中运行",
+      "windowsTitle": "请在 Windows 的 Git Bash 中运行。",
+      "windowsText": "不要使用 WSL，也不要将此管道命令粘贴到 PowerShell。",
+      "terminalText": "打开终端并运行上面的命令。",
+      "restart": "重启{agent}",
+      "bothAgents": "两个智能体",
+      "restartClaude": "关闭并重新打开 Claude Code，通知即可生效。",
+      "restartCodex": "重启 Codex，打开 /hooks，然后检查并信任已安装的 hooks。定义发生变化后需要重新检查；系统绝不会自动信任。"
+    },
+    "help": "安装帮助",
+    "claudeHelp": "Claude 安装帮助",
+    "installationInstructions": "安装说明",
+    "configureSettings": "⚙ 配置设置"
+  }
+}

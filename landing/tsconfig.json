@@ -1,0 +1,4 @@
+{
+  "extends": "./.nuxt/tsconfig.json",
+  "compilerOptions": { "types": ["node"], "allowImportingTsExtensions": true }
+}

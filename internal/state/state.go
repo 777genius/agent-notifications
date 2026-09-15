@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/777genius/claude-notifications/internal/analyzer"
-	"github.com/777genius/claude-notifications/internal/platform"
+	"github.com/777genius/agent-notifications/internal/analyzer"
+	"github.com/777genius/agent-notifications/internal/platform"
 )
 
 // SessionState represents per-session state

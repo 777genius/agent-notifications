@@ -1,0 +1,94 @@
+name: Post-publish Windows E2E
+
+# Manual, on-demand smoke test that exercises the PUBLIC release artifacts
+# (not a local build) on a real Windows runner. Used to validate a specific
+# published tag from public URLs only, in an isolated profile - this never
+# touches a real user's machine, HOME, or config.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to validate (e.g. v1.42.0)'
+        required: true
+
+jobs:
+  windows-e2e:
+    name: Validate public release on Windows
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      TAG: ${{ inputs.tag }}
+      RELEASE_URL: https://github.com/777genius/agent-notifications/releases/download/${{ inputs.tag }}
+      CHECKSUMS_URL: https://github.com/777genius/agent-notifications/releases/download/${{ inputs.tag }}/checksums.txt
+      MODERN_NOTIFIER_URL: https://github.com/777genius/agent-notifications/releases/download/${{ inputs.tag }}/ClaudeNotifier.app.zip
+      INSTALL_TARGET_DIR: ${{ github.workspace }}/e2e-install
+
+    steps:
+      - name: Prepare isolated profile
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/e2e-home/.claude" "$RUNNER_TEMP/e2e-home/.codex" "$RUNNER_TEMP/e2e-home/tmp"
+          echo "E2E_HOME=$RUNNER_TEMP/e2e-home" >> "$GITHUB_ENV"
+          echo "TMPDIR=$RUNNER_TEMP/e2e-home/tmp" >> "$GITHUB_ENV"
+
+      - name: Download install.sh from main
+        run: |
+          set -euo pipefail
+          curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/main/bin/install.sh -o "$E2E_HOME/install.sh"
+
+      - name: Fresh install of public release (install.sh, isolated target dir)
+        run: |
+          set -euo pipefail
+          bash "$E2E_HOME/install.sh"
+          echo "--- installed files ---"
+          ls -la "$INSTALL_TARGET_DIR/bin" || ls -la "$INSTALL_TARGET_DIR"
+
+      - name: Checksum verification against public checksums.txt
+        run: |
+          set -euo pipefail
+          curl -fsSL "$CHECKSUMS_URL" -o "$RUNNER_TEMP/checksums.txt"
+          EXE=$(find "$INSTALL_TARGET_DIR" -iname "claude-notifications-windows-amd64.exe" | head -1)
+          echo "exe=$EXE"
+          EXPECTED=$(grep "claude-notifications-windows-amd64.exe" "$RUNNER_TEMP/checksums.txt" | awk '{print $1}')
+          # sha256sum prefixes the whole output line with a backslash when the
+          # file path itself contains one (GNU coreutils escaping convention);
+          # our path mixes \ and / on Windows, so strip that marker, not the hash.
+          ACTUAL=$(sha256sum "$EXE" | awk '{print $1}')
+          ACTUAL="${ACTUAL#\\}"
+          echo "expected=$EXPECTED actual=$ACTUAL"
+          [ "$EXPECTED" = "$ACTUAL" ] || { echo "CHECKSUM MISMATCH"; exit 1; }
+
+      - name: Version + config smoke test
+        run: |
+          set -euo pipefail
+          EXE=$(find "$INSTALL_TARGET_DIR" -iname "claude-notifications-windows-amd64.exe" | head -1)
+          "$EXE" version
+          env HOME="$E2E_HOME" CLAUDE_CONFIG_DIR="$E2E_HOME/.claude" "$EXE" config path
+          env HOME="$E2E_HOME" CLAUDE_CONFIG_DIR="$E2E_HOME/.claude" "$EXE" config inspect || true
+
+      - name: Repeat install (update path, idempotency + historical-baseline check)
+        run: |
+          set -euo pipefail
+          bash "$E2E_HOME/install.sh" 2>&1 | tee "$RUNNER_TEMP/repeat-install.log"
+          echo "exit_code=${PIPESTATUS[0]}"
+          if grep -qi "traceback\|assertionerror" "$RUNNER_TEMP/repeat-install.log"; then
+            echo "FOUND_PYTHON_TRACEBACK=true" >> "$GITHUB_ENV"
+          else
+            echo "FOUND_PYTHON_TRACEBACK=false" >> "$GITHUB_ENV"
+          fi
+
+      - name: windows-hooks exec-form output
+        run: |
+          set -euo pipefail
+          EXE=$(find "$INSTALL_TARGET_DIR" -iname "claude-notifications-windows-amd64.exe" | head -1)
+          "$EXE" windows-hooks --exe "$EXE"
+
+      - name: Summary
+        run: |
+          set -euo pipefail
+          echo "Tag validated: $TAG"
+          echo "Python traceback seen on repeat install: ${FOUND_PYTHON_TRACEBACK:-unknown}"

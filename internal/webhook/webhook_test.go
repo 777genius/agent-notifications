@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/777genius/claude-notifications/internal/analyzer"
-	"github.com/777genius/claude-notifications/internal/config"
+	"github.com/777genius/agent-notifications/internal/analyzer"
+	"github.com/777genius/agent-notifications/internal/config"
 )
 
 func newTestConfig(url string) *config.Config {
@@ -527,6 +527,53 @@ func TestSenderSendPayloadFieldsSkipUnavailableValues(t *testing.T) {
 	}
 	if receivedPayload["context"] == nil {
 		t.Error("context should still be present")
+	}
+}
+
+func TestSenderSendPayloadFieldsCannotOverrideIdentityFields(t *testing.T) {
+	var receivedPayload map[string]interface{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &receivedPayload)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	cfg := newTestConfig(server.URL)
+	cfg.Notifications.Webhook.PayloadFields = map[string]interface{}{
+		"schema_version":    "9.9",
+		"status":            "spoofed",
+		"notification_type": "spoofed",
+		"agent_source":      123,
+		"untouched":         "kept",
+	}
+	sender := New(cfg)
+
+	err := sender.SendWithContext(SendContext{
+		Status:      analyzer.StatusTaskComplete,
+		Message:     "Identity test",
+		SessionID:   "session-123",
+		AgentSource: "codex",
+	})
+	if err != nil {
+		t.Fatalf("Send failed: %v", err)
+	}
+
+	if got := receivedPayload["schema_version"]; got != "1.0" {
+		t.Errorf("schema_version = %v, want %q (payloadFields must not override it)", got, "1.0")
+	}
+	if got := receivedPayload["status"]; got != "task_complete" {
+		t.Errorf("status = %v, want %q (payloadFields must not override it)", got, "task_complete")
+	}
+	if got := receivedPayload["notification_type"]; got != "task_complete" {
+		t.Errorf("notification_type = %v, want %q (payloadFields must not override it)", got, "task_complete")
+	}
+	if got := receivedPayload["agent_source"]; got != "codex" {
+		t.Errorf("agent_source = %v, want %q (payloadFields must not override it)", got, "codex")
+	}
+	if got := receivedPayload["untouched"]; got != "kept" {
+		t.Errorf("untouched = %v, want %q (non-reserved payloadFields must still apply)", got, "kept")
 	}
 }
 

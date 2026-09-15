@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Documentation
-    url: https://github.com/777genius/claude-notifications-go#readme
+    url: https://github.com/777genius/agent-notifications#readme
     about: Check the README and docs before opening an issue
   - name: Discussions
-    url: https://github.com/777genius/claude-notifications-go/discussions
+    url: https://github.com/777genius/agent-notifications/discussions
     about: Ask questions and share ideas

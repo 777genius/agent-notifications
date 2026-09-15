@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/777genius/claude-notifications/internal/analyzer"
-	"github.com/777genius/claude-notifications/internal/config"
-	"github.com/777genius/claude-notifications/internal/logging"
-	"github.com/777genius/claude-notifications/internal/platform"
-	"github.com/777genius/claude-notifications/internal/sessionname"
+	"github.com/777genius/agent-notifications/internal/analyzer"
+	"github.com/777genius/agent-notifications/internal/config"
+	"github.com/777genius/agent-notifications/internal/logging"
+	"github.com/777genius/agent-notifications/internal/platform"
+	"github.com/777genius/agent-notifications/internal/sessionname"
 )
 
 var templatePattern = regexp.MustCompile(`\$\{\{\s*([^{}]+?)\s*\}\}`)
@@ -34,6 +34,7 @@ type SendContext struct {
 	Folder        string // filepath.Base(CWD); empty when CWD is empty
 	RawBody       string // summary body without prefix/actions
 	ActionSummary string // action segment only (e.g. "📝 1 new  ▶ 2 cmds  ⏱ 41s")
+	AgentSource   string // originating agent, e.g. "claude" or "codex" (hooks.Product); "" for legacy callers
 }
 
 type runtimeContext struct {
@@ -62,11 +63,11 @@ func (c *runtimeContext) resolveHeaders(headers map[string]string) map[string]st
 	for key, value := range headers {
 		rendered, ok, err := c.resolveString(value)
 		if err != nil {
-			logging.Warn("Skipping webhook header %q: %v", key, err)
+			logging.Warn("Skipping webhook header: invalid template")
 			continue
 		}
 		if !ok {
-			logging.Warn("Skipping webhook header %q because template value is unavailable", key)
+			logging.Warn("Skipping webhook header: template value unavailable")
 			continue
 		}
 		resolved[key] = stringifyTemplateValue(rendered)
@@ -104,7 +105,7 @@ func (c *runtimeContext) resolveValue(path string, value interface{}) (interface
 			return nil, false, err
 		}
 		if !ok && path != "" {
-			logging.Warn("Skipping webhook payload field %q because template value is unavailable", path)
+			logging.Warn("Skipping webhook payload field: template value unavailable")
 		}
 		return rendered, ok, nil
 	case map[string]interface{}:
@@ -192,6 +193,8 @@ func (c *runtimeContext) lookupTemplateValue(token string) (interface{}, bool, e
 		return sessionname.GenerateSessionLabel(c.sendCtx.SessionID), true, nil
 	case "source":
 		return "claude-notifications", true, nil
+	case "agent_source":
+		return normalizeAgentSource(c.sendCtx.AgentSource), true, nil
 	case "cwd":
 		return c.sendCtx.CWD, true, nil
 	case "folder":
@@ -281,7 +284,7 @@ func mergePayloadMaps(base, overrides map[string]interface{}) {
 				mergePayloadMaps(existingMap, overrideMap)
 				continue
 			}
-			logging.Debug("Webhook payloadFields overriding key %q", key)
+			logging.Debug("Webhook payload field overridden")
 		}
 		base[key] = value
 	}

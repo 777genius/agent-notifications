@@ -4,7 +4,6 @@ on:
   push:
     branches: [ main, develop ]
   pull_request:
-    branches: [ main ]
 
 jobs:
   test:
@@ -15,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        go: ['1.21', '1.26']
+        go: ['1.22', '1.26']
 
     steps:
       - name: Checkout code
@@ -35,6 +34,19 @@ jobs:
       - name: Verify dependencies
         run: go mod verify
 
+      - name: Set up Python for binary qualification
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Qualify Windows configuration and delivery
+        shell: pwsh
+        run: |
+          go build -o bin/claude-notifications.exe ./cmd/claude-notifications
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $version = (Get-Content .claude-plugin/plugin.json | ConvertFrom-Json).version
+          python scripts/release-artifact-e2e.py --binary bin/claude-notifications.exe --version "v$version"
+
       - name: Run go vet
         run: go vet ./...
 
@@ -50,6 +62,10 @@ jobs:
 
       - name: Run tests
         run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+        shell: bash
+
+      - name: Repeat config crash recovery
+        run: go test -race -count=10 -run '^TestStoreKilledLockOwner$' ./internal/config
         shell: bash
 
       - name: Build binary

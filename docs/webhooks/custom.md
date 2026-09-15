@@ -1,5 +1,8 @@
 # Custom Webhook Integration
 
+Use the installed config-capable executable as `$NOTIFICATIONS_BIN`. Locate settings with `config path` and use [revision-checked leaf edits](../../commands/settings.md). JSON examples below illustrate fields, not whole-file replacements. Keep unrequested fields and literal environment templates unchanged. `config inspect --json` is the safe support output; it intentionally omits URLs, headers, payloads, free-form sounds and unknown fields. Never share raw config or assume omitted values are unset. Keep diagnostic files private and review logs for credentials before sharing.
+
+
 Integrate Claude Code notifications with any webhook-compatible service.
 
 ## Overview
@@ -15,7 +18,7 @@ Custom webhooks allow you to send notifications to any HTTP endpoint that accept
 
 ### Configuration
 
-Edit `~/.claude/claude-notifications-go/config.json`:
+Edit the shared file selected by `config path`:
 
 ```json
 {
@@ -42,7 +45,10 @@ Custom webhooks receive a JSON payload:
 
 ```json
 {
+  "schema_version": "1.0",
   "status": "task_complete",
+  "notification_type": "task_complete",
+  "agent_source": "claude",
   "message": "[bold-cat] Created new authentication system with JWT tokens",
   "session_id": "abc-123",
   "timestamp": "2026-04-13T12:34:56Z",
@@ -52,12 +58,21 @@ Custom webhooks receive a JSON payload:
 ```
 
 **Fields:**
-- `status` (string) - One of: `task_complete`, `review_complete`, `question`, `plan_ready`, `session_limit_reached`
+- `schema_version` (string) - Payload contract version, currently `"1.0"`. Bumped only on breaking changes (field removed/renamed/retyped); new optional fields can be added without a bump.
+- `status` (string) - One of: `task_complete`, `review_complete`, `question`, `plan_ready`, `session_limit_reached`, `api_error`, `api_error_overloaded`, `permission_request`
+- `notification_type` (string) - Same enum and value as `status`. Kept as a separate field so it can be relied on for identity purposes even if `status` ever takes on request/response nuance beyond a plain type tag.
+- `agent_source` (string) - Which agent produced the event: `claude` or `codex`. More values will be added as more agents are supported; treat unknown values as forward-compatible rather than erroring.
 - `message` (string) - Notification message with session name
 - `session_id` (string) - Unique session identifier
 - `timestamp` (string) - RFC3339 timestamp
-- `source` (string) - Always `claude-notifications`
+- `source` (string) - Always `claude-notifications` (identifies the plugin, not the agent — see `agent_source` for that)
 - `title` (string) - Status title from config
+
+The formal contract also lives as a JSON Schema at [`docs/webhooks/payload-schema.json`](payload-schema.json), for consumers that want to validate payloads programmatically.
+
+Slack, Discord, Telegram, and Lark presets also now include the agent name (`Claude Code` / `Codex`) in their footer/author/username so it is visible to humans reading the chat message, not just to machine consumers of the custom JSON format. Discord shows it once, via the top-level `username` field, rather than repeating it in the footer.
+
+`schema_version`, `status`, `notification_type`, and `agent_source` are reserved: `payloadFields` cannot override them, even if your config sets one of those keys. Any such entry is dropped (with a warning in the debug log) instead of silently corrupting the identity contract other systems rely on.
 
 ## Dynamic Fields
 
@@ -96,6 +111,7 @@ You can inject runtime values into header values and extra JSON payload fields.
 ### Supported Templates
 
 - `${{status}}`, `${{title}}`, `${{message}}`
+- `${{agent_source}}` - originating agent, `claude` or `codex`
 - `${{session_id}}`, `${{session_name}}`
 - `${{cwd}}`, `${{folder}}`
 - `${{time.rfc3339}}`, `${{time.unix}}`, `${{time.unix_ms}}`
@@ -309,7 +325,7 @@ _push notifications to Android/iOS/browsers/etc., FOSS_
 
 1. Install [any app](https://ntfy.sh/)
 2. Subscribe to `your_topic_name`
-3. Configure Claude Notifications:
+3. Configure Agent Notifications:
 
 ```json
 "webhook": {
@@ -333,7 +349,7 @@ You can also use ntfy <ins>as middleware transformer for other webhooks</ins> or
 
 1. Create a **Webhook by Zapier** trigger
 2. Copy the webhook URL
-3. Configure Claude Notifications:
+3. Configure Agent Notifications:
 
 ```json
 {
@@ -351,14 +367,14 @@ You can also use ntfy <ins>as middleware transformer for other webhooks</ins> or
 1. Add **Webhook** node to workflow
 2. Set method to `POST`
 3. Copy webhook URL
-4. Configure Claude Notifications with the URL
+4. Configure Agent Notifications with the URL
 
 ### Make (formerly Integromat)
 
 1. Create scenario with **Webhooks** module
 2. Add **Custom webhook**
 3. Copy webhook URL
-4. Configure Claude Notifications with the URL
+4. Configure Agent Notifications with the URL
 
 ### PagerDuty
 
@@ -405,7 +421,7 @@ Perfect for testing webhook payloads:
 
 1. Go to https://webhook.site/
 2. Copy your unique URL
-3. Configure Claude Notifications:
+3. Configure Agent Notifications:
 
 ```json
 {

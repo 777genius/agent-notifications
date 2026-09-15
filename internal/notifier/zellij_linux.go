@@ -5,9 +5,9 @@
 package notifier
 
 import (
-	"github.com/777genius/claude-notifications/internal/config"
-	"github.com/777genius/claude-notifications/internal/daemon"
-	"github.com/777genius/claude-notifications/internal/logging"
+	"github.com/777genius/agent-notifications/internal/config"
+	"github.com/777genius/agent-notifications/internal/daemon"
+	"github.com/777genius/agent-notifications/internal/logging"
 )
 
 func applyZellijFocusHints(cfg *config.Config, hints *daemon.FocusHints) {

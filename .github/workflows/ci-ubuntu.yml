@@ -4,7 +4,6 @@ on:
   push:
     branches: [ main, develop ]
   pull_request:
-    branches: [ main ]
 
 jobs:
   test:
@@ -15,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        go: ['1.21', '1.26']
+        go: ['1.22', '1.26']
 
     steps:
       - name: Checkout code
@@ -67,8 +66,20 @@ jobs:
       - name: Test binary execution (help)
         run: ./bin/claude-notifications help
 
+      - name: Test one-line setup loader (isolated, offline)
+        run: bash bin/setup_test.sh
+
       - name: Run install.sh unit tests
         run: bash bin/install_test.sh
+
+      - name: Qualify real Go config and setup installers (isolated, offline)
+        run: python3 scripts/config_e2e_test.py
+
+      - name: Run config diagnostic and path safety regressions
+        run: bash bin/shell_review_test.sh
+
+      - name: Test Codex release gate selection
+        run: sh scripts/codex-release-gate_test.sh
 
       - name: Run install.sh E2E tests (offline + mock)
         run: bash bin/install_e2e_test.sh

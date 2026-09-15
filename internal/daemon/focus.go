@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/777genius/agent-notifications/internal/warpfocus"
 )
 
 // FocusMethod represents a method for focusing a window
@@ -46,11 +48,14 @@ type FocusHints struct {
 	WindowTitle   string
 	WezTermPaneID string
 	WezTermSocket string
+	WarpFocusURL  string
 	ZellijSession string
 	ZellijPaneID  string
 	ZellijTabName string
 	ZellijMode    string
 }
+
+var openFocusURL = warpfocus.Open
 
 // TryFocus attempts to focus a window using available tools.
 // folderName is the project folder name used for title-based window search (may be empty).
@@ -71,6 +76,7 @@ func TryFocusWithWindowID(terminalName, folderName, windowID string) error {
 // TryFocusWithHints attempts exact focus using hook-time hints first, then falls back to
 // compositor-specific methods.
 // wezTermPaneID and wezTermSocket enable tab-level focus for WezTerm.
+// warpFocusURL is a Warp session deep link that focuses the originating window/tab/pane.
 //
 // For WezTerm, window-level focus runs first, then the pane switch runs after a short
 // delay. This ordering matters: GNOME's XDG Activation Token is processed asynchronously
@@ -81,9 +87,12 @@ func TryFocusWithWindowID(terminalName, folderName, windowID string) error {
 func TryFocusWithHints(hints FocusHints) error {
 	wezTermPaneID, wezTermSocket := normalizeWezTermFocusHints(hints.TerminalName, hints.WezTermPaneID, hints.WezTermSocket)
 	windowFocused := false
+	if url := warpfocus.Normalize(hints.WarpFocusURL); url != "" {
+		windowFocused = openFocusURL(url) == nil
+	}
 	var exactErr, lastErr error
 
-	if strings.TrimSpace(hints.WindowID) != "" {
+	if !windowFocused && strings.TrimSpace(hints.WindowID) != "" {
 		if err := tryX11WindowID(hints.WindowID); err == nil {
 			windowFocused = true
 		} else {

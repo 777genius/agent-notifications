@@ -14,7 +14,7 @@
 ## Инициализация
 
 ```go
-import "github.com/777genius/claude-notifications/internal/errorhandler"
+import "github.com/777genius/agent-notifications/internal/errorhandler"
 
 // Инициализация при старте приложения
 errorhandler.Init(

@@ -12,6 +12,9 @@ func saveTerminalEnv(t *testing.T) func() {
 	t.Helper()
 	vars := []string{
 		"TERM_PROGRAM",
+		"__CFBundleIdentifier",
+		"TMUX",
+		"ZELLIJ",
 		"VSCODE_INJECTION",
 		"VSCODE_GIT_IPC_HANDLE",
 		"GNOME_TERMINAL_SCREEN",
@@ -29,6 +32,9 @@ func saveTerminalEnv(t *testing.T) func() {
 		"ZELLIJ",
 		"ZELLIJ_SESSION_NAME",
 		"ZELLIJ_PANE_ID",
+		"WARP_FOCUS_URL",
+		"WARP_TERMINAL_SESSION_UUID",
+		"WARP_IS_LOCAL_SHELL_SESSION",
 	}
 	type envState struct {
 		value string
@@ -548,6 +554,40 @@ func TestGetTerminalName_Fallback(t *testing.T) {
 	result := GetTerminalName()
 	if result != "Terminal" {
 		t.Errorf("GetTerminalName() fallback = %q, want %q", result, "Terminal")
+	}
+}
+
+func TestGetTerminalName_WarpFocusURL(t *testing.T) {
+	restore := saveTerminalEnv(t)
+	defer restore()
+
+	os.Setenv("TERM_PROGRAM", "WarpTerminal")
+	os.Setenv("WARP_FOCUS_URL", "warp://session/6b7be92641ae8ced80188a4d87e4b200")
+
+	result := GetTerminalName()
+	if result != "WarpTerminal" {
+		t.Errorf("GetTerminalName() with WARP_FOCUS_URL = %q, want %q", result, "WarpTerminal")
+	}
+}
+
+func TestGetTerminalName_IgnoresInheritedWarpInCursor(t *testing.T) {
+	restore := saveTerminalEnv(t)
+	defer restore()
+
+	os.Setenv("TERM_PROGRAM", "WarpTerminal")
+	os.Setenv("VSCODE_INJECTION", "1")
+	os.Setenv("__CFBundleIdentifier", "com.todesktop.230313mzl4w4u92")
+	os.Setenv("WARP_FOCUS_URL", "warp://session/6b7be92641ae8ced80188a4d87e4b200")
+
+	result := GetTerminalName()
+	if result != "Code" {
+		t.Errorf("GetTerminalName() for Cursor-from-Warp = %q, want %q", result, "Code")
+	}
+}
+
+func TestGetGnomeWmClass_Warp(t *testing.T) {
+	if got := GetGnomeWmClass("WarpTerminal"); got != "dev.warp.Warp" {
+		t.Errorf("GetGnomeWmClass(WarpTerminal) = %q, want dev.warp.Warp", got)
 	}
 }
 

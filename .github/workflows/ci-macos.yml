@@ -4,7 +4,6 @@ on:
   push:
     branches: [ main, develop ]
   pull_request:
-    branches: [ main ]
 
 jobs:
   test:
@@ -16,7 +15,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - go: '1.21'
+          - go: '1.22'
             os: macos-15
           - go: '1.26'
             os: macos-26

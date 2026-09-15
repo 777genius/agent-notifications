@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,15 +13,18 @@ import (
 	"strings"
 	"time"
 
-	"github.com/777genius/claude-notifications/internal/audio"
-	"github.com/777genius/claude-notifications/internal/errorhandler"
-	"github.com/777genius/claude-notifications/internal/hooks"
-	"github.com/777genius/claude-notifications/internal/logging"
-	"github.com/777genius/claude-notifications/internal/notifier"
-	"github.com/777genius/claude-notifications/internal/winfocus"
+	"github.com/777genius/agent-notifications/internal/audio"
+	"github.com/777genius/agent-notifications/internal/codexsource"
+	"github.com/777genius/agent-notifications/internal/config"
+	"github.com/777genius/agent-notifications/internal/errorhandler"
+	"github.com/777genius/agent-notifications/internal/hooks"
+	"github.com/777genius/agent-notifications/internal/logging"
+	"github.com/777genius/agent-notifications/internal/notifier"
+	"github.com/777genius/agent-notifications/internal/winfocus"
 )
 
-const version = "1.41.0"
+var version = config.ConsumerVersion
+
 const windowsLazyUpdateRetryAfter = time.Hour
 
 var (
@@ -28,11 +33,15 @@ var (
 )
 
 func main() {
-	// Initialize global error handler with panic recovery
+	// Initialize global error handler with panic recovery.
 	// logToConsole=true: errors will be shown in console
 	// exitOnCritical=false: don't exit on critical errors (let caller decide)
 	// recoveryEnabled=true: recover from panics
-	errorhandler.Init(true, false, true)
+	//
+	// errorhandler.Init is once-only, so the console decision must happen
+	// here: the Codex observation route runs with console output disabled so
+	// that handled errors and panics never reach the process stdout/stderr.
+	errorhandler.Init(!codexRouteRequested(os.Args), false, true)
 
 	// Add global panic recovery
 	defer errorhandler.HandlePanic()
@@ -45,13 +54,15 @@ func main() {
 	command := os.Args[1]
 
 	switch command {
+	case "config":
+		os.Exit(configCommand(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
 	case "handle-hook":
 		if len(os.Args) < 3 {
 			fmt.Fprintf(os.Stderr, "Error: hook event name required\n")
 			printUsage()
 			os.Exit(1)
 		}
-		handleHook(os.Args[2])
+		runHandleHook(os.Args[2:])
 	case "focus-window":
 		if len(os.Args) < 4 {
 			fmt.Fprintf(os.Stderr, "Error: focus-window requires bundleID and cwd arguments\n")
@@ -74,8 +85,10 @@ func main() {
 		runDaemon()
 	case "windows-hooks":
 		runWindowsHooks(os.Args[2:])
+	case "setup-codex":
+		runSetupCodex(os.Args[2:])
 	case "version", "--version", "-v":
-		fmt.Printf("claude-notifications v%s\n", version)
+		fmt.Printf("%s v%s\n", invocationName(), version)
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -200,6 +213,190 @@ func newExecHook(exePath, hookName string) hookCommand {
 	}
 }
 
+// runHandleHook routes a handle-hook invocation. Without a --product flag it
+// is the legacy Claude path, byte-for-byte compatible with previous releases
+// (extra non-flag argv is ignored exactly as before). With --product the
+// parser is strict and any anomaly follows the fail-open observation
+// contract: file-log only, empty output, exit 0.
+func runHandleHook(args []string) {
+	// A --product flag in place of the event name means the configured
+	// command lost its event argument; that is a codex-shaped invocation,
+	// so it follows the fail-open observation contract, not the loud UX.
+	if isProductFlagToken(args[0]) {
+		codexFailOpen(fmt.Sprintf("missing hook event name before %q", args[0]))
+		return
+	}
+
+	hookEvent := args[0]
+	rest := args[1:]
+
+	if !hasProductFlag(rest) {
+		handleHook(hookEvent)
+		return
+	}
+
+	rawProduct, err := parseProductArgs(rest)
+	if err != nil {
+		codexFailOpen(fmt.Sprintf("invalid handle-hook arguments %q: %v", rest, err))
+		return
+	}
+
+	product, err := codexsource.ValidateProductOverride(rawProduct)
+	if err != nil {
+		codexFailOpen(fmt.Sprintf("invalid product override: %v", err))
+		return
+	}
+
+	switch product {
+	case "claude":
+		// Explicit claude override keeps the legacy route.
+		handleHook(hookEvent)
+	case "codex":
+		handleCodexHook(hookEvent)
+	default:
+		codexFailOpen(fmt.Sprintf("product %q has no route", product))
+	}
+}
+
+func isProductFlagToken(arg string) bool {
+	return arg == "--product" || strings.HasPrefix(arg, "--product=")
+}
+
+func hasProductFlag(args []string) bool {
+	for _, a := range args {
+		if isProductFlagToken(a) {
+			return true
+		}
+	}
+	return false
+}
+
+// parseProductArgs accepts exactly one --product flag with a value and
+// nothing else. Duplicate flags, unknown flags, and missing values are
+// errors so a misconfigured hook cannot silently misroute a payload.
+func parseProductArgs(args []string) (string, error) {
+	product := ""
+	seen := false
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--product":
+			if seen {
+				return "", fmt.Errorf("duplicate --product flag")
+			}
+			if i+1 >= len(args) {
+				return "", fmt.Errorf("--product requires a value")
+			}
+			product = args[i+1]
+			seen = true
+			i++
+		case strings.HasPrefix(args[i], "--product="):
+			if seen {
+				return "", fmt.Errorf("duplicate --product flag")
+			}
+			product = strings.TrimPrefix(args[i], "--product=")
+			seen = true
+		default:
+			return "", fmt.Errorf("unknown argument %q", args[i])
+		}
+	}
+	if !seen || product == "" {
+		return "", fmt.Errorf("--product requires a value")
+	}
+	return product, nil
+}
+
+// codexRouteRequested reports whether this invocation must run under the
+// fail-open observation contract (console output disabled). Any handle-hook
+// call with a --product flag that is not an explicit valid "claude" override
+// qualifies, including unparsable flag shapes.
+func codexRouteRequested(argv []string) bool {
+	if len(argv) < 3 || argv[1] != "handle-hook" {
+		return false
+	}
+	// Event name replaced by the flag: fail-open containment route.
+	if isProductFlagToken(argv[2]) {
+		return true
+	}
+	rest := argv[3:]
+	if !hasProductFlag(rest) {
+		return false
+	}
+	product, err := parseProductArgs(rest)
+	if err != nil {
+		return true
+	}
+	return product != "claude"
+}
+
+// codexFailOpen records a routing problem to the file log and returns so the
+// process exits 0 with empty stdout/stderr: notification failures must never
+// block the host agent.
+func codexFailOpen(msg string) {
+	pluginRoot := getPluginRootForProduct("codex")
+	if _, err := logging.InitLogger(pluginRoot); err != nil {
+		return
+	}
+	defer func() { _ = logging.Close() }()
+	logging.SetPrefix(fmt.Sprintf("PID:%d", os.Getpid()))
+	logging.Error("handle-hook (codex route): %s", msg)
+}
+
+// handleCodexHook is the Codex observation route. Every failure is contained:
+// file-log only, empty process output, exit 0. It never calls os.Exit(1) and
+// never lets SDK or config warnings reach stdout/stderr.
+func handleCodexHook(publicEvent string) {
+	// Console output is already disabled: main() initialized the error
+	// handler via codexRouteRequested before any fallible work.
+	defer errorhandler.HandlePanic()
+
+	pluginRoot := getPluginRootForProduct("codex")
+
+	if _, err := logging.InitLogger(pluginRoot); err != nil {
+		// No log sink available; stay silent per the observation contract.
+		return
+	}
+	defer func() { _ = logging.Close() }()
+	logging.SetPrefix(fmt.Sprintf("PID:%d", os.Getpid()))
+
+	if _, ok := codexsource.InvocationForEvent(publicEvent); !ok {
+		logging.Error("codex: unsupported event %q", publicEvent)
+		return
+	}
+
+	// Bounded read: the single wire limit plus one byte to detect overflow.
+	raw, err := io.ReadAll(io.LimitReader(os.Stdin, codexsource.MaxPayloadBytes+1))
+	if err != nil {
+		logging.Error("codex: failed to read stdin: %v", err)
+		return
+	}
+	if len(raw) > codexsource.MaxPayloadBytes {
+		logging.Error("codex: payload exceeds %d bytes", codexsource.MaxPayloadBytes)
+		return
+	}
+
+	handler, err := hooks.NewHandlerWithSource(pluginRoot, hooks.ProductCodex, hooks.NewCodexSource())
+	if err != nil {
+		logging.Error("codex: failed to create handler: %v", err)
+		return
+	}
+
+	if err := handler.HandleHook(publicEvent, bytes.NewReader(raw)); err != nil {
+		logging.Error("codex: hook failed: %v", err)
+	}
+}
+
+// getPluginRootForProduct resolves the plugin root per product. Codex
+// natively exports PLUGIN_ROOT for plugin-bundled hooks; CLAUDE_PLUGIN_ROOT
+// remains only a compatibility fallback via the legacy resolver.
+func getPluginRootForProduct(product string) string {
+	if product == "codex" {
+		if root := os.Getenv("PLUGIN_ROOT"); root != "" {
+			return root
+		}
+	}
+	return getPluginRoot()
+}
+
 func handleHook(hookEvent string) {
 	// Add panic recovery for this function
 	defer errorhandler.HandlePanic()
@@ -318,12 +515,7 @@ func scheduleWindowsLazyUpdateImpl(pluginRoot string) error {
 	targetDir := filepath.ToSlash(filepath.Join(pluginRoot, "bin"))
 	installScript = filepath.ToSlash(installScript)
 	shCommand := "INSTALL_TARGET_DIR=" + shellSingleQuoted(targetDir) + " " + shellSingleQuoted(installScript) + " --force"
-	psCommand := "$ErrorActionPreference = 'SilentlyContinue'; " +
-		"Start-Sleep -Milliseconds 750; " +
-		"for ($i = 0; $i -lt 6; $i++) { " +
-		"& " + powershellSingleQuoted(bashPath) + " -lc " + powershellSingleQuoted(shCommand) + " *> $null; " +
-		"if ($LASTEXITCODE -eq 0) { break }; " +
-		"Start-Sleep -Seconds 5 }"
+	psCommand := windowsLazyUpdatePowerShellCommand(bashPath, shCommand)
 
 	cmd := exec.Command(powershellPath, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", psCommand)
 	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
@@ -347,6 +539,17 @@ func scheduleWindowsLazyUpdateImpl(pluginRoot string) error {
 		_ = devNull.Close()
 	}
 	return nil
+}
+
+func windowsLazyUpdatePowerShellCommand(bashPath, shCommand string) string {
+	// Thread.Sleep remains reliable in the detached, NUL-backed Windows
+	// PowerShell process where Start-Sleep can stall before launching bash.
+	return "$ErrorActionPreference = 'SilentlyContinue'; " +
+		"[System.Threading.Thread]::Sleep(750); " +
+		"for ($i = 0; $i -lt 6; $i++) { " +
+		"& " + powershellSingleQuoted(bashPath) + " -lc " + powershellSingleQuoted(shCommand) + "; " +
+		"if ($LASTEXITCODE -eq 0) { break }; " +
+		"[System.Threading.Thread]::Sleep(5000) }"
 }
 
 func findWindowsPowerShell() (string, error) {
@@ -540,16 +743,18 @@ func parseFocusWindowOptions(args []string) (notifier.FocusWindowOptions, error)
 }
 
 func printUsage() {
-	fmt.Println("claude-notifications - Smart notifications for Claude Code")
+	fmt.Println("agent-notifications - Smart notifications for Claude Code and Codex")
 	fmt.Println()
 	fmt.Printf("Version: %s\n", version)
 	fmt.Println()
 	fmt.Println("Usage:")
-	fmt.Println("  claude-notifications handle-hook <HookName>")
-	fmt.Println("  claude-notifications daemon")
-	fmt.Println("  claude-notifications windows-hooks [--exe <path>]")
-	fmt.Println("  claude-notifications version")
-	fmt.Println("  claude-notifications help")
+	fmt.Println("  agent-notifications handle-hook <HookName>")
+	fmt.Println("  agent-notifications daemon")
+	fmt.Println("  agent-notifications windows-hooks [--exe <path>]")
+	fmt.Println("  agent-notifications version")
+	fmt.Println("  agent-notifications config <path|inspect|init|edit|preflight-update>")
+	fmt.Println("  agent-notifications setup-codex --plugin-root <bundle>")
+	fmt.Println("  agent-notifications help")
 	fmt.Println()
 	fmt.Println("Commands:")
 	fmt.Println("  handle-hook <HookName>  Handle a Claude Code hook event")
@@ -562,23 +767,36 @@ func printUsage() {
 	fmt.Println("                          (internal, Windows; invoked by the toast protocol handler)")
 	fmt.Println("  windows-hooks           Print exec-form hook JSON for Windows settings")
 	fmt.Println("                          Does not modify ~/.claude/settings.json")
+	fmt.Println("  setup-codex             Register Codex CLI hooks (macOS, Linux, Windows)")
+	fmt.Println("                          [--print] [--dry-run] [--codex-home <dir>] [--plugin-root <dir>]")
+	fmt.Println("  config                  Shared configuration path/inspect/init/edit/preflight-update")
 	fmt.Println("  version                 Show version information")
 	fmt.Println("  help                    Show this help message")
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Println("  # Handle PreToolUse hook (reads JSON from stdin)")
-	fmt.Println("  echo '{\"session_id\":\"test\",\"tool_name\":\"ExitPlanMode\"}' | claude-notifications handle-hook PreToolUse")
+	fmt.Println("  echo '{\"session_id\":\"test\",\"tool_name\":\"ExitPlanMode\"}' | agent-notifications handle-hook PreToolUse")
 	fmt.Println()
 	fmt.Println("  # Handle Stop hook")
-	fmt.Println("  echo '{\"session_id\":\"test\",\"transcript_path\":\"/path/to/transcript.jsonl\"}' | claude-notifications handle-hook Stop")
+	fmt.Println("  echo '{\"session_id\":\"test\",\"transcript_path\":\"/path/to/transcript.jsonl\"}' | agent-notifications handle-hook Stop")
 	fmt.Println()
 	fmt.Println("  # Run notification daemon (Linux only, started automatically)")
-	fmt.Println("  claude-notifications daemon")
+	fmt.Println("  agent-notifications daemon")
 	fmt.Println()
 	fmt.Println("  # Print Windows exec-form hook configuration")
-	fmt.Println("  claude-notifications windows-hooks")
+	fmt.Println("  agent-notifications windows-hooks")
 	fmt.Println()
 	fmt.Println("Environment Variables:")
-	fmt.Println("  CLAUDE_PLUGIN_ROOT  Plugin root directory (auto-detected if not set)")
+	fmt.Println("  AGENT_NOTIFICATIONS_ROOT  Resource bundle root for config placeholders")
+	fmt.Println("  CLAUDE_PLUGIN_ROOT        Permanent resource-root alias; Claude hook root")
 	fmt.Println()
+}
+
+// invocationName preserves the permanent legacy launcher's version identity.
+func invocationName() string {
+	name := strings.ToLower(filepath.Base(os.Args[0]))
+	if name == "agent-notifications" || name == "agent-notifications.exe" || (strings.HasPrefix(name, "claude-notifications-windows-") && os.Getenv("AGENT_NOTIFICATIONS_LAUNCHER") == "agent-notifications") {
+		return "agent-notifications"
+	}
+	return "claude-notifications"
 }

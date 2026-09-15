@@ -1,13 +1,17 @@
 {
     "name": "claude-notifications-go",
-    "version": "1.41.0",
-    "description": "Smart notifications for Claude Code task statuses (Go implementation)",
+    "displayName": "Agent Notifications",
+    "version": "1.43.0",
+    "description": "Agent Notifications for Claude Code and Codex CLI (Go implementation)",
     "author": {
         "name": "777genius",
         "email": "iliyazelenkog@gmail.com"
     },
     "license": "GPL-3.0",
-    "repository": "https://github.com/777genius/claude-notifications-go",
+    "repository": "https://github.com/777genius/agent-notifications",
+    "metadata": {
+        "renamePolicy": "Legacy Claude Code identity. Do not rename; see docs/CLAUDE_PLUGIN_IDENTITY.md."
+    },
     "keywords": ["notifications", "alerts", "productivity", "go"],
     "commands": [
         "./commands/init.md",

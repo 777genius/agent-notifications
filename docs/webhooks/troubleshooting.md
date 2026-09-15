@@ -1,5 +1,8 @@
 # Webhook Troubleshooting Guide
 
+Use the installed config-capable executable as `$NOTIFICATIONS_BIN`. Locate settings with `config path` and use [revision-checked leaf edits](../../commands/settings.md). JSON examples below illustrate fields, not whole-file replacements. Keep unrequested fields and literal environment templates unchanged. `config inspect --json` is the safe support output; it intentionally omits URLs, headers, payloads, free-form sounds and unknown fields. Never share raw config or assume omitted values are unset. Keep diagnostic files private and review logs for credentials before sharing.
+
+
 Common issues and solutions for webhook notifications.
 
 ## Table of Contents
@@ -21,9 +24,9 @@ No messages appearing in Slack/Discord/Telegram, no errors in logs.
 
 1. **Verify webhook is enabled:**
    ```bash
-   cat ~/.claude/claude-notifications-go/config.json | grep -A 3 "webhook"
+   "$NOTIFICATIONS_BIN" config inspect --json
    ```
-   Ensure `"enabled": true`
+   Inspect reports `valid` and per-status `settings.statuses.<status>.webhookEnabled`. It does not expose the global webhook object; do not infer omitted fields are unset.
 
 2. **Check logs for errors:**
    ```bash
@@ -54,7 +57,7 @@ No messages appearing in Slack/Discord/Telegram, no errors in logs.
 
 4. **Verify config is valid JSON:**
    ```bash
-   cat ~/.claude/claude-notifications-go/config.json | jq .
+   "$NOTIFICATIONS_BIN" config inspect --json
    ```
    If error, fix JSON syntax
 
@@ -434,11 +437,11 @@ export CLAUDE_NOTIFICATIONS_DEBUG=1
 ### Step 2: Check Configuration
 
 ```bash
-# Validate JSON
-cat ~/.claude/claude-notifications-go/config.json | jq .
+# Inspect validity without printing the document
+"$NOTIFICATIONS_BIN" config inspect --json
 
-# Check webhook config
-cat ~/.claude/claude-notifications-go/config.json | jq '.notifications.webhook'
+# Inspect safe status/channel flags; credentials are intentionally omitted
+"$NOTIFICATIONS_BIN" config inspect --json
 ```
 
 ### Step 3: Test Webhook URL
@@ -499,18 +502,8 @@ curl -I https://hooks.slack.com
 
 **Config issue?**
 ```bash
-# Test with minimal config
-cat > config/config-test.json <<EOF
-{
-  "notifications": {
-    "webhook": {
-      "enabled": true,
-      "preset": "",
-      "url": "https://webhook.site/YOUR-URL"
-    }
-  }
-}
-EOF
+# Read-only validity and selected-path diagnostics; never dump raw config.
+"$NOTIFICATIONS_BIN" config inspect --json
 ```
 
 **Platform issue?**
@@ -527,12 +520,12 @@ If you're still stuck after trying these solutions:
 
 1. **Gather information:**
    - Relevant logs from `notification-debug.log`
-   - Config file (redact sensitive tokens)
+   - Safe `config inspect --json` output (never raw config)
    - Platform (Slack/Discord/Telegram/Custom)
    - Error messages
 
 2. **Check existing issues:**
-   - GitHub Issues: https://github.com/777genius/claude-notifications-go/issues
+   - GitHub Issues: https://github.com/777genius/agent-notifications/issues
 
 3. **Create detailed issue:**
    - Include reproduction steps

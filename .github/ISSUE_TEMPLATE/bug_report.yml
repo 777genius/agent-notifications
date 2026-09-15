@@ -150,9 +150,12 @@ body:
     attributes:
       label: Configuration
       description: |
-        Share your config if relevant (remove webhook URLs/tokens!):
+        Share safe inspect output from your installed config-capable executable.
+        Never paste raw config, webhook URLs, headers, payloads or tokens.
+        Keep saved diagnostics private and review paths before sharing.
+        If inspect is unavailable, report that and the binary version; do not dump config.
         ```
-        cat ~/.claude/claude-notifications-go/config.json
+        "$NOTIFICATIONS_BIN" config inspect --json
         ```
       render: json
     validations:

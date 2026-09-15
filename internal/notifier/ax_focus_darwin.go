@@ -301,8 +301,8 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/777genius/claude-notifications/internal/config"
-	"github.com/777genius/claude-notifications/internal/logging"
+	"github.com/777genius/agent-notifications/internal/config"
+	"github.com/777genius/agent-notifications/internal/logging"
 )
 
 const windowFocusRetryAfterRestore = 2

@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/777genius/claude-notifications/internal/logging"
+	"github.com/777genius/agent-notifications/internal/logging"
 )
 
 // sendTerminalBell writes a BEL character to /dev/tty to trigger terminal

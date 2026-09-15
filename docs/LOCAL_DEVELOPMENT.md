@@ -2,6 +2,12 @@
 
 This project has three separate local-testing workflows. Use the smallest one that matches the change you are making.
 
+## Configuration isolation and qualification
+
+Notification configuration follows [E / L / N](CONFIGURATION.md#manual-configuration), not CLAUDE_HOME or CODEX_HOME. Before tests, create a private disposable root and isolate HOME, USERPROFILE, APPDATA, LOCALAPPDATA, all XDG CONFIG/CACHE/DATA/STATE/RUNTIME directories, CODEX_HOME, CLAUDE_CONFIG_DIR, CLAUDE_HOME and TMP/TEMP/TMPDIR. Clear E (`AGENT_NOTIFICATIONS_CONFIG`) for automatic resolver fixtures or set it to a unique absolute native fixture file. Child processes should receive an allowlist environment. Do not read real profiles/configs or invoke real agents/notifications for source-only checks.
+
+Inspect via the existing executable's `config inspect --json`; never attach raw JSON, expanded webhook values or unscreened logs. Keep diagnostic files private. Tests of Store CAS/unknown-field preservation and native Windows locks/replacement/ACLs, macOS/Linux crash/concurrency and frozen-old-reader compatibility must run separately in disposable environments. This documentation change does not establish those gates; cross-compilation is not native Windows E2E evidence.
+
 ## Recommended Workflow
 
 1. Use `scripts/dev-local-plugin.sh` first when you are changing install/update behavior.
@@ -19,7 +25,7 @@ make build
 
 ### 2. Isolated local marketplace testing
 
-This is the safest default. It uses an isolated Claude config under `~/.claude-dev/claude-notifications-go` and does not touch your real `~/.claude`.
+This isolates Claude metadata under `~/.claude-dev/claude-notifications-go`; it does not by itself isolate notification config, HOME, XDG or APPDATA. Apply the isolation requirements below before running it.
 
 ```bash
 scripts/dev-local-plugin.sh install
@@ -67,7 +73,7 @@ macOS / Linux:
 
 ```bash
 go build -o bin/claude-notifications ./cmd/claude-notifications
-./bin/claude-notifications version
+./bin/agent-notifications version
 ```
 
 Windows PowerShell:
@@ -82,7 +88,7 @@ Trigger a direct desktop notification with a minimal `PreToolUse` payload:
 macOS / Linux:
 
 ```bash
-echo '{"session_id":"local-debug","tool_name":"ExitPlanMode"}' | ./bin/claude-notifications handle-hook PreToolUse
+echo '{"session_id":"local-debug","tool_name":"ExitPlanMode"}' | ./bin/agent-notifications handle-hook PreToolUse
 ```
 
 Windows PowerShell:
@@ -105,7 +111,7 @@ What to collect:
 3. The last lines from `notification-debug.log` in the repo root.
 4. The output of the built binary's `version` command.
 5. Relevant OS notification settings:
-   - macOS: `System Settings > Notifications > Claude Notifier`
+   - macOS: `System Settings > Notifications > Agent Notifications`
    - Linux: desktop-environment notification settings and whether the session is local desktop vs headless/remote
    - Windows: `Settings > System > Notifications > Claude Code Notifications`
 6. On macOS / Linux, if click-to-focus is part of the report, whether clicking the notification activates the expected window.
@@ -147,6 +153,13 @@ What to verify manually:
 2. Clicking it focuses the exact Claude terminal/window that triggered the hook.
 3. On Linux, verify it does not jump to a stale Terminator/X11 window.
 4. On macOS, verify the right app/window becomes frontmost.
+5. In Warp (v0.2026.05.27+): with two Warp tabs/panes, the click must land on the originating pane (and its agent chat), not merely bring Warp to the front. From a Warp pane:
+
+```bash
+scripts/warp-focus-check.sh notify
+```
+
+Then switch to another Warp tab and click the notification. `scripts/warp-focus-check.sh open` only checks Warp's URL handler, not the notification click path.
 
 ### Status / targeting
 
@@ -215,3 +228,5 @@ For click-to-focus changes:
 - Claude process debug log: printed by `scripts/e2e-real-claude.sh` for each run
 
 If a smoke test fails, keep both logs and the command output together when opening an issue or PR.
+
+The checked-in `bin/agent-notifications` symlink delegates to `bin/claude-notifications`; building the legacy development target also makes the primary command available. Installation replaces both launchers with links to the same platform executable.

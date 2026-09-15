@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Real-Claude smoke/manual E2E harness for Claude Notifications.
+# Real-Claude smoke/manual E2E harness for Agent Notifications.
 
 set -euo pipefail
 

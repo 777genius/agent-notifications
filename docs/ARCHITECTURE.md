@@ -35,8 +35,8 @@ notification_plugin_go/
 ├── pkg/                           # Public libraries
 │   └── jsonl/                     # JSONL parser
 │       └── jsonl.go               # Streaming JSONL parser
-├── config/                        # Legacy config location (migrated to ~/.claude/claude-notifications-go/)
-│   └── config.json                # Legacy config (auto-migrated to stable path)
+├── config/                        # Packaged defaults / explicit historical recovery source
+│   └── config.json                # Template only; never a runtime fallback or write target
 ├── hooks/                         # Claude Code hooks
 │   └── hooks.json                 # Hook definitions
 ├── .claude-plugin/                # Plugin metadata
@@ -45,6 +45,12 @@ notification_plugin_go/
 └── bin/                           # Compiled binaries
     └── claude-notifications       # Main executable
 ```
+
+## Shared configuration contract
+
+The config Store owns selection and raw patch writes; see [OS paths and recovery](CONFIGURATION.md#manual-configuration). Selection is E → existing L → N, independent of adapter and resources. Hooks read without migration or writes; invalid selected config is an error, never bundle fallback. Only genuinely missing automatic config permits verified in-memory defaults after historical checks.
+
+`config path` and safe `config inspect --json` share runtime selection. The wizard submits JSON Pointer edits with the inspect revision to `config edit --stdin --expect-revision TOKEN`; conflicts require an explicit user decision. Raw untouched fields and templates survive; the expanded/defaulted runtime Config must never be serialized back. `config init` is create-only, and `--from FILE` is explicit missing-target recovery before cache updates. Resource/permission/venv/state locations and legacy binary/plugin identifiers stay unchanged. Native OS transactional qualification is a release gate, not proven by these docs.
 
 ## Core Components
 
@@ -71,7 +77,7 @@ notification_plugin_go/
 
 **Features**:
 - JSON-based configuration
-- Environment variable expansion (`${CLAUDE_PLUGIN_ROOT}`)
+- Environment variable expansion (`${AGENT_NOTIFICATIONS_ROOT}`)
 - Sensible defaults for all settings
 - Validation for webhook presets, formats, required fields
 

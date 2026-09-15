@@ -1,4 +1,11 @@
 #!/bin/bash
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-env.sh"
+# Native Windows fixtures build the real Go executable. Preserve only Go's
+# pre-populated module cache across env -i so those builds remain offline.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) TEST_ENV_HANDOFF_GOMODCACHE=1 ;;
+esac
+test_env_enter "$0" "$@"
 # install_e2e_test.sh - End-to-end tests for install.sh
 #
 # Usage:
@@ -13,7 +20,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 INSTALL_SCRIPT="$SCRIPT_DIR/install.sh"
 MOCK_SERVER="$SCRIPT_DIR/mock_server.py"
-FIXTURES_DIR="$SCRIPT_DIR/test_fixtures"
 
 # Colors
 GREEN='\033[0;32m'
@@ -55,6 +61,26 @@ for arg in "$@"; do
             ;;
     esac
 done
+
+# All generated fixtures and user state belong to this disposable suite run.
+SUITE_DIR=$(mktemp -d)
+FIXTURES_DIR="$SUITE_DIR/fixtures"
+test_env_setup "$SUITE_DIR"
+
+# Offline tests must never inherit public release endpoints or user proxies.
+if [ "$RUN_REAL_NETWORK" != true ]; then
+    export SKIP_CONNECTIVITY_CHECK=true
+    export RELEASE_URL="http://127.0.0.1:1"
+    export CHECKSUMS_URL="$RELEASE_URL/checksums.txt"
+    export RELEASES_BASE_URL="$RELEASE_URL"
+    export LATEST_RELEASE_API_URL="$RELEASE_URL/api/latest"
+    export MODERN_NOTIFIER_URL="$RELEASE_URL/ClaudeNotifier.app.zip"
+    export NOTIFIER_URL="$RELEASE_URL/valid.zip"
+    export http_proxy="http://127.0.0.1:1" https_proxy="http://127.0.0.1:1" ALL_PROXY="http://127.0.0.1:1"
+    export HTTP_PROXY="$http_proxy" HTTPS_PROXY="$https_proxy" all_proxy="$ALL_PROXY"
+    export NO_PROXY="localhost,127.0.0.1" no_proxy="localhost,127.0.0.1"
+    export PIP_NO_INDEX=1
+fi
 
 #=============================================================================
 # Test Utilities
@@ -109,6 +135,8 @@ run_bootstrap_install_plugin() {
         claude() {
             printf "%s\n" "$*" >> "$COMMAND_LOG"
         }
+        # Registry-only adapter test; protected preflight has dedicated local HTTP fixtures.
+        config_preflight() { :; }
         install_plugin
     ' _ "$sourceable_bootstrap"
 }
@@ -181,6 +209,24 @@ run_with_timeout() {
     fi
 }
 
+# Use the same executable payload and checksum as the main Windows fixture.
+prepare_focus_fixture() {
+    local destination="$1" checksum="$2"
+    if is_windows; then
+        local focus_name="claude-notifications-windows-$(get_arch)-focus.exe"
+        cp "$FIXTURES_DIR/mock_binary" "$destination/$focus_name"
+        echo "$checksum  $focus_name" >> "$destination/checksums.txt"
+    fi
+}
+
+assert_desktop_runtime() {
+    local destination="$1"
+    case "$(get_platform)" in
+        windows) assert_executable "$destination/claude-notifications-windows-$(get_arch)-focus.exe" "Windows focus handler installed" ;;
+        darwin) assert_executable "$destination/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern" "Modern notifier executable installed" ;;
+    esac
+}
+
 # Start mock server
 start_mock_server() {
     local port="${1:-$MOCK_PORT}"
@@ -226,14 +272,26 @@ MOCK_EOF
     fi
     echo "$checksum  mock_binary" > "$FIXTURES_DIR/checksums.txt"
 
-    # Create valid zip for terminal-notifier test
-    if command -v zip &>/dev/null && [ ! -f "$FIXTURES_DIR/valid.zip" ]; then
-        mkdir -p "$FIXTURES_DIR/terminal-notifier.app/Contents/MacOS"
-        echo '#!/bin/bash' > "$FIXTURES_DIR/terminal-notifier.app/Contents/MacOS/terminal-notifier"
-        chmod +x "$FIXTURES_DIR/terminal-notifier.app/Contents/MacOS/terminal-notifier"
-        (cd "$FIXTURES_DIR" && zip -rq valid.zip terminal-notifier.app)
-        rm -rf "$FIXTURES_DIR/terminal-notifier.app"
-    fi
+    # Build both real app layouts; the installer checks the executable inside.
+    python3 - "$FIXTURES_DIR" <<'ZIP_EOF'
+import os
+import sys
+import zipfile
+for archive, app, binary in (
+    ("valid.zip", "terminal-notifier.app", "terminal-notifier"),
+    ("ClaudeNotifier.app.zip", "ClaudeNotifier.app", "terminal-notifier-modern"),
+):
+    with zipfile.ZipFile(os.path.join(sys.argv[1], archive), "w") as bundle:
+        entry = zipfile.ZipInfo(f"{app}/Contents/MacOS/{binary}")
+        entry.create_system = 3
+        entry.external_attr = 0o100755 << 16
+        bundle.writestr(entry, "#!/bin/sh\nexit 0\n")
+ZIP_EOF
+
+    SAVED_MODERN_NOTIFIER_URL="${MODERN_NOTIFIER_URL-}"
+    SAVED_NOTIFIER_URL="${NOTIFIER_URL-}"
+    export MODERN_NOTIFIER_URL="http://localhost:$port/ClaudeNotifier.app.zip"
+    export NOTIFIER_URL="http://localhost:$port/valid.zip"
 
     # Start server
     python3 "$MOCK_SERVER" "$port" "$FIXTURES_DIR" &
@@ -271,6 +329,16 @@ stop_mock_server() {
         kill $MOCK_PID 2>/dev/null || true
         wait $MOCK_PID 2>/dev/null || true
         MOCK_PID=""
+        if [ -n "${SAVED_MODERN_NOTIFIER_URL:-}" ]; then
+            export MODERN_NOTIFIER_URL="$SAVED_MODERN_NOTIFIER_URL"
+        else
+            unset MODERN_NOTIFIER_URL
+        fi
+        if [ -n "${SAVED_NOTIFIER_URL:-}" ]; then
+            export NOTIFIER_URL="$SAVED_NOTIFIER_URL"
+        else
+            unset NOTIFIER_URL
+        fi
     fi
 }
 
@@ -278,6 +346,7 @@ stop_mock_server() {
 cleanup() {
     stop_mock_server
     cleanup_test_dir
+    rm -rf "$SUITE_DIR"
 }
 trap cleanup EXIT INT TERM
 
@@ -613,8 +682,9 @@ test_lock_created() {
     cat > "$fake_bin/curl" <<'FAKE_CURL_EOF'
 #!/bin/sh
 if [ "$1" = "--help" ]; then
-    sleep 5
+    exit 0
 fi
+sleep 5
 exit 28
 FAKE_CURL_EOF
     chmod +x "$fake_bin/curl"
@@ -788,8 +858,8 @@ test_required_tools_curl_wget() {
     cleanup_test_dir
 }
 
-test_force_removes_binaries() {
-    echo -e "\n${CYAN}▶ test_force_removes_binaries${NC}"
+test_force_preserves_binaries() {
+    echo -e "\n${CYAN}▶ test_force_preserves_binaries${NC}"
     setup_test_dir
 
     # Create fake binary files
@@ -803,21 +873,26 @@ test_force_removes_binaries() {
              SKIP_CONNECTIVITY_CHECK=true \
              run_with_timeout 5 bash "$INSTALL_SCRIPT" --force 2>&1 || true)
 
-    # Old files should be removed before download attempt
-    assert_contains "$output" "removing old files" "Force cleanup message shown"
-    assert_file_not_exists "$TEST_DIR/$binary_name" "Old binary removed"
+    # Old files must survive a failed download
+    assert_contains "$output" "preserving live files" "Force preservation message shown"
+    assert_file_exists "$TEST_DIR/$binary_name" "Old binary preserved"
 
     cleanup_test_dir
 }
 
-test_force_removes_symlinks() {
-    echo -e "\n${CYAN}▶ test_force_removes_symlinks${NC}"
+test_force_preserves_symlinks() {
+    echo -e "\n${CYAN}▶ test_force_preserves_symlinks${NC}"
     setup_test_dir
 
-    # Create fake symlinks
-    touch "$TEST_DIR/target_binary"
-    ln -sf target_binary "$TEST_DIR/claude-notifications" 2>/dev/null || true
-    ln -sf target_binary "$TEST_DIR/sound-preview" 2>/dev/null || true
+    # Git Bash can copy ln -s targets instead of creating a symlink. Exercise
+    # the actual launcher form the installer uses on each platform.
+    if is_windows; then
+        printf '@echo off\r\nREM existing launcher\r\n' > "$TEST_DIR/claude-notifications.bat"
+        cp "$TEST_DIR/claude-notifications.bat" "$TEST_DIR/expected-launcher"
+    else
+        touch "$TEST_DIR/target_binary"
+        ln -s target_binary "$TEST_DIR/claude-notifications" || return 1
+    fi
 
     # Run with --force and unreachable URL
     # SKIP_CONNECTIVITY_CHECK bypasses the curl to github.com (flaky on CI)
@@ -826,12 +901,18 @@ test_force_removes_symlinks() {
     SKIP_CONNECTIVITY_CHECK=true \
     run_with_timeout 5 bash "$INSTALL_SCRIPT" --force 2>&1 || true
 
-    # Symlinks should be removed
-    if [ -L "$TEST_DIR/claude-notifications" ]; then
-        echo -e "  ${RED}✗${NC} Symlink not removed"
+    # Launcher bytes or symlink target must survive a failed download.
+    local preserved=false
+    if is_windows; then
+        cmp -s "$TEST_DIR/expected-launcher" "$TEST_DIR/claude-notifications.bat" && preserved=true
+    elif [ -L "$TEST_DIR/claude-notifications" ] && [ "$(readlink "$TEST_DIR/claude-notifications")" = target_binary ]; then
+        preserved=true
+    fi
+    if [ "$preserved" != true ]; then
+        echo -e "  ${RED}✗${NC} Launcher lost or changed"
         TESTS_FAILED=$((TESTS_FAILED + 1))
     else
-        echo -e "  ${GREEN}✓${NC} Symlink removed by --force"
+        echo -e "  ${GREEN}✓${NC} Launcher preserved by --force"
         TESTS_PASSED=$((TESTS_PASSED + 1))
     fi
     TESTS_RUN=$((TESTS_RUN + 1))
@@ -882,6 +963,9 @@ fi
 exit 0
 FAKE_EXE_EOF
     chmod +x "$bin_dir/claude-notifications-windows-amd64.exe"
+    # Complete desktop runtime so hook tests reach their intended behavior.
+    printf '#!/bin/sh\nexit 0\n' > "$bin_dir/claude-notifications-windows-amd64-focus.exe"
+    chmod +x "$bin_dir/claude-notifications-windows-amd64-focus.exe"
 
     touch "$bin_dir/sound-preview-windows-amd64.exe"
     touch "$bin_dir/list-devices-windows-amd64.exe"
@@ -892,6 +976,7 @@ FAKE_EXE_EOF
     exit_code=$?
 
     assert_exit_code 0 $exit_code "Installer succeeds with existing Windows binary"
+    assert_executable "$bin_dir/claude-notifications-windows-amd64-focus.exe" "Existing focus handler preserved"
     assert_contains "$output" "Windows exec-form hooks configured" "Windows hooks configuration message shown"
 
     local hooks_json
@@ -941,6 +1026,9 @@ echo "unknown command: $1" >&2
 exit 1
 OLD_EXE_EOF
     chmod +x "$bin_dir/claude-notifications-windows-amd64.exe"
+    # Complete desktop runtime so hook tests reach their intended behavior.
+    printf '#!/bin/sh\nexit 0\n' > "$bin_dir/claude-notifications-windows-amd64-focus.exe"
+    chmod +x "$bin_dir/claude-notifications-windows-amd64-focus.exe"
 
     local output exit_code
     set +e
@@ -993,6 +1081,9 @@ fi
 exit 0
 WRAPPER_EXE_EOF
     chmod +x "$bin_dir/claude-notifications-windows-amd64.exe"
+    # Complete desktop runtime so hook tests reach their intended behavior.
+    printf '#!/bin/sh\nexit 0\n' > "$bin_dir/claude-notifications-windows-amd64-focus.exe"
+    chmod +x "$bin_dir/claude-notifications-windows-amd64-focus.exe"
 
     local output exit_code
     set +e
@@ -1045,6 +1136,9 @@ fi
 exit 0
 SH_EXE_EOF
     chmod +x "$bin_dir/claude-notifications-windows-amd64.exe"
+    # Complete desktop runtime so hook tests reach their intended behavior.
+    printf '#!/bin/sh\nexit 0\n' > "$bin_dir/claude-notifications-windows-amd64-focus.exe"
+    chmod +x "$bin_dir/claude-notifications-windows-amd64-focus.exe"
 
     local output exit_code
     set +e
@@ -1089,6 +1183,9 @@ test_windows_native_hooks_real_exec_launch() {
         cleanup_test_dir
         return
     fi
+
+    printf '#!/bin/sh\nexit 0\n' > "$bin_dir/claude-notifications-windows-amd64-focus.exe"
+    chmod +x "$bin_dir/claude-notifications-windows-amd64-focus.exe"
 
     touch "$bin_dir/sound-preview-windows-amd64.exe"
     touch "$bin_dir/list-devices-windows-amd64.exe"
@@ -1189,15 +1286,28 @@ FAKE_BASH_GO_EOF
 
     local fake_bash_for_windows="$fake_bash"
     local fake_bash_log_for_windows="$fake_bash_log"
+    local fixture_config="$TEST_DIR/config.json"
+    local fixture_config_for_windows="$fixture_config"
     if command -v cygpath >/dev/null 2>&1; then
         fake_bash_for_windows="$(cygpath -w "$fake_bash" 2>/dev/null || printf '%s' "$fake_bash")"
         fake_bash_log_for_windows="$(cygpath -w "$fake_bash_log" 2>/dev/null || printf '%s' "$fake_bash_log")"
+        fixture_config_for_windows="$(cygpath -w "$fixture_config" 2>/dev/null || printf '%s' "$fixture_config")"
+    fi
+
+    # Keep the real hook fixture independent of arbitrary bundle or user
+    # configuration; this test exercises updater scheduling, not recovery.
+    if ! AGENT_NOTIFICATIONS_CONFIG="$fixture_config_for_windows" \
+        "$exe_path" config init --json >/dev/null; then
+        fail_test "Initialize config for Windows lazy update" "config init failed"
+        cleanup_test_dir
+        return
     fi
 
     local output exit_code
     set +e
     output=$(printf '{"session_id":"ci-win","transcript_path":"","cwd":""}\n' | \
-        env CLAUDE_NOTIFICATIONS_BASH="$fake_bash_for_windows" \
+        env AGENT_NOTIFICATIONS_CONFIG="$fixture_config_for_windows" \
+            CLAUDE_NOTIFICATIONS_BASH="$fake_bash_for_windows" \
             FAKE_BASH_LOG="$fake_bash_log_for_windows" \
             CLAUDE_HOOK_JUDGE_MODE=true \
             "$exe_path" handle-hook Stop 2>&1)
@@ -1227,8 +1337,8 @@ FAKE_BASH_GO_EOF
     cleanup_test_dir
 }
 
-test_force_removes_apps_macos() {
-    echo -e "\n${CYAN}▶ test_force_removes_apps_macos${NC}"
+test_force_preserves_apps_macos() {
+    echo -e "\n${CYAN}▶ test_force_preserves_apps_macos${NC}"
 
     if [ "$(uname)" != "Darwin" ]; then
         skip_test "macOS apps" "not on macOS"
@@ -1248,9 +1358,9 @@ test_force_removes_apps_macos() {
     SKIP_CONNECTIVITY_CHECK=true \
     run_with_timeout 5 bash "$INSTALL_SCRIPT" --force 2>&1 || true
 
-    # Apps should be removed
-    assert_dir_not_exists "$TEST_DIR/terminal-notifier.app" "terminal-notifier.app removed"
-    assert_dir_not_exists "$TEST_DIR/ClaudeNotifications.app" "ClaudeNotifications.app removed"
+    # Apps must survive a failed download
+    [ -d "$TEST_DIR/terminal-notifier.app" ] && pass_test "terminal-notifier preserved" || fail_test "terminal-notifier preserved" "missing"
+    [ -d "$TEST_DIR/ClaudeNotifications.app" ] && pass_test "icon app preserved" || fail_test "icon app preserved" "missing"
 
     cleanup_test_dir
 }
@@ -1284,6 +1394,7 @@ test_mock_download_success() {
         checksum=$(sha256sum "$FIXTURES_DIR/$binary_name" | awk '{print $1}')
     fi
     echo "$checksum  $binary_name" > "$FIXTURES_DIR/checksums.txt"
+    prepare_focus_fixture "$FIXTURES_DIR" "$checksum"
 
     # Run install
     output=$(RELEASE_URL="http://localhost:$MOCK_PORT" \
@@ -1294,6 +1405,7 @@ test_mock_download_success() {
     exit_code=$?
 
     assert_exit_code 0 $exit_code "Install completed successfully"
+    assert_desktop_runtime "$TEST_DIR"
     assert_file_exists "$TEST_DIR/$binary_name" "Binary downloaded"
     # On Windows, wrapper is .bat file; on Unix it's a symlink
     if is_windows; then
@@ -1410,6 +1522,7 @@ test_mock_checksum_mismatch() {
         checksum=$(sha256sum "$FIXTURES_DIR/$binary_name" | awk '{print $1}')
     fi
     echo "$checksum  $binary_name" > "$FIXTURES_DIR/checksums.txt"
+    prepare_focus_fixture "$FIXTURES_DIR" "$checksum"
 
     set +e
     output=$(RELEASE_URL="http://localhost:$MOCK_PORT/wrong-checksum" \
@@ -1450,6 +1563,7 @@ test_mock_partial_download_reports_transport_error() {
         checksum=$(sha256sum "$FIXTURES_DIR/$binary_name" | awk '{print $1}')
     fi
     echo "$checksum  $binary_name" > "$FIXTURES_DIR/checksums.txt"
+    prepare_focus_fixture "$FIXTURES_DIR" "$checksum"
 
     set +e
     output=$(RELEASE_URL="http://localhost:$MOCK_PORT/partial-close" \
@@ -1492,6 +1606,7 @@ test_mock_wrong_payload_recovers_after_retry() {
         checksum=$(sha256sum "$FIXTURES_DIR/$binary_name" | awk '{print $1}')
     fi
     echo "$checksum  $binary_name" > "$FIXTURES_DIR/checksums.txt"
+    prepare_focus_fixture "$FIXTURES_DIR" "$checksum"
 
     set +e
     output=$(RELEASE_URL="http://localhost:$MOCK_PORT/wrong-then-ok" \
@@ -1507,6 +1622,7 @@ test_mock_wrong_payload_recovers_after_retry() {
     assert_contains "$output" "Checksum verified|Installation Complete" "Retry eventually succeeds"
     assert_exit_code 0 $exit_code "Exit code is 0 after recovering from wrong payload"
     assert_file_exists "$TEST_DIR/$binary_name" "Recovered binary installed"
+    assert_desktop_runtime "$TEST_DIR"
 
     rm -f "$FIXTURES_DIR/$binary_name"
 
@@ -1538,12 +1654,13 @@ test_mock_pin_latest_to_exact_tag() {
         checksum=$(sha256sum "$pinned_dir/$binary_name" | awk '{print $1}')
     fi
     echo "$checksum  $binary_name" > "$pinned_dir/checksums.txt"
+    prepare_focus_fixture "$pinned_dir" "$checksum"
+    cp "$FIXTURES_DIR/ClaudeNotifier.app.zip" "$pinned_dir/"
 
     set +e
-    output=$(SKIP_CONNECTIVITY_CHECK=true \
+    output=$(unset RELEASE_URL CHECKSUMS_URL MODERN_NOTIFIER_URL; SKIP_CONNECTIVITY_CHECK=true \
              RELEASES_BASE_URL="http://localhost:$MOCK_PORT" \
              LATEST_RELEASE_API_URL="http://localhost:$MOCK_PORT/api/latest" \
-             MODERN_NOTIFIER_URL="http://localhost:$MOCK_PORT/valid.zip" \
              INSTALL_TARGET_DIR="$TEST_DIR" \
              run_with_timeout 60 bash "$INSTALL_SCRIPT" 2>&1)
     exit_code=$?
@@ -1553,6 +1670,7 @@ test_mock_pin_latest_to_exact_tag() {
     assert_contains "$output" "From: http://localhost:$MOCK_PORT/download/$MOCK_LATEST_TAG/$binary_name" "Pinned download URL is used"
     assert_exit_code 0 $exit_code "Install succeeds with pinned release tag"
     assert_file_exists "$TEST_DIR/$binary_name" "Pinned release binary downloaded"
+    assert_desktop_runtime "$TEST_DIR"
 
     rm -rf "$FIXTURES_DIR/download"
     unset MOCK_LATEST_TAG
@@ -1588,15 +1706,19 @@ test_mock_zip_corrupted() {
         checksum=$(sha256sum "$FIXTURES_DIR/$binary_name" | awk '{print $1}')
     fi
     echo "$checksum  $binary_name" > "$FIXTURES_DIR/checksums.txt"
+    prepare_focus_fixture "$FIXTURES_DIR" "$checksum"
 
+    local exit_code=0
     output=$(RELEASE_URL="http://localhost:$MOCK_PORT" \
              CHECKSUMS_URL="http://localhost:$MOCK_PORT/checksums.txt" \
              MODERN_NOTIFIER_URL="http://localhost:$MOCK_PORT/corrupted.zip" \
              NOTIFIER_URL="http://localhost:$MOCK_PORT/corrupted.zip" \
              INSTALL_TARGET_DIR="$TEST_DIR" \
-             run_with_timeout 30 bash "$INSTALL_SCRIPT" 2>&1 || true)
+             run_with_timeout 30 bash "$INSTALL_SCRIPT" 2>&1) || exit_code=$?
 
-    # Should warn about terminal-notifier but still succeed overall
+    assert_exit_code 1 "$exit_code" "Corrupt notifier prevents successful install"
+    assert_file_not_exists "$TEST_DIR/claude-notifications" "Incomplete runtime is not published"
+    # Missing desktop runtime must fail without publishing a ready installation
     assert_contains "$output" "not a valid zip|Could not extract|extraction" "Corrupted zip detected"
 
     rm -f "$FIXTURES_DIR/$binary_name"
@@ -2130,6 +2252,7 @@ test_hook_wrapper_mock_download() {
         checksum=$(sha256sum "$FIXTURES_DIR/$binary_name" | awk '{print $1}')
     fi
     echo "$checksum  $binary_name" > "$FIXTURES_DIR/checksums.txt"
+    prepare_focus_fixture "$FIXTURES_DIR" "$checksum"
 
     # Copy wrapper and install script
     cp "$SCRIPT_DIR/hook-wrapper.sh" "$TEST_DIR/"
@@ -2147,6 +2270,8 @@ test_hook_wrapper_mock_download() {
 
     stop_mock_server
 
+    # Check the wrapper installed the complete desktop runtime.
+    assert_desktop_runtime "$TEST_DIR"
     # Check binary was downloaded
     if is_windows; then
         assert_file_exists "$TEST_DIR/claude-notifications.bat" "Binary downloaded via wrapper (mock)"
@@ -2358,15 +2483,15 @@ main() {
         test_directory_auto_created
         test_transport_error_diagnostics
         test_required_tools_curl_wget
-        test_force_removes_binaries
-        test_force_removes_symlinks
+        test_force_preserves_binaries
+        test_force_preserves_symlinks
         test_windows_native_hooks_configured_existing_binary
         test_windows_old_binary_forces_update_before_hooks
         test_windows_wrapper_exec_form_forces_update_before_hooks
         test_windows_sh_exec_form_forces_update_before_hooks
         test_windows_native_hooks_real_exec_launch
         test_windows_real_hook_schedules_lazy_update
-        test_force_removes_apps_macos
+        test_force_preserves_apps_macos
     fi
 
     # Category B: Mock Server Tests
@@ -2389,7 +2514,7 @@ main() {
         # /releases/latest may have switched to the new release (without binaries yet).
         RELEASE_BINARY_AVAILABLE=false
         if real_network_tests_supported; then
-            local _check_url="https://github.com/777genius/claude-notifications-go/releases/latest/download"
+            local _check_url="https://github.com/777genius/agent-notifications/releases/latest/download"
             local _check_bin
             case "$(uname -s)-$(uname -m)" in
                 Linux-x86_64)       _check_bin="claude-notifications-linux-amd64" ;;
@@ -2408,7 +2533,7 @@ main() {
                 _our_version=$(grep '"version"' "$_plugin_json" | head -1 | sed 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
             fi
             local _latest_tag=""
-            _latest_tag=$(curl -sI -o /dev/null -w "%{redirect_url}" --connect-timeout 5 "https://github.com/777genius/claude-notifications-go/releases/latest" 2>/dev/null | sed 's|.*/tag/v||')
+            _latest_tag=$(curl -sI -o /dev/null -w "%{redirect_url}" --connect-timeout 5 "https://github.com/777genius/agent-notifications/releases/latest" 2>/dev/null | sed 's|.*/tag/v||')
 
             if [ -n "$_our_version" ] && [ -n "$_latest_tag" ] && [ "$_our_version" != "$_latest_tag" ]; then
                 echo -e "  ${YELLOW}⚠${NC} Release version mismatch: ours=v${_our_version}, latest=v${_latest_tag} — download tests will be skipped"
