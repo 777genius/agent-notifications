@@ -1183,21 +1183,60 @@ const fs = require('fs');
 const path = require('path');
 const osPath = process.platform === 'win32' ? path.win32 : path.posix;
 function lexists(p) { try { fs.lstatSync(p); return true; } catch (_) { return false; } }
-function real(p) {
-  const resolved = osPath.resolve(p);
-  let current = resolved;
-  const missing = [];
-  while (true) {
-    try {
-      const base = fs.realpathSync(current);
-      return missing.length ? osPath.join(base, ...missing.slice().reverse()) : base;
-    } catch (_) {
-      const parent = osPath.dirname(current);
-      if (parent === current) return resolved;
-      missing.push(osPath.basename(current));
-      current = parent;
+function isFsRoot(p) {
+  if (!p || p === '/') return true;
+  if (process.platform !== 'win32') return false;
+  const n = p.replace(/\//g, '\\');
+  if (/^[a-zA-Z]:\\?$/.test(n)) return true;
+  const d = splitdrive(n);
+  return d[1] === '' || d[1] === '\\';
+}
+function walkReal(current, rest, seen) {
+  const sepRe = process.platform === 'win32' ? /[\\/]+/ : /\/+/;
+  if (osPath.isAbsolute(rest) || (process.platform === 'win32' && /^[a-zA-Z]:/.test(rest))) {
+    if (process.platform === 'win32') {
+      const n = rest.replace(/\//g, '\\');
+      const d = splitdrive(n);
+      current = d[0];
+      rest = d[1];
+      if (rest.startsWith('\\')) {
+        current += '\\';
+        rest = rest.replace(/^\\+/, '');
+      }
+    } else {
+      current = '/';
+      rest = rest.replace(/^\/+/, '');
     }
   }
+  const parts = String(rest || '').split(sepRe);
+  for (let i = 0; i < parts.length; i++) {
+    const name = parts[i];
+    if (!name || name === '.') continue;
+    if (name === '..') {
+      if (current && !isFsRoot(current)) current = osPath.dirname(current);
+      continue;
+    }
+    const next = current ? osPath.join(current, name) : name;
+    let st;
+    try { st = fs.lstatSync(next); } catch (_) {
+      const leftover = parts.slice(i).filter((part) => part && part !== '.');
+      return leftover.length ? osPath.join(current || '', ...leftover) : next;
+    }
+    if (!st.isSymbolicLink()) { current = next; continue; }
+    if (Object.prototype.hasOwnProperty.call(seen, next)) {
+      current = seen[next] || next;
+      continue;
+    }
+    seen[next] = null;
+    current = walkReal(current, fs.readlinkSync(next), seen);
+    seen[next] = current;
+  }
+  return current || '.';
+}
+function real(p) {
+  // Walk components so symlink then ".." matches Python os.path.realpath.
+  // path.resolve() would drop ".." before the symlink is followed.
+  return osPath.resolve(walkReal('', String(p || ''), Object.create(null)));
 }
 function splitdrive(p) {
   if (process.platform !== 'win32') return ['', p];
