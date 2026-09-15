@@ -2025,6 +2025,54 @@ func TestSetupWizardUninstallRecoversPendingJournalE2E(t *testing.T) {
 	}
 }
 
+func TestSetupWizardUninstallPlanPendingJournalE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	flags := func(action string, extra ...string) []string {
+		args := []string{
+			"--action", action, "--agents", "codex", "--hooks", "false",
+			"--package", env.pkg, "--control-root", env.control, "--runtime-root", env.runtime,
+			"--global-config", env.global, "--codex-home", env.codexHome,
+			"--client-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+		}
+		return append(args, extra...)
+	}
+	var out bytes.Buffer
+	if code := executeSetupWizardWith(ctx, flags("install", "--yes", "--json"), &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("install: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "completed" {
+		t.Fatalf("install: %+v", got)
+	}
+	plantWizardCLIPendingJournal(t, env.control)
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, flags("uninstall"), &out, io.Discard, strings.NewReader("n\n"), true); code != 0 || !strings.Contains(out.String(), "cancelled") {
+		t.Fatalf("uninstall plan cancel: %d %s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "recovery-pending=wizard-pending-op") {
+		t.Fatalf("uninstall plan omitted recovery: %s", out.String())
+	}
+	journal := filepath.Join(filepath.Dir(env.control), "uap", "state", "operations", "wizard-pending-op.json")
+	if _, err := os.Lstat(journal); err != nil {
+		t.Fatalf("uninstall plan recovered journal: %v", err)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, flags("inspect", "--json"), &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect after uninstall plan: %d %s", code, out.String())
+	}
+	view := decodeWizardJSON(t, out)
+	found := false
+	for _, target := range view.Targets {
+		if target.Unit == "agent-notify" && target.Outcome == "installed" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("uninstall plan dropped binding: %+v", view.Targets)
+	}
+}
+
 func TestSetupWizardRepairDifferentDigestRequiresUpdateE2E(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()

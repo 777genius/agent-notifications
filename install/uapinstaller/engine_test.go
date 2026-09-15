@@ -1423,6 +1423,40 @@ func TestPrepareRemoveGroupDoesNotDeactivateBeforeApply(t *testing.T) {
 	}
 }
 
+func TestPrepareRemoveGroupRejectsCorruptArtifactBeforeDeactivate(t *testing.T) {
+	ctx, eng, runner, pkg, probe, codexConfig, claudeConfig := newBothClientSandbox(t)
+	id := "00000000-0000-4000-8000-0000000000e4"
+	targets := bothClientTargets(codexConfig, claudeConfig, probe)
+	installBothClients(t, ctx, eng, pkg, probe, id, "group-remove-corrupt-install", targets)
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 2 {
+		t.Fatalf("inspect: %+v %v", view, err)
+	}
+	target := inspectedBinding(t, view, "claude").TargetPath
+	if err := os.WriteFile(filepath.Join(target, "tampered"), []byte("corrupt"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	before := len(runner.calls)
+	_, err = eng.Prepare(ctx, Request{
+		Operation: OpRemove, InstallationID: id, OperationID: "group-remove-corrupt",
+		ClientExecutable: probe,
+		Targets: []ClientTarget{
+			{ClientID: "codex", ClientConfigRoot: codexConfig, ClientExecutable: probe, ExternalUninstalled: true},
+			{ClientID: "claude", ClientConfigRoot: claudeConfig, ClientExecutable: probe},
+		},
+	})
+	if err == nil {
+		t.Fatal("corrupt managed artifact accepted")
+	}
+	if len(runner.calls) != before {
+		t.Fatalf("group remove preflight deactivated client: %d -> %d", before, len(runner.calls))
+	}
+	view, err = eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 2 {
+		t.Fatalf("corrupt group remove mutated bindings: %+v %v", view, err)
+	}
+}
+
 func TestApplyStaleGroupRemovePlanChangedPreservesSibling(t *testing.T) {
 	ctx, eng, _, pkg, probe, codexConfig, claudeConfig := newBothClientSandbox(t)
 	id := "00000000-0000-4000-8000-0000000000c4"
