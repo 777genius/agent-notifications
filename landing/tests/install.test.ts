@@ -8,7 +8,7 @@ test("one-line setup contract for each product and supported target", () => {
       assert.equal(command(product, target, "update"), install);
       assert.equal(
         install,
-        `curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/main/bin/setup.sh | bash -s -- --product ${product}`,
+        `(set -o pipefail; curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/a8fbdc74ab418e6221fae2794d1dc9c3d8fc631d/bin/setup.sh | bash -s -- --product ${product})`,
       );
       assert.equal(command(product, target, "configure"), null);
     }

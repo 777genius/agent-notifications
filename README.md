@@ -39,10 +39,10 @@ Desktop notifications and sounds for **Claude Code and Codex CLI**. Know when a 
 Requires Claude Code and/or Codex CLI, plus **Python 3.6+** available as `python3`. On Windows, use **Git Bash with native Windows Python**.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/main/bin/setup.sh | bash
+(set -o pipefail; curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/a8fbdc74ab418e6221fae2794d1dc9c3d8fc631d/bin/setup.sh | bash)
 ```
 
-The small setup script resolves the latest stable release and downloads both installer scripts from its exact commit. Release lookup and validation happen automatically. Choose **Claude**, **Codex**, or **both**. For non-interactive setup, append `-s -- --product claude`, `codex`, or `both` after `bash`.
+The command uses a commit-pinned setup loader and reports download failures. The small setup script resolves the latest stable release and downloads both installer scripts from its exact commit. Release lookup and validation happen automatically. Choose **Claude**, **Codex**, or **both**. For non-interactive setup, append `-s -- --product claude`, `codex`, or `both` after `bash`, before the closing `)`.
 
 - **Claude:** restart Claude Code.
 - **Codex:** restart Codex, open `/hooks`, then review and trust the installed hooks.

@@ -43,7 +43,7 @@ test("production command matrix, aftercare, clipboard and configuration", async 
           await page.getByRole("button", { name: intent, exact: true }).click();
         const value = await page.getByLabel(intent + " command").inputValue();
         expect(value).toBe(
-          `curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/main/bin/setup.sh | bash -s -- --product ${product}`,
+          `(set -o pipefail; curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/a8fbdc74ab418e6221fae2794d1dc9c3d8fc631d/bin/setup.sh | bash -s -- --product ${product})`,
         );
       }
       if (os === "windows")
@@ -148,7 +148,7 @@ test("pending clipboard completion cannot claim a different command was copied",
   await page.evaluate(() => (window as any).finishCopy());
   await expect(page.getByRole("status")).not.toContainText("Copied");
   await expect(page.getByLabel("Install command")).toHaveValue(
-    /--product both$/,
+    /--product both\)$/,
   );
 });
 test("assets load, hydration is clean and reduced motion disables background animation", async ({
@@ -188,7 +188,7 @@ test("language switch localizes content, URL, metadata and persists the choice",
   await page.getByRole("button", { name: "Codex CLI", exact: true }).click();
   await chooseOS(page, "windows");
   await expect(page.getByLabel("Install command")).toHaveValue(
-    /--product codex$/,
+    /--product codex\)$/,
   );
   await chooseLanguage(page, /Current language/, "简体中文");
   await expect(page).toHaveURL(
@@ -212,7 +212,7 @@ test("language switch localizes content, URL, metadata and persists the choice",
   expect(
     await page.locator('script[type="application/ld+json"]').textContent(),
   ).toContain("SoftwareApplication");
-  await expect(page.getByLabel("安装命令")).toHaveValue(/--product codex$/);
+  await expect(page.getByLabel("安装命令")).toHaveValue(/--product codex\)$/);
   await expect(
     page.getByText("请在 Windows 的 Git Bash 中运行。", { exact: true }),
   ).toBeVisible();

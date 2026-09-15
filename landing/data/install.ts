@@ -41,5 +41,5 @@ export function command(
 ): string | null {
   if (intent === "configure" || target === "unknown" || target === "manual")
     return null;
-  return `curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/main/bin/setup.sh | bash -s -- --product ${product}`;
+  return `(set -o pipefail; curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/a8fbdc74ab418e6221fae2794d1dc9c3d8fc631d/bin/setup.sh | bash -s -- --product ${product})`;
 }
