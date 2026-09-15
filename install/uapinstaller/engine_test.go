@@ -1360,6 +1360,116 @@ func TestApplyStaleGroupRemovePlanChangedPreservesSibling(t *testing.T) {
 	}
 }
 
+func TestRemoveGroupOneAlreadyAbsentRemovesOnlyLive(t *testing.T) {
+	ctx, eng, _, pkg, probe, codexConfig, claudeConfig := newBothClientSandbox(t)
+	id := "00000000-0000-4000-8000-0000000000c5"
+	installBothClients(t, ctx, eng, pkg, probe, id, "group-mixed-remove-install", bothClientTargets(codexConfig, claudeConfig, probe))
+	live, err := eng.Prepare(ctx, Request{
+		Operation: OpRemove, ClientID: "claude", ClientConfigRoot: claudeConfig, ClientExecutable: probe,
+		InstallationID: id, OperationID: "claude-first-remove",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, live, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = live.Close()
+	rm, err := eng.Prepare(ctx, Request{
+		Operation: OpRemove, InstallationID: id, OperationID: "group-mixed-remove",
+		ClientExecutable: probe,
+		Targets: []ClientTarget{
+			{ClientID: "codex", ClientConfigRoot: codexConfig, ClientExecutable: probe, ExternalUninstalled: true},
+			{ClientID: "claude", ClientConfigRoot: claudeConfig, ClientExecutable: probe},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rm.Close() }()
+	if len(rm.Plan().Targets) != 2 {
+		t.Fatalf("mixed remove plan: %+v", rm.Plan())
+	}
+	byClient := map[string]PlanTarget{}
+	for _, target := range rm.Plan().Targets {
+		byClient[target.ClientID] = target
+	}
+	if !byClient["claude"].NoChange || byClient["codex"].NoChange {
+		t.Fatalf("mixed remove classification: %+v", rm.Plan().Targets)
+	}
+	got, err := eng.Apply(ctx, rm, Decision{Confirmed: true})
+	if err != nil || got.Outcome != OutcomeCompleted {
+		t.Fatalf("mixed group remove: %+v %v", got, err)
+	}
+	if len(got.Targets) != 2 {
+		t.Fatalf("mixed group remove targets: %+v", got.Targets)
+	}
+	seen := map[string]ClientResult{}
+	for _, target := range got.Targets {
+		seen[target.ClientID] = target
+	}
+	if seen["claude"].Materialization != string(domain.MaterializationAbsent) {
+		t.Fatalf("absent target not classified: %+v", got.Targets)
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 {
+		t.Fatalf("inspect after mixed group remove: %+v %v", view, err)
+	}
+	if len(view.Installations[0].Bindings) != 0 {
+		t.Fatalf("live sibling survived mixed group remove: %+v", view.Installations[0].Bindings)
+	}
+}
+
+func TestRemoveGroupBothAlreadyAbsentDoesNotCreateJournal(t *testing.T) {
+	eng := plantRetainedInstallation(t)
+	before, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	codexConfig := filepath.Join(t.TempDir(), "codex-config")
+	claudeConfig := filepath.Join(t.TempDir(), "claude-config")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rm, err := eng.Prepare(testCtx(t), Request{
+		Operation: OpRemove, InstallationID: "00000000-0000-4000-8000-000000000070",
+		OperationID: "group-both-absent",
+		Targets: []ClientTarget{
+			{ClientID: "codex", ClientConfigRoot: codexConfig, ExternalUninstalled: true},
+			{ClientID: "claude", ClientConfigRoot: claudeConfig},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rm.Close() }()
+	if !rm.Plan().NoChange || len(rm.Plan().Targets) != 2 {
+		t.Fatalf("both-absent plan: %+v", rm.Plan())
+	}
+	got, err := eng.Apply(testCtx(t), rm, Decision{Confirmed: true})
+	if err != nil || got.Outcome != OutcomeUnchanged || got.Reason != "already_absent" || !got.NoChange || !got.DataRetained {
+		t.Fatalf("both-absent apply: %+v %v", got, err)
+	}
+	if len(got.Targets) != 2 {
+		t.Fatalf("both-absent targets: %+v", got.Targets)
+	}
+	after, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("both-absent mutated state")
+	}
+	if _, err := os.Lstat(eng.cfg.LockFile); !os.IsNotExist(err) {
+		t.Fatal("both-absent acquired mutation lock")
+	}
+	if _, err := os.Lstat(eng.cfg.OperationsDir); !os.IsNotExist(err) {
+		t.Fatal("both-absent created operations journal dir")
+	}
+	if runner, ok := eng.cfg.Runner.(*countingRunner); ok && runner.n != 0 {
+		t.Fatalf("both-absent ran helper %d times", runner.n)
+	}
+}
+
 func TestInstallSameDigestDifferentDirectoryAddsSecondClient(t *testing.T) {
 	skipWindowsLauncherExecuteBit(t)
 	ctx := testCtx(t)
