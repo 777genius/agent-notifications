@@ -960,7 +960,40 @@ func inspect(ctx context.Context, req Request, agents []portable.Integration, sn
 			Kind: "recover", Reason: strings.Join(recoveryIDs(view), ","),
 		})
 	}
-	return out, nil
+	return reportPendingWizardIntent(req, snap, out), nil
+}
+
+// reportPendingWizardIntent lists the persisted resume command without
+// restoring omitted flags into this inspect request or running Recover.
+func reportPendingWizardIntent(req Request, snap installruntime.InstalledSnapshot, out Result) Result {
+	pending := snap.Ledger.PendingMutation
+	if pending == nil || pending.Owner != "existing-installer" {
+		return out
+	}
+	intent, err := portablesetup.ReadIntent(req.ControlRoot)
+	if err != nil || intent.SetupIntentID != pending.ID {
+		out.NextActions = append(out.NextActions, NextAction{Kind: "recover", Reason: "pending_intent_unreadable"})
+		return out
+	}
+	clients := intentClients(intent)
+	retry := retryRequestFromIntent(req, intent)
+	if intent.Action == string(ActionUninstall) && !intent.ExternalUninstalled {
+		for _, client := range clients {
+			if client == string(portable.Codex) {
+				retry.ExternalUninstalled = true
+				out.NextActions = append(out.NextActions, NextAction{
+					Kind: "external-uninstall", Agents: clients,
+					Command: RetryCommand(retry), Reason: "attest_codex_plugin_removed",
+				})
+				return out
+			}
+		}
+	}
+	out.NextActions = append(out.NextActions, NextAction{
+		Kind: "resume", Agents: clients, Command: RetryCommand(retry),
+		Reason: "pending_" + intent.Action,
+	})
+	return out
 }
 
 func install(ctx context.Context, req Request, snap installruntime.InstalledSnapshot, runtimeRoot string, hookAgents, notifyAgents []portable.Integration, out Result) (Result, error) {
@@ -2137,6 +2170,9 @@ func offerPostSetupActions(req Request, agents []portable.Integration, out Resul
 			}
 		}
 		return false
+	}
+	if has("recover") || has("external-uninstall") || has("resume") || has("activate") {
+		return out
 	}
 	if restartPending && !has("restart-client") {
 		out.NextActions = append(out.NextActions, NextAction{

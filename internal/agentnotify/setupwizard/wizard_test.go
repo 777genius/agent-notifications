@@ -1561,6 +1561,40 @@ func TestWizardMixedUninstallHoldsClaudeUntilCodexAttested(t *testing.T) {
 			if !strings.Contains(joined, "claude") || !strings.Contains(joined, "codex") || !strings.Contains(joined, "--external-uninstalled") {
 				t.Fatalf("retry omitted mixed uninstall identity: %v", held.Command)
 			}
+			beforeInspect, err := installruntime.ReadInstalledSnapshot(control)
+			if err != nil {
+				t.Fatal(err)
+			}
+			view, err := Run(ctx, Request{
+				Action: ActionInspect, Agents: []string{"claude"},
+				ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global, Helper: probe,
+			})
+			if err != nil || view.Outcome != "completed" || view.ExitCode() != 0 {
+				t.Fatalf("inspect pending hold: %+v %v", view, err)
+			}
+			foundResume := false
+			for _, next := range view.NextActions {
+				if next.Kind != "external-uninstall" {
+					continue
+				}
+				foundResume = true
+				cmd := strings.Join(next.Command, " ")
+				if !strings.Contains(cmd, "claude") || !strings.Contains(cmd, "codex") || !strings.Contains(cmd, "--external-uninstalled") {
+					t.Fatalf("inspect omitted mixed uninstall resume: %v", next.Command)
+				}
+			}
+			if !foundResume {
+				t.Fatalf("inspect omitted pending uninstall: %+v", view.NextActions)
+			}
+			for _, next := range view.NextActions {
+				if next.Kind == "test-notification" {
+					t.Fatalf("inspect offered delivery while uninstall is pending: %+v", view.NextActions)
+				}
+			}
+			afterInspect, err := installruntime.ReadInstalledSnapshot(control)
+			if err != nil || afterInspect.Ledger.Generation != beforeInspect.Ledger.Generation || afterInspect.Ledger.PendingMutation == nil {
+				t.Fatalf("inspect mutated pending uninstall: %+v %v", afterInspect.Ledger, err)
+			}
 			removed, err := Run(ctx, Request{
 				Action: ActionUninstall, Yes: true, ExternalUninstalled: true,
 				ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
@@ -2689,6 +2723,38 @@ func TestWizardConfirmationIntentSurvivesFailedHooks(t *testing.T) {
 	}
 	if intent.TreeDigest == "" || intent.HelperDigest == "" || intent.HelperVersion == "" {
 		t.Fatalf("intent omitted source/helper identity: %+v", intent)
+	}
+	beforeInspect, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := Run(ctx, Request{
+		Action: ActionInspect, Agents: []string{"codex"},
+		ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global, Helper: probe,
+	})
+	if err != nil || view.Outcome != "completed" || view.ExitCode() != 0 {
+		t.Fatalf("inspect pending install: %+v %v", view, err)
+	}
+	foundResume := false
+	for _, next := range view.NextActions {
+		if next.Kind == "test-notification" {
+			t.Fatalf("inspect offered delivery while install is pending: %+v", view.NextActions)
+		}
+		if next.Kind != "resume" {
+			continue
+		}
+		foundResume = true
+		cmd := strings.Join(next.Command, " ")
+		if !strings.Contains(cmd, "install") || !strings.Contains(cmd, "codex") {
+			t.Fatalf("inspect omitted pending install resume: %v", next.Command)
+		}
+	}
+	if !foundResume {
+		t.Fatalf("inspect omitted pending install: %+v", view.NextActions)
+	}
+	afterInspect, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil || afterInspect.Ledger.Generation != beforeInspect.Ledger.Generation || afterInspect.Ledger.PendingMutation == nil {
+		t.Fatalf("inspect mutated pending install: %+v %v", afterInspect.Ledger, err)
 	}
 	resume := req
 	resume.Agents = nil
