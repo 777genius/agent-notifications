@@ -1725,6 +1725,10 @@ func TestSetupWizardUpdateRepairRemoveBothLiveClientsE2E(t *testing.T) {
 		return got
 	}
 	installed := run(t, "install both", append([]string{"--action", "install", "--agents", "claude,codex", "--yes", "--json"}, shared...))
+	repeat := run(t, "repeat install both", append([]string{"--action", "install", "--agents", "claude,codex", "--yes", "--json"}, shared...))
+	if repeat.InstallationID != installed.InstallationID {
+		t.Fatalf("repeat install changed installation: install=%s repeat=%s", installed.InstallationID, repeat.InstallationID)
+	}
 	if err := os.WriteFile(filepath.Join(env.pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
