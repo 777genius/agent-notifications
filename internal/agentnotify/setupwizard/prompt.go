@@ -252,7 +252,7 @@ func confirmPlan(req Request) string {
 	switch req.Action {
 	case ActionUninstall:
 		summary += " required=none permission-dialog=skipped"
-	case ActionInstall, "":
+	case ActionInstall, ActionUpdate, ActionRepair, "":
 		summary += " required=restart,request-permission,test-notification permission-dialog=explicit delivery=not_verified"
 	}
 	return summary + ". Proceed?"

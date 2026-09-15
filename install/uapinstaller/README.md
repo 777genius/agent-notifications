@@ -1,11 +1,13 @@
 # uapinstaller beta
 
 Public process-local installer API for a standard local Agent Plugins package
-(`plugin.json` + MCP/skills). This is the P1 subset: constructor, inspect,
-prepare/apply for **install** and **remove**, and source-independent Recover.
+(`plugin.json` + MCP/skills). Constructor, inspect, Recover, and prepare/apply
+for **install**, **update**, **repair**, and **remove** are published as
+single-client operations.
 
-Update, repair, and group operations are not published. Those requests fail
-before mutation.
+Group operations remain unpublished. Those requests fail before mutation.
+Update and repair of a missing owned binding return `ErrNotInstalled` before
+mutation. Repair rematerializes a missing target of a live binding.
 
 ## Contract
 

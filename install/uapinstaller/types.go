@@ -1,7 +1,7 @@
 package uapinstaller
 
-// Operation is the process-local lifecycle verb. P1 publishes install and remove.
-// Update and repair are rejected until those checkpoints exist.
+// Operation is the process-local lifecycle verb. Install, update, repair, and
+// remove are published as single-client operations. Groups remain P3.
 type Operation string
 
 const (

@@ -70,9 +70,9 @@ func (e *Engine) Apply(ctx context.Context, prepared *PreparedOperation, decisio
 		return result, err
 	}
 	if !prepared.plan.NoChange {
-		if op == OpInstall {
+		if op == OpInstall || op == OpUpdate || op == OpRepair {
 			if _, err = e.helper(); err != nil {
-				result = Result{Operation: OpInstall, Outcome: OutcomeIncomplete, Reason: err.Error()}
+				result = Result{Operation: op, Outcome: OutcomeIncomplete, Reason: err.Error()}
 				attachNextActions(&result)
 				return result, err
 			}
@@ -87,6 +87,10 @@ func (e *Engine) Apply(ctx context.Context, prepared *PreparedOperation, decisio
 	switch op {
 	case OpInstall:
 		result, err = e.applyInstall(ctx, prepared)
+	case OpUpdate:
+		result, err = e.applyUpdate(ctx, prepared)
+	case OpRepair:
+		result, err = e.applyRepair(ctx, prepared)
 	case OpRemove:
 		result, err = e.applyRemove(ctx, prepared)
 	default:
@@ -98,6 +102,24 @@ func (e *Engine) Apply(ctx context.Context, prepared *PreparedOperation, decisio
 }
 
 func (e *Engine) applyInstall(ctx context.Context, prepared *PreparedOperation) (Result, error) {
+	return e.applyMutatingPackage(ctx, prepared, func(svc usecase.Service, in usecase.AddInput) (usecase.AddResult, error) {
+		return svc.Add(ctx, in)
+	})
+}
+
+func (e *Engine) applyUpdate(ctx context.Context, prepared *PreparedOperation) (Result, error) {
+	return e.applyMutatingPackage(ctx, prepared, func(svc usecase.Service, in usecase.AddInput) (usecase.AddResult, error) {
+		return svc.Update(ctx, in)
+	})
+}
+
+func (e *Engine) applyRepair(ctx context.Context, prepared *PreparedOperation) (Result, error) {
+	return e.applyMutatingPackage(ctx, prepared, func(svc usecase.Service, in usecase.AddInput) (usecase.AddResult, error) {
+		return svc.Repair(ctx, in)
+	})
+}
+
+func (e *Engine) applyMutatingPackage(ctx context.Context, prepared *PreparedOperation, call func(usecase.Service, usecase.AddInput) (usecase.AddResult, error)) (Result, error) {
 	if committed, binding, ok := e.liveBinding(prepared); ok && hostHandoffPending(binding) && e.cfg.OnCommittedBinding != nil {
 		if err := e.cfg.OnCommittedBinding(ctx, committed.Binding); err != nil {
 			committed.Outcome = OutcomeIncomplete
@@ -108,17 +130,17 @@ func (e *Engine) applyInstall(ctx context.Context, prepared *PreparedOperation) 
 	}
 	helper, err := e.helper()
 	if err != nil {
-		return Result{Operation: OpInstall, Outcome: OutcomeIncomplete, Reason: err.Error()}, err
+		return Result{Operation: prepared.req.Operation, Outcome: OutcomeIncomplete, Reason: err.Error()}, err
 	}
 	svc := e.lifecycle(helper, prepared.facts)
 	e.report(ProgressStage)
-	added, err := svc.Add(ctx, usecase.AddInput{
+	added, err := call(svc, usecase.AddInput{
 		Envelope: prepared.envelope, Client: prepared.client, Scope: domain.ScopeUser, Confirmed: true,
 		InstallationID: prepared.req.InstallationID, OperationID: prepared.req.OperationID,
 		BackendExecutable: prepared.req.ClientExecutable,
 	})
 	err = wrapLifecycleError(err)
-	result := Result{Operation: OpInstall, InstallationID: added.InstallationID, Binding: prepared.facts}
+	result := Result{Operation: prepared.req.Operation, InstallationID: added.InstallationID, Binding: prepared.facts}
 	if added.Activation.UserActions != nil {
 		result.ManualActions = append([]string(nil), added.Activation.UserActions...)
 	}

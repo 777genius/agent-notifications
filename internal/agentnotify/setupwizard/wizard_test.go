@@ -924,20 +924,129 @@ func TestWizardInstallFromHostAcquisition(t *testing.T) {
 	}
 }
 
-func TestWizardUnsupportedUpdate(t *testing.T) {
-	control, _, _, _, _ := managedRuntime(t)
-	got, err := Run(testCtx(t), Request{Action: ActionUpdate, Agents: []string{"codex"}, Yes: true, ControlRoot: control})
-	if err == nil || got.Outcome != "incomplete" || got.Reason != "action_not_published" {
+func TestWizardUpdateChangesLiveRevision(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	blocked := req
+	blocked.Action = ActionInstall
+	if got, err := Run(ctx, blocked); err == nil || got.Reason != "update_required" {
+		t.Fatalf("install still upserts: %+v %v", got, err)
+	}
+	req.Action = ActionUpdate
+	got, err := Run(ctx, req)
+	if err != nil || got.Outcome != "completed" {
 		t.Fatalf("update: %+v %v", got, err)
 	}
 }
 
-func TestWizardUnsupportedRepair(t *testing.T) {
-	control, _, _, _, _ := managedRuntime(t)
-	got, err := Run(testCtx(t), Request{Action: ActionRepair, Agents: []string{"codex"}, Yes: true, ControlRoot: control})
-	if err == nil || got.Outcome != "incomplete" || got.Reason != "action_not_published" {
+func TestWizardRepairRematerializesMissingTarget(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	statePath := filepath.Join(filepath.Dir(control), "uap", "state", "state-v2.json")
+	target := liveTargetPath(t, statePath, "codex")
+	if err := os.RemoveAll(target); err != nil {
+		t.Fatal(err)
+	}
+	req.Action = ActionRepair
+	got, err := Run(ctx, req)
+	if err != nil || got.Outcome != "completed" {
 		t.Fatalf("repair: %+v %v", got, err)
 	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("repair did not restore target: %v", err)
+	}
+}
+
+func TestWizardUpdateWithoutBindingIsNotInstalled(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	req := Request{
+		Action: ActionUpdate, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Run(ctx, req)
+	if err == nil || got.Reason != "not_installed" {
+		t.Fatalf("update without binding: %+v %v", got, err)
+	}
+}
+
+func liveTargetPath(t *testing.T, statePath, clientID string) string {
+	t.Helper()
+	eng, err := uapinstaller.New(uapinstaller.Config{StateRoot: filepath.Dir(statePath)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := eng.Inspect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, installation := range view.Installations {
+		for _, binding := range installation.Bindings {
+			if binding.ClientID == clientID && binding.TargetPath != "" {
+				return binding.TargetPath
+			}
+		}
+	}
+	t.Fatalf("no live target for %s in %s", clientID, statePath)
+	return ""
 }
 
 func writePluginBundle(t *testing.T) string {

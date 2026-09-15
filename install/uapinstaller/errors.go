@@ -16,5 +16,6 @@ var (
 	ErrAmbiguousInstallations = errors.New("ambiguous installations")
 	ErrIncomplete             = errors.New("required components missing from plan")
 	ErrUpdateRequired         = errors.New("install cannot change an active revision; use update")
+	ErrNotInstalled           = errors.New("update and repair require an existing owned binding")
 	ErrAssessmentRejected     = errors.New("package assessment is not allow")
 )

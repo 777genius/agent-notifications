@@ -51,7 +51,7 @@ installation is offered inspect, add/reinstall, or uninstall.
   --installation-id ID
   --mcp-config PATH           Owned Codex MCP config to hand off (repeat not supported; use --claude-mcp-config)
   --claude-mcp-config PATH
-Update and repair are accepted then refused as action_not_published until UAP P2.
+Update and repair require an existing owned binding; missing files remain repairable. Groups remain unpublished.
 `
 
 func executeSetupWizard(ctx context.Context, args []string, out io.Writer) int {

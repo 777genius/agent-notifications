@@ -908,17 +908,156 @@ func TestPrepareMissingRequiredComponentsDoesNotCreateState(t *testing.T) {
 	}
 }
 
-func TestUnsupportedUpdateRejectedBeforeMutation(t *testing.T) {
+func TestUpdateRejectedWithoutExistingBinding(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "state")
 	eng, err := New(Config{StateRoot: root})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := eng.Prepare(testCtx(t), Request{Operation: OpUpdate, ClientID: "codex", ClientConfigRoot: root, PackageRoot: root}); err == nil {
-		t.Fatal("update published")
+	_, err = eng.Prepare(testCtx(t), Request{
+		Operation: OpUpdate, ClientID: "codex", ClientConfigRoot: root, PackageRoot: root,
+		InstallationID: "00000000-0000-4000-8000-000000000086",
+	})
+	if !errors.Is(err, ErrNotInstalled) {
+		t.Fatalf("update without binding: %v", err)
 	}
 	if _, err := os.Lstat(root); !os.IsNotExist(err) {
 		t.Fatal("rejected update created state")
+	}
+}
+
+func TestUpdateChangesLiveRevision(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "00000000-0000-4000-8000-000000000087"
+	installed, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: id, OperationID: "update-install",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := eng.Apply(ctx, installed, Decision{Confirmed: true})
+	_ = installed.Close()
+	if err != nil || first.Outcome != OutcomeCompleted {
+		t.Fatalf("install: %+v %v", first, err)
+	}
+	before := installed.Plan().TreeDigest
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"sample-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: id, OperationID: "update-blocked-install",
+		RequiredComponents: []string{"mcp", "skills"},
+	}); !errors.Is(err, ErrUpdateRequired) {
+		t.Fatalf("install still upserts: %v", err)
+	}
+	updated, err := eng.Prepare(ctx, Request{
+		Operation: OpUpdate, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: id, OperationID: "update-apply",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := eng.Apply(ctx, updated, Decision{Confirmed: true})
+	digest := updated.Plan().TreeDigest
+	_ = updated.Close()
+	if err != nil || got.Outcome != OutcomeCompleted {
+		t.Fatalf("update: %+v %v", got, err)
+	}
+	if digest == "" || digest == before {
+		t.Fatalf("update kept old digest %s", digest)
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 || view.Installations[0].TreeDigest != digest {
+		t.Fatalf("inspect after update: %+v %v", view, err)
+	}
+}
+
+func TestRepairRematerializesMissingTarget(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "00000000-0000-4000-8000-000000000088"
+	installed, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: id, OperationID: "repair-install",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := eng.Apply(ctx, installed, Decision{Confirmed: true})
+	target := installed.Plan().TargetPath
+	_ = installed.Close()
+	if err != nil || first.Outcome != OutcomeCompleted || target == "" {
+		t.Fatalf("install: %+v %v path=%s", first, err, target)
+	}
+	if err := os.RemoveAll(target); err != nil {
+		t.Fatal(err)
+	}
+	repaired, err := eng.Prepare(ctx, Request{
+		Operation: OpRepair, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: id, OperationID: "repair-apply",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := eng.Apply(ctx, repaired, Decision{Confirmed: true})
+	_ = repaired.Close()
+	if err != nil || got.Outcome != OutcomeCompleted {
+		t.Fatalf("repair: %+v %v", got, err)
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("repair did not restore target: %v", err)
+	}
+}
+
+func TestRepairMissingBindingIsNotInstalled(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "state")
+	eng, err := New(Config{StateRoot: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = eng.Prepare(testCtx(t), Request{
+		Operation: OpRepair, ClientID: "codex", ClientConfigRoot: root, PackageRoot: root,
+		InstallationID: "00000000-0000-4000-8000-000000000089",
+	})
+	if !errors.Is(err, ErrNotInstalled) {
+		t.Fatalf("repair without binding: %v", err)
 	}
 }
 

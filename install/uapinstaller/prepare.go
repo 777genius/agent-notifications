@@ -71,16 +71,65 @@ func (e *Engine) Prepare(ctx context.Context, req Request) (*PreparedOperation, 
 	switch copied.Operation {
 	case OpInstall:
 		return e.prepareInstall(ctx, copied)
+	case OpUpdate:
+		return e.prepareUpdate(ctx, copied)
+	case OpRepair:
+		return e.prepareRepair(ctx, copied)
 	case OpRemove:
 		return e.prepareRemove(ctx, copied)
-	case OpUpdate, OpRepair:
-		return nil, fmt.Errorf("%w: %s", ErrUnsupported, copied.Operation)
 	default:
 		return nil, fmt.Errorf("%w: unknown operation", ErrInvalidRequest)
 	}
 }
 
 func (e *Engine) prepareInstall(ctx context.Context, req Request) (*PreparedOperation, error) {
+	return e.prepareMutatingPackage(ctx, req, OpInstall, false, func(svc usecase.Service, in usecase.AddInput) (usecase.AddResult, error) {
+		return svc.Add(ctx, in)
+	})
+}
+
+func (e *Engine) prepareUpdate(ctx context.Context, req Request) (*PreparedOperation, error) {
+	if _, _, err := e.requireExistingBinding(req); err != nil {
+		return nil, err
+	}
+	return e.prepareMutatingPackage(ctx, req, OpUpdate, true, func(svc usecase.Service, in usecase.AddInput) (usecase.AddResult, error) {
+		return svc.Update(ctx, in)
+	})
+}
+
+func (e *Engine) prepareRepair(ctx context.Context, req Request) (*PreparedOperation, error) {
+	if _, _, err := e.requireExistingBinding(req); err != nil {
+		return nil, err
+	}
+	return e.prepareMutatingPackage(ctx, req, OpRepair, false, func(svc usecase.Service, in usecase.AddInput) (usecase.AddResult, error) {
+		return svc.Repair(ctx, in)
+	})
+}
+
+func (e *Engine) requireExistingBinding(req Request) (domain.Installation, domain.ClientBinding, error) {
+	client, err := detectedClient(req)
+	if err != nil {
+		return domain.Installation{}, domain.ClientBinding{}, err
+	}
+	if req.InstallationID == "" {
+		return domain.Installation{}, domain.ClientBinding{}, fmt.Errorf("%w: InstallationID is required", ErrInvalidRequest)
+	}
+	state, err := e.store.Load()
+	if err != nil {
+		return domain.Installation{}, domain.ClientBinding{}, fmt.Errorf("%w: %v", ErrNotInstalled, err)
+	}
+	installation, ok := findInstall(state, req.InstallationID)
+	if !ok {
+		return domain.Installation{}, domain.ClientBinding{}, fmt.Errorf("%w: installation %s", ErrNotInstalled, req.InstallationID)
+	}
+	binding, _, ok := findBinding(installation, client.ClientID)
+	if !ok {
+		return domain.Installation{}, domain.ClientBinding{}, fmt.Errorf("%w: client %s", ErrNotInstalled, req.ClientID)
+	}
+	return installation, binding, nil
+}
+
+func (e *Engine) prepareMutatingPackage(ctx context.Context, req Request, op Operation, allowDigestRewrite bool, dry func(usecase.Service, usecase.AddInput) (usecase.AddResult, error)) (*PreparedOperation, error) {
 	client, err := detectedClient(req)
 	if err != nil {
 		return nil, err
@@ -104,11 +153,14 @@ func (e *Engine) prepareInstall(ctx context.Context, req Request) (*PreparedOper
 		_ = handle.closeLocked()
 		return nil, err
 	}
-	if err := e.refuseRecordedDigestRewrite(req.InstallationID, snapshot.TreeDigest); err != nil {
-		_ = handle.closeLocked()
-		return nil, err
+	if !allowDigestRewrite {
+		if err := e.refuseRecordedDigestRewrite(req.InstallationID, snapshot.TreeDigest); err != nil {
+			_ = handle.closeLocked()
+			return nil, err
+		}
 	}
 	e.reuseMatchingSourceIdentity(req.InstallationID, &snapshot)
+	handle.snapshot = snapshot
 	ldr, err := newLoader()
 	if err != nil {
 		_ = handle.closeLocked()
@@ -124,7 +176,7 @@ func (e *Engine) prepareInstall(ctx context.Context, req Request) (*PreparedOper
 	}
 	handle.envelope = envelope
 	svc := e.lifecycle(nil, BindingFacts{})
-	preview, err := svc.Add(ctx, usecase.AddInput{
+	preview, err := dry(svc, usecase.AddInput{
 		Envelope: envelope, Client: client, Scope: domain.ScopeUser, DryRun: true, Confirmed: false,
 		PersistAuthoritativeObservations: e.persistObservations,
 		InstallationID:                   req.InstallationID, OperationID: req.OperationID, BackendExecutable: req.ClientExecutable,
@@ -136,7 +188,7 @@ func (e *Engine) prepareInstall(ctx context.Context, req Request) (*PreparedOper
 	missing := missingRequired(envelope, req.RequiredComponents)
 	helperVersion, helperDigest := e.helperIdentity()
 	handle.plan = Plan{
-		Operation: OpInstall, SourceRoot: req.PackageRoot, TreeDigest: snapshot.TreeDigest,
+		Operation: op, SourceRoot: req.PackageRoot, TreeDigest: snapshot.TreeDigest,
 		DigestAlgorithm: snapshot.DigestAlgorithm, ClientID: string(client.ClientID),
 		ConfigRoot: req.ClientConfigRoot, TargetPath: preview.Plan.ActivePath,
 		InstallationID: firstNonEmpty(req.InstallationID, preview.InstallationID),
@@ -456,8 +508,14 @@ func wrapLifecycleError(err error) error {
 	msg := err.Error()
 	if strings.Contains(msg, "run update separately") ||
 		strings.Contains(msg, "at a different revision; use update") ||
+		strings.Contains(msg, "differs from the installed revision; use update") ||
 		strings.Contains(msg, "use switch to change source") {
 		return fmt.Errorf("%w: %v", ErrUpdateRequired, err)
+	}
+	if strings.Contains(msg, "is not bound to an existing installation") ||
+		strings.Contains(msg, "resolved source is not bound to an installation") ||
+		strings.Contains(msg, "plugin is not materialized") {
+		return fmt.Errorf("%w: %v", ErrNotInstalled, err)
 	}
 	return err
 }

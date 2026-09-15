@@ -123,7 +123,7 @@ func TestRetryCommandOmitsInternalIdentity(t *testing.T) {
 }
 
 func TestRunAttachesRetryCommandOnIncomplete(t *testing.T) {
-	got, err := Run(promptCtx(t), Request{Action: ActionUpdate, Agents: []string{"codex"}, Yes: true, ControlRoot: "/tmp/control"})
+	got, err := Run(promptCtx(t), Request{Action: ActionUpdate, Agents: []string{"codex"}, Yes: true, ControlRoot: t.TempDir()})
 	if err == nil || got.Outcome != "incomplete" || len(got.Command) == 0 {
 		t.Fatalf("command: %+v %v", got, err)
 	}

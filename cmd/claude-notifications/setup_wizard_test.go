@@ -172,7 +172,7 @@ func TestSetupWizardTTYShowsDiscoverCapabilities(t *testing.T) {
 	}
 }
 
-func TestSetupWizardUnpublishedUpdateAndRepair(t *testing.T) {
+func TestSetupWizardUpdateAndRepairRequireManagedRuntime(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	root := setupCommandRoot(t)
@@ -186,7 +186,7 @@ func TestSetupWizardUnpublishedUpdateAndRepair(t *testing.T) {
 		if err := json.Unmarshal(out.Bytes(), &result); err != nil {
 			t.Fatalf("%s json: %v %s", action, err, out.String())
 		}
-		if result.Action != action || result.Outcome != "incomplete" || result.Reason != "action_not_published" {
+		if result.Action != action || result.Outcome != "incomplete" || result.Reason != "managed_runtime_required" {
 			t.Fatalf("%s result: %+v", action, result)
 		}
 	}

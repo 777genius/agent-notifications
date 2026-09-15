@@ -58,6 +58,8 @@ type MaterializeRequest struct {
 	// publishes one SetupIntent for the whole confirmed operation and clears
 	// it after the last target, including when several clients share it.
 	KeepReservation bool
+	// Operation selects install, update, or repair. Empty means install.
+	Operation uapinstaller.Operation
 }
 
 type Materializer struct {
@@ -342,7 +344,7 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 		return portable.Binding{}, err
 	}
 	result, err := m.apply(ctx, eng, uapinstaller.Request{
-		Operation: uapinstaller.OpInstall, PackageRoot: req.PackageRoot, ClientID: string(req.Integration),
+		Operation: packageOperation(req), PackageRoot: req.PackageRoot, ClientID: string(req.Integration),
 		ClientConfigRoot: req.ClientConfigRoot, ClientExecutable: req.ClientExecutable,
 		InstallationID: req.Identity.InstallationID, OperationID: req.OperationID,
 		RequiredComponents: []string{"mcp", "skills"},
@@ -360,6 +362,23 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 		}
 	}
 	return pb, nil
+}
+
+func packageOperation(req MaterializeRequest) uapinstaller.Operation {
+	if req.Operation == "" {
+		return uapinstaller.OpInstall
+	}
+	return req.Operation
+}
+
+func (m Materializer) Update(ctx context.Context, req MaterializeRequest) (portable.Binding, error) {
+	req.Operation = uapinstaller.OpUpdate
+	return m.Install(ctx, req)
+}
+
+func (m Materializer) Repair(ctx context.Context, req MaterializeRequest) (portable.Binding, error) {
+	req.Operation = uapinstaller.OpRepair
+	return m.Install(ctx, req)
 }
 
 func IsUpdateRequired(err error) bool {
@@ -459,7 +478,7 @@ func (m Materializer) previewInstall(ctx context.Context, req MaterializeRequest
 		}
 	}
 	prepared, err := eng.Prepare(ctx, uapinstaller.Request{
-		Operation: uapinstaller.OpInstall, PackageRoot: req.PackageRoot, ClientID: string(req.Integration),
+		Operation: packageOperation(req), PackageRoot: req.PackageRoot, ClientID: string(req.Integration),
 		ClientConfigRoot: req.ClientConfigRoot, ClientExecutable: req.ClientExecutable,
 		InstallationID: req.Identity.InstallationID, OperationID: req.OperationID + "-preview",
 		RequiredComponents: []string{"mcp", "skills"},
