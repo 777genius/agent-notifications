@@ -2,6 +2,7 @@ package setupwizard
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -244,6 +245,23 @@ func TestInspectOmittedAgentsStillReportsBoth(t *testing.T) {
 	plan, err := Plan(ctx, Request{Action: ActionInspect, ControlRoot: control})
 	if err != nil || !plan.Ready || plan.Result.Reason == "agents_required" || plan.Result.ExitCode() != 0 {
 		t.Fatalf("omitted inspect plan: %+v %v", plan, err)
+	}
+}
+
+func TestTargetResultJSONIncludesInspectedMCPConfig(t *testing.T) {
+	raw, err := json.Marshal(TargetResult{Client: "codex", Unit: "direct-mcp", Outcome: "absent", ConfigPath: "/tmp/config.toml"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"ConfigPath":"/tmp/config.toml"`) {
+		t.Fatalf("inspect json omitted mcp file: %s", raw)
+	}
+	raw, err = json.Marshal(TargetResult{Client: "codex", Unit: "hooks", Outcome: "absent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "ConfigPath") {
+		t.Fatalf("empty config path leaked: %s", raw)
 	}
 }
 

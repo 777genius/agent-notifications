@@ -6318,17 +6318,18 @@ func TestWizardDefaultCodexProfileHandoffsDirectMCP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var notify, direct string
+	var notify, direct, mcpFile string
 	for _, target := range view.Targets {
 		if target.Unit == "agent-notify" {
 			notify = target.Outcome
 		}
 		if target.Unit == "direct-mcp" {
 			direct = target.Outcome
+			mcpFile = target.ConfigPath
 		}
 	}
-	if notify != "installed" || direct != "absent" {
-		t.Fatalf("default-path handoff inspect: notify=%s direct=%s targets=%+v", notify, direct, view.Targets)
+	if notify != "installed" || direct != "absent" || mcpFile != mcpConfig {
+		t.Fatalf("default-path handoff inspect: notify=%s direct=%s mcp=%s targets=%+v", notify, direct, mcpFile, view.Targets)
 	}
 }
 
