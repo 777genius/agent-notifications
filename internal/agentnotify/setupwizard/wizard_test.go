@@ -2904,6 +2904,69 @@ func TestWizardReinstallRetainsInstallation(t *testing.T) {
 	}
 }
 
+func TestWizardReinstallPreservesNotificationOptOuts(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	optOut := `{"foreign":{"keep":true},"notifications":{"desktop":{"enabled":false,"sound":false,"clickToFocus":false}}}`
+	if err := os.WriteFile(global, []byte(optOut), 0600); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disabled := false
+	if _, err := installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: control, RuntimeRoot: runtime, Owner: "existing-installer", ConsumerID: "existing",
+		RefreshOnly: true, PolicyEnabled: &disabled, ExpectedGeneration: &snap.Ledger.Generation,
+	}); err != nil {
+		t.Fatalf("disable policy: %v", err)
+	}
+	statePath := filepath.Join(filepath.Dir(control), "uap", "state", "state-v2.json")
+	firstID := installationIDFromState(t, statePath)
+	req.Action = ActionUninstall
+	req.ExternalUninstalled = true
+	removed, err := Run(ctx, req)
+	if err != nil || removed.Outcome != "completed" {
+		t.Fatalf("uninstall: %+v %v", removed, err)
+	}
+	req.Action = ActionInstall
+	req.InstallationID = firstID
+	reinstalled, err := Run(ctx, req)
+	if err != nil || reinstalled.Outcome != "completed" {
+		t.Fatalf("reinstall: %+v %v", reinstalled, err)
+	}
+	policy, err := installruntime.ReadUserPolicy(control)
+	if err != nil || policy.Enabled {
+		t.Fatalf("reinstall re-enabled policy: %+v %v", policy, err)
+	}
+	body, err := os.ReadFile(global)
+	if err != nil || !strings.Contains(string(body), `"enabled":false`) || !strings.Contains(string(body), `"sound":false`) || !strings.Contains(string(body), `"clickToFocus":false`) || !strings.Contains(string(body), `"keep":true`) {
+		t.Fatalf("reinstall lost global opt-outs: %s %v", body, err)
+	}
+}
+
 func TestWizardRetainedDifferentDigestRequiresUpdate(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, _, _ := managedRuntime(t)
