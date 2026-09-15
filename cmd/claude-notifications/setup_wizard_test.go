@@ -331,6 +331,22 @@ func TestSetupWizardJSONLifecycleE2E(t *testing.T) {
 	if installed.Outcome != "completed" || installed.InstallationID == "" {
 		t.Fatalf("install result: %+v", installed)
 	}
+	kinds := map[string]bool{}
+	for _, next := range installed.NextActions {
+		kinds[next.Kind] = true
+		if next.Kind == "test-notification" && (len(next.Command) == 0 || next.Command[0] != "notify" || next.Reason != "delivery_not_verified") {
+			t.Fatalf("test action: %+v", next)
+		}
+		if next.Kind == "request-permission" && (len(next.Command) < 2 || next.Command[1] != "request-permission") {
+			t.Fatalf("permission action: %+v", next)
+		}
+	}
+	if !kinds["test-notification"] || !kinds["request-permission"] || !kinds["restart-client"] {
+		t.Fatalf("install next actions: %+v", installed.NextActions)
+	}
+	if len(installed.Readiness) == 0 || installed.Readiness[0].Delivery != "not_verified" {
+		t.Fatalf("delivery treated as proven: %+v", installed.Readiness)
+	}
 	out.Reset()
 	if code := executeSetupWizardWith(ctx, flags("inspect", "--json"), &out, io.Discard, strings.NewReader(""), false); code != 0 {
 		t.Fatalf("inspect: %d %s", code, out.String())
@@ -396,6 +412,11 @@ func TestSetupWizardJSONLifecycleE2E(t *testing.T) {
 	removed := decode(t, out)
 	if removed.Outcome != "completed" {
 		t.Fatalf("uninstall result: %+v", removed)
+	}
+	for _, next := range removed.NextActions {
+		if next.Kind == "test-notification" || next.Kind == "request-permission" {
+			t.Fatalf("uninstall offered setup action: %+v", removed.NextActions)
+		}
 	}
 	out.Reset()
 	if code := executeSetupWizardWith(ctx, flags("inspect", "--json"), &out, io.Discard, strings.NewReader(""), false); code != 0 {
@@ -810,6 +831,116 @@ func TestSetupWizardDirectMCPHandoffDoesNotRestoreE2E(t *testing.T) {
 	}
 	if unit(after, "direct-mcp") == "installed" {
 		t.Fatalf("uninstall restored direct MCP: %+v", after.Targets)
+	}
+}
+
+func TestSetupWizardOmitsPackageInspectRepairUninstallE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	shared := []string{
+		"--agents", "codex", "--control-root", env.control, "--runtime-root", env.runtime,
+		"--global-config", env.global, "--codex-home", env.codexHome,
+		"--client-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+	}
+	notifyInstalled := func(result setupwizard.Result) bool {
+		for _, target := range result.Targets {
+			if target.Unit == "agent-notify" && target.Outcome == "installed" {
+				return true
+			}
+		}
+		return false
+	}
+	var out, stderr bytes.Buffer
+	install := append([]string{"--action", "install", "--hooks", "false", "--package", env.pkg, "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, install, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("install: %d %s", code, out.String())
+	}
+	installed := decodeWizardJSON(t, out)
+	if installed.Outcome != "completed" || installed.InstallationID == "" {
+		t.Fatalf("install result: %+v", installed)
+	}
+	out.Reset()
+	inspect := append([]string{"--action", "inspect", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, inspect, &out, &stderr, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect without package: %d %s", code, out.String())
+	}
+	view := decodeWizardJSON(t, out)
+	if view.Outcome != "completed" || !notifyInstalled(view) {
+		t.Fatalf("inspect without package: %+v", view)
+	}
+	if strings.Contains(stderr.String(), "phase prepare") {
+		t.Fatalf("inspect acquired a package: %s", stderr.String())
+	}
+	for _, next := range view.NextActions {
+		if next.Kind == "request-permission" {
+			t.Fatalf("inspect opened permission action: %+v", view.NextActions)
+		}
+	}
+	eng, err := uapinstaller.New(uapinstaller.Config{StateRoot: filepath.Join(env.root, "uap", "state")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	uapView, err := eng.Inspect(ctx)
+	if err != nil || len(uapView.Installations) != 1 || len(uapView.Installations[0].Bindings) == 0 {
+		t.Fatalf("uap inspect: %+v %v", uapView, err)
+	}
+	target := uapView.Installations[0].Bindings[0].TargetPath
+	if target == "" {
+		t.Fatal("missing live target")
+	}
+	if err := os.RemoveAll(target); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	repair := append([]string{"--action", "repair", "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, repair, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("repair without package: %d %s", code, out.String())
+	}
+	repaired := decodeWizardJSON(t, out)
+	if repaired.Outcome != "completed" {
+		t.Fatalf("repair without package: %+v", repaired)
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("repair did not restore recorded source: %v", err)
+	}
+	if err := os.RemoveAll(env.pkg); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(env.pkg, []byte("not-a-package"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	stderr.Reset()
+	if code := executeSetupWizardWith(ctx, inspect, &out, &stderr, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect after poisoned package: %d %s", code, out.String())
+	}
+	if !notifyInstalled(decodeWizardJSON(t, out)) {
+		t.Fatalf("inspect after poisoned package: %s", out.String())
+	}
+	if strings.Contains(stderr.String(), "phase prepare") {
+		t.Fatalf("inspect opened poisoned package: %s", stderr.String())
+	}
+	out.Reset()
+	uninstall := append([]string{"--action", "uninstall", "--yes", "--json", "--external-uninstalled"}, shared...)
+	if code := executeSetupWizardWith(ctx, uninstall, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("uninstall without package: %d %s", code, out.String())
+	}
+	removed := decodeWizardJSON(t, out)
+	if removed.Outcome != "completed" {
+		t.Fatalf("uninstall without package: %+v", removed)
+	}
+	for _, next := range removed.NextActions {
+		if next.Kind == "test-notification" || next.Kind == "request-permission" {
+			t.Fatalf("uninstall offered setup action: %+v", removed.NextActions)
+		}
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, inspect, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect after uninstall: %d %s", code, out.String())
+	}
+	if notifyInstalled(decodeWizardJSON(t, out)) {
+		t.Fatalf("notify survived uninstall without package: %s", out.String())
 	}
 }
 
