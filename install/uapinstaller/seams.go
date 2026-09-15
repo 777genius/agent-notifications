@@ -98,6 +98,14 @@ func (a seamActivator) Activate(ctx context.Context, request domain.ActivationRe
 	return a.inner.Activate(ctx, request)
 }
 
+func (a seamActivator) AutomaticallyActivates(request domain.ActivationRequest) bool {
+	return a.inner.AutomaticallyActivates(request)
+}
+
+func (a seamActivator) PreflightActivation(request domain.ActivationRequest) error {
+	return a.inner.PreflightActivation(request)
+}
+
 func (a seamActivator) Deactivate(ctx context.Context, request domain.DeactivationRequest) (domain.DeactivationOutcome, error) {
 	return a.inner.Deactivate(ctx, request)
 }

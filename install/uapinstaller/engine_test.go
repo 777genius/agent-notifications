@@ -1548,6 +1548,39 @@ func TestProjectionSeamReplacesDeclaredServerArgs(t *testing.T) {
 	}
 }
 
+func TestSeamActivatorDelegatesProviderPreflight(t *testing.T) {
+	eng, err := New(Config{StateRoot: filepath.Join(t.TempDir(), "uap")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := eng.lifecycle(nil, BindingFacts{})
+	type activationCapabilities interface {
+		AutomaticallyActivates(domain.ActivationRequest) bool
+		PreflightActivation(domain.ActivationRequest) error
+	}
+	activator, ok := svc.Activator.(activationCapabilities)
+	if !ok {
+		t.Fatal("seamActivator dropped AutomaticallyActivates/PreflightActivation")
+	}
+	if activator.AutomaticallyActivates(domain.ActivationRequest{
+		Client: domain.DetectedClient{ClientID: domain.ClientCodex},
+	}) {
+		t.Fatal("codex without runner/executable should not automatically activate")
+	}
+	if err := activator.PreflightActivation(domain.ActivationRequest{
+		Client: domain.DetectedClient{ClientID: domain.ClientClaude, ConfigRoot: filepath.Join(t.TempDir(), "claude")},
+	}); err == nil {
+		t.Fatal("claude preflight accepted an incomplete request")
+	}
+	type pluginDataStager interface {
+		StageWithPluginData(context.Context, domain.PackageEnvelope, domain.DeliveryPlan, string, domain.CompatibilityHints, string) (domain.StagedDelivery, error)
+		PreflightManagedStdio(string) error
+	}
+	if _, ok := svc.Stager.(pluginDataStager); !ok {
+		t.Fatal("seamStager dropped StageWithPluginData/PreflightManagedStdio")
+	}
+}
+
 func TestRemoveRetainsPluginDataAfterLastClient(t *testing.T) {
 	skipWindowsLauncherExecuteBit(t)
 	ctx := testCtx(t)
