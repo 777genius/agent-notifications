@@ -55,13 +55,13 @@ cleanup_install_stage() {
 trap 'cleanup_install_config' EXIT
 
 config_preflight_stop() {
-    echo 'Config preflight stopped installation; existing runtime retained. Check AGENT_NOTIFICATIONS_CONFIG and repair/recover the selected file, or rerun bootstrap with a config-capable release and Python 3.' >&2
+    echo 'Config preflight stopped installation; existing runtime retained. Check AGENT_NOTIFICATIONS_CONFIG and repair/recover the selected file, or rerun bootstrap with a config-capable release and python3 or node.' >&2
     return 1
 }
 
 prepare_install_config_preflight() {
     [ "${AGENT_NOTIFICATIONS_CONFIG+x}" = x ] || return 0
-    command -v python3 >/dev/null 2>&1 || { config_preflight_stop; return 1; }
+    command -v python3 >/dev/null 2>&1 || command -v node >/dev/null 2>&1 || { config_preflight_stop; return 1; }
     local status
     [ -n "$INSTALL_CONFIG_HELPER" ] || INSTALL_CONFIG_HELPER="$BINARY_PATH"
     if install_config_preflight "$@"; then return 0; else status=$?; fi
@@ -105,9 +105,11 @@ install_config_preflight() {
             targets[$i]=$(cygpath -aw "${targets[$i]}") || { config_preflight_stop; return 1; }
         done
     fi
-    # Python only transports JSON/native paths and bounds helper execution. All
-    # selection, validation and alias identity decisions belong to Go Store.
+    # Python or Node only transports JSON/native paths and bounds helper
+    # execution. All selection, validation and alias identity decisions belong
+    # to Go Store.
     local status
+    if command -v python3 >/dev/null 2>&1; then
     if python3 -I - "$helper" "$PLATFORM" "${targets[@]}" <<'PYINSTALL'
 import json, os, subprocess, sys
 try:
@@ -136,6 +138,48 @@ except (OSError, ValueError, TypeError, AttributeError, subprocess.TimeoutExpire
 sys.exit(1)
 PYINSTALL
     then return 0; else status=$?; fi
+    elif command -v node >/dev/null 2>&1; then
+    if NODE_OPTIONS= NODE_PATH= node --no-warnings - "$helper" "$PLATFORM" "${targets[@]}" <<'JSINSTALL'
+const { spawnSync } = require('child_process');
+const path = require('path');
+try {
+  const helper = process.argv[2];
+  const platform = process.argv[3];
+  let paths = process.argv.slice(4);
+  if (platform !== 'windows') paths = paths.map((p) => path.resolve(p));
+  const request = JSON.stringify({ refreshDirs: paths });
+  const result = spawnSync(helper, ['config', 'preflight-update', '--stdin', '--json'], {
+    input: request,
+    encoding: 'utf8',
+    timeout: 20000,
+    stdio: ['pipe', 'pipe', 'ignore'],
+    windowsHide: true,
+  });
+  if (result.error) process.exit(2);
+  const response = JSON.parse(result.stdout);
+  const allowed = { safe: 1, 'unsafe-target': 1, 'invalid-config': 1, 'import-required': 1 };
+  if (!response || typeof response !== 'object' || Array.isArray(response) || !allowed[response.status]) process.exit(2);
+  if (result.status === 0 && response.status === 'safe') process.exit(0);
+  const codes = {
+    ConfigUnsafeTarget: 1, ConfigOverrideInvalid: 1, ConfigInvalid: 1,
+    ConfigUnsupportedSchema: 1, ConfigPermissionDenied: 1, ConfigRecoveryRequired: 1,
+    ConfigLinkedPath: 1, ConfigChanged: 1, ConfigLockTimeout: 1, ConfigMissing: 1,
+    ConfigHomeUnavailable: 1, ConfigBaseUnavailable: 1,
+  };
+  for (const diagnostic of response.diagnostics || []) {
+    const code = diagnostic && diagnostic.code;
+    if (typeof code === 'string' && codes[code]) process.stderr.write(code + '\n');
+  }
+} catch (e) {
+  process.exit(2);
+}
+process.exit(1);
+JSINSTALL
+    then return 0; else status=$?; fi
+    else
+    config_preflight_stop
+    return 1
+    fi
     [ "$status" != 2 ] || return 2
     config_preflight_stop
 }

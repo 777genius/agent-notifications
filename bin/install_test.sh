@@ -271,6 +271,12 @@ else
     TESTS_FAILED=$((TESTS_FAILED + 1))
 fi
 
+if bash "$SCRIPT_DIR/installer_runtime_fallback_e2e_test.sh"; then
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
 if bash "$SCRIPT_DIR/agent-launcher_test.sh"; then
     TESTS_PASSED=$((TESTS_PASSED + 1))
 else

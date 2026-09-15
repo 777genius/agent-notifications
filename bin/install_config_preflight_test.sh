@@ -20,7 +20,7 @@ root, box = map(pathlib.Path, sys.argv[1:])
 functions = box/'functions.sh'
 functions.write_text((root/'install.sh').read_text().replace('main "$@"', ''))
 helper = box/'helper'
-helper.write_text("""#!/usr/bin/env python3
+helper.write_text("#!" + sys.executable + """
 import json,os,sys
 if sys.argv[1:]==['--version']:
     print('claude-notifications 0.0.1'); sys.exit(0)
@@ -446,4 +446,44 @@ shutil.rmtree(venv)
 (venv/'bin/python3').chmod(0o755)
 run('working-venv',iterm,venv/'config.json')
 
+# Node-only transport: python3 is absent from PATH, Node drives preflight.
+if shutil.which('node'):
+    node_bin = box / 'node-only-bin'
+    node_bin.mkdir()
+    for name in ['bash', 'sh', 'mktemp', 'rm', 'cat', 'chmod', 'mkdir', 'ln', 'uname',
+                 'tr', 'head', 'cp', 'mv', 'env', 'true', 'false', 'grep', 'sed', 'node']:
+        src = shutil.which(name)
+        if src:
+            dest = node_bin / name
+            if not dest.exists():
+                os.symlink(src, dest)
+    assert not (node_bin / 'python3').exists()
+    node_isolation = """
+curl() { echo 'unexpected network request' >&2; return 99; }
+wget() { echo 'unexpected network request' >&2; return 99; }
+"""
+    orig_path = os.environ['PATH']
+
+    def run_node(name, body, e=None, ok=True):
+        case = box / name
+        case.mkdir(exist_ok=True)
+        env = dict(os.environ, INSTALL_TARGET_DIR=str(case), TRACE=str(case / 'trace'),
+                   PATH=str(node_bin))
+        if e is not None:
+            env['AGENT_NOTIFICATIONS_CONFIG'] = str(e)
+        script = 'source ' + q(functions) + '\ndetect_platform\nINSTALL_CONFIG_HELPER=' + q(helper) + '\n' + node_isolation + body
+        r = subprocess.run(['bash', '-c', script], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        assert (r.returncode == 0) == ok, (name, r.returncode, r.stderr.decode())
+        assert b'SECRET-CANARY' not in r.stdout + r.stderr
+        print('PASS:', name)
+        return case, r
+
+    run_node('node-only-safe', 'guard_install_paths "$SCRIPT_DIR"', outside)
+    reject_target = box / 'node-only-reject' / 'config.json'
+    reject_target.parent.mkdir()
+    reject_target.write_text('SECRET-CANARY')
+    run_node('node-only-reject', 'guard_install_paths "$SCRIPT_DIR"', reject_target, False)
+    assert reject_target.read_text() == 'SECRET-CANARY'
+else:
+    print('SKIP node-only install preflight: node not available')
 PY

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Installer metadata and checksum validation accept **Node.js** (`node`) when `python3` is not on PATH. Python remains preferred when both are present. iTerm2 click-to-focus still needs a real Python interpreter for its optional venv.
+
 ## [1.43.0] - 2026-09-11
 
 ### Added

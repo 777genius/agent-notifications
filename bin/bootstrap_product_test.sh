@@ -37,6 +37,29 @@ done
 for commit in short 0123456789abcdef0123456789abcdef0123456g 0123456789ABCDEF0123456789ABCDEF01234567; do
     if BOOTSTRAP_RELEASE_TAG=v1.42.0 BOOTSTRAP_RELEASE_COMMIT="$commit" resolve_bootstrap_release; then exit 1; fi
 done
+if command -v node >/dev/null 2>&1; then
+    NODE_ONLY="$SANDBOX/node-only-bin"
+    mkdir -p "$NODE_ONLY"
+    ln -sf "$(command -v node)" "$NODE_ONLY/node"
+    for name in bash sh mktemp rm cat chmod mkdir ln uname tr head cp mv env true false grep sed awk; do
+        src=$(command -v "$name" || true)
+        [ -n "$src" ] || continue
+        [ -e "$NODE_ONLY/$name" ] || ln -sf "$src" "$NODE_ONLY/$name"
+    done
+    (
+        PATH="$NODE_ONLY"
+        command -v python3 >/dev/null 2>&1 && { echo "python3 leaked into node-only PATH"; exit 1; }
+        command -v node >/dev/null 2>&1 || { echo "node missing from node-only PATH"; exit 1; }
+        BOOTSTRAP_RELEASE_TAG=v1.42.0
+        unset BOOTSTRAP_RELEASE_COMMIT INSTALL_SCRIPT_URL
+        BOOTSTRAP_RAW_BASE_URL="https://raw.example.invalid/repository"
+        fetch_bootstrap_file() { printf '%s\n' '{"sha":"'"$TEST_RELEASE_COMMIT"'"}' > "$2"; }
+        resolve_bootstrap_release
+        [ "$BOOTSTRAP_COMMIT" = "$TEST_RELEASE_COMMIT" ]
+        [ "$INSTALL_SCRIPT_URL" = "$BOOTSTRAP_RAW_BASE_URL/$TEST_RELEASE_COMMIT/bin/install.sh" ]
+    )
+    echo "node-only resolve_bootstrap_release passed"
+fi
 unset BOOTSTRAP_RELEASE_TAG BOOTSTRAP_RELEASE_COMMIT BOOTSTRAP_RAW_BASE_URL INSTALL_SCRIPT_URL
 # The production archive endpoint accepts a commit SHA directly, outside refs/tags.
 (
@@ -155,7 +178,7 @@ cp "$INSTALL_STAGED_ASSETS"/claude-notifications-* "$INSTALL_TARGET_DIR/claude-n
 chmod +x "$INSTALL_TARGET_DIR/claude-notifications"
 cp "$INSTALL_TARGET_DIR/claude-notifications" "$INSTALL_TARGET_DIR/claude-notifications-windows-amd64.exe"
 '''
-binary = '''#!/usr/bin/env python3
+binary = '''#!''' + sys.executable + '''
 import json, os, pathlib, sys
 args=sys.argv[1:]
 if os.environ.get('FIXTURE_TRACE'):
@@ -303,7 +326,7 @@ assert not list(pathlib.Path(env['TMPDIR']).glob('bootstrap-release-*'))
 # fake config CLI models the coordinated contract, not Go resolver evidence.
 trace=sandbox/'trace'; request=sandbox/'request.json'
 env.update(FIXTURE_TRACE=str(trace),FIXTURE_REQUEST=str(request))
-claude_script='''#!/usr/bin/env python3
+claude_script='''#!''' + sys.executable + '''
 import json,os,pathlib,sys
 args=sys.argv[1:]
 with open(os.environ['FIXTURE_TRACE'],'a') as f: f.write(json.dumps(['claude']+args)+'\\n')
@@ -498,6 +521,25 @@ trace.write_text('')
 run(['--product','both'],1,{'PYTHONOPTIMIZE':'2'})
 assert not events()
 payload_file.write_bytes(valid_payload); checksums.write_bytes(valid_checksums)
+if shutil.which('node'):
+    node_only = sandbox / 'http-node-only-bin'
+    node_only.mkdir()
+    for name in ['bash', 'sh', 'mktemp', 'rm', 'cat', 'chmod', 'mkdir', 'ln', 'uname',
+                 'tr', 'head', 'cp', 'mv', 'env', 'true', 'false', 'grep', 'sed', 'awk',
+                 'tar', 'gzip', 'curl', 'node']:
+        src = shutil.which(name)
+        if src:
+            dest = node_only / name
+            if not dest.exists():
+                dest.symlink_to(src)
+    assert not (node_only / 'python3').exists()
+    reset_case()
+    env['PATH'] = str(cli) + os.pathsep + str(node_only)
+    run(['--product', 'codex'])
+    assert (pathlib.Path(env['XDG_CONFIG_HOME']) / 'agent-notifications/config.json').exists()
+    print('node-only bootstrap HTTP e2e passed')
+else:
+    print('SKIP node-only bootstrap HTTP e2e: node not available')
 print('protected flow fixtures passed (fake config CLI; real Go integration pending)')
 server.shutdown(); server.server_close()
 print('local HTTP / curl-pipe PTY adapter fixtures passed (fake installer and binary)')

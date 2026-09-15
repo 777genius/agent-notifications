@@ -49,6 +49,32 @@ BOOTSTRAP_TAG=""
 BOOTSTRAP_COMMIT=""
 _BOOTSTRAP_TMP=""  # temp file path for trap (set -u safe)
 
+# Isolated JSON/checksum runtime. Prefer python3 -I; Node is the supported
+# fallback because Claude Code already ships it. iTerm2 venv still needs a
+# real Python interpreter and stays optional.
+installer_runtime() {
+    if command -v python3 >/dev/null 2>&1; then
+        printf '%s\n' python3
+        return 0
+    fi
+    if command -v node >/dev/null 2>&1; then
+        printf '%s\n' node
+        return 0
+    fi
+    return 1
+}
+
+require_installer_runtime() {
+    installer_runtime >/dev/null || {
+        echo "python3 or node is required for protected installer metadata and checksum validation." >&2
+        return 1
+    }
+}
+
+run_isolated_node() {
+    NODE_OPTIONS= NODE_PATH= node --no-warnings "$@"
+}
+
 # ──────────────────────────────────────────────
 
 print_header() {
@@ -99,7 +125,7 @@ abort_if_wsl_environment() {
 # ──────────────────────────────────────────────
 
 check_prerequisites() {
-    command -v python3 >/dev/null 2>&1 || { echo "python3 is required for protected installer metadata and checksum validation." >&2; return 1; }
+    require_installer_runtime || return 1
     if [ "${PRODUCT:-claude}" != codex ] && ! command -v claude &>/dev/null; then
         echo -e "${RED}✗ claude CLI not found in PATH${NC}" >&2
         echo "" >&2
@@ -177,7 +203,8 @@ marketplace_declared_repo() {
     local tmp
     tmp=$(mktemp "${TMPDIR:-/tmp}/marketplace-list-XXXXXX") || return 1
     claude plugin marketplace list --json </dev/null >"$tmp" 2>/dev/null
-    python3 -I - "$tmp" "$MARKETPLACE_NAME" <<'PY'
+    if command -v python3 >/dev/null 2>&1; then
+        python3 -I - "$tmp" "$MARKETPLACE_NAME" <<'PY'
 import json, sys
 path, name = sys.argv[1], sys.argv[2]
 try:
@@ -190,6 +217,21 @@ try:
 except Exception:
     pass
 PY
+    elif command -v node >/dev/null 2>&1; then
+        run_isolated_node - "$tmp" "$MARKETPLACE_NAME" <<'JS'
+const fs = require('fs');
+try {
+  const entries = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+  const name = process.argv[3];
+  for (const entry of entries) {
+    if (entry && entry.name === name && entry.repo) {
+      process.stdout.write(String(entry.repo) + '\n');
+      break;
+    }
+  }
+} catch (_) {}
+JS
+    fi
     rm -f "$tmp"
 }
 
@@ -1072,6 +1114,7 @@ resolve_bootstrap_release() {
         _BOOTSTRAP_TMP=$(mktemp "${TMPDIR:-/tmp}/bootstrap-commit-XXXXXX") || return 1
         fetch_bootstrap_file "${BOOTSTRAP_COMMIT_API_BASE_URL:-https://api.github.com/repos/${REPO}/commits}/$BOOTSTRAP_TAG" "$_BOOTSTRAP_TMP" || return 1
         BOOTSTRAP_COMMIT=$(
+            if command -v python3 >/dev/null 2>&1; then
             python3 -I - "$_BOOTSTRAP_TMP" <<'PYCOMMIT'
 import json, re, sys
 with open(sys.argv[1], encoding='utf-8') as stream:
@@ -1080,6 +1123,26 @@ if not isinstance(value, str) or re.fullmatch(r'[0-9a-f]{40}', value) is None:
     raise SystemExit('Release tag did not resolve to a commit SHA')
 sys.stdout.buffer.write((value + '\n').encode('ascii'))
 PYCOMMIT
+            elif command -v node >/dev/null 2>&1; then
+            run_isolated_node - "$_BOOTSTRAP_TMP" <<'JSCOMMIT'
+const fs = require('fs');
+let value;
+try {
+  value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8')).sha || '';
+} catch (e) {
+  process.stderr.write('Release tag did not resolve to a commit SHA\n');
+  process.exit(1);
+}
+if (typeof value !== 'string' || !/^[0-9a-f]{40}$/.test(value)) {
+  process.stderr.write('Release tag did not resolve to a commit SHA\n');
+  process.exit(1);
+}
+process.stdout.write(value + '\n');
+JSCOMMIT
+            else
+            echo "python3 or node is required for protected installer metadata and checksum validation." >&2
+            exit 1
+            fi
         ) || return 1
         rm -f "$_BOOTSTRAP_TMP"
         _BOOTSTRAP_TMP=""
@@ -1096,6 +1159,7 @@ PYCOMMIT
 stage_config_helper() {
     # Validate the temp parent before creating anything: TMPDIR can itself be
     # inside a Claude cache or a symlink into a refreshed runtime.
+    if command -v python3 >/dev/null 2>&1; then
     python3 -I - "${TMPDIR:-/tmp}" "$INSTALLED_JSON" "$PLUGIN_KEY" "$PRODUCT" "$CACHE_DIR" "$MARKETPLACE_DIR" "${CODEX_HOME:-$HOME/.codex}/claude-notifications-go" <<'PYSTAGE' || return 1
 import json, os, sys
 base,registry,key,product,*roots=sys.argv[1:]
@@ -1113,6 +1177,47 @@ def within(base, root):
 if any(within(base, r) for r in roots):
     sys.exit('Staging must be outside refreshed bundles')
 PYSTAGE
+    elif command -v node >/dev/null 2>&1; then
+    run_isolated_node - "${TMPDIR:-/tmp}" "$INSTALLED_JSON" "$PLUGIN_KEY" "$PRODUCT" "$CACHE_DIR" "$MARKETPLACE_DIR" "${CODEX_HOME:-$HOME/.codex}/claude-notifications-go" <<'JSSTAGE' || return 1
+const fs = require('fs');
+const path = require('path');
+const osPath = process.platform === 'win32' ? path.win32 : path.posix;
+function lexists(p) { try { fs.lstatSync(p); return true; } catch (_) { return false; } }
+function real(p) { try { return fs.realpathSync(p); } catch (_) { return osPath.resolve(p); } }
+function splitdrive(p) {
+  if (process.platform !== 'win32') return ['', p];
+  const n = p.replace(/\//g, '\\');
+  if (n.startsWith('\\\\')) {
+    const parts = n.split('\\').filter(Boolean);
+    if (parts.length >= 2) return ['\\\\' + parts[0] + '\\' + parts[1], '\\' + parts.slice(2).join('\\')];
+  }
+  return /^[a-zA-Z]:/.test(n) ? [n.slice(0, 2), n.slice(2)] : ['', n];
+}
+function within(base, root) {
+  base = osPath.normalize(real(base));
+  root = osPath.normalize(real(root));
+  if (process.platform === 'win32') { base = base.toLowerCase(); root = root.toLowerCase(); }
+  if (splitdrive(base)[0].toLowerCase() !== splitdrive(root)[0].toLowerCase()) return false;
+  const rel = osPath.relative(root, base);
+  return rel === '' || (rel !== '..' && !rel.startsWith('..' + osPath.sep) && !osPath.isAbsolute(rel));
+}
+const argv = process.argv.slice(2);
+let [base, registry, key, product, ...roots] = argv;
+roots = product === 'claude' ? roots.slice(0, 2) : product === 'codex' ? roots.slice(2) : roots;
+if (product !== 'codex' && lexists(registry)) {
+  const data = JSON.parse(fs.readFileSync(registry, 'utf8'));
+  const entries = ((data && data.plugins) || {})[key] || [];
+  for (const entry of entries) roots.push(entry.installPath);
+}
+if (roots.some((root) => within(base, root))) {
+  process.stderr.write('Staging must be outside refreshed bundles\n');
+  process.exit(1);
+}
+JSSTAGE
+    else
+    echo "python3 or node is required for protected installer metadata and checksum validation." >&2
+    return 1
+    fi
     _CONFIG_STAGE=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-config-XXXXXX") || return 1
     # Snapshot the pre-update registry, not a guessed cache version. Later
     # registrations introduce packaged templates, not historical user settings.
@@ -1130,6 +1235,7 @@ PYSTAGE
     base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG"
     fetch_bootstrap_file "$base/checksums.txt" "$_CONFIG_STAGE/checksums.txt" || return 1
     fetch_bootstrap_file "$base/$name" "$_CONFIG_STAGE/$name" || return 1
+    if command -v python3 >/dev/null 2>&1; then
     python3 -I - "$_CONFIG_STAGE" "$name" <<'PYVERIFY' || return 1
 import hashlib, pathlib, sys
 root, name = pathlib.Path(sys.argv[1]), sys.argv[2]
@@ -1137,15 +1243,50 @@ entries = [line.split() for line in (root/'checksums.txt').read_text().splitline
 expected = [e[0] for e in entries if len(e)==2 and e[1].lstrip('*')==name]
 assert len(expected)==1 and hashlib.sha256((root/name).read_bytes()).hexdigest()==expected[0].lower(), 'Helper checksum mismatch'
 PYVERIFY
+    elif command -v node >/dev/null 2>&1; then
+    run_isolated_node - "$_CONFIG_STAGE" "$name" <<'JSVERIFY' || return 1
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const root = process.argv[2], name = process.argv[3];
+const expected = fs.readFileSync(path.join(root, 'checksums.txt'), 'utf8').split(/\r?\n/)
+  .map((line) => line.split(/\s+/).filter(Boolean))
+  .filter((e) => e.length === 2 && e[1].replace(/^\*/, '') === name)
+  .map((e) => e[0]);
+const actual = crypto.createHash('sha256').update(fs.readFileSync(path.join(root, name))).digest('hex');
+if (expected.length !== 1 || actual !== expected[0].toLowerCase()) {
+  process.stderr.write('Helper checksum mismatch\n');
+  process.exit(1);
+}
+JSVERIFY
+    else
+    echo "python3 or node is required for protected installer metadata and checksum validation." >&2
+    return 1
+    fi
     _CONFIG_HELPER="$_CONFIG_STAGE/$name"
     chmod +x "$_CONFIG_HELPER" || return 1
     [ "$("$_CONFIG_HELPER" --version)" = "claude-notifications $BOOTSTRAP_TAG" ] || return 1
     "$_CONFIG_HELPER" config path --json > "$_CONFIG_STAGE/path.json" || return 1
+    if command -v python3 >/dev/null 2>&1; then
     python3 -I - "$_CONFIG_STAGE/path.json" <<'PYCAP' || return 1
 import json, sys
 v=json.load(open(sys.argv[1]))
 assert isinstance(v,dict) and isinstance(v.get('path'),str) and v['path'], 'Missing config path capability'
 PYCAP
+    elif command -v node >/dev/null 2>&1; then
+    run_isolated_node - "$_CONFIG_STAGE/path.json" <<'JSCAP' || return 1
+const fs = require('fs');
+let value;
+try { value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8')); } catch (e) { process.exit(1); }
+if (!value || typeof value !== 'object' || Array.isArray(value) || typeof value.path !== 'string' || !value.path) {
+  process.stderr.write('Missing config path capability\n');
+  process.exit(1);
+}
+JSCAP
+    else
+    echo "python3 or node is required for protected installer metadata and checksum validation." >&2
+    return 1
+    fi
     fetch_bootstrap_file "$INSTALL_SCRIPT_URL" "$_CONFIG_STAGE/install.sh" || return 1
 }
 
@@ -1153,6 +1294,7 @@ PYCAP
 # intentionally leave baseline unknown and require explicit historical import.
 stage_historical_baselines() {
     [ "$PRODUCT" != codex ] || return 0
+    if command -v python3 >/dev/null 2>&1; then
     python3 -I - "$_CONFIG_STAGE/installed-before.json" "$PLUGIN_KEY" "$_CONFIG_STAGE" <<'PYVERSIONS' > "$_CONFIG_STAGE/versions" || return 1
 import json,os,re,sys
 registry,key,stage=sys.argv[1:]
@@ -1166,6 +1308,29 @@ if os.path.lexists(registry):
 # emits CRLF, leaving a trailing CR in the release URL and baseline directory.
 sys.stdout.buffer.write(('\n'.join(sorted(versions))+'\n' if versions else '').encode('ascii'))
 PYVERSIONS
+    elif command -v node >/dev/null 2>&1; then
+    run_isolated_node - "$_CONFIG_STAGE/installed-before.json" "$PLUGIN_KEY" "$_CONFIG_STAGE" <<'JSVERSIONS' > "$_CONFIG_STAGE/versions" || return 1
+const fs = require('fs');
+const path = require('path');
+function lexists(p) { try { fs.lstatSync(p); return true; } catch (_) { return false; } }
+const [registry, key, stage] = process.argv.slice(2);
+const versions = new Set();
+if (lexists(registry)) {
+  const data = JSON.parse(fs.readFileSync(registry, 'utf8'));
+  const entries = ((data && data.plugins) || {})[key] || [];
+  for (const entry of entries) {
+    let version = String((entry && entry.version) || '').replace(/^v/, '');
+    if (!/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(version)) continue;
+    if (lexists(path.join(entry.installPath, 'config', 'config.json'))) versions.add(version);
+  }
+}
+const list = Array.from(versions).sort();
+process.stdout.write(list.length ? list.join('\n') + '\n' : '');
+JSVERSIONS
+    else
+    echo "python3 or node is required for protected installer metadata and checksum validation." >&2
+    return 1
+    fi
     local version base dir
     while IFS= read -r version; do
         [ -n "$version" ] || continue
@@ -1174,6 +1339,7 @@ PYVERSIONS
         base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/v$version"
         fetch_bootstrap_file "$base/checksums.txt" "$dir/checksums.txt" 2>/dev/null || continue
         # Only request a template explicitly included in the release manifest.
+        if command -v python3 >/dev/null 2>&1; then
         python3 -I - "$dir/checksums.txt" <<'PYHAS' || continue
 # Older releases may not publish a config.json checksum entry; skip this
 # baseline quietly rather than let assert dump a traceback to the user.
@@ -1182,7 +1348,18 @@ has_entry = any(len(e) == 2 and e[1].lstrip('*') == 'config.json'
                 for e in (line.split() for line in open(sys.argv[1])))
 sys.exit(0 if has_entry else 1)
 PYHAS
+        elif command -v node >/dev/null 2>&1; then
+        run_isolated_node - "$dir/checksums.txt" <<'JSHAS' || continue
+const fs = require('fs');
+const has = fs.readFileSync(process.argv[2], 'utf8').split(/\r?\n/)
+  .map((line) => line.split(/\s+/).filter(Boolean))
+  .some((e) => e.length === 2 && e[1].replace(/^\*/, '') === 'config.json');
+process.exit(has ? 0 : 1);
+JSHAS
+        else continue
+        fi
         fetch_bootstrap_file "$base/config.json" "$dir/config.json" 2>/dev/null || continue
+        if command -v python3 >/dev/null 2>&1; then
         python3 -I - "$dir" <<'PYBASE' || continue
 import hashlib,pathlib,sys
 p=pathlib.Path(sys.argv[1])
@@ -1192,6 +1369,22 @@ if len(h)!=1 or hashlib.sha256((p/'config.json').read_bytes()).hexdigest()!=h[0]
     sys.exit(1)
 (p/'verified').write_text(h[0].lower())
 PYBASE
+        elif command -v node >/dev/null 2>&1; then
+        run_isolated_node - "$dir" <<'JSBASE' || continue
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const dir = process.argv[2];
+const hashes = fs.readFileSync(path.join(dir, 'checksums.txt'), 'utf8').split(/\r?\n/)
+  .map((line) => line.split(/\s+/).filter(Boolean))
+  .filter((e) => e.length === 2 && e[1].replace(/^\*/, '') === 'config.json')
+  .map((e) => e[0]);
+const actual = crypto.createHash('sha256').update(fs.readFileSync(path.join(dir, 'config.json'))).digest('hex');
+if (hashes.length !== 1 || actual !== hashes[0].toLowerCase()) process.exit(1);
+fs.writeFileSync(path.join(dir, 'verified'), hashes[0].toLowerCase());
+JSBASE
+        else continue
+        fi
     done < "$_CONFIG_STAGE/versions"
 }
 
@@ -1204,6 +1397,7 @@ config_preflight() {
     fi
     # Resolve config afresh before every destructive operation. Historical roots
     # come from the pre-update registry; current roots extend overlap protection.
+    if command -v python3 >/dev/null 2>&1; then
     python3 -I - "$_CONFIG_STAGE/installed-before.json" "$PLUGIN_KEY" "$CLAUDE_HOME" "$CACHE_DIR" "$MARKETPLACE_DIR" "${CODEX_HOME:-$HOME/.codex}" "$PRODUCT" "$_CONFIG_STAGE" "$INSTALLED_JSON" "$venv_refresh" <<'PYINPUT' > "$_CONFIG_STAGE/preflight-input.json" || return 1
 import json, os, re, sys
 registry,key,claude,cache,market,codex,product,stage,current_registry,venv_refresh=sys.argv[1:]
@@ -1243,12 +1437,91 @@ assert all(os.path.isabs(p) for p in refresh), 'Refresh roots must be absolute'
 protected=[current_registry,os.path.join(claude,'plugins','known_marketplaces.json'),os.path.join(claude,'settings.json')] if product!='codex' else []
 json.dump(dict(activeBundleRoots=roots,refreshDirs=refresh,protectedPaths=protected,historicalCandidates=historical),sys.stdout)
 PYINPUT
+    elif command -v node >/dev/null 2>&1; then
+    run_isolated_node - "$_CONFIG_STAGE/installed-before.json" "$PLUGIN_KEY" "$CLAUDE_HOME" "$CACHE_DIR" "$MARKETPLACE_DIR" "${CODEX_HOME:-$HOME/.codex}" "$PRODUCT" "$_CONFIG_STAGE" "$INSTALLED_JSON" "$venv_refresh" <<'JSINPUT' > "$_CONFIG_STAGE/preflight-input.json" || return 1
+const fs = require('fs');
+const path = require('path');
+function lexists(p) { try { fs.lstatSync(p); return true; } catch (_) { return false; } }
+function isabs(p) { return path.isAbsolute(p); }
+const [registry, key, claude, cache, market, codex, product, stage, current_registry, venv_refresh] = process.argv.slice(2);
+const baselines = {};
+const roots = [];
+const refresh = [];
+const historical = [];
+if (product !== 'codex') {
+  if (lexists(registry)) {
+    const data = JSON.parse(fs.readFileSync(registry, 'utf8'));
+    const entries = ((data && data.plugins) || {})[key] || [];
+    if (!Array.isArray(entries)) throw new Error('Invalid Claude registry');
+    for (const entry of entries) {
+      const root = entry && entry.installPath;
+      if (typeof root !== 'string' || !isabs(root)) throw new Error('Missing absolute recorded installPath');
+      if (!roots.includes(root)) roots.push(root);
+      const version = String((entry && entry.version) || '').replace(/^v/, '');
+      if (/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(version)) {
+        const verified = path.join(stage, 'baseline-' + version, 'verified');
+        if (fs.existsSync(verified) && fs.statSync(verified).isFile()) {
+          baselines[root] = {
+            baselinePath: path.join(stage, 'baseline-' + version, 'config.json'),
+            baselineSHA256: fs.readFileSync(verified, 'utf8'),
+          };
+        }
+      }
+    }
+  }
+  refresh.push(cache, market, ...roots);
+  if (lexists(current_registry)) {
+    const currentData = JSON.parse(fs.readFileSync(current_registry, 'utf8'));
+    const current = ((currentData && currentData.plugins) || {})[key] || [];
+    for (const entry of current) {
+      const root = entry && entry.installPath;
+      if (typeof root !== 'string' || !isabs(root)) throw new Error('Missing absolute recorded installPath');
+      if (!refresh.includes(root)) refresh.push(root);
+    }
+  }
+  for (const root of roots) {
+    historical.push(Object.assign({ path: path.join(root, 'config', 'config.json') }, baselines[root] || {}));
+  }
+}
+historical.push({ path: path.join(claude, 'claude-notifications-go', 'config.json') });
+if (product !== 'claude') {
+  const dest = path.join(codex, 'claude-notifications-go');
+  refresh.push(dest);
+  historical.push({ path: path.join(dest, 'config', 'config.json') });
+}
+if (venv_refresh) refresh.push(venv_refresh);
+if (!refresh.every(isabs)) throw new Error('Refresh roots must be absolute');
+const protectedPaths = product !== 'codex' ? [
+  current_registry,
+  path.join(claude, 'plugins', 'known_marketplaces.json'),
+  path.join(claude, 'settings.json'),
+] : [];
+process.stdout.write(JSON.stringify({
+  activeBundleRoots: roots,
+  refreshDirs: refresh,
+  protectedPaths,
+  historicalCandidates: historical,
+}));
+JSINPUT
+    else
+    echo "python3 or node is required for protected installer metadata and checksum validation." >&2
+    return 1
+    fi
     if "$_CONFIG_HELPER" config preflight-update --stdin --json < "$_CONFIG_STAGE/preflight-input.json" > "$_CONFIG_STAGE/preflight.json"; then
+        if command -v python3 >/dev/null 2>&1; then
         if python3 -I - "$_CONFIG_STAGE/preflight.json" <<'PYSAFE'
 import json,sys
 assert json.load(open(sys.argv[1])).get('status')=='safe'
 PYSAFE
         then return 0; fi
+        elif command -v node >/dev/null 2>&1; then
+        if run_isolated_node - "$_CONFIG_STAGE/preflight.json" <<'JSSAFE'
+const fs = require('fs');
+const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+if (!value || value.status !== 'safe') process.exit(1);
+JSSAFE
+        then return 0; fi
+        fi
     fi
     _KEEP_CONFIG_STAGE=true
     echo "Config preflight stopped setup; runtime retained before this operation." >&2

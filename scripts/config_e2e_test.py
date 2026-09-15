@@ -103,7 +103,7 @@ chmod +x "$INSTALL_TARGET_DIR/claude-notifications"
         self.url = 'http://127.0.0.1:' + str(self.server.server_port)
         self.index = 0
 
-    def fixture(self):
+    def fixture(self, python=True, node=True):
         self.index += 1
         base = self.base / ('case-' + str(self.index))
         env = environment(base)
@@ -132,7 +132,22 @@ shutil.copytree(os.environ['SOURCE'],root,dirs_exist_ok=True)
             else:
                 body = '#!/bin/sh\necho invoked >> "$EFFECTS"\nexit 97\n'
             put(clis / name, body, 0o755)
-        env.update(PATH=str(clis) + ':/usr/bin:/bin', TRACE=str(base / 'trace'),
+        runtime = base / 'runtime-bin'
+        runtime.mkdir()
+        names = ['bash', 'sh', 'mktemp', 'rm', 'cat', 'chmod', 'mkdir', 'ln', 'uname',
+                 'tr', 'head', 'cp', 'mv', 'env', 'true', 'false', 'grep', 'sed', 'awk',
+                 'tar', 'gzip', 'curl', 'cut', 'basename', 'dirname', 'touch']
+        if python:
+            names.append('python3')
+        if node:
+            names.append('node')
+        for name in names:
+            src = shutil.which(name)
+            if src:
+                dest = runtime / name
+                if not dest.exists():
+                    os.symlink(src, dest)
+        env.update(PATH=str(clis) + os.pathsep + str(runtime), TRACE=str(base / 'trace'),
                    EFFECTS=str(base / 'effects'), SOURCE=str(self.bundle), LOCAL_URL=self.url,
                    BOOTSTRAP_RELEASE_TAG=TAG, BOOTSTRAP_RELEASE_COMMIT=COMMIT,
                    BOOTSTRAP_SOURCE_BASE_URL=self.url,
@@ -195,8 +210,8 @@ shutil.copytree(os.environ['SOURCE'],root,dirs_exist_ok=True)
         put(home / 'plugins/installed_plugins.json', json.dumps({'plugins': {'claude-notifications-go@claude-notifications-go': [{'installPath': str(active), 'version': version}]}}))
         return active
 
-    def fresh(self, product):
-        env = self.fixture()
+    def fresh(self, product, python=True, node=True):
+        env = self.fixture(python=python, node=node)
         self.requests.clear()
         self.boot(env, product)
         assert sum(p.endswith('/' + self.asset) for p in self.requests) == 1
@@ -486,6 +501,10 @@ def main():
         suite = Suite(base, binary)
         failures = []
         cases = [(f'fresh-{p}-and-repair', lambda p=p: suite.fresh(p)) for p in ('claude', 'codex', 'both')]
+        if shutil.which('python3'):
+            cases += [('fresh-codex-python-only', lambda: suite.fresh('codex', python=True, node=False))]
+        if shutil.which('node'):
+            cases += [('fresh-codex-node-only', lambda: suite.fresh('codex', python=False, node=True))]
         cases += [('legacy-exact', suite.legacy), ('explicit-import-CAS', suite.explicit_and_import_edit),
                   ('corrupt-no-fallback', suite.corrupt), ('custom-and-overlap', suite.custom_and_overlap),
                   ('setup-readonly', suite.setup_readonly), ('offline-retains-state', suite.offline), ('registration-failure', suite.registration_failure), ('hooks-no-config-writes', suite.hooks), ('partial-config-only-retry', suite.partial_retry)]
