@@ -1515,6 +1515,36 @@ func TestWizardResumeRejectsDifferentDigest(t *testing.T) {
 	}
 }
 
+func TestWizardResumeRejectsDifferentBindingID(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, _, _, gen := managedRuntime(t)
+	plantPendingIntent(t, ctx, control, runtime, gen, portablesetup.Intent{
+		Version: 1, SetupIntentID: "pending-install-intent", Action: "install", Stage: "retire-direct",
+		ExpectedGeneration: gen,
+		Targets: []portablesetup.IntentTarget{{
+			Client: "codex", InstallationID: "inst-codex", BindingID: "client_pending", Units: []string{"direct-mcp"},
+		}},
+	})
+	got, err := Run(ctx, Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true,
+		ControlRoot: control, RuntimeRoot: runtime,
+		InstallationID: "inst-codex",
+		BindingIDs:     map[string]string{"codex": "client_other"},
+	})
+	if err == nil || got.Outcome != "conflict" || got.Reason != "pending_intent_conflict" {
+		t.Fatalf("different binding id: %+v %v", got, err)
+	}
+	matched, err := Run(ctx, Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true,
+		ControlRoot: control, RuntimeRoot: runtime,
+		InstallationID: "inst-codex",
+		BindingIDs:     map[string]string{"codex": "client_pending"},
+	})
+	if matched.Reason == "pending_intent_conflict" {
+		t.Fatalf("matching binding id rejected: %+v %v", matched, err)
+	}
+}
+
 func TestWizardResumeRestoresOmittedUninstallFromPendingIntent(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, _, _, gen := managedRuntime(t)
