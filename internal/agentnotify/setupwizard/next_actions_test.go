@@ -161,6 +161,20 @@ func TestOfferPostSetupActionsCompletedInstallOffersDelivery(t *testing.T) {
 	}
 }
 
+func TestOfferPostSetupActionsInspectSkipsPermission(t *testing.T) {
+	req := Request{Action: ActionInspect, ControlRoot: filepath.Join(t.TempDir(), "control"), Agents: []string{"codex"}}
+	out := Result{
+		Action: "inspect", Outcome: "completed", Generation: 2,
+		Targets: []TargetResult{{Client: "codex", Unit: "agent-notify", Outcome: "installed"}},
+	}
+	got := offerPostSetupActions(req, []portable.Integration{portable.Codex}, out, false)
+	for _, next := range got.NextActions {
+		if next.Kind == "request-permission" {
+			t.Fatalf("inspect offered permission dialog: %+v", got.NextActions)
+		}
+	}
+}
+
 func TestOfferPostSetupActionsUninstallSkipsDelivery(t *testing.T) {
 	req := Request{Action: ActionUninstall, ControlRoot: filepath.Join(t.TempDir(), "control"), Agents: []string{"codex"}}
 	out := Result{
@@ -224,5 +238,9 @@ func TestInspectOmittedAgentsStillReportsBoth(t *testing.T) {
 	}
 	if saw["claude"] != "absent" || saw["codex"] != "absent" {
 		t.Fatalf("omitted inspect clients: %+v", got.Targets)
+	}
+	plan, err := Plan(ctx, Request{Action: ActionInspect, ControlRoot: control})
+	if err != nil || !plan.Ready || plan.Result.Reason == "agents_required" || plan.Result.ExitCode() != 0 {
+		t.Fatalf("omitted inspect plan: %+v %v", plan, err)
 	}
 }
