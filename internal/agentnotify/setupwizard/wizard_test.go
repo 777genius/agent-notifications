@@ -210,12 +210,63 @@ func TestPlanShowsSourceDigestWithoutMutating(t *testing.T) {
 	if !strings.Contains(plan.Text, "source-digest=") || !strings.Contains(plan.Text, "helper-digest=") || !strings.Contains(plan.Text, "helper-version=") {
 		t.Fatalf("missing helper identity: %s", plan.Text)
 	}
+	if plan.Request.InstallationID == "" || !strings.Contains(plan.Text, "installation-id="+plan.Request.InstallationID) || plan.Result.InstallationID != plan.Request.InstallationID {
+		t.Fatalf("plan omitted reserved installation id: text=%s req=%s result=%s", plan.Text, plan.Request.InstallationID, plan.Result.InstallationID)
+	}
+	if !strings.Contains(plan.Text, "binding-id=") {
+		t.Fatalf("plan omitted binding id: %s", plan.Text)
+	}
 	snap, err := installruntime.ReadInstalledSnapshot(control)
 	if err != nil || snap.Ledger.PendingMutation != nil || snap.Ledger.Generation != gen {
 		t.Fatalf("preflight mutated ledger: %+v %v", snap.Ledger, err)
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(control), "uap", "state", "state-v2.json")); !os.IsNotExist(err) {
 		t.Fatal("plan wrote UAP state")
+	}
+}
+
+func TestPlanReservedIDIsReusedOnRun(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"},
+		Hooks: &off, AgentNotify: boolPtr(true),
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := Plan(ctx, req)
+	if err != nil || !plan.Ready || plan.Request.InstallationID == "" {
+		t.Fatalf("plan: %+v %v", plan, err)
+	}
+	reserved := plan.Request.InstallationID
+	runReq := plan.Request
+	runReq.Yes = true
+	got, err := Run(ctx, runReq)
+	if err != nil || got.Outcome != "completed" {
+		t.Fatalf("run: %+v %v", got, err)
+	}
+	if got.InstallationID != reserved {
+		t.Fatalf("run allocated a different installation id: plan=%s run=%s", reserved, got.InstallationID)
+	}
+	mat, err := materializer(runReq, installruntime.InstalledSnapshot{}, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := mat.Store.Load()
+	if err != nil || len(state.Installations) != 1 || state.Installations[0].InstallationID != reserved {
+		t.Fatalf("uap installation: %+v err=%v", state.Installations, err)
 	}
 }
 

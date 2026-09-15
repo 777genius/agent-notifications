@@ -169,8 +169,9 @@ func TestConfirmPlanShowsProfilesRevisionAndRequiredActions(t *testing.T) {
 	got := confirmPlan(Request{
 		Action: ActionInstall, Agents: []string{"codex"},
 		CodexHome: "/tmp/codex", ReleaseVersion: "1.44.0", PackageSHA256: "abc",
+		InstallationID: "00000000-0000-4000-8000-000000000082",
 	})
-	if !strings.Contains(got, "codex-profile=/tmp/codex") || !strings.Contains(got, "revision=1.44.0") || !strings.Contains(got, "digest=abc") {
+	if !strings.Contains(got, "codex-profile=/tmp/codex") || !strings.Contains(got, "revision=1.44.0") || !strings.Contains(got, "digest=abc") || !strings.Contains(got, "installation-id=00000000-0000-4000-8000-000000000082") {
 		t.Fatalf("identity: %s", got)
 	}
 	if !strings.Contains(got, "required=restart,request-permission,test-notification") || !strings.Contains(got, "permission-dialog=explicit") {

@@ -246,6 +246,9 @@ func confirmPlan(req Request) string {
 	if req.PackageSHA256 != "" {
 		summary += " digest=" + req.PackageSHA256
 	}
+	if req.InstallationID != "" {
+		summary += " installation-id=" + req.InstallationID
+	}
 	switch req.Action {
 	case ActionUninstall:
 		summary += " required=none permission-dialog=skipped"

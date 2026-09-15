@@ -105,14 +105,15 @@ type NextAction struct {
 }
 
 type Result struct {
-	Action      string          `json:"action"`
-	Outcome     string          `json:"outcome"`
-	Reason      string          `json:"reason,omitempty"`
-	Generation  uint64          `json:"generation,omitempty"`
-	Command     []string        `json:"command,omitempty"`
-	Targets     []TargetResult  `json:"targets,omitempty"`
-	Readiness   []ReadinessFact `json:"readiness,omitempty"`
-	NextActions []NextAction    `json:"nextActions,omitempty"`
+	Action         string          `json:"action"`
+	Outcome        string          `json:"outcome"`
+	Reason         string          `json:"reason,omitempty"`
+	InstallationID string          `json:"installationID,omitempty"`
+	Generation     uint64          `json:"generation,omitempty"`
+	Command        []string        `json:"command,omitempty"`
+	Targets        []TargetResult  `json:"targets,omitempty"`
+	Readiness      []ReadinessFact `json:"readiness,omitempty"`
+	NextActions    []NextAction    `json:"nextActions,omitempty"`
 }
 
 func (r Result) ExitCode() int {
@@ -187,6 +188,26 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 				return plan, err
 			}
 			releasePackage = release
+			mat, err := materializer(acquired, ev.snap, ev.runtimeRoot)
+			if err != nil {
+				ev.out.Outcome, ev.out.Reason = "incomplete", err.Error()
+				plan.Result = attachCommand(req, ev.out)
+				return plan, err
+			}
+			id, err := identity(acquired, ev.snap, ev.runtimeRoot, mat, true)
+			if err != nil {
+				if mapped, handled := mapAmbiguous(err, ev.out); handled {
+					plan.Result = attachCommand(req, mapped)
+					return plan, err
+				}
+				ev.out.Outcome, ev.out.Reason = "incomplete", err.Error()
+				plan.Result = attachCommand(req, ev.out)
+				return plan, err
+			}
+			req.InstallationID = id.InstallationID
+			acquired.InstallationID = id.InstallationID
+			plan.Request = req
+			text += " installation-id=" + id.InstallationID
 			for _, agent := range ev.notifyAgents {
 				preview, err := previewNotifyPlan(ctx, acquired, ev.snap, ev.runtimeRoot, agent)
 				if err != nil {
@@ -197,6 +218,9 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 					ev.out.Outcome, ev.out.Reason = "incomplete", "portable_preflight_failed"
 					plan.Result = attachCommand(req, ev.out)
 					return plan, err
+				}
+				if preview.BindingID != "" {
+					text += " binding-id=" + preview.BindingID
 				}
 				if preview.TreeDigest != "" {
 					text += " source-digest=" + preview.TreeDigest
@@ -227,8 +251,10 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 		ev.out.NextActions = append(ev.out.NextActions, NextAction{Kind: "recover", Reason: reason})
 	}
 	ev.out.Outcome, ev.out.Reason = "ready", ""
+	ev.out.InstallationID = req.InstallationID
 	plan.Ready = true
 	plan.Text = text
+	plan.Request = req
 	plan.Result = ev.out
 	return plan, nil
 }
@@ -754,6 +780,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 			return out, err
 		}
 		req.InstallationID = id.InstallationID
+		out.InstallationID = id.InstallationID
 		for _, agent := range notifyAgents {
 			if !explicitAbs(clientConfig(req, agent)) {
 				out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: "client_config_required"})
