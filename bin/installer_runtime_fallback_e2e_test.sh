@@ -415,5 +415,62 @@ printf 'ver=%s root=%s\n' "$ver" "$root"
 else:
     print('SKIP isolated node NODE_OPTIONS: node not available')
 
+# Generated cache shims are standalone POSIX scripts: they must not call
+# bootstrap helpers, and node-only parses must still find installPath.
+shim = extract_quoted_heredoc(root / 'bin/bootstrap.sh', 'SHIMEOF')
+if 'run_isolated_node' in shim:
+    fail('generated hook-wrapper shim', 'standalone shim calls run_isolated_node')
+if 'NODE_OPTIONS= NODE_PATH= node --no-warnings' not in shim:
+    fail('generated hook-wrapper shim', 'standalone shim missing inline node isolation')
+pass_name('generated hook-wrapper shim inlines isolated node')
+
+if host_cmd('node'):
+    with tempfile.TemporaryDirectory(prefix='shim-node-', dir=os.environ['TMPDIR']) as tmp:
+        case = Path(tmp)
+        claude_home = case / 'claude'
+        (claude_home / 'plugins').mkdir(parents=True)
+        current = case / 'current-plugin'
+        (current / 'bin').mkdir(parents=True)
+        wrapper = current / 'bin/hook-wrapper.sh'
+        wrapper.write_text('#!/bin/sh\nprintf ran\\n > "$MARKER"\nexit 0\n', encoding='utf-8')
+        wrapper.chmod(0o755)
+        (claude_home / 'plugins/installed_plugins.json').write_text(json.dumps({
+            'plugins': {
+                'claude-notifications-go@claude-notifications-go': [
+                    {'installPath': str(current), 'version': '1.42.0'}
+                ]
+            }
+        }), encoding='utf-8')
+        shim_path = case / 'old' / 'bin' / 'hook-wrapper.sh'
+        shim_path.parent.mkdir(parents=True)
+        shim_path.write_text(shim, encoding='utf-8')
+        shim_path.chmod(0o755)
+        (case / 'preload.js').write_text('process.stdout.write("POLLUTED\\n");\n', encoding='utf-8')
+        path = runtime_path(case, node=True)
+        marker = case / 'ran'
+        script = r'''
+PATH="$RUNTIME_PATH"
+command -v python3 >/dev/null && { echo python3 leaked >&2; exit 1; }
+command -v jq >/dev/null && { echo jq leaked >&2; exit 1; }
+command -v node >/dev/null || { echo node missing >&2; exit 1; }
+export NODE_OPTIONS="--require=./preload.js"
+"$HOST_BASH" "$SHIM" Stop
+'''
+        env = dict(os.environ, PATH=path, RUNTIME_PATH=path, SHIM=str(shim_path),
+                   HOST_BASH=HOST_BASH, CLAUDE_HOME=str(claude_home),
+                   CLAUDE_CONFIG_DIR=str(claude_home), HOME=str(case / 'home'),
+                   MARKER=str(marker), TMPDIR=str(case))
+        (case / 'home').mkdir()
+        result = subprocess.run([HOST_BASH, '-c', script], cwd=str(case), env=env,
+                                text=True, capture_output=True, timeout=20)
+        if result.returncode != 0 or 'POLLUTED' in result.stdout:
+            fail('generated shim node-only parse', describe(result))
+        if not marker.is_file() or marker.read_text(encoding='utf-8').strip() != 'ran':
+            fail('generated shim node-only parse',
+                 'hook-wrapper was not execed: ' + describe(result))
+        pass_name('generated hook-wrapper shim parses installPath on node-only PATH')
+else:
+    print('SKIP generated hook-wrapper shim node-only parse: node not available')
+
 print('All installer python/node runtime e2e fixtures passed.')
 PY

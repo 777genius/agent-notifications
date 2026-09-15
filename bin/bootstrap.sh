@@ -774,7 +774,7 @@ if [ -f "$INSTALLED_JSON" ]; then
   fi
 
   if [ -z "$PLUGIN_ROOT" ] && command -v python3 >/dev/null 2>&1; then
-    PLUGIN_ROOT=$(python3 - "$INSTALLED_JSON" "$PLUGIN_KEY" <<'PYEOF' 2>/dev/null || true
+    PLUGIN_ROOT=$(python3 -I - "$INSTALLED_JSON" "$PLUGIN_KEY" <<'PYEOF' 2>/dev/null || true)
 import json, sys
 def ver_tuple(value):
     try:
@@ -797,8 +797,10 @@ PYEOF
   fi
 
   # Node is very likely present because Claude Code is a Node app.
+  # Inline isolation: this generated file is a standalone POSIX script and
+  # cannot call installer helpers that live only in bootstrap.sh.
   if [ -z "$PLUGIN_ROOT" ] && command -v node >/dev/null 2>&1; then
-    PLUGIN_ROOT=$(PLUGIN_KEY="$PLUGIN_KEY" run_isolated_node - "$INSTALLED_JSON" <<'JSEOF' 2>/dev/null || true
+    PLUGIN_ROOT=$(PLUGIN_KEY="$PLUGIN_KEY" NODE_OPTIONS= NODE_PATH= node --no-warnings - "$INSTALLED_JSON" <<'JSEOF' 2>/dev/null || true)
 const fs = require('fs');
 function parseVersion(value) {
   return String(value || '0.0.0')
