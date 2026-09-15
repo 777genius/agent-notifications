@@ -1651,6 +1651,9 @@ func portableInstallFailed(agent portable.Integration, req Request, out Result, 
 		out.Outcome, out.Reason = "incomplete", "not_installed"
 		return out
 	}
+	if errors.Is(err, uapinstaller.ErrCompatibilityUnavailable) {
+		return siblingCompatibilityUnavailable(agent, req, out)
+	}
 	out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: err.Error()})
 	out.Outcome, out.Reason = "incomplete", "portable_install_failed"
 	var persisted portablesetup.ResultError
@@ -1672,6 +1675,21 @@ func portableInstallFailed(agent portable.Integration, req Request, out Result, 
 	return out
 }
 
+func siblingCompatibilityUnavailable(agent portable.Integration, req Request, out Result) Result {
+	out.Outcome, out.Reason = "incomplete", "sibling_compatibility_unavailable"
+	if agent != "" {
+		out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: out.Reason})
+	}
+	retry := req
+	retry.Action = ActionUpdate
+	retry.Yes = true
+	retry.Agents = []string{"claude", "codex"}
+	out.NextActions = []NextAction{{
+		Kind: "update", Agents: retry.Agents, Reason: out.Reason, Command: RetryCommand(retry),
+	}}
+	return out
+}
+
 func groupNotifyFailed(agents []portable.Integration, req Request, out Result, err error) Result {
 	var persisted portablesetup.ResultError
 	if !errors.As(err, &persisted) || (len(persisted.Result.Targets) == 0 && persisted.Result.Client.ClientID == "") {
@@ -1686,6 +1704,12 @@ func groupNotifyFailed(agents []portable.Integration, req Request, out Result, e
 		}
 		out.Outcome, out.Reason = "incomplete", "not_installed"
 		return out
+	}
+	if errors.Is(err, uapinstaller.ErrCompatibilityUnavailable) {
+		if len(agents) == 0 {
+			return siblingCompatibilityUnavailable("", req, out)
+		}
+		return siblingCompatibilityUnavailable(agents[0], req, out)
 	}
 	committed := false
 	names := make([]string, 0, len(agents))
@@ -2052,6 +2076,9 @@ func mapPreviewFailure(req Request, agent portable.Integration, mat portablesetu
 	if errors.Is(err, uapinstaller.ErrNotInstalled) {
 		out.Outcome, out.Reason = "incomplete", "not_installed"
 		return out, err
+	}
+	if errors.Is(err, uapinstaller.ErrCompatibilityUnavailable) {
+		return siblingCompatibilityUnavailable(agent, req, out), err
 	}
 	if portablesetup.IsUpdateRequired(err) {
 		others, _ := mat.OtherLiveClients(id.InstallationID, string(agent))

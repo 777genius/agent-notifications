@@ -4730,6 +4730,26 @@ func TestPortableInstallFailedKeepsActivationIncomplete(t *testing.T) {
 	}
 }
 
+func TestSiblingCompatibilityUnavailableMapsUpdateBoth(t *testing.T) {
+	got := portableInstallFailed(portable.Codex, Request{Action: ActionUpdate, Agents: []string{"codex"}}, Result{Action: "update"}, uapinstaller.ErrCompatibilityUnavailable)
+	if got.Outcome != "incomplete" || got.Reason != "sibling_compatibility_unavailable" {
+		t.Fatalf("mapping: %+v", got)
+	}
+	if len(got.Targets) != 1 || got.Targets[0].Client != "codex" || got.Targets[0].Reason != "sibling_compatibility_unavailable" {
+		t.Fatalf("target: %+v", got.Targets)
+	}
+	if len(got.NextActions) != 1 || got.NextActions[0].Kind != "update" {
+		t.Fatalf("next: %+v", got.NextActions)
+	}
+	if strings.Join(got.NextActions[0].Agents, ",") != "claude,codex" {
+		t.Fatalf("retry agents: %v", got.NextActions[0].Agents)
+	}
+	mapped, err := mapPreviewFailure(Request{Action: ActionUpdate}, portable.Codex, portablesetup.Materializer{}, portablesetup.Identity{}, uapinstaller.ErrCompatibilityUnavailable, Result{Action: "update"})
+	if err == nil || mapped.Reason != "sibling_compatibility_unavailable" {
+		t.Fatalf("preview mapping: %+v %v", mapped, err)
+	}
+}
+
 func TestGroupNotifyFailedReportsBothCommittedTargets(t *testing.T) {
 	err := portablesetup.ResultError{
 		Result: uapinstaller.Result{

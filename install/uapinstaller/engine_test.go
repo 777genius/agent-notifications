@@ -2512,7 +2512,7 @@ func TestUpdateOneClientRefusesWhenSiblingProfileUnknown(t *testing.T) {
 		ClientExecutable: probe, InstallationID: id, OperationID: "sibling-profile-missing",
 		RequiredComponents: []string{"mcp", "skills"},
 	})
-	if !errors.Is(err, ErrInvalidRequest) {
+	if !errors.Is(err, ErrCompatibilityUnavailable) {
 		t.Fatalf("missing sibling profile: %v", err)
 	}
 	after, err := os.ReadFile(eng.cfg.StateFile)
