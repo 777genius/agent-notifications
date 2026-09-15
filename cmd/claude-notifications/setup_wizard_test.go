@@ -5,12 +5,16 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/777genius/agent-notifications/internal/agentnotify/setupwizard"
+	"github.com/777genius/agent-notifications/internal/installruntime"
 )
 
 func TestSetupWizardHelpAndYesRequired(t *testing.T) {
@@ -64,6 +68,39 @@ func TestSetupWizardTTYOmitsActionDefaultsInstall(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Units:") || !strings.Contains(out.String(), "Plan: action=install") || !strings.Contains(out.String(), "managed_runtime_required") {
 		t.Fatalf("omitted action flow: %s", out.String())
+	}
+}
+
+func TestSetupWizardJSONInspectIsOneObject(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	root := setupCommandRoot(t)
+	control := filepath.Join(root, "control")
+	runtime := filepath.Join(root, "runtime")
+	if _, err := installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: control, RuntimeRoot: runtime, Owner: "existing-installer", ConsumerID: "existing",
+		Files: []installruntime.File{{Path: filepath.Join(runtime, "primary"), Data: []byte("inert"), Mode: 0700}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	code := executeSetupWizardWith(ctx, []string{"--action", "inspect", "--agents", "codex", "--control-root", control, "--json"}, &out, &stderr, strings.NewReader("y\n"), true)
+	if code != 0 {
+		t.Fatalf("inspect json: %d stdout=%s stderr=%s", code, out.String(), stderr.String())
+	}
+	if strings.Contains(out.String(), "phase ") {
+		t.Fatalf("json stdout included progress: %s", out.String())
+	}
+	var result setupwizard.Result
+	dec := json.NewDecoder(bytes.NewReader(out.Bytes()))
+	if err := dec.Decode(&result); err != nil {
+		t.Fatalf("stdout json: %v %s", err, out.String())
+	}
+	if result.Action != "inspect" || result.Outcome == "" {
+		t.Fatalf("inspect result: %+v", result)
+	}
+	if dec.More() {
+		t.Fatalf("stdout contained more than one JSON value: %s", out.String())
 	}
 }
 

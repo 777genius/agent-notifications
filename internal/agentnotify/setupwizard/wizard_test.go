@@ -968,6 +968,72 @@ func TestWizardReinstallRetainsInstallation(t *testing.T) {
 	}
 }
 
+func TestWizardRetainedDifferentDigestRequiresUpdate(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	statePath := filepath.Join(filepath.Dir(control), "uap", "state", "state-v2.json")
+	dataRoot := retainedDataRoot(t, statePath)
+	sentinel := filepath.Join(dataRoot, "keep.txt")
+	if err := os.WriteFile(sentinel, []byte("retain\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	req.Action = ActionUninstall
+	req.ExternalUninstalled = true
+	removed, err := Run(ctx, req)
+	if err != nil || removed.Outcome != "completed" {
+		t.Fatalf("uninstall: %+v %v", removed, err)
+	}
+	other := filepath.Join(filepath.Dir(control), "other-package")
+	writePackage(t, other, probe)
+	if err := os.WriteFile(filepath.Join(other, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	req.Action = ActionInstall
+	req.PackageRoot = other
+	req.ExternalUninstalled = false
+	got, err := Run(ctx, req)
+	if err == nil || got.Outcome != "incomplete" || got.Reason != "update_required" {
+		t.Fatalf("retained digest mismatch: %+v %v", got, err)
+	}
+	if len(got.NextActions) != 2 || got.NextActions[0].Kind != "update" || got.NextActions[1].Kind != "install" {
+		t.Fatalf("retained update phases: %+v", got.NextActions)
+	}
+	body, err := os.ReadFile(sentinel)
+	if err != nil || string(body) != "retain\n" {
+		t.Fatalf("PLUGIN_DATA sentinel: %s %v", body, err)
+	}
+	view, err := Run(ctx, Request{Action: ActionInspect, Agents: []string{"codex"}, ControlRoot: control})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range view.Targets {
+		if target.Unit == "agent-notify" && target.Outcome == "installed" {
+			t.Fatalf("hidden retained migration: %+v", view.Targets)
+		}
+	}
+}
+
 func TestWizardUninstallExplicitFalsePreservesNotifyWithoutPackage(t *testing.T) {
 	ctx := testCtx(t)
 	envHome := t.TempDir()
@@ -1355,6 +1421,37 @@ func TestWizardUninstallOmittedUnitsRemovesManagedWithoutPackage(t *testing.T) {
 
 func installationIDFromState(t *testing.T, path string) string {
 	t.Helper()
+	state := loadInstallerState(t, path)
+	if len(state.Installations) != 1 || state.Installations[0].InstallationID == "" {
+		t.Fatalf("installations: %+v", state.Installations)
+	}
+	return state.Installations[0].InstallationID
+}
+
+func retainedDataRoot(t *testing.T, path string) string {
+	t.Helper()
+	state := loadInstallerState(t, path)
+	if len(state.Installations) != 1 {
+		t.Fatalf("installations: %+v", state.Installations)
+	}
+	for _, receipt := range state.Installations[0].DataReceipts {
+		if receipt.Locator != "" {
+			return receipt.Locator
+		}
+	}
+	t.Fatal("missing data receipt locator")
+	return ""
+}
+
+func loadInstallerState(t *testing.T, path string) struct {
+	Installations []struct {
+		InstallationID string `json:"installation_id"`
+		DataReceipts   map[string]struct {
+			Locator string `json:"locator"`
+		} `json:"data_receipts"`
+	} `json:"installations"`
+} {
+	t.Helper()
 	body, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -1362,15 +1459,15 @@ func installationIDFromState(t *testing.T, path string) string {
 	var state struct {
 		Installations []struct {
 			InstallationID string `json:"installation_id"`
+			DataReceipts   map[string]struct {
+				Locator string `json:"locator"`
+			} `json:"data_receipts"`
 		} `json:"installations"`
 	}
 	if err := json.Unmarshal(body, &state); err != nil {
 		t.Fatal(err)
 	}
-	if len(state.Installations) != 1 || state.Installations[0].InstallationID == "" {
-		t.Fatalf("installations: %s", body)
-	}
-	return state.Installations[0].InstallationID
+	return state
 }
 
 func TestWizardUninstallDoesNotRestoreDirectMCP(t *testing.T) {

@@ -782,6 +782,31 @@ func TestPrepareDoesNotPersistWhenObservationSeamEnabled(t *testing.T) {
 	if _, err := os.Lstat(eng.cfg.OperationsDir); !os.IsNotExist(err) {
 		t.Fatal("prepare created operations journal dir")
 	}
+	called := false
+	eng.cfg.OnCommittedBinding = func(context.Context, BindingFacts) error {
+		called = true
+		return errors.New("observation seam must not invoke callbacks")
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil || view.Recovery.Required {
+		t.Fatalf("inspect: %+v %v", view, err)
+	}
+	if _, err := os.Lstat(eng.cfg.StateFile); !os.IsNotExist(err) {
+		t.Fatal("inspect persisted authoritative observations")
+	}
+	cancelled, err := eng.Apply(ctx, prepared, Decision{})
+	if !errors.Is(err, ErrCancelled) || cancelled.Outcome != OutcomeCancelled {
+		t.Fatalf("denied apply: %+v %v", cancelled, err)
+	}
+	if called {
+		t.Fatal("denied apply invoked committed-binding callback")
+	}
+	if _, err := os.Lstat(eng.cfg.StateFile); !os.IsNotExist(err) {
+		t.Fatal("denied apply wrote state")
+	}
+	if _, err := os.Lstat(eng.cfg.LockFile); !os.IsNotExist(err) {
+		t.Fatal("denied apply acquired mutation lock")
+	}
 }
 
 func TestPrepareMissingRequiredComponentsDoesNotCreateState(t *testing.T) {
@@ -1613,6 +1638,84 @@ func TestRemoveRetainsPluginDataAfterLastClient(t *testing.T) {
 	after, err := os.ReadFile(eng.cfg.StateFile)
 	if err != nil || !bytes.Equal(before, after) {
 		t.Fatal("already_absent mutated state")
+	}
+}
+
+func TestRetainedInstallDifferentDigestIsUpdateRequired(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "00000000-0000-4000-8000-000000000073"
+	prepared, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: id, OperationID: "retain-digest-install",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := eng.Apply(ctx, prepared, Decision{Confirmed: true})
+	_ = prepared.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(result.Binding.DataRoot, "keep.txt")
+	if err := os.WriteFile(sentinel, []byte("retain\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	rm, err := eng.Prepare(ctx, Request{
+		Operation: OpRemove, ClientID: "codex", ClientConfigRoot: config, ClientExecutable: probe,
+		InstallationID: id, OperationID: "retain-digest-remove", ExternalUninstalled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, rm, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = rm.Close()
+	other := filepath.Join(base, "other")
+	writePackage(t, other, probe)
+	if err := os.WriteFile(filepath.Join(other, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"sample-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: other, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: id, OperationID: "retain-digest-migrate",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if !errors.Is(err, ErrUpdateRequired) {
+		t.Fatalf("retained different digest: %v", err)
+	}
+	after, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("different digest rewrote retained state")
+	}
+	got, err := os.ReadFile(sentinel)
+	if err != nil || string(got) != "retain\n" {
+		t.Fatalf("PLUGIN_DATA sentinel: %s %v", got, err)
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 || !view.Installations[0].DataRetained || len(view.Installations[0].Bindings) != 0 {
+		t.Fatalf("inspect after rejected retained update: %+v %v", view, err)
 	}
 }
 
