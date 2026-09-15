@@ -1571,6 +1571,13 @@ func TestWizardMixedUninstallHoldsClaudeUntilCodexAttested(t *testing.T) {
 
 func TestWizardMixedUninstallHoldsCodexHooksUntilAttested(t *testing.T) {
 	ctx := testCtx(t)
+	envHome := t.TempDir()
+	testenv.Set(t, envHome)
+	canonical := filepath.Join(envHome, "fixture-config.json")
+	if err := os.WriteFile(canonical, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENT_NOTIFICATIONS_CONFIG", canonical)
 	control, runtime, global, _, _ := managedRuntime(t)
 	probe := buildProbe(t)
 	pkg := filepath.Join(filepath.Dir(control), "package")
