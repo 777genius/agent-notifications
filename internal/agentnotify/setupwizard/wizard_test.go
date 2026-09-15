@@ -3288,6 +3288,9 @@ func TestWizardSecondClientAddDoesNotReviseExisting(t *testing.T) {
 	if !strings.Contains(blockedPlan.Text, "phases=1-update:claude;2-add:codex") {
 		t.Fatalf("mismatch plan omitted two phases: %s", blockedPlan.Text)
 	}
+	if strings.Contains(blockedPlan.Text, "data_retained=true") || strings.Contains(blockedPlan.Text, "metadata-only") {
+		t.Fatalf("live mismatch plan looked retained: %s", blockedPlan.Text)
+	}
 	samePlan, err := Plan(ctx, Request{
 		Action: ActionInstall, Agents: []string{"codex"}, Hooks: &off, AgentNotify: boolPtr(true),
 		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
@@ -4328,6 +4331,9 @@ func TestWizardPlanRetainedDifferentDigestShowsTwoPhases(t *testing.T) {
 	}
 	if !strings.Contains(plan.Text, "required-update=codex") || !strings.Contains(plan.Text, "phases=1-update:codex;2-add:codex") {
 		t.Fatalf("retained plan omitted two phases: %s", plan.Text)
+	}
+	if !strings.Contains(plan.Text, "data_retained=true") || !strings.Contains(plan.Text, "data-compatibility-warning") {
+		t.Fatalf("retained two-phase plan omitted data warning: %s", plan.Text)
 	}
 	after, err := os.ReadFile(statePath)
 	if err != nil || !bytes.Equal(before, after) {

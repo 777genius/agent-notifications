@@ -288,6 +288,9 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 					if reason == "" {
 						mapped, mappedErr := mapPreviewFailure(req, failed, mat, id, err, ev.out)
 						plan.Text = annotateRequiredUpdate(text, mapped)
+						if retained, emptyErr := mat.RetainedEmpty(id.InstallationID); emptyErr == nil && retained {
+							plan.Text += " data_retained=true data-compatibility-warning"
+						}
 						plan.Result = attachCommand(req, mapped)
 						return plan, mappedErr
 					}
