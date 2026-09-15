@@ -788,6 +788,80 @@ func TestWizardInstallRecoversKernelThenUAP(t *testing.T) {
 	}
 }
 
+func TestWizardHooksOnlyInstallRecoversKernelJournal(t *testing.T) {
+	ctx := testCtx(t)
+	envHome := t.TempDir()
+	testenv.Set(t, envHome)
+	control, runtime, global, _, _ := managedRuntime(t)
+	bundle := writePluginBundle(t)
+	canonical := filepath.Join(envHome, "fixture-config.json")
+	if err := os.WriteFile(canonical, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENT_NOTIFICATIONS_CONFIG", canonical)
+	home := filepath.Join(envHome, "codex-home")
+	if err := os.MkdirAll(home, 0700); err != nil {
+		t.Fatal(err)
+	}
+	hook := plantWizardKernelJournal(t, ctx, control, runtime)
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true,
+		Hooks: boolPtr(true), AgentNotify: &off,
+		PluginRoot: bundle, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: home,
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("hooks recover: %+v %v", installed, err)
+	}
+	if _, err := os.Lstat(filepath.Join(control, "transaction.json")); !os.IsNotExist(err) {
+		t.Fatal("hooks-only left kernel journal")
+	}
+	got, err := os.ReadFile(hook)
+	if err != nil || string(got) != "new" {
+		t.Fatalf("hooks-only kernel recover did not finish: %s %v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(control), "uap", "state", "state-v2.json")); !os.IsNotExist(err) {
+		t.Fatal("hooks-only recover opened UAP state")
+	}
+}
+
+func TestWizardHooksOnlyInstallLeavesUAPJournal(t *testing.T) {
+	ctx := testCtx(t)
+	envHome := t.TempDir()
+	testenv.Set(t, envHome)
+	control, runtime, global, _, _ := managedRuntime(t)
+	bundle := writePluginBundle(t)
+	canonical := filepath.Join(envHome, "fixture-config.json")
+	if err := os.WriteFile(canonical, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENT_NOTIFICATIONS_CONFIG", canonical)
+	home := filepath.Join(envHome, "codex-home")
+	if err := os.MkdirAll(home, 0700); err != nil {
+		t.Fatal(err)
+	}
+	plantWizardJournal(t, control)
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true,
+		Hooks: boolPtr(true), AgentNotify: &off,
+		PluginRoot: bundle, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: home,
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("hooks with UAP journal: %+v %v", installed, err)
+	}
+	if _, err := os.Lstat(wizardPendingJournalPath(control)); err != nil {
+		t.Fatalf("hooks-only recovered UAP journal: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(control), "uap", "state", "state-v2.json")); !os.IsNotExist(err) {
+		t.Fatal("hooks-only install opened UAP state")
+	}
+}
+
 func TestPlanUninstallListsCodexExternalPrerequisite(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, _, _ := managedRuntime(t)
