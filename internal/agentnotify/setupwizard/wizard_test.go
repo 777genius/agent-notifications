@@ -3531,6 +3531,71 @@ func TestWizardInstallMixedLiveDoesNotReplaceOlderSibling(t *testing.T) {
 	}
 }
 
+func TestWizardInstallBothLiveBehindRequiresUpdateBoth(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	claudeConfig := filepath.Join(filepath.Dir(control), "claude-profile")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"claude", "codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClaudeConfig: claudeConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot:    filepath.Join(filepath.Dir(control), "scope"),
+		ClaudeRunner: listingRunner{configRoot: claudeConfig},
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	claudeBefore := inspectedWizardBinding(t, ctx, control, "claude")
+	codexBefore := inspectedWizardBinding(t, ctx, control, "codex")
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	blocked, err := Run(ctx, req)
+	if err == nil || blocked.Outcome != "incomplete" || blocked.Reason != "update_required" {
+		t.Fatalf("install both behind: %+v %v", blocked, err)
+	}
+	if len(blocked.NextActions) != 1 || blocked.NextActions[0].Kind != "update" || strings.Join(blocked.NextActions[0].Agents, ",") != "claude,codex" {
+		t.Fatalf("behind next: %+v", blocked.NextActions)
+	}
+	req.Yes = false
+	plan, err := Plan(ctx, req)
+	if plan.Ready || plan.Result.Reason != "update_required" {
+		t.Fatalf("behind plan: %+v %v", plan, err)
+	}
+	if !strings.Contains(plan.Text, "required-update=claude,codex") || strings.Contains(plan.Text, "2-add:") {
+		t.Fatalf("behind plan looked like add: %s", plan.Text)
+	}
+	inspectReq := req
+	inspectReq.Action = ActionInspect
+	inspectReq.Agents = []string{"claude", "codex"}
+	view, err := Run(ctx, inspectReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claudeAfter := inspectedWizardBinding(t, ctx, control, "claude")
+	codexAfter := inspectedWizardBinding(t, ctx, control, "codex")
+	if claudeAfter.BindingID != claudeBefore.BindingID || codexAfter.BindingID != codexBefore.BindingID {
+		t.Fatalf("behind install rewrote bindings: claude=%+v/%+v codex=%+v/%+v", claudeBefore, claudeAfter, codexBefore, codexAfter)
+	}
+	if notifyTreeDigest(view, "claude") != claudeBefore.TreeDigest || notifyTreeDigest(view, "codex") != codexBefore.TreeDigest {
+		t.Fatalf("behind install rewrote digests: view=%+v before claude=%s codex=%s", view.Targets, claudeBefore.TreeDigest, codexBefore.TreeDigest)
+	}
+}
+
 func TestWizardTTYAddSecondClientKeepProposesNewDefaults(t *testing.T) {
 	ctx := testCtx(t)
 	envHome := t.TempDir()
@@ -6058,7 +6123,7 @@ func TestSiblingCompatibilityUnavailableMapsUpdateBoth(t *testing.T) {
 	if strings.Join(got.NextActions[0].Agents, ",") != "claude,codex" {
 		t.Fatalf("retry agents: %v", got.NextActions[0].Agents)
 	}
-	mapped, err := mapPreviewFailure(Request{Action: ActionUpdate}, portable.Codex, portablesetup.Materializer{}, portablesetup.Identity{}, uapinstaller.ErrCompatibilityUnavailable, Result{Action: "update"})
+	mapped, err := mapPreviewFailure(context.Background(), Request{Action: ActionUpdate}, portable.Codex, portablesetup.Materializer{}, portablesetup.Identity{}, uapinstaller.ErrCompatibilityUnavailable, Result{Action: "update"})
 	if err == nil || mapped.Reason != "sibling_compatibility_unavailable" {
 		t.Fatalf("preview mapping: %+v %v", mapped, err)
 	}
