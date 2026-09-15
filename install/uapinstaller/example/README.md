@@ -20,6 +20,8 @@ GOWORK=off go run . -state /abs/uap -package /abs/pkg -config /abs/config \
 
 Pass `-claude-config` (and optionally `-claude-exe`) to use published
 `Request.Targets` for Claude+Codex together. That path needs a trusted Claude
-Code CLI; a probe helper is enough for the Codex-only flags. Mixed package
-roots stay unpublished. Mixed Codex uninstall still needs Codex
+Code CLI; a probe helper is enough for the Codex-only flags. Mixed PackageRoot
+values stay unpublished for install and update. Group Repair of mixed live
+revisions uses per-target `ClientTarget.PackageRoot` so each binding keeps its
+recorded digest. Mixed Codex uninstall still needs Codex
 `ExternalUninstalled`.

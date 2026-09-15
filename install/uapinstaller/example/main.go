@@ -107,6 +107,8 @@ func runGroupDemo(state, pkg, config, claudeConfig, helper, client, claudeExe st
 		{ClientID: "codex", ClientConfigRoot: config, ClientExecutable: client, ExternalUninstalled: true},
 		{ClientID: "claude", ClientConfigRoot: claudeConfig, ClientExecutable: claudeExe},
 	}
+	// Same PackageRoot for install/update: mixed roots stay unpublished there.
+	// Mixed live revisions repair by setting ClientTarget.PackageRoot per client.
 	return runLifecycle(ctx, eng, req, uapinstaller.Request{
 		Operation: uapinstaller.OpUpdate, PackageRoot: pkg, InstallationID: req.InstallationID,
 		OperationID: "sample-group-update", RequiredComponents: []string{"mcp", "skills"},

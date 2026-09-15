@@ -1218,6 +1218,66 @@ func TestPlanUninstallListsCodexExternalPrerequisite(t *testing.T) {
 	}
 }
 
+func TestPlanUninstallShowsPendingRecoveryWithoutMutating(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	before, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plantWizardJournal(t, control)
+	req.Action = ActionUninstall
+	req.Yes = false
+	req.PackageFetcher = func(context.Context, string) ([]byte, error) {
+		t.Fatal("uninstall plan fetched a package during pending recovery")
+		return nil, nil
+	}
+	plan, err := Plan(ctx, req)
+	if err != nil || !plan.Ready {
+		t.Fatalf("uninstall plan: %+v %v", plan, err)
+	}
+	if !strings.Contains(plan.Text, "recovery-pending=wizard-pending-op") {
+		t.Fatalf("missing uninstall recovery text: %s", plan.Text)
+	}
+	found := false
+	for _, next := range plan.Result.NextActions {
+		if next.Kind == "recover" && strings.Contains(next.Reason, "wizard-pending-op") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("uninstall plan recover action: %+v", plan.Result.NextActions)
+	}
+	if _, err := os.Lstat(wizardPendingJournalPath(control)); err != nil {
+		t.Fatalf("uninstall plan recovered journal: %v", err)
+	}
+	after, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil || after.Ledger.Generation != before.Ledger.Generation || after.Ledger.PendingMutation != nil {
+		t.Fatalf("uninstall plan mutated ledger: %+v %v", after.Ledger, err)
+	}
+}
+
 func plantWizardJournal(t *testing.T, controlRoot string) {
 	t.Helper()
 	plantWizardJournalNamed(t, controlRoot, "wizard-pending-op")
