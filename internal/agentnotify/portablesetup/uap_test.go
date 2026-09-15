@@ -938,7 +938,7 @@ func TestUAPMaterializerRemoveGroupBothAndAlreadyAbsent(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(codex.RuntimeRoot, codex.Primary)); err != nil {
 		t.Fatal("shared runtime removed")
 	}
-	installed, err = mat.ApplyGroup(testCtx(t), []MaterializeRequest{
+	_, err = mat.ApplyGroup(testCtx(t), []MaterializeRequest{
 		{
 			Identity: id, Integration: portable.Codex,
 			PackageRoot: pkg, ClientConfigRoot: codexConfig, ClientExecutable: probe,
