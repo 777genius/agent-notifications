@@ -287,6 +287,41 @@ func TestPlanReservedIDIsReusedOnRun(t *testing.T) {
 	}
 }
 
+func TestPlanShowsEveryClientBindingID(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	claudeConfig := filepath.Join(filepath.Dir(control), "claude-profile")
+	for _, dir := range []string{codexConfig, claudeConfig, filepath.Join(filepath.Dir(control), "scope")} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	off := false
+	plan, err := Plan(ctx, Request{
+		Action: ActionInstall, Agents: []string{"claude", "codex"},
+		Hooks: &off, AgentNotify: boolPtr(true),
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClaudeConfig: claudeConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot:    filepath.Join(filepath.Dir(control), "scope"),
+		ClaudeRunner: listingRunner{configRoot: claudeConfig},
+	})
+	if err != nil || !plan.Ready {
+		t.Fatalf("plan: %+v %v", plan, err)
+	}
+	claudeID := plan.Request.BindingIDs["claude"]
+	codexID := plan.Request.BindingIDs["codex"]
+	if claudeID == "" || codexID == "" || claudeID == codexID {
+		t.Fatalf("reserved bindings: %+v", plan.Request.BindingIDs)
+	}
+	if !strings.Contains(plan.Text, "claude-binding-id="+claudeID) || !strings.Contains(plan.Text, "codex-binding-id="+codexID) {
+		t.Fatalf("plan omitted a client binding: %s", plan.Text)
+	}
+}
+
 func TestWizardRunRefusesPlanDigestDrift(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, _, _ := managedRuntime(t)
@@ -2393,6 +2428,60 @@ func TestWizardConfirmationIntentSurvivesFailedHooks(t *testing.T) {
 	}
 	if again.Outcome != "incomplete" || again.Reason != "plugin_root_required" {
 		t.Fatalf("resume: %+v %v", again, err)
+	}
+}
+
+func TestWizardFailedHooksPersistsMixedUnits(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	claudeConfig := filepath.Join(filepath.Dir(control), "claude-profile")
+	for _, dir := range []string{codexConfig, claudeConfig, filepath.Join(filepath.Dir(control), "scope")} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	on, off := true, false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"claude", "codex"}, Yes: true,
+		ClaudeHooks: &off, CodexHooks: &on, ClaudeAgentNotify: &on, CodexAgentNotify: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClaudeConfig: claudeConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot:    filepath.Join(filepath.Dir(control), "scope"),
+		ClaudeRunner: listingRunner{configRoot: claudeConfig},
+	}
+	got, err := Run(ctx, req)
+	if err == nil || got.Outcome != "incomplete" || got.Reason != "plugin_root_required" {
+		t.Fatalf("hooks preflight: %+v %v", got, err)
+	}
+	intent, err := portablesetup.ReadIntent(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	units := map[string]string{}
+	for _, target := range intent.Targets {
+		units[target.Client] = strings.Join(target.Units, ",")
+	}
+	if units["claude"] != "agent-notify" || units["codex"] != "hooks" {
+		t.Fatalf("mixed units not persisted: %+v", intent.Targets)
+	}
+	resume := req
+	resume.Agents = nil
+	resume.Yes = false
+	resume.ClaudeHooks, resume.CodexHooks = nil, nil
+	resume.ClaudeAgentNotify, resume.CodexAgentNotify = nil, nil
+	again, _ := Run(ctx, resume)
+	if again.Reason == "empty_selection" || again.Reason == "noninteractive_requires_yes" || again.Reason == "pending_intent_conflict" {
+		t.Fatalf("resume ignored mixed intent: %+v", again)
+	}
+	joined := strings.Join(again.Command, " ")
+	for _, want := range []string{"--claude-hooks false", "--codex-hooks true", "--claude-agent-notify true", "--codex-agent-notify false"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("resume retry omitted %q: %v", want, again.Command)
+		}
 	}
 }
 

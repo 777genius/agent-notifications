@@ -229,8 +229,7 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 			text += " installation-id=" + id.InstallationID
 			for _, agent := range ev.notifyAgents {
 				if bid := req.BindingIDs[string(agent)]; bid != "" {
-					text += " binding-id=" + bid
-					break
+					text += " " + string(agent) + "-binding-id=" + bid
 				}
 			}
 			failed, reason, err := bindNotifyPreviews(ctx, &req, acquired, ev.snap, ev.runtimeRoot, ev.notifyAgents)
