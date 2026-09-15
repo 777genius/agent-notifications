@@ -191,7 +191,7 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 			}
 		}
 		var recoveryPending bool
-		text, recoveryPending = annotatePendingRecovery(ctx, req, text, &ev.out)
+		text, recoveryPending = annotatePendingRecovery(ctx, req, ev.snap, text, &ev.out)
 		if len(ev.notifyAgents) > 0 && !recoveryPending {
 			acquired, release, err := acquirePlanPackage(ctx, req, ev.notifyAgents)
 			if err != nil {
@@ -273,7 +273,7 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 			acquired.HelperVersion = req.HelperVersion
 		}
 	} else {
-		text, _ = annotatePendingRecovery(ctx, req, text, &ev.out)
+		text, _ = annotatePendingRecovery(ctx, req, ev.snap, text, &ev.out)
 	}
 	if req.Action == ActionUninstall {
 		if prereqs := uninstallManualPrerequisites(ctx, req, ev.snap, ev.runtimeRoot, ev.notifyAgents); len(prereqs) > 0 {
@@ -595,15 +595,21 @@ func inspectUAPState(ctx context.Context, req Request) (uapinstaller.Inspection,
 	return eng.Inspect(ctx)
 }
 
-// annotatePendingRecovery reports UAP recovery without recovering. Plan skips
-// source-dependent Prepare while a journal is pending (§7.4.2, §9.2).
-func annotatePendingRecovery(ctx context.Context, req Request, text string, out *Result) (string, bool) {
+// annotatePendingRecovery reports kernel and UAP recovery without recovering.
+// Plan skips source-dependent Prepare while a journal is pending (§7.4.2, §9.2).
+func annotatePendingRecovery(ctx context.Context, req Request, snap installruntime.InstalledSnapshot, text string, out *Result) (string, bool) {
 	if out == nil {
 		return text, false
 	}
+	pending := false
+	if snap.Recovery {
+		text += " recovery-pending=kernel-journal"
+		out.NextActions = append(out.NextActions, NextAction{Kind: "recover", Reason: "kernel-journal"})
+		pending = true
+	}
 	view, err := inspectUAPState(ctx, req)
 	if err != nil || !view.Recovery.Required {
-		return text, false
+		return text, pending
 	}
 	ids := recoveryIDs(view)
 	reason := strings.Join(ids, ",")
@@ -1023,6 +1029,10 @@ func inspect(ctx context.Context, req Request, agents []portable.Integration, sn
 			outcome = "installed"
 		}
 		out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "direct-mcp", Outcome: outcome})
+	}
+	if snap.Recovery {
+		out.Outcome, out.Reason = "incomplete", "recovery_required"
+		out.NextActions = append(out.NextActions, NextAction{Kind: "recover", Reason: "kernel-journal"})
 	}
 	view, err := inspectUAPState(ctx, req)
 	if err != nil {

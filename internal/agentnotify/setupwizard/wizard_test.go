@@ -530,6 +530,34 @@ func TestWizardInspectReportsPendingJournal(t *testing.T) {
 	}
 }
 
+func TestWizardInspectReportsPendingKernelJournal(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, primary, _ := managedRuntime(t)
+	plantWizardKernelJournal(t, ctx, control, runtime)
+	got, err := Run(ctx, Request{
+		Action: ActionInspect, Agents: []string{"codex"},
+		ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global, Helper: primary,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Outcome != "incomplete" || got.Reason != "recovery_required" || got.ExitCode() != 0 {
+		t.Fatalf("inspect kernel recovery: %+v", got)
+	}
+	found := false
+	for _, next := range got.NextActions {
+		if next.Kind == "recover" && next.Reason == "kernel-journal" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missing kernel recover action: %+v", got.NextActions)
+	}
+	if _, err := os.Lstat(filepath.Join(control, "transaction.json")); err != nil {
+		t.Fatalf("inspect recovered kernel journal: %v", err)
+	}
+}
+
 func TestWizardInspectDoesNotAcquirePackage(t *testing.T) {
 	control, runtime, global, primary, _ := managedRuntime(t)
 	got, err := Run(testCtx(t), Request{
@@ -643,6 +671,40 @@ func TestPlanNotifyShowsPendingRecoveryWithoutMutating(t *testing.T) {
 	}
 }
 
+func TestPlanShowsPendingKernelRecoveryWithoutMutating(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	plantWizardKernelJournal(t, ctx, control, runtime)
+	off := false
+	plan, err := Plan(ctx, Request{
+		Action: ActionInstall, Agents: []string{"codex"},
+		Hooks: boolPtr(true), AgentNotify: &off,
+		ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+	})
+	if err != nil || !plan.Ready {
+		t.Fatalf("kernel plan: %+v %v", plan, err)
+	}
+	if !strings.Contains(plan.Text, "recovery-pending=kernel-journal") {
+		t.Fatalf("missing kernel recovery text: %s", plan.Text)
+	}
+	found := false
+	for _, next := range plan.Result.NextActions {
+		if next.Kind == "recover" && next.Reason == "kernel-journal" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("kernel plan recover action: %+v", plan.Result.NextActions)
+	}
+	if _, err := os.Lstat(filepath.Join(control, "transaction.json")); err != nil {
+		t.Fatalf("kernel plan recovered journal: %v", err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil || !snap.Recovery || snap.Ledger.PendingMutation != nil {
+		t.Fatalf("kernel plan mutated ledger: %+v %v", snap, err)
+	}
+}
+
 func TestWizardInstallRecoversPendingJournal(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, _, _ := managedRuntime(t)
@@ -698,23 +760,7 @@ func TestWizardInstallRecoversKernelThenUAP(t *testing.T) {
 	if err := os.MkdirAll(codexConfig, 0700); err != nil {
 		t.Fatal(err)
 	}
-	hook := filepath.Join(runtime, "hook")
-	if _, err := installruntime.Commit(ctx, installruntime.Request{
-		ControlRoot: control, RuntimeRoot: runtime,
-		Owner: "existing-installer", ConsumerID: "existing",
-		Files: []installruntime.File{{Path: hook, Data: []byte("new"), Mode: 0700}},
-		Fault: func(phase string) error {
-			if phase == "transaction" {
-				return errors.New("crash")
-			}
-			return nil
-		},
-	}); err == nil {
-		t.Fatal("kernel fault not reached")
-	}
-	if _, err := os.Lstat(filepath.Join(control, "transaction.json")); err != nil {
-		t.Fatal("missing kernel journal")
-	}
+	hook := plantWizardKernelJournal(t, ctx, control, runtime)
 	plantWizardJournal(t, control)
 	off := false
 	req := Request{
@@ -833,6 +879,28 @@ func plantWizardJournal(t *testing.T, controlRoot string) {
 
 func wizardPendingJournalPath(controlRoot string) string {
 	return filepath.Join(filepath.Dir(controlRoot), "uap", "state", "operations", "wizard-pending-op.json")
+}
+
+func plantWizardKernelJournal(t *testing.T, ctx context.Context, control, runtime string) string {
+	t.Helper()
+	hook := filepath.Join(runtime, "kernel-pending-hook")
+	if _, err := installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: control, RuntimeRoot: runtime,
+		Owner: "existing-installer", ConsumerID: "existing",
+		Files: []installruntime.File{{Path: hook, Data: []byte("new"), Mode: 0700}},
+		Fault: func(phase string) error {
+			if phase == "transaction" {
+				return errors.New("crash")
+			}
+			return nil
+		},
+	}); err == nil {
+		t.Fatal("kernel fault not reached")
+	}
+	if _, err := os.Lstat(filepath.Join(control, "transaction.json")); err != nil {
+		t.Fatal("missing kernel journal")
+	}
+	return hook
 }
 
 func TestWizardEmptyAgentsCancels(t *testing.T) {
