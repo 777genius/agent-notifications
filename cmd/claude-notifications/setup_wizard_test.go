@@ -625,6 +625,22 @@ func TestSetupWizardReinstallRetainsInstallationE2E(t *testing.T) {
 	if installed.Outcome != "completed" || installed.InstallationID == "" {
 		t.Fatalf("install result: %+v", installed)
 	}
+	eng, err := uapinstaller.New(uapinstaller.Config{StateRoot: filepath.Join(env.root, "uap", "state")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	uapView, err := eng.Inspect(ctx)
+	if err != nil || len(uapView.Installations) != 1 || len(uapView.Installations[0].Bindings) == 0 {
+		t.Fatalf("uap inspect: %+v %v", uapView, err)
+	}
+	dataRoot := uapView.Installations[0].Bindings[0].DataRoot
+	if dataRoot == "" {
+		t.Fatal("missing plugin data root")
+	}
+	sentinel := filepath.Join(dataRoot, "keep.txt")
+	if err := os.WriteFile(sentinel, []byte("retain\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	out.Reset()
 	if code := executeSetupWizardWith(ctx, flags("uninstall", "--yes", "--json", "--external-uninstalled"), &out, io.Discard, strings.NewReader(""), false); code != 0 {
 		t.Fatalf("uninstall: %d %s", code, out.String())
@@ -639,6 +655,10 @@ func TestSetupWizardReinstallRetainsInstallationE2E(t *testing.T) {
 	reinstalled := decodeWizardJSON(t, out)
 	if reinstalled.Outcome != "completed" || reinstalled.InstallationID != installed.InstallationID {
 		t.Fatalf("reinstall lost installation: %+v", reinstalled)
+	}
+	got, err := os.ReadFile(sentinel)
+	if err != nil || string(got) != "retain\n" {
+		t.Fatalf("reinstall lost plugin data: %s %v", got, err)
 	}
 }
 
