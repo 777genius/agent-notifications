@@ -4419,6 +4419,47 @@ func TestWizardRetainedUpdateReportsProgress(t *testing.T) {
 	}
 }
 
+func TestWizardPlanAfterRetainedUpdateIsReady(t *testing.T) {
+	ctx := testCtx(t)
+	req, statePath, sentinel, _ := prepareRetainedCodexWizard(t, ctx)
+	req.Action = ActionUpdate
+	req.Yes = true
+	updated, err := Run(ctx, req)
+	if err != nil || updated.Outcome != "completed" || updated.Reason != "retained_source_updated" {
+		t.Fatalf("retained update: %+v %v", updated, err)
+	}
+	req.Action = ActionInstall
+	req.Yes = false
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := Plan(ctx, req)
+	if err != nil || !plan.Ready {
+		t.Fatalf("add plan after retained update: %+v %v", plan, err)
+	}
+	if strings.Contains(plan.Text, "required-update=") || strings.Contains(plan.Text, "metadata-only") {
+		t.Fatalf("add plan still required update: %s", plan.Text)
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("add plan rewrote state")
+	}
+	view, err := Run(ctx, Request{Action: ActionInspect, Agents: []string{"codex"}, ControlRoot: req.ControlRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range view.Targets {
+		if target.Unit == "agent-notify" && target.Outcome == "installed" {
+			t.Fatalf("plan after metadata update installed a client: %+v", view.Targets)
+		}
+	}
+	body, err := os.ReadFile(sentinel)
+	if err != nil || string(body) != "retain\n" {
+		t.Fatalf("PLUGIN_DATA sentinel: %s %v", body, err)
+	}
+}
+
 func TestWizardUninstallExplicitFalsePreservesNotifyWithoutPackage(t *testing.T) {
 	ctx := testCtx(t)
 	envHome := t.TempDir()

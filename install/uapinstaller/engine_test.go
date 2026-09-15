@@ -2549,6 +2549,169 @@ func TestSwitchRetainedReportsMetadataProgress(t *testing.T) {
 	}
 }
 
+func TestSwitchRetainedIgnoresRequiredComponents(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "00000000-0000-4000-8000-0000000000dc"
+	installed, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: id, OperationID: "retained-components-install",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, installed, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = installed.Close()
+	rm, err := eng.Prepare(ctx, Request{
+		Operation: OpRemove, ClientID: "codex", ClientConfigRoot: config, ClientExecutable: probe,
+		InstallationID: id, OperationID: "retained-components-remove", ExternalUninstalled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, rm, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = rm.Close()
+	other := filepath.Join(base, "other-package")
+	writePackage(t, other, probe)
+	if err := os.WriteFile(filepath.Join(other, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"sample-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(other, "skills")); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	switched, err := eng.SwitchRetained(ctx, Request{
+		PackageRoot: other, InstallationID: id, OperationID: "retained-components-switch",
+		RequiredComponents: []string{"mcp", "skills"},
+	}, Decision{Confirmed: true})
+	if err != nil || switched.Outcome != OutcomeCompleted {
+		t.Fatalf("switch retained incomplete package: %+v %v", switched, err)
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 || !view.Installations[0].DataRetained || len(view.Installations[0].Bindings) != 0 {
+		t.Fatalf("inspect after switch: %+v %v", view, err)
+	}
+	if switched.Binding.TreeDigest == "" {
+		t.Fatal("switch omitted digest")
+	}
+	if view.Installations[0].TreeDigest != switched.Binding.TreeDigest {
+		t.Fatalf("inspect digest: %s vs %s", view.Installations[0].TreeDigest, switched.Binding.TreeDigest)
+	}
+	after, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil || bytes.Equal(before, after) {
+		t.Fatal("switch did not persist new source")
+	}
+	_, err = eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: other, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: id, OperationID: "retained-components-add",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if !errors.Is(err, ErrIncomplete) {
+		t.Fatalf("add after incomplete switch: %v", err)
+	}
+	view, err = eng.Inspect(ctx)
+	if err != nil || len(view.Installations[0].Bindings) != 0 || !view.Installations[0].DataRetained {
+		t.Fatalf("incomplete add materialized a client: %+v %v", view, err)
+	}
+}
+
+func TestSwitchRetainedAssessBlockRefusesWithoutRewrite(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "00000000-0000-4000-8000-0000000000dd"
+	installed, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: id, OperationID: "retained-assess-install",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, installed, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = installed.Close()
+	rm, err := eng.Prepare(ctx, Request{
+		Operation: OpRemove, ClientID: "codex", ClientConfigRoot: config, ClientExecutable: probe,
+		InstallationID: id, OperationID: "retained-assess-remove", ExternalUninstalled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, rm, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = rm.Close()
+	beforeView, err := eng.Inspect(ctx)
+	if err != nil || len(beforeView.Installations) != 1 {
+		t.Fatalf("inspect before blocked switch: %+v %v", beforeView, err)
+	}
+	recorded := beforeView.Installations[0].TreeDigest
+	other := filepath.Join(base, "other-package")
+	writePackage(t, other, probe)
+	if err := os.WriteFile(filepath.Join(other, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"sample-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	eng.cfg.Assess = func(_ context.Context, _, digest string) (Assessment, error) {
+		return Assessment{TreeDigest: digest, Outcome: AssessmentBlock, Reason: "block-switch"}, nil
+	}
+	before, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.SwitchRetained(ctx, Request{
+		PackageRoot: other, InstallationID: id, OperationID: "retained-assess-switch",
+	}, Decision{Confirmed: true}); !errors.Is(err, ErrAssessmentRejected) {
+		t.Fatalf("blocked switch: %v", err)
+	}
+	after, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("blocked switch rewrote state")
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil || view.Installations[0].TreeDigest != recorded || !view.Installations[0].DataRetained {
+		t.Fatalf("blocked switch changed retained source: %+v %v", view, err)
+	}
+}
+
 func TestRepairRematerializesMissingTarget(t *testing.T) {
 	skipWindowsLauncherExecuteBit(t)
 	ctx := testCtx(t)

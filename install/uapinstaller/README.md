@@ -64,8 +64,11 @@ without writing state. Retained metadata Update of a different digest is
 `SwitchRetained`; a later Add is a separate Install. Plan of that Update is
 metadata-only. SwitchRetained Progress is prepare/preflight/commit/complete
 and does not report stage, activate, or verify. Cancelled SwitchRetained
-reports no Progress. Plan of Install onto retained r1 with package r2 is
-`ErrUpdateRequired` and shows both phases before confirmation. Plan includes the helper protocol
+reports no Progress. RequiredComponents do not apply to SwitchRetained;
+completeness is checked on the following Install. A blocking Assess refuses
+SwitchRetained without rewriting retained source. Plan of Install onto
+retained r1 with package r2 is `ErrUpdateRequired` and shows both phases
+before confirmation. Plan includes the helper protocol
 version and SHA-256 of the helper bytes; UAP managedstdio stores the same
 digest. Result.NextActions cover recover, update, reprepare, and activate after
 a managed commit whose client activation did not finish. Cancel before the first
