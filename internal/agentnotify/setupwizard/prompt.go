@@ -485,6 +485,9 @@ func attachCommand(req Request, out Result) Result {
 	case "completed", "cancelled", "unchanged":
 		return out
 	}
+	if req.InstallationID == "" && out.InstallationID != "" {
+		req.InstallationID = out.InstallationID
+	}
 	if len(out.Command) == 0 {
 		out.Command = RetryCommand(req)
 	}

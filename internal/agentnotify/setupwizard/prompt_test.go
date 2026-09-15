@@ -142,6 +142,18 @@ func TestRunAttachesRetryCommandOnIncomplete(t *testing.T) {
 	}
 }
 
+func TestAttachCommandCopiesReservedInstallationID(t *testing.T) {
+	req := Request{Action: ActionInstall, Agents: []string{"codex"}, Yes: true, ControlRoot: "/tmp/control"}
+	got := attachCommand(req, Result{Action: "install", Outcome: "incomplete", Reason: "activation_incomplete", InstallationID: "inst-1"})
+	if !strings.Contains(strings.Join(got.Command, " "), "--installation-id inst-1") {
+		t.Fatalf("retry omitted reserved id: %v", got.Command)
+	}
+	completed := attachCommand(req, Result{Action: "install", Outcome: "completed", InstallationID: "inst-1"})
+	if len(completed.Command) != 0 {
+		t.Fatalf("completed attached retry: %v", completed.Command)
+	}
+}
+
 func TestFillInteractiveNilPrompter(t *testing.T) {
 	_, err := FillInteractive(context.Background(), Request{Action: ActionInstall}, nil, nil)
 	if err != ErrPromptUnavailable {
