@@ -1325,10 +1325,10 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 					out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: err.Error()})
 					out.Outcome, out.Reason = "incomplete", "portable_inspect_failed"
 					return out, err
-				} else if len(others) > 0 && req.Action == ActionInstall {
+				} else if len(others) > 0 && req.Action == ActionInstall && !liveNotifyClient(mat, id.InstallationID, string(agent)) {
 					if err := mat.GuardSecondClient(ctx, materialize); err != nil {
 						if portablesetup.IsUpdateRequired(err) {
-							return updateRequired(req, agent, others, out, err)
+							return updateRequired(req, agent, others, false, out, err)
 						}
 						out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: err.Error()})
 						out.Outcome, out.Reason = "incomplete", "portable_install_failed"
@@ -1433,7 +1433,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		if err != nil {
 			if portablesetup.IsUpdateRequired(err) {
 				others, _ := mat.OtherLiveClients(id.InstallationID, string(notifyAgents[0]))
-				return updateRequired(req, notifyAgents[0], others, out, err)
+				return updateRequired(req, notifyAgents[0], others, liveNotifyClient(mat, id.InstallationID, string(notifyAgents[0])), out, err)
 			}
 			if errors.Is(err, portablesetup.ErrSourceIdentityDrift) {
 				out.Outcome, out.Reason = "incomplete", "source_identity_drift"
@@ -1509,7 +1509,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 			}
 			if portablesetup.IsUpdateRequired(err) {
 				others, _ := mat.OtherLiveClients(id.InstallationID, string(agent))
-				return updateRequired(req, agent, others, out, err)
+				return updateRequired(req, agent, others, liveNotifyClient(mat, id.InstallationID, string(agent)), out, err)
 			}
 			if errors.Is(err, portablesetup.ErrSourceIdentityDrift) {
 				out.Outcome, out.Reason = "incomplete", "source_identity_drift"
@@ -2029,11 +2029,18 @@ func retryRequestFromIntent(req Request, intent portablesetup.Intent) Request {
 	return retry
 }
 
-func updateRequired(req Request, adding portable.Integration, others []string, out Result, err error) (Result, error) {
+func updateRequired(req Request, adding portable.Integration, others []string, addingLive bool, out Result, err error) (Result, error) {
 	out.Targets = append(out.Targets, TargetResult{Client: string(adding), Unit: "agent-notify", Outcome: "incomplete", Reason: "update_required"})
 	out.Outcome, out.Reason = "incomplete", "update_required"
 	updateReq := req
 	updateReq.Action = ActionUpdate
+	if addingLive {
+		updateReq.Agents = []string{string(adding)}
+		out.NextActions = []NextAction{
+			{Kind: "update", Agents: updateReq.Agents, Command: RetryCommand(updateReq), Reason: "update_existing"},
+		}
+		return out, err
+	}
 	updateAgents := others
 	if len(updateAgents) == 0 {
 		updateAgents = []string{string(adding)}
@@ -2384,7 +2391,7 @@ func mapPreviewFailure(req Request, agent portable.Integration, mat portablesetu
 	}
 	if portablesetup.IsUpdateRequired(err) {
 		others, _ := mat.OtherLiveClients(id.InstallationID, string(agent))
-		return updateRequired(req, agent, others, out, err)
+		return updateRequired(req, agent, others, liveNotifyClient(mat, id.InstallationID, string(agent)), out, err)
 	}
 	out.Outcome, out.Reason = "incomplete", "portable_preflight_failed"
 	return out, err

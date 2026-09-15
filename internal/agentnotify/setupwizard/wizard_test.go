@@ -3432,6 +3432,105 @@ func TestWizardTwoPhaseUpdateThenAdd(t *testing.T) {
 	}
 }
 
+func TestWizardInstallMixedLiveDoesNotReplaceOlderSibling(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	r1 := filepath.Join(filepath.Dir(control), "package-r1")
+	copyPackage(t, pkg, r1)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	claudeConfig := filepath.Join(filepath.Dir(control), "claude-profile")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"claude", "codex"}, Yes: true, Hooks: &off,
+		PackageRoot: r1, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClaudeConfig: claudeConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot:    filepath.Join(filepath.Dir(control), "scope"),
+		ClaudeRunner: listingRunner{configRoot: claudeConfig},
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	req.PackageRoot = pkg
+	req.Action = ActionUpdate
+	req.Agents = []string{"claude"}
+	updated, err := Run(ctx, req)
+	if err != nil || updated.Outcome != "completed" {
+		t.Fatalf("claude update: %+v %v", updated, err)
+	}
+	inspectReq := req
+	inspectReq.Action = ActionInspect
+	inspectReq.Agents = []string{"claude", "codex"}
+	inspectReq.Yes = false
+	view, err := Run(ctx, inspectReq)
+	if err != nil {
+		t.Fatalf("inspect mixed: %+v %v", view, err)
+	}
+	claudeDigest := notifyTreeDigest(view, "claude")
+	codexDigest := notifyTreeDigest(view, "codex")
+	if claudeDigest == "" || claudeDigest == codexDigest {
+		t.Fatalf("inspect collapsed mixed revisions: claude=%s codex=%s", claudeDigest, codexDigest)
+	}
+	claudeBefore := inspectedWizardBinding(t, ctx, control, "claude")
+	codexBefore := inspectedWizardBinding(t, ctx, control, "codex")
+	req.Action = ActionInstall
+	req.Agents = []string{"codex"}
+	req.Yes = true
+	blocked, err := Run(ctx, req)
+	if err == nil || blocked.Outcome != "incomplete" || blocked.Reason != "update_required" {
+		t.Fatalf("install older sibling: %+v %v", blocked, err)
+	}
+	if len(blocked.NextActions) != 1 || blocked.NextActions[0].Kind != "update" || strings.Join(blocked.NextActions[0].Agents, ",") != "codex" {
+		t.Fatalf("older sibling next: %+v", blocked.NextActions)
+	}
+	both := req
+	both.Agents = []string{"claude", "codex"}
+	blockedBoth, err := Run(ctx, both)
+	if err == nil || blockedBoth.Outcome != "incomplete" || blockedBoth.Reason != "update_required" {
+		t.Fatalf("install both mixed: %+v %v", blockedBoth, err)
+	}
+	if len(blockedBoth.NextActions) != 1 || blockedBoth.NextActions[0].Kind != "update" || strings.Join(blockedBoth.NextActions[0].Agents, ",") != "codex" {
+		t.Fatalf("mixed both next: %+v", blockedBoth.NextActions)
+	}
+	both.Yes = false
+	plan, err := Plan(ctx, both)
+	if plan.Ready || plan.Result.Reason != "update_required" {
+		t.Fatalf("mixed install plan: %+v %v", plan, err)
+	}
+	if !strings.Contains(plan.Text, "required-update=codex") || strings.Contains(plan.Text, "2-add:") {
+		t.Fatalf("mixed install plan omitted older sibling: %s", plan.Text)
+	}
+	if strings.Contains(plan.Text, "data_retained=true") || strings.Contains(plan.Text, "metadata-only") {
+		t.Fatalf("live mixed install plan looked retained: %s", plan.Text)
+	}
+	view, err = Run(ctx, inspectReq)
+	if err != nil {
+		t.Fatalf("inspect after blocked install: %+v %v", view, err)
+	}
+	if notifyTreeDigest(view, "claude") != claudeDigest || notifyTreeDigest(view, "codex") != codexDigest {
+		t.Fatalf("blocked install rewrote mixed digests: claude=%s/%s codex=%s/%s", claudeDigest, notifyTreeDigest(view, "claude"), codexDigest, notifyTreeDigest(view, "codex"))
+	}
+	claudeAfter := inspectedWizardBinding(t, ctx, control, "claude")
+	codexAfter := inspectedWizardBinding(t, ctx, control, "codex")
+	if claudeAfter.BindingID != claudeBefore.BindingID || codexAfter.BindingID != codexBefore.BindingID {
+		t.Fatalf("blocked install rewrote bindings: claude=%+v/%+v codex=%+v/%+v", claudeBefore, claudeAfter, codexBefore, codexAfter)
+	}
+}
+
 func TestWizardTTYAddSecondClientKeepProposesNewDefaults(t *testing.T) {
 	ctx := testCtx(t)
 	envHome := t.TempDir()
@@ -4544,7 +4643,7 @@ func TestWizardPlanAfterRetainedUpdateIsReady(t *testing.T) {
 
 func TestWizardRetainedAddFailureKeepsMetadata(t *testing.T) {
 	ctx := testCtx(t)
-	req, _, sentinel, _ := prepareRetainedCodexWizard(t, ctx)
+	req, statePath, sentinel, _ := prepareRetainedCodexWizard(t, ctx)
 	req.Action = ActionUpdate
 	req.Yes = true
 	updated, err := Run(ctx, req)
@@ -4586,6 +4685,26 @@ func TestWizardRetainedAddFailureKeepsMetadata(t *testing.T) {
 	body, err := os.ReadFile(sentinel)
 	if err != nil || string(body) != "retain\n" {
 		t.Fatalf("PLUGIN_DATA sentinel: %s %v", body, err)
+	}
+	writePackage(t, req.PackageRoot, req.ClientExecutable)
+	if err := os.WriteFile(filepath.Join(req.PackageRoot, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	req.Yes = false
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := Plan(ctx, req)
+	if err != nil || !plan.Ready {
+		t.Fatalf("add plan after failed add: %+v %v", plan, err)
+	}
+	if strings.Contains(plan.Text, "required-update=") || strings.Contains(plan.Text, "metadata-only") {
+		t.Fatalf("failed add plan repeated metadata update: %s", plan.Text)
+	}
+	afterPlan, err := os.ReadFile(statePath)
+	if err != nil || !bytes.Equal(before, afterPlan) {
+		t.Fatal("add plan after failed add rewrote state")
 	}
 }
 
