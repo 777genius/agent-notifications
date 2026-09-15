@@ -3492,9 +3492,46 @@ func TestWizardInstallBothMismatchedShowsTwoPhase(t *testing.T) {
 	if !strings.Contains(plan.Text, "required-update=claude") || !strings.Contains(plan.Text, "2-add:codex") {
 		t.Fatalf("both mismatched plan omitted two phases: %s", plan.Text)
 	}
+	var promptOut strings.Builder
+	ok, err := (&LinePrompt{In: strings.NewReader("n\n"), Out: &promptOut}).Confirm(ctx, plan.Text)
+	if err != nil || ok {
+		t.Fatalf("both mismatched confirm: ok=%t err=%v text=%s", ok, err, promptOut.String())
+	}
+	if !strings.Contains(promptOut.String(), "required-update=claude") || !strings.Contains(promptOut.String(), "2-add:codex") {
+		t.Fatalf("tty omitted both mismatched phases: %s", promptOut.String())
+	}
 	claudeAfter := inspectedWizardBinding(t, ctx, control, "claude")
 	if claudeAfter.BindingID != claudeBefore.BindingID || claudeAfter.TreeDigest != claudeBefore.TreeDigest {
 		t.Fatalf("mismatched both rewrote claude: %+v/%+v", claudeBefore, claudeAfter)
+	}
+	updateReq := base
+	updateReq.Action = ActionUpdate
+	updateReq.Agents = blocked.NextActions[0].Agents
+	updated, err := Run(ctx, updateReq)
+	if err != nil || updated.Outcome != "completed" {
+		t.Fatalf("both mismatched update: %+v %v", updated, err)
+	}
+	addReq := base
+	addReq.Agents = blocked.NextActions[1].Agents
+	added, err := Run(ctx, addReq)
+	if err != nil || added.Outcome != "completed" {
+		t.Fatalf("both mismatched add: %+v %v", added, err)
+	}
+	inspectReq := base
+	inspectReq.Action = ActionInspect
+	inspectReq.Yes = false
+	inspectReq.Agents = []string{"claude", "codex"}
+	view, err := Run(ctx, inspectReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claudeDone := inspectedWizardBinding(t, ctx, control, "claude")
+	codexDone := inspectedWizardBinding(t, ctx, control, "codex")
+	if claudeDone.BindingID != claudeBefore.BindingID {
+		t.Fatalf("both mismatched phases rewrote claude: %+v/%+v", claudeBefore, claudeDone)
+	}
+	if claudeDone.TreeDigest == "" || claudeDone.TreeDigest == claudeBefore.TreeDigest || claudeDone.TreeDigest != codexDone.TreeDigest {
+		t.Fatalf("both mismatched did not converge: before=%s claude=%s codex=%s view=%+v", claudeBefore.TreeDigest, claudeDone.TreeDigest, codexDone.TreeDigest, view.Targets)
 	}
 }
 
