@@ -6268,6 +6268,16 @@ func TestWizardDefaultCodexProfileHandoffsDirectMCP(t *testing.T) {
 	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
 		t.Fatal(err)
 	}
+	plan, err := Plan(ctx, req)
+	if err != nil || !plan.Ready {
+		t.Fatalf("default-path handoff plan: %+v %v", plan, err)
+	}
+	if !strings.Contains(plan.Text, "codex-mcp="+mcpConfig) {
+		t.Fatalf("plan omitted discovered mcp: %s", plan.Text)
+	}
+	if strings.Contains(strings.Join(RetryCommand(plan.Request), " "), "--mcp-config") {
+		t.Fatalf("plan retry invented mcp-config: %v", RetryCommand(plan.Request))
+	}
 	installed, err := Run(ctx, req)
 	if err != nil || installed.Outcome != "completed" {
 		t.Fatalf("default-path handoff install: %+v %v", installed, err)
