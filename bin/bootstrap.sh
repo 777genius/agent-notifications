@@ -1518,6 +1518,17 @@ main() {
     [ "$PRODUCT" != claude ] || print_success
 }
 
+# Quote argv so a user can paste the retry command into bash. Custom roots with
+# spaces must survive this string (§9.2 / §9.4). Do not print the result through
+# echo -e: printf %q emits backslashes that -e would interpret.
+quote_shell_command() {
+    local quoted="" arg
+    for arg in "$@"; do
+        quoted="${quoted:+$quoted }$(printf '%q' "$arg")"
+    done
+    printf '%s' "$quoted"
+}
+
 # Agent-notify is default-on. A failed setup must not undo hooks/plugin install,
 # but it is incomplete: bootstrap does not print overall success.
 configure_agent_notify() {
@@ -1542,7 +1553,7 @@ configure_agent_notify() {
     if ! "$CONFIGURE_BINARY" setup-notifications configure --provider "$PRODUCT" "${CONFIGURE_ARGS[@]}"; then
         echo -e "${YELLOW}⚠ Agent-notify setup failed; plugin/hooks install succeeded.${NC}" >&2
         echo -e "${YELLOW}  Desktop/hook notifications still work. Retry:${NC}" >&2
-        echo -e "${YELLOW}  \"$CONFIGURE_BINARY\" setup-notifications configure --provider ${PRODUCT} ${CONFIGURE_ARGS[*]}${NC}" >&2
+        printf '  %s\n' "$(quote_shell_command "$CONFIGURE_BINARY" setup-notifications configure --provider "$PRODUCT" "${CONFIGURE_ARGS[@]}")" >&2
         return 1
     fi
     return 0
@@ -1555,7 +1566,7 @@ report_wizard_portable_missing() {
     local agents="$2"
     echo -e "${YELLOW}⚠ Agent-notify wizard skipped; ${reason}.${NC}" >&2
     echo -e "${YELLOW}  Plugin/hooks install succeeded. Retry:${NC}" >&2
-    echo -e "${YELLOW}  \"$CONFIGURE_BINARY\" setup-notifications wizard --action install --agents ${agents} --hooks false --agent-notify true --yes${NC}" >&2
+    printf '  %s\n' "$(quote_shell_command "$CONFIGURE_BINARY" setup-notifications wizard --action install --agents "$agents" --hooks false --agent-notify true --yes)" >&2
     if [ "$AGENT_NOTIFY_REQUEST" = explicit ]; then
         return 1
     fi
@@ -1668,7 +1679,7 @@ setup_agent_notify_wizard() {
     if ! "$CONFIGURE_BINARY" "$@"; then
         echo -e "${YELLOW}⚠ Agent-notify setup failed; plugin/hooks install succeeded.${NC}" >&2
         echo -e "${YELLOW}  Desktop/hook notifications still work. Retry:${NC}" >&2
-        echo -e "${YELLOW}  \"$CONFIGURE_BINARY\" $*${NC}" >&2
+        printf '  %s\n' "$(quote_shell_command "$CONFIGURE_BINARY" "$@")" >&2
         return 1
     fi
     return 0

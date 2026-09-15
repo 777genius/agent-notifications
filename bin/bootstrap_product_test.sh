@@ -13,6 +13,12 @@ export CLAUDE_CONFIG_DIR="$SANDBOX/claude config" CLAUDE_HOME="$SANDBOX/claude h
 mkdir -p "$HOME" "$CODEX_HOME" "$CLAUDE_CONFIG_DIR" "$CLAUDE_HOME"
 sed '/^main "\$@"$/d' "$ROOT/bin/bootstrap.sh" > "$SANDBOX/functions.sh"
 source "$SANDBOX/functions.sh"
+quoted=$(quote_shell_command "$SANDBOX/bin space/cli" --package "$SANDBOX/pkg space" --codex-home "$CODEX_HOME")
+eval "set -- $quoted"
+[ "$#" -eq 5 ] || { echo "quoted argc $#"; exit 1; }
+[ "$1" = "$SANDBOX/bin space/cli" ] || { echo "quoted binary $1"; exit 1; }
+[ "$3" = "$SANDBOX/pkg space" ] || { echo "quoted package $3"; exit 1; }
+[ "$5" = "$CODEX_HOME" ] || { echo "quoted codex home $5"; exit 1; }
 for product in claude codex both; do
     PRODUCT=""; select_product --product "$product"; [ "$PRODUCT" = "$product" ]
 done

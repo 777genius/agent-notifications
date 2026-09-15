@@ -242,3 +242,15 @@ func TestQuoteWizardArgsQuotesPathsWithSpaces(t *testing.T) {
 		t.Fatalf("quoted: %#v", got)
 	}
 }
+
+func TestReportAgentNotifySetupFailureQuotesCodexHome(t *testing.T) {
+	var buf bytes.Buffer
+	reportAgentNotifySetupFailure(&buf, "codex", []string{"--codex-home", `/tmp/codex home`, "--navigation", "none"})
+	got := buf.String()
+	if !strings.Contains(got, `Retry:`) || !strings.Contains(got, `"/tmp/codex home"`) {
+		t.Fatalf("unquoted retry: %s", got)
+	}
+	if strings.Contains(got, "configure --provider codex --codex-home /tmp/codex home --navigation") {
+		t.Fatal("space path split in retry", got)
+	}
+}

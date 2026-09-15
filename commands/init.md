@@ -48,6 +48,13 @@ CLI that does not advertise the command still skips with a warning.
 SKIP_AGENT_NOTIFY=false
 SEEN_AGENT_NOTIFY=false
 CONFIGURE_ARGS=()
+quote_shell_command() {
+  local quoted="" arg
+  for arg in "$@"; do
+    quoted="${quoted:+$quoted }$(printf '%q' "$arg")"
+  done
+  printf '%s' "$quoted"
+}
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --skip-agent-notify) SKIP_AGENT_NOTIFY=true; shift ;;
@@ -124,7 +131,7 @@ if [ "$SKIP_AGENT_NOTIFY" != true ]; then
       package="${CLAUDE_PLUGIN_ROOT}/portable-package"
     fi
     if [ -z "$package" ]; then
-      echo "agent-notify wizard skipped; portable-package is missing. Retry: \"$NOTIFY_BIN\" setup-notifications wizard --action install --agents claude --hooks false --agent-notify true --yes" >&2
+      printf 'agent-notify wizard skipped; portable-package is missing. Retry: %s\n' "$(quote_shell_command "$NOTIFY_BIN" setup-notifications wizard --action install --agents claude --hooks false --agent-notify true --yes)" >&2
       exit 1
     fi
     wizard=(setup-notifications wizard --action install --agents claude --hooks false --agent-notify true --yes --package "$package" --plugin-root "${CLAUDE_PLUGIN_ROOT}" --helper "$NOTIFY_BIN")
@@ -136,11 +143,11 @@ if [ "$SKIP_AGENT_NOTIFY" != true ]; then
       /*|[A-Za-z]:/*|[A-Za-z]:\\*) wizard+=(--claude-executable "$claude_exec" --client-executable "$claude_exec") ;;
     esac
     if ! "$NOTIFY_BIN" "${wizard[@]}"; then
-      echo "agent-notify setup failed; plugin install files remain. Retry: \"$NOTIFY_BIN\" ${wizard[*]}" >&2
+      printf 'agent-notify setup failed; plugin install files remain. Retry: %s\n' "$(quote_shell_command "$NOTIFY_BIN" "${wizard[@]}")" >&2
       exit 1
     fi
   elif ! "$NOTIFY_BIN" setup-notifications configure --provider claude "${CONFIGURE_ARGS[@]}"; then
-    echo "agent-notify setup failed; plugin install files remain. Retry: \"$NOTIFY_BIN\" setup-notifications configure --provider claude ${CONFIGURE_ARGS[*]}" >&2
+    printf 'agent-notify setup failed; plugin install files remain. Retry: %s\n' "$(quote_shell_command "$NOTIFY_BIN" setup-notifications configure --provider claude "${CONFIGURE_ARGS[@]}")" >&2
     exit 1
   fi
 fi
