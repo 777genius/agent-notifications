@@ -5095,6 +5095,71 @@ func TestProgressReportsCoarsePhases(t *testing.T) {
 	}
 }
 
+func TestProgressReportsGroupCoarsePhases(t *testing.T) {
+	ctx, eng, _, pkg, probe, codexConfig, claudeConfig := newBothClientSandbox(t)
+	var phases []ProgressPhase
+	eng.cfg.Progress = func(event ProgressEvent) { phases = append(phases, event.Phase) }
+	id := "00000000-0000-4000-8000-0000000000d7"
+	installBothClients(t, ctx, eng, pkg, probe, id, "group-progress-install", bothClientTargets(codexConfig, claudeConfig, probe))
+	joined := ""
+	for _, phase := range phases {
+		joined += string(phase) + ","
+	}
+	for _, want := range []ProgressPhase{ProgressPrepare, ProgressPreflight, ProgressStage, ProgressCommit, ProgressActivate, ProgressVerify, ProgressComplete} {
+		if !strings.Contains(joined, string(want)+",") {
+			t.Fatalf("missing group phase %s in %s", want, joined)
+		}
+	}
+}
+
+func TestCancelledApplyDoesNotReportMutationPhases(t *testing.T) {
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	var phases []ProgressPhase
+	eng, err := New(Config{
+		StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe,
+		Progress: func(event ProgressEvent) { phases = append(phases, event.Phase) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-0000000000d8",
+		OperationID: "cancel-progress", RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelled, err := eng.Apply(ctx, prepared, Decision{})
+	_ = prepared.Close()
+	if !errors.Is(err, ErrCancelled) || cancelled.Outcome != OutcomeCancelled {
+		t.Fatalf("cancelled apply: %+v %v", cancelled, err)
+	}
+	joined := ""
+	for _, phase := range phases {
+		joined += string(phase) + ","
+	}
+	if !strings.Contains(joined, string(ProgressPrepare)+",") {
+		t.Fatalf("prepare missing: %s", joined)
+	}
+	for _, blocked := range []ProgressPhase{ProgressStage, ProgressCommit, ProgressActivate, ProgressVerify, ProgressComplete} {
+		if strings.Contains(joined, string(blocked)+",") {
+			t.Fatalf("cancelled apply reported %s: %s", blocked, joined)
+		}
+	}
+}
+
 func TestDiscoverDoesNotCreateStateOrRunHelper(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "missing-state")
 	runner := &countingRunner{}
