@@ -1190,9 +1190,23 @@ func TestRecoverAfterPartialGroupDoesNotInvokeHostCallback(t *testing.T) {
 		t.Fatalf("partial group: %+v %v", got, err)
 	}
 	before := calls
+	beforeState, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
 	view, err := eng.Inspect(ctx)
 	if err != nil {
 		t.Fatal(err)
+	}
+	afterState, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil || !bytes.Equal(beforeState, afterState) {
+		t.Fatal("inspect after partial group mutated state")
+	}
+	if len(view.Installations) != 1 {
+		t.Fatalf("inspect after partial group: %+v", view)
+	}
+	if inspectedBinding(t, view, "codex").BindingID == "" {
+		t.Fatalf("first client missing after partial group: %+v", view.Installations[0].Bindings)
 	}
 	if _, err := eng.Recover(ctx, view); err != nil {
 		t.Fatal(err)
@@ -1269,6 +1283,61 @@ func TestDiscoverReportsBothClientsAfterGroupInstallWithoutMutating(t *testing.T
 	again := eng.Discover()
 	if again[0].Bindings[0].ClientID != "claude" {
 		t.Fatalf("caller mutated discover result: %+v", again[0])
+	}
+}
+
+func TestInspectReportsBothClientsAfterGroupInstallWithoutMutating(t *testing.T) {
+	ctx, eng, runner, pkg, probe, codexConfig, claudeConfig := newBothClientSandbox(t)
+	id := "00000000-0000-4000-8000-0000000000c7"
+	installBothClients(t, ctx, eng, pkg, probe, id, "group-inspect", bothClientTargets(codexConfig, claudeConfig, probe))
+	beforeCalls := len(runner.calls)
+	before, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("inspect mutated state")
+	}
+	if len(runner.calls) != beforeCalls {
+		t.Fatalf("inspect ran helper: %d -> %d", beforeCalls, len(runner.calls))
+	}
+	if view.StateRoot != eng.cfg.StateRoot || view.Recovery.Required || len(view.Installations) != 1 {
+		t.Fatalf("inspect: %+v", view)
+	}
+	if view.Installations[0].InstallationID != id || view.Installations[0].TreeDigest == "" {
+		t.Fatalf("inspect installation: %+v", view.Installations[0])
+	}
+	claude := inspectedBinding(t, view, "claude")
+	codex := inspectedBinding(t, view, "codex")
+	if claude.BindingID == "" || claude.Profile != claudeConfig || claude.TargetPath == "" || claude.DataRoot == "" {
+		t.Fatalf("claude inspect: %+v", claude)
+	}
+	if codex.BindingID == "" || codex.Profile != codexConfig || codex.TargetPath == "" || codex.DataRoot == "" {
+		t.Fatalf("codex inspect: %+v", codex)
+	}
+	view.Installations[0].Bindings[0].ClientID = "mutated"
+	again, err := eng.Inspect(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspectedBinding(t, again, "claude").ClientID != "claude" || inspectedBinding(t, again, "codex").ClientID != "codex" {
+		t.Fatalf("caller mutated inspect result: %+v", again.Installations[0].Bindings)
+	}
+	recovered, err := eng.Recover(ctx, again)
+	if err != nil || recovered.Outcome != OutcomeUnchanged || recovered.Reason != "already_recovered" {
+		t.Fatalf("recover clean group: %+v %v", recovered, err)
+	}
+	if len(runner.calls) != beforeCalls {
+		t.Fatalf("recover ran helper: %d -> %d", beforeCalls, len(runner.calls))
+	}
+	final, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil || !bytes.Equal(before, final) {
+		t.Fatal("recover mutated clean group state")
 	}
 }
 
@@ -2473,6 +2542,99 @@ func TestUpdateOneClientKeepsSibling(t *testing.T) {
 	}
 	if view.Installations[0].InstallationID != id {
 		t.Fatalf("installation id: %s", view.Installations[0].InstallationID)
+	}
+}
+
+func TestRepairOneClientKeepsSibling(t *testing.T) {
+	ctx, eng, _, pkg, probe, codexConfig, claudeConfig := newBothClientSandbox(t)
+	id := "00000000-0000-4000-8000-0000000000c8"
+	installBothClients(t, ctx, eng, pkg, probe, id, "repair-sibling-install", bothClientTargets(codexConfig, claudeConfig, probe))
+	before, err := eng.Inspect(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claudeBefore := inspectedBinding(t, before, "claude")
+	codexBefore := inspectedBinding(t, before, "codex")
+	if err := os.RemoveAll(codexBefore.TargetPath); err != nil {
+		t.Fatal(err)
+	}
+	repaired, err := eng.Prepare(ctx, Request{
+		Operation: OpRepair, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: codexConfig,
+		ClientExecutable: probe, InstallationID: id, OperationID: "repair-sibling-codex",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := eng.Apply(ctx, repaired, Decision{Confirmed: true})
+	_ = repaired.Close()
+	if err != nil || got.Outcome != OutcomeCompleted {
+		t.Fatalf("codex repair: %+v %v", got, err)
+	}
+	if _, err := os.Stat(codexBefore.TargetPath); err != nil {
+		t.Fatalf("repair did not restore selected target: %v", err)
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 2 {
+		t.Fatalf("sibling inspect: %+v %v", view, err)
+	}
+	claudeAfter := inspectedBinding(t, view, "claude")
+	if claudeAfter.BindingID != claudeBefore.BindingID || claudeAfter.TargetPath != claudeBefore.TargetPath || claudeAfter.DataRoot != claudeBefore.DataRoot || claudeAfter.Profile != claudeBefore.Profile {
+		t.Fatalf("repair rewrote untouched sibling: before=%+v after=%+v", claudeBefore, claudeAfter)
+	}
+	codexAfter := inspectedBinding(t, view, "codex")
+	if codexAfter.BindingID != codexBefore.BindingID || codexAfter.Profile != codexBefore.Profile || codexAfter.TargetPath != codexBefore.TargetPath {
+		t.Fatalf("repair re-bound selected client: before=%+v after=%+v", codexBefore, codexAfter)
+	}
+}
+
+func TestRepairGroupIntactReportsBothTargets(t *testing.T) {
+	ctx, eng, _, pkg, probe, codexConfig, claudeConfig := newBothClientSandbox(t)
+	id := "00000000-0000-4000-8000-0000000000c9"
+	installBothClients(t, ctx, eng, pkg, probe, id, "repair-group-intact-install", bothClientTargets(codexConfig, claudeConfig, probe))
+	before, err := eng.Inspect(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claudeBefore := inspectedBinding(t, before, "claude")
+	codexBefore := inspectedBinding(t, before, "codex")
+	repaired, err := eng.Prepare(ctx, Request{
+		Operation: OpRepair, PackageRoot: pkg, InstallationID: id, OperationID: "repair-group-intact",
+		RequiredComponents: []string{"mcp", "skills"}, ClientExecutable: probe,
+		Targets: bothClientTargets(codexConfig, claudeConfig, probe),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := eng.Apply(ctx, repaired, Decision{Confirmed: true})
+	_ = repaired.Close()
+	if err != nil || (got.Outcome != OutcomeUnchanged && got.Outcome != OutcomeCompleted) {
+		t.Fatalf("intact group repair: %+v %v", got, err)
+	}
+	if len(got.Targets) != 2 {
+		t.Fatalf("intact group repair omitted targets: %+v", got.Targets)
+	}
+	seen := map[string]bool{}
+	for _, target := range got.Targets {
+		seen[target.ClientID] = true
+		if target.BindingID == "" {
+			t.Fatalf("intact group repair omitted binding: %+v", target)
+		}
+	}
+	if !seen["claude"] || !seen["codex"] {
+		t.Fatalf("intact group repair clients: %+v", got.Targets)
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 2 {
+		t.Fatalf("inspect after intact group repair: %+v %v", view, err)
+	}
+	claudeAfter := inspectedBinding(t, view, "claude")
+	codexAfter := inspectedBinding(t, view, "codex")
+	if claudeAfter.BindingID != claudeBefore.BindingID || claudeAfter.TargetPath != claudeBefore.TargetPath || claudeAfter.DataRoot != claudeBefore.DataRoot || claudeAfter.Profile != claudeBefore.Profile {
+		t.Fatalf("intact group repair rewrote claude: before=%+v after=%+v", claudeBefore, claudeAfter)
+	}
+	if codexAfter.BindingID != codexBefore.BindingID || codexAfter.TargetPath != codexBefore.TargetPath || codexAfter.DataRoot != codexBefore.DataRoot || codexAfter.Profile != codexBefore.Profile {
+		t.Fatalf("intact group repair rewrote codex: before=%+v after=%+v", codexBefore, codexAfter)
 	}
 }
 

@@ -57,8 +57,10 @@ Client.Activation stay separate fields.
 Confirmed Apply re-reads live target/ownership before mutation and returns
 `plan_changed` instead of applying a stale confirmation. Discover reports
 supported Claude/Codex user-scope metadata, executable presence, and current
-bindings without creating state or executing found files. Inspect and Result
-expose per-client materialization/activation/authentication/verification and
+bindings without creating state or executing found files. Inspect after a group
+install reports both live bindings and TreeDigest without mutating state or
+running a helper; Recover of that clean observation is `already_recovered`.
+Inspect and Result expose per-client materialization/activation/authentication/verification and
 required components. The external sample's flagged path runs install → inspect
 → recover → repeat → update → repair → remove. Passing `-claude-config`
 uses `Request.Targets` for the same verbs on Claude+Codex together.

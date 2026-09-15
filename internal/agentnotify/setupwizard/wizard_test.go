@@ -4,6 +4,7 @@ package setupwizard
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -2152,6 +2153,77 @@ func TestWizardUpdateBothLiveClients(t *testing.T) {
 	}
 	if repaired.InstallationID != installed.InstallationID {
 		t.Fatalf("repair changed installation: install=%s repair=%s", installed.InstallationID, repaired.InstallationID)
+	}
+}
+
+func TestWizardInspectAfterGroupInstallReportsBothWithoutMutating(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	claudeConfig := filepath.Join(filepath.Dir(control), "claude-profile")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"claude", "codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClaudeConfig: claudeConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot:    filepath.Join(filepath.Dir(control), "scope"),
+		ClaudeRunner: listingRunner{configRoot: claudeConfig},
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install both: %+v %v", installed, err)
+	}
+	statePath := filepath.Join(filepath.Dir(control), "uap", "state", "state-v2.json")
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Action = ActionInspect
+	req.Yes = false
+	view, err := Run(ctx, req)
+	if err != nil || view.Outcome != "completed" {
+		t.Fatalf("inspect both: %+v %v", view, err)
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("inspect mutated UAP state")
+	}
+	again, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Ledger.Generation != snap.Ledger.Generation {
+		t.Fatalf("inspect mutated ledger: before=%d after=%d", snap.Ledger.Generation, again.Ledger.Generation)
+	}
+	saw := map[string]TargetResult{}
+	for _, target := range view.Targets {
+		if target.Unit == "agent-notify" {
+			saw[target.Client] = target
+		}
+	}
+	if saw["claude"].Outcome != "installed" || saw["claude"].Profile != claudeConfig || saw["claude"].TreeDigest == "" {
+		t.Fatalf("claude inspect: %+v", saw["claude"])
+	}
+	if saw["codex"].Outcome != "installed" || saw["codex"].Profile != codexConfig || saw["codex"].TreeDigest == "" {
+		t.Fatalf("codex inspect: %+v", saw["codex"])
+	}
+	if live := LiveNotifyClients(control, []string{"claude", "codex"}); len(live) != 2 {
+		t.Fatalf("live after inspect: %v", live)
 	}
 }
 
