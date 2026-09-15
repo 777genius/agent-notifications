@@ -4502,6 +4502,53 @@ func TestWizardPlanAfterRetainedUpdateIsReady(t *testing.T) {
 	}
 }
 
+func TestWizardRetainedAddFailureKeepsMetadata(t *testing.T) {
+	ctx := testCtx(t)
+	req, _, sentinel, _ := prepareRetainedCodexWizard(t, ctx)
+	req.Action = ActionUpdate
+	req.Yes = true
+	updated, err := Run(ctx, req)
+	if err != nil || updated.Outcome != "completed" || updated.Reason != "retained_source_updated" {
+		t.Fatalf("retained update: %+v %v", updated, err)
+	}
+	state, err := loadUAPState(req.ControlRoot)
+	if err != nil || len(state.Installations) != 1 || state.Installations[0].Source.TreeDigest == "" {
+		t.Fatalf("state after metadata: %+v %v", state, err)
+	}
+	recorded := state.Installations[0].Source.TreeDigest
+	if err := os.RemoveAll(filepath.Join(req.PackageRoot, "skills")); err != nil {
+		t.Fatal(err)
+	}
+	req.Action = ActionInstall
+	got, err := Run(ctx, req)
+	if err == nil || got.Outcome == "completed" {
+		t.Fatalf("incomplete add succeeded: %+v %v", got, err)
+	}
+	after, err := loadUAPState(req.ControlRoot)
+	if err != nil || len(after.Installations) != 1 {
+		t.Fatalf("state after failed add: %+v %v", after, err)
+	}
+	if after.Installations[0].Source.TreeDigest != recorded {
+		t.Fatalf("failed add rewrote metadata: %s vs %s", after.Installations[0].Source.TreeDigest, recorded)
+	}
+	if !after.Installations[0].DataRetained || len(after.Installations[0].Clients) != 0 {
+		t.Fatalf("failed add changed retained install: %+v", after.Installations[0])
+	}
+	view, err := Run(ctx, Request{Action: ActionInspect, Agents: []string{"codex"}, ControlRoot: req.ControlRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range view.Targets {
+		if target.Unit == "agent-notify" && target.Outcome == "installed" {
+			t.Fatalf("failed add installed a client: %+v", view.Targets)
+		}
+	}
+	body, err := os.ReadFile(sentinel)
+	if err != nil || string(body) != "retain\n" {
+		t.Fatalf("PLUGIN_DATA sentinel: %s %v", body, err)
+	}
+}
+
 func TestWizardRetainedDifferentPackageNameIsConflict(t *testing.T) {
 	ctx := testCtx(t)
 	req, statePath, sentinel, _ := prepareRetainedCodexWizard(t, ctx)
