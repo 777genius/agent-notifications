@@ -77,20 +77,22 @@ func (e *Engine) SwitchRetained(ctx context.Context, req Request, decision Decis
 		return Result{Outcome: OutcomeIncomplete, Reason: err.Error()}, err
 	}
 	e.report(ProgressPreflight)
-	saveErr := e.persistRetainedSource(ctx, req.InstallationID, envelope)
+	changed, saveErr := e.persistRetainedSource(ctx, req.InstallationID, envelope)
 	recorded, digestErr := e.recordedTreeDigest(ctx, req.InstallationID)
 	if saveErr != nil {
 		if digestErr == nil && recorded == snapshot.TreeDigest {
-			saveErr = e.persistRetainedSource(ctx, req.InstallationID, envelope)
+			changed, saveErr = e.persistRetainedSource(ctx, req.InstallationID, envelope)
 			recorded, digestErr = e.recordedTreeDigest(ctx, req.InstallationID)
 			if saveErr == nil && digestErr == nil && recorded == snapshot.TreeDigest {
-				return e.retainedSourceUpdated(req, recorded), nil
+				return e.retainedSourceUpdated(req, recorded, changed), nil
 			}
 		}
 		return switchRetainedError(req.InstallationID, saveErr)
 	}
 	if digestErr != nil || recorded != snapshot.TreeDigest {
-		if retryErr := e.persistRetainedSource(ctx, req.InstallationID, envelope); retryErr != nil {
+		var retryErr error
+		changed, retryErr = e.persistRetainedSource(ctx, req.InstallationID, envelope)
+		if retryErr != nil {
 			if digestErr != nil {
 				return switchRetainedError(req.InstallationID, digestErr)
 			}
@@ -105,26 +107,29 @@ func (e *Engine) SwitchRetained(ctx context.Context, req Request, decision Decis
 			return Result{Operation: OpUpdate, InstallationID: req.InstallationID, Outcome: OutcomeIncomplete, Reason: reason}, fmt.Errorf("%w: %s", ErrIncomplete, reason)
 		}
 	}
-	return e.retainedSourceUpdated(req, recorded), nil
+	return e.retainedSourceUpdated(req, recorded, changed), nil
 }
 
-func (e *Engine) retainedSourceUpdated(req Request, digest string) Result {
+func (e *Engine) retainedSourceUpdated(req Request, digest string, changed usecase.BindingChangeResult) Result {
 	e.report(ProgressCommit)
 	e.report(ProgressComplete)
-	return Result{
+	got := Result{
 		Operation: OpUpdate, InstallationID: req.InstallationID,
-		Outcome: OutcomeCompleted, Binding: BindingFacts{
+		Outcome: OutcomeCompleted, DataRetained: true, Binding: BindingFacts{
 			InstallationID: req.InstallationID, TreeDigest: digest,
 			OperationID: req.OperationID,
 		},
 	}
+	if warning := strings.TrimSpace(changed.PluginData.Warning); warning != "" {
+		got.NextActions = append(got.NextActions, NextAction{Kind: "data_compatibility", Reason: warning})
+	}
+	return got
 }
 
-func (e *Engine) persistRetainedSource(ctx context.Context, installationID string, envelope domain.PackageEnvelope) error {
-	_, err := e.lifecycle(nil, BindingFacts{}).SwitchRetained(ctx, usecase.BindingChangeInput{
+func (e *Engine) persistRetainedSource(ctx context.Context, installationID string, envelope domain.PackageEnvelope) (usecase.BindingChangeResult, error) {
+	return e.lifecycle(nil, BindingFacts{}).SwitchRetained(ctx, usecase.BindingChangeInput{
 		Selector: installationID, Envelope: envelope, Confirmed: true,
 	}, domain.OriginModeDirect, nil)
-	return err
 }
 
 func (e *Engine) recordedTreeDigest(ctx context.Context, installationID string) (string, error) {
@@ -150,13 +155,13 @@ func (e *Engine) recordedTreeDigest(ctx context.Context, installationID string) 
 func switchRetainedError(installationID string, err error) (Result, error) {
 	reason := err.Error()
 	if strings.Contains(reason, "active installation switch requires SwitchGroup") {
-		return Result{Outcome: OutcomeConflict, Reason: "active_installation"}, fmt.Errorf("%w: %v", ErrUnsupported, err)
+		return Result{Operation: OpUpdate, InstallationID: installationID, Outcome: OutcomeConflict, Reason: "active_installation"}, fmt.Errorf("%w: %v", ErrUnsupported, err)
 	}
 	if strings.Contains(reason, "preserve manifest identity") {
-		return Result{Outcome: OutcomeConflict, Reason: "package_identity"}, err
+		return Result{Operation: OpUpdate, InstallationID: installationID, Outcome: OutcomeConflict, Reason: "package_identity"}, err
 	}
 	if strings.Contains(reason, "already bound to installation") {
-		return Result{Outcome: OutcomeConflict, Reason: "source_collision"}, err
+		return Result{Operation: OpUpdate, InstallationID: installationID, Outcome: OutcomeConflict, Reason: "source_collision"}, err
 	}
 	return Result{Operation: OpUpdate, InstallationID: installationID, Outcome: OutcomeIncomplete, Reason: reason}, err
 }

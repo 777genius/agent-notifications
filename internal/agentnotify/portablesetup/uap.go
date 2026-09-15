@@ -690,51 +690,51 @@ func (m Materializer) Repair(ctx context.Context, req MaterializeRequest) (porta
 	return m.Install(ctx, req)
 }
 
-func (m Materializer) SwitchRetained(ctx context.Context, req MaterializeRequest) error {
+func (m Materializer) SwitchRetained(ctx context.Context, req MaterializeRequest) (uapinstaller.Result, error) {
 	if ctx == nil {
-		return ErrPreflight
+		return uapinstaller.Result{}, ErrPreflight
 	}
 	if !explicitAbs(req.PackageRoot) {
-		return fmt.Errorf("%w: package root must be an explicit absolute path", ErrPreflight)
+		return uapinstaller.Result{}, fmt.Errorf("%w: package root must be an explicit absolute path", ErrPreflight)
 	}
 	if req.Identity.InstallationID == "" {
-		return fmt.Errorf("%w: installation id is required", ErrPreflight)
+		return uapinstaller.Result{}, fmt.Errorf("%w: installation id is required", ErrPreflight)
 	}
 	generation := req.ExpectedGeneration
 	eng, err := m.engine(req, &generation, nil)
 	if err != nil {
-		return err
+		return uapinstaller.Result{}, err
 	}
 	got, err := eng.SwitchRetained(ctx, uapinstaller.Request{
 		PackageRoot: req.PackageRoot, InstallationID: req.Identity.InstallationID,
 		OperationID: req.OperationID,
 	}, uapinstaller.Decision{Confirmed: true})
 	if err != nil {
-		return wrapUpdateRequired(err)
+		return got, persistResult(got, wrapUpdateRequired(err))
 	}
 	if got.Outcome != uapinstaller.OutcomeCompleted && got.Outcome != uapinstaller.OutcomeUnchanged {
-		return fmt.Errorf("%w: %s", ErrPreflight, got.Reason)
+		return got, fmt.Errorf("%w: %s", ErrPreflight, got.Reason)
 	}
 	view, inspectErr := eng.Inspect(ctx)
 	if inspectErr != nil {
-		return inspectErr
+		return got, inspectErr
 	}
 	for _, installation := range view.Installations {
 		if installation.InstallationID != req.Identity.InstallationID {
 			continue
 		}
 		if got.Binding.TreeDigest != "" && installation.TreeDigest != got.Binding.TreeDigest {
-			return fmt.Errorf("%w: retained source %s desired %s", ErrPreflight, installation.TreeDigest, got.Binding.TreeDigest)
+			return got, fmt.Errorf("%w: retained source %s desired %s", ErrPreflight, installation.TreeDigest, got.Binding.TreeDigest)
 		}
 		if installation.TreeDigest == "" {
-			return fmt.Errorf("%w: retained source digest is missing after switch", ErrPreflight)
+			return got, fmt.Errorf("%w: retained source digest is missing after switch", ErrPreflight)
 		}
 		if len(installation.Bindings) != 0 {
-			return fmt.Errorf("%w: retained switch materialized a client", ErrPreflight)
+			return got, fmt.Errorf("%w: retained switch materialized a client", ErrPreflight)
 		}
-		return nil
+		return got, nil
 	}
-	return fmt.Errorf("%w: installation %s", ErrPreflight, req.Identity.InstallationID)
+	return got, fmt.Errorf("%w: installation %s", ErrPreflight, req.Identity.InstallationID)
 }
 
 func IsUpdateRequired(err error) bool {

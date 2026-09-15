@@ -66,7 +66,12 @@ metadata-only. SwitchRetained Progress is prepare/preflight/commit/complete
 and does not report stage, activate, or verify. Cancelled SwitchRetained
 reports no Progress. RequiredComponents do not apply to SwitchRetained;
 completeness is checked on the following Install. A blocking Assess refuses
-SwitchRetained without rewriting retained source. Plan of Install onto
+SwitchRetained without rewriting retained source. A different plugin.json
+name is `package_identity` before mutation. A source already bound to
+another installation is `source_collision`. Successful SwitchRetained
+reports `data_retained` and a `data_compatibility` next action. An
+ambiguous Save of that metadata is retried; a remaining Save error is
+not `unchanged` even if Inspect already shows the desired digest. Plan of Install onto
 retained r1 with package r2 is `ErrUpdateRequired` and shows both phases
 before confirmation. Plan includes the helper protocol
 version and SHA-256 of the helper bytes; UAP managedstdio stores the same

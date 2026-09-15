@@ -22,7 +22,7 @@ import (
 // Engine is the process-local installer. It does not export Store or Kernel.
 type Engine struct {
 	cfg   Config
-	store statev2.Store
+	store transaction.StateStore
 	// persistObservations enables the §5.4 PersistAuthoritativeObservations
 	// seam. Prepare still uses DryRun and does not persist.
 	persistObservations bool

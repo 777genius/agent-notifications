@@ -4399,6 +4399,45 @@ func TestWizardPlanRetainedSameRevisionIsReady(t *testing.T) {
 	}
 }
 
+func TestWizardRetainedSameRevisionReinstallPreservesData(t *testing.T) {
+	ctx := testCtx(t)
+	req, statePath, sentinel, origPkg := prepareRetainedCodexWizard(t, ctx)
+	req.PackageRoot = origPkg
+	req.Action = ActionInstall
+	req.Yes = true
+	firstID := req.InstallationID
+	got, err := Run(ctx, req)
+	if err != nil || got.Outcome != "completed" {
+		t.Fatalf("same-revision reinstall: %+v %v", got, err)
+	}
+	if got.InstallationID != "" && got.InstallationID != firstID {
+		t.Fatalf("reinstall lost installation: %s vs %s", got.InstallationID, firstID)
+	}
+	if got := installationIDFromState(t, statePath); got != firstID {
+		t.Fatalf("state installation lost: %s vs %s", firstID, got)
+	}
+	body, err := os.ReadFile(sentinel)
+	if err != nil || string(body) != "retain\n" {
+		t.Fatalf("PLUGIN_DATA sentinel: %s %v", body, err)
+	}
+	view, err := Run(ctx, Request{
+		Action: ActionInspect, Agents: []string{"codex"}, ControlRoot: req.ControlRoot,
+		RuntimeRoot: req.RuntimeRoot, Helper: req.Helper,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var installedNotify bool
+	for _, target := range view.Targets {
+		if target.Unit == "agent-notify" && target.Outcome == "installed" {
+			installedNotify = true
+		}
+	}
+	if !installedNotify {
+		t.Fatalf("same-revision reinstall did not install: %+v", view.Targets)
+	}
+}
+
 func TestWizardRetainedUpdateReportsProgress(t *testing.T) {
 	ctx := testCtx(t)
 	req, _, sentinel, _ := prepareRetainedCodexWizard(t, ctx)
@@ -4412,6 +4451,9 @@ func TestWizardRetainedUpdateReportsProgress(t *testing.T) {
 	}
 	if strings.Join(phases, ",") != "prepare,preflight,complete" {
 		t.Fatalf("retained update phases: %v", phases)
+	}
+	if len(got.NextActions) == 0 || got.NextActions[0].Kind != "data_compatibility" {
+		t.Fatalf("retained update omitted compatibility warning: %+v", got.NextActions)
 	}
 	body, err := os.ReadFile(sentinel)
 	if err != nil || string(body) != "retain\n" {
@@ -4453,6 +4495,40 @@ func TestWizardPlanAfterRetainedUpdateIsReady(t *testing.T) {
 		if target.Unit == "agent-notify" && target.Outcome == "installed" {
 			t.Fatalf("plan after metadata update installed a client: %+v", view.Targets)
 		}
+	}
+	body, err := os.ReadFile(sentinel)
+	if err != nil || string(body) != "retain\n" {
+		t.Fatalf("PLUGIN_DATA sentinel: %s %v", body, err)
+	}
+}
+
+func TestWizardRetainedDifferentPackageNameIsConflict(t *testing.T) {
+	ctx := testCtx(t)
+	req, statePath, sentinel, _ := prepareRetainedCodexWizard(t, ctx)
+	if err := os.WriteFile(filepath.Join(req.PackageRoot, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"other-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	req.Action = ActionUpdate
+	req.Yes = false
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := Plan(ctx, req)
+	if plan.Ready || plan.Result.Reason != "package_identity" || plan.Result.Outcome != "conflict" {
+		t.Fatalf("plan different name: %+v %v", plan, err)
+	}
+	if !strings.Contains(plan.Text, "package-identity-conflict") {
+		t.Fatalf("plan omitted identity conflict: %s", plan.Text)
+	}
+	req.Yes = true
+	got, err := Run(ctx, req)
+	if err == nil || got.Outcome != "conflict" || got.Reason != "package_identity" {
+		t.Fatalf("run different name: %+v %v", got, err)
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("different name rewrote retained state")
 	}
 	body, err := os.ReadFile(sentinel)
 	if err != nil || string(body) != "retain\n" {

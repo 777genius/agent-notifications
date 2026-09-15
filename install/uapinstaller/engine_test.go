@@ -16,9 +16,11 @@ import (
 	"time"
 
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/dirswap"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/packagedigest"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/statev2"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/managedstdio"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/transaction"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/ports"
 )
 
@@ -2420,6 +2422,12 @@ func TestSwitchRetainedCopiedPackageWithNewDigest(t *testing.T) {
 	if switched.Binding.TreeDigest == "" || switched.Binding.TreeDigest == before {
 		t.Fatalf("switch kept old digest %s", switched.Binding.TreeDigest)
 	}
+	if !switched.DataRetained {
+		t.Fatalf("switch omitted data_retained: %+v", switched)
+	}
+	if len(switched.NextActions) != 1 || switched.NextActions[0].Kind != "data_compatibility" || switched.NextActions[0].Reason == "" {
+		t.Fatalf("switch omitted data-compatibility warning: %+v", switched.NextActions)
+	}
 	body, err := os.ReadFile(sentinel)
 	if err != nil || string(body) != "retain\n" {
 		t.Fatalf("PLUGIN_DATA sentinel: %s %v", body, err)
@@ -2709,6 +2717,291 @@ func TestSwitchRetainedAssessBlockRefusesWithoutRewrite(t *testing.T) {
 	view, err := eng.Inspect(ctx)
 	if err != nil || view.Installations[0].TreeDigest != recorded || !view.Installations[0].DataRetained {
 		t.Fatalf("blocked switch changed retained source: %+v %v", view, err)
+	}
+}
+
+func TestSwitchRetainedDifferentPackageNameIsConflict(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "00000000-0000-4000-8000-0000000000de"
+	installed, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: id, OperationID: "retained-name-install",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, installed, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = installed.Close()
+	rm, err := eng.Prepare(ctx, Request{
+		Operation: OpRemove, ClientID: "codex", ClientConfigRoot: config, ClientExecutable: probe,
+		InstallationID: id, OperationID: "retained-name-remove", ExternalUninstalled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, rm, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = rm.Close()
+	other := filepath.Join(base, "other-package")
+	writePackage(t, other, probe)
+	if err := os.WriteFile(filepath.Join(other, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"other-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := eng.SwitchRetained(ctx, Request{
+		PackageRoot: other, InstallationID: id, OperationID: "retained-name-switch",
+	}, Decision{Confirmed: true})
+	if err == nil || got.Outcome != OutcomeConflict || got.Reason != "package_identity" {
+		t.Fatalf("different name: %+v %v", got, err)
+	}
+	after, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("different name rewrote retained state")
+	}
+}
+
+func TestSwitchRetainedSourceCollisionIsConflict(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	idA := "00000000-0000-4000-8000-0000000000df"
+	idB := "00000000-0000-4000-8000-0000000000e0"
+	installed, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: idA, OperationID: "retained-collision-install",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, installed, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = installed.Close()
+	rm, err := eng.Prepare(ctx, Request{
+		Operation: OpRemove, ClientID: "codex", ClientConfigRoot: config, ClientExecutable: probe,
+		InstallationID: idA, OperationID: "retained-collision-remove", ExternalUninstalled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, rm, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = rm.Close()
+	other := filepath.Join(base, "other-package")
+	writePackage(t, other, probe)
+	if err := os.WriteFile(filepath.Join(other, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"sample-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(eng.cfg.TempRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := snapshotLocalPackage(ctx, eng.cfg.TempRoot, other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = packagedigest.Remove(snapshot) }()
+	ldr, err := newLoader()
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := ldr.Load(ctx, domain.LoadInput{
+		SnapshotRoot: snapshot.Root, TreeDigest: snapshot.TreeDigest,
+		ExecutableFiles: snapshot.ExecutableFiles, Source: snapshot.Source,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := statev2.Store{Path: eng.cfg.StateFile}
+	state, err := store.Load()
+	if err != nil || len(state.Installations) != 1 {
+		t.Fatalf("load retained: %+v %v", state, err)
+	}
+	occupant := state.Installations[0]
+	occupant.InstallationID = idB
+	occupant.Source.SourceBindingID = domain.ComputeSourceBindingID(envelope.Source)
+	occupant.Source.RequestedSource = envelope.Source.RequestedSource
+	occupant.Source.CanonicalSource = envelope.Source.CanonicalSource
+	occupant.Source.Repository = envelope.Source.Repository
+	occupant.Source.PackageSubpath = envelope.Source.PackageSubpath
+	occupant.Clients = map[string]domain.ClientBinding{}
+	occupant.DataReceipts = map[string]domain.DataReceipt{
+		"data_occupant": {
+			DataReceiptID: "data_occupant", PhysicalBackend: "local", Scope: "user",
+			Locator: filepath.Join(eng.cfg.PluginDataBase, "occupant"), OwnershipDigest: "sha256:" + strings.Repeat("ab", 32),
+			State: domain.DataReceiptOwned,
+		},
+	}
+	state.Installations = append(state.Installations, occupant)
+	if err := store.Save(state); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := eng.SwitchRetained(ctx, Request{
+		PackageRoot: other, InstallationID: idA, OperationID: "retained-collision-switch-a",
+	}, Decision{Confirmed: true})
+	if err == nil || got.Outcome != OutcomeConflict || got.Reason != "source_collision" {
+		t.Fatalf("source collision: %+v %v", got, err)
+	}
+	after, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("source collision rewrote retained state")
+	}
+}
+
+type ambiguousSaveStore struct {
+	inner  transaction.StateStore
+	id     string
+	digest string
+	saves  int
+}
+
+func (s *ambiguousSaveStore) Load() (domain.StateFileV2, error) {
+	return s.inner.Load()
+}
+
+func (s *ambiguousSaveStore) Save(state domain.StateFileV2) error {
+	if err := s.inner.Save(state); err != nil {
+		return err
+	}
+	for _, installation := range state.Installations {
+		if installation.InstallationID == s.id && installation.Source.TreeDigest == s.digest {
+			s.saves++
+			return errors.New("ambiguous save")
+		}
+	}
+	return nil
+}
+
+func TestSwitchRetainedAmbiguousSaveDoesNotReportUnchanged(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "00000000-0000-4000-8000-0000000000e1"
+	installed, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: id, OperationID: "retained-save-install",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, installed, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = installed.Close()
+	rm, err := eng.Prepare(ctx, Request{
+		Operation: OpRemove, ClientID: "codex", ClientConfigRoot: config, ClientExecutable: probe,
+		InstallationID: id, OperationID: "retained-save-remove", ExternalUninstalled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, rm, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = rm.Close()
+	other := filepath.Join(base, "other-package")
+	writePackage(t, other, probe)
+	if err := os.WriteFile(filepath.Join(other, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"sample-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	desired, err := eng.LocalPackageTreeDigest(ctx, other)
+	if err != nil || desired == "" {
+		t.Fatalf("desired digest: %s %v", desired, err)
+	}
+	failing := &ambiguousSaveStore{inner: eng.store, id: id, digest: desired}
+	eng.store = failing
+	got, err := eng.SwitchRetained(ctx, Request{
+		PackageRoot: other, InstallationID: id, OperationID: "retained-save-ambiguous",
+	}, Decision{Confirmed: true})
+	if err == nil || got.Outcome == OutcomeUnchanged || got.Outcome == OutcomeCompleted {
+		t.Fatalf("ambiguous save claimed success: %+v %v", got, err)
+	}
+	if failing.saves < 2 {
+		t.Fatalf("ambiguous save was not retried: saves=%d", failing.saves)
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 || view.Installations[0].TreeDigest != desired {
+		t.Fatalf("inspect after ambiguous save: %+v %v", view, err)
+	}
+	if len(view.Installations[0].Bindings) != 0 {
+		t.Fatalf("ambiguous save materialized a client: %+v", view.Installations[0].Bindings)
+	}
+	eng.store = failing.inner
+	switched, err := eng.SwitchRetained(ctx, Request{
+		PackageRoot: other, InstallationID: id, OperationID: "retained-save-retry",
+	}, Decision{Confirmed: true})
+	if err != nil || switched.Outcome != OutcomeCompleted || switched.Binding.TreeDigest != desired {
+		t.Fatalf("durable retry: %+v %v", switched, err)
+	}
+	added, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: other, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: id, OperationID: "retained-save-add",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotAdd, err := eng.Apply(ctx, added, Decision{Confirmed: true})
+	_ = added.Close()
+	if err != nil || gotAdd.Outcome != OutcomeCompleted {
+		t.Fatalf("add after durable metadata: %+v %v", gotAdd, err)
 	}
 }
 

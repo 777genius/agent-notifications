@@ -261,6 +261,12 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 				}
 			}
 			if retainedMetadataUpdate(mat, id, req.Action) {
+				if conflict := retainedPackageIdentityConflict(req.ControlRoot, id.InstallationID, acquired.PackageRoot); conflict {
+					ev.out.Outcome, ev.out.Reason = "conflict", "package_identity"
+					plan.Result = attachCommand(req, ev.out)
+					plan.Text = text + " package-identity-conflict"
+					return plan, ErrRefused
+				}
 				digest, err := retainedUpdateTreeDigest(ctx, mat, acquired.PackageRoot)
 				if err != nil {
 					ev.out.Outcome, ev.out.Reason = "incomplete", err.Error()
@@ -1371,9 +1377,10 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 			PackageRoot: req.PackageRoot, ClientConfigRoot: clientConfig(req, notifyAgents[0]), ClientExecutable: clientExecutable(req, notifyAgents[0]),
 			OperationID: wizardMutationID(req.Action, notifyAgents[0], snap.Ledger.Generation),
 		}
-		if err := mat.SwitchRetained(ctx, materialize); err != nil {
-			out.Outcome, out.Reason = "incomplete", "portable_preflight_failed"
-			return out, err
+		if switched, err := mat.SwitchRetained(ctx, materialize); err != nil {
+			return mapSwitchRetainedFailure(err, out)
+		} else {
+			out.NextActions = append(out.NextActions, installerNextActions(switched.NextActions)...)
 		}
 		state, loadErr := mat.Store.Load()
 		if loadErr != nil {
@@ -2054,6 +2061,48 @@ func retainedUpdateTreeDigest(ctx context.Context, mat portablesetup.Materialize
 		return "", err
 	}
 	return eng.LocalPackageTreeDigest(ctx, packageRoot)
+}
+
+func retainedPackageIdentityConflict(controlRoot, installationID, packageRoot string) bool {
+	desired := packageDeclaredName(packageRoot)
+	if desired == "" || installationID == "" {
+		return false
+	}
+	state, err := loadUAPState(controlRoot)
+	if err != nil {
+		return false
+	}
+	for _, installation := range state.Installations {
+		if installation.InstallationID == installationID && installation.DeclaredName != "" && installation.DeclaredName != desired {
+			return true
+		}
+	}
+	return false
+}
+
+func installerNextActions(actions []uapinstaller.NextAction) []NextAction {
+	out := make([]NextAction, 0, len(actions))
+	for _, action := range actions {
+		out = append(out, NextAction{Kind: action.Kind, Reason: action.Reason})
+	}
+	return out
+}
+
+func mapSwitchRetainedFailure(err error, out Result) (Result, error) {
+	var persisted portablesetup.ResultError
+	if errors.As(err, &persisted) && persisted.Result.Reason != "" {
+		out.Outcome, out.Reason = string(persisted.Result.Outcome), persisted.Result.Reason
+		if out.Outcome == "" {
+			out.Outcome = "incomplete"
+		}
+		return out, err
+	}
+	if errors.Is(err, uapinstaller.ErrAssessmentRejected) {
+		out.Outcome, out.Reason = "incomplete", "assessment_rejected"
+		return out, err
+	}
+	out.Outcome, out.Reason = "incomplete", "portable_preflight_failed"
+	return out, err
 }
 
 func annotateRequiredUpdate(text string, out Result) string {
