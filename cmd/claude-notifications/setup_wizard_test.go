@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/777genius/agent-notifications/install/uapinstaller"
+	"github.com/777genius/agent-notifications/internal/agentnotify/clientsetup"
+	"github.com/777genius/agent-notifications/internal/agentnotify/registration"
 	"github.com/777genius/agent-notifications/internal/agentnotify/setupwizard"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/testenv"
@@ -715,6 +717,79 @@ func TestSetupWizardSpaceContainingRootsE2E(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("space inspect missed profile: %+v", view.Targets)
+	}
+}
+
+func TestSetupWizardDirectMCPHandoffDoesNotRestoreE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	snap, err := installruntime.ReadInstalledSnapshot(env.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mcpConfig := filepath.Join(env.root, "client", "config")
+	if err := os.MkdirAll(filepath.Dir(mcpConfig), 0700); err != nil {
+		t.Fatal(err)
+	}
+	primary := filepath.Join(env.runtime, "primary")
+	if _, err := clientsetup.Apply(ctx, clientsetup.Request{
+		ControlRoot: env.control, RuntimeRoot: env.runtime, Command: primary, ConfigPath: mcpConfig,
+		Provider: registration.Codex, Mode: clientsetup.Managed, ExpectedGeneration: snap.Ledger.Generation,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	flags := func(action string, extra ...string) []string {
+		args := []string{
+			"--action", action, "--agents", "codex", "--hooks", "false",
+			"--package", env.pkg, "--control-root", env.control, "--runtime-root", env.runtime,
+			"--global-config", env.global, "--codex-home", env.codexHome,
+			"--client-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+			"--mcp-config", mcpConfig,
+		}
+		return append(args, extra...)
+	}
+	unit := func(result setupwizard.Result, name string) string {
+		for _, target := range result.Targets {
+			if target.Unit == name {
+				return target.Outcome
+			}
+		}
+		return ""
+	}
+	var out bytes.Buffer
+	if code := executeSetupWizardWith(ctx, flags("install", "--yes", "--json"), &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("handoff install: %d %s", code, out.String())
+	}
+	installed := decodeWizardJSON(t, out)
+	if installed.Outcome != "completed" {
+		t.Fatalf("handoff install result: %+v", installed)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, flags("inspect", "--json"), &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("handoff inspect: %d %s", code, out.String())
+	}
+	view := decodeWizardJSON(t, out)
+	if unit(view, "agent-notify") != "installed" || unit(view, "direct-mcp") != "absent" {
+		t.Fatalf("handoff inspect: %+v", view.Targets)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, flags("uninstall", "--yes", "--json", "--external-uninstalled"), &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("handoff uninstall: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "completed" {
+		t.Fatalf("handoff uninstall result: %+v", got)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, flags("inspect", "--json"), &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect after uninstall: %d %s", code, out.String())
+	}
+	after := decodeWizardJSON(t, out)
+	if unit(after, "agent-notify") == "installed" {
+		t.Fatalf("portable survived uninstall: %+v", after.Targets)
+	}
+	if unit(after, "direct-mcp") == "installed" {
+		t.Fatalf("uninstall restored direct MCP: %+v", after.Targets)
 	}
 }
 
