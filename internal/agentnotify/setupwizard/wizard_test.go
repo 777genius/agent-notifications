@@ -2214,11 +2214,26 @@ func TestWizardRepairMixedRevisionsRepairsMatchingPackage(t *testing.T) {
 	if saw["codex"].Outcome != "completed" {
 		t.Fatalf("codex r2 repair: %+v", saw["codex"])
 	}
-	if saw["claude"].Outcome != "incomplete" || saw["claude"].Reason != "exact_revision_required" {
+	if saw["claude"].Outcome != "incomplete" || saw["claude"].Reason != "exact_revision_required" || saw["claude"].TreeDigest == "" {
 		t.Fatalf("claude r1 mismatch: %+v", saw["claude"])
 	}
 	if live := LiveNotifyClients(control, []string{"claude", "codex"}); len(live) != 2 {
 		t.Fatalf("mixed repair lost sibling: %v", live)
+	}
+	var repairCmd, updateCmd []string
+	for _, next := range got.NextActions {
+		if next.Kind == "repair" && strings.Join(next.Agents, ",") == "claude" {
+			repairCmd = next.Command
+		}
+		if next.Kind == "update" && strings.Join(next.Agents, ",") == "claude" {
+			updateCmd = next.Command
+		}
+	}
+	if len(repairCmd) == 0 || strings.Contains(strings.Join(repairCmd, " "), pkg) {
+		t.Fatalf("repair retry kept mismatching package: %v", got.NextActions)
+	}
+	if len(updateCmd) == 0 || !strings.Contains(strings.Join(updateCmd, " "), pkg) {
+		t.Fatalf("missing update retry with offered package: %v", got.NextActions)
 	}
 	snap, err := installruntime.ReadInstalledSnapshot(control)
 	if err != nil || snap.Ledger.PendingMutation != nil {

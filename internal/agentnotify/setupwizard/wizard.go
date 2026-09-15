@@ -1397,13 +1397,18 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 			if req.Action == ActionRepair && (exactRepairRevision(err) || portablesetup.IsUpdateRequired(err)) {
 				others, _ := mat.OtherLiveClients(id.InstallationID, string(agent))
 				if len(others) > 0 {
-					retry := req
-					retry.Agents = []string{string(agent)}
-					out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: "exact_revision_required"})
-					out.NextActions = append(out.NextActions, NextAction{
-						Kind: "repair", Agents: []string{string(agent)}, Reason: "exact_revision_required",
-						Command: RetryCommand(retry),
-					})
+					live := liveBindingTreeDigest(mat, id.InstallationID, string(agent))
+					repairRetry := req
+					repairRetry.Agents = []string{string(agent)}
+					repairRetry.PackageRoot = ""
+					updateRetry := req
+					updateRetry.Action = ActionUpdate
+					updateRetry.Agents = []string{string(agent)}
+					out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: "exact_revision_required", TreeDigest: live})
+					out.NextActions = append(out.NextActions,
+						NextAction{Kind: "repair", Agents: []string{string(agent)}, Reason: "exact_revision_required", Command: RetryCommand(repairRetry)},
+						NextAction{Kind: "update", Agents: []string{string(agent)}, Reason: "exact_revision_required", Command: RetryCommand(updateRetry)},
+					)
 					continue
 				}
 			}
