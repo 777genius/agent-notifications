@@ -1272,6 +1272,54 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 	}
 	reportProgress(req, "agent-notify")
 	generation := snap.Ledger.Generation
+	if canGroupNotify(mat, id, req, notifyAgents) {
+		var reqs []portablesetup.MaterializeRequest
+		for _, agent := range notifyAgents {
+			reqs = append(reqs, portablesetup.MaterializeRequest{
+				Identity: id, Integration: agent, ExpectedGeneration: generation,
+				PackageRoot: req.PackageRoot, ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
+				SourceRevision: req.ReleaseVersion, SourceDigest: req.PackageSHA256,
+				TreeDigest: req.TreeDigest, HelperDigest: req.HelperDigest, HelperVersion: req.HelperVersion,
+				Discovery:       discovery(req, agent, runtimeRoot, snap),
+				OperationID:     wizardMutationID(req.Action, "group", snap.Ledger.Generation),
+				KeepReservation: true,
+				Operation:       wizardPackageOp(req.Action),
+			})
+		}
+		got, err := mat.ApplyGroup(ctx, reqs)
+		if err != nil {
+			if portablesetup.IsUpdateRequired(err) {
+				others, _ := mat.OtherLiveClients(id.InstallationID, string(notifyAgents[0]))
+				return updateRequired(req, notifyAgents[0], others, out, err)
+			}
+			if errors.Is(err, portablesetup.ErrSourceIdentityDrift) {
+				out.Outcome, out.Reason = "incomplete", "source_identity_drift"
+				return out, err
+			}
+			if conflict, handled := pendingIntentConflict(req, err, out); handled {
+				return conflict, err
+			}
+			return portableInstallFailed(notifyAgents[0], req, out, err), err
+		}
+		generation, err = rereadGeneration(req.ControlRoot)
+		if err != nil {
+			out.Outcome, out.Reason = "incomplete", err.Error()
+			return out, err
+		}
+		out.Generation = generation
+		for i, agent := range notifyAgents {
+			out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "completed", Reason: got[i].BindingID})
+			id.InstallationID = got[i].InstallationID
+			_ = persistKnownReceipt(ctx, req, runtimeRoot, mat, id.InstallationID, string(agent))
+			if err := recordLiveProfile(got[i].DataRoot, string(agent), clientConfig(req, agent)); err != nil {
+				out.Outcome, out.Reason = "incomplete", err.Error()
+				return out, err
+			}
+		}
+		out.Outcome = "completed"
+		reportProgress(req, "complete")
+		return out, nil
+	}
 	for _, agent := range notifyAgents {
 		materialize := portablesetup.MaterializeRequest{
 			Identity: id, Integration: agent, ExpectedGeneration: generation,
@@ -1860,6 +1908,22 @@ func mapPreviewFailure(req Request, agent portable.Integration, mat portablesetu
 	}
 	out.Outcome, out.Reason = "incomplete", "portable_preflight_failed"
 	return out, err
+}
+
+func canGroupNotify(mat portablesetup.Materializer, id portablesetup.Identity, req Request, agents []portable.Integration) bool {
+	if len(agents) != 2 {
+		return false
+	}
+	first := liveNotifyClient(mat, id.InstallationID, string(agents[0]))
+	second := liveNotifyClient(mat, id.InstallationID, string(agents[1]))
+	switch req.Action {
+	case ActionInstall:
+		return !first && !second
+	case ActionUpdate, ActionRepair:
+		return first && second
+	default:
+		return false
+	}
 }
 
 func retainedMetadataUpdate(mat portablesetup.Materializer, id portablesetup.Identity, action Action) bool {

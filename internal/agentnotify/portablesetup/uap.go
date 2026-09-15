@@ -250,7 +250,7 @@ func (m Materializer) engine(req MaterializeRequest, generation *uint64, res *in
 		Runner:           runner,
 		ServerName:       portableServerName,
 		ProjectArgs: func(facts uapinstaller.BindingFacts) ([]string, error) {
-			b, err := Complete(req.Identity, req.Integration, facts.ClientID, facts.Scope, facts.TargetPath, facts.DataRoot)
+			b, err := Complete(req.Identity, integrationOf(facts), facts.ClientID, facts.Scope, facts.TargetPath, facts.DataRoot)
 			if err != nil {
 				return nil, err
 			}
@@ -261,7 +261,7 @@ func (m Materializer) engine(req MaterializeRequest, generation *uint64, res *in
 			return []string{"portable-launch", "--locator", name}, nil
 		},
 		OnCommittedBinding: func(ctx context.Context, facts uapinstaller.BindingFacts) error {
-			pb, err := Complete(req.Identity, req.Integration, facts.ClientID, facts.Scope, facts.TargetPath, facts.DataRoot)
+			pb, err := Complete(req.Identity, integrationOf(facts), facts.ClientID, facts.Scope, facts.TargetPath, facts.DataRoot)
 			if err != nil {
 				return err
 			}
@@ -368,6 +368,131 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 		}
 	}
 	return pb, nil
+}
+
+func integrationOf(facts uapinstaller.BindingFacts) portable.Integration {
+	switch facts.ClientID {
+	case string(portable.Claude):
+		return portable.Claude
+	case string(portable.Codex):
+		return portable.Codex
+	default:
+		return portable.Integration(facts.ClientID)
+	}
+}
+
+func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest) ([]portable.Binding, error) {
+	if ctx == nil || len(reqs) != 2 {
+		return nil, ErrPreflight
+	}
+	for i := range reqs {
+		if err := m.validate(reqs[i], true); err != nil {
+			return nil, err
+		}
+		if reqs[i].PackageRoot != reqs[0].PackageRoot {
+			return nil, fmt.Errorf("%w: group requires one package root", ErrPreflight)
+		}
+	}
+	if err := m.recoverOwnedJournals(ctx, reqs[0]); err != nil {
+		return nil, err
+	}
+	release, err := m.beginMutation(ctx, &reqs[0])
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	generation := reqs[0].ExpectedGeneration
+	var res *installruntime.PendingMutation
+	for i := range reqs {
+		template, err := Complete(reqs[i].Identity, reqs[i].Integration, string(reqs[i].Integration), string(domain.ScopeUser), reqs[i].Identity.ScopeRoot, reqs[i].Identity.ControlRoot)
+		if err != nil {
+			return nil, err
+		}
+		gen, next, err := m.Kernel.handoffForward(ctx, Request{
+			Binding: template, ExpectedGeneration: generation, Discovery: reqs[i].Discovery,
+			SourceRevision: reqs[i].SourceRevision, SourceDigest: reqs[i].SourceDigest,
+			TreeDigest: reqs[i].TreeDigest, HelperDigest: reqs[i].HelperDigest, HelperVersion: reqs[i].HelperVersion,
+			Profile: reqs[i].ClientConfigRoot,
+		})
+		if err != nil {
+			return nil, err
+		}
+		generation = gen
+		if next != nil {
+			res = next
+		}
+		reqs[i].ExpectedGeneration = generation
+	}
+	engineReq := reqs[0]
+	for _, req := range reqs {
+		if req.Integration == portable.Claude {
+			engineReq = req
+			break
+		}
+	}
+	eng, err := m.engine(engineReq, &generation, res)
+	if err != nil {
+		return nil, err
+	}
+	var targets []uapinstaller.ClientTarget
+	for _, req := range reqs {
+		targets = append(targets, uapinstaller.ClientTarget{
+			ClientID: string(req.Integration), ClientConfigRoot: req.ClientConfigRoot,
+			ClientExecutable: req.ClientExecutable, PackageRoot: req.PackageRoot,
+			ExternalUninstalled: req.ExternalUninstalled,
+		})
+	}
+	result, err := m.apply(ctx, eng, uapinstaller.Request{
+		Operation: packageOperation(reqs[0]), PackageRoot: reqs[0].PackageRoot,
+		InstallationID: reqs[0].Identity.InstallationID, OperationID: reqs[0].OperationID,
+		RequiredComponents: []string{"mcp", "skills"}, ClientExecutable: reqs[0].ClientExecutable,
+		Targets: targets,
+	}, reqs[0])
+	if err != nil {
+		return nil, persistResult(result, wrapUpdateRequired(err))
+	}
+	var out []portable.Binding
+	for _, req := range reqs {
+		var facts uapinstaller.BindingFacts
+		for _, item := range result.Targets {
+			if item.ClientID == string(req.Integration) {
+				facts.ClientID = item.ClientID
+				facts.BindingID = item.BindingID
+				break
+			}
+		}
+		if facts.ClientID == "" {
+			facts = result.Binding
+		}
+		if state, loadErr := eng.Inspect(ctx); loadErr == nil {
+			for _, installation := range state.Installations {
+				if installation.InstallationID != result.InstallationID && reqs[0].Identity.InstallationID != installation.InstallationID {
+					continue
+				}
+				for _, binding := range installation.Bindings {
+					if binding.ClientID == string(req.Integration) {
+						facts.InstallationID = installation.InstallationID
+						facts.ClientID = binding.ClientID
+						facts.BindingID = binding.BindingID
+						facts.Scope = binding.Scope
+						facts.TargetPath = binding.TargetPath
+						facts.DataRoot = binding.DataRoot
+					}
+				}
+			}
+		}
+		pb, err := Complete(req.Identity, req.Integration, facts.ClientID, facts.Scope, facts.TargetPath, facts.DataRoot)
+		if err != nil {
+			return nil, err
+		}
+		if !req.KeepReservation {
+			if err := m.Kernel.finishHandoff(ctx, Request{Binding: pb, ExpectedGeneration: generation, Reservation: res}, res); err != nil {
+				return nil, err
+			}
+		}
+		out = append(out, pb)
+	}
+	return out, nil
 }
 
 func packageOperation(req MaterializeRequest) uapinstaller.Operation {
