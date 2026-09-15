@@ -535,6 +535,25 @@ func TestWizardInspectDoesNotAcquirePackage(t *testing.T) {
 	}
 }
 
+func TestWizardInspectOmittedAgentsReportsBothClients(t *testing.T) {
+	control, runtime, global, primary, _ := managedRuntime(t)
+	got, err := Run(testCtx(t), Request{
+		Action: ActionInspect, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global, Helper: primary,
+	})
+	if err != nil || got.Outcome != "completed" || got.ExitCode() != 0 || got.Reason == "empty_selection" {
+		t.Fatalf("omitted inspect: %+v %v", got, err)
+	}
+	saw := map[string]string{}
+	for _, target := range got.Targets {
+		if target.Unit == "agent-notify" {
+			saw[target.Client] = target.Outcome
+		}
+	}
+	if saw["claude"] != "absent" || saw["codex"] != "absent" {
+		t.Fatalf("omitted inspect clients: %+v", got.Targets)
+	}
+}
+
 func TestPlanShowsPendingRecoveryWithoutMutating(t *testing.T) {
 	control, runtime, global, _, gen := managedRuntime(t)
 	plantWizardJournal(t, control)
@@ -1566,7 +1585,7 @@ func TestWizardMixedUninstallHoldsClaudeUntilCodexAttested(t *testing.T) {
 				t.Fatal(err)
 			}
 			view, err := Run(ctx, Request{
-				Action: ActionInspect, Agents: []string{"claude"},
+				Action:      ActionInspect,
 				ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global, Helper: probe,
 			})
 			if err != nil || view.Outcome != "completed" || view.ExitCode() != 0 {

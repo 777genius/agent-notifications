@@ -104,6 +104,41 @@ func TestSetupWizardJSONInspectIsOneObject(t *testing.T) {
 	}
 }
 
+func TestSetupWizardJSONInspectOmitsAgents(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	root := setupCommandRoot(t)
+	control := filepath.Join(root, "control")
+	runtime := filepath.Join(root, "runtime")
+	if _, err := installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: control, RuntimeRoot: runtime, Owner: "existing-installer", ConsumerID: "existing",
+		Files: []installruntime.File{{Path: filepath.Join(runtime, "primary"), Data: []byte("inert"), Mode: 0700}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	code := executeSetupWizardWith(ctx, []string{"--action", "inspect", "--control-root", control, "--json"}, &out, &stderr, strings.NewReader(""), false)
+	if code != 0 {
+		t.Fatalf("omitted-agents inspect: %d stdout=%s stderr=%s", code, out.String(), stderr.String())
+	}
+	var result setupwizard.Result
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("stdout json: %v %s", err, out.String())
+	}
+	if result.Action != "inspect" || result.Outcome != "completed" || result.Reason == "empty_selection" {
+		t.Fatalf("omitted-agents inspect result: %+v", result)
+	}
+	saw := map[string]bool{}
+	for _, target := range result.Targets {
+		if target.Unit == "agent-notify" {
+			saw[target.Client] = true
+		}
+	}
+	if !saw["claude"] || !saw["codex"] {
+		t.Fatalf("omitted-agents inspect missed a client: %+v", result.Targets)
+	}
+}
+
 func TestSetupWizardJSONDoesNotPrompt(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

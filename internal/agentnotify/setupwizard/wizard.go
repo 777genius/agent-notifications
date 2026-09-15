@@ -337,9 +337,10 @@ func evaluate(ctx context.Context, req *Request, requireYes bool) evaluated {
 		out.Outcome, out.Reason = "invalid", err.Error()
 		return evaluated{out: out, err: ErrRefused, stop: true}
 	}
+	// Inspect with omitted --agents reports both wizard clients (§9.2).
 	if req.Action == ActionInspect && len(agents) == 0 {
-		out.Outcome, out.Reason = "cancelled", "empty_selection"
-		return evaluated{out: out, stop: true}
+		agents = []portable.Integration{portable.Claude, portable.Codex}
+		req.Agents = []string{string(portable.Claude), string(portable.Codex)}
 	}
 	var snap installruntime.InstalledSnapshot
 	haveSnap := false
