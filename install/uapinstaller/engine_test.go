@@ -3018,6 +3018,120 @@ func TestUpdateAndRepairRefusePendingJournalWithoutRecovering(t *testing.T) {
 	}
 }
 
+func TestRemoveRefusesPendingJournalWithoutRecovering(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "00000000-0000-4000-8000-0000000000e1"
+	installed, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: id, OperationID: "remove-journal-install",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, installed, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = installed.Close()
+	receipt := plantOpenJournal(t, eng, "remove-pending")
+	prepared, err := eng.Prepare(ctx, Request{
+		Operation: OpRemove, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: id, OperationID: "remove-journal-blocked",
+		ExternalUninstalled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := eng.Apply(ctx, prepared, Decision{Confirmed: true})
+	_ = prepared.Close()
+	if !errors.Is(err, ErrRecoveryRequired) || result.Outcome != OutcomeRecovery {
+		t.Fatalf("pending journal remove: %+v %v", result, err)
+	}
+	open, listErr := dirswap.Manager{JournalDir: eng.cfg.OperationsDir}.ListOpen()
+	if listErr != nil || len(open) != 1 || open[0].OperationID != receipt.OperationID {
+		t.Fatalf("remove recovered journal: %+v %v", open, listErr)
+	}
+}
+
+func TestRemoveGroupRefusesPendingJournalWithoutRecovering(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(base, "codex-config")
+	claudeConfig := filepath.Join(base, "claude-config")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eng, err := New(Config{
+		StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe,
+		Runner: listingRunner{configRoot: claudeConfig},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "00000000-0000-4000-8000-0000000000e2"
+	installed, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, InstallationID: id, OperationID: "remove-group-journal-install",
+		RequiredComponents: []string{"mcp", "skills"}, ClientExecutable: probe,
+		Targets: []ClientTarget{
+			{ClientID: "codex", ClientConfigRoot: codexConfig, ClientExecutable: probe},
+			{ClientID: "claude", ClientConfigRoot: claudeConfig, ClientExecutable: probe},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, installed, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = installed.Close()
+	receipt := plantOpenJournal(t, eng, "remove-group-pending")
+	prepared, err := eng.Prepare(ctx, Request{
+		Operation: OpRemove, InstallationID: id, OperationID: "remove-group-journal-blocked",
+		ClientExecutable: probe,
+		Targets: []ClientTarget{
+			{ClientID: "codex", ClientConfigRoot: codexConfig, ClientExecutable: probe, ExternalUninstalled: true},
+			{ClientID: "claude", ClientConfigRoot: claudeConfig, ClientExecutable: probe},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := eng.Apply(ctx, prepared, Decision{Confirmed: true})
+	_ = prepared.Close()
+	if !errors.Is(err, ErrRecoveryRequired) || result.Outcome != OutcomeRecovery {
+		t.Fatalf("pending journal remove group: %+v %v", result, err)
+	}
+	open, listErr := dirswap.Manager{JournalDir: eng.cfg.OperationsDir}.ListOpen()
+	if listErr != nil || len(open) != 1 || open[0].OperationID != receipt.OperationID {
+		t.Fatalf("remove group recovered journal: %+v %v", open, listErr)
+	}
+}
+
 func TestUpdateStalePlanChanged(t *testing.T) {
 	skipWindowsLauncherExecuteBit(t)
 	ctx := testCtx(t)

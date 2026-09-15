@@ -503,6 +503,8 @@ func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest)
 	return out, nil
 }
 
+// RemoveGroup uninstalls both clients in one UAP RemoveGroup. It does not
+// recover journals (§7.5); callers recover first when they own that step.
 func (m Materializer) RemoveGroup(ctx context.Context, reqs []MaterializeRequest) ([]GroupRemoveResult, error) {
 	if ctx == nil || len(reqs) != 2 {
 		return nil, ErrPreflight
@@ -840,6 +842,8 @@ func (m Materializer) GuardSecondClient(ctx context.Context, req MaterializeRequ
 	return nil
 }
 
+// Remove uninstalls one live client. It does not recover journals (§7.5);
+// the wizard recovers explicitly before calling Remove.
 func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error {
 	if ctx == nil {
 		return ErrPreflight

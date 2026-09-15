@@ -1491,6 +1491,7 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 			}
 		}
 		req.InstallationID = id.InstallationID
+		// §7.5: Recover is an application step, not Prepare(remove).
 		if err := recoverWizardJournals(ctx, mat, id, req, notifyAgents); err != nil {
 			out.Outcome, out.Reason = "incomplete", "recovery_required"
 			return out, err

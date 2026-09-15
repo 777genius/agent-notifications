@@ -587,6 +587,79 @@ func TestRemoveDoesNotRecoverPendingJournal(t *testing.T) {
 	}
 }
 
+func TestRemoveGroupDoesNotRecoverPendingJournal(t *testing.T) {
+	codex, ledger := bindingFixture(t)
+	probe := buildProbe(t)
+	root := filepath.Dir(codex.ControlRoot)
+	pkg := filepath.Join(root, "package source with spaces")
+	writePackage(t, pkg, probe)
+	uapRoot := filepath.Join(root, "uap")
+	ops := filepath.Join(uapRoot, "state", "operations")
+	claudeConfig := filepath.Join(root, "home", "claude config")
+	codexConfig := filepath.Join(root, "home", "codex config")
+	for _, dir := range []string{claudeConfig, codexConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mat, err := NewMaterializer(UAPRoots{
+		StateFile:        filepath.Join(uapRoot, "state", "state-v2.json"),
+		LockFile:         filepath.Join(uapRoot, "state", "mutation.lock"),
+		OperationsDir:    ops,
+		PluginDataBase:   filepath.Join(uapRoot, "plugin data"),
+		ManagedRoot:      filepath.Join(uapRoot, "managed"),
+		HelperExecutable: probe,
+		ClaudeRunner:     listingRunner{configRoot: claudeConfig},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := Identity{
+		InstallationID: "00000000-0000-4000-8000-0000000000e3",
+		ComponentID:    codex.ComponentID, Owner: codex.Owner, ScopeRoot: codex.ScopeRoot,
+		ControlRoot: codex.ControlRoot, GlobalConfig: codex.GlobalConfig, RuntimeRoot: codex.RuntimeRoot,
+		Primary: codex.Primary,
+	}
+	if _, err := mat.ApplyGroup(testCtx(t), []MaterializeRequest{
+		{
+			Identity: id, Integration: portable.Codex, ExpectedGeneration: ledger.Generation,
+			PackageRoot: pkg, ClientConfigRoot: codexConfig, ClientExecutable: probe,
+			OperationID: "portable-group-remove-journal-install",
+		},
+		{
+			Identity: id, Integration: portable.Claude, ExpectedGeneration: ledger.Generation,
+			PackageRoot: pkg, ClientConfigRoot: claudeConfig, ClientExecutable: probe,
+			OperationID: "portable-group-remove-journal-install",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	plantUAPPendingJournal(t, ops, filepath.Join(uapRoot, "managed"), "remove-group-pending-journal")
+	snap, err := installruntime.ReadInstalledSnapshot(codex.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = mat.RemoveGroup(testCtx(t), []MaterializeRequest{
+		{
+			Identity: id, Integration: portable.Codex, ExpectedGeneration: snap.Ledger.Generation,
+			ClientConfigRoot: codexConfig, ClientExecutable: probe, ExternalUninstalled: true,
+			OperationID: "portable-group-remove-blocked",
+		},
+		{
+			Identity: id, Integration: portable.Claude, ExpectedGeneration: snap.Ledger.Generation,
+			ClientConfigRoot: claudeConfig, ClientExecutable: probe,
+			OperationID: "portable-group-remove-blocked",
+		},
+	})
+	if !errors.Is(err, uapinstaller.ErrRecoveryRequired) {
+		t.Fatalf("remove group recovered or ignored journal: %v", err)
+	}
+	open, listErr := dirswap.Manager{JournalDir: ops}.ListOpen()
+	if listErr != nil || len(open) != 1 || open[0].OperationID != "remove-group-pending-journal" {
+		t.Fatalf("remove group recovered journal: %+v %v", open, listErr)
+	}
+}
+
 func TestGuardSecondClientAllowsCopiedSameDigest(t *testing.T) {
 	codex, ledger := bindingFixture(t)
 	probe := buildProbe(t)

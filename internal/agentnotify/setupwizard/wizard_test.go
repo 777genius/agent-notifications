@@ -944,6 +944,97 @@ func TestWizardInstallRecoversKernelThenUAP(t *testing.T) {
 	}
 }
 
+func TestWizardUninstallRecoversPendingJournal(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	plantWizardJournal(t, control)
+	req.Action = ActionUninstall
+	req.ExternalUninstalled = true
+	removed, err := Run(ctx, req)
+	if err != nil || removed.Outcome != "completed" {
+		t.Fatalf("uninstall recover: %+v %v", removed, err)
+	}
+	if _, err := os.Lstat(wizardPendingJournalPath(control)); !os.IsNotExist(err) {
+		t.Fatalf("uninstall left pending journal: %v", err)
+	}
+	req.Action = ActionInspect
+	req.Yes = false
+	view, err := Run(ctx, req)
+	if err != nil || view.Outcome == "recovery_required" || view.Reason == "recovery_required" {
+		t.Fatalf("inspect after uninstall recover: %+v %v", view, err)
+	}
+	for _, target := range view.Targets {
+		if target.Unit == "agent-notify" && target.Outcome == "installed" {
+			t.Fatalf("portable binding survived uninstall recover: %+v", view.Targets)
+		}
+	}
+}
+
+func TestWizardUninstallRecoversKernelThenUAP(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	hook := plantWizardKernelJournal(t, ctx, control, runtime)
+	plantWizardJournal(t, control)
+	req.Action = ActionUninstall
+	req.ExternalUninstalled = true
+	removed, err := Run(ctx, req)
+	if err != nil || removed.Outcome != "completed" {
+		t.Fatalf("both journals uninstall: %+v %v", removed, err)
+	}
+	if _, err := os.Lstat(filepath.Join(control, "transaction.json")); !os.IsNotExist(err) {
+		t.Fatal("kernel journal survived uninstall recover")
+	}
+	if _, err := os.Lstat(wizardPendingJournalPath(control)); !os.IsNotExist(err) {
+		t.Fatalf("UAP journal survived uninstall recover: %v", err)
+	}
+	got, err := os.ReadFile(hook)
+	if err != nil || string(got) != "new" {
+		t.Fatalf("kernel recover did not finish: %s %v", got, err)
+	}
+}
+
 func TestWizardHooksOnlyInstallRecoversKernelJournal(t *testing.T) {
 	ctx := testCtx(t)
 	envHome := t.TempDir()
