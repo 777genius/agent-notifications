@@ -1634,6 +1634,9 @@ setup_agent_notify_wizard() {
         fi
         i=$((i + 1))
     done
+    if [ -z "$wizard_codex_home" ] && [ -n "${CODEX_HOME:-}" ]; then
+        wizard_codex_home="$CODEX_HOME"
+    fi
     plugin_root="$PLUGIN_ROOT"
     if [ -z "$plugin_root" ]; then
         plugin_root=$(cd "$(dirname "$CONFIGURE_BINARY")/.." && pwd)
