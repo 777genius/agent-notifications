@@ -3517,6 +3517,14 @@ func TestWizardInstallMixedLiveDoesNotReplaceOlderSibling(t *testing.T) {
 	if strings.Contains(plan.Text, "data_retained=true") || strings.Contains(plan.Text, "metadata-only") {
 		t.Fatalf("live mixed install plan looked retained: %s", plan.Text)
 	}
+	var promptOut strings.Builder
+	ok, err := (&LinePrompt{In: strings.NewReader("n\n"), Out: &promptOut}).Confirm(ctx, plan.Text)
+	if err != nil || ok {
+		t.Fatalf("mixed confirm: ok=%t err=%v text=%s", ok, err, promptOut.String())
+	}
+	if !strings.Contains(promptOut.String(), "required-update=codex") || strings.Contains(promptOut.String(), "2-add:") {
+		t.Fatalf("tty omitted live older sibling: %s", promptOut.String())
+	}
 	view, err = Run(ctx, inspectReq)
 	if err != nil {
 		t.Fatalf("inspect after blocked install: %+v %v", view, err)
@@ -3578,6 +3586,14 @@ func TestWizardInstallBothLiveBehindRequiresUpdateBoth(t *testing.T) {
 	}
 	if !strings.Contains(plan.Text, "required-update=claude,codex") || strings.Contains(plan.Text, "2-add:") {
 		t.Fatalf("behind plan looked like add: %s", plan.Text)
+	}
+	var promptOut strings.Builder
+	ok, err := (&LinePrompt{In: strings.NewReader("n\n"), Out: &promptOut}).Confirm(ctx, plan.Text)
+	if err != nil || ok {
+		t.Fatalf("behind confirm: ok=%t err=%v text=%s", ok, err, promptOut.String())
+	}
+	if !strings.Contains(promptOut.String(), "required-update=claude,codex") || strings.Contains(promptOut.String(), "2-add:") {
+		t.Fatalf("tty omitted behind siblings: %s", promptOut.String())
 	}
 	inspectReq := req
 	inspectReq.Action = ActionInspect
