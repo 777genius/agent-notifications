@@ -7,7 +7,8 @@ client uses `Request.ClientID`. Claude+Codex together uses `Request.Targets`
 with the same operation verb. `install-group` as an operation name is invalid.
 Two PackageRoot values in one install or update group stay unpublished.
 Repair of mixed live revisions uses per-target PackageRoot so each binding
-keeps its exact recorded digest.
+keeps its exact recorded digest. Group Repair with one PackageRoot across
+mixed live revisions is `ErrUpdateRequired` before effects.
 
 Update and repair of a missing owned binding return `ErrNotInstalled` before
 mutation. Repair rematerializes a missing target of a live binding.

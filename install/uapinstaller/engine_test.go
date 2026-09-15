@@ -2806,6 +2806,46 @@ func TestRepairGroupMixedRevisionsUsesPerTargetPackage(t *testing.T) {
 	}
 }
 
+func TestRepairGroupSamePackageRefusesOlderSibling(t *testing.T) {
+	ctx, eng, _, pkg, probe, codexConfig, claudeConfig := newBothClientSandbox(t)
+	id := "00000000-0000-4000-8000-0000000000d3"
+	r1 := filepath.Join(filepath.Dir(pkg), "package-r1")
+	copyPackage(t, pkg, r1)
+	installBothClients(t, ctx, eng, r1, probe, id, "same-root-mixed-repair-install", bothClientTargets(codexConfig, claudeConfig, probe))
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"sample-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := eng.Prepare(ctx, Request{
+		Operation: OpUpdate, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: codexConfig,
+		ClientExecutable: probe, InstallationID: id, OperationID: "same-root-mixed-codex-update",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := eng.Apply(ctx, updated, Decision{Confirmed: true})
+	_ = updated.Close()
+	if err != nil || got.Outcome != OutcomeCompleted {
+		t.Fatalf("codex update: %+v %v", got, err)
+	}
+	before, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = eng.Prepare(ctx, Request{
+		Operation: OpRepair, PackageRoot: pkg, InstallationID: id, OperationID: "same-root-mixed-repair",
+		RequiredComponents: []string{"mcp", "skills"}, ClientExecutable: probe,
+		Targets: bothClientTargets(codexConfig, claudeConfig, probe),
+	})
+	if !errors.Is(err, ErrUpdateRequired) {
+		t.Fatalf("same-root mixed repair: %v", err)
+	}
+	after, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("same-root mixed repair mutated state")
+	}
+}
+
 func TestUpdateOneClientRefusesWhenSiblingProfileUnknown(t *testing.T) {
 	ctx, eng, _, pkg, probe, codexConfig, claudeConfig := newBothClientSandbox(t)
 	id := "00000000-0000-4000-8000-0000000000c6"
