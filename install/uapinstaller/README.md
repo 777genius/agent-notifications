@@ -5,6 +5,7 @@ Public process-local installer API for a standard local Agent Plugins package
 for **install**, **update**, **repair**, and **remove** are published. One
 client uses `Request.ClientID`. Claude+Codex together uses `Request.Targets`
 with the same operation verb. `install-group` as an operation name is invalid.
+Two PackageRoot values in one group stay unpublished.
 
 Update and repair of a missing owned binding return `ErrNotInstalled` before
 mutation. Repair rematerializes a missing target of a live binding.
