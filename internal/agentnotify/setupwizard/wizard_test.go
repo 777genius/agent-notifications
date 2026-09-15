@@ -4259,7 +4259,7 @@ func TestWizardRetainedDifferentDigestRequiresUpdate(t *testing.T) {
 	}
 }
 
-func prepareRetainedCodexWizard(t *testing.T, ctx context.Context) (Request, string, string) {
+func prepareRetainedCodexWizard(t *testing.T, ctx context.Context) (Request, string, string, string) {
 	t.Helper()
 	control, runtime, global, _, _ := managedRuntime(t)
 	probe := buildProbe(t)
@@ -4309,12 +4309,12 @@ func prepareRetainedCodexWizard(t *testing.T, ctx context.Context) (Request, str
 	req.ExternalUninstalled = false
 	req.Yes = false
 	req.InstallationID = firstID
-	return req, statePath, sentinel
+	return req, statePath, sentinel, pkg
 }
 
 func TestWizardPlanRetainedDifferentDigestShowsTwoPhases(t *testing.T) {
 	ctx := testCtx(t)
-	req, statePath, sentinel := prepareRetainedCodexWizard(t, ctx)
+	req, statePath, sentinel, _ := prepareRetainedCodexWizard(t, ctx)
 	before, err := os.ReadFile(statePath)
 	if err != nil {
 		t.Fatal(err)
@@ -4341,7 +4341,7 @@ func TestWizardPlanRetainedDifferentDigestShowsTwoPhases(t *testing.T) {
 
 func TestWizardPlanRetainedUpdateIsMetadataOnly(t *testing.T) {
 	ctx := testCtx(t)
-	req, statePath, sentinel := prepareRetainedCodexWizard(t, ctx)
+	req, statePath, sentinel, _ := prepareRetainedCodexWizard(t, ctx)
 	req.Action = ActionUpdate
 	req.Yes = false
 	before, err := os.ReadFile(statePath)
@@ -4367,6 +4367,51 @@ func TestWizardPlanRetainedUpdateIsMetadataOnly(t *testing.T) {
 	after, err := os.ReadFile(statePath)
 	if err != nil || !bytes.Equal(before, after) {
 		t.Fatal("retained update plan rewrote state")
+	}
+	body, err := os.ReadFile(sentinel)
+	if err != nil || string(body) != "retain\n" {
+		t.Fatalf("PLUGIN_DATA sentinel: %s %v", body, err)
+	}
+}
+
+func TestWizardPlanRetainedSameRevisionIsReady(t *testing.T) {
+	ctx := testCtx(t)
+	req, statePath, sentinel, origPkg := prepareRetainedCodexWizard(t, ctx)
+	req.PackageRoot = origPkg
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := Plan(ctx, req)
+	if err != nil || !plan.Ready {
+		t.Fatalf("same-revision retained plan: %+v %v", plan, err)
+	}
+	if strings.Contains(plan.Text, "required-update=") || strings.Contains(plan.Text, "metadata-only") {
+		t.Fatalf("same-revision reinstall showed update: %s", plan.Text)
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("same-revision plan rewrote state")
+	}
+	body, err := os.ReadFile(sentinel)
+	if err != nil || string(body) != "retain\n" {
+		t.Fatalf("PLUGIN_DATA sentinel: %s %v", body, err)
+	}
+}
+
+func TestWizardRetainedUpdateReportsProgress(t *testing.T) {
+	ctx := testCtx(t)
+	req, _, sentinel, _ := prepareRetainedCodexWizard(t, ctx)
+	req.Action = ActionUpdate
+	req.Yes = true
+	var phases []string
+	req.Progress = func(phase string) { phases = append(phases, phase) }
+	got, err := Run(ctx, req)
+	if err != nil || got.Outcome != "completed" || got.Reason != "retained_source_updated" {
+		t.Fatalf("retained update: %+v %v", got, err)
+	}
+	if strings.Join(phases, ",") != "prepare,preflight,complete" {
+		t.Fatalf("retained update phases: %v", phases)
 	}
 	body, err := os.ReadFile(sentinel)
 	if err != nil || string(body) != "retain\n" {

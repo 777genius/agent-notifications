@@ -62,7 +62,9 @@ client deactivation. Last-client remove retains PLUGIN_DATA and reports
 still installed. `LocalPackageTreeDigest` reports that same canonical digest
 without writing state. Retained metadata Update of a different digest is
 `SwitchRetained`; a later Add is a separate Install. Plan of that Update is
-metadata-only. Plan of Install onto retained r1 with package r2 is
+metadata-only. SwitchRetained Progress is prepare/preflight/commit/complete
+and does not report stage, activate, or verify. Cancelled SwitchRetained
+reports no Progress. Plan of Install onto retained r1 with package r2 is
 `ErrUpdateRequired` and shows both phases before confirmation. Plan includes the helper protocol
 version and SHA-256 of the helper bytes; UAP managedstdio stores the same
 digest. Result.NextActions cover recover, update, reprepare, and activate after

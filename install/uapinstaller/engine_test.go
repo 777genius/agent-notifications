@@ -2466,6 +2466,89 @@ func TestSwitchRetainedCopiedPackageWithNewDigest(t *testing.T) {
 	}
 }
 
+func TestSwitchRetainedReportsMetadataProgress(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	var phases []ProgressPhase
+	eng, err := New(Config{
+		StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe,
+		Progress: func(event ProgressEvent) { phases = append(phases, event.Phase) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "00000000-0000-4000-8000-0000000000db"
+	installed, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: id, OperationID: "retained-progress-install",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, installed, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = installed.Close()
+	rm, err := eng.Prepare(ctx, Request{
+		Operation: OpRemove, ClientID: "codex", ClientConfigRoot: config, ClientExecutable: probe,
+		InstallationID: id, OperationID: "retained-progress-remove", ExternalUninstalled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, rm, Decision{Confirmed: true}); err != nil {
+		t.Fatal(err)
+	}
+	_ = rm.Close()
+	other := filepath.Join(base, "other-package")
+	writePackage(t, other, probe)
+	if err := os.WriteFile(filepath.Join(other, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"sample-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	phases = nil
+	cancelled, err := eng.SwitchRetained(ctx, Request{
+		PackageRoot: other, InstallationID: id, OperationID: "retained-progress-cancel",
+	}, Decision{})
+	if !errors.Is(err, ErrCancelled) || cancelled.Outcome != OutcomeCancelled {
+		t.Fatalf("cancelled switch: %+v %v", cancelled, err)
+	}
+	if len(phases) != 0 {
+		t.Fatalf("cancelled switch reported progress: %v", phases)
+	}
+	switched, err := eng.SwitchRetained(ctx, Request{
+		PackageRoot: other, InstallationID: id, OperationID: "retained-progress-apply",
+	}, Decision{Confirmed: true})
+	if err != nil || switched.Outcome != OutcomeCompleted {
+		t.Fatalf("switch retained: %+v %v", switched, err)
+	}
+	joined := ""
+	for _, phase := range phases {
+		joined += string(phase) + ","
+	}
+	for _, want := range []ProgressPhase{ProgressPrepare, ProgressPreflight, ProgressCommit, ProgressComplete} {
+		if !strings.Contains(joined, string(want)+",") {
+			t.Fatalf("missing retained phase %s in %s", want, joined)
+		}
+	}
+	for _, blocked := range []ProgressPhase{ProgressStage, ProgressActivate, ProgressVerify} {
+		if strings.Contains(joined, string(blocked)+",") {
+			t.Fatalf("metadata switch reported %s: %s", blocked, joined)
+		}
+	}
+}
+
 func TestRepairRematerializesMissingTarget(t *testing.T) {
 	skipWindowsLauncherExecuteBit(t)
 	ctx := testCtx(t)
@@ -5087,6 +5170,32 @@ func TestLocalPackageTreeDigestMatchesPrepareAndWritesNoState(t *testing.T) {
 	_ = prepared.Close()
 	if got != digest {
 		t.Fatalf("digest %s vs plan %s", digest, got)
+	}
+}
+
+func TestLocalPackageTreeDigestHonorsAssess(t *testing.T) {
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	eng, err := New(Config{
+		StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe,
+		Assess: func(_ context.Context, _, digest string) (Assessment, error) {
+			return Assessment{TreeDigest: digest, Outcome: AssessmentBlock, Reason: "block-digest"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.LocalPackageTreeDigest(ctx, pkg); !errors.Is(err, ErrAssessmentRejected) {
+		t.Fatalf("blocked digest: %v", err)
+	}
+	if _, err := os.Lstat(eng.cfg.StateFile); !os.IsNotExist(err) {
+		t.Fatal("blocked digest wrote state")
 	}
 }
 
