@@ -57,7 +57,7 @@ supported Claude/Codex user-scope metadata, executable presence, and current
 bindings without creating state or executing found files. Inspect and Result
 expose per-client materialization/activation/authentication/verification and
 required components. The external sample's flagged path runs install → inspect
-→ repeat → repair → remove.
+→ repeat → update → repair → remove.
 
 Codex artifact removal requires `Request.ExternalUninstalled`. Confirmed Apply
 does not invent that attestation. A missing or relative helper is rejected
@@ -80,7 +80,7 @@ GOWORK=off go run .
 Or clone `example/`, run `GOWORK=off go get` of the same package path, then
 `GOWORK=off go run .`. A successful import prints `external import ok` without
 creating state. Pass `-package`, `-state`, `-config`, `-helper`, and
-`-client-exe` to run install → inspect → repeat → remove.
+`-client-exe` to run install → inspect → repeat → update → repair → remove.
 
 Long-term this package moves to
 `github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/installer`.

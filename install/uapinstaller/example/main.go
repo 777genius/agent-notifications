@@ -3,7 +3,7 @@
 //
 // Default invocation only constructs the public Engine to prove the package
 // imports without a workspace, replace directive, or raw Store/Kernel types.
-// Passing explicit roots runs install → inspect → no-op repeat → repair → remove.
+// Passing explicit roots runs install → inspect → no-op repeat → update → repair → remove.
 package main
 
 import (
@@ -76,6 +76,20 @@ func runDemo(state, pkg, config, helper, client string) error {
 		return err
 	}
 	fmt.Printf("repeat=%s no-change=%t\n", repeat.Outcome, repeat.NoChange)
+	updated, err := eng.Prepare(ctx, uapinstaller.Request{
+		Operation: uapinstaller.OpUpdate, PackageRoot: pkg, ClientID: "codex",
+		ClientConfigRoot: config, ClientExecutable: client, InstallationID: req.InstallationID,
+		OperationID: "sample-update", RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = updated.Close() }()
+	update, err := eng.Apply(ctx, updated, uapinstaller.Decision{Confirmed: true})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("update=%s no-change=%t\n", update.Outcome, update.NoChange)
 	repaired, err := eng.Prepare(ctx, uapinstaller.Request{
 		Operation: uapinstaller.OpRepair, PackageRoot: pkg, ClientID: "codex",
 		ClientConfigRoot: config, ClientExecutable: client, InstallationID: req.InstallationID,
