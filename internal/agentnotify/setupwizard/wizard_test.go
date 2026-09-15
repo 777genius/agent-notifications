@@ -351,6 +351,39 @@ func TestWizardRunRejectsReservedBindingIDDrift(t *testing.T) {
 	}
 }
 
+func TestWizardRunRejectsSecondClientBindingIDDrift(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	claudeConfig := filepath.Join(filepath.Dir(control), "claude-profile")
+	for _, dir := range []string{codexConfig, claudeConfig, filepath.Join(filepath.Dir(control), "scope")} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex", "claude"}, Yes: true,
+		Hooks: &off, AgentNotify: boolPtr(true),
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClaudeConfig: claudeConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot:    filepath.Join(filepath.Dir(control), "scope"),
+		ClaudeRunner: listingRunner{configRoot: claudeConfig},
+		BindingIDs:   map[string]string{"claude": "not-the-reserved-binding"},
+	}
+	got, err := Run(ctx, req)
+	if err == nil || got.Outcome != "incomplete" || got.Reason != "binding_id_drift" {
+		t.Fatalf("second client binding drift: %+v %v", got, err)
+	}
+	plan, err := Plan(ctx, req)
+	if plan.Ready || plan.Result.Reason != "binding_id_drift" {
+		t.Fatalf("plan second client binding drift: %+v %v", plan, err)
+	}
+}
+
 func TestPlanOmittedPackageRequiresAcquisition(t *testing.T) {
 	control, runtime, global, primary, _ := managedRuntime(t)
 	off := false

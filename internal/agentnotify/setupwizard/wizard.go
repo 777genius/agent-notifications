@@ -233,39 +233,29 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 					break
 				}
 			}
-			for _, agent := range ev.notifyAgents {
-				preview, err := previewNotifyPlan(ctx, acquired, ev.snap, ev.runtimeRoot, agent)
-				if err != nil {
-					mapped, mappedErr := mapPreviewFailure(req, agent, mat, id, err, ev.out)
+			failed, err, reason := bindNotifyPreviews(ctx, &req, acquired, ev.snap, ev.runtimeRoot, ev.notifyAgents)
+			if err != nil {
+				if reason == "" {
+					mapped, mappedErr := mapPreviewFailure(req, failed, mat, id, err, ev.out)
 					plan.Result = attachCommand(req, mapped)
 					return plan, mappedErr
 				}
-				if reserved := req.BindingIDs[string(agent)]; reserved != "" && preview.BindingID != "" && preview.BindingID != reserved {
-					ev.out.Outcome, ev.out.Reason = "incomplete", "binding_id_drift"
-					plan.Result = attachCommand(req, ev.out)
-					return plan, ErrRefused
-				}
-				if preview.TreeDigest != "" {
-					text += " source-digest=" + preview.TreeDigest
-				}
-				if preview.HelperDigest != "" {
-					text += " helper-digest=" + preview.HelperDigest
-				}
-				if preview.HelperVersion != "" {
-					text += " helper-version=" + preview.HelperVersion
-				}
-				if err := bindSourceIdentity(&req, preview); err != nil {
-					ev.out.Outcome, ev.out.Reason = "incomplete", "source_identity_drift"
-					plan.Result = attachCommand(req, ev.out)
-					return plan, err
-				}
-				acquired.TreeDigest = req.TreeDigest
-				acquired.HelperDigest = req.HelperDigest
-				acquired.HelperVersion = req.HelperVersion
-				if preview.TreeDigest != "" || preview.HelperDigest != "" {
-					break
-				}
+				ev.out.Outcome, ev.out.Reason = "incomplete", reason
+				plan.Result = attachCommand(req, ev.out)
+				return plan, err
 			}
+			if req.TreeDigest != "" {
+				text += " source-digest=" + req.TreeDigest
+			}
+			if req.HelperDigest != "" {
+				text += " helper-digest=" + req.HelperDigest
+			}
+			if req.HelperVersion != "" {
+				text += " helper-version=" + req.HelperVersion
+			}
+			acquired.TreeDigest = req.TreeDigest
+			acquired.HelperDigest = req.HelperDigest
+			acquired.HelperVersion = req.HelperVersion
 		}
 	}
 	if view, err := inspectUAPState(ctx, req); err == nil && view.Recovery.Required {
@@ -901,16 +891,12 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		}
 	}
 	if req.Action == ActionInstall && len(notifyAgents) > 0 {
-		preview, err := previewNotifyPlan(ctx, req, snap, runtimeRoot, notifyAgents[0])
+		failed, err, reason := bindNotifyPreviews(ctx, &req, req, snap, runtimeRoot, notifyAgents)
 		if err != nil {
-			return mapPreviewFailure(req, notifyAgents[0], mat, id, err, out)
-		}
-		if reserved := req.BindingIDs[string(notifyAgents[0])]; reserved != "" && preview.BindingID != "" && preview.BindingID != reserved {
-			out.Outcome, out.Reason = "incomplete", "binding_id_drift"
-			return out, ErrRefused
-		}
-		if err := bindSourceIdentity(&req, preview); err != nil {
-			out.Outcome, out.Reason = "incomplete", "source_identity_drift"
+			if reason == "" {
+				return mapPreviewFailure(req, failed, mat, id, err, out)
+			}
+			out.Outcome, out.Reason = "incomplete", reason
 			return out, err
 		}
 	}
@@ -1432,6 +1418,28 @@ func reserveClientBindings(req *Request, mat portablesetup.Materializer, agents 
 	}
 	req.BindingIDs = bindings
 	return nil
+}
+
+func bindNotifyPreviews(ctx context.Context, req *Request, previewReq Request, snap installruntime.InstalledSnapshot, runtimeRoot string, notifyAgents []portable.Integration) (portable.Integration, error, string) {
+	if req == nil {
+		return "", nil, ""
+	}
+	for _, agent := range notifyAgents {
+		preview, err := previewNotifyPlan(ctx, previewReq, snap, runtimeRoot, agent)
+		if err != nil {
+			return agent, err, ""
+		}
+		if reserved := req.BindingIDs[string(agent)]; reserved != "" && preview.BindingID != "" && preview.BindingID != reserved {
+			return agent, ErrRefused, "binding_id_drift"
+		}
+		if err := bindSourceIdentity(req, preview); err != nil {
+			return agent, err, "source_identity_drift"
+		}
+		previewReq.TreeDigest = req.TreeDigest
+		previewReq.HelperDigest = req.HelperDigest
+		previewReq.HelperVersion = req.HelperVersion
+	}
+	return "", nil, ""
 }
 
 func bindSourceIdentity(req *Request, preview uapinstaller.Plan) error {
