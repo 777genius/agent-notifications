@@ -138,6 +138,54 @@ func TestSetupWizardJSONInspectOmitsAgents(t *testing.T) {
 	}
 }
 
+func TestSetupWizardInspectReportsDiscoveredMCP(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	root := setupCommandRoot(t)
+	control := filepath.Join(root, "control")
+	runtime := filepath.Join(root, "runtime")
+	if _, err := installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: control, RuntimeRoot: runtime, Owner: "existing-installer", ConsumerID: "existing",
+		Files: []installruntime.File{{Path: filepath.Join(runtime, "primary"), Data: []byte("inert"), Mode: 0700}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	codexHome := filepath.Join(root, "codex")
+	if err := os.MkdirAll(codexHome, 0700); err != nil {
+		t.Fatal(err)
+	}
+	mcp := filepath.Join(codexHome, "config.toml")
+	if err := os.WriteFile(mcp, []byte("title = 'keep'\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	flags := []string{"--action", "inspect", "--agents", "codex", "--control-root", control, "--codex-home", codexHome}
+	var out bytes.Buffer
+	code := executeSetupWizardWith(ctx, append(append([]string{}, flags...), "--json"), &out, io.Discard, strings.NewReader(""), false)
+	if code != 0 {
+		t.Fatalf("inspect json: %d %s", code, out.String())
+	}
+	var result setupwizard.Result
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("inspect json: %v %s", err, out.String())
+	}
+	var mcpFile string
+	for _, target := range result.Targets {
+		if target.Unit == "direct-mcp" && target.Client == "codex" {
+			mcpFile = target.ConfigPath
+		}
+	}
+	if mcpFile != mcp {
+		t.Fatalf("inspect json mcp: %s targets=%+v", mcpFile, result.Targets)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, flags, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect text: %d %s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "mcp="+mcp) {
+		t.Fatalf("inspect text omitted mcp: %s", out.String())
+	}
+}
+
 func TestSetupWizardJSONDoesNotPrompt(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
