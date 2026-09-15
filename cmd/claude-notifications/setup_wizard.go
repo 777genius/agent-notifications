@@ -51,8 +51,8 @@ installation is offered inspect, add/reinstall, uninstall, update, or repair.
   --helper PATH               Managed stdio helper (default: runtime primary)
   --scope-root PATH
   --installation-id ID
-  --mcp-config PATH           Owned Codex MCP config to hand off (repeat not supported; use --claude-mcp-config)
-  --claude-mcp-config PATH
+  --mcp-config PATH           Owned Codex MCP config to hand off; omit to use an existing config.toml in the selected Codex profile
+  --claude-mcp-config PATH    Owned Claude MCP config to hand off; omit to use an existing .claude.json in the selected Claude profile
 Update and repair require an existing owned binding; missing files remain repairable. Two Claude+Codex notify installs when both are unbound, and update/repair of two live same-revision bindings, use one group apply. Install onto mixed live revisions requires Update of the behind sibling, not group Add. Install of both when one client is already live on an older revision is Update of that client then Add of the missing one. Mixed Codex uninstall still needs --external-uninstalled before Claude is removed with it.
 `
 
