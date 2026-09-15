@@ -88,3 +88,4 @@ jobs:
       - name: Run install.sh E2E tests (offline + mock)
         run: bash bin/install_e2e_test.sh
         shell: bash
+        timeout-minutes: 10
