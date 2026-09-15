@@ -22,11 +22,11 @@ import (
 const setupWizardHelp = `Usage: claude-notifications setup-notifications wizard [OPTIONS]
 Master for hooks plus portable MCP/skill.
 TTY stdin prompts for agents, an existing-install action, and units when those flags are omitted, then shows a preflight plan and asks for confirmation.
---json never prompts. Progress phases go to stderr. No TTY and no --agents/--yes is invalid, not a hang.
+--json never prompts. Progress phases go to stderr. No TTY and no --agents/--yes is invalid for mutation, not a hang.
 Without --action, a new machine defaults to install; an existing portable
 installation is offered inspect, add/reinstall, or uninstall.
   --action install|uninstall|inspect|update|repair
-  --agents claude,codex
+  --agents claude,codex   Omit on inspect to report both clients
   --hooks true|false          Omit on install to include hooks; omit on uninstall to select all units
   --agent-notify true|false   Omit on install to include portable MCP+skill
   --claude-hooks true|false   Per-client override; mixed Claude/Codex opt-outs are not collapsed
