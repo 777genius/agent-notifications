@@ -25,7 +25,7 @@ TTY stdin prompts for agents, an existing-install action, and units when those f
 --json never prompts. Progress phases go to stderr. No TTY and no --agents/--yes is invalid, not a hang.
 Without --action, a new machine defaults to install; an existing portable
 installation is offered inspect, add/reinstall, or uninstall.
-  --action install|uninstall|inspect
+  --action install|uninstall|inspect|update|repair
   --agents claude,codex
   --hooks true|false          Omit on install to include hooks; omit on uninstall to select all units
   --agent-notify true|false   Omit on install to include portable MCP+skill
@@ -51,7 +51,7 @@ installation is offered inspect, add/reinstall, or uninstall.
   --installation-id ID
   --mcp-config PATH           Owned Codex MCP config to hand off (repeat not supported; use --claude-mcp-config)
   --claude-mcp-config PATH
-Update and repair are not published in this checkpoint.
+Update and repair are accepted then refused as action_not_published until UAP P2.
 `
 
 func executeSetupWizard(ctx context.Context, args []string, out io.Writer) int {

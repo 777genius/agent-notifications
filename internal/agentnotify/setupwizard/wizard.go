@@ -1216,9 +1216,21 @@ func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot st
 	if err != nil {
 		return portablesetup.Identity{}, err
 	}
+	clientID := ""
+	configRoot := ""
+	if len(req.Agents) == 1 {
+		switch req.Agents[0] {
+		case string(portable.Codex), string(portable.Claude):
+			clientID = req.Agents[0]
+			configRoot = clientConfig(req, portable.Integration(req.Agents[0]))
+		}
+	}
 	reserved, err := eng.ReserveIdentity(uapinstaller.IdentityRequest{
-		InstallationID: req.InstallationID,
-		Allocate:       generate,
+		ClientID:         clientID,
+		InstallationID:   req.InstallationID,
+		Allocate:         generate,
+		DeclaredName:     packageDeclaredName(req.PackageRoot),
+		ClientConfigRoot: configRoot,
 	})
 	if err != nil {
 		if errors.Is(err, uapinstaller.ErrAmbiguousInstallations) {

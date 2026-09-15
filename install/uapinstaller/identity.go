@@ -1,9 +1,11 @@
 package uapinstaller
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/planner"
 )
 
 // IdentityRequest selects an installation without capturing a package snapshot.
@@ -11,18 +13,25 @@ type IdentityRequest struct {
 	ClientID       string
 	InstallationID string
 	Allocate       bool
+	// DeclaredName is the plugin.json name used to derive a prospective
+	// BindingID for a new install. Empty leaves BindingID unset until Prepare
+	// or an existing binding is found.
+	DeclaredName     string
+	ClientConfigRoot string
 }
 
-// IdentityReservation is the §7.2 identity view. BindingID is empty until an
-// existing binding is found; a new install still needs Prepare for ActivePath.
+// IdentityReservation is the §7.2 identity view. BindingID and TargetPath are
+// filled from an existing binding, or derived from DeclaredName without
+// staging when this is a new install.
 type IdentityReservation struct {
 	InstallationID string
 	BindingID      string
 	Scope          string
+	TargetPath     string
 }
 
-// ReserveIdentity returns installation and existing-binding IDs without
-// creating TempRoot, capturing a snapshot, or mutating client config.
+// ReserveIdentity returns installation and binding IDs without creating
+// TempRoot, capturing a snapshot, or mutating client config.
 func (e *Engine) ReserveIdentity(req IdentityRequest) (IdentityReservation, error) {
 	switch req.ClientID {
 	case "", string(domain.ClientCodex), string(domain.ClientClaude):
@@ -62,11 +71,27 @@ func (e *Engine) ReserveIdentity(req IdentityRequest) (IdentityReservation, erro
 				continue
 			}
 			out.BindingID = binding.ClientBindingID
+			out.TargetPath = binding.TargetLocator
 			if binding.Scope != "" {
 				out.Scope = binding.Scope
 			}
 			return out, nil
 		}
 	}
+	e.reserveNewBinding(&out, req)
 	return out, nil
+}
+
+func (e *Engine) reserveNewBinding(out *IdentityReservation, req IdentityRequest) {
+	if req.DeclaredName == "" || out.InstallationID == "" || req.ClientID == "" {
+		return
+	}
+	physicalID := domain.ComputePhysicalArtifactID(req.DeclaredName, out.InstallationID)
+	client := domain.DetectedClient{ClientID: domain.ClientID(req.ClientID), Status: domain.DetectionDetected, ConfigRoot: req.ClientConfigRoot}
+	target, err := planner.Planner{ManagedRoot: e.cfg.ManagedRoot}.ResolveTarget(context.Background(), client, domain.ScopeUser, physicalID)
+	if err != nil {
+		return
+	}
+	out.TargetPath = target.ActivePath
+	out.BindingID = domain.ComputeClientBindingID(out.InstallationID, req.ClientID, out.Scope, target.ActivePath)
 }

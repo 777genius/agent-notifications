@@ -268,6 +268,13 @@ func TestPlanReservedIDIsReusedOnRun(t *testing.T) {
 	if err != nil || len(state.Installations) != 1 || state.Installations[0].InstallationID != reserved {
 		t.Fatalf("uap installation: %+v err=%v", state.Installations, err)
 	}
+	bindingID := ""
+	for _, binding := range state.Installations[0].Clients {
+		bindingID = binding.ClientBindingID
+	}
+	if bindingID == "" || !strings.Contains(plan.Text, "binding-id="+bindingID) {
+		t.Fatalf("run used a different binding id: plan=%s installed=%s", plan.Text, bindingID)
+	}
 }
 
 func TestPlanOmittedPackageRequiresAcquisition(t *testing.T) {

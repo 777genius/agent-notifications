@@ -2,6 +2,7 @@ package setupwizard
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -71,6 +72,23 @@ func openLocalPackage(req Request, source string) (string, func(), error) {
 		return "", cleanup, err
 	}
 	return root, func() { _ = os.RemoveAll(parent) }, nil
+}
+
+func packageDeclaredName(root string) string {
+	if !explicitAbs(root) {
+		return ""
+	}
+	body, err := os.ReadFile(filepath.Join(root, "plugin.json"))
+	if err != nil {
+		return ""
+	}
+	var manifest struct {
+		Name string `json:"name"`
+	}
+	if json.Unmarshal(body, &manifest) != nil {
+		return ""
+	}
+	return strings.TrimSpace(manifest.Name)
 }
 
 func uapStateFile(controlRoot string) string {

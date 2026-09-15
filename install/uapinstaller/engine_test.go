@@ -2752,3 +2752,101 @@ func TestReserveIdentityDoesNotStage(t *testing.T) {
 		t.Fatalf("unsupported client: %v", err)
 	}
 }
+
+func TestReserveIdentityBindingIDMatchesPrepare(t *testing.T) {
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	state := filepath.Join(base, "uap")
+	temp := filepath.Join(base, "tmp")
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{StateRoot: state, TempRoot: temp})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reserved, err := eng.ReserveIdentity(IdentityRequest{
+		ClientID: "codex", Allocate: true, DeclaredName: "sample-notify", ClientConfigRoot: config,
+	})
+	if err != nil || reserved.InstallationID == "" || reserved.BindingID == "" || reserved.TargetPath == "" {
+		t.Fatalf("reserve: %+v %v", reserved, err)
+	}
+	if _, err := os.Lstat(temp); !os.IsNotExist(err) {
+		t.Fatal("ReserveIdentity created TempRoot")
+	}
+	prepared, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: reserved.InstallationID,
+		OperationID: "identity-prepare", RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = prepared.Close() }()
+	plan := prepared.Plan()
+	if plan.BindingID != reserved.BindingID || plan.TargetPath != reserved.TargetPath || plan.InstallationID != reserved.InstallationID {
+		t.Fatalf("prepare identity drifted: plan=%+v reserved=%+v", plan, reserved)
+	}
+}
+
+func TestReserveIdentitySurvivesDirectCollision(t *testing.T) {
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	state := filepath.Join(base, "uap")
+	temp := filepath.Join(base, "tmp")
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{StateRoot: state, TempRoot: temp})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reserved, err := eng.ReserveIdentity(IdentityRequest{
+		ClientID: "codex", Allocate: true, DeclaredName: "sample-notify", ClientConfigRoot: config,
+	})
+	if err != nil || reserved.TargetPath == "" {
+		t.Fatalf("reserve: %+v %v", reserved, err)
+	}
+	if err := os.MkdirAll(reserved.TargetPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: reserved.InstallationID,
+		OperationID: "identity-collision", RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err == nil {
+		_ = prepared.Close()
+		t.Fatal("unmanaged collision was accepted")
+	}
+	if !strings.Contains(err.Error(), "unmanaged") {
+		t.Fatalf("collision: %v", err)
+	}
+	if prepared != nil {
+		t.Fatal("failed prepare returned a handle")
+	}
+	again, err := eng.ReserveIdentity(IdentityRequest{
+		ClientID: "codex", InstallationID: reserved.InstallationID, Allocate: true,
+		DeclaredName: "sample-notify", ClientConfigRoot: config,
+	})
+	if err != nil || again.InstallationID != reserved.InstallationID || again.BindingID != reserved.BindingID || again.TargetPath != reserved.TargetPath {
+		t.Fatalf("ids lost after collision: %+v %v", again, err)
+	}
+	if _, err := os.Lstat(eng.cfg.StateFile); !os.IsNotExist(err) {
+		t.Fatal("collision prepare wrote state")
+	}
+}

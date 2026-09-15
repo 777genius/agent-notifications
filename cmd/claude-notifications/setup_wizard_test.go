@@ -137,6 +137,26 @@ func TestSetupWizardTTYShowsDiscoverCapabilities(t *testing.T) {
 	}
 }
 
+func TestSetupWizardUnpublishedUpdateAndRepair(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	root := setupCommandRoot(t)
+	for _, action := range []string{"update", "repair"} {
+		var out bytes.Buffer
+		code := executeSetupWizardWith(ctx, []string{"--action", action, "--agents", "codex", "--yes", "--control-root", root, "--json"}, &out, io.Discard, strings.NewReader(""), false)
+		if code != 1 {
+			t.Fatalf("%s exit: %d %s", action, code, out.String())
+		}
+		var result setupwizard.Result
+		if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+			t.Fatalf("%s json: %v %s", action, err, out.String())
+		}
+		if result.Action != action || result.Outcome != "incomplete" || result.Reason != "action_not_published" {
+			t.Fatalf("%s result: %+v", action, result)
+		}
+	}
+}
+
 func TestParseSetupWizardResolvesEnvOnce(t *testing.T) {
 	envCodex := filepath.Join(t.TempDir(), "env-codex")
 	envClaude := filepath.Join(t.TempDir(), "env-claude")
