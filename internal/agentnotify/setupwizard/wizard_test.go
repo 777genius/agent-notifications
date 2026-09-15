@@ -923,6 +923,21 @@ func TestWizardInstallFromHostAcquisition(t *testing.T) {
 	if err != nil || installed.Outcome != "completed" {
 		t.Fatalf("acquired install: %+v %v", installed, err)
 	}
+	srv.Close()
+	req.ReleaseDownloadRoot = ""
+	statePath := filepath.Join(base, "uap", "state", "state-v2.json")
+	target := liveTargetPath(t, statePath, "codex")
+	if err := os.RemoveAll(target); err != nil {
+		t.Fatal(err)
+	}
+	req.Action = ActionRepair
+	got, err := Run(ctx, req)
+	if err != nil || got.Outcome != "completed" {
+		t.Fatalf("omitted host-acquired repair: %+v %v", got, err)
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("repair did not use durable fetch source: %v", err)
+	}
 }
 
 func TestWizardUpdateChangesLiveRevision(t *testing.T) {
