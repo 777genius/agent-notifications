@@ -96,7 +96,7 @@ swap artifacts to be absent; leftover `.agentplugins-staging-*` or
 not success.
 Inspect and Result expose per-client materialization/activation/authentication/verification and
 required components. The external sample's flagged path runs install → inspect
-→ recover → repeat → update → repair → remove. Passing `-claude-config`
+→ recover → repeat → update → repair → remove → SwitchRetained → reinstall. Passing `-claude-config`
 uses `Request.Targets` for the same verbs on Claude+Codex together.
 
 Codex artifact removal requires `Request.ExternalUninstalled`. Confirmed Apply
@@ -122,7 +122,7 @@ GOWORK=off go run .
 Or clone `example/`, run `GOWORK=off go get` of the same package path, then
 `GOWORK=off go run .`. A successful import prints `external import ok` without
 creating state. Pass `-package`, `-state`, `-config`, `-helper`, and
-`-client-exe` to run install → inspect → recover → repeat → update → repair → remove.
+`-client-exe` to run install → inspect → recover → repeat → update → repair → remove → SwitchRetained → reinstall.
 Inspect prints `inspect-bindings` for the live clients. Add `-claude-config` for the published Claude+Codex group path.
 
 Long-term this package moves to

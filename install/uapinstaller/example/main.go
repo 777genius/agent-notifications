@@ -3,7 +3,8 @@
 //
 // Default invocation only constructs the public Engine to prove the package
 // imports without a workspace, replace directive, or raw Store/Kernel types.
-// Passing explicit roots runs install → inspect → recover → no-op repeat → update → repair → remove.
+// Passing explicit roots runs install → inspect → recover → no-op repeat →
+// update → repair → remove → SwitchRetained → reinstall.
 // Passing -claude-config as well uses Request.Targets for Claude+Codex together.
 package main
 
@@ -180,7 +181,20 @@ func runLifecycle(ctx context.Context, eng *uapinstaller.Engine, install, update
 	if err != nil {
 		return err
 	}
-	fmt.Printf("remove=%s\n", got.Outcome)
+	fmt.Printf("remove=%s data-retained=%t\n", got.Outcome, got.DataRetained)
+	switched, err := eng.SwitchRetained(ctx, uapinstaller.Request{
+		PackageRoot: install.PackageRoot, InstallationID: install.InstallationID,
+		OperationID: "sample-switch-retained",
+	}, uapinstaller.Decision{Confirmed: true})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("switch-retained=%s data-retained=%t\n", switched.Outcome, switched.DataRetained)
+	added, err := applyConfirmed(ctx, eng, install)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("reinstall=%s\n", added.Outcome)
 	return nil
 }
 

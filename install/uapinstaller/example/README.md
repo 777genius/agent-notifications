@@ -10,8 +10,9 @@ GOWORK=off go run .
 
 Prints `external import ok` and does not create `/uapinstaller-sample-state`.
 
-Install → inspect → recover → no-op repeat → update → repair → remove requires
-explicit absolute roots and a standard local package plus helper:
+Install → inspect → recover → no-op repeat → update → repair → remove →
+retained `SwitchRetained` → reinstall requires explicit absolute roots and a
+standard local package plus helper:
 
 ```sh
 GOWORK=off go run . -state /abs/uap -package /abs/pkg -config /abs/config \

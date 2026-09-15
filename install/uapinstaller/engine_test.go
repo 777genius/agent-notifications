@@ -4856,7 +4856,7 @@ func TestExampleModuleStaysExternal(t *testing.T) {
 	if strings.Contains(text, "internal/") || strings.Contains(text, "plugin-kit-ai/install/integrationctl/agentplugins/transaction") {
 		t.Fatal("example imports raw Store/Kernel types")
 	}
-	if !strings.Contains(text, "Recover(") || !strings.Contains(text, "OpUpdate") || !strings.Contains(text, "OpRepair") {
+	if !strings.Contains(text, "Recover(") || !strings.Contains(text, "OpUpdate") || !strings.Contains(text, "OpRepair") || !strings.Contains(text, "SwitchRetained") {
 		t.Fatal("example omits published lifecycle operations")
 	}
 	if !strings.Contains(text, "ClientTarget") || !strings.Contains(text, "Targets:") {
@@ -4924,7 +4924,7 @@ func TestExampleFlaggedPathRunsAgainstLocalModule(t *testing.T) {
 		t.Fatalf("sample: %s %v", out, err)
 	}
 	text := string(out)
-	for _, want := range []string{"discover=", "install=", "inspect-bindings=1", "recover=", "repeat=", "update=", "repair=", "remove="} {
+	for _, want := range []string{"discover=", "install=", "inspect-bindings=1", "recover=", "repeat=", "update=", "repair=", "remove=", "switch-retained=", "reinstall="} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("sample omitted %s:\n%s", want, text)
 		}
