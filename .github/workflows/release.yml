@@ -135,6 +135,21 @@ jobs:
             go build -ldflags="-s -w -H=windowsgui" -trimpath -o "dist/$FOCUS_BINARY" ./cmd/claude-notifications
           fi
 
+      - name: Build version-bound portable package
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          version="${RELEASE_TAG#v}"
+          zip_name="agent-notify-portable-${{ matrix.platform }}-${{ matrix.arch }}.zip"
+          go run ./cmd/build-portable-package \
+            -version "$version" \
+            -os "${{ matrix.platform }}" \
+            -arch "${{ matrix.arch }}" \
+            -executable "dist/${{ matrix.binary }}" \
+            -output "dist/$zip_name" \
+            -workdir "${RUNNER_TEMP}/portable-${{ matrix.platform }}-${{ matrix.arch }}"
+
       - name: Verify macOS deployment target
         if: matrix.platform == 'darwin'
         run: |
@@ -329,6 +344,11 @@ jobs:
               echo "Missing or empty artifact: $focus_binary"
               exit 1
             fi
+          fi
+          portable_zip="agent-notify-portable-${{ matrix.platform }}-${{ matrix.arch }}.zip"
+          if [ ! -s "dist/$portable_zip" ]; then
+            echo "Missing or empty artifact: $portable_zip"
+            exit 1
           fi
         shell: bash
 

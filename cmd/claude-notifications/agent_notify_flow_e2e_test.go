@@ -184,7 +184,11 @@ func TestAgentNotifyIsolatedInstallFlowE2E(t *testing.T) {
 	}
 	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Env = []string{"PLUGIN_DATA=" + got.DataRoot, "PLUGIN_ROOT=" + pluginRoot}
-	cmd.Dir = filepath.Dir(mcpPath)
+	cwd := filepath.Join(f.root, "mcp cwd with spaces")
+	if err := os.MkdirAll(cwd, 0700); err != nil {
+		t.Fatal(err)
+	}
+	cmd.Dir = cwd
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -236,7 +240,6 @@ func TestAgentNotifyIsolatedInstallFlowE2E(t *testing.T) {
 	_ = in.Close()
 	_ = cmd.Wait()
 	done = true
-	cwd := cmd.Dir
 	if err := os.RemoveAll(cwd); err != nil {
 		t.Fatal(err)
 	}
