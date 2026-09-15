@@ -1299,7 +1299,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 			if conflict, handled := pendingIntentConflict(req, err, out); handled {
 				return conflict, err
 			}
-			return portableInstallFailed(notifyAgents[0], req, out, err), err
+			return groupNotifyFailed(notifyAgents, req, out, err), err
 		}
 		if len(got) != len(notifyAgents) {
 			out.Outcome, out.Reason = "incomplete", "portable_install_failed"
@@ -1671,6 +1671,65 @@ func portableInstallFailed(agent portable.Integration, req Request, out Result, 
 		})
 	}
 	return out
+}
+
+func groupNotifyFailed(agents []portable.Integration, req Request, out Result, err error) Result {
+	var persisted portablesetup.ResultError
+	if !errors.As(err, &persisted) || (len(persisted.Result.Targets) == 0 && persisted.Result.Client.ClientID == "") {
+		if len(agents) == 0 {
+			return portableInstallFailed("", req, out, err)
+		}
+		return portableInstallFailed(agents[0], req, out, err)
+	}
+	if errors.Is(err, uapinstaller.ErrNotInstalled) {
+		for _, agent := range agents {
+			out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: "not_installed"})
+		}
+		out.Outcome, out.Reason = "incomplete", "not_installed"
+		return out
+	}
+	committed := false
+	names := make([]string, 0, len(agents))
+	for _, agent := range agents {
+		names = append(names, string(agent))
+		item := groupClientResult(persisted.Result, string(agent))
+		target := TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: err.Error()}
+		if item.Materialization != "" && item.Materialization != string(domain.MaterializationAbsent) {
+			committed = true
+			target.Reason = "activation_incomplete"
+		}
+		out.Targets = append(out.Targets, target)
+	}
+	out.Outcome, out.Reason = "incomplete", "portable_install_failed"
+	if !committed {
+		return out
+	}
+	retry := req
+	retry.Action = ActionInstall
+	retry.Yes = true
+	if explicitAbs(req.ControlRoot) {
+		if intent, readErr := portablesetup.ReadIntent(req.ControlRoot); readErr == nil {
+			retry = retryRequestFromIntent(retry, intent)
+		}
+	}
+	out.Reason = "activation_incomplete"
+	out.NextActions = append(out.NextActions, NextAction{
+		Kind: "activate", Agents: names, Reason: persisted.Result.Reason,
+		Command: RetryCommand(retry),
+	})
+	return out
+}
+
+func groupClientResult(result uapinstaller.Result, clientID string) uapinstaller.ClientResult {
+	for _, item := range result.Targets {
+		if item.ClientID == clientID {
+			return item
+		}
+	}
+	if result.Client.ClientID == clientID {
+		return result.Client
+	}
+	return uapinstaller.ClientResult{}
 }
 
 func pendingIntentConflict(req Request, err error, out Result) (Result, bool) {

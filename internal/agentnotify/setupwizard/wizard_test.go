@@ -4722,6 +4722,75 @@ func TestPortableInstallFailedKeepsActivationIncomplete(t *testing.T) {
 	}
 }
 
+func TestGroupNotifyFailedReportsBothCommittedTargets(t *testing.T) {
+	err := portablesetup.ResultError{
+		Result: uapinstaller.Result{
+			Outcome: uapinstaller.OutcomeIncomplete,
+			Reason:  "host seam refused claude after managed commit",
+			Client: uapinstaller.ClientResult{
+				ClientID:        "codex",
+				Materialization: string(domain.MaterializationMaterialized),
+				Activation:      string(domain.ActivationActive),
+			},
+			Targets: []uapinstaller.ClientResult{
+				{
+					ClientID:        "codex",
+					BindingID:       "bound-codex",
+					Materialization: string(domain.MaterializationMaterialized),
+					Activation:      string(domain.ActivationActive),
+				},
+				{
+					ClientID:        "claude",
+					BindingID:       "bound-claude",
+					Materialization: string(domain.MaterializationMaterialized),
+					Activation:      string(domain.ActivationActive),
+				},
+			},
+		},
+		Err: errors.New("host seam refused claude after managed commit"),
+	}
+	got := groupNotifyFailed(
+		[]portable.Integration{portable.Codex, portable.Claude},
+		Request{Action: ActionInstall, Agents: []string{"codex", "claude"}, ControlRoot: "/tmp/control"},
+		Result{Action: "install"},
+		err,
+	)
+	if got.Outcome != "incomplete" || got.Reason != "activation_incomplete" {
+		t.Fatalf("group incomplete mapping: %+v", got)
+	}
+	if len(got.Targets) != 2 {
+		t.Fatalf("group targets: %+v", got.Targets)
+	}
+	seen := map[string]string{}
+	for _, target := range got.Targets {
+		seen[target.Client] = target.Reason
+		if target.Outcome != "incomplete" || target.Reason != "activation_incomplete" {
+			t.Fatalf("group target: %+v", target)
+		}
+	}
+	if seen["codex"] == "" || seen["claude"] == "" {
+		t.Fatalf("group omitted a committed client: %+v", got.Targets)
+	}
+	if len(got.NextActions) != 1 || got.NextActions[0].Kind != "activate" {
+		t.Fatalf("group activate action: %+v", got.NextActions)
+	}
+	if len(got.NextActions[0].Agents) != 2 || got.NextActions[0].Agents[0] != "codex" || got.NextActions[0].Agents[1] != "claude" {
+		t.Fatalf("group activate agents: %+v", got.NextActions[0].Agents)
+	}
+	if len(got.NextActions[0].Command) < 2 || got.NextActions[0].Command[0] != "setup-notifications" || got.NextActions[0].Command[1] != "wizard" {
+		t.Fatalf("group activate retry command: %v", got.NextActions[0].Command)
+	}
+	plain := groupNotifyFailed(
+		[]portable.Integration{portable.Codex, portable.Claude},
+		Request{Action: ActionInstall, Agents: []string{"codex", "claude"}},
+		Result{Action: "install"},
+		errors.New("missing helper"),
+	)
+	if plain.Reason != "portable_install_failed" || len(plain.Targets) != 1 || len(plain.NextActions) != 0 {
+		t.Fatalf("group pre-commit failure: %+v", plain)
+	}
+}
+
 func TestWizardCodexLiveProfileConflict(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, _, _ := managedRuntime(t)
