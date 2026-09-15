@@ -37,10 +37,7 @@ func (e *Engine) observe() (Inspection, error) {
 		}
 		for _, binding := range installation.Clients {
 			receipt := installation.DataReceipts[binding.DataReceiptID]
-			digest := installation.Source.TreeDigest
-			if binding.PackageRevision != nil && binding.PackageRevision.TreeDigest != "" {
-				digest = binding.PackageRevision.TreeDigest
-			}
+			digest := recordedBindingDigest(binding, installation.Source.TreeDigest)
 			item.Bindings = append(item.Bindings, InspectedBinding{
 				ClientID: binding.ClientID, BindingID: binding.ClientBindingID, Scope: binding.Scope,
 				TargetPath: binding.TargetLocator, DataRoot: receipt.Locator, Profile: liveProfile(receipt.Locator, binding.ClientID),
@@ -288,4 +285,33 @@ func classifyRecovery(before, after RecoveryObservation, observedAfter bool, rec
 		place(receipt, "receipt|"+receipt.OperationID+"|"+receipt.Phase+"|"+receipt.BindingID)
 	}
 	return report
+}
+
+func recordedBindingDigest(binding domain.ClientBinding, fallback string) string {
+	if binding.PackageRevision != nil && binding.PackageRevision.TreeDigest != "" {
+		return binding.PackageRevision.TreeDigest
+	}
+	return fallback
+}
+
+func planClientDigest(plan Plan, clientID string) string {
+	for _, target := range plan.Targets {
+		if target.ClientID == clientID && target.TreeDigest != "" {
+			return target.TreeDigest
+		}
+	}
+	return plan.TreeDigest
+}
+
+func liveClientResult(binding domain.ClientBinding, required []string, fallbackDigest string) ClientResult {
+	return ClientResult{
+		ClientID:           binding.ClientID,
+		BindingID:          binding.ClientBindingID,
+		TreeDigest:         recordedBindingDigest(binding, fallbackDigest),
+		Materialization:    string(binding.Materialization),
+		Activation:         string(binding.Activation),
+		Authentication:     string(binding.Authentication),
+		Verification:       string(binding.Verification),
+		RequiredComponents: append([]string(nil), required...),
+	}
 }

@@ -159,14 +159,9 @@ func (e *Engine) applyMutatingPackage(ctx context.Context, prepared *PreparedOpe
 					InstallationID: result.InstallationID, ClientID: string(prepared.client.ClientID),
 					BindingID: binding.ClientBindingID, Scope: binding.Scope, TargetPath: binding.TargetLocator,
 					DataRoot: receipt.Locator, DataReceiptID: binding.DataReceiptID,
-					OperationID: prepared.req.OperationID, TreeDigest: prepared.plan.TreeDigest,
+					OperationID: prepared.req.OperationID, TreeDigest: recordedBindingDigest(binding, prepared.plan.TreeDigest),
 				}
-				result.Client = ClientResult{
-					ClientID: binding.ClientID, BindingID: binding.ClientBindingID,
-					Materialization: string(binding.Materialization), Activation: string(binding.Activation),
-					Authentication: string(binding.Authentication), Verification: string(binding.Verification),
-					RequiredComponents: append([]string(nil), prepared.req.RequiredComponents...),
-				}
+				result.Client = liveClientResult(binding, prepared.req.RequiredComponents, prepared.plan.TreeDigest)
 			}
 		}
 	} else if err == nil && !added.NoChange {
@@ -340,14 +335,9 @@ func (e *Engine) liveBinding(prepared *PreparedOperation) (Result, domain.Client
 		InstallationID: result.InstallationID, ClientID: string(prepared.client.ClientID),
 		BindingID: binding.ClientBindingID, Scope: binding.Scope, TargetPath: binding.TargetLocator,
 		DataRoot: receipt.Locator, DataReceiptID: binding.DataReceiptID,
-		OperationID: prepared.req.OperationID, TreeDigest: prepared.plan.TreeDigest,
+		OperationID: prepared.req.OperationID, TreeDigest: recordedBindingDigest(binding, prepared.plan.TreeDigest),
 	}
-	result.Client = ClientResult{
-		ClientID: binding.ClientID, BindingID: binding.ClientBindingID,
-		Materialization: string(binding.Materialization), Activation: string(binding.Activation),
-		Authentication: string(binding.Authentication), Verification: string(binding.Verification),
-		RequiredComponents: append([]string(nil), prepared.req.RequiredComponents...),
-	}
+	result.Client = liveClientResult(binding, prepared.req.RequiredComponents, prepared.plan.TreeDigest)
 	return result, binding, true
 }
 

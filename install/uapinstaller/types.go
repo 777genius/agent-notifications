@@ -120,7 +120,7 @@ type NextAction struct {
 
 // ClientResult is the public per-client lifecycle view. Mapping is not a bool.
 type ClientResult struct {
-	ClientID, BindingID                                       string
+	ClientID, BindingID, TreeDigest                           string
 	Materialization, Activation, Authentication, Verification string
 	RequiredComponents                                        []string
 }

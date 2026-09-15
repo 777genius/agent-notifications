@@ -324,7 +324,7 @@ func (e *Engine) applyGroup(ctx context.Context, prepared *PreparedOperation) (R
 		result.NoChange = true
 		for _, target := range prepared.plan.Targets {
 			result.Targets = append(result.Targets, ClientResult{
-				ClientID: target.ClientID, BindingID: target.BindingID,
+				ClientID: target.ClientID, BindingID: target.BindingID, TreeDigest: target.TreeDigest,
 			})
 		}
 		return result, nil
@@ -526,17 +526,12 @@ func (e *Engine) reconcileGroupHostHandoff(ctx context.Context, prepared *Prepar
 			DataRoot:       receipt.Locator,
 			DataReceiptID:  binding.DataReceiptID,
 			OperationID:    prepared.req.OperationID,
-			TreeDigest:     prepared.plan.TreeDigest,
+			TreeDigest:     recordedBindingDigest(binding, planClientDigest(prepared.plan, binding.ClientID)),
 		}
 		if err := e.cfg.OnCommittedBinding(ctx, facts); err != nil {
 			e.attachLiveGroupResult(result, prepared, installation)
 			if result.Client.ClientID == "" {
-				result.Client = ClientResult{
-					ClientID: binding.ClientID, BindingID: binding.ClientBindingID,
-					Materialization: string(binding.Materialization), Activation: string(binding.Activation),
-					Authentication: string(binding.Authentication), Verification: string(binding.Verification),
-					RequiredComponents: append([]string(nil), prepared.req.RequiredComponents...),
-				}
+				result.Client = liveClientResult(binding, prepared.req.RequiredComponents, facts.TreeDigest)
 				result.Binding = facts
 			}
 			return true, err
@@ -571,12 +566,7 @@ func (e *Engine) attachLiveGroupResult(result *Result, prepared *PreparedOperati
 		if !found {
 			continue
 		}
-		item := ClientResult{
-			ClientID: binding.ClientID, BindingID: binding.ClientBindingID,
-			Materialization: string(binding.Materialization), Activation: string(binding.Activation),
-			Authentication: string(binding.Authentication), Verification: string(binding.Verification),
-			RequiredComponents: append([]string(nil), prepared.req.RequiredComponents...),
-		}
+		item := liveClientResult(binding, prepared.req.RequiredComponents, planClientDigest(prepared.plan, binding.ClientID))
 		result.Targets = append(result.Targets, item)
 		_ = storeLiveProfile(receipt.Locator, binding.ClientID, client.ConfigRoot)
 		if result.Client.ClientID == "" {
@@ -585,7 +575,7 @@ func (e *Engine) attachLiveGroupResult(result *Result, prepared *PreparedOperati
 				InstallationID: result.InstallationID, ClientID: binding.ClientID,
 				BindingID: binding.ClientBindingID, Scope: binding.Scope, TargetPath: binding.TargetLocator,
 				DataRoot: receipt.Locator, DataReceiptID: binding.DataReceiptID,
-				OperationID: prepared.req.OperationID, TreeDigest: prepared.plan.TreeDigest,
+				OperationID: prepared.req.OperationID, TreeDigest: item.TreeDigest,
 			}
 		}
 	}

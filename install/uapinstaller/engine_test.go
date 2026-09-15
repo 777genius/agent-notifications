@@ -2710,6 +2710,9 @@ func TestRepairOlderSiblingAfterSubsetUpdate(t *testing.T) {
 	if err != nil || (got.Outcome != OutcomeUnchanged && got.Outcome != OutcomeCompleted) {
 		t.Fatalf("claude r1 repair: %+v %v", got, err)
 	}
+	if got.Binding.TreeDigest != claudeBefore.TreeDigest || got.Client.TreeDigest != claudeBefore.TreeDigest {
+		t.Fatalf("claude r1 repair result collapsed digest: binding=%s client=%s want=%s", got.Binding.TreeDigest, got.Client.TreeDigest, claudeBefore.TreeDigest)
+	}
 	view, err := eng.Inspect(ctx)
 	if err != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 2 {
 		t.Fatalf("inspect after older sibling repair: %+v %v", view, err)
@@ -2771,6 +2774,11 @@ func TestRepairGroupIntactReportsBothTargets(t *testing.T) {
 	}
 	if !seen["claude"] || !seen["codex"] {
 		t.Fatalf("intact group repair clients: %+v", got.Targets)
+	}
+	for _, target := range got.Targets {
+		if target.TreeDigest == "" {
+			t.Fatalf("intact group repair omitted digest: %+v", target)
+		}
 	}
 	view, err := eng.Inspect(ctx)
 	if err != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 2 {
@@ -2844,6 +2852,13 @@ func TestRepairGroupMixedRevisionsUsesPerTargetPackage(t *testing.T) {
 	if err != nil || (got.Outcome != OutcomeUnchanged && got.Outcome != OutcomeCompleted) {
 		t.Fatalf("mixed revision repair: %+v %v", got, err)
 	}
+	seen := map[string]ClientResult{}
+	for _, target := range got.Targets {
+		seen[target.ClientID] = target
+	}
+	if seen["claude"].TreeDigest != claudeDigest || seen["codex"].TreeDigest != codexDigest {
+		t.Fatalf("mixed repair result collapsed digests: %+v plan claude=%s codex=%s", got.Targets, claudeDigest, codexDigest)
+	}
 	view, err := eng.Inspect(ctx)
 	if err != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 2 {
 		t.Fatalf("inspect after mixed repair: %+v %v", view, err)
@@ -2901,6 +2916,9 @@ func TestRepairMixedRevisionRematerializesDeletedOlderSibling(t *testing.T) {
 	_ = repaired.Close()
 	if err != nil || got.Outcome != OutcomeCompleted {
 		t.Fatalf("mixed rematerialize: %+v %v", got, err)
+	}
+	if got.Client.TreeDigest != claudeBefore.TreeDigest || got.Binding.TreeDigest != claudeBefore.TreeDigest {
+		t.Fatalf("mixed rematerialize result collapsed digest: client=%s binding=%s want=%s", got.Client.TreeDigest, got.Binding.TreeDigest, claudeBefore.TreeDigest)
 	}
 	if _, err := os.Stat(claudeBefore.TargetPath); err != nil {
 		t.Fatalf("mixed rematerialize did not restore claude: %v", err)

@@ -169,7 +169,13 @@ func runLifecycle(ctx context.Context, eng *uapinstaller.Engine, install, update
 	if err != nil {
 		return err
 	}
-	fmt.Printf("repair=%s\n", got.Outcome)
+	fmt.Printf("repair=%s", got.Outcome)
+	for _, target := range got.Targets {
+		if target.TreeDigest != "" {
+			fmt.Printf(" %s=%s", target.ClientID, target.TreeDigest)
+		}
+	}
+	fmt.Println()
 	got, err = applyConfirmed(ctx, eng, remove)
 	if err != nil {
 		return err

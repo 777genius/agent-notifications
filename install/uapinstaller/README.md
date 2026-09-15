@@ -17,7 +17,8 @@ installation's latest Source.TreeDigest, so an older sibling can be repaired
 after a subset update. Repair of that same binding with a different digest
 stays `ErrUpdateRequired`. `InspectedBinding.TreeDigest` is that binding's
 recorded package digest; mixed live revisions are not collapsed to
-`InspectedInstallation.TreeDigest`.
+`InspectedInstallation.TreeDigest`. Apply `ClientResult.TreeDigest` is that
+same per-binding digest, including unchanged mixed group Repair.
 
 ## Contract
 
