@@ -174,7 +174,7 @@ func (s Service) matchingReservation(req Request, action string) (*installruntim
 	if err != nil {
 		return nil, fmt.Errorf("%w: pending handoff intent missing: %v", ErrPreflight, err)
 	}
-	if !intentMatches(intent, pending.ID, action, string(req.Binding.Integration), req.SourceDigest, req.TreeDigest, req.HelperDigest) {
+	if !intentMatches(intent, pending.ID, action, string(req.Binding.Integration), req.SourceDigest, req.TreeDigest, req.HelperDigest, req.HelperVersion) {
 		return nil, fmt.Errorf("%w: pending %s", ErrIntentConflict, intent.Action)
 	}
 	cp := *pending
@@ -395,7 +395,7 @@ func (s Service) handoffForward(ctx context.Context, req Request) (uint64, *inst
 		if err != nil {
 			return 0, nil, fmt.Errorf("%w: pending handoff intent missing: %v", ErrPreflight, err)
 		}
-		if !intentMatches(intent, pending.ID, "install", string(req.Binding.Integration), req.SourceDigest, req.TreeDigest, req.HelperDigest) {
+		if !intentMatches(intent, pending.ID, "install", string(req.Binding.Integration), req.SourceDigest, req.TreeDigest, req.HelperDigest, req.HelperVersion) {
 			return 0, nil, fmt.Errorf("%w: pending %s", ErrIntentConflict, intent.Action)
 		}
 		return snap.Ledger.Generation, pending, nil
@@ -410,7 +410,7 @@ func (s Service) handoffForward(ctx context.Context, req Request) (uint64, *inst
 		if err != nil {
 			return 0, nil, fmt.Errorf("%w: pending handoff intent missing: %v", ErrPreflight, err)
 		}
-		if !intentMatches(intent, pending.ID, "install", string(req.Binding.Integration), req.SourceDigest, req.TreeDigest, req.HelperDigest) {
+		if !intentMatches(intent, pending.ID, "install", string(req.Binding.Integration), req.SourceDigest, req.TreeDigest, req.HelperDigest, req.HelperVersion) {
 			return 0, nil, fmt.Errorf("%w: pending %s", ErrIntentConflict, intent.Action)
 		}
 		res = pending
@@ -475,7 +475,7 @@ func (s Service) PublishConfirmedIntent(ctx context.Context, req ConfirmedIntent
 	}
 	if pending := snap.Ledger.PendingMutation; pending != nil {
 		intent, readErr := ReadIntent(req.ControlRoot)
-		if readErr != nil || !intentMatches(intent, pending.ID, req.Action, req.Targets[0].Client, req.SourceDigest, req.TreeDigest, req.HelperDigest) {
+		if readErr != nil || !intentMatches(intent, pending.ID, req.Action, req.Targets[0].Client, req.SourceDigest, req.TreeDigest, req.HelperDigest, req.HelperVersion) {
 			return installruntime.Ledger{}, nil, fmt.Errorf("%w: pending %s", ErrIntentConflict, intent.Action)
 		}
 		cp := *pending

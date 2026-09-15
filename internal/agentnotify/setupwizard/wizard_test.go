@@ -530,6 +530,66 @@ func TestPlanShowsPendingRecoveryWithoutMutating(t *testing.T) {
 	}
 }
 
+func TestPlanUninstallListsCodexExternalPrerequisite(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	before, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Action = ActionUninstall
+	req.Yes = false
+	plan, err := Plan(ctx, req)
+	if err != nil || !plan.Ready {
+		t.Fatalf("uninstall plan: %+v %v", plan, err)
+	}
+	if !strings.Contains(plan.Text, "required=external-uninstall") || !strings.Contains(plan.Text, "required-external-uninstall=codex") {
+		t.Fatalf("missing Codex prerequisite: %s", plan.Text)
+	}
+	found := false
+	for _, next := range plan.Result.NextActions {
+		if next.Kind == "external-uninstall" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("plan omitted external-uninstall action: %+v", plan.Result.NextActions)
+	}
+	after, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil || after.Ledger.Generation != before.Ledger.Generation || after.Ledger.PendingMutation != nil {
+		t.Fatalf("uninstall plan mutated ledger: %+v %v", after.Ledger, err)
+	}
+	req.ExternalUninstalled = true
+	attested, err := Plan(ctx, req)
+	if err != nil || !attested.Ready {
+		t.Fatalf("attested plan: %+v %v", attested, err)
+	}
+	if strings.Contains(attested.Text, "required=external-uninstall") || strings.Contains(attested.Text, "required-external-uninstall=") {
+		t.Fatalf("attested plan still required external uninstall: %s", attested.Text)
+	}
+}
+
 func plantWizardJournal(t *testing.T, controlRoot string) {
 	t.Helper()
 	owned := filepath.Join(filepath.Dir(controlRoot), "uap", "managed")

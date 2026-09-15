@@ -93,7 +93,7 @@ func ReadIntent(controlRoot string) (Intent, error) {
 	return intent, nil
 }
 
-func intentMatches(intent Intent, pendingID, action, client, digest, treeDigest, helperDigest string) bool {
+func intentMatches(intent Intent, pendingID, action, client, digest, treeDigest, helperDigest, helperVersion string) bool {
 	if intent.SetupIntentID != pendingID || intent.Action != action {
 		return false
 	}
@@ -104,6 +104,9 @@ func intentMatches(intent Intent, pendingID, action, client, digest, treeDigest,
 		return false
 	}
 	if helperDigest != "" && intent.HelperDigest != "" && helperDigest != intent.HelperDigest {
+		return false
+	}
+	if helperVersion != "" && intent.HelperVersion != "" && helperVersion != intent.HelperVersion {
 		return false
 	}
 	if client == "" || len(intent.Targets) == 0 {

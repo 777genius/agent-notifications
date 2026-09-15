@@ -645,6 +645,31 @@ func TestPendingInstallDifferentHelperDigestConflicts(t *testing.T) {
 	}
 }
 
+func TestPendingInstallDifferentHelperVersionConflicts(t *testing.T) {
+	b, ledger := bindingFixture(t)
+	config, cmd, ledger := ownedMCP(t, b, ledger)
+	svc := Service{}
+	req := Request{
+		Binding: b, ExpectedGeneration: ledger.Generation, Discovery: Discovery{ConfigPath: config, Command: cmd},
+		HelperVersion: "1.43.0",
+	}
+	if _, _, err := svc.publishHandoffReservation(testCtx(t), req, ledger.Generation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.matchingReservation(req, "install"); err != nil {
+		t.Fatal(err)
+	}
+	omitted := req
+	omitted.HelperVersion = ""
+	if _, err := svc.matchingReservation(omitted, "install"); err != nil {
+		t.Fatalf("omitted helper version: %v", err)
+	}
+	req.HelperVersion = "1.44.0"
+	if _, err := svc.matchingReservation(req, "install"); !errors.Is(err, ErrIntentConflict) {
+		t.Fatalf("different helper version: %v", err)
+	}
+}
+
 func TestHandoffIntentRecordsResolvedProfile(t *testing.T) {
 	b, ledger := bindingFixture(t)
 	config, cmd, ledger := ownedMCP(t, b, ledger)

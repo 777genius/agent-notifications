@@ -271,6 +271,15 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 		}
 		ev.out.NextActions = append(ev.out.NextActions, NextAction{Kind: "recover", Reason: reason})
 	}
+	if req.Action == ActionUninstall {
+		if prereqs := uninstallManualPrerequisites(ctx, req, ev.snap, ev.runtimeRoot, ev.notifyAgents); len(prereqs) > 0 {
+			text = strings.Replace(text, "required=none", "required=external-uninstall", 1)
+			text += " required-external-uninstall=" + strings.Join(prereqs, ",")
+			ev.out.NextActions = append(ev.out.NextActions, NextAction{
+				Kind: "external-uninstall", Agents: prereqs, Reason: "attest_codex_plugin_removed",
+			})
+		}
+	}
 	ev.out.Outcome, ev.out.Reason = "ready", ""
 	ev.out.InstallationID = req.InstallationID
 	plan.Ready = true
@@ -424,6 +433,41 @@ func liveNotifyClient(mat portablesetup.Materializer, installationID, clientID s
 		}
 	}
 	return false
+}
+
+func uninstallManualPrerequisites(ctx context.Context, req Request, snap installruntime.InstalledSnapshot, runtimeRoot string, notifyAgents []portable.Integration) []string {
+	if req.ExternalUninstalled {
+		return nil
+	}
+	mat, err := materializer(req, snap, runtimeRoot)
+	if err != nil {
+		return nil
+	}
+	id, err := identity(req, snap, runtimeRoot, mat, false)
+	if err != nil {
+		return nil
+	}
+	if id.InstallationID == "" {
+		state, loadErr := mat.Store.Load()
+		if loadErr != nil || len(state.Installations) != 1 {
+			return nil
+		}
+		id.InstallationID = state.Installations[0].InstallationID
+	}
+	var prereqs []string
+	for _, agent := range notifyAgents {
+		if agent != portable.Codex || !liveNotifyClient(mat, id.InstallationID, string(agent)) {
+			continue
+		}
+		status := codexListUnknown
+		if explicitAbs(clientExecutable(req, agent)) {
+			status, _ = observeCodexPluginList(ctx, clientExecutable(req, agent), clientConfig(req, agent))
+		}
+		if status != codexListAbsent {
+			prereqs = append(prereqs, string(agent))
+		}
+	}
+	return prereqs
 }
 
 func previewNotifyPlan(ctx context.Context, req Request, snap installruntime.InstalledSnapshot, runtimeRoot string, agent portable.Integration) (uapinstaller.Plan, error) {
