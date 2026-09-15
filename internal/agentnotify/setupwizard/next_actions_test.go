@@ -2,6 +2,7 @@ package setupwizard
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -297,5 +298,39 @@ func TestDiscoveryConfigPathUsesExistingProfileFile(t *testing.T) {
 	}
 	if got := discoveryConfigPath(Request{CodexHome: "relative"}, portable.Codex); got != "" {
 		t.Fatalf("relative profile: %s", got)
+	}
+}
+
+func TestWizardIntentTargetsRecordsDiscoveredMCP(t *testing.T) {
+	codexHome := filepath.Join(t.TempDir(), "codex")
+	if err := os.MkdirAll(codexHome, 0700); err != nil {
+		t.Fatal(err)
+	}
+	codexCfg := filepath.Join(codexHome, "config.toml")
+	if err := os.WriteFile(codexCfg, []byte("title = 'keep'\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	hooksOnly := wizardIntentTargets(Request{CodexHome: codexHome}, []portable.Integration{portable.Codex}, nil)
+	if len(hooksOnly) != 1 || hooksOnly[0].MCPConfig != "" {
+		t.Fatalf("hooks-only mcp: %+v", hooksOnly)
+	}
+	notify := wizardIntentTargets(Request{CodexHome: codexHome}, nil, []portable.Integration{portable.Codex})
+	if len(notify) != 1 || notify[0].Profile != codexHome || notify[0].MCPConfig != codexCfg {
+		t.Fatalf("notify mcp: %+v", notify)
+	}
+}
+
+func TestRestoreOmittedMCPConfigFromIntent(t *testing.T) {
+	intent := portablesetup.Intent{
+		Version: 1, SetupIntentID: "pending", Action: "install",
+		Targets: []portablesetup.IntentTarget{{Client: "codex", MCPConfig: "/tmp/explicit-mcp.toml", Units: []string{"agent-notify"}}},
+	}
+	got, agents, err := restoreOmittedFromIntent(Request{Action: ActionInstall}, nil, intent)
+	if err != nil || len(agents) != 1 || got.MCPConfig["codex"] != "/tmp/explicit-mcp.toml" {
+		t.Fatalf("restore: %+v %v %v", got.MCPConfig, agents, err)
+	}
+	_, _, err = restoreOmittedFromIntent(Request{Action: ActionInstall, MCPConfig: map[string]string{"codex": "/other"}}, agents, intent)
+	if !errors.Is(err, portablesetup.ErrIntentConflict) {
+		t.Fatalf("conflict: %v", err)
 	}
 }

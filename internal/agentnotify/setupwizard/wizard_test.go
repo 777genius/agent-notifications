@@ -5521,7 +5521,8 @@ func TestWizardResumeRestoresOmittedParamsFromPendingIntent(t *testing.T) {
 		Version: 1, SetupIntentID: "pending-install-intent", Action: "install", Stage: "retire-direct",
 		ExpectedGeneration: gen, SourceRevision: "1.43.0", SourceDigest: strings.Repeat("a", 64),
 		Targets: []portablesetup.IntentTarget{{
-			Client: "codex", InstallationID: "inst-codex", Profile: codexConfig, Units: []string{"direct-mcp"},
+			Client: "codex", InstallationID: "inst-codex", Profile: codexConfig,
+			MCPConfig: filepath.Join(codexConfig, "config.toml"), Units: []string{"direct-mcp"},
 		}},
 	})
 	t.Setenv("CODEX_HOME", filepath.Join(filepath.Dir(control), "later-env-codex"))
@@ -5542,7 +5543,7 @@ func TestWizardResumeRestoresOmittedParamsFromPendingIntent(t *testing.T) {
 		t.Fatalf("resume: %+v %v", got, err)
 	}
 	joined := strings.Join(got.Command, " ")
-	for _, want := range []string{"--agents codex", "--codex-home " + codexConfig, "--hooks false", "--agent-notify true", "--installation-id inst-codex"} {
+	for _, want := range []string{"--agents codex", "--codex-home " + codexConfig, "--mcp-config " + filepath.Join(codexConfig, "config.toml"), "--hooks false", "--agent-notify true", "--installation-id inst-codex"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("retry omitted %q: %v", want, got.Command)
 		}
@@ -6275,8 +6276,9 @@ func TestWizardDefaultCodexProfileHandoffsDirectMCP(t *testing.T) {
 	if !strings.Contains(plan.Text, "codex-mcp="+mcpConfig) {
 		t.Fatalf("plan omitted discovered mcp: %s", plan.Text)
 	}
-	if strings.Contains(strings.Join(RetryCommand(plan.Request), " "), "--mcp-config") {
-		t.Fatalf("plan retry invented mcp-config: %v", RetryCommand(plan.Request))
+	retry := strings.Join(RetryCommand(plan.Request), " ")
+	if !strings.Contains(retry, "--mcp-config "+mcpConfig) {
+		t.Fatalf("plan retry omitted resolved mcp: %v", RetryCommand(plan.Request))
 	}
 	installed, err := Run(ctx, req)
 	if err != nil || installed.Outcome != "completed" {
