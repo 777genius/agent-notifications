@@ -287,6 +287,42 @@ func TestPlanReservedIDIsReusedOnRun(t *testing.T) {
 	}
 }
 
+func TestWizardRunRefusesPlanDigestDrift(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"},
+		Hooks: &off, AgentNotify: boolPtr(true),
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := Plan(ctx, req)
+	if err != nil || !plan.Ready || plan.Request.TreeDigest == "" {
+		t.Fatalf("plan: %+v %v", plan, err)
+	}
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	runReq := plan.Request
+	runReq.Yes = true
+	got, err := Run(ctx, runReq)
+	if err == nil || got.Outcome != "incomplete" || got.Reason != "source_identity_drift" {
+		t.Fatalf("mutated package after plan: %+v %v", got, err)
+	}
+}
+
 func TestPlanOmittedPackageRequiresAcquisition(t *testing.T) {
 	control, runtime, global, primary, _ := managedRuntime(t)
 	off := false

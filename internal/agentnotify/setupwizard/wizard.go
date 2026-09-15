@@ -251,7 +251,11 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 				if preview.HelperVersion != "" {
 					text += " helper-version=" + preview.HelperVersion
 				}
-				captureSourceIdentity(&req, preview)
+				if err := bindSourceIdentity(&req, preview); err != nil {
+					ev.out.Outcome, ev.out.Reason = "incomplete", "source_identity_drift"
+					plan.Result = attachCommand(req, ev.out)
+					return plan, err
+				}
 				acquired.TreeDigest = req.TreeDigest
 				acquired.HelperDigest = req.HelperDigest
 				acquired.HelperVersion = req.HelperVersion
@@ -878,12 +882,15 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 			}
 		}
 	}
-	if req.Action == ActionInstall && len(notifyAgents) > 0 && (req.TreeDigest == "" || req.HelperDigest == "") {
+	if req.Action == ActionInstall && len(notifyAgents) > 0 {
 		preview, err := previewNotifyPlan(ctx, req, snap, runtimeRoot, notifyAgents[0])
 		if err != nil {
 			return mapPreviewFailure(req, notifyAgents[0], mat, id, err, out)
 		}
-		captureSourceIdentity(&req, preview)
+		if err := bindSourceIdentity(&req, preview); err != nil {
+			out.Outcome, out.Reason = "incomplete", "source_identity_drift"
+			return out, err
+		}
 	}
 	reportProgress(req, "preflight")
 	snap, err := publishWizardIntent(ctx, req, snap, runtimeRoot, hookAgents, notifyAgents, true)
@@ -1388,19 +1395,31 @@ func reserveClientBindings(req *Request, mat portablesetup.Materializer, agents 
 	return nil
 }
 
-func captureSourceIdentity(req *Request, preview uapinstaller.Plan) {
+func bindSourceIdentity(req *Request, preview uapinstaller.Plan) error {
 	if req == nil {
-		return
+		return nil
 	}
-	if req.TreeDigest == "" {
-		req.TreeDigest = preview.TreeDigest
+	if err := bindIdentityField(&req.TreeDigest, preview.TreeDigest); err != nil {
+		return err
 	}
-	if req.HelperDigest == "" {
-		req.HelperDigest = preview.HelperDigest
+	if err := bindIdentityField(&req.HelperDigest, preview.HelperDigest); err != nil {
+		return err
 	}
-	if req.HelperVersion == "" {
-		req.HelperVersion = preview.HelperVersion
+	return bindIdentityField(&req.HelperVersion, preview.HelperVersion)
+}
+
+func bindIdentityField(dst *string, src string) error {
+	if dst == nil || src == "" {
+		return nil
 	}
+	if *dst == "" {
+		*dst = src
+		return nil
+	}
+	if *dst != src {
+		return fmt.Errorf("%w: source_identity_drift", ErrRefused)
+	}
+	return nil
 }
 
 func mapPreviewFailure(req Request, agent portable.Integration, mat portablesetup.Materializer, id portablesetup.Identity, err error, out Result) (Result, error) {
