@@ -602,6 +602,122 @@ func TestSetupWizardHooksOnlyDoesNotOpenUAP(t *testing.T) {
 	}
 }
 
+func TestSetupWizardReinstallRetainsInstallationE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	flags := func(action string, extra ...string) []string {
+		args := []string{
+			"--action", action, "--agents", "codex", "--hooks", "false",
+			"--package", env.pkg, "--control-root", env.control, "--runtime-root", env.runtime,
+			"--global-config", env.global, "--codex-home", env.codexHome,
+			"--client-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+		}
+		return append(args, extra...)
+	}
+	var out bytes.Buffer
+	if code := executeSetupWizardWith(ctx, flags("install", "--yes", "--json"), &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("install: %d %s", code, out.String())
+	}
+	installed := decodeWizardJSON(t, out)
+	if installed.Outcome != "completed" || installed.InstallationID == "" {
+		t.Fatalf("install result: %+v", installed)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, flags("uninstall", "--yes", "--json", "--external-uninstalled"), &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("uninstall: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "completed" {
+		t.Fatalf("uninstall result: %+v", got)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, flags("install", "--yes", "--json", "--installation-id", installed.InstallationID), &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("reinstall: %d %s", code, out.String())
+	}
+	reinstalled := decodeWizardJSON(t, out)
+	if reinstalled.Outcome != "completed" || reinstalled.InstallationID != installed.InstallationID {
+		t.Fatalf("reinstall lost installation: %+v", reinstalled)
+	}
+}
+
+func TestSetupWizardMixedPerClientOptOutsE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	shared := []string{
+		"--hooks", "false", "--claude-agent-notify", "false", "--codex-agent-notify", "true",
+		"--package", env.pkg, "--control-root", env.control, "--runtime-root", env.runtime,
+		"--global-config", env.global, "--codex-home", env.codexHome, "--claude-config", env.claudeConfig,
+		"--claude-executable", env.probe, "--codex-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+	}
+	var out bytes.Buffer
+	install := append([]string{"--action", "install", "--agents", "claude,codex", "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, install, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("mixed install: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "completed" {
+		t.Fatalf("mixed install result: %+v", got)
+	}
+	out.Reset()
+	inspect := append([]string{"--action", "inspect", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, inspect, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("mixed inspect: %d %s", code, out.String())
+	}
+	view := decodeWizardJSON(t, out)
+	var claudeMCP, codexMCP string
+	for _, target := range view.Targets {
+		if target.Unit != "agent-notify" {
+			continue
+		}
+		switch target.Client {
+		case "claude":
+			claudeMCP = target.Outcome
+		case "codex":
+			codexMCP = target.Outcome
+		}
+	}
+	if claudeMCP == "installed" || codexMCP != "installed" {
+		t.Fatalf("mixed opt-outs: %+v", view.Targets)
+	}
+}
+
+func TestSetupWizardSpaceContainingRootsE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, true)
+	flags := func(action string, extra ...string) []string {
+		args := []string{
+			"--action", action, "--agents", "codex", "--hooks", "false",
+			"--package", env.pkg, "--control-root", env.control, "--runtime-root", env.runtime,
+			"--global-config", env.global, "--codex-home", env.codexHome,
+			"--client-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+		}
+		return append(args, extra...)
+	}
+	var out bytes.Buffer
+	if code := executeSetupWizardWith(ctx, flags("install", "--yes", "--json"), &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("space install: %d %s", code, out.String())
+	}
+	installed := decodeWizardJSON(t, out)
+	if installed.Outcome != "completed" {
+		t.Fatalf("space install result: %+v", installed)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, flags("inspect", "--json"), &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("space inspect: %d %s", code, out.String())
+	}
+	view := decodeWizardJSON(t, out)
+	found := false
+	for _, target := range view.Targets {
+		if target.Unit == "agent-notify" && target.Outcome == "installed" && target.Profile == env.codexHome {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("space inspect missed profile: %+v", view.Targets)
+	}
+}
+
 func buildWizardProbe(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -705,4 +821,62 @@ func writeWizardPluginBundle(t *testing.T) string {
 		}
 	}
 	return root
+}
+
+func decodeWizardJSON(t *testing.T, out bytes.Buffer) setupwizard.Result {
+	t.Helper()
+	var result setupwizard.Result
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("json: %v %s", err, out.String())
+	}
+	return result
+}
+
+type wizardCLIEnv struct {
+	root, control, runtime, global, probe, pkg, codexHome, claudeConfig, scope string
+}
+
+func newWizardCLIEnv(t *testing.T, ctx context.Context, spaced bool) wizardCLIEnv {
+	t.Helper()
+	root := setupCommandRoot(t)
+	if spaced {
+		root = filepath.Join(root, "install root")
+	}
+	home := filepath.Join(root, "home")
+	if err := os.MkdirAll(home, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	codexName, claudeName := "codex-profile", "claude-profile"
+	if spaced {
+		codexName, claudeName = "codex home", "claude config"
+	}
+	env := wizardCLIEnv{
+		root:         root,
+		control:      filepath.Join(root, "control"),
+		runtime:      filepath.Join(root, "runtime"),
+		global:       filepath.Join(root, "global", "config.json"),
+		probe:        buildWizardProbe(t),
+		pkg:          filepath.Join(root, "package"),
+		codexHome:    filepath.Join(root, codexName),
+		claudeConfig: filepath.Join(root, claudeName),
+		scope:        filepath.Join(root, "scope"),
+	}
+	writeWizardPackage(t, env.pkg, env.probe)
+	for _, dir := range []string{filepath.Dir(env.global), env.codexHome, env.claudeConfig, env.scope} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	body, err := os.ReadFile(env.probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: env.control, RuntimeRoot: env.runtime, Owner: "existing-installer", ConsumerID: "existing",
+		Files: []installruntime.File{{Path: filepath.Join(env.runtime, "primary"), Data: body, Mode: 0700}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return env
 }
