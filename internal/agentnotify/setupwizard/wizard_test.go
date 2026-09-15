@@ -2758,6 +2758,38 @@ func TestWizardResumeRestoresOmittedParamsFromPendingIntent(t *testing.T) {
 	}
 }
 
+func TestWizardResumeIgnoresEnvSnapshot(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, gen := managedRuntime(t)
+	probe := buildProbe(t)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	envCodex := filepath.Join(filepath.Dir(control), "later-env-codex")
+	scope := filepath.Join(filepath.Dir(control), "scope")
+	for _, dir := range []string{codexConfig, envCodex, scope} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plantPendingIntent(t, ctx, control, runtime, gen, portablesetup.Intent{
+		Version: 1, SetupIntentID: "pending-install-intent", Action: "install", Stage: "retire-direct",
+		ExpectedGeneration: gen,
+		Targets:            []portablesetup.IntentTarget{{Client: "codex", Profile: codexConfig, Units: []string{"direct-mcp"}}},
+	})
+	got, err := Run(ctx, Request{
+		Action: ActionInstall, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		ClientExecutable: probe, Helper: probe, ScopeRoot: scope, EnvCodexHome: envCodex,
+	})
+	if got.Reason == "pending_intent_conflict" || got.Reason == "client_config_required" {
+		t.Fatalf("env snapshot treated as explicit: %+v %v", got, err)
+	}
+	if !strings.Contains(strings.Join(got.Command, " "), "--codex-home "+codexConfig) {
+		t.Fatalf("resume lost intent profile: %v", got.Command)
+	}
+	if strings.Contains(strings.Join(got.Command, " "), envCodex) {
+		t.Fatalf("resume used env snapshot: %v", got.Command)
+	}
+}
+
 func TestWizardEmptyUninstallConflictsWithPendingInstall(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, _, _, gen := managedRuntime(t)

@@ -320,7 +320,9 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 	req.GlobalConfig = values["global-config"]
 	req.CodexHome = values["codex-home"]
 	req.ClaudeConfig = values["claude-config"]
-	req = setupwizard.ApplyEnvDefaults(req)
+	env := setupwizard.ApplyEnvDefaults(setupwizard.Request{})
+	req.EnvCodexHome = env.CodexHome
+	req.EnvClaudeConfig = env.ClaudeConfig
 	req.ClientExecutable = values["client-executable"]
 	if values["claude-executable"] != "" || values["codex-executable"] != "" {
 		req.ClientExecutables = map[string]string{}
@@ -343,7 +345,7 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 			req.MCPConfig["claude"] = values["claude-mcp-config"]
 		}
 	}
-	for _, p := range []string{req.PackageRoot, req.PluginRoot, req.ControlRoot, req.RuntimeRoot, req.GlobalConfig, req.CodexHome, req.ClaudeConfig, req.ClientExecutable, req.Helper, req.ScopeRoot, req.ClientExecutables["claude"], req.ClientExecutables["codex"]} {
+	for _, p := range []string{req.PackageRoot, req.PluginRoot, req.ControlRoot, req.RuntimeRoot, req.GlobalConfig, req.CodexHome, req.ClaudeConfig, req.EnvCodexHome, req.EnvClaudeConfig, req.ClientExecutable, req.Helper, req.ScopeRoot, req.ClientExecutables["claude"], req.ClientExecutables["codex"]} {
 		if p != "" && (!filepath.IsAbs(p) || filepath.Clean(p) != p) {
 			return req, jsonOut, errors.New("invalid_arguments")
 		}

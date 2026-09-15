@@ -229,11 +229,14 @@ func TestParseSetupWizardResolvesEnvOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if req.CodexHome != envCodex || req.ClaudeConfig != envClaude {
-		t.Fatalf("env defaults: %+v", req)
+	if req.CodexHome != "" || req.ClaudeConfig != "" {
+		t.Fatalf("parse treated env as explicit: %+v", req)
+	}
+	if req.EnvCodexHome != envCodex || req.EnvClaudeConfig != envClaude {
+		t.Fatalf("env snapshot: %+v", req)
 	}
 	t.Setenv("CODEX_HOME", filepath.Join(t.TempDir(), "later"))
-	if req.CodexHome != envCodex {
+	if req.EnvCodexHome != envCodex {
 		t.Fatal("parsed request reread env")
 	}
 	flagged, _, err := parseSetupWizard([]string{"--action", "inspect", "--codex-home", explicit})
@@ -249,7 +252,7 @@ func TestParseSetupWizardResolvesEnvOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if empty.CodexHome != "" || empty.ClaudeConfig != "" {
+	if empty.CodexHome != "" || empty.ClaudeConfig != "" || empty.EnvCodexHome != "" || empty.EnvClaudeConfig != "" {
 		t.Fatalf("HOME used as profile fallback: %+v", empty)
 	}
 }
@@ -1158,6 +1161,153 @@ func TestSetupWizardSecondClientDifferentDigestE2E(t *testing.T) {
 	}
 }
 
+func TestSetupWizardMixedUninstallHoldsClaudeE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	shared := []string{
+		"--hooks", "false", "--package", env.pkg, "--control-root", env.control, "--runtime-root", env.runtime,
+		"--global-config", env.global, "--codex-home", env.codexHome, "--claude-config", env.claudeConfig,
+		"--claude-executable", env.probe, "--codex-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+	}
+	notify := func(result setupwizard.Result) map[string]string {
+		out := map[string]string{}
+		for _, target := range result.Targets {
+			if target.Unit == "agent-notify" {
+				out[target.Client] = target.Outcome
+			}
+		}
+		return out
+	}
+	var out bytes.Buffer
+	install := append([]string{"--action", "install", "--agents", "claude,codex", "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, install, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("install both: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "completed" {
+		t.Fatalf("install both: %+v", got)
+	}
+	out.Reset()
+	hold := append([]string{"--action", "uninstall", "--agents", "claude,codex", "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, hold, &out, io.Discard, strings.NewReader(""), false); code != 1 {
+		t.Fatalf("hold exit: %d %s", code, out.String())
+	}
+	held := decodeWizardJSON(t, out)
+	if held.Outcome != "incomplete" || held.Reason != "external_uninstall_required" {
+		t.Fatalf("hold: %+v", held)
+	}
+	for _, target := range held.Targets {
+		if target.Client == "claude" && target.Unit == "agent-notify" && target.Outcome == "completed" {
+			t.Fatalf("Claude removed before Codex attestation: %+v", held.Targets)
+		}
+	}
+	joined := strings.Join(held.Command, " ")
+	if !strings.Contains(joined, "claude") || !strings.Contains(joined, "codex") || !strings.Contains(joined, "--external-uninstalled") {
+		t.Fatalf("retry omitted mixed uninstall: %v", held.Command)
+	}
+	out.Reset()
+	inspect := append([]string{"--action", "inspect", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, inspect, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect hold: %d %s", code, out.String())
+	}
+	view := decodeWizardJSON(t, out)
+	both := notify(view)
+	if both["claude"] != "installed" || both["codex"] != "installed" {
+		t.Fatalf("hold revoked a sibling: %+v", view.Targets)
+	}
+	found := false
+	for _, next := range view.NextActions {
+		if next.Kind == "test-notification" {
+			t.Fatalf("inspect offered delivery while uninstall is pending: %+v", view.NextActions)
+		}
+		if next.Kind != "external-uninstall" {
+			continue
+		}
+		found = true
+		cmd := strings.Join(next.Command, " ")
+		if !strings.Contains(cmd, "claude") || !strings.Contains(cmd, "codex") || !strings.Contains(cmd, "--external-uninstalled") {
+			t.Fatalf("inspect resume omitted mixed uninstall: %v", next.Command)
+		}
+	}
+	if !found {
+		t.Fatalf("inspect omitted pending uninstall: %+v", view.NextActions)
+	}
+	out.Reset()
+	resume := []string{
+		"--action", "uninstall", "--json", "--external-uninstalled",
+		"--control-root", env.control, "--runtime-root", env.runtime,
+		"--global-config", env.global, "--helper", env.probe,
+		"--claude-executable", env.probe, "--codex-executable", env.probe,
+	}
+	if code := executeSetupWizardWith(ctx, resume, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("attested resume: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "completed" {
+		t.Fatalf("attested resume: %+v", got)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, inspect, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect after attested uninstall: %d %s", code, out.String())
+	}
+	after := notify(decodeWizardJSON(t, out))
+	if after["claude"] == "installed" || after["codex"] == "installed" {
+		t.Fatalf("attested uninstall left bindings: %+v", after)
+	}
+}
+
+func TestSetupWizardResumeOmitsAgentsFromPendingE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	snap, err := installruntime.ReadInstalledSnapshot(env.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plantWizardCLIPendingIntent(t, ctx, env.control, env.runtime, snap.Ledger.Generation, portablesetup.Intent{
+		Version: 1, SetupIntentID: "pending-install-intent", Action: "install", Stage: "retire-direct",
+		ExpectedGeneration: snap.Ledger.Generation,
+		Targets: []portablesetup.IntentTarget{{
+			Client: "codex", Profile: env.codexHome, Units: []string{"direct-mcp"},
+		}},
+	})
+	t.Setenv("CODEX_HOME", filepath.Join(env.root, "later-env-codex"))
+	var out bytes.Buffer
+	resume := []string{
+		"--action", "install", "--package", env.pkg, "--json",
+		"--control-root", env.control, "--runtime-root", env.runtime,
+		"--global-config", env.global, "--client-executable", env.probe,
+		"--helper", env.probe, "--scope-root", env.scope,
+	}
+	if code := executeSetupWizardWith(ctx, resume, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("resume omitted agents: %d %s", code, out.String())
+	}
+	installed := decodeWizardJSON(t, out)
+	if installed.Outcome == "cancelled" || installed.Reason == "empty_selection" {
+		t.Fatalf("did not restore pending agents: %+v", installed)
+	}
+	if installed.Reason == "noninteractive_requires_yes" {
+		t.Fatalf("matching pending intent still required --yes: %+v", installed)
+	}
+	if installed.Outcome != "completed" {
+		t.Fatalf("resume omitted agents: %+v", installed)
+	}
+	out.Reset()
+	inspect := []string{"--action", "inspect", "--json", "--control-root", env.control, "--runtime-root", env.runtime, "--helper", env.probe}
+	if code := executeSetupWizardWith(ctx, inspect, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect after resume: %d %s", code, out.String())
+	}
+	view := decodeWizardJSON(t, out)
+	found := false
+	for _, target := range view.Targets {
+		if target.Client == "codex" && target.Unit == "agent-notify" && target.Outcome == "installed" && target.Profile == env.codexHome {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("resume missed restored profile: %+v", view.Targets)
+	}
+}
+
 func buildWizardProbe(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -1274,10 +1424,17 @@ func decodeWizardJSON(t *testing.T, out bytes.Buffer) setupwizard.Result {
 
 func plantWizardCLIPendingInstall(t *testing.T, ctx context.Context, control, runtime string, generation uint64) {
 	t.Helper()
-	intent := portablesetup.Intent{
+	plantWizardCLIPendingIntent(t, ctx, control, runtime, generation, portablesetup.Intent{
 		Version: 1, SetupIntentID: "pending-install-intent", Action: "install", Stage: "retire-direct",
 		ExpectedGeneration: generation,
 		Targets:            []portablesetup.IntentTarget{{Client: "codex", Units: []string{"direct-mcp"}}},
+	})
+}
+
+func plantWizardCLIPendingIntent(t *testing.T, ctx context.Context, control, runtime string, generation uint64, intent portablesetup.Intent) {
+	t.Helper()
+	if intent.SetupIntentID == "" {
+		intent.SetupIntentID = "pending-install-intent"
 	}
 	payload, err := json.Marshal(intent)
 	if err != nil {

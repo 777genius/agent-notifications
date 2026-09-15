@@ -46,9 +46,12 @@ type Request struct {
 	Yes                                               bool
 	PackageRoot, PluginRoot, ControlRoot, RuntimeRoot string
 	// CodexHome and ClaudeConfig are explicit UAP client profile roots.
-	// The CLI fills omitted values from CODEX_HOME / CLAUDE_CONFIG_DIR once;
-	// Run and Plan do not reread the process environment.
+	// EnvCodexHome and EnvClaudeConfig are a one-shot CLI snapshot of
+	// CODEX_HOME / CLAUDE_CONFIG_DIR, not flags. Resume restores intent
+	// profiles first; remaining empty roots take this snapshot. Run and
+	// Plan do not reread the process environment.
 	GlobalConfig, CodexHome, ClaudeConfig string
+	EnvCodexHome, EnvClaudeConfig         string
 	ClientExecutable, ScopeRoot, Helper   string
 	ClientExecutables                     map[string]string
 	PackageSHA256                         string
@@ -373,6 +376,7 @@ func evaluate(ctx context.Context, req *Request, requireYes bool) evaluated {
 			return evaluated{out: out, err: ErrRefused, stop: true}
 		}
 	}
+	applyEnvSnapshot(req)
 	if !explicitAbs(req.ControlRoot) {
 		out.Outcome, out.Reason = "invalid", "control_root_required"
 		return evaluated{out: out, err: ErrRefused, stop: true}
@@ -2337,6 +2341,18 @@ func offerPostSetupActions(req Request, agents []portable.Integration, out Resul
 func reportProgress(req Request, phase string) {
 	if req.Progress != nil {
 		req.Progress(phase)
+	}
+}
+
+func applyEnvSnapshot(req *Request) {
+	if req == nil {
+		return
+	}
+	if req.CodexHome == "" {
+		req.CodexHome = req.EnvCodexHome
+	}
+	if req.ClaudeConfig == "" {
+		req.ClaudeConfig = req.EnvClaudeConfig
 	}
 }
 
