@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
 )
 
 var (
@@ -391,6 +393,12 @@ func confirmPlan(req Request) string {
 	}
 	if req.ClaudeConfig != "" {
 		summary += " claude-profile=" + req.ClaudeConfig
+	}
+	if path := discoveryConfigPath(req, portable.Codex); path != "" {
+		summary += " codex-mcp=" + path
+	}
+	if path := discoveryConfigPath(req, portable.Claude); path != "" {
+		summary += " claude-mcp=" + path
 	}
 	if req.ReleaseVersion != "" {
 		summary += " revision=" + req.ReleaseVersion
