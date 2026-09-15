@@ -79,6 +79,26 @@ func (m Materializer) beginMutation(ctx context.Context, req *MaterializeRequest
 	return release, nil
 }
 
+// recoverOwnedJournals restores a pending Notifications kernel journal, then
+// releases the coordinator lease before UAP Recover (§7.4.2).
+func (m Materializer) recoverOwnedJournals(ctx context.Context, req MaterializeRequest) error {
+	release, err := installruntime.AcquireCoordinatorLease(ctx, req.Identity.ControlRoot)
+	if err != nil {
+		return err
+	}
+	_, recoverErr := installruntime.Recover(ctx, req.Identity.ControlRoot)
+	release()
+	if recoverErr != nil {
+		return recoverErr
+	}
+	eng, err := m.engine(req, new(uint64), nil)
+	if err != nil {
+		return err
+	}
+	_, err = eng.RecoverCurrent(ctx)
+	return err
+}
+
 func physicalRoot(path string) string {
 	got, err := installruntime.PhysicalPath(path)
 	if err != nil {
@@ -246,6 +266,9 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 	if err != nil {
 		return portable.Binding{}, err
 	}
+	if err := m.recoverOwnedJournals(ctx, req); err != nil {
+		return portable.Binding{}, err
+	}
 	release, err := m.beginMutation(ctx, &req)
 	if err != nil {
 		return portable.Binding{}, err
@@ -253,9 +276,6 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 	defer release()
 	eng, err := m.engine(req, new(uint64), nil)
 	if err != nil {
-		return portable.Binding{}, err
-	}
-	if _, err := eng.RecoverCurrent(ctx); err != nil {
 		return portable.Binding{}, err
 	}
 	gen, res, err := m.Kernel.handoffForward(ctx, Request{
@@ -443,6 +463,9 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 	if err != nil {
 		return err
 	}
+	if err := m.recoverOwnedJournals(ctx, req); err != nil {
+		return err
+	}
 	release, err := m.beginMutation(ctx, &req)
 	if err != nil {
 		return err
@@ -450,9 +473,6 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 	defer release()
 	eng, err := m.engine(req, &req.ExpectedGeneration, nil)
 	if err != nil {
-		return err
-	}
-	if _, err := eng.RecoverCurrent(ctx); err != nil {
 		return err
 	}
 	kernelReq := Request{

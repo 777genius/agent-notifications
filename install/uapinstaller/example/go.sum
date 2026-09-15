@@ -1,5 +1,7 @@
 github.com/777genius/agent-notifications v1.43.1-0.20260914220435-daea20df4d51 h1:e7APNy0vdHchOuoE7HI4TFnvlav1Xo/yYrAYkQGmHLo=
 github.com/777genius/agent-notifications v1.43.1-0.20260914220435-daea20df4d51/go.mod h1:Zt7Vfj/HN6axSBAJp1G+SylsxpY1ZN7LvPEww3ikbvg=
+github.com/777genius/agent-notifications v1.43.1-0.20260915000303-6b0913fd58cd h1:09sCgNwp8GWQbCx1Q+wGV5b9COxrqMEREWABpWV7XsA=
+github.com/777genius/agent-notifications v1.43.1-0.20260915000303-6b0913fd58cd/go.mod h1:Zt7Vfj/HN6axSBAJp1G+SylsxpY1ZN7LvPEww3ikbvg=
 github.com/777genius/plugin-kit-ai/install/integrationctl v0.0.0-20260910100557-6af7f412cb4a h1:6d6MndaSdF8mD0QIDrsJs/tIZMoUSiCfNfEu5OMYtP0=
 github.com/777genius/plugin-kit-ai/install/integrationctl v0.0.0-20260910100557-6af7f412cb4a/go.mod h1:0gRPS9JtaOBY44H55LYVVhIRujYgE8EodlWIYxpTVsA=
 github.com/dlclark/regexp2 v1.12.0 h1:0j4c5qQmnC6XOWNjP3PIXURXN2gWx76rd3KvgdPkCz8=

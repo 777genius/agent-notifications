@@ -5,6 +5,8 @@ package portablesetup
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -13,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/dirswap"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/ports"
 
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
@@ -311,4 +314,72 @@ func TestUAPMaterializerRepeatedRemoveOfRetainedInstallationIsAlreadyAbsent(t *t
 	if lockBefore != nil && lockAfter != nil && (lockBefore.Size() != lockAfter.Size() || !lockBefore.ModTime().Equal(lockAfter.ModTime())) {
 		t.Fatal("already_absent rewrote UAP lock")
 	}
+}
+
+func TestRecoverOwnedJournalsReleasesCoordinatorLeaseBeforeUAP(t *testing.T) {
+	codex, _ := bindingFixture(t)
+	probe := buildProbe(t)
+	root := filepath.Dir(codex.ControlRoot)
+	uapRoot := filepath.Join(root, "uap")
+	ops := filepath.Join(uapRoot, "state", "operations")
+	mat, err := NewMaterializer(UAPRoots{
+		StateFile:        filepath.Join(uapRoot, "state", "state-v2.json"),
+		LockFile:         filepath.Join(uapRoot, "state", "mutation.lock"),
+		OperationsDir:    ops,
+		PluginDataBase:   filepath.Join(uapRoot, "plugin data"),
+		ManagedRoot:      filepath.Join(uapRoot, "managed"),
+		HelperExecutable: probe,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owned := filepath.Join(uapRoot, "managed")
+	staging := filepath.Join(owned, ".agentplugins-staging-pending")
+	if err := os.MkdirAll(staging, 0700); err != nil {
+		t.Fatal(err)
+	}
+	opID := "portable-pending-journal"
+	sum := sha256.Sum256([]byte(opID))
+	receipt := dirswap.Receipt{
+		SchemaVersion: 3, Operation: dirswap.OperationSwap, OperationID: opID,
+		ClientBindingID: "client-binding-1", Sequence: 1, OwnedBase: owned,
+		ActivePath: filepath.Join(owned, "plugin"), StagingPath: staging,
+		BackupPath: filepath.Join(owned, ".agentplugins-backup-"+hex.EncodeToString(sum[:8])),
+		Phase:      dirswap.PhaseIntent,
+	}
+	body, err := json.MarshalIndent(receipt, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(ops, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ops, opID+".json"), append(body, '\n'), 0600); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(root, "home", "codex config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	req := MaterializeRequest{
+		Identity: Identity{
+			InstallationID: "00000000-0000-4000-8000-000000000010",
+			ComponentID:    codex.ComponentID, Owner: codex.Owner, ScopeRoot: codex.ScopeRoot,
+			ControlRoot: codex.ControlRoot, GlobalConfig: codex.GlobalConfig, RuntimeRoot: codex.RuntimeRoot,
+			Primary: codex.Primary,
+		},
+		Integration: portable.Codex, ClientConfigRoot: config, ClientExecutable: probe,
+	}
+	if err := mat.recoverOwnedJournals(testCtx(t), req); err != nil {
+		t.Fatal(err)
+	}
+	open, err := dirswap.Manager{JournalDir: ops}.ListOpen()
+	if err != nil || len(open) != 0 {
+		t.Fatalf("UAP journal survived recover: %+v %v", open, err)
+	}
+	release, err := installruntime.AcquireCoordinatorLease(testCtx(t), codex.ControlRoot)
+	if err != nil {
+		t.Fatalf("coordinator lease still held after UAP recover: %v", err)
+	}
+	release()
 }
