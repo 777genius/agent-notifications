@@ -253,14 +253,14 @@ func TestTargetResultJSONIncludesInspectedMCPConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), `"ConfigPath":"/tmp/config.toml"`) {
+	if !strings.Contains(string(raw), `"configPath":"/tmp/config.toml"`) || strings.Contains(string(raw), `"Client"`) {
 		t.Fatalf("inspect json omitted mcp file: %s", raw)
 	}
 	raw, err = json.Marshal(TargetResult{Client: "codex", Unit: "hooks", Outcome: "absent"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(raw), "ConfigPath") {
+	if strings.Contains(string(raw), "configPath") || strings.Contains(string(raw), "ConfigPath") {
 		t.Fatalf("empty config path leaked: %s", raw)
 	}
 }

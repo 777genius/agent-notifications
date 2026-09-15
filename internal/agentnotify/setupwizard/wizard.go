@@ -103,10 +103,15 @@ type Request struct {
 }
 
 type TargetResult struct {
-	Client, Unit, Outcome, Reason, Profile, TreeDigest string
+	Client     string `json:"client"`
+	Unit       string `json:"unit"`
+	Outcome    string `json:"outcome"`
+	Reason     string `json:"reason,omitempty"`
+	Profile    string `json:"profile,omitempty"`
+	TreeDigest string `json:"treeDigest,omitempty"`
 	// ConfigPath is the owned MCP file inspect used for a direct-mcp
 	// target. Empty on hooks/notify rows so JSON omits it.
-	ConfigPath string `json:"ConfigPath,omitempty"`
+	ConfigPath string `json:"configPath,omitempty"`
 }
 
 // ReadinessFact is independent of binary download. Inspect and mutation both
