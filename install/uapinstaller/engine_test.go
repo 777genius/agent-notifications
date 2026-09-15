@@ -133,6 +133,37 @@ func TestNewRejectsRelativeStateRootAndDoesNotCreateDirs(t *testing.T) {
 	}
 }
 
+func TestNewInspectDiscoverDoNotInvokeAssess(t *testing.T) {
+	calls := 0
+	root := filepath.Join(t.TempDir(), "missing-state")
+	eng, err := New(Config{
+		StateRoot: root,
+		Assess: func(context.Context, string, string) (Assessment, error) {
+			calls++
+			return Assessment{Outcome: AssessmentBlock, Reason: "constructor-scanner"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 0 {
+		t.Fatalf("New invoked Assess %d times", calls)
+	}
+	if _, err := eng.Inspect(testCtx(t)); err != nil {
+		t.Fatalf("inspect: %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("Inspect invoked Assess %d times", calls)
+	}
+	_ = eng.Discover()
+	if calls != 0 {
+		t.Fatalf("Discover invoked Assess %d times", calls)
+	}
+	if _, err := os.Lstat(root); !os.IsNotExist(err) {
+		t.Fatal("read-only Assess paths created state")
+	}
+}
+
 func TestPrepareUnknownAndGroupOperationsDoNotMutate(t *testing.T) {
 	ctx := testCtx(t)
 	base, err := filepath.EvalSymlinks(t.TempDir())
@@ -3084,6 +3115,41 @@ func TestRepairGroupMixedRevisionsAssessDigestMismatch(t *testing.T) {
 	stateAfter, err := os.ReadFile(eng.cfg.StateFile)
 	if err != nil || !bytes.Equal(stateBefore, stateAfter) {
 		t.Fatal("mismatched mixed repair mutated state")
+	}
+}
+
+func TestRepairGroupSameRootAssessesOnce(t *testing.T) {
+	ctx, eng, _, pkg, probe, codexConfig, claudeConfig := newBothClientSandbox(t)
+	id := "00000000-0000-4000-8000-0000000000d6"
+	installBothClients(t, ctx, eng, pkg, probe, id, "same-root-assess-install", bothClientTargets(codexConfig, claudeConfig, probe))
+	calls := 0
+	digest := ""
+	eng.cfg.Assess = func(_ context.Context, _, got string) (Assessment, error) {
+		calls++
+		digest = got
+		return Assessment{TreeDigest: got, Outcome: AssessmentAllow}, nil
+	}
+	if _, err := eng.Inspect(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_ = eng.Discover()
+	if recovered, err := eng.RecoverCurrent(ctx); err != nil || recovered.Outcome != OutcomeUnchanged {
+		t.Fatalf("recover: %+v %v", recovered, err)
+	}
+	if calls != 0 {
+		t.Fatalf("inspect/discover/recover invoked Assess %d times", calls)
+	}
+	repaired, err := eng.Prepare(ctx, Request{
+		Operation: OpRepair, PackageRoot: pkg, InstallationID: id, OperationID: "same-root-assess-repair",
+		RequiredComponents: []string{"mcp", "skills"}, ClientExecutable: probe,
+		Targets: bothClientTargets(codexConfig, claudeConfig, probe),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = repaired.Close()
+	if calls != 1 || digest == "" {
+		t.Fatalf("same-root repair assess calls=%d digest=%s", calls, digest)
 	}
 }
 

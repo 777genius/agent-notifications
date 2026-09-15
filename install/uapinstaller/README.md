@@ -40,10 +40,11 @@ replace args of one declared MCP server and observe a committed binding before
 client activation. Optional `Config.Assess` is digest-bound: block and
 unavailable never become allow. Mixed group Repair assesses each distinct
 snapshot digest once; blocking any snapshot refuses Prepare without mutation.
-Nil assessor keeps the trusted-local MVP and does not start a download
-scanner. Coarse `Config.Progress` phases are observational. The engine does
-not import Notifications types and does not query a live Claude/Codex
-identity by default.
+Same-root group Repair assesses that snapshot once. `New`, Inspect, Discover,
+and Recover do not invoke Assess. Nil assessor keeps the trusted-local MVP
+and does not start a download scanner. Coarse `Config.Progress` phases are
+observational. The engine does not import Notifications types and does not
+query a live Claude/Codex identity by default.
 
 Prepare copies `Request` and reports canonical `Plan.TreeDigest` with algorithm
 `agentplugins-tree-sha256-v1`. That value is the packagedigest source identity,
