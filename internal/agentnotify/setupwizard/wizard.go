@@ -233,7 +233,7 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 					break
 				}
 			}
-			failed, err, reason := bindNotifyPreviews(ctx, &req, acquired, ev.snap, ev.runtimeRoot, ev.notifyAgents)
+			failed, reason, err := bindNotifyPreviews(ctx, &req, acquired, ev.snap, ev.runtimeRoot, ev.notifyAgents)
 			if err != nil {
 				if reason == "" {
 					mapped, mappedErr := mapPreviewFailure(req, failed, mat, id, err, ev.out)
@@ -935,7 +935,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		}
 	}
 	if req.Action == ActionInstall && len(notifyAgents) > 0 {
-		failed, err, reason := bindNotifyPreviews(ctx, &req, req, snap, runtimeRoot, notifyAgents)
+		failed, reason, err := bindNotifyPreviews(ctx, &req, req, snap, runtimeRoot, notifyAgents)
 		if err != nil {
 			if reason == "" {
 				return mapPreviewFailure(req, failed, mat, id, err, out)
@@ -1464,26 +1464,26 @@ func reserveClientBindings(req *Request, mat portablesetup.Materializer, agents 
 	return nil
 }
 
-func bindNotifyPreviews(ctx context.Context, req *Request, previewReq Request, snap installruntime.InstalledSnapshot, runtimeRoot string, notifyAgents []portable.Integration) (portable.Integration, error, string) {
+func bindNotifyPreviews(ctx context.Context, req *Request, previewReq Request, snap installruntime.InstalledSnapshot, runtimeRoot string, notifyAgents []portable.Integration) (portable.Integration, string, error) {
 	if req == nil {
-		return "", nil, ""
+		return "", "", nil
 	}
 	for _, agent := range notifyAgents {
 		preview, err := previewNotifyPlan(ctx, previewReq, snap, runtimeRoot, agent)
 		if err != nil {
-			return agent, err, ""
+			return agent, "", err
 		}
 		if reserved := req.BindingIDs[string(agent)]; reserved != "" && preview.BindingID != "" && preview.BindingID != reserved {
-			return agent, ErrRefused, "binding_id_drift"
+			return agent, "binding_id_drift", ErrRefused
 		}
 		if err := bindSourceIdentity(req, preview); err != nil {
-			return agent, err, "source_identity_drift"
+			return agent, "source_identity_drift", err
 		}
 		previewReq.TreeDigest = req.TreeDigest
 		previewReq.HelperDigest = req.HelperDigest
 		previewReq.HelperVersion = req.HelperVersion
 	}
-	return "", nil, ""
+	return "", "", nil
 }
 
 func bindSourceIdentity(req *Request, preview uapinstaller.Plan) error {
