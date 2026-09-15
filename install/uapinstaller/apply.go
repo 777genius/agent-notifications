@@ -353,7 +353,10 @@ func (e *Engine) liveBinding(prepared *PreparedOperation) (Result, domain.Client
 
 func (e *Engine) updateWithCompatibility(ctx context.Context, svc usecase.Service, req Request, in usecase.AddInput) (usecase.AddResult, error) {
 	checks := e.compatibilityChecks(req, in)
-	if len(checks) <= 1 {
+	if len(checks) == 0 {
+		return usecase.AddResult{}, fmt.Errorf("%w: sibling compatibility checks are unavailable", ErrInvalidRequest)
+	}
+	if len(checks) == 1 {
 		return svc.Update(ctx, in)
 	}
 	got, err := svc.UpdateGroup(ctx, usecase.GroupInput{

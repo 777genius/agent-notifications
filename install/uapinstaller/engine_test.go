@@ -2476,6 +2476,55 @@ func TestUpdateOneClientKeepsSibling(t *testing.T) {
 	}
 }
 
+func TestUpdateOneClientRefusesWhenSiblingProfileUnknown(t *testing.T) {
+	ctx, eng, _, pkg, probe, codexConfig, claudeConfig := newBothClientSandbox(t)
+	id := "00000000-0000-4000-8000-0000000000c6"
+	installBothClients(t, ctx, eng, pkg, probe, id, "sibling-profile-install", bothClientTargets(codexConfig, claudeConfig, probe))
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 {
+		t.Fatalf("inspect: %+v %v", view, err)
+	}
+	removed := 0
+	if err := filepath.Walk(eng.cfg.PluginDataBase, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info == nil || info.IsDir() || info.Name() != LiveProfilesFile {
+			return err
+		}
+		if rmErr := os.Remove(path); rmErr != nil {
+			return rmErr
+		}
+		removed++
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if removed == 0 {
+		t.Fatal("live-profiles.json was not written")
+	}
+	before, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"sample-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = eng.Prepare(ctx, Request{
+		Operation: OpUpdate, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: codexConfig,
+		ClientExecutable: probe, InstallationID: id, OperationID: "sibling-profile-missing",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("missing sibling profile: %v", err)
+	}
+	after, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("missing sibling profile mutated state")
+	}
+	view, err = eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 2 {
+		t.Fatalf("bindings after refused update: %+v %v", view, err)
+	}
+}
+
 func TestUpdateAndRepairCancelledBeforeMutation(t *testing.T) {
 	skipWindowsLauncherExecuteBit(t)
 	for _, tc := range []struct {
