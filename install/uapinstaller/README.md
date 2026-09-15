@@ -89,7 +89,7 @@ Or clone `example/`, run `GOWORK=off go get` of the same package path, then
 `GOWORK=off go run .`. A successful import prints `external import ok` without
 creating state. Pass `-package`, `-state`, `-config`, `-helper`, and
 `-client-exe` to run install → inspect → recover → repeat → update → repair → remove.
-Add `-claude-config` for the published Claude+Codex group path.
+Inspect prints `inspect-bindings` for the live clients. Add `-claude-config` for the published Claude+Codex group path.
 
 Long-term this package moves to
 `github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/installer`.

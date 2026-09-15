@@ -12,6 +12,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/777genius/agent-notifications/install/uapinstaller"
@@ -136,7 +137,13 @@ func runLifecycle(ctx context.Context, eng *uapinstaller.Engine, install, update
 	if err != nil {
 		return err
 	}
-	fmt.Printf("installations=%d recovery=%t\n", len(view.Installations), view.Recovery.Required)
+	var clients []string
+	for _, installation := range view.Installations {
+		for _, binding := range installation.Bindings {
+			clients = append(clients, binding.ClientID)
+		}
+	}
+	fmt.Printf("installations=%d inspect-bindings=%d %s recovery=%t\n", len(view.Installations), len(clients), strings.Join(clients, ","), view.Recovery.Required)
 	recovered, err := eng.Recover(ctx, view)
 	if err != nil {
 		return err

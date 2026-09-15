@@ -3421,7 +3421,7 @@ func TestExampleFlaggedPathRunsAgainstLocalModule(t *testing.T) {
 		t.Fatalf("sample: %s %v", out, err)
 	}
 	text := string(out)
-	for _, want := range []string{"discover=", "install=", "recover=", "repeat=", "update=", "repair=", "remove="} {
+	for _, want := range []string{"discover=", "install=", "inspect-bindings=1", "recover=", "repeat=", "update=", "repair=", "remove="} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("sample omitted %s:\n%s", want, text)
 		}

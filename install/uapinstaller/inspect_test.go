@@ -137,6 +137,47 @@ func TestInspectReportsPendingJournalWithoutMutating(t *testing.T) {
 	}
 }
 
+func TestInspectReportsBothPendingJournalsWithoutMutating(t *testing.T) {
+	eng, first := plantPendingJournal(t)
+	second := plantOpenJournal(t, eng, "pending-journal-op-2")
+	before, err := dirswap.Manager{JournalDir: eng.cfg.OperationsDir}.ListOpen()
+	if err != nil || len(before) != 2 {
+		t.Fatalf("planted journals: %+v %v", before, err)
+	}
+	view, err := eng.Inspect(testCtx(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !view.Recovery.Required || len(view.Recovery.Journals) != 2 {
+		t.Fatalf("missing group journal observation: %+v", view.Recovery)
+	}
+	seen := map[string]bool{}
+	for _, journal := range view.Recovery.Journals {
+		seen[journal.OperationID] = true
+		if journal.Digest == "" || journal.Phase != dirswap.PhaseIntent {
+			t.Fatalf("journal identity: %+v", journal)
+		}
+	}
+	if !seen[first.OperationID] || !seen[second.OperationID] {
+		t.Fatalf("inspect hid a pending journal: %+v", view.Recovery.Journals)
+	}
+	open, err := dirswap.Manager{JournalDir: eng.cfg.OperationsDir}.ListOpen()
+	if err != nil || len(open) != 2 {
+		t.Fatalf("inspect recovered a journal: %+v %v", open, err)
+	}
+	result, err := eng.Recover(testCtx(t), view)
+	if err != nil || result.Outcome != OutcomeCompleted {
+		t.Fatalf("recover both journals: %+v %v", result, err)
+	}
+	if len(result.Recovery.Resolved) != 2 {
+		t.Fatalf("resolved receipts: %+v", result.Recovery)
+	}
+	after, err := eng.Inspect(testCtx(t))
+	if err != nil || after.Recovery.Required {
+		t.Fatalf("post-recover inspect: %+v %v", after, err)
+	}
+}
+
 func TestRecoverMatchingPendingJournal(t *testing.T) {
 	eng, _ := plantPendingJournal(t)
 	view, err := eng.Inspect(testCtx(t))

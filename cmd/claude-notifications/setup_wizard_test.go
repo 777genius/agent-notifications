@@ -1822,6 +1822,56 @@ func TestSetupWizardUpdateRepairRemoveBothLiveClientsE2E(t *testing.T) {
 	}
 }
 
+func TestSetupWizardInspectAfterGroupInstallE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	shared := []string{
+		"--hooks", "false", "--package", env.pkg, "--control-root", env.control, "--runtime-root", env.runtime,
+		"--global-config", env.global, "--codex-home", env.codexHome, "--claude-config", env.claudeConfig,
+		"--claude-executable", env.probe, "--codex-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+	}
+	var out bytes.Buffer
+	install := append([]string{"--action", "install", "--agents", "claude,codex", "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, install, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("install both: %d %s", code, out.String())
+	}
+	installed := decodeWizardJSON(t, out)
+	if installed.Outcome != "completed" {
+		t.Fatalf("install both: %+v", installed)
+	}
+	statePath := filepath.Join(env.root, "uap", "state", "state-v2.json")
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	inspect := append([]string{"--action", "inspect", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, inspect, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect: %d %s", code, out.String())
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("inspect mutated UAP state")
+	}
+	view := decodeWizardJSON(t, out)
+	if view.Outcome != "completed" {
+		t.Fatalf("inspect: %+v", view)
+	}
+	saw := map[string]setupwizard.TargetResult{}
+	for _, target := range view.Targets {
+		if target.Unit == "agent-notify" {
+			saw[target.Client] = target
+		}
+	}
+	if saw["claude"].Outcome != "installed" || saw["claude"].Profile != env.claudeConfig || saw["claude"].TreeDigest == "" {
+		t.Fatalf("claude inspect: %+v", saw["claude"])
+	}
+	if saw["codex"].Outcome != "installed" || saw["codex"].Profile != env.codexHome || saw["codex"].TreeDigest == "" {
+		t.Fatalf("codex inspect: %+v", saw["codex"])
+	}
+}
+
 func TestSetupWizardInspectPendingJournalE2E(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
