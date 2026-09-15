@@ -52,7 +52,10 @@ type Request struct {
 	ClientExecutable, ScopeRoot, Helper   string
 	ClientExecutables                     map[string]string
 	PackageSHA256                         string
-	InstallationID, Primary               string
+	// TreeDigest is the canonical package-tree digest from Prepare. It is
+	// distinct from PackageSHA256 (archive bytes).
+	TreeDigest, HelperDigest, HelperVersion string
+	InstallationID, Primary                 string
 	// BindingIDs are reserved per client during Plan/identity without
 	// staging. Run and the durable intent reuse them.
 	BindingIDs                          map[string]string
@@ -230,13 +233,9 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 			for _, agent := range ev.notifyAgents {
 				preview, err := previewNotifyPlan(ctx, acquired, ev.snap, ev.runtimeRoot, agent)
 				if err != nil {
-					if mapped, handled := mapAmbiguous(err, ev.out); handled {
-						plan.Result = attachCommand(req, mapped)
-						return plan, err
-					}
-					ev.out.Outcome, ev.out.Reason = "incomplete", "portable_preflight_failed"
-					plan.Result = attachCommand(req, ev.out)
-					return plan, err
+					mapped, mappedErr := mapPreviewFailure(req, agent, mat, id, err, ev.out)
+					plan.Result = attachCommand(req, mapped)
+					return plan, mappedErr
 				}
 				if reserved := req.BindingIDs[string(agent)]; reserved != "" && preview.BindingID != "" && preview.BindingID != reserved {
 					ev.out.Outcome, ev.out.Reason = "incomplete", "binding_id_drift"
@@ -252,6 +251,10 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 				if preview.HelperVersion != "" {
 					text += " helper-version=" + preview.HelperVersion
 				}
+				captureSourceIdentity(&req, preview)
+				acquired.TreeDigest = req.TreeDigest
+				acquired.HelperDigest = req.HelperDigest
+				acquired.HelperVersion = req.HelperVersion
 				if preview.TreeDigest != "" || preview.HelperDigest != "" {
 					break
 				}
@@ -582,6 +585,21 @@ func restoreOmittedFromIntent(req Request, agents []portable.Integration, intent
 	} else if intent.SourceDigest != "" && req.PackageSHA256 != intent.SourceDigest {
 		return req, agents, portablesetup.ErrIntentConflict
 	}
+	if req.TreeDigest == "" {
+		req.TreeDigest = intent.TreeDigest
+	} else if intent.TreeDigest != "" && req.TreeDigest != intent.TreeDigest {
+		return req, agents, portablesetup.ErrIntentConflict
+	}
+	if req.HelperDigest == "" {
+		req.HelperDigest = intent.HelperDigest
+	} else if intent.HelperDigest != "" && req.HelperDigest != intent.HelperDigest {
+		return req, agents, portablesetup.ErrIntentConflict
+	}
+	if req.HelperVersion == "" {
+		req.HelperVersion = intent.HelperVersion
+	} else if intent.HelperVersion != "" && req.HelperVersion != intent.HelperVersion {
+		return req, agents, portablesetup.ErrIntentConflict
+	}
 	if req.ReleaseVersion == "" {
 		req.ReleaseVersion = intent.SourceRevision
 	} else if intent.SourceRevision != "" && req.ReleaseVersion != intent.SourceRevision {
@@ -859,6 +877,13 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 				}
 			}
 		}
+	}
+	if req.Action == ActionInstall && len(notifyAgents) > 0 && (req.TreeDigest == "" || req.HelperDigest == "") {
+		preview, err := previewNotifyPlan(ctx, req, snap, runtimeRoot, notifyAgents[0])
+		if err != nil {
+			return mapPreviewFailure(req, notifyAgents[0], mat, id, err, out)
+		}
+		captureSourceIdentity(&req, preview)
 	}
 	reportProgress(req, "preflight")
 	snap, err := publishWizardIntent(ctx, req, snap, runtimeRoot, hookAgents, notifyAgents, true)
@@ -1181,6 +1206,15 @@ func retryRequestFromIntent(req Request, intent portablesetup.Intent) Request {
 	if intent.SourceDigest != "" {
 		retry.PackageSHA256 = intent.SourceDigest
 	}
+	if intent.TreeDigest != "" {
+		retry.TreeDigest = intent.TreeDigest
+	}
+	if intent.HelperDigest != "" {
+		retry.HelperDigest = intent.HelperDigest
+	}
+	if intent.HelperVersion != "" {
+		retry.HelperVersion = intent.HelperVersion
+	}
 	if intent.SourceRevision != "" {
 		retry.ReleaseVersion = intent.SourceRevision
 	}
@@ -1352,6 +1386,33 @@ func reserveClientBindings(req *Request, mat portablesetup.Materializer, agents 
 	}
 	req.BindingIDs = bindings
 	return nil
+}
+
+func captureSourceIdentity(req *Request, preview uapinstaller.Plan) {
+	if req == nil {
+		return
+	}
+	if req.TreeDigest == "" {
+		req.TreeDigest = preview.TreeDigest
+	}
+	if req.HelperDigest == "" {
+		req.HelperDigest = preview.HelperDigest
+	}
+	if req.HelperVersion == "" {
+		req.HelperVersion = preview.HelperVersion
+	}
+}
+
+func mapPreviewFailure(req Request, agent portable.Integration, mat portablesetup.Materializer, id portablesetup.Identity, err error, out Result) (Result, error) {
+	if mapped, handled := mapAmbiguous(err, out); handled {
+		return mapped, err
+	}
+	if portablesetup.IsUpdateRequired(err) {
+		others, _ := mat.OtherLiveClients(id.InstallationID, string(agent))
+		return updateRequired(req, agent, others, out, err)
+	}
+	out.Outcome, out.Reason = "incomplete", "portable_preflight_failed"
+	return out, err
 }
 
 func mapAmbiguous(err error, out Result) (Result, bool) {
@@ -1594,7 +1655,9 @@ func publishWizardIntent(ctx context.Context, req Request, snap installruntime.I
 	if _, _, err := (portablesetup.Service{}).PublishConfirmedIntent(ctx, portablesetup.ConfirmedIntent{
 		ControlRoot: req.ControlRoot, RuntimeRoot: runtimeRoot, Owner: snap.Ledger.Owner,
 		ExpectedGeneration: snap.Ledger.Generation, Action: string(req.Action), Stage: "confirmed",
-		SourceRevision: req.ReleaseVersion, SourceDigest: req.PackageSHA256, Targets: targets,
+		SourceRevision: req.ReleaseVersion, SourceDigest: req.PackageSHA256,
+		TreeDigest: req.TreeDigest, HelperDigest: req.HelperDigest, HelperVersion: req.HelperVersion,
+		Targets: targets,
 	}); err != nil {
 		return snap, err
 	}

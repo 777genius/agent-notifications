@@ -216,6 +216,9 @@ func TestPlanShowsSourceDigestWithoutMutating(t *testing.T) {
 	if !strings.Contains(plan.Text, "binding-id=") {
 		t.Fatalf("plan omitted binding id: %s", plan.Text)
 	}
+	if plan.Request.TreeDigest == "" || plan.Request.HelperDigest == "" || plan.Request.HelperVersion == "" {
+		t.Fatalf("plan omitted source/helper identity: %+v", plan.Request)
+	}
 	snap, err := installruntime.ReadInstalledSnapshot(control)
 	if err != nil || snap.Ledger.PendingMutation != nil || snap.Ledger.Generation != gen {
 		t.Fatalf("preflight mutated ledger: %+v %v", snap.Ledger, err)
@@ -254,6 +257,9 @@ func TestPlanReservedIDIsReusedOnRun(t *testing.T) {
 	reservedBinding := plan.Request.BindingIDs["codex"]
 	if reservedBinding == "" {
 		t.Fatal("plan omitted reserved binding id")
+	}
+	if plan.Request.TreeDigest == "" || plan.Request.HelperDigest == "" {
+		t.Fatalf("plan omitted source/helper identity: %+v", plan.Request)
 	}
 	runReq := plan.Request
 	runReq.Yes = true
@@ -1545,6 +1551,61 @@ func TestWizardResumeRejectsDifferentBindingID(t *testing.T) {
 	}
 }
 
+func TestWizardResumeRejectsDifferentTreeDigest(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, _, _, gen := managedRuntime(t)
+	plantPendingIntent(t, ctx, control, runtime, gen, portablesetup.Intent{
+		Version: 1, SetupIntentID: "pending-install-intent", Action: "install", Stage: "retire-direct",
+		ExpectedGeneration: gen, TreeDigest: "tree-a", HelperDigest: "helper-a",
+		Targets: []portablesetup.IntentTarget{{Client: "codex", Units: []string{"direct-mcp"}}},
+	})
+	got, err := Run(ctx, Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true,
+		ControlRoot: control, RuntimeRoot: runtime, TreeDigest: "tree-b",
+	})
+	if err == nil || got.Outcome != "conflict" || got.Reason != "pending_intent_conflict" {
+		t.Fatalf("different tree digest: %+v %v", got, err)
+	}
+	got, err = Run(ctx, Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true,
+		ControlRoot: control, RuntimeRoot: runtime, TreeDigest: "tree-a", HelperDigest: "helper-b",
+	})
+	if err == nil || got.Outcome != "conflict" || got.Reason != "pending_intent_conflict" {
+		t.Fatalf("different helper digest: %+v %v", got, err)
+	}
+	matched, err := Run(ctx, Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true,
+		ControlRoot: control, RuntimeRoot: runtime, TreeDigest: "tree-a", HelperDigest: "helper-a",
+	})
+	if matched.Reason == "pending_intent_conflict" {
+		t.Fatalf("matching tree digest rejected: %+v %v", matched, err)
+	}
+}
+
+func TestWizardResumeRejectsDifferentHelperVersion(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, _, _, gen := managedRuntime(t)
+	plantPendingIntent(t, ctx, control, runtime, gen, portablesetup.Intent{
+		Version: 1, SetupIntentID: "pending-install-intent", Action: "install", Stage: "retire-direct",
+		ExpectedGeneration: gen, HelperVersion: "1.43.0",
+		Targets: []portablesetup.IntentTarget{{Client: "codex", Units: []string{"direct-mcp"}}},
+	})
+	got, err := Run(ctx, Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true,
+		ControlRoot: control, RuntimeRoot: runtime, HelperVersion: "1.44.0",
+	})
+	if err == nil || got.Outcome != "conflict" || got.Reason != "pending_intent_conflict" {
+		t.Fatalf("different helper version: %+v %v", got, err)
+	}
+	matched, err := Run(ctx, Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true,
+		ControlRoot: control, RuntimeRoot: runtime, HelperVersion: "1.43.0",
+	})
+	if matched.Reason == "pending_intent_conflict" {
+		t.Fatalf("matching helper version rejected: %+v %v", matched, err)
+	}
+}
+
 func TestWizardResumeRestoresOmittedUninstallFromPendingIntent(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, _, _, gen := managedRuntime(t)
@@ -1891,6 +1952,9 @@ func TestWizardConfirmationIntentSurvivesFailedHooks(t *testing.T) {
 	}
 	if intent.Targets[0].InstallationID == "" || intent.Targets[0].BindingID == "" {
 		t.Fatalf("intent omitted reserved ids: %+v", intent.Targets[0])
+	}
+	if intent.TreeDigest == "" || intent.HelperDigest == "" || intent.HelperVersion == "" {
+		t.Fatalf("intent omitted source/helper identity: %+v", intent)
 	}
 	resume := req
 	resume.Agents = nil

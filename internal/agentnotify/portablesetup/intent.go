@@ -23,6 +23,9 @@ type Intent struct {
 	ExpectedGeneration uint64         `json:"expectedGeneration"`
 	SourceRevision     string         `json:"sourceRevision,omitempty"`
 	SourceDigest       string         `json:"sourceDigest,omitempty"`
+	TreeDigest         string         `json:"treeDigest,omitempty"`
+	HelperDigest       string         `json:"helperDigest,omitempty"`
+	HelperVersion      string         `json:"helperVersion,omitempty"`
 	Targets            []IntentTarget `json:"targets"`
 }
 
@@ -37,11 +40,12 @@ type IntentTarget struct {
 // ConfirmedIntent is the host-normalized SetupIntent published before the first
 // wizard mutation. Handoff still uses one target; the wizard may record many.
 type ConfirmedIntent struct {
-	ControlRoot, RuntimeRoot, Owner string
-	ExpectedGeneration              uint64
-	Action, Stage                   string
-	SourceRevision, SourceDigest    string
-	Targets                         []IntentTarget
+	ControlRoot, RuntimeRoot, Owner         string
+	ExpectedGeneration                      uint64
+	Action, Stage                           string
+	SourceRevision, SourceDigest            string
+	TreeDigest, HelperDigest, HelperVersion string
+	Targets                                 []IntentTarget
 }
 
 func IntentPath(controlRoot string) string {

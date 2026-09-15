@@ -497,6 +497,9 @@ func (s Service) PublishConfirmedIntent(ctx context.Context, req ConfirmedIntent
 		ExpectedGeneration: snap.Ledger.Generation,
 		SourceRevision:     req.SourceRevision,
 		SourceDigest:       req.SourceDigest,
+		TreeDigest:         req.TreeDigest,
+		HelperDigest:       req.HelperDigest,
+		HelperVersion:      req.HelperVersion,
 		Targets:            req.Targets,
 	}
 	payload, err := marshalIntent(intent)
