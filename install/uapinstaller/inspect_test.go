@@ -188,6 +188,9 @@ func TestInspectReportsStateCommittedReceiptWithoutJournal(t *testing.T) {
 	if got.OperationID != receipt.OperationID || got.Phase != transaction.ReceiptPhaseStateCommitted || got.JournalPresent {
 		t.Fatalf("receipt: %+v", got)
 	}
+	if len(view.Installations) != 1 || view.Installations[0].TreeDigest != "sha256:tree" {
+		t.Fatalf("inspect omitted recorded tree digest: %+v", view.Installations)
+	}
 	open, err := dirswap.Manager{JournalDir: eng.cfg.OperationsDir}.ListOpen()
 	if err != nil || len(open) != 0 {
 		t.Fatalf("unexpected journal: %+v %v", open, err)

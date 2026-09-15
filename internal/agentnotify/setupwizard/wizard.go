@@ -88,7 +88,7 @@ type Request struct {
 }
 
 type TargetResult struct {
-	Client, Unit, Outcome, Reason, Profile string
+	Client, Unit, Outcome, Reason, Profile, TreeDigest string
 }
 
 // ReadinessFact is independent of binary download. Inspect and mutation both
@@ -748,6 +748,7 @@ func inspect(ctx context.Context, req Request, agents []portable.Integration, sn
 				out.Targets = append(out.Targets, TargetResult{
 					Client: string(agent), Unit: "agent-notify", Outcome: "installed",
 					Reason: binding.ClientBindingID, Profile: profile,
+					TreeDigest: installation.Source.TreeDigest,
 				})
 			}
 		}
@@ -1683,8 +1684,21 @@ func publishWizardIntent(ctx context.Context, req Request, snap installruntime.I
 	return installruntime.ReadInstalledSnapshot(req.ControlRoot)
 }
 
+func shouldFinishWizardIntent(out Result) bool {
+	switch out.Outcome {
+	case "completed", "unchanged":
+		return true
+	case "incomplete":
+		// §7.4.1: UAP binding, locator, and runtime consumer are consistent.
+		// Manual/failed activation is a next action, not an unfinished handoff.
+		return out.Reason == "activation_incomplete"
+	default:
+		return false
+	}
+}
+
 func finishWizardIntent(ctx context.Context, req Request, runtimeRoot string, out Result, err error) (Result, error) {
-	if out.Outcome != "completed" && out.Outcome != "unchanged" {
+	if !shouldFinishWizardIntent(out) {
 		return out, err
 	}
 	snap, readErr := installruntime.ReadInstalledSnapshot(req.ControlRoot)

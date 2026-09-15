@@ -172,6 +172,7 @@ type PendingReceipt struct {
 // InspectedInstallation is a public subset of one UAP installation.
 type InspectedInstallation struct {
 	InstallationID string
+	TreeDigest     string
 	Bindings       []InspectedBinding
 	DataRetained   bool
 	DataRoots      []string

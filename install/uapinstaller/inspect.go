@@ -27,7 +27,11 @@ func (e *Engine) observe() (Inspection, error) {
 	}
 	bindingIndex := map[string]observedBinding{}
 	for _, installation := range state.Installations {
-		item := InspectedInstallation{InstallationID: installation.InstallationID, DataRetained: installation.DataRetained}
+		item := InspectedInstallation{
+			InstallationID: installation.InstallationID,
+			DataRetained:   installation.DataRetained,
+			TreeDigest:     installation.Source.TreeDigest,
+		}
 		for _, binding := range installation.Clients {
 			receipt := installation.DataReceipts[binding.DataReceiptID]
 			item.Bindings = append(item.Bindings, InspectedBinding{

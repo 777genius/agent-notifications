@@ -565,6 +565,9 @@ func TestWizardInstallInspectUninstall(t *testing.T) {
 			if target.Profile != codexConfig {
 				t.Fatalf("inspect omitted live profile: %+v", target)
 			}
+			if target.TreeDigest == "" {
+				t.Fatalf("inspect omitted tree digest: %+v", target)
+			}
 		}
 	}
 	if !found {
@@ -1916,6 +1919,48 @@ func TestWizardUninstallDoesNotRestoreDirectMCP(t *testing.T) {
 	}
 	if direct == "installed" {
 		t.Fatalf("uninstall restored direct MCP: %+v", view.Targets)
+	}
+}
+
+func TestFinishWizardIntentClearsActivationIncomplete(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, _, _, gen := managedRuntime(t)
+	plantPendingIntent(t, ctx, control, runtime, gen, portablesetup.Intent{
+		Version: 1, SetupIntentID: "pending-install-intent", Action: "install", Stage: "confirmed",
+		ExpectedGeneration: gen,
+		Targets:            []portablesetup.IntentTarget{{Client: "codex", Units: []string{"agent-notify"}}},
+	})
+	got, err := finishWizardIntent(ctx, Request{ControlRoot: control}, runtime, Result{Outcome: "incomplete", Reason: "activation_incomplete"}, errors.New("host seam refused"))
+	if got.Outcome != "incomplete" || got.Reason != "activation_incomplete" {
+		t.Fatalf("result: %+v %v", got, err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil || snap.Ledger.PendingMutation != nil {
+		t.Fatalf("activation_incomplete kept reservation: %+v %v", snap.Ledger.PendingMutation, err)
+	}
+	if _, err := os.Lstat(portablesetup.IntentPath(control)); !os.IsNotExist(err) {
+		t.Fatal("activation_incomplete retained intent")
+	}
+}
+
+func TestFinishWizardIntentKeepsIncompleteHandoff(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, _, _, gen := managedRuntime(t)
+	plantPendingIntent(t, ctx, control, runtime, gen, portablesetup.Intent{
+		Version: 1, SetupIntentID: "pending-install-intent", Action: "install", Stage: "confirmed",
+		ExpectedGeneration: gen,
+		Targets:            []portablesetup.IntentTarget{{Client: "codex", Units: []string{"agent-notify"}}},
+	})
+	got, err := finishWizardIntent(ctx, Request{ControlRoot: control}, runtime, Result{Outcome: "incomplete", Reason: "plugin_root_required"}, errors.New("plugin root"))
+	if got.Outcome != "incomplete" || got.Reason != "plugin_root_required" {
+		t.Fatalf("result: %+v %v", got, err)
+	}
+	if err == nil {
+		t.Fatal("expected incomplete error")
+	}
+	snap, readErr := installruntime.ReadInstalledSnapshot(control)
+	if readErr != nil || snap.Ledger.PendingMutation == nil {
+		t.Fatalf("dropped unfinished handoff: %+v %v", snap.Ledger.PendingMutation, readErr)
 	}
 }
 

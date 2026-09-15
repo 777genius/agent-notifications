@@ -313,6 +313,9 @@ func TestInstallInspectRepeatRemove(t *testing.T) {
 	if err != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 1 {
 		t.Fatalf("inspect: %+v %v", view, err)
 	}
+	if view.Installations[0].TreeDigest == "" || view.Installations[0].TreeDigest != prepared.Plan().TreeDigest {
+		t.Fatalf("inspect omitted source digest: plan=%s inspect=%s", prepared.Plan().TreeDigest, view.Installations[0].TreeDigest)
+	}
 	reserved, err := eng.ReserveIdentity(IdentityRequest{ClientID: "codex", Allocate: false})
 	if err != nil || reserved.InstallationID != req.InstallationID || reserved.BindingID != view.Installations[0].Bindings[0].BindingID {
 		t.Fatalf("reserve existing: %+v %v", reserved, err)
