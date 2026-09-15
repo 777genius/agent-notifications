@@ -280,10 +280,13 @@ func TestDiscoveryConfigPathUsesExistingProfileFile(t *testing.T) {
 	if got := discoveryConfigPath(req, portable.Claude); got != claudeCfg {
 		t.Fatalf("claude default with other explicit: %s", got)
 	}
-	envReq := Request{EnvCodexHome: codexHome}
+	envReq := Request{EnvCodexHome: codexHome, EnvClaudeConfig: claudeHome}
 	applyHostSnapshots(&envReq)
 	if got := discoveryConfigPath(envReq, portable.Codex); got != codexCfg {
 		t.Fatalf("env profile: %s", got)
+	}
+	if got := discoveryConfigPath(envReq, portable.Claude); got != claudeCfg {
+		t.Fatalf("env claude profile: %s", got)
 	}
 	dirHome := filepath.Join(t.TempDir(), "dir-profile")
 	if err := os.MkdirAll(filepath.Join(dirHome, "config.toml"), 0700); err != nil {

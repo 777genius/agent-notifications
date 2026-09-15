@@ -374,6 +374,47 @@ func TestConfirmPlanShowsProfilesRevisionAndRequiredActions(t *testing.T) {
 	}
 }
 
+func TestConfirmPlanShowsExistingProfileMCP(t *testing.T) {
+	codexHome := filepath.Join(t.TempDir(), "codex")
+	claudeHome := filepath.Join(t.TempDir(), "claude")
+	for _, dir := range []string{codexHome, claudeHome} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	missing := confirmPlan(Request{Action: ActionInstall, Agents: []string{"codex"}, CodexHome: codexHome})
+	if strings.Contains(missing, "codex-mcp=") {
+		t.Fatalf("missing file: %s", missing)
+	}
+	codexCfg := filepath.Join(codexHome, "config.toml")
+	if err := os.WriteFile(codexCfg, []byte("title = 'keep'\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got := confirmPlan(Request{Action: ActionInstall, Agents: []string{"codex"}, CodexHome: codexHome})
+	if !strings.Contains(got, "codex-mcp="+codexCfg) {
+		t.Fatalf("codex mcp: %s", got)
+	}
+	claudeCfg := filepath.Join(claudeHome, ".claude.json")
+	if err := os.WriteFile(claudeCfg, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	both := confirmPlan(Request{
+		Action: ActionInstall, Agents: []string{"claude", "codex"},
+		CodexHome: codexHome, ClaudeConfig: claudeHome,
+	})
+	if !strings.Contains(both, "codex-mcp="+codexCfg) || !strings.Contains(both, "claude-mcp="+claudeCfg) {
+		t.Fatalf("both mcp: %s", both)
+	}
+	explicit := filepath.Join(t.TempDir(), "explicit-mcp")
+	flagged := confirmPlan(Request{
+		Action: ActionInstall, Agents: []string{"codex"}, CodexHome: codexHome,
+		MCPConfig: map[string]string{"codex": explicit},
+	})
+	if !strings.Contains(flagged, "codex-mcp="+explicit) || strings.Contains(flagged, "codex-mcp="+codexCfg) {
+		t.Fatalf("explicit mcp: %s", flagged)
+	}
+}
+
 func TestFillInteractiveShowsDiscoverCapabilities(t *testing.T) {
 	in := strings.NewReader("1\n3\n")
 	var out strings.Builder
