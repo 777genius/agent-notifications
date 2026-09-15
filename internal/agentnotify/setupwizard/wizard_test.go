@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -19,9 +20,12 @@ import (
 	"time"
 
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/dirswap"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/ports"
 
+	"github.com/777genius/agent-notifications/install/uapinstaller"
 	"github.com/777genius/agent-notifications/internal/agentnotify/clientsetup"
+	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portableasset"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portablesetup"
 	"github.com/777genius/agent-notifications/internal/agentnotify/registration"
@@ -1540,5 +1544,34 @@ func TestDiscoverAgentsReportsPresenceWithoutExecuting(t *testing.T) {
 	}
 	if got[1].Present || got[1].Path != "" || got[0].Bound || got[1].Bound {
 		t.Fatalf("codex should be absent: %+v", got)
+	}
+}
+
+func TestPortableInstallFailedKeepsActivationIncomplete(t *testing.T) {
+	err := portablesetup.ResultError{
+		Result: uapinstaller.Result{
+			Outcome: uapinstaller.OutcomeIncomplete,
+			Reason:  "host seam refused after managed commit",
+			Client: uapinstaller.ClientResult{
+				ClientID:        "codex",
+				Materialization: string(domain.MaterializationMaterialized),
+				Activation:      string(domain.ActivationFailed),
+			},
+		},
+		Err: errors.New("host seam refused after managed commit"),
+	}
+	got := portableInstallFailed(portable.Codex, Result{Action: "install"}, err)
+	if got.Outcome != "incomplete" || got.Reason != "activation_incomplete" {
+		t.Fatalf("incomplete mapping: %+v", got)
+	}
+	if len(got.NextActions) != 1 || got.NextActions[0].Kind != "activate" || got.NextActions[0].Agents[0] != "codex" {
+		t.Fatalf("activate action: %+v", got.NextActions)
+	}
+	if got.Targets[0].Outcome != "incomplete" {
+		t.Fatalf("target: %+v", got.Targets)
+	}
+	plain := portableInstallFailed(portable.Codex, Result{Action: "install"}, errors.New("missing helper"))
+	if plain.Reason != "portable_install_failed" || len(plain.NextActions) != 0 {
+		t.Fatalf("pre-commit failure: %+v", plain)
 	}
 }

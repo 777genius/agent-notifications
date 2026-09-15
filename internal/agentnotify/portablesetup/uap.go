@@ -298,7 +298,7 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 		RequiredComponents: []string{"mcp", "skills"},
 	})
 	if err != nil {
-		return portable.Binding{}, wrapUpdateRequired(err)
+		return portable.Binding{}, persistResult(result, wrapUpdateRequired(err))
 	}
 	pb, err := Complete(req.Identity, req.Integration, result.Binding.ClientID, result.Binding.Scope, result.Binding.TargetPath, result.Binding.DataRoot)
 	if err != nil {
@@ -333,6 +333,32 @@ func wrapUpdateRequired(err error) error {
 		return fmt.Errorf("%w: %w", ErrUpdateRequired, err)
 	}
 	return err
+}
+
+// ResultError keeps the installer Result when a mutation already happened.
+// Mapping that to a bool or an empty Binding would hide a managed commit.
+type ResultError struct {
+	Result uapinstaller.Result
+	Err    error
+}
+
+func (e ResultError) Error() string {
+	if e.Err != nil {
+		return e.Err.Error()
+	}
+	return e.Result.Reason
+}
+
+func (e ResultError) Unwrap() error { return e.Err }
+
+func persistResult(result uapinstaller.Result, err error) error {
+	if err == nil {
+		return nil
+	}
+	if result.Outcome == "" && result.Client.Materialization == "" && result.Binding.BindingID == "" {
+		return err
+	}
+	return ResultError{Result: result, Err: err}
 }
 
 func (m Materializer) OtherLiveClients(installationID, adding string) ([]string, error) {
@@ -499,13 +525,14 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 	if err := m.Kernel.RevokeBinding(ctx, kernelReq); err != nil {
 		return err
 	}
-	if _, err := m.apply(ctx, eng, uapinstaller.Request{
+	removed, err := m.apply(ctx, eng, uapinstaller.Request{
 		Operation: uapinstaller.OpRemove, ClientID: string(req.Integration),
 		ClientConfigRoot: req.ClientConfigRoot, ClientExecutable: req.ClientExecutable,
 		InstallationID: req.Identity.InstallationID, OperationID: req.OperationID,
 		ExternalUninstalled: req.ExternalUninstalled,
-	}); err != nil {
-		return err
+	})
+	if err != nil {
+		return persistResult(removed, err)
 	}
 	if req.KeepReservation {
 		return nil

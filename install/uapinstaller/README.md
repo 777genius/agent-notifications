@@ -41,7 +41,12 @@ client deactivation. Last-client remove retains PLUGIN_DATA and reports
 `data_retained`. A later remove of that retained empty installation returns
 `already_absent` without creating a journal. Plan includes the helper protocol
 version and SHA-256 of the helper bytes; UAP managedstdio stores the same
-digest. Result.NextActions cover recover, update, and reprepare.
+digest. Result.NextActions cover recover, update, reprepare, and activate after
+a managed commit whose client activation did not finish. Cancel before the first
+durable effect returns cancelled and writes no state. A host callback or context
+cancel after that commit returns incomplete with the binding retained; it is not
+a bool and does not roll the managed package back. Client.Materialization and
+Client.Activation stay separate fields.
 
 Confirmed Apply re-reads live target/ownership before mutation and returns
 `plan_changed` instead of applying a stale confirmation. Discover reports

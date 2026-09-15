@@ -811,9 +811,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 			if conflict, handled := pendingIntentConflict(req, err, out); handled {
 				return conflict, err
 			}
-			out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: err.Error()})
-			out.Outcome, out.Reason = "incomplete", "portable_install_failed"
-			return out, err
+			return portableInstallFailed(agent, out, err), err
 		}
 		generation, err = rereadGeneration(req.ControlRoot)
 		if err != nil {
@@ -1002,6 +1000,19 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 	out.Outcome = "completed"
 	reportProgress(req, "complete")
 	return out, nil
+}
+
+func portableInstallFailed(agent portable.Integration, out Result, err error) Result {
+	out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: err.Error()})
+	out.Outcome, out.Reason = "incomplete", "portable_install_failed"
+	var persisted portablesetup.ResultError
+	if errors.As(err, &persisted) && persisted.Result.Client.Materialization != "" && persisted.Result.Client.Materialization != string(domain.MaterializationAbsent) {
+		out.Reason = "activation_incomplete"
+		out.NextActions = append(out.NextActions, NextAction{
+			Kind: "activate", Agents: []string{string(agent)}, Reason: persisted.Result.Reason,
+		})
+	}
+	return out
 }
 
 func pendingIntentConflict(req Request, err error, out Result) (Result, bool) {

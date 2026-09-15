@@ -111,6 +111,38 @@ func (e *Engine) applyInstall(ctx context.Context, prepared *PreparedOperation) 
 	})
 	err = wrapLifecycleError(err)
 	result := Result{Operation: OpInstall, InstallationID: added.InstallationID, Binding: prepared.facts}
+	if added.Activation.UserActions != nil {
+		result.ManualActions = append([]string(nil), added.Activation.UserActions...)
+	}
+	committed := false
+	if state, loadErr := e.store.Load(); loadErr == nil {
+		installationID := firstNonEmpty(added.InstallationID, prepared.req.InstallationID)
+		if installation, ok := findInstall(state, installationID); ok {
+			if binding, receipt, ok := findBinding(installation, prepared.client.ClientID); ok {
+				committed = true
+				result.InstallationID = firstNonEmpty(installation.InstallationID, installationID)
+				result.Binding = BindingFacts{
+					InstallationID: result.InstallationID, ClientID: string(prepared.client.ClientID),
+					BindingID: binding.ClientBindingID, Scope: binding.Scope, TargetPath: binding.TargetLocator,
+					DataRoot: receipt.Locator, DataReceiptID: binding.DataReceiptID,
+					OperationID: prepared.req.OperationID, TreeDigest: prepared.plan.TreeDigest,
+				}
+				result.Client = ClientResult{
+					ClientID: binding.ClientID, BindingID: binding.ClientBindingID,
+					Materialization: string(binding.Materialization), Activation: string(binding.Activation),
+					Authentication: string(binding.Authentication), Verification: string(binding.Verification),
+					RequiredComponents: append([]string(nil), prepared.req.RequiredComponents...),
+				}
+			}
+		}
+	} else if err == nil && !added.NoChange {
+		result.Outcome = OutcomeIncomplete
+		result.Reason = "committed state is unknown"
+		result.Recovery.Unknown = []PendingReceipt{{
+			OperationID: prepared.req.OperationID, InstallationID: added.InstallationID,
+		}}
+		return result, loadErr
+	}
 	if errors.Is(err, ErrUpdateRequired) {
 		result.Outcome = OutcomeConflict
 		result.Reason = "update_required"
@@ -128,27 +160,8 @@ func (e *Engine) applyInstall(ctx context.Context, prepared *PreparedOperation) 
 	} else {
 		result.Outcome = OutcomeIncomplete
 		result.Reason = err.Error()
-	}
-	if added.Activation.UserActions != nil {
-		result.ManualActions = append([]string(nil), added.Activation.UserActions...)
-	}
-	state, loadErr := e.store.Load()
-	if loadErr == nil {
-		if installation, ok := findInstall(state, added.InstallationID); ok {
-			if binding, receipt, ok := findBinding(installation, prepared.client.ClientID); ok {
-				result.Binding = BindingFacts{
-					InstallationID: added.InstallationID, ClientID: string(prepared.client.ClientID),
-					BindingID: binding.ClientBindingID, Scope: binding.Scope, TargetPath: binding.TargetLocator,
-					DataRoot: receipt.Locator, DataReceiptID: binding.DataReceiptID,
-					OperationID: prepared.req.OperationID, TreeDigest: prepared.plan.TreeDigest,
-				}
-				result.Client = ClientResult{
-					ClientID: binding.ClientID, BindingID: binding.ClientBindingID,
-					Materialization: string(binding.Materialization), Activation: string(binding.Activation),
-					Authentication: string(binding.Authentication), Verification: string(binding.Verification),
-					RequiredComponents: append([]string(nil), prepared.req.RequiredComponents...),
-				}
-			}
+		if committed {
+			e.report(ProgressCommit)
 		}
 	}
 	return result, err
@@ -280,5 +293,7 @@ func attachNextActions(result *Result) {
 		result.NextActions = []NextAction{{Kind: "update", Reason: result.Reason}}
 	case result.Reason == "plan_changed":
 		result.NextActions = []NextAction{{Kind: "reprepare", Reason: result.Reason}}
+	case result.Outcome == OutcomeIncomplete && result.Client.Materialization != "" && result.Client.Materialization != string(domain.MaterializationAbsent):
+		result.NextActions = []NextAction{{Kind: "activate", Reason: result.Reason}}
 	}
 }

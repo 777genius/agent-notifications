@@ -17,6 +17,7 @@ import (
 
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/dirswap"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/statev2"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/managedstdio"
 )
 
@@ -2073,6 +2074,150 @@ func TestRemoveApplyPlanChangedWhenLiveTargetMoves(t *testing.T) {
 	}
 	if view.Installations[0].Bindings[0].TargetPath != filepath.Join(base, "moved-target") {
 		t.Fatalf("plan_changed mutated binding: %+v", view.Installations[0].Bindings[0])
+	}
+}
+
+func TestCommittedBindingFailureKeepsManagedCommit(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	var phases []ProgressPhase
+	eng, err := New(Config{
+		StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe,
+		Progress: func(event ProgressEvent) { phases = append(phases, event.Phase) },
+		OnCommittedBinding: func(context.Context, BindingFacts) error {
+			return errors.New("host seam refused after managed commit")
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-000000000063",
+		OperationID: "commit-then-fail", RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = prepared.Close() }()
+	result, err := eng.Apply(ctx, prepared, Decision{Confirmed: true})
+	if err == nil || result.Outcome != OutcomeIncomplete {
+		t.Fatalf("post-commit failure: %+v %v", result, err)
+	}
+	if result.Outcome == OutcomeCancelled || result.Outcome == OutcomeCompleted {
+		t.Fatalf("post-commit hid incomplete behind %s", result.Outcome)
+	}
+	if result.Client.Materialization == "" || result.Client.Materialization == string(domain.MaterializationAbsent) {
+		t.Fatalf("managed commit missing: %+v", result.Client)
+	}
+	if result.Client.Activation == string(domain.ActivationActive) {
+		t.Fatalf("activation claimed success: %+v", result.Client)
+	}
+	if result.Client.Materialization == result.Client.Activation {
+		t.Fatalf("materialization and activation collapsed: %+v", result.Client)
+	}
+	if result.Binding.BindingID == "" || result.Binding.DataRoot == "" || result.Binding.TargetPath == "" {
+		t.Fatalf("incomplete omitted binding facts: %+v", result.Binding)
+	}
+	if _, err := os.Lstat(result.Binding.TargetPath); err != nil {
+		t.Fatalf("managed target rolled back: %v", err)
+	}
+	if _, err := os.Lstat(result.Binding.DataRoot); err != nil {
+		t.Fatalf("PLUGIN_DATA rolled back: %v", err)
+	}
+	if len(result.NextActions) != 1 || result.NextActions[0].Kind != "activate" {
+		t.Fatalf("activate next action: %+v", result.NextActions)
+	}
+	joined := ""
+	for _, phase := range phases {
+		joined += string(phase) + ","
+	}
+	if !strings.Contains(joined, string(ProgressCommit)+",") {
+		t.Fatalf("missing commit phase in %s", joined)
+	}
+	if strings.Contains(joined, string(ProgressComplete)+",") {
+		t.Fatalf("complete claimed after failed activation: %s", joined)
+	}
+	view, inspectErr := eng.Inspect(ctx)
+	if inspectErr != nil || view.Recovery.Required {
+		t.Fatalf("inspect after incomplete: %+v %v", view, inspectErr)
+	}
+	if len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 1 {
+		t.Fatalf("binding lost after incomplete: %+v", view)
+	}
+	got := view.Installations[0].Bindings[0]
+	if got.Materialization != result.Client.Materialization || got.Activation != result.Client.Activation {
+		t.Fatalf("inspect lifecycle diverged: %+v vs %+v", got, result.Client)
+	}
+}
+
+func TestCancelAfterManagedCommitKeepsBinding(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	t.Cleanup(cancel)
+	eng, err := New(Config{
+		StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe,
+		OnCommittedBinding: func(cbCtx context.Context, facts BindingFacts) error {
+			if facts.BindingID == "" {
+				return errors.New("committed binding missing identity")
+			}
+			cancel()
+			return cbCtx.Err()
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-000000000064",
+		OperationID: "cancel-after-commit", RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = prepared.Close() }()
+	result, err := eng.Apply(ctx, prepared, Decision{Confirmed: true})
+	if err == nil || result.Outcome != OutcomeIncomplete {
+		t.Fatalf("cancel after commit: %+v %v", result, err)
+	}
+	if result.Outcome == OutcomeCancelled {
+		t.Fatal("after-effect cancel rolled back to cancelled")
+	}
+	if result.Client.Materialization == "" || result.Client.Materialization == string(domain.MaterializationAbsent) {
+		t.Fatalf("after-effect cancel dropped materialization: %+v", result.Client)
+	}
+	if result.Binding.TargetPath == "" {
+		t.Fatalf("after-effect cancel omitted target: %+v", result.Binding)
+	}
+	if _, err := os.Lstat(result.Binding.TargetPath); err != nil {
+		t.Fatalf("after-effect cancel removed target: %v", err)
+	}
+	view, inspectErr := eng.Inspect(context.Background())
+	if inspectErr != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 1 {
+		t.Fatalf("after-effect cancel lost installation: %+v %v", view, inspectErr)
 	}
 }
 
