@@ -1898,6 +1898,111 @@ func TestSetupWizardCodexLiveProfileConflictE2E(t *testing.T) {
 	}
 }
 
+func TestSetupWizardRepairOmittedZipUsesDurableSourceE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	pkg := filepath.Join(env.root, "release-pkg")
+	archive := filepath.Join(env.root, portableasset.AssetName(runtime.GOOS, runtime.GOARCH))
+	if _, err := portableasset.Build(portableasset.BuildRequest{
+		Version: "1.43.0", GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
+		Executable: env.probe, OutputRoot: pkg, Archive: archive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	shared := []string{
+		"--agents", "codex", "--hooks", "false", "--control-root", env.control, "--runtime-root", env.runtime,
+		"--global-config", env.global, "--codex-home", env.codexHome,
+		"--client-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+	}
+	var out bytes.Buffer
+	install := append([]string{"--action", "install", "--package", archive, "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, install, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("zip install: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "completed" {
+		t.Fatalf("zip install: %+v", got)
+	}
+	if err := os.Remove(archive); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := uapinstaller.New(uapinstaller.Config{StateRoot: filepath.Join(env.root, "uap", "state")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	uapView, err := eng.Inspect(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := ""
+	for _, installation := range uapView.Installations {
+		for _, binding := range installation.Bindings {
+			if binding.ClientID == "codex" && binding.TargetPath != "" {
+				target = binding.TargetPath
+			}
+		}
+	}
+	if target == "" {
+		t.Fatal("missing live target")
+	}
+	if err := os.RemoveAll(target); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	repair := append([]string{"--action", "repair", "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, repair, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("omitted zip repair: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "completed" {
+		t.Fatalf("omitted zip repair: %+v", got)
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("repair did not use durable acquired source: %v", err)
+	}
+}
+
+func TestSetupWizardRepairMissingDurableZipIsUnavailableE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	pkg := filepath.Join(env.root, "release-pkg")
+	archive := filepath.Join(env.root, portableasset.AssetName(runtime.GOOS, runtime.GOARCH))
+	if _, err := portableasset.Build(portableasset.BuildRequest{
+		Version: "1.43.0", GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
+		Executable: env.probe, OutputRoot: pkg, Archive: archive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	shared := []string{
+		"--agents", "codex", "--hooks", "false", "--control-root", env.control, "--runtime-root", env.runtime,
+		"--global-config", env.global, "--codex-home", env.codexHome,
+		"--client-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+	}
+	var out bytes.Buffer
+	install := append([]string{"--action", "install", "--package", archive, "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, install, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("zip install: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "completed" {
+		t.Fatalf("zip install: %+v", got)
+	}
+	if err := os.Remove(archive); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(env.root, "uap", "acquired-source")); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	repair := append([]string{"--action", "repair", "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, repair, &out, io.Discard, strings.NewReader(""), false); code != 1 {
+		t.Fatalf("missing durable zip exit: %d %s", code, out.String())
+	}
+	got := decodeWizardJSON(t, out)
+	if got.Outcome != "incomplete" || got.Reason != "package_acquisition_failed" {
+		t.Fatalf("missing durable zip: %+v", got)
+	}
+}
+
 func buildWizardProbe(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
