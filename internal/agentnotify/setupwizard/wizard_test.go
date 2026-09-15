@@ -1542,6 +1542,9 @@ func TestWizardInstallInspectUninstall(t *testing.T) {
 	if !found {
 		t.Fatalf("inspect missed portable binding: %+v", view.Targets)
 	}
+	if view.InstallationID == "" || view.InstallationID != installed.InstallationID {
+		t.Fatalf("live inspect omitted installation id: inspect=%s install=%s", view.InstallationID, installed.InstallationID)
+	}
 	if view.DataRetained {
 		t.Fatalf("live inspect reported retained data: %+v", view)
 	}
@@ -1558,6 +1561,9 @@ func TestWizardInstallInspectUninstall(t *testing.T) {
 	if !removed.DataRetained {
 		t.Fatalf("last uninstall omitted data_retained: %+v", removed)
 	}
+	if removed.InstallationID == "" || removed.InstallationID != installed.InstallationID {
+		t.Fatalf("last uninstall omitted installation id: uninstall=%s install=%s", removed.InstallationID, installed.InstallationID)
+	}
 	for _, next := range removed.NextActions {
 		if next.Kind == "test-notification" || next.Kind == "request-permission" {
 			t.Fatalf("uninstall offered setup action: %+v", removed.NextActions)
@@ -1571,6 +1577,9 @@ func TestWizardInstallInspectUninstall(t *testing.T) {
 	}
 	if !view.DataRetained {
 		t.Fatalf("inspect omitted data_retained: %+v", view)
+	}
+	if view.InstallationID == "" || view.InstallationID != installed.InstallationID {
+		t.Fatalf("retained inspect omitted installation id: inspect=%s install=%s", view.InstallationID, installed.InstallationID)
 	}
 	for _, target := range view.Targets {
 		if target.Unit == "agent-notify" && target.Outcome == "installed" {

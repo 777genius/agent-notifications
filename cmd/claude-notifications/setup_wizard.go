@@ -162,6 +162,9 @@ func writeSetupWizardResult(out io.Writer, jsonOut bool, result setupwizard.Resu
 		}
 	} else {
 		line := fmt.Sprintf("%s; reason=%s; generation=%d", result.Outcome, result.Reason, result.Generation)
+		if result.InstallationID != "" {
+			line += " installation-id=" + result.InstallationID
+		}
 		if result.DataRetained {
 			line += " data_retained=true"
 		}

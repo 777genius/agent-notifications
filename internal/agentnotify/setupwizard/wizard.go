@@ -1218,8 +1218,15 @@ func inspect(ctx context.Context, req Request, agents []portable.Integration, sn
 			Kind: "recover", Reason: strings.Join(recoveryIDs(view), ","),
 		})
 	}
-	out = markInspectedDataRetained(view, out)
+	out = markInspectedIdentity(view, out)
 	return reportPendingWizardIntent(req, snap, out), nil
+}
+
+func markInspectedIdentity(view uapinstaller.Inspection, out Result) Result {
+	if len(view.Installations) == 1 {
+		out.InstallationID = view.Installations[0].InstallationID
+	}
+	return markInspectedDataRetained(view, out)
 }
 
 func markInspectedDataRetained(view uapinstaller.Inspection, out Result) Result {
@@ -1619,6 +1626,7 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 			}
 		}
 		req.InstallationID = id.InstallationID
+		out.InstallationID = id.InstallationID
 		// §7.5: Recover is an application step, not Prepare(remove).
 		if err := recoverWizardJournals(ctx, mat, id, req, notifyAgents); err != nil {
 			out.Outcome, out.Reason = "incomplete", "recovery_required"

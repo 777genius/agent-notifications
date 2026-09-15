@@ -245,6 +245,9 @@ func TestInspectOmittedAgentsStillReportsBoth(t *testing.T) {
 	if got.DataRetained {
 		t.Fatalf("empty inspect reported retained data: %+v", got)
 	}
+	if got.InstallationID != "" {
+		t.Fatalf("empty inspect invented installation id: %+v", got)
+	}
 	plan, err := Plan(ctx, Request{Action: ActionInspect, ControlRoot: control})
 	if err != nil || !plan.Ready || plan.Result.Reason == "agents_required" || plan.Result.ExitCode() != 0 {
 		t.Fatalf("omitted inspect plan: %+v %v", plan, err)

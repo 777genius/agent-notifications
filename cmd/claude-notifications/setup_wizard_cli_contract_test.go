@@ -190,16 +190,17 @@ func TestSetupWizardReportsDataRetained(t *testing.T) {
 	var out bytes.Buffer
 	result := setupwizard.Result{
 		Action: "inspect", Outcome: "completed", Generation: 3, DataRetained: true,
-		Targets: []setupwizard.TargetResult{{Client: "codex", Unit: "agent-notify", Outcome: "absent"}},
+		InstallationID: "00000000-0000-4000-8000-000000000099",
+		Targets:        []setupwizard.TargetResult{{Client: "codex", Unit: "agent-notify", Outcome: "absent"}},
 	}
-	if code := writeSetupWizardResult(&out, false, result, nil); code != 0 || !strings.Contains(out.String(), "data_retained=true") {
+	if code := writeSetupWizardResult(&out, false, result, nil); code != 0 || !strings.Contains(out.String(), "data_retained=true") || !strings.Contains(out.String(), "installation-id=00000000-0000-4000-8000-000000000099") {
 		t.Fatalf("text: %d %s", code, out.String())
 	}
 	out.Reset()
 	if code := writeSetupWizardResult(&out, true, result, nil); code != 0 {
 		t.Fatalf("json code: %d %s", code, out.String())
 	}
-	if !strings.Contains(out.String(), `"dataRetained":true`) || strings.Contains(out.String(), `"DataRetained"`) {
+	if !strings.Contains(out.String(), `"dataRetained":true`) || !strings.Contains(out.String(), `"installationID":"00000000-0000-4000-8000-000000000099"`) || strings.Contains(out.String(), `"DataRetained"`) {
 		t.Fatalf("json: %s", out.String())
 	}
 	out.Reset()
