@@ -2350,6 +2350,21 @@ func TestWizardRepairMixedRevisionsRepairsMatchingPackage(t *testing.T) {
 	if err != nil || got.Outcome != "completed" {
 		t.Fatalf("codex update: %+v %v", got, err)
 	}
+	before := inspectedWizardBinding(t, ctx, control, "claude")
+	codexBefore := inspectedWizardBinding(t, ctx, control, "codex")
+	inspectReq := req
+	inspectReq.Action = ActionInspect
+	inspectReq.Agents = []string{"claude", "codex"}
+	inspectReq.Yes = false
+	view, err := Run(ctx, inspectReq)
+	if err != nil {
+		t.Fatalf("inspect mixed: %+v %v", view, err)
+	}
+	claudeDigest := notifyTreeDigest(view, "claude")
+	codexDigest := notifyTreeDigest(view, "codex")
+	if claudeDigest == "" || claudeDigest == codexDigest {
+		t.Fatalf("inspect collapsed mixed revisions: claude=%s codex=%s targets=%+v", claudeDigest, codexDigest, view.Targets)
+	}
 	req.Action = ActionRepair
 	req.Agents = []string{"claude", "codex"}
 	got, err = Run(ctx, req)
@@ -2371,6 +2386,24 @@ func TestWizardRepairMixedRevisionsRepairsMatchingPackage(t *testing.T) {
 	snap, err := installruntime.ReadInstalledSnapshot(control)
 	if err != nil || snap.Ledger.PendingMutation != nil {
 		t.Fatalf("mixed repair left intent: %+v %v", snap.Ledger.PendingMutation, err)
+	}
+	claudeAfter := inspectedWizardBinding(t, ctx, control, "claude")
+	codexAfter := inspectedWizardBinding(t, ctx, control, "codex")
+	if claudeAfter.BindingID != before.BindingID || claudeAfter.TargetPath != before.TargetPath {
+		t.Fatalf("mixed repair rewrote claude: before=%+v after=%+v", before, claudeAfter)
+	}
+	if codexAfter.BindingID != codexBefore.BindingID || codexAfter.TargetPath != codexBefore.TargetPath {
+		t.Fatalf("mixed repair rewrote codex: before=%+v after=%+v", codexBefore, codexAfter)
+	}
+	view, err = Run(ctx, inspectReq)
+	if err != nil {
+		t.Fatalf("inspect after mixed repair: %+v %v", view, err)
+	}
+	if notifyTreeDigest(view, "claude") != claudeDigest {
+		t.Fatalf("mixed repair rewrote claude digest: before=%s after=%s", claudeDigest, notifyTreeDigest(view, "claude"))
+	}
+	if notifyTreeDigest(view, "codex") != codexDigest {
+		t.Fatalf("mixed repair rewrote codex digest: before=%s after=%s", codexDigest, notifyTreeDigest(view, "codex"))
 	}
 }
 
@@ -2480,9 +2513,22 @@ func TestWizardRepairMixedRevisionsRematerializesDeletedSibling(t *testing.T) {
 	if err != nil || got.Outcome != "completed" {
 		t.Fatalf("codex update: %+v %v", got, err)
 	}
-	statePath := filepath.Join(filepath.Dir(control), "uap", "state", "state-v2.json")
-	target := liveTargetPath(t, statePath, "claude")
-	if err := os.RemoveAll(target); err != nil {
+	claudeBefore := inspectedWizardBinding(t, ctx, control, "claude")
+	codexBefore := inspectedWizardBinding(t, ctx, control, "codex")
+	inspectReq := req
+	inspectReq.Action = ActionInspect
+	inspectReq.Agents = []string{"claude", "codex"}
+	inspectReq.Yes = false
+	beforeView, err := Run(ctx, inspectReq)
+	if err != nil {
+		t.Fatalf("inspect mixed: %+v %v", beforeView, err)
+	}
+	claudeDigest := notifyTreeDigest(beforeView, "claude")
+	codexDigest := notifyTreeDigest(beforeView, "codex")
+	if claudeDigest == "" || claudeDigest == codexDigest {
+		t.Fatalf("inspect collapsed mixed revisions: claude=%s codex=%s targets=%+v", claudeDigest, codexDigest, beforeView.Targets)
+	}
+	if err := os.RemoveAll(claudeBefore.TargetPath); err != nil {
 		t.Fatal(err)
 	}
 	req.Action = ActionRepair
@@ -2491,11 +2537,29 @@ func TestWizardRepairMixedRevisionsRematerializesDeletedSibling(t *testing.T) {
 	if err != nil || (got.Outcome != "completed" && got.Outcome != "unchanged") {
 		t.Fatalf("mixed rematerialize: %+v %v", got, err)
 	}
-	if _, err := os.Stat(target); err != nil {
+	if _, err := os.Stat(claudeBefore.TargetPath); err != nil {
 		t.Fatalf("mixed rematerialize did not restore claude: %v", err)
 	}
 	if live := LiveNotifyClients(control, []string{"claude", "codex"}); len(live) != 2 {
 		t.Fatalf("mixed rematerialize lost sibling: %v", live)
+	}
+	claudeAfter := inspectedWizardBinding(t, ctx, control, "claude")
+	codexAfter := inspectedWizardBinding(t, ctx, control, "codex")
+	if claudeAfter.BindingID != claudeBefore.BindingID || claudeAfter.TargetPath != claudeBefore.TargetPath {
+		t.Fatalf("mixed rematerialize rewrote claude: before=%+v after=%+v", claudeBefore, claudeAfter)
+	}
+	if codexAfter.BindingID != codexBefore.BindingID || codexAfter.TargetPath != codexBefore.TargetPath {
+		t.Fatalf("mixed rematerialize rewrote codex sibling: before=%+v after=%+v", codexBefore, codexAfter)
+	}
+	view, err := Run(ctx, inspectReq)
+	if err != nil {
+		t.Fatalf("inspect after mixed rematerialize: %+v %v", view, err)
+	}
+	if notifyTreeDigest(view, "claude") != claudeDigest {
+		t.Fatalf("claude rematerialized from newer package: before=%s after=%s", claudeDigest, notifyTreeDigest(view, "claude"))
+	}
+	if notifyTreeDigest(view, "codex") != codexDigest {
+		t.Fatalf("codex sibling revision lost: before=%s after=%s", codexDigest, notifyTreeDigest(view, "codex"))
 	}
 }
 
@@ -2764,6 +2828,36 @@ func liveTargetPath(t *testing.T, statePath, clientID string) string {
 		}
 	}
 	t.Fatalf("no live target for %s in %s", clientID, statePath)
+	return ""
+}
+
+func inspectedWizardBinding(t *testing.T, ctx context.Context, control, clientID string) uapinstaller.InspectedBinding {
+	t.Helper()
+	eng, err := uapinstaller.New(uapinstaller.Config{StateRoot: filepath.Join(filepath.Dir(control), "uap", "state")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, installation := range view.Installations {
+		for _, binding := range installation.Bindings {
+			if binding.ClientID == clientID && binding.TargetPath != "" {
+				return binding
+			}
+		}
+	}
+	t.Fatalf("no live binding for %s under %s", clientID, control)
+	return uapinstaller.InspectedBinding{}
+}
+
+func notifyTreeDigest(got Result, client string) string {
+	for _, target := range got.Targets {
+		if target.Unit == "agent-notify" && target.Client == client {
+			return target.TreeDigest
+		}
+	}
 	return ""
 }
 

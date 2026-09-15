@@ -2119,6 +2119,126 @@ func TestSetupWizardRepairDifferentDigestRequiresUpdateE2E(t *testing.T) {
 	}
 }
 
+func TestSetupWizardRepairMixedRevisionsKeepsSiblingE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env, _, shared := prepareMixedRevisionWizardCLI(t, ctx)
+	claudeBefore := wizardCLIBinding(t, ctx, env.root, "claude")
+	codexBefore := wizardCLIBinding(t, ctx, env.root, "codex")
+	before := inspectWizardCLI(t, ctx, shared)
+	claudeDigest := wizardCLINotifyDigest(before, "claude")
+	codexDigest := wizardCLINotifyDigest(before, "codex")
+	if claudeDigest == "" || claudeDigest == codexDigest {
+		t.Fatalf("inspect collapsed mixed revisions: %+v", before.Targets)
+	}
+	var out bytes.Buffer
+	repair := append([]string{"--action", "repair", "--agents", "claude,codex", "--package", env.pkg, "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, repair, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("mixed repair: %d %s", code, out.String())
+	}
+	got := decodeWizardJSON(t, out)
+	if got.Outcome != "completed" && got.Outcome != "unchanged" {
+		t.Fatalf("mixed repair: %+v", got)
+	}
+	claudeAfter := wizardCLIBinding(t, ctx, env.root, "claude")
+	codexAfter := wizardCLIBinding(t, ctx, env.root, "codex")
+	if claudeAfter.BindingID != claudeBefore.BindingID || claudeAfter.TargetPath != claudeBefore.TargetPath {
+		t.Fatalf("mixed repair rewrote claude: before=%+v after=%+v", claudeBefore, claudeAfter)
+	}
+	if codexAfter.BindingID != codexBefore.BindingID || codexAfter.TargetPath != codexBefore.TargetPath {
+		t.Fatalf("mixed repair rewrote codex: before=%+v after=%+v", codexBefore, codexAfter)
+	}
+	view := inspectWizardCLI(t, ctx, shared)
+	if wizardCLINotifyDigest(view, "claude") != claudeDigest || wizardCLINotifyDigest(view, "codex") != codexDigest {
+		t.Fatalf("mixed repair rewrote digests: before claude=%s codex=%s after %+v", claudeDigest, codexDigest, view.Targets)
+	}
+}
+
+func TestSetupWizardRepairMixedRematerializesDeletedSiblingE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env, _, shared := prepareMixedRevisionWizardCLI(t, ctx)
+	claudeBefore := wizardCLIBinding(t, ctx, env.root, "claude")
+	codexBefore := wizardCLIBinding(t, ctx, env.root, "codex")
+	before := inspectWizardCLI(t, ctx, shared)
+	claudeDigest := wizardCLINotifyDigest(before, "claude")
+	codexDigest := wizardCLINotifyDigest(before, "codex")
+	if claudeDigest == "" || claudeDigest == codexDigest {
+		t.Fatalf("inspect collapsed mixed revisions: %+v", before.Targets)
+	}
+	if err := os.RemoveAll(claudeBefore.TargetPath); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	repair := append([]string{"--action", "repair", "--agents", "claude,codex", "--package", env.pkg, "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, repair, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("mixed rematerialize: %d %s", code, out.String())
+	}
+	got := decodeWizardJSON(t, out)
+	if got.Outcome != "completed" && got.Outcome != "unchanged" {
+		t.Fatalf("mixed rematerialize: %+v", got)
+	}
+	if _, err := os.Stat(claudeBefore.TargetPath); err != nil {
+		t.Fatalf("mixed rematerialize did not restore claude: %v", err)
+	}
+	claudeAfter := wizardCLIBinding(t, ctx, env.root, "claude")
+	codexAfter := wizardCLIBinding(t, ctx, env.root, "codex")
+	if claudeAfter.BindingID != claudeBefore.BindingID || claudeAfter.TargetPath != claudeBefore.TargetPath {
+		t.Fatalf("mixed rematerialize rewrote claude: before=%+v after=%+v", claudeBefore, claudeAfter)
+	}
+	if codexAfter.BindingID != codexBefore.BindingID || codexAfter.TargetPath != codexBefore.TargetPath {
+		t.Fatalf("mixed rematerialize rewrote codex sibling: before=%+v after=%+v", codexBefore, codexAfter)
+	}
+	view := inspectWizardCLI(t, ctx, shared)
+	if wizardCLINotifyDigest(view, "claude") != claudeDigest {
+		t.Fatalf("claude rematerialized from newer package: before=%s after=%s", claudeDigest, wizardCLINotifyDigest(view, "claude"))
+	}
+	if wizardCLINotifyDigest(view, "codex") != codexDigest {
+		t.Fatalf("codex sibling revision lost: before=%s after=%s", codexDigest, wizardCLINotifyDigest(view, "codex"))
+	}
+}
+
+func TestSetupWizardRepairMixedMissingOlderPackageE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env, r1, shared := prepareMixedRevisionWizardCLI(t, ctx)
+	codexBefore := wizardCLIBinding(t, ctx, env.root, "codex")
+	before := inspectWizardCLI(t, ctx, shared)
+	codexDigest := wizardCLINotifyDigest(before, "codex")
+	if err := os.RemoveAll(r1); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	repair := append([]string{"--action", "repair", "--agents", "claude,codex", "--package", env.pkg, "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, repair, &out, io.Discard, strings.NewReader(""), false); code != 1 {
+		t.Fatalf("mixed repair without r1 exit: %d %s", code, out.String())
+	}
+	got := decodeWizardJSON(t, out)
+	if got.Outcome != "incomplete" || got.Reason != "exact_revision_required" {
+		t.Fatalf("mixed repair without r1: %+v", got)
+	}
+	saw := map[string]setupwizard.TargetResult{}
+	for _, target := range got.Targets {
+		if target.Unit == "agent-notify" {
+			saw[target.Client] = target
+		}
+	}
+	if saw["codex"].Outcome != "completed" {
+		t.Fatalf("codex r2 repair: %+v", saw["codex"])
+	}
+	if saw["claude"].Outcome != "incomplete" || saw["claude"].Reason != "exact_revision_required" {
+		t.Fatalf("claude r1 mismatch: %+v", saw["claude"])
+	}
+	codexAfter := wizardCLIBinding(t, ctx, env.root, "codex")
+	if codexAfter.BindingID != codexBefore.BindingID {
+		t.Fatalf("missing older package rewrote codex: before=%s after=%s", codexBefore.BindingID, codexAfter.BindingID)
+	}
+	view := inspectWizardCLI(t, ctx, shared)
+	if wizardCLINotifyDigest(view, "codex") != codexDigest {
+		t.Fatalf("codex revision lost: before=%s after=%s", codexDigest, wizardCLINotifyDigest(view, "codex"))
+	}
+}
+
 func TestSetupWizardMixedUninstallHoldsCodexHooksE2E(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -3307,4 +3427,105 @@ func newWizardCLIEnv(t *testing.T, ctx context.Context, spaced bool) wizardCLIEn
 		t.Fatal(err)
 	}
 	return env
+}
+
+func copyWizardPackage(t *testing.T, src, dst string) {
+	t.Helper()
+	err := filepath.WalkDir(src, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0700)
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, info.Mode())
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func prepareMixedRevisionWizardCLI(t *testing.T, ctx context.Context) (wizardCLIEnv, string, []string) {
+	t.Helper()
+	env := newWizardCLIEnv(t, ctx, false)
+	r1 := filepath.Join(env.root, "package-r1")
+	copyWizardPackage(t, env.pkg, r1)
+	shared := []string{
+		"--hooks", "false", "--control-root", env.control, "--runtime-root", env.runtime,
+		"--global-config", env.global, "--codex-home", env.codexHome, "--claude-config", env.claudeConfig,
+		"--claude-executable", env.probe, "--codex-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+	}
+	var out bytes.Buffer
+	install := append([]string{"--action", "install", "--agents", "claude,codex", "--package", r1, "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, install, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("install both: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "completed" {
+		t.Fatalf("install both: %+v", got)
+	}
+	if err := os.WriteFile(filepath.Join(env.pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	update := append([]string{"--action", "update", "--agents", "codex", "--package", env.pkg, "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, update, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("update codex: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "completed" {
+		t.Fatalf("update codex: %+v", got)
+	}
+	return env, r1, shared
+}
+
+func wizardCLIBinding(t *testing.T, ctx context.Context, root, clientID string) uapinstaller.InspectedBinding {
+	t.Helper()
+	eng, err := uapinstaller.New(uapinstaller.Config{StateRoot: filepath.Join(root, "uap", "state")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, installation := range view.Installations {
+		for _, binding := range installation.Bindings {
+			if binding.ClientID == clientID && binding.TargetPath != "" {
+				return binding
+			}
+		}
+	}
+	t.Fatalf("no live binding for %s under %s", clientID, root)
+	return uapinstaller.InspectedBinding{}
+}
+
+func inspectWizardCLI(t *testing.T, ctx context.Context, shared []string) setupwizard.Result {
+	t.Helper()
+	var out bytes.Buffer
+	inspect := append([]string{"--action", "inspect", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, inspect, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect: %d %s", code, out.String())
+	}
+	return decodeWizardJSON(t, out)
+}
+
+func wizardCLINotifyDigest(got setupwizard.Result, client string) string {
+	for _, target := range got.Targets {
+		if target.Unit == "agent-notify" && target.Client == client {
+			return target.TreeDigest
+		}
+	}
+	return ""
 }

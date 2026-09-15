@@ -1101,10 +1101,14 @@ func inspect(ctx context.Context, req Request, agents []portable.Integration, sn
 				}
 				found = true
 				profile, _ := recordedLiveProfile(installation.DataReceipts[binding.DataReceiptID].Locator, string(agent))
+				digest := installation.Source.TreeDigest
+				if binding.PackageRevision != nil && binding.PackageRevision.TreeDigest != "" {
+					digest = binding.PackageRevision.TreeDigest
+				}
 				out.Targets = append(out.Targets, TargetResult{
 					Client: string(agent), Unit: "agent-notify", Outcome: "installed",
 					Reason: binding.ClientBindingID, Profile: profile,
-					TreeDigest: installation.Source.TreeDigest,
+					TreeDigest: digest,
 				})
 			}
 		}

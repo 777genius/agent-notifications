@@ -3949,6 +3949,9 @@ func TestExampleModuleStaysExternal(t *testing.T) {
 	if !strings.Contains(text, "ClientTarget") || !strings.Contains(text, "Targets:") {
 		t.Fatal("example omits published group Request.Targets")
 	}
+	if !strings.Contains(text, "repairTargets") {
+		t.Fatal("example omits per-target PackageRoot on group Repair")
+	}
 }
 
 func TestExampleFlaggedPathRunsAgainstLocalModule(t *testing.T) {

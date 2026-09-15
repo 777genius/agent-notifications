@@ -109,6 +109,10 @@ func runGroupDemo(state, pkg, config, claudeConfig, helper, client, claudeExe st
 	}
 	// Same PackageRoot for install/update: mixed roots stay unpublished there.
 	// Mixed live revisions repair by setting ClientTarget.PackageRoot per client.
+	repairTargets := []uapinstaller.ClientTarget{
+		{ClientID: "codex", ClientConfigRoot: config, ClientExecutable: client, PackageRoot: pkg},
+		{ClientID: "claude", ClientConfigRoot: claudeConfig, ClientExecutable: claudeExe, PackageRoot: pkg},
+	}
 	return runLifecycle(ctx, eng, req, uapinstaller.Request{
 		Operation: uapinstaller.OpUpdate, PackageRoot: pkg, InstallationID: req.InstallationID,
 		OperationID: "sample-group-update", RequiredComponents: []string{"mcp", "skills"},
@@ -116,7 +120,7 @@ func runGroupDemo(state, pkg, config, claudeConfig, helper, client, claudeExe st
 	}, uapinstaller.Request{
 		Operation: uapinstaller.OpRepair, PackageRoot: pkg, InstallationID: req.InstallationID,
 		OperationID: "sample-group-repair", RequiredComponents: []string{"mcp", "skills"},
-		ClientExecutable: client, Targets: targets,
+		ClientExecutable: client, Targets: repairTargets,
 	}, uapinstaller.Request{
 		Operation: uapinstaller.OpRemove, InstallationID: req.InstallationID,
 		OperationID: "sample-group-remove", ClientExecutable: client, Targets: removeTargets,
