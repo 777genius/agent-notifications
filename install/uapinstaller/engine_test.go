@@ -3027,6 +3027,66 @@ func TestRepairGroupMixedRevisionsAssessesEachSnapshot(t *testing.T) {
 	}
 }
 
+func TestRepairGroupMixedRevisionsAssessDigestMismatch(t *testing.T) {
+	ctx, eng, _, pkg, probe, codexConfig, claudeConfig := newBothClientSandbox(t)
+	id := "00000000-0000-4000-8000-0000000000d5"
+	r1 := filepath.Join(filepath.Dir(pkg), "package-r1")
+	copyPackage(t, pkg, r1)
+	installBothClients(t, ctx, eng, r1, probe, id, "mixed-repair-mismatch-install", bothClientTargets(codexConfig, claudeConfig, probe))
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"sample-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := eng.Prepare(ctx, Request{
+		Operation: OpUpdate, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: codexConfig,
+		ClientExecutable: probe, InstallationID: id, OperationID: "mixed-repair-mismatch-codex-update",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := eng.Apply(ctx, updated, Decision{Confirmed: true})
+	_ = updated.Close()
+	if err != nil || got.Outcome != OutcomeCompleted {
+		t.Fatalf("codex update: %+v %v", got, err)
+	}
+	before, err := eng.Inspect(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claudeBefore := inspectedBinding(t, before, "claude")
+	codexBefore := inspectedBinding(t, before, "codex")
+	stateBefore, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]int{}
+	eng.cfg.Assess = func(_ context.Context, _, digest string) (Assessment, error) {
+		seen[digest]++
+		if digest == claudeBefore.TreeDigest {
+			return Assessment{TreeDigest: "sha256:" + strings.Repeat("cd", 32), Outcome: AssessmentAllow}, nil
+		}
+		return Assessment{TreeDigest: digest, Outcome: AssessmentAllow}, nil
+	}
+	_, err = eng.Prepare(ctx, Request{
+		Operation: OpRepair, InstallationID: id, OperationID: "mixed-repair-mismatch-group",
+		RequiredComponents: []string{"mcp", "skills"}, ClientExecutable: probe,
+		Targets: []ClientTarget{
+			{ClientID: "codex", ClientConfigRoot: codexConfig, ClientExecutable: probe, PackageRoot: pkg},
+			{ClientID: "claude", ClientConfigRoot: claudeConfig, ClientExecutable: probe, PackageRoot: r1},
+		},
+	})
+	if !errors.Is(err, ErrAssessmentRejected) {
+		t.Fatalf("mismatched mixed repair: %v", err)
+	}
+	if seen[codexBefore.TreeDigest] != 1 || seen[claudeBefore.TreeDigest] != 1 {
+		t.Fatalf("mixed repair mismatch assess calls: %+v claude=%s codex=%s", seen, claudeBefore.TreeDigest, codexBefore.TreeDigest)
+	}
+	stateAfter, err := os.ReadFile(eng.cfg.StateFile)
+	if err != nil || !bytes.Equal(stateBefore, stateAfter) {
+		t.Fatal("mismatched mixed repair mutated state")
+	}
+}
+
 func TestRepairMixedRevisionRematerializesDeletedOlderSibling(t *testing.T) {
 	ctx, eng, _, pkg, probe, codexConfig, claudeConfig := newBothClientSandbox(t)
 	id := "00000000-0000-4000-8000-0000000000ed"
