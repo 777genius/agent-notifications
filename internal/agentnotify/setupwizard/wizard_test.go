@@ -907,6 +907,55 @@ func TestWizardHooksOnlyInstallLeavesUAPJournal(t *testing.T) {
 	}
 }
 
+func TestWizardHooksOnlyUninstallRecoversKernelJournal(t *testing.T) {
+	ctx := testCtx(t)
+	envHome := t.TempDir()
+	testenv.Set(t, envHome)
+	control, runtime, global, _, _ := managedRuntime(t)
+	bundle := writePluginBundle(t)
+	canonical := filepath.Join(envHome, "fixture-config.json")
+	if err := os.WriteFile(canonical, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENT_NOTIFICATIONS_CONFIG", canonical)
+	home := filepath.Join(envHome, "codex-home")
+	if err := os.MkdirAll(home, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true,
+		Hooks: boolPtr(true), AgentNotify: &off,
+		PluginRoot: bundle, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: home,
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("hooks install: %+v %v", installed, err)
+	}
+	hook := plantWizardKernelJournal(t, ctx, control, runtime)
+	req.Action = ActionUninstall
+	removed, err := Run(ctx, req)
+	if err != nil || removed.Outcome != "completed" {
+		t.Fatalf("hooks uninstall recover: %+v %v", removed, err)
+	}
+	if _, err := os.Lstat(filepath.Join(control, "transaction.json")); !os.IsNotExist(err) {
+		t.Fatal("hooks uninstall left kernel journal")
+	}
+	got, err := os.ReadFile(hook)
+	if err != nil || string(got) != "new" {
+		t.Fatalf("hooks uninstall kernel recover did not finish: %s %v", got, err)
+	}
+	hooks := filepath.Join(home, "hooks.json")
+	data, err := os.ReadFile(hooks)
+	if err == nil && strings.Contains(string(data), "codex-hook-wrapper") {
+		t.Fatalf("hooks survived uninstall: %s", data)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(control), "uap", "state", "state-v2.json")); !os.IsNotExist(err) {
+		t.Fatal("hooks uninstall opened UAP state")
+	}
+}
+
 func TestPlanUninstallListsCodexExternalPrerequisite(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, _, _ := managedRuntime(t)
