@@ -1161,10 +1161,7 @@ func inspect(ctx context.Context, req Request, agents []portable.Integration, sn
 			out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "absent"})
 		}
 		out = inspectHooks(req, agent, out)
-		mcpPath := ""
-		if req.MCPConfig != nil {
-			mcpPath = req.MCPConfig[string(agent)]
-		}
+		mcpPath := discoveryConfigPath(req, agent)
 		if mcpPath == "" {
 			continue
 		}
@@ -2680,14 +2677,45 @@ func primaryName(req Request) string {
 }
 
 func discovery(req Request, agent portable.Integration, runtimeRoot string, _ installruntime.InstalledSnapshot) portablesetup.Discovery {
-	path := ""
-	if req.MCPConfig != nil {
-		path = req.MCPConfig[string(agent)]
-	}
+	path := discoveryConfigPath(req, agent)
 	if path == "" {
 		return portablesetup.Discovery{}
 	}
 	return portablesetup.Discovery{ConfigPath: path, Command: filepath.Join(runtimeRoot, primaryName(req))}
+}
+
+// discoveryConfigPath is the owned client MCP file to hand off. Explicit
+// --mcp-config / --claude-mcp-config win. Otherwise a regular file already
+// present in the selected profile is used (Codex config.toml, Claude
+// .claude.json). Missing files stay empty so fresh installs skip handoff.
+func discoveryConfigPath(req Request, agent portable.Integration) string {
+	if req.MCPConfig != nil {
+		if path := req.MCPConfig[string(agent)]; path != "" {
+			return path
+		}
+	}
+	root := clientConfig(req, agent)
+	if !explicitAbs(root) {
+		return ""
+	}
+	name := ""
+	switch agent {
+	case portable.Codex:
+		name = "config.toml"
+	case portable.Claude:
+		name = ".claude.json"
+	default:
+		return ""
+	}
+	path := filepath.Join(root, name)
+	if !explicitAbs(path) {
+		return ""
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return ""
+	}
+	return path
 }
 
 func clientConfig(req Request, agent portable.Integration) string {
