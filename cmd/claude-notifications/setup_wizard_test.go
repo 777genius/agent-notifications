@@ -695,6 +695,67 @@ func TestSetupWizardReinstallRetainsInstallationE2E(t *testing.T) {
 	}
 }
 
+func TestSetupWizardReinstallPreservesNotificationOptOutsE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	flags := func(action string, extra ...string) []string {
+		args := []string{
+			"--action", action, "--agents", "codex", "--hooks", "false",
+			"--package", env.pkg, "--control-root", env.control, "--runtime-root", env.runtime,
+			"--global-config", env.global, "--codex-home", env.codexHome,
+			"--client-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+		}
+		return append(args, extra...)
+	}
+	var out bytes.Buffer
+	if code := executeSetupWizardWith(ctx, flags("install", "--yes", "--json"), &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("install: %d %s", code, out.String())
+	}
+	installed := decodeWizardJSON(t, out)
+	if installed.Outcome != "completed" || installed.InstallationID == "" {
+		t.Fatalf("install result: %+v", installed)
+	}
+	optOut := `{"foreign":{"keep":true},"notifications":{"desktop":{"enabled":false,"sound":false,"clickToFocus":false}}}`
+	if err := os.WriteFile(env.global, []byte(optOut), 0600); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(env.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disabled := false
+	if _, err := installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: env.control, RuntimeRoot: env.runtime, Owner: "existing-installer", ConsumerID: "existing",
+		RefreshOnly: true, PolicyEnabled: &disabled, ExpectedGeneration: &snap.Ledger.Generation,
+	}); err != nil {
+		t.Fatalf("disable policy: %v", err)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, flags("uninstall", "--yes", "--json", "--external-uninstalled"), &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("uninstall: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "completed" {
+		t.Fatalf("uninstall result: %+v", got)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, flags("install", "--yes", "--json", "--installation-id", installed.InstallationID), &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("reinstall: %d %s", code, out.String())
+	}
+	reinstalled := decodeWizardJSON(t, out)
+	if reinstalled.Outcome != "completed" || reinstalled.InstallationID != installed.InstallationID {
+		t.Fatalf("reinstall lost installation: %+v", reinstalled)
+	}
+	policy, err := installruntime.ReadUserPolicy(env.control)
+	if err != nil || policy.Enabled {
+		t.Fatalf("reinstall re-enabled policy: %+v %v", policy, err)
+	}
+	body, err := os.ReadFile(env.global)
+	if err != nil || !strings.Contains(string(body), `"enabled":false`) || !strings.Contains(string(body), `"sound":false`) || !strings.Contains(string(body), `"clickToFocus":false`) || !strings.Contains(string(body), `"keep":true`) {
+		t.Fatalf("reinstall lost global opt-outs: %s %v", body, err)
+	}
+}
+
 func TestSetupWizardMixedPerClientOptOutsE2E(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -802,6 +863,32 @@ func TestSetupWizardTTYMixedAddKeepsPerClientUnits(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "hooks=false") || !strings.Contains(out.String(), "agent-notify=true") {
 		t.Fatalf("mixed uninstall notify-only plan: %s", out.String())
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, shared, &out, io.Discard, strings.NewReader("3\n1\n"), true); code != 0 || !strings.Contains(out.String(), "cancelled") {
+		t.Fatalf("mixed uninstall keep: %d %s", code, out.String())
+	}
+	if strings.Contains(out.String(), "[y/N]") {
+		t.Fatalf("mixed uninstall keep asked confirm: %s", out.String())
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, inspect, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect after uninstall keep: %d %s", code, out.String())
+	}
+	view = decodeWizardJSON(t, out)
+	claudeMCP, codexMCP, hooksInstalled = "", "", false
+	for _, target := range view.Targets {
+		switch {
+		case target.Unit == "agent-notify" && target.Client == "claude":
+			claudeMCP = target.Outcome
+		case target.Unit == "agent-notify" && target.Client == "codex":
+			codexMCP = target.Outcome
+		case target.Unit == "hooks" && target.Outcome == "installed":
+			hooksInstalled = true
+		}
+	}
+	if claudeMCP == "installed" || codexMCP != "installed" || hooksInstalled {
+		t.Fatalf("uninstall keep mutated mixed units: %+v", view.Targets)
 	}
 }
 
@@ -1453,6 +1540,74 @@ func TestSetupWizardUninstallExplicitFalsePreservesNotifyE2E(t *testing.T) {
 	}
 	if hooksInstalled || !notifyInstalled {
 		t.Fatalf("explicit false did not keep notify: %+v", view.Targets)
+	}
+}
+
+func TestSetupWizardUninstallNotifyOnlyKeepsHooksE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	envHome := t.TempDir()
+	testenv.Set(t, envHome)
+	canonical := filepath.Join(envHome, "fixture-config.json")
+	if err := os.WriteFile(canonical, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENT_NOTIFICATIONS_CONFIG", canonical)
+	env := newWizardCLIEnv(t, ctx, false)
+	bundle := writeWizardPluginBundle(t)
+	shared := []string{
+		"--control-root", env.control, "--runtime-root", env.runtime,
+		"--global-config", env.global, "--codex-home", env.codexHome,
+		"--client-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+	}
+	var out, stderr bytes.Buffer
+	install := append([]string{
+		"--action", "install", "--agents", "codex", "--hooks", "true", "--agent-notify", "true",
+		"--package", env.pkg, "--plugin-root", bundle, "--yes", "--json",
+	}, shared...)
+	if code := executeSetupWizardWith(ctx, install, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("install both units: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "completed" {
+		t.Fatalf("install both units: %+v", got)
+	}
+	out.Reset()
+	uninstall := append([]string{
+		"--action", "uninstall", "--agents", "codex", "--hooks", "false", "--agent-notify", "true",
+		"--yes", "--json", "--external-uninstalled",
+	}, shared...)
+	if code := executeSetupWizardWith(ctx, uninstall, &out, &stderr, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("uninstall notify-only: %d %s", code, out.String())
+	}
+	removed := decodeWizardJSON(t, out)
+	if removed.Outcome != "completed" {
+		t.Fatalf("uninstall notify-only: %+v", removed)
+	}
+	if strings.Contains(stderr.String(), "phase prepare") {
+		t.Fatalf("notify-only uninstall acquired a package: %s", stderr.String())
+	}
+	for _, next := range removed.NextActions {
+		if next.Kind == "test-notification" || next.Kind == "request-permission" {
+			t.Fatalf("uninstall offered setup action: %+v", removed.NextActions)
+		}
+	}
+	out.Reset()
+	inspect := append([]string{"--action", "inspect", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, inspect, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect after notify-only uninstall: %d %s", code, out.String())
+	}
+	view := decodeWizardJSON(t, out)
+	var hooksInstalled, notifyInstalled bool
+	for _, target := range view.Targets {
+		if target.Unit == "hooks" && target.Outcome == "installed" {
+			hooksInstalled = true
+		}
+		if target.Unit == "agent-notify" && target.Outcome == "installed" {
+			notifyInstalled = true
+		}
+	}
+	if !hooksInstalled || notifyInstalled {
+		t.Fatalf("notify-only uninstall dropped hooks or kept notify: %+v", view.Targets)
 	}
 }
 
