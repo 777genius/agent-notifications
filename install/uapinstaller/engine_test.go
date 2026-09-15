@@ -2221,6 +2221,114 @@ func TestCancelAfterManagedCommitKeepsBinding(t *testing.T) {
 	}
 }
 
+func TestCommittedBindingCallbackCannotReenterApply(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	var nestedApply, nestedInspect error
+	var eng *Engine
+	var prepared *PreparedOperation
+	eng, err = New(Config{
+		StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe,
+		OnCommittedBinding: func(cbCtx context.Context, facts BindingFacts) error {
+			if facts.BindingID == "" {
+				return errors.New("committed binding missing identity")
+			}
+			_, nestedApply = eng.Apply(cbCtx, prepared, Decision{Confirmed: true})
+			_, nestedInspect = eng.Inspect(cbCtx)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err = eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-000000000065",
+		OperationID: "no-reenter", RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = prepared.Close() }()
+	result, err := eng.Apply(ctx, prepared, Decision{Confirmed: true})
+	if err != nil || result.Outcome != OutcomeCompleted {
+		t.Fatalf("outer apply: %+v %v", result, err)
+	}
+	if !errors.Is(nestedApply, ErrHandleBusy) {
+		t.Fatalf("nested apply from callback: %v", nestedApply)
+	}
+	if nestedInspect != nil {
+		t.Fatalf("inspect from callback mutated or failed: %v", nestedInspect)
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 1 {
+		t.Fatalf("reentrant callback created a second commit: %+v %v", view, err)
+	}
+}
+
+func TestInstalledTargetSurvivesSourceDeleteAfterApply(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-000000000066",
+		OperationID: "survive-source", RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := eng.Apply(ctx, prepared, Decision{Confirmed: true})
+	_ = prepared.Close()
+	if err != nil || result.Outcome != OutcomeCompleted {
+		t.Fatalf("install: %+v %v", result, err)
+	}
+	if err := os.RemoveAll(pkg); err != nil {
+		t.Fatal(err)
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 1 {
+		t.Fatalf("inspect after source delete: %+v %v", view, err)
+	}
+	target := view.Installations[0].Bindings[0].TargetPath
+	if target == "" {
+		t.Fatal("inspect omitted target")
+	}
+	if _, err := os.Lstat(target); err != nil {
+		t.Fatalf("installed launcher lost after source delete: %v", err)
+	}
+	if result.Binding.DataRoot != "" {
+		if _, err := os.Lstat(result.Binding.DataRoot); err != nil {
+			t.Fatalf("PLUGIN_DATA lost after source delete: %v", err)
+		}
+	}
+}
+
 func names(entries []os.DirEntry) []string {
 	out := make([]string, 0, len(entries))
 	for _, entry := range entries {

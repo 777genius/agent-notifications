@@ -233,6 +233,67 @@ func TestBuildPackageInstallsThroughPublicInstaller(t *testing.T) {
 	}
 }
 
+func TestExtractedArchiveInstallsThroughPublicInstaller(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("UAP managedstdio.NewSource requires Perm()&0111; Go Windows FileMode does not set execute bits on regular files")
+	}
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(base, "pkg")
+	archive := filepath.Join(base, AssetName(runtime.GOOS, runtime.GOARCH))
+	got, err := Build(BuildRequest{
+		Version: "1.43.0", GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
+		Executable: probe, OutputRoot: root, Archive: archive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	destParent := filepath.Join(base, "acquired")
+	if err := os.Mkdir(destParent, 0700); err != nil {
+		t.Fatal(err)
+	}
+	extracted, err := OpenArchive(archive, destParent, got.ArchiveSHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(archive); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(base, "client")
+	if err := os.Mkdir(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := uapinstaller.New(uapinstaller.Config{
+		StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := eng.Prepare(t.Context(), uapinstaller.Request{
+		Operation: uapinstaller.OpInstall, PackageRoot: extracted, ClientID: "codex",
+		ClientConfigRoot: config, ClientExecutable: probe,
+		InstallationID: "00000000-0000-4000-8000-000000000098", OperationID: "extracted-asset",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = prepared.Close() }()
+	result, err := eng.Apply(t.Context(), prepared, uapinstaller.Decision{Confirmed: true})
+	if err != nil || result.Outcome != uapinstaller.OutcomeCompleted {
+		t.Fatalf("extracted archive apply: %+v %v", result, err)
+	}
+	if _, err := os.Lstat(result.Binding.TargetPath); err != nil {
+		t.Fatalf("extracted archive lost target: %v", err)
+	}
+}
+
 func TestBuildRefusesExistingRoot(t *testing.T) {
 	probe := buildProbe(t)
 	root := t.TempDir()
