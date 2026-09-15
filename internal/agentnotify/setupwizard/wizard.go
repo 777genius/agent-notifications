@@ -233,14 +233,16 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 					return plan, bindErr
 				}
 			}
-			if err := reserveClientBindings(&req, mat, ev.notifyAgents); err != nil {
-				if mapped, handled := mapAmbiguous(err, ev.out); handled {
-					plan.Result = attachCommand(req, mapped)
+			if !retainedMetadataUpdate(mat, id, req.Action) {
+				if err := reserveClientBindings(&req, mat, ev.notifyAgents); err != nil {
+					if mapped, handled := mapAmbiguous(err, ev.out); handled {
+						plan.Result = attachCommand(req, mapped)
+						return plan, err
+					}
+					ev.out.Outcome, ev.out.Reason = "incomplete", err.Error()
+					plan.Result = attachCommand(req, ev.out)
 					return plan, err
 				}
-				ev.out.Outcome, ev.out.Reason = "incomplete", err.Error()
-				plan.Result = attachCommand(req, ev.out)
-				return plan, err
 			}
 			acquired.BindingIDs = copyBindingIDs(req.BindingIDs)
 			plan.Request = req
@@ -250,17 +252,19 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 					text += " " + string(agent) + "-binding-id=" + bid
 				}
 			}
-			failed, reason, err := bindNotifyPreviews(ctx, &req, acquired, ev.snap, ev.runtimeRoot, ev.notifyAgents)
-			if err != nil {
-				if reason == "" {
-					mapped, mappedErr := mapPreviewFailure(req, failed, mat, id, err, ev.out)
-					plan.Text = annotateRequiredUpdate(text, mapped)
-					plan.Result = attachCommand(req, mapped)
-					return plan, mappedErr
+			if !retainedMetadataUpdate(mat, id, req.Action) {
+				failed, reason, err := bindNotifyPreviews(ctx, &req, acquired, ev.snap, ev.runtimeRoot, ev.notifyAgents)
+				if err != nil {
+					if reason == "" {
+						mapped, mappedErr := mapPreviewFailure(req, failed, mat, id, err, ev.out)
+						plan.Text = annotateRequiredUpdate(text, mapped)
+						plan.Result = attachCommand(req, mapped)
+						return plan, mappedErr
+					}
+					ev.out.Outcome, ev.out.Reason = "incomplete", reason
+					plan.Result = attachCommand(req, ev.out)
+					return plan, err
 				}
-				ev.out.Outcome, ev.out.Reason = "incomplete", reason
-				plan.Result = attachCommand(req, ev.out)
-				return plan, err
 			}
 			if req.TreeDigest != "" {
 				text += " source-digest=" + req.TreeDigest
@@ -1140,57 +1144,59 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 			out.Outcome, out.Reason = "incomplete", "recovery_required"
 			return out, err
 		}
-		if err := reserveClientBindings(&req, mat, notifyAgents); err != nil {
-			if mapped, handled := mapAmbiguous(err, out); handled {
-				return mapped, err
-			}
-			out.Outcome, out.Reason = "incomplete", err.Error()
-			return out, err
-		}
-		for _, agent := range notifyAgents {
-			if !explicitAbs(clientConfig(req, agent)) {
-				out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: "client_config_required"})
-				out.Outcome, out.Reason = "incomplete", "client_config_required"
-				return out, ErrRefused
-			}
-			if !explicitAbs(clientExecutable(req, agent)) {
-				out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: "client_executable_required"})
-				out.Outcome, out.Reason = "incomplete", "client_executable_required"
-				return out, ErrRefused
-			}
-			if err := guardLiveProfile(mat, id.InstallationID, string(agent), clientConfig(req, agent)); err != nil {
+		if !retainedMetadataUpdate(mat, id, req.Action) {
+			if err := reserveClientBindings(&req, mat, notifyAgents); err != nil {
 				if mapped, handled := mapAmbiguous(err, out); handled {
 					return mapped, err
 				}
 				out.Outcome, out.Reason = "incomplete", err.Error()
 				return out, err
 			}
-			materialize := portablesetup.MaterializeRequest{
-				Identity: id, Integration: agent, ExpectedGeneration: snap.Ledger.Generation,
-				PackageRoot: req.PackageRoot, ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
-				SourceRevision: req.ReleaseVersion, SourceDigest: req.PackageSHA256,
-				TreeDigest: req.TreeDigest, HelperDigest: req.HelperDigest, HelperVersion: req.HelperVersion,
-				Discovery:   discovery(req, agent, runtimeRoot, snap),
-				OperationID: wizardMutationID(req.Action, agent, snap.Ledger.Generation),
-				Operation:   wizardPackageOp(req.Action),
-			}
-			if others, err := mat.OtherLiveClients(id.InstallationID, string(agent)); err != nil {
-				out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: err.Error()})
-				out.Outcome, out.Reason = "incomplete", "portable_inspect_failed"
-				return out, err
-			} else if len(others) > 0 && req.Action != ActionUpdate {
-				if err := mat.GuardSecondClient(ctx, materialize); err != nil {
-					if portablesetup.IsUpdateRequired(err) {
-						return updateRequired(req, agent, others, out, err)
+			for _, agent := range notifyAgents {
+				if !explicitAbs(clientConfig(req, agent)) {
+					out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: "client_config_required"})
+					out.Outcome, out.Reason = "incomplete", "client_config_required"
+					return out, ErrRefused
+				}
+				if !explicitAbs(clientExecutable(req, agent)) {
+					out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: "client_executable_required"})
+					out.Outcome, out.Reason = "incomplete", "client_executable_required"
+					return out, ErrRefused
+				}
+				if err := guardLiveProfile(mat, id.InstallationID, string(agent), clientConfig(req, agent)); err != nil {
+					if mapped, handled := mapAmbiguous(err, out); handled {
+						return mapped, err
 					}
-					out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: err.Error()})
-					out.Outcome, out.Reason = "incomplete", "portable_install_failed"
+					out.Outcome, out.Reason = "incomplete", err.Error()
 					return out, err
+				}
+				materialize := portablesetup.MaterializeRequest{
+					Identity: id, Integration: agent, ExpectedGeneration: snap.Ledger.Generation,
+					PackageRoot: req.PackageRoot, ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
+					SourceRevision: req.ReleaseVersion, SourceDigest: req.PackageSHA256,
+					TreeDigest: req.TreeDigest, HelperDigest: req.HelperDigest, HelperVersion: req.HelperVersion,
+					Discovery:   discovery(req, agent, runtimeRoot, snap),
+					OperationID: wizardMutationID(req.Action, agent, snap.Ledger.Generation),
+					Operation:   wizardPackageOp(req.Action),
+				}
+				if others, err := mat.OtherLiveClients(id.InstallationID, string(agent)); err != nil {
+					out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: err.Error()})
+					out.Outcome, out.Reason = "incomplete", "portable_inspect_failed"
+					return out, err
+				} else if len(others) > 0 && req.Action != ActionUpdate {
+					if err := mat.GuardSecondClient(ctx, materialize); err != nil {
+						if portablesetup.IsUpdateRequired(err) {
+							return updateRequired(req, agent, others, out, err)
+						}
+						out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: err.Error()})
+						out.Outcome, out.Reason = "incomplete", "portable_install_failed"
+						return out, err
+					}
 				}
 			}
 		}
 	}
-	if (req.Action == ActionInstall || req.Action == ActionUpdate || req.Action == ActionRepair) && len(notifyAgents) > 0 {
+	if !retainedMetadataUpdate(mat, id, req.Action) && (req.Action == ActionInstall || req.Action == ActionUpdate || req.Action == ActionRepair) && len(notifyAgents) > 0 {
 		failed, reason, err := bindNotifyPreviews(ctx, &req, req, snap, runtimeRoot, notifyAgents)
 		if err != nil {
 			if reason == "" {
@@ -1225,6 +1231,21 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		snap.Ledger.Generation = generation
 	}
 	if len(notifyAgents) == 0 {
+		out.Outcome = "completed"
+		reportProgress(req, "complete")
+		return out, nil
+	}
+	if retainedMetadataUpdate(mat, id, req.Action) {
+		materialize := portablesetup.MaterializeRequest{
+			Identity: id, Integration: notifyAgents[0], ExpectedGeneration: snap.Ledger.Generation,
+			PackageRoot: req.PackageRoot, ClientConfigRoot: clientConfig(req, notifyAgents[0]), ClientExecutable: clientExecutable(req, notifyAgents[0]),
+			OperationID: wizardMutationID(req.Action, notifyAgents[0], snap.Ledger.Generation),
+		}
+		if err := mat.SwitchRetained(ctx, materialize); err != nil {
+			out.Outcome, out.Reason = "incomplete", "portable_preflight_failed"
+			return out, err
+		}
+		out.InstallationID = id.InstallationID
 		out.Outcome = "completed"
 		reportProgress(req, "complete")
 		return out, nil
@@ -1597,11 +1618,15 @@ func updateRequired(req Request, adding portable.Integration, others []string, o
 	out.Outcome, out.Reason = "incomplete", "update_required"
 	updateReq := req
 	updateReq.Action = ActionUpdate
-	updateReq.Agents = others
+	updateAgents := others
+	if len(updateAgents) == 0 {
+		updateAgents = []string{string(adding)}
+	}
+	updateReq.Agents = updateAgents
 	addReq := req
 	addReq.Agents = []string{string(adding)}
 	out.NextActions = []NextAction{
-		{Kind: "update", Agents: others, Command: RetryCommand(updateReq), Reason: "update_existing_before_add"},
+		{Kind: "update", Agents: updateAgents, Command: RetryCommand(updateReq), Reason: "update_existing_before_add"},
 		{Kind: "install", Agents: []string{string(adding)}, Command: RetryCommand(addReq), Reason: "add_after_update"},
 	}
 	return out, err
@@ -1817,7 +1842,18 @@ func mapPreviewFailure(req Request, agent portable.Integration, mat portablesetu
 	return out, err
 }
 
+func retainedMetadataUpdate(mat portablesetup.Materializer, id portablesetup.Identity, action Action) bool {
+	if action != ActionUpdate || id.InstallationID == "" {
+		return false
+	}
+	empty, err := mat.RetainedEmpty(id.InstallationID)
+	return err == nil && empty
+}
+
 func requireLiveNotifyBindings(req Request, mat portablesetup.Materializer, id portablesetup.Identity, agents []portable.Integration, out Result) (Result, error) {
+	if retained, err := mat.RetainedEmpty(id.InstallationID); err == nil && retained && req.Action == ActionUpdate {
+		return out, nil
+	}
 	var missing, live []string
 	for _, agent := range agents {
 		if liveNotifyClient(mat, id.InstallationID, string(agent)) {

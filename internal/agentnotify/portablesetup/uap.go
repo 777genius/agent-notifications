@@ -387,6 +387,34 @@ func (m Materializer) Repair(ctx context.Context, req MaterializeRequest) (porta
 	return m.Install(ctx, req)
 }
 
+func (m Materializer) SwitchRetained(ctx context.Context, req MaterializeRequest) error {
+	if ctx == nil {
+		return ErrPreflight
+	}
+	if !explicitAbs(req.PackageRoot) {
+		return fmt.Errorf("%w: package root must be an explicit absolute path", ErrPreflight)
+	}
+	if req.Identity.InstallationID == "" {
+		return fmt.Errorf("%w: installation id is required", ErrPreflight)
+	}
+	generation := req.ExpectedGeneration
+	eng, err := m.engine(req, &generation, nil)
+	if err != nil {
+		return err
+	}
+	got, err := eng.SwitchRetained(ctx, uapinstaller.Request{
+		PackageRoot: req.PackageRoot, InstallationID: req.Identity.InstallationID,
+		OperationID: req.OperationID,
+	}, uapinstaller.Decision{Confirmed: true})
+	if err != nil {
+		return wrapUpdateRequired(err)
+	}
+	if got.Outcome != uapinstaller.OutcomeCompleted && got.Outcome != uapinstaller.OutcomeUnchanged {
+		return fmt.Errorf("%w: %s", ErrPreflight, got.Reason)
+	}
+	return nil
+}
+
 func IsUpdateRequired(err error) bool {
 	if err == nil {
 		return false

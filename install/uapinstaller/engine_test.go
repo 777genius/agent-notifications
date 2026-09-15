@@ -1158,6 +1158,108 @@ func TestUpdateCopiedPackageWithNewDigest(t *testing.T) {
 	}
 }
 
+func TestSwitchRetainedCopiedPackageWithNewDigest(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "00000000-0000-4000-8000-0000000000a1"
+	installed, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: id, OperationID: "retained-switch-install",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := eng.Apply(ctx, installed, Decision{Confirmed: true})
+	before := installed.Plan().TreeDigest
+	dataRoot := first.Binding.DataRoot
+	_ = installed.Close()
+	if err != nil || first.Outcome != OutcomeCompleted || dataRoot == "" {
+		t.Fatalf("install: %+v %v", first, err)
+	}
+	sentinel := filepath.Join(dataRoot, "keep.txt")
+	if err := os.WriteFile(sentinel, []byte("retain\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.SwitchRetained(ctx, Request{
+		PackageRoot: pkg, InstallationID: id, OperationID: "retained-switch-live",
+	}, Decision{Confirmed: true}); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("live switch: %v", err)
+	}
+	rm, err := eng.Prepare(ctx, Request{
+		Operation: OpRemove, ClientID: "codex", ClientConfigRoot: config, ClientExecutable: probe,
+		InstallationID: id, OperationID: "retained-switch-remove", ExternalUninstalled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed, err := eng.Apply(ctx, rm, Decision{Confirmed: true})
+	_ = rm.Close()
+	if err != nil || removed.Outcome != OutcomeCompleted || !removed.DataRetained {
+		t.Fatalf("remove: %+v %v", removed, err)
+	}
+	other := filepath.Join(base, "other-package")
+	writePackage(t, other, probe)
+	if err := os.WriteFile(filepath.Join(other, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"sample-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	switched, err := eng.SwitchRetained(ctx, Request{
+		PackageRoot: other, InstallationID: id, OperationID: "retained-switch-apply",
+	}, Decision{Confirmed: true})
+	if err != nil || switched.Outcome != OutcomeCompleted {
+		t.Fatalf("switch retained: %+v %v", switched, err)
+	}
+	if switched.Binding.TreeDigest == "" || switched.Binding.TreeDigest == before {
+		t.Fatalf("switch kept old digest %s", switched.Binding.TreeDigest)
+	}
+	body, err := os.ReadFile(sentinel)
+	if err != nil || string(body) != "retain\n" {
+		t.Fatalf("PLUGIN_DATA sentinel: %s %v", body, err)
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 || !view.Installations[0].DataRetained {
+		t.Fatalf("inspect after switch: %+v %v", view, err)
+	}
+	if view.Installations[0].TreeDigest != switched.Binding.TreeDigest {
+		t.Fatalf("inspect digest: %s vs %s", view.Installations[0].TreeDigest, switched.Binding.TreeDigest)
+	}
+	if len(view.Installations[0].Bindings) != 0 {
+		t.Fatalf("switch materialized a client: %+v", view.Installations[0].Bindings)
+	}
+	added, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: other, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: id, OperationID: "retained-switch-add",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := eng.Apply(ctx, added, Decision{Confirmed: true})
+	_ = added.Close()
+	if err != nil || got.Outcome != OutcomeCompleted {
+		t.Fatalf("add after switch: %+v %v", got, err)
+	}
+	body, err = os.ReadFile(sentinel)
+	if err != nil || string(body) != "retain\n" {
+		t.Fatalf("PLUGIN_DATA after add: %s %v", body, err)
+	}
+}
+
 func TestRepairRematerializesMissingTarget(t *testing.T) {
 	skipWindowsLauncherExecuteBit(t)
 	ctx := testCtx(t)
