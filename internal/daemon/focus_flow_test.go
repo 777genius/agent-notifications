@@ -50,7 +50,7 @@ func TestFocusFlowPreservesWarpAndZellij(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer listener.Close()
+			defer func() { _ = listener.Close() }()
 			server := &Server{notifier: focusFlowNotifier{}, focusCtx: make(map[uint32]FocusHints)}
 			done := make(chan error, 1)
 			go func() {
