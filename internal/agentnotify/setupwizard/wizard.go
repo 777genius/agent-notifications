@@ -510,6 +510,43 @@ func liveNotifyClient(mat portablesetup.Materializer, installationID, clientID s
 	return false
 }
 
+// liveManagedTargetsPresent is true when every selected live binding still has
+// its managed artifact. Missing targets skip ApplyGroup Repair so sequential
+// Repair can rematerialize without the unset NativeObserver sibling check.
+func liveManagedTargetsPresent(mat portablesetup.Materializer, installationID string, agents []portable.Integration) bool {
+	if installationID == "" || len(agents) == 0 {
+		return false
+	}
+	state, err := mat.Store.Load()
+	if err != nil {
+		return false
+	}
+	for _, agent := range agents {
+		found := false
+		for _, installation := range state.Installations {
+			if installation.InstallationID != installationID {
+				continue
+			}
+			for _, binding := range installation.Clients {
+				if binding.ClientID != string(agent) {
+					continue
+				}
+				if binding.TargetLocator == "" {
+					return false
+				}
+				if _, err := os.Lstat(binding.TargetLocator); err != nil {
+					return false
+				}
+				found = true
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
 func holdCodexUninstall(ctx context.Context, req *Request, mat portablesetup.Materializer, id portablesetup.Identity, generation uint64, notifyAgents []portable.Integration, runtimeRoot string, out Result) (Result, error) {
 	if req.ExternalUninstalled || id.InstallationID == "" {
 		return out, nil
@@ -2256,6 +2293,9 @@ func canGroupNotify(mat portablesetup.Materializer, id portablesetup.Identity, r
 		return first && second
 	case ActionRepair:
 		if !first || !second {
+			return false
+		}
+		if !liveManagedTargetsPresent(mat, id.InstallationID, agents) {
 			return false
 		}
 		if sameLiveRepairRevision(mat, id.InstallationID, agents) {
