@@ -275,7 +275,7 @@ func (e *Engine) prepareRemoveGroup(ctx context.Context, req Request) (*Prepared
 		binding, receipt, found := findBinding(installation, client.ClientID)
 		item := PlanTarget{ClientID: string(client.ClientID), ConfigRoot: client.ConfigRoot, NoChange: !found}
 		if found {
-			if err := e.removalPreflight(ctx, client, binding); err != nil {
+			if err := e.removalPreflight(ctx, client, binding, receipt); err != nil {
 				return nil, err
 			}
 			item.TargetPath = binding.TargetLocator
@@ -430,6 +430,37 @@ func (e *Engine) applyRemoveGroup(ctx context.Context, prepared *PreparedOperati
 		result.NoChange = true
 		result.DataRetained = true
 		return result, nil
+	}
+	state, err := e.store.Load()
+	if err != nil {
+		result.Outcome = OutcomeIncomplete
+		result.Reason = err.Error()
+		return result, err
+	}
+	installation, ok := findInstall(state, prepared.plan.InstallationID)
+	if !ok {
+		err := fmt.Errorf("%w: installation %s is not installed", ErrInvalidRequest, prepared.plan.InstallationID)
+		result.Outcome = OutcomeIncomplete
+		result.Reason = err.Error()
+		return result, err
+	}
+	for i, target := range prepared.plan.Targets {
+		if target.NoChange {
+			continue
+		}
+		client := prepared.clients[i]
+		binding, receipt, found := findBinding(installation, client.ClientID)
+		if !found {
+			err := fmt.Errorf("%w: client %s is not installed", ErrInvalidRequest, client.ClientID)
+			result.Outcome = OutcomeIncomplete
+			result.Reason = err.Error()
+			return result, err
+		}
+		if err := e.removalPreflight(ctx, client, binding, receipt); err != nil {
+			result.Outcome = OutcomeIncomplete
+			result.Reason = err.Error()
+			return result, err
+		}
 	}
 	helper, _ := e.helper()
 	svc := e.lifecycle(helper, prepared.facts)

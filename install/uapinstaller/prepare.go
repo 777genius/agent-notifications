@@ -277,7 +277,7 @@ func (e *Engine) prepareRemove(ctx context.Context, req Request) (*PreparedOpera
 	}
 	e.report(ProgressPrepare)
 	e.report(ProgressPreflight)
-	if err := e.removalPreflight(ctx, client, binding); err != nil {
+	if err := e.removalPreflight(ctx, client, binding, receipt); err != nil {
 		return nil, err
 	}
 	handle := &PreparedOperation{engine: e, req: req, client: client}
@@ -297,9 +297,10 @@ func (e *Engine) prepareRemove(ctx context.Context, req Request) (*PreparedOpera
 }
 
 // removalPreflight is the §5.5.2 read-only check: exact target, persisted path,
-// and managed artifact digest. It does not lock, recover, EnsureData, invoke a
-// helper, or deactivate the client. Apply repeats it before UAP Remove.
-func (e *Engine) removalPreflight(ctx context.Context, client domain.DetectedClient, binding domain.ClientBinding) error {
+// managed artifact digest, and owned PLUGIN_DATA. It does not lock, recover,
+// EnsureData, invoke a helper, or deactivate the client. Apply repeats it
+// before UAP Remove.
+func (e *Engine) removalPreflight(ctx context.Context, client domain.DetectedClient, binding domain.ClientBinding, receipt domain.DataReceipt) error {
 	digest := managedPackageDigest(binding)
 	if digest == "" {
 		return fmt.Errorf("%w: managed package digest is missing; refusing removal", ErrInvalidRequest)
@@ -313,6 +314,12 @@ func (e *Engine) removalPreflight(ctx context.Context, client domain.DetectedCli
 	}
 	if err := (providers.Stager{}).Verify(ctx, binding.TargetLocator, digest); err != nil {
 		return fmt.Errorf("%w: managed package was changed or is missing; refusing silent removal", ErrInvalidRequest)
+	}
+	if receipt.DataReceiptID == "" {
+		return nil
+	}
+	if err := (providers.PluginDataManager{Base: e.cfg.PluginDataBase}).ValidateData(ctx, receipt); err != nil {
+		return fmt.Errorf("%w: required PLUGIN_DATA is missing or unreadable; refusing silent removal: %v", ErrInvalidRequest, err)
 	}
 	return nil
 }

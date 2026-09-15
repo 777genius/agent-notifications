@@ -840,6 +840,132 @@ func TestRemoveGroupRejectsCorruptArtifactBeforeRevoke(t *testing.T) {
 	requirePortableLocator(t, installed[1])
 }
 
+func TestRemoveRejectsMissingPluginDataBeforeRevoke(t *testing.T) {
+	codex, ledger := bindingFixture(t)
+	probe := buildProbe(t)
+	root := filepath.Dir(codex.ControlRoot)
+	pkg := filepath.Join(root, "package source with spaces")
+	writePackage(t, pkg, probe)
+	uapRoot := filepath.Join(root, "uap")
+	mat, err := NewMaterializer(UAPRoots{
+		StateFile:        filepath.Join(uapRoot, "state", "state-v2.json"),
+		LockFile:         filepath.Join(uapRoot, "state", "mutation.lock"),
+		OperationsDir:    filepath.Join(uapRoot, "state", "operations"),
+		PluginDataBase:   filepath.Join(uapRoot, "plugin data"),
+		ManagedRoot:      filepath.Join(uapRoot, "managed"),
+		HelperExecutable: probe,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := Identity{
+		InstallationID: "00000000-0000-4000-8000-0000000000e9",
+		ComponentID:    codex.ComponentID, Owner: codex.Owner, ScopeRoot: codex.ScopeRoot,
+		ControlRoot: codex.ControlRoot, GlobalConfig: codex.GlobalConfig, RuntimeRoot: codex.RuntimeRoot,
+		Primary: codex.Primary,
+	}
+	codexConfig := filepath.Join(root, "home", "codex config")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := mat.Install(testCtx(t), MaterializeRequest{
+		Identity: id, Integration: portable.Codex, ExpectedGeneration: ledger.Generation,
+		PackageRoot: pkg, ClientConfigRoot: codexConfig, ClientExecutable: probe,
+		OperationID: "portable-codex-remove-data",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(installed.DataRoot, ".agentplugins-data-owner.json")); err != nil {
+		t.Fatal(err)
+	}
+	err = mat.Remove(testCtx(t), MaterializeRequest{
+		Identity: id, Integration: portable.Codex, ClientConfigRoot: codexConfig,
+		ClientExecutable: probe, OperationID: "portable-codex-remove-data-blocked",
+		ExternalUninstalled: true,
+	})
+	if err == nil {
+		t.Fatal("missing PLUGIN_DATA accepted")
+	}
+	requirePortableLocator(t, installed)
+}
+
+func TestRemoveGroupRejectsMissingPluginDataBeforeRevoke(t *testing.T) {
+	codex, ledger := bindingFixture(t)
+	probe := buildProbe(t)
+	root := filepath.Dir(codex.ControlRoot)
+	pkg := filepath.Join(root, "package source with spaces")
+	writePackage(t, pkg, probe)
+	uapRoot := filepath.Join(root, "uap")
+	claudeConfig := filepath.Join(root, "home", "claude config")
+	codexConfig := filepath.Join(root, "home", "codex config")
+	for _, dir := range []string{claudeConfig, codexConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mat, err := NewMaterializer(UAPRoots{
+		StateFile:        filepath.Join(uapRoot, "state", "state-v2.json"),
+		LockFile:         filepath.Join(uapRoot, "state", "mutation.lock"),
+		OperationsDir:    filepath.Join(uapRoot, "state", "operations"),
+		PluginDataBase:   filepath.Join(uapRoot, "plugin data"),
+		ManagedRoot:      filepath.Join(uapRoot, "managed"),
+		HelperExecutable: probe,
+		ClaudeRunner:     listingRunner{configRoot: claudeConfig},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := Identity{
+		InstallationID: "00000000-0000-4000-8000-0000000000ea",
+		ComponentID:    codex.ComponentID, Owner: codex.Owner, ScopeRoot: codex.ScopeRoot,
+		ControlRoot: codex.ControlRoot, GlobalConfig: codex.GlobalConfig, RuntimeRoot: codex.RuntimeRoot,
+		Primary: codex.Primary,
+	}
+	installed, err := mat.ApplyGroup(testCtx(t), []MaterializeRequest{
+		{
+			Identity: id, Integration: portable.Codex, ExpectedGeneration: ledger.Generation,
+			PackageRoot: pkg, ClientConfigRoot: codexConfig, ClientExecutable: probe,
+			OperationID: "portable-group-remove-data-install",
+		},
+		{
+			Identity: id, Integration: portable.Claude, ExpectedGeneration: ledger.Generation,
+			PackageRoot: pkg, ClientConfigRoot: claudeConfig, ClientExecutable: probe,
+			OperationID: "portable-group-remove-data-install",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(installed) != 2 {
+		t.Fatalf("group install: %+v", installed)
+	}
+	if err := os.Remove(filepath.Join(installed[0].DataRoot, ".agentplugins-data-owner.json")); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(codex.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = mat.RemoveGroup(testCtx(t), []MaterializeRequest{
+		{
+			Identity: id, Integration: portable.Codex, ExpectedGeneration: snap.Ledger.Generation,
+			ClientConfigRoot: codexConfig, ClientExecutable: probe, ExternalUninstalled: true,
+			OperationID: "portable-group-remove-data",
+		},
+		{
+			Identity: id, Integration: portable.Claude, ExpectedGeneration: snap.Ledger.Generation,
+			ClientConfigRoot: claudeConfig, ClientExecutable: probe,
+			OperationID: "portable-group-remove-data",
+		},
+	})
+	if err == nil {
+		t.Fatal("missing PLUGIN_DATA accepted")
+	}
+	requirePortableLocator(t, installed[0])
+	requirePortableLocator(t, installed[1])
+}
+
 func TestGuardSecondClientAllowsCopiedSameDigest(t *testing.T) {
 	codex, ledger := bindingFixture(t)
 	probe := buildProbe(t)

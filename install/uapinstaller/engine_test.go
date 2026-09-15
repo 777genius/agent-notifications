@@ -3642,6 +3642,176 @@ func TestPrepareRemoveRejectsCorruptArtifactBeforeDeactivate(t *testing.T) {
 	}
 }
 
+func TestPrepareRemoveRejectsMissingPluginDataBeforeDeactivate(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(base, "uap")
+	eng, err := New(Config{StateRoot: state, HelperExecutable: probe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-0000000000e7",
+		OperationID: "remove-data-preflight", RequiredComponents: []string{"mcp", "skills"},
+	}
+	prepared, err := eng.Prepare(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := eng.Apply(ctx, prepared, Decision{Confirmed: true})
+	_ = prepared.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Binding.DataRoot == "" {
+		t.Fatal("install omitted data root")
+	}
+	if err := os.Remove(filepath.Join(result.Binding.DataRoot, ".agentplugins-data-owner.json")); err != nil {
+		t.Fatal(err)
+	}
+	runner := &countingRunner{}
+	check, err := New(Config{StateRoot: state, HelperExecutable: probe, Runner: runner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = check.Prepare(ctx, Request{
+		Operation: OpRemove, ClientID: "codex", ClientConfigRoot: config, ClientExecutable: probe,
+		InstallationID: req.InstallationID, OperationID: "remove-missing-data", ExternalUninstalled: true,
+	})
+	if err == nil {
+		t.Fatal("missing PLUGIN_DATA accepted")
+	}
+	if runner.n != 0 {
+		t.Fatalf("remove preflight deactivated client: %d", runner.n)
+	}
+}
+
+func TestPrepareRemoveGroupRejectsMissingPluginDataBeforeDeactivate(t *testing.T) {
+	ctx, eng, runner, pkg, probe, codexConfig, claudeConfig := newBothClientSandbox(t)
+	id := "00000000-0000-4000-8000-0000000000e8"
+	targets := bothClientTargets(codexConfig, claudeConfig, probe)
+	installed := installBothClients(t, ctx, eng, pkg, probe, id, "group-remove-data-install", targets)
+	if installed.Binding.DataRoot == "" {
+		t.Fatal("install omitted data root")
+	}
+	if err := os.Remove(filepath.Join(installed.Binding.DataRoot, ".agentplugins-data-owner.json")); err != nil {
+		t.Fatal(err)
+	}
+	before := len(runner.calls)
+	_, err := eng.Prepare(ctx, Request{
+		Operation: OpRemove, InstallationID: id, OperationID: "group-remove-missing-data",
+		ClientExecutable: probe,
+		Targets: []ClientTarget{
+			{ClientID: "codex", ClientConfigRoot: codexConfig, ClientExecutable: probe, ExternalUninstalled: true},
+			{ClientID: "claude", ClientConfigRoot: claudeConfig, ClientExecutable: probe},
+		},
+	})
+	if err == nil {
+		t.Fatal("missing PLUGIN_DATA accepted")
+	}
+	if len(runner.calls) != before {
+		t.Fatalf("group remove preflight deactivated client: %d -> %d", before, len(runner.calls))
+	}
+}
+
+func TestApplyRemoveGroupRepeatsPluginDataPreflightBeforeDeactivate(t *testing.T) {
+	ctx, eng, runner, pkg, probe, codexConfig, claudeConfig := newBothClientSandbox(t)
+	id := "00000000-0000-4000-8000-0000000000ec"
+	targets := bothClientTargets(codexConfig, claudeConfig, probe)
+	installed := installBothClients(t, ctx, eng, pkg, probe, id, "group-remove-data-apply-install", targets)
+	prepared, err := eng.Prepare(ctx, Request{
+		Operation: OpRemove, InstallationID: id, OperationID: "group-remove-data-stale",
+		ClientExecutable: probe,
+		Targets: []ClientTarget{
+			{ClientID: "codex", ClientConfigRoot: codexConfig, ClientExecutable: probe, ExternalUninstalled: true},
+			{ClientID: "claude", ClientConfigRoot: claudeConfig, ClientExecutable: probe},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = prepared.Close() }()
+	if err := os.Remove(filepath.Join(installed.Binding.DataRoot, ".agentplugins-data-owner.json")); err != nil {
+		t.Fatal(err)
+	}
+	before := len(runner.calls)
+	if _, err := eng.Apply(ctx, prepared, Decision{Confirmed: true}); err == nil {
+		t.Fatal("stale PLUGIN_DATA accepted")
+	}
+	if len(runner.calls) != before {
+		t.Fatalf("group apply remove deactivated after data preflight: %d -> %d", before, len(runner.calls))
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 2 {
+		t.Fatalf("group apply remove mutated bindings: %+v %v", view, err)
+	}
+}
+
+func TestApplyRemoveRepeatsPluginDataPreflightBeforeDeactivate(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(base, "uap")
+	eng, err := New(Config{StateRoot: state, HelperExecutable: probe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-0000000000eb",
+		OperationID: "remove-data-apply", RequiredComponents: []string{"mcp", "skills"},
+	}
+	prepared, err := eng.Prepare(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := eng.Apply(ctx, prepared, Decision{Confirmed: true})
+	_ = prepared.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rm, err := eng.Prepare(ctx, Request{
+		Operation: OpRemove, ClientID: "codex", ClientConfigRoot: config, ClientExecutable: probe,
+		InstallationID: req.InstallationID, OperationID: "remove-data-stale", ExternalUninstalled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rm.Close() }()
+	if err := os.Remove(filepath.Join(result.Binding.DataRoot, ".agentplugins-data-owner.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Apply(ctx, rm, Decision{Confirmed: true}); err == nil {
+		t.Fatal("stale PLUGIN_DATA accepted")
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 1 {
+		t.Fatalf("apply remove mutated bindings: %+v %v", view, err)
+	}
+}
+
 func TestPrepareRemoveDoesNotRunHelper(t *testing.T) {
 	skipWindowsLauncherExecuteBit(t)
 	ctx := testCtx(t)
