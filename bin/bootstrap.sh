@@ -48,11 +48,13 @@ PLUGIN_ROOT=""
 _BOOTSTRAP_STAGE=""
 _CONFIG_STAGE=""
 _CONFIG_HELPER=""
+_PORTABLE_STAGE=""
 _KEEP_CONFIG_STAGE=false
 PRODUCT=""
 BOOTSTRAP_TAG=""
 _BOOTSTRAP_TMP=""  # temp file path for trap (set -u safe)
 CONFIGURE_NOTIFICATIONS=true
+AGENT_NOTIFY_REQUEST=auto
 CONFIGURE_BINARY=""
 CONFIGURE_ARGS=()
 
@@ -1042,10 +1044,12 @@ select_product() {
                 PRODUCT="$2"; shift 2 ;;
             --agent-notify)
                 seen_agent_notify=true
+                AGENT_NOTIFY_REQUEST=explicit
                 CONFIGURE_NOTIFICATIONS=true
                 shift ;;
             --skip-agent-notify)
                 seen_skip_agent_notify=true
+                AGENT_NOTIFY_REQUEST=skip
                 CONFIGURE_NOTIFICATIONS=false
                 shift ;;
             --navigation|--app|--team-id|--allow-unknown-caller|--allow-caller-asserted|--codex-home)
@@ -1114,6 +1118,7 @@ select_product() {
 bootstrap_cleanup() {
     [ -z "$_BOOTSTRAP_TMP" ] || rm -f "$_BOOTSTRAP_TMP"
     [ -z "$_BOOTSTRAP_STAGE" ] || rm -rf "$_BOOTSTRAP_STAGE"
+    [ -z "$_PORTABLE_STAGE" ] || rm -rf "$_PORTABLE_STAGE"
     if [ "$_KEEP_CONFIG_STAGE" != true ]; then
         [ -z "$_CONFIG_STAGE" ] || rm -rf "$_CONFIG_STAGE"
     fi
@@ -1273,6 +1278,10 @@ cli_has_setup_codex_skip_agent_notify() {
 
 cli_has_setup_notifications() {
     cli_help "$1" | grep -Fq -- 'setup-notifications'
+}
+
+cli_has_setup_wizard() {
+    cli_help "$1" | grep -Fq -- 'setup-notifications wizard'
 }
 
 # Optional exact-version release templates. Releases without this verified asset
@@ -1505,11 +1514,23 @@ main() {
         fi
     fi
     initialize_config || return 1
-    configure_agent_notify
+    configure_agent_notify || return 1
     [ "$PRODUCT" != claude ] || print_success
 }
 
-# Agent-notify is default-on, but a failed configure must not undo hooks/plugin install.
+# Quote argv so a user can paste the retry command into bash. Custom roots with
+# spaces must survive this string (§9.2 / §9.4). Do not print the result through
+# echo -e: printf %q emits backslashes that -e would interpret.
+quote_shell_command() {
+    local quoted="" arg
+    for arg in "$@"; do
+        quoted="${quoted:+$quoted }$(printf '%q' "$arg")"
+    done
+    printf '%s' "$quoted"
+}
+
+# Agent-notify is default-on. A failed setup must not undo hooks/plugin install,
+# but it is incomplete: bootstrap does not print overall success.
 configure_agent_notify() {
     [ "$CONFIGURE_NOTIFICATIONS" = true ] || return 0
     if [ -z "$CONFIGURE_BINARY" ]; then
@@ -1520,6 +1541,10 @@ configure_agent_notify() {
         echo -e "${YELLOW}  Plugin/hooks install succeeded. Retry after the binary is available.${NC}" >&2
         return 0
     fi
+    if cli_has_setup_wizard "$CONFIGURE_BINARY"; then
+        setup_agent_notify_wizard
+        return $?
+    fi
     if ! cli_has_setup_notifications "$CONFIGURE_BINARY"; then
         echo -e "${YELLOW}⚠ Agent-notify setup skipped; this published CLI does not support setup-notifications.${NC}" >&2
         echo -e "${YELLOW}  Plugin/hooks install succeeded. Desktop/hook notifications still work.${NC}" >&2
@@ -1528,7 +1553,137 @@ configure_agent_notify() {
     if ! "$CONFIGURE_BINARY" setup-notifications configure --provider "$PRODUCT" "${CONFIGURE_ARGS[@]}"; then
         echo -e "${YELLOW}⚠ Agent-notify setup failed; plugin/hooks install succeeded.${NC}" >&2
         echo -e "${YELLOW}  Desktop/hook notifications still work. Retry:${NC}" >&2
-        echo -e "${YELLOW}  \"$CONFIGURE_BINARY\" setup-notifications configure --provider ${PRODUCT} ${CONFIGURE_ARGS[*]}${NC}" >&2
+        printf '  %s\n' "$(quote_shell_command "$CONFIGURE_BINARY" setup-notifications configure --provider "$PRODUCT" "${CONFIGURE_ARGS[@]}")" >&2
+        return 1
+    fi
+    return 0
+}
+
+# Same-tag portable zip is the wizard source. Auto-default without that asset is
+# hooks-only, not a full MCP install. Explicit --agent-notify is incomplete.
+report_wizard_portable_missing() {
+    local reason="$1"
+    local agents="$2"
+    echo -e "${YELLOW}⚠ Agent-notify wizard skipped; ${reason}.${NC}" >&2
+    echo -e "${YELLOW}  Plugin/hooks install succeeded. Retry:${NC}" >&2
+    printf '  %s\n' "$(quote_shell_command "$CONFIGURE_BINARY" setup-notifications wizard --action install --agents "$agents" --hooks false --agent-notify true --yes)" >&2
+    if [ "$AGENT_NOTIFY_REQUEST" = explicit ]; then
+        return 1
+    fi
+    return 0
+}
+
+bootstrap_abs_command() {
+    local found
+    found=$(command -v "$1" 2>/dev/null) || return 1
+    case "$found" in
+        /*|[A-Za-z]:/*|[A-Za-z]:\\*) printf '%s\n' "$found" ;;
+        *) return 1 ;;
+    esac
+}
+
+bootstrap_release_os_arch() {
+    local os arch
+    os=$(uname -s | tr '[:upper:]' '[:lower:]')
+    case "$os" in darwin|linux) ;; mingw*|msys*|cygwin*) os=windows ;; *) return 1 ;; esac
+    case "$(uname -m)" in x86_64|amd64) arch=amd64 ;; arm64|aarch64) arch=arm64 ;; *) return 1 ;; esac
+    printf '%s %s\n' "$os" "$arch"
+}
+
+# Same-tag portable zip is the install source for agent-notify. Git templates
+# without the release binary are only a last-resort offline fallback.
+acquire_wizard_portable_asset() {
+    local os arch asset base stage
+    [ -n "${BOOTSTRAP_TAG:-}" ] || return 1
+    read -r os arch < <(bootstrap_release_os_arch) || return 1
+    asset="agent-notify-portable-${os}-${arch}.zip"
+    stage="${_CONFIG_STAGE:-}"
+    if [ -z "$stage" ]; then
+        _PORTABLE_STAGE=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-portable-XXXXXX") || return 1
+        stage="$_PORTABLE_STAGE"
+    fi
+    base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG"
+    if [ ! -f "$stage/checksums.txt" ]; then
+        fetch_bootstrap_file "$base/checksums.txt" "$stage/checksums.txt" || return 1
+    fi
+    fetch_bootstrap_file "$base/$asset" "$stage/$asset" || return 1
+    python3 -I - "$stage" "$asset" <<'PYVERIFY' || return 1
+import hashlib, pathlib, sys
+root, name = pathlib.Path(sys.argv[1]), sys.argv[2]
+entries = [line.split() for line in (root/'checksums.txt').read_text().splitlines()]
+expected = [e[0] for e in entries if len(e)==2 and e[1].lstrip('*')==name]
+assert len(expected)==1 and hashlib.sha256((root/name).read_bytes()).hexdigest()==expected[0].lower(), 'Portable package checksum mismatch'
+PYVERIFY
+    WIZARD_PACKAGE_ROOT="$stage/$asset"
+}
+
+setup_agent_notify_wizard() {
+    local agents package_root install_root wizard_codex_home="" i=0
+    local claude_exec="" codex_exec="" plugin_root
+    WIZARD_PACKAGE_ROOT=""
+    case "$PRODUCT" in
+        claude) agents=claude ;;
+        codex) agents=codex ;;
+        both) agents=claude,codex ;;
+        *) echo "invalid product for wizard: $PRODUCT" >&2; return 1 ;;
+    esac
+    while [ "$i" -lt "${#CONFIGURE_ARGS[@]}" ]; do
+        if [ "${CONFIGURE_ARGS[$i]}" = "--codex-home" ]; then
+            i=$((i + 1))
+            wizard_codex_home="${CONFIGURE_ARGS[$i]}"
+        fi
+        i=$((i + 1))
+    done
+    if [ -z "$wizard_codex_home" ] && [ -n "${CODEX_HOME:-}" ]; then
+        wizard_codex_home="$CODEX_HOME"
+    fi
+    plugin_root="$PLUGIN_ROOT"
+    if [ -z "$plugin_root" ]; then
+        plugin_root=$(cd "$(dirname "$CONFIGURE_BINARY")/.." && pwd)
+    fi
+    if [ -n "${BOOTSTRAP_TAG:-}" ]; then
+        if ! acquire_wizard_portable_asset; then
+            report_wizard_portable_missing "portable package is missing from $BOOTSTRAP_TAG" "$agents" && return 0
+            return 1
+        fi
+        package_root="$WIZARD_PACKAGE_ROOT"
+    elif [ -f "$plugin_root/portable-package/plugin.json" ]; then
+        package_root="$plugin_root/portable-package"
+    else
+        install_root=$(cd "$(dirname "$CONFIGURE_BINARY")/.." && pwd)
+        if [ -f "$install_root/portable-package/plugin.json" ]; then
+            package_root="$install_root/portable-package"
+            plugin_root="$install_root"
+        fi
+    fi
+    if [ -z "${package_root:-}" ]; then
+        report_wizard_portable_missing "portable package is missing from the accepted release" "$agents" && return 0
+        return 1
+    fi
+    if [ "$PRODUCT" != codex ]; then
+        claude_exec=$(bootstrap_abs_command claude) || true
+    fi
+    if [ "$PRODUCT" != claude ]; then
+        codex_exec=$(bootstrap_abs_command codex) || true
+    fi
+    set -- setup-notifications wizard --action install --agents "$agents" --hooks false --agent-notify true --yes \
+        --package "$package_root" --plugin-root "$plugin_root" --helper "$CONFIGURE_BINARY"
+    [ -z "$wizard_codex_home" ] || set -- "$@" --codex-home "$wizard_codex_home"
+    [ -z "${CLAUDE_CONFIG_DIR:-}" ] || set -- "$@" --claude-config "$CLAUDE_CONFIG_DIR"
+    [ -z "$claude_exec" ] || set -- "$@" --claude-executable "$claude_exec"
+    [ -z "$codex_exec" ] || set -- "$@" --codex-executable "$codex_exec"
+    if [ "$PRODUCT" != both ] && [ -n "$claude_exec$codex_exec" ]; then
+        if [ -n "$claude_exec" ]; then
+            set -- "$@" --client-executable "$claude_exec"
+        else
+            set -- "$@" --client-executable "$codex_exec"
+        fi
+    fi
+    if ! "$CONFIGURE_BINARY" "$@"; then
+        echo -e "${YELLOW}⚠ Agent-notify setup failed; plugin/hooks install succeeded.${NC}" >&2
+        echo -e "${YELLOW}  Desktop/hook notifications still work. Retry:${NC}" >&2
+        printf '  %s\n' "$(quote_shell_command "$CONFIGURE_BINARY" "$@")" >&2
+        return 1
     fi
     return 0
 }

@@ -1,7 +1,7 @@
 package uapinstaller
 
-// Operation is the process-local lifecycle verb. P1 publishes install and remove.
-// Update and repair are rejected until those checkpoints exist.
+// Operation is the process-local lifecycle verb. Install, update, repair, and
+// remove are published. Two Claude+Codex targets use the same verb via Request.Targets.
 type Operation string
 
 const (
@@ -38,6 +38,16 @@ type Request struct {
 	// native plugin was already removed, or was never activated. Confirmed
 	// Apply does not invent this fact.
 	ExternalUninstalled bool
+	// Targets selects two clients in one operation. Empty means the single
+	// ClientID fields. Group operations keep the same Operation verb.
+	Targets []ClientTarget
+}
+
+// ClientTarget is one Claude or Codex selection in a group request.
+type ClientTarget struct {
+	ClientID, ClientConfigRoot, ClientExecutable string
+	PackageRoot                                  string
+	ExternalUninstalled                          bool
 }
 
 // Decision is host UI confirmation, outside mutation locks.
@@ -68,6 +78,13 @@ type Plan struct {
 	HelperDigest    string
 	RequiredMissing []string
 	NoChange        bool
+	Targets         []PlanTarget
+}
+
+// PlanTarget is one client's prepared identity in a group handle.
+type PlanTarget struct {
+	ClientID, ConfigRoot, TargetPath, BindingID, TreeDigest string
+	NoChange                                                bool
 }
 
 // Result is returned together with an error when part of the work already happened.
@@ -81,6 +98,7 @@ type Result struct {
 	NoChange       bool
 	DataRetained   bool
 	Client         ClientResult
+	Targets        []ClientResult
 	NextActions    []NextAction
 	// Recovery classifies observed receipts after Recover. Apply leaves it empty.
 	Recovery RecoveryReport
@@ -102,7 +120,7 @@ type NextAction struct {
 
 // ClientResult is the public per-client lifecycle view. Mapping is not a bool.
 type ClientResult struct {
-	ClientID, BindingID                                       string
+	ClientID, BindingID, TreeDigest                           string
 	Materialization, Activation, Authentication, Verification string
 	RequiredComponents                                        []string
 }
@@ -172,6 +190,7 @@ type PendingReceipt struct {
 // InspectedInstallation is a public subset of one UAP installation.
 type InspectedInstallation struct {
 	InstallationID string
+	TreeDigest     string
 	Bindings       []InspectedBinding
 	DataRetained   bool
 	DataRoots      []string
@@ -179,8 +198,8 @@ type InspectedInstallation struct {
 
 // InspectedBinding is a public subset of one client binding.
 type InspectedBinding struct {
-	ClientID, BindingID, Scope, TargetPath, DataRoot          string
-	Materialization, Activation, Authentication, Verification string
+	ClientID, BindingID, Scope, TargetPath, DataRoot, Profile, TreeDigest string
+	Materialization, Activation, Authentication, Verification             string
 }
 
 // ClientMetadata is read-only provider surface. Discover does not execute files.

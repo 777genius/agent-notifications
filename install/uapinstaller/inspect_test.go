@@ -137,6 +137,47 @@ func TestInspectReportsPendingJournalWithoutMutating(t *testing.T) {
 	}
 }
 
+func TestInspectReportsBothPendingJournalsWithoutMutating(t *testing.T) {
+	eng, first := plantPendingJournal(t)
+	second := plantOpenJournal(t, eng, "pending-journal-op-2")
+	before, err := dirswap.Manager{JournalDir: eng.cfg.OperationsDir}.ListOpen()
+	if err != nil || len(before) != 2 {
+		t.Fatalf("planted journals: %+v %v", before, err)
+	}
+	view, err := eng.Inspect(testCtx(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !view.Recovery.Required || len(view.Recovery.Journals) != 2 {
+		t.Fatalf("missing group journal observation: %+v", view.Recovery)
+	}
+	seen := map[string]bool{}
+	for _, journal := range view.Recovery.Journals {
+		seen[journal.OperationID] = true
+		if journal.Digest == "" || journal.Phase != dirswap.PhaseIntent {
+			t.Fatalf("journal identity: %+v", journal)
+		}
+	}
+	if !seen[first.OperationID] || !seen[second.OperationID] {
+		t.Fatalf("inspect hid a pending journal: %+v", view.Recovery.Journals)
+	}
+	open, err := dirswap.Manager{JournalDir: eng.cfg.OperationsDir}.ListOpen()
+	if err != nil || len(open) != 2 {
+		t.Fatalf("inspect recovered a journal: %+v %v", open, err)
+	}
+	result, err := eng.Recover(testCtx(t), view)
+	if err != nil || result.Outcome != OutcomeCompleted {
+		t.Fatalf("recover both journals: %+v %v", result, err)
+	}
+	if len(result.Recovery.Resolved) != 2 {
+		t.Fatalf("resolved receipts: %+v", result.Recovery)
+	}
+	after, err := eng.Inspect(testCtx(t))
+	if err != nil || after.Recovery.Required {
+		t.Fatalf("post-recover inspect: %+v %v", after, err)
+	}
+}
+
 func TestRecoverMatchingPendingJournal(t *testing.T) {
 	eng, _ := plantPendingJournal(t)
 	view, err := eng.Inspect(testCtx(t))
@@ -161,6 +202,76 @@ func TestRecoverMatchingPendingJournal(t *testing.T) {
 	if err != nil || after.Recovery.Required {
 		t.Fatalf("post-recover inspect: %+v %v", after, err)
 	}
+	again, err := eng.Recover(testCtx(t), after)
+	if err != nil || again.Outcome != OutcomeUnchanged || again.Reason != "already_recovered" {
+		t.Fatalf("clean observation after recover: %+v %v", again, err)
+	}
+}
+
+func TestRecoverDeletedJournalWithStagingIsNotUnchanged(t *testing.T) {
+	eng, journal := plantPendingJournal(t)
+	view, err := eng.Inspect(testCtx(t))
+	if err != nil || !view.Recovery.Required || len(view.Recovery.Journals) != 1 {
+		t.Fatalf("inspect: %+v %v", view, err)
+	}
+	if err := os.Remove(filepath.Join(eng.cfg.OperationsDir, journal.OperationID+".json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(journal.StagingPath); err != nil {
+		t.Fatalf("staging missing before recover: %v", err)
+	}
+	result, err := eng.Recover(testCtx(t), view)
+	if !errors.Is(err, ErrRecoveryRequired) || result.Outcome != OutcomeRecovery || result.Reason != "incomplete_recovery" {
+		t.Fatalf("deleted journal leftover staging: %+v %v", result, err)
+	}
+	if len(result.Recovery.Unknown) == 0 && len(result.Recovery.Remaining) == 0 {
+		t.Fatalf("incomplete recovery hid vanished journal: %+v", result.Recovery)
+	}
+	if _, err := os.Stat(journal.StagingPath); err != nil {
+		t.Fatalf("recover mutated leftover staging: %v", err)
+	}
+}
+
+func TestRecoverDeletedJournalWithBackupIsNotUnchanged(t *testing.T) {
+	eng, journal := plantPendingJournal(t)
+	view, err := eng.Inspect(testCtx(t))
+	if err != nil || !view.Recovery.Required || len(view.Recovery.Journals) != 1 {
+		t.Fatalf("inspect: %+v %v", view, err)
+	}
+	if err := os.Remove(filepath.Join(eng.cfg.OperationsDir, journal.OperationID+".json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(journal.StagingPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(journal.BackupPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	result, err := eng.Recover(testCtx(t), view)
+	if !errors.Is(err, ErrRecoveryRequired) || result.Outcome != OutcomeRecovery || result.Reason != "incomplete_recovery" {
+		t.Fatalf("deleted journal leftover backup: %+v %v", result, err)
+	}
+	if len(result.Recovery.Unknown) == 0 && len(result.Recovery.Remaining) == 0 {
+		t.Fatalf("incomplete recovery hid vanished journal: %+v", result.Recovery)
+	}
+}
+
+func TestRecoverStaleObservationWithoutLeftoverIsUnchanged(t *testing.T) {
+	eng, journal := plantPendingJournal(t)
+	view, err := eng.Inspect(testCtx(t))
+	if err != nil || !view.Recovery.Required || len(view.Recovery.Journals) != 1 {
+		t.Fatalf("inspect: %+v %v", view, err)
+	}
+	if err := os.Remove(filepath.Join(eng.cfg.OperationsDir, journal.OperationID+".json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(journal.StagingPath); err != nil {
+		t.Fatal(err)
+	}
+	result, err := eng.Recover(testCtx(t), view)
+	if err != nil || result.Outcome != OutcomeUnchanged || result.Reason != "already_recovered" {
+		t.Fatalf("vanished journal without leftover: %+v %v", result, err)
+	}
 }
 
 func TestRecoverRejectsUnobservedPendingJournal(t *testing.T) {
@@ -172,6 +283,30 @@ func TestRecoverRejectsUnobservedPendingJournal(t *testing.T) {
 	open, err := dirswap.Manager{JournalDir: eng.cfg.OperationsDir}.ListOpen()
 	if err != nil || len(open) != 1 {
 		t.Fatalf("plan_changed recovered journal: %+v %v", open, err)
+	}
+}
+
+func TestRecoverRejectsNewlyObservedPendingJournal(t *testing.T) {
+	eng, _ := plantPendingJournal(t)
+	view, err := eng.Inspect(testCtx(t))
+	if err != nil || len(view.Recovery.Journals) != 1 {
+		t.Fatalf("inspect: %+v %v", view, err)
+	}
+	second := plantOpenJournal(t, eng, "pending-journal-op-2")
+	result, err := eng.Recover(testCtx(t), view)
+	if !errors.Is(err, ErrPlanChanged) || result.Outcome != OutcomeConflict || result.Reason != "plan_changed" {
+		t.Fatalf("expanded observation: %+v %v", result, err)
+	}
+	open, err := dirswap.Manager{JournalDir: eng.cfg.OperationsDir}.ListOpen()
+	if err != nil || len(open) != 2 {
+		t.Fatalf("plan_changed recovered journals: %+v %v", open, err)
+	}
+	seen := map[string]bool{}
+	for _, journal := range open {
+		seen[journal.OperationID] = true
+	}
+	if !seen[view.Recovery.Journals[0].OperationID] || !seen[second.OperationID] {
+		t.Fatalf("missing planted journal after plan_changed: %+v", open)
 	}
 }
 
@@ -187,6 +322,9 @@ func TestInspectReportsStateCommittedReceiptWithoutJournal(t *testing.T) {
 	got := view.Recovery.Receipts[0]
 	if got.OperationID != receipt.OperationID || got.Phase != transaction.ReceiptPhaseStateCommitted || got.JournalPresent {
 		t.Fatalf("receipt: %+v", got)
+	}
+	if len(view.Installations) != 1 || view.Installations[0].TreeDigest != "sha256:tree" {
+		t.Fatalf("inspect omitted recorded tree digest: %+v", view.Installations)
 	}
 	open, err := dirswap.Manager{JournalDir: eng.cfg.OperationsDir}.ListOpen()
 	if err != nil || len(open) != 0 {
@@ -264,13 +402,17 @@ func plantPendingJournal(t *testing.T) (*Engine, dirswap.Receipt) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	owned := filepath.Join(root, "managed")
+	return eng, plantOpenJournal(t, eng, "pending-journal-op")
+}
+
+func plantOpenJournal(t *testing.T, eng *Engine, opID string) dirswap.Receipt {
+	t.Helper()
+	owned := eng.cfg.ManagedRoot
 	active := filepath.Join(owned, "plugin")
 	staging := filepath.Join(owned, ".agentplugins-staging-pending")
 	if err := os.MkdirAll(staging, 0700); err != nil {
 		t.Fatal(err)
 	}
-	opID := "pending-journal-op"
 	sum := sha256.Sum256([]byte(opID))
 	receipt := dirswap.Receipt{
 		SchemaVersion: 3, Operation: dirswap.OperationSwap, OperationID: opID,
@@ -289,7 +431,7 @@ func plantPendingJournal(t *testing.T) (*Engine, dirswap.Receipt) {
 	if err := os.WriteFile(filepath.Join(eng.cfg.OperationsDir, opID+".json"), append(body, '\n'), 0600); err != nil {
 		t.Fatal(err)
 	}
-	return eng, receipt
+	return receipt
 }
 
 func plantStateCommittedReceipt(t *testing.T) (*Engine, domain.MutationReceipt) {
@@ -373,4 +515,32 @@ func plantRetainedInstallation(t *testing.T) *Engine {
 		t.Fatal(err)
 	}
 	return eng
+}
+
+func TestRecordedBindingDigestPrefersPackageRevision(t *testing.T) {
+	binding := domain.ClientBinding{
+		PackageRevision: &domain.ClientPackageRevision{TreeDigest: "sha256:binding"},
+	}
+	if got := recordedBindingDigest(binding, "sha256:fallback"); got != "sha256:binding" {
+		t.Fatalf("recorded digest: %s", got)
+	}
+	if got := recordedBindingDigest(domain.ClientBinding{}, "sha256:fallback"); got != "sha256:fallback" {
+		t.Fatalf("fallback digest: %s", got)
+	}
+}
+
+func TestPlanClientDigestUsesMatchingTarget(t *testing.T) {
+	plan := Plan{
+		TreeDigest: "sha256:group",
+		Targets: []PlanTarget{
+			{ClientID: "codex", TreeDigest: "sha256:codex"},
+			{ClientID: "claude", TreeDigest: "sha256:claude"},
+		},
+	}
+	if got := planClientDigest(plan, "claude"); got != "sha256:claude" {
+		t.Fatalf("claude digest: %s", got)
+	}
+	if got := planClientDigest(plan, "cursor"); got != "sha256:group" {
+		t.Fatalf("unknown client digest: %s", got)
+	}
 }

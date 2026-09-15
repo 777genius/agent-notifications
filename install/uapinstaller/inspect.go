@@ -5,7 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/dirswap"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
@@ -27,13 +30,18 @@ func (e *Engine) observe() (Inspection, error) {
 	}
 	bindingIndex := map[string]observedBinding{}
 	for _, installation := range state.Installations {
-		item := InspectedInstallation{InstallationID: installation.InstallationID, DataRetained: installation.DataRetained}
+		item := InspectedInstallation{
+			InstallationID: installation.InstallationID,
+			DataRetained:   installation.DataRetained,
+			TreeDigest:     installation.Source.TreeDigest,
+		}
 		for _, binding := range installation.Clients {
 			receipt := installation.DataReceipts[binding.DataReceiptID]
+			digest := recordedBindingDigest(binding, installation.Source.TreeDigest)
 			item.Bindings = append(item.Bindings, InspectedBinding{
 				ClientID: binding.ClientID, BindingID: binding.ClientBindingID, Scope: binding.Scope,
-				TargetPath: binding.TargetLocator, DataRoot: receipt.Locator,
-				Materialization: string(binding.Materialization), Activation: string(binding.Activation),
+				TargetPath: binding.TargetLocator, DataRoot: receipt.Locator, Profile: liveProfile(receipt.Locator, binding.ClientID),
+				TreeDigest: digest, Materialization: string(binding.Materialization), Activation: string(binding.Activation),
 				Authentication: string(binding.Authentication), Verification: string(binding.Verification),
 			})
 			bindingIndex[binding.ClientBindingID] = observedBinding{
@@ -141,6 +149,25 @@ func pendingIdentity(obs RecoveryObservation) []string {
 	return keys
 }
 
+func leftoverSwapArtifacts(obs RecoveryObservation) bool {
+	for _, journal := range obs.Journals {
+		if journal.TargetPath == "" {
+			return true
+		}
+		entries, err := os.ReadDir(filepath.Dir(journal.TargetPath))
+		if err != nil {
+			return true
+		}
+		for _, entry := range entries {
+			name := entry.Name()
+			if strings.HasPrefix(name, ".agentplugins-staging-") || strings.HasPrefix(name, ".agentplugins-backup-") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func liveWithinObserved(live, observed RecoveryObservation) bool {
 	want := map[string]bool{}
 	for _, key := range pendingIdentity(observed) {
@@ -188,6 +215,12 @@ func (e *Engine) Recover(ctx context.Context, observed Inspection) (Result, erro
 		return Result{Outcome: OutcomeConflict, Reason: "plan_changed", Recovery: classifyRecovery(observed.Recovery, live.Recovery, true, ErrPlanChanged)}, ErrPlanChanged
 	}
 	if !live.Recovery.Required {
+		if observed.Recovery.Required && leftoverSwapArtifacts(observed.Recovery) {
+			return Result{
+				Outcome: OutcomeRecovery, Reason: "incomplete_recovery",
+				Recovery: classifyRecovery(observed.Recovery, live.Recovery, true, ErrRecoveryRequired),
+			}, fmt.Errorf("%w: journal vanished with leftover swap artifacts", ErrRecoveryRequired)
+		}
 		return Result{Outcome: OutcomeUnchanged, Reason: "already_recovered", Recovery: classifyRecovery(observed.Recovery, live.Recovery, true, nil)}, nil
 	}
 	if err := svc.Kernel.Recover(ctx); err != nil {
@@ -252,4 +285,33 @@ func classifyRecovery(before, after RecoveryObservation, observedAfter bool, rec
 		place(receipt, "receipt|"+receipt.OperationID+"|"+receipt.Phase+"|"+receipt.BindingID)
 	}
 	return report
+}
+
+func recordedBindingDigest(binding domain.ClientBinding, fallback string) string {
+	if binding.PackageRevision != nil && binding.PackageRevision.TreeDigest != "" {
+		return binding.PackageRevision.TreeDigest
+	}
+	return fallback
+}
+
+func planClientDigest(plan Plan, clientID string) string {
+	for _, target := range plan.Targets {
+		if target.ClientID == clientID && target.TreeDigest != "" {
+			return target.TreeDigest
+		}
+	}
+	return plan.TreeDigest
+}
+
+func liveClientResult(binding domain.ClientBinding, required []string, fallbackDigest string) ClientResult {
+	return ClientResult{
+		ClientID:           binding.ClientID,
+		BindingID:          binding.ClientBindingID,
+		TreeDigest:         recordedBindingDigest(binding, fallbackDigest),
+		Materialization:    string(binding.Materialization),
+		Activation:         string(binding.Activation),
+		Authentication:     string(binding.Authentication),
+		Verification:       string(binding.Verification),
+		RequiredComponents: append([]string(nil), required...),
+	}
 }

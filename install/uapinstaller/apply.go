@@ -70,9 +70,9 @@ func (e *Engine) Apply(ctx context.Context, prepared *PreparedOperation, decisio
 		return result, err
 	}
 	if !prepared.plan.NoChange {
-		if op == OpInstall {
+		if op == OpInstall || op == OpUpdate || op == OpRepair {
 			if _, err = e.helper(); err != nil {
-				result = Result{Operation: OpInstall, Outcome: OutcomeIncomplete, Reason: err.Error()}
+				result = Result{Operation: op, Outcome: OutcomeIncomplete, Reason: err.Error()}
 				attachNextActions(&result)
 				return result, err
 			}
@@ -84,33 +84,94 @@ func (e *Engine) Apply(ctx context.Context, prepared *PreparedOperation, decisio
 		}
 	}
 	e.report(ProgressPreflight)
-	switch op {
-	case OpInstall:
-		result, err = e.applyInstall(ctx, prepared)
-	case OpRemove:
-		result, err = e.applyRemove(ctx, prepared)
-	default:
-		err = fmt.Errorf("%w: %s", ErrUnsupported, op)
-		return Result{}, err
+	if len(prepared.req.Targets) > 1 {
+		result, err = e.applyGroup(ctx, prepared)
+	} else {
+		switch op {
+		case OpInstall:
+			result, err = e.applyInstall(ctx, prepared)
+		case OpUpdate:
+			result, err = e.applyUpdate(ctx, prepared)
+		case OpRepair:
+			result, err = e.applyRepair(ctx, prepared)
+		case OpRemove:
+			result, err = e.applyRemove(ctx, prepared)
+		default:
+			err = fmt.Errorf("%w: %s", ErrUnsupported, op)
+			return Result{}, err
+		}
 	}
 	attachNextActions(&result)
 	return result, err
 }
 
 func (e *Engine) applyInstall(ctx context.Context, prepared *PreparedOperation) (Result, error) {
+	return e.applyMutatingPackage(ctx, prepared, func(svc usecase.Service, in usecase.AddInput) (usecase.AddResult, error) {
+		return svc.Add(ctx, in)
+	})
+}
+
+func (e *Engine) applyUpdate(ctx context.Context, prepared *PreparedOperation) (Result, error) {
+	return e.applyMutatingPackage(ctx, prepared, func(svc usecase.Service, in usecase.AddInput) (usecase.AddResult, error) {
+		return e.updateWithCompatibility(ctx, svc, prepared.req, in)
+	})
+}
+
+func (e *Engine) applyRepair(ctx context.Context, prepared *PreparedOperation) (Result, error) {
+	return e.applyMutatingPackage(ctx, prepared, func(svc usecase.Service, in usecase.AddInput) (usecase.AddResult, error) {
+		return svc.Repair(ctx, in)
+	})
+}
+
+func (e *Engine) applyMutatingPackage(ctx context.Context, prepared *PreparedOperation, call func(usecase.Service, usecase.AddInput) (usecase.AddResult, error)) (Result, error) {
+	if committed, binding, ok := e.liveBinding(prepared); ok && hostHandoffPending(binding) && e.cfg.OnCommittedBinding != nil {
+		if err := e.cfg.OnCommittedBinding(ctx, committed.Binding); err != nil {
+			committed.Outcome = OutcomeIncomplete
+			committed.Reason = err.Error()
+			e.report(ProgressCommit)
+			return committed, err
+		}
+	}
 	helper, err := e.helper()
 	if err != nil {
-		return Result{Operation: OpInstall, Outcome: OutcomeIncomplete, Reason: err.Error()}, err
+		return Result{Operation: prepared.req.Operation, Outcome: OutcomeIncomplete, Reason: err.Error()}, err
 	}
 	svc := e.lifecycle(helper, prepared.facts)
 	e.report(ProgressStage)
-	added, err := svc.Add(ctx, usecase.AddInput{
+	added, err := call(svc, usecase.AddInput{
 		Envelope: prepared.envelope, Client: prepared.client, Scope: domain.ScopeUser, Confirmed: true,
 		InstallationID: prepared.req.InstallationID, OperationID: prepared.req.OperationID,
 		BackendExecutable: prepared.req.ClientExecutable,
 	})
 	err = wrapLifecycleError(err)
-	result := Result{Operation: OpInstall, InstallationID: added.InstallationID, Binding: prepared.facts}
+	result := Result{Operation: prepared.req.Operation, InstallationID: added.InstallationID, Binding: prepared.facts}
+	if added.Activation.UserActions != nil {
+		result.ManualActions = append([]string(nil), added.Activation.UserActions...)
+	}
+	committed := false
+	if state, loadErr := e.store.Load(); loadErr == nil {
+		installationID := firstNonEmpty(added.InstallationID, prepared.req.InstallationID)
+		if installation, ok := findInstall(state, installationID); ok {
+			if binding, receipt, ok := findBinding(installation, prepared.client.ClientID); ok {
+				committed = true
+				result.InstallationID = firstNonEmpty(installation.InstallationID, installationID)
+				result.Binding = BindingFacts{
+					InstallationID: result.InstallationID, ClientID: string(prepared.client.ClientID),
+					BindingID: binding.ClientBindingID, Scope: binding.Scope, TargetPath: binding.TargetLocator,
+					DataRoot: receipt.Locator, DataReceiptID: binding.DataReceiptID,
+					OperationID: prepared.req.OperationID, TreeDigest: recordedBindingDigest(binding, prepared.plan.TreeDigest),
+				}
+				result.Client = liveClientResult(binding, prepared.req.RequiredComponents, prepared.plan.TreeDigest)
+			}
+		}
+	} else if err == nil && !added.NoChange {
+		result.Outcome = OutcomeIncomplete
+		result.Reason = "committed state is unknown"
+		result.Recovery.Unknown = []PendingReceipt{{
+			OperationID: prepared.req.OperationID, InstallationID: added.InstallationID,
+		}}
+		return result, loadErr
+	}
 	if errors.Is(err, ErrUpdateRequired) {
 		result.Outcome = OutcomeConflict
 		result.Reason = "update_required"
@@ -121,6 +182,7 @@ func (e *Engine) applyInstall(ctx context.Context, prepared *PreparedOperation) 
 		result.NoChange = true
 	} else if err == nil {
 		result.Outcome = OutcomeCompleted
+		_ = storeLiveProfile(result.Binding.DataRoot, result.Binding.ClientID, prepared.req.ClientConfigRoot)
 		e.report(ProgressCommit)
 		e.report(ProgressActivate)
 		e.report(ProgressVerify)
@@ -128,27 +190,8 @@ func (e *Engine) applyInstall(ctx context.Context, prepared *PreparedOperation) 
 	} else {
 		result.Outcome = OutcomeIncomplete
 		result.Reason = err.Error()
-	}
-	if added.Activation.UserActions != nil {
-		result.ManualActions = append([]string(nil), added.Activation.UserActions...)
-	}
-	state, loadErr := e.store.Load()
-	if loadErr == nil {
-		if installation, ok := findInstall(state, added.InstallationID); ok {
-			if binding, receipt, ok := findBinding(installation, prepared.client.ClientID); ok {
-				result.Binding = BindingFacts{
-					InstallationID: added.InstallationID, ClientID: string(prepared.client.ClientID),
-					BindingID: binding.ClientBindingID, Scope: binding.Scope, TargetPath: binding.TargetLocator,
-					DataRoot: receipt.Locator, DataReceiptID: binding.DataReceiptID,
-					OperationID: prepared.req.OperationID, TreeDigest: prepared.plan.TreeDigest,
-				}
-				result.Client = ClientResult{
-					ClientID: binding.ClientID, BindingID: binding.ClientBindingID,
-					Materialization: string(binding.Materialization), Activation: string(binding.Activation),
-					Authentication: string(binding.Authentication), Verification: string(binding.Verification),
-					RequiredComponents: append([]string(nil), prepared.req.RequiredComponents...),
-				}
-			}
+		if committed {
+			e.report(ProgressCommit)
 		}
 	}
 	return result, err
@@ -170,11 +213,11 @@ func (e *Engine) applyRemove(ctx context.Context, prepared *PreparedOperation) (
 	if !ok {
 		return Result{Operation: OpRemove, Outcome: OutcomeIncomplete, Reason: "installation is not installed"}, fmt.Errorf("%w: installation %s is not installed", ErrInvalidRequest, prepared.plan.InstallationID)
 	}
-	binding, _, ok := findBinding(installation, prepared.client.ClientID)
+	binding, receipt, ok := findBinding(installation, prepared.client.ClientID)
 	if !ok {
 		return Result{Operation: OpRemove, Outcome: OutcomeIncomplete, Reason: "client is not installed"}, fmt.Errorf("%w: client %s is not installed", ErrInvalidRequest, prepared.client.ClientID)
 	}
-	if err := e.removalPreflight(ctx, prepared.client, binding); err != nil {
+	if err := e.removalPreflight(ctx, prepared.client, binding, receipt); err != nil {
 		return Result{Operation: OpRemove, Outcome: OutcomeIncomplete, Reason: err.Error()}, err
 	}
 	helper, _ := e.helper()
@@ -213,6 +256,9 @@ func (e *Engine) applyRemove(ctx context.Context, prepared *PreparedOperation) (
 
 func (e *Engine) confirmPreparedPlan(ctx context.Context, prepared *PreparedOperation) error {
 	plan := prepared.plan
+	if len(plan.Targets) > 1 {
+		return e.confirmGroupPlan(ctx, prepared)
+	}
 	if plan.Operation == OpInstall {
 		if err := e.refuseRecordedDigestRewrite(plan.InstallationID, plan.TreeDigest); err != nil {
 			return err
@@ -269,6 +315,100 @@ func (e *Engine) confirmPreparedPlan(ctx context.Context, prepared *PreparedOper
 	return nil
 }
 
+func (e *Engine) liveBinding(prepared *PreparedOperation) (Result, domain.ClientBinding, bool) {
+	result := Result{Operation: OpInstall, Binding: prepared.facts}
+	state, err := e.store.Load()
+	if err != nil {
+		return result, domain.ClientBinding{}, false
+	}
+	installationID := firstNonEmpty(prepared.req.InstallationID, prepared.plan.InstallationID)
+	installation, ok := findInstall(state, installationID)
+	if !ok {
+		return result, domain.ClientBinding{}, false
+	}
+	binding, receipt, ok := findBinding(installation, prepared.client.ClientID)
+	if !ok {
+		return result, domain.ClientBinding{}, false
+	}
+	result.InstallationID = firstNonEmpty(installation.InstallationID, installationID)
+	result.Binding = BindingFacts{
+		InstallationID: result.InstallationID, ClientID: string(prepared.client.ClientID),
+		BindingID: binding.ClientBindingID, Scope: binding.Scope, TargetPath: binding.TargetLocator,
+		DataRoot: receipt.Locator, DataReceiptID: binding.DataReceiptID,
+		OperationID: prepared.req.OperationID, TreeDigest: recordedBindingDigest(binding, prepared.plan.TreeDigest),
+	}
+	result.Client = liveClientResult(binding, prepared.req.RequiredComponents, prepared.plan.TreeDigest)
+	return result, binding, true
+}
+
+func (e *Engine) updateWithCompatibility(ctx context.Context, svc usecase.Service, req Request, in usecase.AddInput) (usecase.AddResult, error) {
+	checks := e.compatibilityChecks(req, in)
+	if len(checks) == 0 {
+		return usecase.AddResult{}, ErrCompatibilityUnavailable
+	}
+	if len(checks) == 1 {
+		return svc.Update(ctx, in)
+	}
+	got, err := svc.UpdateGroup(ctx, usecase.GroupInput{
+		Targets:             []usecase.AddInput{in},
+		CompatibilityChecks: checks,
+		OperationGroupID:    firstNonEmpty(req.OperationID, "update"),
+		DryRun:              in.DryRun,
+		Confirmed:           in.Confirmed,
+	})
+	if err != nil {
+		return usecase.AddResult{InstallationID: got.InstallationID}, err
+	}
+	for _, target := range got.Targets {
+		if target.Plan.ClientID == in.Client.ClientID || target.Plan.ClientID == domain.ClientID(req.ClientID) {
+			return target, nil
+		}
+	}
+	if len(got.Targets) > 0 {
+		return got.Targets[0], nil
+	}
+	return usecase.AddResult{InstallationID: got.InstallationID, Mutated: got.Mutated}, nil
+}
+
+func (e *Engine) compatibilityChecks(req Request, target usecase.AddInput) []usecase.AddInput {
+	if req.InstallationID == "" {
+		return []usecase.AddInput{target}
+	}
+	state, err := e.store.Load()
+	if err != nil {
+		return nil
+	}
+	installation, ok := findInstall(state, req.InstallationID)
+	if !ok {
+		return []usecase.AddInput{target}
+	}
+	var checks []usecase.AddInput
+	for _, binding := range installation.Clients {
+		if binding.Materialization == domain.MaterializationAbsent {
+			continue
+		}
+		configRoot := req.ClientConfigRoot
+		if binding.ClientID != req.ClientID {
+			receipt := installation.DataReceipts[binding.DataReceiptID]
+			configRoot = liveProfile(receipt.Locator, binding.ClientID)
+			if configRoot == "" {
+				return nil
+			}
+		}
+		client, err := detectedClient(Request{
+			Operation: OpUpdate, ClientID: binding.ClientID, ClientConfigRoot: configRoot,
+			ClientExecutable: req.ClientExecutable,
+		})
+		if err != nil {
+			return nil
+		}
+		check := target
+		check.Client = client
+		checks = append(checks, check)
+	}
+	return checks
+}
+
 func attachNextActions(result *Result) {
 	if result == nil || len(result.NextActions) > 0 {
 		return
@@ -280,5 +420,7 @@ func attachNextActions(result *Result) {
 		result.NextActions = []NextAction{{Kind: "update", Reason: result.Reason}}
 	case result.Reason == "plan_changed":
 		result.NextActions = []NextAction{{Kind: "reprepare", Reason: result.Reason}}
+	case result.Outcome == OutcomeIncomplete && result.Client.Materialization != "" && result.Client.Materialization != string(domain.MaterializationAbsent):
+		result.NextActions = []NextAction{{Kind: "activate", Reason: result.Reason}}
 	}
 }

@@ -2,7 +2,7 @@ module example.com/uapinstaller-sample
 
 go 1.25.0
 
-require github.com/777genius/agent-notifications v1.43.1-0.20260914220435-daea20df4d51
+require github.com/777genius/agent-notifications v1.43.1-0.20260915125435-e0c315d89b9b
 
 require (
 	github.com/777genius/plugin-kit-ai/install/integrationctl v0.0.0-20260910100557-6af7f412cb4a // indirect

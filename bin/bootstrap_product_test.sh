@@ -13,6 +13,12 @@ export CLAUDE_CONFIG_DIR="$SANDBOX/claude config" CLAUDE_HOME="$SANDBOX/claude h
 mkdir -p "$HOME" "$CODEX_HOME" "$CLAUDE_CONFIG_DIR" "$CLAUDE_HOME"
 sed '/^main "\$@"$/d' "$ROOT/bin/bootstrap.sh" > "$SANDBOX/functions.sh"
 source "$SANDBOX/functions.sh"
+quoted=$(quote_shell_command "$SANDBOX/bin space/cli" --package "$SANDBOX/pkg space" --codex-home "$CODEX_HOME")
+eval "set -- $quoted"
+[ "$#" -eq 5 ] || { echo "quoted argc $#"; exit 1; }
+[ "$1" = "$SANDBOX/bin space/cli" ] || { echo "quoted binary $1"; exit 1; }
+[ "$3" = "$SANDBOX/pkg space" ] || { echo "quoted package $3"; exit 1; }
+[ "$5" = "$CODEX_HOME" ] || { echo "quoted codex home $5"; exit 1; }
 for product in claude codex both; do
     PRODUCT=""; select_product --product "$product"; [ "$PRODUCT" = "$product" ]
 done
@@ -51,11 +57,38 @@ printf '%s\n' '#!/bin/sh' 'echo "setup-codex [--print] [--dry-run] [--codex-home
 chmod +x "$legacy"
 if cli_has_setup_codex_skip_agent_notify "$legacy"; then echo "legacy advertised skip"; exit 1; fi
 if cli_has_setup_notifications "$legacy"; then echo "legacy advertised setup-notifications"; exit 1; fi
+if cli_has_setup_wizard "$legacy"; then echo "legacy advertised wizard"; exit 1; fi
 capable="$SANDBOX/capable-cli"
 printf '%s\n' '#!/bin/sh' 'echo "[--agent-notify|--skip-agent-notify]"' 'echo "setup-notifications [--help]"' > "$capable"
 chmod +x "$capable"
 cli_has_setup_codex_skip_agent_notify "$capable" || { echo "capable missing skip"; exit 1; }
 cli_has_setup_notifications "$capable" || { echo "capable missing setup-notifications"; exit 1; }
+if cli_has_setup_wizard "$capable"; then echo "narrow help advertised wizard"; exit 1; fi
+wizard="$SANDBOX/wizard-cli"
+printf '%s\n' '#!/bin/sh' 'echo "setup-notifications wizard"' > "$wizard"
+chmod +x "$wizard"
+cli_has_setup_wizard "$wizard" || { echo "wizard-cli missing wizard"; exit 1; }
+read -r _os _arch < <(bootstrap_release_os_arch)
+case "$_os" in linux|darwin|windows) ;; *) echo "unexpected os $_os"; exit 1 ;; esac
+case "$_arch" in amd64|arm64) ;; *) echo "unexpected arch $_arch"; exit 1 ;; esac
+_portable_stage="$SANDBOX/portable-stage"
+mkdir -p "$_portable_stage" "$SANDBOX/portable-src"
+_asset="agent-notify-portable-${_os}-${_arch}.zip"
+printf 'portable-zip-fixture' > "$SANDBOX/portable-src/$_asset"
+python3 -I - "$SANDBOX/portable-src" "$_asset" <<'PY'
+import hashlib, pathlib, sys
+root, name = pathlib.Path(sys.argv[1]), sys.argv[2]
+digest = hashlib.sha256((root/name).read_bytes()).hexdigest()
+(root/'checksums.txt').write_text(digest+'  '+name+'\n')
+PY
+BOOTSTRAP_TAG=v1.43.0
+_CONFIG_STAGE="$_portable_stage"
+fetch_bootstrap_file() { cp "$SANDBOX/portable-src/$(basename "$1")" "$2"; }
+acquire_wizard_portable_asset
+[ "$WIZARD_PACKAGE_ROOT" = "$_portable_stage/$_asset" ] || { echo "portable asset path $WIZARD_PACKAGE_ROOT"; exit 1; }
+BOOTSTRAP_TAG=""
+_CONFIG_STAGE=""
+WIZARD_PACKAGE_ROOT=""
 # setup_marketplace self-heals a marketplace declared under a retired repo
 # name, but leaves an unrelated source conflict alone.
 (

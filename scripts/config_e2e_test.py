@@ -183,7 +183,7 @@ shutil.copytree(os.environ['SOURCE'],root,dirs_exist_ok=True)
         return self.run(env, [self.binary, 'config', *args], expected, data)
 
     def boot(self, env, product, expected=0):
-        return self.run(env, ['/bin/bash', ROOT / 'bin/bootstrap.sh', '--product', product], expected)
+        return self.run(env, ['/bin/bash', ROOT / 'bin/bootstrap.sh', '--product', product, '--skip-agent-notify'], expected)
 
     def paths(self, env):
         return (Path(env['HOME']) / '.claude/claude-notifications-go/config.json',
@@ -418,7 +418,7 @@ shutil.copytree(os.environ['SOURCE'],root,dirs_exist_ok=True)
         try:
             with lock.open('r+') as held:
                 fcntl.flock(held, fcntl.LOCK_EX)
-                install = start(['/bin/bash', ROOT / 'bin/bootstrap.sh', '--product', 'both'],
+                install = start(['/bin/bash', ROOT / 'bin/bootstrap.sh', '--product', 'both', '--skip-agent-notify'],
                                 subprocess.DEVNULL)
                 assert self.asset_gate_entered.wait(15), 'installer did not reach asset barrier'
                 settings = start(

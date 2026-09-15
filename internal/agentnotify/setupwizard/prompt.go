@@ -1,0 +1,564 @@
+package setupwizard
+
+import (
+	"bufio"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"strings"
+
+	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
+)
+
+var (
+	ErrPromptCanceled    = errors.New("prompt canceled")
+	ErrPromptUnavailable = errors.New("prompt unavailable; pass --agents and --yes")
+	ErrPromptInputClosed = errors.New("prompt input closed before a complete answer")
+)
+
+// AgentCapability is the Claude/Codex surface shown by the TTY picker.
+// Presence and bindings come from Engine.Discover; the renderer does not
+// search PATH.
+type AgentCapability struct {
+	ID      string
+	Present bool
+	Path    string
+	Bound   bool
+	Profile string
+}
+
+// ClientUnits is the live hooks/notify fact for one selected client. The TTY
+// shows these when Claude and Codex differ so omission is not one bool.
+type ClientUnits struct {
+	Client string
+	Hooks  bool
+	Notify bool
+}
+
+// Prompter is the thin TTY port. It only fills Request fields; Run owns rules.
+type Prompter interface {
+	SelectAgents(context.Context, []AgentCapability) ([]string, error)
+	SelectExistingAction(context.Context) (Action, error)
+	SelectUnits(context.Context) (hooks, notify bool, err error)
+	SelectLiveUnits(context.Context, []ClientUnits) (keep, hooks, notify bool, err error)
+	Confirm(context.Context, string) (bool, error)
+}
+
+// LinePrompt is a local adapter until UAP publishes the reusable P5 terminal UI.
+type LinePrompt struct {
+	In  io.Reader
+	Out io.Writer
+	br  *bufio.Reader
+}
+
+func (p *LinePrompt) reader() *bufio.Reader {
+	if p.br == nil {
+		p.br = bufio.NewReader(p.In)
+	}
+	return p.br
+}
+
+func (p *LinePrompt) SelectAgents(ctx context.Context, clients []AgentCapability) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	claude, codex := "Claude Code", "Codex"
+	if len(clients) > 0 {
+		claude = agentChoiceLabel(clients, "claude", claude)
+		codex = agentChoiceLabel(clients, "codex", codex)
+	}
+	if _, err := io.WriteString(p.Out, "Install notifications for: 1) "+claude+"  2) "+codex+"  3) Both\nChoice: "); err != nil {
+		return nil, err
+	}
+	line, err := readLine(ctx, p.reader())
+	if err != nil {
+		return nil, err
+	}
+	switch strings.TrimSpace(line) {
+	case "1":
+		return []string{"claude"}, nil
+	case "2":
+		return []string{"codex"}, nil
+	case "3":
+		return []string{"claude", "codex"}, nil
+	case "":
+		return nil, ErrPromptCanceled
+	default:
+		return nil, fmt.Errorf("%w: invalid_choice", ErrPromptCanceled)
+	}
+}
+
+func (p *LinePrompt) SelectExistingAction(ctx context.Context) (Action, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if _, err := io.WriteString(p.Out, "Existing agent-notify installation found.\n1) Inspect  2) Add/reinstall  3) Uninstall  4) Update  5) Repair\nChoice: "); err != nil {
+		return "", err
+	}
+	line, err := readLine(ctx, p.reader())
+	if err != nil {
+		return "", err
+	}
+	switch strings.TrimSpace(line) {
+	case "1":
+		return ActionInspect, nil
+	case "2":
+		return ActionInstall, nil
+	case "3":
+		return ActionUninstall, nil
+	case "4":
+		return ActionUpdate, nil
+	case "5":
+		return ActionRepair, nil
+	case "":
+		return "", ErrPromptCanceled
+	default:
+		return "", fmt.Errorf("%w: invalid_choice", ErrPromptCanceled)
+	}
+}
+
+func (p *LinePrompt) SelectUnits(ctx context.Context) (bool, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, false, err
+	}
+	if _, err := io.WriteString(p.Out, "Units: 1) Hooks  2) Agent-initiated notify (MCP+skill)  3) Both\nChoice: "); err != nil {
+		return false, false, err
+	}
+	line, err := readLine(ctx, p.reader())
+	if err != nil {
+		return false, false, err
+	}
+	switch strings.TrimSpace(line) {
+	case "1":
+		return true, false, nil
+	case "2":
+		return false, true, nil
+	case "3":
+		return true, true, nil
+	case "":
+		return false, false, ErrPromptCanceled
+	default:
+		return false, false, fmt.Errorf("%w: invalid_choice", ErrPromptCanceled)
+	}
+}
+
+func (p *LinePrompt) SelectLiveUnits(ctx context.Context, live []ClientUnits) (bool, bool, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, false, false, err
+	}
+	var b strings.Builder
+	b.WriteString("Current units differ per client; omitted flags keep each target (unchecked = keep unchanged):\n")
+	for _, unit := range live {
+		b.WriteString("  ")
+		b.WriteString(unit.Client)
+		b.WriteString(": hooks=")
+		b.WriteString(boolFlag(unit.Hooks))
+		b.WriteString(" agent-notify=")
+		b.WriteString(boolFlag(unit.Notify))
+		b.WriteByte('\n')
+	}
+	b.WriteString("1) Keep current per client  2) Hooks for all  3) Agent-initiated notify for all  4) Both for all\nChoice: ")
+	if _, err := io.WriteString(p.Out, b.String()); err != nil {
+		return false, false, false, err
+	}
+	line, err := readLine(ctx, p.reader())
+	if err != nil {
+		return false, false, false, err
+	}
+	switch strings.TrimSpace(line) {
+	case "1":
+		return true, false, false, nil
+	case "2":
+		return false, true, false, nil
+	case "3":
+		return false, false, true, nil
+	case "4":
+		return false, true, true, nil
+	case "":
+		return false, false, false, ErrPromptCanceled
+	default:
+		return false, false, false, fmt.Errorf("%w: invalid_choice", ErrPromptCanceled)
+	}
+}
+
+func (p *LinePrompt) Confirm(ctx context.Context, summary string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if summary == "" {
+		summary = "Proceed with setup?"
+	}
+	if _, err := fmt.Fprintf(p.Out, "%s [y/N]: ", summary); err != nil {
+		return false, err
+	}
+	line, err := readLine(ctx, p.reader())
+	if err != nil {
+		return false, err
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return true, nil
+	case "", "n", "no":
+		return false, nil
+	default:
+		return false, fmt.Errorf("%w: invalid_choice", ErrPromptCanceled)
+	}
+}
+
+// FillInteractive copies req and asks only for omitted mutation choices.
+// existing reports live portable bindings for the selected agents; nil means
+// treat the machine as new. Detection stays outside this adapter.
+func FillInteractive(ctx context.Context, req Request, p Prompter, existing func([]string) []string) (Request, error) {
+	if p == nil {
+		return req, ErrPromptUnavailable
+	}
+	if ctx == nil {
+		return req, ErrRefused
+	}
+	if req.Action == ActionInspect {
+		return req, nil
+	}
+	if len(req.Agents) == 0 {
+		var clients []AgentCapability
+		if req.DiscoverAgents != nil {
+			clients = req.DiscoverAgents()
+		}
+		agents, err := p.SelectAgents(ctx, clients)
+		if err != nil {
+			return req, err
+		}
+		req.Agents = agents
+	}
+	if len(req.Agents) == 0 {
+		return req, ErrPromptCanceled
+	}
+	if req.Action == "" {
+		if existing != nil && len(existing(req.Agents)) > 0 {
+			action, err := p.SelectExistingAction(ctx)
+			if err != nil {
+				return req, err
+			}
+			req.Action = action
+		} else {
+			req.Action = ActionInstall
+		}
+	}
+	if req.Action == ActionInspect {
+		return req, nil
+	}
+	if unitFlagsOmitted(req) && !req.Yes && req.Action != ActionUpdate && req.Action != ActionRepair {
+		live := lookupLiveUnits(req)
+		if mixedClientUnits(live) && (req.Action == ActionInstall || req.Action == ActionUninstall) {
+			keep, hooks, notify, err := p.SelectLiveUnits(ctx, live)
+			if err != nil {
+				return req, err
+			}
+			if keep {
+				if req.Action == ActionUninstall {
+					// Unchecked existing units stay installed; empty set is cancel.
+					return req, ErrPromptCanceled
+				}
+				applyLiveClientFlags(&req, live)
+				req.Agents = unboundInstallAgents(req)
+				if len(req.Agents) == 0 {
+					return req, ErrPromptCanceled
+				}
+			} else {
+				req.Hooks = boolPtr(hooks)
+				req.AgentNotify = boolPtr(notify)
+			}
+		} else {
+			hooks, notify, err := p.SelectUnits(ctx)
+			if err != nil {
+				return req, err
+			}
+			req.Hooks = boolPtr(hooks)
+			req.AgentNotify = boolPtr(notify)
+		}
+	}
+	return req, nil
+}
+
+func lookupLiveUnits(req Request) []ClientUnits {
+	if req.LiveUnits != nil {
+		return req.LiveUnits(req.Agents)
+	}
+	live := LiveClientUnits(req, req.Agents)
+	if req.Action == ActionUninstall {
+		return live
+	}
+	bound := map[string]bool{}
+	for _, id := range LiveSetupClients(req, req.Agents) {
+		bound[id] = true
+	}
+	for i := range live {
+		if bound[live[i].Client] {
+			continue
+		}
+		// New install targets are proposed on; live-off is only for bound clients.
+		live[i].Hooks = true
+		live[i].Notify = true
+	}
+	return live
+}
+
+func mixedClientUnits(units []ClientUnits) bool {
+	if len(units) < 2 {
+		return false
+	}
+	for _, unit := range units[1:] {
+		if unit.Hooks != units[0].Hooks || unit.Notify != units[0].Notify {
+			return true
+		}
+	}
+	return false
+}
+
+func applyLiveClientFlags(req *Request, live []ClientUnits) {
+	for _, unit := range live {
+		hooks, notify := boolPtr(unit.Hooks), boolPtr(unit.Notify)
+		switch unit.Client {
+		case "claude":
+			req.ClaudeHooks, req.ClaudeAgentNotify = hooks, notify
+		case "codex":
+			req.CodexHooks, req.CodexAgentNotify = hooks, notify
+		}
+	}
+}
+
+// unboundInstallAgents keeps a mixed TTY "keep current" Install from
+// reinstalling already-bound clients when the selection also adds a new one.
+// All-bound keep returns no agents so FillInteractive can cancel as a no-op.
+// LiveSetupClients is the source of truth; the existing() callback is not,
+// because tests may report a subset while LiveUnits lists every selected client.
+func unboundInstallAgents(req Request) []string {
+	if len(req.Agents) == 0 || strings.TrimSpace(req.ControlRoot) == "" {
+		return req.Agents
+	}
+	bound := map[string]bool{}
+	for _, id := range LiveSetupClients(req, req.Agents) {
+		bound[id] = true
+	}
+	unbound := make([]string, 0, len(req.Agents))
+	for _, agent := range req.Agents {
+		if !bound[agent] {
+			unbound = append(unbound, agent)
+		}
+	}
+	return unbound
+}
+
+func confirmPlan(req Request) string {
+	action := string(req.Action)
+	if action == "" {
+		action = string(ActionInstall)
+	}
+	agents := strings.Join(req.Agents, ",")
+	if agents == "" {
+		agents = "none"
+	}
+	unit := func(flag *bool, perClient bool, installDefault string) string {
+		if flag == nil {
+			switch req.Action {
+			case ActionUninstall:
+				return "all-managed"
+			case ActionUpdate, ActionRepair:
+				return "unchanged"
+			default:
+				if perClient {
+					return "per-client"
+				}
+				return installDefault
+			}
+		}
+		return boolFlag(*flag)
+	}
+	hooksPerClient := req.ClaudeHooks != nil || req.CodexHooks != nil
+	notifyPerClient := req.ClaudeAgentNotify != nil || req.CodexAgentNotify != nil
+	summary := fmt.Sprintf("Plan: action=%s agents=%s hooks=%s agent-notify=%s",
+		action, agents, unit(req.Hooks, hooksPerClient, "on"), unit(req.AgentNotify, notifyPerClient, "on"))
+	perClient := func(name string, flag *bool) {
+		if flag == nil {
+			return
+		}
+		summary += fmt.Sprintf(" %s=%s", name, boolFlag(*flag))
+	}
+	perClient("claude-hooks", req.ClaudeHooks)
+	perClient("codex-hooks", req.CodexHooks)
+	perClient("claude-agent-notify", req.ClaudeAgentNotify)
+	perClient("codex-agent-notify", req.CodexAgentNotify)
+	if req.CodexHome != "" {
+		summary += " codex-profile=" + req.CodexHome
+	}
+	if req.ClaudeConfig != "" {
+		summary += " claude-profile=" + req.ClaudeConfig
+	}
+	if path := discoveryConfigPath(req, portable.Codex); path != "" {
+		summary += " codex-mcp=" + path
+	}
+	if path := discoveryConfigPath(req, portable.Claude); path != "" {
+		summary += " claude-mcp=" + path
+	}
+	if req.ReleaseVersion != "" {
+		summary += " revision=" + req.ReleaseVersion
+	}
+	if req.PackageSHA256 != "" {
+		summary += " digest=" + req.PackageSHA256
+	}
+	if req.InstallationID != "" {
+		summary += " installation-id=" + req.InstallationID
+	}
+	switch req.Action {
+	case ActionUninstall:
+		summary += " required=none permission-dialog=skipped"
+	case ActionInstall, ActionUpdate, ActionRepair, "":
+		summary += " required=restart,request-permission,test-notification permission-dialog=explicit delivery=not_verified"
+	}
+	return summary + ". Proceed?"
+}
+
+func agentChoiceLabel(clients []AgentCapability, id, name string) string {
+	for _, client := range clients {
+		if client.ID != id {
+			continue
+		}
+		switch {
+		case client.Present && client.Bound:
+			return agentInstalledLabel(name+" (executable present, installed)", client.Profile)
+		case client.Present:
+			return name + " (executable present)"
+		case client.Bound:
+			return agentInstalledLabel(name+" (executable not found, installed)", client.Profile)
+		default:
+			return name + " (executable not found)"
+		}
+	}
+	return name
+}
+
+func agentInstalledLabel(base, profile string) string {
+	profile = sanitizePromptText(profile)
+	if profile == "" {
+		return base
+	}
+	return base + " profile=" + profile
+}
+
+// sanitizePromptText strips control characters from Discover labels so a
+// foreign profile/path cannot inject extra TTY lines.
+func sanitizePromptText(s string) string {
+	if s == "" {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if r < 32 || r == 127 {
+			b.WriteByte(' ')
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+func readLine(ctx context.Context, reader *bufio.Reader) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	line, err := reader.ReadString('\n')
+	if errors.Is(err, io.EOF) {
+		if strings.TrimSpace(line) == "" {
+			return "", ErrPromptInputClosed
+		}
+		err = nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimRight(line, "\r\n"), nil
+}
+
+func attachCommand(req Request, out Result) Result {
+	switch out.Outcome {
+	case "completed", "cancelled", "unchanged":
+		return out
+	}
+	if req.InstallationID == "" && out.InstallationID != "" {
+		req.InstallationID = out.InstallationID
+	}
+	if len(out.Command) == 0 {
+		out.Command = RetryCommand(req)
+	}
+	return out
+}
+
+// RetryCommand is the structured argv that repeats this wizard request.
+func RetryCommand(req Request) []string {
+	cmd := []string{"setup-notifications", "wizard"}
+	if req.Action != "" {
+		cmd = append(cmd, "--action", string(req.Action))
+	}
+	if len(req.Agents) > 0 {
+		cmd = append(cmd, "--agents", strings.Join(req.Agents, ","))
+	}
+	if req.Hooks != nil {
+		cmd = append(cmd, "--hooks", boolFlag(*req.Hooks))
+	}
+	if req.AgentNotify != nil {
+		cmd = append(cmd, "--agent-notify", boolFlag(*req.AgentNotify))
+	}
+	if req.ClaudeHooks != nil {
+		cmd = append(cmd, "--claude-hooks", boolFlag(*req.ClaudeHooks))
+	}
+	if req.CodexHooks != nil {
+		cmd = append(cmd, "--codex-hooks", boolFlag(*req.CodexHooks))
+	}
+	if req.ClaudeAgentNotify != nil {
+		cmd = append(cmd, "--claude-agent-notify", boolFlag(*req.ClaudeAgentNotify))
+	}
+	if req.CodexAgentNotify != nil {
+		cmd = append(cmd, "--codex-agent-notify", boolFlag(*req.CodexAgentNotify))
+	}
+	appendPath := func(flag, value string) {
+		if value != "" {
+			cmd = append(cmd, flag, value)
+		}
+	}
+	appendPath("--package", req.PackageRoot)
+	appendPath("--plugin-root", req.PluginRoot)
+	appendPath("--control-root", req.ControlRoot)
+	appendPath("--runtime-root", req.RuntimeRoot)
+	appendPath("--global-config", req.GlobalConfig)
+	appendPath("--codex-home", req.CodexHome)
+	appendPath("--claude-config", req.ClaudeConfig)
+	appendPath("--client-executable", req.ClientExecutable)
+	if req.ClientExecutables != nil {
+		appendPath("--claude-executable", req.ClientExecutables["claude"])
+		appendPath("--codex-executable", req.ClientExecutables["codex"])
+	}
+	appendPath("--helper", req.Helper)
+	appendPath("--scope-root", req.ScopeRoot)
+	if req.InstallationID != "" {
+		cmd = append(cmd, "--installation-id", req.InstallationID)
+	}
+	if req.MCPConfig != nil {
+		appendPath("--mcp-config", req.MCPConfig["codex"])
+		appendPath("--claude-mcp-config", req.MCPConfig["claude"])
+	}
+	if req.Action != ActionInspect {
+		cmd = append(cmd, "--yes")
+	}
+	if req.ExternalUninstalled {
+		cmd = append(cmd, "--external-uninstalled")
+	}
+	return cmd
+}
+
+func boolFlag(v bool) string {
+	if v {
+		return "true"
+	}
+	return "false"
+}
