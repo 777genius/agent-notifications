@@ -3250,6 +3250,10 @@ func TestWizardRetainedDifferentDigestRequiresUpdate(t *testing.T) {
 		t.Fatalf("install: %+v %v", installed, err)
 	}
 	statePath := filepath.Join(filepath.Dir(control), "uap", "state", "state-v2.json")
+	firstID := installed.InstallationID
+	if firstID == "" {
+		firstID = installationIDFromState(t, statePath)
+	}
 	dataRoot := retainedDataRoot(t, statePath)
 	sentinel := filepath.Join(dataRoot, "keep.txt")
 	if err := os.WriteFile(sentinel, []byte("retain\n"), 0600); err != nil {
@@ -3276,9 +3280,17 @@ func TestWizardRetainedDifferentDigestRequiresUpdate(t *testing.T) {
 	if len(got.NextActions) != 2 || got.NextActions[0].Kind != "update" || got.NextActions[1].Kind != "install" {
 		t.Fatalf("retained update phases: %+v", got.NextActions)
 	}
-	body, err := os.ReadFile(sentinel)
-	if err != nil || string(body) != "retain\n" {
-		t.Fatalf("PLUGIN_DATA sentinel: %s %v", body, err)
+	if !strings.Contains(strings.Join(got.NextActions[0].Command, " "), "--agents codex") {
+		t.Fatalf("retained update missed agents: %v", got.NextActions[0].Command)
+	}
+	updated, err := Run(ctx, Request{
+		Action: ActionUpdate, Agents: got.NextActions[0].Agents, Yes: true, Hooks: &off,
+		PackageRoot: other, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: req.ScopeRoot, InstallationID: firstID,
+	})
+	if err != nil || updated.Outcome != "completed" {
+		t.Fatalf("phase 1 retained update: %+v %v", updated, err)
 	}
 	view, err := Run(ctx, Request{Action: ActionInspect, Agents: []string{"codex"}, ControlRoot: control})
 	if err != nil {
@@ -3286,8 +3298,37 @@ func TestWizardRetainedDifferentDigestRequiresUpdate(t *testing.T) {
 	}
 	for _, target := range view.Targets {
 		if target.Unit == "agent-notify" && target.Outcome == "installed" {
-			t.Fatalf("hidden retained migration: %+v", view.Targets)
+			t.Fatalf("metadata update installed a client: %+v", view.Targets)
 		}
+	}
+	added, err := Run(ctx, Request{
+		Action: ActionInstall, Agents: got.NextActions[1].Agents, Yes: true, Hooks: &off,
+		PackageRoot: other, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: req.ScopeRoot, InstallationID: firstID,
+	})
+	if err != nil || added.Outcome != "completed" {
+		t.Fatalf("phase 2 retained add: %+v %v", added, err)
+	}
+	body, err := os.ReadFile(sentinel)
+	if err != nil || string(body) != "retain\n" {
+		t.Fatalf("PLUGIN_DATA sentinel: %s %v", body, err)
+	}
+	view, err = Run(ctx, Request{Action: ActionInspect, Agents: []string{"codex"}, ControlRoot: control, RuntimeRoot: runtime, Helper: probe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var installedNotify bool
+	for _, target := range view.Targets {
+		if target.Unit == "agent-notify" && target.Outcome == "installed" {
+			installedNotify = true
+		}
+	}
+	if !installedNotify {
+		t.Fatalf("phase 2 did not install: %+v", view.Targets)
+	}
+	if got := installationIDFromState(t, statePath); got != firstID {
+		t.Fatalf("retained installation lost: %s vs %s", firstID, got)
 	}
 }
 

@@ -1949,9 +1949,16 @@ func TestSetupWizardRetainedDifferentDigestRequiresUpdateE2E(t *testing.T) {
 	if len(got.NextActions) != 2 || got.NextActions[0].Kind != "update" || got.NextActions[1].Kind != "install" {
 		t.Fatalf("retained update phases: %+v", got.NextActions)
 	}
-	body, err := os.ReadFile(sentinel)
-	if err != nil || string(body) != "retain\n" {
-		t.Fatalf("PLUGIN_DATA sentinel: %s %v", body, err)
+	if !strings.Contains(strings.Join(got.NextActions[0].Command, " "), "--agents codex") {
+		t.Fatalf("retained update missed agents: %v", got.NextActions[0].Command)
+	}
+	out.Reset()
+	updateArgs := wizardCommandArgs(t, got.NextActions[0].Command)
+	if code := executeSetupWizardWith(ctx, updateArgs, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("phase 1 retained update: %d %s", code, out.String())
+	}
+	if updated := decodeWizardJSON(t, out); updated.Outcome != "completed" {
+		t.Fatalf("phase 1 retained update result: %+v", updated)
 	}
 	out.Reset()
 	inspect := []string{
@@ -1959,12 +1966,24 @@ func TestSetupWizardRetainedDifferentDigestRequiresUpdateE2E(t *testing.T) {
 		"--runtime-root", env.runtime, "--helper", env.probe,
 	}
 	if code := executeSetupWizardWith(ctx, inspect, &out, io.Discard, strings.NewReader(""), false); code != 0 {
-		t.Fatalf("inspect after retained mismatch: %d %s", code, out.String())
+		t.Fatalf("inspect after retained metadata: %d %s", code, out.String())
 	}
 	for _, target := range decodeWizardJSON(t, out).Targets {
 		if target.Unit == "agent-notify" && target.Outcome == "installed" {
-			t.Fatalf("hidden retained migration: %+v", target)
+			t.Fatalf("metadata update installed a client: %+v", target)
 		}
+	}
+	out.Reset()
+	addArgs := wizardCommandArgs(t, got.NextActions[1].Command)
+	if code := executeSetupWizardWith(ctx, addArgs, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("phase 2 retained add: %d %s", code, out.String())
+	}
+	if added := decodeWizardJSON(t, out); added.Outcome != "completed" || added.InstallationID != installed.InstallationID {
+		t.Fatalf("phase 2 retained add result: %+v", added)
+	}
+	body, err := os.ReadFile(sentinel)
+	if err != nil || string(body) != "retain\n" {
+		t.Fatalf("PLUGIN_DATA sentinel: %s %v", body, err)
 	}
 }
 
