@@ -104,6 +104,32 @@ func TestNewRejectsRelativeStateRootAndDoesNotCreateDirs(t *testing.T) {
 	}
 }
 
+func TestPrepareUnknownAndGroupOperationsDoNotMutate(t *testing.T) {
+	ctx := testCtx(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(base, "uap")
+	eng, err := New(Config{StateRoot: state})
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, op := range []Operation{"", "install-group", "update-group", "repair-group", "remove-group", "switch"} {
+		_, err := eng.Prepare(ctx, Request{Operation: op, ClientID: "codex", ClientConfigRoot: config})
+		if !errors.Is(err, ErrInvalidRequest) {
+			t.Fatalf("%q: %v", op, err)
+		}
+	}
+	if _, err := os.Lstat(eng.cfg.StateFile); !os.IsNotExist(err) {
+		t.Fatal("unknown operation created state")
+	}
+}
+
 func TestNewRejectsWindowsUNCStateRoot(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("UNC volume names are a Windows path form")
@@ -1900,6 +1926,9 @@ func TestExampleModuleStaysExternal(t *testing.T) {
 	}
 	if strings.Contains(text, "internal/") || strings.Contains(text, "plugin-kit-ai/install/integrationctl/agentplugins/transaction") {
 		t.Fatal("example imports raw Store/Kernel types")
+	}
+	if !strings.Contains(text, "Recover(") || !strings.Contains(text, "OpUpdate") || !strings.Contains(text, "OpRepair") {
+		t.Fatal("example omits published lifecycle operations")
 	}
 }
 

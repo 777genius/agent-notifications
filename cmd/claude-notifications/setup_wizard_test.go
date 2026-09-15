@@ -8,11 +8,13 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/777genius/agent-notifications/install/uapinstaller"
 	"github.com/777genius/agent-notifications/internal/agentnotify/setupwizard"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 )
@@ -271,5 +273,181 @@ func TestReportAgentNotifySetupFailureQuotesCodexHome(t *testing.T) {
 	}
 	if strings.Contains(got, "configure --provider codex --codex-home /tmp/codex home --navigation") {
 		t.Fatal("space path split in retry", got)
+	}
+}
+
+func TestSetupWizardJSONLifecycleE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	root := setupCommandRoot(t)
+	control := filepath.Join(root, "control")
+	runtime := filepath.Join(root, "runtime")
+	global := filepath.Join(root, "global", "config.json")
+	probe := buildWizardProbe(t)
+	pkg := filepath.Join(root, "package")
+	writeWizardPackage(t, pkg, probe)
+	codexHome := filepath.Join(root, "codex-profile")
+	scope := filepath.Join(root, "scope")
+	for _, dir := range []string{filepath.Dir(global), codexHome, scope} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	body, err := os.ReadFile(probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: control, RuntimeRoot: runtime, Owner: "existing-installer", ConsumerID: "existing",
+		Files: []installruntime.File{{Path: filepath.Join(runtime, "primary"), Data: body, Mode: 0700}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	flags := func(action string, extra ...string) []string {
+		args := []string{
+			"--action", action, "--agents", "codex", "--hooks", "false",
+			"--package", pkg, "--control-root", control, "--runtime-root", runtime,
+			"--global-config", global, "--codex-home", codexHome,
+			"--client-executable", probe, "--helper", probe, "--scope-root", scope,
+		}
+		return append(args, extra...)
+	}
+	decode := func(t *testing.T, out bytes.Buffer) setupwizard.Result {
+		t.Helper()
+		var result setupwizard.Result
+		if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+			t.Fatalf("json: %v %s", err, out.String())
+		}
+		return result
+	}
+	var out bytes.Buffer
+	if code := executeSetupWizardWith(ctx, flags("install", "--yes", "--json"), &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("install: %d %s", code, out.String())
+	}
+	installed := decode(t, out)
+	if installed.Outcome != "completed" || installed.InstallationID == "" {
+		t.Fatalf("install result: %+v", installed)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, flags("inspect", "--json"), &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect: %d %s", code, out.String())
+	}
+	view := decode(t, out)
+	if view.Outcome != "completed" {
+		t.Fatalf("inspect result: %+v", view)
+	}
+	var notifyInstalled bool
+	for _, target := range view.Targets {
+		if target.Unit == "agent-notify" && target.Outcome == "installed" {
+			notifyInstalled = true
+		}
+	}
+	if !notifyInstalled {
+		t.Fatalf("inspect missed notify: %+v", view.Targets)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, flags("update"), &out, io.Discard, strings.NewReader("n\n"), true); code != 0 || !strings.Contains(out.String(), "cancelled") {
+		t.Fatalf("update cancel: %d %s", code, out.String())
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, flags("update", "--yes", "--json"), &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("update: %d %s", code, out.String())
+	}
+	updated := decode(t, out)
+	if updated.Outcome != "completed" && updated.Outcome != "unchanged" {
+		t.Fatalf("update result: %+v", updated)
+	}
+	if updated.InstallationID != installed.InstallationID {
+		t.Fatalf("update changed installation: %s vs %s", installed.InstallationID, updated.InstallationID)
+	}
+	eng, err := uapinstaller.New(uapinstaller.Config{StateRoot: filepath.Join(root, "uap", "state")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	uapView, err := eng.Inspect(ctx)
+	if err != nil || len(uapView.Installations) != 1 || len(uapView.Installations[0].Bindings) == 0 {
+		t.Fatalf("uap inspect: %+v %v", uapView, err)
+	}
+	target := uapView.Installations[0].Bindings[0].TargetPath
+	if target == "" {
+		t.Fatal("missing live target")
+	}
+	if err := os.RemoveAll(target); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, flags("repair", "--yes", "--json"), &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("repair: %d %s", code, out.String())
+	}
+	repaired := decode(t, out)
+	if repaired.Outcome != "completed" {
+		t.Fatalf("repair result: %+v", repaired)
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("repair did not restore target: %v", err)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, flags("uninstall", "--yes", "--json", "--external-uninstalled"), &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("uninstall: %d %s", code, out.String())
+	}
+	removed := decode(t, out)
+	if removed.Outcome != "completed" {
+		t.Fatalf("uninstall result: %+v", removed)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, flags("inspect", "--json"), &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect after uninstall: %d %s", code, out.String())
+	}
+	after := decode(t, out)
+	for _, target := range after.Targets {
+		if target.Unit == "agent-notify" && target.Outcome == "installed" {
+			t.Fatalf("notify survived uninstall: %+v", after.Targets)
+		}
+	}
+}
+
+func buildWizardProbe(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	src := filepath.Join(dir, "probe.go")
+	if err := os.WriteFile(src, []byte(`package main
+import ("encoding/json"; "os")
+func main() { json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true}) }
+`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "probe")
+	cmd := exec.Command("go", "build", "-o", out, src)
+	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
+	if body, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build probe: %s %v", body, err)
+	}
+	return out
+}
+
+func writeWizardPackage(t *testing.T, root, probe string) {
+	t.Helper()
+	body, err := os.ReadFile(probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := map[string][]byte{
+		"plugin.json":                  []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.0"}`),
+		"mcp.json":                     []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"agent-notify":{"type":"stdio","command":"./bin/probe","args":[],"env":{}}}}`),
+		"skills/agent-notify/SKILL.md": []byte("---\nname: agent-notify\ndescription: Wizard CLI e2e\n---\n"),
+		"bin/probe":                    body,
+	}
+	for rel, data := range files {
+		path := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		mode := os.FileMode(0600)
+		if rel == "bin/probe" {
+			mode = 0700
+		}
+		if err := os.WriteFile(path, data, mode); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

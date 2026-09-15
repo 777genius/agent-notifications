@@ -3,7 +3,7 @@
 //
 // Default invocation only constructs the public Engine to prove the package
 // imports without a workspace, replace directive, or raw Store/Kernel types.
-// Passing explicit roots runs install → inspect → no-op repeat → update → repair → remove.
+// Passing explicit roots runs install → inspect → recover → no-op repeat → update → repair → remove.
 package main
 
 import (
@@ -66,6 +66,11 @@ func runDemo(state, pkg, config, helper, client string) error {
 		return err
 	}
 	fmt.Printf("installations=%d recovery=%t\n", len(view.Installations), view.Recovery.Required)
+	recovered, err := eng.Recover(ctx, view)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("recover=%s\n", recovered.Outcome)
 	again, err := eng.Prepare(ctx, req)
 	if err != nil {
 		return err
