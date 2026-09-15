@@ -3497,6 +3497,9 @@ func TestWizardInstallMixedLiveDoesNotReplaceOlderSibling(t *testing.T) {
 	if len(blocked.NextActions) != 1 || blocked.NextActions[0].Kind != "update" || strings.Join(blocked.NextActions[0].Agents, ",") != "codex" {
 		t.Fatalf("older sibling next: %+v", blocked.NextActions)
 	}
+	if cmd := strings.Join(blocked.NextActions[0].Command, " "); !strings.Contains(cmd, "--action update") || !strings.Contains(cmd, "--agents codex") || strings.Contains(cmd, "2-add") {
+		t.Fatalf("older sibling retry: %v", blocked.NextActions[0].Command)
+	}
 	both := req
 	both.Agents = []string{"claude", "codex"}
 	blockedBoth, err := Run(ctx, both)
@@ -3505,6 +3508,9 @@ func TestWizardInstallMixedLiveDoesNotReplaceOlderSibling(t *testing.T) {
 	}
 	if len(blockedBoth.NextActions) != 1 || blockedBoth.NextActions[0].Kind != "update" || strings.Join(blockedBoth.NextActions[0].Agents, ",") != "codex" {
 		t.Fatalf("mixed both next: %+v", blockedBoth.NextActions)
+	}
+	if cmd := strings.Join(blockedBoth.NextActions[0].Command, " "); !strings.Contains(cmd, "--action update") || !strings.Contains(cmd, "--agents codex") || strings.Contains(cmd, "--agents claude,codex") {
+		t.Fatalf("mixed both retry: %v", blockedBoth.NextActions[0].Command)
 	}
 	both.Yes = false
 	plan, err := Plan(ctx, both)
@@ -3578,6 +3584,9 @@ func TestWizardInstallBothLiveBehindRequiresUpdateBoth(t *testing.T) {
 	}
 	if len(blocked.NextActions) != 1 || blocked.NextActions[0].Kind != "update" || strings.Join(blocked.NextActions[0].Agents, ",") != "claude,codex" {
 		t.Fatalf("behind next: %+v", blocked.NextActions)
+	}
+	if cmd := strings.Join(blocked.NextActions[0].Command, " "); !strings.Contains(cmd, "--action update") || !strings.Contains(cmd, "--agents claude,codex") {
+		t.Fatalf("behind retry: %v", blocked.NextActions[0].Command)
 	}
 	req.Yes = false
 	plan, err := Plan(ctx, req)
