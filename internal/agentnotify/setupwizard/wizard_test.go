@@ -1431,6 +1431,63 @@ func TestWizardUninstallBothWhenOneBindingMissing(t *testing.T) {
 	}
 }
 
+func TestWizardMixedUninstallHoldsClaudeUntilCodexAttested(t *testing.T) {
+	ctx := testCtx(t)
+	for _, agents := range [][]string{{"claude", "codex"}, {"codex", "claude"}} {
+		t.Run(strings.Join(agents, ","), func(t *testing.T) {
+			control, runtime, global, _, _ := managedRuntime(t)
+			probe := buildProbe(t)
+			pkg := filepath.Join(filepath.Dir(control), "package")
+			writePackage(t, pkg, probe)
+			codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+			claudeConfig := filepath.Join(filepath.Dir(control), "claude-profile")
+			for _, dir := range []string{codexConfig, claudeConfig} {
+				if err := os.MkdirAll(dir, 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			off := false
+			req := Request{
+				Action: ActionInstall, Agents: agents, Yes: true, Hooks: &off,
+				PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+				CodexHome: codexConfig, ClaudeConfig: claudeConfig, ClientExecutable: probe, Helper: probe,
+				ScopeRoot:    filepath.Join(filepath.Dir(control), "scope"),
+				ClaudeRunner: listingRunner{configRoot: claudeConfig},
+			}
+			if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+				t.Fatal(err)
+			}
+			installed, err := Run(ctx, req)
+			if err != nil || installed.Outcome != "completed" {
+				t.Fatalf("install: %+v %v", installed, err)
+			}
+			req.Action = ActionUninstall
+			held, err := Run(ctx, req)
+			if err == nil || held.Outcome != "incomplete" || held.Reason != "external_uninstall_required" {
+				t.Fatalf("hold: %+v %v", held, err)
+			}
+			for _, target := range held.Targets {
+				if target.Client == "claude" && target.Unit == "agent-notify" && target.Outcome == "completed" {
+					t.Fatalf("Claude removed before Codex attestation: %+v", held.Targets)
+				}
+			}
+			live := LiveNotifyClients(control, []string{"claude", "codex"})
+			have := strings.Join(live, ",")
+			if len(live) != 2 || !strings.Contains(have, "claude") || !strings.Contains(have, "codex") {
+				t.Fatalf("sibling revoked before Codex attestation: %v", live)
+			}
+			req.ExternalUninstalled = true
+			removed, err := Run(ctx, req)
+			if err != nil || removed.Outcome != "completed" {
+				t.Fatalf("attested uninstall: %+v %v", removed, err)
+			}
+			if remaining := LiveNotifyClients(control, []string{"claude", "codex"}); len(remaining) != 0 {
+				t.Fatalf("attested uninstall left bindings: %v", remaining)
+			}
+		})
+	}
+}
+
 func TestWizardReinstallRetainsInstallation(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, _, _ := managedRuntime(t)

@@ -424,6 +424,57 @@ func liveNotifyClient(mat portablesetup.Materializer, installationID, clientID s
 	return false
 }
 
+func holdCodexUninstall(ctx context.Context, req *Request, mat portablesetup.Materializer, id portablesetup.Identity, generation uint64, notifyAgents []portable.Integration, runtimeRoot string, out Result) (Result, error) {
+	if req.ExternalUninstalled || id.InstallationID == "" {
+		return out, nil
+	}
+	for _, agent := range notifyAgents {
+		if agent != portable.Codex || !liveNotifyClient(mat, id.InstallationID, string(agent)) {
+			continue
+		}
+		if attestCodexExternalUninstall(ctx, clientExecutable(*req, agent), req.CodexHome) {
+			req.ExternalUninstalled = true
+			_ = persistExternalUninstalled(ctx, *req, runtimeRoot)
+			return out, nil
+		}
+		err := mat.Remove(ctx, portablesetup.MaterializeRequest{
+			Identity: id, Integration: agent, ExpectedGeneration: generation,
+			ClientConfigRoot: clientConfig(*req, agent), ClientExecutable: clientExecutable(*req, agent),
+			OperationID: "wizard-remove-" + string(agent), ExternalUninstalled: req.ExternalUninstalled,
+			HoldOnly: true, KeepReservation: true,
+		})
+		if err == nil {
+			return out, nil
+		}
+		if conflict, handled := pendingIntentConflict(*req, err, out); handled {
+			return conflict, err
+		}
+		if errors.Is(err, portablesetup.ErrAlreadyAbsent) {
+			return out, nil
+		}
+		if errors.Is(err, portablesetup.ErrExternalUninstall) {
+			return externalUninstallRequired(*req, agent, out), err
+		}
+		out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: err.Error()})
+		out.Outcome, out.Reason = "incomplete", "portable_remove_failed"
+		return out, err
+	}
+	return out, nil
+}
+
+func externalUninstallRequired(req Request, agent portable.Integration, out Result) Result {
+	retry := req
+	retry.ExternalUninstalled = true
+	out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: "external_uninstall_required"})
+	out.Outcome, out.Reason = "incomplete", "external_uninstall_required"
+	out.Command = RetryCommand(retry)
+	out.NextActions = []NextAction{{
+		Kind: "external-uninstall", Agents: []string{string(agent)},
+		Command: RetryCommand(retry), Reason: "attest_codex_plugin_removed",
+	}}
+	return out
+}
+
 func uninstallManualPrerequisites(ctx context.Context, req Request, snap installruntime.InstalledSnapshot, runtimeRoot string, notifyAgents []portable.Integration) []string {
 	if req.ExternalUninstalled {
 		return nil
@@ -1190,6 +1241,14 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 	}
 	_ = persistExternalUninstalled(ctx, req, runtimeRoot)
 	out.Generation = snap.Ledger.Generation
+	if len(notifyAgents) > 0 {
+		// §7.5: persist removal intent, then satisfy Codex attestation before
+		// any sibling locator revoke or hooks effect.
+		out, err = holdCodexUninstall(ctx, &req, mat, id, snap.Ledger.Generation, notifyAgents, runtimeRoot, out)
+		if err != nil || out.Outcome == "incomplete" || out.Outcome == "invalid" {
+			return out, err
+		}
+	}
 	if len(hookAgents) > 0 {
 		reportProgress(req, "hooks")
 		out, err = applyHooks(ctx, req, hookAgents, snap, true, out)
@@ -1257,16 +1316,7 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 				continue
 			}
 			if errors.Is(err, portablesetup.ErrExternalUninstall) {
-				retry := req
-				retry.ExternalUninstalled = true
-				out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: "external_uninstall_required"})
-				out.Outcome, out.Reason = "incomplete", "external_uninstall_required"
-				out.Command = RetryCommand(retry)
-				out.NextActions = []NextAction{{
-					Kind: "external-uninstall", Agents: []string{string(agent)},
-					Command: RetryCommand(retry), Reason: "attest_codex_plugin_removed",
-				}}
-				return out, err
+				return externalUninstallRequired(req, agent, out), err
 			}
 			out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: err.Error()})
 			out.Outcome, out.Reason = "incomplete", "portable_remove_failed"
