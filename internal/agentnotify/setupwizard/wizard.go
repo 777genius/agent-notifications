@@ -396,6 +396,9 @@ func evaluate(ctx context.Context, req *Request, requireYes bool) evaluated {
 	if req.Action == ActionInspect {
 		return evaluated{agents: agents, snap: snap, runtimeRoot: runtimeRoot, out: out}
 	}
+	if req.Action == ActionUpdate || req.Action == ActionRepair {
+		*req = preserveLiveUnits(ctx, *req, agents)
+	}
 	hookAgents, notifyAgents := selectedUnits(*req, agents)
 	if len(hookAgents) == 0 && len(notifyAgents) == 0 {
 		out.Outcome, out.Reason = "cancelled", "empty_units"
@@ -2129,6 +2132,34 @@ func selectedUnits(req Request, agents []portable.Integration) (hooks, notify []
 		}
 	}
 	return hooks, notify
+}
+
+// preserveLiveUnits keeps omitted update/repair unit flags on the currently
+// managed units. Omission must not add a unit the user left off.
+func preserveLiveUnits(ctx context.Context, req Request, agents []portable.Integration) Request {
+	if !unitFlagsOmitted(req) {
+		return req
+	}
+	notifyLive := map[string]bool{}
+	if view, err := inspectUAPState(ctx, req); err == nil {
+		for _, installation := range view.Installations {
+			for _, binding := range installation.Bindings {
+				if binding.ClientID != "" {
+					notifyLive[binding.ClientID] = true
+				}
+			}
+		}
+	}
+	for _, agent := range agents {
+		hooks, notify := boolPtr(hooksManaged(req, agent)), boolPtr(notifyLive[string(agent)])
+		switch agent {
+		case portable.Claude:
+			req.ClaudeHooks, req.ClaudeAgentNotify = hooks, notify
+		case portable.Codex:
+			req.CodexHooks, req.CodexAgentNotify = hooks, notify
+		}
+	}
+	return req
 }
 
 func perClientHooks(req Request, agent portable.Integration) *bool {

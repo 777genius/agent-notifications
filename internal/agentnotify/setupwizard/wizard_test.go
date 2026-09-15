@@ -961,6 +961,13 @@ func TestWizardUpdateChangesLiveRevision(t *testing.T) {
 	if err != nil || got.Outcome != "completed" {
 		t.Fatalf("update: %+v %v", got, err)
 	}
+	if got.InstallationID == "" || got.InstallationID != installed.InstallationID {
+		t.Fatalf("update changed installation: install=%s update=%s", installed.InstallationID, got.InstallationID)
+	}
+	view, err := inspectUAPState(ctx, req)
+	if err != nil || len(view.Installations) != 1 || view.Installations[0].TreeDigest == "" {
+		t.Fatalf("inspect after update: %+v %v", view, err)
+	}
 }
 
 func TestWizardRepairRematerializesMissingTarget(t *testing.T) {
@@ -1022,9 +1029,102 @@ func TestWizardUpdateWithoutBindingIsNotInstalled(t *testing.T) {
 	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
 		t.Fatal(err)
 	}
+	for _, action := range []Action{ActionUpdate, ActionRepair} {
+		req.Action = action
+		got, err := Run(ctx, req)
+		if err == nil || got.Reason != "not_installed" {
+			t.Fatalf("%s without binding: %+v %v", action, got, err)
+		}
+		plan, err := Plan(ctx, req)
+		if plan.Ready || plan.Result.Reason != "not_installed" {
+			t.Fatalf("%s plan without binding: %+v %v", action, plan, err)
+		}
+	}
+}
+
+func TestWizardRepairDifferentDigestRequiresUpdate(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	req.Action = ActionRepair
 	got, err := Run(ctx, req)
-	if err == nil || got.Reason != "not_installed" {
-		t.Fatalf("update without binding: %+v %v", got, err)
+	if err == nil || got.Reason != "update_required" {
+		t.Fatalf("repair rewrote revision: %+v %v", got, err)
+	}
+}
+
+func TestWizardUpdateOmittedUnitsPreservesNotifyOnly(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	req.Action = ActionUpdate
+	req.Hooks = nil
+	req.AgentNotify = nil
+	got, err := Run(ctx, req)
+	if err != nil || got.Outcome != "completed" {
+		t.Fatalf("omitted-unit update: %+v %v", got, err)
+	}
+	for _, target := range got.Targets {
+		if target.Unit == "hooks" && target.Outcome != "absent" && target.Outcome != "" {
+			t.Fatalf("omitted update added hooks: %+v", got.Targets)
+		}
+	}
+	req.Action = ActionInspect
+	req.Yes = false
+	view, err := Run(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range view.Targets {
+		if target.Unit == "hooks" && target.Outcome == "installed" {
+			t.Fatalf("omitted update installed hooks: %+v", view.Targets)
+		}
 	}
 }
 

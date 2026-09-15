@@ -1061,6 +1061,50 @@ func TestRepairMissingBindingIsNotInstalled(t *testing.T) {
 	}
 }
 
+func TestRepairDifferentDigestRequiresUpdate(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := New(Config{StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "00000000-0000-4000-8000-000000000090"
+	installed, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: id, OperationID: "repair-digest-install",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := eng.Apply(ctx, installed, Decision{Confirmed: true})
+	_ = installed.Close()
+	if err != nil || first.Outcome != OutcomeCompleted {
+		t.Fatalf("install: %+v %v", first, err)
+	}
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"sample-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Prepare(ctx, Request{
+		Operation: OpRepair, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: id, OperationID: "repair-digest-blocked",
+		RequiredComponents: []string{"mcp", "skills"},
+	}); !errors.Is(err, ErrUpdateRequired) {
+		t.Fatalf("repair rewrote revision: %v", err)
+	}
+}
+
 func TestPrepareSnapshotIgnoresLaterSourceMutation(t *testing.T) {
 	skipWindowsLauncherExecuteBit(t)
 	ctx := testCtx(t)
