@@ -3485,6 +3485,22 @@ func TestWizardInstallMixedLiveDoesNotReplaceOlderSibling(t *testing.T) {
 	if claudeDigest == "" || claudeDigest == codexDigest {
 		t.Fatalf("inspect collapsed mixed revisions: claude=%s codex=%s", claudeDigest, codexDigest)
 	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mat, err := materializer(req, snap, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := portablesetup.Identity{InstallationID: installed.InstallationID}
+	if id.InstallationID == "" {
+		id.InstallationID = installationIDFromState(t, filepath.Join(filepath.Dir(control), "uap", "state", "state-v2.json"))
+	}
+	groupAgents := []portable.Integration{portable.Claude, portable.Codex}
+	if canGroupNotify(mat, id, Request{Action: ActionInstall}, groupAgents) {
+		t.Fatal("mixed live install grouped")
+	}
 	claudeBefore := inspectedWizardBinding(t, ctx, control, "claude")
 	codexBefore := inspectedWizardBinding(t, ctx, control, "codex")
 	req.Action = ActionInstall
