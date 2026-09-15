@@ -1089,6 +1089,67 @@ func countPluginMutations(calls [][]string) int {
 	return n
 }
 
+func TestRecoverAfterPartialGroupDoesNotInvokeHostCallback(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(base, "codex-config")
+	claudeConfig := filepath.Join(base, "claude-config")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var calls int
+	eng, err := New(Config{
+		StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe,
+		Runner: listingRunner{configRoot: claudeConfig},
+		OnCommittedBinding: func(_ context.Context, facts BindingFacts) error {
+			calls++
+			if facts.ClientID == "claude" {
+				return errors.New("host seam refused claude after managed commit")
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := eng.Prepare(ctx, Request{
+		Operation: OpInstall, PackageRoot: pkg, InstallationID: "00000000-0000-4000-8000-0000000000b9",
+		OperationID: "group-recover-partial", RequiredComponents: []string{"mcp", "skills"}, ClientExecutable: probe,
+		Targets: []ClientTarget{
+			{ClientID: "codex", ClientConfigRoot: codexConfig, ClientExecutable: probe},
+			{ClientID: "claude", ClientConfigRoot: claudeConfig, ClientExecutable: probe},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := eng.Apply(ctx, prepared, Decision{Confirmed: true})
+	_ = prepared.Close()
+	if err == nil || got.Outcome != OutcomeIncomplete {
+		t.Fatalf("partial group: %+v %v", got, err)
+	}
+	before := calls
+	view, err := eng.Inspect(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Recover(ctx, view); err != nil {
+		t.Fatal(err)
+	}
+	if calls != before {
+		t.Fatalf("recover invoked host callback: %d -> %d", before, calls)
+	}
+}
+
 func TestInstallSameDigestDifferentDirectoryAddsSecondClient(t *testing.T) {
 	skipWindowsLauncherExecuteBit(t)
 	ctx := testCtx(t)

@@ -1545,8 +1545,7 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 			if errors.Is(err, portablesetup.ErrExternalUninstall) {
 				return externalUninstallRequired(req, portable.Codex, out), err
 			}
-			out.Outcome, out.Reason = "incomplete", "portable_remove_failed"
-			return out, err
+			return groupRemoveFailed(notifyAgents, req, out, err), err
 		}
 		if len(got) != len(notifyAgents) {
 			out.Outcome, out.Reason = "incomplete", "portable_remove_failed"
@@ -1730,6 +1729,36 @@ func groupClientResult(result uapinstaller.Result, clientID string) uapinstaller
 		return result.Client
 	}
 	return uapinstaller.ClientResult{}
+}
+
+func groupRemoveFailed(agents []portable.Integration, req Request, out Result, err error) Result {
+	out.Outcome, out.Reason = "incomplete", "portable_remove_failed"
+	names := make([]string, 0, len(agents))
+	var persisted portablesetup.ResultError
+	hasPersist := errors.As(err, &persisted)
+	for _, agent := range agents {
+		names = append(names, string(agent))
+		target := TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: err.Error()}
+		if hasPersist {
+			if item := groupClientResult(persisted.Result, string(agent)); item.ClientID != "" && item.Materialization == string(domain.MaterializationAbsent) {
+				target.Outcome, target.Reason = "unchanged", "already_absent"
+			}
+		}
+		out.Targets = append(out.Targets, target)
+	}
+	retry := req
+	retry.Action = ActionUninstall
+	retry.Yes = true
+	if explicitAbs(req.ControlRoot) {
+		if intent, readErr := portablesetup.ReadIntent(req.ControlRoot); readErr == nil {
+			retry = retryRequestFromIntent(retry, intent)
+		}
+	}
+	out.NextActions = append(out.NextActions, NextAction{
+		Kind: "uninstall", Agents: names, Reason: out.Reason,
+		Command: RetryCommand(retry),
+	})
+	return out
 }
 
 func pendingIntentConflict(req Request, err error, out Result) (Result, bool) {
