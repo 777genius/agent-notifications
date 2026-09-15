@@ -274,6 +274,13 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 					return plan, err
 				}
 			}
+			if req.Action == ActionUpdate || req.Action == ActionRepair {
+				for _, agent := range ev.notifyAgents {
+					if digest := liveBindingTreeDigest(mat, id.InstallationID, string(agent)); digest != "" {
+						text += " " + string(agent) + "-source-digest=" + digest
+					}
+				}
+			}
 			if req.TreeDigest != "" {
 				text += " source-digest=" + req.TreeDigest
 			}

@@ -355,6 +355,80 @@ func TestPlanShowsEveryClientBindingID(t *testing.T) {
 	}
 }
 
+func TestPlanShowsMixedRepairPerBindingDigests(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	r1 := filepath.Join(filepath.Dir(control), "package-r1")
+	copyPackage(t, pkg, r1)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	claudeConfig := filepath.Join(filepath.Dir(control), "claude-profile")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"claude", "codex"}, Yes: true, Hooks: &off,
+		PackageRoot: r1, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClaudeConfig: claudeConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot:    filepath.Join(filepath.Dir(control), "scope"),
+		ClaudeRunner: listingRunner{configRoot: claudeConfig},
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	req.PackageRoot = pkg
+	req.Action = ActionUpdate
+	req.Agents = []string{"codex"}
+	got, err := Run(ctx, req)
+	if err != nil || got.Outcome != "completed" {
+		t.Fatalf("codex update: %+v %v", got, err)
+	}
+	before, err := os.ReadFile(filepath.Join(filepath.Dir(control), "uap", "state", "state-v2.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Action = ActionRepair
+	req.Agents = []string{"claude", "codex"}
+	req.Yes = false
+	plan, err := Plan(ctx, req)
+	if err != nil || !plan.Ready {
+		t.Fatalf("mixed repair plan: %+v %v", plan, err)
+	}
+	claude := inspectField(plan.Text, "claude-source-digest=")
+	codex := inspectField(plan.Text, "codex-source-digest=")
+	if claude == "" || claude == codex {
+		t.Fatalf("plan collapsed mixed repair digests: %s", plan.Text)
+	}
+	after, err := os.ReadFile(filepath.Join(filepath.Dir(control), "uap", "state", "state-v2.json"))
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("mixed repair plan mutated UAP state")
+	}
+}
+
+func inspectField(text, key string) string {
+	idx := strings.Index(text, key)
+	if idx < 0 {
+		return ""
+	}
+	rest := text[idx+len(key):]
+	if i := strings.IndexByte(rest, ' '); i >= 0 {
+		return rest[:i]
+	}
+	return rest
+}
+
 func TestWizardRunRefusesPlanDigestDrift(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, _, _ := managedRuntime(t)
