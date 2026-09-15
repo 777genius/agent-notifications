@@ -1,5 +1,3 @@
-//go:build linux || darwin
-
 package setupwizard
 
 import (
@@ -9,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -51,7 +51,11 @@ func main() { json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true}) }
 `), 0600); err != nil {
 		t.Fatal(err)
 	}
-	out := filepath.Join(dir, "probe")
+	name := "probe"
+	if runtime.GOOS == "windows" {
+		name = "probe.exe"
+	}
+	out := filepath.Join(dir, name)
 	cmd := exec.Command("go", "build", "-o", out, src)
 	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
 	if body, err := cmd.CombinedOutput(); err != nil {
@@ -1620,7 +1624,7 @@ func TestWizardRefusesSymlinkPackage(t *testing.T) {
 	writePackage(t, pkg, probe)
 	link := filepath.Join(filepath.Dir(control), "package-link")
 	if err := os.Symlink(pkg, link); err != nil {
-		t.Fatal(err)
+		t.Skip("symlink not permitted")
 	}
 	off := false
 	got, err := Run(ctx, Request{
@@ -4240,10 +4244,20 @@ func TestWizardCodexUninstallAttestsFromEmptyPluginList(t *testing.T) {
 
 func writeCodexListStub(t *testing.T, dir, listJSON string) string {
 	t.Helper()
-	path := filepath.Join(dir, "codex-stub")
-	script := "#!/bin/sh\ncase \"$*\" in\n  \"plugin list --json\") printf '%s\\n' '" + listJSON + "';;\n  \"plugin remove \"*) echo '{\"ok\":true}';;\n  *) exit 1;;\nesac\n"
-	if err := os.WriteFile(path, []byte(script), 0700); err != nil {
+	src := filepath.Join(dir, "codex-stub.go")
+	code := fmt.Sprintf("package main\nimport (\"encoding/json\"; \"fmt\"; \"os\"; \"strings\")\nfunc main() {\n\tif strings.Join(os.Args[1:], \" \") == \"plugin list --json\" {\n\t\tfmt.Println(%s)\n\t\treturn\n\t}\n\tif len(os.Args) >= 3 && os.Args[1] == \"plugin\" && os.Args[2] == \"remove\" {\n\t\tjson.NewEncoder(os.Stdout).Encode(map[string]any{\"ok\": true})\n\t\treturn\n\t}\n\tos.Exit(1)\n}\n", strconv.Quote(listJSON))
+	if err := os.WriteFile(src, []byte(code), 0600); err != nil {
 		t.Fatal(err)
+	}
+	name := "codex-stub"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	path := filepath.Join(dir, name)
+	cmd := exec.Command("go", "build", "-o", path, src)
+	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
+	if body, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build codex stub: %s %v", body, err)
 	}
 	return path
 }
@@ -4255,11 +4269,20 @@ func TestDiscoverAgentsReportsPresenceWithoutExecuting(t *testing.T) {
 	}
 	binDir := t.TempDir()
 	marker := filepath.Join(t.TempDir(), "executed")
-	path := filepath.Join(binDir, "claude")
-	if err := os.WriteFile(path, []byte("#!/bin/sh\ntouch "+marker+"\n"), 0700); err != nil {
+	name := "claude"
+	body := "#!/bin/sh\ntouch " + marker + "\n"
+	if runtime.GOOS == "windows" {
+		name = "claude.bat"
+		body = "@echo off\r\necho.>" + marker + "\r\n"
+	}
+	path := filepath.Join(binDir, name)
+	if err := os.WriteFile(path, []byte(body), 0700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir)
+	if runtime.GOOS == "windows" {
+		t.Setenv("PATHEXT", ".BAT;.COM;.EXE")
+	}
 	got := DiscoverAgents(Request{ControlRoot: control})
 	if _, err := os.Lstat(marker); !os.IsNotExist(err) {
 		t.Fatal("discover executed PATH candidate")
