@@ -694,6 +694,9 @@ func TestNotificationInitWizard(t *testing.T) {
 	if !strings.Contains(got, "--package "+filepath.Join(bundle, "portable-package")) {
 		t.Fatal(got)
 	}
+	if strings.Contains(got, "--mcp-config") || strings.Contains(got, "--claude-mcp-config") {
+		t.Fatal("init must not invent MCP config paths", got)
+	}
 }
 
 func TestNotificationInitWizardRetryQuotesCustomRoots(t *testing.T) {
@@ -773,6 +776,9 @@ func TestNotificationInitWizardRetryQuotesCustomRoots(t *testing.T) {
 	}
 	if flagValue(argv, "--claude-config") != claudeConfig {
 		t.Fatalf("claude-config: %#v", argv)
+	}
+	if flagValue(argv, "--mcp-config") != "" || flagValue(argv, "--claude-mcp-config") != "" {
+		t.Fatalf("invented mcp-config: %#v", argv)
 	}
 }
 
