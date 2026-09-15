@@ -224,8 +224,35 @@ func TestRecoverDeletedJournalWithStagingIsNotUnchanged(t *testing.T) {
 	if !errors.Is(err, ErrRecoveryRequired) || result.Outcome != OutcomeRecovery || result.Reason != "incomplete_recovery" {
 		t.Fatalf("deleted journal leftover staging: %+v %v", result, err)
 	}
+	if len(result.Recovery.Unknown) == 0 && len(result.Recovery.Remaining) == 0 {
+		t.Fatalf("incomplete recovery hid vanished journal: %+v", result.Recovery)
+	}
 	if _, err := os.Stat(journal.StagingPath); err != nil {
 		t.Fatalf("recover mutated leftover staging: %v", err)
+	}
+}
+
+func TestRecoverDeletedJournalWithBackupIsNotUnchanged(t *testing.T) {
+	eng, journal := plantPendingJournal(t)
+	view, err := eng.Inspect(testCtx(t))
+	if err != nil || !view.Recovery.Required || len(view.Recovery.Journals) != 1 {
+		t.Fatalf("inspect: %+v %v", view, err)
+	}
+	if err := os.Remove(filepath.Join(eng.cfg.OperationsDir, journal.OperationID+".json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(journal.StagingPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(journal.BackupPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	result, err := eng.Recover(testCtx(t), view)
+	if !errors.Is(err, ErrRecoveryRequired) || result.Outcome != OutcomeRecovery || result.Reason != "incomplete_recovery" {
+		t.Fatalf("deleted journal leftover backup: %+v %v", result, err)
+	}
+	if len(result.Recovery.Unknown) == 0 && len(result.Recovery.Remaining) == 0 {
+		t.Fatalf("incomplete recovery hid vanished journal: %+v", result.Recovery)
 	}
 }
 
