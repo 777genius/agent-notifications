@@ -45,6 +45,10 @@ type Request struct {
 	Hooks, AgentNotify                                *bool
 	Yes                                               bool
 	PackageRoot, PluginRoot, ControlRoot, RuntimeRoot string
+	// PackageRoots are per-agent local packages for mixed-revision Repair.
+	// Run fills them from the offered root and still-usable recorded sources;
+	// they are not CLI flags.
+	PackageRoots map[string]string
 	// CodexHome and ClaudeConfig are explicit UAP client profile roots.
 	// EnvCodexHome and EnvClaudeConfig are a one-shot CLI snapshot of
 	// CODEX_HOME / CLAUDE_CONFIG_DIR, not flags. Resume restores intent
@@ -232,6 +236,10 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 					plan.Result = attachCommand(req, mapped)
 					return plan, bindErr
 				}
+			}
+			if req.Action == ActionRepair {
+				bindRepairPackages(ctx, &acquired, ev.snap, ev.runtimeRoot, ev.notifyAgents)
+				req.PackageRoots = copyPackageRoots(acquired.PackageRoots)
 			}
 			if !retainedMetadataUpdate(mat, id, req.Action) {
 				if err := reserveClientBindings(&req, mat, ev.notifyAgents); err != nil {
@@ -601,7 +609,7 @@ func previewNotifyPlan(ctx context.Context, req Request, snap installruntime.Ins
 		return uapinstaller.Plan{}, err
 	}
 	return mat.PreviewPlan(ctx, portablesetup.MaterializeRequest{
-		Identity: id, Integration: agent, PackageRoot: req.PackageRoot,
+		Identity: id, Integration: agent, PackageRoot: clientPackageRoot(req, agent),
 		ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
 		OperationID: wizardMutationID("plan-"+req.Action, agent, 0), Operation: wizardPackageOp(req.Action),
 	})
@@ -1188,6 +1196,9 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 				return mapped, bindErr
 			}
 		}
+		if req.Action == ActionRepair {
+			bindRepairPackages(ctx, &req, snap, runtimeRoot, notifyAgents)
+		}
 		if err := recoverWizardJournals(ctx, mat, id, req, notifyAgents); err != nil {
 			out.Outcome, out.Reason = "incomplete", "recovery_required"
 			return out, err
@@ -1220,7 +1231,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 				}
 				materialize := portablesetup.MaterializeRequest{
 					Identity: id, Integration: agent, ExpectedGeneration: snap.Ledger.Generation,
-					PackageRoot: req.PackageRoot, ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
+					PackageRoot: clientPackageRoot(req, agent), ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
 					SourceRevision: req.ReleaseVersion, SourceDigest: req.PackageSHA256,
 					TreeDigest: req.TreeDigest, HelperDigest: req.HelperDigest, HelperVersion: req.HelperVersion,
 					Discovery:   discovery(req, agent, runtimeRoot, snap),
@@ -1325,7 +1336,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		for _, agent := range notifyAgents {
 			reqs = append(reqs, portablesetup.MaterializeRequest{
 				Identity: id, Integration: agent, ExpectedGeneration: generation,
-				PackageRoot: req.PackageRoot, ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
+				PackageRoot: clientPackageRoot(req, agent), ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
 				SourceRevision: req.ReleaseVersion, SourceDigest: req.PackageSHA256,
 				TreeDigest: req.TreeDigest, HelperDigest: req.HelperDigest, HelperVersion: req.HelperVersion,
 				Discovery:       discovery(req, agent, runtimeRoot, snap),
@@ -1375,7 +1386,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 	for _, agent := range notifyAgents {
 		materialize := portablesetup.MaterializeRequest{
 			Identity: id, Integration: agent, ExpectedGeneration: generation,
-			PackageRoot: req.PackageRoot, ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
+			PackageRoot: clientPackageRoot(req, agent), ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
 			SourceRevision: req.ReleaseVersion, SourceDigest: req.PackageSHA256,
 			TreeDigest: req.TreeDigest, HelperDigest: req.HelperDigest, HelperVersion: req.HelperVersion,
 			Discovery:       discovery(req, agent, runtimeRoot, snap),
@@ -2059,6 +2070,62 @@ func copyBindingIDs(src map[string]string) map[string]string {
 	return out
 }
 
+func copyPackageRoots(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(src))
+	for client, root := range src {
+		out[client] = root
+	}
+	return out
+}
+
+func clientPackageRoot(req Request, agent portable.Integration) string {
+	if req.PackageRoots != nil {
+		if root := req.PackageRoots[string(agent)]; root != "" {
+			return root
+		}
+	}
+	return req.PackageRoot
+}
+
+func bindRepairPackages(ctx context.Context, req *Request, snap installruntime.InstalledSnapshot, runtimeRoot string, agents []portable.Integration) {
+	if req == nil || req.Action != ActionRepair || len(agents) == 0 {
+		return
+	}
+	recorded, _ := desiredPackage(*req)
+	seen := map[string]bool{}
+	var candidates []string
+	for _, root := range []string{req.PackageRoot, recorded} {
+		if root == "" || seen[root] {
+			continue
+		}
+		seen[root] = true
+		candidates = append(candidates, root)
+	}
+	if len(candidates) == 0 {
+		return
+	}
+	if req.PackageRoots == nil {
+		req.PackageRoots = map[string]string{}
+	}
+	for _, agent := range agents {
+		if req.PackageRoots[string(agent)] != "" {
+			continue
+		}
+		for _, root := range candidates {
+			try := *req
+			try.PackageRoot = root
+			try.PackageRoots = nil
+			if _, err := previewNotifyPlan(ctx, try, snap, runtimeRoot, agent); err == nil {
+				req.PackageRoots[string(agent)] = root
+				break
+			}
+		}
+	}
+}
+
 func reserveClientBindings(req *Request, mat portablesetup.Materializer, agents []portable.Integration) error {
 	if req == nil || req.InstallationID == "" || len(agents) == 0 {
 		return nil
@@ -2098,7 +2165,12 @@ func bindNotifyPreviews(ctx context.Context, req *Request, previewReq Request, s
 		return "", "", nil
 	}
 	for _, agent := range notifyAgents {
-		preview, err := previewNotifyPlan(ctx, previewReq, snap, runtimeRoot, agent)
+		try := previewReq
+		try.PackageRoots = req.PackageRoots
+		if root := clientPackageRoot(*req, agent); root != "" {
+			try.PackageRoot = root
+		}
+		preview, err := previewNotifyPlan(ctx, try, snap, runtimeRoot, agent)
 		if err != nil {
 			if req.Action == ActionRepair && len(notifyAgents) > 1 && (exactRepairRevision(err) || portablesetup.IsUpdateRequired(err)) {
 				continue
@@ -2178,7 +2250,21 @@ func canGroupNotify(mat portablesetup.Materializer, id portablesetup.Identity, r
 	case ActionUpdate:
 		return first && second
 	case ActionRepair:
-		return first && second && sameLiveRepairRevision(mat, id.InstallationID, agents)
+		if !first || !second {
+			return false
+		}
+		if sameLiveRepairRevision(mat, id.InstallationID, agents) {
+			return true
+		}
+		if len(req.PackageRoots) != 2 {
+			return false
+		}
+		for _, agent := range agents {
+			if req.PackageRoots[string(agent)] == "" {
+				return false
+			}
+		}
+		return true
 	default:
 		return false
 	}

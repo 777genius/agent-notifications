@@ -19,6 +19,7 @@ import (
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/dirswap"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/ports"
 
+	"github.com/777genius/agent-notifications/install/uapinstaller"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 )
@@ -105,6 +106,35 @@ func writePackage(t *testing.T, root, probe string) {
 		if err := os.WriteFile(path, data, mode); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func copyPackage(t *testing.T, src, dst string) {
+	t.Helper()
+	err := filepath.WalkDir(src, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0700)
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, info.Mode())
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -768,6 +798,100 @@ func TestUAPMaterializerApplyGroupBothClientsShareDataIndependentLocators(t *tes
 	})
 	if err == nil || !errors.Is(err, ErrPreflight) {
 		t.Fatalf("mixed package roots: %v", err)
+	}
+}
+
+func TestUAPMaterializerApplyGroupRepairMixedRevisions(t *testing.T) {
+	codex, ledger := bindingFixture(t)
+	probe := buildProbe(t)
+	root := filepath.Dir(codex.ControlRoot)
+	pkg := filepath.Join(root, "package")
+	writePackage(t, pkg, probe)
+	r1 := filepath.Join(root, "package-r1")
+	copyPackage(t, pkg, r1)
+	uapRoot := filepath.Join(root, "uap")
+	claudeConfig := filepath.Join(root, "home", "claude-config")
+	codexConfig := filepath.Join(root, "home", "codex-config")
+	for _, dir := range []string{claudeConfig, codexConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mat, err := NewMaterializer(UAPRoots{
+		StateFile:        filepath.Join(uapRoot, "state", "state-v2.json"),
+		LockFile:         filepath.Join(uapRoot, "state", "mutation.lock"),
+		OperationsDir:    filepath.Join(uapRoot, "state", "operations"),
+		PluginDataBase:   filepath.Join(uapRoot, "plugin-data"),
+		ManagedRoot:      filepath.Join(uapRoot, "managed"),
+		HelperExecutable: probe,
+		ClaudeRunner:     listingRunner{configRoot: claudeConfig},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := Identity{
+		InstallationID: "00000000-0000-4000-8000-0000000000d4",
+		ComponentID:    codex.ComponentID, Owner: codex.Owner, ScopeRoot: codex.ScopeRoot,
+		ControlRoot: codex.ControlRoot, GlobalConfig: codex.GlobalConfig, RuntimeRoot: codex.RuntimeRoot,
+		Primary: codex.Primary,
+	}
+	installed, err := mat.ApplyGroup(testCtx(t), []MaterializeRequest{
+		{
+			Identity: id, Integration: portable.Codex, ExpectedGeneration: ledger.Generation,
+			PackageRoot: r1, ClientConfigRoot: codexConfig, ClientExecutable: probe,
+			OperationID: "portable-mixed-repair-install-codex",
+		},
+		{
+			Identity: id, Integration: portable.Claude, ExpectedGeneration: ledger.Generation,
+			PackageRoot: r1, ClientConfigRoot: claudeConfig, ClientExecutable: probe,
+			OperationID: "portable-mixed-repair-install-claude",
+		},
+	})
+	if err != nil || len(installed) != 2 {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	id.InstallationID = installed[0].InstallationID
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := mat.Update(testCtx(t), MaterializeRequest{
+		Identity: id, Integration: portable.Codex, PackageRoot: pkg,
+		ClientConfigRoot: codexConfig, ClientExecutable: probe,
+		OperationID: "portable-mixed-repair-codex-update",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id.InstallationID = updated.InstallationID
+	got, err := mat.ApplyGroup(testCtx(t), []MaterializeRequest{
+		{
+			Identity: id, Integration: portable.Codex, PackageRoot: pkg,
+			ClientConfigRoot: codexConfig, ClientExecutable: probe,
+			OperationID: "portable-mixed-repair-group", Operation: uapinstaller.OpRepair,
+		},
+		{
+			Identity: id, Integration: portable.Claude, PackageRoot: r1,
+			ClientConfigRoot: claudeConfig, ClientExecutable: probe,
+			OperationID: "portable-mixed-repair-group", Operation: uapinstaller.OpRepair,
+		},
+	})
+	if err != nil || len(got) != 2 {
+		t.Fatalf("mixed repair: %+v %v", got, err)
+	}
+	if got[0].InstallationID != id.InstallationID || got[1].InstallationID != id.InstallationID {
+		t.Fatalf("mixed repair changed installation: %+v", got)
+	}
+	if got[0].BindingID != updated.BindingID {
+		t.Fatalf("mixed repair rewrote codex: before=%s after=%s", updated.BindingID, got[0].BindingID)
+	}
+	claudeBefore := ""
+	for _, binding := range installed {
+		if binding.Integration == portable.Claude {
+			claudeBefore = binding.BindingID
+		}
+	}
+	if claudeBefore == "" || got[1].BindingID != claudeBefore {
+		t.Fatalf("mixed repair rewrote claude: before=%s after=%s", claudeBefore, got[1].BindingID)
 	}
 }
 

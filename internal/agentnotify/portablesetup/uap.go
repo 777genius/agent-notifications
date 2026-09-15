@@ -396,7 +396,9 @@ func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest)
 			return nil, err
 		}
 		if reqs[i].PackageRoot != reqs[0].PackageRoot {
-			return nil, fmt.Errorf("%w: group requires one package root", ErrPreflight)
+			if packageOperation(reqs[0]) != uapinstaller.OpRepair || packageOperation(reqs[i]) != uapinstaller.OpRepair {
+				return nil, fmt.Errorf("%w: group requires one package root", ErrPreflight)
+			}
 		}
 	}
 	if err := m.recoverOwnedJournals(ctx, reqs[0]); err != nil {

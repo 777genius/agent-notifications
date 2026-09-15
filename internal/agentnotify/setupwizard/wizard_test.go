@@ -2202,8 +2202,75 @@ func TestWizardRepairMixedRevisionsRepairsMatchingPackage(t *testing.T) {
 	req.Action = ActionRepair
 	req.Agents = []string{"claude", "codex"}
 	got, err = Run(ctx, req)
+	if err != nil || (got.Outcome != "completed" && got.Outcome != "unchanged") {
+		t.Fatalf("mixed repair with recorded r1: %+v %v", got, err)
+	}
+	saw := map[string]TargetResult{}
+	for _, target := range got.Targets {
+		if target.Unit == "agent-notify" {
+			saw[target.Client] = target
+		}
+	}
+	if saw["codex"].Outcome != "completed" || saw["claude"].Outcome != "completed" {
+		t.Fatalf("mixed group repair: %+v", got.Targets)
+	}
+	if live := LiveNotifyClients(control, []string{"claude", "codex"}); len(live) != 2 {
+		t.Fatalf("mixed repair lost sibling: %v", live)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil || snap.Ledger.PendingMutation != nil {
+		t.Fatalf("mixed repair left intent: %+v %v", snap.Ledger.PendingMutation, err)
+	}
+}
+
+func TestWizardRepairMixedRevisionsMissingOlderPackage(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	r1 := filepath.Join(filepath.Dir(control), "package-r1")
+	copyPackage(t, pkg, r1)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	claudeConfig := filepath.Join(filepath.Dir(control), "claude-profile")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"claude", "codex"}, Yes: true, Hooks: &off,
+		PackageRoot: r1, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClaudeConfig: claudeConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot:    filepath.Join(filepath.Dir(control), "scope"),
+		ClaudeRunner: listingRunner{configRoot: claudeConfig},
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	req.PackageRoot = pkg
+	req.Action = ActionUpdate
+	req.Agents = []string{"codex"}
+	got, err := Run(ctx, req)
+	if err != nil || got.Outcome != "completed" {
+		t.Fatalf("codex update: %+v %v", got, err)
+	}
+	if err := os.RemoveAll(r1); err != nil {
+		t.Fatal(err)
+	}
+	req.Action = ActionRepair
+	req.Agents = []string{"claude", "codex"}
+	got, err = Run(ctx, req)
 	if err == nil || got.Outcome != "incomplete" || got.Reason != "exact_revision_required" {
-		t.Fatalf("mixed repair with r2 package: %+v %v", got, err)
+		t.Fatalf("mixed repair without r1: %+v %v", got, err)
 	}
 	saw := map[string]TargetResult{}
 	for _, target := range got.Targets {
@@ -2214,39 +2281,11 @@ func TestWizardRepairMixedRevisionsRepairsMatchingPackage(t *testing.T) {
 	if saw["codex"].Outcome != "completed" {
 		t.Fatalf("codex r2 repair: %+v", saw["codex"])
 	}
-	if saw["claude"].Outcome != "incomplete" || saw["claude"].Reason != "exact_revision_required" || saw["claude"].TreeDigest == "" {
+	if saw["claude"].Outcome != "incomplete" || saw["claude"].Reason != "exact_revision_required" {
 		t.Fatalf("claude r1 mismatch: %+v", saw["claude"])
 	}
 	if live := LiveNotifyClients(control, []string{"claude", "codex"}); len(live) != 2 {
 		t.Fatalf("mixed repair lost sibling: %v", live)
-	}
-	var repairCmd, updateCmd []string
-	for _, next := range got.NextActions {
-		if next.Kind == "repair" && strings.Join(next.Agents, ",") == "claude" {
-			repairCmd = next.Command
-		}
-		if next.Kind == "update" && strings.Join(next.Agents, ",") == "claude" {
-			updateCmd = next.Command
-		}
-	}
-	if len(repairCmd) == 0 || strings.Contains(strings.Join(repairCmd, " "), pkg) {
-		t.Fatalf("repair retry kept mismatching package: %v", got.NextActions)
-	}
-	if len(updateCmd) == 0 || !strings.Contains(strings.Join(updateCmd, " "), pkg) {
-		t.Fatalf("missing update retry with offered package: %v", got.NextActions)
-	}
-	snap, err := installruntime.ReadInstalledSnapshot(control)
-	if err != nil || snap.Ledger.PendingMutation != nil {
-		t.Fatalf("mixed repair left intent: %+v %v", snap.Ledger.PendingMutation, err)
-	}
-	req.PackageRoot = r1
-	req.Agents = []string{"claude"}
-	got, err = Run(ctx, req)
-	if err != nil || (got.Outcome != "completed" && got.Outcome != "unchanged") {
-		t.Fatalf("claude r1 repair: %+v %v", got, err)
-	}
-	if live := LiveNotifyClients(control, []string{"claude", "codex"}); len(live) != 2 {
-		t.Fatalf("r1 repair lost sibling: %v", live)
 	}
 }
 
