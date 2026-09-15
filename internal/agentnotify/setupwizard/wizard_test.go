@@ -3292,6 +3292,14 @@ func TestWizardRetainedDifferentDigestRequiresUpdate(t *testing.T) {
 	if err != nil || updated.Outcome != "completed" {
 		t.Fatalf("phase 1 retained update: %+v %v", updated, err)
 	}
+	if updated.Reason != "retained_source_updated" {
+		t.Fatalf("phase 1 installed a client: %+v", updated)
+	}
+	for _, next := range updated.NextActions {
+		if next.Kind == "test-notification" || next.Kind == "request-permission" {
+			t.Fatalf("metadata update offered delivery: %+v", updated.NextActions)
+		}
+	}
 	view, err := Run(ctx, Request{Action: ActionInspect, Agents: []string{"codex"}, ControlRoot: control})
 	if err != nil {
 		t.Fatal(err)

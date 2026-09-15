@@ -1957,8 +1957,14 @@ func TestSetupWizardRetainedDifferentDigestRequiresUpdateE2E(t *testing.T) {
 	if code := executeSetupWizardWith(ctx, updateArgs, &out, io.Discard, strings.NewReader(""), false); code != 0 {
 		t.Fatalf("phase 1 retained update: %d %s", code, out.String())
 	}
-	if updated := decodeWizardJSON(t, out); updated.Outcome != "completed" {
+	updated := decodeWizardJSON(t, out)
+	if updated.Outcome != "completed" || updated.Reason != "retained_source_updated" {
 		t.Fatalf("phase 1 retained update result: %+v", updated)
+	}
+	for _, next := range updated.NextActions {
+		if next.Kind == "test-notification" || next.Kind == "request-permission" {
+			t.Fatalf("metadata update offered delivery: %+v", updated.NextActions)
+		}
 	}
 	out.Reset()
 	inspect := []string{

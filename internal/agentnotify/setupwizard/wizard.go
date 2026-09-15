@@ -1246,7 +1246,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 			return out, err
 		}
 		out.InstallationID = id.InstallationID
-		out.Outcome = "completed"
+		out.Outcome, out.Reason = "completed", "retained_source_updated"
 		reportProgress(req, "complete")
 		return out, nil
 	}
@@ -2398,6 +2398,13 @@ func offerPostSetupActions(req Request, agents []portable.Integration, out Resul
 	if req.Action == ActionUninstall {
 		return out
 	}
+	notifyReady := false
+	for _, target := range out.Targets {
+		if target.Unit == "agent-notify" && (target.Outcome == "completed" || target.Outcome == "installed") {
+			notifyReady = true
+			break
+		}
+	}
 	names := make([]string, len(agents))
 	for i, agent := range agents {
 		names[i] = string(agent)
@@ -2417,6 +2424,9 @@ func offerPostSetupActions(req Request, agents []portable.Integration, out Resul
 		out.NextActions = append(out.NextActions, NextAction{
 			Kind: "restart-client", Agents: names, Reason: "pending_client_restart",
 		})
+	}
+	if !notifyReady {
+		return out
 	}
 	if req.Action != ActionInspect && explicitAbs(req.ControlRoot) && out.Generation != 0 && !has("request-permission") {
 		out.NextActions = append(out.NextActions, NextAction{
