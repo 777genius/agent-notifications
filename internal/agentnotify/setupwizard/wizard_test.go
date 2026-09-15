@@ -1461,7 +1461,24 @@ func TestWizardMixedUninstallHoldsClaudeUntilCodexAttested(t *testing.T) {
 			if err != nil || installed.Outcome != "completed" {
 				t.Fatalf("install: %+v %v", installed, err)
 			}
+			before, err := installruntime.ReadInstalledSnapshot(control)
+			if err != nil {
+				t.Fatal(err)
+			}
 			req.Action = ActionUninstall
+			req.Yes = false
+			plan, err := Plan(ctx, req)
+			if err != nil || !plan.Ready {
+				t.Fatalf("uninstall plan: %+v %v", plan, err)
+			}
+			if !strings.Contains(plan.Text, "required=external-uninstall") || !strings.Contains(plan.Text, "required-external-uninstall=codex") {
+				t.Fatalf("mixed uninstall plan omitted Codex prerequisite: %s", plan.Text)
+			}
+			afterPlan, err := installruntime.ReadInstalledSnapshot(control)
+			if err != nil || afterPlan.Ledger.Generation != before.Ledger.Generation || afterPlan.Ledger.PendingMutation != nil {
+				t.Fatalf("mixed uninstall plan mutated ledger: %+v %v", afterPlan.Ledger, err)
+			}
+			req.Yes = true
 			held, err := Run(ctx, req)
 			if err == nil || held.Outcome != "incomplete" || held.Reason != "external_uninstall_required" {
 				t.Fatalf("hold: %+v %v", held, err)
@@ -1476,6 +1493,22 @@ func TestWizardMixedUninstallHoldsClaudeUntilCodexAttested(t *testing.T) {
 			if len(live) != 2 || !strings.Contains(have, "claude") || !strings.Contains(have, "codex") {
 				t.Fatalf("sibling revoked before Codex attestation: %v", live)
 			}
+			intent, err := portablesetup.ReadIntent(control)
+			if err != nil || intent.ExternalUninstalled {
+				t.Fatalf("hold intent: %+v %v", intent, err)
+			}
+			var sawClaude, sawCodex bool
+			for _, target := range intent.Targets {
+				if target.Client == "claude" {
+					sawClaude = true
+				}
+				if target.Client == "codex" {
+					sawCodex = true
+				}
+			}
+			if !sawClaude || !sawCodex {
+				t.Fatalf("hold dropped a sibling from intent: %+v", intent.Targets)
+			}
 			req.ExternalUninstalled = true
 			removed, err := Run(ctx, req)
 			if err != nil || removed.Outcome != "completed" {
@@ -1485,6 +1518,58 @@ func TestWizardMixedUninstallHoldsClaudeUntilCodexAttested(t *testing.T) {
 				t.Fatalf("attested uninstall left bindings: %v", remaining)
 			}
 		})
+	}
+}
+
+func TestWizardMixedUninstallHoldsCodexHooksUntilAttested(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	bundle := writePluginBundle(t)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	claudeConfig := filepath.Join(filepath.Dir(control), "claude-profile")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	req := Request{
+		Action: ActionInstall, Agents: []string{"claude", "codex"}, Yes: true,
+		PackageRoot: pkg, PluginRoot: bundle, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClaudeConfig: claudeConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot:    filepath.Join(filepath.Dir(control), "scope"),
+		ClaudeRunner: listingRunner{configRoot: claudeConfig},
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	hooks := filepath.Join(codexConfig, "hooks.json")
+	data, err := os.ReadFile(hooks)
+	if err != nil || !strings.Contains(string(data), "codex-hook-wrapper") {
+		t.Fatalf("hooks.json after install: %s %v", data, err)
+	}
+	req.Action = ActionUninstall
+	held, err := Run(ctx, req)
+	if err == nil || held.Outcome != "incomplete" || held.Reason != "external_uninstall_required" {
+		t.Fatalf("hold: %+v %v", held, err)
+	}
+	data, err = os.ReadFile(hooks)
+	if err != nil || !strings.Contains(string(data), "codex-hook-wrapper") {
+		t.Fatalf("Codex hooks removed before attestation: %s %v", data, err)
+	}
+	if live := LiveNotifyClients(control, []string{"claude", "codex"}); len(live) != 2 {
+		t.Fatalf("notify revoked with hooks still pending Codex: %v", live)
+	}
+	req.ExternalUninstalled = true
+	removed, err := Run(ctx, req)
+	if err != nil || removed.Outcome != "completed" {
+		t.Fatalf("attested uninstall: %+v %v", removed, err)
 	}
 }
 
