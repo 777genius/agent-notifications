@@ -796,6 +796,13 @@ func TestSetupWizardTTYMixedAddKeepsPerClientUnits(t *testing.T) {
 	if claudeMCP == "installed" || codexMCP != "installed" || hooksInstalled {
 		t.Fatalf("keep mutated mixed units: %+v", view.Targets)
 	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, shared, &out, io.Discard, strings.NewReader("3\n3\nn\n"), true); !strings.Contains(out.String(), "differ per client") || strings.Contains(out.String(), "Units: 1) Hooks") {
+		t.Fatalf("mixed uninstall tty: %d %s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "hooks=false") || !strings.Contains(out.String(), "agent-notify=true") {
+		t.Fatalf("mixed uninstall notify-only plan: %s", out.String())
+	}
 }
 
 func TestSetupWizardSpaceContainingRootsE2E(t *testing.T) {

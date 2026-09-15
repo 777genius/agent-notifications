@@ -280,6 +280,32 @@ func TestFillInteractiveMixedUnitsCancel(t *testing.T) {
 	}
 }
 
+func TestFillInteractiveUninstallMixedKeepCancels(t *testing.T) {
+	var out strings.Builder
+	_, err := FillInteractive(promptCtx(t), Request{
+		Action:    ActionUninstall,
+		Agents:    []string{"claude", "codex"},
+		LiveUnits: func([]string) []ClientUnits { return mixedLiveUnits() },
+	}, &LinePrompt{In: strings.NewReader("1\n"), Out: &out}, nil)
+	if err != ErrPromptCanceled {
+		t.Fatalf("keep uninstall: %v", err)
+	}
+	if !strings.Contains(out.String(), "differ per client") || strings.Contains(out.String(), "Units: 1) Hooks") {
+		t.Fatalf("mixed uninstall hid differences: %s", out.String())
+	}
+}
+
+func TestFillInteractiveUninstallMixedNotifyOnly(t *testing.T) {
+	got, err := FillInteractive(promptCtx(t), Request{
+		Action:    ActionUninstall,
+		Agents:    []string{"claude", "codex"},
+		LiveUnits: func([]string) []ClientUnits { return mixedLiveUnits() },
+	}, &LinePrompt{In: strings.NewReader("3\n"), Out: io.Discard}, nil)
+	if err != nil || got.Action != ActionUninstall || got.Hooks == nil || *got.Hooks || got.AgentNotify == nil || !*got.AgentNotify {
+		t.Fatalf("uninstall notify-only: %+v %v", got, err)
+	}
+}
+
 func TestConfirmPlanShowsMixedPerClientFlags(t *testing.T) {
 	off, on := false, true
 	got := confirmPlan(Request{

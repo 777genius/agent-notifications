@@ -247,12 +247,16 @@ func FillInteractive(ctx context.Context, req Request, p Prompter, existing func
 	}
 	if unitFlagsOmitted(req) && !req.Yes && req.Action != ActionUpdate && req.Action != ActionRepair {
 		live := lookupLiveUnits(req)
-		if req.Action == ActionInstall && mixedClientUnits(live) {
+		if mixedClientUnits(live) && (req.Action == ActionInstall || req.Action == ActionUninstall) {
 			keep, hooks, notify, err := p.SelectLiveUnits(ctx, live)
 			if err != nil {
 				return req, err
 			}
 			if keep {
+				if req.Action == ActionUninstall {
+					// Unchecked existing units stay installed; empty set is cancel.
+					return req, ErrPromptCanceled
+				}
 				applyLiveClientFlags(&req, live)
 			} else {
 				req.Hooks = boolPtr(hooks)
