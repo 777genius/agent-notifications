@@ -1120,6 +1120,27 @@ func TestWizardSecondClientAddDoesNotReviseExisting(t *testing.T) {
 	if len(blocked.NextActions) != 2 || blocked.NextActions[0].Kind != "update" || blocked.NextActions[1].Kind != "install" {
 		t.Fatalf("next: %+v", blocked.NextActions)
 	}
+	mismatch.Yes = false
+	blockedPlan, err := Plan(ctx, mismatch)
+	if blockedPlan.Ready || blockedPlan.Result.Reason != "update_required" {
+		t.Fatalf("mismatch plan: %+v %v", blockedPlan, err)
+	}
+	if !strings.Contains(blockedPlan.Text, "required-update=claude") {
+		t.Fatalf("mismatch plan omitted required-update: %s", blockedPlan.Text)
+	}
+	samePlan, err := Plan(ctx, Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Hooks: &off, AgentNotify: boolPtr(true),
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClaudeConfig: claudeConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot:    base.ScopeRoot,
+		ClaudeRunner: listingRunner{configRoot: claudeConfig},
+	})
+	if err != nil || !samePlan.Ready {
+		t.Fatalf("same-revision add plan: %+v %v", samePlan, err)
+	}
+	if strings.Contains(samePlan.Text, "required-update=") {
+		t.Fatalf("same-revision add showed required-update: %s", samePlan.Text)
+	}
 	codexReq := base
 	codexReq.Agents = []string{"codex"}
 	added, err := Run(ctx, codexReq)

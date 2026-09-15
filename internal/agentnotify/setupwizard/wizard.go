@@ -179,9 +179,6 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 				plan.Result = attachCommand(req, ev.out)
 				return plan, ErrRefused
 			}
-			if others, err := otherLiveClients(req, ev.snap, ev.runtimeRoot, req.InstallationID, string(agent)); err == nil && len(others) > 0 {
-				text += " required-update=" + strings.Join(others, ",")
-			}
 		}
 		if len(ev.notifyAgents) > 0 {
 			acquired, release, err := acquirePlanPackage(ctx, req, ev.notifyAgents)
@@ -236,6 +233,7 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 			if err != nil {
 				if reason == "" {
 					mapped, mappedErr := mapPreviewFailure(req, failed, mat, id, err, ev.out)
+					plan.Text = annotateRequiredUpdate(text, mapped)
 					plan.Result = attachCommand(req, mapped)
 					return plan, mappedErr
 				}
@@ -403,14 +401,6 @@ func evaluate(ctx context.Context, req *Request, requireYes bool) evaluated {
 		agents: agents, snap: snap, runtimeRoot: runtimeRoot,
 		hookAgents: hookAgents, notifyAgents: notifyAgents, out: out,
 	}
-}
-
-func otherLiveClients(req Request, snap installruntime.InstalledSnapshot, runtimeRoot, installationID, adding string) ([]string, error) {
-	mat, err := materializer(req, snap, runtimeRoot)
-	if err != nil {
-		return nil, err
-	}
-	return mat.OtherLiveClients(installationID, adding)
 }
 
 func liveNotifyClient(mat portablesetup.Materializer, installationID, clientID string) bool {
@@ -1414,6 +1404,20 @@ func updateRequired(req Request, adding portable.Integration, others []string, o
 		{Kind: "install", Agents: []string{string(adding)}, Command: RetryCommand(addReq), Reason: "add_after_update"},
 	}
 	return out, err
+}
+
+func annotateRequiredUpdate(text string, out Result) string {
+	var others []string
+	for _, next := range out.NextActions {
+		if next.Kind != "update" {
+			continue
+		}
+		others = append(others, next.Agents...)
+	}
+	if len(others) == 0 {
+		return text
+	}
+	return text + " required-update=" + strings.Join(others, ",")
 }
 
 func materializer(req Request, snap installruntime.InstalledSnapshot, runtimeRoot string) (portablesetup.Materializer, error) {
