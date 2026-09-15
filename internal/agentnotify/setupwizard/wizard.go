@@ -24,6 +24,8 @@ import (
 
 var ErrRefused = errors.New("setup wizard refused")
 var ErrAmbiguousInstallation = errors.New("ambiguous_installation")
+var ErrAmbiguousBinding = errors.New("ambiguous_binding")
+var ErrLiveProfileConflict = errors.New("live_profile_conflict")
 
 type Action string
 
@@ -384,6 +386,9 @@ func previewNotifyPlan(ctx context.Context, req Request, snap installruntime.Ins
 	}
 	id, err := identity(req, snap, runtimeRoot, mat, true)
 	if err != nil {
+		return uapinstaller.Plan{}, err
+	}
+	if err := guardLiveProfile(mat, id.InstallationID, string(agent), clientConfig(req, agent)); err != nil {
 		return uapinstaller.Plan{}, err
 	}
 	return mat.PreviewPlan(ctx, portablesetup.MaterializeRequest{
@@ -747,6 +752,13 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 				out.Outcome, out.Reason = "incomplete", "client_executable_required"
 				return out, ErrRefused
 			}
+			if err := guardLiveProfile(mat, id.InstallationID, string(agent), clientConfig(req, agent)); err != nil {
+				if mapped, handled := mapAmbiguous(err, out); handled {
+					return mapped, err
+				}
+				out.Outcome, out.Reason = "incomplete", err.Error()
+				return out, err
+			}
 			materialize := portablesetup.MaterializeRequest{
 				Identity: id, Integration: agent, ExpectedGeneration: snap.Ledger.Generation,
 				PackageRoot: req.PackageRoot, ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
@@ -909,6 +921,13 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 				out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: "client_executable_required"})
 				out.Outcome, out.Reason = "incomplete", "client_executable_required"
 				return out, ErrRefused
+			}
+			if err := guardLiveProfile(mat, id.InstallationID, string(agent), clientConfig(req, agent)); err != nil {
+				if mapped, handled := mapAmbiguous(err, out); handled {
+					return mapped, err
+				}
+				out.Outcome, out.Reason = "incomplete", err.Error()
+				return out, err
 			}
 		}
 	}
@@ -1169,15 +1188,114 @@ func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot st
 }
 
 func mapAmbiguous(err error, out Result) (Result, bool) {
-	if !errors.Is(err, ErrAmbiguousInstallation) {
+	reason := ""
+	switch {
+	case errors.Is(err, ErrAmbiguousInstallation):
+		reason = "ambiguous_installation"
+	case errors.Is(err, ErrAmbiguousBinding):
+		reason = "ambiguous_binding"
+	case errors.Is(err, ErrLiveProfileConflict):
+		reason = "live_profile_conflict"
+	default:
 		return out, false
 	}
-	out.Outcome, out.Reason = "conflict", "ambiguous_installation"
+	out.Outcome, out.Reason = "conflict", reason
 	out.NextActions = append(out.NextActions, NextAction{
 		Kind: "inspect", Reason: err.Error(),
 		Command: []string{"setup-notifications", "wizard", "--action", "inspect", "--json"},
 	})
 	return out, true
+}
+
+func liveClientBindings(mat portablesetup.Materializer, installationID, clientID string) ([]domain.ClientBinding, error) {
+	if installationID == "" || clientID == "" {
+		return nil, nil
+	}
+	state, err := mat.Store.Load()
+	if err != nil {
+		return nil, err
+	}
+	var out []domain.ClientBinding
+	for _, installation := range state.Installations {
+		if installation.InstallationID != installationID {
+			continue
+		}
+		for _, binding := range installation.Clients {
+			if binding.ClientID == clientID {
+				out = append(out, binding)
+			}
+		}
+	}
+	return out, nil
+}
+
+func guardLiveProfile(mat portablesetup.Materializer, installationID, clientID, profile string) error {
+	bindings, err := liveClientBindings(mat, installationID, clientID)
+	if err != nil {
+		return err
+	}
+	if len(bindings) > 1 {
+		return fmt.Errorf("%w: client %s has %d bindings", ErrAmbiguousBinding, clientID, len(bindings))
+	}
+	if len(bindings) == 0 || profile == "" {
+		return nil
+	}
+	live := bindings[0]
+	if profileOwnsLive(profile, live) {
+		return nil
+	}
+	// Codex TargetLocator and native objects live under managed/clients, not
+	// CodexHome. Path-under-profile would false-conflict a matching uninstall.
+	if !clientConfigAnchored(live) {
+		return nil
+	}
+	return fmt.Errorf("%w: live target %s is not under %s", ErrLiveProfileConflict, live.TargetLocator, profile)
+}
+
+func profileOwnsLive(profile string, binding domain.ClientBinding) bool {
+	if profileMatchesLive(profile, binding.TargetLocator) {
+		return true
+	}
+	for _, obj := range binding.NativeObjects {
+		if profileMatchesLive(profile, obj.Path) {
+			return true
+		}
+	}
+	return false
+}
+
+func clientConfigAnchored(binding domain.ClientBinding) bool {
+	if binding.TargetLocator != "" && !managedClientPath(binding.TargetLocator) {
+		return true
+	}
+	for _, obj := range binding.NativeObjects {
+		if obj.Path != "" && !managedClientPath(obj.Path) {
+			return true
+		}
+	}
+	return false
+}
+
+func managedClientPath(p string) bool {
+	return strings.Contains(filepath.ToSlash(p), "/managed/clients/")
+}
+
+func profileMatchesLive(profile, target string) bool {
+	if profile == "" || target == "" {
+		return false
+	}
+	root := filepath.Clean(profile)
+	path := filepath.Clean(target)
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+	if path == root {
+		return true
+	}
+	return strings.HasPrefix(path, root+string(os.PathSeparator))
 }
 
 func primaryName(req Request) string {

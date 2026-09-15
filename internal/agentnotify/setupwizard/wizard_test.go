@@ -966,6 +966,78 @@ func TestWizardAmbiguousInstallationsConflictWithoutID(t *testing.T) {
 	}
 }
 
+func TestWizardLiveProfileConflict(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	live := filepath.Join(filepath.Dir(control), "claude-live")
+	other := filepath.Join(filepath.Dir(control), "claude-other")
+	for _, dir := range []string{live, other} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"claude"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		ClaudeConfig: live, ClientExecutable: probe, Helper: probe,
+		ScopeRoot:    filepath.Join(filepath.Dir(control), "scope"),
+		ClaudeRunner: listingRunner{configRoot: live},
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := Run(ctx, req); err != nil || got.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", got, err)
+	}
+	mismatch := req
+	mismatch.ClaudeConfig = other
+	mismatch.ClaudeRunner = listingRunner{configRoot: other}
+	got, err := Run(ctx, mismatch)
+	if err == nil || got.Outcome != "conflict" || got.Reason != "live_profile_conflict" || got.ExitCode() != 1 {
+		t.Fatalf("install mismatch: %+v %v", got, err)
+	}
+	plan, err := Plan(ctx, mismatch)
+	if err == nil || plan.Ready || plan.Result.Outcome != "conflict" || plan.Result.Reason != "live_profile_conflict" {
+		t.Fatalf("plan: %+v %v", plan, err)
+	}
+	mismatch.Action = ActionUninstall
+	got, err = Run(ctx, mismatch)
+	if err == nil || got.Outcome != "conflict" || got.Reason != "live_profile_conflict" {
+		t.Fatalf("uninstall mismatch: %+v %v", got, err)
+	}
+	viewReq := req
+	viewReq.Action = ActionInspect
+	viewReq.Yes = false
+	view, err := Run(ctx, viewReq)
+	if err != nil || view.Outcome != "completed" {
+		t.Fatalf("inspect: %+v %v", view, err)
+	}
+	found := false
+	for _, target := range view.Targets {
+		if target.Unit == "agent-notify" && target.Outcome == "installed" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("live binding lost: %+v", view.Targets)
+	}
+	same := req
+	same.Action = ActionUninstall
+	removed, err := Run(ctx, same)
+	if err != nil || removed.Outcome != "completed" {
+		t.Fatalf("matching uninstall: %+v %v", removed, err)
+	}
+	reinstall := mismatch
+	reinstall.Action = ActionInstall
+	if got, err := Run(ctx, reinstall); err != nil || got.Outcome != "completed" {
+		t.Fatalf("reinstall other profile: %+v %v", got, err)
+	}
+}
+
 func TestWizardUninstallBothWhenOneBindingMissing(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, _, _ := managedRuntime(t)
