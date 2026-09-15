@@ -3,6 +3,8 @@ package setupwizard
 import (
 	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -123,8 +125,16 @@ func TestRetryCommandOmitsInternalIdentity(t *testing.T) {
 }
 
 func TestRunAttachesRetryCommandOnIncomplete(t *testing.T) {
-	got, err := Run(promptCtx(t), Request{Action: ActionUpdate, Agents: []string{"codex"}, Yes: true, ControlRoot: t.TempDir()})
-	if err == nil || got.Outcome != "incomplete" || len(got.Command) == 0 {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(base, "not-a-dir")
+	if err := os.WriteFile(root, []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Run(promptCtx(t), Request{Action: ActionUpdate, Agents: []string{"codex"}, Yes: true, ControlRoot: root})
+	if err == nil || got.Outcome != "incomplete" || got.Reason != "managed_runtime_required" || len(got.Command) == 0 {
 		t.Fatalf("command: %+v %v", got, err)
 	}
 	if got.Command[0] != "setup-notifications" || got.Command[1] != "wizard" {
