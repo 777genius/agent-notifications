@@ -62,10 +62,24 @@ fi
 # Return a failure AFTER emitting valid bytes, to catch accidental execution.
 if [ "${FAIL_DOWNLOAD:-}" = "$kind" ]; then exit 22; fi
 '''
+# Record argv in bash. Native Windows python.exe CRT-globs "*" when Git Bash
+# execs it, so sys.argv cannot prove setup.sh forwarded the literal argument.
 bootstrap_stub = '''#!/usr/bin/env bash
-''' + shlex.quote(sys.executable) + ''' -I -c 'import json,os,sys; print(json.dumps({"args":sys.argv[1:],"tag":os.environ["BOOTSTRAP_RELEASE_TAG"],"sha":os.environ["BOOTSTRAP_RELEASE_COMMIT"],"install":os.environ["INSTALL_SCRIPT_URL"]}))' "$@" > "$CASE_DIR/ran.json"
+set -eu
+: > "$CASE_DIR/argv0"
+for a in "$@"; do
+    printf '%s\\0' "$a" >> "$CASE_DIR/argv0"
+done
+''' + shlex.quote(sys.executable.replace('\\', '/')) + ''' -I -c 'import json,os; print(json.dumps({"tag":os.environ["BOOTSTRAP_RELEASE_TAG"],"sha":os.environ["BOOTSTRAP_RELEASE_COMMIT"],"install":os.environ["INSTALL_SCRIPT_URL"]}))' > "$CASE_DIR/ran.json"
 exit "${BOOTSTRAP_STATUS:-0}"
 '''
+
+
+def recorded_install(case):
+    ran = json.loads((case / 'ran.json').read_text(encoding='utf-8'))
+    ran['args'] = [a.decode('utf-8') for a in (case / 'argv0').read_bytes().split(b'\0') if a]
+    return ran
+
 
 def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, piped=False, documented=False):
     with tempfile.TemporaryDirectory(prefix='setup-test-', dir=os.environ['TMPDIR']) as tmp:
@@ -97,12 +111,13 @@ def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, pipe
         else:
             assert result.returncode == expected, (name, result.returncode, result.stderr)
             if (case / 'ran.json').exists():
-                assert json.loads((case / 'ran.json').read_text()) == {
+                got = recorded_install(case)
+                assert got == {
                     'args': args, 'tag': 'v1.43.0', 'sha': sha, 'install': raw + '/install.sh'
-                }, name
+                }, (name, got)
             else:
                 raise AssertionError(name + ': installer did not run')
-            requests = (case / 'requests').read_text().splitlines()
+            requests = (case / 'requests').read_text(encoding='utf-8').splitlines()
             if documented:
                 assert requests.pop(0) == PINNED_SETUP_URL
             assert requests == [
@@ -218,7 +233,7 @@ def run_runtime_case(name, python=False, node=False, expected=0, stub_python=Fal
         if expected == 0:
             assert result.returncode == 0, (name, result.returncode, result.stderr)
             assert (case / 'ran.json').exists(), name + ': installer did not run'
-            assert json.loads((case / 'ran.json').read_text())['tag'] == 'v1.43.0', name
+            assert json.loads((case / 'ran.json').read_text(encoding='utf-8'))['tag'] == 'v1.43.0', name
         else:
             assert result.returncode != 0, (name, result.stdout, result.stderr)
             assert not (case / 'ran.json').exists(), name + ': installer ran on failure'
@@ -275,7 +290,7 @@ if host_cmd('python3') and host_cmd('node'):
         result = subprocess.run([HOST_BASH, str(root / 'bin/setup.sh'), '--product', 'codex'],
                                 text=True, capture_output=True, env=env, timeout=20)
         assert result.returncode == 0, ('python preferred', result.stderr)
-        log = (case / 'runtime.log').read_text()
+        log = (case / 'runtime.log').read_text(encoding='utf-8')
         assert log.startswith('python3'), log
         assert 'node' not in log, log
         print('PASS python preferred over node')
