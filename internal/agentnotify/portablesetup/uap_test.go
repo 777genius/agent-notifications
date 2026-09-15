@@ -316,29 +316,12 @@ func TestUAPMaterializerRepeatedRemoveOfRetainedInstallationIsAlreadyAbsent(t *t
 	}
 }
 
-func TestRecoverOwnedJournalsReleasesCoordinatorLeaseBeforeUAP(t *testing.T) {
-	codex, _ := bindingFixture(t)
-	probe := buildProbe(t)
-	root := filepath.Dir(codex.ControlRoot)
-	uapRoot := filepath.Join(root, "uap")
-	ops := filepath.Join(uapRoot, "state", "operations")
-	mat, err := NewMaterializer(UAPRoots{
-		StateFile:        filepath.Join(uapRoot, "state", "state-v2.json"),
-		LockFile:         filepath.Join(uapRoot, "state", "mutation.lock"),
-		OperationsDir:    ops,
-		PluginDataBase:   filepath.Join(uapRoot, "plugin data"),
-		ManagedRoot:      filepath.Join(uapRoot, "managed"),
-		HelperExecutable: probe,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	owned := filepath.Join(uapRoot, "managed")
+func plantUAPPendingJournal(t *testing.T, ops, owned, opID string) {
+	t.Helper()
 	staging := filepath.Join(owned, ".agentplugins-staging-pending")
 	if err := os.MkdirAll(staging, 0700); err != nil {
 		t.Fatal(err)
 	}
-	opID := "portable-pending-journal"
 	sum := sha256.Sum256([]byte(opID))
 	receipt := dirswap.Receipt{
 		SchemaVersion: 3, Operation: dirswap.OperationSwap, OperationID: opID,
@@ -357,6 +340,26 @@ func TestRecoverOwnedJournalsReleasesCoordinatorLeaseBeforeUAP(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(ops, opID+".json"), append(body, '\n'), 0600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestRecoverOwnedJournalsReleasesCoordinatorLeaseBeforeUAP(t *testing.T) {
+	codex, _ := bindingFixture(t)
+	probe := buildProbe(t)
+	root := filepath.Dir(codex.ControlRoot)
+	uapRoot := filepath.Join(root, "uap")
+	ops := filepath.Join(uapRoot, "state", "operations")
+	mat, err := NewMaterializer(UAPRoots{
+		StateFile:        filepath.Join(uapRoot, "state", "state-v2.json"),
+		LockFile:         filepath.Join(uapRoot, "state", "mutation.lock"),
+		OperationsDir:    ops,
+		PluginDataBase:   filepath.Join(uapRoot, "plugin data"),
+		ManagedRoot:      filepath.Join(uapRoot, "managed"),
+		HelperExecutable: probe,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plantUAPPendingJournal(t, ops, filepath.Join(uapRoot, "managed"), "portable-pending-journal")
 	config := filepath.Join(root, "home", "codex config")
 	if err := os.MkdirAll(config, 0700); err != nil {
 		t.Fatal(err)
@@ -382,4 +385,57 @@ func TestRecoverOwnedJournalsReleasesCoordinatorLeaseBeforeUAP(t *testing.T) {
 		t.Fatalf("coordinator lease still held after UAP recover: %v", err)
 	}
 	release()
+}
+
+func TestGuardSecondClientDoesNotRecoverPendingJournal(t *testing.T) {
+	codex, ledger := bindingFixture(t)
+	probe := buildProbe(t)
+	root := filepath.Dir(codex.ControlRoot)
+	pkg := filepath.Join(root, "package source with spaces")
+	writePackage(t, pkg, probe)
+	uapRoot := filepath.Join(root, "uap")
+	ops := filepath.Join(uapRoot, "state", "operations")
+	claudeConfig := filepath.Join(root, "home", "claude config")
+	mat, err := NewMaterializer(UAPRoots{
+		StateFile:        filepath.Join(uapRoot, "state", "state-v2.json"),
+		LockFile:         filepath.Join(uapRoot, "state", "mutation.lock"),
+		OperationsDir:    ops,
+		PluginDataBase:   filepath.Join(uapRoot, "plugin data"),
+		ManagedRoot:      filepath.Join(uapRoot, "managed"),
+		HelperExecutable: probe,
+		ClaudeRunner:     listingRunner{configRoot: claudeConfig},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := Identity{
+		InstallationID: "00000000-0000-4000-8000-000000000011",
+		ComponentID:    codex.ComponentID, Owner: codex.Owner, ScopeRoot: codex.ScopeRoot,
+		ControlRoot: codex.ControlRoot, GlobalConfig: codex.GlobalConfig, RuntimeRoot: codex.RuntimeRoot,
+		Primary: codex.Primary,
+	}
+	codexConfig := filepath.Join(root, "home", "codex config")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := mat.Install(testCtx(t), MaterializeRequest{
+		Identity: id, Integration: portable.Codex, ExpectedGeneration: ledger.Generation,
+		PackageRoot: pkg, ClientConfigRoot: codexConfig, ClientExecutable: probe,
+		OperationID: "portable-codex-guard",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	plantUAPPendingJournal(t, ops, filepath.Join(uapRoot, "managed"), "guard-pending-journal")
+	if err := mat.GuardSecondClient(testCtx(t), MaterializeRequest{
+		Identity: id, Integration: portable.Claude, PackageRoot: pkg,
+		ClientConfigRoot: claudeConfig, ClientExecutable: probe, OperationID: "portable-claude-guard",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	open, err := dirswap.Manager{JournalDir: ops}.ListOpen()
+	if err != nil || len(open) != 1 || open[0].OperationID != "guard-pending-journal" {
+		t.Fatalf("guard recovered journal: %+v %v", open, err)
+	}
 }

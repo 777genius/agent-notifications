@@ -378,7 +378,7 @@ func (m Materializer) previewInstall(ctx context.Context, req MaterializeRequest
 		return uapinstaller.Plan{}, err
 	}
 	if recover {
-		if _, err := eng.RecoverCurrent(ctx); err != nil {
+		if err := m.recoverOwnedJournals(ctx, req); err != nil {
 			return uapinstaller.Plan{}, err
 		}
 	}
@@ -403,7 +403,7 @@ func (m Materializer) GuardSecondClient(ctx context.Context, req MaterializeRequ
 	if len(others) == 0 {
 		return nil
 	}
-	plan, err := m.PreviewInstall(ctx, req)
+	plan, err := m.PreviewPlan(ctx, req)
 	if err != nil {
 		return wrapUpdateRequired(err)
 	}
