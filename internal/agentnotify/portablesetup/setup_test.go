@@ -368,6 +368,53 @@ func TestCommitBindingPublishFailureKeepsExistingConsumer(t *testing.T) {
 	}
 }
 
+func TestCommitBindingSameBindingDoesNotBumpGeneration(t *testing.T) {
+	b, ledger := bindingFixture(t)
+	svc := Service{}
+	if _, err := svc.CommitBinding(testCtx(t), Request{Binding: b, ExpectedGeneration: ledger.Generation}); err != nil {
+		t.Fatal(err)
+	}
+	first, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _, _, err := b.Registration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := first.Ledger.Consumers[key]; !ok {
+		t.Fatal("first commit omitted portable consumer")
+	}
+	if _, err := svc.CommitBinding(testCtx(t), Request{Binding: b, ExpectedGeneration: first.Ledger.Generation}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CommitBinding(testCtx(t), Request{Binding: b, ExpectedGeneration: ledger.Generation}); err != nil {
+		t.Fatal(err)
+	}
+	second, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Ledger.Generation != first.Ledger.Generation {
+		t.Fatalf("duplicate commit bumped generation %d -> %d", first.Ledger.Generation, second.Ledger.Generation)
+	}
+	if _, ok := second.Ledger.Consumers[key]; !ok {
+		t.Fatal("duplicate commit dropped portable consumer")
+	}
+	if _, ok := second.Ledger.Consumers["existing"]; !ok {
+		t.Fatal("duplicate commit dropped unrelated consumer")
+	}
+	name, err := b.Filename()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := portable.Acquire(testCtx(t), b.DataRoot, name)
+	if err != nil {
+		t.Fatalf("locator after duplicate commit: %v", err)
+	}
+	lease.Release()
+}
+
 func ownedMCP(t *testing.T, b portable.Binding, ledger installruntime.Ledger) (string, string, installruntime.Ledger) {
 	t.Helper()
 	config := filepath.Join(filepath.Dir(b.ControlRoot), "client", "config")

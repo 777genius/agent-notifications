@@ -98,6 +98,14 @@ func (e *Engine) Apply(ctx context.Context, prepared *PreparedOperation, decisio
 }
 
 func (e *Engine) applyInstall(ctx context.Context, prepared *PreparedOperation) (Result, error) {
+	if committed, binding, ok := e.liveBinding(prepared); ok && hostHandoffPending(binding) && e.cfg.OnCommittedBinding != nil {
+		if err := e.cfg.OnCommittedBinding(ctx, committed.Binding); err != nil {
+			committed.Outcome = OutcomeIncomplete
+			committed.Reason = err.Error()
+			e.report(ProgressCommit)
+			return committed, err
+		}
+	}
 	helper, err := e.helper()
 	if err != nil {
 		return Result{Operation: OpInstall, Outcome: OutcomeIncomplete, Reason: err.Error()}, err
@@ -280,6 +288,37 @@ func (e *Engine) confirmPreparedPlan(ctx context.Context, prepared *PreparedOper
 		return fmt.Errorf("%w: live binding does not match confirmed plan", ErrPlanChanged)
 	}
 	return nil
+}
+
+func (e *Engine) liveBinding(prepared *PreparedOperation) (Result, domain.ClientBinding, bool) {
+	result := Result{Operation: OpInstall, Binding: prepared.facts}
+	state, err := e.store.Load()
+	if err != nil {
+		return result, domain.ClientBinding{}, false
+	}
+	installationID := firstNonEmpty(prepared.req.InstallationID, prepared.plan.InstallationID)
+	installation, ok := findInstall(state, installationID)
+	if !ok {
+		return result, domain.ClientBinding{}, false
+	}
+	binding, receipt, ok := findBinding(installation, prepared.client.ClientID)
+	if !ok {
+		return result, domain.ClientBinding{}, false
+	}
+	result.InstallationID = firstNonEmpty(installation.InstallationID, installationID)
+	result.Binding = BindingFacts{
+		InstallationID: result.InstallationID, ClientID: string(prepared.client.ClientID),
+		BindingID: binding.ClientBindingID, Scope: binding.Scope, TargetPath: binding.TargetLocator,
+		DataRoot: receipt.Locator, DataReceiptID: binding.DataReceiptID,
+		OperationID: prepared.req.OperationID, TreeDigest: prepared.plan.TreeDigest,
+	}
+	result.Client = ClientResult{
+		ClientID: binding.ClientID, BindingID: binding.ClientBindingID,
+		Materialization: string(binding.Materialization), Activation: string(binding.Activation),
+		Authentication: string(binding.Authentication), Verification: string(binding.Verification),
+		RequiredComponents: append([]string(nil), prepared.req.RequiredComponents...),
+	}
+	return result, binding, true
 }
 
 func attachNextActions(result *Result) {

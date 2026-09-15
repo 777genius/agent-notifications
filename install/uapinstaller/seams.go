@@ -86,7 +86,12 @@ type seamActivator struct {
 }
 
 func (a seamActivator) Activate(ctx context.Context, request domain.ActivationRequest) (domain.ActivationOutcome, error) {
-	if a.onCommitted != nil && !request.VerifyOnly {
+	// UAP resume marks VerifyOnly even when activation never finished. Convert
+	// that path to a mutating resume; already-activated VerifyOnly stays read-only.
+	resume := request.VerifyOnly && a.hostHandoffPending(request)
+	if resume {
+		request.VerifyOnly = false
+	} else if a.onCommitted != nil && !request.VerifyOnly {
 		facts, err := a.committedFacts(request)
 		if err != nil {
 			return domain.ActivationOutcome{}, err
@@ -96,6 +101,44 @@ func (a seamActivator) Activate(ctx context.Context, request domain.ActivationRe
 		}
 	}
 	return a.inner.Activate(ctx, request)
+}
+
+func hostHandoffPending(binding domain.ClientBinding) bool {
+	switch binding.Materialization {
+	case domain.MaterializationMaterialized, domain.MaterializationDegraded:
+	default:
+		return false
+	}
+	if binding.InstallIntent == domain.InstallIntentPrepare {
+		return binding.Activation != domain.ActivationPrepared
+	}
+	switch binding.Activation {
+	case "", domain.ActivationFailed, domain.ActivationPrepared:
+		return true
+	default:
+		return false
+	}
+}
+
+func (a seamActivator) hostHandoffPending(request domain.ActivationRequest) bool {
+	if a.store == nil {
+		return false
+	}
+	state, err := a.store.Load()
+	if err != nil {
+		return false
+	}
+	installation, ok := findInstall(state, a.facts.InstallationID)
+	if !ok {
+		return false
+	}
+	for _, binding := range installation.Clients {
+		if binding.TargetLocator != request.Plan.ActivePath || binding.ClientID != string(request.Plan.ClientID) {
+			continue
+		}
+		return hostHandoffPending(binding)
+	}
+	return false
 }
 
 func (a seamActivator) AutomaticallyActivates(request domain.ActivationRequest) bool {

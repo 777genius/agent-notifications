@@ -19,6 +19,7 @@ import (
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/statev2"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/managedstdio"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/ports"
 )
 
 func testCtx(t *testing.T) context.Context {
@@ -2391,6 +2392,149 @@ func TestCommittedBindingFailureKeepsManagedCommit(t *testing.T) {
 	got := view.Installations[0].Bindings[0]
 	if got.Materialization != result.Client.Materialization || got.Activation != result.Client.Activation {
 		t.Fatalf("inspect lifecycle diverged: %+v vs %+v", got, result.Client)
+	}
+}
+
+type recordingCodexRunner struct {
+	calls     [][]string
+	installed bool
+	pluginID  string
+}
+
+func (r *recordingCodexRunner) Run(_ context.Context, cmd ports.Command) (ports.CommandResult, error) {
+	argv := append([]string(nil), cmd.Argv...)
+	r.calls = append(r.calls, argv)
+	if containsArgSeq(argv, "plugin", "marketplace", "add") || containsArgSeq(argv, "plugin", "marketplace", "update") || containsArgSeq(argv, "plugin", "add") {
+		r.installed = true
+		for _, arg := range argv {
+			if i := strings.Index(arg, "@"); i > 0 {
+				r.pluginID = arg
+			}
+		}
+		return ports.CommandResult{Stdout: []byte(`{"ok":true}`)}, nil
+	}
+	if containsArgSeq(argv, "plugin", "list") {
+		if !r.installed || r.pluginID == "" || !strings.Contains(r.pluginID, "@") {
+			return ports.CommandResult{Stdout: []byte(`{"installed":[]}`)}, nil
+		}
+		name, market, _ := strings.Cut(r.pluginID, "@")
+		body := `{"installed":[{"pluginId":"` + r.pluginID + `","name":"` + name + `","marketplaceName":"` + market + `","installed":true,"enabled":true}]}`
+		return ports.CommandResult{Stdout: []byte(body)}, nil
+	}
+	return ports.CommandResult{}, nil
+}
+
+func containsArgSeq(argv []string, seq ...string) bool {
+	for i := 0; i+len(seq) <= len(argv); i++ {
+		match := true
+		for j := range seq {
+			if argv[i+j] != seq[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
+
+func argvHas(calls [][]string, seq ...string) bool {
+	for _, argv := range calls {
+		if containsArgSeq(argv, seq...) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestRetryAfterCommittedBindingFailureReconcilesBeforeVerifyOnly(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx := testCtx(t)
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	var calls int
+	runner := &recordingCodexRunner{}
+	eng, err := New(Config{
+		StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe, Runner: runner,
+		OnCommittedBinding: func(_ context.Context, facts BindingFacts) error {
+			if facts.BindingID == "" || facts.TargetPath == "" || facts.DataRoot == "" {
+				return errors.New("committed binding missing identity")
+			}
+			calls++
+			if calls == 1 {
+				return errors.New("host seam refused after managed commit")
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := Request{
+		Operation: OpInstall, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: "00000000-0000-4000-8000-000000000076",
+		OperationID: "commit-then-retry", RequiredComponents: []string{"mcp", "skills"},
+	}
+	prepared, err := eng.Prepare(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := eng.Apply(ctx, prepared, Decision{Confirmed: true})
+	_ = prepared.Close()
+	if err == nil || first.Outcome != OutcomeIncomplete {
+		t.Fatalf("first apply: %+v %v", first, err)
+	}
+	if argvHas(runner.calls, "plugin", "marketplace", "add") || argvHas(runner.calls, "plugin", "add") {
+		t.Fatalf("first apply activated before host callback: %+v", runner.calls)
+	}
+	beforeRetry := calls
+	if _, inspectErr := eng.Inspect(ctx); inspectErr != nil {
+		t.Fatal(inspectErr)
+	}
+	preview, err := eng.Prepare(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != beforeRetry {
+		t.Fatalf("inspect/prepare executed host callback: %d -> %d", beforeRetry, calls)
+	}
+	retried, err := eng.Apply(ctx, preview, Decision{Confirmed: true})
+	_ = preview.Close()
+	if err != nil || retried.Outcome != OutcomeCompleted {
+		t.Fatalf("retry apply: %+v %v", retried, err)
+	}
+	if calls != 2 {
+		t.Fatalf("retry skipped committed-binding reconciliation: %d", calls)
+	}
+	if !argvHas(runner.calls, "plugin", "marketplace", "add") && !argvHas(runner.calls, "plugin", "marketplace", "update") {
+		t.Fatalf("retry stayed on VerifyOnly listing: %+v", runner.calls)
+	}
+	if !argvHas(runner.calls, "plugin", "add") {
+		t.Fatalf("retry omitted mutating plugin add: %+v", runner.calls)
+	}
+	view, inspectErr := eng.Inspect(ctx)
+	if inspectErr != nil || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 1 {
+		t.Fatalf("inspect after retry: %+v %v", view, inspectErr)
+	}
+	if retried.Binding.DataRoot == "" {
+		t.Fatal("retry omitted PLUGIN_DATA")
+	}
+	if _, err := os.Lstat(retried.Binding.DataRoot); err != nil {
+		t.Fatalf("PLUGIN_DATA after retry: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("inspect after retry executed host callback: %d", calls)
 	}
 }
 

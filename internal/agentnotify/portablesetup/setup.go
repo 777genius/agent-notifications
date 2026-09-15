@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 
 	"github.com/777genius/agent-notifications/internal/agentnotify/clientsetup"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
@@ -183,11 +184,6 @@ func (s Service) CommitBinding(ctx context.Context, req Request) (portable.Bindi
 	if err := s.preflight(req.Binding); err != nil {
 		return portable.Binding{}, err
 	}
-	res, err := s.matchingReservation(req, "install")
-	if err != nil {
-		return portable.Binding{}, err
-	}
-	req.Reservation = res
 	key, consumer, _, err := req.Binding.Registration()
 	if err != nil {
 		return portable.Binding{}, err
@@ -196,6 +192,17 @@ func (s Service) CommitBinding(ctx context.Context, req Request) (portable.Bindi
 	if err != nil {
 		return portable.Binding{}, err
 	}
+	if existing, ok := snap.Ledger.Consumers[key]; ok && reflect.DeepEqual(existing, consumer) {
+		if _, err = portable.Publish(req.Binding); err != nil {
+			return portable.Binding{}, err
+		}
+		return req.Binding, nil
+	}
+	res, err := s.matchingReservation(req, "install")
+	if err != nil {
+		return portable.Binding{}, err
+	}
+	req.Reservation = res
 	_, existed := snap.Ledger.Consumers[key]
 	gen := req.ExpectedGeneration
 	ledger, err := installruntime.Commit(ctx, installruntime.Request{
