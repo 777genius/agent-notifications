@@ -2155,6 +2155,73 @@ func TestWizardUpdateBothLiveClients(t *testing.T) {
 	}
 }
 
+func TestWizardUpdateOneClientMissingSiblingProfile(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	claudeConfig := filepath.Join(filepath.Dir(control), "claude-profile")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"claude", "codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClaudeConfig: claudeConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot:    filepath.Join(filepath.Dir(control), "scope"),
+		ClaudeRunner: listingRunner{configRoot: claudeConfig},
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install both: %+v %v", installed, err)
+	}
+	removeLiveProfiles(t, control)
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	req.Action = ActionUpdate
+	req.Agents = []string{"codex"}
+	got, err := Run(ctx, req)
+	if err == nil || got.Reason != "sibling_compatibility_unavailable" {
+		t.Fatalf("missing sibling profile: %+v %v", got, err)
+	}
+	if len(got.NextActions) != 1 || got.NextActions[0].Kind != "update" || strings.Join(got.NextActions[0].Agents, ",") != "claude,codex" {
+		t.Fatalf("retry: %+v", got.NextActions)
+	}
+	if live := LiveNotifyClients(control, []string{"claude", "codex"}); len(live) != 2 {
+		t.Fatalf("refused update dropped a client: %v", live)
+	}
+}
+
+func removeLiveProfiles(t *testing.T, controlRoot string) {
+	t.Helper()
+	pluginData := filepath.Join(filepath.Dir(controlRoot), "uap", "plugin-data")
+	removed := 0
+	if err := filepath.Walk(pluginData, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info == nil || info.IsDir() || info.Name() != uapinstaller.LiveProfilesFile {
+			return err
+		}
+		if rmErr := os.Remove(path); rmErr != nil {
+			return rmErr
+		}
+		removed++
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if removed == 0 {
+		t.Fatal("live-profiles.json was not written")
+	}
+}
+
 func liveTargetPath(t *testing.T, statePath, clientID string) string {
 	t.Helper()
 	eng, err := uapinstaller.New(uapinstaller.Config{StateRoot: filepath.Dir(statePath)})

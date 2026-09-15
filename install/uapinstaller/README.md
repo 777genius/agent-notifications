@@ -69,7 +69,9 @@ before the state file is written. Confirmed Apply returns `recovery_required`
 when Inspect sees a pending journal or unfinished receipt; it does not recover
 as a side effect of install/remove. Close during Apply returns `ErrHandleBusy`
 without releasing the sealed snapshot. Install of a different TreeDigest for an
-active binding returns `ErrUpdateRequired` before mutation.
+active binding returns `ErrUpdateRequired` before mutation. Update of one live
+client CompatibilityChecks remaining live siblings; missing sibling profile
+data returns `ErrCompatibilityUnavailable` before mutation.
 
 ## External sample
 

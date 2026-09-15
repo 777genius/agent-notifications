@@ -1694,6 +1694,69 @@ func TestSetupWizardUpdateOneClientKeepsSiblingE2E(t *testing.T) {
 	}
 }
 
+func TestSetupWizardUpdateOneClientMissingSiblingProfileE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	shared := []string{
+		"--hooks", "false", "--package", env.pkg, "--control-root", env.control, "--runtime-root", env.runtime,
+		"--global-config", env.global, "--codex-home", env.codexHome, "--claude-config", env.claudeConfig,
+		"--claude-executable", env.probe, "--codex-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+	}
+	var out bytes.Buffer
+	install := append([]string{"--action", "install", "--agents", "claude,codex", "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, install, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("install both: %d %s", code, out.String())
+	}
+	installed := decodeWizardJSON(t, out)
+	if installed.Outcome != "completed" {
+		t.Fatalf("install both: %+v", installed)
+	}
+	removed := 0
+	if err := filepath.Walk(filepath.Join(env.root, "uap", "plugin-data"), func(path string, info os.FileInfo, err error) error {
+		if err != nil || info == nil || info.IsDir() || info.Name() != uapinstaller.LiveProfilesFile {
+			return err
+		}
+		if rmErr := os.Remove(path); rmErr != nil {
+			return rmErr
+		}
+		removed++
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if removed == 0 {
+		t.Fatal("live-profiles.json was not written")
+	}
+	if err := os.WriteFile(filepath.Join(env.pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	update := append([]string{"--action", "update", "--agents", "codex", "--yes", "--json"}, shared...)
+	code := executeSetupWizardWith(ctx, update, &out, io.Discard, strings.NewReader(""), false)
+	got := decodeWizardJSON(t, out)
+	if code == 0 || got.Reason != "sibling_compatibility_unavailable" {
+		t.Fatalf("missing sibling profile: code=%d %+v %s", code, got, out.String())
+	}
+	if len(got.NextActions) != 1 || got.NextActions[0].Kind != "update" || strings.Join(got.NextActions[0].Agents, ",") != "claude,codex" {
+		t.Fatalf("retry: %+v", got.NextActions)
+	}
+	out.Reset()
+	inspect := append([]string{"--action", "inspect", "--json"}, shared...)
+	if inspectCode := executeSetupWizardWith(ctx, inspect, &out, io.Discard, strings.NewReader(""), false); inspectCode != 0 {
+		t.Fatalf("inspect: %d %s", inspectCode, out.String())
+	}
+	both := map[string]string{}
+	for _, target := range decodeWizardJSON(t, out).Targets {
+		if target.Unit == "agent-notify" {
+			both[target.Client] = target.Outcome
+		}
+	}
+	if both["claude"] != "installed" || both["codex"] != "installed" {
+		t.Fatalf("refused update dropped a client: %+v", both)
+	}
+}
+
 func TestSetupWizardUpdateRepairRemoveBothLiveClientsE2E(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
