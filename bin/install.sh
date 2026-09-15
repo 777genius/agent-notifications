@@ -59,9 +59,20 @@ config_preflight_stop() {
     return 1
 }
 
+# Presence on PATH is not enough: Windows Store/WSL python3 stubs must not win.
+usable_python3() {
+    command -v python3 >/dev/null 2>&1 || return 1
+    python3 -I -c 'import json' </dev/null >/dev/null 2>&1
+}
+
+usable_node() {
+    command -v node >/dev/null 2>&1 || return 1
+    NODE_OPTIONS= NODE_PATH= node --no-warnings -e 'JSON.parse("{}")' </dev/null >/dev/null 2>&1
+}
+
 prepare_install_config_preflight() {
     [ "${AGENT_NOTIFICATIONS_CONFIG+x}" = x ] || return 0
-    command -v python3 >/dev/null 2>&1 || command -v node >/dev/null 2>&1 || { config_preflight_stop; return 1; }
+    usable_python3 || usable_node || { config_preflight_stop; return 1; }
     local status
     [ -n "$INSTALL_CONFIG_HELPER" ] || INSTALL_CONFIG_HELPER="$BINARY_PATH"
     if install_config_preflight "$@"; then return 0; else status=$?; fi
@@ -109,7 +120,7 @@ install_config_preflight() {
     # execution. All selection, validation and alias identity decisions belong
     # to Go Store.
     local status
-    if command -v python3 >/dev/null 2>&1; then
+    if usable_python3; then
     if python3 -I - "$helper" "$PLATFORM" "${targets[@]}" <<'PYINSTALL'
 import json, os, subprocess, sys
 try:
@@ -138,7 +149,7 @@ except (OSError, ValueError, TypeError, AttributeError, subprocess.TimeoutExpire
 sys.exit(1)
 PYINSTALL
     then return 0; else status=$?; fi
-    elif command -v node >/dev/null 2>&1; then
+    elif usable_node; then
     if NODE_OPTIONS= NODE_PATH= node --no-warnings - "$helper" "$PLATFORM" "${targets[@]}" <<'JSINSTALL'
 const { spawnSync } = require('child_process');
 const path = require('path');
@@ -1677,9 +1688,11 @@ setup_iterm2_venv() {
         return 0
     fi
 
-    # Find Python 3
+    # Find a working Python 3 (Store/WSL stubs are not usable for venv).
     local python3_path=""
-    command -v python3 &>/dev/null && python3_path="$(command -v python3)"
+    if usable_python3; then
+        python3_path="$(command -v python3)"
+    fi
 
     if [ -z "$python3_path" ]; then
         echo ""

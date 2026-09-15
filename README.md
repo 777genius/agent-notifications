@@ -36,7 +36,7 @@ Desktop notifications and sounds for **Claude Code and Codex CLI**. Know when a 
 
 ## Install Or Update
 
-Requires Claude Code and/or Codex CLI, plus **Python 3.6+** (`python3`) **or** **Node.js** (`node`) for the installer. Python is used when both are present. On Windows, use **Git Bash** with native Windows Python or Node.
+Requires Claude Code and/or Codex CLI, plus **Python 3.6+** (`python3`) **or** **Node.js** (`node`) for the installer. Python is used when both are present. On Windows, use **Git Bash** with native Windows Python or Node. A Microsoft Store or WSL `python3` stub is skipped when Node is available.
 
 ```bash
 (set -o pipefail; curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/a8fbdc74ab418e6221fae2794d1dc9c3d8fc631d/bin/setup.sh | bash)

@@ -17,8 +17,19 @@ root = Path(sys.argv[1])
 loader = (root / 'bin/setup.sh').read_text(encoding='utf-8')
 public_command = next(line for line in (root / 'README.md').read_text(encoding='utf-8').splitlines()
                       if line.startswith('(set -o pipefail; curl '))
+PINNED_SETUP_SHA = 'a8fbdc74ab418e6221fae2794d1dc9c3d8fc631d'
+PINNED_SETUP_URL = (
+    'https://raw.githubusercontent.com/777genius/agent-notifications/'
+    + PINNED_SETUP_SHA + '/bin/setup.sh'
+)
+STORE_PYTHON3_STUB = '''#!/usr/bin/env bash
+echo "Python was not found; run without arguments to install from the Microsoft Store, or disable this shortcut from Settings > Apps > Advanced app settings > App execution aliases." >&2
+exit 9009
+'''
 sha = '0123456789abcdef0123456789abcdef01234567'
 raw = 'https://raw.githubusercontent.com/777genius/agent-notifications/' + sha + '/bin'
+assert 'usable_python3()' in loader and "python3 -I -c 'import json'" in loader
+assert '</dev/null' in loader
 curl_stub = '''#!/usr/bin/env bash
 set -eu
 output=""; url=""
@@ -31,7 +42,7 @@ while [ "$#" -gt 0 ]; do
 done
 printf '%s\\n' "$url" >> "$CASE_DIR/requests"
 case "$url" in
-    https://raw.githubusercontent.com/777genius/agent-notifications/a8fbdc74ab418e6221fae2794d1dc9c3d8fc631d/bin/setup.sh) kind=setup ;;
+    ''' + PINNED_SETUP_URL + ''') kind=setup ;;
     https://api.github.com/repos/777genius/agent-notifications/releases/latest) kind=latest ;;
     https://api.github.com/repos/777genius/agent-notifications/commits/v1.43.0) kind=commit ;;
     https://raw.githubusercontent.com/777genius/agent-notifications/*/bin/bootstrap.sh) kind=bootstrap ;;
@@ -64,7 +75,7 @@ def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, pipe
         (case / 'bootstrap').write_text(bootstrap_stub)
         (case / 'setup').write_text(loader)
         env = dict(os.environ, PATH=str(case / 'bin') + os.pathsep + os.environ['PATH'],
-                   CASE_DIR=str(case), TMPDIR=str(case / 'tmp space'),
+                   CASE_DIR=bash_path(case), TMPDIR=bash_path(case / 'tmp space'),
                    FAIL_DOWNLOAD=fail, BOOTSTRAP_STATUS=str(status),
                    BOOTSTRAP_RELEASE_TAG='untrusted', BOOTSTRAP_RELEASE_COMMIT='untrusted',
                    INSTALL_SCRIPT_URL='https://example.invalid/not-used')
@@ -89,7 +100,7 @@ def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, pipe
                 raise AssertionError(name + ': installer did not run')
             requests = (case / 'requests').read_text().splitlines()
             if documented:
-                assert requests.pop(0) == 'https://raw.githubusercontent.com/777genius/agent-notifications/a8fbdc74ab418e6221fae2794d1dc9c3d8fc631d/bin/setup.sh'
+                assert requests.pop(0) == PINNED_SETUP_URL
             assert requests == [
                 'https://api.github.com/repos/777genius/agent-notifications/releases/latest',
                 'https://api.github.com/repos/777genius/agent-notifications/commits/v1.43.0',
@@ -148,6 +159,13 @@ def host_cmd(name):
     return which_skip_aliases(name)
 
 
+def bash_path(p):
+    s = str(p).replace('\\', '/')
+    if len(s) >= 2 and s[1] == ':':
+        s = '/' + s[0].lower() + s[2:]
+    return s
+
+
 HOST_BASH = host_cmd('bash')
 assert HOST_BASH, 'Git Bash / bash executable not found'
 
@@ -163,27 +181,31 @@ def runtime_path(case, python=False, node=False):
     bin_dir = case / 'runtime-bin'
     bin_dir.mkdir()
     names = ['bash', 'sh', 'mktemp', 'rm', 'cat', 'chmod', 'mkdir', 'ln', 'uname',
-             'tr', 'head', 'cp', 'mv', 'env', 'true', 'false']
+             'tr', 'head', 'cp', 'mv', 'env', 'true', 'false', 'dirname', 'basename',
+             'printf', 'pwd', 'cygpath']
     if python:
         names.append('python3')
     if node:
         names.append('node')
     for name in names:
         place_runtime_cmd(bin_dir / name, host_cmd(name))
-    return str(case / 'bin') + os.pathsep + str(bin_dir)
+    return bash_path(case / 'bin') + ':' + bash_path(bin_dir)
 
-def run_runtime_case(name, python=False, node=False, expected=0):
+def run_runtime_case(name, python=False, node=False, expected=0, stub_python=False):
     with tempfile.TemporaryDirectory(prefix='setup-runtime-', dir=os.environ['TMPDIR']) as tmp:
         case = Path(tmp)
         (case / 'bin').mkdir()
         (case / 'tmp space').mkdir()
         (case / 'bin/curl').write_text(curl_stub)
         (case / 'bin/curl').chmod(0o755)
+        if stub_python:
+            (case / 'bin/python3').write_text(STORE_PYTHON3_STUB)
+            (case / 'bin/python3').chmod(0o755)
         (case / 'latest').write_text(json.dumps({'tag_name': 'v1.43.0'}))
         (case / 'commit').write_text(json.dumps({'sha': sha}))
         (case / 'bootstrap').write_text(bootstrap_stub)
         env = dict(os.environ, PATH=runtime_path(case, python=python, node=node),
-                   CASE_DIR=str(case), TMPDIR=str(case / 'tmp space'),
+                   CASE_DIR=bash_path(case), TMPDIR=bash_path(case / 'tmp space'),
                    FAIL_DOWNLOAD='', BOOTSTRAP_STATUS='0',
                    BOOTSTRAP_RELEASE_TAG='untrusted', BOOTSTRAP_RELEASE_COMMIT='untrusted',
                    INSTALL_SCRIPT_URL='https://example.invalid/not-used')
@@ -241,8 +263,8 @@ if host_cmd('python3') and host_cmd('node'):
         (case / 'latest').write_text(json.dumps({'tag_name': 'v1.43.0'}))
         (case / 'commit').write_text(json.dumps({'sha': sha}))
         (case / 'bootstrap').write_text(bootstrap_stub)
-        env = dict(os.environ, PATH=str(case / 'bin') + os.pathsep + runtime_path(case, python=True, node=True),
-                   CASE_DIR=str(case), TMPDIR=str(case / 'tmp space'),
+        env = dict(os.environ, PATH=bash_path(case / 'bin') + ':' + runtime_path(case, python=True, node=True),
+                   CASE_DIR=bash_path(case), TMPDIR=bash_path(case / 'tmp space'),
                    FAIL_DOWNLOAD='', BOOTSTRAP_STATUS='0',
                    BOOTSTRAP_RELEASE_TAG='untrusted', BOOTSTRAP_RELEASE_COMMIT='untrusted',
                    INSTALL_SCRIPT_URL='https://example.invalid/not-used')
@@ -253,5 +275,10 @@ if host_cmd('python3') and host_cmd('node'):
         assert log.startswith('python3'), log
         assert 'node' not in log, log
         print('PASS python preferred over node')
+if host_cmd('node'):
+    run_runtime_case('stub python3 falls back to node', python=False, node=True, stub_python=True)
+else:
+    print('SKIP stub python3 falls back to node: node not available')
+run_runtime_case('stub python3 without node', python=False, node=False, stub_python=True, expected=1)
 print('All setup loader fixtures passed (no public network or real agent CLIs).')
 PY

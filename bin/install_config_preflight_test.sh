@@ -505,6 +505,31 @@ guard_install_paths "$SCRIPT_DIR"
 ''',
         outside, False, extra_env={'HELPER_DIAG': 'malformed'})
     assert (staged_case / 'trace.staged').read_text() == 'staged'
+    stub_dir = box / 'store-stub-bin'
+    stub_dir.mkdir()
+    (stub_dir / 'python3').write_text(
+        '#!/bin/sh\n'
+        'echo "Python was not found; run without arguments to install from the Microsoft Store." >&2\n'
+        'exit 9009\n')
+    (stub_dir / 'python3').chmod(0o755)
+
+    def run_stub(name, body, e=None, ok=True, extra_env=None):
+        case = box / name
+        case.mkdir(exist_ok=True)
+        env = dict(os.environ, INSTALL_TARGET_DIR=str(case), TRACE=str(case / 'trace'),
+                   PATH=str(stub_dir) + os.pathsep + str(node_bin))
+        if e is not None:
+            env['AGENT_NOTIFICATIONS_CONFIG'] = str(e)
+        if extra_env:
+            env.update(extra_env)
+        script = 'source ' + q(functions) + '\ndetect_platform\nINSTALL_CONFIG_HELPER=' + q(helper) + '\n' + node_isolation + body
+        r = subprocess.run(['bash', '-c', script], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        assert (r.returncode == 0) == ok, (name, r.returncode, r.stderr.decode(), r.stdout.decode())
+        assert b'SECRET-CANARY' not in r.stdout + r.stderr
+        print('PASS:', name)
+        return case, r
+
+    run_stub('stub-python-falls-back-to-node', 'guard_install_paths "$SCRIPT_DIR"', outside)
 else:
     print('SKIP node-only install preflight: node not available')
 PY

@@ -2,10 +2,21 @@
 # Usage: curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/main/bin/setup.sh | bash
 # Keep this entry point small: installation runs from one exact release commit.
 # Prefer isolated python3; Node is the supported fallback (Claude Code ships it).
+# Presence on PATH is not enough: Windows Store/WSL python3 stubs must not win.
+usable_python3() {
+    command -v python3 >/dev/null 2>&1 || return 1
+    python3 -I -c 'import json' </dev/null >/dev/null 2>&1
+}
+
+usable_node() {
+    command -v node >/dev/null 2>&1 || return 1
+    NODE_OPTIONS= NODE_PATH= node --no-warnings -e 'JSON.parse("{}")' </dev/null >/dev/null 2>&1
+}
+
 decode_github_json() {
-    if command -v python3 >/dev/null 2>&1; then
+    if usable_python3; then
         python3 -I -c "$1"
-    elif command -v node >/dev/null 2>&1; then
+    elif usable_node; then
         NODE_OPTIONS= NODE_PATH= node --no-warnings -e "$2"
     else
         echo "python3 or node is required to install Agent Notifications." >&2
@@ -19,7 +30,7 @@ main() (
         echo "curl is required to install Agent Notifications." >&2
         exit 1
     }
-    command -v python3 >/dev/null 2>&1 || command -v node >/dev/null 2>&1 || {
+    usable_python3 || usable_node || {
         echo "python3 or node is required to install Agent Notifications." >&2
         exit 1
     }

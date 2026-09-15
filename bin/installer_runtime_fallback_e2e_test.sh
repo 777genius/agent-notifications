@@ -15,6 +15,10 @@ import sys
 import tempfile
 
 root = Path(sys.argv[1])
+STORE_PYTHON3_STUB = '''#!/usr/bin/env bash
+echo "Python was not found; run without arguments to install from the Microsoft Store, or disable this shortcut from Settings > Apps > Advanced app settings > App execution aliases." >&2
+exit 9009
+'''
 
 
 def is_windows_store_or_wsl_alias(src):
@@ -173,13 +177,16 @@ exit 0
 '''
 
 
-def setup_case(name, python=False, node=False, expected=0, preferred=False):
+def setup_case(name, python=False, node=False, expected=0, preferred=False, stub_python=False):
     with tempfile.TemporaryDirectory(prefix='runtime-e2e-', dir=os.environ['TMPDIR']) as tmp:
         case = Path(tmp)
         (case / 'bin').mkdir()
         (case / 'tmp space').mkdir()
         (case / 'bin/curl').write_text(curl_stub)
         (case / 'bin/curl').chmod(0o755)
+        if stub_python:
+            (case / 'bin/python3').write_text(STORE_PYTHON3_STUB)
+            (case / 'bin/python3').chmod(0o755)
         (case / 'latest').write_text(json.dumps({'tag_name': 'v1.43.0'}))
         (case / 'commit').write_text(json.dumps({'sha': sha}))
         (case / 'bootstrap').write_text(bootstrap_stub)
@@ -228,6 +235,11 @@ else:
 setup_case('setup.sh neither runtime', expected=1)
 if host_cmd('python3') and HOST_NODE:
     setup_case('setup.sh python preferred', python=True, node=True, preferred=True)
+if HOST_NODE:
+    setup_case('setup.sh stub python3 falls back to node', node=True, stub_python=True)
+else:
+    print('SKIP setup.sh stub python3 falls back to node')
+setup_case('setup.sh stub python3 without node', stub_python=True, expected=1)
 
 # --- bootstrap.sh: node-only commit parse and checksum verify ---
 if HOST_NODE:
@@ -481,6 +493,58 @@ printf 'ver=%s root=%s\n' "$ver" "$root"
 else:
     print('SKIP isolated node NODE_OPTIONS: node not available')
 
+# A Windows Store/WSL python3 stub on PATH must not block a working Node.
+if HOST_NODE:
+    with tempfile.TemporaryDirectory(prefix='stub-python-', dir=os.environ['TMPDIR']) as tmp:
+        case = Path(tmp)
+        stub = case / 'stub-bin'
+        stub.mkdir()
+        (stub / 'python3').write_text(STORE_PYTHON3_STUB)
+        (stub / 'python3').chmod(0o755)
+        path = bash_path(stub) + ':' + runtime_path(case, node=True)
+        functions = case / 'functions.sh'
+        functions.write_text((root / 'bin/bootstrap.sh').read_text(encoding='utf-8').replace('main "$@"', ''), encoding='utf-8')
+        plugin = case / 'plugin'
+        plugin.mkdir()
+        installed = case / 'installed.json'
+        key = 'claude-notifications-go@claude-notifications-go'
+        installed.write_text(json.dumps({
+            'plugins': {key: [{'installPath': bash_path(plugin), 'version': '1.42.0'}]}
+        }))
+        commit = 'a' * 40
+        script = r'''
+source "$FUNCTIONS"
+PATH="$RUNTIME_PATH"
+command -v python3 >/dev/null || { echo stub python3 missing >&2; exit 1; }
+python3 -I -c 'import json' >/dev/null 2>&1 && { echo stub python3 unexpectedly usable >&2; exit 1; }
+command -v node >/dev/null || { echo node missing >&2; exit 1; }
+rt=$(installer_runtime)
+[ "$rt" = node ] || { echo "installer_runtime=$rt" >&2; exit 1; }
+BOOTSTRAP_RELEASE_TAG=v1.42.0
+unset BOOTSTRAP_RELEASE_COMMIT INSTALL_SCRIPT_URL
+BOOTSTRAP_RAW_BASE_URL=https://raw.example.invalid/repository
+fetch_bootstrap_file() { printf '%s\n' '{"sha":"''' + commit + r'''"}' > "$2"; }
+resolve_bootstrap_release
+[ "$BOOTSTRAP_COMMIT" = "''' + commit + r'''" ]
+PLUGIN_KEY="claude-notifications-go@claude-notifications-go"
+INSTALLED_JSON="$INSTALLED"
+ver=$(get_installed_plugin_version)
+root=$(get_installed_plugin_root)
+[ "$ver" = "1.42.0" ] || { echo "ver=$ver" >&2; exit 1; }
+[ "$root" = "$PLUGIN_DIR" ] || { echo "root=$root" >&2; exit 1; }
+'''
+        env = dict(os.environ, PATH=path, FUNCTIONS=bash_path(functions), RUNTIME_PATH=path,
+                   INSTALLED=bash_path(installed), PLUGIN_DIR=bash_path(plugin),
+                   TMPDIR=bash_path(case), HOME=bash_path(case / 'home'))
+        (case / 'home').mkdir()
+        result = subprocess.run([HOST_BASH, '-c', script], cwd=str(case), env=env, text=True,
+                                capture_output=True, timeout=20)
+        if result.returncode != 0:
+            fail('stub python3 falls back to node', describe(result))
+        pass_name('installer_runtime and get_installed_* skip Store/WSL python3 stubs')
+else:
+    print('SKIP stub python3 installer_runtime: node not available')
+
 # Generated cache shims are standalone POSIX scripts: they must not call
 # bootstrap helpers, and node-only parses must still find installPath.
 # Heredocs inside $(...) are invalid: ")" in Python/JS closes the substitution.
@@ -493,6 +557,10 @@ if '<<' in shim:
     fail('generated hook-wrapper shim', 'standalone shim uses a heredoc inside $()')
 if "python3 -I -c '" not in shim or "node --no-warnings -e '" not in shim:
     fail('generated hook-wrapper shim', 'standalone shim missing quoted -c/-e parsers')
+if "python3 -I -c 'import json'" not in shim or '</dev/null' not in shim:
+    fail('generated hook-wrapper shim', 'standalone shim missing python3 usability probe')
+if 'JSON.parse("{}")' not in shim:
+    fail('generated hook-wrapper shim', 'standalone shim missing node usability probe')
 pass_name('generated hook-wrapper shim inlines isolated node')
 
 if HOST_NODE:
@@ -551,6 +619,39 @@ export NODE_OPTIONS="--require=./preload.js"
             fail('generated shim node-only parse',
                  'hook-wrapper was not execed: ' + describe(result))
         pass_name('generated hook-wrapper shim parses installPath on node-only PATH')
+
+        stub = case / 'stub-bin'
+        stub.mkdir()
+        (stub / 'python3').write_text(STORE_PYTHON3_STUB)
+        (stub / 'python3').chmod(0o755)
+        wrapper.write_text(
+            '#!/bin/sh\ncat > "$CLAUDE_PLUGIN_ROOT/stdin"\necho ran > "$CLAUDE_PLUGIN_ROOT/ran"\nexit 0\n',
+            encoding='utf-8')
+        wrapper.chmod(0o755)
+        ran.unlink(missing_ok=True)
+        stub_path = bash_path(stub) + ':' + path
+        script = r'''
+PATH="$RUNTIME_PATH"
+command -v python3 >/dev/null || { echo stub python3 missing >&2; exit 1; }
+python3 -I -c 'import json' </dev/null >/dev/null 2>&1 && { echo stub python3 unexpectedly usable >&2; exit 1; }
+command -v node >/dev/null || { echo node missing >&2; exit 1; }
+printf 'hook-payload\n' | "$HOST_BASH" "$SHIM" Stop
+'''
+        env = dict(os.environ, PATH=stub_path, RUNTIME_PATH=stub_path, SHIM=bash_path(shim_path),
+                   HOST_BASH=HOST_BASH, CLAUDE_HOME=bash_path(claude_home),
+                   CLAUDE_CONFIG_DIR=bash_path(claude_home), HOME=bash_path(case / 'home'),
+                   TMPDIR=bash_path(case))
+        result = subprocess.run([HOST_BASH, '-c', script], cwd=str(case), env=env,
+                                text=True, capture_output=True, timeout=20)
+        if result.returncode != 0:
+            fail('generated shim skips stub python3', describe(result))
+        if not ran.is_file() or ran.read_text(encoding='utf-8').strip() != 'ran':
+            fail('generated shim skips stub python3',
+                 'hook-wrapper was not execed: ' + describe(result))
+        stdin_data = (current / 'stdin').read_text(encoding='utf-8')
+        if stdin_data != 'hook-payload\n':
+            fail('generated shim preserves stdin', repr(stdin_data))
+        pass_name('generated hook-wrapper shim skips Store/WSL python3 stubs')
 else:
     print('SKIP generated hook-wrapper shim node-only parse: node not available')
 

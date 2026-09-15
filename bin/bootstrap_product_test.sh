@@ -64,6 +64,28 @@ if command -v node >/dev/null 2>&1; then
         [ "$INSTALL_SCRIPT_URL" = "$BOOTSTRAP_RAW_BASE_URL/$TEST_RELEASE_COMMIT/bin/install.sh" ]
     )
     echo "node-only resolve_bootstrap_release passed"
+    STUB_BIN="$SANDBOX/store-stub-bin"
+    mkdir -p "$STUB_BIN"
+    printf '%s\n' '#!/bin/sh' \
+        'echo "Python was not found; run without arguments to install from the Microsoft Store." >&2' \
+        'exit 9009' > "$STUB_BIN/python3"
+    chmod +x "$STUB_BIN/python3"
+    (
+        PATH="$STUB_BIN:$NODE_ONLY"
+        command -v python3 >/dev/null 2>&1 || { echo "stub python3 missing from PATH"; exit 1; }
+        python3 -I -c 'import json' >/dev/null 2>&1 && { echo "stub python3 unexpectedly usable"; exit 1; }
+        command -v node >/dev/null 2>&1 || { echo "node missing from stub+node PATH"; exit 1; }
+        rt=$(installer_runtime)
+        [ "$rt" = node ] || { echo "installer_runtime=$rt"; exit 1; }
+        BOOTSTRAP_RELEASE_TAG=v1.42.0
+        unset BOOTSTRAP_RELEASE_COMMIT INSTALL_SCRIPT_URL
+        BOOTSTRAP_RAW_BASE_URL="https://raw.example.invalid/repository"
+        fetch_bootstrap_file() { printf '%s\n' '{"sha":"'"$TEST_RELEASE_COMMIT"'"}' > "$2"; }
+        resolve_bootstrap_release
+        [ "$BOOTSTRAP_COMMIT" = "$TEST_RELEASE_COMMIT" ]
+        [ "$INSTALL_SCRIPT_URL" = "$BOOTSTRAP_RAW_BASE_URL/$TEST_RELEASE_COMMIT/bin/install.sh" ]
+    )
+    echo "stub python3 falls back to node in installer_runtime"
 fi
 unset BOOTSTRAP_RELEASE_TAG BOOTSTRAP_RELEASE_COMMIT BOOTSTRAP_RAW_BASE_URL INSTALL_SCRIPT_URL
 # The production archive endpoint accepts a commit SHA directly, outside refs/tags.
