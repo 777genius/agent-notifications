@@ -533,6 +533,36 @@ func TestWizardInspectReportsPendingJournal(t *testing.T) {
 	}
 }
 
+func TestWizardInspectReportsBothPendingJournals(t *testing.T) {
+	control, runtime, global, primary, _ := managedRuntime(t)
+	plantWizardJournalNamed(t, control, "wizard-pending-op")
+	plantWizardJournalNamed(t, control, "wizard-pending-op-2")
+	got, err := Run(testCtx(t), Request{
+		Action: ActionInspect, Agents: []string{"codex"},
+		ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global, Helper: primary,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Outcome != "incomplete" || got.Reason != "recovery_required" || got.ExitCode() != 0 {
+		t.Fatalf("inspect recovery: %+v", got)
+	}
+	reason := ""
+	for _, next := range got.NextActions {
+		if next.Kind == "recover" {
+			reason = next.Reason
+		}
+	}
+	if !strings.Contains(reason, "wizard-pending-op") || !strings.Contains(reason, "wizard-pending-op-2") {
+		t.Fatalf("inspect hid a pending journal: %+v", got.NextActions)
+	}
+	for _, opID := range []string{"wizard-pending-op", "wizard-pending-op-2"} {
+		if _, err := os.Lstat(filepath.Join(filepath.Dir(control), "uap", "state", "operations", opID+".json")); err != nil {
+			t.Fatalf("inspect recovered %s: %v", opID, err)
+		}
+	}
+}
+
 func TestWizardInspectReportsPendingKernelJournal(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, primary, _ := managedRuntime(t)
@@ -1021,12 +1051,16 @@ func TestPlanUninstallListsCodexExternalPrerequisite(t *testing.T) {
 
 func plantWizardJournal(t *testing.T, controlRoot string) {
 	t.Helper()
+	plantWizardJournalNamed(t, controlRoot, "wizard-pending-op")
+}
+
+func plantWizardJournalNamed(t *testing.T, controlRoot, opID string) {
+	t.Helper()
 	owned := filepath.Join(filepath.Dir(controlRoot), "uap", "managed")
-	staging := filepath.Join(owned, ".agentplugins-staging-pending")
+	staging := filepath.Join(owned, ".agentplugins-staging-"+opID)
 	if err := os.MkdirAll(staging, 0700); err != nil {
 		t.Fatal(err)
 	}
-	opID := "wizard-pending-op"
 	sum := sha256.Sum256([]byte(opID))
 	receipt := dirswap.Receipt{
 		SchemaVersion: 3, Operation: dirswap.OperationSwap, OperationID: opID,

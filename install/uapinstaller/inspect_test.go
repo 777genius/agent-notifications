@@ -216,6 +216,30 @@ func TestRecoverRejectsUnobservedPendingJournal(t *testing.T) {
 	}
 }
 
+func TestRecoverRejectsNewlyObservedPendingJournal(t *testing.T) {
+	eng, _ := plantPendingJournal(t)
+	view, err := eng.Inspect(testCtx(t))
+	if err != nil || len(view.Recovery.Journals) != 1 {
+		t.Fatalf("inspect: %+v %v", view, err)
+	}
+	second := plantOpenJournal(t, eng, "pending-journal-op-2")
+	result, err := eng.Recover(testCtx(t), view)
+	if !errors.Is(err, ErrPlanChanged) || result.Outcome != OutcomeConflict || result.Reason != "plan_changed" {
+		t.Fatalf("expanded observation: %+v %v", result, err)
+	}
+	open, err := dirswap.Manager{JournalDir: eng.cfg.OperationsDir}.ListOpen()
+	if err != nil || len(open) != 2 {
+		t.Fatalf("plan_changed recovered journals: %+v %v", open, err)
+	}
+	seen := map[string]bool{}
+	for _, journal := range open {
+		seen[journal.OperationID] = true
+	}
+	if !seen[view.Recovery.Journals[0].OperationID] || !seen[second.OperationID] {
+		t.Fatalf("missing planted journal after plan_changed: %+v", open)
+	}
+}
+
 func TestInspectReportsStateCommittedReceiptWithoutJournal(t *testing.T) {
 	eng, receipt := plantStateCommittedReceipt(t)
 	view, err := eng.Inspect(testCtx(t))
