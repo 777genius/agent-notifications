@@ -406,13 +406,154 @@ func TestSetupWizardJSONLifecycleE2E(t *testing.T) {
 	}
 }
 
+func TestSetupWizardBothClientsRemoveOneE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	root := setupCommandRoot(t)
+	home := filepath.Join(root, "home")
+	if err := os.MkdirAll(home, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	control := filepath.Join(root, "control")
+	runtime := filepath.Join(root, "runtime")
+	global := filepath.Join(root, "global", "config.json")
+	probe := buildWizardProbe(t)
+	pkg := filepath.Join(root, "package")
+	writeWizardPackage(t, pkg, probe)
+	codexHome := filepath.Join(root, "codex-profile")
+	claudeConfig := filepath.Join(root, "claude-profile")
+	scope := filepath.Join(root, "scope")
+	for _, dir := range []string{filepath.Dir(global), codexHome, claudeConfig, scope} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	body, err := os.ReadFile(probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: control, RuntimeRoot: runtime, Owner: "existing-installer", ConsumerID: "existing",
+		Files: []installruntime.File{{Path: filepath.Join(runtime, "primary"), Data: body, Mode: 0700}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	shared := []string{
+		"--hooks", "false", "--package", pkg, "--control-root", control, "--runtime-root", runtime,
+		"--global-config", global, "--codex-home", codexHome, "--claude-config", claudeConfig,
+		"--claude-executable", probe, "--codex-executable", probe, "--helper", probe, "--scope-root", scope,
+	}
+	decode := func(t *testing.T, out bytes.Buffer) setupwizard.Result {
+		t.Helper()
+		var result setupwizard.Result
+		if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+			t.Fatalf("json: %v %s", err, out.String())
+		}
+		return result
+	}
+	notify := func(result setupwizard.Result) map[string]string {
+		out := map[string]string{}
+		for _, target := range result.Targets {
+			if target.Unit == "agent-notify" {
+				out[target.Client] = target.Outcome
+			}
+		}
+		return out
+	}
+	var out bytes.Buffer
+	claudeFlags := append([]string{"--action", "install", "--agents", "claude", "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, claudeFlags, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("install claude: %d %s", code, out.String())
+	}
+	claude := decode(t, out)
+	if claude.Outcome != "completed" || claude.InstallationID == "" {
+		t.Fatalf("install claude result: %+v", claude)
+	}
+	out.Reset()
+	codexFlags := append([]string{"--action", "install", "--agents", "codex", "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, codexFlags, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("add codex: %d %s", code, out.String())
+	}
+	added := decode(t, out)
+	if added.Outcome != "completed" || added.InstallationID != claude.InstallationID {
+		t.Fatalf("add codex result: %+v", added)
+	}
+	out.Reset()
+	inspectFlags := append([]string{"--action", "inspect", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, inspectFlags, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect both: %d %s", code, out.String())
+	}
+	both := notify(decode(t, out))
+	if both["claude"] != "installed" || both["codex"] != "installed" {
+		t.Fatalf("inspect both: %+v", both)
+	}
+	out.Reset()
+	removeFlags := append([]string{"--action", "uninstall", "--agents", "claude", "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, removeFlags, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("uninstall claude: %d %s", code, out.String())
+	}
+	removed := decode(t, out)
+	if removed.Outcome != "completed" && removed.Outcome != "unchanged" {
+		t.Fatalf("uninstall claude result: %+v", removed)
+	}
+	out.Reset()
+	if code := executeSetupWizardWith(ctx, inspectFlags, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect after remove: %d %s", code, out.String())
+	}
+	after := notify(decode(t, out))
+	if after["codex"] != "installed" {
+		t.Fatalf("codex lost after claude remove: %+v", after)
+	}
+	if after["claude"] == "installed" {
+		t.Fatalf("claude survived remove: %+v", after)
+	}
+}
+
 func buildWizardProbe(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	src := filepath.Join(dir, "probe.go")
 	if err := os.WriteFile(src, []byte(`package main
-import ("encoding/json"; "os")
-func main() { json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true}) }
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+)
+func main() {
+	if strings.Join(os.Args[1:], " ") == "plugin list --json" {
+		root := os.Getenv("CLAUDE_CONFIG_DIR")
+		listed := []map[string]any{}
+		if root != "" {
+			entries, err := os.ReadDir(filepath.Join(root, "skills"))
+			if err == nil {
+				for _, entry := range entries {
+					if !entry.IsDir() || entry.Name()[0] == '.' {
+						continue
+					}
+					path := filepath.Join(root, "skills", entry.Name())
+					body, readErr := os.ReadFile(filepath.Join(path, ".claude-plugin", "plugin.json"))
+					if readErr != nil {
+						continue
+					}
+					var manifest map[string]any
+					if json.Unmarshal(body, &manifest) != nil {
+						continue
+					}
+					name, _ := manifest["name"].(string)
+					listed = append(listed, map[string]any{
+						"id": name + "@skills-dir", "version": manifest["version"], "scope": "user",
+						"enabled": true, "installPath": path,
+					})
+				}
+			}
+		}
+		json.NewEncoder(os.Stdout).Encode(listed)
+		return
+	}
+	json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true})
+}
 `), 0600); err != nil {
 		t.Fatal(err)
 	}

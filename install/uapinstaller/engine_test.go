@@ -342,6 +342,13 @@ func TestInstallInspectRepeatRemove(t *testing.T) {
 	if view.Installations[0].TreeDigest == "" || view.Installations[0].TreeDigest != prepared.Plan().TreeDigest {
 		t.Fatalf("inspect omitted source digest: plan=%s inspect=%s", prepared.Plan().TreeDigest, view.Installations[0].TreeDigest)
 	}
+	recovered, err := eng.Recover(ctx, view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.Outcome != OutcomeUnchanged && recovered.Outcome != OutcomeCompleted {
+		t.Fatalf("recover: %+v", recovered)
+	}
 	reserved, err := eng.ReserveIdentity(IdentityRequest{ClientID: "codex", Allocate: false})
 	if err != nil || reserved.InstallationID != req.InstallationID || reserved.BindingID != view.Installations[0].Bindings[0].BindingID {
 		t.Fatalf("reserve existing: %+v %v", reserved, err)
@@ -357,6 +364,41 @@ func TestInstallInspectRepeatRemove(t *testing.T) {
 	}
 	if !repeat.NoChange && repeat.Outcome != OutcomeUnchanged && repeat.Outcome != OutcomeCompleted {
 		t.Fatalf("repeat install: %+v", repeat)
+	}
+	updated, err := eng.Prepare(ctx, Request{
+		Operation: OpUpdate, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: req.InstallationID, OperationID: "sample-update",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = updated.Close() }()
+	update, err := eng.Apply(ctx, updated, Decision{Confirmed: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if update.Outcome != OutcomeCompleted && update.Outcome != OutcomeUnchanged {
+		t.Fatalf("update: %+v", update)
+	}
+	if update.InstallationID != req.InstallationID {
+		t.Fatalf("update changed installation: %s", update.InstallationID)
+	}
+	repaired, err := eng.Prepare(ctx, Request{
+		Operation: OpRepair, PackageRoot: pkg, ClientID: "codex", ClientConfigRoot: config,
+		ClientExecutable: probe, InstallationID: req.InstallationID, OperationID: "sample-repair",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = repaired.Close() }()
+	repair, err := eng.Apply(ctx, repaired, Decision{Confirmed: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repair.Outcome != OutcomeCompleted && repair.Outcome != OutcomeUnchanged {
+		t.Fatalf("repair: %+v", repair)
 	}
 	rm, err := eng.Prepare(ctx, Request{
 		Operation: OpRemove, ClientID: "codex", ClientConfigRoot: config, ClientExecutable: probe,
@@ -1929,6 +1971,70 @@ func TestExampleModuleStaysExternal(t *testing.T) {
 	}
 	if !strings.Contains(text, "Recover(") || !strings.Contains(text, "OpUpdate") || !strings.Contains(text, "OpRepair") {
 		t.Fatal("example omits published lifecycle operations")
+	}
+}
+
+func TestExampleFlaggedPathRunsAgainstLocalModule(t *testing.T) {
+	skipWindowsLauncherExecuteBit(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg := filepath.Join(base, "package")
+	writePackage(t, pkg, probe)
+	state := filepath.Join(base, "uap")
+	config := filepath.Join(base, "config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	repo, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := filepath.Join(base, "sample")
+	if err := os.MkdirAll(work, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"main.go", "go.mod", "go.sum"} {
+		body, err := os.ReadFile(filepath.Join("example", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(work, name), body, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mod, err := os.ReadFile(filepath.Join(work, "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	replaced := string(mod) + "\nreplace github.com/777genius/agent-notifications => " + repo + "\n"
+	if err := os.WriteFile(filepath.Join(work, "go.mod"), []byte(replaced), 0600); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(work, "sample")
+	build := exec.CommandContext(ctx, "go", "build", "-o", bin, ".")
+	build.Dir = work
+	build.Env = append(os.Environ(), "GOTOOLCHAIN=local", "GOWORK=off")
+	if body, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build sample: %s %v", body, err)
+	}
+	run := exec.CommandContext(ctx, bin,
+		"-state", state, "-package", pkg, "-config", config,
+		"-helper", probe, "-client-exe", probe,
+	)
+	out, err := run.CombinedOutput()
+	if err != nil {
+		t.Fatalf("sample: %s %v", out, err)
+	}
+	text := string(out)
+	for _, want := range []string{"install=", "recover=", "repeat=", "update=", "repair=", "remove="} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("sample omitted %s:\n%s", want, text)
+		}
 	}
 }
 
