@@ -76,8 +76,10 @@ type Request struct {
 	// fixture; the field is never parsed from CLI flags.
 	ClaudeRunner providers.CommandRunner
 	// ReleaseVersion is the accepted master revision without a leading v.
-	// Empty means this binary's compiled consumer version, set by the CLI.
-	ReleaseVersion string
+	// DefaultReleaseVersion is a one-shot CLI snapshot of this binary's
+	// compiled consumer version, not an explicit flag. Resume restores
+	// intent.SourceRevision first; remaining empty values take this snapshot.
+	ReleaseVersion, DefaultReleaseVersion string
 	// ReleaseDownloadRoot is the directory that contains v{version}/ assets.
 	// Empty disables host fetch so tests that omit --package stay offline.
 	ReleaseDownloadRoot string
@@ -376,7 +378,7 @@ func evaluate(ctx context.Context, req *Request, requireYes bool) evaluated {
 			return evaluated{out: out, err: ErrRefused, stop: true}
 		}
 	}
-	applyEnvSnapshot(req)
+	applyHostSnapshots(req)
 	if !explicitAbs(req.ControlRoot) {
 		out.Outcome, out.Reason = "invalid", "control_root_required"
 		return evaluated{out: out, err: ErrRefused, stop: true}
@@ -2344,7 +2346,7 @@ func reportProgress(req Request, phase string) {
 	}
 }
 
-func applyEnvSnapshot(req *Request) {
+func applyHostSnapshots(req *Request) {
 	if req == nil {
 		return
 	}
@@ -2353,6 +2355,9 @@ func applyEnvSnapshot(req *Request) {
 	}
 	if req.ClaudeConfig == "" {
 		req.ClaudeConfig = req.EnvClaudeConfig
+	}
+	if req.ReleaseVersion == "" {
+		req.ReleaseVersion = req.DefaultReleaseVersion
 	}
 }
 

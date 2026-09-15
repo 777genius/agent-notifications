@@ -2790,6 +2790,34 @@ func TestWizardResumeIgnoresEnvSnapshot(t *testing.T) {
 	}
 }
 
+func TestWizardResumeIgnoresDefaultReleaseVersion(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, gen := managedRuntime(t)
+	probe := buildProbe(t)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	scope := filepath.Join(filepath.Dir(control), "scope")
+	for _, dir := range []string{codexConfig, scope} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plantPendingIntent(t, ctx, control, runtime, gen, portablesetup.Intent{
+		Version: 1, SetupIntentID: "pending-install-intent", Action: "install", Stage: "retire-direct",
+		ExpectedGeneration: gen, SourceRevision: "1.42.0",
+		Targets: []portablesetup.IntentTarget{{Client: "codex", Profile: codexConfig, Units: []string{"direct-mcp"}}},
+	})
+	got, err := Run(ctx, Request{
+		Action: ActionInstall, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		ClientExecutable: probe, Helper: probe, ScopeRoot: scope, DefaultReleaseVersion: "1.43.0",
+	})
+	if got.Reason == "pending_intent_conflict" {
+		t.Fatalf("compiled version treated as explicit: %+v %v", got, err)
+	}
+	if got.Reason == "noninteractive_requires_yes" || got.Reason == "empty_selection" {
+		t.Fatalf("did not resume pending install: %+v %v", got, err)
+	}
+}
+
 func TestWizardEmptyUninstallConflictsWithPendingInstall(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, _, _, gen := managedRuntime(t)

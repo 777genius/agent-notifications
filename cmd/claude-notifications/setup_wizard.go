@@ -91,7 +91,7 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 		return 2
 	}
 	if req.ReleaseVersion == "" {
-		req.ReleaseVersion = config.ConsumerVersion
+		req.DefaultReleaseVersion = config.ConsumerVersion
 	}
 	if req.ReleaseDownloadRoot == "" {
 		req.ReleaseDownloadRoot = portableasset.DefaultReleaseDownloadRoot

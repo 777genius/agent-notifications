@@ -1265,7 +1265,7 @@ func TestSetupWizardResumeOmitsAgentsFromPendingE2E(t *testing.T) {
 	}
 	plantWizardCLIPendingIntent(t, ctx, env.control, env.runtime, snap.Ledger.Generation, portablesetup.Intent{
 		Version: 1, SetupIntentID: "pending-install-intent", Action: "install", Stage: "retire-direct",
-		ExpectedGeneration: snap.Ledger.Generation,
+		ExpectedGeneration: snap.Ledger.Generation, SourceRevision: "1.42.0",
 		Targets: []portablesetup.IntentTarget{{
 			Client: "codex", Profile: env.codexHome, Units: []string{"direct-mcp"},
 		}},
@@ -1288,6 +1288,9 @@ func TestSetupWizardResumeOmitsAgentsFromPendingE2E(t *testing.T) {
 	if installed.Reason == "noninteractive_requires_yes" {
 		t.Fatalf("matching pending intent still required --yes: %+v", installed)
 	}
+	if installed.Reason == "pending_intent_conflict" {
+		t.Fatalf("compiled consumer version treated as explicit: %+v", installed)
+	}
 	if installed.Outcome != "completed" {
 		t.Fatalf("resume omitted agents: %+v", installed)
 	}
@@ -1305,6 +1308,113 @@ func TestSetupWizardResumeOmitsAgentsFromPendingE2E(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("resume missed restored profile: %+v", view.Targets)
+	}
+}
+
+func TestSetupWizardUninstallExplicitFalsePreservesNotifyE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	envHome := t.TempDir()
+	testenv.Set(t, envHome)
+	canonical := filepath.Join(envHome, "fixture-config.json")
+	if err := os.WriteFile(canonical, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENT_NOTIFICATIONS_CONFIG", canonical)
+	env := newWizardCLIEnv(t, ctx, false)
+	bundle := writeWizardPluginBundle(t)
+	shared := []string{
+		"--control-root", env.control, "--runtime-root", env.runtime,
+		"--global-config", env.global, "--codex-home", env.codexHome,
+		"--client-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+	}
+	var out bytes.Buffer
+	install := append([]string{
+		"--action", "install", "--agents", "codex", "--hooks", "true", "--agent-notify", "true",
+		"--package", env.pkg, "--plugin-root", bundle, "--yes", "--json",
+	}, shared...)
+	if code := executeSetupWizardWith(ctx, install, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("install both units: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "completed" {
+		t.Fatalf("install both units: %+v", got)
+	}
+	out.Reset()
+	uninstall := append([]string{"--action", "uninstall", "--agents", "codex", "--agent-notify", "false", "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, uninstall, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("uninstall hooks only: %d %s", code, out.String())
+	}
+	removed := decodeWizardJSON(t, out)
+	if removed.Outcome != "completed" {
+		t.Fatalf("uninstall hooks only: %+v", removed)
+	}
+	out.Reset()
+	inspect := append([]string{"--action", "inspect", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, inspect, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect after hooks-only uninstall: %d %s", code, out.String())
+	}
+	view := decodeWizardJSON(t, out)
+	var hooksInstalled, notifyInstalled bool
+	for _, target := range view.Targets {
+		if target.Unit == "hooks" && target.Outcome == "installed" {
+			hooksInstalled = true
+		}
+		if target.Unit == "agent-notify" && target.Outcome == "installed" {
+			notifyInstalled = true
+		}
+	}
+	if hooksInstalled || !notifyInstalled {
+		t.Fatalf("explicit false did not keep notify: %+v", view.Targets)
+	}
+}
+
+func TestSetupWizardUpdateOneClientKeepsSiblingE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	shared := []string{
+		"--hooks", "false", "--package", env.pkg, "--control-root", env.control, "--runtime-root", env.runtime,
+		"--global-config", env.global, "--codex-home", env.codexHome, "--claude-config", env.claudeConfig,
+		"--claude-executable", env.probe, "--codex-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+	}
+	notify := func(result setupwizard.Result) map[string]string {
+		out := map[string]string{}
+		for _, target := range result.Targets {
+			if target.Unit == "agent-notify" {
+				out[target.Client] = target.Outcome
+			}
+		}
+		return out
+	}
+	var out bytes.Buffer
+	install := append([]string{"--action", "install", "--agents", "claude,codex", "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, install, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("install both: %d %s", code, out.String())
+	}
+	installed := decodeWizardJSON(t, out)
+	if installed.Outcome != "completed" {
+		t.Fatalf("install both: %+v", installed)
+	}
+	if err := os.WriteFile(filepath.Join(env.pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	update := append([]string{"--action", "update", "--agents", "codex", "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, update, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("update codex: %d %s", code, out.String())
+	}
+	updated := decodeWizardJSON(t, out)
+	if updated.Outcome != "completed" || updated.InstallationID != installed.InstallationID {
+		t.Fatalf("update codex: %+v", updated)
+	}
+	out.Reset()
+	inspect := append([]string{"--action", "inspect", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, inspect, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect after update: %d %s", code, out.String())
+	}
+	both := notify(decodeWizardJSON(t, out))
+	if both["claude"] != "installed" || both["codex"] != "installed" {
+		t.Fatalf("sibling lost after one-client update: %+v", both)
 	}
 }
 
