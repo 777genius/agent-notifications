@@ -515,9 +515,6 @@ func (m Materializer) RemoveGroup(ctx context.Context, reqs []MaterializeRequest
 			return nil, fmt.Errorf("%w: group remove does not hold a Codex attestation", ErrPreflight)
 		}
 	}
-	if err := m.recoverOwnedJournals(ctx, reqs[0]); err != nil {
-		return nil, err
-	}
 	state, err := m.Store.Load()
 	if err != nil {
 		return nil, err
@@ -856,9 +853,6 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 		return nil
 	}
 	if err := m.validate(req, false); err != nil {
-		return err
-	}
-	if err := m.recoverOwnedJournals(ctx, req); err != nil {
 		return err
 	}
 	state, err = m.Store.Load()

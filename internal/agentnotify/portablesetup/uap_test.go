@@ -536,6 +536,57 @@ func TestGuardSecondClientDoesNotRecoverPendingJournal(t *testing.T) {
 	}
 }
 
+func TestRemoveDoesNotRecoverPendingJournal(t *testing.T) {
+	codex, ledger := bindingFixture(t)
+	probe := buildProbe(t)
+	root := filepath.Dir(codex.ControlRoot)
+	pkg := filepath.Join(root, "package source with spaces")
+	writePackage(t, pkg, probe)
+	uapRoot := filepath.Join(root, "uap")
+	ops := filepath.Join(uapRoot, "state", "operations")
+	mat, err := NewMaterializer(UAPRoots{
+		StateFile:        filepath.Join(uapRoot, "state", "state-v2.json"),
+		LockFile:         filepath.Join(uapRoot, "state", "mutation.lock"),
+		OperationsDir:    ops,
+		PluginDataBase:   filepath.Join(uapRoot, "plugin data"),
+		ManagedRoot:      filepath.Join(uapRoot, "managed"),
+		HelperExecutable: probe,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := Identity{
+		InstallationID: "00000000-0000-4000-8000-000000000013",
+		ComponentID:    codex.ComponentID, Owner: codex.Owner, ScopeRoot: codex.ScopeRoot,
+		ControlRoot: codex.ControlRoot, GlobalConfig: codex.GlobalConfig, RuntimeRoot: codex.RuntimeRoot,
+		Primary: codex.Primary,
+	}
+	codexConfig := filepath.Join(root, "home", "codex config")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mat.Install(testCtx(t), MaterializeRequest{
+		Identity: id, Integration: portable.Codex, ExpectedGeneration: ledger.Generation,
+		PackageRoot: pkg, ClientConfigRoot: codexConfig, ClientExecutable: probe,
+		OperationID: "portable-codex-remove-journal",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	plantUAPPendingJournal(t, ops, filepath.Join(uapRoot, "managed"), "remove-pending-journal")
+	err = mat.Remove(testCtx(t), MaterializeRequest{
+		Identity: id, Integration: portable.Codex, ClientConfigRoot: codexConfig,
+		ClientExecutable: probe, OperationID: "portable-codex-remove-blocked",
+		ExternalUninstalled: true,
+	})
+	if !errors.Is(err, uapinstaller.ErrRecoveryRequired) {
+		t.Fatalf("remove recovered or ignored journal: %v", err)
+	}
+	open, listErr := dirswap.Manager{JournalDir: ops}.ListOpen()
+	if listErr != nil || len(open) != 1 || open[0].OperationID != "remove-pending-journal" {
+		t.Fatalf("remove recovered journal: %+v %v", open, listErr)
+	}
+}
+
 func TestGuardSecondClientAllowsCopiedSameDigest(t *testing.T) {
 	codex, ledger := bindingFixture(t)
 	probe := buildProbe(t)

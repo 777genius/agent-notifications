@@ -1491,6 +1491,10 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 			}
 		}
 		req.InstallationID = id.InstallationID
+		if err := recoverWizardJournals(ctx, mat, id, req, notifyAgents); err != nil {
+			out.Outcome, out.Reason = "incomplete", "recovery_required"
+			return out, err
+		}
 		if err := reserveClientBindings(&req, mat, notifyAgents); err != nil {
 			if mapped, handled := mapAmbiguous(err, out); handled {
 				return mapped, err
