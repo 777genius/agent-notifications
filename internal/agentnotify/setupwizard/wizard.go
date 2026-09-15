@@ -612,6 +612,9 @@ func restoreOmittedFromIntent(req Request, agents []portable.Integration, intent
 	} else if intent.SourceRevision != "" && req.ReleaseVersion != intent.SourceRevision {
 		return req, agents, portablesetup.ErrIntentConflict
 	}
+	if intent.ExternalUninstalled {
+		req.ExternalUninstalled = true
+	}
 	for _, target := range intent.Targets {
 		if target.InstallationID != "" {
 			if req.InstallationID == "" {
@@ -1076,6 +1079,7 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 		out.Outcome, out.Reason = "incomplete", err.Error()
 		return out, err
 	}
+	_ = persistExternalUninstalled(ctx, req, runtimeRoot)
 	out.Generation = snap.Ledger.Generation
 	if len(hookAgents) > 0 {
 		reportProgress(req, "hooks")
@@ -1118,6 +1122,7 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 		if agent == portable.Codex && !req.ExternalUninstalled {
 			if attestCodexExternalUninstall(ctx, clientExecutable(req, agent), req.CodexHome) {
 				req.ExternalUninstalled = true
+				_ = persistExternalUninstalled(ctx, req, runtimeRoot)
 			}
 		}
 		remove := portablesetup.MaterializeRequest{
@@ -1239,6 +1244,9 @@ func retryRequestFromIntent(req Request, intent portablesetup.Intent) Request {
 	}
 	if intent.SourceRevision != "" {
 		retry.ReleaseVersion = intent.SourceRevision
+	}
+	if intent.ExternalUninstalled {
+		retry.ExternalUninstalled = true
 	}
 	if hooks, notify, specified := intentUnitSelection(intent); specified {
 		retry.Hooks = boolPtr(hooks)
@@ -1705,6 +1713,13 @@ func attachKnownReceipts(req Request, snap installruntime.InstalledSnapshot, run
 	return targets
 }
 
+func persistExternalUninstalled(ctx context.Context, req Request, runtimeRoot string) error {
+	if !req.ExternalUninstalled {
+		return nil
+	}
+	return (portablesetup.Service{}).PatchIntentExternalUninstalled(ctx, req.ControlRoot, runtimeRoot, "")
+}
+
 func persistKnownReceipt(ctx context.Context, req Request, runtimeRoot string, mat portablesetup.Materializer, installationID, client string) error {
 	receipt := knownReceiptID(mat, installationID, client)
 	if receipt == "" {
@@ -1751,7 +1766,8 @@ func publishWizardIntent(ctx context.Context, req Request, snap installruntime.I
 		ExpectedGeneration: snap.Ledger.Generation, Action: string(req.Action), Stage: "confirmed",
 		SourceRevision: req.ReleaseVersion, SourceDigest: req.PackageSHA256,
 		TreeDigest: req.TreeDigest, HelperDigest: req.HelperDigest, HelperVersion: req.HelperVersion,
-		Targets: targets,
+		ExternalUninstalled: req.ExternalUninstalled,
+		Targets:             targets,
 	}); err != nil {
 		return snap, err
 	}

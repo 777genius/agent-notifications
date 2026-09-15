@@ -490,17 +490,18 @@ func (s Service) PublishConfirmedIntent(ctx context.Context, req ConfirmedIntent
 		stage = "confirmed"
 	}
 	intent := Intent{
-		Version:            intentVersion,
-		SetupIntentID:      intentID,
-		Action:             req.Action,
-		Stage:              stage,
-		ExpectedGeneration: snap.Ledger.Generation,
-		SourceRevision:     req.SourceRevision,
-		SourceDigest:       req.SourceDigest,
-		TreeDigest:         req.TreeDigest,
-		HelperDigest:       req.HelperDigest,
-		HelperVersion:      req.HelperVersion,
-		Targets:            req.Targets,
+		Version:             intentVersion,
+		SetupIntentID:       intentID,
+		Action:              req.Action,
+		Stage:               stage,
+		ExpectedGeneration:  snap.Ledger.Generation,
+		SourceRevision:      req.SourceRevision,
+		SourceDigest:        req.SourceDigest,
+		TreeDigest:          req.TreeDigest,
+		HelperDigest:        req.HelperDigest,
+		HelperVersion:       req.HelperVersion,
+		ExternalUninstalled: req.ExternalUninstalled,
+		Targets:             req.Targets,
 	}
 	payload, err := marshalIntent(intent)
 	if err != nil {
@@ -527,7 +528,39 @@ func (s Service) PublishConfirmedIntent(ctx context.Context, req ConfirmedIntent
 // PatchIntentReceipt records a known UAP data receipt on the pending host
 // intent without allocating a new SetupIntentID.
 func (s Service) PatchIntentReceipt(ctx context.Context, controlRoot, runtimeRoot, owner, client, receiptID string) error {
-	if ctx == nil || controlRoot == "" || receiptID == "" || client == "" {
+	if receiptID == "" || client == "" {
+		return nil
+	}
+	return s.patchIntent(ctx, controlRoot, runtimeRoot, owner, func(intent *Intent) bool {
+		changed := false
+		for i, target := range intent.Targets {
+			if target.Client != client {
+				continue
+			}
+			if target.DataReceiptID == receiptID {
+				return false
+			}
+			intent.Targets[i].DataReceiptID = receiptID
+			changed = true
+		}
+		return changed
+	})
+}
+
+// PatchIntentExternalUninstalled records a confirmed Codex native-plugin
+// attestation on the pending intent so resume does not require the flag again.
+func (s Service) PatchIntentExternalUninstalled(ctx context.Context, controlRoot, runtimeRoot, owner string) error {
+	return s.patchIntent(ctx, controlRoot, runtimeRoot, owner, func(intent *Intent) bool {
+		if intent.ExternalUninstalled {
+			return false
+		}
+		intent.ExternalUninstalled = true
+		return true
+	})
+}
+
+func (s Service) patchIntent(ctx context.Context, controlRoot, runtimeRoot, owner string, mutate func(*Intent) bool) error {
+	if ctx == nil || controlRoot == "" || mutate == nil {
 		return nil
 	}
 	release, err := installruntime.AcquireCoordinatorLease(ctx, controlRoot)
@@ -553,18 +586,7 @@ func (s Service) PatchIntentReceipt(ctx context.Context, controlRoot, runtimeRoo
 	if intent.SetupIntentID != pending.ID {
 		return fmt.Errorf("%w: pending %s", ErrIntentConflict, intent.Action)
 	}
-	changed := false
-	for i, target := range intent.Targets {
-		if target.Client != client {
-			continue
-		}
-		if target.DataReceiptID == receiptID {
-			return nil
-		}
-		intent.Targets[i].DataReceiptID = receiptID
-		changed = true
-	}
-	if !changed {
+	if !mutate(&intent) {
 		return nil
 	}
 	payload, err := marshalIntent(intent)
@@ -591,7 +613,7 @@ func (s Service) PatchIntentReceipt(ctx context.Context, controlRoot, runtimeRoo
 		Files: []installruntime.File{{Path: path, Before: before, Data: payload, Mode: 0600}},
 	})
 	if err != nil {
-		return fmt.Errorf("%w: patch intent receipt: %v", ErrPreflight, err)
+		return fmt.Errorf("%w: patch confirmed intent: %v", ErrPreflight, err)
 	}
 	return nil
 }

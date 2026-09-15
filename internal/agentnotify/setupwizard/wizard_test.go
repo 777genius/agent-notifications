@@ -1729,6 +1729,9 @@ func TestWizardCodexUninstallDoesNotInventExternalAttestation(t *testing.T) {
 	if err != nil || len(intent.Targets) != 1 || intent.Targets[0].DataReceiptID == "" {
 		t.Fatalf("uninstall intent omitted known data receipt: %+v %v", intent, err)
 	}
+	if intent.ExternalUninstalled {
+		t.Fatalf("hold recorded attestation: %+v", intent)
+	}
 	joined := strings.Join(got.Command, " ")
 	if !strings.Contains(joined, "--external-uninstalled") {
 		t.Fatalf("retry omitted attestation flag: %v", got.Command)
@@ -1754,6 +1757,50 @@ func TestWizardCodexUninstallDoesNotInventExternalAttestation(t *testing.T) {
 	removed, err := Run(ctx, req)
 	if err != nil || removed.Outcome != "completed" {
 		t.Fatalf("attested uninstall: %+v %v", removed, err)
+	}
+}
+
+func TestWizardResumeRestoresExternalUninstalledFromIntent(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", installed, err)
+	}
+	req.Action = ActionUninstall
+	held, err := Run(ctx, req)
+	if err == nil || held.Outcome != "incomplete" || held.Reason != "external_uninstall_required" {
+		t.Fatalf("hold: %+v %v", held, err)
+	}
+	if err := (portablesetup.Service{}).PatchIntentExternalUninstalled(ctx, control, runtime, ""); err != nil {
+		t.Fatal(err)
+	}
+	resume := Request{
+		Action: ActionUninstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: req.ScopeRoot,
+	}
+	removed, err := Run(ctx, resume)
+	if err != nil || removed.Outcome != "completed" {
+		t.Fatalf("resume omitted attestation: %+v %v", removed, err)
 	}
 }
 

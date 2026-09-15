@@ -16,17 +16,18 @@ const intentVersion = 1
 // Intent is the host-owned handoff record. The kernel stores only a reservation
 // pointing at this file and never parses the payload.
 type Intent struct {
-	Version            int            `json:"version"`
-	SetupIntentID      string         `json:"setupIntentID"`
-	Action             string         `json:"action"`
-	Stage              string         `json:"stage"`
-	ExpectedGeneration uint64         `json:"expectedGeneration"`
-	SourceRevision     string         `json:"sourceRevision,omitempty"`
-	SourceDigest       string         `json:"sourceDigest,omitempty"`
-	TreeDigest         string         `json:"treeDigest,omitempty"`
-	HelperDigest       string         `json:"helperDigest,omitempty"`
-	HelperVersion      string         `json:"helperVersion,omitempty"`
-	Targets            []IntentTarget `json:"targets"`
+	Version             int            `json:"version"`
+	SetupIntentID       string         `json:"setupIntentID"`
+	Action              string         `json:"action"`
+	Stage               string         `json:"stage"`
+	ExpectedGeneration  uint64         `json:"expectedGeneration"`
+	SourceRevision      string         `json:"sourceRevision,omitempty"`
+	SourceDigest        string         `json:"sourceDigest,omitempty"`
+	TreeDigest          string         `json:"treeDigest,omitempty"`
+	HelperDigest        string         `json:"helperDigest,omitempty"`
+	HelperVersion       string         `json:"helperVersion,omitempty"`
+	ExternalUninstalled bool           `json:"externalUninstalled,omitempty"`
+	Targets             []IntentTarget `json:"targets"`
 }
 
 type IntentTarget struct {
@@ -46,6 +47,7 @@ type ConfirmedIntent struct {
 	Action, Stage                           string
 	SourceRevision, SourceDigest            string
 	TreeDigest, HelperDigest, HelperVersion string
+	ExternalUninstalled                     bool
 	Targets                                 []IntentTarget
 }
 
