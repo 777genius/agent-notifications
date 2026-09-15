@@ -2416,6 +2416,100 @@ func TestWizardSecondClientAddDoesNotReviseExisting(t *testing.T) {
 	}
 }
 
+func TestWizardTwoPhaseUpdateThenAdd(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	claudeConfig := filepath.Join(filepath.Dir(control), "claude-profile")
+	for _, dir := range []string{codexConfig, claudeConfig} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	off := false
+	base := Request{
+		Action: ActionInstall, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClaudeConfig: claudeConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot:    filepath.Join(filepath.Dir(control), "scope"),
+		ClaudeRunner: listingRunner{configRoot: claudeConfig},
+	}
+	if err := os.MkdirAll(base.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	claudeReq := base
+	claudeReq.Agents = []string{"claude"}
+	installed, err := Run(ctx, claudeReq)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("claude: %+v %v", installed, err)
+	}
+	claudeBinding := ""
+	for _, target := range installed.Targets {
+		if target.Unit == "agent-notify" {
+			claudeBinding = target.Reason
+		}
+	}
+	otherPkg := filepath.Join(filepath.Dir(control), "other-package")
+	writePackage(t, otherPkg, probe)
+	if err := os.WriteFile(filepath.Join(otherPkg, "skills", "agent-notify", "SKILL.md"), []byte("---\nname: agent-notify\ndescription: Revised\n---\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	mismatch := base
+	mismatch.Agents = []string{"codex"}
+	mismatch.PackageRoot = otherPkg
+	blocked, err := Run(ctx, mismatch)
+	if err == nil || blocked.Outcome != "incomplete" || blocked.Reason != "update_required" {
+		t.Fatalf("mismatch: %+v %v", blocked, err)
+	}
+	if len(blocked.NextActions) != 2 || blocked.NextActions[0].Kind != "update" || blocked.NextActions[1].Kind != "install" {
+		t.Fatalf("next: %+v", blocked.NextActions)
+	}
+	updateReq := base
+	updateReq.Action = ActionUpdate
+	updateReq.Agents = blocked.NextActions[0].Agents
+	updateReq.PackageRoot = otherPkg
+	updated, err := Run(ctx, updateReq)
+	if err != nil || updated.Outcome != "completed" {
+		t.Fatalf("phase 1 update: %+v %v", updated, err)
+	}
+	addReq := base
+	addReq.Agents = blocked.NextActions[1].Agents
+	addReq.PackageRoot = otherPkg
+	added, err := Run(ctx, addReq)
+	if err != nil || added.Outcome != "completed" {
+		t.Fatalf("phase 2 add: %+v %v", added, err)
+	}
+	inspectReq := base
+	inspectReq.Action = ActionInspect
+	inspectReq.Yes = false
+	inspectReq.Agents = []string{"claude", "codex"}
+	view, err := Run(ctx, inspectReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var claudeOK, codexOK bool
+	for _, target := range view.Targets {
+		if target.Unit != "agent-notify" || target.Outcome != "installed" {
+			continue
+		}
+		if target.Client == "claude" {
+			if target.Reason != claudeBinding {
+				t.Fatalf("claude binding revised: %s vs %s", claudeBinding, target.Reason)
+			}
+			claudeOK = true
+		}
+		if target.Client == "codex" {
+			codexOK = true
+		}
+	}
+	if !claudeOK || !codexOK {
+		t.Fatalf("two-phase inspect: %+v", view.Targets)
+	}
+}
+
 func TestWizardTTYAddSecondClientKeepProposesNewDefaults(t *testing.T) {
 	ctx := testCtx(t)
 	envHome := t.TempDir()
