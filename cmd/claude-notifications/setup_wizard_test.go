@@ -16,6 +16,7 @@ import (
 
 	"github.com/777genius/agent-notifications/install/uapinstaller"
 	"github.com/777genius/agent-notifications/internal/agentnotify/clientsetup"
+	"github.com/777genius/agent-notifications/internal/agentnotify/portablesetup"
 	"github.com/777genius/agent-notifications/internal/agentnotify/registration"
 	"github.com/777genius/agent-notifications/internal/agentnotify/setupwizard"
 	"github.com/777genius/agent-notifications/internal/installruntime"
@@ -996,6 +997,74 @@ func TestSetupWizardTTYExistingOmitsActionE2E(t *testing.T) {
 	}
 }
 
+func TestSetupWizardPendingIntentConflictE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	shared := []string{
+		"--agents", "codex", "--control-root", env.control, "--runtime-root", env.runtime,
+		"--global-config", env.global, "--codex-home", env.codexHome,
+		"--client-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+	}
+	var out bytes.Buffer
+	install := append([]string{"--action", "install", "--hooks", "false", "--package", env.pkg, "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, install, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("install: %d %s", code, out.String())
+	}
+	installed := decodeWizardJSON(t, out)
+	if installed.Outcome != "completed" {
+		t.Fatalf("install result: %+v", installed)
+	}
+	plantWizardCLIPendingInstall(t, ctx, env.control, env.runtime, installed.Generation)
+	out.Reset()
+	uninstall := append([]string{"--action", "uninstall", "--yes", "--json", "--external-uninstalled"}, shared...)
+	if code := executeSetupWizardWith(ctx, uninstall, &out, io.Discard, strings.NewReader(""), false); code != 1 {
+		t.Fatalf("pending uninstall exit: %d %s", code, out.String())
+	}
+	conflict := decodeWizardJSON(t, out)
+	if conflict.Outcome != "conflict" || conflict.Reason != "pending_intent_conflict" {
+		t.Fatalf("pending uninstall: %+v", conflict)
+	}
+	joined := strings.Join(conflict.Command, " ")
+	if !strings.Contains(joined, "--action install") || !strings.Contains(joined, "--agents codex") {
+		t.Fatalf("retry dropped pending install: %v", conflict.Command)
+	}
+	if strings.Contains(joined, "--action uninstall") {
+		t.Fatalf("repair-style mutation replaced pending install: %v", conflict.Command)
+	}
+	out.Reset()
+	repair := append([]string{"--action", "repair", "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, repair, &out, io.Discard, strings.NewReader(""), false); code != 1 {
+		t.Fatalf("pending repair exit: %d %s", code, out.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "conflict" || got.Reason != "pending_intent_conflict" {
+		t.Fatalf("repair replaced pending install: %+v", got)
+	}
+	out.Reset()
+	inspect := append([]string{"--action", "inspect", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, inspect, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("inspect during pending: %d %s", code, out.String())
+	}
+	view := decodeWizardJSON(t, out)
+	found, resume := false, false
+	for _, target := range view.Targets {
+		if target.Unit == "agent-notify" && target.Outcome == "installed" {
+			found = true
+		}
+	}
+	for _, next := range view.NextActions {
+		if next.Kind == "resume" {
+			resume = true
+			if !strings.Contains(strings.Join(next.Command, " "), "--action install") {
+				t.Fatalf("inspect resume dropped install: %+v", next)
+			}
+		}
+	}
+	if !found || !resume {
+		t.Fatalf("inspect during pending: %+v", view)
+	}
+}
+
 func buildWizardProbe(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -1108,6 +1177,28 @@ func decodeWizardJSON(t *testing.T, out bytes.Buffer) setupwizard.Result {
 		t.Fatalf("json: %v %s", err, out.String())
 	}
 	return result
+}
+
+func plantWizardCLIPendingInstall(t *testing.T, ctx context.Context, control, runtime string, generation uint64) {
+	t.Helper()
+	intent := portablesetup.Intent{
+		Version: 1, SetupIntentID: "pending-install-intent", Action: "install", Stage: "retire-direct",
+		ExpectedGeneration: generation,
+		Targets:            []portablesetup.IntentTarget{{Client: "codex", Units: []string{"direct-mcp"}}},
+	}
+	payload, err := json.Marshal(intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := portablesetup.IntentPath(control)
+	res := installruntime.PendingMutation{ID: intent.SetupIntentID, Owner: "existing-installer", IntentRef: path}
+	if _, err := installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: control, Owner: "existing-installer", RuntimeRoot: runtime, ConsumerID: "existing",
+		RefreshOnly: true, ExpectedGeneration: &generation, Reservation: &res,
+		Files: []installruntime.File{{Path: path, Data: append(payload, '\n'), Mode: 0600}},
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 type wizardCLIEnv struct {
