@@ -5844,6 +5844,34 @@ func TestWizardResumeRejectsDifferentProfile(t *testing.T) {
 	}
 }
 
+func TestWizardResumeRejectsDifferentMCPConfig(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, _, _, gen := managedRuntime(t)
+	plantPendingIntent(t, ctx, control, runtime, gen, portablesetup.Intent{
+		Version: 1, SetupIntentID: "pending-install-intent", Action: "install", Stage: "retire-direct",
+		ExpectedGeneration: gen,
+		Targets: []portablesetup.IntentTarget{{
+			Client: "codex", MCPConfig: "/pending/config.toml", Units: []string{"direct-mcp"},
+		}},
+	})
+	got, err := Run(ctx, Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true,
+		ControlRoot: control, RuntimeRoot: runtime,
+		MCPConfig: map[string]string{"codex": "/other/config.toml"},
+	})
+	if err == nil || got.Outcome != "conflict" || got.Reason != "pending_intent_conflict" {
+		t.Fatalf("different mcp-config: %+v %v", got, err)
+	}
+	matched, err := Run(ctx, Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true,
+		ControlRoot: control, RuntimeRoot: runtime,
+		MCPConfig: map[string]string{"codex": "/pending/config.toml"},
+	})
+	if matched.Reason == "pending_intent_conflict" {
+		t.Fatalf("matching mcp-config rejected: %+v %v", matched, err)
+	}
+}
+
 func TestWizardResumeRestoresMixedPerClientUnits(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, _, gen := managedRuntime(t)
