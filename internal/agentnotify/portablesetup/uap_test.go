@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -385,6 +386,71 @@ func TestRecoverOwnedJournalsReleasesCoordinatorLeaseBeforeUAP(t *testing.T) {
 		t.Fatalf("coordinator lease still held after UAP recover: %v", err)
 	}
 	release()
+}
+
+func TestRecoverOwnedJournalsRecoversKernelThenUAP(t *testing.T) {
+	codex, _ := bindingFixture(t)
+	probe := buildProbe(t)
+	root := filepath.Dir(codex.ControlRoot)
+	uapRoot := filepath.Join(root, "uap")
+	ops := filepath.Join(uapRoot, "state", "operations")
+	mat, err := NewMaterializer(UAPRoots{
+		StateFile:        filepath.Join(uapRoot, "state", "state-v2.json"),
+		LockFile:         filepath.Join(uapRoot, "state", "mutation.lock"),
+		OperationsDir:    ops,
+		PluginDataBase:   filepath.Join(uapRoot, "plugin data"),
+		ManagedRoot:      filepath.Join(uapRoot, "managed"),
+		HelperExecutable: probe,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hook := filepath.Join(codex.RuntimeRoot, "hook")
+	crash := installruntime.Request{
+		ControlRoot: codex.ControlRoot, RuntimeRoot: codex.RuntimeRoot,
+		Owner: codex.Owner, ConsumerID: "existing",
+		Files: []installruntime.File{{Path: hook, Data: []byte("new"), Mode: 0700}},
+		Fault: func(phase string) error {
+			if phase == "transaction" {
+				return fmt.Errorf("crash")
+			}
+			return nil
+		},
+	}
+	if _, err := installruntime.Commit(testCtx(t), crash); err == nil {
+		t.Fatal("kernel fault not reached")
+	}
+	if _, err := os.Lstat(filepath.Join(codex.ControlRoot, "transaction.json")); err != nil {
+		t.Fatal("missing kernel journal")
+	}
+	plantUAPPendingJournal(t, ops, filepath.Join(uapRoot, "managed"), "portable-both-journals")
+	config := filepath.Join(root, "home", "codex config")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	req := MaterializeRequest{
+		Identity: Identity{
+			InstallationID: "00000000-0000-4000-8000-000000000012",
+			ComponentID:    codex.ComponentID, Owner: codex.Owner, ScopeRoot: codex.ScopeRoot,
+			ControlRoot: codex.ControlRoot, GlobalConfig: codex.GlobalConfig, RuntimeRoot: codex.RuntimeRoot,
+			Primary: codex.Primary,
+		},
+		Integration: portable.Codex, ClientConfigRoot: config, ClientExecutable: probe,
+	}
+	if err := mat.recoverOwnedJournals(testCtx(t), req); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(codex.ControlRoot, "transaction.json")); !os.IsNotExist(err) {
+		t.Fatal("kernel journal survived recover")
+	}
+	open, err := dirswap.Manager{JournalDir: ops}.ListOpen()
+	if err != nil || len(open) != 0 {
+		t.Fatalf("UAP journal survived recover: %+v %v", open, err)
+	}
+	got, err := os.ReadFile(hook)
+	if err != nil || string(got) != "new" {
+		t.Fatalf("kernel recover did not finish: %s %v", got, err)
+	}
 }
 
 func TestGuardSecondClientDoesNotRecoverPendingJournal(t *testing.T) {
