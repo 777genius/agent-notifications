@@ -773,8 +773,11 @@ if [ -f "$INSTALLED_JSON" ]; then
     ' "$INSTALLED_JSON" 2>/dev/null) || true
   fi
 
+  # Quoted -c/-e scripts keep ")" inside $() from closing command substitution.
+  # Heredocs cannot be used here: the $(...) matcher does not treat heredoc
+  # bodies as quoted, so Python/JS parentheses would break the shim.
   if [ -z "$PLUGIN_ROOT" ] && command -v python3 >/dev/null 2>&1; then
-    PLUGIN_ROOT=$(python3 -I - "$INSTALLED_JSON" "$PLUGIN_KEY" <<'PYEOF' 2>/dev/null || true)
+    PLUGIN_ROOT=$(python3 -I -c '
 import json, sys
 def ver_tuple(value):
     try:
@@ -786,25 +789,24 @@ def ver_tuple(value):
 try:
     with open(sys.argv[1]) as f:
         d = json.load(f)
-    entries = [e for e in d.get('plugins', {}).get(sys.argv[2], []) if isinstance(e, dict) and e.get('installPath')]
+    entries = [e for e in d.get("plugins", {}).get(sys.argv[2], []) if isinstance(e, dict) and e.get("installPath")]
     if entries:
-        best = max(entries, key=lambda e: ver_tuple(e.get('version')))
-        print(best.get('installPath', '') or '')
+        best = max(entries, key=lambda e: ver_tuple(e.get("version")))
+        print(best.get("installPath", "") or "")
 except Exception:
     pass
-PYEOF
-)
+' "$INSTALLED_JSON" "$PLUGIN_KEY" 2>/dev/null) || true
   fi
 
   # Node is very likely present because Claude Code is a Node app.
   # Inline isolation: this generated file is a standalone POSIX script and
   # cannot call installer helpers that live only in bootstrap.sh.
   if [ -z "$PLUGIN_ROOT" ] && command -v node >/dev/null 2>&1; then
-    PLUGIN_ROOT=$(PLUGIN_KEY="$PLUGIN_KEY" NODE_OPTIONS= NODE_PATH= node --no-warnings - "$INSTALLED_JSON" <<'JSEOF' 2>/dev/null || true)
-const fs = require('fs');
+    PLUGIN_ROOT=$(PLUGIN_KEY="$PLUGIN_KEY" NODE_OPTIONS= NODE_PATH= node --no-warnings -e '
+const fs = require("fs");
 function parseVersion(value) {
-  return String(value || '0.0.0')
-    .split('.')
+  return String(value || "0.0.0")
+    .split(".")
     .slice(0, 3)
     .map((part) => {
       const n = parseInt(part, 10);
@@ -820,17 +822,16 @@ function compareVersions(a, b) {
   return 0;
 }
 try {
-  const p = process.argv[2];
+  const p = process.argv[1];
   const k = process.env.PLUGIN_KEY;
-  const d = JSON.parse(fs.readFileSync(p, 'utf8'));
-  const entries = ((d.plugins && d.plugins[k]) || []).filter((entry) => entry && typeof entry === 'object' && entry.installPath);
+  const d = JSON.parse(fs.readFileSync(p, "utf8"));
+  const entries = ((d.plugins && d.plugins[k]) || []).filter((entry) => entry && typeof entry === "object" && entry.installPath);
   if (entries.length > 0) {
     const e = entries.slice().sort(compareVersions).pop();
-    process.stdout.write((e && e.installPath) ? String(e.installPath) : '');
+    process.stdout.write((e && e.installPath) ? String(e.installPath) : "");
   }
 } catch (_) {}
-JSEOF
-)
+' "$INSTALLED_JSON" 2>/dev/null) || true
   fi
 
   if [ -z "$PLUGIN_ROOT" ]; then
