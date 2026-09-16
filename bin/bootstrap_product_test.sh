@@ -37,6 +37,56 @@ done
 for commit in short 0123456789abcdef0123456789abcdef0123456g 0123456789ABCDEF0123456789ABCDEF01234567; do
     if BOOTSTRAP_RELEASE_TAG=v1.42.0 BOOTSTRAP_RELEASE_COMMIT="$commit" resolve_bootstrap_release; then exit 1; fi
 done
+place_runtime_cmd() {
+    local dest="$1" src="${2:-}"
+    [ -n "$src" ] && [ -e "$src" ] || return 0
+    [ ! -e "$dest" ] || return 0
+    printf '#!/bin/sh\nexec %s "$@"\n' "$(printf "'%s'" "$(printf '%s' "$src" | sed "s/'/'\\\\''/g")")" > "$dest"
+    chmod +x "$dest"
+}
+if command -v node >/dev/null 2>&1; then
+    NODE_ONLY="$SANDBOX/node-only-bin"
+    mkdir -p "$NODE_ONLY"
+    for name in node bash sh mktemp rm cat chmod mkdir ln uname tr head cp mv env true false grep sed awk; do
+        src=$(type -P "$name" 2>/dev/null || true)
+        place_runtime_cmd "$NODE_ONLY/$name" "$src"
+    done
+    (
+        PATH="$NODE_ONLY"
+        command -v python3 >/dev/null 2>&1 && { echo "python3 leaked into node-only PATH"; exit 1; }
+        command -v node >/dev/null 2>&1 || { echo "node missing from node-only PATH"; exit 1; }
+        BOOTSTRAP_RELEASE_TAG=v1.42.0
+        unset BOOTSTRAP_RELEASE_COMMIT INSTALL_SCRIPT_URL
+        BOOTSTRAP_RAW_BASE_URL="https://raw.example.invalid/repository"
+        fetch_bootstrap_file() { printf '%s\n' '{"sha":"'"$TEST_RELEASE_COMMIT"'"}' > "$2"; }
+        resolve_bootstrap_release
+        [ "$BOOTSTRAP_COMMIT" = "$TEST_RELEASE_COMMIT" ]
+        [ "$INSTALL_SCRIPT_URL" = "$BOOTSTRAP_RAW_BASE_URL/$TEST_RELEASE_COMMIT/bin/install.sh" ]
+    )
+    echo "node-only resolve_bootstrap_release passed"
+    STUB_BIN="$SANDBOX/store-stub-bin"
+    mkdir -p "$STUB_BIN"
+    printf '%s\n' '#!/bin/sh' \
+        'echo "Python was not found; run without arguments to install from the Microsoft Store." >&2' \
+        'exit 9009' > "$STUB_BIN/python3"
+    chmod +x "$STUB_BIN/python3"
+    (
+        PATH="$STUB_BIN:$NODE_ONLY"
+        command -v python3 >/dev/null 2>&1 || { echo "stub python3 missing from PATH"; exit 1; }
+        python3 -I -c 'import json' >/dev/null 2>&1 && { echo "stub python3 unexpectedly usable"; exit 1; }
+        command -v node >/dev/null 2>&1 || { echo "node missing from stub+node PATH"; exit 1; }
+        rt=$(installer_runtime)
+        [ "$rt" = node ] || { echo "installer_runtime=$rt"; exit 1; }
+        BOOTSTRAP_RELEASE_TAG=v1.42.0
+        unset BOOTSTRAP_RELEASE_COMMIT INSTALL_SCRIPT_URL
+        BOOTSTRAP_RAW_BASE_URL="https://raw.example.invalid/repository"
+        fetch_bootstrap_file() { printf '%s\n' '{"sha":"'"$TEST_RELEASE_COMMIT"'"}' > "$2"; }
+        resolve_bootstrap_release
+        [ "$BOOTSTRAP_COMMIT" = "$TEST_RELEASE_COMMIT" ]
+        [ "$INSTALL_SCRIPT_URL" = "$BOOTSTRAP_RAW_BASE_URL/$TEST_RELEASE_COMMIT/bin/install.sh" ]
+    )
+    echo "stub python3 falls back to node in installer_runtime"
+fi
 unset BOOTSTRAP_RELEASE_TAG BOOTSTRAP_RELEASE_COMMIT BOOTSTRAP_RAW_BASE_URL INSTALL_SCRIPT_URL
 # The production archive endpoint accepts a commit SHA directly, outside refs/tags.
 (
@@ -155,7 +205,7 @@ cp "$INSTALL_STAGED_ASSETS"/claude-notifications-* "$INSTALL_TARGET_DIR/claude-n
 chmod +x "$INSTALL_TARGET_DIR/claude-notifications"
 cp "$INSTALL_TARGET_DIR/claude-notifications" "$INSTALL_TARGET_DIR/claude-notifications-windows-amd64.exe"
 '''
-binary = '''#!/usr/bin/env python3
+binary = '''#!''' + sys.executable + '''
 import json, os, pathlib, sys
 args=sys.argv[1:]
 if os.environ.get('FIXTURE_TRACE'):
@@ -303,7 +353,7 @@ assert not list(pathlib.Path(env['TMPDIR']).glob('bootstrap-release-*'))
 # fake config CLI models the coordinated contract, not Go resolver evidence.
 trace=sandbox/'trace'; request=sandbox/'request.json'
 env.update(FIXTURE_TRACE=str(trace),FIXTURE_REQUEST=str(request))
-claude_script='''#!/usr/bin/env python3
+claude_script='''#!''' + sys.executable + '''
 import json,os,pathlib,sys
 args=sys.argv[1:]
 with open(os.environ['FIXTURE_TRACE'],'a') as f: f.write(json.dumps(['claude']+args)+'\\n')
@@ -498,6 +548,31 @@ trace.write_text('')
 run(['--product','both'],1,{'PYTHONOPTIMIZE':'2'})
 assert not events()
 payload_file.write_bytes(valid_payload); checksums.write_bytes(valid_checksums)
+def place_runtime_cmd(dest, src):
+    if dest.exists() or not src or not os.path.isfile(src):
+        return
+    n = src.replace('\\', '/').lower()
+    base = os.path.basename(n)
+    if base in ('python', 'python.exe', 'python3', 'python3.exe', 'node', 'node.exe') and (
+            '/windowsapps/' in n or '/system32/' in n or '/syswow64/' in n):
+        return
+    dest.write_text('#!/bin/sh\nexec {} "$@"\n'.format(shlex.quote(src.replace('\\', '/'))))
+    dest.chmod(0o755)
+if shutil.which('node'):
+    node_only = sandbox / 'http-node-only-bin'
+    node_only.mkdir()
+    for name in ['bash', 'sh', 'mktemp', 'rm', 'cat', 'chmod', 'mkdir', 'ln', 'uname',
+                 'tr', 'head', 'cp', 'mv', 'env', 'true', 'false', 'grep', 'sed', 'awk',
+                 'tar', 'gzip', 'curl', 'node']:
+        place_runtime_cmd(node_only / name, shutil.which(name))
+    assert not (node_only / 'python3').exists()
+    reset_case()
+    env['PATH'] = str(cli) + os.pathsep + str(node_only)
+    run(['--product', 'codex'])
+    assert (pathlib.Path(env['XDG_CONFIG_HOME']) / 'agent-notifications/config.json').exists()
+    print('node-only bootstrap HTTP e2e passed')
+else:
+    print('SKIP node-only bootstrap HTTP e2e: node not available')
 print('protected flow fixtures passed (fake config CLI; real Go integration pending)')
 server.shutdown(); server.server_close()
 print('local HTTP / curl-pipe PTY adapter fixtures passed (fake installer and binary)')

@@ -69,6 +69,9 @@ jobs:
       - name: Test one-line setup loader (isolated, offline)
         run: bash bin/setup_test.sh
 
+      - name: Test python/node installer runtime fallback (isolated, offline)
+        run: bash bin/installer_runtime_fallback_e2e_test.sh
+
       - name: Run install.sh unit tests
         run: bash bin/install_test.sh
 

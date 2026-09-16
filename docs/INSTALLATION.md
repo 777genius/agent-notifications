@@ -5,9 +5,9 @@
 ### Prerequisites
 
 - Claude Code and/or Codex CLI for the products you select
-- Python **3.6 or newer**, available as the `python3` command on PATH, is required for installer metadata and checksum validation. Check with `python3 --version`.
-- **Windows users:** Git Bash (included with [Git for Windows](https://git-scm.com/download/win)) and native Windows Python available as `python3` from Git Bash. A `python` or `py` command alone is insufficient; use native Python, not WSL Python.
-- **macOS/Linux users:** Ensure `python3` is installed and available in the shell running the installer.
+- Python **3.6 or newer** (`python3`) **or** Node.js (`node`) for installer metadata and checksum validation. Python is used when both are present. Check with `python3 --version` or `node --version`.
+- **Windows users:** Git Bash (included with [Git for Windows](https://git-scm.com/download/win)) and either native Windows Python as `python3` or Node.js as `node` from Git Bash. A `python` or `py` command alone is insufficient; use native interpreters, not WSL. A Microsoft Store or WSL `python3` stub is skipped when a working `node` is available.
+- **macOS/Linux users:** Ensure `python3` or `node` is available in the shell running the installer. Claude Code already provides `node` on typical installs.
 
 ### Quick Install (Recommended)
 
@@ -16,7 +16,7 @@ Prefer a guided setup? [Open the installation guide](https://777genius.github.io
 The command pins the setup loader to a reviewed commit and reports download failures. The setup script handles release lookup and validation internally, then downloads both installer scripts from the exact release commit. Run it and choose Claude, Codex, or both:
 
 ```bash
-(set -o pipefail; curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/a8fbdc74ab418e6221fae2794d1dc9c3d8fc631d/bin/setup.sh | bash)
+(set -o pipefail; curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/a512deb5819c3f8c7c3be8335f713cc8bb734fc3/bin/setup.sh | bash)
 ```
 
 > Windows users: open Git Bash from the Start menu and run this command there. Do not run the `curl ... | bash` command from PowerShell or Windows Terminal if `bash` opens WSL, because that targets Linux paths and binaries instead of Windows.
@@ -24,7 +24,7 @@ The command pins the setup loader to a reviewed commit and reports download fail
 For automation or terminals without a controlling TTY, choose explicitly:
 
 ```bash
-(set -o pipefail; curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/a8fbdc74ab418e6221fae2794d1dc9c3d8fc631d/bin/setup.sh | bash -s -- --product codex)
+(set -o pipefail; curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/a512deb5819c3f8c7c3be8335f713cc8bb734fc3/bin/setup.sh | bash -s -- --product codex)
 ```
 
 Use `claude`, `codex`, or `both`. This installs the notifications plugin; the selected Claude Code / Codex CLI must already be on `PATH`.

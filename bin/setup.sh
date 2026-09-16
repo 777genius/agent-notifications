@@ -1,29 +1,72 @@
 #!/usr/bin/env bash
 # Usage: curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/main/bin/setup.sh | bash
 # Keep this entry point small: installation runs from one exact release commit.
+# Prefer isolated python3; Node is the supported fallback (Claude Code ships it).
+# Presence on PATH is not enough: Windows Store/WSL python3 stubs must not win.
+usable_python3() {
+    command -v python3 >/dev/null 2>&1 || return 1
+    python3 -I -c 'import json' </dev/null >/dev/null 2>&1
+}
+
+usable_node() {
+    command -v node >/dev/null 2>&1 || return 1
+    NODE_OPTIONS= NODE_PATH= node --no-warnings -e 'JSON.parse("{}")' </dev/null >/dev/null 2>&1
+}
+
+decode_github_json() {
+    if usable_python3; then
+        python3 -I -c "$1"
+    elif usable_node; then
+        NODE_OPTIONS= NODE_PATH= node --no-warnings -e "$2"
+    else
+        echo "python3 or node is required to install Agent Notifications." >&2
+        exit 1
+    fi
+}
+
 main() (
     set -euo pipefail
-    for dependency in curl python3; do
-        command -v "$dependency" >/dev/null 2>&1 || {
-            echo "$dependency is required to install Agent Notifications." >&2
-            exit 1
-        }
-    done
+    command -v curl >/dev/null 2>&1 || {
+        echo "curl is required to install Agent Notifications." >&2
+        exit 1
+    }
+    usable_python3 || usable_node || {
+        echo "python3 or node is required to install Agent Notifications." >&2
+        exit 1
+    }
 
     repo=777genius/agent-notifications
-    tag=$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" | python3 -I -c '
+    tag=$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" | decode_github_json '
 import json, re, sys
 value = json.load(sys.stdin).get("tag_name")
 if not isinstance(value, str) or not re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", value):
     sys.exit("Invalid stable release tag")
 sys.stdout.buffer.write((value + "\n").encode("ascii"))
+' '
+const fs = require("fs");
+let value;
+try { value = JSON.parse(fs.readFileSync(0, "utf8")).tag_name; } catch (e) { process.exit(1); }
+if (typeof value !== "string" || !/^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(value)) {
+  process.stderr.write("Invalid stable release tag\n");
+  process.exit(1);
+}
+process.stdout.write(value + "\n");
 ')
-    commit=$(curl -fsSL "https://api.github.com/repos/$repo/commits/$tag" | python3 -I -c '
+    commit=$(curl -fsSL "https://api.github.com/repos/$repo/commits/$tag" | decode_github_json '
 import json, re, sys
 value = json.load(sys.stdin).get("sha")
 if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40}", value):
     sys.exit("Invalid release commit")
 sys.stdout.buffer.write((value + "\n").encode("ascii"))
+' '
+const fs = require("fs");
+let value;
+try { value = JSON.parse(fs.readFileSync(0, "utf8")).sha; } catch (e) { process.exit(1); }
+if (typeof value !== "string" || !/^[0-9a-f]{40}$/.test(value)) {
+  process.stderr.write("Invalid release commit\n");
+  process.exit(1);
+}
+process.stdout.write(value + "\n");
 ')
     raw="https://raw.githubusercontent.com/$repo/$commit/bin"
     stage=$(mktemp -d "${TMPDIR:-/tmp}/agent-notifications-setup.XXXXXX")
