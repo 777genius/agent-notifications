@@ -1,6 +1,6 @@
 ## CLA
 
-- [ ] I have read the [Contributor License Agreement](https://github.com/777genius/agent-notifications/blob/main/.github/CLA.md) and this PR adds my row to the **CLA signatures** table (or I am already listed there).
+- [ ] I agree to the [Contributor License Agreement](https://github.com/777genius/agent-notifications/blob/main/.github/CLA.md). Opening this pull request is acceptance. I am not adding a signatures-table row.
 
 ## Summary
 
