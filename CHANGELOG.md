@@ -7,14 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.43.1] - 2026-09-16
+
 ### Changed
-- Installer metadata and checksum validation accept **Node.js** (`node`) when `python3` is not on PATH. Python remains preferred when both are present. iTerm2 click-to-focus still needs a real Python interpreter for its optional venv.
-- Pin the documented one-line installer to the setup loader that probes `python3`/`node` and falls back from Windows Store/WSL stubs.
+- Installer metadata and checksum validation accept **Node.js** (`node`) when `python3` is not on PATH. Python remains preferred when both are present. iTerm2 click-to-focus still needs a real Python interpreter for its optional venv ([#192](https://github.com/777genius/agent-notifications/pull/192)).
+- Pin the documented one-line installer to the setup loader that probes `python3`/`node` and falls back from Windows Store/WSL stubs ([#192](https://github.com/777genius/agent-notifications/pull/192)).
 
 ### Fixed
-- Node-only installer paths now isolate registry JSON parses from `NODE_OPTIONS`/`NODE_PATH`, resolve staging TMPDIR by walking symlink components then `..` the same way Python `os.path.realpath` does (including keeping Windows root-relative symlink targets on the symlink's drive), and treat malformed config diagnostics as a protocol failure so a capable helper can still be staged.
-- Generated cache `hook-wrapper` shims now inline isolated `node`/`python3` via quoted `-e`/`-c` scripts instead of calling `run_isolated_node` (which exists only in `bootstrap.sh`) or using heredocs inside `$(...)`, which bash treats as unquoted.
-- Installer runtime selection now probes `python3` and `node` with an isolated JSON parse before using them, so Windows Store/WSL `python3` stubs fall back to Node instead of failing the install.
+- Node-only installer paths now isolate registry JSON parses from `NODE_OPTIONS`/`NODE_PATH`, resolve staging TMPDIR by walking symlink components then `..` the same way Python `os.path.realpath` does (including keeping Windows root-relative symlink targets on the symlink's drive), and treat malformed config diagnostics as a protocol failure so a capable helper can still be staged ([#192](https://github.com/777genius/agent-notifications/pull/192)).
+- Generated cache `hook-wrapper` shims now inline isolated `node`/`python3` via quoted `-e`/`-c` scripts instead of calling `run_isolated_node` (which exists only in `bootstrap.sh`) or using heredocs inside `$(...)`, which bash treats as unquoted ([#192](https://github.com/777genius/agent-notifications/pull/192)).
+- Installer runtime selection now probes `python3` and `node` with an isolated JSON parse before using them, so Windows Store/WSL `python3` stubs fall back to Node instead of failing the install ([#192](https://github.com/777genius/agent-notifications/pull/192)).
 
 ## [1.43.0] - 2026-09-11
 
