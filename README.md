@@ -66,4 +66,4 @@ The primary CLI is `agent-notifications`. Use `agent-notifications config path` 
 
 GPL-3.0-or-later. See [LICENSE](LICENSE).
 
-Human pull requests must be signed under the [Contributor License Agreement](.github/CLA.md) before merge. You keep copyright. Until you sign, GitHub's Terms of Service license the pull request under GPL-3.0-or-later only. The CLA lets the project owner sublicense signed work under additional terms (for example a commercial license) while keeping the GPL-3.0-or-later grant from the submission date.
+By opening a pull request you agree to the [Contributor License Agreement](.github/CLA.md). You keep copyright. You do not add your name to a table. That does not replace GPL-3.0-or-later on the public repository. It lets the project owner sublicense that work under additional terms (for example a commercial license) while keeping the GPL-3.0-or-later grant from the submission date.

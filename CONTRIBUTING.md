@@ -6,13 +6,11 @@ Thank you for your interest in contributing to Agent Notifications!
 
 You keep copyright in what you write.
 
-GitHub's Terms of Service already license a pull request under the repository license, which is GPL-3.0-or-later. That is not enough if the project later needs Apache-2.0 or a commercial license that includes your work.
+By opening a pull request (or pushing commits to one) you agree to [.github/CLA.md](.github/CLA.md). You do not add your name to a table. Do not open a PR if you do not agree.
 
-This CLA keeps your copyright and grants the project owner a transferable license to sublicense that work, including commercially, while still keeping the GPL-3.0-or-later grant that applied when you submitted it. Read [.github/CLA.md](.github/CLA.md).
+GitHub's Terms of Service already license that PR under GPL-3.0-or-later. The CLA is the extra grant so the project owner can also sublicense your work (for example commercially or under Apache-2.0) while keeping the GPL-3.0-or-later grant from the submission date.
 
-Sign before we merge: add your legal name, GitHub login, email, and date to the **CLA signatures** table in the same PR or in a first-time CLA-only PR. Use the GitHub account that will author the commits. Every human listed in `Co-authored-by` trailers must also be on the table. If a company owns the work, the row must name that entity.
-
-Maintainers: do not merge a human contribution until every human author is on the CLA signatures table. Bots such as Dependabot do not sign.
+If the work belongs to your employer, say so in the PR. Do not include someone else's commits unless they agree to the CLA. Bots such as Dependabot do not need to agree.
 
 ## Prerequisites
 

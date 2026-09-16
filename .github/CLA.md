@@ -8,9 +8,9 @@ This is an inbound license, not a copyright assignment. You keep the copyright i
 
 This agreement is adapted from the [Harmony Individual Contributor License Agreement v1.0](https://www.harmonyagreements.org/) (Option Five outbound terms). Harmony Agreements are licensed under [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/).
 
-This is a legally binding document. Do not sign it if you do not agree.
+This is a legally binding document. Do not Submit a Contribution if you do not agree.
 
-Until you accept this CLA, GitHub's Terms of Service still apply: a pull request to a repository that contains a notice of GPL-3.0 is licensed to the project **only under GPL-3.0-or-later** (inbound = outbound). This CLA is the extra grant that lets Us also sublicense your work under other terms, including a commercial license. We will not merge a human Contribution until you have accepted this CLA.
+GitHub's Terms of Service license a pull request under GPL-3.0-or-later (inbound = outbound). That is not enough for Us to also sublicense your work under other terms. This CLA is that extra grant. **Opening a pull request or pushing commits to one, after this version is on the default branch, is how you accept this CLA.** You do not add your name to a table.
 
 ## 1. Definitions
 
@@ -28,7 +28,7 @@ Until you accept this CLA, GitHub's Terms of Service still apply: a pull request
 
 **"Submission Date"** means the date on which You Submit a Contribution to Us.
 
-**"Effective Date"** means the date recorded in Your CLA signature row, not the date of Your first pull request.
+**"Effective Date"** means the date You first Submit a Contribution after this version of the Agreement is published on the default branch.
 
 ## 2. Grant of Rights
 
@@ -66,11 +66,11 @@ Any rights not expressly licensed under this section are reserved by You.
 
 You confirm that:
 
-(a) You have the legal authority to enter into this Agreement. If You are signing for a legal entity, You are authorized to bind that entity, the signature table must name the entity, and this same document is the entity CLA. There is no separate entity form.
+(a) You have the legal authority to enter into this Agreement. If You are contributing for a legal entity, You are authorized to bind that entity, and this same document is the entity CLA. Say so in the pull request. There is no separate entity form.
 
 (b) You own the Copyright and patent claims covering the Contribution which are required to grant the rights under Section 2, or You have permission from the owner.
 
-(c) The grant of rights under Section 2 does not violate any grant of rights You have made to third parties, including Your employer. If You are an employee and Your employer owns the work, You have received permission to Submit it, Your employer has waived those rights, or an authorized person has accepted this Agreement for that employer by listing the entity in the CLA signatures table.
+(c) The grant of rights under Section 2 does not violate any grant of rights You have made to third parties, including Your employer. If You are an employee and Your employer owns the work, You have received permission to Submit it, Your employer has waived those rights, or an authorized person is Submitting on behalf of that employer.
 
 (d) You have disclosed, in the pull request or a notice with the Contribution, any third-party license or other restriction of which You are personally aware and which is associated with any part of Your Contribution.
 
@@ -90,16 +90,13 @@ If You accept this CLA, it applies to all Contributions You Submit after the Eff
 
 ## 6. How to accept
 
-You accept this CLA only by adding a row to the **CLA signatures** table in a pull request from the GitHub account listed in that row, and having that change merged. A checklist box in a pull request template is not enough by itself.
+You accept this CLA by Submitting a Contribution after this version is published on the default branch. That includes opening a pull request or pushing commits onto a pull request. Do not Submit if you do not agree.
 
-Each row must include:
+You do not need to add your name to a signatures table. A checklist box in the pull request template is only a reminder.
 
-- legal name (or entity name)
-- GitHub login
-- email
-- date (`YYYY-MM-DD`)
+Each person who authors a commit in the pull request accepts this Agreement for their Contribution. Do not include another person's work unless they agree to this CLA.
 
-The Project Owner does not sign this CLA as a contributor. Automated dependency bots (for example Dependabot) do not sign.
+The Project Owner does not accept this CLA as a contributor. Automated dependency bots (for example Dependabot) do not accept it and do not need to.
 
 This Agreement does not grant any trademark rights in "Agent Notifications" or related names or logos.
 
@@ -116,16 +113,7 @@ If any provision of this Agreement is found unenforceable, it will be replaced t
 ## What this does *not* change
 
 - The public GitHub project stays available under GPL-3.0-or-later for Contributions Submitted while that is the outbound license. Section 2.3 lets Us *add* other outbound terms (Apache-2.0, commercial). It does not let Us drop the GPL-3.0-or-later grant that applied on the Submission Date.
-- Other people's Contributions are not covered by Your signature.
+- Other people's Contributions are not covered by Your acceptance.
 - This CLA does not transfer copyright to Us.
 - This CLA does not grant trademark rights.
 - Existing releases, tags, and forks already received under GPL-3.0-or-later keep those rights.
-
----
-
-## CLA signatures
-
-| Name | GitHub login | Email | Date |
-| --- | --- | --- | --- |
-
-To sign: open a pull request that adds your row. Maintainers will not merge other human Contributions until you are listed here.
