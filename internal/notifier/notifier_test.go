@@ -681,18 +681,8 @@ func TestBuildTerminalNotifierArgs_Basic(t *testing.T) {
 	}
 
 	// Note: -sender was removed because it conflicts with -activate on macOS Sequoia
-
-	// Check that -group is present (for deduplication)
-	hasGroup := false
-	for _, arg := range args {
-		if arg == "-group" {
-			hasGroup = true
-			break
-		}
-	}
-	if !hasGroup {
-		t.Error("Missing -group argument")
-	}
+	// -group is applied later via appendSharedNotifierOptions so multiplexer
+	// and plain paths share one replacement identifier.
 }
 
 func TestBuildTerminalNotifierArgs_NoSender(t *testing.T) {
@@ -737,20 +727,80 @@ func TestBuildTerminalNotifierArgs_EmptyValues(t *testing.T) {
 	}
 }
 
-func TestBuildTerminalNotifierArgs_UniqueGroupID(t *testing.T) {
-	// Two calls should produce different group IDs
-	args1 := buildTerminalNotifierArgs("Title", "Msg", "com.test", "", true)
-	time.Sleep(time.Nanosecond) // Ensure different timestamp
-	args2 := buildTerminalNotifierArgs("Title", "Msg", "com.test", "", true)
+func TestNotificationGroupID_SessionStableAndIsolated(t *testing.T) {
+	sessionA := "73b5e210-ec1a-4294-96e4-c2aecb2e1063"
+	sessionB := "06ddb8f7-03ff-4fdb-9fd8-5710213661b1"
 
-	group1 := getArgValue(args1, "-group")
-	group2 := getArgValue(args2, "-group")
-
-	if group1 == "" || group2 == "" {
-		t.Error("Group ID should not be empty")
+	if got, want := notificationGroupID(sessionA), notificationGroupPrefix+sessionA; got != want {
+		t.Errorf("group for session A = %q, want %q", got, want)
 	}
-	if group1 == group2 {
-		t.Error("Group IDs should be unique between calls")
+	if notificationGroupID(sessionA) != notificationGroupID("  "+sessionA+"  ") {
+		t.Error("trimmed session IDs should produce the same group")
+	}
+	if notificationGroupID(sessionA) == notificationGroupID(sessionB) {
+		t.Error("different sessions must not share a group")
+	}
+}
+
+func TestNotificationGroupID_EmptyAndUnknownStayUnique(t *testing.T) {
+	empty1 := notificationGroupID("")
+	empty2 := notificationGroupID("   ")
+	unknown1 := notificationGroupID("unknown")
+	unknown2 := notificationGroupID("Unknown")
+
+	ids := []string{empty1, empty2, unknown1, unknown2}
+	seen := map[string]struct{}{}
+	for _, id := range ids {
+		if id == "" {
+			t.Fatal("fallback group ID should not be empty")
+		}
+		if !strings.HasPrefix(id, notificationGroupPrefix) {
+			t.Errorf("fallback group ID should start with %q, got %q", notificationGroupPrefix, id)
+		}
+		if _, dup := seen[id]; dup {
+			t.Errorf("fallback group IDs must be unique, duplicated %q", id)
+		}
+		seen[id] = struct{}{}
+	}
+}
+
+func TestAppendSharedNotifierOptions_ReplacesGroupAndAddsThread(t *testing.T) {
+	sessionID := "session-abc-123"
+	args := appendSharedNotifierOptions(
+		[]string{"-title", "Title", "-message", "Msg", "-group", "claude-notif-stale"},
+		"main · project",
+		sessionID,
+		true,
+	)
+
+	if got, want := getArgValue(args, "-group"), notificationGroupPrefix+sessionID; got != want {
+		t.Errorf("-group = %q, want %q", got, want)
+	}
+	if countFlag(args, "-group") != 1 {
+		t.Errorf("expected exactly one -group, got %v", args)
+	}
+	if got := getArgValue(args, "-threadID"); got != sessionID {
+		t.Errorf("-threadID = %q, want %q", got, sessionID)
+	}
+	if got := getArgValue(args, "-subtitle"); got != "main · project" {
+		t.Errorf("-subtitle = %q", got)
+	}
+	if !containsFlag(args, "-timeSensitive") {
+		t.Error("missing -timeSensitive")
+	}
+	if !containsFlag(args, "-nosound") {
+		t.Error("missing -nosound")
+	}
+}
+
+func TestAppendSharedNotifierOptions_SkipsThreadForUnknownSession(t *testing.T) {
+	args := appendSharedNotifierOptions([]string{"-title", "T", "-message", "M"}, "", "unknown", false)
+	if getArgValue(args, "-threadID") != "" {
+		t.Errorf("unknown session should not set -threadID, got %v", args)
+	}
+	group := getArgValue(args, "-group")
+	if group == "" || group == notificationGroupPrefix+"unknown" {
+		t.Errorf("unknown session should use a unique group, got %q", group)
 	}
 }
 
@@ -995,6 +1045,25 @@ func getArgValue(args []string, flag string) string {
 	return ""
 }
 
+func containsFlag(args []string, flag string) bool {
+	for _, arg := range args {
+		if arg == flag {
+			return true
+		}
+	}
+	return false
+}
+
+func countFlag(args []string, flag string) int {
+	n := 0
+	for _, arg := range args {
+		if arg == flag {
+			n++
+		}
+	}
+	return n
+}
+
 // === Tests for terminal-notifier argument validation ===
 
 func TestBuildTerminalNotifierArgs_ArgumentOrder(t *testing.T) {
@@ -1027,17 +1096,10 @@ func TestBuildTerminalNotifierArgs_NoNilValues(t *testing.T) {
 	}
 }
 
-func TestBuildTerminalNotifierArgs_GroupIDFormat(t *testing.T) {
+func TestBuildTerminalNotifierArgs_OmitsGroup(t *testing.T) {
 	args := buildTerminalNotifierArgs("Title", "Message", "com.test", "", true)
-
-	groupID := getArgValue(args, "-group")
-	if groupID == "" {
-		t.Fatal("Group ID is empty")
-	}
-
-	// Group ID should start with "claude-notif-"
-	if !strings.HasPrefix(groupID, "claude-notif-") {
-		t.Errorf("Group ID should start with 'claude-notif-', got: %s", groupID)
+	if getArgValue(args, "-group") != "" {
+		t.Errorf("plain builder should leave -group to appendSharedNotifierOptions, got %v", args)
 	}
 }
 

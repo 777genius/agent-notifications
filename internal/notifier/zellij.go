@@ -158,17 +158,12 @@ func buildZellijActionNotifierArgs(title, message, sessionName, bundleID, action
 		zellijPath, sessionName, action, target,
 	)
 
-	args := []string{
+	return []string{
 		"-title", title,
 		"-message", message,
 		"-activate", bundleID,
 		"-execute", executeCmd,
 	}
-
-	// Add group ID to prevent notification stacking issues
-	args = append(args, "-group", fmt.Sprintf("claude-notif-%d", time.Now().UnixNano()))
-
-	return args
 }
 
 // resolveZellijFocusMode decides how a zellij session should be brought forward.

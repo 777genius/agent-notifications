@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gen2brain/beeep"
@@ -27,6 +28,9 @@ const macOSPermissionDeniedMessage = "Notification permission denied. Enable in 
 var execCommand = exec.Command
 var beeepNotify = beeep.Notify
 var notifierGOOS = runtime.GOOS
+var uniqueNotificationGroupSeq atomic.Uint64
+
+const notificationGroupPrefix = "claude-notif-"
 
 // NotificationPermissionDeniedError indicates macOS rejected the native
 // ClaudeNotifier path because notification permission is denied for the app.
@@ -208,18 +212,7 @@ func (n *Notifier) sendWithTerminalNotifier(title, message, subtitle, sessionID 
 		args = buildTerminalNotifierArgsWithOptions(title, message, bundleID, cwd, ghosttyTerminalID, clickToFocus)
 	}
 
-	// Append shared options: subtitle, threadID, timeSensitive, nosound
-	if subtitle != "" {
-		args = append(args, "-subtitle", subtitle)
-	}
-	if sessionID != "" {
-		args = append(args, "-threadID", sessionID)
-	}
-	if timeSensitive {
-		args = append(args, "-timeSensitive")
-	}
-	// Always suppress sound in Swift — Go manages sound via audio player
-	args = append(args, "-nosound")
+	args = appendSharedNotifierOptions(args, subtitle, sessionID, timeSensitive)
 
 	if appPath, ok := claudeNotifierAppPath(notifierPath); ok {
 		if err := runClaudeNotifierApp(appPath, args); err != nil {
@@ -340,9 +333,50 @@ func buildTerminalNotifierArgsWithOptions(title, message, bundleID, cwd, ghostty
 		}
 	}
 
-	// Add group ID to prevent notification stacking issues
-	args = append(args, "-group", fmt.Sprintf("claude-notif-%d", time.Now().UnixNano()))
+	return args
+}
 
+// notificationGroupID is the terminal-notifier -group / UNNotificationRequest.identifier.
+// The same identifier replaces the previous banner in place. A session ID keeps one
+// live notification per conversation; different sessions never collide. Empty or
+// "unknown" IDs stay unique so unrelated notifications are not collapsed.
+func notificationGroupID(sessionID string) string {
+	id := strings.TrimSpace(sessionID)
+	if id == "" || strings.EqualFold(id, "unknown") {
+		seq := uniqueNotificationGroupSeq.Add(1)
+		return fmt.Sprintf("%s%d-%d", notificationGroupPrefix, time.Now().UnixNano(), seq)
+	}
+	return notificationGroupPrefix + id
+}
+
+// setNotifierFlag replaces flag's value if present, otherwise appends the pair.
+func setNotifierFlag(args []string, flag, value string) []string {
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == flag {
+			out := make([]string, len(args))
+			copy(out, args)
+			out[i+1] = value
+			return out
+		}
+	}
+	return append(args, flag, value)
+}
+
+// appendSharedNotifierOptions adds subtitle, thread, replacement group, and
+// Swift-only flags that every macOS delivery path (plain and multiplexer) shares.
+func appendSharedNotifierOptions(args []string, subtitle, sessionID string, timeSensitive bool) []string {
+	if subtitle != "" {
+		args = append(args, "-subtitle", subtitle)
+	}
+	if id := strings.TrimSpace(sessionID); id != "" && !strings.EqualFold(id, "unknown") {
+		args = append(args, "-threadID", id)
+	}
+	args = setNotifierFlag(args, "-group", notificationGroupID(sessionID))
+	if timeSensitive {
+		args = append(args, "-timeSensitive")
+	}
+	// Always suppress sound in Swift — Go manages sound via audio player
+	args = append(args, "-nosound")
 	return args
 }
 

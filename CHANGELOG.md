@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **macOS notification replacement is per session** — `terminal-notifier` `-group` is keyed on the Claude/Codex session ID instead of a unique timestamp, so a conversation's latest banner replaces the previous one while other sessions stay separate ([#195](https://github.com/777genius/agent-notifications/issues/195)). `-threadID` still groups the same session in Notification Center. Missing or `unknown` session IDs keep a unique group so unrelated toasts are not collapsed.
+
 ## [1.43.1] - 2026-09-16
 
 ### Changed
