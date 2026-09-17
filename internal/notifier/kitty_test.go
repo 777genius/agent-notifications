@@ -163,11 +163,6 @@ func TestBuildKittyNotifierArgs(t *testing.T) {
 	if executeCmd == "" {
 		t.Fatal("Missing -execute argument")
 	}
-
-	group := getArgValue(args, "-group")
-	if group == "" {
-		t.Error("Missing -group argument")
-	}
 }
 
 func TestBuildKittyNotifierArgs_ExecuteContainsWindowAndSocket(t *testing.T) {

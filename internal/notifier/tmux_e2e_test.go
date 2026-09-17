@@ -73,7 +73,7 @@ func TestTmuxE2E(t *testing.T) {
 	t.Run("args_construction", func(t *testing.T) {
 		args := buildTmuxNotifierArgs("Title", "Message", editorPaneID, "com.test.app")
 
-		// Must have -title, -message, -activate, -execute, -group
+		// Must have -title, -message, -activate, -execute
 		if !containsArg(args, "-title", "Title") {
 			t.Error("Missing -title")
 		}
@@ -100,12 +100,6 @@ func TestTmuxE2E(t *testing.T) {
 		// -execute must contain pane target
 		if !strings.Contains(executeCmd, editorPaneID) {
 			t.Errorf("-execute should contain pane target %q, got: %s", editorPaneID, executeCmd)
-		}
-
-		// -group must be present
-		group := getArgValue(args, "-group")
-		if group == "" {
-			t.Error("Missing -group argument")
 		}
 	})
 
