@@ -727,68 +727,73 @@ func TestBuildTerminalNotifierArgs_EmptyValues(t *testing.T) {
 	}
 }
 
-func TestNotificationGroupID_SessionStableAndIsolated(t *testing.T) {
-	sessionA := "73b5e210-ec1a-4294-96e4-c2aecb2e1063"
-	sessionB := "06ddb8f7-03ff-4fdb-9fd8-5710213661b1"
-
-	if got, want := notificationGroupID(sessionA), notificationGroupPrefix+sessionA; got != want {
-		t.Errorf("group for session A = %q, want %q", got, want)
+func TestUniqueNotificationGroupID_NeverReusesAnID(t *testing.T) {
+	session := "73b5e210-ec1a-4294-96e4-c2aecb2e1063"
+	ids := []string{
+		uniqueNotificationGroupID(),
+		uniqueNotificationGroupID(),
+		uniqueNotificationGroupID(),
 	}
-	if notificationGroupID(sessionA) != notificationGroupID("  "+sessionA+"  ") {
-		t.Error("trimmed session IDs should produce the same group")
-	}
-	if notificationGroupID(sessionA) == notificationGroupID(sessionB) {
-		t.Error("different sessions must not share a group")
-	}
-}
-
-func TestNotificationGroupID_EmptyAndUnknownStayUnique(t *testing.T) {
-	empty1 := notificationGroupID("")
-	empty2 := notificationGroupID("   ")
-	unknown1 := notificationGroupID("unknown")
-	unknown2 := notificationGroupID("Unknown")
-
-	ids := []string{empty1, empty2, unknown1, unknown2}
 	seen := map[string]struct{}{}
 	for _, id := range ids {
 		if id == "" {
-			t.Fatal("fallback group ID should not be empty")
+			t.Fatal("group ID should not be empty")
 		}
 		if !strings.HasPrefix(id, notificationGroupPrefix) {
-			t.Errorf("fallback group ID should start with %q, got %q", notificationGroupPrefix, id)
+			t.Errorf("group ID should start with %q, got %q", notificationGroupPrefix, id)
+		}
+		if id == notificationGroupPrefix+session {
+			t.Errorf("group ID must not be the session ID; that would replace banners across a chat: %q", id)
 		}
 		if _, dup := seen[id]; dup {
-			t.Errorf("fallback group IDs must be unique, duplicated %q", id)
+			t.Errorf("group IDs must be unique, duplicated %q", id)
 		}
 		seen[id] = struct{}{}
 	}
 }
 
-func TestAppendSharedNotifierOptions_ReplacesGroupAndAddsThread(t *testing.T) {
+func TestAppendSharedNotifierOptions_UniqueGroupAndSessionThread(t *testing.T) {
 	sessionID := "session-abc-123"
-	args := appendSharedNotifierOptions(
+	args1 := appendSharedNotifierOptions(
 		[]string{"-title", "Title", "-message", "Msg", "-group", "claude-notif-stale"},
 		"main · project",
 		sessionID,
 		true,
 	)
+	args2 := appendSharedNotifierOptions(
+		[]string{"-title", "Title", "-message", "Later"},
+		"main · project",
+		sessionID,
+		false,
+	)
 
-	if got, want := getArgValue(args, "-group"), notificationGroupPrefix+sessionID; got != want {
-		t.Errorf("-group = %q, want %q", got, want)
+	group1 := getArgValue(args1, "-group")
+	group2 := getArgValue(args2, "-group")
+	if group1 == "" || group2 == "" {
+		t.Fatalf("missing -group: %q / %q", group1, group2)
 	}
-	if countFlag(args, "-group") != 1 {
-		t.Errorf("expected exactly one -group, got %v", args)
+	if group1 == group2 {
+		t.Error("same session must still get unique -group so banners do not replace each other")
 	}
-	if got := getArgValue(args, "-threadID"); got != sessionID {
-		t.Errorf("-threadID = %q, want %q", got, sessionID)
+	if group1 == notificationGroupPrefix+sessionID || group2 == notificationGroupPrefix+sessionID {
+		t.Error("-group must not be keyed on session ID")
 	}
-	if got := getArgValue(args, "-subtitle"); got != "main · project" {
+	if countFlag(args1, "-group") != 1 {
+		t.Errorf("expected exactly one -group, got %v", args1)
+	}
+	if got := getArgValue(args1, "-threadID"); got != sessionID {
+		t.Errorf("-threadID = %q, want session %q", got, sessionID)
+	}
+	if got := getArgValue(args2, "-threadID"); got != sessionID {
+		t.Errorf("second notification -threadID = %q, want same session %q", got, sessionID)
+	}
+	if got := getArgValue(args1, "-subtitle"); got != "main · project" {
 		t.Errorf("-subtitle = %q", got)
 	}
-	if !containsFlag(args, "-timeSensitive") {
+	if !containsFlag(args1, "-timeSensitive") {
 		t.Error("missing -timeSensitive")
 	}
-	if !containsFlag(args, "-nosound") {
+	if !containsFlag(args1, "-nosound") {
 		t.Error("missing -nosound")
 	}
 }
