@@ -10,7 +10,7 @@ This agreement is adapted from the [Harmony Individual Contributor License Agree
 
 This is a legally binding document. Do not Submit a Contribution if you do not agree.
 
-GitHub's Terms of Service license a pull request under GPL-3.0-or-later (inbound = outbound). That is not enough for Us to also sublicense your work under other terms. This CLA is that extra grant. **Opening a pull request or pushing commits to one, after this version is on the default branch, is how you accept this CLA.** You do not add your name to a table.
+GitHub's Terms of Service license a pull request under GPL-3.0-or-later (inbound = outbound). That is not enough for Us to also sublicense your work under other terms. This CLA is that extra grant. **Opening a pull request or pushing commits to one, after this version is on the default branch, is how you accept this CLA.**
 
 ## 1. Definitions
 
@@ -92,7 +92,7 @@ If You accept this CLA, it applies to all Contributions You Submit after the Eff
 
 You accept this CLA by Submitting a Contribution after this version is published on the default branch. That includes opening a pull request or pushing commits onto a pull request. Do not Submit if you do not agree.
 
-You do not need to add your name to a signatures table. A checklist box in the pull request template is only a reminder.
+A checklist box at the end of the pull request template is only a reminder.
 
 Each person who authors a commit in the pull request accepts this Agreement for their Contribution. Do not include another person's work unless they agree to this CLA.
 

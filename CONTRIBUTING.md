@@ -6,7 +6,7 @@ Thank you for your interest in contributing to Agent Notifications!
 
 You keep copyright in what you write.
 
-By opening a pull request (or pushing commits to one) you agree to [.github/CLA.md](.github/CLA.md). You do not add your name to a table. Do not open a PR if you do not agree.
+By opening a pull request (or pushing commits to one) you agree to [.github/CLA.md](.github/CLA.md). Do not open a PR if you do not agree.
 
 GitHub's Terms of Service already license that PR under GPL-3.0-or-later. The CLA is the extra grant so the project owner can also sublicense your work (for example commercially or under Apache-2.0) while keeping the GPL-3.0-or-later grant from the submission date.
 
