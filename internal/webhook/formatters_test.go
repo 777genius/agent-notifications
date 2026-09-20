@@ -70,6 +70,9 @@ func TestSlackFormatterFormat(t *testing.T) {
 	if !ok || !strings.Contains(footer, "session-123") {
 		t.Errorf("Footer should contain session ID, got %v", footer)
 	}
+	if got := attachment["footer_icon"]; got != agentNotificationsLogoURL {
+		t.Errorf("footer_icon = %v, want %q", got, agentNotificationsLogoURL)
+	}
 
 	// Verify it's valid JSON
 	data, err := json.Marshal(result)
@@ -138,6 +141,9 @@ func TestDiscordFormatterFormat(t *testing.T) {
 	username, ok := resultMap["username"].(string)
 	if !ok || username != "Claude Code" {
 		t.Errorf("Expected username 'Claude Code', got %v", username)
+	}
+	if got := resultMap["avatar_url"]; got != agentNotificationsLogoURL {
+		t.Errorf("avatar_url = %v, want %q", got, agentNotificationsLogoURL)
 	}
 
 	// Check embeds

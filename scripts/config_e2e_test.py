@@ -16,12 +16,14 @@ import platform
 import shlex
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import threading
 
 ROOT = Path(__file__).resolve().parents[1]
 TAG = 'v9.9.9'
+COMMIT = '9' * 40
 CANARY = 'synthetic-' + hashlib.sha256(b'config-e2e-private').hexdigest()
 
 
@@ -29,6 +31,31 @@ def put(path, data, mode=0o600):
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     path.write_bytes(data.encode() if isinstance(data, str) else data)
     path.chmod(mode)
+
+
+def is_windows_store_or_wsl_alias(src):
+    n = src.replace('\\', '/').lower()
+    base = os.path.basename(n)
+    if base not in ('python', 'python.exe', 'python3', 'python3.exe', 'node', 'node.exe'):
+        return False
+    return '/windowsapps/' in n or '/system32/' in n or '/syswow64/' in n
+
+
+def host_cmd(name):
+    if name == 'python3' and sys.executable and os.path.isfile(sys.executable) \
+            and not is_windows_store_or_wsl_alias(sys.executable):
+        return sys.executable
+    src = shutil.which(name)
+    if src and os.path.isfile(src) and not is_windows_store_or_wsl_alias(src):
+        return src
+    return None
+
+
+def place_runtime_cmd(dest, src):
+    if dest.exists() or not src or not os.path.isfile(src) or is_windows_store_or_wsl_alias(src):
+        return
+    dest.write_text('#!/bin/sh\nexec {} "$@"\n'.format(shlex.quote(src.replace('\\', '/'))))
+    dest.chmod(0o755)
 
 
 def snapshot(path):
@@ -89,7 +116,7 @@ main "$@"
         template = (ROOT / 'config/config.json').read_bytes()
         put(dest / 'config.json', template)
         put(dest / 'checksums.txt', ''.join(hashlib.sha256((dest / n).read_bytes()).hexdigest() + '  ' + n + '\n' for n in (self.asset, 'config.json')))
-        with tarfile.open(self.web / (TAG + '.tar.gz'), 'w:gz') as archive:
+        with tarfile.open(self.web / (COMMIT + '.tar.gz'), 'w:gz') as archive:
             archive.add(self.bundle, arcname='bundle')
         put(self.web / 'install.sh', self.installer)
         self.requests = []
@@ -112,7 +139,7 @@ main "$@"
         self.url = 'http://127.0.0.1:' + str(self.server.server_port)
         self.index = 0
 
-    def fixture(self):
+    def fixture(self, python=True, node=True, stub_python=False):
         self.index += 1
         base = self.base / ('case-' + str(self.index))
         env = environment(base)
@@ -141,9 +168,27 @@ shutil.copytree(os.environ['SOURCE'],root,dirs_exist_ok=True)
             else:
                 body = '#!/bin/sh\necho invoked >> "$EFFECTS"\nexit 97\n'
             put(clis / name, body, 0o755)
-        env.update(PATH=str(clis) + ':/usr/bin:/bin', TRACE=str(base / 'trace'),
+        runtime = base / 'runtime-bin'
+        runtime.mkdir()
+        names = ['bash', 'sh', 'mktemp', 'rm', 'cat', 'chmod', 'mkdir', 'ln', 'uname',
+                 'tr', 'head', 'cp', 'mv', 'env', 'true', 'false', 'grep', 'sed', 'awk',
+                 'tar', 'gzip', 'curl', 'cut', 'basename', 'dirname', 'touch']
+        if python and not stub_python:
+            names.append('python3')
+        if node:
+            names.append('node')
+        for name in names:
+            place_runtime_cmd(runtime / name, host_cmd(name))
+        if stub_python:
+            put(runtime / 'python3',
+                '#!/bin/sh\n'
+                'echo "Python was not found; run without arguments to install from the Microsoft Store." >&2\n'
+                'exit 9009\n',
+                0o755)
+        env.update(PATH=str(clis) + os.pathsep + str(runtime), TRACE=str(base / 'trace'),
                    EFFECTS=str(base / 'effects'), SOURCE=str(self.bundle), LOCAL_URL=self.url,
-                   BOOTSTRAP_RELEASE_TAG=TAG, BOOTSTRAP_SOURCE_BASE_URL=self.url,
+                   BOOTSTRAP_RELEASE_TAG=TAG, BOOTSTRAP_RELEASE_COMMIT=COMMIT,
+                   BOOTSTRAP_SOURCE_BASE_URL=self.url,
                    BOOTSTRAP_RELEASES_BASE_URL=self.url, INSTALL_SCRIPT_URL=self.url + '/install.sh')
         return env
 
@@ -203,8 +248,8 @@ shutil.copytree(os.environ['SOURCE'],root,dirs_exist_ok=True)
         put(home / 'plugins/installed_plugins.json', json.dumps({'plugins': {'claude-notifications-go@claude-notifications-go': [{'installPath': str(active), 'version': version}]}}))
         return active
 
-    def fresh(self, product):
-        env = self.fixture()
+    def fresh(self, product, python=True, node=True, stub_python=False):
+        env = self.fixture(python=python, node=node, stub_python=stub_python)
         self.requests.clear()
         self.boot(env, product)
         assert sum(p.endswith('/' + self.asset) for p in self.requests) == 1
@@ -494,6 +539,11 @@ def main():
         suite = Suite(base, binary)
         failures = []
         cases = [(f'fresh-{p}-and-repair', lambda p=p: suite.fresh(p)) for p in ('claude', 'codex', 'both')]
+        if shutil.which('python3'):
+            cases += [('fresh-codex-python-only', lambda: suite.fresh('codex', python=True, node=False))]
+        if shutil.which('node'):
+            cases += [('fresh-codex-node-only', lambda: suite.fresh('codex', python=False, node=True))]
+            cases += [('fresh-codex-stub-python', lambda: suite.fresh('codex', python=False, node=True, stub_python=True))]
         cases += [('legacy-exact', suite.legacy), ('explicit-import-CAS', suite.explicit_and_import_edit),
                   ('corrupt-no-fallback', suite.corrupt), ('custom-and-overlap', suite.custom_and_overlap),
                   ('setup-readonly', suite.setup_readonly), ('offline-retains-state', suite.offline), ('registration-failure', suite.registration_failure), ('hooks-no-config-writes', suite.hooks), ('partial-config-only-retry', suite.partial_retry)]

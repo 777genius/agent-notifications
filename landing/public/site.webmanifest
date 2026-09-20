@@ -1,0 +1,17 @@
+{
+  "name": "Agent Notifications",
+  "short_name": "Agent Notify",
+  "description": "Notifications for AI coding agents",
+  "start_url": "/agent-notifications/",
+  "scope": "/agent-notifications/",
+  "display": "standalone",
+  "background_color": "#080b12",
+  "theme_color": "#080b12",
+  "icons": [
+    {
+      "src": "agent-notifications-logo.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

@@ -91,6 +91,11 @@ echo " Running install.sh Tests"
 echo "========================================="
 echo ""
 
+if command -v go >/dev/null 2>&1; then
+    assert_equals "off" "$(go env GOPROXY)" "Isolated Go builds use GOPROXY=off"
+    assert_equals "local" "$(go env GOTOOLCHAIN)" "Isolated Go builds pin GOTOOLCHAIN=local"
+fi
+
 # Test 1: Platform detection
 echo "--- Test: Platform Detection ---"
 detect_platform
@@ -266,6 +271,12 @@ else
 fi
 
 if bash "$SCRIPT_DIR/bootstrap_product_test.sh"; then
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+if bash "$SCRIPT_DIR/installer_runtime_fallback_e2e_test.sh"; then
     TESTS_PASSED=$((TESTS_PASSED + 1))
 else
     TESTS_FAILED=$((TESTS_FAILED + 1))

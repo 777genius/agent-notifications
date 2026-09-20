@@ -1,10 +1,13 @@
+<p align="center">
+  <a href="https://777genius.github.io/agent-notifications/"><img src="brand/agent-notifications-logo-transparent.png" width="148" alt="Agent Notifications logo" /></a>
+</p>
 <h1 align="center"><a href="https://777genius.github.io/agent-notifications/">Agent Notifications</a></h1>
 
 [![Ubuntu CI](https://github.com/777genius/agent-notifications/workflows/Ubuntu%20CI/badge.svg)](https://github.com/777genius/agent-notifications/actions)
 [![macOS CI](https://github.com/777genius/agent-notifications/workflows/macOS%20CI/badge.svg)](https://github.com/777genius/agent-notifications/actions)
 [![Windows CI](https://github.com/777genius/agent-notifications/workflows/Windows%20CI/badge.svg)](https://github.com/777genius/agent-notifications/actions)
-[![Go Report Card](https://goreportcard.com/badge/github.com/777genius/agent-notifications)](https://goreportcard.com/report/github.com/777genius/agent-notifications)
-[![codecov](https://codecov.io/gh/777genius/agent-notifications/branch/main/graph/badge.svg)](https://codecov.io/gh/777genius/agent-notifications)
+[![Go Reference](https://pkg.go.dev/badge/github.com/777genius/agent-notifications.svg)](https://pkg.go.dev/github.com/777genius/agent-notifications)
+[![codecov](https://codecov.io/gh/777genius/agent-notifications/graph/badge.svg?branch=main)](https://codecov.io/gh/777genius/agent-notifications)
 
 <div>
 <table>
@@ -16,78 +19,43 @@
 </table>
 </div>
 
-Notifications for Claude Code and Codex CLI (beta), with sounds, git branch display, and webhook integrations. See [Codex support and limitations](#codex-cli-support-beta) for differences between products.
-
-> **Boost your productivity** — check out the [advanced task manager for Claude with a convenient UI](https://github.com/777genius/claude_agent_teams_ui), from the creator of this plugin.
-
-## Table of Contents
-
-  - [Features](#features)
-  - [Installation](#installation)
-    - [Prerequisites](#prerequisites)
-    - [Quick Install (Recommended)](#quick-install-recommended)
-    - [Manual Install](#manual-install)
-    - [Updating](#updating)
-    - [Uninstalling](#uninstalling)
-  - [Supported Notification Types](#supported-notification-types)
-  - [Codex CLI Support (beta)](#codex-cli-support-beta)
-  - [Platform Support](#platform-support)
-    - [Click-to-Focus (macOS & Linux)](#click-to-focus-macos--linux)
-  - [Configuration](#configuration)
-    - [Manual Configuration](#manual-configuration)
-    - [Sound Options](#sound-options)
-    - [Test Sound Playback](#test-sound-playback)
-  - [Manual Testing](#manual-testing)
-  - [Contributing](#contributing)
-  - [Troubleshooting](#troubleshooting)
-  - [Documentation](#documentation)
-  - [License](#license)
+Desktop notifications and sounds for **Claude Code and Codex CLI**. Know when a task finishes, an agent needs input, or a tool needs approval. Click a notification to return to work.
 
 ## Features
 
-- **Cross-platform**: macOS (Intel & Apple Silicon), Linux (x64 & ARM64), Windows 10+ (x64)
-- **Claude notification types**: Task Complete, Review Complete, Question, Plan Ready, Session Limit, API Error
-- **Click-to-focus** (macOS, Linux): click notification to focus the exact project window and tab — Ghostty, VS Code, iTerm2, Warp (`WARP_FOCUS_URL`), kitty, WezTerm, Alacritty, Hyper, Apple Terminal, GNOME Terminal, Konsole, Tilix, Terminator, XFCE4 Terminal, MATE Terminal. Windows focuses the originating window; Warp on Windows can still select the pane via `WARP_FOCUS_URL`.
-- **Multiplexers**: tmux (including iTerm2 -CC integration mode), zellij, WezTerm, kitty — click switches to the correct session/pane/tab
-- **Git branch in title**: `✅ Completed main [cat]`
-- **Sounds**: MP3/WAV/FLAC/OGG/AIFF, volume control, audio device selection
-- **Webhooks**: Slack, Discord, Telegram, Lark/Feishu, Microsoft Teams, ntfy.sh, PagerDuty, Zapier, n8n, Make, custom — with retry, circuit breaker, rate limiting ([docs](docs/webhooks/README.md))
-- **[Plugin compatibility](docs/PLUGIN_COMPATIBILITY.md)**: works with [double-shot-latte](https://github.com/obra/double-shot-latte) and other plugins that spawn background Claude instances
+- **Task and attention alerts:** completions, reviews, questions, plans, session limits and API errors for Claude; completions and permission requests for Codex, with opt-in subagent alerts. [Event details](docs/NOTIFICATION_TYPES.md)
+- **Click-to-focus:** return to the originating terminal or editor, with exact tab/pane targeting for supported integrations including Ghostty, iTerm2, Warp, tmux, kitty and WezTerm. [Supported terminals](docs/CLICK_TO_FOCUS.md)
+- **Useful context:** project, git branch and session labels in notifications.
+- **Custom sounds:** built-in or custom MP3, WAV, FLAC, OGG and AIFF, with volume control, previews and audio output selection.
+- **Less noise:** focus-aware delivery, optional delay, duplicate-question suppression and filters by status, branch or folder.
+- **Your settings per agent:** shared configuration with separate Claude and Codex overrides; control desktop and webhook delivery per status. [Agent settings](docs/AGENT_CONFIGURATION.md)
+- **Webhooks:** Slack, Discord, Telegram, Lark/Feishu and custom endpoints, including Teams, ntfy, PagerDuty, Zapier, n8n and Make. Retries, rate limits and circuit breakers are built in. [Integrations](docs/webhooks/README.md)
+- **Cross-platform:** macOS (Intel/Apple Silicon), Linux (x64/ARM64) and Windows 10+ (x64). [Platform details](docs/PLATFORMS.md)
 
-## Installation
+[Codex setup and event behavior](docs/CODEX.md)
 
-### Prerequisites
+## Install Or Update
 
-- Claude Code and/or Codex CLI for the products you select
-- Python **3.6 or newer**, available as the `python3` command on PATH, is required for installer metadata and checksum validation. Check with `python3 --version`.
-- **Windows users:** Git Bash (included with [Git for Windows](https://git-scm.com/download/win)) and native Windows Python available as `python3` from Git Bash. A `python` or `py` command alone is insufficient; use native Python, not WSL Python.
-- **macOS/Linux users:** Ensure `python3` is installed and available in the shell running the installer.
-
-### Quick Install (Recommended)
-
-Prefer a guided setup? [Open the installation guide](https://777genius.github.io/agent-notifications/#install) to choose your agent, OS and task.
-
-One command to install or update the notifications plugin for Claude Code, Codex, or both. The interactive menu asks you to choose:
+Requires Claude Code and/or Codex CLI, plus **Python 3.6+** (`python3`) **or** **Node.js** (`node`) for the installer. Python is used when both are present. On Windows, use **Git Bash** with native Windows Python or Node. A Microsoft Store or WSL `python3` stub is skipped when Node is available.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/main/bin/bootstrap.sh | bash
+(set -o pipefail; curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/a512deb5819c3f8c7c3be8335f713cc8bb734fc3/bin/setup.sh | bash)
 ```
 
-> Windows users: open Git Bash from the Start menu and run this command there. Do not run the `curl ... | bash` command from PowerShell or Windows Terminal if `bash` opens WSL, because that targets Linux paths and binaries instead of Windows.
+The command uses a commit-pinned setup loader and reports download failures. The small setup script resolves the latest stable release and downloads both installer scripts from its exact commit. Release lookup and validation happen automatically. Choose **Claude**, **Codex**, or **both**. For non-interactive setup, append `-s -- --product claude`, `codex`, or `both` after `bash`, before the closing `)`.
 
-For automation or terminals without a controlling TTY, choose explicitly:
+- **Claude:** restart Claude Code.
+- **Codex:** restart Codex, open `/hooks`, then review and trust the installed hooks.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/main/bin/bootstrap.sh | bash -s -- --product codex
-```
+Run the same command to update. [Guided installer](https://777genius.github.io/agent-notifications/#install) · [Manual installation, updates and removal](docs/INSTALLATION.md)
 
-Use `claude`, `codex`, or `both`. This installs the notifications plugin; the selected Claude Code / Codex CLI must already be on `PATH`.
+## Settings
 
-After installation:
+In Claude Code, run `/claude-notifications-go:settings` for the configuration wizard or `/claude-notifications-go:sounds` to browse and preview sounds.
 
-- **Claude:** restart Claude Code. Optionally run `/claude-notifications-go:settings` to configure sounds.
-- **Codex:** start Codex, run `/hooks`, then review and trust the installed hooks. The installer registers them automatically; no JSON editing or manual registration command is needed. Trust approval remains yours.
-- **Both:** complete both steps above.
+The primary CLI is `agent-notifications`. Use `agent-notifications config path` to locate your settings and `agent-notifications config inspect --json` to inspect them safely. The `claude-notifications` alias and Claude slash-command namespace remain compatible with existing installations.
+
+[Configuration reference](docs/CONFIGURATION.md) · [Per-agent overrides](docs/AGENT_CONFIGURATION.md) · [Sound previews](docs/interactive-sound-preview.md)
 
 Codex requires a published stable plugin release v1.42.0 or newer. The installer downloads matching source and binaries, respects `CODEX_HOME`, and keeps a permanent runtime copy there. It reports an error if no supported release is published yet.
 
@@ -126,7 +94,7 @@ Run these slash commands in the Claude Code chat, not in your system terminal:
 Run the same command and choose the product(s) you want to update:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/main/bin/bootstrap.sh | bash
+(set -o pipefail; curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/a512deb5819c3f8c7c3be8335f713cc8bb734fc3/bin/setup.sh | bash)
 ```
 
 For Claude, restart Claude Code. For Codex, restart Codex and inspect `/hooks`; changed hook definitions may need trust approval again. The installer refreshes the Codex runtime and registration automatically. Existing foreign hooks and shared settings in the file selected by `config path` are preserved.
@@ -616,39 +584,11 @@ See **[Troubleshooting Guide](docs/troubleshooting.md)** for common issues:
 
 ## Documentation
 
-- **[Architecture](docs/ARCHITECTURE.md)** - Plugin architecture, directory structure, data flow
+- [Troubleshooting](docs/troubleshooting.md)
+- [Plugin compatibility](docs/PLUGIN_COMPATIBILITY.md)
+- [Architecture](docs/ARCHITECTURE.md) and [local development](docs/LOCAL_DEVELOPMENT.md)
+- [Contributing](CONTRIBUTING.md) and [changelog](CHANGELOG.md)
 
-- **[Local Development And E2E](docs/LOCAL_DEVELOPMENT.md)** - Local marketplace testing, real Claude smoke tests, manual click-to-focus validation
+GPL-3.0-or-later. See [LICENSE](LICENSE).
 
-- **[Click-to-Focus](docs/CLICK_TO_FOCUS.md)** - Configuration, supported terminals, platform details
-
-- **[Volume Control Guide](docs/volume-control.md)** - Customize notification volume
-  - Configure volume from 0% to 100%
-  - Logarithmic scaling for natural sound
-  - Per-environment recommendations
-
-- **[Interactive Sound Preview](docs/interactive-sound-preview.md)** - Preview sounds during setup
-  - Interactive sound selection
-  - Preview before choosing
-
-- **[Plugin Compatibility](docs/PLUGIN_COMPATIBILITY.md)** - Integration with other Claude Code plugins
-
-- **[Troubleshooting](docs/troubleshooting.md)** - Common install/runtime issues
-  - Ubuntu 24.04 `EXDEV` during `/plugin install` (TMPDIR workaround)
-
-- **[Webhook Integration Guide](docs/webhooks/README.md)** - Complete guide for webhook setup
-  - **[Slack](docs/webhooks/slack.md)** - Slack integration with color-coded attachments
-  - **[Discord](docs/webhooks/discord.md)** - Discord integration with rich embeds
-  - **[Telegram](docs/webhooks/telegram.md)** - Telegram bot integration
-  - **[Lark/Feishu](docs/webhooks/lark.md)** - Lark/Feishu integration with interactive cards
-  - **[Custom Webhooks](docs/webhooks/custom.md)** - Any webhook-compatible service
-  - **[Configuration](docs/webhooks/configuration.md)** - Retry, circuit breaker, rate limiting
-  - **[Monitoring](docs/webhooks/monitoring.md)** - Metrics and debugging
-  - **[Troubleshooting](docs/webhooks/troubleshooting.md)** - Common issues and solutions
-
-## License
-
-GPL-3.0 - See [LICENSE](LICENSE) file for details.
-
-For per-agent sound and notification settings, see [shared configuration and schema 2 overrides](docs/AGENT_CONFIGURATION.md).
-The primary command is `agent-notifications`; `claude-notifications` remains a permanent compatibility alias.
+By opening a pull request you agree to the [Contributor License Agreement](.github/CLA.md). You keep copyright. That does not replace GPL-3.0-or-later on the public repository. It lets the project owner sublicense that work under additional terms (for example a commercial license) while keeping the GPL-3.0-or-later grant from the submission date.

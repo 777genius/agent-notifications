@@ -59,6 +59,12 @@ jobs:
       - name: Test binary execution (help)
         run: ./bin/claude-notifications help
 
+      - name: Test one-line setup loader (isolated, offline)
+        run: bash bin/setup_test.sh
+
+      - name: Test python/node installer runtime fallback (isolated, offline)
+        run: bash bin/installer_runtime_fallback_e2e_test.sh
+
       - name: Build sound preview binary
         run: go build -o bin/sound-preview ./cmd/sound-preview
 

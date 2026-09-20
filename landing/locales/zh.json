@@ -1,7 +1,7 @@
 {
   "seo": {
     "title": "Agent Notifications - 专注工作，及时获知进展",
-    "description": "为 Claude Code 和 Codex CLI 测试版提供桌面通知。任务完成、需要回答问题或发生错误时，第一时间获知。"
+    "description": "为 Claude Code 和 Codex CLI 提供桌面通知。任务完成、需要回答问题或发生错误时，第一时间获知。"
   },
   "language": {
     "label": "语言",
@@ -31,7 +31,7 @@
     "leadSecond": "为 Claude Code 和 Codex CLI 提供声音、桌面通知和 Webhook。",
     "primary": "设置通知",
     "secondary": "在 GitHub 上查看",
-    "note": "开源 · 本地运行 · Codex CLI 测试版"
+    "note": "开源 · 本地运行"
   },
   "common": {
     "now": "刚刚",
@@ -169,7 +169,7 @@
     "targetOs": "目标操作系统",
     "products": {
       "claude": "Claude Code",
-      "codex": "Codex CLI · 测试版",
+      "codex": "Codex CLI",
       "both": "两个智能体"
     },
     "targets": {
@@ -179,8 +179,8 @@
       "windows": "Windows · Git Bash",
       "manual": "手动安装说明"
     },
-    "prerequisiteTitle": "Codex CLI 测试版 - 发布前提条件。",
-    "prerequisiteText": "需要已发布的稳定版插件 ≥1.42.0。该版本目前仍是草稿；在正式发布前，Codex 安装程序不可用。",
+    "prerequisiteTitle": "Codex CLI",
+    "prerequisiteText": "需要已发布的稳定版插件 ≥1.42.0。",
     "checkReleases": "查看发布版本",
     "configure": {
       "title": "打造适合你的提示方式",

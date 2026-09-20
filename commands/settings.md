@@ -97,6 +97,6 @@ On `ConfigConflict`, keep the user's answers privately, inspect again, and expla
 
 After confirmed success, run `config inspect --json` again. Report the selected path and only the requested changes; do not claim untouched fields were reset or infer omitted secret/sound values. Report failures honestly. Sound previews remain optional and user-requested.
 
-See [configuration paths and compatibility](../README.md#manual-configuration). Resource, permission-marker, venv and state paths, executable names and plugin IDs remain unchanged.
+See [configuration paths and compatibility](../docs/CONFIGURATION.md#manual-configuration). Resource, permission-marker, venv and state paths, executable names and plugin IDs remain unchanged.
 
 Schema 2 agent overrides are manual-only. This wizard edits global settings only; never submit `/agents` edits or flatten an effective agent profile into the document. Existing agent overrides are preserved by `config edit`.

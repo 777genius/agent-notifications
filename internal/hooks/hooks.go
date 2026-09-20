@@ -903,7 +903,7 @@ func (h *Handler) maybeEmitDesktopPermissionGuidance(err error) {
 		return
 	}
 
-	message := "[claude-notifications] macOS is blocking ClaudeNotifier notifications. Open System Settings > Notifications > Claude Notifier and enable notifications. This can happen after older ad-hoc installs or stale notification permissions."
+	message := "[agent-notifications] macOS is blocking Agent Notifications. Open System Settings > Notifications > Agent Notifications and enable notifications. This can happen after older ad-hoc installs or stale notification permissions."
 	fmt.Printf("{\"systemMessage\":%q}\n", message)
 }
 

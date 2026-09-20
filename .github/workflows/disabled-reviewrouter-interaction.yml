@@ -1,10 +1,8 @@
-name: ReviewRouter Interaction
+name: Disabled ReviewRouter Interaction
 
+# Temporarily disabled with the Codex OAuth workflow: ReviewRouter OIDC returns
+# 403 action_repository_mismatch for 777genius/agent-notifications.
 on:
-  pull_request_review_comment:
-    types: [created, edited]
-  issue_comment:
-    types: [created, edited]
   workflow_dispatch:
 
 permissions: {}
@@ -13,7 +11,7 @@ jobs:
   interaction:
     name: interaction
     runs-on: ubuntu-24.04
-    if: ${{ github.event_name == 'workflow_dispatch' || ((github.event_name != 'issue_comment' || github.event.issue.pull_request) && github.event.comment.user.type != 'Bot') }}
+    if: ${{ false }}
     permissions:
       contents: read
       issues: read

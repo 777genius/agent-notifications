@@ -75,6 +75,14 @@ jobs:
         run: ./bin/claude-notifications.exe help
         shell: bash
 
+      - name: Test one-line setup loader (isolated, offline)
+        run: bash bin/setup_test.sh
+        shell: bash
+
+      - name: Test python/node installer runtime fallback (isolated, offline)
+        run: bash bin/installer_runtime_fallback_e2e_test.sh
+        shell: bash
+
       - name: Qualify interpreter-free bootstrap in Git Bash
         if: matrix.go == '1.26'
         run: bash bin/install_no_interpreters_test.sh "$PWD/bin/claude-notifications.exe"

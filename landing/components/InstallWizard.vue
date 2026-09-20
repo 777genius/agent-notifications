@@ -52,7 +52,7 @@ const agentNotify = ref(true);
 const snippet = computed(() =>
   command(product.value, target.value, intent.value, agentNotify.value),
 );
-const displaySnippet = computed(() => snippet.value?.replace(" | ", " |\n"));
+const displaySnippet = computed(() => snippet.value);
 onMounted(() => {
   detected.value = detectTarget(navigator.userAgent, navigator.maxTouchPoints);
   if (!manualOverride.value) target.value = detected.value;
@@ -66,8 +66,7 @@ async function copy() {
   if (!value) return;
   try {
     await navigator.clipboard.writeText(value);
-    if (snippet.value === value)
-      copyStatus.value = t("install.copied");
+    if (snippet.value === value) copyStatus.value = t("install.copied");
   } catch {
     if (snippet.value !== value) return;
     copyStatus.value = t("install.copyUnavailable");
@@ -89,9 +88,15 @@ async function copy() {
       <p>{{ t("install.intro", { agent: agentName }) }}</p>
     </header>
 
-    <div class="agent-cards" role="group" :aria-label="t('install.chooseAgent')">
+    <div
+      class="agent-cards"
+      role="group"
+      :aria-label="t('install.chooseAgent')"
+    >
       <button
-        v-for="item in localizedProducts.filter((item) => item.value !== 'both')"
+        v-for="item in localizedProducts.filter(
+          (item) => item.value !== 'both',
+        )"
         :key="item.value"
         class="agent-card"
         :aria-label="item.label"
@@ -100,11 +105,14 @@ async function copy() {
       >
         <AgentLogo :agent="item.value as 'claude' | 'codex'" />
         <span class="agent-card-copy"
-          ><strong
-            >{{ item.value === "claude" ? "Claude Code" : "Codex CLI" }}
-            <small v-if="item.value === 'codex'">{{ t("common.beta") }}</small></strong
-          ><span>{{ t("install.requires", { agent: item.value === "claude" ? "Claude Code" : "Codex CLI" }) }}</span
-          ></span
+          ><strong>{{
+            item.value === "claude" ? "Claude Code" : "Codex CLI"
+          }}</strong
+          ><span>{{
+            t("install.requires", {
+              agent: item.value === "claude" ? "Claude Code" : "Codex CLI",
+            })
+          }}</span></span
         >
         <span class="agent-check" aria-hidden="true">{{
           product === item.value ? "✓" : ""
@@ -114,9 +122,7 @@ async function copy() {
     <div class="environment-row">
       <div class="os-summary">
         <span>{{
-          target === "unknown"
-            ? t("install.chooseComputer")
-            : osLabel
+          target === "unknown" ? t("install.chooseComputer") : osLabel
         }}</span>
         <small v-if="target !== 'unknown' && target !== 'manual'">{{
           manualOverride ? t("install.selected") : t("install.detected")
@@ -190,7 +196,8 @@ async function copy() {
         {{ t("install.configure.codexBefore") }}
         <code>config path</code>
         {{ t("install.configure.codexMiddle") }}
-        <a :href="repo + '#manual-configuration'"
+        <a
+          :href="repo + '/blob/main/docs/CONFIGURATION.md#manual-configuration'"
           >{{ t("install.configure.codexLink") }}</a
         >. {{ t("install.configure.codexAfter") }}
       </p>
@@ -199,10 +206,13 @@ async function copy() {
     <div v-else-if="target === 'manual'" class="setup-panel instructions">
       <h3>{{ t("install.manual.title") }}</h3>
       <p v-if="product !== 'codex'">
-        <a :href="repo + '#manual-install'">{{ t("install.manual.claude") }}</a>
+        <a :href="repo + '/blob/main/docs/INSTALLATION.md#manual-install'">{{
+          t("install.manual.claude")
+        }}</a>
       </p>
       <p v-if="product !== 'claude'">
-        <a :href="repo + '#manual-codex-registration'"
+        <a
+          :href="repo + '/blob/main/docs/CODEX.md#manual-codex-registration'"
           >{{ t("install.manual.codex") }}</a
         >
       </p>
@@ -213,27 +223,37 @@ async function copy() {
     <template v-else>
       <div class="installation-command">
         <div class="command-panel-heading">
-          <label for="command">{{ t("install.commandLabel", { intent: t(`install.intents.${intent === "update" ? "update" : "install"}`) }) }}</label>
+          <label for="command">{{
+            t("install.commandLabel", {
+              intent: t(
+                `install.intents.${intent === "update" ? "update" : "install"}`,
+              ),
+            })
+          }}</label>
           <div class="command-tools">
             <span>{{ target === "windows" ? "Git Bash" : "Bash" }}</span>
-
           </div>
         </div>
         <div class="install-command-line">
-            <button class="copy-icon" :aria-label="t('install.copyCommand')" :title="t('install.copyCommand')" @click="copy">
-              <svg
-                width="18"
-                height="18"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.6"
-                aria-hidden="true"
-              >
-                <rect x="8" y="3" width="12" height="15" rx="2" />
-                <path d="M16 18v3H4V7h4" /></svg
-              >
-            </button>
+          <button
+            class="copy-icon"
+            :aria-label="t('install.copyCommand')"
+            :title="t('install.copyCommand')"
+            @click="copy"
+          >
+            <svg
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.6"
+              aria-hidden="true"
+            >
+              <rect x="8" y="3" width="12" height="15" rx="2" />
+              <path d="M16 18v3H4V7h4" />
+            </svg>
+          </button>
           <span class="terminal-prompt" aria-hidden="true">$</span>
           <textarea
             id="command"
@@ -241,7 +261,7 @@ async function copy() {
             :value="displaySnippet"
             readonly
             spellcheck="false"
-            rows="2"
+            rows="1"
             wrap="off"
           />
         </div>
@@ -272,7 +292,11 @@ async function copy() {
           <div>
             <span class="step-label">{{ t("install.steps.label1") }}</span>
             <h3>
-              {{ target === "windows" ? t("install.steps.runBash") : t("install.steps.runTerminal") }}
+              {{
+                target === "windows"
+                  ? t("install.steps.runBash")
+                  : t("install.steps.runTerminal")
+              }}
             </h3>
             <p v-if="target === 'windows'">
               <strong>{{ t("install.steps.windowsTitle") }}</strong>
@@ -293,7 +317,16 @@ async function copy() {
           ></span>
           <div>
             <span class="step-label">{{ t("install.steps.label2") }}</span>
-            <h3>{{ t("install.steps.restart", { agent: product === "both" ? t("install.steps.bothAgents") : agentName }) }}</h3>
+            <h3>
+              {{
+                t("install.steps.restart", {
+                  agent:
+                    product === "both"
+                      ? t("install.steps.bothAgents")
+                      : agentName,
+                })
+              }}
+            </h3>
             <p v-if="product !== 'codex'">
               {{ t("install.steps.restartClaude") }}
             </p>
@@ -309,12 +342,14 @@ async function copy() {
         :href="
           repo +
           (product === 'claude'
-            ? '#manual-install'
-            : '#manual-codex-registration')
+            ? '/blob/main/docs/INSTALLATION.md#manual-install'
+            : '/blob/main/docs/CODEX.md#manual-codex-registration')
         "
         >{{ t("install.help") }} ↗</a
       >
-      <a v-if="product === 'both'" :href="repo + '#manual-install'"
+      <a
+        v-if="product === 'both'"
+        :href="repo + '/blob/main/docs/INSTALLATION.md#manual-install'"
         >{{ t("install.claudeHelp") }} ↗</a
       >
       <div>

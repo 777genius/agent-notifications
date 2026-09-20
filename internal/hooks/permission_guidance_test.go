@@ -55,8 +55,8 @@ func TestMaybeEmitDesktopPermissionGuidance_RateLimited(t *testing.T) {
 	if !strings.Contains(first, "systemMessage") {
 		t.Fatalf("expected systemMessage on first permission denial, got %q", first)
 	}
-	if !strings.Contains(first, "Claude Notifier") {
-		t.Fatalf("expected Claude Notifier guidance, got %q", first)
+	if !strings.Contains(first, "Agent Notifications") {
+		t.Fatalf("expected Agent Notifications guidance, got %q", first)
 	}
 
 	second := captureStdout(t, func() {

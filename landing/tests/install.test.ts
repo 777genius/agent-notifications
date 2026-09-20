@@ -1,17 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { command, detectTarget } from "../data/install.ts";
-test("verified bootstrap contract for each product and supported target", () => {
+test("one-line setup contract for each product and supported target", () => {
   for (const product of ["claude", "codex", "both"] as const)
     for (const target of ["macos", "linux", "windows"] as const) {
       const expected =
-        "curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/main/bin/bootstrap.sh | bash -s -- --product " +
-        product;
+        "(set -o pipefail; curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/a512deb5819c3f8c7c3be8335f713cc8bb734fc3/bin/setup.sh | bash -s -- --product " +
+        product + ")";
       assert.equal(command(product, target, "install"), expected);
       assert.equal(command(product, target, "update"), expected);
       assert.equal(
         command(product, target, "install", false),
-        expected + " --skip-agent-notify",
+        expected.slice(0, -1) + " --skip-agent-notify)",
       );
       assert.equal(command(product, target, "configure"), null);
     }

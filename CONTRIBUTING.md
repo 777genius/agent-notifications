@@ -2,6 +2,16 @@
 
 Thank you for your interest in contributing to Agent Notifications!
 
+## Contributor License Agreement
+
+You keep copyright in what you write.
+
+By opening a pull request (or pushing commits to one) you agree to [.github/CLA.md](.github/CLA.md). Do not open a PR if you do not agree.
+
+GitHub's Terms of Service already license that PR under GPL-3.0-or-later. The CLA is the extra grant so the project owner can also sublicense your work (for example commercially or under Apache-2.0) while keeping the GPL-3.0-or-later grant from the submission date.
+
+If the work belongs to your employer, say so in the PR. Do not include someone else's commits unless they agree to the CLA. Bots such as Dependabot do not need to agree.
+
 ## Prerequisites
 
 - **Go 1.25.0+** (CI covers the minimum Go 1.25 and Go 1.26; automatic toolchain switching is disabled)

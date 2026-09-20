@@ -28,7 +28,7 @@ After successful resource installation and registration through the supported to
 "$NOTIFICATIONS_BIN" config inspect --json
 ```
 
-Existing valid config is a byte/mode/mtime-preserving no-op. Existing invalid config is an error. Missing automatic config is created at N; existing L remains selected; explicit E selects only that file. See [OS paths and environment rules](../README.md#manual-configuration). Hooks never initialize config.
+Existing valid config is a byte/mode/mtime-preserving no-op. Existing invalid config is an error. Missing automatic config is created at N; existing L remains selected; explicit E selects only that file. See [OS paths and environment rules](../docs/CONFIGURATION.md#manual-configuration). Hooks never initialize config.
 
 If assets/registration succeeded but init failed, report partial success and the safe error/path. Retry only `config init` after resolving the cause; do not repeat downloads or registration. Do not claim success after a failed command. Do not add config writes to low-level asset installers.
 

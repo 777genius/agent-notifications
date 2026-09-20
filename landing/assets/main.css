@@ -109,9 +109,11 @@ h3 {
   margin-top: 5px;
 }
 .brand-icon {
-  font-size: 34px;
-  color: #79ebf9;
-  text-shadow: 0 0 20px #c42ffa;
+  width: 38px;
+  height: 38px;
+  object-fit: contain;
+  flex-shrink: 0;
+  filter: drop-shadow(0 0 12px rgb(121 235 249 / 24%));
 }
 .header nav {
   display: flex;
@@ -867,7 +869,8 @@ footer .brand {
     width: min(238px, calc(100vw - 32px));
   }
   .brand-icon {
-    font-size: 25px;
+    width: 30px;
+    height: 30px;
   }
   .brand small {
     font-size: 7px;
@@ -989,6 +992,10 @@ footer .brand {
   object-fit: contain;
   flex-shrink: 0;
 }
+.notification-brand-logo {
+  object-fit: contain;
+  flex-shrink: 0;
+}
 .notification-preview {
   width: 100%;
   min-width: 0;
@@ -1031,7 +1038,7 @@ footer .brand {
   box-shadow: 0 10px 35px #0003;
   min-height: 116px;
 }
-.notification-card .agent-logo {
+.notification-card .notification-brand-logo {
   width: 48px;
   height: 48px;
 }
@@ -1161,7 +1168,7 @@ footer .brand {
     padding: 14px;
     gap: 10px;
   }
-  .notification-card .agent-logo {
+  .notification-card .notification-brand-logo {
     width: 38px;
     height: 38px;
   }
@@ -1616,7 +1623,7 @@ h1 {
   gap: 10.5px;
   border-radius: 16.5px;
 }
-.notification-card .agent-logo {
+.notification-card .notification-brand-logo {
   width: 36px;
   height: 36px;
 }

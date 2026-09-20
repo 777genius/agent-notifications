@@ -66,6 +66,12 @@ jobs:
       - name: Test binary execution (help)
         run: ./bin/claude-notifications help
 
+      - name: Test one-line setup loader (isolated, offline)
+        run: bash bin/setup_test.sh
+
+      - name: Test python/node installer runtime fallback (isolated, offline)
+        run: bash bin/installer_runtime_fallback_e2e_test.sh
+
       - name: Qualify interpreter-free artifact lifecycle
         if: matrix.go == '1.26'
         run: |

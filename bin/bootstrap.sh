@@ -1,6 +1,6 @@
 #!/bin/bash
 # bootstrap.sh - One-command install/update for claude-notifications plugin
-# Usage: curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/main/bin/bootstrap.sh | bash
+# Usage: see https://777genius.github.io/agent-notifications/#install
 
 set -euo pipefail
 
@@ -52,11 +52,49 @@ _PORTABLE_STAGE=""
 _KEEP_CONFIG_STAGE=false
 PRODUCT=""
 BOOTSTRAP_TAG=""
+BOOTSTRAP_COMMIT=""
 _BOOTSTRAP_TMP=""  # temp file path for trap (set -u safe)
 CONFIGURE_NOTIFICATIONS=true
 AGENT_NOTIFY_REQUEST=auto
 CONFIGURE_BINARY=""
 CONFIGURE_ARGS=()
+
+# Isolated JSON/checksum runtime. Prefer python3 -I; Node is the supported
+# fallback because Claude Code already ships it. iTerm2 venv still needs a
+# real Python interpreter and stays optional.
+# Presence on PATH is not enough: Windows Store/WSL python3 stubs must not win.
+usable_python3() {
+    command -v python3 >/dev/null 2>&1 || return 1
+    python3 -I -c 'import json' </dev/null >/dev/null 2>&1
+}
+
+usable_node() {
+    command -v node >/dev/null 2>&1 || return 1
+    NODE_OPTIONS= NODE_PATH= node --no-warnings -e 'JSON.parse("{}")' </dev/null >/dev/null 2>&1
+}
+
+installer_runtime() {
+    if usable_python3; then
+        printf '%s\n' python3
+        return 0
+    fi
+    if usable_node; then
+        printf '%s\n' node
+        return 0
+    fi
+    return 1
+}
+
+require_installer_runtime() {
+    installer_runtime >/dev/null || {
+        echo "python3 or node is required for protected installer metadata and checksum validation." >&2
+        return 1
+    }
+}
+
+run_isolated_node() {
+    NODE_OPTIONS= NODE_PATH= node --no-warnings "$@"
+}
 
 # ──────────────────────────────────────────────
 
@@ -97,11 +135,10 @@ abort_if_wsl_environment() {
     echo -e "${YELLOW}This command is running inside WSL, so it would install Linux binaries under /home instead of Windows binaries.${NC}" >&2
     echo -e "${YELLOW}If you started this from PowerShell or Windows Terminal, your bash command is probably WSL bash, not Git Bash.${NC}" >&2
     echo "" >&2
-    echo -e "${YELLOW}For Windows Claude Code, open Git Bash from the Start menu and run:${NC}" >&2
-    echo -e "  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/bin/bootstrap.sh | bash" >&2
+    echo -e "${YELLOW}For Windows Claude Code, open Git Bash and use the installer at:${NC}" >&2
+    echo -e "  https://777genius.github.io/agent-notifications/#install" >&2
     echo "" >&2
-    echo -e "${YELLOW}If you intentionally use Claude Code inside WSL, rerun with:${NC}" >&2
-    echo -e "  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/bin/bootstrap.sh | env CLAUDE_NOTIFICATIONS_ALLOW_WSL=1 bash" >&2
+    echo -e "${YELLOW}For an intentional WSL install, set CLAUDE_NOTIFICATIONS_ALLOW_WSL=1 on the final bash command.${NC}" >&2
     echo "" >&2
     exit 1
 }
@@ -277,7 +314,7 @@ get_installed_plugin_version() {
         return 0
     fi
 
-    if command -v python3 &>/dev/null; then
+    if usable_python3; then
         python3 - "$INSTALLED_JSON" "$PLUGIN_KEY" <<'PYEOF' 2>/dev/null || true
 import json, sys
 def ver_tuple(value):
@@ -309,8 +346,8 @@ PYEOF
         return 0
     fi
 
-    if command -v node &>/dev/null; then
-        PLUGIN_KEY="$PLUGIN_KEY" node - "$INSTALLED_JSON" <<'JSEOF' 2>/dev/null || true
+    if usable_node; then
+        PLUGIN_KEY="$PLUGIN_KEY" run_isolated_node - "$INSTALLED_JSON" <<'JSEOF' 2>/dev/null || true
 const fs = require('fs');
 function parseVersion(value) {
   return String(value || '0.0.0')
@@ -383,7 +420,7 @@ get_installed_plugin_root() {
         return 0
     fi
 
-    if command -v python3 &>/dev/null; then
+    if usable_python3; then
         python3 - "$INSTALLED_JSON" "$PLUGIN_KEY" <<'PYEOF' 2>/dev/null || true
 import json, sys
 def ver_tuple(value):
@@ -413,8 +450,8 @@ PYEOF
         return 0
     fi
 
-    if command -v node &>/dev/null; then
-        PLUGIN_KEY="$PLUGIN_KEY" node - "$INSTALLED_JSON" <<'JSEOF' 2>/dev/null || true
+    if usable_node; then
+        PLUGIN_KEY="$PLUGIN_KEY" run_isolated_node - "$INSTALLED_JSON" <<'JSEOF' 2>/dev/null || true
 const fs = require('fs');
 function parseVersion(value) {
   return String(value || '0.0.0')
@@ -733,8 +770,11 @@ if [ -f "$INSTALLED_JSON" ]; then
     ' "$INSTALLED_JSON" 2>/dev/null) || true
   fi
 
-  if [ -z "$PLUGIN_ROOT" ] && command -v python3 >/dev/null 2>&1; then
-    PLUGIN_ROOT=$(python3 - "$INSTALLED_JSON" "$PLUGIN_KEY" <<'PYEOF' 2>/dev/null || true
+  # Quoted -c/-e scripts keep ")" inside $() from closing command substitution.
+  # Heredocs cannot be used here: the $(...) matcher does not treat heredoc
+  # bodies as quoted, so Python/JS parentheses would break the shim.
+  if [ -z "$PLUGIN_ROOT" ] && command -v python3 >/dev/null 2>&1 && python3 -I -c 'import json' </dev/null >/dev/null 2>&1; then
+    PLUGIN_ROOT=$(python3 -I -c '
 import json, sys
 def ver_tuple(value):
     try:
@@ -746,23 +786,24 @@ def ver_tuple(value):
 try:
     with open(sys.argv[1]) as f:
         d = json.load(f)
-    entries = [e for e in d.get('plugins', {}).get(sys.argv[2], []) if isinstance(e, dict) and e.get('installPath')]
+    entries = [e for e in d.get("plugins", {}).get(sys.argv[2], []) if isinstance(e, dict) and e.get("installPath")]
     if entries:
-        best = max(entries, key=lambda e: ver_tuple(e.get('version')))
-        print(best.get('installPath', '') or '')
+        best = max(entries, key=lambda e: ver_tuple(e.get("version")))
+        print(best.get("installPath", "") or "")
 except Exception:
     pass
-PYEOF
-)
+' "$INSTALLED_JSON" "$PLUGIN_KEY" 2>/dev/null) || true
   fi
 
   # Node is very likely present because Claude Code is a Node app.
-  if [ -z "$PLUGIN_ROOT" ] && command -v node >/dev/null 2>&1; then
-    PLUGIN_ROOT=$(PLUGIN_KEY="$PLUGIN_KEY" node - "$INSTALLED_JSON" <<'JSEOF' 2>/dev/null || true
-const fs = require('fs');
+  # Inline isolation: this generated file is a standalone POSIX script and
+  # cannot call installer helpers that live only in bootstrap.sh.
+  if [ -z "$PLUGIN_ROOT" ] && command -v node >/dev/null 2>&1 && NODE_OPTIONS= NODE_PATH= node --no-warnings -e 'JSON.parse("{}")' </dev/null >/dev/null 2>&1; then
+    PLUGIN_ROOT=$(PLUGIN_KEY="$PLUGIN_KEY" NODE_OPTIONS= NODE_PATH= node --no-warnings -e '
+const fs = require("fs");
 function parseVersion(value) {
-  return String(value || '0.0.0')
-    .split('.')
+  return String(value || "0.0.0")
+    .split(".")
     .slice(0, 3)
     .map((part) => {
       const n = parseInt(part, 10);
@@ -778,17 +819,16 @@ function compareVersions(a, b) {
   return 0;
 }
 try {
-  const p = process.argv[2];
+  const p = process.argv[1];
   const k = process.env.PLUGIN_KEY;
-  const d = JSON.parse(fs.readFileSync(p, 'utf8'));
-  const entries = ((d.plugins && d.plugins[k]) || []).filter((entry) => entry && typeof entry === 'object' && entry.installPath);
+  const d = JSON.parse(fs.readFileSync(p, "utf8"));
+  const entries = ((d.plugins && d.plugins[k]) || []).filter((entry) => entry && typeof entry === "object" && entry.installPath);
   if (entries.length > 0) {
     const e = entries.slice().sort(compareVersions).pop();
-    process.stdout.write((e && e.installPath) ? String(e.installPath) : '');
+    process.stdout.write((e && e.installPath) ? String(e.installPath) : "");
   }
 } catch (_) {}
-JSEOF
-)
+' "$INSTALLED_JSON" 2>/dev/null) || true
   fi
 
   if [ -z "$PLUGIN_ROOT" ]; then
@@ -920,9 +960,11 @@ setup_iterm2_venv() {
         return 0
     fi
 
-    # Find Python 3
+    # Find a working Python 3 (Store/WSL stubs are not usable for venv).
     local python3_path=""
-    command -v python3 &>/dev/null && python3_path="$(command -v python3)"
+    if usable_python3; then
+        python3_path="$(command -v python3)"
+    fi
 
     if [ -z "$python3_path" ]; then
         echo ""
@@ -965,8 +1007,8 @@ print_success() {
     echo ""
     print_iterm2_python_api_notice
     echo ""
-    echo -e "${BLUE}One-liner to update in the future (same as install):${NC}"
-    echo -e "  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/bin/bootstrap.sh | bash"
+    echo -e "${BLUE}To update later, use the current installer at:${NC}"
+    echo -e "  https://777genius.github.io/agent-notifications/#install"
     echo ""
     echo -e "${YELLOW}────────────────────────────────────────────${NC}"
     echo -e "${YELLOW}★${NC} ${BOLD}Boost your productivity${NC}"
@@ -1165,6 +1207,51 @@ resolve_bootstrap_release() {
         echo "Agent Notifications requires published release v1.42.0 or newer (the shared config preflight needs it, for every product); found $BOOTSTRAP_TAG." >&2
         return 1
     fi
+
+    BOOTSTRAP_COMMIT="${BOOTSTRAP_RELEASE_COMMIT:-}"
+    if [ -z "$BOOTSTRAP_COMMIT" ]; then
+        _BOOTSTRAP_TMP=$(mktemp "${TMPDIR:-/tmp}/bootstrap-commit-XXXXXX") || return 1
+        fetch_bootstrap_file "${BOOTSTRAP_COMMIT_API_BASE_URL:-https://api.github.com/repos/${REPO}/commits}/$BOOTSTRAP_TAG" "$_BOOTSTRAP_TMP" || return 1
+        BOOTSTRAP_COMMIT=$(
+            if usable_python3; then
+            python3 -I - "$_BOOTSTRAP_TMP" <<'PYCOMMIT'
+import json, re, sys
+with open(sys.argv[1], encoding='utf-8') as stream:
+    value = json.load(stream).get('sha', '')
+if not isinstance(value, str) or re.fullmatch(r'[0-9a-f]{40}', value) is None:
+    raise SystemExit('Release tag did not resolve to a commit SHA')
+sys.stdout.buffer.write((value + '\n').encode('ascii'))
+PYCOMMIT
+            elif usable_node; then
+            run_isolated_node - "$_BOOTSTRAP_TMP" <<'JSCOMMIT'
+const fs = require('fs');
+let value;
+try {
+  value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8')).sha || '';
+} catch (e) {
+  process.stderr.write('Release tag did not resolve to a commit SHA\n');
+  process.exit(1);
+}
+if (typeof value !== 'string' || !/^[0-9a-f]{40}$/.test(value)) {
+  process.stderr.write('Release tag did not resolve to a commit SHA\n');
+  process.exit(1);
+}
+process.stdout.write(value + '\n');
+JSCOMMIT
+            else
+            echo "python3 or node is required for protected installer metadata and checksum validation." >&2
+            exit 1
+            fi
+        ) || return 1
+        rm -f "$_BOOTSTRAP_TMP"
+        _BOOTSTRAP_TMP=""
+    fi
+    printf '%s\n' "$BOOTSTRAP_COMMIT" | grep -Eq '^[0-9a-f]{40}$' || {
+        echo "Invalid release commit SHA: $BOOTSTRAP_COMMIT" >&2; return 1;
+    }
+
+    # Keep explicit overrides separate from the default so managed installs
+    # can still select their compatible writer.
 }
 
 # Only release-verified bytes execute before host registration. Never use an old
@@ -1247,7 +1334,7 @@ bootstrap_has_managed_ledger() {
 }
 
 select_bootstrap_install_script() {
-    if [ -n "$INSTALL_SCRIPT_URL" ]; then
+    if [ -n "${INSTALL_SCRIPT_URL:-}" ]; then
         printf '%s\n' "$INSTALL_SCRIPT_URL"
         return 0
     fi
@@ -1255,7 +1342,7 @@ select_bootstrap_install_script() {
         printf '%s\n' "$MANAGED_INSTALL_SCRIPT_URL"
         return 0
     fi
-    printf '%s\n' "$BOOTSTRAP_RAW_CONTENT_URL/${BOOTSTRAP_TAG}/bin/install.sh"
+    printf '%s\n' "${BOOTSTRAP_RAW_BASE_URL:-$BOOTSTRAP_RAW_CONTENT_URL}/${BOOTSTRAP_COMMIT}/bin/install.sh"
 }
 
 # Released CLIs before agent-notify pairing reject unknown setup-codex flags and
@@ -1330,12 +1417,12 @@ report_config_init_failure() {
 
 install_codex() {
     local tag="$BOOTSTRAP_TAG" version="${BOOTSTRAP_TAG#v}"
-    local source_base="${BOOTSTRAP_SOURCE_BASE_URL:-https://github.com/${REPO}/archive/refs/tags}"
+    local source_base="${BOOTSTRAP_SOURCE_BASE_URL:-https://github.com/${REPO}/archive}"
     local release_base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}"
     _BOOTSTRAP_STAGE=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-codex-XXXXXX") || return 1
     local bundle="$_BOOTSTRAP_STAGE/bundle"
     mkdir "$bundle" || return 1
-    fetch_bootstrap_file "$source_base/$tag.tar.gz" "$_BOOTSTRAP_STAGE/source.tar.gz" || return 1
+    fetch_bootstrap_file "$source_base/$BOOTSTRAP_COMMIT.tar.gz" "$_BOOTSTRAP_STAGE/source.tar.gz" || return 1
     tar -xzf "$_BOOTSTRAP_STAGE/source.tar.gz" --strip-components=1 -C "$bundle" || return 1
     [ "$(get_manifest_version "$bundle/.claude-plugin/plugin.json")" = "$version" ] || {
         echo "Source bundle must match Codex-capable release $tag (minimum v1.42.0)." >&2; return 1;

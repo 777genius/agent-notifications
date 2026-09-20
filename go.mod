@@ -9,8 +9,8 @@ require (
 	github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20260920103526-9f0d0cdb8fe8
 	github.com/777genius/plugin-kit-ai/sdk v1.1.1-0.20260920081413-a5644312f7af
 	github.com/creack/pty v1.1.24
-	github.com/esiqveland/notify v0.13.3
-	github.com/gen2brain/beeep v0.11.1
+	github.com/esiqveland/notify v0.14.0
+	github.com/gen2brain/beeep v0.11.2
 	github.com/gen2brain/malgo v0.11.24
 	github.com/go-audio/aiff v1.1.0
 	github.com/go-audio/audio v1.0.0

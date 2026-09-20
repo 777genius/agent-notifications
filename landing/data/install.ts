@@ -4,7 +4,7 @@ export type Target = "unknown" | "macos" | "linux" | "windows" | "manual";
 export type Intent = "install" | "update" | "configure";
 export const products = [
   { value: "claude", label: "Claude Code" },
-  { value: "codex", label: "Codex CLI · beta" },
+  { value: "codex", label: "Codex CLI" },
   { value: "both", label: "Both agents" },
 ] as const;
 export const targets = [
@@ -43,5 +43,5 @@ export function command(
   if (intent === "configure" || target === "unknown" || target === "manual")
     return null;
   const skip = agentNotify ? "" : " --skip-agent-notify";
-  return `curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/main/bin/bootstrap.sh | bash -s -- --product ${product}${skip}`;
+  return `(set -o pipefail; curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/a512deb5819c3f8c7c3be8335f713cc8bb734fc3/bin/setup.sh | bash -s -- --product ${product}${skip})`;
 }

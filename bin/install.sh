@@ -60,6 +60,17 @@ config_preflight_stop() {
     return 1
 }
 
+# Presence on PATH is not enough: Windows Store/WSL python3 stubs must not win.
+usable_python3() {
+    command -v python3 >/dev/null 2>&1 || return 1
+    python3 -I -c 'import json' </dev/null >/dev/null 2>&1
+}
+
+usable_node() {
+    command -v node >/dev/null 2>&1 || return 1
+    NODE_OPTIONS= NODE_PATH= node --no-warnings -e 'JSON.parse("{}")' </dev/null >/dev/null 2>&1
+}
+
 prepare_install_config_preflight() {
     [ "${AGENT_NOTIFICATIONS_CONFIG+x}" = x ] || return 0
     local status
@@ -227,11 +238,10 @@ abort_if_wsl_environment() {
     echo -e "${YELLOW}This installer is running inside WSL, so it would install Linux binaries under /home instead of Windows binaries.${NC}" >&2
     echo -e "${YELLOW}If you started this from PowerShell or Windows Terminal, your bash command is probably WSL bash, not Git Bash.${NC}" >&2
     echo "" >&2
-    echo -e "${YELLOW}For Windows Claude Code, open Git Bash from the Start menu and run:${NC}" >&2
-    echo -e "  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/bin/bootstrap.sh | bash" >&2
+    echo -e "${YELLOW}For Windows Claude Code, open Git Bash and use the installer at:${NC}" >&2
+    echo -e "  https://777genius.github.io/agent-notifications/#install" >&2
     echo "" >&2
-    echo -e "${YELLOW}If you intentionally use Claude Code inside WSL, rerun with:${NC}" >&2
-    echo -e "  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/bin/bootstrap.sh | env CLAUDE_NOTIFICATIONS_ALLOW_WSL=1 bash" >&2
+    echo -e "${YELLOW}For an intentional WSL install, set CLAUDE_NOTIFICATIONS_ALLOW_WSL=1 on the final bash command.${NC}" >&2
     echo "" >&2
     exit 1
 }
@@ -1613,11 +1623,11 @@ create_claude_notifications_app() {
 
     # Check if icon exists
     if [ ! -f "$ICON_SRC" ]; then
-        echo -e "${YELLOW}⚠ Claude icon not found at ${ICON_SRC}${NC}"
+        echo -e "${YELLOW}⚠ Agent Notifications icon not found at ${ICON_SRC}${NC}"
         return 1
     fi
 
-    echo -e "${BLUE}🎨 Creating ClaudeNotifications.app (notification icon)...${NC}"
+    echo -e "${BLUE}🎨 Creating Agent Notifications icon app...${NC}"
 
     guard_install_paths "$APP_DIR" \
         "$APP_DIR/Contents/Info.plist" "$APP_DIR/Contents/MacOS/claude-notify" \
@@ -1691,7 +1701,7 @@ EXEC_EOF
     # Register with Launch Services
     /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP_DIR" 2>/dev/null || true
 
-    echo -e "${GREEN}✓${NC} ClaudeNotifications.app created (Claude icon in notifications)"
+    echo -e "${GREEN}✓${NC} Agent Notifications icon app created"
     return 0
 }
 
@@ -1723,9 +1733,11 @@ setup_iterm2_venv() {
         return 0
     fi
 
-    # Find Python 3
+    # Find a working Python 3 (Store/WSL stubs are not usable for venv).
     local python3_path=""
-    command -v python3 &>/dev/null && python3_path="$(command -v python3)"
+    if usable_python3; then
+        python3_path="$(command -v python3)"
+    fi
 
     if [ -z "$python3_path" ]; then
         echo ""
@@ -2281,7 +2293,7 @@ main() {
         else
             echo -e "${GREEN}✓${NC} terminal-notifier installed (click-to-focus)"
         fi
-        echo -e "${GREEN}✓${NC} Claude icon configured for notifications"
+        echo -e "${GREEN}✓${NC} Agent Notifications icon configured"
     fi
     if [ "$PLATFORM" = "linux" ]; then
         if [ "$GNOME_EXT_INSTALLED" = true ]; then

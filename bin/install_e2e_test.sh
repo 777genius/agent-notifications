@@ -224,6 +224,13 @@ run_with_timeout() {
     wait "$pid"
 }
 
+# Keep environment assignments on the command executed by the timeout helper.
+run_with_timeout_env() {
+    local seconds="$1"
+    shift
+    run_with_timeout "$seconds" env "$@"
+}
+
 # Use the same executable payload and checksum as the main Windows fixture.
 prepare_focus_fixture() {
     local destination="$1" checksum="$2"
@@ -585,6 +592,21 @@ fail_test() {
 #=============================================================================
 # Category A: Offline Tests (no network required)
 #=============================================================================
+
+test_run_with_timeout_env_reaches_child() {
+    echo -e "\n${CYAN}▶ test_run_with_timeout_env_reaches_child${NC}"
+    if ! command -v python3 >/dev/null 2>&1; then
+        skip_test "run_with_timeout_env reaches child" "python3 not available"
+        return
+    fi
+    local output exit_code
+    set +e
+    output=$(run_with_timeout_env 5 CLAUDE_HOOK_JUDGE_MODE=true python3 -c 'import os; print(os.environ.get("CLAUDE_HOOK_JUDGE_MODE",""))' 2>&1)
+    exit_code=$?
+    set +e
+    assert_exit_code 0 "$exit_code" "run_with_timeout_env exits 0"
+    assert_contains "$output" "true" "run_with_timeout_env exports variables to the child"
+}
 
 test_platform_detection() {
     echo -e "\n${CYAN}▶ test_platform_detection${NC}"
@@ -1294,6 +1316,11 @@ test_windows_native_hooks_real_exec_launch() {
     printf '{"hooks":{}}\n' > "$hooks_dir/hooks.json"
 
     local exe_path="$stage_dir/claude-notifications-windows-amd64.exe"
+    if [ "$(go env GOPROXY)" != "off" ]; then
+        fail_test "Isolated Windows go build stays offline" "GOPROXY=$(go env GOPROXY) want off"
+        cleanup_test_dir
+        return
+    fi
     if ! (cd "$REPO_ROOT" && go build -ldflags="-s -w" -trimpath -o "$exe_path" ./cmd/claude-notifications); then
         fail_test "Build real Windows notification binary" "go build failed"
         cleanup_test_dir
@@ -1358,8 +1385,10 @@ test_windows_native_hooks_real_exec_launch() {
     assert_contains "$hooks_json" '"handle-hook"' "real hooks.json calls hook handler"
     assert_contains "$hooks_json" '"Stop"' "real hooks.json contains Stop hook"
 
+    # Judge mode skips WinRT/PowerShell toast delivery, which can stall hosted
+    # Windows runners. The assertion is that the exec-form exe launches.
     set +e
-    output=$(printf '{"session_id":"ci-win","transcript_path":"","cwd":""}\n' | APPDATA="$native_appdata" "$exe_path" handle-hook Stop 2>&1)
+    output=$(printf '{"session_id":"ci-win","transcript_path":"","cwd":""}\n' | run_with_timeout_env 20 APPDATA="$native_appdata" CLAUDE_HOOK_JUDGE_MODE=true "$exe_path" handle-hook Stop 2>&1)
     exit_code=$?
     set +e
 
@@ -1400,6 +1429,11 @@ test_windows_real_hook_schedules_lazy_update() {
     cp "$INSTALL_SCRIPT" "$bin_dir/install.sh"
 
     local exe_path="$bin_dir/claude-notifications-windows-amd64.exe"
+    if [ "$(go env GOPROXY)" != "off" ]; then
+        fail_test "Isolated Windows lazy-update go build stays offline" "GOPROXY=$(go env GOPROXY) want off"
+        cleanup_test_dir
+        return
+    fi
     if ! (cd "$REPO_ROOT" && go build -o "$exe_path" ./cmd/claude-notifications); then
         fail_test "Build real Windows notification binary for lazy update" "go build failed"
         cleanup_test_dir
@@ -1455,7 +1489,8 @@ FAKE_BASH_GO_EOF
     local output exit_code
     set +e
     output=$(printf '{"session_id":"ci-win","transcript_path":"","cwd":""}\n' | \
-        env AGENT_NOTIFICATIONS_CONFIG="$fixture_config_for_windows" \
+        run_with_timeout_env 20 \
+            AGENT_NOTIFICATIONS_CONFIG="$fixture_config_for_windows" \
             CLAUDE_NOTIFICATIONS_BASH="$fake_bash_for_windows" \
             FAKE_BASH_LOG="$fake_bash_log_for_windows" \
             CLAUDE_HOOK_JUDGE_MODE=true \
@@ -2620,6 +2655,7 @@ main() {
         # Category A: Offline Tests
         echo ""
         echo -e "${BOLD}Category A: Offline Tests${NC}"
+        test_run_with_timeout_env_reaches_child
         test_platform_detection
         test_binary_name_format
         test_wsl_guard_blocks_linux_install

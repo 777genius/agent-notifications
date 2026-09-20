@@ -259,7 +259,7 @@ Discord webhooks are a **common attack vector**. If an attacker gets your webhoo
 ## Best Practices
 
 1. **Dedicated channel** - Create an `#agent-notifications` channel
-2. **Custom avatar** - Upload Claude icon for easy identification
+2. **Custom avatar** - Upload the Agent Notifications logo for easy identification
 3. **Enable retry** - Handle transient network failures
 4. **Monitor rate limits** - Discord has stricter limits than Slack
 5. **Test thoroughly** - Use webhook.site before production

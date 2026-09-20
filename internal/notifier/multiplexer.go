@@ -3,6 +3,7 @@ package notifier
 import (
 	"fmt"
 
+	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/logging"
 )
 
@@ -10,7 +11,7 @@ import (
 type multiplexerHandler struct {
 	name      string
 	detect    func() bool
-	buildArgs func(title, message, bundleID string) ([]string, error)
+	buildArgs func(title, message, bundleID string, cfg *config.Config) ([]string, error)
 }
 
 // multiplexerHandlers is the ordered list of supported multiplexers.
@@ -26,12 +27,12 @@ var multiplexerHandlers = []multiplexerHandler{
 // Returns (args, name) if detected and target obtained,
 // (nil, name) if detected but target failed,
 // (nil, "") if no multiplexer detected.
-func detectMultiplexerArgs(title, message, bundleID string) ([]string, string) {
+func detectMultiplexerArgs(title, message, bundleID string, cfg *config.Config) ([]string, string) {
 	for _, mux := range multiplexerHandlers {
 		if !mux.detect() {
 			continue
 		}
-		args, err := mux.buildArgs(title, message, bundleID)
+		args, err := mux.buildArgs(title, message, bundleID, cfg)
 		if err != nil {
 			logging.Debug("%s detected but buildArgs failed: %v", mux.name, err)
 			return nil, mux.name
@@ -44,7 +45,7 @@ func detectMultiplexerArgs(title, message, bundleID string) ([]string, string) {
 // buildTmuxClickArgs captures tmux target and builds notifier args.
 // For iTerm2 tmux -CC (control mode), uses the iTerm2 Python API helper
 // instead of standard tmux select-window (which doesn't switch iTerm2 tabs).
-func buildTmuxClickArgs(title, message, bundleID string) ([]string, error) {
+func buildTmuxClickArgs(title, message, bundleID string, _ *config.Config) ([]string, error) {
 	target, err := GetTmuxPaneTarget()
 	if err != nil {
 		return nil, err
@@ -80,7 +81,7 @@ func buildTmuxClickArgs(title, message, bundleID string) ([]string, error) {
 }
 
 // buildZellijClickArgs captures zellij tab target and builds notifier args.
-func buildZellijClickArgs(title, message, bundleID string) ([]string, error) {
+func buildZellijClickArgs(title, message, bundleID string, _ *config.Config) ([]string, error) {
 	tabName, sessionName, err := GetZellijTabTarget()
 	if err != nil {
 		return nil, err
@@ -89,7 +90,7 @@ func buildZellijClickArgs(title, message, bundleID string) ([]string, error) {
 }
 
 // buildWezTermClickArgs captures WezTerm pane target and builds notifier args.
-func buildWezTermClickArgs(title, message, bundleID string) ([]string, error) {
+func buildWezTermClickArgs(title, message, bundleID string, _ *config.Config) ([]string, error) {
 	paneID, socketPath, err := GetWezTermPaneTarget()
 	if err != nil {
 		return nil, err
@@ -98,7 +99,7 @@ func buildWezTermClickArgs(title, message, bundleID string) ([]string, error) {
 }
 
 // buildKittyClickArgs captures Kitty window target and builds notifier args.
-func buildKittyClickArgs(title, message, bundleID string) ([]string, error) {
+func buildKittyClickArgs(title, message, bundleID string, _ *config.Config) ([]string, error) {
 	windowID, listenOn, err := GetKittyWindowTarget()
 	if err != nil {
 		return nil, err

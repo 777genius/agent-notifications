@@ -25,6 +25,8 @@ done
 for args in '--product invalid' '--product' '--unknown' '--product claude --product codex'; do
     if ( PRODUCT=""; select_product $args ); then echo "accepted $args"; exit 1; fi
 done
+TEST_RELEASE_COMMIT="0123456789abcdef0123456789abcdef01234567"
+BOOTSTRAP_RAW_BASE_URL="https://raw.example.invalid/repository"
 if ( PRODUCT=""; CONFIGURE_ARGS=(); select_product --product codex --navigation none ); then echo "accepted incomplete none"; exit 1; fi
 if ( PRODUCT=""; CONFIGURE_ARGS=(); select_product --product codex --allow-unknown-caller true ); then echo "accepted partial consent"; exit 1; fi
 PRODUCT=""; CONFIGURE_ARGS=(); CONFIGURE_NOTIFICATIONS=true
@@ -34,17 +36,90 @@ PRODUCT=""; CONFIGURE_ARGS=(); CONFIGURE_NOTIFICATIONS=true
 select_product --product claude
 [ "${CONFIGURE_ARGS[*]}" = "--navigation none --allow-unknown-caller true --allow-caller-asserted false" ]
 for tag in v1.42.0 v1.43.2 v2.0.0; do
-    BOOTSTRAP_RELEASE_TAG="$tag" resolve_bootstrap_release
+    BOOTSTRAP_RELEASE_TAG="$tag"
+    BOOTSTRAP_RELEASE_COMMIT="$TEST_RELEASE_COMMIT"
+    INSTALL_SCRIPT_URL=""
+    resolve_bootstrap_release
     [ "$BOOTSTRAP_TAG" = "$tag" ]
+    [ "$BOOTSTRAP_COMMIT" = "$TEST_RELEASE_COMMIT" ]
+    case "$BOOTSTRAP_COMMIT" in *$'\r'*) echo "release commit contains CR"; exit 1 ;; esac
+    [ "$(select_bootstrap_install_script)" = "$BOOTSTRAP_RAW_BASE_URL/$TEST_RELEASE_COMMIT/bin/install.sh" ]
 done
 for tag in v1.41.0 v0.99.0 v1.42.0-rc1 v01.42.0 v1.042.0 v1.42.00 v99999999999999999999.0.0 main; do
     if BOOTSTRAP_RELEASE_TAG="$tag" resolve_bootstrap_release; then exit 1; fi
 done
+for commit in short 0123456789abcdef0123456789abcdef0123456g 0123456789ABCDEF0123456789ABCDEF01234567; do
+    if BOOTSTRAP_RELEASE_TAG=v1.42.0 BOOTSTRAP_RELEASE_COMMIT="$commit" resolve_bootstrap_release; then exit 1; fi
+done
+place_runtime_cmd() {
+    local dest="$1" src="${2:-}"
+    [ -n "$src" ] && [ -e "$src" ] || return 0
+    [ ! -e "$dest" ] || return 0
+    printf '#!/bin/sh\nexec %s "$@"\n' "$(printf "'%s'" "$(printf '%s' "$src" | sed "s/'/'\\\\''/g")")" > "$dest"
+    chmod +x "$dest"
+}
+if command -v node >/dev/null 2>&1; then
+    NODE_ONLY="$SANDBOX/node-only-bin"
+    mkdir -p "$NODE_ONLY"
+    for name in node bash sh mktemp rm cat chmod mkdir ln uname tr head cp mv env true false grep sed awk; do
+        src=$(type -P "$name" 2>/dev/null || true)
+        place_runtime_cmd "$NODE_ONLY/$name" "$src"
+    done
+    (
+        PATH="$NODE_ONLY"
+        command -v python3 >/dev/null 2>&1 && { echo "python3 leaked into node-only PATH"; exit 1; }
+        command -v node >/dev/null 2>&1 || { echo "node missing from node-only PATH"; exit 1; }
+        BOOTSTRAP_RELEASE_TAG=v1.42.0
+        unset BOOTSTRAP_RELEASE_COMMIT INSTALL_SCRIPT_URL
+        BOOTSTRAP_RAW_BASE_URL="https://raw.example.invalid/repository"
+        fetch_bootstrap_file() { printf '%s\n' '{"sha":"'"$TEST_RELEASE_COMMIT"'"}' > "$2"; }
+        resolve_bootstrap_release
+        [ "$BOOTSTRAP_COMMIT" = "$TEST_RELEASE_COMMIT" ]
+        [ "$(select_bootstrap_install_script)" = "$BOOTSTRAP_RAW_BASE_URL/$TEST_RELEASE_COMMIT/bin/install.sh" ]
+    )
+    echo "node-only resolve_bootstrap_release passed"
+    STUB_BIN="$SANDBOX/store-stub-bin"
+    mkdir -p "$STUB_BIN"
+    printf '%s\n' '#!/bin/sh' \
+        'echo "Python was not found; run without arguments to install from the Microsoft Store." >&2' \
+        'exit 9009' > "$STUB_BIN/python3"
+    chmod +x "$STUB_BIN/python3"
+    (
+        PATH="$STUB_BIN:$NODE_ONLY"
+        command -v python3 >/dev/null 2>&1 || { echo "stub python3 missing from PATH"; exit 1; }
+        python3 -I -c 'import json' >/dev/null 2>&1 && { echo "stub python3 unexpectedly usable"; exit 1; }
+        command -v node >/dev/null 2>&1 || { echo "node missing from stub+node PATH"; exit 1; }
+        rt=$(installer_runtime)
+        [ "$rt" = node ] || { echo "installer_runtime=$rt"; exit 1; }
+        BOOTSTRAP_RELEASE_TAG=v1.42.0
+        unset BOOTSTRAP_RELEASE_COMMIT INSTALL_SCRIPT_URL
+        BOOTSTRAP_RAW_BASE_URL="https://raw.example.invalid/repository"
+        fetch_bootstrap_file() { printf '%s\n' '{"sha":"'"$TEST_RELEASE_COMMIT"'"}' > "$2"; }
+        resolve_bootstrap_release
+        [ "$BOOTSTRAP_COMMIT" = "$TEST_RELEASE_COMMIT" ]
+        [ "$(select_bootstrap_install_script)" = "$BOOTSTRAP_RAW_BASE_URL/$TEST_RELEASE_COMMIT/bin/install.sh" ]
+    )
+    echo "stub python3 falls back to node in installer_runtime"
+fi
+unset BOOTSTRAP_RELEASE_TAG BOOTSTRAP_RELEASE_COMMIT BOOTSTRAP_RAW_BASE_URL INSTALL_SCRIPT_URL
+# The production archive endpoint accepts a commit SHA directly, outside refs/tags.
+(
+    PRODUCT=codex
+    BOOTSTRAP_TAG=v1.42.0
+    BOOTSTRAP_COMMIT="$TEST_RELEASE_COMMIT"
+    TMPDIR="$SANDBOX/archive-test"; mkdir -p "$TMPDIR"
+    request="$TMPDIR/request"
+    fetch_bootstrap_file() { printf '%s\n' "$1" > "$request"; return 1; }
+    install_cleanup_traps
+    if install_codex; then exit 1; fi
+    [ "$(cat "$request")" = "https://github.com/${REPO}/archive/$TEST_RELEASE_COMMIT.tar.gz" ]
+)
 INSTALL_SCRIPT_URL=""
 BOOTSTRAP_TAG=v1.43.0
+BOOTSTRAP_COMMIT="$TEST_RELEASE_COMMIT"
 BOOTSTRAP_RAW_CONTENT_URL="http://example.test"
 MANAGED_INSTALL_SCRIPT_URL="http://example.test/main/bin/install.sh"
-[ "$(select_bootstrap_install_script)" = "http://example.test/v1.43.0/bin/install.sh" ]
+[ "$(select_bootstrap_install_script)" = "http://example.test/$TEST_RELEASE_COMMIT/bin/install.sh" ]
 mkdir -p "$(bootstrap_control_root)"
 printf '{}\n' > "$(bootstrap_control_root)/ownership.json"
 [ "$(select_bootstrap_install_script)" = "http://example.test/main/bin/install.sh" ]
@@ -169,13 +244,17 @@ printf 'bootstrap product unit fixtures passed\n'
 # Local HTTP and controlling-PTY integration. Installer/registration are explicit
 # fake adapters here; the fetched bootstrap, archive extraction and curl are real.
 python3 - "$ROOT" "$SANDBOX" <<'PY'
-import functools, http.server, io, json, os, pathlib, select, shlex, shutil, subprocess, sys, tarfile, threading, time
+import functools, http.server, io, json, os, pathlib, select, shlex, shutil, signal, subprocess, sys, tarfile, threading, time
 if os.name != "nt":
     import pty
 root, sandbox = map(pathlib.Path, sys.argv[1:])
 web = sandbox / 'http'; web.mkdir()
 (web / 'bootstrap.sh').write_bytes((root / 'bin/bootstrap.sh').read_bytes())
 (web / 'latest').write_text('{"tag_name":"v1.42.0"}')
+release_commits = {'v1.42.0': 'a' * 40, 'v1.43.0': 'b' * 40, 'v2.0.0': 'c' * 40}
+(web / 'commits').mkdir()
+for tag, commit in release_commits.items():
+    (web / 'commits' / tag).write_text(json.dumps({'sha': commit}))
 uname_os=subprocess.check_output(['uname','-s'],text=True).strip().lower()
 uname_arch=subprocess.check_output(['uname','-m'],text=True).strip().lower()
 asset_os='windows' if uname_os.startswith(('mingw','msys','cygwin')) else uname_os
@@ -188,7 +267,7 @@ cp "$INSTALL_STAGED_ASSETS"/claude-notifications-* "$INSTALL_TARGET_DIR/claude-n
 chmod +x "$INSTALL_TARGET_DIR/claude-notifications"
 cp "$INSTALL_TARGET_DIR/claude-notifications" "$INSTALL_TARGET_DIR/claude-notifications-windows-amd64.exe"
 '''
-binary = '''#!/usr/bin/env python3
+binary = '''#!''' + sys.executable + '''
 import json, os, pathlib, sys
 # Match the native Go helper's LF protocol on Windows too. Python's default
 # CRLF would leave a trailing carriage return in Bash's baseline version.
@@ -297,17 +376,24 @@ if changed:
     p.parent.mkdir(parents=True,exist_ok=True); p.write_text('{}')
 print(json.dumps(dict(selected,changed=changed)))
 '''
-for tag in ['v1.42.0', 'v1.43.0']:
-    with tarfile.open(web / (tag + '.tar.gz'), 'w:gz') as archive:
+for tag, commit in release_commits.items():
+    with tarfile.open(web / (commit + '.tar.gz'), 'w:gz') as archive:
         for name, data in {'bin/install.sh': installer, '.claude-plugin/plugin.json': '{"version":"'+tag[1:]+'"}'}.items():
             data = data.encode('utf-8'); entry = tarfile.TarInfo('bundle/' + name); entry.size = len(data); entry.mode = 0o755
             archive.addfile(entry, io.BytesIO(data))
+    archive_copy = web / 'archive' / (commit + '.tar.gz')
+    archive_copy.parent.mkdir(parents=True, exist_ok=True)
+    archive_copy.write_bytes((web / (commit + '.tar.gz')).read_bytes())
     dest = web / 'download' / tag; dest.mkdir(parents=True)
     payload=binary.replace('v1.42.0', tag).encode('utf-8')
     (dest / 'binary').write_bytes(payload)
     (dest / asset_name).write_bytes(payload)
     import hashlib
     (dest / 'checksums.txt').write_bytes((hashlib.sha256(payload).hexdigest()+'  '+asset_name+'\n').encode('ascii'))
+    raw = web / 'raw' / commit / 'bin'; raw.mkdir(parents=True)
+    (raw / 'install.sh').write_bytes(installer.encode('utf-8'))
+    tag_raw = web / 'raw' / tag / 'bin'; tag_raw.mkdir(parents=True)
+    (tag_raw / 'install.sh').write_bytes(installer.encode('utf-8'))
 capable = binary.replace(
     '  setup-codex [--print] [--dry-run] [--codex-home <dir>] [--plugin-root <dir>]',
     '  setup-codex [--print] [--dry-run] [--codex-home <dir>] [--plugin-root <dir>]\\n                          [--agent-notify|--skip-agent-notify]\\n  setup-notifications',
@@ -318,11 +404,7 @@ capable = binary.replace(
     "print('Error: unknown command: setup-notifications', file=sys.stderr)\n    sys.exit(1)",
     "sys.exit(0)",
 )
-with tarfile.open(web / 'v2.0.0.tar.gz', 'w:gz') as archive:
-    for name, data in {'bin/install.sh': installer, '.claude-plugin/plugin.json': '{"version":"2.0.0"}'}.items():
-        data = data.encode('utf-8'); entry = tarfile.TarInfo('bundle/' + name); entry.size = len(data); entry.mode = 0o755
-        archive.addfile(entry, io.BytesIO(data))
-dest = web / 'download' / 'v2.0.0'; dest.mkdir(parents=True)
+dest = web / 'download' / 'v2.0.0'
 payload=capable.replace('v1.42.0', 'v2.0.0').encode('utf-8')
 (dest / 'binary').write_bytes(payload)
 (dest / asset_name).write_bytes(payload)
@@ -373,28 +455,46 @@ env_keys = (
     'CLAUDE_CONFIG_DIR', 'TMP', 'TEMP', 'TMPDIR',
 )
 env = {key: os.environ[key] for key in env_keys if key in os.environ}
-env.update(INSTALL_SCRIPT_URL=base+'/install.sh', BOOTSTRAP_LATEST_RELEASE_API_URL=base+'/latest', BOOTSTRAP_SOURCE_BASE_URL=base, BOOTSTRAP_RELEASES_BASE_URL=base)
+env.update(BOOTSTRAP_LATEST_RELEASE_API_URL=base+'/latest', BOOTSTRAP_COMMIT_API_BASE_URL=base+'/commits', BOOTSTRAP_RAW_BASE_URL=base+'/raw', BOOTSTRAP_RAW_CONTENT_URL=base+'/raw', BOOTSTRAP_SOURCE_BASE_URL=base, BOOTSTRAP_RELEASES_BASE_URL=base)
 cli = sandbox / 'clis'; cli.mkdir()
 (cli / 'codex').write_bytes(b'#!/bin/sh\nexit 99\n'); (cli / 'codex').chmod(0o755)
 bash = shutil.which('bash'); assert bash
 env['PATH'] = str(cli) + os.pathsep + (os.environ['PATH'] if os.name == 'nt' else '/usr/bin:/bin')
 script = str(root / 'bin/bootstrap.sh')
 def run(args, expected=0, extra=None):
-    result = subprocess.run([bash, script]+args, env=dict(env, **(extra or {})), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True, timeout=40)
-    assert (result.returncode == 0) == (expected == 0), result.stdout.decode()
-    return result.stdout.decode()
+    process = subprocess.Popen([bash, script]+args, env=dict(env, **(extra or {})), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+    try:
+        output, _ = process.communicate(timeout=40)
+    except subprocess.TimeoutExpired:
+        # Killing only Bash leaves curl/helper children holding the output pipe,
+        # so subprocess.run's timeout cleanup can itself wait indefinitely.
+        if os.name == 'nt':
+            subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+        else:
+            os.killpg(process.pid, signal.SIGKILL)
+        output, _ = process.communicate(timeout=5)
+        raise AssertionError('bootstrap timed out: ' + repr(args) + '\n' + output.decode())
+    assert (process.returncode == 0) == (expected == 0), output.decode()
+    return output.decode()
 assert 'No controlling TTY' in run([], 1)
 assert 'claude CLI not found' in run(['--product', 'both'], 1)
 (cli / 'codex').rename(cli / 'absent')
 assert 'codex CLI not found' in run(['--product', 'codex'], 1)
 (cli / 'absent').rename(cli / 'codex')
 run(['--product', 'codex']); run(['--product', 'codex'])
+assert '/commits/v1.42.0' in request_paths
+assert '/raw/' + release_commits['v1.42.0'] + '/bin/install.sh' in request_paths
+assert '/' + release_commits['v1.42.0'] + '.tar.gz' in request_paths
+assert not any('/refs/tags/' + commit in path for commit in release_commits.values() for path in request_paths)
 run(['--product', 'codex'], extra={'BOOTSTRAP_RELEASE_TAG':'v1.43.0'})
 run(['--product', 'codex'], extra={'BOOTSTRAP_RELEASE_TAG':'v2.0.0'})
+assert '/' + release_commits['v2.0.0'] + '.tar.gz' in request_paths
+assert '/commits/v2.0.0' in request_paths
 pairing={'INSTALL_SCRIPT_URL':'','BOOTSTRAP_RAW_CONTENT_URL':base,'MANAGED_INSTALL_SCRIPT_URL':base+'/main/bin/install.sh'}
 request_paths.clear()
 run(['--product', 'codex'], extra=dict(pairing, BOOTSTRAP_RELEASE_TAG='v1.43.0'))
-assert sum(path.endswith('/v1.43.0/bin/install.sh') for path in request_paths)==1
+assert sum(path.endswith('/' + release_commits['v1.43.0'] + '/bin/install.sh') for path in request_paths)==1
 assert not any(path.endswith('/main/bin/install.sh') for path in request_paths)
 home=pathlib.Path(env['HOME'])
 xdg=sandbox/'xdg-config'
@@ -413,7 +513,7 @@ ledger.write_text('{"schema":1,"id":"fixture","generation":1,"consumers":{},"fil
 request_paths.clear()
 run(['--product', 'codex'], extra=dict(pairing, BOOTSTRAP_RELEASE_TAG='v1.43.0', **managed_env))
 assert sum(path.endswith('/main/bin/install.sh') for path in request_paths)==1
-assert not any(path.endswith('/v1.43.0/bin/install.sh') for path in request_paths)
+assert not any(path.endswith('/' + release_commits['v1.43.0'] + '/bin/install.sh') for path in request_paths)
 ledger.unlink()
 registration = pathlib.Path(env['CODEX_HOME']) / 'fixture-registration'
 before = registration.read_bytes()
@@ -433,7 +533,7 @@ live = sandbox / 'live claude'; (live / 'bin').mkdir(parents=True); (live / '.cl
 (live / '.claude-plugin/plugin.json').write_text('{"version":"1.42.0"}')
 (live / 'bin/install.sh').write_bytes(installer.encode('utf-8'))
 (live / 'bin/claude-notifications').write_text('stale')
-command = 'source '+shlex.quote(str(sandbox/'functions.sh'))+'; PRODUCT=both; PLUGIN_ROOT='+shlex.quote(str(live))+'; BOOTSTRAP_TAG=v1.42.0; install_cleanup_traps; stage_config_helper; config_preflight; install_codex'
+command = 'source '+shlex.quote(str(sandbox/'functions.sh'))+'; PRODUCT=both; PLUGIN_ROOT='+shlex.quote(str(live))+'; BOOTSTRAP_TAG=v1.42.0; BOOTSTRAP_COMMIT='+release_commits['v1.42.0']+'; INSTALL_SCRIPT_URL='+shlex.quote(base+'/raw/'+release_commits['v1.42.0']+'/bin/install.sh')+'; install_cleanup_traps; stage_config_helper; config_preflight; install_codex'
 r = subprocess.run([bash,'-c',command],env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=20)
 assert r.returncode == 0, r.stdout.decode()
 assert (live/'bin/claude-notifications').read_text() == 'stale'
@@ -469,7 +569,7 @@ assert not list(pathlib.Path(env['TMPDIR']).glob('bootstrap-release-*'))
 # fake config CLI models the coordinated contract, not Go resolver evidence.
 trace=sandbox/'trace'; request=sandbox/'request.json'
 env.update(FIXTURE_TRACE=str(trace),FIXTURE_REQUEST=str(request))
-claude_script='''#!/usr/bin/env python3
+claude_script='''#!''' + sys.executable + '''
 import json,os,pathlib,sys
 args=sys.argv[1:]
 with open(os.environ['FIXTURE_TRACE'],'a') as f: f.write(json.dumps(['claude']+args)+'\\n')
@@ -665,6 +765,31 @@ trace.write_text('')
 run(['--product','both'],1,{'PYTHONOPTIMIZE':'2'})
 assert not events()
 payload_file.write_bytes(valid_payload); checksums.write_bytes(valid_checksums)
+def place_runtime_cmd(dest, src):
+    if dest.exists() or not src or not os.path.isfile(src):
+        return
+    n = src.replace('\\', '/').lower()
+    base = os.path.basename(n)
+    if base in ('python', 'python.exe', 'python3', 'python3.exe', 'node', 'node.exe') and (
+            '/windowsapps/' in n or '/system32/' in n or '/syswow64/' in n):
+        return
+    dest.write_text('#!/bin/sh\nexec {} "$@"\n'.format(shlex.quote(src.replace('\\', '/'))))
+    dest.chmod(0o755)
+if shutil.which('node'):
+    node_only = sandbox / 'http-node-only-bin'
+    node_only.mkdir()
+    for name in ['bash', 'sh', 'mktemp', 'rm', 'cat', 'chmod', 'mkdir', 'ln', 'uname',
+                 'tr', 'head', 'cp', 'mv', 'env', 'true', 'false', 'grep', 'sed', 'awk',
+                 'tar', 'gzip', 'curl', 'node', 'sha256sum', 'shasum', 'dirname', 'realpath']:
+        place_runtime_cmd(node_only / name, shutil.which(name))
+    assert not (node_only / 'python3').exists()
+    reset_case()
+    env['PATH'] = str(cli) + os.pathsep + str(node_only)
+    run(['--product', 'codex'])
+    assert (pathlib.Path(env['XDG_CONFIG_HOME']) / 'agent-notifications/config.json').exists()
+    print('node-only bootstrap HTTP e2e passed')
+else:
+    print('SKIP node-only bootstrap HTTP e2e: node not available')
 print('protected flow fixtures passed (fake config CLI; real Go integration pending)')
 server.shutdown(); server.server_close()
 print('local HTTP / curl-pipe PTY adapter fixtures passed (fake installer and binary)')
