@@ -172,7 +172,7 @@ shutil.copytree(os.environ['SOURCE'],root,dirs_exist_ok=True)
         runtime.mkdir()
         names = ['bash', 'sh', 'mktemp', 'rm', 'cat', 'chmod', 'mkdir', 'ln', 'uname',
                  'tr', 'head', 'cp', 'mv', 'env', 'true', 'false', 'grep', 'sed', 'awk',
-                 'tar', 'gzip', 'curl', 'cut', 'basename', 'dirname', 'touch']
+                 'tar', 'gzip', 'curl', 'cut', 'basename', 'dirname', 'touch', 'sha256sum']
         if python and not stub_python:
             names.append('python3')
         if node:

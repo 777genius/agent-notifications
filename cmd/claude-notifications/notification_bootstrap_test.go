@@ -236,8 +236,11 @@ main --product both
 		t.Fatal(err)
 	}
 	body := string(calls)
-	if strings.Contains(body, "setup-notifications configure") {
-		t.Fatal("wizard path called configure", body)
+	if !strings.Contains(body, "setup-notifications configure --provider both --navigation none --allow-unknown-caller true --allow-caller-asserted false") {
+		t.Fatal("wizard must enable accepted policy", body)
+	}
+	if strings.Index(body, "setup-notifications configure") > strings.Index(body, "setup-notifications wizard") {
+		t.Fatal("policy must precede portable registration", body)
 	}
 	if !strings.Contains(body, "setup-notifications wizard --action install --agents claude,codex --hooks false --agent-notify true --yes") {
 		t.Fatal(body)
@@ -293,7 +296,7 @@ func TestNotificationBootstrapWizardRetryQuotesCustomRoots(t *testing.T) {
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	binary := filepath.Join(home, "fake binary")
-	helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then printf '%s\\n' 'setup-notifications wizard' 'setup-notifications' '--skip-agent-notify'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\nexit 1\n"
+	helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then printf '%s\\n' 'setup-notifications wizard' 'setup-notifications' '--skip-agent-notify'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n[ \"$2\" = configure ] && exit 0\nexit 1\n"
 	if err := os.WriteFile(binary, []byte(helper), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -474,8 +477,11 @@ main --product both
 		t.Fatal(err)
 	}
 	body := string(calls)
-	if strings.Contains(body, "setup-notifications configure") {
-		t.Fatal("wizard path called configure", body)
+	if !strings.Contains(body, "setup-notifications configure --provider both --navigation none --allow-unknown-caller true --allow-caller-asserted false") {
+		t.Fatal("wizard must enable accepted policy", body)
+	}
+	if strings.Index(body, "setup-notifications configure") > strings.Index(body, "setup-notifications wizard") {
+		t.Fatal("policy must precede portable registration", body)
 	}
 	if !strings.Contains(body, "--package ") || !strings.Contains(body, asset) {
 		t.Fatal(body)
@@ -996,6 +1002,61 @@ main
 			data, err := os.ReadFile(sentinel)
 			if err != nil || string(data) != "existing-runtime" {
 				t.Fatalf("overwritten: %s %v", data, err)
+			}
+		})
+	}
+}
+
+func TestNotificationBootstrapWindowsLaunchers(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join(notificationRepoRoot(t), "bin", "bootstrap.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := strings.TrimSuffix(strings.TrimSpace(string(source)), `main "$@"`)
+	for _, arch := range []string{"amd64", "arm64"} {
+		t.Run(arch, func(t *testing.T) {
+			home := t.TempDir()
+			root := filepath.Join(home, "runtime space")
+			if err := os.MkdirAll(filepath.Join(root, "bin"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			binary := filepath.Join(root, "bin", "claude-notifications-windows-"+arch+".exe")
+			if err := os.WriteFile(binary, []byte("#!/bin/sh\nif [ \"$1\" = --version ]; then echo \"claude-notifications v1.42.0\"; exit 0; fi\nprintf '%s\\n' \"$*\"\n"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			script := prefix + `
+uname() { case "$1" in -s) echo MINGW64_NT ;; -m) echo "$FIXTURE_ARCH" ;; esac; }
+config_preflight() { :; }
+fetch_bootstrap_file() { :; }
+tar() { mkdir -p "$bundle/bin"; touch "$bundle/bin/install.sh"; }
+get_manifest_version() { echo 1.42.0; }
+install_runtime() { cp "$FIXTURE_ROOT/bin/"*.exe "$bundle/bin/"; }
+cli_has_setup_codex_skip_agent_notify() { return 1; }
+BOOTSTRAP_TAG=v1.42.0
+TMPDIR="$FIXTURE_HOME"
+CONFIGURE_ARGS=(--codex-home "$FIXTURE_HOME")
+setup_marketplace() { :; }
+install_plugin() { :; }
+sync_marketplace_checkout() { :; }
+find_plugin_root() { :; }
+download_binary() { :; }
+setup_iterm2_venv() { :; }
+setup_codex_home="$FIXTURE_HOME"
+mkdir -p "$setup_codex_home/claude-notifications-go"
+cp -R "$FIXTURE_ROOT/bin" "$setup_codex_home/claude-notifications-go/"
+PRODUCT=codex
+install_codex || exit 1
+"$CONFIGURE_BINARY" codex-launch || exit 1
+PRODUCT=claude
+PLUGIN_ROOT="$FIXTURE_ROOT"
+install_claude || exit 1
+"$CONFIGURE_BINARY" claude-launch || exit 1
+`
+			cmd := exec.Command("bash", "-c", script)
+			cmd.Env = append(os.Environ(), "HOME="+home, "FIXTURE_HOME="+home, "FIXTURE_ROOT="+root, "FIXTURE_ARCH="+arch)
+			out, err := cmd.CombinedOutput()
+			if err != nil || !strings.Contains(string(out), "codex-launch") || !strings.Contains(string(out), "claude-launch") {
+				t.Fatalf("native Windows launcher selection: %v\n%s", err, out)
 			}
 		})
 	}

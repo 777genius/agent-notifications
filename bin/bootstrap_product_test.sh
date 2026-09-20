@@ -263,9 +263,11 @@ asset_name='claude-notifications-'+asset_os+'-'+asset_arch+('.exe' if asset_os==
 installer = '''#!/bin/bash
 set -eu
 [ "$1" = --force ]
-cp "$INSTALL_STAGED_ASSETS"/claude-notifications-* "$INSTALL_TARGET_DIR/claude-notifications"
-chmod +x "$INSTALL_TARGET_DIR/claude-notifications"
-cp "$INSTALL_TARGET_DIR/claude-notifications" "$INSTALL_TARGET_DIR/claude-notifications-windows-amd64.exe"
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) cp "$INSTALL_STAGED_ASSETS"/claude-notifications-*.exe "$INSTALL_TARGET_DIR/" ;;
+    *) cp "$INSTALL_STAGED_ASSETS"/claude-notifications-* "$INSTALL_TARGET_DIR/claude-notifications" ;;
+esac
+chmod +x "$INSTALL_TARGET_DIR"/claude-notifications*
 '''
 binary = '''#!''' + sys.executable + '''
 import json, os, pathlib, sys
@@ -305,7 +307,7 @@ if args[0]=='setup-codex':
         (p/'fixture-registration').write_text('registered')
         dest=p/'claude-notifications-go'/'bin'
         dest.mkdir(parents=True, exist_ok=True)
-        target=dest/'claude-notifications'
+        target=dest/(pathlib.Path(sys.argv[0]).name if os.name=='nt' else 'claude-notifications')
         target.write_bytes(pathlib.Path(sys.argv[0]).read_bytes())
         target.chmod(0o755)
         if os.environ.get('FAIL_SETUP_INIT')=='1': sys.exit(3)
@@ -431,8 +433,8 @@ assert protocol == b'1.40.0\n', repr(protocol)
 def write_origin_installer(path, origin):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(installer.replace(
-        'chmod +x "$INSTALL_TARGET_DIR/claude-notifications"',
-        'printf %s\\\\n '+origin+' > "$INSTALL_TARGET_DIR/script-origin"\nchmod +x "$INSTALL_TARGET_DIR/claude-notifications"',
+        'chmod +x "$INSTALL_TARGET_DIR"/claude-notifications*',
+        'printf %s\\\\n '+origin+' > "$INSTALL_TARGET_DIR/script-origin"\nchmod +x "$INSTALL_TARGET_DIR"/claude-notifications*',
         1,
     ))
 for tag in ['v1.42.0', 'v1.43.0', 'v2.0.0']:
@@ -747,9 +749,9 @@ assert r.returncode==0, r.stdout.decode()
 assert events()==[['config','init','--json']]
 # Offline staging failure cannot touch a working runtime/registration.
 trace.write_text(''); active=pathlib.Path(env['CLAUDE_CONFIG_DIR'])/'plugins/cache/claude-notifications-go/claude-notifications-go/1.42.0'
-before=(active/'bin/claude-notifications').read_bytes()
+before=(active/'bin'/ (asset_name if os.name=='nt' else 'claude-notifications')).read_bytes()
 run(['--product','both'],1,{'BOOTSTRAP_RELEASES_BASE_URL':base+'/offline'})
-assert (active/'bin/claude-notifications').read_bytes()==before and not events()
+assert (active/'bin'/ (asset_name if os.name=='nt' else 'claude-notifications')).read_bytes()==before and not events()
 # A checksum-valid older helper without config commands fails before touching
 # host registration. A hostile Python environment cannot disable verification.
 valid_payload=payload_file.read_bytes()

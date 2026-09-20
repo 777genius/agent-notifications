@@ -89,7 +89,7 @@ def place_runtime_cmd(dest, src):
     # Cleanup wrappers may need tools outside the runtime-isolation PATH.
     # Preserve the selected host command and its dependencies for cleanup only.
     cleanup_env = ('PATH=' + shlex.quote(os.environ['PATH']) + ' ' if dest.name == 'rm' else '')
-    dest.write_text('#!/bin/sh\n{}exec {} "$@"\n'.format(cleanup_env, shlex.quote(src.replace('\\', '/'))))
+    dest.write_text('#!/bin/sh\n{}exec {} "$@"\n'.format(cleanup_env, shlex.quote(src.replace('\\', '/'))), encoding='utf-8')
     dest.chmod(0o755)
 
 
@@ -185,23 +185,23 @@ def setup_case(name, python=False, node=False, expected=0, preferred=False, stub
         case = Path(tmp)
         (case / 'bin').mkdir()
         (case / 'tmp space').mkdir()
-        (case / 'bin/curl').write_text(curl_stub)
+        (case / 'bin/curl').write_text(curl_stub, encoding='utf-8')
         (case / 'bin/curl').chmod(0o755)
         if stub_python:
-            (case / 'bin/python3').write_text(STORE_PYTHON3_STUB)
+            (case / 'bin/python3').write_text(STORE_PYTHON3_STUB, encoding='utf-8')
             (case / 'bin/python3').chmod(0o755)
-        (case / 'latest').write_text(json.dumps({'tag_name': 'v1.43.0'}))
-        (case / 'commit').write_text(json.dumps({'sha': sha}))
-        (case / 'bootstrap').write_text(bootstrap_stub)
+        (case / 'latest').write_text(json.dumps({'tag_name': 'v1.43.0'}), encoding='utf-8')
+        (case / 'commit').write_text(json.dumps({'sha': sha}), encoding='utf-8')
+        (case / 'bootstrap').write_text(bootstrap_stub, encoding='utf-8')
         path = bash_path(case / 'bin') + ':' + runtime_path(case, python=python, node=node)
         if preferred:
             (case / 'bin/python3').write_text(
                 '#!/usr/bin/env bash\nprintf python3 >> "$CASE_DIR/runtime.log"\nexec '
-                + shlex.quote(host_cmd('python3').replace('\\', '/')) + ' "$@"\n')
+                + shlex.quote(host_cmd('python3').replace('\\', '/')) + ' "$@"\n', encoding='utf-8')
             (case / 'bin/python3').chmod(0o755)
             (case / 'bin/node').write_text(
                 '#!/usr/bin/env bash\nprintf node >> "$CASE_DIR/runtime.log"\nexec '
-                + shlex.quote(HOST_NODE.replace('\\', '/')) + ' "$@"\n')
+                + shlex.quote(HOST_NODE.replace('\\', '/')) + ' "$@"\n', encoding='utf-8')
             (case / 'bin/node').chmod(0o755)
         env = dict(os.environ, PATH=path, CASE_DIR=bash_path(case),
                    TMPDIR=bash_path(case / 'tmp space'))
@@ -210,11 +210,11 @@ def setup_case(name, python=False, node=False, expected=0, preferred=False, stub
         if expected == 0:
             if result.returncode != 0:
                 fail(name, describe(result))
-            ran = json.loads((case / 'ran.json').read_text())
+            ran = json.loads((case / 'ran.json').read_text(encoding='utf-8'))
             if ran['tag'] != 'v1.43.0' or ran['sha'] != sha:
                 fail(name, repr(ran))
             if preferred:
-                log = (case / 'runtime.log').read_text()
+                log = (case / 'runtime.log').read_text(encoding='utf-8')
                 if not log.startswith('python3') or 'node' in log:
                     fail(name, log)
         else:
@@ -345,11 +345,11 @@ if sys.argv[1:] == ["config", "installer", "capabilities"]:
     print("installer-v1"); sys.exit(0)
 assert sys.argv[1:4] == ["config", "installer", "preflight"]
 request = {"refreshDirs": sys.argv[4:]}
-open(os.environ["TRACE"], "w").write(json.dumps(request))
-''')
+open(os.environ["TRACE"], "w", encoding="utf-8").write(json.dumps(request))
+''', encoding='utf-8')
             helper.chmod(0o755)
         target = case / 'outside.json'
-        target.write_text('{}')
+        target.write_text('{}', encoding='utf-8')
         path = runtime_path(case, node=True)
         script = '''
 source "$FUNCTIONS"
@@ -370,7 +370,7 @@ guard_install_paths "$PWD"
                                 capture_output=True, timeout=20)
         if result.returncode != 0:
             fail('install.sh node-only preflight', result.stderr + result.stdout)
-        request = json.loads((case / 'trace').read_text())
+        request = json.loads((case / 'trace').read_text(encoding='utf-8'))
         if request != {'refreshDirs': [str(case)]}:
             fail('install.sh node-only preflight', repr(request))
         pass_name('install.sh node-only config preflight')
@@ -384,9 +384,9 @@ if HOST_NODE:
     with tempfile.TemporaryDirectory(prefix='install-protocol-', dir=os.environ['TMPDIR']) as tmp:
         case = Path(tmp)
         functions = case / 'functions.sh'
-        functions.write_text((root / 'bin/install.sh').read_text().replace('main "$@"', ''))
+        functions.write_text((root / 'bin/install.sh').read_text(encoding='utf-8').replace('main "$@"', ''), encoding='utf-8')
         helper = case / 'helper'
-        helper.write_text('#!/bin/sh\nprintf \'{"status":"unsafe-target","diagnostics":["invalid"]}\\n\'\n')
+        helper.write_text('#!/bin/sh\nprintf \'{"status":"unsafe-target","diagnostics":["invalid"]}\\n\'\n', encoding='utf-8')
         helper.chmod(0o755)
         path = runtime_path(case, node=True)
         env = dict(os.environ, PATH=path, FUNCTIONS=bash_path(functions),
@@ -404,7 +404,7 @@ if HOST_NODE:
     with tempfile.TemporaryDirectory(prefix='bootstrap-alias-', dir=os.environ['TMPDIR']) as tmp:
         case = Path(tmp)
         functions = case / 'functions.sh'
-        functions.write_text((root / 'bin/bootstrap.sh').read_text().replace('main "$@"', ''))
+        functions.write_text((root / 'bin/bootstrap.sh').read_text(encoding='utf-8').replace('main "$@"', ''), encoding='utf-8')
         plugin = case / 'plugin'
         (plugin / 'child').mkdir(parents=True)
         alias = case / 'alias'
@@ -414,7 +414,7 @@ if HOST_NODE:
             print('SKIP bootstrap staging aliases: cannot create symlink')
         else:
             helper = case / 'helper'
-            helper.write_text('#!/bin/sh\nprintf \'%s\\0\' "$@" > "$TRACE"\nexit 78\n')
+            helper.write_text('#!/bin/sh\nprintf \'%s\\0\' "$@" > "$TRACE"\nexit 78\n', encoding='utf-8')
             helper.chmod(0o755)
             path = runtime_path(case, node=True)
             for stage in (str(alias), str(alias) + '/..'):
@@ -450,8 +450,8 @@ if HOST_NODE:
         key = 'claude-notifications-go@claude-notifications-go'
         installed.write_text(json.dumps({
             'plugins': {key: [{'installPath': bash_path(plugin), 'version': '1.42.0'}]}
-        }))
-        (case / 'preload.js').write_text('process.stdout.write("POLLUTED\\n");\n')
+        }), encoding='utf-8')
+        (case / 'preload.js').write_text('process.stdout.write("POLLUTED\\n");\n', encoding='utf-8')
         script = r'''
 source "$FUNCTIONS"
 PATH="$RUNTIME_PATH"
@@ -484,7 +484,7 @@ if HOST_NODE:
         case = Path(tmp)
         stub = case / 'stub-bin'
         stub.mkdir()
-        (stub / 'python3').write_text(STORE_PYTHON3_STUB)
+        (stub / 'python3').write_text(STORE_PYTHON3_STUB, encoding='utf-8')
         (stub / 'python3').chmod(0o755)
         path = bash_path(stub) + ':' + runtime_path(case, node=True)
         functions = case / 'functions.sh'
@@ -495,7 +495,7 @@ if HOST_NODE:
         key = 'claude-notifications-go@claude-notifications-go'
         installed.write_text(json.dumps({
             'plugins': {key: [{'installPath': bash_path(plugin), 'version': '1.42.0'}]}
-        }))
+        }), encoding='utf-8')
         commit = 'a' * 40
         script = r'''
 source "$FUNCTIONS"
@@ -607,7 +607,7 @@ export NODE_OPTIONS="--require=./preload.js"
 
         stub = case / 'stub-bin'
         stub.mkdir()
-        (stub / 'python3').write_text(STORE_PYTHON3_STUB)
+        (stub / 'python3').write_text(STORE_PYTHON3_STUB, encoding='utf-8')
         (stub / 'python3').chmod(0o755)
         wrapper.write_text(
             '#!/bin/sh\ncat > "$CLAUDE_PLUGIN_ROOT/stdin"\necho ran > "$CLAUDE_PLUGIN_ROOT/ran"\nexit 0\n',

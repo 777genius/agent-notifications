@@ -73,19 +73,20 @@ func openLocalPackage(req Request, source string) (string, func(), error) {
 	if !info.Mode().IsRegular() || !strings.EqualFold(filepath.Ext(source), ".zip") {
 		return "", cleanup, fmt.Errorf("%w: package must be a directory or zip archive", ErrRefused)
 	}
-	parent, err := durableAcquireParent(req, source)
+	digest, err := archiveChecksum(source, req.PackageSHA256)
+	if err != nil {
+		return "", cleanup, err
+	}
+	parent, err := durableAcquireParent(req, source+"\n"+digest)
 	if err != nil {
 		return "", cleanup, err
 	}
 	extracted := filepath.Join(parent, acquiredExtractName)
-	if err := verifyArchiveChecksum(source, req.PackageSHA256); err != nil {
-		return "", cleanup, err
-	}
 	if packageStillUsable(extracted) {
 		return extracted, cleanup, nil
 	}
 	_ = os.RemoveAll(parent)
-	root, err := portableasset.OpenArchive(source, parent, req.PackageSHA256)
+	root, err := portableasset.OpenArchive(source, parent, digest)
 	if err != nil {
 		_ = os.RemoveAll(parent)
 		return "", cleanup, err
@@ -101,24 +102,21 @@ func durableAcquireParent(req Request, key string) (string, error) {
 	return filepath.Join(filepath.Dir(req.ControlRoot), "uap", "acquired-source", hex.EncodeToString(sum[:])), nil
 }
 
-func verifyArchiveChecksum(path, expected string) error {
-	if expected == "" {
-		return nil
-	}
+func archiveChecksum(path, expected string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer func() { _ = f.Close() }()
 	sum := sha256.New()
 	if _, err := io.Copy(sum, f); err != nil {
-		return err
+		return "", err
 	}
 	got := hex.EncodeToString(sum.Sum(nil))
-	if !strings.EqualFold(got, expected) {
-		return fmt.Errorf("%w: got %s", portableasset.ErrChecksumMismatch, got)
+	if expected != "" && !strings.EqualFold(got, expected) {
+		return "", fmt.Errorf("%w: got %s", portableasset.ErrChecksumMismatch, got)
 	}
-	return nil
+	return got, nil
 }
 
 func packageDeclaredName(root string) string {

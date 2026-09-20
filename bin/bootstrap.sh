@@ -1469,9 +1469,9 @@ install_codex() {
     config_preflight || return 1
     run_codex_setup || return $?
     if [ -n "$setup_codex_home" ]; then
-        CONFIGURE_BINARY="$setup_codex_home/claude-notifications-go/bin/claude-notifications"
+        CONFIGURE_BINARY=$(installed_notification_binary "$setup_codex_home/claude-notifications-go") || return 1
     else
-        CONFIGURE_BINARY="${CODEX_HOME:-$HOME/.codex}/claude-notifications-go/bin/claude-notifications"
+        CONFIGURE_BINARY=$(installed_notification_binary "${CODEX_HOME:-$HOME/.codex}/claude-notifications-go") || return 1
     fi
     if [ ! -x "$CONFIGURE_BINARY" ]; then
         echo "Committed Codex runtime binary missing after setup-codex." >&2
@@ -1482,6 +1482,21 @@ install_codex() {
     echo "Codex installed. Start Codex, run /hooks, review and trust the entries."
 }
 
+# Git Bash installs native executables, without an extensionless launcher.
+installed_notification_binary() {
+    local root="$1" arch
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*)
+            case "$(uname -m)" in
+                x86_64|amd64) arch=amd64 ;;
+                aarch64|arm64) arch=arm64 ;;
+                *) return 1 ;;
+            esac
+            printf '%s/bin/claude-notifications-windows-%s.exe\n' "$root" "$arch" ;;
+        *) printf '%s/bin/claude-notifications\n' "$root" ;;
+    esac
+}
+
 install_claude() {
     setup_marketplace || return 1
     sync_marketplace_checkout || return 1
@@ -1489,7 +1504,7 @@ install_claude() {
     find_plugin_root || return 1
     download_binary || return 1
     setup_iterm2_venv || return 1
-    CONFIGURE_BINARY="${PLUGIN_ROOT}/bin/claude-notifications"
+    CONFIGURE_BINARY=$(installed_notification_binary "$PLUGIN_ROOT") || return 1
     if [ "$PRODUCT" = both ]; then
     echo "Agent Notifications installed; continuing with Codex."
     fi
@@ -1544,7 +1559,7 @@ quote_shell_command() {
 configure_agent_notify() {
     [ "$CONFIGURE_NOTIFICATIONS" = true ] || return 0
     if [ -z "$CONFIGURE_BINARY" ]; then
-        CONFIGURE_BINARY="${PLUGIN_ROOT}/bin/claude-notifications"
+        CONFIGURE_BINARY=$(installed_notification_binary "$PLUGIN_ROOT") || return 1
     fi
     if [ ! -x "$CONFIGURE_BINARY" ]; then
         echo -e "${YELLOW}⚠ Agent-notify setup skipped; installer binary not found.${NC}" >&2
@@ -1560,6 +1575,10 @@ configure_agent_notify() {
         echo -e "${YELLOW}  Plugin/hooks install succeeded. Desktop/hook notifications still work.${NC}" >&2
         return 0
     fi
+    configure_agent_policy
+}
+
+configure_agent_policy() {
     if ! "$CONFIGURE_BINARY" setup-notifications configure --provider "$PRODUCT" "${CONFIGURE_ARGS[@]}"; then
         echo -e "${YELLOW}⚠ Agent-notify setup failed; plugin/hooks install succeeded.${NC}" >&2
         echo -e "${YELLOW}  Desktop/hook notifications still work. Retry:${NC}" >&2
@@ -1661,6 +1680,9 @@ setup_agent_notify_wizard() {
         report_wizard_portable_missing "portable package is missing from the accepted release" "$agents" && return 0
         return 1
     fi
+    # Preserve policy enablement and accepted route/consent before the wizard
+    # migrates client registration to the portable package.
+    configure_agent_policy || return 1
     if [ "$PRODUCT" != codex ]; then
         claude_exec=$(bootstrap_abs_command claude) || true
     fi
