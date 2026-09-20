@@ -190,6 +190,9 @@ cp "$INSTALL_TARGET_DIR/claude-notifications" "$INSTALL_TARGET_DIR/claude-notifi
 '''
 binary = '''#!/usr/bin/env python3
 import json, os, pathlib, sys
+# Match the native Go helper's LF protocol on Windows too. Python's default
+# CRLF would leave a trailing carriage return in Bash's baseline version.
+sys.stdout.reconfigure(newline='\\n')
 args=sys.argv[1:]
 if not args:
     sys.exit(2)
@@ -324,6 +327,24 @@ payload=capable.replace('v1.42.0', 'v2.0.0').encode('utf-8')
 (dest / 'binary').write_bytes(payload)
 (dest / asset_name).write_bytes(payload)
 (dest / 'checksums.txt').write_bytes((hashlib.sha256(payload).hexdigest()+'  '+asset_name+'\n').encode('ascii'))
+# Exercise the adapter's raw protocol before shell command substitution can
+# hide newline differences. Model Windows text output on every host, in
+# addition to running with native Windows Python in Git Bash CI.
+protocol_helper=sandbox/'protocol-helper.py'
+protocol_helper.write_bytes(binary.replace(
+    'import json, os, pathlib, sys\n',
+    "import json, os, pathlib, sys\nsys.stdout.reconfigure(newline='\\r\\n')\n",
+    1,
+).encode('utf-8'))
+protocol=subprocess.check_output([sys.executable,str(protocol_helper),'--version'])
+assert protocol == b'claude-notifications v1.42.0\n', repr(protocol)
+protocol_root=sandbox/'protocol bundle'
+(protocol_root/'config').mkdir(parents=True)
+(protocol_root/'config/config.json').write_bytes(b'{}')
+protocol_registry=sandbox/'protocol-registry.json'
+protocol_registry.write_text(json.dumps({'plugins':{'fixture':[{'installPath':str(protocol_root),'version':'v1.40.0'}]}}))
+protocol=subprocess.check_output([sys.executable,str(protocol_helper),'config','installer','versions',str(protocol_registry),'fixture'])
+assert protocol == b'1.40.0\n', repr(protocol)
 (web/'install.sh').write_bytes(installer.encode('utf-8'))
 def write_origin_installer(path, origin):
     path.parent.mkdir(parents=True, exist_ok=True)
