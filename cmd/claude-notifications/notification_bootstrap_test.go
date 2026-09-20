@@ -183,6 +183,7 @@ func TestNotificationBootstrapWizard(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
 	t.Setenv("CODEX_HOME", "")
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("CLAUDE_HOME", "")
 	if err := os.MkdirAll(codexHome, 0700); err != nil {
 		t.Fatal(err)
 	}
