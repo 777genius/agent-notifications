@@ -1535,7 +1535,7 @@ acquire_wizard_portable_asset() {
 }
 
 setup_agent_notify_wizard() {
-    local agents package_root install_root wizard_codex_home="" i=0
+    local agents package_root install_root wizard_codex_home="${CODEX_HOME:-$HOME/.codex}" i=0
     local claude_exec="" codex_exec="" plugin_root
     WIZARD_PACKAGE_ROOT=""
     case "$PRODUCT" in
@@ -1551,9 +1551,6 @@ setup_agent_notify_wizard() {
         fi
         i=$((i + 1))
     done
-    if [ -z "$wizard_codex_home" ] && [ -n "${CODEX_HOME:-}" ]; then
-        wizard_codex_home="$CODEX_HOME"
-    fi
     plugin_root="$PLUGIN_ROOT"
     if [ -z "$plugin_root" ]; then
         plugin_root=$(cd "$(dirname "$CONFIGURE_BINARY")/.." && pwd)
@@ -1585,8 +1582,7 @@ setup_agent_notify_wizard() {
     fi
     set -- setup-notifications wizard --action install --agents "$agents" --hooks false --agent-notify true --yes \
         --package "$package_root" --plugin-root "$plugin_root" --helper "$CONFIGURE_BINARY"
-    [ -z "$wizard_codex_home" ] || set -- "$@" --codex-home "$wizard_codex_home"
-    [ -z "${CLAUDE_CONFIG_DIR:-}" ] || set -- "$@" --claude-config "$CLAUDE_CONFIG_DIR"
+    set -- "$@" --codex-home "$wizard_codex_home" --claude-config "$CLAUDE_HOME"
     [ -z "$claude_exec" ] || set -- "$@" --claude-executable "$claude_exec"
     [ -z "$codex_exec" ] || set -- "$@" --codex-executable "$codex_exec"
     if [ "$PRODUCT" != both ] && [ -n "$claude_exec$codex_exec" ]; then

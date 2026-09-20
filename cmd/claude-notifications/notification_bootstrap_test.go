@@ -177,10 +177,11 @@ func TestNotificationBootstrapWizard(t *testing.T) {
 	}
 	prefix := strings.TrimSuffix(strings.TrimSpace(string(source)), `main "$@"`)
 	home := t.TempDir()
-	codexHome := filepath.Join(home, "codex")
+	codexHome := filepath.Join(home, ".codex")
+	claudeHome := filepath.Join(home, ".claude")
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
-	t.Setenv("CODEX_HOME", codexHome)
+	t.Setenv("CODEX_HOME", "")
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	if err := os.MkdirAll(codexHome, 0700); err != nil {
 		t.Fatal(err)
@@ -247,6 +248,9 @@ main --product both
 		t.Fatal(body)
 	}
 	if !strings.Contains(body, "--codex-home "+codexHome) {
+		t.Fatal(body)
+	}
+	if !strings.Contains(body, "--claude-config "+claudeHome) {
 		t.Fatal(body)
 	}
 	if strings.Contains(body, "--mcp-config") || strings.Contains(body, "--claude-mcp-config") {
