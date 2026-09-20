@@ -146,7 +146,20 @@ jobs:
           modules = subprocess.check_output(
               ['go', 'list', '-m', '-f', '{{.Path}} {{.Version}}', 'all'], text=True
           ).splitlines()
-          uap = [line for line in modules if line.startswith('github.com/777genius/universal-agent-plugins/')]
+          uap_prefix = 'github.com/777genius/plugin-kit-ai/'
+          uap = sorted(line for line in modules if line.startswith(uap_prefix))
+          required_uap_modules = {
+              'github.com/777genius/plugin-kit-ai/cli',
+              'github.com/777genius/plugin-kit-ai/install/integrationctl',
+              'github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins',
+              'github.com/777genius/plugin-kit-ai/sdk',
+          }
+          pinned_uap_modules = {line.split(maxsplit=1)[0] for line in uap}
+          missing_uap_modules = sorted(required_uap_modules - pinned_uap_modules)
+          if missing_uap_modules:
+              raise SystemExit(f'missing required UAP module pins: {missing_uap_modules}')
+          if any(len(line.split(maxsplit=1)) != 2 for line in uap):
+              raise SystemExit(f'unversioned UAP module in exact candidate graph: {uap}')
           version = subprocess.check_output([str(binary), 'version'], text=True).strip()
           record = {
               'schema_version': 1,
