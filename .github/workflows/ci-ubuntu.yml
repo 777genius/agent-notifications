@@ -66,6 +66,12 @@ jobs:
       - name: Test binary execution (help)
         run: ./bin/claude-notifications help
 
+      - name: Qualify interpreter-free artifact lifecycle
+        if: matrix.go == '1.26'
+        run: |
+          bash bin/install_no_interpreters_test.sh "$PWD/bin/claude-notifications"
+          bash bin/install_no_interpreters_lifecycle_test.sh "$PWD/bin/claude-notifications"
+
       - name: Run install.sh unit tests
         run: bash bin/install_test.sh
 
