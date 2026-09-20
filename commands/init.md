@@ -34,16 +34,27 @@ If assets/registration succeeded but init failed, report partial success and the
 
 Then run `/claude-notifications-go:settings` for [private revision-checked edits](settings.md). Save diagnostics privately; never print raw configuration or expanded secrets.
 
-After a successful plugin install, agent-notify configure runs by default
-(`--navigation none --allow-unknown-caller true --allow-caller-asserted false`
-unless a route is supplied). Pass `--skip-agent-notify` to
-keep hooks-only setup. If agent-notify setup fails, the plugin install still
-counts as success; retry `setup-notifications configure` after fixing the cause.
+After a successful plugin install, agent-notify setup runs by default.
+When the installed CLI advertises `setup-notifications wizard`, that is
+the main path (`--hooks false --agent-notify true`). Older CLIs keep
+`setup-notifications configure` (`--navigation none --allow-unknown-caller true
+--allow-caller-asserted false` unless a route is supplied). Pass
+`--skip-agent-notify` to keep hooks-only setup. If the advertised setup
+command runs and fails, this slash command returns incomplete/nonzero with
+a retry; committed plugin/hooks files stay in place. A missing binary or a
+CLI that does not advertise the command still skips with a warning.
 
 ```bash
 SKIP_AGENT_NOTIFY=false
 SEEN_AGENT_NOTIFY=false
 CONFIGURE_ARGS=()
+quote_shell_command() {
+  local quoted="" arg
+  for arg in "$@"; do
+    quoted="${quoted:+$quoted }$(printf '%q' "$arg")"
+  done
+  printf '%s' "$quoted"
+}
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --skip-agent-notify) SKIP_AGENT_NOTIFY=true; shift ;;
@@ -114,8 +125,30 @@ if [ "$SKIP_AGENT_NOTIFY" != true ]; then
   NOTIFY_BIN="${CLAUDE_PLUGIN_ROOT}/bin/claude-notifications"
   if [ ! -x "$NOTIFY_BIN" ]; then
     echo "agent-notify setup skipped; installer binary not found. Plugin install succeeded." >&2
+  elif "$NOTIFY_BIN" --help </dev/null 2>/dev/null | grep -Fq -- 'setup-notifications wizard'; then
+    package=""
+    if [ -f "${CLAUDE_PLUGIN_ROOT}/portable-package/plugin.json" ]; then
+      package="${CLAUDE_PLUGIN_ROOT}/portable-package"
+    fi
+    if [ -z "$package" ]; then
+      printf 'agent-notify wizard skipped; portable-package is missing. Retry: %s\n' "$(quote_shell_command "$NOTIFY_BIN" setup-notifications wizard --action install --agents claude --hooks false --agent-notify true --yes)" >&2
+      exit 1
+    fi
+    wizard=(setup-notifications wizard --action install --agents claude --hooks false --agent-notify true --yes --package "$package" --plugin-root "${CLAUDE_PLUGIN_ROOT}" --helper "$NOTIFY_BIN")
+    if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+      wizard+=(--claude-config "$CLAUDE_CONFIG_DIR")
+    fi
+    claude_exec=$(command -v claude 2>/dev/null || true)
+    case "$claude_exec" in
+      /*|[A-Za-z]:/*|[A-Za-z]:\\*) wizard+=(--claude-executable "$claude_exec" --client-executable "$claude_exec") ;;
+    esac
+    if ! "$NOTIFY_BIN" "${wizard[@]}"; then
+      printf 'agent-notify setup failed; plugin install files remain. Retry: %s\n' "$(quote_shell_command "$NOTIFY_BIN" "${wizard[@]}")" >&2
+      exit 1
+    fi
   elif ! "$NOTIFY_BIN" setup-notifications configure --provider claude "${CONFIGURE_ARGS[@]}"; then
-    echo "agent-notify setup failed; plugin install succeeded. Retry: \"$NOTIFY_BIN\" setup-notifications configure --provider claude ${CONFIGURE_ARGS[*]}" >&2
+    printf 'agent-notify setup failed; plugin install files remain. Retry: %s\n' "$(quote_shell_command "$NOTIFY_BIN" setup-notifications configure --provider claude "${CONFIGURE_ARGS[@]}")" >&2
+    exit 1
   fi
 fi
 ```

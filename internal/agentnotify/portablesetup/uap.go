@@ -1,13 +1,21 @@
 package portablesetup
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/statev2"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/claude"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/codex"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
-	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/providers"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/ports"
 
 	"github.com/777genius/agent-notifications/install/uapinstaller"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
@@ -15,6 +23,13 @@ import (
 )
 
 const portableServerName = "agent-notify"
+const clientFactsFile = "client-facts.json"
+
+// NewRegistry is the explicit Notifications composition of the two supported
+// native clients. The UAP SDK intentionally rejects a nil registry.
+func NewRegistry() (*clients.Registry, error) {
+	return clients.NewRegistry(claude.New(), codex.New())
+}
 
 // Identity is the operator-selected existing-installer surface. BindingID and
 // DataRoot are completed from the committed UAP plan, not guessed from HOME.
@@ -26,7 +41,8 @@ type Identity struct {
 type UAPRoots struct {
 	StateFile, LockFile, OperationsDir, PluginDataBase, ManagedRoot string
 	HelperExecutable, HelperVersion                                 string
-	ClaudeRunner                                                    providers.CommandRunner
+	ClaudeRunner                                                    ports.CommandRunner
+	RequireLiveProfiles                                             bool
 }
 
 // MaterializeRequest selects one client. Integration is never taken from clientInfo.
@@ -37,16 +53,162 @@ type MaterializeRequest struct {
 	PackageRoot         string
 	ClientConfigRoot    string
 	ClientExecutable    string
+	SourceRevision      string
+	SourceDigest        string
+	TreeDigest          string
+	HelperDigest        string
+	HelperVersion       string
 	Discovery           Discovery
 	OperationID         string
 	HelperExecutable    string
 	ExternalUninstalled bool
+	// HoldOnly publishes the uninstall reservation and returns without locator
+	// revoke or UAP mutation. Wizard uses it to keep a Codex removal pending
+	// until the host attests ExternalUninstalled.
+	HoldOnly bool
+	// KeepReservation leaves the kernel pending mutation in place. Wizard
+	// publishes one SetupIntent for the whole confirmed operation and clears
+	// it after the last target, including when several clients share it.
+	KeepReservation bool
+	// Operation selects install, update, or repair. Empty means install.
+	Operation uapinstaller.Operation
 }
 
 type Materializer struct {
 	Kernel Service
 	Store  statev2.Store
 	Roots  UAPRoots
+}
+
+type clientFact struct {
+	BindingID  string `json:"binding_id"`
+	ConfigRoot string `json:"config_root"`
+	Executable string `json:"executable"`
+}
+
+func clientFactsPath(dataRoot string) string { return filepath.Join(dataRoot, clientFactsFile) }
+
+func readClientFacts(dataRoot string) (map[string]clientFact, error) {
+	body, err := os.ReadFile(clientFactsPath(dataRoot))
+	if os.IsNotExist(err) {
+		return map[string]clientFact{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var facts map[string]clientFact
+	if err := json.Unmarshal(body, &facts); err != nil {
+		return nil, err
+	}
+	if facts == nil {
+		facts = map[string]clientFact{}
+	}
+	return facts, nil
+}
+
+func recordClientFact(dataRoot string, fact clientFact, clientID string) error {
+	if dataRoot == "" || clientID == "" {
+		return nil
+	}
+	facts, err := readClientFacts(dataRoot)
+	if err != nil {
+		return err
+	}
+	facts[clientID] = fact
+	body, err := json.Marshal(facts)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(clientFactsPath(dataRoot), body, 0600)
+}
+
+func (m Materializer) knownTargets(installationID, selected string) ([]uapinstaller.TargetFacts, error) {
+	if installationID == "" {
+		return nil, nil
+	}
+	state, err := m.Store.Load()
+	if err != nil {
+		return nil, err
+	}
+	installation, ok := findInstallation(state, installationID)
+	if !ok {
+		return nil, nil
+	}
+	facts, err := readClientFacts(filepath.Dir(m.Roots.StateFile))
+	if err != nil {
+		return nil, err
+	}
+	var out []uapinstaller.TargetFacts
+	for _, binding := range installation.Clients {
+		if binding.ClientID == selected {
+			continue
+		}
+		fact, ok := facts[binding.ClientID]
+		if !ok || fact.BindingID != binding.ClientBindingID {
+			continue
+		}
+		if info, err := os.Stat(fact.ConfigRoot); err != nil || !info.IsDir() {
+			continue
+		}
+		if m.Roots.RequireLiveProfiles {
+			receipt := installation.DataReceipts[binding.DataReceiptID]
+			if _, err := os.Stat(filepath.Join(receipt.Locator, "live-profiles.json")); err != nil {
+				continue
+			}
+		}
+		out = append(out, uapinstaller.TargetFacts{ClientID: binding.ClientID, BindingID: binding.ClientBindingID, ConfigRoot: fact.ConfigRoot, Executable: fact.Executable})
+	}
+	return out, nil
+}
+
+// GroupRemoveResult is one client's outcome from RemoveGroup.
+type GroupRemoveResult struct {
+	Integration   portable.Integration
+	AlreadyAbsent bool
+}
+
+func (m Materializer) beginMutation(ctx context.Context, req *MaterializeRequest) (func(), error) {
+	release, err := installruntime.AcquireCoordinatorLease(ctx, req.Identity.ControlRoot)
+	if err != nil {
+		return nil, err
+	}
+	if _, err = installruntime.Recover(ctx, req.Identity.ControlRoot); err != nil {
+		release()
+		return nil, err
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(req.Identity.ControlRoot)
+	if err != nil {
+		release()
+		return nil, err
+	}
+	req.ExpectedGeneration = snap.Ledger.Generation
+	return release, nil
+}
+
+// RecoverJournals restores the Notifications kernel journal, then UAP
+// RecoverCurrent, without a new Prepare (§7.4.2).
+func (m Materializer) RecoverJournals(ctx context.Context, req MaterializeRequest) error {
+	return m.recoverOwnedJournals(ctx, req)
+}
+
+// recoverOwnedJournals restores a pending Notifications kernel journal, then
+// releases the coordinator lease before UAP Recover (§7.4.2).
+func (m Materializer) recoverOwnedJournals(ctx context.Context, req MaterializeRequest) error {
+	release, err := installruntime.AcquireCoordinatorLease(ctx, req.Identity.ControlRoot)
+	if err != nil {
+		return err
+	}
+	_, recoverErr := installruntime.Recover(ctx, req.Identity.ControlRoot)
+	release()
+	if recoverErr != nil {
+		return recoverErr
+	}
+	eng, err := m.engine(req, new(uint64), nil)
+	if err != nil {
+		return err
+	}
+	_, err = eng.RecoverCurrent(ctx)
+	return err
 }
 
 func physicalRoot(path string) string {
@@ -72,6 +234,28 @@ func Complete(id Identity, integration portable.Integration, clientID, scope, ac
 		return portable.Binding{}, fmt.Errorf("%w: integration=%s bindingID=%s scopeID=%s dataRoot=%q activePath=%q primary=%q", err, integration, b.BindingID, b.ScopeID, dataRoot, activePath, id.Primary)
 	}
 	return b, nil
+}
+
+func refuseConflictingLocator(b portable.Binding) error {
+	name, err := b.Filename()
+	if err != nil {
+		return err
+	}
+	body, err := os.ReadFile(filepath.Join(b.DataRoot, name))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	_, _, raw, err := b.Registration()
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(body, raw) {
+		return fmt.Errorf("%w: existing locator identity does not match committed binding", ErrPreflight)
+	}
+	return nil
 }
 
 func NewMaterializer(roots UAPRoots) (Materializer, error) {
@@ -152,20 +336,26 @@ func (m Materializer) engine(req MaterializeRequest, generation *uint64, res *in
 	if req.Integration != portable.Claude {
 		runner = nil
 	}
+	registry, err := NewRegistry()
+	if err != nil {
+		return nil, err
+	}
 	return uapinstaller.New(uapinstaller.Config{
-		StateRoot:        filepath.Dir(m.Roots.StateFile),
-		StateFile:        m.Roots.StateFile,
-		LockFile:         m.Roots.LockFile,
-		OperationsDir:    m.Roots.OperationsDir,
-		PluginDataBase:   m.Roots.PluginDataBase,
-		ManagedRoot:      m.Roots.ManagedRoot,
-		TempRoot:         filepath.Join(filepath.Dir(m.Roots.StateFile), "tmp"),
-		HelperExecutable: helper,
-		HelperVersion:    m.Roots.HelperVersion,
-		Runner:           runner,
-		ServerName:       portableServerName,
+		StateRoot:            filepath.Dir(m.Roots.StateFile),
+		StateFile:            m.Roots.StateFile,
+		LockFile:             m.Roots.LockFile,
+		OperationsDir:        m.Roots.OperationsDir,
+		PluginDataBase:       m.Roots.PluginDataBase,
+		ManagedRoot:          m.Roots.ManagedRoot,
+		TempRoot:             filepath.Join(filepath.Dir(m.Roots.StateFile), "tmp"),
+		HelperExecutable:     helper,
+		HelperVersion:        m.Roots.HelperVersion,
+		Runner:               runner,
+		Registry:             registry,
+		TrustedLocalPackages: true,
+		ServerName:           portableServerName,
 		ProjectArgs: func(facts uapinstaller.BindingFacts) ([]string, error) {
-			b, err := Complete(req.Identity, req.Integration, facts.ClientID, facts.Scope, facts.TargetPath, facts.DataRoot)
+			b, err := Complete(req.Identity, integrationOf(facts), facts.ClientID, facts.Scope, facts.TargetPath, facts.DataRoot)
 			if err != nil {
 				return nil, err
 			}
@@ -176,12 +366,15 @@ func (m Materializer) engine(req MaterializeRequest, generation *uint64, res *in
 			return []string{"portable-launch", "--locator", name}, nil
 		},
 		OnCommittedBinding: func(ctx context.Context, facts uapinstaller.BindingFacts) error {
-			pb, err := Complete(req.Identity, req.Integration, facts.ClientID, facts.Scope, facts.TargetPath, facts.DataRoot)
+			pb, err := Complete(req.Identity, integrationOf(facts), facts.ClientID, facts.Scope, facts.TargetPath, facts.DataRoot)
 			if err != nil {
 				return err
 			}
 			if pb.BindingID != facts.BindingID && facts.BindingID != "" {
 				return fmt.Errorf("%w: binding identity does not match committed UAP client", ErrPreflight)
+			}
+			if err := refuseConflictingLocator(pb); err != nil {
+				return err
 			}
 			if _, err := m.Kernel.CommitBinding(ctx, Request{Binding: pb, ExpectedGeneration: *generation, Reservation: res}); err != nil {
 				return err
@@ -196,13 +389,58 @@ func (m Materializer) engine(req MaterializeRequest, generation *uint64, res *in
 	})
 }
 
-func (m Materializer) apply(ctx context.Context, eng *uapinstaller.Engine, req uapinstaller.Request) (uapinstaller.Result, error) {
+func (m Materializer) apply(ctx context.Context, eng *uapinstaller.Engine, req uapinstaller.Request, expected MaterializeRequest) (uapinstaller.Result, error) {
 	prepared, err := eng.Prepare(ctx, req)
 	if err != nil {
 		return uapinstaller.Result{}, err
 	}
 	defer func() { _ = prepared.Close() }()
+	if err := confirmPreparedIdentity(expected, prepared.Plan()); err != nil {
+		return uapinstaller.Result{}, err
+	}
 	return eng.Apply(ctx, prepared, uapinstaller.Decision{Confirmed: true})
+}
+
+// prepareRemove is the §5.5.2 read-only removal preflight. It refuses a pending
+// journal and verifies the managed artifact before locator revoke or Apply.
+func (m Materializer) prepareRemove(ctx context.Context, eng *uapinstaller.Engine, req uapinstaller.Request, expected MaterializeRequest) (*uapinstaller.PreparedOperation, error) {
+	view, err := eng.Inspect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if view.Recovery.Required {
+		reason := view.Recovery.Reason
+		if reason == "" {
+			reason = "pending transactions remain"
+		}
+		return nil, fmt.Errorf("%w: %s", uapinstaller.ErrRecoveryRequired, reason)
+	}
+	prepared, err := eng.Prepare(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if err := confirmPreparedIdentity(expected, prepared.Plan()); err != nil {
+		_ = prepared.Close()
+		return nil, err
+	}
+	return prepared, nil
+}
+
+func confirmPreparedIdentity(req MaterializeRequest, plan uapinstaller.Plan) error {
+	if err := matchOptionalIdentity("tree digest", req.TreeDigest, plan.TreeDigest); err != nil {
+		return err
+	}
+	if err := matchOptionalIdentity("helper digest", req.HelperDigest, plan.HelperDigest); err != nil {
+		return err
+	}
+	return matchOptionalIdentity("helper version", req.HelperVersion, plan.HelperVersion)
+}
+
+func matchOptionalIdentity(name, expected, got string) error {
+	if expected == "" || got == "" || expected == got {
+		return nil
+	}
+	return fmt.Errorf("%w: %s %s desired %s", ErrSourceIdentityDrift, name, expected, got)
 }
 
 func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (portable.Binding, error) {
@@ -216,58 +454,541 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 	if err != nil {
 		return portable.Binding{}, err
 	}
-	if req.Discovery.ConfigPath != "" {
-		release, err := installruntime.AcquireCoordinatorLease(ctx, req.Identity.ControlRoot)
-		if err != nil {
-			return portable.Binding{}, err
-		}
-		defer release()
-		if _, err = installruntime.Recover(ctx, req.Identity.ControlRoot); err != nil {
-			return portable.Binding{}, err
-		}
-		snap, err := installruntime.ReadInstalledSnapshot(req.Identity.ControlRoot)
-		if err != nil {
-			return portable.Binding{}, err
-		}
-		req.ExpectedGeneration = snap.Ledger.Generation
+	if err := m.recoverOwnedJournals(ctx, req); err != nil {
+		return portable.Binding{}, err
 	}
-	eng, err := m.engine(req, new(uint64), nil)
+	release, err := m.beginMutation(ctx, &req)
 	if err != nil {
 		return portable.Binding{}, err
 	}
-	if _, err := eng.RecoverCurrent(ctx); err != nil {
+	defer release()
+	if _, err := m.engine(req, new(uint64), nil); err != nil {
 		return portable.Binding{}, err
 	}
 	gen, res, err := m.Kernel.handoffForward(ctx, Request{
 		Binding: template, ExpectedGeneration: req.ExpectedGeneration, Discovery: req.Discovery,
+		SourceRevision: req.SourceRevision, SourceDigest: req.SourceDigest,
+		TreeDigest: req.TreeDigest, HelperDigest: req.HelperDigest, HelperVersion: req.HelperVersion,
+		Profile: req.ClientConfigRoot,
 	})
 	if err != nil {
 		return portable.Binding{}, err
 	}
 	generation := gen
-	eng, err = m.engine(req, &generation, res)
+	eng, err := m.engine(req, &generation, res)
+	if err != nil {
+		return portable.Binding{}, err
+	}
+	known, err := m.knownTargets(req.Identity.InstallationID, string(req.Integration))
 	if err != nil {
 		return portable.Binding{}, err
 	}
 	result, err := m.apply(ctx, eng, uapinstaller.Request{
-		Operation: uapinstaller.OpInstall, PackageRoot: req.PackageRoot, ClientID: string(req.Integration),
+		Operation: packageOperation(req), PackageRoot: req.PackageRoot, ClientID: string(req.Integration),
 		ClientConfigRoot: req.ClientConfigRoot, ClientExecutable: req.ClientExecutable,
 		InstallationID: req.Identity.InstallationID, OperationID: req.OperationID,
 		RequiredComponents: []string{"mcp", "skills"},
-	})
+		KnownTargets:       known,
+	}, req)
 	if err != nil {
-		return portable.Binding{}, err
+		return portable.Binding{}, persistResult(result, wrapUpdateRequired(err))
 	}
 	pb, err := Complete(req.Identity, req.Integration, result.Binding.ClientID, result.Binding.Scope, result.Binding.TargetPath, result.Binding.DataRoot)
 	if err != nil {
 		return portable.Binding{}, err
 	}
-	if err := m.Kernel.finishHandoff(ctx, Request{Binding: pb, ExpectedGeneration: generation, Reservation: res}, res); err != nil {
+	if err := recordClientFact(filepath.Dir(m.Roots.StateFile), clientFact{BindingID: pb.BindingID, ConfigRoot: req.ClientConfigRoot, Executable: req.ClientExecutable}, string(req.Integration)); err != nil {
 		return portable.Binding{}, err
+	}
+	if !req.KeepReservation {
+		if err := m.Kernel.finishHandoff(ctx, Request{Binding: pb, ExpectedGeneration: generation, Reservation: res}, res); err != nil {
+			return portable.Binding{}, err
+		}
 	}
 	return pb, nil
 }
 
+func integrationOf(facts uapinstaller.BindingFacts) portable.Integration {
+	switch facts.ClientID {
+	case string(portable.Claude):
+		return portable.Claude
+	case string(portable.Codex):
+		return portable.Codex
+	default:
+		return portable.Integration(facts.ClientID)
+	}
+}
+
+func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest) ([]portable.Binding, error) {
+	if ctx == nil || len(reqs) != 2 {
+		return nil, ErrPreflight
+	}
+	for i := range reqs {
+		if err := m.validate(reqs[i], true); err != nil {
+			return nil, err
+		}
+		if reqs[i].PackageRoot != reqs[0].PackageRoot {
+			if packageOperation(reqs[0]) != uapinstaller.OpRepair || packageOperation(reqs[i]) != uapinstaller.OpRepair {
+				return nil, fmt.Errorf("%w: group requires one package root", ErrPreflight)
+			}
+		}
+	}
+	if err := m.recoverOwnedJournals(ctx, reqs[0]); err != nil {
+		return nil, err
+	}
+	release, err := m.beginMutation(ctx, &reqs[0])
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	generation := reqs[0].ExpectedGeneration
+	var res *installruntime.PendingMutation
+	for i := range reqs {
+		template, err := Complete(reqs[i].Identity, reqs[i].Integration, string(reqs[i].Integration), string(domain.ScopeUser), reqs[i].Identity.ScopeRoot, reqs[i].Identity.ControlRoot)
+		if err != nil {
+			return nil, err
+		}
+		gen, next, err := m.Kernel.handoffForward(ctx, Request{
+			Binding: template, ExpectedGeneration: generation, Discovery: reqs[i].Discovery,
+			SourceRevision: reqs[i].SourceRevision, SourceDigest: reqs[i].SourceDigest,
+			TreeDigest: reqs[i].TreeDigest, HelperDigest: reqs[i].HelperDigest, HelperVersion: reqs[i].HelperVersion,
+			Profile: reqs[i].ClientConfigRoot,
+		})
+		if err != nil {
+			return nil, err
+		}
+		generation = gen
+		if next != nil {
+			res = next
+		}
+		reqs[i].ExpectedGeneration = generation
+	}
+	engineReq := reqs[0]
+	for _, req := range reqs {
+		if req.Integration == portable.Claude {
+			engineReq = req
+			break
+		}
+	}
+	eng, err := m.engine(engineReq, &generation, res)
+	if err != nil {
+		return nil, err
+	}
+	var targets []uapinstaller.ClientTarget
+	for _, req := range reqs {
+		targets = append(targets, uapinstaller.ClientTarget{
+			ClientID: string(req.Integration), ClientConfigRoot: req.ClientConfigRoot,
+			ClientExecutable: req.ClientExecutable, PackageRoot: req.PackageRoot,
+			ExternalUninstalled: req.ExternalUninstalled,
+		})
+	}
+	result, err := m.apply(ctx, eng, uapinstaller.Request{
+		Operation: packageOperation(reqs[0]), PackageRoot: reqs[0].PackageRoot,
+		InstallationID: reqs[0].Identity.InstallationID, OperationID: reqs[0].OperationID,
+		RequiredComponents: []string{"mcp", "skills"}, ClientExecutable: reqs[0].ClientExecutable,
+		Targets: targets,
+	}, reqs[0])
+	if err != nil {
+		return nil, persistResult(result, wrapUpdateRequired(err))
+	}
+	var out []portable.Binding
+	for _, req := range reqs {
+		var facts uapinstaller.BindingFacts
+		for _, item := range result.Targets {
+			if item.ClientID == string(req.Integration) {
+				facts.ClientID = item.ClientID
+				facts.BindingID = item.BindingID
+				break
+			}
+		}
+		if state, loadErr := eng.Inspect(ctx); loadErr == nil {
+			for _, installation := range state.Installations {
+				if installation.InstallationID != result.InstallationID && reqs[0].Identity.InstallationID != installation.InstallationID {
+					continue
+				}
+				for _, binding := range installation.Bindings {
+					if binding.ClientID == string(req.Integration) {
+						facts.InstallationID = installation.InstallationID
+						facts.ClientID = binding.ClientID
+						facts.BindingID = binding.BindingID
+						facts.Scope = binding.Scope
+						facts.TargetPath = binding.TargetPath
+						facts.DataRoot = binding.DataRoot
+					}
+				}
+			}
+		}
+		if facts.ClientID == "" {
+			return nil, fmt.Errorf("%w: group result omitted %s", ErrPreflight, req.Integration)
+		}
+		pb, err := Complete(req.Identity, req.Integration, facts.ClientID, facts.Scope, facts.TargetPath, facts.DataRoot)
+		if err != nil {
+			return nil, err
+		}
+		if err := recordClientFact(filepath.Dir(m.Roots.StateFile), clientFact{BindingID: pb.BindingID, ConfigRoot: req.ClientConfigRoot, Executable: req.ClientExecutable}, string(req.Integration)); err != nil {
+			return nil, err
+		}
+		if !req.KeepReservation {
+			if err := m.Kernel.finishHandoff(ctx, Request{Binding: pb, ExpectedGeneration: generation, Reservation: res}, res); err != nil {
+				return nil, err
+			}
+		}
+		out = append(out, pb)
+	}
+	return out, nil
+}
+
+// RemoveGroup uninstalls both clients in one UAP RemoveGroup. It preflights
+// the managed artifacts and refuses pending journals before locator revoke.
+func (m Materializer) RemoveGroup(ctx context.Context, reqs []MaterializeRequest) ([]GroupRemoveResult, error) {
+	if ctx == nil || len(reqs) != 2 {
+		return nil, ErrPreflight
+	}
+	for i := range reqs {
+		if err := m.validate(reqs[i], false); err != nil {
+			return nil, err
+		}
+		if reqs[i].HoldOnly {
+			return nil, fmt.Errorf("%w: group remove does not hold a Codex attestation", ErrPreflight)
+		}
+	}
+	state, err := m.Store.Load()
+	if err != nil {
+		return nil, err
+	}
+	installation, ok := findInstallation(state, reqs[0].Identity.InstallationID)
+	if !ok {
+		return nil, fmt.Errorf("%w: portable binding is not installed", ErrPreflight)
+	}
+	if installation.DataRetained && len(installation.Clients) == 0 {
+		return []GroupRemoveResult{
+			{Integration: reqs[0].Integration, AlreadyAbsent: true},
+			{Integration: reqs[1].Integration, AlreadyAbsent: true},
+		}, nil
+	}
+	release, err := m.beginMutation(ctx, &reqs[0])
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	generation := reqs[0].ExpectedGeneration
+	engineReq := reqs[0]
+	for _, req := range reqs {
+		if req.Integration == portable.Claude {
+			engineReq = req
+			break
+		}
+	}
+	eng, err := m.engine(engineReq, &generation, nil)
+	if err != nil {
+		return nil, err
+	}
+	var targets []uapinstaller.ClientTarget
+	for _, req := range reqs {
+		targets = append(targets, uapinstaller.ClientTarget{
+			ClientID: string(req.Integration), ClientConfigRoot: req.ClientConfigRoot,
+			ClientExecutable: req.ClientExecutable, ExternalUninstalled: req.ExternalUninstalled,
+		})
+	}
+	prepared, err := m.prepareRemove(ctx, eng, uapinstaller.Request{
+		Operation: uapinstaller.OpRemove, InstallationID: reqs[0].Identity.InstallationID,
+		OperationID: reqs[0].OperationID, ClientExecutable: engineReq.ClientExecutable,
+		ExternalUninstalled: reqs[0].ExternalUninstalled || reqs[1].ExternalUninstalled,
+		Targets:             targets,
+	}, reqs[0])
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = prepared.Close() }()
+	var res *installruntime.PendingMutation
+	var lastPB portable.Binding
+	live := 0
+	out := make([]GroupRemoveResult, len(reqs))
+	for i, req := range reqs {
+		out[i].Integration = req.Integration
+		var found *domain.ClientBinding
+		var receipt domain.DataReceipt
+		for _, binding := range installation.Clients {
+			if binding.ClientID != string(req.Integration) {
+				continue
+			}
+			item := binding
+			found = &item
+			receipt = installation.DataReceipts[binding.DataReceiptID]
+		}
+		if found == nil {
+			out[i].AlreadyAbsent = true
+			continue
+		}
+		pb, err := Complete(req.Identity, req.Integration, found.ClientID, found.Scope, found.TargetLocator, receipt.Locator)
+		if err != nil {
+			return nil, err
+		}
+		kernelReq := Request{
+			Binding: pb, ExpectedGeneration: generation, Discovery: req.Discovery,
+			SourceRevision: req.SourceRevision, SourceDigest: req.SourceDigest, Profile: req.ClientConfigRoot,
+			Reservation: res,
+		}
+		matched, err := m.Kernel.matchingReservation(kernelReq, "uninstall")
+		if err != nil {
+			return nil, err
+		}
+		if matched != nil {
+			res = matched
+			kernelReq.Reservation = res
+		}
+		if res == nil {
+			published, created, err := m.Kernel.publishIntent(ctx, kernelReq, generation, "uninstall", "revoke-locator", []string{"direct-mcp"})
+			if err != nil {
+				return nil, err
+			}
+			generation = published.Generation
+			res = created
+			kernelReq.ExpectedGeneration = generation
+			kernelReq.Reservation = res
+		}
+		if err := m.Kernel.RevokeBinding(ctx, kernelReq); err != nil {
+			return nil, err
+		}
+		snap, err := installruntime.ReadInstalledSnapshot(req.Identity.ControlRoot)
+		if err != nil {
+			return nil, err
+		}
+		generation = snap.Ledger.Generation
+		lastPB = pb
+		live++
+	}
+	if live == 0 {
+		return out, nil
+	}
+	removed, err := eng.Apply(ctx, prepared, uapinstaller.Decision{Confirmed: true})
+	if err != nil {
+		return nil, persistResult(removed, err)
+	}
+	byClient := map[string]uapinstaller.ClientResult{}
+	for _, item := range removed.Targets {
+		byClient[item.ClientID] = item
+	}
+	for i, req := range reqs {
+		item, ok := byClient[string(req.Integration)]
+		if ok && item.Materialization == string(domain.MaterializationAbsent) {
+			out[i].AlreadyAbsent = true
+		}
+	}
+	if !reqs[0].KeepReservation && res != nil {
+		if err := m.Kernel.finishHandoff(ctx, Request{Binding: lastPB, ExpectedGeneration: generation, Reservation: res}, res); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func packageOperation(req MaterializeRequest) uapinstaller.Operation {
+	if req.Operation == "" {
+		return uapinstaller.OpInstall
+	}
+	return req.Operation
+}
+
+func (m Materializer) Update(ctx context.Context, req MaterializeRequest) (portable.Binding, error) {
+	req.Operation = uapinstaller.OpUpdate
+	return m.Install(ctx, req)
+}
+
+func (m Materializer) Repair(ctx context.Context, req MaterializeRequest) (portable.Binding, error) {
+	req.Operation = uapinstaller.OpRepair
+	return m.Install(ctx, req)
+}
+
+func (m Materializer) SwitchRetained(ctx context.Context, req MaterializeRequest) (uapinstaller.Result, error) {
+	if ctx == nil {
+		return uapinstaller.Result{}, ErrPreflight
+	}
+	if !explicitAbs(req.PackageRoot) {
+		return uapinstaller.Result{}, fmt.Errorf("%w: package root must be an explicit absolute path", ErrPreflight)
+	}
+	if req.Identity.InstallationID == "" {
+		return uapinstaller.Result{}, fmt.Errorf("%w: installation id is required", ErrPreflight)
+	}
+	generation := req.ExpectedGeneration
+	eng, err := m.engine(req, &generation, nil)
+	if err != nil {
+		return uapinstaller.Result{}, err
+	}
+	got, err := eng.SwitchRetained(ctx, uapinstaller.Request{
+		PackageRoot: req.PackageRoot, InstallationID: req.Identity.InstallationID,
+		OperationID: req.OperationID,
+	}, uapinstaller.Decision{Confirmed: true})
+	if err != nil {
+		return got, persistResult(got, wrapUpdateRequired(err))
+	}
+	if got.Outcome != uapinstaller.OutcomeCompleted && got.Outcome != uapinstaller.OutcomeUnchanged {
+		return got, fmt.Errorf("%w: %s", ErrPreflight, got.Reason)
+	}
+	view, inspectErr := eng.Inspect(ctx)
+	if inspectErr != nil {
+		return got, inspectErr
+	}
+	for _, installation := range view.Installations {
+		if installation.InstallationID != req.Identity.InstallationID {
+			continue
+		}
+		if got.Binding.TreeDigest != "" && installation.TreeDigest != got.Binding.TreeDigest {
+			return got, fmt.Errorf("%w: retained source %s desired %s", ErrPreflight, installation.TreeDigest, got.Binding.TreeDigest)
+		}
+		if installation.TreeDigest == "" {
+			return got, fmt.Errorf("%w: retained source digest is missing after switch", ErrPreflight)
+		}
+		if len(installation.Bindings) != 0 {
+			return got, fmt.Errorf("%w: retained switch materialized a client", ErrPreflight)
+		}
+		return got, nil
+	}
+	return got, fmt.Errorf("%w: installation %s", ErrPreflight, req.Identity.InstallationID)
+}
+
+func IsUpdateRequired(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrUpdateRequired) || errors.Is(err, uapinstaller.ErrUpdateRequired) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "run update separately") ||
+		strings.Contains(msg, "use switch to change source") ||
+		strings.Contains(msg, "is sticky to")
+}
+
+func wrapUpdateRequired(err error) error {
+	if err == nil {
+		return nil
+	}
+	if IsUpdateRequired(err) && !errors.Is(err, ErrUpdateRequired) {
+		return fmt.Errorf("%w: %w", ErrUpdateRequired, err)
+	}
+	return err
+}
+
+// ResultError keeps the installer Result when a mutation already happened.
+// Mapping that to a bool or an empty Binding would hide a managed commit.
+type ResultError struct {
+	Result uapinstaller.Result
+	Err    error
+}
+
+func (e ResultError) Error() string {
+	if e.Err != nil {
+		return e.Err.Error()
+	}
+	return e.Result.Reason
+}
+
+func (e ResultError) Unwrap() error { return e.Err }
+
+func persistResult(result uapinstaller.Result, err error) error {
+	if err == nil {
+		return nil
+	}
+	if result.Outcome == "" && result.Client.Materialization == "" && result.Binding.BindingID == "" {
+		return err
+	}
+	return ResultError{Result: result, Err: err}
+}
+
+func (m Materializer) OtherLiveClients(installationID, adding string) ([]string, error) {
+	if installationID == "" {
+		return nil, nil
+	}
+	state, err := m.Store.Load()
+	if err != nil {
+		return nil, err
+	}
+	installation, ok := findInstallation(state, installationID)
+	if !ok {
+		return nil, nil
+	}
+	var others []string
+	for _, binding := range installation.Clients {
+		if binding.ClientID != adding {
+			others = append(others, binding.ClientID)
+		}
+	}
+	return others, nil
+}
+
+func (m Materializer) PreviewInstall(ctx context.Context, req MaterializeRequest) (uapinstaller.Plan, error) {
+	return m.previewInstall(ctx, req, true)
+}
+
+// PreviewPlan is read-only Prepare for host confirmation. It does not recover
+// journals, publish intent, or Apply.
+func (m Materializer) PreviewPlan(ctx context.Context, req MaterializeRequest) (uapinstaller.Plan, error) {
+	return m.previewInstall(ctx, req, false)
+}
+
+func (m Materializer) previewInstall(ctx context.Context, req MaterializeRequest, recover bool) (uapinstaller.Plan, error) {
+	if ctx == nil {
+		return uapinstaller.Plan{}, ErrPreflight
+	}
+	if err := m.validate(req, true); err != nil {
+		return uapinstaller.Plan{}, err
+	}
+	eng, err := m.engine(req, new(uint64), nil)
+	if err != nil {
+		return uapinstaller.Plan{}, err
+	}
+	known, err := m.knownTargets(req.Identity.InstallationID, string(req.Integration))
+	if err != nil {
+		return uapinstaller.Plan{}, err
+	}
+	if recover {
+		if err := m.recoverOwnedJournals(ctx, req); err != nil {
+			return uapinstaller.Plan{}, err
+		}
+	}
+	prepared, err := eng.Prepare(ctx, uapinstaller.Request{
+		Operation: packageOperation(req), PackageRoot: req.PackageRoot, ClientID: string(req.Integration),
+		ClientConfigRoot: req.ClientConfigRoot, ClientExecutable: req.ClientExecutable,
+		InstallationID: req.Identity.InstallationID, OperationID: req.OperationID + "-preview",
+		RequiredComponents: []string{"mcp", "skills"},
+		KnownTargets:       known,
+	})
+	if err != nil {
+		return uapinstaller.Plan{}, wrapUpdateRequired(err)
+	}
+	defer func() { _ = prepared.Close() }()
+	return prepared.Plan(), nil
+}
+
+func (m Materializer) GuardSecondClient(ctx context.Context, req MaterializeRequest) error {
+	others, err := m.OtherLiveClients(req.Identity.InstallationID, string(req.Integration))
+	if err != nil {
+		return err
+	}
+	if len(others) == 0 {
+		return nil
+	}
+	plan, err := m.PreviewPlan(ctx, req)
+	if err != nil {
+		return wrapUpdateRequired(err)
+	}
+	state, err := m.Store.Load()
+	if err != nil {
+		return err
+	}
+	installation, ok := findInstallation(state, req.Identity.InstallationID)
+	if !ok {
+		return nil
+	}
+	if installation.Source.TreeDigest != "" && plan.TreeDigest != "" && installation.Source.TreeDigest != plan.TreeDigest {
+		return fmt.Errorf("%w: recorded digest %s desired %s", ErrUpdateRequired, installation.Source.TreeDigest, plan.TreeDigest)
+	}
+	return nil
+}
+
+// Remove uninstalls one live client. It preflights the managed artifact and
+// refuses pending journals before locator revoke. The wizard recovers first.
 func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error {
 	if ctx == nil {
 		return ErrPreflight
@@ -283,6 +1004,14 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 	if err := m.validate(req, false); err != nil {
 		return err
 	}
+	state, err = m.Store.Load()
+	if err != nil {
+		return err
+	}
+	installation, ok = findInstallation(state, req.Identity.InstallationID)
+	if ok && installation.DataRetained && len(installation.Clients) == 0 {
+		return nil
+	}
 	if !ok {
 		return fmt.Errorf("%w: portable binding is not installed", ErrPreflight)
 	}
@@ -297,58 +1026,71 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 		receipt = installation.DataReceipts[binding.DataReceiptID]
 	}
 	if found == nil {
-		return fmt.Errorf("%w: portable binding is not installed", ErrPreflight)
+		return ErrAlreadyAbsent
 	}
 	pb, err := Complete(req.Identity, req.Integration, found.ClientID, found.Scope, found.TargetLocator, receipt.Locator)
 	if err != nil {
 		return err
 	}
-	if req.Discovery.ConfigPath != "" {
-		release, err := installruntime.AcquireCoordinatorLease(ctx, req.Identity.ControlRoot)
-		if err != nil {
-			return err
-		}
-		defer release()
-		if _, err = installruntime.Recover(ctx, req.Identity.ControlRoot); err != nil {
-			return err
-		}
-		snap, err := installruntime.ReadInstalledSnapshot(req.Identity.ControlRoot)
-		if err != nil {
-			return err
-		}
-		req.ExpectedGeneration = snap.Ledger.Generation
+	release, err := m.beginMutation(ctx, &req)
+	if err != nil {
+		return err
 	}
+	defer release()
 	eng, err := m.engine(req, &req.ExpectedGeneration, nil)
 	if err != nil {
 		return err
 	}
-	if _, err := eng.RecoverCurrent(ctx); err != nil {
-		return err
-	}
-	if err := m.Kernel.RevokeBinding(ctx, Request{Binding: pb, ExpectedGeneration: req.ExpectedGeneration}); err != nil {
-		return err
-	}
-	if _, err := m.apply(ctx, eng, uapinstaller.Request{
+	prepared, err := m.prepareRemove(ctx, eng, uapinstaller.Request{
 		Operation: uapinstaller.OpRemove, ClientID: string(req.Integration),
 		ClientConfigRoot: req.ClientConfigRoot, ClientExecutable: req.ClientExecutable,
 		InstallationID: req.Identity.InstallationID, OperationID: req.OperationID,
 		ExternalUninstalled: req.ExternalUninstalled,
-	}); err != nil {
+	}, req)
+	if err != nil {
 		return err
 	}
+	defer func() { _ = prepared.Close() }()
+	kernelReq := Request{
+		Binding: pb, ExpectedGeneration: req.ExpectedGeneration, Discovery: req.Discovery,
+		SourceRevision: req.SourceRevision, SourceDigest: req.SourceDigest, Profile: req.ClientConfigRoot,
+	}
+	res, err := m.Kernel.matchingReservation(kernelReq, "uninstall")
+	if err != nil {
+		return err
+	}
+	if res == nil {
+		published, created, err := m.Kernel.publishIntent(ctx, kernelReq, req.ExpectedGeneration, "uninstall", "revoke-locator", []string{"direct-mcp"})
+		if err != nil {
+			return err
+		}
+		kernelReq.ExpectedGeneration = published.Generation
+		req.ExpectedGeneration = published.Generation
+		res = created
+	}
+	kernelReq.Reservation = res
+	if req.HoldOnly {
+		return fmt.Errorf("%w: %w", ErrPreflight, ErrExternalUninstall)
+	}
+	if err := m.Kernel.RevokeBinding(ctx, kernelReq); err != nil {
+		return err
+	}
+	removed, err := eng.Apply(ctx, prepared, uapinstaller.Decision{Confirmed: true})
+	if err != nil {
+		return persistResult(removed, err)
+	}
+	if req.KeepReservation {
+		return nil
+	}
 	if req.Discovery.ConfigPath == "" {
-		return m.Kernel.finishHandoff(ctx, Request{Binding: pb, ExpectedGeneration: req.ExpectedGeneration}, nil)
+		return m.Kernel.finishHandoff(ctx, kernelReq, res)
 	}
 	snap, err := installruntime.ReadInstalledSnapshot(req.Identity.ControlRoot)
 	if err != nil {
 		return err
 	}
-	reqBody := Request{Binding: pb, ExpectedGeneration: snap.Ledger.Generation, Discovery: req.Discovery}
+	reqBody := Request{Binding: pb, ExpectedGeneration: snap.Ledger.Generation, Discovery: req.Discovery, Reservation: res, Profile: req.ClientConfigRoot}
 	if _, err = m.Kernel.HandoffReverse(ctx, reqBody); err != nil {
-		return err
-	}
-	res, err := m.Kernel.matchingReservation(reqBody)
-	if err != nil {
 		return err
 	}
 	return m.Kernel.finishHandoff(ctx, reqBody, res)

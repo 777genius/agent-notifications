@@ -59,14 +59,6 @@ func setupCommandTree(t *testing.T, root string) map[string]string {
 	}
 	return out
 }
-func setupCommandRoot(t *testing.T) string {
-	t.Helper()
-	p, e := filepath.EvalSymlinks(t.TempDir())
-	if e != nil {
-		t.Fatal(e)
-	}
-	return p
-}
 func setupCommandWrite(t *testing.T, p, s string, mode os.FileMode) {
 	t.Helper()
 	if e := os.WriteFile(p, []byte(s), mode); e != nil {

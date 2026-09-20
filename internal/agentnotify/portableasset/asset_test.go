@@ -14,6 +14,7 @@ import (
 
 	"github.com/777genius/agent-notifications/install/uapinstaller"
 	"github.com/777genius/agent-notifications/skills"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/managedstdio"
 )
 
 func TestAssetName(t *testing.T) {
@@ -134,6 +135,60 @@ func TestExtractRejectsUnexpectedEntry(t *testing.T) {
 	}
 }
 
+func TestExtractRejectsSymlinkAndAbsolutePath(t *testing.T) {
+	base := t.TempDir()
+	linkZip := filepath.Join(base, "link.zip")
+	f, err := os.Create(linkZip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := zip.NewWriter(f)
+	hdr := &zip.FileHeader{Name: "bin/claude-notifications"}
+	hdr.SetMode(os.ModeSymlink | 0777)
+	w, err := zw.CreateHeader(hdr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("/tmp/evil")); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := Extract(linkZip, filepath.Join(base, "link-out")); err == nil || !errors.Is(err, ErrUnsafeArchive) {
+		t.Fatalf("want symlink rejection, got %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(base, "link-out", "bin", "claude-notifications")); !os.IsNotExist(err) {
+		t.Fatal("symlink archive wrote an entry")
+	}
+
+	absZip := filepath.Join(base, "abs.zip")
+	f, err = os.Create(absZip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw = zip.NewWriter(f)
+	w, err = zw.Create("/tmp/evil.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("no")); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := Extract(absZip, filepath.Join(base, "abs-out")); err == nil || !errors.Is(err, ErrUnsafeArchive) {
+		t.Fatalf("want absolute-path rejection, got %v", err)
+	}
+}
+
 func TestBuildPackageInstallsThroughPublicInstaller(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("UAP managedstdio.NewSource requires Perm()&0111; Go Windows FileMode does not set execute bits on regular files")
@@ -176,6 +231,146 @@ func TestBuildPackageInstallsThroughPublicInstaller(t *testing.T) {
 	}
 	if result.Outcome != uapinstaller.OutcomeCompleted {
 		t.Fatalf("%+v", result)
+	}
+}
+
+func TestExtractedArchiveInstallsThroughPublicInstaller(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("UAP managedstdio.NewSource requires Perm()&0111; Go Windows FileMode does not set execute bits on regular files")
+	}
+	probe := buildProbe(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(base, "pkg")
+	archive := filepath.Join(base, AssetName(runtime.GOOS, runtime.GOARCH))
+	got, err := Build(BuildRequest{
+		Version: "1.43.0", GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
+		Executable: probe, OutputRoot: root, Archive: archive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	destParent := filepath.Join(base, "acquired")
+	if err := os.Mkdir(destParent, 0700); err != nil {
+		t.Fatal(err)
+	}
+	extracted, err := OpenArchive(archive, destParent, got.ArchiveSHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(archive); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(base, "client")
+	if err := os.Mkdir(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := uapinstaller.New(uapinstaller.Config{
+		StateRoot: filepath.Join(base, "uap"), HelperExecutable: probe,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := eng.Prepare(t.Context(), uapinstaller.Request{
+		Operation: uapinstaller.OpInstall, PackageRoot: extracted, ClientID: "codex",
+		ClientConfigRoot: config, ClientExecutable: probe,
+		InstallationID: "00000000-0000-4000-8000-000000000098", OperationID: "extracted-asset",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = prepared.Close() }()
+	result, err := eng.Apply(t.Context(), prepared, uapinstaller.Decision{Confirmed: true})
+	if err != nil || result.Outcome != uapinstaller.OutcomeCompleted {
+		t.Fatalf("extracted archive apply: %+v %v", result, err)
+	}
+	if _, err := os.Lstat(result.Binding.TargetPath); err != nil {
+		t.Fatalf("extracted archive lost target: %v", err)
+	}
+}
+
+func TestReleaseCLIPackageInstallsAndDispatchesManagedStdio(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("UAP managedstdio.NewSource requires Perm()&0111; Go Windows FileMode does not set execute bits on regular files")
+	}
+	helper := buildReleaseCLI(t)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(base, "pkg")
+	archive := filepath.Join(base, AssetName(runtime.GOOS, runtime.GOARCH))
+	got, err := Build(BuildRequest{
+		Version: "1.43.0", GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
+		Executable: helper, OutputRoot: root, Archive: archive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	destParent := filepath.Join(base, "acquired")
+	if err := os.Mkdir(destParent, 0700); err != nil {
+		t.Fatal(err)
+	}
+	extracted, err := OpenArchive(archive, destParent, got.ArchiveSHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(archive); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(helper); err != nil {
+		t.Fatal(err)
+	}
+	extractedBin := filepath.Join(extracted, "bin", got.BinaryName)
+	stdout, stderr, code := runExtractedCLI(t, extractedBin, managedstdio.Mode)
+	if code != 126 || stdout != "" || !strings.Contains(stderr, "managed stdio:") {
+		t.Fatalf("extracted v1 dispatch: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if strings.Contains(stderr, "unknown protocol version") {
+		t.Fatal("extracted v1 treated as unknown version")
+	}
+	stdout, stderr, code = runExtractedCLI(t, extractedBin, "--internal-stdio-v2")
+	if code != 126 || stdout != "" || !strings.Contains(stderr, "unknown protocol version") {
+		t.Fatalf("extracted unknown version: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	config := filepath.Join(base, "client")
+	if err := os.Mkdir(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	eng, err := uapinstaller.New(uapinstaller.Config{
+		StateRoot: filepath.Join(base, "uap"), HelperExecutable: extractedBin,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := eng.Prepare(t.Context(), uapinstaller.Request{
+		Operation: uapinstaller.OpInstall, PackageRoot: extracted, ClientID: "codex",
+		ClientConfigRoot: config, ClientExecutable: extractedBin,
+		InstallationID: "00000000-0000-4000-8000-000000000075", OperationID: "release-cli-asset",
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = prepared.Close() }()
+	result, err := eng.Apply(t.Context(), prepared, uapinstaller.Decision{Confirmed: true})
+	if err != nil || result.Outcome != uapinstaller.OutcomeCompleted {
+		t.Fatalf("release CLI apply: %+v %v", result, err)
+	}
+	if _, err := os.Lstat(result.Binding.TargetPath); err != nil {
+		t.Fatalf("release CLI lost target: %v", err)
+	}
+	if _, err := os.Lstat(extractedBin); err != nil {
+		t.Fatalf("extracted helper missing after apply: %v", err)
 	}
 }
 
@@ -241,6 +436,36 @@ func main() { json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true}) }
 		t.Fatalf("build probe: %s %v", body, err)
 	}
 	return out
+}
+
+func buildReleaseCLI(t *testing.T) string {
+	t.Helper()
+	out := filepath.Join(t.TempDir(), binaryName(runtime.GOOS))
+	cmd := exec.Command("go", "build", "-p", "2", "-buildvcs=false", "-o", out, ".")
+	cmd.Dir = filepath.Join(repoRoot(t), "cmd", "claude-notifications")
+	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
+	if body, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build release CLI: %s %v", body, err)
+	}
+	return out
+}
+
+func runExtractedCLI(t *testing.T, bin string, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
+	cmd := exec.Command(bin, args...)
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+	err := cmd.Run()
+	if err == nil {
+		return outBuf.String(), errBuf.String(), 0
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return outBuf.String(), errBuf.String(), exitErr.ExitCode()
+	}
+	t.Fatalf("run %s: %v stderr=%s", strings.Join(args, " "), err, errBuf.String())
+	return "", "", -1
 }
 
 func repoRoot(t *testing.T) string {

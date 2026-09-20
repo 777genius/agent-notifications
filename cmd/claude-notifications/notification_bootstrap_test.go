@@ -3,10 +3,13 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -24,6 +27,44 @@ func notificationRepoRoot(t *testing.T) string {
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "../.."))
 }
 
+var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func retryArgv(t *testing.T, output, needle string) []string {
+	t.Helper()
+	clean := ansiEscape.ReplaceAllString(output, "")
+	var line string
+	for _, candidate := range strings.Split(clean, "\n") {
+		if strings.Contains(candidate, needle) {
+			line = strings.TrimSpace(candidate)
+		}
+	}
+	if line == "" {
+		t.Fatalf("missing %q retry in %s", needle, output)
+	}
+	if i := strings.Index(line, "Retry: "); i >= 0 {
+		line = strings.TrimSpace(line[i+len("Retry: "):])
+	}
+	cmd := exec.Command("bash", "-c", `eval "set -- $1"; printf '%s\0' "$@"`, "_", line)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("eval retry %q: %v", line, err)
+	}
+	parts := strings.Split(strings.TrimRight(string(out), "\x00"), "\x00")
+	if len(parts) == 0 || (len(parts) == 1 && parts[0] == "") {
+		t.Fatalf("empty retry argv from %q", line)
+	}
+	return parts
+}
+
+func flagValue(argv []string, name string) string {
+	for i, arg := range argv {
+		if arg == name && i+1 < len(argv) {
+			return argv[i+1]
+		}
+	}
+	return ""
+}
+
 func TestNotificationBootstrapOffline(t *testing.T) {
 	source, err := os.ReadFile(filepath.Join(notificationRepoRoot(t), "bin", "bootstrap.sh"))
 	if err != nil {
@@ -31,6 +72,9 @@ func TestNotificationBootstrapOffline(t *testing.T) {
 	}
 	if !strings.Contains(string(source), "cli_has_setup_codex_skip_agent_notify") {
 		t.Fatal("install_codex must only pass --skip-agent-notify when the published CLI advertises it")
+	}
+	if !strings.Contains(string(source), "cli_has_setup_wizard") {
+		t.Fatal("bootstrap must probe wizard before calling configure")
 	}
 	prefix := strings.TrimSuffix(strings.TrimSpace(string(source)), `main "$@"`)
 	for _, test := range []struct {
@@ -90,7 +134,7 @@ install_codex() { echo codex >> "$HOME/installs"; CONFIGURE_BINARY="$HOME/fake-b
 			command := exec.Command("bash", "-c", script)
 			command.Dir = home
 			output, err := command.CombinedOutput()
-			if (test.fail || strings.HasPrefix(test.name, "bad_")) != (err != nil) {
+			if (test.fail || test.name == "configure_failed" || strings.HasPrefix(test.name, "bad_")) != (err != nil) {
 				t.Fatalf("%v: %s", err, output)
 			}
 			calls, _ := os.ReadFile(filepath.Join(home, "calls"))
@@ -126,6 +170,382 @@ install_codex() { echo codex >> "$HOME/installs"; CONFIGURE_BINARY="$HOME/fake-b
 	}
 }
 
+func TestNotificationBootstrapWizard(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join(notificationRepoRoot(t), "bin", "bootstrap.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := strings.TrimSuffix(strings.TrimSpace(string(source)), `main "$@"`)
+	home := t.TempDir()
+	codexHome := filepath.Join(home, ".codex")
+	claudeHome := filepath.Join(home, ".claude")
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	t.Setenv("CODEX_HOME", "")
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("CLAUDE_HOME", "")
+	if err := os.MkdirAll(codexHome, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte("title = 'keep'\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	binDir := filepath.Join(home, "bin")
+	if err := os.MkdirAll(binDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"claude", "codex"} {
+		if err := os.WriteFile(filepath.Join(binDir, name), []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	binary := filepath.Join(home, "fake-binary")
+	helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then printf '%s\\n' 'setup-notifications wizard' 'setup-notifications' '--skip-agent-notify'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n"
+	if err := os.WriteFile(binary, []byte(helper), 0700); err != nil {
+		t.Fatal(err)
+	}
+	script := prefix + `
+print_header() { :; }
+abort_if_wsl_environment() { :; }
+check_prerequisites() { :; }
+detect_platform() { :; }
+install_cleanup_traps() { :; }
+resolve_bootstrap_release() { :; }
+stage_config_helper() { :; }
+stage_historical_baselines() { :; }
+config_preflight() { :; }
+initialize_config() { :; }
+install_claude() {
+  echo claude >> "$HOME/installs"
+  PLUGIN_ROOT="$HOME/bundle"
+  mkdir -p "$PLUGIN_ROOT/portable-package"
+  printf '%s\n' '{"name":"agent-notify","version":"1.0.0"}' > "$PLUGIN_ROOT/portable-package/plugin.json"
+}
+install_codex() { echo codex >> "$HOME/installs"; CONFIGURE_BINARY="$HOME/fake-binary"; return 0; }
+main --product both
+`
+	command := exec.Command("bash", "-c", script)
+	command.Dir = home
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v: %s", err, output)
+	}
+	calls, err := os.ReadFile(filepath.Join(home, "calls"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(calls)
+	if strings.Contains(body, "setup-notifications configure") {
+		t.Fatal("wizard path called configure", body)
+	}
+	if !strings.Contains(body, "setup-notifications wizard --action install --agents claude,codex --hooks false --agent-notify true --yes") {
+		t.Fatal(body)
+	}
+	if !strings.Contains(body, "--package "+filepath.Join(home, "bundle", "portable-package")) {
+		t.Fatal(body)
+	}
+	if !strings.Contains(body, "--claude-executable "+filepath.Join(binDir, "claude")) || !strings.Contains(body, "--codex-executable "+filepath.Join(binDir, "codex")) {
+		t.Fatal(body)
+	}
+	if !strings.Contains(body, "--codex-home "+codexHome) {
+		t.Fatal(body)
+	}
+	if !strings.Contains(body, "--claude-config "+claudeHome) {
+		t.Fatal(body)
+	}
+	if strings.Contains(body, "--mcp-config") || strings.Contains(body, "--claude-mcp-config") {
+		t.Fatal("bootstrap must not invent MCP config paths", body)
+	}
+}
+
+func TestNotificationBootstrapWizardRetryQuotesCustomRoots(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join(notificationRepoRoot(t), "bin", "bootstrap.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := strings.TrimSuffix(strings.TrimSpace(string(source)), `main "$@"`)
+	base := t.TempDir()
+	home := filepath.Join(base, "home space")
+	bundle := filepath.Join(home, "bundle space")
+	codexHome := filepath.Join(home, "codex home")
+	claudeConfig := filepath.Join(home, "claude config")
+	for _, dir := range []string{home, bundle, filepath.Join(bundle, "portable-package"), codexHome, claudeConfig, filepath.Join(home, "bin"), filepath.Join(home, "xdg")} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(bundle, "portable-package", "plugin.json"), []byte(`{"name":"agent-notify"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte("title = 'keep'\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	t.Setenv("CODEX_HOME", codexHome)
+	t.Setenv("CLAUDE_CONFIG_DIR", claudeConfig)
+	binDir := filepath.Join(home, "bin")
+	for _, name := range []string{"claude", "codex"} {
+		if err := os.WriteFile(filepath.Join(binDir, name), []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	binary := filepath.Join(home, "fake binary")
+	helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then printf '%s\\n' 'setup-notifications wizard' 'setup-notifications' '--skip-agent-notify'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\nexit 1\n"
+	if err := os.WriteFile(binary, []byte(helper), 0700); err != nil {
+		t.Fatal(err)
+	}
+	script := prefix + `
+print_header() { :; }
+abort_if_wsl_environment() { :; }
+check_prerequisites() { :; }
+detect_platform() { :; }
+install_cleanup_traps() { :; }
+resolve_bootstrap_release() { :; }
+stage_config_helper() { :; }
+stage_historical_baselines() { :; }
+config_preflight() { :; }
+initialize_config() { :; }
+install_claude() { echo claude >> "$HOME/installs"; PLUGIN_ROOT="$HOME/bundle space"; }
+install_codex() { echo codex >> "$HOME/installs"; CONFIGURE_BINARY="$HOME/fake binary"; return 0; }
+main --product both --codex-home "$HOME/codex home"
+`
+	command := exec.Command("bash", "-c", script)
+	command.Dir = home
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected wizard failure: %s", output)
+	}
+	if !strings.Contains(string(output), "Agent-notify setup failed") {
+		t.Fatal("missing configure warning", string(output))
+	}
+	argv := retryArgv(t, string(output), "setup-notifications wizard")
+	if argv[0] != binary {
+		t.Fatalf("binary: %#v", argv)
+	}
+	if flagValue(argv, "--package") != filepath.Join(bundle, "portable-package") {
+		t.Fatalf("package: %#v", argv)
+	}
+	if flagValue(argv, "--plugin-root") != bundle {
+		t.Fatalf("plugin-root: %#v", argv)
+	}
+	if flagValue(argv, "--helper") != binary {
+		t.Fatalf("helper: %#v", argv)
+	}
+	if flagValue(argv, "--claude-config") != claudeConfig {
+		t.Fatalf("claude-config: %#v", argv)
+	}
+	if flagValue(argv, "--codex-home") != codexHome {
+		t.Fatalf("codex-home: %#v", argv)
+	}
+	if flagValue(argv, "--mcp-config") != "" || flagValue(argv, "--claude-mcp-config") != "" {
+		t.Fatalf("invented mcp-config: %#v", argv)
+	}
+}
+
+func TestNotificationBootstrapConfigureRetryQuotesCustomRoots(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join(notificationRepoRoot(t), "bin", "bootstrap.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := strings.TrimSuffix(strings.TrimSpace(string(source)), `main "$@"`)
+	base := t.TempDir()
+	home := filepath.Join(base, "home space")
+	codexHome := filepath.Join(home, "codex home")
+	for _, dir := range []string{home, codexHome, filepath.Join(home, "xdg")} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	t.Setenv("CODEX_HOME", codexHome)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	binary := filepath.Join(home, "fake binary")
+	helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then printf '%s\\n' 'setup-notifications' '--skip-agent-notify'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\nexit 1\n"
+	if err := os.WriteFile(binary, []byte(helper), 0700); err != nil {
+		t.Fatal(err)
+	}
+	script := prefix + `
+print_header() { :; }
+abort_if_wsl_environment() { :; }
+check_prerequisites() { :; }
+detect_platform() { :; }
+install_cleanup_traps() { :; }
+resolve_bootstrap_release() { :; }
+stage_config_helper() { :; }
+stage_historical_baselines() { :; }
+config_preflight() { :; }
+initialize_config() { :; }
+install_claude() { echo claude >> "$HOME/installs"; PLUGIN_ROOT="$HOME/bundle space"; }
+install_codex() { echo codex >> "$HOME/installs"; CONFIGURE_BINARY="$HOME/fake binary"; return 0; }
+main --product both --codex-home "$HOME/codex home"
+`
+	command := exec.Command("bash", "-c", script)
+	command.Dir = home
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected configure failure: %s", output)
+	}
+	argv := retryArgv(t, string(output), "setup-notifications configure")
+	if argv[0] != binary {
+		t.Fatalf("binary: %#v", argv)
+	}
+	if flagValue(argv, "--codex-home") != codexHome {
+		t.Fatalf("codex-home: %#v", argv)
+	}
+	if flagValue(argv, "--provider") != "both" {
+		t.Fatalf("provider: %#v", argv)
+	}
+}
+
+func TestNotificationBootstrapWizardReleaseZip(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join(notificationRepoRoot(t), "bin", "bootstrap.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := strings.TrimSuffix(strings.TrimSpace(string(source)), `main "$@"`)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	t.Setenv("CODEX_HOME", filepath.Join(home, "codex"))
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	binDir := filepath.Join(home, "bin")
+	if err := os.MkdirAll(binDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"claude", "codex"} {
+		if err := os.WriteFile(filepath.Join(binDir, name), []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	binary := filepath.Join(home, "fake-binary")
+	helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then printf '%s\\n' 'setup-notifications wizard' 'setup-notifications' '--skip-agent-notify'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n"
+	if err := os.WriteFile(binary, []byte(helper), 0700); err != nil {
+		t.Fatal(err)
+	}
+	asset := fmt.Sprintf("agent-notify-portable-%s-%s.zip", runtime.GOOS, runtime.GOARCH)
+	release := filepath.Join(home, "release")
+	if err := os.Mkdir(release, 0700); err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("portable-zip-fixture")
+	if err := os.WriteFile(filepath.Join(release, asset), payload, 0600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(payload)
+	checksums := hex.EncodeToString(sum[:]) + "  " + asset + "\n"
+	if err := os.WriteFile(filepath.Join(release, "checksums.txt"), []byte(checksums), 0600); err != nil {
+		t.Fatal(err)
+	}
+	script := prefix + `
+print_header() { :; }
+abort_if_wsl_environment() { :; }
+check_prerequisites() { :; }
+detect_platform() { :; }
+install_cleanup_traps() { :; }
+resolve_bootstrap_release() { BOOTSTRAP_TAG=v1.43.0; }
+stage_config_helper() { :; }
+stage_historical_baselines() { :; }
+config_preflight() { :; }
+initialize_config() { :; }
+fetch_bootstrap_file() {
+  case "$1" in
+    *checksums.txt) cp "$HOME/release/checksums.txt" "$2" ;;
+    *agent-notify-portable-*) cp "$HOME/release/$(basename "$1")" "$2" ;;
+    *) echo "unexpected fetch $1" >&2; return 1 ;;
+  esac
+}
+install_claude() { echo claude >> "$HOME/installs"; PLUGIN_ROOT="$HOME/bundle"; mkdir -p "$PLUGIN_ROOT"; }
+install_codex() { echo codex >> "$HOME/installs"; CONFIGURE_BINARY="$HOME/fake-binary"; return 0; }
+main --product both
+`
+	command := exec.Command("bash", "-c", script)
+	command.Dir = home
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v: %s", err, output)
+	}
+	calls, err := os.ReadFile(filepath.Join(home, "calls"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(calls)
+	if strings.Contains(body, "setup-notifications configure") {
+		t.Fatal("wizard path called configure", body)
+	}
+	if !strings.Contains(body, "--package ") || !strings.Contains(body, asset) {
+		t.Fatal(body)
+	}
+	if strings.Contains(body, "portable-package") {
+		t.Fatal("used git template instead of release zip", body)
+	}
+}
+
+func TestNotificationBootstrapWizardMissingPortable(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join(notificationRepoRoot(t), "bin", "bootstrap.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := strings.TrimSuffix(strings.TrimSpace(string(source)), `main "$@"`)
+	for _, test := range []struct {
+		name, args string
+		wantErr    bool
+	}{
+		{name: "auto", args: "--product both"},
+		{name: "explicit", args: "--product both --agent-notify --navigation none --allow-unknown-caller true --allow-caller-asserted false", wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+			t.Setenv("CODEX_HOME", filepath.Join(home, "codex"))
+			t.Setenv("CLAUDE_CONFIG_DIR", "")
+			binary := filepath.Join(home, "fake-binary")
+			helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then printf '%s\\n' 'setup-notifications wizard' 'setup-notifications' '--skip-agent-notify'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n"
+			if err := os.WriteFile(binary, []byte(helper), 0700); err != nil {
+				t.Fatal(err)
+			}
+			script := prefix + `
+print_header() { :; }
+abort_if_wsl_environment() { :; }
+check_prerequisites() { :; }
+detect_platform() { :; }
+install_cleanup_traps() { :; }
+resolve_bootstrap_release() { BOOTSTRAP_TAG=v9.9.9; }
+stage_config_helper() { :; }
+stage_historical_baselines() { :; }
+config_preflight() { :; }
+initialize_config() { :; }
+fetch_bootstrap_file() { echo curl: 404 >&2; return 1; }
+install_claude() { echo claude >> "$HOME/installs"; PLUGIN_ROOT="$HOME/bundle"; mkdir -p "$PLUGIN_ROOT"; }
+install_codex() { echo codex >> "$HOME/installs"; CONFIGURE_BINARY="$HOME/fake-binary"; return 0; }
+main ` + test.args + `
+`
+			command := exec.Command("bash", "-c", script)
+			command.Dir = home
+			output, err := command.CombinedOutput()
+			if test.wantErr != (err != nil) {
+				t.Fatalf("%v: %s", err, output)
+			}
+			if !strings.Contains(string(output), "portable package is missing") {
+				t.Fatal(string(output))
+			}
+			calls, _ := os.ReadFile(filepath.Join(home, "calls"))
+			if len(calls) != 0 {
+				t.Fatal("missing portable still invoked wizard", string(calls))
+			}
+			installs, err := os.ReadFile(filepath.Join(home, "installs"))
+			if err != nil || !strings.Contains(string(installs), "claude") || !strings.Contains(string(installs), "codex") {
+				t.Fatal("missing portable rolled back install", err, string(installs))
+			}
+		})
+	}
+}
+
 func TestNotificationInitOfflineBranch(t *testing.T) {
 	source, err := os.ReadFile(filepath.Join(notificationRepoRoot(t), "commands", "init.md"))
 	if err != nil {
@@ -151,7 +571,7 @@ func TestNotificationInitOfflineBranch(t *testing.T) {
 		{name: "default", install: true},
 		{name: "skip", args: []string{"--skip-agent-notify"}, install: true},
 		{name: "configure", args: []string{"--agent-notify", "--navigation", "none", "--allow-unknown-caller", "true", "--allow-caller-asserted", "false"}, install: true},
-		{name: "failed", failHelper: true, install: true},
+		{name: "failed", failHelper: true, fail: true, install: true},
 		{name: "incomplete_none", args: []string{"--agent-notify", "--navigation", "none"}, fail: true},
 		{name: "bad_alias", args: []string{"--configure-notifications"}, fail: true},
 		{name: "bad_route", args: []string{"--navigation", "invalid"}, fail: true},
@@ -168,7 +588,7 @@ func TestNotificationInitOfflineBranch(t *testing.T) {
 			if err := os.MkdirAll(filepath.Join(bundle, "bin"), 0700); err != nil {
 				t.Fatal(err)
 			}
-			helper := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n"
+			helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n"
 			if test.failHelper {
 				helper += "exit 1\n"
 			}
@@ -209,6 +629,161 @@ func TestNotificationInitOfflineBranch(t *testing.T) {
 				t.Fatal("missing configure warning", string(output))
 			}
 		})
+	}
+}
+
+func TestNotificationInitWizard(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join(notificationRepoRoot(t), "commands", "init.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocks := strings.Split(string(source), "```bash\n")
+	body := ""
+	for _, block := range blocks[1:] {
+		chunk := strings.SplitN(block, "```", 2)[0]
+		if strings.Contains(chunk, "setup-notifications wizard") {
+			body = chunk
+			break
+		}
+	}
+	if body == "" {
+		t.Fatal("missing init wizard script")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("TMPDIR", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	t.Setenv("CODEX_HOME", filepath.Join(home, "codex"))
+	bundle := filepath.Join(home, "bundle")
+	t.Setenv("CLAUDE_PLUGIN_ROOT", bundle)
+	if err := os.MkdirAll(filepath.Join(bundle, "bin"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(bundle, "portable-package"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bundle, "portable-package", "plugin.json"), []byte(`{"name":"agent-notify"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	binDir := filepath.Join(home, "bin")
+	if err := os.MkdirAll(binDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then printf '%s\\n' 'setup-notifications wizard'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n"
+	if err := os.WriteFile(filepath.Join(bundle, "bin", "claude-notifications"), []byte(helper), 0700); err != nil {
+		t.Fatal(err)
+	}
+	script := `curl() { printf '#!/bin/sh\necho installed >> "$HOME/installs"\n' > "$4"; }
+` + body
+	command := exec.Command("bash", "-c", script, "init")
+	command.Dir = home
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v: %s", err, output)
+	}
+	calls, err := os.ReadFile(filepath.Join(home, "calls"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(calls)
+	if strings.Contains(got, "setup-notifications configure") {
+		t.Fatal("wizard path called configure", got)
+	}
+	if !strings.Contains(got, "setup-notifications wizard --action install --agents claude --hooks false --agent-notify true --yes") {
+		t.Fatal(got)
+	}
+	if !strings.Contains(got, "--package "+filepath.Join(bundle, "portable-package")) {
+		t.Fatal(got)
+	}
+	if strings.Contains(got, "--mcp-config") || strings.Contains(got, "--claude-mcp-config") {
+		t.Fatal("init must not invent MCP config paths", got)
+	}
+}
+
+func TestNotificationInitWizardRetryQuotesCustomRoots(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join(notificationRepoRoot(t), "commands", "init.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocks := strings.Split(string(source), "```bash\n")
+	body := ""
+	for _, block := range blocks[1:] {
+		chunk := strings.SplitN(block, "```", 2)[0]
+		if strings.Contains(chunk, "setup-notifications wizard") {
+			body = chunk
+			break
+		}
+	}
+	if body == "" {
+		t.Fatal("missing init wizard script")
+	}
+	base := t.TempDir()
+	home := filepath.Join(base, "home space")
+	bundle := filepath.Join(home, "plugin root")
+	claudeConfig := filepath.Join(home, "claude config")
+	for _, dir := range []string{
+		home,
+		filepath.Join(bundle, "bin"),
+		filepath.Join(bundle, "portable-package"),
+		filepath.Join(home, "bin"),
+		filepath.Join(home, "xdg"),
+		claudeConfig,
+	} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(bundle, "portable-package", "plugin.json"), []byte(`{"name":"agent-notify"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("TMPDIR", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	t.Setenv("CODEX_HOME", filepath.Join(home, "codex home"))
+	t.Setenv("CLAUDE_PLUGIN_ROOT", bundle)
+	t.Setenv("CLAUDE_CONFIG_DIR", claudeConfig)
+	if err := os.WriteFile(filepath.Join(home, "bin", "claude"), []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", filepath.Join(home, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"))
+	helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then printf '%s\\n' 'setup-notifications wizard'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(bundle, "bin", "claude-notifications"), []byte(helper), 0700); err != nil {
+		t.Fatal(err)
+	}
+	script := `curl() { printf '#!/bin/sh\necho installed >> "$HOME/installs"\n' > "$4"; }
+` + body
+	command := exec.Command("bash", "-c", script, "init")
+	command.Dir = home
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected wizard failure: %s", output)
+	}
+	if !strings.Contains(string(output), "agent-notify setup failed") {
+		t.Fatal("missing configure warning", string(output))
+	}
+	argv := retryArgv(t, string(output), "setup-notifications wizard")
+	notifyBin := filepath.Join(bundle, "bin", "claude-notifications")
+	if argv[0] != notifyBin {
+		t.Fatalf("binary: %#v", argv)
+	}
+	if flagValue(argv, "--package") != filepath.Join(bundle, "portable-package") {
+		t.Fatalf("package: %#v", argv)
+	}
+	if flagValue(argv, "--plugin-root") != bundle {
+		t.Fatalf("plugin-root: %#v", argv)
+	}
+	if flagValue(argv, "--helper") != notifyBin {
+		t.Fatalf("helper: %#v", argv)
+	}
+	if flagValue(argv, "--claude-config") != claudeConfig {
+		t.Fatalf("claude-config: %#v", argv)
+	}
+	if flagValue(argv, "--mcp-config") != "" || flagValue(argv, "--claude-mcp-config") != "" {
+		t.Fatalf("invented mcp-config: %#v", argv)
 	}
 }
 

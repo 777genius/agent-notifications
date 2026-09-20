@@ -1,0 +1,198 @@
+name: Qualification candidate
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/qualification-candidate.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qualification-candidate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  portable-candidate:
+    name: Candidate ${{ matrix.platform }} ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15-intel
+            platform: darwin
+            arch: amd64
+            binary: claude-notifications-darwin-amd64
+            macos_deployment_target: '12.0'
+          - os: macos-15
+            platform: darwin
+            arch: arm64
+            binary: claude-notifications-darwin-arm64
+            macos_deployment_target: '12.0'
+          - os: ubuntu-22.04
+            platform: linux
+            arch: amd64
+            binary: claude-notifications-linux-amd64
+          - os: ubuntu-22.04-arm
+            platform: linux
+            arch: arm64
+            binary: claude-notifications-linux-arm64
+          - os: windows-latest
+            platform: windows
+            arch: amd64
+            binary: claude-notifications-windows-amd64.exe
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+
+      - name: Set up Python evidence controller
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install Linux build dependencies
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+
+      - name: Build exact binary and portable package
+        env:
+          CGO_ENABLED: '1'
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_deployment_target }}
+          CANDIDATE_BINARY: ${{ matrix.binary }}
+          CANDIDATE_OS: ${{ matrix.platform }}
+          CANDIDATE_ARCH: ${{ matrix.arch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p candidate
+          version="$(sed -n 's/^var ConsumerVersion = "\([^"]*\)"$/\1/p' internal/config/runtime.go)"
+          test -n "$version"
+          go build -ldflags="-s -w" -trimpath -o "candidate/$CANDIDATE_BINARY" ./cmd/claude-notifications
+          go run ./cmd/build-portable-package \
+            -version "$version" \
+            -os "$CANDIDATE_OS" \
+            -arch "$CANDIDATE_ARCH" \
+            -executable "candidate/$CANDIDATE_BINARY" \
+            -output "candidate/agent-notify-portable-$CANDIDATE_OS-$CANDIDATE_ARCH.zip" \
+            -workdir "$RUNNER_TEMP/portable-$CANDIDATE_OS-$CANDIDATE_ARCH"
+
+      - name: Verify macOS deployment target
+        if: matrix.platform == 'darwin'
+        env:
+          CANDIDATE_BINARY: ${{ matrix.binary }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          minos="$(otool -l "candidate/$CANDIDATE_BINARY" | awk '$1 == "minos" { print $2; exit }')"
+          case "$minos" in
+            12|12.*) ;;
+            *) echo "unexpected minimum macOS version: ${minos:-missing}" >&2; exit 1 ;;
+          esac
+
+      - name: Qualify built artifact in disposable profiles
+        env:
+          CANDIDATE_BINARY: ${{ matrix.binary }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.os }}" != Windows ]; then
+            chmod +x "candidate/$CANDIDATE_BINARY"
+          fi
+          version="$(sed -n 's/^var ConsumerVersion = "\([^"]*\)"$/\1/p' internal/config/runtime.go)"
+          python scripts/release-artifact-e2e.py \
+            --binary "candidate/$CANDIDATE_BINARY" \
+            --version "v$version" | tee candidate/artifact-e2e.log
+
+      - name: Record exact candidate identity
+        env:
+          CANDIDATE_BINARY: ${{ matrix.binary }}
+          CANDIDATE_OS: ${{ matrix.platform }}
+          CANDIDATE_ARCH: ${{ matrix.arch }}
+          CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          CANDIDATE_REF: ${{ github.head_ref || github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import platform
+          import subprocess
+
+          root = pathlib.Path('candidate')
+          binary = root / os.environ['CANDIDATE_BINARY']
+          archive = root / f"agent-notify-portable-{os.environ['CANDIDATE_OS']}-{os.environ['CANDIDATE_ARCH']}.zip"
+
+          def sha256(path):
+              digest = hashlib.sha256()
+              with path.open('rb') as stream:
+                  for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                      digest.update(chunk)
+              return digest.hexdigest()
+
+          modules = subprocess.check_output(
+              ['go', 'list', '-m', '-f', '{{.Path}} {{.Version}}', 'all'], text=True
+          ).splitlines()
+          uap_prefix = 'github.com/777genius/plugin-kit-ai/'
+          uap = sorted(line for line in modules if line.startswith(uap_prefix))
+          required_uap_modules = {
+              'github.com/777genius/plugin-kit-ai/cli',
+              'github.com/777genius/plugin-kit-ai/install/integrationctl',
+              'github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins',
+              'github.com/777genius/plugin-kit-ai/sdk',
+          }
+          pinned_uap_modules = {line.split(maxsplit=1)[0] for line in uap}
+          missing_uap_modules = sorted(required_uap_modules - pinned_uap_modules)
+          if missing_uap_modules:
+              raise SystemExit(f'missing required UAP module pins: {missing_uap_modules}')
+          if any(len(line.split(maxsplit=1)) != 2 for line in uap):
+              raise SystemExit(f'unversioned UAP module in exact candidate graph: {uap}')
+          version = subprocess.check_output([str(binary), 'version'], text=True).strip()
+          record = {
+              'schema_version': 1,
+              'status': 'pass',
+              'candidate_sha': os.environ['CANDIDATE_SHA'],
+              'candidate_ref': os.environ['CANDIDATE_REF'],
+              'run_id': int(os.environ['GITHUB_RUN_ID']),
+              'run_attempt': int(os.environ['GITHUB_RUN_ATTEMPT']),
+              'os': os.environ['CANDIDATE_OS'],
+              'arch': os.environ['CANDIDATE_ARCH'],
+              'runner_os_release': platform.platform(),
+              'version_output': version,
+              'binary': {'name': binary.name, 'size': binary.stat().st_size, 'sha256': sha256(binary)},
+              'portable': {'name': archive.name, 'size': archive.stat().st_size, 'sha256': sha256(archive)},
+              'uap_modules': uap,
+              'qualification': {
+                  'artifact_e2e': 'pass',
+                  'desktop_outcome': 'not_run',
+                  'client_restart': 'not_run',
+                  'machine_reboot_login': 'not_run',
+              },
+          }
+          (root / 'candidate-evidence.json').write_text(
+              json.dumps(record, indent=2, sort_keys=True) + '\n', encoding='utf-8'
+          )
+          PY
+          cat candidate/candidate-evidence.json
+
+      - name: Upload exact candidate and evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: qualification-candidate-${{ matrix.platform }}-${{ matrix.arch }}
+          path: candidate/
+          if-no-files-found: error
+          retention-days: 14

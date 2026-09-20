@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -367,6 +368,88 @@ func TestCommitBindingPublishFailureKeepsExistingConsumer(t *testing.T) {
 	}
 }
 
+func TestCommitBindingSameBindingDoesNotBumpGeneration(t *testing.T) {
+	b, ledger := bindingFixture(t)
+	svc := Service{}
+	if _, err := svc.CommitBinding(testCtx(t), Request{Binding: b, ExpectedGeneration: ledger.Generation}); err != nil {
+		t.Fatal(err)
+	}
+	first, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _, _, err := b.Registration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := first.Ledger.Consumers[key]; !ok {
+		t.Fatal("first commit omitted portable consumer")
+	}
+	if _, err := svc.CommitBinding(testCtx(t), Request{Binding: b, ExpectedGeneration: first.Ledger.Generation}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CommitBinding(testCtx(t), Request{Binding: b, ExpectedGeneration: ledger.Generation}); err != nil {
+		t.Fatal(err)
+	}
+	second, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Ledger.Generation != first.Ledger.Generation {
+		t.Fatalf("duplicate commit bumped generation %d -> %d", first.Ledger.Generation, second.Ledger.Generation)
+	}
+	if _, ok := second.Ledger.Consumers[key]; !ok {
+		t.Fatal("duplicate commit dropped portable consumer")
+	}
+	if _, ok := second.Ledger.Consumers["existing"]; !ok {
+		t.Fatal("duplicate commit dropped unrelated consumer")
+	}
+	name, err := b.Filename()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := portable.Acquire(testCtx(t), b.DataRoot, name)
+	if err != nil {
+		t.Fatalf("locator after duplicate commit: %v", err)
+	}
+	lease.Release()
+}
+
+func TestRefuseConflictingLocatorIgnoresPathMatch(t *testing.T) {
+	b, ledger := bindingFixture(t)
+	name, err := b.Filename()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(b.DataRoot, name)
+	if err := os.WriteFile(path, []byte(`{"conflict":true}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := refuseConflictingLocator(b); err == nil || !errors.Is(err, ErrPreflight) {
+		t.Fatalf("conflicting locator accepted: %v", err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Ledger.Generation != ledger.Generation {
+		t.Fatalf("preflight bumped generation %d -> %d", ledger.Generation, snap.Ledger.Generation)
+	}
+	key, _, raw, err := b.Registration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := snap.Ledger.Consumers[key]; ok {
+		t.Fatal("preflight committed portable consumer")
+	}
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := refuseConflictingLocator(b); err != nil {
+		t.Fatalf("matching locator refused: %v", err)
+	}
+}
+
 func ownedMCP(t *testing.T, b portable.Binding, ledger installruntime.Ledger) (string, string, installruntime.Ledger) {
 	t.Helper()
 	config := filepath.Join(filepath.Dir(b.ControlRoot), "client", "config")
@@ -439,6 +522,230 @@ func TestHandoffReservationIsPublishedBeforeDirectRemove(t *testing.T) {
 	}
 }
 
+func TestPendingInstallReservationConflictsWithRemove(t *testing.T) {
+	b, ledger := bindingFixture(t)
+	config, cmd, ledger := ownedMCP(t, b, ledger)
+	svc := Service{Remover: &fakeUAP{}}
+	req := Request{Binding: b, ExpectedGeneration: ledger.Generation, Discovery: Discovery{ConfigPath: config, Command: cmd}}
+	published, res, err := svc.publishHandoffReservation(testCtx(t), req, ledger.Generation)
+	if err != nil || res == nil || published.PendingMutation == nil {
+		t.Fatalf("publish: %+v %v", res, err)
+	}
+	if err := svc.Remove(testCtx(t), Request{
+		Binding: b, ExpectedGeneration: published.Generation, Discovery: req.Discovery,
+	}); !errors.Is(err, ErrIntentConflict) {
+		t.Fatalf("remove during install reservation: %v", err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
+	if err != nil || snap.Ledger.PendingMutation == nil {
+		t.Fatalf("conflict consumed install reservation: %+v %v", snap.Ledger.PendingMutation, err)
+	}
+	if _, err := os.Stat(config); err != nil {
+		t.Fatal("conflict retired direct MCP")
+	}
+}
+
+func TestPendingInstallForOtherClientConflicts(t *testing.T) {
+	b, ledger := bindingFixture(t)
+	config, cmd, ledger := ownedMCP(t, b, ledger)
+	svc := Service{}
+	req := Request{Binding: b, ExpectedGeneration: ledger.Generation, Discovery: Discovery{ConfigPath: config, Command: cmd}}
+	if _, _, err := svc.publishHandoffReservation(testCtx(t), req, ledger.Generation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.matchingReservation(req, "install"); err != nil {
+		t.Fatal(err)
+	}
+	req.Binding.Integration = portable.Claude
+	if _, err := svc.matchingReservation(req, "install"); !errors.Is(err, ErrIntentConflict) {
+		t.Fatalf("other client: %v", err)
+	}
+}
+
+func TestPendingInstallDifferentDigestConflicts(t *testing.T) {
+	b, ledger := bindingFixture(t)
+	config, cmd, ledger := ownedMCP(t, b, ledger)
+	svc := Service{}
+	req := Request{
+		Binding: b, ExpectedGeneration: ledger.Generation, Discovery: Discovery{ConfigPath: config, Command: cmd},
+		SourceDigest: strings.Repeat("a", 64),
+	}
+	if _, _, err := svc.publishHandoffReservation(testCtx(t), req, ledger.Generation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.matchingReservation(req, "install"); err != nil {
+		t.Fatal(err)
+	}
+	omitted := req
+	omitted.SourceDigest = ""
+	if _, err := svc.matchingReservation(omitted, "install"); err != nil {
+		t.Fatalf("omitted digest: %v", err)
+	}
+	req.SourceDigest = strings.Repeat("b", 64)
+	if _, err := svc.matchingReservation(req, "install"); !errors.Is(err, ErrIntentConflict) {
+		t.Fatalf("different digest: %v", err)
+	}
+}
+
+func TestPendingInstallDifferentTreeDigestConflicts(t *testing.T) {
+	b, ledger := bindingFixture(t)
+	config, cmd, ledger := ownedMCP(t, b, ledger)
+	svc := Service{}
+	req := Request{
+		Binding: b, ExpectedGeneration: ledger.Generation, Discovery: Discovery{ConfigPath: config, Command: cmd},
+		SourceDigest: strings.Repeat("a", 64), TreeDigest: "tree-a",
+	}
+	if _, _, err := svc.publishHandoffReservation(testCtx(t), req, ledger.Generation); err != nil {
+		t.Fatal(err)
+	}
+	intent, err := ReadIntent(b.ControlRoot)
+	if err != nil || intent.TreeDigest != "tree-a" || intent.SourceDigest != req.SourceDigest {
+		t.Fatalf("intent omitted tree digest: %+v %v", intent, err)
+	}
+	if _, err := svc.matchingReservation(req, "install"); err != nil {
+		t.Fatal(err)
+	}
+	omitted := req
+	omitted.TreeDigest = ""
+	if _, err := svc.matchingReservation(omitted, "install"); err != nil {
+		t.Fatalf("omitted tree digest: %v", err)
+	}
+	req.TreeDigest = "tree-b"
+	if _, err := svc.matchingReservation(req, "install"); !errors.Is(err, ErrIntentConflict) {
+		t.Fatalf("different tree digest: %v", err)
+	}
+}
+
+func TestPendingInstallDifferentHelperDigestConflicts(t *testing.T) {
+	b, ledger := bindingFixture(t)
+	config, cmd, ledger := ownedMCP(t, b, ledger)
+	svc := Service{}
+	req := Request{
+		Binding: b, ExpectedGeneration: ledger.Generation, Discovery: Discovery{ConfigPath: config, Command: cmd},
+		HelperDigest: "helper-a", HelperVersion: "1.43.0",
+	}
+	if _, _, err := svc.publishHandoffReservation(testCtx(t), req, ledger.Generation); err != nil {
+		t.Fatal(err)
+	}
+	intent, err := ReadIntent(b.ControlRoot)
+	if err != nil || intent.HelperDigest != "helper-a" || intent.HelperVersion != "1.43.0" {
+		t.Fatalf("intent omitted helper identity: %+v %v", intent, err)
+	}
+	if _, err := svc.matchingReservation(req, "install"); err != nil {
+		t.Fatal(err)
+	}
+	omitted := req
+	omitted.HelperDigest = ""
+	if _, err := svc.matchingReservation(omitted, "install"); err != nil {
+		t.Fatalf("omitted helper digest: %v", err)
+	}
+	req.HelperDigest = "helper-b"
+	if _, err := svc.matchingReservation(req, "install"); !errors.Is(err, ErrIntentConflict) {
+		t.Fatalf("different helper digest: %v", err)
+	}
+}
+
+func TestPendingInstallDifferentHelperVersionConflicts(t *testing.T) {
+	b, ledger := bindingFixture(t)
+	config, cmd, ledger := ownedMCP(t, b, ledger)
+	svc := Service{}
+	req := Request{
+		Binding: b, ExpectedGeneration: ledger.Generation, Discovery: Discovery{ConfigPath: config, Command: cmd},
+		HelperVersion: "1.43.0",
+	}
+	if _, _, err := svc.publishHandoffReservation(testCtx(t), req, ledger.Generation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.matchingReservation(req, "install"); err != nil {
+		t.Fatal(err)
+	}
+	omitted := req
+	omitted.HelperVersion = ""
+	if _, err := svc.matchingReservation(omitted, "install"); err != nil {
+		t.Fatalf("omitted helper version: %v", err)
+	}
+	req.HelperVersion = "1.44.0"
+	if _, err := svc.matchingReservation(req, "install"); !errors.Is(err, ErrIntentConflict) {
+		t.Fatalf("different helper version: %v", err)
+	}
+}
+
+func TestHandoffIntentRecordsResolvedProfile(t *testing.T) {
+	b, ledger := bindingFixture(t)
+	config, cmd, ledger := ownedMCP(t, b, ledger)
+	profile := filepath.Join(filepath.Dir(b.ControlRoot), "codex-profile")
+	svc := Service{}
+	req := Request{
+		Binding: b, ExpectedGeneration: ledger.Generation, Discovery: Discovery{ConfigPath: config, Command: cmd},
+		Profile: profile,
+	}
+	if _, _, err := svc.publishHandoffReservation(testCtx(t), req, ledger.Generation); err != nil {
+		t.Fatal(err)
+	}
+	intent, err := ReadIntent(b.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(intent.Targets) != 1 || intent.Targets[0].Client != "codex" || intent.Targets[0].Profile != profile {
+		t.Fatalf("intent: %+v", intent)
+	}
+}
+
+func TestUninstallPublishesIntentBeforeFirstEffect(t *testing.T) {
+	b, ledger := bindingFixture(t)
+	uap := &fakeUAP{}
+	name, err := b.Filename()
+	if err != nil {
+		t.Fatal(err)
+	}
+	uap.stage = func(Envelope) (Receipt, error) {
+		return Receipt{BindingID: b.BindingID, DataRoot: b.DataRoot, LocatorArg: name}, nil
+	}
+	svc := Service{Stager: uap, Activator: uap, Remover: uap}
+	if _, err := svc.Install(testCtx(t), Request{Binding: b, ExpectedGeneration: ledger.Generation}); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := filepath.Join(filepath.Dir(b.ControlRoot), "codex-profile")
+	uap.remove = func(string) error {
+		held, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
+		if err != nil || held.Ledger.PendingMutation == nil {
+			t.Fatalf("remove without uninstall reservation: %+v %v", held.Ledger.PendingMutation, err)
+		}
+		intent, err := ReadIntent(b.ControlRoot)
+		if err != nil || intent.Action != "uninstall" || len(intent.Targets) == 0 || intent.Targets[0].Profile != profile {
+			t.Fatalf("intent: %+v %v", intent, err)
+		}
+		return nil
+	}
+	if err := svc.Remove(testCtx(t), Request{Binding: b, ExpectedGeneration: snap.Ledger.Generation, Profile: profile}); err != nil {
+		t.Fatal(err)
+	}
+	snap, err = installruntime.ReadInstalledSnapshot(b.ControlRoot)
+	if err != nil || snap.Ledger.PendingMutation != nil {
+		t.Fatalf("uninstall left reservation: %+v %v", snap.Ledger.PendingMutation, err)
+	}
+	if _, err := os.Lstat(IntentPath(b.ControlRoot)); !os.IsNotExist(err) {
+		t.Fatal("uninstall retained intent")
+	}
+}
+
+func TestInstallConflictsWithPendingUninstall(t *testing.T) {
+	b, ledger := bindingFixture(t)
+	config, cmd, ledger := ownedMCP(t, b, ledger)
+	svc := Service{}
+	req := Request{Binding: b, ExpectedGeneration: ledger.Generation, Discovery: Discovery{ConfigPath: config, Command: cmd}}
+	if _, _, err := svc.publishIntent(testCtx(t), req, ledger.Generation, "uninstall", "revoke-locator", []string{"direct-mcp"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.matchingReservation(req, "install"); !errors.Is(err, ErrIntentConflict) {
+		t.Fatalf("install during uninstall: %v", err)
+	}
+}
+
 func TestHandoffNoopDoesNotCreateIntent(t *testing.T) {
 	b, ledger := bindingFixture(t)
 	uap := &fakeUAP{}
@@ -466,5 +773,40 @@ func TestHandoffNoopDoesNotCreateIntent(t *testing.T) {
 	}
 	if snap.Ledger.PendingMutation != nil || snap.Ledger.WriterFloor != 1 {
 		t.Fatalf("noop raised reservation protocol: %+v", snap.Ledger)
+	}
+}
+
+func TestPublishConfirmedIntentRecordsTargetsAndClears(t *testing.T) {
+	b, ledger := bindingFixture(t)
+	ctx := testCtx(t)
+	profile := filepath.Join(filepath.Dir(b.ControlRoot), "codex-profile")
+	svc := Service{}
+	published, res, err := svc.PublishConfirmedIntent(ctx, ConfirmedIntent{
+		ControlRoot: b.ControlRoot, RuntimeRoot: b.RuntimeRoot, Owner: b.Owner,
+		ExpectedGeneration: ledger.Generation, Action: "install", Stage: "confirmed",
+		SourceDigest: "abc", Targets: []IntentTarget{{
+			Client: "codex", InstallationID: "uap-install", Profile: profile,
+			Units: []string{"hooks", "agent-notify"},
+		}},
+	})
+	if err != nil || res == nil || published.PendingMutation == nil {
+		t.Fatalf("publish: %+v %v %v", published.PendingMutation, res, err)
+	}
+	intent, err := ReadIntent(b.ControlRoot)
+	if err != nil || intent.Action != "install" || intent.Stage != "confirmed" || intent.SourceDigest != "abc" {
+		t.Fatalf("intent: %+v %v", intent, err)
+	}
+	if len(intent.Targets) != 1 || intent.Targets[0].Profile != profile || strings.Join(intent.Targets[0].Units, ",") != "hooks,agent-notify" {
+		t.Fatalf("targets: %+v", intent.Targets)
+	}
+	if err := svc.FinishConfirmedIntent(ctx, ConfirmedIntent{ControlRoot: b.ControlRoot, RuntimeRoot: b.RuntimeRoot, Owner: b.Owner}, res); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
+	if err != nil || snap.Ledger.PendingMutation != nil {
+		t.Fatalf("finish left reservation: %+v %v", snap.Ledger.PendingMutation, err)
+	}
+	if _, err := os.Lstat(IntentPath(b.ControlRoot)); !os.IsNotExist(err) {
+		t.Fatal("finish retained intent file")
 	}
 }

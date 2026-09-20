@@ -50,8 +50,10 @@ if sys.argv[1:2]==['internal-install-runtime']:
         elif os.path.isfile(src):
             shutil.copy2(src,dst)
     sys.exit(0)
-assert sys.argv[1:]==['config','preflight-update','--stdin','--json']
-r=json.load(sys.stdin)
+if sys.argv[1:]==['config','installer','capabilities']:
+    print('installer-v1'); sys.exit(0)
+assert sys.argv[1:4]==['config','installer','preflight']
+r=dict(refreshDirs=[os.path.abspath(p) for p in sys.argv[4:]])
 with open(os.environ['TRACE'],'a') as f: f.write(json.dumps(r)+'\\n')
 e=os.environ.get('AGENT_NOTIFICATIONS_CONFIG','')
 status='safe'; code=''
@@ -63,7 +65,7 @@ elif e:
         p=os.path.realpath(p)
         if e==p or e.startswith(p+os.sep) or (os.path.isfile(e) and os.path.isfile(p) and os.path.samefile(e,p)):
             status='unsafe-target'; code='ConfigUnsafeTarget'; break
-print(json.dumps(dict(status=status,diagnostics=[dict(code=code,path='SECRET-CANARY')])))
+if code: print(code,file=sys.stderr)
 sys.exit(0 if status=='safe' else 1)
 """)
 helper.chmod(0o755)

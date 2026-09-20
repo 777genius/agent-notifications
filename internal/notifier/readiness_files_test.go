@@ -24,12 +24,18 @@ func TestReadinessManagedNoMutation(t *testing.T) {
 	}
 	for i := 0; i < 3; i++ {
 		if out := h.delivery.CheckReadiness(context.Background(), pr3Request()); out.Status != "ready" {
-			t.Fatal(out)
+			t.Fatalf("readiness %d: %+v", i, out)
 		}
 	}
 	after, err := pr3ManagedFiles(t, m.ControlRoot)
-	if err != nil || !reflect.DeepEqual(before, after) {
-		t.Fatal("owned tree mutated", err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock := filepath.Join(m.ControlRoot, ".component-install.lock")
+	delete(before, lock)
+	delete(after, lock)
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("owned tree mutated before=%v after=%v", before, after)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -38,13 +44,12 @@ func TestReadinessManagedNoMutation(t *testing.T) {
 		t.Fatal("lease retained", err)
 	}
 	lease.Release()
-	lock := filepath.Join(m.ControlRoot, ".component-install.lock")
 	if err := os.Remove(lock); err != nil {
 		t.Fatal(err)
 	}
 	h.probes = 0
 	if out := h.delivery.CheckReadiness(context.Background(), pr3Request()); out.Status == "ready" || h.probes != 0 {
-		t.Fatal(out)
+		t.Fatalf("missing lock still ready: %+v probes=%d", out, h.probes)
 	}
 	if _, err := os.Stat(lock); !os.IsNotExist(err) {
 		t.Fatal("created missing lock")

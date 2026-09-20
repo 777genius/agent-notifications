@@ -1,11 +1,13 @@
 module github.com/777genius/agent-notifications
 
-go 1.25.0
+go 1.25.8
 
 require (
 	git.sr.ht/~jackmordaunt/go-toast v1.1.2
-	github.com/777genius/plugin-kit-ai/install/integrationctl v0.0.0-20260910100557-6af7f412cb4a
-	github.com/777genius/plugin-kit-ai/sdk v1.1.1-0.20260908195702-6e6e6ac59f25
+	github.com/777genius/plugin-kit-ai/cli v0.0.0-20260920103526-9f0d0cdb8fe8
+	github.com/777genius/plugin-kit-ai/install/integrationctl v0.0.0-20260920081413-a5644312f7af
+	github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20260920103526-9f0d0cdb8fe8
+	github.com/777genius/plugin-kit-ai/sdk v1.1.1-0.20260920081413-a5644312f7af
 	github.com/creack/pty v1.1.24
 	github.com/esiqveland/notify v0.13.3
 	github.com/gen2brain/beeep v0.11.1
@@ -18,7 +20,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/stretchr/testify v1.11.1
-	golang.org/x/sys v0.41.0
+	golang.org/x/sys v0.42.0
 )
 
 require (

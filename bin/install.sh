@@ -56,13 +56,12 @@ cleanup_install_stage() {
 trap 'cleanup_install_config' EXIT
 
 config_preflight_stop() {
-    echo 'Config preflight stopped installation; existing runtime retained. Check AGENT_NOTIFICATIONS_CONFIG and repair/recover the selected file, or rerun bootstrap with a config-capable release and Python 3.' >&2
+    echo 'Config preflight stopped installation; existing runtime retained. Check AGENT_NOTIFICATIONS_CONFIG and repair/recover the selected file, or rerun bootstrap with a config-capable release.' >&2
     return 1
 }
 
 prepare_install_config_preflight() {
     [ "${AGENT_NOTIFICATIONS_CONFIG+x}" = x ] || return 0
-    command -v python3 >/dev/null 2>&1 || { config_preflight_stop; return 1; }
     local status
     [ -n "$INSTALL_CONFIG_HELPER" ] || INSTALL_CONFIG_HELPER="$BINARY_PATH"
     if install_config_preflight "$@"; then return 0; else status=$?; fi
@@ -94,50 +93,66 @@ prepare_install_config_preflight() {
     INSTALL_STAGED_ASSETS="$INSTALL_CONFIG_STAGE"
 }
 
+# Keep an unresponsive helper from hanging an installation indefinitely, without
+# requiring a language runtime. The watchdog never grants permission to mutate.
+run_install_helper() (
+    # EXIT runs after Bash unwinds function locals on an interrupted wait.
+    # This subshell owns the trap state, so assignments cannot leak to callers.
+    child="" watchdog="" capture=""
+    local status timeout
+    capture=$(mktemp -d "${TMPDIR:-${TEMP:-/tmp}}/install-helper.XXXXXX") || exit 1
+    cleanup_helper_run() {
+        [ -z "$watchdog" ] || kill "$watchdog" 2>/dev/null || true
+        [ -z "$child" ] || kill -KILL -- "-$child" 2>/dev/null || true
+        [ -z "$watchdog" ] || wait "$watchdog" 2>/dev/null || true
+        [ -z "$child" ] || wait "$child" 2>/dev/null || true
+        rm -rf -- "$capture"
+    }
+    trap cleanup_helper_run EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    timeout="${INSTALL_HELPER_TIMEOUT_SECONDS:-20}"
+    # Monitor mode gives this background command its own process group. A hung
+    # helper and every descendant are then terminated together. Capture files
+    # keep descendants from holding a caller command-substitution pipe open.
+    set -m
+    "$@" >"$capture/stdout" 2>"$capture/stderr" &
+    child=$!
+    set +m
+    (
+        command sleep "$timeout" &
+        timer=$!
+        trap 'kill "$timer" 2>/dev/null || true' EXIT
+        trap 'exit 0' TERM
+        wait "$timer" && kill -KILL -- "-$child" 2>/dev/null
+    ) >/dev/null 2>&1 &
+    watchdog=$!
+    if wait "$child"; then status=0; else status=$?; fi
+    kill "$watchdog" 2>/dev/null || true
+    wait "$watchdog" 2>/dev/null || true
+    cat "$capture/stdout"
+    # Preserve stable diagnostics without exposing paths, config contents,
+    # panic text, or arbitrary stderr from an installed/legacy helper.
+    grep -E '^(ConfigUnsafeTarget|ConfigOverrideInvalid|ConfigInvalid|ConfigUnsupportedSchema|ConfigPermissionDenied|ConfigRecoveryRequired|ConfigLinkedPath|ConfigChanged|ConfigLockTimeout|ConfigMissing|ConfigHomeUnavailable|ConfigBaseUnavailable)$' "$capture/stderr" >&2 || true
+    exit "$status"
+)
+
 install_config_preflight() {
     [ "${AGENT_NOTIFICATIONS_CONFIG+x}" = x ] || return 0
     [ -n "$INSTALL_CONFIG_HELPER" ] || { config_preflight_stop; return 1; }
     local -a targets=("$@")
-    local helper="$INSTALL_CONFIG_HELPER"
+    local helper="$INSTALL_CONFIG_HELPER" capability
     local i
     if [ "$PLATFORM" = windows ]; then
-        helper=$(cygpath -aw "$helper") || { config_preflight_stop; return 1; }
         for ((i=0; i<${#targets[@]}; i++)); do
             targets[$i]=$(cygpath -aw "${targets[$i]}") || { config_preflight_stop; return 1; }
         done
     fi
-    # Python only transports JSON/native paths and bounds helper execution. All
-    # selection, validation and alias identity decisions belong to Go Store.
-    local status
-    if python3 -I - "$helper" "$PLATFORM" "${targets[@]}" <<'PYINSTALL'
-import json, os, subprocess, sys
-try:
-    helper, platform, *paths = sys.argv[1:]
-    if platform != 'windows':
-        paths = [os.path.abspath(p) for p in paths]
-    request = json.dumps(dict(refreshDirs=paths))
-    result = subprocess.run([helper, 'config', 'preflight-update', '--stdin', '--json'],
-                            input=request, universal_newlines=True, stdout=subprocess.PIPE,
-                            stderr=subprocess.DEVNULL, timeout=20)
-    response = json.loads(result.stdout)
-    if not isinstance(response, dict) or response.get('status') not in {'safe', 'unsafe-target', 'invalid-config', 'import-required'}:
-        sys.exit(2)
-    if result.returncode == 0 and response.get('status') == 'safe':
-        sys.exit(0)
-    # Only canonical codes, never paths, raw helper output, or config contents.
-    for diagnostic in response.get('diagnostics', []):
-        code = diagnostic.get('code', '')
-        if isinstance(code, str) and code in {'ConfigUnsafeTarget', 'ConfigOverrideInvalid', 'ConfigInvalid',
-                'ConfigUnsupportedSchema', 'ConfigPermissionDenied', 'ConfigRecoveryRequired',
-                'ConfigLinkedPath', 'ConfigChanged', 'ConfigLockTimeout', 'ConfigMissing',
-                'ConfigHomeUnavailable', 'ConfigBaseUnavailable'}:
-            print(code, file=sys.stderr)
-except (OSError, ValueError, TypeError, AttributeError, subprocess.TimeoutExpired):
-    sys.exit(2)
-sys.exit(1)
-PYINSTALL
-    then return 0; else status=$?; fi
-    [ "$status" != 2 ] || return 2
+    # Capability detection distinguishes an old binary from a canonical safety
+    # rejection. Paths cross argv verbatim; the verified helper owns JSON.
+    capability=$(run_install_helper "$helper" config installer capabilities 2>/dev/null) || return 2
+    [ "$capability" = installer-v1 ] || return 2
+    if run_install_helper "$helper" config installer preflight "${targets[@]}" >/dev/null; then return 0; fi
     config_preflight_stop
 }
 

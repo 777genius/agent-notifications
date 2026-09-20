@@ -194,19 +194,34 @@ real_network_tests_supported() {
     return 0
 }
 
-# Cross-platform timeout command
-# macOS doesn't have timeout by default, use gtimeout if available or run without timeout
+# Cross-platform timeout. GNU timeout without --foreground puts the child in a
+# new process group; on Git Bash that SIGTERM can take down this test script
+# (Windows exit 3840 = 15<<8). Windows timeout.exe is a sleep helper, not a
+# command wrapper. Watch only the child PID when GNU timeout is missing.
 run_with_timeout() {
     local seconds="$1"
     shift
-    if command -v timeout &>/dev/null; then
-        timeout "$seconds" "$@"
-    elif command -v gtimeout &>/dev/null; then
-        gtimeout "$seconds" "$@"
-    else
-        # No timeout available, run without it
-        "$@"
+    if command -v timeout >/dev/null 2>&1 && timeout --version >/dev/null 2>&1; then
+        timeout --foreground "$seconds" "$@"
+        return
     fi
+    if command -v gtimeout >/dev/null 2>&1 && gtimeout --version >/dev/null 2>&1; then
+        gtimeout --foreground "$seconds" "$@"
+        return
+    fi
+    "$@" &
+    local pid=$!
+    local elapsed=0
+    while kill -0 "$pid" 2>/dev/null; do
+        if [ "$elapsed" -ge "$seconds" ]; then
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+            return 124
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    wait "$pid"
 }
 
 # Use the same executable payload and checksum as the main Windows fixture.

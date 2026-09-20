@@ -27,8 +27,9 @@ import (
 )
 
 const agentNotifySetupHelp = `Usage: claude-notifications setup-notifications OPERATION [OPTIONS]
-Operations: configure | prepare | status | register | remove | enable | disable | permission-status | request-permission
+Operations: configure | wizard | prepare | status | register | remove | enable | disable | permission-status | request-permission
 Configure requires --provider codex|claude|both and an explicit fresh route.
+Wizard is a separate master: setup-notifications wizard --help
   --codex-home ABS and --request-permission are configure-only choices.
   Configure resolves primary runtime, generation and canonical global internally.
   --control-root PATH       Existing managed control directory (OS config default)
@@ -288,6 +289,9 @@ func agentNotifySetupExecute(ctx context.Context, args []string, out io.Writer, 
 			return 0
 		}
 		return executeNotificationConfigure(ctx, args[1:], out, "")
+	}
+	if len(args) > 0 && args[0] == "wizard" {
+		return executeSetupWizard(ctx, args[1:], out)
 	}
 	a, help, e := parseAgentNotifySetup(args)
 	emit := func(r agentNotifySetupResult, code int) int {

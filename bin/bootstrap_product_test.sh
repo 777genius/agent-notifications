@@ -13,6 +13,12 @@ export CLAUDE_CONFIG_DIR="$SANDBOX/claude config" CLAUDE_HOME="$SANDBOX/claude h
 mkdir -p "$HOME" "$CODEX_HOME" "$CLAUDE_CONFIG_DIR" "$CLAUDE_HOME"
 sed '/^main "\$@"$/d' "$ROOT/bin/bootstrap.sh" > "$SANDBOX/functions.sh"
 source "$SANDBOX/functions.sh"
+quoted=$(quote_shell_command "$SANDBOX/bin space/cli" --package "$SANDBOX/pkg space" --codex-home "$CODEX_HOME")
+eval "set -- $quoted"
+[ "$#" -eq 5 ] || { echo "quoted argc $#"; exit 1; }
+[ "$1" = "$SANDBOX/bin space/cli" ] || { echo "quoted binary $1"; exit 1; }
+[ "$3" = "$SANDBOX/pkg space" ] || { echo "quoted package $3"; exit 1; }
+[ "$5" = "$CODEX_HOME" ] || { echo "quoted codex home $5"; exit 1; }
 for product in claude codex both; do
     PRODUCT=""; select_product --product "$product"; [ "$PRODUCT" = "$product" ]
 done
@@ -51,11 +57,38 @@ printf '%s\n' '#!/bin/sh' 'echo "setup-codex [--print] [--dry-run] [--codex-home
 chmod +x "$legacy"
 if cli_has_setup_codex_skip_agent_notify "$legacy"; then echo "legacy advertised skip"; exit 1; fi
 if cli_has_setup_notifications "$legacy"; then echo "legacy advertised setup-notifications"; exit 1; fi
+if cli_has_setup_wizard "$legacy"; then echo "legacy advertised wizard"; exit 1; fi
 capable="$SANDBOX/capable-cli"
 printf '%s\n' '#!/bin/sh' 'echo "[--agent-notify|--skip-agent-notify]"' 'echo "setup-notifications [--help]"' > "$capable"
 chmod +x "$capable"
 cli_has_setup_codex_skip_agent_notify "$capable" || { echo "capable missing skip"; exit 1; }
 cli_has_setup_notifications "$capable" || { echo "capable missing setup-notifications"; exit 1; }
+if cli_has_setup_wizard "$capable"; then echo "narrow help advertised wizard"; exit 1; fi
+wizard="$SANDBOX/wizard-cli"
+printf '%s\n' '#!/bin/sh' 'echo "setup-notifications wizard"' > "$wizard"
+chmod +x "$wizard"
+cli_has_setup_wizard "$wizard" || { echo "wizard-cli missing wizard"; exit 1; }
+read -r _os _arch < <(bootstrap_release_os_arch)
+case "$_os" in linux|darwin|windows) ;; *) echo "unexpected os $_os"; exit 1 ;; esac
+case "$_arch" in amd64|arm64) ;; *) echo "unexpected arch $_arch"; exit 1 ;; esac
+_portable_stage="$SANDBOX/portable-stage"
+mkdir -p "$_portable_stage" "$SANDBOX/portable-src"
+_asset="agent-notify-portable-${_os}-${_arch}.zip"
+printf 'portable-zip-fixture' > "$SANDBOX/portable-src/$_asset"
+python3 -I - "$SANDBOX/portable-src" "$_asset" <<'PY'
+import hashlib, pathlib, sys
+root, name = pathlib.Path(sys.argv[1]), sys.argv[2]
+digest = hashlib.sha256((root/name).read_bytes()).hexdigest()
+(root/'checksums.txt').write_text(digest+'  '+name+'\n')
+PY
+BOOTSTRAP_TAG=v1.43.0
+_CONFIG_STAGE="$_portable_stage"
+fetch_bootstrap_file() { cp "$SANDBOX/portable-src/$(basename "$1")" "$2"; }
+acquire_wizard_portable_asset
+[ "$WIZARD_PACKAGE_ROOT" = "$_portable_stage/$_asset" ] || { echo "portable asset path $WIZARD_PACKAGE_ROOT"; exit 1; }
+BOOTSTRAP_TAG=""
+_CONFIG_STAGE=""
+WIZARD_PACKAGE_ROOT=""
 # setup_marketplace self-heals a marketplace declared under a retired repo
 # name, but leaves an unrelated source conflict alone.
 (
@@ -67,6 +100,7 @@ cli_has_setup_notifications "$capable" || { echo "capable missing setup-notifica
     LEGACY_MARKETPLACE_REPOS="old/retired-repo"
     config_preflight() { :; }
     calls="$SANDBOX/marketplace-calls"; declared_repo="old/retired-repo"
+    marketplace_declared_repo() { printf '%s\n' "$declared_repo"; }
     claude() {
         printf '%s\n' "$*" >> "$calls"
         if [ "$1 $2 $3" = "plugin marketplace add" ]; then
@@ -102,16 +136,13 @@ echo "marketplace self-heal fixtures passed"
     _CONFIG_STAGE="$SANDBOX/preflight-resource"; mkdir "$_CONFIG_STAGE"
     printf '{"plugins":{}}\n' > "$_CONFIG_STAGE/installed-before.json"
     uname() { printf 'Darwin\n'; }
-    capture_preflight() { cat > "$_CONFIG_STAGE/request.json"; printf '{"status":"safe"}\n'; }
+    capture_preflight() {
+        [ "$1 $2 $3" = 'config installer bootstrap' ] || return 1
+        [ "${13}" = "$HOME/.claude/claude-notifications-go/iterm2-venv" ] || return 1
+        printf '{"status":"safe"}\n'
+    }
     _CONFIG_HELPER=capture_preflight
     config_preflight
-    python3 - "$_CONFIG_STAGE/request.json" "$HOME" <<'PYRESOURCE'
-import json,pathlib,sys
-v=json.load(open(sys.argv[1]))
-expected=(pathlib.Path(sys.argv[2])/'.claude'/'claude-notifications-go'/'iterm2-venv').resolve()
-actual=[pathlib.Path(entry).resolve() for entry in v['refreshDirs']]
-assert expected in actual, f'expected refresh dir {expected!s}; got {[str(path) for path in actual]!r}'
-PYRESOURCE
 )
 # Dispatch tests preserve shared bundle state and isolate CN_PRODUCT.
 print_header() { :; }; abort_if_wsl_environment() { :; }
@@ -159,6 +190,9 @@ cp "$INSTALL_TARGET_DIR/claude-notifications" "$INSTALL_TARGET_DIR/claude-notifi
 '''
 binary = '''#!/usr/bin/env python3
 import json, os, pathlib, sys
+# Match the native Go helper's LF protocol on Windows too. Python's default
+# CRLF would leave a trailing carriage return in Bash's baseline version.
+sys.stdout.reconfigure(newline='\\n')
 args=sys.argv[1:]
 if not args:
     sys.exit(2)
@@ -207,8 +241,42 @@ explicit=os.environ.get('AGENT_NOTIFICATIONS_CONFIG')
 p=pathlib.Path(explicit) if explicit else legacy if legacy.exists() else neutral
 selected=dict(path=str(p),source='explicit' if explicit else 'legacy' if p==legacy else 'universal',exists=p.exists())
 if args[1]=='path': print(json.dumps(selected)); sys.exit()
+request=None
+if args[1:3]==['installer','capabilities']:
+    print('installer-v1'); sys.exit()
+if args[1:2]==['installer'] and args[2] in ('root','version'):
+    entries=json.loads(pathlib.Path(args[3]).read_text()).get('plugins',{}).get(args[4],[])
+    if entries: print(entries[-1]['installPath' if args[2]=='root' else 'version'])
+    sys.exit()
+if args[1:3]==['installer','versions']:
+    registry=json.loads(pathlib.Path(args[3]).read_text())
+    for entry in registry.get('plugins',{}).get(args[4],[]):
+        if (pathlib.Path(entry['installPath'])/'config/config.json').exists(): print(entry['version'].removeprefix('v'))
+    sys.exit()
+if args[1:3]==['installer','bootstrap']:
+    registry,key,claude,cache,market,codex,product,stage,current,venv=args[3:]
+    roots=[]; refresh=[]; historical=[]; protected=[]
+    if product!='codex':
+        entries=json.loads(pathlib.Path(registry).read_text()).get('plugins',{}).get(key,[])
+        roots=[e['installPath'] for e in entries]
+        refresh=[cache,market]+roots
+        if pathlib.Path(current).exists(): refresh += [e['installPath'] for e in json.loads(pathlib.Path(current).read_text()).get('plugins',{}).get(key,[])]
+        protected=[current,str(pathlib.Path(claude)/'plugins/known_marketplaces.json'),str(pathlib.Path(claude)/'settings.json')]
+        for e in entries:
+            c=dict(path=str(pathlib.Path(e['installPath'])/'config/config.json'))
+            b=pathlib.Path(stage)/('baseline-'+e['version'].removeprefix('v'))
+            if (b/'verified').exists(): c.update(baselinePath=str(b/'config.json'),baselineSHA256=(b/'verified').read_text().strip())
+            historical.append(c)
+    historical.append(dict(path=str(pathlib.Path(claude)/'claude-notifications-go/config.json')))
+    if product!='claude':
+        dest=pathlib.Path(codex)/'claude-notifications-go'
+        refresh.append(str(dest)); historical.append(dict(path=str(dest/'config/config.json')))
+    if venv: refresh.append(venv)
+    if any(pathlib.Path(stage).resolve().is_relative_to(pathlib.Path(d).resolve()) for d in refresh): sys.exit(1)
+    request=dict(activeBundleRoots=roots,refreshDirs=refresh,historicalCandidates=historical,protectedPaths=protected)
+    args=['config','preflight-update']
 if args[1]=='preflight-update':
-    request=json.load(sys.stdin)
+    if request is None: request=json.load(sys.stdin)
     status='safe'
     if any(p.resolve().is_relative_to(pathlib.Path(d).resolve()) for d in request['refreshDirs']): status='unsafe-target'
     if any(p.resolve()==pathlib.Path(d).resolve() for d in request.get('protectedPaths',[])): status='unsafe-target'
@@ -259,6 +327,24 @@ payload=capable.replace('v1.42.0', 'v2.0.0').encode('utf-8')
 (dest / 'binary').write_bytes(payload)
 (dest / asset_name).write_bytes(payload)
 (dest / 'checksums.txt').write_bytes((hashlib.sha256(payload).hexdigest()+'  '+asset_name+'\n').encode('ascii'))
+# Exercise the adapter's raw protocol before shell command substitution can
+# hide newline differences. Model Windows text output on every host, in
+# addition to running with native Windows Python in Git Bash CI.
+protocol_helper=sandbox/'protocol-helper.py'
+protocol_helper.write_bytes(binary.replace(
+    'import json, os, pathlib, sys\n',
+    "import json, os, pathlib, sys\nsys.stdout.reconfigure(newline='\\r\\n')\n",
+    1,
+).encode('utf-8'))
+protocol=subprocess.check_output([sys.executable,str(protocol_helper),'--version'])
+assert protocol == b'claude-notifications v1.42.0\n', repr(protocol)
+protocol_root=sandbox/'protocol bundle'
+(protocol_root/'config').mkdir(parents=True)
+(protocol_root/'config/config.json').write_bytes(b'{}')
+protocol_registry=sandbox/'protocol-registry.json'
+protocol_registry.write_text(json.dumps({'plugins':{'fixture':[{'installPath':str(protocol_root),'version':'v1.40.0'}]}}))
+protocol=subprocess.check_output([sys.executable,str(protocol_helper),'config','installer','versions',str(protocol_registry),'fixture'])
+assert protocol == b'1.40.0\n', repr(protocol)
 (web/'install.sh').write_bytes(installer.encode('utf-8'))
 def write_origin_installer(path, origin):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -515,7 +601,8 @@ for product in ['codex', 'claude', 'both']:
         assert not any(e[:1]==['claude'] for e in events())
         assert not any('v1.40.0' in path for path in request_paths)
     else:
-        assert not events()
+        # Verified helper metadata reads precede rejection; no host mutation.
+        assert not any(e[:1] in (['claude'], ['setup-codex']) or e[:2]==['config','init'] for e in events())
 reset_case()
 custom=pathlib.Path(env['CLAUDE_CONFIG_DIR'])/'claude-notifications-go/config.json'
 custom.parent.mkdir(); custom.write_text('{"custom":true}')
