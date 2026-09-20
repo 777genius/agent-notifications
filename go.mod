@@ -1,13 +1,13 @@
 module github.com/777genius/agent-notifications
 
-go 1.25.0
+go 1.25.8
 
 require (
 	git.sr.ht/~jackmordaunt/go-toast v1.1.2
-	github.com/777genius/plugin-kit-ai/cli v0.0.0-20260920062738-9ec4f52e11e1
-	github.com/777genius/plugin-kit-ai/install/integrationctl v0.0.0-20260919103549-148794ac5947
-	github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20260920065041-10a6e7329418
-	github.com/777genius/plugin-kit-ai/sdk v1.1.1-0.20260908195702-6e6e6ac59f25
+	github.com/777genius/plugin-kit-ai/cli v0.0.0-20260920081708-1f1ae3edb9a1
+	github.com/777genius/plugin-kit-ai/install/integrationctl v0.0.0-20260920081413-a5644312f7af
+	github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20260920081708-1f1ae3edb9a1
+	github.com/777genius/plugin-kit-ai/sdk v1.1.1-0.20260920081413-a5644312f7af
 	github.com/creack/pty v1.1.24
 	github.com/esiqveland/notify v0.13.3
 	github.com/gen2brain/beeep v0.11.1
