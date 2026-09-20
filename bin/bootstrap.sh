@@ -109,7 +109,6 @@ abort_if_wsl_environment() {
 # ──────────────────────────────────────────────
 
 check_prerequisites() {
-    command -v python3 >/dev/null 2>&1 || { echo "python3 is required for protected installer metadata and checksum validation." >&2; return 1; }
     if [ "${PRODUCT:-claude}" != codex ] && ! command -v claude &>/dev/null; then
         echo -e "${RED}✗ claude CLI not found in PATH${NC}" >&2
         echo "" >&2
@@ -182,28 +181,13 @@ print_iterm2_python_api_notice() {
 
 # Reports (on stdout) the repo currently declared in settings for
 # $MARKETPLACE_NAME, or nothing if it isn't declared / can't be read.
-# `marketplace list` only reads local state — no network calls.
 marketplace_declared_repo() {
     local tmp
     tmp=$(mktemp "${TMPDIR:-/tmp}/marketplace-list-XXXXXX") || return 1
     claude plugin marketplace list --json </dev/null >"$tmp" 2>/dev/null
-    python3 -I - "$tmp" "$MARKETPLACE_NAME" <<'PY'
-import json, sys
-path, name = sys.argv[1], sys.argv[2]
-try:
-    with open(path) as f:
-        entries = json.load(f)
-    for e in entries:
-        if e.get('name') == name and e.get('repo'):
-            print(e['repo'])
-            break
-except Exception:
-    pass
-PY
+    "$_CONFIG_HELPER" config installer marketplace "$tmp" "$MARKETPLACE_NAME" || true
     rm -f "$tmp"
 }
-
-# True if $1 (a repo slug) is one of our own retired marketplace sources.
 is_legacy_marketplace_repo() {
     local repo="$1" candidate
     for candidate in $LEGACY_MARKETPLACE_REPOS; do
@@ -269,6 +253,10 @@ get_manifest_version() {
 
 get_installed_plugin_version() {
     [ -f "$INSTALLED_JSON" ] || return 0
+    if [ -n "${_CONFIG_HELPER:-}" ]; then
+        "$_CONFIG_HELPER" config installer version "$INSTALLED_JSON" "$PLUGIN_KEY"
+        return
+    fi
 
     if command -v jq &>/dev/null; then
         PLUGIN_KEY="$PLUGIN_KEY" jq -r '
@@ -372,6 +360,10 @@ JSEOF
 
 get_installed_plugin_root() {
     [ -f "$INSTALLED_JSON" ] || return 0
+    if [ -n "${_CONFIG_HELPER:-}" ]; then
+        "$_CONFIG_HELPER" config installer root "$INSTALLED_JSON" "$PLUGIN_KEY"
+        return
+    fi
 
     if command -v jq &>/dev/null; then
         PLUGIN_KEY="$PLUGIN_KEY" jq -r '
@@ -1177,27 +1169,33 @@ resolve_bootstrap_release() {
 
 # Only release-verified bytes execute before host registration. Never use an old
 # cache binary for config decisions. Paths are metadata, never resolver inputs.
+bootstrap_checksum_entry() {
+    local manifest="$1" name="$2"
+    awk -v name="$name" '
+        NF == 2 { file=$2; sub(/^\*/, "", file); if (file == name) { count++; digest=tolower($1) } }
+        END { if (count != 1 || length(digest) != 64 || digest ~ /[^0-9a-f]/) exit 1; print digest }
+    ' "$manifest"
+}
+
+verify_bootstrap_checksum() {
+    local root="$1" name="$2" expected actual
+    expected=$(bootstrap_checksum_entry "$root/checksums.txt" "$name") || return 1
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual=$(sha256sum < "$root/$name") || return 1
+    elif command -v shasum >/dev/null 2>&1; then
+        actual=$(shasum -a 256 < "$root/$name") || return 1
+    else
+        echo 'A system SHA-256 tool (sha256sum or shasum) is required.' >&2
+        return 1
+    fi
+    actual=${actual%% *}
+    [ "$actual" = "$expected" ] || { echo 'Release checksum mismatch.' >&2; return 1; }
+}
+
 stage_config_helper() {
-    # Validate the temp parent before creating anything: TMPDIR can itself be
-    # inside a Claude cache or a symlink into a refreshed runtime.
-    python3 -I - "${TMPDIR:-/tmp}" "$INSTALLED_JSON" "$PLUGIN_KEY" "$PRODUCT" "$CACHE_DIR" "$MARKETPLACE_DIR" "${CODEX_HOME:-$HOME/.codex}/claude-notifications-go" <<'PYSTAGE' || return 1
-import json, os, sys
-base,registry,key,product,*roots=sys.argv[1:]
-roots = roots[:2] if product == 'claude' else roots[2:] if product == 'codex' else roots
-if product != 'codex' and os.path.lexists(registry):
-    with open(registry) as f: entries=json.load(f).get('plugins',{}).get(key,[])
-    roots.extend(e['installPath'] for e in entries)
-def within(base, root):
-    base = os.path.normcase(os.path.realpath(base))
-    root = os.path.normcase(os.path.realpath(root))
-    # Different drives or UNC shares cannot overlap.
-    if os.path.splitdrive(base)[0] != os.path.splitdrive(root)[0]:
-        return False
-    return os.path.commonpath([base, root]) == root
-if any(within(base, r) for r in roots):
-    sys.exit('Staging must be outside refreshed bundles')
-PYSTAGE
-    _CONFIG_STAGE=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-config-XXXXXX") || return 1
+    # Use the OS temporary root, not a caller-controlled TMPDIR inside a bundle.
+    # The verified helper checks canonical overlap before any refresh operation.
+    _CONFIG_STAGE=$(mktemp -d "/tmp/bootstrap-config-XXXXXX") || return 1
     # Snapshot the pre-update registry, not a guessed cache version. Later
     # registrations introduce packaged templates, not historical user settings.
     if [ "$PRODUCT" != codex ] && [ -e "$INSTALLED_JSON" ]; then
@@ -1205,7 +1203,7 @@ PYSTAGE
     else
         printf '{"plugins":{}}\n' > "$_CONFIG_STAGE/installed-before.json"
     fi
-    local os arch name base
+    local os arch name base capability
     os=$(uname -s | tr '[:upper:]' '[:lower:]')
     case "$os" in darwin|linux) ;; mingw*|msys*|cygwin*) os=windows ;; *) return 1 ;; esac
     case "$(uname -m)" in x86_64|amd64) arch=amd64 ;; arm64|aarch64) arch=arm64 ;; *) return 1 ;; esac
@@ -1214,22 +1212,16 @@ PYSTAGE
     base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG"
     fetch_bootstrap_file "$base/checksums.txt" "$_CONFIG_STAGE/checksums.txt" || return 1
     fetch_bootstrap_file "$base/$name" "$_CONFIG_STAGE/$name" || return 1
-    python3 -I - "$_CONFIG_STAGE" "$name" <<'PYVERIFY' || return 1
-import hashlib, pathlib, sys
-root, name = pathlib.Path(sys.argv[1]), sys.argv[2]
-entries = [line.split() for line in (root/'checksums.txt').read_text().splitlines()]
-expected = [e[0] for e in entries if len(e)==2 and e[1].lstrip('*')==name]
-assert len(expected)==1 and hashlib.sha256((root/name).read_bytes()).hexdigest()==expected[0].lower(), 'Helper checksum mismatch'
-PYVERIFY
+    verify_bootstrap_checksum "$_CONFIG_STAGE" "$name" || return 1
     _CONFIG_HELPER="$_CONFIG_STAGE/$name"
     chmod +x "$_CONFIG_HELPER" || return 1
     [ "$("$_CONFIG_HELPER" --version)" = "claude-notifications $BOOTSTRAP_TAG" ] || return 1
+    capability=$("$_CONFIG_HELPER" config installer capabilities) || return 1
+    [ "$capability" = installer-v1 ] || {
+        echo 'Published helper does not support interpreter-free installation; a newer release is required.' >&2
+        return 1
+    }
     "$_CONFIG_HELPER" config path --json > "$_CONFIG_STAGE/path.json" || return 1
-    python3 -I - "$_CONFIG_STAGE/path.json" <<'PYCAP' || return 1
-import json, sys
-v=json.load(open(sys.argv[1]))
-assert isinstance(v,dict) and isinstance(v.get('path'),str) and v['path'], 'Missing config path capability'
-PYCAP
     fetch_bootstrap_file "$(select_bootstrap_install_script)" "$_CONFIG_STAGE/install.sh" || return 1
 }
 
@@ -1288,19 +1280,7 @@ cli_has_setup_wizard() {
 # intentionally leave baseline unknown and require explicit historical import.
 stage_historical_baselines() {
     [ "$PRODUCT" != codex ] || return 0
-    python3 -I - "$_CONFIG_STAGE/installed-before.json" "$PLUGIN_KEY" "$_CONFIG_STAGE" <<'PYVERSIONS' > "$_CONFIG_STAGE/versions" || return 1
-import json,os,re,sys
-registry,key,stage=sys.argv[1:]
-versions=set()
-if os.path.lexists(registry):
-    with open(registry) as f: entries=json.load(f).get('plugins',{}).get(key,[])
-    for e in entries:
-        v=re.sub(r'^v', '', str(e.get('version','')))
-        if re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)',v) and os.path.lexists(os.path.join(e['installPath'],'config','config.json')): versions.add(v)
-# This output is consumed by a Bash read loop.  Native Windows Python otherwise
-# emits CRLF, leaving a trailing CR in the release URL and baseline directory.
-sys.stdout.buffer.write(('\n'.join(sorted(versions))+'\n' if versions else '').encode('ascii'))
-PYVERSIONS
+    "$_CONFIG_HELPER" config installer versions "$_CONFIG_STAGE/installed-before.json" "$PLUGIN_KEY" > "$_CONFIG_STAGE/versions" || return 1
     local version base dir
     while IFS= read -r version; do
         [ -n "$version" ] || continue
@@ -1309,24 +1289,10 @@ PYVERSIONS
         base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/v$version"
         fetch_bootstrap_file "$base/checksums.txt" "$dir/checksums.txt" 2>/dev/null || continue
         # Only request a template explicitly included in the release manifest.
-        python3 -I - "$dir/checksums.txt" <<'PYHAS' || continue
-# Older releases may not publish a config.json checksum entry; skip this
-# baseline quietly rather than let assert dump a traceback to the user.
-import sys
-has_entry = any(len(e) == 2 and e[1].lstrip('*') == 'config.json'
-                for e in (line.split() for line in open(sys.argv[1])))
-sys.exit(0 if has_entry else 1)
-PYHAS
+        bootstrap_checksum_entry "$dir/checksums.txt" config.json >/dev/null || continue
         fetch_bootstrap_file "$base/config.json" "$dir/config.json" 2>/dev/null || continue
-        python3 -I - "$dir" <<'PYBASE' || continue
-import hashlib,pathlib,sys
-p=pathlib.Path(sys.argv[1])
-entries=[line.split() for line in (p/'checksums.txt').read_text().splitlines()]
-h=[e[0] for e in entries if len(e)==2 and e[1].lstrip('*')=='config.json']
-if len(h)!=1 or hashlib.sha256((p/'config.json').read_bytes()).hexdigest()!=h[0].lower():
-    sys.exit(1)
-(p/'verified').write_text(h[0].lower())
-PYBASE
+        verify_bootstrap_checksum "$dir" config.json || continue
+        bootstrap_checksum_entry "$dir/checksums.txt" config.json > "$dir/verified" || return 1
     done < "$_CONFIG_STAGE/versions"
 }
 
@@ -1339,51 +1305,8 @@ config_preflight() {
     fi
     # Resolve config afresh before every destructive operation. Historical roots
     # come from the pre-update registry; current roots extend overlap protection.
-    python3 -I - "$_CONFIG_STAGE/installed-before.json" "$PLUGIN_KEY" "$CLAUDE_HOME" "$CACHE_DIR" "$MARKETPLACE_DIR" "${CODEX_HOME:-$HOME/.codex}" "$PRODUCT" "$_CONFIG_STAGE" "$INSTALLED_JSON" "$venv_refresh" <<'PYINPUT' > "$_CONFIG_STAGE/preflight-input.json" || return 1
-import json, os, re, sys
-registry,key,claude,cache,market,codex,product,stage,current_registry,venv_refresh=sys.argv[1:]
-baselines={}
-roots=[]; refresh=[]; historical=[]
-if product!='codex':
-    if os.path.lexists(registry):
-        with open(registry) as f: entries=json.load(f).get('plugins',{}).get(key,[])
-        assert isinstance(entries,list), 'Invalid Claude registry'
-        for entry in entries:
-            root=entry.get('installPath')
-            assert isinstance(root,str) and os.path.isabs(root), 'Missing absolute recorded installPath'
-            if root not in roots: roots.append(root)
-            version=re.sub(r'^v', '', str(entry.get('version','')))
-            import re
-            if re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)',version):
-                baseline=os.path.join(stage,'baseline-'+version)
-                if os.path.isfile(os.path.join(baseline,'verified')):
-                    baselines[root]=dict(baselinePath=os.path.join(baseline,'config.json'),baselineSHA256=open(os.path.join(baseline,'verified')).read())
-    refresh.extend([cache,market]+roots)
-    if os.path.lexists(current_registry):
-        with open(current_registry) as f: current=json.load(f).get('plugins',{}).get(key,[])
-        for entry in current:
-            root=entry.get('installPath')
-            assert isinstance(root,str) and os.path.isabs(root), 'Missing absolute recorded installPath'
-            if root not in refresh: refresh.append(root)
-    historical.extend(dict(path=os.path.join(r,'config','config.json'),**baselines.get(r,{})) for r in roots)
-# Shared configuration history applies even to a Codex-only install.
-historical.append({'path':os.path.join(claude,'claude-notifications-go','config.json')})
-if product!='claude':
-    dest=os.path.join(codex,'claude-notifications-go')
-    refresh.append(dest)
-    historical.append({'path':os.path.join(dest,'config','config.json')})
-if venv_refresh: refresh.append(venv_refresh)
-assert all(os.path.isabs(p) for p in refresh), 'Refresh roots must be absolute'
-# Baselines come only from checksum-verified artifacts of the recorded version.
-protected=[current_registry,os.path.join(claude,'plugins','known_marketplaces.json'),os.path.join(claude,'settings.json')] if product!='codex' else []
-json.dump(dict(activeBundleRoots=roots,refreshDirs=refresh,protectedPaths=protected,historicalCandidates=historical),sys.stdout)
-PYINPUT
-    if "$_CONFIG_HELPER" config preflight-update --stdin --json < "$_CONFIG_STAGE/preflight-input.json" > "$_CONFIG_STAGE/preflight.json"; then
-        if python3 -I - "$_CONFIG_STAGE/preflight.json" <<'PYSAFE'
-import json,sys
-assert json.load(open(sys.argv[1])).get('status')=='safe'
-PYSAFE
-        then return 0; fi
+    if "$_CONFIG_HELPER" config installer bootstrap "$_CONFIG_STAGE/installed-before.json" "$PLUGIN_KEY" "$CLAUDE_HOME" "$CACHE_DIR" "$MARKETPLACE_DIR" "${CODEX_HOME:-$HOME/.codex}" "$PRODUCT" "$_CONFIG_STAGE" "$INSTALLED_JSON" "$venv_refresh" > "$_CONFIG_STAGE/preflight.json"; then
+        return 0
     fi
     _KEEP_CONFIG_STAGE=true
     echo "Config preflight stopped setup; runtime retained before this operation." >&2
@@ -1607,13 +1530,7 @@ acquire_wizard_portable_asset() {
         fetch_bootstrap_file "$base/checksums.txt" "$stage/checksums.txt" || return 1
     fi
     fetch_bootstrap_file "$base/$asset" "$stage/$asset" || return 1
-    python3 -I - "$stage" "$asset" <<'PYVERIFY' || return 1
-import hashlib, pathlib, sys
-root, name = pathlib.Path(sys.argv[1]), sys.argv[2]
-entries = [line.split() for line in (root/'checksums.txt').read_text().splitlines()]
-expected = [e[0] for e in entries if len(e)==2 and e[1].lstrip('*')==name]
-assert len(expected)==1 and hashlib.sha256((root/name).read_bytes()).hexdigest()==expected[0].lower(), 'Portable package checksum mismatch'
-PYVERIFY
+    verify_bootstrap_checksum "$stage" "$asset" || return 1
     WIZARD_PACKAGE_ROOT="$stage/$asset"
 }
 

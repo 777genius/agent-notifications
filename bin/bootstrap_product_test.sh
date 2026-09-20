@@ -100,6 +100,7 @@ WIZARD_PACKAGE_ROOT=""
     LEGACY_MARKETPLACE_REPOS="old/retired-repo"
     config_preflight() { :; }
     calls="$SANDBOX/marketplace-calls"; declared_repo="old/retired-repo"
+    marketplace_declared_repo() { printf '%s\n' "$declared_repo"; }
     claude() {
         printf '%s\n' "$*" >> "$calls"
         if [ "$1 $2 $3" = "plugin marketplace add" ]; then
@@ -135,16 +136,13 @@ echo "marketplace self-heal fixtures passed"
     _CONFIG_STAGE="$SANDBOX/preflight-resource"; mkdir "$_CONFIG_STAGE"
     printf '{"plugins":{}}\n' > "$_CONFIG_STAGE/installed-before.json"
     uname() { printf 'Darwin\n'; }
-    capture_preflight() { cat > "$_CONFIG_STAGE/request.json"; printf '{"status":"safe"}\n'; }
+    capture_preflight() {
+        [ "$1 $2 $3" = 'config installer bootstrap' ] || return 1
+        [ "${13}" = "$HOME/.claude/claude-notifications-go/iterm2-venv" ] || return 1
+        printf '{"status":"safe"}\n'
+    }
     _CONFIG_HELPER=capture_preflight
     config_preflight
-    python3 - "$_CONFIG_STAGE/request.json" "$HOME" <<'PYRESOURCE'
-import json,pathlib,sys
-v=json.load(open(sys.argv[1]))
-expected=(pathlib.Path(sys.argv[2])/'.claude'/'claude-notifications-go'/'iterm2-venv').resolve()
-actual=[pathlib.Path(entry).resolve() for entry in v['refreshDirs']]
-assert expected in actual, f'expected refresh dir {expected!s}; got {[str(path) for path in actual]!r}'
-PYRESOURCE
 )
 # Dispatch tests preserve shared bundle state and isolate CN_PRODUCT.
 print_header() { :; }; abort_if_wsl_environment() { :; }
@@ -240,8 +238,42 @@ explicit=os.environ.get('AGENT_NOTIFICATIONS_CONFIG')
 p=pathlib.Path(explicit) if explicit else legacy if legacy.exists() else neutral
 selected=dict(path=str(p),source='explicit' if explicit else 'legacy' if p==legacy else 'universal',exists=p.exists())
 if args[1]=='path': print(json.dumps(selected)); sys.exit()
+request=None
+if args[1:3]==['installer','capabilities']:
+    print('installer-v1'); sys.exit()
+if args[1:2]==['installer'] and args[2] in ('root','version'):
+    entries=json.loads(pathlib.Path(args[3]).read_text()).get('plugins',{}).get(args[4],[])
+    if entries: print(entries[-1]['installPath' if args[2]=='root' else 'version'])
+    sys.exit()
+if args[1:3]==['installer','versions']:
+    registry=json.loads(pathlib.Path(args[3]).read_text())
+    for entry in registry.get('plugins',{}).get(args[4],[]):
+        if (pathlib.Path(entry['installPath'])/'config/config.json').exists(): print(entry['version'].removeprefix('v'))
+    sys.exit()
+if args[1:3]==['installer','bootstrap']:
+    registry,key,claude,cache,market,codex,product,stage,current,venv=args[3:]
+    roots=[]; refresh=[]; historical=[]; protected=[]
+    if product!='codex':
+        entries=json.loads(pathlib.Path(registry).read_text()).get('plugins',{}).get(key,[])
+        roots=[e['installPath'] for e in entries]
+        refresh=[cache,market]+roots
+        if pathlib.Path(current).exists(): refresh += [e['installPath'] for e in json.loads(pathlib.Path(current).read_text()).get('plugins',{}).get(key,[])]
+        protected=[current,str(pathlib.Path(claude)/'plugins/known_marketplaces.json'),str(pathlib.Path(claude)/'settings.json')]
+        for e in entries:
+            c=dict(path=str(pathlib.Path(e['installPath'])/'config/config.json'))
+            b=pathlib.Path(stage)/('baseline-'+e['version'].removeprefix('v'))
+            if (b/'verified').exists(): c.update(baselinePath=str(b/'config.json'),baselineSHA256=(b/'verified').read_text().strip())
+            historical.append(c)
+    historical.append(dict(path=str(pathlib.Path(claude)/'claude-notifications-go/config.json')))
+    if product!='claude':
+        dest=pathlib.Path(codex)/'claude-notifications-go'
+        refresh.append(str(dest)); historical.append(dict(path=str(dest/'config/config.json')))
+    if venv: refresh.append(venv)
+    if any(pathlib.Path(stage).resolve().is_relative_to(pathlib.Path(d).resolve()) for d in refresh): sys.exit(1)
+    request=dict(activeBundleRoots=roots,refreshDirs=refresh,historicalCandidates=historical,protectedPaths=protected)
+    args=['config','preflight-update']
 if args[1]=='preflight-update':
-    request=json.load(sys.stdin)
+    if request is None: request=json.load(sys.stdin)
     status='safe'
     if any(p.resolve().is_relative_to(pathlib.Path(d).resolve()) for d in request['refreshDirs']): status='unsafe-target'
     if any(p.resolve()==pathlib.Path(d).resolve() for d in request.get('protectedPaths',[])): status='unsafe-target'
@@ -548,7 +580,8 @@ for product in ['codex', 'claude', 'both']:
         assert not any(e[:1]==['claude'] for e in events())
         assert not any('v1.40.0' in path for path in request_paths)
     else:
-        assert not events()
+        # Verified helper metadata reads precede rejection; no host mutation.
+        assert not any(e[:1] in (['claude'], ['setup-codex']) or e[:2]==['config','init'] for e in events())
 reset_case()
 custom=pathlib.Path(env['CLAUDE_CONFIG_DIR'])/'claude-notifications-go/config.json'
 custom.parent.mkdir(); custom.write_text('{"custom":true}')
