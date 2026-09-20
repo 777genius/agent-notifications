@@ -3,6 +3,13 @@ set -eo pipefail
 root=$(cd "$(dirname "$0")" && pwd)
 source "$root/test-env.sh"
 test_env_enter "$0" "$@"
+report_fixture_error() {
+    local status=$?
+    local line="${BASH_LINENO[0]:-$LINENO}"
+    trap - ERR
+    printf 'FAIL: interpreter-free fixture line %s exited with status %s\n' "$line" "$status" >&2
+    exit "$status"
+}
 native_helper="${1:-}"
 box=$(mktemp -d)
 trap 'rm -rf "$box"' EXIT
@@ -10,9 +17,14 @@ test_env_setup "$box"
 mkdir -p "$box/path" "$box/assets" "$box/target"
 # A minimal PATH deliberately omits Python, Node, Go and jq. shasum uses the
 # system Perl runtime, which is outside the omitted development dependencies.
-for tool in awk cat chmod cp grep mktemp uname tr dirname mkdir rm sleep ps shasum sha256sum; do
-    location=$(command -v "$tool" || true)
-    [ -z "$location" ] || ln -s "$location" "$box/path/$tool"
+# Wrappers preserve each tool's original executable directory. Git Bash may
+# implement ln -s by copying an executable, separating MSYS tools from DLLs.
+for tool in awk cat chmod cp grep mktemp uname tr dirname mkdir rm sleep ps shasum sha256sum cygpath; do
+    location=$(type -P "$tool" || true)
+    if [ -n "$location" ]; then
+        printf '#!/bin/bash\nexec %q "$@"\n' "$location" > "$box/path/$tool"
+        chmod +x "$box/path/$tool"
+    fi
 done
 sed '/^main "\$@"$/d' "$root/bootstrap.sh" > "$box/bootstrap.sh"
 sed '/^main "\$@"$/d' "$root/install.sh" > "$box/install.sh"
@@ -71,6 +83,9 @@ list_process_pairs() {
 }
 
 (
+    # Keep diagnostics at the fixture boundary so expected failures inside the
+    # imported installer functions do not emit false alarms under errtrace.
+    trap report_fixture_error ERR
     export PATH="$box/path"
     for tool in python3 node go jq; do ! command -v "$tool"; done
     source "$box/bootstrap.sh"
@@ -163,15 +178,20 @@ list_process_pairs() {
             esac
         }
         PRODUCT=codex
+        PLATFORM="$native_os"
         BOOTSTRAP_TAG="$native_tag"
         _CONFIG_STAGE=""
         _CONFIG_HELPER=""
         stage_config_helper
         [ -x "$_CONFIG_HELPER" ]
         INSTALL_CONFIG_HELPER="$_CONFIG_HELPER"
-        export AGENT_NOTIFICATIONS_CONFIG="$box/target/config.json"
+        config_path="$box/target/config.json"
+        if [ "$PLATFORM" = windows ]; then config_path=$(cygpath -aw "$config_path"); fi
+        export AGENT_NOTIFICATIONS_CONFIG="$config_path"
         if install_config_preflight "$box/target"; then exit 1; fi
-        export AGENT_NOTIFICATIONS_CONFIG="$box/separate/config.json"
+        config_path="$box/separate/config.json"
+        if [ "$PLATFORM" = windows ]; then config_path=$(cygpath -aw "$config_path"); fi
+        export AGENT_NOTIFICATIONS_CONFIG="$config_path"
         install_config_preflight "$box/target"
         config_preflight
         rm -rf -- "$_CONFIG_STAGE"
