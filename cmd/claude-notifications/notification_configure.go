@@ -26,6 +26,7 @@ type notificationConfigureRequest struct {
 	CodexHome         string
 	Route             *notifysetup.Route
 	RequestPermission bool
+	PreservePolicy    bool
 }
 type notificationConfigureDependencies struct {
 	Home, ClaudeHome, BundleRoot, ControlRoot string
@@ -134,7 +135,15 @@ func configureNotifications(ctx context.Context, request notificationConfigureRe
 	if !bundleOwned {
 		return result, fail("installed_bundle_required")
 	}
-	global = filepath.Join(deps.Home, ".claude", "claude-notifications-go", "config.json")
+	selection, e := config.Resolve(config.SnapshotEnv())
+	if e != nil {
+		return result, e
+	}
+	global = selection.Path
+	command, e := installruntime.OwnedNotificationCommand(snapshot.Ledger, primary)
+	if e != nil {
+		return result, e
+	}
 	legacy := filepath.Join(primary, "config", "config.json")
 	defaults := filepath.Join(deps.BundleRoot, "config", "config.json")
 	for _, p := range []string{global, legacy, defaults} {
@@ -162,6 +171,18 @@ func configureNotifications(ctx context.Context, request notificationConfigureRe
 	}
 	enabled := true
 	setupRequest := notifysetup.Request{ExpectedGeneration: result.Generation, Enabled: &enabled, Route: request.Route}
+	// Bootstrap defaults seed fresh installs; they do not replace saved consent,
+	// routing, or an explicit opt-out during the later portable handoff.
+	if request.PreservePolicy {
+		policy, err := installruntime.ReadPolicySnapshot(ctx, deps.ControlRoot)
+		if err != nil {
+			return result, err
+		}
+		if _, configured := policy.Fields["route"]; configured {
+			setupRequest.Enabled = nil
+			setupRequest.Route = nil
+		}
+	}
 	if e = notifysetup.Inspect(ctx, options, setupRequest, prepared); e != nil {
 		return result, e
 	}
@@ -202,7 +223,7 @@ func configureNotifications(ctx context.Context, request notificationConfigureRe
 		if inv.State != "clear" {
 			return result, fail("inventory_" + inv.State)
 		}
-		r := clientsetup.Request{ControlRoot: deps.ControlRoot, RuntimeRoot: primary, Command: filepath.Join(primary, "bin", "claude-notifications"), ConfigPath: path, Provider: provider, Mode: clientsetup.Managed, ExpectedGeneration: result.Generation}
+		r := clientsetup.Request{ControlRoot: deps.ControlRoot, RuntimeRoot: primary, Command: command, ConfigPath: path, Provider: provider, Mode: clientsetup.Managed, ExpectedGeneration: result.Generation}
 		facts, e := clientsetup.Inspect(ctx, r)
 		if e != nil {
 			return result, e
@@ -487,11 +508,13 @@ func parseNotificationConfigure(args []string) (r notificationConfigureRequest, 
 			return r, false, errors.New("invalid_arguments")
 		}
 		seen[key] = true
-		if key == "request-permission" || key == "json" {
+		if key == "request-permission" || key == "json" || key == "preserve-policy" {
 			if inline {
 				return r, false, errors.New("invalid_arguments")
 			}
-			if key == "json" {
+			if key == "preserve-policy" {
+				r.PreservePolicy = true
+			} else if key == "json" {
 				jsonOutput = true
 			} else {
 				r.RequestPermission = true

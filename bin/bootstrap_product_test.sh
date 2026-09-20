@@ -34,7 +34,7 @@ select_product --product codex --navigation none --allow-unknown-caller true --a
 [ "${#CONFIGURE_ARGS[@]}" -eq 6 ]
 PRODUCT=""; CONFIGURE_ARGS=(); CONFIGURE_NOTIFICATIONS=true
 select_product --product claude
-[ "${CONFIGURE_ARGS[*]}" = "--navigation none --allow-unknown-caller true --allow-caller-asserted false" ]
+[ "${CONFIGURE_ARGS[*]}" = "--navigation none --allow-unknown-caller true --allow-caller-asserted false --preserve-policy" ]
 for tag in v1.42.0 v1.43.2 v2.0.0; do
     BOOTSTRAP_RELEASE_TAG="$tag"
     BOOTSTRAP_RELEASE_COMMIT="$TEST_RELEASE_COMMIT"
@@ -240,6 +240,25 @@ install_codex() { return 1; }
 if ( PRODUCT=""; main --product both ); then exit 1; fi
 # main installs its own trap; restore test-owned sandbox cleanup.
 trap 'rm -rf "$SANDBOX"' EXIT
+# The profile directory and default Claude registration file are different.
+PRODUCT=claude
+BOOTSTRAP_TAG=""
+PLUGIN_ROOT="$SANDBOX/wizard-package"
+mkdir -p "$PLUGIN_ROOT/portable-package"
+printf '{}' > "$PLUGIN_ROOT/portable-package/plugin.json"
+CONFIGURE_BINARY="$SANDBOX/capture-wizard"
+export WIZARD_CAPTURE="$SANDBOX/wizard-args"
+printf '%s\n' '#!/bin/bash' 'printf "%s\n" "$@" > "$WIZARD_CAPTURE"' > "$CONFIGURE_BINARY"
+chmod +x "$CONFIGURE_BINARY"
+configure_agent_policy() { return 0; }
+bootstrap_abs_command() { return 1; }
+unset CLAUDE_CONFIG_DIR
+setup_agent_notify_wizard
+grep -Fx -- "$HOME/.claude.json" "$WIZARD_CAPTURE"
+export CLAUDE_CONFIG_DIR="$SANDBOX/custom claude"
+setup_agent_notify_wizard
+grep -Fx -- "$CLAUDE_CONFIG_DIR/.claude.json" "$WIZARD_CAPTURE"
+
 printf 'bootstrap product unit fixtures passed\n'
 # Local HTTP and controlling-PTY integration. Installer/registration are explicit
 # fake adapters here; the fetched bootstrap, archive extraction and curl are real.

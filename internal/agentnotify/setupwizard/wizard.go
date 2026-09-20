@@ -1201,7 +1201,7 @@ func inspect(ctx context.Context, req Request, agents []portable.Integration, sn
 		if mcpPath == "" {
 			continue
 		}
-		command := filepath.Join(runtimeRoot, primaryName(req))
+		command := discovery(req, agent, runtimeRoot, snap).Command
 		facts, err := clientsetup.Inspect(ctx, clientsetup.Request{
 			ControlRoot: req.ControlRoot, RuntimeRoot: runtimeRoot, Command: command, ConfigPath: mcpPath,
 			Provider: discoveryProvider(agent), Mode: clientsetup.Managed, ExpectedGeneration: snap.Ledger.Generation,
@@ -2754,12 +2754,13 @@ func primaryName(req Request) string {
 	return "primary"
 }
 
-func discovery(req Request, agent portable.Integration, runtimeRoot string, _ installruntime.InstalledSnapshot) portablesetup.Discovery {
+func discovery(req Request, agent portable.Integration, runtimeRoot string, snap installruntime.InstalledSnapshot) portablesetup.Discovery {
 	path := discoveryConfigPath(req, agent)
 	if path == "" {
 		return portablesetup.Discovery{}
 	}
-	return portablesetup.Discovery{ConfigPath: path, Command: filepath.Join(runtimeRoot, primaryName(req))}
+	command, _ := installruntime.OwnedNotificationCommand(snap.Ledger, runtimeRoot)
+	return portablesetup.Discovery{ConfigPath: path, Command: command}
 }
 
 // discoveryConfigPath is the owned client MCP file to hand off. Explicit

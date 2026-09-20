@@ -887,7 +887,7 @@ func TestSetupWizardDirectMCPHandoffDoesNotRestoreE2E(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(mcpConfig), 0700); err != nil {
 		t.Fatal(err)
 	}
-	primary := filepath.Join(env.runtime, "primary")
+	primary := filepath.Join(env.runtime, "bin", "claude-notifications")
 	if _, err := clientsetup.Apply(ctx, clientsetup.Request{
 		ControlRoot: env.control, RuntimeRoot: env.runtime, Command: primary, ConfigPath: mcpConfig,
 		Provider: registration.Codex, Mode: clientsetup.Managed, ExpectedGeneration: snap.Ledger.Generation,
@@ -3456,7 +3456,7 @@ func newWizardCLIEnv(t *testing.T, ctx context.Context, spaced bool) wizardCLIEn
 	}
 	if _, err := installruntime.Commit(ctx, installruntime.Request{
 		ControlRoot: env.control, RuntimeRoot: env.runtime, Owner: "existing-installer", ConsumerID: "existing",
-		Files: []installruntime.File{{Path: filepath.Join(env.runtime, "primary"), Data: body, Mode: 0700}},
+		Files: []installruntime.File{{Path: filepath.Join(env.runtime, "bin", "claude-notifications"), Data: append(body, []byte(installruntime.WriterProtocolMarker)...), Mode: 0700}},
 	}); err != nil {
 		t.Fatal(err)
 	}

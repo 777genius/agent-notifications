@@ -128,13 +128,13 @@ func managedRuntime(t *testing.T) (control, runtime, global, primary string, gen
 	control = filepath.Join(root, "control")
 	runtime = filepath.Join(root, "runtime")
 	global = filepath.Join(root, "global", "config.json")
-	primary = filepath.Join(runtime, "primary")
+	primary = filepath.Join(runtime, "bin", "claude-notifications")
 	if err := os.MkdirAll(filepath.Dir(global), 0700); err != nil {
 		t.Fatal(err)
 	}
 	ledger, err := installruntime.Commit(testCtx(t), installruntime.Request{
 		ControlRoot: control, RuntimeRoot: runtime, Owner: "existing-installer", ConsumerID: "existing",
-		Files: []installruntime.File{{Path: primary, Data: []byte("inert primary"), Mode: 0700}},
+		Files: []installruntime.File{{Path: primary, Data: []byte(installruntime.WriterProtocolMarker), Mode: 0700}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -6891,5 +6891,70 @@ func TestWizardCodexLiveProfileConflict(t *testing.T) {
 	reinstall.ExternalUninstalled = false
 	if got, err := Run(ctx, reinstall); err != nil || got.Outcome != "completed" {
 		t.Fatalf("reinstall other profile: %+v %v", got, err)
+	}
+}
+
+func TestWizardDefaultClaudeRegistrationHandoffsDirectMCP(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, primary, gen := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	claudeConfig := filepath.Join(filepath.Dir(control), "claude-profile")
+	mcpConfig := filepath.Join(filepath.Dir(control), ".claude.json")
+	if err := os.MkdirAll(claudeConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := clientsetup.Apply(ctx, clientsetup.Request{
+		ControlRoot: control, RuntimeRoot: runtime, Command: primary, ConfigPath: mcpConfig,
+		Provider: registration.Claude, Mode: clientsetup.Managed, ExpectedGeneration: gen,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"claude"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		ClaudeConfig: claudeConfig, ClientExecutable: probe, Helper: probe,
+		ScopeRoot:    filepath.Join(filepath.Dir(control), "scope"),
+		MCPConfig:    map[string]string{"claude": mcpConfig},
+		ClaudeRunner: listingRunner{configRoot: claudeConfig},
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := Plan(ctx, req)
+	if err != nil || !plan.Ready {
+		t.Fatalf("default-path handoff plan: %+v %v", plan, err)
+	}
+	if !strings.Contains(plan.Text, "claude-mcp="+mcpConfig) {
+		t.Fatalf("plan omitted discovered mcp: %s", plan.Text)
+	}
+	retry := strings.Join(RetryCommand(plan.Request), " ")
+	if !strings.Contains(retry, "--claude-mcp-config "+mcpConfig) {
+		t.Fatalf("plan retry omitted resolved mcp: %v", RetryCommand(plan.Request))
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("default-path handoff install: %+v %v", installed, err)
+	}
+	req.Action = ActionInspect
+	req.Yes = false
+	view, err := Run(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var notify, direct, mcpFile string
+	for _, target := range view.Targets {
+		if target.Unit == "agent-notify" {
+			notify = target.Outcome
+		}
+		if target.Unit == "direct-mcp" {
+			direct = target.Outcome
+			mcpFile = target.ConfigPath
+		}
+	}
+	if notify != "installed" || direct != "absent" || mcpFile != mcpConfig {
+		t.Fatalf("default-path handoff inspect: notify=%s direct=%s mcp=%s targets=%+v", notify, direct, mcpFile, view.Targets)
 	}
 }

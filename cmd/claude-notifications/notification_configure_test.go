@@ -56,7 +56,7 @@ func TestNotificationConfigureBothAndRetry(t *testing.T) {
 			t.Fatal("primary command missing", path)
 		}
 	}
-	global := filepath.Join(f.root, ".claude", "claude-notifications-go", "config.json")
+	global := filepath.Join(f.root, "xdg", "agent-notifications", "config.json")
 	if setupCommandRead(t, global) != setupCommandRead(t, f.global) {
 		t.Fatal("global restrictions changed")
 	}
@@ -316,7 +316,7 @@ func TestNotificationConfigureReportsPersistedGlobal(t *testing.T) {
 	request.Route = &notifysetup.Route{}
 	request.RequestPermission = true
 	deps.Composition.permission = func(context.Context, string, installruntime.InstalledSnapshot, bool) (string, error) {
-		setupCommandWrite(t, filepath.Join(f.root, ".claude", "claude-notifications-go", "config.json"), `{"notifications":{"desktop":{"enabled":true,"sound":false,"clickToFocus":false}}}`, 0600)
+		setupCommandWrite(t, filepath.Join(f.root, "xdg", "agent-notifications", "config.json"), `{"notifications":{"desktop":{"enabled":true,"sound":false,"clickToFocus":false}}}`, 0600)
 		return "denied", nil
 	}
 	result, err = configureNotifications(setupCommandContext(t), request, deps)
@@ -439,5 +439,74 @@ func TestNotificationProductionRejectsGlobalOverride(t *testing.T) {
 				t.Fatal("override wrote")
 			}
 		})
+	}
+}
+
+func TestNotificationConfigureOwnedWindowsCommands(t *testing.T) {
+	for _, arch := range []string{"amd64", "arm64"} {
+		t.Run(arch, func(t *testing.T) {
+			f, request, deps := configureFixture(t)
+			command := filepath.Join(f.runtime, "bin", "claude-notifications-windows-"+arch+".exe")
+			before, err := installruntime.Fingerprint(f.command)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = installruntime.Commit(setupCommandContext(t), installruntime.Request{ControlRoot: f.control, RuntimeRoot: f.runtime, Owner: "existing-installer", ConsumerID: "hooks", RefreshOnly: true, Files: []installruntime.File{{Path: f.command, Before: before, Remove: true}, {Path: command, Data: []byte(installruntime.WriterProtocolMarker), Mode: 0700}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := configureNotifications(setupCommandContext(t), request, deps)
+			if err != nil {
+				t.Fatal(result, err)
+			}
+			for _, path := range []string{filepath.Join(request.CodexHome, "config.toml"), filepath.Join(f.root, ".claude.json")} {
+				if !strings.Contains(setupCommandRead(t, path), command) {
+					t.Fatal("native command missing", path)
+				}
+			}
+		})
+	}
+}
+
+func TestNotificationConfigurePreservesUniversalPolicyOnFailure(t *testing.T) {
+	f, request, deps := configureFixture(t)
+	global := filepath.Join(f.root, "xdg", "agent-notifications", "config.json")
+	original := setupCommandRead(t, f.global)
+	if err := os.MkdirAll(filepath.Dir(global), 0700); err != nil {
+		t.Fatal(err)
+	}
+	setupCommandWrite(t, global, original, 0600)
+	if _, err := configureNotifications(setupCommandContext(t), request, deps); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	snap, err := installruntime.ReadInstalledSnapshot(f.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := notifysetup.Apply(setupCommandContext(t), notifysetup.Options{ControlRoot: f.control, RuntimeRoot: f.runtime, Owner: "existing-installer", ConsumerID: "hooks", GlobalConfig: global}, notifysetup.Request{Enabled: &off, ExpectedGeneration: snap.Ledger.Generation}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := installruntime.ReadPolicySnapshot(setupCommandContext(t), f.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.PreservePolicy = true
+	deps.Composition.permission = func(context.Context, string, installruntime.InstalledSnapshot, bool) (string, error) {
+		return "denied", errors.New("wizard prerequisite failure")
+	}
+	request.RequestPermission = true
+	if _, err := configureNotifications(setupCommandContext(t), request, deps); err == nil {
+		t.Fatal("expected failure")
+	}
+	after, err := installruntime.ReadPolicySnapshot(setupCommandContext(t), f.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before.Fields, after.Fields) || setupCommandRead(t, global) != original {
+		t.Fatal("preferences changed")
+	}
+	if _, err := os.Stat(filepath.Join(f.root, ".claude", "claude-notifications-go", "config.json")); !os.IsNotExist(err) {
+		t.Fatal("legacy config created", err)
 	}
 }

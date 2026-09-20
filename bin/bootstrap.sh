@@ -1037,13 +1037,13 @@ complete_configure_route() {
                     --allow-unknown-caller) unknown="${CONFIGURE_ARGS[$i]}" ;;
                     --allow-caller-asserted) asserted="${CONFIGURE_ARGS[$i]}" ;;
                 esac ;;
-            --json|--request-permission) ;;
+            --json|--request-permission|--preserve-policy) ;;
             *) echo "Unknown option: ${CONFIGURE_ARGS[$i]}" >&2; return 1 ;;
         esac
         i=$((i + 1))
     done
     if [ -z "$nav" ] && [ -z "$app" ] && [ -z "$team" ] && [ -z "$unknown" ] && [ -z "$asserted" ]; then
-        CONFIGURE_ARGS+=(--navigation none --allow-unknown-caller true --allow-caller-asserted false)
+        CONFIGURE_ARGS+=(--navigation none --allow-unknown-caller true --allow-caller-asserted false --preserve-policy)
         return 0
     fi
     if [ "$nav" = none ]; then
@@ -1692,6 +1692,9 @@ setup_agent_notify_wizard() {
     set -- setup-notifications wizard --action install --agents "$agents" --hooks false --agent-notify true --yes \
         --package "$package_root" --plugin-root "$plugin_root" --helper "$CONFIGURE_BINARY"
     set -- "$@" --codex-home "$wizard_codex_home" --claude-config "$CLAUDE_HOME"
+    if [ "$PRODUCT" != codex ]; then
+        set -- "$@" --claude-mcp-config "${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
+    fi
     [ -z "$claude_exec" ] || set -- "$@" --claude-executable "$claude_exec"
     [ -z "$codex_exec" ] || set -- "$@" --codex-executable "$codex_exec"
     if [ "$PRODUCT" != both ] && [ -n "$claude_exec$codex_exec" ]; then
