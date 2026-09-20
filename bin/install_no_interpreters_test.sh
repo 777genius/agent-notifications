@@ -48,6 +48,28 @@ if [ -n "$native_helper" ]; then
     fi
     printf '%s  %s\n' "${native_digest%% *}" "$native_name" > "$box/native/checksums.txt"
 fi
+
+list_process_pairs() {
+    local pairs
+    if pairs=$(ps -eo pid=,ppid= 2>/dev/null); then
+        printf '%s\n' "$pairs"
+        return
+    fi
+    # MSYS ps does not implement GNU -o. Its default table prefixes data rows
+    # with an unlabelled status byte, while -ef has aligned named columns.
+    ps -ef | awk '
+        NR == 1 {
+            for (i = 1; i <= NF; i++) {
+                if ($i == "PID") pid_col = i
+                if ($i == "PPID") ppid_col = i
+            }
+            if (!pid_col || !ppid_col) exit 1
+            next
+        }
+        { print $pid_col, $ppid_col }
+    '
+}
+
 (
     export PATH="$box/path"
     for tool in python3 node go jq; do ! command -v "$tool"; done
@@ -101,7 +123,7 @@ fi
         i=0
         timers=""
         while [ -z "$timers" ] && [ "$i" -lt 100 ]; do
-            processes=$(ps -eo pid=,ppid=)
+            processes=$(list_process_pairs)
             siblings=$(printf '%s\n' "$processes" | awk -v p="$helper_parent" '$2 == p {printf "%s ", $1}')
             timers=$(printf '%s\n' "$processes" | awk -v parents="$siblings" -v child="$child" 'BEGIN {n=split(parents,a," "); for(i=1;i<=n;i++) p[a[i]]=1} p[$2] && $1 != child {print $1}')
             [ -n "$timers" ] || sleep .02

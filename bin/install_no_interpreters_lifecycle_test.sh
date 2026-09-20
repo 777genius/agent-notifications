@@ -97,7 +97,7 @@ printf '%s\n' \
     'esac' > "$box/client-probe"
 chmod 700 "$box/client-probe"
 
-for tool in basename cat chmod cmp cp dirname find grep mkdir mktemp mv rm sed sha256sum shasum tr uname; do
+for tool in basename cat chmod cmp cp diff dirname find grep mkdir mktemp mv rm sed sha256sum shasum sort tr uname; do
     location=$(command -v "$tool" || true)
     [ -z "$location" ] || ln -s "$location" "$box/path/$tool"
 done
@@ -152,6 +152,8 @@ done
 
     run_wizard update update "$box/package-1.0.1.zip"
     [ "$(installation_id "$box/update.json")" = "$installed_id" ]
+    grep -q '"outcome":"completed"' "$box/update.json"
+    grep -Eq '"version"[[:space:]]*:[[:space:]]*"1\.0\.1"' "$box/uap/state/state-v2.json"
 
     projection=""
     for candidate in "$box/claude"/skills/agent-notify-*; do
@@ -166,7 +168,24 @@ done
     done
     [ "$repaired" = true ]
 
+    sed -n 's/.*"active_path": "\([^"]*\)".*/\1/p' \
+        "$box/uap/state/state-v2.json" | sort -u > "$box/owned-projections.txt"
+    [ -s "$box/owned-projections.txt" ]
     run_wizard remove uninstall "$box/package-1.0.1.zip" --external-uninstalled
+    grep -q '"outcome":"completed"' "$box/remove.json"
+    grep -q '"clients": {}' "$box/uap/state/state-v2.json"
+    grep -q '"data_retained": true' "$box/uap/state/state-v2.json"
+    while IFS= read -r owned_projection; do
+        [ ! -e "$owned_projection" ]
+    done < "$box/owned-projections.txt"
+    for candidate in "$box/claude"/skills/agent-notify-*; do
+        [ ! -e "$candidate" ]
+    done
+    run_wizard removed-inspect inspect "$box/package-1.0.1.zip"
+    if grep -Eq '"unit":"agent-notify"[^}]*"outcome":"installed"' "$box/removed-inspect.json"; then
+        echo 'uninstall left an owned client binding installed' >&2
+        exit 1
+    fi
     grep -q 'foreign-codex-entry' "$box/codex/foreign-plugin/sentinel"
     grep -q 'foreign-claude-entry' "$box/claude/skills/foreign-plugin/sentinel"
     grep -q 'retained-user-data' "$data_dir/retained.txt"
@@ -175,14 +194,31 @@ done
     [ "$(installation_id "$box/reinstall.json")" = "$installed_id" ]
     grep -q 'retained-user-data' "$data_dir/retained.txt"
 
+    projection=""
+    for candidate in "$box/claude"/skills/agent-notify-*; do
+        if [ -d "$candidate" ]; then projection=$candidate; break; fi
+    done
+    [ -n "$projection" ]
+    # Make repair observable. A malformed Notifications config must reject the
+    # real lifecycle action before it restores this deliberately removed file.
+    mv "$projection/.mcp.json" "$box/missing-before-invalid-config.mcp.json"
     cp "$box/uap/state/state-v2.json" "$box/state-before-invalid-config.json"
     printf '%s' '{' > "$box/malformed-config.json"
+    cp "$box/malformed-config.json" "$box/config-before-invalid-config.json"
+    cp -R "$box/claude" "$box/claude-before-invalid-config"
+    cp -R "$box/codex" "$box/codex-before-invalid-config"
     export AGENT_NOTIFICATIONS_CONFIG="$box/malformed-config.json"
-    if "$native_helper" config installer preflight "$box/runtime" >/dev/null 2>&1; then
-        echo 'malformed config passed native preflight' >&2
+    if "$native_helper" setup-notifications wizard \
+        --action repair --package "$box/package-1.0.1.zip" --yes --json \
+        "${common[@]}" > "$box/invalid-config-repair.json" 2>&1; then
+        echo 'malformed config passed lifecycle repair' >&2
         exit 1
     fi
     cmp "$box/state-before-invalid-config.json" "$box/uap/state/state-v2.json"
+    cmp "$box/config-before-invalid-config.json" "$box/malformed-config.json"
+    diff -r "$box/claude-before-invalid-config" "$box/claude"
+    diff -r "$box/codex-before-invalid-config" "$box/codex"
+    [ ! -e "$projection/.mcp.json" ]
 )
 
 echo "PASS: interpreter-free artifact fresh/repeat/update/repair/remove/reinstall lifecycle"
