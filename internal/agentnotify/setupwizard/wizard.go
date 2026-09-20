@@ -8,11 +8,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	processadapter "github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/process"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
-	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/providers"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/ports"
 
 	"github.com/777genius/agent-notifications/install/uapinstaller"
 	"github.com/777genius/agent-notifications/internal/agentnotify/clientsetup"
@@ -78,7 +79,7 @@ type Request struct {
 	// ClaudeRunner overrides Claude activation probing. Production leaves it
 	// nil so the OS process runner is used. Isolated tests inject a listing
 	// fixture; the field is never parsed from CLI flags.
-	ClaudeRunner providers.CommandRunner
+	ClaudeRunner ports.CommandRunner
 	// ReleaseVersion is the accepted master revision without a leading v.
 	// DefaultReleaseVersion is a one-shot CLI snapshot of this binary's
 	// compiled consumer version, not an explicit flag. Resume restores
@@ -749,7 +750,11 @@ func inspectUAPState(ctx context.Context, req Request) (uapinstaller.Inspection,
 		return uapinstaller.Inspection{}, nil
 	}
 	stateRoot := filepath.Join(filepath.Dir(req.ControlRoot), "uap", "state")
-	eng, err := uapinstaller.New(uapinstaller.Config{StateRoot: stateRoot})
+	registry, err := portablesetup.NewRegistry()
+	if err != nil {
+		return uapinstaller.Inspection{}, err
+	}
+	eng, err := uapinstaller.New(uapinstaller.Config{StateRoot: stateRoot, Registry: registry})
 	if err != nil {
 		return uapinstaller.Inspection{}, err
 	}
@@ -808,14 +813,23 @@ func DiscoverAgents(req Request) []AgentCapability {
 	if !explicitAbs(req.ControlRoot) {
 		stateRoot = filepath.Join(os.TempDir(), "uapinstaller-discover-absent")
 	}
+	registry, err := portablesetup.NewRegistry()
+	if err != nil {
+		return nil
+	}
 	eng, err := uapinstaller.New(uapinstaller.Config{
-		StateRoot:         stateRoot,
-		ClientExecutables: req.ClientExecutables,
+		StateRoot: stateRoot, ClientExecutables: req.ClientExecutables, Registry: registry,
 	})
 	if err != nil {
 		return nil
 	}
 	found := eng.Discover()
+	sort.SliceStable(found, func(i, j int) bool {
+		if found[i].ClientID == found[j].ClientID {
+			return false
+		}
+		return found[i].ClientID == "claude"
+	})
 	out := make([]AgentCapability, 0, len(found))
 	for _, item := range found {
 		out = append(out, AgentCapability{
@@ -828,8 +842,8 @@ func DiscoverAgents(req Request) []AgentCapability {
 
 func firstBindingProfile(bindings []uapinstaller.InspectedBinding) string {
 	for _, binding := range bindings {
-		if binding.Profile != "" {
-			return binding.Profile
+		if profile, err := recordedLiveProfile(binding.DataRoot, binding.ClientID); err == nil && profile != "" {
+			return profile
 		}
 	}
 	return ""
@@ -1881,7 +1895,7 @@ func portableInstallFailed(agent portable.Integration, req Request, out Result, 
 		out.Outcome, out.Reason = "incomplete", "not_installed"
 		return out
 	}
-	if errors.Is(err, uapinstaller.ErrCompatibilityUnavailable) {
+	if errors.Is(err, uapinstaller.ErrCompatibilityUnavailable) || errors.Is(err, uapinstaller.ErrTargetFactsUnavailable) {
 		return siblingCompatibilityUnavailable(agent, req, out)
 	}
 	out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "incomplete", Reason: err.Error()})
@@ -1935,7 +1949,7 @@ func groupNotifyFailed(agents []portable.Integration, req Request, out Result, e
 		out.Outcome, out.Reason = "incomplete", "not_installed"
 		return out
 	}
-	if errors.Is(err, uapinstaller.ErrCompatibilityUnavailable) {
+	if errors.Is(err, uapinstaller.ErrCompatibilityUnavailable) || errors.Is(err, uapinstaller.ErrTargetFactsUnavailable) {
 		if len(agents) == 0 {
 			return siblingCompatibilityUnavailable("", req, out)
 		}
@@ -2267,13 +2281,14 @@ func materializer(req Request, snap installruntime.InstalledSnapshot, runtimeRoo
 	}
 	uapRoot := filepath.Join(filepath.Dir(req.ControlRoot), "uap")
 	return portablesetup.NewMaterializer(portablesetup.UAPRoots{
-		StateFile:        filepath.Join(uapRoot, "state", "state-v2.json"),
-		LockFile:         filepath.Join(uapRoot, "state", "mutation.lock"),
-		OperationsDir:    filepath.Join(uapRoot, "state", "operations"),
-		PluginDataBase:   filepath.Join(uapRoot, "plugin-data"),
-		ManagedRoot:      filepath.Join(uapRoot, "managed"),
-		HelperExecutable: helper,
-		ClaudeRunner:     runner,
+		StateFile:           filepath.Join(uapRoot, "state", "state-v2.json"),
+		LockFile:            filepath.Join(uapRoot, "state", "mutation.lock"),
+		OperationsDir:       filepath.Join(uapRoot, "state", "operations"),
+		PluginDataBase:      filepath.Join(uapRoot, "plugin-data"),
+		ManagedRoot:         filepath.Join(uapRoot, "managed"),
+		HelperExecutable:    helper,
+		ClaudeRunner:        runner,
+		RequireLiveProfiles: true,
 	})
 }
 
@@ -2321,14 +2336,20 @@ func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot st
 }
 
 func installerEngine(mat portablesetup.Materializer) (*uapinstaller.Engine, error) {
+	registry, err := portablesetup.NewRegistry()
+	if err != nil {
+		return nil, err
+	}
 	return uapinstaller.New(uapinstaller.Config{
-		StateRoot:        filepath.Dir(mat.Roots.StateFile),
-		StateFile:        mat.Roots.StateFile,
-		LockFile:         mat.Roots.LockFile,
-		OperationsDir:    mat.Roots.OperationsDir,
-		PluginDataBase:   mat.Roots.PluginDataBase,
-		ManagedRoot:      mat.Roots.ManagedRoot,
-		HelperExecutable: mat.Roots.HelperExecutable,
+		StateRoot:            filepath.Dir(mat.Roots.StateFile),
+		StateFile:            mat.Roots.StateFile,
+		LockFile:             mat.Roots.LockFile,
+		OperationsDir:        mat.Roots.OperationsDir,
+		PluginDataBase:       mat.Roots.PluginDataBase,
+		ManagedRoot:          mat.Roots.ManagedRoot,
+		HelperExecutable:     mat.Roots.HelperExecutable,
+		Registry:             registry,
+		TrustedLocalPackages: true,
 	})
 }
 
@@ -2500,7 +2521,7 @@ func mapPreviewFailure(ctx context.Context, req Request, agent portable.Integrat
 		out.Outcome, out.Reason = "incomplete", "not_installed"
 		return out, err
 	}
-	if errors.Is(err, uapinstaller.ErrCompatibilityUnavailable) {
+	if errors.Is(err, uapinstaller.ErrCompatibilityUnavailable) || errors.Is(err, uapinstaller.ErrTargetFactsUnavailable) {
 		return siblingCompatibilityUnavailable(agent, req, out), err
 	}
 	if portablesetup.IsUpdateRequired(err) {

@@ -1,7 +1,9 @@
 git.sr.ht/~jackmordaunt/go-toast v1.1.2 h1:/yrfI55LRt1M7H1vkaw+NaH1+L1CDxrqDltwm5euVuE=
 git.sr.ht/~jackmordaunt/go-toast v1.1.2/go.mod h1:jA4OqHKTQ4AFBdwrSnwnskUIIS3HYzlJSgdzCKqfavo=
-github.com/777genius/plugin-kit-ai/install/integrationctl v0.0.0-20260910100557-6af7f412cb4a h1:6d6MndaSdF8mD0QIDrsJs/tIZMoUSiCfNfEu5OMYtP0=
-github.com/777genius/plugin-kit-ai/install/integrationctl v0.0.0-20260910100557-6af7f412cb4a/go.mod h1:0gRPS9JtaOBY44H55LYVVhIRujYgE8EodlWIYxpTVsA=
+github.com/777genius/plugin-kit-ai/install/integrationctl v0.0.0-20260919103549-148794ac5947 h1:Ho5h6juIvPYIyxyXYfETpXHufig8O0Sl3u83OP5KoN4=
+github.com/777genius/plugin-kit-ai/install/integrationctl v0.0.0-20260919103549-148794ac5947/go.mod h1:+4skxdhGnVAQduEPhpO1gP+DZP5f0K3l9rljiFA+hm0=
+github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20260920051840-0b823e3a3346 h1:zwYr9gDF5hkYsVO9w3CHiVJP8jz/QOPhxHIKmVoMHh4=
+github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20260920051840-0b823e3a3346/go.mod h1:+zvITs+V/r1s6URiDklERjqbJo77vhnPV+8cqenGmAE=
 github.com/777genius/plugin-kit-ai/sdk v1.1.1-0.20260908195702-6e6e6ac59f25 h1:j0sldeNjfYe0Cavs0PIffbveyOhf0mIJKYma/IJxAT0=
 github.com/777genius/plugin-kit-ai/sdk v1.1.1-0.20260908195702-6e6e6ac59f25/go.mod h1:5Dzrnf4A5Yocek3zypR6TmZTlakBoWhtm/JD0/osAEM=
 github.com/creack/pty v1.1.24 h1:bJrF4RRfyJnbTJqzRLHzcGaZK1NeM5kTC9jGgovnR1s=
@@ -121,8 +123,8 @@ golang.org/x/sys v0.0.0-20220712014510-0a85c31ab51e/go.mod h1:oPkhp1MJrh7nUepCBc
 golang.org/x/sys v0.0.0-20220722155257-8c9f86f7a55f/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
 golang.org/x/sys v0.1.0/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
 golang.org/x/sys v0.5.0/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
-golang.org/x/sys v0.41.0 h1:Ivj+2Cp/ylzLiEU89QhWblYnOE9zerudt9Ftecq2C6k=
-golang.org/x/sys v0.41.0/go.mod h1:OgkHotnGiDImocRcuBABYBEXf8A9a87e/uXjp9XT3ks=
+golang.org/x/sys v0.42.0 h1:omrd2nAlyT5ESRdCLYdm3+fMfNFE/+Rf4bDIQImRJeo=
+golang.org/x/sys v0.42.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=
 golang.org/x/term v0.0.0-20201126162022-7de9c90e9dd1/go.mod h1:bj7SfCRtBDWHUb9snDiAeCFNEtKQo2Wmx5Cou7ajbmo=
 golang.org/x/term v0.0.0-20210927222741-03fcf44c2211/go.mod h1:jbD1KX2456YbFQfuXm/mYQcufACuNUgVhRMnK/tPxf8=
 golang.org/x/term v0.5.0/go.mod h1:jMB1sMXY+tzblOD4FWmEbocvup2/aLOaQEp7JmGp78k=

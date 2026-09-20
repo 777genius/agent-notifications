@@ -1,3 +1,5 @@
+//go:build legacy_uapinstaller
+
 package uapinstaller
 
 import (

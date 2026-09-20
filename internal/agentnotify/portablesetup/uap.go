@@ -3,6 +3,7 @@ package portablesetup
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -10,8 +11,11 @@ import (
 	"strings"
 
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/statev2"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/claude"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/codex"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
-	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/providers"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/ports"
 
 	"github.com/777genius/agent-notifications/install/uapinstaller"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
@@ -19,6 +23,13 @@ import (
 )
 
 const portableServerName = "agent-notify"
+const clientFactsFile = "client-facts.json"
+
+// NewRegistry is the explicit Notifications composition of the two supported
+// native clients. The UAP SDK intentionally rejects a nil registry.
+func NewRegistry() (*clients.Registry, error) {
+	return clients.NewRegistry(claude.New(), codex.New())
+}
 
 // Identity is the operator-selected existing-installer surface. BindingID and
 // DataRoot are completed from the committed UAP plan, not guessed from HOME.
@@ -30,7 +41,8 @@ type Identity struct {
 type UAPRoots struct {
 	StateFile, LockFile, OperationsDir, PluginDataBase, ManagedRoot string
 	HelperExecutable, HelperVersion                                 string
-	ClaudeRunner                                                    providers.CommandRunner
+	ClaudeRunner                                                    ports.CommandRunner
+	RequireLiveProfiles                                             bool
 }
 
 // MaterializeRequest selects one client. Integration is never taken from clientInfo.
@@ -66,6 +78,87 @@ type Materializer struct {
 	Kernel Service
 	Store  statev2.Store
 	Roots  UAPRoots
+}
+
+type clientFact struct {
+	BindingID  string `json:"binding_id"`
+	ConfigRoot string `json:"config_root"`
+	Executable string `json:"executable"`
+}
+
+func clientFactsPath(dataRoot string) string { return filepath.Join(dataRoot, clientFactsFile) }
+
+func readClientFacts(dataRoot string) (map[string]clientFact, error) {
+	body, err := os.ReadFile(clientFactsPath(dataRoot))
+	if os.IsNotExist(err) {
+		return map[string]clientFact{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var facts map[string]clientFact
+	if err := json.Unmarshal(body, &facts); err != nil {
+		return nil, err
+	}
+	if facts == nil {
+		facts = map[string]clientFact{}
+	}
+	return facts, nil
+}
+
+func recordClientFact(dataRoot string, fact clientFact, clientID string) error {
+	if dataRoot == "" || clientID == "" {
+		return nil
+	}
+	facts, err := readClientFacts(dataRoot)
+	if err != nil {
+		return err
+	}
+	facts[clientID] = fact
+	body, err := json.Marshal(facts)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(clientFactsPath(dataRoot), body, 0600)
+}
+
+func (m Materializer) knownTargets(installationID, selected string) ([]uapinstaller.TargetFacts, error) {
+	if installationID == "" {
+		return nil, nil
+	}
+	state, err := m.Store.Load()
+	if err != nil {
+		return nil, err
+	}
+	installation, ok := findInstallation(state, installationID)
+	if !ok {
+		return nil, nil
+	}
+	facts, err := readClientFacts(filepath.Dir(m.Roots.StateFile))
+	if err != nil {
+		return nil, err
+	}
+	var out []uapinstaller.TargetFacts
+	for _, binding := range installation.Clients {
+		if binding.ClientID == selected {
+			continue
+		}
+		fact, ok := facts[binding.ClientID]
+		if !ok || fact.BindingID != binding.ClientBindingID {
+			continue
+		}
+		if info, err := os.Stat(fact.ConfigRoot); err != nil || !info.IsDir() {
+			continue
+		}
+		if m.Roots.RequireLiveProfiles {
+			receipt := installation.DataReceipts[binding.DataReceiptID]
+			if _, err := os.Stat(filepath.Join(receipt.Locator, "live-profiles.json")); err != nil {
+				continue
+			}
+		}
+		out = append(out, uapinstaller.TargetFacts{ClientID: binding.ClientID, BindingID: binding.ClientBindingID, ConfigRoot: fact.ConfigRoot, Executable: fact.Executable})
+	}
+	return out, nil
 }
 
 // GroupRemoveResult is one client's outcome from RemoveGroup.
@@ -243,18 +336,24 @@ func (m Materializer) engine(req MaterializeRequest, generation *uint64, res *in
 	if req.Integration != portable.Claude {
 		runner = nil
 	}
+	registry, err := NewRegistry()
+	if err != nil {
+		return nil, err
+	}
 	return uapinstaller.New(uapinstaller.Config{
-		StateRoot:        filepath.Dir(m.Roots.StateFile),
-		StateFile:        m.Roots.StateFile,
-		LockFile:         m.Roots.LockFile,
-		OperationsDir:    m.Roots.OperationsDir,
-		PluginDataBase:   m.Roots.PluginDataBase,
-		ManagedRoot:      m.Roots.ManagedRoot,
-		TempRoot:         filepath.Join(filepath.Dir(m.Roots.StateFile), "tmp"),
-		HelperExecutable: helper,
-		HelperVersion:    m.Roots.HelperVersion,
-		Runner:           runner,
-		ServerName:       portableServerName,
+		StateRoot:            filepath.Dir(m.Roots.StateFile),
+		StateFile:            m.Roots.StateFile,
+		LockFile:             m.Roots.LockFile,
+		OperationsDir:        m.Roots.OperationsDir,
+		PluginDataBase:       m.Roots.PluginDataBase,
+		ManagedRoot:          m.Roots.ManagedRoot,
+		TempRoot:             filepath.Join(filepath.Dir(m.Roots.StateFile), "tmp"),
+		HelperExecutable:     helper,
+		HelperVersion:        m.Roots.HelperVersion,
+		Runner:               runner,
+		Registry:             registry,
+		TrustedLocalPackages: true,
+		ServerName:           portableServerName,
 		ProjectArgs: func(facts uapinstaller.BindingFacts) ([]string, error) {
 			b, err := Complete(req.Identity, integrationOf(facts), facts.ClientID, facts.Scope, facts.TargetPath, facts.DataRoot)
 			if err != nil {
@@ -380,17 +479,25 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 	if err != nil {
 		return portable.Binding{}, err
 	}
+	known, err := m.knownTargets(req.Identity.InstallationID, string(req.Integration))
+	if err != nil {
+		return portable.Binding{}, err
+	}
 	result, err := m.apply(ctx, eng, uapinstaller.Request{
 		Operation: packageOperation(req), PackageRoot: req.PackageRoot, ClientID: string(req.Integration),
 		ClientConfigRoot: req.ClientConfigRoot, ClientExecutable: req.ClientExecutable,
 		InstallationID: req.Identity.InstallationID, OperationID: req.OperationID,
 		RequiredComponents: []string{"mcp", "skills"},
+		KnownTargets:       known,
 	}, req)
 	if err != nil {
 		return portable.Binding{}, persistResult(result, wrapUpdateRequired(err))
 	}
 	pb, err := Complete(req.Identity, req.Integration, result.Binding.ClientID, result.Binding.Scope, result.Binding.TargetPath, result.Binding.DataRoot)
 	if err != nil {
+		return portable.Binding{}, err
+	}
+	if err := recordClientFact(filepath.Dir(m.Roots.StateFile), clientFact{BindingID: pb.BindingID, ConfigRoot: req.ClientConfigRoot, Executable: req.ClientExecutable}, string(req.Integration)); err != nil {
 		return portable.Binding{}, err
 	}
 	if !req.KeepReservation {
@@ -516,6 +623,9 @@ func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest)
 		}
 		pb, err := Complete(req.Identity, req.Integration, facts.ClientID, facts.Scope, facts.TargetPath, facts.DataRoot)
 		if err != nil {
+			return nil, err
+		}
+		if err := recordClientFact(filepath.Dir(m.Roots.StateFile), clientFact{BindingID: pb.BindingID, ConfigRoot: req.ClientConfigRoot, Executable: req.ClientExecutable}, string(req.Integration)); err != nil {
 			return nil, err
 		}
 		if !req.KeepReservation {
@@ -828,6 +938,10 @@ func (m Materializer) previewInstall(ctx context.Context, req MaterializeRequest
 	if err != nil {
 		return uapinstaller.Plan{}, err
 	}
+	known, err := m.knownTargets(req.Identity.InstallationID, string(req.Integration))
+	if err != nil {
+		return uapinstaller.Plan{}, err
+	}
 	if recover {
 		if err := m.recoverOwnedJournals(ctx, req); err != nil {
 			return uapinstaller.Plan{}, err
@@ -838,6 +952,7 @@ func (m Materializer) previewInstall(ctx context.Context, req MaterializeRequest
 		ClientConfigRoot: req.ClientConfigRoot, ClientExecutable: req.ClientExecutable,
 		InstallationID: req.Identity.InstallationID, OperationID: req.OperationID + "-preview",
 		RequiredComponents: []string{"mcp", "skills"},
+		KnownTargets:       known,
 	})
 	if err != nil {
 		return uapinstaller.Plan{}, wrapUpdateRequired(err)
