@@ -32,7 +32,9 @@ func installerConfigCommand(args []string, out, stderr io.Writer) int {
 		}
 		for _, entry := range entries {
 			if entry.Name == args[2] && entry.Repo != "" {
-				fmt.Fprintln(out, entry.Repo)
+				if _, err := fmt.Fprintln(out, entry.Repo); err != nil {
+					return 1
+				}
 				break
 			}
 		}
@@ -70,20 +72,28 @@ func installerConfigCommand(args []string, out, stderr io.Writer) int {
 			}
 		}
 		if args[0] == "root" {
-			fmt.Fprintln(out, best.InstallPath)
+			if _, err := fmt.Fprintln(out, best.InstallPath); err != nil {
+				return 1
+			}
 		} else {
-			fmt.Fprintln(out, best.Version)
+			if _, err := fmt.Fprintln(out, best.Version); err != nil {
+				return 1
+			}
 		}
 		return 0
 	}
 	if len(args) == 1 && args[0] == "capabilities" {
-		fmt.Fprintln(out, "installer-v1")
+		if _, err := fmt.Fprintln(out, "installer-v1"); err != nil {
+			return 1
+		}
 		return 0
 	}
 	if len(args) > 0 && args[0] == "bootstrap" {
 		request, err := installerBootstrapRequest(args[1:])
 		if err != nil {
-			fmt.Fprintln(stderr, config.ConfigInvalid)
+			if _, writeErr := fmt.Fprintln(stderr, config.ConfigInvalid); writeErr != nil {
+				return 1
+			}
 			return 1
 		}
 		data, err := json.Marshal(request)
@@ -95,7 +105,9 @@ func installerConfigCommand(args []string, out, stderr io.Writer) int {
 	if len(args) == 3 && args[0] == "versions" {
 		entries, err := installerRegistry(args[1], args[2])
 		if err != nil {
-			fmt.Fprintln(stderr, config.ConfigInvalid)
+			if _, writeErr := fmt.Fprintln(stderr, config.ConfigInvalid); writeErr != nil {
+				return 1
+			}
 			return 1
 		}
 		versions := map[string]bool{}
@@ -115,26 +127,34 @@ func installerConfigCommand(args []string, out, stderr io.Writer) int {
 		}
 		sort.Strings(ordered)
 		for _, v := range ordered {
-			fmt.Fprintln(out, v)
+			if _, err := fmt.Fprintln(out, v); err != nil {
+				return 1
+			}
 		}
 		return 0
 	}
 	if len(args) == 0 || args[0] != "preflight" {
-		fmt.Fprintln(stderr, config.ConfigInvalid)
+		if _, err := fmt.Fprintln(stderr, config.ConfigInvalid); err != nil {
+			return 1
+		}
 		return 1
 	}
 	refresh := []string{}
 	for _, path := range args[1:] {
 		absolute, err := filepath.Abs(path)
 		if err != nil {
-			fmt.Fprintln(stderr, config.ConfigInvalid)
+			if _, writeErr := fmt.Fprintln(stderr, config.ConfigInvalid); writeErr != nil {
+				return 1
+			}
 			return 1
 		}
 		refresh = append(refresh, absolute)
 	}
 	data, err := json.Marshal(map[string]any{"refreshDirs": refresh})
 	if err != nil {
-		fmt.Fprintln(stderr, config.ConfigInvalid)
+		if _, writeErr := fmt.Fprintln(stderr, config.ConfigInvalid); writeErr != nil {
+			return 1
+		}
 		return 1
 	}
 	return configCommand([]string{"preflight-update", "--stdin", "--json"}, bytes.NewReader(data), io.Discard, stderr)
