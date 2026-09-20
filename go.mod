@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	git.sr.ht/~jackmordaunt/go-toast v1.1.2
+	github.com/777genius/plugin-kit-ai/cli v0.0.0-20260920062738-9ec4f52e11e1
 	github.com/777genius/plugin-kit-ai/install/integrationctl v0.0.0-20260919103549-148794ac5947
 	github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20260920051840-0b823e3a3346
 	github.com/777genius/plugin-kit-ai/sdk v1.1.1-0.20260908195702-6e6e6ac59f25

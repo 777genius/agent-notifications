@@ -104,7 +104,13 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 		}
 	}
 	needsPrompt := tty && !jsonOut && (req.Action == "" || (req.Action != setupwizard.ActionInspect && (len(req.Agents) == 0 || !req.Yes)))
-	prompt := &setupwizard.LinePrompt{In: in, Out: out}
+	var prompt setupwizard.Prompter
+	if tty && !jsonOut {
+		prompt, err = setupwizard.NewPublicPrompt(in, out)
+		if err != nil {
+			return writeSetupWizardPromptError(out, jsonOut, req, err)
+		}
+	}
 	if needsPrompt {
 		req.DiscoverAgents = func() []setupwizard.AgentCapability {
 			return setupwizard.DiscoverAgents(req)
