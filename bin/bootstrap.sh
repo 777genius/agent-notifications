@@ -1564,6 +1564,7 @@ configure_agent_notify() {
     if [ ! -x "$CONFIGURE_BINARY" ]; then
         echo -e "${YELLOW}⚠ Agent-notify setup skipped; installer binary not found.${NC}" >&2
         echo -e "${YELLOW}  Plugin/hooks install succeeded. Retry after the binary is available.${NC}" >&2
+        [ "$AGENT_NOTIFY_REQUEST" = explicit ] && return 1
         return 0
     fi
     if cli_has_setup_wizard "$CONFIGURE_BINARY"; then
@@ -1573,6 +1574,7 @@ configure_agent_notify() {
     if ! cli_has_setup_notifications "$CONFIGURE_BINARY"; then
         echo -e "${YELLOW}⚠ Agent-notify setup skipped; this published CLI does not support setup-notifications.${NC}" >&2
         echo -e "${YELLOW}  Plugin/hooks install succeeded. Desktop/hook notifications still work.${NC}" >&2
+        [ "$AGENT_NOTIFY_REQUEST" = explicit ] && return 1
         return 0
     fi
     configure_agent_policy
@@ -1580,13 +1582,13 @@ configure_agent_notify() {
 
 configure_agent_policy() {
     case "$(uname -s 2>/dev/null)" in
-        Darwin) ;;
+        Darwin|Linux) ;;
         *) return 0 ;;
     esac
-    if ! "$CONFIGURE_BINARY" setup-notifications configure --provider "$PRODUCT" "${CONFIGURE_ARGS[@]}"; then
+    if ! "$CONFIGURE_BINARY" setup-notifications configure --provider "$PRODUCT" ${CONFIGURE_ARGS[@]+"${CONFIGURE_ARGS[@]}"}; then
         echo -e "${YELLOW}⚠ Agent-notify setup failed; plugin/hooks install succeeded.${NC}" >&2
         echo -e "${YELLOW}  Desktop/hook notifications still work. Retry:${NC}" >&2
-        printf '  %s\n' "$(quote_shell_command "$CONFIGURE_BINARY" setup-notifications configure --provider "$PRODUCT" "${CONFIGURE_ARGS[@]}")" >&2
+        printf '  %s\n' "$(quote_shell_command "$CONFIGURE_BINARY" setup-notifications configure --provider "$PRODUCT" ${CONFIGURE_ARGS[@]+"${CONFIGURE_ARGS[@]}"})" >&2
         return 1
     fi
     return 0

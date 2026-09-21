@@ -9,6 +9,9 @@ import "golang.org/x/sys/unix"
 // Darwin execution qualification belongs to the macOS coordinator.
 type PlatformClock struct{}
 
+// DefaultClock is the production Darwin journal clock.
+func DefaultClock() Clock { return PlatformClock{} }
+
 func (PlatformClock) Sample() Sample {
 	boot, e := unix.Sysctl("kern.bootsessionuuid")
 	if e != nil || !validText(boot, 256, true) {

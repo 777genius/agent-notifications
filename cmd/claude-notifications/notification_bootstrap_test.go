@@ -1118,16 +1118,20 @@ install_claude || exit 1
 	}
 }
 
-func TestNotificationBootstrapSkipsMacPolicyOnOtherPlatforms(t *testing.T) {
+func TestNotificationBootstrapRunsPolicyOnLinux(t *testing.T) {
 	source, err := os.ReadFile(filepath.Join(notificationRepoRoot(t), "bin", "bootstrap.sh"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	prefix := strings.TrimSuffix(strings.TrimSpace(string(source)), `main "$@"`)
 	home := t.TempDir()
+	binary := filepath.Join(home, "configure")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" >\"$HOME/configure.args\"\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
 	script := prefix + `
 uname() { echo Linux; }
-CONFIGURE_BINARY="$HOME/must-not-run"
+CONFIGURE_BINARY="$HOME/configure"
 PRODUCT=both
 CONFIGURE_ARGS=()
 configure_agent_policy
@@ -1135,6 +1139,13 @@ configure_agent_policy
 	command := exec.Command("bash", "-c", script)
 	command.Env = append(os.Environ(), "HOME="+home)
 	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("non-Darwin policy gate: %v\n%s", err, output)
+		t.Fatalf("Linux policy gate: %v\n%s", err, output)
+	}
+	got, err := os.ReadFile(filepath.Join(home, "configure.args"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "setup-notifications configure --provider both\n" {
+		t.Fatalf("Linux configure argv = %q", got)
 	}
 }
