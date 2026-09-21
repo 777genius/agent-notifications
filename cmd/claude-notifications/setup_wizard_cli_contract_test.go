@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -379,7 +381,7 @@ func TestParseSetupWizardRejectsRelativeEnvProfile(t *testing.T) {
 
 func TestQuoteWizardArgsQuotesPathsWithSpaces(t *testing.T) {
 	got := quoteWizardArgs([]string{"setup-notifications", "wizard", "--codex-home", `/tmp/codex home`, "--yes"})
-	if len(got) != 5 || got[3] != `"/tmp/codex home"` || got[4] != "--yes" {
+	if len(got) != 5 || got[3] != `'/tmp/codex home'` || got[4] != "'--yes'" {
 		t.Fatalf("quoted: %#v", got)
 	}
 }
@@ -388,10 +390,24 @@ func TestReportAgentNotifySetupFailureQuotesCodexHome(t *testing.T) {
 	var buf bytes.Buffer
 	reportAgentNotifySetupFailure(&buf, "codex", []string{"--codex-home", `/tmp/codex home`, "--navigation", "none"})
 	got := buf.String()
-	if !strings.Contains(got, `Retry:`) || !strings.Contains(got, `"/tmp/codex home"`) {
+	if !strings.Contains(got, `Retry:`) || !strings.Contains(got, `'/tmp/codex home'`) {
 		t.Fatalf("unquoted retry: %s", got)
 	}
 	if strings.Contains(got, "configure --provider codex --codex-home /tmp/codex home --navigation") {
 		t.Fatal("space path split in retry", got)
+	}
+}
+
+func TestQuoteWizardArgsBashRoundTrip(t *testing.T) {
+	want := []string{"plain", "spaces here", "dollar$sign", "apostrophe's", `back\\slash`, "$(touch SHOULD_NOT_EXIST) ; & |"}
+	quoted := strings.Join(quoteWizardArgs(want), " ")
+	cmd := exec.Command("bash", "-c", `eval "set -- $1"; printf '%s\0' "$@"`, "_", quoted)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Split(strings.TrimRight(string(out), "\x00"), "\x00")
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("round trip = %#v, want %#v", got, want)
 	}
 }

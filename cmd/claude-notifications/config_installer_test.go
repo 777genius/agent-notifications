@@ -76,3 +76,42 @@ func TestInstallerRegistryRejectsDuplicateKeys(t *testing.T) {
 		t.Fatal("duplicate registry key accepted")
 	}
 }
+
+func TestInstallerRootPrefersValidVersionsOverPlaceholders(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "registry.json")
+	entries := []map[string]any{
+		{"installPath": "/placeholder-first", "version": "unknown"},
+		{"installPath": "/valid-low", "version": "1.2.3"},
+		{"installPath": "/missing-version"},
+		{"installPath": "/valid-high", "version": "2.0.0"},
+	}
+	data, err := json.Marshal(map[string]any{"plugins": map[string]any{"test": entries}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	if code := installerConfigCommand([]string{"root", path, "test"}, &out, &stderr); code != 0 {
+		t.Fatalf("root: %d %s", code, stderr.String())
+	}
+	if got := strings.TrimSpace(out.String()); got != "/valid-high" {
+		t.Fatalf("root = %q", got)
+	}
+}
+
+func TestInstallerRootPlaceholderOnlyUsesRegistryOrder(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "registry.json")
+	data := []byte(`{"plugins":{"test":[{"installPath":"/first","version":"unknown"},{"installPath":"/second"}]}}`)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	if code := installerConfigCommand([]string{"root", path, "test"}, &out, &stderr); code != 0 {
+		t.Fatalf("root: %d %s", code, stderr.String())
+	}
+	if got := strings.TrimSpace(out.String()); got != "/first" {
+		t.Fatalf("root = %q", got)
+	}
+}

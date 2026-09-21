@@ -257,7 +257,7 @@ main --product both
 	if !strings.Contains(body, "--claude-config "+claudeHome) {
 		t.Fatal(body)
 	}
-	if flagValue(strings.Fields(body), "--claude-mcp-config") != filepath.Join(claudeHome, ".claude.json") {
+	if flagValue(strings.Fields(body), "--claude-mcp-config") != filepath.Join(home, ".claude.json") {
 		t.Fatal("bootstrap must pass the resolved Claude MCP config path", body)
 	}
 }
@@ -705,7 +705,7 @@ func TestNotificationInitWizard(t *testing.T) {
 	if !strings.Contains(got, "--package "+filepath.Join(bundle, "portable-package")) {
 		t.Fatal(got)
 	}
-	if flagValue(strings.Fields(got), "--claude-mcp-config") != filepath.Join(home, ".claude", ".claude.json") {
+	if flagValue(strings.Fields(got), "--claude-mcp-config") != filepath.Join(home, ".claude.json") {
 		t.Fatal("init must pass the resolved Claude MCP config path", got)
 	}
 }

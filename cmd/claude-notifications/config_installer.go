@@ -48,27 +48,17 @@ func installerConfigCommand(args []string, out, stderr io.Writer) int {
 		if len(entries) == 0 {
 			return 0
 		}
+		// Registry order is the deterministic fallback for placeholder-only
+		// registries. A real semantic version always outranks placeholders,
+		// regardless of where it occurs in the registry.
 		best := entries[0]
-		placeholder := func(v string) bool { v = strings.TrimPrefix(strings.ToLower(v), "v"); return v == "" || v == "unknown" }
-		greater := func(a, b string) bool {
-			x, y := strings.Split(a, "."), strings.Split(b, ".")
-			for i := 0; i < 3; i++ {
-				av, bv := 0, 0
-				if i < len(x) {
-					av, _ = strconv.Atoi(x[i])
-				}
-				if i < len(y) {
-					bv, _ = strconv.Atoi(y[i])
-				}
-				if av != bv {
-					return av > bv
-				}
-			}
-			return false
-		}
+		bestVersion := strings.TrimPrefix(best.Version, "v")
+		bestValid := installerVersion.MatchString(bestVersion)
 		for _, entry := range entries[1:] {
-			if placeholder(entry.Version) || (!placeholder(best.Version) && greater(entry.Version, best.Version)) {
-				best = entry
+			version := strings.TrimPrefix(entry.Version, "v")
+			valid := installerVersion.MatchString(version)
+			if valid && (!bestValid || greaterInstallerVersion(version, bestVersion)) {
+				best, bestVersion, bestValid = entry, version, true
 			}
 		}
 		if args[0] == "root" {
@@ -158,6 +148,23 @@ func installerConfigCommand(args []string, out, stderr io.Writer) int {
 		return 1
 	}
 	return configCommand([]string{"preflight-update", "--stdin", "--json"}, bytes.NewReader(data), io.Discard, stderr)
+}
+
+func greaterInstallerVersion(a, b string) bool {
+	x, y := strings.Split(a, "."), strings.Split(b, ".")
+	for i := 0; i < 3; i++ {
+		av, bv := 0, 0
+		if i < len(x) {
+			av, _ = strconv.Atoi(x[i])
+		}
+		if i < len(y) {
+			bv, _ = strconv.Atoi(y[i])
+		}
+		if av != bv {
+			return av > bv
+		}
+	}
+	return false
 }
 
 var installerVersion = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)

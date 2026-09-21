@@ -138,6 +138,7 @@ if [ "$SKIP_AGENT_NOTIFY" != true ]; then
     if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
       wizard+=(--claude-config "$CLAUDE_CONFIG_DIR")
     fi
+    wizard+=(--claude-mcp-config "${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json")
     claude_exec=$(command -v claude 2>/dev/null || true)
     case "$claude_exec" in
       /*|[A-Za-z]:/*|[A-Za-z]:\\*) wizard+=(--claude-executable "$claude_exec" --client-executable "$claude_exec") ;;

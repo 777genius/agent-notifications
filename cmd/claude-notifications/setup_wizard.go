@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -403,11 +402,7 @@ func stdinIsCharDevice() bool {
 func quoteWizardArgs(args []string) []string {
 	out := make([]string, len(args))
 	for i, arg := range args {
-		if arg == "" || strings.ContainsAny(arg, " \t\n'\"") {
-			out[i] = strconv.Quote(arg)
-			continue
-		}
-		out[i] = arg
+		out[i] = "'" + strings.ReplaceAll(arg, "'", "'\"'\"'") + "'"
 	}
 	return out
 }

@@ -321,6 +321,8 @@ func TestInspectReportsDiscoveredMCPConfigPath(t *testing.T) {
 }
 
 func TestDiscoveryConfigPathUsesExistingProfileFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	codexHome := filepath.Join(t.TempDir(), "codex")
 	claudeHome := filepath.Join(t.TempDir(), "claude")
 	for _, dir := range []string{codexHome, claudeHome} {
@@ -353,6 +355,13 @@ func TestDiscoveryConfigPathUsesExistingProfileFile(t *testing.T) {
 	}
 	if got := discoveryConfigPath(req, portable.Claude); got != claudeCfg {
 		t.Fatalf("claude default with other explicit: %s", got)
+	}
+	defaultClaude := filepath.Join(home, ".claude.json")
+	if err := os.WriteFile(defaultClaude, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := discoveryConfigPath(Request{}, portable.Claude); got != defaultClaude {
+		t.Fatalf("claude home default: %s", got)
 	}
 	envReq := Request{EnvCodexHome: codexHome, EnvClaudeConfig: claudeHome}
 	applyHostSnapshots(&envReq)

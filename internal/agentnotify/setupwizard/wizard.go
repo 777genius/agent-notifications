@@ -2770,8 +2770,9 @@ func discovery(req Request, agent portable.Integration, runtimeRoot string, snap
 
 // discoveryConfigPath is the owned client MCP file to hand off. Explicit
 // --mcp-config / --claude-mcp-config win. Otherwise a regular file already
-// present in the selected profile is used (Codex config.toml, Claude
-// .claude.json). Missing files stay empty so fresh installs skip handoff.
+// present in the selected profile is used for Codex. Claude's registration
+// file is independent of its UAP plugin profile: it defaults to HOME/.claude.json
+// and uses the explicit Claude config root only when one was supplied.
 func discoveryConfigPath(req Request, agent portable.Integration) string {
 	if req.MCPConfig != nil {
 		if path := req.MCPConfig[string(agent)]; path != "" {
@@ -2779,6 +2780,9 @@ func discoveryConfigPath(req Request, agent portable.Integration) string {
 		}
 	}
 	root := clientConfig(req, agent)
+	if agent == portable.Claude && root == "" {
+		root = os.Getenv("HOME")
+	}
 	if !explicitAbs(root) {
 		return ""
 	}
