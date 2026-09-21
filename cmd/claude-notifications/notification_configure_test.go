@@ -317,7 +317,7 @@ func TestNotificationConfigurePluginSingleSource(t *testing.T) {
 }
 
 func TestNotificationConfigureReportsPersistedGlobal(t *testing.T) {
-	f, request, deps := configureFixture(t)
+	_, request, deps := configureFixture(t)
 	request.Route = nil
 	result, err := configureNotifications(setupCommandContext(t), request, deps)
 	if err == nil || result.DesktopEnabled != nil || result.GlobalConfiguration != "configuration_required" {
