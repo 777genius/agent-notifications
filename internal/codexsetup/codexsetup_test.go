@@ -503,6 +503,38 @@ func TestOwnsHandlerBoundaries(t *testing.T) {
 	}
 }
 
+func TestHasManagedHooksRequiresExactGeneratedCommand(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, "hooks.json")
+	installDir := filepath.Join(home, InstallDirName)
+
+	foreign := []byte(`{"description":"documentation mentions codex-hook-wrapper","hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo foreign"}]}]}}`)
+	if err := os.WriteFile(path, foreign, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if HasManagedHooks(home) {
+		t.Fatal("foreign text containing launcher name was classified as managed")
+	}
+
+	managed, err := RenderHooksJSON(installDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, managed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !HasManagedHooks(home) {
+		t.Fatal("exact generated hook was not classified as managed")
+	}
+
+	if err := os.WriteFile(path, []byte(`{"hooks":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if HasManagedHooks(home) {
+		t.Fatal("malformed hooks file was classified as managed")
+	}
+}
+
 func TestResolveCodexHomePrecedence(t *testing.T) {
 	root := t.TempDir()
 	explicit := filepath.Join(root, "explicit")

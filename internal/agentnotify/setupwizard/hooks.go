@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
 	"github.com/777genius/agent-notifications/internal/codexsetup"
@@ -24,8 +23,7 @@ func inspectHooks(req Request, agent portable.Integration, out Result) Result {
 		return out
 	}
 	path := filepath.Join(home, "hooks.json")
-	data, err := os.ReadFile(path)
-	if err == nil && strings.Contains(string(data), "codex-hook-wrapper") {
+	if codexsetup.HasManagedHooks(home) {
 		out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "hooks", Outcome: "installed", Reason: path})
 		return out
 	}
@@ -41,8 +39,7 @@ func hooksManaged(req Request, agent portable.Integration) bool {
 	if !explicitAbs(home) {
 		return false
 	}
-	data, err := os.ReadFile(filepath.Join(home, "hooks.json"))
-	return err == nil && strings.Contains(string(data), "codex-hook-wrapper")
+	return codexsetup.HasManagedHooks(home)
 }
 
 // LiveClientUnits reports currently managed hooks/notify for each selected
