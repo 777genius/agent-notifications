@@ -32,7 +32,7 @@ assert_output() {
 }
 test_env_setup "$sandbox"
 sed '/^main "\$@"$/d' "$root/install.sh" > "$sandbox/functions.sh"
-for scenario in staged staged_corrupt offline fresh_offline download checksum missing_checksum executable interrupt desktop fresh_desktop success fresh_success optional_interrupt legacy_fallback retained_legacy failed_fallback; do
+for scenario in staged staged_corrupt offline fresh_offline download checksum missing_checksum executable interrupt desktop fresh_desktop success fresh_success postcommit_manifest optional_interrupt legacy_fallback retained_legacy failed_fallback; do
     case_dir="$sandbox/$scenario"
     mkdir -p "$case_dir"
     (
@@ -80,7 +80,48 @@ for scenario in staged staged_corrupt offline fresh_offline download checksum mi
         eval "$(declare -f download_binary | sed '1s/download_binary/real_download_binary/')"
         MAX_RETRIES=1 RETRY_DELAY=0
         download_checksums() {
-            printf '#!/bin/bash\necho claude-notifications-new-version\nexit 0\n' > "$SCRIPT_DIR/payload"
+            cat > "$SCRIPT_DIR/payload" <<'PAYLOAD'
+#!/bin/bash
+# agent-notifications-managed-writer-protocol-v1
+if [ "$1" = internal-install-runtime ]; then
+    stage="" target="" entry="" refresh=false
+    shift
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --stage) stage=$2; shift 2 ;;
+            --target) target=$2; shift 2 ;;
+            --entry) entry=$2; shift 2 ;;
+            --control-root|--consumer) shift 2 ;;
+            --refresh) refresh=true; shift ;;
+            --require-native|--remove|--purge-native) shift ;;
+            *) shift ;;
+        esac
+    done
+    [ -n "$stage" ] && [ -n "$target" ] || exit 2
+    if [ "$stage" = "$target" ]; then
+        if [ -n "$entry" ]; then
+            ln -sf "$entry" "$target/claude-notifications" 2>/dev/null || true
+            ln -sf "$entry" "$target/agent-notifications" 2>/dev/null || true
+        fi
+        exit 0
+    fi
+    for f in "$stage"/*; do
+        [ -e "$f" ] || continue
+        base=$(basename "$f")
+        case "$base" in .install-stage.*|old-*|unusable-*) continue ;; esac
+        if [ -d "$f" ]; then
+            rm -rf "$target/$base"
+            cp -R "$f" "$target/$base"
+        else
+            cp "$f" "$target/$base"
+            chmod +x "$target/$base" 2>/dev/null || true
+        fi
+    done
+    exit 0
+fi
+echo claude-notifications-new-version
+exit 0
+PAYLOAD
             [ "$scenario" != executable ] || printf '#!/bin/bash\nexit 1\n' > "$SCRIPT_DIR/payload"
             head -c 1000000 /dev/zero >> "$SCRIPT_DIR/payload"
             [ "$scenario" != missing_checksum ] || return 1
@@ -103,10 +144,14 @@ for scenario in staged staged_corrupt offline fresh_offline download checksum mi
             if [ "$scenario" = interrupt ]; then sh -c 'kill -TERM "$PPID"'; fi
         }
         download_terminal_notifier_modern() {
-            [ "$scenario" = fresh_success ] || return 1
+            case "$scenario" in
+                success|fresh_success|staged|postcommit_manifest|optional_interrupt) ;;
+                *) return 1 ;;
+            esac
             mkdir -p "$SCRIPT_DIR/ClaudeNotifier.app/Contents/MacOS"
             printf '#!/bin/bash\necho new-notifier\n' > "$SCRIPT_DIR/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern"
             chmod +x "$SCRIPT_DIR/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern"
+            printf '{"SchemaVersion":1,"ProtocolVersion":1,"DecoderFloor":1,"ExecutableSHA256":"test"}\n' > "$SCRIPT_DIR/ClaudeNotifier.app.managed-runtime.json"
         }
         download_terminal_notifier() {
             [ "$scenario" = legacy_fallback ] || return 1
@@ -122,6 +167,21 @@ for scenario in staged staged_corrupt offline fresh_offline download checksum mi
         }
         create_claude_notifications_app() { :; }
         setup_iterm2_venv() { :; }
+        if [ "$scenario" = postcommit_manifest ]; then
+            # Runtime promotion is already committed before optional companions
+            # are handled. It must not attempt a fatal manifest write afterward.
+            eval "$(declare -f guard_install_paths | sed '1s/guard_install_paths/real_guard_install_paths/')"
+            guard_install_paths() {
+                local path
+                for path in "$@"; do
+                    if [ "$path" = "$case_dir/.checksums.txt" ]; then
+                        printf 'unexpected post-commit manifest write\n' >> "$case_dir/postcommit-attempt"
+                        return 1
+                    fi
+                done
+                real_guard_install_paths "$@"
+            }
+        fi
         if [[ "$scenario" == staged* ]]; then
             download_checksums
             mkdir "$case_dir/assets"
@@ -139,24 +199,22 @@ for scenario in staged staged_corrupt offline fresh_offline download checksum mi
     ) > "$case_dir/output" 2>&1 && status=0 || status=$?
     binary="$case_dir/claude-notifications-darwin-amd64"
     case "$scenario" in
-        staged|success|fresh_success|optional_interrupt)
+        staged|success|fresh_success|postcommit_manifest|optional_interrupt)
             "$binary" | grep -q new-version
-            [ -x "$case_dir/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern" ] ;;
+            [ -x "$case_dir/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern" ]
+            assert_output new-notifier 'attested modern notifier must be published' "$case_dir/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern"
+            [ -f "$case_dir/ClaudeNotifier.app.managed-runtime.json" ] ;;
         legacy_fallback|retained_legacy)
-            [ "$status" = 0 ]
-            "$binary" | grep -q new-version
-            # Match runtime discovery: prefer the modern path if it exists.
-            selected="$case_dir/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern"
-            [ -e "$selected" ] || selected="$case_dir/terminal-notifier.app/Contents/MacOS/terminal-notifier"
-            [ "$("$selected")" = legacy-notifier ]
-            [ ! -e "$case_dir/ClaudeNotifier.app" ] ;;
+            [ "$status" != 0 ]
+            assert_output old-version 'existing binary was not preserved' "$binary" ;;
         fresh_desktop|fresh_offline) [ ! -e "$binary" ]; [ "$status" != 0 ] ;;
         *) assert_output old-version 'existing binary was not preserved' "$binary"
            assert_output old-version 'existing binary symlink was not preserved' "$case_dir/claude-notifications" ;;
     esac
     [ "$scenario" != staged_corrupt ] || assert 'corrupt staged binary must fail installation' test "$status" != 0
+    [ "$scenario" != postcommit_manifest ] || assert 'promotion must not write a manifest after commit' test ! -e "$case_dir/postcommit-attempt"
     assert_output utility 'existing utility was not preserved' cat "$case_dir/sound-preview"
-    if [[ "$scenario" != fresh_* && "$scenario" != desktop && "$scenario" != *legacy* && "$scenario" != *fallback ]]; then
+    if [[ "$scenario" != fresh_* && "$scenario" != desktop && "$scenario" != *legacy* && "$scenario" != *fallback && "$scenario" != success && "$scenario" != staged && "$scenario" != postcommit_manifest && "$scenario" != optional_interrupt ]]; then
         assert_output old-notifier 'existing notifier was not preserved' "$case_dir/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern"
     fi
     if [ "$scenario" = failed_fallback ]; then
@@ -180,6 +238,28 @@ scenario=utility_downloader
     source "$sandbox/functions.sh"
     trap 'result=$?; [ "$result" = 0 ] || echo "UTILITY PHASE FAILED: ${phase:-setup} (status $result)" >&2' EXIT
     utility="$INSTALL_TARGET_DIR/sound-preview-test"
+    CHECKSUMS_PATH="$INSTALL_TARGET_DIR/checksums.txt"
+    utility_fixture="$INSTALL_TARGET_DIR/utility-fixture"
+    printf '#!/bin/sh\necho new-utility\n' > "$utility_fixture"
+    head -c 100001 /dev/zero >> "$utility_fixture"
+    chmod +x "$utility_fixture"
+    if command -v shasum >/dev/null 2>&1; then
+        valid_digest=$(shasum -a 256 "$utility_fixture" | awk '{print $1}')
+    else
+        valid_digest=$(sha256sum "$utility_fixture" | awk '{print $1}')
+    fi
+    set_manifest() {
+        case "$1" in
+            valid) printf '%s  test\n' "$valid_digest" > "$CHECKSUMS_PATH" ;;
+            mismatch) printf '%064d  test\n' 0 > "$CHECKSUMS_PATH" ;;
+            missing) printf '%s  other-test\n' "$valid_digest" > "$CHECKSUMS_PATH" ;;
+            substring) printf '%s  prefix-test-suffix\n' "$valid_digest" > "$CHECKSUMS_PATH" ;;
+            duplicate) printf '%s  test\n%s  test\n' "$valid_digest" "$valid_digest" > "$CHECKSUMS_PATH" ;;
+            malformed) printf 'not-a-sha256  test\n' > "$CHECKSUMS_PATH" ;;
+            absent) rm -f "$CHECKSUMS_PATH" ;;
+        esac
+    }
+    set_manifest valid
     FORCE_UPDATE=true
     transfer=interrupt
     curl() {
@@ -189,18 +269,17 @@ scenario=utility_downloader
             shift
         done
         [ "$output" != "$utility" ] || return 99
-        printf partial > "$output"
         case "$transfer" in
             interrupt)
+                printf partial > "$output"
                 # Avoid command substitution: Bash 3.2 forks an intermediate
                 # shell there, making the reported PPID the wrong process.
                 sh -c 'kill -TERM "$PPID"'
                 return 1 ;;
-            fail) return 22 ;;
-            short) return 0 ;;
+            fail) printf partial > "$output"; return 22 ;;
+            short) printf partial > "$output"; return 0 ;;
         esac
-        printf '#!/bin/sh\necho new-utility\n' > "$output"
-        head -c 100001 /dev/zero >> "$output"
+        cp "$utility_fixture" "$output"
     }
     phase=initial_interrupt
     download_utility test "$utility" && status=0 || status=$?
@@ -210,6 +289,7 @@ scenario=utility_downloader
     assert_output '' 'initial interrupt temp file was not cleaned' printf %s "$artifacts"
     phase=initial_success
     transfer=success
+    set_manifest valid
     download_utility test "$utility"
     assert_output new-utility 'successful download did not install the utility' "$utility"
     cp "$utility" "$INSTALL_TARGET_DIR/expected"
@@ -240,6 +320,24 @@ scenario=utility_downloader
     chmod +x "$utility"
     download_utility test "$utility"
     assert_output new-utility 'forced replacement did not install the new utility' "$utility"
+    cp "$utility" "$INSTALL_TARGET_DIR/verified-utility"
+    for manifest_mode in mismatch missing substring duplicate malformed absent; do
+        phase="checksum_$manifest_mode"
+        set_manifest "$manifest_mode"
+        download_utility test "$utility" && status=0 || status=$?
+        assert "$phase must fail closed" test "$status" != 0
+        assert "$phase must preserve the live utility" cmp "$utility" "$INSTALL_TARGET_DIR/verified-utility"
+    done
+    phase=checksum_no_tool
+    set_manifest valid
+    command() {
+        case "${1:-}:${2:-}" in -v:shasum|-v:sha256sum) return 1 ;; esac
+        builtin command "$@"
+    }
+    download_utility test "$utility" && status=0 || status=$?
+    unset -f command
+    assert "$phase must fail closed" test "$status" != 0
+    assert "$phase must preserve the live utility" cmp "$utility" "$INSTALL_TARGET_DIR/verified-utility"
     # Optional phase must not even request the required Windows focus asset.
     phase=focus_exclusion
     FOCUS_HANDLER_NAME=focus.exe FOCUS_HANDLER_PATH="$INSTALL_TARGET_DIR/focus.exe"
@@ -249,4 +347,113 @@ scenario=utility_downloader
     create_utility_symlink() { :; }
     download_utilities
     echo 'PASS: real optional downloader interruption, preservation, repair, force, focus exclusion'
+)
+
+# Exercise archive checksum and signature gates without a network, macOS host,
+# real profile, or real app bundle.
+scenario=notifier_integrity
+(
+    export INSTALL_TARGET_DIR="$sandbox/notifier"
+    mkdir -p "$INSTALL_TARGET_DIR"
+    source "$sandbox/functions.sh"
+    SCRIPT_DIR="$INSTALL_TARGET_DIR"
+    CHECKSUMS_PATH="$SCRIPT_DIR/checksums.txt"
+    MODERN_NOTIFIER_URL='https://release.invalid/ClaudeNotifier.app.zip'
+    archive="$SCRIPT_DIR/archive-fixture"
+    printf 'fixture archive bytes\n' > "$archive"
+    if command -v shasum >/dev/null 2>&1; then
+        archive_digest=$(shasum -a 256 "$archive" | awk '{print $1}')
+    else
+        archive_digest=$(sha256sum "$archive" | awk '{print $1}')
+    fi
+    curl() {
+        local output=''
+        while [ "$#" -gt 0 ]; do
+            if [ "$1" = -o ]; then output="$2"; shift; fi
+            shift
+        done
+        cp "$archive" "$output"
+    }
+    unzip() {
+        [ "${1:-}" != -t ] || return 0
+        mkdir -p "$SCRIPT_DIR/ClaudeNotifier.app/Contents/MacOS"
+        printf '#!/bin/sh\nexit 0\n' > "$SCRIPT_DIR/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern"
+        chmod +x "$SCRIPT_DIR/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern"
+        printf '{}\n' > "$SCRIPT_DIR/ClaudeNotifier.app.managed-runtime.json"
+    }
+    xattr() { :; }
+    codesign() { [ "$signature" = valid ]; }
+    MAX_RETRIES=1 RETRY_DELAY=0 signature=valid
+    printf '%s  ClaudeNotifier.app.zip\n' "$archive_digest" > "$CHECKSUMS_PATH"
+    download_terminal_notifier_modern
+    [ -x "$SCRIPT_DIR/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern" ]
+    rm -rf "$SCRIPT_DIR/ClaudeNotifier.app" "$SCRIPT_DIR/ClaudeNotifier.app.managed-runtime.json"
+    for phase in checksum_mismatch checksum_missing checksum_duplicate signature_failure; do
+        signature=valid
+        case "$phase" in
+            checksum_mismatch) printf '%064d  ClaudeNotifier.app.zip\n' 0 > "$CHECKSUMS_PATH" ;;
+            checksum_missing) printf '%s  other.zip\n' "$archive_digest" > "$CHECKSUMS_PATH" ;;
+            checksum_duplicate) printf '%s  ClaudeNotifier.app.zip\n%s  ClaudeNotifier.app.zip\n' "$archive_digest" "$archive_digest" > "$CHECKSUMS_PATH" ;;
+            signature_failure) printf '%s  ClaudeNotifier.app.zip\n' "$archive_digest" > "$CHECKSUMS_PATH"; signature=invalid ;;
+        esac
+        download_terminal_notifier_modern && status=0 || status=$?
+        assert "$phase must fail closed" test "$status" != 0
+        assert "$phase must remove the staged app" test ! -e "$SCRIPT_DIR/ClaudeNotifier.app"
+    done
+    echo 'PASS: notifier archive checksum and signature fail closed'
+)
+
+# A failed or malformed manifest refresh must not truncate the last valid
+# manifest. Successful validated bytes replace it atomically.
+scenario=checksum_manifest_download
+(
+    export INSTALL_TARGET_DIR="$sandbox/checksum-manifest"
+    mkdir -p "$INSTALL_TARGET_DIR"
+    source "$sandbox/functions.sh"
+    INSTALL_PRIVATE_DOWNLOAD=true
+    CHECKSUMS_PATH="$INSTALL_TARGET_DIR/checksums.txt"
+    CHECKSUMS_URL='https://release.invalid/checksums.txt'
+    BINARY_NAME=test
+    guard_download_paths() {
+        local path
+        for path in "$@"; do
+            case "$path" in
+                *.download.*)
+                    if [ ! -e "$path" ]; then
+                        printf 'guarded missing temp after promotion\n' > "$INSTALL_TARGET_DIR/post-move-guard"
+                        return 1
+                    fi
+                    ;;
+            esac
+        done
+        return 0
+    }
+    old_digest=$(printf '%064d' 1)
+    new_digest=$(printf '%064d' 2)
+    printf '%s  test\n' "$old_digest" > "$CHECKSUMS_PATH"
+    transfer=failed
+    curl() {
+        local output=''
+        while [ "$#" -gt 0 ]; do
+            if [ "$1" = -o ]; then output="$2"; shift; fi
+            shift
+        done
+        case "$transfer" in
+            failed) printf partial > "$output"; return 22 ;;
+            malformed) printf 'not-a-checksum  test\n' > "$output" ;;
+            valid) printf '%s  test\n' "$new_digest" > "$output" ;;
+        esac
+    }
+    for transfer in failed malformed; do
+        download_checksums && status=0 || status=$?
+        assert "$transfer manifest refresh must fail" test "$status" != 0
+        assert_output "$old_digest  test" "$transfer manifest refresh changed live bytes" cat "$CHECKSUMS_PATH"
+    done
+    transfer=valid
+    download_checksums
+    assert_output "$new_digest  test" 'validated manifest did not replace live bytes' cat "$CHECKSUMS_PATH"
+    assert 'successful promotion re-guarded the consumed temp path' test ! -e "$INSTALL_TARGET_DIR/post-move-guard"
+    artifacts=$(find "$INSTALL_TARGET_DIR" -maxdepth 1 -name 'checksums.txt.download.*' -print)
+    assert_output '' 'checksum manifest temp file was not cleaned' printf %s "$artifacts"
+    echo 'PASS: checksum manifest refresh is validated and atomic'
 )

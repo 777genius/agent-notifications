@@ -4,6 +4,7 @@ test_env_enter "$0" "$@"
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 python3 -I - "$ROOT" <<'PY'
+import hashlib
 import json
 import os
 import shlex
@@ -22,6 +23,12 @@ PINNED_SETUP_URL = (
     'https://raw.githubusercontent.com/777genius/agent-notifications/'
     + PINNED_SETUP_SHA + '/bin/setup.sh'
 )
+# The public pin and main commit 9039815 reference the same setup.sh Git blob.
+pinned_loader = (root / 'bin/testdata/setup-9039815833ed8d16a11ee4a45de62bb0119c874f.sh').read_text(
+    encoding='utf-8')
+assert hashlib.sha256(pinned_loader.encode()).hexdigest() == \
+    '7b00c0cfbeff547e60d38d4703873975b9dcea5682a8312f908477d0d0e4e4a4'
+assert 'python3 or node is required' in pinned_loader
 assert PINNED_SETUP_SHA in public_command
 for rel in ('docs/INSTALLATION.md', 'landing/data/install.ts',
             'landing/tests/install.test.ts', 'landing/tests/browser/install.spec.ts'):
@@ -32,14 +39,16 @@ exit 9009
 '''
 sha = '0123456789abcdef0123456789abcdef01234567'
 raw = 'https://raw.githubusercontent.com/777genius/agent-notifications/' + sha + '/bin'
-assert 'usable_python3()' in loader and "python3 -I -c 'import json'" in loader
-assert '</dev/null' in loader
+assert 'python3' not in loader and 'node' not in loader
+assert 'application/vnd.github.sha' in loader and 'url_effective' in loader
 curl_stub = '''#!/usr/bin/env bash
 set -eu
-output=""; url=""
+output=""; url=""; format=""; accept=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         -o) output="$2"; shift 2 ;;
+        -w) format="$2"; shift 2 ;;
+        -H) accept="$2"; shift 2 ;;
         -*) shift ;;
         *) url="$1"; shift ;;
     esac
@@ -47,17 +56,27 @@ done
 printf '%s\\n' "$url" >> "$CASE_DIR/requests"
 case "$url" in
     ''' + PINNED_SETUP_URL + ''') kind=setup ;;
-    https://api.github.com/repos/777genius/agent-notifications/releases/latest) kind=latest ;;
+    https://github.com/777genius/agent-notifications/releases/latest) kind=latest ;;
+    https://api.github.com/repos/777genius/agent-notifications/releases/latest) kind=latest_json ;;
     https://api.github.com/repos/777genius/agent-notifications/commits/v1.43.0) kind=commit ;;
     https://raw.githubusercontent.com/777genius/agent-notifications/*/bin/bootstrap.sh) kind=bootstrap ;;
     *) echo "Unexpected URL: $url" >&2; exit 99 ;;
 esac
+if [ "$kind" = latest ] && [ -n "$format" ]; then
+    cat "$CASE_DIR/latest_url"
+    if [ "${FAIL_DOWNLOAD:-}" = latest ]; then exit 22; fi
+    exit 0
+fi
 # Simulate an initial fetch failing before it produces script bytes.
 if [ "$kind" = setup ] && [ "${FAIL_DOWNLOAD:-}" = setup ]; then exit 22; fi
+source="$kind"
+if [ "$kind" = commit ] && [ "$accept" != 'Accept: application/vnd.github.sha' ]; then
+    source=commit_json
+fi
 if [ -n "$output" ]; then
-    cat "$CASE_DIR/$kind" > "$output"
+    cat "$CASE_DIR/$source" > "$output"
 else
-    cat "$CASE_DIR/$kind"
+    cat "$CASE_DIR/$source"
 fi
 # Return a failure AFTER emitting valid bytes, to catch accidental execution.
 if [ "${FAIL_DOWNLOAD:-}" = "$kind" ]; then exit 22; fi
@@ -114,11 +133,30 @@ def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, pipe
         (case / 'tmp space').mkdir()
         (case / 'bin/curl').write_text(curl_stub)
         (case / 'bin/curl').chmod(0o755)
-        (case / 'latest').write_text(json.dumps({'tag_name': 'v1.43.0'}) if tag is None else tag)
-        (case / 'commit').write_text(json.dumps({'sha': sha}) if commit is None else commit)
+        if tag is None:
+            latest_value = 'v1.43.0'
+        else:
+            try:
+                latest_value = json.loads(tag).get('tag_name')
+            except Exception:
+                latest_value = tag
+        (case / 'latest_url').write_text(
+            'https://github.com/777genius/agent-notifications/releases/tag/' + str(latest_value))
+        (case / 'latest_json').write_text(
+            json.dumps({'tag_name': 'v1.43.0'}) if tag is None else tag)
+        if commit is None:
+            commit_value = sha
+        else:
+            try:
+                commit_value = json.loads(commit).get('sha')
+            except Exception:
+                commit_value = commit
+        (case / 'commit').write_text('' if commit_value is None else str(commit_value))
+        (case / 'commit_json').write_text(
+            json.dumps({'sha': sha}) if commit is None else commit)
         (case / 'bootstrap').write_text(bootstrap_stub)
-        (case / 'setup').write_text(loader)
-        env = dict(os.environ, PATH=str(case / 'bin') + os.pathsep + os.environ['PATH'],
+        (case / 'setup').write_text(pinned_loader if documented else loader)
+        env = dict(os.environ, PATH=runtime_path(case, python=True, node=True),
                    CASE_DIR=bash_path(case), TMPDIR=bash_path(case / 'tmp space'),
                    FAIL_DOWNLOAD=fail, BOOTSTRAP_STATUS=str(status),
                    BOOTSTRAP_RELEASE_TAG='untrusted', BOOTSTRAP_RELEASE_COMMIT='untrusted',
@@ -140,8 +178,11 @@ def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, pipe
             requests = (case / 'requests').read_text(encoding='utf-8').splitlines()
             if documented:
                 assert requests.pop(0) == PINNED_SETUP_URL
+            expected_latest = ('https://api.github.com/repos/777genius/agent-notifications/releases/latest'
+                               if documented else
+                               'https://github.com/777genius/agent-notifications/releases/latest')
             assert requests == [
-                'https://api.github.com/repos/777genius/agent-notifications/releases/latest',
+                expected_latest,
                 'https://api.github.com/repos/777genius/agent-notifications/commits/v1.43.0',
                 raw + '/bootstrap.sh',
             ], name
@@ -192,6 +233,10 @@ def which_skip_aliases(name):
 
 
 def host_cmd(name):
+    # Fixture cleanup needs the system utility, not host PATH wrappers with
+    # extra dependencies or process/container scans. Keep runtime lookup intact.
+    if name == 'rm' and os.name != 'nt':
+        return shutil.which(name, path=os.defpath)
     if name == 'python3' and sys.executable and os.path.isfile(sys.executable) \
             and not is_windows_store_or_wsl_alias(sys.executable):
         return sys.executable
@@ -220,7 +265,7 @@ def runtime_path(case, python=False, node=False):
     bin_dir = case / 'runtime-bin'
     bin_dir.mkdir()
     names = ['bash', 'sh', 'mktemp', 'rm', 'cat', 'chmod', 'mkdir', 'ln', 'uname',
-             'tr', 'head', 'cp', 'mv', 'env', 'true', 'false', 'dirname', 'basename',
+             'tr', 'wc', 'grep', 'head', 'cp', 'mv', 'env', 'true', 'false', 'dirname', 'basename',
              'printf', 'pwd', 'cygpath']
     if python:
         names.append('python3')
@@ -240,8 +285,9 @@ def run_runtime_case(name, python=False, node=False, expected=0, stub_python=Fal
         if stub_python:
             (case / 'bin/python3').write_text(STORE_PYTHON3_STUB)
             (case / 'bin/python3').chmod(0o755)
-        (case / 'latest').write_text(json.dumps({'tag_name': 'v1.43.0'}))
-        (case / 'commit').write_text(json.dumps({'sha': sha}))
+        (case / 'latest_url').write_text(
+            'https://github.com/777genius/agent-notifications/releases/tag/v1.43.0')
+        (case / 'commit').write_text(sha)
         (case / 'bootstrap').write_text(bootstrap_stub)
         env = dict(os.environ, PATH=runtime_path(case, python=python, node=node),
                    CASE_DIR=bash_path(case), TMPDIR=bash_path(case / 'tmp space'),
@@ -257,7 +303,6 @@ def run_runtime_case(name, python=False, node=False, expected=0, stub_python=Fal
         else:
             assert result.returncode != 0, (name, result.stdout, result.stderr)
             assert not (case / 'ran.json').exists(), name + ': installer ran on failure'
-            assert 'python3 or node is required' in result.stderr, (name, result.stderr)
         assert not list((case / 'tmp space').iterdir()), name + ': leaked staging directory'
         print('PASS ' + name)
 
@@ -268,7 +313,7 @@ run_case('initial loader download failure', fail='setup', documented=True)
 run_case('bootstrap exit status', status=17, expected=17)
 for tag in ['v1.43.0-rc1', 'main', 'v01.43.0', 'v1.43.0\r', '../main', 42, None]:
     run_case('reject tag ' + repr(tag), tag=json.dumps({'tag_name': tag}))
-for value in ['', 'A' * 40, 'a' * 39, sha + '\r', '../main', 42, None]:
+for value in ['', 'A' * 40, 'a' * 39, sha + '\r', sha + '\n', '../main', 42, None]:
     run_case('reject commit ' + repr(value), commit=json.dumps({'sha': value}))
 run_case('malformed release JSON', tag='{broken')
 run_case('non-object release JSON', tag='[]')
@@ -283,7 +328,7 @@ if host_cmd('node'):
     run_runtime_case('node-only loader e2e', python=False, node=True)
 else:
     print('SKIP node-only loader e2e: node not available')
-run_runtime_case('neither runtime loader e2e', python=False, node=False, expected=1)
+run_runtime_case('neither runtime loader e2e', python=False, node=False, expected=0)
 if host_cmd('python3') and host_cmd('node'):
     with tempfile.TemporaryDirectory(prefix='setup-pref-', dir=os.environ['TMPDIR']) as tmp:
         case = Path(tmp)
@@ -299,8 +344,9 @@ if host_cmd('python3') and host_cmd('node'):
         (case / 'bin/node').write_text(
             '#!/usr/bin/env bash\nprintf node >> "$CASE_DIR/runtime.log"\nexec ' + shlex.quote(node_src) + ' "$@"\n')
         (case / 'bin/node').chmod(0o755)
-        (case / 'latest').write_text(json.dumps({'tag_name': 'v1.43.0'}))
-        (case / 'commit').write_text(json.dumps({'sha': sha}))
+        (case / 'latest_url').write_text(
+            'https://github.com/777genius/agent-notifications/releases/tag/v1.43.0')
+        (case / 'commit').write_text(sha)
         (case / 'bootstrap').write_text(bootstrap_stub)
         env = dict(os.environ, PATH=bash_path(case / 'bin') + ':' + runtime_path(case, python=True, node=True),
                    CASE_DIR=bash_path(case), TMPDIR=bash_path(case / 'tmp space'),
@@ -310,14 +356,13 @@ if host_cmd('python3') and host_cmd('node'):
         result = subprocess.run([HOST_BASH, str(root / 'bin/setup.sh'), '--product', 'codex'],
                                 text=True, capture_output=True, env=env, timeout=20)
         assert result.returncode == 0, ('python preferred', result.stderr)
-        log = (case / 'runtime.log').read_text(encoding='utf-8')
-        assert log.startswith('python3'), log
-        assert 'node' not in log, log
-        print('PASS python preferred over node')
+        assert json.loads((case / 'ran.json').read_text(encoding='utf-8'))['sha'] == sha
+        assert not (case / 'runtime.log').exists(), 'loader invoked an optional runtime'
+        print('PASS Python/Node presence does not change loader behavior')
 if host_cmd('node'):
     run_runtime_case('stub python3 falls back to node', python=False, node=True, stub_python=True)
 else:
     print('SKIP stub python3 falls back to node: node not available')
-run_runtime_case('stub python3 without node', python=False, node=False, stub_python=True, expected=1)
+run_runtime_case('stub python3 without node', python=False, node=False, stub_python=True, expected=0)
 print('All setup loader fixtures passed (no public network or real agent CLIs).')
 PY

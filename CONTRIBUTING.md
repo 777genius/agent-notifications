@@ -14,7 +14,7 @@ If the work belongs to your employer, say so in the PR. Do not include someone e
 
 ## Prerequisites
 
-- **Go 1.21+** (tested with 1.25)
+- **Go 1.25.0+** (CI covers the minimum Go 1.25 and Go 1.26; automatic toolchain switching is disabled)
 - **Make** (for build commands)
 - **Claude Code** (tested on v2.0.15)
 

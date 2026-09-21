@@ -16,6 +16,9 @@ import (
 // configCommand has no notification or agent dependencies. All failures cross
 // a content-free boundary, including flag names and decoder errors.
 func configCommand(args []string, in io.Reader, out, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "installer" {
+		return installerConfigCommand(args[1:], out, stderr)
+	}
 	fail := func(err error) int {
 		code := config.ConfigInvalid
 		var ce *config.Error

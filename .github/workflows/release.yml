@@ -149,6 +149,21 @@ jobs:
             esac
           done
 
+      - name: Build version-bound portable package
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          version="${RELEASE_TAG#v}"
+          zip_name="agent-notify-portable-${{ matrix.platform }}-${{ matrix.arch }}.zip"
+          go run ./cmd/build-portable-package \
+            -version "$version" \
+            -os "${{ matrix.platform }}" \
+            -arch "${{ matrix.arch }}" \
+            -executable "dist/${{ matrix.binary }}" \
+            -output "dist/$zip_name" \
+            -workdir "${RUNNER_TEMP}/portable-${{ matrix.platform }}-${{ matrix.arch }}"
+
       - name: Upload binary artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -210,7 +225,13 @@ jobs:
       - name: Create zip artifact
         run: |
           cd swift-notifier
+          if [ ! -f ClaudeNotifier.app.managed-runtime.json ]; then
+            echo "missing managed runtime attestation sidecar" >&2
+            exit 1
+          fi
           ditto -c -k --keepParent ClaudeNotifier.app ClaudeNotifier.app.zip
+          zip -u ClaudeNotifier.app.zip ClaudeNotifier.app.managed-runtime.json
+          unzip -l ClaudeNotifier.app.zip | grep -F ClaudeNotifier.app.managed-runtime.json
           ls -lh ClaudeNotifier.app.zip
 
       - name: Upload notifier artifact
@@ -323,6 +344,11 @@ jobs:
               echo "Missing or empty artifact: $focus_binary"
               exit 1
             fi
+          fi
+          portable_zip="agent-notify-portable-${{ matrix.platform }}-${{ matrix.arch }}.zip"
+          if [ ! -s "dist/$portable_zip" ]; then
+            echo "Missing or empty artifact: $portable_zip"
+            exit 1
           fi
         shell: bash
 

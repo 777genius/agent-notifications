@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        go: ['1.22', '1.26']
+        go: ['1.25', '1.26']
 
     steps:
       - name: Checkout code
@@ -50,7 +50,7 @@ jobs:
           fi
 
       - name: Run tests
-        run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+        run: go test -timeout 20m -v -race -coverprofile=coverage.txt -covermode=atomic ./...
 
       - name: Upload coverage to Codecov
         if: matrix.go == '1.26'
@@ -71,6 +71,12 @@ jobs:
 
       - name: Test python/node installer runtime fallback (isolated, offline)
         run: bash bin/installer_runtime_fallback_e2e_test.sh
+
+      - name: Qualify interpreter-free artifact lifecycle
+        if: matrix.go == '1.26'
+        run: |
+          bash bin/install_no_interpreters_test.sh "$PWD/bin/claude-notifications"
+          bash bin/install_no_interpreters_lifecycle_test.sh "$PWD/bin/claude-notifications"
 
       - name: Run install.sh unit tests
         run: bash bin/install_test.sh

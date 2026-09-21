@@ -43,6 +43,7 @@
   },
   "select": { "scrollUp": "تمرير الخيارات إلى الأعلى", "scrollDown": "تمرير الخيارات إلى الأسفل" },
   "install": {
+    "agentNotify": {"label": "السماح للوكلاء بإرسال إشعارات عند حاجتهم إلى انتباهك", "hint": "يضيف أداة ليتمكن الوكيل من تنبيهك أثناء المهمة، وليس فقط عند توقف العمل."},
     "title": "إعداد الإشعارات", "intro": "اتبع الخطوات أدناه لإضافة إشعارات سطح المكتب إلى {agent}.", "chooseAgent": "اختر وكيلك", "requires": "يتطلب {agent}", "bothAgents": "كلا الوكيلين", "bothSelected": "✓ تم اختيار كلا الوكيلين", "installBoth": "التثبيت لكلا الوكيلين", "chooseComputer": "اختر الحاسوب الذي يعمل عليه وكيلك", "selected": "محدد", "detected": "تم اكتشافه تلقائيًا", "change": "تغيير", "targetOs": "نظام التشغيل المستهدف",
     "products": { "claude": "Claude Code", "codex": "Codex CLI", "both": "كلا الوكيلين" },
     "targets": { "unknown": "اختر نظام التشغيل المستهدف", "macos": "macOS", "linux": "Linux", "windows": "Windows · Git Bash", "manual": "التعليمات اليدوية" },

@@ -12,7 +12,33 @@ export HOME="$SANDBOX/home space" USERPROFILE="$SANDBOX/home space" CODEX_HOME="
 export CLAUDE_CONFIG_DIR="$SANDBOX/claude config" CLAUDE_HOME="$SANDBOX/claude home"
 mkdir -p "$HOME" "$CODEX_HOME" "$CLAUDE_CONFIG_DIR" "$CLAUDE_HOME"
 sed '/^main "\$@"$/d' "$ROOT/bin/bootstrap.sh" > "$SANDBOX/functions.sh"
+
+# Startup path resolution must be nounset-safe on Git Bash and must not require
+# a home fallback when an explicit Claude path is available.
+env -u HOME -u CLAUDE_CONFIG_DIR -u CLAUDE_HOME USERPROFILE="$SANDBOX/windows profile" \
+    bash "$ROOT/bin/bootstrap.sh" --help >/dev/null
+env -u HOME -u USERPROFILE -u CLAUDE_HOME CLAUDE_CONFIG_DIR="$SANDBOX/explicit config" \
+    bash "$ROOT/bin/bootstrap.sh" --help >/dev/null
+env -u HOME -u CLAUDE_CONFIG_DIR -u CLAUDE_HOME USERPROFILE="$SANDBOX/windows profile" \
+    bash -c 'source "$1"; [ "$INSTALLER_HOME" = "$2" ] && [ "$CLAUDE_HOME" = "$2/.claude" ]' \
+    _ "$SANDBOX/functions.sh" "$SANDBOX/windows profile"
+env -u HOME -u USERPROFILE -u CLAUDE_HOME CLAUDE_CONFIG_DIR="$SANDBOX/explicit config" \
+    bash -c 'source "$1"; [ -z "$INSTALLER_HOME" ] && [ "$CLAUDE_HOME" = "$2" ]' \
+    _ "$SANDBOX/functions.sh" "$SANDBOX/explicit config"
+env -u HOME -u USERPROFILE -u CLAUDE_CONFIG_DIR CLAUDE_HOME="$SANDBOX/legacy home" \
+    bash -c 'source "$1"; [ -z "$INSTALLER_HOME" ] && [ "$CLAUDE_HOME" = "$2" ]' \
+    _ "$SANDBOX/functions.sh" "$SANDBOX/legacy home"
+env -u HOME USERPROFILE="$SANDBOX/windows profile" CLAUDE_HOME="$SANDBOX/legacy home" \
+    CLAUDE_CONFIG_DIR="$SANDBOX/explicit config" \
+    bash -c 'source "$1"; [ "$CLAUDE_HOME" = "$2" ]' \
+    _ "$SANDBOX/functions.sh" "$SANDBOX/explicit config"
 source "$SANDBOX/functions.sh"
+quoted=$(quote_shell_command "$SANDBOX/bin space/cli" --package "$SANDBOX/pkg space" --codex-home "$CODEX_HOME")
+eval "set -- $quoted"
+[ "$#" -eq 5 ] || { echo "quoted argc $#"; exit 1; }
+[ "$1" = "$SANDBOX/bin space/cli" ] || { echo "quoted binary $1"; exit 1; }
+[ "$3" = "$SANDBOX/pkg space" ] || { echo "quoted package $3"; exit 1; }
+[ "$5" = "$CODEX_HOME" ] || { echo "quoted codex home $5"; exit 1; }
 for product in claude codex both; do
     PRODUCT=""; select_product --product "$product"; [ "$PRODUCT" = "$product" ]
 done
@@ -21,6 +47,14 @@ for args in '--product invalid' '--product' '--unknown' '--product claude --prod
 done
 TEST_RELEASE_COMMIT="0123456789abcdef0123456789abcdef01234567"
 BOOTSTRAP_RAW_BASE_URL="https://raw.example.invalid/repository"
+if ( PRODUCT=""; CONFIGURE_ARGS=(); select_product --product codex --navigation none ); then echo "accepted incomplete none"; exit 1; fi
+if ( PRODUCT=""; CONFIGURE_ARGS=(); select_product --product codex --allow-unknown-caller true ); then echo "accepted partial consent"; exit 1; fi
+PRODUCT=""; CONFIGURE_ARGS=(); CONFIGURE_NOTIFICATIONS=true
+select_product --product codex --navigation none --allow-unknown-caller true --allow-caller-asserted false
+[ "${#CONFIGURE_ARGS[@]}" -eq 6 ]
+PRODUCT=""; CONFIGURE_ARGS=(); CONFIGURE_NOTIFICATIONS=true
+select_product --product claude
+[ "${CONFIGURE_ARGS[*]}" = "--navigation none --allow-unknown-caller true --allow-caller-asserted false --preserve-policy" ]
 for tag in v1.42.0 v1.43.2 v2.0.0; do
     BOOTSTRAP_RELEASE_TAG="$tag"
     BOOTSTRAP_RELEASE_COMMIT="$TEST_RELEASE_COMMIT"
@@ -29,7 +63,7 @@ for tag in v1.42.0 v1.43.2 v2.0.0; do
     [ "$BOOTSTRAP_TAG" = "$tag" ]
     [ "$BOOTSTRAP_COMMIT" = "$TEST_RELEASE_COMMIT" ]
     case "$BOOTSTRAP_COMMIT" in *$'\r'*) echo "release commit contains CR"; exit 1 ;; esac
-    [ "$INSTALL_SCRIPT_URL" = "$BOOTSTRAP_RAW_BASE_URL/$TEST_RELEASE_COMMIT/bin/install.sh" ]
+    [ "$(select_bootstrap_install_script)" = "$BOOTSTRAP_RAW_BASE_URL/$TEST_RELEASE_COMMIT/bin/install.sh" ]
 done
 for tag in v1.41.0 v0.99.0 v1.42.0-rc1 v01.42.0 v1.042.0 v1.42.00 v99999999999999999999.0.0 main; do
     if BOOTSTRAP_RELEASE_TAG="$tag" resolve_bootstrap_release; then exit 1; fi
@@ -61,7 +95,7 @@ if command -v node >/dev/null 2>&1; then
         fetch_bootstrap_file() { printf '%s\n' '{"sha":"'"$TEST_RELEASE_COMMIT"'"}' > "$2"; }
         resolve_bootstrap_release
         [ "$BOOTSTRAP_COMMIT" = "$TEST_RELEASE_COMMIT" ]
-        [ "$INSTALL_SCRIPT_URL" = "$BOOTSTRAP_RAW_BASE_URL/$TEST_RELEASE_COMMIT/bin/install.sh" ]
+        [ "$(select_bootstrap_install_script)" = "$BOOTSTRAP_RAW_BASE_URL/$TEST_RELEASE_COMMIT/bin/install.sh" ]
     )
     echo "node-only resolve_bootstrap_release passed"
     STUB_BIN="$SANDBOX/store-stub-bin"
@@ -83,7 +117,7 @@ if command -v node >/dev/null 2>&1; then
         fetch_bootstrap_file() { printf '%s\n' '{"sha":"'"$TEST_RELEASE_COMMIT"'"}' > "$2"; }
         resolve_bootstrap_release
         [ "$BOOTSTRAP_COMMIT" = "$TEST_RELEASE_COMMIT" ]
-        [ "$INSTALL_SCRIPT_URL" = "$BOOTSTRAP_RAW_BASE_URL/$TEST_RELEASE_COMMIT/bin/install.sh" ]
+        [ "$(select_bootstrap_install_script)" = "$BOOTSTRAP_RAW_BASE_URL/$TEST_RELEASE_COMMIT/bin/install.sh" ]
     )
     echo "stub python3 falls back to node in installer_runtime"
 fi
@@ -100,6 +134,56 @@ unset BOOTSTRAP_RELEASE_TAG BOOTSTRAP_RELEASE_COMMIT BOOTSTRAP_RAW_BASE_URL INST
     if install_codex; then exit 1; fi
     [ "$(cat "$request")" = "https://github.com/${REPO}/archive/$TEST_RELEASE_COMMIT.tar.gz" ]
 )
+INSTALL_SCRIPT_URL=""
+BOOTSTRAP_TAG=v1.43.0
+BOOTSTRAP_COMMIT="$TEST_RELEASE_COMMIT"
+BOOTSTRAP_RAW_CONTENT_URL="http://example.test"
+MANAGED_INSTALL_SCRIPT_URL="http://example.test/main/bin/install.sh"
+[ "$(select_bootstrap_install_script)" = "http://example.test/$TEST_RELEASE_COMMIT/bin/install.sh" ]
+mkdir -p "$(bootstrap_control_root)"
+printf '{}\n' > "$(bootstrap_control_root)/ownership.json"
+[ "$(select_bootstrap_install_script)" = "http://example.test/main/bin/install.sh" ]
+INSTALL_SCRIPT_URL="http://example.test/override.sh"
+[ "$(select_bootstrap_install_script)" = "http://example.test/override.sh" ]
+rm -f "$(bootstrap_control_root)/ownership.json"
+INSTALL_SCRIPT_URL=""
+legacy="$SANDBOX/legacy-cli"
+printf '%s\n' '#!/bin/sh' 'echo "setup-codex [--print] [--dry-run] [--codex-home <dir>] [--plugin-root <dir>]"' > "$legacy"
+chmod +x "$legacy"
+if cli_has_setup_codex_skip_agent_notify "$legacy"; then echo "legacy advertised skip"; exit 1; fi
+if cli_has_setup_notifications "$legacy"; then echo "legacy advertised setup-notifications"; exit 1; fi
+if cli_has_setup_wizard "$legacy"; then echo "legacy advertised wizard"; exit 1; fi
+capable="$SANDBOX/capable-cli"
+printf '%s\n' '#!/bin/sh' 'echo "[--agent-notify|--skip-agent-notify]"' 'echo "setup-notifications [--help]"' > "$capable"
+chmod +x "$capable"
+cli_has_setup_codex_skip_agent_notify "$capable" || { echo "capable missing skip"; exit 1; }
+cli_has_setup_notifications "$capable" || { echo "capable missing setup-notifications"; exit 1; }
+if cli_has_setup_wizard "$capable"; then echo "narrow help advertised wizard"; exit 1; fi
+wizard="$SANDBOX/wizard-cli"
+printf '%s\n' '#!/bin/sh' 'echo "setup-notifications wizard"' > "$wizard"
+chmod +x "$wizard"
+cli_has_setup_wizard "$wizard" || { echo "wizard-cli missing wizard"; exit 1; }
+read -r _os _arch < <(bootstrap_release_os_arch)
+case "$_os" in linux|darwin|windows) ;; *) echo "unexpected os $_os"; exit 1 ;; esac
+case "$_arch" in amd64|arm64) ;; *) echo "unexpected arch $_arch"; exit 1 ;; esac
+_portable_stage="$SANDBOX/portable-stage"
+mkdir -p "$_portable_stage" "$SANDBOX/portable-src"
+_asset="agent-notify-portable-${_os}-${_arch}.zip"
+printf 'portable-zip-fixture' > "$SANDBOX/portable-src/$_asset"
+python3 -I - "$SANDBOX/portable-src" "$_asset" <<'PY'
+import hashlib, pathlib, sys
+root, name = pathlib.Path(sys.argv[1]), sys.argv[2]
+digest = hashlib.sha256((root/name).read_bytes()).hexdigest()
+(root/'checksums.txt').write_text(digest+'  '+name+'\n')
+PY
+BOOTSTRAP_TAG=v1.43.0
+_CONFIG_STAGE="$_portable_stage"
+fetch_bootstrap_file() { cp "$SANDBOX/portable-src/$(basename "$1")" "$2"; }
+acquire_wizard_portable_asset
+[ "$WIZARD_PACKAGE_ROOT" = "$_portable_stage/$_asset" ] || { echo "portable asset path $WIZARD_PACKAGE_ROOT"; exit 1; }
+BOOTSTRAP_TAG=""
+_CONFIG_STAGE=""
+WIZARD_PACKAGE_ROOT=""
 # setup_marketplace self-heals a marketplace declared under a retired repo
 # name, but leaves an unrelated source conflict alone.
 (
@@ -111,6 +195,7 @@ unset BOOTSTRAP_RELEASE_TAG BOOTSTRAP_RELEASE_COMMIT BOOTSTRAP_RAW_BASE_URL INST
     LEGACY_MARKETPLACE_REPOS="old/retired-repo"
     config_preflight() { :; }
     calls="$SANDBOX/marketplace-calls"; declared_repo="old/retired-repo"
+    marketplace_declared_repo() { printf '%s\n' "$declared_repo"; }
     claude() {
         printf '%s\n' "$*" >> "$calls"
         if [ "$1 $2 $3" = "plugin marketplace add" ]; then
@@ -146,16 +231,13 @@ echo "marketplace self-heal fixtures passed"
     _CONFIG_STAGE="$SANDBOX/preflight-resource"; mkdir "$_CONFIG_STAGE"
     printf '{"plugins":{}}\n' > "$_CONFIG_STAGE/installed-before.json"
     uname() { printf 'Darwin\n'; }
-    capture_preflight() { cat > "$_CONFIG_STAGE/request.json"; printf '{"status":"safe"}\n'; }
+    capture_preflight() {
+        [ "$1 $2 $3" = 'config installer bootstrap' ] || return 1
+        [ "${13}" = "$HOME/.claude/claude-notifications-go/iterm2-venv" ] || return 1
+        printf '{"status":"safe"}\n'
+    }
     _CONFIG_HELPER=capture_preflight
     config_preflight
-    python3 - "$_CONFIG_STAGE/request.json" "$HOME" <<'PYRESOURCE'
-import json,pathlib,sys
-v=json.load(open(sys.argv[1]))
-expected=(pathlib.Path(sys.argv[2])/'.claude'/'claude-notifications-go'/'iterm2-venv').resolve()
-actual=[pathlib.Path(entry).resolve() for entry in v['refreshDirs']]
-assert expected in actual, f'expected refresh dir {expected!s}; got {[str(path) for path in actual]!r}'
-PYRESOURCE
 )
 # Dispatch tests preserve shared bundle state and isolate CN_PRODUCT.
 print_header() { :; }; abort_if_wsl_environment() { :; }
@@ -178,18 +260,37 @@ install_codex() { return 1; }
 if ( PRODUCT=""; main --product both ); then exit 1; fi
 # main installs its own trap; restore test-owned sandbox cleanup.
 trap 'rm -rf "$SANDBOX"' EXIT
+# The profile directory and default Claude registration file are different.
+PRODUCT=claude
+BOOTSTRAP_TAG=""
+PLUGIN_ROOT="$SANDBOX/wizard-package"
+mkdir -p "$PLUGIN_ROOT/portable-package"
+printf '{}' > "$PLUGIN_ROOT/portable-package/plugin.json"
+CONFIGURE_BINARY="$SANDBOX/capture-wizard"
+export WIZARD_CAPTURE="$SANDBOX/wizard-args"
+printf '%s\n' '#!/bin/bash' 'printf "%s\n" "$@" > "$WIZARD_CAPTURE"' > "$CONFIGURE_BINARY"
+chmod +x "$CONFIGURE_BINARY"
+configure_agent_policy() { return 0; }
+bootstrap_abs_command() { return 1; }
+unset CLAUDE_CONFIG_DIR
+setup_agent_notify_wizard
+grep -Fx -- "$HOME/.claude.json" "$WIZARD_CAPTURE"
+export CLAUDE_CONFIG_DIR="$SANDBOX/custom claude"
+setup_agent_notify_wizard
+grep -Fx -- "$CLAUDE_CONFIG_DIR/.claude.json" "$WIZARD_CAPTURE"
+
 printf 'bootstrap product unit fixtures passed\n'
 # Local HTTP and controlling-PTY integration. Installer/registration are explicit
 # fake adapters here; the fetched bootstrap, archive extraction and curl are real.
 python3 - "$ROOT" "$SANDBOX" <<'PY'
-import functools, http.server, io, json, os, pathlib, select, shlex, shutil, subprocess, sys, tarfile, threading, time
+import functools, http.server, io, json, os, pathlib, select, shlex, shutil, signal, subprocess, sys, tarfile, threading, time
 if os.name != "nt":
     import pty
 root, sandbox = map(pathlib.Path, sys.argv[1:])
 web = sandbox / 'http'; web.mkdir()
 (web / 'bootstrap.sh').write_bytes((root / 'bin/bootstrap.sh').read_bytes())
 (web / 'latest').write_text('{"tag_name":"v1.42.0"}')
-release_commits = {'v1.42.0': 'a' * 40, 'v1.43.0': 'b' * 40}
+release_commits = {'v1.42.0': 'a' * 40, 'v1.43.0': 'b' * 40, 'v2.0.0': 'c' * 40}
 (web / 'commits').mkdir()
 for tag, commit in release_commits.items():
     (web / 'commits' / tag).write_text(json.dumps({'sha': commit}))
@@ -201,24 +302,60 @@ asset_name='claude-notifications-'+asset_os+'-'+asset_arch+('.exe' if asset_os==
 installer = '''#!/bin/bash
 set -eu
 [ "$1" = --force ]
-cp "$INSTALL_STAGED_ASSETS"/claude-notifications-* "$INSTALL_TARGET_DIR/claude-notifications"
-chmod +x "$INSTALL_TARGET_DIR/claude-notifications"
-cp "$INSTALL_TARGET_DIR/claude-notifications" "$INSTALL_TARGET_DIR/claude-notifications-windows-amd64.exe"
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) cp "$INSTALL_STAGED_ASSETS"/claude-notifications-*.exe "$INSTALL_TARGET_DIR/" ;;
+    *) cp "$INSTALL_STAGED_ASSETS"/claude-notifications-* "$INSTALL_TARGET_DIR/claude-notifications" ;;
+esac
+chmod +x "$INSTALL_TARGET_DIR"/claude-notifications*
 '''
 binary = '''#!''' + sys.executable + '''
 import json, os, pathlib, sys
+# Match the native Go helper's LF protocol on Windows too. Python's default
+# CRLF would leave a trailing carriage return in Bash's baseline version.
+sys.stdout.reconfigure(newline='\\n')
 args=sys.argv[1:]
+if not args:
+    sys.exit(2)
+if args[0] in ('--help', 'help', '-h'):
+    print('Usage:')
+    print('  setup-codex [--print] [--dry-run] [--codex-home <dir>] [--plugin-root <dir>]')
+    sys.exit()
 if os.environ.get('FIXTURE_TRACE'):
     with open(os.environ['FIXTURE_TRACE'],'a') as f: f.write(json.dumps(args)+'\\n')
 if args==['--version']:
     print('claude-notifications v1.42.0'); sys.exit()
 if args[0]=='setup-codex':
+    i=1
+    known={'--print','--dry-run','--codex-home','--plugin-root'}
+    takes_value={'--codex-home','--plugin-root'}
+    while i < len(args):
+        if args[i] not in known:
+            print('setup-codex: unknown option: '+args[i], file=sys.stderr)
+            sys.exit(1)
+        if args[i] in takes_value:
+            i += 1
+            if i >= len(args):
+                sys.exit(1)
+        i += 1
     if os.environ.get('FAIL_REGISTER')=='1': sys.exit(1)
     if '--dry-run' not in args:
-        p=pathlib.Path(os.environ['CODEX_HOME']); p.mkdir(exist_ok=True)
+        p=pathlib.Path(os.environ['CODEX_HOME'])
+        if '--codex-home' in args:
+            p=pathlib.Path(args[args.index('--codex-home')+1])
+        p.mkdir(parents=True, exist_ok=True)
         (p/'fixture-registration').write_text('registered')
+        dest=p/'claude-notifications-go'/'bin'
+        dest.mkdir(parents=True, exist_ok=True)
+        target=dest/(pathlib.Path(sys.argv[0]).name if os.name=='nt' else 'claude-notifications')
+        target.write_bytes(pathlib.Path(sys.argv[0]).read_bytes())
+        target.chmod(0o755)
+        if os.name=='nt':
+            (dest/'claude-notifications.bat').write_text('@echo off\\r\\n"%~dp0\\\\'+target.name+'" %*\\r\\n')
         if os.environ.get('FAIL_SETUP_INIT')=='1': sys.exit(3)
     sys.exit()
+if args[0]=='setup-notifications':
+    print('Error: unknown command: setup-notifications', file=sys.stderr)
+    sys.exit(1)
 assert args[0]=='config'
 legacy=pathlib.Path(os.environ['HOME'])/'.claude/claude-notifications-go/config.json'
 neutral=pathlib.Path(os.environ['XDG_CONFIG_HOME'])/'agent-notifications/config.json'
@@ -226,8 +363,42 @@ explicit=os.environ.get('AGENT_NOTIFICATIONS_CONFIG')
 p=pathlib.Path(explicit) if explicit else legacy if legacy.exists() else neutral
 selected=dict(path=str(p),source='explicit' if explicit else 'legacy' if p==legacy else 'universal',exists=p.exists())
 if args[1]=='path': print(json.dumps(selected)); sys.exit()
+request=None
+if args[1:3]==['installer','capabilities']:
+    print('installer-v1'); sys.exit()
+if args[1:2]==['installer'] and args[2] in ('root','version'):
+    entries=json.loads(pathlib.Path(args[3]).read_text()).get('plugins',{}).get(args[4],[])
+    if entries: print(entries[-1]['installPath' if args[2]=='root' else 'version'])
+    sys.exit()
+if args[1:3]==['installer','versions']:
+    registry=json.loads(pathlib.Path(args[3]).read_text())
+    for entry in registry.get('plugins',{}).get(args[4],[]):
+        if (pathlib.Path(entry['installPath'])/'config/config.json').exists(): print(entry['version'].removeprefix('v'))
+    sys.exit()
+if args[1:3]==['installer','bootstrap']:
+    registry,key,claude,cache,market,codex,product,stage,current,venv=args[3:]
+    roots=[]; refresh=[]; historical=[]; protected=[]
+    if product!='codex':
+        entries=json.loads(pathlib.Path(registry).read_text()).get('plugins',{}).get(key,[])
+        roots=[e['installPath'] for e in entries]
+        refresh=[cache,market]+roots
+        if pathlib.Path(current).exists(): refresh += [e['installPath'] for e in json.loads(pathlib.Path(current).read_text()).get('plugins',{}).get(key,[])]
+        protected=[current,str(pathlib.Path(claude)/'plugins/known_marketplaces.json'),str(pathlib.Path(claude)/'settings.json')]
+        for e in entries:
+            c=dict(path=str(pathlib.Path(e['installPath'])/'config/config.json'))
+            b=pathlib.Path(stage)/('baseline-'+e['version'].removeprefix('v'))
+            if (b/'verified').exists(): c.update(baselinePath=str(b/'config.json'),baselineSHA256=(b/'verified').read_text().strip())
+            historical.append(c)
+    historical.append(dict(path=str(pathlib.Path(claude)/'claude-notifications-go/config.json')))
+    if product!='claude':
+        dest=pathlib.Path(codex)/'claude-notifications-go'
+        refresh.append(str(dest)); historical.append(dict(path=str(dest/'config/config.json')))
+    if venv: refresh.append(venv)
+    if any(pathlib.Path(stage).resolve().is_relative_to(pathlib.Path(d).resolve()) for d in refresh): sys.exit(1)
+    request=dict(activeBundleRoots=roots,refreshDirs=refresh,historicalCandidates=historical,protectedPaths=protected)
+    args=['config','preflight-update']
 if args[1]=='preflight-update':
-    request=json.load(sys.stdin)
+    if request is None: request=json.load(sys.stdin)
     status='safe'
     if any(p.resolve().is_relative_to(pathlib.Path(d).resolve()) for d in request['refreshDirs']): status='unsafe-target'
     if any(p.resolve()==pathlib.Path(d).resolve() for d in request.get('protectedPaths',[])): status='unsafe-target'
@@ -253,6 +424,9 @@ for tag, commit in release_commits.items():
         for name, data in {'bin/install.sh': installer, '.claude-plugin/plugin.json': '{"version":"'+tag[1:]+'"}'}.items():
             data = data.encode('utf-8'); entry = tarfile.TarInfo('bundle/' + name); entry.size = len(data); entry.mode = 0o755
             archive.addfile(entry, io.BytesIO(data))
+    archive_copy = web / 'archive' / (commit + '.tar.gz')
+    archive_copy.parent.mkdir(parents=True, exist_ok=True)
+    archive_copy.write_bytes((web / (commit + '.tar.gz')).read_bytes())
     dest = web / 'download' / tag; dest.mkdir(parents=True)
     payload=binary.replace('v1.42.0', tag).encode('utf-8')
     (dest / 'binary').write_bytes(payload)
@@ -261,6 +435,52 @@ for tag, commit in release_commits.items():
     (dest / 'checksums.txt').write_bytes((hashlib.sha256(payload).hexdigest()+'  '+asset_name+'\n').encode('ascii'))
     raw = web / 'raw' / commit / 'bin'; raw.mkdir(parents=True)
     (raw / 'install.sh').write_bytes(installer.encode('utf-8'))
+    tag_raw = web / 'raw' / tag / 'bin'; tag_raw.mkdir(parents=True)
+    (tag_raw / 'install.sh').write_bytes(installer.encode('utf-8'))
+capable = binary.replace(
+    '  setup-codex [--print] [--dry-run] [--codex-home <dir>] [--plugin-root <dir>]',
+    '  setup-codex [--print] [--dry-run] [--codex-home <dir>] [--plugin-root <dir>]\\n                          [--agent-notify|--skip-agent-notify]\\n  setup-notifications',
+).replace(
+    "known={'--print','--dry-run','--codex-home','--plugin-root'}",
+    "known={'--print','--dry-run','--codex-home','--plugin-root','--skip-agent-notify','--agent-notify'}",
+).replace(
+    "print('Error: unknown command: setup-notifications', file=sys.stderr)\n    sys.exit(1)",
+    "sys.exit(0)",
+)
+dest = web / 'download' / 'v2.0.0'
+payload=capable.replace('v1.42.0', 'v2.0.0').encode('utf-8')
+(dest / 'binary').write_bytes(payload)
+(dest / asset_name).write_bytes(payload)
+(dest / 'checksums.txt').write_bytes((hashlib.sha256(payload).hexdigest()+'  '+asset_name+'\n').encode('ascii'))
+# Exercise the adapter's raw protocol before shell command substitution can
+# hide newline differences. Model Windows text output on every host, in
+# addition to running with native Windows Python in Git Bash CI.
+protocol_helper=sandbox/'protocol-helper.py'
+protocol_helper.write_bytes(binary.replace(
+    'import json, os, pathlib, sys\n',
+    "import json, os, pathlib, sys\nsys.stdout.reconfigure(newline='\\r\\n')\n",
+    1,
+).encode('utf-8'))
+protocol=subprocess.check_output([sys.executable,str(protocol_helper),'--version'])
+assert protocol == b'claude-notifications v1.42.0\n', repr(protocol)
+protocol_root=sandbox/'protocol bundle'
+(protocol_root/'config').mkdir(parents=True)
+(protocol_root/'config/config.json').write_bytes(b'{}')
+protocol_registry=sandbox/'protocol-registry.json'
+protocol_registry.write_text(json.dumps({'plugins':{'fixture':[{'installPath':str(protocol_root),'version':'v1.40.0'}]}}))
+protocol=subprocess.check_output([sys.executable,str(protocol_helper),'config','installer','versions',str(protocol_registry),'fixture'])
+assert protocol == b'1.40.0\n', repr(protocol)
+(web/'install.sh').write_bytes(installer.encode('utf-8'))
+def write_origin_installer(path, origin):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(installer.replace(
+        'chmod +x "$INSTALL_TARGET_DIR"/claude-notifications*',
+        'printf %s\\\\n '+origin+' > "$INSTALL_TARGET_DIR/script-origin"\nchmod +x "$INSTALL_TARGET_DIR"/claude-notifications*',
+        1,
+    ))
+for tag in ['v1.42.0', 'v1.43.0', 'v2.0.0']:
+    write_origin_installer(web / tag / 'bin' / 'install.sh', tag)
+write_origin_installer(web / 'main' / 'bin' / 'install.sh', 'managed')
 request_paths=[]
 class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
@@ -278,16 +498,28 @@ env_keys = (
     'CLAUDE_CONFIG_DIR', 'TMP', 'TEMP', 'TMPDIR',
 )
 env = {key: os.environ[key] for key in env_keys if key in os.environ}
-env.update(BOOTSTRAP_LATEST_RELEASE_API_URL=base+'/latest', BOOTSTRAP_COMMIT_API_BASE_URL=base+'/commits', BOOTSTRAP_RAW_BASE_URL=base+'/raw', BOOTSTRAP_SOURCE_BASE_URL=base, BOOTSTRAP_RELEASES_BASE_URL=base)
+env.update(BOOTSTRAP_LATEST_RELEASE_API_URL=base+'/latest', BOOTSTRAP_COMMIT_API_BASE_URL=base+'/commits', BOOTSTRAP_RAW_BASE_URL=base+'/raw', BOOTSTRAP_RAW_CONTENT_URL=base+'/raw', BOOTSTRAP_SOURCE_BASE_URL=base, BOOTSTRAP_RELEASES_BASE_URL=base)
 cli = sandbox / 'clis'; cli.mkdir()
 (cli / 'codex').write_bytes(b'#!/bin/sh\nexit 99\n'); (cli / 'codex').chmod(0o755)
 bash = shutil.which('bash'); assert bash
 env['PATH'] = str(cli) + os.pathsep + (os.environ['PATH'] if os.name == 'nt' else '/usr/bin:/bin')
 script = str(root / 'bin/bootstrap.sh')
 def run(args, expected=0, extra=None):
-    result = subprocess.run([bash, script]+args, env=dict(env, **(extra or {})), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True, timeout=20)
-    assert (result.returncode == 0) == (expected == 0), result.stdout.decode()
-    return result.stdout.decode()
+    process = subprocess.Popen([bash, script]+args, env=dict(env, **(extra or {})), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+    try:
+        output, _ = process.communicate(timeout=40)
+    except subprocess.TimeoutExpired:
+        # Killing only Bash leaves curl/helper children holding the output pipe,
+        # so subprocess.run's timeout cleanup can itself wait indefinitely.
+        if os.name == 'nt':
+            subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+        else:
+            os.killpg(process.pid, signal.SIGKILL)
+        output, _ = process.communicate(timeout=5)
+        raise AssertionError('bootstrap timed out: ' + repr(args) + '\n' + output.decode())
+    assert (process.returncode == 0) == (expected == 0), output.decode()
+    return output.decode()
 assert 'No controlling TTY' in run([], 1)
 assert 'claude CLI not found' in run(['--product', 'both'], 1)
 (cli / 'codex').rename(cli / 'absent')
@@ -299,6 +531,33 @@ assert '/raw/' + release_commits['v1.42.0'] + '/bin/install.sh' in request_paths
 assert '/' + release_commits['v1.42.0'] + '.tar.gz' in request_paths
 assert not any('/refs/tags/' + commit in path for commit in release_commits.values() for path in request_paths)
 run(['--product', 'codex'], extra={'BOOTSTRAP_RELEASE_TAG':'v1.43.0'})
+run(['--product', 'codex'], extra={'BOOTSTRAP_RELEASE_TAG':'v2.0.0'})
+assert '/' + release_commits['v2.0.0'] + '.tar.gz' in request_paths
+assert '/commits/v2.0.0' in request_paths
+pairing={'INSTALL_SCRIPT_URL':'','BOOTSTRAP_RAW_CONTENT_URL':base,'MANAGED_INSTALL_SCRIPT_URL':base+'/main/bin/install.sh'}
+request_paths.clear()
+run(['--product', 'codex'], extra=dict(pairing, BOOTSTRAP_RELEASE_TAG='v1.43.0'))
+assert sum(path.endswith('/' + release_commits['v1.43.0'] + '/bin/install.sh') for path in request_paths)==1
+assert not any(path.endswith('/main/bin/install.sh') for path in request_paths)
+home=pathlib.Path(env['HOME'])
+xdg=sandbox/'xdg-config'
+appdata=sandbox/'appdata'
+if sys.platform=='darwin':
+    ledger=home/'Library/Application Support'/'agent-notifications'/'ownership.json'
+    managed_env={}
+elif os.name=='nt':
+    ledger=appdata/'agent-notifications'/'ownership.json'
+    managed_env={'APPDATA':str(appdata)}
+else:
+    ledger=xdg/'agent-notifications'/'ownership.json'
+    managed_env={'XDG_CONFIG_HOME':str(xdg)}
+ledger.parent.mkdir(parents=True, exist_ok=True)
+ledger.write_text('{"schema":1,"id":"fixture","generation":1,"consumers":{},"files":{}}\n')
+request_paths.clear()
+run(['--product', 'codex'], extra=dict(pairing, BOOTSTRAP_RELEASE_TAG='v1.43.0', **managed_env))
+assert sum(path.endswith('/main/bin/install.sh') for path in request_paths)==1
+assert not any(path.endswith('/' + release_commits['v1.43.0'] + '/bin/install.sh') for path in request_paths)
+ledger.unlink()
 registration = pathlib.Path(env['CODEX_HOME']) / 'fixture-registration'
 before = registration.read_bytes()
 # Reject mixed binary/source releases before registration and retain live state.
@@ -385,7 +644,12 @@ def reset_case():
     # Every directory is an explicit child of this fixture, never host state.
     for key in ['HOME','XDG_CONFIG_HOME','CODEX_HOME','CLAUDE_CONFIG_DIR']:
         d=pathlib.Path(env[key]); assert d.is_relative_to(sandbox)
-        shutil.rmtree(d); d.mkdir()
+        # Several roots intentionally overlap (for example CODEX_HOME under
+        # HOME), so an earlier removal may already have removed this path.
+        # Recreate every fixture root while keeping all behavioral assertions.
+        if d.exists():
+            shutil.rmtree(d)
+        d.mkdir(parents=True, exist_ok=True)
     trace.write_text('')
 def init_events(): return [e for e in events() if e[:2]==['config','init']]
 for product in ['claude','codex','both']:
@@ -485,7 +749,8 @@ for product in ['codex', 'claude', 'both']:
         assert not any(e[:1]==['claude'] for e in events())
         assert not any('v1.40.0' in path for path in request_paths)
     else:
-        assert not events()
+        # Verified helper metadata reads precede rejection; no host mutation.
+        assert not any(e[:1] in (['claude'], ['setup-codex']) or e[:2]==['config','init'] for e in events())
 reset_case()
 custom=pathlib.Path(env['CLAUDE_CONFIG_DIR'])/'claude-notifications-go/config.json'
 custom.parent.mkdir(); custom.write_text('{"custom":true}')
@@ -530,9 +795,9 @@ assert r.returncode==0, r.stdout.decode()
 assert events()==[['config','init','--json']]
 # Offline staging failure cannot touch a working runtime/registration.
 trace.write_text(''); active=pathlib.Path(env['CLAUDE_CONFIG_DIR'])/'plugins/cache/claude-notifications-go/claude-notifications-go/1.42.0'
-before=(active/'bin/claude-notifications').read_bytes()
+before=(active/'bin'/ (asset_name if os.name=='nt' else 'claude-notifications')).read_bytes()
 run(['--product','both'],1,{'BOOTSTRAP_RELEASES_BASE_URL':base+'/offline'})
-assert (active/'bin/claude-notifications').read_bytes()==before and not events()
+assert (active/'bin'/ (asset_name if os.name=='nt' else 'claude-notifications')).read_bytes()==before and not events()
 # A checksum-valid older helper without config commands fails before touching
 # host registration. A hostile Python environment cannot disable verification.
 valid_payload=payload_file.read_bytes()
@@ -563,7 +828,7 @@ if shutil.which('node'):
     node_only.mkdir()
     for name in ['bash', 'sh', 'mktemp', 'rm', 'cat', 'chmod', 'mkdir', 'ln', 'uname',
                  'tr', 'head', 'cp', 'mv', 'env', 'true', 'false', 'grep', 'sed', 'awk',
-                 'tar', 'gzip', 'curl', 'node']:
+                 'tar', 'gzip', 'curl', 'node', 'sha256sum', 'shasum', 'dirname', 'realpath']:
         place_runtime_cmd(node_only / name, shutil.which(name))
     assert not (node_only / 'python3').exists()
     reset_case()

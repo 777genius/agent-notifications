@@ -43,6 +43,7 @@
   },
   "select": { "scrollUp": "Scorri le opzioni verso l'alto", "scrollDown": "Scorri le opzioni verso il basso" },
   "install": {
+    "agentNotify": {"label": "Consenti agli agenti di inviarti notifiche quando serve la tua attenzione", "hint": "Aggiunge uno strumento così un agente può avvisarti durante un’attività, non solo a lavoro fermo."},
     "title": "Configura le notifiche", "intro": "Segui questi passaggi per aggiungere notifiche desktop a {agent}.", "chooseAgent": "Scegli il tuo agente", "requires": "Richiede {agent}", "bothAgents": "Entrambi gli agenti", "bothSelected": "✓ Entrambi gli agenti selezionati", "installBoth": "Installa per entrambi gli agenti", "chooseComputer": "Scegli il computer su cui è in esecuzione il tuo agente", "selected": "Selezionato", "detected": "Rilevato automaticamente", "change": "Cambia", "targetOs": "Sistema operativo di destinazione",
     "products": { "claude": "Claude Code", "codex": "Codex CLI", "both": "Entrambi gli agenti" },
     "targets": { "unknown": "Scegli il sistema operativo", "macos": "macOS", "linux": "Linux", "windows": "Windows · Git Bash", "manual": "Istruzioni manuali" },

@@ -28,11 +28,13 @@ func fakeBundle(t *testing.T) string {
 		t.Fatalf("mkdir sounds: %v", err)
 	}
 	files := map[string]string{
-		"bin/codex-hook-wrapper.sh":  "#!/bin/sh\nexit 0\n",
-		"bin/codex-hook-wrapper.cmd": "@echo off\r\nexit /b 0\r\n",
-		"bin/hook-wrapper.sh":        "#!/bin/sh\nexit 0\n",
-		"sounds/task-complete.mp3":   "not-really-audio",
-		"config/config.json":         `{"notifications":{}}`,
+		"bin/codex-hook-wrapper.sh":    "#!/bin/sh\nexit 0\n",
+		"bin/codex-hook-wrapper.cmd":   "@echo off\r\nexit /b 0\r\n",
+		"bin/hook-wrapper.sh":          "#!/bin/sh\nexit 0\n",
+		"sounds/task-complete.mp3":     "not-really-audio",
+		"config/config.json":           `{"notifications":{}}`,
+		"portable-package/plugin.json": `{"name":"agent-notify","version":"1.0.0"}`,
+		"portable-package/mcp.json":    `{"mcpServers":{}}`,
 	}
 	for rel, content := range files {
 		path := filepath.Join(root, filepath.FromSlash(rel))
@@ -76,7 +78,7 @@ func TestRunCreatesRegistrationAndInstallCopy(t *testing.T) {
 	}
 
 	// Install copy carries runtime assets but not sources.
-	for _, rel := range []string{"bin/codex-hook-wrapper.sh", "bin/codex-hook-wrapper.cmd", "sounds/task-complete.mp3"} {
+	for _, rel := range []string{"bin/codex-hook-wrapper.sh", "bin/codex-hook-wrapper.cmd", "sounds/task-complete.mp3", "portable-package/plugin.json", "portable-package/mcp.json"} {
 		if _, err := os.Stat(filepath.Join(res.InstallDir, filepath.FromSlash(rel))); err != nil {
 			t.Errorf("install copy missing %s: %v", rel, err)
 		}
@@ -498,6 +500,38 @@ func TestOwnsHandlerBoundaries(t *testing.T) {
 		if ownsHandler(h, "/home/u/.codex/"+InstallDirName, "Stop") {
 			t.Errorf("ownsHandler(%q) = true, want false", h.Command)
 		}
+	}
+}
+
+func TestHasManagedHooksRequiresExactGeneratedCommand(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, "hooks.json")
+	installDir := filepath.Join(home, InstallDirName)
+
+	foreign := []byte(`{"description":"documentation mentions codex-hook-wrapper","hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo foreign"}]}]}}`)
+	if err := os.WriteFile(path, foreign, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if HasManagedHooks(home) {
+		t.Fatal("foreign text containing launcher name was classified as managed")
+	}
+
+	managed, err := RenderHooksJSON(installDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, managed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !HasManagedHooks(home) {
+		t.Fatal("exact generated hook was not classified as managed")
+	}
+
+	if err := os.WriteFile(path, []byte(`{"hooks":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if HasManagedHooks(home) {
+		t.Fatal("malformed hooks file was classified as managed")
 	}
 }
 

@@ -42,7 +42,7 @@ Update the version string in **4 files** (5 occurrences total):
 
 | File | Location | Count |
 |------|----------|-------|
-| `cmd/claude-notifications/main.go` | `const version = "X.Y.Z"` | 1 |
+| `internal/config/runtime.go` | `var ConsumerVersion = "X.Y.Z"` | 1 |
 | `.claude-plugin/plugin.json` | `"version": "X.Y.Z"` | 1 |
 | `.claude-plugin/marketplace.json` | `"version": "X.Y.Z"` | 2 |
 | `.codex-plugin/plugin.json` | `"version": "X.Y.Z"` | 1 |
@@ -50,7 +50,7 @@ Update the version string in **4 files** (5 occurrences total):
 Quick check — all occurrences should match:
 
 ```bash
-grep -rn '1\.[0-9]\+\.[0-9]\+' cmd/claude-notifications/main.go .claude-plugin/plugin.json .claude-plugin/marketplace.json .codex-plugin/plugin.json
+grep -rn '1\.[0-9]\+\.[0-9]\+' internal/config/runtime.go .claude-plugin/plugin.json .claude-plugin/marketplace.json .codex-plugin/plugin.json
 ```
 
 `TestCodexManifestContract` in `cmd/claude-notifications` fails the build when any

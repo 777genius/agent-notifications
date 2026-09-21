@@ -194,48 +194,61 @@ real_network_tests_supported() {
     return 0
 }
 
-# Cross-platform timeout command.
-# Git Bash on Windows often resolves `timeout` to timeout.exe, which is a
-# countdown timer and rejects redirected stdin. Use GNU timeout only.
+# Cross-platform timeout. GNU timeout without --foreground puts the child in a
+# new process group; on Git Bash that SIGTERM can take down this test script
+# (Windows exit 3840 = 15<<8). Windows timeout.exe is a sleep helper, not a
+# command wrapper. Watch only the child PID when GNU timeout is missing.
 run_with_timeout() {
     local seconds="$1"
     shift
     if command -v timeout >/dev/null 2>&1 && timeout --version >/dev/null 2>&1; then
-        timeout "$seconds" "$@"
+        timeout --foreground "$seconds" "$@"
         return
     fi
-    if command -v gtimeout >/dev/null 2>&1; then
-        gtimeout "$seconds" "$@"
+    if command -v gtimeout >/dev/null 2>&1 && gtimeout --version >/dev/null 2>&1; then
+        gtimeout --foreground "$seconds" "$@"
         return
     fi
-    if command -v python3 >/dev/null 2>&1; then
-        python3 -c 'import subprocess, sys
-seconds = int(sys.argv[1])
-try:
-    raise SystemExit(subprocess.run(sys.argv[2:], timeout=seconds).returncode)
-except subprocess.TimeoutExpired:
-    raise SystemExit(124)
-' "$seconds" "$@"
-        return
-    fi
-    "$@"
+    "$@" &
+    local pid=$!
+    local elapsed=0
+    while kill -0 "$pid" 2>/dev/null; do
+        if [ "$elapsed" -ge "$seconds" ]; then
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+            return 124
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    wait "$pid"
 }
 
-# env(1) looks up the next token on PATH, so a bash function cannot follow it.
-# Keep extra variables on the env command that run_with_timeout actually execs.
+# Keep environment assignments on the command executed by the timeout helper.
 run_with_timeout_env() {
     local seconds="$1"
     shift
     run_with_timeout "$seconds" env "$@"
 }
 
-# Use the same executable payload and checksum as the main Windows fixture.
+# Add the required platform companion asset and checksum beside the main binary.
 prepare_focus_fixture() {
     local destination="$1" checksum="$2"
     if is_windows; then
         local focus_name="claude-notifications-windows-$(get_arch)-focus.exe"
         cp "$FIXTURES_DIR/mock_binary" "$destination/$focus_name"
         echo "$checksum  $focus_name" >> "$destination/checksums.txt"
+    elif [ "$(get_platform)" = "darwin" ]; then
+        local modern_checksum
+        if [ ! -f "$destination/ClaudeNotifier.app.zip" ]; then
+            cp "$FIXTURES_DIR/ClaudeNotifier.app.zip" "$destination/ClaudeNotifier.app.zip"
+        fi
+        if command -v shasum &>/dev/null; then
+            modern_checksum=$(shasum -a 256 "$destination/ClaudeNotifier.app.zip" | awk '{print $1}')
+        else
+            modern_checksum=$(sha256sum "$destination/ClaudeNotifier.app.zip" | awk '{print $1}')
+        fi
+        echo "$modern_checksum  ClaudeNotifier.app.zip" >> "$destination/checksums.txt"
     fi
 }
 
@@ -264,6 +277,7 @@ start_mock_server() {
     if [ ! -f "$FIXTURES_DIR/mock_binary" ]; then
         cat > "$FIXTURES_DIR/mock_binary" << 'MOCK_EOF'
 #!/bin/bash
+# agent-notifications-managed-writer-protocol-v1
 # Mock claude-notifications binary for testing
 if [ "$1" = "--version" ] || [ "$1" = "version" ]; then
     echo "claude-notifications version 1.0.0-mock (test binary)"
@@ -271,6 +285,64 @@ if [ "$1" = "--version" ] || [ "$1" = "version" ]; then
 fi
 if [ "$1" = "help" ] || [ "$1" = "--help" ]; then
     echo "claude-notifications mock binary"
+    exit 0
+fi
+if [ "$1" = "internal-install-runtime" ]; then
+    stage="" target="" entry=""
+    shift
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --stage) stage=$2; shift 2 ;;
+            --target) target=$2; shift 2 ;;
+            --entry) entry=$2; shift 2 ;;
+            --control-root|--consumer) shift 2 ;;
+            --require-native|--refresh|--remove|--purge-native) shift ;;
+            *) shift ;;
+        esac
+    done
+    [ -n "$stage" ] && [ -n "$target" ] || exit 2
+    if [ "$stage" != "$target" ]; then
+        mkdir -p "$target" || exit 1
+        for f in "$stage"/*; do
+            [ -e "$f" ] || continue
+            base=$(basename "$f")
+            case "$base" in .install-stage.*|checksums.txt|.checksums.txt|*.sha256) continue ;; esac
+            if [ -d "$f" ]; then
+                [ "$f" -ef "$target/$base" ] 2>/dev/null && continue
+                rm -rf "$target/$base"
+                cp -R "$f" "$target/$base" || exit 1
+            else
+                [ "$f" -ef "$target/$base" ] 2>/dev/null && continue
+                cp "$f" "$target/$base" || exit 1
+                chmod +x "$target/$base" 2>/dev/null || true
+            fi
+        done
+    fi
+    if [ -z "$entry" ]; then
+        exit 1
+    fi
+    case "$entry" in
+        *.exe)
+            for launcher in claude-notifications agent-notifications; do
+                cat > "$target/${launcher}.bat" <<EOF
+@echo off
+REM ${launcher} Windows wrapper
+REM Automatically runs the platform-specific binary
+
+setlocal
+set SCRIPT_DIR=%~dp0
+set AGENT_NOTIFICATIONS_LAUNCHER=${launcher}
+"%SCRIPT_DIR%${entry}" %*
+EOF
+                [ -f "$target/${launcher}.bat" ] || exit 1
+            done
+            ;;
+        *)
+            ln -sf "$entry" "$target/claude-notifications" || exit 1
+            ln -sf "$entry" "$target/agent-notifications" || exit 1
+            ;;
+    esac
+    echo "managed-runtime committed generation=1"
     exit 0
 fi
 echo "Mock binary executed with args: $@"
@@ -292,7 +364,9 @@ MOCK_EOF
     fi
     echo "$checksum  mock_binary" > "$FIXTURES_DIR/checksums.txt"
 
-    # Build both real app layouts; the installer checks the executable inside.
+    # Build the legacy layout portably. On macOS, build a real app bundle and
+    # ad-hoc sign it before archiving so production signature verification is
+    # exercised by the positive fixture.
     python3 - "$FIXTURES_DIR" <<'ZIP_EOF'
 import os
 import sys
@@ -306,7 +380,38 @@ for archive, app, binary in (
         entry.create_system = 3
         entry.external_attr = 0o100755 << 16
         bundle.writestr(entry, "#!/bin/sh\nexit 0\n")
+        if app == "ClaudeNotifier.app":
+            sidecar = zipfile.ZipInfo(f"{app}.managed-runtime.json")
+            bundle.writestr(sidecar, "{}\n")
 ZIP_EOF
+
+    if [ "$(get_platform)" = "darwin" ]; then
+        if ! command -v codesign >/dev/null 2>&1 || ! command -v ditto >/dev/null 2>&1; then
+            echo "codesign and ditto are required for the macOS mock fixture"
+            return 1
+        fi
+        local archive_dir="$FIXTURES_DIR/ClaudeNotifier-archive"
+        local app_dir="$archive_dir/ClaudeNotifier.app"
+        rm -rf "$archive_dir" "$FIXTURES_DIR/ClaudeNotifier.app.zip"
+        mkdir -p "$app_dir/Contents/MacOS"
+        cat > "$app_dir/Contents/MacOS/terminal-notifier-modern" <<'APP_EOF'
+#!/bin/sh
+exit 0
+APP_EOF
+        chmod +x "$app_dir/Contents/MacOS/terminal-notifier-modern"
+        cat > "$app_dir/Contents/Info.plist" <<'PLIST_EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>com.claude.desktop.notifier</string>
+<key>CFBundleExecutable</key><string>terminal-notifier-modern</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+</dict></plist>
+PLIST_EOF
+        printf '{}\n' > "$archive_dir/ClaudeNotifier.app.managed-runtime.json"
+        codesign --force --sign - --timestamp=none --identifier com.claude.desktop.notifier "$app_dir" >/dev/null
+        ditto -c -k --sequesterRsrc "$archive_dir" "$FIXTURES_DIR/ClaudeNotifier.app.zip"
+        rm -rf "$archive_dir"
+    fi
 
     SAVED_MODERN_NOTIFIER_URL="${MODERN_NOTIFIER_URL-}"
     SAVED_NOTIFIER_URL="${NOTIFIER_URL-}"
@@ -761,13 +866,187 @@ test_lock_prevents_parallel() {
     cleanup_test_dir
 }
 
+test_install_helper_timeout_validation() {
+    echo -e "\n${CYAN}▶ test_install_helper_timeout_validation${NC}"
+
+    setup_test_dir
+    local sourceable_install="$TEST_DIR/install-functions.sh"
+    local helper="$TEST_DIR/hanging-helper.sh"
+    local marker="$TEST_DIR/helper-started"
+    sed '/^main "\$@"$/d' "$INSTALL_SCRIPT" > "$sourceable_install"
+    cat > "$helper" <<'HELPER_EOF'
+#!/usr/bin/env bash
+: > "$HELPER_STARTED_MARKER"
+sleep 30
+HELPER_EOF
+    chmod +x "$helper"
+
+    local timeout_value exit_code
+    for timeout_value in invalid 0 -1 999999999999999999999999999999; do
+        rm -f "$marker"
+        set +e
+        run_with_timeout_env 3 \
+            INSTALL_HELPER_TIMEOUT_SECONDS="$timeout_value" \
+            HELPER_STARTED_MARKER="$marker" \
+            bash -c 'source "$1"; run_install_helper "$2"' _ \
+            "$sourceable_install" "$helper" >/dev/null 2>&1
+        exit_code=$?
+        set -e
+        assert_exit_code 2 "$exit_code" "Invalid helper timeout '$timeout_value' fails closed"
+        assert_file_not_exists "$marker" "Invalid helper timeout '$timeout_value' never starts helper"
+    done
+
+    cleanup_test_dir
+}
+
 test_lock_stale_removal() {
     echo -e "\n${CYAN}▶ test_lock_stale_removal${NC}"
 
-    # This test is difficult to do reliably without modifying install.sh
-    # The stale lock check uses 600 seconds (10 minutes)
-    # We'll skip this test in normal runs
-    skip_test "Stale lock removal" "requires 10+ minute old lock"
+    setup_test_dir
+    local sourceable_install="$TEST_DIR/install-functions.sh"
+    sed '/^main "\$@"$/d' "$INSTALL_SCRIPT" > "$sourceable_install"
+
+    # An old heartbeat owned by this live shell is still refused.
+    mkdir -p "$TEST_DIR/.install.lock/.owner.live"
+    printf '%s\n' "$$" > "$TEST_DIR/.install.lock/.owner.live/pid"
+    : > "$TEST_DIR/.install.lock/.owner.live/heartbeat"
+    touch -t 200001010000 "$TEST_DIR/.install.lock/.owner.live/heartbeat"
+    set +e
+    local live_output
+    live_output=$(INSTALL_TARGET_DIR="$TEST_DIR" bash -c 'source "$1"; acquire_lock' _ "$sourceable_install" 2>&1)
+    local live_exit=$?
+    set -e
+    assert_exit_code 1 "$live_exit" "Live owner refuses old lock takeover"
+    assert_contains "$live_output" "Another installation" "Live owner lock remains protected"
+    assert_dir_exists "$TEST_DIR/.install.lock" "Live old lock remains"
+
+    # A dead owner with an expired heartbeat is reclaimable.
+    rm -rf "$TEST_DIR/.install.lock"
+    mkdir -p "$TEST_DIR/.install.lock/.owner.dead"
+    # This value is outside the supported PID range on macOS, Linux, and
+    # Windows, so liveness does not depend on child exit or PID reuse timing.
+    local dead_pid=99999999
+    printf '%s\n' "$dead_pid" > "$TEST_DIR/.install.lock/.owner.dead/pid"
+    : > "$TEST_DIR/.install.lock/.owner.dead/heartbeat"
+    touch -t 200001010000 "$TEST_DIR/.install.lock/.owner.dead/heartbeat"
+    set +e
+    local dead_output
+    dead_output=$(INSTALL_TARGET_DIR="$TEST_DIR" bash -c 'source "$1"; acquire_lock; release_lock' _ "$sourceable_install" 2>&1)
+    local dead_exit=$?
+    set -e
+    assert_exit_code 0 "$dead_exit" "Dead stale owner lock is reclaimed"
+    assert_not_contains "$dead_output" "Another installation" "Dead stale owner does not block"
+    assert_dir_not_exists "$TEST_DIR/.install.lock" "Reclaimed lock releases normally"
+
+    # Missing, malformed, or ambiguous ownership evidence fails closed even
+    # when every visible heartbeat is old.
+    for marker_case in missing invalid multiple unexpected-root unexpected-owner; do
+        rm -rf "$TEST_DIR/.install.lock"
+        mkdir -p "$TEST_DIR/.install.lock"
+        case "$marker_case" in
+            missing)
+                :
+                ;;
+            invalid)
+                : > "$TEST_DIR/.install.lock/.owner.invalid"
+                ;;
+            multiple)
+                for suffix in one two; do
+                    mkdir "$TEST_DIR/.install.lock/.owner.$suffix"
+                    printf '%s\n' "$dead_pid" > "$TEST_DIR/.install.lock/.owner.$suffix/pid"
+                    : > "$TEST_DIR/.install.lock/.owner.$suffix/heartbeat"
+                    touch -t 200001010000 "$TEST_DIR/.install.lock/.owner.$suffix/heartbeat"
+                done
+                ;;
+            unexpected-root)
+                mkdir "$TEST_DIR/.install.lock/.owner.dead"
+                printf '%s\n' "$dead_pid" > "$TEST_DIR/.install.lock/.owner.dead/pid"
+                : > "$TEST_DIR/.install.lock/.owner.dead/heartbeat"
+                touch -t 200001010000 "$TEST_DIR/.install.lock/.owner.dead/heartbeat"
+                : > "$TEST_DIR/.install.lock/legacy.lock"
+                ;;
+            unexpected-owner)
+                mkdir "$TEST_DIR/.install.lock/.owner.dead"
+                printf '%s\n' "$dead_pid" > "$TEST_DIR/.install.lock/.owner.dead/pid"
+                : > "$TEST_DIR/.install.lock/.owner.dead/heartbeat"
+                touch -t 200001010000 "$TEST_DIR/.install.lock/.owner.dead/heartbeat"
+                : > "$TEST_DIR/.install.lock/.owner.dead/legacy"
+                ;;
+        esac
+        set +e
+        local ambiguous_output
+        ambiguous_output=$(INSTALL_TARGET_DIR="$TEST_DIR" bash -c 'source "$1"; acquire_lock' _ "$sourceable_install" 2>&1)
+        local ambiguous_exit=$?
+        set -e
+        assert_exit_code 1 "$ambiguous_exit" "$marker_case owner evidence is not reclaimed"
+        assert_contains "$ambiguous_output" "Another installation" "$marker_case owner evidence fails closed"
+        assert_dir_exists "$TEST_DIR/.install.lock" "$marker_case owner lock remains"
+        if [ "$marker_case" = unexpected-root ] || [ "$marker_case" = unexpected-owner ]; then
+            assert_file_exists "$TEST_DIR/.install.lock/.owner.dead/pid" "$marker_case owner PID remains untouched"
+            assert_file_exists "$TEST_DIR/.install.lock/.owner.dead/heartbeat" "$marker_case heartbeat remains untouched"
+        fi
+        if [ "$marker_case" = unexpected-root ]; then
+            assert_file_exists "$TEST_DIR/.install.lock/legacy.lock" "Unexpected root content remains untouched"
+        elif [ "$marker_case" = unexpected-owner ]; then
+            assert_file_exists "$TEST_DIR/.install.lock/.owner.dead/legacy" "Unexpected owner content remains untouched"
+        fi
+    done
+
+    cleanup_test_dir
+}
+
+test_lock_release_removes_owned_metadata() {
+    echo -e "\n${CYAN}▶ test_lock_release_removes_owned_metadata${NC}"
+
+    setup_test_dir
+    local sourceable_install="$TEST_DIR/install-functions.sh"
+    sed '/^main "\$@"$/d' "$INSTALL_SCRIPT" > "$sourceable_install"
+
+    set +e
+    INSTALL_TARGET_DIR="$TEST_DIR" bash -c '
+        source "$1"
+        acquire_lock || exit
+        test -f "$LOCK_OWNER_DIR/pid" && test -f "$LOCK_OWNER_DIR/heartbeat" || exit 2
+        release_lock
+        test ! -e "$LOCKFILE"
+    ' _ "$sourceable_install"
+    local exit_code=$?
+    set -e
+
+    assert_exit_code 0 "$exit_code" "Ordinary release removes owned metadata and lock"
+    assert_dir_not_exists "$TEST_DIR/.install.lock" "Ordinary release does not leak lock"
+    cleanup_test_dir
+}
+
+test_lock_heartbeat_stops_with_dead_owner() {
+    echo -e "\n${CYAN}▶ test_lock_heartbeat_stops_with_dead_owner${NC}"
+
+    setup_test_dir
+    local sourceable_install="$TEST_DIR/install-functions.sh"
+    sed '/^main "\$@"$/d' "$INSTALL_SCRIPT" > "$sourceable_install"
+
+    # Use the heartbeat function's validated test interval so this checks the
+    # orphan-child edge without weakening the production 30-second interval.
+    set +e
+    run_with_timeout 5 bash -c '
+        source "$1"
+        mkdir -p "$LOCKFILE/.owner.test"
+        owner_dir="$LOCKFILE/.owner.test"
+        (sleep 0.1) &
+        owner_pid=$!
+        printf "%s\n" "$owner_pid" > "$owner_dir/pid"
+        : > "$owner_dir/heartbeat"
+        start_lock_heartbeat "$owner_dir" 1
+        heartbeat_pid=$LOCK_HEARTBEAT_PID
+        wait "$owner_pid"
+        wait "$heartbeat_pid"
+    ' _ "$sourceable_install"
+    local exit_code=$?
+    set -e
+
+    assert_exit_code 0 "$exit_code" "Heartbeat child exits after its recorded owner dies"
+    rm -rf "$TEST_DIR/.install.lock"
+    cleanup_test_dir
 }
 
 test_lock_cleanup_on_exit() {
@@ -788,6 +1067,36 @@ test_lock_cleanup_on_exit() {
     # Lock should be cleaned up by trap
     assert_dir_not_exists "$TEST_DIR/.install.lock" "Lock cleaned up after exit"
 
+    cleanup_test_dir
+}
+
+test_lock_release_preserves_replacement_owner() {
+    echo -e "\n${CYAN}▶ test_lock_release_preserves_replacement_owner${NC}"
+
+    setup_test_dir
+    local sourceable_install="$TEST_DIR/install-functions.sh"
+    sed '/^main "\$@"$/d' "$INSTALL_SCRIPT" > "$sourceable_install"
+
+    set +e
+    INSTALL_TARGET_DIR="$TEST_DIR" /bin/bash -c '
+        source "$1"
+        acquire_lock
+        # Model an external takeover after the old owner heartbeat has stopped.
+        # Otherwise macOS rm can race the active heartbeat recreating metadata.
+        kill "$LOCK_HEARTBEAT_PID" 2>/dev/null || true
+        wait "$LOCK_HEARTBEAT_PID" 2>/dev/null || true
+        LOCK_HEARTBEAT_PID=""
+        rm -rf "$LOCKFILE"
+        mkdir "$LOCKFILE"
+        replacement_owner=$(mktemp -d "$LOCKFILE/.owner.XXXXXX")
+        release_lock
+        test -d "$LOCKFILE" && test -d "$replacement_owner"
+        rm -rf "$LOCKFILE"
+    ' _ "$sourceable_install"
+    local exit_code=$?
+    set -e
+
+    assert_exit_code 0 "$exit_code" "Old process cannot remove a replacement owner's lock"
     cleanup_test_dir
 }
 
@@ -873,6 +1182,38 @@ test_transport_error_diagnostics() {
     assert_contains "$output" "Download failed before an HTTP response was received|No HTTP response received from the release server" "Transport failure summary shown"
     assert_contains "$output" "Retrying once with compatibility mode|Connection to the release host failed|TLS/certificate validation failed|Windows/Git Bash downloads can fail behind corporate proxies" "Transport guidance shown"
     assert_exit_code 1 $exit_code "Exit code is 1 on transport failure"
+
+    cleanup_test_dir
+}
+
+test_no_file_printable_payload_diagnostic() {
+    echo -e "\n${CYAN}▶ test_no_file_printable_payload_diagnostic${NC}"
+
+    setup_test_dir
+    local sourceable_install="$TEST_DIR/install-functions.sh"
+    local text_payload="$TEST_DIR/text-payload"
+    local binary_payload="$TEST_DIR/binary-payload"
+    sed '/^main "\$@"$/d' "$INSTALL_SCRIPT" > "$sourceable_install"
+    : > "$text_payload"
+    local i=0
+    while [ "$i" -lt 256 ]; do
+        printf 'wrong content ' >> "$text_payload"
+        i=$((i + 1))
+    done
+    # A NUL amid otherwise printable bytes guards against inspecting raw bytes
+    # via command substitution, which Bash would silently strip.
+    printf 'binary\000bytes' > "$binary_payload"
+
+    local text_output binary_output
+    text_output=$(INSTALL_TARGET_DIR="$TEST_DIR" /bin/bash -c \
+        'source "$1"; file() { return 127; }; PLATFORM=windows; print_unexpected_payload_diagnostics "$2"' \
+        _ "$sourceable_install" "$text_payload" 2>&1)
+    binary_output=$(INSTALL_TARGET_DIR="$TEST_DIR" /bin/bash -c \
+        'source "$1"; file() { return 127; }; PLATFORM=windows; print_unexpected_payload_diagnostics "$2"' \
+        _ "$sourceable_install" "$binary_payload" 2>&1)
+
+    assert_contains "$text_output" "Payload looks like text instead of a raw executable" "Printable payload is diagnosed without file"
+    assert_not_contains "$binary_output" "Payload looks like text instead of a raw executable" "Binary payload is not classified as text"
 
     cleanup_test_dir
 }
@@ -979,6 +1320,7 @@ UNAME_EOF
 
     cat > "$bin_dir/claude-notifications-windows-amd64.exe" <<'FAKE_EXE_EOF'
 #!/bin/sh
+# agent-notifications-managed-writer-protocol-v1
 if [ "$1" = "--version" ] || [ "$1" = "version" ]; then
     echo "claude-notifications v1.38.0"
     exit 0
@@ -993,6 +1335,40 @@ if [ "$1" = "windows-hooks" ]; then
         shift
     done
     printf '{\n  "hooks": {\n    "Stop": [\n      {\n        "hooks": [\n          {\n            "type": "command",\n            "command": "%s",\n            "args": ["handle-hook", "Stop"],\n            "timeout": 30\n          }\n        ]\n      }\n    ]\n  }\n}\n' "$exe"
+    exit 0
+fi
+if [ "$1" = "internal-install-runtime" ]; then
+    shift
+    target=""
+    entry=""
+    while [ "$#" -gt 0 ]; do
+        if [ "$1" = "--stage" ]; then
+            shift
+        elif [ "$1" = "--target" ]; then
+            shift
+            target="$1"
+        elif [ "$1" = "--entry" ]; then
+            shift
+            entry="$1"
+        fi
+        shift
+    done
+    if [ -z "$target" ] || [ -z "$entry" ]; then
+        exit 1
+    fi
+    for launcher in claude-notifications agent-notifications; do
+        cat > "$target/${launcher}.bat" <<EOF
+@echo off
+REM ${launcher} Windows wrapper
+REM Automatically runs the platform-specific binary
+
+setlocal
+set SCRIPT_DIR=%~dp0
+set AGENT_NOTIFICATIONS_LAUNCHER=${launcher}
+"%SCRIPT_DIR%${entry}" %*
+EOF
+        [ -f "$target/${launcher}.bat" ] || exit 1
+    done
     exit 0
 fi
 exit 0
@@ -1053,6 +1429,7 @@ UNAME_EOF
 
     cat > "$bin_dir/claude-notifications-windows-amd64.exe" <<'OLD_EXE_EOF'
 #!/bin/sh
+# agent-notifications-managed-writer-protocol-v1
 if [ "$1" = "--version" ] || [ "$1" = "version" ]; then
     echo "claude-notifications v1.37.0"
     exit 0
@@ -1105,6 +1482,7 @@ UNAME_EOF
 
     cat > "$bin_dir/claude-notifications-windows-amd64.exe" <<'WRAPPER_EXE_EOF'
 #!/bin/sh
+# agent-notifications-managed-writer-protocol-v1
 if [ "$1" = "--version" ] || [ "$1" = "version" ]; then
     echo "claude-notifications v1.38.0"
     exit 0
@@ -1160,6 +1538,7 @@ UNAME_EOF
 
     cat > "$bin_dir/claude-notifications-windows-amd64.exe" <<'SH_EXE_EOF'
 #!/bin/sh
+# agent-notifications-managed-writer-protocol-v1
 if [ "$1" = "--version" ] || [ "$1" = "version" ]; then
     echo "claude-notifications v1.38.0"
     exit 0
@@ -1208,33 +1587,65 @@ test_windows_native_hooks_real_exec_launch() {
 
     local plugin_root="$TEST_DIR/plugin"
     local bin_dir="$plugin_root/bin"
+    local stage_dir="$TEST_DIR/stage"
     local hooks_dir="$plugin_root/hooks"
-    mkdir -p "$bin_dir" "$hooks_dir"
+    mkdir -p "$bin_dir" "$stage_dir" "$hooks_dir"
     printf '{"hooks":{}}\n' > "$hooks_dir/hooks.json"
 
-    local exe_path="$bin_dir/claude-notifications-windows-amd64.exe"
-    local go_proxy
-    go_proxy=$(go env GOPROXY)
-    if [ "$go_proxy" != "off" ]; then
-        fail_test "Isolated Windows go build stays offline" "GOPROXY=$go_proxy want off"
+    local exe_path="$stage_dir/claude-notifications-windows-amd64.exe"
+    if [ "$(go env GOPROXY)" != "off" ]; then
+        fail_test "Isolated Windows go build stays offline" "GOPROXY=$(go env GOPROXY) want off"
         cleanup_test_dir
         return
     fi
-    if ! (cd "$REPO_ROOT" && go build -o "$exe_path" ./cmd/claude-notifications); then
+    if ! (cd "$REPO_ROOT" && go build -ldflags="-s -w" -trimpath -o "$exe_path" ./cmd/claude-notifications); then
         fail_test "Build real Windows notification binary" "go build failed"
         cleanup_test_dir
         return
     fi
+    local exe_size
+    exe_size=$(wc -c < "$exe_path")
+    if [ "$exe_size" -gt $((32 * 1024 * 1024)) ]; then
+        fail_test "Build real Windows notification binary" "fixture exceeds 32MiB managed cap ($exe_size bytes)"
+        cleanup_test_dir
+        return
+    fi
 
-    printf '#!/bin/sh\nexit 0\n' > "$bin_dir/claude-notifications-windows-amd64-focus.exe"
-    chmod +x "$bin_dir/claude-notifications-windows-amd64-focus.exe"
+    printf '#!/bin/sh\nexit 0\n' > "$stage_dir/claude-notifications-windows-amd64-focus.exe"
+    chmod +x "$stage_dir/claude-notifications-windows-amd64-focus.exe"
 
-    touch "$bin_dir/sound-preview-windows-amd64.exe"
-    touch "$bin_dir/list-devices-windows-amd64.exe"
-    touch "$bin_dir/list-sounds-windows-amd64.exe"
+    local appdata_dir="$TEST_DIR/appdata"
+    mkdir -p "$appdata_dir"
+    local native_stage native_target native_appdata
+    native_stage="$stage_dir"
+    native_target="$bin_dir"
+    native_appdata="$appdata_dir"
+    if command -v cygpath >/dev/null 2>&1; then
+        native_stage=$(cygpath -w "$stage_dir")
+        native_target=$(cygpath -w "$bin_dir")
+        native_appdata=$(cygpath -w "$appdata_dir")
+    fi
+
+    local register_out
+    if ! register_out=$(APPDATA="$native_appdata" "$exe_path" internal-install-runtime --stage "$native_stage" --target "$native_target" --entry "claude-notifications-windows-amd64.exe" 2>&1); then
+        fail_test "Register managed Windows runtime" "$register_out"
+        cleanup_test_dir
+        return
+    fi
+
+    # Installer skips GitHub utility downloads when these exceed the size floor.
+    # Keep them out of the stage so the kernel does not adopt dummy bytes.
+    dd if=/dev/zero of="$bin_dir/sound-preview-windows-amd64.exe" bs=1024 count=100 status=none 2>/dev/null || \
+        dd if=/dev/zero of="$bin_dir/sound-preview-windows-amd64.exe" bs=1024 count=100 2>/dev/null
+    dd if=/dev/zero of="$bin_dir/list-devices-windows-amd64.exe" bs=1024 count=100 status=none 2>/dev/null || \
+        dd if=/dev/zero of="$bin_dir/list-devices-windows-amd64.exe" bs=1024 count=100 2>/dev/null
+    dd if=/dev/zero of="$bin_dir/list-sounds-windows-amd64.exe" bs=1024 count=100 status=none 2>/dev/null || \
+        dd if=/dev/zero of="$bin_dir/list-sounds-windows-amd64.exe" bs=1024 count=100 2>/dev/null
+
+    exe_path="$bin_dir/claude-notifications-windows-amd64.exe"
 
     local output exit_code
-    output=$(INSTALL_TARGET_DIR="$bin_dir" run_with_timeout 30 bash "$INSTALL_SCRIPT" 2>&1)
+    output=$(APPDATA="$native_appdata" INSTALL_TARGET_DIR="$bin_dir" bash "$INSTALL_SCRIPT" 2>&1)
     exit_code=$?
 
     assert_exit_code 0 $exit_code "Installer succeeds with real Windows binary"
@@ -1254,8 +1665,7 @@ test_windows_native_hooks_real_exec_launch() {
     # Judge mode skips WinRT/PowerShell toast delivery, which can stall hosted
     # Windows runners. The assertion is that the exec-form exe launches.
     set +e
-    output=$(printf '{"session_id":"ci-win","transcript_path":"","cwd":""}\n' | \
-        run_with_timeout_env 20 CLAUDE_HOOK_JUDGE_MODE=true "$exe_path" handle-hook Stop 2>&1)
+    output=$(printf '{"session_id":"ci-win","transcript_path":"","cwd":""}\n' | run_with_timeout_env 20 APPDATA="$native_appdata" CLAUDE_HOOK_JUDGE_MODE=true "$exe_path" handle-hook Stop 2>&1)
     exit_code=$?
     set +e
 
@@ -1456,6 +1866,44 @@ test_mock_download_success() {
     exit_code=$?
 
     assert_exit_code 0 $exit_code "Install completed successfully"
+    assert_dir_not_exists "$TEST_DIR/.install.lock" "Successful install releases lock before next run"
+    second_output=$(RELEASE_URL="http://localhost:$MOCK_PORT" \
+             CHECKSUMS_URL="http://localhost:$MOCK_PORT/checksums.txt" \
+             NOTIFIER_URL="http://localhost:$MOCK_PORT/valid.zip" \
+             INSTALL_TARGET_DIR="$TEST_DIR" \
+             run_with_timeout 60 bash "$INSTALL_SCRIPT" 2>&1)
+    second_exit_code=$?
+    assert_exit_code 0 $second_exit_code "Second same-target install succeeds after lock release"
+
+    if [ "$(get_platform)" = "darwin" ]; then
+        local repair_output repair_exit_code modern_app
+        modern_app="$TEST_DIR/ClaudeNotifier.app"
+
+        rm -f "${modern_app}.managed-runtime.json"
+        repair_output=$(RELEASE_URL="http://localhost:$MOCK_PORT" \
+                 CHECKSUMS_URL="http://localhost:$MOCK_PORT/checksums.txt" \
+                 NOTIFIER_URL="http://localhost:$MOCK_PORT/valid.zip" \
+                 INSTALL_TARGET_DIR="$TEST_DIR" \
+                 run_with_timeout 60 bash "$INSTALL_SCRIPT" 2>&1)
+        repair_exit_code=$?
+        assert_exit_code 0 "$repair_exit_code" "Missing modern notifier sidecar triggers reacquisition"
+        assert_file_exists "${modern_app}.managed-runtime.json" "Modern notifier sidecar restored"
+
+        printf '\n# signature tamper\n' >> "$modern_app/Contents/MacOS/terminal-notifier-modern"
+        repair_output=$(RELEASE_URL="http://localhost:$MOCK_PORT" \
+                 CHECKSUMS_URL="http://localhost:$MOCK_PORT/checksums.txt" \
+                 NOTIFIER_URL="http://localhost:$MOCK_PORT/valid.zip" \
+                 INSTALL_TARGET_DIR="$TEST_DIR" \
+                 run_with_timeout 60 bash "$INSTALL_SCRIPT" 2>&1)
+        repair_exit_code=$?
+        assert_exit_code 0 "$repair_exit_code" "Invalid modern notifier signature triggers reacquisition"
+        if codesign --verify --verbose "$modern_app" >/dev/null 2>&1; then
+            pass_test "Modern notifier signature restored"
+        else
+            fail_test "Modern notifier signature restored" "codesign verification failed after reacquisition"
+        fi
+    fi
+
     assert_desktop_runtime "$TEST_DIR"
     assert_file_exists "$TEST_DIR/$binary_name" "Binary downloaded"
     # On Windows, wrapper is .bat file; on Unix it's a symlink
@@ -1770,7 +2218,7 @@ test_mock_zip_corrupted() {
     assert_exit_code 1 "$exit_code" "Corrupt notifier prevents successful install"
     assert_file_not_exists "$TEST_DIR/claude-notifications" "Incomplete runtime is not published"
     # Missing desktop runtime must fail without publishing a ready installation
-    assert_contains "$output" "not a valid zip|Could not extract|extraction" "Corrupted zip detected"
+    assert_contains "$output" "Checksum mismatch.*ClaudeNotifier.app.zip|not a valid zip|Could not extract|extraction" "Corrupted zip detected"
 
     rm -f "$FIXTURES_DIR/$binary_name"
 
@@ -2175,6 +2623,7 @@ MOCK_EOF
     # Create dummy install.sh that creates a marker file
     cat > "$ROOT_DIR/bin/install.sh" << 'INSTALL_EOF'
 #!/bin/sh
+# agent-notifications-managed-writer-protocol-v1
 touch "$INSTALL_TARGET_DIR/.update-triggered"
 INSTALL_EOF
     chmod +x "$ROOT_DIR/bin/install.sh"
@@ -2228,6 +2677,7 @@ MOCK_EOF
     # Create install.sh that creates a marker file
     cat > "$ROOT_DIR/bin/install.sh" << 'INSTALL_EOF'
 #!/bin/sh
+# agent-notifications-managed-writer-protocol-v1
 touch "$INSTALL_TARGET_DIR/.update-triggered"
 INSTALL_EOF
     chmod +x "$ROOT_DIR/bin/install.sh"
@@ -2528,12 +2978,17 @@ main() {
         test_bootstrap_empty_registry_version_preserves_installed_manifest
         test_lock_created
         test_lock_prevents_parallel
+        test_install_helper_timeout_validation
         test_lock_stale_removal
+        test_lock_release_removes_owned_metadata
+        test_lock_heartbeat_stops_with_dead_owner
         test_lock_cleanup_on_exit
+        test_lock_release_preserves_replacement_owner
         test_no_write_permission
         test_install_target_dir
         test_directory_auto_created
         test_transport_error_diagnostics
+        test_no_file_printable_payload_diagnostic
         test_required_tools_curl_wget
         test_force_preserves_binaries
         test_force_preserves_symlinks

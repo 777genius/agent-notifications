@@ -15,7 +15,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - go: '1.22'
+          - go: '1.25'
             os: macos-15
           - go: '1.26'
             os: macos-26
@@ -51,7 +51,7 @@ jobs:
           fi
 
       - name: Run tests
-        run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+        run: go test -timeout 20m -v -race -coverprofile=coverage.txt -covermode=atomic ./...
 
       - name: Build binary
         run: go build -o bin/claude-notifications ./cmd/claude-notifications

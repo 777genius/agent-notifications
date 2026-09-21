@@ -1,6 +1,7 @@
 #!/bin/bash
 # install.sh - Auto-installer for claude-notifications binaries
 # Downloads the appropriate binary from GitHub Releases
+# agent-notifications-managed-writer-protocol-v1
 
 set -e
 
@@ -55,7 +56,7 @@ cleanup_install_stage() {
 trap 'cleanup_install_config' EXIT
 
 config_preflight_stop() {
-    echo 'Config preflight stopped installation; existing runtime retained. Check AGENT_NOTIFICATIONS_CONFIG and repair/recover the selected file, or rerun bootstrap with a config-capable release and python3 or node.' >&2
+    echo 'Config preflight stopped installation; existing runtime retained. Check AGENT_NOTIFICATIONS_CONFIG and repair/recover the selected file, or rerun bootstrap with a config-capable release.' >&2
     return 1
 }
 
@@ -72,7 +73,6 @@ usable_node() {
 
 prepare_install_config_preflight() {
     [ "${AGENT_NOTIFICATIONS_CONFIG+x}" = x ] || return 0
-    usable_python3 || usable_node || { config_preflight_stop; return 1; }
     local status
     [ -n "$INSTALL_CONFIG_HELPER" ] || INSTALL_CONFIG_HELPER="$BINARY_PATH"
     if install_config_preflight "$@"; then return 0; else status=$?; fi
@@ -104,97 +104,77 @@ prepare_install_config_preflight() {
     INSTALL_STAGED_ASSETS="$INSTALL_CONFIG_STAGE"
 }
 
+# Keep an unresponsive helper from hanging an installation indefinitely, without
+# requiring a language runtime. The watchdog never grants permission to mutate.
+run_install_helper() (
+    # EXIT runs after Bash unwinds function locals on an interrupted wait.
+    # This subshell owns the trap state, so assignments cannot leak to callers.
+    child="" watchdog="" capture=""
+    local status timeout
+    capture=$(mktemp -d "${TMPDIR:-${TEMP:-/tmp}}/install-helper.XXXXXX") || exit 1
+    cleanup_helper_run() {
+        [ -z "$watchdog" ] || kill "$watchdog" 2>/dev/null || true
+        [ -z "$child" ] || kill -KILL -- "-$child" 2>/dev/null || true
+        [ -z "$watchdog" ] || wait "$watchdog" 2>/dev/null || true
+        [ -z "$child" ] || wait "$child" 2>/dev/null || true
+        rm -rf -- "$capture"
+    }
+    trap cleanup_helper_run EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    timeout="${INSTALL_HELPER_TIMEOUT_SECONDS:-20}"
+    # This value crosses a trust boundary through the environment. Reject it
+    # before starting the helper so malformed, zero, negative, or impractically
+    # large values cannot disable the watchdog or leave command substitution
+    # waiting forever.
+    case "$timeout" in
+        ''|*[!0-9]*) exit 2 ;;
+    esac
+    if ! [ "$timeout" -ge 1 ] 2>/dev/null ||
+       ! [ "$timeout" -le 300 ] 2>/dev/null; then
+        exit 2
+    fi
+    # Monitor mode gives this background command its own process group. A hung
+    # helper and every descendant are then terminated together. Capture files
+    # keep descendants from holding a caller command-substitution pipe open.
+    set -m
+    "$@" >"$capture/stdout" 2>"$capture/stderr" &
+    child=$!
+    set +m
+    (
+        command sleep "$timeout" &
+        timer=$!
+        trap 'kill "$timer" 2>/dev/null || true' EXIT
+        trap 'exit 0' TERM
+        wait "$timer" && kill -KILL -- "-$child" 2>/dev/null
+    ) >/dev/null 2>&1 &
+    watchdog=$!
+    if wait "$child"; then status=0; else status=$?; fi
+    kill "$watchdog" 2>/dev/null || true
+    wait "$watchdog" 2>/dev/null || true
+    cat "$capture/stdout"
+    # Preserve stable diagnostics without exposing paths, config contents,
+    # panic text, or arbitrary stderr from an installed/legacy helper.
+    grep -E '^(ConfigUnsafeTarget|ConfigOverrideInvalid|ConfigInvalid|ConfigUnsupportedSchema|ConfigPermissionDenied|ConfigRecoveryRequired|ConfigLinkedPath|ConfigChanged|ConfigLockTimeout|ConfigMissing|ConfigHomeUnavailable|ConfigBaseUnavailable)$' "$capture/stderr" >&2 || true
+    exit "$status"
+)
+
 install_config_preflight() {
     [ "${AGENT_NOTIFICATIONS_CONFIG+x}" = x ] || return 0
     [ -n "$INSTALL_CONFIG_HELPER" ] || { config_preflight_stop; return 1; }
     local -a targets=("$@")
-    local helper="$INSTALL_CONFIG_HELPER"
+    local helper="$INSTALL_CONFIG_HELPER" capability
     local i
     if [ "$PLATFORM" = windows ]; then
-        helper=$(cygpath -aw "$helper") || { config_preflight_stop; return 1; }
         for ((i=0; i<${#targets[@]}; i++)); do
             targets[$i]=$(cygpath -aw "${targets[$i]}") || { config_preflight_stop; return 1; }
         done
     fi
-    # Python or Node only transports JSON/native paths and bounds helper
-    # execution. All selection, validation and alias identity decisions belong
-    # to Go Store.
-    local status
-    if usable_python3; then
-    if python3 -I - "$helper" "$PLATFORM" "${targets[@]}" <<'PYINSTALL'
-import json, os, subprocess, sys
-try:
-    helper, platform, *paths = sys.argv[1:]
-    if platform != 'windows':
-        paths = [os.path.abspath(p) for p in paths]
-    request = json.dumps(dict(refreshDirs=paths))
-    result = subprocess.run([helper, 'config', 'preflight-update', '--stdin', '--json'],
-                            input=request, universal_newlines=True, stdout=subprocess.PIPE,
-                            stderr=subprocess.DEVNULL, timeout=20)
-    response = json.loads(result.stdout)
-    if not isinstance(response, dict) or response.get('status') not in {'safe', 'unsafe-target', 'invalid-config', 'import-required'}:
-        sys.exit(2)
-    if result.returncode == 0 and response.get('status') == 'safe':
-        sys.exit(0)
-    # Only canonical codes, never paths, raw helper output, or config contents.
-    for diagnostic in response.get('diagnostics', []):
-        code = diagnostic.get('code', '')
-        if isinstance(code, str) and code in {'ConfigUnsafeTarget', 'ConfigOverrideInvalid', 'ConfigInvalid',
-                'ConfigUnsupportedSchema', 'ConfigPermissionDenied', 'ConfigRecoveryRequired',
-                'ConfigLinkedPath', 'ConfigChanged', 'ConfigLockTimeout', 'ConfigMissing',
-                'ConfigHomeUnavailable', 'ConfigBaseUnavailable'}:
-            print(code, file=sys.stderr)
-except (OSError, ValueError, TypeError, AttributeError, subprocess.TimeoutExpired):
-    sys.exit(2)
-sys.exit(1)
-PYINSTALL
-    then return 0; else status=$?; fi
-    elif usable_node; then
-    if NODE_OPTIONS= NODE_PATH= node --no-warnings - "$helper" "$PLATFORM" "${targets[@]}" <<'JSINSTALL'
-const { spawnSync } = require('child_process');
-const path = require('path');
-try {
-  const helper = process.argv[2];
-  const platform = process.argv[3];
-  let paths = process.argv.slice(4);
-  if (platform !== 'windows') paths = paths.map((p) => path.resolve(p));
-  const request = JSON.stringify({ refreshDirs: paths });
-  const result = spawnSync(helper, ['config', 'preflight-update', '--stdin', '--json'], {
-    input: request,
-    encoding: 'utf8',
-    timeout: 20000,
-    stdio: ['pipe', 'pipe', 'ignore'],
-    windowsHide: true,
-  });
-  if (result.error) process.exit(2);
-  const response = JSON.parse(result.stdout);
-  const allowed = { safe: 1, 'unsafe-target': 1, 'invalid-config': 1, 'import-required': 1 };
-  if (!response || typeof response !== 'object' || Array.isArray(response) || !allowed[response.status]) process.exit(2);
-  if (result.status === 0 && response.status === 'safe') process.exit(0);
-  const codes = {
-    ConfigUnsafeTarget: 1, ConfigOverrideInvalid: 1, ConfigInvalid: 1,
-    ConfigUnsupportedSchema: 1, ConfigPermissionDenied: 1, ConfigRecoveryRequired: 1,
-    ConfigLinkedPath: 1, ConfigChanged: 1, ConfigLockTimeout: 1, ConfigMissing: 1,
-    ConfigHomeUnavailable: 1, ConfigBaseUnavailable: 1,
-  };
-  const diagnostics = response.diagnostics === undefined ? [] : response.diagnostics;
-  if (!Array.isArray(diagnostics)) process.exit(2);
-  for (const diagnostic of diagnostics) {
-    if (!diagnostic || typeof diagnostic !== 'object' || Array.isArray(diagnostic)) process.exit(2);
-    const code = diagnostic.code;
-    if (typeof code === 'string' && codes[code]) process.stderr.write(code + '\n');
-  }
-} catch (e) {
-  process.exit(2);
-}
-process.exit(1);
-JSINSTALL
-    then return 0; else status=$?; fi
-    else
-    config_preflight_stop
-    return 1
-    fi
-    [ "$status" != 2 ] || return 2
+    # Capability detection distinguishes an old binary from a canonical safety
+    # rejection. Paths cross argv verbatim; the verified helper owns JSON.
+    capability=$(run_install_helper "$helper" config installer capabilities 2>/dev/null) || return 2
+    [ "$capability" = installer-v1 ] || return 2
+    if run_install_helper "$helper" config installer preflight "${targets[@]}" >/dev/null; then return 0; fi
     config_preflight_stop
 }
 
@@ -207,6 +187,9 @@ guard_install_paths() {
 
 # Lockfile to prevent parallel installations
 LOCKFILE="${SCRIPT_DIR}/.install.lock"
+LOCK_HELD=false
+LOCK_OWNER_DIR=""
+LOCK_HEARTBEAT_PID=""
 
 # Network settings
 MAX_RETRIES=3
@@ -469,33 +452,187 @@ print_curl_failure_guidance() {
 }
 
 # Acquire lock to prevent parallel installations
+release_lock() {
+    local owner_dir=""
+
+    [ "$LOCK_HELD" = true ] || return 0
+    owner_dir="$LOCK_OWNER_DIR"
+    LOCK_HELD=false
+    LOCK_OWNER_DIR=""
+
+    if [ -n "$LOCK_HEARTBEAT_PID" ]; then
+        kill "$LOCK_HEARTBEAT_PID" 2>/dev/null || true
+        wait "$LOCK_HEARTBEAT_PID" 2>/dev/null || true
+        LOCK_HEARTBEAT_PID=""
+    fi
+
+    # Remove only metadata below this process's unique ownership marker. If a
+    # stale-lock takeover replaced the directory, this path no longer exists
+    # and the new owner's lock remains untouched. The root can be removed only
+    # after our marker was removed successfully and no replacement marker is
+    # present.
+    [ -n "$owner_dir" ] || return 0
+    rm -f "$owner_dir/pid" "$owner_dir/heartbeat" 2>/dev/null || return 0
+    rmdir "$owner_dir" 2>/dev/null || return 0
+    rmdir "$LOCKFILE" 2>/dev/null || :
+    return 0
+}
+
+lock_mtime() {
+    local path="$1" value
+    if stat -f%m "$path" >/dev/null 2>&1; then
+        value=$(stat -f%m "$path" 2>/dev/null) || return 1
+    elif stat -c%Y "$path" >/dev/null 2>&1; then
+        value=$(stat -c%Y "$path" 2>/dev/null) || return 1
+    else
+        return 1
+    fi
+    case "$value" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    printf '%s\n' "$value"
+}
+
+lock_owner_dir() {
+    local candidate owner_dir="" count=0 metadata_count=0
+    # Enumerate every visible and hidden entry. A legacy file or any other
+    # unexpected content makes ownership ambiguous, so stale recovery must not
+    # remove even the otherwise well-formed marker beside it.
+    for candidate in "$LOCKFILE"/* "$LOCKFILE"/.[!.]* "$LOCKFILE"/..?*; do
+        if [ ! -e "$candidate" ] && [ ! -L "$candidate" ]; then
+            continue
+        fi
+        case "$candidate" in
+            "$LOCKFILE"/.owner.*)
+                # Symlinks, files, and ambiguous marker sets are not proof that
+                # any particular owner was abandoned.
+                [ -d "$candidate" ] && [ ! -L "$candidate" ] || return 1
+                owner_dir="$candidate"
+                count=$((count + 1))
+                ;;
+            *) return 1 ;;
+        esac
+    done
+    [ "$count" -eq 1 ] || return 1
+
+    # The owner marker itself is also a closed format. Refuse extra files,
+    # directories, or symlinks instead of partially deleting unknown state.
+    for candidate in "$owner_dir"/* "$owner_dir"/.[!.]* "$owner_dir"/..?*; do
+        if [ ! -e "$candidate" ] && [ ! -L "$candidate" ]; then
+            continue
+        fi
+        case "$candidate" in
+            "$owner_dir/pid"|"$owner_dir/heartbeat")
+                [ -f "$candidate" ] && [ ! -L "$candidate" ] || return 1
+                metadata_count=$((metadata_count + 1))
+                ;;
+            *) return 1 ;;
+        esac
+    done
+    [ "$metadata_count" -eq 2 ] || return 1
+    printf '%s\n' "$owner_dir"
+}
+
+lock_owner_alive() {
+    local owner_dir="$1" pid
+    [ -r "$owner_dir/pid" ] || return 2
+    IFS= read -r pid < "$owner_dir/pid" || return 2
+    case "$pid" in
+        ''|*[!0-9]*) return 2 ;;
+    esac
+    kill -0 "$pid" 2>/dev/null
+}
+
+start_lock_heartbeat() {
+    local owner_dir="$1"
+    local interval="${2:-30}"
+    case "$interval" in
+        ''|*[!0-9]*) interval=30 ;;
+        *) [ "$interval" -gt 0 ] 2>/dev/null || interval=30 ;;
+    esac
+    (
+        while [ -d "$owner_dir" ] && [ -f "$owner_dir/pid" ]; do
+            # The heartbeat must not outlive a SIGKILLed installer. Otherwise
+            # its orphaned child could keep a demonstrably dead owner's lock
+            # fresh forever.
+            lock_owner_alive "$owner_dir" || exit 0
+            touch "$owner_dir/heartbeat" 2>/dev/null || exit 0
+            sleep "$interval" || exit 0
+        done
+    ) </dev/null >/dev/null 2>&1 &
+    LOCK_HEARTBEAT_PID=$!
+}
+
 acquire_lock() {
     # Use mkdir for atomic lock (works on all platforms)
     if ! mkdir "$LOCKFILE" 2>/dev/null; then
-        # Check if lock is stale (older than 10 minutes)
-        if [ -d "$LOCKFILE" ]; then
-            local lock_age=0
-            if stat -f%m "$LOCKFILE" &>/dev/null; then
-                lock_age=$(($(date +%s) - $(stat -f%m "$LOCKFILE")))
-            elif stat -c%Y "$LOCKFILE" &>/dev/null; then
-                lock_age=$(($(date +%s) - $(stat -c%Y "$LOCKFILE")))
+        # A lock is reclaimable only when its recorded owner is dead and its
+        # heartbeat is older than the abandonment window. Unknown/legacy
+        # ownership is retained because age alone cannot prove abandonment.
+        if [ -d "$LOCKFILE" ] && [ ! -L "$LOCKFILE" ]; then
+            local owner_dir lock_age owner_status now heartbeat_mtime
+            owner_dir=$(lock_owner_dir || true)
+            if [ -n "$owner_dir" ] && [ -f "$owner_dir/heartbeat" ]; then
+                now=$(date +%s)
+                heartbeat_mtime=$(lock_mtime "$owner_dir/heartbeat" || true)
+                case "$now" in ''|*[!0-9]*) now="" ;; esac
+                case "$heartbeat_mtime" in ''|*[!0-9]*) heartbeat_mtime="" ;; esac
+                if [ -n "$now" ] && [ -n "$heartbeat_mtime" ]; then
+                    lock_age=$((now - heartbeat_mtime))
+                    owner_status=0
+                    lock_owner_alive "$owner_dir" || owner_status=$?
+                else
+                    lock_age=0
+                    owner_status=2
+                fi
+            else
+                lock_age=0
+                owner_status=2
             fi
 
-            if [ "$lock_age" -gt 600 ]; then
-                echo -e "${YELLOW}⚠ Removing stale lock (${lock_age}s old)${NC}"
+            if [ "$lock_age" -gt 600 ] && [ "$owner_status" -eq 1 ]; then
+                echo -e "${YELLOW}⚠ Removing abandoned lock (${lock_age}s since heartbeat)${NC}"
                 guard_install_paths "$LOCKFILE"
-                rm -rf "$LOCKFILE"
-                mkdir "$LOCKFILE" 2>/dev/null || true
+                # Retire only the marker that was inspected. If ownership was
+                # replaced or extra content appeared, fail closed instead of
+                # deleting the replacement lock.
+                rm -f "$owner_dir/pid" "$owner_dir/heartbeat" 2>/dev/null || :
+                if ! rmdir "$owner_dir" 2>/dev/null || ! rmdir "$LOCKFILE" 2>/dev/null; then
+                    echo -e "${RED}✗ Installation lock ownership changed during stale-lock recovery${NC}" >&2
+                    return 1
+                fi
+                if ! mkdir "$LOCKFILE" 2>/dev/null; then
+                    echo -e "${RED}✗ Another installation acquired the lock${NC}" >&2
+                    return 1
+                fi
             else
                 echo -e "${RED}✗ Another installation is in progress${NC}" >&2
                 echo -e "${YELLOW}If this is incorrect, remove: ${LOCKFILE}${NC}" >&2
                 return 1
             fi
+        else
+            echo -e "${RED}✗ Installation lock path is not a directory: ${LOCKFILE}${NC}" >&2
+            return 1
         fi
     fi
 
+    if ! LOCK_OWNER_DIR=$(mktemp -d "$LOCKFILE/.owner.XXXXXX"); then
+        echo -e "${RED}✗ Could not record installation lock ownership${NC}" >&2
+        rmdir "$LOCKFILE" 2>/dev/null || :
+        return 1
+    fi
+    if ! printf '%s\n' "${BASHPID:-$$}" > "$LOCK_OWNER_DIR/pid" ||
+       ! : > "$LOCK_OWNER_DIR/heartbeat"; then
+        rm -rf "$LOCK_OWNER_DIR" 2>/dev/null || :
+        rmdir "$LOCKFILE" 2>/dev/null || :
+        LOCK_OWNER_DIR=""
+        echo -e "${RED}✗ Could not record installation lock ownership${NC}" >&2
+        return 1
+    fi
+    LOCK_HELD=true
+    start_lock_heartbeat "$LOCK_OWNER_DIR"
     # Set trap to release lock on exit
-    trap 'rmdir "$LOCKFILE" 2>/dev/null || :; cleanup_install_config' EXIT
+    trap 'release_lock; cleanup_install_config' EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
     return 0
@@ -669,6 +806,29 @@ get_payload_text_sample() {
     LC_ALL=C head -c 256 "$1" 2>/dev/null | tr '\000' ' ' | tr '\r' '\n'
 }
 
+is_clearly_printable_text_payload() {
+    local file="$1"
+    local sample_size
+    local non_text_size
+    local printable_size
+
+    # Inspect the original bytes before get_payload_text_sample replaces NULs.
+    # Restrict this to printable ASCII plus the ordinary text whitespace bytes;
+    # this avoids calling arbitrary binary data text when `file` is unavailable.
+    # Count through pipelines rather than storing raw bytes in a shell variable,
+    # since command substitution silently drops NUL bytes in Bash.
+    sample_size=$(LC_ALL=C head -c 4096 "$file" 2>/dev/null | wc -c) || return 1
+    [ "${sample_size:-0}" -gt 0 ] || return 1
+
+    non_text_size=$(LC_ALL=C head -c 4096 "$file" 2>/dev/null |
+        LC_ALL=C tr -d '\011\012\015\040-\176' | wc -c) || return 1
+    [ "${non_text_size:-0}" -eq 0 ] || return 1
+
+    printable_size=$(LC_ALL=C head -c 4096 "$file" 2>/dev/null |
+        LC_ALL=C tr -cd '\040-\176' | wc -c) || return 1
+    [ "${printable_size:-0}" -gt 0 ]
+}
+
 print_unexpected_payload_diagnostics() {
     local file="$1"
     local magic=""
@@ -727,7 +887,9 @@ print_unexpected_payload_diagnostics() {
         return 0
     fi
 
-    if [ -n "$file_desc" ] && printf '%s\n' "$file_desc" | grep -qiE 'text|ascii|unicode'; then
+    if is_clearly_printable_text_payload "$file" || {
+        [ -n "$file_desc" ] && printf '%s\n' "$file_desc" | grep -qiE 'text|ascii|unicode'
+    }; then
         echo -e "${YELLOW}→ Payload looks like text instead of a raw executable.${NC}" >&2
     fi
 }
@@ -789,6 +951,9 @@ check_existing() {
         return 1
     fi
     if [ -f "$BINARY_PATH" ]; then
+        if ! LC_ALL=C grep -aqF 'agent-notifications-managed-writer-protocol-v1' "$BINARY_PATH"; then
+            return 1
+        fi
         if ! desktop_runtime_usable; then
             return 1
         fi
@@ -804,6 +969,33 @@ check_existing() {
         return 0
     fi
     return 1
+}
+
+# In-place refresh of an already compatible runtime. Historical writers are
+# never executed: the protocol marker is required in the existing bytes first.
+refresh_existing_runtime() {
+    [ -f "$BINARY_PATH" ] || return 1
+    LC_ALL=C grep -aqF 'agent-notifications-managed-writer-protocol-v1' "$BINARY_PATH" || return 1
+    "$BINARY_PATH" internal-install-runtime --refresh --stage "$SCRIPT_DIR" --target "$SCRIPT_DIR" --entry "$BINARY_NAME"
+}
+
+# Disposable acquisition refuses an existing or unclean destination before any
+# download. Bootstrap uses this to keep the live runtime untouched.
+validate_acquire_output() {
+    local out="${ACQUIRE_OUTPUT-}"
+    [ -n "$out" ] || return 1
+    case "$out" in
+        /*) ;;
+        *) return 1 ;;
+    esac
+    case "$out" in
+        *..*|*/) return 1 ;;
+    esac
+    if [ -e "$out" ] || [ -L "$out" ]; then
+        echo "Acquire destination already exists; existing runtime preserved." >&2
+        return 1
+    fi
+    return 0
 }
 
 # Download a utility binary (sound-preview, list-devices)
@@ -848,7 +1040,8 @@ download_utility() (
     # These sound tools do not implement --version; do not launch audio/device
     # enumeration to validate an optional download.
     if [ "$downloaded" = true ] && guard_install_paths "$temp_path" && chmod +x "$temp_path" &&
-       utility_usable "$temp_path" && guard_install_paths "$util_path" && mv -f "$temp_path" "$util_path"; then
+       utility_usable "$temp_path" && verify_checksum_file "$temp_path" "$util_name" &&
+       guard_install_paths "$util_path" && mv -f "$temp_path" "$util_path"; then
         echo -e "${GREEN}✓${NC} ${util_name} downloaded"
         return 0
     fi
@@ -860,6 +1053,10 @@ download_utility() (
 download_utilities() {
     echo ""
     echo -e "${BLUE}📦 Downloading utility binaries...${NC}"
+
+    # Fetch the manifest from the same pinned release URL as the optional
+    # companions. Verification still fails closed if acquisition is unavailable.
+    [ -f "$CHECKSUMS_PATH" ] || download_checksums || true
 
     local status
     download_utility "$SOUND_PREVIEW_NAME" "$SOUND_PREVIEW_PATH" || {
@@ -921,25 +1118,38 @@ EOF
     chmod +x "$symlink_path" 2>/dev/null || true
 }
 
-# Download checksums file
-download_checksums() {
+# Download checksums file without exposing a partial manifest at the live path.
+download_checksums() (
     guard_download_paths "$CHECKSUMS_PATH"
     echo -e "${BLUE}📝 Downloading checksums...${NC}"
 
+    checksum_temp=''
+    checksum_temp=$(mktemp "${CHECKSUMS_PATH}.download.XXXXXX") || return 1
+    trap 'if [ -n "$checksum_temp" ]; then guard_download_paths "$checksum_temp"; rm -f "$checksum_temp"; fi; cleanup_install_config' EXIT
+
+    local downloaded=false
     if command -v curl &> /dev/null; then
-        if curl -fsSL "${CURL_EXTRA_OPTS[@]}" --connect-timeout "$CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" "$CHECKSUMS_URL" -o "$CHECKSUMS_PATH" 2>/dev/null; then
-            return 0
+        if curl -fsSL "${CURL_EXTRA_OPTS[@]}" --connect-timeout "$CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" "$CHECKSUMS_URL" -o "$checksum_temp" 2>/dev/null; then
+            downloaded=true
         fi
     elif command -v wget &> /dev/null; then
-        if wget -q "$CHECKSUMS_URL" -O "$CHECKSUMS_PATH" 2>/dev/null; then
-            return 0
+        if wget -q "$CHECKSUMS_URL" -O "$checksum_temp" 2>/dev/null; then
+            downloaded=true
         fi
+    fi
+
+    if [ "$downloaded" = true ] &&
+       checksum_manifest_entry "$checksum_temp" "$BINARY_NAME" >/dev/null &&
+       guard_download_paths "$checksum_temp" "$CHECKSUMS_PATH" &&
+       mv -f "$checksum_temp" "$CHECKSUMS_PATH"; then
+        checksum_temp=''
+        return 0
     fi
 
     # Checksums optional - just warn
     echo -e "${YELLOW}⚠ Could not download checksums (verification will be skipped)${NC}"
     return 1
-}
+)
 
 # Download binary with progress bar
 download_binary() (
@@ -1090,43 +1300,54 @@ verify_checksum() {
 
     echo -e "${BLUE}🔒 Verifying checksum...${NC}"
 
-    # Extract expected checksum for our binary
-    local expected_sum=$(grep "$BINARY_NAME" "$CHECKSUMS_PATH" 2>/dev/null | awk '{print $1}')
-
-    if [ -z "$expected_sum" ]; then
-        [ "${REQUIRE_CHECKSUM:-false}" != true ] || return 1
-        echo -e "${YELLOW}⚠ Checksum not found for ${BINARY_NAME} (skipping)${NC}"
+    if verify_checksum_file "$BINARY_PATH" "$BINARY_NAME"; then
         return 0
     fi
-
-    # Calculate actual checksum
-    # Note: On Windows (MSYS2/Git Bash/Cygwin), sha256sum prefixes output with \
-    # when the file path contains backslashes. awk sub() strips this prefix.
-    # This is safe because SHA-256 hashes are hex-only [0-9a-f] and never contain \.
-    local actual_sum=""
-    if command -v shasum &> /dev/null; then
-        actual_sum=$(shasum -a 256 "$BINARY_PATH" 2>/dev/null | awk '{sub(/^\\/, "", $1); print $1}')
-    elif command -v sha256sum &> /dev/null; then
-        actual_sum=$(sha256sum "$BINARY_PATH" 2>/dev/null | awk '{sub(/^\\/, "", $1); print $1}')
-    else
-        [ "${REQUIRE_CHECKSUM:-false}" != true ] || return 1
-        echo -e "${YELLOW}⚠ sha256sum not available (skipping checksum)${NC}"
+    if [ "${REQUIRE_CHECKSUM:-false}" != true ] && [ ! -f "$CHECKSUMS_PATH" ]; then
+        echo -e "${YELLOW}⚠ Skipping checksum verification (checksums.txt not available)${NC}"
         return 0
     fi
+    print_unexpected_payload_diagnostics "$BINARY_PATH"
+    guard_download_paths "$BINARY_PATH"
+    rm -f "$BINARY_PATH"
+    return 1
+}
 
-    if [ "$expected_sum" = "$actual_sum" ]; then
-        echo -e "${GREEN}✓ Checksum verified${NC}"
-        return 0
+# Read one exact release filename. Every non-empty manifest record must be
+# well formed; the requested filename must occur exactly once.
+checksum_manifest_entry() {
+    local manifest="$1" filename="$2"
+    [ -f "$manifest" ] || return 1
+    awk -v target="$filename" '
+        BEGIN { found=0; bad=0 }
+        /^[[:space:]]*$/ { next }
+        NF != 2 || $1 !~ /^[0-9A-Fa-f][0-9A-Fa-f]*$/ || length($1) != 64 { bad=1; next }
+        { name=$2; sub(/^\*/, "", name); if (name == target) { found++; value=$1 } }
+        END { if (bad || found != 1) exit 1; print value }
+    ' "$manifest" 2>/dev/null
+}
+
+# Verify one exact release filename.
+verify_checksum_file() {
+    local file="$1" filename="$2" expected actual
+    [ -f "$CHECKSUMS_PATH" ] || { echo "Checksum manifest missing for ${filename}" >&2; return 1; }
+    expected=$(checksum_manifest_entry "$CHECKSUMS_PATH" "$filename") || {
+        echo "Invalid, missing, or duplicate checksum entry for ${filename}" >&2
+        return 1
+    }
+    if command -v shasum >/dev/null 2>&1; then
+        actual=$(shasum -a 256 "$file" 2>/dev/null | awk '{sub(/^\\/, "", $1); print tolower($1)}')
+    elif command -v sha256sum >/dev/null 2>&1; then
+        actual=$(sha256sum "$file" 2>/dev/null | awk '{sub(/^\\/, "", $1); print tolower($1)}')
     else
-        echo -e "${RED}✗ Checksum mismatch!${NC}" >&2
-        echo -e "${RED}  Expected: ${expected_sum}${NC}" >&2
-        echo -e "${RED}  Got:      ${actual_sum}${NC}" >&2
-        print_unexpected_payload_diagnostics "$BINARY_PATH"
-        echo -e "${YELLOW}The downloaded file may be corrupted. Try again.${NC}" >&2
-        guard_download_paths "$BINARY_PATH"
-        rm -f "$BINARY_PATH"
+        echo "No SHA-256 checksum utility available for ${filename}" >&2
         return 1
     fi
+    [ "$(printf '%s' "$expected" | tr '[:upper:]' '[:lower:]')" = "$actual" ] || {
+        echo "Checksum mismatch for ${filename}" >&2
+        return 1
+    }
+    echo -e "${GREEN}✓ Checksum verified: ${filename}${NC}"
 }
 
 # Verify downloaded binary
@@ -1218,8 +1439,10 @@ verify_executable() {
         echo -e "${RED}✗ Binary failed to execute (exit code: ${exit_code})${NC}" >&2
         echo -e "${RED}  Output: ${output}${NC}" >&2
         echo -e "${YELLOW}The downloaded file may be corrupted or incompatible.${NC}" >&2
-        guard_download_paths "$BINARY_PATH"
-        rm -f "$BINARY_PATH"
+        if [ "${INSTALL_PRIVATE_DOWNLOAD:-false}" = true ]; then
+            guard_download_paths "$BINARY_PATH"
+            rm -f "$BINARY_PATH"
+        fi
         return 1
     fi
 
@@ -1228,12 +1451,24 @@ verify_executable() {
         echo -e "${RED}✗ Binary output unexpected${NC}" >&2
         echo -e "${RED}  Output: ${output}${NC}" >&2
         echo -e "${YELLOW}This doesn't appear to be the correct binary.${NC}" >&2
-        guard_download_paths "$BINARY_PATH"
-        rm -f "$BINARY_PATH"
+        if [ "${INSTALL_PRIVATE_DOWNLOAD:-false}" = true ]; then
+            guard_download_paths "$BINARY_PATH"
+            rm -f "$BINARY_PATH"
+        fi
         return 1
     fi
 
     echo -e "${GREEN}✓ Binary executes correctly${NC}"
+
+    if ! LC_ALL=C grep -aqF 'agent-notifications-managed-writer-protocol-v1' "$BINARY_PATH"; then
+        echo -e "${RED}✗ Binary is below the managed writer protocol floor${NC}" >&2
+        if [ "${INSTALL_PRIVATE_DOWNLOAD:-false}" = true ]; then
+            guard_download_paths "$BINARY_PATH"
+            rm -f "$BINARY_PATH"
+        fi
+        return 1
+    fi
+
     return 0
 }
 
@@ -1251,6 +1486,7 @@ windows_hooks_path() {
 windows_native_hooks_json() {
     [ "$PLATFORM" = "windows" ] || return 1
     [ -f "$BINARY_PATH" ] || return 1
+    LC_ALL=C grep -aqF 'agent-notifications-managed-writer-protocol-v1' "$BINARY_PATH" || return 1
 
     local exe_path="$BINARY_PATH"
     if command -v cygpath >/dev/null 2>&1; then
@@ -1290,7 +1526,7 @@ windows_native_hooks_update_required() {
 # Create symlink for hooks
 create_symlink() {
     create_named_launcher claude-notifications || return 1
-    create_named_launcher agent-notifications
+    create_named_launcher agent-notifications || return 1
 }
 
 create_named_launcher() {
@@ -1301,6 +1537,13 @@ create_named_launcher() {
         local bat_path="${final_bat_path}.tmp.$$"
 
         guard_install_paths "$bat_path" "$final_bat_path"
+        if [ -e "$final_bat_path" ]; then
+            return 0
+        fi
+        local repair_status=0
+        repair_named_launcher "$final_bat_path" || repair_status=$?
+        [ "$repair_status" -eq 0 ] && return 0
+        [ "$repair_status" -eq 1 ] && return 1
         # Remove old .bat file if exists
         rm -f "$bat_path" 2>/dev/null || true
 
@@ -1329,6 +1572,13 @@ EOF
     local final_symlink_path="${SCRIPT_DIR}/${launcher_name}"
     local symlink_path="${final_symlink_path}.tmp.$$"
     guard_install_paths "$final_symlink_path" "$symlink_path"
+    if [ -e "$final_symlink_path" ]; then
+        return 0
+    fi
+    local repair_status=0
+    repair_named_launcher "$final_symlink_path" || repair_status=$?
+    [ "$repair_status" -eq 0 ] && return 0
+    [ "$repair_status" -eq 1 ] && return 1
     # Remove old symlink if exists
     rm -f "$symlink_path" 2>/dev/null || true
 
@@ -1348,6 +1598,23 @@ EOF
         echo -e "${YELLOW}⚠ Could not create symlink/copy (hooks may not work)${NC}"
         return 1
     fi
+}
+
+# Republish a missing owned launcher through the kernel. Local symlink/copy/BAT
+# is allowed only for an explicit disposable acquisition; a managed refusal
+# must not create an untracked launcher beside the ledger.
+repair_named_launcher() {
+    local dest="$1"
+    [ -f "$BINARY_PATH" ] || return 2
+    LC_ALL=C grep -aqF 'agent-notifications-managed-writer-protocol-v1' "$BINARY_PATH" || return 2
+    if refresh_existing_runtime && [ -e "$dest" ]; then
+        return 0
+    fi
+    if [ "${INSTALL_DISPOSABLE_ACQUISITION:-}" = true ]; then
+        return 2
+    fi
+    echo -e "${RED}✗ Managed runtime refused launcher repair; existing ledger preserved${NC}" >&2
+    return 1
 }
 
 configure_windows_native_hooks() {
@@ -1390,14 +1657,24 @@ cleanup() {
     rm -f "$CHECKSUMS_PATH" 2>/dev/null || true
 }
 
+modern_notifier_usable() {
+    local app="$1"
+    [ -d "$app" ] &&
+        [ -x "$app/Contents/MacOS/terminal-notifier-modern" ] &&
+        [ -f "${app}.managed-runtime.json" ] &&
+        command -v codesign >/dev/null 2>&1 &&
+        codesign --verify --verbose "$app" >/dev/null 2>&1
+}
+
 # Download ClaudeNotifier for macOS (modern UNUserNotificationCenter, works on M4 Sequoia)
 download_terminal_notifier_modern() {
     local MODERN_APP="${SCRIPT_DIR}/ClaudeNotifier.app"
     local MODERN_URL="${MODERN_NOTIFIER_URL:-${RELEASE_URL}/ClaudeNotifier.app.zip}"
+    local MODERN_ASSET_NAME="ClaudeNotifier.app.zip"
     local TEMP_ZIP="${TMPDIR:-${TEMP:-/tmp}}/ClaudeNotifier-$$.zip"
 
     # Check if already installed
-    if [ -d "$MODERN_APP" ] && [ -x "$MODERN_APP/Contents/MacOS/terminal-notifier-modern" ]; then
+    if modern_notifier_usable "$MODERN_APP"; then
         echo -e "${GREEN}✓${NC} ClaudeNotifier already installed"
         return 0
     fi
@@ -1439,6 +1716,13 @@ download_terminal_notifier_modern() {
         return 1
     fi
 
+    # Verify the archive bytes before extraction or any live-path mutation.
+    if ! verify_checksum_file "$TEMP_ZIP" "$MODERN_ASSET_NAME"; then
+        guard_install_paths "$TEMP_ZIP"
+        rm -f "$TEMP_ZIP"
+        return 1
+    fi
+
     # Verify zip
     if ! unzip -t "$TEMP_ZIP" &>/dev/null; then
         echo -e "${YELLOW}⚠ Downloaded file is not a valid zip, falling back to legacy${NC}"
@@ -1460,14 +1744,17 @@ download_terminal_notifier_modern() {
     rm -f "$TEMP_ZIP"
 
     # Verify extraction
-    if [ -d "$MODERN_APP" ] && [ -x "$MODERN_APP/Contents/MacOS/terminal-notifier-modern" ]; then
+    if [ -d "$MODERN_APP" ] && [ -x "$MODERN_APP/Contents/MacOS/terminal-notifier-modern" ] && [ -f "${MODERN_APP}.managed-runtime.json" ]; then
         # Remove quarantine attribute (downloaded files are flagged by Gatekeeper)
         xattr -cr "$MODERN_APP" 2>/dev/null || true
         # Verify code signature (notarized builds have valid Developer ID signature)
-        if codesign --verify --verbose "$MODERN_APP" 2>/dev/null; then
+        if modern_notifier_usable "$MODERN_APP"; then
             echo -e "${GREEN}✓${NC} Code signature verified"
         else
-            echo -e "${YELLOW}⚠${NC} Code signature verification failed (app may still work)"
+            echo -e "${RED}✗ Code signature verification failed${NC}" >&2
+            guard_install_paths "$MODERN_APP"
+            rm -rf "$MODERN_APP"
+            return 1
         fi
         # Register with Launch Services
         /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$MODERN_APP" 2>/dev/null || true
@@ -1976,11 +2263,47 @@ EOF
 desktop_runtime_usable() {
     case "$PLATFORM" in
         darwin)
-            [ -x "$SCRIPT_DIR/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern" ] ||
+            modern_notifier_usable "$SCRIPT_DIR/ClaudeNotifier.app" ||
                 [ -x "$SCRIPT_DIR/terminal-notifier.app/Contents/MacOS/terminal-notifier" ] ;;
         windows) [ -x "$FOCUS_HANDLER_PATH" ] ;;
         *) return 0 ;;
     esac
+}
+
+copy_verified_stage() {
+    local src="$1" dest="$2" item base
+    for item in "$src"/*; do
+        [ -e "$item" ] || continue
+        base=$(basename "$item")
+        case "$base" in
+            .install-stage.*|checksums.txt|.checksums.txt|*.sha256) continue ;;
+        esac
+        if [ -L "$item" ]; then
+            continue
+        fi
+        if [ -d "$item" ]; then
+            mkdir -p "$dest/$base" || return 1
+            copy_verified_stage "$item" "$dest/$base" || return 1
+        elif [ -f "$item" ]; then
+            cp "$item" "$dest/$base" || return 1
+            if [ -x "$item" ]; then
+                chmod +x "$dest/$base" || return 1
+            fi
+        fi
+    done
+}
+
+# Product identity is not a disposable destination. Only bootstrap's explicit
+# acquisition into an empty published slot may copy without a ledger commit.
+disposable_acquisition() {
+    local dest="$1" published="$2"
+    [ "${INSTALL_DISPOSABLE_ACQUISITION:-}" = true ] || return 1
+    [ -n "${INSTALL_STAGED_ASSETS:-}" ] && [ -d "$INSTALL_STAGED_ASSETS" ] && [ ! -L "$INSTALL_STAGED_ASSETS" ] || return 1
+    [ -d "$dest" ] && [ ! -L "$dest" ] || return 1
+    if [ -e "$published" ] || [ -L "$published" ]; then
+        return 1
+    fi
+    return 0
 }
 
 stage_and_promote_runtime() (
@@ -2008,32 +2331,9 @@ stage_and_promote_runtime() (
     INSTALL_CONFIG_HELPER="$BINARY_PATH"
 
     if [ "$PLATFORM" = "darwin" ]; then
-        if ! [ -x "$live_dir/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern" ] &&
-           ! [ -x "$live_dir/terminal-notifier.app/Contents/MacOS/terminal-notifier" ]; then
-            download_terminal_notifier_modern || download_terminal_notifier || exit 1
-            local app
-            for app in ClaudeNotifier.app terminal-notifier.app; do
-                case "$app" in
-                    ClaudeNotifier.app) [ -x "$stage/$app/Contents/MacOS/terminal-notifier-modern" ] || continue ;;
-                    terminal-notifier.app) [ -x "$stage/$app/Contents/MacOS/terminal-notifier" ] || continue ;;
-                esac
-                # Only an unusable bundle can be displaced here. A valid live
-                # notifier never has a rename gap, including during SIGKILL.
-                guard_install_paths "$live_dir/$app"
-                if [ -e "$live_dir/$app" ]; then
-                    mv "$live_dir/$app" "$stage/old-$app" || exit 1
-                fi
-                mv "$stage/$app" "$live_dir/$app" || exit 1
-            done
-        fi
-        # Runtime discovery prefers a present modern executable path, even if
-        # it cannot execute. Remove that shadow only after legacy is ready.
-        if ! [ -x "$live_dir/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern" ] &&
-           [ -x "$live_dir/terminal-notifier.app/Contents/MacOS/terminal-notifier" ] &&
-           { [ -e "$live_dir/ClaudeNotifier.app" ] || [ -L "$live_dir/ClaudeNotifier.app" ]; }; then
-            guard_install_paths "$live_dir/ClaudeNotifier.app"
-            mv "$live_dir/ClaudeNotifier.app" "$stage/unusable-ClaudeNotifier.app" || exit 1
-        fi
+        download_terminal_notifier_modern || exit 1
+        [ -x "$stage/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern" ] || exit 1
+        [ -f "$stage/ClaudeNotifier.app.managed-runtime.json" ] || exit 1
     elif [ "$PLATFORM" = "windows" ]; then
         # Click-to-focus is part of the runtime, not an optional sound utility.
         local main_name="$BINARY_NAME" main_path="$BINARY_PATH"
@@ -2041,17 +2341,36 @@ stage_and_promote_runtime() (
         BINARY_PATH="$FOCUS_HANDLER_PATH"
         download_and_verify_binary || exit 1
         chmod +x "$BINARY_PATH" || exit 1
-        guard_install_paths "$live_dir/$BINARY_NAME"
-        mv -f "$BINARY_PATH" "$live_dir/$BINARY_NAME" || exit 1
         BINARY_NAME="$main_name"
         BINARY_PATH="$main_path"
-    elif [ "$PLATFORM" = "linux" ]; then
+    fi
+
+    # Kernel publication mutates the live directory. Downloads used a private
+    # stage, so re-check the selected config against the real destination.
+    live_published="$live_dir/$BINARY_NAME"
+    guard_install_paths "$live_dir" "$live_published" || exit 1
+
+    if disposable_acquisition "$live_dir" "$live_published"; then
+        # Acquisition into a disposable Codex bundle must not Commit a live
+        # consumer. setup-codex registers the durable runtime afterwards.
+        copy_verified_stage "$stage" "$live_dir" || exit 1
+    elif [ "${CN_PRODUCT:-claude}" = "codex" ] && [ "$PLATFORM" = "darwin" ]; then
+        "$BINARY_PATH" internal-install-runtime --refresh --stage "$stage" --target "$live_dir" --entry "$BINARY_NAME" --require-native || exit 1
+    elif [ "${CN_PRODUCT:-claude}" = "codex" ]; then
+        "$BINARY_PATH" internal-install-runtime --refresh --stage "$stage" --target "$live_dir" --entry "$BINARY_NAME" || exit 1
+    elif [ "$PLATFORM" = "darwin" ]; then
+        "$BINARY_PATH" internal-install-runtime --stage "$stage" --target "$live_dir" --entry "$BINARY_NAME" --require-native || exit 1
+    else
+        "$BINARY_PATH" internal-install-runtime --stage "$stage" --target "$live_dir" --entry "$BINARY_NAME" || exit 1
+    fi
+
+    if [ "$PLATFORM" = "linux" ]; then
+        SCRIPT_DIR="$live_dir"
+        BINARY_PATH="$live_published"
         install_linux_notification_desktop_entry || exit 1
     fi
 
-    guard_install_paths "$live_binary"
-    mv -f "$BINARY_PATH" "$live_binary" || exit 1
-    INSTALL_CONFIG_HELPER="$live_binary"
+    INSTALL_CONFIG_HELPER="$live_published"
 )
 
 # Main installation flow
@@ -2079,6 +2398,14 @@ main() {
     echo -e "${BLUE}Binary:${NC}   ${BINARY_NAME}"
     echo ""
 
+    if [ "${ACQUIRE_ONLY:-false}" = true ]; then
+        validate_acquire_output || exit 1
+        mkdir -p "$ACQUIRE_OUTPUT" || exit 1
+        SCRIPT_DIR="$ACQUIRE_OUTPUT"
+        INSTALL_TARGET_DIR="$ACQUIRE_OUTPUT"
+        detect_platform
+    fi
+
     # Offline forced updates must stop before any installation work.
     if [ "$FORCE_UPDATE" = true ] && [ -z "${INSTALL_STAGED_ASSETS:-}" ]; then
         if ! check_github_availability || [ "$OFFLINE_MODE" = true ]; then
@@ -2094,7 +2421,7 @@ main() {
     # Check if already installed
     if check_existing; then
         # Even if binary exists, ensure symlink is created
-        create_symlink
+        create_symlink || return 1
         configure_windows_native_hooks
 
         # Download utility binaries (sound-preview, list-devices)
@@ -2118,6 +2445,7 @@ main() {
 
         echo -e "${GREEN}✓ Setup complete${NC}"
         echo ""
+        release_lock
         return 0
     fi
 
@@ -2147,7 +2475,7 @@ main() {
         fi
 
         # Ensure symlink exists
-        create_symlink
+        create_symlink || return 1
         configure_windows_native_hooks
 
         echo ""
@@ -2158,6 +2486,7 @@ main() {
         echo -e "${YELLOW}Note: Running with cached binary (no updates)${NC}"
         echo -e "${YELLOW}Restore network access for full installation.${NC}"
         echo ""
+        release_lock
         return 0
     fi
 
@@ -2170,7 +2499,7 @@ main() {
         exit 1
     fi
 
-    create_symlink
+    create_symlink || return 1
     configure_windows_native_hooks
     download_utilities
 
@@ -2226,6 +2555,7 @@ main() {
     echo -e "  ${GREEN}https://github.com/777genius/claude_agent_teams_ui${NC}"
     echo -e "${YELLOW}────────────────────────────────────────${NC}"
     echo ""
+    release_lock
 }
 
 # Run main function

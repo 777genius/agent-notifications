@@ -1,0 +1,266 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Native protocol v1 with PR3 desktop action",
+  "description": "Choose a $defs schema. Runtime also checks UTF-8 byte limits, duplicates, controls, boot deadline and filename correlation. Entire wire request <=16384 bytes.",
+  "$defs": {
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "correlationID",
+        "nonce",
+        "bootID",
+        "notAfter",
+        "title",
+        "body",
+        "category",
+        "action",
+        "silent"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "correlationID": {
+          "type": "string",
+          "format": "uuid",
+          "maxLength": 36
+        },
+        "nonce": {
+          "type": "string",
+          "format": "uuid",
+          "maxLength": 36
+        },
+        "bootID": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "notAfter": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "title": {
+          "type": "string",
+          "description": "Single line; max 256 UTF-8 bytes; no controls."
+        },
+        "body": {
+          "type": "string",
+          "description": "Max 4096 UTF-8 bytes; no controls except LF and TAB."
+        },
+        "subtitle": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Single line; max 256 UTF-8 bytes; no controls."
+        },
+        "category": {
+          "enum": [
+            "info",
+            "attention",
+            "progress"
+          ]
+        },
+        "action": {
+          "oneOf": [
+            {
+              "const": "none"
+            },
+            {
+              "$ref": "#/$defs/desktop_thread_v1"
+            }
+          ]
+        },
+        "silent": {
+          "type": "boolean"
+        }
+      }
+    },
+    "receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "correlationID",
+        "nonce",
+        "notificationID",
+        "status",
+        "reason",
+        "retrySafe"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "correlationID": {
+          "type": "string",
+          "format": "uuid",
+          "maxLength": 36
+        },
+        "nonce": {
+          "type": "string",
+          "format": "uuid",
+          "maxLength": 36
+        },
+        "notificationID": {
+          "type": "string",
+          "format": "uuid",
+          "maxLength": 36
+        },
+        "status": {
+          "enum": [
+            "rejected",
+            "submitted",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "enum": [
+            "malformed_request",
+            "unsupported_version",
+            "unsupported_action",
+            "invalid_file",
+            "expired",
+            "activation_required",
+            "permission_denied",
+            "unsupported_notifier",
+            "os_rejected",
+            "os_accepted",
+            "timeout"
+          ]
+        },
+        "retrySafe": {
+          "const": false
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "status": {
+              "const": "rejected"
+            },
+            "reason": {
+              "enum": [
+                "malformed_request",
+                "unsupported_version",
+                "unsupported_action",
+                "invalid_file",
+                "expired",
+                "activation_required",
+                "permission_denied",
+                "unsupported_notifier",
+                "os_rejected"
+              ]
+            }
+          }
+        },
+        {
+          "properties": {
+            "status": {
+              "const": "submitted"
+            },
+            "reason": {
+              "const": "os_accepted"
+            }
+          }
+        },
+        {
+          "properties": {
+            "status": {
+              "const": "unknown"
+            },
+            "reason": {
+              "const": "timeout"
+            }
+          }
+        }
+      ]
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "protocolVersions",
+        "actionKinds",
+        "receiptSupport",
+        "backend",
+        "explicitFeatureEnabledByDefault"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "protocolVersions": {
+          "const": [
+            1
+          ]
+        },
+        "actionKinds": {
+          "const": [
+            "none",
+            "desktop_thread_v1"
+          ]
+        },
+        "receiptSupport": {
+          "const": true
+        },
+        "backend": {
+          "const": "macos.usernotifications"
+        },
+        "explicitFeatureEnabledByDefault": {
+          "const": false
+        }
+      }
+    },
+    "desktop_thread_v1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "schemaVersion",
+        "threadID",
+        "routeKind",
+        "bundleID",
+        "teamID",
+        "applicationPath",
+        "correlationID"
+      ],
+      "properties": {
+        "type": {
+          "const": "desktop_thread_v1"
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "threadID": {
+          "type": "string",
+          "minLength": 1,
+          "description": "1..256 UTF-8 bytes; single line; no Cc controls; not . or ..; encoded as a single URI path segment without normalization."
+        },
+        "routeKind": {
+          "const": "codex_thread"
+        },
+        "bundleID": {
+          "const": "com.openai.codex"
+        },
+        "teamID": {
+          "type": "string",
+          "pattern": "^[A-Z0-9]{10}$"
+        },
+        "applicationPath": {
+          "type": "string",
+          "pattern": "^/.*\\.app$",
+          "description": "Canonical configured location; <=4096 UTF-8 bytes; no Cc or line separators."
+        },
+        "correlationID": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Must equal enclosing request correlationID / notification identifier."
+        }
+      }
+    }
+  }
+}

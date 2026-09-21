@@ -86,7 +86,10 @@ def place_runtime_cmd(dest, src):
     # symlinks. Exec wrappers keep restricted PATH tests portable.
     if dest.exists() or not src or not os.path.isfile(src) or is_windows_store_or_wsl_alias(src):
         return
-    dest.write_text('#!/bin/sh\nexec {} "$@"\n'.format(shlex.quote(src.replace('\\', '/'))))
+    # Cleanup wrappers may need tools outside the runtime-isolation PATH.
+    # Preserve the selected host command and its dependencies for cleanup only.
+    cleanup_env = ('PATH=' + shlex.quote(os.environ['PATH']) + ' ' if dest.name == 'rm' else '')
+    dest.write_text('#!/bin/sh\n{}exec {} "$@"\n'.format(cleanup_env, shlex.quote(src.replace('\\', '/'))), encoding='utf-8')
     dest.chmod(0o755)
 
 
@@ -94,8 +97,8 @@ def runtime_path(case, python=False, node=False):
     bin_dir = case / 'runtime-bin'
     bin_dir.mkdir()
     names = ['bash', 'sh', 'mktemp', 'rm', 'cat', 'chmod', 'mkdir', 'ln', 'uname',
-             'tr', 'head', 'cp', 'mv', 'env', 'true', 'false', 'grep', 'sed', 'awk',
-             'dirname', 'basename', 'printf', 'pwd', 'cygpath']
+             'tr', 'wc', 'head', 'cp', 'mv', 'env', 'true', 'false', 'grep', 'sed', 'awk',
+             'dirname', 'basename', 'printf', 'pwd', 'cygpath', 'sleep']
     if python:
         names.append('python3')
     if node:
@@ -154,21 +157,27 @@ sha = '0123456789abcdef0123456789abcdef01234567'
 loader = (root / 'bin/setup.sh').read_text(encoding='utf-8')
 curl_stub = r'''#!/usr/bin/env bash
 set -eu
-output=""; url=""
+output=""; url=""; format=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         -o) output="$2"; shift 2 ;;
+        -w) format="$2"; shift 2 ;;
         -*) shift ;;
         *) url="$1"; shift ;;
     esac
 done
 printf '%s\n' "$url" >> "$CASE_DIR/requests"
 case "$url" in
-    https://api.github.com/repos/777genius/agent-notifications/releases/latest) kind=latest ;;
+    https://github.com/777genius/agent-notifications/releases/latest) kind=latest ;;
     https://api.github.com/repos/777genius/agent-notifications/commits/v1.43.0) kind=commit ;;
     https://raw.githubusercontent.com/777genius/agent-notifications/*/bin/bootstrap.sh) kind=bootstrap ;;
     *) echo "Unexpected URL: $url" >&2; exit 99 ;;
 esac
+if [ "$kind" = latest ] && [ -n "$format" ]; then
+    cat "$CASE_DIR/latest_url"
+    if [ "${FAIL_DOWNLOAD:-}" = latest ]; then exit 22; fi
+    exit 0
+fi
 if [ -n "$output" ]; then cat "$CASE_DIR/$kind" > "$output"; else cat "$CASE_DIR/$kind"; fi
 '''
 bootstrap_stub = '''#!/usr/bin/env bash
@@ -182,23 +191,25 @@ def setup_case(name, python=False, node=False, expected=0, preferred=False, stub
         case = Path(tmp)
         (case / 'bin').mkdir()
         (case / 'tmp space').mkdir()
-        (case / 'bin/curl').write_text(curl_stub)
+        (case / 'bin/curl').write_text(curl_stub, encoding='utf-8')
         (case / 'bin/curl').chmod(0o755)
         if stub_python:
-            (case / 'bin/python3').write_text(STORE_PYTHON3_STUB)
+            (case / 'bin/python3').write_text(STORE_PYTHON3_STUB, encoding='utf-8')
             (case / 'bin/python3').chmod(0o755)
-        (case / 'latest').write_text(json.dumps({'tag_name': 'v1.43.0'}))
-        (case / 'commit').write_text(json.dumps({'sha': sha}))
-        (case / 'bootstrap').write_text(bootstrap_stub)
+        (case / 'latest_url').write_text(
+            'https://github.com/777genius/agent-notifications/releases/tag/v1.43.0',
+            encoding='utf-8')
+        (case / 'commit').write_text(sha, encoding='utf-8')
+        (case / 'bootstrap').write_text(bootstrap_stub, encoding='utf-8')
         path = bash_path(case / 'bin') + ':' + runtime_path(case, python=python, node=node)
         if preferred:
             (case / 'bin/python3').write_text(
                 '#!/usr/bin/env bash\nprintf python3 >> "$CASE_DIR/runtime.log"\nexec '
-                + shlex.quote(host_cmd('python3').replace('\\', '/')) + ' "$@"\n')
+                + shlex.quote(host_cmd('python3').replace('\\', '/')) + ' "$@"\n', encoding='utf-8')
             (case / 'bin/python3').chmod(0o755)
             (case / 'bin/node').write_text(
                 '#!/usr/bin/env bash\nprintf node >> "$CASE_DIR/runtime.log"\nexec '
-                + shlex.quote(HOST_NODE.replace('\\', '/')) + ' "$@"\n')
+                + shlex.quote(HOST_NODE.replace('\\', '/')) + ' "$@"\n', encoding='utf-8')
             (case / 'bin/node').chmod(0o755)
         env = dict(os.environ, PATH=path, CASE_DIR=bash_path(case),
                    TMPDIR=bash_path(case / 'tmp space'))
@@ -207,18 +218,14 @@ def setup_case(name, python=False, node=False, expected=0, preferred=False, stub
         if expected == 0:
             if result.returncode != 0:
                 fail(name, describe(result))
-            ran = json.loads((case / 'ran.json').read_text())
+            ran = json.loads((case / 'ran.json').read_text(encoding='utf-8'))
             if ran['tag'] != 'v1.43.0' or ran['sha'] != sha:
                 fail(name, repr(ran))
-            if preferred:
-                log = (case / 'runtime.log').read_text()
-                if not log.startswith('python3') or 'node' in log:
-                    fail(name, log)
+            if preferred and (case / 'runtime.log').exists():
+                fail(name, 'loader invoked an optional runtime')
         else:
             if result.returncode == 0 or (case / 'ran.json').exists():
                 fail(name, 'installer ran without a JSON runtime: ' + describe(result))
-            if 'python3 or node is required' not in result.stderr:
-                fail(name, describe(result))
         if list((case / 'tmp space').iterdir()):
             fail(name, 'leaked staging directory')
         pass_name(name)
@@ -232,14 +239,14 @@ if HOST_NODE:
     setup_case('setup.sh node-only', node=True)
 else:
     print('SKIP setup.sh node-only')
-setup_case('setup.sh neither runtime', expected=1)
+setup_case('setup.sh neither runtime', expected=0)
 if host_cmd('python3') and HOST_NODE:
     setup_case('setup.sh python preferred', python=True, node=True, preferred=True)
 if HOST_NODE:
     setup_case('setup.sh stub python3 falls back to node', node=True, stub_python=True)
 else:
     print('SKIP setup.sh stub python3 falls back to node')
-setup_case('setup.sh stub python3 without node', stub_python=True, expected=1)
+setup_case('setup.sh stub python3 without node', stub_python=True, expected=0)
 
 # --- bootstrap.sh: node-only commit parse and checksum verify ---
 if HOST_NODE:
@@ -315,14 +322,16 @@ if HOST_NODE:
                 'package main\n'
                 'import (\n'
                 '\t"fmt"\n'
-                '\t"io"\n'
+                '\t"encoding/json"\n'
                 '\t"os"\n'
                 ')\n'
                 'func main() {\n'
-                '\tdata, err := io.ReadAll(os.Stdin)\n'
+                '\targs := os.Args[1:]\n'
+                '\tif len(args)==3 && args[0]=="config" && args[1]=="installer" && args[2]=="capabilities" { fmt.Println("installer-v1"); return }\n'
+                '\tif len(args)<4 || args[0]!="config" || args[1]!="installer" || args[2]!="preflight" { os.Exit(2) }\n'
+                '\tdata, err := json.Marshal(map[string][]string{"refreshDirs": args[3:]})\n'
                 '\tif err != nil { os.Exit(2) }\n'
                 '\tif err := os.WriteFile(os.Getenv("TRACE"), data, 0644); err != nil { os.Exit(2) }\n'
-                '\tfmt.Println(`{"status":"safe","diagnostics":[]}`)\n'
                 '}\n',
                 encoding='utf-8')
             (case / 'go.mod').write_text('module helper\n\ngo 1.22\n', encoding='utf-8')
@@ -336,14 +345,15 @@ if HOST_NODE:
             helper = case / 'helper'
             helper.write_text('#!' + sys.executable + '''
 import json, os, sys
-assert sys.argv[1:] == ["config", "preflight-update", "--stdin", "--json"]
-request = json.load(sys.stdin)
-open(os.environ["TRACE"], "w").write(json.dumps(request))
-print(json.dumps({"status": "safe", "diagnostics": []}))
-''')
+if sys.argv[1:] == ["config", "installer", "capabilities"]:
+    print("installer-v1"); sys.exit(0)
+assert sys.argv[1:4] == ["config", "installer", "preflight"]
+request = {"refreshDirs": sys.argv[4:]}
+open(os.environ["TRACE"], "w", encoding="utf-8").write(json.dumps(request))
+''', encoding='utf-8')
             helper.chmod(0o755)
         target = case / 'outside.json'
-        target.write_text('{}')
+        target.write_text('{}', encoding='utf-8')
         path = runtime_path(case, node=True)
         script = '''
 source "$FUNCTIONS"
@@ -352,6 +362,8 @@ command -v python3 >/dev/null && { echo python3 leaked >&2; exit 1; }
 detect_platform
 INSTALL_CONFIG_HELPER="$HELPER"
 AGENT_NOTIFICATIONS_CONFIG="$TARGET"
+curl() { echo "unexpected network request" >&2; return 99; }
+wget() { echo "unexpected network request" >&2; return 99; }
 guard_install_paths "$PWD"
 '''
         env = dict(os.environ, PATH=path, FUNCTIONS=bash_path(functions), RUNTIME_PATH=path,
@@ -362,95 +374,72 @@ guard_install_paths "$PWD"
                                 capture_output=True, timeout=20)
         if result.returncode != 0:
             fail('install.sh node-only preflight', result.stderr + result.stdout)
-        request = json.loads((case / 'trace').read_text())
-        if 'refreshDirs' not in request:
+        request = json.loads((case / 'trace').read_text(encoding='utf-8'))
+        if request != {'refreshDirs': [str(case)]}:
             fail('install.sh node-only preflight', repr(request))
         pass_name('install.sh node-only config preflight')
 else:
     print('SKIP install.sh node-only config preflight')
 
-# Production JSSTAGE must resolve TMPDIR through a symlink ancestor, matching
-# Python os.path.realpath, so overlap into a refresh root is rejected.
+# Path canonicalization now belongs to the verified native config helper.
+# Exercise the shell boundary instead of extracting the removed JSSTAGE and
+# JSINSTALL implementations: capability failures must remain protocol errors.
 if HOST_NODE:
-    jsstage = extract_quoted_heredoc(root / 'bin/bootstrap.sh', 'JSSTAGE')
-    with tempfile.TemporaryDirectory(prefix='jsstage-', dir=os.environ['TMPDIR']) as tmp:
-        td = Path(tmp)
-        plugin = td / 'plugin'
-        plugin.mkdir()
-        alias = td / 'alias'
-        try:
-            alias.symlink_to(plugin, target_is_directory=True)
-        except OSError:
-            print('SKIP JSSTAGE symlink ancestor overlap: cannot create symlink')
-        else:
-            scratch = alias / 'scratch'
-            env = dict(os.environ)
-            result = subprocess.run(
-                [HOST_NODE, '-', str(scratch), str(td / 'missing.json'), 'claude-notifications-go',
-                 'codex', str(td / 'cache'), str(td / 'market'), str(plugin)],
-                input=jsstage, text=True, capture_output=True, env=env, timeout=20)
-            if result.returncode == 0 or 'Staging must be outside refreshed bundles' not in result.stderr:
-                fail('JSSTAGE symlink ancestor overlap', describe(result))
-            pass_name('JSSTAGE rejects TMPDIR under symlink into plugin root')
-            child = plugin / 'child'
-            child.mkdir()
-            outside = td / 'outside'
-            outside.mkdir()
-            link = outside / 'link'
-            link.symlink_to(child, target_is_directory=True)
-            via_parent = str(link / '..')
-            if os.path.realpath(via_parent) != os.path.realpath(plugin):
-                print('SKIP JSSTAGE symlink .. overlap: host realpath does not follow ' + via_parent)
-            else:
-                result = subprocess.run(
-                    [HOST_NODE, '-', via_parent, str(td / 'missing.json'), 'claude-notifications-go',
-                     'codex', str(td / 'cache'), str(td / 'market'), str(plugin)],
-                    input=jsstage, text=True, capture_output=True, env=env, timeout=20)
-                if result.returncode == 0 or 'Staging must be outside refreshed bundles' not in result.stderr:
-                    fail('JSSTAGE symlink .. overlap', describe(result) + ' tmpdir=' + via_parent)
-                pass_name('JSSTAGE rejects TMPDIR via symlink then ..')
-    helpers, _, _ = jsstage.partition('const argv = process.argv.slice(2);')
-    drive_js = (
-        "Object.defineProperty(process, 'platform', { value: 'win32' });\n"
-        + helpers
-        + r'''
-const rootRelative = walkReal('D:\\outside', '\\plugin', Object.create(null));
-if (rootRelative !== 'D:\\plugin') {
-  process.stderr.write('root-relative: ' + rootRelative + '\n');
-  process.exit(1);
-}
-const otherDrive = walkReal('D:\\outside', 'C:\\other\\bundle', Object.create(null));
-if (otherDrive !== 'C:\\other\\bundle') {
-  process.stderr.write('other-drive: ' + otherDrive + '\n');
-  process.exit(1);
-}
-'''
-    )
-    result = subprocess.run([HOST_NODE, '-'], input=drive_js, text=True,
-                            capture_output=True, timeout=20)
-    if result.returncode != 0:
-        fail('JSSTAGE Windows root-relative drive', describe(result))
-    pass_name('JSSTAGE keeps Windows root-relative symlink targets on the source drive')
-else:
-    print('SKIP JSSTAGE symlink ancestor overlap: node not available')
-
-# Malformed diagnostics are a protocol failure (status 2), not a final reject.
-if HOST_NODE:
-    jsinstall = extract_quoted_heredoc(root / 'bin/install.sh', 'JSINSTALL')
-    with tempfile.TemporaryDirectory(prefix='jsinstall-', dir=os.environ['TMPDIR']) as tmp:
+    with tempfile.TemporaryDirectory(prefix='install-protocol-', dir=os.environ['TMPDIR']) as tmp:
         case = Path(tmp)
+        functions = case / 'functions.sh'
+        functions.write_text((root / 'bin/install.sh').read_text(encoding='utf-8').replace('main "$@"', ''), encoding='utf-8')
         helper = case / 'helper'
-        helper.write_text(
-            '#!/bin/sh\nprintf \'{"status":"unsafe-target","diagnostics":["invalid"]}\\n\'\n')
+        helper.write_text('#!/bin/sh\nprintf \'{"status":"unsafe-target","diagnostics":["invalid"]}\\n\'\n', encoding='utf-8')
         helper.chmod(0o755)
-        result = subprocess.run(
-            [HOST_NODE, '-', str(helper), 'linux', str(case)],
-            input=jsinstall, text=True, capture_output=True, timeout=20)
+        path = runtime_path(case, node=True)
+        env = dict(os.environ, PATH=path, FUNCTIONS=bash_path(functions),
+                   HELPER=bash_path(helper), TMPDIR=bash_path(case),
+                   AGENT_NOTIFICATIONS_CONFIG=bash_path(case / 'config.json'))
+        result = subprocess.run([HOST_BASH, '-c', 'source "$FUNCTIONS"; detect_platform; INSTALL_CONFIG_HELPER="$HELPER"; install_config_preflight "$PWD"'],
+                                env=env, text=True, capture_output=True, timeout=20)
         if result.returncode != 2:
-            fail('JSINSTALL malformed diagnostics', describe(result))
-        pass_name('JSINSTALL malformed diagnostics exits 2')
-else:
-    print('SKIP JSINSTALL malformed diagnostics: node not available')
+            fail('installer malformed capability', describe(result))
+        pass_name('installer malformed capability exits 2 on node-only PATH')
+
+# Bootstrap must pass staging aliases verbatim to the native helper and retain
+# a rejected stage. Canonicalization is no longer implemented in shell/Node.
+if HOST_NODE:
+    with tempfile.TemporaryDirectory(prefix='bootstrap-alias-', dir=os.environ['TMPDIR']) as tmp:
+        case = Path(tmp)
+        functions = case / 'functions.sh'
+        functions.write_text((root / 'bin/bootstrap.sh').read_text(encoding='utf-8').replace('main "$@"', ''), encoding='utf-8')
+        plugin = case / 'plugin'
+        (plugin / 'child').mkdir(parents=True)
+        alias = case / 'alias'
+        try:
+            alias.symlink_to(plugin / 'child', target_is_directory=True)
+        except OSError:
+            print('SKIP bootstrap staging aliases: cannot create symlink')
+        else:
+            helper = case / 'helper'
+            helper.write_text('#!/bin/sh\nprintf \'%s\\0\' "$@" > "$TRACE"\nexit 78\n', encoding='utf-8')
+            helper.chmod(0o755)
+            path = runtime_path(case, node=True)
+            for stage in (str(alias), str(alias) + '/..'):
+                env = dict(os.environ, PATH=path, FUNCTIONS=bash_path(functions),
+                           HELPER=bash_path(helper), STAGE=bash_path(stage),
+                           TRACE=bash_path(case / 'trace'), TMPDIR=bash_path(case))
+                script = '''
+source "$FUNCTIONS"
+_CONFIG_HELPER="$HELPER"
+_CONFIG_STAGE="$STAGE"
+PRODUCT=codex
+if config_preflight; then exit 99; fi
+[ "$_KEEP_CONFIG_STAGE" = true ]
+'''
+                result = subprocess.run([HOST_BASH, '-c', script], env=env,
+                                        text=True, capture_output=True, timeout=20)
+                args = (case / 'trace').read_bytes().split(b'\0')[:-1]
+                if result.returncode != 0 or args[:3] != [b'config', b'installer', b'bootstrap'] or args[10] != bash_path(stage).encode():
+                    fail('bootstrap staging alias transport', describe(result) + repr(args))
+                assert plugin.is_dir() and alias.is_symlink()
+            pass_name('bootstrap forwards staging aliases and retains rejected stages')
 
 # NODE_OPTIONS must not pollute plugin registry parses on node-only installs.
 if HOST_NODE:
@@ -465,8 +454,8 @@ if HOST_NODE:
         key = 'claude-notifications-go@claude-notifications-go'
         installed.write_text(json.dumps({
             'plugins': {key: [{'installPath': bash_path(plugin), 'version': '1.42.0'}]}
-        }))
-        (case / 'preload.js').write_text('process.stdout.write("POLLUTED\\n");\n')
+        }), encoding='utf-8')
+        (case / 'preload.js').write_text('process.stdout.write("POLLUTED\\n");\n', encoding='utf-8')
         script = r'''
 source "$FUNCTIONS"
 PATH="$RUNTIME_PATH"
@@ -499,7 +488,7 @@ if HOST_NODE:
         case = Path(tmp)
         stub = case / 'stub-bin'
         stub.mkdir()
-        (stub / 'python3').write_text(STORE_PYTHON3_STUB)
+        (stub / 'python3').write_text(STORE_PYTHON3_STUB, encoding='utf-8')
         (stub / 'python3').chmod(0o755)
         path = bash_path(stub) + ':' + runtime_path(case, node=True)
         functions = case / 'functions.sh'
@@ -510,7 +499,7 @@ if HOST_NODE:
         key = 'claude-notifications-go@claude-notifications-go'
         installed.write_text(json.dumps({
             'plugins': {key: [{'installPath': bash_path(plugin), 'version': '1.42.0'}]}
-        }))
+        }), encoding='utf-8')
         commit = 'a' * 40
         script = r'''
 source "$FUNCTIONS"
@@ -622,7 +611,7 @@ export NODE_OPTIONS="--require=./preload.js"
 
         stub = case / 'stub-bin'
         stub.mkdir()
-        (stub / 'python3').write_text(STORE_PYTHON3_STUB)
+        (stub / 'python3').write_text(STORE_PYTHON3_STUB, encoding='utf-8')
         (stub / 'python3').chmod(0o755)
         wrapper.write_text(
             '#!/bin/sh\ncat > "$CLAUDE_PLUGIN_ROOT/stdin"\necho ran > "$CLAUDE_PLUGIN_ROOT/ran"\nexit 0\n',

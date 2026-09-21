@@ -18,7 +18,12 @@ MARKETPLACE_SOURCE="${BOOTSTRAP_MARKETPLACE_SOURCE:-$REPO}"
 MARKETPLACE_NAME="claude-notifications-go"
 PLUGIN_NAME="claude-notifications-go"
 PLUGIN_KEY="${PLUGIN_NAME}@${MARKETPLACE_NAME}"
+# Public installs pair install.sh with the same published tag as the binary.
+# main/bin/install.sh is only used for already-managed runtimes that already
+# have an ownership ledger; never mix that writer with a pre-floor release.
 INSTALL_SCRIPT_URL="${INSTALL_SCRIPT_URL:-}"
+MANAGED_INSTALL_SCRIPT_URL="${MANAGED_INSTALL_SCRIPT_URL:-https://raw.githubusercontent.com/${REPO}/main/bin/install.sh}"
+BOOTSTRAP_RAW_CONTENT_URL="${BOOTSTRAP_RAW_CONTENT_URL:-https://raw.githubusercontent.com/${REPO}}"
 
 # Retired GitHub repo name(s) this marketplace was previously declared under.
 # Users who added the marketplace before a rename have this baked into their
@@ -28,11 +33,19 @@ INSTALL_SCRIPT_URL="${INSTALL_SCRIPT_URL:-}"
 LEGACY_MARKETPLACE_REPOS="777genius/claude-notifications-go"
 
 # Paths — CLAUDE_CONFIG_DIR is the official Claude Code env var;
-# CLAUDE_HOME is a legacy fallback; default to ~/.claude
-CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-${CLAUDE_HOME:-$HOME/.claude}}"
-if [ -z "$CLAUDE_HOME" ]; then
-    CLAUDE_HOME="$HOME/.claude"
+# CLAUDE_HOME is a legacy fallback; default to ~/.claude. Git Bash on Windows
+# may provide USERPROFILE without HOME, so resolve the installer home before
+# expanding any default path while nounset is active.
+INSTALLER_HOME="${HOME:-${USERPROFILE:-}}"
+CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-${CLAUDE_HOME:-}}"
+if [ -z "$CLAUDE_HOME" ] && [ -z "$INSTALLER_HOME" ]; then
+    echo "HOME or USERPROFILE must be set to locate the Claude configuration." >&2
+    exit 1
 fi
+if [ -z "$CLAUDE_HOME" ]; then
+    CLAUDE_HOME="$INSTALLER_HOME/.claude"
+fi
+DEFAULT_CODEX_HOME="${CODEX_HOME:-${INSTALLER_HOME:+$INSTALLER_HOME/.codex}}"
 INSTALLED_JSON="${CLAUDE_HOME}/plugins/installed_plugins.json"
 CACHE_DIR="${CLAUDE_HOME}/plugins/cache/${MARKETPLACE_NAME}"
 MARKETPLACE_DIR="${CLAUDE_HOME}/plugins/marketplaces/${MARKETPLACE_NAME}"
@@ -43,11 +56,16 @@ PLUGIN_ROOT=""
 _BOOTSTRAP_STAGE=""
 _CONFIG_STAGE=""
 _CONFIG_HELPER=""
+_PORTABLE_STAGE=""
 _KEEP_CONFIG_STAGE=false
 PRODUCT=""
 BOOTSTRAP_TAG=""
 BOOTSTRAP_COMMIT=""
 _BOOTSTRAP_TMP=""  # temp file path for trap (set -u safe)
+CONFIGURE_NOTIFICATIONS=true
+AGENT_NOTIFY_REQUEST=auto
+CONFIGURE_BINARY=""
+CONFIGURE_ARGS=()
 
 # Isolated JSON/checksum runtime. Prefer python3 -I; Node is the supported
 # fallback because Claude Code already ships it. iTerm2 venv still needs a
@@ -136,7 +154,6 @@ abort_if_wsl_environment() {
 # ──────────────────────────────────────────────
 
 check_prerequisites() {
-    require_installer_runtime || return 1
     if [ "${PRODUCT:-claude}" != codex ] && ! command -v claude &>/dev/null; then
         echo -e "${RED}✗ claude CLI not found in PATH${NC}" >&2
         echo "" >&2
@@ -184,7 +201,7 @@ is_iterm2_detected() {
     [ "${TERM_PROGRAM:-}" = "iTerm.app" ] && return 0
     [ "${__CFBundleIdentifier:-}" = "com.googlecode.iterm2" ] && return 0
     [ -d "/Applications/iTerm.app" ] && return 0
-    [ -d "$HOME/Applications/iTerm.app" ] && return 0
+    [ -n "$INSTALLER_HOME" ] && [ -d "$INSTALLER_HOME/Applications/iTerm.app" ] && return 0
 
     return 1
 }
@@ -209,44 +226,13 @@ print_iterm2_python_api_notice() {
 
 # Reports (on stdout) the repo currently declared in settings for
 # $MARKETPLACE_NAME, or nothing if it isn't declared / can't be read.
-# `marketplace list` only reads local state — no network calls.
 marketplace_declared_repo() {
     local tmp
     tmp=$(mktemp "${TMPDIR:-/tmp}/marketplace-list-XXXXXX") || return 1
     claude plugin marketplace list --json </dev/null >"$tmp" 2>/dev/null
-    if usable_python3; then
-        python3 -I - "$tmp" "$MARKETPLACE_NAME" <<'PY'
-import json, sys
-path, name = sys.argv[1], sys.argv[2]
-try:
-    with open(path) as f:
-        entries = json.load(f)
-    for e in entries:
-        if e.get('name') == name and e.get('repo'):
-            print(e['repo'])
-            break
-except Exception:
-    pass
-PY
-    elif usable_node; then
-        run_isolated_node - "$tmp" "$MARKETPLACE_NAME" <<'JS'
-const fs = require('fs');
-try {
-  const entries = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-  const name = process.argv[3];
-  for (const entry of entries) {
-    if (entry && entry.name === name && entry.repo) {
-      process.stdout.write(String(entry.repo) + '\n');
-      break;
-    }
-  }
-} catch (_) {}
-JS
-    fi
+    "$_CONFIG_HELPER" config installer marketplace "$tmp" "$MARKETPLACE_NAME" || true
     rm -f "$tmp"
 }
-
-# True if $1 (a repo slug) is one of our own retired marketplace sources.
 is_legacy_marketplace_repo() {
     local repo="$1" candidate
     for candidate in $LEGACY_MARKETPLACE_REPOS; do
@@ -312,6 +298,10 @@ get_manifest_version() {
 
 get_installed_plugin_version() {
     [ -f "$INSTALLED_JSON" ] || return 0
+    if [ -n "${_CONFIG_HELPER:-}" ]; then
+        "$_CONFIG_HELPER" config installer version "$INSTALLED_JSON" "$PLUGIN_KEY"
+        return
+    fi
 
     if command -v jq &>/dev/null; then
         PLUGIN_KEY="$PLUGIN_KEY" jq -r '
@@ -415,6 +405,10 @@ JSEOF
 
 get_installed_plugin_root() {
     [ -f "$INSTALLED_JSON" ] || return 0
+    if [ -n "${_CONFIG_HELPER:-}" ]; then
+        "$_CONFIG_HELPER" config installer root "$INSTALLED_JSON" "$PLUGIN_KEY"
+        return
+    fi
 
     if command -v jq &>/dev/null; then
         PLUGIN_KEY="$PLUGIN_KEY" jq -r '
@@ -762,9 +756,11 @@ install_plugin() {
 #
 # IMPORTANT: Must never fail the hook (exit 0 on any error).
 
-CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-${CLAUDE_HOME:-$HOME/.claude}}"
+SHIM_HOME="${HOME:-${USERPROFILE:-}}"
+CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-${CLAUDE_HOME:-}}"
 if [ -z "$CLAUDE_HOME" ]; then
-  CLAUDE_HOME="$HOME/.claude"
+  [ -n "$SHIM_HOME" ] || exit 0
+  CLAUDE_HOME="$SHIM_HOME/.claude"
 fi
 
 INSTALLED_JSON="${CLAUDE_HOME}/plugins/installed_plugins.json"
@@ -963,9 +959,10 @@ setup_iterm2_venv() {
     is_iterm2_detected || return 0
     config_preflight || return 1
 
-    # Use $HOME/.claude explicitly (not $CLAUDE_HOME) — the Go code resolves
+    # Use the resolved user home explicitly (not $CLAUDE_HOME) — the Go code resolves
     # the venv path via os.UserHomeDir()/.claude/..., so the venv must be there.
-    local VENV_DIR="$HOME/.claude/claude-notifications-go/iterm2-venv"
+    [ -n "$INSTALLER_HOME" ] || return 0
+    local VENV_DIR="$INSTALLER_HOME/.claude/claude-notifications-go/iterm2-venv"
 
     # Skip if venv already exists and is functional
     if [ -x "$VENV_DIR/bin/python3" ] && \
@@ -1035,19 +1032,112 @@ print_success() {
 
 # ──────────────────────────────────────────────
 
+# Match the CLI contract before any installation work. Incomplete consent or
+# mixed none/local pairs must not reach configure as a printed retry.
+complete_configure_route() {
+    local nav="" app="" team="" unknown="" asserted="" i=0
+    while [ "$i" -lt "${#CONFIGURE_ARGS[@]}" ]; do
+        case "${CONFIGURE_ARGS[$i]}" in
+            --navigation|--app|--team-id|--allow-unknown-caller|--allow-caller-asserted|--codex-home)
+                i=$((i + 1))
+                [ "$i" -lt "${#CONFIGURE_ARGS[@]}" ] || { echo "Missing value for ${CONFIGURE_ARGS[$((i - 1))]}" >&2; return 1; }
+                case "${CONFIGURE_ARGS[$((i - 1))]}" in
+                    --navigation) nav="${CONFIGURE_ARGS[$i]}" ;;
+                    --app) app="${CONFIGURE_ARGS[$i]}" ;;
+                    --team-id) team="${CONFIGURE_ARGS[$i]}" ;;
+                    --allow-unknown-caller) unknown="${CONFIGURE_ARGS[$i]}" ;;
+                    --allow-caller-asserted) asserted="${CONFIGURE_ARGS[$i]}" ;;
+                esac ;;
+            --json|--request-permission|--preserve-policy) ;;
+            *) echo "Unknown option: ${CONFIGURE_ARGS[$i]}" >&2; return 1 ;;
+        esac
+        i=$((i + 1))
+    done
+    if [ -z "$nav" ] && [ -z "$app" ] && [ -z "$team" ] && [ -z "$unknown" ] && [ -z "$asserted" ]; then
+        CONFIGURE_ARGS+=(--navigation none --allow-unknown-caller true --allow-caller-asserted false --preserve-policy)
+        return 0
+    fi
+    if [ "$nav" = none ]; then
+        if [ -n "$app" ] || [ -n "$team" ]; then
+            echo "navigation none cannot combine with --app/--team-id." >&2
+            return 1
+        fi
+        case "$unknown" in true|false) ;; *) echo "navigation none requires --allow-unknown-caller and --allow-caller-asserted." >&2; return 1 ;; esac
+        case "$asserted" in true|false) ;; *) echo "navigation none requires --allow-unknown-caller and --allow-caller-asserted." >&2; return 1 ;; esac
+        return 0
+    fi
+    if [ -n "$nav" ]; then
+        echo "Invalid navigation: $nav" >&2
+        return 1
+    fi
+    if [ -z "$app" ] || [ -z "$team" ] || [ -z "$unknown" ] || [ -z "$asserted" ]; then
+        echo "Incomplete route; supply --app, --team-id, and both consent flags." >&2
+        return 1
+    fi
+    case "$unknown" in true|false) ;; *) echo "Invalid allow-unknown-caller: $unknown" >&2; return 1 ;; esac
+    case "$asserted" in true|false) ;; *) echo "Invalid allow-caller-asserted: $asserted" >&2; return 1 ;; esac
+    return 0
+}
+
 # Product selection must precede any filesystem or host CLI mutation.
 select_product() {
+    local seen_agent_notify=false seen_skip_agent_notify=false
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --product)
                 [ "$#" -ge 2 ] && [ -z "$PRODUCT" ] || { echo "Use --product claude|codex|both once." >&2; return 1; }
                 PRODUCT="$2"; shift 2 ;;
+            --agent-notify)
+                seen_agent_notify=true
+                AGENT_NOTIFY_REQUEST=explicit
+                CONFIGURE_NOTIFICATIONS=true
+                shift ;;
+            --skip-agent-notify)
+                seen_skip_agent_notify=true
+                AGENT_NOTIFY_REQUEST=skip
+                CONFIGURE_NOTIFICATIONS=false
+                shift ;;
+            --navigation|--app|--team-id|--allow-unknown-caller|--allow-caller-asserted|--codex-home)
+                [ "$#" -ge 2 ] || { echo "Missing value for $1" >&2; return 1; }
+                case "$1" in
+                    --navigation)
+                        [ "$2" = none ] || { echo "Invalid navigation: $2" >&2; return 1; } ;;
+                    --app)
+                        case "$2" in
+                            /*) ;;
+                            *) echo "App path must be absolute." >&2; return 1 ;;
+                        esac
+                        case "$2" in
+                            *..*) echo "App path must be a physical path." >&2; return 1 ;;
+                        esac ;;
+                    --codex-home)
+                        case "$2" in
+                            /*) ;;
+                            *) echo "codex-home must be absolute." >&2; return 1 ;;
+                        esac ;;
+                esac
+                CONFIGURE_ARGS+=("$1" "$2")
+                shift 2 ;;
+            --request-permission|--json)
+                CONFIGURE_ARGS+=("$1")
+                shift ;;
             --help|-h)
-                echo "Usage: bash bootstrap.sh [--product claude|codex|both]"
+                echo "Usage: bash bootstrap.sh [--product claude|codex|both] [--agent-notify|--skip-agent-notify] [--navigation none]"
                 exit 0 ;;
             *) echo "Unknown option: $1" >&2; return 1 ;;
         esac
     done
+    if [ "$seen_agent_notify" = true ] && [ "$seen_skip_agent_notify" = true ]; then
+        echo "--agent-notify and --skip-agent-notify are mutually exclusive." >&2
+        return 1
+    fi
+    if [ "$CONFIGURE_NOTIFICATIONS" = true ]; then
+        complete_configure_route || return 1
+    fi
+    if [ "$CONFIGURE_NOTIFICATIONS" != true ] && [ "${#CONFIGURE_ARGS[@]}" -ne 0 ]; then
+        echo "Route flags require --agent-notify." >&2
+        return 1
+    fi
     if [ -z "$PRODUCT" ]; then
         if ! { exec 3<>/dev/tty; } 2>/dev/null; then
             echo "No controlling TTY. Specify --product claude|codex|both." >&2
@@ -1073,6 +1163,7 @@ select_product() {
 bootstrap_cleanup() {
     [ -z "$_BOOTSTRAP_TMP" ] || rm -f "$_BOOTSTRAP_TMP"
     [ -z "$_BOOTSTRAP_STAGE" ] || rm -rf "$_BOOTSTRAP_STAGE"
+    [ -z "$_PORTABLE_STAGE" ] || rm -rf "$_PORTABLE_STAGE"
     if [ "$_KEEP_CONFIG_STAGE" != true ]; then
         [ -z "$_CONFIG_STAGE" ] || rm -rf "$_CONFIG_STAGE"
     fi
@@ -1087,7 +1178,10 @@ install_cleanup_traps() {
 
 install_runtime() {
     local product="$1" script="$2" target="$3"
+    local disposable=false
+    [ "$product" = "codex" ] && disposable=true
     CN_PRODUCT="$product" INSTALL_STAGED_ASSETS="$_CONFIG_STAGE" \
+    INSTALL_DISPOSABLE_ACQUISITION="$disposable" \
     RELEASE_URL="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG" \
     CHECKSUMS_URL="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG/checksums.txt" \
     MODERN_NOTIFIER_URL="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG/ClaudeNotifier.app.zip" \
@@ -1167,129 +1261,39 @@ JSCOMMIT
         echo "Invalid release commit SHA: $BOOTSTRAP_COMMIT" >&2; return 1;
     }
 
-    INSTALL_SCRIPT_URL="${INSTALL_SCRIPT_URL:-${BOOTSTRAP_RAW_BASE_URL:-https://raw.githubusercontent.com/${REPO}}/$BOOTSTRAP_COMMIT/bin/install.sh}"
+    # Keep explicit overrides separate from the default so managed installs
+    # can still select their compatible writer.
 }
 
 # Only release-verified bytes execute before host registration. Never use an old
 # cache binary for config decisions. Paths are metadata, never resolver inputs.
-stage_config_helper() {
-    # Validate the temp parent before creating anything: TMPDIR can itself be
-    # inside a Claude cache or a symlink into a refreshed runtime.
-    if usable_python3; then
-    python3 -I - "${TMPDIR:-/tmp}" "$INSTALLED_JSON" "$PLUGIN_KEY" "$PRODUCT" "$CACHE_DIR" "$MARKETPLACE_DIR" "${CODEX_HOME:-$HOME/.codex}/claude-notifications-go" <<'PYSTAGE' || return 1
-import json, os, sys
-base,registry,key,product,*roots=sys.argv[1:]
-roots = roots[:2] if product == 'claude' else roots[2:] if product == 'codex' else roots
-if product != 'codex' and os.path.lexists(registry):
-    with open(registry) as f: entries=json.load(f).get('plugins',{}).get(key,[])
-    roots.extend(e['installPath'] for e in entries)
-def within(base, root):
-    base = os.path.normcase(os.path.realpath(base))
-    root = os.path.normcase(os.path.realpath(root))
-    # Different drives or UNC shares cannot overlap.
-    if os.path.splitdrive(base)[0] != os.path.splitdrive(root)[0]:
-        return False
-    return os.path.commonpath([base, root]) == root
-if any(within(base, r) for r in roots):
-    sys.exit('Staging must be outside refreshed bundles')
-PYSTAGE
-    elif usable_node; then
-    run_isolated_node - "${TMPDIR:-/tmp}" "$INSTALLED_JSON" "$PLUGIN_KEY" "$PRODUCT" "$CACHE_DIR" "$MARKETPLACE_DIR" "${CODEX_HOME:-$HOME/.codex}/claude-notifications-go" <<'JSSTAGE' || return 1
-const fs = require('fs');
-const path = require('path');
-const osPath = process.platform === 'win32' ? path.win32 : path.posix;
-function lexists(p) { try { fs.lstatSync(p); return true; } catch (_) { return false; } }
-function isFsRoot(p) {
-  if (!p || p === '/') return true;
-  if (process.platform !== 'win32') return false;
-  const n = p.replace(/\//g, '\\');
-  if (/^[a-zA-Z]:\\?$/.test(n)) return true;
-  const d = splitdrive(n);
-  return d[1] === '' || d[1] === '\\';
+bootstrap_checksum_entry() {
+    local manifest="$1" name="$2"
+    awk -v name="$name" '
+        NF == 2 { file=$2; sub(/^\*/, "", file); if (file == name) { count++; digest=tolower($1) } }
+        END { if (count != 1 || length(digest) != 64 || digest ~ /[^0-9a-f]/) exit 1; print digest }
+    ' "$manifest"
 }
-function walkReal(current, rest, seen) {
-  const sepRe = process.platform === 'win32' ? /[\\/]+/ : /\/+/;
-  if (osPath.isAbsolute(rest) || (process.platform === 'win32' && /^[a-zA-Z]:/.test(rest))) {
-    if (process.platform === 'win32') {
-      const n = rest.replace(/\//g, '\\');
-      const d = splitdrive(n);
-      const currentDrive = splitdrive(current)[0];
-      current = d[0] || currentDrive;
-      rest = d[1];
-      if (rest.startsWith('\\')) {
-        current += '\\';
-        rest = rest.replace(/^\\+/, '');
-      }
-    } else {
-      current = '/';
-      rest = rest.replace(/^\/+/, '');
-    }
-  }
-  const parts = String(rest || '').split(sepRe);
-  for (let i = 0; i < parts.length; i++) {
-    const name = parts[i];
-    if (!name || name === '.') continue;
-    if (name === '..') {
-      if (current && !isFsRoot(current)) current = osPath.dirname(current);
-      continue;
-    }
-    const next = current ? osPath.join(current, name) : name;
-    let st;
-    try { st = fs.lstatSync(next); } catch (_) {
-      const leftover = parts.slice(i).filter((part) => part && part !== '.');
-      return leftover.length ? osPath.join(current || '', ...leftover) : next;
-    }
-    if (!st.isSymbolicLink()) { current = next; continue; }
-    if (Object.prototype.hasOwnProperty.call(seen, next)) {
-      current = seen[next] || next;
-      continue;
-    }
-    seen[next] = null;
-    current = walkReal(current, fs.readlinkSync(next), seen);
-    seen[next] = current;
-  }
-  return current || '.';
-}
-function real(p) {
-  // Walk components so symlink then ".." matches Python os.path.realpath.
-  // path.resolve() would drop ".." before the symlink is followed.
-  return osPath.resolve(walkReal('', String(p || ''), Object.create(null)));
-}
-function splitdrive(p) {
-  if (process.platform !== 'win32') return ['', p];
-  const n = p.replace(/\//g, '\\');
-  if (n.startsWith('\\\\')) {
-    const parts = n.split('\\').filter(Boolean);
-    if (parts.length >= 2) return ['\\\\' + parts[0] + '\\' + parts[1], '\\' + parts.slice(2).join('\\')];
-  }
-  return /^[a-zA-Z]:/.test(n) ? [n.slice(0, 2), n.slice(2)] : ['', n];
-}
-function within(base, root) {
-  base = osPath.normalize(real(base));
-  root = osPath.normalize(real(root));
-  if (process.platform === 'win32') { base = base.toLowerCase(); root = root.toLowerCase(); }
-  if (splitdrive(base)[0].toLowerCase() !== splitdrive(root)[0].toLowerCase()) return false;
-  const rel = osPath.relative(root, base);
-  return rel === '' || (rel !== '..' && !rel.startsWith('..' + osPath.sep) && !osPath.isAbsolute(rel));
-}
-const argv = process.argv.slice(2);
-let [base, registry, key, product, ...roots] = argv;
-roots = product === 'claude' ? roots.slice(0, 2) : product === 'codex' ? roots.slice(2) : roots;
-if (product !== 'codex' && lexists(registry)) {
-  const data = JSON.parse(fs.readFileSync(registry, 'utf8'));
-  const entries = ((data && data.plugins) || {})[key] || [];
-  for (const entry of entries) roots.push(entry.installPath);
-}
-if (roots.some((root) => within(base, root))) {
-  process.stderr.write('Staging must be outside refreshed bundles\n');
-  process.exit(1);
-}
-JSSTAGE
+
+verify_bootstrap_checksum() {
+    local root="$1" name="$2" expected actual
+    expected=$(bootstrap_checksum_entry "$root/checksums.txt" "$name") || return 1
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual=$(sha256sum < "$root/$name") || return 1
+    elif command -v shasum >/dev/null 2>&1; then
+        actual=$(shasum -a 256 < "$root/$name") || return 1
     else
-    echo "python3 or node is required for protected installer metadata and checksum validation." >&2
-    return 1
+        echo 'A system SHA-256 tool (sha256sum or shasum) is required.' >&2
+        return 1
     fi
-    _CONFIG_STAGE=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-config-XXXXXX") || return 1
+    actual=${actual%% *}
+    [ "$actual" = "$expected" ] || { echo 'Release checksum mismatch.' >&2; return 1; }
+}
+
+stage_config_helper() {
+    # Use the OS temporary root, not a caller-controlled TMPDIR inside a bundle.
+    # The verified helper checks canonical overlap before any refresh operation.
+    _CONFIG_STAGE=$(mktemp -d "/tmp/bootstrap-config-XXXXXX") || return 1
     # Snapshot the pre-update registry, not a guessed cache version. Later
     # registrations introduce packaged templates, not historical user settings.
     if [ "$PRODUCT" != codex ] && [ -e "$INSTALLED_JSON" ]; then
@@ -1297,7 +1301,7 @@ JSSTAGE
     else
         printf '{"plugins":{}}\n' > "$_CONFIG_STAGE/installed-before.json"
     fi
-    local os arch name base
+    local os arch name base capability
     os=$(uname -s | tr '[:upper:]' '[:lower:]')
     case "$os" in darwin|linux) ;; mingw*|msys*|cygwin*) os=windows ;; *) return 1 ;; esac
     case "$(uname -m)" in x86_64|amd64) arch=amd64 ;; arm64|aarch64) arch=arm64 ;; *) return 1 ;; esac
@@ -1306,102 +1310,80 @@ JSSTAGE
     base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG"
     fetch_bootstrap_file "$base/checksums.txt" "$_CONFIG_STAGE/checksums.txt" || return 1
     fetch_bootstrap_file "$base/$name" "$_CONFIG_STAGE/$name" || return 1
-    if usable_python3; then
-    python3 -I - "$_CONFIG_STAGE" "$name" <<'PYVERIFY' || return 1
-import hashlib, pathlib, sys
-root, name = pathlib.Path(sys.argv[1]), sys.argv[2]
-entries = [line.split() for line in (root/'checksums.txt').read_text().splitlines()]
-expected = [e[0] for e in entries if len(e)==2 and e[1].lstrip('*')==name]
-assert len(expected)==1 and hashlib.sha256((root/name).read_bytes()).hexdigest()==expected[0].lower(), 'Helper checksum mismatch'
-PYVERIFY
-    elif usable_node; then
-    run_isolated_node - "$_CONFIG_STAGE" "$name" <<'JSVERIFY' || return 1
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
-const root = process.argv[2], name = process.argv[3];
-const expected = fs.readFileSync(path.join(root, 'checksums.txt'), 'utf8').split(/\r?\n/)
-  .map((line) => line.split(/\s+/).filter(Boolean))
-  .filter((e) => e.length === 2 && e[1].replace(/^\*/, '') === name)
-  .map((e) => e[0]);
-const actual = crypto.createHash('sha256').update(fs.readFileSync(path.join(root, name))).digest('hex');
-if (expected.length !== 1 || actual !== expected[0].toLowerCase()) {
-  process.stderr.write('Helper checksum mismatch\n');
-  process.exit(1);
-}
-JSVERIFY
-    else
-    echo "python3 or node is required for protected installer metadata and checksum validation." >&2
-    return 1
-    fi
+    verify_bootstrap_checksum "$_CONFIG_STAGE" "$name" || return 1
     _CONFIG_HELPER="$_CONFIG_STAGE/$name"
     chmod +x "$_CONFIG_HELPER" || return 1
     [ "$("$_CONFIG_HELPER" --version)" = "claude-notifications $BOOTSTRAP_TAG" ] || return 1
+    capability=$("$_CONFIG_HELPER" config installer capabilities) || return 1
+    [ "$capability" = installer-v1 ] || {
+        echo 'Published helper does not support interpreter-free installation; a newer release is required.' >&2
+        return 1
+    }
     "$_CONFIG_HELPER" config path --json > "$_CONFIG_STAGE/path.json" || return 1
-    if usable_python3; then
-    python3 -I - "$_CONFIG_STAGE/path.json" <<'PYCAP' || return 1
-import json, sys
-v=json.load(open(sys.argv[1]))
-assert isinstance(v,dict) and isinstance(v.get('path'),str) and v['path'], 'Missing config path capability'
-PYCAP
-    elif usable_node; then
-    run_isolated_node - "$_CONFIG_STAGE/path.json" <<'JSCAP' || return 1
-const fs = require('fs');
-let value;
-try { value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8')); } catch (e) { process.exit(1); }
-if (!value || typeof value !== 'object' || Array.isArray(value) || typeof value.path !== 'string' || !value.path) {
-  process.stderr.write('Missing config path capability\n');
-  process.exit(1);
+    fetch_bootstrap_file "$(select_bootstrap_install_script)" "$_CONFIG_STAGE/install.sh" || return 1
 }
-JSCAP
-    else
-    echo "python3 or node is required for protected installer metadata and checksum validation." >&2
-    return 1
+
+bootstrap_control_root() {
+    local root
+    case "$(uname -s 2>/dev/null)" in
+        Darwin)
+            [ -n "$INSTALLER_HOME" ] || return 1
+            root="$INSTALLER_HOME/Library/Application Support"
+            ;;
+        MINGW*|MSYS*|CYGWIN*|Windows_NT)
+            root="${APPDATA:-${INSTALLER_HOME:+$INSTALLER_HOME/AppData/Roaming}}"
+            ;;
+        *)
+            root="${XDG_CONFIG_HOME:-${INSTALLER_HOME:+$INSTALLER_HOME/.config}}"
+            ;;
+    esac
+    [ -n "$root" ] || return 1
+    printf '%s/agent-notifications\n' "$root"
+}
+
+bootstrap_has_managed_ledger() {
+    local root ledger
+    root=$(bootstrap_control_root) || return 1
+    ledger="$root/ownership.json"
+    [ -f "$ledger" ] || return 1
+    [ ! -L "$ledger" ]
+}
+
+select_bootstrap_install_script() {
+    if [ -n "${INSTALL_SCRIPT_URL:-}" ]; then
+        printf '%s\n' "$INSTALL_SCRIPT_URL"
+        return 0
     fi
-    fetch_bootstrap_file "$INSTALL_SCRIPT_URL" "$_CONFIG_STAGE/install.sh" || return 1
+    if bootstrap_has_managed_ledger; then
+        printf '%s\n' "$MANAGED_INSTALL_SCRIPT_URL"
+        return 0
+    fi
+    printf '%s\n' "${BOOTSTRAP_RAW_BASE_URL:-$BOOTSTRAP_RAW_CONTENT_URL}/${BOOTSTRAP_COMMIT}/bin/install.sh"
+}
+
+# Released CLIs before agent-notify pairing reject unknown setup-codex flags and
+# have no setup-notifications command. Probe advertised help, never guess.
+cli_help() {
+    "$1" --help </dev/null 2>/dev/null || "$1" help </dev/null 2>/dev/null || true
+}
+
+cli_has_setup_codex_skip_agent_notify() {
+    cli_help "$1" | grep -Fq -- '--skip-agent-notify'
+}
+
+cli_has_setup_notifications() {
+    cli_help "$1" | grep -Fq -- 'setup-notifications'
+}
+
+cli_has_setup_wizard() {
+    cli_help "$1" | grep -Fq -- 'setup-notifications wizard'
 }
 
 # Optional exact-version release templates. Releases without this verified asset
 # intentionally leave baseline unknown and require explicit historical import.
 stage_historical_baselines() {
     [ "$PRODUCT" != codex ] || return 0
-    if usable_python3; then
-    python3 -I - "$_CONFIG_STAGE/installed-before.json" "$PLUGIN_KEY" "$_CONFIG_STAGE" <<'PYVERSIONS' > "$_CONFIG_STAGE/versions" || return 1
-import json,os,re,sys
-registry,key,stage=sys.argv[1:]
-versions=set()
-if os.path.lexists(registry):
-    with open(registry) as f: entries=json.load(f).get('plugins',{}).get(key,[])
-    for e in entries:
-        v=re.sub(r'^v', '', str(e.get('version','')))
-        if re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)',v) and os.path.lexists(os.path.join(e['installPath'],'config','config.json')): versions.add(v)
-# This output is consumed by a Bash read loop.  Native Windows Python otherwise
-# emits CRLF, leaving a trailing CR in the release URL and baseline directory.
-sys.stdout.buffer.write(('\n'.join(sorted(versions))+'\n' if versions else '').encode('ascii'))
-PYVERSIONS
-    elif usable_node; then
-    run_isolated_node - "$_CONFIG_STAGE/installed-before.json" "$PLUGIN_KEY" "$_CONFIG_STAGE" <<'JSVERSIONS' > "$_CONFIG_STAGE/versions" || return 1
-const fs = require('fs');
-const path = require('path');
-function lexists(p) { try { fs.lstatSync(p); return true; } catch (_) { return false; } }
-const [registry, key, stage] = process.argv.slice(2);
-const versions = new Set();
-if (lexists(registry)) {
-  const data = JSON.parse(fs.readFileSync(registry, 'utf8'));
-  const entries = ((data && data.plugins) || {})[key] || [];
-  for (const entry of entries) {
-    let version = String((entry && entry.version) || '').replace(/^v/, '');
-    if (!/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(version)) continue;
-    if (lexists(path.join(entry.installPath, 'config', 'config.json'))) versions.add(version);
-  }
-}
-const list = Array.from(versions).sort();
-process.stdout.write(list.length ? list.join('\n') + '\n' : '');
-JSVERSIONS
-    else
-    echo "python3 or node is required for protected installer metadata and checksum validation." >&2
-    return 1
-    fi
+    "$_CONFIG_HELPER" config installer versions "$_CONFIG_STAGE/installed-before.json" "$PLUGIN_KEY" > "$_CONFIG_STAGE/versions" || return 1
     local version base dir
     while IFS= read -r version; do
         [ -n "$version" ] || continue
@@ -1410,52 +1392,10 @@ JSVERSIONS
         base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/v$version"
         fetch_bootstrap_file "$base/checksums.txt" "$dir/checksums.txt" 2>/dev/null || continue
         # Only request a template explicitly included in the release manifest.
-        if usable_python3; then
-        python3 -I - "$dir/checksums.txt" <<'PYHAS' || continue
-# Older releases may not publish a config.json checksum entry; skip this
-# baseline quietly rather than let assert dump a traceback to the user.
-import sys
-has_entry = any(len(e) == 2 and e[1].lstrip('*') == 'config.json'
-                for e in (line.split() for line in open(sys.argv[1])))
-sys.exit(0 if has_entry else 1)
-PYHAS
-        elif usable_node; then
-        run_isolated_node - "$dir/checksums.txt" <<'JSHAS' || continue
-const fs = require('fs');
-const has = fs.readFileSync(process.argv[2], 'utf8').split(/\r?\n/)
-  .map((line) => line.split(/\s+/).filter(Boolean))
-  .some((e) => e.length === 2 && e[1].replace(/^\*/, '') === 'config.json');
-process.exit(has ? 0 : 1);
-JSHAS
-        else continue
-        fi
+        bootstrap_checksum_entry "$dir/checksums.txt" config.json >/dev/null || continue
         fetch_bootstrap_file "$base/config.json" "$dir/config.json" 2>/dev/null || continue
-        if usable_python3; then
-        python3 -I - "$dir" <<'PYBASE' || continue
-import hashlib,pathlib,sys
-p=pathlib.Path(sys.argv[1])
-entries=[line.split() for line in (p/'checksums.txt').read_text().splitlines()]
-h=[e[0] for e in entries if len(e)==2 and e[1].lstrip('*')=='config.json']
-if len(h)!=1 or hashlib.sha256((p/'config.json').read_bytes()).hexdigest()!=h[0].lower():
-    sys.exit(1)
-(p/'verified').write_text(h[0].lower())
-PYBASE
-        elif usable_node; then
-        run_isolated_node - "$dir" <<'JSBASE' || continue
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
-const dir = process.argv[2];
-const hashes = fs.readFileSync(path.join(dir, 'checksums.txt'), 'utf8').split(/\r?\n/)
-  .map((line) => line.split(/\s+/).filter(Boolean))
-  .filter((e) => e.length === 2 && e[1].replace(/^\*/, '') === 'config.json')
-  .map((e) => e[0]);
-const actual = crypto.createHash('sha256').update(fs.readFileSync(path.join(dir, 'config.json'))).digest('hex');
-if (hashes.length !== 1 || actual !== hashes[0].toLowerCase()) process.exit(1);
-fs.writeFileSync(path.join(dir, 'verified'), hashes[0].toLowerCase());
-JSBASE
-        else continue
-        fi
+        verify_bootstrap_checksum "$dir" config.json || continue
+        bootstrap_checksum_entry "$dir/checksums.txt" config.json > "$dir/verified" || return 1
     done < "$_CONFIG_STAGE/versions"
 }
 
@@ -1464,135 +1404,12 @@ config_preflight() {
     if [ "$PRODUCT" != codex ] && [ "$(uname -s)" = Darwin ]; then
         # Resource location, not a second config resolver. Both asset installers
         # can recreate this venv outside the plugin cache.
-        venv_refresh="$HOME/.claude/claude-notifications-go/iterm2-venv"
+        [ -z "$INSTALLER_HOME" ] || venv_refresh="$INSTALLER_HOME/.claude/claude-notifications-go/iterm2-venv"
     fi
     # Resolve config afresh before every destructive operation. Historical roots
     # come from the pre-update registry; current roots extend overlap protection.
-    if usable_python3; then
-    python3 -I - "$_CONFIG_STAGE/installed-before.json" "$PLUGIN_KEY" "$CLAUDE_HOME" "$CACHE_DIR" "$MARKETPLACE_DIR" "${CODEX_HOME:-$HOME/.codex}" "$PRODUCT" "$_CONFIG_STAGE" "$INSTALLED_JSON" "$venv_refresh" <<'PYINPUT' > "$_CONFIG_STAGE/preflight-input.json" || return 1
-import json, os, re, sys
-registry,key,claude,cache,market,codex,product,stage,current_registry,venv_refresh=sys.argv[1:]
-baselines={}
-roots=[]; refresh=[]; historical=[]
-if product!='codex':
-    if os.path.lexists(registry):
-        with open(registry) as f: entries=json.load(f).get('plugins',{}).get(key,[])
-        assert isinstance(entries,list), 'Invalid Claude registry'
-        for entry in entries:
-            root=entry.get('installPath')
-            assert isinstance(root,str) and os.path.isabs(root), 'Missing absolute recorded installPath'
-            if root not in roots: roots.append(root)
-            version=re.sub(r'^v', '', str(entry.get('version','')))
-            import re
-            if re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)',version):
-                baseline=os.path.join(stage,'baseline-'+version)
-                if os.path.isfile(os.path.join(baseline,'verified')):
-                    baselines[root]=dict(baselinePath=os.path.join(baseline,'config.json'),baselineSHA256=open(os.path.join(baseline,'verified')).read())
-    refresh.extend([cache,market]+roots)
-    if os.path.lexists(current_registry):
-        with open(current_registry) as f: current=json.load(f).get('plugins',{}).get(key,[])
-        for entry in current:
-            root=entry.get('installPath')
-            assert isinstance(root,str) and os.path.isabs(root), 'Missing absolute recorded installPath'
-            if root not in refresh: refresh.append(root)
-    historical.extend(dict(path=os.path.join(r,'config','config.json'),**baselines.get(r,{})) for r in roots)
-# Shared configuration history applies even to a Codex-only install.
-historical.append({'path':os.path.join(claude,'claude-notifications-go','config.json')})
-if product!='claude':
-    dest=os.path.join(codex,'claude-notifications-go')
-    refresh.append(dest)
-    historical.append({'path':os.path.join(dest,'config','config.json')})
-if venv_refresh: refresh.append(venv_refresh)
-assert all(os.path.isabs(p) for p in refresh), 'Refresh roots must be absolute'
-# Baselines come only from checksum-verified artifacts of the recorded version.
-protected=[current_registry,os.path.join(claude,'plugins','known_marketplaces.json'),os.path.join(claude,'settings.json')] if product!='codex' else []
-json.dump(dict(activeBundleRoots=roots,refreshDirs=refresh,protectedPaths=protected,historicalCandidates=historical),sys.stdout)
-PYINPUT
-    elif usable_node; then
-    run_isolated_node - "$_CONFIG_STAGE/installed-before.json" "$PLUGIN_KEY" "$CLAUDE_HOME" "$CACHE_DIR" "$MARKETPLACE_DIR" "${CODEX_HOME:-$HOME/.codex}" "$PRODUCT" "$_CONFIG_STAGE" "$INSTALLED_JSON" "$venv_refresh" <<'JSINPUT' > "$_CONFIG_STAGE/preflight-input.json" || return 1
-const fs = require('fs');
-const path = require('path');
-function lexists(p) { try { fs.lstatSync(p); return true; } catch (_) { return false; } }
-function isabs(p) { return path.isAbsolute(p); }
-const [registry, key, claude, cache, market, codex, product, stage, current_registry, venv_refresh] = process.argv.slice(2);
-const baselines = {};
-const roots = [];
-const refresh = [];
-const historical = [];
-if (product !== 'codex') {
-  if (lexists(registry)) {
-    const data = JSON.parse(fs.readFileSync(registry, 'utf8'));
-    const entries = ((data && data.plugins) || {})[key] || [];
-    if (!Array.isArray(entries)) throw new Error('Invalid Claude registry');
-    for (const entry of entries) {
-      const root = entry && entry.installPath;
-      if (typeof root !== 'string' || !isabs(root)) throw new Error('Missing absolute recorded installPath');
-      if (!roots.includes(root)) roots.push(root);
-      const version = String((entry && entry.version) || '').replace(/^v/, '');
-      if (/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(version)) {
-        const verified = path.join(stage, 'baseline-' + version, 'verified');
-        if (fs.existsSync(verified) && fs.statSync(verified).isFile()) {
-          baselines[root] = {
-            baselinePath: path.join(stage, 'baseline-' + version, 'config.json'),
-            baselineSHA256: fs.readFileSync(verified, 'utf8'),
-          };
-        }
-      }
-    }
-  }
-  refresh.push(cache, market, ...roots);
-  if (lexists(current_registry)) {
-    const currentData = JSON.parse(fs.readFileSync(current_registry, 'utf8'));
-    const current = ((currentData && currentData.plugins) || {})[key] || [];
-    for (const entry of current) {
-      const root = entry && entry.installPath;
-      if (typeof root !== 'string' || !isabs(root)) throw new Error('Missing absolute recorded installPath');
-      if (!refresh.includes(root)) refresh.push(root);
-    }
-  }
-  for (const root of roots) {
-    historical.push(Object.assign({ path: path.join(root, 'config', 'config.json') }, baselines[root] || {}));
-  }
-}
-historical.push({ path: path.join(claude, 'claude-notifications-go', 'config.json') });
-if (product !== 'claude') {
-  const dest = path.join(codex, 'claude-notifications-go');
-  refresh.push(dest);
-  historical.push({ path: path.join(dest, 'config', 'config.json') });
-}
-if (venv_refresh) refresh.push(venv_refresh);
-if (!refresh.every(isabs)) throw new Error('Refresh roots must be absolute');
-const protectedPaths = product !== 'codex' ? [
-  current_registry,
-  path.join(claude, 'plugins', 'known_marketplaces.json'),
-  path.join(claude, 'settings.json'),
-] : [];
-process.stdout.write(JSON.stringify({
-  activeBundleRoots: roots,
-  refreshDirs: refresh,
-  protectedPaths,
-  historicalCandidates: historical,
-}));
-JSINPUT
-    else
-    echo "python3 or node is required for protected installer metadata and checksum validation." >&2
-    return 1
-    fi
-    if "$_CONFIG_HELPER" config preflight-update --stdin --json < "$_CONFIG_STAGE/preflight-input.json" > "$_CONFIG_STAGE/preflight.json"; then
-        if usable_python3; then
-        if python3 -I - "$_CONFIG_STAGE/preflight.json" <<'PYSAFE'
-import json,sys
-assert json.load(open(sys.argv[1])).get('status')=='safe'
-PYSAFE
-        then return 0; fi
-        elif usable_node; then
-        if run_isolated_node - "$_CONFIG_STAGE/preflight.json" <<'JSSAFE'
-const fs = require('fs');
-const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-if (!value || value.status !== 'safe') process.exit(1);
-JSSAFE
-        then return 0; fi
-        fi
+    if "$_CONFIG_HELPER" config installer bootstrap "$_CONFIG_STAGE/installed-before.json" "$PLUGIN_KEY" "$CLAUDE_HOME" "$CACHE_DIR" "$MARKETPLACE_DIR" "$DEFAULT_CODEX_HOME" "$PRODUCT" "$_CONFIG_STAGE" "$INSTALLED_JSON" "$venv_refresh" > "$_CONFIG_STAGE/preflight.json"; then
+        return 0
     fi
     _KEEP_CONFIG_STAGE=true
     echo "Config preflight stopped setup; runtime retained before this operation." >&2
@@ -1646,10 +1463,58 @@ install_codex() {
     [ "$actual" = "claude-notifications v$version" ] || {
         echo "Binary must match $tag and support setup-codex." >&2; return 1;
     }
-    CN_PRODUCT=codex "$binary" setup-codex --plugin-root "$bundle" --dry-run </dev/null || return 1
+    local setup_codex_home="" i=0
+    while [ "$i" -lt "${#CONFIGURE_ARGS[@]}" ]; do
+        if [ "${CONFIGURE_ARGS[$i]}" = "--codex-home" ]; then
+            i=$((i + 1))
+            setup_codex_home="${CONFIGURE_ARGS[$i]}"
+        fi
+        i=$((i + 1))
+    done
+    run_codex_setup() {
+        if cli_has_setup_codex_skip_agent_notify "$binary"; then
+            set -- --skip-agent-notify "$@"
+        fi
+        if [ -n "$setup_codex_home" ]; then
+            CN_PRODUCT=codex "$binary" setup-codex --plugin-root "$bundle" --codex-home "$setup_codex_home" "$@" </dev/null
+        else
+            CN_PRODUCT=codex "$binary" setup-codex --plugin-root "$bundle" "$@" </dev/null
+        fi
+    }
+    run_codex_setup --dry-run || return 1
     config_preflight || return 1
-    CN_PRODUCT=codex "$binary" setup-codex --plugin-root "$bundle" </dev/null || return $?
+    run_codex_setup || return $?
+    if [ -n "$setup_codex_home" ]; then
+        CONFIGURE_BINARY=$(installed_notification_binary "$setup_codex_home/claude-notifications-go") || return 1
+    else
+        [ -n "$DEFAULT_CODEX_HOME" ] || { echo "HOME, USERPROFILE, CODEX_HOME, or --codex-home is required for Codex setup." >&2; return 1; }
+        CONFIGURE_BINARY=$(installed_notification_binary "$DEFAULT_CODEX_HOME/claude-notifications-go") || return 1
+    fi
+    if ! notification_command_available "$CONFIGURE_BINARY"; then
+        echo "Committed Codex runtime binary missing after setup-codex." >&2
+        return 1
+    fi
+    rm -rf "$_BOOTSTRAP_STAGE"
+    _BOOTSTRAP_STAGE=""
     echo "Codex installed. Start Codex, run /hooks, review and trust the entries."
+}
+
+# Windows uses the ledger-owned BAT launcher; it does not rely on POSIX execute
+# bits and keeps the client command stable across architecture updates.
+installed_notification_binary() {
+    local root="$1"
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*)
+            printf '%s/bin/claude-notifications.bat\n' "$root" ;;
+        *) printf '%s/bin/claude-notifications\n' "$root" ;;
+    esac
+}
+
+notification_command_available() {
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) [ -f "$1" ] ;;
+        *) [ -x "$1" ] ;;
+    esac
 }
 
 install_claude() {
@@ -1659,6 +1524,7 @@ install_claude() {
     find_plugin_root || return 1
     download_binary || return 1
     setup_iterm2_venv || return 1
+    CONFIGURE_BINARY=$(installed_notification_binary "$PLUGIN_ROOT") || return 1
     if [ "$PRODUCT" = both ]; then
     echo "Agent Notifications installed; continuing with Codex."
     fi
@@ -1693,7 +1559,196 @@ main() {
         fi
     fi
     initialize_config || return 1
+    configure_agent_notify || return 1
     [ "$PRODUCT" != claude ] || print_success
+}
+
+# Quote argv so a user can paste the retry command into bash. Custom roots with
+# spaces must survive this string (§9.2 / §9.4). Do not print the result through
+# echo -e: printf %q emits backslashes that -e would interpret.
+quote_shell_command() {
+    local quoted="" arg
+    for arg in "$@"; do
+        quoted="${quoted:+$quoted }$(printf '%q' "$arg")"
+    done
+    printf '%s' "$quoted"
+}
+
+# Agent-notify is default-on. A failed setup must not undo hooks/plugin install,
+# but it is incomplete: bootstrap does not print overall success.
+configure_agent_notify() {
+    [ "$CONFIGURE_NOTIFICATIONS" = true ] || return 0
+    if [ -z "$CONFIGURE_BINARY" ]; then
+        CONFIGURE_BINARY=$(installed_notification_binary "$PLUGIN_ROOT") || return 1
+    fi
+    if ! notification_command_available "$CONFIGURE_BINARY"; then
+        echo -e "${YELLOW}⚠ Agent-notify setup skipped; installer binary not found.${NC}" >&2
+        echo -e "${YELLOW}  Plugin/hooks install succeeded. Retry after the binary is available.${NC}" >&2
+        [ "$AGENT_NOTIFY_REQUEST" = explicit ] && return 1
+        return 0
+    fi
+    case "$(uname -s 2>/dev/null)" in
+        Darwin|Linux) use_wizard=true ;;
+        *) use_wizard=false ;;
+    esac
+    if [ "$use_wizard" = true ] && cli_has_setup_wizard "$CONFIGURE_BINARY"; then
+        setup_agent_notify_wizard
+        return $?
+    fi
+    if ! cli_has_setup_notifications "$CONFIGURE_BINARY"; then
+        echo -e "${YELLOW}⚠ Agent-notify setup skipped; this published CLI does not support setup-notifications.${NC}" >&2
+        echo -e "${YELLOW}  Plugin/hooks install succeeded. Desktop/hook notifications still work.${NC}" >&2
+        [ "$AGENT_NOTIFY_REQUEST" = explicit ] && return 1
+        return 0
+    fi
+    configure_agent_policy
+}
+
+configure_agent_policy() {
+    case "$(uname -s 2>/dev/null)" in
+        Darwin|Linux|MINGW*|MSYS*|CYGWIN*) ;;
+        *)
+            echo -e "${YELLOW}⚠ Agent-notify MCP skipped: unsupported_platform (this installer supports macOS, Linux, and Windows).${NC}" >&2
+            echo -e "${YELLOW}  Plugin/hooks install succeeded. Not a full MCP installation.${NC}" >&2
+            [ "$AGENT_NOTIFY_REQUEST" = explicit ] && return 1
+            return 0 ;;
+    esac
+    if ! "$CONFIGURE_BINARY" setup-notifications configure --provider "$PRODUCT" ${CONFIGURE_ARGS[@]+"${CONFIGURE_ARGS[@]}"}; then
+        echo -e "${YELLOW}⚠ Agent-notify setup failed; plugin/hooks install succeeded.${NC}" >&2
+        echo -e "${YELLOW}  Desktop/hook notifications still work. Retry:${NC}" >&2
+        printf '  %s\n' "$(quote_shell_command "$CONFIGURE_BINARY" setup-notifications configure --provider "$PRODUCT" ${CONFIGURE_ARGS[@]+"${CONFIGURE_ARGS[@]}"})" >&2
+        return 1
+    fi
+    return 0
+}
+
+# Same-tag portable zip is the wizard source. Auto-default without that asset is
+# hooks-only, not a full MCP install. Explicit --agent-notify is incomplete.
+report_wizard_portable_missing() {
+    local reason="$1"
+    local agents="$2"
+    echo -e "${YELLOW}⚠ Agent-notify wizard skipped; ${reason}.${NC}" >&2
+    echo -e "${YELLOW}  Plugin/hooks install succeeded. Retry:${NC}" >&2
+    printf '  %s\n' "$(quote_shell_command "$CONFIGURE_BINARY" setup-notifications wizard --action install --agents "$agents" --hooks false --agent-notify true --yes)" >&2
+    if [ "$AGENT_NOTIFY_REQUEST" = explicit ]; then
+        return 1
+    fi
+    return 0
+}
+
+bootstrap_abs_command() {
+    local found
+    found=$(command -v "$1" 2>/dev/null) || return 1
+    case "$found" in
+        /*|[A-Za-z]:/*|[A-Za-z]:\\*) printf '%s\n' "$found" ;;
+        *) return 1 ;;
+    esac
+}
+
+bootstrap_release_os_arch() {
+    local os arch
+    os=$(uname -s | tr '[:upper:]' '[:lower:]')
+    case "$os" in darwin|linux) ;; mingw*|msys*|cygwin*) os=windows ;; *) return 1 ;; esac
+    case "$(uname -m)" in x86_64|amd64) arch=amd64 ;; arm64|aarch64) arch=arm64 ;; *) return 1 ;; esac
+    printf '%s %s\n' "$os" "$arch"
+}
+
+# Same-tag portable zip is the install source for agent-notify. Git templates
+# without the release binary are only a last-resort offline fallback.
+acquire_wizard_portable_asset() {
+    local os arch asset base stage
+    [ -n "${BOOTSTRAP_TAG:-}" ] || return 1
+    read -r os arch < <(bootstrap_release_os_arch) || return 1
+    asset="agent-notify-portable-${os}-${arch}.zip"
+    stage="${_CONFIG_STAGE:-}"
+    if [ -z "$stage" ]; then
+        _PORTABLE_STAGE=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-portable-XXXXXX") || return 1
+        stage="$_PORTABLE_STAGE"
+    fi
+    base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG"
+    if [ ! -f "$stage/checksums.txt" ]; then
+        fetch_bootstrap_file "$base/checksums.txt" "$stage/checksums.txt" || return 1
+    fi
+    fetch_bootstrap_file "$base/$asset" "$stage/$asset" || return 1
+    verify_bootstrap_checksum "$stage" "$asset" || return 1
+    WIZARD_PACKAGE_ROOT="$stage/$asset"
+}
+
+setup_agent_notify_wizard() {
+    local agents package_root install_root wizard_codex_home="$DEFAULT_CODEX_HOME" i=0
+    local claude_exec="" codex_exec="" plugin_root
+    WIZARD_PACKAGE_ROOT=""
+    case "$PRODUCT" in
+        claude) agents=claude ;;
+        codex) agents=codex ;;
+        both) agents=claude,codex ;;
+        *) echo "invalid product for wizard: $PRODUCT" >&2; return 1 ;;
+    esac
+    while [ "$i" -lt "${#CONFIGURE_ARGS[@]}" ]; do
+        if [ "${CONFIGURE_ARGS[$i]}" = "--codex-home" ]; then
+            i=$((i + 1))
+            wizard_codex_home="${CONFIGURE_ARGS[$i]}"
+        fi
+        i=$((i + 1))
+    done
+    if [ "$PRODUCT" != claude ] && [ -z "$wizard_codex_home" ]; then
+        echo "HOME, USERPROFILE, CODEX_HOME, or --codex-home is required for Codex setup." >&2
+        return 1
+    fi
+    plugin_root="$PLUGIN_ROOT"
+    if [ -z "$plugin_root" ]; then
+        plugin_root=$(cd "$(dirname "$CONFIGURE_BINARY")/.." && pwd)
+    fi
+    if [ -n "${BOOTSTRAP_TAG:-}" ]; then
+        if ! acquire_wizard_portable_asset; then
+            report_wizard_portable_missing "portable package is missing from $BOOTSTRAP_TAG" "$agents" && return 0
+            return 1
+        fi
+        package_root="$WIZARD_PACKAGE_ROOT"
+    elif [ -f "$plugin_root/portable-package/plugin.json" ]; then
+        package_root="$plugin_root/portable-package"
+    else
+        install_root=$(cd "$(dirname "$CONFIGURE_BINARY")/.." && pwd)
+        if [ -f "$install_root/portable-package/plugin.json" ]; then
+            package_root="$install_root/portable-package"
+            plugin_root="$install_root"
+        fi
+    fi
+    if [ -z "${package_root:-}" ]; then
+        report_wizard_portable_missing "portable package is missing from the accepted release" "$agents" && return 0
+        return 1
+    fi
+    # Preserve policy enablement and accepted route/consent before the wizard
+    # migrates client registration to the portable package.
+    configure_agent_policy || return 1
+    if [ "$PRODUCT" != codex ]; then
+        claude_exec=$(bootstrap_abs_command claude) || true
+    fi
+    if [ "$PRODUCT" != claude ]; then
+        codex_exec=$(bootstrap_abs_command codex) || true
+    fi
+    set -- setup-notifications wizard --action install --agents "$agents" --hooks false --agent-notify true --yes \
+        --package "$package_root" --plugin-root "$plugin_root" --helper "$CONFIGURE_BINARY"
+    set -- "$@" --codex-home "$wizard_codex_home" --claude-config "$CLAUDE_HOME"
+    if [ "$PRODUCT" != codex ]; then
+        set -- "$@" --claude-mcp-config "${CLAUDE_CONFIG_DIR:-$INSTALLER_HOME}/.claude.json"
+    fi
+    [ -z "$claude_exec" ] || set -- "$@" --claude-executable "$claude_exec"
+    [ -z "$codex_exec" ] || set -- "$@" --codex-executable "$codex_exec"
+    if [ "$PRODUCT" != both ] && [ -n "$claude_exec$codex_exec" ]; then
+        if [ -n "$claude_exec" ]; then
+            set -- "$@" --client-executable "$claude_exec"
+        else
+            set -- "$@" --client-executable "$codex_exec"
+        fi
+    fi
+    if ! "$CONFIGURE_BINARY" "$@"; then
+        echo -e "${YELLOW}⚠ Agent-notify setup failed; plugin/hooks install succeeded.${NC}" >&2
+        echo -e "${YELLOW}  Desktop/hook notifications still work. Retry:${NC}" >&2
+        printf '  %s\n' "$(quote_shell_command "$CONFIGURE_BINARY" "$@")" >&2
+        return 1
+    fi
+    return 0
 }
 
 main "$@"

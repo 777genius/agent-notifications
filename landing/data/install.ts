@@ -38,8 +38,10 @@ export function command(
   product: Product,
   target: Target,
   intent: Intent,
+  agentNotify = true,
 ): string | null {
   if (intent === "configure" || target === "unknown" || target === "manual")
     return null;
-  return `(set -o pipefail; curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/a512deb5819c3f8c7c3be8335f713cc8bb734fc3/bin/setup.sh | bash -s -- --product ${product})`;
+  const skip = agentNotify ? "" : " --skip-agent-notify";
+  return `(set -o pipefail; curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/a512deb5819c3f8c7c3be8335f713cc8bb734fc3/bin/setup.sh | bash -s -- --product ${product}${skip})`;
 }

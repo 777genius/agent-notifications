@@ -80,6 +80,9 @@ func Env(t *testing.T, root string) []string {
 func Build(t *testing.T, root string) []string {
 	t.Helper()
 	result := Env(t, root)
+	// Test helpers build from this module root. Do not let an ambient parent
+	// go.work select an older language version or a different module graph.
+	result = append(result, "GOWORK=off")
 	for _, key := range []string{"GOROOT", "GOPATH", "GOMODCACHE", "GOCACHE", "GOTMPDIR", "GOPROXY", "GOSUMDB", "GOTOOLCHAIN", "GOMAXPROCS", "CGO_ENABLED", "CC", "CXX"} {
 		if value, ok := os.LookupEnv(key); ok {
 			result = append(result, key+"="+value)

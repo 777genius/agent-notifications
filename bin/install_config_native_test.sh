@@ -89,14 +89,33 @@ if [ "$PLATFORM" != windows ]; then
             )
         else
             (
-                download_and_verify_binary() { cp "$sandbox/helper.exe" "$BINARY_PATH"; }
+                download_and_verify_binary() {
+                    cat > "$BINARY_PATH" <<'EOF'
+#!/bin/sh
+# agent-notifications-managed-writer-protocol-v1
+[ "$1" = --version ] && { echo 'claude-notifications 0.0.1'; exit 0; }
+[ "$1" = internal-install-runtime ] && exit 0
+exit 0
+EOF
+                    chmod +x "$BINARY_PATH"
+                }
                 verify_executable() { :; }
+                download_terminal_notifier_modern() {
+                    mkdir -p "$SCRIPT_DIR/ClaudeNotifier.app/Contents/MacOS"
+                    printf '#!/bin/sh\n' > "$SCRIPT_DIR/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern"
+                    chmod +x "$SCRIPT_DIR/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern"
+                    printf '{"SchemaVersion":1,"ProtocolVersion":1,"DecoderFloor":1,"ExecutableSHA256":"test"}\n' > "$SCRIPT_DIR/ClaudeNotifier.app.managed-runtime.json"
+                    printf '{}' > "$SCRIPT_DIR/config.json"
+                    rm "$selected"
+                    ln -s "$SCRIPT_DIR/config.json" "$selected"
+                }
                 install_linux_notification_desktop_entry() {
                     printf '{}' > "$stage/config.json"
                     rm "$selected"
                     ln -s "$stage/config.json" "$selected"
                     exit 0
                 }
+                guard_install_paths() { return 0; }
                 unset -f uname
                 stage_and_promote_runtime
             )

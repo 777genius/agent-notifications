@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        go: ['1.22', '1.26']
+        go: ['1.25', '1.26']
 
     steps:
       - name: Checkout code
@@ -83,6 +83,11 @@ jobs:
         run: bash bin/installer_runtime_fallback_e2e_test.sh
         shell: bash
 
+      - name: Qualify interpreter-free bootstrap in Git Bash
+        if: matrix.go == '1.26'
+        run: bash bin/install_no_interpreters_test.sh "$PWD/bin/claude-notifications.exe"
+        shell: bash
+
       - name: Build sound preview binary
         run: go build -o bin/sound-preview.exe ./cmd/sound-preview
 
@@ -96,3 +101,4 @@ jobs:
       - name: Run install.sh E2E tests (offline + mock)
         run: bash bin/install_e2e_test.sh
         shell: bash
+        timeout-minutes: 10

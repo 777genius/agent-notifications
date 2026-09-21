@@ -1,10 +1,12 @@
 package codexsetup
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
+
+	"github.com/777genius/agent-notifications/internal/installruntime"
 )
 
 func TestWindowsBundleLaunchers(t *testing.T) {
@@ -21,7 +23,7 @@ func TestWindowsBundleLaunchers(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(data), `"%~dp0`+binary+`" %*`) || !strings.Contains(string(data), "set AGENT_NOTIFICATIONS_LAUNCHER="+name) {
+		if !bytes.Equal(data, installruntime.WindowsLauncherScript(name, binary)) {
 			t.Fatalf("wrong wrapper: %s", data)
 		}
 		for _, suffix := range []string{"", ".bat", ".cmd"} {

@@ -43,6 +43,7 @@
   },
   "select": { "scrollUp": "विकल्प ऊपर स्क्रॉल करें", "scrollDown": "विकल्प नीचे स्क्रॉल करें" },
   "install": {
+    "agentNotify": {"label": "एजेंट को सूचना भेजने दें जब उन्हें आपके ध्यान की ज़रूरत हो", "hint": "एक टूल जोड़ता है जिससे एजेंट कार्य के दौरान सूचना भेज सके, सिर्फ़ काम रुकने पर नहीं।"},
     "title": "सूचनाएँ सेट करें", "intro": "{agent} में डेस्कटॉप सूचनाएँ जोड़ने के लिए नीचे दिए गए चरण अपनाएँ।", "chooseAgent": "अपना एजेंट चुनें", "requires": "{agent} आवश्यक है", "bothAgents": "दोनों एजेंट", "bothSelected": "✓ दोनों एजेंट चुने गए", "installBoth": "दोनों एजेंटों के लिए इंस्टॉल करें", "chooseComputer": "वह कंप्यूटर चुनें जहाँ आपका एजेंट चलता है", "selected": "चुना गया", "detected": "अपने-आप पहचाना गया", "change": "बदलें", "targetOs": "लक्ष्य ऑपरेटिंग सिस्टम",
     "products": { "claude": "Claude Code", "codex": "Codex CLI", "both": "दोनों एजेंट" },
     "targets": { "unknown": "लक्ष्य ऑपरेटिंग सिस्टम चुनें", "macos": "macOS", "linux": "Linux", "windows": "Windows · Git Bash", "manual": "मैन्युअल निर्देश" },

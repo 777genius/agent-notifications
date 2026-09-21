@@ -3,6 +3,7 @@ import UserNotifications
 
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
 
+    let lifecycle = ProcessCallbackLifecycle.shared
     private let actionExecutor: ActionExecuting
 
     init(actionExecutor: ActionExecuting = ActionExecutor()) {
@@ -19,28 +20,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
-        switch response.actionIdentifier {
-        case "DISMISS", UNNotificationDismissActionIdentifier:
-            break
-        case "OPEN", UNNotificationDefaultActionIdentifier:
-            let userInfo = response.notification.request.content.userInfo
-            if let actionJSON = userInfo["action"] as? String,
-               let action = ClickAction.fromJSON(actionJSON) {
-                actionExecutor.execute(action)
-            }
-        default:
-            let userInfo = response.notification.request.content.userInfo
-            if let actionJSON = userInfo["action"] as? String,
-               let action = ClickAction.fromJSON(actionJSON) {
-                actionExecutor.execute(action)
-            }
+        let handle = { [self] in
+            CallbackHandler(lifecycle: lifecycle, legacy: actionExecutor).receive(
+                identifier: response.actionIdentifier,
+                defaultIdentifier: UNNotificationDefaultActionIdentifier,
+                notificationID: response.notification.request.identifier,
+                userInfo: response.notification.request.content.userInfo,
+                completion: completionHandler)
         }
-
-        completionHandler()
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            NSApplication.shared.terminate(nil)
-        }
+        if Thread.isMainThread { handle() }
+        else { DispatchQueue.main.async(execute: handle) }
     }
 
     func userNotificationCenter(

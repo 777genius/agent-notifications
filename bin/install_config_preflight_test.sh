@@ -21,15 +21,40 @@ functions = box/'functions.sh'
 functions.write_text((root/'install.sh').read_text().replace('main "$@"', ''))
 helper = box/'helper'
 helper.write_text("#!" + sys.executable + """
-import json,os,sys
+# agent-notifications-managed-writer-protocol-v1
+import json,os,shutil,sys
 if sys.argv[1:]==['--version']:
     print('claude-notifications 0.0.1'); sys.exit(0)
-assert sys.argv[1:]==['config','preflight-update','--stdin','--json']
-r=json.load(sys.stdin)
-with open(os.environ['TRACE'],'a') as f: f.write(json.dumps(r)+'\\n')
-if os.environ.get('HELPER_DIAG')=='malformed':
-    print(json.dumps(dict(status='unsafe-target',diagnostics=['invalid'])))
+if sys.argv[1:2]==['internal-install-runtime']:
+    stage=target=''
+    args=sys.argv[2:]
+    i=0
+    while i<len(args):
+        if args[i]=='--stage' and i+1<len(args):
+            stage=args[i+1]; i+=2
+        elif args[i]=='--target' and i+1<len(args):
+            target=args[i+1]; i+=2
+        elif args[i] in ('--entry','--control-root','--consumer') and i+1<len(args):
+            i+=2
+        else:
+            i+=1
+    assert stage and target
+    os.makedirs(target, exist_ok=True)
+    for name in os.listdir(stage):
+        src=os.path.join(stage,name)
+        dst=os.path.join(target,name)
+        if os.path.isdir(src):
+            if os.path.exists(dst):
+                shutil.rmtree(dst)
+            shutil.copytree(src,dst)
+        elif os.path.isfile(src):
+            shutil.copy2(src,dst)
     sys.exit(0)
+if sys.argv[1:]==['config','installer','capabilities']:
+    print('invalid-capability' if os.environ.get('HELPER_DIAG')=='malformed' else 'installer-v1'); sys.exit(0)
+assert sys.argv[1:4]==['config','installer','preflight']
+r=dict(refreshDirs=[os.path.abspath(p) for p in sys.argv[4:]])
+with open(os.environ['TRACE'],'a') as f: f.write(json.dumps(r)+'\\n')
 e=os.environ.get('AGENT_NOTIFICATIONS_CONFIG','')
 status='safe'; code=''
 if e and not os.path.isabs(e): status='invalid-config'; code='ConfigOverrideInvalid'
@@ -40,7 +65,7 @@ elif e:
         p=os.path.realpath(p)
         if e==p or e.startswith(p+os.sep) or (os.path.isfile(e) and os.path.isfile(p) and os.path.samefile(e,p)):
             status='unsafe-target'; code='ConfigUnsafeTarget'; break
-print(json.dumps(dict(status=status,diagnostics=[dict(code=code,path='SECRET-CANARY')])))
+if code: print(code,file=sys.stderr)
 sys.exit(0 if status=='safe' else 1)
 """)
 helper.chmod(0o755)
@@ -156,7 +181,7 @@ binary.chmod(0o755)
 plugin=box/'.claude-plugin'; plugin.mkdir()
 (plugin/'plugin.json').write_text('{"version":"9.9.9"}')
 installer=case/'install.sh'
-installer.write_text('#!/bin/bash\nsource '+q(functions)+'\ndetect_platform\nINSTALL_CONFIG_HELPER='+q(helper)+'\n'+isolation+iterm)
+installer.write_text('#!/bin/bash\n# agent-notifications-managed-writer-protocol-v1\nsource '+q(functions)+'\ndetect_platform\nINSTALL_CONFIG_HELPER='+q(helper)+'\n'+isolation+iterm)
 installer.chmod(0o755)
 env=dict(os.environ,AGENT_NOTIFICATIONS_CONFIG=str(config),TRACE=str(case/'trace'))
 before=binary.read_bytes()
@@ -449,7 +474,7 @@ shutil.rmtree(venv)
 (venv/'bin/python3').chmod(0o755)
 run('working-venv',iterm,venv/'config.json')
 
-# Node-only transport: python3 is absent from PATH, Node drives preflight.
+# Python is absent from PATH; the executable helper owns preflight transport.
 def place_runtime_cmd(dest, src):
     if dest.exists() or not src or not os.path.isfile(src):
         return
@@ -458,13 +483,17 @@ def place_runtime_cmd(dest, src):
     if base in ('python', 'python.exe', 'python3', 'python3.exe', 'node', 'node.exe') and (
             '/windowsapps/' in n or '/system32/' in n or '/syswow64/' in n):
         return
-    dest.write_text('#!/bin/sh\nexec {} "$@"\n'.format(shlex.quote(src.replace('\\', '/'))))
+    # Cleanup wrappers may need tools outside the runtime-isolation PATH.
+    # Preserve the selected host command and its dependencies for cleanup only.
+    cleanup_env = ('PATH=' + shlex.quote(os.environ['PATH']) + ' ' if dest.name == 'rm' else '')
+    dest.write_text('#!/bin/sh\n{}exec {} "$@"\n'.format(cleanup_env, shlex.quote(src.replace('\\', '/'))))
     dest.chmod(0o755)
 if shutil.which('node'):
     node_bin = box / 'node-only-bin'
     node_bin.mkdir()
     for name in ['bash', 'sh', 'mktemp', 'rm', 'cat', 'chmod', 'mkdir', 'ln', 'uname',
-                 'tr', 'head', 'cp', 'mv', 'env', 'true', 'false', 'grep', 'sed', 'node']:
+                 'tr', 'head', 'cp', 'mv', 'env', 'true', 'false', 'grep', 'sed', 'sleep', 'node',
+                 'dirname', 'realpath']:
         place_runtime_cmd(node_bin / name, shutil.which(name))
     assert not (node_bin / 'python3').exists()
     node_isolation = """
@@ -496,7 +525,7 @@ wget() { echo 'unexpected network request' >&2; return 99; }
     run_node('node-only-reject', 'guard_install_paths "$SCRIPT_DIR"', reject_target, False)
     assert reject_target.read_text() == 'SECRET-CANARY'
     staged_case, _ = run_node(
-        'node-only-malformed-diagnostics-stages',
+        'node-only-malformed-capability-stages',
         '''
 download_and_verify_binary() { printf staged > "$TRACE.staged"; return 1; }
 verify_executable() { :; }

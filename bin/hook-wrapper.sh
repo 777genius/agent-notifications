@@ -138,6 +138,9 @@ get_plugin_version() {
 # Run install.sh (silent, never fails the script)
 run_install() {
     [ -f "$INSTALL_SCRIPT" ] || return 0
+    # A package rollback must not delegate mutation to a historical writer.
+    # This compatibility declaration does not authenticate the package origin.
+    LC_ALL=C grep -aqF 'agent-notifications-managed-writer-protocol-v1' "$INSTALL_SCRIPT" || return 0
     INSTALL_TARGET_DIR="$SCRIPT_DIR" "$INSTALL_SCRIPT" "$@" >/dev/null 2>&1 || true
 }
 
