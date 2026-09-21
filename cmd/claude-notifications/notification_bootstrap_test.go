@@ -924,7 +924,7 @@ func TestNotificationBootstrapRealInstaller(t *testing.T) {
 	}
 	t.Setenv("NOTIFICATION_TEST_EXECUTABLE", executable)
 	bundle := filepath.Join(home, "source")
-	for _, dir := range []string{"bin", ".claude-plugin", "config"} {
+	for _, dir := range []string{"bin", ".claude-plugin", "config", "skills/agent-notify"} {
 		if err := os.MkdirAll(filepath.Join(bundle, dir), 0700); err != nil {
 			t.Fatal(err)
 		}
@@ -942,6 +942,11 @@ func TestNotificationBootstrapRealInstaller(t *testing.T) {
 		t.Fatal(err)
 	}
 	write(filepath.Join(bundle, "config", "config.json"), string(packagedConfig))
+	packagedSkill, err := os.ReadFile(filepath.Join(notificationRepoRoot(t), "skills", "agent-notify", "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(filepath.Join(bundle, "skills", "agent-notify", "SKILL.md"), string(packagedSkill))
 	for _, name := range []string{"codex-hook-wrapper.sh", "codex-hook-wrapper.cmd"} {
 		write(filepath.Join(bundle, "bin", name), "inert hook")
 	}
@@ -1022,7 +1027,7 @@ case "$CONFIGURE_BINARY" in "$CODEX_HOME/claude-notifications-go/bin/claude-noti
 		t.Fatal(err)
 	}
 	installed := filepath.Join(home, "codex", "claude-notifications-go")
-	if snapshot.Ledger.RuntimeRoot != installed || len(snapshot.Ledger.Consumers) != 1 {
+	if snapshot.Ledger.RuntimeRoot != installed || len(snapshot.Ledger.Consumers) != 2 {
 		t.Fatal(snapshot.Ledger)
 	}
 	for _, consumer := range snapshot.Ledger.Consumers {
