@@ -135,6 +135,20 @@ jobs:
             go build -ldflags="-s -w -H=windowsgui" -trimpath -o "dist/$FOCUS_BINARY" ./cmd/claude-notifications
           fi
 
+      - name: Verify macOS deployment target
+        if: matrix.platform == 'darwin'
+        run: |
+          for binary in dist/*; do
+            minos="$(otool -l "$binary" | awk '$1 == "minos" { print $2; exit }')"
+            case "$minos" in
+              12|12.*) ;;
+              *)
+                echo "$binary has unexpected minimum macOS version: ${minos:-missing}"
+                exit 1
+                ;;
+            esac
+          done
+
       - name: Build version-bound portable package
         env:
           RELEASE_TAG: ${{ github.ref_name }}
@@ -149,20 +163,6 @@ jobs:
             -executable "dist/${{ matrix.binary }}" \
             -output "dist/$zip_name" \
             -workdir "${RUNNER_TEMP}/portable-${{ matrix.platform }}-${{ matrix.arch }}"
-
-      - name: Verify macOS deployment target
-        if: matrix.platform == 'darwin'
-        run: |
-          for binary in dist/*; do
-            minos="$(otool -l "$binary" | awk '$1 == "minos" { print $2; exit }')"
-            case "$minos" in
-              12|12.*) ;;
-              *)
-                echo "$binary has unexpected minimum macOS version: ${minos:-missing}"
-                exit 1
-                ;;
-            esac
-          done
 
       - name: Upload binary artifacts
         uses: actions/upload-artifact@v7
