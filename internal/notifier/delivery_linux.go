@@ -122,10 +122,9 @@ func (d *FreedesktopDelivery) checkAndDeliver(ctx context.Context, r notificatio
 	}
 	_, err = session.Submit(operation, r)
 	if err != nil {
-		if operation.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return finish("unknown", "handoff_unconfirmed")
-		}
-		return finish("rejected", "unsupported_notifier")
+		// Notify is a one-way D-Bus handoff. Once invoked, an error cannot prove
+		// that the notification daemon did not accept the request.
+		return finish("unknown", "handoff_unconfirmed")
 	}
 	return finish("submitted", "session_notification")
 }

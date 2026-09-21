@@ -638,6 +638,64 @@ func TestNotificationInitOfflineBranch(t *testing.T) {
 	}
 }
 
+func TestNotificationInitRuntimeReadinessContract(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join(notificationRepoRoot(t), "commands", "init.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := ""
+	for _, block := range strings.Split(string(source), "```bash\n")[1:] {
+		chunk := strings.SplitN(block, "```", 2)[0]
+		if strings.Contains(chunk, "NOTIFY_READY=") {
+			body = chunk
+			break
+		}
+	}
+	if body == "" || !strings.Contains(body, `NOTIFY_READY=(-f "$NOTIFY_BIN")`) ||
+		!strings.Contains(body, `NOTIFY_READY=(-x "$NOTIFY_BIN")`) ||
+		!strings.Contains(body, `if ! test "${NOTIFY_READY[@]}"; then`) {
+		t.Fatal("init readiness contract is missing the Windows file or POSIX executable test")
+	}
+	for _, tc := range []struct {
+		name     string
+		uname    string
+		filename string
+		mode     os.FileMode
+		wantCall bool
+	}{
+		{"posix_not_executable", "Linux", "claude-notifications", 0600, false},
+		{"posix_executable", "Linux", "claude-notifications", 0700, true},
+		{"windows_bat", "MINGW64_NT", "claude-notifications.bat", 0700, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			bundle := filepath.Join(home, "bundle")
+			if err := os.MkdirAll(filepath.Join(bundle, "bin"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			helper := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n"
+			if err := os.WriteFile(filepath.Join(bundle, "bin", tc.filename), []byte(helper), tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("HOME", home)
+			t.Setenv("CLAUDE_PLUGIN_ROOT", bundle)
+			script := `uname() { echo ` + tc.uname + `; }
+curl() { printf '#!/bin/sh\nexit 0\n' > "$4"; }
+` + body
+			command := exec.Command("bash", "-c", script, "init")
+			output, runErr := command.CombinedOutput()
+			calls, _ := os.ReadFile(filepath.Join(home, "calls"))
+			if tc.wantCall {
+				if runErr != nil || !strings.Contains(string(calls), "setup-notifications configure") {
+					t.Fatalf("executable runtime not used: %v %s %s", runErr, output, calls)
+				}
+			} else if runErr != nil || len(calls) != 0 || !strings.Contains(string(output), "installer binary not found") {
+				t.Fatalf("non-executable runtime was not rejected: %v %s %s", runErr, output, calls)
+			}
+		})
+	}
+}
+
 func TestNotificationInitWizard(t *testing.T) {
 	source, err := os.ReadFile(filepath.Join(notificationRepoRoot(t), "commands", "init.md"))
 	if err != nil {

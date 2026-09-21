@@ -128,7 +128,7 @@ if [ "$SKIP_AGENT_NOTIFY" != true ]; then
     Darwin|Linux) NOTIFY_BIN="${CLAUDE_PLUGIN_ROOT}/bin/claude-notifications"; NOTIFY_READY=(-x "$NOTIFY_BIN"); USE_WIZARD=true ;;
     *) NOTIFY_BIN="${CLAUDE_PLUGIN_ROOT}/bin/claude-notifications"; NOTIFY_READY=(-x "$NOTIFY_BIN"); USE_WIZARD=false ;;
   esac
-  if ! "${NOTIFY_READY[@]}"; then
+  if ! test "${NOTIFY_READY[@]}"; then
     echo "agent-notify setup skipped; installer binary not found. Plugin install succeeded." >&2
     [ "$SEEN_AGENT_NOTIFY" != true ] || exit 1
   elif [ "$USE_WIZARD" = true ] && "$NOTIFY_BIN" --help </dev/null 2>/dev/null | grep -Fq -- 'setup-notifications wizard'; then

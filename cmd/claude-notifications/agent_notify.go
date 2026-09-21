@@ -185,6 +185,7 @@ func (s *agentNotifyIO) Close() error {
 type agentNotifyStream struct {
 	file     *os.File
 	pollable bool
+	write    func([]byte) (int, error)
 	release  func()
 	mu       sync.Mutex
 	closed   bool
@@ -215,6 +216,9 @@ func (s *agentNotifyStream) Write(p []byte) (int, error) {
 		return 0, os.ErrClosed
 	}
 	defer s.work.Done()
+	if s.write != nil {
+		return s.write(p)
+	}
 	if s.pollable {
 		if err := s.file.SetWriteDeadline(time.Now().Add(time.Second)); err != nil {
 			return 0, err

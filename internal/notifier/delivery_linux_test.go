@@ -86,6 +86,18 @@ func TestFreedesktopSubmitTimeoutIsUnknownWithoutBeeep(t *testing.T) {
 	}
 }
 
+func TestFreedesktopSubmitErrorIsUnknownWithoutBeeep(t *testing.T) {
+	withFatalLinuxBeeep(t)
+	session := &fakeSession{submit: func(context.Context, notification.Request) (uint32, error) {
+		return 0, errors.New("dbus reply lost")
+	}}
+	d, clock := linuxDelivery(t, session)
+	got := d.Deliver(context.Background(), linuxNoneRequest(clock))
+	if got.Status != "unknown" || got.Reason != "handoff_unconfirmed" || session.submits.Load() != 1 {
+		t.Fatal(got, session.submits.Load())
+	}
+}
+
 func TestFreedesktopMissingSessionDoesNotCallBeeep(t *testing.T) {
 	withFatalLinuxBeeep(t)
 	clock := &pr3Clock{now: 100}

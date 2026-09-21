@@ -145,7 +145,7 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 		}
 	}
 
-	// Windows: use go-toast with protocol activation for click-to-focus support
+	// Windows: use a bounded WinRT toast with protocol activation for click-to-focus support.
 	if platform.IsWindows() && n.cfg.Notifications.Desktop.ClickToFocus {
 		if err := sendWindowsNotification(title, cleanMessage, appIcon, n.cfg, cwd); err != nil {
 			logging.Warn("Windows click-to-focus notification failed, falling back to beeep: %v", err)

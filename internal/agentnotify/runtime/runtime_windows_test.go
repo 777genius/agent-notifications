@@ -139,8 +139,12 @@ func TestWindowsProductionFactoryUsesToast(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, ok := b.opts.DeliveryFactory(notifier.ManagedInstallation{}, o.SpoolRoot, o.BootClock).(*notifier.WindowsToastDelivery)
-	if !ok || d.Clock != o.BootClock {
+	d, ok := b.opts.DeliveryFactory(notifier.ManagedInstallation{}, o.SpoolRoot, o.BootClock).(*sessionDelivery)
+	if !ok {
+		t.Fatal("windows production delivery is not fenced")
+	}
+	toast, toastOK := d.Delivery.(*notifier.WindowsToastDelivery)
+	if !toastOK || toast.Clock != o.BootClock {
 		t.Fatal("windows factory still uses macos native delivery")
 	}
 }

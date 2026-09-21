@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	goruntime "runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -404,15 +405,36 @@ func TestProductionFactoryAndStrictReader(t *testing.T) {
 	o.ReadGlobal = nil
 	b := backend(t, o)
 	m := notifier.ManagedInstallation{ControlRoot: o.ControlRoot, Expected: snapshot("A").Installation}
-	d, ok := b.opts.DeliveryFactory(m, o.SpoolRoot, o.BootClock).(*notifier.StructuredDelivery)
-	if !ok {
-		t.Fatal("not production delivery")
-	}
-	if !reflect.DeepEqual(d.Installation, m) {
-		t.Fatal("installation refreshed")
-	}
-	if d.Spool.(*notifier.PrivateNativeSpool).Root != o.SpoolRoot {
-		t.Fatal("wrong spool")
+	production := b.opts.DeliveryFactory(m, o.SpoolRoot, o.BootClock)
+	switch goruntime.GOOS {
+	case "linux":
+		fenced, fencedOK := production.(*sessionDelivery)
+		if !fencedOK {
+			t.Fatal("linux production delivery is not fenced")
+		}
+		if fmt.Sprintf("%T", fenced.Delivery) != "*notifier.FreedesktopDelivery" || !reflect.DeepEqual(fenced.installation, m) {
+			t.Fatal("wrong linux production delivery")
+		}
+	case "windows":
+		fenced, fencedOK := production.(*sessionDelivery)
+		if !fencedOK {
+			t.Fatal("windows production delivery is not fenced")
+		}
+		d, ok := fenced.Delivery.(*notifier.WindowsToastDelivery)
+		if !ok || !reflect.DeepEqual(fenced.installation, m) || d.Clock != o.BootClock {
+			t.Fatal("wrong windows production delivery")
+		}
+	default:
+		d, ok := production.(*notifier.StructuredDelivery)
+		if !ok {
+			t.Fatal("not production delivery")
+		}
+		if !reflect.DeepEqual(d.Installation, m) {
+			t.Fatal("installation refreshed")
+		}
+		if d.Spool.(*notifier.PrivateNativeSpool).Root != o.SpoolRoot {
+			t.Fatal("wrong spool")
+		}
 	}
 	if e := os.WriteFile(o.GlobalConfig, []byte(global), 0600); e != nil {
 		t.Fatal(e)
@@ -435,6 +457,38 @@ func TestProductionFactoryAndStrictReader(t *testing.T) {
 	}
 	if _, e := b.policy(snapshot("A")); !errors.Is(e, errConfig) {
 		t.Fatal("symlink accepted", e)
+	}
+}
+
+func TestSessionDeliveryFencesReadinessAndHandoff(t *testing.T) {
+	var held, releases atomic.Int32
+	inner := fakeDelivery{
+		ready: func(notification.Request) {
+			if held.Load() != 1 || releases.Load() != 0 {
+				t.Fatal("readiness ran outside lease")
+			}
+		},
+		send: func(notification.Request) string {
+			if held.Load() != 1 || releases.Load() != 1 {
+				t.Fatal("handoff ran outside its lease")
+			}
+			return "submitted"
+		},
+	}
+	d := &sessionDelivery{Delivery: inner, clock: boot{}}
+	d.acquire = func(context.Context, string, installruntime.InstalledSnapshot) (installruntime.InstalledSnapshot, func(), error) {
+		held.Add(1)
+		return installruntime.InstalledSnapshot{}, func() {
+			held.Add(-1)
+			releases.Add(1)
+		}, nil
+	}
+	r := notification.Request{CorrelationID: "fenced", Deadline: notification.Deadline{BootID: "boot", NotAfter: 110}}
+	if got := d.CheckReadiness(context.Background(), r); got.Status != "ready" || held.Load() != 0 || releases.Load() != 1 {
+		t.Fatal(got, held.Load(), releases.Load())
+	}
+	if got := d.Deliver(context.Background(), r); got.Status != "submitted" || held.Load() != 0 || releases.Load() != 2 {
+		t.Fatal(got, held.Load(), releases.Load())
 	}
 }
 func TestSoundFocusAndUnknownCallerOptOut(t *testing.T) {
