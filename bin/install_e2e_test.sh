@@ -869,10 +869,128 @@ test_lock_prevents_parallel() {
 test_lock_stale_removal() {
     echo -e "\n${CYAN}▶ test_lock_stale_removal${NC}"
 
-    # This test is difficult to do reliably without modifying install.sh
-    # The stale lock check uses 600 seconds (10 minutes)
-    # We'll skip this test in normal runs
-    skip_test "Stale lock removal" "requires 10+ minute old lock"
+    setup_test_dir
+    local sourceable_install="$TEST_DIR/install-functions.sh"
+    sed '/^main "\$@"$/d' "$INSTALL_SCRIPT" > "$sourceable_install"
+
+    # An old heartbeat owned by this live shell is still refused.
+    mkdir -p "$TEST_DIR/.install.lock/.owner.live"
+    printf '%s\n' "$$" > "$TEST_DIR/.install.lock/.owner.live/pid"
+    : > "$TEST_DIR/.install.lock/.owner.live/heartbeat"
+    touch -t 200001010000 "$TEST_DIR/.install.lock/.owner.live/heartbeat"
+    set +e
+    local live_output
+    live_output=$(INSTALL_TARGET_DIR="$TEST_DIR" bash -c 'source "$1"; acquire_lock' _ "$sourceable_install" 2>&1)
+    local live_exit=$?
+    set -e
+    assert_exit_code 1 "$live_exit" "Live owner refuses old lock takeover"
+    assert_contains "$live_output" "Another installation" "Live owner lock remains protected"
+    assert_dir_exists "$TEST_DIR/.install.lock" "Live old lock remains"
+
+    # A dead owner with an expired heartbeat is reclaimable.
+    rm -rf "$TEST_DIR/.install.lock"
+    mkdir -p "$TEST_DIR/.install.lock/.owner.dead"
+    # This value is outside the supported PID range on macOS, Linux, and
+    # Windows, so liveness does not depend on child exit or PID reuse timing.
+    local dead_pid=99999999
+    printf '%s\n' "$dead_pid" > "$TEST_DIR/.install.lock/.owner.dead/pid"
+    : > "$TEST_DIR/.install.lock/.owner.dead/heartbeat"
+    touch -t 200001010000 "$TEST_DIR/.install.lock/.owner.dead/heartbeat"
+    set +e
+    local dead_output
+    dead_output=$(INSTALL_TARGET_DIR="$TEST_DIR" bash -c 'source "$1"; acquire_lock; release_lock' _ "$sourceable_install" 2>&1)
+    local dead_exit=$?
+    set -e
+    assert_exit_code 0 "$dead_exit" "Dead stale owner lock is reclaimed"
+    assert_not_contains "$dead_output" "Another installation" "Dead stale owner does not block"
+    assert_dir_not_exists "$TEST_DIR/.install.lock" "Reclaimed lock releases normally"
+
+    # Missing, malformed, or ambiguous ownership evidence fails closed even
+    # when every visible heartbeat is old.
+    for marker_case in missing invalid multiple; do
+        rm -rf "$TEST_DIR/.install.lock"
+        mkdir -p "$TEST_DIR/.install.lock"
+        case "$marker_case" in
+            missing)
+                :
+                ;;
+            invalid)
+                : > "$TEST_DIR/.install.lock/.owner.invalid"
+                ;;
+            multiple)
+                for suffix in one two; do
+                    mkdir "$TEST_DIR/.install.lock/.owner.$suffix"
+                    printf '%s\n' "$dead_pid" > "$TEST_DIR/.install.lock/.owner.$suffix/pid"
+                    : > "$TEST_DIR/.install.lock/.owner.$suffix/heartbeat"
+                    touch -t 200001010000 "$TEST_DIR/.install.lock/.owner.$suffix/heartbeat"
+                done
+                ;;
+        esac
+        set +e
+        local ambiguous_output
+        ambiguous_output=$(INSTALL_TARGET_DIR="$TEST_DIR" bash -c 'source "$1"; acquire_lock' _ "$sourceable_install" 2>&1)
+        local ambiguous_exit=$?
+        set -e
+        assert_exit_code 1 "$ambiguous_exit" "$marker_case owner evidence is not reclaimed"
+        assert_contains "$ambiguous_output" "Another installation" "$marker_case owner evidence fails closed"
+        assert_dir_exists "$TEST_DIR/.install.lock" "$marker_case owner lock remains"
+    done
+
+    cleanup_test_dir
+}
+
+test_lock_release_removes_owned_metadata() {
+    echo -e "\n${CYAN}▶ test_lock_release_removes_owned_metadata${NC}"
+
+    setup_test_dir
+    local sourceable_install="$TEST_DIR/install-functions.sh"
+    sed '/^main "\$@"$/d' "$INSTALL_SCRIPT" > "$sourceable_install"
+
+    set +e
+    INSTALL_TARGET_DIR="$TEST_DIR" bash -c '
+        source "$1"
+        acquire_lock || exit
+        test -f "$LOCK_OWNER_DIR/pid" && test -f "$LOCK_OWNER_DIR/heartbeat" || exit 2
+        release_lock
+        test ! -e "$LOCKFILE"
+    ' _ "$sourceable_install"
+    local exit_code=$?
+    set -e
+
+    assert_exit_code 0 "$exit_code" "Ordinary release removes owned metadata and lock"
+    assert_dir_not_exists "$TEST_DIR/.install.lock" "Ordinary release does not leak lock"
+    cleanup_test_dir
+}
+
+test_lock_heartbeat_stops_with_dead_owner() {
+    echo -e "\n${CYAN}▶ test_lock_heartbeat_stops_with_dead_owner${NC}"
+
+    setup_test_dir
+    local sourceable_install="$TEST_DIR/install-functions.sh"
+    sed '/^main "\$@"$/d' "$INSTALL_SCRIPT" > "$sourceable_install"
+
+    # Use the heartbeat function's validated test interval so this checks the
+    # orphan-child edge without weakening the production 30-second interval.
+    set +e
+    run_with_timeout 5 bash -c '
+        source "$1"
+        mkdir -p "$LOCKFILE/.owner.test"
+        owner_dir="$LOCKFILE/.owner.test"
+        (sleep 0.1) &
+        owner_pid=$!
+        printf "%s\n" "$owner_pid" > "$owner_dir/pid"
+        : > "$owner_dir/heartbeat"
+        start_lock_heartbeat "$owner_dir" 1
+        heartbeat_pid=$LOCK_HEARTBEAT_PID
+        wait "$owner_pid"
+        wait "$heartbeat_pid"
+    ' _ "$sourceable_install"
+    local exit_code=$?
+    set -e
+
+    assert_exit_code 0 "$exit_code" "Heartbeat child exits after its recorded owner dies"
+    rm -rf "$TEST_DIR/.install.lock"
+    cleanup_test_dir
 }
 
 test_lock_cleanup_on_exit() {
@@ -907,6 +1025,11 @@ test_lock_release_preserves_replacement_owner() {
     INSTALL_TARGET_DIR="$TEST_DIR" /bin/bash -c '
         source "$1"
         acquire_lock
+        # Model an external takeover after the old owner heartbeat has stopped.
+        # Otherwise macOS rm can race the active heartbeat recreating metadata.
+        kill "$LOCK_HEARTBEAT_PID" 2>/dev/null || true
+        wait "$LOCK_HEARTBEAT_PID" 2>/dev/null || true
+        LOCK_HEARTBEAT_PID=""
         rm -rf "$LOCKFILE"
         mkdir "$LOCKFILE"
         replacement_owner=$(mktemp -d "$LOCKFILE/.owner.XXXXXX")
@@ -2800,6 +2923,8 @@ main() {
         test_lock_created
         test_lock_prevents_parallel
         test_lock_stale_removal
+        test_lock_release_removes_owned_metadata
+        test_lock_heartbeat_stops_with_dead_owner
         test_lock_cleanup_on_exit
         test_lock_release_preserves_replacement_owner
         test_no_write_permission

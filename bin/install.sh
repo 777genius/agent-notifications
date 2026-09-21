@@ -178,6 +178,7 @@ guard_install_paths() {
 LOCKFILE="${SCRIPT_DIR}/.install.lock"
 LOCK_HELD=false
 LOCK_OWNER_DIR=""
+LOCK_HEARTBEAT_PID=""
 
 # Network settings
 MAX_RETRIES=3
@@ -448,32 +449,123 @@ release_lock() {
     LOCK_HELD=false
     LOCK_OWNER_DIR=""
 
-    # Remove only this process's unique ownership marker. If a stale-lock
-    # takeover replaced the directory, this path no longer exists and the new
-    # owner's lock remains untouched. The root can be removed only after our
-    # marker was removed successfully and no replacement marker is present.
+    if [ -n "$LOCK_HEARTBEAT_PID" ]; then
+        kill "$LOCK_HEARTBEAT_PID" 2>/dev/null || true
+        wait "$LOCK_HEARTBEAT_PID" 2>/dev/null || true
+        LOCK_HEARTBEAT_PID=""
+    fi
+
+    # Remove only metadata below this process's unique ownership marker. If a
+    # stale-lock takeover replaced the directory, this path no longer exists
+    # and the new owner's lock remains untouched. The root can be removed only
+    # after our marker was removed successfully and no replacement marker is
+    # present.
     [ -n "$owner_dir" ] || return 0
+    rm -f "$owner_dir/pid" "$owner_dir/heartbeat" 2>/dev/null || return 0
     rmdir "$owner_dir" 2>/dev/null || return 0
     rmdir "$LOCKFILE" 2>/dev/null || :
     return 0
 }
 
+lock_mtime() {
+    local path="$1" value
+    if stat -f%m "$path" >/dev/null 2>&1; then
+        value=$(stat -f%m "$path" 2>/dev/null) || return 1
+    elif stat -c%Y "$path" >/dev/null 2>&1; then
+        value=$(stat -c%Y "$path" 2>/dev/null) || return 1
+    else
+        return 1
+    fi
+    case "$value" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    printf '%s\n' "$value"
+}
+
+lock_owner_dir() {
+    local candidate owner_dir="" count=0
+    for candidate in "$LOCKFILE"/.owner.*; do
+        if [ ! -e "$candidate" ] && [ ! -L "$candidate" ]; then
+            continue
+        fi
+        # Symlinks, files, and ambiguous marker sets are not proof that any
+        # particular owner was abandoned.
+        [ -d "$candidate" ] && [ ! -L "$candidate" ] || return 1
+        owner_dir="$candidate"
+        count=$((count + 1))
+    done
+    [ "$count" -eq 1 ] || return 1
+    printf '%s\n' "$owner_dir"
+}
+
+lock_owner_alive() {
+    local owner_dir="$1" pid
+    [ -r "$owner_dir/pid" ] || return 2
+    IFS= read -r pid < "$owner_dir/pid" || return 2
+    case "$pid" in
+        ''|*[!0-9]*) return 2 ;;
+    esac
+    kill -0 "$pid" 2>/dev/null
+}
+
+start_lock_heartbeat() {
+    local owner_dir="$1"
+    local interval="${2:-30}"
+    case "$interval" in
+        ''|*[!0-9]*) interval=30 ;;
+        *) [ "$interval" -gt 0 ] 2>/dev/null || interval=30 ;;
+    esac
+    (
+        while [ -d "$owner_dir" ] && [ -f "$owner_dir/pid" ]; do
+            # The heartbeat must not outlive a SIGKILLed installer. Otherwise
+            # its orphaned child could keep a demonstrably dead owner's lock
+            # fresh forever.
+            lock_owner_alive "$owner_dir" || exit 0
+            touch "$owner_dir/heartbeat" 2>/dev/null || exit 0
+            sleep "$interval" || exit 0
+        done
+    ) </dev/null >/dev/null 2>&1 &
+    LOCK_HEARTBEAT_PID=$!
+}
+
 acquire_lock() {
     # Use mkdir for atomic lock (works on all platforms)
     if ! mkdir "$LOCKFILE" 2>/dev/null; then
-        # Check if lock is stale (older than 10 minutes)
+        # A lock is reclaimable only when its recorded owner is dead and its
+        # heartbeat is older than the abandonment window. Unknown/legacy
+        # ownership is retained because age alone cannot prove abandonment.
         if [ -d "$LOCKFILE" ]; then
-            local lock_age=0
-            if stat -f%m "$LOCKFILE" &>/dev/null; then
-                lock_age=$(($(date +%s) - $(stat -f%m "$LOCKFILE")))
-            elif stat -c%Y "$LOCKFILE" &>/dev/null; then
-                lock_age=$(($(date +%s) - $(stat -c%Y "$LOCKFILE")))
+            local owner_dir lock_age owner_status now heartbeat_mtime
+            owner_dir=$(lock_owner_dir || true)
+            if [ -n "$owner_dir" ] && [ -f "$owner_dir/heartbeat" ]; then
+                now=$(date +%s)
+                heartbeat_mtime=$(lock_mtime "$owner_dir/heartbeat" || true)
+                case "$now" in ''|*[!0-9]*) now="" ;; esac
+                case "$heartbeat_mtime" in ''|*[!0-9]*) heartbeat_mtime="" ;; esac
+                if [ -n "$now" ] && [ -n "$heartbeat_mtime" ]; then
+                    lock_age=$((now - heartbeat_mtime))
+                    owner_status=0
+                    lock_owner_alive "$owner_dir" || owner_status=$?
+                else
+                    lock_age=0
+                    owner_status=2
+                fi
+            else
+                lock_age=0
+                owner_status=2
             fi
 
-            if [ "$lock_age" -gt 600 ]; then
-                echo -e "${YELLOW}⚠ Removing stale lock (${lock_age}s old)${NC}"
+            if [ "$lock_age" -gt 600 ] && [ "$owner_status" -eq 1 ]; then
+                echo -e "${YELLOW}⚠ Removing abandoned lock (${lock_age}s since heartbeat)${NC}"
                 guard_install_paths "$LOCKFILE"
-                rm -rf "$LOCKFILE"
+                # Retire only the marker that was inspected. If ownership was
+                # replaced or extra content appeared, fail closed instead of
+                # deleting the replacement lock.
+                rm -f "$owner_dir/pid" "$owner_dir/heartbeat" 2>/dev/null || :
+                if ! rmdir "$owner_dir" 2>/dev/null || ! rmdir "$LOCKFILE" 2>/dev/null; then
+                    echo -e "${RED}✗ Installation lock ownership changed during stale-lock recovery${NC}" >&2
+                    return 1
+                fi
                 if ! mkdir "$LOCKFILE" 2>/dev/null; then
                     echo -e "${RED}✗ Another installation acquired the lock${NC}" >&2
                     return 1
@@ -494,7 +586,16 @@ acquire_lock() {
         rmdir "$LOCKFILE" 2>/dev/null || :
         return 1
     fi
+    if ! printf '%s\n' "${BASHPID:-$$}" > "$LOCK_OWNER_DIR/pid" ||
+       ! : > "$LOCK_OWNER_DIR/heartbeat"; then
+        rm -rf "$LOCK_OWNER_DIR" 2>/dev/null || :
+        rmdir "$LOCKFILE" 2>/dev/null || :
+        LOCK_OWNER_DIR=""
+        echo -e "${RED}✗ Could not record installation lock ownership${NC}" >&2
+        return 1
+    fi
     LOCK_HELD=true
+    start_lock_heartbeat "$LOCK_OWNER_DIR"
     # Set trap to release lock on exit
     trap 'release_lock; cleanup_install_config' EXIT
     trap 'exit 130' INT
