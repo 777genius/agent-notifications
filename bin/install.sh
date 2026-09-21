@@ -176,6 +176,7 @@ guard_install_paths() {
 
 # Lockfile to prevent parallel installations
 LOCKFILE="${SCRIPT_DIR}/.install.lock"
+LOCK_HELD=false
 
 # Network settings
 MAX_RETRIES=3
@@ -438,6 +439,15 @@ print_curl_failure_guidance() {
 }
 
 # Acquire lock to prevent parallel installations
+release_lock() {
+    # Explicit success-path release and the EXIT fallback share this process
+    # state so the fallback cannot remove a lock acquired by a later process.
+    [ "$LOCK_HELD" = true ] || return 0
+    LOCK_HELD=false
+    rmdir "$LOCKFILE" 2>/dev/null || :
+    return 0
+}
+
 acquire_lock() {
     # Use mkdir for atomic lock (works on all platforms)
     if ! mkdir "$LOCKFILE" 2>/dev/null; then
@@ -454,17 +464,24 @@ acquire_lock() {
                 echo -e "${YELLOW}⚠ Removing stale lock (${lock_age}s old)${NC}"
                 guard_install_paths "$LOCKFILE"
                 rm -rf "$LOCKFILE"
-                mkdir "$LOCKFILE" 2>/dev/null || true
+                if ! mkdir "$LOCKFILE" 2>/dev/null; then
+                    echo -e "${RED}✗ Another installation acquired the lock${NC}" >&2
+                    return 1
+                fi
             else
                 echo -e "${RED}✗ Another installation is in progress${NC}" >&2
                 echo -e "${YELLOW}If this is incorrect, remove: ${LOCKFILE}${NC}" >&2
                 return 1
             fi
+        else
+            echo -e "${RED}✗ Installation lock path is not a directory: ${LOCKFILE}${NC}" >&2
+            return 1
         fi
     fi
 
+    LOCK_HELD=true
     # Set trap to release lock on exit
-    trap 'rmdir "$LOCKFILE" 2>/dev/null || :; cleanup_install_config' EXIT
+    trap 'release_lock; cleanup_install_config' EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
     return 0
@@ -638,6 +655,29 @@ get_payload_text_sample() {
     LC_ALL=C head -c 256 "$1" 2>/dev/null | tr '\000' ' ' | tr '\r' '\n'
 }
 
+is_clearly_printable_text_payload() {
+    local file="$1"
+    local sample_size
+    local non_text_size
+    local printable_size
+
+    # Inspect the original bytes before get_payload_text_sample replaces NULs.
+    # Restrict this to printable ASCII plus the ordinary text whitespace bytes;
+    # this avoids calling arbitrary binary data text when `file` is unavailable.
+    # Count through pipelines rather than storing raw bytes in a shell variable,
+    # since command substitution silently drops NUL bytes in Bash.
+    sample_size=$(LC_ALL=C head -c 4096 "$file" 2>/dev/null | wc -c) || return 1
+    [ "${sample_size:-0}" -gt 0 ] || return 1
+
+    non_text_size=$(LC_ALL=C head -c 4096 "$file" 2>/dev/null |
+        LC_ALL=C tr -d '\011\012\015\040-\176' | wc -c) || return 1
+    [ "${non_text_size:-0}" -eq 0 ] || return 1
+
+    printable_size=$(LC_ALL=C head -c 4096 "$file" 2>/dev/null |
+        LC_ALL=C tr -cd '\040-\176' | wc -c) || return 1
+    [ "${printable_size:-0}" -gt 0 ]
+}
+
 print_unexpected_payload_diagnostics() {
     local file="$1"
     local magic=""
@@ -696,7 +736,9 @@ print_unexpected_payload_diagnostics() {
         return 0
     fi
 
-    if [ -n "$file_desc" ] && printf '%s\n' "$file_desc" | grep -qiE 'text|ascii|unicode'; then
+    if is_clearly_printable_text_payload "$file" || {
+        [ -n "$file_desc" ] && printf '%s\n' "$file_desc" | grep -qiE 'text|ascii|unicode'
+    }; then
         echo -e "${YELLOW}→ Payload looks like text instead of a raw executable.${NC}" >&2
     fi
 }
@@ -1114,6 +1156,7 @@ verify_checksum() {
         echo -e "${YELLOW}⚠ Skipping checksum verification (checksums.txt not available)${NC}"
         return 0
     fi
+    print_unexpected_payload_diagnostics "$BINARY_PATH"
     guard_download_paths "$BINARY_PATH"
     rm -f "$BINARY_PATH"
     return 1
@@ -2242,6 +2285,7 @@ main() {
 
         echo -e "${GREEN}✓ Setup complete${NC}"
         echo ""
+        release_lock
         return 0
     fi
 
@@ -2282,6 +2326,7 @@ main() {
         echo -e "${YELLOW}Note: Running with cached binary (no updates)${NC}"
         echo -e "${YELLOW}Restore network access for full installation.${NC}"
         echo ""
+        release_lock
         return 0
     fi
 
@@ -2350,6 +2395,7 @@ main() {
     echo -e "  ${GREEN}https://github.com/777genius/claude_agent_teams_ui${NC}"
     echo -e "${YELLOW}────────────────────────────────────────${NC}"
     echo ""
+    release_lock
 }
 
 # Run main function

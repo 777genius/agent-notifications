@@ -231,13 +231,24 @@ run_with_timeout_env() {
     run_with_timeout "$seconds" env "$@"
 }
 
-# Use the same executable payload and checksum as the main Windows fixture.
+# Add the required platform companion asset and checksum beside the main binary.
 prepare_focus_fixture() {
     local destination="$1" checksum="$2"
     if is_windows; then
         local focus_name="claude-notifications-windows-$(get_arch)-focus.exe"
         cp "$FIXTURES_DIR/mock_binary" "$destination/$focus_name"
         echo "$checksum  $focus_name" >> "$destination/checksums.txt"
+    elif [ "$(get_platform)" = "darwin" ]; then
+        local modern_checksum
+        if [ ! -f "$destination/ClaudeNotifier.app.zip" ]; then
+            cp "$FIXTURES_DIR/ClaudeNotifier.app.zip" "$destination/ClaudeNotifier.app.zip"
+        fi
+        if command -v shasum &>/dev/null; then
+            modern_checksum=$(shasum -a 256 "$destination/ClaudeNotifier.app.zip" | awk '{print $1}')
+        else
+            modern_checksum=$(sha256sum "$destination/ClaudeNotifier.app.zip" | awk '{print $1}')
+        fi
+        echo "$modern_checksum  ClaudeNotifier.app.zip" >> "$destination/checksums.txt"
     fi
 }
 
@@ -353,7 +364,9 @@ MOCK_EOF
     fi
     echo "$checksum  mock_binary" > "$FIXTURES_DIR/checksums.txt"
 
-    # Build both real app layouts; the installer checks the executable inside.
+    # Build the legacy layout portably. On macOS, build a real app bundle and
+    # ad-hoc sign it before archiving so production signature verification is
+    # exercised by the positive fixture.
     python3 - "$FIXTURES_DIR" <<'ZIP_EOF'
 import os
 import sys
@@ -371,6 +384,34 @@ for archive, app, binary in (
             sidecar = zipfile.ZipInfo(f"{app}.managed-runtime.json")
             bundle.writestr(sidecar, "{}\n")
 ZIP_EOF
+
+    if [ "$(get_platform)" = "darwin" ]; then
+        if ! command -v codesign >/dev/null 2>&1 || ! command -v ditto >/dev/null 2>&1; then
+            echo "codesign and ditto are required for the macOS mock fixture"
+            return 1
+        fi
+        local archive_dir="$FIXTURES_DIR/ClaudeNotifier-archive"
+        local app_dir="$archive_dir/ClaudeNotifier.app"
+        rm -rf "$archive_dir" "$FIXTURES_DIR/ClaudeNotifier.app.zip"
+        mkdir -p "$app_dir/Contents/MacOS"
+        cat > "$app_dir/Contents/MacOS/terminal-notifier-modern" <<'APP_EOF'
+#!/bin/sh
+exit 0
+APP_EOF
+        chmod +x "$app_dir/Contents/MacOS/terminal-notifier-modern"
+        cat > "$app_dir/Contents/Info.plist" <<'PLIST_EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>com.claude.desktop.notifier</string>
+<key>CFBundleExecutable</key><string>terminal-notifier-modern</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+</dict></plist>
+PLIST_EOF
+        printf '{}\n' > "$archive_dir/ClaudeNotifier.app.managed-runtime.json"
+        codesign --force --sign - --timestamp=none --identifier com.claude.desktop.notifier "$app_dir" >/dev/null
+        ditto -c -k --sequesterRsrc "$archive_dir" "$FIXTURES_DIR/ClaudeNotifier.app.zip"
+        rm -rf "$archive_dir"
+    fi
 
     SAVED_MODERN_NOTIFIER_URL="${MODERN_NOTIFIER_URL-}"
     SAVED_NOTIFIER_URL="${NOTIFIER_URL-}"
@@ -937,6 +978,43 @@ test_transport_error_diagnostics() {
     assert_contains "$output" "Download failed before an HTTP response was received|No HTTP response received from the release server" "Transport failure summary shown"
     assert_contains "$output" "Retrying once with compatibility mode|Connection to the release host failed|TLS/certificate validation failed|Windows/Git Bash downloads can fail behind corporate proxies" "Transport guidance shown"
     assert_exit_code 1 $exit_code "Exit code is 1 on transport failure"
+
+    cleanup_test_dir
+}
+
+test_no_file_printable_payload_diagnostic() {
+    echo -e "\n${CYAN}▶ test_no_file_printable_payload_diagnostic${NC}"
+
+    setup_test_dir
+    local sourceable_install="$TEST_DIR/install-functions.sh"
+    local tool_path="$TEST_DIR/tools"
+    local text_payload="$TEST_DIR/text-payload"
+    local binary_payload="$TEST_DIR/binary-payload"
+    sed '/^main "\$@"$/d' "$INSTALL_SCRIPT" > "$sourceable_install"
+    mkdir -p "$tool_path"
+    for tool in head tr grep od wc; do
+        ln -s "$(command -v "$tool")" "$tool_path/$tool"
+    done
+    : > "$text_payload"
+    local i=0
+    while [ "$i" -lt 256 ]; do
+        printf 'wrong content ' >> "$text_payload"
+        i=$((i + 1))
+    done
+    # A NUL amid otherwise printable bytes guards against inspecting raw bytes
+    # via command substitution, which Bash would silently strip.
+    printf 'binary\000bytes' > "$binary_payload"
+
+    local text_output binary_output
+    text_output=$(PATH="$tool_path" INSTALL_TARGET_DIR="$TEST_DIR" /bin/bash -c \
+        'source "$1"; PLATFORM=windows; print_unexpected_payload_diagnostics "$2"' \
+        _ "$sourceable_install" "$text_payload" 2>&1)
+    binary_output=$(PATH="$tool_path" INSTALL_TARGET_DIR="$TEST_DIR" /bin/bash -c \
+        'source "$1"; PLATFORM=windows; print_unexpected_payload_diagnostics "$2"' \
+        _ "$sourceable_install" "$binary_payload" 2>&1)
+
+    assert_contains "$text_output" "Payload looks like text instead of a raw executable" "Printable payload is diagnosed without file"
+    assert_not_contains "$binary_output" "Payload looks like text instead of a raw executable" "Binary payload is not classified as text"
 
     cleanup_test_dir
 }
@@ -1589,6 +1667,14 @@ test_mock_download_success() {
     exit_code=$?
 
     assert_exit_code 0 $exit_code "Install completed successfully"
+    assert_dir_not_exists "$TEST_DIR/.install.lock" "Successful install releases lock before next run"
+    second_output=$(RELEASE_URL="http://localhost:$MOCK_PORT" \
+             CHECKSUMS_URL="http://localhost:$MOCK_PORT/checksums.txt" \
+             NOTIFIER_URL="http://localhost:$MOCK_PORT/valid.zip" \
+             INSTALL_TARGET_DIR="$TEST_DIR" \
+             run_with_timeout 60 bash "$INSTALL_SCRIPT" 2>&1)
+    second_exit_code=$?
+    assert_exit_code 0 $second_exit_code "Second same-target install succeeds after lock release"
     assert_desktop_runtime "$TEST_DIR"
     assert_file_exists "$TEST_DIR/$binary_name" "Binary downloaded"
     # On Windows, wrapper is .bat file; on Unix it's a symlink
@@ -1903,7 +1989,7 @@ test_mock_zip_corrupted() {
     assert_exit_code 1 "$exit_code" "Corrupt notifier prevents successful install"
     assert_file_not_exists "$TEST_DIR/claude-notifications" "Incomplete runtime is not published"
     # Missing desktop runtime must fail without publishing a ready installation
-    assert_contains "$output" "not a valid zip|Could not extract|extraction" "Corrupted zip detected"
+    assert_contains "$output" "Checksum mismatch.*ClaudeNotifier.app.zip|not a valid zip|Could not extract|extraction" "Corrupted zip detected"
 
     rm -f "$FIXTURES_DIR/$binary_name"
 
@@ -2669,6 +2755,7 @@ main() {
         test_install_target_dir
         test_directory_auto_created
         test_transport_error_diagnostics
+        test_no_file_printable_payload_diagnostic
         test_required_tools_curl_wget
         test_force_preserves_binaries
         test_force_preserves_symlinks
