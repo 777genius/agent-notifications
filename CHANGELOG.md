@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.44.0] - 2026-09-21
+
+### Added
+- **Standalone universal installer and guided setup** - install, update, repair, remove and inspect Claude Code, Codex CLI or both through one recoverable wizard. The base installer no longer requires Python, Node.js or Go; Python remains optional only for exact iTerm2 tab and pane targeting ([#182](https://github.com/777genius/agent-notifications/pull/182), [UAP #328](https://github.com/777genius/universal-agent-plugins/pull/328)).
+- **Managed agent notification runtime** - durable Claude and Codex registration, version-bound portable packages, generation fencing, recovery, rollback and native notification delivery on the qualified macOS, Linux and Windows targets ([#177](https://github.com/777genius/agent-notifications/pull/177), [#182](https://github.com/777genius/agent-notifications/pull/182)).
+
+### Changed
+- Claude Code and Codex CLI now share the selected Agent Notifications configuration. Existing webhook settings therefore also receive Codex notifications unless an agent-specific override disables them.
+- Setup reports permission, restart and desktop-banner readiness separately from an installation commit, and emits shell-specific recovery commands for Bash and PowerShell.
+
+### Fixed
+- Preserve existing configuration during bootstrap and migration, including custom Claude profiles and Windows `USERPROFILE` discovery.
+- Harden installer acquisition, lock ownership, stale recovery, Windows Git Bash quoting, native asset promotion and macOS deployment-target verification ([#182](https://github.com/777genius/agent-notifications/pull/182)).
+
+### Platform notes
+- Release artifacts cover macOS amd64/arm64, Linux amd64/arm64 and Windows amd64. Windows arm64 and a separate PowerShell installer are not included.
+- Exact-chat navigation remains separately qualified; navigation-none desktop delivery is the portable baseline.
+
 ## [1.43.1] - 2026-09-16
 
 ### Changed
