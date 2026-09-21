@@ -42,7 +42,7 @@ func linuxDelivery(t *testing.T, session *fakeSession) (*FreedesktopDelivery, *p
 	return d, clock
 }
 
-func withFatalBeeep(t *testing.T) {
+func withFatalLinuxBeeep(t *testing.T) {
 	t.Helper()
 	previous := beeepNotify
 	beeepNotify = func(string, string, any) error { t.Fatal("beeep fallback after D-Bus"); return nil }
@@ -50,7 +50,7 @@ func withFatalBeeep(t *testing.T) {
 }
 
 func TestFreedesktopNavigationNoneSubmitsWithoutBeeep(t *testing.T) {
-	withFatalBeeep(t)
+	withFatalLinuxBeeep(t)
 	session := &fakeSession{}
 	d, clock := linuxDelivery(t, session)
 	req := linuxNoneRequest(clock)
@@ -65,7 +65,7 @@ func TestFreedesktopNavigationNoneSubmitsWithoutBeeep(t *testing.T) {
 }
 
 func TestFreedesktopSubmitTimeoutIsUnknownWithoutBeeep(t *testing.T) {
-	withFatalBeeep(t)
+	withFatalLinuxBeeep(t)
 	started := make(chan struct{})
 	session := &fakeSession{submit: func(ctx context.Context, _ notification.Request) (uint32, error) {
 		close(started)
@@ -87,7 +87,7 @@ func TestFreedesktopSubmitTimeoutIsUnknownWithoutBeeep(t *testing.T) {
 }
 
 func TestFreedesktopMissingSessionDoesNotCallBeeep(t *testing.T) {
-	withFatalBeeep(t)
+	withFatalLinuxBeeep(t)
 	clock := &pr3Clock{now: 100}
 	d := NewFreedesktopDelivery(clock)
 	d.Open = func(context.Context) (sessionNotifications, error) { return nil, errors.New("no session bus") }
