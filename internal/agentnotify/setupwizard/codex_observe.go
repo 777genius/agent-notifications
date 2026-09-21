@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -106,7 +105,7 @@ func parseCodexPluginList(body []byte) (codexListStatus, []string) {
 	if err := decoder.Decode(&parsed); err != nil {
 		return codexListUnknown, nil
 	}
-	if _, err := decoder.Token(); err == nil || !errors.Is(err, io.EOF) {
+	if _, err := decoder.Token(); err != io.EOF {
 		return codexListUnknown, nil
 	}
 	document, ok := parsed.(map[string]any)

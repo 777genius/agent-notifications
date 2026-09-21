@@ -336,7 +336,7 @@ func (s Service) HandoffReverse(ctx context.Context, req Request) (uint64, error
 	}
 	command := req.Discovery.Command
 	if command == "" {
-		command = filepath.Join(req.Binding.RuntimeRoot, req.Binding.Primary)
+		return 0, fmt.Errorf("%w: owned notification command missing", ErrPreflight)
 	}
 	provider, err := discoveryProvider(req.Binding.Integration)
 	if err != nil {
@@ -364,7 +364,7 @@ func (s Service) handoffForward(ctx context.Context, req Request) (uint64, *inst
 	}
 	command := req.Discovery.Command
 	if command == "" {
-		command = filepath.Join(req.Binding.RuntimeRoot, req.Binding.Primary)
+		return 0, nil, fmt.Errorf("%w: owned notification command missing", ErrPreflight)
 	}
 	provider, err := discoveryProvider(req.Binding.Integration)
 	if err != nil {

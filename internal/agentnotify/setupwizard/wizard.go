@@ -2759,7 +2759,12 @@ func discovery(req Request, agent portable.Integration, runtimeRoot string, snap
 	if path == "" {
 		return portablesetup.Discovery{}
 	}
-	command, _ := installruntime.OwnedNotificationCommand(snap.Ledger, runtimeRoot)
+	command, err := installruntime.OwnedNotificationCommand(snap.Ledger, runtimeRoot)
+	if err != nil {
+		// Keep discovery explicit; portablesetup must refuse a managed handoff
+		// when the installed command is missing or ambiguous.
+		return portablesetup.Discovery{ConfigPath: path}
+	}
 	return portablesetup.Discovery{ConfigPath: path, Command: command}
 }
 

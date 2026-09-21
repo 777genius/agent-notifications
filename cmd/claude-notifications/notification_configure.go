@@ -178,7 +178,11 @@ func configureNotifications(ctx context.Context, request notificationConfigureRe
 		if err != nil {
 			return result, err
 		}
-		if _, configured := policy.Fields["route"]; configured {
+		// Preserve every existing policy decision, including an explicit
+		// enabled=false document that has no route field.
+		_, routeConfigured := policy.Fields["route"]
+		_, enabledConfigured := policy.Fields["enabled"]
+		if routeConfigured || enabledConfigured {
 			setupRequest.Enabled = nil
 			setupRequest.Route = nil
 		}

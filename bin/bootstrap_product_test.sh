@@ -622,7 +622,12 @@ def reset_case():
     # Every directory is an explicit child of this fixture, never host state.
     for key in ['HOME','XDG_CONFIG_HOME','CODEX_HOME','CLAUDE_CONFIG_DIR']:
         d=pathlib.Path(env[key]); assert d.is_relative_to(sandbox)
-        shutil.rmtree(d); d.mkdir()
+        # Several roots intentionally overlap (for example CODEX_HOME under
+        # HOME), so an earlier removal may already have removed this path.
+        # Recreate every fixture root while keeping all behavioral assertions.
+        if d.exists():
+            shutil.rmtree(d)
+        d.mkdir(parents=True, exist_ok=True)
     trace.write_text('')
 def init_events(): return [e for e in events() if e[:2]==['config','init']]
 for product in ['claude','codex','both']:
