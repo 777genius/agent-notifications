@@ -14,8 +14,18 @@ import (
 
 	"github.com/777genius/agent-notifications/internal/agentnotify/registration"
 	notifysetup "github.com/777genius/agent-notifications/internal/agentnotify/setup"
+	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 )
+
+func resolvedNotificationGlobal(t *testing.T) string {
+	t.Helper()
+	selection, err := config.Resolve(config.SnapshotEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return selection.Path
+}
 
 func configureFixture(t *testing.T) (setupCommandFixture, notificationConfigureRequest, notificationConfigureDependencies) {
 	t.Helper()
@@ -56,7 +66,7 @@ func TestNotificationConfigureBothAndRetry(t *testing.T) {
 			t.Fatal("primary command missing", path)
 		}
 	}
-	global := filepath.Join(f.root, "xdg", "agent-notifications", "config.json")
+	global := resolvedNotificationGlobal(t)
 	if setupCommandRead(t, global) != setupCommandRead(t, f.global) {
 		t.Fatal("global restrictions changed")
 	}
@@ -316,7 +326,7 @@ func TestNotificationConfigureReportsPersistedGlobal(t *testing.T) {
 	request.Route = &notifysetup.Route{}
 	request.RequestPermission = true
 	deps.Composition.permission = func(context.Context, string, installruntime.InstalledSnapshot, bool) (string, error) {
-		setupCommandWrite(t, filepath.Join(f.root, "xdg", "agent-notifications", "config.json"), `{"notifications":{"desktop":{"enabled":true,"sound":false,"clickToFocus":false}}}`, 0600)
+		setupCommandWrite(t, resolvedNotificationGlobal(t), `{"notifications":{"desktop":{"enabled":true,"sound":false,"clickToFocus":false}}}`, 0600)
 		return "denied", nil
 	}
 	result, err = configureNotifications(setupCommandContext(t), request, deps)
@@ -470,7 +480,7 @@ func TestNotificationConfigureOwnedWindowsCommands(t *testing.T) {
 
 func TestNotificationConfigurePreservesUniversalPolicyOnFailure(t *testing.T) {
 	f, request, deps := configureFixture(t)
-	global := filepath.Join(f.root, "xdg", "agent-notifications", "config.json")
+	global := resolvedNotificationGlobal(t)
 	original := setupCommandRead(t, f.global)
 	if err := os.MkdirAll(filepath.Dir(global), 0700); err != nil {
 		t.Fatal(err)

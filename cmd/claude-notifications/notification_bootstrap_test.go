@@ -257,8 +257,8 @@ main --product both
 	if !strings.Contains(body, "--claude-config "+claudeHome) {
 		t.Fatal(body)
 	}
-	if strings.Contains(body, "--mcp-config") || strings.Contains(body, "--claude-mcp-config") {
-		t.Fatal("bootstrap must not invent MCP config paths", body)
+	if flagValue(strings.Fields(body), "--claude-mcp-config") != filepath.Join(claudeHome, ".claude.json") {
+		t.Fatal("bootstrap must pass the resolved Claude MCP config path", body)
 	}
 }
 
@@ -343,8 +343,8 @@ main --product both --codex-home "$HOME/codex home"
 	if flagValue(argv, "--codex-home") != codexHome {
 		t.Fatalf("codex-home: %#v", argv)
 	}
-	if flagValue(argv, "--mcp-config") != "" || flagValue(argv, "--claude-mcp-config") != "" {
-		t.Fatalf("invented mcp-config: %#v", argv)
+	if flagValue(argv, "--claude-mcp-config") != filepath.Join(claudeConfig, ".claude.json") {
+		t.Fatalf("claude-mcp-config: %#v", argv)
 	}
 }
 
@@ -705,8 +705,8 @@ func TestNotificationInitWizard(t *testing.T) {
 	if !strings.Contains(got, "--package "+filepath.Join(bundle, "portable-package")) {
 		t.Fatal(got)
 	}
-	if strings.Contains(got, "--mcp-config") || strings.Contains(got, "--claude-mcp-config") {
-		t.Fatal("init must not invent MCP config paths", got)
+	if flagValue(strings.Fields(got), "--claude-mcp-config") != filepath.Join(home, ".claude", ".claude.json") {
+		t.Fatal("init must pass the resolved Claude MCP config path", got)
 	}
 }
 
@@ -788,8 +788,8 @@ func TestNotificationInitWizardRetryQuotesCustomRoots(t *testing.T) {
 	if flagValue(argv, "--claude-config") != claudeConfig {
 		t.Fatalf("claude-config: %#v", argv)
 	}
-	if flagValue(argv, "--mcp-config") != "" || flagValue(argv, "--claude-mcp-config") != "" {
-		t.Fatalf("invented mcp-config: %#v", argv)
+	if flagValue(argv, "--claude-mcp-config") != filepath.Join(claudeConfig, ".claude.json") {
+		t.Fatalf("claude-mcp-config: %#v", argv)
 	}
 }
 

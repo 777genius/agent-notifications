@@ -49,12 +49,13 @@ func TestAgentNotifyIsolatedInstallFlowE2E(t *testing.T) {
 	if _, err := configureNotifications(ctx, request, deps); err != nil {
 		t.Fatal(err)
 	}
+	globalPath := resolvedNotificationGlobal(t)
 	for _, path := range []string{filepath.Join(request.CodexHome, "config.toml"), filepath.Join(f.root, ".claude.json")} {
 		if !strings.Contains(setupCommandRead(t, path), f.command) {
 			t.Fatal("primary command missing after both client orders", path)
 		}
 	}
-	if setupCommandRead(t, filepath.Join(f.root, ".claude", "claude-notifications-go", "config.json")) != setupCommandRead(t, f.global) {
+	if setupCommandRead(t, globalPath) != setupCommandRead(t, f.global) {
 		t.Fatal("global restrictions changed")
 	}
 
@@ -117,7 +118,7 @@ func TestAgentNotifyIsolatedInstallFlowE2E(t *testing.T) {
 	skillDest := filepath.Join(request.CodexHome, "skills", "agent-notify", "SKILL.md")
 	identity := portablesetup.Identity{
 		InstallationID: "00000000-0000-4000-8000-000000000009", ComponentID: snap.Ledger.ID, Owner: "existing-installer",
-		ScopeRoot: filepath.Join(f.root, "scope"), ControlRoot: f.control, GlobalConfig: f.global,
+		ScopeRoot: filepath.Join(f.root, "scope"), ControlRoot: f.control, GlobalConfig: globalPath,
 		RuntimeRoot: f.runtime, Primary: "primary",
 	}
 	discovery := portablesetup.Discovery{
@@ -349,7 +350,7 @@ func TestAgentNotifyIsolatedInstallFlowE2E(t *testing.T) {
 	if !strings.Contains(setupCommandRead(t, claudePath), f.command) {
 		t.Fatal("Claude registration lost during Codex portable reverse")
 	}
-	if setupCommandRead(t, filepath.Join(f.root, ".claude", "claude-notifications-go", "config.json")) != setupCommandRead(t, f.global) {
+	if setupCommandRead(t, globalPath) != setupCommandRead(t, f.global) {
 		t.Fatal("global restrictions changed after portable reverse")
 	}
 	name, err := got.Filename()
@@ -360,7 +361,7 @@ func TestAgentNotifyIsolatedInstallFlowE2E(t *testing.T) {
 		t.Fatal("locator survived portable reverse")
 	}
 	hook := setupCommandRead(t, filepath.Join(f.runtime, "hook"))
-	global := setupCommandRead(t, f.global)
+	global := setupCommandRead(t, globalPath)
 	codex := setupCommandRead(t, codexConfig)
 	claude := setupCommandRead(t, claudePath)
 	snap, err = installruntime.ReadInstalledSnapshot(f.control)
@@ -373,7 +374,7 @@ func TestAgentNotifyIsolatedInstallFlowE2E(t *testing.T) {
 	}, notifysetup.Request{ExpectedGeneration: snap.Ledger.Generation, Enabled: &disabled}); err != nil {
 		t.Fatal(err)
 	}
-	if setupCommandRead(t, filepath.Join(f.runtime, "hook")) != hook || setupCommandRead(t, f.global) != global || setupCommandRead(t, codexConfig) != codex || setupCommandRead(t, claudePath) != claude {
+	if setupCommandRead(t, filepath.Join(f.runtime, "hook")) != hook || setupCommandRead(t, globalPath) != global || setupCommandRead(t, codexConfig) != codex || setupCommandRead(t, claudePath) != claude {
 		t.Fatal("disable mutated hooks, global config, or client registrations")
 	}
 }
