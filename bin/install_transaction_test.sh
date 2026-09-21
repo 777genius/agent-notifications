@@ -414,6 +414,20 @@ scenario=checksum_manifest_download
     CHECKSUMS_PATH="$INSTALL_TARGET_DIR/checksums.txt"
     CHECKSUMS_URL='https://release.invalid/checksums.txt'
     BINARY_NAME=test
+    guard_download_paths() {
+        local path
+        for path in "$@"; do
+            case "$path" in
+                *.download.*)
+                    if [ ! -e "$path" ]; then
+                        printf 'guarded missing temp after promotion\n' > "$INSTALL_TARGET_DIR/post-move-guard"
+                        return 1
+                    fi
+                    ;;
+            esac
+        done
+        return 0
+    }
     old_digest=$(printf '%064d' 1)
     new_digest=$(printf '%064d' 2)
     printf '%s  test\n' "$old_digest" > "$CHECKSUMS_PATH"
@@ -438,6 +452,7 @@ scenario=checksum_manifest_download
     transfer=valid
     download_checksums
     assert_output "$new_digest  test" 'validated manifest did not replace live bytes' cat "$CHECKSUMS_PATH"
+    assert 'successful promotion re-guarded the consumed temp path' test ! -e "$INSTALL_TARGET_DIR/post-move-guard"
     artifacts=$(find "$INSTALL_TARGET_DIR" -maxdepth 1 -name 'checksums.txt.download.*' -print)
     assert_output '' 'checksum manifest temp file was not cleaned' printf %s "$artifacts"
     echo 'PASS: checksum manifest refresh is validated and atomic'

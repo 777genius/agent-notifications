@@ -932,7 +932,7 @@ download_checksums() (
 
     checksum_temp=''
     checksum_temp=$(mktemp "${CHECKSUMS_PATH}.download.XXXXXX") || return 1
-    trap 'guard_download_paths "$checksum_temp"; rm -f "$checksum_temp"; cleanup_install_config' EXIT
+    trap 'if [ -n "$checksum_temp" ]; then guard_download_paths "$checksum_temp"; rm -f "$checksum_temp"; fi; cleanup_install_config' EXIT
 
     local downloaded=false
     if command -v curl &> /dev/null; then
@@ -949,6 +949,7 @@ download_checksums() (
        checksum_manifest_entry "$checksum_temp" "$BINARY_NAME" >/dev/null &&
        guard_download_paths "$checksum_temp" "$CHECKSUMS_PATH" &&
        mv -f "$checksum_temp" "$CHECKSUMS_PATH"; then
+        checksum_temp=''
         return 0
     fi
 
