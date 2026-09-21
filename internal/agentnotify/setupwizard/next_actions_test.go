@@ -323,6 +323,7 @@ func TestInspectReportsDiscoveredMCPConfigPath(t *testing.T) {
 func TestDiscoveryConfigPathUsesExistingProfileFile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", "")
 	codexHome := filepath.Join(t.TempDir(), "codex")
 	claudeHome := filepath.Join(t.TempDir(), "claude")
 	for _, dir := range []string{codexHome, claudeHome} {
@@ -380,6 +381,22 @@ func TestDiscoveryConfigPathUsesExistingProfileFile(t *testing.T) {
 	}
 	if got := discoveryConfigPath(Request{CodexHome: "relative"}, portable.Codex); got != "" {
 		t.Fatalf("relative profile: %s", got)
+	}
+}
+
+func TestDiscoveryConfigPathClaudeUsesUserProfileWhenHomeUnset(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "Windows User")
+	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", home)
+	if err := os.MkdirAll(home, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, ".claude.json")
+	if err := os.WriteFile(path, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := discoveryConfigPath(Request{}, portable.Claude); got != path {
+		t.Fatalf("USERPROFILE default: %s", got)
 	}
 }
 

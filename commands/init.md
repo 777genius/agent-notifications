@@ -134,11 +134,27 @@ if [ "$SKIP_AGENT_NOTIFY" != true ]; then
       printf 'agent-notify wizard skipped; portable-package is missing. Retry: %s\n' "$(quote_shell_command "$NOTIFY_BIN" setup-notifications wizard --action install --agents claude --hooks false --agent-notify true --yes)" >&2
       exit 1
     fi
+    case "$(uname -s 2>/dev/null)" in
+      Darwin)
+        if ! "$NOTIFY_BIN" setup-notifications configure --provider claude "${CONFIGURE_ARGS[@]}"; then
+          printf 'agent-notify configure failed; plugin install files remain. Retry: %s\n' "$(quote_shell_command "$NOTIFY_BIN" setup-notifications configure --provider claude "${CONFIGURE_ARGS[@]}")" >&2
+          exit 1
+        fi
+        ;;
+    esac
     wizard=(setup-notifications wizard --action install --agents claude --hooks false --agent-notify true --yes --package "$package" --plugin-root "${CLAUDE_PLUGIN_ROOT}" --helper "$NOTIFY_BIN")
     if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
       wizard+=(--claude-config "$CLAUDE_CONFIG_DIR")
+      claude_home="$CLAUDE_CONFIG_DIR"
+    else
+      claude_home="${HOME:-${USERPROFILE:-}}"
+      if [ -n "$claude_home" ]; then
+        wizard+=(--claude-config "$claude_home/.claude")
+      fi
     fi
-    wizard+=(--claude-mcp-config "${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json")
+    if [ -n "$claude_home" ]; then
+      wizard+=(--claude-mcp-config "$claude_home/.claude.json")
+    fi
     claude_exec=$(command -v claude 2>/dev/null || true)
     case "$claude_exec" in
       /*|[A-Za-z]:/*|[A-Za-z]:\\*) wizard+=(--claude-executable "$claude_exec" --client-executable "$claude_exec") ;;

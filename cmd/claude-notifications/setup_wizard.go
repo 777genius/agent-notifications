@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -195,10 +196,10 @@ func writeSetupWizardResult(out io.Writer, jsonOut bool, result setupwizard.Resu
 				fact.Client, fact.Runtime, fact.Hooks, fact.MCP, fact.Permission, fact.Restart, fact.Delivery)
 		}
 		for _, next := range result.NextActions {
-			_, _ = fmt.Fprintf(out, "next %s: %s\n", next.Kind, strings.Join(quoteWizardArgs(next.Command), " "))
+			_, _ = fmt.Fprintf(out, "next %s: %s\n", next.Kind, strings.Join(quoteWizardArgs(wizardPrintableCommand(next.Command)), " "))
 		}
 		if len(result.Command) > 0 {
-			_, _ = fmt.Fprintf(out, "retry: %s\n", strings.Join(quoteWizardArgs(result.Command), " "))
+			_, _ = fmt.Fprintf(out, "retry: %s\n", strings.Join(quoteWizardArgs(wizardPrintableCommand(result.Command)), " "))
 		}
 	}
 	if result.ExitCode() != 0 {
@@ -211,6 +212,19 @@ func writeSetupWizardResult(out io.Writer, jsonOut bool, result setupwizard.Resu
 		return 1
 	}
 	return 0
+}
+
+func wizardPrintableCommand(command []string) []string {
+	if len(command) == 0 || command[0] != "setup-notifications" {
+		return append([]string(nil), command...)
+	}
+	executable, err := os.Executable()
+	if err != nil || strings.TrimSpace(executable) == "" {
+		executable = "claude-notifications"
+	}
+	out := make([]string, 0, len(command)+1)
+	out = append(out, executable)
+	return append(out, command...)
 }
 
 func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
@@ -400,9 +414,25 @@ func stdinIsCharDevice() bool {
 }
 
 func quoteWizardArgs(args []string) []string {
+	if runtime.GOOS == "windows" {
+		return quotePowerShellArgs(args)
+	}
 	out := make([]string, len(args))
 	for i, arg := range args {
 		out[i] = "'" + strings.ReplaceAll(arg, "'", "'\"'\"'") + "'"
+	}
+	return out
+}
+
+func quotePowerShellArgs(args []string) []string {
+	out := make([]string, len(args))
+	for i, arg := range args {
+		// Single-quoted PowerShell strings preserve $, backticks, and all other
+		// metacharacters; apostrophes are represented by two apostrophes.
+		out[i] = "'" + strings.ReplaceAll(arg, "'", "''") + "'"
+	}
+	if len(out) > 0 {
+		out[0] = "& " + out[0]
 	}
 	return out
 }

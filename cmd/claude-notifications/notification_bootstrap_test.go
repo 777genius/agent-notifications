@@ -657,6 +657,7 @@ func TestNotificationInitWizard(t *testing.T) {
 	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	t.Setenv("TMPDIR", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
 	t.Setenv("CODEX_HOME", filepath.Join(home, "codex"))
@@ -683,7 +684,8 @@ func TestNotificationInitWizard(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(bundle, "bin", "claude-notifications"), []byte(helper), 0700); err != nil {
 		t.Fatal(err)
 	}
-	script := `curl() { printf '#!/bin/sh\necho installed >> "$HOME/installs"\n' > "$4"; }
+	script := `uname() { echo Darwin; }
+curl() { printf '#!/bin/sh\necho installed >> "$HOME/installs"\n' > "$4"; }
 ` + body
 	command := exec.Command("bash", "-c", script, "init")
 	command.Dir = home
@@ -696,8 +698,12 @@ func TestNotificationInitWizard(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := string(calls)
-	if strings.Contains(got, "setup-notifications configure") {
-		t.Fatal("wizard path called configure", got)
+	configure := "setup-notifications configure --provider claude --navigation none --allow-unknown-caller true --allow-caller-asserted false"
+	if !strings.Contains(got, configure) {
+		t.Fatal("wizard path omitted configure", got)
+	}
+	if strings.Index(got, configure) > strings.Index(got, "setup-notifications wizard") {
+		t.Fatal("configure must precede wizard", got)
 	}
 	if !strings.Contains(got, "setup-notifications wizard --action install --agents claude --hooks false --agent-notify true --yes") {
 		t.Fatal(got)
@@ -707,6 +713,55 @@ func TestNotificationInitWizard(t *testing.T) {
 	}
 	if flagValue(strings.Fields(got), "--claude-mcp-config") != filepath.Join(home, ".claude.json") {
 		t.Fatal("init must pass the resolved Claude MCP config path", got)
+	}
+	if flagValue(strings.Fields(got), "--claude-config") != filepath.Join(home, ".claude") {
+		t.Fatal("init must pass the default Claude profile", got)
+	}
+}
+
+func TestNotificationInitWizardConfigureFailureStopsWizard(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join(notificationRepoRoot(t), "commands", "init.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := ""
+	for _, block := range strings.Split(string(source), "```bash\n")[1:] {
+		chunk := strings.SplitN(block, "```", 2)[0]
+		if strings.Contains(chunk, "setup-notifications wizard") {
+			body = chunk
+			break
+		}
+	}
+	home := t.TempDir()
+	bundle := filepath.Join(home, "bundle")
+	if err := os.MkdirAll(filepath.Join(bundle, "bin"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(bundle, "portable-package"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bundle, "portable-package", "plugin.json"), []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("CLAUDE_PLUGIN_ROOT", bundle)
+	helper := "#!/bin/sh\nif [ \"$1\" = --help ]; then echo 'setup-notifications wizard'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\nexit 7\n"
+	if err := os.WriteFile(filepath.Join(bundle, "bin", "claude-notifications"), []byte(helper), 0700); err != nil {
+		t.Fatal(err)
+	}
+	script := `uname() { echo Darwin; }
+curl() { printf '#!/bin/sh\n' > "$4"; }
+` + body
+	command := exec.Command("bash", "-c", script, "init")
+	command.Dir = home
+	output, err := command.CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "configure failed") {
+		t.Fatalf("expected configure failure: %v %s", err, output)
+	}
+	calls, _ := os.ReadFile(filepath.Join(home, "calls"))
+	if strings.Contains(string(calls), "setup-notifications wizard") {
+		t.Fatalf("wizard ran after configure failure: %s", calls)
 	}
 }
 
@@ -756,11 +811,12 @@ func TestNotificationInitWizardRetryQuotesCustomRoots(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", filepath.Join(home, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"))
-	helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then printf '%s\\n' 'setup-notifications wizard'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\nexit 1\n"
+	helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then printf '%s\\n' 'setup-notifications wizard'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\nif [ \"$1 $2\" = 'setup-notifications configure' ]; then exit 0; fi\nexit 1\n"
 	if err := os.WriteFile(filepath.Join(bundle, "bin", "claude-notifications"), []byte(helper), 0700); err != nil {
 		t.Fatal(err)
 	}
-	script := `curl() { printf '#!/bin/sh\necho installed >> "$HOME/installs"\n' > "$4"; }
+	script := `uname() { echo Darwin; }
+curl() { printf '#!/bin/sh\necho installed >> "$HOME/installs"\n' > "$4"; }
 ` + body
 	command := exec.Command("bash", "-c", script, "init")
 	command.Dir = home
@@ -1059,5 +1115,26 @@ install_claude || exit 1
 				t.Fatalf("native Windows launcher selection: %v\n%s", err, out)
 			}
 		})
+	}
+}
+
+func TestNotificationBootstrapSkipsMacPolicyOnOtherPlatforms(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join(notificationRepoRoot(t), "bin", "bootstrap.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := strings.TrimSuffix(strings.TrimSpace(string(source)), `main "$@"`)
+	home := t.TempDir()
+	script := prefix + `
+uname() { echo Linux; }
+CONFIGURE_BINARY="$HOME/must-not-run"
+PRODUCT=both
+CONFIGURE_ARGS=()
+configure_agent_policy
+`
+	command := exec.Command("bash", "-c", script)
+	command.Env = append(os.Environ(), "HOME="+home)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("non-Darwin policy gate: %v\n%s", err, output)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	processadapter "github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/process"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/shared"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/ports"
 
@@ -613,7 +614,7 @@ func holdCodexUninstall(ctx context.Context, req *Request, mat portablesetup.Mat
 		if agent != portable.Codex || !liveNotifyClient(mat, id.InstallationID, string(agent)) {
 			continue
 		}
-		if attestCodexExternalUninstall(ctx, clientExecutable(*req, agent), req.CodexHome) {
+		if attestCodexExternalUninstall(ctx, clientExecutable(*req, agent), req.CodexHome, managedCodexPluginSpec(mat, id.InstallationID)) {
 			req.ExternalUninstalled = true
 			_ = persistExternalUninstalled(ctx, *req, runtimeRoot)
 			return out, nil
@@ -676,13 +677,14 @@ func uninstallManualPrerequisites(ctx context.Context, req Request, snap install
 		id.InstallationID = state.Installations[0].InstallationID
 	}
 	var prereqs []string
+	expectedSpec := managedCodexPluginSpec(mat, id.InstallationID)
 	for _, agent := range notifyAgents {
 		if agent != portable.Codex || !liveNotifyClient(mat, id.InstallationID, string(agent)) {
 			continue
 		}
 		status := codexListUnknown
 		if explicitAbs(clientExecutable(req, agent)) {
-			status, _ = observeCodexPluginList(ctx, clientExecutable(req, agent), clientConfig(req, agent))
+			status, _ = observeCodexPluginList(ctx, clientExecutable(req, agent), clientConfig(req, agent), expectedSpec)
 		}
 		if status != codexListAbsent {
 			prereqs = append(prereqs, string(agent))
@@ -1825,9 +1827,10 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 		return out, nil
 	}
 	removed := 0
+	expectedCodexSpec := managedCodexPluginSpec(mat, id.InstallationID)
 	for _, agent := range notifyAgents {
 		if agent == portable.Codex && !req.ExternalUninstalled {
-			if attestCodexExternalUninstall(ctx, clientExecutable(req, agent), req.CodexHome) {
+			if attestCodexExternalUninstall(ctx, clientExecutable(req, agent), req.CodexHome, expectedCodexSpec) {
 				req.ExternalUninstalled = true
 				_ = persistExternalUninstalled(ctx, req, runtimeRoot)
 			}
@@ -1887,6 +1890,28 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 	out = markRetainedEmpty(mat, id.InstallationID, out)
 	reportProgress(req, "complete")
 	return out, nil
+}
+
+func managedCodexPluginSpec(mat portablesetup.Materializer, installationID string) string {
+	if installationID == "" {
+		return ""
+	}
+	state, err := mat.Store.Load()
+	if err != nil {
+		return ""
+	}
+	for _, installation := range state.Installations {
+		if installation.InstallationID != installationID || strings.TrimSpace(installation.DeclaredName) == "" {
+			continue
+		}
+		for _, binding := range installation.Clients {
+			if binding.ClientID != string(portable.Codex) || strings.TrimSpace(binding.PhysicalArtifact) == "" {
+				continue
+			}
+			return installation.DeclaredName + "@" + shared.ManagedMarketplaceName(binding.PhysicalArtifact)
+		}
+	}
+	return ""
 }
 
 func portableInstallFailed(agent portable.Integration, req Request, out Result, err error) Result {
@@ -2781,7 +2806,7 @@ func discoveryConfigPath(req Request, agent portable.Integration) string {
 	}
 	root := clientConfig(req, agent)
 	if agent == portable.Claude && root == "" {
-		root = os.Getenv("HOME")
+		root = userHomeDir()
 	}
 	if !explicitAbs(root) {
 		return ""
@@ -2804,6 +2829,15 @@ func discoveryConfigPath(req Request, agent portable.Integration) string {
 		return ""
 	}
 	return path
+}
+
+func userHomeDir() string {
+	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+		return home
+	}
+	// os.UserHomeDir uses USERPROFILE on Windows. Keep the explicit fallback
+	// for restricted/test environments where the platform lookup is unavailable.
+	return strings.TrimSpace(os.Getenv("USERPROFILE"))
 }
 
 func bindDiscoveredMCP(req *Request, agents []portable.Integration) {

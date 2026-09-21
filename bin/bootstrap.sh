@@ -1579,6 +1579,10 @@ configure_agent_notify() {
 }
 
 configure_agent_policy() {
+    case "$(uname -s 2>/dev/null)" in
+        Darwin) ;;
+        *) return 0 ;;
+    esac
     if ! "$CONFIGURE_BINARY" setup-notifications configure --provider "$PRODUCT" "${CONFIGURE_ARGS[@]}"; then
         echo -e "${YELLOW}⚠ Agent-notify setup failed; plugin/hooks install succeeded.${NC}" >&2
         echo -e "${YELLOW}  Desktop/hook notifications still work. Retry:${NC}" >&2

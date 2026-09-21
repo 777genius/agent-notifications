@@ -140,6 +140,12 @@ func TestInstallAdapterOldHelperSelectsQualifiedSuppliedRelease(t *testing.T) {
 	if _, ok := snap.Ledger.Consumers["claude-hooks"]; !ok {
 		t.Fatal("actual adapter did not commit consumer")
 	}
+	// Launcher repair passes the committed runtime as both stage and target.
+	// Previously the adapter rejected this before it could reuse the exact
+	// qualified native evidence already bound in the ownership ledger.
+	if err := installRuntime([]string{"--stage", target, "--target", target, "--entry", entry, "--control-root", control}, io.Discard); err != nil {
+		t.Fatalf("in-place launcher repair: %v", err)
+	}
 	if err := os.RemoveAll(stage); err != nil {
 		t.Fatal(err)
 	}

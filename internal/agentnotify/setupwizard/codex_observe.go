@@ -23,11 +23,11 @@ const (
 // attestCodexExternalUninstall observes `plugin list --json` and, when that
 // contract is recognized, runs `plugin remove` for still-present managed
 // entries. Unknown output never becomes --external-uninstalled.
-func attestCodexExternalUninstall(ctx context.Context, executable, codexHome string) bool {
-	if ctx == nil || !explicitAbs(executable) {
+func attestCodexExternalUninstall(ctx context.Context, executable, codexHome, expectedSpec string) bool {
+	if ctx == nil || !explicitAbs(executable) || expectedSpec == "" {
 		return false
 	}
-	status, specs := observeCodexPluginList(ctx, executable, codexHome)
+	status, specs := observeCodexPluginList(ctx, executable, codexHome, expectedSpec)
 	if status == codexListAbsent {
 		return true
 	}
@@ -39,16 +39,19 @@ func attestCodexExternalUninstall(ctx context.Context, executable, codexHome str
 			return false
 		}
 	}
-	status, _ = observeCodexPluginList(ctx, executable, codexHome)
+	status, _ = observeCodexPluginList(ctx, executable, codexHome, expectedSpec)
 	return status == codexListAbsent
 }
 
-func observeCodexPluginList(ctx context.Context, executable, codexHome string) (codexListStatus, []string) {
+func observeCodexPluginList(ctx context.Context, executable, codexHome, expectedSpec string) (codexListStatus, []string) {
+	if expectedSpec == "" {
+		return codexListUnknown, nil
+	}
 	body, ok := runCodexPluginJSON(ctx, executable, codexHome, "plugin", "list", "--json")
 	if !ok {
 		return codexListUnknown, nil
 	}
-	return parseCodexPluginList(body)
+	return parseCodexPluginList(body, expectedSpec)
 }
 
 func removeCodexPlugin(ctx context.Context, executable, codexHome, spec string) bool {
@@ -95,8 +98,8 @@ func codexChildEnv(codexHome string) []string {
 	return env
 }
 
-func parseCodexPluginList(body []byte) (codexListStatus, []string) {
-	if len(body) == 0 {
+func parseCodexPluginList(body []byte, expectedSpec string) (codexListStatus, []string) {
+	if len(body) == 0 || expectedSpec == "" {
 		return codexListUnknown, nil
 	}
 	decoder := json.NewDecoder(strings.NewReader(string(body)))
@@ -147,7 +150,7 @@ func parseCodexPluginList(body []byte) (codexListStatus, []string) {
 			return codexListUnknown, nil
 		}
 		identities[pluginID] = struct{}{}
-		if name == wizardPluginName && installed && enabled {
+		if pluginID == expectedSpec && name == wizardPluginName && installed && enabled {
 			specs = append(specs, pluginID)
 		}
 	}

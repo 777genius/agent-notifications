@@ -209,11 +209,6 @@ func installRuntime(args []string, output io.Writer) error {
 			} else if e != nil {
 				return e
 			}
-			// A required release update needs the selected package identity. A
-			// decoder floor alone cannot prove a retained artifact is current.
-			if retained && *requireNative {
-				return fmt.Errorf("required compatible native release must be supplied in a separate authenticated stage; cached helper presence cannot establish release freshness")
-			}
 			if retained {
 				native, err = installruntime.StageRetainedNative(ctx, *control, candidate)
 			} else {

@@ -412,3 +412,19 @@ func TestQuoteWizardArgsBashRoundTrip(t *testing.T) {
 		t.Fatalf("round trip = %#v, want %#v", got, want)
 	}
 }
+
+func TestQuotePowerShellArgsPreservesMetacharacters(t *testing.T) {
+	want := []string{`C:\Program Files\Claude\claude.exe`, `dollar$sign`, "apostrophe's", "back`tick", `$(no-expand)`}
+	got := quotePowerShellArgs(want)
+	wantQuoted := []string{`& 'C:\Program Files\Claude\claude.exe'`, `'dollar$sign'`, `'apostrophe''s'`, "'back`tick'", "'$(no-expand)'"}
+	if !reflect.DeepEqual(got, wantQuoted) {
+		t.Fatalf("PowerShell quoting = %#v, want %#v", got, wantQuoted)
+	}
+}
+
+func TestWizardPrintableCommandIncludesExecutable(t *testing.T) {
+	got := wizardPrintableCommand([]string{"setup-notifications", "wizard", "--yes"})
+	if len(got) != 4 || got[0] == "setup-notifications" || got[1] != "setup-notifications" {
+		t.Fatalf("printable command = %#v", got)
+	}
+}
