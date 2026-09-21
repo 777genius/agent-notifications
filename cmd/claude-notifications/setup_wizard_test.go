@@ -3125,22 +3125,18 @@ func TestSetupWizardResumeRestoresMixedPerClientUnitsE2E(t *testing.T) {
 	t.Setenv("CODEX_HOME", filepath.Join(env.root, "later-env-codex"))
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(env.root, "later-env-claude"))
 	var out bytes.Buffer
-	resume := []string{
-		"--action", "install", "--json",
-		"--control-root", env.control, "--runtime-root", env.runtime, "--global-config", env.global,
-		"--claude-executable", env.probe, "--codex-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+	conflict := []string{
+		"--action", "install", "--agents", "claude,codex", "--hooks", "true", "--agent-notify", "true",
+		"--yes", "--json", "--control-root", env.control, "--runtime-root", env.runtime,
 	}
-	if code := executeSetupWizardWith(ctx, resume, &out, io.Discard, strings.NewReader(""), false); code == 2 {
-		t.Fatalf("mixed resume invalid: %s", out.String())
+	if code := executeSetupWizardWith(ctx, conflict, &out, io.Discard, strings.NewReader(""), false); code != 1 {
+		t.Fatalf("global units exit: %d %s", code, out.String())
 	}
-	got := decodeWizardJSON(t, out)
-	if got.Outcome == "cancelled" || got.Reason == "empty_selection" {
-		t.Fatalf("did not restore pending agents: %+v", got)
+	conflicted := decodeWizardJSON(t, out)
+	if conflicted.Outcome != "conflict" || conflicted.Reason != "pending_intent_conflict" {
+		t.Fatalf("global units matched mixed intent: %+v", conflicted)
 	}
-	if got.Reason == "noninteractive_requires_yes" {
-		t.Fatalf("matching pending intent still required --yes: %+v", got)
-	}
-	joined := strings.Join(got.Command, " ")
+	joined := strings.Join(conflicted.Command, " ")
 	for _, want := range []string{
 		"--agents claude,codex",
 		"--claude-hooks true",
@@ -3151,22 +3147,26 @@ func TestSetupWizardResumeRestoresMixedPerClientUnitsE2E(t *testing.T) {
 		"--codex-home " + env.codexHome,
 	} {
 		if !strings.Contains(joined, want) {
-			t.Fatalf("retry omitted %q: %v", want, got.Command)
+			t.Fatalf("retry omitted %q: %v", want, conflicted.Command)
 		}
 	}
 	if strings.Contains(joined, "--hooks ") || strings.Contains(joined, "--agent-notify ") {
-		t.Fatalf("mixed units collapsed to global flags: %v", got.Command)
+		t.Fatalf("mixed units collapsed to global flags: %v", conflicted.Command)
 	}
+
 	out.Reset()
-	conflict := []string{
-		"--action", "install", "--agents", "claude,codex", "--hooks", "true", "--agent-notify", "true",
-		"--yes", "--json", "--control-root", env.control, "--runtime-root", env.runtime,
+	resume := []string{
+		"--action", "install", "--json",
+		"--package", env.pkg,
+		"--control-root", env.control, "--runtime-root", env.runtime, "--global-config", env.global,
+		"--claude-executable", env.probe, "--codex-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
 	}
-	if code := executeSetupWizardWith(ctx, conflict, &out, io.Discard, strings.NewReader(""), false); code != 1 {
-		t.Fatalf("global units exit: %d %s", code, out.String())
+	if code := executeSetupWizardWith(ctx, resume, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("mixed resume failed: %d %s", code, out.String())
 	}
-	if got := decodeWizardJSON(t, out); got.Outcome != "conflict" || got.Reason != "pending_intent_conflict" {
-		t.Fatalf("global units matched mixed intent: %+v", got)
+	got := decodeWizardJSON(t, out)
+	if got.Outcome != "completed" {
+		t.Fatalf("mixed resume did not complete: %+v", got)
 	}
 }
 
