@@ -866,6 +866,39 @@ test_lock_prevents_parallel() {
     cleanup_test_dir
 }
 
+test_install_helper_timeout_validation() {
+    echo -e "\n${CYAN}▶ test_install_helper_timeout_validation${NC}"
+
+    setup_test_dir
+    local sourceable_install="$TEST_DIR/install-functions.sh"
+    local helper="$TEST_DIR/hanging-helper.sh"
+    local marker="$TEST_DIR/helper-started"
+    sed '/^main "\$@"$/d' "$INSTALL_SCRIPT" > "$sourceable_install"
+    cat > "$helper" <<'HELPER_EOF'
+#!/usr/bin/env bash
+: > "$HELPER_STARTED_MARKER"
+sleep 30
+HELPER_EOF
+    chmod +x "$helper"
+
+    local timeout_value exit_code
+    for timeout_value in invalid 0 -1 999999999999999999999999999999; do
+        rm -f "$marker"
+        set +e
+        run_with_timeout_env 3 \
+            INSTALL_HELPER_TIMEOUT_SECONDS="$timeout_value" \
+            HELPER_STARTED_MARKER="$marker" \
+            bash -c 'source "$1"; run_install_helper "$2"' _ \
+            "$sourceable_install" "$helper" >/dev/null 2>&1
+        exit_code=$?
+        set -e
+        assert_exit_code 2 "$exit_code" "Invalid helper timeout '$timeout_value' fails closed"
+        assert_file_not_exists "$marker" "Invalid helper timeout '$timeout_value' never starts helper"
+    done
+
+    cleanup_test_dir
+}
+
 test_lock_stale_removal() {
     echo -e "\n${CYAN}▶ test_lock_stale_removal${NC}"
 
@@ -907,7 +940,7 @@ test_lock_stale_removal() {
 
     # Missing, malformed, or ambiguous ownership evidence fails closed even
     # when every visible heartbeat is old.
-    for marker_case in missing invalid multiple; do
+    for marker_case in missing invalid multiple unexpected-root unexpected-owner; do
         rm -rf "$TEST_DIR/.install.lock"
         mkdir -p "$TEST_DIR/.install.lock"
         case "$marker_case" in
@@ -925,6 +958,20 @@ test_lock_stale_removal() {
                     touch -t 200001010000 "$TEST_DIR/.install.lock/.owner.$suffix/heartbeat"
                 done
                 ;;
+            unexpected-root)
+                mkdir "$TEST_DIR/.install.lock/.owner.dead"
+                printf '%s\n' "$dead_pid" > "$TEST_DIR/.install.lock/.owner.dead/pid"
+                : > "$TEST_DIR/.install.lock/.owner.dead/heartbeat"
+                touch -t 200001010000 "$TEST_DIR/.install.lock/.owner.dead/heartbeat"
+                : > "$TEST_DIR/.install.lock/legacy.lock"
+                ;;
+            unexpected-owner)
+                mkdir "$TEST_DIR/.install.lock/.owner.dead"
+                printf '%s\n' "$dead_pid" > "$TEST_DIR/.install.lock/.owner.dead/pid"
+                : > "$TEST_DIR/.install.lock/.owner.dead/heartbeat"
+                touch -t 200001010000 "$TEST_DIR/.install.lock/.owner.dead/heartbeat"
+                : > "$TEST_DIR/.install.lock/.owner.dead/legacy"
+                ;;
         esac
         set +e
         local ambiguous_output
@@ -934,6 +981,15 @@ test_lock_stale_removal() {
         assert_exit_code 1 "$ambiguous_exit" "$marker_case owner evidence is not reclaimed"
         assert_contains "$ambiguous_output" "Another installation" "$marker_case owner evidence fails closed"
         assert_dir_exists "$TEST_DIR/.install.lock" "$marker_case owner lock remains"
+        if [ "$marker_case" = unexpected-root ] || [ "$marker_case" = unexpected-owner ]; then
+            assert_file_exists "$TEST_DIR/.install.lock/.owner.dead/pid" "$marker_case owner PID remains untouched"
+            assert_file_exists "$TEST_DIR/.install.lock/.owner.dead/heartbeat" "$marker_case heartbeat remains untouched"
+        fi
+        if [ "$marker_case" = unexpected-root ]; then
+            assert_file_exists "$TEST_DIR/.install.lock/legacy.lock" "Unexpected root content remains untouched"
+        elif [ "$marker_case" = unexpected-owner ]; then
+            assert_file_exists "$TEST_DIR/.install.lock/.owner.dead/legacy" "Unexpected owner content remains untouched"
+        fi
     done
 
     cleanup_test_dir
@@ -2922,6 +2978,7 @@ main() {
         test_bootstrap_empty_registry_version_preserves_installed_manifest
         test_lock_created
         test_lock_prevents_parallel
+        test_install_helper_timeout_validation
         test_lock_stale_removal
         test_lock_release_removes_owned_metadata
         test_lock_heartbeat_stops_with_dead_owner

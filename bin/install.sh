@@ -123,6 +123,17 @@ run_install_helper() (
     trap 'exit 130' INT
     trap 'exit 143' TERM
     timeout="${INSTALL_HELPER_TIMEOUT_SECONDS:-20}"
+    # This value crosses a trust boundary through the environment. Reject it
+    # before starting the helper so malformed, zero, negative, or impractically
+    # large values cannot disable the watchdog or leave command substitution
+    # waiting forever.
+    case "$timeout" in
+        ''|*[!0-9]*) exit 2 ;;
+    esac
+    if ! [ "$timeout" -ge 1 ] 2>/dev/null ||
+       ! [ "$timeout" -le 300 ] 2>/dev/null; then
+        exit 2
+    fi
     # Monitor mode gives this background command its own process group. A hung
     # helper and every descendant are then terminated together. Capture files
     # keep descendants from holding a caller command-substitution pipe open.
@@ -483,18 +494,42 @@ lock_mtime() {
 }
 
 lock_owner_dir() {
-    local candidate owner_dir="" count=0
-    for candidate in "$LOCKFILE"/.owner.*; do
+    local candidate owner_dir="" count=0 metadata_count=0
+    # Enumerate every visible and hidden entry. A legacy file or any other
+    # unexpected content makes ownership ambiguous, so stale recovery must not
+    # remove even the otherwise well-formed marker beside it.
+    for candidate in "$LOCKFILE"/* "$LOCKFILE"/.[!.]* "$LOCKFILE"/..?*; do
         if [ ! -e "$candidate" ] && [ ! -L "$candidate" ]; then
             continue
         fi
-        # Symlinks, files, and ambiguous marker sets are not proof that any
-        # particular owner was abandoned.
-        [ -d "$candidate" ] && [ ! -L "$candidate" ] || return 1
-        owner_dir="$candidate"
-        count=$((count + 1))
+        case "$candidate" in
+            "$LOCKFILE"/.owner.*)
+                # Symlinks, files, and ambiguous marker sets are not proof that
+                # any particular owner was abandoned.
+                [ -d "$candidate" ] && [ ! -L "$candidate" ] || return 1
+                owner_dir="$candidate"
+                count=$((count + 1))
+                ;;
+            *) return 1 ;;
+        esac
     done
     [ "$count" -eq 1 ] || return 1
+
+    # The owner marker itself is also a closed format. Refuse extra files,
+    # directories, or symlinks instead of partially deleting unknown state.
+    for candidate in "$owner_dir"/* "$owner_dir"/.[!.]* "$owner_dir"/..?*; do
+        if [ ! -e "$candidate" ] && [ ! -L "$candidate" ]; then
+            continue
+        fi
+        case "$candidate" in
+            "$owner_dir/pid"|"$owner_dir/heartbeat")
+                [ -f "$candidate" ] && [ ! -L "$candidate" ] || return 1
+                metadata_count=$((metadata_count + 1))
+                ;;
+            *) return 1 ;;
+        esac
+    done
+    [ "$metadata_count" -eq 2 ] || return 1
     printf '%s\n' "$owner_dir"
 }
 
@@ -534,7 +569,7 @@ acquire_lock() {
         # A lock is reclaimable only when its recorded owner is dead and its
         # heartbeat is older than the abandonment window. Unknown/legacy
         # ownership is retained because age alone cannot prove abandonment.
-        if [ -d "$LOCKFILE" ]; then
+        if [ -d "$LOCKFILE" ] && [ ! -L "$LOCKFILE" ]; then
             local owner_dir lock_age owner_status now heartbeat_mtime
             owner_dir=$(lock_owner_dir || true)
             if [ -n "$owner_dir" ] && [ -f "$owner_dir/heartbeat" ]; then
