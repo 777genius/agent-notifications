@@ -208,6 +208,33 @@ func TestPortableProductionBridge(t *testing.T) {
 	}
 }
 
+func TestPortableChildEnvironmentPreservesDesktopSession(t *testing.T) {
+	t.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/fixture/session-bus")
+	t.Setenv("XDG_RUNTIME_DIR", "/fixture/runtime")
+	t.Setenv("DISPLAY", ":88")
+	t.Setenv("PLUGIN_DATA", "/untrusted/data")
+	t.Setenv("PLUGIN_ROOT", "/untrusted/root")
+
+	values := map[string]string{}
+	for _, entry := range portableChildEnvironment("/managed/data", "/managed/root") {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok {
+			values[key] = value
+		}
+	}
+	for key, want := range map[string]string{
+		"DBUS_SESSION_BUS_ADDRESS": "unix:path=/fixture/session-bus",
+		"XDG_RUNTIME_DIR":          "/fixture/runtime",
+		"DISPLAY":                  ":88",
+		"PLUGIN_DATA":              "/managed/data",
+		"PLUGIN_ROOT":              "/managed/root",
+	} {
+		if values[key] != want {
+			t.Fatalf("%s = %q, want %q", key, values[key], want)
+		}
+	}
+}
+
 type portableTestClock struct{}
 
 func (portableTestClock) Now() (string, float64, error) { return "portable-test-boot", 100, nil }

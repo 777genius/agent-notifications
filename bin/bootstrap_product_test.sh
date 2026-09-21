@@ -330,7 +330,7 @@ if args[0]=='setup-codex':
         target.write_bytes(pathlib.Path(sys.argv[0]).read_bytes())
         target.chmod(0o755)
         if os.name=='nt':
-            (dest/'claude-notifications.bat').write_text('@echo off\r\n"%~dp0\\'+target.name+'" %*\r\n')
+            (dest/'claude-notifications.bat').write_text('@echo off\\r\\n"%~dp0\\\\'+target.name+'" %*\\r\\n')
         if os.environ.get('FAIL_SETUP_INIT')=='1': sys.exit(3)
     sys.exit()
 if args[0]=='setup-notifications':

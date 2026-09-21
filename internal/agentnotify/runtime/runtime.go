@@ -12,6 +12,7 @@ import (
 	"github.com/777genius/agent-notifications/internal/agentnotify"
 	"github.com/777genius/agent-notifications/internal/agentnotify/journal"
 	"github.com/777genius/agent-notifications/internal/agentnotify/origin"
+	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/notification"
 	"github.com/777genius/agent-notifications/internal/notifier"
@@ -57,7 +58,8 @@ type Backend struct {
 	drained chan struct{}
 }
 
-// New allocates one Service. It performs no filesystem writes, probes or opens.
+// New allocates one Service. It performs no filesystem writes or state opens;
+// an empty GlobalConfig uses the shared read-only path resolver.
 func New(o Options) (*Backend, error) {
 	if o.ControlRoot == "" {
 		p, e := os.UserConfigDir()
@@ -67,11 +69,11 @@ func New(o Options) (*Backend, error) {
 		o.ControlRoot = filepath.Join(p, "agent-notifications")
 	}
 	if o.GlobalConfig == "" {
-		p, e := os.UserHomeDir()
+		selected, e := config.Resolve(config.SnapshotEnv())
 		if e != nil {
 			return nil, e
 		}
-		o.GlobalConfig = filepath.Join(p, ".claude", "claude-notifications-go", "config.json")
+		o.GlobalConfig = selected.Path
 	}
 	if o.JournalRoot == "" {
 		o.JournalRoot = filepath.Join(o.ControlRoot, "state", "journal")

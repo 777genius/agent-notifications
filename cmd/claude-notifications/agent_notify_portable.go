@@ -63,7 +63,7 @@ func agentPortableRun(command string, args []string, options notifyruntime.Optio
 		return agentNotifyExecute(ctx, "mcp-server", []string{"--integration", string(b.Integration)}, options)
 	}
 	child := exec.CommandContext(ctx, lease.Executable, "portable-primary", "--locator", name, "--runtime-sha256", lease.SHA256)
-	child.Env = []string{"PLUGIN_DATA=" + lease.Binding.DataRoot, "PLUGIN_ROOT=" + os.Getenv("PLUGIN_ROOT")}
+	child.Env = portableChildEnvironment(lease.Binding.DataRoot, os.Getenv("PLUGIN_ROOT"))
 	child.Dir = lease.Binding.RuntimeRoot
 	child.Stdin = os.Stdin
 	child.Stdout = os.Stdout
@@ -80,4 +80,8 @@ func agentPortableRun(command string, args []string, options notifyruntime.Optio
 		return 2
 	}
 	return 0
+}
+
+func portableChildEnvironment(dataRoot, pluginRoot string) []string {
+	return append(os.Environ(), "PLUGIN_DATA="+dataRoot, "PLUGIN_ROOT="+pluginRoot)
 }
