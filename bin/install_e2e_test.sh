@@ -987,14 +987,9 @@ test_no_file_printable_payload_diagnostic() {
 
     setup_test_dir
     local sourceable_install="$TEST_DIR/install-functions.sh"
-    local tool_path="$TEST_DIR/tools"
     local text_payload="$TEST_DIR/text-payload"
     local binary_payload="$TEST_DIR/binary-payload"
     sed '/^main "\$@"$/d' "$INSTALL_SCRIPT" > "$sourceable_install"
-    mkdir -p "$tool_path"
-    for tool in head tr grep od wc; do
-        ln -s "$(command -v "$tool")" "$tool_path/$tool"
-    done
     : > "$text_payload"
     local i=0
     while [ "$i" -lt 256 ]; do
@@ -1006,11 +1001,11 @@ test_no_file_printable_payload_diagnostic() {
     printf 'binary\000bytes' > "$binary_payload"
 
     local text_output binary_output
-    text_output=$(PATH="$tool_path" INSTALL_TARGET_DIR="$TEST_DIR" /bin/bash -c \
-        'source "$1"; PLATFORM=windows; print_unexpected_payload_diagnostics "$2"' \
+    text_output=$(INSTALL_TARGET_DIR="$TEST_DIR" /bin/bash -c \
+        'source "$1"; file() { return 127; }; PLATFORM=windows; print_unexpected_payload_diagnostics "$2"' \
         _ "$sourceable_install" "$text_payload" 2>&1)
-    binary_output=$(PATH="$tool_path" INSTALL_TARGET_DIR="$TEST_DIR" /bin/bash -c \
-        'source "$1"; PLATFORM=windows; print_unexpected_payload_diagnostics "$2"' \
+    binary_output=$(INSTALL_TARGET_DIR="$TEST_DIR" /bin/bash -c \
+        'source "$1"; file() { return 127; }; PLATFORM=windows; print_unexpected_payload_diagnostics "$2"' \
         _ "$sourceable_install" "$binary_payload" 2>&1)
 
     assert_contains "$text_output" "Payload looks like text instead of a raw executable" "Printable payload is diagnosed without file"
