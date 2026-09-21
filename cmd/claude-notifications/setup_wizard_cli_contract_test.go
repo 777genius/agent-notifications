@@ -401,7 +401,8 @@ func TestReportAgentNotifySetupFailureQuotesCodexHome(t *testing.T) {
 func TestQuoteWizardArgsBashRoundTrip(t *testing.T) {
 	want := []string{"plain", "spaces here", "dollar$sign", "apostrophe's", `back\\slash`, "$(touch SHOULD_NOT_EXIST) ; & |"}
 	quoted := strings.Join(quoteWizardArgs(want), " ")
-	cmd := exec.Command("bash", "-c", `eval "set -- $1"; printf '%s\0' "$@"`, "_", quoted)
+	cmd := exec.Command("bash")
+	cmd.Stdin = strings.NewReader("set -- " + quoted + `; printf '%s\0' "$@"`)
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatal(err)

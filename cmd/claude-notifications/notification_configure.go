@@ -512,17 +512,24 @@ func parseNotificationConfigure(args []string) (r notificationConfigureRequest, 
 			return r, false, errors.New("invalid_arguments")
 		}
 		seen[key] = true
-		if key == "request-permission" || key == "json" || key == "preserve-policy" {
+		switch key {
+		case "request-permission":
 			if inline {
 				return r, false, errors.New("invalid_arguments")
 			}
-			if key == "preserve-policy" {
-				r.PreservePolicy = true
-			} else if key == "json" {
-				jsonOutput = true
-			} else {
-				r.RequestPermission = true
+			r.RequestPermission = true
+			continue
+		case "json":
+			if inline {
+				return r, false, errors.New("invalid_arguments")
 			}
+			jsonOutput = true
+			continue
+		case "preserve-policy":
+			if inline {
+				return r, false, errors.New("invalid_arguments")
+			}
+			r.PreservePolicy = true
 			continue
 		}
 		if !inline {
