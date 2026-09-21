@@ -1077,7 +1077,11 @@ func TestNotificationBootstrapWindowsLaunchers(t *testing.T) {
 				t.Fatal(err)
 			}
 			binary := filepath.Join(root, "bin", "claude-notifications-windows-"+arch+".exe")
-			if err := os.WriteFile(binary, []byte("#!/bin/sh\nif [ \"$1\" = --version ]; then echo \"claude-notifications v1.42.0\"; exit 0; fi\nprintf '%s\\n' \"$*\"\n"), 0700); err != nil {
+			fixtureCommand := []byte("#!/bin/sh\nif [ \"$1\" = --version ]; then echo \"claude-notifications v1.42.0\"; exit 0; fi\nprintf '%s\\n' \"$*\"\n")
+			if err := os.WriteFile(binary, fixtureCommand, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, "bin", "claude-notifications.bat"), fixtureCommand, 0700); err != nil {
 				t.Fatal(err)
 			}
 			script := prefix + `
@@ -1086,7 +1090,7 @@ config_preflight() { :; }
 fetch_bootstrap_file() { :; }
 tar() { mkdir -p "$bundle/bin"; touch "$bundle/bin/install.sh"; }
 get_manifest_version() { echo 1.42.0; }
-install_runtime() { cp "$FIXTURE_ROOT/bin/"*.exe "$bundle/bin/"; }
+install_runtime() { cp "$FIXTURE_ROOT/bin/"* "$bundle/bin/"; }
 cli_has_setup_codex_skip_agent_notify() { return 1; }
 BOOTSTRAP_TAG=v1.42.0
 TMPDIR="$FIXTURE_HOME"

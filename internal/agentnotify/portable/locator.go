@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"runtime"
 	"time"
 
 	"github.com/777genius/agent-notifications/internal/installruntime"
@@ -228,9 +229,16 @@ func (b Binding) CheckSnapshot(snapshot installruntime.InstalledSnapshot) error 
 	}
 	executable := filepath.Join(ledger.RuntimeRoot, b.Primary)
 	fingerprint, ok := ledger.Files[executable]
-	if !ok || !fingerprint.Exists || fingerprint.Link != "" || fingerprint.Mode&0111 == 0 {
+	if !ok || !fingerprint.Exists || fingerprint.Link != "" || !portablePrimaryMode(fingerprint.Mode) {
 		return ErrInvalid
 	}
 
 	return nil
+}
+
+func portablePrimaryMode(mode uint32) bool {
+	if runtime.GOOS == "windows" {
+		return true
+	}
+	return mode&0111 != 0
 }

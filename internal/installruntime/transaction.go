@@ -119,6 +119,10 @@ func Fingerprint(path string) (Identity, error) {
 	return safeFingerprint(path)
 }
 
+// IdentityMode returns the permission bits retained by the host fingerprint.
+// Windows has no Unix execute bit and normalizes its file modes accordingly.
+func IdentityMode(mode uint32) uint32 { return identityMode(mode) }
+
 func identity(data []byte, mode uint32) Identity {
 	sum := sha256.Sum256(data)
 	return Identity{Exists: true, SHA256: hex.EncodeToString(sum[:]), Mode: identityMode(mode)}

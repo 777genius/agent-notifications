@@ -151,7 +151,7 @@ func Apply(ctx context.Context, o Options, r Request) (result Result, err error)
 		return result, nil
 	}
 	if !setupOSSupported(o.Platform) {
-		return result, fail("unsupported_platform", fmt.Errorf("explicit setup supports macOS and Linux"))
+		return result, fail("unsupported_platform", fmt.Errorf("explicit setup supports macOS, Linux, and Windows"))
 	}
 	// Read and validate before creating even the setup lock. Missing canonical
 	// global configuration must leave all roots and settings byte-for-byte intact.
@@ -229,7 +229,7 @@ func readSnapshot(ctx context.Context, root string) (installruntime.PolicySnapsh
 		return installruntime.PolicySnapshot{}, installruntime.Identity{}, e
 	}
 	s, e := installruntime.ReadPolicySnapshot(ctx, root)
-	if e == nil && s.Preimage.Exists && s.Preimage.Mode != 0600 {
+	if e == nil && s.Preimage.Exists && s.Preimage.Mode != installruntime.IdentityMode(0600) {
 		e = fmt.Errorf("explicit policy must remain private")
 	}
 	return s, s.Preimage, e
@@ -243,7 +243,7 @@ func qualified(s installruntime.PolicySnapshot, o Options, g uint64) error {
 	if l.ID == "" || l.Owner != o.Owner || l.Generation != g {
 		return fail("generation_changed", fmt.Errorf("expected existing owner and generation"))
 	}
-	if l.WriterFloor > installruntime.ReservationWriterFloor {
+	if l.WriterFloor > installruntime.WriterFloor {
 		return fail("newer_installer_required", fmt.Errorf("installed writer floor is newer"))
 	}
 	registered := false
@@ -260,7 +260,9 @@ func qualified(s installruntime.PolicySnapshot, o Options, g uint64) error {
 	}
 	return nil
 }
-func setupOSSupported(platform string) bool { return platform == "darwin" || platform == "linux" }
+func setupOSSupported(platform string) bool {
+	return platform == "darwin" || platform == "linux" || platform == "windows"
+}
 func changes(r Request) (map[string]json.RawMessage, error) {
 	m := map[string]json.RawMessage{}
 	if r.Route != nil {
@@ -332,8 +334,8 @@ func (o Options) validatePrepared(ctx context.Context, s installruntime.PolicySn
 	if e != nil {
 		return fail("configuration_invalid", e)
 	}
-	if o.Platform == "linux" && p.Route.LocalRouting {
-		return fail("unsupported_platform", fmt.Errorf("linux explicit setup supports navigation none"))
+	if (o.Platform == "linux" || o.Platform == "windows") && p.Route.LocalRouting {
+		return fail("unsupported_platform", fmt.Errorf("%s explicit setup supports navigation none", o.Platform))
 	}
 	if p.Route.LocalRouting {
 		a := Application{p.Route.ApplicationPath, p.Route.TeamID}
@@ -383,7 +385,7 @@ func Inspect(ctx context.Context, o Options, r Request, preparedGlobal []byte) e
 		return err
 	}
 	if !setupOSSupported(o.Platform) {
-		return fail("unsupported_platform", fmt.Errorf("explicit setup supports macOS and Linux"))
+		return fail("unsupported_platform", fmt.Errorf("explicit setup supports macOS, Linux, and Windows"))
 	}
 	s, _, err := readSnapshot(ctx, o.ControlRoot)
 	if err != nil {

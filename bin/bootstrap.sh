@@ -1473,7 +1473,7 @@ install_codex() {
     else
         CONFIGURE_BINARY=$(installed_notification_binary "${CODEX_HOME:-$HOME/.codex}/claude-notifications-go") || return 1
     fi
-    if [ ! -x "$CONFIGURE_BINARY" ]; then
+    if ! notification_command_available "$CONFIGURE_BINARY"; then
         echo "Committed Codex runtime binary missing after setup-codex." >&2
         return 1
     fi
@@ -1482,18 +1482,21 @@ install_codex() {
     echo "Codex installed. Start Codex, run /hooks, review and trust the entries."
 }
 
-# Git Bash installs native executables, without an extensionless launcher.
+# Windows uses the ledger-owned BAT launcher; it does not rely on POSIX execute
+# bits and keeps the client command stable across architecture updates.
 installed_notification_binary() {
-    local root="$1" arch
+    local root="$1"
     case "$(uname -s)" in
         MINGW*|MSYS*|CYGWIN*)
-            case "$(uname -m)" in
-                x86_64|amd64) arch=amd64 ;;
-                aarch64|arm64) arch=arm64 ;;
-                *) return 1 ;;
-            esac
-            printf '%s/bin/claude-notifications-windows-%s.exe\n' "$root" "$arch" ;;
+            printf '%s/bin/claude-notifications.bat\n' "$root" ;;
         *) printf '%s/bin/claude-notifications\n' "$root" ;;
+    esac
+}
+
+notification_command_available() {
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) [ -f "$1" ] ;;
+        *) [ -x "$1" ] ;;
     esac
 }
 
@@ -1561,13 +1564,17 @@ configure_agent_notify() {
     if [ -z "$CONFIGURE_BINARY" ]; then
         CONFIGURE_BINARY=$(installed_notification_binary "$PLUGIN_ROOT") || return 1
     fi
-    if [ ! -x "$CONFIGURE_BINARY" ]; then
+    if ! notification_command_available "$CONFIGURE_BINARY"; then
         echo -e "${YELLOW}⚠ Agent-notify setup skipped; installer binary not found.${NC}" >&2
         echo -e "${YELLOW}  Plugin/hooks install succeeded. Retry after the binary is available.${NC}" >&2
         [ "$AGENT_NOTIFY_REQUEST" = explicit ] && return 1
         return 0
     fi
-    if cli_has_setup_wizard "$CONFIGURE_BINARY"; then
+    case "$(uname -s 2>/dev/null)" in
+        Darwin|Linux) use_wizard=true ;;
+        *) use_wizard=false ;;
+    esac
+    if [ "$use_wizard" = true ] && cli_has_setup_wizard "$CONFIGURE_BINARY"; then
         setup_agent_notify_wizard
         return $?
     fi
@@ -1582,8 +1589,12 @@ configure_agent_notify() {
 
 configure_agent_policy() {
     case "$(uname -s 2>/dev/null)" in
-        Darwin|Linux) ;;
-        *) return 0 ;;
+        Darwin|Linux|MINGW*|MSYS*|CYGWIN*) ;;
+        *)
+            echo -e "${YELLOW}⚠ Agent-notify MCP skipped: unsupported_platform (this installer supports macOS, Linux, and Windows).${NC}" >&2
+            echo -e "${YELLOW}  Plugin/hooks install succeeded. Not a full MCP installation.${NC}" >&2
+            [ "$AGENT_NOTIFY_REQUEST" = explicit ] && return 1
+            return 0 ;;
     esac
     if ! "$CONFIGURE_BINARY" setup-notifications configure --provider "$PRODUCT" ${CONFIGURE_ARGS[@]+"${CONFIGURE_ARGS[@]}"}; then
         echo -e "${YELLOW}⚠ Agent-notify setup failed; plugin/hooks install succeeded.${NC}" >&2

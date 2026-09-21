@@ -123,11 +123,15 @@ curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/main/
 chmod +x "$INSTALLER"
 "$INSTALLER"
 if [ "$SKIP_AGENT_NOTIFY" != true ]; then
-  NOTIFY_BIN="${CLAUDE_PLUGIN_ROOT}/bin/claude-notifications"
-  if [ ! -x "$NOTIFY_BIN" ]; then
+  case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) NOTIFY_BIN="${CLAUDE_PLUGIN_ROOT}/bin/claude-notifications.bat"; NOTIFY_READY=(-f "$NOTIFY_BIN"); USE_WIZARD=false ;;
+    Darwin|Linux) NOTIFY_BIN="${CLAUDE_PLUGIN_ROOT}/bin/claude-notifications"; NOTIFY_READY=(-x "$NOTIFY_BIN"); USE_WIZARD=true ;;
+    *) NOTIFY_BIN="${CLAUDE_PLUGIN_ROOT}/bin/claude-notifications"; NOTIFY_READY=(-x "$NOTIFY_BIN"); USE_WIZARD=false ;;
+  esac
+  if ! "${NOTIFY_READY[@]}"; then
     echo "agent-notify setup skipped; installer binary not found. Plugin install succeeded." >&2
     [ "$SEEN_AGENT_NOTIFY" != true ] || exit 1
-  elif "$NOTIFY_BIN" --help </dev/null 2>/dev/null | grep -Fq -- 'setup-notifications wizard'; then
+  elif [ "$USE_WIZARD" = true ] && "$NOTIFY_BIN" --help </dev/null 2>/dev/null | grep -Fq -- 'setup-notifications wizard'; then
     package=""
     if [ -f "${CLAUDE_PLUGIN_ROOT}/portable-package/plugin.json" ]; then
       package="${CLAUDE_PLUGIN_ROOT}/portable-package"

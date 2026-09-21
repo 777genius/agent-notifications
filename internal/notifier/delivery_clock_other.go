@@ -1,4 +1,4 @@
-//go:build (!darwin || !cgo) && !linux
+//go:build (!darwin || !cgo) && !linux && !windows
 
 package notifier
 

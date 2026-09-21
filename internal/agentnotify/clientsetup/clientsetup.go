@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"unicode/utf8"
 
@@ -112,7 +113,7 @@ func checkRuntime(r Request, s installruntime.InstalledSnapshot) error {
 			return ErrConflict
 		}
 		if want.Link == "" {
-			if want.Mode&0111 == 0 {
+			if !regularCommandExecutable(want.Mode) {
 				return ErrConflict
 			}
 			break
@@ -127,6 +128,15 @@ func checkRuntime(r Request, s installruntime.InstalledSnapshot) error {
 		return ErrConflict
 	}
 	return nil
+}
+
+// Windows identityMode stores 0666/0444 only. Unix execute bits are not an NTFS
+// concept and must not reject a ledger-owned regular command.
+func regularCommandExecutable(mode uint32) bool {
+	if runtime.GOOS == "windows" {
+		return true
+	}
+	return mode&0111 != 0
 }
 
 // Apply does not execute the command, enable delivery, infer chat context, or
@@ -195,7 +205,7 @@ func calculate(ctx context.Context, r Request, fault func(string) error, inspect
 		}
 		_, installed := l.Consumers[id]
 		want, tracked := l.Files[path]
-		if installed != tracked || installed != si.Exists || (tracked && (want != si || si.Mode != 0600)) {
+		if installed != tracked || installed != si.Exists || (tracked && (want != si || si.Mode != installruntime.IdentityMode(0600))) {
 			return nil, ErrConflict
 		}
 		var prev *registration.Ownership
