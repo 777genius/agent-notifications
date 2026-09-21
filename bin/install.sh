@@ -925,25 +925,37 @@ EOF
     chmod +x "$symlink_path" 2>/dev/null || true
 }
 
-# Download checksums file
-download_checksums() {
+# Download checksums file without exposing a partial manifest at the live path.
+download_checksums() (
     guard_download_paths "$CHECKSUMS_PATH"
     echo -e "${BLUE}📝 Downloading checksums...${NC}"
 
+    checksum_temp=''
+    checksum_temp=$(mktemp "${CHECKSUMS_PATH}.download.XXXXXX") || return 1
+    trap 'guard_download_paths "$checksum_temp"; rm -f "$checksum_temp"; cleanup_install_config' EXIT
+
+    local downloaded=false
     if command -v curl &> /dev/null; then
-        if curl -fsSL "${CURL_EXTRA_OPTS[@]}" --connect-timeout "$CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" "$CHECKSUMS_URL" -o "$CHECKSUMS_PATH" 2>/dev/null; then
-            return 0
+        if curl -fsSL "${CURL_EXTRA_OPTS[@]}" --connect-timeout "$CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" "$CHECKSUMS_URL" -o "$checksum_temp" 2>/dev/null; then
+            downloaded=true
         fi
     elif command -v wget &> /dev/null; then
-        if wget -q "$CHECKSUMS_URL" -O "$CHECKSUMS_PATH" 2>/dev/null; then
-            return 0
+        if wget -q "$CHECKSUMS_URL" -O "$checksum_temp" 2>/dev/null; then
+            downloaded=true
         fi
+    fi
+
+    if [ "$downloaded" = true ] &&
+       checksum_manifest_entry "$checksum_temp" "$BINARY_NAME" >/dev/null &&
+       guard_download_paths "$checksum_temp" "$CHECKSUMS_PATH" &&
+       mv -f "$checksum_temp" "$CHECKSUMS_PATH"; then
+        return 0
     fi
 
     # Checksums optional - just warn
     echo -e "${YELLOW}⚠ Could not download checksums (verification will be skipped)${NC}"
     return 1
-}
+)
 
 # Download binary with progress bar
 download_binary() (
@@ -1106,18 +1118,25 @@ verify_checksum() {
     return 1
 }
 
-# Verify one exact release filename. Every non-empty checksums.txt record must
-# be well formed; the requested filename must occur exactly once.
-verify_checksum_file() {
-    local file="$1" filename="$2" expected actual
-    [ -f "$CHECKSUMS_PATH" ] || { echo "Checksum manifest missing for ${filename}" >&2; return 1; }
-    expected=$(awk -v target="$filename" '
+# Read one exact release filename. Every non-empty manifest record must be
+# well formed; the requested filename must occur exactly once.
+checksum_manifest_entry() {
+    local manifest="$1" filename="$2"
+    [ -f "$manifest" ] || return 1
+    awk -v target="$filename" '
         BEGIN { found=0; bad=0 }
         /^[[:space:]]*$/ { next }
         NF != 2 || $1 !~ /^[0-9A-Fa-f][0-9A-Fa-f]*$/ || length($1) != 64 { bad=1; next }
         { name=$2; sub(/^\*/, "", name); if (name == target) { found++; value=$1 } }
         END { if (bad || found != 1) exit 1; print value }
-    ' "$CHECKSUMS_PATH" 2>/dev/null) || {
+    ' "$manifest" 2>/dev/null
+}
+
+# Verify one exact release filename.
+verify_checksum_file() {
+    local file="$1" filename="$2" expected actual
+    [ -f "$CHECKSUMS_PATH" ] || { echo "Checksum manifest missing for ${filename}" >&2; return 1; }
+    expected=$(checksum_manifest_entry "$CHECKSUMS_PATH" "$filename") || {
         echo "Invalid, missing, or duplicate checksum entry for ${filename}" >&2
         return 1
     }

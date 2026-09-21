@@ -402,3 +402,43 @@ scenario=notifier_integrity
     done
     echo 'PASS: notifier archive checksum and signature fail closed'
 )
+
+# A failed or malformed manifest refresh must not truncate the last valid
+# manifest. Successful validated bytes replace it atomically.
+scenario=checksum_manifest_download
+(
+    export INSTALL_TARGET_DIR="$sandbox/checksum-manifest"
+    mkdir -p "$INSTALL_TARGET_DIR"
+    source "$sandbox/functions.sh"
+    INSTALL_PRIVATE_DOWNLOAD=true
+    CHECKSUMS_PATH="$INSTALL_TARGET_DIR/checksums.txt"
+    CHECKSUMS_URL='https://release.invalid/checksums.txt'
+    BINARY_NAME=test
+    old_digest=$(printf '%064d' 1)
+    new_digest=$(printf '%064d' 2)
+    printf '%s  test\n' "$old_digest" > "$CHECKSUMS_PATH"
+    transfer=failed
+    curl() {
+        local output=''
+        while [ "$#" -gt 0 ]; do
+            if [ "$1" = -o ]; then output="$2"; shift; fi
+            shift
+        done
+        case "$transfer" in
+            failed) printf partial > "$output"; return 22 ;;
+            malformed) printf 'not-a-checksum  test\n' > "$output" ;;
+            valid) printf '%s  test\n' "$new_digest" > "$output" ;;
+        esac
+    }
+    for transfer in failed malformed; do
+        download_checksums && status=0 || status=$?
+        assert "$transfer manifest refresh must fail" test "$status" != 0
+        assert_output "$old_digest  test" "$transfer manifest refresh changed live bytes" cat "$CHECKSUMS_PATH"
+    done
+    transfer=valid
+    download_checksums
+    assert_output "$new_digest  test" 'validated manifest did not replace live bytes' cat "$CHECKSUMS_PATH"
+    artifacts=$(find "$INSTALL_TARGET_DIR" -maxdepth 1 -name 'checksums.txt.download.*' -print)
+    assert_output '' 'checksum manifest temp file was not cleaned' printf %s "$artifacts"
+    echo 'PASS: checksum manifest refresh is validated and atomic'
+)
