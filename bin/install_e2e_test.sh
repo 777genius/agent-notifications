@@ -896,6 +896,31 @@ test_lock_cleanup_on_exit() {
     cleanup_test_dir
 }
 
+test_lock_release_preserves_replacement_owner() {
+    echo -e "\n${CYAN}▶ test_lock_release_preserves_replacement_owner${NC}"
+
+    setup_test_dir
+    local sourceable_install="$TEST_DIR/install-functions.sh"
+    sed '/^main "\$@"$/d' "$INSTALL_SCRIPT" > "$sourceable_install"
+
+    set +e
+    INSTALL_TARGET_DIR="$TEST_DIR" /bin/bash -c '
+        source "$1"
+        acquire_lock
+        rm -rf "$LOCKFILE"
+        mkdir "$LOCKFILE"
+        replacement_owner=$(mktemp -d "$LOCKFILE/.owner.XXXXXX")
+        release_lock
+        test -d "$LOCKFILE" && test -d "$replacement_owner"
+        rm -rf "$LOCKFILE"
+    ' _ "$sourceable_install"
+    local exit_code=$?
+    set -e
+
+    assert_exit_code 0 "$exit_code" "Old process cannot remove a replacement owner's lock"
+    cleanup_test_dir
+}
+
 test_no_write_permission() {
     echo -e "\n${CYAN}▶ test_no_write_permission${NC}"
 
@@ -1670,6 +1695,36 @@ test_mock_download_success() {
              run_with_timeout 60 bash "$INSTALL_SCRIPT" 2>&1)
     second_exit_code=$?
     assert_exit_code 0 $second_exit_code "Second same-target install succeeds after lock release"
+
+    if [ "$(get_platform)" = "darwin" ]; then
+        local repair_output repair_exit_code modern_app
+        modern_app="$TEST_DIR/ClaudeNotifier.app"
+
+        rm -f "${modern_app}.managed-runtime.json"
+        repair_output=$(RELEASE_URL="http://localhost:$MOCK_PORT" \
+                 CHECKSUMS_URL="http://localhost:$MOCK_PORT/checksums.txt" \
+                 NOTIFIER_URL="http://localhost:$MOCK_PORT/valid.zip" \
+                 INSTALL_TARGET_DIR="$TEST_DIR" \
+                 run_with_timeout 60 bash "$INSTALL_SCRIPT" 2>&1)
+        repair_exit_code=$?
+        assert_exit_code 0 "$repair_exit_code" "Missing modern notifier sidecar triggers reacquisition"
+        assert_file_exists "${modern_app}.managed-runtime.json" "Modern notifier sidecar restored"
+
+        printf '\n# signature tamper\n' >> "$modern_app/Contents/MacOS/terminal-notifier-modern"
+        repair_output=$(RELEASE_URL="http://localhost:$MOCK_PORT" \
+                 CHECKSUMS_URL="http://localhost:$MOCK_PORT/checksums.txt" \
+                 NOTIFIER_URL="http://localhost:$MOCK_PORT/valid.zip" \
+                 INSTALL_TARGET_DIR="$TEST_DIR" \
+                 run_with_timeout 60 bash "$INSTALL_SCRIPT" 2>&1)
+        repair_exit_code=$?
+        assert_exit_code 0 "$repair_exit_code" "Invalid modern notifier signature triggers reacquisition"
+        if codesign --verify --verbose "$modern_app" >/dev/null 2>&1; then
+            pass_test "Modern notifier signature restored"
+        else
+            fail_test "Modern notifier signature restored" "codesign verification failed after reacquisition"
+        fi
+    fi
+
     assert_desktop_runtime "$TEST_DIR"
     assert_file_exists "$TEST_DIR/$binary_name" "Binary downloaded"
     # On Windows, wrapper is .bat file; on Unix it's a symlink
@@ -2746,6 +2801,7 @@ main() {
         test_lock_prevents_parallel
         test_lock_stale_removal
         test_lock_cleanup_on_exit
+        test_lock_release_preserves_replacement_owner
         test_no_write_permission
         test_install_target_dir
         test_directory_auto_created

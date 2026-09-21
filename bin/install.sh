@@ -177,6 +177,7 @@ guard_install_paths() {
 # Lockfile to prevent parallel installations
 LOCKFILE="${SCRIPT_DIR}/.install.lock"
 LOCK_HELD=false
+LOCK_OWNER_DIR=""
 
 # Network settings
 MAX_RETRIES=3
@@ -440,10 +441,19 @@ print_curl_failure_guidance() {
 
 # Acquire lock to prevent parallel installations
 release_lock() {
-    # Explicit success-path release and the EXIT fallback share this process
-    # state so the fallback cannot remove a lock acquired by a later process.
+    local owner_dir=""
+
     [ "$LOCK_HELD" = true ] || return 0
+    owner_dir="$LOCK_OWNER_DIR"
     LOCK_HELD=false
+    LOCK_OWNER_DIR=""
+
+    # Remove only this process's unique ownership marker. If a stale-lock
+    # takeover replaced the directory, this path no longer exists and the new
+    # owner's lock remains untouched. The root can be removed only after our
+    # marker was removed successfully and no replacement marker is present.
+    [ -n "$owner_dir" ] || return 0
+    rmdir "$owner_dir" 2>/dev/null || return 0
     rmdir "$LOCKFILE" 2>/dev/null || :
     return 0
 }
@@ -479,6 +489,11 @@ acquire_lock() {
         fi
     fi
 
+    if ! LOCK_OWNER_DIR=$(mktemp -d "$LOCKFILE/.owner.XXXXXX"); then
+        echo -e "${RED}✗ Could not record installation lock ownership${NC}" >&2
+        rmdir "$LOCKFILE" 2>/dev/null || :
+        return 1
+    fi
     LOCK_HELD=true
     # Set trap to release lock on exit
     trap 'release_lock; cleanup_install_config' EXIT
@@ -1506,6 +1521,15 @@ cleanup() {
     rm -f "$CHECKSUMS_PATH" 2>/dev/null || true
 }
 
+modern_notifier_usable() {
+    local app="$1"
+    [ -d "$app" ] &&
+        [ -x "$app/Contents/MacOS/terminal-notifier-modern" ] &&
+        [ -f "${app}.managed-runtime.json" ] &&
+        command -v codesign >/dev/null 2>&1 &&
+        codesign --verify --verbose "$app" >/dev/null 2>&1
+}
+
 # Download ClaudeNotifier for macOS (modern UNUserNotificationCenter, works on M4 Sequoia)
 download_terminal_notifier_modern() {
     local MODERN_APP="${SCRIPT_DIR}/ClaudeNotifier.app"
@@ -1514,7 +1538,7 @@ download_terminal_notifier_modern() {
     local TEMP_ZIP="${TMPDIR:-${TEMP:-/tmp}}/ClaudeNotifier-$$.zip"
 
     # Check if already installed
-    if [ -d "$MODERN_APP" ] && [ -x "$MODERN_APP/Contents/MacOS/terminal-notifier-modern" ]; then
+    if modern_notifier_usable "$MODERN_APP"; then
         echo -e "${GREEN}✓${NC} ClaudeNotifier already installed"
         return 0
     fi
@@ -1588,7 +1612,7 @@ download_terminal_notifier_modern() {
         # Remove quarantine attribute (downloaded files are flagged by Gatekeeper)
         xattr -cr "$MODERN_APP" 2>/dev/null || true
         # Verify code signature (notarized builds have valid Developer ID signature)
-        if codesign --verify --verbose "$MODERN_APP" 2>/dev/null; then
+        if modern_notifier_usable "$MODERN_APP"; then
             echo -e "${GREEN}✓${NC} Code signature verified"
         else
             echo -e "${RED}✗ Code signature verification failed${NC}" >&2
@@ -2103,7 +2127,7 @@ EOF
 desktop_runtime_usable() {
     case "$PLATFORM" in
         darwin)
-            [ -x "$SCRIPT_DIR/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern" ] ||
+            modern_notifier_usable "$SCRIPT_DIR/ClaudeNotifier.app" ||
                 [ -x "$SCRIPT_DIR/terminal-notifier.app/Contents/MacOS/terminal-notifier" ] ;;
         windows) [ -x "$FOCUS_HANDLER_PATH" ] ;;
         *) return 0 ;;
