@@ -3161,15 +3161,12 @@ func TestSetupWizardResumeRestoresMixedPerClientUnitsE2E(t *testing.T) {
 		"--control-root", env.control, "--runtime-root", env.runtime, "--global-config", env.global,
 		"--claude-executable", env.probe, "--codex-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
 	}
-	if code := executeSetupWizardWith(ctx, resume, &out, io.Discard, strings.NewReader(""), false); code == 2 {
-		t.Fatalf("mixed resume invalid: %s", out.String())
+	if code := executeSetupWizardWith(ctx, resume, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("mixed resume failed: %d %s", code, out.String())
 	}
 	got := decodeWizardJSON(t, out)
-	if got.Outcome == "cancelled" || got.Reason == "empty_selection" {
-		t.Fatalf("did not restore pending agents: %+v", got)
-	}
-	if got.Reason == "noninteractive_requires_yes" {
-		t.Fatalf("matching pending intent still required --yes: %+v", got)
+	if got.Outcome != "completed" {
+		t.Fatalf("mixed resume did not complete: %+v", got)
 	}
 }
 
