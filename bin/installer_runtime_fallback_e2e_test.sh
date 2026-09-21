@@ -97,7 +97,7 @@ def runtime_path(case, python=False, node=False):
     bin_dir = case / 'runtime-bin'
     bin_dir.mkdir()
     names = ['bash', 'sh', 'mktemp', 'rm', 'cat', 'chmod', 'mkdir', 'ln', 'uname',
-             'tr', 'head', 'cp', 'mv', 'env', 'true', 'false', 'grep', 'sed', 'awk',
+             'tr', 'wc', 'head', 'cp', 'mv', 'env', 'true', 'false', 'grep', 'sed', 'awk',
              'dirname', 'basename', 'printf', 'pwd', 'cygpath', 'sleep']
     if python:
         names.append('python3')
@@ -157,21 +157,27 @@ sha = '0123456789abcdef0123456789abcdef01234567'
 loader = (root / 'bin/setup.sh').read_text(encoding='utf-8')
 curl_stub = r'''#!/usr/bin/env bash
 set -eu
-output=""; url=""
+output=""; url=""; format=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         -o) output="$2"; shift 2 ;;
+        -w) format="$2"; shift 2 ;;
         -*) shift ;;
         *) url="$1"; shift ;;
     esac
 done
 printf '%s\n' "$url" >> "$CASE_DIR/requests"
 case "$url" in
-    https://api.github.com/repos/777genius/agent-notifications/releases/latest) kind=latest ;;
+    https://github.com/777genius/agent-notifications/releases/latest) kind=latest ;;
     https://api.github.com/repos/777genius/agent-notifications/commits/v1.43.0) kind=commit ;;
     https://raw.githubusercontent.com/777genius/agent-notifications/*/bin/bootstrap.sh) kind=bootstrap ;;
     *) echo "Unexpected URL: $url" >&2; exit 99 ;;
 esac
+if [ "$kind" = latest ] && [ -n "$format" ]; then
+    cat "$CASE_DIR/latest_url"
+    if [ "${FAIL_DOWNLOAD:-}" = latest ]; then exit 22; fi
+    exit 0
+fi
 if [ -n "$output" ]; then cat "$CASE_DIR/$kind" > "$output"; else cat "$CASE_DIR/$kind"; fi
 '''
 bootstrap_stub = '''#!/usr/bin/env bash
@@ -190,8 +196,10 @@ def setup_case(name, python=False, node=False, expected=0, preferred=False, stub
         if stub_python:
             (case / 'bin/python3').write_text(STORE_PYTHON3_STUB, encoding='utf-8')
             (case / 'bin/python3').chmod(0o755)
-        (case / 'latest').write_text(json.dumps({'tag_name': 'v1.43.0'}), encoding='utf-8')
-        (case / 'commit').write_text(json.dumps({'sha': sha}), encoding='utf-8')
+        (case / 'latest_url').write_text(
+            'https://github.com/777genius/agent-notifications/releases/tag/v1.43.0',
+            encoding='utf-8')
+        (case / 'commit').write_text(sha, encoding='utf-8')
         (case / 'bootstrap').write_text(bootstrap_stub, encoding='utf-8')
         path = bash_path(case / 'bin') + ':' + runtime_path(case, python=python, node=node)
         if preferred:
@@ -213,15 +221,11 @@ def setup_case(name, python=False, node=False, expected=0, preferred=False, stub
             ran = json.loads((case / 'ran.json').read_text(encoding='utf-8'))
             if ran['tag'] != 'v1.43.0' or ran['sha'] != sha:
                 fail(name, repr(ran))
-            if preferred:
-                log = (case / 'runtime.log').read_text(encoding='utf-8')
-                if not log.startswith('python3') or 'node' in log:
-                    fail(name, log)
+            if preferred and (case / 'runtime.log').exists():
+                fail(name, 'loader invoked an optional runtime')
         else:
             if result.returncode == 0 or (case / 'ran.json').exists():
                 fail(name, 'installer ran without a JSON runtime: ' + describe(result))
-            if 'python3 or node is required' not in result.stderr:
-                fail(name, describe(result))
         if list((case / 'tmp space').iterdir()):
             fail(name, 'leaked staging directory')
         pass_name(name)
@@ -235,14 +239,14 @@ if HOST_NODE:
     setup_case('setup.sh node-only', node=True)
 else:
     print('SKIP setup.sh node-only')
-setup_case('setup.sh neither runtime', expected=1)
+setup_case('setup.sh neither runtime', expected=0)
 if host_cmd('python3') and HOST_NODE:
     setup_case('setup.sh python preferred', python=True, node=True, preferred=True)
 if HOST_NODE:
     setup_case('setup.sh stub python3 falls back to node', node=True, stub_python=True)
 else:
     print('SKIP setup.sh stub python3 falls back to node')
-setup_case('setup.sh stub python3 without node', stub_python=True, expected=1)
+setup_case('setup.sh stub python3 without node', stub_python=True, expected=0)
 
 # --- bootstrap.sh: node-only commit parse and checksum verify ---
 if HOST_NODE:

@@ -36,7 +36,7 @@ Desktop notifications and sounds for **Claude Code and Codex CLI**. Know when a 
 
 ## Install Or Update
 
-Requires Claude Code and/or Codex CLI, plus **Python 3.6+** (`python3`) **or** **Node.js** (`node`) for the installer. Python is used when both are present. On Windows, use **Git Bash** with native Windows Python or Node. A Microsoft Store or WSL `python3` stub is skipped when Node is available.
+Requires Claude Code and/or Codex CLI. The base installer requires only **bash**, **curl**, a working temporary directory, and a system SHA-256 utility (`sha256sum` or `shasum`); **Python, Node.js, and Go are not required**. On Windows, use **Git Bash**. Optional iTerm2 exact tab/pane targeting may use its separate Python API integration.
 
 ```bash
 (set -o pipefail; curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/a512deb5819c3f8c7c3be8335f713cc8bb734fc3/bin/setup.sh | bash)

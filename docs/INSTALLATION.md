@@ -5,9 +5,10 @@
 ### Prerequisites
 
 - Claude Code and/or Codex CLI for the products you select
-- Python **3.6 or newer** (`python3`) **or** Node.js (`node`) for installer metadata and checksum validation. Python is used when both are present. Check with `python3 --version` or `node --version`.
-- **Windows users:** Git Bash (included with [Git for Windows](https://git-scm.com/download/win)) and either native Windows Python as `python3` or Node.js as `node` from Git Bash. A `python` or `py` command alone is insufficient; use native interpreters, not WSL. A Microsoft Store or WSL `python3` stub is skipped when a working `node` is available.
-- **macOS/Linux users:** Ensure `python3` or `node` is available in the shell running the installer. Claude Code already provides `node` on typical installs.
+- **bash** and **curl**, plus a writable temporary directory and a system SHA-256 utility (`sha256sum` or `shasum`). Python, Node.js, and Go are not required for base installation.
+- **Windows users:** Git Bash (included with [Git for Windows](https://git-scm.com/download/win)); use its bundled `bash`, `curl`, and SHA-256 utility. Do not run this command from WSL.
+- **macOS/Linux users:** use the system `bash`, `curl`, and `sha256sum`/`shasum`.
+- iTerm2's optional exact tab/pane integration has a separate, optional Python API requirement; it is not an installation prerequisite.
 
 ### Quick Install (Recommended)
 
