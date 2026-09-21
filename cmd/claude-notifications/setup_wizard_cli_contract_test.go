@@ -399,6 +399,9 @@ func TestReportAgentNotifySetupFailureQuotesCodexHome(t *testing.T) {
 }
 
 func TestQuoteWizardArgsBashRoundTrip(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows retry commands use PowerShell quoting")
+	}
 	want := []string{"plain", "spaces here", "dollar$sign", "apostrophe's", `back\\slash`, "$(touch SHOULD_NOT_EXIST) ; & |"}
 	quoted := strings.Join(quoteWizardArgs(want), " ")
 	cmd := exec.Command("bash")

@@ -2832,12 +2832,16 @@ func discoveryConfigPath(req Request, agent portable.Integration) string {
 }
 
 func userHomeDir() string {
+	if home := strings.TrimSpace(os.Getenv("HOME")); home != "" {
+		return home
+	}
+	if home := strings.TrimSpace(os.Getenv("USERPROFILE")); home != "" {
+		return home
+	}
 	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
 		return home
 	}
-	// os.UserHomeDir uses USERPROFILE on Windows. Keep the explicit fallback
-	// for restricted/test environments where the platform lookup is unavailable.
-	return strings.TrimSpace(os.Getenv("USERPROFILE"))
+	return ""
 }
 
 func bindDiscoveredMCP(req *Request, agents []portable.Integration) {
