@@ -12,6 +12,26 @@ export HOME="$SANDBOX/home space" USERPROFILE="$SANDBOX/home space" CODEX_HOME="
 export CLAUDE_CONFIG_DIR="$SANDBOX/claude config" CLAUDE_HOME="$SANDBOX/claude home"
 mkdir -p "$HOME" "$CODEX_HOME" "$CLAUDE_CONFIG_DIR" "$CLAUDE_HOME"
 sed '/^main "\$@"$/d' "$ROOT/bin/bootstrap.sh" > "$SANDBOX/functions.sh"
+
+# Startup path resolution must be nounset-safe on Git Bash and must not require
+# a home fallback when an explicit Claude path is available.
+env -u HOME -u CLAUDE_CONFIG_DIR -u CLAUDE_HOME USERPROFILE="$SANDBOX/windows profile" \
+    bash "$ROOT/bin/bootstrap.sh" --help >/dev/null
+env -u HOME -u USERPROFILE -u CLAUDE_HOME CLAUDE_CONFIG_DIR="$SANDBOX/explicit config" \
+    bash "$ROOT/bin/bootstrap.sh" --help >/dev/null
+env -u HOME -u CLAUDE_CONFIG_DIR -u CLAUDE_HOME USERPROFILE="$SANDBOX/windows profile" \
+    bash -c 'source "$1"; [ "$INSTALLER_HOME" = "$2" ] && [ "$CLAUDE_HOME" = "$2/.claude" ]' \
+    _ "$SANDBOX/functions.sh" "$SANDBOX/windows profile"
+env -u HOME -u USERPROFILE -u CLAUDE_HOME CLAUDE_CONFIG_DIR="$SANDBOX/explicit config" \
+    bash -c 'source "$1"; [ -z "$INSTALLER_HOME" ] && [ "$CLAUDE_HOME" = "$2" ]' \
+    _ "$SANDBOX/functions.sh" "$SANDBOX/explicit config"
+env -u HOME -u USERPROFILE -u CLAUDE_CONFIG_DIR CLAUDE_HOME="$SANDBOX/legacy home" \
+    bash -c 'source "$1"; [ -z "$INSTALLER_HOME" ] && [ "$CLAUDE_HOME" = "$2" ]' \
+    _ "$SANDBOX/functions.sh" "$SANDBOX/legacy home"
+env -u HOME USERPROFILE="$SANDBOX/windows profile" CLAUDE_HOME="$SANDBOX/legacy home" \
+    CLAUDE_CONFIG_DIR="$SANDBOX/explicit config" \
+    bash -c 'source "$1"; [ "$CLAUDE_HOME" = "$2" ]' \
+    _ "$SANDBOX/functions.sh" "$SANDBOX/explicit config"
 source "$SANDBOX/functions.sh"
 quoted=$(quote_shell_command "$SANDBOX/bin space/cli" --package "$SANDBOX/pkg space" --codex-home "$CODEX_HOME")
 eval "set -- $quoted"

@@ -847,7 +847,8 @@ download_utility() (
     # These sound tools do not implement --version; do not launch audio/device
     # enumeration to validate an optional download.
     if [ "$downloaded" = true ] && guard_install_paths "$temp_path" && chmod +x "$temp_path" &&
-       utility_usable "$temp_path" && guard_install_paths "$util_path" && mv -f "$temp_path" "$util_path"; then
+       utility_usable "$temp_path" && verify_checksum_file "$temp_path" "$util_name" &&
+       guard_install_paths "$util_path" && mv -f "$temp_path" "$util_path"; then
         echo -e "${GREEN}✓${NC} ${util_name} downloaded"
         return 0
     fi
@@ -859,6 +860,10 @@ download_utility() (
 download_utilities() {
     echo ""
     echo -e "${BLUE}📦 Downloading utility binaries...${NC}"
+
+    # Fetch the manifest from the same pinned release URL as the optional
+    # companions. Verification still fails closed if acquisition is unavailable.
+    [ -f "$CHECKSUMS_PATH" ] || download_checksums || true
 
     local status
     download_utility "$SOUND_PREVIEW_NAME" "$SOUND_PREVIEW_PATH" || {
@@ -1089,43 +1094,46 @@ verify_checksum() {
 
     echo -e "${BLUE}🔒 Verifying checksum...${NC}"
 
-    # Extract expected checksum for our binary
-    local expected_sum=$(grep "$BINARY_NAME" "$CHECKSUMS_PATH" 2>/dev/null | awk '{print $1}')
-
-    if [ -z "$expected_sum" ]; then
-        [ "${REQUIRE_CHECKSUM:-false}" != true ] || return 1
-        echo -e "${YELLOW}⚠ Checksum not found for ${BINARY_NAME} (skipping)${NC}"
+    if verify_checksum_file "$BINARY_PATH" "$BINARY_NAME"; then
         return 0
     fi
-
-    # Calculate actual checksum
-    # Note: On Windows (MSYS2/Git Bash/Cygwin), sha256sum prefixes output with \
-    # when the file path contains backslashes. awk sub() strips this prefix.
-    # This is safe because SHA-256 hashes are hex-only [0-9a-f] and never contain \.
-    local actual_sum=""
-    if command -v shasum &> /dev/null; then
-        actual_sum=$(shasum -a 256 "$BINARY_PATH" 2>/dev/null | awk '{sub(/^\\/, "", $1); print $1}')
-    elif command -v sha256sum &> /dev/null; then
-        actual_sum=$(sha256sum "$BINARY_PATH" 2>/dev/null | awk '{sub(/^\\/, "", $1); print $1}')
-    else
-        [ "${REQUIRE_CHECKSUM:-false}" != true ] || return 1
-        echo -e "${YELLOW}⚠ sha256sum not available (skipping checksum)${NC}"
+    if [ "${REQUIRE_CHECKSUM:-false}" != true ] && [ ! -f "$CHECKSUMS_PATH" ]; then
+        echo -e "${YELLOW}⚠ Skipping checksum verification (checksums.txt not available)${NC}"
         return 0
     fi
+    guard_download_paths "$BINARY_PATH"
+    rm -f "$BINARY_PATH"
+    return 1
+}
 
-    if [ "$expected_sum" = "$actual_sum" ]; then
-        echo -e "${GREEN}✓ Checksum verified${NC}"
-        return 0
+# Verify one exact release filename. Every non-empty checksums.txt record must
+# be well formed; the requested filename must occur exactly once.
+verify_checksum_file() {
+    local file="$1" filename="$2" expected actual
+    [ -f "$CHECKSUMS_PATH" ] || { echo "Checksum manifest missing for ${filename}" >&2; return 1; }
+    expected=$(awk -v target="$filename" '
+        BEGIN { found=0; bad=0 }
+        /^[[:space:]]*$/ { next }
+        NF != 2 || $1 !~ /^[0-9A-Fa-f][0-9A-Fa-f]*$/ || length($1) != 64 { bad=1; next }
+        { name=$2; sub(/^\*/, "", name); if (name == target) { found++; value=$1 } }
+        END { if (bad || found != 1) exit 1; print value }
+    ' "$CHECKSUMS_PATH" 2>/dev/null) || {
+        echo "Invalid, missing, or duplicate checksum entry for ${filename}" >&2
+        return 1
+    }
+    if command -v shasum >/dev/null 2>&1; then
+        actual=$(shasum -a 256 "$file" 2>/dev/null | awk '{sub(/^\\/, "", $1); print tolower($1)}')
+    elif command -v sha256sum >/dev/null 2>&1; then
+        actual=$(sha256sum "$file" 2>/dev/null | awk '{sub(/^\\/, "", $1); print tolower($1)}')
     else
-        echo -e "${RED}✗ Checksum mismatch!${NC}" >&2
-        echo -e "${RED}  Expected: ${expected_sum}${NC}" >&2
-        echo -e "${RED}  Got:      ${actual_sum}${NC}" >&2
-        print_unexpected_payload_diagnostics "$BINARY_PATH"
-        echo -e "${YELLOW}The downloaded file may be corrupted. Try again.${NC}" >&2
-        guard_download_paths "$BINARY_PATH"
-        rm -f "$BINARY_PATH"
+        echo "No SHA-256 checksum utility available for ${filename}" >&2
         return 1
     fi
+    [ "$(printf '%s' "$expected" | tr '[:upper:]' '[:lower:]')" = "$actual" ] || {
+        echo "Checksum mismatch for ${filename}" >&2
+        return 1
+    }
+    echo -e "${GREEN}✓ Checksum verified: ${filename}${NC}"
 }
 
 # Verify downloaded binary
@@ -1439,6 +1447,7 @@ cleanup() {
 download_terminal_notifier_modern() {
     local MODERN_APP="${SCRIPT_DIR}/ClaudeNotifier.app"
     local MODERN_URL="${MODERN_NOTIFIER_URL:-${RELEASE_URL}/ClaudeNotifier.app.zip}"
+    local MODERN_ASSET_NAME="ClaudeNotifier.app.zip"
     local TEMP_ZIP="${TMPDIR:-${TEMP:-/tmp}}/ClaudeNotifier-$$.zip"
 
     # Check if already installed
@@ -1484,6 +1493,13 @@ download_terminal_notifier_modern() {
         return 1
     fi
 
+    # Verify the archive bytes before extraction or any live-path mutation.
+    if ! verify_checksum_file "$TEMP_ZIP" "$MODERN_ASSET_NAME"; then
+        guard_install_paths "$TEMP_ZIP"
+        rm -f "$TEMP_ZIP"
+        return 1
+    fi
+
     # Verify zip
     if ! unzip -t "$TEMP_ZIP" &>/dev/null; then
         echo -e "${YELLOW}⚠ Downloaded file is not a valid zip, falling back to legacy${NC}"
@@ -1512,7 +1528,10 @@ download_terminal_notifier_modern() {
         if codesign --verify --verbose "$MODERN_APP" 2>/dev/null; then
             echo -e "${GREEN}✓${NC} Code signature verified"
         else
-            echo -e "${YELLOW}⚠${NC} Code signature verification failed (app may still work)"
+            echo -e "${RED}✗ Code signature verification failed${NC}" >&2
+            guard_install_paths "$MODERN_APP"
+            rm -rf "$MODERN_APP"
+            return 1
         fi
         # Register with Launch Services
         /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$MODERN_APP" 2>/dev/null || true

@@ -33,11 +33,19 @@ BOOTSTRAP_RAW_CONTENT_URL="${BOOTSTRAP_RAW_CONTENT_URL:-https://raw.githubuserco
 LEGACY_MARKETPLACE_REPOS="777genius/claude-notifications-go"
 
 # Paths — CLAUDE_CONFIG_DIR is the official Claude Code env var;
-# CLAUDE_HOME is a legacy fallback; default to ~/.claude
-CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-${CLAUDE_HOME:-$HOME/.claude}}"
-if [ -z "$CLAUDE_HOME" ]; then
-    CLAUDE_HOME="$HOME/.claude"
+# CLAUDE_HOME is a legacy fallback; default to ~/.claude. Git Bash on Windows
+# may provide USERPROFILE without HOME, so resolve the installer home before
+# expanding any default path while nounset is active.
+INSTALLER_HOME="${HOME:-${USERPROFILE:-}}"
+CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-${CLAUDE_HOME:-}}"
+if [ -z "$CLAUDE_HOME" ] && [ -z "$INSTALLER_HOME" ]; then
+    echo "HOME or USERPROFILE must be set to locate the Claude configuration." >&2
+    exit 1
 fi
+if [ -z "$CLAUDE_HOME" ]; then
+    CLAUDE_HOME="$INSTALLER_HOME/.claude"
+fi
+DEFAULT_CODEX_HOME="${CODEX_HOME:-${INSTALLER_HOME:+$INSTALLER_HOME/.codex}}"
 INSTALLED_JSON="${CLAUDE_HOME}/plugins/installed_plugins.json"
 CACHE_DIR="${CLAUDE_HOME}/plugins/cache/${MARKETPLACE_NAME}"
 MARKETPLACE_DIR="${CLAUDE_HOME}/plugins/marketplaces/${MARKETPLACE_NAME}"
@@ -193,7 +201,7 @@ is_iterm2_detected() {
     [ "${TERM_PROGRAM:-}" = "iTerm.app" ] && return 0
     [ "${__CFBundleIdentifier:-}" = "com.googlecode.iterm2" ] && return 0
     [ -d "/Applications/iTerm.app" ] && return 0
-    [ -d "$HOME/Applications/iTerm.app" ] && return 0
+    [ -n "$INSTALLER_HOME" ] && [ -d "$INSTALLER_HOME/Applications/iTerm.app" ] && return 0
 
     return 1
 }
@@ -748,9 +756,11 @@ install_plugin() {
 #
 # IMPORTANT: Must never fail the hook (exit 0 on any error).
 
-CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-${CLAUDE_HOME:-$HOME/.claude}}"
+SHIM_HOME="${HOME:-${USERPROFILE:-}}"
+CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-${CLAUDE_HOME:-}}"
 if [ -z "$CLAUDE_HOME" ]; then
-  CLAUDE_HOME="$HOME/.claude"
+  [ -n "$SHIM_HOME" ] || exit 0
+  CLAUDE_HOME="$SHIM_HOME/.claude"
 fi
 
 INSTALLED_JSON="${CLAUDE_HOME}/plugins/installed_plugins.json"
@@ -949,9 +959,10 @@ setup_iterm2_venv() {
     is_iterm2_detected || return 0
     config_preflight || return 1
 
-    # Use $HOME/.claude explicitly (not $CLAUDE_HOME) — the Go code resolves
+    # Use the resolved user home explicitly (not $CLAUDE_HOME) — the Go code resolves
     # the venv path via os.UserHomeDir()/.claude/..., so the venv must be there.
-    local VENV_DIR="$HOME/.claude/claude-notifications-go/iterm2-venv"
+    [ -n "$INSTALLER_HOME" ] || return 0
+    local VENV_DIR="$INSTALLER_HOME/.claude/claude-notifications-go/iterm2-venv"
 
     # Skip if venv already exists and is functional
     if [ -x "$VENV_DIR/bin/python3" ] && \
@@ -1313,22 +1324,27 @@ stage_config_helper() {
 }
 
 bootstrap_control_root() {
+    local root
     case "$(uname -s 2>/dev/null)" in
         Darwin)
-            printf '%s\n' "$HOME/Library/Application Support/agent-notifications"
+            [ -n "$INSTALLER_HOME" ] || return 1
+            root="$INSTALLER_HOME/Library/Application Support"
             ;;
         MINGW*|MSYS*|CYGWIN*|Windows_NT)
-            printf '%s\n' "${APPDATA:-$HOME/AppData/Roaming}/agent-notifications"
+            root="${APPDATA:-${INSTALLER_HOME:+$INSTALLER_HOME/AppData/Roaming}}"
             ;;
         *)
-            printf '%s\n' "${XDG_CONFIG_HOME:-$HOME/.config}/agent-notifications"
+            root="${XDG_CONFIG_HOME:-${INSTALLER_HOME:+$INSTALLER_HOME/.config}}"
             ;;
     esac
+    [ -n "$root" ] || return 1
+    printf '%s/agent-notifications\n' "$root"
 }
 
 bootstrap_has_managed_ledger() {
-    local ledger
-    ledger="$(bootstrap_control_root)/ownership.json"
+    local root ledger
+    root=$(bootstrap_control_root) || return 1
+    ledger="$root/ownership.json"
     [ -f "$ledger" ] || return 1
     [ ! -L "$ledger" ]
 }
@@ -1388,11 +1404,11 @@ config_preflight() {
     if [ "$PRODUCT" != codex ] && [ "$(uname -s)" = Darwin ]; then
         # Resource location, not a second config resolver. Both asset installers
         # can recreate this venv outside the plugin cache.
-        venv_refresh="$HOME/.claude/claude-notifications-go/iterm2-venv"
+        [ -z "$INSTALLER_HOME" ] || venv_refresh="$INSTALLER_HOME/.claude/claude-notifications-go/iterm2-venv"
     fi
     # Resolve config afresh before every destructive operation. Historical roots
     # come from the pre-update registry; current roots extend overlap protection.
-    if "$_CONFIG_HELPER" config installer bootstrap "$_CONFIG_STAGE/installed-before.json" "$PLUGIN_KEY" "$CLAUDE_HOME" "$CACHE_DIR" "$MARKETPLACE_DIR" "${CODEX_HOME:-$HOME/.codex}" "$PRODUCT" "$_CONFIG_STAGE" "$INSTALLED_JSON" "$venv_refresh" > "$_CONFIG_STAGE/preflight.json"; then
+    if "$_CONFIG_HELPER" config installer bootstrap "$_CONFIG_STAGE/installed-before.json" "$PLUGIN_KEY" "$CLAUDE_HOME" "$CACHE_DIR" "$MARKETPLACE_DIR" "$DEFAULT_CODEX_HOME" "$PRODUCT" "$_CONFIG_STAGE" "$INSTALLED_JSON" "$venv_refresh" > "$_CONFIG_STAGE/preflight.json"; then
         return 0
     fi
     _KEEP_CONFIG_STAGE=true
@@ -1471,7 +1487,8 @@ install_codex() {
     if [ -n "$setup_codex_home" ]; then
         CONFIGURE_BINARY=$(installed_notification_binary "$setup_codex_home/claude-notifications-go") || return 1
     else
-        CONFIGURE_BINARY=$(installed_notification_binary "${CODEX_HOME:-$HOME/.codex}/claude-notifications-go") || return 1
+        [ -n "$DEFAULT_CODEX_HOME" ] || { echo "HOME, USERPROFILE, CODEX_HOME, or --codex-home is required for Codex setup." >&2; return 1; }
+        CONFIGURE_BINARY=$(installed_notification_binary "$DEFAULT_CODEX_HOME/claude-notifications-go") || return 1
     fi
     if ! notification_command_available "$CONFIGURE_BINARY"; then
         echo "Committed Codex runtime binary missing after setup-codex." >&2
@@ -1658,7 +1675,7 @@ acquire_wizard_portable_asset() {
 }
 
 setup_agent_notify_wizard() {
-    local agents package_root install_root wizard_codex_home="${CODEX_HOME:-$HOME/.codex}" i=0
+    local agents package_root install_root wizard_codex_home="$DEFAULT_CODEX_HOME" i=0
     local claude_exec="" codex_exec="" plugin_root
     WIZARD_PACKAGE_ROOT=""
     case "$PRODUCT" in
@@ -1674,6 +1691,10 @@ setup_agent_notify_wizard() {
         fi
         i=$((i + 1))
     done
+    if [ "$PRODUCT" != claude ] && [ -z "$wizard_codex_home" ]; then
+        echo "HOME, USERPROFILE, CODEX_HOME, or --codex-home is required for Codex setup." >&2
+        return 1
+    fi
     plugin_root="$PLUGIN_ROOT"
     if [ -z "$plugin_root" ]; then
         plugin_root=$(cd "$(dirname "$CONFIGURE_BINARY")/.." && pwd)
@@ -1710,7 +1731,7 @@ setup_agent_notify_wizard() {
         --package "$package_root" --plugin-root "$plugin_root" --helper "$CONFIGURE_BINARY"
     set -- "$@" --codex-home "$wizard_codex_home" --claude-config "$CLAUDE_HOME"
     if [ "$PRODUCT" != codex ]; then
-        set -- "$@" --claude-mcp-config "${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
+        set -- "$@" --claude-mcp-config "${CLAUDE_CONFIG_DIR:-$INSTALLER_HOME}/.claude.json"
     fi
     [ -z "$claude_exec" ] || set -- "$@" --claude-executable "$claude_exec"
     [ -z "$codex_exec" ] || set -- "$@" --codex-executable "$codex_exec"
