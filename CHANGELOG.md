@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.45.0] - 2026-09-22
+
+### Added
+- The guided installer lets users select Claude Code, Codex CLI, or both directly from the agent cards ([#205](https://github.com/777genius/agent-notifications/pull/205)).
+
+### Changed
+- README and landing use the same short installation command and guided installer link ([#204](https://github.com/777genius/agent-notifications/pull/204), [#205](https://github.com/777genius/agent-notifications/pull/205)).
+
+### Fixed
+- Portable Codex plugin setup now performs native activation in the selected test profile, and update, repair, removal and retained reinstall no longer hit stale handoff or operation-ID conflicts. Uninstall readiness reports MCP as absent ([#207](https://github.com/777genius/agent-notifications/pull/207)).
+- Codex runtime bundles include the optional iTerm2 tab-selection helper without copying unrelated development scripts ([#206](https://github.com/777genius/agent-notifications/pull/206)).
+
+### Platform notes
+- The verified installer regression covers an isolated macOS arm64 Codex CLI lifecycle. Cross-OS desktop, client restart and reboot qualification remains in progress; this release does not claim that full matrix.
+
 ## [1.44.1] - 2026-09-22
 
 ### Fixed
