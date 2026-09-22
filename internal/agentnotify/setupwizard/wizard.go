@@ -622,7 +622,7 @@ func holdCodexUninstall(ctx context.Context, req *Request, mat portablesetup.Mat
 		err := mat.Remove(ctx, portablesetup.MaterializeRequest{
 			Identity: id, Integration: agent, ExpectedGeneration: generation,
 			ClientConfigRoot: clientConfig(*req, agent), ClientExecutable: clientExecutable(*req, agent),
-			OperationID: "wizard-remove-" + string(agent), ExternalUninstalled: req.ExternalUninstalled,
+			OperationID: wizardMutationID(ActionUninstall, agent, generation), ExternalUninstalled: req.ExternalUninstalled,
 			HoldOnly: true, KeepReservation: true,
 		})
 		if err == nil {
@@ -1839,7 +1839,7 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 			Identity: id, Integration: agent, ExpectedGeneration: generation,
 			ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
 			// User uninstall does not restore a retired direct MCP.
-			OperationID: "wizard-remove-" + string(agent), ExternalUninstalled: req.ExternalUninstalled,
+			OperationID: wizardMutationID(ActionUninstall, agent, generation), ExternalUninstalled: req.ExternalUninstalled,
 			HoldOnly:        agent == portable.Codex && !req.ExternalUninstalled,
 			KeepReservation: true,
 		}

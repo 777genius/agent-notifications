@@ -5427,6 +5427,9 @@ func TestWizardUninstallNotifyOnlyKeepsHooks(t *testing.T) {
 	if err != nil || removed.Outcome != "completed" {
 		t.Fatalf("uninstall notify-only: %+v %v", removed, err)
 	}
+	if len(removed.Readiness) != 1 || removed.Readiness[0].MCP != "absent" || removed.Readiness[0].Hooks != "not_checked" {
+		t.Fatalf("uninstall readiness: %+v", removed.Readiness)
+	}
 	req.Action = ActionInspect
 	req.Yes = false
 	view, err := Run(ctx, req)
@@ -5444,6 +5447,22 @@ func TestWizardUninstallNotifyOnlyKeepsHooks(t *testing.T) {
 	}
 	if !hooksInstalled || notifyInstalled {
 		t.Fatalf("notify-only uninstall dropped hooks or kept notify: %+v", view.Targets)
+	}
+	req.Action = ActionInstall
+	req.Yes = true
+	req.PackageRoot = pkg
+	req.PackageFetcher = nil
+	req.ExternalUninstalled = false
+	reinstalled, err := Run(ctx, req)
+	if err != nil || reinstalled.Outcome != "completed" {
+		t.Fatalf("retained reinstall: %+v %v", reinstalled, err)
+	}
+	req.Action = ActionUninstall
+	req.PackageRoot = ""
+	req.ExternalUninstalled = true
+	again, err := Run(ctx, req)
+	if err != nil || again.Outcome != "completed" {
+		t.Fatalf("second uninstall reused prior operation id: %+v %v", again, err)
 	}
 }
 
