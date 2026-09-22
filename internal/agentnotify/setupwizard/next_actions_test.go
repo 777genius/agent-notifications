@@ -15,6 +15,24 @@ import (
 	"github.com/777genius/agent-notifications/internal/installruntime"
 )
 
+func TestReadinessReportsRemovedUnitsAbsentAndUnselectedUnitsUnchecked(t *testing.T) {
+	for _, unit := range []string{"hooks", "agent-notify"} {
+		out := attachReadiness(Request{Action: ActionUninstall}, []portable.Integration{portable.Codex}, Result{
+			Outcome: "completed", Targets: []TargetResult{{Client: "codex", Unit: unit, Outcome: "completed"}},
+		}, false)
+		if len(out.Readiness) != 1 {
+			t.Fatalf("%s: readiness=%+v", unit, out.Readiness)
+		}
+		fact := out.Readiness[0]
+		if unit == "hooks" && (fact.Hooks != "absent" || fact.MCP != "not_checked") {
+			t.Fatalf("hooks uninstall: %+v", fact)
+		}
+		if unit == "agent-notify" && (fact.MCP != "absent" || fact.Hooks != "not_checked") {
+			t.Fatalf("notify uninstall: %+v", fact)
+		}
+	}
+}
+
 func TestUpdateRequiredLiveMixedIsUpdateOnly(t *testing.T) {
 	req := Request{Action: ActionInstall, Agents: []string{"claude", "codex"}, Yes: true}
 	got, err := updateRequired(req, portable.Codex, nil, []string{"codex"}, nil, Result{Action: "install"}, ErrRefused)

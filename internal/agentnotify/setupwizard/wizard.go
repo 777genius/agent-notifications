@@ -3207,8 +3207,8 @@ func attachReadiness(req Request, agents []portable.Integration, out Result, mut
 		fact := ReadinessFact{
 			Client:     string(agent),
 			Runtime:    runtime,
-			Hooks:      "absent",
-			MCP:        "absent",
+			Hooks:      "not_checked",
+			MCP:        "not_checked",
 			Permission: "unsupported",
 			Restart:    "not_required",
 			Delivery:   "not_verified",
@@ -3219,14 +3219,9 @@ func attachReadiness(req Request, agents []portable.Integration, out Result, mut
 			}
 			switch target.Unit {
 			case "hooks":
-				fact.Hooks = target.Outcome
+				fact.Hooks = targetReadiness(req.Action, target)
 			case "agent-notify":
-				switch target.Outcome {
-				case "completed", "installed":
-					fact.MCP = "installed"
-				default:
-					fact.MCP = target.Outcome
-				}
+				fact.MCP = targetReadiness(req.Action, target)
 			}
 		}
 		if mutationInstall && fact.MCP == "installed" && out.Outcome == "completed" {
@@ -3239,6 +3234,16 @@ func attachReadiness(req Request, agents []portable.Integration, out Result, mut
 		out = offerPostSetupActions(req, agents, out, restartPending)
 	}
 	return out
+}
+
+func targetReadiness(action Action, target TargetResult) string {
+	if action == ActionUninstall && (target.Outcome == "completed" || target.Outcome == "unchanged" && target.Reason == "already_absent") {
+		return "absent"
+	}
+	if target.Outcome == "completed" {
+		return "installed"
+	}
+	return target.Outcome
 }
 
 func offerPostSetupActions(req Request, agents []portable.Integration, out Result, restartPending bool) Result {
