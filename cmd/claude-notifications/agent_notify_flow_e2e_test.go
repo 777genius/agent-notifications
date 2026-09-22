@@ -637,7 +637,7 @@ func nativeFlowApp(t *testing.T) string {
 
 func nativeFlowBundleID() string {
 	if os.Getenv("AGENT_NOTIFY_DARWIN_E2E") == "1" {
-		return "com.claude.desktop.notifier"
+		return "com.777genius.agent-notifications"
 	}
 	return "com.agentnotify.test.flow"
 }
@@ -685,7 +685,7 @@ func exactHeadNativeFlowApp(t *testing.T) string {
 		t.Fatal(err)
 	}
 	bundleID := nativeFlowBundleID()
-	info = bytes.Replace(info, []byte("com.claude.desktop.notifier"), []byte(bundleID), 1)
+	info = bytes.Replace(info, []byte("com.777genius.agent-notifications"), []byte(bundleID), 1)
 	if err := os.WriteFile(filepath.Join(root, "Contents", "Info.plist"), info, 0644); err != nil {
 		t.Fatal(err)
 	}
