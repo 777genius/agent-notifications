@@ -36,13 +36,15 @@ Desktop notifications and sounds for **Claude Code and Codex CLI**. Know when a 
 
 ## Install Or Update
 
-Requires Claude Code and/or Codex CLI, plus **Python 3.6+** (`python3`) **or** **Node.js** (`node`) for the currently published installer. Python is used when both are present. On Windows, use **Git Bash** with native Windows Python or Node. A Microsoft Store or WSL `python3` stub is skipped when Node is available. The interpreter-free loader is staged for the next release.
+👉 **[Open the guided installer](https://777genius.github.io/agent-notifications/#install)**
+
+The base installer only needs `curl` and Bash. It does **not** require Python, Node.js, Go, or `jq`. On Windows, run it in **Git Bash**. Python remains optional only for exact iTerm2 tab/pane targeting.
 
 ```bash
-(set -o pipefail; curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/a512deb5819c3f8c7c3be8335f713cc8bb734fc3/bin/setup.sh | bash)
+(set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash)
 ```
 
-The command uses a commit-pinned setup loader and reports download failures. The small setup script resolves the latest stable release and downloads both installer scripts from its exact commit. Release lookup and validation happen automatically. Choose **Claude**, **Codex**, or **both**. For non-interactive setup, append `-s -- --product claude`, `codex`, or `both` after `bash`, before the closing `)`.
+The short setup loader resolves the latest stable release and downloads the installer from that release's exact commit. Release lookup and validation happen automatically. Choose **Claude**, **Codex**, or **both**. For non-interactive setup, append `-s -- --product claude`, `codex`, or `both` after `bash`, before the closing `)`.
 
 - **Claude:** restart Claude Code.
 - **Codex:** restart Codex, open `/hooks`, then review and trust the installed hooks.
@@ -94,7 +96,7 @@ Run these slash commands in the Claude Code chat, not in your system terminal:
 Run the same command and choose the product(s) you want to update:
 
 ```bash
-(set -o pipefail; curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/a512deb5819c3f8c7c3be8335f713cc8bb734fc3/bin/setup.sh | bash)
+(set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash)
 ```
 
 For Claude, restart Claude Code. For Codex, restart Codex and inspect `/hooks`; changed hook definitions may need trust approval again. The installer refreshes the Codex runtime and registration automatically. Existing foreign hooks and shared settings in the file selected by `config path` are preserved.
