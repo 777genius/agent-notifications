@@ -692,7 +692,7 @@ func writeHooksFile(path string, content hooksFile, expected []byte, existed boo
 // Only runtime assets belong in the installed bundle. User config and logs
 // at the installation root are never refreshed from the source.
 func runtimeEntry(name string) bool {
-	return name == "bin" || name == "sounds" || name == "config" || name == "skills" || name == "claude_icon.png" || name == ".claude-plugin" || name == "portable-package"
+	return name == "bin" || name == "sounds" || name == "config" || name == "skills" || name == "scripts" || name == "claude_icon.png" || name == ".claude-plugin" || name == "portable-package"
 }
 
 func validateInstallPath(path string) error {
@@ -728,6 +728,11 @@ func stageRuntimeFiles(source, destination string) ([]installruntime.File, error
 		}
 		if parts[0] == "skills" {
 			return len(parts) == 1 || (parts[1] == "agent-notify" && (len(parts) == 2 || (len(parts) == 3 && parts[2] == "SKILL.md")))
+		}
+		// Only the iTerm2 exact-tab focus helper is a runtime dependency; the
+		// rest of scripts/ is dev/CI tooling that does not belong in the bundle.
+		if parts[0] == "scripts" {
+			return len(parts) == 1 || (len(parts) == 2 && parts[1] == "iterm2-select-tab.py")
 		}
 		if parts[0] == "bin" && len(parts) > 1 {
 			return !strings.HasSuffix(parts[1], ".app") && runtimeBinary(parts[1])
