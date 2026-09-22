@@ -21,10 +21,10 @@ curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash
 
 > Windows users: open Git Bash from the Start menu and run this command there. Do not run the `curl ... | bash` command from PowerShell or Windows Terminal if `bash` opens WSL, because that targets Linux paths and binaries instead of Windows.
 
-For automation or terminals without a controlling TTY, choose explicitly:
+For automation or terminals without a controlling TTY, choose explicitly and preserve download failures in the exit status:
 
 ```bash
-curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product codex
+(set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product codex)
 ```
 
 Use `claude`, `codex`, or `both`. This installs the notifications plugin; the selected Claude Code / Codex CLI must already be on `PATH`.
