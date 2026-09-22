@@ -1299,10 +1299,6 @@ footer .brand {
   text-decoration: underline;
   text-underline-offset: 4px;
 }
-.both-choice {
-  font-size: 11px;
-  flex-shrink: 0;
-}
 .os-picker {
   max-width: 350px;
   margin: 0 40px 22px;

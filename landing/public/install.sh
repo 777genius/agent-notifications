@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: (set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash)
+# Usage: curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash
 # Keep this entry point small: installation runs from one exact release commit.
 main() (
     set -euo pipefail
