@@ -62,7 +62,7 @@ func sendQueuedNativeFromActive(t *testing.T, ctx context.Context, control, spoo
 func launchGenerationAfterColdStart(t *testing.T, ctx context.Context, bundle string) {
 	t.Helper()
 	id := nativeBundleID(bundle)
-	if id == "com.claude.desktop.notifier" && os.Getenv("AGENT_NOTIFY_DARWIN_E2E") != "1" {
+	if id == "com.777genius.agent-notifications" && os.Getenv("AGENT_NOTIFY_DARWIN_E2E") != "1" {
 		t.Log("skipping LaunchServices cold-start of production bundle; set AGENT_NOTIFY_DARWIN_E2E=1")
 		return
 	}

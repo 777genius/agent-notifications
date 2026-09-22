@@ -43,7 +43,7 @@ func installerNativeFixture(t *testing.T, stage string) {
 	embeddedPut(t, filepath.Join(bundle, "Contents", "Info.plist"), []byte(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>CFBundleIdentifier</key><string>com.claude.desktop.notifier</string>
+<key>CFBundleIdentifier</key><string>com.777genius.agent-notifications</string>
 <key>CFBundleExecutable</key><string>terminal-notifier-modern</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 </dict></plist>
@@ -74,7 +74,7 @@ func installerNativeFixture(t *testing.T, stage string) {
 	}
 	run("/usr/bin/clang", source, "-arch", arch, "-x", "c", "-", "-o", executable)
 	// Replace any linker-generated ad-hoc signature with the bundle seal.
-	run("/usr/bin/codesign", "", "--force", "--sign", "-", "--identifier", "com.claude.desktop.notifier", bundle)
+	run("/usr/bin/codesign", "", "--force", "--sign", "-", "--identifier", "com.777genius.agent-notifications", bundle)
 	// Hash only after signing; never modify resources inside the signed bundle.
 	digest := sha256.Sum256(embeddedRead(t, executable))
 	embeddedPut(t, bundle+".managed-runtime.json", []byte(fmt.Sprintf(`{"SchemaVersion":1,"ProtocolVersion":1,"DecoderFloor":1,"ExecutableSHA256":"%x"}`, digest)), 0600)

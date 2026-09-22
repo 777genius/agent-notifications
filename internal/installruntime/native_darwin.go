@@ -9,7 +9,7 @@ import (
 )
 
 func verifyNativePlatform(ctx context.Context, bundle string) error {
-	if _, err := boundedCommand(ctx, "/usr/bin/codesign", "--verify", "--deep", "--strict", "-R", `=identifier "com.claude.desktop.notifier"`, bundle); err != nil {
+	if _, err := boundedCommand(ctx, "/usr/bin/codesign", "--verify", "--deep", "--strict", "-R", `=identifier "com.777genius.agent-notifications"`, bundle); err != nil {
 		return fmt.Errorf("native signed offline manifest verification: %w", err)
 	}
 	path := filepath.Join(bundle, "Contents", "MacOS", "terminal-notifier-modern")
