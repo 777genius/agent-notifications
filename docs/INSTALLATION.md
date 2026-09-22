@@ -5,7 +5,7 @@
 ### Prerequisites
 
 - Claude Code and/or Codex CLI for the products you select
-- `curl` and Bash. The base installer does **not** require Python, Node.js, Go, or `jq`.
+- `curl` and Bash
 - **Windows users:** Git Bash (included with [Git for Windows](https://git-scm.com/download/win)). Do not use WSL for a native Windows installation.
 - Python remains optional only for iTerm2 exact tab/pane targeting.
 
@@ -16,7 +16,7 @@ Prefer a guided setup? [Open the installation guide](https://777genius.github.io
 The short setup loader handles release lookup and validation internally, then downloads the installer from the exact release commit. Run it and choose Claude, Codex, or both:
 
 ```bash
-(set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash)
+curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash
 ```
 
 > Windows users: open Git Bash from the Start menu and run this command there. Do not run the `curl ... | bash` command from PowerShell or Windows Terminal if `bash` opens WSL, because that targets Linux paths and binaries instead of Windows.
@@ -24,7 +24,7 @@ The short setup loader handles release lookup and validation internally, then do
 For automation or terminals without a controlling TTY, choose explicitly:
 
 ```bash
-(set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product codex)
+curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product codex
 ```
 
 Use `claude`, `codex`, or `both`. This installs the notifications plugin; the selected Claude Code / Codex CLI must already be on `PATH`.

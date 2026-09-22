@@ -15,6 +15,31 @@ async function chooseOS(page: Page, value: string) {
   await page.getByRole("combobox", { name: "Target operating system" }).click();
   await page.getByRole("option", { name: labels[value], exact: true }).click();
 }
+async function chooseProduct(
+  page: Page,
+  product: "claude" | "codex" | "both",
+) {
+  const desired = {
+    claude: product !== "codex",
+    codex: product !== "claude",
+  };
+  const cards = {
+    claude: page.getByRole("button", { name: "Claude Code", exact: true }),
+    codex: page.getByRole("button", { name: "Codex CLI", exact: true }),
+  };
+  for (const value of ["claude", "codex"] as const)
+    if (
+      desired[value] &&
+      (await cards[value].getAttribute("aria-pressed")) !== "true"
+    )
+      await cards[value].click();
+  for (const value of ["claude", "codex"] as const)
+    if (
+      !desired[value] &&
+      (await cards[value].getAttribute("aria-pressed")) !== "false"
+    )
+      await cards[value].click();
+}
 async function chooseLanguage(page: Page, current: RegExp, language: string) {
   await page.getByRole("button", { name: current }).click();
   await page.getByRole("option", { name: language, exact: true }).click();
@@ -28,12 +53,8 @@ test("production command matrix, aftercare, clipboard and configuration", async 
   await expect(page.getByRole("heading", { level: 1 })).toContainText(
     "Stay in flow",
   );
-  for (const [name, product] of [
-    ["Claude Code", "claude"],
-    ["Codex CLI", "codex"],
-    ["Both agents", "both"],
-  ]) {
-    await page.getByRole("button", { name, exact: true }).click();
+  for (const product of ["claude", "codex", "both"] as const) {
+    await chooseProduct(page, product);
     for (const os of ["macos", "linux", "windows"]) {
       await chooseOS(page, os);
       for (const intent of ["Install", "Update"]) {
@@ -43,7 +64,7 @@ test("production command matrix, aftercare, clipboard and configuration", async 
           await page.getByRole("button", { name: intent, exact: true }).click();
         const value = await page.getByLabel(intent + " command").inputValue();
         expect(value).toBe(
-          `(set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product ${product})`,
+          `curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product ${product}`,
         );
       }
       if (os === "windows")
@@ -67,11 +88,11 @@ test("production command matrix, aftercare, clipboard and configuration", async 
   });
   await expect(agentNotify).toBeChecked();
   await expect(page.getByLabel("Install command")).toHaveValue(
-    /--product both\)$/,
+    /--product both$/,
   );
   await agentNotify.uncheck();
   await expect(page.getByLabel("Install command")).toHaveValue(
-    /--skip-agent-notify\)$/,
+    /--skip-agent-notify$/,
   );
   await agentNotify.check();
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
@@ -157,11 +178,11 @@ test("pending clipboard completion cannot claim a different command was copied",
   await page.goto("");
   await chooseOS(page, "linux");
   await page.getByRole("button", { name: "Copy command" }).click();
-  await page.getByRole("button", { name: "Both agents", exact: true }).click();
+  await chooseProduct(page, "both");
   await page.evaluate(() => (window as any).finishCopy());
   await expect(page.getByRole("status")).not.toContainText("Copied");
   await expect(page.getByLabel("Install command")).toHaveValue(
-    /--product both\)$/,
+    /--product both$/,
   );
 });
 test("assets load, hydration is clean and reduced motion disables background animation", async ({
@@ -198,10 +219,10 @@ test("language switch localizes content, URL, metadata and persists the choice",
   page,
 }) => {
   await page.goto("?source=i18n#features");
-  await page.getByRole("button", { name: "Codex CLI", exact: true }).click();
+  await chooseProduct(page, "codex");
   await chooseOS(page, "windows");
   await expect(page.getByLabel("Install command")).toHaveValue(
-    /--product codex\)$/,
+    /--product codex$/,
   );
   await chooseLanguage(page, /Current language/, "简体中文");
   await expect(page).toHaveURL(
@@ -225,7 +246,7 @@ test("language switch localizes content, URL, metadata and persists the choice",
   expect(
     await page.locator('script[type="application/ld+json"]').textContent(),
   ).toContain("SoftwareApplication");
-  await expect(page.getByLabel("安装命令")).toHaveValue(/--product codex\)$/);
+  await expect(page.getByLabel("安装命令")).toHaveValue(/--product codex$/);
   await expect(
     page.getByText("请在 Windows 的 Git Bash 中运行。", { exact: true }),
   ).toBeVisible();
@@ -425,7 +446,7 @@ test("guided reference layout, detected OS and mode focus", async ({
   await expect(
     page.getByRole("heading", { name: "Run in Git Bash", exact: true }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Both agents", exact: true }).click();
+  await chooseProduct(page, "both");
   await expect(
     page.getByRole("link", { name: "Claude installation help ↗" }),
   ).toBeVisible();

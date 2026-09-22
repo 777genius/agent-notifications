@@ -45,5 +45,5 @@ export function command(
   if (intent === "configure" || target === "unknown" || target === "manual")
     return null;
   const skip = agentNotify ? "" : " --skip-agent-notify";
-  return `(set -o pipefail; curl -fsSL ${installerUrl} | bash -s -- --product ${product}${skip})`;
+  return `curl -fsSL ${installerUrl} | bash -s -- --product ${product}${skip}`;
 }

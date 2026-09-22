@@ -16,7 +16,19 @@ async function changeIntent(value: Intent) {
   await nextTick();
   installTitle.value?.focus({ preventScroll: true });
 }
-const product = ref<Product>("claude");
+const selectedProducts = reactive({ claude: true, codex: false });
+const product = computed<Product>(() =>
+  selectedProducts.claude && selectedProducts.codex
+    ? "both"
+    : selectedProducts.codex
+      ? "codex"
+      : "claude",
+);
+function toggleProduct(value: "claude" | "codex") {
+  const other = value === "claude" ? "codex" : "claude";
+  if (selectedProducts[value] && !selectedProducts[other]) return;
+  selectedProducts[value] = !selectedProducts[value];
+}
 const target = ref<Target>("unknown");
 const intent = ref<Intent>("install");
 const manualOverride = ref(false);
@@ -100,8 +112,8 @@ async function copy() {
         :key="item.value"
         class="agent-card"
         :aria-label="item.label"
-        :aria-pressed="product === item.value"
-        @click="product = item.value"
+        :aria-pressed="product === item.value || product === 'both'"
+        @click="toggleProduct(item.value as 'claude' | 'codex')"
       >
         <AgentLogo :agent="item.value as 'claude' | 'codex'" />
         <span class="agent-card-copy"
@@ -115,7 +127,7 @@ async function copy() {
           }}</span></span
         >
         <span class="agent-check" aria-hidden="true">{{
-          product === item.value ? "✓" : ""
+          product === item.value || product === "both" ? "✓" : ""
         }}</span>
       </button>
     </div>
@@ -136,18 +148,6 @@ async function copy() {
           {{ t("install.change") }}
         </button>
       </div>
-      <button
-        class="text-action both-choice"
-        :aria-pressed="product === 'both'"
-        :aria-label="t('install.bothAgents')"
-        @click="product = product === 'both' ? 'claude' : 'both'"
-      >
-        {{
-          product === "both"
-            ? t("install.bothSelected")
-            : t("install.installBoth")
-        }}
-      </button>
     </div>
     <div v-if="showOSPicker" id="os-picker" class="os-picker">
       <AppSelect

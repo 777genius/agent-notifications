@@ -17,7 +17,7 @@ import tempfile
 root = Path(sys.argv[1])
 loader = (root / 'bin/setup.sh').read_text(encoding='utf-8')
 public_command = next(line for line in (root / 'README.md').read_text(encoding='utf-8').splitlines()
-                      if line.startswith('(set -o pipefail; curl '))
+                      if line.startswith('curl -fsSL '))
 PUBLIC_SETUP_URL = 'https://777genius.github.io/agent-notifications/install.sh'
 # The public pin and main commit 9039815 reference the same setup.sh Git blob.
 pinned_loader = (root / 'bin/testdata/setup-9039815833ed8d16a11ee4a45de62bb0119c874f.sh').read_text(
@@ -111,7 +111,7 @@ def run_loader(args, env, piped=False, documented=False):
     setup_sh = bash_path(root / 'bin/setup.sh')
     if documented:
         command = [HOST_BASH, '-c', public_command.replace(
-            '| bash)', '| bash -s -- ' + ' '.join(map(shlex.quote, args)) + ')')]
+            '| bash', '| bash -s -- ' + ' '.join(map(shlex.quote, args)))]
         stdin = None
     elif piped:
         command = [HOST_BASH, '-c', 'exec ' + ' '.join(
@@ -123,7 +123,7 @@ def run_loader(args, env, piped=False, documented=False):
     return subprocess.run(command, input=stdin, text=True, capture_output=True, env=env, timeout=20)
 
 
-def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, piped=False, documented=False):
+def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, piped=False, documented=False, expect_run=True):
     with tempfile.TemporaryDirectory(prefix='setup-test-', dir=os.environ['TMPDIR']) as tmp:
         case = Path(tmp)
         (case / 'bin').mkdir()
@@ -163,6 +163,10 @@ def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, pipe
         if expected is None:
             assert result.returncode != 0, (name, result.stdout, result.stderr)
             assert not (case / 'ran.json').exists(), name + ': installer ran on failure'
+        elif not expect_run:
+            assert result.returncode == expected, (name, result.returncode, result.stderr)
+            assert not (case / 'ran.json').exists(), name + ': installer ran after loader failure'
+            assert (case / 'requests').read_text(encoding='utf-8').splitlines() == [PUBLIC_SETUP_URL]
         else:
             assert result.returncode == expected, (name, result.returncode, result.stderr)
             if (case / 'ran.json').exists():
@@ -303,7 +307,7 @@ def run_runtime_case(name, python=False, node=False, expected=0, stub_python=Fal
 run_case('pinned release and exact argv', expected=0)
 run_case('piped one-line entry point', expected=0, piped=True)
 run_case('documented one-line command', expected=0, documented=True)
-run_case('initial loader download failure', fail='setup', documented=True)
+run_case('initial loader download failure', fail='setup', expected=0, documented=True, expect_run=False)
 run_case('bootstrap exit status', status=17, expected=17)
 for tag in ['v1.43.0-rc1', 'main', 'v01.43.0', 'v1.43.0\r', '../main', 42, None]:
     run_case('reject tag ' + repr(tag), tag=json.dumps({'tag_name': tag}))
