@@ -123,7 +123,7 @@ func (s Service) Install(ctx context.Context, req Request) (portable.Binding, er
 		return portable.Binding{}, err
 	}
 	req.ExpectedGeneration = snap.Ledger.Generation
-	gen, res, err := s.handoffForward(ctx, req)
+	gen, res, err := s.handoffForward(ctx, req, "install")
 	if err != nil {
 		return portable.Binding{}, err
 	}
@@ -358,7 +358,7 @@ func (s Service) HandoffReverse(ctx context.Context, req Request) (uint64, error
 	return result.Ledger.Generation, nil
 }
 
-func (s Service) handoffForward(ctx context.Context, req Request) (uint64, *installruntime.PendingMutation, error) {
+func (s Service) handoffForward(ctx context.Context, req Request, action string) (uint64, *installruntime.PendingMutation, error) {
 	if req.Discovery.ConfigPath == "" {
 		return req.ExpectedGeneration, nil, nil
 	}
@@ -395,7 +395,7 @@ func (s Service) handoffForward(ctx context.Context, req Request) (uint64, *inst
 		if err != nil {
 			return 0, nil, fmt.Errorf("%w: pending handoff intent missing: %v", ErrPreflight, err)
 		}
-		if !intentMatches(intent, pending.ID, "install", string(req.Binding.Integration), req.SourceDigest, req.TreeDigest, req.HelperDigest, req.HelperVersion) {
+		if !intentMatches(intent, pending.ID, action, string(req.Binding.Integration), req.SourceDigest, req.TreeDigest, req.HelperDigest, req.HelperVersion) {
 			return 0, nil, fmt.Errorf("%w: pending %s", ErrIntentConflict, intent.Action)
 		}
 		return snap.Ledger.Generation, pending, nil
@@ -410,13 +410,19 @@ func (s Service) handoffForward(ctx context.Context, req Request) (uint64, *inst
 		if err != nil {
 			return 0, nil, fmt.Errorf("%w: pending handoff intent missing: %v", ErrPreflight, err)
 		}
-		if !intentMatches(intent, pending.ID, "install", string(req.Binding.Integration), req.SourceDigest, req.TreeDigest, req.HelperDigest, req.HelperVersion) {
+		if !intentMatches(intent, pending.ID, action, string(req.Binding.Integration), req.SourceDigest, req.TreeDigest, req.HelperDigest, req.HelperVersion) {
 			return 0, nil, fmt.Errorf("%w: pending %s", ErrIntentConflict, intent.Action)
 		}
 		res = pending
 		gen = snap.Ledger.Generation
 	} else {
-		published, created, err := s.publishHandoffReservation(ctx, req, gen)
+		var published installruntime.Ledger
+		var created *installruntime.PendingMutation
+		if action == "install" {
+			published, created, err = s.publishHandoffReservation(ctx, req, gen)
+		} else {
+			published, created, err = s.publishIntent(ctx, req, gen, action, "retire-direct", []string{"direct-mcp"})
+		}
 		if err != nil {
 			return 0, nil, err
 		}

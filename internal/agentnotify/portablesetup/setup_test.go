@@ -545,6 +545,40 @@ func TestPendingInstallReservationConflictsWithRemove(t *testing.T) {
 	}
 }
 
+func TestPendingUpdateReservationRetiresOwnedDiscovery(t *testing.T) {
+	b, ledger := bindingFixture(t)
+	config, cmd, ledger := ownedMCP(t, b, ledger)
+	svc := Service{}
+	req := Request{
+		Binding: b, ExpectedGeneration: ledger.Generation,
+		Discovery:  Discovery{ConfigPath: config, Command: cmd},
+		TreeDigest: "tree-update", HelperDigest: "helper-update", HelperVersion: "1.44.1",
+	}
+	published, reservation, err := svc.publishIntent(testCtx(t), req, ledger.Generation, "update", "confirmed", []string{"agent-notify"})
+	if err != nil || reservation == nil {
+		t.Fatalf("publish update intent: %+v %v", reservation, err)
+	}
+	req.ExpectedGeneration = published.Generation
+	if _, _, err := svc.handoffForward(testCtx(t), req, "install"); !errors.Is(err, ErrIntentConflict) {
+		t.Fatalf("different action reused update reservation: %v", err)
+	}
+	gen, got, err := svc.handoffForward(testCtx(t), req, "update")
+	if err != nil || got == nil || got.ID != reservation.ID || gen <= published.Generation {
+		t.Fatalf("update handoff: generation=%d reservation=%+v err=%v", gen, got, err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
+	if err != nil || snap.Ledger.PendingMutation == nil {
+		t.Fatalf("update reservation was lost: %+v %v", snap.Ledger.PendingMutation, err)
+	}
+	facts, err := clientsetup.Inspect(testCtx(t), clientsetup.Request{
+		ControlRoot: b.ControlRoot, RuntimeRoot: b.RuntimeRoot, Command: cmd, ConfigPath: config,
+		Provider: registration.Codex, Mode: clientsetup.Managed, ExpectedGeneration: snap.Ledger.Generation,
+	})
+	if err != nil || facts.Registered {
+		t.Fatalf("owned direct MCP remained after update handoff: %+v %v", facts, err)
+	}
+}
+
 func TestPendingInstallForOtherClientConflicts(t *testing.T) {
 	b, ledger := bindingFixture(t)
 	config, cmd, ledger := ownedMCP(t, b, ledger)

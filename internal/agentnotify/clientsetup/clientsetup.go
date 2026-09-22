@@ -257,7 +257,10 @@ func calculate(ctx context.Context, r Request, fault func(string) error, inspect
 		if e != nil {
 			return nil, e
 		}
-		if ci.Exists && len(input) == 0 {
+		// Native Codex plugin removal can leave an empty but valid TOML file.
+		// A read-only inspection of an unowned registration may treat it as
+		// absent; mutations and already-owned registrations still refuse it.
+		if ci.Exists && len(input) == 0 && (inspection == nil || installed) {
 			return nil, registration.ErrInvalid
 		}
 		edited, e := registration.Apply(registration.Request{Provider: r.Provider, Input: input, Command: r.Command, Args: args(r.Provider), Previous: prev, Remove: r.Remove})

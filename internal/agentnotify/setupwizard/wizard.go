@@ -2313,6 +2313,7 @@ func materializer(req Request, snap installruntime.InstalledSnapshot, runtimeRoo
 		ManagedRoot:         filepath.Join(uapRoot, "managed"),
 		HelperExecutable:    helper,
 		ClaudeRunner:        runner,
+		CodexRunner:         processadapter.OS{},
 		RequireLiveProfiles: true,
 	})
 }

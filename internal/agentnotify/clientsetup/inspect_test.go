@@ -75,3 +75,19 @@ func TestInspectCancellation(t *testing.T) {
 		t.Fatal("canceled inspection wrote")
 	}
 }
+
+func TestInspectUnownedEmptyCodexConfigIsReadOnly(t *testing.T) {
+	f := fresh(t, registration.Codex)
+	put(t, f.r.ConfigPath, nil)
+	before := inspectionTree(t, filepath.Dir(f.r.ControlRoot))
+	facts, err := Inspect(f.ctx, f.r)
+	if err != nil || facts.Registered || facts.SkillProjected {
+		t.Fatalf("empty unowned Codex config: %+v %v", facts, err)
+	}
+	if !reflect.DeepEqual(before, inspectionTree(t, filepath.Dir(f.r.ControlRoot))) {
+		t.Fatal("inspection changed empty config")
+	}
+	if _, err := Apply(f.ctx, f.r); !errors.Is(err, registration.ErrInvalid) {
+		t.Fatalf("mutation must still refuse empty config: %v", err)
+	}
+}
