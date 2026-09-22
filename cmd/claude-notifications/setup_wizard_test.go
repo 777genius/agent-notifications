@@ -1058,6 +1058,73 @@ func TestSetupWizardOmitsPackageInspectRepairUninstallE2E(t *testing.T) {
 	}
 }
 
+func TestSetupWizardCombinedUninstallRetiresManagedHelperLastE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	envHome := t.TempDir()
+	testenv.Set(t, envHome)
+	canonical := filepath.Join(envHome, "fixture-config.json")
+	if err := os.WriteFile(canonical, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENT_NOTIFICATIONS_CONFIG", canonical)
+	env := newWizardCLIEnv(t, ctx, false)
+	bundle := writeWizardPluginBundle(t)
+	helper := filepath.Join(env.codexHome, "claude-notifications-go", "bin", "claude-notifications")
+	body, err := os.ReadFile(env.probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bundle, "bin", "claude-notifications"), append(body, []byte(installruntime.WriterProtocolMarker)...), 0700); err != nil {
+		t.Fatal(err)
+	}
+	shared := []string{
+		"--agents", "codex", "--plugin-root", bundle, "--package", env.pkg,
+		"--control-root", env.control, "--runtime-root", env.runtime,
+		"--global-config", env.global, "--codex-home", env.codexHome,
+		"--client-executable", env.probe, "--helper", helper, "--scope-root", env.scope,
+	}
+	var out, stderr bytes.Buffer
+	install := append([]string{"--action", "install", "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, install, &out, &stderr, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("install: %d %s %s", code, out.String(), stderr.String())
+	}
+	if got := decodeWizardJSON(t, out); got.Outcome != "completed" {
+		t.Fatalf("install result: %+v", got)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(env.control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gen := snap.Ledger.Generation
+	if _, err := installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: env.control, RuntimeRoot: env.runtime, Owner: "existing-installer",
+		ConsumerID: "existing", RemoveConsumer: true, ExpectedGeneration: &gen,
+	}); err != nil {
+		t.Fatalf("remove fixture consumer: %v", err)
+	}
+	out.Reset()
+	stderr.Reset()
+	uninstall := append([]string{"--action", "uninstall", "--yes", "--json", "--external-uninstalled"}, shared...)
+	if code := executeSetupWizardWith(ctx, uninstall, &out, &stderr, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("uninstall: %d %s %s", code, out.String(), stderr.String())
+	}
+	removed := decodeWizardJSON(t, out)
+	if removed.Outcome != "completed" {
+		t.Fatalf("uninstall result: %+v", removed)
+	}
+	if i, j := strings.Index(stderr.String(), "phase agent-notify"), strings.Index(stderr.String(), "phase hooks"); i < 0 || j < 0 || i > j {
+		t.Fatalf("portable removal must precede hooks: %s", stderr.String())
+	}
+	snap, err = installruntime.ReadInstalledSnapshot(env.control)
+	if err != nil || snap.Ledger.PendingMutation != nil {
+		t.Fatalf("uninstall left pending intent: %+v %v", snap.Ledger.PendingMutation, err)
+	}
+	if _, err := os.Stat(helper); !os.IsNotExist(err) {
+		t.Fatalf("final consumer removal retained helper: %v", err)
+	}
+}
+
 func TestSetupWizardTTYExistingOmitsActionE2E(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
