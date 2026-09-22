@@ -89,7 +89,7 @@ func TestNativePublishedGenerationRemainsRegisteredAfterUpdate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	t.Cleanup(cancel)
 	_, r := request(t)
-	id := "com.claude.desktop.notifier.test." + filepath.Base(t.TempDir())
+	id := "com.777genius.agent-notifications.test." + filepath.Base(t.TempDir())
 	tool := filepath.Join(t.TempDir(), "ls-tool")
 	src := filepath.Join(t.TempDir(), "ls-tool.c")
 	if err := os.WriteFile(src, []byte(lsTools), 0600); err != nil {
@@ -106,7 +106,7 @@ func TestNativePublishedGenerationRemainsRegisteredAfterUpdate(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		updated := strings.Replace(string(body), "com.claude.desktop.notifier", id, 1)
+		updated := strings.Replace(string(body), "com.777genius.agent-notifications", id, 1)
 		updated = strings.Replace(updated, "2.0.0", marker, 1)
 		if err := os.WriteFile(plist, []byte(updated), 0644); err != nil {
 			t.Fatal(err)

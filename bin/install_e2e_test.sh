@@ -402,13 +402,13 @@ APP_EOF
         cat > "$app_dir/Contents/Info.plist" <<'PLIST_EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><dict>
-<key>CFBundleIdentifier</key><string>com.claude.desktop.notifier</string>
+<key>CFBundleIdentifier</key><string>com.777genius.agent-notifications</string>
 <key>CFBundleExecutable</key><string>terminal-notifier-modern</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 </dict></plist>
 PLIST_EOF
         printf '{}\n' > "$archive_dir/ClaudeNotifier.app.managed-runtime.json"
-        codesign --force --sign - --timestamp=none --identifier com.claude.desktop.notifier "$app_dir" >/dev/null
+        codesign --force --sign - --timestamp=none --identifier com.777genius.agent-notifications "$app_dir" >/dev/null
         ditto -c -k --sequesterRsrc "$archive_dir" "$FIXTURES_DIR/ClaudeNotifier.app.zip"
         rm -rf "$archive_dir"
     fi
