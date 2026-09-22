@@ -91,3 +91,15 @@ func TestInspectUnownedEmptyCodexConfigIsReadOnly(t *testing.T) {
 		t.Fatalf("mutation must still refuse empty config: %v", err)
 	}
 }
+
+func TestInspectUnownedEmptyClaudeConfigIsInvalid(t *testing.T) {
+	f := fresh(t, registration.Claude)
+	put(t, f.r.ConfigPath, nil)
+	before := inspectionTree(t, filepath.Dir(f.r.ControlRoot))
+	if _, err := Inspect(f.ctx, f.r); !errors.Is(err, registration.ErrInvalid) {
+		t.Fatalf("empty Claude config must be invalid: %v", err)
+	}
+	if !reflect.DeepEqual(before, inspectionTree(t, filepath.Dir(f.r.ControlRoot))) {
+		t.Fatal("inspection changed empty config")
+	}
+}
