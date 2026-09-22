@@ -16,6 +16,8 @@ export const targets = [
 ] as const;
 export const intents = ["install", "update", "configure"] as const;
 export const repo = "https://github.com/777genius/agent-notifications";
+export const installerUrl =
+  "https://777genius.github.io/agent-notifications/install.sh";
 export function detectTarget(ua: string, touchPoints = 0): Target {
   const browser = Bowser.getParser(ua);
   if (
@@ -43,5 +45,5 @@ export function command(
   if (intent === "configure" || target === "unknown" || target === "manual")
     return null;
   const skip = agentNotify ? "" : " --skip-agent-notify";
-  return `(set -o pipefail; curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/a512deb5819c3f8c7c3be8335f713cc8bb734fc3/bin/setup.sh | bash -s -- --product ${product}${skip})`;
+  return `(set -o pipefail; curl -fsSL ${installerUrl} | bash -s -- --product ${product}${skip})`;
 }

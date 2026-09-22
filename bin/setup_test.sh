@@ -18,21 +18,18 @@ root = Path(sys.argv[1])
 loader = (root / 'bin/setup.sh').read_text(encoding='utf-8')
 public_command = next(line for line in (root / 'README.md').read_text(encoding='utf-8').splitlines()
                       if line.startswith('(set -o pipefail; curl '))
-PINNED_SETUP_SHA = 'a512deb5819c3f8c7c3be8335f713cc8bb734fc3'
-PINNED_SETUP_URL = (
-    'https://raw.githubusercontent.com/777genius/agent-notifications/'
-    + PINNED_SETUP_SHA + '/bin/setup.sh'
-)
+PUBLIC_SETUP_URL = 'https://777genius.github.io/agent-notifications/install.sh'
 # The public pin and main commit 9039815 reference the same setup.sh Git blob.
 pinned_loader = (root / 'bin/testdata/setup-9039815833ed8d16a11ee4a45de62bb0119c874f.sh').read_text(
     encoding='utf-8')
 assert hashlib.sha256(pinned_loader.encode()).hexdigest() == \
     '7b00c0cfbeff547e60d38d4703873975b9dcea5682a8312f908477d0d0e4e4a4'
 assert 'python3 or node is required' in pinned_loader
-assert PINNED_SETUP_SHA in public_command
+assert PUBLIC_SETUP_URL in public_command
 for rel in ('docs/INSTALLATION.md', 'landing/data/install.ts',
             'landing/tests/install.test.ts', 'landing/tests/browser/install.spec.ts'):
-    assert PINNED_SETUP_SHA in (root / rel).read_text(encoding='utf-8'), rel
+    assert PUBLIC_SETUP_URL in (root / rel).read_text(encoding='utf-8'), rel
+assert (root / 'landing/public/install.sh').read_text(encoding='utf-8') == loader
 STORE_PYTHON3_STUB = '''#!/usr/bin/env bash
 echo "Python was not found; run without arguments to install from the Microsoft Store, or disable this shortcut from Settings > Apps > Advanced app settings > App execution aliases." >&2
 exit 9009
@@ -55,7 +52,7 @@ while [ "$#" -gt 0 ]; do
 done
 printf '%s\\n' "$url" >> "$CASE_DIR/requests"
 case "$url" in
-    ''' + PINNED_SETUP_URL + ''') kind=setup ;;
+    ''' + PUBLIC_SETUP_URL + ''') kind=setup ;;
     https://github.com/777genius/agent-notifications/releases/latest) kind=latest ;;
     https://api.github.com/repos/777genius/agent-notifications/releases/latest) kind=latest_json ;;
     https://api.github.com/repos/777genius/agent-notifications/commits/v1.43.0) kind=commit ;;
@@ -155,7 +152,7 @@ def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, pipe
         (case / 'commit_json').write_text(
             json.dumps({'sha': sha}) if commit is None else commit)
         (case / 'bootstrap').write_text(bootstrap_stub)
-        (case / 'setup').write_text(pinned_loader if documented else loader)
+        (case / 'setup').write_text(loader)
         env = dict(os.environ, PATH=runtime_path(case, python=True, node=True),
                    CASE_DIR=bash_path(case), TMPDIR=bash_path(case / 'tmp space'),
                    FAIL_DOWNLOAD=fail, BOOTSTRAP_STATUS=str(status),
@@ -177,12 +174,9 @@ def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, pipe
                 raise AssertionError(name + ': installer did not run')
             requests = (case / 'requests').read_text(encoding='utf-8').splitlines()
             if documented:
-                assert requests.pop(0) == PINNED_SETUP_URL
-            expected_latest = ('https://api.github.com/repos/777genius/agent-notifications/releases/latest'
-                               if documented else
-                               'https://github.com/777genius/agent-notifications/releases/latest')
+                assert requests.pop(0) == PUBLIC_SETUP_URL
             assert requests == [
-                expected_latest,
+                'https://github.com/777genius/agent-notifications/releases/latest',
                 'https://api.github.com/repos/777genius/agent-notifications/commits/v1.43.0',
                 raw + '/bootstrap.sh',
             ], name

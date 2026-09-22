@@ -5,7 +5,7 @@ test("one-line setup contract for each product and supported target", () => {
   for (const product of ["claude", "codex", "both"] as const)
     for (const target of ["macos", "linux", "windows"] as const) {
       const expected =
-        "(set -o pipefail; curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/a512deb5819c3f8c7c3be8335f713cc8bb734fc3/bin/setup.sh | bash -s -- --product " +
+        "(set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product " +
         product + ")";
       assert.equal(command(product, target, "install"), expected);
       assert.equal(command(product, target, "update"), expected);
