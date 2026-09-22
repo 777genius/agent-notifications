@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.44.1] - 2026-09-22
+
+### Fixed
+- **macOS installs and updates accept the signed Agent Notifications helper again** - native verification now matches the rebranded `com.777genius.agent-notifications` bundle identity, so v1.44.0 no longer rejects the notarized helper and rolls back the candidate. Existing working installations remained intact because the failed candidate was never committed ([#201](https://github.com/777genius/agent-notifications/issues/201), [#202](https://github.com/777genius/agent-notifications/pull/202)).
+
 ## [1.44.0] - 2026-09-21
 
 ### Added
