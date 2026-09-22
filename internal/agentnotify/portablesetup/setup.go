@@ -649,9 +649,12 @@ func (s Service) FinishConfirmedIntent(ctx context.Context, req ConfirmedIntent,
 	if snap.Ledger.PendingMutation == nil {
 		return nil
 	}
-	consumerID, err := existingConsumerID(snap.Ledger, req.RuntimeRoot)
-	if err != nil {
-		return err
+	consumerID := "reservation-finalizer"
+	if len(snap.Ledger.Consumers) != 0 {
+		consumerID, err = existingConsumerID(snap.Ledger, req.RuntimeRoot)
+		if err != nil {
+			return err
+		}
 	}
 	path := IntentPath(req.ControlRoot)
 	before, err := installruntime.Fingerprint(path)

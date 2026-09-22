@@ -1729,9 +1729,20 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 			return out, err
 		}
 	}
-	if len(hookAgents) > 0 {
+	removeHooks := func(out Result) (Result, error) {
+		if len(hookAgents) == 0 {
+			return out, nil
+		}
+		// Keep the hooks consumer (and its managed helper) alive until UAP has
+		// finished removing the portable bindings. Hooks may be the final
+		// runtime consumer and their removal can retire that helper.
 		reportProgress(req, "hooks")
-		out, err = applyHooks(ctx, req, hookAgents, snap, true, out)
+		current, err := installruntime.ReadInstalledSnapshot(req.ControlRoot)
+		if err != nil {
+			out.Outcome, out.Reason = "incomplete", err.Error()
+			return out, err
+		}
+		out, err = applyHooks(ctx, req, hookAgents, current, true, out)
 		if err != nil || out.Outcome == "incomplete" || out.Outcome == "invalid" {
 			return out, err
 		}
@@ -1741,14 +1752,22 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 			return out, err
 		}
 		out.Generation = generation
-		snap.Ledger.Generation = generation
+		return out, nil
 	}
 	if len(notifyAgents) == 0 {
+		out, err = removeHooks(out)
+		if err != nil || out.Outcome == "incomplete" || out.Outcome == "invalid" {
+			return out, err
+		}
 		out.Outcome = "completed"
 		reportProgress(req, "complete")
 		return out, nil
 	}
 	if id.InstallationID == "" {
+		out, err = removeHooks(out)
+		if err != nil || out.Outcome == "incomplete" || out.Outcome == "invalid" {
+			return out, err
+		}
 		out.Outcome, out.Reason = "unchanged", "portable_absent"
 		reportProgress(req, "complete")
 		return out, nil
@@ -1759,6 +1778,10 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 		}
 		if out.Outcome == "" {
 			out.Outcome, out.Reason = "unchanged", "already_absent"
+		}
+		out, err = removeHooks(out)
+		if err != nil || out.Outcome == "incomplete" || out.Outcome == "invalid" {
+			return out, err
 		}
 		out = markRetainedEmpty(mat, id.InstallationID, out)
 		reportProgress(req, "complete")
@@ -1812,6 +1835,10 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 			return out, err
 		}
 		out.Generation = generation
+		out, err = removeHooks(out)
+		if err != nil || out.Outcome == "incomplete" || out.Outcome == "invalid" {
+			return out, err
+		}
 		if removed == 0 {
 			if out.Reason == "" {
 				out.Reason = "already_absent"
@@ -1876,6 +1903,10 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 		}
 		out.Generation = generation
 		out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "completed"})
+	}
+	out, err = removeHooks(out)
+	if err != nil || out.Outcome == "incomplete" || out.Outcome == "invalid" {
+		return out, err
 	}
 	if removed == 0 {
 		if out.Reason == "" {

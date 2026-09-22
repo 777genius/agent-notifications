@@ -151,6 +151,52 @@ func TestReservationClearKeepsFloorAndOldWriterRejectsSchema(t *testing.T) {
 	}
 }
 
+func TestFinalConsumerRemovalRetainsPendingIntentUntilCleanup(t *testing.T) {
+	ctx, r := request(t)
+	primary := filepath.Join(r.RuntimeRoot, "bin", "helper")
+	r.Files = []File{{Path: primary, Data: []byte("helper"), Mode: 0755}}
+	installed, err := Commit(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := filepath.Join(r.ControlRoot, "portable-handoff.json")
+	res := &PendingMutation{ID: "final-consumer-intent", Owner: r.Owner, IntentRef: intent}
+	r.Files = []File{{Path: intent, Data: []byte(`{"version":1}` + "\n"), Mode: 0600}}
+	r.Reservation, r.RefreshOnly, r.ExpectedGeneration = res, true, &installed.Generation
+	held, err := Commit(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Files, r.RefreshOnly, r.RemoveConsumer, r.ExpectedGeneration = nil, false, true, &held.Generation
+	removed, err := Commit(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(removed.Consumers) != 0 || removed.PendingMutation == nil {
+		t.Fatalf("last removal dropped reservation: %+v", removed)
+	}
+	if _, err := os.Stat(primary); !os.IsNotExist(err) {
+		t.Fatalf("last removal retained helper: %v", err)
+	}
+	if _, err := os.Stat(intent); err != nil {
+		t.Fatalf("last removal deleted resumable intent: %v", err)
+	}
+	r.RemoveConsumer, r.RefreshOnly, r.ClearReservation, r.ExpectedGeneration = false, true, true, &removed.Generation
+	r.ConsumerID = "reservation-finalizer"
+	before, err := Fingerprint(intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Files = []File{{Path: intent, Before: before, Remove: true}}
+	cleared, err := Commit(ctx, r)
+	if err != nil || cleared.PendingMutation != nil || len(cleared.Consumers) != 0 {
+		t.Fatalf("final cleanup: %+v %v", cleared, err)
+	}
+	if _, err := os.Stat(intent); !os.IsNotExist(err) {
+		t.Fatalf("final cleanup retained intent: %v", err)
+	}
+}
+
 func TestReservationRollbackDoesNotLowerFloor(t *testing.T) {
 	ctx, r := request(t)
 	r.Files = []File{{Path: filepath.Join(r.RuntimeRoot, "hook"), Data: []byte("hook"), Mode: 0755}}

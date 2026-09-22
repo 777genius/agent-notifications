@@ -344,7 +344,15 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 				registered = true
 			}
 		}
-		if !registered || r.RemoveConsumer {
+		// The last consumer may be removed while a confirmed wizard intent is
+		// still pending. Permit only its exact cleanup transaction afterward;
+		// an ordinary refresh must still have a live consumer.
+		finalIntentCleanup := r.ClearReservation && len(l.Consumers) == 0 && l.PendingMutation != nil &&
+			r.Reservation != nil && *r.Reservation == *l.PendingMutation && r.Native == nil &&
+			r.Prepare == nil && !r.PurgeNative && !r.RetireNative && !r.RollbackPending &&
+			r.PolicyEnabled == nil && len(r.PolicyFields) == 0 && r.ExpectedGeneration != nil && len(r.Files) <= 1 &&
+			(len(r.Files) == 0 || (r.Files[0].Remove && r.Files[0].Path == l.PendingMutation.IntentRef))
+		if (!registered && !finalIntentCleanup) || r.RemoveConsumer {
 			return l, fmt.Errorf("runtime refresh requires an existing consumer at this path")
 		}
 	}
@@ -540,6 +548,9 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 	// have their own retained record and are intentionally not ordinary Files.
 	if r.RemoveConsumer && len(next.Consumers) == 0 {
 		for path, before := range l.Files {
+			if next.PendingMutation != nil && path == next.PendingMutation.IntentRef {
+				continue
+			}
 			files = append(files, File{Path: path, Before: before, Remove: true})
 		}
 	}
