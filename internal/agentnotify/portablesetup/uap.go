@@ -42,6 +42,7 @@ type UAPRoots struct {
 	StateFile, LockFile, OperationsDir, PluginDataBase, ManagedRoot string
 	HelperExecutable, HelperVersion                                 string
 	ClaudeRunner                                                    ports.CommandRunner
+	CodexRunner                                                     ports.CommandRunner
 	RequireLiveProfiles                                             bool
 }
 
@@ -333,8 +334,8 @@ func (m Materializer) engine(req MaterializeRequest, generation *uint64, res *in
 		helper = req.HelperExecutable
 	}
 	runner := m.Roots.ClaudeRunner
-	if req.Integration != portable.Claude {
-		runner = nil
+	if req.Integration == portable.Codex {
+		runner = m.Roots.CodexRunner
 	}
 	registry, err := NewRegistry()
 	if err != nil {
@@ -470,7 +471,7 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 		SourceRevision: req.SourceRevision, SourceDigest: req.SourceDigest,
 		TreeDigest: req.TreeDigest, HelperDigest: req.HelperDigest, HelperVersion: req.HelperVersion,
 		Profile: req.ClientConfigRoot,
-	})
+	}, string(packageOperation(req)))
 	if err != nil {
 		return portable.Binding{}, err
 	}
@@ -553,7 +554,7 @@ func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest)
 			SourceRevision: reqs[i].SourceRevision, SourceDigest: reqs[i].SourceDigest,
 			TreeDigest: reqs[i].TreeDigest, HelperDigest: reqs[i].HelperDigest, HelperVersion: reqs[i].HelperVersion,
 			Profile: reqs[i].ClientConfigRoot,
-		})
+		}, string(packageOperation(reqs[i])))
 		if err != nil {
 			return nil, err
 		}

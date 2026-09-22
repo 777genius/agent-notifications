@@ -622,7 +622,7 @@ func holdCodexUninstall(ctx context.Context, req *Request, mat portablesetup.Mat
 		err := mat.Remove(ctx, portablesetup.MaterializeRequest{
 			Identity: id, Integration: agent, ExpectedGeneration: generation,
 			ClientConfigRoot: clientConfig(*req, agent), ClientExecutable: clientExecutable(*req, agent),
-			OperationID: "wizard-remove-" + string(agent), ExternalUninstalled: req.ExternalUninstalled,
+			OperationID: wizardMutationID(ActionUninstall, agent, generation), ExternalUninstalled: req.ExternalUninstalled,
 			HoldOnly: true, KeepReservation: true,
 		})
 		if err == nil {
@@ -1839,7 +1839,7 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 			Identity: id, Integration: agent, ExpectedGeneration: generation,
 			ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
 			// User uninstall does not restore a retired direct MCP.
-			OperationID: "wizard-remove-" + string(agent), ExternalUninstalled: req.ExternalUninstalled,
+			OperationID: wizardMutationID(ActionUninstall, agent, generation), ExternalUninstalled: req.ExternalUninstalled,
 			HoldOnly:        agent == portable.Codex && !req.ExternalUninstalled,
 			KeepReservation: true,
 		}
@@ -2313,6 +2313,7 @@ func materializer(req Request, snap installruntime.InstalledSnapshot, runtimeRoo
 		ManagedRoot:         filepath.Join(uapRoot, "managed"),
 		HelperExecutable:    helper,
 		ClaudeRunner:        runner,
+		CodexRunner:         processadapter.OS{},
 		RequireLiveProfiles: true,
 	})
 }
@@ -3206,8 +3207,8 @@ func attachReadiness(req Request, agents []portable.Integration, out Result, mut
 		fact := ReadinessFact{
 			Client:     string(agent),
 			Runtime:    runtime,
-			Hooks:      "absent",
-			MCP:        "absent",
+			Hooks:      "not_checked",
+			MCP:        "not_checked",
 			Permission: "unsupported",
 			Restart:    "not_required",
 			Delivery:   "not_verified",
@@ -3218,14 +3219,9 @@ func attachReadiness(req Request, agents []portable.Integration, out Result, mut
 			}
 			switch target.Unit {
 			case "hooks":
-				fact.Hooks = target.Outcome
+				fact.Hooks = targetReadiness(req.Action, target)
 			case "agent-notify":
-				switch target.Outcome {
-				case "completed", "installed":
-					fact.MCP = "installed"
-				default:
-					fact.MCP = target.Outcome
-				}
+				fact.MCP = targetReadiness(req.Action, target)
 			}
 		}
 		if mutationInstall && fact.MCP == "installed" && out.Outcome == "completed" {
@@ -3238,6 +3234,16 @@ func attachReadiness(req Request, agents []portable.Integration, out Result, mut
 		out = offerPostSetupActions(req, agents, out, restartPending)
 	}
 	return out
+}
+
+func targetReadiness(action Action, target TargetResult) string {
+	if action == ActionUninstall && (target.Outcome == "completed" || target.Outcome == "unchanged" && target.Reason == "already_absent") {
+		return "absent"
+	}
+	if target.Outcome == "completed" {
+		return "installed"
+	}
+	return target.Outcome
 }
 
 func offerPostSetupActions(req Request, agents []portable.Integration, out Result, restartPending bool) Result {
