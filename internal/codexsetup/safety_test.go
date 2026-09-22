@@ -122,7 +122,7 @@ func TestCopyRejectsOverlapAndAliases(t *testing.T) {
 
 func TestRuntimeSelectionAndRollback(t *testing.T) {
 	src, dst := fakeBundle(t), t.TempDir()
-	for _, name := range []string{".env", "notification-debug.log", ".claude/worktrees/secret", "bin/private-token"} {
+	for _, name := range []string{".env", "notification-debug.log", ".claude/worktrees/secret", "bin/private-token", "scripts/iterm2-select-tab.py", "scripts/dev-local-plugin.sh"} {
 		path := filepath.Join(src, name)
 		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 			t.Fatal(err)
@@ -134,10 +134,13 @@ func TestRuntimeSelectionAndRollback(t *testing.T) {
 	if err := copyBundle(src, dst); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{".env", "notification-debug.log", ".claude", "bin/private-token"} {
+	for _, name := range []string{".env", "notification-debug.log", ".claude", "bin/private-token", "scripts/dev-local-plugin.sh"} {
 		if _, err := os.Lstat(filepath.Join(dst, name)); !os.IsNotExist(err) {
 			t.Fatalf("copied %s", name)
 		}
+	}
+	if _, err := os.Stat(filepath.Join(dst, "scripts", "iterm2-select-tab.py")); err != nil {
+		t.Fatalf("iTerm2 helper missing: %v", err)
 	}
 	path := filepath.Join(dst, "bin", "codex-hook-wrapper.sh")
 	old, _ := os.ReadFile(path)
