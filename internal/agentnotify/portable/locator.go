@@ -148,6 +148,61 @@ func installedPaths(ledger installruntime.Ledger, installationID, controlRoot st
 	}
 	return primary, global, found, nil
 }
+
+// ResolveCommittedBinding selects the exact historical consumer for a UAP
+// binding. GlobalConfig and Primary may differ from the current defaults: both
+// are part of the registered bytes and must come from the ledger on removal.
+// All other fields are fixed by the UAP receipt and the managed installation.
+func ResolveCommittedBinding(ledger installruntime.Ledger, expected Binding) (Binding, bool, error) {
+	variants, err := CommittedBindingVariants(ledger, expected)
+	if err != nil || len(variants) > 1 {
+		return Binding{}, false, ErrInvalid
+	}
+	if len(variants) == 0 {
+		return Binding{}, false, nil
+	}
+	return variants[0], true, nil
+}
+
+// CommittedBindingVariants is for a controlled transition that temporarily
+// holds the old and replacement consumer for the same UAP binding.
+func CommittedBindingVariants(ledger installruntime.Ledger, expected Binding) ([]Binding, error) {
+	if _, _, _, err := expected.Registration(); err != nil || ledger.ID != expected.ComponentID || ledger.Owner != expected.Owner || !samePhysicalPath(ledger.RuntimeRoot, expected.RuntimeRoot) {
+		return nil, ErrInvalid
+	}
+	var variants []Binding
+	for key, consumer := range ledger.Consumers {
+		if !strings.HasPrefix(key, "portable:") {
+			continue
+		}
+		candidate, err := decode([]byte(consumer.Registration))
+		if err != nil {
+			return nil, ErrInvalid
+		}
+		candidateKey, candidateConsumer, raw, err := candidate.Registration()
+		if err != nil || key != candidateKey || string(raw) != consumer.Registration || !reflect.DeepEqual(candidateConsumer, consumer) || candidate.ComponentID != ledger.ID || candidate.Owner != ledger.Owner || !samePhysicalPath(candidate.RuntimeRoot, ledger.RuntimeRoot) {
+			return nil, ErrInvalid
+		}
+		if candidate.InstallationID != expected.InstallationID || candidate.Integration != expected.Integration || candidate.BindingID != expected.BindingID {
+			continue
+		}
+		if candidate.Version != expected.Version || candidate.ScopeID != expected.ScopeID || candidate.ComponentID != expected.ComponentID || candidate.Owner != expected.Owner || !samePhysicalPath(candidate.ScopeRoot, expected.ScopeRoot) || !samePhysicalPath(candidate.DataRoot, expected.DataRoot) || !samePhysicalPath(candidate.ControlRoot, expected.ControlRoot) || !samePhysicalPath(candidate.RuntimeRoot, expected.RuntimeRoot) {
+			return nil, ErrInvalid
+		}
+		variants = append(variants, candidate)
+	}
+	return variants, nil
+}
+
+// ExactCommittedBinding validates one consumer without checking the executable.
+func ExactCommittedBinding(ledger installruntime.Ledger, b Binding) bool {
+	key, want, _, err := b.Registration()
+	if err != nil || ledger.ID != b.ComponentID || ledger.Owner != b.Owner || !samePhysicalPath(ledger.RuntimeRoot, b.RuntimeRoot) {
+		return false
+	}
+	got, ok := ledger.Consumers[key]
+	return ok && reflect.DeepEqual(got, want)
+}
 func (b Binding) Filename() (string, error) {
 	key, _, _, err := b.Registration()
 	if err != nil {
@@ -195,7 +250,39 @@ func RevokeLocator(b Binding) error {
 	if err != nil {
 		return err
 	}
+	_, _, raw, err := b.Registration()
+	if err != nil {
+		return err
+	}
+	current, err := readPrivate(b.DataRoot, name)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil || !bytes.Equal(current, raw) {
+		return ErrInvalid
+	}
 	return removePrivate(b.DataRoot, name)
+}
+
+// ExactLocator returns true only for the private, byte-identical locator.
+// A missing locator is allowed during a resumed revoke.
+func ExactLocator(b Binding) (bool, error) {
+	name, err := b.Filename()
+	if err != nil {
+		return false, err
+	}
+	_, _, raw, err := b.Registration()
+	if err != nil {
+		return false, err
+	}
+	current, err := readPrivate(b.DataRoot, name)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil || !bytes.Equal(current, raw) {
+		return false, ErrInvalid
+	}
+	return true, nil
 }
 func ParseArgs(args []string) (string, error) {
 	if len(args) != 2 || args[0] != "--locator" || !selector.MatchString(args[1]) {
