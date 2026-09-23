@@ -196,7 +196,21 @@ func validInstallOrUpdateRequest(req setupwizard.Request) bool {
 }
 
 func runInstallOrUpdate(ctx context.Context, req setupwizard.Request) (setupwizard.Result, error) {
+	inspect := req
+	inspect.Action = setupwizard.ActionInspect
+	before, inspectErr := setupwizard.Run(ctx, inspect)
+	if inspectErr != nil {
+		return before, inspectErr
+	}
+	for _, next := range before.NextActions {
+		if next.Kind == "recover" || next.Kind == "resume" {
+			return setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "pending_setup_required", NextActions: before.NextActions}, setupwizard.ErrRefused
+		}
+	}
 	plan, err := setupwizard.Plan(ctx, req)
+	if plan.Ready && (plan.Request.Action != req.Action || strings.Join(plan.Request.Agents, ",") != strings.Join(req.Agents, ",")) {
+		return setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "pending_setup_required"}, setupwizard.ErrRefused
+	}
 	if plan.Ready {
 		result, runErr := setupwizard.Run(ctx, plan.Request)
 		if runErr != nil || result.ExitCode() != 0 {
