@@ -172,6 +172,66 @@ func TestHistoricalBindingResolutionPreservesBothAgentsAndOverride(t *testing.T)
 	}
 }
 
+func TestUninstallRetryRejectsConsumerDifferentFromFrozenIntent(t *testing.T) {
+	old, ledger := legacyFixture(t)
+	targetPath := filepath.Join(old.ScopeRoot, "client-target")
+	old.BindingID = domain.ComputeClientBindingID(old.InstallationID, string(old.Integration), old.ScopeID, targetPath)
+	gen := commitLegacy(t, old, ledger.Generation)
+	oldKey, _, _, err := old.Registration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := filepath.Join(filepath.Dir(old.ControlRoot), "profile")
+	confirmed, reservation, err := (Service{}).PublishConfirmedIntent(testCtx(t), ConfirmedIntent{
+		ControlRoot: old.ControlRoot, RuntimeRoot: old.RuntimeRoot, Owner: old.Owner,
+		Action: "uninstall", Targets: []IntentTarget{{
+			Client: string(old.Integration), InstallationID: old.InstallationID,
+			BindingID: old.BindingID, DataReceiptID: "receipt", Profile: profile,
+			OldConsumerKey: oldKey, OldBinding: &old,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gen = confirmed.Generation
+	if _, err := installruntime.Commit(testCtx(t), installruntime.Request{
+		ControlRoot: old.ControlRoot, RuntimeRoot: old.RuntimeRoot, Owner: old.Owner,
+		ConsumerID: oldKey, RemoveConsumer: true, ExpectedGeneration: &gen, Reservation: reservation,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	replacement := old
+	replacement.GlobalConfig = filepath.Join(filepath.Dir(old.ControlRoot), "different", "config.json")
+	replacementKey, consumer, _, err := replacement.Registration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(old.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gen = snap.Ledger.Generation
+	if _, err := installruntime.Commit(testCtx(t), installruntime.Request{
+		ControlRoot: old.ControlRoot, RuntimeRoot: old.RuntimeRoot, Owner: old.Owner,
+		ConsumerID: replacementKey, Consumer: consumer, ExpectedGeneration: &gen, Reservation: reservation,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	snap, err = installruntime.ReadInstalledSnapshot(old.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := Identity{InstallationID: old.InstallationID, ComponentID: old.ComponentID, Owner: old.Owner,
+		ScopeRoot: old.ScopeRoot, ControlRoot: old.ControlRoot, RuntimeRoot: old.RuntimeRoot,
+		GlobalConfig: old.GlobalConfig, Primary: old.Primary}
+	client := domain.ClientBinding{ClientBindingID: old.BindingID, ClientID: string(old.Integration),
+		Scope: old.ScopeID, TargetLocator: targetPath, DataReceiptID: "receipt"}
+	receipt := domain.DataReceipt{DataReceiptID: "receipt", Scope: old.ScopeID, Locator: old.DataRoot}
+	if _, err := resolveRemovableBinding(id, old.Integration, client, receipt, profile, snap.Ledger); !errors.Is(err, ErrPreflight) {
+		t.Fatalf("changed consumer bypassed frozen uninstall: %v", err)
+	}
+}
+
 func TestRevokeHistoricalBindingWithoutOldConfigParentOrLogicalPrimary(t *testing.T) {
 	old, ledger := legacyFixture(t)
 	gen := commitLegacy(t, old, ledger.Generation)
@@ -433,6 +493,32 @@ func TestMaterializerRemoveGroupRetriesAfterBothRevokes(t *testing.T) {
 		Action: "uninstall", Targets: targets,
 	})
 	if err != nil {
+		t.Fatal(err)
+	}
+	second := installed[1]
+	name, err := second.Filename()
+	if err != nil {
+		t.Fatal(err)
+	}
+	locatorPath := filepath.Join(second.DataRoot, name)
+	_, _, original, err := second.Registration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(locatorPath, []byte("foreign"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mat.RemoveGroup(testCtx(t), []MaterializeRequest{
+		{Identity: id, Integration: portable.Codex, ExpectedGeneration: confirmed.Generation, ClientConfigRoot: codexConfig, ClientExecutable: probe, ExternalUninstalled: true, OperationID: "foreign-group-remove"},
+		{Identity: id, Integration: portable.Claude, ExpectedGeneration: confirmed.Generation, ClientConfigRoot: claudeConfig, ClientExecutable: probe, OperationID: "foreign-group-remove"},
+	}); !errors.Is(err, ErrPreflight) {
+		t.Fatalf("foreign second locator did not block group preflight: %v", err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(old.ControlRoot)
+	if err != nil || !portable.ExactCommittedBinding(snap.Ledger, installed[0]) {
+		t.Fatalf("first consumer changed before second locator validation: %v", err)
+	}
+	if err := os.WriteFile(locatorPath, original, 0600); err != nil {
 		t.Fatal(err)
 	}
 	gen := confirmed.Generation

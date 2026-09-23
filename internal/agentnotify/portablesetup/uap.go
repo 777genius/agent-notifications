@@ -281,6 +281,20 @@ func resolveRemovableBinding(id Identity, integration portable.Integration, clie
 		return portable.Binding{}, fmt.Errorf("%w: committed binding ambiguous or invalid", ErrPreflight)
 	}
 	if len(variants) == 1 {
+		if ledger.PendingMutation != nil {
+			target, err := readUninstallIntentTarget(ledger, expected, client.DataReceiptID, profile)
+			if err != nil {
+				return portable.Binding{}, err
+			}
+			if target.OldBinding != nil {
+				frozen, err := frozenUninstallBinding(ledger, expected, client.DataReceiptID, profile)
+				if err != nil || frozen != variants[0] {
+					return portable.Binding{}, fmt.Errorf("%w: committed binding differs from confirmed uninstall", ErrPreflight)
+				}
+			} else if target.OldConsumerKey != "" || target.NewBinding != nil || target.NewConsumerKey != "" {
+				return portable.Binding{}, fmt.Errorf("%w: incomplete confirmed uninstall binding", ErrPreflight)
+			}
+		}
 		return variants[0], nil
 	}
 	old, err := frozenUninstallBinding(ledger, expected, client.DataReceiptID, profile)
@@ -294,31 +308,11 @@ func resolveRemovableBinding(id Identity, integration portable.Integration, clie
 }
 
 func frozenUninstallBinding(ledger installruntime.Ledger, expected portable.Binding, receiptID, profile string) (portable.Binding, error) {
-	pending := ledger.PendingMutation
-	if pending == nil || pending.Owner != expected.Owner || pending.IntentRef != IntentPath(expected.ControlRoot) {
-		return portable.Binding{}, fmt.Errorf("%w: uninstall reservation missing", ErrPreflight)
+	target, err := readUninstallIntentTarget(ledger, expected, receiptID, profile)
+	if err != nil {
+		return portable.Binding{}, err
 	}
-	path := IntentPath(expected.ControlRoot)
-	wantFile, ok := ledger.Files[path]
-	actualFile, err := installruntime.Fingerprint(path)
-	if err != nil || !ok || actualFile != wantFile {
-		return portable.Binding{}, fmt.Errorf("%w: uninstall intent file differs", ErrPreflight)
-	}
-	intent, err := ReadIntent(expected.ControlRoot)
-	if err != nil || intent.SetupIntentID != pending.ID || intent.Action != "uninstall" {
-		return portable.Binding{}, fmt.Errorf("%w: uninstall intent missing", ErrPreflight)
-	}
-	var target *IntentTarget
-	for i := range intent.Targets {
-		if intent.Targets[i].Client != string(expected.Integration) {
-			continue
-		}
-		if target != nil {
-			return portable.Binding{}, fmt.Errorf("%w: uninstall intent target ambiguous", ErrPreflight)
-		}
-		target = &intent.Targets[i]
-	}
-	if target == nil || target.OldBinding == nil || target.NewBinding != nil || target.Client != string(expected.Integration) || target.InstallationID != expected.InstallationID || target.BindingID != expected.BindingID || target.DataReceiptID != receiptID || target.Profile != profile {
+	if target.OldBinding == nil || target.NewBinding != nil || target.NewConsumerKey != "" || target.DataReceiptID != receiptID {
 		return portable.Binding{}, fmt.Errorf("%w: uninstall intent target differs", ErrPreflight)
 	}
 	old := *target.OldBinding
@@ -331,6 +325,37 @@ func frozenUninstallBinding(ledger installruntime.Ledger, expected portable.Bind
 		return portable.Binding{}, fmt.Errorf("%w: uninstall UAP identity differs", ErrPreflight)
 	}
 	return old, nil
+}
+
+func readUninstallIntentTarget(ledger installruntime.Ledger, expected portable.Binding, receiptID, profile string) (IntentTarget, error) {
+	pending := ledger.PendingMutation
+	if pending == nil || pending.Owner != expected.Owner || pending.IntentRef != IntentPath(expected.ControlRoot) {
+		return IntentTarget{}, fmt.Errorf("%w: uninstall reservation missing", ErrPreflight)
+	}
+	path := IntentPath(expected.ControlRoot)
+	wantFile, ok := ledger.Files[path]
+	actualFile, err := installruntime.Fingerprint(path)
+	if err != nil || !ok || actualFile != wantFile {
+		return IntentTarget{}, fmt.Errorf("%w: uninstall intent file differs", ErrPreflight)
+	}
+	intent, err := ReadIntent(expected.ControlRoot)
+	if err != nil || intent.SetupIntentID != pending.ID || intent.Action != "uninstall" {
+		return IntentTarget{}, fmt.Errorf("%w: uninstall intent missing", ErrPreflight)
+	}
+	var target *IntentTarget
+	for i := range intent.Targets {
+		if intent.Targets[i].Client != string(expected.Integration) {
+			continue
+		}
+		if target != nil {
+			return IntentTarget{}, fmt.Errorf("%w: uninstall intent target ambiguous", ErrPreflight)
+		}
+		target = &intent.Targets[i]
+	}
+	if target == nil || target.Client != string(expected.Integration) || target.InstallationID != expected.InstallationID || target.BindingID != expected.BindingID || (target.DataReceiptID != "" && target.DataReceiptID != receiptID) || target.Profile != profile {
+		return IntentTarget{}, fmt.Errorf("%w: uninstall intent target differs", ErrPreflight)
+	}
+	return *target, nil
 }
 
 func (m Materializer) validateRefreshHandoff(req MaterializeRequest) error {
@@ -924,6 +949,9 @@ func (m Materializer) RemoveGroup(ctx context.Context, reqs []MaterializeRequest
 			bindings[i], err = resolveRemovableBinding(req.Identity, req.Integration, client, installation.DataReceipts[client.DataReceiptID], req.ClientConfigRoot, snap.Ledger)
 			if err != nil {
 				return nil, err
+			}
+			if _, err := portable.ExactLocator(bindings[i]); err != nil {
+				return nil, fmt.Errorf("%w: existing locator differs for %s: %v", ErrPreflight, req.Integration, err)
 			}
 			key, _, _, err := bindings[i].Registration()
 			if err != nil {

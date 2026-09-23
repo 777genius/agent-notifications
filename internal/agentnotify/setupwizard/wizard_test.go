@@ -689,6 +689,59 @@ func TestReplaceMigratedBindingCleansOldLocatorAfterConsumerRevoke(t *testing.T)
 	}
 }
 
+func TestWizardMigrationOfOneClientLeavesSiblingPlannable(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtimeRoot, _, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	legacy := filepath.Join(runtimeRoot, "global", "config.json")
+	canonical := filepath.Join(filepath.Dir(control), "canonical", "config.json")
+	claudeProfile := filepath.Join(filepath.Dir(control), "claude-profile")
+	codexProfile := filepath.Join(filepath.Dir(control), "codex-profile")
+	scope := filepath.Join(filepath.Dir(control), "scope")
+	for _, dir := range []string{claudeProfile, codexProfile, scope} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	req := Request{Action: ActionInstall, Agents: []string{"claude", "codex"}, Yes: true,
+		Hooks: boolPtr(false), AgentNotify: boolPtr(true), PackageRoot: pkg,
+		ControlRoot: control, RuntimeRoot: runtimeRoot, GlobalConfig: legacy,
+		ClaudeConfig: claudeProfile, CodexHome: codexProfile,
+		ClientExecutable: probe, Helper: probe, ScopeRoot: scope,
+		ClaudeRunner: listingRunner{configRoot: claudeProfile}}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("legacy install both: %+v %v", installed, err)
+	}
+	t.Setenv(config.OverrideEnv, canonical)
+	req.Action, req.Agents, req.GlobalConfig, req.InstallationID = ActionRepair, []string{"claude"}, "", installed.InstallationID
+	first, err := Run(ctx, req)
+	if err != nil || first.Outcome != "completed" {
+		t.Fatalf("migrate claude: %+v %v", first, err)
+	}
+	req.Agents = []string{"codex"}
+	plan, err := Plan(ctx, req)
+	if err != nil || !plan.Ready || len(plan.Request.MigrationBindings) != 1 {
+		t.Fatalf("unmigrated sibling plan: %+v %v", plan, err)
+	}
+	req.Agents = []string{"claude", "codex"}
+	plan, err = Plan(ctx, req)
+	if err != nil || !plan.Ready || len(plan.Request.MigrationBindings) != 1 {
+		t.Fatalf("mixed installation plan: %+v %v", plan, err)
+	}
+	second, err := Run(ctx, plan.Request)
+	if err != nil || second.Outcome != "completed" {
+		t.Fatalf("migrate codex after claude: %+v %v", second, err)
+	}
+	req.Agents = []string{"claude"}
+	plan, err = Plan(ctx, req)
+	if err != nil || !plan.Ready || len(plan.Request.MigrationBindings) != 0 {
+		t.Fatalf("migrated client plan: %+v %v", plan, err)
+	}
+}
+
 func TestPlanShowsEveryClientBindingID(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, _, _ := managedRuntime(t)

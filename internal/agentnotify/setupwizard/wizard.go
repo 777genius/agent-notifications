@@ -253,14 +253,6 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 			}
 			req.InstallationID = id.InstallationID
 			req.GlobalConfig = id.GlobalConfig
-			existingGlobal := false
-			if _, existing, globalErr := portable.InstalledGlobalConfig(ev.snap.Ledger, id.InstallationID, req.ControlRoot); globalErr != nil {
-				ev.out.Outcome, ev.out.Reason = "incomplete", "global_config_parent_invalid"
-				plan.Result = attachCommand(req, ev.out)
-				return plan, globalErr
-			} else {
-				existingGlobal = existing
-			}
 			acquired.InstallationID = id.InstallationID
 			if req.Action == ActionUpdate || req.Action == ActionRepair {
 				if mapped, bindErr := requireLiveNotifyBindings(req, mat, id, ev.notifyAgents, ev.out); bindErr != nil {
@@ -345,20 +337,18 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 					}
 				}
 			}
-			if existingGlobal {
-				for _, agent := range ev.notifyAgents {
-					if _, migrating := req.MigrationBindings[string(agent)]; migrating {
-						continue
-					}
-					target, err := targetIdentity(id, req, ev.snap, mat, agent)
-					if err == nil {
-						err = portable.ValidateGlobalConfigParent(target.GlobalConfig)
-					}
-					if err != nil {
-						ev.out.Outcome, ev.out.Reason = "incomplete", "global_config_parent_invalid"
-						plan.Result = attachCommand(req, ev.out)
-						return plan, err
-					}
+			for _, agent := range ev.notifyAgents {
+				if _, migrating := req.MigrationBindings[string(agent)]; migrating || !liveNotifyClient(mat, id.InstallationID, string(agent)) {
+					continue
+				}
+				target, err := targetIdentity(id, req, ev.snap, mat, agent)
+				if err == nil {
+					err = portable.ValidateGlobalConfigParent(target.GlobalConfig)
+				}
+				if err != nil {
+					ev.out.Outcome, ev.out.Reason = "incomplete", "global_config_parent_invalid"
+					plan.Result = attachCommand(req, ev.out)
+					return plan, err
 				}
 			}
 			if req.TreeDigest != "" {
@@ -1565,8 +1555,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 			}
 			path := target.GlobalConfig
 			_, migrating := req.MigrationBindings[string(agent)]
-			_, existing, err := portable.InstalledGlobalConfig(snap.Ledger, id.InstallationID, req.ControlRoot)
-			if migrating || (err == nil && !existing) {
+			if migrating || !liveNotifyClient(mat, id.InstallationID, string(agent)) {
 				err = config.PrepareGlobalConfigParent(path)
 			}
 			if err == nil {
@@ -2654,25 +2643,37 @@ func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot st
 		}
 		global = physical
 	}
-	var frozen *portable.Binding
-	for _, agent := range []portable.Integration{portable.Claude, portable.Codex} {
-		if migration, ok := req.MigrationBindings[string(agent)]; ok {
-			frozen = &migration.Old
-			break
+	var frozen *portablesetup.Identity
+	if id != "" && (req.Action == ActionUpdate || req.Action == ActionRepair || req.Action == ActionUninstall) {
+		base := portablesetup.Identity{InstallationID: id, ComponentID: snap.Ledger.ID, Owner: snap.Ledger.Owner,
+			ScopeRoot: scope, ControlRoot: req.ControlRoot, RuntimeRoot: runtimeRoot, GlobalConfig: global}
+		var candidates []portablesetup.Identity
+		for _, name := range req.Agents {
+			agent := portable.Integration(name)
+			if agent != portable.Claude && agent != portable.Codex {
+				continue
+			}
+			if migration, ok := req.MigrationBindings[name]; ok {
+				candidates = append(candidates, identityFromBinding(base, migration.Old))
+			} else if removal, ok := req.RemovalBindings[name]; ok {
+				candidates = append(candidates, identityFromBinding(base, removal.Old))
+			} else if liveNotifyClient(mat, id, name) {
+				committed, err := targetIdentity(base, req, snap, mat, agent)
+				if err != nil {
+					return portablesetup.Identity{}, err
+				}
+				candidates = append(candidates, committed)
+			}
 		}
-		if removal, ok := req.RemovalBindings[string(agent)]; ok {
-			frozen = &removal.Old
-			break
+		for _, candidate := range candidates {
+			if (global == "" || candidate.GlobalConfig == global) && (req.Primary == "" || candidate.Primary == req.Primary) {
+				cp := candidate
+				frozen = &cp
+				break
+			}
 		}
-	}
-	if frozen == nil && id != "" && (req.Action == ActionUpdate || req.Action == ActionRepair || req.Action == ActionUninstall) {
-		base := portablesetup.Identity{InstallationID: id, ComponentID: snap.Ledger.ID, Owner: snap.Ledger.Owner, ControlRoot: req.ControlRoot, RuntimeRoot: runtimeRoot}
-		committed, found, err := selectedCommittedIdentity(req, snap, mat, base)
-		if err != nil {
-			return portablesetup.Identity{}, err
-		}
-		if found {
-			frozen = &committed
+		if frozen == nil && len(candidates) != 0 {
+			return portablesetup.Identity{}, fmt.Errorf("%w: requested config or primary differs from selected clients", portablesetup.ErrIntentConflict)
 		}
 	}
 	if frozen != nil {
