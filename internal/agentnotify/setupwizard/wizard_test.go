@@ -543,6 +543,15 @@ func TestWizardExistingGlobalConfigIdentitySurvivesDefaultChange(t *testing.T) {
 			t.Fatalf("macOS system alias changed installed identity: %+v %v", id, err)
 		}
 		req.GlobalConfig = legacy
+		req.Action = ActionRepair
+		req.ControlRoot = strings.TrimPrefix(control, "/private")
+		req.RuntimeRoot = strings.TrimPrefix(runtimeRoot, "/private")
+		aliased, err := Run(ctx, req)
+		if err != nil || (aliased.Outcome != "completed" && aliased.Outcome != "unchanged") {
+			t.Fatalf("repair through macOS system alias: %+v %v", aliased, err)
+		}
+		req.ControlRoot = control
+		req.RuntimeRoot = runtimeRoot
 	}
 	req.Action = ActionRepair
 	explicitPlan, err := Plan(ctx, req)
@@ -721,6 +730,19 @@ func TestWizardMigrationOfOneClientLeavesSiblingPlannable(t *testing.T) {
 	if err != nil || first.Outcome != "completed" {
 		t.Fatalf("migrate claude: %+v %v", first, err)
 	}
+	req.Action = ActionInstall
+	for _, agent := range []string{"claude", "codex"} {
+		req.Agents = []string{agent}
+		plan, err := Plan(ctx, req)
+		if err != nil || !plan.Ready {
+			t.Fatalf("install plan for mixed-identity %s: %+v %v", agent, plan, err)
+		}
+		result, err := Run(ctx, plan.Request)
+		if err != nil || (result.Outcome != "completed" && result.Outcome != "unchanged") {
+			t.Fatalf("install for mixed-identity %s: %+v %v", agent, result, err)
+		}
+	}
+	req.Action = ActionRepair
 	req.Agents = []string{"codex"}
 	plan, err := Plan(ctx, req)
 	if err != nil || !plan.Ready || len(plan.Request.MigrationBindings) != 1 {
@@ -739,6 +761,124 @@ func TestWizardMigrationOfOneClientLeavesSiblingPlannable(t *testing.T) {
 	plan, err = Plan(ctx, req)
 	if err != nil || !plan.Ready || len(plan.Request.MigrationBindings) != 0 {
 		t.Fatalf("migrated client plan: %+v %v", plan, err)
+	}
+}
+
+func TestWizardUpdateRestoresMissingOldProjectionWithDiscovery(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtimeRoot, _, primary, generation := managedRuntime(t)
+	probe := buildProbe(t)
+	root := filepath.Dir(control)
+	pkg := filepath.Join(root, "package")
+	writePackage(t, pkg, probe)
+	profile := filepath.Join(root, "codex-profile")
+	mcpConfig := filepath.Join(root, "direct-mcp.json")
+	scope := filepath.Join(root, "scope")
+	for _, dir := range []string{profile, scope} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := clientsetup.Apply(ctx, clientsetup.Request{
+		ControlRoot: control, RuntimeRoot: runtimeRoot, Command: primary, ConfigPath: mcpConfig,
+		Provider: registration.Codex, Mode: clientsetup.Managed, ExpectedGeneration: generation,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(runtimeRoot, "global", "config.json")
+	req := Request{Action: ActionInstall, Agents: []string{"codex"}, Yes: true,
+		Hooks: boolPtr(false), AgentNotify: boolPtr(true), PackageRoot: pkg,
+		ControlRoot: control, RuntimeRoot: runtimeRoot, GlobalConfig: legacy, Primary: "primary",
+		CodexHome: profile, ClientExecutable: probe, Helper: probe, ScopeRoot: scope,
+		MCPConfig: map[string]string{"codex": mcpConfig}}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("legacy install: %+v %v", installed, err)
+	}
+	canonical := filepath.Join(root, "canonical", "config.json")
+	t.Setenv(config.OverrideEnv, canonical)
+	req.Action, req.GlobalConfig, req.Primary, req.InstallationID = ActionUpdate, "", "", installed.InstallationID
+	plan, err := Plan(ctx, req)
+	if err != nil || !plan.Ready || len(plan.Request.MigrationBindings) != 1 {
+		t.Fatalf("migration plan: %+v %v", plan, err)
+	}
+	migration := plan.Request.MigrationBindings["codex"]
+	target := liveTargetPath(t, filepath.Join(root, "uap", "state", "state-v2.json"), "codex")
+	var removed bool
+	var removeErr error
+	plan.Request.Progress = func(phase string) {
+		if phase == "agent-notify" && !removed {
+			removed = true
+			removeErr = os.RemoveAll(target)
+		}
+	}
+	updated, err := Run(ctx, plan.Request)
+	if !removed || removeErr != nil {
+		t.Fatalf("managed projection was not removed after preflight: removed=%t err=%v", removed, removeErr)
+	}
+	if err != nil || updated.Outcome != "completed" {
+		t.Fatalf("update did not restore old projection and migrate: %+v %v", updated, err)
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("managed projection was not restored: %v", err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil || snap.Ledger.PendingMutation != nil || !portable.ExactCommittedBinding(snap.Ledger, migration.New) || portable.ExactCommittedBinding(snap.Ledger, migration.Old) {
+		t.Fatalf("migration did not settle exact bindings: %+v %v", snap.Ledger.PendingMutation, err)
+	}
+}
+
+func TestIdentitySkipsLiveClientWithoutCommittedConsumer(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtimeRoot, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	profile := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(profile, 0700); err != nil {
+		t.Fatal(err)
+	}
+	req := Request{Action: ActionInstall, Agents: []string{"codex"}, Yes: true,
+		Hooks: boolPtr(false), AgentNotify: boolPtr(true), PackageRoot: pkg,
+		ControlRoot: control, RuntimeRoot: runtimeRoot, GlobalConfig: global,
+		CodexHome: profile, ClientExecutable: probe, Helper: probe, ScopeRoot: filepath.Dir(control)}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install fixture: %+v %v", installed, err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var consumerKey string
+	for key := range snap.Ledger.Consumers {
+		if strings.HasPrefix(key, "portable:") {
+			consumerKey = key
+		}
+	}
+	if consumerKey == "" {
+		t.Fatal("fixture has no portable consumer")
+	}
+	generation := snap.Ledger.Generation
+	if _, err := installruntime.Commit(ctx, installruntime.Request{ControlRoot: control, RuntimeRoot: runtimeRoot,
+		Owner: snap.Ledger.Owner, ConsumerID: consumerKey, RemoveConsumer: true, ExpectedGeneration: &generation}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(config.OverrideEnv, filepath.Join(filepath.Dir(control), "canonical", "config.json"))
+	req.GlobalConfig = ""
+	req.Primary = ""
+	req.InstallationID = installed.InstallationID
+	snap, err = installruntime.ReadInstalledSnapshot(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mat, err := materializer(req, snap, runtimeRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := identity(req, snap, runtimeRoot, mat, false)
+	if err != nil || id.Primary != portable.PlatformPrimary() || id.GlobalConfig != filepath.Join(filepath.Dir(control), "canonical", "config.json") {
+		t.Fatalf("uncommitted live client froze invalid identity: %+v %v", id, err)
 	}
 }
 

@@ -243,8 +243,8 @@ func committedTemplate(ledger installruntime.Ledger, id portablesetup.Identity, 
 		if json.Unmarshal([]byte(consumer.Registration), &candidate) != nil ||
 			candidate.Integration != agent || candidate.InstallationID != id.InstallationID ||
 			candidate.BindingID != live.ClientBindingID || candidate.ScopeID != live.Scope ||
-			candidate.DataRoot != dataRoot || candidate.ControlRoot != id.ControlRoot ||
-			candidate.ComponentID != id.ComponentID || candidate.Owner != id.Owner || candidate.RuntimeRoot != id.RuntimeRoot {
+			!samePortableRoot(candidate.DataRoot, dataRoot) || !samePortableRoot(candidate.ControlRoot, id.ControlRoot) ||
+			candidate.ComponentID != id.ComponentID || candidate.Owner != id.Owner || !samePortableRoot(candidate.RuntimeRoot, id.RuntimeRoot) {
 			continue
 		}
 		actualKey, actualConsumer, _, err := candidate.Registration()
@@ -260,6 +260,16 @@ func committedTemplate(ledger installruntime.Ledger, id portablesetup.Identity, 
 		return portable.Binding{}, fmt.Errorf("%w: committed binding missing for %s", portablesetup.ErrAlreadyAbsent, agent)
 	}
 	return expected, nil
+}
+
+// Complete only canonicalizes OS-owned path aliases, not arbitrary user symlinks.
+func samePortableRoot(a, b string) bool {
+	if a == b {
+		return true
+	}
+	left, leftErr := installruntime.PhysicalPath(a)
+	right, rightErr := installruntime.PhysicalPath(b)
+	return leftErr == nil && rightErr == nil && left == right
 }
 
 func migrationAlreadyProjected(ledger installruntime.Ledger, migration MigrationBinding) (bool, error) {

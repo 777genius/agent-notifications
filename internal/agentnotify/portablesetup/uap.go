@@ -63,9 +63,11 @@ type MaterializeRequest struct {
 	OperationID         string
 	HelperExecutable    string
 	ExternalUninstalled bool
-	// HandoffAction is the host action (update or repair) for a one-client
-	// refresh_projection migration. The UAP operation remains refresh_projection.
-	HandoffAction string
+	// HandoffAction is the frozen host action (update or repair) for a
+	// migration projection. Only RefreshProjection and RestoreMigrationProjection
+	// may pass it to the handoff; their UAP operations remain distinct.
+	HandoffAction              string
+	restoreMigrationProjection bool
 	// HoldOnly publishes the uninstall reservation and returns without locator
 	// revoke or UAP mutation. Wizard uses it to keep a Codex removal pending
 	// until the host attests ExternalUninstalled.
@@ -440,6 +442,68 @@ func (m Materializer) validateRefreshHandoff(req MaterializeRequest) error {
 	return nil
 }
 
+// validateRestoreMigrationHandoff authorizes a repair of precisely the old UAP
+// projection frozen by a pending migration. A repair cannot borrow an unrelated
+// update intent merely by supplying its action string.
+func (m Materializer) validateRestoreMigrationHandoff(req MaterializeRequest) error {
+	if req.HandoffAction != "update" && req.HandoffAction != "repair" {
+		return fmt.Errorf("%w: migration restore requires update or repair intent", ErrPreflight)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(req.Identity.ControlRoot)
+	if err != nil || snap.Recovery {
+		return fmt.Errorf("%w: managed runtime snapshot unavailable", ErrPreflight)
+	}
+	intent, target, err := readMigrationIntentTarget(snap.Ledger, req.Identity.ControlRoot, req.Integration)
+	if err != nil || intent.Action != req.HandoffAction || target.InstallationID != req.Identity.InstallationID || target.Profile != req.ClientConfigRoot {
+		return fmt.Errorf("%w: migration restore intent differs", ErrPreflight)
+	}
+	old, replacement := *target.OldBinding, *target.NewBinding
+	if old == replacement || old.Integration != req.Integration || old.InstallationID != req.Identity.InstallationID {
+		return fmt.Errorf("%w: migration restore identity differs", ErrPreflight)
+	}
+	sameIdentity := old
+	sameIdentity.GlobalConfig, sameIdentity.Primary = replacement.GlobalConfig, replacement.Primary
+	if sameIdentity != replacement {
+		return fmt.Errorf("%w: migration restore changes UAP identity", ErrPreflight)
+	}
+	oldKey, _, _, oldErr := old.Registration()
+	newKey, _, _, newErr := replacement.Registration()
+	if oldErr != nil || newErr != nil || target.OldConsumerKey != oldKey || target.NewConsumerKey != newKey || target.BindingID != old.BindingID {
+		return fmt.Errorf("%w: migration restore registration differs", ErrPreflight)
+	}
+	state, err := m.Store.Load()
+	if err != nil {
+		return err
+	}
+	installation, ok := findInstallation(state, old.InstallationID)
+	if !ok {
+		return fmt.Errorf("%w: UAP installation missing", ErrPreflight)
+	}
+	var client domain.ClientBinding
+	count := 0
+	for _, candidate := range installation.Clients {
+		if candidate.ClientID == string(req.Integration) {
+			client = candidate
+			count++
+		}
+	}
+	if count != 1 || client.DataReceiptID != target.DataReceiptID {
+		return fmt.Errorf("%w: UAP client or receipt ambiguous", ErrPreflight)
+	}
+	expectedOld, err := expectedStoredBinding(req.Identity, req.Integration, client, installation.DataReceipts[client.DataReceiptID])
+	if err != nil || expectedOld != old {
+		return fmt.Errorf("%w: requested old projection differs from UAP binding", ErrPreflight)
+	}
+	variants, err := portable.CommittedBindingVariants(snap.Ledger, expectedOld)
+	if err != nil || len(variants) != 1 || variants[0] != old {
+		return fmt.Errorf("%w: committed old consumer differs", ErrPreflight)
+	}
+	if present, err := portable.ExactLocator(old); err != nil || !present {
+		return fmt.Errorf("%w: old locator is absent or foreign", ErrPreflight)
+	}
+	return nil
+}
+
 func refuseConflictingLocator(b portable.Binding) error {
 	name, err := b.Filename()
 	if err != nil {
@@ -675,8 +739,13 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 			return portable.Binding{}, err
 		}
 		action = req.HandoffAction
+	} else if req.Operation == uapinstaller.OpRepair && req.restoreMigrationProjection {
+		if err := m.validateRestoreMigrationHandoff(req); err != nil {
+			return portable.Binding{}, err
+		}
+		action = req.HandoffAction
 	} else if req.HandoffAction != "" {
-		return portable.Binding{}, fmt.Errorf("%w: handoff action override is only for projection refresh", ErrPreflight)
+		return portable.Binding{}, fmt.Errorf("%w: handoff action override requires validated migration projection", ErrPreflight)
 	}
 	gen, res, err := m.Kernel.handoffForward(ctx, Request{
 		Binding: template, ExpectedGeneration: req.ExpectedGeneration, Discovery: req.Discovery,
@@ -687,17 +756,17 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 	if err != nil {
 		return portable.Binding{}, err
 	}
-	if req.Operation == uapinstaller.OpRefreshProjection && res == nil {
+	if (req.Operation == uapinstaller.OpRefreshProjection || req.restoreMigrationProjection) && res == nil {
 		// A migration can have no direct-MCP discovery. In that case
 		// handoffForward has no work, but the UAP commit still needs the
 		// previously confirmed kernel reservation.
 		snap, readErr := installruntime.ReadInstalledSnapshot(req.Identity.ControlRoot)
 		if readErr != nil || snap.Ledger.PendingMutation == nil {
-			return portable.Binding{}, fmt.Errorf("%w: projection refresh reservation disappeared", ErrPreflight)
+			return portable.Binding{}, fmt.Errorf("%w: migration projection reservation disappeared", ErrPreflight)
 		}
 		intent, _, readErr := readMigrationIntentTarget(snap.Ledger, req.Identity.ControlRoot, req.Integration)
 		if readErr != nil || intent.Action != req.HandoffAction {
-			return portable.Binding{}, fmt.Errorf("%w: projection refresh intent changed", ErrPreflight)
+			return portable.Binding{}, fmt.Errorf("%w: migration projection intent changed", ErrPreflight)
 		}
 		cp := *snap.Ledger.PendingMutation
 		res = &cp
@@ -1061,6 +1130,19 @@ func (m Materializer) Update(ctx context.Context, req MaterializeRequest) (porta
 
 func (m Materializer) Repair(ctx context.Context, req MaterializeRequest) (portable.Binding, error) {
 	req.Operation = uapinstaller.OpRepair
+	return m.Install(ctx, req)
+}
+
+// RestoreMigrationProjection repairs the exact old UAP projection while the
+// frozen update or repair migration intent remains pending. The caller then
+// refreshes to the replacement and retires this old binding.
+func (m Materializer) RestoreMigrationProjection(ctx context.Context, req MaterializeRequest) (portable.Binding, error) {
+	req.Operation = uapinstaller.OpRepair
+	req.KeepReservation = true
+	req.restoreMigrationProjection = true
+	if err := m.validateRestoreMigrationHandoff(req); err != nil {
+		return portable.Binding{}, err
+	}
 	return m.Install(ctx, req)
 }
 
