@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.45.9] - 2026-09-23
+
+### Fixed
+- Start the Codex portable MCP server from its UAP-owned locator even when Codex CLI replaces `PLUGIN_DATA` with its own plugin-data directory. Claude MCP and notification hooks keep their existing launch paths ([#225](https://github.com/777genius/agent-notifications/issues/225), [#226](https://github.com/777genius/agent-notifications/pull/226)).
+- Make the short bootstrap installer update owned agent-notify bindings before adding missing selected clients, including retained-data reinstalls. Pending recovery and unselected siblings remain manual rather than being mutated implicitly ([#228](https://github.com/777genius/agent-notifications/issues/228), [#229](https://github.com/777genius/agent-notifications/pull/229)).
+
 ## [1.45.7] - 2026-09-23
 
 ### Added
