@@ -266,7 +266,7 @@ unset BOOTSTRAP_RELEASE_COMMIT INSTALL_SCRIPT_URL
 BOOTSTRAP_RAW_BASE_URL=https://raw.example.invalid/repository
 fetch_bootstrap_file() { printf '%s\n' '{"sha":"''' + commit + r'''"}' > "$2"; }
 resolve_bootstrap_release
-[ "$BOOTSTRAP_COMMIT" = "''' + commit + r'''" ]
+[ -z "$BOOTSTRAP_COMMIT" ]
 payload="$TMPDIR/payload"
 mkdir -p "$payload"
 printf 'helper-bytes' > "$payload/claude-notifications-linux-amd64"
@@ -306,7 +306,7 @@ then echo 'checksum mismatch accepted' >&2; exit 1; fi
         result = subprocess.run([HOST_BASH, '-c', script], env=env, text=True, capture_output=True, timeout=20)
         if result.returncode != 0:
             fail('bootstrap node-only commit+checksum', result.stderr + result.stdout)
-        pass_name('bootstrap.sh node-only commit parse and checksum verify')
+        pass_name('bootstrap.sh deferred commit parse and node checksum verify')
 else:
     print('SKIP bootstrap.sh node-only commit parse and checksum verify')
 
@@ -514,7 +514,7 @@ unset BOOTSTRAP_RELEASE_COMMIT INSTALL_SCRIPT_URL
 BOOTSTRAP_RAW_BASE_URL=https://raw.example.invalid/repository
 fetch_bootstrap_file() { printf '%s\n' '{"sha":"''' + commit + r'''"}' > "$2"; }
 resolve_bootstrap_release
-[ "$BOOTSTRAP_COMMIT" = "''' + commit + r'''" ]
+[ -z "$BOOTSTRAP_COMMIT" ]
 PLUGIN_KEY="claude-notifications-go@claude-notifications-go"
 INSTALLED_JSON="$INSTALLED"
 ver=$(get_installed_plugin_version)

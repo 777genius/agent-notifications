@@ -32,6 +32,36 @@ func TestInstallerPreflightPathsWithoutInterpreter(t *testing.T) {
 	}
 }
 
+func TestInstallerReleaseCommitStrictJSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "commit.json")
+	sha := strings.Repeat("a", 40)
+	for _, tc := range []struct {
+		name, body, want string
+	}{
+		{"valid", `{"sha":"` + sha + `","commit":{"message":"release"}}`, sha},
+		{"missing", `{"commit":{"sha":"` + sha + `"}}`, ""},
+		{"duplicate", `{"sha":"` + sha + `","sha":"` + sha + `"}`, ""},
+		{"wrong type", `{"sha":42}`, ""},
+		{"uppercase", `{"sha":"` + strings.ToUpper(sha) + `"}`, ""},
+		{"trailing", `{"sha":"` + sha + `"} true`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.WriteFile(path, []byte(tc.body), 0600); err != nil {
+				t.Fatal(err)
+			}
+			var out, stderr bytes.Buffer
+			code := installerConfigCommand([]string{"release-commit", path}, &out, &stderr)
+			if tc.want == "" {
+				if code == 0 || out.Len() != 0 {
+					t.Fatalf("accepted invalid commit: code=%d out=%q", code, out.String())
+				}
+			} else if code != 0 || strings.TrimSpace(out.String()) != tc.want {
+				t.Fatalf("commit: code=%d out=%q stderr=%q", code, out.String(), stderr.String())
+			}
+		})
+	}
+}
+
 func TestInstallerBootstrapProtectsStageAndRegistry(t *testing.T) {
 	box := t.TempDir()
 	testenv.Set(t, box)

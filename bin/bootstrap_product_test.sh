@@ -46,6 +46,9 @@ for args in '--product invalid' '--product' '--unknown' '--product claude --prod
     if ( PRODUCT=""; select_product $args ); then echo "accepted $args"; exit 1; fi
 done
 TEST_RELEASE_COMMIT="0123456789abcdef0123456789abcdef01234567"
+export TEST_RELEASE_COMMIT
+printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$TEST_RELEASE_COMMIT"' > "$SANDBOX/commit-helper"
+chmod +x "$SANDBOX/commit-helper"
 BOOTSTRAP_RAW_BASE_URL="https://raw.example.invalid/repository"
 if ( PRODUCT=""; CONFIGURE_ARGS=(); select_product --product codex --navigation none ); then echo "accepted incomplete none"; exit 1; fi
 if ( PRODUCT=""; CONFIGURE_ARGS=(); select_product --product codex --allow-unknown-caller true ); then echo "accepted partial consent"; exit 1; fi
@@ -94,6 +97,9 @@ if command -v node >/dev/null 2>&1; then
         BOOTSTRAP_RAW_BASE_URL="https://raw.example.invalid/repository"
         fetch_bootstrap_file() { printf '%s\n' '{"sha":"'"$TEST_RELEASE_COMMIT"'"}' > "$2"; }
         resolve_bootstrap_release
+        [ -z "$BOOTSTRAP_COMMIT" ]
+        _CONFIG_HELPER="$SANDBOX/commit-helper"
+        resolve_bootstrap_commit
         [ "$BOOTSTRAP_COMMIT" = "$TEST_RELEASE_COMMIT" ]
         [ "$(select_bootstrap_install_script)" = "$BOOTSTRAP_RAW_BASE_URL/$TEST_RELEASE_COMMIT/bin/install.sh" ]
     )
@@ -116,6 +122,9 @@ if command -v node >/dev/null 2>&1; then
         BOOTSTRAP_RAW_BASE_URL="https://raw.example.invalid/repository"
         fetch_bootstrap_file() { printf '%s\n' '{"sha":"'"$TEST_RELEASE_COMMIT"'"}' > "$2"; }
         resolve_bootstrap_release
+        [ -z "$BOOTSTRAP_COMMIT" ]
+        _CONFIG_HELPER="$SANDBOX/commit-helper"
+        resolve_bootstrap_commit
         [ "$BOOTSTRAP_COMMIT" = "$TEST_RELEASE_COMMIT" ]
         [ "$(select_bootstrap_install_script)" = "$BOOTSTRAP_RAW_BASE_URL/$TEST_RELEASE_COMMIT/bin/install.sh" ]
     )
@@ -366,6 +375,8 @@ if args[1]=='path': print(json.dumps(selected)); sys.exit()
 request=None
 if args[1:3]==['installer','capabilities']:
     print('installer-v1'); sys.exit()
+if args[1:3]==['installer','release-commit']:
+    print(json.loads(pathlib.Path(args[3]).read_text())['sha']); sys.exit()
 if args[1:2]==['installer'] and args[2] in ('root','version'):
     entries=json.loads(pathlib.Path(args[3]).read_text()).get('plugins',{}).get(args[4],[])
     if entries: print(entries[-1]['installPath' if args[2]=='root' else 'version'])

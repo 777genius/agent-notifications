@@ -1220,49 +1220,27 @@ resolve_bootstrap_release() {
     fi
 
     BOOTSTRAP_COMMIT="${BOOTSTRAP_RELEASE_COMMIT:-}"
-    if [ -z "$BOOTSTRAP_COMMIT" ]; then
-        _BOOTSTRAP_TMP=$(mktemp "${TMPDIR:-/tmp}/bootstrap-commit-XXXXXX") || return 1
-        fetch_bootstrap_file "${BOOTSTRAP_COMMIT_API_BASE_URL:-https://api.github.com/repos/${REPO}/commits}/$BOOTSTRAP_TAG" "$_BOOTSTRAP_TMP" || return 1
-        BOOTSTRAP_COMMIT=$(
-            if usable_python3; then
-            python3 -I - "$_BOOTSTRAP_TMP" <<'PYCOMMIT'
-import json, re, sys
-with open(sys.argv[1], encoding='utf-8') as stream:
-    value = json.load(stream).get('sha', '')
-if not isinstance(value, str) or re.fullmatch(r'[0-9a-f]{40}', value) is None:
-    raise SystemExit('Release tag did not resolve to a commit SHA')
-sys.stdout.buffer.write((value + '\n').encode('ascii'))
-PYCOMMIT
-            elif usable_node; then
-            run_isolated_node - "$_BOOTSTRAP_TMP" <<'JSCOMMIT'
-const fs = require('fs');
-let value;
-try {
-  value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8')).sha || '';
-} catch (e) {
-  process.stderr.write('Release tag did not resolve to a commit SHA\n');
-  process.exit(1);
-}
-if (typeof value !== 'string' || !/^[0-9a-f]{40}$/.test(value)) {
-  process.stderr.write('Release tag did not resolve to a commit SHA\n');
-  process.exit(1);
-}
-process.stdout.write(value + '\n');
-JSCOMMIT
-            else
-            echo "python3 or node is required for protected installer metadata and checksum validation." >&2
-            exit 1
-            fi
-        ) || return 1
-        rm -f "$_BOOTSTRAP_TMP"
-        _BOOTSTRAP_TMP=""
-    fi
-    printf '%s\n' "$BOOTSTRAP_COMMIT" | grep -Eq '^[0-9a-f]{40}$' || {
+    if [ -n "$BOOTSTRAP_COMMIT" ]; then
+        printf '%s\n' "$BOOTSTRAP_COMMIT" | grep -Eq '^[0-9a-f]{40}$' || {
         echo "Invalid release commit SHA: $BOOTSTRAP_COMMIT" >&2; return 1;
-    }
+        }
+    fi
 
     # Keep explicit overrides separate from the default so managed installs
     # can still select their compatible writer.
+}
+
+resolve_bootstrap_commit() {
+    [ -n "$BOOTSTRAP_COMMIT" ] && return 0
+    [ -n "$_CONFIG_HELPER" ] || return 1
+    _BOOTSTRAP_TMP=$(mktemp "${TMPDIR:-/tmp}/bootstrap-commit-XXXXXX") || return 1
+    fetch_bootstrap_file "${BOOTSTRAP_COMMIT_API_BASE_URL:-https://api.github.com/repos/${REPO}/commits}/$BOOTSTRAP_TAG" "$_BOOTSTRAP_TMP" || return 1
+    BOOTSTRAP_COMMIT=$("$_CONFIG_HELPER" config installer release-commit "$_BOOTSTRAP_TMP") || return 1
+    rm -f "$_BOOTSTRAP_TMP"
+    _BOOTSTRAP_TMP=""
+    printf '%s\n' "$BOOTSTRAP_COMMIT" | grep -Eq '^[0-9a-f]{40}$' || {
+        echo "Release tag did not resolve to a commit SHA." >&2; return 1;
+    }
 }
 
 # Only release-verified bytes execute before host registration. Never use an old
@@ -1319,6 +1297,7 @@ stage_config_helper() {
         echo 'Published helper does not support interpreter-free installation; a newer release is required.' >&2
         return 1
     }
+    resolve_bootstrap_commit || return 1
     "$_CONFIG_HELPER" config path --json > "$_CONFIG_STAGE/path.json" || return 1
     fetch_bootstrap_file "$(select_bootstrap_install_script)" "$_CONFIG_STAGE/install.sh" || return 1
 }
