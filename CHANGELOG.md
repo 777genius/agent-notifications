@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Allow a bounded cold start of the signed macOS native helper during Codex setup and report probe deadlines explicitly ([#217](https://github.com/777genius/agent-notifications/issues/217)).
 - Restore retained-data reinstall after the final runtime consumer is removed, with a narrowly scoped private handoff intent ([#218](https://github.com/777genius/agent-notifications/pull/218)).
 - Allow repeated setup after a completed portable reservation. The current installer understands writer floor 2; older writers still fail closed instead of mutating newer state.
-- Resolve the release commit through the verified installer binary, so the public bootstrap command works without Python or Node.js.
+- Resolve the release commit through the verified installer binary when `bootstrap.sh` is run directly without a supplied SHA. The short website loader already supplied the SHA without Python or Node.js.
 
 ### Platform notes
 - An uninstall interrupted on an older release after its portable consumer was removed can require manual recovery; the installer fails closed rather than guessing its historical path ([#215](https://github.com/777genius/agent-notifications/issues/215)).
