@@ -546,35 +546,58 @@ func (s Service) PatchIntentReceipt(ctx context.Context, controlRoot, runtimeRoo
 	if receiptID == "" || client == "" {
 		return nil
 	}
-	return s.patchIntent(ctx, controlRoot, runtimeRoot, owner, func(intent *Intent) bool {
+	return s.patchIntent(ctx, controlRoot, runtimeRoot, owner, func(intent *Intent, _ installruntime.Ledger) (bool, error) {
 		changed := false
 		for i, target := range intent.Targets {
 			if target.Client != client {
 				continue
 			}
 			if target.DataReceiptID == receiptID {
-				return false
+				return false, nil
 			}
 			intent.Targets[i].DataReceiptID = receiptID
 			changed = true
 		}
-		return changed
+		return changed, nil
 	})
 }
 
 // PatchIntentExternalUninstalled records a confirmed Codex native-plugin
 // attestation on the pending intent so resume does not require the flag again.
 func (s Service) PatchIntentExternalUninstalled(ctx context.Context, controlRoot, runtimeRoot, owner string) error {
-	return s.patchIntent(ctx, controlRoot, runtimeRoot, owner, func(intent *Intent) bool {
+	return s.patchIntent(ctx, controlRoot, runtimeRoot, owner, func(intent *Intent, _ installruntime.Ledger) (bool, error) {
 		if intent.ExternalUninstalled {
-			return false
+			return false, nil
 		}
 		intent.ExternalUninstalled = true
-		return true
+		return true, nil
 	})
 }
 
-func (s Service) patchIntent(ctx context.Context, controlRoot, runtimeRoot, owner string, mutate func(*Intent) bool) error {
+// PatchIntentGlobalConfig freezes the path before the first portable consumer
+// is committed. Legacy or hooks-only intents may omit it; a later retry must
+// match the frozen path exactly.
+func (s Service) PatchIntentGlobalConfig(ctx context.Context, controlRoot, runtimeRoot, owner, installationID, path string) error {
+	if installationID == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return ErrPreflight
+	}
+	return s.patchIntent(ctx, controlRoot, runtimeRoot, owner, func(intent *Intent, ledger installruntime.Ledger) (bool, error) {
+		installed, found, err := portable.InstalledGlobalConfig(ledger, installationID, controlRoot)
+		if err != nil || (found && installed != path) {
+			return false, ErrIntentConflict
+		}
+		if intent.GlobalConfig != "" {
+			if intent.GlobalConfig != path {
+				return false, ErrIntentConflict
+			}
+			return false, nil
+		}
+		intent.GlobalConfig = path
+		return true, nil
+	})
+}
+
+func (s Service) patchIntent(ctx context.Context, controlRoot, runtimeRoot, owner string, mutate func(*Intent, installruntime.Ledger) (bool, error)) error {
 	if ctx == nil || controlRoot == "" || mutate == nil {
 		return nil
 	}
@@ -601,7 +624,11 @@ func (s Service) patchIntent(ctx context.Context, controlRoot, runtimeRoot, owne
 	if intent.SetupIntentID != pending.ID {
 		return fmt.Errorf("%w: pending %s", ErrIntentConflict, intent.Action)
 	}
-	if !mutate(&intent) {
+	changed, err := mutate(&intent, snap.Ledger)
+	if err != nil {
+		return err
+	}
+	if !changed {
 		return nil
 	}
 	payload, err := marshalIntent(intent)
