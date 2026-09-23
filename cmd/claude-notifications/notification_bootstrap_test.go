@@ -763,7 +763,7 @@ curl() { printf '#!/bin/sh\necho installed >> "$HOME/installs"\n' > "$4"; }
 	if strings.Index(got, configure) > strings.Index(got, "setup-notifications wizard") {
 		t.Fatal("configure must precede wizard", got)
 	}
-	if !strings.Contains(got, "setup-notifications wizard --action install --install-or-update --agents claude --hooks false --agent-notify true --yes") {
+	if !strings.Contains(got, "setup-notifications wizard --action install --agents claude --hooks false --agent-notify true --yes") {
 		t.Fatal(got)
 	}
 	if !strings.Contains(got, "--package "+filepath.Join(bundle, "portable-package")) {
