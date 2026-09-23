@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
@@ -33,11 +34,19 @@ func agentPortableRun(command string, args []string, options notifyruntime.Optio
 	} else if command != "portable-launch" {
 		return 2
 	}
+	dataRoot := os.Getenv("PLUGIN_DATA")
+	if command == "portable-launch" && len(args) > 0 && args[0] == "--data-root" {
+		if len(args) != 4 || !filepath.IsAbs(args[1]) || filepath.Clean(args[1]) != args[1] {
+			return 2
+		}
+		dataRoot = args[1]
+		args = args[2:]
+	}
 	name, err := portable.ParseArgs(args)
 	if err != nil {
 		return 2
 	}
-	lease, err := portable.Acquire(ctx, os.Getenv("PLUGIN_DATA"), name)
+	lease, err := portable.Acquire(ctx, dataRoot, name)
 	if err != nil {
 		return 2
 	}

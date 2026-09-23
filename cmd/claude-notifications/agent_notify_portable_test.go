@@ -86,6 +86,18 @@ func TestPortableProductionBridge(t *testing.T) {
 	b.Integration = portable.Claude
 	b.BindingID = "claude-binding"
 	claude := register(b)
+	codexData := filepath.Join(root, "codex assigned data")
+	if e = os.MkdirAll(codexData, 0700); e != nil {
+		t.Fatal(e)
+	}
+	// Native Codex replaces the PLUGIN_DATA value in the projected MCP env.
+	// The old argv must fail closed, while the new explicit root still resolves
+	// the owned UAP locator and starts the installed primary.
+	wrong := exec.CommandContext(ctx, launcher, "portable-launch", "--locator", codex)
+	wrong.Env = []string{"PLUGIN_ROOT=" + pkg, "PLUGIN_DATA=" + codexData}
+	if out, runErr := wrong.Output(); runErr == nil || len(out) != 0 {
+		t.Fatal("Codex data root unexpectedly resolved the UAP locator")
+	}
 	// The installed primary refuses an old launcher image fingerprint, and a
 	// package copy cannot impersonate the installed primary at a different path.
 	for _, invalid := range []struct{ exe, hash string }{
@@ -105,8 +117,14 @@ func TestPortableProductionBridge(t *testing.T) {
 		if i == 1 {
 			command = filepath.Join(b.RuntimeRoot, b.Primary)
 		}
-		cmd := exec.CommandContext(ctx, command, "portable-launch", "--locator", name)
-		cmd.Env = []string{"PLUGIN_ROOT=" + pkg, "PLUGIN_DATA=" + b.DataRoot}
+		args := []string{"portable-launch", "--locator", name}
+		pluginData := b.DataRoot
+		if i == 0 {
+			args = []string{"portable-launch", "--data-root", b.DataRoot, "--locator", name}
+			pluginData = codexData
+		}
+		cmd := exec.CommandContext(ctx, command, args...)
+		cmd.Env = []string{"PLUGIN_ROOT=" + pkg, "PLUGIN_DATA=" + pluginData}
 		cmd.Dir = b.ScopeRoot
 		in, e := cmd.StdinPipe()
 		if e != nil {

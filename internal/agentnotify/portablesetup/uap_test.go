@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -224,8 +225,28 @@ func TestUAPMaterializerTwoClientsShareDataIndependentLocators(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(body), "portable-launch") || !strings.Contains(string(body), "--locator") {
-			t.Fatalf("locator missing from projection %s: %s", mcp, body)
+		if binding.ClientID != string(portable.Codex) {
+			if !strings.Contains(string(body), "portable-launch") || !strings.Contains(string(body), "--locator") {
+				t.Fatalf("Claude locator missing from projection %s: %s", mcp, body)
+			}
+			sawLocator = true
+			continue
+		}
+		var projected struct {
+			MCPServers map[string]struct {
+				Args []string `json:"args"`
+			} `json:"mcpServers"`
+		}
+		if err := json.Unmarshal(body, &projected); err != nil {
+			t.Fatal(err)
+		}
+		server, ok := projected.MCPServers["agent-notify"]
+		if !ok {
+			t.Fatalf("agent-notify missing from projection %s: %s", mcp, body)
+		}
+		want := []string{"portable-launch", "--data-root", codexB.DataRoot, "--locator", codexName}
+		if !reflect.DeepEqual(server.Args, want) {
+			t.Fatalf("projection args = %q, want %q", server.Args, want)
 		}
 		sawLocator = true
 	}

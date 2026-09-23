@@ -631,6 +631,11 @@ func (m Materializer) engine(req MaterializeRequest, generation *uint64, res *in
 			if err != nil {
 				return nil, err
 			}
+			if b.Integration == portable.Codex {
+				// Codex supplies its own PLUGIN_DATA after reading .mcp.json.
+				// Keep the UAP-owned locator root in immutable argv instead.
+				return []string{"portable-launch", "--data-root", b.DataRoot, "--locator", name}, nil
+			}
 			return []string{"portable-launch", "--locator", name}, nil
 		},
 		OnCommittedBinding: func(ctx context.Context, facts uapinstaller.BindingFacts) error {
