@@ -78,6 +78,23 @@ func bindingFixture(t *testing.T) (portable.Binding, installruntime.Ledger) {
 	return b, l
 }
 
+func TestPreflightRefusesMissingOrLinkedPrimaryBeforeCommit(t *testing.T) {
+	for _, linked := range []bool{false, true} {
+		t.Run(map[bool]string{false: "missing", true: "symlink"}[linked], func(t *testing.T) {
+			b, _ := bindingFixture(t)
+			b.Primary = "unowned"
+			if linked {
+				if err := os.Symlink("primary", filepath.Join(b.RuntimeRoot, b.Primary)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := (Service{}).preflight(b); !errors.Is(err, ErrPreflight) {
+				t.Fatalf("unsafe primary accepted: %v", err)
+			}
+		})
+	}
+}
+
 func TestInstallTwoClientsShareDataAndIndependentLocators(t *testing.T) {
 	codex, ledger := bindingFixture(t)
 	claude := codex

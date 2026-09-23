@@ -100,6 +100,9 @@ func (s Service) preflight(b portable.Binding) error {
 	if snapshot.Ledger.ID != b.ComponentID || snapshot.Ledger.Owner != b.Owner || snapshot.Ledger.RuntimeRoot != b.RuntimeRoot {
 		return fmt.Errorf("%w: binding does not match managed runtime", ErrPreflight)
 	}
+	if err := b.CheckPrimaryFile(snapshot); err != nil {
+		return fmt.Errorf("%w: selected runtime primary is not an owned executable: %v", ErrPreflight, err)
+	}
 	return nil
 }
 

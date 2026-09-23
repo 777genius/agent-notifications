@@ -2326,7 +2326,7 @@ func annotateRequiredUpdate(text string, out Result) string {
 func materializer(req Request, snap installruntime.InstalledSnapshot, runtimeRoot string) (portablesetup.Materializer, error) {
 	helper := req.Helper
 	if helper == "" {
-		helper = filepath.Join(runtimeRoot, primaryName(req))
+		helper = filepath.Join(runtimeRoot, filepath.FromSlash(portable.PlatformPrimary()))
 	}
 	if !explicitAbs(helper) {
 		return portablesetup.Materializer{}, fmt.Errorf("%w: helper must be explicit", ErrRefused)
@@ -2385,10 +2385,14 @@ func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot st
 	if global == "" {
 		global = filepath.Join(runtimeRoot, "global", "config.json")
 	}
+	primary, err := primaryName(req, snap.Ledger, id)
+	if err != nil {
+		return portablesetup.Identity{}, err
+	}
 	return portablesetup.Identity{
 		InstallationID: id, ComponentID: snap.Ledger.ID, Owner: snap.Ledger.Owner,
 		ScopeRoot: scope, ControlRoot: req.ControlRoot, GlobalConfig: global,
-		RuntimeRoot: runtimeRoot, Primary: primaryName(req),
+		RuntimeRoot: runtimeRoot, Primary: primary,
 	}, nil
 }
 
@@ -2804,11 +2808,20 @@ func profileMatchesLive(profile, target string) bool {
 	return strings.HasPrefix(path, root+string(os.PathSeparator))
 }
 
-func primaryName(req Request) string {
+func primaryName(req Request, ledger installruntime.Ledger, installationID string) (string, error) {
 	if req.Primary != "" {
-		return req.Primary
+		return req.Primary, nil
 	}
-	return "primary"
+	if installationID != "" {
+		primary, found, err := portable.InstalledPrimary(ledger, installationID, req.ControlRoot)
+		if err != nil {
+			return "", err
+		}
+		if found {
+			return primary, nil
+		}
+	}
+	return portable.PlatformPrimary(), nil
 }
 
 func discovery(req Request, agent portable.Integration, runtimeRoot string, snap installruntime.InstalledSnapshot) portablesetup.Discovery {

@@ -134,7 +134,10 @@ func managedRuntime(t *testing.T) (control, runtime, global, primary string, gen
 	}
 	ledger, err := installruntime.Commit(testCtx(t), installruntime.Request{
 		ControlRoot: control, RuntimeRoot: runtime, Owner: "existing-installer", ConsumerID: "existing",
-		Files: []installruntime.File{{Path: primary, Data: []byte(installruntime.WriterProtocolMarker), Mode: 0700}},
+		Files: []installruntime.File{
+			{Path: primary, Data: []byte(installruntime.WriterProtocolMarker), Mode: 0700},
+			{Path: filepath.Join(runtime, filepath.FromSlash(portable.PlatformPrimary())), Data: []byte(installruntime.WriterProtocolMarker), Mode: 0700},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1501,6 +1504,45 @@ func TestWizardInstallInspectUninstall(t *testing.T) {
 	installed, err := Run(ctx, req)
 	if err != nil || installed.Outcome != "completed" {
 		t.Fatalf("install: %+v %v", installed, err)
+	}
+	if _, err := os.Lstat(filepath.Join(runtime, "primary")); !os.IsNotExist(err) {
+		t.Fatalf("fixture unexpectedly has the old synthetic primary: %v", err)
+	}
+	snapshot, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound := false
+	for key, consumer := range snapshot.Ledger.Consumers {
+		if !strings.HasPrefix(key, "portable:") {
+			continue
+		}
+		var binding portable.Binding
+		if err := json.Unmarshal([]byte(consumer.Registration), &binding); err != nil {
+			t.Fatal(err)
+		}
+		if binding.Integration != portable.Codex {
+			continue
+		}
+		bound = true
+		if binding.Primary != portable.PlatformPrimary() {
+			t.Fatalf("wizard selected %q instead of the managed native primary", binding.Primary)
+		}
+		name, err := binding.Filename()
+		if err != nil {
+			t.Fatal(err)
+		}
+		lease, err := portable.Acquire(ctx, binding.DataRoot, name)
+		if err != nil {
+			t.Fatalf("installed locator cannot launch: %v", err)
+		}
+		if want := filepath.Join(runtime, filepath.FromSlash(portable.PlatformPrimary())); lease.Executable != want {
+			t.Errorf("lease executable = %q, want %q", lease.Executable, want)
+		}
+		lease.Release()
+	}
+	if !bound {
+		t.Fatal("wizard did not commit a Codex portable binding")
 	}
 	if strings.Join(phases, ",") != "prepare,preflight,agent-notify,complete" {
 		t.Fatalf("install phases: %v", phases)

@@ -9,10 +9,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/777genius/agent-notifications/internal/installruntime"
@@ -53,6 +55,32 @@ type Binding struct {
 var id = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$`)
 var selector = regexp.MustCompile(`^agent-notify-[0-9a-f]{64}\.json$`)
 
+// PlatformPrimary is the regular writer installed by the release bootstrap.
+// Keep the slash-separated locator value independent of the host path separator.
+func PlatformPrimary() string {
+	name := "claude-notifications-" + runtime.GOOS + "-" + runtime.GOARCH
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	return "bin/" + name
+}
+
+func validPrimary(primary string) bool {
+	if len(primary) == 0 || len(primary) > 512 || strings.ContainsAny(primary, `\:`) {
+		return false
+	}
+	for _, part := range strings.Split(primary, "/") {
+		if !id.MatchString(part) || part == "." || part == ".." {
+			return false
+		}
+	}
+	return filepath.IsLocal(filepath.FromSlash(primary))
+}
+
+func primaryPath(root, primary string) string {
+	return filepath.Join(root, filepath.FromSlash(primary))
+}
+
 // Registration returns the exact consumer record the next setup slice must
 // commit under the component lock/CAS before publishing locator bytes. Calling
 // this pure function does not establish UAP receipt ownership or authorize setup.
@@ -70,7 +98,7 @@ func (b Binding) Registration() (string, installruntime.Consumer, []byte, error)
 			return "", installruntime.Consumer{}, nil, ErrInvalid
 		}
 	}
-	if !id.MatchString(b.Primary) || b.Primary == "." || b.Primary == ".." {
+	if !validPrimary(b.Primary) {
 		return "", installruntime.Consumer{}, nil, ErrInvalid
 	}
 	raw, err := json.Marshal(b)
@@ -79,7 +107,33 @@ func (b Binding) Registration() (string, installruntime.Consumer, []byte, error)
 	}
 	hash := sha256.Sum256(raw)
 	key := "portable:" + hex.EncodeToString(hash[:])
-	return key, installruntime.Consumer{RuntimeRoot: b.RuntimeRoot, Registration: string(raw), Commands: []string{filepath.Join(b.RuntimeRoot, b.Primary)}}, raw, nil
+	return key, installruntime.Consumer{RuntimeRoot: b.RuntimeRoot, Registration: string(raw), Commands: []string{primaryPath(b.RuntimeRoot, b.Primary)}}, raw, nil
+}
+
+// InstalledPrimary preserves the identity of an already committed installation.
+// In particular, old locators used "primary" even though bootstrap never wrote
+// that file. A later add/update/remove must not silently change their identity.
+func InstalledPrimary(ledger installruntime.Ledger, installationID, controlRoot string) (string, bool, error) {
+	primary := ""
+	found := false
+	for key, consumer := range ledger.Consumers {
+		if !strings.HasPrefix(key, "portable:") {
+			continue
+		}
+		var candidate Binding
+		if json.Unmarshal([]byte(consumer.Registration), &candidate) != nil || candidate.InstallationID != installationID {
+			continue
+		}
+		wantKey, wantConsumer, _, err := candidate.Registration()
+		if err != nil || key != wantKey || !reflect.DeepEqual(consumer, wantConsumer) || candidate.ComponentID != ledger.ID || candidate.Owner != ledger.Owner || !samePhysicalPath(candidate.RuntimeRoot, ledger.RuntimeRoot) || !samePhysicalPath(candidate.ControlRoot, controlRoot) {
+			return "", false, ErrInvalid
+		}
+		if found && primary != candidate.Primary {
+			return "", false, ErrInvalid
+		}
+		primary, found = candidate.Primary, true
+	}
+	return primary, found, nil
 }
 func (b Binding) Filename() (string, error) {
 	key, _, _, err := b.Registration()
@@ -194,7 +248,10 @@ func Acquire(ctx context.Context, data, name string) (*Lease, error) {
 	if err = b.CheckSnapshot(snapshot); err != nil {
 		return nil, err
 	}
-	executable := filepath.Join(snapshot.Ledger.RuntimeRoot, b.Primary)
+	executable, _, err := b.ownedPrimary(snapshot.Ledger)
+	if err != nil {
+		return nil, err
+	}
 	// Bound the primary's file security separately from ledger content hashing.
 	if checkPrimary(executable) != nil {
 		return nil, ErrInvalid
@@ -227,13 +284,46 @@ func (b Binding) CheckSnapshot(snapshot installruntime.InstalledSnapshot) error 
 	if !reflect.DeepEqual(ledger.Consumers[key], want) {
 		return ErrInvalid
 	}
-	executable := filepath.Join(ledger.RuntimeRoot, b.Primary)
-	fingerprint, ok := ledger.Files[executable]
-	if !ok || !fingerprint.Exists || fingerprint.Link != "" || !portablePrimaryMode(fingerprint.Mode) {
+	if _, _, err := b.ownedPrimary(ledger); err != nil {
 		return ErrInvalid
 	}
 
 	return nil
+}
+
+// CheckPrimaryFile is used before a new binding is committed. It does not
+// require its consumer record yet, but it requires a live, ledger-owned writer.
+func (b Binding) CheckPrimaryFile(snapshot installruntime.InstalledSnapshot) error {
+	if _, _, _, err := b.Registration(); err != nil {
+		return err
+	}
+	path, fingerprint, err := b.ownedPrimary(snapshot.Ledger)
+	if err != nil || checkPrimary(path) != nil {
+		return ErrInvalid
+	}
+	current, err := installruntime.Fingerprint(path)
+	if err != nil || !reflect.DeepEqual(current, fingerprint) {
+		return ErrInvalid
+	}
+	return nil
+}
+
+func (b Binding) ownedPrimary(ledger installruntime.Ledger) (string, installruntime.Identity, error) {
+	path := primaryPath(ledger.RuntimeRoot, b.Primary)
+	fingerprint, ok := ledger.Files[path]
+	if !ok && b.Primary == "primary" {
+		// Compatibility for published locators with the old absent default.
+		// An unexpected file at that name is drift, not permission to fall back.
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			return "", installruntime.Identity{}, ErrInvalid
+		}
+		path = primaryPath(ledger.RuntimeRoot, PlatformPrimary())
+		fingerprint, ok = ledger.Files[path]
+	}
+	if !ok || !fingerprint.Exists || fingerprint.Link != "" || !portablePrimaryMode(fingerprint.Mode) {
+		return "", installruntime.Identity{}, ErrInvalid
+	}
+	return path, fingerprint, nil
 }
 
 func portablePrimaryMode(mode uint32) bool {
