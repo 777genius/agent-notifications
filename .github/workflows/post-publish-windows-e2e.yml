@@ -25,15 +25,34 @@ jobs:
       RELEASE_URL: https://github.com/777genius/agent-notifications/releases/download/${{ inputs.tag }}
       CHECKSUMS_URL: https://github.com/777genius/agent-notifications/releases/download/${{ inputs.tag }}/checksums.txt
       MODERN_NOTIFIER_URL: https://github.com/777genius/agent-notifications/releases/download/${{ inputs.tag }}/ClaudeNotifier.app.zip
-      INSTALL_TARGET_DIR: ${{ github.workspace }}/e2e-install
 
     steps:
       - name: Prepare isolated profile
+        shell: pwsh
         run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/e2e-home/.claude" "$RUNNER_TEMP/e2e-home/.codex" "$RUNNER_TEMP/e2e-home/tmp"
-          echo "E2E_HOME=$RUNNER_TEMP/e2e-home" >> "$GITHUB_ENV"
-          echo "TMPDIR=$RUNNER_TEMP/e2e-home/tmp" >> "$GITHUB_ENV"
+          $root = Join-Path $env:RUNNER_TEMP 'e2e-home'
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          foreach ($name in @('.claude', '.codex', 'tmp', 'APPDATA', 'LOCALAPPDATA', 'bundle')) {
+            New-Item -ItemType Directory -Force -Path (Join-Path $root $name) | Out-Null
+          }
+          # The runner temp/workspace ACLs may grant access to other users.
+          # The installer intentionally rejects those paths for managed state.
+          $userSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+          & icacls $root /inheritance:r /grant:r "*${userSid}:(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /T
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          @(
+            "E2E_HOME=$root"
+            "HOME=$root"
+            "USERPROFILE=$root"
+            "APPDATA=$(Join-Path $root 'APPDATA')"
+            "LOCALAPPDATA=$(Join-Path $root 'LOCALAPPDATA')"
+            "CODEX_HOME=$(Join-Path $root '.codex')"
+            "CLAUDE_CONFIG_DIR=$(Join-Path $root '.claude')"
+            "TMPDIR=$(Join-Path $root 'tmp')"
+            "TMP=$(Join-Path $root 'tmp')"
+            "TEMP=$(Join-Path $root 'tmp')"
+            "INSTALL_TARGET_DIR=$(Join-Path $root 'bundle')"
+          ) | Add-Content -Path $env:GITHUB_ENV
 
       - name: Download install.sh from main
         run: |
