@@ -544,6 +544,12 @@ func TestWizardExistingGlobalConfigIdentitySurvivesDefaultChange(t *testing.T) {
 		}
 		req.GlobalConfig = legacy
 	}
+	req.Action = ActionRepair
+	explicitPlan, err := Plan(ctx, req)
+	if err != nil || !explicitPlan.Ready || len(explicitPlan.Request.MigrationBindings) != 0 {
+		t.Fatalf("explicit config path was changed: %+v %v", explicitPlan, err)
+	}
+	req.Action = ActionInstall
 	if err := os.Remove(filepath.Dir(legacy)); err != nil {
 		t.Fatal(err)
 	}
@@ -569,15 +575,29 @@ func TestWizardExistingGlobalConfigIdentitySurvivesDefaultChange(t *testing.T) {
 	req.GlobalConfig = ""
 	req.Action = ActionRepair
 	plan, err := Plan(ctx, req)
-	if err == nil || plan.Ready || plan.Result.Reason != "global_config_parent_invalid" {
-		t.Fatalf("plan accepted unusable historical config parent: %+v %v", plan, err)
+	if err != nil || !plan.Ready || !strings.Contains(plan.Text, "portable-identity-migration=true") {
+		t.Fatalf("repair plan omitted historical migration: %+v %v", plan, err)
 	}
-	blocked, err := Run(ctx, req)
-	if err == nil || blocked.Reason != "global_config_parent_invalid" {
-		t.Fatalf("repair published unusable historical binding: %+v %v", blocked, err)
+	migration := plan.Request.MigrationBindings["codex"]
+	if migration.Old.GlobalConfig != legacy || migration.New.GlobalConfig != canonical {
+		t.Fatalf("migration identity: %+v", migration)
+	}
+	repaired, err := Run(ctx, plan.Request)
+	if err != nil || repaired.Outcome != "completed" {
+		t.Fatalf("repair did not migrate historical binding: %+v %v", repaired, err)
 	}
 	if _, err := os.Lstat(filepath.Dir(legacy)); !os.IsNotExist(err) {
 		t.Fatalf("repair recreated historical parent: %v", err)
+	}
+	snap, err = installruntime.ReadInstalledSnapshot(control)
+	if err != nil || !portable.ExactCommittedBinding(snap.Ledger, migration.New) || portable.ExactCommittedBinding(snap.Ledger, migration.Old) {
+		t.Fatalf("migration did not replace exact consumer: %v", err)
+	}
+	if ok, err := portable.ExactLocator(migration.New); err != nil || !ok {
+		t.Fatalf("migration locator missing: %v", err)
+	}
+	if ok, err := portable.ExactLocator(migration.Old); err != nil || ok {
+		t.Fatalf("legacy locator survived: %v", err)
 	}
 	req.Action = ActionUninstall
 	req.ExternalUninstalled = true
@@ -591,6 +611,81 @@ func TestWizardExistingGlobalConfigIdentitySurvivesDefaultChange(t *testing.T) {
 	}
 	if _, found, err := portable.InstalledGlobalConfig(snap.Ledger, installed.InstallationID, control); err != nil || found {
 		t.Fatalf("historical consumer survived uninstall: %v %v", found, err)
+	}
+}
+
+func TestReplaceMigratedBindingCleansOldLocatorAfterConsumerRevoke(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtimeRoot, _, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	legacy := filepath.Join(runtimeRoot, "global", "config.json")
+	canonical := filepath.Join(filepath.Dir(control), "canonical", "config.json")
+	profile := filepath.Join(filepath.Dir(control), "codex-profile")
+	scope := filepath.Join(filepath.Dir(control), "scope")
+	for _, dir := range []string{profile, scope} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	req := Request{Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: boolPtr(false),
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtimeRoot, GlobalConfig: legacy,
+		CodexHome: profile, ClientExecutable: probe, Helper: probe, ScopeRoot: scope}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("legacy install: %+v %v", installed, err)
+	}
+	t.Setenv(config.OverrideEnv, canonical)
+	req.Action, req.GlobalConfig, req.InstallationID = ActionRepair, "", installed.InstallationID
+	plan, err := Plan(ctx, req)
+	if err != nil || !plan.Ready {
+		t.Fatalf("migration plan: %+v %v", plan, err)
+	}
+	migration := plan.Request.MigrationBindings["codex"]
+	if err := config.PrepareGlobalConfigParent(migration.New.GlobalConfig); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err = publishWizardIntent(ctx, plan.Request, snap, runtimeRoot, nil, []portable.Integration{portable.Codex}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservation := *snap.Ledger.PendingMutation
+	key, consumer, _, err := migration.New.Registration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation := snap.Ledger.Generation
+	committed, err := installruntime.Commit(ctx, installruntime.Request{ControlRoot: control, RuntimeRoot: runtimeRoot,
+		Owner: snap.Ledger.Owner, ConsumerID: key, Consumer: consumer, ExpectedGeneration: &generation, Reservation: &reservation})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := portable.Publish(migration.New); err != nil {
+		t.Fatal(err)
+	}
+	generation = committed.Generation
+	if _, err := installruntime.Commit(ctx, installruntime.Request{ControlRoot: control, RuntimeRoot: runtimeRoot,
+		Owner: snap.Ledger.Owner, ConsumerID: migration.OldConsumerKey, RemoveConsumer: true,
+		ExpectedGeneration: &generation, Reservation: &reservation}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := portable.ExactLocator(migration.Old); err != nil || !ok {
+		t.Fatalf("crash window missing old locator: %v", err)
+	}
+	mat, err := materializer(plan.Request, snap, runtimeRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := replaceMigratedBinding(ctx, plan.Request, mat, migration, migration.New); err != nil {
+		t.Fatalf("migration cleanup: %v", err)
+	}
+	if ok, err := portable.ExactLocator(migration.Old); err != nil || ok {
+		t.Fatalf("old locator survived cleanup: %v", err)
 	}
 }
 
@@ -1951,6 +2046,20 @@ func TestWizardRetryRemovesLegacyLocatorAfterConsumerCommit(t *testing.T) {
 	}
 	req.Action, req.ExternalUninstalled = ActionUninstall, true
 	req.InstallationID = installed.InstallationID
+	mat, err := materializer(req, snapshot, runtimeRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := identity(req, snapshot, runtimeRoot, mat, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reserveClientBindings(&req, mat, []portable.Integration{portable.Codex}); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareUninstallBindings(&req, snapshot, mat, id, []portable.Integration{portable.Codex}); err != nil {
+		t.Fatal(err)
+	}
 	snapshot, err = publishWizardIntent(ctx, req, snapshot, runtimeRoot, nil, []portable.Integration{portable.Codex}, true)
 	if err != nil {
 		t.Fatal(err)
@@ -1958,6 +2067,9 @@ func TestWizardRetryRemovesLegacyLocatorAfterConsumerCommit(t *testing.T) {
 	intent, err := portablesetup.ReadIntent(control)
 	if err != nil || intent.Primary != "primary" {
 		t.Fatalf("confirmed intent lost legacy primary: %+v %v", intent, err)
+	}
+	if len(intent.Targets) != 1 || intent.Targets[0].OldBinding == nil || intent.Targets[0].OldConsumerKey != key || intent.Targets[0].DataReceiptID == "" {
+		t.Fatalf("confirmed uninstall intent lost exact old binding: %+v", intent.Targets)
 	}
 	reservation := *snapshot.Ledger.PendingMutation
 	generation := snapshot.Ledger.Generation
@@ -1970,7 +2082,7 @@ func TestWizardRetryRemovesLegacyLocatorAfterConsumerCommit(t *testing.T) {
 	if _, err := os.Lstat(locator); err != nil {
 		t.Fatalf("crash window did not retain the legacy locator: %v", err)
 	}
-	req.Primary, req.InstallationID, req.PackageRoot = "", "", ""
+	req.Primary, req.InstallationID, req.PackageRoot, req.RemovalBindings = "", "", "", nil
 	removed, err := Run(ctx, req)
 	if err != nil || removed.Outcome != "completed" {
 		t.Fatalf("retry uninstall: %+v %v", removed, err)
@@ -2035,6 +2147,14 @@ func TestWizardLegacyRepairWithoutHelper(t *testing.T) {
 	}
 	if _, err := os.Stat(target); err != nil {
 		t.Fatalf("legacy repair did not restore target: %v", err)
+	}
+	snapshot, err = installruntime.ReadInstalledSnapshot(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	primary, found, err := portable.InstalledPrimary(snapshot.Ledger, installed.InstallationID, control)
+	if err != nil || !found || primary != portable.PlatformPrimary() {
+		t.Fatalf("legacy primary was not migrated: %q %v", primary, err)
 	}
 }
 

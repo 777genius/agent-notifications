@@ -69,6 +69,13 @@ type Request struct {
 	// BindingIDs are reserved per client during Plan/identity without
 	// staging. Run and the durable intent reuse them.
 	BindingIDs map[string]string
+	// MigrationBindings freezes the exact historical and replacement consumer
+	// identities before the confirmed intent is published. It is restored from
+	// that intent on retry, never reconstructed from a changed host environment.
+	MigrationBindings map[string]MigrationBinding
+	// RemovalBindings freezes the exact portable consumer that uninstall will
+	// revoke. A retry restores it from the confirmed intent after kernel revoke.
+	RemovalBindings map[string]RemovalBinding
 	// DataReceiptIDs are known UAP PLUGIN_DATA receipts. Uninstall/publish
 	// copies live receipts onto the durable intent; resume rejects a different ID.
 	DataReceiptIDs                      map[string]string
@@ -233,6 +240,7 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 				plan.Result = attachCommand(req, ev.out)
 				return plan, err
 			}
+			explicitGlobal, explicitPrimary := req.GlobalConfig, req.Primary
 			id, err := identity(acquired, ev.snap, ev.runtimeRoot, mat, req.Action == ActionInstall)
 			if err != nil {
 				if mapped, handled := mapAmbiguous(err, ev.out); handled {
@@ -245,16 +253,13 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 			}
 			req.InstallationID = id.InstallationID
 			req.GlobalConfig = id.GlobalConfig
+			existingGlobal := false
 			if _, existing, globalErr := portable.InstalledGlobalConfig(ev.snap.Ledger, id.InstallationID, req.ControlRoot); globalErr != nil {
 				ev.out.Outcome, ev.out.Reason = "incomplete", "global_config_parent_invalid"
 				plan.Result = attachCommand(req, ev.out)
 				return plan, globalErr
-			} else if existing {
-				if err := portable.ValidateGlobalConfigParent(id.GlobalConfig); err != nil {
-					ev.out.Outcome, ev.out.Reason = "incomplete", "global_config_parent_invalid"
-					plan.Result = attachCommand(req, ev.out)
-					return plan, err
-				}
+			} else {
+				existingGlobal = existing
 			}
 			acquired.InstallationID = id.InstallationID
 			if req.Action == ActionUpdate || req.Action == ActionRepair {
@@ -326,9 +331,33 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 				}
 			}
 			if req.Action == ActionUpdate || req.Action == ActionRepair {
+				if err := prepareLegacyMigrations(&req, ev.snap, mat, id, ev.notifyAgents, explicitGlobal, explicitPrimary); err != nil {
+					ev.out.Outcome, ev.out.Reason = "incomplete", "migration_preflight_failed"
+					plan.Result = attachCommand(req, ev.out)
+					return plan, err
+				}
+				if len(req.MigrationBindings) > 0 {
+					text += " portable-identity-migration=true"
+				}
 				for _, agent := range ev.notifyAgents {
 					if digest := liveBindingTreeDigest(mat, id.InstallationID, string(agent)); digest != "" {
 						text += " " + string(agent) + "-source-digest=" + digest
+					}
+				}
+			}
+			if existingGlobal {
+				for _, agent := range ev.notifyAgents {
+					if _, migrating := req.MigrationBindings[string(agent)]; migrating {
+						continue
+					}
+					target, err := targetIdentity(id, req, ev.snap, mat, agent)
+					if err == nil {
+						err = portable.ValidateGlobalConfigParent(target.GlobalConfig)
+					}
+					if err != nil {
+						ev.out.Outcome, ev.out.Reason = "incomplete", "global_config_parent_invalid"
+						plan.Result = attachCommand(req, ev.out)
+						return plan, err
 					}
 				}
 			}
@@ -627,13 +656,21 @@ func holdCodexUninstall(ctx context.Context, req *Request, mat portablesetup.Mat
 		if agent != portable.Codex || !liveNotifyClient(mat, id.InstallationID, string(agent)) {
 			continue
 		}
+		snap, err := installruntime.ReadInstalledSnapshot(req.ControlRoot)
+		if err != nil {
+			return out, err
+		}
+		target, err := targetIdentity(id, *req, snap, mat, agent)
+		if err != nil {
+			return out, err
+		}
 		if attestCodexExternalUninstall(ctx, clientExecutable(*req, agent), req.CodexHome, managedCodexPluginSpec(mat, id.InstallationID)) {
 			req.ExternalUninstalled = true
 			_ = persistExternalUninstalled(ctx, *req, runtimeRoot)
 			return out, nil
 		}
-		err := mat.Remove(ctx, portablesetup.MaterializeRequest{
-			Identity: id, Integration: agent, ExpectedGeneration: generation,
+		err = mat.Remove(ctx, portablesetup.MaterializeRequest{
+			Identity: target, Integration: agent, ExpectedGeneration: generation,
 			ClientConfigRoot: clientConfig(*req, agent), ClientExecutable: clientExecutable(*req, agent),
 			OperationID: wizardMutationID(ActionUninstall, agent, generation), ExternalUninstalled: req.ExternalUninstalled,
 			HoldOnly: true, KeepReservation: true,
@@ -990,6 +1027,37 @@ func restoreOmittedFromIntent(req Request, agents []portable.Integration, intent
 		req.ExternalUninstalled = true
 	}
 	for _, target := range intent.Targets {
+		if req.Action == ActionUninstall && (target.OldBinding != nil || target.OldConsumerKey != "") {
+			if target.OldBinding == nil || target.NewBinding != nil || target.NewConsumerKey != "" || target.DataReceiptID == "" {
+				return req, agents, portablesetup.ErrIntentConflict
+			}
+			removal := RemovalBinding{Old: *target.OldBinding, OldConsumerKey: target.OldConsumerKey}
+			if removal.validate(target.Client, target.InstallationID, target.BindingID) != nil {
+				return req, agents, portablesetup.ErrIntentConflict
+			}
+			if req.RemovalBindings == nil {
+				req.RemovalBindings = map[string]RemovalBinding{}
+			}
+			if existing, ok := req.RemovalBindings[target.Client]; ok && existing != removal {
+				return req, agents, portablesetup.ErrIntentConflict
+			}
+			req.RemovalBindings[target.Client] = removal
+		} else if target.OldBinding != nil || target.NewBinding != nil || target.OldConsumerKey != "" || target.NewConsumerKey != "" {
+			if target.OldBinding == nil || target.NewBinding == nil {
+				return req, agents, portablesetup.ErrIntentConflict
+			}
+			migration := MigrationBinding{Old: *target.OldBinding, New: *target.NewBinding, OldConsumerKey: target.OldConsumerKey, NewConsumerKey: target.NewConsumerKey}
+			if migration.validate() != nil || string(migration.Old.Integration) != target.Client || migration.Old.InstallationID != target.InstallationID || migration.Old.BindingID != target.BindingID {
+				return req, agents, portablesetup.ErrIntentConflict
+			}
+			if req.MigrationBindings == nil {
+				req.MigrationBindings = map[string]MigrationBinding{}
+			}
+			if existing, ok := req.MigrationBindings[target.Client]; ok && existing != migration {
+				return req, agents, portablesetup.ErrIntentConflict
+			}
+			req.MigrationBindings[target.Client] = migration
+		}
 		if target.InstallationID != "" {
 			if req.InstallationID == "" {
 				req.InstallationID = target.InstallationID
@@ -1341,6 +1409,7 @@ func reportPendingWizardIntent(req Request, snap installruntime.InstalledSnapsho
 }
 
 func install(ctx context.Context, req Request, snap installruntime.InstalledSnapshot, runtimeRoot string, hookAgents, notifyAgents []portable.Integration, out Result) (Result, error) {
+	explicitGlobal, explicitPrimary := req.GlobalConfig, req.Primary
 	var releasePackage func()
 	defer func() {
 		if releasePackage != nil {
@@ -1458,19 +1527,32 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 			return out, err
 		}
 	}
-	if len(notifyAgents) > 0 && (req.Action == ActionInstall || req.Action == ActionUpdate || req.Action == ActionRepair) {
-		_, existing, err := portable.InstalledGlobalConfig(snap.Ledger, id.InstallationID, req.ControlRoot)
-		if err == nil && existing {
-			err = portable.ValidateGlobalConfigParent(id.GlobalConfig)
-		} else if err == nil {
-			err = config.PrepareGlobalConfigParent(id.GlobalConfig)
-			if err == nil {
-				err = portable.ValidateGlobalConfigParent(id.GlobalConfig)
-			}
-		}
-		if err != nil {
-			out.Outcome, out.Reason = "incomplete", "global_config_parent_invalid"
+	if req.Action == ActionUpdate || req.Action == ActionRepair {
+		if err := prepareLegacyMigrations(&req, snap, mat, id, notifyAgents, explicitGlobal, explicitPrimary); err != nil {
+			out.Outcome, out.Reason = "incomplete", "migration_preflight_failed"
 			return out, err
+		}
+	}
+	if len(notifyAgents) > 0 && (req.Action == ActionInstall || req.Action == ActionUpdate || req.Action == ActionRepair) {
+		for _, agent := range notifyAgents {
+			target, err := targetIdentity(id, req, snap, mat, agent)
+			if err != nil {
+				out.Outcome, out.Reason = "incomplete", "binding_identity_invalid"
+				return out, err
+			}
+			path := target.GlobalConfig
+			_, migrating := req.MigrationBindings[string(agent)]
+			_, existing, err := portable.InstalledGlobalConfig(snap.Ledger, id.InstallationID, req.ControlRoot)
+			if migrating || (err == nil && !existing) {
+				err = config.PrepareGlobalConfigParent(path)
+			}
+			if err == nil {
+				err = portable.ValidateGlobalConfigParent(path)
+			}
+			if err != nil {
+				out.Outcome, out.Reason = "incomplete", "global_config_parent_invalid"
+				return out, err
+			}
 		}
 	}
 	reportProgress(req, "preflight")
@@ -1540,7 +1622,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 	}
 	reportProgress(req, "agent-notify")
 	generation := snap.Ledger.Generation
-	if canGroupNotify(mat, id, req, notifyAgents) {
+	if len(req.MigrationBindings) == 0 && canGroupNotify(mat, id, req, notifyAgents) {
 		var reqs []portablesetup.MaterializeRequest
 		for _, agent := range notifyAgents {
 			reqs = append(reqs, portablesetup.MaterializeRequest{
@@ -1593,8 +1675,13 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		return out, nil
 	}
 	for _, agent := range notifyAgents {
+		migration, migrating := req.MigrationBindings[string(agent)]
+		target, targetErr := targetIdentity(id, req, snap, mat, agent)
+		if targetErr != nil {
+			return portableInstallFailed(agent, req, out, targetErr), targetErr
+		}
 		materialize := portablesetup.MaterializeRequest{
-			Identity: id, Integration: agent, ExpectedGeneration: generation,
+			Identity: target, Integration: agent, ExpectedGeneration: generation,
 			PackageRoot: clientPackageRoot(req, agent), ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
 			SourceRevision: req.ReleaseVersion, SourceDigest: req.PackageSHA256,
 			TreeDigest: req.TreeDigest, HelperDigest: req.HelperDigest, HelperVersion: req.HelperVersion,
@@ -1605,13 +1692,40 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		}
 		var got portable.Binding
 		var err error
-		switch req.Action {
-		case ActionUpdate:
-			got, err = mat.Update(ctx, materialize)
-		case ActionRepair:
-			got, err = mat.Repair(ctx, materialize)
-		default:
-			got, err = mat.Install(ctx, materialize)
+		if migrating {
+			materialize.HandoffAction = string(req.Action)
+			current, readErr := installruntime.ReadInstalledSnapshot(req.ControlRoot)
+			if readErr != nil {
+				return portableInstallFailed(agent, req, out, readErr), readErr
+			}
+			if portable.ExactCommittedBinding(current.Ledger, migration.New) {
+				if portable.ExactCommittedBinding(current.Ledger, migration.Old) {
+					// UAP can still be in prepared/failed activation after its
+					// callback committed the new consumer. Re-enter its lifecycle.
+					got, err = mat.RefreshProjection(ctx, materialize)
+					if err == nil && got.Version != 0 && got != migration.New {
+						err = fmt.Errorf("%w: refreshed binding differs from confirmed intent", ErrRefused)
+					}
+				}
+				if err == nil {
+					got = migration.New
+				}
+			} else if req.TreeDigest != "" && req.TreeDigest == liveBindingTreeDigest(mat, id.InstallationID, string(agent)) && liveManagedTargetsPresent(mat, id.InstallationID, []portable.Integration{agent}) {
+				got, err = mat.RefreshProjection(ctx, materialize)
+			} else if req.Action == ActionUpdate {
+				got, err = mat.Update(ctx, materialize)
+			} else {
+				got, err = mat.Repair(ctx, materialize)
+			}
+		} else {
+			switch req.Action {
+			case ActionUpdate:
+				got, err = mat.Update(ctx, materialize)
+			case ActionRepair:
+				got, err = mat.Repair(ctx, materialize)
+			default:
+				got, err = mat.Install(ctx, materialize)
+			}
 		}
 		if err != nil {
 			if req.Action == ActionRepair && (exactRepairRevision(err) || portablesetup.IsUpdateRequired(err)) {
@@ -1643,7 +1757,35 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 			if conflict, handled := pendingIntentConflict(req, err, out); handled {
 				return conflict, err
 			}
+			if migrating {
+				failed := portableInstallFailed(agent, req, out, err)
+				if failed.Reason == "activation_incomplete" {
+					failed.Reason = "migration_activation_pending"
+					failed.NextActions = []NextAction{{Kind: "activate", Agents: []string{string(agent)}, Reason: "migration_activation_pending", Command: RetryCommand(req)}}
+				}
+				return failed, err
+			}
 			return portableInstallFailed(agent, req, out, err), err
+		}
+		if migrating {
+			current, readErr := installruntime.ReadInstalledSnapshot(req.ControlRoot)
+			if readErr != nil || current.Ledger.PendingMutation == nil {
+				if readErr == nil {
+					readErr = fmt.Errorf("%w: migration reservation missing", ErrRefused)
+				}
+				return portableInstallFailed(agent, req, out, readErr), readErr
+			}
+			if ready, readyErr := migrationAlreadyProjected(current.Ledger, migration); readyErr != nil {
+				return portableInstallFailed(agent, req, out, readyErr), readyErr
+			} else if !ready && portable.ExactCommittedBinding(current.Ledger, migration.New) {
+				reservation := *current.Ledger.PendingMutation
+				if _, publishErr := mat.Kernel.CommitBinding(ctx, portablesetup.Request{Binding: migration.New, ExpectedGeneration: current.Ledger.Generation, Reservation: &reservation}); publishErr != nil {
+					return portableInstallFailed(agent, req, out, publishErr), publishErr
+				}
+			}
+			if err := replaceMigratedBinding(ctx, req, mat, migration, got); err != nil {
+				return portableInstallFailed(agent, req, out, err), err
+			}
 		}
 		generation, err = rereadGeneration(req.ControlRoot)
 		if err != nil {
@@ -1767,6 +1909,10 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 				out.Outcome, out.Reason = "incomplete", err.Error()
 				return out, err
 			}
+		}
+		if err := prepareUninstallBindings(&req, snap, mat, id, notifyAgents); err != nil {
+			out.Outcome, out.Reason = "incomplete", "removal_identity_invalid"
+			return out, err
 		}
 	}
 	reportProgress(req, "preflight")
@@ -1921,8 +2067,13 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 				_ = persistExternalUninstalled(ctx, req, runtimeRoot)
 			}
 		}
+		target, targetErr := targetIdentity(id, req, snap, mat, agent)
+		if targetErr != nil {
+			out.Outcome, out.Reason = "incomplete", "binding_identity_invalid"
+			return out, targetErr
+		}
 		remove := portablesetup.MaterializeRequest{
-			Identity: id, Integration: agent, ExpectedGeneration: generation,
+			Identity: target, Integration: agent, ExpectedGeneration: generation,
 			ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
 			// User uninstall does not restore a retired direct MCP.
 			OperationID: wizardMutationID(ActionUninstall, agent, generation), ExternalUninstalled: req.ExternalUninstalled,
@@ -2464,7 +2615,39 @@ func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot st
 		}
 		global = physical
 	}
-	if id != "" {
+	var frozen *portable.Binding
+	for _, agent := range []portable.Integration{portable.Claude, portable.Codex} {
+		if migration, ok := req.MigrationBindings[string(agent)]; ok {
+			frozen = &migration.Old
+			break
+		}
+		if removal, ok := req.RemovalBindings[string(agent)]; ok {
+			frozen = &removal.Old
+			break
+		}
+	}
+	if frozen == nil && id != "" && (req.Action == ActionUpdate || req.Action == ActionRepair || req.Action == ActionUninstall) {
+		base := portablesetup.Identity{InstallationID: id, ComponentID: snap.Ledger.ID, Owner: snap.Ledger.Owner, ControlRoot: req.ControlRoot, RuntimeRoot: runtimeRoot}
+		committed, found, err := selectedCommittedIdentity(req, snap, mat, base)
+		if err != nil {
+			return portablesetup.Identity{}, err
+		}
+		if found {
+			frozen = &committed
+		}
+	}
+	if frozen != nil {
+		if global != "" && global != frozen.GlobalConfig {
+			return portablesetup.Identity{}, fmt.Errorf("%w: confirmed global config differs", portablesetup.ErrIntentConflict)
+		}
+		installedGlobal = true
+		global = frozen.GlobalConfig
+		scope = frozen.ScopeRoot
+		if req.Primary != "" && req.Primary != frozen.Primary {
+			return portablesetup.Identity{}, fmt.Errorf("%w: confirmed primary differs", portablesetup.ErrIntentConflict)
+		}
+	}
+	if id != "" && frozen == nil {
 		installed, found, err := portable.InstalledGlobalConfig(snap.Ledger, id, req.ControlRoot)
 		if err != nil {
 			return portablesetup.Identity{}, err
@@ -2500,9 +2683,14 @@ func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot st
 		}
 		global = selected.Path
 	}
-	primary, err := primaryName(req, snap.Ledger, id)
-	if err != nil {
-		return portablesetup.Identity{}, err
+	primary := ""
+	if frozen != nil {
+		primary = frozen.Primary
+	} else {
+		primary, err = primaryName(req, snap.Ledger, id)
+		if err != nil {
+			return portablesetup.Identity{}, err
+		}
 	}
 	return portablesetup.Identity{
 		InstallationID: id, ComponentID: snap.Ledger.ID, Owner: snap.Ledger.Owner,
@@ -2712,6 +2900,16 @@ func canGroupNotify(mat portablesetup.Materializer, id portablesetup.Identity, r
 	if len(agents) != 2 {
 		return false
 	}
+	snap, err := installruntime.ReadInstalledSnapshot(req.ControlRoot)
+	if err != nil {
+		return false
+	}
+	if _, _, err := portable.InstalledGlobalConfig(snap.Ledger, id.InstallationID, req.ControlRoot); err != nil {
+		return false
+	}
+	if _, _, err := portable.InstalledPrimary(snap.Ledger, id.InstallationID, req.ControlRoot); err != nil {
+		return false
+	}
 	first := liveNotifyClient(mat, id.InstallationID, string(agents[0]))
 	second := liveNotifyClient(mat, id.InstallationID, string(agents[1]))
 	switch req.Action {
@@ -2751,6 +2949,21 @@ func canGroupNotify(mat portablesetup.Materializer, id portablesetup.Identity, r
 
 func canGroupRemove(mat portablesetup.Materializer, id portablesetup.Identity, req Request, agents []portable.Integration) bool {
 	if req.Action != ActionUninstall || len(agents) != 2 {
+		return false
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(req.ControlRoot)
+	if err != nil {
+		return false
+	}
+	for _, agent := range agents {
+		if removal, ok := req.RemovalBindings[string(agent)]; ok && !portable.ExactCommittedBinding(snap.Ledger, removal.Old) {
+			return false
+		}
+	}
+	if _, _, err := portable.InstalledGlobalConfig(snap.Ledger, id.InstallationID, req.ControlRoot); err != nil {
+		return false
+	}
+	if _, _, err := portable.InstalledPrimary(snap.Ledger, id.InstallationID, req.ControlRoot); err != nil {
 		return false
 	}
 	for _, agent := range agents {
@@ -3096,6 +3309,15 @@ func wizardIntentTargets(req Request, hookAgents, notifyAgents []portable.Integr
 		target.Units = append(target.Units, unit)
 		if unit == "agent-notify" {
 			target.MCPConfig = discoveryConfigPath(req, agent)
+			if removal, ok := req.RemovalBindings[id]; ok {
+				oldBinding := removal.Old
+				target.OldBinding, target.OldConsumerKey = &oldBinding, removal.OldConsumerKey
+			}
+			if migration, ok := req.MigrationBindings[id]; ok {
+				oldBinding, newBinding := migration.Old, migration.New
+				target.OldBinding, target.NewBinding = &oldBinding, &newBinding
+				target.OldConsumerKey, target.NewConsumerKey = migration.OldConsumerKey, migration.NewConsumerKey
+			}
 		}
 	}
 	for _, agent := range hookAgents {
