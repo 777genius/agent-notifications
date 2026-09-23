@@ -140,7 +140,9 @@ def main():
                 if case == 'explicit':
                     env['AGENT_NOTIFICATIONS_CONFIG'] = str(home / 'custom' / 'config.json')
                 if case == 'legacy':
-                    legacy.parent.mkdir(parents=True, mode=0o777 if os.name == 'nt' else 0o700)
+                    private_mode = 0o777 if os.name == 'nt' else 0o700
+                    legacy.parent.parent.mkdir(mode=private_mode)
+                    legacy.parent.mkdir(mode=private_mode)
                     legacy.write_text('{}')
                     legacy.chmod(0o600)
                 selected = Path(run('config', 'path').stdout.strip())
