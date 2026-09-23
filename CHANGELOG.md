@@ -9,16 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.45.7] - 2026-09-23
 
-### Fixed
-- Normalize managed bundle file modes during staging, so a cooperative `umask 002` cannot produce a group-writable runtime that portable setup rejects.
-- Qualify Codex CLI 0.155.1 installed-plugin inventory for repeat setup and updates. Unsupported client versions still fail closed.
-
-## [1.45.6] - 2026-09-23
-
 ### Added
 - The guided installer lets users select Claude Code, Codex CLI, or both directly. The README and website share one short install command ([#204](https://github.com/777genius/agent-notifications/pull/204), [#205](https://github.com/777genius/agent-notifications/pull/205)).
 
 ### Fixed
+- Normalize managed bundle file modes during staging, so a cooperative `umask 002` cannot produce a group-writable runtime that portable setup rejects.
+- Qualify Codex CLI 0.155.1 installed-plugin inventory for repeat setup and updates. Unsupported client versions still fail closed.
 - Activate the native Codex plugin through the full installer lifecycle, finish combined removal safely, and launch MCP through the exact managed binary ([#207](https://github.com/777genius/agent-notifications/pull/207), [#209](https://github.com/777genius/agent-notifications/pull/209), [#211](https://github.com/777genius/agent-notifications/pull/211)).
 - Resolve the canonical configuration path before publishing a fresh portable binding. Repair and update migrate historical bindings and retire old locator identities without changing intentional custom paths ([#213](https://github.com/777genius/agent-notifications/pull/213), [#214](https://github.com/777genius/agent-notifications/pull/214)).
 - Include the iTerm2 exact-focus helper in the Codex runtime bundle ([#206](https://github.com/777genius/agent-notifications/pull/206)).
