@@ -288,6 +288,7 @@ bootstrap_abs_command() { return 1; }
 unset CLAUDE_CONFIG_DIR
 setup_agent_notify_wizard
 grep -Fx -- "$HOME/.claude.json" "$WIZARD_CAPTURE"
+grep -Fx -- '--install-or-update' "$WIZARD_CAPTURE"
 export CLAUDE_CONFIG_DIR="$SANDBOX/custom claude"
 setup_agent_notify_wizard
 grep -Fx -- "$CLAUDE_CONFIG_DIR/.claude.json" "$WIZARD_CAPTURE"

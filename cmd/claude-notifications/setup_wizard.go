@@ -28,6 +28,7 @@ Inspect exit 0 means the report was read; readiness stays in result fields.
 Without --action, a new machine defaults to install; an existing portable
 installation is offered inspect, add/reinstall, uninstall, update, or repair.
   --action install|uninstall|inspect|update|repair
+  --install-or-update       Bootstrap-only: install selected clients or update owned bindings first
   --agents claude,codex   Omit on inspect to report both clients
   --hooks true|false          Omit on install of new targets to include hooks; omit on update/repair to keep live units; omit on uninstall to select all units
   --agent-notify true|false   Omit on install of new targets to include portable MCP+skill; omit on update/repair to keep live units
@@ -68,7 +69,11 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 		}
 		return 0
 	}
+	args, installOrUpdate, flagErr := stripInstallOrUpdate(args)
 	req, jsonOut, err := parseSetupWizard(args)
+	if flagErr != nil && err == nil {
+		err = flagErr
+	}
 	if err != nil {
 		if jsonOut {
 			_ = json.NewEncoder(out).Encode(setupwizard.Result{Outcome: "invalid", Reason: "invalid_arguments"})
@@ -97,6 +102,9 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 	}
 	if req.ReleaseDownloadRoot == "" {
 		req.ReleaseDownloadRoot = portableasset.DefaultReleaseDownloadRoot
+	}
+	if installOrUpdate && !validInstallOrUpdateRequest(req) {
+		return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "invalid", Reason: "invalid_arguments"}, nil)
 	}
 	if errOut != nil {
 		req.Progress = func(phase string) {
@@ -142,8 +150,130 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 		}
 		req.Yes = true
 	}
-	result, err := setupwizard.Run(ctx, req)
+	var result setupwizard.Result
+	if installOrUpdate {
+		result, err = runInstallOrUpdate(ctx, req)
+	} else {
+		result, err = setupwizard.Run(ctx, req)
+	}
 	return writeSetupWizardResult(out, jsonOut, result, err)
+}
+
+// The bootstrap flag is intentionally outside the public wizard Request. It
+// changes orchestration, not the meaning of any explicit wizard action.
+func stripInstallOrUpdate(args []string) ([]string, bool, error) {
+	filtered := make([]string, 0, len(args))
+	found := false
+	for _, arg := range args {
+		if arg != "--install-or-update" {
+			filtered = append(filtered, arg)
+			continue
+		}
+		if found {
+			return filtered, false, errors.New("invalid_arguments")
+		}
+		found = true
+	}
+	return filtered, found, nil
+}
+
+func validInstallOrUpdateRequest(req setupwizard.Request) bool {
+	if req.Action != setupwizard.ActionInstall || !req.Yes || req.Hooks == nil || *req.Hooks ||
+		req.AgentNotify == nil || !*req.AgentNotify || req.ExternalUninstalled ||
+		req.ClaudeHooks != nil || req.CodexHooks != nil ||
+		req.ClaudeAgentNotify != nil || req.CodexAgentNotify != nil ||
+		len(req.Agents) == 0 || len(req.Agents) > 2 {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, agent := range req.Agents {
+		if (agent != "claude" && agent != "codex") || seen[agent] {
+			return false
+		}
+		seen[agent] = true
+	}
+	return true
+}
+
+func runInstallOrUpdate(ctx context.Context, req setupwizard.Request) (setupwizard.Result, error) {
+	plan, err := setupwizard.Plan(ctx, req)
+	if plan.Ready {
+		result, runErr := setupwizard.Run(ctx, plan.Request)
+		if runErr != nil || result.ExitCode() != 0 {
+			return result, runErr
+		}
+		return verifyInstallOrUpdate(ctx, req, result)
+	}
+	if plan.Result.Reason != "update_required" || !validInstallOrUpdateActions(req.Agents, plan.Result.NextActions) {
+		return plan.Result, err
+	}
+	var last setupwizard.Result
+	for _, next := range plan.Result.NextActions {
+		phase := req
+		phase.Action = setupwizard.Action(next.Kind)
+		phase.Agents = append([]string(nil), next.Agents...)
+		phasePlan, planErr := setupwizard.Plan(ctx, phase)
+		if !phasePlan.Ready {
+			return phasePlan.Result, planErr
+		}
+		last, err = setupwizard.Run(ctx, phasePlan.Request)
+		if err != nil || last.ExitCode() != 0 {
+			return last, err
+		}
+	}
+	return verifyInstallOrUpdate(ctx, req, last)
+}
+
+func validInstallOrUpdateActions(selected []string, next []setupwizard.NextAction) bool {
+	if len(next) < 1 || len(next) > 2 || next[0].Kind != "update" ||
+		(len(next) == 2 && next[1].Kind != "install") {
+		return false
+	}
+	allowed := map[string]bool{}
+	for _, agent := range selected {
+		allowed[agent] = true
+	}
+	seen := map[string]bool{}
+	for i, action := range next {
+		if len(action.Agents) == 0 {
+			return false
+		}
+		phaseSeen := map[string]bool{}
+		for _, agent := range action.Agents {
+			if !allowed[agent] || phaseSeen[agent] {
+				return false
+			}
+			phaseSeen[agent] = true
+			// A retained-empty installation needs a metadata-only update,
+			// then an install of the same selected client to restore delivery.
+			if seen[agent] && !(i == 1 && next[0].Reason == "update_existing_before_add" && action.Reason == "add_after_update") {
+				return false
+			}
+			seen[agent] = true
+		}
+	}
+	return true
+}
+
+func verifyInstallOrUpdate(ctx context.Context, req setupwizard.Request, result setupwizard.Result) (setupwizard.Result, error) {
+	inspect := req
+	inspect.Action = setupwizard.ActionInspect
+	view, err := setupwizard.Run(ctx, inspect)
+	if err != nil {
+		return view, err
+	}
+	installed := map[string]bool{}
+	for _, target := range view.Targets {
+		if target.Unit == "agent-notify" && target.Outcome == "installed" {
+			installed[target.Client] = true
+		}
+	}
+	for _, agent := range req.Agents {
+		if !installed[agent] {
+			return setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "post_install_incomplete", Targets: view.Targets}, setupwizard.ErrRefused
+		}
+	}
+	return result, nil
 }
 
 func writeSetupWizardPromptError(out io.Writer, jsonOut bool, req setupwizard.Request, e error) int {

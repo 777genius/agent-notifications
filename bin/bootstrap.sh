@@ -1618,7 +1618,7 @@ report_wizard_portable_missing() {
     local agents="$2"
     echo -e "${YELLOW}⚠ Agent-notify wizard skipped; ${reason}.${NC}" >&2
     echo -e "${YELLOW}  Plugin/hooks install succeeded. Retry:${NC}" >&2
-    printf '  %s\n' "$(quote_shell_command "$CONFIGURE_BINARY" setup-notifications wizard --action install --agents "$agents" --hooks false --agent-notify true --yes)" >&2
+    printf '  %s\n' "$(quote_shell_command "$CONFIGURE_BINARY" setup-notifications wizard --action install --install-or-update --agents "$agents" --hooks false --agent-notify true --yes)" >&2
     if [ "$AGENT_NOTIFY_REQUEST" = explicit ]; then
         return 1
     fi
@@ -1716,7 +1716,7 @@ setup_agent_notify_wizard() {
     if [ "$PRODUCT" != claude ]; then
         codex_exec=$(bootstrap_abs_command codex) || true
     fi
-    set -- setup-notifications wizard --action install --agents "$agents" --hooks false --agent-notify true --yes \
+    set -- setup-notifications wizard --action install --install-or-update --agents "$agents" --hooks false --agent-notify true --yes \
         --package "$package_root" --plugin-root "$plugin_root" --helper "$CONFIGURE_BINARY"
     set -- "$@" --codex-home "$wizard_codex_home" --claude-config "$CLAUDE_HOME"
     if [ "$PRODUCT" != codex ]; then
