@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -384,12 +385,28 @@ func TestCapabilityProbeDeadline(t *testing.T) {
 	if err := os.WriteFile(script, []byte("#!/bin/sh\nexec sleep 10\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
 	start := time.Now()
-	if _, err := boundedCommand(context.Background(), script); err == nil {
-		t.Fatal("unbounded helper accepted")
+	if _, err := boundedCommand(ctx, script); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("probe deadline not reported: %v", err)
 	}
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Fatalf("probe deadline exceeded: %s", elapsed)
+	}
+}
+
+func TestCapabilityProbeAllowsColdStart(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX direct process fixture")
+	}
+	script := filepath.Join(t.TempDir(), "probe")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nsleep 2\nprintf ready\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	output, err := boundedCommand(context.Background(), script)
+	if err != nil || string(output) != "ready" {
+		t.Fatalf("cold probe = %q, %v", output, err)
 	}
 }
 

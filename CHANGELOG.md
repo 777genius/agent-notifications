@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Activate the native Codex plugin through the complete installer lifecycle, finish combined hooks and portable removal safely, and launch MCP through the exact managed binary ([#207](https://github.com/777genius/agent-notifications/pull/207), [#209](https://github.com/777genius/agent-notifications/pull/209), [#211](https://github.com/777genius/agent-notifications/pull/211)).
 - Resolve the canonical configuration path before publishing a fresh portable binding. Repair/update migrate affected historical bindings and retire old locator identities without changing intentional custom paths ([#213](https://github.com/777genius/agent-notifications/pull/213), [#214](https://github.com/777genius/agent-notifications/pull/214)).
 - Include the iTerm2 exact-focus helper in the Codex runtime bundle ([#206](https://github.com/777genius/agent-notifications/pull/206)).
+- Allow a bounded cold start of the signed macOS native helper during Codex setup and report probe deadlines explicitly ([#217](https://github.com/777genius/agent-notifications/issues/217)).
 
 ### Platform notes
 - An uninstall interrupted on an older release after its portable consumer was removed can require manual recovery; the installer fails closed rather than guessing its historical path ([#215](https://github.com/777genius/agent-notifications/issues/215)).

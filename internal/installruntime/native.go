@@ -237,14 +237,17 @@ func (b *limitedOutput) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 func boundedCommand(ctx context.Context, path string, args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	commandCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	command := exec.CommandContext(ctx, path, args...)
+	command := exec.CommandContext(commandCtx, path, args...)
 	command.WaitDelay = 100 * time.Millisecond
 	out := &limitedOutput{}
 	command.Stdout = out
 	command.Stderr = io.Discard
 	err := command.Run()
+	if commandCtx.Err() != nil {
+		return out.data, commandCtx.Err()
+	}
 	return out.data, err
 }
 
@@ -302,7 +305,7 @@ func verifyNativeEvidence(ctx context.Context, bundle string, attestation []byte
 	}
 	output, err := boundedCommand(ctx, filepath.Join(bundle, "Contents", "MacOS", "terminal-notifier-modern"), "--capabilities-json")
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("native capabilities probe: %w", err)
 	}
 	if err := validateNativeCapabilities(output); err != nil {
 		return 0, err
