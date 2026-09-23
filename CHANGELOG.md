@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.45.2] - 2026-09-23
+
+### Added
+- The guided installer lets users select Claude Code, Codex CLI, or both directly from the agent cards ([#205](https://github.com/777genius/agent-notifications/pull/205)).
+
+### Changed
+- README and landing use the same short installation command and guided installer link ([#204](https://github.com/777genius/agent-notifications/pull/204), [#205](https://github.com/777genius/agent-notifications/pull/205)).
+
+### Fixed
+- Portable MCP launch now uses the ledger-owned platform binary instead of a nonexistent `runtime/primary` path. Existing bindings keep their identity across update, repair, and interrupted removal; setup rejects a missing or foreign executable before reporting success ([#211](https://github.com/777genius/agent-notifications/pull/211)).
+- Portable Codex plugin setup performs native activation in the selected profile; update, repair, removal, and retained reinstall avoid stale handoff and operation-ID conflicts ([#207](https://github.com/777genius/agent-notifications/pull/207)).
+- Combined Claude and Codex uninstall keeps the managed helper and durable intent available until both bindings are removed ([#209](https://github.com/777genius/agent-notifications/pull/209)).
+- Codex runtime bundles include the optional iTerm2 tab-selection helper without copying unrelated development scripts ([#206](https://github.com/777genius/agent-notifications/pull/206)).
+
+### Platform notes
+- Isolated lifecycle regressions cover macOS arm64 and Linux paths. Cross-OS visible desktop delivery, client restart, and reboot qualification remain separate evidence and are not claimed by this release.
+
 ## [1.44.1] - 2026-09-22
 
 ### Fixed
