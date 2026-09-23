@@ -287,6 +287,7 @@ func TestHandler_PreToolUse_ExitPlanMode(t *testing.T) {
 	call := mockNotif.lastCall()
 	if call == nil {
 		t.Fatal("no notification sent")
+		return
 	}
 
 	if call.status != analyzer.StatusPlanReady {
@@ -1147,6 +1148,7 @@ func TestNewHandler_Success(t *testing.T) {
 
 	if handler == nil {
 		t.Fatal("handler is nil")
+		return
 	}
 
 	// Verify handler components
@@ -1193,6 +1195,7 @@ func TestNewHandler_WithDefaultConfig(t *testing.T) {
 
 	if handler == nil {
 		t.Fatal("handler is nil")
+		return
 	}
 
 	// Verify default config was loaded
@@ -1289,6 +1292,7 @@ func TestNewHandler_NonexistentPluginRoot(t *testing.T) {
 
 	if handler == nil {
 		t.Fatal("handler is nil")
+		return
 	}
 
 	// Should use default config
@@ -1309,6 +1313,7 @@ func TestNewHandler_EmptyPluginRoot(t *testing.T) {
 
 	if handler == nil {
 		t.Fatal("handler is nil")
+		return
 	}
 
 	// Should use default config

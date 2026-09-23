@@ -35,6 +35,7 @@ func TestDetectTeamLead(t *testing.T) {
 		info := mgr.DetectTeamLead("session-123")
 		if info == nil {
 			t.Fatal("expected team info, got nil")
+			return
 		}
 		if info.TeamName != "test-team" {
 			t.Errorf("expected team name 'test-team', got %q", info.TeamName)
@@ -114,6 +115,7 @@ func TestDetectTeamByName(t *testing.T) {
 	info := mgr.DetectTeamByName("my-team")
 	if info == nil {
 		t.Fatal("expected team info")
+		return
 	}
 	if len(info.Members) != 1 || info.Members[0] != "worker" {
 		t.Errorf("expected members [worker], got %v", info.Members)
