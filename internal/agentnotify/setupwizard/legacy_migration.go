@@ -113,39 +113,6 @@ func legacyGeneratedConfig(b portable.Binding) bool {
 	return b.GlobalConfig == filepath.Join(b.RuntimeRoot, "global", "config.json")
 }
 
-func selectedCommittedIdentity(req Request, snap installruntime.InstalledSnapshot, mat portablesetup.Materializer, id portablesetup.Identity) (portable.Binding, bool, error) {
-	for _, name := range req.Agents {
-		agent := portable.Integration(name)
-		if agent != portable.Claude && agent != portable.Codex {
-			continue
-		}
-		bindings, err := liveClientBindings(mat, id.InstallationID, name)
-		if err != nil {
-			return portable.Binding{}, false, err
-		}
-		if len(bindings) == 0 {
-			continue
-		}
-		if len(bindings) != 1 {
-			return portable.Binding{}, false, fmt.Errorf("%w: client %s has %d bindings", ErrAmbiguousBinding, name, len(bindings))
-		}
-		dataRoot, err := bindingDataRoot(mat, id.InstallationID, bindings[0])
-		if err != nil || dataRoot == "" {
-			return portable.Binding{}, false, fmt.Errorf("%w: data root unavailable for %s: %v", ErrRefused, name, err)
-		}
-		expected, err := committedTemplate(snap.Ledger, id, agent, bindings[0], dataRoot)
-		if err != nil {
-			if errors.Is(err, portablesetup.ErrAlreadyAbsent) {
-				continue
-			}
-			return portable.Binding{}, false, err
-		}
-		committed, found, err := portable.ResolveCommittedBinding(snap.Ledger, expected)
-		return committed, found, err
-	}
-	return portable.Binding{}, false, nil
-}
-
 func prepareLegacyMigrations(req *Request, snap installruntime.InstalledSnapshot, mat portablesetup.Materializer, id portablesetup.Identity, agents []portable.Integration, explicitGlobal, explicitPrimary string) error {
 	if req.Action != ActionUpdate && req.Action != ActionRepair {
 		return nil

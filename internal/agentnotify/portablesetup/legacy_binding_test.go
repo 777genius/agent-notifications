@@ -290,7 +290,7 @@ func TestReplaceCommittedBindingRequiresNewAndPreservesSiblingOnRetry(t *testing
 	gen := commitLegacy(t, old, ledger.Generation)
 	sibling := old
 	sibling.Integration, sibling.BindingID = portable.Claude, "claude-binding"
-	gen = commitLegacy(t, sibling, gen)
+	commitLegacy(t, sibling, gen)
 	replacement := old
 	replacement.GlobalConfig = filepath.Join(filepath.Dir(old.RuntimeRoot), "explicit-config", "config.json")
 	replacement.Primary = portable.PlatformPrimary()
@@ -333,7 +333,7 @@ func TestReplaceCommittedBindingRequiresNewAndPreservesSiblingOnRetry(t *testing
 
 func TestReplaceCommittedBindingResumesAfterConsumerRemoval(t *testing.T) {
 	old, ledger := legacyFixture(t)
-	gen := commitLegacy(t, old, ledger.Generation)
+	commitLegacy(t, old, ledger.Generation)
 	replacement := old
 	replacement.Primary = portable.PlatformPrimary()
 	gen, res := migrationReservation(t, old, replacement)
