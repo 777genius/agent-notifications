@@ -945,6 +945,23 @@ func restoreOmittedFromIntent(req Request, agents []portable.Integration, intent
 	} else if intent.SourceRevision != "" && req.ReleaseVersion != intent.SourceRevision {
 		return req, agents, portablesetup.ErrIntentConflict
 	}
+	primary := intent.Primary
+	if primary == "" {
+		// Intents written before primary was persisted used the old default.
+		// Keep that locator identity across an interrupted remove/retry.
+		for _, target := range intent.Targets {
+			for _, unit := range target.Units {
+				if unit == "agent-notify" {
+					primary = "primary"
+				}
+			}
+		}
+	}
+	if req.Primary == "" {
+		req.Primary = primary
+	} else if primary != "" && req.Primary != primary {
+		return req, agents, portablesetup.ErrIntentConflict
+	}
 	if intent.ExternalUninstalled {
 		req.ExternalUninstalled = true
 	}
@@ -1340,6 +1357,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 			return out, err
 		}
 		req.InstallationID = id.InstallationID
+		req.Primary = id.Primary
 		out.InstallationID = id.InstallationID
 		if req.Action == ActionUpdate || req.Action == ActionRepair {
 			if mapped, bindErr := requireLiveNotifyBindings(req, mat, id, notifyAgents, out); bindErr != nil {
@@ -1642,6 +1660,7 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 			}
 		}
 		req.InstallationID = id.InstallationID
+		req.Primary = id.Primary
 		out.InstallationID = id.InstallationID
 		// §7.5: Recover is an application step, not Prepare(remove).
 		if err := recoverWizardJournals(ctx, mat, id, req, notifyAgents); err != nil {
@@ -2326,7 +2345,19 @@ func annotateRequiredUpdate(text string, out Result) string {
 func materializer(req Request, snap installruntime.InstalledSnapshot, runtimeRoot string) (portablesetup.Materializer, error) {
 	helper := req.Helper
 	if helper == "" {
-		helper = filepath.Join(runtimeRoot, primaryName(req))
+		primary := req.Primary
+		if primary == "" {
+			primary = portable.PlatformPrimary()
+		}
+		if primary == "primary" {
+			var err error
+			helper, err = portable.ResolvePrimaryExecutable(snap.Ledger, primary)
+			if err != nil {
+				return portablesetup.Materializer{}, fmt.Errorf("%w: legacy helper unavailable: %v", ErrRefused, err)
+			}
+		} else {
+			helper = filepath.Join(runtimeRoot, filepath.FromSlash(primary))
+		}
 	}
 	if !explicitAbs(helper) {
 		return portablesetup.Materializer{}, fmt.Errorf("%w: helper must be explicit", ErrRefused)
@@ -2385,10 +2416,14 @@ func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot st
 	if global == "" {
 		global = filepath.Join(runtimeRoot, "global", "config.json")
 	}
+	primary, err := primaryName(req, snap.Ledger, id)
+	if err != nil {
+		return portablesetup.Identity{}, err
+	}
 	return portablesetup.Identity{
 		InstallationID: id, ComponentID: snap.Ledger.ID, Owner: snap.Ledger.Owner,
 		ScopeRoot: scope, ControlRoot: req.ControlRoot, GlobalConfig: global,
-		RuntimeRoot: runtimeRoot, Primary: primaryName(req),
+		RuntimeRoot: runtimeRoot, Primary: primary,
 	}, nil
 }
 
@@ -2804,11 +2839,20 @@ func profileMatchesLive(profile, target string) bool {
 	return strings.HasPrefix(path, root+string(os.PathSeparator))
 }
 
-func primaryName(req Request) string {
+func primaryName(req Request, ledger installruntime.Ledger, installationID string) (string, error) {
 	if req.Primary != "" {
-		return req.Primary
+		return req.Primary, nil
 	}
-	return "primary"
+	if installationID != "" {
+		primary, found, err := portable.InstalledPrimary(ledger, installationID, req.ControlRoot)
+		if err != nil {
+			return "", err
+		}
+		if found {
+			return primary, nil
+		}
+	}
+	return portable.PlatformPrimary(), nil
 }
 
 func discovery(req Request, agent portable.Integration, runtimeRoot string, snap installruntime.InstalledSnapshot) portablesetup.Discovery {
@@ -3059,6 +3103,7 @@ func publishWizardIntent(ctx context.Context, req Request, snap installruntime.I
 		ExpectedGeneration: snap.Ledger.Generation, Action: string(req.Action), Stage: "confirmed",
 		SourceRevision: req.ReleaseVersion, SourceDigest: req.PackageSHA256,
 		TreeDigest: req.TreeDigest, HelperDigest: req.HelperDigest, HelperVersion: req.HelperVersion,
+		Primary:             req.Primary,
 		ExternalUninstalled: req.ExternalUninstalled,
 		Targets:             targets,
 	}); err != nil {

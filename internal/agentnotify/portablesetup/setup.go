@@ -100,6 +100,9 @@ func (s Service) preflight(b portable.Binding) error {
 	if snapshot.Ledger.ID != b.ComponentID || snapshot.Ledger.Owner != b.Owner || snapshot.Ledger.RuntimeRoot != b.RuntimeRoot {
 		return fmt.Errorf("%w: binding does not match managed runtime", ErrPreflight)
 	}
+	if err := b.CheckPrimaryFile(snapshot); err != nil {
+		return fmt.Errorf("%w: selected runtime primary is not an owned executable: %v", ErrPreflight, err)
+	}
 	return nil
 }
 
@@ -481,7 +484,7 @@ func (s Service) PublishConfirmedIntent(ctx context.Context, req ConfirmedIntent
 	}
 	if pending := snap.Ledger.PendingMutation; pending != nil {
 		intent, readErr := ReadIntent(req.ControlRoot)
-		if readErr != nil || !intentMatches(intent, pending.ID, req.Action, req.Targets[0].Client, req.SourceDigest, req.TreeDigest, req.HelperDigest, req.HelperVersion) {
+		if readErr != nil || !intentMatches(intent, pending.ID, req.Action, req.Targets[0].Client, req.SourceDigest, req.TreeDigest, req.HelperDigest, req.HelperVersion) || (intent.Primary != "" && req.Primary != "" && intent.Primary != req.Primary) {
 			return installruntime.Ledger{}, nil, fmt.Errorf("%w: pending %s", ErrIntentConflict, intent.Action)
 		}
 		cp := *pending
@@ -510,6 +513,7 @@ func (s Service) PublishConfirmedIntent(ctx context.Context, req ConfirmedIntent
 		TreeDigest:          req.TreeDigest,
 		HelperDigest:        req.HelperDigest,
 		HelperVersion:       req.HelperVersion,
+		Primary:             req.Primary,
 		ExternalUninstalled: req.ExternalUninstalled,
 		Targets:             req.Targets,
 	}

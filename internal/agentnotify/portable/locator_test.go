@@ -14,6 +14,10 @@ import (
 )
 
 func fixture(t *testing.T) (Binding, string, installruntime.Request) {
+	return fixtureWithPrimaryFile(t, "primary")
+}
+
+func fixtureWithPrimaryFile(t *testing.T, file string) (Binding, string, installruntime.Request) {
 	t.Helper()
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -25,7 +29,11 @@ func fixture(t *testing.T) (Binding, string, installruntime.Request) {
 			t.Fatal(err)
 		}
 	}
-	r := installruntime.Request{ControlRoot: b.ControlRoot, RuntimeRoot: b.RuntimeRoot, Owner: b.Owner, ConsumerID: "existing", Files: []installruntime.File{{Path: filepath.Join(b.RuntimeRoot, b.Primary), Data: []byte("inert primary"), Mode: 0700}}}
+	data := []byte("inert primary")
+	if file != "primary" {
+		data = []byte(installruntime.WriterProtocolMarker)
+	}
+	r := installruntime.Request{ControlRoot: b.ControlRoot, RuntimeRoot: b.RuntimeRoot, Owner: b.Owner, ConsumerID: "existing", Files: []installruntime.File{{Path: primaryPath(b.RuntimeRoot, file), Data: data, Mode: 0700}}}
 	l, err := installruntime.Commit(testContext(t), r)
 	if err != nil {
 		t.Fatal(err)
@@ -47,6 +55,48 @@ func fixture(t *testing.T) (Binding, string, installruntime.Request) {
 		t.Fatal(err)
 	}
 	return b, name, r
+}
+
+func TestPrimaryPathValidation(t *testing.T) {
+	b, _, _ := fixture(t)
+	for _, primary := range []string{PlatformPrimary(), "primary", "bin/helper-v1"} {
+		b.Primary = primary
+		if _, _, _, err := b.Registration(); err != nil {
+			t.Errorf("valid primary %q rejected: %v", primary, err)
+		}
+	}
+	for _, primary := range []string{"", "/bin/helper", "../helper", "bin/../helper", "bin/./helper", "bin//helper", `bin\helper`, "bin/C:helper"} {
+		b.Primary = primary
+		if _, _, _, err := b.Registration(); err == nil {
+			t.Errorf("unsafe primary %q accepted", primary)
+		}
+	}
+}
+
+func TestLegacyMissingPrimaryResolvesOnlyOwnedPlatformBinary(t *testing.T) {
+	b, name, _ := fixtureWithPrimaryFile(t, PlatformPrimary())
+	snapshot, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	primary, found, err := InstalledPrimary(snapshot.Ledger, b.InstallationID, b.ControlRoot)
+	if err != nil || !found || primary != "primary" {
+		t.Fatalf("legacy binding identity lost: %q %v %v", primary, found, err)
+	}
+	lease, err := Acquire(testContext(t), b.DataRoot, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := primaryPath(b.RuntimeRoot, PlatformPrimary()); lease.Executable != want {
+		t.Errorf("legacy primary resolved to %q, want %q", lease.Executable, want)
+	}
+	lease.Release()
+	if err := os.WriteFile(primaryPath(b.RuntimeRoot, "primary"), []byte("unexpected file"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Acquire(testContext(t), b.DataRoot, name); err == nil {
+		t.Fatal("unexpected legacy primary file was ignored")
+	}
 }
 func TestBindingLeaseAndRevocation(t *testing.T) {
 	b, name, r := fixture(t)
