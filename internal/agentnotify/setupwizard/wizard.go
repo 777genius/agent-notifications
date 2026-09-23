@@ -1534,6 +1534,29 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		}
 	}
 	if len(notifyAgents) > 0 && (req.Action == ActionInstall || req.Action == ActionUpdate || req.Action == ActionRepair) {
+		if snap.Ledger.PendingMutation != nil {
+			intent, err := portablesetup.ReadIntent(req.ControlRoot)
+			if err != nil {
+				out.Outcome, out.Reason = "incomplete", "pending_intent_unreadable"
+				return out, err
+			}
+			if intent.GlobalConfig == "" {
+				if err := (portablesetup.Service{}).PatchIntentGlobalConfig(ctx, req.ControlRoot, runtimeRoot, snap.Ledger.Owner, id.InstallationID, id.GlobalConfig); err != nil {
+					out.Outcome, out.Reason = "incomplete", "pending_intent_patch_failed"
+					if errors.Is(err, portablesetup.ErrIntentConflict) {
+						out.Outcome, out.Reason = "conflict", "pending_intent_conflict"
+					}
+					return out, err
+				}
+				snap, err = installruntime.ReadInstalledSnapshot(req.ControlRoot)
+				if err != nil {
+					out.Outcome, out.Reason = "incomplete", "pending_intent_unreadable"
+					return out, err
+				}
+			}
+		}
+	}
+	if len(notifyAgents) > 0 && (req.Action == ActionInstall || req.Action == ActionUpdate || req.Action == ActionRepair) {
 		for _, agent := range notifyAgents {
 			target, err := targetIdentity(id, req, snap, mat, agent)
 			if err != nil {
@@ -2624,7 +2647,6 @@ func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot st
 		scope = req.ControlRoot
 	}
 	global := req.GlobalConfig
-	installedGlobal := false
 	if global != "" {
 		physical, err := installruntime.PhysicalPath(global)
 		if err != nil {
@@ -2657,7 +2679,6 @@ func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot st
 		if global != "" && global != frozen.GlobalConfig {
 			return portablesetup.Identity{}, fmt.Errorf("%w: confirmed global config differs", portablesetup.ErrIntentConflict)
 		}
-		installedGlobal = true
 		global = frozen.GlobalConfig
 		scope = frozen.ScopeRoot
 		if req.Primary != "" && req.Primary != frozen.Primary {
@@ -2670,7 +2691,6 @@ func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot st
 			return portablesetup.Identity{}, err
 		}
 		if found {
-			installedGlobal = true
 			if global != "" && global != installed {
 				return portablesetup.Identity{}, fmt.Errorf("%w: installed global config differs from --global-config", ErrRefused)
 			}
@@ -2682,11 +2702,7 @@ func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot st
 		if err != nil || intent.SetupIntentID != snap.Ledger.PendingMutation.ID {
 			return portablesetup.Identity{}, fmt.Errorf("%w: pending global config identity unavailable", portablesetup.ErrIntentConflict)
 		}
-		if intent.GlobalConfig == "" {
-			if !installedGlobal {
-				return portablesetup.Identity{}, fmt.Errorf("%w: pending global config identity unavailable", portablesetup.ErrIntentConflict)
-			}
-		} else {
+		if intent.GlobalConfig != "" {
 			if global != "" && global != intent.GlobalConfig {
 				return portablesetup.Identity{}, fmt.Errorf("%w: pending global config differs", portablesetup.ErrIntentConflict)
 			}

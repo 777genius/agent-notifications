@@ -878,3 +878,33 @@ func TestPublishConfirmedIntentRecordsTargetsAndClears(t *testing.T) {
 		t.Fatal("finish retained intent file")
 	}
 }
+
+func TestPatchIntentGlobalConfigFreezesLegacyPendingIntent(t *testing.T) {
+	b, ledger := bindingFixture(t)
+	ctx := testCtx(t)
+	svc := Service{}
+	_, res, err := svc.PublishConfirmedIntent(ctx, ConfirmedIntent{
+		ControlRoot: b.ControlRoot, RuntimeRoot: b.RuntimeRoot, Owner: b.Owner,
+		ExpectedGeneration: ledger.Generation, Action: "install", Stage: "confirmed",
+		Targets: []IntentTarget{{Client: "claude", Units: []string{"hooks"}},
+			{Client: "codex", Units: []string{"agent-notify"}}},
+	})
+	if err != nil || res == nil {
+		t.Fatalf("publish old intent: %v", err)
+	}
+	if err := svc.PatchIntentGlobalConfig(ctx, b.ControlRoot, b.RuntimeRoot, b.Owner, b.InstallationID, b.GlobalConfig); err != nil {
+		t.Fatalf("freeze path: %v", err)
+	}
+	intent, err := ReadIntent(b.ControlRoot)
+	if err != nil || intent.GlobalConfig != b.GlobalConfig || intent.SetupIntentID != res.ID {
+		t.Fatalf("frozen intent: %+v %v", intent, err)
+	}
+	other := filepath.Join(filepath.Dir(b.GlobalConfig), "other.json")
+	if err := svc.PatchIntentGlobalConfig(ctx, b.ControlRoot, b.RuntimeRoot, b.Owner, b.InstallationID, other); !errors.Is(err, ErrIntentConflict) {
+		t.Fatalf("changed path accepted: %v", err)
+	}
+	intent, err = ReadIntent(b.ControlRoot)
+	if err != nil || intent.GlobalConfig != b.GlobalConfig {
+		t.Fatalf("conflict changed intent: %+v %v", intent, err)
+	}
+}
