@@ -578,6 +578,12 @@ func existingConsumerID(ledger installruntime.Ledger, runtimeRoot string) (strin
 			return id, nil
 		}
 	}
+	// A completed last-client uninstall keeps the installation and plugin data,
+	// but leaves no runtime consumer. Its next confirmed install still needs a
+	// durable intent before adding a new consumer.
+	if len(ledger.Consumers) == 0 && ledger.ID != "" && ledger.RuntimeRoot == runtimeRoot {
+		return "reservation-publisher", nil
+	}
 	return "", fmt.Errorf("%w: no consumer at runtime root", ErrPreflight)
 }
 

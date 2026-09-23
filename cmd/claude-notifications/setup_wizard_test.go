@@ -1076,13 +1076,30 @@ func TestSetupWizardCombinedUninstallRetiresManagedHelperLastE2E(t *testing.T) {
 	}
 	t.Setenv("AGENT_NOTIFICATIONS_CONFIG", canonical)
 	env := newWizardCLIEnv(t, ctx, false)
+	// Match the real Codex runtime layout: the signed bundle and portable
+	// primary live under the same managed runtime root.
+	env.control = filepath.Join(env.root, "retained-control")
+	env.runtime = filepath.Join(env.codexHome, "claude-notifications-go")
 	bundle := writeWizardPluginBundle(t)
 	helper := filepath.Join(env.codexHome, "claude-notifications-go", "bin", "claude-notifications")
 	body, err := os.ReadFile(env.probe)
 	if err != nil {
 		t.Fatal(err)
 	}
+	platformPrimary := filepath.Join(env.runtime, filepath.FromSlash(portable.PlatformPrimary()))
+	if _, err := installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: env.control, RuntimeRoot: env.runtime, Owner: "existing-installer", ConsumerID: "existing",
+		Files: []installruntime.File{
+			{Path: helper, Data: append(append([]byte(nil), body...), []byte(installruntime.WriterProtocolMarker)...), Mode: 0700},
+			{Path: platformPrimary, Data: append(append([]byte(nil), body...), []byte(installruntime.WriterProtocolMarker)...), Mode: 0700},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(bundle, "bin", "claude-notifications"), append(body, []byte(installruntime.WriterProtocolMarker)...), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bundle, filepath.FromSlash(portable.PlatformPrimary())), append(body, []byte(installruntime.WriterProtocolMarker)...), 0700); err != nil {
 		t.Fatal(err)
 	}
 	shared := []string{
@@ -1129,6 +1146,22 @@ func TestSetupWizardCombinedUninstallRetiresManagedHelperLastE2E(t *testing.T) {
 	}
 	if _, err := os.Stat(helper); !os.IsNotExist(err) {
 		t.Fatalf("final consumer removal retained helper: %v", err)
+	}
+	if len(snap.Ledger.Consumers) != 0 || !removed.DataRetained {
+		t.Fatalf("uninstall did not leave a retained-only installation: %+v", removed)
+	}
+	out.Reset()
+	stderr.Reset()
+	if code := executeSetupWizardWith(ctx, install, &out, &stderr, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("retained-only reinstall: %d %s %s", code, out.String(), stderr.String())
+	}
+	reinstalled := decodeWizardJSON(t, out)
+	if reinstalled.Outcome != "completed" || reinstalled.InstallationID != removed.InstallationID {
+		t.Fatalf("retained-only reinstall lost installation: %+v", reinstalled)
+	}
+	snap, err = installruntime.ReadInstalledSnapshot(env.control)
+	if err != nil || len(snap.Ledger.Consumers) == 0 || snap.Ledger.PendingMutation != nil {
+		t.Fatalf("retained-only reinstall left invalid ledger: %+v %v", snap.Ledger, err)
 	}
 }
 

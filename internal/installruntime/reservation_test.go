@@ -62,6 +62,67 @@ func TestRecoverOnlyMissingRootIsNoop(t *testing.T) {
 	}
 }
 
+func TestRetainedOnlyReservationNeedsExactPrivateIntent(t *testing.T) {
+	ctx, r := request(t)
+	r.Files = []File{{Path: filepath.Join(r.RuntimeRoot, "primary"), Data: []byte("binary"), Mode: 0700}}
+	installed, err := Commit(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Files, r.RemoveConsumer, r.ExpectedGeneration = nil, true, &installed.Generation
+	retained, err := Commit(ctx, r)
+	if err != nil || len(retained.Consumers) != 0 {
+		t.Fatalf("last consumer removal: %+v %v", retained, err)
+	}
+	intent := filepath.Join(r.ControlRoot, "portable-handoff.json")
+	res := &PendingMutation{ID: "retained-intent", Owner: r.Owner, IntentRef: intent}
+	r.ConsumerID, r.RemoveConsumer, r.RefreshOnly, r.Reservation = "reservation-publisher", false, true, res
+	r.ExpectedGeneration = &retained.Generation
+	r.Files = []File{{Path: intent, Data: []byte(`{"version":1}` + "\n"), Mode: 0600}}
+	for name, change := range map[string]func(*Request){
+		"wrong consumer": func(req *Request) { req.ConsumerID = "other" },
+		"runtime file":   func(req *Request) { req.Files[0].Path = filepath.Join(req.RuntimeRoot, "primary") },
+		"outside control": func(req *Request) {
+			outside := filepath.Join(filepath.Dir(req.ControlRoot), "outside-intent.json")
+			req.Files[0].Path = outside
+			copy := *req.Reservation
+			copy.IntentRef = outside
+			req.Reservation = &copy
+		},
+		"no reservation": func(req *Request) { req.Reservation = nil },
+		"policy change":  func(req *Request) { enabled := true; req.PolicyEnabled = &enabled },
+	} {
+		t.Run(name, func(t *testing.T) {
+			invalid := r
+			invalid.Files = append([]File(nil), r.Files...)
+			change(&invalid)
+			if _, err := Commit(ctx, invalid); err == nil {
+				t.Fatal("unregistered runtime accepted non-intent refresh")
+			}
+		})
+	}
+	for _, name := range []string{
+		"ownership.json", "transaction.json", "transaction.blobs", "policy-generation.json",
+		".component-install.lock", ".setup-coordinator.lock", "agent-notifications.json", "agent-notifications.json.lock", "native", "other-intent.json",
+	} {
+		t.Run("reserved or unrelated intent "+name, func(t *testing.T) {
+			invalid := r
+			invalid.Files = append([]File(nil), r.Files...)
+			invalid.Files[0].Path = filepath.Join(r.ControlRoot, name)
+			copy := *r.Reservation
+			copy.IntentRef = invalid.Files[0].Path
+			invalid.Reservation = &copy
+			if _, err := Commit(ctx, invalid); err == nil {
+				t.Fatalf("accepted consumerless intent at %s", name)
+			}
+		})
+	}
+	held, err := Commit(ctx, r)
+	if err != nil || held.PendingMutation == nil || len(held.Consumers) != 0 {
+		t.Fatalf("exact retained intent: %+v %v", held, err)
+	}
+}
+
 func TestReservationStartBlocksUnmatchedWriterAndAllowsMatch(t *testing.T) {
 	ctx, r := request(t)
 	r.Files = []File{{Path: filepath.Join(r.RuntimeRoot, "hook"), Data: []byte("hook"), Mode: 0755}}
