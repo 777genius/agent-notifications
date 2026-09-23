@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 )
 
@@ -33,13 +34,17 @@ type Intent struct {
 }
 
 type IntentTarget struct {
-	Client         string   `json:"client"`
-	BindingID      string   `json:"bindingID,omitempty"`
-	InstallationID string   `json:"installationID,omitempty"`
-	DataReceiptID  string   `json:"dataReceiptID,omitempty"`
-	Profile        string   `json:"profile,omitempty"`
-	MCPConfig      string   `json:"mcpConfig,omitempty"`
-	Units          []string `json:"units,omitempty"`
+	Client         string            `json:"client"`
+	BindingID      string            `json:"bindingID,omitempty"`
+	InstallationID string            `json:"installationID,omitempty"`
+	OldConsumerKey string            `json:"oldConsumerKey,omitempty"`
+	NewConsumerKey string            `json:"newConsumerKey,omitempty"`
+	OldBinding     *portable.Binding `json:"oldBinding,omitempty"`
+	NewBinding     *portable.Binding `json:"newBinding,omitempty"`
+	DataReceiptID  string            `json:"dataReceiptID,omitempty"`
+	Profile        string            `json:"profile,omitempty"`
+	MCPConfig      string            `json:"mcpConfig,omitempty"`
+	Units          []string          `json:"units,omitempty"`
 }
 
 // ConfirmedIntent is the host-normalized SetupIntent published before the first

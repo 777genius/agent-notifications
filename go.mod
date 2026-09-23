@@ -6,7 +6,7 @@ require (
 	git.sr.ht/~jackmordaunt/go-toast v1.1.2
 	github.com/777genius/plugin-kit-ai/cli v0.0.0-20260920103526-9f0d0cdb8fe8
 	github.com/777genius/plugin-kit-ai/install/integrationctl v0.0.0-20260920081413-a5644312f7af
-	github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20260920103526-9f0d0cdb8fe8
+	github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20260923060302-98e5c6706a58
 	github.com/777genius/plugin-kit-ai/sdk v1.1.1-0.20260920081413-a5644312f7af
 	github.com/creack/pty v1.1.24
 	github.com/esiqveland/notify v0.14.0

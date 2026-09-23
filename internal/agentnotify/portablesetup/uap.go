@@ -63,6 +63,9 @@ type MaterializeRequest struct {
 	OperationID         string
 	HelperExecutable    string
 	ExternalUninstalled bool
+	// HandoffAction is the host action (update or repair) for a one-client
+	// refresh_projection migration. The UAP operation remains refresh_projection.
+	HandoffAction string
 	// HoldOnly publishes the uninstall reservation and returns without locator
 	// revoke or UAP mutation. Wizard uses it to keep a Codex removal pending
 	// until the host attests ExternalUninstalled.
@@ -235,6 +238,206 @@ func Complete(id Identity, integration portable.Integration, clientID, scope, ac
 		return portable.Binding{}, fmt.Errorf("%w: integration=%s bindingID=%s scopeID=%s dataRoot=%q activePath=%q primary=%q", err, integration, b.BindingID, b.ScopeID, dataRoot, activePath, id.Primary)
 	}
 	return b, nil
+}
+
+// resolveStoredBinding binds UAP's committed client and data receipt to the
+// exact portable consumer bytes, including historical GlobalConfig/Primary.
+func resolveStoredBinding(id Identity, integration portable.Integration, client domain.ClientBinding, receipt domain.DataReceipt, ledger installruntime.Ledger) (portable.Binding, error) {
+	expected, err := expectedStoredBinding(id, integration, client, receipt)
+	if err != nil {
+		return portable.Binding{}, err
+	}
+	b, found, err := portable.ResolveCommittedBinding(ledger, expected)
+	if err != nil || !found {
+		return portable.Binding{}, fmt.Errorf("%w: exact historical consumer missing or ambiguous", ErrPreflight)
+	}
+	return b, nil
+}
+
+func expectedStoredBinding(id Identity, integration portable.Integration, client domain.ClientBinding, receipt domain.DataReceipt) (portable.Binding, error) {
+	if client.ClientID != string(integration) || client.DataReceiptID == "" || receipt.DataReceiptID != client.DataReceiptID || receipt.Locator == "" || receipt.Scope != client.Scope {
+		return portable.Binding{}, fmt.Errorf("%w: UAP client/data receipt mismatch", ErrPreflight)
+	}
+	expected, err := Complete(id, integration, client.ClientID, client.Scope, client.TargetLocator, receipt.Locator)
+	if err != nil {
+		return portable.Binding{}, err
+	}
+	if expected.BindingID != client.ClientBindingID {
+		return portable.Binding{}, fmt.Errorf("%w: UAP target binding ID mismatch", ErrPreflight)
+	}
+	return expected, nil
+}
+
+// resolveRemovableBinding accepts a vanished consumer only when the pending
+// uninstall intent froze its exact identity before the revoke. The UAP client
+// and receipt must still agree; a foreign locator is never removed.
+func resolveRemovableBinding(id Identity, integration portable.Integration, client domain.ClientBinding, receipt domain.DataReceipt, profile string, ledger installruntime.Ledger) (portable.Binding, error) {
+	expected, err := expectedStoredBinding(id, integration, client, receipt)
+	if err != nil {
+		return portable.Binding{}, err
+	}
+	variants, err := portable.CommittedBindingVariants(ledger, expected)
+	if err != nil || len(variants) > 1 {
+		return portable.Binding{}, fmt.Errorf("%w: committed binding ambiguous or invalid", ErrPreflight)
+	}
+	if len(variants) == 1 {
+		if ledger.PendingMutation != nil {
+			target, err := readUninstallIntentTarget(ledger, expected, client.DataReceiptID, profile)
+			if err != nil {
+				return portable.Binding{}, err
+			}
+			if target.OldBinding != nil {
+				frozen, err := frozenUninstallBinding(ledger, expected, client.DataReceiptID, profile)
+				if err != nil || frozen != variants[0] {
+					return portable.Binding{}, fmt.Errorf("%w: committed binding differs from confirmed uninstall", ErrPreflight)
+				}
+			} else if target.OldConsumerKey != "" || target.NewBinding != nil || target.NewConsumerKey != "" {
+				return portable.Binding{}, fmt.Errorf("%w: incomplete confirmed uninstall binding", ErrPreflight)
+			}
+		}
+		return variants[0], nil
+	}
+	old, err := frozenUninstallBinding(ledger, expected, client.DataReceiptID, profile)
+	if err != nil {
+		return portable.Binding{}, err
+	}
+	if _, err := portable.ExactLocator(old); err != nil {
+		return portable.Binding{}, err
+	}
+	return old, nil
+}
+
+func frozenUninstallBinding(ledger installruntime.Ledger, expected portable.Binding, receiptID, profile string) (portable.Binding, error) {
+	target, err := readUninstallIntentTarget(ledger, expected, receiptID, profile)
+	if err != nil {
+		return portable.Binding{}, err
+	}
+	if target.OldBinding == nil || target.NewBinding != nil || target.NewConsumerKey != "" || target.DataReceiptID != receiptID {
+		return portable.Binding{}, fmt.Errorf("%w: uninstall intent target differs", ErrPreflight)
+	}
+	old := *target.OldBinding
+	wantKey, _, _, err := old.Registration()
+	if err != nil || target.OldConsumerKey != wantKey {
+		return portable.Binding{}, fmt.Errorf("%w: uninstall registration differs", ErrPreflight)
+	}
+	expected.GlobalConfig, expected.Primary = old.GlobalConfig, old.Primary
+	if expected != old {
+		return portable.Binding{}, fmt.Errorf("%w: uninstall UAP identity differs", ErrPreflight)
+	}
+	return old, nil
+}
+
+func readUninstallIntentTarget(ledger installruntime.Ledger, expected portable.Binding, receiptID, profile string) (IntentTarget, error) {
+	pending := ledger.PendingMutation
+	if pending == nil || pending.Owner != expected.Owner || pending.IntentRef != IntentPath(expected.ControlRoot) {
+		return IntentTarget{}, fmt.Errorf("%w: uninstall reservation missing", ErrPreflight)
+	}
+	path := IntentPath(expected.ControlRoot)
+	wantFile, ok := ledger.Files[path]
+	actualFile, err := installruntime.Fingerprint(path)
+	if err != nil || !ok || actualFile != wantFile {
+		return IntentTarget{}, fmt.Errorf("%w: uninstall intent file differs", ErrPreflight)
+	}
+	intent, err := ReadIntent(expected.ControlRoot)
+	if err != nil || intent.SetupIntentID != pending.ID || intent.Action != "uninstall" {
+		return IntentTarget{}, fmt.Errorf("%w: uninstall intent missing", ErrPreflight)
+	}
+	var target *IntentTarget
+	for i := range intent.Targets {
+		if intent.Targets[i].Client != string(expected.Integration) {
+			continue
+		}
+		if target != nil {
+			return IntentTarget{}, fmt.Errorf("%w: uninstall intent target ambiguous", ErrPreflight)
+		}
+		target = &intent.Targets[i]
+	}
+	if target == nil || target.Client != string(expected.Integration) || target.InstallationID != expected.InstallationID || target.BindingID != expected.BindingID || (target.DataReceiptID != "" && target.DataReceiptID != receiptID) || target.Profile != profile {
+		return IntentTarget{}, fmt.Errorf("%w: uninstall intent target differs", ErrPreflight)
+	}
+	return *target, nil
+}
+
+func (m Materializer) validateRefreshHandoff(req MaterializeRequest) error {
+	if req.HandoffAction != "update" && req.HandoffAction != "repair" {
+		return fmt.Errorf("%w: projection refresh requires update or repair intent", ErrPreflight)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(req.Identity.ControlRoot)
+	if err != nil || snap.Recovery {
+		return fmt.Errorf("%w: managed runtime snapshot unavailable", ErrPreflight)
+	}
+	intent, target, err := readMigrationIntentTarget(snap.Ledger, req.Identity.ControlRoot, req.Integration)
+	if err != nil || intent.Action != req.HandoffAction || target.InstallationID != req.Identity.InstallationID {
+		return fmt.Errorf("%w: projection refresh intent differs", ErrPreflight)
+	}
+	old, replacement := *target.OldBinding, *target.NewBinding
+	if old == replacement || old.Integration != req.Integration || old.InstallationID != req.Identity.InstallationID {
+		return fmt.Errorf("%w: projection refresh identity differs", ErrPreflight)
+	}
+	sameIdentity := old
+	sameIdentity.GlobalConfig, sameIdentity.Primary = replacement.GlobalConfig, replacement.Primary
+	if sameIdentity != replacement {
+		return fmt.Errorf("%w: projection refresh changes UAP identity", ErrPreflight)
+	}
+	oldKey, _, _, oldErr := old.Registration()
+	newKey, _, _, newErr := replacement.Registration()
+	if oldErr != nil || newErr != nil || target.OldConsumerKey != oldKey || target.NewConsumerKey != newKey || target.BindingID != old.BindingID {
+		return fmt.Errorf("%w: projection refresh registration differs", ErrPreflight)
+	}
+	state, err := m.Store.Load()
+	if err != nil {
+		return err
+	}
+	installation, ok := findInstallation(state, old.InstallationID)
+	if !ok {
+		return fmt.Errorf("%w: UAP installation missing", ErrPreflight)
+	}
+	var client domain.ClientBinding
+	count := 0
+	for _, candidate := range installation.Clients {
+		if candidate.ClientID == string(req.Integration) {
+			client = candidate
+			count++
+		}
+	}
+	if count != 1 || client.DataReceiptID != target.DataReceiptID {
+		return fmt.Errorf("%w: UAP client or receipt ambiguous", ErrPreflight)
+	}
+	expectedOld, err := expectedStoredBinding(req.Identity, req.Integration, client, installation.DataReceipts[client.DataReceiptID])
+	if err != nil {
+		return err
+	}
+	variants, err := portable.CommittedBindingVariants(snap.Ledger, expectedOld)
+	if err != nil || len(variants) == 0 || len(variants) > 2 {
+		return fmt.Errorf("%w: persisted historical binding differs", ErrPreflight)
+	}
+	oldPresent, newPresent := false, false
+	for _, variant := range variants {
+		switch variant {
+		case old:
+			oldPresent = true
+		case replacement:
+			newPresent = true
+		default:
+			return fmt.Errorf("%w: foreign projection refresh consumer", ErrPreflight)
+		}
+	}
+	if !oldPresent || (len(variants) == 2 && !newPresent) {
+		return fmt.Errorf("%w: persisted historical binding differs", ErrPreflight)
+	}
+	wantNew, err := Complete(req.Identity, req.Integration, client.ClientID, client.Scope, client.TargetLocator, installation.DataReceipts[client.DataReceiptID].Locator)
+	if err != nil || wantNew != replacement {
+		return fmt.Errorf("%w: requested replacement differs from UAP binding", ErrPreflight)
+	}
+	if present, err := portable.ExactLocator(old); err != nil || !present {
+		return fmt.Errorf("%w: old locator is absent or foreign", ErrPreflight)
+	}
+	if newPresent {
+		if _, err := portable.ExactLocator(replacement); err != nil {
+			return fmt.Errorf("%w: replacement locator is foreign", ErrPreflight)
+		}
+	}
+	return nil
 }
 
 func refuseConflictingLocator(b portable.Binding) error {
@@ -466,14 +669,38 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 	if _, err := m.engine(req, new(uint64), nil); err != nil {
 		return portable.Binding{}, err
 	}
+	action := string(packageOperation(req))
+	if req.Operation == uapinstaller.OpRefreshProjection {
+		if err := m.validateRefreshHandoff(req); err != nil {
+			return portable.Binding{}, err
+		}
+		action = req.HandoffAction
+	} else if req.HandoffAction != "" {
+		return portable.Binding{}, fmt.Errorf("%w: handoff action override is only for projection refresh", ErrPreflight)
+	}
 	gen, res, err := m.Kernel.handoffForward(ctx, Request{
 		Binding: template, ExpectedGeneration: req.ExpectedGeneration, Discovery: req.Discovery,
 		SourceRevision: req.SourceRevision, SourceDigest: req.SourceDigest,
 		TreeDigest: req.TreeDigest, HelperDigest: req.HelperDigest, HelperVersion: req.HelperVersion,
 		Profile: req.ClientConfigRoot,
-	}, string(packageOperation(req)))
+	}, action)
 	if err != nil {
 		return portable.Binding{}, err
+	}
+	if req.Operation == uapinstaller.OpRefreshProjection && res == nil {
+		// A migration can have no direct-MCP discovery. In that case
+		// handoffForward has no work, but the UAP commit still needs the
+		// previously confirmed kernel reservation.
+		snap, readErr := installruntime.ReadInstalledSnapshot(req.Identity.ControlRoot)
+		if readErr != nil || snap.Ledger.PendingMutation == nil {
+			return portable.Binding{}, fmt.Errorf("%w: projection refresh reservation disappeared", ErrPreflight)
+		}
+		intent, _, readErr := readMigrationIntentTarget(snap.Ledger, req.Identity.ControlRoot, req.Integration)
+		if readErr != nil || intent.Action != req.HandoffAction {
+			return portable.Binding{}, fmt.Errorf("%w: projection refresh intent changed", ErrPreflight)
+		}
+		cp := *snap.Ledger.PendingMutation
+		res = &cp
 	}
 	generation := gen
 	eng, err := m.engine(req, &generation, res)
@@ -701,6 +928,44 @@ func (m Materializer) RemoveGroup(ctx context.Context, reqs []MaterializeRequest
 		return nil, err
 	}
 	defer func() { _ = prepared.Close() }()
+	// Resolve both before any revocation so an ambiguous second client cannot
+	// leave the first client removed while its sibling remains unresolved.
+	bindings := make([]portable.Binding, len(reqs))
+	var intentTargets []IntentTarget
+	for i, req := range reqs {
+		matches := 0
+		for _, client := range installation.Clients {
+			if client.ClientID != string(req.Integration) {
+				continue
+			}
+			matches++
+			if matches > 1 {
+				return nil, fmt.Errorf("%w: duplicate UAP client identity", ErrPreflight)
+			}
+			snap, err := installruntime.ReadInstalledSnapshot(req.Identity.ControlRoot)
+			if err != nil || snap.Recovery {
+				return nil, fmt.Errorf("%w: managed runtime snapshot unavailable", ErrPreflight)
+			}
+			bindings[i], err = resolveRemovableBinding(req.Identity, req.Integration, client, installation.DataReceipts[client.DataReceiptID], req.ClientConfigRoot, snap.Ledger)
+			if err != nil {
+				return nil, err
+			}
+			if _, err := portable.ExactLocator(bindings[i]); err != nil {
+				return nil, fmt.Errorf("%w: existing locator differs for %s: %v", ErrPreflight, req.Integration, err)
+			}
+			key, _, _, err := bindings[i].Registration()
+			if err != nil {
+				return nil, err
+			}
+			b := bindings[i]
+			intentTargets = append(intentTargets, IntentTarget{
+				Client: client.ClientID, InstallationID: req.Identity.InstallationID,
+				BindingID: client.ClientBindingID, DataReceiptID: client.DataReceiptID,
+				Profile: req.ClientConfigRoot, OldConsumerKey: key, OldBinding: &b,
+				Units: []string{"direct-mcp"},
+			})
+		}
+	}
 	var res *installruntime.PendingMutation
 	var lastPB portable.Binding
 	live := 0
@@ -708,27 +973,25 @@ func (m Materializer) RemoveGroup(ctx context.Context, reqs []MaterializeRequest
 	for i, req := range reqs {
 		out[i].Integration = req.Integration
 		var found *domain.ClientBinding
-		var receipt domain.DataReceipt
 		for _, binding := range installation.Clients {
 			if binding.ClientID != string(req.Integration) {
 				continue
 			}
 			item := binding
 			found = &item
-			receipt = installation.DataReceipts[binding.DataReceiptID]
 		}
 		if found == nil {
 			out[i].AlreadyAbsent = true
 			continue
 		}
-		pb, err := Complete(req.Identity, req.Integration, found.ClientID, found.Scope, found.TargetLocator, receipt.Locator)
-		if err != nil {
-			return nil, err
+		pb := bindings[i]
+		if pb == (portable.Binding{}) {
+			return nil, fmt.Errorf("%w: historical binding not resolved", ErrPreflight)
 		}
 		kernelReq := Request{
 			Binding: pb, ExpectedGeneration: generation, Discovery: req.Discovery,
 			SourceRevision: req.SourceRevision, SourceDigest: req.SourceDigest, Profile: req.ClientConfigRoot,
-			Reservation: res,
+			DataReceiptID: found.DataReceiptID, IntentTargets: intentTargets, Reservation: res,
 		}
 		matched, err := m.Kernel.matchingReservation(kernelReq, "uninstall")
 		if err != nil {
@@ -798,6 +1061,15 @@ func (m Materializer) Update(ctx context.Context, req MaterializeRequest) (porta
 
 func (m Materializer) Repair(ctx context.Context, req MaterializeRequest) (portable.Binding, error) {
 	req.Operation = uapinstaller.OpRepair
+	return m.Install(ctx, req)
+}
+
+// RefreshProjection reprojects one committed UAP client through Install's
+// normal callback. The new portable consumer is committed first; the caller
+// then retires the old binding with ReplaceCommittedBinding.
+func (m Materializer) RefreshProjection(ctx context.Context, req MaterializeRequest) (portable.Binding, error) {
+	req.Operation = uapinstaller.OpRefreshProjection
+	req.KeepReservation = true
 	return m.Install(ctx, req)
 }
 
@@ -1022,6 +1294,9 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 		if binding.ClientID != string(req.Integration) {
 			continue
 		}
+		if found != nil {
+			return fmt.Errorf("%w: duplicate UAP client identity", ErrPreflight)
+		}
 		item := binding
 		found = &item
 		receipt = installation.DataReceipts[binding.DataReceiptID]
@@ -1029,15 +1304,19 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 	if found == nil {
 		return ErrAlreadyAbsent
 	}
-	pb, err := Complete(req.Identity, req.Integration, found.ClientID, found.Scope, found.TargetLocator, receipt.Locator)
-	if err != nil {
-		return err
-	}
 	release, err := m.beginMutation(ctx, &req)
 	if err != nil {
 		return err
 	}
 	defer release()
+	snap, err := installruntime.ReadInstalledSnapshot(req.Identity.ControlRoot)
+	if err != nil || snap.Recovery {
+		return fmt.Errorf("%w: managed runtime snapshot unavailable", ErrPreflight)
+	}
+	pb, err := resolveRemovableBinding(req.Identity, req.Integration, *found, receipt, req.ClientConfigRoot, snap.Ledger)
+	if err != nil {
+		return err
+	}
 	eng, err := m.engine(req, &req.ExpectedGeneration, nil)
 	if err != nil {
 		return err
@@ -1055,6 +1334,7 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 	kernelReq := Request{
 		Binding: pb, ExpectedGeneration: req.ExpectedGeneration, Discovery: req.Discovery,
 		SourceRevision: req.SourceRevision, SourceDigest: req.SourceDigest, Profile: req.ClientConfigRoot,
+		DataReceiptID: found.DataReceiptID,
 	}
 	res, err := m.Kernel.matchingReservation(kernelReq, "uninstall")
 	if err != nil {
@@ -1086,7 +1366,7 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 	if req.Discovery.ConfigPath == "" {
 		return m.Kernel.finishHandoff(ctx, kernelReq, res)
 	}
-	snap, err := installruntime.ReadInstalledSnapshot(req.Identity.ControlRoot)
+	snap, err = installruntime.ReadInstalledSnapshot(req.Identity.ControlRoot)
 	if err != nil {
 		return err
 	}
