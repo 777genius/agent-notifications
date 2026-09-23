@@ -738,6 +738,113 @@ func TestRefreshHandoffAcceptsFrozenOldAndNewAfterCallbackRetry(t *testing.T) {
 	}
 }
 
+func TestRestoreMigrationProjectionUsesFrozenOuterAction(t *testing.T) {
+	for _, action := range []string{"update", "repair"} {
+		t.Run(action, func(t *testing.T) {
+			old, ledger := legacyFixture(t)
+			probe := buildProbe(t)
+			root := filepath.Dir(old.ControlRoot)
+			pkg := filepath.Join(root, "package")
+			writePackage(t, pkg, probe)
+			config := filepath.Join(root, "profiles", "claude")
+			if err := os.MkdirAll(config, 0700); err != nil {
+				t.Fatal(err)
+			}
+			uapRoot := filepath.Join(root, "uap")
+			mat, err := NewMaterializer(UAPRoots{
+				StateFile: filepath.Join(uapRoot, "state", "state-v2.json"), LockFile: filepath.Join(uapRoot, "state", "mutation.lock"),
+				OperationsDir: filepath.Join(uapRoot, "state", "operations"), PluginDataBase: filepath.Join(uapRoot, "plugin-data"),
+				ManagedRoot: filepath.Join(uapRoot, "managed"), HelperExecutable: probe, ClaudeRunner: listingRunner{configRoot: config},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := Identity{
+				InstallationID: "00000000-0000-4000-8000-0000000000ae", ComponentID: old.ComponentID, Owner: old.Owner,
+				ScopeRoot: old.ScopeRoot, ControlRoot: old.ControlRoot, GlobalConfig: old.GlobalConfig,
+				RuntimeRoot: old.RuntimeRoot, Primary: old.Primary,
+			}
+			oldBinding, err := mat.Install(testCtx(t), MaterializeRequest{
+				Identity: id, Integration: portable.Claude, ExpectedGeneration: ledger.Generation,
+				PackageRoot: pkg, ClientConfigRoot: config, ClientExecutable: probe, OperationID: "migration-restore-install",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			state, err := mat.Store.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			installation, ok := findInstallation(state, id.InstallationID)
+			if !ok || len(installation.Clients) != 1 {
+				t.Fatal("UAP client missing")
+			}
+			var client domain.ClientBinding
+			for _, candidate := range installation.Clients {
+				if candidate.ClientID == string(portable.Claude) {
+					client = candidate
+				}
+			}
+			if client.DataReceiptID == "" {
+				t.Fatal("Claude UAP client missing")
+			}
+			replacement := oldBinding
+			replacement.GlobalConfig = filepath.Join(root, "explicit-config", "config.json")
+			replacement.Primary = portable.PlatformPrimary()
+			if err := os.MkdirAll(filepath.Dir(replacement.GlobalConfig), 0700); err != nil {
+				t.Fatal(err)
+			}
+			oldKey, _, _, err := oldBinding.Registration()
+			if err != nil {
+				t.Fatal(err)
+			}
+			newKey, _, _, err := replacement.Registration()
+			if err != nil {
+				t.Fatal(err)
+			}
+			confirmed, _, err := (Service{}).PublishConfirmedIntent(testCtx(t), ConfirmedIntent{
+				ControlRoot: old.ControlRoot, RuntimeRoot: old.RuntimeRoot, Owner: old.Owner, Action: action,
+				Targets: []IntentTarget{{
+					Client: string(portable.Claude), InstallationID: id.InstallationID, BindingID: oldBinding.BindingID,
+					DataReceiptID: client.DataReceiptID, Profile: config,
+					OldConsumerKey: oldKey, NewConsumerKey: newKey, OldBinding: &oldBinding, NewBinding: &replacement,
+				}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := MaterializeRequest{
+				Identity: id, Integration: portable.Claude, ExpectedGeneration: confirmed.Generation,
+				PackageRoot: pkg, ClientConfigRoot: config, ClientExecutable: probe,
+				OperationID: "migration-restore-old", HandoffAction: action,
+				Discovery: Discovery{ConfigPath: filepath.Join(root, "direct-mcp.json"), Command: filepath.Join(old.RuntimeRoot, filepath.FromSlash(portable.PlatformPrimary()))},
+			}
+			wrongAction := req
+			if action == "update" {
+				wrongAction.HandoffAction = "repair"
+			} else {
+				wrongAction.HandoffAction = "update"
+			}
+			if _, err := mat.RestoreMigrationProjection(testCtx(t), wrongAction); !errors.Is(err, ErrPreflight) {
+				t.Fatalf("mismatched action accepted: %v", err)
+			}
+			wrongProfile := req
+			wrongProfile.ClientConfigRoot = filepath.Join(root, "profiles", "other")
+			if _, err := mat.RestoreMigrationProjection(testCtx(t), wrongProfile); !errors.Is(err, ErrPreflight) {
+				t.Fatalf("mismatched profile accepted: %v", err)
+			}
+			got, err := mat.RestoreMigrationProjection(testCtx(t), req)
+			if err != nil || got != oldBinding {
+				t.Fatalf("old projection not restored: got=%+v err=%v", got, err)
+			}
+			snap, err := installruntime.ReadInstalledSnapshot(old.ControlRoot)
+			if err != nil || snap.Ledger.PendingMutation == nil || !portable.ExactCommittedBinding(snap.Ledger, oldBinding) {
+				t.Fatalf("old binding or migration reservation lost: %v", err)
+			}
+		})
+	}
+}
+
 func TestRevokeAndReplaceRefuseForeignLocator(t *testing.T) {
 	old, ledger := legacyFixture(t)
 	gen := commitLegacy(t, old, ledger.Generation)

@@ -438,6 +438,19 @@ func evaluate(ctx context.Context, req *Request, requireYes bool) evaluated {
 		agents = []portable.Integration{portable.Claude, portable.Codex}
 		req.Agents = []string{string(portable.Claude), string(portable.Codex)}
 	}
+	// Use the same OS-owned root aliases as committed portable bindings and
+	// UAP managed paths before resolving either ledger. Arbitrary user symlinks
+	// are intentionally not followed by PhysicalPath.
+	for _, path := range []*string{&req.ControlRoot, &req.RuntimeRoot, &req.ScopeRoot} {
+		if *path != "" && explicitAbs(*path) {
+			physical, pathErr := installruntime.PhysicalPath(*path)
+			if pathErr != nil {
+				out.Outcome, out.Reason = "invalid", "root_path_invalid"
+				return evaluated{out: out, err: pathErr, stop: true}
+			}
+			*path = physical
+		}
+	}
 	var snap installruntime.InstalledSnapshot
 	haveSnap := false
 	if explicitAbs(req.ControlRoot) {
@@ -1731,7 +1744,8 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 					oldRepair.Identity = identityFromBinding(id, migration.Old)
 					oldRepair.Operation = uapinstaller.OpRepair
 					oldRepair.OperationID = wizardMutationID(req.Action, agent, generation) + "-restore"
-					if _, err = mat.Repair(ctx, oldRepair); err != nil {
+					oldRepair.HandoffAction = string(req.Action)
+					if _, err = mat.RestoreMigrationProjection(ctx, oldRepair); err != nil {
 						return portableInstallFailed(agent, req, out, err), err
 					}
 					materialize.ExpectedGeneration, err = rereadGeneration(req.ControlRoot)
@@ -2644,7 +2658,7 @@ func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot st
 		global = physical
 	}
 	var frozen *portablesetup.Identity
-	if id != "" && (req.Action == ActionUpdate || req.Action == ActionRepair || req.Action == ActionUninstall) {
+	if id != "" && (req.Action == ActionInstall || req.Action == ActionUpdate || req.Action == ActionRepair || req.Action == ActionUninstall) {
 		base := portablesetup.Identity{InstallationID: id, ComponentID: snap.Ledger.ID, Owner: snap.Ledger.Owner,
 			ScopeRoot: scope, ControlRoot: req.ControlRoot, RuntimeRoot: runtimeRoot, GlobalConfig: global}
 		var candidates []portablesetup.Identity
@@ -2662,7 +2676,9 @@ func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot st
 				if err != nil {
 					return portablesetup.Identity{}, err
 				}
-				candidates = append(candidates, committed)
+				if committed.Primary != "" {
+					candidates = append(candidates, committed)
+				}
 			}
 		}
 		for _, candidate := range candidates {
@@ -2673,6 +2689,9 @@ func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot st
 			}
 		}
 		if frozen == nil && len(candidates) != 0 {
+			if req.Action == ActionInstall {
+				return portablesetup.Identity{}, fmt.Errorf("%w: requested config or primary differs from selected clients", ErrRefused)
+			}
 			return portablesetup.Identity{}, fmt.Errorf("%w: requested config or primary differs from selected clients", portablesetup.ErrIntentConflict)
 		}
 	}
