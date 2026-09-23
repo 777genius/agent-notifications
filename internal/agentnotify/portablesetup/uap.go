@@ -645,7 +645,7 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 		return portable.Binding{}, err
 	}
 	action := string(packageOperation(req))
-	if req.Operation == uapinstaller.Operation("refresh_projection") {
+	if req.Operation == uapinstaller.OpRefreshProjection {
 		if err := m.validateRefreshHandoff(req); err != nil {
 			return portable.Binding{}, err
 		}
@@ -662,7 +662,7 @@ func (m Materializer) Install(ctx context.Context, req MaterializeRequest) (port
 	if err != nil {
 		return portable.Binding{}, err
 	}
-	if req.Operation == uapinstaller.Operation("refresh_projection") && res == nil {
+	if req.Operation == uapinstaller.OpRefreshProjection && res == nil {
 		// A migration can have no direct-MCP discovery. In that case
 		// handoffForward has no work, but the UAP commit still needs the
 		// previously confirmed kernel reservation.
@@ -1040,7 +1040,7 @@ func (m Materializer) Repair(ctx context.Context, req MaterializeRequest) (porta
 // normal callback. The new portable consumer is committed first; the caller
 // then retires the old binding with ReplaceCommittedBinding.
 func (m Materializer) RefreshProjection(ctx context.Context, req MaterializeRequest) (portable.Binding, error) {
-	req.Operation = uapinstaller.Operation("refresh_projection")
+	req.Operation = uapinstaller.OpRefreshProjection
 	req.KeepReservation = true
 	return m.Install(ctx, req)
 }

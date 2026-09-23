@@ -330,7 +330,7 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 					return plan, err
 				}
 			}
-			if req.Action == ActionUpdate || req.Action == ActionRepair {
+			if (req.Action == ActionUpdate || req.Action == ActionRepair) && !retainedMetadataUpdate(mat, id, req.Action) {
 				if err := prepareLegacyMigrations(&req, ev.snap, mat, id, ev.notifyAgents, explicitGlobal, explicitPrimary); err != nil {
 					ev.out.Outcome, ev.out.Reason = "incomplete", "migration_preflight_failed"
 					plan.Result = attachCommand(req, ev.out)
@@ -1527,7 +1527,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 			return out, err
 		}
 	}
-	if req.Action == ActionUpdate || req.Action == ActionRepair {
+	if (req.Action == ActionUpdate || req.Action == ActionRepair) && !retainedMetadataUpdate(mat, id, req.Action) {
 		if err := prepareLegacyMigrations(&req, snap, mat, id, notifyAgents, explicitGlobal, explicitPrimary); err != nil {
 			out.Outcome, out.Reason = "incomplete", "migration_preflight_failed"
 			return out, err
@@ -1693,7 +1693,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		var got portable.Binding
 		var err error
 		if migrating {
-			materialize.HandoffAction = string(req.Action)
+			materialize.OperationID += "-projection"
 			current, readErr := installruntime.ReadInstalledSnapshot(req.ControlRoot)
 			if readErr != nil {
 				return portableInstallFailed(agent, req, out, readErr), readErr
@@ -1702,6 +1702,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 				if portable.ExactCommittedBinding(current.Ledger, migration.Old) {
 					// UAP can still be in prepared/failed activation after its
 					// callback committed the new consumer. Re-enter its lifecycle.
+					materialize.HandoffAction = string(req.Action)
 					got, err = mat.RefreshProjection(ctx, materialize)
 					if err == nil && got.Version != 0 && got != migration.New {
 						err = fmt.Errorf("%w: refreshed binding differs from confirmed intent", ErrRefused)
@@ -1710,7 +1711,23 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 				if err == nil {
 					got = migration.New
 				}
-			} else if req.TreeDigest != "" && req.TreeDigest == liveBindingTreeDigest(mat, id.InstallationID, string(agent)) && liveManagedTargetsPresent(mat, id.InstallationID, []portable.Integration{agent}) {
+			} else if liveDigest := liveBindingTreeDigest(mat, id.InstallationID, string(agent)); liveDigest != "" && (req.TreeDigest == "" || req.TreeDigest == liveDigest) {
+				if !liveManagedTargetsPresent(mat, id.InstallationID, []portable.Integration{agent}) {
+					// Restore the exact old projection first when its managed package
+					// vanished. RefreshProjection only accepts an intact package.
+					oldRepair := materialize
+					oldRepair.Identity = identityFromBinding(id, migration.Old)
+					oldRepair.Operation = uapinstaller.OpRepair
+					oldRepair.OperationID = wizardMutationID(req.Action, agent, generation) + "-restore"
+					if _, err = mat.Repair(ctx, oldRepair); err != nil {
+						return portableInstallFailed(agent, req, out, err), err
+					}
+					materialize.ExpectedGeneration, err = rereadGeneration(req.ControlRoot)
+					if err != nil {
+						return portableInstallFailed(agent, req, out, err), err
+					}
+				}
+				materialize.HandoffAction = string(req.Action)
 				got, err = mat.RefreshProjection(ctx, materialize)
 			} else if req.Action == ActionUpdate {
 				got, err = mat.Update(ctx, materialize)

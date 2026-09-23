@@ -46,6 +46,7 @@ const (
 	OpRemove              = installer.OpRemove
 	OpUpdate              = installer.OpUpdate
 	OpRepair              = installer.OpRepair
+	OpRefreshProjection   = installer.OpRefreshProjection
 	OutcomeUnchanged      = installer.OutcomeUnchanged
 	OutcomeCompleted      = installer.OutcomeCompleted
 	OutcomeIncomplete     = installer.OutcomeIncomplete
