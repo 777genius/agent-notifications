@@ -33,6 +33,7 @@ import (
 	"github.com/777genius/agent-notifications/internal/agentnotify/portableasset"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portablesetup"
 	"github.com/777genius/agent-notifications/internal/agentnotify/registration"
+	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/testenv"
 )
@@ -197,6 +198,16 @@ func TestRestorePrimaryFromPendingIntent(t *testing.T) {
 	req.Primary = "primary"
 	if _, _, err := restoreOmittedFromIntent(req, agents, intent); !errors.Is(err, portablesetup.ErrIntentConflict) {
 		t.Fatalf("conflicting primary was not refused: %v", err)
+	}
+	intent.GlobalConfig = filepath.Join(t.TempDir(), "config.json")
+	req.Primary = portable.PlatformPrimary()
+	restored, _, err = restoreOmittedFromIntent(req, agents, intent)
+	if err != nil || restored.GlobalConfig != intent.GlobalConfig {
+		t.Fatalf("pending global config was not restored: %q %v", restored.GlobalConfig, err)
+	}
+	req.GlobalConfig = filepath.Join(t.TempDir(), "other.json")
+	if _, _, err := restoreOmittedFromIntent(req, agents, intent); !errors.Is(err, portablesetup.ErrIntentConflict) {
+		t.Fatalf("conflicting global config was not refused: %v", err)
 	}
 }
 
@@ -375,6 +386,211 @@ func TestPlanReservedIDIsReusedOnRun(t *testing.T) {
 	}
 	if bindingID != reservedBinding || !strings.Contains(plan.Text, "binding-id="+bindingID) {
 		t.Fatalf("run used a different binding id: plan=%s installed=%s text=%s", reservedBinding, bindingID, plan.Text)
+	}
+}
+
+func TestWizardDefaultGlobalConfigUsesCanonicalResolverBeforePublishing(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtimeRoot, _, _, _ := managedRuntime(t)
+	canonical := filepath.Join(filepath.Dir(control), "canonical", "nested", "config.json")
+	t.Setenv(config.OverrideEnv, canonical)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	profile := filepath.Join(filepath.Dir(control), "codex-profile")
+	scope := filepath.Join(filepath.Dir(control), "scope")
+	for _, dir := range []string{profile, scope} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Hooks: &off, AgentNotify: boolPtr(true),
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtimeRoot,
+		CodexHome: profile, ClientExecutable: probe, Helper: probe, ScopeRoot: scope,
+	}
+	plan, err := Plan(ctx, req)
+	if err != nil || !plan.Ready || plan.Request.GlobalConfig != canonical {
+		t.Fatalf("canonical plan: %+v %v", plan, err)
+	}
+	if _, err := os.Lstat(filepath.Dir(canonical)); !os.IsNotExist(err) {
+		t.Fatalf("plan created config parent: %v", err)
+	}
+	plan.Request.Yes = true
+	got, err := Run(ctx, plan.Request)
+	if err != nil || got.Outcome != "completed" {
+		t.Fatalf("install: %+v %v", got, err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, found, err := portable.InstalledGlobalConfig(snap.Ledger, got.InstallationID, control)
+	if err != nil || !found || path != canonical {
+		t.Fatalf("published global config: %q %v %v", path, found, err)
+	}
+	if err := portable.ValidateGlobalConfigParent(path); err != nil {
+		t.Fatalf("published parent fails launch check: %v", err)
+	}
+	admitted := false
+	for key, consumer := range snap.Ledger.Consumers {
+		if !strings.HasPrefix(key, "portable:") {
+			continue
+		}
+		var binding portable.Binding
+		if err := json.Unmarshal([]byte(consumer.Registration), &binding); err != nil {
+			t.Fatal(err)
+		}
+		if binding.InstallationID != got.InstallationID {
+			continue
+		}
+		name, err := binding.Filename()
+		if err != nil {
+			t.Fatal(err)
+		}
+		lease, err := portable.Acquire(ctx, binding.DataRoot, name)
+		if err != nil {
+			t.Fatalf("portable launch admission: %v", err)
+		}
+		lease.Release()
+		admitted = true
+	}
+	if !admitted {
+		t.Fatal("portable consumer missing")
+	}
+	if _, err := os.Lstat(canonical); !os.IsNotExist(err) {
+		t.Fatalf("setup wrote config file: %v", err)
+	}
+}
+
+func TestWizardPendingIntentFreezesGlobalConfigBeforeFirstPortableConsumer(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtimeRoot, _, helper, _ := managedRuntime(t)
+	installationID := "00000000-0000-4000-8000-000000000145"
+	frozen := filepath.Join(filepath.Dir(control), "frozen", "config.json")
+	changed := filepath.Join(filepath.Dir(control), "changed", "config.json")
+	profile := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(profile, 0700); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := (portablesetup.Service{}).PublishConfirmedIntent(ctx, portablesetup.ConfirmedIntent{
+		ControlRoot: control, RuntimeRoot: runtimeRoot, Owner: "existing-installer",
+		Action: "install", GlobalConfig: frozen,
+		Targets: []portablesetup.IntentTarget{{Client: "codex", InstallationID: installationID, Units: []string{"agent-notify"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := Request{Action: ActionInstall, Agents: []string{"codex"}, ControlRoot: control,
+		RuntimeRoot: runtimeRoot, InstallationID: installationID, CodexHome: profile, Helper: helper}
+	mat, err := materializer(req, snap, runtimeRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(config.OverrideEnv, changed)
+	id, err := identity(req, snap, runtimeRoot, mat, false)
+	if err != nil || id.GlobalConfig != frozen {
+		t.Fatalf("pending config drifted to environment: %+v %v", id, err)
+	}
+	req.GlobalConfig = changed
+	if _, err := identity(req, snap, runtimeRoot, mat, false); !errors.Is(err, portablesetup.ErrIntentConflict) {
+		t.Fatalf("conflicting pending config accepted: %v", err)
+	}
+}
+
+func TestWizardExistingGlobalConfigIdentitySurvivesDefaultChange(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtimeRoot, _, _, _ := managedRuntime(t)
+	legacy := filepath.Join(runtimeRoot, "global", "config.json")
+	canonical := filepath.Join(filepath.Dir(control), "canonical", "config.json")
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	profile := filepath.Join(filepath.Dir(control), "codex-profile")
+	scope := filepath.Join(filepath.Dir(control), "scope")
+	for _, dir := range []string{profile, scope} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off, AgentNotify: boolPtr(true),
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtimeRoot, GlobalConfig: legacy,
+		CodexHome: profile, ClientExecutable: probe, Helper: probe, ScopeRoot: scope,
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("legacy install: %+v %v", installed, err)
+	}
+	if runtime.GOOS == "darwin" && strings.HasPrefix(legacy, "/private/var/") {
+		req.GlobalConfig = strings.TrimPrefix(legacy, "/private")
+		snap, err := installruntime.ReadInstalledSnapshot(control)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mat, err := materializer(req, snap, runtimeRoot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, err := identity(req, snap, runtimeRoot, mat, false)
+		if err != nil || id.GlobalConfig != legacy {
+			t.Fatalf("macOS system alias changed installed identity: %+v %v", id, err)
+		}
+		req.GlobalConfig = legacy
+	}
+	if err := os.Remove(filepath.Dir(legacy)); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(config.OverrideEnv, canonical)
+	req.GlobalConfig = ""
+	req.InstallationID = installed.InstallationID
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mat, err := materializer(req, snap, runtimeRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := identity(req, snap, runtimeRoot, mat, false)
+	if err != nil || id.GlobalConfig != legacy {
+		t.Fatalf("historical binding changed: %+v %v", id, err)
+	}
+	req.GlobalConfig = canonical
+	if _, err := identity(req, snap, runtimeRoot, mat, false); !errors.Is(err, ErrRefused) {
+		t.Fatalf("conflicting explicit config accepted: %v", err)
+	}
+	req.GlobalConfig = ""
+	req.Action = ActionRepair
+	plan, err := Plan(ctx, req)
+	if err == nil || plan.Ready || plan.Result.Reason != "global_config_parent_invalid" {
+		t.Fatalf("plan accepted unusable historical config parent: %+v %v", plan, err)
+	}
+	blocked, err := Run(ctx, req)
+	if err == nil || blocked.Reason != "global_config_parent_invalid" {
+		t.Fatalf("repair published unusable historical binding: %+v %v", blocked, err)
+	}
+	if _, err := os.Lstat(filepath.Dir(legacy)); !os.IsNotExist(err) {
+		t.Fatalf("repair recreated historical parent: %v", err)
+	}
+	req.Action = ActionUninstall
+	req.ExternalUninstalled = true
+	removed, err := Run(ctx, req)
+	if err != nil || removed.Outcome != "completed" {
+		t.Fatalf("historical uninstall: %+v %v", removed, err)
+	}
+	snap, err = installruntime.ReadInstalledSnapshot(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := portable.InstalledGlobalConfig(snap.Ledger, installed.InstallationID, control); err != nil || found {
+		t.Fatalf("historical consumer survived uninstall: %v %v", found, err)
 	}
 }
 

@@ -21,6 +21,7 @@ import (
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portablesetup"
 	"github.com/777genius/agent-notifications/internal/agentnotify/registration"
+	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 )
 
@@ -243,6 +244,18 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 				return plan, err
 			}
 			req.InstallationID = id.InstallationID
+			req.GlobalConfig = id.GlobalConfig
+			if _, existing, globalErr := portable.InstalledGlobalConfig(ev.snap.Ledger, id.InstallationID, req.ControlRoot); globalErr != nil {
+				ev.out.Outcome, ev.out.Reason = "incomplete", "global_config_parent_invalid"
+				plan.Result = attachCommand(req, ev.out)
+				return plan, globalErr
+			} else if existing {
+				if err := portable.ValidateGlobalConfigParent(id.GlobalConfig); err != nil {
+					ev.out.Outcome, ev.out.Reason = "incomplete", "global_config_parent_invalid"
+					plan.Result = attachCommand(req, ev.out)
+					return plan, err
+				}
+			}
 			acquired.InstallationID = id.InstallationID
 			if req.Action == ActionUpdate || req.Action == ActionRepair {
 				if mapped, bindErr := requireLiveNotifyBindings(req, mat, id, ev.notifyAgents, ev.out); bindErr != nil {
@@ -945,6 +958,17 @@ func restoreOmittedFromIntent(req Request, agents []portable.Integration, intent
 	} else if intent.SourceRevision != "" && req.ReleaseVersion != intent.SourceRevision {
 		return req, agents, portablesetup.ErrIntentConflict
 	}
+	if intent.GlobalConfig != "" {
+		if req.GlobalConfig == "" {
+			req.GlobalConfig = intent.GlobalConfig
+		} else {
+			physical, err := installruntime.PhysicalPath(req.GlobalConfig)
+			if err != nil || physical != intent.GlobalConfig {
+				return req, agents, portablesetup.ErrIntentConflict
+			}
+			req.GlobalConfig = physical
+		}
+	}
 	primary := intent.Primary
 	if primary == "" {
 		// Intents written before primary was persisted used the old default.
@@ -1357,6 +1381,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 			return out, err
 		}
 		req.InstallationID = id.InstallationID
+		req.GlobalConfig = id.GlobalConfig
 		req.Primary = id.Primary
 		out.InstallationID = id.InstallationID
 		if req.Action == ActionUpdate || req.Action == ActionRepair {
@@ -1430,6 +1455,36 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 				return mapPreviewFailure(ctx, req, failed, mat, id, err, out)
 			}
 			out.Outcome, out.Reason = "incomplete", reason
+			return out, err
+		}
+	}
+	if len(notifyAgents) > 0 && (req.Action == ActionInstall || req.Action == ActionUpdate || req.Action == ActionRepair) {
+		if snap.Ledger.PendingMutation != nil {
+			if err := (portablesetup.Service{}).PatchIntentGlobalConfig(ctx, req.ControlRoot, runtimeRoot, snap.Ledger.Owner, id.InstallationID, id.GlobalConfig); err != nil {
+				out.Outcome, out.Reason = "incomplete", "pending_intent_patch_failed"
+				if errors.Is(err, portablesetup.ErrIntentConflict) {
+					out.Outcome, out.Reason = "conflict", "pending_intent_conflict"
+				}
+				return out, err
+			}
+			var err error
+			snap, err = installruntime.ReadInstalledSnapshot(req.ControlRoot)
+			if err != nil {
+				out.Outcome, out.Reason = "incomplete", "pending_intent_unreadable"
+				return out, err
+			}
+		}
+		_, existing, err := portable.InstalledGlobalConfig(snap.Ledger, id.InstallationID, req.ControlRoot)
+		if err == nil && existing {
+			err = portable.ValidateGlobalConfigParent(id.GlobalConfig)
+		} else if err == nil {
+			err = config.PrepareGlobalConfigParent(id.GlobalConfig)
+			if err == nil {
+				err = portable.ValidateGlobalConfigParent(id.GlobalConfig)
+			}
+		}
+		if err != nil {
+			out.Outcome, out.Reason = "incomplete", "global_config_parent_invalid"
 			return out, err
 		}
 	}
@@ -2138,6 +2193,9 @@ func retryRequestFromIntent(req Request, intent portablesetup.Intent) Request {
 	if intent.SourceRevision != "" {
 		retry.ReleaseVersion = intent.SourceRevision
 	}
+	if intent.GlobalConfig != "" {
+		retry.GlobalConfig = intent.GlobalConfig
+	}
 	if intent.ExternalUninstalled {
 		retry.ExternalUninstalled = true
 	}
@@ -2413,8 +2471,43 @@ func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot st
 		scope = req.ControlRoot
 	}
 	global := req.GlobalConfig
+	if global != "" {
+		physical, err := installruntime.PhysicalPath(global)
+		if err != nil {
+			return portablesetup.Identity{}, err
+		}
+		global = physical
+	}
+	if id != "" {
+		installed, found, err := portable.InstalledGlobalConfig(snap.Ledger, id, req.ControlRoot)
+		if err != nil {
+			return portablesetup.Identity{}, err
+		}
+		if found {
+			if global != "" && global != installed {
+				return portablesetup.Identity{}, fmt.Errorf("%w: installed global config differs from --global-config", ErrRefused)
+			}
+			global = installed
+		}
+	}
+	if snap.Ledger.PendingMutation != nil && (req.Action == ActionInstall || req.Action == ActionUpdate || req.Action == ActionRepair) {
+		intent, err := portablesetup.ReadIntent(req.ControlRoot)
+		if err != nil || intent.SetupIntentID != snap.Ledger.PendingMutation.ID {
+			return portablesetup.Identity{}, fmt.Errorf("%w: pending global config identity unavailable", portablesetup.ErrIntentConflict)
+		}
+		if intent.GlobalConfig != "" {
+			if global != "" && global != intent.GlobalConfig {
+				return portablesetup.Identity{}, fmt.Errorf("%w: pending global config differs", portablesetup.ErrIntentConflict)
+			}
+			global = intent.GlobalConfig
+		}
+	}
 	if global == "" {
-		global = filepath.Join(runtimeRoot, "global", "config.json")
+		selected, err := config.Resolve(config.SnapshotEnv())
+		if err != nil {
+			return portablesetup.Identity{}, err
+		}
+		global = selected.Path
 	}
 	primary, err := primaryName(req, snap.Ledger, id)
 	if err != nil {
@@ -3104,6 +3197,7 @@ func publishWizardIntent(ctx context.Context, req Request, snap installruntime.I
 		SourceRevision: req.ReleaseVersion, SourceDigest: req.PackageSHA256,
 		TreeDigest: req.TreeDigest, HelperDigest: req.HelperDigest, HelperVersion: req.HelperVersion,
 		Primary:             req.Primary,
+		GlobalConfig:        req.GlobalConfig,
 		ExternalUninstalled: req.ExternalUninstalled,
 		Targets:             targets,
 	}); err != nil {

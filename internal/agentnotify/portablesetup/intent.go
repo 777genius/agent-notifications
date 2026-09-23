@@ -27,6 +27,7 @@ type Intent struct {
 	HelperDigest        string         `json:"helperDigest,omitempty"`
 	HelperVersion       string         `json:"helperVersion,omitempty"`
 	Primary             string         `json:"primary,omitempty"`
+	GlobalConfig        string         `json:"globalConfig,omitempty"`
 	ExternalUninstalled bool           `json:"externalUninstalled,omitempty"`
 	Targets             []IntentTarget `json:"targets"`
 }
@@ -50,6 +51,7 @@ type ConfirmedIntent struct {
 	SourceRevision, SourceDigest            string
 	TreeDigest, HelperDigest, HelperVersion string
 	Primary                                 string
+	GlobalConfig                            string
 	ExternalUninstalled                     bool
 	Targets                                 []IntentTarget
 }
