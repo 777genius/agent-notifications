@@ -1596,13 +1596,13 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		if err != nil || out.Outcome == "incomplete" || out.Outcome == "invalid" {
 			return out, err
 		}
-		generation, err := rereadGeneration(req.ControlRoot)
+		current, err := installruntime.ReadInstalledSnapshot(req.ControlRoot)
 		if err != nil {
 			out.Outcome, out.Reason = "incomplete", err.Error()
 			return out, err
 		}
-		out.Generation = generation
-		snap.Ledger.Generation = generation
+		out.Generation = current.Ledger.Generation
+		snap = current
 	}
 	if len(notifyAgents) == 0 {
 		out.Outcome = "completed"

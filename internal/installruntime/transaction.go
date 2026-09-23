@@ -352,7 +352,18 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 			r.Prepare == nil && !r.PurgeNative && !r.RetireNative && !r.RollbackPending &&
 			r.PolicyEnabled == nil && len(r.PolicyFields) == 0 && r.ExpectedGeneration != nil && len(r.Files) <= 1 &&
 			(len(r.Files) == 0 || (r.Files[0].Remove && r.Files[0].Path == l.PendingMutation.IntentRef))
-		if (!registered && !finalIntentCleanup) || r.RemoveConsumer {
+			// Retained-only reinstall has no live consumer to refresh. Permit only the
+			// owner's exact private intent publication/patch, never runtime files,
+			// policy changes or an unreserved refresh. The new consumer is registered
+			// by the subsequent guarded install transaction.
+		emptyIntentReservation := len(l.Consumers) == 0 && l.ID != "" && l.RuntimeRoot == r.RuntimeRoot &&
+			r.ConsumerID == "reservation-publisher" && r.Reservation != nil && r.Reservation.Owner == r.Owner &&
+			!r.ClearReservation && !r.PolicyOnly && r.ExpectedGeneration != nil && len(r.Files) == 1 &&
+			!r.Files[0].Remove && r.Files[0].Link == "" && r.Files[0].Mode == 0600 && len(r.Files[0].Data) > 0 &&
+			r.Files[0].Path == r.Reservation.IntentRef && filepath.Dir(r.Files[0].Path) == r.ControlRoot &&
+			r.Native == nil && r.Prepare == nil &&
+			!r.PurgeNative && !r.RetireNative && !r.RollbackPending && r.PolicyEnabled == nil && len(r.PolicyFields) == 0
+		if (!registered && !finalIntentCleanup && !emptyIntentReservation) || r.RemoveConsumer {
 			return l, fmt.Errorf("runtime refresh requires an existing consumer at this path")
 		}
 	}
