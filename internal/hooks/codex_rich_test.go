@@ -35,6 +35,7 @@ func TestCodexFlowQuestionToolNotifies(t *testing.T) {
 	call := mockNotif.lastCall()
 	if call == nil {
 		t.Fatal("expected notification")
+		return
 	}
 	if call.status != analyzer.StatusQuestion {
 		t.Errorf("status = %v, want question", call.status)
@@ -130,6 +131,7 @@ func TestCodexFlowSubagentStopOptIn(t *testing.T) {
 	call := mockNotif.lastCall()
 	if call == nil {
 		t.Fatal("expected notification with notifyOnSubagentStop enabled")
+		return
 	}
 	if call.status != analyzer.StatusTaskComplete {
 		t.Errorf("status = %v, want task_complete", call.status)
@@ -194,6 +196,7 @@ func TestCodexFlowStopErrorHeuristic(t *testing.T) {
 	call := mockNotif.lastCall()
 	if call == nil {
 		t.Fatal("expected notification")
+		return
 	}
 	if call.status != analyzer.StatusAPIErrorOverloaded {
 		t.Errorf("status = %v, want api_error_overloaded", call.status)
