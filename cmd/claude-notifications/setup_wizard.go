@@ -260,7 +260,7 @@ func validInstallOrUpdateActions(selected []string, next []setupwizard.NextActio
 			phaseSeen[agent] = true
 			// A retained-empty installation needs a metadata-only update,
 			// then an install of the same selected client to restore delivery.
-			if seen[agent] && !(i == 1 && next[0].Reason == "update_existing_before_add" && action.Reason == "add_after_update") {
+			if seen[agent] && (i != 1 || next[0].Reason != "update_existing_before_add" || action.Reason != "add_after_update") {
 				return false
 			}
 			seen[agent] = true
