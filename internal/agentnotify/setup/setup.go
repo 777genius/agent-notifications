@@ -240,6 +240,9 @@ func qualified(s installruntime.PolicySnapshot, o Options, g uint64) error {
 	if s.Installation.Recovery {
 		return fail("recovery_required", fmt.Errorf("finish the managed installation transaction first"))
 	}
+	if l.PendingMutation != nil {
+		return fail("recovery_required", fmt.Errorf("finish the pending managed installation mutation first"))
+	}
 	if l.ID == "" || l.Owner != o.Owner || l.Generation != g {
 		return fail("generation_changed", fmt.Errorf("expected existing owner and generation"))
 	}

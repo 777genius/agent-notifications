@@ -248,7 +248,7 @@ else:
     print('SKIP setup.sh stub python3 falls back to node')
 setup_case('setup.sh stub python3 without node', stub_python=True, expected=0)
 
-# --- bootstrap.sh: node-only commit parse and checksum verify ---
+# --- bootstrap.sh: raw commit SHA and node-only checksum verify ---
 if HOST_NODE:
     with tempfile.TemporaryDirectory(prefix='bootstrap-node-', dir=os.environ['TMPDIR']) as tmp:
         case = Path(tmp)
@@ -264,9 +264,11 @@ command -v node >/dev/null || { echo node missing >&2; exit 1; }
 BOOTSTRAP_RELEASE_TAG=v1.42.0
 unset BOOTSTRAP_RELEASE_COMMIT INSTALL_SCRIPT_URL
 BOOTSTRAP_RAW_BASE_URL=https://raw.example.invalid/repository
-fetch_bootstrap_file() { printf '%s\n' '{"sha":"''' + commit + r'''"}' > "$2"; }
+fetch_bootstrap_commit_file() { printf '%s' "''' + commit + r'''" > "$2"; }
 resolve_bootstrap_release
 [ -z "$BOOTSTRAP_COMMIT" ]
+resolve_bootstrap_commit
+[ "$BOOTSTRAP_COMMIT" = "''' + commit + r'''" ]
 payload="$TMPDIR/payload"
 mkdir -p "$payload"
 printf 'helper-bytes' > "$payload/claude-notifications-linux-amd64"
@@ -306,9 +308,9 @@ then echo 'checksum mismatch accepted' >&2; exit 1; fi
         result = subprocess.run([HOST_BASH, '-c', script], env=env, text=True, capture_output=True, timeout=20)
         if result.returncode != 0:
             fail('bootstrap node-only commit+checksum', result.stderr + result.stdout)
-        pass_name('bootstrap.sh deferred commit parse and node checksum verify')
+        pass_name('bootstrap.sh raw commit SHA and node checksum verify')
 else:
-    print('SKIP bootstrap.sh node-only commit parse and checksum verify')
+    print('SKIP bootstrap.sh raw commit SHA and node checksum verify')
 
 # --- install.sh: node-only config preflight transport ---
 if HOST_NODE:
@@ -512,7 +514,7 @@ rt=$(installer_runtime)
 BOOTSTRAP_RELEASE_TAG=v1.42.0
 unset BOOTSTRAP_RELEASE_COMMIT INSTALL_SCRIPT_URL
 BOOTSTRAP_RAW_BASE_URL=https://raw.example.invalid/repository
-fetch_bootstrap_file() { printf '%s\n' '{"sha":"''' + commit + r'''"}' > "$2"; }
+fetch_bootstrap_commit_file() { printf '%s' "''' + commit + r'''" > "$2"; }
 resolve_bootstrap_release
 [ -z "$BOOTSTRAP_COMMIT" ]
 PLUGIN_KEY="claude-notifications-go@claude-notifications-go"

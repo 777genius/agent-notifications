@@ -1196,6 +1196,16 @@ fetch_bootstrap_file() {
     fi
 }
 
+fetch_bootstrap_commit_file() {
+    # GitHub's SHA media type returns exactly 40 ASCII bytes, as setup.sh
+    # already uses. This also works with helpers from older stable releases.
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL -H 'Accept: application/vnd.github.sha' --connect-timeout 15 --max-time 120 "$1" -o "$2"
+    else
+        wget -q -T 120 --header='Accept: application/vnd.github.sha' "$1" -O "$2"
+    fi
+}
+
 resolve_bootstrap_release() {
     BOOTSTRAP_TAG="${BOOTSTRAP_RELEASE_TAG:-}"
     if [ -z "$BOOTSTRAP_TAG" ]; then
@@ -1232,15 +1242,15 @@ resolve_bootstrap_release() {
 
 resolve_bootstrap_commit() {
     [ -n "$BOOTSTRAP_COMMIT" ] && return 0
-    [ -n "$_CONFIG_HELPER" ] || return 1
     _BOOTSTRAP_TMP=$(mktemp "${TMPDIR:-/tmp}/bootstrap-commit-XXXXXX") || return 1
-    fetch_bootstrap_file "${BOOTSTRAP_COMMIT_API_BASE_URL:-https://api.github.com/repos/${REPO}/commits}/$BOOTSTRAP_TAG" "$_BOOTSTRAP_TMP" || return 1
-    BOOTSTRAP_COMMIT=$("$_CONFIG_HELPER" config installer release-commit "$_BOOTSTRAP_TMP") || return 1
-    rm -f "$_BOOTSTRAP_TMP"
-    _BOOTSTRAP_TMP=""
-    printf '%s\n' "$BOOTSTRAP_COMMIT" | grep -Eq '^[0-9a-f]{40}$' || {
+    fetch_bootstrap_commit_file "${BOOTSTRAP_COMMIT_API_BASE_URL:-https://api.github.com/repos/${REPO}/commits}/$BOOTSTRAP_TAG" "$_BOOTSTRAP_TMP" || return 1
+    [ "$(LC_ALL=C wc -c < "$_BOOTSTRAP_TMP" | tr -d '[:space:]')" = 40 ] &&
+        LC_ALL=C grep -Eq '^[0-9a-f]{40}$' "$_BOOTSTRAP_TMP" || {
         echo "Release tag did not resolve to a commit SHA." >&2; return 1;
     }
+    IFS= read -r BOOTSTRAP_COMMIT < "$_BOOTSTRAP_TMP" || [ -n "$BOOTSTRAP_COMMIT" ] || return 1
+    rm -f "$_BOOTSTRAP_TMP"
+    _BOOTSTRAP_TMP=""
 }
 
 # Only release-verified bytes execute before host registration. Never use an old

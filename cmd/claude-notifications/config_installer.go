@@ -18,26 +18,6 @@ import (
 // installerConfigCommand keeps shell adapters out of JSON parsing and escaping.
 // Success is an exit-code contract, not a substring search of JSON output.
 func installerConfigCommand(args []string, out, stderr io.Writer) int {
-	if len(args) == 2 && args[0] == "release-commit" {
-		data, err := os.ReadFile(args[1])
-		if err != nil {
-			return 1
-		}
-		// Parse the tag response only after this exact-release binary has been
-		// checksum-verified. Strict JSON rejects duplicate or ambiguous SHA keys.
-		doc, err := config.ParseDocument(data, "", false)
-		if err != nil {
-			return 1
-		}
-		var sha string
-		if err := json.Unmarshal(doc.Raw()["sha"], &sha); err != nil || !installerCommitSHA.MatchString(sha) {
-			return 1
-		}
-		if _, err := fmt.Fprintln(out, sha); err != nil {
-			return 1
-		}
-		return 0
-	}
 	if len(args) == 3 && args[0] == "marketplace" {
 		data, err := os.ReadFile(args[1])
 		if err != nil {
@@ -188,7 +168,6 @@ func greaterInstallerVersion(a, b string) bool {
 }
 
 var installerVersion = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
-var installerCommitSHA = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 type installerEntry struct {
 	InstallPath string `json:"installPath"`

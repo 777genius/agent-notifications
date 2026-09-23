@@ -46,9 +46,6 @@ for args in '--product invalid' '--product' '--unknown' '--product claude --prod
     if ( PRODUCT=""; select_product $args ); then echo "accepted $args"; exit 1; fi
 done
 TEST_RELEASE_COMMIT="0123456789abcdef0123456789abcdef01234567"
-export TEST_RELEASE_COMMIT
-printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$TEST_RELEASE_COMMIT"' > "$SANDBOX/commit-helper"
-chmod +x "$SANDBOX/commit-helper"
 BOOTSTRAP_RAW_BASE_URL="https://raw.example.invalid/repository"
 if ( PRODUCT=""; CONFIGURE_ARGS=(); select_product --product codex --navigation none ); then echo "accepted incomplete none"; exit 1; fi
 if ( PRODUCT=""; CONFIGURE_ARGS=(); select_product --product codex --allow-unknown-caller true ); then echo "accepted partial consent"; exit 1; fi
@@ -74,6 +71,15 @@ done
 for commit in short 0123456789abcdef0123456789abcdef0123456g 0123456789ABCDEF0123456789ABCDEF01234567; do
     if BOOTSTRAP_RELEASE_TAG=v1.42.0 BOOTSTRAP_RELEASE_COMMIT="$commit" resolve_bootstrap_release; then exit 1; fi
 done
+for response in short 0123456789abcdef0123456789abcdef0123456g 0123456789ABCDEF0123456789ABCDEF01234567 '{"sha":"0123456789abcdef0123456789abcdef01234567"}'; do
+    (
+        BOOTSTRAP_RELEASE_TAG=v1.42.0
+        unset BOOTSTRAP_RELEASE_COMMIT
+        fetch_bootstrap_commit_file() { printf '%s' "$response" > "$2"; }
+        resolve_bootstrap_release
+        if resolve_bootstrap_commit; then echo "accepted invalid raw commit response" >&2; exit 1; fi
+    )
+done
 place_runtime_cmd() {
     local dest="$1" src="${2:-}"
     [ -n "$src" ] && [ -e "$src" ] || return 0
@@ -84,7 +90,7 @@ place_runtime_cmd() {
 if command -v node >/dev/null 2>&1; then
     NODE_ONLY="$SANDBOX/node-only-bin"
     mkdir -p "$NODE_ONLY"
-    for name in node bash sh mktemp rm cat chmod mkdir ln uname tr head cp mv env true false grep sed awk; do
+    for name in node bash sh mktemp rm cat chmod mkdir ln uname tr wc head cp mv env true false grep sed awk; do
         src=$(type -P "$name" 2>/dev/null || true)
         place_runtime_cmd "$NODE_ONLY/$name" "$src"
     done
@@ -95,10 +101,9 @@ if command -v node >/dev/null 2>&1; then
         BOOTSTRAP_RELEASE_TAG=v1.42.0
         unset BOOTSTRAP_RELEASE_COMMIT INSTALL_SCRIPT_URL
         BOOTSTRAP_RAW_BASE_URL="https://raw.example.invalid/repository"
-        fetch_bootstrap_file() { printf '%s\n' '{"sha":"'"$TEST_RELEASE_COMMIT"'"}' > "$2"; }
+        fetch_bootstrap_commit_file() { printf '%s' "$TEST_RELEASE_COMMIT" > "$2"; }
         resolve_bootstrap_release
         [ -z "$BOOTSTRAP_COMMIT" ]
-        _CONFIG_HELPER="$SANDBOX/commit-helper"
         resolve_bootstrap_commit
         [ "$BOOTSTRAP_COMMIT" = "$TEST_RELEASE_COMMIT" ]
         [ "$(select_bootstrap_install_script)" = "$BOOTSTRAP_RAW_BASE_URL/$TEST_RELEASE_COMMIT/bin/install.sh" ]
@@ -120,10 +125,9 @@ if command -v node >/dev/null 2>&1; then
         BOOTSTRAP_RELEASE_TAG=v1.42.0
         unset BOOTSTRAP_RELEASE_COMMIT INSTALL_SCRIPT_URL
         BOOTSTRAP_RAW_BASE_URL="https://raw.example.invalid/repository"
-        fetch_bootstrap_file() { printf '%s\n' '{"sha":"'"$TEST_RELEASE_COMMIT"'"}' > "$2"; }
+        fetch_bootstrap_commit_file() { printf '%s' "$TEST_RELEASE_COMMIT" > "$2"; }
         resolve_bootstrap_release
         [ -z "$BOOTSTRAP_COMMIT" ]
-        _CONFIG_HELPER="$SANDBOX/commit-helper"
         resolve_bootstrap_commit
         [ "$BOOTSTRAP_COMMIT" = "$TEST_RELEASE_COMMIT" ]
         [ "$(select_bootstrap_install_script)" = "$BOOTSTRAP_RAW_BASE_URL/$TEST_RELEASE_COMMIT/bin/install.sh" ]
@@ -302,7 +306,7 @@ web = sandbox / 'http'; web.mkdir()
 release_commits = {'v1.42.0': 'a' * 40, 'v1.43.0': 'b' * 40, 'v2.0.0': 'c' * 40}
 (web / 'commits').mkdir()
 for tag, commit in release_commits.items():
-    (web / 'commits' / tag).write_text(json.dumps({'sha': commit}))
+    (web / 'commits' / tag).write_text(commit)
 uname_os=subprocess.check_output(['uname','-s'],text=True).strip().lower()
 uname_arch=subprocess.check_output(['uname','-m'],text=True).strip().lower()
 asset_os='windows' if uname_os.startswith(('mingw','msys','cygwin')) else uname_os
@@ -375,8 +379,6 @@ if args[1]=='path': print(json.dumps(selected)); sys.exit()
 request=None
 if args[1:3]==['installer','capabilities']:
     print('installer-v1'); sys.exit()
-if args[1:3]==['installer','release-commit']:
-    print(json.loads(pathlib.Path(args[3]).read_text())['sha']); sys.exit()
 if args[1:2]==['installer'] and args[2] in ('root','version'):
     entries=json.loads(pathlib.Path(args[3]).read_text()).get('plugins',{}).get(args[4],[])
     if entries: print(entries[-1]['installPath' if args[2]=='root' else 'version'])
@@ -838,7 +840,7 @@ if shutil.which('node'):
     node_only = sandbox / 'http-node-only-bin'
     node_only.mkdir()
     for name in ['bash', 'sh', 'mktemp', 'rm', 'cat', 'chmod', 'mkdir', 'ln', 'uname',
-                 'tr', 'head', 'cp', 'mv', 'env', 'true', 'false', 'grep', 'sed', 'awk',
+                 'tr', 'wc', 'head', 'cp', 'mv', 'env', 'true', 'false', 'grep', 'sed', 'awk',
                  'tar', 'gzip', 'curl', 'node', 'sha256sum', 'shasum', 'dirname', 'realpath']:
         place_runtime_cmd(node_only / name, shutil.which(name))
     assert not (node_only / 'python3').exists()

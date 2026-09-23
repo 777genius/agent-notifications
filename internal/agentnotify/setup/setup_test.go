@@ -156,6 +156,27 @@ func TestConfigureAfterCompletedPortableReservation(t *testing.T) {
 	}
 }
 
+func TestConfigureWithPendingPortableReservationDoesNotProvision(t *testing.T) {
+	o, r := fixture(t)
+	intent := filepath.Join(o.ControlRoot, "portable-handoff.json")
+	reservation := &installruntime.PendingMutation{ID: "pending-portable-install", Owner: o.Owner, IntentRef: intent}
+	held, err := installruntime.Commit(contextFor(t), installruntime.Request{
+		ControlRoot: o.ControlRoot, RuntimeRoot: o.RuntimeRoot, Owner: o.Owner, ConsumerID: o.ConsumerID,
+		RefreshOnly: true, ExpectedGeneration: &r.ExpectedGeneration, Reservation: reservation,
+		Files: []installruntime.File{{Path: intent, Data: []byte(`{"version":1}` + "\n"), Mode: 0600}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.ExpectedGeneration = held.Generation
+	before := tree(t, filepath.Dir(o.ControlRoot))
+	_, err = Apply(contextFor(t), o, r)
+	wantReason(t, err, "recovery_required")
+	if !reflect.DeepEqual(before, tree(t, filepath.Dir(o.ControlRoot))) {
+		t.Fatal("pending reservation created provisioning state")
+	}
+}
+
 func TestEnableRepairDisableRetainsNamespaceAndCounters(t *testing.T) {
 	o, r := fixture(t)
 	global := read(t, o.GlobalConfig)
