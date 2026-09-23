@@ -125,6 +125,37 @@ func tree(t *testing.T, root string) map[string]string {
 	}
 	return out
 }
+
+func TestConfigureAfterCompletedPortableReservation(t *testing.T) {
+	o, r := fixture(t)
+	ctx := contextFor(t)
+	intent := filepath.Join(o.ControlRoot, "portable-handoff.json")
+	reservation := &installruntime.PendingMutation{ID: "completed-portable-install", Owner: o.Owner, IntentRef: intent}
+	held, err := installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: o.ControlRoot, RuntimeRoot: o.RuntimeRoot, Owner: o.Owner, ConsumerID: o.ConsumerID,
+		RefreshOnly: true, ExpectedGeneration: &r.ExpectedGeneration, Reservation: reservation,
+		Files: []installruntime.File{{Path: intent, Data: []byte(`{"version":1}` + "\n"), Mode: 0600}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleared, err := installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: o.ControlRoot, RuntimeRoot: o.RuntimeRoot, Owner: o.Owner, ConsumerID: o.ConsumerID,
+		RefreshOnly: true, ExpectedGeneration: &held.Generation, Reservation: reservation, ClearReservation: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleared.PendingMutation != nil || cleared.WriterFloor != installruntime.ReservationWriterFloor {
+		t.Fatalf("completed reservation did not retain supported writer floor: %+v", cleared)
+	}
+	r.ExpectedGeneration = cleared.Generation
+	result, err := Apply(ctx, o, r)
+	if err != nil || result.Reason != "configured" {
+		t.Fatalf("configure after portable install: result=%+v err=%v", result, err)
+	}
+}
+
 func TestEnableRepairDisableRetainsNamespaceAndCounters(t *testing.T) {
 	o, r := fixture(t)
 	global := read(t, o.GlobalConfig)
