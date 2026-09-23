@@ -671,5 +671,9 @@ func canonicalNotificationGlobalConfig() (string, error) {
 	if !filepath.IsAbs(home) || filepath.Clean(home) != home {
 		return "", errors.New("physical_path_required")
 	}
-	return config.GetStableConfigPath()
+	selected, err := config.Resolve(config.SnapshotEnv())
+	if err != nil {
+		return "", err
+	}
+	return selected.Path, nil
 }

@@ -70,6 +70,17 @@ func TestNotificationConfigureBothAndRetry(t *testing.T) {
 	if setupCommandRead(t, global) != setupCommandRead(t, f.global) {
 		t.Fatal("global restrictions changed")
 	}
+	for _, extra := range [][]string{nil, {"--global-config", global}} {
+		args := append([]string{"status", "--control-root", f.control, "--json"}, extra...)
+		var output strings.Builder
+		if code := agentNotifySetupExecute(ctx, args, &output, agentNotifySetupComposition{}); code != 0 {
+			t.Fatalf("status after configure: code=%d result=%s", code, output.String())
+		}
+		var status agentNotifySetupResult
+		if err := json.Unmarshal([]byte(output.String()), &status); err != nil || status.GlobalConfiguration != "configured" || status.Configuration != "configured" || !status.ExplicitIntent {
+			t.Fatalf("status after configure: result=%+v err=%v", status, err)
+		}
+	}
 	request.Route = nil
 	if _, err = configureNotifications(ctx, request, deps); err != nil {
 		t.Fatal("retry:", err)
