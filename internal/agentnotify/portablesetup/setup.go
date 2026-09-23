@@ -61,6 +61,8 @@ type Discovery struct {
 type Request struct {
 	Binding            portable.Binding
 	ExpectedGeneration uint64
+	DataReceiptID      string
+	IntentTargets      []IntentTarget
 	Envelope           Envelope
 	Discovery          Discovery
 	Reservation        *installruntime.PendingMutation
@@ -236,7 +238,15 @@ func (s Service) RevokeBinding(ctx context.Context, req Request) error {
 	if ctx == nil {
 		return ErrPreflight
 	}
-	if err := s.preflight(req.Binding); err != nil {
+	snap, err := installruntime.ReadInstalledSnapshot(req.Binding.ControlRoot)
+	if err != nil || snap.Recovery {
+		return fmt.Errorf("%w: managed runtime snapshot unavailable", ErrPreflight)
+	}
+	variants, err := portable.CommittedBindingVariants(snap.Ledger, req.Binding)
+	if err != nil || len(variants) > 1 || (len(variants) == 1 && variants[0] != req.Binding) {
+		return fmt.Errorf("%w: historical binding is ambiguous or differs from requested identity", ErrPreflight)
+	}
+	if _, err := portable.ExactLocator(req.Binding); err != nil {
 		return err
 	}
 	res, err := s.matchingReservation(req, "uninstall")
@@ -244,16 +254,126 @@ func (s Service) RevokeBinding(ctx context.Context, req Request) error {
 		return err
 	}
 	req.Reservation = res
+	return revokeExactBinding(ctx, req, len(variants) == 1)
+}
+
+// ReplaceCommittedBinding retires the old locator only after the replacement
+// consumer and locator have both been committed. A retry may find the old
+// consumer already gone while its exact locator still awaits deletion.
+// req.Binding is the replacement; req.Reservation carries the install intent.
+func (s Service) ReplaceCommittedBinding(ctx context.Context, old portable.Binding, req Request) error {
+	if ctx == nil || old == req.Binding {
+		return ErrPreflight
+	}
+	sameIdentity := old
+	sameIdentity.GlobalConfig, sameIdentity.Primary = req.Binding.GlobalConfig, req.Binding.Primary
+	if sameIdentity != req.Binding {
+		return fmt.Errorf("%w: replacement changes UAP binding identity", ErrPreflight)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(old.ControlRoot)
+	if err != nil || snap.Recovery {
+		return fmt.Errorf("%w: managed runtime snapshot unavailable", ErrPreflight)
+	}
+	variants, err := portable.CommittedBindingVariants(snap.Ledger, old)
+	if err != nil || len(variants) == 0 || len(variants) > 2 {
+		return fmt.Errorf("%w: replacement consumer set is invalid", ErrPreflight)
+	}
+	oldPresent, newPresent := false, false
+	for _, variant := range variants {
+		switch variant {
+		case old:
+			oldPresent = true
+		case req.Binding:
+			newPresent = true
+		default:
+			return fmt.Errorf("%w: third consumer for UAP binding", ErrPreflight)
+		}
+	}
+	if !newPresent || !portable.ExactCommittedBinding(snap.Ledger, req.Binding) {
+		return fmt.Errorf("%w: replacement consumer is not committed", ErrPreflight)
+	}
+	action, err := checkReplacementIntent(snap.Ledger, old, req)
+	if err != nil {
+		return err
+	}
+	newLocator, err := portable.ExactLocator(req.Binding)
+	if err != nil || !newLocator {
+		return fmt.Errorf("%w: replacement locator is not published", ErrPreflight)
+	}
+	if _, err := portable.ExactLocator(old); err != nil {
+		return err
+	}
+	res, err := s.matchingReservation(req, action)
+	if err != nil {
+		return err
+	}
+	req.Binding, req.Reservation = old, res
+	return revokeExactBinding(ctx, req, oldPresent)
+}
+
+func checkReplacementIntent(ledger installruntime.Ledger, old portable.Binding, req Request) (string, error) {
+	pending := ledger.PendingMutation
+	if pending == nil || req.Reservation == nil || !reflect.DeepEqual(*pending, *req.Reservation) {
+		return "", fmt.Errorf("%w: replacement lacks a matching reserved intent", ErrPreflight)
+	}
+	intent, target, err := readMigrationIntentTarget(ledger, old.ControlRoot, old.Integration)
+	if err != nil {
+		return "", err
+	}
+	oldKey, _, _, oldErr := old.Registration()
+	newKey, _, _, newErr := req.Binding.Registration()
+	if oldErr != nil || newErr != nil || target.InstallationID != old.InstallationID || target.BindingID != old.BindingID || target.OldConsumerKey != oldKey || target.NewConsumerKey != newKey || *target.OldBinding != old || *target.NewBinding != req.Binding {
+		return "", fmt.Errorf("%w: replacement intent target differs", ErrPreflight)
+	}
+	return intent.Action, nil
+}
+
+func readMigrationIntentTarget(ledger installruntime.Ledger, controlRoot string, integration portable.Integration) (Intent, IntentTarget, error) {
+	pending := ledger.PendingMutation
+	if pending == nil || pending.Owner != "existing-installer" || pending.IntentRef != IntentPath(controlRoot) {
+		return Intent{}, IntentTarget{}, fmt.Errorf("%w: migration reservation missing", ErrPreflight)
+	}
+	path := IntentPath(controlRoot)
+	wantFile, ok := ledger.Files[path]
+	currentFile, err := installruntime.Fingerprint(path)
+	if err != nil || !ok || !reflect.DeepEqual(wantFile, currentFile) {
+		return Intent{}, IntentTarget{}, fmt.Errorf("%w: migration intent bytes changed", ErrPreflight)
+	}
+	intent, err := ReadIntent(controlRoot)
+	if err != nil || intent.SetupIntentID != pending.ID || (intent.Action != "update" && intent.Action != "repair") {
+		return Intent{}, IntentTarget{}, fmt.Errorf("%w: migration intent is missing", ErrPreflight)
+	}
+	var found IntentTarget
+	matches := 0
+	for _, target := range intent.Targets {
+		if target.Client != string(integration) {
+			continue
+		}
+		if target.DataReceiptID == "" || target.OldBinding == nil || target.NewBinding == nil {
+			return Intent{}, IntentTarget{}, fmt.Errorf("%w: migration target incomplete", ErrPreflight)
+		}
+		found = target
+		matches++
+	}
+	if matches != 1 {
+		return Intent{}, IntentTarget{}, fmt.Errorf("%w: migration target is missing or ambiguous", ErrPreflight)
+	}
+	return intent, found, nil
+}
+
+func revokeExactBinding(ctx context.Context, req Request, present bool) error {
 	key, _, _, err := req.Binding.Registration()
 	if err != nil {
 		return err
 	}
-	gen := req.ExpectedGeneration
-	if _, err = installruntime.Commit(ctx, installruntime.Request{
-		ControlRoot: req.Binding.ControlRoot, Owner: req.Binding.Owner, RuntimeRoot: req.Binding.RuntimeRoot,
-		ConsumerID: key, RemoveConsumer: true, ExpectedGeneration: &gen, Reservation: res,
-	}); err != nil {
-		return err
+	if present {
+		gen := req.ExpectedGeneration
+		if _, err = installruntime.Commit(ctx, installruntime.Request{
+			ControlRoot: req.Binding.ControlRoot, Owner: req.Binding.Owner, RuntimeRoot: req.Binding.RuntimeRoot,
+			ConsumerID: key, RemoveConsumer: true, ExpectedGeneration: &gen, Reservation: req.Reservation,
+		}); err != nil {
+			return err
+		}
 	}
 	return portable.RevokeLocator(req.Binding)
 }
@@ -718,6 +838,19 @@ func (s Service) publishIntent(ctx context.Context, req Request, gen uint64, act
 	if err != nil {
 		return installruntime.Ledger{}, nil, err
 	}
+	targets := req.IntentTargets
+	if len(targets) == 0 {
+		target := IntentTarget{
+			Client: string(req.Binding.Integration), BindingID: req.Binding.BindingID,
+			InstallationID: req.Binding.InstallationID, DataReceiptID: req.DataReceiptID,
+			Profile: req.Profile, Units: units,
+		}
+		if action == "uninstall" {
+			binding := req.Binding
+			target.OldBinding, target.OldConsumerKey = &binding, key
+		}
+		targets = []IntentTarget{target}
+	}
 	intent := Intent{
 		Version:            intentVersion,
 		SetupIntentID:      intentID,
@@ -729,13 +862,7 @@ func (s Service) publishIntent(ctx context.Context, req Request, gen uint64, act
 		TreeDigest:         req.TreeDigest,
 		HelperDigest:       req.HelperDigest,
 		HelperVersion:      req.HelperVersion,
-		Targets: []IntentTarget{{
-			Client:         string(req.Binding.Integration),
-			BindingID:      req.Binding.BindingID,
-			InstallationID: req.Binding.InstallationID,
-			Profile:        req.Profile,
-			Units:          units,
-		}},
+		Targets:            targets,
 	}
 	payload, err := marshalIntent(intent)
 	if err != nil {

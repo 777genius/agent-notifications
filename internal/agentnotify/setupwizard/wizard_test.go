@@ -543,7 +543,22 @@ func TestWizardExistingGlobalConfigIdentitySurvivesDefaultChange(t *testing.T) {
 			t.Fatalf("macOS system alias changed installed identity: %+v %v", id, err)
 		}
 		req.GlobalConfig = legacy
+		req.Action = ActionRepair
+		req.ControlRoot = strings.TrimPrefix(control, "/private")
+		req.RuntimeRoot = strings.TrimPrefix(runtimeRoot, "/private")
+		aliased, err := Run(ctx, req)
+		if err != nil || (aliased.Outcome != "completed" && aliased.Outcome != "unchanged") {
+			t.Fatalf("repair through macOS system alias: %+v %v", aliased, err)
+		}
+		req.ControlRoot = control
+		req.RuntimeRoot = runtimeRoot
 	}
+	req.Action = ActionRepair
+	explicitPlan, err := Plan(ctx, req)
+	if err != nil || !explicitPlan.Ready || len(explicitPlan.Request.MigrationBindings) != 0 {
+		t.Fatalf("explicit config path was changed: %+v %v", explicitPlan, err)
+	}
+	req.Action = ActionInstall
 	if err := os.Remove(filepath.Dir(legacy)); err != nil {
 		t.Fatal(err)
 	}
@@ -569,15 +584,29 @@ func TestWizardExistingGlobalConfigIdentitySurvivesDefaultChange(t *testing.T) {
 	req.GlobalConfig = ""
 	req.Action = ActionRepair
 	plan, err := Plan(ctx, req)
-	if err == nil || plan.Ready || plan.Result.Reason != "global_config_parent_invalid" {
-		t.Fatalf("plan accepted unusable historical config parent: %+v %v", plan, err)
+	if err != nil || !plan.Ready || !strings.Contains(plan.Text, "portable-identity-migration=true") {
+		t.Fatalf("repair plan omitted historical migration: %+v %v", plan, err)
 	}
-	blocked, err := Run(ctx, req)
-	if err == nil || blocked.Reason != "global_config_parent_invalid" {
-		t.Fatalf("repair published unusable historical binding: %+v %v", blocked, err)
+	migration := plan.Request.MigrationBindings["codex"]
+	if migration.Old.GlobalConfig != legacy || migration.New.GlobalConfig != canonical {
+		t.Fatalf("migration identity: %+v", migration)
+	}
+	repaired, err := Run(ctx, plan.Request)
+	if err != nil || repaired.Outcome != "completed" {
+		t.Fatalf("repair did not migrate historical binding: %+v %v", repaired, err)
 	}
 	if _, err := os.Lstat(filepath.Dir(legacy)); !os.IsNotExist(err) {
 		t.Fatalf("repair recreated historical parent: %v", err)
+	}
+	snap, err = installruntime.ReadInstalledSnapshot(control)
+	if err != nil || !portable.ExactCommittedBinding(snap.Ledger, migration.New) || portable.ExactCommittedBinding(snap.Ledger, migration.Old) {
+		t.Fatalf("migration did not replace exact consumer: %v", err)
+	}
+	if ok, err := portable.ExactLocator(migration.New); err != nil || !ok {
+		t.Fatalf("migration locator missing: %v", err)
+	}
+	if ok, err := portable.ExactLocator(migration.Old); err != nil || ok {
+		t.Fatalf("legacy locator survived: %v", err)
 	}
 	req.Action = ActionUninstall
 	req.ExternalUninstalled = true
@@ -591,6 +620,265 @@ func TestWizardExistingGlobalConfigIdentitySurvivesDefaultChange(t *testing.T) {
 	}
 	if _, found, err := portable.InstalledGlobalConfig(snap.Ledger, installed.InstallationID, control); err != nil || found {
 		t.Fatalf("historical consumer survived uninstall: %v %v", found, err)
+	}
+}
+
+func TestReplaceMigratedBindingCleansOldLocatorAfterConsumerRevoke(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtimeRoot, _, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	legacy := filepath.Join(runtimeRoot, "global", "config.json")
+	canonical := filepath.Join(filepath.Dir(control), "canonical", "config.json")
+	profile := filepath.Join(filepath.Dir(control), "codex-profile")
+	scope := filepath.Join(filepath.Dir(control), "scope")
+	for _, dir := range []string{profile, scope} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	req := Request{Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: boolPtr(false),
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtimeRoot, GlobalConfig: legacy,
+		CodexHome: profile, ClientExecutable: probe, Helper: probe, ScopeRoot: scope}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("legacy install: %+v %v", installed, err)
+	}
+	t.Setenv(config.OverrideEnv, canonical)
+	req.Action, req.GlobalConfig, req.InstallationID = ActionRepair, "", installed.InstallationID
+	plan, err := Plan(ctx, req)
+	if err != nil || !plan.Ready {
+		t.Fatalf("migration plan: %+v %v", plan, err)
+	}
+	migration := plan.Request.MigrationBindings["codex"]
+	if err := config.PrepareGlobalConfigParent(migration.New.GlobalConfig); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err = publishWizardIntent(ctx, plan.Request, snap, runtimeRoot, nil, []portable.Integration{portable.Codex}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reservation := *snap.Ledger.PendingMutation
+	key, consumer, _, err := migration.New.Registration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation := snap.Ledger.Generation
+	committed, err := installruntime.Commit(ctx, installruntime.Request{ControlRoot: control, RuntimeRoot: runtimeRoot,
+		Owner: snap.Ledger.Owner, ConsumerID: key, Consumer: consumer, ExpectedGeneration: &generation, Reservation: &reservation})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := portable.Publish(migration.New); err != nil {
+		t.Fatal(err)
+	}
+	generation = committed.Generation
+	if _, err := installruntime.Commit(ctx, installruntime.Request{ControlRoot: control, RuntimeRoot: runtimeRoot,
+		Owner: snap.Ledger.Owner, ConsumerID: migration.OldConsumerKey, RemoveConsumer: true,
+		ExpectedGeneration: &generation, Reservation: &reservation}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := portable.ExactLocator(migration.Old); err != nil || !ok {
+		t.Fatalf("crash window missing old locator: %v", err)
+	}
+	mat, err := materializer(plan.Request, snap, runtimeRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := replaceMigratedBinding(ctx, plan.Request, mat, migration, migration.New); err != nil {
+		t.Fatalf("migration cleanup: %v", err)
+	}
+	if ok, err := portable.ExactLocator(migration.Old); err != nil || ok {
+		t.Fatalf("old locator survived cleanup: %v", err)
+	}
+}
+
+func TestWizardMigrationOfOneClientLeavesSiblingPlannable(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtimeRoot, _, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	legacy := filepath.Join(runtimeRoot, "global", "config.json")
+	canonical := filepath.Join(filepath.Dir(control), "canonical", "config.json")
+	claudeProfile := filepath.Join(filepath.Dir(control), "claude-profile")
+	codexProfile := filepath.Join(filepath.Dir(control), "codex-profile")
+	scope := filepath.Join(filepath.Dir(control), "scope")
+	for _, dir := range []string{claudeProfile, codexProfile, scope} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	req := Request{Action: ActionInstall, Agents: []string{"claude", "codex"}, Yes: true,
+		Hooks: boolPtr(false), AgentNotify: boolPtr(true), PackageRoot: pkg,
+		ControlRoot: control, RuntimeRoot: runtimeRoot, GlobalConfig: legacy,
+		ClaudeConfig: claudeProfile, CodexHome: codexProfile,
+		ClientExecutable: probe, Helper: probe, ScopeRoot: scope,
+		ClaudeRunner: listingRunner{configRoot: claudeProfile}}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("legacy install both: %+v %v", installed, err)
+	}
+	t.Setenv(config.OverrideEnv, canonical)
+	req.Action, req.Agents, req.GlobalConfig, req.InstallationID = ActionRepair, []string{"claude"}, "", installed.InstallationID
+	first, err := Run(ctx, req)
+	if err != nil || first.Outcome != "completed" {
+		t.Fatalf("migrate claude: %+v %v", first, err)
+	}
+	req.Action = ActionInstall
+	for _, agent := range []string{"claude", "codex"} {
+		req.Agents = []string{agent}
+		plan, err := Plan(ctx, req)
+		if err != nil || !plan.Ready {
+			t.Fatalf("install plan for mixed-identity %s: %+v %v", agent, plan, err)
+		}
+		result, err := Run(ctx, plan.Request)
+		if err != nil || (result.Outcome != "completed" && result.Outcome != "unchanged") {
+			t.Fatalf("install for mixed-identity %s: %+v %v", agent, result, err)
+		}
+	}
+	req.Action = ActionRepair
+	req.Agents = []string{"codex"}
+	plan, err := Plan(ctx, req)
+	if err != nil || !plan.Ready || len(plan.Request.MigrationBindings) != 1 {
+		t.Fatalf("unmigrated sibling plan: %+v %v", plan, err)
+	}
+	req.Agents = []string{"claude", "codex"}
+	plan, err = Plan(ctx, req)
+	if err != nil || !plan.Ready || len(plan.Request.MigrationBindings) != 1 {
+		t.Fatalf("mixed installation plan: %+v %v", plan, err)
+	}
+	second, err := Run(ctx, plan.Request)
+	if err != nil || second.Outcome != "completed" {
+		t.Fatalf("migrate codex after claude: %+v %v", second, err)
+	}
+	req.Agents = []string{"claude"}
+	plan, err = Plan(ctx, req)
+	if err != nil || !plan.Ready || len(plan.Request.MigrationBindings) != 0 {
+		t.Fatalf("migrated client plan: %+v %v", plan, err)
+	}
+}
+
+func TestWizardUpdateRestoresMissingOldProjectionWithDiscovery(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtimeRoot, _, primary, generation := managedRuntime(t)
+	probe := buildProbe(t)
+	root := filepath.Dir(control)
+	pkg := filepath.Join(root, "package")
+	writePackage(t, pkg, probe)
+	profile := filepath.Join(root, "codex-profile")
+	mcpConfig := filepath.Join(root, "direct-mcp.json")
+	scope := filepath.Join(root, "scope")
+	for _, dir := range []string{profile, scope} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := clientsetup.Apply(ctx, clientsetup.Request{
+		ControlRoot: control, RuntimeRoot: runtimeRoot, Command: primary, ConfigPath: mcpConfig,
+		Provider: registration.Codex, Mode: clientsetup.Managed, ExpectedGeneration: generation,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(runtimeRoot, "global", "config.json")
+	req := Request{Action: ActionInstall, Agents: []string{"codex"}, Yes: true,
+		Hooks: boolPtr(false), AgentNotify: boolPtr(true), PackageRoot: pkg,
+		ControlRoot: control, RuntimeRoot: runtimeRoot, GlobalConfig: legacy, Primary: "primary",
+		CodexHome: profile, ClientExecutable: probe, Helper: probe, ScopeRoot: scope,
+		MCPConfig: map[string]string{"codex": mcpConfig}}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("legacy install: %+v %v", installed, err)
+	}
+	canonical := filepath.Join(root, "canonical", "config.json")
+	t.Setenv(config.OverrideEnv, canonical)
+	req.Action, req.GlobalConfig, req.Primary, req.InstallationID = ActionUpdate, "", "", installed.InstallationID
+	plan, err := Plan(ctx, req)
+	if err != nil || !plan.Ready || len(plan.Request.MigrationBindings) != 1 {
+		t.Fatalf("migration plan: %+v %v", plan, err)
+	}
+	migration := plan.Request.MigrationBindings["codex"]
+	target := liveTargetPath(t, filepath.Join(root, "uap", "state", "state-v2.json"), "codex")
+	var removed bool
+	var removeErr error
+	plan.Request.Progress = func(phase string) {
+		if phase == "agent-notify" && !removed {
+			removed = true
+			removeErr = os.RemoveAll(target)
+		}
+	}
+	updated, err := Run(ctx, plan.Request)
+	if !removed || removeErr != nil {
+		t.Fatalf("managed projection was not removed after preflight: removed=%t err=%v", removed, removeErr)
+	}
+	if err != nil || updated.Outcome != "completed" {
+		t.Fatalf("update did not restore old projection and migrate: %+v %v", updated, err)
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("managed projection was not restored: %v", err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil || snap.Ledger.PendingMutation != nil || !portable.ExactCommittedBinding(snap.Ledger, migration.New) || portable.ExactCommittedBinding(snap.Ledger, migration.Old) {
+		t.Fatalf("migration did not settle exact bindings: %+v %v", snap.Ledger.PendingMutation, err)
+	}
+}
+
+func TestIdentitySkipsLiveClientWithoutCommittedConsumer(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtimeRoot, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	profile := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(profile, 0700); err != nil {
+		t.Fatal(err)
+	}
+	req := Request{Action: ActionInstall, Agents: []string{"codex"}, Yes: true,
+		Hooks: boolPtr(false), AgentNotify: boolPtr(true), PackageRoot: pkg,
+		ControlRoot: control, RuntimeRoot: runtimeRoot, GlobalConfig: global,
+		CodexHome: profile, ClientExecutable: probe, Helper: probe, ScopeRoot: filepath.Dir(control)}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install fixture: %+v %v", installed, err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var consumerKey string
+	for key := range snap.Ledger.Consumers {
+		if strings.HasPrefix(key, "portable:") {
+			consumerKey = key
+		}
+	}
+	if consumerKey == "" {
+		t.Fatal("fixture has no portable consumer")
+	}
+	generation := snap.Ledger.Generation
+	if _, err := installruntime.Commit(ctx, installruntime.Request{ControlRoot: control, RuntimeRoot: runtimeRoot,
+		Owner: snap.Ledger.Owner, ConsumerID: consumerKey, RemoveConsumer: true, ExpectedGeneration: &generation}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(config.OverrideEnv, filepath.Join(filepath.Dir(control), "canonical", "config.json"))
+	req.GlobalConfig = ""
+	req.Primary = ""
+	req.InstallationID = installed.InstallationID
+	snap, err = installruntime.ReadInstalledSnapshot(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mat, err := materializer(req, snap, runtimeRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := identity(req, snap, runtimeRoot, mat, false)
+	if err != nil || id.Primary != portable.PlatformPrimary() || id.GlobalConfig != filepath.Join(filepath.Dir(control), "canonical", "config.json") {
+		t.Fatalf("uncommitted live client froze invalid identity: %+v %v", id, err)
 	}
 }
 
@@ -1951,6 +2239,20 @@ func TestWizardRetryRemovesLegacyLocatorAfterConsumerCommit(t *testing.T) {
 	}
 	req.Action, req.ExternalUninstalled = ActionUninstall, true
 	req.InstallationID = installed.InstallationID
+	mat, err := materializer(req, snapshot, runtimeRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := identity(req, snapshot, runtimeRoot, mat, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reserveClientBindings(&req, mat, []portable.Integration{portable.Codex}); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareUninstallBindings(&req, snapshot, mat, id, []portable.Integration{portable.Codex}); err != nil {
+		t.Fatal(err)
+	}
 	snapshot, err = publishWizardIntent(ctx, req, snapshot, runtimeRoot, nil, []portable.Integration{portable.Codex}, true)
 	if err != nil {
 		t.Fatal(err)
@@ -1958,6 +2260,9 @@ func TestWizardRetryRemovesLegacyLocatorAfterConsumerCommit(t *testing.T) {
 	intent, err := portablesetup.ReadIntent(control)
 	if err != nil || intent.Primary != "primary" {
 		t.Fatalf("confirmed intent lost legacy primary: %+v %v", intent, err)
+	}
+	if len(intent.Targets) != 1 || intent.Targets[0].OldBinding == nil || intent.Targets[0].OldConsumerKey != key || intent.Targets[0].DataReceiptID == "" {
+		t.Fatalf("confirmed uninstall intent lost exact old binding: %+v", intent.Targets)
 	}
 	reservation := *snapshot.Ledger.PendingMutation
 	generation := snapshot.Ledger.Generation
@@ -1970,7 +2275,7 @@ func TestWizardRetryRemovesLegacyLocatorAfterConsumerCommit(t *testing.T) {
 	if _, err := os.Lstat(locator); err != nil {
 		t.Fatalf("crash window did not retain the legacy locator: %v", err)
 	}
-	req.Primary, req.InstallationID, req.PackageRoot = "", "", ""
+	req.Primary, req.InstallationID, req.PackageRoot, req.RemovalBindings = "", "", "", nil
 	removed, err := Run(ctx, req)
 	if err != nil || removed.Outcome != "completed" {
 		t.Fatalf("retry uninstall: %+v %v", removed, err)
@@ -2035,6 +2340,14 @@ func TestWizardLegacyRepairWithoutHelper(t *testing.T) {
 	}
 	if _, err := os.Stat(target); err != nil {
 		t.Fatalf("legacy repair did not restore target: %v", err)
+	}
+	snapshot, err = installruntime.ReadInstalledSnapshot(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	primary, found, err := portable.InstalledPrimary(snapshot.Ledger, installed.InstallationID, control)
+	if err != nil || !found || primary != portable.PlatformPrimary() {
+		t.Fatalf("legacy primary was not migrated: %q %v", primary, err)
 	}
 }
 
