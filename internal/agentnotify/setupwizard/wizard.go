@@ -2878,7 +2878,9 @@ func bindNotifyPreviews(ctx context.Context, req *Request, previewReq Request, s
 	for _, agent := range notifyAgents {
 		try := previewReq
 		try.PackageRoots = req.PackageRoots
-		if root := clientPackageRoot(*req, agent); root != "" {
+		// Plan has already resolved a zip into previewReq.PackageRoot. Only
+		// per-client repair roots may override that acquired directory.
+		if root := req.PackageRoots[string(agent)]; root != "" {
 			try.PackageRoot = root
 		}
 		preview, err := previewNotifyPlan(ctx, try, snap, runtimeRoot, agent)

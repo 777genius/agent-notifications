@@ -207,35 +207,39 @@ func runInstallOrUpdate(ctx context.Context, req setupwizard.Request) (setupwiza
 			return setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "pending_setup_required", NextActions: before.NextActions}, setupwizard.ErrRefused
 		}
 	}
-	plan, err := setupwizard.Plan(ctx, req)
-	if plan.Ready && (plan.Request.Action != req.Action || strings.Join(plan.Request.Agents, ",") != strings.Join(req.Agents, ",")) {
-		return setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "pending_setup_required"}, setupwizard.ErrRefused
-	}
-	if plan.Ready {
-		result, runErr := setupwizard.Run(ctx, plan.Request)
-		if runErr != nil || result.ExitCode() != 0 {
-			return result, runErr
+	// A group update can expose another behind client only after the first
+	// binding moves. Replan the original selection until every selected client
+	// is ready; a completed phase alone is not proof that the group is current.
+	for attempt := 0; attempt <= len(req.Agents); attempt++ {
+		plan, err := setupwizard.Plan(ctx, req)
+		if plan.Ready && (plan.Request.Action != req.Action || strings.Join(plan.Request.Agents, ",") != strings.Join(req.Agents, ",")) {
+			return setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "pending_setup_required"}, setupwizard.ErrRefused
 		}
-		return verifyInstallOrUpdate(ctx, req, result)
-	}
-	if plan.Result.Reason != "update_required" || !validInstallOrUpdateActions(req.Agents, plan.Result.NextActions) {
-		return plan.Result, err
-	}
-	var last setupwizard.Result
-	for _, next := range plan.Result.NextActions {
-		phase := req
-		phase.Action = setupwizard.Action(next.Kind)
-		phase.Agents = append([]string(nil), next.Agents...)
-		phasePlan, planErr := setupwizard.Plan(ctx, phase)
-		if !phasePlan.Ready {
-			return phasePlan.Result, planErr
+		if plan.Ready {
+			result, runErr := setupwizard.Run(ctx, plan.Request)
+			if runErr != nil || result.ExitCode() != 0 {
+				return result, runErr
+			}
+			return verifyInstallOrUpdate(ctx, req, result)
 		}
-		last, err = setupwizard.Run(ctx, phasePlan.Request)
-		if err != nil || last.ExitCode() != 0 {
-			return last, err
+		if plan.Result.Reason != "update_required" || !validInstallOrUpdateActions(req.Agents, plan.Result.NextActions) {
+			return plan.Result, err
+		}
+		for _, next := range plan.Result.NextActions {
+			phase := req
+			phase.Action = setupwizard.Action(next.Kind)
+			phase.Agents = append([]string(nil), next.Agents...)
+			phasePlan, planErr := setupwizard.Plan(ctx, phase)
+			if !phasePlan.Ready {
+				return phasePlan.Result, planErr
+			}
+			result, runErr := setupwizard.Run(ctx, phasePlan.Request)
+			if runErr != nil || result.ExitCode() != 0 {
+				return result, runErr
+			}
 		}
 	}
-	return verifyInstallOrUpdate(ctx, req, last)
+	return setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "update_required_after_retries"}, setupwizard.ErrRefused
 }
 
 func validInstallOrUpdateActions(selected []string, next []setupwizard.NextAction) bool {

@@ -8,22 +8,27 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/777genius/agent-notifications/internal/agentnotify/portableasset"
 	"github.com/777genius/agent-notifications/internal/agentnotify/setupwizard"
 )
 
 func TestWizardInstallOrUpdateBootstrapE2E(t *testing.T) {
 	for _, tc := range []struct {
 		name, existing, selected string
+		asZip                    bool
 	}{
-		{"fresh_both", "", "claude,codex"},
-		{"upgrade_codex", "codex", "codex"},
-		{"upgrade_both", "claude,codex", "claude,codex"},
-		{"upgrade_claude_then_add_codex", "claude", "claude,codex"},
-		{"upgrade_codex_then_add_claude", "codex", "claude,codex"},
+		{name: "fresh_both", selected: "claude,codex"},
+		{name: "upgrade_codex", existing: "codex", selected: "codex"},
+		{name: "upgrade_both", existing: "claude,codex", selected: "claude,codex"},
+		{name: "upgrade_claude_then_add_codex", existing: "claude", selected: "claude,codex"},
+		{name: "upgrade_codex_then_add_claude", existing: "codex", selected: "claude,codex"},
+		{name: "fresh_both_zip", selected: "claude,codex", asZip: true},
+		{name: "upgrade_both_zip", existing: "claude,codex", selected: "claude,codex", asZip: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -61,7 +66,17 @@ func TestWizardInstallOrUpdateBootstrapE2E(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(env.pkg, "skills", "agent-notify", "SKILL.md"), []byte("---\nname: agent-notify\ndescription: Updated bootstrap fixture\n---\n"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			code, result := invoke(tc.selected, env.pkg, true)
+			candidate := env.pkg
+			if tc.asZip {
+				candidate = filepath.Join(env.root, "candidate.zip")
+				if _, err := portableasset.Build(portableasset.BuildRequest{
+					Version: "1.43.1", GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
+					Executable: env.probe, OutputRoot: filepath.Join(env.root, "candidate-built"), Archive: candidate,
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			code, result := invoke(tc.selected, candidate, true)
 			if code != 0 || (result.Outcome != "completed" && result.Outcome != "unchanged") {
 				t.Fatalf("auto install/update: %d %+v", code, result)
 			}

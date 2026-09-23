@@ -2378,10 +2378,32 @@ func TestWizardInstallFromReleaseZip(t *testing.T) {
 	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
 		t.Fatal(err)
 	}
+	planned, err := Plan(ctx, req)
+	if err != nil || !planned.Ready {
+		t.Fatalf("zip install plan: %+v %v", planned.Result, err)
+	}
 	installed, err := Run(ctx, req)
 	if err != nil || installed.Outcome != "completed" {
 		t.Fatalf("zip install: %+v %v", installed, err)
 	}
+	nextArchive := filepath.Join(base, "next-release.zip")
+	next, err := portableasset.Build(portableasset.BuildRequest{
+		Version: "1.43.1", GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
+		Executable: probe, OutputRoot: filepath.Join(base, "next-release-pkg"), Archive: nextArchive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Action, req.PackageRoot, req.PackageSHA256 = ActionUpdate, nextArchive, next.ArchiveSHA256
+	planned, err = Plan(ctx, req)
+	if err != nil || !planned.Ready {
+		t.Fatalf("zip update plan: %+v %v", planned.Result, err)
+	}
+	updated, err := Run(ctx, planned.Request)
+	if err != nil || updated.Outcome != "completed" || updated.InstallationID != installed.InstallationID {
+		t.Fatalf("zip update: %+v %v", updated, err)
+	}
+	req.Action, req.PackageRoot = ActionInstall, archive
 	req.PackageSHA256 = strings.Repeat("0", 64)
 	blocked, err := Run(ctx, req)
 	if err == nil || blocked.Reason != "package_acquisition_failed" {
