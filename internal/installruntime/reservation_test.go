@@ -101,6 +101,22 @@ func TestRetainedOnlyReservationNeedsExactPrivateIntent(t *testing.T) {
 			}
 		})
 	}
+	for _, name := range []string{
+		"ownership.json", "transaction.json", "transaction.blobs", "policy-generation.json",
+		".component-install.lock", ".setup-coordinator.lock", "agent-notifications.json", "agent-notifications.json.lock", "native", "other-intent.json",
+	} {
+		t.Run("reserved or unrelated intent "+name, func(t *testing.T) {
+			invalid := r
+			invalid.Files = append([]File(nil), r.Files...)
+			invalid.Files[0].Path = filepath.Join(r.ControlRoot, name)
+			copy := *r.Reservation
+			copy.IntentRef = invalid.Files[0].Path
+			invalid.Reservation = &copy
+			if _, err := Commit(ctx, invalid); err == nil {
+				t.Fatalf("accepted consumerless intent at %s", name)
+			}
+		})
+	}
 	held, err := Commit(ctx, r)
 	if err != nil || held.PendingMutation == nil || len(held.Consumers) != 0 {
 		t.Fatalf("exact retained intent: %+v %v", held, err)

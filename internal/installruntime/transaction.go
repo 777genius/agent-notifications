@@ -360,7 +360,7 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 			r.ConsumerID == "reservation-publisher" && r.Reservation != nil && r.Reservation.Owner == r.Owner &&
 			!r.ClearReservation && !r.PolicyOnly && r.ExpectedGeneration != nil && len(r.Files) == 1 &&
 			!r.Files[0].Remove && r.Files[0].Link == "" && r.Files[0].Mode == 0600 && len(r.Files[0].Data) > 0 &&
-			r.Files[0].Path == r.Reservation.IntentRef && filepath.Dir(r.Files[0].Path) == r.ControlRoot &&
+			r.Files[0].Path == r.Reservation.IntentRef && r.Files[0].Path == filepath.Join(r.ControlRoot, "portable-handoff.json") &&
 			r.Native == nil && r.Prepare == nil &&
 			!r.PurgeNative && !r.RetireNative && !r.RollbackPending && r.PolicyEnabled == nil && len(r.PolicyFields) == 0
 		if (!registered && !finalIntentCleanup && !emptyIntentReservation) || r.RemoveConsumer {
