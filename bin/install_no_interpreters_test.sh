@@ -19,7 +19,7 @@ mkdir -p "$box/path" "$box/assets" "$box/target"
 # system Perl runtime, which is outside the omitted development dependencies.
 # Wrappers preserve each tool's original executable directory. Git Bash may
 # implement ln -s by copying an executable, separating MSYS tools from DLLs.
-for tool in awk cat chmod cp grep mktemp uname tr dirname mkdir rm sleep ps shasum sha256sum cygpath; do
+for tool in awk cat chmod cp grep mktemp uname tr wc dirname mkdir rm sleep ps shasum sha256sum cygpath; do
     location=$(type -P "$tool" || true)
     if [ -n "$location" ]; then
         printf '#!/bin/bash\nexec %q "$@"\n' "$location" > "$box/path/$tool"
@@ -59,6 +59,7 @@ if [ -n "$native_helper" ]; then
         native_digest=$(shasum -a 256 < "$box/native/$native_name")
     fi
     printf '%s  %s\n' "${native_digest%% *}" "$native_name" > "$box/native/checksums.txt"
+    printf '%s' '0123456789abcdef0123456789abcdef01234567' > "$box/native/commit-sha"
 fi
 
 list_process_pairs() {
@@ -177,12 +178,15 @@ list_process_pairs() {
                 *) return 1 ;;
             esac
         }
+        fetch_bootstrap_commit_file() { cp "$box/native/commit-sha" "$2"; }
         PRODUCT=codex
         PLATFORM="$native_os"
         BOOTSTRAP_TAG="$native_tag"
+        BOOTSTRAP_COMMIT=""
         _CONFIG_STAGE=""
         _CONFIG_HELPER=""
         stage_config_helper
+        [ "$BOOTSTRAP_COMMIT" = '0123456789abcdef0123456789abcdef01234567' ]
         [ -x "$_CONFIG_HELPER" ]
         INSTALL_CONFIG_HELPER="$_CONFIG_HELPER"
         config_path="$box/target/config.json"
