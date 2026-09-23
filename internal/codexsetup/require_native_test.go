@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -42,6 +43,9 @@ func TestRequireNativeBeforeHookCommit(t *testing.T) {
 }
 
 func TestNativeStagingHonorsSetupContext(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("native bundle staging requires a supported native platform")
+	}
 	root := t.TempDir()
 	t.Setenv("HOME", root)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "xdg"))
