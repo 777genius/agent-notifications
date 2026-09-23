@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.45.4] - 2026-09-23
+
+### Added
+- The guided installer lets users select Claude Code, Codex CLI, or both directly. The README and website share one short install command ([#204](https://github.com/777genius/agent-notifications/pull/204), [#205](https://github.com/777genius/agent-notifications/pull/205)).
+
+### Fixed
+- Activate the native Codex plugin through the full installer lifecycle, finish combined removal safely, and launch MCP through the exact managed binary ([#207](https://github.com/777genius/agent-notifications/pull/207), [#209](https://github.com/777genius/agent-notifications/pull/209), [#211](https://github.com/777genius/agent-notifications/pull/211)).
+- Resolve the canonical configuration path before publishing a fresh portable binding. Repair and update migrate historical bindings and retire old locator identities without changing intentional custom paths ([#213](https://github.com/777genius/agent-notifications/pull/213), [#214](https://github.com/777genius/agent-notifications/pull/214)).
+- Include the iTerm2 exact-focus helper in the Codex runtime bundle ([#206](https://github.com/777genius/agent-notifications/pull/206)).
+- Allow a bounded cold start of the signed macOS native helper during Codex setup and report probe deadlines explicitly ([#217](https://github.com/777genius/agent-notifications/issues/217)).
+- Restore retained-data reinstall after the final runtime consumer is removed, with a narrowly scoped private handoff intent ([#218](https://github.com/777genius/agent-notifications/pull/218)).
+
+### Platform notes
+- An uninstall interrupted on an older release after its portable consumer was removed can require manual recovery; the installer fails closed rather than guessing its historical path ([#215](https://github.com/777genius/agent-notifications/issues/215)).
+- Python remains optional only for exact iTerm2 tab and pane targeting. Windows uses Git Bash for installation; Windows arm64 and a standalone PowerShell installer are not included.
+
 ## [1.44.1] - 2026-09-22
 
 ### Fixed
