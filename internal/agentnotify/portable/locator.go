@@ -114,7 +114,20 @@ func (b Binding) Registration() (string, installruntime.Consumer, []byte, error)
 // In particular, old locators used "primary" even though bootstrap never wrote
 // that file. A later add/update/remove must not silently change their identity.
 func InstalledPrimary(ledger installruntime.Ledger, installationID, controlRoot string) (string, bool, error) {
-	primary := ""
+	primary, _, found, err := installedPaths(ledger, installationID, controlRoot)
+	return primary, found, err
+}
+
+// InstalledGlobalConfig preserves the config path in a published locator.
+// Changing it changes the consumer key, so existing bindings must keep it
+// until an explicit migration replaces their locator and consumer together.
+func InstalledGlobalConfig(ledger installruntime.Ledger, installationID, controlRoot string) (string, bool, error) {
+	_, global, found, err := installedPaths(ledger, installationID, controlRoot)
+	return global, found, err
+}
+
+func installedPaths(ledger installruntime.Ledger, installationID, controlRoot string) (string, string, bool, error) {
+	primary, global := "", ""
 	found := false
 	for key, consumer := range ledger.Consumers {
 		if !strings.HasPrefix(key, "portable:") {
@@ -126,14 +139,14 @@ func InstalledPrimary(ledger installruntime.Ledger, installationID, controlRoot 
 		}
 		wantKey, wantConsumer, _, err := candidate.Registration()
 		if err != nil || key != wantKey || !reflect.DeepEqual(consumer, wantConsumer) || candidate.ComponentID != ledger.ID || candidate.Owner != ledger.Owner || !samePhysicalPath(candidate.RuntimeRoot, ledger.RuntimeRoot) || !samePhysicalPath(candidate.ControlRoot, controlRoot) {
-			return "", false, ErrInvalid
+			return "", "", false, ErrInvalid
 		}
-		if found && primary != candidate.Primary {
-			return "", false, ErrInvalid
+		if found && (primary != candidate.Primary || global != candidate.GlobalConfig) {
+			return "", "", false, ErrInvalid
 		}
-		primary, found = candidate.Primary, true
+		primary, global, found = candidate.Primary, candidate.GlobalConfig, true
 	}
-	return primary, found, nil
+	return primary, global, found, nil
 }
 func (b Binding) Filename() (string, error) {
 	key, _, _, err := b.Registration()
@@ -141,6 +154,15 @@ func (b Binding) Filename() (string, error) {
 		return "", err
 	}
 	return "agent-notify-" + key[len("portable:"):] + ".json", nil
+}
+
+// ValidateGlobalConfigParent applies launch's read-only parent check during
+// setup, before a binding can be published.
+func ValidateGlobalConfigParent(path string) error {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return ErrInvalid
+	}
+	return physicalDirectory(filepath.Dir(path))
 }
 
 // Publish writes the exact locator after the kernel consumer already exists.

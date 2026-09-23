@@ -21,6 +21,7 @@ import (
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portablesetup"
 	"github.com/777genius/agent-notifications/internal/agentnotify/registration"
+	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 )
 
@@ -243,6 +244,7 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 				return plan, err
 			}
 			req.InstallationID = id.InstallationID
+			req.GlobalConfig = id.GlobalConfig
 			acquired.InstallationID = id.InstallationID
 			if req.Action == ActionUpdate || req.Action == ActionRepair {
 				if mapped, bindErr := requireLiveNotifyBindings(req, mat, id, ev.notifyAgents, ev.out); bindErr != nil {
@@ -1357,6 +1359,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 			return out, err
 		}
 		req.InstallationID = id.InstallationID
+		req.GlobalConfig = id.GlobalConfig
 		req.Primary = id.Primary
 		out.InstallationID = id.InstallationID
 		if req.Action == ActionUpdate || req.Action == ActionRepair {
@@ -1430,6 +1433,21 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 				return mapPreviewFailure(ctx, req, failed, mat, id, err, out)
 			}
 			out.Outcome, out.Reason = "incomplete", reason
+			return out, err
+		}
+	}
+	if len(notifyAgents) > 0 && (req.Action == ActionInstall || req.Action == ActionUpdate || req.Action == ActionRepair) {
+		_, existing, err := portable.InstalledGlobalConfig(snap.Ledger, id.InstallationID, req.ControlRoot)
+		if err == nil && existing {
+			err = portable.ValidateGlobalConfigParent(id.GlobalConfig)
+		} else if err == nil {
+			err = config.PrepareGlobalConfigParent(id.GlobalConfig)
+			if err == nil {
+				err = portable.ValidateGlobalConfigParent(id.GlobalConfig)
+			}
+		}
+		if err != nil {
+			out.Outcome, out.Reason = "incomplete", "global_config_parent_invalid"
 			return out, err
 		}
 	}
@@ -2413,8 +2431,24 @@ func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot st
 		scope = req.ControlRoot
 	}
 	global := req.GlobalConfig
+	if id != "" {
+		installed, found, err := portable.InstalledGlobalConfig(snap.Ledger, id, req.ControlRoot)
+		if err != nil {
+			return portablesetup.Identity{}, err
+		}
+		if found {
+			if global != "" && global != installed {
+				return portablesetup.Identity{}, fmt.Errorf("%w: installed global config differs from --global-config", ErrRefused)
+			}
+			global = installed
+		}
+	}
 	if global == "" {
-		global = filepath.Join(runtimeRoot, "global", "config.json")
+		selected, err := config.Resolve(config.SnapshotEnv())
+		if err != nil {
+			return portablesetup.Identity{}, err
+		}
+		global = selected.Path
 	}
 	primary, err := primaryName(req, snap.Ledger, id)
 	if err != nil {

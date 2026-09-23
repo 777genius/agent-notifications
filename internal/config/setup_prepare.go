@@ -166,6 +166,18 @@ func physicalParent(path string, create bool) (*os.Root, error) {
 	return root, nil
 }
 
+// PrepareGlobalConfigParent creates only the destination parent using the
+// confined setup path walk. Portable setup needs the parent before publishing
+// a locator; runtime launch remains read-only and the config file is untouched.
+func PrepareGlobalConfigParent(path string) error {
+	root, err := physicalParent(path, true)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	return samePreparedParent(root, path)
+}
+
 func physicalWalk(path string) (string, []string, error) {
 	vol := filepath.VolumeName(path)
 	root := string(filepath.Separator)
