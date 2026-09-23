@@ -199,6 +199,16 @@ func TestRestorePrimaryFromPendingIntent(t *testing.T) {
 	if _, _, err := restoreOmittedFromIntent(req, agents, intent); !errors.Is(err, portablesetup.ErrIntentConflict) {
 		t.Fatalf("conflicting primary was not refused: %v", err)
 	}
+	intent.GlobalConfig = filepath.Join(t.TempDir(), "config.json")
+	req.Primary = portable.PlatformPrimary()
+	restored, _, err = restoreOmittedFromIntent(req, agents, intent)
+	if err != nil || restored.GlobalConfig != intent.GlobalConfig {
+		t.Fatalf("pending global config was not restored: %q %v", restored.GlobalConfig, err)
+	}
+	req.GlobalConfig = filepath.Join(t.TempDir(), "other.json")
+	if _, _, err := restoreOmittedFromIntent(req, agents, intent); !errors.Is(err, portablesetup.ErrIntentConflict) {
+		t.Fatalf("conflicting global config was not refused: %v", err)
+	}
 }
 
 func TestWizardRejectsMutationWithoutYes(t *testing.T) {
@@ -454,6 +464,45 @@ func TestWizardDefaultGlobalConfigUsesCanonicalResolverBeforePublishing(t *testi
 	}
 }
 
+func TestWizardPendingIntentFreezesGlobalConfigBeforeFirstPortableConsumer(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtimeRoot, _, helper, _ := managedRuntime(t)
+	installationID := "00000000-0000-4000-8000-000000000145"
+	frozen := filepath.Join(filepath.Dir(control), "frozen", "config.json")
+	changed := filepath.Join(filepath.Dir(control), "changed", "config.json")
+	profile := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(profile, 0700); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := (portablesetup.Service{}).PublishConfirmedIntent(ctx, portablesetup.ConfirmedIntent{
+		ControlRoot: control, RuntimeRoot: runtimeRoot, Owner: "existing-installer",
+		Action: "install", GlobalConfig: frozen,
+		Targets: []portablesetup.IntentTarget{{Client: "codex", InstallationID: installationID, Units: []string{"agent-notify"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := Request{Action: ActionInstall, Agents: []string{"codex"}, ControlRoot: control,
+		RuntimeRoot: runtimeRoot, InstallationID: installationID, CodexHome: profile, Helper: helper}
+	mat, err := materializer(req, snap, runtimeRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(config.OverrideEnv, changed)
+	id, err := identity(req, snap, runtimeRoot, mat, false)
+	if err != nil || id.GlobalConfig != frozen {
+		t.Fatalf("pending config drifted to environment: %+v %v", id, err)
+	}
+	req.GlobalConfig = changed
+	if _, err := identity(req, snap, runtimeRoot, mat, false); !errors.Is(err, portablesetup.ErrIntentConflict) {
+		t.Fatalf("conflicting pending config accepted: %v", err)
+	}
+}
+
 func TestWizardExistingGlobalConfigIdentitySurvivesDefaultChange(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtimeRoot, _, _, _ := managedRuntime(t)
@@ -479,6 +528,22 @@ func TestWizardExistingGlobalConfigIdentitySurvivesDefaultChange(t *testing.T) {
 	if err != nil || installed.Outcome != "completed" {
 		t.Fatalf("legacy install: %+v %v", installed, err)
 	}
+	if runtime.GOOS == "darwin" && strings.HasPrefix(legacy, "/private/var/") {
+		req.GlobalConfig = strings.TrimPrefix(legacy, "/private")
+		snap, err := installruntime.ReadInstalledSnapshot(control)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mat, err := materializer(req, snap, runtimeRoot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, err := identity(req, snap, runtimeRoot, mat, false)
+		if err != nil || id.GlobalConfig != legacy {
+			t.Fatalf("macOS system alias changed installed identity: %+v %v", id, err)
+		}
+		req.GlobalConfig = legacy
+	}
 	if err := os.Remove(filepath.Dir(legacy)); err != nil {
 		t.Fatal(err)
 	}
@@ -503,6 +568,10 @@ func TestWizardExistingGlobalConfigIdentitySurvivesDefaultChange(t *testing.T) {
 	}
 	req.GlobalConfig = ""
 	req.Action = ActionRepair
+	plan, err := Plan(ctx, req)
+	if err == nil || plan.Ready || plan.Result.Reason != "global_config_parent_invalid" {
+		t.Fatalf("plan accepted unusable historical config parent: %+v %v", plan, err)
+	}
 	blocked, err := Run(ctx, req)
 	if err == nil || blocked.Reason != "global_config_parent_invalid" {
 		t.Fatalf("repair published unusable historical binding: %+v %v", blocked, err)

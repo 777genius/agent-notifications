@@ -845,7 +845,7 @@ func TestPublishConfirmedIntentRecordsTargetsAndClears(t *testing.T) {
 	published, res, err := svc.PublishConfirmedIntent(ctx, ConfirmedIntent{
 		ControlRoot: b.ControlRoot, RuntimeRoot: b.RuntimeRoot, Owner: b.Owner,
 		ExpectedGeneration: ledger.Generation, Action: "install", Stage: "confirmed",
-		SourceDigest: "abc", Targets: []IntentTarget{{
+		SourceDigest: "abc", GlobalConfig: b.GlobalConfig, Targets: []IntentTarget{{
 			Client: "codex", InstallationID: "uap-install", Profile: profile,
 			Units: []string{"hooks", "agent-notify"},
 		}},
@@ -854,8 +854,15 @@ func TestPublishConfirmedIntentRecordsTargetsAndClears(t *testing.T) {
 		t.Fatalf("publish: %+v %v %v", published.PendingMutation, res, err)
 	}
 	intent, err := ReadIntent(b.ControlRoot)
-	if err != nil || intent.Action != "install" || intent.Stage != "confirmed" || intent.SourceDigest != "abc" {
+	if err != nil || intent.Action != "install" || intent.Stage != "confirmed" || intent.SourceDigest != "abc" || intent.GlobalConfig != b.GlobalConfig {
 		t.Fatalf("intent: %+v %v", intent, err)
+	}
+	if _, _, err := svc.PublishConfirmedIntent(ctx, ConfirmedIntent{
+		ControlRoot: b.ControlRoot, RuntimeRoot: b.RuntimeRoot, Owner: b.Owner,
+		Action: "install", SourceDigest: "abc", GlobalConfig: filepath.Join(filepath.Dir(b.GlobalConfig), "other.json"),
+		Targets: []IntentTarget{{Client: "codex", Units: []string{"agent-notify"}}},
+	}); !errors.Is(err, ErrIntentConflict) {
+		t.Fatalf("pending global config drift was not refused: %v", err)
 	}
 	if len(intent.Targets) != 1 || intent.Targets[0].Profile != profile || strings.Join(intent.Targets[0].Units, ",") != "hooks,agent-notify" {
 		t.Fatalf("targets: %+v", intent.Targets)

@@ -484,7 +484,7 @@ func (s Service) PublishConfirmedIntent(ctx context.Context, req ConfirmedIntent
 	}
 	if pending := snap.Ledger.PendingMutation; pending != nil {
 		intent, readErr := ReadIntent(req.ControlRoot)
-		if readErr != nil || !intentMatches(intent, pending.ID, req.Action, req.Targets[0].Client, req.SourceDigest, req.TreeDigest, req.HelperDigest, req.HelperVersion) || (intent.Primary != "" && req.Primary != "" && intent.Primary != req.Primary) {
+		if readErr != nil || !intentMatches(intent, pending.ID, req.Action, req.Targets[0].Client, req.SourceDigest, req.TreeDigest, req.HelperDigest, req.HelperVersion) || (intent.Primary != "" && req.Primary != "" && intent.Primary != req.Primary) || (intent.GlobalConfig != "" && req.GlobalConfig != "" && intent.GlobalConfig != req.GlobalConfig) {
 			return installruntime.Ledger{}, nil, fmt.Errorf("%w: pending %s", ErrIntentConflict, intent.Action)
 		}
 		cp := *pending
@@ -514,6 +514,7 @@ func (s Service) PublishConfirmedIntent(ctx context.Context, req ConfirmedIntent
 		HelperDigest:        req.HelperDigest,
 		HelperVersion:       req.HelperVersion,
 		Primary:             req.Primary,
+		GlobalConfig:        req.GlobalConfig,
 		ExternalUninstalled: req.ExternalUninstalled,
 		Targets:             req.Targets,
 	}
