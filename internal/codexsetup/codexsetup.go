@@ -378,7 +378,11 @@ func Run(opts Options) (Result, error) {
 			} else if e != nil {
 				return Result{}, e
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			parent := opts.Context
+			if parent == nil {
+				parent = context.Background()
+			}
+			ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 			native, err = installruntime.StageNative(ctx, opts.ControlRoot, candidate)
 			cancel()
 			if err != nil {
