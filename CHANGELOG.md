@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.45.7] - 2026-09-23
+
+### Fixed
+- Normalize managed bundle file modes during staging, so a cooperative `umask 002` cannot produce a group-writable runtime that portable setup rejects.
+- Qualify Codex CLI 0.155.1 installed-plugin inventory for repeat setup and updates. Unsupported client versions still fail closed.
+
 ## [1.45.6] - 2026-09-23
 
 ### Added

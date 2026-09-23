@@ -23,7 +23,7 @@ type notificationCodexSkill struct {
 	Enabled              bool
 }
 type notificationCodexProbeResult struct {
-	// Exact 0.152.0 and 0.153.4 add/list cache layout was qualified by the controller.
+	// Exact 0.152.0, 0.153.4, and 0.155.1 add/list layouts were qualified.
 	CacheLayoutQualified bool
 	ClientVersion        string
 	Installed            []byte
@@ -91,7 +91,7 @@ func (b *notificationInventoryBuffer) Write(p []byte) (int, error) {
 }
 
 // The cache adapter is intentionally pinned. The controller supplied evidence; the
-// exact layout was qualified against actual 0.152.0 and 0.153.4 add/list observations.
+// exact layout was qualified against actual 0.152.0, 0.153.4, and 0.155.1 add/list observations.
 // Missing, ambiguous or unsupported identities fail closed, without cache scans.
 func inspectCodexNotificationPackages(ctx context.Context, home string, probe notificationCodexProbe) (notificationInventory, error) {
 	unknown := func() (notificationInventory, error) {
@@ -288,5 +288,5 @@ func notificationCacheToken(s string) bool {
 
 // Only these exact CLI versions have controller-qualified inventory evidence.
 func qualifiedNotificationCodexVersion(version string) bool {
-	return version == "codex-cli 0.152.0" || version == "codex-cli 0.153.4"
+	return version == "codex-cli 0.152.0" || version == "codex-cli 0.153.4" || version == "codex-cli 0.155.1"
 }

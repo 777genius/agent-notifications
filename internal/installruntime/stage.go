@@ -95,7 +95,11 @@ func StageFiles(source, destination string, allow func(string) bool) ([]File, er
 		if len(data) > maxManagedFile {
 			return fmt.Errorf("managed input exceeds size limit")
 		}
-		files = append(files, File{Parents: anchors, Path: target, Before: before, Data: data, Mode: uint32(info.Mode().Perm())})
+		// Tar extraction and copy operations can inherit a cooperative umask
+		// (for example 0002). Never publish group- or world-writable managed
+		// code: portable launch deliberately refuses such executables.
+		mode := uint32(info.Mode().Perm()) &^ 0022
+		files = append(files, File{Parents: anchors, Path: target, Before: before, Data: data, Mode: mode})
 		return nil
 	})
 	return files, err

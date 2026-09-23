@@ -74,7 +74,7 @@ func TestNotificationInventoryClaudeExactPackage(t *testing.T) {
 }
 
 func TestNotificationCodexQualifiedCacheSeam(t *testing.T) {
-	for _, version := range []string{"codex-cli 0.152.0", "codex-cli 0.153.4"} {
+	for _, version := range []string{"codex-cli 0.152.0", "codex-cli 0.153.4", "codex-cli 0.155.1"} {
 		t.Run(version, func(t *testing.T) {
 			home := setupCommandRoot(t)
 			t.Setenv("HOME", home)
@@ -219,7 +219,7 @@ func TestNotificationCodexSkillsDuplicateFields(t *testing.T) {
 }
 
 func TestNotificationCodexProductionQualificationFlag(t *testing.T) {
-	for _, version := range []string{"codex-cli 0.152.0", "codex-cli 0.153.4"} {
+	for _, version := range []string{"codex-cli 0.152.0", "codex-cli 0.153.4", "codex-cli 0.155.1"} {
 		t.Run(version, func(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("HOME", home)

@@ -105,3 +105,22 @@ func TestDestinationDirectoryIdentitySubstitution(t *testing.T) {
 		t.Fatal("wrote substituted directory")
 	}
 }
+
+func TestStageFilesDropsWritableGroupAndWorldBits(t *testing.T) {
+	source := t.TempDir()
+	destination := filepath.Join(t.TempDir(), "runtime")
+	path := filepath.Join(source, "bin")
+	if err := os.WriteFile(path, []byte("writer"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0777); err != nil {
+		t.Fatal(err)
+	}
+	files, err := StageFiles(source, destination, func(string) bool { return true })
+	if err != nil || len(files) != 1 {
+		t.Fatalf("stage files: %v %+v", err, files)
+	}
+	if files[0].Mode != 0755 {
+		t.Fatalf("staged executable mode = %04o, want 0755", files[0].Mode)
+	}
+}

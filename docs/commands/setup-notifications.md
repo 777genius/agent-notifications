@@ -214,6 +214,6 @@ scan projects or use authored Codex plugin sources as effective cache authority.
 Installed client discovery and Desktop delivery remain separate qualification gates.
 
 Production low-level `--global-config` accepts only the canonical global path.
-The Codex 0.152.0 and 0.153.4 no-skill cache layouts are version-qualified; unsupported versions
+The Codex 0.152.0, 0.153.4, and 0.155.1 no-skill cache layouts are version-qualified; unsupported versions
 remain unknown. Bootstrap acquires into a disposable bundle, then setup-codex
 commits the stable installation before the final configure call.
