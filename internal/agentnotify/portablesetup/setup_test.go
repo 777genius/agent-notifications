@@ -79,11 +79,21 @@ func bindingFixture(t *testing.T) (portable.Binding, installruntime.Ledger) {
 }
 
 func TestPreflightRefusesMissingOrLinkedPrimaryBeforeCommit(t *testing.T) {
-	for _, linked := range []bool{false, true} {
-		t.Run(map[bool]string{false: "missing", true: "symlink"}[linked], func(t *testing.T) {
+	for _, scenario := range []string{"missing", "unowned-symlink", "owned-symlink"} {
+		t.Run(scenario, func(t *testing.T) {
 			b, _ := bindingFixture(t)
-			b.Primary = "unowned"
-			if linked {
+			if scenario == "owned-symlink" {
+				primary := filepath.Join(b.RuntimeRoot, b.Primary)
+				if err := os.Rename(primary, filepath.Join(b.RuntimeRoot, "moved-primary")); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink("moved-primary", primary); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				b.Primary = "unowned"
+			}
+			if scenario == "unowned-symlink" {
 				if err := os.Symlink("primary", filepath.Join(b.RuntimeRoot, b.Primary)); err != nil {
 					t.Fatal(err)
 				}

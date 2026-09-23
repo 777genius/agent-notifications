@@ -145,6 +145,40 @@ func managedRuntime(t *testing.T) (control, runtime, global, primary string, gen
 	return control, runtime, global, primary, ledger.Generation
 }
 
+func TestMaterializerPreservesExplicitPrimaryHelper(t *testing.T) {
+	control, runtimeRoot, _, _, _ := managedRuntime(t)
+	snapshot, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mat, err := materializer(Request{ControlRoot: control, Primary: "custom-primary"}, snapshot, runtimeRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(runtimeRoot, "custom-primary"); mat.Roots.HelperExecutable != want {
+		t.Fatalf("helper = %q, want %q", mat.Roots.HelperExecutable, want)
+	}
+}
+
+func TestRestorePrimaryFromPendingIntent(t *testing.T) {
+	intent := portablesetup.Intent{Targets: []portablesetup.IntentTarget{{Client: "codex", Units: []string{"agent-notify"}}}}
+	req := Request{Action: ActionUninstall, Agents: []string{"codex"}, Hooks: boolPtr(false), AgentNotify: boolPtr(true)}
+	agents := []portable.Integration{portable.Codex}
+	restored, _, err := restoreOmittedFromIntent(req, agents, intent)
+	if err != nil || restored.Primary != "primary" {
+		t.Fatalf("historical intent did not restore legacy primary: %q %v", restored.Primary, err)
+	}
+	intent.Primary = portable.PlatformPrimary()
+	restored, _, err = restoreOmittedFromIntent(req, agents, intent)
+	if err != nil || restored.Primary != portable.PlatformPrimary() {
+		t.Fatalf("current intent did not restore platform primary: %q %v", restored.Primary, err)
+	}
+	req.Primary = "primary"
+	if _, _, err := restoreOmittedFromIntent(req, agents, intent); !errors.Is(err, portablesetup.ErrIntentConflict) {
+		t.Fatalf("conflicting primary was not refused: %v", err)
+	}
+}
+
 func TestWizardRejectsMutationWithoutYes(t *testing.T) {
 	control, _, _, _, _ := managedRuntime(t)
 	got, err := Run(testCtx(t), Request{Action: ActionInstall, Agents: []string{"codex"}, ControlRoot: control})
@@ -1627,6 +1661,88 @@ func TestWizardInstallInspectUninstall(t *testing.T) {
 		if target.Unit == "agent-notify" && target.Outcome == "installed" {
 			t.Fatalf("portable binding survived uninstall: %+v", view.Targets)
 		}
+	}
+}
+
+func TestWizardRetryRemovesLegacyLocatorAfterConsumerCommit(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtimeRoot, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true,
+		Hooks: boolPtr(false), PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtimeRoot,
+		GlobalConfig: global, CodexHome: codexConfig, ClientExecutable: probe,
+		Helper: probe, ScopeRoot: filepath.Join(filepath.Dir(control), "scope"), Primary: "primary",
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("legacy install: %+v %v", installed, err)
+	}
+	snapshot, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var key, locator string
+	for candidateKey, consumer := range snapshot.Ledger.Consumers {
+		if !strings.HasPrefix(candidateKey, "portable:") {
+			continue
+		}
+		var binding portable.Binding
+		if err := json.Unmarshal([]byte(consumer.Registration), &binding); err != nil {
+			t.Fatal(err)
+		}
+		if binding.Primary != "primary" {
+			t.Fatalf("legacy identity changed before retry: %q", binding.Primary)
+		}
+		name, err := binding.Filename()
+		if err != nil {
+			t.Fatal(err)
+		}
+		key, locator = candidateKey, filepath.Join(binding.DataRoot, name)
+	}
+	if key == "" {
+		t.Fatal("legacy portable consumer missing")
+	}
+	req.Action, req.ExternalUninstalled = ActionUninstall, true
+	req.InstallationID = installed.InstallationID
+	snapshot, err = publishWizardIntent(ctx, req, snapshot, runtimeRoot, nil, []portable.Integration{portable.Codex}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := portablesetup.ReadIntent(control)
+	if err != nil || intent.Primary != "primary" {
+		t.Fatalf("confirmed intent lost legacy primary: %+v %v", intent, err)
+	}
+	reservation := *snapshot.Ledger.PendingMutation
+	generation := snapshot.Ledger.Generation
+	if _, err := installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: control, RuntimeRoot: runtimeRoot, Owner: snapshot.Ledger.Owner,
+		ConsumerID: key, RemoveConsumer: true, ExpectedGeneration: &generation, Reservation: &reservation,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(locator); err != nil {
+		t.Fatalf("crash window did not retain the legacy locator: %v", err)
+	}
+	req.Primary, req.InstallationID, req.PackageRoot = "", "", ""
+	removed, err := Run(ctx, req)
+	if err != nil || removed.Outcome != "completed" {
+		t.Fatalf("retry uninstall: %+v %v", removed, err)
+	}
+	if _, err := os.Lstat(locator); !os.IsNotExist(err) {
+		t.Fatalf("legacy locator survived retry: %v", err)
+	}
+	if _, err := os.Lstat(portablesetup.IntentPath(control)); !os.IsNotExist(err) {
+		t.Fatalf("confirmed intent survived completed retry: %v", err)
 	}
 }
 

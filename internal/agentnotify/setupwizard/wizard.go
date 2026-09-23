@@ -945,6 +945,23 @@ func restoreOmittedFromIntent(req Request, agents []portable.Integration, intent
 	} else if intent.SourceRevision != "" && req.ReleaseVersion != intent.SourceRevision {
 		return req, agents, portablesetup.ErrIntentConflict
 	}
+	primary := intent.Primary
+	if primary == "" {
+		// Intents written before primary was persisted used the old default.
+		// Keep that locator identity across an interrupted remove/retry.
+		for _, target := range intent.Targets {
+			for _, unit := range target.Units {
+				if unit == "agent-notify" {
+					primary = "primary"
+				}
+			}
+		}
+	}
+	if req.Primary == "" {
+		req.Primary = primary
+	} else if primary != "" && req.Primary != primary {
+		return req, agents, portablesetup.ErrIntentConflict
+	}
 	if intent.ExternalUninstalled {
 		req.ExternalUninstalled = true
 	}
@@ -1340,6 +1357,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 			return out, err
 		}
 		req.InstallationID = id.InstallationID
+		req.Primary = id.Primary
 		out.InstallationID = id.InstallationID
 		if req.Action == ActionUpdate || req.Action == ActionRepair {
 			if mapped, bindErr := requireLiveNotifyBindings(req, mat, id, notifyAgents, out); bindErr != nil {
@@ -1642,6 +1660,7 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 			}
 		}
 		req.InstallationID = id.InstallationID
+		req.Primary = id.Primary
 		out.InstallationID = id.InstallationID
 		// §7.5: Recover is an application step, not Prepare(remove).
 		if err := recoverWizardJournals(ctx, mat, id, req, notifyAgents); err != nil {
@@ -2326,7 +2345,11 @@ func annotateRequiredUpdate(text string, out Result) string {
 func materializer(req Request, snap installruntime.InstalledSnapshot, runtimeRoot string) (portablesetup.Materializer, error) {
 	helper := req.Helper
 	if helper == "" {
-		helper = filepath.Join(runtimeRoot, filepath.FromSlash(portable.PlatformPrimary()))
+		primary := req.Primary
+		if primary == "" {
+			primary = portable.PlatformPrimary()
+		}
+		helper = filepath.Join(runtimeRoot, filepath.FromSlash(primary))
 	}
 	if !explicitAbs(helper) {
 		return portablesetup.Materializer{}, fmt.Errorf("%w: helper must be explicit", ErrRefused)
@@ -3072,6 +3095,7 @@ func publishWizardIntent(ctx context.Context, req Request, snap installruntime.I
 		ExpectedGeneration: snap.Ledger.Generation, Action: string(req.Action), Stage: "confirmed",
 		SourceRevision: req.ReleaseVersion, SourceDigest: req.PackageSHA256,
 		TreeDigest: req.TreeDigest, HelperDigest: req.HelperDigest, HelperVersion: req.HelperVersion,
+		Primary:             req.Primary,
 		ExternalUninstalled: req.ExternalUninstalled,
 		Targets:             targets,
 	}); err != nil {
