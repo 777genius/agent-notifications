@@ -81,6 +81,16 @@ func TestNotificationConfigureBothAndRetry(t *testing.T) {
 			t.Fatalf("status after configure: result=%+v err=%v", status, err)
 		}
 	}
+	t.Setenv("AGENT_NOTIFICATIONS_CONFIG", global)
+	t.Setenv("HOME", "")
+	var overrideStatus strings.Builder
+	if code := agentNotifySetupExecute(ctx, []string{"status", "--control-root", f.control, "--json"}, &overrideStatus, agentNotifySetupComposition{}); code != 0 {
+		t.Fatalf("status with explicit config and no HOME: code=%d result=%s", code, overrideStatus.String())
+	}
+	t.Setenv("HOME", f.root)
+	if err := os.Unsetenv("AGENT_NOTIFICATIONS_CONFIG"); err != nil {
+		t.Fatal(err)
+	}
 	request.Route = nil
 	if _, err = configureNotifications(ctx, request, deps); err != nil {
 		t.Fatal("retry:", err)

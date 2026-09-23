@@ -664,13 +664,6 @@ func agentNotifySetupMain(args []string) (code int) {
 }
 
 func canonicalNotificationGlobalConfig() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	if !filepath.IsAbs(home) || filepath.Clean(home) != home {
-		return "", errors.New("physical_path_required")
-	}
 	selected, err := config.Resolve(config.SnapshotEnv())
 	if err != nil {
 		return "", err
