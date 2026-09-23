@@ -297,21 +297,36 @@ func (b Binding) CheckPrimaryFile(snapshot installruntime.InstalledSnapshot) err
 	if _, _, _, err := b.Registration(); err != nil {
 		return err
 	}
-	path, fingerprint, err := b.ownedPrimary(snapshot.Ledger)
+	_, err := ResolvePrimaryExecutable(snapshot.Ledger, b.Primary)
+	return err
+}
+
+// ResolvePrimaryExecutable selects a live, ledger-owned writer for setup.
+// Old bindings retain the logical "primary" identity even when that filename
+// was never installed; their helper must use the same owned fallback as launch.
+func ResolvePrimaryExecutable(ledger installruntime.Ledger, primary string) (string, error) {
+	if !validPrimary(primary) {
+		return "", ErrInvalid
+	}
+	path, fingerprint, err := ownedPrimary(ledger, primary)
 	if err != nil || checkPrimary(path) != nil {
-		return ErrInvalid
+		return "", ErrInvalid
 	}
 	current, err := installruntime.Fingerprint(path)
 	if err != nil || !reflect.DeepEqual(current, fingerprint) {
-		return ErrInvalid
+		return "", ErrInvalid
 	}
-	return nil
+	return path, nil
 }
 
 func (b Binding) ownedPrimary(ledger installruntime.Ledger) (string, installruntime.Identity, error) {
-	path := primaryPath(ledger.RuntimeRoot, b.Primary)
+	return ownedPrimary(ledger, b.Primary)
+}
+
+func ownedPrimary(ledger installruntime.Ledger, primary string) (string, installruntime.Identity, error) {
+	path := primaryPath(ledger.RuntimeRoot, primary)
 	fingerprint, ok := ledger.Files[path]
-	if !ok && b.Primary == "primary" {
+	if !ok && primary == "primary" {
 		// Compatibility for published locators with the old absent default.
 		// An unexpected file at that name is drift, not permission to fall back.
 		if _, err := os.Lstat(path); !os.IsNotExist(err) {

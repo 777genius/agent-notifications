@@ -2349,7 +2349,15 @@ func materializer(req Request, snap installruntime.InstalledSnapshot, runtimeRoo
 		if primary == "" {
 			primary = portable.PlatformPrimary()
 		}
-		helper = filepath.Join(runtimeRoot, filepath.FromSlash(primary))
+		if primary == "primary" {
+			var err error
+			helper, err = portable.ResolvePrimaryExecutable(snap.Ledger, primary)
+			if err != nil {
+				return portablesetup.Materializer{}, fmt.Errorf("%w: legacy helper unavailable: %v", ErrRefused, err)
+			}
+		} else {
+			helper = filepath.Join(runtimeRoot, filepath.FromSlash(primary))
+		}
 	}
 	if !explicitAbs(helper) {
 		return portablesetup.Materializer{}, fmt.Errorf("%w: helper must be explicit", ErrRefused)

@@ -23,6 +23,7 @@ import (
 
 	"github.com/777genius/agent-notifications/install/uapinstaller"
 	"github.com/777genius/agent-notifications/internal/agentnotify/clientsetup"
+	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portableasset"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portablesetup"
 	"github.com/777genius/agent-notifications/internal/agentnotify/registration"
@@ -54,7 +55,10 @@ func TestSetupWizardJSONLifecycleE2E(t *testing.T) {
 	}
 	if _, err := installruntime.Commit(ctx, installruntime.Request{
 		ControlRoot: control, RuntimeRoot: runtime, Owner: "existing-installer", ConsumerID: "existing",
-		Files: []installruntime.File{{Path: filepath.Join(runtime, "primary"), Data: body, Mode: 0700}},
+		Files: []installruntime.File{
+			{Path: filepath.Join(runtime, "primary"), Data: body, Mode: 0700},
+			{Path: filepath.Join(runtime, filepath.FromSlash(portable.PlatformPrimary())), Data: append(body, []byte(installruntime.WriterProtocolMarker)...), Mode: 0700},
+		},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +215,10 @@ func TestSetupWizardBothClientsRemoveOneE2E(t *testing.T) {
 	}
 	if _, err := installruntime.Commit(ctx, installruntime.Request{
 		ControlRoot: control, RuntimeRoot: runtime, Owner: "existing-installer", ConsumerID: "existing",
-		Files: []installruntime.File{{Path: filepath.Join(runtime, "primary"), Data: body, Mode: 0700}},
+		Files: []installruntime.File{
+			{Path: filepath.Join(runtime, "primary"), Data: body, Mode: 0700},
+			{Path: filepath.Join(runtime, filepath.FromSlash(portable.PlatformPrimary())), Data: append(body, []byte(installruntime.WriterProtocolMarker)...), Mode: 0700},
+		},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -3523,7 +3530,10 @@ func newWizardCLIEnv(t *testing.T, ctx context.Context, spaced bool) wizardCLIEn
 	}
 	if _, err := installruntime.Commit(ctx, installruntime.Request{
 		ControlRoot: env.control, RuntimeRoot: env.runtime, Owner: "existing-installer", ConsumerID: "existing",
-		Files: []installruntime.File{{Path: filepath.Join(env.runtime, "bin", "claude-notifications"), Data: append(body, []byte(installruntime.WriterProtocolMarker)...), Mode: 0700}},
+		Files: []installruntime.File{
+			{Path: filepath.Join(env.runtime, "bin", "claude-notifications"), Data: append(body, []byte(installruntime.WriterProtocolMarker)...), Mode: 0700},
+			{Path: filepath.Join(env.runtime, filepath.FromSlash(portable.PlatformPrimary())), Data: append(body, []byte(installruntime.WriterProtocolMarker)...), Mode: 0700},
+		},
 	}); err != nil {
 		t.Fatal(err)
 	}

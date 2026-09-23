@@ -160,6 +160,27 @@ func TestMaterializerPreservesExplicitPrimaryHelper(t *testing.T) {
 	}
 }
 
+func TestMaterializerResolvesLegacyPrimaryHelper(t *testing.T) {
+	control, runtimeRoot, _, _, _ := managedRuntime(t)
+	snapshot, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mat, err := materializer(Request{ControlRoot: control, Primary: "primary"}, snapshot, runtimeRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(runtimeRoot, filepath.FromSlash(portable.PlatformPrimary())); mat.Roots.HelperExecutable != want {
+		t.Fatalf("legacy helper = %q, want %q", mat.Roots.HelperExecutable, want)
+	}
+	if err := os.WriteFile(filepath.Join(runtimeRoot, "primary"), []byte("foreign"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := materializer(Request{ControlRoot: control, Primary: "primary"}, snapshot, runtimeRoot); !errors.Is(err, ErrRefused) {
+		t.Fatalf("foreign legacy helper not rejected: %v", err)
+	}
+}
+
 func TestRestorePrimaryFromPendingIntent(t *testing.T) {
 	intent := portablesetup.Intent{Targets: []portablesetup.IntentTarget{{Client: "codex", Units: []string{"agent-notify"}}}}
 	req := Request{Action: ActionUninstall, Agents: []string{"codex"}, Hooks: boolPtr(false), AgentNotify: boolPtr(true)}
@@ -1743,6 +1764,61 @@ func TestWizardRetryRemovesLegacyLocatorAfterConsumerCommit(t *testing.T) {
 	}
 	if _, err := os.Lstat(portablesetup.IntentPath(control)); !os.IsNotExist(err) {
 		t.Fatalf("confirmed intent survived completed retry: %v", err)
+	}
+}
+
+func TestWizardLegacyRepairWithoutHelper(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtimeRoot, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	platformPath := filepath.Join(runtimeRoot, filepath.FromSlash(portable.PlatformPrimary()))
+	snapshot, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probeBytes, err := os.ReadFile(probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation := snapshot.Ledger.Generation
+	if _, err := installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: control, RuntimeRoot: runtimeRoot, Owner: snapshot.Ledger.Owner,
+		ConsumerID: "existing", RefreshOnly: true, ExpectedGeneration: &generation,
+		Files: []installruntime.File{{Path: platformPath, Before: snapshot.Ledger.Files[platformPath], Data: append(probeBytes, []byte(installruntime.WriterProtocolMarker)...), Mode: 0700}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(codexConfig, 0700); err != nil {
+		t.Fatal(err)
+	}
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: boolPtr(false),
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtimeRoot, GlobalConfig: global,
+		CodexHome: codexConfig, ClientExecutable: probe, Helper: probe, Primary: "primary",
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("legacy install: %+v %v", installed, err)
+	}
+	statePath := filepath.Join(filepath.Dir(control), "uap", "state", "state-v2.json")
+	target := liveTargetPath(t, statePath, "codex")
+	if err := os.RemoveAll(target); err != nil {
+		t.Fatal(err)
+	}
+	req.Action, req.Helper, req.Primary = ActionRepair, "", ""
+	repaired, err := Run(ctx, req)
+	if err != nil || repaired.Outcome != "completed" {
+		t.Fatalf("legacy repair without helper: %+v %v", repaired, err)
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("legacy repair did not restore target: %v", err)
 	}
 }
 
