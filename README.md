@@ -279,6 +279,7 @@ Clicking a notification activates your terminal window. Auto-detects terminal an
 | VS Code | GNOME, KDE, Sway, X11 |
 | Warp | GNOME, KDE, Sway, X11 — exact pane via `WARP_FOCUS_URL` |
 | GNOME Terminal, Konsole, Alacritty, kitty, WezTerm, Tilix, Terminator, XFCE4 Terminal, MATE Terminal | GNOME, KDE, Sway, X11 |
+| JetBrains IDEs (IntelliJ IDEA, PhpStorm, WebStorm, PyCharm, GoLand, …) | GNOME, KDE, Sway, X11 — the IDE window, not the terminal tab |
 | Any other | Fallback by name |
 
 Linux focus methods (tried in order): Warp session URL (`xdg-open`), GNOME extension, GNOME Shell Eval, GNOME FocusApp, wlrctl (Sway/wlroots), kdotool (KDE), xdotool (X11).
