@@ -221,6 +221,9 @@ func (m *Manager) UpdateLastNotificationWithIdentity(sessionID string, status an
 	}
 
 	state.LastNotificationTime = platform.CurrentTimestamp()
+	if status == analyzer.StatusTaskComplete {
+		state.LastTaskCompleteTime = state.LastNotificationTime
+	}
 	state.LastNotificationStatus = string(status)
 	state.LastNotificationMessage = message
 	state.LastNotificationBody = body

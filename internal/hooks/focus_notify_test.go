@@ -133,12 +133,11 @@ func TestSendDesktopNotification_DelayThenSuppressedOnFocus(t *testing.T) {
 
 func TestHandleHook_FocusSuppressionDoesNotRecordLastNotificationOrCooldownQuestion(t *testing.T) {
 	on := true
-	taskCooldown := 0
 	anyCooldown := 30
 	cfg := focusNotifyConfig(&on, nil)
 	cfg.Notifications.Webhook.Enabled = false
-	cfg.Notifications.SuppressQuestionAfterTaskCompleteSeconds = &taskCooldown
 	cfg.Notifications.SuppressQuestionAfterAnyNotificationSeconds = &anyCooldown
+	assert.Equal(t, 12, cfg.GetSuppressQuestionAfterTaskCompleteSeconds())
 
 	handler, mockNotif, _ := newTestHandler(t, cfg)
 
@@ -159,8 +158,9 @@ func TestHandleHook_FocusSuppressionDoesNotRecordLastNotificationOrCooldownQuest
 
 	sessionState, err := handler.stateMgr.Load(sessionID)
 	assert.NoError(t, err)
-	if assert.NotNil(t, sessionState) {
+	if sessionState != nil {
 		assert.Zero(t, sessionState.LastNotificationTime, "suppressed desktop notification must not start notification cooldowns")
+		assert.Zero(t, sessionState.LastTaskCompleteTime, "suppressed task-complete must not start question cooldown")
 		assert.Empty(t, sessionState.LastNotificationStatus)
 		assert.Empty(t, sessionState.LastNotificationMessage)
 	}

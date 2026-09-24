@@ -184,12 +184,11 @@ func TestSendDesktopNotification_FocusSuppressionSkipsDNDProbe(t *testing.T) {
 // contract: a notification that never reached the desktop must not consume the
 // question cooldown budget.
 func TestHandleHook_DNDSuppressionDoesNotStartCooldowns(t *testing.T) {
-	taskCooldown := 0
 	anyCooldown := 30
 	cfg := dndNotifyConfig(dndMode("suppress"), nil)
 	cfg.Notifications.Webhook.Enabled = false
-	cfg.Notifications.SuppressQuestionAfterTaskCompleteSeconds = &taskCooldown
 	cfg.Notifications.SuppressQuestionAfterAnyNotificationSeconds = &anyCooldown
+	require.Equal(t, 12, cfg.GetSuppressQuestionAfterTaskCompleteSeconds(), "test must exercise the shipped task-complete cooldown")
 
 	handler, mockNotif, _ := newTestHandler(t, cfg)
 
@@ -210,8 +209,9 @@ func TestHandleHook_DNDSuppressionDoesNotStartCooldowns(t *testing.T) {
 
 	sessionState, err := handler.stateMgr.Load(sessionID)
 	require.NoError(t, err)
-	if assert.NotNil(t, sessionState) {
+	if sessionState != nil {
 		assert.Zero(t, sessionState.LastNotificationTime, "a suppressed notification must not start notification cooldowns")
+		assert.Zero(t, sessionState.LastTaskCompleteTime, "a suppressed task-complete must not start the question cooldown")
 		assert.Empty(t, sessionState.LastNotificationStatus)
 	}
 
@@ -222,4 +222,28 @@ func TestHandleHook_DNDSuppressionDoesNotStartCooldowns(t *testing.T) {
 	}))
 	require.NoError(t, err)
 	assert.True(t, mockNotif.wasCalled(), "a later question must not be blocked by the suppressed notification")
+}
+
+func TestHandleHook_DNDQueuedWebhookStartsTaskCompleteCooldown(t *testing.T) {
+	cfg := dndNotifyConfig(dndMode("suppress"), nil)
+	cfg.Notifications.Webhook.Enabled = true
+	require.Equal(t, 12, cfg.GetSuppressQuestionAfterTaskCompleteSeconds())
+
+	handler, mockNotif, mockWH := newTestHandler(t, cfg)
+	stubDoNotDisturb(t, true)
+
+	const sessionID = "test-dnd-webhook-cooldown"
+	transcriptPath := createTempTranscript(t, buildTranscriptWithTools([]string{"Write"}, 300))
+	err := handler.HandleHook("Stop", buildHookDataJSON(HookData{
+		SessionID:      sessionID,
+		TranscriptPath: transcriptPath,
+		CWD:            "/test",
+	}))
+	require.NoError(t, err)
+	assert.False(t, mockNotif.wasCalled(), "DND should suppress desktop delivery")
+	require.True(t, mockWH.wasCalled(), "the webhook must be queued")
+
+	suppress, err := handler.stateMgr.ShouldSuppressQuestion(sessionID, cfg.GetSuppressQuestionAfterTaskCompleteSeconds())
+	require.NoError(t, err)
+	assert.True(t, suppress, "a queued webhook counts as task-complete delivery")
 }

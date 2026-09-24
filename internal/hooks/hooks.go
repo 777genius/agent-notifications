@@ -517,12 +517,6 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 		}
 	}
 
-	// Update state (only for task_complete, PreToolUse already updated state)
-	if status == analyzer.StatusTaskComplete {
-		if err := h.stateMgr.UpdateTaskComplete(keys.stateKey); err != nil {
-			logging.Warn("Failed to update task complete state: %v", err)
-		}
-	}
 	// Notification and PreToolUse also need the current Claude turn identity.
 	// Reusing these messages for summary generation avoids a second read.
 	if ev.Product == ProductClaude && len(parsedMessages) == 0 &&
