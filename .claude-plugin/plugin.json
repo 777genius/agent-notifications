@@ -1,7 +1,7 @@
 {
     "name": "claude-notifications-go",
     "displayName": "Agent Notifications",
-    "version": "1.45.7",
+    "version": "1.45.14",
     "description": "Agent Notifications for Claude Code and Codex CLI (Go implementation)",
     "author": {
         "name": "777genius",

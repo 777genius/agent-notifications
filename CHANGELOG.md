@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.45.14] - 2026-09-24
+
+### Fixed
+- Start the Codex portable MCP server from its UAP-owned locator even when Codex CLI replaces `PLUGIN_DATA` with its own plugin-data directory. Claude MCP and notification hooks keep their existing launch paths ([#225](https://github.com/777genius/agent-notifications/issues/225), [#226](https://github.com/777genius/agent-notifications/pull/226)).
+- Make the short bootstrap installer update owned agent-notify bindings before adding missing selected clients, including retained-data reinstalls. Pending recovery and unselected siblings remain manual rather than being mutated implicitly ([#228](https://github.com/777genius/agent-notifications/issues/228), [#229](https://github.com/777genius/agent-notifications/pull/229)).
+- Preflight the extracted portable release zip and recheck both selected clients after each upgrade phase, preventing partial two-client upgrades from reporting success ([#228](https://github.com/777genius/agent-notifications/issues/228), [#231](https://github.com/777genius/agent-notifications/pull/231)).
+- Read the same selected global configuration in setup status, prepare, and enable that configure writes. A fresh two-client installation no longer reports `configuration_required` immediately after successful configuration ([#234](https://github.com/777genius/agent-notifications/pull/234)).
+- Relocate Claude hook ownership between sibling versioned plugin caches during updates. When existing portable bindings still point to the old cache, atomically refresh their primary binary with the verified new release so MCP does not remain on the old runtime. Other consumers never move implicitly ([#228](https://github.com/777genius/agent-notifications/issues/228), [#236](https://github.com/777genius/agent-notifications/pull/236), [#238](https://github.com/777genius/agent-notifications/pull/238)).
+- Clear and republish confirmed setup intents after the last portable binding leaves an older cache, while preserving the relocated Claude hook consumer and retained installation data ([#228](https://github.com/777genius/agent-notifications/issues/228), [#240](https://github.com/777genius/agent-notifications/pull/240)).
+- Allow read-only discovery inspection after the sole Claude hook consumer moves to a newer versioned cache, so retained-data reinstall can safely rebind both clients without relaxing mutation ownership ([#228](https://github.com/777genius/agent-notifications/issues/228), [#242](https://github.com/777genius/agent-notifications/pull/242)).
+
 ## [1.45.7] - 2026-09-23
 
 ### Added
