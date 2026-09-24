@@ -563,8 +563,14 @@ func TryKdotool(terminalName, folderName string) error {
 		return fmt.Errorf("no windows found via kdotool")
 	}
 
-	windowIDs := strings.Split(outputStr, "\n")
+	windowIDs := splitWindowIDs(outputStr)
+	if folderName != "" && len(windowIDs) > 1 {
+		matching, nonMatching := partitionWindowsByTitle(windowIDs, getKdotoolWindowName, windowTitleMatcher(terminalName, folderName))
+		windowIDs = append(matching, nonMatching...)
+	}
 
+	// windowactivate exits 0 even for an unknown window, so there is no failure
+	// signal to fall back on: activate the best candidate only.
 	cmd := exec.Command("kdotool", "windowactivate", windowIDs[0])
 	if _, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("kdotool windowactivate failed: %w", err)
@@ -595,7 +601,7 @@ func TryXdotool(terminalName, folderName string) error {
 		}
 
 		foundMatch = true
-		windowIDs = prioritizeXdotoolCandidates(windowIDs, search.label, folderName)
+		windowIDs = prioritizeXdotoolCandidates(windowIDs, search.label, terminalName, folderName)
 
 		// xdotool returns bottom-most windows first; prefer the top-most candidate.
 		for i := len(windowIDs) - 1; i >= 0; i-- {
@@ -684,7 +690,7 @@ func splitWindowIDs(output string) []string {
 	return ids
 }
 
-func prioritizeXdotoolCandidates(windowIDs []string, searchLabel, folderName string) []string {
+func prioritizeXdotoolCandidates(windowIDs []string, searchLabel, terminalName, folderName string) []string {
 	if folderName == "" {
 		return windowIDs
 	}
@@ -692,17 +698,7 @@ func prioritizeXdotoolCandidates(windowIDs []string, searchLabel, folderName str
 		return windowIDs
 	}
 
-	matching := make([]string, 0, len(windowIDs))
-	nonMatching := make([]string, 0, len(windowIDs))
-	for _, windowID := range windowIDs {
-		title := getXdotoolWindowName(windowID)
-		if title != "" && strings.Contains(title, folderName) {
-			matching = append(matching, windowID)
-			continue
-		}
-		nonMatching = append(nonMatching, windowID)
-	}
-
+	matching, nonMatching := partitionWindowsByTitle(windowIDs, getXdotoolWindowName, windowTitleMatcher(terminalName, folderName))
 	if len(matching) == 0 {
 		return windowIDs
 	}
@@ -710,6 +706,37 @@ func prioritizeXdotoolCandidates(windowIDs []string, searchLabel, folderName str
 	// TryXdotool tries candidates from the end (xdotool lists bottom-most
 	// windows first), so matches go last to be tried first, top-most first.
 	return append(nonMatching, matching...)
+}
+
+// windowTitleMatcher returns the check for whether a window title belongs to
+// folderName: strict for JetBrains, whose titles start with the project name,
+// and a substring match for everything else.
+func windowTitleMatcher(terminalName, folderName string) func(title string) bool {
+	if isJetBrainsTerminalName(terminalName) {
+		return func(title string) bool { return jetBrainsTitleMatches(title, folderName) }
+	}
+	return func(title string) bool { return title != "" && strings.Contains(title, folderName) }
+}
+
+// partitionWindowsByTitle splits windowIDs by whether their title matches,
+// keeping the original order within each group.
+func partitionWindowsByTitle(windowIDs []string, windowName func(windowID string) string, matches func(title string) bool) (matching, nonMatching []string) {
+	for _, windowID := range windowIDs {
+		if matches(windowName(windowID)) {
+			matching = append(matching, windowID)
+		} else {
+			nonMatching = append(nonMatching, windowID)
+		}
+	}
+	return matching, nonMatching
+}
+
+func getKdotoolWindowName(windowID string) string {
+	output, err := exec.Command("kdotool", "getwindowname", windowID).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
 }
 
 func getXdotoolWindowName(windowID string) string {

@@ -3,6 +3,7 @@ package daemon
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/777genius/agent-notifications/internal/warpfocus"
@@ -233,8 +234,12 @@ func GetSearchTerm(terminalName string) string {
 }
 
 // GetSearchTermWithFolder returns the window title search term, using the project
-// folder name for VS Code when available (more specific than "Visual Studio Code").
+// folder name for VS Code and JetBrains IDEs when available (more specific than
+// the app name).
 func GetSearchTermWithFolder(terminalName, folderName string) string {
+	if folderName != "" && isJetBrainsTerminalName(terminalName) {
+		return folderName
+	}
 	switch strings.ToLower(terminalName) {
 	case "code", "vscode", "visual studio code":
 		if folderName != "" {
@@ -244,8 +249,30 @@ func GetSearchTermWithFolder(terminalName, folderName string) string {
 	return GetSearchTerm(terminalName)
 }
 
+// GetFocusFolderName returns the folder name used to pick this session's window
+// by title. JetBrains IDEs title windows by project, which may enclose cwd or be
+// renamed in .idea/.name; everything else uses the cwd base name.
+func GetFocusFolderName(terminalName, cwd string) string {
+	if cwd == "" {
+		return ""
+	}
+	if isJetBrainsTerminalName(terminalName) {
+		if project := jetBrainsProjectName(cwd); project != "" {
+			return project
+		}
+	}
+	return filepath.Base(cwd)
+}
+
 // GetTerminalName detects the current terminal from environment variables.
 func GetTerminalName() string {
+	// JetBrains IDE terminals set no TERM_PROGRAM, so a TERM_PROGRAM or KONSOLE_*
+	// value seen in one was inherited from whatever launched the IDE. Detect the
+	// IDE before those checks; the ancestry walk rejects terminals started from it.
+	if class, ok := detectJetBrainsClass(); ok {
+		return class
+	}
+
 	// Try TERM_PROGRAM first (set by many terminals). Skip an inherited
 	// WarpTerminal value when this process is Cursor/VS Code/etc.
 	if termProg := os.Getenv("TERM_PROGRAM"); termProg != "" {
