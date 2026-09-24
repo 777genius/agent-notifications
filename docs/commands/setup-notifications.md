@@ -202,7 +202,7 @@ result continues to enable. Otherwise setup reads permission status without prom
 and reports it separately from saved intent. No notification is sent. Registration preserves client disable
 and tool restrictions and still requires client activation.
 
-Global settings always live at `$HOME/.claude/claude-notifications-go/config.json`.
+Global settings use the path reported by `claude-notifications config path`; existing legacy settings at `$HOME/.claude/claude-notifications-go/config.json` remain selected when present.
 Claude MCP lives at `$HOME/.claude.json`, or absolute `$CLAUDE_CONFIG_DIR/.claude.json`.
 Codex home inputs must be absolute. Configuration uses the ledger primary runtime.
 Failures report saved stages and last observed intent/generation without rolling

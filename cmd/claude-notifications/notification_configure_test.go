@@ -70,6 +70,31 @@ func TestNotificationConfigureBothAndRetry(t *testing.T) {
 	if setupCommandRead(t, global) != setupCommandRead(t, f.global) {
 		t.Fatal("global restrictions changed")
 	}
+	for _, extra := range [][]string{nil, {"--global-config", global}} {
+		args := append([]string{"status", "--control-root", f.control, "--json"}, extra...)
+		var output strings.Builder
+		if code := agentNotifySetupExecute(ctx, args, &output, agentNotifySetupComposition{}); code != 0 {
+			t.Fatalf("status after configure: code=%d result=%s", code, output.String())
+		}
+		var status agentNotifySetupResult
+		if err := json.Unmarshal([]byte(output.String()), &status); err != nil || status.GlobalConfiguration != "configured" || status.Configuration != "configured" || !status.ExplicitIntent {
+			t.Fatalf("status after configure: result=%+v err=%v", status, err)
+		}
+	}
+	t.Setenv("AGENT_NOTIFICATIONS_CONFIG", global)
+	t.Setenv("HOME", "")
+	var overrideStatus strings.Builder
+	if code := agentNotifySetupExecute(ctx, []string{"status", "--control-root", f.control, "--json"}, &overrideStatus, agentNotifySetupComposition{}); code != 0 {
+		t.Fatalf("status with explicit config and no HOME: code=%d result=%s", code, overrideStatus.String())
+	}
+	var selectedStatus agentNotifySetupResult
+	if err := json.Unmarshal([]byte(overrideStatus.String()), &selectedStatus); err != nil || selectedStatus.GlobalConfiguration != "configured" || selectedStatus.Configuration != "configured" || !selectedStatus.ExplicitIntent {
+		t.Fatalf("status with explicit config and no HOME: result=%+v err=%v", selectedStatus, err)
+	}
+	t.Setenv("HOME", f.root)
+	if err := os.Unsetenv("AGENT_NOTIFICATIONS_CONFIG"); err != nil {
+		t.Fatal(err)
+	}
 	request.Route = nil
 	if _, err = configureNotifications(ctx, request, deps); err != nil {
 		t.Fatal("retry:", err)
