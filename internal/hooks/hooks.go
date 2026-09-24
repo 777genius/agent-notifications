@@ -49,11 +49,12 @@ func (d notificationDelivery) delivered() bool {
 
 // HookData represents the data received from Claude Code hooks
 type HookData struct {
-	TranscriptPath string `json:"transcript_path"`
-	SessionID      string `json:"session_id"`
-	CWD            string `json:"cwd"`
-	ToolName       string `json:"tool_name,omitempty"`
-	HookEventName  string `json:"hook_event_name,omitempty"`
+	TranscriptPath       string `json:"transcript_path"`
+	LastAssistantMessage string `json:"last_assistant_message,omitempty"`
+	SessionID            string `json:"session_id"`
+	CWD                  string `json:"cwd"`
+	ToolName             string `json:"tool_name,omitempty"`
+	HookEventName        string `json:"hook_event_name,omitempty"`
 	// Team-related fields (present in TeammateIdle, TaskCreated, TaskCompleted hooks)
 	TeamName     string `json:"team_name,omitempty"`
 	TeammateName string `json:"teammate_name,omitempty"`
@@ -348,6 +349,7 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 		if err != nil {
 			return err
 		}
+		status, insight = h.fallbackClaudeStop(status, p.AssistantMessage)
 		// Note: We don't delete session state here to preserve cooldown info
 		// State files have TTL and will be cleaned up automatically
 		defer h.cleanupOldLocks()
@@ -399,6 +401,7 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 		if err != nil {
 			return err
 		}
+		status, insight = h.fallbackClaudeStop(status, p.Stop.AssistantMessage)
 		defer h.cleanupOldLocks()
 	case PermissionRequestPayload:
 		// Codex-only in this milestone: the host is waiting on user approval.
@@ -501,6 +504,15 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 	bench.Start("message.generate")
 	body, actions := h.generateMessage(ev, status, parsedMessages, insight)
 	message := joinMessageParts(body, actions)
+	contentKey := message
+	currentTurn := jsonl.FilterMessagesAfterTimestamp(parsedMessages, jsonl.GetLastUserTimestamp(parsedMessages))
+	if ev.Product == ProductClaude && (ev.Kind() == EventStop || ev.Kind() == EventSubagentStop) &&
+		len(jsonl.ExtractTools(currentTurn)) == 0 {
+		// A text-only Stop can arrive before its final transcript line. Once
+		// flushed, summary actions (notably elapsed time) may appear, but the
+		// notification is still the same completed turn.
+		contentKey = body
+	}
 	bench.Elapsed("message.generate")
 
 	// Acquire content lock to prevent race between different hooks (Stop vs Notification)
@@ -546,7 +558,7 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 	skipContentDedup := status == analyzer.StatusPermissionRequest ||
 		(ev.Product == ProductCodex && (ev.Kind() == EventPreToolUse || ev.Kind() == EventSubagentStop))
 	if !skipContentDedup {
-		isDuplicate, err := h.stateMgr.IsDuplicateMessage(keys.stateKey, message, 180)
+		isDuplicate, err := h.stateMgr.IsDuplicateMessage(keys.stateKey, contentKey, 180)
 		if err != nil {
 			logging.Warn("Failed to check duplicate message: %v", err)
 		} else if isDuplicate {
@@ -566,7 +578,7 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 	bench.Elapsed("notify.send")
 
 	if delivery.delivered() {
-		if err := h.stateMgr.UpdateLastNotification(keys.stateKey, status, message); err != nil {
+		if err := h.stateMgr.UpdateLastNotification(keys.stateKey, status, contentKey); err != nil {
 			logging.Warn("Failed to update last notification: %v", err)
 		}
 	} else {
@@ -694,6 +706,29 @@ func (h *Handler) handleStopEvent(ev Event) (analyzer.Status, []jsonl.Message, e
 	return status, messages, nil
 }
 
+// Claude Code can fire Stop before the final assistant message is flushed to
+// the transcript. Its payload carries that message directly, so use it only
+// when transcript analysis has no status and text-only notifications are on.
+func (h *Handler) fallbackClaudeStop(status analyzer.Status, message string) (analyzer.Status, *TurnInsight) {
+	if status != analyzer.StatusUnknown || !h.cfg.ShouldNotifyOnTextResponse() || strings.TrimSpace(message) == "" {
+		return status, nil
+	}
+	// Claude's transcript classifier treats a text-only Stop as task_complete;
+	// question prompts arrive through Notification instead. Match that policy
+	// even if the last message itself ends in a question mark.
+	status = analyzer.StatusTaskComplete
+	// Match the normal transcript summary so a replay after the final line
+	// flushes has the same content-dedup key.
+	synthetic := []jsonl.Message{{
+		Type: "assistant",
+		Message: jsonl.MessageContent{Role: "assistant", Content: []jsonl.Content{{
+			Type: "text", Text: message,
+		}}},
+	}}
+	body, _ := summary.GenerateFromMessagesStructured(synthetic, status, h.cfg)
+	return status, &TurnInsight{Body: body}
+}
+
 // generateMessage generates a notification body and action summary.
 // If messages are provided (from handleStopEvent), uses them directly to avoid re-reading the transcript.
 func (h *Handler) generateMessage(ev Event, status analyzer.Status, messages []jsonl.Message, insight *TurnInsight) (body, actions string) {
@@ -704,6 +739,9 @@ func (h *Handler) generateMessage(ev Event, status analyzer.Status, messages []j
 			return insight.Body, ""
 		}
 		return h.generateCodexMessage(ev, status), ""
+	}
+	if insight != nil && insight.Body != "" {
+		return insight.Body, ""
 	}
 
 	// Use pre-parsed messages if available (eliminates ~234ms double I/O)

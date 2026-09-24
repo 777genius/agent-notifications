@@ -51,9 +51,9 @@ func (ClaudeSource) Decode(_ context.Context, hookEvent string, input io.Reader)
 	case "Notification":
 		ev.Payload = NotificationPayload{}
 	case "Stop":
-		ev.Payload = StopPayload{}
+		ev.Payload = StopPayload{AssistantMessage: wire.LastAssistantMessage}
 	case "SubagentStop":
-		ev.Payload = SubagentStopPayload{Stop: StopPayload{}}
+		ev.Payload = SubagentStopPayload{Stop: StopPayload{AssistantMessage: wire.LastAssistantMessage}}
 	case "TeammateIdle":
 		ev.Payload = TeammateIdlePayload{
 			TeamName:     wire.TeamName,

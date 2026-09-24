@@ -60,6 +60,30 @@ func TestClaudeSourceDecodeTeammateIdle(t *testing.T) {
 	}
 }
 
+func TestClaudeSourceDecodeFinalAssistantMessage(t *testing.T) {
+	for _, event := range []string{"Stop", "SubagentStop"} {
+		t.Run(event, func(t *testing.T) {
+			ev, err := ClaudeSource{}.Decode(context.Background(), event,
+				strings.NewReader(`{"session_id":"s","last_assistant_message":"Done."}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var message string
+			switch p := ev.Payload.(type) {
+			case StopPayload:
+				message = p.AssistantMessage
+			case SubagentStopPayload:
+				message = p.Stop.AssistantMessage
+			default:
+				t.Fatalf("Payload = %#v", ev.Payload)
+			}
+			if message != "Done." {
+				t.Fatalf("AssistantMessage = %q", message)
+			}
+		})
+	}
+}
+
 func TestClaudeSourceDecodeBOMAndTrailingData(t *testing.T) {
 	payload := "\xEF\xBB\xBF" + `{"session_id":"s"}` + "trailing garbage"
 	ev, err := ClaudeSource{}.Decode(context.Background(), "Stop", strings.NewReader(payload))

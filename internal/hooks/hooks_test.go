@@ -21,6 +21,109 @@ import (
 	"github.com/777genius/agent-notifications/pkg/jsonl"
 )
 
+func TestClaudeStopFinalMessageFallback(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	transcript := filepath.Join(t.TempDir(), "session.jsonl")
+	if err := os.WriteFile(transcript, []byte(`{"type":"user","timestamp":"2026-09-24T12:00:00Z","message":{"role":"user","content":"test"}}`+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, message string
+		textEnabled   *bool
+		want          analyzer.Status
+	}{
+		{name: "completed before transcript flush", message: "Done.", want: analyzer.StatusTaskComplete},
+		{name: "question text uses Claude Stop policy", message: "Which option?", want: analyzer.StatusTaskComplete},
+		{name: "empty message stays silent", want: analyzer.StatusUnknown},
+		{name: "text notifications disabled", message: "Done.", textEnabled: boolPtr(false), want: analyzer.StatusUnknown},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{Notifications: config.NotificationsConfig{
+				Desktop:              config.DesktopConfig{Enabled: true},
+				NotifyOnTextResponse: tc.textEnabled,
+			}}
+			mock := &mockNotifier{}
+			h := &Handler{
+				cfg: cfg, dedupMgr: dedup.NewManager(), stateMgr: state.NewManager(),
+				teamStateMgr: teamstate.NewManager(""), notifierSvc: mock,
+				webhookSvc: &mockWebhook{}, pluginRoot: t.TempDir(),
+			}
+			payload, err := json.Marshal(HookData{
+				SessionID: strings.ReplaceAll(t.Name(), "/", "-"), TranscriptPath: transcript,
+				LastAssistantMessage: tc.message, HookEventName: "Stop", CWD: t.TempDir(),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := h.HandleHook("Stop", strings.NewReader(string(payload))); err != nil {
+				t.Fatal(err)
+			}
+			if tc.want == analyzer.StatusUnknown {
+				if mock.callCount() != 0 {
+					t.Fatalf("unexpected notification: %+v", mock.lastCall())
+				}
+				return
+			}
+			if mock.callCount() != 1 || mock.lastCall().status != tc.want || !strings.Contains(mock.lastCall().message, tc.message) {
+				t.Fatalf("notification = %+v, count = %d", mock.lastCall(), mock.callCount())
+			}
+		})
+	}
+}
+
+func TestClaudeStopFallbackAndTranscriptReplayDeduplicate(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	transcript := filepath.Join(t.TempDir(), "session.jsonl")
+	previousTool := `{"type":"assistant","timestamp":"2026-09-24T11:59:00Z","message":{"role":"assistant","content":[{"type":"tool_use","name":"Read"}]}}`
+	user := previousTool + "\n" + `{"type":"user","timestamp":"2026-09-24T12:00:00Z","message":{"role":"user","content":"test"}}`
+	if err := os.WriteFile(transcript, []byte(user+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	message := strings.Repeat("This is a complete long sentence. ", 8) + "What next?"
+	mock := &mockNotifier{}
+	h := &Handler{
+		cfg: &config.Config{Notifications: config.NotificationsConfig{
+			Desktop: config.DesktopConfig{Enabled: true},
+		}},
+		dedupMgr: dedup.NewManager(), stateMgr: state.NewManager(),
+		teamStateMgr: teamstate.NewManager(""), notifierSvc: mock,
+		webhookSvc: &mockWebhook{}, pluginRoot: t.TempDir(),
+	}
+	payload, err := json.Marshal(HookData{
+		SessionID: "claude-stop-replay", TranscriptPath: transcript,
+		LastAssistantMessage: message, HookEventName: "Stop", CWD: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.HandleHook("Stop", strings.NewReader(string(payload))); err != nil {
+		t.Fatal(err)
+	}
+	if mock.callCount() != 1 {
+		t.Fatalf("first delivery count = %d", mock.callCount())
+	}
+	firstBody := mock.lastCall().message
+	assistant, err := json.Marshal(jsonl.Message{
+		Type: "assistant", Timestamp: "2026-09-24T12:00:01Z",
+		Message: jsonl.MessageContent{Role: "assistant", Content: []jsonl.Content{{Type: "text", Text: message}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(transcript, []byte(user+"\n"+string(assistant)+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// The event lock is a two-second guard; the content guard must still hold.
+	time.Sleep(2100 * time.Millisecond)
+	if err := h.HandleHook("Stop", strings.NewReader(string(payload))); err != nil {
+		t.Fatal(err)
+	}
+	if mock.callCount() != 1 {
+		t.Fatalf("replayed Stop escaped content dedup: count=%d first=%q last=%q",
+			mock.callCount(), firstBody, mock.lastCall().message)
+	}
+}
+
 // setTestHome isolates all configuration, metadata and temporary paths.
 func setTestHome(t *testing.T, dir string) {
 	t.Helper()
