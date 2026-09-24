@@ -232,11 +232,19 @@ func configCommand(args []string, in io.Reader, out, stderr io.Writer) int {
 				continue
 			}
 			trusted := bundleLegacy.Candidates[0]
+			found := false
 			for i := range request.HistoricalCandidates {
 				candidate := &request.HistoricalCandidates[i]
-				if filepath.Clean(candidate.Path) == filepath.Clean(trusted.Path) && candidate.BaselinePath == "" && candidate.BaselineSHA256 == "" {
+				if filepath.Clean(candidate.Path) != filepath.Clean(trusted.Path) {
+					continue
+				}
+				found = true
+				if candidate.BaselinePath == "" && candidate.BaselineSHA256 == "" {
 					candidate.TrustedBaseline = trusted.TrustedBaseline
 				}
+			}
+			if !found {
+				request.HistoricalCandidates = append(request.HistoricalCandidates, trusted)
 			}
 		}
 		for _, historical := range legacy.Candidates {

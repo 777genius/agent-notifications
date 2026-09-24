@@ -108,10 +108,10 @@ func TestInstallerBootstrapRetryTrustsOnlyCurrentUnmodifiedCacheTemplate(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	check := func(wantSafe bool) {
+	check := func(data []byte, wantSafe bool) {
 		t.Helper()
 		var out, stderr bytes.Buffer
-		code := configCommand([]string{"preflight-update", "--stdin", "--json"}, bytes.NewReader(input), &out, &stderr)
+		code := configCommand([]string{"preflight-update", "--stdin", "--json"}, bytes.NewReader(data), &out, &stderr)
 		if wantSafe && code != 0 {
 			t.Fatalf("unmodified current template blocked: %s %s", out.String(), stderr.String())
 		}
@@ -119,16 +119,25 @@ func TestInstallerBootstrapRetryTrustsOnlyCurrentUnmodifiedCacheTemplate(t *test
 			t.Fatalf("unsafe historical config accepted: %d %s %s", code, out.String(), stderr.String())
 		}
 	}
-	check(true)
+	check(input, true)
+	history := request["historicalCandidates"].([]config.HistoricalCandidate)
+	request["historicalCandidates"] = history[1:]
+	withoutActiveCandidate, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(withoutActiveCandidate, true)
 	if err := os.WriteFile(configPath, []byte(`{"custom":true}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	check(false)
+	check(input, false)
+	check(withoutActiveCandidate, false)
 	if err := os.WriteFile(configPath, configtemplate.Bytes(), 0600); err != nil {
 		t.Fatal(err)
 	}
 	writeManifest("0.0.0")
-	check(false)
+	check(input, false)
+	check(withoutActiveCandidate, false)
 }
 
 func TestInstallerRegistryRejectsDuplicateKeys(t *testing.T) {
