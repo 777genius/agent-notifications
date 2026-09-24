@@ -707,7 +707,9 @@ func prioritizeXdotoolCandidates(windowIDs []string, searchLabel, folderName str
 		return windowIDs
 	}
 
-	return append(matching, nonMatching...)
+	// TryXdotool tries candidates from the end (xdotool lists bottom-most
+	// windows first), so matches go last to be tried first, top-most first.
+	return append(nonMatching, matching...)
 }
 
 func getXdotoolWindowName(windowID string) string {
