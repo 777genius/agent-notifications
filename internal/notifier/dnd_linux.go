@@ -63,7 +63,7 @@ type dndReader func(ctx context.Context) (value bool, ok bool)
 // a source that is not present in this session and is skipped.
 type dndReaders struct {
 	// inhibited reads org.freedesktop.Notifications.Inhibited. KDE Plasma and
-	// any daemon implementing that part of the freedesktop spec expose it. Note
+	// any daemon exposing the same extension can provide it. Note
 	// it is also true when an application requests inhibition (fullscreen video,
 	// screen sharing), not only when the user toggles DND by hand.
 	inhibited dndReader

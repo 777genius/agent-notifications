@@ -11,8 +11,9 @@ package notifier
 //
 // This bias matters: a wrong "in DND" result silently swallows a cue the user is
 // waiting for, whereas a wrong "not in DND" result merely plays one sound the
-// user did not want. The failure mode is therefore always an extra sound, never
-// a missing notification.
+// user did not want. Probe failures therefore keep the existing delivery
+// behavior. A confirmed positive can intentionally drop desktop delivery in
+// "suppress" mode.
 //
 // Detection is implemented on Linux (see dnd_linux.go). Every other platform
 // reports "not in DND"; see docs/DO_NOT_DISTURB.md for the per-platform status.

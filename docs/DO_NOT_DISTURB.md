@@ -63,10 +63,9 @@ unsupported desktop, missing daemon, timeout, or unparseable value is treated as
 "unknown", which means the notification and its sound are delivered exactly as
 before.
 
-This bias is deliberate, and it is what makes the option safe to enable: a wrong
-"in DND" result silently swallows a cue you are waiting for, whereas a wrong "not
-in DND" result merely plays one sound you did not want. The failure mode is
-always an extra sound, never a missing notification.
+This bias is deliberate: a probe error or unknown state keeps the existing
+delivery behavior. A confirmed positive result in `"suppress"` mode intentionally
+skips desktop delivery; a false positive could therefore hide a notification.
 
 ## What is detected, per platform
 
@@ -74,7 +73,7 @@ always an extra sound, never a missing notification.
 
 | Desktop / daemon | Source | Notes |
 |---|---|---|
-| KDE Plasma (and any daemon implementing that part of the freedesktop spec) | `org.freedesktop.Notifications.Inhibited` (D-Bus property) | Also true for application-requested inhibition — fullscreen video, screen sharing. |
+| KDE Plasma (and any daemon exposing the same property) | `org.freedesktop.Notifications.Inhibited` (D-Bus property) | KDE-compatible extension, not part of the freedesktop notification specification. Also true for application-requested inhibition — fullscreen video, screen sharing. |
 | dunst | `paused` property on the `org.dunstproject.cmd0` interface, same bus name and object path | Matches `dunstctl set-paused`. |
 | XFCE | `xfce4-notifyd` / `/do-not-disturb` via `org.xfce.Xfconf.GetProperty` | Only queried when the desktop is XFCE. |
 | GNOME (and Unity) | `gsettings get org.gnome.desktop.notifications show-banners` | The key is inverted: `false` means DND. GNOME exposes no DND property on D-Bus, so this is the one probe that costs a subprocess; it only runs when the desktop is GNOME. |
