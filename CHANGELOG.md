@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.45.15] - 2026-09-24
+
+### Fixed
+- Allow a macOS installer retry after a temporarily unavailable notifier asset to recognize an untouched cache template from the same release. Edited and older configurations still require explicit import. Installer errors no longer claim a legacy fallback that cannot complete ([#243](https://github.com/777genius/agent-notifications/issues/243), [#244](https://github.com/777genius/agent-notifications/pull/244)).
+
 ## [1.45.14] - 2026-09-24
 
 ### Fixed
