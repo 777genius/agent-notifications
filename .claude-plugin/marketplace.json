@@ -7,14 +7,14 @@
     },
     "metadata": {
         "description": "Agent Notifications marketplace for coding agents (Go implementation)",
-        "version": "1.45.7"
+        "version": "1.45.12"
     },
     "plugins": [{
         "name": "claude-notifications-go",
         "displayName": "Agent Notifications",
         "source": "./",
         "description": "Agent Notifications for Claude Code and Codex CLI (Go implementation)",
-        "version": "1.45.7",
+        "version": "1.45.12",
         "author": {
             "name": "777genius",
             "email": "iliyazelenkog@gmail.com"
