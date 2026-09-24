@@ -55,6 +55,24 @@ printf '#!/bin/sh\nexit 1\n' > codex/bin/install.sh
 before=$(wc -l < delivered)
 sh codex/bin/codex-hook-wrapper.sh handle-hook Stop --product codex
 [ "$(wc -l < delivered)" = "$before" ]
+# An absent Windows binary and a failed lazy install must notify once per
+# package version; repeated hooks must stay quiet until the version changes.
+mkdir -p failed/bin failed/.claude-plugin
+cp "$SRC/hook-wrapper.sh" failed/bin/hook-wrapper.sh
+echo '{"version":"1.42.0"}' > failed/.claude-plugin/plugin.json
+cat > failed/bin/install.sh <<'FAILED_INSTALL'
+#!/bin/sh
+# agent-notifications-managed-writer-protocol-v1
+exit 7
+FAILED_INSTALL
+chmod +x failed/bin/install.sh
+first=$(OS=Windows_NT XDG_CACHE_HOME="$ROOT/failed-cache" sh failed/bin/hook-wrapper.sh handle-hook Stop)
+second=$(OS=Windows_NT XDG_CACHE_HOME="$ROOT/failed-cache" sh failed/bin/hook-wrapper.sh handle-hook Stop)
+case "$first" in *'"systemMessage"'*'Installation of v1.42.0 failed'*) : ;; *) exit 1 ;; esac
+[ -z "$second" ]
+echo '{"version":"1.42.1"}' > failed/.claude-plugin/plugin.json
+third=$(OS=Windows_NT XDG_CACHE_HOME="$ROOT/failed-cache" sh failed/bin/hook-wrapper.sh handle-hook Stop)
+case "$third" in *'"systemMessage"'*'Installation of v1.42.1 failed'*) : ;; *) exit 1 ;; esac
 # Source actual installer functions, substituting local download/OS integration
 # seams; execute the real main flow and real venv setup on both main branches.
 sed '$d' "$SRC/install.sh" > installer-functions.sh

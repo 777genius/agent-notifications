@@ -135,13 +135,29 @@ get_plugin_version() {
     [ -f "$PLUGIN_JSON" ] && grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' "$PLUGIN_JSON" | head -n 1 || true
 }
 
-# Run install.sh (silent, never fails the script)
+# Run install.sh silently. The caller reports a safe, once-per-version failure.
 run_install() {
-    [ -f "$INSTALL_SCRIPT" ] || return 0
+    [ -f "$INSTALL_SCRIPT" ] || return 1
     # A package rollback must not delegate mutation to a historical writer.
     # This compatibility declaration does not authenticate the package origin.
-    LC_ALL=C grep -aqF 'agent-notifications-managed-writer-protocol-v1' "$INSTALL_SCRIPT" || return 0
-    INSTALL_TARGET_DIR="$SCRIPT_DIR" "$INSTALL_SCRIPT" "$@" >/dev/null 2>&1 || true
+    LC_ALL=C grep -aqF 'agent-notifications-managed-writer-protocol-v1' "$INSTALL_SCRIPT" || return 1
+    INSTALL_TARGET_DIR="$SCRIPT_DIR" "$INSTALL_SCRIPT" "$@" >/dev/null 2>&1
+}
+
+report_install_failure() {
+    _failed_ver=$(get_plugin_version)
+    [ -n "$_failed_ver" ] || _failed_ver=unknown
+    _failure_stamp="$STAMP_DIR/install-failed-$_failed_ver"
+    mkdir -p "$STAMP_DIR" >/dev/null 2>&1 || true
+    # mkdir is atomic across concurrent hooks. If cache writes fail, still
+    # report the failure rather than hiding a missing runtime indefinitely.
+    if mkdir "$_failure_stamp" 2>/dev/null || [ ! -d "$_failure_stamp" ]; then
+        if ! binary_ok; then
+            printf '{"systemMessage":"[claude-notifications] Installation of v%s failed. Run bin/install.sh manually for details."}\n' "$_failed_ver"
+        else
+            printf '[claude-notifications] Installation of v%s failed. Run bin/install.sh manually for details.\n' "$_failed_ver" >&2
+        fi
+    fi
 }
 
 # === Main Logic ===
@@ -192,10 +208,11 @@ fi
 
 # Install if needed and notify user
 if [ "$NEED_INSTALL" = 1 ]; then
+    INSTALL_FAILED=0
     if [ "$NEED_FORCE" = 1 ]; then
-        run_install --force
+        run_install --force || INSTALL_FAILED=1
     else
-        run_install
+        run_install || INSTALL_FAILED=1
     fi
 
     # On Windows, re-detect binary after install to prefer .exe over .bat
@@ -231,6 +248,9 @@ if [ "$NEED_INSTALL" = 1 ]; then
                 # fi
             fi
         fi
+    fi
+    if [ "$INSTALL_FAILED" = 1 ] || ! binary_ok; then
+        report_install_failure
     fi
 fi
 

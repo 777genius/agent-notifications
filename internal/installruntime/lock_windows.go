@@ -95,9 +95,6 @@ func privateWindowsHandle(h windows.Handle) error {
 		if err := windows.GetAce(acl, i, &ace); err != nil {
 			return err
 		}
-		if ace.Header.AceFlags&windows.INHERIT_ONLY_ACE != 0 {
-			continue
-		}
 		if ace.Header.AceType == windows.ACCESS_DENIED_ACE_TYPE {
 			continue
 		}
@@ -105,12 +102,19 @@ func privateWindowsHandle(h windows.Handle) error {
 			return fmt.Errorf("unsupported managed inode ACL")
 		}
 		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
-		if ace.Mask != 0 && !sid.Equals(user.User.Sid) && !sid.IsWellKnown(windows.WinLocalSystemSid) && !sid.IsWellKnown(windows.WinBuiltinAdministratorsSid) {
+		if !sid.Equals(user.User.Sid) && !sid.IsWellKnown(windows.WinLocalSystemSid) && !sid.IsWellKnown(windows.WinBuiltinAdministratorsSid) && ace.Mask&^foreignReadOnlyFileRights != 0 {
 			return fmt.Errorf("managed inode DACL grants foreign access")
 		}
 	}
 	return nil
 }
+
+// A foreign principal may inspect or execute the runtime, but may not alter
+// managed files, descendants, ownership, or the DACL. Unknown rights fail
+// closed. Inherit-only ACEs are checked too: they can affect future children.
+const foreignReadOnlyFileRights = windows.FILE_READ_DATA | windows.FILE_READ_EA |
+	windows.FILE_EXECUTE | windows.FILE_READ_ATTRIBUTES | windows.READ_CONTROL |
+	windows.SYNCHRONIZE | windows.GENERIC_READ | windows.GENERIC_EXECUTE
 
 func restrictPrivateWindowsHandle(h windows.Handle) error {
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
