@@ -10,6 +10,6 @@ const ForeignReadOnlyFileRights = windows.FILE_READ_DATA | windows.FILE_READ_EA 
 	windows.FILE_EXECUTE | windows.FILE_READ_ATTRIBUTES | windows.READ_CONTROL |
 	windows.SYNCHRONIZE | windows.GENERIC_READ | windows.GENERIC_EXECUTE
 
-func AllowsForeignReadOnly(mask uint32) bool {
+func AllowsForeignReadOnly(mask windows.ACCESS_MASK) bool {
 	return mask&^ForeignReadOnlyFileRights == 0
 }
