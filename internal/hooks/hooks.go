@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/777genius/agent-notifications/internal/analyzer"
 	"github.com/777genius/agent-notifications/internal/benchmark"
@@ -33,10 +34,16 @@ import (
 // delay can never push the hook past the timeout configured in hooks.json.
 const maxNotifyDelaySeconds = 25
 
+const (
+	transcriptSettleWait     = 500 * time.Millisecond
+	transcriptSettleInterval = 25 * time.Millisecond
+)
+
 // Test seams for the focus-aware / delayed desktop notification path.
 var (
 	isTerminalFocused = notifier.IsTerminalFocused
 	sleepFunc         = time.Sleep
+	settleSleepFunc   = time.Sleep
 )
 
 type notificationDelivery struct {
@@ -241,7 +248,11 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 
 	// Phase 1: Early duplicate check (per hook event type)
 	bench.Start("dedup.early_check")
-	if h.dedupMgr.CheckEarlyDuplicate(keys.lockKey, hookEvent) {
+	// Claude Stop has no explicit turn id. Its turn-scoped lock key can only be
+	// derived after reading the transcript; a session-scoped early lock would
+	// suppress a second legitimate turn completed within two seconds.
+	deferClaudeStopLock := ev.Product == ProductClaude && ev.Kind() == EventStop
+	if !deferClaudeStopLock && h.dedupMgr.CheckEarlyDuplicate(keys.lockKey, hookEvent) {
 		bench.Elapsed("dedup.early_check")
 		logging.Debug("Early duplicate detected, skipping")
 		return nil
@@ -350,7 +361,10 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 		if err != nil {
 			return err
 		}
-		status, insight = h.fallbackClaudeStop(status, p.AssistantMessage)
+		if strings.TrimSpace(p.AssistantMessage) == "" {
+			status, parsedMessages = h.settleClaudeTranscript(ev, status, parsedMessages)
+		}
+		status, insight = h.enrichClaudeStop(status, p.AssistantMessage, parsedMessages)
 		// Note: We don't delete session state here to preserve cooldown info
 		// State files have TTL and will be cleaned up automatically
 		defer h.cleanupOldLocks()
@@ -402,7 +416,10 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 		if err != nil {
 			return err
 		}
-		status, insight = h.fallbackClaudeStop(status, p.Stop.AssistantMessage)
+		if strings.TrimSpace(p.Stop.AssistantMessage) == "" {
+			status, parsedMessages = h.settleClaudeTranscript(ev, status, parsedMessages)
+		}
+		status, insight = h.enrichClaudeStop(status, p.Stop.AssistantMessage, parsedMessages)
 		defer h.cleanupOldLocks()
 	case PermissionRequestPayload:
 		// Codex-only in this milestone: the host is waiting on user approval.
@@ -412,6 +429,11 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 		return h.handleTeammateIdle(ev, p)
 	default:
 		return fmt.Errorf("unknown hook event: %s", hookEvent)
+	}
+	if deferClaudeStopLock {
+		if userTS := jsonl.GetLastUserTimestamp(parsedMessages); userTS != "" {
+			keys.lockKey = claudeStopTurnLockKey(ev.Session.SessionID, userTS)
+		}
 	}
 
 	// If status is unknown, skip
@@ -500,27 +522,31 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 			logging.Warn("Failed to update task complete state: %v", err)
 		}
 	}
+	// Notification and PreToolUse also need the current Claude turn identity.
+	// Reusing these messages for summary generation avoids a second read.
+	if ev.Product == ProductClaude && len(parsedMessages) == 0 &&
+		ev.Session.TranscriptPath != "" && platform.FileExists(ev.Session.TranscriptPath) {
+		if messages, parseErr := jsonl.ParseFile(ev.Session.TranscriptPath); parseErr == nil {
+			parsedMessages = messages
+		}
+	}
+	turnTS := ""
+	if ev.Product == ProductClaude {
+		turnTS = jsonl.GetLastUserTimestamp(parsedMessages)
+	}
 
 	// Generate message
 	bench.Start("message.generate")
 	body, actions := h.generateMessage(ev, status, parsedMessages, insight)
 	message := joinMessageParts(body, actions)
 	var stopHash string
-	currentTurn := jsonl.FilterMessagesAfterTimestamp(parsedMessages, jsonl.GetLastUserTimestamp(parsedMessages))
-	if ev.Product == ProductClaude && (ev.Kind() == EventStop || ev.Kind() == EventSubagentStop) &&
-		len(jsonl.ExtractTools(currentTurn)) == 0 {
-		// A text-only Stop can arrive before its final transcript line.
-		// Track a separate hash of the host final message so transcript replay
-		// is stable while rendered-content dedup stays shared across hooks.
-		var final string
-		switch p := ev.Payload.(type) {
-		case StopPayload:
-			final = p.AssistantMessage
-		case SubagentStopPayload:
-			final = p.Stop.AssistantMessage
-		}
-		if strings.TrimSpace(final) != "" {
-			stopHash = claudeStopPayloadHash(final, jsonl.GetLastUserTimestamp(parsedMessages))
+	if ev.Product == ProductClaude && ev.Kind() == EventStop {
+		// The host final text is stable before and after the transcript flush.
+		// The last user timestamp separates identical replies in distinct turns.
+		// Without that timestamp there is no trustworthy turn identity, so fall
+		// back to the legacy rendered-content check instead.
+		if p, ok := ev.Payload.(StopPayload); ok && strings.TrimSpace(p.AssistantMessage) != "" && turnTS != "" {
+			stopHash = claudeStopPayloadHash(p.AssistantMessage, turnTS)
 		}
 	}
 	bench.Elapsed("message.generate")
@@ -575,12 +601,27 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 			logging.Debug("Duplicate Stop payload detected within 3 minutes, skipping")
 			return nil
 		}
-		isDuplicate, err := h.stateMgr.IsDuplicateMessage(keys.stateKey, message, 180)
-		if err != nil {
-			logging.Warn("Failed to check duplicate message: %v", err)
-		} else if isDuplicate {
-			logging.Debug("Duplicate message content detected within 3 minutes, skipping")
-			return nil
+		if ev.Product == ProductClaude && turnTS != "" {
+			// The body/turn pair is stable across transcript flushes and hook
+			// types. In particular, a duration suffix must not make the same
+			// answer from Notification look like new content.
+			isDuplicate, turnErr := h.stateMgr.IsDuplicateTurnBody(keys.stateKey, body, turnTS, 180)
+			if turnErr != nil {
+				logging.Warn("Failed to check duplicate Claude turn body: %v", turnErr)
+			} else if isDuplicate {
+				logging.Debug("Duplicate Claude turn body detected within 3 minutes, skipping")
+				return nil
+			}
+		} else {
+			// Without a turn identity, retain the conservative legacy content
+			// check. Distinct identical answers cannot be proven in this mode.
+			isDuplicate, err := h.stateMgr.IsDuplicateMessage(keys.stateKey, message, 180)
+			if err != nil {
+				logging.Warn("Failed to check duplicate message: %v", err)
+			} else if isDuplicate {
+				logging.Debug("Duplicate message content detected within 3 minutes, skipping")
+				return nil
+			}
 		}
 	}
 
@@ -595,7 +636,7 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 	bench.Elapsed("notify.send")
 
 	if delivery.delivered() {
-		if err := h.stateMgr.UpdateLastNotificationWithStop(keys.stateKey, status, message, stopHash); err != nil {
+		if err := h.stateMgr.UpdateLastNotificationWithIdentity(keys.stateKey, status, message, stopHash, body, turnTS); err != nil {
 			logging.Warn("Failed to update last notification: %v", err)
 		}
 	} else {
@@ -723,36 +764,169 @@ func (h *Handler) handleStopEvent(ev Event) (analyzer.Status, []jsonl.Message, e
 	return status, messages, nil
 }
 
-// Claude Code can fire Stop before the final assistant message is flushed to
-// the transcript. Its payload carries that message directly, so use it only
-// when transcript analysis has no status and text-only notifications are on.
-func (h *Handler) fallbackClaudeStop(status analyzer.Status, message string) (analyzer.Status, *TurnInsight) {
-	if status != analyzer.StatusUnknown || strings.TrimSpace(message) == "" {
+// Claude Code supplies the final response in Stop even when the final JSONL
+// record has not yet been written. Use that text for the body on every ordinary
+// Stop, not only when transcript classification is unknown. The transcript
+// remains authoritative for tool-driven status and action counts.
+func (h *Handler) enrichClaudeStop(status analyzer.Status, message string, messages []jsonl.Message) (analyzer.Status, *TurnInsight) {
+	message = strings.TrimSpace(message)
+	if message == "" {
 		return status, nil
 	}
-	// Preserve a short host-reported error even if text-only notifications are
-	// disabled. Claude's transcript classifier handles API errors first.
-	classified := analyzer.ClassifyLastMessage(message)
-	switch classified {
-	case analyzer.StatusAPIError, analyzer.StatusAPIErrorOverloaded, analyzer.StatusSessionLimitReached:
-		status = classified
-	default:
-		if !h.cfg.ShouldNotifyOnTextResponse() {
-			return analyzer.StatusUnknown, nil
+	if status == analyzer.StatusUnknown || status == analyzer.StatusTaskComplete || status == analyzer.StatusReviewComplete {
+		if failure := classifyClaudeStopFailure(message); failure != analyzer.StatusUnknown {
+			status = failure
+		} else if status == analyzer.StatusUnknown {
+			if !h.cfg.ShouldNotifyOnTextResponse() {
+				return analyzer.StatusUnknown, nil
+			}
+			status = analyzer.StatusTaskComplete
 		}
-		// Claude text-only Stop is task_complete; questions use Notification.
-		status = analyzer.StatusTaskComplete
 	}
-	// Match the normal transcript summary so a replay after the final line
-	// flushes has the same content-dedup key.
+	if status == analyzer.StatusTaskComplete && claudeStopIsReview(messages, message) {
+		status = analyzer.StatusReviewComplete
+	}
+	if status != analyzer.StatusTaskComplete && status != analyzer.StatusReviewComplete {
+		return status, nil
+	}
+	// The task-body formatter applies the same Markdown cleanup and truncation
+	// regardless of whether the final text has reached the transcript.
 	synthetic := []jsonl.Message{{
 		Type: "assistant",
 		Message: jsonl.MessageContent{Role: "assistant", Content: []jsonl.Content{{
 			Type: "text", Text: message,
 		}}},
 	}}
-	body, _ := summary.GenerateFromMessagesStructured(synthetic, status, h.cfg)
+	body, _ := summary.GenerateFromMessagesStructured(synthetic, analyzer.StatusTaskComplete, h.cfg)
 	return status, &TurnInsight{Body: body}
+}
+
+// A Claude success summary can mention an error it fixed. Only a failure
+// phrase standing alone or introducing details is treated as a host error;
+// the Codex last-message heuristic is intentionally broader and not used here.
+func classifyClaudeStopFailure(message string) analyzer.Status {
+	// Long final responses are usually task reports, not host failure notices.
+	if utf8.RuneCountInString(strings.TrimSpace(message)) > 300 {
+		return analyzer.StatusUnknown
+	}
+	firstLine := strings.ToLower(strings.TrimSpace(strings.SplitN(message, "\n", 2)[0]))
+	for _, pattern := range []struct {
+		phrase string
+		status analyzer.Status
+	}{
+		{"session limit reached", analyzer.StatusSessionLimitReached},
+		{"usage limit reached", analyzer.StatusSessionLimitReached},
+		{"rate limit reached", analyzer.StatusAPIErrorOverloaded},
+		{"rate limit exceeded", analyzer.StatusAPIErrorOverloaded},
+		{"too many requests", analyzer.StatusAPIErrorOverloaded},
+		{"quota exceeded", analyzer.StatusAPIErrorOverloaded},
+		{"currently overloaded", analyzer.StatusAPIErrorOverloaded},
+		{"authentication failed", analyzer.StatusAPIError},
+		{"invalid api key", analyzer.StatusAPIError},
+		{"api error", analyzer.StatusAPIError},
+		{"stream error", analyzer.StatusAPIError},
+		{"context window exceeded", analyzer.StatusAPIError},
+	} {
+		if firstLine == pattern.phrase || firstLine == pattern.phrase+"." {
+			return pattern.status
+		}
+		for _, separator := range []string{":", ". ", " - "} {
+			if detail, ok := strings.CutPrefix(firstLine, pattern.phrase+separator); ok {
+				detail = strings.TrimSpace(detail)
+				for _, success := range []string{"fixed", "resolved", "handled", "corrected", "mitigated"} {
+					if strings.HasPrefix(detail, success+" ") || detail == success {
+						return analyzer.StatusUnknown
+					}
+				}
+				return pattern.status
+			}
+		}
+	}
+	return analyzer.StatusUnknown
+}
+
+func claudeStopIsReview(messages []jsonl.Message, final string) bool {
+	currentTurn := jsonl.FilterMessagesAfterTimestamp(messages, jsonl.GetLastUserTimestamp(messages))
+	if len(currentTurn) > 15 {
+		currentTurn = currentTurn[len(currentTurn)-15:]
+	}
+	tools := jsonl.ExtractTools(currentTurn)
+	if jsonl.CountToolsByNames(tools, []string{"Read", "Grep", "Glob"}) == 0 ||
+		jsonl.HasAnyActiveTool(tools, analyzer.ActiveTools) {
+		return false
+	}
+	recentText := jsonl.ExtractRecentText(currentTurn, 5)
+	lastTexts := []string(nil)
+	if len(currentTurn) > 0 {
+		lastTexts = jsonl.ExtractTextFromMessages(currentTurn[len(currentTurn)-1:])
+	}
+	if len(lastTexts) > 0 && strings.Join(strings.Fields(strings.Join(lastTexts, " ")), " ") ==
+		strings.Join(strings.Fields(final), " ") {
+		// The final line has already flushed; don't count it twice.
+		return len(recentText) > 200
+	}
+	return len(recentText)+len(final) > 200
+}
+
+// Older Claude versions may omit last_assistant_message. In that case only,
+// wait briefly for an existing transcript to grow. A stat avoids reparsing an
+// unchanged large transcript; elapsed time bounds both sleeps and reparses.
+func (h *Handler) settleClaudeTranscript(ev Event, status analyzer.Status, messages []jsonl.Message) (analyzer.Status, []jsonl.Message) {
+	path := ev.Session.TranscriptPath
+	if path == "" || !platform.FileExists(path) || claudeStopStatusSettled(status) || claudeTranscriptHasClosingText(messages) {
+		return status, messages
+	}
+	deadline := time.Now().Add(transcriptSettleWait)
+	lastSize := int64(-1)
+	if info, err := os.Stat(path); err == nil {
+		lastSize = info.Size()
+	}
+	for time.Now().Before(deadline) {
+		settleSleepFunc(transcriptSettleInterval)
+		info, err := os.Stat(path)
+		if err == nil && info.Size() == lastSize {
+			continue
+		}
+		if err == nil {
+			lastSize = info.Size()
+		}
+		updatedStatus, updatedMessages, parseErr := analyzer.AnalyzeTranscriptWithMessages(path, h.cfg)
+		if parseErr != nil {
+			continue
+		}
+		status, messages = updatedStatus, updatedMessages
+		if claudeStopStatusSettled(status) || claudeTranscriptHasClosingText(messages) {
+			break
+		}
+	}
+	return status, messages
+}
+
+func claudeStopStatusSettled(status analyzer.Status) bool {
+	switch status {
+	case analyzer.StatusPlanReady, analyzer.StatusQuestion, analyzer.StatusSessionLimitReached,
+		analyzer.StatusAPIError, analyzer.StatusAPIErrorOverloaded:
+		return true
+	}
+	return false
+}
+
+func claudeTranscriptHasClosingText(messages []jsonl.Message) bool {
+	currentTurn := jsonl.FilterMessagesAfterTimestamp(messages, jsonl.GetLastUserTimestamp(messages))
+	if len(currentTurn) == 0 {
+		return false
+	}
+	last := currentTurn[len(currentTurn)-1]
+	text := false
+	for _, block := range last.Message.Content {
+		if block.Type == "tool_use" {
+			return false
+		}
+		if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
+			text = true
+		}
+	}
+	return text
 }
 
 // The user timestamp distinguishes separate turns with identical replies.
@@ -761,6 +935,11 @@ func (h *Handler) fallbackClaudeStop(status analyzer.Status, message string) (an
 func claudeStopPayloadHash(final, userTimestamp string) string {
 	material := userTimestamp + "\x00" + strings.TrimSpace(final)
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(material)))
+}
+
+func claudeStopTurnLockKey(sessionID, userTimestamp string) string {
+	material := sessionID + "\x00" + userTimestamp
+	return fmt.Sprintf("claude-turn-%x", sha256.Sum256([]byte(material)))
 }
 
 // generateMessage generates a notification body and action summary.
@@ -775,7 +954,17 @@ func (h *Handler) generateMessage(ev Event, status analyzer.Status, messages []j
 		return h.generateCodexMessage(ev, status), ""
 	}
 	if insight != nil && insight.Body != "" {
-		return insight.Body, ""
+		if len(messages) > 0 {
+			_, actions = summary.GenerateFromMessagesStructured(messages, status, h.cfg)
+			if !claudeTranscriptHasClosingText(messages) {
+				// The last assistant timestamp can still be the pre-tool call;
+				// showing its duration as the completed turn would be misleading.
+				if duration := strings.Index(actions, "⏱"); duration >= 0 {
+					actions = strings.TrimSpace(actions[:duration])
+				}
+			}
+		}
+		return insight.Body, actions
 	}
 
 	// Use pre-parsed messages if available (eliminates ~234ms double I/O)

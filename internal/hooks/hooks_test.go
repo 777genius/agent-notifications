@@ -38,6 +38,11 @@ func TestClaudeStopFinalMessageFallback(t *testing.T) {
 		{name: "text notifications disabled", message: "Done.", textEnabled: boolPtr(false), want: analyzer.StatusUnknown},
 		{name: "API error stays visible when text disabled", message: "API error", textEnabled: boolPtr(false), want: analyzer.StatusAPIError},
 		{name: "rate limit stays error", message: "Rate limit reached", want: analyzer.StatusAPIErrorOverloaded},
+		{name: "rate limit with details stays error", message: "Rate limit reached. Please try again.", textEnabled: boolPtr(false), want: analyzer.StatusAPIErrorOverloaded},
+		{name: "session limit with details stays error", message: "Session limit reached. Please start a new conversation.", textEnabled: boolPtr(false), want: analyzer.StatusSessionLimitReached},
+		{name: "success mentioning error stays success", message: "Fixed the API error.", want: analyzer.StatusTaskComplete},
+		{name: "success beginning with error topic stays success", message: "API error: fixed the retry path.", want: analyzer.StatusTaskComplete},
+		{name: "long success beginning with error topic stays success", message: "API error: " + strings.Repeat("the handler is now resilient and verified. ", 10), want: analyzer.StatusTaskComplete},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := &config.Config{Notifications: config.NotificationsConfig{
@@ -69,8 +74,14 @@ func TestClaudeStopFinalMessageFallback(t *testing.T) {
 			if mock.callCount() != 1 || mock.lastCall().status != tc.want {
 				t.Fatalf("notification = %+v, count = %d", mock.lastCall(), mock.callCount())
 			}
-			if tc.want == analyzer.StatusTaskComplete && !strings.Contains(mock.lastCall().message, tc.message) {
-				t.Fatalf("final message absent from notification: %+v", mock.lastCall())
+			if tc.want == analyzer.StatusTaskComplete {
+				wantText := tc.message
+				if len(wantText) > 40 {
+					wantText = wantText[:40]
+				}
+				if !strings.Contains(mock.lastCall().message, wantText) {
+					t.Fatalf("final message absent from notification: %+v", mock.lastCall())
+				}
 			}
 		})
 	}
@@ -172,6 +183,217 @@ func TestClaudeStopPayloadHashSeparatesTurns(t *testing.T) {
 	}
 	if first == claudeStopPayloadHash("Done.", "2026-09-24T12:00:01Z") {
 		t.Fatal("separate turns with identical replies shared replay identity")
+	}
+}
+
+func TestClaudeStopIdenticalAnswersInDifferentTurns(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	transcript := filepath.Join(t.TempDir(), "session.jsonl")
+	firstUser := `{"type":"user","timestamp":"2026-09-24T12:00:00Z","message":{"role":"user","content":"first"}}` + "\n"
+	if err := os.WriteFile(transcript, []byte(firstUser), 0600); err != nil {
+		t.Fatal(err)
+	}
+	mock := &mockNotifier{}
+	h := &Handler{cfg: &config.Config{Notifications: config.NotificationsConfig{Desktop: config.DesktopConfig{Enabled: true}}},
+		dedupMgr: dedup.NewManager(), stateMgr: state.NewManager(), teamStateMgr: teamstate.NewManager(""),
+		notifierSvc: mock, webhookSvc: &mockWebhook{}, pluginRoot: t.TempDir()}
+	payload, err := json.Marshal(HookData{SessionID: "same-answer-new-turn", TranscriptPath: transcript,
+		LastAssistantMessage: "Done.", HookEventName: "Stop", CWD: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.HandleHook("Stop", strings.NewReader(string(payload))); err != nil {
+		t.Fatal(err)
+	}
+	secondUser := `{"type":"user","timestamp":"2026-09-24T12:00:03Z","message":{"role":"user","content":"second"}}` + "\n"
+	if err := os.WriteFile(transcript, []byte(firstUser+secondUser), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// A new user turn must not be blocked by the previous turn's 2s event lock.
+	if err := h.HandleHook("Stop", strings.NewReader(string(payload))); err != nil {
+		t.Fatal(err)
+	}
+	if mock.callCount() != 2 {
+		t.Fatalf("two real turns with the same answer delivered %d notifications, want 2", mock.callCount())
+	}
+}
+
+func TestClaudeStopUsesFinalPayloadAfterToolAndDeduplicatesReplay(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	transcript := filepath.Join(t.TempDir(), "session.jsonl")
+	beforeFinal := `{"type":"user","timestamp":"2026-09-24T12:00:00Z","message":{"role":"user","content":"read file"}}` + "\n" +
+		`{"type":"assistant","timestamp":"2026-09-24T12:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"Starting now."},{"type":"tool_use","name":"Read"}]}}` + "\n"
+	if err := os.WriteFile(transcript, []byte(beforeFinal), 0600); err != nil {
+		t.Fatal(err)
+	}
+	mock := &mockNotifier{}
+	h := &Handler{cfg: &config.Config{Notifications: config.NotificationsConfig{Desktop: config.DesktopConfig{Enabled: true}}},
+		dedupMgr: dedup.NewManager(), stateMgr: state.NewManager(), teamStateMgr: teamstate.NewManager(""),
+		notifierSvc: mock, webhookSvc: &mockWebhook{}, pluginRoot: t.TempDir()}
+	final := "The requested file contains the expected module name."
+	payload, err := json.Marshal(HookData{SessionID: "tool-final-message", TranscriptPath: transcript,
+		LastAssistantMessage: final, HookEventName: "Stop", CWD: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.HandleHook("Stop", strings.NewReader(string(payload))); err != nil {
+		t.Fatal(err)
+	}
+	if mock.callCount() != 1 || !strings.Contains(mock.lastCall().message, final) ||
+		strings.Contains(mock.lastCall().message, "Starting now") ||
+		strings.Contains(mock.lastCall().message, "⏱") {
+		t.Fatalf("tool Stop did not show the final answer: %+v", mock.lastCall())
+	}
+	flushed := `{"type":"assistant","timestamp":"2026-09-24T12:00:02Z","message":{"role":"assistant","content":[{"type":"text","text":"` + final + `"}]}}` + "\n"
+	if err := os.WriteFile(transcript, []byte(beforeFinal+flushed), 0600); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2100 * time.Millisecond)
+	if err := h.HandleHook("Stop", strings.NewReader(string(payload))); err != nil {
+		t.Fatal(err)
+	}
+	if mock.callCount() != 1 {
+		t.Fatalf("tool Stop replay delivered %d notifications, want 1", mock.callCount())
+	}
+}
+
+func TestClaudeStopLongReadOnlyFinalIsReview(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	transcript := filepath.Join(t.TempDir(), "session.jsonl")
+	content := `{"type":"user","timestamp":"2026-09-24T12:00:00Z","message":{"role":"user","content":"review file"}}` + "\n" +
+		`{"type":"assistant","timestamp":"2026-09-24T12:00:01Z","message":{"role":"assistant","content":[{"type":"tool_use","name":"Read"}]}}` + "\n"
+	if err := os.WriteFile(transcript, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	mock := &mockNotifier{}
+	h := &Handler{cfg: &config.Config{Notifications: config.NotificationsConfig{Desktop: config.DesktopConfig{Enabled: true}}},
+		dedupMgr: dedup.NewManager(), stateMgr: state.NewManager(), teamStateMgr: teamstate.NewManager(""),
+		notifierSvc: mock, webhookSvc: &mockWebhook{}, pluginRoot: t.TempDir()}
+	payload, err := json.Marshal(HookData{SessionID: "long-read-only-final", TranscriptPath: transcript,
+		LastAssistantMessage: strings.Repeat("The file is correct and needs no changes. ", 7), HookEventName: "Stop", CWD: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.HandleHook("Stop", strings.NewReader(string(payload))); err != nil {
+		t.Fatal(err)
+	}
+	if mock.callCount() != 1 || mock.lastCall().status != analyzer.StatusReviewComplete {
+		t.Fatalf("long read-only turn status = %+v, want review_complete", mock.lastCall())
+	}
+}
+
+func TestClaudeStopReviewStatusStableAcrossTranscriptFlush(t *testing.T) {
+	user := jsonl.Message{Type: "user", Timestamp: "2026-09-24T12:00:00Z",
+		Message: jsonl.MessageContent{Role: "user", ContentString: "review"}}
+	read := jsonl.Message{Type: "assistant", Timestamp: "2026-09-24T12:00:01Z",
+		Message: jsonl.MessageContent{Role: "assistant", Content: []jsonl.Content{{Type: "tool_use", Name: "Read"}}}}
+	h := &Handler{cfg: &config.Config{}}
+	for _, blocks := range [][]string{{strings.Repeat("a", 110)}, {strings.Repeat("a", 55), strings.Repeat("b", 54)}} {
+		final := strings.Join(blocks, " ")
+		flushed := jsonl.Message{Type: "assistant", Timestamp: "2026-09-24T12:00:02Z",
+			Message: jsonl.MessageContent{Role: "assistant"}}
+		for _, block := range blocks {
+			flushed.Message.Content = append(flushed.Message.Content, jsonl.Content{Type: "text", Text: block})
+		}
+		for _, messages := range [][]jsonl.Message{{user, read}, {user, read, flushed}} {
+			status, _ := h.enrichClaudeStop(analyzer.StatusTaskComplete, final, messages)
+			if status != analyzer.StatusTaskComplete {
+				t.Fatalf("%d-byte answer became %s after transcript flush", len(final), status)
+			}
+		}
+	}
+}
+
+func TestClaudeStopCrossHookDedupSurvivesTranscriptFlush(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	transcript := filepath.Join(t.TempDir(), "session.jsonl")
+	user := `{"type":"user","timestamp":"2026-09-24T12:00:00Z","message":{"role":"user","content":"choose"}}` + "\n"
+	final := `{"type":"assistant","timestamp":"2026-09-24T12:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"Which option?"}]}}` + "\n"
+	if err := os.WriteFile(transcript, []byte(user), 0600); err != nil {
+		t.Fatal(err)
+	}
+	mock := &mockNotifier{}
+	h := &Handler{cfg: &config.Config{Notifications: config.NotificationsConfig{
+		Desktop: config.DesktopConfig{Enabled: true},
+		SuppressQuestionAfterAnyNotificationSeconds: intPtr(0), SuppressQuestionAfterTaskCompleteSeconds: intPtr(0),
+	}}, dedupMgr: dedup.NewManager(), stateMgr: state.NewManager(), teamStateMgr: teamstate.NewManager(""),
+		notifierSvc: mock, webhookSvc: &mockWebhook{}, pluginRoot: t.TempDir()}
+	for _, hookEvent := range []string{"Stop", "Notification"} {
+		payload, err := json.Marshal(HookData{SessionID: "cross-hook-flush", TranscriptPath: transcript,
+			LastAssistantMessage: "Which option?", HookEventName: hookEvent, CWD: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := h.HandleHook(hookEvent, strings.NewReader(string(payload))); err != nil {
+			t.Fatal(err)
+		}
+		if hookEvent == "Stop" {
+			if err := os.WriteFile(transcript, []byte(user+final), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if mock.callCount() != 1 {
+		t.Fatalf("cross-hook replay after transcript flush delivered %d notifications, want 1", mock.callCount())
+	}
+}
+
+func TestClaudeStopWithoutPayloadWaitsOnlyForTranscriptGrowth(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	transcript := filepath.Join(t.TempDir(), "session.jsonl")
+	user := `{"type":"user","timestamp":"2026-09-24T12:00:00Z","message":{"role":"user","content":"say ready"}}` + "\n"
+	if err := os.WriteFile(transcript, []byte(user), 0600); err != nil {
+		t.Fatal(err)
+	}
+	mock := &mockNotifier{}
+	h := &Handler{cfg: &config.Config{Notifications: config.NotificationsConfig{Desktop: config.DesktopConfig{Enabled: true}}},
+		dedupMgr: dedup.NewManager(), stateMgr: state.NewManager(), teamStateMgr: teamstate.NewManager(""),
+		notifierSvc: mock, webhookSvc: &mockWebhook{}, pluginRoot: t.TempDir()}
+	payload, err := json.Marshal(HookData{SessionID: "settling-without-payload", TranscriptPath: transcript,
+		HookEventName: "Stop", CWD: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousSleep := settleSleepFunc
+	t.Cleanup(func() { settleSleepFunc = previousSleep })
+	settleSleepFunc = func(time.Duration) {
+		if err := os.WriteFile(transcript, []byte(user+
+			`{"type":"assistant","timestamp":"2026-09-24T12:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"Ready."}]}}`+"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := h.HandleHook("Stop", strings.NewReader(string(payload))); err != nil {
+		t.Fatal(err)
+	}
+	if mock.callCount() != 1 || !strings.Contains(mock.lastCall().message, "Ready") {
+		t.Fatalf("settled Stop notification = %+v, count=%d", mock.lastCall(), mock.callCount())
+	}
+}
+
+func TestClaudeStopWithoutPayloadWaitIsBounded(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	transcript := filepath.Join(t.TempDir(), "session.jsonl")
+	if err := os.WriteFile(transcript, []byte(`{"type":"user","timestamp":"2026-09-24T12:00:00Z","message":{"role":"user","content":"say ready"}}`+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	mock := &mockNotifier{}
+	h := &Handler{cfg: &config.Config{Notifications: config.NotificationsConfig{Desktop: config.DesktopConfig{Enabled: true}}},
+		dedupMgr: dedup.NewManager(), stateMgr: state.NewManager(), teamStateMgr: teamstate.NewManager(""),
+		notifierSvc: mock, webhookSvc: &mockWebhook{}, pluginRoot: t.TempDir()}
+	payload, err := json.Marshal(HookData{SessionID: "bounded-settle-without-payload", TranscriptPath: transcript,
+		HookEventName: "Stop", CWD: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if err := h.HandleHook("Stop", strings.NewReader(string(payload))); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("transcript settle exceeded bound: %v", elapsed)
+	}
+	if mock.callCount() != 0 {
+		t.Fatalf("unfinished Stop unexpectedly notified: %+v", mock.lastCall())
 	}
 }
 

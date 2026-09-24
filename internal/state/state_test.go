@@ -675,6 +675,19 @@ func TestManager_StopPayloadIdentityIsSeparateFromRenderedContent(t *testing.T) 
 	assert.False(t, duplicate)
 }
 
+func TestManager_IsDuplicateTurnBodyIgnoresDurationButNotTurn(t *testing.T) {
+	mgr := newTestManager(t)
+	const session = "claude-turn-body"
+	require.NoError(t, mgr.UpdateLastNotificationWithIdentity(session, analyzer.StatusTaskComplete,
+		"Done. ⏱ 1s", "stop-hash", "Done.", "2026-09-24T12:00:00Z"))
+	duplicate, err := mgr.IsDuplicateTurnBody(session, "Done", "2026-09-24T12:00:00Z", 180)
+	require.NoError(t, err)
+	assert.True(t, duplicate)
+	duplicate, err = mgr.IsDuplicateTurnBody(session, "Done.", "2026-09-24T12:00:03Z", 180)
+	require.NoError(t, err)
+	assert.False(t, duplicate, "identical answer from a new turn must be delivered")
+}
+
 func TestManager_IsDuplicateMessage_NoState(t *testing.T) {
 	mgr := newTestManager(t)
 
