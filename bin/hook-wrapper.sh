@@ -162,6 +162,15 @@ report_install_failure() {
     fi
 }
 
+path_recent() {
+    _mtime=$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null) || return 1
+    _now=$(date +%s) || return 1
+    case "$_mtime" in ''|*[!0-9]*) return 1 ;; esac
+    case "$_now" in ''|*[!0-9]*) return 1 ;; esac
+    _age=$((_now - _mtime))
+    [ "$_age" -ge 0 ] && [ "$_age" -le "$2" ]
+}
+
 install_in_progress() {
     _lock="$SCRIPT_DIR/.install.lock"
     [ -d "$_lock" ] && [ ! -L "$_lock" ] || return 1
@@ -191,7 +200,9 @@ install_in_progress() {
     [ "$_metadata_count" = 2 ] || return 1
     IFS= read -r _owner_pid < "$_owner/pid" || return 1
     case "$_owner_pid" in ''|*[!0-9]*) return 1 ;; esac
-    kill -0 "$_owner_pid" 2>/dev/null
+    [ "$_owner_pid" -gt 0 ] 2>/dev/null &&
+        path_recent "$_owner/heartbeat" 120 &&
+        kill -0 "$_owner_pid" 2>/dev/null
 }
 
 wait_for_install_publication() {
@@ -201,6 +212,7 @@ wait_for_install_publication() {
         binary_ok && return 0
         install_in_progress && return 0
         [ -d "$SCRIPT_DIR/.install.lock" ] && [ ! -L "$SCRIPT_DIR/.install.lock" ] || return 1
+        path_recent "$SCRIPT_DIR/.install.lock" 2 || return 1
         sleep 1
         _wait_attempt=$((_wait_attempt + 1))
     done

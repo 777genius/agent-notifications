@@ -113,6 +113,16 @@ winner_pid=$!
 winner=$(OS=Windows_NT XDG_CACHE_HOME="$ROOT/failed-cache" sh failed/bin/hook-wrapper.sh handle-hook Stop)
 wait "$winner_pid"
 case "$winner" in *'Installation of v1.42.3 failed'*) exit 1 ;; esac
+rm failed/bin/claude-notifications-windows-amd64.exe
+echo '{"version":"1.42.4"}' > failed/.claude-plugin/plugin.json
+mkdir -p failed/bin/.install.lock/.owner.reused
+printf '%s\n' "$$" > failed/bin/.install.lock/.owner.reused/pid
+: > failed/bin/.install.lock/.owner.reused/heartbeat
+touch -t 200001010000 failed/bin/.install.lock/.owner.reused/heartbeat
+stale=$(OS=Windows_NT XDG_CACHE_HOME="$ROOT/failed-cache" sh failed/bin/hook-wrapper.sh handle-hook Stop)
+case "$stale" in *'"systemMessage"'*'Installation of v1.42.4 failed'*) : ;; *) exit 1 ;; esac
+rm failed/bin/.install.lock/.owner.reused/pid failed/bin/.install.lock/.owner.reused/heartbeat
+rmdir failed/bin/.install.lock/.owner.reused failed/bin/.install.lock
 # Source actual installer functions, substituting local download/OS integration
 # seams; execute the real main flow and real venv setup on both main branches.
 sed '$d' "$SRC/install.sh" > installer-functions.sh
