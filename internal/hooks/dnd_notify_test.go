@@ -225,12 +225,20 @@ func TestHandleHook_DNDSuppressionDoesNotStartCooldowns(t *testing.T) {
 }
 
 func TestHandleHook_DNDQueuedWebhookStartsTaskCompleteCooldown(t *testing.T) {
-	cfg := dndNotifyConfig(dndMode("suppress"), nil)
+	delay := 5
+	cfg := dndNotifyConfig(dndMode("suppress"), &delay)
 	cfg.Notifications.Webhook.Enabled = true
 	require.Equal(t, 12, cfg.GetSuppressQuestionAfterTaskCompleteSeconds())
 
 	handler, mockNotif, mockWH := newTestHandler(t, cfg)
 	stubDoNotDisturb(t, true)
+	restoreSleep := sleepFunc
+	sleepFunc = func(time.Duration) {
+		suppress, err := handler.stateMgr.ShouldSuppressQuestion("test-dnd-webhook-cooldown", cfg.GetSuppressQuestionAfterTaskCompleteSeconds())
+		require.NoError(t, err)
+		assert.True(t, suppress, "webhook delivery starts cooldown before desktop delay")
+	}
+	defer func() { sleepFunc = restoreSleep }()
 
 	const sessionID = "test-dnd-webhook-cooldown"
 	transcriptPath := createTempTranscript(t, buildTranscriptWithTools([]string{"Write"}, 300))
