@@ -520,7 +520,7 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 			final = p.Stop.AssistantMessage
 		}
 		if strings.TrimSpace(final) != "" {
-			stopHash = fmt.Sprintf("%x", sha256.Sum256([]byte(strings.TrimSpace(final))))
+			stopHash = claudeStopPayloadHash(final, jsonl.GetLastUserTimestamp(parsedMessages))
 		}
 	}
 	bench.Elapsed("message.generate")
@@ -753,6 +753,14 @@ func (h *Handler) fallbackClaudeStop(status analyzer.Status, message string) (an
 	}}
 	body, _ := summary.GenerateFromMessagesStructured(synthetic, status, h.cfg)
 	return status, &TurnInsight{Body: body}
+}
+
+// The user timestamp distinguishes separate turns with identical replies.
+// It is already present when a normal Claude transcript has reached Stop;
+// empty is used for no-session-persistence turns without a transcript.
+func claudeStopPayloadHash(final, userTimestamp string) string {
+	material := userTimestamp + "\x00" + strings.TrimSpace(final)
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(material)))
 }
 
 // generateMessage generates a notification body and action summary.

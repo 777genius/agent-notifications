@@ -165,6 +165,16 @@ func TestClaudeStopKeepsCrossHookContentDedup(t *testing.T) {
 	}
 }
 
+func TestClaudeStopPayloadHashSeparatesTurns(t *testing.T) {
+	first := claudeStopPayloadHash("Done.", "2026-09-24T12:00:00Z")
+	if first != claudeStopPayloadHash("Done.", "2026-09-24T12:00:00Z") {
+		t.Fatal("same turn did not produce stable replay identity")
+	}
+	if first == claudeStopPayloadHash("Done.", "2026-09-24T12:00:01Z") {
+		t.Fatal("separate turns with identical replies shared replay identity")
+	}
+}
+
 // setTestHome isolates all configuration, metadata and temporary paths.
 func setTestHome(t *testing.T, dir string) {
 	t.Helper()
