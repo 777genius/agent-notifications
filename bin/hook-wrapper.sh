@@ -197,12 +197,14 @@ install_in_progress() {
 wait_for_install_publication() {
     _wait_attempt=0
     while [ "$_wait_attempt" -lt 2 ]; do
+        [ "$IS_WINDOWS" = 1 ] && detect_windows_binary
         binary_ok && return 0
         install_in_progress && return 0
         [ -d "$SCRIPT_DIR/.install.lock" ] && [ ! -L "$SCRIPT_DIR/.install.lock" ] || return 1
         sleep 1
         _wait_attempt=$((_wait_attempt + 1))
     done
+    [ "$IS_WINDOWS" = 1 ] && detect_windows_binary
     binary_ok || install_in_progress
 }
 

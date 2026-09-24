@@ -101,6 +101,18 @@ mkdir failed/bin/.install.lock
 abandoned=$(OS=Windows_NT XDG_CACHE_HOME="$ROOT/failed-cache" sh failed/bin/hook-wrapper.sh handle-hook Stop)
 case "$abandoned" in *'"systemMessage"'*'Installation of v1.42.2 failed'*) : ;; *) exit 1 ;; esac
 rmdir failed/bin/.install.lock
+echo '{"version":"1.42.3"}' > failed/.claude-plugin/plugin.json
+mkdir failed/bin/.install.lock
+(
+ sleep 0.2
+ printf '#!/bin/sh\necho ready\n' > failed/bin/claude-notifications-windows-amd64.exe
+ chmod +x failed/bin/claude-notifications-windows-amd64.exe
+ rmdir failed/bin/.install.lock
+) &
+winner_pid=$!
+winner=$(OS=Windows_NT XDG_CACHE_HOME="$ROOT/failed-cache" sh failed/bin/hook-wrapper.sh handle-hook Stop)
+wait "$winner_pid"
+case "$winner" in *'Installation of v1.42.3 failed'*) exit 1 ;; esac
 # Source actual installer functions, substituting local download/OS integration
 # seams; execute the real main flow and real venv setup on both main branches.
 sed '$d' "$SRC/install.sh" > installer-functions.sh
