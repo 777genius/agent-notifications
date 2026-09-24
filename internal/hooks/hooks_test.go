@@ -211,7 +211,15 @@ func TestClaudeStopKeepsLegacyDedupAfterPreToolUse(t *testing.T) {
 	if err := h.stateMgr.Save(previous); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.dedupMgr.ReleaseLock(session, claudeStopTurnLockKey(session, "2026-09-24T12:00:00Z")); err != nil {
+	stopLockKey := claudeStopTurnLockKey(session, "2026-09-24T12:00:00Z")
+	if err := h.dedupMgr.ReleaseLock(stopLockKey, "Stop"); err != nil {
+		t.Fatal(err)
+	}
+	lockAvailable, err := h.dedupMgr.AcquireLock(stopLockKey, "Stop")
+	if err != nil || !lockAvailable {
+		t.Fatalf("Stop event lock was not released: available=%v err=%v", lockAvailable, err)
+	}
+	if err := h.dedupMgr.ReleaseLock(stopLockKey, "Stop"); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.HandleHook("Stop", strings.NewReader(string(payload))); err != nil {
