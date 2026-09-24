@@ -808,8 +808,18 @@ func (s Service) FinishConfirmedIntent(ctx context.Context, req ConfirmedIntent,
 		return nil
 	}
 	consumerID := "reservation-finalizer"
+	finalizerRoot := req.RuntimeRoot
 	if len(snap.Ledger.Consumers) != 0 {
 		consumerID, err = existingConsumerID(snap.Ledger, req.RuntimeRoot)
+		if err != nil && req.RuntimeRoot == snap.Ledger.RuntimeRoot && len(snap.Ledger.Consumers) == 1 {
+			// Claude's hooks may move to a new versioned cache while portable
+			// bindings still retain the old runtime. Uninstalling those bindings
+			// leaves only the relocated hook consumer. The exact pending intent
+			// can then be cleared through that remaining registered runtime.
+			if hooks, ok := snap.Ledger.Consumers["claude-hooks"]; ok && filepath.IsAbs(hooks.RuntimeRoot) {
+				consumerID, finalizerRoot, err = "claude-hooks", hooks.RuntimeRoot, nil
+			}
+		}
 		if err != nil {
 			return err
 		}
@@ -825,7 +835,7 @@ func (s Service) FinishConfirmedIntent(ctx context.Context, req ConfirmedIntent,
 	}
 	gen := snap.Ledger.Generation
 	_, err = installruntime.Commit(ctx, installruntime.Request{
-		ControlRoot: req.ControlRoot, Owner: req.Owner, RuntimeRoot: req.RuntimeRoot,
+		ControlRoot: req.ControlRoot, Owner: req.Owner, RuntimeRoot: finalizerRoot,
 		ConsumerID: consumerID, RefreshOnly: true, ExpectedGeneration: &gen, Reservation: res, ClearReservation: true,
 		Files: files,
 	})
