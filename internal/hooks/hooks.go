@@ -326,13 +326,13 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 
 				// Record that the lead has stopped
 				if err := h.teamStateMgr.RecordLeadStopped(teamInfo.TeamName); err != nil {
-					return fmt.Errorf("Stop: record lead stopped: %w", err)
+					return fmt.Errorf("stop: record lead stopped: %w", err)
 				}
 
 				// Check readiness and claim completion under the same team file lock.
 				claimed, err := h.teamStateMgr.ClaimAllIdle(teamInfo.TeamName, teamInfo.Members)
 				if err != nil {
-					return fmt.Errorf("Stop: claim team completion: %w", err)
+					return fmt.Errorf("stop: claim team completion: %w", err)
 				}
 
 				if !claimed {
@@ -719,13 +719,13 @@ func (h *Handler) handleTeammateIdle(ev Event, p TeammateIdlePayload) error {
 
 	// Record this teammate as idle
 	if err := h.teamStateMgr.RecordTeammateIdle(p.TeamName, p.TeammateName); err != nil {
-		return fmt.Errorf("TeammateIdle: record idle state: %w", err)
+		return fmt.Errorf("teammate idle: record idle state: %w", err)
 	}
 
 	// Check readiness and claim completion under the same team file lock.
 	claimed, err := h.teamStateMgr.ClaimAllIdle(p.TeamName, teamInfo.Members)
 	if err != nil {
-		return fmt.Errorf("TeammateIdle: claim team completion: %w", err)
+		return fmt.Errorf("teammate idle: claim team completion: %w", err)
 	}
 
 	if !claimed {
