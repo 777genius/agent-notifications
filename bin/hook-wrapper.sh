@@ -162,6 +162,38 @@ report_install_failure() {
     fi
 }
 
+install_in_progress() {
+    _lock="$SCRIPT_DIR/.install.lock"
+    [ -d "$_lock" ] && [ ! -L "$_lock" ] || return 1
+    _owner=""
+    for _entry in "$_lock"/* "$_lock"/.[!.]* "$_lock"/..?*; do
+        [ -e "$_entry" ] || [ -L "$_entry" ] || continue
+        case "$_entry" in
+            "$_lock"/.owner.*)
+                [ -d "$_entry" ] && [ ! -L "$_entry" ] && [ -z "$_owner" ] || return 1
+                _owner="$_entry"
+                ;;
+            *) return 1 ;;
+        esac
+    done
+    [ -n "$_owner" ] || return 1
+    _metadata_count=0
+    for _entry in "$_owner"/* "$_owner"/.[!.]* "$_owner"/..?*; do
+        [ -e "$_entry" ] || [ -L "$_entry" ] || continue
+        case "$_entry" in
+            "$_owner/pid"|"$_owner/heartbeat")
+                [ -f "$_entry" ] && [ ! -L "$_entry" ] || return 1
+                _metadata_count=$((_metadata_count + 1))
+                ;;
+            *) return 1 ;;
+        esac
+    done
+    [ "$_metadata_count" = 2 ] || return 1
+    IFS= read -r _owner_pid < "$_owner/pid" || return 1
+    case "$_owner_pid" in ''|*[!0-9]*) return 1 ;; esac
+    kill -0 "$_owner_pid" 2>/dev/null
+}
+
 # === Main Logic ===
 
 STAMP_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/claude-notifications-go"
@@ -253,8 +285,8 @@ if [ "$NEED_INSTALL" = 1 ]; then
     fi
     if [ "$INSTALL_FAILED" = 1 ] || ! binary_ok; then
         # Keep update/preflight failures silent while a usable old binary is
-        # retained. A competing hook may still own the install lock.
-        if ! binary_ok && [ ! -d "$SCRIPT_DIR/.install.lock" ]; then
+        # retained. Only a verified live installer suppresses the diagnostic.
+        if ! binary_ok && ! install_in_progress; then
             report_install_failure
         fi
     fi

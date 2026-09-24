@@ -68,10 +68,13 @@ cat > failed/bin/install.sh <<'FAILED_INSTALL'
 exit 7
 FAILED_INSTALL
 chmod +x failed/bin/install.sh
-mkdir failed/bin/.install.lock
+mkdir -p failed/bin/.install.lock/.owner.test
+printf '%s\n' "$$" > failed/bin/.install.lock/.owner.test/pid
+: > failed/bin/.install.lock/.owner.test/heartbeat
 contended=$(OS=Windows_NT XDG_CACHE_HOME="$ROOT/failed-cache" sh failed/bin/hook-wrapper.sh handle-hook Stop)
 [ -z "$contended" ]
-rmdir failed/bin/.install.lock
+rm failed/bin/.install.lock/.owner.test/pid failed/bin/.install.lock/.owner.test/heartbeat
+rmdir failed/bin/.install.lock/.owner.test failed/bin/.install.lock
 first=$(OS=Windows_NT XDG_CACHE_HOME="$ROOT/failed-cache" sh failed/bin/hook-wrapper.sh handle-hook Stop)
 second=$(OS=Windows_NT XDG_CACHE_HOME="$ROOT/failed-cache" sh failed/bin/hook-wrapper.sh handle-hook Stop)
 case "$first" in *'"systemMessage"'*'Installation of v1.42.0 failed'*) : ;; *) exit 1 ;; esac
@@ -79,6 +82,11 @@ case "$first" in *'"systemMessage"'*'Installation of v1.42.0 failed'*) : ;; *) e
 echo '{"version":"1.42.1"}' > failed/.claude-plugin/plugin.json
 third=$(OS=Windows_NT XDG_CACHE_HOME="$ROOT/failed-cache" sh failed/bin/hook-wrapper.sh handle-hook Stop)
 case "$third" in *'"systemMessage"'*'Installation of v1.42.1 failed'*) : ;; *) exit 1 ;; esac
+echo '{"version":"1.42.2"}' > failed/.claude-plugin/plugin.json
+mkdir failed/bin/.install.lock
+abandoned=$(OS=Windows_NT XDG_CACHE_HOME="$ROOT/failed-cache" sh failed/bin/hook-wrapper.sh handle-hook Stop)
+case "$abandoned" in *'"systemMessage"'*'Installation of v1.42.2 failed'*) : ;; *) exit 1 ;; esac
+rmdir failed/bin/.install.lock
 # Source actual installer functions, substituting local download/OS integration
 # seams; execute the real main flow and real venv setup on both main branches.
 sed '$d' "$SRC/install.sh" > installer-functions.sh
