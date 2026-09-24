@@ -879,6 +879,93 @@ func TestPublishConfirmedIntentRecordsTargetsAndClears(t *testing.T) {
 	}
 }
 
+func TestFinishConfirmedIntentAfterClaudeCacheRelocationAndPortableRemoval(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := filepath.Join(root, ".claude", "plugins", "cache", "claude-notifications-go", "claude-notifications-go")
+	oldRoot, newRoot := filepath.Join(cache, "1.45.7"), filepath.Join(cache, "1.45.13")
+	oldPrimary := filepath.Join(oldRoot, "bin", "claude-notifications-linux-amd64")
+	newPrimary := filepath.Join(newRoot, "bin", "claude-notifications-linux-amd64")
+	control := filepath.Join(root, "control")
+	ctx := testCtx(t)
+	owner := "existing-installer"
+	ledger, err := installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: control, RuntimeRoot: oldRoot, Owner: owner, ConsumerID: "claude-hooks",
+		Files: []installruntime.File{{Path: oldPrimary, Data: []byte("old" + installruntime.WriterProtocolMarker), Mode: 0700}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger, err = installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: control, RuntimeRoot: oldRoot, Owner: owner, ConsumerID: "portable:claude",
+		Consumer: installruntime.Consumer{Commands: []string{oldPrimary}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger, err = installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: control, RuntimeRoot: newRoot, Owner: owner, ConsumerID: "claude-hooks",
+		RelocateVersionedCache: true,
+		Files:                  []installruntime.File{{Path: newPrimary, Data: []byte("new" + installruntime.WriterProtocolMarker), Mode: 0700}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ledger.RuntimeRoot != oldRoot || ledger.Consumers["claude-hooks"].RuntimeRoot != newRoot {
+		t.Fatalf("fixture did not retain old runtime: %+v", ledger)
+	}
+	svc := Service{}
+	_, reservation, err := svc.PublishConfirmedIntent(ctx, ConfirmedIntent{
+		ControlRoot: control, RuntimeRoot: oldRoot, Owner: owner, ExpectedGeneration: ledger.Generation,
+		Action: "uninstall", Stage: "confirmed", Targets: []IntentTarget{{Client: "claude", Units: []string{"agent-notify"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: control, RuntimeRoot: oldRoot, Owner: owner, ConsumerID: "portable:claude",
+		RemoveConsumer: true, Reservation: reservation,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.FinishConfirmedIntent(ctx, ConfirmedIntent{ControlRoot: control, RuntimeRoot: filepath.Join(root, "unrelated"), Owner: owner}, reservation); err == nil {
+		t.Fatal("unrelated runtime root finalized the intent")
+	}
+	if err = svc.FinishConfirmedIntent(ctx, ConfirmedIntent{ControlRoot: control, RuntimeRoot: oldRoot, Owner: owner}, reservation); err != nil {
+		t.Fatalf("finish after removing last old-root consumer: %v", err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Ledger.PendingMutation != nil || snap.Ledger.RuntimeRoot != oldRoot ||
+		snap.Ledger.Consumers["claude-hooks"].RuntimeRoot != newRoot {
+		t.Fatalf("cleanup changed relocated hook or left reservation: %+v", snap.Ledger)
+	}
+	if _, err := os.Lstat(IntentPath(control)); !os.IsNotExist(err) {
+		t.Fatalf("cleanup retained intent: %v", err)
+	}
+	_, reinstallReservation, err := svc.PublishConfirmedIntent(ctx, ConfirmedIntent{
+		ControlRoot: control, RuntimeRoot: oldRoot, Owner: owner, ExpectedGeneration: snap.Ledger.Generation,
+		Action: "install", Stage: "confirmed", Targets: []IntentTarget{{Client: "claude", Units: []string{"agent-notify"}}},
+	})
+	if err != nil {
+		t.Fatalf("retained reinstall could not publish intent: %v", err)
+	}
+	if err := svc.PatchIntentReceipt(ctx, control, oldRoot, owner, "claude", "receipt-1"); err != nil {
+		t.Fatalf("retained reinstall could not patch intent: %v", err)
+	}
+	if err := svc.FinishConfirmedIntent(ctx, ConfirmedIntent{ControlRoot: control, RuntimeRoot: oldRoot, Owner: owner}, reinstallReservation); err != nil {
+		t.Fatalf("retained reinstall could not finish intent: %v", err)
+	}
+	intent, err := os.Lstat(IntentPath(control))
+	if err == nil || !os.IsNotExist(err) {
+		t.Fatalf("retained reinstall left intent file: %v %v", intent, err)
+	}
+}
+
 func TestPatchIntentGlobalConfigFreezesLegacyPendingIntent(t *testing.T) {
 	b, ledger := bindingFixture(t)
 	ctx := testCtx(t)

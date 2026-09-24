@@ -566,25 +566,34 @@ func (s Service) publishHandoffReservation(ctx context.Context, req Request, gen
 	return s.publishIntent(ctx, req, gen, "install", "retire-direct", []string{"direct-mcp"})
 }
 
-func existingConsumerID(ledger installruntime.Ledger, runtimeRoot string) (string, error) {
+func intentConsumer(ledger installruntime.Ledger, runtimeRoot string) (string, string, error) {
 	if runtimeRoot == "" {
-		return "", fmt.Errorf("%w: runtime root required", ErrPreflight)
+		return "", "", fmt.Errorf("%w: runtime root required", ErrPreflight)
 	}
 	if consumer, ok := ledger.Consumers["existing"]; ok && (consumer.RuntimeRoot == "" || consumer.RuntimeRoot == runtimeRoot) {
-		return "existing", nil
+		return "existing", runtimeRoot, nil
 	}
 	for id, consumer := range ledger.Consumers {
 		if consumer.RuntimeRoot == runtimeRoot {
-			return id, nil
+			return id, runtimeRoot, nil
+		}
+	}
+	// Claude's hooks may move to a new versioned cache while portable bindings
+	// retain the old ledger root. After the last portable binding is removed,
+	// confirmed-intent publication, patching and finalization may use the sole
+	// remaining hook consumer without changing the ledger's retained root.
+	if runtimeRoot == ledger.RuntimeRoot && len(ledger.Consumers) == 1 {
+		if hooks, ok := ledger.Consumers["claude-hooks"]; ok && filepath.IsAbs(hooks.RuntimeRoot) {
+			return "claude-hooks", hooks.RuntimeRoot, nil
 		}
 	}
 	// A completed last-client uninstall keeps the installation and plugin data,
 	// but leaves no runtime consumer. Its next confirmed install still needs a
 	// durable intent before adding a new consumer.
 	if len(ledger.Consumers) == 0 && ledger.ID != "" && ledger.RuntimeRoot == runtimeRoot {
-		return "reservation-publisher", nil
+		return "reservation-publisher", runtimeRoot, nil
 	}
-	return "", fmt.Errorf("%w: no consumer at runtime root", ErrPreflight)
+	return "", "", fmt.Errorf("%w: no consumer at runtime root", ErrPreflight)
 }
 
 // PublishConfirmedIntent records the confirmed SetupIntent and kernel
@@ -616,7 +625,7 @@ func (s Service) PublishConfirmedIntent(ctx context.Context, req ConfirmedIntent
 		cp := *pending
 		return snap.Ledger, &cp, nil
 	}
-	consumerID, err := existingConsumerID(snap.Ledger, req.RuntimeRoot)
+	consumerID, commitRoot, err := intentConsumer(snap.Ledger, req.RuntimeRoot)
 	if err != nil {
 		return installruntime.Ledger{}, nil, err
 	}
@@ -656,7 +665,7 @@ func (s Service) PublishConfirmedIntent(ctx context.Context, req ConfirmedIntent
 	}
 	gen := snap.Ledger.Generation
 	ledger, err := installruntime.Commit(ctx, installruntime.Request{
-		ControlRoot: req.ControlRoot, Owner: req.Owner, RuntimeRoot: req.RuntimeRoot,
+		ControlRoot: req.ControlRoot, Owner: req.Owner, RuntimeRoot: commitRoot,
 		ConsumerID: consumerID, RefreshOnly: true, ExpectedGeneration: &gen, Reservation: &res,
 		Files: []installruntime.File{{Path: path, Before: before, Data: payload, Mode: 0600}},
 	})
@@ -761,7 +770,7 @@ func (s Service) patchIntent(ctx context.Context, controlRoot, runtimeRoot, owne
 	if err != nil {
 		return err
 	}
-	consumerID, err := existingConsumerID(snap.Ledger, runtimeRoot)
+	consumerID, commitRoot, err := intentConsumer(snap.Ledger, runtimeRoot)
 	if err != nil {
 		return err
 	}
@@ -776,7 +785,7 @@ func (s Service) patchIntent(ctx context.Context, controlRoot, runtimeRoot, owne
 	gen := snap.Ledger.Generation
 	res := *pending
 	_, err = installruntime.Commit(ctx, installruntime.Request{
-		ControlRoot: controlRoot, Owner: owner, RuntimeRoot: runtimeRoot,
+		ControlRoot: controlRoot, Owner: owner, RuntimeRoot: commitRoot,
 		ConsumerID: consumerID, RefreshOnly: true, ExpectedGeneration: &gen, Reservation: &res,
 		Files: []installruntime.File{{Path: path, Before: before, Data: payload, Mode: 0600}},
 	})
@@ -808,8 +817,9 @@ func (s Service) FinishConfirmedIntent(ctx context.Context, req ConfirmedIntent,
 		return nil
 	}
 	consumerID := "reservation-finalizer"
+	commitRoot := req.RuntimeRoot
 	if len(snap.Ledger.Consumers) != 0 {
-		consumerID, err = existingConsumerID(snap.Ledger, req.RuntimeRoot)
+		consumerID, commitRoot, err = intentConsumer(snap.Ledger, req.RuntimeRoot)
 		if err != nil {
 			return err
 		}
@@ -825,7 +835,7 @@ func (s Service) FinishConfirmedIntent(ctx context.Context, req ConfirmedIntent,
 	}
 	gen := snap.Ledger.Generation
 	_, err = installruntime.Commit(ctx, installruntime.Request{
-		ControlRoot: req.ControlRoot, Owner: req.Owner, RuntimeRoot: req.RuntimeRoot,
+		ControlRoot: req.ControlRoot, Owner: req.Owner, RuntimeRoot: commitRoot,
 		ConsumerID: consumerID, RefreshOnly: true, ExpectedGeneration: &gen, Reservation: res, ClearReservation: true,
 		Files: files,
 	})
