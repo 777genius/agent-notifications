@@ -252,12 +252,9 @@ if [ "$NEED_INSTALL" = 1 ]; then
         fi
     fi
     if [ "$INSTALL_FAILED" = 1 ] || ! binary_ok; then
-        # A competing hook may still own the install lock or may already have
-        # published the requested version. Neither is a failed installation.
-        _installed_ver=""
-        binary_ok && _installed_ver=$(get_binary_version)
-        _wanted_ver=$(get_plugin_version)
-        if [ -n "$_wanted_ver" ] && [ "$_installed_ver" != "$_wanted_ver" ] && [ ! -d "$SCRIPT_DIR/.install.lock" ]; then
+        # Keep update/preflight failures silent while a usable old binary is
+        # retained. A competing hook may still own the install lock.
+        if ! binary_ok && [ ! -d "$SCRIPT_DIR/.install.lock" ]; then
             report_install_failure
         fi
     fi
