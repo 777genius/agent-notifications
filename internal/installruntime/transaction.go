@@ -228,7 +228,9 @@ func retainedPortablePrimaryFiles(l Ledger, oldRoot, newRoot, movingID string, s
 		}
 		before, owned := l.Files[command]
 		after, staged := byPath[filepath.Join(newRoot, relative)]
-		if !owned || !before.Exists || before.Link != "" || !staged || after.Remove || after.Link != "" || len(after.Data) == 0 || after.Mode&0111 == 0 {
+		// Windows executable files do not carry POSIX execute bits.
+		executable := after.Mode&0111 != 0 || filepath.Ext(relative) == ".exe"
+		if !owned || !before.Exists || before.Link != "" || !staged || after.Remove || after.Link != "" || len(after.Data) == 0 || !executable {
 			return nil, fmt.Errorf("portable primary cannot be refreshed from the verified stage")
 		}
 		retained[command] = File{Path: command, Before: before, Data: after.Data, Mode: after.Mode}
