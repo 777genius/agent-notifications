@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.45.16] - 2026-09-24
+
+### Fixed
+- Recover an older confirmed uninstall interrupted after portable consumer revocation by verifying the managed projection and historical locator before continuing. Unknown custom paths and foreign artifacts still fail closed ([#215](https://github.com/777genius/agent-notifications/issues/215), [#246](https://github.com/777genius/agent-notifications/pull/246)).
+
 ## [1.45.15] - 2026-09-24
 
 ### Fixed
