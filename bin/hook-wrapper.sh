@@ -135,13 +135,89 @@ get_plugin_version() {
     [ -f "$PLUGIN_JSON" ] && grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' "$PLUGIN_JSON" | head -n 1 || true
 }
 
-# Run install.sh (silent, never fails the script)
+# Run install.sh silently. The caller reports a safe, once-per-version failure.
 run_install() {
-    [ -f "$INSTALL_SCRIPT" ] || return 0
+    [ -f "$INSTALL_SCRIPT" ] || return 1
     # A package rollback must not delegate mutation to a historical writer.
     # This compatibility declaration does not authenticate the package origin.
-    LC_ALL=C grep -aqF 'agent-notifications-managed-writer-protocol-v1' "$INSTALL_SCRIPT" || return 0
-    INSTALL_TARGET_DIR="$SCRIPT_DIR" "$INSTALL_SCRIPT" "$@" >/dev/null 2>&1 || true
+    LC_ALL=C grep -aqF 'agent-notifications-managed-writer-protocol-v1' "$INSTALL_SCRIPT" || return 1
+    INSTALL_TARGET_DIR="$SCRIPT_DIR" "$INSTALL_SCRIPT" "$@" >/dev/null 2>&1
+}
+
+report_install_failure() {
+    # Codex observation hooks must leave both output streams empty.
+    [ "${CN_PRODUCT:-claude}" = "claude" ] || return 0
+    _failed_ver=$(get_plugin_version)
+    [ -n "$_failed_ver" ] || _failed_ver=unknown
+    _failure_stamp="$STAMP_DIR/install-failed-$_failed_ver"
+    mkdir -p "$STAMP_DIR" >/dev/null 2>&1 || true
+    # mkdir is atomic across concurrent hooks. If cache writes fail, still
+    # report the failure rather than hiding a missing runtime indefinitely.
+    if mkdir "$_failure_stamp" 2>/dev/null || [ ! -d "$_failure_stamp" ]; then
+        if ! binary_ok; then
+            printf '{"systemMessage":"[claude-notifications] Installation of v%s failed. Run bin/install.sh manually for details."}\n' "$_failed_ver"
+        else
+            printf '[claude-notifications] Installation of v%s failed. Run bin/install.sh manually for details.\n' "$_failed_ver" >&2
+        fi
+    fi
+}
+
+path_recent() {
+    _mtime=$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null) || return 1
+    _now=$(date +%s) || return 1
+    case "$_mtime" in ''|*[!0-9]*) return 1 ;; esac
+    case "$_now" in ''|*[!0-9]*) return 1 ;; esac
+    _age=$((_now - _mtime))
+    [ "$_age" -ge 0 ] && [ "$_age" -le "$2" ]
+}
+
+install_in_progress() {
+    _lock="$SCRIPT_DIR/.install.lock"
+    [ -d "$_lock" ] && [ ! -L "$_lock" ] || return 1
+    _owner=""
+    for _entry in "$_lock"/* "$_lock"/.[!.]* "$_lock"/..?*; do
+        [ -e "$_entry" ] || [ -L "$_entry" ] || continue
+        case "$_entry" in
+            "$_lock"/.owner.*)
+                [ -d "$_entry" ] && [ ! -L "$_entry" ] && [ -z "$_owner" ] || return 1
+                _owner="$_entry"
+                ;;
+            *) return 1 ;;
+        esac
+    done
+    [ -n "$_owner" ] || return 1
+    _metadata_count=0
+    for _entry in "$_owner"/* "$_owner"/.[!.]* "$_owner"/..?*; do
+        [ -e "$_entry" ] || [ -L "$_entry" ] || continue
+        case "$_entry" in
+            "$_owner/pid"|"$_owner/heartbeat")
+                [ -f "$_entry" ] && [ ! -L "$_entry" ] || return 1
+                _metadata_count=$((_metadata_count + 1))
+                ;;
+            *) return 1 ;;
+        esac
+    done
+    [ "$_metadata_count" = 2 ] || return 1
+    IFS= read -r _owner_pid < "$_owner/pid" || return 1
+    case "$_owner_pid" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$_owner_pid" -gt 0 ] 2>/dev/null &&
+        path_recent "$_owner/heartbeat" 120 &&
+        kill -0 "$_owner_pid" 2>/dev/null
+}
+
+wait_for_install_publication() {
+    _wait_attempt=0
+    while [ "$_wait_attempt" -lt 2 ]; do
+        [ "$IS_WINDOWS" = 1 ] && detect_windows_binary
+        binary_ok && return 0
+        install_in_progress && return 0
+        [ -d "$SCRIPT_DIR/.install.lock" ] && [ ! -L "$SCRIPT_DIR/.install.lock" ] || return 1
+        path_recent "$SCRIPT_DIR/.install.lock" 2 || return 1
+        sleep 1
+        _wait_attempt=$((_wait_attempt + 1))
+    done
+    [ "$IS_WINDOWS" = 1 ] && detect_windows_binary
+    binary_ok || install_in_progress
 }
 
 # === Main Logic ===
@@ -192,10 +268,11 @@ fi
 
 # Install if needed and notify user
 if [ "$NEED_INSTALL" = 1 ]; then
+    INSTALL_FAILED=0
     if [ "$NEED_FORCE" = 1 ]; then
-        run_install --force
+        run_install --force || INSTALL_FAILED=1
     else
-        run_install
+        run_install || INSTALL_FAILED=1
     fi
 
     # On Windows, re-detect binary after install to prefer .exe over .bat
@@ -230,6 +307,13 @@ if [ "$NEED_INSTALL" = 1 ]; then
                 #     printf '{"systemMessage":"[claude-notifications] Installed v%s"}\n' "$NEW_VER"
                 # fi
             fi
+        fi
+    fi
+    if [ "$INSTALL_FAILED" = 1 ] || ! binary_ok; then
+        # Keep update/preflight failures silent while a usable old binary is
+        # retained. Only a verified live installer suppresses the diagnostic.
+        if ! binary_ok && ! wait_for_install_publication; then
+            report_install_failure
         fi
     fi
 fi

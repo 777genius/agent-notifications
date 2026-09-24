@@ -53,8 +53,76 @@ sh codex/bin/codex-hook-wrapper.sh handle-hook Stop --product codex
 echo 1.41.0 > codex/bin/version
 printf '#!/bin/sh\nexit 1\n' > codex/bin/install.sh
 before=$(wc -l < delivered)
-sh codex/bin/codex-hook-wrapper.sh handle-hook Stop --product codex
+sh codex/bin/codex-hook-wrapper.sh handle-hook Stop --product codex > codex-failed.stdout 2> codex-failed.stderr
+[ ! -s codex-failed.stdout ]
+[ ! -s codex-failed.stderr ]
 [ "$(wc -l < delivered)" = "$before" ]
+# An absent Windows binary and a failed lazy install must notify once per
+# package version; repeated hooks must stay quiet until the version changes.
+mkdir -p failed/bin failed/.claude-plugin
+cp "$SRC/hook-wrapper.sh" failed/bin/hook-wrapper.sh
+echo '{"version":"1.42.0"}' > failed/.claude-plugin/plugin.json
+cat > failed/bin/install.sh <<'FAILED_INSTALL'
+#!/bin/sh
+# agent-notifications-managed-writer-protocol-v1
+exit 7
+FAILED_INSTALL
+chmod +x failed/bin/install.sh
+mkdir -p failed/bin/.install.lock/.owner.test
+printf '%s\n' "$$" > failed/bin/.install.lock/.owner.test/pid
+: > failed/bin/.install.lock/.owner.test/heartbeat
+contended=$(OS=Windows_NT XDG_CACHE_HOME="$ROOT/failed-cache" sh failed/bin/hook-wrapper.sh handle-hook Stop)
+[ -z "$contended" ]
+rm failed/bin/.install.lock/.owner.test/pid failed/bin/.install.lock/.owner.test/heartbeat
+rmdir failed/bin/.install.lock/.owner.test failed/bin/.install.lock
+# A competing installer can publish the lock directory before its owner.
+mkdir failed/bin/.install.lock
+(
+ sleep 0.2
+ mkdir failed/bin/.install.lock/.owner.publishing
+ printf '%s\n' "$$" > failed/bin/.install.lock/.owner.publishing/pid
+ : > failed/bin/.install.lock/.owner.publishing/heartbeat
+) &
+publishing_pid=$!
+publishing=$(OS=Windows_NT XDG_CACHE_HOME="$ROOT/failed-cache" sh failed/bin/hook-wrapper.sh handle-hook Stop)
+wait "$publishing_pid"
+[ -z "$publishing" ]
+rm failed/bin/.install.lock/.owner.publishing/pid failed/bin/.install.lock/.owner.publishing/heartbeat
+rmdir failed/bin/.install.lock/.owner.publishing failed/bin/.install.lock
+first=$(OS=Windows_NT XDG_CACHE_HOME="$ROOT/failed-cache" sh failed/bin/hook-wrapper.sh handle-hook Stop)
+second=$(OS=Windows_NT XDG_CACHE_HOME="$ROOT/failed-cache" sh failed/bin/hook-wrapper.sh handle-hook Stop)
+case "$first" in *'"systemMessage"'*'Installation of v1.42.0 failed'*) : ;; *) exit 1 ;; esac
+[ -z "$second" ]
+echo '{"version":"1.42.1"}' > failed/.claude-plugin/plugin.json
+third=$(OS=Windows_NT XDG_CACHE_HOME="$ROOT/failed-cache" sh failed/bin/hook-wrapper.sh handle-hook Stop)
+case "$third" in *'"systemMessage"'*'Installation of v1.42.1 failed'*) : ;; *) exit 1 ;; esac
+echo '{"version":"1.42.2"}' > failed/.claude-plugin/plugin.json
+mkdir failed/bin/.install.lock
+abandoned=$(OS=Windows_NT XDG_CACHE_HOME="$ROOT/failed-cache" sh failed/bin/hook-wrapper.sh handle-hook Stop)
+case "$abandoned" in *'"systemMessage"'*'Installation of v1.42.2 failed'*) : ;; *) exit 1 ;; esac
+rmdir failed/bin/.install.lock
+echo '{"version":"1.42.3"}' > failed/.claude-plugin/plugin.json
+mkdir failed/bin/.install.lock
+(
+ sleep 0.2
+ printf '#!/bin/sh\necho ready\n' > failed/bin/claude-notifications-windows-amd64.exe
+ chmod +x failed/bin/claude-notifications-windows-amd64.exe
+ rmdir failed/bin/.install.lock
+) &
+winner_pid=$!
+winner=$(OS=Windows_NT XDG_CACHE_HOME="$ROOT/failed-cache" sh failed/bin/hook-wrapper.sh handle-hook Stop)
+wait "$winner_pid"
+case "$winner" in *'Installation of v1.42.3 failed'*) exit 1 ;; esac
+rm failed/bin/claude-notifications-windows-amd64.exe
+echo '{"version":"1.42.4"}' > failed/.claude-plugin/plugin.json
+mkdir -p failed/bin/.install.lock/.owner.reused
+printf '%s\n' "$$" > failed/bin/.install.lock/.owner.reused/pid
+: > failed/bin/.install.lock/.owner.reused/heartbeat
+touch -t 200001010000 failed/bin/.install.lock/.owner.reused/heartbeat
+stale=$(OS=Windows_NT XDG_CACHE_HOME="$ROOT/failed-cache" sh failed/bin/hook-wrapper.sh handle-hook Stop)
+case "$stale" in *'"systemMessage"'*'Installation of v1.42.4 failed'*) : ;; *) exit 1 ;; esac
+rm failed/bin/.install.lock/.owner.reused/pid failed/bin/.install.lock/.owner.reused/heartbeat
+rmdir failed/bin/.install.lock/.owner.reused failed/bin/.install.lock
 # Source actual installer functions, substituting local download/OS integration
 # seams; execute the real main flow and real venv setup on both main branches.
 sed '$d' "$SRC/install.sh" > installer-functions.sh

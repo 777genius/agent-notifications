@@ -1626,6 +1626,23 @@ test_windows_native_hooks_real_exec_launch() {
         native_appdata=$(cygpath -w "$appdata_dir")
     fi
 
+    # Codex elevated sandbox adds an inheritable read/execute ACE under the
+    # user profile. Exercise the complete managed install with that ACL.
+    local native_plugin
+    native_plugin="$plugin_root"
+    if command -v cygpath >/dev/null 2>&1; then
+        native_plugin=$(cygpath -w "$plugin_root")
+    fi
+    if ! MSYS_NO_PATHCONV=1 icacls "$native_plugin" /grant '*S-1-1-0:(OI)(CI)(RX)' >/dev/null ||
+       ! MSYS_NO_PATHCONV=1 icacls "$native_appdata" /grant '*S-1-1-0:(OI)(CI)(RX)' >/dev/null; then
+        fail_test "Add inherited read-only Windows ACE" "icacls failed"
+        cleanup_test_dir
+        return
+    fi
+    local bin_acl
+    bin_acl=$(MSYS_NO_PATHCONV=1 icacls "$native_target")
+    assert_contains "$bin_acl" '\(I\).*\(RX\)' "managed bin inherits the read-only ACE"
+
     local register_out
     if ! register_out=$(APPDATA="$native_appdata" "$exe_path" internal-install-runtime --stage "$native_stage" --target "$native_target" --entry "claude-notifications-windows-amd64.exe" 2>&1); then
         fail_test "Register managed Windows runtime" "$register_out"

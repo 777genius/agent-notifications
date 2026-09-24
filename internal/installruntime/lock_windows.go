@@ -6,6 +6,8 @@ import (
 	"golang.org/x/sys/windows"
 	"os"
 	"unsafe"
+
+	"github.com/777genius/agent-notifications/internal/windowsacl"
 )
 
 func tryLock(f *os.File) (bool, error) {
@@ -23,10 +25,25 @@ func openLock(path string, create bool) (*os.File, error) {
 		return nil, err
 	}
 	disposition := uint32(windows.OPEN_EXISTING)
+	access := uint32(windows.GENERIC_READ | windows.GENERIC_WRITE)
+	var security *windows.SecurityAttributes
 	if create {
 		disposition = windows.OPEN_ALWAYS
+		access |= windows.WRITE_DAC | windows.WRITE_OWNER
+		user, err := windows.GetCurrentProcessToken().GetTokenUser()
+		if err != nil {
+			return nil, err
+		}
+		sd, err := windows.SecurityDescriptorFromString("D:P(A;;FA;;;" + user.User.Sid.String() + ")(A;;FA;;;SY)(A;;FA;;;BA)")
+		if err != nil {
+			return nil, err
+		}
+		security = &windows.SecurityAttributes{
+			Length:             uint32(unsafe.Sizeof(windows.SecurityAttributes{})),
+			SecurityDescriptor: sd,
+		}
 	}
-	h, err := windows.CreateFile(name, windows.GENERIC_READ|windows.GENERIC_WRITE, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, disposition, windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
+	h, err := windows.CreateFile(name, access, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, security, disposition, windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -43,6 +60,12 @@ func openLock(path string, create bool) (*os.File, error) {
 	if err := privateWindowsHandle(h); err != nil {
 		f.Close()
 		return nil, err
+	}
+	if create {
+		if err := restrictPrivateWindowsHandle(h); err != nil {
+			f.Close()
+			return nil, err
+		}
 	}
 	return f, nil
 }
@@ -95,9 +118,6 @@ func privateWindowsHandle(h windows.Handle) error {
 		if err := windows.GetAce(acl, i, &ace); err != nil {
 			return err
 		}
-		if ace.Header.AceFlags&windows.INHERIT_ONLY_ACE != 0 {
-			continue
-		}
 		if ace.Header.AceType == windows.ACCESS_DENIED_ACE_TYPE {
 			continue
 		}
@@ -105,7 +125,7 @@ func privateWindowsHandle(h windows.Handle) error {
 			return fmt.Errorf("unsupported managed inode ACL")
 		}
 		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
-		if ace.Mask != 0 && !sid.Equals(user.User.Sid) && !sid.IsWellKnown(windows.WinLocalSystemSid) && !sid.IsWellKnown(windows.WinBuiltinAdministratorsSid) {
+		if !sid.Equals(user.User.Sid) && !sid.IsWellKnown(windows.WinLocalSystemSid) && !sid.IsWellKnown(windows.WinBuiltinAdministratorsSid) && !windowsacl.AllowsForeignReadOnly(ace.Mask) {
 			return fmt.Errorf("managed inode DACL grants foreign access")
 		}
 	}
