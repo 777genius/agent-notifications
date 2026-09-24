@@ -284,6 +284,36 @@ func ExactLocator(b Binding) (bool, error) {
 	}
 	return true, nil
 }
+
+// ReadLocatorForRecovery reads a private locator without requiring its kernel
+// consumer. Only setup may use this after a confirmed uninstall revoked that
+// consumer. The selector must still name the canonical binding bytes.
+func ReadLocatorForRecovery(dataRoot, name string) (Binding, bool, error) {
+	if !selector.MatchString(name) {
+		return Binding{}, false, ErrInvalid
+	}
+	raw, err := readPrivate(dataRoot, name)
+	if os.IsNotExist(err) {
+		return Binding{}, false, nil
+	}
+	if err != nil {
+		return Binding{}, false, ErrInvalid
+	}
+	b, err := decode(raw)
+	if err != nil {
+		return Binding{}, false, ErrInvalid
+	}
+	wantName, err := b.Filename()
+	if err != nil || wantName != name {
+		return Binding{}, false, ErrInvalid
+	}
+	_, _, canonical, err := b.Registration()
+	if err != nil || !bytes.Equal(raw, canonical) {
+		return Binding{}, false, ErrInvalid
+	}
+	return b, true, nil
+}
+
 func ParseArgs(args []string) (string, error) {
 	if len(args) != 2 || args[0] != "--locator" || !selector.MatchString(args[1]) {
 		return "", ErrInvalid

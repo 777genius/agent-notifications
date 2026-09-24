@@ -5,12 +5,13 @@ package portable
 import (
 	"context"
 	"encoding/json"
-	"github.com/777genius/agent-notifications/internal/installruntime"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/777genius/agent-notifications/internal/installruntime"
 )
 
 func fixture(t *testing.T) (Binding, string, installruntime.Request) {
@@ -286,6 +287,55 @@ func TestBoundedArgsAndCancellation(t *testing.T) {
 	cancel()
 	if _, e := Acquire(ctx, b.DataRoot, name); e == nil {
 		t.Fatal("cancelled launch")
+	}
+}
+
+func TestReadLocatorForRecoveryRequiresCanonicalPrivateBytes(t *testing.T) {
+	for _, scenario := range []string{"present", "absent", "foreign-bytes", "symlink", "hardlink", "public-mode"} {
+		t.Run(scenario, func(t *testing.T) {
+			b, name, _ := fixture(t)
+			path := filepath.Join(b.DataRoot, name)
+			switch scenario {
+			case "absent":
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+			case "foreign-bytes":
+				if err := os.WriteFile(path, []byte("{}"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "symlink":
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(filepath.Join(b.DataRoot, "foreign"), path); err != nil {
+					t.Fatal(err)
+				}
+			case "hardlink":
+				if err := os.Link(path, filepath.Join(b.DataRoot, "another-link")); err != nil {
+					t.Fatal(err)
+				}
+			case "public-mode":
+				if err := os.Chmod(path, 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, found, err := ReadLocatorForRecovery(b.DataRoot, name)
+			switch scenario {
+			case "present":
+				if err != nil || !found || got != b {
+					t.Fatalf("valid locator rejected: %+v %v %v", got, found, err)
+				}
+			case "absent":
+				if err != nil || found {
+					t.Fatalf("absent locator not distinguished: %v %v", found, err)
+				}
+			default:
+				if err == nil || found {
+					t.Fatalf("unsafe locator accepted: %v %v", found, err)
+				}
+			}
+		})
 	}
 }
 

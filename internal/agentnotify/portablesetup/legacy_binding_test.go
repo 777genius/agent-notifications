@@ -415,6 +415,25 @@ func TestHistoricalResolverRejectsMalformedConsumerAndReceipt(t *testing.T) {
 }
 
 func TestMaterializerRemoveGroupRetriesAfterBothRevokes(t *testing.T) {
+	for _, scenario := range []struct {
+		name         string
+		legacyIntent bool
+		emptyReceipt bool
+		revokes      int
+	}{
+		{name: "frozen-both-revoked", revokes: 2},
+		{name: "legacy-both-revoked", legacyIntent: true, revokes: 2},
+		{name: "legacy-one-revoked", legacyIntent: true, revokes: 1},
+		{name: "legacy-empty-receipt", legacyIntent: true, emptyReceipt: true, revokes: 2},
+		{name: "legacy-empty-receipt-one-revoked", legacyIntent: true, emptyReceipt: true, revokes: 1},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			testMaterializerRemoveGroupRetry(t, scenario.legacyIntent, scenario.emptyReceipt, scenario.revokes)
+		})
+	}
+}
+
+func testMaterializerRemoveGroupRetry(t *testing.T, legacyIntent, emptyReceipt bool, revokes int) {
 	old, ledger := legacyFixture(t)
 	probe := buildProbe(t)
 	root := filepath.Dir(old.ControlRoot)
@@ -477,16 +496,23 @@ func TestMaterializerRemoveGroupRetriesAfterBothRevokes(t *testing.T) {
 		if receiptID == "" {
 			t.Fatalf("%s data receipt missing", b.Integration)
 		}
-		key, _, _, err := b.Registration()
-		if err != nil {
-			t.Fatal(err)
-		}
-		copy := b
-		targets = append(targets, IntentTarget{
+		target := IntentTarget{
 			Client: string(b.Integration), InstallationID: b.InstallationID,
 			BindingID: b.BindingID, DataReceiptID: receiptID, Profile: profiles[b.Integration],
-			OldConsumerKey: key, OldBinding: &copy, Units: []string{"direct-mcp"},
-		})
+			Units: []string{"direct-mcp"},
+		}
+		if !legacyIntent {
+			key, _, _, err := b.Registration()
+			if err != nil {
+				t.Fatal(err)
+			}
+			copy := b
+			target.OldConsumerKey, target.OldBinding = key, &copy
+		}
+		if emptyReceipt {
+			target.DataReceiptID = ""
+		}
+		targets = append(targets, target)
 	}
 	confirmed, reservation, err := (Service{}).PublishConfirmedIntent(testCtx(t), ConfirmedIntent{
 		ControlRoot: old.ControlRoot, RuntimeRoot: old.RuntimeRoot, Owner: old.Owner,
@@ -518,11 +544,17 @@ func TestMaterializerRemoveGroupRetriesAfterBothRevokes(t *testing.T) {
 	if err != nil || !portable.ExactCommittedBinding(snap.Ledger, installed[0]) {
 		t.Fatalf("first consumer changed before second locator validation: %v", err)
 	}
+	if legacyIntent {
+		intent, err := ReadIntent(old.ControlRoot)
+		if err != nil || intent.Targets[0].OldBinding != nil {
+			t.Fatalf("refused group mutated legacy intent: %+v %v", intent.Targets, err)
+		}
+	}
 	if err := os.WriteFile(locatorPath, original, 0600); err != nil {
 		t.Fatal(err)
 	}
 	gen := confirmed.Generation
-	for _, b := range installed {
+	for _, b := range installed[:revokes] {
 		if err := (Service{}).RevokeBinding(testCtx(t), Request{
 			Binding: b, ExpectedGeneration: gen, Reservation: reservation,
 		}); err != nil {
@@ -637,6 +669,210 @@ func TestMaterializerRemoveRetriesAfterRevoke(t *testing.T) {
 	}
 	if present, err := portable.ExactLocator(b); err != nil || present {
 		t.Fatalf("old locator survived resumed remove: %v %v", present, err)
+	}
+}
+
+func TestMaterializerRemoveRecoversLegacyUninstallWithoutFrozenBinding(t *testing.T) {
+	for _, integration := range []portable.Integration{portable.Claude, portable.Codex} {
+		for _, missingLocator := range []bool{false, true} {
+			name := string(integration) + "/present"
+			if missingLocator {
+				name = string(integration) + "/absent"
+			}
+			t.Run(name, func(t *testing.T) {
+				testMaterializerRemoveRecoversLegacyUninstall(t, integration, legacyUninstallOptions{missingLocator: missingLocator})
+			})
+		}
+	}
+}
+
+func TestMaterializerRemoveRejectsMissingCustomLegacyLocator(t *testing.T) {
+	testMaterializerRemoveRecoversLegacyUninstall(t, portable.Claude, legacyUninstallOptions{missingLocator: true, customIdentity: true})
+}
+
+func TestMaterializerRemoveRejectsModifiedLegacyProjection(t *testing.T) {
+	for _, integration := range []portable.Integration{portable.Claude, portable.Codex} {
+		for _, mutation := range []string{"trailing-data", "malformed-json", "duplicate-key"} {
+			t.Run(string(integration)+"/"+mutation, func(t *testing.T) {
+				testMaterializerRemoveRecoversLegacyUninstall(t, integration, legacyUninstallOptions{projectionMutation: mutation})
+			})
+		}
+	}
+}
+
+func TestMaterializerRemoveRejectsForeignLegacyLocator(t *testing.T) {
+	for _, integration := range []portable.Integration{portable.Claude, portable.Codex} {
+		t.Run(string(integration), func(t *testing.T) {
+			testMaterializerRemoveRecoversLegacyUninstall(t, integration, legacyUninstallOptions{foreignLocator: true})
+		})
+	}
+}
+
+func TestMaterializerRemoveRecoversLegacyIntentWithoutReceipt(t *testing.T) {
+	for _, integration := range []portable.Integration{portable.Claude, portable.Codex} {
+		for _, revoked := range []bool{false, true} {
+			name := string(integration) + "/live"
+			if revoked {
+				name = string(integration) + "/revoked"
+			}
+			t.Run(name, func(t *testing.T) {
+				testMaterializerRemoveRecoversLegacyUninstall(t, integration, legacyUninstallOptions{
+					missingLocator: revoked, emptyReceipt: true, leaveConsumer: !revoked,
+				})
+			})
+		}
+	}
+}
+
+type legacyUninstallOptions struct {
+	missingLocator     bool
+	customIdentity     bool
+	emptyReceipt       bool
+	leaveConsumer      bool
+	projectionMutation string
+	foreignLocator     bool
+}
+
+func testMaterializerRemoveRecoversLegacyUninstall(t *testing.T, integration portable.Integration, opts legacyUninstallOptions) {
+	old, ledger := legacyFixture(t)
+	probe := buildProbe(t)
+	root := filepath.Dir(old.ControlRoot)
+	pkg := filepath.Join(root, "package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(root, "profiles", string(integration))
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	uapRoot := filepath.Join(root, "uap")
+	mat, err := NewMaterializer(UAPRoots{
+		StateFile:        filepath.Join(uapRoot, "state", "state-v2.json"),
+		LockFile:         filepath.Join(uapRoot, "state", "mutation.lock"),
+		OperationsDir:    filepath.Join(uapRoot, "state", "operations"),
+		PluginDataBase:   filepath.Join(uapRoot, "plugin-data"),
+		ManagedRoot:      filepath.Join(uapRoot, "managed"),
+		HelperExecutable: probe,
+		ClaudeRunner:     listingRunner{configRoot: config},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := Identity{
+		InstallationID: "00000000-0000-4000-8000-0000000000ad", ComponentID: old.ComponentID, Owner: old.Owner,
+		ScopeRoot: old.ScopeRoot, ControlRoot: old.ControlRoot, GlobalConfig: old.GlobalConfig,
+		RuntimeRoot: old.RuntimeRoot, Primary: old.Primary,
+	}
+	if opts.customIdentity {
+		id.GlobalConfig = filepath.Join(root, "custom", "config.json")
+		if err := os.MkdirAll(filepath.Dir(id.GlobalConfig), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b, err := mat.Install(testCtx(t), MaterializeRequest{
+		Identity: id, Integration: integration, ExpectedGeneration: ledger.Generation,
+		PackageRoot: pkg, ClientConfigRoot: config, ClientExecutable: probe, OperationID: "legacy-uninstall-install",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := mat.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	installation, ok := findInstallation(state, id.InstallationID)
+	if !ok {
+		t.Fatal("UAP installation missing")
+	}
+	var client domain.ClientBinding
+	for _, candidate := range installation.Clients {
+		if candidate.ClientID == string(integration) {
+			client = candidate
+		}
+	}
+	if client.DataReceiptID == "" {
+		t.Fatal("UAP client receipt missing")
+	}
+	intentReceipt := client.DataReceiptID
+	if opts.emptyReceipt {
+		intentReceipt = ""
+	}
+	confirmed, reservation, err := (Service{}).PublishConfirmedIntent(testCtx(t), ConfirmedIntent{
+		ControlRoot: b.ControlRoot, RuntimeRoot: b.RuntimeRoot, Owner: b.Owner, Action: "uninstall",
+		Targets: []IntentTarget{{
+			Client: string(integration), InstallationID: b.InstallationID, BindingID: b.BindingID,
+			DataReceiptID: intentReceipt, Profile: config,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _, _, err := b.Registration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.leaveConsumer {
+		gen := confirmed.Generation
+		if _, err := installruntime.Commit(testCtx(t), installruntime.Request{
+			ControlRoot: b.ControlRoot, RuntimeRoot: b.RuntimeRoot, Owner: b.Owner,
+			ConsumerID: key, RemoveConsumer: true, ExpectedGeneration: &gen, Reservation: reservation,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if opts.missingLocator {
+		if err := portable.RevokeLocator(b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if opts.foreignLocator {
+		name, err := b.Filename()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(b.DataRoot, name), []byte(`{"foreign":true}`), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if opts.projectionMutation != "" {
+		path := filepath.Join(client.TargetLocator, ".mcp.json")
+		file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload := map[string]string{
+			"trailing-data": "\n", "malformed-json": "{", "duplicate-key": `,"mcpServers":{}}`,
+		}[opts.projectionMutation]
+		_, writeErr := file.Write([]byte(payload))
+		closeErr := file.Close()
+		if writeErr != nil || closeErr != nil {
+			t.Fatalf("tamper projection: %v %v", writeErr, closeErr)
+		}
+	}
+	id.GlobalConfig = filepath.Join(root, "explicit-config", "config.json")
+	id.Primary = portable.PlatformPrimary()
+	snap, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removeErr := mat.Remove(testCtx(t), MaterializeRequest{
+		Identity: id, Integration: integration, ExpectedGeneration: snap.Ledger.Generation,
+		ClientConfigRoot: config, ClientExecutable: probe, ExternalUninstalled: integration == portable.Codex,
+		OperationID: "legacy-uninstall-retry",
+	})
+	if opts.customIdentity || opts.projectionMutation != "" || opts.foreignLocator {
+		if removeErr == nil || (opts.customIdentity && !errors.Is(removeErr, ErrPreflight)) {
+			t.Fatalf("unsafe legacy recovery accepted: %v", removeErr)
+		}
+		intent, err := ReadIntent(b.ControlRoot)
+		if err != nil || intent.Targets[0].OldBinding != nil {
+			t.Fatalf("refused custom recovery mutated intent: %+v %v", intent.Targets, err)
+		}
+		return
+	}
+	if removeErr != nil {
+		t.Fatalf("legacy uninstall retry: %v", removeErr)
+	}
+	if present, err := portable.ExactLocator(b); err != nil || present {
+		t.Fatalf("legacy locator remains after retry: %v %v", present, err)
 	}
 }
 

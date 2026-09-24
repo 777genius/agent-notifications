@@ -741,7 +741,16 @@ func (s Service) patchIntent(ctx context.Context, controlRoot, runtimeRoot, owne
 		return err
 	}
 	defer release()
-	if _, err = installruntime.Recover(ctx, controlRoot); err != nil {
+	return s.patchIntentLocked(ctx, controlRoot, runtimeRoot, owner, mutate)
+}
+
+// patchIntentLocked is called only while the coordinator lease is held by the
+// enclosing materializer. It avoids reacquiring that lease during recovery.
+func (s Service) patchIntentLocked(ctx context.Context, controlRoot, runtimeRoot, owner string, mutate func(*Intent, installruntime.Ledger) (bool, error)) error {
+	if ctx == nil || controlRoot == "" || mutate == nil {
+		return ErrPreflight
+	}
+	if _, err := installruntime.Recover(ctx, controlRoot); err != nil {
 		return err
 	}
 	snap, err := installruntime.ReadInstalledSnapshot(controlRoot)
