@@ -205,19 +205,29 @@ install_in_progress() {
         kill -0 "$_owner_pid" 2>/dev/null
 }
 
+target_binary_ok() {
+    [ "$IS_WINDOWS" = 1 ] && detect_windows_binary
+    binary_ok || return 1
+    [ -z "$TARGET_VER" ] || [ "$(get_binary_version)" = "$TARGET_VER" ]
+}
+
 wait_for_install_publication() {
     _wait_attempt=0
     while [ "$_wait_attempt" -lt 2 ]; do
-        [ "$IS_WINDOWS" = 1 ] && detect_windows_binary
-        binary_ok && return 0
+        target_binary_ok && return 0
         install_in_progress && return 0
-        [ -d "$SCRIPT_DIR/.install.lock" ] && [ ! -L "$SCRIPT_DIR/.install.lock" ] || return 1
-        path_recent "$SCRIPT_DIR/.install.lock" 2 || return 1
+        if [ -d "$SCRIPT_DIR/.install.lock" ] && [ ! -L "$SCRIPT_DIR/.install.lock" ]; then
+            path_recent "$SCRIPT_DIR/.install.lock" 2 || return 1
+        else
+            # Removing the lock updates its parent directory. Publication may
+            # still be in flight, so recheck after this lock-free gap.
+            target_binary_ok && return 0
+            path_recent "$SCRIPT_DIR" 2 || return 1
+        fi
         sleep 1
         _wait_attempt=$((_wait_attempt + 1))
     done
-    [ "$IS_WINDOWS" = 1 ] && detect_windows_binary
-    binary_ok || install_in_progress
+    target_binary_ok || install_in_progress
 }
 
 # === Main Logic ===
@@ -268,11 +278,16 @@ fi
 
 # Install if needed and notify user
 if [ "$NEED_INSTALL" = 1 ]; then
-    INSTALL_FAILED=0
+    TARGET_VER=$(get_plugin_version)
     if [ "$NEED_FORCE" = 1 ]; then
-        run_install --force || INSTALL_FAILED=1
+        run_install --force || true
     else
-        run_install || INSTALL_FAILED=1
+        run_install || true
+    fi
+
+    REPORT_FAILURE=0
+    if ! target_binary_ok && ! wait_for_install_publication; then
+        REPORT_FAILURE=1
     fi
 
     # On Windows, re-detect binary after install to prefer .exe over .bat
@@ -309,12 +324,9 @@ if [ "$NEED_INSTALL" = 1 ]; then
             fi
         fi
     fi
-    if [ "$INSTALL_FAILED" = 1 ] || ! binary_ok; then
-        # Keep update/preflight failures silent while a usable old binary is
-        # retained. Only a verified live installer suppresses the diagnostic.
-        if ! binary_ok && ! wait_for_install_publication; then
-            report_install_failure
-        fi
+    # A winner may publish after the bounded wait's last check.
+    if [ "$REPORT_FAILURE" = 1 ] && ! target_binary_ok && ! install_in_progress; then
+        report_install_failure
     fi
 fi
 
