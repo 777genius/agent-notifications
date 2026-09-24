@@ -145,6 +145,8 @@ run_install() {
 }
 
 report_install_failure() {
+    # Codex observation hooks must leave both output streams empty.
+    [ "${CN_PRODUCT:-claude}" = "claude" ] || return 0
     _failed_ver=$(get_plugin_version)
     [ -n "$_failed_ver" ] || _failed_ver=unknown
     _failure_stamp="$STAMP_DIR/install-failed-$_failed_ver"
@@ -250,7 +252,14 @@ if [ "$NEED_INSTALL" = 1 ]; then
         fi
     fi
     if [ "$INSTALL_FAILED" = 1 ] || ! binary_ok; then
-        report_install_failure
+        # A competing hook may still own the install lock or may already have
+        # published the requested version. Neither is a failed installation.
+        _installed_ver=""
+        binary_ok && _installed_ver=$(get_binary_version)
+        _wanted_ver=$(get_plugin_version)
+        if [ -n "$_wanted_ver" ] && [ "$_installed_ver" != "$_wanted_ver" ] && [ ! -d "$SCRIPT_DIR/.install.lock" ]; then
+            report_install_failure
+        fi
     fi
 fi
 

@@ -53,7 +53,9 @@ sh codex/bin/codex-hook-wrapper.sh handle-hook Stop --product codex
 echo 1.41.0 > codex/bin/version
 printf '#!/bin/sh\nexit 1\n' > codex/bin/install.sh
 before=$(wc -l < delivered)
-sh codex/bin/codex-hook-wrapper.sh handle-hook Stop --product codex
+sh codex/bin/codex-hook-wrapper.sh handle-hook Stop --product codex > codex-failed.stdout 2> codex-failed.stderr
+[ ! -s codex-failed.stdout ]
+[ ! -s codex-failed.stderr ]
 [ "$(wc -l < delivered)" = "$before" ]
 # An absent Windows binary and a failed lazy install must notify once per
 # package version; repeated hooks must stay quiet until the version changes.
@@ -66,6 +68,10 @@ cat > failed/bin/install.sh <<'FAILED_INSTALL'
 exit 7
 FAILED_INSTALL
 chmod +x failed/bin/install.sh
+mkdir failed/bin/.install.lock
+contended=$(OS=Windows_NT XDG_CACHE_HOME="$ROOT/failed-cache" sh failed/bin/hook-wrapper.sh handle-hook Stop)
+[ -z "$contended" ]
+rmdir failed/bin/.install.lock
 first=$(OS=Windows_NT XDG_CACHE_HOME="$ROOT/failed-cache" sh failed/bin/hook-wrapper.sh handle-hook Stop)
 second=$(OS=Windows_NT XDG_CACHE_HOME="$ROOT/failed-cache" sh failed/bin/hook-wrapper.sh handle-hook Stop)
 case "$first" in *'"systemMessage"'*'Installation of v1.42.0 failed'*) : ;; *) exit 1 ;; esac
