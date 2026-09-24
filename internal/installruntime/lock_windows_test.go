@@ -61,7 +61,25 @@ func TestLockWithInheritedForeignReadOnlyACE(t *testing.T) {
 		t.Fatalf("installer lock inherited a read-only ACE: %v", err)
 	}
 	release()
-	f, err := openLock(filepath.Join(root, "install.lock"), false)
+	assertLockDACLProtected(t, filepath.Join(root, "install.lock"))
+
+	legacyPath := filepath.Join(root, "legacy.lock")
+	if err := os.WriteFile(legacyPath, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	legacyCtx, legacyCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer legacyCancel()
+	release, err = Lock(legacyCtx, legacyPath)
+	if err != nil {
+		t.Fatalf("existing installer lock with inherited read ACE rejected: %v", err)
+	}
+	release()
+	assertLockDACLProtected(t, legacyPath)
+}
+
+func assertLockDACLProtected(t *testing.T, path string) {
+	t.Helper()
+	f, err := openLock(path, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,11 +93,11 @@ func TestLockWithInheritedForeignReadOnlyACE(t *testing.T) {
 		t.Fatal(err)
 	}
 	if control&windows.SE_DACL_PROTECTED == 0 {
-		t.Fatal("new installer lock inherited the control root DACL")
+		t.Fatal("installer lock retained the control root DACL")
 	}
 	acl, _, err := sd.DACL()
 	if err != nil || acl == nil {
-		t.Fatalf("new installer lock has no DACL: %v", err)
+		t.Fatalf("installer lock has no DACL: %v", err)
 	}
 	for i := uint32(0); i < uint32(acl.AceCount); i++ {
 		var ace *windows.ACCESS_ALLOWED_ACE
@@ -87,7 +105,7 @@ func TestLockWithInheritedForeignReadOnlyACE(t *testing.T) {
 			t.Fatal(err)
 		}
 		if (*windows.SID)(unsafe.Pointer(&ace.SidStart)).IsWellKnown(windows.WinWorldSid) {
-			t.Fatal("new installer lock grants Everyone access")
+			t.Fatal("installer lock grants Everyone access")
 		}
 	}
 }

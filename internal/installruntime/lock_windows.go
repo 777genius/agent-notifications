@@ -25,9 +25,11 @@ func openLock(path string, create bool) (*os.File, error) {
 		return nil, err
 	}
 	disposition := uint32(windows.OPEN_EXISTING)
+	access := uint32(windows.GENERIC_READ | windows.GENERIC_WRITE)
 	var security *windows.SecurityAttributes
 	if create {
 		disposition = windows.OPEN_ALWAYS
+		access |= windows.WRITE_DAC | windows.WRITE_OWNER
 		user, err := windows.GetCurrentProcessToken().GetTokenUser()
 		if err != nil {
 			return nil, err
@@ -41,7 +43,7 @@ func openLock(path string, create bool) (*os.File, error) {
 			SecurityDescriptor: sd,
 		}
 	}
-	h, err := windows.CreateFile(name, windows.GENERIC_READ|windows.GENERIC_WRITE, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, security, disposition, windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
+	h, err := windows.CreateFile(name, access, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, security, disposition, windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -58,6 +60,12 @@ func openLock(path string, create bool) (*os.File, error) {
 	if err := privateWindowsHandle(h); err != nil {
 		f.Close()
 		return nil, err
+	}
+	if create {
+		if err := restrictPrivateWindowsHandle(h); err != nil {
+			f.Close()
+			return nil, err
+		}
 	}
 	return f, nil
 }
