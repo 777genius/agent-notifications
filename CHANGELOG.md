@@ -5,10 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.45.16] - 2026-09-24
 
 ### Added
-- **Do Not Disturb aware notifications on Linux** - `respectDoNotDisturb` (default `"off"`) lets the plugin honour the desktop's DND state. `"silent"` still delivers the banner, so it lands in the notification centre, but skips the plugin's own audio cue - which previously played through DND because the sound is played by the plugin rather than the notification server. `"suppress"` skips the notification entirely. Detected via `org.freedesktop.Notifications.Inhibited` (KDE Plasma), dunst's `paused` property, Xfconf `xfce4-notifyd/do-not-disturb`, and GNOME's `show-banners` GSetting; any unreadable state fails open and delivers the notification as before. macOS Focus modes and Windows Focus Assist are not detected yet and always report "not in DND". Webhooks are unaffected. See [docs/DO_NOT_DISTURB.md](docs/DO_NOT_DISTURB.md)
+- **Do Not Disturb aware notifications on Linux** - `respectDoNotDisturb` supports `off`, `silent`, and `suppress` modes using the desktop's available DND state. When state cannot be read, notifications fail open as before. macOS Focus modes and Windows Focus Assist are not detected. Webhooks are unaffected. See [docs/DO_NOT_DISTURB.md](docs/DO_NOT_DISTURB.md) ([#248](https://github.com/777genius/agent-notifications/pull/248)).
+
+### Fixed
+- Recover portable bindings left behind by an interrupted legacy uninstall without changing unrelated or foreign registrations ([#215](https://github.com/777genius/agent-notifications/issues/215), [#246](https://github.com/777genius/agent-notifications/pull/246)).
+- Deliver Claude Stop notifications from the host's final assistant message before transcript flush, while keeping a bounded transcript fallback for older hosts. Same-turn replays and duplicate hooks are suppressed, and identical answers from separate turns remain distinct ([#111](https://github.com/777genius/agent-notifications/issues/111), [#249](https://github.com/777genius/agent-notifications/pull/249)).
 
 ## [1.45.15] - 2026-09-24
 
