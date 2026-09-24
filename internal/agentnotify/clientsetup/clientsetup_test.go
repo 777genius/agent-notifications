@@ -147,6 +147,86 @@ func TestLifecycle(t *testing.T) {
 		})
 	}
 }
+
+func TestInspectionAllowsSoleMovedClaudeHookConsumerOnly(t *testing.T) {
+	for _, provider := range []registration.Provider{registration.Claude, registration.Codex} {
+		t.Run(string(provider), func(t *testing.T) {
+			f := fresh(t, provider)
+			snapshot, err := installruntime.ReadInstalledSnapshot(f.r.ControlRoot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			movedRoot := filepath.Join(filepath.Dir(f.r.RuntimeRoot), "new versioned cache")
+			snapshot.Ledger.Consumers = map[string]installruntime.Consumer{
+				"claude-hooks": {RuntimeRoot: movedRoot},
+			}
+			if err := checkRuntime(f.r, snapshot, true); err != nil {
+				t.Fatalf("read-only inspection of retained root failed: %v", err)
+			}
+			if err := checkRuntime(f.r, snapshot, false); !errors.Is(err, ErrConflict) {
+				t.Fatalf("mutation accepted a moved-only hook consumer: %v", err)
+			}
+			snapshot.Ledger.Consumers["foreign"] = installruntime.Consumer{RuntimeRoot: movedRoot}
+			if err := checkRuntime(f.r, snapshot, true); !errors.Is(err, ErrConflict) {
+				t.Fatalf("inspection accepted multiple moved consumers: %v", err)
+			}
+		})
+	}
+}
+
+func TestInspectRetainedRootAfterVersionedHookMoveAndPortableRemoval(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := filepath.Join(root, ".claude", "plugins", "cache", "claude-notifications-go", "claude-notifications-go")
+	oldRoot, newRoot := filepath.Join(cache, "1.45.7"), filepath.Join(cache, "1.45.14")
+	oldCommand, newCommand := filepath.Join(oldRoot, "bin", "claude-notifications-linux-amd64"), filepath.Join(newRoot, "bin", "claude-notifications-linux-amd64")
+	control := filepath.Join(root, "control")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	ledger, err := installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: control, RuntimeRoot: oldRoot, Owner: Managed, ConsumerID: "claude-hooks",
+		Files: []installruntime.File{{Path: oldCommand, Data: []byte("old" + installruntime.WriterProtocolMarker), Mode: 0700}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger, err = installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: control, RuntimeRoot: oldRoot, Owner: Managed, ConsumerID: "portable:existing",
+		Consumer: installruntime.Consumer{Commands: []string{oldCommand}}, ExpectedGeneration: &ledger.Generation,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger, err = installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: control, RuntimeRoot: newRoot, Owner: Managed, ConsumerID: "claude-hooks",
+		RelocateVersionedCache: true, ExpectedGeneration: &ledger.Generation,
+		Files: []installruntime.File{{Path: newCommand, Data: []byte("new" + installruntime.WriterProtocolMarker), Mode: 0700}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger, err = installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: control, RuntimeRoot: oldRoot, Owner: Managed, ConsumerID: "portable:existing",
+		RemoveConsumer: true, ExpectedGeneration: &ledger.Generation,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := Request{
+		ControlRoot: control, RuntimeRoot: oldRoot, Command: oldCommand,
+		ConfigPath: filepath.Join(root, "claude.json"), Provider: registration.Claude, Mode: Managed,
+		ExpectedGeneration: ledger.Generation,
+	}
+	facts, err := Inspect(ctx, r)
+	if err != nil || facts.Registered || facts.SkillProjected {
+		t.Fatalf("retained-root inspection failed: facts=%+v err=%v", facts, err)
+	}
+	if _, err := Apply(ctx, r); !errors.Is(err, ErrConflict) {
+		t.Fatalf("retained-root mutation unexpectedly succeeded: %v", err)
+	}
+}
 func TestConflictsAndInvalidInputs(t *testing.T) {
 	for _, provider := range []registration.Provider{registration.Codex, registration.Claude} {
 		for _, name := range []string{"unowned", "modified", "missing-state", "bad-state", "generation", "mode", "command", "runtime", "malformed", "oversized", "symlink", "missing-runtime", "empty"} {

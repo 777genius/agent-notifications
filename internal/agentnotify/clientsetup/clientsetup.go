@@ -77,7 +77,7 @@ func validate(r Request) error {
 	}
 	return installruntime.CheckPrivateControlRoot(r.ControlRoot)
 }
-func checkRuntime(r Request, s installruntime.InstalledSnapshot) error {
+func checkRuntime(r Request, s installruntime.InstalledSnapshot, inspection bool) error {
 	l := s.Ledger
 	if s.Recovery {
 		return ErrRecovery
@@ -92,7 +92,14 @@ func checkRuntime(r Request, s installruntime.InstalledSnapshot) error {
 		}
 	}
 	if !registered {
-		return ErrConflict
+		// A versioned Claude hook cache may move while the ledger retains its
+		// original runtime root. Read-only discovery inspection must still be
+		// able to establish that no direct registration needs handoff. Mutations
+		// remain fenced to a consumer at the requested runtime root.
+		hooks, ok := l.Consumers["claude-hooks"]
+		if !inspection || len(l.Consumers) != 1 || !ok || !filepath.IsAbs(hooks.RuntimeRoot) || hooks.RuntimeRoot == r.RuntimeRoot {
+			return ErrConflict
+		}
 	}
 	// Stable aliases are accepted only when every link and final executable are
 	// ledger-owned, remain inside this runtime, and match kernel fingerprints.
@@ -177,7 +184,7 @@ func calculate(ctx context.Context, r Request, fault func(string) error, inspect
 	if e != nil {
 		return result, e
 	}
-	if e = checkRuntime(r, s); e != nil {
+	if e = checkRuntime(r, s, inspection != nil); e != nil {
 		return result, e
 	}
 	if r.SkillProjection != nil {
@@ -194,7 +201,7 @@ func calculate(ctx context.Context, r Request, fault func(string) error, inspect
 		if e != nil {
 			return nil, e
 		}
-		if e = checkRuntime(r, current); e != nil {
+		if e = checkRuntime(r, current, inspection != nil); e != nil {
 			return nil, e
 		}
 		l := current.Ledger
