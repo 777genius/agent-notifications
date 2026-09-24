@@ -2798,6 +2798,66 @@ func TestHandler_TeammateIdle_SendsWhenAllReady(t *testing.T) {
 	}
 }
 
+// Regression: a lead Stop and TeammateIdle can both see the same ready team.
+// Their real team-state file must award one claim, producing one delivery.
+func TestHandler_TeamWaitAll_ConcurrentStopAndIdleDeliversOnce(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	const teamName = "test-concurrent-team-claim"
+	const leadSession = "test-concurrent-team-lead"
+	claudeDir := setupTeamConfig(t, teamName, leadSession, []string{"alice"})
+	setTestHome(t, claudeDir)
+
+	cfg := &config.Config{
+		Notifications: config.NotificationsConfig{
+			Desktop:  config.DesktopConfig{Enabled: true},
+			TeamMode: "wait-all",
+		},
+		Statuses: map[string]config.StatusInfo{
+			"task_complete": {Title: "Completed"},
+		},
+	}
+	handler, mockNotif, _ := newTestHandler(t, cfg)
+	mgr := setupTeamStateManager(t, claudeDir)
+	if err := mgr.RecordLeadStopped(teamName); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.RecordTeammateIdle(teamName, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	transcript := createTempTranscript(t, buildTranscriptWithTools([]string{"Write"}, 50))
+	stopData := buildHookDataJSON(HookData{
+		SessionID: leadSession, TranscriptPath: transcript, CWD: "/test",
+	})
+	idleData := buildHookDataJSON(HookData{
+		SessionID: "test-concurrent-team-alice", TeamName: teamName,
+		TeammateName: "alice", CWD: "/test",
+	})
+
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for _, hook := range []struct {
+		name string
+		data io.Reader
+	}{
+		{name: "Stop", data: stopData},
+		{name: "TeammateIdle", data: idleData},
+	} {
+		go func(name string, data io.Reader) {
+			<-start
+			results <- handler.HandleHook(name, data)
+		}(hook.name, hook.data)
+	}
+	close(start)
+	for i := 0; i < 2; i++ {
+		if err := <-results; err != nil {
+			t.Fatalf("concurrent hook failed: %v", err)
+		}
+	}
+	if got := mockNotif.callCount(); got != 1 {
+		t.Fatalf("team completion deliveries = %d, want exactly one", got)
+	}
+}
+
 func TestHandler_TeammateIdle_DoesNotSendWhenLeadNotStopped(t *testing.T) {
 	sessionID := "test-ti-nosend-session"
 	teamName := "test-ti-nosend-team"

@@ -264,32 +264,65 @@ func (m *Manager) CheckAllIdle(teamName string, expectedMembers []string) (bool,
 		if err != nil {
 			return err
 		}
-
-		if !s.LeadStopped {
-			logging.Debug("teamstate: lead not stopped yet for team %q", teamName)
-			return nil
-		}
-
-		for _, member := range expectedMembers {
-			if _, idle := s.IdleMembers[member]; !idle {
-				logging.Debug("teamstate: member %q not idle yet in team %q", member, teamName)
-				return nil
-			}
-		}
-
-		// Prevent duplicate notifications: check if we already notified
-		if s.NotifiedAt > 0 && s.NotifiedAt >= s.LeadStopAt {
-			logging.Debug("teamstate: already notified for team %q (notified_at=%d >= lead_stop_at=%d)",
-				teamName, s.NotifiedAt, s.LeadStopAt)
-			return nil
-		}
-
-		logging.Debug("teamstate: all conditions met for team %q — lead stopped + all %d members idle",
-			teamName, len(expectedMembers))
-		result = true
+		result = allIdle(s, teamName, expectedMembers)
 		return nil
 	})
 	return result, err
+}
+
+// allIdle checks a state snapshot. The caller holds the team's file lock.
+func allIdle(s *State, teamName string, expectedMembers []string) bool {
+	if !s.LeadStopped {
+		logging.Debug("teamstate: lead not stopped yet for team %q", teamName)
+		return false
+	}
+
+	for _, member := range expectedMembers {
+		if _, idle := s.IdleMembers[member]; !idle {
+			logging.Debug("teamstate: member %q not idle yet in team %q", member, teamName)
+			return false
+		}
+	}
+
+	// Prevent duplicate notifications: check if we already notified.
+	if s.NotifiedAt > 0 && s.NotifiedAt >= s.LeadStopAt {
+		logging.Debug("teamstate: already notified for team %q (notified_at=%d >= lead_stop_at=%d)",
+			teamName, s.NotifiedAt, s.LeadStopAt)
+		return false
+	}
+
+	logging.Debug("teamstate: all conditions met for team %q — lead stopped + all %d members idle",
+		teamName, len(expectedMembers))
+	return true
+}
+
+// ClaimAllIdle atomically checks readiness and claims the team's completion.
+// Only the caller that persists the claim may send a wait-all notification.
+func (m *Manager) ClaimAllIdle(teamName string, expectedMembers []string) (bool, error) {
+	var claimed bool
+	err := withFileLock(teamName, func() error {
+		s, err := loadStateUnlocked(teamName)
+		if err != nil {
+			return err
+		}
+		if !allIdle(s, teamName, expectedMembers) {
+			return nil
+		}
+		markNotified(s)
+		if err := saveStateUnlocked(s); err != nil {
+			return err
+		}
+		claimed = true
+		return nil
+	})
+	return claimed, err
+}
+
+func markNotified(s *State) {
+	s.NotifiedAt = time.Now().Unix()
+	// Reset state for next cycle: lead will stop again, teammates will go idle again.
+	s.LeadStopped = false
+	s.IdleMembers = make(map[string]int64)
 }
 
 // MarkNotified records that a notification was sent and resets state for next cycle.
@@ -300,10 +333,7 @@ func (m *Manager) MarkNotified(teamName string) error {
 		if err != nil {
 			return err
 		}
-		s.NotifiedAt = time.Now().Unix()
-		// Reset state for next cycle: lead will stop again, teammates will go idle again
-		s.LeadStopped = false
-		s.IdleMembers = make(map[string]int64)
+		markNotified(s)
 		return saveStateUnlocked(s)
 	})
 }
