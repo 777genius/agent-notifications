@@ -128,7 +128,16 @@ rmdir failed/bin/.install.lock/.owner.reused failed/bin/.install.lock
 # Claude hook. On the base wrapper both attempts are silent.
 mkdir -p upgrade/bin upgrade/.claude-plugin
 cp "$SRC/hook-wrapper.sh" upgrade/bin/hook-wrapper.sh
-cp claude/bin/claude-notifications upgrade/bin/claude-notifications
+cat > upgrade/bin/claude-notifications <<'UPGRADE_BINARY'
+#!/bin/sh
+if [ "$1" = version ]; then
+ echo version >> "$ROOT/upgrade-version-probes"
+ cat "$(dirname "$0")/version"
+else
+ cat "$(dirname "$0")/version" >> "$ROOT/delivered"
+fi
+UPGRADE_BINARY
+chmod +x upgrade/bin/claude-notifications
 echo 1.41.0 > upgrade/bin/version
 echo '{"version":"1.42.0"}' > upgrade/.claude-plugin/plugin.json
 cat > upgrade/bin/install.sh <<'FAILED_UPGRADE'
@@ -139,7 +148,14 @@ FAILED_UPGRADE
 chmod +x upgrade/bin/install.sh
 before=$(wc -l < delivered)
 XDG_CACHE_HOME="$ROOT/upgrade-cache" sh upgrade/bin/hook-wrapper.sh handle-hook Stop > upgrade-first.stdout 2> upgrade-first.stderr
-XDG_CACHE_HOME="$ROOT/upgrade-cache" sh upgrade/bin/hook-wrapper.sh handle-hook Stop > upgrade-second.stdout 2> upgrade-second.stderr
+first_probes=$(wc -l < upgrade-version-probes)
+mkdir upgrade-stubs
+printf '#!/bin/sh\necho sleep >> "$ROOT/upgrade-sleeps"\n' > upgrade-stubs/sleep
+chmod +x upgrade-stubs/sleep
+PATH="$ROOT/upgrade-stubs:$PATH" XDG_CACHE_HOME="$ROOT/upgrade-cache" sh upgrade/bin/hook-wrapper.sh handle-hook Stop > upgrade-second.stdout 2> upgrade-second.stderr
+second_probes=$(wc -l < upgrade-version-probes)
+[ ! -e upgrade-sleeps ]
+[ "$((second_probes - first_probes))" -le 3 ]
 [ ! -s upgrade-first.stdout ] && [ ! -s upgrade-second.stdout ]
 grep -q 'Installation of v1.42.0 failed' upgrade-first.stderr
 [ ! -s upgrade-second.stderr ]

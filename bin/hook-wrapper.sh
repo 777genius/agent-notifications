@@ -212,21 +212,15 @@ target_binary_ok() {
 }
 
 wait_for_install_publication() {
-    _wait_attempt=0
-    while [ "$_wait_attempt" -lt 2 ]; do
-        target_binary_ok && return 0
-        install_in_progress && return 0
-        if [ -d "$SCRIPT_DIR/.install.lock" ] && [ ! -L "$SCRIPT_DIR/.install.lock" ]; then
-            path_recent "$SCRIPT_DIR/.install.lock" 2 || return 1
-        else
-            # Removing the lock updates its parent directory. Publication may
-            # still be in flight, so recheck after this lock-free gap.
-            target_binary_ok && return 0
-            path_recent "$SCRIPT_DIR" 2 || return 1
-        fi
-        sleep 1
-        _wait_attempt=$((_wait_attempt + 1))
-    done
+    # The caller already checked the target binary. Give a recent lock-free
+    # publication gap one bounded chance, but never wait for an old failure.
+    install_in_progress && return 0
+    if [ -d "$SCRIPT_DIR/.install.lock" ] && [ ! -L "$SCRIPT_DIR/.install.lock" ]; then
+        path_recent "$SCRIPT_DIR/.install.lock" 2 || return 1
+    else
+        path_recent "$SCRIPT_DIR" 2 || return 1
+    fi
+    sleep 1
     target_binary_ok || install_in_progress
 }
 
@@ -286,8 +280,11 @@ if [ "$NEED_INSTALL" = 1 ]; then
     fi
 
     REPORT_FAILURE=0
-    if ! target_binary_ok && ! wait_for_install_publication; then
-        REPORT_FAILURE=1
+    if [ "${CN_PRODUCT:-claude}" = "claude" ] && ! target_binary_ok; then
+        _target_failure_stamp="$STAMP_DIR/install-failed-${TARGET_VER:-unknown}"
+        if [ ! -d "$_target_failure_stamp" ] && ! wait_for_install_publication; then
+            REPORT_FAILURE=1
+        fi
     fi
 
     # On Windows, re-detect binary after install to prefer .exe over .bat
