@@ -641,6 +641,40 @@ func TestDelete_PermissionDenied(t *testing.T) {
 
 // === IsDuplicateMessage Tests ===
 
+func TestManager_StopPayloadIdentityIsSeparateFromRenderedContent(t *testing.T) {
+	mgr := newTestManager(t)
+	const session = "stop-payload-identity"
+	duplicate, err := mgr.IsDuplicateStopPayload(session, "hash-a", 180)
+	require.NoError(t, err)
+	assert.False(t, duplicate)
+
+	require.NoError(t, mgr.UpdateLastNotificationWithStop(session, analyzer.StatusTaskComplete, "rendered A", "hash-a"))
+	duplicate, err = mgr.IsDuplicateStopPayload(session, "hash-a", 180)
+	require.NoError(t, err)
+	assert.True(t, duplicate)
+	duplicate, err = mgr.IsDuplicateMessage(session, "rendered A", 180)
+	require.NoError(t, err)
+	assert.True(t, duplicate)
+
+	// An unrelated hook updates the shared content key but must not erase the
+	// Stop replay identity.
+	require.NoError(t, mgr.UpdateLastNotification(session, analyzer.StatusQuestion, "rendered B"))
+	duplicate, err = mgr.IsDuplicateStopPayload(session, "hash-a", 180)
+	require.NoError(t, err)
+	assert.True(t, duplicate)
+	duplicate, err = mgr.IsDuplicateMessage(session, "rendered B", 180)
+	require.NoError(t, err)
+	assert.True(t, duplicate)
+
+	state, err := mgr.Load(session)
+	require.NoError(t, err)
+	state.LastStopPayloadTime = platform.CurrentTimestamp() - 181
+	require.NoError(t, mgr.Save(state))
+	duplicate, err = mgr.IsDuplicateStopPayload(session, "hash-a", 180)
+	require.NoError(t, err)
+	assert.False(t, duplicate)
+}
+
 func TestManager_IsDuplicateMessage_NoState(t *testing.T) {
 	mgr := newTestManager(t)
 

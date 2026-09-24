@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -504,14 +505,23 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 	bench.Start("message.generate")
 	body, actions := h.generateMessage(ev, status, parsedMessages, insight)
 	message := joinMessageParts(body, actions)
-	contentKey := message
+	var stopHash string
 	currentTurn := jsonl.FilterMessagesAfterTimestamp(parsedMessages, jsonl.GetLastUserTimestamp(parsedMessages))
 	if ev.Product == ProductClaude && (ev.Kind() == EventStop || ev.Kind() == EventSubagentStop) &&
 		len(jsonl.ExtractTools(currentTurn)) == 0 {
-		// A text-only Stop can arrive before its final transcript line. Once
-		// flushed, summary actions (notably elapsed time) may appear, but the
-		// notification is still the same completed turn.
-		contentKey = body
+		// A text-only Stop can arrive before its final transcript line.
+		// Track a separate hash of the host final message so transcript replay
+		// is stable while rendered-content dedup stays shared across hooks.
+		var final string
+		switch p := ev.Payload.(type) {
+		case StopPayload:
+			final = p.AssistantMessage
+		case SubagentStopPayload:
+			final = p.Stop.AssistantMessage
+		}
+		if strings.TrimSpace(final) != "" {
+			stopHash = fmt.Sprintf("%x", sha256.Sum256([]byte(strings.TrimSpace(final))))
+		}
 	}
 	bench.Elapsed("message.generate")
 
@@ -558,7 +568,14 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 	skipContentDedup := status == analyzer.StatusPermissionRequest ||
 		(ev.Product == ProductCodex && (ev.Kind() == EventPreToolUse || ev.Kind() == EventSubagentStop))
 	if !skipContentDedup {
-		isDuplicate, err := h.stateMgr.IsDuplicateMessage(keys.stateKey, contentKey, 180)
+		isDuplicateStop, stopErr := h.stateMgr.IsDuplicateStopPayload(keys.stateKey, stopHash, 180)
+		if stopErr != nil {
+			logging.Warn("Failed to check duplicate Stop payload: %v", stopErr)
+		} else if isDuplicateStop {
+			logging.Debug("Duplicate Stop payload detected within 3 minutes, skipping")
+			return nil
+		}
+		isDuplicate, err := h.stateMgr.IsDuplicateMessage(keys.stateKey, message, 180)
 		if err != nil {
 			logging.Warn("Failed to check duplicate message: %v", err)
 		} else if isDuplicate {
@@ -578,7 +595,7 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 	bench.Elapsed("notify.send")
 
 	if delivery.delivered() {
-		if err := h.stateMgr.UpdateLastNotification(keys.stateKey, status, contentKey); err != nil {
+		if err := h.stateMgr.UpdateLastNotificationWithStop(keys.stateKey, status, message, stopHash); err != nil {
 			logging.Warn("Failed to update last notification: %v", err)
 		}
 	} else {
@@ -710,13 +727,22 @@ func (h *Handler) handleStopEvent(ev Event) (analyzer.Status, []jsonl.Message, e
 // the transcript. Its payload carries that message directly, so use it only
 // when transcript analysis has no status and text-only notifications are on.
 func (h *Handler) fallbackClaudeStop(status analyzer.Status, message string) (analyzer.Status, *TurnInsight) {
-	if status != analyzer.StatusUnknown || !h.cfg.ShouldNotifyOnTextResponse() || strings.TrimSpace(message) == "" {
+	if status != analyzer.StatusUnknown || strings.TrimSpace(message) == "" {
 		return status, nil
 	}
-	// Claude's transcript classifier treats a text-only Stop as task_complete;
-	// question prompts arrive through Notification instead. Match that policy
-	// even if the last message itself ends in a question mark.
-	status = analyzer.StatusTaskComplete
+	// Preserve a short host-reported error even if text-only notifications are
+	// disabled. Claude's transcript classifier handles API errors first.
+	classified := analyzer.ClassifyLastMessage(message)
+	switch classified {
+	case analyzer.StatusAPIError, analyzer.StatusAPIErrorOverloaded, analyzer.StatusSessionLimitReached:
+		status = classified
+	default:
+		if !h.cfg.ShouldNotifyOnTextResponse() {
+			return analyzer.StatusUnknown, nil
+		}
+		// Claude text-only Stop is task_complete; questions use Notification.
+		status = analyzer.StatusTaskComplete
+	}
 	// Match the normal transcript summary so a replay after the final line
 	// flushes has the same content-dedup key.
 	synthetic := []jsonl.Message{{

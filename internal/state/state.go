@@ -20,6 +20,8 @@ type SessionState struct {
 	LastNotificationTime    int64  `json:"last_notification_ts,omitempty"`
 	LastNotificationStatus  string `json:"last_notification_status,omitempty"`
 	LastNotificationMessage string `json:"last_notification_message,omitempty"`
+	LastStopPayloadHash     string `json:"last_stop_payload_hash,omitempty"`
+	LastStopPayloadTime     int64  `json:"last_stop_payload_ts,omitempty"`
 	GhosttyTerminalID       string `json:"ghostty_terminal_id,omitempty"`
 	CWD                     string `json:"cwd"`
 }
@@ -192,6 +194,12 @@ func (m *Manager) Cleanup(maxAge int64) error {
 
 // UpdateLastNotification updates the last notification timestamp, status, and message
 func (m *Manager) UpdateLastNotification(sessionID string, status analyzer.Status, message string) error {
+	return m.UpdateLastNotificationWithStop(sessionID, status, message, "")
+}
+
+// UpdateLastNotificationWithStop retains the normal cross-hook content key and
+// optionally records a separate digest for Claude Stop replay detection.
+func (m *Manager) UpdateLastNotificationWithStop(sessionID string, status analyzer.Status, message, stopHash string) error {
 	state, err := m.Load(sessionID)
 	if err != nil {
 		return err
@@ -206,8 +214,26 @@ func (m *Manager) UpdateLastNotification(sessionID string, status analyzer.Statu
 	state.LastNotificationTime = platform.CurrentTimestamp()
 	state.LastNotificationStatus = string(status)
 	state.LastNotificationMessage = message
+	if stopHash != "" {
+		state.LastStopPayloadHash = stopHash
+		state.LastStopPayloadTime = state.LastNotificationTime
+	}
 
 	return m.Save(state)
+}
+
+// IsDuplicateStopPayload checks the separate Stop identity without replacing
+// the rendered message shared by Stop, Notification and other hooks.
+func (m *Manager) IsDuplicateStopPayload(sessionID, stopHash string, windowSeconds int) (bool, error) {
+	if stopHash == "" || windowSeconds <= 0 {
+		return false, nil
+	}
+	state, err := m.Load(sessionID)
+	if err != nil || state == nil || state.LastStopPayloadTime == 0 {
+		return false, err
+	}
+	elapsed := platform.CurrentTimestamp() - state.LastStopPayloadTime
+	return elapsed >= 0 && elapsed <= int64(windowSeconds) && state.LastStopPayloadHash == stopHash, nil
 }
 
 // ShouldSuppressQuestionAfterAnyNotification checks if a question notification should be suppressed

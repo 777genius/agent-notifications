@@ -36,6 +36,8 @@ func TestClaudeStopFinalMessageFallback(t *testing.T) {
 		{name: "question text uses Claude Stop policy", message: "Which option?", want: analyzer.StatusTaskComplete},
 		{name: "empty message stays silent", want: analyzer.StatusUnknown},
 		{name: "text notifications disabled", message: "Done.", textEnabled: boolPtr(false), want: analyzer.StatusUnknown},
+		{name: "API error stays visible when text disabled", message: "API error", textEnabled: boolPtr(false), want: analyzer.StatusAPIError},
+		{name: "rate limit stays error", message: "Rate limit reached", want: analyzer.StatusAPIErrorOverloaded},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := &config.Config{Notifications: config.NotificationsConfig{
@@ -64,8 +66,11 @@ func TestClaudeStopFinalMessageFallback(t *testing.T) {
 				}
 				return
 			}
-			if mock.callCount() != 1 || mock.lastCall().status != tc.want || !strings.Contains(mock.lastCall().message, tc.message) {
+			if mock.callCount() != 1 || mock.lastCall().status != tc.want {
 				t.Fatalf("notification = %+v, count = %d", mock.lastCall(), mock.callCount())
+			}
+			if tc.want == analyzer.StatusTaskComplete && !strings.Contains(mock.lastCall().message, tc.message) {
+				t.Fatalf("final message absent from notification: %+v", mock.lastCall())
 			}
 		})
 	}
@@ -121,6 +126,42 @@ func TestClaudeStopFallbackAndTranscriptReplayDeduplicate(t *testing.T) {
 	if mock.callCount() != 1 {
 		t.Fatalf("replayed Stop escaped content dedup: count=%d first=%q last=%q",
 			mock.callCount(), firstBody, mock.lastCall().message)
+	}
+}
+
+func TestClaudeStopKeepsCrossHookContentDedup(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	transcript := filepath.Join(t.TempDir(), "session.jsonl")
+	content := `{"type":"user","timestamp":"2026-09-24T12:00:00Z","message":{"role":"user","content":"test"}}` + "\n" +
+		`{"type":"assistant","timestamp":"2026-09-24T12:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"Which option?"}]}}` + "\n"
+	if err := os.WriteFile(transcript, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	mock := &mockNotifier{}
+	h := &Handler{
+		cfg: &config.Config{Notifications: config.NotificationsConfig{
+			Desktop: config.DesktopConfig{Enabled: true},
+			SuppressQuestionAfterAnyNotificationSeconds: intPtr(0),
+			SuppressQuestionAfterTaskCompleteSeconds:    intPtr(0),
+		}},
+		dedupMgr: dedup.NewManager(), stateMgr: state.NewManager(),
+		teamStateMgr: teamstate.NewManager(""), notifierSvc: mock,
+		webhookSvc: &mockWebhook{}, pluginRoot: t.TempDir(),
+	}
+	for _, hookEvent := range []string{"Stop", "Notification"} {
+		payload, err := json.Marshal(HookData{
+			SessionID: "claude-cross-hook", TranscriptPath: transcript,
+			LastAssistantMessage: "Which option?", HookEventName: hookEvent, CWD: t.TempDir(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := h.HandleHook(hookEvent, strings.NewReader(string(payload))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if mock.callCount() != 1 {
+		t.Fatalf("Stop and Notification delivered duplicate content: count=%d", mock.callCount())
 	}
 }
 
