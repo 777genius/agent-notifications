@@ -517,12 +517,6 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 		}
 	}
 
-	// Update state (only for task_complete, PreToolUse already updated state)
-	if status == analyzer.StatusTaskComplete {
-		if err := h.stateMgr.UpdateTaskComplete(keys.stateKey); err != nil {
-			logging.Warn("Failed to update task complete state: %v", err)
-		}
-	}
 	// Notification and PreToolUse also need the current Claude turn identity.
 	// Reusing these messages for summary generation avoids a second read.
 	if ev.Product == ProductClaude && len(parsedMessages) == 0 &&
@@ -659,14 +653,16 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 
 	// Send notifications
 	bench.Start("notify.send")
-	delivery := h.sendNotifications(status, body, actions, ev.Session.SessionID, ev.Session.CWD)
-	bench.Elapsed("notify.send")
-
-	if delivery.delivered() {
+	recordedDelivery := false
+	delivery := h.sendNotifications(status, body, actions, ev.Session.SessionID, ev.Session.CWD, func() {
+		recordedDelivery = true
 		if err := h.stateMgr.UpdateLastNotificationWithIdentity(keys.stateKey, status, message, stopHash, body, turnTS, hookEvent); err != nil {
 			logging.Warn("Failed to update last notification: %v", err)
 		}
-	} else {
+	})
+	bench.Elapsed("notify.send")
+
+	if !recordedDelivery && !delivery.delivered() {
 		logging.Debug("No notification delivery was recorded (all channels disabled, suppressed, or failed)")
 	}
 
@@ -752,7 +748,15 @@ func (h *Handler) handleTeammateIdle(ev Event, p TeammateIdlePayload) error {
 	status := analyzer.StatusTaskComplete
 	body := fmt.Sprintf("Team %q: all teammates finished work", p.TeamName)
 
-	h.sendNotifications(status, body, "", ev.Session.SessionID, ev.Session.CWD)
+	stateKey := teamInfo.LeadSessionID
+	if stateKey == "" {
+		stateKey = ev.Session.SessionID
+	}
+	h.sendNotifications(status, body, "", ev.Session.SessionID, ev.Session.CWD, func() {
+		if err := h.stateMgr.UpdateLastNotificationWithIdentity(stateKey, status, body, "", body, "", "TeammateIdle"); err != nil {
+			logging.Warn("TeammateIdle: failed to update notification state: %v", err)
+		}
+	})
 
 	logging.Debug("=== Hook completed: TeammateIdle (team notification sent) ===")
 	return nil
@@ -1054,7 +1058,7 @@ func joinMessageParts(body, actions string) string {
 //
 // body is the summary text (no metadata prefix, no action segments).
 // actions is the formatted action summary (e.g. "📝 1 new  ▶ 2 cmds  ⏱ 41s") or "".
-func (h *Handler) sendNotifications(status analyzer.Status, body, actions, sessionID, cwd string) notificationDelivery {
+func (h *Handler) sendNotifications(status analyzer.Status, body, actions, sessionID, cwd string, onFirstDelivery func()) notificationDelivery {
 	// Add panic recovery to prevent notification failures from crashing the plugin
 	defer errorhandler.HandlePanic()
 
@@ -1101,6 +1105,9 @@ func (h *Handler) sendNotifications(status analyzer.Status, body, actions, sessi
 			AgentSource:   string(h.product),
 		})
 		delivery.webhookQueued = true
+		if onFirstDelivery != nil {
+			onFirstDelivery()
+		}
 	} else {
 		logging.Debug("Webhook notification disabled for status: %s", statusStr)
 	}
@@ -1108,6 +1115,9 @@ func (h *Handler) sendNotifications(status analyzer.Status, body, actions, sessi
 	// Send desktop notification (check per-status enabled)
 	if h.cfg.IsStatusDesktopEnabled(statusStr) {
 		delivery.desktopDelivered = h.sendDesktopNotification(status, enhancedMessage, sessionID, cwd)
+		if delivery.desktopDelivered && !delivery.webhookQueued && onFirstDelivery != nil {
+			onFirstDelivery()
+		}
 	} else {
 		logging.Debug("Desktop notification disabled for status: %s", statusStr)
 	}

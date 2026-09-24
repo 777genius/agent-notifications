@@ -27,9 +27,10 @@ type teamMember struct {
 
 // TeamInfo holds detected team information for the current session
 type TeamInfo struct {
-	TeamName   string
-	Members    []string // non-lead member names
-	ConfigPath string
+	TeamName      string
+	LeadSessionID string
+	Members       []string // non-lead member names
+	ConfigPath    string
 }
 
 // State tracks team notification state (persisted to /tmp)
@@ -103,9 +104,10 @@ func (m *Manager) DetectTeamLead(sessionID string) *TeamInfo {
 			logging.Debug("teamstate: session %s is lead of team %q with %d members: %s",
 				sessionID, cfg.Name, len(members), strings.Join(members, ", "))
 			return &TeamInfo{
-				TeamName:   cfg.Name,
-				Members:    members,
-				ConfigPath: configPath,
+				TeamName:      cfg.Name,
+				LeadSessionID: cfg.LeadSessionID,
+				Members:       members,
+				ConfigPath:    configPath,
 			}
 		}
 	}
@@ -137,9 +139,10 @@ func (m *Manager) DetectTeamByName(teamName string) *TeamInfo {
 	}
 
 	return &TeamInfo{
-		TeamName:   cfg.Name,
-		Members:    members,
-		ConfigPath: configPath,
+		TeamName:      cfg.Name,
+		LeadSessionID: cfg.LeadSessionID,
+		Members:       members,
+		ConfigPath:    configPath,
 	}
 }
 
