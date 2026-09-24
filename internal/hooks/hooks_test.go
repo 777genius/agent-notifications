@@ -2766,9 +2766,9 @@ func TestHandler_TeammateIdle_SendsWhenAllReady(t *testing.T) {
 	teamMgr.RecordLeadStopped(teamName)           //nolint:errcheck
 	teamMgr.RecordTeammateIdle(teamName, "alice") //nolint:errcheck
 
-	// Now bob goes idle → should trigger notification
+	// Bob's hook has its own session ID, but the completion belongs to the lead.
 	hookData := buildHookDataJSON(HookData{
-		SessionID:    sessionID,
+		SessionID:    "test-ti-bob-session",
 		TeamName:     teamName,
 		TeammateName: "bob",
 		CWD:          "/test",
@@ -2781,6 +2781,20 @@ func TestHandler_TeammateIdle_SendsWhenAllReady(t *testing.T) {
 
 	if !mockNotif.wasCalled() {
 		t.Error("expected notification when last teammate goes idle and lead has stopped")
+	}
+	leadState, err := handler.stateMgr.Load(sessionID)
+	if err != nil {
+		t.Fatalf("load lead notification state: %v", err)
+	}
+	if leadState == nil || leadState.LastTaskCompleteTime == 0 {
+		t.Fatal("delivered team completion did not start the lead's cooldown")
+	}
+	bobState, err := handler.stateMgr.Load("test-ti-bob-session")
+	if err != nil {
+		t.Fatalf("load teammate notification state: %v", err)
+	}
+	if bobState != nil && bobState.LastTaskCompleteTime != 0 {
+		t.Fatal("team completion started the teammate's cooldown")
 	}
 }
 

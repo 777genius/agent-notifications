@@ -748,7 +748,15 @@ func (h *Handler) handleTeammateIdle(ev Event, p TeammateIdlePayload) error {
 	status := analyzer.StatusTaskComplete
 	body := fmt.Sprintf("Team %q: all teammates finished work", p.TeamName)
 
-	h.sendNotifications(status, body, "", ev.Session.SessionID, ev.Session.CWD, nil)
+	stateKey := teamInfo.LeadSessionID
+	if stateKey == "" {
+		stateKey = ev.Session.SessionID
+	}
+	h.sendNotifications(status, body, "", ev.Session.SessionID, ev.Session.CWD, func() {
+		if err := h.stateMgr.UpdateLastNotificationWithIdentity(stateKey, status, body, "", body, "", "TeammateIdle"); err != nil {
+			logging.Warn("TeammateIdle: failed to update notification state: %v", err)
+		}
+	})
 
 	logging.Debug("=== Hook completed: TeammateIdle (team notification sent) ===")
 	return nil
