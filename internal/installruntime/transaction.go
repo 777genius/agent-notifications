@@ -90,6 +90,10 @@ type Request struct {
 	ExpectedPolicy *Identity
 	// RefreshOnly updates an already registered runtime without adding a consumer.
 	RefreshOnly bool
+	// RelocateVersionedCache explicitly moves only the existing Claude hooks
+	// consumer between sibling, versioned Claude plugin cache directories.
+	// Other consumers and their runtime roots are never moved implicitly.
+	RelocateVersionedCache bool
 	// RollbackPending explicitly reverses a pending transaction using per-file CAS.
 	RollbackPending bool
 	Native          *NativeChange
@@ -163,12 +167,49 @@ func writeJSON(path string, value any) error {
 	return durable(path, append(data, '\n'), 0600)
 }
 
+func versionedClaudeCachePeers(oldRoot, newRoot string) bool {
+	if oldRoot == newRoot || filepath.Dir(oldRoot) != filepath.Dir(newRoot) {
+		return false
+	}
+	parent := filepath.Dir(oldRoot)
+	if filepath.Base(parent) != "claude-notifications-go" ||
+		filepath.Base(filepath.Dir(parent)) != "claude-notifications-go" ||
+		filepath.Base(filepath.Dir(filepath.Dir(parent))) != "cache" {
+		return false
+	}
+	for _, version := range []string{filepath.Base(oldRoot), filepath.Base(newRoot)} {
+		parts := strings.Split(version, ".")
+		if len(parts) != 3 {
+			return false
+		}
+		for _, part := range parts {
+			if len(part) == 0 || len(part) > 9 {
+				return false
+			}
+			for _, digit := range part {
+				if digit < '0' || digit > '9' {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
+func pathWithinRoot(root, path string) bool {
+	relative, err := filepath.Rel(root, path)
+	return err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
 // Commit serializes all component decisions, then config locks in canonical
 // order. The durable redo record precedes every live mutation. Recovery checks
 // every identity before changing anything and refuses ambiguous foreign edits.
 func Commit(ctx context.Context, r Request) (Ledger, error) {
 	if err := reservationRequestInvalid(r); err != nil {
 		return Ledger{}, err
+	}
+	if r.RelocateVersionedCache && (r.RefreshOnly || r.RemoveConsumer || r.RetireNative || r.RecoverOnly || r.RollbackPending || r.ConsumerID != "claude-hooks" || r.Owner != "existing-installer") {
+		return Ledger{}, fmt.Errorf("versioned cache relocation requires a Claude hooks install")
 	}
 	if r.PolicyOnly && (!r.RefreshOnly || r.ExpectedGeneration == nil || len(r.Files) != 0 || r.Native != nil || r.RemoveConsumer || r.PurgeNative || r.RetireNative || r.RollbackPending || r.Reservation != nil || r.ClearReservation) {
 		return Ledger{}, fmt.Errorf("policy-only transaction requires existing generation and no asset or consumer mutation")
@@ -334,8 +375,20 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 	if l.ID != "" && l.Owner != r.Owner {
 		return l, fmt.Errorf("component owned by %s at %s; explicit takeover required", l.Owner, l.RuntimeRoot)
 	}
-	if previous, ok := l.Consumers[r.ConsumerID]; !r.RefreshOnly && ok && previous.RuntimeRoot != "" && previous.RuntimeRoot != r.RuntimeRoot {
+	previous, registered := l.Consumers[r.ConsumerID]
+	relocating := !r.RefreshOnly && registered && previous.RuntimeRoot != "" && previous.RuntimeRoot != r.RuntimeRoot
+	if relocating && (!r.RelocateVersionedCache || r.RemoveConsumer || r.ConsumerID != "claude-hooks" || r.Owner != "existing-installer" ||
+		!versionedClaudeCachePeers(previous.RuntimeRoot, r.RuntimeRoot)) {
 		return l, fmt.Errorf("consumer runtime relocation requires explicit takeover")
+	}
+	retireOldCache := relocating
+	if retireOldCache {
+		for id, consumer := range l.Consumers {
+			if id != r.ConsumerID && consumer.RuntimeRoot == previous.RuntimeRoot {
+				retireOldCache = false
+				break
+			}
+		}
 	}
 	if r.RefreshOnly {
 		registered := false
@@ -396,6 +449,12 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 		if got == want {
 			continue
 		}
+		// Claude owns the previous versioned cache. Once no consumer points at
+		// it, its files may already have been pruned by Claude. De-own only
+		// missing files; a changed existing file is still a foreign edit.
+		if retireOldCache && pathWithinRoot(previous.RuntimeRoot, path) && !got.Exists {
+			continue
+		}
 		if replacing[path] && !got.Exists && want.Exists {
 			continue
 		}
@@ -447,6 +506,18 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 	} else if !r.RefreshOnly && !r.RetireNative {
 		r.Consumer.RuntimeRoot = r.RuntimeRoot
 		next.Consumers[r.ConsumerID] = r.Consumer
+	}
+	if retireOldCache {
+		if next.RuntimeRoot == previous.RuntimeRoot {
+			next.RuntimeRoot = r.RuntimeRoot
+		}
+		// Leave Claude's old cache bytes in place for in-flight hooks. They
+		// are no longer component-owned after the last consumer leaves.
+		for path := range next.Files {
+			if pathWithinRoot(previous.RuntimeRoot, path) {
+				delete(next.Files, path)
+			}
+		}
 	}
 	if len(next.Consumers) == 0 {
 		next.Enabled = false
@@ -553,6 +624,13 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 			return l, fmt.Errorf("policy-only preparation cannot mutate assets")
 		}
 		files = append(files, extra...)
+	}
+	if relocating {
+		for _, file := range files {
+			if pathWithinRoot(previous.RuntimeRoot, file.Path) {
+				return l, fmt.Errorf("cache relocation cannot mutate the previous runtime")
+			}
+		}
 	}
 	// Last-consumer cleanup uses the identities decided under this same lock.
 	// The control/state namespace is never part of this list. Callback bundles

@@ -2359,9 +2359,9 @@ stage_and_promote_runtime() (
     elif [ "${CN_PRODUCT:-claude}" = "codex" ]; then
         "$BINARY_PATH" internal-install-runtime --refresh --stage "$stage" --target "$live_dir" --entry "$BINARY_NAME" || exit 1
     elif [ "$PLATFORM" = "darwin" ]; then
-        "$BINARY_PATH" internal-install-runtime --stage "$stage" --target "$live_dir" --entry "$BINARY_NAME" --require-native || exit 1
+        "$BINARY_PATH" internal-install-runtime --stage "$stage" --target "$live_dir" --entry "$BINARY_NAME" --require-native --relocate-versioned-cache || exit 1
     else
-        "$BINARY_PATH" internal-install-runtime --stage "$stage" --target "$live_dir" --entry "$BINARY_NAME" || exit 1
+        "$BINARY_PATH" internal-install-runtime --stage "$stage" --target "$live_dir" --entry "$BINARY_NAME" --relocate-versioned-cache || exit 1
     fi
 
     if [ "$PLATFORM" = "linux" ]; then

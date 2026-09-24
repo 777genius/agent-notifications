@@ -78,6 +78,55 @@ func TestShellAndSetupShareOwnership(t *testing.T) {
 	}
 }
 
+func TestInstallRuntimeVersionedClaudeCacheRelocation(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := filepath.Join(root, ".claude", "plugins", "cache", "claude-notifications-go", "claude-notifications-go")
+	control := filepath.Join(root, "control")
+	entry := "claude-notifications-linux-amd64"
+	if runtime.GOOS == "windows" {
+		entry = "claude-notifications-windows-amd64.exe"
+	}
+	install := func(version, content string, relocate bool) error {
+		stage := filepath.Join(root, "stage-"+version)
+		if err := os.MkdirAll(stage, 0700); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(stage, entry), []byte(content+installruntime.WriterProtocolMarker), 0700); err != nil {
+			return err
+		}
+		args := []string{"--stage", stage, "--target", filepath.Join(cache, version, "bin"), "--entry", entry, "--control-root", control}
+		if relocate {
+			args = append(args, "--relocate-versioned-cache")
+		}
+		return installRuntime(args, io.Discard)
+	}
+	if err := install("1.45.7", "old", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := install("1.45.12", "new", false); err == nil {
+		t.Fatal("silent cache relocation")
+	}
+	if err := install("1.45.12", "new", true); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(control, "ownership.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ledger installruntime.Ledger
+	if err := json.Unmarshal(data, &ledger); err != nil {
+		t.Fatal(err)
+	}
+	oldRoot, newRoot := filepath.Join(cache, "1.45.7"), filepath.Join(cache, "1.45.12")
+	if ledger.Consumers["claude-hooks"].RuntimeRoot != newRoot || ledger.RuntimeRoot != newRoot ||
+		ledger.Files[filepath.Join(oldRoot, "bin", entry)].Exists || !ledger.Files[filepath.Join(newRoot, "bin", entry)].Exists {
+		t.Fatalf("unexpected ownership after cache relocation: %+v", ledger)
+	}
+}
+
 func TestWindowsManagedHooksPreserveForeignOnRemove(t *testing.T) {
 	root := t.TempDir()
 	stage, bin := filepath.Join(root, "stage"), filepath.Join(root, "plugin", "bin")

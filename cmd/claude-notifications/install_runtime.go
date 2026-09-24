@@ -28,6 +28,7 @@ func installRuntime(args []string, output io.Writer) error {
 	remove := flags.Bool("remove", false, "remove this managed consumer")
 	requireNative := flags.Bool("require-native", false, "require an attested compatible native reader")
 	refresh := flags.Bool("refresh", false, "refresh files for existing consumers without adding a registration")
+	relocateCache := flags.Bool("relocate-versioned-cache", false, "move Claude hooks between versioned plugin caches")
 	purge := flags.Bool("purge-native", false, "explicitly remove retained callback on final uninstall")
 	consumer := flags.String("consumer", "claude-hooks", "managed consumer identity")
 	if err := flags.Parse(args); err != nil {
@@ -38,6 +39,9 @@ func installRuntime(args []string, output io.Writer) error {
 	}
 	if *refresh && *remove {
 		return fmt.Errorf("refresh cannot remove a consumer")
+	}
+	if *relocateCache && (*refresh || *remove || *consumer != "claude-hooks") {
+		return fmt.Errorf("versioned cache relocation requires a Claude hooks install")
 	}
 	if *purge && !*remove {
 		return fmt.Errorf("purge requires consumer removal")
@@ -235,7 +239,7 @@ func installRuntime(args []string, output io.Writer) error {
 		}
 		files = append(files, aliases...)
 	}
-	req := installruntime.Request{RefreshOnly: *refresh, ControlRoot: *control, Owner: "existing-installer", RuntimeRoot: filepath.Dir(destination), ConsumerID: *consumer, Files: files, Native: native, RemoveConsumer: *remove, PurgeNative: *purge}
+	req := installruntime.Request{RefreshOnly: *refresh, RelocateVersionedCache: *relocateCache, ControlRoot: *control, Owner: "existing-installer", RuntimeRoot: filepath.Dir(destination), ConsumerID: *consumer, Files: files, Native: native, RemoveConsumer: *remove, PurgeNative: *purge}
 	if strings.HasSuffix(*entry, ".exe") {
 		hooks := filepath.Join(filepath.Dir(destination), "hooks", "hooks.json")
 		exe := filepath.Join(destination, *entry)
