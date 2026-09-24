@@ -106,6 +106,14 @@ func TestInstallRuntimeVersionedClaudeCacheRelocation(t *testing.T) {
 	if err := install("1.45.7", "old", false); err != nil {
 		t.Fatal(err)
 	}
+	oldRoot, newRoot := filepath.Join(cache, "1.45.7"), filepath.Join(cache, "1.45.12")
+	oldPrimary := filepath.Join(oldRoot, "bin", entry)
+	if _, err := installruntime.Commit(setupCommandContext(t), installruntime.Request{
+		ControlRoot: control, RuntimeRoot: oldRoot, Owner: "existing-installer", ConsumerID: "portable:existing",
+		Consumer: installruntime.Consumer{Commands: []string{oldPrimary}},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := install("1.45.12", "new", false); err == nil {
 		t.Fatal("silent cache relocation")
 	}
@@ -120,10 +128,12 @@ func TestInstallRuntimeVersionedClaudeCacheRelocation(t *testing.T) {
 	if err := json.Unmarshal(data, &ledger); err != nil {
 		t.Fatal(err)
 	}
-	oldRoot, newRoot := filepath.Join(cache, "1.45.7"), filepath.Join(cache, "1.45.12")
-	if ledger.Consumers["claude-hooks"].RuntimeRoot != newRoot || ledger.RuntimeRoot != newRoot ||
-		ledger.Files[filepath.Join(oldRoot, "bin", entry)].Exists || !ledger.Files[filepath.Join(newRoot, "bin", entry)].Exists {
+	if ledger.Consumers["claude-hooks"].RuntimeRoot != newRoot || ledger.Consumers["portable:existing"].RuntimeRoot != oldRoot || ledger.RuntimeRoot != oldRoot ||
+		!ledger.Files[oldPrimary].Exists || !ledger.Files[filepath.Join(newRoot, "bin", entry)].Exists {
 		t.Fatalf("unexpected ownership after cache relocation: %+v", ledger)
+	}
+	if contents, err := os.ReadFile(oldPrimary); err != nil || string(contents) != "new"+installruntime.WriterProtocolMarker {
+		t.Fatalf("retained portable primary was not upgraded: %q, %v", contents, err)
 	}
 }
 

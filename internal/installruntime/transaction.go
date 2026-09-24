@@ -201,6 +201,50 @@ func pathWithinRoot(root, path string) bool {
 	return err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
+// A portable binding keeps executing its recorded primary under the previous
+// cache root until a separate binding migration changes that locator. Publish
+// the same verified sender there in the relocation transaction, or refuse the
+// move when a shared consumer cannot be identified precisely.
+func retainedPortablePrimaryFiles(l Ledger, oldRoot, newRoot, movingID string, staged []File) ([]File, error) {
+	byPath := make(map[string]File, len(staged))
+	for _, file := range staged {
+		byPath[file.Path] = file
+	}
+	retained := make(map[string]File)
+	for id, consumer := range l.Consumers {
+		if id == movingID || consumer.RuntimeRoot != oldRoot {
+			continue
+		}
+		if !strings.HasPrefix(id, "portable:") || len(consumer.Commands) != 1 {
+			return nil, fmt.Errorf("shared cache consumer requires explicit migration: %s", id)
+		}
+		command := consumer.Commands[0]
+		if !pathWithinRoot(oldRoot, command) {
+			return nil, fmt.Errorf("portable primary is outside the previous runtime")
+		}
+		relative, err := filepath.Rel(oldRoot, command)
+		if err != nil || filepath.Dir(relative) != "bin" || !strings.HasPrefix(filepath.Base(relative), "claude-notifications-") {
+			return nil, fmt.Errorf("portable primary is not a managed sender")
+		}
+		before, owned := l.Files[command]
+		after, staged := byPath[filepath.Join(newRoot, relative)]
+		if !owned || !before.Exists || before.Link != "" || !staged || after.Remove || after.Link != "" || len(after.Data) == 0 || after.Mode&0111 == 0 {
+			return nil, fmt.Errorf("portable primary cannot be refreshed from the verified stage")
+		}
+		retained[command] = File{Path: command, Before: before, Data: after.Data, Mode: after.Mode}
+	}
+	paths := make([]string, 0, len(retained))
+	for path := range retained {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	files := make([]File, 0, len(paths))
+	for _, path := range paths {
+		files = append(files, retained[path])
+	}
+	return files, nil
+}
+
 // Commit serializes all component decisions, then config locks in canonical
 // order. The durable redo record precedes every live mutation. Recovery checks
 // every identity before changing anything and refuses ambiguous foreign edits.
@@ -388,6 +432,13 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 				retireOldCache = false
 				break
 			}
+		}
+	}
+	var retainedPrimaries []File
+	if relocating && !retireOldCache {
+		retainedPrimaries, err = retainedPortablePrimaryFiles(l, previous.RuntimeRoot, r.RuntimeRoot, r.ConsumerID, r.Files)
+		if err != nil {
+			return l, err
 		}
 	}
 	if r.RefreshOnly {
@@ -632,6 +683,7 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 			}
 		}
 	}
+	files = append(files, retainedPrimaries...)
 	// Last-consumer cleanup uses the identities decided under this same lock.
 	// The control/state namespace is never part of this list. Callback bundles
 	// have their own retained record and are intentionally not ordinary Files.
