@@ -6,6 +6,8 @@ import (
 	"golang.org/x/sys/windows"
 	"os"
 	"unsafe"
+
+	"github.com/777genius/agent-notifications/internal/windowsacl"
 )
 
 func tryLock(f *os.File) (bool, error) {
@@ -102,19 +104,12 @@ func privateWindowsHandle(h windows.Handle) error {
 			return fmt.Errorf("unsupported managed inode ACL")
 		}
 		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
-		if !sid.Equals(user.User.Sid) && !sid.IsWellKnown(windows.WinLocalSystemSid) && !sid.IsWellKnown(windows.WinBuiltinAdministratorsSid) && ace.Mask&^foreignReadOnlyFileRights != 0 {
+		if !sid.Equals(user.User.Sid) && !sid.IsWellKnown(windows.WinLocalSystemSid) && !sid.IsWellKnown(windows.WinBuiltinAdministratorsSid) && !windowsacl.AllowsForeignReadOnly(ace.Mask) {
 			return fmt.Errorf("managed inode DACL grants foreign access")
 		}
 	}
 	return nil
 }
-
-// A foreign principal may inspect or execute the runtime, but may not alter
-// managed files, descendants, ownership, or the DACL. Unknown rights fail
-// closed. Inherit-only ACEs are checked too: they can affect future children.
-const foreignReadOnlyFileRights = windows.FILE_READ_DATA | windows.FILE_READ_EA |
-	windows.FILE_EXECUTE | windows.FILE_READ_ATTRIBUTES | windows.READ_CONTROL |
-	windows.SYNCHRONIZE | windows.GENERIC_READ | windows.GENERIC_EXECUTE
 
 func restrictPrivateWindowsHandle(h windows.Handle) error {
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
