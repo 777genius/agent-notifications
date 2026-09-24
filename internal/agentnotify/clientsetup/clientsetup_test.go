@@ -147,6 +147,32 @@ func TestLifecycle(t *testing.T) {
 		})
 	}
 }
+
+func TestInspectionAllowsSoleMovedClaudeHookConsumerOnly(t *testing.T) {
+	for _, provider := range []registration.Provider{registration.Claude, registration.Codex} {
+		t.Run(string(provider), func(t *testing.T) {
+			f := fresh(t, provider)
+			snapshot, err := installruntime.ReadInstalledSnapshot(f.r.ControlRoot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			movedRoot := filepath.Join(filepath.Dir(f.r.RuntimeRoot), "new versioned cache")
+			snapshot.Ledger.Consumers = map[string]installruntime.Consumer{
+				"claude-hooks": {RuntimeRoot: movedRoot},
+			}
+			if err := checkRuntime(f.r, snapshot, true); err != nil {
+				t.Fatalf("read-only inspection of retained root failed: %v", err)
+			}
+			if err := checkRuntime(f.r, snapshot, false); !errors.Is(err, ErrConflict) {
+				t.Fatalf("mutation accepted a moved-only hook consumer: %v", err)
+			}
+			snapshot.Ledger.Consumers["foreign"] = installruntime.Consumer{RuntimeRoot: movedRoot}
+			if err := checkRuntime(f.r, snapshot, true); !errors.Is(err, ErrConflict) {
+				t.Fatalf("inspection accepted multiple moved consumers: %v", err)
+			}
+		})
+	}
+}
 func TestConflictsAndInvalidInputs(t *testing.T) {
 	for _, provider := range []registration.Provider{registration.Codex, registration.Claude} {
 		for _, name := range []string{"unowned", "modified", "missing-state", "bad-state", "generation", "mode", "command", "runtime", "malformed", "oversized", "symlink", "missing-runtime", "empty"} {
