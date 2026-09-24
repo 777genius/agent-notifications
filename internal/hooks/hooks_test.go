@@ -177,6 +177,51 @@ func TestClaudeStopKeepsCrossHookContentDedup(t *testing.T) {
 	}
 }
 
+func TestClaudeStopKeepsLegacyDedupAfterPreToolUse(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	transcript := filepath.Join(t.TempDir(), "session.jsonl")
+	if err := os.WriteFile(transcript, []byte(`{"type":"user","timestamp":"2026-09-24T12:00:00Z","message":{"role":"user","content":"plan"}}`+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	const session = "claude-pretool-stop-same-turn"
+	mock := &mockNotifier{}
+	h := &Handler{cfg: &config.Config{Notifications: config.NotificationsConfig{Desktop: config.DesktopConfig{Enabled: true}}},
+		dedupMgr: dedup.NewManager(), stateMgr: state.NewManager(), teamStateMgr: teamstate.NewManager(""),
+		notifierSvc: mock, webhookSvc: &mockWebhook{}, pluginRoot: t.TempDir()}
+	payload, err := json.Marshal(HookData{SessionID: session, TranscriptPath: transcript,
+		LastAssistantMessage: "Plan ready.", HookEventName: "Stop", CWD: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.HandleHook("Stop", strings.NewReader(string(payload))); err != nil {
+		t.Fatal(err)
+	}
+	if mock.callCount() != 1 {
+		t.Fatalf("initial notification count = %d, want 1", mock.callCount())
+	}
+	// Model a matching PreToolUse banner as the last delivered event. The
+	// subsequent Stop must retain the legacy rendered-content deduplication.
+	previous, err := h.stateMgr.Load(session)
+	if err != nil || previous == nil {
+		t.Fatalf("load delivered state: %v", err)
+	}
+	previous.LastNotificationEvent = "PreToolUse"
+	previous.LastStopPayloadHash = ""
+	previous.LastStopPayloadTime = 0
+	if err := h.stateMgr.Save(previous); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.dedupMgr.ReleaseLock(session, claudeStopTurnLockKey(session, "2026-09-24T12:00:00Z")); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.HandleHook("Stop", strings.NewReader(string(payload))); err != nil {
+		t.Fatal(err)
+	}
+	if mock.callCount() != 1 {
+		t.Fatalf("Stop repeated matching PreToolUse banner: count=%d", mock.callCount())
+	}
+}
+
 func TestClaudeStopPayloadHashSeparatesTurns(t *testing.T) {
 	first := claudeStopPayloadHash("Done.", "2026-09-24T12:00:00Z")
 	if first != claudeStopPayloadHash("Done.", "2026-09-24T12:00:00Z") {

@@ -615,10 +615,21 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 				return nil
 			}
 			if !isDuplicate {
-				// Notification after Notification (or after PreToolUse) keeps the
-				// old rendered-message check. The stronger body key is reserved
-				// for Stop replays and Stop/Notification cross-hook duplicates.
-				if ev.Kind() == EventNotification {
+				// Interactive prompts keep the old rendered-message check. A Stop
+				// after another hook in this turn needs it too: for example,
+				// ExitPlanMode and Stop can both render the same plan-ready banner.
+				// Do not apply it to a later Stop turn with an identical answer.
+				checkLegacy := ev.Kind() == EventNotification
+				if ev.Kind() == EventStop {
+					previous, loadErr := h.stateMgr.Load(keys.stateKey)
+					if loadErr != nil {
+						logging.Warn("Failed to load previous Claude notification: %v", loadErr)
+					} else if previous != nil && previous.LastNotificationTurn == turnTS &&
+						previous.LastNotificationEvent != "Stop" && previous.LastNotificationEvent != "Notification" {
+						checkLegacy = true
+					}
+				}
+				if checkLegacy {
 					isDuplicate, err := h.stateMgr.IsDuplicateMessage(keys.stateKey, message, 180)
 					if err != nil {
 						logging.Warn("Failed to check duplicate message: %v", err)
