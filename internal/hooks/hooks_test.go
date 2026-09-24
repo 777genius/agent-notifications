@@ -15,6 +15,7 @@ import (
 	"github.com/777genius/agent-notifications/internal/analyzer"
 	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/dedup"
+	"github.com/777genius/agent-notifications/internal/notifier"
 	"github.com/777genius/agent-notifications/internal/state"
 	"github.com/777genius/agent-notifications/internal/teamstate"
 	"github.com/777genius/agent-notifications/internal/webhook"
@@ -415,16 +416,23 @@ type notificationCall struct {
 	status  analyzer.Status
 	message string
 	cwd     string
+	// optionCount records how many notifier.SendOption values the handler passed.
+	// The option type is unexported, so the count is the only thing a caller can
+	// observe; WithoutSound is currently the only option, which makes
+	// "optionCount == 1" equivalent to "a muted delivery was requested". The
+	// option's own meaning is covered by TestWithoutSound* in the notifier package.
+	optionCount int
 }
 
-func (m *mockNotifier) SendDesktop(status analyzer.Status, message, sessionID, cwd string) error {
+func (m *mockNotifier) SendDesktop(status analyzer.Status, message, sessionID, cwd string, opts ...notifier.SendOption) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	m.calls = append(m.calls, notificationCall{
-		status:  status,
-		message: message,
-		cwd:     cwd,
+		status:      status,
+		message:     message,
+		cwd:         cwd,
+		optionCount: len(opts),
 	})
 
 	if m.shouldFail {

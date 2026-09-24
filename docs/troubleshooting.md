@@ -115,6 +115,70 @@ Review the file before posting it publicly, because it may include local file pa
 
 Linux click-to-focus behavior depends on the session type, terminal, window manager, and available focus tools. The diagnostic script captures the exact environment needed to explain why the plugin focused the wrong window or could not focus anything at all.
 
+## The notification sound plays even though Do Not Disturb is on
+
+### Symptom
+
+Your desktop is in Do Not Disturb. The banner is correctly held back by the
+desktop, but the plugin's sound plays anyway.
+
+### Why it happens
+
+The plugin plays its own audio cue in its own process, rather than asking the
+notification server to play one - that is what makes per-status sounds and volume
+control work. The notification server is explicitly asked not to play anything
+(`suppress-sound`), and it has no say over a separate process's audio.
+
+### Fix
+
+Opt in to DND handling in the shared file selected by `config path`
+(`"$NOTIFICATIONS_BIN" config path --json`; see the
+[Configuration guide](CONFIGURATION.md)):
+
+```json
+{
+  "notifications": {
+    "respectDoNotDisturb": "silent"
+  }
+}
+```
+
+`"silent"` keeps the banner (it still lands in the notification centre) and drops
+the sound; `"suppress"` drops both. The default is `"off"`, which is the old
+behaviour.
+
+### If it still plays
+
+Detection deliberately fails open: anything it cannot read counts as "not in
+DND", so the notification is delivered. Check, in order:
+
+1. **Platform.** Detection is Linux-only right now. macOS Focus modes and Windows
+   Focus Assist are not detected, so the option has no effect there. See
+   [DO_NOT_DISTURB.md](DO_NOT_DISTURB.md).
+2. **The value is spelled correctly.** An unrecognised value falls back to
+   `"off"` and logs `Unknown respectDoNotDisturb value ...` rather than failing
+   the config, so a typo looks exactly like the feature being switched off.
+3. **Your desktop actually exposes the state.** Run the probe for your daemon:
+
+   ```bash
+   gdbus call --session --dest org.freedesktop.Notifications      --object-path /org/freedesktop/Notifications      --method org.freedesktop.DBus.Properties.Get      org.freedesktop.Notifications Inhibited   # KDE Plasma and spec-compliant daemons
+   dunstctl is-paused                                            # dunst
+   xfconf-query -c xfce4-notifyd -p /do-not-disturb              # XFCE
+   gsettings get org.gnome.desktop.notifications show-banners    # GNOME: false means DND
+   ```
+
+   If none of these reports DND while your desktop says it is on, the plugin has
+   no source to read and will keep delivering.
+4. **Which source fired.** With debug logging on, look for a `DND: active (...)`
+   line in the plugin log. If the outcome looks right but the source is not the
+   one you expect, the detection is wrong even though the result happens to match.
+
+### Related: the terminal bell still rings
+
+`"silent"` mutes the plugin's sound, not the terminal bell - BEL is a tab
+indicator on Ghostty, tmux and Windows Terminal, and whether it makes noise is
+your terminal's own setting. Set `"terminalBell": false` to turn it off.
+
 ## Windows: installer says Linux or installs `linux-amd64`
 
 ### Symptom

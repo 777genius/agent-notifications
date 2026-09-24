@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/777genius/agent-notifications/internal/logging"
 	"github.com/777genius/agent-notifications/internal/platform"
@@ -22,20 +23,32 @@ type DebugConfig struct {
 	Benchmark bool `json:"benchmark"` // Enable benchmark timing output to log file
 }
 
+// Do Not Disturb handling modes for notifications.respectDoNotDisturb.
+const (
+	// DNDModeOff never consults the desktop's DND state (default).
+	DNDModeOff = "off"
+	// DNDModeSilent delivers the banner but skips the plugin's own sound, so
+	// the notification still reaches the notification centre.
+	DNDModeSilent = "silent"
+	// DNDModeSuppress skips the desktop notification entirely.
+	DNDModeSuppress = "suppress"
+)
+
 // NotificationsConfig represents notification settings
 type NotificationsConfig struct {
 	Desktop                                     DesktopConfig    `json:"desktop"`
 	Webhook                                     WebhookConfig    `json:"webhook"`
 	SuppressQuestionAfterTaskCompleteSeconds    *int             `json:"suppressQuestionAfterTaskCompleteSeconds"`
 	SuppressQuestionAfterAnyNotificationSeconds *int             `json:"suppressQuestionAfterAnyNotificationSeconds"`
-	NotifyOnSubagentStop                        bool             `json:"notifyOnSubagentStop"`      // Send notifications when subagents (Task tool) complete, default: false. Requires suppressForSubagents=false to take effect.
-	SuppressForSubagents                        *bool            `json:"suppressForSubagents"`      // Suppress subagent (SubagentStop) notifications, and Stop notifications whose transcript_path is a subagent/teammate transcript; default: true. Overrides notifyOnSubagentStop.
-	NotifyOnTextResponse                        *bool            `json:"notifyOnTextResponse"`      // Send notifications for text-only responses (no tools), default: true
-	RespectJudgeMode                            *bool            `json:"respectJudgeMode"`          // Honor CLAUDE_HOOK_JUDGE_MODE=true env var to suppress notifications, default: true
-	SuppressFilters                             []SuppressFilter `json:"suppressFilters,omitempty"` // Rules for suppressing notifications by status/branch/folder
-	TeamMode                                    string           `json:"teamMode,omitempty"`        // Team mode: "always" (no suppression, default), "wait-all" (suppress lead, notify when all idle), "never" (silent in team mode)
-	NotifyOnlyWhenUnfocused                     *bool            `json:"notifyOnlyWhenUnfocused"`   // Suppress desktop notifications while the terminal window running Claude Code has OS focus, default: false
-	NotifyDelaySeconds                          *int             `json:"notifyDelaySeconds"`        // Wait N seconds before delivering a desktop notification (paired with notifyOnlyWhenUnfocused, it re-checks focus after the wait), default: 0
+	NotifyOnSubagentStop                        bool             `json:"notifyOnSubagentStop"`          // Send notifications when subagents (Task tool) complete, default: false. Requires suppressForSubagents=false to take effect.
+	SuppressForSubagents                        *bool            `json:"suppressForSubagents"`          // Suppress subagent (SubagentStop) notifications, and Stop notifications whose transcript_path is a subagent/teammate transcript; default: true. Overrides notifyOnSubagentStop.
+	NotifyOnTextResponse                        *bool            `json:"notifyOnTextResponse"`          // Send notifications for text-only responses (no tools), default: true
+	RespectJudgeMode                            *bool            `json:"respectJudgeMode"`              // Honor CLAUDE_HOOK_JUDGE_MODE=true env var to suppress notifications, default: true
+	SuppressFilters                             []SuppressFilter `json:"suppressFilters,omitempty"`     // Rules for suppressing notifications by status/branch/folder
+	TeamMode                                    string           `json:"teamMode,omitempty"`            // Team mode: "always" (no suppression, default), "wait-all" (suppress lead, notify when all idle), "never" (silent in team mode)
+	NotifyOnlyWhenUnfocused                     *bool            `json:"notifyOnlyWhenUnfocused"`       // Suppress desktop notifications while the terminal window running Claude Code has OS focus, default: false
+	NotifyDelaySeconds                          *int             `json:"notifyDelaySeconds"`            // Wait N seconds before delivering a desktop notification (paired with notifyOnlyWhenUnfocused, it re-checks focus after the wait), default: 0
+	RespectDoNotDisturb                         *string          `json:"respectDoNotDisturb,omitempty"` // How to treat the desktop's Do Not Disturb state: "off" (default), "silent" (deliver the banner, skip the sound), "suppress" (skip the notification entirely)
 }
 
 // DesktopConfig represents desktop notification settings
@@ -623,6 +636,30 @@ func (c *Config) GetNotifyDelaySeconds() int {
 		return 0
 	}
 	return *c.Notifications.NotifyDelaySeconds
+}
+
+// GetDoNotDisturbMode returns how the desktop's Do Not Disturb state should be
+// treated: DNDModeOff (default), DNDModeSilent, or DNDModeSuppress.
+//
+// Unknown values fall back to DNDModeOff with a warning. Rejecting them in
+// Validate would abort config loading and therefore silence every notification
+// over a typo in one optional field, which is the exact failure this feature is
+// meant to avoid.
+func (c *Config) GetDoNotDisturbMode() string {
+	if c.Notifications.RespectDoNotDisturb == nil {
+		return DNDModeOff // Default: never consult the desktop's DND state
+	}
+	switch strings.ToLower(strings.TrimSpace(*c.Notifications.RespectDoNotDisturb)) {
+	case DNDModeSilent:
+		return DNDModeSilent
+	case DNDModeSuppress:
+		return DNDModeSuppress
+	case DNDModeOff:
+		return DNDModeOff
+	default:
+		logging.Warn("Unknown respectDoNotDisturb value %q, falling back to %q", *c.Notifications.RespectDoNotDisturb, DNDModeOff)
+		return DNDModeOff
+	}
 }
 
 // GetTeamMode returns the team notification mode: "always" (default), "wait-all", or "never"

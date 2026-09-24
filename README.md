@@ -27,7 +27,7 @@ Desktop notifications and sounds for **Claude Code and Codex CLI**. Know when a 
 - **Click-to-focus:** return to the originating terminal or editor, with exact tab/pane targeting for supported integrations including Ghostty, iTerm2, Warp, tmux, kitty and WezTerm. [Supported terminals](docs/CLICK_TO_FOCUS.md)
 - **Useful context:** project, git branch and session labels in notifications.
 - **Custom sounds:** built-in or custom MP3, WAV, FLAC, OGG and AIFF, with volume control, previews and audio output selection.
-- **Less noise:** focus-aware delivery, optional delay, duplicate-question suppression and filters by status, branch or folder.
+- **Less noise:** focus-aware delivery, optional delay, duplicate-question suppression, filters by status, branch or folder, and opt-in respect for the desktop's Do Not Disturb state. [Do Not Disturb](docs/DO_NOT_DISTURB.md)
 - **Your settings per agent:** shared configuration with separate Claude and Codex overrides; control desktop and webhook delivery per status. [Agent settings](docs/AGENT_CONFIGURATION.md)
 - **Webhooks:** Slack, Discord, Telegram, Lark/Feishu and custom endpoints, including Teams, ntfy, PagerDuty, Zapier, n8n and Make. Retries, rate limits and circuit breakers are built in. [Integrations](docs/webhooks/README.md)
 - **Cross-platform:** macOS (Intel/Apple Silicon), Linux (x64/ARM64) and Windows 10+ (x64). [Platform details](docs/PLATFORMS.md)

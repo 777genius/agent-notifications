@@ -42,6 +42,7 @@ const (
 // Test seams for the focus-aware / delayed desktop notification path.
 var (
 	isTerminalFocused = notifier.IsTerminalFocused
+	isDoNotDisturb    = notifier.IsDoNotDisturb
 	sleepFunc         = time.Sleep
 	settleSleepFunc   = time.Sleep
 )
@@ -70,7 +71,7 @@ type HookData struct {
 
 // notifierInterface defines the interface for sending desktop notifications
 type notifierInterface interface {
-	SendDesktop(status analyzer.Status, message, sessionID, cwd string) error
+	SendDesktop(status analyzer.Status, message, sessionID, cwd string, opts ...notifier.SendOption) error
 	Close() error
 }
 
@@ -1099,6 +1100,12 @@ func (h *Handler) sendNotifications(status analyzer.Status, body, actions, sessi
 // window has OS focus at delivery time - checked after the delay, so the two
 // options compose into "only notify once I have looked away". Both options are
 // independent and default off; webhook delivery is unaffected.
+//
+// When respectDoNotDisturb is not "off", the desktop's Do Not Disturb state is
+// checked at delivery time: "silent" delivers the banner without the plugin's
+// sound so it still lands in the notification centre, "suppress" drops it
+// entirely. Detection fails open - an unknown DND state delivers as usual.
+// Webhook delivery is unaffected by all three options.
 func (h *Handler) sendDesktopNotification(status analyzer.Status, message, sessionID, cwd string) bool {
 	if delay := h.cfg.GetNotifyDelaySeconds(); delay > 0 {
 		if delay > maxNotifyDelaySeconds {
@@ -1114,7 +1121,19 @@ func (h *Handler) sendDesktopNotification(status analyzer.Status, message, sessi
 		return false
 	}
 
-	if err := h.notifierSvc.SendDesktop(status, message, sessionID, cwd); err != nil {
+	// Do Not Disturb is evaluated at delivery time, after any notifyDelaySeconds
+	// wait, so toggling DND during the grace period is honoured.
+	var sendOpts []notifier.SendOption
+	if mode := h.cfg.GetDoNotDisturbMode(); mode != config.DNDModeOff && isDoNotDisturb() {
+		if mode == config.DNDModeSuppress {
+			logging.Debug("Desktop notification suppressed: Do Not Disturb is active")
+			return false
+		}
+		logging.Debug("Desktop notification muted: Do Not Disturb is active")
+		sendOpts = append(sendOpts, notifier.WithoutSound())
+	}
+
+	if err := h.notifierSvc.SendDesktop(status, message, sessionID, cwd, sendOpts...); err != nil {
 		h.maybeEmitDesktopPermissionGuidance(err)
 		errorhandler.HandleError(err, "Failed to send desktop notification")
 		return false

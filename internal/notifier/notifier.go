@@ -75,7 +75,12 @@ func isTimeSensitiveStatus(status analyzer.Status) bool {
 // Script Editor attribution and optionally enables click-to-focus.
 // On Linux with clickToFocus enabled, it uses the background daemon.
 // cwd is the working directory of the project; used for window-specific focus. May be empty.
-func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd string) error {
+//
+// Passing WithoutSound() delivers the banner without the plugin's own audio cue
+// (used when the desktop is in Do Not Disturb).
+func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd string, opts ...SendOption) error {
+	sendOpts := resolveSendOptions(opts)
+
 	// Send terminal bell for terminal tab indicators (e.g. Ghostty, tmux,
 	// Windows Terminal). Platform-specific; see bell_other.go / bell_windows.go.
 	if n.cfg.IsTerminalBellEnabled() {
@@ -125,7 +130,7 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 				logging.Warn("ClaudeNotifier failed on macOS, falling back to beeep: %v", err)
 			} else {
 				logging.Debug("Desktop notification sent via ClaudeNotifier/terminal-notifier: title=%s", title)
-				n.playSoundDetached(statusInfo.Sound)
+				n.playSoundUnlessMuted(statusInfo.Sound, sendOpts)
 				return nil
 			}
 		} else {
@@ -140,7 +145,7 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 			// Fall through to beeep
 		} else {
 			logging.Debug("Desktop notification sent via Linux daemon: title=%s", title)
-			n.playSoundDetached(statusInfo.Sound)
+			n.playSoundUnlessMuted(statusInfo.Sound, sendOpts)
 			return nil
 		}
 	}
@@ -152,13 +157,13 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 			// Fall through to beeep
 		} else {
 			logging.Debug("Desktop notification sent via Windows click-to-focus: title=%s", title)
-			n.playSoundDetached(statusInfo.Sound)
+			n.playSoundUnlessMuted(statusInfo.Sound, sendOpts)
 			return nil
 		}
 	}
 
 	// Standard path: beeep (Windows, Linux fallback)
-	return n.sendWithBeeep(title, cleanMessage, appIcon, statusInfo.Sound)
+	return n.sendWithBeeep(title, cleanMessage, appIcon, statusInfo.Sound, sendOpts)
 }
 
 // sendWithTerminalNotifier sends notification via terminal-notifier on macOS
@@ -471,7 +476,7 @@ func SendQuickNotification(title, message, executeCmd string) error {
 }
 
 // sendWithBeeep sends notification via beeep (cross-platform)
-func (n *Notifier) sendWithBeeep(title, message, appIcon, sound string) error {
+func (n *Notifier) sendWithBeeep(title, message, appIcon, sound string, opts sendOptions) error {
 	// Platform-specific AppName handling:
 	// - Windows: Use fixed AppName to prevent registry pollution. Each unique AppName
 	//   creates a persistent entry in HKEY_CURRENT_USER\SOFTWARE\Microsoft\Windows\
@@ -508,7 +513,7 @@ func (n *Notifier) sendWithBeeep(title, message, appIcon, sound string) error {
 	// returns the (joined) COM error. Gating the sound on that error therefore
 	// drops the audio cue spuriously. See docs/troubleshooting.md, which already
 	// documents the "doc.LoadXml(tmpl)" error as a harmless false positive.
-	n.playSoundDetached(sound)
+	n.playSoundUnlessMuted(sound, opts)
 
 	return err
 }
@@ -540,6 +545,16 @@ func isWindowsToastFallbackSuccess(err error) bool {
 
 	parts := joined.Unwrap()
 	return len(parts) == 1 && strings.Contains(parts[0].Error(), "doc.LoadXml(tmpl)")
+}
+
+// playSoundUnlessMuted routes every sound-playing path through one decision
+// point, so a muted delivery cannot leak audio via a branch that was missed.
+func (n *Notifier) playSoundUnlessMuted(sound string, opts sendOptions) {
+	if opts.muteSound {
+		logging.Debug("Sound suppressed for this notification (muted delivery)")
+		return
+	}
+	n.playSoundDetached(sound)
 }
 
 // playSoundDetached spawns a detached child process to play the sound.

@@ -76,6 +76,7 @@ The following JSON illustrates the schema. Do not replace your existing document
     "respectJudgeMode": true,
     "notifyOnlyWhenUnfocused": false,
     "notifyDelaySeconds": 0,
+    "respectDoNotDisturb": "off",
     "suppressFilters": [
       {
         "name": "Suppress ClaudeProbe completions (remote-control)",
@@ -127,6 +128,7 @@ The following JSON illustrates the schema. Do not replace your existing document
 | `respectJudgeMode` | `true` | Honor `CLAUDE_HOOK_JUDGE_MODE=true` env var to suppress notifications |
 | `notifyOnlyWhenUnfocused` | `false` | Skip the desktop notification only when the focused terminal window can be matched to the current Claude Code session. Best-effort per platform; if focus can't be determined the notification is still shown. |
 | `notifyDelaySeconds` | `0` | Wait N seconds before delivering a desktop notification (capped at 25s by the hook timeout). With `notifyOnlyWhenUnfocused`, focus is re-checked after the wait. Webhooks are unaffected. |
+| `respectDoNotDisturb` | `"off"` | Honour the desktop's Do Not Disturb state. `"silent"` still delivers the banner (so it reaches the notification centre) but skips the plugin's sound; `"suppress"` skips the notification entirely. Linux only for now (KDE Plasma, GNOME, XFCE, dunst); other platforms always report "not in DND". Webhooks are unaffected. See [Do Not Disturb](DO_NOT_DISTURB.md). |
 | `suppressQuestionAfterTaskCompleteSeconds` | `12` | Suppress question notifications for N seconds after task complete |
 | `suppressQuestionAfterAnyNotificationSeconds` | `7` | Suppress question notifications for N seconds after any notification |
 | `suppressFilters` | `[]` | Array of rules to suppress notifications by status, git branch, and/or folder. Each rule is an AND of its fields; omitted fields match any value. Set `gitBranch` to `""` to match sessions outside git repos. |
@@ -177,6 +179,38 @@ Both apply to **desktop notifications only** - webhook delivery is never delayed
 - Windows: the foreground window must belong to the hook process ancestry and its title must contain the project folder. Ambiguous multi-window or multi-tab terminal hosts are treated as unknown.
 
 Unknown means "show the notification", not "suppress it".
+
+### Do Not Disturb
+
+The plugin plays its notification sound itself, in its own process, which is why
+the sound used to come through at full volume while the desktop was in Do Not
+Disturb: the banner was correctly silenced by the desktop, but nothing had any
+say over a separate process's audio.
+
+`respectDoNotDisturb` fixes that. It is `"off"` by default, so nothing changes
+until you opt in:
+
+```json
+{
+  "notifications": {
+    "respectDoNotDisturb": "silent"
+  }
+}
+```
+
+- **`"off"`** (default) - DND state is never queried.
+- **`"silent"`** - the banner is still delivered, so it lands in the notification centre and shows when DND lifts, but the plugin's sound is skipped.
+- **`"suppress"`** - nothing is delivered.
+
+Detection is Linux-only for now - KDE Plasma and other daemons exposing
+`org.freedesktop.Notifications.Inhibited`, dunst, XFCE and GNOME. macOS Focus
+modes and Windows Focus Assist are not detected yet, so `respectDoNotDisturb`
+has no effect there. Like focus detection, it fails open: anything it cannot read
+counts as "not in DND" and the notification is delivered with its sound.
+
+Webhooks are unaffected in every mode. See [Do Not Disturb](DO_NOT_DISTURB.md)
+for the exact sources per desktop, the latency budget, and how to verify which
+one fired.
 
 ### Sound Options
 

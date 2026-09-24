@@ -245,7 +245,7 @@ func TestSendWithBeeep_RestoresAppName(t *testing.T) {
 	beeep.AppName = testAppName
 
 	// Call sendWithBeeep
-	_ = n.sendWithBeeep("Test Title", "Test Message", "", "")
+	_ = n.sendWithBeeep("Test Title", "Test Message", "", "", sendOptions{})
 
 	// AppName should be restored
 	if beeep.AppName != testAppName {
@@ -278,7 +278,7 @@ func TestSendWithBeeep_WindowsToastFallbackSuccess(t *testing.T) {
 		return errors.Join(fmt.Errorf("doc.LoadXml(tmpl): error 3222070623"))
 	})
 
-	err := n.sendWithBeeep("🔍 Review", "Test Message", "", "")
+	err := n.sendWithBeeep("🔍 Review", "Test Message", "", "", sendOptions{})
 	if err != nil {
 		t.Fatalf("sendWithBeeep returned %v, want nil for successful PowerShell fallback", err)
 	}
@@ -303,7 +303,7 @@ func TestSendWithBeeep_WindowsToastFallbackFailure(t *testing.T) {
 		)
 	})
 
-	err := n.sendWithBeeep("🔍 Review", "Test Message", "", "")
+	err := n.sendWithBeeep("🔍 Review", "Test Message", "", "", sendOptions{})
 	if err == nil {
 		t.Fatal("sendWithBeeep returned nil, want error when COM and PowerShell fallback both fail")
 	}

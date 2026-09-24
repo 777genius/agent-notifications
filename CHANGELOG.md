@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Do Not Disturb aware notifications on Linux** - `respectDoNotDisturb` (default `"off"`) lets the plugin honour the desktop's DND state. `"silent"` still delivers the banner, so it lands in the notification centre, but skips the plugin's own audio cue - which previously played through DND because the sound is played by the plugin rather than the notification server. `"suppress"` skips the notification entirely. Detected via `org.freedesktop.Notifications.Inhibited` (KDE Plasma), dunst's `paused` property, Xfconf `xfce4-notifyd/do-not-disturb`, and GNOME's `show-banners` GSetting; any unreadable state fails open and delivers the notification as before. macOS Focus modes and Windows Focus Assist are not detected yet and always report "not in DND". Webhooks are unaffected. See [docs/DO_NOT_DISTURB.md](docs/DO_NOT_DISTURB.md)
+
 ## [1.45.15] - 2026-09-24
 
 ### Fixed
