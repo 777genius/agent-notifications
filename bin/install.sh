@@ -1710,7 +1710,7 @@ download_terminal_notifier_modern() {
     done
 
     if [ "$downloaded" != true ]; then
-        echo -e "${YELLOW}⚠ Could not download ClaudeNotifier, falling back to legacy${NC}"
+        echo -e "${YELLOW}⚠ Could not download ClaudeNotifier; installation cannot continue${NC}"
         guard_install_paths "$TEMP_ZIP"
         rm -f "$TEMP_ZIP" 2>/dev/null
         return 1
@@ -1725,7 +1725,7 @@ download_terminal_notifier_modern() {
 
     # Verify zip
     if ! unzip -t "$TEMP_ZIP" &>/dev/null; then
-        echo -e "${YELLOW}⚠ Downloaded file is not a valid zip, falling back to legacy${NC}"
+        echo -e "${YELLOW}⚠ ClaudeNotifier download is not a valid zip; installation cannot continue${NC}"
         guard_install_paths "$TEMP_ZIP"
         rm -f "$TEMP_ZIP"
         return 1
@@ -1761,7 +1761,7 @@ download_terminal_notifier_modern() {
         echo -e "${GREEN}✓${NC} ClaudeNotifier installed (modern notifications + click-to-focus)"
         return 0
     else
-        echo -e "${YELLOW}⚠ ClaudeNotifier extraction incomplete, falling back to legacy${NC}"
+        echo -e "${YELLOW}⚠ ClaudeNotifier extraction incomplete; installation cannot continue${NC}"
         guard_install_paths "$MODERN_APP"
         rm -rf "$MODERN_APP" 2>/dev/null
         return 1

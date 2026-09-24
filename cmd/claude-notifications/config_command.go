@@ -222,6 +222,23 @@ func configCommand(args []string, in io.Reader, out, stderr io.Writer) int {
 		}
 		request.Env = env
 		request.Assets = assets
+		// A failed first install can leave a same-release Claude cache before
+		// config init writes the shared file. Only its exact-version packaged
+		// template is safe to ignore on retry; edited or older caches still
+		// require explicit import. The verified helper supplies the template.
+		for _, bundleRoot := range request.ActiveBundleRoots {
+			_, bundleLegacy := config.ConsumerContext(bundleRoot)
+			if len(bundleLegacy.Candidates) == 0 || len(bundleLegacy.Candidates[0].TrustedBaseline) == 0 {
+				continue
+			}
+			trusted := bundleLegacy.Candidates[0]
+			for i := range request.HistoricalCandidates {
+				candidate := &request.HistoricalCandidates[i]
+				if filepath.Clean(candidate.Path) == filepath.Clean(trusted.Path) && candidate.BaselinePath == "" && candidate.BaselineSHA256 == "" {
+					candidate.TrustedBaseline = trusted.TrustedBaseline
+				}
+			}
+		}
 		for _, historical := range legacy.Candidates {
 			supplied := false
 			for _, candidate := range request.HistoricalCandidates {

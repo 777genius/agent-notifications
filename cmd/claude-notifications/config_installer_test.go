@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	configtemplate "github.com/777genius/agent-notifications/config"
+	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/testenv"
 )
 
@@ -65,6 +67,68 @@ func TestInstallerBootstrapProtectsStageAndRegistry(t *testing.T) {
 	if _, err := installerBootstrapRequest(args); err == nil {
 		t.Fatal("relative registry path accepted")
 	}
+}
+
+func TestInstallerBootstrapRetryTrustsOnlyCurrentUnmodifiedCacheTemplate(t *testing.T) {
+	box := t.TempDir()
+	testenv.Set(t, box)
+	root := filepath.Join(box, "cache", config.ConsumerVersion)
+	stage := filepath.Join(box, "stage")
+	for _, path := range []string{filepath.Join(root, "config"), filepath.Join(root, ".claude-plugin"), stage} {
+		if err := os.MkdirAll(path, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	configPath := filepath.Join(root, "config", "config.json")
+	manifestPath := filepath.Join(root, ".claude-plugin", "plugin.json")
+	if err := os.WriteFile(configPath, configtemplate.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	writeManifest := func(version string) {
+		t.Helper()
+		manifest := `{"name":"claude-notifications-go","version":"` + version + `"}`
+		if err := os.WriteFile(manifestPath, []byte(manifest), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeManifest(config.ConsumerVersion)
+	registry := filepath.Join(box, "installed-before.json")
+	data, err := json.Marshal(map[string]any{"plugins": map[string]any{"test": []installerEntry{{InstallPath: root, Version: config.ConsumerVersion}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(registry, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	request, err := installerBootstrapRequest([]string{registry, "test", filepath.Join(box, "claude"), filepath.Join(box, "cache"), filepath.Join(box, "market"), filepath.Join(box, "codex"), "both", stage, registry, ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(wantSafe bool) {
+		t.Helper()
+		var out, stderr bytes.Buffer
+		code := configCommand([]string{"preflight-update", "--stdin", "--json"}, bytes.NewReader(input), &out, &stderr)
+		if wantSafe && code != 0 {
+			t.Fatalf("unmodified current template blocked: %s %s", out.String(), stderr.String())
+		}
+		if !wantSafe && (code == 0 || !strings.Contains(stderr.String(), string(config.ConfigLegacyImportRequired))) {
+			t.Fatalf("unsafe historical config accepted: %d %s %s", code, out.String(), stderr.String())
+		}
+	}
+	check(true)
+	if err := os.WriteFile(configPath, []byte(`{"custom":true}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	check(false)
+	if err := os.WriteFile(configPath, configtemplate.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	writeManifest("0.0.0")
+	check(false)
 }
 
 func TestInstallerRegistryRejectsDuplicateKeys(t *testing.T) {
