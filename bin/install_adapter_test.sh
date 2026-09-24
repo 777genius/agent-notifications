@@ -58,15 +58,17 @@ echo 'PASS: ordinary hook dispatch preserved'
 [ "$1" != --version ] || { echo claude-notifications-1.0.0; exit 0; }
 [ "$1" = internal-install-runtime ] || exit 2
 shift
-stage= required=false
+stage= required=false relocate=false
 while [ "$#" -gt 0 ]; do
  case "$1" in
   --stage) stage=$2; shift 2 ;;
   --require-native) required=true; shift ;;
+  --relocate-versioned-cache) relocate=true; shift ;;
   *) shift ;;
  esac
 done
 [ "$required" = true ] || exit 3
+[ "$relocate" = true ] || exit 6
 [ "$(cat "$stage/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern")" = supplied-new-native ] || exit 4
 [ -f "$stage/ClaudeNotifier.app.managed-runtime.json" ] || exit 5
 echo 'managed-runtime committed generation=1'
@@ -130,6 +132,7 @@ PAYLOAD
  rm -f "$ADAPTER_SPY"
  stage_and_promote_runtime
  grep -q -- '--refresh' "$ADAPTER_SPY"
+ if grep -q -- '--relocate-versioned-cache' "$ADAPTER_SPY"; then exit 1; fi
 )
 echo 'PASS: Codex live update refreshes through the kernel'
 (
