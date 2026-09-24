@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/777genius/agent-notifications/internal/codexsetup"
 	"github.com/777genius/agent-notifications/internal/installruntime"
@@ -108,7 +110,9 @@ func TestInstallRuntimeVersionedClaudeCacheRelocation(t *testing.T) {
 	}
 	oldRoot, newRoot := filepath.Join(cache, "1.45.7"), filepath.Join(cache, "1.45.12")
 	oldPrimary := filepath.Join(oldRoot, "bin", entry)
-	if _, err := installruntime.Commit(setupCommandContext(t), installruntime.Request{
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := installruntime.Commit(ctx, installruntime.Request{
 		ControlRoot: control, RuntimeRoot: oldRoot, Owner: "existing-installer", ConsumerID: "portable:existing",
 		Consumer: installruntime.Consumer{Commands: []string{oldPrimary}},
 	}); err != nil {
