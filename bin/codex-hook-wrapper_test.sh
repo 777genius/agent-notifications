@@ -75,6 +75,20 @@ contended=$(OS=Windows_NT XDG_CACHE_HOME="$ROOT/failed-cache" sh failed/bin/hook
 [ -z "$contended" ]
 rm failed/bin/.install.lock/.owner.test/pid failed/bin/.install.lock/.owner.test/heartbeat
 rmdir failed/bin/.install.lock/.owner.test failed/bin/.install.lock
+# A competing installer can publish the lock directory before its owner.
+mkdir failed/bin/.install.lock
+(
+ sleep 0.2
+ mkdir failed/bin/.install.lock/.owner.publishing
+ printf '%s\n' "$$" > failed/bin/.install.lock/.owner.publishing/pid
+ : > failed/bin/.install.lock/.owner.publishing/heartbeat
+) &
+publishing_pid=$!
+publishing=$(OS=Windows_NT XDG_CACHE_HOME="$ROOT/failed-cache" sh failed/bin/hook-wrapper.sh handle-hook Stop)
+wait "$publishing_pid"
+[ -z "$publishing" ]
+rm failed/bin/.install.lock/.owner.publishing/pid failed/bin/.install.lock/.owner.publishing/heartbeat
+rmdir failed/bin/.install.lock/.owner.publishing failed/bin/.install.lock
 first=$(OS=Windows_NT XDG_CACHE_HOME="$ROOT/failed-cache" sh failed/bin/hook-wrapper.sh handle-hook Stop)
 second=$(OS=Windows_NT XDG_CACHE_HOME="$ROOT/failed-cache" sh failed/bin/hook-wrapper.sh handle-hook Stop)
 case "$first" in *'"systemMessage"'*'Installation of v1.42.0 failed'*) : ;; *) exit 1 ;; esac

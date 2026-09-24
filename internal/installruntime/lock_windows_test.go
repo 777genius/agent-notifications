@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -60,6 +61,35 @@ func TestLockWithInheritedForeignReadOnlyACE(t *testing.T) {
 		t.Fatalf("installer lock inherited a read-only ACE: %v", err)
 	}
 	release()
+	f, err := openLock(filepath.Join(root, "install.lock"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	sd, err := windows.GetSecurityInfo(windows.Handle(f.Fd()), windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		t.Fatal(err)
+	}
+	control, _, err := sd.Control()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if control&windows.SE_DACL_PROTECTED == 0 {
+		t.Fatal("new installer lock inherited the control root DACL")
+	}
+	acl, _, err := sd.DACL()
+	if err != nil || acl == nil {
+		t.Fatalf("new installer lock has no DACL: %v", err)
+	}
+	for i := uint32(0); i < uint32(acl.AceCount); i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(acl, i, &ace); err != nil {
+			t.Fatal(err)
+		}
+		if (*windows.SID)(unsafe.Pointer(&ace.SidStart)).IsWellKnown(windows.WinWorldSid) {
+			t.Fatal("new installer lock grants Everyone access")
+		}
+	}
 }
 
 func windowsTestDirectoryWithForeignACE(t *testing.T, flags string, mask uint32) (string, windows.Handle) {

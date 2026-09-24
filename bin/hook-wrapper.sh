@@ -194,6 +194,18 @@ install_in_progress() {
     kill -0 "$_owner_pid" 2>/dev/null
 }
 
+wait_for_install_publication() {
+    _wait_attempt=0
+    while [ "$_wait_attempt" -lt 2 ]; do
+        binary_ok && return 0
+        install_in_progress && return 0
+        [ -d "$SCRIPT_DIR/.install.lock" ] && [ ! -L "$SCRIPT_DIR/.install.lock" ] || return 1
+        sleep 1
+        _wait_attempt=$((_wait_attempt + 1))
+    done
+    binary_ok || install_in_progress
+}
+
 # === Main Logic ===
 
 STAMP_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/claude-notifications-go"
@@ -286,7 +298,7 @@ if [ "$NEED_INSTALL" = 1 ]; then
     if [ "$INSTALL_FAILED" = 1 ] || ! binary_ok; then
         # Keep update/preflight failures silent while a usable old binary is
         # retained. Only a verified live installer suppresses the diagnostic.
-        if ! binary_ok && ! install_in_progress; then
+        if ! binary_ok && ! wait_for_install_publication; then
             report_install_failure
         fi
     fi
