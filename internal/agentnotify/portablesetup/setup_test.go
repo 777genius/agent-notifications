@@ -940,11 +940,29 @@ func TestFinishConfirmedIntentAfterClaudeCacheRelocationAndPortableRemoval(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snap.Ledger.PendingMutation != nil || snap.Ledger.Consumers["claude-hooks"].RuntimeRoot != newRoot {
+	if snap.Ledger.PendingMutation != nil || snap.Ledger.RuntimeRoot != oldRoot ||
+		snap.Ledger.Consumers["claude-hooks"].RuntimeRoot != newRoot {
 		t.Fatalf("cleanup changed relocated hook or left reservation: %+v", snap.Ledger)
 	}
 	if _, err := os.Lstat(IntentPath(control)); !os.IsNotExist(err) {
 		t.Fatalf("cleanup retained intent: %v", err)
+	}
+	_, reinstallReservation, err := svc.PublishConfirmedIntent(ctx, ConfirmedIntent{
+		ControlRoot: control, RuntimeRoot: oldRoot, Owner: owner, ExpectedGeneration: snap.Ledger.Generation,
+		Action: "install", Stage: "confirmed", Targets: []IntentTarget{{Client: "claude", Units: []string{"agent-notify"}}},
+	})
+	if err != nil {
+		t.Fatalf("retained reinstall could not publish intent: %v", err)
+	}
+	if err := svc.PatchIntentReceipt(ctx, control, oldRoot, owner, "claude", "receipt-1"); err != nil {
+		t.Fatalf("retained reinstall could not patch intent: %v", err)
+	}
+	if err := svc.FinishConfirmedIntent(ctx, ConfirmedIntent{ControlRoot: control, RuntimeRoot: oldRoot, Owner: owner}, reinstallReservation); err != nil {
+		t.Fatalf("retained reinstall could not finish intent: %v", err)
+	}
+	intent, err := os.Lstat(IntentPath(control))
+	if err == nil || !os.IsNotExist(err) {
+		t.Fatalf("retained reinstall left intent file: %v %v", intent, err)
 	}
 }
 
