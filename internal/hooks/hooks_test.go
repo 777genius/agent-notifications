@@ -339,6 +339,45 @@ func TestClaudeStopCrossHookDedupSurvivesTranscriptFlush(t *testing.T) {
 	}
 }
 
+func TestClaudeRepeatedQuestionKeepsLegacyContentDedup(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	transcript := filepath.Join(t.TempDir(), "session.jsonl")
+	user := `{"type":"user","timestamp":"2026-09-24T12:00:00Z","message":{"role":"user","content":"choose"}}` + "\n"
+	question := func(timestamp string) string {
+		return `{"type":"assistant","timestamp":"` + timestamp + `","message":{"role":"assistant","content":[{"type":"text","text":"Which option?"}]}}` + "\n"
+	}
+	if err := os.WriteFile(transcript, []byte(user+question("2026-09-24T12:00:01Z")), 0600); err != nil {
+		t.Fatal(err)
+	}
+	mock := &mockNotifier{}
+	h := &Handler{cfg: &config.Config{Notifications: config.NotificationsConfig{
+		Desktop: config.DesktopConfig{Enabled: true},
+		SuppressQuestionAfterAnyNotificationSeconds: intPtr(0), SuppressQuestionAfterTaskCompleteSeconds: intPtr(0),
+	}}, dedupMgr: dedup.NewManager(), stateMgr: state.NewManager(), teamStateMgr: teamstate.NewManager(""),
+		notifierSvc: mock, webhookSvc: &mockWebhook{}, pluginRoot: t.TempDir()}
+	const session = "repeated-question-same-turn"
+	payload, err := json.Marshal(HookData{SessionID: session, TranscriptPath: transcript,
+		HookEventName: "Notification", CWD: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.HandleHook("Notification", strings.NewReader(string(payload))); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.dedupMgr.ReleaseLock(session, "Notification"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(transcript, []byte(user+question("2026-09-24T12:00:01Z")+question("2026-09-24T12:00:05Z")), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.HandleHook("Notification", strings.NewReader(string(payload))); err != nil {
+		t.Fatal(err)
+	}
+	if mock.callCount() != 2 {
+		t.Fatalf("second interactive prompt suppressed: notifications=%d", mock.callCount())
+	}
+}
+
 func TestClaudeStopWithoutPayloadWaitsOnlyForTranscriptGrowth(t *testing.T) {
 	setTestHome(t, t.TempDir())
 	transcript := filepath.Join(t.TempDir(), "session.jsonl")

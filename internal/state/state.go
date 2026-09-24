@@ -22,6 +22,7 @@ type SessionState struct {
 	LastNotificationMessage string `json:"last_notification_message,omitempty"`
 	LastNotificationBody    string `json:"last_notification_body,omitempty"`
 	LastNotificationTurn    string `json:"last_notification_turn,omitempty"`
+	LastNotificationEvent   string `json:"last_notification_event,omitempty"`
 	LastStopPayloadHash     string `json:"last_stop_payload_hash,omitempty"`
 	LastStopPayloadTime     int64  `json:"last_stop_payload_ts,omitempty"`
 	GhosttyTerminalID       string `json:"ghostty_terminal_id,omitempty"`
@@ -202,12 +203,12 @@ func (m *Manager) UpdateLastNotification(sessionID string, status analyzer.Statu
 // UpdateLastNotificationWithStop retains the normal cross-hook content key and
 // optionally records a separate digest for Claude Stop replay detection.
 func (m *Manager) UpdateLastNotificationWithStop(sessionID string, status analyzer.Status, message, stopHash string) error {
-	return m.UpdateLastNotificationWithIdentity(sessionID, status, message, stopHash, "", "")
+	return m.UpdateLastNotificationWithIdentity(sessionID, status, message, stopHash, "", "", "")
 }
 
 // UpdateLastNotificationWithIdentity records both the legacy rendered key and
 // a stable body/turn pair for Claude's cross-hook deduplication.
-func (m *Manager) UpdateLastNotificationWithIdentity(sessionID string, status analyzer.Status, message, stopHash, body, turn string) error {
+func (m *Manager) UpdateLastNotificationWithIdentity(sessionID string, status analyzer.Status, message, stopHash, body, turn, event string) error {
 	state, err := m.Load(sessionID)
 	if err != nil {
 		return err
@@ -224,6 +225,7 @@ func (m *Manager) UpdateLastNotificationWithIdentity(sessionID string, status an
 	state.LastNotificationMessage = message
 	state.LastNotificationBody = body
 	state.LastNotificationTurn = turn
+	state.LastNotificationEvent = event
 	if stopHash != "" {
 		state.LastStopPayloadHash = stopHash
 		state.LastStopPayloadTime = state.LastNotificationTime
@@ -235,8 +237,9 @@ func (m *Manager) UpdateLastNotificationWithIdentity(sessionID string, status an
 // IsDuplicateTurnBody suppresses different hooks for the same Claude turn
 // even if transcript flush changes the duration/actions appended to the body.
 // An identical answer in a later turn is not a duplicate.
-func (m *Manager) IsDuplicateTurnBody(sessionID, body, turn string, windowSeconds int) (bool, error) {
-	if body == "" || turn == "" || windowSeconds <= 0 {
+func (m *Manager) IsDuplicateTurnBody(sessionID, body, turn, event string, windowSeconds int) (bool, error) {
+	if body == "" || turn == "" || windowSeconds <= 0 ||
+		(event != "Stop" && event != "Notification") {
 		return false, nil
 	}
 	state, err := m.Load(sessionID)
@@ -244,8 +247,13 @@ func (m *Manager) IsDuplicateTurnBody(sessionID, body, turn string, windowSecond
 		return false, err
 	}
 	elapsed := platform.CurrentTimestamp() - state.LastNotificationTime
+	// Only Stop replays and the Stop/Notification pair share this stronger
+	// body-only key. Repeated interactive prompts must retain their legacy
+	// rendered-content behavior rather than being hidden by a shared body.
+	paired := event == "Stop" && (state.LastNotificationEvent == "Stop" || state.LastNotificationEvent == "Notification") ||
+		event == "Notification" && state.LastNotificationEvent == "Stop"
 	return elapsed >= 0 && elapsed <= int64(windowSeconds) &&
-		state.LastNotificationTurn == turn && normalizeMessage(state.LastNotificationBody) == normalizeMessage(body), nil
+		paired && state.LastNotificationTurn == turn && normalizeMessage(state.LastNotificationBody) == normalizeMessage(body), nil
 }
 
 // IsDuplicateStopPayload checks the separate Stop identity without replacing

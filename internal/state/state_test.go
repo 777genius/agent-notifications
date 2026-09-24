@@ -679,13 +679,18 @@ func TestManager_IsDuplicateTurnBodyIgnoresDurationButNotTurn(t *testing.T) {
 	mgr := newTestManager(t)
 	const session = "claude-turn-body"
 	require.NoError(t, mgr.UpdateLastNotificationWithIdentity(session, analyzer.StatusTaskComplete,
-		"Done. ⏱ 1s", "stop-hash", "Done.", "2026-09-24T12:00:00Z"))
-	duplicate, err := mgr.IsDuplicateTurnBody(session, "Done", "2026-09-24T12:00:00Z", 180)
+		"Done. ⏱ 1s", "stop-hash", "Done.", "2026-09-24T12:00:00Z", "Stop"))
+	duplicate, err := mgr.IsDuplicateTurnBody(session, "Done", "2026-09-24T12:00:00Z", "Notification", 180)
 	require.NoError(t, err)
 	assert.True(t, duplicate)
-	duplicate, err = mgr.IsDuplicateTurnBody(session, "Done.", "2026-09-24T12:00:03Z", 180)
+	duplicate, err = mgr.IsDuplicateTurnBody(session, "Done.", "2026-09-24T12:00:03Z", "Stop", 180)
 	require.NoError(t, err)
 	assert.False(t, duplicate, "identical answer from a new turn must be delivered")
+	require.NoError(t, mgr.UpdateLastNotificationWithIdentity(session, analyzer.StatusQuestion,
+		"Which one? ⏱ 2s", "", "Which one?", "2026-09-24T12:00:03Z", "Notification"))
+	duplicate, err = mgr.IsDuplicateTurnBody(session, "Which one?", "2026-09-24T12:00:03Z", "Notification", 180)
+	require.NoError(t, err)
+	assert.False(t, duplicate, "a later interactive prompt is not a Stop replay")
 }
 
 func TestManager_IsDuplicateMessage_NoState(t *testing.T) {

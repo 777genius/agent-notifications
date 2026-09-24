@@ -602,16 +602,31 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 			logging.Debug("Duplicate Stop payload detected within 3 minutes, skipping")
 			return nil
 		}
-		if ev.Product == ProductClaude && turnTS != "" {
+		if ev.Product == ProductClaude && turnTS != "" &&
+			(ev.Kind() == EventStop || ev.Kind() == EventNotification) {
 			// The body/turn pair is stable across transcript flushes and hook
 			// types. In particular, a duration suffix must not make the same
 			// answer from Notification look like new content.
-			isDuplicate, turnErr := h.stateMgr.IsDuplicateTurnBody(keys.stateKey, body, turnTS, 180)
+			isDuplicate, turnErr := h.stateMgr.IsDuplicateTurnBody(keys.stateKey, body, turnTS, hookEvent, 180)
 			if turnErr != nil {
 				logging.Warn("Failed to check duplicate Claude turn body: %v", turnErr)
 			} else if isDuplicate {
 				logging.Debug("Duplicate Claude turn body detected within 3 minutes, skipping")
 				return nil
+			}
+			if !isDuplicate {
+				// Notification after Notification (or after PreToolUse) keeps the
+				// old rendered-message check. The stronger body key is reserved
+				// for Stop replays and Stop/Notification cross-hook duplicates.
+				if ev.Kind() == EventNotification {
+					isDuplicate, err := h.stateMgr.IsDuplicateMessage(keys.stateKey, message, 180)
+					if err != nil {
+						logging.Warn("Failed to check duplicate message: %v", err)
+					} else if isDuplicate {
+						logging.Debug("Duplicate message content detected within 3 minutes, skipping")
+						return nil
+					}
+				}
 			}
 		} else {
 			// Without a turn identity, retain the conservative legacy content
@@ -637,7 +652,7 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 	bench.Elapsed("notify.send")
 
 	if delivery.delivered() {
-		if err := h.stateMgr.UpdateLastNotificationWithIdentity(keys.stateKey, status, message, stopHash, body, turnTS); err != nil {
+		if err := h.stateMgr.UpdateLastNotificationWithIdentity(keys.stateKey, status, message, stopHash, body, turnTS, hookEvent); err != nil {
 			logging.Warn("Failed to update last notification: %v", err)
 		}
 	} else {
