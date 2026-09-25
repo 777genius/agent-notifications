@@ -159,7 +159,7 @@ other off for the same status.
 
 Two independent options cut notification noise when you're already watching the terminal:
 
-- **`notifyOnlyWhenUnfocused`** - skip the desktop notification only when the focused terminal window can be matched to the current Claude Code session.
+- **`notifyOnlyWhenUnfocused`** - skip the desktop notification only when the focused terminal window can be matched to the current Claude Code session. On Linux this works on X11 terminals that export `$WINDOWID`, and in [JetBrains IDE terminals](CLICK_TO_FOCUS.md#jetbrains-ides).
 - **`notifyDelaySeconds`** - wait N seconds before delivering, so a quick task can finish before any banner appears (capped at 25s to stay within the hook timeout).
 
 They compose: with both set, the plugin waits, then notifies only if the terminal still isn't focused - "tell me once I've looked away."
