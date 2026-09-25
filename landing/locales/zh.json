@@ -67,6 +67,68 @@
     "foot": "点击通知返回终端的支持情况取决于操作系统和终端。",
     "details": "查看平台详情"
   },
+  "terminalSupport": {
+    "eyebrow": "一次点击，精准定位窗口。",
+    "titleFirst": "适配你的工作方式",
+    "titleSecond": "不止支持一种终端",
+    "intro": "点击返回终端功能会自动适配你正在使用的环境。以下是各平台上定位精度的详细说明。",
+    "columns": {
+      "app": "终端 / IDE",
+      "macos": "macOS",
+      "linux": "Linux",
+      "windows": "Windows",
+      "notes": "说明"
+    },
+    "levels": {
+      "exact": "精确定位标签页/分屏",
+      "window": "仅定位窗口",
+      "bestEffort": "尽力而为",
+      "none": "不支持"
+    },
+    "legend": "「精确定位标签页/分屏」会准确切换到目标分屏或标签页。「仅定位窗口」会将整个应用窗口置于前台。「尽力而为」表示插件会按通用规则匹配窗口，可能选中错误的窗口。",
+    "windowsNote": "在 Windows 上，聚焦始终停留在窗口级别——没有公开 API 可以指定 Windows Terminal 内的具体标签页。",
+    "fallbackNote": "未列出的其他终端仍可通过通用窗口名称匹配工作。在 macOS 上，可以用自定义 bundle ID 覆盖自动检测到的应用。",
+    "detailsLink": "查看完整的权限与合成器细节",
+    "notes": {
+      "ghosttyAutomation": "精确定位标签页需要 Automation 权限。",
+      "ghosttyUnverified": "已在 Linux 守护进程中配置映射，但尚未经过官方验证。",
+      "itermPythonApi": "需要先启用 iTerm2 的 Python API，然后重启应用。",
+      "warpDeepLink": "无需额外权限——Warp 会自行解析窗口、标签页和分屏。",
+      "kittyRemoteControl": "精确定位分屏需要启用 kitty 的远程控制功能。",
+      "wezPane": "通过 WezTerm 自身的 CLI 精确定位分屏。",
+      "jetbrainsGeneric": "在 macOS 上按通用方式检测，和其他应用一样，没有专门的集成。",
+      "jetbrainsLinuxDetect": "在 Linux 上通过进程树和 product-info.json 中的窗口类别来识别该 IDE，其内置终端的具体标签页无法单独选中。",
+      "genericFallback": "回退到通用窗口匹配，没有专门的集成。",
+      "appleTerminalFallback": "同时也是未检测到其他终端时的默认回退方案。",
+      "terminatorTitle": "使用完整的窗口标题以实现精确匹配。",
+      "tmuxItermCC": "在 iTerm2 的 -CC 控制模式下同样可以工作。",
+      "zellijLinuxPane": "在 Linux 上，如果会话导出了对应信息，会精确定位到具体面板，否则按名称回退到当前活动标签页。"
+    },
+    "names": {
+      "ghostty": "Ghostty",
+      "iterm2": "iTerm2",
+      "warp": "Warp",
+      "kitty": "kitty",
+      "wezterm": "WezTerm",
+      "vscode": "VS Code / Insiders",
+      "cursor": "Cursor",
+      "jetbrains": "JetBrains IDEs",
+      "appleTerminal": "Apple Terminal",
+      "alacritty": "Alacritty",
+      "hyper": "Hyper",
+      "gnomeTerminal": "GNOME Terminal",
+      "konsole": "Konsole",
+      "tilix": "Tilix",
+      "terminator": "Terminator",
+      "xfce4Terminal": "XFCE4 Terminal",
+      "mateTerminal": "MATE Terminal",
+      "windowsTerminal": "Windows Terminal",
+      "conhost": "命令提示符 / PowerShell",
+      "conemu": "ConEmu",
+      "tmux": "tmux",
+      "zellij": "zellij"
+    }
+  },
   "faq": {
     "eyebrow": "开始前需要了解的几件事",
     "title": "常见问题",

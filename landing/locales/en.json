@@ -62,6 +62,68 @@
     "foot": "Click-to-focus support depends on your terminal and OS.",
     "details": "See platform details"
   },
+  "terminalSupport": {
+    "eyebrow": "ONE CLICK. THE RIGHT WINDOW.",
+    "titleFirst": "Built for your setup",
+    "titleSecond": "Not just one terminal",
+    "intro": "Click-to-focus adapts to what you already run. Here is exactly how precise the click gets on each platform.",
+    "columns": {
+      "app": "Terminal / IDE",
+      "macos": "macOS",
+      "linux": "Linux",
+      "windows": "Windows",
+      "notes": "Notes"
+    },
+    "levels": {
+      "exact": "Exact tab/pane",
+      "window": "Window-level",
+      "bestEffort": "Best-effort",
+      "none": "Not supported"
+    },
+    "legend": "Exact tab/pane focuses the precise split or tab. Window-level raises the whole app window. Best-effort means the plugin tries a generic match that may land on the wrong window.",
+    "windowsNote": "On Windows, focus is always window-level — there is no public API to target one tab inside Windows Terminal.",
+    "fallbackNote": "Any other terminal still works through generic window matching. Override the detected app with a custom bundle ID on macOS.",
+    "detailsLink": "Full permission & compositor details",
+    "notes": {
+      "ghosttyAutomation": "Needs Automation permission for exact tab focus.",
+      "ghosttyUnverified": "Mapped in the Linux daemon but not yet officially verified.",
+      "itermPythonApi": "Requires enabling iTerm2's Python API, then a restart.",
+      "warpDeepLink": "No extra permissions needed — Warp resolves its own window, tab, and pane.",
+      "kittyRemoteControl": "Exact pane targeting needs kitty's remote control enabled.",
+      "wezPane": "Targets the exact pane through WezTerm's own CLI.",
+      "jetbrainsGeneric": "macOS detects it the same way as any other app, not with a dedicated integration.",
+      "jetbrainsLinuxDetect": "Linux detects the IDE via its process tree and product-info.json window class. The terminal tab inside it isn't selectable.",
+      "genericFallback": "Falls back to generic window matching, not a dedicated integration.",
+      "appleTerminalFallback": "Also the default fallback when no other terminal is detected.",
+      "terminatorTitle": "Uses the exact window title for precise matching.",
+      "tmuxItermCC": "Also works inside iTerm2's -CC control mode.",
+      "zellijLinuxPane": "Linux targets the exact pane when the session exports it, otherwise falls back to the active tab by name."
+    },
+    "names": {
+      "ghostty": "Ghostty",
+      "iterm2": "iTerm2",
+      "warp": "Warp",
+      "kitty": "kitty",
+      "wezterm": "WezTerm",
+      "vscode": "VS Code / Insiders",
+      "cursor": "Cursor",
+      "jetbrains": "JetBrains IDEs",
+      "appleTerminal": "Apple Terminal",
+      "alacritty": "Alacritty",
+      "hyper": "Hyper",
+      "gnomeTerminal": "GNOME Terminal",
+      "konsole": "Konsole",
+      "tilix": "Tilix",
+      "terminator": "Terminator",
+      "xfce4Terminal": "XFCE4 Terminal",
+      "mateTerminal": "MATE Terminal",
+      "windowsTerminal": "Windows Terminal",
+      "conhost": "Command Prompt / PowerShell",
+      "conemu": "ConEmu",
+      "tmux": "tmux",
+      "zellij": "zellij"
+    }
+  },
   "faq": {
     "eyebrow": "A FEW THINGS TO KNOW",
     "title": "Frequently asked questions",
