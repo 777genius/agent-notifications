@@ -33,9 +33,9 @@ function levelLabel(level: FocusLevel): string {
         <thead>
           <tr>
             <th scope="col">{{ t("terminalSupport.columns.app") }}</th>
-            <th scope="col"><img class="os-header-icon" :src="`${base}platforms/apple.svg`" alt="" width="13" height="13" />{{ t("terminalSupport.columns.macos") }}</th>
-            <th scope="col"><img class="os-header-icon" :src="`${base}platforms/linux.svg`" alt="" width="13" height="13" />{{ t("terminalSupport.columns.linux") }}</th>
-            <th scope="col"><img class="os-header-icon" :src="`${base}platforms/windows.svg`" alt="" width="13" height="13" />{{ t("terminalSupport.columns.windows") }}</th>
+            <th scope="col"><PlatformLogos only="apple" :size="13" class="os-header-icon" />{{ t("terminalSupport.columns.macos") }}</th>
+            <th scope="col"><PlatformLogos only="linux" :size="13" class="os-header-icon" />{{ t("terminalSupport.columns.linux") }}</th>
+            <th scope="col"><PlatformLogos only="windows" :size="13" class="os-header-icon" />{{ t("terminalSupport.columns.windows") }}</th>
             <th scope="col">{{ t("terminalSupport.columns.notes") }}</th>
           </tr>
         </thead>

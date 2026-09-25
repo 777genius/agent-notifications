@@ -1718,7 +1718,6 @@ h1 {
   white-space: nowrap;
 }
 .os-header-icon {
-  filter: invert(85%);
   margin-right: 6px;
   vertical-align: -2px;
 }
