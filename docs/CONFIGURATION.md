@@ -176,7 +176,7 @@ They compose: with both set, the plugin waits, then notifies only if the termina
 Both apply to **desktop notifications only** - webhook delivery is never delayed or suppressed. Focus detection is best-effort and degrades safely by notifying when unsure:
 
 - macOS: Ghostty can be matched by exact terminal/session metadata; other terminal apps require the frontmost window title to match the project folder and existing Screen Recording access.
-- Linux: X11 sessions compare `$WINDOWID` to the active window. Wayland or terminals without `$WINDOWID` are treated as unknown.
+- Linux: X11 sessions compare `$WINDOWID` to the active window. In JetBrains IDE terminals the active window must belong to the IDE process and its title must name the project (KDE Plasma: `kdotool`, X11: `xdotool`); an inherited `$WINDOWID` is ignored there. Other Wayland sessions and terminals without `$WINDOWID` are treated as unknown.
 - Windows: the foreground window must belong to the hook process ancestry and its title must contain the project folder. Ambiguous multi-window or multi-tab terminal hosts are treated as unknown.
 
 Unknown means "show the notification", not "suppress it".
