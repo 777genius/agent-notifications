@@ -16,6 +16,68 @@
     "preview": { "done": "आपके एजेंट का काम पूरा हो गया", "ready": "आप जब चाहें, तैयार है।", "sound": "आपकी ध्वनि। आपका आवाज़ स्तर।", "event": "एजेंट की घटना" },
     "foot": "क्लिक करके फ़ोकस करने की सुविधा आपके टर्मिनल और ऑपरेटिंग सिस्टम पर निर्भर करती है।", "details": "प्लैटफ़ॉर्म की जानकारी देखें"
   },
+  "terminalSupport": {
+    "eyebrow": "एक क्लिक। सही विंडो।",
+    "titleFirst": "आपके सेटअप के हिसाब से",
+    "titleSecond": "सिर्फ़ एक टर्मिनल तक सीमित नहीं",
+    "intro": "क्लिक करके फ़ोकस करना आपके मौजूदा सेटअप के हिसाब से काम करता है। हर प्लैटफ़ॉर्म पर क्लिक कितना सटीक है, यहाँ पूरी जानकारी है।",
+    "columns": {
+      "app": "टर्मिनल / IDE",
+      "macos": "macOS",
+      "linux": "Linux",
+      "windows": "Windows",
+      "notes": "टिप्पणियाँ"
+    },
+    "levels": {
+      "exact": "सटीक टैब/पेन",
+      "window": "विंडो-स्तर",
+      "bestEffort": "सर्वश्रेष्ठ प्रयास",
+      "none": "समर्थित नहीं"
+    },
+    "legend": "'सटीक टैब/पेन' ठीक उसी स्प्लिट या टैब पर फ़ोकस करता है। 'विंडो-स्तर' पूरी ऐप विंडो को आगे लाता है। 'सर्वश्रेष्ठ प्रयास' का मतलब है कि प्लगइन एक सामान्य मिलान खोजने की कोशिश करता है, जिससे ग़लत विंडो चुनी जा सकती है।",
+    "windowsNote": "Windows पर फ़ोकस हमेशा विंडो-स्तर पर होता है — Windows Terminal के अंदर किसी एक टैब को लक्षित करने के लिए कोई सार्वजनिक API मौजूद नहीं है।",
+    "fallbackNote": "ऊपर न दिखने वाला कोई भी अन्य टर्मिनल सामान्य विंडो मिलान से फिर भी काम करता है। macOS पर पहचाने गए ऐप को कस्टम bundle ID से बदला जा सकता है।",
+    "detailsLink": "अनुमतियों और कंपोज़िटर की पूरी जानकारी देखें",
+    "notes": {
+      "ghosttyAutomation": "सटीक टैब फ़ोकस के लिए Automation अनुमति ज़रूरी है।",
+      "ghosttyUnverified": "Linux डेमन में मैप किया गया है, लेकिन अभी आधिकारिक रूप से जाँचा नहीं गया है।",
+      "itermPythonApi": "iTerm2 का Python API सक्षम करना और फिर से शुरू करना ज़रूरी है।",
+      "warpDeepLink": "किसी अतिरिक्त अनुमति की ज़रूरत नहीं — Warp खुद अपनी विंडो, टैब और पेन तय कर लेता है।",
+      "kittyRemoteControl": "सटीक पेन तय करने के लिए kitty का रिमोट कंट्रोल चालू होना चाहिए।",
+      "wezPane": "WezTerm के अपने CLI के ज़रिए सटीक पेन तय होता है।",
+      "jetbrainsGeneric": "macOS पर इसे किसी खास एकीकरण के बिना, बाकी ऐप्स जैसे ही तरीक़े से पहचाना जाता है।",
+      "jetbrainsLinuxDetect": "Linux पर IDE को उसके प्रोसेस ट्री और product-info.json विंडो क्लास से पहचाना जाता है। इसके अंदर टर्मिनल टैब को अलग से चुना नहीं जा सकता।",
+      "genericFallback": "किसी खास एकीकरण के बजाय सामान्य विंडो मिलान पर निर्भर करता है।",
+      "appleTerminalFallback": "जब कोई और टर्मिनल न मिले, तब यह डिफ़ॉल्ट विकल्प भी है।",
+      "terminatorTitle": "सटीक मिलान के लिए विंडो का पूरा शीर्षक इस्तेमाल करता है।",
+      "tmuxItermCC": "iTerm2 के -CC कंट्रोल मोड में भी काम करता है।",
+      "zellijLinuxPane": "Linux पर, जब सेशन इसे एक्सपोर्ट करता है तो ठीक उसी पैन को टारगेट करता है, वरना नाम के आधार पर सक्रिय टैब पर वापस चला जाता है।"
+    },
+    "names": {
+      "ghostty": "Ghostty",
+      "iterm2": "iTerm2",
+      "warp": "Warp",
+      "kitty": "kitty",
+      "wezterm": "WezTerm",
+      "vscode": "VS Code / Insiders",
+      "cursor": "Cursor",
+      "jetbrains": "JetBrains IDEs",
+      "appleTerminal": "Apple Terminal",
+      "alacritty": "Alacritty",
+      "hyper": "Hyper",
+      "gnomeTerminal": "GNOME Terminal",
+      "konsole": "Konsole",
+      "tilix": "Tilix",
+      "terminator": "Terminator",
+      "xfce4Terminal": "XFCE4 Terminal",
+      "mateTerminal": "MATE Terminal",
+      "windowsTerminal": "Windows Terminal",
+      "conhost": "कमांड प्रॉम्प्ट / PowerShell",
+      "conemu": "ConEmu",
+      "tmux": "tmux",
+      "zellij": "zellij"
+    }
+  },
   "faq": {
     "eyebrow": "कुछ ज़रूरी बातें", "title": "अक्सर पूछे जाने वाले सवाल", "subtitle": "काम पर लौटने के लिए ज़रूरी सारी जानकारी।",
     "items": {

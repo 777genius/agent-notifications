@@ -16,6 +16,68 @@
     "preview": { "done": "أنهى وكيلك العمل", "ready": "جاهز عندما تكون جاهزًا.", "sound": "صوتك. بالمستوى الذي تختاره.", "event": "حدث من الوكيل" },
     "foot": "يعتمد دعم التركيز بالنقر على الطرفية ونظام التشغيل لديك.", "details": "عرض تفاصيل المنصات"
   },
+  "terminalSupport": {
+    "eyebrow": "نقرة واحدة. النافذة الصحيحة.",
+    "titleFirst": "مصمم لبيئة عملك",
+    "titleSecond": "وليس لطرفية واحدة فقط",
+    "intro": "يتكيف التركيز بالنقر مع ما تستخدمه بالفعل. إليك بالضبط مدى دقة النقرة على كل منصة.",
+    "columns": {
+      "app": "الطرفية / بيئة التطوير",
+      "macos": "macOS",
+      "linux": "Linux",
+      "windows": "Windows",
+      "notes": "ملاحظات"
+    },
+    "levels": {
+      "exact": "تحديد دقيق لعلامة التبويب/اللوحة",
+      "window": "على مستوى النافذة",
+      "bestEffort": "أفضل محاولة",
+      "none": "غير مدعوم"
+    },
+    "legend": "«تحديد دقيق لعلامة التبويب/اللوحة» يركّز على القسم أو علامة التبويب المطلوبة بدقة. «على مستوى النافذة» يُظهر نافذة التطبيق بأكملها. «أفضل محاولة» تعني أن الإضافة تحاول إيجاد تطابق عام قد يؤدي إلى اختيار نافذة غير صحيحة.",
+    "windowsNote": "في Windows، يكون التركيز دائمًا على مستوى النافذة — لا توجد واجهة برمجة عامة لتحديد علامة تبويب بعينها داخل Windows Terminal.",
+    "fallbackNote": "أي طرفية أخرى غير مذكورة أعلاه تعمل أيضًا عبر مطابقة عامة لاسم النافذة. يمكن في macOS استبدال التطبيق المكتشف تلقائيًا بمعرّف حزمة مخصص.",
+    "detailsLink": "عرض كل تفاصيل الأذونات والمُركِّبات",
+    "notes": {
+      "ghosttyAutomation": "يتطلب التركيز الدقيق على علامة التبويب إذن Automation.",
+      "ghosttyUnverified": "مُدرَج في خدمة Linux الخلفية لكن لم يتم التحقق منه رسميًا بعد.",
+      "itermPythonApi": "يتطلب تفعيل واجهة Python الخاصة بـ iTerm2 ثم إعادة تشغيله.",
+      "warpDeepLink": "لا حاجة إلى أذونات إضافية — يحدد Warp بنفسه النافذة وعلامة التبويب واللوحة.",
+      "kittyRemoteControl": "يتطلب التحديد الدقيق للوحة تفعيل التحكم عن بُعد في kitty.",
+      "wezPane": "يحدد اللوحة بدقة عبر واجهة سطر الأوامر الخاصة بـ WezTerm.",
+      "jetbrainsGeneric": "على macOS يُكتشف بنفس طريقة أي تطبيق آخر، دون تكامل مخصص.",
+      "jetbrainsLinuxDetect": "على لينكس، يُكتشف بيئة التطوير عبر شجرة العمليات وفئة النافذة في product-info.json. لا يمكن تحديد تبويب الطرفية داخلها بدقة.",
+      "genericFallback": "يعتمد على مطابقة عامة للنافذة بدلًا من تكامل مخصص.",
+      "appleTerminalFallback": "وهو أيضًا الخيار الافتراضي عند عدم اكتشاف أي طرفية أخرى.",
+      "terminatorTitle": "يستخدم عنوان النافذة الكامل لتحقيق مطابقة دقيقة.",
+      "tmuxItermCC": "يعمل أيضًا داخل وضع التحكم -CC في iTerm2.",
+      "zellijLinuxPane": "على لينكس، يستهدف اللوحة الدقيقة عندما تُصدّرها الجلسة، وإلا يعود إلى التبويب النشط حسب الاسم."
+    },
+    "names": {
+      "ghostty": "Ghostty",
+      "iterm2": "iTerm2",
+      "warp": "Warp",
+      "kitty": "kitty",
+      "wezterm": "WezTerm",
+      "vscode": "VS Code / Insiders",
+      "cursor": "Cursor",
+      "jetbrains": "JetBrains IDEs",
+      "appleTerminal": "Apple Terminal",
+      "alacritty": "Alacritty",
+      "hyper": "Hyper",
+      "gnomeTerminal": "GNOME Terminal",
+      "konsole": "Konsole",
+      "tilix": "Tilix",
+      "terminator": "Terminator",
+      "xfce4Terminal": "XFCE4 Terminal",
+      "mateTerminal": "MATE Terminal",
+      "windowsTerminal": "Windows Terminal",
+      "conhost": "موجّه الأوامر / PowerShell",
+      "conemu": "ConEmu",
+      "tmux": "tmux",
+      "zellij": "zellij"
+    }
+  },
   "faq": {
     "eyebrow": "بعض الأمور التي ينبغي معرفتها", "title": "الأسئلة الشائعة", "subtitle": "كل ما تحتاجه للعودة إلى العمل.",
     "items": {

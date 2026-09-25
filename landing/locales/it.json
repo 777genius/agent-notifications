@@ -16,6 +16,68 @@
     "preview": { "done": "Il tuo agente ha finito", "ready": "Pronto quando vuoi.", "sound": "Il tuo suono. Il tuo volume.", "event": "Evento dell'agente" },
     "foot": "Il supporto per la messa a fuoco con un clic dipende dal terminale e dal sistema operativo.", "details": "Vedi i dettagli delle piattaforme"
   },
+  "terminalSupport": {
+    "eyebrow": "UN CLIC. LA FINESTRA GIUSTA.",
+    "titleFirst": "Pensato per la tua configurazione",
+    "titleSecond": "Non solo un terminale",
+    "intro": "Il click-to-focus si adatta a ciò che usi già. Ecco esattamente quanto è preciso il clic su ogni piattaforma.",
+    "columns": {
+      "app": "Terminal / IDE",
+      "macos": "macOS",
+      "linux": "Linux",
+      "windows": "Windows",
+      "notes": "Note"
+    },
+    "levels": {
+      "exact": "Scheda/pannello esatto",
+      "window": "Livello finestra",
+      "bestEffort": "Miglior tentativo",
+      "none": "Non supportato"
+    },
+    "legend": "«Scheda/pannello esatto» mette a fuoco esattamente lo split o la scheda giusta. «Livello finestra» porta in primo piano l'intera finestra dell'app. «Miglior tentativo» significa che il plugin prova una corrispondenza generica che potrebbe centrare la finestra sbagliata.",
+    "windowsNote": "Su Windows il focus è sempre a livello di finestra — non esiste un'API pubblica per puntare a una scheda specifica dentro Windows Terminal.",
+    "fallbackNote": "Qualsiasi altro terminale funziona comunque tramite corrispondenza generica della finestra. Su macOS puoi sostituire l'app rilevata con un bundle ID personalizzato.",
+    "detailsLink": "Tutti i dettagli su permessi e compositor",
+    "notes": {
+      "ghosttyAutomation": "Richiede il permesso Automazione per il focus esatto della scheda.",
+      "ghosttyUnverified": "Mappato nel daemon Linux, ma non ancora verificato ufficialmente.",
+      "itermPythonApi": "Richiede l'attivazione della Python API di iTerm2, poi un riavvio.",
+      "warpDeepLink": "Non servono permessi aggiuntivi — Warp determina da solo finestra, scheda e pannello.",
+      "kittyRemoteControl": "Il targeting esatto del pannello richiede il controllo remoto di kitty attivato.",
+      "wezPane": "Punta al pannello esatto tramite la CLI di WezTerm.",
+      "jetbrainsGeneric": "Su macOS viene rilevato come qualsiasi altra app, senza un'integrazione dedicata.",
+      "jetbrainsLinuxDetect": "Su Linux l'IDE viene rilevato tramite il suo albero dei processi e la classe finestra di product-info.json. La scheda del terminale al suo interno non è selezionabile.",
+      "genericFallback": "Ricade sulla corrispondenza generica della finestra, senza integrazione dedicata.",
+      "appleTerminalFallback": "È anche il fallback predefinito quando non viene rilevato nessun altro terminale.",
+      "terminatorTitle": "Usa il titolo esatto della finestra per una corrispondenza precisa.",
+      "tmuxItermCC": "Funziona anche nella modalità di controllo -CC di iTerm2.",
+      "zellijLinuxPane": "Su Linux punta al pannello esatto quando la sessione lo espone, altrimenti ricade sulla scheda attiva in base al nome."
+    },
+    "names": {
+      "ghostty": "Ghostty",
+      "iterm2": "iTerm2",
+      "warp": "Warp",
+      "kitty": "kitty",
+      "wezterm": "WezTerm",
+      "vscode": "VS Code / Insiders",
+      "cursor": "Cursor",
+      "jetbrains": "JetBrains IDEs",
+      "appleTerminal": "Apple Terminal",
+      "alacritty": "Alacritty",
+      "hyper": "Hyper",
+      "gnomeTerminal": "GNOME Terminal",
+      "konsole": "Konsole",
+      "tilix": "Tilix",
+      "terminator": "Terminator",
+      "xfce4Terminal": "XFCE4 Terminal",
+      "mateTerminal": "MATE Terminal",
+      "windowsTerminal": "Windows Terminal",
+      "conhost": "Prompt dei comandi / PowerShell",
+      "conemu": "ConEmu",
+      "tmux": "tmux",
+      "zellij": "zellij"
+    }
+  },
   "faq": {
     "eyebrow": "QUALCHE COSA DA SAPERE", "title": "Domande frequenti", "subtitle": "Tutto ciò che serve per tornare al lavoro.",
     "items": {

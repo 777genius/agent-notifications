@@ -46,7 +46,7 @@ Clicking a notification activates your terminal window. Auto-detects terminal an
 
 Linux focus methods (tried in order): Warp session URL (`xdg-open`), GNOME extension, GNOME Shell Eval, GNOME FocusApp, wlrctl (Sway/wlroots), kdotool (KDE), xdotool (X11).
 
-**Multiplexers** (both platforms): tmux (including iTerm2 -CC integration mode), zellij, WezTerm, kitty — click switches to the correct pane/tab.
+**Multiplexers:** tmux and kitty (macOS only), zellij and WezTerm (macOS & Linux) — click switches to the correct pane/tab. Linux zellij targets the exact pane; see the [Click-to-Focus Guide](CLICK_TO_FOCUS.md#multiplexers) for the full per-platform breakdown.
 
 **iTerm2 note:** to open the exact iTerm2 tab or split pane, enable `iTerm2 > Settings > General > Magic > Enable Python API`. If you just toggled it, restart iTerm2 once. Without the Python API, the plugin falls back to app-level iTerm activation instead of exact tab targeting.
 

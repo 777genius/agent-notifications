@@ -150,6 +150,8 @@ const faqIcons = [
         </p>
       </section>
 
+      <TerminalSupportTable />
+
       <section id="faq" class="section faq anchor-offset">
         <div class="faq-header">
           <p class="eyebrow">{{ t("faq.eyebrow") }}</p>

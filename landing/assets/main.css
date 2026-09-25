@@ -1687,3 +1687,115 @@ h1 {
     max-width: none;
   }
 }
+
+.terminal-support-intro {
+  color: var(--muted);
+  font-size: 14px;
+  max-width: 640px;
+  margin: 14px 0 0;
+}
+.terminal-table-scroll {
+  overflow-x: auto;
+  margin-top: 28px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+}
+.terminal-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  min-width: 760px;
+}
+.terminal-table thead th {
+  text-align: left;
+  padding: 12px 14px;
+  font: 10px ui-monospace, monospace;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #87dce6;
+  background: #131725;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.os-header-icon {
+  filter: invert(85%);
+  margin-right: 6px;
+  vertical-align: -2px;
+}
+.terminal-table td,
+.terminal-table th.terminal-table-app {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+.terminal-table tbody tr:last-child td,
+.terminal-table tbody tr:last-child th {
+  border-bottom: none;
+}
+.terminal-table-app {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 500;
+  white-space: nowrap;
+  text-align: left;
+}
+.terminal-table-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  border-radius: 7px;
+  background: #f4f6fb;
+  padding: 4px;
+}
+.terminal-table-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.terminal-table td {
+  color: var(--muted);
+  white-space: nowrap;
+}
+.level-dot {
+  display: inline-block;
+  margin-right: 4px;
+}
+.level-exact {
+  color: #87dce6;
+}
+.level-window {
+  color: #b9d9ec;
+}
+.level-bestEffort {
+  color: #d9b673;
+}
+.level-none {
+  color: #5b6478;
+}
+.terminal-table-notes {
+  white-space: normal;
+  min-width: 220px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.terminal-table-notes span {
+  display: block;
+}
+.terminal-table-notes span + span {
+  margin-top: 4px;
+}
+.terminal-support-legend {
+  font-size: 11px;
+  color: var(--muted);
+  max-width: 780px;
+  margin: 10px 0 0;
+}
+@media (max-width: 640px) {
+  .terminal-table {
+    min-width: 640px;
+  }
+}
