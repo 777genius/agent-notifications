@@ -57,33 +57,34 @@ func isJetBrainsTerminalName(terminalName string) bool {
 	return strings.HasPrefix(strings.ToLower(terminalName), jetBrainsClassPrefix)
 }
 
-// detectJetBrainsClass returns the window class of the JetBrains IDE whose
-// terminal runs this process, e.g. "jetbrains-phpstorm". The class comes from
-// the IDE's product-info.json, so every product and edition is covered.
-func detectJetBrainsClass() (string, bool) {
+// DetectJetBrainsIDE returns the window class of the JetBrains IDE whose
+// terminal runs this process, e.g. "jetbrains-phpstorm", and the IDE's PID,
+// which owns its windows. The class comes from the IDE's product-info.json, so
+// every product and edition is covered.
+func DetectJetBrainsIDE() (class string, pid int, ok bool) {
 	if os.Getenv("TERMINAL_EMULATOR") != jetBrainsTerminalEmulator {
-		return "", false
+		return "", 0, false
 	}
 
-	pid := getParentPID()
+	pid = getParentPID()
 	for i := 0; i < maxProcessAncestors && pid > 1; i++ {
 		dir := filepath.Join(procRoot, strconv.Itoa(pid))
 		if comm, err := os.ReadFile(filepath.Join(dir, "comm")); err == nil {
 			if _, ok := standaloneTerminalComms[strings.TrimSpace(string(comm))]; ok {
-				return "", false
+				return "", 0, false
 			}
 		}
 		if class := jetBrainsClassFromExe(filepath.Join(dir, "exe")); class != "" {
-			return class, true
+			return class, pid, true
 		}
 
 		ppid, err := readParentPID(filepath.Join(dir, "stat"))
 		if err != nil {
-			return "", false
+			return "", 0, false
 		}
 		pid = ppid
 	}
-	return "", false
+	return "", 0, false
 }
 
 // readParentPID reads the ppid field of /proc/<pid>/stat. It parses after the

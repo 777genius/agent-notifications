@@ -728,19 +728,19 @@ func prioritizeXdotoolCandidates(windowIDs []string, searchLabel string, hints F
 // project name, and a substring match for everything else.
 func windowTitleMatcher(hints FocusHints) func(title string) bool {
 	if isJetBrainsTerminalName(hints.TerminalName) {
-		return func(title string) bool { return jetBrainsTitleMatches(title, hints.FolderName, hints.ProjectPath) }
+		return func(title string) bool { return JetBrainsTitleMatches(title, hints.FolderName, hints.ProjectPath) }
 	}
 	return func(title string) bool { return title != "" && strings.Contains(title, hints.FolderName) }
 }
 
-// jetBrainsTitleMatches reports whether a JetBrains window title belongs to
+// JetBrainsTitleMatches reports whether a JetBrains window title belongs to
 // project, whose root is projectPath. Titles are "<project>" or
 // "<project> – <file>" (en dash), so a plain substring check would let "agent"
 // match "agent-notifications". When another open project has the same name,
 // JetBrains adds its location: "<project> [<location>] – <file>"
 // (PlatformFrameTitleBuilder). Without projectPath (older hooks) any location
 // is accepted.
-func jetBrainsTitleMatches(title, project, projectPath string) bool {
+func JetBrainsTitleMatches(title, project, projectPath string) bool {
 	if project == "" {
 		return false
 	}

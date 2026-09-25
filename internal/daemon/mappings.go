@@ -284,7 +284,7 @@ func GetTerminalName() string {
 	// JetBrains IDE terminals set no TERM_PROGRAM, so a TERM_PROGRAM or KONSOLE_*
 	// value seen in one was inherited from whatever launched the IDE. Detect the
 	// IDE before those checks; the ancestry walk rejects terminals started from it.
-	if class, ok := detectJetBrainsClass(); ok {
+	if class, _, ok := DetectJetBrainsIDE(); ok {
 		return class
 	}
 

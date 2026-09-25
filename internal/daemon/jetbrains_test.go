@@ -64,7 +64,7 @@ func writeIDEHome(t *testing.T, productInfo string) string {
 
 const phpStormProductInfo = `{"name":"PhpStorm","launch":[{"os":"Linux","arch":"amd64","launcherPath":"bin/phpstorm","startupWmClass":"jetbrains-phpstorm"}]}`
 
-func TestDetectJetBrainsClass(t *testing.T) {
+func TestDetectJetBrainsIDE(t *testing.T) {
 	phpStorm := writeIDEHome(t, phpStormProductInfo)
 	ideaCE := writeIDEHome(t, `{"launch":[{"os":"macOS","startupWmClass":"jetbrains-idea"},{"os":"Linux","startupWmClass":"jetbrains-idea-ce"}]}`)
 	noLinuxClass := writeIDEHome(t, `{"launch":[{"os":"Windows","startupWmClass":"jetbrains-phpstorm"},{"os":"Linux"}]}`)
@@ -174,35 +174,35 @@ func TestDetectJetBrainsClass(t *testing.T) {
 			t.Setenv("TERMINAL_EMULATOR", tt.env)
 			useFakeProc(t, 100, tt.processes...)
 
-			got, ok := detectJetBrainsClass()
-			if got != tt.want || ok != tt.wantOK {
-				t.Errorf("detectJetBrainsClass() = (%q, %v), want (%q, %v)", got, ok, tt.want, tt.wantOK)
+			got, pid, ok := DetectJetBrainsIDE()
+			if got != tt.want || ok != tt.wantOK || (ok && pid != tt.processes[len(tt.processes)-1].pid) {
+				t.Errorf("DetectJetBrainsIDE() = (%q, %d, %v), want (%q, IDE pid, %v)", got, pid, ok, tt.want, tt.wantOK)
 			}
 		})
 	}
 }
 
-func TestDetectJetBrainsClass_BrokenStat(t *testing.T) {
+func TestDetectJetBrainsIDE_BrokenStat(t *testing.T) {
 	t.Setenv("TERMINAL_EMULATOR", "JetBrains-JediTerm")
 	root := useFakeProc(t, 100, fakeProcess{pid: 100, ppid: 101, comm: "claude", exe: "/usr/bin/claude"})
 	if err := os.WriteFile(filepath.Join(root, "100", "stat"), []byte("100 (claude"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	if got, ok := detectJetBrainsClass(); ok {
-		t.Errorf("detectJetBrainsClass() = (%q, true), want not detected", got)
+	if got, _, ok := DetectJetBrainsIDE(); ok {
+		t.Errorf("DetectJetBrainsIDE() = (%q, true), want not detected", got)
 	}
 }
 
-func TestDetectJetBrainsClass_StopsOnParentCycle(t *testing.T) {
+func TestDetectJetBrainsIDE_StopsOnParentCycle(t *testing.T) {
 	t.Setenv("TERMINAL_EMULATOR", "JetBrains-JediTerm")
 	useFakeProc(t, 100,
 		fakeProcess{pid: 100, ppid: 101, comm: "bash", exe: "/usr/bin/bash"},
 		fakeProcess{pid: 101, ppid: 100, comm: "bash", exe: "/usr/bin/bash"},
 	)
 
-	if got, ok := detectJetBrainsClass(); ok {
-		t.Errorf("detectJetBrainsClass() = (%q, true), want not detected", got)
+	if got, _, ok := DetectJetBrainsIDE(); ok {
+		t.Errorf("DetectJetBrainsIDE() = (%q, true), want not detected", got)
 	}
 }
 
@@ -403,8 +403,8 @@ func TestJetBrainsTitleMatches(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		if got := jetBrainsTitleMatches(tt.title, tt.project, tt.path); got != tt.want {
-			t.Errorf("jetBrainsTitleMatches(%q, %q, %q) = %v, want %v", tt.title, tt.project, tt.path, got, tt.want)
+		if got := JetBrainsTitleMatches(tt.title, tt.project, tt.path); got != tt.want {
+			t.Errorf("JetBrainsTitleMatches(%q, %q, %q) = %v, want %v", tt.title, tt.project, tt.path, got, tt.want)
 		}
 	}
 }
