@@ -153,7 +153,7 @@ func TestBuildTmuxCCNotifierArgs_ContainsActivate(t *testing.T) {
 	}
 }
 
-func TestBuildTmuxCCNotifierArgs_HasGroup(t *testing.T) {
+func TestBuildTmuxCCNotifierArgs_OmitsGroup(t *testing.T) {
 	setupFakeiTerm2Env(t)
 	overrideIterm2Healthcheck(t, iTerm2HelperReady)
 
@@ -162,12 +162,8 @@ func TestBuildTmuxCCNotifierArgs_HasGroup(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	group := getArgValue(args, "-group")
-	if group == "" {
-		t.Error("missing -group argument")
-	}
-	if !strings.HasPrefix(group, "claude-notif-") {
-		t.Errorf("-group should have claude-notif- prefix, got: %s", group)
+	if getArgValue(args, "-group") != "" {
+		t.Errorf("multiplexer builders should leave -group to appendSharedNotifierOptions, got %v", args)
 	}
 }
 

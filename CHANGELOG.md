@@ -73,6 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Release artifacts cover macOS amd64/arm64, Linux amd64/arm64 and Windows amd64. Windows arm64 and a separate PowerShell installer are not included.
 - Exact-chat navigation remains separately qualified; navigation-none desktop delivery is the portable baseline.
 
+
 ## [1.43.1] - 2026-09-16
 
 ### Changed

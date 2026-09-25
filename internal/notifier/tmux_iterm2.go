@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 )
 
 // getiTerm2PythonEnv returns the absolute paths to the Python interpreter
@@ -67,7 +66,6 @@ func buildIterm2TmuxNotifierArgs(title, message, paneTarget, bundleID string) ([
 		"-message", message,
 		"-activate", bundleID,
 		"-execute", executeCmd,
-		"-group", fmt.Sprintf("claude-notif-%d", time.Now().UnixNano()),
 	}
 	return args, nil
 }

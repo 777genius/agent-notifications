@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"time"
 )
 
 // IsWezTerm returns true if the current process is running inside WezTerm.
@@ -51,14 +50,10 @@ func buildWezTermNotifierArgs(title, message, paneID, socketPath, bundleID strin
 		)
 	}
 
-	args := []string{
+	return []string{
 		"-title", title,
 		"-message", message,
 		"-activate", bundleID,
 		"-execute", executeCmd,
 	}
-
-	args = append(args, "-group", fmt.Sprintf("claude-notif-%d", time.Now().UnixNano()))
-
-	return args
 }

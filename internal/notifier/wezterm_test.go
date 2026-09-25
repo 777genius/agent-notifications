@@ -121,11 +121,6 @@ func TestBuildWezTermNotifierArgs(t *testing.T) {
 	if executeCmd == "" {
 		t.Fatal("Missing -execute argument")
 	}
-
-	group := getArgValue(args, "-group")
-	if group == "" {
-		t.Error("Missing -group argument")
-	}
 }
 
 func TestBuildWezTermNotifierArgs_ExecuteContainsPaneAndSocket(t *testing.T) {
