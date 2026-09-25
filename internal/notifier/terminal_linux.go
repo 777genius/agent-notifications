@@ -7,7 +7,6 @@ package notifier
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/daemon"
@@ -84,16 +83,12 @@ func sendViaDaemon(title, body, cwd string, cfg *config.Config) error {
 		return err
 	}
 
-	// Extract folder name from cwd for title-based window focus
-	folderName := ""
-	if cwd != "" {
-		folderName = filepath.Base(cwd)
-	}
-
 	// Send notification with 30 second timeout.
 	// Detect focus target in the hook process (not the daemon), since the daemon may
 	// have been started from a different environment.
 	focusTarget := daemon.GetTerminalName()
+	// Folder name for title-based window focus
+	folderName := daemon.GetFocusFolderName(focusTarget, cwd)
 	focusWindowID := daemon.GetX11WindowID()
 	focusWindowTitle := daemon.GetExactWindowTitle(focusTarget)
 	if sessionType := os.Getenv("XDG_SESSION_TYPE"); sessionType != "" && sessionType != "x11" {

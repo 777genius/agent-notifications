@@ -3,9 +3,84 @@
 package daemon
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
+
+// useFakeWindowTool puts a fake xdotool or kdotool on PATH: search lists ids in
+// order, getwindowname prints titles[id], and windowactivate records its last
+// argument (the window ID). It returns the trace path for readActivatedWindows.
+func useFakeWindowTool(t *testing.T, tool string, ids []string, titles map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	trace := filepath.Join(dir, "trace")
+	var script strings.Builder
+	script.WriteString("#!/bin/sh\ncase \"$1\" in\nsearch)\n")
+	for _, id := range ids {
+		fmt.Fprintf(&script, "  echo '%s'\n", id)
+	}
+	script.WriteString("  ;;\ngetwindowname)\n  case \"$2\" in\n")
+	for id, title := range titles {
+		fmt.Fprintf(&script, "  '%s') echo '%s' ;;\n", id, title)
+	}
+	script.WriteString("  esac\n  ;;\nwindowactivate)\n  for arg; do last=$arg; done\n  echo \"$last\" >> \"$WINDOW_TOOL_TRACE\"\n  ;;\nesac\n")
+	if err := os.WriteFile(filepath.Join(dir, tool), []byte(script.String()), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv("WINDOW_TOOL_TRACE", trace)
+	return trace
+}
+
+func readActivatedWindows(t *testing.T, trace string) []string {
+	t.Helper()
+	data, err := os.ReadFile(trace)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Fields(string(data))
+}
+
+// xdotool lists bottom-most windows first; TryXdotool must activate the
+// top-most window whose title names the folder.
+func TestTryXdotool_PrefersTopMostTitleMatch(t *testing.T) {
+	titles := map[string]string{
+		"1": "project-a - Visual Studio Code",
+		"2": "project-b - Visual Studio Code",
+		"3": "project-a - Visual Studio Code",
+	}
+
+	tests := []struct {
+		name   string
+		folder string
+		ids    []string
+		want   string
+	}{
+		{"match below a non-match", "project-a", []string{"1", "2"}, "1"},
+		{"top-most of several matches", "project-a", []string{"1", "2", "3"}, "3"},
+		{"no match keeps the top-most window", "other", []string{"1", "2"}, "2"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			trace := useFakeWindowTool(t, "xdotool", tt.ids, titles)
+
+			if err := TryXdotool("code", tt.folder); err != nil {
+				t.Fatalf("TryXdotool() error = %v", err)
+			}
+			if got := readActivatedWindows(t, trace); !reflect.DeepEqual(got, []string{tt.want}) {
+				t.Errorf("activated %v, want [%s]", got, tt.want)
+			}
+		})
+	}
+}
 
 // --- GetFocusMethods tests ---
 

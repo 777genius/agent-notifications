@@ -63,6 +63,7 @@ Uses a background D-Bus daemon. Auto-detects terminal and compositor.
 | VS Code | GNOME, KDE, Sway, X11 |
 | Warp | GNOME, KDE, Sway, X11 — exact pane via `WARP_FOCUS_URL` |
 | GNOME Terminal, Konsole, Alacritty, kitty, WezTerm, Tilix, Terminator, XFCE4 Terminal, MATE Terminal | GNOME, KDE, Sway, X11 |
+| JetBrains IDEs (IntelliJ IDEA, PhpStorm, WebStorm, PyCharm, GoLand, …) | GNOME, KDE, Sway, X11 — the IDE window, not the terminal tab |
 | Any other | Fallback by name |
 
 Focus methods (tried in order):
@@ -74,6 +75,15 @@ Focus methods (tried in order):
 5. **X11** (XFCE, MATE, Cinnamon, i3, bspwm): `xdotool`
 
 Falls back to standard notifications if no focus tool is available.
+
+### JetBrains IDEs
+
+Works in the built-in terminal of JetBrains IDEs. The plugin finds the IDE in the process tree and reads its window class from the IDE's `product-info.json`.
+
+- A click raises the window of the project the session runs in. The project name is `.idea/.name` if set, else the name of the folder that holds `.idea/`.
+- The terminal tab inside the IDE isn't selected: JetBrains has no external API for it.
+- KDE Plasma (`kdotool`) and X11 (`xdotool`) raise the window whose title starts with the project name. If none matches, they raise another window of the IDE.
+- GNOME (`activate-window-by-title` extension) matches the project name anywhere in a window title. Sway (`wlrctl`) raises a window of the IDE, not always the project's.
 
 ### Diagnostics
 

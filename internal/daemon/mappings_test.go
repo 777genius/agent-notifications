@@ -22,6 +22,7 @@ func saveTerminalEnv(t *testing.T) func() {
 		"TERMINATOR_UUID",
 		"KONSOLE_VERSION",
 		"KONSOLE_DBUS_SESSION",
+		"TERMINAL_EMULATOR",
 		"WINDOWID",
 		"XDG_SESSION_TYPE",
 		"XDG_CURRENT_DESKTOP",
@@ -438,6 +439,44 @@ func TestGetXdotoolClass_UnknownFallback(t *testing.T) {
 	result := GetXdotoolClass("CustomTerm")
 	if result != "CustomTerm" {
 		t.Errorf("GetXdotoolClass unknown = %q, want %q", result, "CustomTerm")
+	}
+}
+
+// JetBrains focus targets are already window classes; every mapper must pass
+// them through unchanged.
+func TestWindowClassMappers_JetBrains(t *testing.T) {
+	mappers := map[string]func(string) string{
+		"GetKdotoolClass": GetKdotoolClass,
+		"GetXdotoolClass": GetXdotoolClass,
+		"GetGnomeWmClass": GetGnomeWmClass,
+		"GetWlrctlAppID":  GetWlrctlAppID,
+	}
+
+	for name, mapper := range mappers {
+		for _, class := range []string{"jetbrains-phpstorm", "jetbrains-idea-ce"} {
+			if got := mapper(class); got != class {
+				t.Errorf("%s(%q) = %q, want %q", name, class, got, class)
+			}
+		}
+	}
+}
+
+func TestGetSearchTermWithFolder(t *testing.T) {
+	tests := []struct {
+		terminal string
+		folder   string
+		want     string
+	}{
+		{"jetbrains-phpstorm", "agent-notifications", "agent-notifications"},
+		{"jetbrains-phpstorm", "", "jetbrains-phpstorm"},
+		{"code", "agent-notifications", "agent-notifications"},
+		{"konsole", "agent-notifications", "konsole"},
+	}
+
+	for _, tt := range tests {
+		if got := GetSearchTermWithFolder(tt.terminal, tt.folder); got != tt.want {
+			t.Errorf("GetSearchTermWithFolder(%q, %q) = %q, want %q", tt.terminal, tt.folder, got, tt.want)
+		}
 	}
 }
 
