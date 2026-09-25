@@ -326,26 +326,23 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 
 				// Record that the lead has stopped
 				if err := h.teamStateMgr.RecordLeadStopped(teamInfo.TeamName); err != nil {
-					logging.Warn("Stop: failed to record lead stopped: %v", err)
+					return fmt.Errorf("stop: record lead stopped: %w", err)
 				}
 
-				// Check if all teammates are already idle
-				allIdle, err := h.teamStateMgr.CheckAllIdle(teamInfo.TeamName, teamInfo.Members)
+				// Check readiness and claim completion under the same team file lock.
+				claimed, err := h.teamStateMgr.ClaimAllIdle(teamInfo.TeamName, teamInfo.Members)
 				if err != nil {
-					logging.Warn("Stop: failed to check team idle state: %v", err)
+					return fmt.Errorf("stop: claim team completion: %w", err)
 				}
 
-				if !allIdle {
+				if !claimed {
 					// Not all teammates idle yet — suppress notification, wait for TeammateIdle
 					logging.Debug("Stop: team %q has active teammates, suppressing notification", teamInfo.TeamName)
 					return nil
 				}
 
-				// All teammates are idle — proceed with notification and mark as notified
+				// This hook owns the completion; proceed with notification.
 				logging.Debug("Stop: team %q all teammates idle, sending notification", teamInfo.TeamName)
-				if err := h.teamStateMgr.MarkNotified(teamInfo.TeamName); err != nil {
-					logging.Warn("Stop: failed to mark team notified: %v", err)
-				}
 			}
 		} else if h.cfg.GetTeamMode() == "never" {
 			if teamInfo := h.teamStateMgr.DetectTeamLead(ev.Session.SessionID); teamInfo != nil {
@@ -722,28 +719,22 @@ func (h *Handler) handleTeammateIdle(ev Event, p TeammateIdlePayload) error {
 
 	// Record this teammate as idle
 	if err := h.teamStateMgr.RecordTeammateIdle(p.TeamName, p.TeammateName); err != nil {
-		logging.Warn("TeammateIdle: failed to record idle state: %v", err)
-		return nil
+		return fmt.Errorf("teammate idle: record idle state: %w", err)
 	}
 
-	// Check if all conditions are met: lead stopped + all teammates idle
-	allIdle, err := h.teamStateMgr.CheckAllIdle(p.TeamName, teamInfo.Members)
+	// Check readiness and claim completion under the same team file lock.
+	claimed, err := h.teamStateMgr.ClaimAllIdle(p.TeamName, teamInfo.Members)
 	if err != nil {
-		logging.Warn("TeammateIdle: failed to check team idle state: %v", err)
-		return nil
+		return fmt.Errorf("teammate idle: claim team completion: %w", err)
 	}
 
-	if !allIdle {
+	if !claimed {
 		logging.Debug("TeammateIdle: not all conditions met yet for team %q", p.TeamName)
 		return nil
 	}
 
 	// All conditions met — send notification
 	logging.Debug("TeammateIdle: all teammates idle + lead stopped for team %q, sending notification", p.TeamName)
-
-	if err := h.teamStateMgr.MarkNotified(p.TeamName); err != nil {
-		logging.Warn("TeammateIdle: failed to mark team notified: %v", err)
-	}
 
 	status := analyzer.StatusTaskComplete
 	body := fmt.Sprintf("Team %q: all teammates finished work", p.TeamName)
