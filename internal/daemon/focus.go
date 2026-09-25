@@ -718,6 +718,19 @@ func windowTitleMatcher(terminalName, folderName string) func(title string) bool
 	return func(title string) bool { return title != "" && strings.Contains(title, folderName) }
 }
 
+// jetBrainsTitleMatches reports whether a JetBrains window title belongs to
+// project. Titles are "<project>", "<project> – <file>" or
+// "<project> [<path>] – <file>" (en dash), so a plain substring check would let
+// "agent" match "agent-notifications".
+func jetBrainsTitleMatches(title, project string) bool {
+	if project == "" {
+		return false
+	}
+	return title == project ||
+		strings.HasPrefix(title, project+" – ") ||
+		strings.HasPrefix(title, project+" [")
+}
+
 // partitionWindowsByTitle splits windowIDs by whether their title matches,
 // keeping the original order within each group.
 func partitionWindowsByTitle(windowIDs []string, windowName func(windowID string) string, matches func(title string) bool) (matching, nonMatching []string) {

@@ -166,16 +166,3 @@ func jetBrainsProjectName(cwd string) string {
 		dir = parent
 	}
 }
-
-// jetBrainsTitleMatches reports whether a JetBrains window title belongs to
-// project. Titles are "<project>", "<project> – <file>" or
-// "<project> [<path>] – <file>" (en dash), so a plain substring check would let
-// "agent" match "agent-notifications".
-func jetBrainsTitleMatches(title, project string) bool {
-	if project == "" {
-		return false
-	}
-	return title == project ||
-		strings.HasPrefix(title, project+" – ") ||
-		strings.HasPrefix(title, project+" [")
-}
