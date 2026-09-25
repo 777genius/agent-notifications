@@ -105,7 +105,7 @@ echo '{"version":"1.42.3"}' > failed/.claude-plugin/plugin.json
 mkdir failed/bin/.install.lock
 (
  sleep 0.2
- printf '#!/bin/sh\necho ready\n' > failed/bin/claude-notifications-windows-amd64.exe
+ printf '#!/bin/sh\nif [ "$1" = version ]; then echo 1.42.3; else echo ready; fi\n' > failed/bin/claude-notifications-windows-amd64.exe
  chmod +x failed/bin/claude-notifications-windows-amd64.exe
  rmdir failed/bin/.install.lock
 ) &
@@ -123,6 +123,80 @@ stale=$(OS=Windows_NT XDG_CACHE_HOME="$ROOT/failed-cache" sh failed/bin/hook-wra
 case "$stale" in *'"systemMessage"'*'Installation of v1.42.4 failed'*) : ;; *) exit 1 ;; esac
 rm failed/bin/.install.lock/.owner.reused/pid failed/bin/.install.lock/.owner.reused/heartbeat
 rmdir failed/bin/.install.lock/.owner.reused failed/bin/.install.lock
+# Regression: a failed upgrade with a usable older binary must emit one
+# stderr diagnostic per target version while continuing to dispatch the old
+# Claude hook. On the base wrapper both attempts are silent.
+mkdir -p upgrade/bin upgrade/.claude-plugin
+cp "$SRC/hook-wrapper.sh" upgrade/bin/hook-wrapper.sh
+cat > upgrade/bin/claude-notifications <<'UPGRADE_BINARY'
+#!/bin/sh
+if [ "$1" = version ]; then
+ echo version >> "$ROOT/upgrade-version-probes"
+ cat "$(dirname "$0")/version"
+else
+ cat "$(dirname "$0")/version" >> "$ROOT/delivered"
+fi
+UPGRADE_BINARY
+chmod +x upgrade/bin/claude-notifications
+echo 1.41.0 > upgrade/bin/version
+echo '{"version":"1.42.0"}' > upgrade/.claude-plugin/plugin.json
+cat > upgrade/bin/install.sh <<'FAILED_UPGRADE'
+#!/bin/sh
+# agent-notifications-managed-writer-protocol-v1
+exit 7
+FAILED_UPGRADE
+chmod +x upgrade/bin/install.sh
+before=$(wc -l < delivered)
+XDG_CACHE_HOME="$ROOT/upgrade-cache" sh upgrade/bin/hook-wrapper.sh handle-hook Stop > upgrade-first.stdout 2> upgrade-first.stderr
+first_probes=$(wc -l < upgrade-version-probes)
+mkdir upgrade-stubs
+printf '#!/bin/sh\necho sleep >> "$ROOT/upgrade-sleeps"\n' > upgrade-stubs/sleep
+chmod +x upgrade-stubs/sleep
+PATH="$ROOT/upgrade-stubs:$PATH" XDG_CACHE_HOME="$ROOT/upgrade-cache" sh upgrade/bin/hook-wrapper.sh handle-hook Stop > upgrade-second.stdout 2> upgrade-second.stderr
+second_probes=$(wc -l < upgrade-version-probes)
+[ ! -e upgrade-sleeps ]
+[ "$((second_probes - first_probes))" -le 3 ]
+[ ! -s upgrade-first.stdout ] && [ ! -s upgrade-second.stdout ]
+grep -q 'Installation of v1.42.0 failed' upgrade-first.stderr
+[ ! -s upgrade-second.stderr ]
+[ -d "$ROOT/upgrade-cache/claude-notifications-go/install-failed-1.42.0" ]
+[ "$(cat "$ROOT/upgrade-cache/claude-notifications-go/verified-version")" = 1.41.0 ]
+[ "$(wc -l < delivered)" -eq "$((before + 2))" ]
+echo '{"version":"1.42.1"}' > upgrade/.claude-plugin/plugin.json
+XDG_CACHE_HOME="$ROOT/upgrade-cache" sh upgrade/bin/hook-wrapper.sh handle-hook Stop > upgrade-third.stdout 2> upgrade-third.stderr
+[ ! -s upgrade-third.stdout ]
+grep -q 'Installation of v1.42.1 failed' upgrade-third.stderr
+[ "$(wc -l < delivered)" -eq "$((before + 3))" ]
+# Regression: a concurrent installer that removes its lock just before
+# publishing a working binary must leave no failure message and must dispatch
+# that binary. On the base wrapper the lock-free gap emits a false failure.
+mkdir -p racing/bin racing/.claude-plugin
+cp "$SRC/hook-wrapper.sh" racing/bin/hook-wrapper.sh
+echo '{"version":"1.42.0"}' > racing/.claude-plugin/plugin.json
+cat > race-new-binary <<'RACE_BINARY'
+#!/bin/sh
+if [ "$1" = version ]; then echo 1.42.0; else echo published >> "$ROOT/race-delivered"; fi
+RACE_BINARY
+chmod +x race-new-binary
+cat > racing/bin/install.sh <<'RACE_INSTALL'
+#!/bin/sh
+# agent-notifications-managed-writer-protocol-v1
+mkdir "$INSTALL_TARGET_DIR/.install.lock"
+(
+ rmdir "$INSTALL_TARGET_DIR/.install.lock"
+ : > "$ROOT/race-lock-gone"
+ sleep 0.8
+ mv "$ROOT/race-new-binary" "$INSTALL_TARGET_DIR/claude-notifications"
+) &
+while [ ! -e "$ROOT/race-lock-gone" ]; do sleep 0.01; done
+exit 7
+RACE_INSTALL
+chmod +x racing/bin/install.sh
+XDG_CACHE_HOME="$ROOT/race-cache" sh racing/bin/hook-wrapper.sh handle-hook Stop > race.stdout 2> race.stderr
+[ ! -s race.stdout ] && [ ! -s race.stderr ]
+[ "$(cat race-delivered)" = published ]
+[ "$(cat "$ROOT/race-cache/claude-notifications-go/verified-version")" = 1.42.0 ]
+[ ! -d "$ROOT/race-cache/claude-notifications-go/install-failed-1.42.0" ]
 # Source actual installer functions, substituting local download/OS integration
 # seams; execute the real main flow and real venv setup on both main branches.
 sed '$d' "$SRC/install.sh" > installer-functions.sh
