@@ -42,7 +42,8 @@
     "notifyOnTextResponse": null,
     "respectJudgeMode": null,
     "notifyOnlyWhenUnfocused": null,
-    "notifyDelaySeconds": null
+    "notifyDelaySeconds": null,
+    "respectDisplaySleep": null
   },
   "statuses": {
     "api_error": {

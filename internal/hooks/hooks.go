@@ -43,6 +43,7 @@ const (
 var (
 	isTerminalFocused = notifier.IsTerminalFocused
 	isDoNotDisturb    = notifier.IsDoNotDisturb
+	isDisplayAsleep   = notifier.IsDisplayAsleep
 	sleepFunc         = time.Sleep
 	settleSleepFunc   = time.Sleep
 )
@@ -1132,7 +1133,12 @@ func (h *Handler) sendNotifications(status analyzer.Status, body, actions, sessi
 // checked at delivery time: "silent" delivers the banner without the plugin's
 // sound so it still lands in the notification centre, "suppress" drops it
 // entirely. Detection fails open - an unknown DND state delivers as usual.
-// Webhook delivery is unaffected by all three options.
+//
+// When respectDisplaySleep is set, the banner is delivered without the
+// plugin's own sound while every display is asleep (macOS only; see
+// docs/DO_NOT_DISTURB.md). Detection fails open the same way DND does.
+//
+// Webhook delivery is unaffected by any of these options.
 func (h *Handler) sendDesktopNotification(status analyzer.Status, message, sessionID, cwd string) bool {
 	if delay := h.cfg.GetNotifyDelaySeconds(); delay > 0 {
 		if delay > maxNotifyDelaySeconds {
@@ -1151,12 +1157,24 @@ func (h *Handler) sendDesktopNotification(status analyzer.Status, message, sessi
 	// Do Not Disturb is evaluated at delivery time, after any notifyDelaySeconds
 	// wait, so toggling DND during the grace period is honoured.
 	var sendOpts []notifier.SendOption
+	muted := false
 	if mode := h.cfg.GetDoNotDisturbMode(); mode != config.DNDModeOff && isDoNotDisturb() {
 		if mode == config.DNDModeSuppress {
 			logging.Debug("Desktop notification suppressed: Do Not Disturb is active")
 			return false
 		}
 		logging.Debug("Desktop notification muted: Do Not Disturb is active")
+		sendOpts = append(sendOpts, notifier.WithoutSound())
+		muted = true
+	}
+
+	// Display sleep is evaluated independently of Do Not Disturb: a machine can
+	// be in DND without its display being asleep, and vice versa. Skipped once
+	// DND has already muted the sound, the same cheapest-decisive-first order as
+	// the focus check above, so a notification never pays for a probe whose
+	// result cannot change the outcome.
+	if !muted && h.cfg.ShouldRespectDisplaySleep() && isDisplayAsleep() {
+		logging.Debug("Desktop notification muted: display is asleep")
 		sendOpts = append(sendOpts, notifier.WithoutSound())
 	}
 

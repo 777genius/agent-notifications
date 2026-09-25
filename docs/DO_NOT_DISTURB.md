@@ -101,6 +101,13 @@ is worth doing, but not worth guessing at:
   version-fragile, and a detector that is wrong in the "in DND" direction
   silently swallows notifications — the one failure mode this feature must not
   have. It needs its own testing across OS versions, in its own change.
+
+  Do Not Disturb / Focus is not the same as the display being asleep — a Mac can
+  be in Focus mode with the screen wide awake, or have the screen timed out with
+  Focus off. The latter is a separate, implemented option on macOS:
+  `respectDisplaySleep`, detected through the public Quartz Display Services API
+  rather than the undocumented DND sources above. See
+  [Mute Sound While Display Is Asleep](CONFIGURATION.md#mute-sound-while-display-is-asleep).
 - **Windows.** Focus Assist / quiet hours, via
   `WNF_SHEL_QUIET_MOMENT_SHELL_MODE_CHANGED` or the registry under
   `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings`.

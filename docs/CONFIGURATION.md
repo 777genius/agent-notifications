@@ -129,6 +129,7 @@ The following JSON illustrates the schema. Do not replace your existing document
 | `notifyOnlyWhenUnfocused` | `false` | Skip the desktop notification only when the focused terminal window can be matched to the current Claude Code session. Best-effort per platform; if focus can't be determined the notification is still shown. |
 | `notifyDelaySeconds` | `0` | Wait N seconds before delivering a desktop notification (capped at 25s by the hook timeout). With `notifyOnlyWhenUnfocused`, focus is re-checked after the wait. Webhooks are unaffected. |
 | `respectDoNotDisturb` | `"off"` | Honour the desktop's Do Not Disturb state. `"silent"` still delivers the banner (so it reaches the notification centre) but skips the plugin's sound; `"suppress"` skips the notification entirely. Linux only for now (KDE Plasma, GNOME, XFCE, dunst); other platforms always report "not in DND". Webhooks are unaffected. See [Do Not Disturb](DO_NOT_DISTURB.md). |
+| `respectDisplaySleep` | `false` | Skip the plugin's own sound while every display is asleep; the banner is still delivered. macOS only for now; other platforms always report "not asleep". Independent of `respectDoNotDisturb`. Webhooks are unaffected. |
 | `suppressQuestionAfterTaskCompleteSeconds` | `12` | Suppress question notifications for N seconds after task complete |
 | `suppressQuestionAfterAnyNotificationSeconds` | `7` | Suppress question notifications for N seconds after any notification |
 | `suppressFilters` | `[]` | Array of rules to suppress notifications by status, git branch, and/or folder. Each rule is an AND of its fields; omitted fields match any value. Set `gitBranch` to `""` to match sessions outside git repos. |
@@ -211,6 +212,37 @@ counts as "not in DND" and the notification is delivered with its sound.
 Webhooks are unaffected in every mode. See [Do Not Disturb](DO_NOT_DISTURB.md)
 for the exact sources per desktop, the latency budget, and how to verify which
 one fired.
+
+### Mute Sound While Display Is Asleep
+
+A machine can be fully awake and still have nobody in front of it - the display
+timed out and went to sleep. `respectDisplaySleep` skips the plugin's own sound
+in that case, the same way `respectDoNotDisturb` does for Do Not Disturb; the
+banner is still delivered so it is waiting in the notification centre when the
+display wakes up.
+
+It is `false` by default, so nothing changes until you opt in:
+
+```json
+{
+  "notifications": {
+    "respectDisplaySleep": true
+  }
+}
+```
+
+Detection is macOS-only for now, via the same public Quartz Display Services
+API used by other window-management tools, and considers every attached
+display: on a laptop in clamshell mode with an external monitor still on, the
+built-in display reports asleep while you are actively working, so the sound is
+muted only when no attached display is awake. Linux and Windows are not
+detected yet, so the option has no effect there. Detection fails open the same
+way Do Not Disturb detection does: anything it cannot read counts as "not
+asleep" and the notification keeps its sound.
+
+This is a different signal from Do Not Disturb - a display can go to sleep
+without Focus/DND being on, and DND can be on with the display wide awake - so
+the two options are independent and compose freely.
 
 ### Sound Options
 
