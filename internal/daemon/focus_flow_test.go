@@ -64,7 +64,7 @@ func TestFocusFlowPreservesWarpAndZellij(t *testing.T) {
 				done <- nil
 			}()
 			client := &Client{socketPath: socket}
-			response, err := client.SendNotification("title", "body", hints, 30)
+			response, err := client.SendNotification("title", "body", "", hints, 30)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -99,5 +99,59 @@ func TestFocusFlowPreservesWarpAndZellij(t *testing.T) {
 				t.Error("click context was not cleared")
 			}
 		})
+	}
+}
+
+type capturingNotifier struct {
+	notify.Notifier
+	sent []notify.Notification
+}
+
+func (c *capturingNotifier) SendNotification(n notify.Notification) (uint32, error) {
+	c.sent = append(c.sent, n)
+	return 21, nil
+}
+
+// The configured app icon must survive the hook-to-daemon hop; without it the
+// notification server shows a generic icon.
+func TestSendNotification_PassesAppIcon(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "daemon.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = listener.Close() }()
+	notifier := &capturingNotifier{}
+	server := &Server{notifier: notifier, focusCtx: make(map[uint32]FocusHints)}
+	done := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			done <- err
+			return
+		}
+		server.wg.Add(1)
+		server.handleConnection(conn)
+		done <- nil
+	}()
+
+	client := &Client{socketPath: socket}
+	if _, err := client.SendNotification("title", "body", "/plugin/claude_icon.png", FocusHints{TerminalName: "konsole"}, 30); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("server did not complete request")
+	}
+
+	if len(notifier.sent) != 1 {
+		t.Fatalf("sent %d notifications, want 1", len(notifier.sent))
+	}
+	if got := notifier.sent[0].AppIcon; got != "/plugin/claude_icon.png" {
+		t.Errorf("AppIcon = %q, want %q", got, "/plugin/claude_icon.png")
 	}
 }

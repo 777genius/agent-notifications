@@ -48,6 +48,7 @@ type Response struct {
 type NotifyRequest struct {
 	Title              string `json:"title"`
 	Body               string `json:"body"`
+	AppIcon            string `json:"app_icon,omitempty"`              // Icon path or name shown by the notification server
 	FocusTarget        string `json:"focus_target"`                    // Terminal identifier (empty = auto-detect)
 	FocusFolder        string `json:"focus_folder,omitempty"`          // Project folder name for window-specific focus
 	FocusWindowID      string `json:"focus_window_id,omitempty"`       // Exact X11 window ID captured in the hook process

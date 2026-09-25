@@ -251,6 +251,7 @@ func (s *Server) handleNotification(req *NotifyRequest) (*NotifyResponse, error)
 	// Create notification with click action
 	n := notify.Notification{
 		AppName:       "claude-notifications",
+		AppIcon:       req.AppIcon,
 		Summary:       req.Title,
 		Body:          req.Body,
 		ExpireTimeout: timeout,

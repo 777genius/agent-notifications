@@ -57,7 +57,7 @@ func sendLinuxNotification(title, body, appIcon string, cfg *config.Config, cwd 
 	}
 
 	// Try to use daemon for click-to-focus
-	if err := sendViaDaemon(title, body, cwd, cfg); err == nil {
+	if err := sendViaDaemon(title, body, appIcon, cwd, cfg); err == nil {
 		logging.Debug("Notification sent via daemon with click-to-focus support")
 		return nil
 	} else {
@@ -71,7 +71,7 @@ func sendLinuxNotification(title, body, appIcon string, cfg *config.Config, cwd 
 // sendViaDaemon sends a notification via the background daemon.
 // Returns an error if daemon is not available or fails.
 // cwd is used to extract the project folder name for window-specific focus.
-func sendViaDaemon(title, body, cwd string, cfg *config.Config) error {
+func sendViaDaemon(title, body, appIcon, cwd string, cfg *config.Config) error {
 	// Start daemon on-demand (no-op if already running)
 	if !daemon.StartDaemonOnDemand() {
 		return daemon.ErrDaemonNotAvailable
@@ -114,7 +114,7 @@ func sendViaDaemon(title, body, cwd string, cfg *config.Config) error {
 	// every terminal.
 	applyZellijFocusHints(cfg, &hints)
 
-	_, err = client.SendNotification(title, body, hints, 30)
+	_, err = client.SendNotification(title, body, appIcon, hints, 30)
 	return err
 }
 

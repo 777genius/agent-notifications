@@ -39,7 +39,8 @@ func NewClient() (*Client, error) {
 // field is optional and an empty one simply narrows the daemon's search less.
 func (c *Client) SendNotification(
 	title,
-	body string,
+	body,
+	appIcon string,
 	hints FocusHints,
 	timeout int,
 ) (*NotifyResponse, error) {
@@ -49,6 +50,7 @@ func (c *Client) SendNotification(
 		Notify: &NotifyRequest{
 			Title:              title,
 			Body:               body,
+			AppIcon:            appIcon,
 			FocusTarget:        hints.TerminalName,
 			FocusFolder:        hints.FolderName,
 			FocusWindowID:      hints.WindowID,
