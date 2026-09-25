@@ -264,7 +264,7 @@ func TestGetTerminalName_JetBrains(t *testing.T) {
 	}
 }
 
-func TestJetBrainsProjectName(t *testing.T) {
+func TestJetBrainsProject(t *testing.T) {
 	root := t.TempDir()
 	mkdir := func(parts ...string) string {
 		dir := filepath.Join(append([]string{root}, parts...)...)
@@ -288,21 +288,55 @@ func TestJetBrainsProjectName(t *testing.T) {
 	plain := mkdir("plain", "sub")
 
 	tests := []struct {
-		name string
-		cwd  string
-		want string
+		name     string
+		cwd      string
+		wantName string
+		wantRoot string
 	}{
-		{"idea name file", filepath.Join(root, "named"), "Display Name"},
-		{"empty idea name file", filepath.Join(root, "empty-name"), "empty-name"},
-		{"idea without name file", filepath.Join(root, "agent-notifications"), "agent-notifications"},
-		{"idea in a parent dir", nested, "agent-notifications"},
-		{"no idea dir", plain, ""},
+		{"idea name file", filepath.Join(root, "named"), "Display Name", filepath.Join(root, "named")},
+		{"empty idea name file", filepath.Join(root, "empty-name"), "empty-name", filepath.Join(root, "empty-name")},
+		{"idea without name file", filepath.Join(root, "agent-notifications"), "agent-notifications", filepath.Join(root, "agent-notifications")},
+		{"idea in a parent dir", nested, "agent-notifications", filepath.Join(root, "agent-notifications")},
+		{"no idea dir", plain, "", ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := jetBrainsProjectName(tt.cwd); got != tt.want {
-				t.Errorf("jetBrainsProjectName(%q) = %q, want %q", tt.cwd, got, tt.want)
+			name, projectRoot := jetBrainsProject(tt.cwd)
+			if name != tt.wantName || projectRoot != tt.wantRoot {
+				t.Errorf("jetBrainsProject(%q) = (%q, %q), want (%q, %q)", tt.cwd, name, projectRoot, tt.wantName, tt.wantRoot)
+			}
+		})
+	}
+}
+
+func TestGetFocusProjectPath(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "agent-notifications")
+	cwd := filepath.Join(project, "internal")
+	if err := os.MkdirAll(filepath.Join(project, ".idea"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(cwd, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name     string
+		terminal string
+		cwd      string
+		want     string
+	}{
+		{"JetBrains project root", "jetbrains-goland", cwd, project},
+		{"JetBrains without idea dir", "jetbrains-goland", root, ""},
+		{"other terminals", "konsole", cwd, ""},
+		{"empty cwd", "jetbrains-goland", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := GetFocusProjectPath(tt.terminal, tt.cwd); got != tt.want {
+				t.Errorf("GetFocusProjectPath(%q, %q) = %q, want %q", tt.terminal, tt.cwd, got, tt.want)
 			}
 		})
 	}
@@ -340,23 +374,62 @@ func TestGetFocusFolderName(t *testing.T) {
 }
 
 func TestJetBrainsTitleMatches(t *testing.T) {
+	t.Setenv("HOME", "/home/u")
+
 	tests := []struct {
 		title   string
 		project string
+		path    string
 		want    bool
 	}{
-		{"agent-notifications", "agent-notifications", true},
-		{"agent-notifications – README.md", "agent-notifications", true},
-		{"wvc-image-processing [/var/www/html/wvc-image-processing] – README.md", "wvc-image-processing", true},
-		{"agent-notifications – README.md", "agent", false},
-		{"agent-notifications - README.md", "agent-notifications", false},
-		{"README.md – agent-notifications", "agent-notifications", false},
-		{"agent-notifications – README.md", "", false},
+		{"agent-notifications", "agent-notifications", "", true},
+		{"agent-notifications – README.md", "agent-notifications", "", true},
+		{"wvc-image-processing [/var/www/html/wvc-image-processing] – README.md", "wvc-image-processing", "", true},
+		{"agent-notifications – README.md", "agent", "", false},
+		{"agent-notifications - README.md", "agent-notifications", "", false},
+		{"README.md – agent-notifications", "agent-notifications", "", false},
+		{"agent-notifications – README.md", "", "", false},
+		// With the project path, a [location] must name this project.
+		{"agent", "agent", "/srv/agent", true},
+		{"agent – main.go", "agent", "/srv/agent", true},
+		{"agent [/srv/agent] – main.go", "agent", "/srv/agent", true},
+		{"agent [/opt/agent] – main.go", "agent", "/srv/agent", false},
+		{"agent [staging] – main.go", "agent", "/srv/agent", false},
+		{"agent [/srv/agent-old] – main.go", "agent", "/srv/agent", false},
+		// Under the user home JetBrains shows ~/<relative path>.
+		{"api [~/src/api] – main.go", "api", "/home/u/src/api", true},
+		{"api [/home/u/src/api] – main.go", "api", "/home/u/src/api", true},
+		{"api [~/other/api] – main.go", "api", "/home/u/src/api", false},
 	}
 
 	for _, tt := range tests {
-		if got := jetBrainsTitleMatches(tt.title, tt.project); got != tt.want {
-			t.Errorf("jetBrainsTitleMatches(%q, %q) = %v, want %v", tt.title, tt.project, got, tt.want)
+		if got := jetBrainsTitleMatches(tt.title, tt.project, tt.path); got != tt.want {
+			t.Errorf("jetBrainsTitleMatches(%q, %q, %q) = %v, want %v", tt.title, tt.project, tt.path, got, tt.want)
+		}
+	}
+}
+
+// Two open projects with the same name: only the path tells them apart.
+func TestTryKdotool_SameNameProjects(t *testing.T) {
+	titles := map[string]string{
+		"{a}": "api [/srv/a/api] – main.go",
+		"{b}": "api [/srv/b/api] – main.go",
+	}
+
+	for _, tt := range []struct {
+		path string
+		want string
+	}{
+		{"/srv/b/api", "{b}"},
+		{"/srv/a/api", "{a}"},
+		{"", "{a}"},
+	} {
+		trace := useFakeWindowTool(t, "kdotool", []string{"{a}", "{b}"}, titles)
+		if err := tryKdotool(FocusHints{TerminalName: "jetbrains-goland", FolderName: "api", ProjectPath: tt.path}); err != nil {
+			t.Fatalf("tryKdotool() error = %v", err)
+		}
+		if got := readActivatedWindows(t, trace); !reflect.DeepEqual(got, []string{tt.want}) {
+			t.Errorf("path %q: activated %v, want [%s]", tt.path, got, tt.want)
 		}
 	}
 }

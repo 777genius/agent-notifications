@@ -262,11 +262,21 @@ func GetFocusFolderName(terminalName, cwd string) string {
 		return ""
 	}
 	if isJetBrainsTerminalName(terminalName) {
-		if project := jetBrainsProjectName(cwd); project != "" {
+		if project, _ := jetBrainsProject(cwd); project != "" {
 			return project
 		}
 	}
 	return filepath.Base(cwd)
+}
+
+// GetFocusProjectPath returns the JetBrains project root for cwd, which tells
+// apart open projects with the same name. It is "" for other terminals.
+func GetFocusProjectPath(terminalName, cwd string) string {
+	if cwd == "" || !isJetBrainsTerminalName(terminalName) {
+		return ""
+	}
+	_, root := jetBrainsProject(cwd)
+	return root
 }
 
 // GetTerminalName detects the current terminal from environment variables.

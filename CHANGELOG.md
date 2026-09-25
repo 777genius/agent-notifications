@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Linux JetBrains click-to-focus: open projects with the same name are told apart by path, which JetBrains shows in their window titles.
+
 ## [1.45.17] - 2026-09-26
 
 ### Added

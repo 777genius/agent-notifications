@@ -275,6 +275,7 @@ func (s *Server) handleNotification(req *NotifyRequest) (*NotifyResponse, error)
 	s.focusCtx[id] = FocusHints{
 		TerminalName:  focusTarget,
 		FolderName:    req.FocusFolder,
+		ProjectPath:   req.FocusProjectPath,
 		WindowID:      req.FocusWindowID,
 		WindowTitle:   req.FocusWindowTitle,
 		WezTermPaneID: req.FocusWezTermPaneID,

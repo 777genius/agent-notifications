@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -20,20 +21,25 @@ import (
 // FocusMethod represents a method for focusing a window
 type FocusMethod struct {
 	Name string
-	Fn   func(terminalName, folderName string) error
+	Fn   func(hints FocusHints) error
 }
 
 // GetFocusMethods returns the ordered list of focus methods to try
 func GetFocusMethods() []FocusMethod {
 	return []FocusMethod{
-		{"activate-window-by-title extension", TryActivateWindowByTitle},
-		{"GNOME Shell Eval (by window title)", TryGnomeShellEvalByTitle},
-		{"GNOME Shell Eval (by app)", TryGnomeShellEval},
-		{"GNOME Shell FocusApp", TryGnomeFocusApp},
-		{"wlrctl", TryWlrctl},
-		{"kdotool", TryKdotool},
-		{"xdotool", TryXdotool},
+		{"activate-window-by-title extension", byName(TryActivateWindowByTitle)},
+		{"GNOME Shell Eval (by window title)", byName(TryGnomeShellEvalByTitle)},
+		{"GNOME Shell Eval (by app)", byName(TryGnomeShellEval)},
+		{"GNOME Shell FocusApp", byName(TryGnomeFocusApp)},
+		{"wlrctl", byName(TryWlrctl)},
+		{"kdotool", tryKdotool},
+		{"xdotool", tryXdotool},
 	}
+}
+
+// byName adapts a focus method that only needs the terminal and folder names.
+func byName(fn func(terminalName, folderName string) error) func(FocusHints) error {
+	return func(hints FocusHints) error { return fn(hints.TerminalName, hints.FolderName) }
 }
 
 // FocusHints identifies the session that produced a notification: its terminal,
@@ -44,6 +50,7 @@ func GetFocusMethods() []FocusMethod {
 type FocusHints struct {
 	TerminalName  string
 	FolderName    string
+	ProjectPath   string // JetBrains project root; tells same-named projects apart
 	WindowID      string
 	WindowTitle   string
 	WezTermPaneID string
@@ -112,7 +119,7 @@ func TryFocusWithHints(hints FocusHints) error {
 
 	if !windowFocused {
 		for _, method := range GetFocusMethods() {
-			if err := method.Fn(hints.TerminalName, hints.FolderName); err != nil {
+			if err := method.Fn(hints); err != nil {
 				lastErr = err
 				continue
 			}
@@ -549,12 +556,16 @@ func TryWlrctl(terminalName, folderName string) error {
 
 // TryKdotool uses kdotool for KDE Plasma.
 func TryKdotool(terminalName, folderName string) error {
+	return tryKdotool(FocusHints{TerminalName: terminalName, FolderName: folderName})
+}
+
+func tryKdotool(hints FocusHints) error {
 	if _, err := exec.LookPath("kdotool"); err != nil {
 		return fmt.Errorf("kdotool not installed")
 	}
 
 	// Search by class
-	className := GetKdotoolClass(terminalName)
+	className := GetKdotoolClass(hints.TerminalName)
 	searchCmd := exec.Command("kdotool", "search", "--class", className)
 	output, err := searchCmd.CombinedOutput()
 	outputStr := strings.TrimSpace(string(output))
@@ -564,8 +575,8 @@ func TryKdotool(terminalName, folderName string) error {
 	}
 
 	windowIDs := splitWindowIDs(outputStr)
-	if folderName != "" && len(windowIDs) > 1 {
-		matching, nonMatching := partitionWindowsByTitle(windowIDs, getKdotoolWindowName, windowTitleMatcher(terminalName, folderName))
+	if hints.FolderName != "" && len(windowIDs) > 1 {
+		matching, nonMatching := partitionWindowsByTitle(windowIDs, getKdotoolWindowName, windowTitleMatcher(hints))
 		windowIDs = append(matching, nonMatching...)
 	}
 
@@ -581,11 +592,15 @@ func TryKdotool(terminalName, folderName string) error {
 // TryXdotool uses xdotool for X11-based desktop environments
 // (XFCE, MATE, Cinnamon, i3, bspwm, and X11 sessions of GNOME/KDE).
 func TryXdotool(terminalName, folderName string) error {
+	return tryXdotool(FocusHints{TerminalName: terminalName, FolderName: folderName})
+}
+
+func tryXdotool(hints FocusHints) error {
 	if _, err := exec.LookPath("xdotool"); err != nil {
 		return fmt.Errorf("xdotool not installed")
 	}
 
-	searches := buildXdotoolSearches(terminalName, folderName)
+	searches := buildXdotoolSearches(hints.TerminalName, hints.FolderName)
 	seenIDs := make(map[string]struct{})
 	foundMatch := false
 	var errs []string
@@ -601,7 +616,7 @@ func TryXdotool(terminalName, folderName string) error {
 		}
 
 		foundMatch = true
-		windowIDs = prioritizeXdotoolCandidates(windowIDs, search.label, terminalName, folderName)
+		windowIDs = prioritizeXdotoolCandidates(windowIDs, search.label, hints)
 
 		// xdotool returns bottom-most windows first; prefer the top-most candidate.
 		for i := len(windowIDs) - 1; i >= 0; i-- {
@@ -690,15 +705,15 @@ func splitWindowIDs(output string) []string {
 	return ids
 }
 
-func prioritizeXdotoolCandidates(windowIDs []string, searchLabel, terminalName, folderName string) []string {
-	if folderName == "" {
+func prioritizeXdotoolCandidates(windowIDs []string, searchLabel string, hints FocusHints) []string {
+	if hints.FolderName == "" {
 		return windowIDs
 	}
 	if !strings.Contains(searchLabel, "class search") {
 		return windowIDs
 	}
 
-	matching, nonMatching := partitionWindowsByTitle(windowIDs, getXdotoolWindowName, windowTitleMatcher(terminalName, folderName))
+	matching, nonMatching := partitionWindowsByTitle(windowIDs, getXdotoolWindowName, windowTitleMatcher(hints))
 	if len(matching) == 0 {
 		return windowIDs
 	}
@@ -709,26 +724,52 @@ func prioritizeXdotoolCandidates(windowIDs []string, searchLabel, terminalName, 
 }
 
 // windowTitleMatcher returns the check for whether a window title belongs to
-// folderName: strict for JetBrains, whose titles start with the project name,
-// and a substring match for everything else.
-func windowTitleMatcher(terminalName, folderName string) func(title string) bool {
-	if isJetBrainsTerminalName(terminalName) {
-		return func(title string) bool { return jetBrainsTitleMatches(title, folderName) }
+// the session's folder: strict for JetBrains, whose titles start with the
+// project name, and a substring match for everything else.
+func windowTitleMatcher(hints FocusHints) func(title string) bool {
+	if isJetBrainsTerminalName(hints.TerminalName) {
+		return func(title string) bool { return jetBrainsTitleMatches(title, hints.FolderName, hints.ProjectPath) }
 	}
-	return func(title string) bool { return title != "" && strings.Contains(title, folderName) }
+	return func(title string) bool { return title != "" && strings.Contains(title, hints.FolderName) }
 }
 
 // jetBrainsTitleMatches reports whether a JetBrains window title belongs to
-// project. Titles are "<project>", "<project> – <file>" or
-// "<project> [<path>] – <file>" (en dash), so a plain substring check would let
-// "agent" match "agent-notifications".
-func jetBrainsTitleMatches(title, project string) bool {
+// project, whose root is projectPath. Titles are "<project>" or
+// "<project> – <file>" (en dash), so a plain substring check would let "agent"
+// match "agent-notifications". When another open project has the same name,
+// JetBrains adds its location: "<project> [<location>] – <file>"
+// (PlatformFrameTitleBuilder). Without projectPath (older hooks) any location
+// is accepted.
+func jetBrainsTitleMatches(title, project, projectPath string) bool {
 	if project == "" {
 		return false
 	}
-	return title == project ||
-		strings.HasPrefix(title, project+" – ") ||
-		strings.HasPrefix(title, project+" [")
+	if title == project || strings.HasPrefix(title, project+" – ") {
+		return true
+	}
+	if projectPath == "" {
+		return strings.HasPrefix(title, project+" [")
+	}
+	for _, location := range jetBrainsTitleLocations(projectPath) {
+		if strings.HasPrefix(title, project+" ["+location+"]") {
+			return true
+		}
+	}
+	return false
+}
+
+// jetBrainsTitleLocations returns the ways JetBrains can show projectPath in a
+// window title: "~/<relative>" under the user home (FileUtil
+// .getLocationRelativeToUserHome), otherwise the path itself. Both forms are
+// accepted because the IDE's idea of the home can differ from this process's.
+func jetBrainsTitleLocations(projectPath string) []string {
+	locations := []string{projectPath}
+	if home, err := os.UserHomeDir(); err == nil {
+		if rel, err := filepath.Rel(home, projectPath); err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, "../") {
+			locations = append(locations, "~/"+rel)
+		}
+	}
+	return locations
 }
 
 // partitionWindowsByTitle splits windowIDs by whether their title matches,

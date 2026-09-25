@@ -32,7 +32,7 @@ func TestFocusFlowPreservesWarpAndZellij(t *testing.T) {
 			t.Setenv("PATH", dir)
 			t.Setenv("FOCUS_TEST_TRACE", trace)
 			hints := FocusHints{
-				TerminalName: "WarpTerminal", FolderName: "sandbox", WindowID: "123", WindowTitle: "sandbox window",
+				TerminalName: "WarpTerminal", FolderName: "sandbox", ProjectPath: "/srv/sandbox", WindowID: "123", WindowTitle: "sandbox window",
 				WezTermPaneID: "stale", WezTermSocket: "stale-socket",
 				WarpFocusURL:  "warp://session/6b7be92641ae8ced80188a4d87e4b200",
 				ZellijSession: "sandbox-session", ZellijPaneID: "2", ZellijTabName: "sandbox-tab", ZellijMode: mode,

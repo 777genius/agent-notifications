@@ -145,23 +145,24 @@ func readStartupWMClass(productInfoPath string) string {
 	return ""
 }
 
-// jetBrainsProjectName returns the name JetBrains shows in the window title for
-// the project containing cwd: .idea/.name when set, else the project directory
-// name. It returns "" when no enclosing directory has an .idea folder.
-func jetBrainsProjectName(cwd string) string {
+// jetBrainsProject returns the JetBrains project containing cwd: the name the
+// IDE shows in the window title (.idea/.name when set, else the directory
+// name) and the project root (the directory holding .idea). Both are "" when
+// no enclosing directory has an .idea folder.
+func jetBrainsProject(cwd string) (name, root string) {
 	dir := filepath.Clean(cwd)
 	for {
 		if info, err := os.Stat(filepath.Join(dir, ".idea")); err == nil && info.IsDir() {
 			if data, err := os.ReadFile(filepath.Join(dir, ".idea", ".name")); err == nil {
 				if name := strings.TrimSpace(string(data)); name != "" {
-					return name
+					return name, dir
 				}
 			}
-			return filepath.Base(dir)
+			return filepath.Base(dir), dir
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return ""
+			return "", ""
 		}
 		dir = parent
 	}
