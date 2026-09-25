@@ -69,6 +69,11 @@ func GetNotificationDesktopEntryID(terminalName string) string {
 	if isGnomeWaylandSession() && hasClaudeNotificationsDesktopEntry() {
 		return claudeNotificationsDesktopEntryID
 	}
+	if isJetBrainsTerminalName(terminalName) {
+		if id := jetBrainsDesktopEntryID(terminalName); id != "" {
+			return id
+		}
+	}
 	return GetDesktopEntryID(terminalName)
 }
 

@@ -166,3 +166,53 @@ func jetBrainsProjectName(cwd string) string {
 		dir = parent
 	}
 }
+
+// jetBrainsDesktopEntryID returns the ID of the installed .desktop file whose
+// StartupWMClass is class, so the notification server can show the IDE's name
+// and icon. Toolbox names these files "<class>-<uuid>.desktop", so the class
+// alone is not a valid ID. It returns "" when no entry matches.
+func jetBrainsDesktopEntryID(class string) string {
+	if strings.ContainsAny(class, `*?[\/`) {
+		return ""
+	}
+	want := "StartupWMClass=" + class
+	for _, dir := range xdgApplicationDirs() {
+		exact := filepath.Join(dir, class+".desktop")
+		suffixed, _ := filepath.Glob(filepath.Join(dir, class+"-*.desktop"))
+		for _, path := range append([]string{exact}, suffixed...) {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				continue
+			}
+			for _, line := range strings.Split(string(data), "\n") {
+				if strings.TrimSpace(line) == want {
+					return strings.TrimSuffix(filepath.Base(path), ".desktop")
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// xdgApplicationDirs lists the applications directories of the XDG base
+// directory spec, most specific first.
+func xdgApplicationDirs() []string {
+	dataHome := os.Getenv("XDG_DATA_HOME")
+	if dataHome == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			dataHome = filepath.Join(home, ".local", "share")
+		}
+	}
+	dataDirs := os.Getenv("XDG_DATA_DIRS")
+	if dataDirs == "" {
+		dataDirs = "/usr/local/share:/usr/share"
+	}
+
+	var dirs []string
+	for _, dir := range append([]string{dataHome}, strings.Split(dataDirs, ":")...) {
+		if dir != "" {
+			dirs = append(dirs, filepath.Join(dir, "applications"))
+		}
+	}
+	return dirs
+}

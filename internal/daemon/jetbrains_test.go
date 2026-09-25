@@ -423,3 +423,83 @@ func TestTryXdotool_JetBrainsStrictTitleMatch(t *testing.T) {
 		t.Errorf("activated %v, want [1]", got)
 	}
 }
+
+func writeDesktopFile(t *testing.T, dir, name, wmClass string) {
+	t.Helper()
+	apps := filepath.Join(dir, "applications")
+	if err := os.MkdirAll(apps, 0755); err != nil {
+		t.Fatal(err)
+	}
+	content := "[Desktop Entry]\nName=IDE\nIcon=ide\nStartupWMClass=" + wmClass + "\n"
+	if err := os.WriteFile(filepath.Join(apps, name+".desktop"), []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGetNotificationDesktopEntryID_JetBrains(t *testing.T) {
+	const toolbox = "jetbrains-goland-31970c23-ef28-4826-a2ea-51dff0e57df2"
+
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, home, system string)
+		class string
+		want  string
+	}{
+		{
+			name:  "Toolbox entry with uuid suffix",
+			setup: func(t *testing.T, home, _ string) { writeDesktopFile(t, home, toolbox, "jetbrains-goland") },
+			class: "jetbrains-goland", want: toolbox,
+		},
+		{
+			name: "entry in XDG_DATA_DIRS",
+			setup: func(t *testing.T, _, system string) {
+				writeDesktopFile(t, system, "jetbrains-goland-9999", "jetbrains-goland")
+			},
+			class: "jetbrains-goland", want: "jetbrains-goland-9999",
+		},
+		{
+			name: "prefix match with another class is skipped",
+			setup: func(t *testing.T, home, _ string) {
+				writeDesktopFile(t, home, "jetbrains-idea-ce-1234", "jetbrains-idea-ce")
+			},
+			class: "jetbrains-idea", want: "jetbrains-idea",
+		},
+		{
+			name:  "no entry keeps the class",
+			setup: func(*testing.T, string, string) {},
+			class: "jetbrains-goland", want: "jetbrains-goland",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home, system := t.TempDir(), t.TempDir()
+			t.Setenv("XDG_DATA_HOME", home)
+			t.Setenv("XDG_DATA_DIRS", system)
+			t.Setenv("XDG_SESSION_TYPE", "wayland")
+			t.Setenv("XDG_CURRENT_DESKTOP", "KDE")
+			tt.setup(t, home, system)
+
+			if got := GetNotificationDesktopEntryID(tt.class); got != tt.want {
+				t.Errorf("GetNotificationDesktopEntryID(%q) = %q, want %q", tt.class, got, tt.want)
+			}
+		})
+	}
+}
+
+// GNOME Wayland keeps the plugin's own entry, which avoids a stuck loading cursor.
+func TestGetNotificationDesktopEntryID_JetBrainsOnGnomeWayland(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", home)
+	t.Setenv("XDG_DATA_DIRS", t.TempDir())
+	t.Setenv("XDG_SESSION_TYPE", "wayland")
+	t.Setenv("XDG_CURRENT_DESKTOP", "GNOME")
+	writeDesktopFile(t, home, "jetbrains-goland-1234", "jetbrains-goland")
+	if err := os.WriteFile(filepath.Join(home, "applications", claudeNotificationsDesktopEntryID+".desktop"), []byte("[Desktop Entry]\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := GetNotificationDesktopEntryID("jetbrains-goland"); got != claudeNotificationsDesktopEntryID {
+		t.Errorf("GetNotificationDesktopEntryID() = %q, want %q", got, claudeNotificationsDesktopEntryID)
+	}
+}
