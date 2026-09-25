@@ -34,8 +34,10 @@ func TestParseWindowID(t *testing.T) {
 }
 
 func TestTerminalHasFocus_Linux(t *testing.T) {
-	restore := activeWindowID
-	defer func() { activeWindowID = restore }()
+	restore, restoreIDE := activeWindowID, detectJetBrainsIDE
+	defer func() { activeWindowID, detectJetBrainsIDE = restore, restoreIDE }()
+	// Not a JetBrains terminal, even when the tests run in one.
+	detectJetBrainsIDE = func() (string, int, bool) { return "", 0, false }
 
 	t.Run("focused when active window matches WINDOWID", func(t *testing.T) {
 		t.Setenv("WINDOWID", "0x1e00009")
@@ -82,8 +84,8 @@ func ideProject(t *testing.T, name string) string {
 }
 
 func TestTerminalHasFocus_JetBrains(t *testing.T) {
-	restoreIDE, restoreWindow := detectJetBrainsIDE, activeWindow
-	defer func() { detectJetBrainsIDE, activeWindow = restoreIDE, restoreWindow }()
+	restoreIDE, restoreWindow, restoreID := detectJetBrainsIDE, activeWindow, activeWindowID
+	defer func() { detectJetBrainsIDE, activeWindow, activeWindowID = restoreIDE, restoreWindow, restoreID }()
 	t.Setenv("WINDOWID", "")
 
 	root := ideProject(t, "api")
@@ -119,6 +121,28 @@ func TestTerminalHasFocus_JetBrains(t *testing.T) {
 				t.Errorf("terminalHasFocus() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// A $WINDOWID in a JetBrains terminal was inherited from whatever launched the
+// IDE. It must not decide focus: that terminal being active is not this session.
+func TestTerminalHasFocus_JetBrainsIgnoresInheritedWindowID(t *testing.T) {
+	restoreIDE, restoreWindow, restoreID := detectJetBrainsIDE, activeWindow, activeWindowID
+	defer func() { detectJetBrainsIDE, activeWindow, activeWindowID = restoreIDE, restoreWindow, restoreID }()
+
+	root := ideProject(t, "api")
+	t.Setenv("WINDOWID", "100")
+	activeWindowID = func() (string, error) { return "100", nil } // the launcher terminal is active
+	detectJetBrainsIDE = func() (string, int, bool) { return "jetbrains-goland", 4242, true }
+
+	activeWindow = func() (windowInfo, error) { return windowInfo{7, "xterm"}, nil }
+	if terminalHasFocus("", root) {
+		t.Error("launcher terminal active: expected no focus (deliver)")
+	}
+
+	activeWindow = func() (windowInfo, error) { return windowInfo{4242, "api – main.go"}, nil }
+	if !terminalHasFocus("", root) {
+		t.Error("IDE project window active: expected focus")
 	}
 }
 

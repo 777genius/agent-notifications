@@ -333,7 +333,12 @@ func GetTerminalName() string {
 
 // GetX11WindowID returns the current terminal window's X11 window ID when available.
 // It is captured in the hook process and later used by the daemon for exact focus on X11.
-func GetX11WindowID() string {
+// JetBrains terminals have no X11 window of their own: a $WINDOWID there was
+// inherited from whatever launched the IDE, so it is ignored.
+func GetX11WindowID(terminalName string) string {
+	if isJetBrainsTerminalName(terminalName) {
+		return ""
+	}
 	return strings.TrimSpace(os.Getenv("WINDOWID"))
 }
 

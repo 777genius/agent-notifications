@@ -39,15 +39,19 @@ type windowInfo struct {
 // xdotool) against $WINDOWID, which X11 terminals export for their own window.
 // When $WINDOWID is unset - typically under Wayland, where there is no portable
 // active-window query - focus is treated as unknown and the notification is
-// delivered, except for JetBrains IDE terminals (see jetBrainsProjectHasFocus).
+// delivered. JetBrains IDE terminals are checked first and separately (see
+// jetBrainsProjectHasFocus): they have no X11 window of their own, so a
+// $WINDOWID there was inherited from whatever launched the IDE.
 // Class-based matching alone is intentionally avoided: two terminal windows
 // share a class, so it cannot tell "the window Claude runs in" from "another
 // terminal", and a false match would swallow the notification.
 func terminalHasFocus(_, cwd string) bool {
+	if class, pid, ok := detectJetBrainsIDE(); ok {
+		return jetBrainsProjectHasFocus(class, pid, cwd)
+	}
 	ours, ok := parseWindowID(os.Getenv("WINDOWID"))
 	if !ok {
-		// Wayland, or a terminal that does not export WINDOWID.
-		return jetBrainsProjectHasFocus(cwd)
+		return false // Wayland, or a terminal that does not export WINDOWID
 	}
 	activeRaw, err := activeWindowID()
 	if err != nil {
@@ -94,11 +98,7 @@ func parseWindowID(raw string) (uint64, bool) {
 // class is not compared (xdotool before 2021 cannot print it). Like the X11
 // check it is window-level: it cannot tell whether the IDE's terminal tool
 // window is open.
-func jetBrainsProjectHasFocus(cwd string) bool {
-	class, pid, ok := detectJetBrainsIDE()
-	if !ok {
-		return false
-	}
+func jetBrainsProjectHasFocus(class string, pid int, cwd string) bool {
 	projectPath := daemon.GetFocusProjectPath(class, cwd)
 	if projectPath == "" {
 		return false // not inside a JetBrains project: its window can't be confirmed

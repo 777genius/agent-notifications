@@ -89,7 +89,7 @@ func sendViaDaemon(title, body, appIcon, cwd string, cfg *config.Config) error {
 	focusTarget := daemon.GetTerminalName()
 	// Folder name for title-based window focus
 	folderName := daemon.GetFocusFolderName(focusTarget, cwd)
-	focusWindowID := daemon.GetX11WindowID()
+	focusWindowID := daemon.GetX11WindowID(focusTarget)
 	focusWindowTitle := daemon.GetExactWindowTitle(focusTarget)
 	if sessionType := os.Getenv("XDG_SESSION_TYPE"); sessionType != "" && sessionType != "x11" {
 		focusWindowID = ""
