@@ -103,6 +103,7 @@ func sendViaDaemon(title, body, appIcon, cwd string, cfg *config.Config) error {
 		TerminalName:  focusTarget,
 		FolderName:    folderName,
 		ProjectPath:   daemon.GetFocusProjectPath(focusTarget, cwd),
+		IDEPID:        daemon.GetFocusIDEPID(focusTarget),
 		WindowID:      focusWindowID,
 		WindowTitle:   focusWindowTitle,
 		WezTermPaneID: wezTermPaneID,

@@ -54,6 +54,7 @@ func (c *Client) SendNotification(
 			FocusTarget:        hints.TerminalName,
 			FocusFolder:        hints.FolderName,
 			FocusProjectPath:   hints.ProjectPath,
+			FocusIDEPID:        hints.IDEPID,
 			FocusWindowID:      hints.WindowID,
 			FocusWindowTitle:   hints.WindowTitle,
 			FocusWezTermPaneID: hints.WezTermPaneID,

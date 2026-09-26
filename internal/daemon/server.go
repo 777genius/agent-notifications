@@ -276,6 +276,7 @@ func (s *Server) handleNotification(req *NotifyRequest) (*NotifyResponse, error)
 		TerminalName:  focusTarget,
 		FolderName:    req.FocusFolder,
 		ProjectPath:   req.FocusProjectPath,
+		IDEPID:        req.FocusIDEPID,
 		WindowID:      req.FocusWindowID,
 		WindowTitle:   req.FocusWindowTitle,
 		WezTermPaneID: req.FocusWezTermPaneID,

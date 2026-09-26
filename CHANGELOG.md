@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Linux: JetBrains notifications show the IDE's name and icon, including Toolbox installs.
 
 ### Fixed
-- Linux JetBrains click-to-focus: open projects with the same name are told apart by path, which JetBrains shows in their window titles.
+- Linux JetBrains click-to-focus: with several open projects of the same name, raise this session's window. Within one IDE process JetBrains adds each project's path to its title, which the plugin matches; across processes of the same IDE (titles without a path), the IDE's process ID decides.
 - Linux: click-to-focus notifications show the configured `appIcon`. Only the fallback path without click-to-focus used it.
 
 ## [1.45.17] - 2026-09-26

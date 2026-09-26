@@ -576,3 +576,64 @@ func TestGetNotificationDesktopEntryID_JetBrainsOnGnomeWayland(t *testing.T) {
 		t.Errorf("GetNotificationDesktopEntryID() = %q, want %q", got, claudeNotificationsDesktopEntryID)
 	}
 }
+
+// Same-named projects in two processes of one IDE both have plain titles
+// (JetBrains adds a location only within one process), so the IDE's PID decides.
+func TestFocus_SameNameProjectsInTwoIDEProcesses(t *testing.T) {
+	titles := map[string]string{"1": "api – main.go", "2": "api – main.go"}
+	pids := map[string]int{"1": 100, "2": 200}
+
+	for _, tt := range []struct {
+		tool string
+		pid  int
+		want string
+	}{
+		// kdotool activates the first candidate.
+		{"kdotool", 200, "2"},
+		{"kdotool", 100, "1"},
+		{"kdotool", 0, "1"},   // older hook: no PID, first title match
+		{"kdotool", 300, "1"}, // no window of that process: any title match
+		// xdotool lists bottom-most first and prefers the top-most candidate.
+		{"xdotool", 100, "1"},
+		{"xdotool", 200, "2"},
+		{"xdotool", 0, "2"},
+	} {
+		trace := useFakeWindowToolWithPIDs(t, tt.tool, []string{"1", "2"}, titles, pids)
+		hints := FocusHints{TerminalName: "jetbrains-goland", FolderName: "api", ProjectPath: "/srv/a/api", IDEPID: tt.pid}
+		var err error
+		if tt.tool == "kdotool" {
+			err = tryKdotool(hints)
+		} else {
+			err = tryXdotool(hints)
+		}
+		if err != nil {
+			t.Fatalf("%s: %v", tt.tool, err)
+		}
+		if got := readActivatedWindows(t, trace); !reflect.DeepEqual(got, []string{tt.want}) {
+			t.Errorf("%s with IDE pid %d: activated %v, want [%s]", tt.tool, tt.pid, got, tt.want)
+		}
+	}
+}
+
+func TestGetFocusIDEPID(t *testing.T) {
+	phpStorm := writeIDEHome(t, phpStormProductInfo)
+	processes := []fakeProcess{
+		{pid: 100, ppid: 101, comm: "claude", exe: "/usr/bin/claude"},
+		{pid: 101, ppid: 1, comm: "phpstorm", exe: filepath.Join(phpStorm, "bin", "phpstorm")},
+	}
+	t.Setenv("TERMINAL_EMULATOR", "JetBrains-JediTerm")
+	useFakeProc(t, 100, processes...)
+
+	for _, tt := range []struct {
+		terminal string
+		want     int
+	}{
+		{"jetbrains-phpstorm", 101},
+		{"jetbrains-goland", 0}, // a different IDE than the one running this session
+		{"konsole", 0},
+	} {
+		if got := GetFocusIDEPID(tt.terminal); got != tt.want {
+			t.Errorf("GetFocusIDEPID(%q) = %d, want %d", tt.terminal, got, tt.want)
+		}
+	}
+}

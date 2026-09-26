@@ -269,6 +269,19 @@ func GetFocusFolderName(terminalName, cwd string) string {
 	return filepath.Base(cwd)
 }
 
+// GetFocusIDEPID returns the PID of the JetBrains IDE running this session
+// when it is terminalName, which tells its windows apart from those of another
+// process of the same IDE. It is 0 otherwise.
+func GetFocusIDEPID(terminalName string) int {
+	if !isJetBrainsTerminalName(terminalName) {
+		return 0
+	}
+	if class, pid, ok := DetectJetBrainsIDE(); ok && class == terminalName {
+		return pid
+	}
+	return 0
+}
+
 // GetFocusProjectPath returns the JetBrains project root for cwd, which tells
 // apart open projects with the same name. It is "" for other terminals.
 func GetFocusProjectPath(terminalName, cwd string) string {

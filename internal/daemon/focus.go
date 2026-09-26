@@ -51,6 +51,7 @@ type FocusHints struct {
 	TerminalName  string
 	FolderName    string
 	ProjectPath   string // JetBrains project root; tells same-named projects apart
+	IDEPID        int    // JetBrains IDE process; tells apart IDE processes with same-named projects
 	WindowID      string
 	WindowTitle   string
 	WezTermPaneID string
@@ -576,8 +577,8 @@ func tryKdotool(hints FocusHints) error {
 
 	windowIDs := splitWindowIDs(outputStr)
 	if hints.FolderName != "" && len(windowIDs) > 1 {
-		matching, nonMatching := partitionWindowsByTitle(windowIDs, getKdotoolWindowName, windowTitleMatcher(hints))
-		windowIDs = append(matching, nonMatching...)
+		ours, matching, rest := rankWindows(windowIDs, hints, getKdotoolWindowName, getKdotoolWindowPID)
+		windowIDs = append(append(ours, matching...), rest...)
 	}
 
 	// windowactivate exits 0 even for an unknown window, so there is no failure
@@ -713,14 +714,14 @@ func prioritizeXdotoolCandidates(windowIDs []string, searchLabel string, hints F
 		return windowIDs
 	}
 
-	matching, nonMatching := partitionWindowsByTitle(windowIDs, getXdotoolWindowName, windowTitleMatcher(hints))
-	if len(matching) == 0 {
+	ours, matching, rest := rankWindows(windowIDs, hints, getXdotoolWindowName, getXdotoolWindowPID)
+	if len(ours)+len(matching) == 0 {
 		return windowIDs
 	}
 
 	// TryXdotool tries candidates from the end (xdotool lists bottom-most
-	// windows first), so matches go last to be tried first, top-most first.
-	return append(nonMatching, matching...)
+	// windows first), so the best group goes last to be tried first, top-most first.
+	return append(append(rest, matching...), ours...)
 }
 
 // windowTitleMatcher returns the check for whether a window title belongs to
@@ -772,17 +773,25 @@ func jetBrainsTitleLocations(projectPath string) []string {
 	return locations
 }
 
-// partitionWindowsByTitle splits windowIDs by whether their title matches,
-// keeping the original order within each group.
-func partitionWindowsByTitle(windowIDs []string, windowName func(windowID string) string, matches func(title string) bool) (matching, nonMatching []string) {
+// rankWindows splits windowIDs, keeping their order within each group: ours
+// are title matches owned by the session's IDE process (hints.IDEPID), matching
+// are the other title matches, rest are the others. The IDE process matters for
+// same-named projects in two processes of one IDE: JetBrains adds a location to
+// the title only for same-named projects within one process. windowPID is only
+// called for title matches, and only when the IDE process is known.
+func rankWindows(windowIDs []string, hints FocusHints, windowName func(windowID string) string, windowPID func(windowID string) int) (ours, matching, rest []string) {
+	titleMatches := windowTitleMatcher(hints)
 	for _, windowID := range windowIDs {
-		if matches(windowName(windowID)) {
+		switch {
+		case !titleMatches(windowName(windowID)):
+			rest = append(rest, windowID)
+		case hints.IDEPID > 0 && windowPID(windowID) == hints.IDEPID:
+			ours = append(ours, windowID)
+		default:
 			matching = append(matching, windowID)
-		} else {
-			nonMatching = append(nonMatching, windowID)
 		}
 	}
-	return matching, nonMatching
+	return ours, matching, rest
 }
 
 func getKdotoolWindowName(windowID string) string {
@@ -791,6 +800,27 @@ func getKdotoolWindowName(windowID string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(output))
+}
+
+func getKdotoolWindowPID(windowID string) int {
+	return windowPIDFromTool("kdotool", windowID)
+}
+
+func getXdotoolWindowPID(windowID string) int {
+	return windowPIDFromTool("xdotool", windowID)
+}
+
+// windowPIDFromTool returns the PID owning windowID, or 0 when unknown.
+func windowPIDFromTool(tool, windowID string) int {
+	output, err := exec.Command(tool, "getwindowpid", windowID).Output()
+	if err != nil {
+		return 0
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(output)))
+	if err != nil {
+		return 0
+	}
+	return pid
 }
 
 func getXdotoolWindowName(windowID string) string {

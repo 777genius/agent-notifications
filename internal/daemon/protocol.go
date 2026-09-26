@@ -52,6 +52,7 @@ type NotifyRequest struct {
 	FocusTarget        string `json:"focus_target"`                    // Terminal identifier (empty = auto-detect)
 	FocusFolder        string `json:"focus_folder,omitempty"`          // Project folder name for window-specific focus
 	FocusProjectPath   string `json:"focus_project_path,omitempty"`    // JetBrains project root, to tell same-named projects apart
+	FocusIDEPID        int    `json:"focus_ide_pid,omitempty"`         // JetBrains IDE process, to tell its windows from another process's
 	FocusWindowID      string `json:"focus_window_id,omitempty"`       // Exact X11 window ID captured in the hook process
 	FocusWindowTitle   string `json:"focus_window_title,omitempty"`    // Exact window title captured in the hook process when available
 	FocusWezTermPaneID string `json:"focus_wezterm_pane_id,omitempty"` // WezTerm pane ID ($WEZTERM_PANE)
