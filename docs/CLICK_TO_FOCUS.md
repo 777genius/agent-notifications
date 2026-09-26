@@ -116,6 +116,8 @@ Works in the built-in terminal of JetBrains IDEs. The plugin finds the IDE in th
 - A click raises the window of the project the session runs in. The project name is `.idea/.name` if set, else the name of the folder that holds `.idea/`.
 - The terminal tab inside the IDE isn't selected: JetBrains has no external API for it.
 - KDE Plasma (`kdotool`) and X11 (`xdotool`) raise the window whose title starts with the project name. If none matches, they raise another window of the IDE.
+- Two open projects with the same name: JetBrains adds each project's path to its title, and the plugin picks the window with this session's path.
+- With `notifyOnlyWhenUnfocused`, the notification is skipped while this project's IDE window is active (KDE Plasma: `kdotool`, X11: `xdotool`). It can't tell whether the IDE's terminal panel is open.
 - GNOME (`activate-window-by-title` extension) matches the project name anywhere in a window title. Sway (`wlrctl`) raises a window of the IDE, not always the project's.
 
 ### Diagnostics

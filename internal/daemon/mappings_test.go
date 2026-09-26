@@ -724,8 +724,21 @@ func TestGetX11WindowID(t *testing.T) {
 
 	t.Setenv("WINDOWID", "12345")
 
-	if got := GetX11WindowID(); got != "12345" {
+	if got := GetX11WindowID("konsole"); got != "12345" {
 		t.Errorf("GetX11WindowID() = %q, want %q", got, "12345")
+	}
+}
+
+// A JetBrains terminal has no X11 window of its own: a $WINDOWID there was
+// inherited from whatever launched the IDE and would raise that window.
+func TestGetX11WindowID_IgnoresInheritedIDInJetBrains(t *testing.T) {
+	restore := saveTerminalEnv(t)
+	defer restore()
+
+	t.Setenv("WINDOWID", "12345")
+
+	if got := GetX11WindowID("jetbrains-phpstorm"); got != "" {
+		t.Errorf("GetX11WindowID(jetbrains-phpstorm) = %q, want empty", got)
 	}
 }
 
@@ -735,7 +748,7 @@ func TestGetX11WindowID_TrimsWhitespace(t *testing.T) {
 
 	t.Setenv("WINDOWID", "  0x123  ")
 
-	if got := GetX11WindowID(); got != "0x123" {
+	if got := GetX11WindowID("konsole"); got != "0x123" {
 		t.Errorf("GetX11WindowID() = %q, want %q", got, "0x123")
 	}
 }

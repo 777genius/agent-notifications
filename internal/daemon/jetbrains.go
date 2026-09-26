@@ -57,33 +57,34 @@ func isJetBrainsTerminalName(terminalName string) bool {
 	return strings.HasPrefix(strings.ToLower(terminalName), jetBrainsClassPrefix)
 }
 
-// detectJetBrainsClass returns the window class of the JetBrains IDE whose
-// terminal runs this process, e.g. "jetbrains-phpstorm". The class comes from
-// the IDE's product-info.json, so every product and edition is covered.
-func detectJetBrainsClass() (string, bool) {
+// DetectJetBrainsIDE returns the window class of the JetBrains IDE whose
+// terminal runs this process, e.g. "jetbrains-phpstorm", and the IDE's PID,
+// which owns its windows. The class comes from the IDE's product-info.json, so
+// every product and edition is covered.
+func DetectJetBrainsIDE() (class string, pid int, ok bool) {
 	if os.Getenv("TERMINAL_EMULATOR") != jetBrainsTerminalEmulator {
-		return "", false
+		return "", 0, false
 	}
 
-	pid := getParentPID()
+	pid = getParentPID()
 	for i := 0; i < maxProcessAncestors && pid > 1; i++ {
 		dir := filepath.Join(procRoot, strconv.Itoa(pid))
 		if comm, err := os.ReadFile(filepath.Join(dir, "comm")); err == nil {
 			if _, ok := standaloneTerminalComms[strings.TrimSpace(string(comm))]; ok {
-				return "", false
+				return "", 0, false
 			}
 		}
 		if class := jetBrainsClassFromExe(filepath.Join(dir, "exe")); class != "" {
-			return class, true
+			return class, pid, true
 		}
 
 		ppid, err := readParentPID(filepath.Join(dir, "stat"))
 		if err != nil {
-			return "", false
+			return "", 0, false
 		}
 		pid = ppid
 	}
-	return "", false
+	return "", 0, false
 }
 
 // readParentPID reads the ppid field of /proc/<pid>/stat. It parses after the
@@ -145,24 +146,75 @@ func readStartupWMClass(productInfoPath string) string {
 	return ""
 }
 
-// jetBrainsProjectName returns the name JetBrains shows in the window title for
-// the project containing cwd: .idea/.name when set, else the project directory
-// name. It returns "" when no enclosing directory has an .idea folder.
-func jetBrainsProjectName(cwd string) string {
+// jetBrainsProject returns the JetBrains project containing cwd: the name the
+// IDE shows in the window title (.idea/.name when set, else the directory
+// name) and the project root (the directory holding .idea). Both are "" when
+// no enclosing directory has an .idea folder.
+func jetBrainsProject(cwd string) (name, root string) {
 	dir := filepath.Clean(cwd)
 	for {
 		if info, err := os.Stat(filepath.Join(dir, ".idea")); err == nil && info.IsDir() {
 			if data, err := os.ReadFile(filepath.Join(dir, ".idea", ".name")); err == nil {
 				if name := strings.TrimSpace(string(data)); name != "" {
-					return name
+					return name, dir
 				}
 			}
-			return filepath.Base(dir)
+			return filepath.Base(dir), dir
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return ""
+			return "", ""
 		}
 		dir = parent
 	}
+}
+
+// jetBrainsDesktopEntryID returns the ID of the installed .desktop file whose
+// StartupWMClass is class, so the notification server can show the IDE's name
+// and icon. Toolbox names these files "<class>-<uuid>.desktop", so the class
+// alone is not a valid ID. It returns "" when no entry matches.
+func jetBrainsDesktopEntryID(class string) string {
+	if strings.ContainsAny(class, `*?[\/`) {
+		return ""
+	}
+	want := "StartupWMClass=" + class
+	for _, dir := range xdgApplicationDirs() {
+		exact := filepath.Join(dir, class+".desktop")
+		suffixed, _ := filepath.Glob(filepath.Join(dir, class+"-*.desktop"))
+		for _, path := range append([]string{exact}, suffixed...) {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				continue
+			}
+			for _, line := range strings.Split(string(data), "\n") {
+				if strings.TrimSpace(line) == want {
+					return strings.TrimSuffix(filepath.Base(path), ".desktop")
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// xdgApplicationDirs lists the applications directories of the XDG base
+// directory spec, most specific first.
+func xdgApplicationDirs() []string {
+	dataHome := os.Getenv("XDG_DATA_HOME")
+	if dataHome == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			dataHome = filepath.Join(home, ".local", "share")
+		}
+	}
+	dataDirs := os.Getenv("XDG_DATA_DIRS")
+	if dataDirs == "" {
+		dataDirs = "/usr/local/share:/usr/share"
+	}
+
+	var dirs []string
+	for _, dir := range append([]string{dataHome}, strings.Split(dataDirs, ":")...) {
+		if dir != "" {
+			dirs = append(dirs, filepath.Join(dir, "applications"))
+		}
+	}
+	return dirs
 }

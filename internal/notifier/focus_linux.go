@@ -4,11 +4,14 @@ package notifier
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/777genius/agent-notifications/internal/daemon"
 )
 
 // activeWindowQueryTimeout bounds the xdotool call so a stalled subprocess can
@@ -16,8 +19,19 @@ import (
 // error, which terminalHasFocus treats as "unfocused" and delivers the notification.
 const activeWindowQueryTimeout = 2 * time.Second
 
-// activeWindowID is a seam so tests can stub the X11 active-window query.
-var activeWindowID = defaultActiveWindowID
+// Seams so tests can stub the X11 active-window query, the JetBrains IDE
+// lookup and the active-window details query.
+var (
+	activeWindowID     = defaultActiveWindowID
+	detectJetBrainsIDE = daemon.DetectJetBrainsIDE
+	activeWindow       = defaultActiveWindow
+)
+
+// windowInfo describes the active window.
+type windowInfo struct {
+	pid   int
+	title string
+}
 
 // terminalHasFocus reports whether the terminal window is the X11 active window.
 //
@@ -25,10 +39,16 @@ var activeWindowID = defaultActiveWindowID
 // xdotool) against $WINDOWID, which X11 terminals export for their own window.
 // When $WINDOWID is unset - typically under Wayland, where there is no portable
 // active-window query - focus is treated as unknown and the notification is
-// delivered. Class-based matching is intentionally avoided: two terminal windows
+// delivered. JetBrains IDE terminals are checked first and separately (see
+// jetBrainsProjectHasFocus): they have no X11 window of their own, so a
+// $WINDOWID there was inherited from whatever launched the IDE.
+// Class-based matching alone is intentionally avoided: two terminal windows
 // share a class, so it cannot tell "the window Claude runs in" from "another
 // terminal", and a false match would swallow the notification.
-func terminalHasFocus(_, _ string) bool {
+func terminalHasFocus(_, cwd string) bool {
+	if class, pid, ok := detectJetBrainsIDE(); ok {
+		return jetBrainsProjectHasFocus(class, pid, cwd)
+	}
 	ours, ok := parseWindowID(os.Getenv("WINDOWID"))
 	if !ok {
 		return false // Wayland, or a terminal that does not export WINDOWID
@@ -69,4 +89,59 @@ func parseWindowID(raw string) (uint64, bool) {
 		return 0, false
 	}
 	return id, true
+}
+
+// jetBrainsProjectHasFocus reports whether the active window is this session's
+// JetBrains project window: owned by the IDE process this session runs under,
+// with a title naming this project (and its path when JetBrains shows one for
+// same-named projects). The PID already identifies the IDE, so the window
+// class is not compared (xdotool before 2021 cannot print it). Like the X11
+// check it is window-level: it cannot tell whether the IDE's terminal tool
+// window is open.
+func jetBrainsProjectHasFocus(class string, pid int, cwd string) bool {
+	projectPath := daemon.GetFocusProjectPath(class, cwd)
+	if projectPath == "" {
+		return false // not inside a JetBrains project: its window can't be confirmed
+	}
+	window, err := activeWindow()
+	if err != nil {
+		return false
+	}
+	return window.pid == pid &&
+		daemon.JetBrainsTitleMatches(window.title, daemon.GetFocusFolderName(class, cwd), projectPath)
+}
+
+// defaultActiveWindow reads the active window's PID and title in one chained
+// call: xdotool on X11, kdotool (KDE Plasma) otherwise. It is bounded
+// by activeWindowQueryTimeout so a stalled subprocess cannot hang the hook.
+func defaultActiveWindow() (windowInfo, error) {
+	tool := "kdotool"
+	if os.Getenv("XDG_SESSION_TYPE") == "x11" {
+		tool = "xdotool"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), activeWindowQueryTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, tool, "getactivewindow", "getwindowpid", "getwindowname").Output()
+	if err != nil {
+		return windowInfo{}, err
+	}
+	return parseWindowInfo(string(out))
+}
+
+// parseWindowInfo parses the PID and title lines printed by
+// defaultActiveWindow. The title is everything after the PID line.
+func parseWindowInfo(out string) (windowInfo, error) {
+	lines := strings.SplitN(strings.TrimSuffix(out, "\n"), "\n", 2)
+	if lines[0] == "" {
+		return windowInfo{}, errors.New("empty active window output")
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(lines[0]))
+	if err != nil {
+		return windowInfo{}, err
+	}
+	info := windowInfo{pid: pid}
+	if len(lines) == 2 {
+		info.title = lines[1]
+	}
+	return info, nil
 }

@@ -64,7 +64,7 @@ func writeIDEHome(t *testing.T, productInfo string) string {
 
 const phpStormProductInfo = `{"name":"PhpStorm","launch":[{"os":"Linux","arch":"amd64","launcherPath":"bin/phpstorm","startupWmClass":"jetbrains-phpstorm"}]}`
 
-func TestDetectJetBrainsClass(t *testing.T) {
+func TestDetectJetBrainsIDE(t *testing.T) {
 	phpStorm := writeIDEHome(t, phpStormProductInfo)
 	ideaCE := writeIDEHome(t, `{"launch":[{"os":"macOS","startupWmClass":"jetbrains-idea"},{"os":"Linux","startupWmClass":"jetbrains-idea-ce"}]}`)
 	noLinuxClass := writeIDEHome(t, `{"launch":[{"os":"Windows","startupWmClass":"jetbrains-phpstorm"},{"os":"Linux"}]}`)
@@ -174,35 +174,35 @@ func TestDetectJetBrainsClass(t *testing.T) {
 			t.Setenv("TERMINAL_EMULATOR", tt.env)
 			useFakeProc(t, 100, tt.processes...)
 
-			got, ok := detectJetBrainsClass()
-			if got != tt.want || ok != tt.wantOK {
-				t.Errorf("detectJetBrainsClass() = (%q, %v), want (%q, %v)", got, ok, tt.want, tt.wantOK)
+			got, pid, ok := DetectJetBrainsIDE()
+			if got != tt.want || ok != tt.wantOK || (ok && pid != tt.processes[len(tt.processes)-1].pid) {
+				t.Errorf("DetectJetBrainsIDE() = (%q, %d, %v), want (%q, IDE pid, %v)", got, pid, ok, tt.want, tt.wantOK)
 			}
 		})
 	}
 }
 
-func TestDetectJetBrainsClass_BrokenStat(t *testing.T) {
+func TestDetectJetBrainsIDE_BrokenStat(t *testing.T) {
 	t.Setenv("TERMINAL_EMULATOR", "JetBrains-JediTerm")
 	root := useFakeProc(t, 100, fakeProcess{pid: 100, ppid: 101, comm: "claude", exe: "/usr/bin/claude"})
 	if err := os.WriteFile(filepath.Join(root, "100", "stat"), []byte("100 (claude"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	if got, ok := detectJetBrainsClass(); ok {
-		t.Errorf("detectJetBrainsClass() = (%q, true), want not detected", got)
+	if got, _, ok := DetectJetBrainsIDE(); ok {
+		t.Errorf("DetectJetBrainsIDE() = (%q, true), want not detected", got)
 	}
 }
 
-func TestDetectJetBrainsClass_StopsOnParentCycle(t *testing.T) {
+func TestDetectJetBrainsIDE_StopsOnParentCycle(t *testing.T) {
 	t.Setenv("TERMINAL_EMULATOR", "JetBrains-JediTerm")
 	useFakeProc(t, 100,
 		fakeProcess{pid: 100, ppid: 101, comm: "bash", exe: "/usr/bin/bash"},
 		fakeProcess{pid: 101, ppid: 100, comm: "bash", exe: "/usr/bin/bash"},
 	)
 
-	if got, ok := detectJetBrainsClass(); ok {
-		t.Errorf("detectJetBrainsClass() = (%q, true), want not detected", got)
+	if got, _, ok := DetectJetBrainsIDE(); ok {
+		t.Errorf("DetectJetBrainsIDE() = (%q, true), want not detected", got)
 	}
 }
 
@@ -264,7 +264,7 @@ func TestGetTerminalName_JetBrains(t *testing.T) {
 	}
 }
 
-func TestJetBrainsProjectName(t *testing.T) {
+func TestJetBrainsProject(t *testing.T) {
 	root := t.TempDir()
 	mkdir := func(parts ...string) string {
 		dir := filepath.Join(append([]string{root}, parts...)...)
@@ -288,21 +288,55 @@ func TestJetBrainsProjectName(t *testing.T) {
 	plain := mkdir("plain", "sub")
 
 	tests := []struct {
-		name string
-		cwd  string
-		want string
+		name     string
+		cwd      string
+		wantName string
+		wantRoot string
 	}{
-		{"idea name file", filepath.Join(root, "named"), "Display Name"},
-		{"empty idea name file", filepath.Join(root, "empty-name"), "empty-name"},
-		{"idea without name file", filepath.Join(root, "agent-notifications"), "agent-notifications"},
-		{"idea in a parent dir", nested, "agent-notifications"},
-		{"no idea dir", plain, ""},
+		{"idea name file", filepath.Join(root, "named"), "Display Name", filepath.Join(root, "named")},
+		{"empty idea name file", filepath.Join(root, "empty-name"), "empty-name", filepath.Join(root, "empty-name")},
+		{"idea without name file", filepath.Join(root, "agent-notifications"), "agent-notifications", filepath.Join(root, "agent-notifications")},
+		{"idea in a parent dir", nested, "agent-notifications", filepath.Join(root, "agent-notifications")},
+		{"no idea dir", plain, "", ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := jetBrainsProjectName(tt.cwd); got != tt.want {
-				t.Errorf("jetBrainsProjectName(%q) = %q, want %q", tt.cwd, got, tt.want)
+			name, projectRoot := jetBrainsProject(tt.cwd)
+			if name != tt.wantName || projectRoot != tt.wantRoot {
+				t.Errorf("jetBrainsProject(%q) = (%q, %q), want (%q, %q)", tt.cwd, name, projectRoot, tt.wantName, tt.wantRoot)
+			}
+		})
+	}
+}
+
+func TestGetFocusProjectPath(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "agent-notifications")
+	cwd := filepath.Join(project, "internal")
+	if err := os.MkdirAll(filepath.Join(project, ".idea"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(cwd, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name     string
+		terminal string
+		cwd      string
+		want     string
+	}{
+		{"JetBrains project root", "jetbrains-goland", cwd, project},
+		{"JetBrains without idea dir", "jetbrains-goland", root, ""},
+		{"other terminals", "konsole", cwd, ""},
+		{"empty cwd", "jetbrains-goland", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := GetFocusProjectPath(tt.terminal, tt.cwd); got != tt.want {
+				t.Errorf("GetFocusProjectPath(%q, %q) = %q, want %q", tt.terminal, tt.cwd, got, tt.want)
 			}
 		})
 	}
@@ -340,23 +374,62 @@ func TestGetFocusFolderName(t *testing.T) {
 }
 
 func TestJetBrainsTitleMatches(t *testing.T) {
+	t.Setenv("HOME", "/home/u")
+
 	tests := []struct {
 		title   string
 		project string
+		path    string
 		want    bool
 	}{
-		{"agent-notifications", "agent-notifications", true},
-		{"agent-notifications – README.md", "agent-notifications", true},
-		{"wvc-image-processing [/var/www/html/wvc-image-processing] – README.md", "wvc-image-processing", true},
-		{"agent-notifications – README.md", "agent", false},
-		{"agent-notifications - README.md", "agent-notifications", false},
-		{"README.md – agent-notifications", "agent-notifications", false},
-		{"agent-notifications – README.md", "", false},
+		{"agent-notifications", "agent-notifications", "", true},
+		{"agent-notifications – README.md", "agent-notifications", "", true},
+		{"wvc-image-processing [/var/www/html/wvc-image-processing] – README.md", "wvc-image-processing", "", true},
+		{"agent-notifications – README.md", "agent", "", false},
+		{"agent-notifications - README.md", "agent-notifications", "", false},
+		{"README.md – agent-notifications", "agent-notifications", "", false},
+		{"agent-notifications – README.md", "", "", false},
+		// With the project path, a [location] must name this project.
+		{"agent", "agent", "/srv/agent", true},
+		{"agent – main.go", "agent", "/srv/agent", true},
+		{"agent [/srv/agent] – main.go", "agent", "/srv/agent", true},
+		{"agent [/opt/agent] – main.go", "agent", "/srv/agent", false},
+		{"agent [staging] – main.go", "agent", "/srv/agent", false},
+		{"agent [/srv/agent-old] – main.go", "agent", "/srv/agent", false},
+		// Under the user home JetBrains shows ~/<relative path>.
+		{"api [~/src/api] – main.go", "api", "/home/u/src/api", true},
+		{"api [/home/u/src/api] – main.go", "api", "/home/u/src/api", true},
+		{"api [~/other/api] – main.go", "api", "/home/u/src/api", false},
 	}
 
 	for _, tt := range tests {
-		if got := jetBrainsTitleMatches(tt.title, tt.project); got != tt.want {
-			t.Errorf("jetBrainsTitleMatches(%q, %q) = %v, want %v", tt.title, tt.project, got, tt.want)
+		if got := JetBrainsTitleMatches(tt.title, tt.project, tt.path); got != tt.want {
+			t.Errorf("JetBrainsTitleMatches(%q, %q, %q) = %v, want %v", tt.title, tt.project, tt.path, got, tt.want)
+		}
+	}
+}
+
+// Two open projects with the same name: only the path tells them apart.
+func TestTryKdotool_SameNameProjects(t *testing.T) {
+	titles := map[string]string{
+		"{a}": "api [/srv/a/api] – main.go",
+		"{b}": "api [/srv/b/api] – main.go",
+	}
+
+	for _, tt := range []struct {
+		path string
+		want string
+	}{
+		{"/srv/b/api", "{b}"},
+		{"/srv/a/api", "{a}"},
+		{"", "{a}"},
+	} {
+		trace := useFakeWindowTool(t, "kdotool", []string{"{a}", "{b}"}, titles)
+		if err := tryKdotool(FocusHints{TerminalName: "jetbrains-goland", FolderName: "api", ProjectPath: tt.path}); err != nil {
+			t.Fatalf("tryKdotool() error = %v", err)
+		}
+		if got := readActivatedWindows(t, trace); !reflect.DeepEqual(got, []string{tt.want}) {
+			t.Errorf("path %q: activated %v, want [%s]", tt.path, got, tt.want)
 		}
 	}
 }
@@ -421,5 +494,85 @@ func TestTryXdotool_JetBrainsStrictTitleMatch(t *testing.T) {
 	}
 	if got := readActivatedWindows(t, trace); !reflect.DeepEqual(got, []string{"1"}) {
 		t.Errorf("activated %v, want [1]", got)
+	}
+}
+
+func writeDesktopFile(t *testing.T, dir, name, wmClass string) {
+	t.Helper()
+	apps := filepath.Join(dir, "applications")
+	if err := os.MkdirAll(apps, 0755); err != nil {
+		t.Fatal(err)
+	}
+	content := "[Desktop Entry]\nName=IDE\nIcon=ide\nStartupWMClass=" + wmClass + "\n"
+	if err := os.WriteFile(filepath.Join(apps, name+".desktop"), []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGetNotificationDesktopEntryID_JetBrains(t *testing.T) {
+	const toolbox = "jetbrains-goland-31970c23-ef28-4826-a2ea-51dff0e57df2"
+
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, home, system string)
+		class string
+		want  string
+	}{
+		{
+			name:  "Toolbox entry with uuid suffix",
+			setup: func(t *testing.T, home, _ string) { writeDesktopFile(t, home, toolbox, "jetbrains-goland") },
+			class: "jetbrains-goland", want: toolbox,
+		},
+		{
+			name: "entry in XDG_DATA_DIRS",
+			setup: func(t *testing.T, _, system string) {
+				writeDesktopFile(t, system, "jetbrains-goland-9999", "jetbrains-goland")
+			},
+			class: "jetbrains-goland", want: "jetbrains-goland-9999",
+		},
+		{
+			name: "prefix match with another class is skipped",
+			setup: func(t *testing.T, home, _ string) {
+				writeDesktopFile(t, home, "jetbrains-idea-ce-1234", "jetbrains-idea-ce")
+			},
+			class: "jetbrains-idea", want: "jetbrains-idea",
+		},
+		{
+			name:  "no entry keeps the class",
+			setup: func(*testing.T, string, string) {},
+			class: "jetbrains-goland", want: "jetbrains-goland",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home, system := t.TempDir(), t.TempDir()
+			t.Setenv("XDG_DATA_HOME", home)
+			t.Setenv("XDG_DATA_DIRS", system)
+			t.Setenv("XDG_SESSION_TYPE", "wayland")
+			t.Setenv("XDG_CURRENT_DESKTOP", "KDE")
+			tt.setup(t, home, system)
+
+			if got := GetNotificationDesktopEntryID(tt.class); got != tt.want {
+				t.Errorf("GetNotificationDesktopEntryID(%q) = %q, want %q", tt.class, got, tt.want)
+			}
+		})
+	}
+}
+
+// GNOME Wayland keeps the plugin's own entry, which avoids a stuck loading cursor.
+func TestGetNotificationDesktopEntryID_JetBrainsOnGnomeWayland(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", home)
+	t.Setenv("XDG_DATA_DIRS", t.TempDir())
+	t.Setenv("XDG_SESSION_TYPE", "wayland")
+	t.Setenv("XDG_CURRENT_DESKTOP", "GNOME")
+	writeDesktopFile(t, home, "jetbrains-goland-1234", "jetbrains-goland")
+	if err := os.WriteFile(filepath.Join(home, "applications", claudeNotificationsDesktopEntryID+".desktop"), []byte("[Desktop Entry]\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := GetNotificationDesktopEntryID("jetbrains-goland"); got != claudeNotificationsDesktopEntryID {
+		t.Errorf("GetNotificationDesktopEntryID() = %q, want %q", got, claudeNotificationsDesktopEntryID)
 	}
 }

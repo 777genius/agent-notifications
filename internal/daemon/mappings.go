@@ -69,6 +69,11 @@ func GetNotificationDesktopEntryID(terminalName string) string {
 	if isGnomeWaylandSession() && hasClaudeNotificationsDesktopEntry() {
 		return claudeNotificationsDesktopEntryID
 	}
+	if isJetBrainsTerminalName(terminalName) {
+		if id := jetBrainsDesktopEntryID(terminalName); id != "" {
+			return id
+		}
+	}
 	return GetDesktopEntryID(terminalName)
 }
 
@@ -257,11 +262,21 @@ func GetFocusFolderName(terminalName, cwd string) string {
 		return ""
 	}
 	if isJetBrainsTerminalName(terminalName) {
-		if project := jetBrainsProjectName(cwd); project != "" {
+		if project, _ := jetBrainsProject(cwd); project != "" {
 			return project
 		}
 	}
 	return filepath.Base(cwd)
+}
+
+// GetFocusProjectPath returns the JetBrains project root for cwd, which tells
+// apart open projects with the same name. It is "" for other terminals.
+func GetFocusProjectPath(terminalName, cwd string) string {
+	if cwd == "" || !isJetBrainsTerminalName(terminalName) {
+		return ""
+	}
+	_, root := jetBrainsProject(cwd)
+	return root
 }
 
 // GetTerminalName detects the current terminal from environment variables.
@@ -269,7 +284,7 @@ func GetTerminalName() string {
 	// JetBrains IDE terminals set no TERM_PROGRAM, so a TERM_PROGRAM or KONSOLE_*
 	// value seen in one was inherited from whatever launched the IDE. Detect the
 	// IDE before those checks; the ancestry walk rejects terminals started from it.
-	if class, ok := detectJetBrainsClass(); ok {
+	if class, _, ok := DetectJetBrainsIDE(); ok {
 		return class
 	}
 
@@ -318,7 +333,12 @@ func GetTerminalName() string {
 
 // GetX11WindowID returns the current terminal window's X11 window ID when available.
 // It is captured in the hook process and later used by the daemon for exact focus on X11.
-func GetX11WindowID() string {
+// JetBrains terminals have no X11 window of their own: a $WINDOWID there was
+// inherited from whatever launched the IDE, so it is ignored.
+func GetX11WindowID(terminalName string) string {
+	if isJetBrainsTerminalName(terminalName) {
+		return ""
+	}
 	return strings.TrimSpace(os.Getenv("WINDOWID"))
 }
 

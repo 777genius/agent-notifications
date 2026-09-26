@@ -251,6 +251,7 @@ func (s *Server) handleNotification(req *NotifyRequest) (*NotifyResponse, error)
 	// Create notification with click action
 	n := notify.Notification{
 		AppName:       "claude-notifications",
+		AppIcon:       req.AppIcon,
 		Summary:       req.Title,
 		Body:          req.Body,
 		ExpireTimeout: timeout,
@@ -274,6 +275,7 @@ func (s *Server) handleNotification(req *NotifyRequest) (*NotifyResponse, error)
 	s.focusCtx[id] = FocusHints{
 		TerminalName:  focusTarget,
 		FolderName:    req.FocusFolder,
+		ProjectPath:   req.FocusProjectPath,
 		WindowID:      req.FocusWindowID,
 		WindowTitle:   req.FocusWindowTitle,
 		WezTermPaneID: req.FocusWezTermPaneID,
