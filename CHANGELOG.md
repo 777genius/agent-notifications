@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Linux click-to-focus for JetBrains IDE terminals (IntelliJ IDEA, PhpStorm, WebStorm, PyCharm, GoLand, …). A click raises the IDE, and on KDE and X11 the window of the session's project. KDE Plasma needs `kdotool`.
+- **Mute sound while the display is asleep (macOS)** - `respectDisplaySleep` skips the plugin's own sound while every attached display is asleep, detected via the public Quartz Display Services API. The banner is still delivered. Independent of `respectDoNotDisturb`; Linux and Windows are not detected yet. See [docs/CONFIGURATION.md](docs/CONFIGURATION.md#mute-sound-while-display-is-asleep).
 
 ### Fixed
 - Linux X11: when several windows of the terminal are open, activate the top-most one whose title names the project, not a non-matching window.

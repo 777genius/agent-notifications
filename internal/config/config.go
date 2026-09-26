@@ -49,6 +49,7 @@ type NotificationsConfig struct {
 	NotifyOnlyWhenUnfocused                     *bool            `json:"notifyOnlyWhenUnfocused"`       // Suppress desktop notifications while the terminal window running Claude Code has OS focus, default: false
 	NotifyDelaySeconds                          *int             `json:"notifyDelaySeconds"`            // Wait N seconds before delivering a desktop notification (paired with notifyOnlyWhenUnfocused, it re-checks focus after the wait), default: 0
 	RespectDoNotDisturb                         *string          `json:"respectDoNotDisturb,omitempty"` // How to treat the desktop's Do Not Disturb state: "off" (default), "silent" (deliver the banner, skip the sound), "suppress" (skip the notification entirely)
+	RespectDisplaySleep                         *bool            `json:"respectDisplaySleep"`           // Skip the plugin's own sound while every display is asleep (macOS only), default: false
 }
 
 // DesktopConfig represents desktop notification settings
@@ -660,6 +661,16 @@ func (c *Config) GetDoNotDisturbMode() string {
 		logging.Warn("Unknown respectDoNotDisturb value %q, falling back to %q", *c.Notifications.RespectDoNotDisturb, DNDModeOff)
 		return DNDModeOff
 	}
+}
+
+// ShouldRespectDisplaySleep returns true if the plugin's own sound should be
+// skipped while every display is asleep (default: false). It has no effect on
+// platforms with no display-sleep detector; see docs/DO_NOT_DISTURB.md.
+func (c *Config) ShouldRespectDisplaySleep() bool {
+	if c.Notifications.RespectDisplaySleep == nil {
+		return false // Default: play sound regardless of display sleep state
+	}
+	return *c.Notifications.RespectDisplaySleep
 }
 
 // GetTeamMode returns the team notification mode: "always" (default), "wait-all", or "never"
