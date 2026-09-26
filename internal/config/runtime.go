@@ -9,7 +9,7 @@ import (
 
 // ConsumerVersion identifies the template compiled into this binary. The CLI
 // reports this same build value; a bundle with another version has no baseline.
-var ConsumerVersion = "1.45.16"
+var ConsumerVersion = "1.45.17"
 
 // ConsumerContext keeps resource discovery separate from canonical selection.
 // A bundle is historical evidence, never a runtime fallback. Without verified
