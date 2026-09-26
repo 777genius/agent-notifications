@@ -109,6 +109,9 @@ jobs:
           if [ "${{ runner.os }}" != Windows ]; then
             chmod +x "candidate/$CANDIDATE_BINARY"
           fi
+          if [ "${{ runner.os }}" = Linux ]; then
+            umask 0002
+          fi
           version="$(sed -n 's/^var ConsumerVersion = "\([^"]*\)"$/\1/p' internal/config/runtime.go)"
           python scripts/release-artifact-e2e.py \
             --binary "candidate/$CANDIDATE_BINARY" \
