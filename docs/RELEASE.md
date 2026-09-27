@@ -103,8 +103,8 @@ and their evidence on the release PR; the selector itself does not run or prove 
 > release finishes building.
 >
 > Prepare the bump on a release branch, tag that exact commit (`release.yml` triggers on the
-> tag, not on `main`), qualify the draft, obtain explicit approval to publish that version,
-> publish its assets, and only then fast-forward
+> tag, not on `main`), qualify the draft, follow the owner request scope below,
+> publish its assets when authorized, and only then fast-forward
 > `main` to the same SHA. The tag stays valid because the SHA is unchanged, and the
 > asset-missing window is zero.
 
@@ -147,10 +147,19 @@ both versions, so a binary that fails `version` leaves users stuck on it.
 # Keep HOME, CODEX_HOME and platform config/cache/temp directories in the sandbox.
 ```
 
-After qualification, obtain the owner's explicit approval for **this version** before
-publishing the draft with `gh release edit vX.Y.Z --draft=false`. Previous release
-approvals do not carry forward. Verify the public assets and checksums, then land the
-exact same commit on `main`:
+After qualification, follow the owner's request for this release:
+
+- A request to **make a release** authorizes publishing the qualified version prepared for
+  that request. Publish the draft with `gh release edit vX.Y.Z --draft=false` without asking
+  for a second approval. State the candidate version in a progress update so the owner can
+  correct it before publication.
+- A request to **make a draft release** authorizes only the draft. Leave it unpublished
+  until the owner asks to publish it.
+- If there was no request to publish this release, or the candidate version or scope
+  materially changed after the request, obtain explicit owner approval for the final version
+  before publishing. Approval for an earlier release does not carry forward.
+
+Verify the public assets and checksums, then land the exact same commit on `main`:
 
 ```bash
 git switch main && git merge --ff-only release/vX.Y.Z && git push origin main
