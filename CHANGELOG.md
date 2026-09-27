@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.45.18] - 2026-09-27
+
 ### Added
 - Linux: `notifyOnlyWhenUnfocused` works in JetBrains IDE terminals. The notification is skipped while this session's project window is active (KDE Plasma with `kdotool`, X11 with `xdotool`).
 - Linux: JetBrains notifications show the IDE's name and icon, including Toolbox installs.
