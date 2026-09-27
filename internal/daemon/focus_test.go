@@ -16,6 +16,12 @@ import (
 // argument (the window ID). It returns the trace path for readActivatedWindows.
 func useFakeWindowTool(t *testing.T, tool string, ids []string, titles map[string]string) string {
 	t.Helper()
+	return useFakeWindowToolWithPIDs(t, tool, ids, titles, nil)
+}
+
+// useFakeWindowToolWithPIDs is useFakeWindowTool where getwindowpid prints pids[id].
+func useFakeWindowToolWithPIDs(t *testing.T, tool string, ids []string, titles map[string]string, pids map[string]int) string {
+	t.Helper()
 	dir := t.TempDir()
 	trace := filepath.Join(dir, "trace")
 	var script strings.Builder
@@ -26,6 +32,10 @@ func useFakeWindowTool(t *testing.T, tool string, ids []string, titles map[strin
 	script.WriteString("  ;;\ngetwindowname)\n  case \"$2\" in\n")
 	for id, title := range titles {
 		fmt.Fprintf(&script, "  '%s') echo '%s' ;;\n", id, title)
+	}
+	script.WriteString("  esac\n  ;;\ngetwindowpid)\n  case \"$2\" in\n")
+	for id, pid := range pids {
+		fmt.Fprintf(&script, "  '%s') echo %d ;;\n", id, pid)
 	}
 	script.WriteString("  esac\n  ;;\nwindowactivate)\n  for arg; do last=$arg; done\n  echo \"$last\" >> \"$WINDOW_TOOL_TRACE\"\n  ;;\nesac\n")
 	if err := os.WriteFile(filepath.Join(dir, tool), []byte(script.String()), 0755); err != nil {
