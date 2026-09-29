@@ -1,7 +1,4 @@
 // Generated from UAP dc0147c17429e8da886810b198db17b9a89c89d9; source sha256 ee3b795a970764d1937fccec6ac8321ca76056f27b4e05e842d721933dc580f7.
-// plugin.mjs
-import { spawn } from "node:child_process";
-
 // uap:observer
 var object = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
 var id = (x) => typeof x === "string" && x.length > 0 && new TextEncoder().encode(x).length <= 256;
@@ -281,7 +278,8 @@ function createObserver(options) {
   return { observe };
 }
 
-// plugin.mjs
+// ipc.mjs
+import { spawn } from "node:child_process";
 var executable = "__AGENT_NOTIFICATIONS_EXECUTABLE__";
 var maxWireBytes = 4096;
 var maxReceiptBytes = 1024;
@@ -304,7 +302,7 @@ async function forward(event, spawnProcess = spawn, binary = executable) {
       child = spawnProcess(binary, ["opencode-event", "--protocol", "1"], {
         shell: false,
         stdio: ["pipe", "pipe", "pipe"],
-        env: Object.fromEntries(["HOME", "XDG_CONFIG_HOME", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR"].filter((key) => process.env[key] !== void 0).map((key) => [key, process.env[key]]))
+        env: Object.fromEntries(["HOME", "XDG_CONFIG_HOME", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR", "AGENT_NOTIFICATIONS_CONFIG"].filter((key) => process.env[key] !== void 0).map((key) => [key, process.env[key]]))
       });
     } catch {
       finish("spawn_failed");
@@ -354,6 +352,8 @@ async function forward(event, spawnProcess = spawn, binary = executable) {
     child.stdin.end(body);
   });
 }
+
+// plugin.mjs
 var AgentNotifications = async ({ client }) => {
   const observer = createObserver({
     client,
@@ -369,6 +369,5 @@ var AgentNotifications = async ({ client }) => {
   return { event: async ({ event }) => observer.observe(event) };
 };
 export {
-  AgentNotifications,
-  forward
+  AgentNotifications
 };

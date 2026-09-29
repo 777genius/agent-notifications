@@ -72,8 +72,8 @@ func TestFourFactsKeepDistinctNotificationCategories(t *testing.T) {
 		kind, requestID, messageID, body, category string
 	}{
 		{"turn_idle_verified", "", "m", "Task completed", "info"},
-		{"question_asked", "r", "", "Question needs your answer", "attention"},
-		{"permission_asked", "r", "", "Permission needs your decision", "attention"},
+		{"question_asked", "r", "", "OpenCode asked a question", "attention"},
+		{"permission_asked", "r", "", "OpenCode requested permission", "attention"},
 		{"terminal_error", "", "", "An error needs your attention", "attention"},
 	} {
 		t.Run(tc.kind, func(t *testing.T) {

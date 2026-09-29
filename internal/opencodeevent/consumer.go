@@ -57,9 +57,9 @@ func mapEvent(kind uap.Kind) (message, bool) {
 	case uap.TurnIdleVerified:
 		return message{analyzer.StatusTaskComplete, notification.Content{Title: "OpenCode", Body: "Task completed", Category: "info"}}, true
 	case uap.QuestionAsked:
-		return message{analyzer.StatusQuestion, notification.Content{Title: "OpenCode", Body: "Question needs your answer", Category: "attention"}}, true
+		return message{analyzer.StatusQuestion, notification.Content{Title: "OpenCode", Body: "OpenCode asked a question", Category: "attention"}}, true
 	case uap.PermissionAsked:
-		return message{analyzer.StatusPermissionRequest, notification.Content{Title: "OpenCode", Body: "Permission needs your decision", Category: "attention"}}, true
+		return message{analyzer.StatusPermissionRequest, notification.Content{Title: "OpenCode", Body: "OpenCode requested permission", Category: "attention"}}, true
 	case uap.TerminalError:
 		return message{analyzer.Status("opencode_error"), notification.Content{Title: "OpenCode", Body: "An error needs your attention", Category: "attention"}}, true
 	default:
