@@ -8,12 +8,11 @@ import (
 	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/notifier"
 	"github.com/777genius/agent-notifications/internal/opencodeevent"
+	"github.com/777genius/agent-notifications/internal/opencodeinstall"
 	"github.com/777genius/agent-notifications/internal/webhook"
 )
 
-// openCodeRegistrationGate is deliberately unset until PR4 wires a verified
-// current opt-in and managed registration. A nil gate fails closed.
-var openCodeRegistrationGate opencodeevent.Gate
+var openCodeRegistrationGate opencodeevent.Gate = opencodeinstall.CurrentGate{}
 
 func runOpenCodeEvent(args []string, input io.Reader, output io.Writer) int {
 	result := opencodeevent.Receipt{Status: "rejected", Reason: "invalid_command"}

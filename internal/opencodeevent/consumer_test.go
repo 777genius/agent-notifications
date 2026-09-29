@@ -27,6 +27,25 @@ type fixedClock struct{}
 
 func (fixedClock) Now() (string, float64, error) { return "test-boot", 100, nil }
 
+type channelGate struct{ desktop, webhook bool }
+
+func (g channelGate) Enabled(context.Context) bool          { return g.desktop || g.webhook }
+func (g channelGate) Channels(context.Context) (bool, bool) { return g.desktop, g.webhook }
+
+func TestChannelGateDoesNotBroadenDesktopConsentToWebhook(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Notifications.Webhook.Enabled = true
+	cfg.Notifications.Webhook.URL = "https://example.invalid/unused"
+	desktop := &captureDesktop{}
+	webhookCalls := 0
+	c := Consumer{Gate: channelGate{desktop: true}, Config: cfg, Desktop: desktop, Clock: fixedClock{},
+		SendWebhook: func(*config.Config, webhook.SendContext) error { webhookCalls++; return nil }}
+	got := c.Consume(context.Background(), strings.NewReader(frame("turn_idle_verified", "s", true)))
+	if got.Desktop != "submitted" || got.Webhook != "" || len(desktop.calls) != 1 || webhookCalls != 0 {
+		t.Fatalf("desktop-only opt-in broadened delivery: %+v desktop=%d webhook=%d", got, len(desktop.calls), webhookCalls)
+	}
+}
+
 func frame(kind, marker string, root bool) string {
 	return fmt.Sprintf(`{"version":1,"kind":%q,"sessionID":%q,"turnID":"turn","messageID":"message","rootSession":%t}`, kind, marker, root)
 }
