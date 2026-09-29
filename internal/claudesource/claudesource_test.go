@@ -183,7 +183,7 @@ func TestDecodeEmptySessionPreservesLegacyWarning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InitLogger() error = %v", err)
 	}
-	defer logger.Close()
+	defer func() { _ = logger.Close() }()
 
 	event, _, err := decodeWithIO(context.Background(), "Stop", strings.NewReader(`{"hook_event_name":"Stop"}`))
 	if err != nil {
