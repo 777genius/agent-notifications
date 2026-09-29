@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 
 // PR1 exact source artifact. Replace this pin with a published UAP package before merge.
-export const uapCommit = 'dc0147c17429e8da886810b198db17b9a89c89d9';
+export const uapCommit = '69eea93bcf37f2fec556c649135919a6456c5f0d';
 export const uapSourceSHA256 = 'ee3b795a970764d1937fccec6ac8321ca76056f27b4e05e842d721933dc580f7';
 const sourceURL = `https://raw.githubusercontent.com/777genius/universal-agent-plugins/${uapCommit}/sdk/opencode-js/index.js`;
 const root = fileURLToPath(new URL('.', import.meta.url));
@@ -34,7 +34,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     plugins: [{
       name: 'pinned-uap-observer',
       setup(plugin) {
-        plugin.onResolve({ filter: /^@universal-agent-plugins\/opencode-events$/ }, () => ({ path: 'observer', namespace: 'uap' }));
+        plugin.onResolve({ filter: /^plugin-kit-ai-opencode-events$/ }, () => ({ path: 'observer', namespace: 'uap' }));
         plugin.onLoad({ filter: /^observer$/, namespace: 'uap' }, () => ({ contents: source, loader: 'js' }));
       },
     }],

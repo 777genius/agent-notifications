@@ -1,4 +1,4 @@
-import { createObserver } from '@universal-agent-plugins/opencode-events';
+import { createObserver } from 'plugin-kit-ai-opencode-events';
 import { forward } from './ipc.mjs';
 
 export const AgentNotifications = async ({ client }) => {
