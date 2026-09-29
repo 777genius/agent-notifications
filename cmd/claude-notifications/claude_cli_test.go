@@ -44,9 +44,7 @@ func TestClaudeHookCLIAllEventsKeepWireContract(t *testing.T) {
 			if result.stdout != "" {
 				t.Fatalf("stdout = %q, want empty", result.stdout)
 			}
-			if result.stderr != "" {
-				t.Fatalf("stderr = %q, want empty", result.stderr)
-			}
+			assertClaudeFixtureStderr(t, result.stderr)
 		})
 	}
 }
@@ -69,9 +67,7 @@ func TestClaudeHookCLIIgnoresLegacyUnknownTypedField(t *testing.T) {
 			if result.stdout != "" {
 				t.Fatalf("stdout = %q, want empty", result.stdout)
 			}
-			if result.stderr != "" {
-				t.Fatalf("stderr = %q, want empty", result.stderr)
-			}
+			assertClaudeFixtureStderr(t, result.stderr)
 		})
 	}
 }
@@ -159,9 +155,7 @@ func TestClaudeHookCLIJudgeModeSuppressesBeforeDecode(t *testing.T) {
 			if result.stdout != "" {
 				t.Fatalf("stdout = %q, want empty", result.stdout)
 			}
-			if result.stderr != "" {
-				t.Fatalf("stderr = %q, want empty", result.stderr)
-			}
+			assertClaudeFixtureStderr(t, result.stderr)
 		})
 	}
 }
@@ -180,4 +174,13 @@ func claudeCLIEnv(t *testing.T) []string {
 	}
 	t.Fatal("test HOME missing")
 	return nil
+}
+
+func assertClaudeFixtureStderr(t *testing.T, stderr string) {
+	t.Helper()
+	// Windows ACLs can make the isolated fixture config publicly readable even
+	// after Chmod. The warning is part of Claude CLI's existing contract.
+	if stderr != "" && stderr != "ConfigPublicReadable\n" {
+		t.Fatalf("stderr = %q, want empty or fixture permission warning", stderr)
+	}
 }
