@@ -34,3 +34,34 @@ The desktop and webhook flags authorize only those channels. Product settings
 may further disable them. The event path rechecks policy, consumer registration,
 owned plugin and executable identities on each request and has no recovery or
 write behavior.
+
+## Linux amd64 qualification
+
+On 2026-09-29, a fresh disposable Linux amd64 project and isolated OpenCode
+profile loaded the bundle from Notifications commit
+`2da9d192b1863f9d2220e760ad3fc47177ae15d2`.
+The test used OpenCode 1.18.33 and a locally built Linux amd64 binary
+(`sha256:5a83226dedb208c80c2597b5fa48de745bbbf6ddb5f7afdf4b7d95f7c111ee54`).
+The bundle source hash was
+`sha256:0148e31bbd1b9bca49c674689a5f621a26d72142974b9cc663b8a96f72461b81`.
+The operator retained test data and logs in the disposable sandbox. No agent
+command ran in a product checkout.
+
+- A loopback webhook received `task_complete`, `question`,
+  `permission_request`, and `opencode_error` from the loaded OpenCode plugin.
+  The question came from a native `question.asked` triggered through the
+  OpenCode SDK with the question tool enabled. The error came from a test
+  request for a nonexistent model. Captured payloads contained none of the
+  test prompt markers.
+- With a private D-Bus session and test implementation of
+  `org.freedesktop.Notifications`, the loaded plugin made one `Notify` call
+  for a completed turn and one for a terminal error. Each call used generic
+  product copy; no duplicate call was observed in those runs.
+- `install`, `update` between desktop and webhook consent, and `remove`
+  completed. While the OpenCode server still held the old plugin in memory,
+  a new error after `remove` produced no webhook request.
+
+One-shot `opencode run` can exit after printing an answer before asynchronous
+notification delivery finishes. The persistent OpenCode server runs above
+verified both loaded desktop outcomes. This MVP is best effort at process
+shutdown; it does not promise delivery after the host exits.
