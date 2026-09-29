@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,9 @@ import (
 
 func fixture(t *testing.T) (context.Context, Request, string) {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("Linux setup fixture needs executable file mode, which Windows does not expose")
+	}
 	base := t.TempDir()
 	source := filepath.Join(base, "source-binary")
 	if err := os.WriteFile(source, []byte("inert Linux test fixture v1 "+installruntime.WriterProtocolMarker), 0700); err != nil {
