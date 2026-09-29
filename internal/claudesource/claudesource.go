@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/777genius/agent-notifications/internal/hooks"
 	"github.com/777genius/agent-notifications/internal/logging"
@@ -332,7 +333,7 @@ func marshalSDKEnvelope(event string, values sdkValues) ([]byte, error) {
 }
 
 func sdkString(value string) string {
-	if value == "" || len(value) > pluginkitai.MaxPayloadBytes {
+	if strings.TrimSpace(value) == "" || len(value) > pluginkitai.MaxPayloadBytes {
 		return sdkPlaceholder
 	}
 	return value

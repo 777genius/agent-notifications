@@ -222,6 +222,27 @@ func TestDecodeEmptyToolNameRestoresLegacyValue(t *testing.T) {
 	}
 }
 
+func TestDecodeWhitespaceToolNameRestoresLegacyValue(t *testing.T) {
+	const original = " \t\u2003"
+	payload := `{"session_id":"s","hook_event_name":"PreToolUse","tool_name":" \t\u2003"}`
+	event, sdkIO, err := decodeWithIO(context.Background(), "PreToolUse", strings.NewReader(payload))
+	if err != nil {
+		t.Fatalf("decodeWithIO() error = %v", err)
+	}
+	preToolUse, ok := event.Payload.(hooks.PreToolUsePayload)
+	if !ok || preToolUse.ToolName != original {
+		t.Fatalf("payload = %#v, want original whitespace", event.Payload)
+	}
+
+	var projected map[string]any
+	if err := json.Unmarshal(sdkIO.payload, &projected); err != nil {
+		t.Fatalf("projected payload error = %v", err)
+	}
+	if projected["tool_name"] != sdkPlaceholder {
+		t.Fatalf("projected tool_name = %#v, want placeholder", projected["tool_name"])
+	}
+}
+
 func TestDecodeSDKFailureDoesNotExposeCapturedStderr(t *testing.T) {
 	const hookDataMarker = "raw-hook-data-must-stay-private"
 	payload := `{"session_id":"s","hook_event_name":"Stop","stop_hook_active":"` + hookDataMarker + `"}`
