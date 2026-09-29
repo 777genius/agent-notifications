@@ -281,12 +281,13 @@ function createObserver(options) {
 // ipc.mjs
 import { spawn } from "node:child_process";
 var executable = "__AGENT_NOTIFICATIONS_EXECUTABLE__";
+var controlRoot = "__AGENT_NOTIFICATIONS_CONTROL_ROOT__";
 var maxWireBytes = 4096;
 var maxReceiptBytes = 1024;
 var processTimeoutMs = 25e3;
-async function forward(event, spawnProcess = spawn, binary = executable) {
+async function forward(event, spawnProcess = spawn, binary = executable, root = controlRoot) {
   const body = Buffer.from(JSON.stringify(event));
-  if (body.length > maxWireBytes || !binary.startsWith("/") || binary.includes("\0")) return "invalid_plugin";
+  if (body.length > maxWireBytes || !binary.startsWith("/") || binary.includes("\0") || !root.startsWith("/") || root.includes("\0")) return "invalid_plugin";
   return new Promise((resolve) => {
     let settled = false;
     let timer;
@@ -302,7 +303,7 @@ async function forward(event, spawnProcess = spawn, binary = executable) {
       child = spawnProcess(binary, ["opencode-event", "--protocol", "1"], {
         shell: false,
         stdio: ["pipe", "pipe", "pipe"],
-        env: Object.fromEntries(["HOME", "XDG_CONFIG_HOME", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR", "AGENT_NOTIFICATIONS_CONFIG"].filter((key) => process.env[key] !== void 0).map((key) => [key, process.env[key]]))
+        env: { ...Object.fromEntries(["HOME", "XDG_CONFIG_HOME", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR", "AGENT_NOTIFICATIONS_CONFIG"].filter((key) => process.env[key] !== void 0).map((key) => [key, process.env[key]])), AGENT_NOTIFICATIONS_CONTROL_ROOT: root }
       });
     } catch {
       finish("spawn_failed");

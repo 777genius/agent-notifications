@@ -2,14 +2,15 @@ import { spawn } from 'node:child_process';
 
 // The product installer replaces this exact token with an owned absolute path.
 const executable = '__AGENT_NOTIFICATIONS_EXECUTABLE__';
+const controlRoot = '__AGENT_NOTIFICATIONS_CONTROL_ROOT__';
 const maxWireBytes = 4096;
 const maxReceiptBytes = 1024;
 // Linux desktop and one webhook POST are sequential, each bounded to 10 seconds.
 const processTimeoutMs = 25000;
 
-export async function forward(event, spawnProcess = spawn, binary = executable) {
+export async function forward(event, spawnProcess = spawn, binary = executable, root = controlRoot) {
   const body = Buffer.from(JSON.stringify(event));
-  if (body.length > maxWireBytes || !binary.startsWith('/') || binary.includes('\0')) return 'invalid_plugin';
+  if (body.length > maxWireBytes || !binary.startsWith('/') || binary.includes('\0') || !root.startsWith('/') || root.includes('\0')) return 'invalid_plugin';
   return new Promise((resolve) => {
     let settled = false;
     let timer;
@@ -19,9 +20,9 @@ export async function forward(event, spawnProcess = spawn, binary = executable) 
       child = spawnProcess(binary, ['opencode-event', '--protocol', '1'], {
         shell: false,
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: Object.fromEntries(['HOME', 'XDG_CONFIG_HOME', 'DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR', 'AGENT_NOTIFICATIONS_CONFIG']
+        env: { ...Object.fromEntries(['HOME', 'XDG_CONFIG_HOME', 'DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR', 'AGENT_NOTIFICATIONS_CONFIG']
           .filter((key) => process.env[key] !== undefined)
-          .map((key) => [key, process.env[key]])),
+          .map((key) => [key, process.env[key]])), AGENT_NOTIFICATIONS_CONTROL_ROOT: root },
       });
     } catch { finish('spawn_failed'); return; }
     let stdout = Buffer.alloc(0), stderrBytes = 0;

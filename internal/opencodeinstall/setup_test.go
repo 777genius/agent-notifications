@@ -33,8 +33,13 @@ func TestInstallUpdateAndRemovePreserveSeparateChannelConsent(t *testing.T) {
 	}
 	binary := filepath.Join(r.RuntimeRoot, binaryName)
 	gate := CurrentGate{ControlRoot: r.ControlRoot, Executable: binary, GOOS: "linux", GOARCH: "amd64"}
-	if desktop, webhook := gate.Channels(ctx); !desktop || webhook {
+	if desktop, webhook := gate.Channels(context.Background()); !desktop || webhook {
 		t.Fatalf("initial channels = %v %v", desktop, webhook)
+	}
+	t.Setenv("AGENT_NOTIFICATIONS_CONTROL_ROOT", r.ControlRoot)
+	fromPlugin := CurrentGate{Executable: binary, GOOS: "linux", GOARCH: "amd64"}
+	if desktop, webhook := fromPlugin.Channels(context.Background()); !desktop || webhook {
+		t.Fatalf("plugin-selected control root channels = %v %v", desktop, webhook)
 	}
 	s, err := installruntime.ReadPolicySnapshot(ctx, r.ControlRoot)
 	if err != nil {

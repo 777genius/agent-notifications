@@ -19,6 +19,7 @@ test('IPC sends only neutral wire and treats an ambiguous child failure as non-s
     assert.deepEqual(args, ['opencode-event', '--protocol', '1']);
     assert.equal(options.shell, false);
     assert.equal(options.env.AGENT_NOTIFICATIONS_CONFIG, '/test/selected-config.json');
+    assert.equal(options.env.AGENT_NOTIFICATIONS_CONTROL_ROOT, '/test/managed-control');
     const child = new EventEmitter();
     child.stdin = new PassThrough();
     child.stdout = new PassThrough();
@@ -29,7 +30,7 @@ test('IPC sends only neutral wire and treats an ambiguous child failure as non-s
     return child;
   };
   const fact = { version: 1, kind: 'terminal_error', sessionID: 's', turnID: 't', rootSession: true };
-  assert.equal(await forward(fact, spawnFake, '/test/owned-binary'), 'rejected');
+  assert.equal(await forward(fact, spawnFake, '/test/owned-binary', '/test/managed-control'), 'rejected');
   assert.deepEqual(JSON.parse(sent), fact);
   } finally {
     if (previousSelector === undefined) delete process.env.AGENT_NOTIFICATIONS_CONFIG;

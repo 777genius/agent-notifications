@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/opencodeplugin"
@@ -107,7 +108,7 @@ func Apply(ctx context.Context, r Request) error {
 		if r.BinarySource == "" || !filepath.IsAbs(r.BinarySource) {
 			return errors.New("absolute --binary source required")
 		}
-		bundle, err = opencodeplugin.Render(binary)
+		bundle, err = opencodeplugin.Render(binary, root)
 		if err != nil {
 			return err
 		}
@@ -295,6 +296,8 @@ func (g CurrentGate) Enabled(ctx context.Context) bool {
 }
 
 func (g CurrentGate) Channels(ctx context.Context) (bool, bool) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
 	goos, goarch := runtime.GOOS, runtime.GOARCH
 	if g.GOOS != "" {
 		goos = g.GOOS
@@ -306,6 +309,9 @@ func (g CurrentGate) Channels(ctx context.Context) (bool, bool) {
 		return false, false
 	}
 	root := g.ControlRoot
+	if root == "" {
+		root = os.Getenv("AGENT_NOTIFICATIONS_CONTROL_ROOT")
+	}
 	if root == "" {
 		var err error
 		root, err = installruntime.ControlRoot()
