@@ -15,6 +15,7 @@ import (
 
 	notifyruntime "github.com/777genius/agent-notifications/internal/agentnotify/runtime"
 	"github.com/777genius/agent-notifications/internal/audio"
+	"github.com/777genius/agent-notifications/internal/claudesource"
 	"github.com/777genius/agent-notifications/internal/codexsource"
 	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/errorhandler"
@@ -442,7 +443,7 @@ func handleHook(hookEvent string) {
 	defer func() { _ = logging.Close() }()
 
 	// Create handler
-	handler, err := hooks.NewHandler(pluginRoot)
+	handler, err := hooks.NewHandlerWithClaudeSource(pluginRoot, claudesource.Source{})
 	if err != nil {
 		errorhandler.HandleCriticalError(err, "Failed to create handler")
 		os.Exit(1)
