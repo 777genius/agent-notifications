@@ -6,17 +6,38 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/777genius/agent-notifications/internal/hooks"
+	"github.com/777genius/agent-notifications/internal/logging"
 	pluginkitai "github.com/777genius/plugin-kit-ai/sdk"
 )
 
 type neverEOFReader struct {
 	data []byte
 	pos  int
+}
+
+type sdkFailureContext struct {
+	context.Context
+	err error
+}
+
+func (c sdkFailureContext) Err() error {
+	return c.err
+}
+
+type sdkFailureError string
+
+func (e sdkFailureError) Error() string {
+	return string(e)
+}
+
+func (e sdkFailureError) Is(target error) bool {
+	return target == context.Canceled
 }
 
 func (r *neverEOFReader) Read(payload []byte) (int, error) {
@@ -100,6 +121,9 @@ func TestDecodeAllFiveEventsThroughTypedCallbacks(t *testing.T) {
 			if sdkIO == nil || sdkIO.reads != 1 {
 				t.Fatalf("SDK reads = %+v", sdkIO)
 			}
+			if sdkIO.stdout.String() != "{}" || sdkIO.stderr.Len() != 0 {
+				t.Fatalf("SDK output = stdout %q stderr %q, want neutral empty decision", sdkIO.stdout.Bytes(), sdkIO.stderr.Bytes())
+			}
 			test.assert(t, event)
 		})
 	}
@@ -153,6 +177,31 @@ func TestDecodeMalformedFirstJSONFails(t *testing.T) {
 	}
 }
 
+func TestDecodeEmptySessionPreservesLegacyWarning(t *testing.T) {
+	logDir := t.TempDir()
+	logger, err := logging.InitLogger(logDir)
+	if err != nil {
+		t.Fatalf("InitLogger() error = %v", err)
+	}
+	defer logger.Close()
+
+	event, _, err := decodeWithIO(context.Background(), "Stop", strings.NewReader(`{"hook_event_name":"Stop"}`))
+	if err != nil {
+		t.Fatalf("decodeWithIO() error = %v", err)
+	}
+	if event.Session.SessionID != "unknown" {
+		t.Fatalf("SessionID = %q, want unknown", event.Session.SessionID)
+	}
+
+	logged, err := os.ReadFile(filepath.Join(logDir, "notification-debug.log"))
+	if err != nil {
+		t.Fatalf("read debug log: %v", err)
+	}
+	if !strings.Contains(string(logged), "[WARN]") || !strings.Contains(string(logged), "Session ID is empty, using 'unknown'") {
+		t.Fatalf("debug log = %q, want legacy empty-session warning", logged)
+	}
+}
+
 func TestDecodeEmptyToolNameRestoresLegacyValue(t *testing.T) {
 	payload := `{"session_id":"s","hook_event_name":"PreToolUse","tool_name":""}`
 	event, sdkIO, err := decodeWithIO(context.Background(), "PreToolUse", strings.NewReader(payload))
@@ -170,6 +219,29 @@ func TestDecodeEmptyToolNameRestoresLegacyValue(t *testing.T) {
 	}
 	if projected["tool_name"] != sdkPlaceholder {
 		t.Fatalf("projected tool_name = %#v, want placeholder", projected["tool_name"])
+	}
+}
+
+func TestDecodeSDKFailureDoesNotExposeCapturedStderr(t *testing.T) {
+	const hookDataMarker = "raw-hook-data-must-stay-private"
+	payload := `{"session_id":"s","hook_event_name":"Stop","stop_hook_active":"` + hookDataMarker + `"}`
+	ctx := sdkFailureContext{
+		Context: context.Background(),
+		err:     sdkFailureError(hookDataMarker),
+	}
+
+	_, sdkIO, err := decodeWithIO(ctx, "Stop", strings.NewReader(payload))
+	if err == nil {
+		t.Fatal("decodeWithIO() error = nil, want SDK dispatch failure")
+	}
+	if sdkIO == nil || sdkIO.stderr.Len() == 0 {
+		t.Fatalf("SDK IO = %+v, want captured stderr for injected failure", sdkIO)
+	}
+	if strings.Contains(err.Error(), hookDataMarker) {
+		t.Fatalf("error = %q, want no raw hook data", err)
+	}
+	if strings.Contains(err.Error(), strconv.Quote(sdkIO.stderr.String())) {
+		t.Fatalf("error = %q, want no SDK stderr", err)
 	}
 }
 

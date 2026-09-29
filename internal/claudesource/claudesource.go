@@ -12,6 +12,7 @@ import (
 	"io"
 
 	"github.com/777genius/agent-notifications/internal/hooks"
+	"github.com/777genius/agent-notifications/internal/logging"
 	pluginkitai "github.com/777genius/plugin-kit-ai/sdk"
 	"github.com/777genius/plugin-kit-ai/sdk/claude"
 )
@@ -103,6 +104,7 @@ func decodeWithIO(ctx context.Context, hookEvent string, input io.Reader) (hooks
 	sessionID := wire.SessionID
 	if sessionID == "" {
 		sessionID = "unknown"
+		logging.Warn("Session ID is empty, using 'unknown'")
 	}
 	event := hooks.Event{
 		Product:          hooks.ProductClaude,
@@ -119,7 +121,7 @@ func decodeWithIO(ctx context.Context, hookEvent string, input io.Reader) (hooks
 		return event, nil, nil
 	}
 
-	sdkPayload, restored, err := dispatchPayload(hookEvent, raw, wire)
+	sdkPayload, restored, err := dispatchPayload(hookEvent, wire)
 	if err != nil {
 		return hooks.Event{}, nil, err
 	}
@@ -139,7 +141,7 @@ func decodeWithIO(ctx context.Context, hookEvent string, input io.Reader) (hooks
 		observed.transcriptPath = event.TranscriptPath
 		observed.hookEventName = event.HookEventName
 		observed.toolName = event.ToolName
-		return claude.PreToolAllow()
+		return nil
 	})
 	registrar.OnNotification(func(event *claude.NotificationEvent) *claude.NotificationResponse {
 		observed.notificationCalled = true
@@ -156,7 +158,7 @@ func decodeWithIO(ctx context.Context, hookEvent string, input io.Reader) (hooks
 		observed.transcriptPath = event.TranscriptPath
 		observed.hookEventName = event.HookEventName
 		observed.lastAssistantMessage = event.LastAssistantMessage
-		return claude.Allow()
+		return nil
 	})
 	registrar.OnSubagentStop(func(event *claude.SubagentStopEvent) *claude.SubagentStopResponse {
 		observed.subagentStopCalled = true
@@ -178,7 +180,7 @@ func decodeWithIO(ctx context.Context, hookEvent string, input io.Reader) (hooks
 	})
 
 	if code := app.RunContext(ctx); code != 0 {
-		return hooks.Event{}, sdkIO, fmt.Errorf("sdk dispatch for %s failed: exit %d, stderr: %q", hookEvent, code, sdkIO.stderr.String())
+		return hooks.Event{}, sdkIO, fmt.Errorf("sdk dispatch for %s failed: exit %d", hookEvent, code)
 	}
 	if !callbackCalled(&observed, hookEvent) {
 		return hooks.Event{}, sdkIO, fmt.Errorf("sdk dispatch for %s produced no callback result", hookEvent)
@@ -267,16 +269,12 @@ func callbackCalled(observed *sdkObservation, event string) bool {
 	}
 }
 
-// dispatchPayload sends the original JSON when it fits and needs no strictness
-// fallback. Oversized or conflicting input is reduced to an event-specific SDK
-// envelope; restored is true so every product value comes from the legacy wire.
-func dispatchPayload(event string, raw json.RawMessage, wire hooks.HookData) ([]byte, bool, error) {
+// dispatchPayload sends only the fields used by the product through the SDK.
+// The legacy wire remains authoritative for the returned event and Raw: SDK
+// DTOs also define fields that the legacy decoder ignored, and rejecting an
+// incompatible value in one of those fields would change CLI behavior.
+func dispatchPayload(event string, wire hooks.HookData) ([]byte, bool, error) {
 	maxPayloadBytes := pluginkitai.MaxPayloadBytes
-	if event != "SubagentStop" && len(raw) <= maxPayloadBytes && wire.SessionID != "" && wire.HookEventName == event {
-		if event != "PreToolUse" || wire.ToolName != "" {
-			return append([]byte(nil), raw...), false, nil
-		}
-	}
 
 	values := sdkValues{
 		sessionID:            sdkString(wire.SessionID),
