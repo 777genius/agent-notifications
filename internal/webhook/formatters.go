@@ -40,6 +40,8 @@ func agentDisplayName(source string) string {
 	switch config.AgentID(normalized) {
 	case config.AgentCodex:
 		return "Codex"
+	case config.AgentOpenCode:
+		return "OpenCode"
 	case config.AgentClaude:
 		return "Claude Code"
 	default:

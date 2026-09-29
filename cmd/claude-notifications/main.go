@@ -35,6 +35,9 @@ var (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "opencode-event" {
+		os.Exit(runOpenCodeEvent(os.Args[2:], os.Stdin, os.Stdout))
+	}
 	if handled, code := dispatchManagedStdio(os.Args[1:], os.Stderr); handled {
 		os.Exit(code)
 	}
