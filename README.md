@@ -3,6 +3,14 @@
 </p>
 <h1 align="center"><a href="https://777genius.github.io/agent-notifications/">Agent Notifications</a></h1>
 
+<p align="center">
+  <a href="#manual-install"><img src="landing/public/agents/claude.png" width="64" height="64" alt="Claude Code" title="Claude Code" /></a>
+  &nbsp;&nbsp;
+  <a href="docs/CODEX.md"><img src="brand/codex-logo.svg" width="64" height="64" alt="Codex CLI" title="Codex CLI" /></a>
+  &nbsp;&nbsp;
+  <a href="docs/opencode-notifications.md"><img src="brand/opencode-logo.svg" width="64" height="64" alt="OpenCode" title="OpenCode" /></a>
+</p>
+
 [![Ubuntu CI](https://github.com/777genius/agent-notifications/workflows/Ubuntu%20CI/badge.svg)](https://github.com/777genius/agent-notifications/actions)
 [![macOS CI](https://github.com/777genius/agent-notifications/workflows/macOS%20CI/badge.svg)](https://github.com/777genius/agent-notifications/actions)
 [![Windows CI](https://github.com/777genius/agent-notifications/workflows/Windows%20CI/badge.svg)](https://github.com/777genius/agent-notifications/actions)
