@@ -31,7 +31,7 @@ The UAP OpenCode observer and neutral Go wire remain shared. Product-specific po
 | Notifications 2 | macOS consent-specific native lease, helper/spool setup, permission and revoke behavior. | 900-1,600 |
 | Qualification | Focused platform tests, native E2E harness/evidence and accurate docs; fix Windows toast identity only if clean-profile E2E exposes it. | 550-1,000 |
 
-The existing UAP `0.1.1` source is merged but its npm package is not yet published. Pin the published version and regenerate the Notifications bundle in the separate dependency PR before the final exact-head qualification. No local `replace` or floating `main` in a mergeable consumer PR.
+UAP PR #359 changed Windows placement tests and CI only; it did not change the observer package or runtime API. Agent Notifications uses the published observer `0.1.0`, which passed the native Windows E2E. No UAP `0.1.1` publication or dependency PR is needed for this slice. No local `replace` or floating `main` belongs in a mergeable consumer PR.
 
 ## Regression checks
 
@@ -44,3 +44,9 @@ Run agent commands only inside **new disposable projects** with isolated OpenCod
 For each native target, load the actual installed JS in OpenCode and trigger four real events: completion, question, permission request and terminal error. Observe one real system banner per event where desktop is enabled, and one loopback webhook POST with generic content and no test secret. Verify channel updates, restart behavior, removal and no delivery from a still loaded old plugin after revocation. A direct `opencode-event` invocation, unit test, CI build or OS submit receipt alone cannot establish visual E2E. macOS Intel must run natively; Rosetta is labelled separately. Windows needs an interactive desktop session.
 
 The final support claim is per target and channel. If a native environment or OS permission is unavailable, leave that target unqualified and state the blocker. Do not release Agent Notifications as cross-platform until the target matrix has real evidence.
+
+## Qualification snapshot, 2026-09-30
+
+The native OpenCode 1.18.33 completion lifecycle passed in disposable projects on all five targets: install, one webhook per turn before and after update/restart, no webhook from an already loaded plugin after remove, and rejection by a restored old executable. These runs verified the published UAP observer `0.1.0`. The user confirmed a visible `Task completed` banner on macOS arm64 with the signed native helper.
+
+The CI runners did not observe desktop banners. macOS Intel, Linux and Windows desktop visuals remain unqualified, as do native desktop visuals for question, permission and error events. Only the user's current Mac is available as an interactive machine. The implementation can be merged behind explicit setup, but this evidence does not authorize a cross-platform Agent Notifications release.
