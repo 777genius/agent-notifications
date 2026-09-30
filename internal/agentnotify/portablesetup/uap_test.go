@@ -5,8 +5,6 @@ package portablesetup
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -374,23 +372,21 @@ func plantUAPPendingJournal(t *testing.T, ops, owned, opID string) {
 	if err := os.MkdirAll(staging, 0700); err != nil {
 		t.Fatal(err)
 	}
-	sum := sha256.Sum256([]byte(opID))
-	receipt := dirswap.Receipt{
-		SchemaVersion: 3, Operation: dirswap.OperationSwap, OperationID: opID,
-		ClientBindingID: "client-binding-1", Sequence: 1, OwnedBase: owned,
-		ActivePath: filepath.Join(owned, "plugin"), StagingPath: staging,
-		BackupPath: filepath.Join(owned, ".agentplugins-backup-"+hex.EncodeToString(sum[:8])),
-		Phase:      dirswap.PhaseIntent,
+	manager := dirswap.Manager{JournalDir: ops, Fault: func(phase string) error {
+		if phase == dirswap.PhaseBackupPending {
+			return errors.New("simulated crash")
+		}
+		return nil
+	}}
+	if _, err := manager.Apply(context.Background(), dirswap.Input{
+		OperationID: opID, ClientBindingID: "client-binding-1", Sequence: 1,
+		OwnedBase: owned, ActivePath: filepath.Join(owned, "plugin"), StagingPath: staging,
+		RequireAbsent: true,
+	}); err == nil {
+		t.Fatal("expected pending directory swap")
 	}
-	body, err := json.MarshalIndent(receipt, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(ops, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(ops, opID+".json"), append(body, '\n'), 0600); err != nil {
-		t.Fatal(err)
+	if _, err := os.Lstat(filepath.Join(ops, opID+".json")); err != nil {
+		t.Fatalf("pending directory swap journal: %v", err)
 	}
 }
 

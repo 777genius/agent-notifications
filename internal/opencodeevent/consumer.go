@@ -19,6 +19,12 @@ import (
 // denies delivery. PR4 supplies the persisted implementation at composition.
 type Gate interface{ Enabled(context.Context) bool }
 
+// ChannelGate binds a product setup decision to the same event observation.
+// Legacy test gates retain their existing allow-all-channel behavior.
+type ChannelGate interface {
+	Channels(context.Context) (desktop, webhook bool)
+}
+
 type GateFunc func(context.Context) bool
 
 func (f GateFunc) Enabled(ctx context.Context) bool { return f(ctx) }
@@ -85,7 +91,16 @@ func (c Consumer) Consume(ctx context.Context, input io.Reader) Receipt {
 	if !supported || event.RootSession == nil || !*event.RootSession {
 		return Receipt{Status: "suppressed", Reason: "unsupported_fact"}
 	}
-	if c.Gate == nil || !c.Gate.Enabled(ctx) {
+	if c.Gate == nil {
+		return Receipt{Status: "suppressed", Reason: "not_registered"}
+	}
+	desktopAllowed, webhookAllowed := true, true
+	if gate, ok := c.Gate.(ChannelGate); ok {
+		desktopAllowed, webhookAllowed = gate.Channels(ctx)
+	} else if !c.Gate.Enabled(ctx) {
+		return Receipt{Status: "suppressed", Reason: "not_registered"}
+	}
+	if !desktopAllowed && !webhookAllowed {
 		return Receipt{Status: "suppressed", Reason: "not_registered"}
 	}
 	if c.Config == nil {
@@ -93,7 +108,7 @@ func (c Consumer) Consume(ctx context.Context, input io.Reader) Receipt {
 	}
 	result := Receipt{Status: "suppressed", Reason: "channels_disabled"}
 	status := string(m.status)
-	if c.Config.IsStatusDesktopEnabled(status) {
+	if desktopAllowed && c.Config.IsStatusDesktopEnabled(status) {
 		result.Desktop = "unavailable"
 		if c.Desktop != nil && c.Clock != nil {
 			boot, now, clockErr := c.Clock.Now()
@@ -110,7 +125,7 @@ func (c Consumer) Consume(ctx context.Context, input io.Reader) Receipt {
 			}
 		}
 	}
-	if c.Config.IsStatusWebhookEnabled(status) {
+	if webhookAllowed && c.Config.IsStatusWebhookEnabled(status) {
 		result.Webhook = "unavailable"
 		if c.SendWebhook != nil {
 			if err := c.SendWebhook(privateWebhookConfig(c.Config, status, m.content.Title), webhook.SendContext{
