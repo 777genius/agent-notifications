@@ -1,21 +1,13 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
-import { acquireObserver, uapSourceSHA256 } from './build.mjs';
 import { forward } from './ipc.mjs';
 
 test('loaded OpenCode bundle exports exactly one plugin function', async () => {
   const exports = await import('../internal/opencodeplugin/dist/agent-notifications.js');
   assert.deepEqual(Object.keys(exports), ['AgentNotifications']);
   assert.equal(typeof exports.AgentNotifications, 'function');
-});
-
-test('build accepts only the pinned UAP source digest', async () => {
-  const source = 'export function createObserver() {}';
-  await assert.rejects(acquireObserver(async () => ({ ok: true, arrayBuffer: async () => Buffer.from(source) })), /digest mismatch/);
-  assert.equal(createHash('sha256').update(source).digest('hex') === uapSourceSHA256, false);
 });
 
 test('IPC sends only neutral wire and treats an ambiguous child failure as non-success', async () => {

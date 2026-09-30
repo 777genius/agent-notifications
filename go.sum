@@ -18,6 +18,8 @@ github.com/777genius/plugin-kit-ai/sdk v1.1.1-0.20260929155642-dc0147c17429 h1:r
 github.com/777genius/plugin-kit-ai/sdk v1.1.1-0.20260929155642-dc0147c17429/go.mod h1:5Dzrnf4A5Yocek3zypR6TmZTlakBoWhtm/JD0/osAEM=
 github.com/777genius/plugin-kit-ai/sdk v1.1.1-0.20260929163955-69eea93bcf37 h1:JnF8txgHL1FdR+eQsTEQ6ar/tyL+kDXlA7xeeITjj/o=
 github.com/777genius/plugin-kit-ai/sdk v1.1.1-0.20260929163955-69eea93bcf37/go.mod h1:5Dzrnf4A5Yocek3zypR6TmZTlakBoWhtm/JD0/osAEM=
+github.com/777genius/plugin-kit-ai/sdk v1.2.0 h1:r+KogVH8b0KdayHIt8UWcF+FYdGMf8kmuLzvikr1Mmo=
+github.com/777genius/plugin-kit-ai/sdk v1.2.0/go.mod h1:5Dzrnf4A5Yocek3zypR6TmZTlakBoWhtm/JD0/osAEM=
 github.com/creack/pty v1.1.24 h1:bJrF4RRfyJnbTJqzRLHzcGaZK1NeM5kTC9jGgovnR1s=
 github.com/creack/pty v1.1.24/go.mod h1:08sCNb52WyoAwi2QDyzUCTgcvVFhUzewun7wtTfvcwE=
 github.com/d4l3k/messagediff v1.2.2-0.20190829033028-7e0a312ae40b/go.mod h1:Oozbb1TVXFac9FtSIxHBMnBCq2qeH/2KkEQxENCrlLo=

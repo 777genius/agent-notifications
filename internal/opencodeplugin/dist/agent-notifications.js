@@ -1,7 +1,7 @@
-// Generated from UAP 69eea93bcf37f2fec556c649135919a6456c5f0d; source sha256 ee3b795a970764d1937fccec6ac8321ca76056f27b4e05e842d721933dc580f7.
-// uap:observer
+// Generated with the UAP observer pinned in package-lock.json.
+// node_modules/universal-agent-plugins-opencode-events/index.js
 var object = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
-var id = (x) => typeof x === "string" && x.length > 0 && new TextEncoder().encode(x).length <= 256;
+var id = (x) => typeof x === "string" && x.length > 0 && !/[\u0000-\u001f]/u.test(x) && new TextEncoder().encode(x).length <= 256;
 var typeOK = (x) => typeof x === "string" && /^[a-z][a-z0-9.-]{0,79}$/.test(x);
 function createObserver(options) {
   if (typeof options?.emit !== "function" || typeof options.client?.session?.messages !== "function" || typeof options.client?.session?.get !== "function") {
@@ -121,12 +121,12 @@ function createObserver(options) {
     const s = state(sid), revision = s.revision, uid = s.user;
     if (!uid || !s.assistant || s.admitted.has("idle") || s.retry || s.cancelled || s.errorPending || s.questions.size || s.permissions.size) return;
     const messages = await latest(sid);
-    if (!messages || revision !== s.revision || s.user !== uid || s.retry || s.cancelled || s.errorPending || s.questions.size || s.permissions.size) return;
+    if (!messages || sessions.get(sid) !== s || revision !== s.revision || s.user !== uid || s.retry || s.cancelled || s.errorPending || s.questions.size || s.permissions.size) return;
     if (!currentTurn(messages, uid)) return;
     const answer = messages.at(-1);
     if (!answer || answer.role !== "assistant" || answer.id !== s.assistant || answer.parentID !== uid || answer.finish !== "stop" || !Number.isFinite(answer.time?.completed) || answer.error != null) return;
     const rootSession = await rootStatus(sid);
-    if (rootSession === void 0 || revision !== s.revision || s.user !== uid || s.cancelled || s.errorPending) return;
+    if (rootSession === void 0 || sessions.get(sid) !== s || revision !== s.revision || s.user !== uid || s.cancelled || s.errorPending) return;
     await emit({ kind: "turn_idle_verified", sessionID: sid, turnID: uid, messageID: answer.id, rootSession }, "idle", s);
   }
   async function observe(event) {
@@ -212,7 +212,7 @@ function createObserver(options) {
       pending.add(p.id);
       s.revision++;
       const messages = await latest(p.sessionID);
-      if (s.turnEpoch !== epoch || s.user !== uid || !pending.has(p.id) || s.resolved.has(p.id)) return;
+      if (sessions.get(p.sessionID) !== s || s.turnEpoch !== epoch || s.user !== uid || !pending.has(p.id) || s.resolved.has(p.id)) return;
       if (!messages || !currentTurn(messages, uid)) {
         pending.delete(p.id);
         diag("unmatched request turn");
@@ -224,7 +224,7 @@ function createObserver(options) {
         return;
       }
       const rootSession = await rootStatus(p.sessionID);
-      if (rootSession === void 0 || s.turnEpoch !== epoch || s.user !== uid || !pending.has(p.id) || s.resolved.has(p.id)) return;
+      if (rootSession === void 0 || sessions.get(p.sessionID) !== s || s.turnEpoch !== epoch || s.user !== uid || !pending.has(p.id) || s.resolved.has(p.id)) return;
       s.assistant = "";
       s.revision++;
       await emit({ kind: type === "question.asked" ? "question_asked" : "permission_asked", sessionID: p.sessionID, turnID: uid, requestID: p.id, rootSession }, `${type}:${p.id}`, s);
@@ -257,13 +257,13 @@ function createObserver(options) {
       s.revision++;
       const messages = await latest(p.sessionID);
       s.errorPending--;
-      if (!messages || s.turnEpoch !== epoch || s.user !== uid || s.admitted.has("idle") || !currentTurn(messages, uid)) return;
+      if (!messages || sessions.get(p.sessionID) !== s || s.turnEpoch !== epoch || s.user !== uid || s.admitted.has("idle") || !currentTurn(messages, uid)) return;
       if (p.messageID && !messages.some((m) => m.role === "assistant" && m.id === p.messageID && m.parentID === uid)) {
         diag("unmatched error message");
         return;
       }
       const rootSession = await rootStatus(p.sessionID);
-      if (rootSession === void 0 || s.turnEpoch !== epoch || s.user !== uid || s.admitted.has("idle")) return;
+      if (rootSession === void 0 || sessions.get(p.sessionID) !== s || s.turnEpoch !== epoch || s.user !== uid || s.admitted.has("idle")) return;
       s.cancelled = true;
       s.revision++;
       if (/abort|cancel/i.test(String(p.error.name ?? ""))) return;
