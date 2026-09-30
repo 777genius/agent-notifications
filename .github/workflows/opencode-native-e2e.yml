@@ -84,7 +84,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p candidate
-          CGO_ENABLED=1 go build -trimpath -buildvcs=true -o "candidate/$CANDIDATE_BINARY" ./cmd/claude-notifications
+          CGO_ENABLED=1 go build -ldflags="-s -w" -trimpath -buildvcs=true -o "candidate/$CANDIDATE_BINARY" ./cmd/claude-notifications
           gh release download v1.18.33 --repo anomalyco/opencode \
             --pattern "$OPENCODE_ARCHIVE" --dir candidate
 
