@@ -29,7 +29,15 @@ For automation or terminals without a controlling TTY, choose explicitly and pre
 
 Use `claude`, `codex`, or `both` for Claude/Codex. For OpenCode, use `--product opencode --desktop`, `--webhook`, or both channel flags (explicit consent required). The selected host CLI must already be on `PATH`; this installs notifications only.
 
-You can select any combination of the three agents in the guided setup. When OpenCode is selected with Claude or Codex, the copied block runs the Claude/Codex installer first, then the separate OpenCode installer if the first download and installation succeed. If the second installation fails, the first remains installed. OpenCode channel consent applies only to OpenCode; the agent notification tool option applies only to Claude/Codex.
+You can select any combination of the three agents in the guided setup. Mixed selections containing OpenCode use one loader command:
+
+```bash
+(set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --products claude,codex,opencode --desktop)
+```
+
+Use `claude,opencode` or `codex,opencode` for two agents. The loader downloads and validates one installer, then runs Claude/Codex setup followed by OpenCode setup. It stops at the first failure; an earlier successful installation remains installed. Fix the reported error and rerun the same command to complete setup.
+
+`--desktop` and `--webhook` grant consent only for OpenCode; choose at least one, and configure webhook URLs separately. `--skip-agent-notify` applies only to the Claude/Codex notification tool. These flags do not change Claude/Codex notification channels. Single-agent commands and `--product both` remain supported.
 
 After installation:
 

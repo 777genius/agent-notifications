@@ -68,8 +68,7 @@ test("OpenCode command requires explicit selected channels and omits MCP flags",
 });
 
 // A regression here would silently omit a selected host or leak one host's flags to another.
-test("all seven selections route each installer and keep consent scoped to its host", () => {
-  const prefix = "curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product ";
+test("all seven selections produce one loader command with host-scoped consent", () => {
   const cases = [
     { selected: ["claude"], legacy: "claude", openCode: false },
     { selected: ["codex"], legacy: "codex", openCode: false },
@@ -93,13 +92,17 @@ test("all seven selections route each installer and keep consent scoped to its h
               assert.equal(command(selected, target, intent, agentNotify, channels), null);
               continue;
             }
-            const expected = [];
-            if (legacy) expected.push(prefix + legacy + (agentNotify ? "" : " --skip-agent-notify"));
-            if (openCode) expected.push(prefix + "opencode" + (channels.desktop ? " --desktop" : "") + (channels.webhook ? " --webhook" : ""));
-            const expectedSnippet = expected.length === 1
-              ? expected[0]
-              : "(\nset -o pipefail\n" + expected.join(" &&\n") + "\n)";
-            assert.equal(command(selected, target, intent, agentNotify, channels), expectedSnippet);
+            const product = openCode && legacy
+              ? `--products ${selected.join(",")}`
+              : `--product ${openCode ? "opencode" : legacy}`;
+            const pipeline = "curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- " + product
+              + (legacy && !agentNotify ? " --skip-agent-notify" : "")
+              + (openCode && channels.desktop ? " --desktop" : "")
+              + (openCode && channels.webhook ? " --webhook" : "");
+            const expected = openCode && legacy ? `(set -o pipefail; ${pipeline})` : pipeline;
+            const actual = command(selected, target, intent, agentNotify, channels);
+            assert.equal(actual, expected);
+            assert.equal(actual?.split("\n").length, 1);
           }
     assert.equal(command(selected, "linux", "configure"), null);
     assert.equal(command(selected, "manual", "install"), null);
@@ -108,58 +111,29 @@ test("all seven selections route each installer and keep consent scoped to its h
   assert.equal(command([], "linux", "install"), null);
 });
 
-test("mixed copied block is valid Bash and stops after a failed first installer", () => {
-  const snippet = command(["claude", "codex", "opencode"], "linux", "install")!;
-  const syntax = spawnSync("bash", ["-n"], { input: snippet, encoding: "utf8" });
-  assert.equal(syntax.status, 0, syntax.stderr);
-  // Replace both external commands with shell functions: no download or installation runs.
-  const result = spawnSync("bash", [], {
-    input: `curl() { printf 'mock installer'; }
-bash() {
-  case "$*" in
-    *"--product both"*) printf 'legacy failed'; return 73 ;;
-    *) printf 'unexpected OpenCode invocation' ;;
-  esac
-}
-${snippet}`,
-    encoding: "utf8",
-  });
-  assert.equal(result.status, 73, result.stderr);
-  assert.equal(result.stdout, "legacy failed");
+
+// Selection order must not change the public dispatch order or duplicate a host.
+test("mixed loader uses a canonical product list", () => {
+  assert.equal(
+    command(["opencode", "claude", "opencode", "codex"], "linux", "install"),
+    "(set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --products claude,codex,opencode --desktop)",
+  );
 });
 
-test("mixed block preserves download failures and skips the second installer", () => {
+// The copied shell command must report a failed curl even if Bash accepts its input.
+test("mixed single command propagates empty and partial download failures without changing caller pipefail", () => {
   const snippet = command(["claude", "opencode"], "linux", "install")!;
-  for (const { response, expectedOutput } of [
-    { response: "", expectedOutput: "" },
-    { response: 'printf "partial installer ran"', expectedOutput: "partial installer ran" },
-  ]) {
-    // Real Bash consumes an empty or partial mocked download that finishes with curl failure.
+  for (const partial of [false, true]) {
     const result = spawnSync("bash", [], {
-      input: `curl() { printf 'fetch attempted\n' >&2; printf '%s' '${response}'; return 22; }
-${snippet}`,
-      encoding: "utf8",
-    });
-    assert.equal(result.status, 22, result.stderr);
-    assert.equal(result.stdout, expectedOutput);
-    assert.equal(result.stderr, "fetch attempted\n");
-  }
-});
-
-test("mixed block propagates the second installer failure without changing caller pipefail", () => {
-  const snippet = command(["claude", "opencode"], "linux", "install")!;
-  // Feed only a controlled shell script to the real bash -s invocation.
-  const result = spawnSync("bash", [], {
-    input: `set +o pipefail
-curl() {
-  printf '%s\n' 'case "$*" in *"--product opencode"*) printf "opencode failed"; exit 74 ;; *) printf "legacy installed\n" ;; esac'
-}
+      input: `set +o pipefail
+curl() { ${partial ? "printf '%s' 'printf partial-input'" : ":"}; return 22; }
 ${snippet}
 install_status=$?
 if [[ -o pipefail ]]; then printf 'caller pipefail changed'; exit 1; fi
 exit "$install_status"`,
-    encoding: "utf8",
-  });
-  assert.equal(result.status, 74, result.stderr);
-  assert.equal(result.stdout, "legacy installed\nopencode failed");
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 22, result.stderr);
+    assert.equal(result.stdout, partial ? "partial-input" : "");
+  }
 });

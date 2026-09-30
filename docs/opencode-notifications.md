@@ -27,7 +27,13 @@ service or Windows toasts. Linux needs an available desktop session/D-Bus servic
 ## Install or update
 
 Install OpenCode first. In the [guided installer](https://777genius.github.io/agent-notifications/#install),
-select **OpenCode** and explicitly allow desktop notifications, webhooks or both.
+select **OpenCode** and explicitly allow desktop notifications, webhooks or both. You can also select Claude Code or Codex CLI in the same setup. The copied command uses one loader, for example:
+
+```bash
+(set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --products claude,opencode --desktop)
+```
+
+Channel flags grant consent only for OpenCode; webhook URLs still need separate configuration. Claude/Codex setup runs first. If a later setup fails, earlier successful installations remain installed; fix the error and rerun the command.
 The bootstrap requires Agent Notifications **v1.46.0 or newer** and acquires the
 checksum-verified executable for your platform from the accepted release. On Mac,
 desktop setup also acquires the signed native helper and its attestation sidecar

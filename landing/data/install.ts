@@ -57,18 +57,17 @@ export function command(
   const hasOpenCode = selected.includes("opencode");
   if (hasOpenCode && !openCodeChannels.desktop && !openCodeChannels.webhook)
     return null;
-  const commands: string[] = [];
   const hasClaude = selected.includes("claude");
   const hasCodex = selected.includes("codex");
-  if (hasClaude || hasCodex) {
-    const legacy = hasClaude && hasCodex ? "both" : hasCodex ? "codex" : "claude";
-    const skip = agentNotify ? "" : " --skip-agent-notify";
-    commands.push(`curl -fsSL ${installerUrl} | bash -s -- --product ${legacy}${skip}`);
-  }
+  const skip = (hasClaude || hasCodex) && !agentNotify ? " --skip-agent-notify" : "";
   if (hasOpenCode) {
     const channels = `${openCodeChannels.desktop ? " --desktop" : ""}${openCodeChannels.webhook ? " --webhook" : ""}`;
-    commands.push(`curl -fsSL ${installerUrl} | bash -s -- --product opencode${channels}`);
+    const productFlag = hasClaude || hasCodex
+      ? `--products ${(["claude", "codex", "opencode"] as const).filter((value) => selected.includes(value)).join(",")}`
+      : "--product opencode";
+    const pipeline = `curl -fsSL ${installerUrl} | bash -s -- ${productFlag}${skip}${channels}`;
+    return hasClaude || hasCodex ? `(set -o pipefail; ${pipeline})` : pipeline;
   }
-  if (commands.length === 1) return commands[0];
-  return `(\nset -o pipefail\n${commands.join(" &&\n")}\n)`;
+  const legacy = hasClaude && hasCodex ? "both" : hasCodex ? "codex" : "claude";
+  return `curl -fsSL ${installerUrl} | bash -s -- --product ${legacy}${skip}`;
 }

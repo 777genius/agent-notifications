@@ -59,7 +59,7 @@ case "$url" in
     ''' + PUBLIC_SETUP_URL + ''') kind=setup ;;
     https://github.com/777genius/agent-notifications/releases/latest) kind=latest ;;
     https://api.github.com/repos/777genius/agent-notifications/releases/latest) kind=latest_json ;;
-    https://api.github.com/repos/777genius/agent-notifications/commits/v1.43.0) kind=commit ;;
+    https://api.github.com/repos/777genius/agent-notifications/commits/v*) kind=commit ;;
     https://raw.githubusercontent.com/777genius/agent-notifications/*/bin/bootstrap.sh) kind=bootstrap ;;
     *) echo "Unexpected URL: $url" >&2; exit 99 ;;
 esac
@@ -91,7 +91,11 @@ for a in "$@"; do
     printf '%s\\0' "$a" >> "$CASE_DIR/argv0"
 done
 ''' + shlex.quote(sys.executable.replace('\\', '/')) + ''' -I -c 'import json,os; print(json.dumps({"tag":os.environ["BOOTSTRAP_RELEASE_TAG"],"sha":os.environ["BOOTSTRAP_RELEASE_COMMIT"],"install":os.environ["INSTALL_SCRIPT_URL"]}))' > "$CASE_DIR/ran.json"
-exit "${BOOTSTRAP_STATUS:-0}"
+STAGED_BOOTSTRAP="$0" ''' + shlex.quote(sys.executable.replace('\\', '/')) + ''' -I -c 'import json,os; from pathlib import Path; c=Path(os.environ["RECORD_DIR"]); r=json.loads((c/"ran.json").read_text()); r["args"]=[a.decode() for a in (c/"argv0").read_bytes().split(b"\\0") if a]; r["script"]=os.environ["STAGED_BOOTSTRAP"]; print(json.dumps(r))' >> "$CASE_DIR/calls.jsonl"
+case "${2:-}" in
+    opencode) exit "${OPENCODE_STATUS:-${BOOTSTRAP_STATUS:-0}}" ;;
+    *) exit "${LEGACY_STATUS:-${BOOTSTRAP_STATUS:-0}}" ;;
+esac
 '''
 
 
@@ -110,24 +114,35 @@ def with_noglob(env):
     return env
 
 
-def run_loader(args, env, piped=False, documented=False):
+def run_loader(args, env, piped=False, documented=False, bash_executable=None):
     env = with_noglob(env)
+    runner = bash_executable or HOST_BASH
     setup_sh = bash_path(root / 'bin/setup.sh')
     if documented:
-        command = [HOST_BASH, '-c', public_command.replace(
+        command = [runner, '-c', public_command.replace(
             '| bash', '| bash -s -- ' + ' '.join(map(shlex.quote, args)))]
         stdin = None
     elif piped:
-        command = [HOST_BASH, '-c', 'exec ' + ' '.join(
-            shlex.quote(x) for x in [bash_path(HOST_BASH), '-s', '--'] + args)]
+        command = [runner, '-c', 'exec ' + ' '.join(
+            shlex.quote(x) for x in [bash_path(runner), '-s', '--'] + args)]
         stdin = loader
     else:
-        command = [HOST_BASH, '-c', 'exec ' + ' '.join(shlex.quote(x) for x in [setup_sh] + args)]
+        # Explicitly select the interpreter for native Bash 3.2 regressions;
+        # default fixtures retain the normal env-bash entry point.
+        invocation = ([bash_path(runner)] if bash_executable else []) + [setup_sh] + args
+        command = [runner, '-c', 'exec ' + ' '.join(map(shlex.quote, invocation))]
         stdin = None
     return subprocess.run(command, input=stdin, text=True, capture_output=True, env=env, timeout=20)
 
 
-def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, piped=False, documented=False, expect_run=True):
+def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, piped=False,
+             documented=False, expect_run=True, args=None, calls=None, no_network=False,
+             legacy_status=None, opencode_status=None, message=None, help_only=False,
+             release=None, release_only=False, bash_executable=None):
+    if args is None:
+        args = ['--product', 'both', 'argument with spaces', '*']
+    if release is None:
+        release = 'v1.46.0' if any(a == '--products' or a.startswith('--products=') for a in args) else 'v1.43.0'
     with tempfile.TemporaryDirectory(prefix='setup-test-', dir=os.environ['TMPDIR']) as tmp:
         case = Path(tmp)
         (case / 'bin').mkdir()
@@ -135,7 +150,7 @@ def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, pipe
         (case / 'bin/curl').write_text(curl_stub)
         (case / 'bin/curl').chmod(0o755)
         if tag is None:
-            latest_value = 'v1.43.0'
+            latest_value = release
         else:
             try:
                 latest_value = json.loads(tag).get('tag_name')
@@ -157,14 +172,45 @@ def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, pipe
             json.dumps({'sha': sha}) if commit is None else commit)
         (case / 'bootstrap').write_text(bootstrap_stub)
         (case / 'setup').write_text(loader)
-        env = dict(os.environ, PATH=runtime_path(case, python=True, node=True),
-                   CASE_DIR=bash_path(case), TMPDIR=bash_path(case / 'tmp space'),
+        env = dict(os.environ, PATH=runtime_path(case, python=True, node=True, bash_executable=bash_executable),
+                   CASE_DIR=bash_path(case), RECORD_DIR=str(case), TMPDIR=bash_path(case / 'tmp space'),
                    FAIL_DOWNLOAD=fail, BOOTSTRAP_STATUS=str(status),
                    BOOTSTRAP_RELEASE_TAG='untrusted', BOOTSTRAP_RELEASE_COMMIT='untrusted',
                    INSTALL_SCRIPT_URL='https://example.invalid/not-used')
-        args = ['--product', 'both', 'argument with spaces', '*']
-        result = run_loader(args, env, piped=piped, documented=documented)
-        if expected is None:
+        if legacy_status is not None:
+            env['LEGACY_STATUS'] = str(legacy_status)
+        if opencode_status is not None:
+            env['OPENCODE_STATUS'] = str(opencode_status)
+        result = run_loader(args, env, piped=piped, documented=documented, bash_executable=bash_executable)
+        if no_network or help_only:
+            assert result.returncode == (0 if help_only else 1), (name, result.returncode, result.stderr)
+            assert not (case / 'requests').exists(), name + ': parser performed a network request'
+            assert not (case / 'ran.json').exists(), name + ': parser ran installer'
+            if help_only:
+                assert '--products' in result.stdout and '--desktop' in result.stdout, name
+        elif release_only:
+            assert result.returncode == 1, (name, result.returncode, result.stderr)
+            assert not (case / 'ran.json').exists(), name + ': installer ran on unsupported release'
+            assert (case / 'requests').read_text().splitlines() == [
+                'https://github.com/777genius/agent-notifications/releases/latest'
+            ], name + ': unsupported release fetched bootstrap'
+            assert 'No products were installed.' in result.stderr, (name, result.stderr)
+        elif calls is not None:
+            assert result.returncode == expected, (name, result.returncode, result.stderr)
+            got = [json.loads(line) for line in (case / 'calls.jsonl').read_text().splitlines()]
+            assert [r['args'] for r in got] == calls, (name, got)
+            assert all({k: r[k] for k in ('tag', 'sha', 'install')} == {
+                'tag': release, 'sha': sha, 'install': raw + '/install.sh'
+            } for r in got), (name, got)
+            assert len({r['script'] for r in got}) == 1, name + ': different staged bootstrap'
+            assert (case / 'requests').read_text().splitlines() == [
+                'https://github.com/777genius/agent-notifications/releases/latest',
+                'https://api.github.com/repos/777genius/agent-notifications/commits/' + release,
+                raw + '/bootstrap.sh',
+            ], name + ': expected one release resolution and bootstrap download'
+            if result.returncode:
+                assert 'all products installed' not in result.stdout.lower(), (name, result.stdout)
+        elif expected is None:
             assert result.returncode != 0, (name, result.stdout, result.stderr)
             assert not (case / 'ran.json').exists(), name + ': installer ran on failure'
         elif not expect_run:
@@ -176,7 +222,7 @@ def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, pipe
             if (case / 'ran.json').exists():
                 got = recorded_install(case)
                 assert got == {
-                    'args': args, 'tag': 'v1.43.0', 'sha': sha, 'install': raw + '/install.sh'
+                    'args': args, 'tag': release, 'sha': sha, 'install': raw + '/install.sh'
                 }, (name, got)
             else:
                 raise AssertionError(name + ': installer did not run')
@@ -185,9 +231,11 @@ def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, pipe
                 assert requests.pop(0) == PUBLIC_SETUP_URL
             assert requests == [
                 'https://github.com/777genius/agent-notifications/releases/latest',
-                'https://api.github.com/repos/777genius/agent-notifications/commits/v1.43.0',
+                'https://api.github.com/repos/777genius/agent-notifications/commits/' + release,
                 raw + '/bootstrap.sh',
             ], name
+        if message:
+            assert message in result.stderr, (name, result.stderr)
         assert not list((case / 'tmp space').iterdir()), name + ': leaked staging directory'
         print('PASS ' + name)
 
@@ -263,7 +311,7 @@ def place_runtime_cmd(dest, src):
     dest.chmod(0o755)
 
 
-def runtime_path(case, python=False, node=False):
+def runtime_path(case, python=False, node=False, bash_executable=None):
     bin_dir = case / 'runtime-bin'
     bin_dir.mkdir()
     names = ['bash', 'sh', 'mktemp', 'rm', 'cat', 'chmod', 'mkdir', 'ln', 'uname',
@@ -274,7 +322,8 @@ def runtime_path(case, python=False, node=False):
     if node:
         names.append('node')
     for name in names:
-        place_runtime_cmd(bin_dir / name, host_cmd(name))
+        source = bash_executable if name == 'bash' and bash_executable else host_cmd(name)
+        place_runtime_cmd(bin_dir / name, source)
     return bash_path(case / 'bin') + ':' + bash_path(bin_dir)
 
 def run_runtime_case(name, python=False, node=False, expected=0, stub_python=False):
@@ -292,7 +341,7 @@ def run_runtime_case(name, python=False, node=False, expected=0, stub_python=Fal
         (case / 'commit').write_text(sha)
         (case / 'bootstrap').write_text(bootstrap_stub)
         env = dict(os.environ, PATH=runtime_path(case, python=python, node=node),
-                   CASE_DIR=bash_path(case), TMPDIR=bash_path(case / 'tmp space'),
+                   CASE_DIR=bash_path(case), RECORD_DIR=str(case), TMPDIR=bash_path(case / 'tmp space'),
                    FAIL_DOWNLOAD='', BOOTSTRAP_STATUS='0',
                    BOOTSTRAP_RELEASE_TAG='untrusted', BOOTSTRAP_RELEASE_COMMIT='untrusted',
                    INSTALL_SCRIPT_URL='https://example.invalid/not-used')
@@ -313,6 +362,105 @@ run_case('piped one-line entry point', expected=0, piped=True)
 run_case('documented one-line command', expected=0, documented=True)
 run_case('initial loader download failure', fail='setup', expected=0, documented=True, expect_run=False)
 run_case('bootstrap exit status', status=17, expected=17)
+# Independent bootstrap calls are the observable routing boundary. All seven
+# sets resolve one release, regardless of caller order or number of groups.
+product_sets = [
+    ('claude', [['--product', 'claude']]),
+    ('codex', [['--product', 'codex']]),
+    ('opencode', [['--product', 'opencode', '--desktop']]),
+    ('codex,claude', [['--product', 'both']]),
+    ('opencode,claude', [['--product', 'claude'], ['--product', 'opencode', '--desktop']]),
+    ('opencode,codex', [['--product', 'codex'], ['--product', 'opencode', '--desktop']]),
+    ('opencode,codex,claude', [['--product', 'both'], ['--product', 'opencode', '--desktop']]),
+]
+for selection, routed in product_sets:
+    args = ['--products', selection]
+    if 'opencode' in selection:
+        args += ['--desktop']
+    run_case('product set ' + selection, args=args, calls=routed, expected=0)
+# Focused native Bash 3.2 coverage protects optional-channel parsing under
+# nounset. Check every advertised set and the intended consent error with
+# /bin/bash both as the loader interpreter and as fixture PATH's bash.
+if sys.platform == 'darwin':
+    native_bash = '/bin/bash'
+    native_version = subprocess.run([native_bash, '-c', 'printf "%s" "$BASH_VERSION"'],
+                                    text=True, capture_output=True, check=True, timeout=5).stdout
+    if native_version.startswith('3.2.'):
+        for selection, routed in product_sets:
+            args = ['--products', selection]
+            if 'opencode' in selection:
+                args += ['--desktop']
+            run_case('native Bash 3.2 product set ' + selection,
+                     args=args, calls=routed, expected=0, bash_executable=native_bash)
+        for selection in ['opencode', 'claude,opencode']:
+            run_case('native Bash 3.2 missing consent ' + selection,
+                     args=['--products', selection], no_network=True,
+                     message='OpenCode requires explicit --desktop and/or --webhook consent.',
+                     bash_executable=native_bash)
+    else:
+        print('SKIP native Bash 3.2 fixtures: /bin/bash is ' + native_version)
+run_case('scoped flags and equals selector',
+         args=['--webhook', '--products=opencode,claude,codex', '--skip-agent-notify', '--desktop'],
+         calls=[['--product', 'both', '--skip-agent-notify'],
+                ['--product', 'opencode', '--webhook', '--desktop']], expected=0, piped=True)
+run_case('agent-notify scoped to legacy',
+         args=['--products', 'claude,opencode', '--agent-notify', '--webhook'],
+         calls=[['--product', 'claude', '--agent-notify'], ['--product', 'opencode', '--webhook']], expected=0)
+run_case('first group failure stops OpenCode', args=['--products', 'claude,opencode', '--desktop'],
+         calls=[['--product', 'claude']], legacy_status=37, expected=37,
+         message='remaining products were not installed')
+run_case('second group failure reports partial success', args=['--products', 'codex,opencode', '--webhook'],
+         calls=[['--product', 'codex'], ['--product', 'opencode', '--webhook']],
+         opencode_status=41, expected=41, message='Partial success:')
+run_case('OpenCode-only failure status', args=['--products', 'opencode', '--desktop'],
+         calls=[['--product', 'opencode', '--desktop']], opencode_status=43, expected=43)
+for args in [
+    ['--products'], ['--products', ''], ['--products='],
+    ['--products', ',claude'], ['--products', 'claude,'], ['--products', 'claude,,codex'],
+    ['--products', 'claude,claude'], ['--products', 'codex,codex'],
+    ['--products', 'opencode,opencode', '--desktop'],
+    ['--products', 'both'], ['--products', 'Claude'], ['--products', 'claude, codex'],
+    ['--products', '*'], ['--products', 'claude,$(touch marker)'],
+    ['--products', 'claude', '--products', 'codex'],
+    ['--products=claude', '--products=codex'],
+    ['--product', 'claude', '--products', 'codex'],
+    ['--products', 'claude', '--product', 'codex'],
+    ['--products', 'claude', '--product=codex'],
+    ['--products', 'opencode'],
+    ['--products', 'claude', '--desktop'], ['--products', 'codex', '--webhook'],
+    ['--products', 'opencode', '--desktop', '--skip-agent-notify'],
+    ['--products', 'opencode', '--desktop', '--agent-notify'],
+    ['--products', 'claude', '--skip-agent-notify', '--agent-notify'],
+    ['--products', 'claude', '--agent-notify', '--agent-notify'],
+    ['--products', 'opencode', '--desktop', '--desktop'],
+    ['--products', 'opencode', '--webhook', '--webhook'],
+    ['--products', 'claude', '--navigation', 'none'],
+    ['--products', 'claude', '--codex-home', '/tmp/space path'],
+    ['--products', 'claude', '--unknown'], ['--unknown', '--products', 'claude'],
+    ['--products', '--desktop'], ['--products', 'claude', 'argument with spaces'],
+]:
+    run_case('early selector rejection ' + repr(args), args=args, no_network=True)
+for args in [['--help', '--products', 'opencode'], ['--products=claude', '-h']]:
+    run_case('new mode help ' + repr(args), args=args, help_only=True)
+# Unknown legacy arguments, literal metacharacters and standalone help continue
+# to reach the released bootstrap without loader reinterpretation.
+for args in [[], ['--help'], ['--product', 'claude'], ['--product', 'codex'],
+             ['--product', 'opencode', '--desktop'],
+             ['--unknown', 'space path', '*', '$(touch marker)', '--products-not-a-selector']]:
+    run_case('legacy passthrough ' + repr(args), args=args, expected=0)
+for release in ['v0.99.0', 'v1.9.0', 'v1.43.0', 'v1.45.99']:
+    run_case('reject unsupported OpenCode release ' + release,
+             args=['--products', 'claude,opencode', '--desktop'], release=release, release_only=True)
+for release in ['v1.46.0', 'v1.100.0', 'v2.0.0']:
+    run_case('accept OpenCode release ' + release,
+             args=['--products', 'opencode', '--desktop'], release=release,
+             calls=[['--product', 'opencode', '--desktop']], expected=0)
+run_case('legacy release behavior unchanged', args=['--product', 'opencode', '--desktop'],
+         release='v1.43.0', expected=0)
+for step in ['latest', 'commit', 'bootstrap']:
+    run_case('multi-product failed download: ' + step,
+             args=['--products', 'claude,opencode', '--desktop'], fail=step)
+
 for tag in ['v1.43.0-rc1', 'main', 'v01.43.0', 'v1.43.0\r', '../main', 42, None]:
     run_case('reject tag ' + repr(tag), tag=json.dumps({'tag_name': tag}))
 for value in ['', 'A' * 40, 'a' * 39, sha + '\r', sha + '\n', '../main', 42, None]:
@@ -351,7 +499,7 @@ if host_cmd('python3') and host_cmd('node'):
         (case / 'commit').write_text(sha)
         (case / 'bootstrap').write_text(bootstrap_stub)
         env = dict(os.environ, PATH=bash_path(case / 'bin') + ':' + runtime_path(case, python=True, node=True),
-                   CASE_DIR=bash_path(case), TMPDIR=bash_path(case / 'tmp space'),
+                   CASE_DIR=bash_path(case), RECORD_DIR=str(case), TMPDIR=bash_path(case / 'tmp space'),
                    FAIL_DOWNLOAD='', BOOTSTRAP_STATUS='0',
                    BOOTSTRAP_RELEASE_TAG='untrusted', BOOTSTRAP_RELEASE_COMMIT='untrusted',
                    INSTALL_SCRIPT_URL='https://example.invalid/not-used')
