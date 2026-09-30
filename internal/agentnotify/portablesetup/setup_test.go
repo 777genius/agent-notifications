@@ -867,7 +867,7 @@ func TestPublishConfirmedIntentRecordsTargetsAndClears(t *testing.T) {
 	if len(intent.Targets) != 1 || intent.Targets[0].Profile != profile || strings.Join(intent.Targets[0].Units, ",") != "hooks,agent-notify" {
 		t.Fatalf("targets: %+v", intent.Targets)
 	}
-	if err := svc.FinishConfirmedIntent(ctx, ConfirmedIntent{ControlRoot: b.ControlRoot, RuntimeRoot: b.RuntimeRoot, Owner: b.Owner}, res); err != nil {
+	if _, _, err := svc.FinishConfirmedIntent(ctx, ConfirmedIntent{ControlRoot: b.ControlRoot, RuntimeRoot: b.RuntimeRoot, Owner: b.Owner}, res); err != nil {
 		t.Fatal(err)
 	}
 	snap, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
@@ -876,6 +876,17 @@ func TestPublishConfirmedIntentRecordsTargetsAndClears(t *testing.T) {
 	}
 	if _, err := os.Lstat(IntentPath(b.ControlRoot)); !os.IsNotExist(err) {
 		t.Fatal("finish retained intent file")
+	}
+	if _, _, err := svc.PublishConfirmedIntent(ctx, ConfirmedIntent{
+		ControlRoot: b.ControlRoot, RuntimeRoot: b.RuntimeRoot, Owner: b.Owner,
+		ExpectedGeneration: ledger.Generation, Action: "install", Stage: "confirmed",
+		Targets: []IntentTarget{{Client: "codex", Units: []string{"agent-notify"}}},
+	}); !errors.Is(err, ErrConcurrentChange) {
+		t.Fatalf("stale confirmed intent published: %v", err)
+	}
+	snap, err = installruntime.ReadInstalledSnapshot(b.ControlRoot)
+	if err != nil || snap.Ledger.PendingMutation != nil {
+		t.Fatalf("stale intent changed reservation: %+v %v", snap.Ledger.PendingMutation, err)
 	}
 }
 
@@ -930,10 +941,10 @@ func TestFinishConfirmedIntentAfterClaudeCacheRelocationAndPortableRemoval(t *te
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err = svc.FinishConfirmedIntent(ctx, ConfirmedIntent{ControlRoot: control, RuntimeRoot: filepath.Join(root, "unrelated"), Owner: owner}, reservation); err == nil {
+	if _, _, err = svc.FinishConfirmedIntent(ctx, ConfirmedIntent{ControlRoot: control, RuntimeRoot: filepath.Join(root, "unrelated"), Owner: owner}, reservation); err == nil {
 		t.Fatal("unrelated runtime root finalized the intent")
 	}
-	if err = svc.FinishConfirmedIntent(ctx, ConfirmedIntent{ControlRoot: control, RuntimeRoot: oldRoot, Owner: owner}, reservation); err != nil {
+	if _, _, err = svc.FinishConfirmedIntent(ctx, ConfirmedIntent{ControlRoot: control, RuntimeRoot: oldRoot, Owner: owner}, reservation); err != nil {
 		t.Fatalf("finish after removing last old-root consumer: %v", err)
 	}
 	snap, err := installruntime.ReadInstalledSnapshot(control)
@@ -957,7 +968,7 @@ func TestFinishConfirmedIntentAfterClaudeCacheRelocationAndPortableRemoval(t *te
 	if err := svc.PatchIntentReceipt(ctx, control, oldRoot, owner, "claude", "receipt-1"); err != nil {
 		t.Fatalf("retained reinstall could not patch intent: %v", err)
 	}
-	if err := svc.FinishConfirmedIntent(ctx, ConfirmedIntent{ControlRoot: control, RuntimeRoot: oldRoot, Owner: owner}, reinstallReservation); err != nil {
+	if _, _, err := svc.FinishConfirmedIntent(ctx, ConfirmedIntent{ControlRoot: control, RuntimeRoot: oldRoot, Owner: owner}, reinstallReservation); err != nil {
 		t.Fatalf("retained reinstall could not finish intent: %v", err)
 	}
 	intent, err := os.Lstat(IntentPath(control))

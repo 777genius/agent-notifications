@@ -29,6 +29,8 @@ import (
 const agentNotifySetupHelp = `Usage: claude-notifications setup-notifications OPERATION [OPTIONS]
 Operations: configure | wizard | prepare | status | register | remove | enable | disable | permission-status | request-permission
 Configure requires --provider codex|claude|both and an explicit fresh route.
+  --policy-only skips legacy MCP/skill registration before portable UAP handoff.
+  --preserve-policy keeps existing enablement, consent and route on repeat setup.
 Wizard is a separate master: setup-notifications wizard --help
   --codex-home ABS and --request-permission are configure-only choices.
   Configure resolves primary runtime, generation and canonical global internally.

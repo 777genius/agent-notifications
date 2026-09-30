@@ -260,9 +260,34 @@ main --product both
 	if flagValue(strings.Fields(body), "--claude-mcp-config") != filepath.Join(home, ".claude.json") {
 		t.Fatal("bootstrap must pass the resolved Claude MCP config path", body)
 	}
+	if !strings.Contains(body, "--policy-only --preserve-policy") {
+		t.Fatal("portable setup must not let the legacy writer register MCP", body)
+	}
+	// The same public entrypoint previously fell through to direct configure
+	// when uname reported Git Bash, even though the CLI advertised the wizard.
+	if err := os.Remove(filepath.Join(home, "calls")); err != nil {
+		t.Fatal(err)
+	}
+	windowsScript := strings.Replace(script, "main --product both\n", "uname() { echo MINGW64_NT-10.0; }\nmain --product both\n", 1)
+	command = exec.Command("bash", "-c", windowsScript)
+	command.Dir = home
+	if output, err = command.CombinedOutput(); err != nil {
+		t.Fatalf("Git Bash dispatch: %v: %s", err, output)
+	}
+	calls, err = os.ReadFile(filepath.Join(home, "calls"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = string(calls)
+	if !strings.Contains(body, "setup-notifications wizard") || !strings.Contains(body, "--policy-only --preserve-policy") {
+		t.Fatal("Git Bash must select portable setup", body)
+	}
+	if strings.Contains(body, "--helper "+binary) {
+		t.Fatal("Git Bash launcher cannot be a native helper", body)
+	}
 }
 
-func TestNotificationBootstrapWizardRetryQuotesCustomRoots(t *testing.T) {
+func TestNotificationBootstrapWizardFailureDoesNotInventRetry(t *testing.T) {
 	source, err := os.ReadFile(filepath.Join(notificationRepoRoot(t), "bin", "bootstrap.sh"))
 	if err != nil {
 		t.Fatal(err)
@@ -313,7 +338,7 @@ config_preflight() { :; }
 initialize_config() { :; }
 install_claude() { echo claude >> "$HOME/installs"; PLUGIN_ROOT="$HOME/bundle space"; }
 install_codex() { echo codex >> "$HOME/installs"; CONFIGURE_BINARY="$HOME/fake binary"; return 0; }
-main --product both --codex-home "$HOME/codex home"
+main --product both --agent-notify --navigation none --allow-unknown-caller true --allow-caller-asserted false --codex-home "$HOME/codex home"
 `
 	command := exec.Command("bash", "-c", script)
 	command.Dir = home
@@ -324,27 +349,8 @@ main --product both --codex-home "$HOME/codex home"
 	if !strings.Contains(string(output), "Agent-notify setup failed") {
 		t.Fatal("missing configure warning", string(output))
 	}
-	argv := retryArgv(t, string(output), "setup-notifications wizard")
-	if argv[0] != binary {
-		t.Fatalf("binary: %#v", argv)
-	}
-	if flagValue(argv, "--package") != filepath.Join(bundle, "portable-package") {
-		t.Fatalf("package: %#v", argv)
-	}
-	if flagValue(argv, "--plugin-root") != bundle {
-		t.Fatalf("plugin-root: %#v", argv)
-	}
-	if flagValue(argv, "--helper") != binary {
-		t.Fatalf("helper: %#v", argv)
-	}
-	if flagValue(argv, "--claude-config") != claudeConfig {
-		t.Fatalf("claude-config: %#v", argv)
-	}
-	if flagValue(argv, "--codex-home") != codexHome {
-		t.Fatalf("codex-home: %#v", argv)
-	}
-	if flagValue(argv, "--claude-mcp-config") != filepath.Join(claudeConfig, ".claude.json") {
-		t.Fatalf("claude-mcp-config: %#v", argv)
+	if strings.Contains(string(output), "Retry: ") || !strings.Contains(string(output), "Use the wizard's retry or next resume command above") {
+		t.Fatalf("wrapper fabricated a retry for an unknown wizard failure: %s", output)
 	}
 }
 
@@ -763,17 +769,45 @@ curl() { printf '#!/bin/sh\necho installed >> "$HOME/installs"\n' > "$4"; }
 	if strings.Index(got, configure) > strings.Index(got, "setup-notifications wizard") {
 		t.Fatal("configure must precede wizard", got)
 	}
-	if !strings.Contains(got, "setup-notifications wizard --action install --agents claude --hooks false --agent-notify true --yes") {
+	if !strings.Contains(got, "setup-notifications wizard --action install --install-or-update --agents claude --hooks false --agent-notify true --yes") {
 		t.Fatal(got)
 	}
-	if !strings.Contains(got, "--package "+filepath.Join(bundle, "portable-package")) {
-		t.Fatal(got)
+	if strings.Contains(got, "--package ") {
+		t.Fatal("/init must fetch the version-bound portable ZIP, not pass the source template", got)
 	}
 	if flagValue(strings.Fields(got), "--claude-mcp-config") != filepath.Join(home, ".claude.json") {
 		t.Fatal("init must pass the resolved Claude MCP config path", got)
 	}
 	if flagValue(strings.Fields(got), "--claude-config") != filepath.Join(home, ".claude") {
 		t.Fatal("init must pass the default Claude profile", got)
+	}
+	if !strings.Contains(got, "--policy-only --preserve-policy") {
+		t.Fatal("init must keep direct MCP writer out of portable setup", got)
+	}
+	// /init must use the same capable Windows path as bootstrap.
+	launcher := filepath.Join(bundle, "bin", "claude-notifications.bat")
+	if err := os.WriteFile(launcher, []byte(helper), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(home, "calls")); err != nil {
+		t.Fatal(err)
+	}
+	windowsScript := strings.Replace(script, "uname() { echo Darwin; }", "uname() { echo MINGW64_NT-10.0; }", 1)
+	command = exec.Command("bash", "-c", windowsScript, "init")
+	command.Dir = home
+	if output, err = command.CombinedOutput(); err != nil {
+		t.Fatalf("Git Bash /init: %v: %s", err, output)
+	}
+	calls, err = os.ReadFile(filepath.Join(home, "calls"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = string(calls)
+	if !strings.Contains(got, "setup-notifications wizard") || !strings.Contains(got, "--policy-only --preserve-policy") {
+		t.Fatal("Git Bash /init must select portable setup", got)
+	}
+	if strings.Contains(got, "--helper "+launcher) {
+		t.Fatal("BAT launcher cannot be a native helper", got)
 	}
 }
 
@@ -823,7 +857,7 @@ curl() { printf '#!/bin/sh\n' > "$4"; }
 	}
 }
 
-func TestNotificationInitWizardRetryQuotesCustomRoots(t *testing.T) {
+func TestNotificationInitWizardFailureDoesNotInventRetry(t *testing.T) {
 	source, err := os.ReadFile(filepath.Join(notificationRepoRoot(t), "commands", "init.md"))
 	if err != nil {
 		t.Fatal(err)
@@ -876,7 +910,7 @@ func TestNotificationInitWizardRetryQuotesCustomRoots(t *testing.T) {
 	script := `uname() { echo Darwin; }
 curl() { printf '#!/bin/sh\necho installed >> "$HOME/installs"\n' > "$4"; }
 ` + body
-	command := exec.Command("bash", "-c", script, "init")
+	command := exec.Command("bash", "-c", script, "init", "--agent-notify", "--navigation", "none", "--allow-unknown-caller", "true", "--allow-caller-asserted", "false")
 	command.Dir = home
 	output, err := command.CombinedOutput()
 	if err == nil {
@@ -885,25 +919,8 @@ curl() { printf '#!/bin/sh\necho installed >> "$HOME/installs"\n' > "$4"; }
 	if !strings.Contains(string(output), "agent-notify setup failed") {
 		t.Fatal("missing configure warning", string(output))
 	}
-	argv := retryArgv(t, string(output), "setup-notifications wizard")
-	notifyBin := filepath.Join(bundle, "bin", "claude-notifications")
-	if argv[0] != notifyBin {
-		t.Fatalf("binary: %#v", argv)
-	}
-	if flagValue(argv, "--package") != filepath.Join(bundle, "portable-package") {
-		t.Fatalf("package: %#v", argv)
-	}
-	if flagValue(argv, "--plugin-root") != bundle {
-		t.Fatalf("plugin-root: %#v", argv)
-	}
-	if flagValue(argv, "--helper") != notifyBin {
-		t.Fatalf("helper: %#v", argv)
-	}
-	if flagValue(argv, "--claude-config") != claudeConfig {
-		t.Fatalf("claude-config: %#v", argv)
-	}
-	if flagValue(argv, "--claude-mcp-config") != filepath.Join(claudeConfig, ".claude.json") {
-		t.Fatalf("claude-mcp-config: %#v", argv)
+	if strings.Contains(string(output), "Retry: ") || !strings.Contains(string(output), "Use the wizard's retry or next resume command above") {
+		t.Fatalf("/init fabricated a retry for an unknown wizard failure: %s", output)
 	}
 }
 

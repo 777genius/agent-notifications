@@ -6,6 +6,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1499,6 +1501,38 @@ func TestWizardInstallRecoversPendingJournal(t *testing.T) {
 	}
 }
 
+func TestWizardLegacyPendingJournalRequiresManualRecovery(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtimeRoot, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	profile := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(profile, 0700); err != nil {
+		t.Fatal(err)
+	}
+	plantWizardLegacyJournal(t, control)
+	journal := wizardPendingJournalPath(control)
+	before, err := os.ReadFile(journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	got, err := Run(ctx, Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtimeRoot, GlobalConfig: global,
+		CodexHome: profile, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	})
+	if err == nil || got.Outcome != "incomplete" || got.Reason != "recovery_required" {
+		t.Fatalf("legacy journal must stop safely: %+v %v", got, err)
+	}
+	after, err := os.ReadFile(journal)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("legacy journal changed: %v", err)
+	}
+}
+
 func TestWizardInstallRecoversBothPendingJournals(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, _, _ := managedRuntime(t)
@@ -1935,19 +1969,48 @@ func plantWizardJournalNamed(t *testing.T, controlRoot, opID string) {
 	ops := filepath.Join(filepath.Dir(controlRoot), "uap", "state", "operations")
 	manager := dirswap.Manager{JournalDir: ops, Fault: func(phase string) error {
 		if phase == dirswap.PhaseBackupPending {
-			return errors.New("simulated crash")
+			return errors.New("fixture: leave pending journal")
 		}
 		return nil
 	}}
-	if _, err := manager.Apply(context.Background(), dirswap.Input{
+	receipt, err := manager.Apply(context.Background(), dirswap.Input{
 		OperationID: opID, ClientBindingID: "client-binding-1", Sequence: 1,
 		OwnedBase: owned, ActivePath: filepath.Join(owned, "plugin"), StagingPath: staging,
 		RequireAbsent: true,
-	}); err == nil {
-		t.Fatal("expected pending directory swap")
+	})
+	if err == nil || receipt.OperationID != opID {
+		t.Fatalf("create pending journal: %+v %v", receipt, err)
 	}
-	if _, err := os.Lstat(filepath.Join(ops, opID+".json")); err != nil {
-		t.Fatalf("pending directory swap journal: %v", err)
+}
+
+// Previous UAP releases wrote schema 3 receipts without physical ownership
+// proof. They must remain untouched for explicit recovery after the pin bump.
+func plantWizardLegacyJournal(t *testing.T, controlRoot string) {
+	t.Helper()
+	opID := "wizard-pending-op"
+	owned := filepath.Join(filepath.Dir(controlRoot), "uap", "managed")
+	staging := filepath.Join(owned, ".agentplugins-staging-"+opID)
+	if err := os.MkdirAll(staging, 0700); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte(opID))
+	receipt := dirswap.Receipt{
+		SchemaVersion: 3, Operation: dirswap.OperationSwap, OperationID: opID,
+		ClientBindingID: "client-binding-1", Sequence: 1, OwnedBase: owned,
+		ActivePath: filepath.Join(owned, "plugin"), StagingPath: staging,
+		BackupPath: filepath.Join(owned, ".agentplugins-backup-"+hex.EncodeToString(sum[:8])),
+		Phase:      dirswap.PhaseIntent,
+	}
+	body, err := json.MarshalIndent(receipt, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal := wizardPendingJournalPath(controlRoot)
+	if err := os.MkdirAll(filepath.Dir(journal), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(journal, append(body, '\n'), 0600); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -3982,7 +4045,7 @@ func TestWizardMixedPerClientOptOuts(t *testing.T) {
 		t.Fatal("inspect omitted readiness")
 	}
 	for _, fact := range view.Readiness {
-		if fact.Permission != "unsupported" || fact.Delivery != "not_verified" {
+		if fact.Permission != "not_checked" || fact.Delivery != "not_verified" {
 			t.Fatalf("readiness mixed download with delivery: %+v", fact)
 		}
 	}
@@ -6137,7 +6200,7 @@ func TestWizardUninstallExplicitFalsePreservesNotifyWithoutPackage(t *testing.T)
 		t.Fatal("uninstall omitted readiness")
 	}
 	for _, fact := range removed.Readiness {
-		if fact.Permission != "unsupported" || fact.Delivery != "not_verified" {
+		if fact.Permission != "not_checked" || fact.Delivery != "not_verified" {
 			t.Fatalf("uninstall required permission/delivery: %+v", fact)
 		}
 	}

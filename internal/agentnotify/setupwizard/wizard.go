@@ -85,6 +85,10 @@ type Request struct {
 	// ExternalUninstalled is host attestation that Codex already removed the
 	// native plugin, or never activated it. --yes does not set this.
 	ExternalUninstalled bool
+	// BootstrapExpectedGeneration fences an automatic client selection made
+	// before release acquisition. It is internal to the bootstrap orchestrator:
+	// an intervening opt-out must not become an implicit Add.
+	BootstrapExpectedGeneration *uint64
 	// ClaudeRunner overrides Claude activation probing. Production leaves it
 	// nil so the OS process runner is used. Isolated tests inject a listing
 	// fixture; the field is never parsed from CLI flags.
@@ -125,7 +129,7 @@ type TargetResult struct {
 }
 
 // ReadinessFact is independent of binary download. Inspect and mutation both
-// report these fields; not_verified/unsupported are not installation failure.
+// report these fields; not_checked/not_verified are not installation failure.
 type ReadinessFact struct {
 	Client     string `json:"client"`
 	Runtime    string `json:"runtime"`
@@ -459,6 +463,11 @@ func evaluate(ctx context.Context, req *Request, requireYes bool) evaluated {
 			haveSnap = true
 			out.Generation = snap.Ledger.Generation
 		}
+	}
+	if req.Action != ActionInspect && req.BootstrapExpectedGeneration != nil &&
+		(!haveSnap || snap.Ledger.Generation != *req.BootstrapExpectedGeneration) {
+		out.Outcome, out.Reason = "conflict", "concurrent_change"
+		return evaluated{out: out, err: ErrRefused, stop: true}
 	}
 	if req.Action != ActionInspect {
 		resumed := false
@@ -1357,6 +1366,43 @@ func markInspectedIdentity(view uapinstaller.Inspection, out Result) Result {
 	return markInspectedDataRetained(view, out)
 }
 
+// BootstrapAutoTargets preserves absent MCP units when an installation or
+// owned direct registration already exists. Historical state has no durable
+// per-client opt-out bit, so an absent sibling requires an explicit Add.
+// A read error or ambiguous state must never be interpreted as a fresh install.
+func BootstrapAutoTargets(ctx context.Context, req Request, before Result) (selected, skipped []string, err error) {
+	view, err := inspectUAPState(ctx, req)
+	if err != nil {
+		return nil, nil, err
+	}
+	if view.Recovery.Required || len(view.Installations) > 1 {
+		return nil, nil, fmt.Errorf("existing portable installation requires inspection")
+	}
+	live := map[string]bool{}
+	for _, target := range before.Targets {
+		if target.Unit != "direct-mcp" && target.Unit != "agent-notify" {
+			continue
+		}
+		if target.Outcome == "unknown" {
+			return nil, nil, fmt.Errorf("existing MCP registration could not be inspected")
+		}
+		if target.Outcome == "installed" {
+			live[target.Client] = true
+		}
+	}
+	if len(view.Installations) == 0 && len(live) == 0 {
+		return append([]string(nil), req.Agents...), nil, nil
+	}
+	for _, agent := range req.Agents {
+		if live[agent] {
+			selected = append(selected, agent)
+		} else {
+			skipped = append(skipped, agent)
+		}
+	}
+	return selected, skipped, nil
+}
+
 func markInspectedDataRetained(view uapinstaller.Inspection, out Result) Result {
 	for _, installation := range view.Installations {
 		if installation.DataRetained {
@@ -1583,6 +1629,10 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 	reportProgress(req, "preflight")
 	snap, err := publishWizardIntent(ctx, req, snap, runtimeRoot, hookAgents, notifyAgents, true)
 	if err != nil {
+		if errors.Is(err, portablesetup.ErrConcurrentChange) {
+			out.Outcome, out.Reason = "conflict", "concurrent_change"
+			return out, err
+		}
 		if conflict, handled := pendingIntentConflict(req, err, out); handled {
 			return conflict, err
 		}
@@ -1961,6 +2011,10 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 	reportProgress(req, "preflight")
 	snap, err := publishWizardIntent(ctx, req, snap, runtimeRoot, hookAgents, notifyAgents, portablePresent)
 	if err != nil {
+		if errors.Is(err, portablesetup.ErrConcurrentChange) {
+			out.Outcome, out.Reason = "conflict", "concurrent_change"
+			return out, err
+		}
 		if conflict, handled := pendingIntentConflict(req, err, out); handled {
 			return conflict, err
 		}
@@ -3503,15 +3557,18 @@ func finishWizardIntent(ctx context.Context, req Request, runtimeRoot string, ou
 		return out, err
 	}
 	cp := *snap.Ledger.PendingMutation
-	if finishErr := (portablesetup.Service{}).FinishConfirmedIntent(ctx, portablesetup.ConfirmedIntent{
+	gen, finished, finishErr := (portablesetup.Service{}).FinishConfirmedIntent(ctx, portablesetup.ConfirmedIntent{
 		ControlRoot: req.ControlRoot, RuntimeRoot: runtimeRoot, Owner: snap.Ledger.Owner,
-	}, &cp); finishErr != nil {
+	}, &cp)
+	if finishErr != nil {
 		out.Outcome, out.Reason = "incomplete", "intent_cleanup_failed"
 		return out, finishErr
 	}
-	if gen, readErr := rereadGeneration(req.ControlRoot); readErr == nil {
-		out.Generation = gen
+	if !finished {
+		out.Outcome, out.Reason = "conflict", "concurrent_change"
+		return out, ErrRefused
 	}
+	out.Generation = gen
 	return out, err
 }
 
@@ -3647,7 +3704,7 @@ func attachReadiness(req Request, agents []portable.Integration, out Result, mut
 			Runtime:    runtime,
 			Hooks:      "not_checked",
 			MCP:        "not_checked",
-			Permission: "unsupported",
+			Permission: "not_checked",
 			Restart:    "not_required",
 			Delivery:   "not_verified",
 		}

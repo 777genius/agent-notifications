@@ -55,6 +55,24 @@ select_product --product codex --navigation none --allow-unknown-caller true --a
 PRODUCT=""; CONFIGURE_ARGS=(); CONFIGURE_NOTIFICATIONS=true
 select_product --product claude
 [ "${CONFIGURE_ARGS[*]}" = "--navigation none --allow-unknown-caller true --allow-caller-asserted false --preserve-policy" ]
+cat > "$SANDBOX/configure-parser" <<'EOF'
+#!/bin/bash
+preserve=0
+policy=0
+for arg in "$@"; do
+    [ "$arg" != --preserve-policy ] || preserve=$((preserve + 1))
+    [ "$arg" != --policy-only ] || policy=$((policy + 1))
+done
+[ "$preserve" -eq 1 ] && [ "$policy" -eq 1 ]
+EOF
+chmod +x "$SANDBOX/configure-parser"
+(
+    CONFIGURE_BINARY="$SANDBOX/configure-parser"
+    PRODUCT=claude
+    configure_agent_policy portable
+    CONFIGURE_ARGS=(--navigation none --allow-unknown-caller true --allow-caller-asserted false)
+    configure_agent_policy portable
+)
 for tag in v1.42.0 v1.43.2 v2.0.0; do
     BOOTSTRAP_RELEASE_TAG="$tag"
     BOOTSTRAP_RELEASE_COMMIT="$TEST_RELEASE_COMMIT"
@@ -179,8 +197,7 @@ cli_has_setup_wizard "$wizard" || { echo "wizard-cli missing wizard"; exit 1; }
 read -r _os _arch < <(bootstrap_release_os_arch)
 case "$_os" in linux|darwin|windows) ;; *) echo "unexpected os $_os"; exit 1 ;; esac
 case "$_arch" in amd64|arm64) ;; *) echo "unexpected arch $_arch"; exit 1 ;; esac
-_portable_stage="$SANDBOX/portable-stage"
-mkdir -p "$_portable_stage" "$SANDBOX/portable-src"
+mkdir -p "$SANDBOX/portable-src"
 _asset="agent-notify-portable-${_os}-${_arch}.zip"
 printf 'portable-zip-fixture' > "$SANDBOX/portable-src/$_asset"
 python3 -I - "$SANDBOX/portable-src" "$_asset" <<'PY'
@@ -190,12 +207,35 @@ digest = hashlib.sha256((root/name).read_bytes()).hexdigest()
 (root/'checksums.txt').write_text(digest+'  '+name+'\n')
 PY
 BOOTSTRAP_TAG=v1.43.0
-_CONFIG_STAGE="$_portable_stage"
 fetch_bootstrap_file() { cp "$SANDBOX/portable-src/$(basename "$1")" "$2"; }
 acquire_wizard_portable_asset
-[ "$WIZARD_PACKAGE_ROOT" = "$_portable_stage/$_asset" ] || { echo "portable asset path $WIZARD_PACKAGE_ROOT"; exit 1; }
+[ "$WIZARD_PACKAGE_ROOT" = "$_PORTABLE_STAGE/$_asset" ] || { echo "portable asset path $WIZARD_PACKAGE_ROOT"; exit 1; }
+rm -rf "$_PORTABLE_STAGE"
+_PORTABLE_STAGE=""
+mkdir -p "$SANDBOX/temp" "$SANDBOX/config-stage"
+printf 'preflight-state' > "$SANDBOX/config-stage/baseline"
+printf '%s\n' '#!/bin/sh' 'exit 1' > "$SANDBOX/fail-wizard"
+chmod +x "$SANDBOX/fail-wizard"
+(
+    set +e
+    export TMPDIR="$SANDBOX/temp"
+    _CONFIG_STAGE="$SANDBOX/config-stage"
+    CONFIGURE_BINARY="$SANDBOX/fail-wizard"
+    PLUGIN_ROOT="$SANDBOX/runtime"
+    PRODUCT=claude
+    CONFIGURE_ARGS=()
+    configure_agent_policy() { return 0; }
+    bootstrap_abs_command() { return 1; }
+    install_cleanup_traps
+    setup_agent_notify_wizard > "$SANDBOX/retry.log" 2>&1
+    [ "$?" -ne 0 ]
+)
+_retry_package=$(sed -n 's/^  Verified package retained: //p' "$SANDBOX/retry.log")
+[ -f "$_retry_package" ] || { echo "retry package removed: $_retry_package"; exit 1; }
+[ ! -e "$SANDBOX/config-stage" ] || { echo 'preflight state retained with portable asset'; exit 1; }
+grep -F -- "Verified package retained: $_retry_package" "$SANDBOX/retry.log" >/dev/null
+grep -F -- "Use the wizard's retry or next resume command above" "$SANDBOX/retry.log" >/dev/null
 BOOTSTRAP_TAG=""
-_CONFIG_STAGE=""
 WIZARD_PACKAGE_ROOT=""
 # setup_marketplace self-heals a marketplace declared under a retired repo
 # name, but leaves an unrelated source conflict alone.

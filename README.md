@@ -51,6 +51,17 @@ The short setup loader resolves the latest stable release and downloads the inst
 
 Run the same command to update. [Guided installer](https://777genius.github.io/agent-notifications/#install) · [Manual installation, updates and removal](docs/INSTALLATION.md)
 
+On a release with the portable setup wizard, the public installer also installs an MCP server
+and the `agent-notify` skill for each selected client. In a new Claude Code or Codex session,
+the agent can call `notify` while it is still working, for example when input is needed.
+For an informational alert, explicitly pass `navigation: "none"`; that alert does not open
+the exact chat when clicked. Hooks still handle their own client events. Use
+`--skip-agent-notify` for hooks only. `notification_status` reads configuration but does not
+prove that the desktop displayed a banner. OS notification permission, client activation,
+and a visible test notification are separate checks.
+Automatic updates preserve an absent MCP client when another selected client is installed;
+use explicit `--agent-notify` to add that client later.
+
 ## Settings
 
 In Claude Code, run `/claude-notifications-go:settings` for the configuration wizard or `/claude-notifications-go:sounds` to browse and preview sounds.
@@ -182,7 +193,8 @@ definitions and unknown fields are preserved, and every run saves a uniquely nam
 the previous file next to it.
 
 Then start Codex, run `/hooks`, review the entries and trust them. Open a new session so MCP
-can start; `/mcp` should list `agent_notifications`.
+can start. The manual compatibility path may list `agent_notifications`; the portable public
+installer uses `agent-notify`.
 
 Useful flags: `--dry-run` shows what would change, `--print` outputs the JSON so you can merge it
 yourself, `--codex-home` and `--plugin-root` override the paths, `--skip-agent-notify` skips MCP

@@ -29,6 +29,7 @@ Without --action, a new machine defaults to install; an existing portable
 installation is offered inspect, add/reinstall, uninstall, update, or repair.
   --action install|uninstall|inspect|update|repair
   --install-or-update       Bootstrap-only: install selected clients or update owned bindings first
+  --preserve-existing-units Bootstrap auto mode: leave absent MCP units off when another binding already exists
   --agents claude,codex   Omit on inspect to report both clients
   --hooks true|false          Omit on install of new targets to include hooks; omit on update/repair to keep live units; omit on uninstall to select all units
   --agent-notify true|false   Omit on install of new targets to include portable MCP+skill; omit on update/repair to keep live units
@@ -69,7 +70,7 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 		}
 		return 0
 	}
-	args, installOrUpdate, flagErr := stripInstallOrUpdate(args)
+	args, installOrUpdate, preserveExistingUnits, flagErr := stripInstallOrUpdate(args)
 	req, jsonOut, err := parseSetupWizard(args)
 	if flagErr != nil && err == nil {
 		err = flagErr
@@ -103,7 +104,7 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 	if req.ReleaseDownloadRoot == "" {
 		req.ReleaseDownloadRoot = portableasset.DefaultReleaseDownloadRoot
 	}
-	if installOrUpdate && !validInstallOrUpdateRequest(req) {
+	if (preserveExistingUnits && !installOrUpdate) || (installOrUpdate && !validInstallOrUpdateRequest(req)) {
 		return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "invalid", Reason: "invalid_arguments"}, nil)
 	}
 	if errOut != nil {
@@ -152,7 +153,7 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 	}
 	var result setupwizard.Result
 	if installOrUpdate {
-		result, err = runInstallOrUpdate(ctx, req)
+		result, err = runInstallOrUpdate(ctx, req, preserveExistingUnits)
 	} else {
 		result, err = setupwizard.Run(ctx, req)
 	}
@@ -161,20 +162,27 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 
 // The bootstrap flag is intentionally outside the public wizard Request. It
 // changes orchestration, not the meaning of any explicit wizard action.
-func stripInstallOrUpdate(args []string) ([]string, bool, error) {
+func stripInstallOrUpdate(args []string) ([]string, bool, bool, error) {
 	filtered := make([]string, 0, len(args))
-	found := false
+	found, preserve := false, false
 	for _, arg := range args {
-		if arg != "--install-or-update" {
+		if arg != "--install-or-update" && arg != "--preserve-existing-units" {
 			filtered = append(filtered, arg)
 			continue
 		}
+		if arg == "--preserve-existing-units" {
+			if preserve {
+				return filtered, false, false, errors.New("invalid_arguments")
+			}
+			preserve = true
+			continue
+		}
 		if found {
-			return filtered, false, errors.New("invalid_arguments")
+			return filtered, false, false, errors.New("invalid_arguments")
 		}
 		found = true
 	}
-	return filtered, found, nil
+	return filtered, found, preserve, nil
 }
 
 func validInstallOrUpdateRequest(req setupwizard.Request) bool {
@@ -195,7 +203,15 @@ func validInstallOrUpdateRequest(req setupwizard.Request) bool {
 	return true
 }
 
-func runInstallOrUpdate(ctx context.Context, req setupwizard.Request) (setupwizard.Result, error) {
+func runInstallOrUpdate(ctx context.Context, req setupwizard.Request, preserveExistingUnits bool) (result setupwizard.Result, err error) {
+	defer func() {
+		if result.Reason == "concurrent_change" {
+			// The original auto selection is stale. A direct mutation retry
+			// would turn an opt-out into an implicit Add.
+			result.Command = nil
+			result.NextActions = nil
+		}
+	}()
 	inspect := req
 	inspect.Action = setupwizard.ActionInspect
 	before, inspectErr := setupwizard.Run(ctx, inspect)
@@ -206,6 +222,29 @@ func runInstallOrUpdate(ctx context.Context, req setupwizard.Request) (setupwiza
 		if next.Kind == "recover" || next.Kind == "resume" {
 			return setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "pending_setup_required", NextActions: before.NextActions}, setupwizard.ErrRefused
 		}
+	}
+	var preserved []string
+	if preserveExistingUnits {
+		selected, skipped, err := setupwizard.BootstrapAutoTargets(ctx, req, before)
+		if err != nil {
+			return setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "existing_units_unavailable"}, err
+		}
+		req.Agents, preserved = selected, skipped
+		if len(selected) == 0 {
+			return setupwizard.Result{Action: string(req.Action), Outcome: "unchanged", Reason: "existing_opt_out", Targets: preservedUnitTargets(preserved)}, nil
+		}
+		// Selection is a policy decision about currently live bindings. The
+		// package fetch can take time, so every later Plan and Run must still
+		// see this ledger generation (or one produced by our own phase).
+		expected := before.Generation
+		req.BootstrapExpectedGeneration = &expected
+	}
+	if req.PackageRoot == "" {
+		pinned, err := setupwizard.PinCurrentReleasePackage(ctx, req)
+		if err != nil {
+			return setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "package_acquisition_failed"}, err
+		}
+		req = pinned
 	}
 	// A group update can expose another behind client only after the first
 	// binding moves. Replan the original selection until every selected client
@@ -220,7 +259,9 @@ func runInstallOrUpdate(ctx context.Context, req setupwizard.Request) (setupwiza
 			if runErr != nil || result.ExitCode() != 0 {
 				return result, runErr
 			}
-			return verifyInstallOrUpdate(ctx, req, result)
+			verified, verifyErr := verifyInstallOrUpdate(ctx, req, result)
+			verified.Targets = append(verified.Targets, preservedUnitTargets(preserved)...)
+			return verified, verifyErr
 		}
 		if plan.Result.Reason != "update_required" || !validInstallOrUpdateActions(req.Agents, plan.Result.NextActions) {
 			return plan.Result, err
@@ -237,9 +278,20 @@ func runInstallOrUpdate(ctx context.Context, req setupwizard.Request) (setupwiza
 			if runErr != nil || result.ExitCode() != 0 {
 				return result, runErr
 			}
+			if req.BootstrapExpectedGeneration != nil {
+				*req.BootstrapExpectedGeneration = result.Generation
+			}
 		}
 	}
 	return setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "update_required_after_retries"}, setupwizard.ErrRefused
+}
+
+func preservedUnitTargets(clients []string) []setupwizard.TargetResult {
+	var targets []setupwizard.TargetResult
+	for _, client := range clients {
+		targets = append(targets, setupwizard.TargetResult{Client: client, Unit: "agent-notify", Outcome: "absent", Reason: "preserved_existing_opt_out"})
+	}
+	return targets
 }
 
 func validInstallOrUpdateActions(selected []string, next []setupwizard.NextAction) bool {
@@ -343,6 +395,9 @@ func writeSetupWizardResult(out io.Writer, jsonOut bool, result setupwizard.Resu
 			_, _ = fmt.Fprintf(out, "%s readiness: runtime=%s hooks=%s mcp=%s permission=%s restart=%s delivery=%s\n",
 				fact.Client, fact.Runtime, fact.Hooks, fact.MCP, fact.Permission, fact.Restart, fact.Delivery)
 		}
+		if runtime.GOOS == "windows" && (len(result.NextActions) > 0 || len(result.Command) > 0) {
+			_, _ = fmt.Fprintln(out, "Recovery commands below use PowerShell syntax.")
+		}
 		for _, next := range result.NextActions {
 			_, _ = fmt.Fprintf(out, "next %s: %s\n", next.Kind, strings.Join(quoteWizardArgs(wizardPrintableCommand(next.Command)), " "))
 		}
@@ -445,6 +500,16 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 		}
 		values[key] = value
 	}
+	for _, key := range []string{"package", "plugin-root", "control-root", "runtime-root", "global-config", "codex-home", "claude-config", "client-executable", "helper", "scope-root", "mcp-config", "claude-mcp-config", "claude-executable", "codex-executable"} {
+		if values[key] == "" {
+			continue
+		}
+		normalized, err := normalizeSetupPhysicalPath(values[key])
+		if err != nil {
+			return req, jsonOut, err
+		}
+		values[key] = normalized
+	}
 	switch values["action"] {
 	case "install":
 		req.Action = setupwizard.ActionInstall
@@ -515,6 +580,16 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 	env := setupwizard.ApplyEnvDefaults(setupwizard.Request{})
 	req.EnvCodexHome = env.CodexHome
 	req.EnvClaudeConfig = env.ClaudeConfig
+	for _, path := range []*string{&req.EnvCodexHome, &req.EnvClaudeConfig} {
+		if *path == "" {
+			continue
+		}
+		normalized, normalizeErr := normalizeSetupPhysicalPath(*path)
+		if normalizeErr != nil {
+			return req, jsonOut, normalizeErr
+		}
+		*path = normalized
+	}
 	req.ClientExecutable = values["client-executable"]
 	if values["claude-executable"] != "" || values["codex-executable"] != "" {
 		req.ClientExecutables = map[string]string{}
@@ -537,12 +612,20 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 			req.MCPConfig["claude"] = values["claude-mcp-config"]
 		}
 	}
-	for _, p := range []string{req.PackageRoot, req.PluginRoot, req.ControlRoot, req.RuntimeRoot, req.GlobalConfig, req.CodexHome, req.ClaudeConfig, req.EnvCodexHome, req.EnvClaudeConfig, req.ClientExecutable, req.Helper, req.ScopeRoot, req.ClientExecutables["claude"], req.ClientExecutables["codex"]} {
-		if p != "" && (!filepath.IsAbs(p) || filepath.Clean(p) != p) {
-			return req, jsonOut, errors.New("invalid_arguments")
-		}
-	}
 	return req, jsonOut, nil
+}
+
+// MSYS hands native Windows processes absolute paths using forward slashes.
+// Canonicalize only that separator form; Clean must still reject traversal and
+// nonphysical paths before the values reach the installer or its ACL checks.
+func normalizeSetupPhysicalPath(path string) (string, error) {
+	if runtime.GOOS == "windows" {
+		path = strings.ReplaceAll(path, "/", `\`)
+	}
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return "", errors.New("invalid_arguments")
+	}
+	return path, nil
 }
 
 func parseBoolFlag(v string) (bool, error) {

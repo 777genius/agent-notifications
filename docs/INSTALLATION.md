@@ -35,6 +35,25 @@ After installation:
 - **Codex:** start Codex, run `/hooks`, then review and trust the installed hooks. The installer registers them automatically; no JSON editing or manual registration command is needed. Trust approval remains yours.
 - **Both:** complete both steps above.
 
+When the selected release supports the portable wizard, the installer also registers the
+`agent-notify` MCP server and skill for the selected clients. Restart each selected client
+and open a new session before checking its MCP tools. The agent can call `notify` during a
+task, not only after a Stop hook. For an informational notification, use
+`navigation: "none"`; it does not promise a click back to the exact chat. `notify` returns
+`submitted` when the OS accepted the request, which does not prove that a banner was visible.
+The read-only `notification_status` reports configuration and suppression, not display.
+Desktop notification permission and a visible test send must be checked separately.
+
+The installer reports incomplete setup separately from successful hooks. Keep its retry
+command and selected profile if MCP or skill setup fails; rerun the installer or its
+`setup-notifications wizard` repair action after the cause is resolved. `--skip-agent-notify`
+is an explicit hooks-only choice and does not remove an existing MCP installation.
+Automatic updates preserve an absent MCP client when another selected client already has a binding.
+Use an explicit `--agent-notify` request to add that client later.
+An interrupted installation made by an older UAP release may have a schema 3 directory
+journal without ownership proof. A newer installer stops with `recovery_required` and
+preserves its files for manual inspection; do not delete that journal to force a retry.
+
 Codex requires a published stable plugin release v1.42.0 or newer. The installer downloads matching source and binaries, respects `CODEX_HOME`, and keeps a permanent runtime copy there. It reports an error if no supported release is published yet.
 
 > If installation fails, use [manual Claude installation](#manual-install) or [manual Codex registration](CODEX.md#manual-codex-registration), depending on the product.

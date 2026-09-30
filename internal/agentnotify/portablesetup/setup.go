@@ -20,6 +20,7 @@ var (
 	ErrPreflight           = errors.New("portable setup refused")
 	ErrUpdateRequired      = errors.New("existing clients require explicit update before add")
 	ErrIntentConflict      = errors.New("pending setup intent conflict")
+	ErrConcurrentChange    = errors.New("managed installation changed concurrently")
 	ErrExternalUninstall   = errors.New("external uninstall required")
 	ErrAlreadyAbsent       = errors.New("portable binding is already absent")
 	ErrSourceIdentityDrift = errors.New("confirmed source identity drifted")
@@ -625,6 +626,9 @@ func (s Service) PublishConfirmedIntent(ctx context.Context, req ConfirmedIntent
 		cp := *pending
 		return snap.Ledger, &cp, nil
 	}
+	if snap.Ledger.Generation != req.ExpectedGeneration {
+		return installruntime.Ledger{}, nil, ErrConcurrentChange
+	}
 	consumerID, commitRoot, err := intentConsumer(snap.Ledger, req.RuntimeRoot)
 	if err != nil {
 		return installruntime.Ledger{}, nil, err
@@ -806,52 +810,52 @@ func (s Service) patchIntentLocked(ctx context.Context, controlRoot, runtimeRoot
 
 // FinishConfirmedIntent removes a matching reservation after the whole wizard
 // mutation finished. Incomplete HoldOnly/external uninstall leaves it in place.
-func (s Service) FinishConfirmedIntent(ctx context.Context, req ConfirmedIntent, res *installruntime.PendingMutation) error {
+func (s Service) FinishConfirmedIntent(ctx context.Context, req ConfirmedIntent, res *installruntime.PendingMutation) (uint64, bool, error) {
 	if ctx == nil || res == nil {
-		return nil
+		return 0, false, nil
 	}
 	release, err := installruntime.AcquireCoordinatorLease(ctx, req.ControlRoot)
 	if err != nil {
-		return err
+		return 0, false, err
 	}
 	defer release()
 	if _, err = installruntime.Recover(ctx, req.ControlRoot); err != nil {
-		return err
+		return 0, false, err
 	}
 	snap, err := installruntime.ReadInstalledSnapshot(req.ControlRoot)
 	if err != nil {
-		return err
+		return 0, false, err
 	}
 	if snap.Ledger.PendingMutation == nil {
-		return nil
+		return snap.Ledger.Generation, false, nil
 	}
 	consumerID := "reservation-finalizer"
 	commitRoot := req.RuntimeRoot
 	if len(snap.Ledger.Consumers) != 0 {
 		consumerID, commitRoot, err = intentConsumer(snap.Ledger, req.RuntimeRoot)
 		if err != nil {
-			return err
+			return 0, false, err
 		}
 	}
 	path := IntentPath(req.ControlRoot)
 	before, err := installruntime.Fingerprint(path)
 	if err != nil {
-		return err
+		return 0, false, err
 	}
 	var files []installruntime.File
 	if before.Exists {
 		files = []installruntime.File{{Path: path, Before: before, Remove: true}}
 	}
 	gen := snap.Ledger.Generation
-	_, err = installruntime.Commit(ctx, installruntime.Request{
+	ledger, err := installruntime.Commit(ctx, installruntime.Request{
 		ControlRoot: req.ControlRoot, Owner: req.Owner, RuntimeRoot: commitRoot,
 		ConsumerID: consumerID, RefreshOnly: true, ExpectedGeneration: &gen, Reservation: res, ClearReservation: true,
 		Files: files,
 	})
 	if err != nil {
-		return fmt.Errorf("%w: clear confirmed intent: %v", ErrPreflight, err)
+		return 0, false, fmt.Errorf("%w: clear confirmed intent: %v", ErrPreflight, err)
 	}
-	return nil
+	return ledger.Generation, true, nil
 }
 
 func (s Service) publishIntent(ctx context.Context, req Request, gen uint64, action, stage string, units []string) (installruntime.Ledger, *installruntime.PendingMutation, error) {

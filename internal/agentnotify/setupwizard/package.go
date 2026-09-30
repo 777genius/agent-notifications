@@ -58,6 +58,26 @@ func resolvePackageRoot(ctx context.Context, req Request, recordedPath, recorded
 	return root, cleanup, nil
 }
 
+// PinCurrentReleasePackage is used by the public bootstrap mode when its
+// caller did not provide a verified ZIP. It deliberately ignores the old
+// recorded package, so updating the runtime also updates the portable skill.
+// Pending intents are checked before this function is called and keep their
+// recorded source revision for resume.
+func PinCurrentReleasePackage(ctx context.Context, req Request) (Request, error) {
+	if req.PackageRoot != "" {
+		return req, nil
+	}
+	if req.ReleaseVersion == "" {
+		req.ReleaseVersion = req.DefaultReleaseVersion
+	}
+	root, _, err := resolvePackageRoot(ctx, req, "", "")
+	if err != nil {
+		return req, err
+	}
+	req.PackageRoot = root
+	return req, nil
+}
+
 func openLocalPackage(req Request, source string) (string, func(), error) {
 	cleanup := func() {}
 	info, err := os.Lstat(source)

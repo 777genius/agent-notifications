@@ -103,6 +103,24 @@ func TestNotificationConfigureBothAndRetry(t *testing.T) {
 		t.Fatal("skill source")
 	}
 }
+
+// A portable/UAP-owned MCP entry is intentionally opaque to the legacy
+// registrar. Policy preparation must not inspect or rewrite that entry.
+func TestNotificationConfigurePolicyOnlyPreservesMCP(t *testing.T) {
+	f, request, deps := configureFixture(t)
+	request.Provider = "claude"
+	request.PolicyOnly = true
+	entry := `{"mcpServers":{"agent-notify":{"command":"uap-owned-launcher","args":["--existing"]}},"other":"keep"}`
+	path := filepath.Join(f.root, ".claude.json")
+	setupCommandWrite(t, path, entry, 0600)
+	result, err := configureNotifications(setupCommandContext(t), request, deps)
+	if err != nil || !result.ExplicitIntent || result.Reason != "configured" {
+		t.Fatalf("policy preparation: result=%+v err=%v", result, err)
+	}
+	if got := setupCommandRead(t, path); got != entry {
+		t.Fatalf("MCP entry changed: %s", got)
+	}
+}
 func TestNotificationConfigurePreflightNoWrites(t *testing.T) {
 	for _, kind := range []string{"provider", "relative_home", "fresh_route", "unknown", "collision", "malformed_global", "foreign_registration"} {
 		t.Run(kind, func(t *testing.T) {
