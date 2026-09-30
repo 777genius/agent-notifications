@@ -2,7 +2,6 @@
 """Bounded OpenCode 1.18.33 webhook qualification in a disposable project."""
 
 import argparse
-import csv
 import hashlib
 import json
 import os
@@ -161,14 +160,9 @@ def prepare_sandbox_root(root, os_name):
     """Give every new Windows sandbox child a private inherited DACL."""
     if os_name != "windows":
         return
-    whoami = subprocess.check_output(["whoami", "/user", "/fo", "csv", "/nh"],
-                                     text=True, encoding="utf-8").strip()
-    sid = next(csv.reader([whoami]))[-1]
-    if not re.fullmatch(r"S-1-(?:\d+-)+\d+", sid):
-        raise RuntimeError("could not identify the Windows test account SID")
-    subprocess.run(["icacls", str(root), "/inheritance:r", "/grant:r",
-                    f"*{sid}:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F",
-                    "*S-1-5-32-544:(OI)(CI)F"], check=True, capture_output=True, text=True)
+    repo = pathlib.Path(__file__).resolve().parents[1]
+    run(["go", "run", str(repo / "scripts" / "opencode-private-root-windows.go"),
+         str(root)], cwd=repo, env=os.environ, timeout=90)
 
 
 def main():
