@@ -130,8 +130,8 @@
     "subtitle": "Everything you need to get back to work.",
     "items": {
       "1": {
-        "question": "Do I need both agents installed?",
-        "answer": "Select Claude Code, Codex CLI, both of those, or OpenCode. Install the selected host first; this command installs notifications."
+        "question": "Do I need every agent installed?",
+        "answer": "Select any combination of Claude Code, Codex CLI and OpenCode. Install the selected agents first; the commands below install notifications."
       },
       "2": {
         "question": "Are Codex hooks installed automatically?",
@@ -208,7 +208,7 @@
   "install": {
     "title": "Set up notifications",
     "intro": "Follow the steps below to add desktop notifications to {agent}.",
-    "chooseAgent": "Choose your agent",
+    "chooseAgent": "Choose your agents",
     "requires": "Requires {agent}",
     "bothAgents": "Both agents",
     "bothSelected": "✓ Both agents selected",

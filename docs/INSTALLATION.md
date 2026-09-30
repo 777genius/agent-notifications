@@ -11,7 +11,7 @@
 
 ### Quick Install (Recommended)
 
-Prefer a guided setup? [Open the installation guide](https://777genius.github.io/agent-notifications/#install) to choose your agent, OS and task.
+Prefer a guided setup? [Open the installation guide](https://777genius.github.io/agent-notifications/#install) to choose your agents, OS and task.
 
 The short setup loader handles release lookup and validation internally, then downloads the installer from the exact release commit. Run it and choose Claude, Codex, Claude + Codex, or OpenCode:
 
@@ -28,6 +28,8 @@ For automation or terminals without a controlling TTY, choose explicitly and pre
 ```
 
 Use `claude`, `codex`, or `both` for Claude/Codex. For OpenCode, use `--product opencode --desktop`, `--webhook`, or both channel flags (explicit consent required). The selected host CLI must already be on `PATH`; this installs notifications only.
+
+You can select any combination of the three agents in the guided setup. When OpenCode is selected with Claude or Codex, the copied block runs the Claude/Codex installer first, then the separate OpenCode installer if the first download and installation succeed. If the second installation fails, the first remains installed. OpenCode channel consent applies only to OpenCode; the agent notification tool option applies only to Claude/Codex.
 
 After installation:
 
