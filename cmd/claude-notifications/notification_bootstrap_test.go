@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -260,7 +261,7 @@ main --product both
 	if flagValue(strings.Fields(body), "--claude-mcp-config") != filepath.Join(home, ".claude.json") {
 		t.Fatal("bootstrap must pass the resolved Claude MCP config path", body)
 	}
-	if !strings.Contains(body, "--policy-only --preserve-policy") {
+	if !slices.Contains(strings.Fields(body), "--policy-only") || !slices.Contains(strings.Fields(body), "--preserve-policy") {
 		t.Fatal("portable setup must not let the legacy writer register MCP", body)
 	}
 	// The same public entrypoint previously fell through to direct configure
@@ -279,7 +280,7 @@ main --product both
 		t.Fatal(err)
 	}
 	body = string(calls)
-	if !strings.Contains(body, "setup-notifications wizard") || !strings.Contains(body, "--policy-only --preserve-policy") {
+	if !strings.Contains(body, "setup-notifications wizard") || !slices.Contains(strings.Fields(body), "--policy-only") || !slices.Contains(strings.Fields(body), "--preserve-policy") {
 		t.Fatal("Git Bash must select portable setup", body)
 	}
 	if strings.Contains(body, "--helper "+binary) {
@@ -781,7 +782,7 @@ curl() { printf '#!/bin/sh\necho installed >> "$HOME/installs"\n' > "$4"; }
 	if flagValue(strings.Fields(got), "--claude-config") != filepath.Join(home, ".claude") {
 		t.Fatal("init must pass the default Claude profile", got)
 	}
-	if !strings.Contains(got, "--policy-only --preserve-policy") {
+	if !slices.Contains(strings.Fields(got), "--policy-only") || !slices.Contains(strings.Fields(got), "--preserve-policy") {
 		t.Fatal("init must keep direct MCP writer out of portable setup", got)
 	}
 	// /init must use the same capable Windows path as bootstrap.
@@ -803,7 +804,7 @@ curl() { printf '#!/bin/sh\necho installed >> "$HOME/installs"\n' > "$4"; }
 		t.Fatal(err)
 	}
 	got = string(calls)
-	if !strings.Contains(got, "setup-notifications wizard") || !strings.Contains(got, "--policy-only --preserve-policy") {
+	if !strings.Contains(got, "setup-notifications wizard") || !slices.Contains(strings.Fields(got), "--policy-only") || !slices.Contains(strings.Fields(got), "--preserve-policy") {
 		t.Fatal("Git Bash /init must select portable setup", got)
 	}
 	if strings.Contains(got, "--helper "+launcher) {

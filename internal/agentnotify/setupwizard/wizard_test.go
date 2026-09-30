@@ -466,7 +466,7 @@ func TestWizardDefaultGlobalConfigUsesCanonicalResolverBeforePublishing(t *testi
 
 func TestWizardPendingIntentFreezesGlobalConfigBeforeFirstPortableConsumer(t *testing.T) {
 	ctx := testCtx(t)
-	control, runtimeRoot, _, helper, _ := managedRuntime(t)
+	control, runtimeRoot, _, helper, gen := managedRuntime(t)
 	installationID := "00000000-0000-4000-8000-000000000145"
 	frozen := filepath.Join(filepath.Dir(control), "frozen", "config.json")
 	changed := filepath.Join(filepath.Dir(control), "changed", "config.json")
@@ -476,7 +476,8 @@ func TestWizardPendingIntentFreezesGlobalConfigBeforeFirstPortableConsumer(t *te
 	}
 	_, _, err := (portablesetup.Service{}).PublishConfirmedIntent(ctx, portablesetup.ConfirmedIntent{
 		ControlRoot: control, RuntimeRoot: runtimeRoot, Owner: "existing-installer",
-		Action: "install", GlobalConfig: frozen,
+		ExpectedGeneration: gen,
+		Action:             "install", GlobalConfig: frozen,
 		Targets: []portablesetup.IntentTarget{{Client: "codex", InstallationID: installationID, Units: []string{"agent-notify"}}},
 	})
 	if err != nil {
@@ -1498,6 +1499,46 @@ func TestWizardInstallRecoversPendingJournal(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("install after recover missed binding: %+v", view.Targets)
+	}
+}
+
+func TestWizardBootstrapSelectionDoesNotReplayPendingKernelJournal(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtimeRoot, global, _, generation := managedRuntime(t)
+	probe := buildProbe(t)
+	packageRoot := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, packageRoot, probe)
+	profile := filepath.Join(filepath.Dir(control), "codex-profile")
+	if err := os.MkdirAll(profile, 0700); err != nil {
+		t.Fatal(err)
+	}
+	hook := plantWizardKernelJournal(t, ctx, control, runtimeRoot)
+	journal := filepath.Join(control, "transaction.json")
+	before, err := os.ReadFile(journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	got, err := Run(ctx, Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true, Hooks: &off,
+		BootstrapExpectedGeneration: &generation,
+		PackageRoot:                 packageRoot, ControlRoot: control, RuntimeRoot: runtimeRoot, GlobalConfig: global,
+		CodexHome: profile, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	})
+	if err == nil || got.Outcome != "conflict" || got.Reason != "concurrent_change" {
+		t.Fatalf("bootstrap selection adopted kernel replay: %+v %v", got, err)
+	}
+	after, err := os.ReadFile(journal)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("kernel journal changed: %v", err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil || !snap.Recovery || snap.Ledger.Generation != generation {
+		t.Fatalf("kernel state changed: %+v %v", snap, err)
+	}
+	if _, err := os.Lstat(hook); !os.IsNotExist(err) {
+		t.Fatalf("kernel journal replayed hook: %v", err)
 	}
 }
 
@@ -3205,6 +3246,120 @@ func TestWizardUpdateOmittedUnitsPreservesNotifyOnly(t *testing.T) {
 		if target.Unit == "hooks" && target.Outcome == "installed" {
 			t.Fatalf("omitted update installed hooks: %+v", view.Targets)
 		}
+	}
+}
+
+func TestWizardUpdateOmittedUnitsRespectsHooksRemovedByKernelRecovery(t *testing.T) {
+	ctx := testCtx(t)
+	envHome := t.TempDir()
+	testenv.Set(t, envHome)
+	control, runtimeRoot, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	packageRoot := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, packageRoot, probe)
+	bundle := writePluginBundle(t)
+	canonical := filepath.Join(envHome, "fixture-config.json")
+	if err := os.WriteFile(canonical, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENT_NOTIFICATIONS_CONFIG", canonical)
+	profile := filepath.Join(envHome, "codex-home")
+	if err := os.MkdirAll(profile, 0700); err != nil {
+		t.Fatal(err)
+	}
+	physicalProfile, err := filepath.EvalSymlinks(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile = physicalProfile
+	req := Request{
+		Action: ActionInstall, Agents: []string{"codex"}, Yes: true,
+		Hooks: boolPtr(true), AgentNotify: boolPtr(true),
+		PackageRoot: packageRoot, PluginRoot: bundle,
+		ControlRoot: control, RuntimeRoot: runtimeRoot, GlobalConfig: global,
+		CodexHome: profile, ClientExecutable: probe, Helper: probe,
+		ScopeRoot: filepath.Join(filepath.Dir(control), "scope"),
+	}
+	if err := os.MkdirAll(req.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install both units: %+v %v", installed, err)
+	}
+	units := LiveClientUnits(req, []string{"codex"})
+	if len(units) != 1 || !units[0].Hooks || !units[0].Notify {
+		t.Fatalf("fixture needs both live units: %+v", units)
+	}
+	hooksPath := filepath.Join(profile, "hooks.json")
+	before, err := installruntime.Fingerprint(hooksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumerID := "codex:" + hooksPath
+	hookConsumer, ok := snap.Ledger.Consumers[consumerID]
+	if !ok {
+		t.Fatalf("hooks consumer missing before removal: %v", snap.Ledger.Consumers)
+	}
+	generation := snap.Ledger.Generation
+	_, commitErr := installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: control, Owner: snap.Ledger.Owner,
+		RuntimeRoot: hookConsumer.RuntimeRoot,
+		ConsumerID:  consumerID, RemoveConsumer: true,
+		ExpectedGeneration: &generation,
+		ConfigPaths:        []string{hooksPath},
+		Prepare: func() ([]installruntime.File, error) {
+			return []installruntime.File{{Path: hooksPath, Before: before, Data: []byte("{\"hooks\":{}}\n"), Mode: 0600}}, nil
+		},
+		Fault: func(phase string) error {
+			if phase == "transaction" {
+				return errors.New("fixture: leave pending hooks removal")
+			}
+			return nil
+		},
+	})
+	if commitErr == nil {
+		t.Fatal("kernel fault not reached")
+	}
+	journal := filepath.Join(control, "transaction.json")
+	if _, err := os.Stat(journal); err != nil {
+		t.Fatalf("missing pending hooks removal after %v: %v", commitErr, err)
+	}
+	pending, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil || !pending.Recovery || pending.Ledger.Generation != generation {
+		t.Fatalf("hooks removal was not left pending: %+v %v", pending, err)
+	}
+	units = LiveClientUnits(req, []string{"codex"})
+	if len(units) != 1 || !units[0].Hooks || !units[0].Notify {
+		t.Fatalf("pending removal changed live units before replay: %+v", units)
+	}
+	if err := os.WriteFile(filepath.Join(packageRoot, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	req.Action = ActionUpdate
+	req.Hooks = nil
+	req.AgentNotify = nil
+	updated, err := Run(ctx, req)
+	if err != nil || updated.Outcome != "completed" {
+		t.Fatalf("update after hooks removal: %+v %v", updated, err)
+	}
+	if _, err := os.Stat(journal); !os.IsNotExist(err) {
+		t.Fatalf("kernel journal was not recovered: %v", err)
+	}
+	units = LiveClientUnits(req, []string{"codex"})
+	if len(units) != 1 || units[0].Hooks || !units[0].Notify {
+		t.Fatalf("omitted update changed recovered hooks opt-out: %+v", units)
+	}
+	current, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil || current.Recovery {
+		t.Fatalf("kernel remained in recovery: %+v %v", current, err)
+	}
+	if _, kept := current.Ledger.Consumers[consumerID]; kept {
+		t.Fatalf("removed hooks consumer was restored: %s", consumerID)
 	}
 }
 

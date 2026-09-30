@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -390,6 +391,18 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 }
 
 func run(ctx context.Context, req *Request) (Result, error) {
+	// Evaluation fills omitted unit flags and may restore pending-intent maps.
+	// A recovered kernel journal changes the live set, so keep the caller's
+	// request intact for the second evaluation.
+	original := *req
+	original.Agents = append([]string(nil), req.Agents...)
+	original.PackageRoots = maps.Clone(req.PackageRoots)
+	original.ClientExecutables = maps.Clone(req.ClientExecutables)
+	original.BindingIDs = maps.Clone(req.BindingIDs)
+	original.MigrationBindings = maps.Clone(req.MigrationBindings)
+	original.RemovalBindings = maps.Clone(req.RemovalBindings)
+	original.DataReceiptIDs = maps.Clone(req.DataReceiptIDs)
+	original.MCPConfig = maps.Clone(req.MCPConfig)
 	ev := evaluate(ctx, req, true)
 	if ev.stop {
 		return ev.out, ev.err
@@ -397,6 +410,48 @@ func run(ctx context.Context, req *Request) (Result, error) {
 	if req.Action == ActionInspect {
 		got, err := inspect(ctx, *req, ev.agents, ev.snap, ev.runtimeRoot, ev.out)
 		return attachReadiness(*req, ev.agents, got, false), err
+	}
+	if ev.snap.Recovery {
+		// A journal replay advances the ledger generation. Recover before any
+		// target mutation, then evaluate the recovered state again so intent
+		// publication fences the generation that actually owns those targets.
+		// Automatic bootstrap selected clients from the old state and must
+		// reselect them in a new invocation instead of adopting the replay.
+		if req.BootstrapExpectedGeneration != nil {
+			ev.out.Outcome, ev.out.Reason = "conflict", "concurrent_change"
+			return ev.out, ErrRefused
+		}
+		release, err := installruntime.AcquireCoordinatorLease(ctx, req.ControlRoot)
+		if err != nil {
+			ev.out.Outcome, ev.out.Reason = "incomplete", "recovery_required"
+			return ev.out, err
+		}
+		current, err := installruntime.ReadInstalledSnapshot(req.ControlRoot)
+		if err == nil && (current.Ledger.Generation != ev.snap.Ledger.Generation || !current.Recovery) {
+			err = portablesetup.ErrConcurrentChange
+		}
+		var recovered installruntime.Ledger
+		if err == nil {
+			recovered, err = installruntime.Recover(ctx, req.ControlRoot)
+		}
+		release()
+		if errors.Is(err, portablesetup.ErrConcurrentChange) {
+			ev.out.Outcome, ev.out.Reason = "conflict", "concurrent_change"
+			return ev.out, err
+		}
+		if err != nil {
+			ev.out.Outcome, ev.out.Reason = "incomplete", "recovery_required"
+			return ev.out, err
+		}
+		*req = original
+		ev = evaluate(ctx, req, true)
+		if ev.stop {
+			return ev.out, ev.err
+		}
+		if ev.snap.Recovery || ev.snap.Ledger.Generation != recovered.Generation {
+			ev.out.Outcome, ev.out.Reason = "conflict", "concurrent_change"
+			return ev.out, portablesetup.ErrConcurrentChange
+		}
 	}
 	var got Result
 	var err error
