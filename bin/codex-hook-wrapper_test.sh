@@ -167,6 +167,46 @@ XDG_CACHE_HOME="$ROOT/upgrade-cache" sh upgrade/bin/hook-wrapper.sh handle-hook 
 [ ! -s upgrade-third.stdout ]
 grep -q 'Installation of v1.42.1 failed' upgrade-third.stderr
 [ "$(wc -l < delivered)" -eq "$((before + 3))" ]
+# Regression: a verified working binary retires its version's failure stamp,
+# so a later failure of that version is reported again. On the base wrapper
+# the stamp outlives the repair and the next failure is silent.
+echo '{"version":"1.42.0"}' > upgrade/.claude-plugin/plugin.json
+cat > upgrade/bin/install.sh <<'REPAIRED_UPGRADE'
+#!/bin/sh
+# agent-notifications-managed-writer-protocol-v1
+echo 1.42.0 > "$INSTALL_TARGET_DIR/version"
+REPAIRED_UPGRADE
+XDG_CACHE_HOME="$ROOT/upgrade-cache" sh upgrade/bin/hook-wrapper.sh handle-hook Stop > upgrade-repaired.stdout 2> upgrade-repaired.stderr
+[ ! -s upgrade-repaired.stdout ]
+[ ! -s upgrade-repaired.stderr ]
+[ "$(cat "$ROOT/upgrade-cache/claude-notifications-go/verified-version")" = 1.42.0 ]
+[ ! -d "$ROOT/upgrade-cache/claude-notifications-go/install-failed-1.42.0" ]
+[ -d "$ROOT/upgrade-cache/claude-notifications-go/install-failed-1.42.1" ]
+mv upgrade/bin/claude-notifications upgrade/bin/claude-notifications.wiped
+cat > upgrade/bin/install.sh <<'FAILED_AGAIN'
+#!/bin/sh
+# agent-notifications-managed-writer-protocol-v1
+exit 7
+FAILED_AGAIN
+XDG_CACHE_HOME="$ROOT/upgrade-cache" sh upgrade/bin/hook-wrapper.sh handle-hook Stop > upgrade-wiped.stdout 2> upgrade-wiped.stderr
+grep -q 'Installation of v1.42.0 failed' upgrade-wiped.stdout
+[ ! -s upgrade-wiped.stderr ]
+[ -d "$ROOT/upgrade-cache/claude-notifications-go/install-failed-1.42.0" ]
+mv upgrade/bin/claude-notifications.wiped upgrade/bin/claude-notifications
+# A version verified outside the install path retires its stamp as well,
+# from the cache-miss probe and from a cache hit.
+echo '{"version":"1.42.1"}' > upgrade/.claude-plugin/plugin.json
+echo 1.42.1 > upgrade/bin/version
+XDG_CACHE_HOME="$ROOT/upgrade-cache" sh upgrade/bin/hook-wrapper.sh handle-hook Stop > upgrade-verified.stdout 2> upgrade-verified.stderr
+[ ! -s upgrade-verified.stdout ]
+[ ! -s upgrade-verified.stderr ]
+[ "$(cat "$ROOT/upgrade-cache/claude-notifications-go/verified-version")" = 1.42.1 ]
+[ ! -d "$ROOT/upgrade-cache/claude-notifications-go/install-failed-1.42.1" ]
+mkdir "$ROOT/upgrade-cache/claude-notifications-go/install-failed-1.42.1"
+XDG_CACHE_HOME="$ROOT/upgrade-cache" sh upgrade/bin/hook-wrapper.sh handle-hook Stop > upgrade-cached.stdout 2> upgrade-cached.stderr
+[ ! -s upgrade-cached.stdout ]
+[ ! -s upgrade-cached.stderr ]
+[ ! -d "$ROOT/upgrade-cache/claude-notifications-go/install-failed-1.42.1" ]
 # Regression: a concurrent installer that removes its lock just before
 # publishing a working binary must leave no failure message and must dispatch
 # that binary. On the base wrapper the lock-free gap emits a false failure.

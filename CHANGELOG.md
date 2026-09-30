@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Updating between versioned Claude plugin caches no longer fails with `managed fingerprint changed without transaction` when the retired cache has been restored to the marketplace checkout's contents, whose skill file mode and launcher link differ from what the installer wrote. Files under the cache being retired are de-owned whatever changed in them; a cache still shared with a portable binding keeps the strict check ([#278](https://github.com/777genius/agent-notifications/issues/278)).
+- The hook wrapper retires a version's `install-failed` stamp once it has established that the version's binary is in place (after a successful install, a version probe, or a version-cache hit), so a later failure of the same version is reported again instead of staying silent ([#278](https://github.com/777genius/agent-notifications/issues/278)).
 
 ## [1.46.0] - 2026-09-30
 
