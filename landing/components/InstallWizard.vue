@@ -255,7 +255,7 @@ async function copy() {
             <span>{{ target === "windows" ? "Git Bash" : "Bash" }}</span>
           </div>
         </div>
-        <div class="install-command-line">
+        <div class="install-command-line" dir="ltr">
           <button
             class="copy-icon"
             :aria-label="t('install.copyCommand')"
