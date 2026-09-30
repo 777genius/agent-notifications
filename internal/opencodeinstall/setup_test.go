@@ -141,8 +141,8 @@ func TestWindowsNativeInstallUpdateRemoveAndForeignProtection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !sameWindowsPath(shortcutTarget, installed) || shortcutAppID != OpenCodeToastAppID || shortcutArgs != "--help" {
-		t.Fatalf("installed shortcut target=%q appID=%q args=%q", shortcutTarget, shortcutAppID, shortcutArgs)
+	if !sameWindowsFile(shortcutTarget, installed) || shortcutAppID != OpenCodeToastAppID || shortcutArgs != "--help" {
+		t.Fatalf("installed shortcut target=%q installed=%q appID=%q args=%q", shortcutTarget, installed, shortcutAppID, shortcutArgs)
 	}
 	if err := windowsShortcutReady(r.ControlRoot, installed, r.HomeDir); err != nil {
 		t.Fatal(err)

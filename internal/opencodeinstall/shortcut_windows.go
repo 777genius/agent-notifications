@@ -252,7 +252,7 @@ func windowsShortcutReady(controlRoot, executable, home string) error {
 		return errors.New("installation recovery required")
 	}
 	consumer, ok := ledger.Consumers[consumerID]
-	if !ok || len(consumer.Commands) == 0 || !filepath.IsAbs(executable) || !sameWindowsPath(consumer.Commands[0], executable) {
+	if !ok || len(consumer.Commands) == 0 || !filepath.IsAbs(executable) || !sameWindowsFile(consumer.Commands[0], executable) {
 		return errors.New("OpenCode executable is not registered")
 	}
 	path, err := ownedWindowsShortcutPath(ledger)
@@ -284,7 +284,7 @@ func windowsShortcutReady(controlRoot, executable, home string) error {
 	if err != nil {
 		return err
 	}
-	if !sameWindowsPath(target, executable) || appID != OpenCodeToastAppID || arguments != "--help" {
+	if !sameWindowsFile(target, executable) || appID != OpenCodeToastAppID || arguments != "--help" {
 		return errors.New("OpenCode toast shortcut identity mismatch")
 	}
 	return nil
@@ -292,6 +292,15 @@ func windowsShortcutReady(controlRoot, executable, home string) error {
 
 func sameWindowsPath(a, b string) bool {
 	return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+}
+
+func sameWindowsFile(a, b string) bool {
+	if sameWindowsPath(a, b) {
+		return true
+	}
+	left, leftErr := os.Stat(a)
+	right, rightErr := os.Stat(b)
+	return leftErr == nil && rightErr == nil && os.SameFile(left, right)
 }
 
 func withShellLink(fn func(unsafe.Pointer) error) error {

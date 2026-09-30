@@ -17,6 +17,7 @@ func inspectWindowsShortcut(string) (string, string, string, error) {
 	return "", "", "", errors.New("windows shortcut requires Windows")
 }
 func sameWindowsPath(string, string) bool { return false }
+func sameWindowsFile(string, string) bool { return false }
 func windowsShortcutReady(string, string, string) error {
 	return errors.New("windows shortcut requires Windows")
 }

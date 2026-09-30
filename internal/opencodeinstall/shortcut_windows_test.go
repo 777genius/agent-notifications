@@ -39,8 +39,8 @@ func TestWindowsShortcutContainsTargetAndAppUserModelID(t *testing.T) {
 		t.Skip("released Windows architecture only")
 	}
 	base := t.TempDir()
-	target := filepath.Join(base, "notification.exe")
-	if err := os.WriteFile(target, fixtureBinary("windows", "amd64", "v1"), 0600); err != nil {
+	target, err := os.Executable()
+	if err != nil {
 		t.Fatal(err)
 	}
 	data, err := renderWindowsShortcut(target)
@@ -55,8 +55,8 @@ func TestWindowsShortcutContainsTargetAndAppUserModelID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !sameWindowsPath(gotTarget, target) || gotAppID != OpenCodeToastAppID || gotArgs != "--help" {
-		t.Fatalf("shortcut target=%q appID=%q args=%q", gotTarget, gotAppID, gotArgs)
+	if !sameWindowsFile(gotTarget, target) || gotAppID != OpenCodeToastAppID || gotArgs != "--help" {
+		t.Fatalf("shortcut target=%q executable=%q appID=%q args=%q", gotTarget, target, gotAppID, gotArgs)
 	}
 }
 
