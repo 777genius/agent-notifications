@@ -559,7 +559,7 @@ main ` + test.args + `
 	}
 }
 
-func TestNotificationInitOfflineBranch(t *testing.T) {
+func TestNotificationInitWithoutWizard(t *testing.T) {
 	source, err := os.ReadFile(filepath.Join(notificationRepoRoot(t), "commands", "init.md"))
 	if err != nil {
 		t.Fatal(err)
@@ -574,17 +574,16 @@ func TestNotificationInitOfflineBranch(t *testing.T) {
 		}
 	}
 	if body == "" {
-		t.Fatal("missing init configure script")
+		t.Fatal("missing init script")
 	}
 	for _, test := range []struct {
-		name                      string
-		args                      []string
-		failHelper, fail, install bool
+		name          string
+		args          []string
+		fail, install bool
 	}{
 		{name: "default", install: true},
 		{name: "skip", args: []string{"--skip-agent-notify"}, install: true},
-		{name: "configure", args: []string{"--agent-notify", "--navigation", "none", "--allow-unknown-caller", "true", "--allow-caller-asserted", "false"}, install: true},
-		{name: "failed", failHelper: true, fail: true, install: true},
+		{name: "explicit", args: []string{"--agent-notify", "--navigation", "none", "--allow-unknown-caller", "true", "--allow-caller-asserted", "false"}, fail: true, install: true},
 		{name: "incomplete_none", args: []string{"--agent-notify", "--navigation", "none"}, fail: true},
 		{name: "bad_alias", args: []string{"--configure-notifications"}, fail: true},
 		{name: "bad_route", args: []string{"--navigation", "invalid"}, fail: true},
@@ -601,10 +600,7 @@ func TestNotificationInitOfflineBranch(t *testing.T) {
 			if err := os.MkdirAll(filepath.Join(bundle, "bin"), 0700); err != nil {
 				t.Fatal(err)
 			}
-			helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n"
-			if test.failHelper {
-				helper += "exit 1\n"
-			}
+			helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\nexit 87\n"
 			if err := os.WriteFile(filepath.Join(bundle, "bin", "claude-notifications"), []byte(helper), 0700); err != nil {
 				t.Fatal(err)
 			}
@@ -628,18 +624,11 @@ func TestNotificationInitOfflineBranch(t *testing.T) {
 				t.Fatal("installer not exercised", err)
 			}
 			calls, _ := os.ReadFile(filepath.Join(home, "calls"))
-			if test.name == "skip" {
-				if len(calls) != 0 {
-					t.Fatal("skip configured", string(calls))
-				}
-				return
+			if len(calls) != 0 {
+				t.Fatal("old helper received a mutation", string(calls))
 			}
-			want := "setup-notifications configure --provider claude --navigation none --allow-unknown-caller true --allow-caller-asserted false"
-			if strings.TrimSpace(string(calls)) != want {
-				t.Fatal(string(calls))
-			}
-			if test.failHelper && !strings.Contains(string(output), "agent-notify setup failed") {
-				t.Fatal("missing configure warning", string(output))
+			if test.name != "skip" && !strings.Contains(string(output), "installed binary lacks portable wizard") {
+				t.Fatal("missing compatibility warning", string(output))
 			}
 		})
 	}
@@ -680,7 +669,7 @@ func TestNotificationInitRuntimeReadinessContract(t *testing.T) {
 			if err := os.MkdirAll(filepath.Join(bundle, "bin"), 0700); err != nil {
 				t.Fatal(err)
 			}
-			helper := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n"
+			helper := "#!/bin/sh\nif [ \"$1\" = --help ]; then echo 'setup-notifications wizard'; exit 0; fi\nif [ \"$1 $2\" = 'setup-notifications --help' ]; then echo '--policy-only'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n"
 			if err := os.WriteFile(filepath.Join(bundle, "bin", tc.filename), []byte(helper), tc.mode); err != nil {
 				t.Fatal(err)
 			}
@@ -745,7 +734,7 @@ func TestNotificationInitWizard(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then printf '%s\\n' 'setup-notifications wizard'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n"
+	helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then printf '%s\\n' 'setup-notifications wizard'; exit 0; fi\nif [ \"$1 $2\" = 'setup-notifications --help' ]; then echo '--policy-only'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n"
 	if err := os.WriteFile(filepath.Join(bundle, "bin", "claude-notifications"), []byte(helper), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -839,7 +828,7 @@ func TestNotificationInitWizardConfigureFailureStopsWizard(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	t.Setenv("CLAUDE_PLUGIN_ROOT", bundle)
-	helper := "#!/bin/sh\nif [ \"$1\" = --help ]; then echo 'setup-notifications wizard'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\nexit 7\n"
+	helper := "#!/bin/sh\nif [ \"$1\" = --help ]; then echo 'setup-notifications wizard'; exit 0; fi\nif [ \"$1 $2\" = 'setup-notifications --help' ]; then echo '--policy-only'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\nexit 7\n"
 	if err := os.WriteFile(filepath.Join(bundle, "bin", "claude-notifications"), []byte(helper), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -855,6 +844,83 @@ curl() { printf '#!/bin/sh\n' > "$4"; }
 	calls, _ := os.ReadFile(filepath.Join(home, "calls"))
 	if strings.Contains(string(calls), "setup-notifications wizard") {
 		t.Fatalf("wizard ran after configure failure: %s", calls)
+	}
+}
+
+// A marketplace update can deliver /init from main before the matching binary
+// release exists. In that state the old helper must not become a direct MCP
+// writer for a binding that the new portable wizard may own.
+func TestNotificationInitOldReleaseSkipsPortableSetup(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join(notificationRepoRoot(t), "commands", "init.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body string
+	for _, block := range strings.Split(string(source), "```bash\n")[1:] {
+		chunk := strings.SplitN(block, "```", 2)[0]
+		if strings.Contains(chunk, "setup-notifications wizard") {
+			body = chunk
+			break
+		}
+	}
+	if body == "" {
+		t.Fatal("missing init script")
+	}
+	for _, tc := range []struct {
+		name, uname string
+		explicit    bool
+		failInstall bool
+	}{
+		{name: "automatic_mac", uname: "Darwin"},
+		{name: "explicit_mac", uname: "Darwin", explicit: true},
+		{name: "automatic_windows", uname: "MINGW64_NT-10.0"},
+		{name: "failed_installer", uname: "Darwin", failInstall: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			bundle := filepath.Join(home, "bundle")
+			if err := os.MkdirAll(filepath.Join(bundle, "bin"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("HOME", home)
+			t.Setenv("CLAUDE_PLUGIN_ROOT", bundle)
+			// The released helper advertises wizard, but has no --policy-only.
+			helper := "#!/bin/sh\nif [ \"$1\" = --help ]; then echo 'setup-notifications wizard'; exit 0; fi\nif [ \"$1 $2\" = 'setup-notifications --help' ]; then echo 'Configure requires --provider'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\nexit 87\n"
+			name := "claude-notifications"
+			if strings.HasPrefix(tc.uname, "MINGW") {
+				name += ".bat"
+			}
+			if err := os.WriteFile(filepath.Join(bundle, "bin", name), []byte(helper), 0700); err != nil {
+				t.Fatal(err)
+			}
+			installExit := 0
+			if tc.failInstall {
+				installExit = 37
+			}
+			script := "uname() { echo " + tc.uname + "; }\n" +
+				fmt.Sprintf("curl() { printf '#!/bin/sh\\necho installed >> \"$HOME/installs\"\\nexit %d\\n' > \"$4\"; }\n", installExit) + body
+			args := []string{"-c", script, "init"}
+			if tc.explicit {
+				args = append(args, "--agent-notify")
+			}
+			output, runErr := exec.Command("bash", args...).CombinedOutput()
+			if (runErr != nil) != (tc.explicit || tc.failInstall) {
+				t.Fatalf("unexpected compatibility result: %v %s", runErr, output)
+			}
+			if tc.failInstall {
+				if !strings.Contains(string(output), "Installer failed") || strings.Contains(string(output), "Plugin/hooks install succeeded") {
+					t.Fatalf("failed installer was reported as success: %s", output)
+				}
+			} else if !strings.Contains(string(output), "installed binary predates portable setup") {
+				t.Fatalf("missing compatibility result: %s", output)
+			}
+			if calls, _ := os.ReadFile(filepath.Join(home, "calls")); len(calls) != 0 {
+				t.Fatalf("old binary received a mutation: %s", calls)
+			}
+			if installs, err := os.ReadFile(filepath.Join(home, "installs")); err != nil || strings.TrimSpace(string(installs)) != "installed" {
+				t.Fatalf("hooks install did not finish: %v %s", err, installs)
+			}
+		})
 	}
 }
 
@@ -904,7 +970,7 @@ func TestNotificationInitWizardFailureDoesNotInventRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", filepath.Join(home, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"))
-	helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then printf '%s\\n' 'setup-notifications wizard'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\nif [ \"$1 $2\" = 'setup-notifications configure' ]; then exit 0; fi\nexit 1\n"
+	helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then printf '%s\\n' 'setup-notifications wizard'; exit 0; fi\nif [ \"$1 $2\" = 'setup-notifications --help' ]; then echo '--policy-only'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\nif [ \"$1 $2\" = 'setup-notifications configure' ]; then exit 0; fi\nexit 1\n"
 	if err := os.WriteFile(filepath.Join(bundle, "bin", "claude-notifications"), []byte(helper), 0700); err != nil {
 		t.Fatal(err)
 	}
