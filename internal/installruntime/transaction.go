@@ -508,17 +508,19 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 		if r.RevokeOpenCode {
 			break
 		}
+		// Claude owns the previous versioned cache: it may prune files or
+		// restore the marketplace checkout, whose launcher link and skill mode
+		// differ from what the installer wrote. Nothing here writes to that
+		// root and every entry under it is de-owned below, so drift there is
+		// not a foreign edit and its files are not read.
+		if retireOldCache && pathWithinRoot(previous.RuntimeRoot, path) {
+			continue
+		}
 		got, e := Fingerprint(path)
 		if e != nil {
 			return l, e
 		}
 		if got == want {
-			continue
-		}
-		// Claude owns the previous versioned cache. Once no consumer points at
-		// it, its files may already have been pruned by Claude. De-own only
-		// missing files; a changed existing file is still a foreign edit.
-		if retireOldCache && pathWithinRoot(previous.RuntimeRoot, path) && !got.Exists {
 			continue
 		}
 		if replacing[path] && !got.Exists && want.Exists {
