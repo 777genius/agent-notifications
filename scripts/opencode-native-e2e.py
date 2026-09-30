@@ -2,6 +2,7 @@
 """Bounded OpenCode 1.18.33 webhook qualification in a disposable project."""
 
 import argparse
+import csv
 import hashlib
 import json
 import os
@@ -156,6 +157,21 @@ def wait_for(predicate, seconds, label):
     raise RuntimeError(f"timed out waiting for {label}")
 
 
+def prepare_control_root(root, os_name):
+    """Match a private user control directory on a disposable Windows runner."""
+    if os_name != "windows":
+        return
+    root.mkdir()
+    whoami = subprocess.check_output(["whoami", "/user", "/fo", "csv", "/nh"],
+                                     text=True, encoding="utf-8").strip()
+    sid = next(csv.reader([whoami]))[-1]
+    if not re.fullmatch(r"S-1-(?:\d+-)+\d+", sid):
+        raise RuntimeError("could not identify the Windows test account SID")
+    subprocess.run(["icacls", str(root), "/inheritance:r", "/grant:r",
+                    f"*{sid}:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F",
+                    "*S-1-5-32-544:(OI)(CI)F"], check=True, capture_output=True, text=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=pathlib.Path, required=True)
@@ -233,6 +249,7 @@ def main():
             env.update({"OPENCODE_CONFIG_DIR": str(config_dir), "AGENT_NOTIFICATIONS_CONFIG": str(config),
                         "AGENT_NOTIFICATIONS_CONTROL_ROOT": str(root / "control"), "CI": "true",
                         "NO_COLOR": "1", "OPENCODE_DISABLE_AUTOUPDATE": "1"})
+            prepare_control_root(root / "control", args.os)
             opencode = root / ("opencode.exe" if args.os == "windows" else "opencode")
             if args.archive:
                 extract_opencode(args.archive, opencode, args.os)
