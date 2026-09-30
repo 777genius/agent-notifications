@@ -15,6 +15,7 @@ type AgentID string
 const (
 	AgentClaude                AgentID = "claude"
 	AgentCodex                 AgentID = "codex"
+	AgentOpenCode              AgentID = "opencode"
 	AssetRootPlaceholder               = "AGENT_NOTIFICATIONS_ROOT"
 	LegacyAssetRootPlaceholder         = "CLAUDE_PLUGIN_ROOT"
 )
