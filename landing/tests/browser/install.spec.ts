@@ -452,3 +452,34 @@ test("guided reference layout, detected OS and mode focus", async ({
   ).toBeVisible();
   await context.close();
 });
+
+test("OpenCode selection keeps channel consent explicit and preserves Claude/Codex selection", async ({ page }) => {
+  await page.goto("");
+  await chooseOS(page, "macos");
+  const openCode = page.getByRole("button", { name: "OpenCode", exact: true });
+  await openCode.click();
+  await expect(openCode).toHaveAttribute("aria-pressed", "true");
+  for (const name of ["Claude Code", "Codex CLI"])
+    await expect(page.getByRole("button", { name, exact: true })).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByText(/Tested with OpenCode 1.18.33/)).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: /Let agents send/ })).toHaveCount(0);
+  const desktop = page.getByRole("checkbox", { name: "Allow desktop notifications", exact: true });
+  const webhook = page.getByRole("checkbox", { name: "Allow webhook notifications", exact: true });
+  const command = page.getByLabel("Install command", { exact: true });
+  await expect(command).toHaveValue(/--product opencode --desktop$/);
+  await webhook.check();
+  await expect(command).toHaveValue(/--product opencode --desktop --webhook$/);
+  await desktop.uncheck();
+  await expect(command).toHaveValue(/--product opencode --webhook$/);
+  await webhook.uncheck();
+  await expect(command).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Copy command" })).toHaveCount(0);
+  await desktop.check();
+  await page.getByRole("button", { name: "Configure", exact: true }).click();
+  await expect(page.getByText("/claude-notifications-go:settings", { exact: true })).toHaveCount(0);
+  await expect(page.getByText(/Use config path for shared settings/)).toBeVisible();
+  await page.getByRole("button", { name: "Install", exact: true }).click();
+  await chooseProduct(page, "both");
+  await expect(openCode).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--product both$/);
+});

@@ -16,15 +16,23 @@ async function changeIntent(value: Intent) {
   await nextTick();
   installTitle.value?.focus({ preventScroll: true });
 }
-const selectedProducts = reactive({ claude: true, codex: false });
+const selectedProducts = reactive({ claude: true, codex: false, opencode: false });
 const product = computed<Product>(() =>
-  selectedProducts.claude && selectedProducts.codex
+  selectedProducts.opencode
+    ? "opencode"
+    : selectedProducts.claude && selectedProducts.codex
     ? "both"
     : selectedProducts.codex
       ? "codex"
       : "claude",
 );
-function toggleProduct(value: "claude" | "codex") {
+function toggleProduct(value: "claude" | "codex" | "opencode") {
+  if (value === "opencode") {
+    selectedProducts.opencode = true;
+    selectedProducts.claude = selectedProducts.codex = false;
+    return;
+  }
+  selectedProducts.opencode = false;
   const other = value === "claude" ? "codex" : "claude";
   if (selectedProducts[value] && !selectedProducts[other]) return;
   selectedProducts[value] = !selectedProducts[value];
@@ -51,7 +59,7 @@ const agentName = computed(() =>
     ? t("install.products.both")
     : product.value === "claude"
       ? "Claude Code"
-      : "Codex CLI",
+      : product.value === "opencode" ? "OpenCode" : "Codex CLI",
 );
 const osLabel = computed(
   () =>
@@ -61,8 +69,9 @@ const osLabel = computed(
 const copyStatus = ref("");
 const commandField = ref<HTMLTextAreaElement>();
 const agentNotify = ref(true);
+const openCodeChannels = reactive({ desktop: true, webhook: false });
 const snippet = computed(() =>
-  command(product.value, target.value, intent.value, agentNotify.value),
+  command(product.value, target.value, intent.value, agentNotify.value, openCodeChannels),
 );
 const displaySnippet = computed(() => snippet.value);
 onMounted(() => {
@@ -70,7 +79,7 @@ onMounted(() => {
   if (!manualOverride.value) target.value = detected.value;
   showOSPicker.value = target.value === "unknown";
 });
-watch([product, target, intent, agentNotify], () => {
+watch([product, target, intent, agentNotify, () => openCodeChannels.desktop, () => openCodeChannels.webhook], () => {
   copyStatus.value = "";
 });
 async function copy() {
@@ -112,22 +121,22 @@ async function copy() {
         :key="item.value"
         class="agent-card"
         :aria-label="item.label"
-        :aria-pressed="product === item.value || product === 'both'"
-        @click="toggleProduct(item.value as 'claude' | 'codex')"
+        :aria-pressed="product === item.value || (product === 'both' && item.value !== 'opencode')"
+        @click="toggleProduct(item.value as 'claude' | 'codex' | 'opencode')"
       >
-        <AgentLogo :agent="item.value as 'claude' | 'codex'" />
+        <AgentLogo :agent="item.value as 'claude' | 'codex' | 'opencode'" />
         <span class="agent-card-copy"
           ><strong>{{
-            item.value === "claude" ? "Claude Code" : "Codex CLI"
+            item.label
           }}</strong
           ><span>{{
             t("install.requires", {
-              agent: item.value === "claude" ? "Claude Code" : "Codex CLI",
+              agent: item.label,
             })
           }}</span></span
         >
         <span class="agent-check" aria-hidden="true">{{
-          product === item.value || product === "both" ? "✓" : ""
+          product === item.value || (product === "both" && item.value !== "opencode") ? "✓" : ""
         }}</span>
       </button>
     </div>
@@ -161,14 +170,24 @@ async function copy() {
       />
     </div>
 
-    <p v-if="product !== 'claude'" class="notice install-prerequisite">
+    <p v-if="product === 'codex' || product === 'both'" class="notice install-prerequisite">
       <strong>{{ t("install.prerequisiteTitle") }}</strong>
       {{ t("install.prerequisiteText") }}
       <a :href="repo + '/releases'">{{ t("install.checkReleases") }}</a>.
     </p>
 
+    <div v-if="product === 'opencode'" class="setup-panel instructions">
+      <p>{{ t("install.opencode.scope") }}</p>
+      <p>{{ t("install.opencode.version") }}</p>
+      <template v-if="intent !== 'configure' && target !== 'manual'">
+        <label class="agent-notify-option"><input v-model="openCodeChannels.desktop" type="checkbox" /> {{ t("install.opencode.desktop") }}</label>
+        <label class="agent-notify-option"><input v-model="openCodeChannels.webhook" type="checkbox" /> {{ t("install.opencode.webhook") }}</label>
+        <p v-if="!openCodeChannels.desktop && !openCodeChannels.webhook" role="status">{{ t("install.opencode.chooseChannel") }}</p>
+      </template>
+      <a :href="repo + '/blob/main/docs/opencode-notifications.md'">{{ t("install.opencode.guide") }}</a>
+    </div>
     <label
-      v-if="intent !== 'configure' && target !== 'manual' && target !== 'unknown'"
+      v-if="product !== 'opencode' && intent !== 'configure' && target !== 'manual' && target !== 'unknown'"
       class="agent-notify-option"
     >
       <input
@@ -186,13 +205,13 @@ async function copy() {
       v-if="intent === 'configure'"
       class="setup-panel configuration instructions"
     >
-      <h3>{{ t("install.configure.title") }}</h3>
-      <p v-if="product !== 'codex'">
+      <h3>{{ product === 'opencode' ? t("install.opencode.guide") : t("install.configure.title") }}</h3>
+      <p v-if="product === 'claude' || product === 'both'">
         {{ t("install.configure.claudeBefore") }}
         <code>/claude-notifications-go:settings</code>.
         {{ t("install.configure.claudeAfter") }}
       </p>
-      <p v-if="product !== 'claude'">
+      <p v-if="product === 'codex' || product === 'both'">
         {{ t("install.configure.codexBefore") }}
         <code>config path</code>
         {{ t("install.configure.codexMiddle") }}
@@ -201,22 +220,24 @@ async function copy() {
           >{{ t("install.configure.codexLink") }}</a
         >. {{ t("install.configure.codexAfter") }}
       </p>
-      <p>{{ t("install.configure.shared") }}</p>
+      <p v-if="product === 'opencode'">{{ t("install.opencode.configure") }}</p>
+      <p v-else>{{ t("install.configure.shared") }}</p>
     </div>
     <div v-else-if="target === 'manual'" class="setup-panel instructions">
       <h3>{{ t("install.manual.title") }}</h3>
-      <p v-if="product !== 'codex'">
+      <p v-if="product === 'claude' || product === 'both'">
         <a :href="repo + '/blob/main/docs/INSTALLATION.md#manual-install'">{{
           t("install.manual.claude")
         }}</a>
       </p>
-      <p v-if="product !== 'claude'">
+      <p v-if="product === 'codex' || product === 'both'">
         <a
           :href="repo + '/blob/main/docs/CODEX.md#manual-codex-registration'"
           >{{ t("install.manual.codex") }}</a
         >
       </p>
     </div>
+    <div v-else-if="!snippet && product === 'opencode' && !openCodeChannels.desktop && !openCodeChannels.webhook" class="setup-panel instructions"><p>{{ t("install.opencode.chooseChannel") }}</p></div>
     <div v-else-if="!snippet" class="setup-panel instructions">
       <p>{{ t("install.chooseTarget") }}</p>
     </div>
@@ -327,12 +348,13 @@ async function copy() {
                 })
               }}
             </h3>
-            <p v-if="product !== 'codex'">
+            <p v-if="product === 'claude' || product === 'both'">
               {{ t("install.steps.restartClaude") }}
             </p>
-            <p v-if="product !== 'claude'">
+            <p v-if="product === 'codex' || product === 'both'">
               {{ t("install.steps.restartCodex") }}
             </p>
+            <p v-if="product === 'opencode'">{{ t("install.opencode.restart") }}</p>
           </div>
         </article>
       </div>
@@ -341,7 +363,9 @@ async function copy() {
       <a
         :href="
           repo +
-          (product === 'claude'
+          (product === 'opencode'
+            ? '/blob/main/docs/opencode-notifications.md'
+            : product === 'claude'
             ? '/blob/main/docs/INSTALLATION.md#manual-install'
             : '/blob/main/docs/CODEX.md#manual-codex-registration')
         "

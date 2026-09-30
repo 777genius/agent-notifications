@@ -2,15 +2,18 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	configtemplate "github.com/777genius/agent-notifications/config"
 	"github.com/777genius/agent-notifications/internal/config"
+	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/testenv"
 )
 
@@ -200,5 +203,32 @@ func TestInstallerRootPlaceholderOnlyUsesRegistryOrder(t *testing.T) {
 	}
 	if got := strings.TrimSpace(out.String()); got != first {
 		t.Fatalf("root = %q", got)
+	}
+}
+
+// The installer must report the persisted runtime, even when it differs from
+// the default control/runtime guess. Interrupted state must not print a path.
+func TestInstallerRuntimeRootUsesOwnership(t *testing.T) {
+	box := t.TempDir()
+	testenv.Set(t, box)
+	root := filepath.Join(box, "control")
+	runtimeRoot := filepath.Join(box, "existing runtime")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: root, RuntimeRoot: runtimeRoot, Owner: "existing-installer", ConsumerID: "test-consumer",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	if code := installerConfigCommand([]string{"runtime-root", root}, &out, &stderr); code != 0 || out.String() != runtimeRoot+"\n" {
+		t.Fatalf("runtime lookup = %d %q %q", code, out.String(), stderr.String())
+	}
+	if err := os.WriteFile(filepath.Join(root, "transaction.json"), []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := installerConfigCommand([]string{"runtime-root", root}, &out, &stderr); code == 0 || out.Len() != 0 {
+		t.Fatalf("interrupted state accepted: %d %q", code, out.String())
 	}
 }

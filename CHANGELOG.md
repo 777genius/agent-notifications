@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **OpenCode notifications** for root-session completion, questions, permission requests and terminal errors through the published, pinned UAP OpenCode events adapter 0.1.0 ([#267](https://github.com/777genius/agent-notifications/pull/267)).
 - Managed OpenCode install, update and removal with explicit desktop and webhook consent. Removal revokes delivery even from an already-loaded plugin ([#268](https://github.com/777genius/agent-notifications/pull/268), [#269](https://github.com/777genius/agent-notifications/pull/269)).
+- OpenCode selection and channel consent in the guided installer, official OpenCode branding, and setup guidance across the landing's 12 languages, README and documentation.
 - OpenCode support on macOS arm64/amd64, Linux arm64/amd64 and Windows amd64, qualified with OpenCode 1.18.33. Native lifecycle checks cover completion webhook delivery, update and revocation on all five targets.
 
 ### Platform notes

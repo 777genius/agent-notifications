@@ -1,11 +1,12 @@
 import Bowser from "bowser";
-export type Product = "claude" | "codex" | "both";
+export type Product = "claude" | "codex" | "both" | "opencode";
 export type Target = "unknown" | "macos" | "linux" | "windows" | "manual";
 export type Intent = "install" | "update" | "configure";
 export const products = [
   { value: "claude", label: "Claude Code" },
   { value: "codex", label: "Codex CLI" },
-  { value: "both", label: "Both agents" },
+  { value: "both", label: "Claude + Codex" },
+  { value: "opencode", label: "OpenCode" },
 ] as const;
 export const targets = [
   { value: "unknown", label: "Choose target OS" },
@@ -41,9 +42,15 @@ export function command(
   target: Target,
   intent: Intent,
   agentNotify = true,
+  openCodeChannels: { desktop: boolean; webhook: boolean } = { desktop: true, webhook: false },
 ): string | null {
   if (intent === "configure" || target === "unknown" || target === "manual")
     return null;
+  if (product === "opencode") {
+    if (!openCodeChannels.desktop && !openCodeChannels.webhook) return null;
+    const channels = `${openCodeChannels.desktop ? " --desktop" : ""}${openCodeChannels.webhook ? " --webhook" : ""}`;
+    return `curl -fsSL ${installerUrl} | bash -s -- --product opencode${channels}`;
+  }
   const skip = agentNotify ? "" : " --skip-agent-notify";
   return `curl -fsSL ${installerUrl} | bash -s -- --product ${product}${skip}`;
 }

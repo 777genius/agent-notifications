@@ -52,3 +52,16 @@ test("Bowser OS suggestions and mobile exclusions", () => {
   );
   assert.equal(detectTarget("unknown"), "unknown");
 });
+
+test("OpenCode command requires explicit selected channels and omits MCP flags", () => {
+  for (const target of ["macos", "linux", "windows"] as const) {
+    const prefix = "curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product opencode";
+    assert.equal(command("opencode", target, "install"), prefix + " --desktop");
+    assert.equal(command("opencode", target, "update", false, { desktop: false, webhook: true }), prefix + " --webhook");
+    assert.equal(command("opencode", target, "install", true, { desktop: true, webhook: true }), prefix + " --desktop --webhook");
+    assert.equal(command("opencode", target, "install", true, { desktop: false, webhook: false }), null);
+    assert.equal(command("opencode", target, "configure"), null);
+  }
+  assert.equal(command("opencode", "manual", "install"), null);
+  assert.equal(command("opencode", "unknown", "install"), null);
+});

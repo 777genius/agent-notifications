@@ -66,6 +66,7 @@ CONFIGURE_NOTIFICATIONS=true
 AGENT_NOTIFY_REQUEST=auto
 CONFIGURE_BINARY=""
 CONFIGURE_ARGS=()
+OPENCODE_ARGS=()
 
 # Isolated JSON/checksum runtime. Prefer python3 -I; Node is the supported
 # fallback because Claude Code already ships it. iTerm2 venv still needs a
@@ -154,7 +155,7 @@ abort_if_wsl_environment() {
 # ──────────────────────────────────────────────
 
 check_prerequisites() {
-    if [ "${PRODUCT:-claude}" != codex ] && ! command -v claude &>/dev/null; then
+    if { [ "${PRODUCT:-claude}" = claude ] || [ "$PRODUCT" = both ]; } && ! command -v claude &>/dev/null; then
         echo -e "${RED}✗ claude CLI not found in PATH${NC}" >&2
         echo "" >&2
         echo -e "${YELLOW}Install Claude Code first:${NC}" >&2
@@ -162,12 +163,31 @@ check_prerequisites() {
         echo "" >&2
         exit 1
     fi
-    if [ "${PRODUCT:-claude}" != claude ] && ! command -v codex &>/dev/null; then
+    if { [ "${PRODUCT:-claude}" = codex ] || [ "$PRODUCT" = both ]; } && ! command -v codex &>/dev/null; then
         echo "codex CLI not found in PATH; install Codex first." >&2
         exit 1
     fi
-    if [ "${PRODUCT:-claude}" != claude ] && ! command -v tar &>/dev/null; then
+    if { [ "${PRODUCT:-claude}" = codex ] || [ "$PRODUCT" = both ]; } && ! command -v tar &>/dev/null; then
         echo "tar is required for the Codex source bundle." >&2
+        exit 1
+    fi
+
+    if [ "$PRODUCT" = opencode ] && ! command -v opencode >/dev/null 2>&1; then
+        echo "opencode CLI not found in PATH; install OpenCode first." >&2
+        exit 1
+    fi
+    if [ "$PRODUCT" = opencode ]; then
+        local host_version
+        host_version=$(opencode --version </dev/null) || { echo "Cannot determine OpenCode version." >&2; exit 1; }
+        case "$host_version" in
+            1.*) echo "OpenCode notifications were tested with 1.18.33; detected $host_version." ;;
+            *) echo "OpenCode V2 is not supported by this plugin. Tested host: 1.18.33; detected $host_version." >&2; exit 1 ;;
+        esac
+        [ "$(bootstrap_release_os_arch)" != "windows arm64" ] || { echo "Windows arm64 is not supported." >&2; exit 1; }
+    fi
+    if [ "$PRODUCT" = opencode ] && [ "$(uname -s)" = Darwin ] &&
+        [[ " ${OPENCODE_ARGS[*]} " = *" --desktop "* ]] && ! command -v unzip >/dev/null 2>&1; then
+        echo "unzip is required for the signed macOS notification helper." >&2
         exit 1
     fi
 
@@ -1085,8 +1105,11 @@ select_product() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --product)
-                [ "$#" -ge 2 ] && [ -z "$PRODUCT" ] || { echo "Use --product claude|codex|both once." >&2; return 1; }
+                [ "$#" -ge 2 ] && [ -z "$PRODUCT" ] || { echo "Use --product claude|codex|both|opencode once." >&2; return 1; }
                 PRODUCT="$2"; shift 2 ;;
+            --desktop|--webhook)
+                OPENCODE_ARGS+=("$1")
+                shift ;;
             --agent-notify)
                 seen_agent_notify=true
                 AGENT_NOTIFY_REQUEST=explicit
@@ -1122,7 +1145,7 @@ select_product() {
                 CONFIGURE_ARGS+=("$1")
                 shift ;;
             --help|-h)
-                echo "Usage: bash bootstrap.sh [--product claude|codex|both] [--agent-notify|--skip-agent-notify] [--navigation none]"
+                echo "Usage: bash bootstrap.sh [--product claude|codex|both|opencode] [--desktop] [--webhook] [--agent-notify|--skip-agent-notify] [--navigation none]"
                 exit 0 ;;
             *) echo "Unknown option: $1" >&2; return 1 ;;
         esac
@@ -1131,19 +1154,12 @@ select_product() {
         echo "--agent-notify and --skip-agent-notify are mutually exclusive." >&2
         return 1
     fi
-    if [ "$CONFIGURE_NOTIFICATIONS" = true ]; then
-        complete_configure_route || return 1
-    fi
-    if [ "$CONFIGURE_NOTIFICATIONS" != true ] && [ "${#CONFIGURE_ARGS[@]}" -ne 0 ]; then
-        echo "Route flags require --agent-notify." >&2
-        return 1
-    fi
     if [ -z "$PRODUCT" ]; then
         if ! { exec 3<>/dev/tty; } 2>/dev/null; then
-            echo "No controlling TTY. Specify --product claude|codex|both." >&2
+            echo "No controlling TTY. Specify --product claude|codex|both|opencode." >&2
             return 1
         fi
-        printf 'Install notifications for: 1) Claude  2) Codex  3) Both\nChoice: ' >&3
+        printf 'Install notifications for: 1) Claude  2) Codex  3) Claude + Codex  4) OpenCode\nChoice: ' >&3
         local choice=""
         IFS= read -r choice <&3 || true
         exec 3>&-
@@ -1151,13 +1167,45 @@ select_product() {
             1|claude) PRODUCT=claude ;;
             2|codex) PRODUCT=codex ;;
             3|both) PRODUCT=both ;;
-            *) echo "Invalid product choice; use claude, codex or both." >&2; return 1 ;;
+            4|opencode) PRODUCT=opencode ;;
+            *) echo "Invalid product choice; use claude, codex, both or opencode." >&2; return 1 ;;
         esac
     fi
     case "$PRODUCT" in
-        claude|codex|both) ;;
-        *) echo "Invalid product: $PRODUCT; use claude, codex or both." >&2; return 1 ;;
+        claude|codex|both|opencode) ;;
+        *) echo "Invalid product: $PRODUCT; use claude, codex, both or opencode." >&2; return 1 ;;
     esac
+    if [ "$PRODUCT" = opencode ]; then
+        if [ "$seen_agent_notify" = true ] || [ "$seen_skip_agent_notify" = true ] || [ "${#CONFIGURE_ARGS[@]}" -ne 0 ]; then
+            echo "OpenCode uses --desktop/--webhook consent, not agent-notify or navigation flags." >&2
+            return 1
+        fi
+        if [ "${#OPENCODE_ARGS[@]}" -eq 0 ]; then
+            if ! { exec 3<>/dev/tty; } 2>/dev/null; then
+                echo "OpenCode requires explicit --desktop and/or --webhook consent." >&2
+                return 1
+            fi
+            printf 'OpenCode channels: 1) Desktop  2) Webhook  3) Both\nChoice: ' >&3
+            local channel=""
+            IFS= read -r channel <&3 || true
+            exec 3>&-
+            case "$channel" in
+                1) OPENCODE_ARGS=(--desktop) ;;
+                2) OPENCODE_ARGS=(--webhook) ;;
+                3) OPENCODE_ARGS=(--desktop --webhook) ;;
+                *) echo "Choose OpenCode channels explicitly." >&2; return 1 ;;
+            esac
+        fi
+        CONFIGURE_NOTIFICATIONS=false
+        return 0
+    fi
+    [ "${#OPENCODE_ARGS[@]}" -eq 0 ] || { echo "--desktop/--webhook require --product opencode." >&2; return 1; }
+    if [ "$CONFIGURE_NOTIFICATIONS" = true ]; then
+        complete_configure_route || return 1
+    elif [ "${#CONFIGURE_ARGS[@]}" -ne 0 ]; then
+        echo "Route flags require --agent-notify." >&2
+        return 1
+    fi
 }
 
 bootstrap_cleanup() {
@@ -1229,6 +1277,11 @@ resolve_bootstrap_release() {
         return 1
     fi
 
+    if [ "$PRODUCT" = opencode ] && [ "$major" -eq 1 ] && [ "$minor" -lt 46 ]; then
+        echo "OpenCode bootstrap requires published release v1.46.0 or newer; found $BOOTSTRAP_TAG." >&2
+        return 1
+    fi
+
     BOOTSTRAP_COMMIT="${BOOTSTRAP_RELEASE_COMMIT:-}"
     if [ -n "$BOOTSTRAP_COMMIT" ]; then
         printf '%s\n' "$BOOTSTRAP_COMMIT" | grep -Eq '^[0-9a-f]{40}$' || {
@@ -1284,7 +1337,7 @@ stage_config_helper() {
     _CONFIG_STAGE=$(mktemp -d "/tmp/bootstrap-config-XXXXXX") || return 1
     # Snapshot the pre-update registry, not a guessed cache version. Later
     # registrations introduce packaged templates, not historical user settings.
-    if [ "$PRODUCT" != codex ] && [ -e "$INSTALLED_JSON" ]; then
+    if { [ "$PRODUCT" = claude ] || [ "$PRODUCT" = both ]; } && [ -e "$INSTALLED_JSON" ]; then
         cp "$INSTALLED_JSON" "$_CONFIG_STAGE/installed-before.json" || return 1
     else
         printf '{"plugins":{}}\n' > "$_CONFIG_STAGE/installed-before.json"
@@ -1519,6 +1572,56 @@ install_claude() {
     fi
 }
 
+# OpenCode setup owns its plugin, native executable and independent channel
+# consent. Acquisition stays temporary; only the verified Go transaction writes
+# the managed installation. It never launches or installs the OpenCode host.
+install_opencode() {
+    local root binary runtime os arch base native native_root config_path installed
+    root=$(bootstrap_control_root) || return 1
+    read -r os arch < <(bootstrap_release_os_arch) || return 1
+    [ "$os-$arch" != windows-arm64 ] || { echo "Windows arm64 is not a supported release target." >&2; return 1; }
+    binary="$_CONFIG_HELPER"
+    runtime="$root/runtime"
+    if [ "$os" = windows ]; then
+        command -v cygpath >/dev/null 2>&1 || { echo "Git Bash cygpath is required for native Windows paths." >&2; return 1; }
+        binary=$(cygpath -m "$binary") || return 1
+        runtime=$(cygpath -m "$runtime") || return 1
+    fi
+    set -- setup-opencode install --binary "$binary" "${OPENCODE_ARGS[@]}"
+    # Existing shared components supply their authoritative runtime directory.
+    [ -e "$root/ownership.json" ] || set -- "$@" --runtime-root "$runtime"
+    if [ "$os" = darwin ] && [[ " ${OPENCODE_ARGS[*]} " = *" --desktop "* ]]; then
+        base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG"
+        native="$_CONFIG_STAGE/ClaudeNotifier.app"
+        fetch_bootstrap_file "$base/ClaudeNotifier.app.zip" "$_CONFIG_STAGE/ClaudeNotifier.app.zip" || return 1
+        verify_bootstrap_checksum "$_CONFIG_STAGE" ClaudeNotifier.app.zip || return 1
+        unzip -q "$_CONFIG_STAGE/ClaudeNotifier.app.zip" -d "$_CONFIG_STAGE" || return 1
+        [ -f "$native.managed-runtime.json" ] || { echo "Signed native helper attestation is missing." >&2; return 1; }
+        # StageNative checks sealed decoder floor, attestation and OS signature.
+        set -- "$@" --native-app "$native"
+    fi
+    "$_CONFIG_HELPER" "$@" </dev/null || return 1
+    native_root="$root"
+    [ "$os" != windows ] || native_root=$(cygpath -m "$root") || return 1
+    runtime=$("$_CONFIG_HELPER" config installer runtime-root "$native_root") || return 1
+    installed="$runtime/claude-notifications-$os-$arch"
+    [ "$os" != windows ] || installed="$installed.exe"
+    initialize_config || return 1
+    config_path=$("$_CONFIG_HELPER" config path) || return 1
+    printf 'Installed executable: %s\nShared settings: %s\n' "$installed" "$config_path"
+    echo "OpenCode installed. Restart OpenCode to load the global plugin."
+    echo "OpenCode sends silent completion, question, permission and error alerts; no click-to-focus."
+    if [ "$os" = darwin ] && [[ " ${OPENCODE_ARGS[*]} " = *" --desktop "* ]]; then
+        printf 'Check permission: %s\n' "$(quote_shell_command "$installed" setup-opencode permission-status)"
+        printf 'Grant permission: %s\n' "$(quote_shell_command "$installed" setup-opencode request-permission)"
+    fi
+    if [[ " ${OPENCODE_ARGS[*]} " = *" --webhook "* ]]; then
+        echo "Webhook consent is recorded. Configure and enable your webhook destination and status channel in the shared settings before delivery."
+    fi
+    printf 'Remove: %s\n' "$(quote_shell_command "$installed" setup-opencode remove)"
+    printf 'Managed installation records: %s/ownership.json\n' "$root"
+}
+
 main() {
     select_product "$@" || return 1
     print_header
@@ -1528,6 +1631,10 @@ main() {
     install_cleanup_traps
     resolve_bootstrap_release || return 1
     stage_config_helper || { echo "Cannot stage verified config helper; existing runtime retained." >&2; return 1; }
+    if [ "$PRODUCT" = opencode ]; then
+        install_opencode
+        return $?
+    fi
     stage_historical_baselines || return 1
     config_preflight || return 1
     if [ "$PRODUCT" != codex ]; then

@@ -364,3 +364,15 @@ else:
 run_runtime_case('stub python3 without node', python=False, node=False, stub_python=True, expected=0)
 print('All setup loader fixtures passed (no public network or real agent CLIs).')
 PY
+
+# Reuse the native binary already built by each OS CI job. No host is launched;
+# the lifecycle suite creates an isolated disposable profile.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) native_binary="$ROOT/bin/claude-notifications.exe" ;;
+    *) native_binary="$ROOT/bin/claude-notifications" ;;
+esac
+if [ -f "$native_binary" ]; then
+    bash "$ROOT/bin/bootstrap_opencode_test.sh" "$native_binary"
+else
+    echo "SKIP OpenCode bootstrap lifecycle: build the native CLI first."
+fi

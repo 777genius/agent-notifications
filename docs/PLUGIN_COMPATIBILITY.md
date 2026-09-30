@@ -2,6 +2,17 @@
 
 Compatible with other Claude Code plugins that spawn background Claude instances.
 
+## OpenCode
+
+OpenCode integration is a self-contained global plugin, separate from Claude
+marketplace plugins and Codex hooks. The tested host is 1.18.33; V2 is not
+supported. Only generic root-session completion, question, permission and error
+notifications are covered. It does not inherit portable MCP consent, sound or
+click-to-focus behavior. Other global/project notification plugins and OpenCode's
+native desktop alerts can cause duplicates. Disable overlapping sources in the
+profile rather than installing this plugin twice. Owned or foreign plugin
+conflicts are preserved and reported. [Setup and compatibility limits](opencode-notifications.md).
+
 ## double-shot-latte
 
 **[double-shot-latte](https://github.com/obra/double-shot-latte)** — auto-continue plugin that uses a background Claude instance for context evaluation. Notifications are automatically suppressed for the background judge process (via `CLAUDE_HOOK_JUDGE_MODE=true` environment variable).

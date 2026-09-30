@@ -4,7 +4,7 @@
 
 ### Prerequisites
 
-- Claude Code and/or Codex CLI for the products you select
+- Claude Code, Codex CLI and/or OpenCode for the products you select (OpenCode tested with 1.18.33; V2 unsupported)
 - `curl` and Bash
 - **Windows users:** Git Bash (included with [Git for Windows](https://git-scm.com/download/win)). Do not use WSL for a native Windows installation.
 - Python remains optional only for iTerm2 exact tab/pane targeting.
@@ -13,7 +13,7 @@
 
 Prefer a guided setup? [Open the installation guide](https://777genius.github.io/agent-notifications/#install) to choose your agent, OS and task.
 
-The short setup loader handles release lookup and validation internally, then downloads the installer from the exact release commit. Run it and choose Claude, Codex, or both:
+The short setup loader handles release lookup and validation internally, then downloads the installer from the exact release commit. Run it and choose Claude, Codex, Claude + Codex, or OpenCode:
 
 ```bash
 curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash
@@ -27,13 +27,14 @@ For automation or terminals without a controlling TTY, choose explicitly and pre
 (set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product codex)
 ```
 
-Use `claude`, `codex`, or `both`. This installs the notifications plugin; the selected Claude Code / Codex CLI must already be on `PATH`.
+Use `claude`, `codex`, or `both` for Claude/Codex. For OpenCode, use `--product opencode --desktop`, `--webhook`, or both channel flags (explicit consent required). The selected host CLI must already be on `PATH`; this installs notifications only.
 
 After installation:
 
 - **Claude:** restart Claude Code. Optionally run `/claude-notifications-go:settings` to configure sounds.
 - **Codex:** start Codex, run `/hooks`, then review and trust the installed hooks. The installer registers them automatically; no JSON editing or manual registration command is needed. Trust approval remains yours.
 - **Both:** complete both steps above.
+- **OpenCode:** restart OpenCode to load its global plugin. On Mac, explicitly grant notification permission. OpenCode bootstrap requires release v1.46.0 or newer; see [OpenCode setup, channels and limits](opencode-notifications.md).
 
 Codex requires a published stable plugin release v1.42.0 or newer. The installer downloads matching source and binaries, respects `CODEX_HOME`, and keeps a permanent runtime copy there. It reports an error if no supported release is published yet.
 
@@ -71,7 +72,7 @@ Run these slash commands in the Claude Code chat, not in your system terminal:
 
 Run the [secure install command](#quick-install-recommended) again and choose the product(s) you want to update.
 
-For Claude, restart Claude Code. For Codex, restart Codex and inspect `/hooks`; changed hook definitions may need trust approval again. The installer refreshes the Codex runtime and registration automatically. Existing foreign hooks and shared settings in the file selected by `config path` are preserved.
+For OpenCode, rerun with explicitly chosen desktop/webhook flags; the idempotent install action updates the registered runtime. Restart OpenCode. For Claude, restart Claude Code. For Codex, restart Codex and inspect `/hooks`; changed hook definitions may need trust approval again. The installer refreshes the Codex runtime and registration automatically. Existing foreign hooks and shared settings in the file selected by `config path` are preserved.
 
 <details>
 <summary>Manual Claude update (if bootstrap didn't work)</summary>
@@ -88,6 +89,8 @@ If the binary auto-update didn't work (e.g. no internet at the time), run `/clau
 </details>
 
 ### Uninstalling
+
+**OpenCode:** run `setup-opencode remove` using the installed managed executable, then restart OpenCode. Removal revokes its consent before deleting owned files and preserves other consumers. [Detailed removal/recovery commands](opencode-notifications.md#change-channels-remove-or-recover).
 
 **Claude:**
 
