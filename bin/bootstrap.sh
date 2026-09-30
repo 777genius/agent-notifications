@@ -1800,6 +1800,13 @@ acquire_wizard_portable_asset() {
 }
 
 setup_agent_notify_wizard() {
+    local policy_help
+    policy_help=$("$CONFIGURE_BINARY" setup-notifications --help </dev/null 2>/dev/null) || policy_help=""
+    if [[ "$policy_help" != *--policy-only* || "$policy_help" != *--preserve-enabled* ]]; then
+        echo "agent-notify setup skipped; installed binary predates portable setup. Plugin/hooks install succeeded. Update to a matching release before enabling MCP." >&2
+        [ "$AGENT_NOTIFY_REQUEST" != explicit ] || return 1
+        return 0
+    fi
     local agents package_root install_root wizard_codex_home="$DEFAULT_CODEX_HOME" i=0
     local claude_exec="" codex_exec="" plugin_root
     WIZARD_PACKAGE_ROOT=""

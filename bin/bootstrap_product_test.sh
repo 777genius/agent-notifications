@@ -257,7 +257,7 @@ rm -rf "$_PORTABLE_STAGE"
 _PORTABLE_STAGE=""
 mkdir -p "$SANDBOX/temp" "$SANDBOX/config-stage"
 printf 'preflight-state' > "$SANDBOX/config-stage/baseline"
-printf '%s\n' '#!/bin/sh' 'exit 1' > "$SANDBOX/fail-wizard"
+printf '%s\n' '#!/bin/sh' 'if [ "$1 $2" = "setup-notifications --help" ]; then echo "--policy-only --preserve-enabled"; exit 0; fi' 'exit 1' > "$SANDBOX/fail-wizard"
 chmod +x "$SANDBOX/fail-wizard"
 (
     set +e
@@ -364,7 +364,7 @@ mkdir -p "$PLUGIN_ROOT/portable-package"
 printf '{}' > "$PLUGIN_ROOT/portable-package/plugin.json"
 CONFIGURE_BINARY="$SANDBOX/capture-wizard"
 export WIZARD_CAPTURE="$SANDBOX/wizard-args"
-printf '%s\n' '#!/bin/bash' 'printf "%s\n" "$@" > "$WIZARD_CAPTURE"' > "$CONFIGURE_BINARY"
+printf '%s\n' '#!/bin/bash' 'if [ "$1 $2" = "setup-notifications --help" ]; then echo "--policy-only --preserve-enabled"; exit 0; fi' 'printf "%s\n" "$@" > "$WIZARD_CAPTURE"' > "$CONFIGURE_BINARY"
 chmod +x "$CONFIGURE_BINARY"
 configure_agent_policy() { return 0; }
 bootstrap_abs_command() { return 1; }
@@ -759,7 +759,7 @@ if os.name != 'nt':
     release=web/'download/v2.0.0'
     original_payload=(release/asset_name).read_bytes()
     original_checksums=(release/'checksums.txt').read_bytes()
-    wizard_payload=capable.replace('setup-notifications', 'setup-notifications wizard', 1).replace('v1.42.0', 'v2.0.0').encode('utf-8')
+    wizard_payload=capable.replace('setup-notifications', 'setup-notifications wizard', 1).replace("if args[0]=='setup-notifications':", "if args[:2]==['setup-notifications','--help']:\n    print('--policy-only --preserve-enabled'); sys.exit()\nif args[0]=='setup-notifications':", 1).replace('v1.42.0', 'v2.0.0').encode('utf-8')
     portable_name='agent-notify-portable-'+asset_os+'-'+asset_arch+'.zip'
     portable_payload=b'verified portable argv fixture'
     (release/asset_name).write_bytes(wizard_payload)

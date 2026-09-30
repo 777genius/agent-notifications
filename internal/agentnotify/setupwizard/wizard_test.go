@@ -7250,7 +7250,7 @@ func TestWizardResumeRestoresExternalUninstalledFromIntent(t *testing.T) {
 	if err == nil || held.Outcome != "incomplete" || held.Reason != "external_uninstall_required" {
 		t.Fatalf("hold: %+v %v", held, err)
 	}
-	if err := (portablesetup.Service{}).PatchIntentExternalUninstalled(ctx, control, runtime, ""); err != nil {
+	if err := (portablesetup.Service{}).PatchIntentExternalUninstalled(ctx, control, runtime, "", held.reservation); err != nil {
 		t.Fatal(err)
 	}
 	resume := Request{

@@ -202,7 +202,7 @@ func TestNotificationBootstrapWizard(t *testing.T) {
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	binary := filepath.Join(home, "fake-binary")
-	helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then printf '%s\\n' 'setup-notifications wizard' 'setup-notifications' '--skip-agent-notify'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n"
+	helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then printf '%s\\n' 'setup-notifications wizard' 'setup-notifications' '--skip-agent-notify'; exit 0; fi\nif [ \"$1 $2\" = 'setup-notifications --help' ]; then echo '--policy-only --preserve-enabled'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n"
 	if err := os.WriteFile(binary, []byte(helper), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -304,6 +304,26 @@ main --product both
 	if strings.Contains(body, "--helper "+binary) {
 		t.Fatal("Git Bash launcher cannot be a native helper", body)
 	}
+	// A released wizard with --policy-only but no --preserve-enabled must
+	// never receive a mutating configure or wizard call from this entrypoint.
+	if err := os.WriteFile(binary, []byte(strings.Replace(helper, "--policy-only --preserve-enabled", "--policy-only", 1)), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, oldScript := range map[string]string{"automatic": script, "explicit": explicitScript, "git_bash": windowsScript} {
+		if err := os.Remove(filepath.Join(home, "calls")); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		command = exec.Command("bash", "-c", oldScript)
+		command.Dir = home
+		output, err = command.CombinedOutput()
+		if (name == "explicit") != (err != nil) || !strings.Contains(string(output), "Update to a matching release") {
+			t.Fatalf("old CLI %s: %v: %s", name, err, output)
+		}
+		calls, _ = os.ReadFile(filepath.Join(home, "calls"))
+		if len(calls) != 0 {
+			t.Fatalf("old CLI %s received mutations: %s", name, calls)
+		}
+	}
 }
 
 func TestNotificationBootstrapWizardFailureDoesNotInventRetry(t *testing.T) {
@@ -340,7 +360,7 @@ func TestNotificationBootstrapWizardFailureDoesNotInventRetry(t *testing.T) {
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	binary := filepath.Join(home, "fake binary")
-	helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then printf '%s\\n' 'setup-notifications wizard' 'setup-notifications' '--skip-agent-notify'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n[ \"$2\" = configure ] && exit 0\nexit 1\n"
+	helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then printf '%s\\n' 'setup-notifications wizard' 'setup-notifications' '--skip-agent-notify'; exit 0; fi\nif [ \"$1 $2\" = 'setup-notifications --help' ]; then echo '--policy-only --preserve-enabled'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n[ \"$2\" = configure ] && exit 0\nexit 1\n"
 	if err := os.WriteFile(binary, []byte(helper), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -451,7 +471,7 @@ func TestNotificationBootstrapWizardReleaseZip(t *testing.T) {
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	binary := filepath.Join(home, "fake-binary")
-	helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then printf '%s\\n' 'setup-notifications wizard' 'setup-notifications' '--skip-agent-notify'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n"
+	helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then printf '%s\\n' 'setup-notifications wizard' 'setup-notifications' '--skip-agent-notify'; exit 0; fi\nif [ \"$1 $2\" = 'setup-notifications --help' ]; then echo '--policy-only --preserve-enabled'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n"
 	if err := os.WriteFile(binary, []byte(helper), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -536,7 +556,7 @@ func TestNotificationBootstrapWizardMissingPortable(t *testing.T) {
 			t.Setenv("CODEX_HOME", filepath.Join(home, "codex"))
 			t.Setenv("CLAUDE_CONFIG_DIR", "")
 			binary := filepath.Join(home, "fake-binary")
-			helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then printf '%s\\n' 'setup-notifications wizard' 'setup-notifications' '--skip-agent-notify'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n"
+			helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then printf '%s\\n' 'setup-notifications wizard' 'setup-notifications' '--skip-agent-notify'; exit 0; fi\nif [ \"$1 $2\" = 'setup-notifications --help' ]; then echo '--policy-only --preserve-enabled'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n"
 			if err := os.WriteFile(binary, []byte(helper), 0700); err != nil {
 				t.Fatal(err)
 			}
@@ -687,7 +707,7 @@ func TestNotificationInitRuntimeReadinessContract(t *testing.T) {
 			if err := os.MkdirAll(filepath.Join(bundle, "bin"), 0700); err != nil {
 				t.Fatal(err)
 			}
-			helper := "#!/bin/sh\nif [ \"$1\" = --help ]; then echo 'setup-notifications wizard'; exit 0; fi\nif [ \"$1 $2\" = 'setup-notifications --help' ]; then echo '--policy-only'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n"
+			helper := "#!/bin/sh\nif [ \"$1\" = --help ]; then echo 'setup-notifications wizard'; exit 0; fi\nif [ \"$1 $2\" = 'setup-notifications --help' ]; then echo '--policy-only --preserve-enabled'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n"
 			if err := os.WriteFile(filepath.Join(bundle, "bin", tc.filename), []byte(helper), tc.mode); err != nil {
 				t.Fatal(err)
 			}
@@ -752,7 +772,7 @@ func TestNotificationInitWizard(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then printf '%s\\n' 'setup-notifications wizard'; exit 0; fi\nif [ \"$1 $2\" = 'setup-notifications --help' ]; then echo '--policy-only'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n"
+	helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then printf '%s\\n' 'setup-notifications wizard'; exit 0; fi\nif [ \"$1 $2\" = 'setup-notifications --help' ]; then echo '--policy-only --preserve-enabled'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\n"
 	if err := os.WriteFile(filepath.Join(bundle, "bin", "claude-notifications"), []byte(helper), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -862,7 +882,7 @@ func TestNotificationInitWizardConfigureFailureStopsWizard(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	t.Setenv("CLAUDE_PLUGIN_ROOT", bundle)
-	helper := "#!/bin/sh\nif [ \"$1\" = --help ]; then echo 'setup-notifications wizard'; exit 0; fi\nif [ \"$1 $2\" = 'setup-notifications --help' ]; then echo '--policy-only'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\nexit 7\n"
+	helper := "#!/bin/sh\nif [ \"$1\" = --help ]; then echo 'setup-notifications wizard'; exit 0; fi\nif [ \"$1 $2\" = 'setup-notifications --help' ]; then echo '--policy-only --preserve-enabled'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\nexit 7\n"
 	if err := os.WriteFile(filepath.Join(bundle, "bin", "claude-notifications"), []byte(helper), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -904,11 +924,15 @@ func TestNotificationInitOldReleaseSkipsPortableSetup(t *testing.T) {
 		name, uname string
 		explicit    bool
 		failInstall bool
+		policyOnly  bool
 	}{
 		{name: "automatic_mac", uname: "Darwin"},
 		{name: "explicit_mac", uname: "Darwin", explicit: true},
 		{name: "automatic_windows", uname: "MINGW64_NT-10.0"},
 		{name: "failed_installer", uname: "Darwin", failInstall: true},
+		{name: "automatic_old_policy", uname: "Darwin", policyOnly: true},
+		{name: "explicit_old_policy", uname: "Darwin", explicit: true, policyOnly: true},
+		{name: "windows_old_policy", uname: "MINGW64_NT-10.0", policyOnly: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
@@ -920,6 +944,9 @@ func TestNotificationInitOldReleaseSkipsPortableSetup(t *testing.T) {
 			t.Setenv("CLAUDE_PLUGIN_ROOT", bundle)
 			// The released helper advertises wizard, but has no --policy-only.
 			helper := "#!/bin/sh\nif [ \"$1\" = --help ]; then echo 'setup-notifications wizard'; exit 0; fi\nif [ \"$1 $2\" = 'setup-notifications --help' ]; then echo 'Configure requires --provider'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\nexit 87\n"
+			if tc.policyOnly {
+				helper = strings.Replace(helper, "Configure requires --provider", "--policy-only", 1)
+			}
 			name := "claude-notifications"
 			if strings.HasPrefix(tc.uname, "MINGW") {
 				name += ".bat"
@@ -1004,7 +1031,7 @@ func TestNotificationInitWizardFailureDoesNotInventRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", filepath.Join(home, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"))
-	helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then printf '%s\\n' 'setup-notifications wizard'; exit 0; fi\nif [ \"$1 $2\" = 'setup-notifications --help' ]; then echo '--policy-only'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\nif [ \"$1 $2\" = 'setup-notifications configure' ]; then exit 0; fi\nexit 1\n"
+	helper := "#!/bin/sh\nif [ \"$1\" = --help ] || [ \"$1\" = help ]; then printf '%s\\n' 'setup-notifications wizard'; exit 0; fi\nif [ \"$1 $2\" = 'setup-notifications --help' ]; then echo '--policy-only --preserve-enabled'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\nif [ \"$1 $2\" = 'setup-notifications configure' ]; then exit 0; fi\nexit 1\n"
 	if err := os.WriteFile(filepath.Join(bundle, "bin", "claude-notifications"), []byte(helper), 0700); err != nil {
 		t.Fatal(err)
 	}

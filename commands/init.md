@@ -137,7 +137,8 @@ if [ "$SKIP_AGENT_NOTIFY" != true ]; then
     echo "agent-notify setup skipped; installer binary not found. Plugin install succeeded." >&2
     [ "$SEEN_AGENT_NOTIFY" != true ] || exit 1
   elif [ "$USE_WIZARD" = true ] && "$NOTIFY_BIN" --help </dev/null 2>/dev/null | grep -Fq -- 'setup-notifications wizard'; then
-    if ! "$NOTIFY_BIN" setup-notifications --help </dev/null 2>/dev/null | grep -Fq -- '--policy-only'; then
+    POLICY_HELP=$("$NOTIFY_BIN" setup-notifications --help </dev/null 2>/dev/null) || POLICY_HELP=""
+    if [[ "$POLICY_HELP" != *--policy-only* || "$POLICY_HELP" != *--preserve-enabled* ]]; then
       echo "agent-notify setup skipped; installed binary predates portable setup. Plugin/hooks install succeeded. Update to a matching release before enabling MCP." >&2
       [ "$SEEN_AGENT_NOTIFY" != true ] || exit 1
       exit 0
