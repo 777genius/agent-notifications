@@ -41,7 +41,7 @@ type propertyKey struct {
 type stringVariant struct {
 	Type     uint16
 	Reserved [3]uint16
-	Value    uintptr
+	Value    unsafe.Pointer
 	Padding  uintptr
 }
 
@@ -141,7 +141,7 @@ func renderWindowsShortcut(target string) ([]byte, error) {
 	}
 	defer os.RemoveAll(dir)
 	path := filepath.Join(dir, shortcutName)
-	err = withShellLink(func(link uintptr) error {
+	err = withShellLink(func(link unsafe.Pointer) error {
 		value, err := windows.UTF16PtrFromString(target)
 		if err != nil {
 			return err
@@ -165,7 +165,7 @@ func renderWindowsShortcut(target string) ([]byte, error) {
 		if err != nil {
 			return err
 		}
-		v := stringVariant{Type: 31, Value: uintptr(unsafe.Pointer(appID))} // VT_LPWSTR
+		v := stringVariant{Type: 31, Value: unsafe.Pointer(appID)} // VT_LPWSTR
 		if err := comResult("IPropertyStore.SetValue", comCall(store, 6, uintptr(unsafe.Pointer(&appIDProperty)), uintptr(unsafe.Pointer(&v)))); err != nil {
 			return err
 		}
@@ -191,7 +191,7 @@ func renderWindowsShortcut(target string) ([]byte, error) {
 }
 
 func inspectWindowsShortcut(path string) (target, appID, arguments string, err error) {
-	err = withShellLink(func(link uintptr) error {
+	err = withShellLink(func(link unsafe.Pointer) error {
 		persist, e := queryInterface(link, &iidPersistFile)
 		if e != nil {
 			return e
@@ -224,10 +224,10 @@ func inspectWindowsShortcut(path string) (target, appID, arguments string, err e
 			return e
 		}
 		defer procPropVariantClear.Call(uintptr(unsafe.Pointer(&v)))
-		if v.Type != 31 || v.Value == 0 {
+		if v.Type != 31 || v.Value == nil {
 			return errors.New("shortcut has no string AppUserModelID")
 		}
-		appID = windows.UTF16PtrToString((*uint16)(unsafe.Pointer(v.Value)))
+		appID = windows.UTF16PtrToString((*uint16)(v.Value))
 		return nil
 	})
 	return
@@ -294,7 +294,7 @@ func sameWindowsPath(a, b string) bool {
 	return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
 }
 
-func withShellLink(fn func(uintptr) error) error {
+func withShellLink(fn func(unsafe.Pointer) error) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	// x/sys exposes COM's S_FALSE (already initialized in this apartment) as
@@ -303,7 +303,7 @@ func withShellLink(fn func(uintptr) error) error {
 		return err
 	}
 	defer windows.CoUninitialize()
-	var link uintptr
+	var link unsafe.Pointer
 	h, _, _ := procCoCreateInstance.Call(uintptr(unsafe.Pointer(&clsidShellLink)), 0, 1, uintptr(unsafe.Pointer(&iidShellLinkW)), uintptr(unsafe.Pointer(&link)))
 	if err := comResult("CoCreateInstance", h); err != nil {
 		return err
@@ -312,26 +312,26 @@ func withShellLink(fn func(uintptr) error) error {
 	return fn(link)
 }
 
-func queryInterface(object uintptr, iid *windows.GUID) (uintptr, error) {
-	var result uintptr
+func queryInterface(object unsafe.Pointer, iid *windows.GUID) (unsafe.Pointer, error) {
+	var result unsafe.Pointer
 	if err := comResult("QueryInterface", comCall(object, 0, uintptr(unsafe.Pointer(iid)), uintptr(unsafe.Pointer(&result)))); err != nil {
-		return 0, err
+		return nil, err
 	}
 	return result, nil
 }
 
-func releaseCOM(object uintptr) {
-	if object != 0 {
+func releaseCOM(object unsafe.Pointer) {
+	if object != nil {
 		comCall(object, 2)
 	}
 }
 
 //go:uintptrescapes
-func comCall(object uintptr, method int, args ...uintptr) uintptr {
-	vtbl := *(*uintptr)(unsafe.Pointer(object))
-	fn := *(*uintptr)(unsafe.Pointer(vtbl + uintptr(method)*unsafe.Sizeof(uintptr(0))))
+func comCall(object unsafe.Pointer, method int, args ...uintptr) uintptr {
+	vtbl := *(*unsafe.Pointer)(object)
+	fn := *(*uintptr)(unsafe.Add(vtbl, uintptr(method)*unsafe.Sizeof(uintptr(0))))
 	call := make([]uintptr, 0, len(args)+1)
-	call = append(call, object)
+	call = append(call, uintptr(object))
 	call = append(call, args...)
 	r, _, _ := syscall.SyscallN(fn, call...)
 	return r
