@@ -8,23 +8,47 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 
+	"golang.org/x/sys/windows"
+
+	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/notification"
+	"github.com/777genius/agent-notifications/internal/opencodeinstall"
 )
 
-type windowsPowerShellToastSession struct{}
+type windowsPowerShellToastSession struct {
+	appID, controlRoot, executable string
+	requireOpenCodeShortcut        bool
+}
 
 const windowsToastPowerShell = `$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Runtime.WindowsRuntime; $xmlBytes=[Convert]::FromBase64String($env:AGENT_NOTIFICATIONS_TOAST_XML); $xmlText=[Text.Encoding]::UTF8.GetString($xmlBytes); $doc=[Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom.XmlDocument,ContentType=WindowsRuntime]::New(); $doc.LoadXml($xmlText); $toast=[Windows.UI.Notifications.ToastNotification,Windows.UI.Notifications,ContentType=WindowsRuntime]::New($doc); [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($env:AGENT_NOTIFICATIONS_TOAST_APP_ID).Show($toast)`
 
 var submitWindowsToast = runWindowsToast
-var lookWindowsPowerShell = exec.LookPath
+var resolveWindowsPowerShell = systemWindowsPowerShell
+
+func systemWindowsPowerShell() (string, error) {
+	systemDir, err := windows.GetSystemDirectory()
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(systemDir, "WindowsPowerShell", "v1.0", "powershell.exe")
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() {
+		return "", errors.New("system PowerShell is not a regular file")
+	}
+	return path, nil
+}
 
 func runWindowsToast(ctx context.Context, p windowsToastPayload) error {
 	data, err := encodeWindowsToast(p)
 	if err != nil {
 		return err
 	}
-	powershell, err := lookWindowsPowerShell("powershell.exe")
+	powershell, err := resolveWindowsPowerShell()
 	if err != nil {
 		return err
 	}
@@ -44,20 +68,59 @@ func openWindowsToast(ctx context.Context) (windowsToastSession, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if _, err := lookWindowsPowerShell("powershell.exe"); err != nil {
+	if _, err := resolveWindowsPowerShell(); err != nil {
 		return nil, err
 	}
 	return windowsPowerShellToastSession{}, nil
 }
 
-func (windowsPowerShellToastSession) Ready(ctx context.Context) error { return ctx.Err() }
+func NewOpenCodeWindowsToastDelivery(clock BootClock) *WindowsToastDelivery {
+	return &WindowsToastDelivery{Clock: clock, Open: openOpenCodeWindowsToast}
+}
 
-func (windowsPowerShellToastSession) Submit(ctx context.Context, r notification.Request) error {
+func openOpenCodeWindowsToast(ctx context.Context) (windowsToastSession, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if _, err := resolveWindowsPowerShell(); err != nil {
+		return nil, err
+	}
+	root := os.Getenv("AGENT_NOTIFICATIONS_CONTROL_ROOT")
+	if root == "" {
+		var err error
+		root, err = installruntime.ControlRoot()
+		if err != nil {
+			return nil, err
+		}
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	return windowsPowerShellToastSession{appID: opencodeinstall.OpenCodeToastAppID, controlRoot: root,
+		executable: executable, requireOpenCodeShortcut: true}, nil
+}
+
+func (s windowsPowerShellToastSession) Ready(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if s.requireOpenCodeShortcut {
+		return opencodeinstall.WindowsShortcutReady(s.controlRoot, s.executable)
+	}
+	return nil
+}
+
+func (s windowsPowerShellToastSession) Submit(ctx context.Context, r notification.Request) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	appID := s.appID
+	if appID == "" {
+		appID = windowsToastAppID
+	}
 	return submitWindowsToast(ctx, windowsToastPayload{
-		AppID:  windowsToastAppID,
+		AppID:  appID,
 		Title:  r.Content.Title,
 		Body:   r.Content.Body,
 		Silent: r.Silent || !r.Policy.SoundEnabled,

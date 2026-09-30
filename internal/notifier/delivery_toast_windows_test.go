@@ -5,11 +5,15 @@ package notifier
 import (
 	"context"
 	"errors"
-	"os/exec"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"golang.org/x/sys/windows"
+
 	"github.com/777genius/agent-notifications/internal/notification"
+	"github.com/777genius/agent-notifications/internal/opencodeinstall"
 )
 
 func TestWindowsPowerShellToastSessionForwardsSilentPolicy(t *testing.T) {
@@ -26,6 +30,24 @@ func TestWindowsPowerShellToastSessionForwardsSilentPolicy(t *testing.T) {
 	}
 	if !got.Silent || got.Title != r.Content.Title || got.Body != r.Content.Body || got.AppID != windowsToastAppID {
 		t.Fatalf("wrong toast payload: %+v", got)
+	}
+}
+
+func TestOpenCodeToastUsesSeparateIdentityAndRejectsMissingShortcut(t *testing.T) {
+	previous := submitWindowsToast
+	t.Cleanup(func() { submitWindowsToast = previous })
+	var got windowsToastPayload
+	submitWindowsToast = func(_ context.Context, p windowsToastPayload) error { got = p; return nil }
+	s := windowsPowerShellToastSession{appID: opencodeinstall.OpenCodeToastAppID,
+		controlRoot: filepath.Join(t.TempDir(), "control"), executable: filepath.Join(t.TempDir(), "notification.exe"), requireOpenCodeShortcut: true}
+	if err := s.Ready(context.Background()); err == nil {
+		t.Fatal("missing owned shortcut passed readiness")
+	}
+	if err := s.Submit(context.Background(), notification.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if got.AppID != opencodeinstall.OpenCodeToastAppID || got.AppID == windowsToastAppID {
+		t.Fatalf("OpenCode toast identity = %q", got.AppID)
 	}
 }
 
@@ -58,10 +80,26 @@ func TestWindowsPowerShellToastSessionSubmissionHonorsCancellation(t *testing.T)
 }
 
 func TestOpenWindowsToastRequiresPowerShell(t *testing.T) {
-	previous := lookWindowsPowerShell
-	lookWindowsPowerShell = func(string) (string, error) { return "", exec.ErrNotFound }
-	t.Cleanup(func() { lookWindowsPowerShell = previous })
-	if session, err := openWindowsToast(context.Background()); !errors.Is(err, exec.ErrNotFound) || session != nil {
+	previous := resolveWindowsPowerShell
+	resolveWindowsPowerShell = func() (string, error) { return "", os.ErrNotExist }
+	t.Cleanup(func() { resolveWindowsPowerShell = previous })
+	if session, err := openWindowsToast(context.Background()); !errors.Is(err, os.ErrNotExist) || session != nil {
 		t.Fatalf("open = %#v, %v", session, err)
+	}
+}
+
+func TestSystemPowerShellIgnoresUserPath(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	systemDir, err := windows.GetSystemDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := systemWindowsPowerShell()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(systemDir, "WindowsPowerShell", "v1.0", "powershell.exe")
+	if got != want {
+		t.Fatalf("PowerShell path = %q, want %q", got, want)
 	}
 }

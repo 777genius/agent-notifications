@@ -4,6 +4,7 @@ package opencodeinstall
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -23,8 +24,30 @@ import (
 const (
 	consumerID = "opencode-notifications"
 	pluginName = "agent-notifications.js"
-	binaryName = "claude-notifications-linux-amd64"
 )
+
+type platform struct {
+	goos, goarch, binary string
+	format               string
+	machine              uint32
+}
+
+var supportedPlatforms = []platform{
+	{"linux", "amd64", "claude-notifications-linux-amd64", "elf", 62},
+	{"linux", "arm64", "claude-notifications-linux-arm64", "elf", 183},
+	{"darwin", "amd64", "claude-notifications-darwin-amd64", "macho", 0x01000007},
+	{"darwin", "arm64", "claude-notifications-darwin-arm64", "macho", 0x0100000c},
+	{"windows", "amd64", "claude-notifications-windows-amd64.exe", "pe", 0x8664},
+}
+
+func targetPlatform(goos, goarch string) (platform, bool) {
+	for _, p := range supportedPlatforms {
+		if p.goos == goos && p.goarch == goarch {
+			return p, true
+		}
+	}
+	return platform{}, false
+}
 
 type Action string
 
@@ -38,15 +61,17 @@ const (
 type Request struct {
 	Action                                    Action
 	ControlRoot, RuntimeRoot, BinarySource    string
+	NativeSource                              string
 	HomeDir, XDGConfigHome, OpenCodeConfigDir string
 	Desktop, Webhook                          bool
-	// Platform is supplied by the CLI. Tests may qualify a disposable Linux fixture.
+	// Platform is supplied by the CLI. Tests use disposable platform fixtures.
 	GOOS, GOARCH string
 }
 
 func Apply(ctx context.Context, r Request) error {
-	if r.GOOS != "linux" || r.GOARCH != "amd64" {
-		return errors.New("OpenCode notifications support Linux amd64 only")
+	p, supported := targetPlatform(r.GOOS, r.GOARCH)
+	if !supported {
+		return errors.New("unsupported OpenCode platform")
 	}
 	if r.ControlRoot == "" || !filepath.IsAbs(r.ControlRoot) {
 		return errors.New("absolute control root required")
@@ -83,6 +108,9 @@ func Apply(ctx context.Context, r Request) error {
 	if r.Action != Remove && !r.Desktop && !r.Webhook {
 		return errors.New("choose --desktop or --webhook explicitly")
 	}
+	if r.NativeSource != "" && (p.goos != "darwin" || !r.Desktop || !filepath.IsAbs(r.NativeSource)) {
+		return errors.New("absolute --native-app source requires macOS desktop consent")
+	}
 	if r.RuntimeRoot == "" {
 		if registered {
 			r.RuntimeRoot = previous.RuntimeRoot
@@ -102,7 +130,7 @@ func Apply(ctx context.Context, r Request) error {
 	if registered && previous.RuntimeRoot != r.RuntimeRoot {
 		return errors.New("OpenCode consumer relocation refused")
 	}
-	binary := filepath.Join(r.RuntimeRoot, binaryName)
+	binary := filepath.Join(r.RuntimeRoot, p.binary)
 	var bundle []byte
 	if r.Action != Remove {
 		if r.BinarySource == "" || !filepath.IsAbs(r.BinarySource) {
@@ -159,7 +187,7 @@ func Apply(ctx context.Context, r Request) error {
 			return errors.New("OpenCode plugin path is owned by another consumer")
 		}
 	}
-	data, mode, err := readBinary(r.BinarySource)
+	data, mode, err := readBinary(r.BinarySource, p)
 	if err != nil {
 		return err
 	}
@@ -176,14 +204,47 @@ func Apply(ctx context.Context, r Request) error {
 		{Path: binary, Before: beforeBinary, Data: data, Mode: mode},
 		{Path: plugin.Target, Before: plannedPlugin, Data: bundle, Mode: 0600},
 	}
+	if p.goos == "windows" {
+		shortcut, shortcutErr := stageWindowsShortcutForSetup(r.HomeDir, binary, r.Desktop, ledger)
+		if shortcutErr != nil {
+			return shortcutErr
+		}
+		if shortcut != nil {
+			files = append(files, *shortcut)
+		}
+	}
+	var native *installruntime.NativeChange
+	if p.goos == "darwin" && r.Desktop {
+		if r.NativeSource != "" {
+			native, err = installruntime.StageNative(ctx, root, r.NativeSource)
+			if err != nil {
+				return fmt.Errorf("OpenCode native package verification failed: %w", err)
+			}
+			defer func() {
+				cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				_ = installruntime.DiscardNative(cleanup, root, native)
+			}()
+			if native.After.DecoderFloor < 1 {
+				return errors.New("macOS desktop requires a managed native app with decoder protocol 1")
+			}
+		} else if ledger.Native == nil || ledger.Native.DecoderFloor < 1 {
+			return errors.New("macOS desktop requires a verified managed native app; pass --native-app")
+		}
+	}
 	gen := ledger.Generation
 	_, err = installruntime.Commit(ctx, installruntime.Request{
 		ControlRoot: root, Owner: "existing-installer", RuntimeRoot: r.RuntimeRoot,
 		ConsumerID: consumerID, Consumer: installruntime.Consumer{Registration: plugin.Target, Commands: []string{binary, "opencode-event", "--protocol", "1"}},
-		ExpectedGeneration: &gen, ExpectedPolicy: expectedPolicy, Files: files,
+		ExpectedGeneration: &gen, ExpectedPolicy: expectedPolicy, Files: files, Native: native,
 	})
 	if err != nil {
 		return err
+	}
+	if p.goos == "darwin" && r.Desktop {
+		if _, err := PrepareNativeSpool(ctx, root); err != nil {
+			return err
+		}
 	}
 	return setChannels(ctx, root, r.RuntimeRoot, r.Desktop, r.Webhook)
 }
@@ -218,7 +279,7 @@ func plan(r Request, ledger installruntime.Ledger, desired []byte) (uap.Placemen
 	return placement, id, err
 }
 
-func readBinary(path string) ([]byte, uint32, error) {
+func readBinary(path string, p platform) ([]byte, uint32, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, 0, err
@@ -228,7 +289,7 @@ func readBinary(path string) ([]byte, uint32, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 || info.Size() > 32<<20 {
+	if !info.Mode().IsRegular() || (p.goos != "windows" && info.Mode().Perm()&0111 == 0) || info.Size() > 32<<20 {
 		return nil, 0, errors.New("binary must be a bounded executable regular file")
 	}
 	data, err := io.ReadAll(io.LimitReader(f, 32<<20+1))
@@ -238,7 +299,29 @@ func readBinary(path string) ([]byte, uint32, error) {
 	if !installruntime.WriterCompatible(data) {
 		return nil, 0, errors.New("binary does not declare the managed writer protocol")
 	}
+	if !binaryMatchesPlatform(data, p) {
+		return nil, 0, errors.New("binary format or architecture does not match OpenCode target")
+	}
+	if p.goos == "windows" {
+		return data, 0600, nil
+	}
 	return data, uint32(info.Mode().Perm() &^ 0022), nil
+}
+
+func binaryMatchesPlatform(data []byte, p platform) bool {
+	switch p.format {
+	case "elf":
+		return len(data) >= 20 && string(data[:4]) == "\x7fELF" && data[4] == 2 && data[5] == 1 && uint32(binary.LittleEndian.Uint16(data[18:20])) == p.machine
+	case "macho":
+		return len(data) >= 8 && binary.BigEndian.Uint32(data[:4]) == 0xcffaedfe && binary.LittleEndian.Uint32(data[4:8]) == p.machine
+	case "pe":
+		if len(data) < 0x40 || string(data[:2]) != "MZ" {
+			return false
+		}
+		offset := binary.LittleEndian.Uint32(data[0x3c:0x40])
+		return offset <= uint32(len(data)-6) && string(data[offset:offset+4]) == "PE\x00\x00" && uint32(binary.LittleEndian.Uint16(data[offset+4:offset+6])) == p.machine
+	}
+	return false
 }
 
 func setChannels(ctx context.Context, root, runtimeRoot string, desktop, webhook bool) error {
@@ -263,7 +346,7 @@ func setChannels(ctx context.Context, root, runtimeRoot string, desktop, webhook
 }
 
 func remove(ctx context.Context, r Request, ledger installruntime.Ledger, target string) error {
-	if err := setChannels(ctx, r.ControlRoot, r.RuntimeRoot, false, false); err != nil {
+	if err := RevokeChannels(ctx, r.ControlRoot, r.RuntimeRoot); err != nil {
 		return err
 	}
 	// A shared runtime retains other consumers. Remove this plugin under CAS
@@ -274,16 +357,29 @@ func remove(ctx context.Context, r Request, ledger installruntime.Ledger, target
 			return err
 		}
 		before, ok := installruntime.OwnedFile(l, target)
+		files := []installruntime.File{}
 		if ok {
-			gen := l.Generation
-			_, err = installruntime.Commit(ctx, installruntime.Request{ControlRoot: r.ControlRoot, RuntimeRoot: r.RuntimeRoot,
-				Owner: "existing-installer", ConsumerID: consumerID, RefreshOnly: true, ExpectedGeneration: &gen,
-				Files: []installruntime.File{{Path: target, Before: before, Remove: true}}})
+			files = append(files, installruntime.File{Path: target, Before: before, Remove: true})
+		} else if observed, err := installruntime.Fingerprint(target); err != nil || observed.Exists {
+			return errors.New("unowned OpenCode plugin path blocks removal")
+		}
+		if r.GOOS == "windows" {
+			shortcut, err := stageWindowsShortcutForSetup(r.HomeDir, "", false, l)
 			if err != nil {
 				return err
 			}
-		} else if observed, err := installruntime.Fingerprint(target); err != nil || observed.Exists {
-			return errors.New("unowned OpenCode plugin path blocks removal")
+			if shortcut != nil {
+				files = append(files, *shortcut)
+			}
+		}
+		if len(files) != 0 {
+			gen := l.Generation
+			_, err = installruntime.Commit(ctx, installruntime.Request{ControlRoot: r.ControlRoot, RuntimeRoot: r.RuntimeRoot,
+				Owner: "existing-installer", ConsumerID: consumerID, RefreshOnly: true, ExpectedGeneration: &gen,
+				Files: files})
+			if err != nil {
+				return err
+			}
 		}
 	}
 	l, _, err := installruntime.ReadOwnership(r.ControlRoot)
@@ -315,7 +411,8 @@ func (g CurrentGate) Channels(ctx context.Context) (bool, bool) {
 	if g.GOARCH != "" {
 		goarch = g.GOARCH
 	}
-	if goos != "linux" || goarch != "amd64" {
+	_, supported := targetPlatform(goos, goarch)
+	if !supported {
 		return false, false
 	}
 	root := g.ControlRoot
@@ -333,11 +430,6 @@ func (g CurrentGate) Channels(ctx context.Context) (bool, bool) {
 	if err != nil || s.Installation.Recovery {
 		return false, false
 	}
-	c, ok := s.Installation.Ledger.Consumers[consumerID]
-	if !ok || c.Registration == "" || filepath.Base(c.Registration) != pluginName || len(c.Commands) != 4 ||
-		c.Commands[1] != "opencode-event" || c.Commands[2] != "--protocol" || c.Commands[3] != "1" {
-		return false, false
-	}
 	executable := g.Executable
 	if executable == "" {
 		executable, err = os.Executable()
@@ -345,21 +437,49 @@ func (g CurrentGate) Channels(ctx context.Context) (bool, bool) {
 			return false, false
 		}
 	}
-	executable, err = filepath.EvalSymlinks(executable)
-	if err != nil {
-		return false, false
-	}
-	command, err := filepath.EvalSymlinks(c.Commands[0])
-	if err != nil || command != executable || command != filepath.Join(c.RuntimeRoot, binaryName) {
-		return false, false
-	}
-	if id, ok := installruntime.OwnedFile(s.Installation.Ledger, c.Registration); !ok || !id.Exists {
-		return false, false
-	}
-	if id, ok := installruntime.OwnedFile(s.Installation.Ledger, command); !ok || !id.Exists {
+	return ChannelsFromSnapshot(s, executable, goos, goarch)
+}
+
+// ChannelsFromSnapshot validates OpenCode ownership and explicit consent in an
+// already-read policy snapshot. It is safe to use inside a setup/native lease
+// callback after the caller revalidates that snapshot under the component lock.
+func ChannelsFromSnapshot(s installruntime.PolicySnapshot, executable, goos, goarch string) (bool, bool) {
+	if !RegisteredFromSnapshot(s, executable, goos, goarch) {
 		return false, false
 	}
 	return policyChannels(s.Fields)
+}
+
+// RegisteredFromSnapshot checks the owned OpenCode command without requiring
+// desktop consent, so explicit permission setup can precede channel enablement.
+func RegisteredFromSnapshot(s installruntime.PolicySnapshot, executable, goos, goarch string) bool {
+	if s.Installation.Recovery {
+		return false
+	}
+	p, supported := targetPlatform(goos, goarch)
+	if !supported {
+		return false
+	}
+	c, ok := s.Installation.Ledger.Consumers[consumerID]
+	if !ok || c.Registration == "" || filepath.Base(c.Registration) != pluginName || len(c.Commands) != 4 ||
+		c.Commands[1] != "opencode-event" || c.Commands[2] != "--protocol" || c.Commands[3] != "1" {
+		return false
+	}
+	executable, err := filepath.EvalSymlinks(executable)
+	if err != nil {
+		return false
+	}
+	command, err := filepath.EvalSymlinks(c.Commands[0])
+	if err != nil || command != executable || command != filepath.Join(c.RuntimeRoot, p.binary) {
+		return false
+	}
+	if id, ok := installruntime.OwnedFile(s.Installation.Ledger, c.Registration); !ok || !id.Exists {
+		return false
+	}
+	if id, ok := installruntime.OwnedFile(s.Installation.Ledger, command); !ok || !id.Exists {
+		return false
+	}
+	return true
 }
 
 func policyChannels(fields map[string]json.RawMessage) (bool, bool) {

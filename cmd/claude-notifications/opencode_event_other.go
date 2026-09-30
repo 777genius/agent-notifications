@@ -1,8 +1,8 @@
-//go:build !linux
+//go:build !linux && !windows && !darwin
 
 package main
 
 import "github.com/777genius/agent-notifications/internal/notification"
 
-// PR3 initially qualifies Linux only. Other platforms stay unavailable.
+// Other platforms stay unavailable until they have a native delivery port.
 func newOpenCodeDesktopPort() notification.DeliveryPort { return nil }
