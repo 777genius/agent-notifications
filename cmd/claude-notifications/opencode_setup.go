@@ -13,7 +13,7 @@ import (
 
 func runOpenCodeSetup(args []string, output io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(output, "usage: setup-opencode install|update|remove|recover [flags]")
+		_, _ = fmt.Fprintln(output, "usage: setup-opencode install|update|remove|recover [flags]")
 		return 2
 	}
 	action := opencodeinstall.Action(args[0])
@@ -32,16 +32,18 @@ func runOpenCodeSetup(args []string, output io.Writer) int {
 		return 2
 	}
 	if f.NArg() != 0 {
-		fmt.Fprintln(output, "unexpected positional argument")
+		_, _ = fmt.Fprintln(output, "unexpected positional argument")
 		return 2
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := opencodeinstall.Apply(ctx, r); err != nil {
-		fmt.Fprintf(output, "setup-opencode: %v\n", err)
+		_, _ = fmt.Fprintf(output, "setup-opencode: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(output, "OpenCode notifications %s complete\n", action)
+	if _, err := fmt.Fprintf(output, "OpenCode notifications %s complete\n", action); err != nil {
+		return 1
+	}
 	return 0
 }
 
