@@ -81,7 +81,7 @@
   "faq": {
     "eyebrow": "QUALCHE COSA DA SAPERE", "title": "Domande frequenti", "subtitle": "Tutto ciò che serve per tornare al lavoro.",
     "items": {
-      "1": { "question": "Devo installare entrambi gli agenti?", "answer": "Scegli Claude Code, Codex CLI, entrambi oppure OpenCode. Installa prima l’agente scelto; questo comando installa le notifiche." },
+      "1": { "question": "Devo installare tutti gli agenti?", "answer": "Scegli qualsiasi combinazione di Claude Code, Codex CLI e OpenCode. Installa prima gli agenti scelti; i comandi seguenti installano le notifiche." },
       "2": { "question": "Gli hook di Codex vengono installati automaticamente?", "answer": "Sì. Il programma di installazione registra gli hook e salva una copia stabile del runtime. Apri /hooks in Codex per verificarli e autorizzarli. Le definizioni modificate richiedono una nuova verifica." },
       "3": { "question": "Un aggiornamento azzera le mie impostazioni?", "answer": "Il programma di installazione conserva la configurazione condivisa e gli hook di Codex di terze parti. Installazione e aggiornamento usano lo stesso comando. Riavvia l'agente selezionato dopo l'aggiornamento." },
       "4": { "question": "Posso scegliere quali eventi emettono un suono?", "answer": "Sì. Configura suoni, volume, dispositivo audio e canali di notifica. Scegli Configura nella guida per i passaggi specifici del tuo agente. Solo Claude Code e Codex CLI." },
@@ -122,7 +122,7 @@
   "select": { "scrollUp": "Scorri le opzioni verso l'alto", "scrollDown": "Scorri le opzioni verso il basso" },
   "install": {
     "agentNotify": {"label": "Consenti agli agenti di inviarti notifiche quando serve la tua attenzione", "hint": "Aggiunge uno strumento così un agente può avvisarti durante un’attività, non solo a lavoro fermo."},
-    "title": "Configura le notifiche", "intro": "Segui questi passaggi per aggiungere notifiche desktop a {agent}.", "chooseAgent": "Scegli il tuo agente", "requires": "Richiede {agent}", "bothAgents": "Entrambi gli agenti", "bothSelected": "✓ Entrambi gli agenti selezionati", "installBoth": "Installa per entrambi gli agenti", "chooseComputer": "Scegli il computer su cui è in esecuzione il tuo agente", "selected": "Selezionato", "detected": "Rilevato automaticamente", "change": "Cambia", "targetOs": "Sistema operativo di destinazione",
+    "title": "Configura le notifiche", "intro": "Segui questi passaggi per aggiungere notifiche desktop a {agent}.", "chooseAgent": "Scegli i tuoi agenti", "requires": "Richiede {agent}", "bothAgents": "Entrambi gli agenti", "bothSelected": "✓ Entrambi gli agenti selezionati", "installBoth": "Installa per entrambi gli agenti", "chooseComputer": "Scegli il computer su cui è in esecuzione il tuo agente", "selected": "Selezionato", "detected": "Rilevato automaticamente", "change": "Cambia", "targetOs": "Sistema operativo di destinazione",
     "products": { "claude": "Claude Code", "codex": "Codex CLI", "both": "Claude Code + Codex CLI",
       "opencode": "OpenCode" },
     "targets": { "unknown": "Scegli il sistema operativo", "macos": "macOS", "linux": "Linux", "windows": "Windows · Git Bash", "manual": "Istruzioni manuali" },

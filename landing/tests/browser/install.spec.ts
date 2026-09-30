@@ -15,30 +15,19 @@ async function chooseOS(page: Page, value: string) {
   await page.getByRole("combobox", { name: "Target operating system" }).click();
   await page.getByRole("option", { name: labels[value], exact: true }).click();
 }
-async function chooseProduct(
-  page: Page,
-  product: "claude" | "codex" | "both",
-) {
-  const desired = {
-    claude: product !== "codex",
-    codex: product !== "claude",
-  };
-  const cards = {
-    claude: page.getByRole("button", { name: "Claude Code", exact: true }),
-    codex: page.getByRole("button", { name: "Codex CLI", exact: true }),
-  };
-  for (const value of ["claude", "codex"] as const)
-    if (
-      desired[value] &&
-      (await cards[value].getAttribute("aria-pressed")) !== "true"
-    )
-      await cards[value].click();
-  for (const value of ["claude", "codex"] as const)
-    if (
-      !desired[value] &&
-      (await cards[value].getAttribute("aria-pressed")) !== "false"
-    )
-      await cards[value].click();
+async function chooseAgents(page: Page, selected: readonly ("claude" | "codex" | "opencode")[]) {
+  const labels = { claude: "Claude Code", codex: "Codex CLI", opencode: "OpenCode" };
+  // Select desired cards first so switching hosts never needs an empty selection.
+  for (const wanted of [true, false])
+    for (const value of ["claude", "codex", "opencode"] as const) {
+      const card = page.getByRole("button", { name: labels[value], exact: true });
+      if (selected.includes(value) === wanted &&
+          (await card.getAttribute("aria-pressed")) !== String(wanted))
+        await card.click();
+    }
+}
+async function chooseProduct(page: Page, product: "claude" | "codex" | "both") {
+  await chooseAgents(page, product === "both" ? ["claude", "codex"] : [product]);
 }
 async function chooseLanguage(page: Page, current: RegExp, language: string) {
   await page.getByRole("button", { name: current }).click();
@@ -454,33 +443,56 @@ test("guided reference layout, detected OS and mode focus", async ({
   await context.close();
 });
 
-test("OpenCode selection keeps channel consent explicit and preserves Claude/Codex selection", async ({ page }) => {
+test("all agents toggle independently, copied commands and configuration cover the selection", async ({ page }) => {
   await page.goto("");
   await chooseOS(page, "macos");
-  const openCode = page.getByRole("button", { name: "OpenCode", exact: true });
-  await openCode.click();
-  await expect(openCode).toHaveAttribute("aria-pressed", "true");
-  for (const name of ["Claude Code", "Codex CLI"])
-    await expect(page.getByRole("button", { name, exact: true })).toHaveAttribute("aria-pressed", "false");
+  const labels = { claude: "Claude Code", codex: "Codex CLI", opencode: "OpenCode" };
+  const prefix = "curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product ";
+  const cases = [
+    { selected: ["claude"], expected: prefix + "claude" },
+    { selected: ["claude", "opencode"], expected: "(\nset -o pipefail\n" + prefix + "claude &&\n" + prefix + "opencode --desktop\n)" },
+    { selected: ["claude", "codex", "opencode"], expected: "(\nset -o pipefail\n" + prefix + "both &&\n" + prefix + "opencode --desktop\n)" },
+    { selected: ["codex", "opencode"], expected: "(\nset -o pipefail\n" + prefix + "codex &&\n" + prefix + "opencode --desktop\n)" },
+    { selected: ["opencode"], expected: prefix + "opencode --desktop" },
+    { selected: ["codex"], expected: prefix + "codex" },
+    { selected: ["claude", "codex"], expected: prefix + "both" },
+  ] as const;
+  for (const { selected, expected } of cases) {
+    await chooseAgents(page, selected);
+    for (const value of ["claude", "codex", "opencode"] as const)
+      await expect(page.getByRole("button", { name: labels[value], exact: true }))
+        .toHaveAttribute("aria-pressed", String((selected as readonly string[]).includes(value)));
+    await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(expected);
+    if (selected.length === 1) {
+      await page.getByRole("button", { name: labels[selected[0]], exact: true }).click();
+      await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(expected);
+    }
+  }
+  await chooseAgents(page, ["claude", "codex", "opencode"]);
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.getByRole("button", { name: "Copy command" }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("(\nset -o pipefail\n" + prefix + "both &&\n" + prefix + "opencode --desktop\n)");
   await expect(page.getByText(/Tested with OpenCode 1.18.33/)).toBeVisible();
-  await expect(page.getByRole("checkbox", { name: /Let agents send/ })).toHaveCount(0);
+  const agentNotify = page.getByRole("checkbox", { name: /Let agents send/ });
+  await agentNotify.uncheck();
+  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue("(\nset -o pipefail\n" + prefix + "both --skip-agent-notify &&\n" + prefix + "opencode --desktop\n)");
   const desktop = page.getByRole("checkbox", { name: "Allow desktop notifications", exact: true });
   const webhook = page.getByRole("checkbox", { name: "Allow webhook notifications", exact: true });
-  const command = page.getByLabel("Install command", { exact: true });
-  await expect(command).toHaveValue(/--product opencode --desktop$/);
   await webhook.check();
-  await expect(command).toHaveValue(/--product opencode --desktop --webhook$/);
   await desktop.uncheck();
-  await expect(command).toHaveValue(/--product opencode --webhook$/);
+  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue("(\nset -o pipefail\n" + prefix + "both --skip-agent-notify &&\n" + prefix + "opencode --webhook\n)");
   await webhook.uncheck();
-  await expect(command).toHaveCount(0);
+  await expect(page.getByLabel("Install command", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Copy command" })).toHaveCount(0);
   await desktop.check();
   await page.getByRole("button", { name: "Configure", exact: true }).click();
-  await expect(page.getByText("/claude-notifications-go:settings", { exact: true })).toHaveCount(0);
-  await expect(page.getByText(/Use config path for shared settings/)).toBeVisible();
+  const configuration = page.locator(".configuration");
+  await expect(configuration.getByText("/claude-notifications-go:settings", { exact: true })).toBeVisible();
+  await expect(configuration.getByText("config path", { exact: true })).toBeVisible();
+  await expect(configuration.getByText(/Use config path for shared settings/)).toBeVisible();
   await page.getByRole("button", { name: "Install", exact: true }).click();
-  await chooseProduct(page, "both");
-  await expect(openCode).toHaveAttribute("aria-pressed", "false");
-  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--product both$/);
+  await expect(page.getByText(/Restart OpenCode to load the global plugin/)).toBeVisible();
+  await chooseAgents(page, ["opencode"]);
+  await expect(agentNotify).toHaveCount(0);
+  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(prefix + "opencode --desktop");
 });

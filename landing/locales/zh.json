@@ -135,8 +135,8 @@
     "subtitle": "快速了解所需信息，然后继续工作。",
     "items": {
       "1": {
-        "question": "必须同时安装两个智能体吗？",
-        "answer": "选择 Claude Code、Codex CLI、两者或 OpenCode。请先安装所选代理；此命令用于安装通知。"
+        "question": "必须安装所有智能体吗？",
+        "answer": "可任意组合选择 Claude Code、Codex CLI 和 OpenCode。请先安装所选智能体；以下命令用于安装通知。"
       },
       "2": {
         "question": "Codex hooks 会自动安装吗？",
