@@ -660,7 +660,7 @@ func TestReplaceMigratedBindingCleansOldLocatorAfterConsumerRevoke(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	snap, err = publishWizardIntent(ctx, plan.Request, snap, runtimeRoot, nil, []portable.Integration{portable.Codex}, true)
+	snap, _, err = publishWizardIntent(ctx, plan.Request, snap, runtimeRoot, nil, []portable.Integration{portable.Codex}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2353,7 +2353,7 @@ func TestWizardRetryRemovesLegacyLocatorAfterConsumerCommit(t *testing.T) {
 	if err := prepareUninstallBindings(&req, snapshot, mat, id, []portable.Integration{portable.Codex}); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err = publishWizardIntent(ctx, req, snapshot, runtimeRoot, nil, []portable.Integration{portable.Codex}, true)
+	snapshot, _, err = publishWizardIntent(ctx, req, snapshot, runtimeRoot, nil, []portable.Integration{portable.Codex}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7541,7 +7541,7 @@ func TestFinishWizardIntentClearsExactRevisionRequired(t *testing.T) {
 		ExpectedGeneration: gen,
 		Targets:            []portablesetup.IntentTarget{{Client: "claude", Units: []string{"agent-notify"}}, {Client: "codex", Units: []string{"agent-notify"}}},
 	})
-	got, err := finishWizardIntent(ctx, Request{ControlRoot: control}, runtime, Result{Outcome: "incomplete", Reason: "exact_revision_required"}, ErrRefused)
+	got, err := finishWizardIntent(ctx, Request{ControlRoot: control}, runtime, confirmedWizardResult(t, control, Result{Outcome: "incomplete", Reason: "exact_revision_required"}), ErrRefused)
 	if got.Outcome != "incomplete" || got.Reason != "exact_revision_required" {
 		t.Fatalf("result: %+v %v", got, err)
 	}
@@ -7562,7 +7562,7 @@ func TestFinishWizardIntentClearsActivationIncomplete(t *testing.T) {
 		ExpectedGeneration: gen,
 		Targets:            []portablesetup.IntentTarget{{Client: "codex", Units: []string{"agent-notify"}}},
 	})
-	got, err := finishWizardIntent(ctx, Request{ControlRoot: control}, runtime, Result{Outcome: "incomplete", Reason: "activation_incomplete"}, errors.New("host seam refused"))
+	got, err := finishWizardIntent(ctx, Request{ControlRoot: control}, runtime, confirmedWizardResult(t, control, Result{Outcome: "incomplete", Reason: "activation_incomplete"}), errors.New("host seam refused"))
 	if got.Outcome != "incomplete" || got.Reason != "activation_incomplete" {
 		t.Fatalf("result: %+v %v", got, err)
 	}
@@ -8128,5 +8128,64 @@ func TestWizardDefaultClaudeRegistrationHandoffsDirectMCP(t *testing.T) {
 	}
 	if notify != "installed" || direct != "absent" || mcpFile != mcpConfig {
 		t.Fatalf("default-path handoff inspect: notify=%s direct=%s mcp=%s targets=%+v", notify, direct, mcpFile, view.Targets)
+	}
+}
+
+// Capture the initiating reservation independently of cleanup's later read.
+func confirmedWizardResult(t *testing.T, control string, out Result) Result {
+	t.Helper()
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil || snap.Ledger.PendingMutation == nil {
+		t.Fatalf("missing initiating reservation: %+v %v", snap.Ledger.PendingMutation, err)
+	}
+	reservation := *snap.Ledger.PendingMutation
+	out.reservation = &reservation
+	return out
+}
+
+func TestFinishWizardIntentDoesNotClearNewerOperation(t *testing.T) {
+	for _, initiating := range []bool{true, false} {
+		t.Run(fmt.Sprint("initiating=", initiating), func(t *testing.T) {
+			ctx := testCtx(t)
+			control, runtime, _, _, gen := managedRuntime(t)
+			plantPendingIntent(t, ctx, control, runtime, gen, portablesetup.Intent{
+				Version: 1, SetupIntentID: "operation-a", Action: "repair", Stage: "confirmed", ExpectedGeneration: gen,
+				Targets: []portablesetup.IntentTarget{{Client: "codex", Units: []string{"agent-notify"}}},
+			})
+			original := confirmedWizardResult(t, control, Result{Outcome: "completed"})
+			// B resumes and finishes A before A reaches its own cleanup.
+			completed, err := finishWizardIntent(ctx, Request{ControlRoot: control}, runtime, original, nil)
+			if err != nil || completed.Outcome != "completed" {
+				t.Fatalf("resume cleanup: %+v %v", completed, err)
+			}
+			// C starts a new operation while A is still returning.
+			plantPendingIntent(t, ctx, control, runtime, completed.Generation, portablesetup.Intent{
+				Version: 1, SetupIntentID: "operation-c", Action: "uninstall", Stage: "confirmed", ExpectedGeneration: completed.Generation,
+				Targets: []portablesetup.IntentTarget{{Client: "claude", Units: []string{"agent-notify"}}},
+			})
+			before, err := installruntime.ReadInstalledSnapshot(control)
+			if err != nil {
+				t.Fatal(err)
+			}
+			payload, err := os.ReadFile(portablesetup.IntentPath(control))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !initiating {
+				original.reservation = nil
+			}
+			got, err := finishWizardIntent(ctx, Request{ControlRoot: control}, runtime, original, nil)
+			if !errors.Is(err, ErrRefused) || got.Outcome != "conflict" || got.Reason != "concurrent_change" {
+				t.Fatalf("stale cleanup accepted: %+v %v", got, err)
+			}
+			after, err := installruntime.ReadInstalledSnapshot(control)
+			if err != nil || after.Ledger.PendingMutation == nil || *after.Ledger.PendingMutation != *before.Ledger.PendingMutation || after.Ledger.Generation != before.Ledger.Generation {
+				t.Fatalf("new reservation changed: %+v %v", after.Ledger, err)
+			}
+			retained, err := os.ReadFile(portablesetup.IntentPath(control))
+			if err != nil || string(retained) != string(payload) {
+				t.Fatalf("new intent changed: %q %v", retained, err)
+			}
+		})
 	}
 }

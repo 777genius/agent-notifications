@@ -161,6 +161,9 @@ type Result struct {
 	// DataRetained is true after the last live binding is removed while
 	// PLUGIN_DATA remains. Absent inspect rows are not a license to run.
 	DataRetained bool `json:"dataRetained,omitempty"`
+
+	// reservation belongs to this invocation, never a later ledger snapshot.
+	reservation *installruntime.PendingMutation
 }
 
 func (r Result) ExitCode() int {
@@ -1688,7 +1691,8 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		}
 	}
 	reportProgress(req, "preflight")
-	snap, err := publishWizardIntent(ctx, req, snap, runtimeRoot, hookAgents, notifyAgents, true)
+	snap, reservation, err := publishWizardIntent(ctx, req, snap, runtimeRoot, hookAgents, notifyAgents, true)
+	out.reservation = reservation
 	if err != nil {
 		if errors.Is(err, portablesetup.ErrConcurrentChange) {
 			out.Outcome, out.Reason = "conflict", "concurrent_change"
@@ -2079,7 +2083,8 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 		}
 	}
 	reportProgress(req, "preflight")
-	snap, err := publishWizardIntent(ctx, req, snap, runtimeRoot, hookAgents, notifyAgents, portablePresent)
+	snap, reservation, err := publishWizardIntent(ctx, req, snap, runtimeRoot, hookAgents, notifyAgents, portablePresent)
+	out.reservation = reservation
 	if err != nil {
 		if errors.Is(err, portablesetup.ErrConcurrentChange) {
 			out.Outcome, out.Reason = "conflict", "concurrent_change"
@@ -3571,19 +3576,20 @@ func knownReceiptID(mat portablesetup.Materializer, installationID, clientID str
 	return ""
 }
 
-func publishWizardIntent(ctx context.Context, req Request, snap installruntime.InstalledSnapshot, runtimeRoot string, hookAgents, notifyAgents []portable.Integration, portablePresent bool) (installruntime.InstalledSnapshot, error) {
+func publishWizardIntent(ctx context.Context, req Request, snap installruntime.InstalledSnapshot, runtimeRoot string, hookAgents, notifyAgents []portable.Integration, portablePresent bool) (installruntime.InstalledSnapshot, *installruntime.PendingMutation, error) {
 	if snap.Ledger.PendingMutation != nil {
-		return snap, nil
+		reservation := *snap.Ledger.PendingMutation
+		return snap, &reservation, nil
 	}
 	if !wizardWillMutate(hookAgents, notifyAgents, portablePresent, req.Action == ActionInstall) {
-		return snap, nil
+		return snap, nil, nil
 	}
 	targets := wizardIntentTargets(req, hookAgents, notifyAgents)
 	targets = attachKnownReceipts(req, snap, runtimeRoot, targets)
 	if len(targets) == 0 {
-		return snap, nil
+		return snap, nil, nil
 	}
-	if _, _, err := (portablesetup.Service{}).PublishConfirmedIntent(ctx, portablesetup.ConfirmedIntent{
+	_, reservation, err := (portablesetup.Service{}).PublishConfirmedIntent(ctx, portablesetup.ConfirmedIntent{
 		ControlRoot: req.ControlRoot, RuntimeRoot: runtimeRoot, Owner: snap.Ledger.Owner,
 		ExpectedGeneration: snap.Ledger.Generation, Action: string(req.Action), Stage: "confirmed",
 		SourceRevision: req.ReleaseVersion, SourceDigest: req.PackageSHA256,
@@ -3592,10 +3598,20 @@ func publishWizardIntent(ctx context.Context, req Request, snap installruntime.I
 		GlobalConfig:        req.GlobalConfig,
 		ExternalUninstalled: req.ExternalUninstalled,
 		Targets:             targets,
-	}); err != nil {
-		return snap, err
+	})
+	if err != nil {
+		return snap, nil, err
 	}
-	return installruntime.ReadInstalledSnapshot(req.ControlRoot)
+	// Another invocation may complete this intent and publish a new one before
+	// the refresh. Keep the token returned by publication and reject substitution.
+	current, err := installruntime.ReadInstalledSnapshot(req.ControlRoot)
+	if err != nil {
+		return snap, reservation, err
+	}
+	if reservation == nil || current.Ledger.PendingMutation == nil || *current.Ledger.PendingMutation != *reservation {
+		return snap, reservation, portablesetup.ErrConcurrentChange
+	}
+	return current, reservation, nil
 }
 
 func shouldFinishWizardIntent(out Result) bool {
@@ -3626,7 +3642,11 @@ func finishWizardIntent(ctx context.Context, req Request, runtimeRoot string, ou
 	if snap.Ledger.PendingMutation == nil {
 		return out, err
 	}
-	cp := *snap.Ledger.PendingMutation
+	if out.reservation == nil || *snap.Ledger.PendingMutation != *out.reservation {
+		out.Outcome, out.Reason = "conflict", "concurrent_change"
+		return out, ErrRefused
+	}
+	cp := *out.reservation
 	gen, finished, finishErr := (portablesetup.Service{}).FinishConfirmedIntent(ctx, portablesetup.ConfirmedIntent{
 		ControlRoot: req.ControlRoot, RuntimeRoot: runtimeRoot, Owner: snap.Ledger.Owner,
 	}, &cp)

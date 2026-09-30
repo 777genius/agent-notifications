@@ -1610,12 +1610,7 @@ configure_agent_policy() {
     local -a configure_cmd=(setup-notifications configure --provider "$PRODUCT")
     configure_cmd+=(${CONFIGURE_ARGS[@]+"${CONFIGURE_ARGS[@]}"})
     if [ "${1:-}" = portable ]; then
-        configure_cmd+=(--policy-only)
-        local arg has_preserve_policy=false
-        for arg in "${CONFIGURE_ARGS[@]}"; do
-            [ "$arg" != --preserve-policy ] || has_preserve_policy=true
-        done
-        [ "$has_preserve_policy" = true ] || configure_cmd+=(--preserve-policy)
+        configure_cmd+=(--policy-only --preserve-enabled)
     fi
     if ! "$CONFIGURE_BINARY" "${configure_cmd[@]}"; then
         echo -e "${YELLOW}⚠ Agent-notify setup failed; plugin/hooks install succeeded.${NC}" >&2

@@ -59,17 +59,21 @@ cat > "$SANDBOX/configure-parser" <<'EOF'
 #!/bin/bash
 preserve=0
 policy=0
+enabled=0
 for arg in "$@"; do
     [ "$arg" != --preserve-policy ] || preserve=$((preserve + 1))
     [ "$arg" != --policy-only ] || policy=$((policy + 1))
+    [ "$arg" != --preserve-enabled ] || enabled=$((enabled + 1))
 done
-[ "$preserve" -eq 1 ] && [ "$policy" -eq 1 ]
+[ "$preserve" -eq "$EXPECTED_PRESERVE" ] && [ "$policy" -eq 1 ] && [ "$enabled" -eq 1 ]
 EOF
 chmod +x "$SANDBOX/configure-parser"
 (
     CONFIGURE_BINARY="$SANDBOX/configure-parser"
     PRODUCT=claude
+    export EXPECTED_PRESERVE=1
     configure_agent_policy portable
+    export EXPECTED_PRESERVE=0
     CONFIGURE_ARGS=(--navigation none --allow-unknown-caller true --allow-caller-asserted false)
     configure_agent_policy portable
 )

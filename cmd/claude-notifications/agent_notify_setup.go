@@ -31,6 +31,7 @@ Operations: configure | wizard | prepare | status | register | remove | enable |
 Configure requires --provider codex|claude|both and an explicit fresh route.
   --policy-only skips legacy MCP/skill registration before portable UAP handoff.
   --preserve-policy keeps existing enablement, consent and route on repeat setup.
+  --preserve-enabled keeps enablement while applying explicit route/consent choices.
 Wizard is a separate master: setup-notifications wizard --help
   --codex-home ABS and --request-permission are configure-only choices.
   Configure resolves primary runtime, generation and canonical global internally.

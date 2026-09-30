@@ -102,7 +102,7 @@ if [ "$SKIP_AGENT_NOTIFY" != true ]; then
     i=$((i + 1))
   done
   if [ -z "$nav" ] && [ -z "$app" ] && [ -z "$team" ] && [ -z "$unknown" ] && [ -z "$asserted" ]; then
-    CONFIGURE_ARGS+=(--navigation none --allow-unknown-caller true --allow-caller-asserted false)
+    CONFIGURE_ARGS+=(--navigation none --allow-unknown-caller true --allow-caller-asserted false --preserve-policy)
   elif [ "$nav" = none ]; then
     if [ -n "$app" ] || [ -n "$team" ]; then
       echo "navigation none cannot combine with --app/--team-id." >&2; exit 1
@@ -144,8 +144,8 @@ if [ "$SKIP_AGENT_NOTIFY" != true ]; then
     fi
     case "$(uname -s 2>/dev/null)" in
       Darwin|Linux|MINGW*|MSYS*|CYGWIN*)
-        if ! "$NOTIFY_BIN" setup-notifications configure --provider claude "${CONFIGURE_ARGS[@]}" --policy-only --preserve-policy; then
-          printf 'agent-notify configure failed; plugin install files remain. Retry: %s\n' "$(quote_shell_command "$NOTIFY_BIN" setup-notifications configure --provider claude "${CONFIGURE_ARGS[@]}" --policy-only --preserve-policy)" >&2
+        if ! "$NOTIFY_BIN" setup-notifications configure --provider claude "${CONFIGURE_ARGS[@]}" --policy-only --preserve-enabled; then
+          printf 'agent-notify configure failed; plugin install files remain. Retry: %s\n' "$(quote_shell_command "$NOTIFY_BIN" setup-notifications configure --provider claude "${CONFIGURE_ARGS[@]}" --policy-only --preserve-enabled)" >&2
           exit 1
         fi
         ;;

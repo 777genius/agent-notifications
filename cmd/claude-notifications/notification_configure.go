@@ -27,6 +27,7 @@ type notificationConfigureRequest struct {
 	Route             *notifysetup.Route
 	RequestPermission bool
 	PreservePolicy    bool
+	PreserveEnabled   bool
 	PolicyOnly        bool
 }
 type notificationConfigureDependencies struct {
@@ -172,20 +173,21 @@ func configureNotifications(ctx context.Context, request notificationConfigureRe
 	}
 	enabled := true
 	setupRequest := notifysetup.Request{ExpectedGeneration: result.Generation, Enabled: &enabled, Route: request.Route}
-	// Bootstrap defaults seed fresh installs; they do not replace saved consent,
-	// routing, or an explicit opt-out during the later portable handoff.
-	if request.PreservePolicy {
+	// Automatic defaults seed policy. Explicit routes may replace consent while
+	// the portable handoff preserves an existing enablement decision.
+	if request.PreservePolicy || request.PreserveEnabled {
 		policy, err := installruntime.ReadPolicySnapshot(ctx, deps.ControlRoot)
 		if err != nil {
 			return result, err
 		}
-		// Preserve every existing policy decision, including an explicit
-		// enabled=false document that has no route field.
+		// An explicit enabled=false document needs no route to remain disabled.
 		_, routeConfigured := policy.Fields["route"]
 		_, enabledConfigured := policy.Fields["enabled"]
 		if routeConfigured || enabledConfigured {
 			setupRequest.Enabled = nil
-			setupRequest.Route = nil
+			if request.PreservePolicy {
+				setupRequest.Route = nil
+			}
 		}
 	}
 	if e = notifysetup.Inspect(ctx, options, setupRequest, prepared); e != nil {
@@ -533,6 +535,12 @@ func parseNotificationConfigure(args []string) (r notificationConfigureRequest, 
 				return r, false, errors.New("invalid_arguments")
 			}
 			r.PreservePolicy = true
+			continue
+		case "preserve-enabled":
+			if inline {
+				return r, false, errors.New("invalid_arguments")
+			}
+			r.PreserveEnabled = true
 			continue
 		case "policy-only":
 			if inline {

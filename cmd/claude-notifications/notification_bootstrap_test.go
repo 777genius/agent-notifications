@@ -264,6 +264,24 @@ main --product both
 	if !slices.Contains(strings.Fields(body), "--policy-only") || !slices.Contains(strings.Fields(body), "--preserve-policy") {
 		t.Fatal("portable setup must not let the legacy writer register MCP", body)
 	}
+	// Explicit consent must reach configure without the default-only policy flag.
+	if err := os.Remove(filepath.Join(home, "calls")); err != nil {
+		t.Fatal(err)
+	}
+	explicitScript := strings.Replace(script, "main --product both\n", "main --product both --navigation none --allow-unknown-caller false --allow-caller-asserted false\n", 1)
+	command = exec.Command("bash", "-c", explicitScript)
+	command.Dir = home
+	if output, err = command.CombinedOutput(); err != nil {
+		t.Fatalf("explicit consent: %v: %s", err, output)
+	}
+	calls, err = os.ReadFile(filepath.Join(home, "calls"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	explicitFields := strings.Fields(strings.SplitN(string(calls), "\n", 2)[0])
+	if !slices.Contains(explicitFields, "--preserve-enabled") || slices.Contains(explicitFields, "--preserve-policy") || flagValue(explicitFields, "--allow-unknown-caller") != "false" {
+		t.Fatal("explicit consent suppressed", string(calls))
+	}
 	// The same public entrypoint previously fell through to direct configure
 	// when uname reported Git Bash, even though the CLI advertised the wizard.
 	if err := os.Remove(filepath.Join(home, "calls")); err != nil {
@@ -773,6 +791,22 @@ curl() { printf '#!/bin/sh\necho installed >> "$HOME/installs"\n' > "$4"; }
 	}
 	if !slices.Contains(strings.Fields(got), "--policy-only") || !slices.Contains(strings.Fields(got), "--preserve-policy") {
 		t.Fatal("init must keep direct MCP writer out of portable setup", got)
+	}
+	if err := os.Remove(filepath.Join(home, "calls")); err != nil {
+		t.Fatal(err)
+	}
+	command = exec.Command("bash", "-c", script, "init", "--navigation", "none", "--allow-unknown-caller", "false", "--allow-caller-asserted", "false")
+	command.Dir = home
+	if output, err = command.CombinedOutput(); err != nil {
+		t.Fatalf("explicit init consent: %v: %s", err, output)
+	}
+	calls, err = os.ReadFile(filepath.Join(home, "calls"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	explicitFields := strings.Fields(strings.SplitN(string(calls), "\n", 2)[0])
+	if !slices.Contains(explicitFields, "--preserve-enabled") || slices.Contains(explicitFields, "--preserve-policy") || flagValue(explicitFields, "--allow-unknown-caller") != "false" {
+		t.Fatal("explicit init consent suppressed", string(calls))
 	}
 	// /init must use the same capable Windows path as bootstrap.
 	launcher := filepath.Join(bundle, "bin", "claude-notifications.bat")
