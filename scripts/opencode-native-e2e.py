@@ -175,6 +175,22 @@ def main():
     parser.add_argument("--arch", choices=("arm64", "amd64"), required=True)
     parser.add_argument("--report", type=pathlib.Path, required=True)
     args = parser.parse_args()
+    report = {"schema_version": 1, "status": "fail", "host": platform.platform(),
+              "os": args.os, "arch": args.arch, "opencode_version": VERSION,
+              "desktop_visual_outcome": "not_observed"}
+    try:
+        qualify(args, report)
+    except Exception as error:
+        report["status"] = "fail"
+        report["failure"] = redact(str(error))[-1200:]
+        raise
+    finally:
+        args.report.parent.mkdir(parents=True, exist_ok=True)
+        args.report.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+        print(json.dumps(report, sort_keys=True))
+
+
+def qualify(args, report):
     expected_name, expected_digest = ARCHIVES[(args.os, args.arch)]
     if args.archive and (args.archive.name != expected_name or digest(args.archive) != expected_digest):
         raise RuntimeError("OpenCode release archive name or SHA-256 differs from v1.18.33 pin")
@@ -192,13 +208,10 @@ def main():
                            and modified.group(1) == "false")
     if args.archive and not verified_source:
         raise RuntimeError("candidate binary lacks clean VCS metadata for exact checkout HEAD")
-    report = {"schema_version": 1, "status": "fail",
-              "candidate_sha": source_sha if verified_source else "local_binary_unattributed",
-              "source_checkout_sha": source_sha,
-              "host": platform.platform(), "os": args.os, "arch": args.arch,
-              "product_binary_sha256": digest(candidate), "opencode_version": VERSION,
-              "opencode_archive_sha256": expected_digest if args.archive else "local_self_check",
-              "desktop_visual_outcome": "not_observed"}
+    report.update({"candidate_sha": source_sha if verified_source else "local_binary_unattributed",
+                   "source_checkout_sha": source_sha,
+                   "product_binary_sha256": digest(candidate),
+                   "opencode_archive_sha256": expected_digest if args.archive else "local_self_check"})
     repo = pathlib.Path(__file__).resolve().parents[1]
     report["bundled_js_source_sha256"] = digest(repo / "internal" / "opencodeplugin" /
                                                  "dist" / "agent-notifications.js")
@@ -360,17 +373,10 @@ def main():
                                    "loaded_old_plugin_post_remove": "no_webhook"})
                 finally:
                     stop_server(server)
-    except Exception as error:
-        report["status"] = "fail"
-        report["failure"] = redact(str(error))[-1200:]
-        raise
     finally:
         for item in servers:
             item.shutdown()
             item.server_close()
-        args.report.parent.mkdir(parents=True, exist_ok=True)
-        args.report.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
-        print(json.dumps(report, sort_keys=True))
 
 
 if __name__ == "__main__":
