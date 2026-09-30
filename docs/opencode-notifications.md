@@ -65,8 +65,15 @@ otherwise `$XDG_CONFIG_HOME/opencode/plugins/agent-notifications.js`, otherwise
 `~/.config/opencode/plugins/agent-notifications.js`. Use the same environment when
 setting up and starting OpenCode. The CLI also supports `--opencode-config-dir`,
 `--xdg-config-home`, `--home`, `--control-root` and `--runtime-root` for explicit
-placement. On Windows pass native absolute paths (Git Bash `cygpath -m` can
-convert them).
+placement. On Windows, OpenCode placement paths must be clean native absolute
+paths with backslashes, without `..` or a trailing separator. In Git Bash use
+`cygpath -w` and quote the result, especially for `OPENCODE_CONFIG_DIR`,
+`XDG_CONFIG_HOME`, `--opencode-config-dir` and `--home`; `cygpath -m` emits forward
+slashes and does not satisfy this strict placement contract. For example:
+
+```bash
+export OPENCODE_CONFIG_DIR="$(cygpath -w /absolute/path/to/opencode-profile)"
+```
 
 For manual/offline setup, obtain the native `claude-notifications-OS-ARCH` release
 binary (`.exe` on Windows) and verify it against that release's `checksums.txt`.

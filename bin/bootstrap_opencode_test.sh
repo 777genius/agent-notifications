@@ -24,8 +24,11 @@ test_env_setup "$SANDBOX"
 export OPENCODE_CONFIG_DIR="$SANDBOX/opencode profile"
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
-        export USERPROFILE="$(cygpath -m "$USERPROFILE")" APPDATA="$(cygpath -m "$APPDATA")"
-        export LOCALAPPDATA="$(cygpath -m "$LOCALAPPDATA")" OPENCODE_CONFIG_DIR="$(cygpath -m "$OPENCODE_CONFIG_DIR")"
+        # OpenCode's strict placement contract requires filepath.Clean(path) ==
+        # path. Native Windows environment paths therefore need backslashes.
+        export USERPROFILE="$(cygpath -w "$USERPROFILE")" APPDATA="$(cygpath -w "$APPDATA")"
+        export LOCALAPPDATA="$(cygpath -w "$LOCALAPPDATA")" OPENCODE_CONFIG_DIR="$(cygpath -w "$OPENCODE_CONFIG_DIR")"
+        export XDG_CONFIG_HOME="$(cygpath -w "$XDG_CONFIG_HOME")"
         ;;
 esac
 sed '/^main "\$@"$/d' "$ROOT/bin/bootstrap.sh" > "$SANDBOX/functions.sh"
