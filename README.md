@@ -11,9 +11,9 @@
   <a href="docs/opencode-notifications.md"><img src="brand/opencode-logo.svg" width="64" height="64" alt="OpenCode" title="OpenCode" /></a>
 </p>
 
-[![Ubuntu CI](https://github.com/777genius/agent-notifications/workflows/Ubuntu%20CI/badge.svg)](https://github.com/777genius/agent-notifications/actions)
-[![macOS CI](https://github.com/777genius/agent-notifications/workflows/macOS%20CI/badge.svg)](https://github.com/777genius/agent-notifications/actions)
-[![Windows CI](https://github.com/777genius/agent-notifications/workflows/Windows%20CI/badge.svg)](https://github.com/777genius/agent-notifications/actions)
+[![Ubuntu CI](https://github.com/777genius/agent-notifications/actions/workflows/ci-ubuntu.yml/badge.svg?branch=main&event=push)](https://github.com/777genius/agent-notifications/actions/workflows/ci-ubuntu.yml?query=branch%3Amain+event%3Apush)
+[![macOS CI](https://github.com/777genius/agent-notifications/actions/workflows/ci-macos.yml/badge.svg?branch=main&event=push)](https://github.com/777genius/agent-notifications/actions/workflows/ci-macos.yml?query=branch%3Amain+event%3Apush)
+[![Windows CI](https://github.com/777genius/agent-notifications/actions/workflows/ci-windows.yml/badge.svg?branch=main&event=push)](https://github.com/777genius/agent-notifications/actions/workflows/ci-windows.yml?query=branch%3Amain+event%3Apush)
 [![Go Reference](https://pkg.go.dev/badge/github.com/777genius/agent-notifications.svg)](https://pkg.go.dev/github.com/777genius/agent-notifications)
 [![codecov](https://codecov.io/gh/777genius/agent-notifications/graph/badge.svg?branch=main)](https://codecov.io/gh/777genius/agent-notifications)
 
