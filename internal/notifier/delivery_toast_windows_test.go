@@ -5,9 +5,12 @@ package notifier
 import (
 	"context"
 	"errors"
-	"os/exec"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/windows"
 
 	"github.com/777genius/agent-notifications/internal/notification"
 )
@@ -58,10 +61,26 @@ func TestWindowsPowerShellToastSessionSubmissionHonorsCancellation(t *testing.T)
 }
 
 func TestOpenWindowsToastRequiresPowerShell(t *testing.T) {
-	previous := lookWindowsPowerShell
-	lookWindowsPowerShell = func(string) (string, error) { return "", exec.ErrNotFound }
-	t.Cleanup(func() { lookWindowsPowerShell = previous })
-	if session, err := openWindowsToast(context.Background()); !errors.Is(err, exec.ErrNotFound) || session != nil {
+	previous := resolveWindowsPowerShell
+	resolveWindowsPowerShell = func() (string, error) { return "", os.ErrNotExist }
+	t.Cleanup(func() { resolveWindowsPowerShell = previous })
+	if session, err := openWindowsToast(context.Background()); !errors.Is(err, os.ErrNotExist) || session != nil {
 		t.Fatalf("open = %#v, %v", session, err)
+	}
+}
+
+func TestSystemPowerShellIgnoresUserPath(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	systemDir, err := windows.GetSystemDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := systemWindowsPowerShell()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(systemDir, "WindowsPowerShell", "v1.0", "powershell.exe")
+	if got != want {
+		t.Fatalf("PowerShell path = %q, want %q", got, want)
 	}
 }

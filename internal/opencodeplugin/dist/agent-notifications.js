@@ -280,14 +280,26 @@ function createObserver(options) {
 
 // ipc.mjs
 import { spawn } from "node:child_process";
+import path from "node:path";
 var executable = "__AGENT_NOTIFICATIONS_EXECUTABLE__";
 var controlRoot = "__AGENT_NOTIFICATIONS_CONTROL_ROOT__";
 var maxWireBytes = 4096;
 var maxReceiptBytes = 1024;
 var processTimeoutMs = 25e3;
-async function forward(event, spawnProcess = spawn, binary = executable, root = controlRoot) {
+var commonEnvironment = ["AGENT_NOTIFICATIONS_CONFIG"];
+var posixEnvironment = ["HOME", "XDG_CONFIG_HOME", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR"];
+var windowsEnvironment = ["SystemRoot", "WINDIR", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP"];
+function absoluteNativePath(value, platform) {
+  if (typeof value !== "string" || value.includes("\0")) return false;
+  if (platform !== "win32") return path.posix.isAbsolute(value);
+  if (value.startsWith("\\\\?\\") || value.startsWith("\\\\.\\")) return false;
+  const drive = /^[A-Za-z]:\\/.test(value);
+  const unc = /^\\\\[^\\]+\\[^\\]+\\/.test(value);
+  return (drive || unc) && path.win32.normalize(value) === value;
+}
+async function forward(event, spawnProcess = spawn, binary = executable, root = controlRoot, platform = process.platform) {
   const body = Buffer.from(JSON.stringify(event));
-  if (body.length > maxWireBytes || !binary.startsWith("/") || binary.includes("\0") || !root.startsWith("/") || root.includes("\0")) return "invalid_plugin";
+  if (body.length > maxWireBytes || !absoluteNativePath(binary, platform) || !absoluteNativePath(root, platform) || platform === "win32" && !binary.toLowerCase().endsWith(".exe")) return "invalid_plugin";
   return new Promise((resolve) => {
     let settled = false;
     let timer;
@@ -303,7 +315,7 @@ async function forward(event, spawnProcess = spawn, binary = executable, root = 
       child = spawnProcess(binary, ["opencode-event", "--protocol", "1"], {
         shell: false,
         stdio: ["pipe", "pipe", "pipe"],
-        env: { ...Object.fromEntries(["HOME", "XDG_CONFIG_HOME", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR", "AGENT_NOTIFICATIONS_CONFIG"].filter((key) => process.env[key] !== void 0).map((key) => [key, process.env[key]])), AGENT_NOTIFICATIONS_CONTROL_ROOT: root }
+        env: { ...Object.fromEntries([...commonEnvironment, ...platform === "win32" ? windowsEnvironment : posixEnvironment].filter((key) => process.env[key] !== void 0).map((key) => [key, process.env[key]])), AGENT_NOTIFICATIONS_CONTROL_ROOT: root }
       });
     } catch {
       finish("spawn_failed");

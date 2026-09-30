@@ -74,6 +74,10 @@ type transaction struct {
 // Request stages ordinary file bytes before Commit. Prepare runs under the
 // component and config locks, and may only compute adapter-owned JSON changes.
 type Request struct {
+	// RevokeOpenCode permits only the exact desktop/webhook false policy patch
+	// when delivery assets are damaged. It still requires a registered consumer,
+	// generation and policy CAS; no asset, native or other policy mutation is allowed.
+	RevokeOpenCode bool
 	// PolicyOnly requires an already-managed runtime and existing kernel locks.
 	// It refuses recovery and asset/consumer mutations; setup cannot accidentally
 	// promote native or rewrite hooks from an unrelated pending transaction.
@@ -251,6 +255,9 @@ func retainedPortablePrimaryFiles(l Ledger, oldRoot, newRoot, movingID string, s
 // order. The durable redo record precedes every live mutation. Recovery checks
 // every identity before changing anything and refuses ambiguous foreign edits.
 func Commit(ctx context.Context, r Request) (Ledger, error) {
+	if r.RevokeOpenCode && !openCodeRevokeOnly(r) {
+		return Ledger{}, fmt.Errorf("invalid OpenCode channel revocation")
+	}
 	if err := reservationRequestInvalid(r); err != nil {
 		return Ledger{}, err
 	}
@@ -400,7 +407,7 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 		return l, err
 	}
 
-	if l.Native != nil && !policyDisableOnly(r) {
+	if l.Native != nil && !policyDisableOnly(r) && !r.RevokeOpenCode {
 		if err := validateNativeRecord(l.Native); err != nil {
 			return l, err
 		}
@@ -422,6 +429,9 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 		return l, fmt.Errorf("component owned by %s at %s; explicit takeover required", l.Owner, l.RuntimeRoot)
 	}
 	previous, registered := l.Consumers[r.ConsumerID]
+	if r.RevokeOpenCode && (!registered || previous.RuntimeRoot != r.RuntimeRoot || previous.Registration == "") {
+		return l, fmt.Errorf("OpenCode revocation requires its registered runtime")
+	}
 	relocating := !r.RefreshOnly && registered && previous.RuntimeRoot != "" && previous.RuntimeRoot != r.RuntimeRoot
 	if relocating && (!r.RelocateVersionedCache || r.RemoveConsumer || r.ConsumerID != "claude-hooks" || r.Owner != "existing-installer" ||
 		!versionedClaudeCachePeers(previous.RuntimeRoot, r.RuntimeRoot)) {
@@ -495,6 +505,9 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 		}
 	}
 	for path, want := range l.Files {
+		if r.RevokeOpenCode {
+			break
+		}
 		got, e := Fingerprint(path)
 		if e != nil {
 			return l, e

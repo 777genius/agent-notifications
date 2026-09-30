@@ -8,6 +8,9 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
+
+	"golang.org/x/sys/windows"
 
 	"github.com/777genius/agent-notifications/internal/notification"
 )
@@ -17,14 +20,30 @@ type windowsPowerShellToastSession struct{}
 const windowsToastPowerShell = `$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Runtime.WindowsRuntime; $xmlBytes=[Convert]::FromBase64String($env:AGENT_NOTIFICATIONS_TOAST_XML); $xmlText=[Text.Encoding]::UTF8.GetString($xmlBytes); $doc=[Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom.XmlDocument,ContentType=WindowsRuntime]::New(); $doc.LoadXml($xmlText); $toast=[Windows.UI.Notifications.ToastNotification,Windows.UI.Notifications,ContentType=WindowsRuntime]::New($doc); [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($env:AGENT_NOTIFICATIONS_TOAST_APP_ID).Show($toast)`
 
 var submitWindowsToast = runWindowsToast
-var lookWindowsPowerShell = exec.LookPath
+var resolveWindowsPowerShell = systemWindowsPowerShell
+
+func systemWindowsPowerShell() (string, error) {
+	systemDir, err := windows.GetSystemDirectory()
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(systemDir, "WindowsPowerShell", "v1.0", "powershell.exe")
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() {
+		return "", errors.New("system PowerShell is not a regular file")
+	}
+	return path, nil
+}
 
 func runWindowsToast(ctx context.Context, p windowsToastPayload) error {
 	data, err := encodeWindowsToast(p)
 	if err != nil {
 		return err
 	}
-	powershell, err := lookWindowsPowerShell("powershell.exe")
+	powershell, err := resolveWindowsPowerShell()
 	if err != nil {
 		return err
 	}
@@ -44,7 +63,7 @@ func openWindowsToast(ctx context.Context) (windowsToastSession, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if _, err := lookWindowsPowerShell("powershell.exe"); err != nil {
+	if _, err := resolveWindowsPowerShell(); err != nil {
 		return nil, err
 	}
 	return windowsPowerShellToastSession{}, nil
