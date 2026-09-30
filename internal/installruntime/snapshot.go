@@ -156,6 +156,57 @@ func AcquireSetupLease(ctx context.Context, root string, expected InstalledSnaps
 	return acquireInstalledLease(ctx, root, expected, false)
 }
 
+// AcquirePolicyLease pins the exact observed policy and installation through a
+// consumer's bounded handoff. Unlike AcquireInstalledLease, portable enablement
+// is not an admission condition: the consumer must check its own registration
+// and consent against the returned snapshot before using the retained native
+// bundle. Both existing locks are retained until release.
+func AcquirePolicyLease(ctx context.Context, root string, expected PolicySnapshot) (PolicySnapshot, func(), error) {
+	var zero PolicySnapshot
+	if root == "" {
+		return zero, nil, fmt.Errorf("managed control root required")
+	}
+	if err := privateDirectory(root); err != nil {
+		return zero, nil, err
+	}
+	componentRelease, err := LockExisting(ctx, filepath.Join(root, ".component-install.lock"))
+	if err != nil {
+		return zero, nil, err
+	}
+	success := false
+	var configRelease func()
+	defer func() {
+		if !success {
+			if configRelease != nil {
+				configRelease()
+			}
+			componentRelease()
+		}
+	}()
+	configRelease, err = LockExisting(ctx, filepath.Join(root, "agent-notifications.json.lock"))
+	if err != nil {
+		return zero, nil, err
+	}
+	current := PolicySnapshot{}
+	current.Policy, current.Fields, current.Preimage, err = readPolicyForUpdate(root)
+	if err != nil {
+		return zero, nil, err
+	}
+	current.Installation, err = readInstalledSnapshot(root, &current.Policy)
+	if err != nil {
+		return zero, nil, err
+	}
+	if current.Installation.Recovery || current.Installation.Ledger.ID == "" ||
+		current.Preimage != expected.Preimage || !reflect.DeepEqual(current.Installation, expected.Installation) {
+		return zero, nil, fmt.Errorf("consumer policy or installation snapshot changed")
+	}
+	if err := ctx.Err(); err != nil {
+		return zero, nil, err
+	}
+	success = true
+	return current, func() { configRelease(); componentRelease() }, nil
+}
+
 func acquireInstalledLease(ctx context.Context, root string, expected InstalledSnapshot, requireEnabled bool) (InstalledSnapshot, func(), error) {
 	var zero InstalledSnapshot
 	if root == "" {

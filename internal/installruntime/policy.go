@@ -23,6 +23,57 @@ type PolicySnapshot struct {
 	Fields       map[string]json.RawMessage
 }
 
+// RevocationSnapshot is only a CAS preimage for turning a consumer's channels
+// off. It deliberately does not assert that native or owned assets are usable.
+type RevocationSnapshot struct {
+	Generation uint64
+	Preimage   Identity
+}
+
+// ReadRevocationSnapshot keeps the same component/config lock order as policy
+// reads while allowing a damaged delivery asset to be revoked. Commit performs
+// the final generation, ownership and exact policy preimage checks again.
+func ReadRevocationSnapshot(ctx context.Context, root string) (RevocationSnapshot, error) {
+	var result RevocationSnapshot
+	if root == "" {
+		return result, fmt.Errorf("managed control root required")
+	}
+	if err := privateDirectory(root); err != nil {
+		return result, err
+	}
+	release, err := LockExisting(ctx, filepath.Join(root, ".component-install.lock"))
+	if err != nil {
+		return result, err
+	}
+	defer release()
+	configRelease, err := LockExisting(ctx, filepath.Join(root, "agent-notifications.json.lock"))
+	if err != nil {
+		return result, err
+	}
+	defer configRelease()
+	l, err := readLedger(root)
+	if err != nil {
+		return result, err
+	}
+	if l.ID == "" {
+		return result, fmt.Errorf("managed installation required")
+	}
+	if _, err := os.Lstat(filepath.Join(root, "transaction.json")); err == nil {
+		return result, ErrPolicyRecovery
+	} else if !os.IsNotExist(err) {
+		return result, err
+	}
+	if err := checkPolicyGeneration(root, l); err != nil {
+		return result, err
+	}
+	_, _, result.Preimage, err = readPolicyForUpdate(root)
+	if err != nil {
+		return result, err
+	}
+	result.Generation = l.Generation
+	return result, nil
+}
+
 // ReadPolicySnapshot reads policy and installation generation under component,
 // then policy config locking. It never creates state or recovers transactions.
 // Call once per request without a journal lock; release precedes journal work.
@@ -175,4 +226,16 @@ func policyDisableOnly(r Request) bool {
 		len(r.PolicyFields) == 0 && len(r.Files) == 0 && r.Prepare == nil && r.Native == nil &&
 		!r.RemoveConsumer && !r.PurgeNative && !r.RetireNative && !r.RollbackPending &&
 		r.Reservation == nil && !r.ClearReservation
+}
+
+func openCodeRevokeOnly(r Request) bool {
+	if !r.PolicyOnly || !r.RefreshOnly || r.Owner != "existing-installer" || r.ConsumerID != "opencode-notifications" ||
+		r.ExpectedGeneration == nil || r.ExpectedPolicy == nil || r.PolicyEnabled != nil ||
+		len(r.PolicyFields) != 1 || string(r.PolicyFields["route"]) != `{"openCodeNotifications":{"desktop":false,"webhook":false}}` ||
+		len(r.Files) != 0 || len(r.ConfigPaths) != 0 || r.Prepare != nil || r.Native != nil ||
+		r.RemoveConsumer || r.PurgeNative || r.RetireNative || r.RollbackPending || r.RecoverOnly ||
+		r.Reservation != nil || r.ClearReservation || r.RelocateVersionedCache {
+		return false
+	}
+	return true
 }

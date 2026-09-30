@@ -8,6 +8,10 @@ Use `claude-notifications setup-opencode install` with an absolute, trusted,
 current Linux amd64 `--binary` source. Specify `--runtime-root` for a new
 installation; an existing managed installation uses its recorded runtime root.
 Select `--desktop`, `--webhook`, or both.
+Setup installs one managed Linux amd64 executable, one self-contained global
+OpenCode plugin file, and its ownership/consent records. It does not install
+OpenCode itself. Start or restart OpenCode after `install` or `update` so it
+loads the current plugin bytes; restart after `remove` to unload old code.
 For example, in a disposable test environment:
 
 ```sh
@@ -34,6 +38,16 @@ The desktop and webhook flags authorize only those channels. Product settings
 may further disable them. The event path rechecks policy, consumer registration,
 owned plugin and executable identities on each request and has no recovery or
 write behavior.
+An already admitted delivery can finish after `remove`; this MVP does not
+promise a strict in-flight revocation barrier.
+
+If the OpenCode desktop app also shows system notifications, its
+**Settings > General > Notifications** switches for **Agent**,
+**Permissions**, and **Errors** can be turned off to avoid overlap with the
+corresponding Agent Notifications channels. Other notification plugins in the
+OpenCode profile may also produce duplicates. The isolated qualification below
+loaded only this plugin; it does not prove duplicate-free behavior in a
+profile with other notification sources.
 
 ## Linux amd64 qualification
 
@@ -65,3 +79,17 @@ One-shot `opencode run` can exit after printing an answer before asynchronous
 notification delivery finishes. The persistent OpenCode server runs above
 verified both loaded desktop outcomes. This MVP is best effort at process
 shutdown; it does not promise delivery after the host exits.
+
+### Visible desktop check (2026-09-30)
+
+A second disposable, Git-initialized test project used the merged Notifications
+binary (`sha256:a1a70f35a6fbdd40ac50123dca5582c6fb4fe6e88724427bfc5f7e8d0460e7aa`)
+and OpenCode 1.18.33. `setup-opencode install --desktop` created a mode-0755
+managed executable and a mode-0600 global plugin. The loaded OpenCode config
+listed only that plugin. In a private D-Bus session with a real `dunst` daemon
+and Xvfb display, native completion, question, permission, and error events each
+rendered one visible system banner (`dunstctl count displayed` was 1 at each
+capture). The banners used generic text and omitted the test prompt markers.
+The [four captured banners](evidence/opencode-1.18.33-x11-notifications.png)
+show the actual X11 pixels, in that order. This qualifies the Linux X11/dunst
+path, not every desktop environment or the OpenCode desktop app's own switches.
