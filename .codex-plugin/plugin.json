@@ -1,5 +1,5 @@
 {
     "name": "claude-notifications-go",
-    "version": "1.45.18",
+    "version": "1.46.0",
     "hooks": "./hooks/hooks-codex.json"
 }

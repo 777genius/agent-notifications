@@ -253,10 +253,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
-      - name: Download all artifacts
+      - name: Download binary artifacts
         uses: actions/download-artifact@v8
         with:
+          pattern: binaries-*
           path: dist-artifacts
+
+      - name: Download notifier artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: ClaudeNotifier
+          path: dist-artifacts/ClaudeNotifier
 
       - name: Organize binaries
         run: |
@@ -295,26 +302,38 @@ jobs:
             platform: linux
             arch: amd64
             binary: claude-notifications-linux-amd64
+            opencode_archive: opencode-linux-x64.tar.gz
           - os: ubuntu-24.04-arm
             platform: linux
             arch: arm64
             binary: claude-notifications-linux-arm64
+            opencode_archive: opencode-linux-arm64.tar.gz
           - os: macos-15-intel
             platform: darwin
             arch: amd64
             binary: claude-notifications-darwin-amd64
+            opencode_archive: opencode-darwin-x64.zip
           - os: macos-26
             platform: darwin
             arch: arm64
             binary: claude-notifications-darwin-arm64
+            opencode_archive: opencode-darwin-arm64.zip
           - os: windows-latest
             platform: windows
             arch: amd64
             binary: claude-notifications-windows-amd64.exe
+            opencode_archive: opencode-windows-x64.zip
 
     steps:
       - name: Checkout artifact qualification tests
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Go for artifact identity and private Windows roots
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -383,3 +402,38 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: python scripts/release-artifact-e2e.py --binary "dist/${{ matrix.binary }}" --version "$RELEASE_TAG"
         shell: bash
+
+      - name: Fetch pinned OpenCode CLI
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OPENCODE_ARCHIVE: ${{ matrix.opencode_archive }}
+        run: |
+          set -euo pipefail
+          mkdir -p opencode-qualification
+          gh release download v1.18.33 --repo anomalyco/opencode \
+            --pattern "$OPENCODE_ARCHIVE" --dir opencode-qualification
+
+      - name: Qualify OpenCode lifecycle with release artifact
+        shell: bash
+        env:
+          MAIN_BINARY: ${{ matrix.binary }}
+          OPENCODE_ARCHIVE: ${{ matrix.opencode_archive }}
+          CANDIDATE_OS: ${{ matrix.platform }}
+          CANDIDATE_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          python scripts/opencode-native-e2e.py \
+            --binary "dist/$MAIN_BINARY" \
+            --archive "opencode-qualification/$OPENCODE_ARCHIVE" \
+            --os "$CANDIDATE_OS" --arch "$CANDIDATE_ARCH" \
+            --report opencode-qualification/opencode-release-e2e.json
+
+      - name: Upload OpenCode release artifact evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-release-e2e-${{ matrix.platform }}-${{ matrix.arch }}
+          path: opencode-qualification/opencode-release-e2e.json
+          if-no-files-found: error
+          retention-days: 14

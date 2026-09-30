@@ -1204,7 +1204,7 @@ footer .brand {
 }
 .agent-cards {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 18px;
   margin: 0 40px;
 }
@@ -1497,6 +1497,7 @@ footer .brand {
 }
 @media (max-width: 700px) {
   .agent-cards {
+    grid-template-columns: 1fr;
     margin-inline: 0;
     gap: 12px;
   }

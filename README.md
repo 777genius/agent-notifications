@@ -3,6 +3,14 @@
 </p>
 <h1 align="center"><a href="https://777genius.github.io/agent-notifications/">Agent Notifications</a></h1>
 
+<p align="center">
+  <a href="#install-or-update"><img src="landing/public/agents/claude.png" width="64" height="64" alt="Claude Code" title="Claude Code" /></a>
+  &nbsp;&nbsp;
+  <a href="docs/CODEX.md"><img src="brand/codex-logo.svg" width="64" height="64" alt="Codex CLI" title="Codex CLI" /></a>
+  &nbsp;&nbsp;
+  <a href="docs/opencode-notifications.md"><img src="brand/opencode-logo.svg" width="64" height="64" alt="OpenCode" title="OpenCode" /></a>
+</p>
+
 [![Ubuntu CI](https://github.com/777genius/agent-notifications/workflows/Ubuntu%20CI/badge.svg)](https://github.com/777genius/agent-notifications/actions)
 [![macOS CI](https://github.com/777genius/agent-notifications/workflows/macOS%20CI/badge.svg)](https://github.com/777genius/agent-notifications/actions)
 [![Windows CI](https://github.com/777genius/agent-notifications/workflows/Windows%20CI/badge.svg)](https://github.com/777genius/agent-notifications/actions)
@@ -19,20 +27,22 @@
 </table>
 </div>
 
-Desktop notifications and sounds for **Claude Code and Codex CLI**. Know when a task finishes, an agent needs input, or a tool needs approval. Click a notification to return to work.
+Desktop notifications for **Claude Code, Codex CLI and OpenCode**. Know when a task finishes, an agent needs input, or a tool needs approval. Claude and Codex also support sounds and click-to-focus.
+
+OpenCode provides silent, generic completion, question, permission and error alerts for root sessions, with explicit desktop/webhook consent. Tested with OpenCode **1.18.33**; V2 is not supported. [OpenCode setup, privacy and limits](docs/opencode-notifications.md)
 
 ## Features
 
-- **Task and attention alerts:** completions, reviews, questions, plans, session limits and API errors for Claude; completions and permission requests for Codex, with opt-in subagent alerts. [Event details](docs/NOTIFICATION_TYPES.md)
-- **Click-to-focus:** return to the originating terminal or editor, with exact tab/pane targeting for supported integrations including Ghostty, iTerm2, Warp, tmux, kitty and WezTerm. [Supported terminals](docs/CLICK_TO_FOCUS.md)
-- **Useful context:** project, git branch and session labels in notifications.
-- **Custom sounds:** built-in or custom MP3, WAV, FLAC, OGG and AIFF, with volume control, previews and audio output selection.
+- **Task and attention alerts:** completions, reviews, questions, plans, session limits and API errors for Claude; completions and permission requests for Codex, with opt-in subagent alerts; four generic root-session alerts for OpenCode. [Event details](docs/NOTIFICATION_TYPES.md)
+- **Click-to-focus (Claude/Codex):** return to the originating terminal or editor, with exact tab/pane targeting for supported integrations including Ghostty, iTerm2, Warp, tmux, kitty and WezTerm. [Supported terminals](docs/CLICK_TO_FOCUS.md)
+- **Useful context (Claude/Codex):** project, git branch and session labels in notifications.
+- **Custom sounds (Claude/Codex):** built-in or custom MP3, WAV, FLAC, OGG and AIFF, with volume control, previews and audio output selection.
 - **Less noise:** focus-aware delivery, optional delay, duplicate-question suppression, filters by status, branch or folder, opt-in respect for the desktop's Do Not Disturb state, and opt-in muting while the display is asleep (macOS). [Do Not Disturb](docs/DO_NOT_DISTURB.md) · [Display sleep](docs/CONFIGURATION.md#mute-sound-while-display-is-asleep)
-- **Your settings per agent:** shared configuration with separate Claude and Codex overrides; control desktop and webhook delivery per status. [Agent settings](docs/AGENT_CONFIGURATION.md)
+- **Your settings per agent:** shared configuration with separate Claude, Codex and OpenCode overrides; control desktop and webhook delivery per status. [Agent settings](docs/AGENT_CONFIGURATION.md)
 - **Webhooks:** Slack, Discord, Telegram, Lark/Feishu and custom endpoints, including Teams, ntfy, PagerDuty, Zapier, n8n and Make. Retries, rate limits and circuit breakers are built in. [Integrations](docs/webhooks/README.md)
 - **Cross-platform:** macOS (Intel/Apple Silicon), Linux (x64/ARM64) and Windows 10+ (x64). [Platform details](docs/PLATFORMS.md)
 
-[Codex setup and event behavior](docs/CODEX.md)
+[Codex setup and event behavior](docs/CODEX.md) · [OpenCode setup and event behavior](docs/opencode-notifications.md)
 
 ## Install Or Update
 
@@ -44,10 +54,11 @@ On Windows, run the installer in **Git Bash**. Python is optional only for exact
 curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash
 ```
 
-The short setup loader resolves the latest stable release and downloads the installer from that release's exact commit. Release lookup and validation happen automatically. Choose **Claude**, **Codex**, or **both**. For non-interactive setup, append `-s -- --product claude`, `codex`, or `both` after `bash`.
+The short setup loader resolves the latest stable release and downloads the installer from that release's exact commit. Release lookup and validation happen automatically. Choose **Claude**, **Codex**, **Claude + Codex**, or **OpenCode**. For non-interactive setup, append `-s -- --product claude`, `codex`, or `both` after `bash`. For OpenCode use `-s -- --product opencode --desktop`, `--webhook`, or both channel flags.
 
 - **Claude:** restart Claude Code.
 - **Codex:** restart Codex, open `/hooks`, then review and trust the installed hooks.
+- **OpenCode:** restart OpenCode to load the global plugin. On Mac, [grant notification permission](docs/opencode-notifications.md#macos-notification-permission). Requires plugin release v1.46.0 or newer.
 
 Run the same command to update. [Guided installer](https://777genius.github.io/agent-notifications/#install) · [Manual installation, updates and removal](docs/INSTALLATION.md)
 
@@ -110,7 +121,7 @@ Run the same command and choose the product(s) you want to update:
 curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash
 ```
 
-For Claude, restart Claude Code. For Codex, restart Codex and inspect `/hooks`; changed hook definitions may need trust approval again. The installer refreshes the Codex runtime and registration automatically. Existing foreign hooks and shared settings in the file selected by `config path` are preserved.
+For OpenCode, rerun the installer with explicitly selected desktop/webhook channels and restart OpenCode. For Claude, restart Claude Code. For Codex, restart Codex and inspect `/hooks`; changed hook definitions may need trust approval again. The installer refreshes the Codex runtime and registration automatically. Existing foreign hooks and shared settings in the file selected by `config path` are preserved.
 
 <details>
 <summary>Manual Claude update (if bootstrap didn't work)</summary>
@@ -127,6 +138,8 @@ If the binary auto-update didn't work (e.g. no internet at the time), run `/clau
 </details>
 
 ### Uninstalling
+
+**OpenCode:** use the installer's printed **Remove** command, then restart OpenCode. Windows removal runs a temporary copy of the managed executable. [Removal and recovery](docs/opencode-notifications.md#change-channels-remove-or-recover).
 
 **Claude:**
 

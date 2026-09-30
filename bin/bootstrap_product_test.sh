@@ -33,6 +33,45 @@ env -u HOME USERPROFILE="$SANDBOX/windows profile" CLAUDE_HOME="$SANDBOX/legacy 
     bash -c 'source "$1"; [ "$CLAUDE_HOME" = "$2" ]' \
     _ "$SANDBOX/functions.sh" "$SANDBOX/explicit config"
 source "$SANDBOX/functions.sh"
+
+# Consent failures must stop at argument parsing, before acquiring artifacts.
+(
+    PRODUCT=""; CONFIGURE_ARGS=(); OPENCODE_ARGS=()
+    select_product --product opencode --desktop --webhook
+    [ "$PRODUCT" = opencode ] && [ "$CONFIGURE_NOTIFICATIONS" = false ]
+    [ "${OPENCODE_ARGS[*]}" = "--desktop --webhook" ]
+    if BOOTSTRAP_RELEASE_TAG=v1.45.0 resolve_bootstrap_release; then exit 1; fi
+    BOOTSTRAP_RELEASE_TAG=v1.46.0 BOOTSTRAP_RELEASE_COMMIT=0123456789abcdef0123456789abcdef01234567 resolve_bootstrap_release
+)
+for args in "--product claude --desktop" "--product codex --webhook" "--product opencode --desktop --agent-notify" "--product opencode --desktop --skip-agent-notify" "--product opencode --desktop --navigation none"; do
+    if ( PRODUCT=""; CONFIGURE_ARGS=(); OPENCODE_ARGS=(); select_product $args ); then
+        echo "accepted incompatible OpenCode consent flags: $args" >&2
+        exit 1
+    fi
+done
+# A real disposable PATH executable covers common --version output formats.
+# No installed user host is queried by these prerequisite checks.
+(
+    mkdir -p "$SANDBOX/version-cli"
+    cat > "$SANDBOX/version-cli/opencode" <<'HOST_VERSION'
+#!/bin/bash
+[ "$#" -eq 1 ] && [ "$1" = --version ] || exit 2
+printf '%s\n' "$TEST_OPENCODE_VERSION"
+HOST_VERSION
+    chmod +x "$SANDBOX/version-cli/opencode"
+    export PATH="$SANDBOX/version-cli:$PATH"
+    PRODUCT=opencode
+    OPENCODE_ARGS=(--webhook)
+    for version in '1.18.33' 'v1.18.33' 'OpenCode version: v1.18.33'; do
+        TEST_OPENCODE_VERSION="$version" check_prerequisites
+    done
+    for version in '2.0.0' 'OpenCode v2.0.0 (compatibility 1.18.33)' 'unknown'; do
+        if ( TEST_OPENCODE_VERSION="$version" check_prerequisites ); then
+            echo "accepted unsupported host output: $version" >&2
+            exit 1
+        fi
+    done
+)
 quoted=$(quote_shell_command "$SANDBOX/bin space/cli" --package "$SANDBOX/pkg space" --codex-home "$CODEX_HOME")
 eval "set -- $quoted"
 [ "$#" -eq 5 ] || { echo "quoted argc $#"; exit 1; }

@@ -1,11 +1,13 @@
 import Bowser from "bowser";
-export type Product = "claude" | "codex" | "both";
+export type AgentProduct = "claude" | "codex" | "opencode";
+export type Product = AgentProduct | "both";
 export type Target = "unknown" | "macos" | "linux" | "windows" | "manual";
 export type Intent = "install" | "update" | "configure";
 export const products = [
   { value: "claude", label: "Claude Code" },
   { value: "codex", label: "Codex CLI" },
-  { value: "both", label: "Both agents" },
+  { value: "both", label: "Claude + Codex" },
+  { value: "opencode", label: "OpenCode" },
 ] as const;
 export const targets = [
   { value: "unknown", label: "Choose target OS" },
@@ -37,13 +39,36 @@ export function detectTarget(ua: string, touchPoints = 0): Target {
         : "unknown";
 }
 export function command(
-  product: Product,
+  product: Product | readonly AgentProduct[],
   target: Target,
   intent: Intent,
   agentNotify = true,
+  openCodeChannels: { desktop: boolean; webhook: boolean } = { desktop: true, webhook: false },
 ): string | null {
   if (intent === "configure" || target === "unknown" || target === "manual")
     return null;
-  const skip = agentNotify ? "" : " --skip-agent-notify";
-  return `curl -fsSL ${installerUrl} | bash -s -- --product ${product}${skip}`;
+  const selected: readonly AgentProduct[] =
+    typeof product === "string"
+      ? product === "both"
+        ? ["claude", "codex"]
+        : [product]
+      : product;
+  if (!selected.length) return null;
+  const hasOpenCode = selected.includes("opencode");
+  if (hasOpenCode && !openCodeChannels.desktop && !openCodeChannels.webhook)
+    return null;
+  const commands: string[] = [];
+  const hasClaude = selected.includes("claude");
+  const hasCodex = selected.includes("codex");
+  if (hasClaude || hasCodex) {
+    const legacy = hasClaude && hasCodex ? "both" : hasCodex ? "codex" : "claude";
+    const skip = agentNotify ? "" : " --skip-agent-notify";
+    commands.push(`curl -fsSL ${installerUrl} | bash -s -- --product ${legacy}${skip}`);
+  }
+  if (hasOpenCode) {
+    const channels = `${openCodeChannels.desktop ? " --desktop" : ""}${openCodeChannels.webhook ? " --webhook" : ""}`;
+    commands.push(`curl -fsSL ${installerUrl} | bash -s -- --product opencode${channels}`);
+  }
+  if (commands.length === 1) return commands[0];
+  return `(\nset -o pipefail\n${commands.join(" &&\n")}\n)`;
 }

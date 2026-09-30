@@ -1,7 +1,7 @@
 {
   "seo": {
     "title": "Agent Notifications - 专注工作，及时获知进展",
-    "description": "为 Claude Code 和 Codex CLI 提供桌面通知。任务完成、需要回答问题或发生错误时，第一时间获知。"
+    "description": "适用于 Claude Code、Codex CLI 和 OpenCode 的桌面通知与 Webhook。"
   },
   "language": {
     "label": "语言",
@@ -28,7 +28,7 @@
     "title": "保持专注",
     "emphasis": "需要你时，我们会提醒",
     "leadFirst": "让智能体安心工作，完成时你自然会知道。",
-    "leadSecond": "为 Claude Code 和 Codex CLI 提供声音、桌面通知和 Webhook。",
+    "leadSecond": "适用于 Claude Code、Codex CLI 和 OpenCode 的桌面通知与 Webhook。",
     "primary": "设置通知",
     "secondary": "在 GitHub 上查看",
     "note": "开源 · 本地运行"
@@ -50,7 +50,7 @@
       "2": {
         "label": "声音控制",
         "title": "每种时刻都有专属提示音",
-        "text": "选择声音、调节音量并指定音频设备。保留重要信号，其余保持安静。"
+        "text": "选择声音、调节音量并指定音频设备。保留重要信号，其余保持安静。 仅适用于 Claude Code 和 Codex CLI。"
       },
       "3": {
         "label": "WEBHOOK 集成",
@@ -64,14 +64,14 @@
       "sound": "你的声音，你的音量。",
       "event": "智能体事件"
     },
-    "foot": "点击通知返回终端的支持情况取决于操作系统和终端。",
+    "foot": "点击通知返回终端的支持情况取决于操作系统和终端。 OpenCode：为根会话的完成、问题、权限请求和错误发送静默提醒。不支持声音或点击聚焦。",
     "details": "查看平台详情"
   },
   "terminalSupport": {
     "eyebrow": "一次点击，精准定位窗口。",
     "titleFirst": "适配你的工作方式",
     "titleSecond": "不止支持一种终端",
-    "intro": "点击返回终端功能会自动适配你正在使用的环境。以下是各平台上定位精度的详细说明。",
+    "intro": "仅适用于 Claude Code 和 Codex CLI。 点击返回终端功能会自动适配你正在使用的环境。以下是各平台上定位精度的详细说明。",
     "columns": {
       "app": "终端 / IDE",
       "macos": "macOS",
@@ -135,8 +135,8 @@
     "subtitle": "快速了解所需信息，然后继续工作。",
     "items": {
       "1": {
-        "question": "必须同时安装两个智能体吗？",
-        "answer": "不需要。你可以选择 Claude Code、Codex CLI 或两者。请先安装所选智能体的 CLI；此命令会安装通知插件。"
+        "question": "必须安装所有智能体吗？",
+        "answer": "可任意组合选择 Claude Code、Codex CLI 和 OpenCode。请先安装所选智能体；以下命令用于安装通知。"
       },
       "2": {
         "question": "Codex hooks 会自动安装吗？",
@@ -148,11 +148,11 @@
       },
       "4": {
         "question": "可以选择哪些事件播放声音吗？",
-        "answer": "可以。你可以配置声音、音量、音频设备和通知渠道。在指南中选择“配置”，即可查看适用于所选智能体的步骤。"
+        "answer": "可以。你可以配置声音、音量、音频设备和通知渠道。在指南中选择“配置”，即可查看适用于所选智能体的步骤。 仅适用于 Claude Code 和 Codex CLI。"
       },
       "5": {
         "question": "点击通知返回终端在所有环境都可用吗？",
-        "answer": "支持情况取决于操作系统和终端。iTerm2 需要启用 Python API 才能精确定位标签页。Windows 只能聚焦窗口，无法定位具体标签页。",
+        "answer": "支持情况取决于操作系统和终端。iTerm2 需要启用 Python API 才能精确定位标签页。Windows 只能聚焦窗口，无法定位具体标签页。 OpenCode：为根会话的完成、问题、权限请求和错误发送静默提醒。不支持声音或点击聚焦。",
         "link": "查看支持的环境。"
       },
       "6": {
@@ -209,6 +209,22 @@
       "error": {
         "title": "🔴 API 错误：401",
         "body": "身份验证已过期，请重新登录。"
+      },
+      "opencodeComplete": {
+        "title": "OpenCode",
+        "body": "任务已完成"
+      },
+      "opencodeQuestion": {
+        "title": "OpenCode",
+        "body": "OpenCode 提出了问题"
+      },
+      "opencodePermission": {
+        "title": "OpenCode",
+        "body": "OpenCode 请求了权限"
+      },
+      "opencodeError": {
+        "title": "OpenCode",
+        "body": "有错误需要您关注"
       }
     }
   },
@@ -232,7 +248,8 @@
     "products": {
       "claude": "Claude Code",
       "codex": "Codex CLI",
-      "both": "两个智能体"
+      "both": "Claude Code + Codex CLI",
+      "opencode": "OpenCode"
     },
     "targets": {
       "unknown": "选择目标操作系统",
@@ -291,6 +308,16 @@
     "agentNotify": {
       "label": "允许智能体在需要你关注时发送通知",
       "hint": "会安装一个工具，让智能体在任务进行中通知你，而不仅在工作结束时。"
+    },
+    "opencode": {
+      "scope": "OpenCode：为根会话的完成、问题、权限请求和错误发送静默提醒。不支持声音或点击聚焦。",
+      "version": "已使用 OpenCode 1.18.33 验证。需要插件 1.46.0 或更新版本。不支持 OpenCode V2。",
+      "desktop": "允许桌面通知",
+      "webhook": "允许 Webhook 通知",
+      "chooseChannel": "请至少选择一个通知渠道。",
+      "guide": "OpenCode 设置与限制",
+      "restart": "重启 OpenCode 以加载全局插件。在 macOS 上，请按指南授予通知权限。",
+      "configure": "使用 config path 查找共享设置。通过 setup-opencode 授予 desktop/webhook 权限；Webhook 地址需另行配置。"
     }
   }
 }
