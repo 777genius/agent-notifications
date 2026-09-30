@@ -157,11 +157,10 @@ def wait_for(predicate, seconds, label):
     raise RuntimeError(f"timed out waiting for {label}")
 
 
-def prepare_control_root(root, os_name):
-    """Match a private user control directory on a disposable Windows runner."""
+def prepare_sandbox_root(root, os_name):
+    """Give every new Windows sandbox child a private inherited DACL."""
     if os_name != "windows":
         return
-    root.mkdir()
     whoami = subprocess.check_output(["whoami", "/user", "/fo", "csv", "/nh"],
                                      text=True, encoding="utf-8").strip()
     sid = next(csv.reader([whoami]))[-1]
@@ -221,6 +220,7 @@ def main():
     try:
         with tempfile.TemporaryDirectory(prefix="TEST-opencode-native-") as name:
             root = pathlib.Path(name).resolve()
+            prepare_sandbox_root(root, args.os)
             project = root / "project"
             project.mkdir()
             (project / "README.md").write_text("Disposable native qualification project.\n")
@@ -249,7 +249,6 @@ def main():
             env.update({"OPENCODE_CONFIG_DIR": str(config_dir), "AGENT_NOTIFICATIONS_CONFIG": str(config),
                         "AGENT_NOTIFICATIONS_CONTROL_ROOT": str(root / "control"), "CI": "true",
                         "NO_COLOR": "1", "OPENCODE_DISABLE_AUTOUPDATE": "1"})
-            prepare_control_root(root / "control", args.os)
             opencode = root / ("opencode.exe" if args.os == "windows" else "opencode")
             if args.archive:
                 extract_opencode(args.archive, opencode, args.os)
