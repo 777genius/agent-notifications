@@ -117,7 +117,7 @@ func Apply(ctx context.Context, r Request) error {
 		// environment changed since setup. It is never guessed for removal.
 		bundle = []byte("removed")
 	}
-	plugin, err := plan(r, ledger, bundle)
+	plugin, plannedPlugin, err := plan(r, ledger, bundle)
 	if err != nil {
 		return err
 	}
@@ -133,6 +133,19 @@ func Apply(ctx context.Context, r Request) error {
 	var expectedPolicy *installruntime.Identity
 	if !registered {
 		policy, err := installruntime.ReadPolicySnapshot(ctx, root)
+		if errors.Is(err, os.ErrNotExist) && ledger.ID == "" {
+			// A precreated private control directory has no lock inodes yet.
+			// Commit creates them; the absent policy remains a CAS preimage.
+			preimage, fingerprintErr := installruntime.Fingerprint(filepath.Join(root, "agent-notifications.json"))
+			if fingerprintErr != nil {
+				return fingerprintErr
+			}
+			if !preimage.Exists {
+				policy.Preimage = preimage
+				policy.Fields = map[string]json.RawMessage{}
+				err = nil
+			}
+		}
 		if err != nil {
 			return err
 		}
@@ -159,13 +172,9 @@ func Apply(ctx context.Context, r Request) error {
 			return errors.New("target binary is foreign")
 		}
 	}
-	beforePlugin, err := installruntime.Fingerprint(plugin.Target)
-	if err != nil {
-		return err
-	}
 	files := []installruntime.File{
 		{Path: binary, Before: beforeBinary, Data: data, Mode: mode},
-		{Path: plugin.Target, Before: beforePlugin, Data: bundle, Mode: 0600},
+		{Path: plugin.Target, Before: plannedPlugin, Data: bundle, Mode: 0600},
 	}
 	gen := ledger.Generation
 	_, err = installruntime.Commit(ctx, installruntime.Request{
@@ -179,16 +188,16 @@ func Apply(ctx context.Context, r Request) error {
 	return setChannels(ctx, root, r.RuntimeRoot, r.Desktop, r.Webhook)
 }
 
-func plan(r Request, ledger installruntime.Ledger, desired []byte) (uap.Placement, error) {
+func plan(r Request, ledger installruntime.Ledger, desired []byte) (uap.Placement, installruntime.Identity, error) {
 	digest := sha256.Sum256(desired)
 	base, err := uap.Plan(uap.Input{HomeDir: r.HomeDir, XDGConfigHome: r.XDGConfigHome, Override: r.OpenCodeConfigDir,
 		FileName: pluginName, DesiredSHA256: hex.EncodeToString(digest[:])})
 	if err != nil {
-		return base, err
+		return base, installruntime.Identity{}, err
 	}
 	id, err := installruntime.Fingerprint(base.Target)
 	if err != nil {
-		return base, err
+		return base, id, err
 	}
 	var existing *uap.Existing
 	if id.Exists {
@@ -204,8 +213,9 @@ func plan(r Request, ledger installruntime.Ledger, desired []byte) (uap.Placemen
 	if claim, ok := installruntime.OwnedFile(ledger, base.Target); ok {
 		owned = claim.SHA256
 	}
-	return uap.Plan(uap.Input{HomeDir: r.HomeDir, XDGConfigHome: r.XDGConfigHome, Override: r.OpenCodeConfigDir,
+	placement, err := uap.Plan(uap.Input{HomeDir: r.HomeDir, XDGConfigHome: r.XDGConfigHome, Override: r.OpenCodeConfigDir,
 		FileName: pluginName, DesiredSHA256: hex.EncodeToString(digest[:]), OwnedSHA256: owned, Existing: existing})
+	return placement, id, err
 }
 
 func readBinary(path string) ([]byte, uint32, error) {

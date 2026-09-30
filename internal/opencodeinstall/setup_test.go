@@ -81,6 +81,66 @@ func TestInstallUpdateAndRemovePreserveSeparateChannelConsent(t *testing.T) {
 	}
 }
 
+func TestInstallIntoPrecreatedEmptyControlDirectory(t *testing.T) {
+	ctx, r, plugin := fixture(t)
+	if err := os.MkdirAll(r.ControlRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := Apply(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(plugin); err != nil {
+		t.Fatalf("plugin was not installed: %v", err)
+	}
+}
+
+func TestPrecreatedControlWithoutLocksPreservesExistingPolicy(t *testing.T) {
+	ctx, r, plugin := fixture(t)
+	if err := os.MkdirAll(r.ControlRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	policy := filepath.Join(r.ControlRoot, "agent-notifications.json")
+	if err := os.WriteFile(policy, []byte(`{"schemaVersion":1,"enabled":false,"route":{"openCodeNotifications":{"desktop":true}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Apply(ctx, r); err == nil {
+		t.Fatal("existing policy without locks was adopted")
+	}
+	if _, err := os.Lstat(plugin); !os.IsNotExist(err) {
+		t.Fatalf("plugin published despite untrusted policy: %v", err)
+	}
+}
+
+func TestPlannedPluginPreimageRejectsLateForeignFile(t *testing.T) {
+	ctx, r, plugin := fixture(t)
+	placement, before, err := plan(r, installruntime.Ledger{}, []byte("desired plugin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if placement.Target != plugin || before.Exists {
+		t.Fatal("unexpected initial plugin placement")
+	}
+	if err := os.MkdirAll(filepath.Dir(plugin), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(plugin, []byte("foreign plugin"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	gen := uint64(0)
+	_, err = installruntime.Commit(ctx, installruntime.Request{
+		ControlRoot: r.ControlRoot, RuntimeRoot: r.RuntimeRoot, Owner: "existing-installer",
+		ConsumerID: consumerID, Consumer: installruntime.Consumer{Registration: plugin},
+		ExpectedGeneration: &gen,
+		Files:              []installruntime.File{{Path: plugin, Before: before, Data: []byte("desired plugin"), Mode: 0600}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "staged fingerprint changed") {
+		t.Fatalf("late foreign plugin was not rejected by file CAS: %v", err)
+	}
+	if got, err := os.ReadFile(plugin); err != nil || string(got) != "foreign plugin" {
+		t.Fatalf("foreign plugin changed: %q, %v", got, err)
+	}
+}
+
 func TestForeignAndModifiedPluginArePreserved(t *testing.T) {
 	ctx, r, plugin := fixture(t)
 	if err := os.MkdirAll(filepath.Dir(plugin), 0700); err != nil {
