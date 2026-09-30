@@ -90,7 +90,7 @@ If the binary auto-update didn't work (e.g. no internet at the time), run `/clau
 
 ### Uninstalling
 
-**OpenCode:** run `setup-opencode remove` using the installed managed executable, then restart OpenCode. Removal revokes its consent before deleting owned files and preserves other consumers. [Detailed removal/recovery commands](opencode-notifications.md#change-channels-remove-or-recover).
+**OpenCode:** use the installer's printed **Remove** command, then restart OpenCode. On Windows it runs a temporary executable copy so the managed `.exe` can be deleted; on macOS/Linux it invokes the installed executable directly. Removal revokes its consent before deleting owned files and preserves other consumers. [Detailed removal/recovery commands](opencode-notifications.md#change-channels-remove-or-recover).
 
 **Claude:**
 

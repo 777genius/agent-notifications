@@ -110,8 +110,26 @@ verified local executable source. Choose the channels on every update:
 
 ```bash
 "$NOTIFICATIONS_BIN" setup-opencode update --binary /absolute/path/to/verified-native-binary --webhook
-"$NOTIFICATIONS_BIN" setup-opencode remove
 ```
+
+On macOS/Linux, use `"$NOTIFICATIONS_BIN" setup-opencode remove`. On Windows,
+use the installer's printed **Remove** command: it runs a temporary copy because
+a running managed `.exe` cannot delete itself. The equivalent Git Bash command
+is below; set `NOTIFICATIONS_BIN` to the installed executable:
+
+```bash
+(
+  set -eu
+  stage=$(mktemp -d "${TMPDIR:-/tmp}/agent-notifications-remove.XXXXXX")
+  trap 'status=$?; rm -rf "$stage"; exit "$status"' EXIT
+  cp "$NOTIFICATIONS_BIN" "$stage/remover.exe"
+  "$stage/remover.exe" setup-opencode remove
+)
+```
+
+A trusted release executable outside the managed runtime may also run
+`setup-opencode remove` directly on Windows. Temporary cleanup preserves the
+remover's exit status; a reported ownership conflict must still be resolved.
 
 To enable macOS desktop on an update, supply the verified `--native-app` source
 unless the existing managed helper already meets the required protocol. Removal

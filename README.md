@@ -120,7 +120,7 @@ If the binary auto-update didn't work (e.g. no internet at the time), run `/clau
 
 ### Uninstalling
 
-**OpenCode:** use the managed executable with `setup-opencode remove`, then restart OpenCode. [Removal and recovery](docs/opencode-notifications.md#change-channels-remove-or-recover).
+**OpenCode:** use the installer's printed **Remove** command, then restart OpenCode. Windows removal runs a temporary copy of the managed executable. [Removal and recovery](docs/opencode-notifications.md#change-channels-remove-or-recover).
 
 **Claude:**
 

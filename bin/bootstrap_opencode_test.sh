@@ -50,6 +50,29 @@ assert policy.get('enabled',False) is False
 assert binary.read_bytes(), 'runtime disappeared with installer staging'
 assert (profile/'plugins/agent-notifications.js').read_bytes(), 'global plugin missing'
 PY
-"$installed" setup-opencode remove
+# Execute the same command printed by public setup. On Windows its temporary
+# remover must preserve failure status and avoid deleting a foreign plugin.
+remove_command=$(opencode_remove_command "$installed")
+plugin="$OPENCODE_CONFIG_DIR/plugins/agent-notifications.js"
+cp "$plugin" "$SANDBOX/owned-plugin.js"
+printf 'foreign plugin edit\n' > "$plugin"
+if bash -c "$remove_command"; then
+    echo "removal accepted an edited plugin" >&2
+    exit 1
+fi
+[ -f "$installed" ]
+printf 'foreign plugin edit\n' > "$SANDBOX/foreign-plugin.js"
+cmp "$plugin" "$SANDBOX/foreign-plugin.js"
+cp "$SANDBOX/owned-plugin.js" "$plugin"
+bash -c "$remove_command"
+python3 - "$control" <<'PYREMOVE'
+import json, pathlib, sys
+root=pathlib.Path(sys.argv[1])
+ledger=json.loads((root/'ownership.json').read_text())
+assert not ledger['Consumers'], ledger['Consumers']
+policy=json.loads((root/'agent-notifications.json').read_text())
+assert policy['route']['openCodeNotifications'] == {'desktop':False,'webhook':False}
+PYREMOVE
+[ ! -e "$installed" ]
 [ ! -e "$OPENCODE_CONFIG_DIR/plugins/agent-notifications.js" ]
 echo "OpenCode bootstrap real native lifecycle passed in disposable profile"

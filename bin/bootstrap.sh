@@ -1572,6 +1572,25 @@ install_claude() {
     fi
 }
 
+# A mapped Windows executable cannot delete itself. Run a temporary copy and
+# preserve its status while cleaning up after the process has exited.
+opencode_remove_command() {
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*)
+            local script
+            script=$(cat <<'REMOVE_SCRIPT'
+set -eu
+stage=$(mktemp -d "${TMPDIR:-/tmp}/agent-notifications-remove.XXXXXX")
+trap 'status=$?; rm -rf "$stage"; exit "$status"' EXIT
+cp "$1" "$stage/remover.exe"
+"$stage/remover.exe" setup-opencode remove
+REMOVE_SCRIPT
+)
+            quote_shell_command bash -c "$script" _ "$1" ;;
+        *) quote_shell_command "$1" setup-opencode remove ;;
+    esac
+}
+
 # OpenCode setup owns its plugin, native executable and independent channel
 # consent. Acquisition stays temporary; only the verified Go transaction writes
 # the managed installation. It never launches or installs the OpenCode host.
@@ -1618,7 +1637,7 @@ install_opencode() {
     if [[ " ${OPENCODE_ARGS[*]} " = *" --webhook "* ]]; then
         echo "Webhook consent is recorded. Configure and enable your webhook destination and status channel in the shared settings before delivery."
     fi
-    printf 'Remove: %s\n' "$(quote_shell_command "$installed" setup-opencode remove)"
+    printf 'Remove: %s\n' "$(opencode_remove_command "$installed")"
     printf 'Managed installation records: %s/ownership.json\n' "$root"
 }
 
