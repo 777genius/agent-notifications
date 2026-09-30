@@ -114,19 +114,23 @@ def with_noglob(env):
     return env
 
 
-def run_loader(args, env, piped=False, documented=False):
+def run_loader(args, env, piped=False, documented=False, bash_executable=None):
     env = with_noglob(env)
+    runner = bash_executable or HOST_BASH
     setup_sh = bash_path(root / 'bin/setup.sh')
     if documented:
-        command = [HOST_BASH, '-c', public_command.replace(
+        command = [runner, '-c', public_command.replace(
             '| bash', '| bash -s -- ' + ' '.join(map(shlex.quote, args)))]
         stdin = None
     elif piped:
-        command = [HOST_BASH, '-c', 'exec ' + ' '.join(
-            shlex.quote(x) for x in [bash_path(HOST_BASH), '-s', '--'] + args)]
+        command = [runner, '-c', 'exec ' + ' '.join(
+            shlex.quote(x) for x in [bash_path(runner), '-s', '--'] + args)]
         stdin = loader
     else:
-        command = [HOST_BASH, '-c', 'exec ' + ' '.join(shlex.quote(x) for x in [setup_sh] + args)]
+        # Explicitly select the interpreter for native Bash 3.2 regressions;
+        # default fixtures retain the normal env-bash entry point.
+        invocation = ([bash_path(runner)] if bash_executable else []) + [setup_sh] + args
+        command = [runner, '-c', 'exec ' + ' '.join(map(shlex.quote, invocation))]
         stdin = None
     return subprocess.run(command, input=stdin, text=True, capture_output=True, env=env, timeout=20)
 
@@ -134,7 +138,7 @@ def run_loader(args, env, piped=False, documented=False):
 def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, piped=False,
              documented=False, expect_run=True, args=None, calls=None, no_network=False,
              legacy_status=None, opencode_status=None, message=None, help_only=False,
-             release=None, release_only=False):
+             release=None, release_only=False, bash_executable=None):
     if args is None:
         args = ['--product', 'both', 'argument with spaces', '*']
     if release is None:
@@ -168,7 +172,7 @@ def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, pipe
             json.dumps({'sha': sha}) if commit is None else commit)
         (case / 'bootstrap').write_text(bootstrap_stub)
         (case / 'setup').write_text(loader)
-        env = dict(os.environ, PATH=runtime_path(case, python=True, node=True),
+        env = dict(os.environ, PATH=runtime_path(case, python=True, node=True, bash_executable=bash_executable),
                    CASE_DIR=bash_path(case), RECORD_DIR=str(case), TMPDIR=bash_path(case / 'tmp space'),
                    FAIL_DOWNLOAD=fail, BOOTSTRAP_STATUS=str(status),
                    BOOTSTRAP_RELEASE_TAG='untrusted', BOOTSTRAP_RELEASE_COMMIT='untrusted',
@@ -177,7 +181,7 @@ def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, pipe
             env['LEGACY_STATUS'] = str(legacy_status)
         if opencode_status is not None:
             env['OPENCODE_STATUS'] = str(opencode_status)
-        result = run_loader(args, env, piped=piped, documented=documented)
+        result = run_loader(args, env, piped=piped, documented=documented, bash_executable=bash_executable)
         if no_network or help_only:
             assert result.returncode == (0 if help_only else 1), (name, result.returncode, result.stderr)
             assert not (case / 'requests').exists(), name + ': parser performed a network request'
@@ -204,8 +208,6 @@ def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, pipe
                 'https://api.github.com/repos/777genius/agent-notifications/commits/' + release,
                 raw + '/bootstrap.sh',
             ], name + ': expected one release resolution and bootstrap download'
-            if message:
-                assert message in result.stderr, (name, result.stderr)
             if result.returncode:
                 assert 'all products installed' not in result.stdout.lower(), (name, result.stdout)
         elif expected is None:
@@ -232,6 +234,8 @@ def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, pipe
                 'https://api.github.com/repos/777genius/agent-notifications/commits/' + release,
                 raw + '/bootstrap.sh',
             ], name
+        if message:
+            assert message in result.stderr, (name, result.stderr)
         assert not list((case / 'tmp space').iterdir()), name + ': leaked staging directory'
         print('PASS ' + name)
 
@@ -307,7 +311,7 @@ def place_runtime_cmd(dest, src):
     dest.chmod(0o755)
 
 
-def runtime_path(case, python=False, node=False):
+def runtime_path(case, python=False, node=False, bash_executable=None):
     bin_dir = case / 'runtime-bin'
     bin_dir.mkdir()
     names = ['bash', 'sh', 'mktemp', 'rm', 'cat', 'chmod', 'mkdir', 'ln', 'uname',
@@ -318,7 +322,8 @@ def runtime_path(case, python=False, node=False):
     if node:
         names.append('node')
     for name in names:
-        place_runtime_cmd(bin_dir / name, host_cmd(name))
+        source = bash_executable if name == 'bash' and bash_executable else host_cmd(name)
+        place_runtime_cmd(bin_dir / name, source)
     return bash_path(case / 'bin') + ':' + bash_path(bin_dir)
 
 def run_runtime_case(name, python=False, node=False, expected=0, stub_python=False):
@@ -359,7 +364,7 @@ run_case('initial loader download failure', fail='setup', expected=0, documented
 run_case('bootstrap exit status', status=17, expected=17)
 # Independent bootstrap calls are the observable routing boundary. All seven
 # sets resolve one release, regardless of caller order or number of groups.
-for selection, routed in [
+product_sets = [
     ('claude', [['--product', 'claude']]),
     ('codex', [['--product', 'codex']]),
     ('opencode', [['--product', 'opencode', '--desktop']]),
@@ -367,11 +372,33 @@ for selection, routed in [
     ('opencode,claude', [['--product', 'claude'], ['--product', 'opencode', '--desktop']]),
     ('opencode,codex', [['--product', 'codex'], ['--product', 'opencode', '--desktop']]),
     ('opencode,codex,claude', [['--product', 'both'], ['--product', 'opencode', '--desktop']]),
-]:
+]
+for selection, routed in product_sets:
     args = ['--products', selection]
     if 'opencode' in selection:
         args += ['--desktop']
     run_case('product set ' + selection, args=args, calls=routed, expected=0)
+# Focused native Bash 3.2 coverage protects optional-channel parsing under
+# nounset. Check every advertised set and the intended consent error with
+# /bin/bash both as the loader interpreter and as fixture PATH's bash.
+if sys.platform == 'darwin':
+    native_bash = '/bin/bash'
+    native_version = subprocess.run([native_bash, '-c', 'printf "%s" "$BASH_VERSION"'],
+                                    text=True, capture_output=True, check=True, timeout=5).stdout
+    if native_version.startswith('3.2.'):
+        for selection, routed in product_sets:
+            args = ['--products', selection]
+            if 'opencode' in selection:
+                args += ['--desktop']
+            run_case('native Bash 3.2 product set ' + selection,
+                     args=args, calls=routed, expected=0, bash_executable=native_bash)
+        for selection in ['opencode', 'claude,opencode']:
+            run_case('native Bash 3.2 missing consent ' + selection,
+                     args=['--products', selection], no_network=True,
+                     message='OpenCode requires explicit --desktop and/or --webhook consent.',
+                     bash_executable=native_bash)
+    else:
+        print('SKIP native Bash 3.2 fixtures: /bin/bash is ' + native_version)
 run_case('scoped flags and equals selector',
          args=['--webhook', '--products=opencode,claude,codex', '--skip-agent-notify', '--desktop'],
          calls=[['--product', 'both', '--skip-agent-notify'],

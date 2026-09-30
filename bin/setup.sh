@@ -12,6 +12,7 @@ main() (
     legacy_product=""
     legacy_args=()
     opencode_args=()
+    opencode_channels=0
     if [ "$multi" -eq 1 ]; then
         selector_seen=0
         claude=0 codex=0 opencode=0
@@ -54,7 +55,8 @@ main() (
                     for channel in ${opencode_args[@]+"${opencode_args[@]}"}; do
                         [ "$channel" != "$1" ] || { echo "Use each OpenCode channel once." >&2; exit 1; }
                     done
-                    opencode_args+=("$1") ;;
+                    opencode_args+=("$1")
+                    opencode_channels=$((opencode_channels + 1)) ;;
                 --help|-h) help=1 ;;
                 *) echo "Unsupported --products option: $1." >&2; exit 1 ;;
             esac
@@ -76,10 +78,10 @@ main() (
             echo "Agent-notify options require Claude or Codex in --products." >&2; exit 1;
         }
         if [ "$opencode" -eq 1 ]; then
-            [ "${#opencode_args[@]}" -gt 0 ] || {
+            [ "$opencode_channels" -gt 0 ] || {
                 echo "OpenCode requires explicit --desktop and/or --webhook consent." >&2; exit 1;
             }
-        elif [ "${#opencode_args[@]}" -gt 0 ]; then
+        elif [ "$opencode_channels" -gt 0 ]; then
             echo "--desktop/--webhook require OpenCode in --products." >&2; exit 1
         fi
     fi
