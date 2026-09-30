@@ -221,8 +221,19 @@ func TestInstallerRuntimeRootUsesOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, stderr bytes.Buffer
-	if code := installerConfigCommand([]string{"runtime-root", root}, &out, &stderr); code != 0 || out.String() != runtimeRoot+"\n" {
+	if code := installerConfigCommand([]string{"runtime-root", root}, &out, &stderr); code != 0 {
 		t.Fatalf("runtime lookup = %d %q %q", code, out.String(), stderr.String())
+	}
+	actual, err := os.Stat(strings.TrimSpace(out.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := os.Stat(runtimeRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(actual, expected) {
+		t.Fatalf("runtime lookup points to a different directory: %q", out.String())
 	}
 	if err := os.WriteFile(filepath.Join(root, "transaction.json"), []byte("{}"), 0600); err != nil {
 		t.Fatal(err)

@@ -49,6 +49,29 @@ for args in "--product claude --desktop" "--product codex --webhook" "--product 
         exit 1
     fi
 done
+# A real disposable PATH executable covers common --version output formats.
+# No installed user host is queried by these prerequisite checks.
+(
+    mkdir -p "$SANDBOX/version-cli"
+    cat > "$SANDBOX/version-cli/opencode" <<'HOST_VERSION'
+#!/bin/bash
+[ "$#" -eq 1 ] && [ "$1" = --version ] || exit 2
+printf '%s\n' "$TEST_OPENCODE_VERSION"
+HOST_VERSION
+    chmod +x "$SANDBOX/version-cli/opencode"
+    export PATH="$SANDBOX/version-cli:$PATH"
+    PRODUCT=opencode
+    OPENCODE_ARGS=(--webhook)
+    for version in '1.18.33' 'v1.18.33' 'OpenCode version: v1.18.33'; do
+        TEST_OPENCODE_VERSION="$version" check_prerequisites
+    done
+    for version in '2.0.0' 'OpenCode v2.0.0 (compatibility 1.18.33)' 'unknown'; do
+        if ( TEST_OPENCODE_VERSION="$version" check_prerequisites ); then
+            echo "accepted unsupported host output: $version" >&2
+            exit 1
+        fi
+    done
+)
 quoted=$(quote_shell_command "$SANDBOX/bin space/cli" --package "$SANDBOX/pkg space" --codex-home "$CODEX_HOME")
 eval "set -- $quoted"
 [ "$#" -eq 5 ] || { echo "quoted argc $#"; exit 1; }

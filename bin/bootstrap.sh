@@ -179,10 +179,12 @@ check_prerequisites() {
     if [ "$PRODUCT" = opencode ]; then
         local host_version
         host_version=$(opencode --version </dev/null) || { echo "Cannot determine OpenCode version." >&2; exit 1; }
-        case "$host_version" in
-            1.*) echo "OpenCode notifications were tested with 1.18.33; detected $host_version." ;;
-            *) echo "OpenCode V2 is not supported by this plugin. Tested host: 1.18.33; detected $host_version." >&2; exit 1 ;;
-        esac
+        if [[ "$host_version" =~ (^|[^0-9])v?([0-9]+)\.([0-9]+)\.([0-9]+)($|[^0-9]) ]] && [ "${BASH_REMATCH[2]}" = 1 ]; then
+            echo "OpenCode notifications were tested with 1.18.33; detected $host_version."
+        else
+            echo "Unsupported OpenCode version. Tested host: 1.18.33; V2 is not supported. Detected: $host_version" >&2
+            exit 1
+        fi
         [ "$(bootstrap_release_os_arch)" != "windows arm64" ] || { echo "Windows arm64 is not supported." >&2; exit 1; }
     fi
     if [ "$PRODUCT" = opencode ] && [ "$(uname -s)" = Darwin ] &&

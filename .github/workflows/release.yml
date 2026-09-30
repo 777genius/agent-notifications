@@ -435,5 +435,5 @@ jobs:
         with:
           name: opencode-release-e2e-${{ matrix.platform }}-${{ matrix.arch }}
           path: opencode-qualification/opencode-release-e2e.json
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14

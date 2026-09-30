@@ -1,6 +1,10 @@
 #!/bin/bash
 # Real installer boundary: a native Go binary must persist an owned runtime and
 # global plugin in a disposable profile, with independent webhook consent.
+# The Windows private-root fixture reuses the already prepared offline Go cache.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) TEST_ENV_HANDOFF_GOMODCACHE=1 ;;
+esac
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-env.sh"
 test_env_enter "$0" "$@"
 set -euo pipefail
@@ -10,6 +14,12 @@ TEST_BINARY="$1"
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SANDBOX=$(mktemp -d /tmp/bootstrap-opencode-XXXXXX)
 trap 'rm -rf "$SANDBOX"' EXIT
+# Give all Windows sandbox children the established private inherited DACL
+# before creating HOME/config/plugin paths. chmod alone does not create it.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        (cd "$ROOT" && GOTMPDIR="$(cygpath -m "$TMPDIR")" go run scripts/opencode-private-root-windows.go "$(cygpath -m "$SANDBOX")") ;;
+esac
 test_env_setup "$SANDBOX"
 export OPENCODE_CONFIG_DIR="$SANDBOX/opencode profile"
 case "$(uname -s)" in

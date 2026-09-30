@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# The Windows private-root fixture reuses the already prepared offline Go cache.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) TEST_ENV_HANDOFF_GOMODCACHE=1 ;;
+esac
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-env.sh"
 test_env_enter "$0" "$@"
 set -euo pipefail

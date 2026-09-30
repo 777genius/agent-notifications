@@ -6,7 +6,7 @@ Use the current installer and runtime for the configuration commands below. Upda
 
 Run `/claude-notifications-go:settings` to configure sounds, volume, webhooks, and other options via an interactive wizard. You can re-run it anytime to reconfigure.
 
-### OpenCode channels and settings
+## OpenCode channels and settings
 
 OpenCode uses the shared resolver below and supports `agents.opencode` overrides.
 It sends silent generic messages for `task_complete`, `question`,
@@ -18,7 +18,7 @@ does not enable portable MCP notifications. Webhooks also need a configured,
 enabled destination and an enabled status channel. Restart OpenCode after setup
 or update. [Full setup and limits](opencode-notifications.md).
 
-### Manual Configuration
+## Manual Configuration
 
 Use the installed config-capable executable (shown as `$NOTIFICATIONS_BIN` in recipes):
 
