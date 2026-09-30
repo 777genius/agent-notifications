@@ -125,8 +125,8 @@ const faqIcons = [
           <article v-for="feature in features" :key="feature.number" class="panel feature">
             <div class="feature-visual" aria-hidden="true">
               <div v-if="feature.number === '01'" class="mini-notification">
-                <span class="signal-icon">✓</span>
-                <div><strong>{{ t("features.preview.done") }}</strong><span>{{ t("features.preview.ready") }}</span></div>
+                <span class="signal-icon">↖</span>
+                <div><strong>{{ t("features.preview.focus") }}</strong><span>{{ t("features.preview.return") }}</span></div>
                 <span class="mini-now">{{ t("common.now") }}</span>
               </div>
               <div v-else-if="feature.number === '02'" class="sound-preview">

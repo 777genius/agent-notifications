@@ -43,9 +43,9 @@
     "titleSecond": "告别反复查看",
     "items": {
       "1": {
-        "label": "桌面通知",
-        "title": "放心离开，进展尽在掌握",
-        "text": "智能体完成任务或需要你处理时，桌面通知会立即出现。无需再一直盯着终端。"
+        "label": "点击返回",
+        "title": "一键回到工作现场",
+        "text": "点击通知，在支持的环境中返回对应的终端、编辑器或标签页。仅适用于 Claude Code 和 Codex CLI；支持情况取决于终端和操作系统。"
       },
       "2": {
         "label": "声音控制",
@@ -59,7 +59,7 @@
       }
     },
     "preview": {
-      "done": "智能体已完成任务",
+      "focus":"点击返回","return":"回到你的终端","done": "智能体已完成任务",
       "ready": "随时可以查看。",
       "sound": "你的声音，你的音量。",
       "event": "智能体事件"
@@ -234,7 +234,7 @@
   },
   "install": {
     "title": "设置通知",
-    "intro": "按照以下步骤为 {agent} 添加桌面通知。",
+    "intro": "按照以下步骤为 {agent} 添加通知。",
     "chooseAgent": "选择智能体",
     "requires": "需要 {agent}",
     "bothAgents": "两个智能体",
@@ -269,7 +269,7 @@
       "codexMiddle": "然后按照以下文档修改：",
       "codexLink": "手动配置文档",
       "codexAfter": "仅配置 Codex 时不需要 Claude Code。",
-      "shared": "两个智能体共享此配置。更新时会保留你的设置。"
+      "shared": "更新时会保留共享设置。"
     },
     "manual": {
       "title": "按照手动方式安装",
@@ -307,9 +307,18 @@
     "configureSettings": "⚙ 配置设置",
     "agentNotify": {
       "label": "允许智能体在需要你关注时发送通知",
-      "hint": "会安装一个工具，让智能体在任务进行中通知你，而不仅在工作结束时。"
+      "hint": "为 Claude Code 和 Codex CLI 添加通知工具，可在任务进行中提醒你，而不只是结束时。"
+    },
+    "capabilities": {
+      "title": "所选代理的功能",
+      "details": "兼容性详情",
+      "claude": "提供完成、审查、提问、计划、会话限制和 API 错误通知。在支持的环境中提供声音和点击返回功能。",
+      "codex": "提供完成和权限通知。在支持的环境中提供声音和点击返回功能。请在 /hooks 中审查并信任已安装的钩子。",
+      "opencode": "仅为根会话提供静音的完成、提问、权限和错误通知。不支持声音或点击返回。"
     },
     "opencode": {
+      "channelsTitle": "OpenCode 通知渠道",
+      "channelsHint": "这些选项仅适用于 OpenCode。请允许至少一个渠道；Webhook URL 需单独配置。",
       "scope": "OpenCode：为根会话的完成、问题、权限请求和错误发送静默提醒。不支持声音或点击聚焦。",
       "version": "已使用 OpenCode 1.18.33 验证。需要插件 1.46.0 或更新版本。不支持 OpenCode V2。",
       "desktop": "允许桌面通知",

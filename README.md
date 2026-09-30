@@ -54,7 +54,13 @@ On Windows, run the installer in **Git Bash**. Python is optional only for exact
 curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash
 ```
 
-The short setup loader resolves the latest stable release and downloads the installer from that release's exact commit. Release lookup and validation happen automatically. Choose **Claude**, **Codex**, **Claude + Codex**, or **OpenCode**. For non-interactive setup, append `-s -- --product claude`, `codex`, or `both` after `bash`. For OpenCode use `-s -- --product opencode --desktop`, `--webhook`, or both channel flags.
+The short setup loader resolves the latest stable release and downloads the installer from that release's exact commit. Release lookup and validation happen automatically. Choose **Claude**, **Codex**, **Claude + Codex**, or **OpenCode**. For non-interactive setup, append `-s -- --product claude`, `codex`, or `both` after `bash`. For OpenCode use `-s -- --product opencode --desktop`, `--webhook`, or both channel flags. To install notifications for all three agents with one command:
+
+```bash
+(set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --products claude,codex,opencode --desktop)
+```
+
+Use `claude,opencode` or `codex,opencode` for a mixed pair. OpenCode channel flags apply only to OpenCode; `--skip-agent-notify` applies only to Claude/Codex. Webhook URLs are configured separately. Setup stops at the first failure and preserves earlier successful installations; fix the error and rerun. [Installer options](docs/INSTALLATION.md).
 
 - **Claude:** restart Claude Code.
 - **Codex:** restart Codex, open `/hooks`, then review and trust the installed hooks.

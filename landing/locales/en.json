@@ -38,9 +38,9 @@
     "titleSecond": "Lose the constant checking",
     "items": {
       "1": {
-        "label": "DESKTOP NOTIFICATIONS",
-        "title": "Step away, stay informed",
-        "text": "Get a desktop notification when your agent finishes or needs your attention. Spend less time watching a terminal."
+        "label": "CLICK TO FOCUS",
+        "title": "Return with one click",
+        "text": "Click a notification to return to its terminal, editor or tab where supported. Claude Code and Codex CLI only; support depends on your terminal and OS."
       },
       "2": {
         "label": "SOUND CONTROLS",
@@ -54,6 +54,8 @@
       }
     },
     "preview": {
+      "focus": "Click to return",
+      "return": "Back to your terminal",
       "done": "Your agent is done",
       "ready": "Ready when you are.",
       "sound": "Your sound. Your volume.",
@@ -207,7 +209,7 @@
   },
   "install": {
     "title": "Set up notifications",
-    "intro": "Follow the steps below to add desktop notifications to {agent}.",
+    "intro": "Follow the steps below to add notifications to {agent}.",
     "chooseAgent": "Choose your agents",
     "requires": "Requires {agent}",
     "bothAgents": "Both agents",
@@ -242,7 +244,7 @@
       "codexMiddle": "and apply edits using the",
       "codexLink": "documented manual configuration",
       "codexAfter": "Claude Code is not required for Codex-only setup.",
-      "shared": "Both agents share this configuration. Your settings are preserved when updating."
+      "shared": "Shared settings are preserved when updating."
     },
     "manual": {
       "title": "Follow the manual route",
@@ -276,9 +278,18 @@
     "configureSettings": "⚙ Configure settings",
     "agentNotify": {
       "label": "Let agents send you notifications when they need your attention",
-      "hint": "Adds a tool so an agent can notify you during a task, not only when work stops."
+      "hint": "Adds a notification tool for Claude Code and Codex CLI during a task, not only when work stops."
+    },
+    "capabilities": {
+      "title": "Selected agent capabilities",
+      "details": "Compatibility details",
+      "claude": "Completion, review, question, plan, session limit and API error alerts, with sounds and click-to-focus where supported.",
+      "codex": "Completion and permission alerts, with sounds and click-to-focus where supported. Review and trust installed hooks in /hooks.",
+      "opencode": "Silent completion, question, permission and error alerts for root sessions. No sound or click-to-focus."
     },
     "opencode": {
+      "channelsTitle": "OpenCode notification channels",
+      "channelsHint": "These choices apply only to OpenCode. Allow at least one channel; webhook URLs are configured separately.",
       "scope": "OpenCode: silent completion, question, permission and error alerts for root sessions. No sound or click-to-focus.",
       "version": "Tested with OpenCode 1.18.33. Requires plugin release 1.46.0 or newer. OpenCode V2 is not supported.",
       "desktop": "Allow desktop notifications",

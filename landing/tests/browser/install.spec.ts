@@ -450,9 +450,9 @@ test("all agents toggle independently, copied commands and configuration cover t
   const prefix = "curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product ";
   const cases = [
     { selected: ["claude"], expected: prefix + "claude" },
-    { selected: ["claude", "opencode"], expected: "(\nset -o pipefail\n" + prefix + "claude &&\n" + prefix + "opencode --desktop\n)" },
-    { selected: ["claude", "codex", "opencode"], expected: "(\nset -o pipefail\n" + prefix + "both &&\n" + prefix + "opencode --desktop\n)" },
-    { selected: ["codex", "opencode"], expected: "(\nset -o pipefail\n" + prefix + "codex &&\n" + prefix + "opencode --desktop\n)" },
+    { selected: ["claude", "opencode"], expected: "(set -o pipefail; " + prefix.replace("--product ", "--products ") + "claude,opencode --desktop)" },
+    { selected: ["claude", "codex", "opencode"], expected: "(set -o pipefail; " + prefix.replace("--product ", "--products ") + "claude,codex,opencode --desktop)" },
+    { selected: ["codex", "opencode"], expected: "(set -o pipefail; " + prefix.replace("--product ", "--products ") + "codex,opencode --desktop)" },
     { selected: ["opencode"], expected: prefix + "opencode --desktop" },
     { selected: ["codex"], expected: prefix + "codex" },
     { selected: ["claude", "codex"], expected: prefix + "both" },
@@ -471,16 +471,31 @@ test("all agents toggle independently, copied commands and configuration cover t
   await chooseAgents(page, ["claude", "codex", "opencode"]);
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.getByRole("button", { name: "Copy command" }).click();
-  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("(\nset -o pipefail\n" + prefix + "both &&\n" + prefix + "opencode --desktop\n)");
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("(set -o pipefail; " + prefix.replace("--product ", "--products ") + "claude,codex,opencode --desktop)");
+  const info = page.getByRole("group", { name: "Selected agent capabilities" });
+  await expect(info.getByRole("heading")).toHaveCount(3);
+  await expect(info).toContainText("Completion and permission alerts");
+  await expect(info).toContainText("Silent completion, question, permission and error alerts for root sessions");
+  await expect(page.getByText(/Tested with OpenCode 1.18.33/)).not.toBeVisible();
+  await info.locator("article").filter({ has: page.getByRole("heading", { name: "OpenCode", exact: true }) })
+    .getByText("Compatibility details", { exact: true }).click();
   await expect(page.getByText(/Tested with OpenCode 1.18.33/)).toBeVisible();
+  const channels = page.getByRole("group", { name: "OpenCode notification channels" });
+  await expect(channels).toContainText("webhook URLs are configured separately");
+  await expect(channels.getByRole("checkbox")).toHaveCount(2);
+  const controls = await channels.locator("label").evaluateAll((nodes) => nodes.map((node) => {
+    const rect = node.getBoundingClientRect();
+    return { x: rect.x, right: rect.right, y: rect.y, bottom: rect.bottom };
+  }));
+  expect(controls[1].x >= controls[0].right + 8 || controls[1].y >= controls[0].bottom + 8).toBe(true);
   const agentNotify = page.getByRole("checkbox", { name: /Let agents send/ });
   await agentNotify.uncheck();
-  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue("(\nset -o pipefail\n" + prefix + "both --skip-agent-notify &&\n" + prefix + "opencode --desktop\n)");
+  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue("(set -o pipefail; " + prefix.replace("--product ", "--products ") + "claude,codex,opencode --skip-agent-notify --desktop)");
   const desktop = page.getByRole("checkbox", { name: "Allow desktop notifications", exact: true });
   const webhook = page.getByRole("checkbox", { name: "Allow webhook notifications", exact: true });
   await webhook.check();
   await desktop.uncheck();
-  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue("(\nset -o pipefail\n" + prefix + "both --skip-agent-notify &&\n" + prefix + "opencode --webhook\n)");
+  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue("(set -o pipefail; " + prefix.replace("--product ", "--products ") + "claude,codex,opencode --skip-agent-notify --webhook)");
   await webhook.uncheck();
   await expect(page.getByLabel("Install command", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Copy command" })).toHaveCount(0);
@@ -495,4 +510,14 @@ test("all agents toggle independently, copied commands and configuration cover t
   await chooseAgents(page, ["opencode"]);
   await expect(agentNotify).toHaveCount(0);
   await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(prefix + "opencode --desktop");
+});
+
+test("first feature explains supported click-to-focus and its agent scope", async ({ page }) => {
+  await page.goto("");
+  const feature = page.locator("#features article").first();
+  await expect(feature.getByRole("heading", { name: "Return with one click" })).toBeVisible();
+  await expect(feature).toContainText("CLICK TO FOCUS");
+  await expect(feature).toContainText("terminal, editor or tab where supported");
+  await expect(feature).toContainText("Claude Code and Codex CLI only");
+  await expect(feature).toContainText("terminal and OS");
 });
