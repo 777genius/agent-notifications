@@ -706,6 +706,45 @@ def reset_case():
         d.mkdir(parents=True, exist_ok=True)
     trace.write_text('')
 def init_events(): return [e for e in events() if e[:2]==['config','init']]
+# Real HTTP/checksum acquisition and public shell orchestration must emit clean,
+# physical staging paths. A symlinked TMPDIR ending in / used to produce // in
+# --package, rejected by the real Go wizard before any installation action.
+if os.name != 'nt':
+    reset_case(); request_paths.clear()
+    temp_root=sandbox/'physical temp'; temp_root.mkdir()
+    temp_alias=sandbox/'temp alias'; temp_alias.symlink_to(temp_root, target_is_directory=True)
+    release=web/'download/v2.0.0'
+    original_payload=(release/asset_name).read_bytes()
+    original_checksums=(release/'checksums.txt').read_bytes()
+    wizard_payload=capable.replace('setup-notifications', 'setup-notifications wizard', 1).replace('v1.42.0', 'v2.0.0').encode('utf-8')
+    portable_name='agent-notify-portable-'+asset_os+'-'+asset_arch+'.zip'
+    portable_payload=b'verified portable argv fixture'
+    (release/asset_name).write_bytes(wizard_payload)
+    (release/portable_name).write_bytes(portable_payload)
+    (release/'checksums.txt').write_text(
+        hashlib.sha256(wizard_payload).hexdigest()+'  '+asset_name+'\n'+
+        hashlib.sha256(portable_payload).hexdigest()+'  '+portable_name+'\n')
+    try:
+        run(['--product','codex'], extra={'BOOTSTRAP_RELEASE_TAG':'v2.0.0', 'TMPDIR':str(temp_alias)+'/'})
+        es=events()
+        wizard_args=next(e for e in es if e[:2]==['setup-notifications','wizard'])
+        package=wizard_args[wizard_args.index('--package')+1]
+        assert package == os.path.normpath(package) == os.path.realpath(package), package
+        assert pathlib.Path(package).parent.parent == temp_root.resolve(), package
+        assert pathlib.Path(package).name == portable_name
+        for e in es:
+            if e[:1]==['setup-codex']:
+                bundle=e[e.index('--plugin-root')+1]
+                assert bundle == os.path.realpath(bundle), bundle
+            if e[:3]==['config','installer','bootstrap']:
+                for staging_path in (e[3], e[10]):
+                    assert staging_path == os.path.realpath(staging_path), staging_path
+        assert '/download/v2.0.0/'+portable_name in request_paths
+        assert not list(temp_root.iterdir()), 'canonical staging cleanup failed'
+    finally:
+        (release/asset_name).write_bytes(original_payload)
+        (release/'checksums.txt').write_bytes(original_checksums)
+        (release/portable_name).unlink()
 for product in ['claude','codex','both']:
     reset_case(); request_paths.clear()
     run(['--product',product])

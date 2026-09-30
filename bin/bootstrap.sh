@@ -1285,6 +1285,7 @@ stage_config_helper() {
     # Use the OS temporary root, not a caller-controlled TMPDIR inside a bundle.
     # The verified helper checks canonical overlap before any refresh operation.
     _CONFIG_STAGE=$(mktemp -d "/tmp/bootstrap-config-XXXXXX") || return 1
+    _CONFIG_STAGE=$(cd -P "$_CONFIG_STAGE" && pwd -P) || return 1
     # Snapshot the pre-update registry, not a guessed cache version. Later
     # registrations introduce packaged templates, not historical user settings.
     if [ "$PRODUCT" != codex ] && [ -e "$INSTALLED_JSON" ]; then
@@ -1428,6 +1429,7 @@ install_codex() {
     local source_base="${BOOTSTRAP_SOURCE_BASE_URL:-https://github.com/${REPO}/archive}"
     local release_base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}"
     _BOOTSTRAP_STAGE=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-codex-XXXXXX") || return 1
+    _BOOTSTRAP_STAGE=$(cd -P "$_BOOTSTRAP_STAGE" && pwd -P) || return 1
     local bundle="$_BOOTSTRAP_STAGE/bundle"
     mkdir "$bundle" || return 1
     fetch_bootstrap_file "$source_base/$BOOTSTRAP_COMMIT.tar.gz" "$_BOOTSTRAP_STAGE/source.tar.gz" || return 1
@@ -1662,6 +1664,8 @@ acquire_wizard_portable_asset() {
     read -r os arch < <(bootstrap_release_os_arch) || return 1
     asset="agent-notify-portable-${os}-${arch}.zip"
     _PORTABLE_STAGE=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-portable-XXXXXX") || return 1
+    # Wizard paths must be clean and physical, including TMPDIR aliases and /tmp on macOS.
+    _PORTABLE_STAGE=$(cd -P "$_PORTABLE_STAGE" && pwd -P) || return 1
     stage="$_PORTABLE_STAGE"
     base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG"
     if [ ! -f "$stage/checksums.txt" ]; then
