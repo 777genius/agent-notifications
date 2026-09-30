@@ -1660,6 +1660,8 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 			}
 		}
 	}
+	// Freeze every client identity before publishing intent or changing hooks.
+	notifyIdentities := make(map[portable.Integration]portablesetup.Identity, len(notifyAgents))
 	if len(notifyAgents) > 0 && (req.Action == ActionInstall || req.Action == ActionUpdate || req.Action == ActionRepair) {
 		for _, agent := range notifyAgents {
 			target, err := targetIdentity(id, req, snap, mat, agent)
@@ -1667,7 +1669,11 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 				out.Outcome, out.Reason = "incomplete", "binding_identity_invalid"
 				return out, err
 			}
-			path := target.GlobalConfig
+			notifyIdentities[agent] = target
+		}
+		for _, agent := range notifyAgents {
+			var err error
+			path := notifyIdentities[agent].GlobalConfig
 			_, migrating := req.MigrationBindings[string(agent)]
 			if migrating || !liveNotifyClient(mat, id.InstallationID, string(agent)) {
 				err = config.PrepareGlobalConfigParent(path)
@@ -1756,7 +1762,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		var reqs []portablesetup.MaterializeRequest
 		for _, agent := range notifyAgents {
 			reqs = append(reqs, portablesetup.MaterializeRequest{
-				Identity: id, Integration: agent, ExpectedGeneration: generation,
+				Identity: notifyIdentities[agent], Integration: agent, ExpectedGeneration: generation,
 				PackageRoot: clientPackageRoot(req, agent), ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
 				SourceRevision: req.ReleaseVersion, SourceDigest: req.PackageSHA256,
 				TreeDigest: req.TreeDigest, HelperDigest: req.HelperDigest, HelperVersion: req.HelperVersion,
@@ -2037,6 +2043,7 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 			return out, nil
 		}
 	}
+	notifyIdentities := make(map[portable.Integration]portablesetup.Identity, len(notifyAgents))
 	portablePresent := id.InstallationID != "" && !retainedEmpty
 	if portablePresent {
 		for _, agent := range notifyAgents {
@@ -2061,6 +2068,14 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 		if err := prepareUninstallBindings(&req, snap, mat, id, notifyAgents); err != nil {
 			out.Outcome, out.Reason = "incomplete", "removal_identity_invalid"
 			return out, err
+		}
+		for _, agent := range notifyAgents {
+			target, err := targetIdentity(id, req, snap, mat, agent)
+			if err != nil {
+				out.Outcome, out.Reason = "incomplete", "binding_identity_invalid"
+				return out, err
+			}
+			notifyIdentities[agent] = target
 		}
 	}
 	reportProgress(req, "preflight")
@@ -2152,7 +2167,7 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 		for i, agent := range notifyAgents {
 			dataRoots[i] = liveDataRoot(mat, id.InstallationID, string(agent))
 			reqs = append(reqs, portablesetup.MaterializeRequest{
-				Identity: id, Integration: agent, ExpectedGeneration: generation,
+				Identity: notifyIdentities[agent], Integration: agent, ExpectedGeneration: generation,
 				ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
 				OperationID:         wizardMutationID(req.Action, "group", generation),
 				ExternalUninstalled: req.ExternalUninstalled,

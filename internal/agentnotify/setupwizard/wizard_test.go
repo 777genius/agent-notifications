@@ -3783,6 +3783,160 @@ func TestWizardUpdateBothLiveClients(t *testing.T) {
 	}
 }
 
+// A group update must preserve the independently frozen scopes after one
+// sibling was removed and installed again from another project directory.
+func TestWizardUpdateBothLiveClientsPreservesIndependentScopes(t *testing.T) {
+	ctx := testCtx(t)
+	control, runtime, global, _, _ := managedRuntime(t)
+	probe := buildProbe(t)
+	pkg := filepath.Join(filepath.Dir(control), "package")
+	writePackage(t, pkg, probe)
+	codexConfig := filepath.Join(filepath.Dir(control), "codex-profile")
+	claudeConfig := filepath.Join(filepath.Dir(control), "claude-profile")
+	projectScope := filepath.Join(filepath.Dir(control), "claude-project")
+	for _, dir := range []string{codexConfig, claudeConfig, projectScope} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	off := false
+	req := Request{
+		Action: ActionInstall, Agents: []string{"claude", "codex"}, Yes: true, Hooks: &off,
+		PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
+		CodexHome: codexConfig, ClaudeConfig: claudeConfig, ClientExecutable: probe, Helper: probe,
+		ClaudeRunner: listingRunner{configRoot: claudeConfig},
+	}
+	installed, err := Run(ctx, req)
+	if err != nil || installed.Outcome != "completed" {
+		t.Fatalf("install both: %+v %v", installed, err)
+	}
+	claude := req
+	claude.Agents, claude.Action = []string{"claude"}, ActionUninstall
+	removed, err := Run(ctx, claude)
+	if err != nil || removed.Outcome != "completed" {
+		t.Fatalf("remove Claude: %+v %v", removed, err)
+	}
+	claude.Action, claude.ScopeRoot = ActionInstall, projectScope
+	reinstalled, err := Run(ctx, claude)
+	if err != nil || reinstalled.Outcome != "completed" || reinstalled.InstallationID != installed.InstallationID {
+		t.Fatalf("reinstall Claude: %+v %v", reinstalled, err)
+	}
+	assertBindings := func(want map[portable.Integration]portable.Binding) map[portable.Integration]portable.Binding {
+		t.Helper()
+		snap, err := installruntime.ReadInstalledSnapshot(control)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bindings := map[portable.Integration]portable.Binding{}
+		for key, consumer := range snap.Ledger.Consumers {
+			if !strings.HasPrefix(key, "portable:") {
+				continue
+			}
+			var binding portable.Binding
+			if err := json.Unmarshal([]byte(consumer.Registration), &binding); err != nil {
+				t.Fatal(err)
+			}
+			if binding.InstallationID != installed.InstallationID {
+				continue
+			}
+			if _, duplicate := bindings[binding.Integration]; duplicate {
+				t.Fatalf("duplicate portable consumer for %s: %+v", binding.Integration, snap.Ledger.Consumers)
+			}
+			bindings[binding.Integration] = binding
+		}
+		for agent, scope := range map[portable.Integration]string{portable.Codex: control, portable.Claude: projectScope} {
+			binding, ok := bindings[agent]
+			if !ok || !samePortableRoot(binding.ScopeRoot, scope) {
+				t.Fatalf("%s scope changed: %+v, want %s", agent, binding, scope)
+			}
+			if want != nil && binding != want[agent] {
+				t.Fatalf("%s committed identity changed: before=%+v after=%+v", agent, want[agent], binding)
+			}
+			live := inspectedWizardBinding(t, ctx, control, string(agent))
+			if live.BindingID != binding.BindingID {
+				t.Fatalf("%s runtime consumer differs from UAP: %+v %+v", agent, binding, live)
+			}
+			if exact, err := portable.ExactLocator(binding); err != nil || !exact {
+				t.Fatalf("%s locator mismatch: exact=%v err=%v", agent, exact, err)
+			}
+			body, err := os.ReadFile(filepath.Join(live.TargetPath, ".mcp.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			type serverProjection struct {
+				Args []string `json:"args"`
+			}
+			var servers map[string]serverProjection
+			if agent == portable.Codex {
+				var projected struct {
+					MCPServers map[string]serverProjection `json:"mcpServers"`
+				}
+				if err := json.Unmarshal(body, &projected); err != nil {
+					t.Fatal(err)
+				}
+				servers = projected.MCPServers
+			} else if err := json.Unmarshal(body, &servers); err != nil {
+				t.Fatal(err)
+			}
+			server, ok := servers["agent-notify"]
+			if !ok {
+				t.Fatalf("%s MCP projection omitted agent-notify: %s", agent, body)
+			}
+			name, err := binding.Filename()
+			if err != nil {
+				t.Fatal(err)
+			}
+			args := []string{"portable-launch", "--locator", name}
+			if agent == portable.Codex {
+				args = []string{"portable-launch", "--data-root", binding.DataRoot, "--locator", name}
+			}
+			// The native adapter can prepend its runtime wrapper; the product
+			// launch arguments must remain the exact trailing invocation.
+			if len(server.Args) < len(args) || strings.Join(server.Args[len(server.Args)-len(args):], "\x00") != strings.Join(args, "\x00") {
+				t.Fatalf("%s MCP argv differs: got=%q want=%q", agent, server.Args, args)
+			}
+		}
+		if len(bindings) != 2 {
+			t.Fatalf("portable consumers: %+v", bindings)
+		}
+		return bindings
+	}
+	frozen := assertBindings(nil)
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.1"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	req.Action = ActionUpdate
+	for i := 0; i < 2; i++ {
+		updated, err := Run(ctx, req)
+		if err != nil || updated.Outcome != "completed" || updated.InstallationID != installed.InstallationID {
+			t.Fatalf("group update %d: %+v %v", i, updated, err)
+		}
+		assertBindings(frozen)
+	}
+	req.Action, req.ExternalUninstalled = ActionUninstall, true
+	removed, err = Run(ctx, req)
+	if err != nil || removed.Outcome != "completed" {
+		t.Fatalf("attested group uninstall: %+v %v", removed, err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key := range snap.Ledger.Consumers {
+		if strings.HasPrefix(key, "portable:") {
+			t.Fatalf("group uninstall retained portable consumer %s", key)
+		}
+	}
+	if live := LiveNotifyClients(control, []string{"claude", "codex"}); len(live) != 0 {
+		t.Fatalf("group uninstall retained clients: %v", live)
+	}
+	for _, binding := range frozen {
+		if exact, err := portable.ExactLocator(binding); err != nil || exact {
+			t.Fatalf("group uninstall retained locator: %+v exact=%v err=%v", binding, exact, err)
+		}
+	}
+}
+
 func TestWizardInspectAfterGroupInstallReportsBothWithoutMutating(t *testing.T) {
 	ctx := testCtx(t)
 	control, runtime, global, _, _ := managedRuntime(t)
