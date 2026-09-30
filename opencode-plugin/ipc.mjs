@@ -35,6 +35,7 @@ export async function forward(event, spawnProcess = spawn, binary = executable, 
     try {
       child = spawnProcess(binary, ['opencode-event', '--protocol', '1'], {
         shell: false,
+        windowsHide: true,
         stdio: ['pipe', 'pipe', 'pipe'],
         env: { ...Object.fromEntries([...commonEnvironment, ...(platform === 'win32' ? windowsEnvironment : posixEnvironment)]
           .filter((key) => process.env[key] !== undefined)

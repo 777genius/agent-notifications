@@ -314,6 +314,7 @@ async function forward(event, spawnProcess = spawn, binary = executable, root = 
     try {
       child = spawnProcess(binary, ["opencode-event", "--protocol", "1"], {
         shell: false,
+        windowsHide: true,
         stdio: ["pipe", "pipe", "pipe"],
         env: { ...Object.fromEntries([...commonEnvironment, ...platform === "win32" ? windowsEnvironment : posixEnvironment].filter((key) => process.env[key] !== void 0).map((key) => [key, process.env[key]])), AGENT_NOTIFICATIONS_CONTROL_ROOT: root }
       });
