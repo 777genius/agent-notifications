@@ -4,7 +4,7 @@
 <h1 align="center"><a href="https://777genius.github.io/agent-notifications/">Agent Notifications</a></h1>
 
 <p align="center">
-  <a href="#manual-install"><img src="landing/public/agents/claude.png" width="64" height="64" alt="Claude Code" title="Claude Code" /></a>
+  <a href="#install-or-update"><img src="landing/public/agents/claude.png" width="64" height="64" alt="Claude Code" title="Claude Code" /></a>
   &nbsp;&nbsp;
   <a href="docs/CODEX.md"><img src="brand/codex-logo.svg" width="64" height="64" alt="Codex CLI" title="Codex CLI" /></a>
   &nbsp;&nbsp;
