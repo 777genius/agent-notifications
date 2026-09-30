@@ -204,6 +204,15 @@ func Apply(ctx context.Context, r Request) error {
 		{Path: binary, Before: beforeBinary, Data: data, Mode: mode},
 		{Path: plugin.Target, Before: plannedPlugin, Data: bundle, Mode: 0600},
 	}
+	if p.goos == "windows" {
+		shortcut, shortcutErr := stageWindowsShortcutForSetup(r.HomeDir, binary, r.Desktop, ledger)
+		if shortcutErr != nil {
+			return shortcutErr
+		}
+		if shortcut != nil {
+			files = append(files, *shortcut)
+		}
+	}
 	var native *installruntime.NativeChange
 	if p.goos == "darwin" && r.Desktop {
 		if r.NativeSource != "" {
@@ -348,16 +357,29 @@ func remove(ctx context.Context, r Request, ledger installruntime.Ledger, target
 			return err
 		}
 		before, ok := installruntime.OwnedFile(l, target)
+		files := []installruntime.File{}
 		if ok {
-			gen := l.Generation
-			_, err = installruntime.Commit(ctx, installruntime.Request{ControlRoot: r.ControlRoot, RuntimeRoot: r.RuntimeRoot,
-				Owner: "existing-installer", ConsumerID: consumerID, RefreshOnly: true, ExpectedGeneration: &gen,
-				Files: []installruntime.File{{Path: target, Before: before, Remove: true}}})
+			files = append(files, installruntime.File{Path: target, Before: before, Remove: true})
+		} else if observed, err := installruntime.Fingerprint(target); err != nil || observed.Exists {
+			return errors.New("unowned OpenCode plugin path blocks removal")
+		}
+		if r.GOOS == "windows" {
+			shortcut, err := stageWindowsShortcutForSetup(r.HomeDir, "", false, l)
 			if err != nil {
 				return err
 			}
-		} else if observed, err := installruntime.Fingerprint(target); err != nil || observed.Exists {
-			return errors.New("unowned OpenCode plugin path blocks removal")
+			if shortcut != nil {
+				files = append(files, *shortcut)
+			}
+		}
+		if len(files) != 0 {
+			gen := l.Generation
+			_, err = installruntime.Commit(ctx, installruntime.Request{ControlRoot: r.ControlRoot, RuntimeRoot: r.RuntimeRoot,
+				Owner: "existing-installer", ConsumerID: consumerID, RefreshOnly: true, ExpectedGeneration: &gen,
+				Files: files})
+			if err != nil {
+				return err
+			}
 		}
 	}
 	l, _, err := installruntime.ReadOwnership(r.ControlRoot)

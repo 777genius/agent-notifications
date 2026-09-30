@@ -133,6 +133,36 @@ func TestWindowsNativeInstallUpdateRemoveAndForeignProtection(t *testing.T) {
 	if got, err := os.ReadFile(installed); err != nil || string(got) != string(fixtureBinary("windows", "amd64", "v1")) {
 		t.Fatalf("owned executable missing or changed: %v", err)
 	}
+	shortcut, err := windowsShortcutPath(r.HomeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shortcutTarget, shortcutAppID, shortcutArgs, err := inspectWindowsShortcut(shortcut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sameWindowsPath(shortcutTarget, installed) || shortcutAppID != OpenCodeToastAppID || shortcutArgs != "--help" {
+		t.Fatalf("installed shortcut target=%q appID=%q args=%q", shortcutTarget, shortcutAppID, shortcutArgs)
+	}
+	if err := windowsShortcutReady(r.ControlRoot, installed, r.HomeDir); err != nil {
+		t.Fatal(err)
+	}
+	shortcutBytes, err := os.ReadFile(shortcut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(shortcut, []byte("foreign edit"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := windowsShortcutReady(r.ControlRoot, installed, r.HomeDir); err == nil {
+		t.Fatal("modified shortcut passed readiness")
+	}
+	if err := os.WriteFile(shortcut, shortcutBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := windowsShortcutReady(r.ControlRoot, installed, filepath.Join(base, "different-home")); err == nil {
+		t.Fatal("shortcut outside current Programs folder passed readiness")
+	}
 	ledger, recovery, err := installruntime.ReadOwnership(r.ControlRoot)
 	if err != nil || recovery {
 		t.Fatalf("read installed ownership: recovery=%v err=%v", recovery, err)
@@ -146,6 +176,7 @@ func TestWindowsNativeInstallUpdateRemoveAndForeignProtection(t *testing.T) {
 		t.Fatalf("installed channels = %v %v", desktop, webhook)
 	}
 	r.Action, r.Desktop, r.Webhook = Update, false, true
+	r.HomeDir = filepath.Join(base, "different-home")
 	if err := os.WriteFile(r.BinarySource, fixtureBinary("windows", "amd64", "v2"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -154,6 +185,9 @@ func TestWindowsNativeInstallUpdateRemoveAndForeignProtection(t *testing.T) {
 	}
 	if desktop, webhook := gate.Channels(ctx); desktop || !webhook {
 		t.Fatalf("updated channels = %v %v", desktop, webhook)
+	}
+	if _, err := os.Lstat(shortcut); !os.IsNotExist(err) {
+		t.Fatalf("desktop-disabled shortcut retained: %v", err)
 	}
 	r.Action = Remove
 	if err := Apply(ctx, r); err != nil {

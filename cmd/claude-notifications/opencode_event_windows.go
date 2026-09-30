@@ -8,5 +8,5 @@ import (
 )
 
 func newOpenCodeDesktopPort() notification.DeliveryPort {
-	return notifier.NewWindowsToastDelivery(notifier.SystemBootClock{})
+	return notifier.NewOpenCodeWindowsToastDelivery(notifier.SystemBootClock{})
 }

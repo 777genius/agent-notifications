@@ -13,6 +13,7 @@ import (
 	"golang.org/x/sys/windows"
 
 	"github.com/777genius/agent-notifications/internal/notification"
+	"github.com/777genius/agent-notifications/internal/opencodeinstall"
 )
 
 func TestWindowsPowerShellToastSessionForwardsSilentPolicy(t *testing.T) {
@@ -29,6 +30,24 @@ func TestWindowsPowerShellToastSessionForwardsSilentPolicy(t *testing.T) {
 	}
 	if !got.Silent || got.Title != r.Content.Title || got.Body != r.Content.Body || got.AppID != windowsToastAppID {
 		t.Fatalf("wrong toast payload: %+v", got)
+	}
+}
+
+func TestOpenCodeToastUsesSeparateIdentityAndRejectsMissingShortcut(t *testing.T) {
+	previous := submitWindowsToast
+	t.Cleanup(func() { submitWindowsToast = previous })
+	var got windowsToastPayload
+	submitWindowsToast = func(_ context.Context, p windowsToastPayload) error { got = p; return nil }
+	s := windowsPowerShellToastSession{appID: opencodeinstall.OpenCodeToastAppID,
+		controlRoot: filepath.Join(t.TempDir(), "control"), executable: filepath.Join(t.TempDir(), "notification.exe"), requireOpenCodeShortcut: true}
+	if err := s.Ready(context.Background()); err == nil {
+		t.Fatal("missing owned shortcut passed readiness")
+	}
+	if err := s.Submit(context.Background(), notification.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if got.AppID != opencodeinstall.OpenCodeToastAppID || got.AppID == windowsToastAppID {
+		t.Fatalf("OpenCode toast identity = %q", got.AppID)
 	}
 }
 
