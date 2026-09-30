@@ -133,7 +133,12 @@ func TestWindowsNativeInstallUpdateRemoveAndForeignProtection(t *testing.T) {
 	if got, err := os.ReadFile(installed); err != nil || string(got) != string(fixtureBinary("windows", "amd64", "v1")) {
 		t.Fatalf("owned executable missing or changed: %v", err)
 	}
-	if got, err := os.ReadFile(plugin); err != nil || !strings.Contains(string(got), strconv.Quote(installed)) {
+	ledger, recovery, err := installruntime.ReadOwnership(r.ControlRoot)
+	if err != nil || recovery {
+		t.Fatalf("read installed ownership: recovery=%v err=%v", recovery, err)
+	}
+	ownedCommand := ledger.Consumers[consumerID].Commands[0]
+	if got, err := os.ReadFile(plugin); err != nil || !strings.Contains(string(got), strconv.Quote(ownedCommand)) {
 		t.Fatalf("owned plugin missing executable path: %v", err)
 	}
 	gate := CurrentGate{ControlRoot: r.ControlRoot, Executable: installed, GOOS: "windows", GOARCH: "amd64"}
