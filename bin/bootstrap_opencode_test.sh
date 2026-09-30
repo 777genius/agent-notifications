@@ -11,6 +11,10 @@ set -euo pipefail
 [ "$#" -eq 1 ] || { echo "Usage: bash bin/bootstrap_opencode_test.sh /absolute/native/test-binary" >&2; exit 2; }
 TEST_BINARY="$1"
 [ -f "$TEST_BINARY" ] || exit 2
+# CI qualifies release-mode bytes: unstripped Windows debug symbols can exceed
+# the product's existing 32 MiB executable bound. Keep the actual size visible.
+source_size=$(wc -c < "$TEST_BINARY" | tr -d '[:space:]')
+printf 'OpenCode fixture native source: %s bytes\n' "$source_size"
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SANDBOX=$(mktemp -d /tmp/bootstrap-opencode-XXXXXX)
 trap 'rm -rf "$SANDBOX"' EXIT

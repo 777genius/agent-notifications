@@ -69,7 +69,7 @@ jobs:
         shell: bash
 
       - name: Build binary
-        run: go build -o bin/claude-notifications.exe ./cmd/claude-notifications
+        run: go build -ldflags="-s -w" -trimpath -o bin/claude-notifications.exe ./cmd/claude-notifications
 
       - name: Test binary execution (help)
         run: ./bin/claude-notifications.exe help
