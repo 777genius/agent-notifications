@@ -213,6 +213,9 @@ func TestInstallerRuntimeRootUsesOwnership(t *testing.T) {
 	testenv.Set(t, box)
 	root := filepath.Join(box, "control")
 	runtimeRoot := filepath.Join(box, "existing runtime")
+	if err := os.MkdirAll(runtimeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if _, err := installruntime.Commit(ctx, installruntime.Request{
