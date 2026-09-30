@@ -6,6 +6,23 @@ on:
   pull_request:
 
 jobs:
+  opencode-plugin:
+    name: OpenCode plugin bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: opencode-plugin/package-lock.json
+      - run: npm ci
+        working-directory: opencode-plugin
+      - run: npm run check
+        working-directory: opencode-plugin
+      - run: git diff --exit-code -- internal/opencodeplugin/dist/agent-notifications.js
+
   test:
     name: Test on Ubuntu
     runs-on: ubuntu-latest
