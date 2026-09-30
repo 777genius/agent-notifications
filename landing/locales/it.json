@@ -107,15 +107,15 @@
       },
       "opencodeQuestion": {
         "title": "OpenCode",
-        "body": "È richiesta la tua attenzione"
+        "body": "OpenCode ha posto una domanda"
       },
       "opencodePermission": {
         "title": "OpenCode",
-        "body": "Permesso richiesto"
+        "body": "OpenCode ha richiesto un permesso"
       },
       "opencodeError": {
         "title": "OpenCode",
-        "body": "OpenCode richiede attenzione"
+        "body": "Un errore richiede la tua attenzione"
       }
     }
   },

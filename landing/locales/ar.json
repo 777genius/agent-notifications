@@ -107,15 +107,15 @@
       },
       "opencodeQuestion": {
         "title": "OpenCode",
-        "body": "يلزم انتباهك"
+        "body": "طرح OpenCode سؤالاً"
       },
       "opencodePermission": {
         "title": "OpenCode",
-        "body": "تم طلب الإذن"
+        "body": "طلب OpenCode إذناً"
       },
       "opencodeError": {
         "title": "OpenCode",
-        "body": "OpenCode يحتاج إلى انتباهك"
+        "body": "هناك خطأ يحتاج إلى انتباهك"
       }
     }
   },

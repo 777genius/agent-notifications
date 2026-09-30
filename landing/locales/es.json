@@ -18,15 +18,15 @@
       },
       "opencodeQuestion": {
         "title": "OpenCode",
-        "body": "Se requiere tu atención"
+        "body": "OpenCode ha hecho una pregunta"
       },
       "opencodePermission": {
         "title": "OpenCode",
-        "body": "Permiso solicitado"
+        "body": "OpenCode ha solicitado permiso"
       },
       "opencodeError": {
         "title": "OpenCode",
-        "body": "OpenCode necesita atención"
+        "body": "Un error requiere tu atención"
       } } },
   "select": { "scrollUp": "Desplazar opciones hacia arriba", "scrollDown": "Desplazar opciones hacia abajo" },
   "install": {

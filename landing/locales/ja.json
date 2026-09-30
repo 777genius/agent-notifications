@@ -5,15 +5,15 @@
       },
       "opencodeQuestion": {
         "title": "OpenCode",
-        "body": "確認が必要です"
+        "body": "OpenCode から質問があります"
       },
       "opencodePermission": {
         "title": "OpenCode",
-        "body": "権限が要求されました"
+        "body": "OpenCode が権限を要求しました"
       },
       "opencodeError": {
         "title": "OpenCode",
-        "body": "OpenCode の確認が必要です"
+        "body": "エラーの確認が必要です"
       }}},"select":{"scrollUp":"選択肢を上にスクロール","scrollDown":"選択肢を下にスクロール"},"install":{
     "agentNotify": {"label": "エージェントが注意を必要とするときに通知できるようにする", "hint": "作業の停止時だけでなく、タスクの途中でもエージェントが通知できるツールを追加します。"},"title":"通知を設定","intro":"以下の手順で {agent} にデスクトップ通知を追加します。","chooseAgent":"エージェントを選択","requires":"{agent} が必要です","bothAgents":"両方のエージェント","bothSelected":"✓ 両方のエージェントを選択済み","installBoth":"両方のエージェントにインストール","chooseComputer":"エージェントを実行するコンピューターを選択","selected":"選択済み","detected":"自動検出","change":"変更","targetOs":"対象のオペレーティングシステム","products":{"claude":"Claude Code","codex":"Codex CLI","both":"Claude Code + Codex CLI",
       "opencode": "OpenCode"},"targets":{"unknown":"対象の OS を選択","macos":"macOS","linux":"Linux","windows":"Windows · Git Bash","manual":"手動の手順"},"prerequisiteTitle":"Codex CLI","prerequisiteText":"バージョン 1.42.0。","checkReleases":"リリースを確認","configure":{"title":"サウンドを自分好みに","claudeBefore":"Claude Code のチャット内で実行：","claudeAfter":"これは Claude のスラッシュコマンドです。シェルコマンドではありません。","codexBefore":"Codex では、共有設定ファイルを編集します：","codexMiddle":"手順はこちら：","codexLink":"手動設定のドキュメント","codexAfter":"Codex のみを設定する場合、Claude Code は必要ありません。","shared":"両方のエージェントでこの設定を共有します。更新時も設定は保持されます。"},"manual":{"title":"手動で設定する","claude":"Claude の手動インストール","codex":"Codex の手動登録"},"chooseTarget":"対象の OS を選択するとコマンドが表示されます。モバイル端末や判別できないブラウザーでは、手動で選択してください。","commandLabel":"{intent}用コマンド","copyCommand":"コマンドをコピー","updatingInstead":"更新する場合は？","copied":"コピーしました。準備ができたら対象のターミナルに貼り付けてください。","copyUnavailable":"コピーできません。コマンドを選択して手動でコピーしてください。","updateNote":"インストールと更新には同じコマンドを使います。既存の設定は保持されます。","intents":{"install":"インストール","update":"更新","configure":"設定"},"steps":{"label1":"次の手順 1","label2":"次の手順 2","runBash":"Git Bash で実行","runTerminal":"ターミナルで実行","windowsTitle":"Windows の Git Bash で実行してください。","windowsText":"WSL は使用しないでください。また、このパイプ付きコマンドを PowerShell に貼り付けないでください。","terminalText":"ターミナルを開き、上のコマンドを実行してください。","restart":"{agent}を再起動","bothAgents":"両方のエージェント","restartClaude":"通知を有効にするには、Claude Code を閉じて開き直してください。","restartCodex":"Codex を再起動して /hooks を開き、インストールされたフックを確認して信頼を許可してください。定義が変わった場合は再確認が必要です。信頼が自動で許可されることはありません。"},"help":"インストールのヘルプ","claudeHelp":"Claude インストールのヘルプ","installationInstructions":"インストール手順","configureSettings":"⚙ 設定を変更",

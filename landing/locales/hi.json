@@ -107,15 +107,15 @@
       },
       "opencodeQuestion": {
         "title": "OpenCode",
-        "body": "आपका ध्यान आवश्यक है"
+        "body": "OpenCode ने सवाल पूछा"
       },
       "opencodePermission": {
         "title": "OpenCode",
-        "body": "अनुमति मांगी गई"
+        "body": "OpenCode ने अनुमति मांगी"
       },
       "opencodeError": {
         "title": "OpenCode",
-        "body": "OpenCode को आपका ध्यान चाहिए"
+        "body": "एक त्रुटि पर आपका ध्यान चाहिए"
       }
     }
   },

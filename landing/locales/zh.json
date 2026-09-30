@@ -216,15 +216,15 @@
       },
       "opencodeQuestion": {
         "title": "OpenCode",
-        "body": "需要您关注"
+        "body": "OpenCode 提出了问题"
       },
       "opencodePermission": {
         "title": "OpenCode",
-        "body": "请求权限"
+        "body": "OpenCode 请求了权限"
       },
       "opencodeError": {
         "title": "OpenCode",
-        "body": "OpenCode 需要关注"
+        "body": "有错误需要您关注"
       }
     }
   },

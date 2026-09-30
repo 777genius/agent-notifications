@@ -189,15 +189,15 @@
       },
       "opencodeQuestion": {
         "title": "OpenCode",
-        "body": "Your attention is needed"
+        "body": "OpenCode asked a question"
       },
       "opencodePermission": {
         "title": "OpenCode",
-        "body": "Permission requested"
+        "body": "OpenCode requested permission"
       },
       "opencodeError": {
         "title": "OpenCode",
-        "body": "OpenCode needs attention"
+        "body": "An error needs your attention"
       }
     }
   },
