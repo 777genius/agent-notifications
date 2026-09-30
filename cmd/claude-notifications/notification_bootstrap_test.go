@@ -309,7 +309,7 @@ main --product both
 	if err := os.WriteFile(binary, []byte(strings.Replace(helper, "--policy-only --preserve-enabled", "--policy-only", 1)), 0700); err != nil {
 		t.Fatal(err)
 	}
-	for name, oldScript := range map[string]string{"automatic": script, "explicit": explicitScript, "git_bash": windowsScript} {
+	for name, oldScript := range map[string]string{"automatic": script, "explicit": strings.Replace(explicitScript, "main --product both ", "main --product both --agent-notify ", 1), "git_bash": windowsScript} {
 		if err := os.Remove(filepath.Join(home, "calls")); err != nil && !os.IsNotExist(err) {
 			t.Fatal(err)
 		}
