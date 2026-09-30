@@ -581,14 +581,14 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 	req.EnvCodexHome = env.CodexHome
 	req.EnvClaudeConfig = env.ClaudeConfig
 	for _, path := range []*string{&req.EnvCodexHome, &req.EnvClaudeConfig} {
-		if *path == "" {
+		if runtime.GOOS == "windows" {
+			*path = strings.ReplaceAll(*path, "/", `\`)
+		}
+		if !filepath.IsAbs(*path) {
+			*path = ""
 			continue
 		}
-		normalized, normalizeErr := normalizeSetupPhysicalPath(*path)
-		if normalizeErr != nil {
-			return req, jsonOut, normalizeErr
-		}
-		*path = normalized
+		*path = filepath.Clean(*path)
 	}
 	req.ClientExecutable = values["client-executable"]
 	if values["claude-executable"] != "" || values["codex-executable"] != "" {

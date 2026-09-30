@@ -13,8 +13,8 @@ func TestSetupWizardAcceptsMSYSAbsolutePaths(t *testing.T) {
 	root := t.TempDir()
 	profile := filepath.Join(root, "profile ü with spaces")
 	slash := filepath.ToSlash(profile)
-	t.Setenv("CODEX_HOME", slash)
-	t.Setenv("CLAUDE_CONFIG_DIR", slash)
+	t.Setenv("CODEX_HOME", slash+"/")
+	t.Setenv("CLAUDE_CONFIG_DIR", slash+"/")
 	req, _, err := parseSetupWizard([]string{
 		"--action", "inspect", "--package", slash,
 		"--plugin-root", slash, "--claude-mcp-config", filepath.ToSlash(filepath.Join(profile, ".claude.json")),

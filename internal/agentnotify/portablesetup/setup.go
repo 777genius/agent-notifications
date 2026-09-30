@@ -838,6 +838,9 @@ func (s Service) FinishConfirmedIntent(ctx context.Context, req ConfirmedIntent,
 	if snap.Ledger.PendingMutation == nil {
 		return snap.Ledger.Generation, false, nil
 	}
+	if *snap.Ledger.PendingMutation != *res {
+		return snap.Ledger.Generation, false, nil
+	}
 	consumerID := "reservation-finalizer"
 	commitRoot := req.RuntimeRoot
 	if len(snap.Ledger.Consumers) != 0 {
