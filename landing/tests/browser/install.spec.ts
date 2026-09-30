@@ -317,7 +317,7 @@ test("notification sequence covers statuses and agents, pause and reduced motion
   expect(await cards.allTextContents()).toEqual(initial);
   await page.getByRole("button", { name: "Resume", exact: true }).click();
   const seen = new Set<string>();
-  for (let i = 0; i < 7; i++) {
+  for (let i = 0; i < 11; i++) {
     for (const title of await cards.locator("h3").allTextContents())
       seen.add(title);
     await page.clock.fastForward(3400);
@@ -325,6 +325,7 @@ test("notification sequence covers statuses and agents, pause and reduced motion
   }
   expect([...seen].sort()).toEqual(
     [
+      "OpenCode",
       "❓ Question",
       "📋 Plan",
       "✅ Completed",
