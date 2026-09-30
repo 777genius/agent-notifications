@@ -249,6 +249,12 @@ def main():
             if not plugin.is_file():
                 raise RuntimeError("setup-opencode did not install its JS plugin")
             report["installed_plugin_sha256"] = digest(plugin)
+            managed_name = f"claude-notifications-{args.os}-{args.arch}"
+            if args.os == "windows":
+                managed_name += ".exe"
+            managed_binary = root / "runtime" / managed_name
+            if not managed_binary.is_file() or digest(managed_binary) != digest(candidate):
+                raise RuntimeError("setup-opencode did not install the candidate at its managed path")
             server_port = port()
             with (root / "opencode-serve.log").open("w", encoding="utf-8") as log:
                 def start_server():
@@ -312,7 +318,6 @@ def main():
                     run([str(candidate), "setup-opencode", "remove", *common], cwd=project, env=env)
                     if plugin.exists():
                         raise RuntimeError("remove left the installed plugin file")
-                    managed_binary = root / "runtime" / args.binary.name
                     if managed_binary.exists():
                         raise RuntimeError("remove left the managed executable")
                     # Keep the old executable at its former sandbox path to exercise
