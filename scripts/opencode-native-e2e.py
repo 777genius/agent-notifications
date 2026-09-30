@@ -200,8 +200,8 @@ def qualify(args, report):
         raise RuntimeError("requested native matrix target differs from the actual host")
     candidate = args.binary.resolve(strict=True)
     source_sha = subprocess.check_output(["git", "rev-parse", "HEAD"],
-        cwd=pathlib.Path(__file__).resolve().parents[1], text=True).strip()
-    build_info = subprocess.check_output(["go", "version", "-m", str(candidate)], text=True)
+        cwd=pathlib.Path(__file__).resolve().parents[1], text=True, timeout=30).strip()
+    build_info = subprocess.check_output(["go", "version", "-m", str(candidate)], text=True, timeout=30)
     revision = re.search(r"(?m)^\s*build\s+vcs\.revision=([0-9a-f]{40})\s*$", build_info)
     modified = re.search(r"(?m)^\s*build\s+vcs\.modified=(true|false)\s*$", build_info)
     verified_source = bool(revision and modified and revision.group(1) == source_sha
