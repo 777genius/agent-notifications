@@ -35,4 +35,28 @@
       "guide": "OpenCode の設定と制限",
       "restart": "グローバルプラグインを読み込むために OpenCode を再起動してください。macOS ではガイドに従って通知を許可します。",
       "configure": "共通設定は config path で確認します。desktop/webhook の許可は setup-opencode で設定し、Webhook の送信先は別途設定します。"
-    }}}
+    }},
+  "agentSupport": {
+    "title": "エージェント機能の比較",
+    "feature": "機能",
+    "yes": "対応",
+    "no": "非対応",
+    "conditional": "制限付きで対応",
+    "legend": "✓ 対応 · ✕ 非対応 · ✓* 制限付き",
+    "conditions": "* Codex の質問はモードに依存します。エラーと上限は最終メッセージから検出されます。クリックでのフォーカスは OS とターミナルに依存します。",
+    "qualification": "Codex: Windows のフック通知と質問ツールのフックは、実際のセッションではまだ検証されていません。",
+    "v2Link": "OpenCode V2 とは？",
+    "rows": {
+      "completion": "完了",
+      "question": "質問",
+      "permission": "権限のリクエスト",
+      "review": "レビュー",
+      "plan": "計画",
+      "limit": "セッション上限に到達",
+      "sound": "サウンド",
+      "focus": "クリックでフォーカス",
+      "webhook": "Webhook",
+      "error": "エラー"
+    }
+  }
+}

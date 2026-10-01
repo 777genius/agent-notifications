@@ -53,7 +53,9 @@ test("production command matrix, aftercare, clipboard and configuration", async 
           await page.getByRole("button", { name: intent, exact: true }).click();
         const value = await page.getByLabel(intent + " command").inputValue();
         expect(value).toBe(
-          `curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product ${product}`,
+          product === "both"
+            ? "(set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --products claude,codex)"
+            : `curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product ${product}`,
         );
       }
       if (os === "windows")
@@ -77,18 +79,18 @@ test("production command matrix, aftercare, clipboard and configuration", async 
   });
   await expect(agentNotify).toBeChecked();
   await expect(page.getByLabel("Install command")).toHaveValue(
-    /--product both$/,
+    /--products claude,codex\)$/,
   );
   await agentNotify.uncheck();
   await expect(page.getByLabel("Install command")).toHaveValue(
-    /--skip-agent-notify$/,
+    /--skip-agent-notify\)$/,
   );
   await agentNotify.check();
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.getByRole("button", { name: "Copy command" }).click();
   await expect(page.getByRole("status")).toContainText("Copied");
   expect(await page.evaluate(() => navigator.clipboard.readText())).toContain(
-    "--product both",
+    "--products claude,codex",
   );
   await page.evaluate(() => {
     Object.defineProperty(navigator, "clipboard", {
@@ -171,7 +173,7 @@ test("pending clipboard completion cannot claim a different command was copied",
   await page.evaluate(() => (window as any).finishCopy());
   await expect(page.getByRole("status")).not.toContainText("Copied");
   await expect(page.getByLabel("Install command")).toHaveValue(
-    /--product both$/,
+    /--products claude,codex\)$/,
   );
 });
 test("assets load, hydration is clean and reduced motion disables background animation", async ({
@@ -204,6 +206,44 @@ test("assets load, hydration is clean and reduced motion disables background ani
   );
   expect(errors).toEqual([]);
 });
+test("background follows the pointer and scroll, sections reveal and motion preference resets them", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.goto("");
+  const orb = page.locator(".page-bg__orb--1");
+  const feature = page.locator(".feature").first();
+  const translation = () => orb.evaluate((node) => {
+    // CSS serializes a zero Y component as a single value.
+    const [x = "0", y = "0"] = getComputedStyle(node).translate.split(" ");
+    return [Number.parseFloat(x), Number.parseFloat(y)];
+  });
+  await expect(feature).toHaveCSS("opacity", "0");
+  const viewport = page.viewportSize()!;
+  await page.mouse.move(20, 200);
+  await expect.poll(async () => (await translation())[0]).toBeLessThan(-40);
+  await page.mouse.move(viewport.width - 20, 200);
+  await expect.poll(async () => (await translation())[0]).toBeGreaterThan(40);
+
+  await page.mouse.move(viewport.width / 2, viewport.height / 2);
+  await expect.poll(async () => Math.abs((await translation())[1])).toBeLessThan(1);
+  await page.evaluate(() => window.scrollTo({ top: 700, behavior: "instant" }));
+  await expect.poll(async () => (await translation())[1]).toBeGreaterThan(60);
+  await feature.scrollIntoViewIfNeeded();
+  await expect(feature).toHaveCSS("opacity", "1");
+  await expect(feature).toHaveCSS("translate", "none");
+
+  // A live accessibility preference change stops motion and reveals remaining content.
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect(orb).toHaveCSS("translate", "none");
+  await expect(orb).toHaveCSS("animation-name", "none");
+  await expect(page.locator(".page-bg__grid")).toHaveCSS("background-position", /^0px 0px(?:, 0px 0px)*$/);
+  await expect(page.locator(".closing")).toHaveCSS("opacity", "1");
+  await page.mouse.move(20, 200);
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+  await expect(page.locator(".page-bg__grid")).toHaveCSS("background-position", /^0px 0px(?:, 0px 0px)*$/);
+});
+
 test("language switch localizes content, URL, metadata and persists the choice", async ({
   page,
 }) => {
@@ -340,7 +380,7 @@ test("installation order, sticky header and custom select keyboard behavior", as
   await page.goto("");
   expect(
     await page
-      .locator("main > *")
+      .locator('main > :not([aria-hidden="true"])')
       .evaluateAll((nodes) =>
         nodes.map((n) => n.id || n.className).slice(0, 3),
       ),
@@ -455,7 +495,7 @@ test("all agents toggle independently, copied commands and configuration cover t
     { selected: ["codex", "opencode"], expected: "(set -o pipefail; " + prefix.replace("--product ", "--products ") + "codex,opencode --desktop)" },
     { selected: ["opencode"], expected: prefix + "opencode --desktop" },
     { selected: ["codex"], expected: prefix + "codex" },
-    { selected: ["claude", "codex"], expected: prefix + "both" },
+    { selected: ["claude", "codex"], expected: "(set -o pipefail; " + prefix.replace("--product ", "--products ") + "claude,codex)" },
   ] as const;
   for (const { selected, expected } of cases) {
     await chooseAgents(page, selected);
@@ -472,34 +512,29 @@ test("all agents toggle independently, copied commands and configuration cover t
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.getByRole("button", { name: "Copy command" }).click();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("(set -o pipefail; " + prefix.replace("--product ", "--products ") + "claude,codex,opencode --desktop)");
-  const info = page.getByRole("group", { name: "Selected agent capabilities" });
-  await expect(info.getByRole("heading")).toHaveCount(3);
-  await expect(info).toContainText("Completion and permission alerts");
-  await expect(info).toContainText("Silent completion, question, permission and error alerts for root sessions");
+  const table = page.getByRole("table", { name: "Compare agent features" });
+  await expect(table.getByRole("columnheader")).toHaveText(["Feature", "Claude Code", "Codex CLI", "OpenCode"]);
+  await expect(table.getByRole("row", { name: /^Completed/ }).getByRole("cell")).toHaveText(["✓Supported", "✓Supported", "✓Supported"]);
+  await expect(table.getByRole("row", { name: /^Review/ }).getByRole("cell")).toHaveText(["✓Supported", "✕Not supported", "✕Not supported"]);
+  await expect(table.getByRole("row", { name: /^Sounds/ }).getByRole("cell")).toHaveText(["✓Supported", "✓Supported", "✕Not supported"]);
+  await expect(table.getByRole("row", { name: /^Question/ }).getByRole("cell")).toHaveText(["✓Supported", "✓*Supported with limitations", "✓Supported"]);
+  await expect(table.getByRole("row", { name: /^Errors/ }).getByRole("cell")).toHaveText(["✓Supported", "✓*Supported with limitations", "✓Supported"]);
+  const compatibility = page.locator(".agent-support details");
+  const qualification = compatibility.getByText("Codex: Windows hook delivery and the question tool hook are not yet qualified in live sessions.", { exact: true });
+  await expect(qualification).not.toBeVisible();
+  await expect(compatibility.getByText(/^\* Codex questions depend/)).not.toBeVisible();
+  await expect(compatibility.getByText(/^OpenCode: silent completion/)).not.toBeVisible();
   await expect(page.getByText(/Tested with OpenCode 1.18.33/)).not.toBeVisible();
-  await info.locator("article").filter({ has: page.getByRole("heading", { name: "OpenCode", exact: true }) })
-    .getByText("Compatibility details", { exact: true }).click();
+  await page.locator(".agent-support summary").click();
+  await expect(qualification).toBeVisible();
+  await expect(compatibility.getByText(/^\* Codex questions depend/)).toBeVisible();
+  await expect(compatibility.getByText(/^OpenCode: silent completion/)).toBeVisible();
   await expect(page.getByText(/Tested with OpenCode 1.18.33/)).toBeVisible();
-  const channels = page.getByRole("group", { name: "OpenCode notification channels" });
-  await expect(channels).toContainText("webhook URLs are configured separately");
-  await expect(channels.getByRole("checkbox")).toHaveCount(2);
-  const controls = await channels.locator("label").evaluateAll((nodes) => nodes.map((node) => {
-    const rect = node.getBoundingClientRect();
-    return { x: rect.x, right: rect.right, y: rect.y, bottom: rect.bottom };
-  }));
-  expect(controls[1].x >= controls[0].right + 8 || controls[1].y >= controls[0].bottom + 8).toBe(true);
+  await expect(page.getByRole("link", { name: "What is OpenCode V2? ↗" })).toHaveAttribute("href", "https://opencode.ai/v2/docs");
+  await expect(page.getByRole("group", { name: "OpenCode notification channels" })).toHaveCount(0);
   const agentNotify = page.getByRole("checkbox", { name: /Let agents send/ });
   await agentNotify.uncheck();
   await expect(page.getByLabel("Install command", { exact: true })).toHaveValue("(set -o pipefail; " + prefix.replace("--product ", "--products ") + "claude,codex,opencode --skip-agent-notify --desktop)");
-  const desktop = page.getByRole("checkbox", { name: "Allow desktop notifications", exact: true });
-  const webhook = page.getByRole("checkbox", { name: "Allow webhook notifications", exact: true });
-  await webhook.check();
-  await desktop.uncheck();
-  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue("(set -o pipefail; " + prefix.replace("--product ", "--products ") + "claude,codex,opencode --skip-agent-notify --webhook)");
-  await webhook.uncheck();
-  await expect(page.getByLabel("Install command", { exact: true })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Copy command" })).toHaveCount(0);
-  await desktop.check();
   await page.getByRole("button", { name: "Configure", exact: true }).click();
   const configuration = page.locator(".configuration");
   await expect(configuration.getByText("/claude-notifications-go:settings", { exact: true })).toBeVisible();
@@ -520,4 +555,23 @@ test("first feature explains supported click-to-focus and its agent scope", asyn
   await expect(feature).toContainText("terminal, editor or tab where supported");
   await expect(feature).toContainText("Claude Code and Codex CLI only");
   await expect(feature).toContainText("terminal and OS");
+});
+
+// A regression here would clip feature comparisons or restore channel setup friction.
+test("agent comparison stays readable on mobile and keeps all agents visible", async ({ page }) => {
+  for (const width of [320, 390, 1088]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("");
+    await chooseOS(page, "linux");
+    await chooseAgents(page, ["opencode"]);
+    const table = page.getByRole("table", { name: "Compare agent features" });
+    await expect(table.getByRole("columnheader")).toHaveCount(4);
+    await expect(table.getByRole("row")).toHaveCount(11);
+    await expect(page.getByRole("checkbox")).toHaveCount(0);
+    await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--product opencode --desktop$/);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    for (const logo of await table.locator("img").evaluateAll((nodes) => nodes.map((node) => (node as HTMLImageElement).naturalWidth)))
+      expect(logo).toBeGreaterThan(0);
+    await page.locator(".agent-support").screenshot({ path: `test-results/agent-support-${width}.png` });
+  }
 });
