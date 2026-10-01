@@ -188,7 +188,8 @@ def snapshot(lab, candidate_hash):
     executable = physical(commands[0])
     require(executable.parent == lab / "an-runtime", "registered_runtime_path")
     files = ledger.get("Files", {})
-    require(str(settings_path) not in files, "whole_settings_ownership_forbidden")
+    require(all(os.path.normcase(name) != os.path.normcase(str(settings_path)) for name in files),
+            "whole_settings_ownership_forbidden")
     for path, expected in ((executable, candidate_hash), (receipt_path, sha(bounded_read(receipt_path, 16384)))):
         # Windows preserves path spelling in JSON while Go and Python may
         # canonicalize its casing differently. Accept only one native spelling.
@@ -802,6 +803,8 @@ class PureChecks(unittest.TestCase):
         startup = g0.version_probe(1, b"", concatenated)
         self.assertEqual(startup["Node_error_codes"], ["ENOENT"])
         self.assertEqual(startup["startup_error_line"], "Error: spawn missing-test-command ENOENT")
+        excerpt = b'const banner = "Error: startup failed";\n                      ^\nSyntaxError: Invalid expression\n'
+        self.assertEqual(g0.version_probe(1, b"", excerpt)["startup_error_line"], "SyntaxError: Invalid expression")
         private = b"Error: hook provider session text\n"
         self.assertNotIn("startup_error_line", g0.version_probe(1, b"", private))
         paths = b"Error: Cannot load /tmp/TEST profile/cli.js from https://example.invalid/file\n"

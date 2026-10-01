@@ -58,19 +58,19 @@ def version_probe(code, out, err, redactions=()):
     facts["startup_classification"] = "node_startup_error" if codes else "unclassified_public_startup_error"
     if "ENOENT" in codes:
         # Fixed public startup operations only; never emit arbitrary file names.
-        operations = ("spawn", "open", "mkdir", "stat", "lstat", "access", "scandir", "chdir", "realpath", "dlopen", "uv_cwd", "uv_os_get_passwd", "uv_os_homedir", "uv_exepath")
+        operations = ("spawn", "spawnSync", "open", "mkdir", "stat", "lstat", "access", "scandir", "chdir", "realpath", "dlopen", "uv_cwd", "uv_os_get_passwd", "uv_os_homedir", "uv_exepath")
         facts["missing_operations"] = sorted(op for op in operations
             if re.search(rb"\b" + op.encode() + rb"\b", err))
-        commands = ("git", "ioreg", "security", "uname", "whoami", "bash", "zsh", "node", "rg")
+        commands = ("git", "ioreg", "security", "uname", "whoami", "bash", "zsh", "node", "rg", "sysctl")
         facts["missing_known_commands"] = sorted(command for command in commands
-            if re.search(rb"\bspawn (?:[^\r\n ]*/)?" + command.encode() + rb" ENOENT\b", err))
+            if re.search(rb"\bspawn(?:Sync)? (?:[^\r\n ]*/)?" + command.encode() + rb" ENOENT\b", err))
     # One bounded Error header only; stack, source excerpt and all other lines
     # are excluded. Do not expose session/provider/hook text even in this probe.
     text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", err.decode("utf-8", "replace"))
-    lines = (line.removeprefix("An unexpected critical error occurred:").removeprefix("[") for line in text.splitlines())
+    lines = (line.removeprefix("An unexpected critical error occurred:").lstrip().removeprefix("[") for line in text.splitlines())
     header = r"(?:(?:[A-Za-z]*Error)(?: \[[A-Z_]+\])?|ENOENT|EACCES|EPERM|EINVAL|ENOEXEC):"
     line = next((match.group(0).strip() for candidate in lines
-                 if (match := re.search(header + r"[^\r\n]*", candidate))), "")
+                 if (match := re.match(r"^\s*" + header + r"[^\r\n]*", candidate))), "")
     if re.fullmatch(r"ReferenceError: (?:File|Blob|ReadableStream|fetch|crypto|navigator) is not defined", line):
         facts["startup_classification"] = "public_runtime_global_missing"
     if not line or len(line) > 512:
@@ -241,7 +241,7 @@ def minimal_env(lab, node, shell, system_root=None):
         bins.append(str(Path(system_root) / "System32"))
     else:
         require(shell.name == "bash", "Unix_requires_bash")
-        bins += ["/usr/bin", "/bin"]
+        bins += ["/usr/bin", "/bin", "/usr/sbin"]
         env.update(LANG="C.UTF-8", LC_ALL="C.UTF-8")
     env["PATH"] = os.pathsep.join(dict.fromkeys(bins))
     return env
