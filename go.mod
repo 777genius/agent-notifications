@@ -5,7 +5,7 @@ go 1.25.8
 require (
 	github.com/777genius/plugin-kit-ai/cli v0.0.0-20260930053012-236889b1c082
 	github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.0
-	github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20260930053012-236889b1c082
+	github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261001090905-11a842f55d19
 	github.com/777genius/plugin-kit-ai/sdk v1.2.1-0.20261001061845-2d2a26bf372a
 	github.com/creack/pty v1.1.24
 	github.com/esiqveland/notify v0.14.0
@@ -19,7 +19,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/stretchr/testify v1.11.1
-	golang.org/x/sys v0.42.0
+	golang.org/x/sys v0.44.0
 )
 
 require (
@@ -46,7 +46,7 @@ require (
 	github.com/tadvi/systray v0.0.0-20190226123456-11a2b8fa57af // indirect
 	github.com/tailscale/hujson v0.0.0-20260302212456-ecc657c15afd // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
-	golang.org/x/mod v0.37.0 // indirect
+	golang.org/x/mod v0.40.0 // indirect
 	golang.org/x/oauth2 v0.35.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/text v0.40.0 // indirect

@@ -67,6 +67,16 @@ func (n NativeInstallation) Acquire(ctx context.Context) (notifier.NativeLease, 
 // setup may later initialize controlRoot/state without colliding with it. Keep
 // the spool on remove so a previously admitted bounded callback can complete.
 func PrepareNativeSpool(ctx context.Context, controlRoot string) (string, error) {
+	return PrepareNativeSpoolFor(ctx, controlRoot, OpenCodeDesktop)
+}
+
+// PrepareNativeSpoolFor shares only the no-follow private-directory preparation.
+// Each trusted observer retains its own namespace and permanent spool lock.
+func PrepareNativeSpoolFor(ctx context.Context, controlRoot string, product DesktopProduct) (string, error) {
+	id, err := identityFor(product)
+	if err != nil {
+		return "", err
+	}
 	if err := installruntime.CheckPrivateControlRoot(controlRoot); err != nil {
 		return "", err
 	}
@@ -80,7 +90,7 @@ func PrepareNativeSpool(ctx context.Context, controlRoot string) (string, error)
 		return "", err
 	}
 	defer unix.Close(rootFD)
-	const name = "opencode-native-spool"
+	name := id.spool
 	if err := unix.Mkdirat(rootFD, name, 0700); err != nil && !errors.Is(err, unix.EEXIST) {
 		return "", err
 	}
@@ -94,7 +104,7 @@ func PrepareNativeSpool(ctx context.Context, controlRoot string) (string, error)
 		return "", err
 	}
 	if st.Uid != uint32(os.Geteuid()) || st.Mode&07777 != 0700 {
-		return "", fmt.Errorf("OpenCode spool must be an owned private directory")
+		return "", fmt.Errorf("%s spool must be an owned private directory", id.label)
 	}
 	spool := filepath.Join(controlRoot, name)
 	lockFD, err := unix.Openat(spoolFD, ".spool.lock", unix.O_RDWR|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0600)
@@ -110,14 +120,14 @@ func PrepareNativeSpool(ctx context.Context, controlRoot string) (string, error)
 		return "", err
 	}
 	if lockStat.Mode&unix.S_IFMT != unix.S_IFREG || lockStat.Uid != uint32(os.Geteuid()) || lockStat.Mode&07777 != 0600 || lockStat.Nlink != 1 {
-		return "", fmt.Errorf("OpenCode spool lock must be an owned private inode")
+		return "", fmt.Errorf("%s spool lock must be an owned private inode", id.label)
 	}
 	var named unix.Stat_t
 	if err := unix.Fstatat(rootFD, name, &named, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 		return "", err
 	}
 	if named.Dev != st.Dev || named.Ino != st.Ino || named.Mode&unix.S_IFMT != unix.S_IFDIR {
-		return "", fmt.Errorf("OpenCode spool directory changed during preparation")
+		return "", fmt.Errorf("%s spool directory changed during preparation", id.label)
 	}
 	if err := unix.Fsync(lockFD); err != nil {
 		return "", err

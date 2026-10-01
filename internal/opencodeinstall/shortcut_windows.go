@@ -17,11 +17,6 @@ import (
 	"github.com/777genius/agent-notifications/internal/installruntime"
 )
 
-// OpenCodeToastAppID is deliberately distinct from the legacy Claude toast ID.
-const OpenCodeToastAppID = "Genius.AgentNotifications.OpenCode"
-
-const shortcutName = "OpenCode Notifications.lnk"
-
 var (
 	clsidShellLink       = windows.GUID{Data1: 0x00021401, Data4: [8]byte{0xc0, 0, 0, 0, 0, 0, 0, 0x46}}
 	iidShellLinkW        = windows.GUID{Data1: 0x000214f9, Data4: [8]byte{0xc0, 0, 0, 0, 0, 0, 0, 0x46}}
@@ -46,6 +41,11 @@ type stringVariant struct {
 }
 
 func windowsShortcutPath(home string) (string, error) {
+	id, _ := identityFor(OpenCodeDesktop)
+	return windowsShortcutPathFor(home, id)
+}
+
+func windowsShortcutPathFor(home string, id desktopIdentity) (string, error) {
 	if !filepath.IsAbs(home) {
 		return "", errors.New("absolute home required for Windows shortcut")
 	}
@@ -60,15 +60,20 @@ func windowsShortcutPath(home string) (string, error) {
 		}
 		programs = actual
 	}
-	return filepath.Join(programs, shortcutName), nil
+	return filepath.Join(programs, id.shortcut), nil
 }
 
 func stageWindowsShortcut(home, target string) (installruntime.File, error) {
-	path, err := windowsShortcutPath(home)
+	id, _ := identityFor(OpenCodeDesktop)
+	return stageWindowsShortcutFor(home, target, id)
+}
+
+func stageWindowsShortcutFor(home, target string, id desktopIdentity) (installruntime.File, error) {
+	path, err := windowsShortcutPathFor(home, id)
 	if err != nil {
 		return installruntime.File{}, err
 	}
-	data, err := renderWindowsShortcut(target)
+	data, err := renderWindowsShortcutFor(target, id)
 	if err != nil {
 		return installruntime.File{}, err
 	}
@@ -80,35 +85,59 @@ func stageWindowsShortcut(home, target string) (installruntime.File, error) {
 }
 
 func stageWindowsShortcutForSetup(home, target string, desktop bool, ledger installruntime.Ledger) (*installruntime.File, error) {
-	ownedPath, err := ownedWindowsShortcutPath(ledger)
+	return StageWindowsShortcut(OpenCodeDesktop, home, target, desktop, ledger)
+}
+
+// StageWindowsShortcut reuses the existing COM renderer and owned-file CAS
+// staging for a fixed observer identity. It never publishes shortcut bytes.
+func StageWindowsShortcut(product DesktopProduct, home, target string, desktop bool, ledger installruntime.Ledger) (*installruntime.File, error) {
+	id, err := identityFor(product)
+	if err != nil {
+		return nil, err
+	}
+	ownedPath, err := ownedWindowsShortcutPathFor(ledger, id)
 	if err != nil {
 		return nil, err
 	}
 	if desktop {
-		path, err := windowsShortcutPath(home)
+		path, err := windowsShortcutPathFor(home, id)
 		if err != nil {
 			return nil, err
 		}
 		if ownedPath != "" && !sameWindowsPath(ownedPath, path) {
-			return nil, errors.New("OpenCode toast shortcut location changed; use the original setup environment")
+			return nil, fmt.Errorf("%s toast shortcut location changed; use the original setup environment", id.label)
 		}
-		file, err := stageWindowsShortcut(home, target)
+		if ownedPath != "" {
+			if ledger.Consumers[id.consumer].Registration == "" {
+				return nil, fmt.Errorf("%s toast shortcut path is owned by another consumer", id.label)
+			}
+			observed, err := installruntime.Fingerprint(ownedPath)
+			owned, ok := installruntime.OwnedFile(ledger, ownedPath)
+			if err != nil || !ok || observed != owned {
+				return nil, fmt.Errorf("%s toast shortcut changed", id.label)
+			}
+			actualTarget, appID, arguments, err := inspectWindowsShortcut(ownedPath)
+			if err == nil && sameWindowsFile(actualTarget, target) && appID == id.appID && arguments == "--help" {
+				return nil, nil
+			}
+		}
+		file, err := stageWindowsShortcutFor(home, target, id)
 		if err != nil {
 			return nil, err
 		}
 		if file.Before.Exists && ownedPath == "" {
-			return nil, errors.New("OpenCode toast shortcut path is foreign")
+			return nil, fmt.Errorf("%s toast shortcut path is foreign", id.label)
 		}
-		if ownedPath != "" && ledger.Consumers[consumerID].Registration == "" {
-			return nil, errors.New("OpenCode toast shortcut path is owned by another consumer")
+		if ownedPath != "" && ledger.Consumers[id.consumer].Registration == "" {
+			return nil, fmt.Errorf("%s toast shortcut path is owned by another consumer", id.label)
 		}
 		return &file, nil
 	}
 	if ownedPath == "" {
 		return nil, nil
 	}
-	if ledger.Consumers[consumerID].Registration == "" {
-		return nil, errors.New("OpenCode toast shortcut path is owned by another consumer")
+	if ledger.Consumers[id.consumer].Registration == "" {
+		return nil, fmt.Errorf("%s toast shortcut path is owned by another consumer", id.label)
 	}
 	before, err := installruntime.Fingerprint(ownedPath)
 	if err != nil {
@@ -118,13 +147,18 @@ func stageWindowsShortcutForSetup(home, target string, desktop bool, ledger inst
 }
 
 func ownedWindowsShortcutPath(ledger installruntime.Ledger) (string, error) {
+	id, _ := identityFor(OpenCodeDesktop)
+	return ownedWindowsShortcutPathFor(ledger, id)
+}
+
+func ownedWindowsShortcutPathFor(ledger installruntime.Ledger, id desktopIdentity) (string, error) {
 	var result string
 	for path := range ledger.Files {
-		if !strings.EqualFold(filepath.Base(path), shortcutName) {
+		if !strings.EqualFold(filepath.Base(path), id.shortcut) {
 			continue
 		}
 		if result != "" {
-			return "", errors.New("ambiguous owned OpenCode toast shortcuts")
+			return "", fmt.Errorf("ambiguous owned %s toast shortcuts", id.label)
 		}
 		result = path
 	}
@@ -132,6 +166,11 @@ func ownedWindowsShortcutPath(ledger installruntime.Ledger) (string, error) {
 }
 
 func renderWindowsShortcut(target string) ([]byte, error) {
+	id, _ := identityFor(OpenCodeDesktop)
+	return renderWindowsShortcutFor(target, id)
+}
+
+func renderWindowsShortcutFor(target string, id desktopIdentity) ([]byte, error) {
 	if !filepath.IsAbs(target) {
 		return nil, errors.New("absolute shortcut target required")
 	}
@@ -140,7 +179,7 @@ func renderWindowsShortcut(target string) ([]byte, error) {
 		return nil, err
 	}
 	defer os.RemoveAll(dir)
-	path := filepath.Join(dir, shortcutName)
+	path := filepath.Join(dir, id.shortcut)
 	err = withShellLink(func(link unsafe.Pointer) error {
 		value, err := windows.UTF16PtrFromString(target)
 		if err != nil {
@@ -161,7 +200,7 @@ func renderWindowsShortcut(target string) ([]byte, error) {
 			return err
 		}
 		defer releaseCOM(store)
-		appID, err := windows.UTF16PtrFromString(OpenCodeToastAppID)
+		appID, err := windows.UTF16PtrFromString(id.appID)
 		if err != nil {
 			return err
 		}
@@ -236,14 +275,31 @@ func inspectWindowsShortcut(path string) (target, appID, arguments string, err e
 // WindowsShortcutReady verifies both installer ownership and the properties
 // Windows uses to match the Start Menu entry to an OpenCode toast.
 func WindowsShortcutReady(controlRoot, executable string) error {
+	return WindowsShortcutReadyFor(OpenCodeDesktop, controlRoot, executable)
+}
+
+// WindowsShortcutReadyFor checks registration, ownership and actual COM
+// properties for the same trusted product selected during setup staging.
+func WindowsShortcutReadyFor(product DesktopProduct, controlRoot, executable string) error {
+	if _, err := identityFor(product); err != nil {
+		return err
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
 	}
-	return windowsShortcutReady(controlRoot, executable, home)
+	return windowsShortcutReadyFor(product, controlRoot, executable, home)
 }
 
 func windowsShortcutReady(controlRoot, executable, home string) error {
+	return windowsShortcutReadyFor(OpenCodeDesktop, controlRoot, executable, home)
+}
+
+func windowsShortcutReadyFor(product DesktopProduct, controlRoot, executable, home string) error {
+	id, err := identityFor(product)
+	if err != nil {
+		return err
+	}
 	ledger, recovery, err := installruntime.ReadOwnership(controlRoot)
 	if err != nil {
 		return err
@@ -251,41 +307,41 @@ func windowsShortcutReady(controlRoot, executable, home string) error {
 	if recovery {
 		return errors.New("installation recovery required")
 	}
-	consumer, ok := ledger.Consumers[consumerID]
+	consumer, ok := ledger.Consumers[id.consumer]
 	if !ok || len(consumer.Commands) == 0 || !filepath.IsAbs(executable) || !sameWindowsFile(consumer.Commands[0], executable) {
-		return errors.New("OpenCode executable is not registered")
+		return fmt.Errorf("%s executable is not registered", id.label)
 	}
-	path, err := ownedWindowsShortcutPath(ledger)
+	path, err := ownedWindowsShortcutPathFor(ledger, id)
 	if err != nil {
 		return err
 	}
 	if path == "" {
-		return errors.New("OpenCode toast shortcut is not owned")
+		return fmt.Errorf("%s toast shortcut is not owned", id.label)
 	}
-	activePath, err := windowsShortcutPath(home)
+	activePath, err := windowsShortcutPathFor(home, id)
 	if err != nil {
 		return err
 	}
 	if !sameWindowsPath(path, activePath) {
-		return errors.New("OpenCode toast shortcut is outside the active Programs folder")
+		return fmt.Errorf("%s toast shortcut is outside the active Programs folder", id.label)
 	}
 	owned, ok := installruntime.OwnedFile(ledger, path)
 	if !ok || !owned.Exists || owned.Link != "" {
-		return errors.New("OpenCode toast shortcut is not owned")
+		return fmt.Errorf("%s toast shortcut is not owned", id.label)
 	}
 	actual, err := installruntime.Fingerprint(path)
 	if err != nil {
 		return err
 	}
 	if !actual.Exists || actual.Link != "" || actual.SHA256 != owned.SHA256 {
-		return errors.New("OpenCode toast shortcut changed")
+		return fmt.Errorf("%s toast shortcut changed", id.label)
 	}
 	target, appID, arguments, err := inspectWindowsShortcut(path)
 	if err != nil {
 		return err
 	}
-	if !sameWindowsFile(target, executable) || appID != OpenCodeToastAppID || arguments != "--help" {
-		return errors.New("OpenCode toast shortcut identity mismatch")
+	if !sameWindowsFile(target, executable) || appID != id.appID || arguments != "--help" {
+		return fmt.Errorf("%s toast shortcut identity mismatch", id.label)
 	}
 	return nil
 }

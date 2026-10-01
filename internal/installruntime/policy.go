@@ -229,9 +229,21 @@ func policyDisableOnly(r Request) bool {
 }
 
 func openCodeRevokeOnly(r Request) bool {
-	if !r.PolicyOnly || !r.RefreshOnly || r.Owner != "existing-installer" || r.ConsumerID != "opencode-notifications" ||
+	if r.RevokeGemini || !r.PolicyOnly || !r.RefreshOnly || r.Owner != "existing-installer" || r.ConsumerID != "opencode-notifications" ||
 		r.ExpectedGeneration == nil || r.ExpectedPolicy == nil || r.PolicyEnabled != nil ||
 		len(r.PolicyFields) != 1 || string(r.PolicyFields["route"]) != `{"openCodeNotifications":{"desktop":false,"webhook":false}}` ||
+		len(r.Files) != 0 || len(r.ConfigPaths) != 0 || r.Prepare != nil || r.Native != nil ||
+		r.RemoveConsumer || r.PurgeNative || r.RetireNative || r.RollbackPending || r.RecoverOnly ||
+		r.Reservation != nil || r.ClearReservation || r.RelocateVersionedCache {
+		return false
+	}
+	return true
+}
+
+func geminiRevokeOnly(r Request) bool {
+	if r.RevokeOpenCode || !r.PolicyOnly || !r.RefreshOnly || r.Owner != "existing-installer" || r.ConsumerID != "gemini-notifications" ||
+		r.ExpectedGeneration == nil || r.ExpectedPolicy == nil || r.PolicyEnabled != nil ||
+		len(r.PolicyFields) != 1 || string(r.PolicyFields["route"]) != `{"geminiNotifications":{"desktop":false,"webhook":false}}` ||
 		len(r.Files) != 0 || len(r.ConfigPaths) != 0 || r.Prepare != nil || r.Native != nil ||
 		r.RemoveConsumer || r.PurgeNative || r.RetireNative || r.RollbackPending || r.RecoverOnly ||
 		r.Reservation != nil || r.ClearReservation || r.RelocateVersionedCache {
