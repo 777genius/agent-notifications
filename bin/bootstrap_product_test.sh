@@ -982,13 +982,22 @@ PY
 # Stage output is a public contract: success hides machine/binary banners but
 # preserves warnings and shell state; failure replays diagnostics and its code.
 (
-    emit_stage() { PLUGIN_ROOT=fixture-installed; printf 'Ready to use!\n{"generation":12}\n'; printf 'phase prepare\nSetting up notifications: agent notify...\n' >&2; echo 'warning: fixture optional setup' >&2; }
+    emit_stage() { PLUGIN_ROOT=fixture-installed; printf 'Ready to use!\n{"generation":12}\n\033[33mwarning: extension needs activation\033[0m\n\033[33m  Log out and log back in, then run:\033[0m\n  gnome-extensions enable fixture@example.test\n'; printf 'phase prepare\nSetting up notifications: agent notify...\n' >&2; echo 'warning: fixture optional setup' >&2; }
     run_setup_stage 'Installing fixture' emit_stage > "$SANDBOX/stage-ok.out" 2> "$SANDBOX/stage-ok.err"
     [ "$PLUGIN_ROOT" = fixture-installed ]
     grep -F 'Installing fixture...' "$SANDBOX/stage-ok.out"
-    ! grep -E 'Ready to use|generation' "$SANDBOX/stage-ok.out"
+    if grep -E 'Ready to use|generation' "$SANDBOX/stage-ok.out"; then exit 1; fi
+    grep -F 'Log out and log back in' "$SANDBOX/stage-ok.out"
+    grep -F 'gnome-extensions enable fixture@example.test' "$SANDBOX/stage-ok.out"
     grep -F 'warning: fixture optional setup' "$SANDBOX/stage-ok.err"
-    ! grep -E 'phase prepare|Setting up notifications:' "$SANDBOX/stage-ok.err"
+    if grep -E 'phase prepare|Setting up notifications:' "$SANDBOX/stage-ok.err"; then exit 1; fi
+    # A real stage failure must return so captured recovery advice is replayed.
+    INSTALLED_JSON="$SANDBOX/missing-installed-plugins.json"
+    status=0
+    run_setup_stage 'Locating fixture plugin' find_plugin_root > "$SANDBOX/root-fail.out" 2> "$SANDBOX/root-fail.err" || status=$?
+    [ "$status" -eq 1 ]
+    grep -F 'installed_plugins.json not found' "$SANDBOX/root-fail.err"
+    grep -F 'Try restarting Claude Code' "$SANDBOX/root-fail.err"
     emit_failure() { echo 'diagnostic stdout'; echo 'diagnostic stderr' >&2; return 3; }
     status=0
     run_setup_stage 'Failing fixture' emit_failure > "$SANDBOX/stage-fail.out" 2> "$SANDBOX/stage-fail.err" || status=$?

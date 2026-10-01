@@ -709,7 +709,7 @@ install_plugin() {
             else
                 echo -e "${RED}✗ Plugin install failed${NC}" >&2
                 echo -e "${YELLOW}Output: ${output}${NC}" >&2
-                exit 1
+                return 1
             fi
         fi
     fi
@@ -727,7 +727,7 @@ install_plugin() {
         else
             echo -e "${RED}✗ Plugin reinstall failed${NC}" >&2
             echo -e "${YELLOW}Output: ${output}${NC}" >&2
-            exit 1
+            return 1
         fi
     fi
 
@@ -737,7 +737,7 @@ install_plugin() {
         echo -e "${RED}✗ Plugin version mismatch after install/update${NC}" >&2
         echo -e "${YELLOW}Expected: v${expected_version}${NC}" >&2
         echo -e "${YELLOW}Installed: v${installed_after:-unknown}${NC}" >&2
-        exit 1
+        return 1
     fi
 
     # Create shim dirs for old version paths so running Claude Code instances
@@ -922,7 +922,7 @@ find_plugin_root() {
     if [ ! -f "$INSTALLED_JSON" ]; then
         echo -e "${RED}✗ installed_plugins.json not found at ${INSTALLED_JSON}${NC}" >&2
         echo -e "${YELLOW}  Try restarting Claude Code and running this script again.${NC}" >&2
-        exit 1
+        return 1
     fi
 
     # Try jq first (clean JSON parsing)
@@ -952,7 +952,7 @@ find_plugin_root() {
         echo -e "${RED}✗ Could not find plugin install path${NC}" >&2
         echo -e "${YELLOW}  installed_plugins.json may not contain the plugin entry yet.${NC}" >&2
         echo -e "${YELLOW}  Try: claude plugin install ${PLUGIN_KEY}${NC}" >&2
-        exit 1
+        return 1
     fi
 
     echo -e "${GREEN}✓${NC} Plugin root: ${PLUGIN_ROOT}"
@@ -968,7 +968,7 @@ download_binary() {
     local target_dir="${PLUGIN_ROOT}/bin"
     if ! mkdir -p "$target_dir" 2>/dev/null; then
         echo -e "${RED}✗ Cannot create directory: ${target_dir}${NC}" >&2
-        exit 1
+        return 1
     fi
 
     install_runtime claude "$_CONFIG_STAGE/install.sh" "$target_dir" --force
@@ -1042,7 +1042,18 @@ run_setup_stage() {
     if "$@" > "$log" 2> "$log.stderr"; then
         # Preserve all stderr, including skipped/partial setup recovery advice.
         grep -vE '^(phase (prepare|preflight|hooks|agent-notify|complete)|Setting up notifications: (prepare|preflight|hooks|agent notify|complete)\.\.\.)$' "$log.stderr" >&2 || true
-        grep -iE '⚠|warning|skipped|not installed|manual setup|could not|keeping existing' "$log" || true
+        # Keep indented recovery advice with its warning, including colorized lines.
+        awk '{
+            plain = $0
+            gsub(/\033\[[0-9;]*m/, "", plain)
+            if (tolower(plain) ~ /⚠|warning|skipped|not installed|manual setup|could not|keeping existing/) {
+                print; warning = 1
+            } else if (warning && plain ~ /^[[:space:]]+[^[:space:]]/) {
+                print
+            } else {
+                warning = 0
+            }
+        }' "$log"
     else
         status=$?
         cat "$log" "$log.stderr" >&2
@@ -1951,6 +1962,9 @@ setup_agent_notify_wizard() {
         case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*) echo "  On Windows, run that command in PowerShell (the printed quoting is PowerShell syntax)." >&2 ;; esac
         [ -z "${BOOTSTRAP_TAG:-}" ] || printf '  If no retry is shown, rerun bootstrap pinned to BOOTSTRAP_RELEASE_TAG=%s.\n' "$BOOTSTRAP_TAG" >&2
         return 1
+    fi
+    if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then
+        cat "$wizard_result"
     fi
     # Keep failure output human and runnable; only the post-commit read uses JSON.
     set -- setup-notifications wizard --action inspect --agents "$agents" --json \
