@@ -13,7 +13,7 @@ import (
 // permission/delivery, and restart printed an empty shell command.
 func TestSetupWizardHumanInstallationSummary(t *testing.T) {
 	result := setupwizard.Result{Action: "install", Outcome: "completed", Generation: 12, InstallationID: "private-id",
-		Targets:     []setupwizard.TargetResult{{Client: "codex", Unit: "agent-notify", Outcome: "completed", Profile: "profile-secret", TreeDigest: "digest-secret"}},
+		Targets:     []setupwizard.TargetResult{{Client: "codex", Unit: "agent-notify", Outcome: "completed", Profile: "profile-secret", TreeDigest: "digest-secret", Reason: "client-private-id"}},
 		Readiness:   []setupwizard.ReadinessFact{{Client: "codex", Runtime: "installed", Hooks: "not_checked", MCP: "installed", Permission: "not_checked", Restart: "pending", Delivery: "not_verified"}},
 		NextActions: []setupwizard.NextAction{{Kind: "restart-client", Agents: []string{"codex"}}, {Kind: "request-permission", Agents: []string{"codex"}, Command: []string{"setup-notifications", "request-permission", "--control-root", "/tmp/path with spaces"}}, {Kind: "test-notification", Agents: []string{"codex"}, Command: []string{"notify"}}},
 	}
@@ -26,7 +26,7 @@ func TestSetupWizardHumanInstallationSummary(t *testing.T) {
 			t.Errorf("missing %q: %s", want, out.String())
 		}
 	}
-	for _, forbidden := range []string{"generation=", "private-id", "profile-secret", "digest-secret", "Ready to use", "next restart-client:", "'notify'", "/hooks"} {
+	for _, forbidden := range []string{"generation=", "private-id", "profile-secret", "digest-secret", "client-private-id", "Ready to use", "next restart-client:", "'notify'", "/hooks"} {
 		if strings.Contains(out.String(), forbidden) {
 			t.Errorf("misleading/technical %q: %s", forbidden, out.String())
 		}

@@ -49,7 +49,7 @@ func writeSetupWizardSummary(out io.Writer, result setupwizard.Result) {
 			state = "removed"
 		}
 		fmt.Fprintf(out, "  %s - %s: %s", setupClientName(target.Client), unit, state)
-		if target.Reason != "" {
+		if target.Reason != "" && target.Outcome != "completed" && target.Outcome != "installed" {
 			fmt.Fprintf(out, " (%s)", target.Reason)
 		}
 		fmt.Fprintln(out)
