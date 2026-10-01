@@ -16,8 +16,12 @@ import subprocess
 import sys
 
 source, root = Path(sys.argv[1]), Path(sys.argv[2])
-env = dict(os.environ, ROOT=str(root), CN_PRODUCT='claude')
+env = dict(os.environ, ROOT=root.as_posix(), CN_PRODUCT='claude')
 version = '1.42.0'
+stub = root / 'stubs'
+stub.mkdir()
+(stub / 'uname').write_text('#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo x86_64;; esac\n')
+(stub / 'uname').chmod(0o700)
 
 
 def fixture(name, installer):
@@ -33,10 +37,11 @@ def fixture(name, installer):
 
 
 def invoke(plugin, cache, product='claude', extra=None):
-    run_env = dict(env, XDG_CACHE_HOME=str(cache), CN_PRODUCT=product)
+    run_env = dict(env, XDG_CACHE_HOME=cache.as_posix(), CN_PRODUCT=product)
     if extra:
         run_env.update(extra)
-    result = subprocess.run(['sh', str(plugin / 'bin/hook-wrapper.sh'), 'handle-hook', 'Stop'],
+    result = subprocess.run(['bash', '-c', 'export PATH="$ROOT/stubs:$PATH"; unset OS; exec sh "$1" handle-hook Stop',
+                             'fixture', (plugin / 'bin/hook-wrapper.sh').as_posix()],
                             env=run_env, capture_output=True, timeout=15)
     assert result.returncode == 0, result
     return result
@@ -53,7 +58,7 @@ def logs(cache, product='claude'):
 reason = b'progress\n\x1b[31mError: managed fingerprint "changed" at C:\\cache\tSKILL.md\x1b[0m\x01\x1b]0;secret-title\x07\n'
 (root / 'reason.txt').write_bytes(reason)
 plugin = fixture('failed', 'cat "$ROOT/reason.txt"; exit 7\n')
-cache = root / 'cache "quoted"\\path\nline\t\x01'
+cache = root / ('cache with spaces' if os.name == 'nt' else 'cache "quoted"\\path\nline\t\x01')
 failed = invoke(plugin, cache)
 message = json.loads(failed.stdout)['systemMessage']
 assert not failed.stderr
@@ -61,15 +66,15 @@ assert 'managed fingerprint "changed" at C:\\cache\tSKILL.md' in message, messag
 assert '\x1b' not in message and 'secret-title' not in message
 saved = logs(cache)
 assert len(saved) == 1 and saved[0].read_bytes() == reason
-assert saved[0].stat().st_mode & 0o777 == 0o600
-assert 'Details: ' + str(saved[0]) in message
+assert os.name == 'nt' or saved[0].stat().st_mode & 0o777 == 0o600
+assert 'Details: ' + saved[0].as_posix() in message
 # Repeated failures keep their logs but emit only one notification.
 repeated = invoke(plugin, cache)
 assert repeated.stdout == repeated.stderr == b''
 assert len(logs(cache)) == 2
 
 # An oversized UTF-8 reason must stay bounded and decodable, without splitting a character.
-(root / 'reason.txt').write_text('Error: ' + 'я' * 350 + '\n')
+(root / 'reason.txt').write_text('Error: ' + 'я' * 350 + '\n', encoding='utf-8')
 long_result = invoke(plugin, root / 'long-cache')
 excerpt = json.loads(long_result.stdout)['systemMessage'].split('\n')[1]
 assert excerpt.startswith('Error: ') and len(excerpt) <= 300
@@ -125,19 +130,18 @@ fallback = invoke(no_log, unusable)
 assert (root / 'ran').read_text() == 'ran\n'
 assert not fallback.stderr
 assert 'status 8' in json.loads(fallback.stdout)['systemMessage']
-stub = root / 'stubs'
-stub.mkdir()
 (stub / 'mktemp').write_text('#!/bin/sh\nexit 1\n')
 (stub / 'mktemp').chmod(0o700)
-fallback = invoke(no_log, root / 'mktemp-failure', 'codex', {'PATH': str(stub) + ':' + env['PATH']})
+fallback = invoke(no_log, root / 'mktemp-failure', 'codex')
 assert (root / 'ran').read_text() == 'ran\nran\n'
 assert fallback.stdout == fallback.stderr == b''
 # A successful mktemp followed by a failed log open must invoke the installer once.
 (root / 'log-is-directory').mkdir()
 (stub / 'mktemp').write_text('#!/bin/sh\nprintf "%s\\n" "$ROOT/log-is-directory"\n')
-fallback = invoke(no_log, root / 'open-failure', extra={'PATH': str(stub) + ':' + env['PATH']})
+fallback = invoke(no_log, root / 'open-failure')
 assert (root / 'ran').read_text() == 'ran\nran\nran\n'
 assert not fallback.stderr and 'status 8' in json.loads(fallback.stdout)['systemMessage']
+(stub / 'mktemp').unlink()
 # A usable older Claude binary keeps diagnostics on stderr, including the reason.
 binary = no_log / 'bin/claude-notifications'
 binary.write_text('#!/bin/sh\nif [ "$1" = version ]; then echo 1.41.0; fi\n')
