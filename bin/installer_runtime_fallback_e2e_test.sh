@@ -305,7 +305,9 @@ then echo 'checksum mismatch accepted' >&2; exit 1; fi
         env = dict(os.environ, PATH=path, FUNCTIONS=bash_path(functions), RUNTIME_PATH=path,
                    TMPDIR=bash_path(case), HOME=bash_path(case / 'home'))
         (case / 'home').mkdir()
-        result = subprocess.run([HOST_BASH, '-c', script], env=env, text=True, capture_output=True, timeout=20)
+        # Aggregate watchdog for several real Node/Bash launches, release/SHA
+        # checks and both checksum outcomes; this is not a runtime latency test.
+        result = subprocess.run([HOST_BASH, '-c', script], env=env, text=True, capture_output=True, timeout=60)
         if result.returncode != 0:
             fail('bootstrap node-only commit+checksum', result.stderr + result.stdout)
         pass_name('bootstrap.sh raw commit SHA and node checksum verify')
