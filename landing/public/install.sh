@@ -134,6 +134,8 @@ main() (
     if [ "$multi" -eq 0 ]; then
         run_bootstrap "$@"
     else
+        summary="$stage/summary.txt"
+        export BOOTSTRAP_SUMMARY_FILE="$summary"
         if [ -n "$legacy_product" ]; then
             # Capture the original status before printing failure information.
             run_bootstrap --product "$legacy_product" ${legacy_args[@]+"${legacy_args[@]}"} || {
@@ -150,6 +152,11 @@ main() (
                 fi
                 exit "$status"
             }
+        fi
+        if [ -s "$summary" ]; then
+            printf '\nInstallation complete\n\n'
+            cat "$summary"
+            printf '\nDetailed installer output: rerun with BOOTSTRAP_VERBOSE=1.\n'
         fi
     fi
 )

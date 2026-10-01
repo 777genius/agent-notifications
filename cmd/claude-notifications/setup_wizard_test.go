@@ -613,7 +613,7 @@ func TestSetupWizardTTYMixedAddKeepsPerClientUnits(t *testing.T) {
 		t.Fatalf("uninstall keep mutated mixed units: %+v", view.Targets)
 	}
 	out.Reset()
-	if code := executeSetupWizardWith(ctx, shared, &out, io.Discard, strings.NewReader("2\n1\ny\n"), true); code != 0 || !strings.Contains(out.String(), "completed") {
+	if code := executeSetupWizardWith(ctx, shared, &out, io.Discard, strings.NewReader("2\n1\ny\n"), true); code != 0 || !strings.Contains(out.String(), "Installation complete") {
 		t.Fatalf("mixed tty keep run: %d %s", code, out.String())
 	}
 	out.Reset()
@@ -682,7 +682,7 @@ func TestSetupWizardTTYAddSecondClientKeepProposesDefaultsE2E(t *testing.T) {
 		t.Fatalf("add keep still planned bound claude: %s", out.String())
 	}
 	out.Reset()
-	if code := executeSetupWizardWith(ctx, both, &out, io.Discard, strings.NewReader("2\n1\ny\n"), true); code != 0 || !strings.Contains(out.String(), "completed") {
+	if code := executeSetupWizardWith(ctx, both, &out, io.Discard, strings.NewReader("2\n1\ny\n"), true); code != 0 || !strings.Contains(out.String(), "Installation complete") {
 		t.Fatalf("add keep run: %d %s", code, out.String())
 	}
 	out.Reset()
@@ -811,7 +811,7 @@ func TestSetupWizardTTYUpdateRepairOmittedKeepsMixedE2E(t *testing.T) {
 		t.Fatalf("mixed install result: %+v", got)
 	}
 	out.Reset()
-	if code := executeSetupWizardWith(ctx, shared, &out, io.Discard, strings.NewReader("4\ny\n"), true); code != 0 || !strings.Contains(out.String(), "completed") {
+	if code := executeSetupWizardWith(ctx, shared, &out, io.Discard, strings.NewReader("4\ny\n"), true); code != 0 || !strings.Contains(out.String(), "Update complete") {
 		t.Fatalf("tty omitted update: %d %s", code, out.String())
 	}
 	if strings.Contains(out.String(), "Units: 1) Hooks") || strings.Contains(out.String(), "differ per client") {
@@ -827,7 +827,7 @@ func TestSetupWizardTTYUpdateRepairOmittedKeepsMixedE2E(t *testing.T) {
 	}
 	assertMixed("tty update", decodeWizardJSON(t, out))
 	out.Reset()
-	if code := executeSetupWizardWith(ctx, shared, &out, io.Discard, strings.NewReader("5\ny\n"), true); code != 0 || !strings.Contains(out.String(), "completed") {
+	if code := executeSetupWizardWith(ctx, shared, &out, io.Discard, strings.NewReader("5\ny\n"), true); code != 0 || !strings.Contains(out.String(), "Repair complete") {
 		t.Fatalf("tty omitted repair: %d %s", code, out.String())
 	}
 	if strings.Contains(out.String(), "Units: 1) Hooks") || strings.Contains(out.String(), "differ per client") {
@@ -1187,7 +1187,7 @@ func TestSetupWizardTTYExistingOmitsActionE2E(t *testing.T) {
 	if !strings.Contains(out.String(), "Existing agent-notify") {
 		t.Fatalf("existing action not offered: %s", out.String())
 	}
-	if !strings.Contains(out.String(), "codex agent-notify: installed") {
+	if !strings.Contains(out.String(), "Codex - notification tool and skill: installed") {
 		t.Fatalf("existing inspect missed notify: %s", out.String())
 	}
 	out.Reset()

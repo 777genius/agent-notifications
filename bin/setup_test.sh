@@ -93,9 +93,19 @@ done
 ''' + shlex.quote(sys.executable.replace('\\', '/')) + ''' -I -c 'import json,os; print(json.dumps({"tag":os.environ["BOOTSTRAP_RELEASE_TAG"],"sha":os.environ["BOOTSTRAP_RELEASE_COMMIT"],"install":os.environ["INSTALL_SCRIPT_URL"]}))' > "$CASE_DIR/ran.json"
 STAGED_BOOTSTRAP="$0" ''' + shlex.quote(sys.executable.replace('\\', '/')) + ''' -I -c 'import json,os; from pathlib import Path; c=Path(os.environ["RECORD_DIR"]); r=json.loads((c/"ran.json").read_text()); r["args"]=[a.decode() for a in (c/"argv0").read_bytes().split(b"\\0") if a]; r["script"]=os.environ["STAGED_BOOTSTRAP"]; print(json.dumps(r))' >> "$CASE_DIR/calls.jsonl"
 case "${2:-}" in
-    opencode) exit "${OPENCODE_STATUS:-${BOOTSTRAP_STATUS:-0}}" ;;
-    *) exit "${LEGACY_STATUS:-${BOOTSTRAP_STATUS:-0}}" ;;
+    opencode) status="${OPENCODE_STATUS:-${BOOTSTRAP_STATUS:-0}}" ;;
+    *) status="${LEGACY_STATUS:-${BOOTSTRAP_STATUS:-0}}" ;;
 esac
+if [ "$status" -eq 0 ] && [ -n "${BOOTSTRAP_SUMMARY_FILE:-}" ]; then
+    case "${2:-}" in
+        both) printf '  Claude Code - installed; restart required.\\n  Codex - installed; restart required.\\n' >> "$BOOTSTRAP_SUMMARY_FILE" ;;
+        claude) echo "  Claude Code - installed; restart required." >> "$BOOTSTRAP_SUMMARY_FILE" ;;
+        codex) echo "  Codex - installed; restart required." >> "$BOOTSTRAP_SUMMARY_FILE" ;;
+        opencode) echo "  OpenCode - installed; restart required." >> "$BOOTSTRAP_SUMMARY_FILE" ;;
+    esac
+    echo "  Delivery has not been verified." >> "$BOOTSTRAP_SUMMARY_FILE"
+fi
+exit "$status"
 '''
 
 
@@ -209,7 +219,15 @@ def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, pipe
                 raw + '/bootstrap.sh',
             ], name + ': expected one release resolution and bootstrap download'
             if result.returncode:
-                assert 'all products installed' not in result.stdout.lower(), (name, result.stdout)
+                assert 'Installation complete' not in result.stdout, (name, result.stdout)
+            else:
+                assert result.stdout.count('Installation complete') == 1, (name, result.stdout)
+                assert 'Delivery has not been verified.' in result.stdout, (name, result.stdout)
+                for call in calls:
+                    selected = ['claude', 'codex'] if call[1] == 'both' else [call[1]]
+                    for client in selected:
+                        label = {'claude': 'Claude Code', 'codex': 'Codex', 'opencode': 'OpenCode'}[client]
+                        assert label + ' - installed; restart required.' in result.stdout, (name, result.stdout)
         elif expected is None:
             assert result.returncode != 0, (name, result.stdout, result.stderr)
             assert not (case / 'ran.json').exists(), name + ': installer ran on failure'

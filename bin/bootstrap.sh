@@ -68,6 +68,8 @@ AGENT_NOTIFY_REQUEST=auto
 CONFIGURE_BINARY=""
 CONFIGURE_ARGS=()
 OPENCODE_ARGS=()
+CLAUDE_AGENT_NOTIFY_STATUS="not configured by this run"
+CODEX_AGENT_NOTIFY_STATUS="not configured by this run"
 
 # Isolated JSON/checksum runtime. Prefer python3 -I; Node is the supported
 # fallback because Claude Code already ships it. iTerm2 venv still needs a
@@ -1026,31 +1028,71 @@ setup_iterm2_venv() {
 
 # ──────────────────────────────────────────────
 
-print_success() {
-    echo ""
-    echo -e "${GREEN}============================================${NC}"
-    echo -e "${GREEN} ✓ Bootstrap Complete!${NC}"
-    echo -e "${GREEN}============================================${NC}"
-    echo ""
-    echo -e "${BOLD}Next steps:${NC}"
-    echo -e "  1. ${YELLOW}Restart Claude Code${NC} (exit and reopen)"
-    echo -e "  2. Run ${BOLD}/claude-notifications-go:settings${NC} to configure sounds"
-    if is_iterm2_detected; then
-        echo -e "  3. In ${BOLD}iTerm2${NC}, enable ${BOLD}Settings → General → Magic → Python API${NC}"
+# Keep low-level installer diagnostics available without printing nested success
+# banners or machine JSON. Functions run in this shell so their state survives.
+run_setup_stage() {
+    local label="$1" log status=0
+    shift
+    printf '%s...\n' "$label"
+    if [ "${BOOTSTRAP_VERBOSE:-0}" = 1 ]; then
+        "$@"
+        return $?
     fi
-    echo ""
-    print_iterm2_python_api_notice
-    echo ""
-    echo -e "${BLUE}To update later, use the current installer at:${NC}"
-    echo -e "  https://777genius.github.io/agent-notifications/#install"
-    echo ""
-    echo -e "${YELLOW}────────────────────────────────────────────${NC}"
-    echo -e "${YELLOW}★${NC} ${BOLD}Boost your productivity${NC}"
-    echo -e "  Check out Agent Teams AI, a desktop app for AI agent teams"
-    echo -e "  with Claude Code, Codex and more, from the creator of this plugin:"
-    echo -e "  ${GREEN}https://github.com/777genius/agent-teams-ai${NC}"
-    echo -e "${YELLOW}────────────────────────────────────────────${NC}"
-    echo ""
+    log=$(mktemp "${TMPDIR:-/tmp}/bootstrap-output-XXXXXX") || return 1
+    if "$@" > "$log" 2> "$log.stderr"; then
+        # Preserve all stderr, including skipped/partial setup recovery advice.
+        grep -vE '^phase (prepare|preflight|hooks|agent-notify|complete)$' "$log.stderr" >&2 || true
+        grep -iE '⚠|warning|skipped|not installed|manual setup|could not|keeping existing' "$log" || true
+    else
+        status=$?
+        cat "$log" "$log.stderr" >&2
+    fi
+    rm -f "$log" "$log.stderr"
+    if [ "$status" -ne 0 ]; then
+        printf 'Setup stopped while %s. Review the details above.\n' "$label" >&2
+        return "$status"
+    fi
+}
+
+print_success() {
+    local report
+    report=$(mktemp "${TMPDIR:-/tmp}/bootstrap-summary-XXXXXX") || return 1
+    {
+        case "$PRODUCT" in
+            claude|both)
+                printf '  Claude Code - installed; restart required.\n'
+                printf '    Agent notification tool: %s.\n' "$CLAUDE_AGENT_NOTIFY_STATUS" ;;
+        esac
+        case "$PRODUCT" in
+            codex|both)
+                printf '  Codex - installed; restart required.\n'
+                printf '    Agent notification tool: %s.\n' "$CODEX_AGENT_NOTIFY_STATUS"
+                printf '    Run /hooks in Codex, review the entries and trust them.\n' ;;
+        esac
+        printf '  Delivery has not been verified.\n'
+        printf '  Restart the installed agents, then trigger a notification to check delivery.\n'
+        printf '  If no alert arrives, check OS notification permission and your settings.\n'
+        if [ "$PRODUCT" != codex ]; then
+            printf '  Claude settings: /claude-notifications-go:settings\n'
+            print_iterm2_python_api_notice
+        fi
+    } > "$report"
+    publish_setup_summary "$report"
+    local status=$?
+    rm -f "$report"
+    return "$status"
+}
+
+# The public loader can collect summaries across separate pinned bootstrap runs.
+# This file contains display text, never executable shell or a readiness claim.
+publish_setup_summary() {
+    if [ -n "${BOOTSTRAP_SUMMARY_FILE:-}" ]; then
+        cat "$1" >> "$BOOTSTRAP_SUMMARY_FILE"
+    else
+        printf '\nInstallation complete\n\n'
+        cat "$1"
+        printf '\nDetailed installer output: rerun with BOOTSTRAP_VERBOSE=1.\n'
+    fi
 }
 
 # ──────────────────────────────────────────────
@@ -1626,50 +1668,60 @@ install_opencode() {
         # StageNative checks sealed decoder floor, attestation and OS signature.
         set -- "$@" --native-app "$native"
     fi
-    "$_CONFIG_HELPER" "$@" </dev/null || return 1
+    run_setup_stage "Installing OpenCode notifications" "$_CONFIG_HELPER" "$@" </dev/null || return 1
     native_root="$root"
     [ "$os" != windows ] || native_root=$(cygpath -m "$root") || return 1
     runtime=$("$_CONFIG_HELPER" config installer runtime-root "$native_root") || return 1
     installed="$runtime/claude-notifications-$os-$arch"
     [ "$os" != windows ] || installed="$installed.exe"
-    initialize_config || return 1
+    run_setup_stage "Preparing notification settings" initialize_config || return 1
     config_path=$("$_CONFIG_HELPER" config path) || return 1
-    printf 'Installed executable: %s\nShared settings: %s\n' "$installed" "$config_path"
-    echo "OpenCode installed. Restart OpenCode to load the global plugin."
-    echo "OpenCode sends silent completion, question, permission and error alerts; no click-to-focus."
-    if [ "$os" = darwin ] && [[ " ${OPENCODE_ARGS[*]} " = *" --desktop "* ]]; then
-        printf 'Check permission: %s\n' "$(quote_shell_command "$installed" setup-opencode permission-status)"
-        printf 'Grant permission: %s\n' "$(quote_shell_command "$installed" setup-opencode request-permission)"
-    fi
-    if [[ " ${OPENCODE_ARGS[*]} " = *" --webhook "* ]]; then
-        echo "Webhook consent is recorded. Configure and enable your webhook destination and status channel in the shared settings before delivery."
-    fi
-    printf 'Remove: %s\n' "$(opencode_remove_command "$installed")"
-    printf 'Managed installation records: %s/ownership.json\n' "$root"
+    local report
+    report=$(mktemp "${TMPDIR:-/tmp}/bootstrap-summary-XXXXXX") || return 1
+    {
+        echo "  OpenCode - installed; restart required to load the global plugin."
+        echo "  Delivery has not been verified."
+        echo "  Silent completion, question, permission and error alerts; no click-to-focus."
+        printf '  Shared settings: %s\n' "$config_path"
+        if [ "$os" = darwin ] && [[ " ${OPENCODE_ARGS[*]} " = *" --desktop "* ]]; then
+            echo "  Check OS notification permission; grant it only if needed."
+            printf '    Check: %s\n' "$(quote_shell_command "$installed" setup-opencode permission-status)"
+            printf '    Grant if needed: %s\n' "$(quote_shell_command "$installed" setup-opencode request-permission)"
+        fi
+        if [[ " ${OPENCODE_ARGS[*]} " = *" --webhook "* ]]; then
+            echo "  Webhook consent recorded; configure and enable its destination and status channel in shared settings."
+        fi
+        echo "  Restart OpenCode, then complete a task to check notification delivery."
+        printf '  Remove: %s\n' "$(opencode_remove_command "$installed")"
+    } > "$report"
+    publish_setup_summary "$report"
+    local status=$?
+    rm -f "$report"
+    return "$status"
 }
 
 main() {
     select_product "$@" || return 1
-    print_header
+    [ -n "${BOOTSTRAP_SUMMARY_FILE:-}" ] || print_header
     abort_if_wsl_environment
     check_prerequisites || return 1
     detect_platform
     install_cleanup_traps
     resolve_bootstrap_release || return 1
-    stage_config_helper || { echo "Cannot stage verified config helper; existing runtime retained." >&2; return 1; }
+    run_setup_stage "Preparing verified installer" stage_config_helper || { echo "Cannot stage verified config helper; existing runtime retained." >&2; return 1; }
     if [ "$PRODUCT" = opencode ]; then
         install_opencode
         return $?
     fi
-    stage_historical_baselines || return 1
-    config_preflight || return 1
+    run_setup_stage "Checking existing installation" stage_historical_baselines || return 1
+    run_setup_stage "Checking shared settings" config_preflight || return 1
     if [ "$PRODUCT" != codex ]; then
         # Function assignment scopes child environment while preserving PLUGIN_ROOT.
-        CN_PRODUCT=claude install_claude || return 1
+        CN_PRODUCT=claude run_setup_stage "Installing Claude Code notifications" install_claude || return 1
     fi
     if [ "$PRODUCT" != claude ]; then
         local codex_status=0
-        install_codex || codex_status=$?
+        run_setup_stage "Installing Codex notifications" install_codex || codex_status=$?
         # Reserved CLI result: registration committed, config init failed.
         if [ "$codex_status" -eq 3 ]; then
             report_config_init_failure
@@ -1680,9 +1732,9 @@ main() {
             return 1
         fi
     fi
-    initialize_config || return 1
-    configure_agent_notify || return 1
-    [ "$PRODUCT" != claude ] || print_success
+    run_setup_stage "Preparing notification settings" initialize_config || return 1
+    run_setup_stage "Configuring agent notification tools" configure_agent_notify || return 1
+    print_success
 }
 
 # Quote argv so a user can paste the retry command into bash. Custom roots with
@@ -1699,7 +1751,7 @@ quote_shell_command() {
 # Agent-notify is default-on. A failed setup must not undo hooks/plugin install,
 # but it is incomplete: bootstrap does not print overall success.
 configure_agent_notify() {
-    [ "$CONFIGURE_NOTIFICATIONS" = true ] || return 0
+    [ "$CONFIGURE_NOTIFICATIONS" = true ] || { CLAUDE_AGENT_NOTIFY_STATUS="skipped (existing setup kept)"; CODEX_AGENT_NOTIFY_STATUS="$CLAUDE_AGENT_NOTIFY_STATUS"; return 0; }
     if [ -z "$CONFIGURE_BINARY" ]; then
         CONFIGURE_BINARY=$(installed_notification_binary "$PLUGIN_ROOT") || return 1
     fi
@@ -1723,7 +1775,9 @@ configure_agent_notify() {
         [ "$AGENT_NOTIFY_REQUEST" = explicit ] && return 1
         return 0
     fi
-    configure_agent_policy
+    configure_agent_policy || return 1
+    CLAUDE_AGENT_NOTIFY_STATUS="configured; activation not verified"
+    CODEX_AGENT_NOTIFY_STATUS="$CLAUDE_AGENT_NOTIFY_STATUS"
 }
 
 configure_agent_policy() {
@@ -1879,7 +1933,12 @@ setup_agent_notify_wizard() {
             set -- "$@" --client-executable "$codex_exec"
         fi
     fi
-    if ! "$CONFIGURE_BINARY" "$@"; then
+    local wizard_result wizard_status=0
+    wizard_result=$(mktemp "${TMPDIR:-/tmp}/bootstrap-wizard-XXXXXX") || return 1
+    "$CONFIGURE_BINARY" "$@" > "$wizard_result" || wizard_status=$?
+    if [ "$wizard_status" -ne 0 ]; then
+        cat "$wizard_result"
+        rm -f "$wizard_result"
         # The retry command refers to the verified same-release ZIP. Retain its
         # staging directory so EXIT cleanup cannot invalidate that command.
         if [ -n "$_PORTABLE_STAGE" ] && [[ "$package_root" = "$_PORTABLE_STAGE/"* ]]; then
@@ -1893,7 +1952,56 @@ setup_agent_notify_wizard() {
         [ -z "${BOOTSTRAP_TAG:-}" ] || printf '  If no retry is shown, rerun bootstrap pinned to BOOTSTRAP_RELEASE_TAG=%s.\n' "$BOOTSTRAP_TAG" >&2
         return 1
     fi
+    # Keep failure output human and runnable; only the post-commit read uses JSON.
+    set -- setup-notifications wizard --action inspect --agents "$agents" --json \
+        --codex-home "$wizard_codex_home" --claude-config "$CLAUDE_HOME"
+    [ "$PRODUCT" = codex ] || set -- "$@" --claude-mcp-config "${CLAUDE_CONFIG_DIR:-$INSTALLER_HOME}/.claude.json"
+    if ! "$CONFIGURE_BINARY" "$@" > "$wizard_result" 2>/dev/null; then
+        : > "$wizard_result"
+        echo "Warning: installation finished, but agent notification tool status could not be checked." >&2
+    fi
+    CLAUDE_AGENT_NOTIFY_STATUS=$(wizard_tool_status "$wizard_result" claude)
+    CODEX_AGENT_NOTIFY_STATUS=$(wizard_tool_status "$wizard_result" codex)
+    rm -f "$wizard_result"
     return 0
+}
+
+# --json is the stable operator contract. A successful preserved opt-out is
+# different from an installed tool; missing parsers/results stay explicitly unknown.
+wizard_tool_status() {
+    local engine status=""
+    engine=$(installer_runtime) || { printf '%s\n' 'setup completed; status not checked'; return 0; }
+    if [ "$engine" = python3 ]; then
+        status=$(python3 -I - "$1" "$2" <<'PY_STATUS'
+import json, sys
+try:
+    result = json.load(open(sys.argv[1]))
+    rows = [t for t in result.get('targets', []) if t.get('client') == sys.argv[2] and t.get('unit') == 'agent-notify']
+    if len(rows) == 1:
+        target = rows[0]
+        if target.get('outcome') in ('completed', 'installed'):
+            print('installed')
+        elif target.get('outcome') == 'absent':
+            print('not installed (existing opt-out kept)' if target.get('reason') == 'preserved_existing_opt_out' else 'not installed')
+except (ValueError, OSError, TypeError, AttributeError):
+    pass
+PY_STATUS
+) || status=""
+    else
+        status=$(run_isolated_node - "$1" "$2" <<'JS_STATUS'
+try {
+    const r = JSON.parse(require('fs').readFileSync(process.argv[2], 'utf8'));
+    const rows = (r.targets || []).filter(t => t.client === process.argv[3] && t.unit === 'agent-notify');
+    if (rows.length === 1) {
+        const t = rows[0];
+        if (['completed', 'installed'].includes(t.outcome)) console.log('installed');
+        else if (t.outcome === 'absent') console.log(t.reason === 'preserved_existing_opt_out' ? 'not installed (existing opt-out kept)' : 'not installed');
+    }
+} catch (_) {}
+JS_STATUS
+) || status=""
+    fi
+    printf '%s\n' "${status:-setup completed; status not checked}"
 }
 
 main "$@"

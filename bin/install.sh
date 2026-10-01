@@ -2523,7 +2523,7 @@ main() {
     # Success message
     echo ""
     echo -e "${GREEN}========================================${NC}"
-    echo -e "${GREEN}✓ Installation Complete!${NC}"
+    echo -e "${GREEN}✓ Binary installation complete${NC}"
     echo -e "${GREEN}========================================${NC}"
     echo ""
     echo -e "${GREEN}✓${NC} Binary downloaded: ${BOLD}${BINARY_NAME}${NC}"
@@ -2546,7 +2546,7 @@ main() {
             echo -e "${YELLOW}⚠${NC} GNOME extension not installed (click-to-focus requires manual setup)"
         fi
     fi
-    echo -e "${GREEN}✓${NC} Ready to use!"
+    echo -e "${GREEN}✓${NC} Binary installed. Restart your agent and verify notification delivery."
     echo ""
     echo -e "${YELLOW}────────────────────────────────────────${NC}"
     echo -e "${YELLOW}★${NC} ${BOLD}Boost your productivity${NC}"

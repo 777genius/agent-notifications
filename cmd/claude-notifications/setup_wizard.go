@@ -109,7 +109,11 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 	}
 	if errOut != nil {
 		req.Progress = func(phase string) {
-			_, _ = fmt.Fprintln(errOut, "phase", phase)
+			if jsonOut {
+				_, _ = fmt.Fprintln(errOut, "phase", phase)
+			} else if phase != "complete" {
+				_, _ = fmt.Fprintln(errOut, "Setting up notifications: "+strings.ReplaceAll(phase, "-", " ")+"...")
+			}
 		}
 	}
 	needsPrompt := tty && !jsonOut && (req.Action == "" || (req.Action != setupwizard.ActionInspect && (len(req.Agents) == 0 || !req.Yes)))
@@ -367,44 +371,9 @@ func writeSetupWizardResult(out io.Writer, jsonOut bool, result setupwizard.Resu
 			return 1
 		}
 	} else {
-		line := fmt.Sprintf("%s; reason=%s; generation=%d", result.Outcome, result.Reason, result.Generation)
-		if result.InstallationID != "" {
-			line += " installation-id=" + result.InstallationID
-		}
-		if result.DataRetained {
-			line += " data_retained=true"
-		}
-		_, _ = fmt.Fprintln(out, line+".")
-		for _, target := range result.Targets {
-			line := target.Client + " " + target.Unit + ": " + target.Outcome
-			if target.Reason != "" {
-				line += " " + target.Reason
-			}
-			if target.Profile != "" {
-				line += " profile=" + target.Profile
-			}
-			if target.TreeDigest != "" {
-				line += " digest=" + target.TreeDigest
-			}
-			if target.ConfigPath != "" {
-				line += " mcp=" + target.ConfigPath
-			}
-			_, _ = fmt.Fprintln(out, line)
-		}
-		for _, fact := range result.Readiness {
-			_, _ = fmt.Fprintf(out, "%s readiness: runtime=%s hooks=%s mcp=%s permission=%s restart=%s delivery=%s\n",
-				fact.Client, fact.Runtime, fact.Hooks, fact.MCP, fact.Permission, fact.Restart, fact.Delivery)
-		}
-		if runtime.GOOS == "windows" && (len(result.NextActions) > 0 || len(result.Command) > 0) {
-			_, _ = fmt.Fprintln(out, "Recovery commands below use PowerShell syntax.")
-		}
-		for _, next := range result.NextActions {
-			_, _ = fmt.Fprintf(out, "next %s: %s\n", next.Kind, strings.Join(quoteWizardArgs(wizardPrintableCommand(next.Command)), " "))
-		}
-		if len(result.Command) > 0 {
-			_, _ = fmt.Fprintf(out, "retry: %s\n", strings.Join(quoteWizardArgs(wizardPrintableCommand(result.Command)), " "))
-		}
+		writeSetupWizardSummary(out, result)
 	}
+
 	if result.ExitCode() != 0 {
 		return result.ExitCode()
 	}

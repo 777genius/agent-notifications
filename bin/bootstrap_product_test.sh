@@ -364,7 +364,7 @@ mkdir -p "$PLUGIN_ROOT/portable-package"
 printf '{}' > "$PLUGIN_ROOT/portable-package/plugin.json"
 CONFIGURE_BINARY="$SANDBOX/capture-wizard"
 export WIZARD_CAPTURE="$SANDBOX/wizard-args"
-printf '%s\n' '#!/bin/bash' 'if [ "$1 $2" = "setup-notifications --help" ]; then echo "--policy-only --preserve-enabled"; exit 0; fi' 'printf "%s\n" "$@" > "$WIZARD_CAPTURE"' > "$CONFIGURE_BINARY"
+printf '%s\n' '#!/bin/bash' 'if [ "$1 $2" = "setup-notifications --help" ]; then echo "--policy-only --preserve-enabled"; exit 0; fi' 'if [ "${4:-}" = inspect ]; then printf '"'"'{"targets":[]}\n'"'"'; exit 0; fi' 'printf "%s\n" "$@" > "$WIZARD_CAPTURE"' > "$CONFIGURE_BINARY"
 chmod +x "$CONFIGURE_BINARY"
 configure_agent_policy() { return 0; }
 bootstrap_abs_command() { return 1; }
@@ -700,9 +700,9 @@ for choice, success in ([('1',True), ('2',True), ('3',True), ('invalid',False)] 
         os.kill(pid,9); raise AssertionError('PTY timeout')
     _, status = os.waitpid(pid,0); os.close(fd)
     assert sent and (os.waitstatus_to_exitcode(status)==0)==success, output.decode()
-    if choice in ['1','3']: assert b'CLAUDE_ADAPTER' in output
-    if choice == '1': assert b'CODEX_ADAPTER' not in output
-    if choice == '3': assert b'CODEX_ADAPTER' in output
+    if choice in ['1','3']: assert b'Claude Code - installed' in output
+    if choice == '1': assert b'Codex - installed' not in output
+    if choice == '3': assert b'Codex - installed' in output
 assert not list(pathlib.Path(env['TMPDIR']).glob('bootstrap-codex-*'))
 assert not list(pathlib.Path(env['TMPDIR']).glob('bootstrap-release-*'))
 # Protected flow E2E. Real shell orchestration and local downloads; explicit
@@ -978,3 +978,43 @@ print('protected flow fixtures passed (fake config CLI; real Go integration pend
 server.shutdown(); server.server_close()
 print('local HTTP / curl-pipe PTY adapter fixtures passed (fake installer and binary)')
 PY
+
+# Stage output is a public contract: success hides machine/binary banners but
+# preserves warnings and shell state; failure replays diagnostics and its code.
+(
+    emit_stage() { PLUGIN_ROOT=fixture-installed; printf 'Ready to use!\n{"generation":12}\n'; echo 'warning: fixture optional setup' >&2; }
+    run_setup_stage 'Installing fixture' emit_stage > "$SANDBOX/stage-ok.out" 2> "$SANDBOX/stage-ok.err"
+    [ "$PLUGIN_ROOT" = fixture-installed ]
+    grep -F 'Installing fixture...' "$SANDBOX/stage-ok.out"
+    ! grep -E 'Ready to use|generation' "$SANDBOX/stage-ok.out"
+    grep -F 'warning: fixture optional setup' "$SANDBOX/stage-ok.err"
+    emit_failure() { echo 'diagnostic stdout'; echo 'diagnostic stderr' >&2; return 3; }
+    status=0
+    run_setup_stage 'Failing fixture' emit_failure > "$SANDBOX/stage-fail.out" 2> "$SANDBOX/stage-fail.err" || status=$?
+    [ "$status" -eq 3 ]
+    grep -F 'diagnostic stdout' "$SANDBOX/stage-fail.err"
+    grep -F 'diagnostic stderr' "$SANDBOX/stage-fail.err"
+    BOOTSTRAP_VERBOSE=1 run_setup_stage 'Verbose fixture' emit_stage > "$SANDBOX/stage-verbose.out" 2>/dev/null
+    grep -F 'generation' "$SANDBOX/stage-verbose.out"
+    PRODUCT=both CLAUDE_AGENT_NOTIFY_STATUS='not configured by this run' CODEX_AGENT_NOTIFY_STATUS='not configured by this run'
+    print_iterm2_python_api_notice() { :; }
+    print_success > "$SANDBOX/summary.out"
+    grep -F 'Claude Code - installed; restart required.' "$SANDBOX/summary.out"
+    grep -F 'Codex - installed; restart required.' "$SANDBOX/summary.out"
+    grep -F 'Run /hooks in Codex' "$SANDBOX/summary.out"
+    grep -F 'not configured by this run' "$SANDBOX/summary.out"
+    grep -F 'Delivery has not been verified.' "$SANDBOX/summary.out"
+    [ "$(grep -c '^Installation complete$' "$SANDBOX/summary.out")" -eq 1 ]
+    BOOTSTRAP_SUMMARY_FILE="$SANDBOX/aggregate.txt"
+    print_success > "$SANDBOX/collected.out"
+    [ ! -s "$SANDBOX/collected.out" ]
+    grep -F 'Delivery has not been verified.' "$BOOTSTRAP_SUMMARY_FILE"
+)
+
+# Structured results distinguish a successful opt-out from an installed sibling.
+cat > "$SANDBOX/wizard-summary.json" <<'JSON_STATUS'
+{"outcome":"completed","targets":[{"client":"claude","unit":"agent-notify","outcome":"absent","reason":"preserved_existing_opt_out"},{"client":"codex","unit":"agent-notify","outcome":"installed"}]}
+JSON_STATUS
+[ "$(wizard_tool_status "$SANDBOX/wizard-summary.json" claude)" = 'not installed (existing opt-out kept)' ]
+[ "$(wizard_tool_status "$SANDBOX/wizard-summary.json" codex)" = installed ]
+[ "$(wizard_tool_status "$SANDBOX/wizard-summary.json" other)" = 'setup completed; status not checked' ]
