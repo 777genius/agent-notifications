@@ -2,6 +2,8 @@ package geminievent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -67,6 +69,29 @@ func consumerFixture(t *testing.T) (Consumer, geminisource.Facts, notification.D
 // TestCacheInterprocessClaim covers concurrent first claims separately.
 func TestConcurrentConsumerClaimsEachChannelOnce(t *testing.T) {
 	c, facts, deadline := consumerFixture(t)
+	// Prepare the empty durable cache outside the measured claim budget. This
+	// test owns handoff and duplicate semantics, not first filesystem creation;
+	// native G5 independently exercises cold production caches on every target.
+	seedCtx, seedCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	release, err := installruntime.Lock(seedCtx, filepath.Join(c.Cache.Root, ".observations.lock"))
+	if err != nil {
+		seedCancel()
+		t.Fatal(err)
+	}
+	boot, _, err := c.Clock.Now()
+	bootHash := sha256.Sum256([]byte(boot))
+	seed, marshalErr := json.Marshal(cacheState{Boot: hex.EncodeToString(bootHash[:])})
+	if err == nil {
+		err = marshalErr
+	}
+	if err == nil {
+		err = writeCache(c.Cache.Root, seed)
+	}
+	release()
+	seedCancel()
+	if err != nil {
+		t.Fatal(err)
+	}
 	var desktops, hooks, rechecks atomic.Int32
 	c.Gate = testGate{channels: Channels{true, true}, check: func(ctx context.Context, _ Binding, _ Channel) bool {
 		rechecks.Add(1)
