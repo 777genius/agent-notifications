@@ -40,9 +40,10 @@ func TestRegistrationRendererIndependentLiteralBoundary(t *testing.T) {
 		}
 	}
 }
-func TestRegistrationRendererCurrentTwoTokenAssetFailsClosed(t *testing.T) {
-	if _, err := (RegistrationRenderer{}).RenderRegistration("/owned/binary", "/control/root", strings.Repeat("11", 32)); err == nil {
-		t.Fatal("old generated asset became origin-bound")
+func TestRegistrationRendererLegacyTwoTokenAssetFailsClosed(t *testing.T) {
+	const asset = `export default { executable:"__AGENT_NOTIFICATIONS_EXECUTABLE__", root:"__AGENT_NOTIFICATIONS_CONTROL_ROOT__" };`
+	if _, err := renderRegistration(asset, "/owned/binary", "/control/root", strings.Repeat("11", 32)); err == nil {
+		t.Fatal("legacy two-token asset became origin-bound")
 	}
 	if _, err := Render("/owned/binary", "/control/root"); err != nil {
 		t.Fatal("legacy placement compatibility lost", err)
