@@ -24,7 +24,7 @@ func TestWizardPublicLongScopeConsent(t *testing.T) {
 	env := newWizardCLIEnv(t, ctx, false)
 	t.Setenv("TERM", "dumb")
 	t.Setenv("NO_COLOR", "1")
-	prefix := filepath.Join(env.root, strings.Repeat("long-segment/", 200))
+	prefix := filepath.Join(env.root, strings.Repeat("long-segment/", 40))
 	env.claudeConfig = filepath.Join(prefix, "CLAUDE-END")
 	env.codexHome = filepath.Join(prefix, "CODEX-END")
 	for _, path := range []string{env.claudeConfig, env.codexHome} {

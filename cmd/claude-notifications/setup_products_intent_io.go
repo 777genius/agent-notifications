@@ -143,23 +143,9 @@ func loadBootstrapIntent(path string, p selectorProvenance) (confirmedBootstrapI
 		return i, err
 	}
 	defer func() { _ = root.Close() }()
-	info, err := root.Lstat(leaf)
-	if err != nil {
-		return i, err
-	}
-	if !info.Mode().IsRegular() || info.Size() > maxBootstrapIntent || info.Size() == 0 || info.Mode().Perm()&0077 != 0 {
-		return i, errors.New("invalid private intent leaf")
-	}
-	f, err := root.Open(leaf)
-	if err != nil {
-		return i, err
-	}
-	defer func() { _ = f.Close() }()
-	opened, err := f.Stat()
-	if err != nil || !os.SameFile(info, opened) {
-		return i, errors.New("intent leaf changed")
-	}
-	data, err := io.ReadAll(io.LimitReader(f, maxBootstrapIntent+1))
+	// Use the kernel's held-handle private-file checks: Unix owner/mode and
+	// Windows owner/DACL, rather than interpreting Windows synthetic mode bits.
+	data, err := readBootstrapIntentDocument(string(p.Stage), root, leaf)
 	if err != nil {
 		return i, err
 	}

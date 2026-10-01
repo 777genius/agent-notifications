@@ -9,7 +9,10 @@ import (
 // Red regression: the UI shows the Gemini parent as the destination, appends
 // .gemini twice, or ignores an explicit root that the actual writer uses.
 func TestResolvedScopeMatchesInstallerAuthority(t *testing.T) {
-	home := t.TempDir()
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		name    string
 		request Request
@@ -48,7 +51,10 @@ func TestResolvedScopeMatchesInstallerAuthority(t *testing.T) {
 // Red regression: extracting the resolver changes the writer's canonical
 // directory alias handling, so the displayed and committed roots diverge.
 func TestGeminiConfigRootCanonicalAlias(t *testing.T) {
-	home := t.TempDir()
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	target := filepath.Join(home, "target")
 	alias := filepath.Join(home, "alias")
 	if err := os.Mkdir(target, 0700); err != nil {

@@ -7,6 +7,7 @@ import (
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/clientdetect"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -87,7 +88,7 @@ func TestSetupProductsAllSubsets(t *testing.T) {
 func TestSetupProductsDiscoveryIsReadOnly(t *testing.T) {
 	e, a := setupProductsDiscoveryFixture(t)
 	for _, id := range productOrder {
-		path := filepath.Join(e.PATH, id)
+		path := filepath.Join(e.PATH, fixtureProductName(id))
 		if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf executed > \""+filepath.Join(e.Home, "EXECUTED")+"\"\n"), 0700); err != nil {
 			t.Fatal(err)
 		}
@@ -111,7 +112,7 @@ func TestSetupProductsDiscoveryIsReadOnly(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(e.Home, "EXECUTED")); !os.IsNotExist(err) {
 		t.Fatalf("agent stub executed: %v", err)
 	}
-	if err := os.Remove(filepath.Join(e.PATH, "codex")); err != nil {
+	if err := os.Remove(filepath.Join(e.PATH, fixtureProductName("codex"))); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Mkdir(filepath.Join(e.Home, ".codex"), 0700); err != nil {
@@ -129,6 +130,13 @@ func TestSetupProductsDiscoveryIsReadOnly(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(e.Home, "control")); !os.IsNotExist(err) {
 		t.Fatalf("discovery created control state: %v", err)
 	}
+}
+
+func fixtureProductName(id string) string {
+	if runtime.GOOS == "windows" {
+		return id + ".exe"
+	}
+	return id
 }
 
 func setupProductsDiscoveryFixture(t *testing.T) (productEnvironment, setupProductsArgs) {
