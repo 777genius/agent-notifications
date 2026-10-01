@@ -299,5 +299,28 @@
       "restart": "Restart OpenCode to load the global plugin. On macOS, grant notification permission using the setup guide.",
       "configure": "Use config path for shared settings. Enable desktop/webhook consent with setup-opencode; configure webhook endpoints separately."
     }
+  },
+  "agentSupport": {
+    "title": "Compare agent features",
+    "feature": "Feature",
+    "yes": "Supported",
+    "no": "Not supported",
+    "conditional": "Supported with limitations",
+    "legend": "✓ Supported · ✕ Not supported · ✓* Supported with limitations",
+    "conditions": "* Codex questions depend on the active mode; errors and limits are detected from the final message. Click-to-focus depends on your OS and terminal.",
+    "qualification": "Codex: Windows hook delivery and the question tool hook are not yet qualified in live sessions.",
+    "v2Link": "What is OpenCode V2?",
+    "rows": {
+      "completion": "Completed",
+      "question": "Question",
+      "permission": "Permission Request",
+      "review": "Review",
+      "plan": "Plan",
+      "limit": "Session Limit Reached",
+      "sound": "Sounds",
+      "focus": "Click-to-focus",
+      "webhook": "Webhooks",
+      "error": "Errors"
+    }
   }
 }
