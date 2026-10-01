@@ -35,9 +35,9 @@ func command(binary, root, binding string) []string {
 func hookSpecs(binary, root, binding string) []geminihooks.HookSpec {
 	return []geminihooks.HookSpec{
 		{Event: "AfterAgent", Name: "agent-notifications-gemini-after-agent",
-			Argv: append(command(binary, root, binding), "--event", "AfterAgent"), Timeout: 5000},
+			Argv: append(command(binary, root, binding), "--event", "AfterAgent"), Timeout: 5000, Observer: true},
 		{Event: "Notification", Name: "agent-notifications-gemini-notification", Matcher: "ToolPermission",
-			Argv: append(command(binary, root, binding), "--event", "Notification"), Timeout: 5000},
+			Argv: append(command(binary, root, binding), "--event", "Notification"), Timeout: 5000, Observer: true},
 	}
 }
 
