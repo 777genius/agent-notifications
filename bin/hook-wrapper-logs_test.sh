@@ -88,6 +88,15 @@ assert len(logs(cache)) == 2
 osc_message = json.loads(invoke(plugin, root / 'osc-cache').stdout)['systemMessage']
 assert 'Error: real failure' in osc_message and 'HIDDEN_OSC_PAYLOAD' not in osc_message
 
+# DCS/SOS/PM/APC strings end with ST, never BEL. Their hidden payload must
+# not replace a real error, even across newlines or repeated ESC bytes.
+strings = b'Error: real failure\n'
+for introducer in (b'P', b'X', b'^', b'_'):
+    strings += b'\x1b' + introducer + b'hidden\x07\nError: HIDDEN_STRING_PAYLOAD\x1b\x1b\\\n'
+(root / 'reason.txt').write_bytes(strings)
+string_message = json.loads(invoke(plugin, root / 'string-cache').stdout)['systemMessage']
+assert 'Error: real failure' in string_message and 'HIDDEN_STRING_PAYLOAD' not in string_message
+
 # An oversized UTF-8 reason must stay bounded and decodable, without splitting a character.
 (root / 'reason.txt').write_text('Error: ' + 'я' * 350 + '\n', encoding='utf-8')
 long_result = invoke(plugin, root / 'long-cache')

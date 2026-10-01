@@ -202,9 +202,11 @@ install_error_excerpt() {
             for (i = 1; i <= length($0); i++) {
                 c = substr($0, i, 1)
                 if (state == "osc") { if (c == "\007") state = ""; else if (c == "\033") state = "osc-esc"; continue }
-                if (state == "osc-esc") { if (c == "\\") state = ""; else state = "osc"; continue }
+                if (state == "osc-esc") { if (c == "\\") state = ""; else if (c != "\033") state = "osc"; continue }
+                if (state == "string") { if (c == "\033") state = "string-esc"; continue }
+                if (state == "string-esc") { if (c == "\\") state = ""; else if (c != "\033") state = "string"; continue }
                 if (state == "csi") { if (c ~ /[@-~]/) state = ""; continue }
-                if (state == "esc") { state = c == "[" ? "csi" : c == "]" ? "osc" : ""; continue }
+                if (state == "esc") { state = c == "[" ? "csi" : c == "]" ? "osc" : c ~ /^[PX^_]$/ ? "string" : ""; continue }
                 if (c == "\033") { state = "esc"; continue }
                 if (c in control || c == "\177") continue
                 # Keep enough bytes for the excerpt and its last UTF-8 character.
