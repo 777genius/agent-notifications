@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 
 REQUIRED = {
+    "TestSetupProductsScopedPresence",
     "TestBootstrapSelectorPTY",
     "TestBootstrapSelectionDoesNotApproveConsent",
     "TestBootstrapInteractiveChannelConsent",
@@ -28,7 +29,7 @@ def check(path):
         event = json.loads(line)
         name = event.get("Test", "")
         action = event.get("Action")
-        if name.startswith("TestBootstrap"):
+        if name.startswith(("TestBootstrap", "TestSetupProductsScopedPresence")):
             if action == "pass":
                 passed.add(name)
             elif action in ("skip", "fail"):

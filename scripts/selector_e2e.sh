@@ -24,5 +24,5 @@ pathlib.Path(sys.argv[2]).write_text(json.dumps({
 }, indent=2) + '\n')
 PY
 SELECTOR_TEST_BINARY="$binary" go test -json -count=1 -timeout=10m \
-    -run '^TestBootstrap' ./cmd/claude-notifications > "$evidence/tests.jsonl"
+    -run '^(TestBootstrap|TestSetupProductsScopedPresence)' ./cmd/claude-notifications > "$evidence/tests.jsonl"
 python3 scripts/selector_e2e_check.py "$evidence/tests.jsonl"
