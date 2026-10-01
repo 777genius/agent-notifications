@@ -337,6 +337,7 @@
     "conditional": "支持，但有限制",
     "legend": "✓ 支持 · ✕ 不支持 · ✓* 有限制",
     "conditions": "* Codex 的提问取决于当前模式；错误和限额通过最终消息识别。点击聚焦取决于操作系统和终端。",
+    "qualification": "Codex：Windows 钩子通知和提问工具钩子尚未在实际会话中验证。",
     "v2Link": "什么是 OpenCode V2？",
     "rows": {
       "completion": "已完成",

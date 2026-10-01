@@ -44,6 +44,7 @@
     "conditional": "Mit Einschränkungen unterstützt",
     "legend": "✓ Unterstützt · ✕ Nicht unterstützt · ✓* Mit Einschränkungen",
     "conditions": "* Codex-Fragen hängen vom Modus ab; Fehler und Limits werden aus der letzten Nachricht erkannt. Klick-Fokus hängt von Betriebssystem und Terminal ab.",
+    "qualification": "Codex: Hook-Zustellung unter Windows und der Frage-Tool-Hook sind noch nicht in echten Sitzungen verifiziert.",
     "v2Link": "Was ist OpenCode V2?",
     "rows": {
       "completion": "Abgeschlossen",

@@ -44,6 +44,7 @@
     "conditional": "제한적으로 지원",
     "legend": "✓ 지원 · ✕ 미지원 · ✓* 제한적 지원",
     "conditions": "* Codex 질문은 모드에 따라 다르며 오류와 한도는 최종 메시지에서 감지합니다. 클릭 포커스는 OS와 터미널에 따라 다릅니다.",
+    "qualification": "Codex: Windows 훅 알림과 질문 도구 훅은 아직 실제 세션에서 검증되지 않았습니다.",
     "v2Link": "OpenCode V2란?",
     "rows": {
       "completion": "완료",

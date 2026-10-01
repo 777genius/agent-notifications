@@ -44,6 +44,7 @@
     "conditional": "Suportado com limitações",
     "legend": "✓ Suportado · ✕ Não suportado · ✓* Com limitações",
     "conditions": "* As perguntas do Codex dependem do modo; erros e limites são detectados na mensagem final. O foco por clique depende do sistema e terminal.",
+    "qualification": "Codex: a entrega por hooks no Windows e o hook de perguntas ainda não foram verificados em sessões reais.",
     "v2Link": "O que é OpenCode V2?",
     "rows": {
       "completion": "Concluído",

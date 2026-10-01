@@ -44,6 +44,7 @@
     "conditional": "Pris en charge avec limites",
     "legend": "✓ Pris en charge · ✕ Non pris en charge · ✓* Avec limites",
     "conditions": "* Les questions Codex dépendent du mode ; les erreurs et limites sont détectées dans le message final. Le focus par clic dépend du système et du terminal.",
+    "qualification": "Codex : la livraison via les hooks sous Windows et le hook de questions ne sont pas encore vérifiés en session réelle.",
     "v2Link": "Qu'est-ce qu'OpenCode V2 ?",
     "rows": {
       "completion": "Terminé",

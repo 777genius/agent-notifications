@@ -479,6 +479,7 @@ test("all agents toggle independently, copied commands and configuration cover t
   await expect(table.getByRole("row", { name: /^Sounds/ }).getByRole("cell")).toHaveText(["✓Supported", "✓Supported", "✕Not supported"]);
   await expect(table.getByRole("row", { name: /^Question/ }).getByRole("cell")).toHaveText(["✓Supported", "✓*Supported with limitations", "✓Supported"]);
   await expect(table.getByRole("row", { name: /^Errors/ }).getByRole("cell")).toHaveText(["✓Supported", "✓*Supported with limitations", "✓Supported"]);
+  await expect(page.getByText("Codex: Windows hook delivery and the question tool hook are not yet qualified in live sessions.", { exact: true })).toBeVisible();
   await expect(page.getByText(/Tested with OpenCode 1.18.33/)).not.toBeVisible();
   await page.locator(".agent-support summary").click();
   await expect(page.getByText(/Tested with OpenCode 1.18.33/)).toBeVisible();

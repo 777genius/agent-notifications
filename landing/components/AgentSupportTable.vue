@@ -51,6 +51,7 @@ const icons = { yes: "✓", no: "✕", conditional: "✓*" };
     <div id="agent-support-notes" class="agent-support-notes">
       <p>{{ t("agentSupport.legend") }}</p>
       <p>{{ t("agentSupport.conditions") }}</p>
+      <p>{{ t("agentSupport.qualification") }}</p>
       <p>{{ t("install.opencode.scope") }}</p>
       <details>
         <summary>{{ t("install.capabilities.details") }}</summary>
