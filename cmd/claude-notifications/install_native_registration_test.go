@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -36,6 +37,9 @@ func TestInstallRuntimeReportsRegistrationFailureAfterSuccessfulCommit(t *testin
 		t.Fatal(err)
 	}
 	entry := "claude-notifications-linux-amd64"
+	if runtime.GOOS == "windows" {
+		entry = "claude-notifications-windows-" + runtime.GOARCH + ".exe"
+	}
 	if err := os.WriteFile(filepath.Join(stage, entry), []byte("inert sender "+installruntime.WriterProtocolMarker), 0700); err != nil {
 		t.Fatal(err)
 	}
