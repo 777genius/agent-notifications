@@ -1,3 +1,5 @@
+> Historical worker handoff below. Current executed qualification is recorded in the final production supplement: all five native platforms passed. Static-worker limitations are retained as provenance, not current blockers.
+
 # Gemini native harness handoff — an-next-g0
 
 The worker implemented and statically checked the fixture. **No Gemini process, Google model service, AN consumer, desktop backend, or production installer was run. G0 and G5 remain unverified.** The trusted orchestrator must inspect and fingerprint these files before executing them outside the provider sandbox, with the guard unchanged.
@@ -128,9 +130,10 @@ These are `native_cli/provider_substitute` results. Production setup, AN deliver
 
 ## Production qualification supplement, 2026-10-01
 
-The trusted production G5 run now passes on macOS arm64 and Linux amd64/arm64.
-This supersedes the earlier static-worker statement that G5 was pending. Windows
-amd64 and macOS Intel native qualification remain in progress; their GUI is unverified.
+The trusted production G0/G5 run passed on macOS arm64/Intel, Linux amd64/arm64
+and Windows amd64 at `cee81a77d8aef5369456cc24ad4e9be5184b3264`, GitHub run
+`36859247789`. This supersedes earlier static-worker and partial-platform statuses.
+Desktop GUI remains unverified on Windows, Linux and macOS Intel.
 
 On the owner's Mac, the final public graph was exercised with actual CI binary
 source `884e2b6f522010f0cac015d89a9933071e6d85d9`, driver source

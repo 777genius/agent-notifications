@@ -3,8 +3,7 @@
 Public Agent Notifications **1.46.1 does not contain Gemini support**. This guide
 covers the candidate integration; it requires a compatible release or an exact,
 checked candidate bundle supplied for qualification. No release version is assigned
-here. The candidate was tested with exact **Gemini CLI 0.62.0** on macOS arm64
-and Linux. Tests use the real CLI and its permission UI with a deterministic local
+here. The candidate was tested with exact **Gemini CLI 0.62.0** on macOS arm64/Intel, Linux amd64/arm64 and Windows amd64. Tests use the real CLI and its permission UI with a deterministic local
 provider; they do not call the live Google model service. See qualification by OS below.
 
 ## Two fixed alerts
@@ -70,7 +69,7 @@ OpenCode consent is separate. Webhook consent alone does not configure an endpoi
 
 Restart Gemini after setup or update so its effective hooks are reloaded. Use the
 checked candidate's printed inspect, channel-change, remove and recovery commands;
-installation, repeat, update, inspect and removal were exercised on Mac and Linux.
+installation, repeat, update, inspect and removal were exercised on all five native CI targets.
 Removal revokes Gemini consent and removes only owned hooks/runtime files, preserving foreign settings and
 other agents. An ownership conflict may retain disabled files for inspection rather
 than overwrite another writer's edits.
@@ -79,11 +78,11 @@ than overwrite another writer's edits.
 
 | Evidence layer | Status |
 | --- | --- |
-| Exact Gemini CLI 0.62.0 native hooks and permission UI | Passed on macOS arm64 and Linux amd64/arm64, with a local provider fixture |
+| Exact Gemini CLI 0.62.0 native hooks and permission UI | Passed on macOS arm64/Intel, Linux amd64/arm64 and Windows amd64, with a local provider fixture |
 | macOS arm64 desktop and visual test | Real CLI delivered completion and tool-permission alerts through our signed helper; macOS accepted both and the owner confirmed seeing both |
-| Windows amd64 native shell / notification API / visual desktop | Native qualification in progress; notification API and visual desktop unverified |
+| Windows amd64 native shell / notification API / visual desktop | Native CLI, production lifecycle and webhook passed; notification API and visual desktop unverified |
 | Linux amd64/arm64 native shell and webhook / desktop | Native CLI and production install/update/remove/webhook passed; desktop API and visual desktop unverified |
-| macOS Intel native CLI | Qualification in progress; visual desktop unverified |
+| macOS Intel native CLI | Native CLI, production lifecycle and webhook passed; visual desktop unverified |
 | Compatible public Agent Notifications release | Pending; 1.46.1 excludes Gemini |
 
 A macOS observation will not imply Windows/Linux GUI verification. Injected

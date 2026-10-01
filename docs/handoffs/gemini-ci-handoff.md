@@ -46,16 +46,25 @@ and visual behavior are unverified. Interactive Mac desktop/API/visual runs
 remain with the main orchestrator. The event producer is the real native CLI;
 the model provider is deterministic real local HTTP. No Google model-service
 qualification is claimed. Green CI means implemented scenarios passed, not
-that pending G5/desktop gates are complete.
+that GUI or live Google model-service gates are complete.
 
 Historical provider checks passed: four wrapper self-tests, six then-existing G5 self-tests,
 Python compilation in memory, workflow YAML parsing and whitespace checks.
 Commands used `python3 -B ... --self-test`; no npm/build/native execution was
 performed by that provider worker.
 
-Trusted native CI subsequently ran real G0/G5 on five platforms. At AN
-`4b27719a0ceec8453aeb53dded282ff0afe58682`, run `36852524077` passed macOS
-arm64 and Linux amd64/arm64. Windows and macOS Intel remain failed and are
-being corrected; no all-platform pass is claimed. The current pure harness
-suite contains nine G5 checks and four wrapper checks. Interactive macOS
-production evidence is recorded separately in `gemini-production-harness.md`.
+Trusted native CI passed all five platforms at AN
+`cee81a77d8aef5369456cc24ad4e9be5184b3264`, run `36859247789`:
+Windows amd64, macOS arm64/Intel and Linux amd64/arm64. Every job exercised
+G0 and G5, all six native cases, production install/repeat/changed-binary update/
+inspect/recovery/remove, foreign preservation and live-session revocation.
+Native children exited zero without forced termination. The current pure suite
+contains ten G5 checks and four wrapper checks. Interactive macOS production
+and owner visual evidence are recorded separately in `gemini-production-harness.md`.
+
+Earlier failures were TEST fixture defects: Windows binary reads required
+`O_BINARY`; native `write_file` uses CRLF on Windows; the explicit Windows
+child environment requires PATHEXT; private TEST ACLs must cover newly created
+children; ConPTY bridge cleanup must follow the confirmed native child exit;
+Intel startup requires `/usr/sbin` for the bundled architecture probe's `sysctl`.
+The production deadline and privacy/ownership checks were preserved.
