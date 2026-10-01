@@ -84,9 +84,11 @@ func formatWindowsGUID(g [16]byte) string {
 	return fmt.Sprintf("%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x", d1, d2, d3, g[8], g[9], g[10], g[11], g[12], g[13], g[14], g[15])
 }
 
+// Precise export contract: https://learn.microsoft.com/en-us/uwp/win32-and-com/win32-apis#apis-from-api-ms-win-core-realtime-l1-1-1dll
 var (
 	kernel32                  = windows.NewLazySystemDLL("kernel32.dll")
-	queryInterruptTimePrecise = kernel32.NewProc("QueryInterruptTimePrecise")
+	realtime                  = windows.NewLazySystemDLL("api-ms-win-core-realtime-l1-1-1.dll")
+	queryInterruptTimePrecise = realtime.NewProc("QueryInterruptTimePrecise")
 	queryInterruptTime        = kernel32.NewProc("QueryInterruptTime")
 	getTickCount64            = kernel32.NewProc("GetTickCount64")
 )

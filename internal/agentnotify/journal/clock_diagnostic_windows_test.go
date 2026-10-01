@@ -57,18 +57,25 @@ func TestWindowsNativeClockDiagnostic(t *testing.T) {
 		uint32(status), statusOK, retLen, expectedLength, retLen == lengthSentinel, retLen == expectedLength,
 		nonzero, canonicalOK, stable, falseOK, trueOK, trueMatches)
 
-	precise := windows.NewLazySystemDLL("kernel32.dll").NewProc("QueryInterruptTimePrecise")
-	exportOK := precise.Find() == nil
+	// Independent binding to the documented API-set contract, resolved by the OS.
+	// https://learn.microsoft.com/en-us/uwp/win32-and-com/win32-apis#apis-from-api-ms-win-core-realtime-l1-1-1dll
+	realtime := windows.NewLazySystemDLL("api-ms-win-core-realtime-l1-1-1.dll")
+	contractLoadOK := realtime.Load() == nil
+	precise := realtime.NewProc("QueryInterruptTimePrecise")
+	contractExportOK := false
+	if contractLoadOK {
+		contractExportOK = precise.Find() == nil
+	}
 	var before, after uint64
-	if exportOK {
+	if contractExportOK {
 		_, _, _ = precise.Call(uintptr(unsafe.Pointer(&before))) // VOID, ignore return/last-error.
 	}
 	boot, sec, nsec, sampleOK := WindowsPreciseBootSample()
-	if exportOK {
+	if contractExportOK {
 		_, _, _ = precise.Call(uintptr(unsafe.Pointer(&after)))
 	}
 	counterNonzero := before != 0 && after != 0
-	monotone := exportOK && counterNonzero && after >= before
+	monotone := contractExportOK && counterNonzero && after >= before
 	conversionOK := sampleOK && sec >= 0 && nsec >= 0 && nsec < 1_000_000_000 && nsec%100 == 0 &&
 		sec <= (math.MaxInt64-nsec)/1_000_000_000 && before <= math.MaxInt64/100 && after <= math.MaxInt64/100
 	withinNative := false
@@ -77,12 +84,12 @@ func TestWindowsNativeClockDiagnostic(t *testing.T) {
 		withinNative = uint64(ns) >= before*100 && uint64(ns) <= after*100
 	}
 	sampleBootMatches := stable && sampleOK && boot == canonical
-	t.Logf("native precise export_available=%t counter_nonzero=%t counter_monotone=%t sample_available=%t sample_boot_matches_native=%t conversion_valid=%t sample_within_native_reads=%t",
-		exportOK, counterNonzero, monotone, sampleOK, sampleBootMatches, conversionOK, withinNative)
+	t.Logf("native precise contract_load_available=%t contract_export_available=%t counter_nonzero=%t counter_monotone=%t sample_available=%t sample_boot_matches_native=%t conversion_valid=%t sample_within_native_reads=%t",
+		contractLoadOK, contractExportOK, counterNonzero, monotone, sampleOK, sampleBootMatches, conversionOK, withinNative)
 	if !statusOK || retLen != expectedLength || !nonzero || !canonicalOK || !stable || !trueMatches {
 		t.Error("native boot contract unavailable; see bounded predicates")
 	}
-	if !exportOK || !counterNonzero || !monotone || !sampleBootMatches || !conversionOK || !withinNative {
+	if !contractLoadOK || !contractExportOK || !counterNonzero || !monotone || !sampleBootMatches || !conversionOK || !withinNative {
 		t.Error("native precise contract unavailable; see bounded predicates")
 	}
 }
