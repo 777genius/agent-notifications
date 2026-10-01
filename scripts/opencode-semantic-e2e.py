@@ -395,6 +395,10 @@ export default async function(){record({phase:'loaded',version:'v1'});return{eve
                 wait(lambda: len(webhook.bodies) == seed_before + 1, 'native parent seed completion')
                 child = wait(lambda: next((x for x in rows() if x.get('parentID') == parent_sid), None), 'native child creation')
                 sid = child['sessionID']
+                if v1:
+                    req(prefix + sid, {'permission': [
+                        {'permission': '*', 'pattern': '*', 'action': 'allow'},
+                        {'permission': 'bash', 'pattern': '*', 'action': 'ask'}]}, method='PATCH')
                 if not v1:
                     wait_prefix = prefix if args.version == '2.0.0' else '/api/experimental/session/'
                     req(wait_prefix + parent_sid + '/wait', method='POST')
@@ -484,7 +488,7 @@ export default async function(){record({phase:'loaded',version:'v1'});return{eve
             if mode == 'retry' and (provider.attempts < 2 or (not v1 and not any(
                     x.get('type') == 'session.retry.scheduled' for x in native))):
                 raise AssertionError('retry scenario did not retry native provider')
-            if mode == 'overflow' and not any(x.get('type') == 'session.compaction.ended' for x in native):
+            if mode == 'overflow' and not any(x.get('type') == ('session.compacted' if v1 else 'session.compaction.ended') for x in native):
                 raise AssertionError('overflow scenario did not perform native compaction')
             if mode == 'child' and not any(x.get('parentID') == sid for x in rows()):
                 raise AssertionError('subagent tool did not create a native child session')
