@@ -78,6 +78,9 @@ type Request struct {
 	// when delivery assets are damaged. It still requires a registered consumer,
 	// generation and policy CAS; no asset, native or other policy mutation is allowed.
 	RevokeOpenCode bool
+	// RevokeGemini permits only Gemini's exact desktop/webhook false patch.
+	// Damaged assets do not prevent revocation; ownership and CAS still apply.
+	RevokeGemini bool
 	// PolicyOnly requires an already-managed runtime and existing kernel locks.
 	// It refuses recovery and asset/consumer mutations; setup cannot accidentally
 	// promote native or rewrite hooks from an unrelated pending transaction.
@@ -258,6 +261,9 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 	if r.RevokeOpenCode && !openCodeRevokeOnly(r) {
 		return Ledger{}, fmt.Errorf("invalid OpenCode channel revocation")
 	}
+	if r.RevokeGemini && !geminiRevokeOnly(r) {
+		return Ledger{}, fmt.Errorf("invalid Gemini channel revocation")
+	}
 	if err := reservationRequestInvalid(r); err != nil {
 		return Ledger{}, err
 	}
@@ -275,7 +281,9 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 			return Ledger{}, err
 		}
 	}
-	if filepath.IsAbs(r.RuntimeRoot) {
+	// Only the already-validated exact Gemini false patch may use a recorded
+	// runtime name without resolving damaged assets. Compare it under both locks.
+	if filepath.IsAbs(r.RuntimeRoot) && !r.RevokeGemini {
 		r.RuntimeRoot, err = CanonicalPath(r.RuntimeRoot)
 		if err != nil {
 			return Ledger{}, err
@@ -407,7 +415,7 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 		return l, err
 	}
 
-	if l.Native != nil && !policyDisableOnly(r) && !r.RevokeOpenCode {
+	if l.Native != nil && !policyDisableOnly(r) && !r.RevokeOpenCode && !r.RevokeGemini {
 		if err := validateNativeRecord(l.Native); err != nil {
 			return l, err
 		}
@@ -431,6 +439,11 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 	previous, registered := l.Consumers[r.ConsumerID]
 	if r.RevokeOpenCode && (!registered || previous.RuntimeRoot != r.RuntimeRoot || previous.Registration == "") {
 		return l, fmt.Errorf("OpenCode revocation requires its registered runtime")
+	}
+	if r.RevokeGemini && (!registered || !filepath.IsAbs(previous.RuntimeRoot) ||
+		filepath.Clean(previous.RuntimeRoot) != previous.RuntimeRoot || filepath.Clean(r.RuntimeRoot) != r.RuntimeRoot ||
+		previous.RuntimeRoot != r.RuntimeRoot || previous.Registration == "") {
+		return l, fmt.Errorf("Gemini revocation requires its registered runtime")
 	}
 	relocating := !r.RefreshOnly && registered && previous.RuntimeRoot != "" && previous.RuntimeRoot != r.RuntimeRoot
 	if relocating && (!r.RelocateVersionedCache || r.RemoveConsumer || r.ConsumerID != "claude-hooks" || r.Owner != "existing-installer" ||
@@ -505,7 +518,7 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 		}
 	}
 	for path, want := range l.Files {
-		if r.RevokeOpenCode {
+		if r.RevokeOpenCode || r.RevokeGemini {
 			break
 		}
 		// Claude owns the previous versioned cache: it may prune files or

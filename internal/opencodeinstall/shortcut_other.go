@@ -8,8 +8,6 @@ import (
 	"github.com/777genius/agent-notifications/internal/installruntime"
 )
 
-const OpenCodeToastAppID = "Genius.AgentNotifications.OpenCode"
-
 func windowsShortcutPath(string) (string, error) {
 	return "", errors.New("windows shortcut requires Windows")
 }
@@ -23,4 +21,12 @@ func windowsShortcutReady(string, string, string) error {
 
 func stageWindowsShortcutForSetup(string, string, bool, installruntime.Ledger) (*installruntime.File, error) {
 	return nil, errors.New("windows shortcut setup requires Windows")
+}
+
+func StageWindowsShortcut(DesktopProduct, string, string, bool, installruntime.Ledger) (*installruntime.File, error) {
+	return nil, errors.New("windows shortcut setup requires Windows")
+}
+
+func WindowsShortcutReadyFor(DesktopProduct, string, string) error {
+	return errors.New("windows shortcut requires Windows")
 }
