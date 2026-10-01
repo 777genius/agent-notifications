@@ -21,7 +21,7 @@ env = dict(os.environ, ROOT=root.as_posix(), CN_PRODUCT='claude')
 version = '1.42.0'
 stub = root / 'stubs'
 stub.mkdir()
-(stub / 'uname').write_text('#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo x86_64;; esac\n')
+(stub / 'uname').write_text('#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo x86_64;; esac\n', newline='\n')
 (stub / 'uname').chmod(0o700)
 
 
@@ -32,7 +32,7 @@ def fixture(name, installer):
     shutil.copyfile(source, plugin / 'bin/hook-wrapper.sh')
     (plugin / '.claude-plugin/plugin.json').write_text(json.dumps({'version': version}))
     script = plugin / 'bin/install.sh'
-    script.write_text('#!/bin/sh\n# agent-notifications-managed-writer-protocol-v1\n' + installer)
+    script.write_text('#!/bin/sh\n# agent-notifications-managed-writer-protocol-v1\n' + installer, newline='\n')
     script.chmod(0o700)
     return plugin
 
@@ -120,13 +120,13 @@ if [ "$1" = version ]; then echo 1.42.0; fi
 BIN
 chmod +x "$INSTALL_TARGET_DIR/claude-notifications"
 echo repaired
-''')
+''', newline='\n')
 repaired = invoke(plugin, cache)
 assert repaired.stdout == repaired.stderr == b''
 assert len(logs(cache)) == 2
-assert not (cache / 'claude-notifications-go/install-failed-1.42.0').exists()
+assert not (cache / 'claude-notifications-go/install-failed-1.42.0').exists(), (repaired, (plugin / 'bin/claude-notifications').read_bytes())
 (plugin / 'bin/claude-notifications').unlink()
-script.write_text('#!/bin/sh\n# agent-notifications-managed-writer-protocol-v1\necho "Error: failed again"; exit 9\n')
+script.write_text('#!/bin/sh\n# agent-notifications-managed-writer-protocol-v1\necho "Error: failed again"; exit 9\n', newline='\n')
 assert 'failed again' in json.loads(invoke(plugin, cache).stdout)['systemMessage']
 
 # A broken cache or mktemp must never stop the installer or expose its raw output.
@@ -137,21 +137,21 @@ fallback = invoke(no_log, unusable)
 assert (root / 'ran').read_text() == 'ran\n'
 assert not fallback.stderr
 assert 'status 8' in json.loads(fallback.stdout)['systemMessage']
-(stub / 'mktemp').write_text('#!/bin/sh\nexit 1\n')
+(stub / 'mktemp').write_text('#!/bin/sh\nexit 1\n', newline='\n')
 (stub / 'mktemp').chmod(0o700)
 fallback = invoke(no_log, root / 'mktemp-failure', 'codex')
 assert (root / 'ran').read_text() == 'ran\nran\n'
 assert fallback.stdout == fallback.stderr == b''
 # A successful mktemp followed by a failed log open must invoke the installer once.
 (root / 'log-is-directory').mkdir()
-(stub / 'mktemp').write_text('#!/bin/sh\nprintf "%s\\n" "$ROOT/log-is-directory"\n')
+(stub / 'mktemp').write_text('#!/bin/sh\nprintf "%s\\n" "$ROOT/log-is-directory"\n', newline='\n')
 fallback = invoke(no_log, root / 'open-failure')
 assert (root / 'ran').read_text() == 'ran\nran\nran\n'
 assert not fallback.stderr and 'status 8' in json.loads(fallback.stdout)['systemMessage']
 (stub / 'mktemp').unlink()
 # A usable older Claude binary keeps diagnostics on stderr, including the reason.
 binary = no_log / 'bin/claude-notifications'
-binary.write_text('#!/bin/sh\nif [ "$1" = version ]; then echo 1.41.0; fi\n')
+binary.write_text('#!/bin/sh\nif [ "$1" = version ]; then echo 1.41.0; fi\n', newline='\n')
 binary.chmod(0o700)
 upgrade = invoke(no_log, root / 'upgrade-cache')
 assert not upgrade.stdout and b'Error: raw installer output' in upgrade.stderr
