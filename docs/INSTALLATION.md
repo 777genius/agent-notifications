@@ -2,7 +2,22 @@
 
 # Installation
 
-### Prerequisites
+## Gemini candidate availability
+
+Gemini CLI is a fourth product in the unreleased candidate. Public release **1.46.0
+does not include Gemini**. The qualification target is exact **Gemini CLI 0.62.0**;
+native qualification and a compatible release are pending. Follow the
+[Gemini candidate guide](gemini-notifications.md) for checked-bundle setup and
+planned single-pipeline selectors `--product gemini` or
+`--products claude,codex,opencode,gemini`. Do not use a local `bin/setup.sh` to
+qualify candidate bytes: it downloads the public release.
+
+For the compatible candidate, `--desktop`/`--webhook` apply to each selected
+Gemini/OpenCode observer with separately saved consent. At least one channel is
+required. Claude/Codex portable MCP/skill choices and legacy `both` remain unchanged.
+Gemini configuration uses its guide, not the portable MCP wizard.
+
+## Prerequisites
 
 - Claude Code, Codex CLI and/or OpenCode for the products you select (OpenCode tested with 1.18.33; V2 unsupported)
 - `curl` and Bash

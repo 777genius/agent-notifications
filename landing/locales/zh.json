@@ -1,7 +1,7 @@
 {
   "seo": {
     "title": "Agent Notifications - 专注工作，及时获知进展",
-    "description": "适用于 Claude Code、Codex CLI 和 OpenCode 的桌面通知与 Webhook。"
+    "description": "适用于 Claude Code、Codex CLI 和 OpenCode 的桌面通知与 Webhook。 Gemini CLI 集成尚未发布。"
   },
   "language": {
     "label": "语言",
@@ -12,7 +12,8 @@
   },
   "accessibility": {
     "skip": "跳到主要内容",
-    "platforms": "支持的操作系统"
+    "platforms": "支持的操作系统",
+    "agents": "支持的代理集成"
   },
   "brand": {
     "tagline": "为你的编程智能体而生"
@@ -28,7 +29,7 @@
     "title": "保持专注",
     "emphasis": "需要你时，我们会提醒",
     "leadFirst": "让智能体安心工作，完成时你自然会知道。",
-    "leadSecond": "适用于 Claude Code、Codex CLI 和 OpenCode 的桌面通知与 Webhook。",
+    "leadSecond": "适用于 Claude Code、Codex CLI 和 OpenCode 的桌面通知与 Webhook。 Gemini CLI 集成尚未发布。",
     "primary": "设置通知",
     "secondary": "在 GitHub 上查看",
     "note": "开源 · 本地运行"
@@ -249,7 +250,8 @@
       "claude": "Claude Code",
       "codex": "Codex CLI",
       "both": "Claude Code + Codex CLI",
-      "opencode": "OpenCode"
+      "opencode": "OpenCode",
+      "gemini": "Gemini CLI"
     },
     "targets": {
       "unknown": "选择目标操作系统",
@@ -314,7 +316,17 @@
       "details": "兼容性详情",
       "claude": "提供完成、审查、提问、计划、会话限制和 API 错误通知。在支持的环境中提供声音和点击返回功能。",
       "codex": "提供完成和权限通知。在支持的环境中提供声音和点击返回功能。请在 /hooks 中审查并信任已安装的钩子。",
-      "opencode": "仅为根会话提供静音的完成、提问、权限和错误通知。不支持声音或点击返回。"
+      "opencode": "仅为根会话提供静音的完成、提问、权限和错误通知。不支持声音或点击返回。",
+      "gemini": "Gemini CLI 候选集成：静默提示回合结束和工具权限请求。回合结束不代表成功或最终答复。不支持声音、点击聚焦、问题、错误、计划、审查通知或嵌套代理功能对等。"
+    },
+    "gemini": {
+      "version": "集成尚未发布。公开版本 1.46.0 不包含 Gemini。目标为 Gemini CLI 0.62.0；原生验证待完成。需要兼容版本。",
+      "guide": "Gemini 候选集成设置与限制",
+      "configure": "渠道授权和共享设置请参阅 Gemini 指南；不安装 MCP 工具或技能。内置通知可能重复。请选择一个桌面通知来源或仅使用 webhook；不会修改内置设置。"
+    },
+    "observer": {
+      "channelsTitle": "观察型代理通知渠道",
+      "channelsHint": "这些选择适用于每个选中的 OpenCode/Gemini 代理，授权分别保存。请至少选择一个渠道；webhook URL 单独配置。"
     },
     "opencode": {
       "channelsTitle": "OpenCode 通知渠道",

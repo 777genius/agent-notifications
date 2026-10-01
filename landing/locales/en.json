@@ -1,7 +1,7 @@
 {
   "seo": {
     "title": "Agent Notifications - Stay in flow",
-    "description": "Desktop notifications and webhooks for Claude Code, Codex CLI and OpenCode."
+    "description": "Desktop notifications and webhooks for Claude Code, Codex CLI and OpenCode. Gemini CLI integration is unreleased."
   },
   "language": {
     "label": "Language",
@@ -12,7 +12,8 @@
   },
   "accessibility": {
     "skip": "Skip to content",
-    "platforms": "Supported operating systems"
+    "platforms": "Supported operating systems",
+    "agents": "Supported agent integrations"
   },
   "brand": { "tagline": "FOR YOUR CODING AGENTS" },
   "nav": {
@@ -26,7 +27,7 @@
     "title": "Stay in flow",
     "emphasis": "We'll get your attention",
     "leadFirst": "Let your agent work. Know when it's done.",
-    "leadSecond": "Desktop notifications and webhooks for Claude Code, Codex CLI and OpenCode.",
+    "leadSecond": "Desktop notifications and webhooks for Claude Code, Codex CLI and OpenCode. Gemini CLI integration is unreleased.",
     "primary": "Set up notifications",
     "secondary": "Explore on GitHub",
     "note": "Open source · Runs locally"
@@ -224,7 +225,8 @@
       "claude": "Claude Code",
       "codex": "Codex CLI",
       "both": "Claude Code + Codex CLI",
-      "opencode": "OpenCode"
+      "opencode": "OpenCode",
+      "gemini": "Gemini CLI"
     },
     "targets": {
       "unknown": "Choose target OS",
@@ -285,7 +287,17 @@
       "details": "Compatibility details",
       "claude": "Completion, review, question, plan, session limit and API error alerts, with sounds and click-to-focus where supported.",
       "codex": "Completion and permission alerts, with sounds and click-to-focus where supported. Review and trust installed hooks in /hooks.",
-      "opencode": "Silent completion, question, permission and error alerts for root sessions. No sound or click-to-focus."
+      "opencode": "Silent completion, question, permission and error alerts for root sessions. No sound or click-to-focus.",
+      "gemini": "Gemini CLI candidate: silent turn-completed and tool-permission alerts. A completed turn does not imply success or a final answer. No sound, click-to-focus, question, error, plan, review or nested-agent parity."
+    },
+    "gemini": {
+      "version": "Unreleased integration. Public release 1.46.0 does not include Gemini. Target Gemini CLI 0.62.0; native qualification pending. A compatible release is required.",
+      "guide": "Gemini candidate setup and limits",
+      "configure": "Use the Gemini guide for channel consent and shared settings; no MCP tool or skill is installed. Built-in Gemini notifications can duplicate desktop alerts. Choose one desktop source or webhook-only; built-in settings are not changed."
+    },
+    "observer": {
+      "channelsTitle": "Observer notification channels",
+      "channelsHint": "These choices apply to each selected OpenCode/Gemini agent, with consent saved separately. Choose at least one channel; configure webhook URLs separately."
     },
     "opencode": {
       "channelsTitle": "OpenCode notification channels",

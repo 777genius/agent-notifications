@@ -15,11 +15,11 @@ async function chooseOS(page: Page, value: string) {
   await page.getByRole("combobox", { name: "Target operating system" }).click();
   await page.getByRole("option", { name: labels[value], exact: true }).click();
 }
-async function chooseAgents(page: Page, selected: readonly ("claude" | "codex" | "opencode")[]) {
-  const labels = { claude: "Claude Code", codex: "Codex CLI", opencode: "OpenCode" };
+async function chooseAgents(page: Page, selected: readonly ("claude" | "codex" | "opencode" | "gemini")[]) {
+  const labels = { claude: "Claude Code", codex: "Codex CLI", opencode: "OpenCode", gemini: "Gemini CLI" };
   // Select desired cards first so switching hosts never needs an empty selection.
   for (const wanted of [true, false])
-    for (const value of ["claude", "codex", "opencode"] as const) {
+    for (const value of ["claude", "codex", "opencode", "gemini"] as const) {
       const card = page.getByRole("button", { name: labels[value], exact: true });
       if (selected.includes(value) === wanted &&
           (await card.getAttribute("aria-pressed")) !== String(wanted))
@@ -446,7 +446,7 @@ test("guided reference layout, detected OS and mode focus", async ({
 test("all agents toggle independently, copied commands and configuration cover the selection", async ({ page }) => {
   await page.goto("");
   await chooseOS(page, "macos");
-  const labels = { claude: "Claude Code", codex: "Codex CLI", opencode: "OpenCode" };
+  const labels = { claude: "Claude Code", codex: "Codex CLI", opencode: "OpenCode", gemini: "Gemini CLI" };
   const prefix = "curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product ";
   const cases = [
     { selected: ["claude"], expected: prefix + "claude" },
@@ -459,7 +459,7 @@ test("all agents toggle independently, copied commands and configuration cover t
   ] as const;
   for (const { selected, expected } of cases) {
     await chooseAgents(page, selected);
-    for (const value of ["claude", "codex", "opencode"] as const)
+    for (const value of ["claude", "codex", "opencode", "gemini"] as const)
       await expect(page.getByRole("button", { name: labels[value], exact: true }))
         .toHaveAttribute("aria-pressed", String((selected as readonly string[]).includes(value)));
     await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(expected);
@@ -480,8 +480,8 @@ test("all agents toggle independently, copied commands and configuration cover t
   await info.locator("article").filter({ has: page.getByRole("heading", { name: "OpenCode", exact: true }) })
     .getByText("Compatibility details", { exact: true }).click();
   await expect(page.getByText(/Tested with OpenCode 1.18.33/)).toBeVisible();
-  const channels = page.getByRole("group", { name: "OpenCode notification channels" });
-  await expect(channels).toContainText("webhook URLs are configured separately");
+  const channels = page.getByRole("group", { name: "Observer notification channels" });
+  await expect(channels).toContainText("configure webhook URLs separately");
   await expect(channels.getByRole("checkbox")).toHaveCount(2);
   const controls = await channels.locator("label").evaluateAll((nodes) => nodes.map((node) => {
     const rect = node.getBoundingClientRect();
@@ -520,4 +520,52 @@ test("first feature explains supported click-to-focus and its agent scope", asyn
   await expect(feature).toContainText("terminal, editor or tab where supported");
   await expect(feature).toContainText("Claude Code and Codex CLI only");
   await expect(feature).toContainText("terminal and OS");
+});
+
+test("Gemini selection explains pending release, shared consent and configuration without offering a released command", async ({ page }) => {
+  await page.goto("");
+  await chooseOS(page, "linux");
+  for (const selected of [["gemini"], ["gemini", "opencode"], ["claude", "codex", "opencode", "gemini"]] as const) {
+    await chooseAgents(page, selected);
+    const info = page.getByRole("group", { name: "Selected agent capabilities" });
+    const gemini = info.locator("article").filter({ has: page.getByRole("heading", { name: "Gemini CLI", exact: true }) });
+    await expect(gemini).toContainText("A completed turn does not imply success or a final answer");
+    await expect(page.getByLabel("Install command", { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Copy command" })).toHaveCount(0);
+    await expect(page.locator(".setup-panel[role=status]")).toContainText("Public release 1.46.0 does not include Gemini");
+    const channels = page.getByRole("group", { name: "Observer notification channels" });
+    await expect(channels).toContainText("consent saved separately");
+    await channels.getByRole("checkbox", { name: "Allow desktop notifications" }).uncheck();
+    await channels.getByRole("checkbox", { name: "Allow webhook notifications" }).uncheck();
+    await expect(page.getByText("Choose at least one notification channel.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Copy command" })).toHaveCount(0);
+    await channels.getByRole("checkbox", { name: "Allow desktop notifications" }).check();
+    await page.getByRole("button", { name: "Configure", exact: true }).click();
+    const config = page.locator(".configuration");
+    await expect(config.getByRole("link", { name: "Gemini candidate setup and limits" })).toHaveAttribute("href", /docs\/gemini-notifications.md$/);
+    await expect(config).toContainText("no MCP tool or skill is installed");
+    await expect(config).toContainText("webhook-only; built-in settings are not changed");
+    if (selected.length === 1)
+      await expect(page.getByRole("checkbox", { name: /Let agents send/ })).toHaveCount(0);
+    await page.getByRole("button", { name: "Install", exact: true }).click();
+  }
+  await chooseAgents(page, ["claude"]);
+  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--product claude$/);
+});
+
+// Regression: selecting Gemini must preserve the other selected agents' manual links.
+test("mixed Gemini selection keeps Claude and Codex manual instructions", async ({ page }) => {
+  await page.goto("");
+  await chooseAgents(page, ["claude", "codex", "gemini"]);
+  await chooseOS(page, "manual");
+  for (const intent of ["Install", "Update"]) {
+    await page.getByRole("button", { name: intent, exact: true }).click();
+    const manual = page.locator(".setup-panel.instructions");
+    await expect(manual.locator('a[href$="docs/INSTALLATION.md#manual-install"]')).toBeVisible();
+    await expect(manual.locator('a[href$="docs/CODEX.md#manual-codex-registration"]')).toBeVisible();
+    await expect(manual.getByRole("link", { name: "Gemini candidate setup and limits" })).toBeVisible();
+    await expect(manual).toContainText("Public release 1.46.0 does not include Gemini");
+    await expect(page.getByLabel(intent + " command", { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Copy command" })).toHaveCount(0);
+  }
 });
