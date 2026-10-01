@@ -10,7 +10,7 @@
   &nbsp;&nbsp;
   <a href="docs/opencode-notifications.md"><img src="brand/opencode-logo.svg" width="64" height="64" alt="OpenCode" title="OpenCode" /></a>
   &nbsp;&nbsp;
-  <a href="docs/gemini-notifications.md">Gemini CLI (candidate)</a>
+  <a href="docs/gemini-notifications.md"><img src="landing/public/agents/gemini.svg" width="64" height="64" alt="Gemini CLI (candidate)" title="Gemini CLI (unreleased candidate)" /></a>
 </p>
 
 [![Ubuntu CI](https://github.com/777genius/agent-notifications/actions/workflows/ci-ubuntu.yml/badge.svg?branch=main&event=push)](https://github.com/777genius/agent-notifications/actions/workflows/ci-ubuntu.yml?query=branch%3Amain+event%3Apush)
