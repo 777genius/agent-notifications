@@ -191,6 +191,11 @@ test("assets load, hydration is clean and reduced motion disables background ani
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("");
   await page.waitForLoadState("networkidle");
+  const geminiLogo = page.locator(".supported-agents").getByRole("img", { name: "Gemini CLI", exact: true });
+  await expect(geminiLogo).toBeVisible();
+  await expect.poll(() => geminiLogo.evaluate((image) =>
+    image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0 && image.naturalHeight > 0,
+  )).toBe(true);
   expect(
     await page
       .locator(".page-bg__orb")
