@@ -6,8 +6,16 @@ main() (
     # Only opt into loader parsing when the new selector is present. Every
     # existing invocation is forwarded verbatim to the released bootstrap.
     multi=0
+    new_setup=0
+    previous=""
+    [ "$#" -ne 0 ] || new_setup=1
     for arg in "$@"; do
-        case "$arg" in --products|--products=*) multi=1 ;; esac
+        case "$arg" in
+            --products|--products=*) multi=1; new_setup=1 ;;
+            --product=gemini) new_setup=1 ;;
+            gemini) [ "$previous" != --product ] || new_setup=1 ;;
+        esac
+        previous=$arg
     done
     legacy_product=""
     legacy_args=()
@@ -15,7 +23,7 @@ main() (
     opencode_channels=0
     if [ "$multi" -eq 1 ]; then
         selector_seen=0
-        claude=0 codex=0 opencode=0
+        claude=0 codex=0 opencode=0 gemini=0
         notify=""
         help=0
         while [ "$#" -gt 0 ]; do
@@ -39,6 +47,7 @@ main() (
                             claude) [ "$claude" -eq 0 ] || { echo "Duplicate product: claude." >&2; exit 1; }; claude=1 ;;
                             codex) [ "$codex" -eq 0 ] || { echo "Duplicate product: codex." >&2; exit 1; }; codex=1 ;;
                             opencode) [ "$opencode" -eq 0 ] || { echo "Duplicate product: opencode." >&2; exit 1; }; opencode=1 ;;
+                            gemini) [ "$gemini" -eq 0 ] || { echo "Duplicate product: gemini." >&2; exit 1; }; gemini=1 ;;
                             *) echo "Unknown product: $product." >&2; exit 1 ;;
                         esac
                         case "$remaining" in
@@ -53,7 +62,7 @@ main() (
                     legacy_args+=("$1") ;;
                 --desktop|--webhook)
                     for channel in ${opencode_args[@]+"${opencode_args[@]}"}; do
-                        [ "$channel" != "$1" ] || { echo "Use each OpenCode channel once." >&2; exit 1; }
+                        [ "$channel" != "$1" ] || { echo "Use each observer channel once." >&2; exit 1; }
                     done
                     opencode_args+=("$1")
                     opencode_channels=$((opencode_channels + 1)) ;;
@@ -63,8 +72,8 @@ main() (
             shift
         done
         if [ "$help" -eq 1 ]; then
-            echo "Usage: bash install.sh --products claude,codex,opencode [--agent-notify|--skip-agent-notify] [--desktop] [--webhook]"
-            echo "Choose any nonempty subset. Agent-notify options apply to Claude/Codex; OpenCode requires --desktop and/or --webhook."
+            echo "Usage: bash install.sh --products claude,codex,opencode,gemini [--agent-notify|--skip-agent-notify] [--desktop] [--webhook]"
+            echo "Choose any nonempty subset. Agent-notify options apply to Claude/Codex; Observers require --desktop and/or --webhook."
             exit 0
         fi
         if [ "$claude" -eq 1 ] && [ "$codex" -eq 1 ]; then
@@ -77,12 +86,12 @@ main() (
         [ -z "$notify" ] || [ -n "$legacy_product" ] || {
             echo "Agent-notify options require Claude or Codex in --products." >&2; exit 1;
         }
-        if [ "$opencode" -eq 1 ]; then
+        if [ "$opencode" -eq 1 ] || [ "$gemini" -eq 1 ]; then
             [ "$opencode_channels" -gt 0 ] || {
-                echo "OpenCode requires explicit --desktop and/or --webhook consent." >&2; exit 1;
+                echo "Selected observers require explicit --desktop and/or --webhook consent." >&2; exit 1;
             }
         elif [ "$opencode_channels" -gt 0 ]; then
-            echo "--desktop/--webhook require OpenCode in --products." >&2; exit 1
+            echo "--desktop/--webhook require OpenCode or Gemini in --products." >&2; exit 1
         fi
     fi
     command -v curl >/dev/null 2>&1 || {
@@ -131,26 +140,18 @@ main() (
         env BOOTSTRAP_RELEASE_TAG="$tag" BOOTSTRAP_RELEASE_COMMIT="$commit" \
             INSTALL_SCRIPT_URL="$raw/install.sh" bash "$stage/bootstrap.sh" "$@"
     }
+    if [ "$new_setup" -eq 1 ]; then
+        if [ "$(run_bootstrap --capabilities 2>/dev/null)" != bootstrap-products-v1 ]; then
+            echo "This published release lacks four-product setup. No products were installed. Use an updated release when available." >&2
+            exit 1
+        fi
+    fi
     if [ "$multi" -eq 0 ]; then
         run_bootstrap "$@"
     else
-        if [ -n "$legacy_product" ]; then
-            # Capture the original status before printing failure information.
-            run_bootstrap --product "$legacy_product" ${legacy_args[@]+"${legacy_args[@]}"} || {
-                status=$?
-                echo "Claude/Codex installation failed; remaining products were not installed." >&2
-                exit "$status"
-            }
-        fi
-        if [ "$opencode" -eq 1 ]; then
-            run_bootstrap --product opencode "${opencode_args[@]}" || {
-                status=$?
-                if [ -n "$legacy_product" ]; then
-                    echo "Partial success: Claude/Codex installation completed; OpenCode installation failed." >&2
-                fi
-                exit "$status"
-            }
-        fi
+        # One bootstrap performs every selected prerequisite/capability check
+        # before the first product mutates its installation.
+        run_bootstrap --products "$selection" ${legacy_args[@]+"${legacy_args[@]}"} ${opencode_args[@]+"${opencode_args[@]}"}
     fi
 )
 

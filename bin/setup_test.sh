@@ -86,6 +86,11 @@ if [ "${FAIL_DOWNLOAD:-}" = "$kind" ]; then exit 22; fi
 # execs it, so sys.argv cannot prove setup.sh forwarded the literal argument.
 bootstrap_stub = '''#!/usr/bin/env bash
 set -eu
+if [ "${1:-}" = --capabilities ]; then
+    [ "${NO_PRODUCT_CAPABILITY:-}" != 1 ] || exit 1
+    printf '%s\\n' bootstrap-products-v1
+    exit 0
+fi
 : > "$CASE_DIR/argv0"
 for a in "$@"; do
     printf '%s\\0' "$a" >> "$CASE_DIR/argv0"
@@ -362,21 +367,18 @@ run_case('piped one-line entry point', expected=0, piped=True)
 run_case('documented one-line command', expected=0, documented=True)
 run_case('initial loader download failure', fail='setup', expected=0, documented=True, expect_run=False)
 run_case('bootstrap exit status', status=17, expected=17)
-# Independent bootstrap calls are the observable routing boundary. All seven
-# sets resolve one release, regardless of caller order or number of groups.
-product_sets = [
-    ('claude', [['--product', 'claude']]),
-    ('codex', [['--product', 'codex']]),
-    ('opencode', [['--product', 'opencode', '--desktop']]),
-    ('codex,claude', [['--product', 'both']]),
-    ('opencode,claude', [['--product', 'claude'], ['--product', 'opencode', '--desktop']]),
-    ('opencode,codex', [['--product', 'codex'], ['--product', 'opencode', '--desktop']]),
-    ('opencode,codex,claude', [['--product', 'both'], ['--product', 'opencode', '--desktop']]),
-]
-for selection, routed in product_sets:
+# One composed bootstrap receives the selected bundle so it can preflight
+# every product before mutation. This fixture checks acquisition/argv only;
+# bootstrap_opencode_test.sh qualifies real candidate installation separately.
+product_sets = []
+for selection in ['claude','codex','opencode','gemini','codex,claude',
+                  'opencode,claude','opencode,codex','opencode,codex,claude',
+                  'claude,codex,opencode,gemini']:
     args = ['--products', selection]
-    if 'opencode' in selection:
+    if any(p in selection.split(',') for p in ('opencode','gemini')):
         args += ['--desktop']
+    routed = [args]
+    product_sets.append((selection, routed))
     run_case('product set ' + selection, args=args, calls=routed, expected=0)
 # Focused native Bash 3.2 coverage protects optional-channel parsing under
 # nounset. Check every advertised set and the intended consent error with
@@ -388,37 +390,34 @@ if sys.platform == 'darwin':
     if native_version.startswith('3.2.'):
         for selection, routed in product_sets:
             args = ['--products', selection]
-            if 'opencode' in selection:
+            if any(p in selection.split(',') for p in ('opencode','gemini')):
                 args += ['--desktop']
             run_case('native Bash 3.2 product set ' + selection,
                      args=args, calls=routed, expected=0, bash_executable=native_bash)
         for selection in ['opencode', 'claude,opencode']:
             run_case('native Bash 3.2 missing consent ' + selection,
                      args=['--products', selection], no_network=True,
-                     message='OpenCode requires explicit --desktop and/or --webhook consent.',
+                     message='Selected observers require explicit --desktop and/or --webhook consent.',
                      bash_executable=native_bash)
     else:
         print('SKIP native Bash 3.2 fixtures: /bin/bash is ' + native_version)
 run_case('scoped flags and equals selector',
-         args=['--webhook', '--products=opencode,claude,codex', '--skip-agent-notify', '--desktop'],
-         calls=[['--product', 'both', '--skip-agent-notify'],
-                ['--product', 'opencode', '--webhook', '--desktop']], expected=0, piped=True)
+         args=['--webhook', '--products=opencode,claude,codex,gemini', '--skip-agent-notify', '--desktop'],
+         calls=[['--products','opencode,claude,codex,gemini','--skip-agent-notify','--webhook','--desktop']], expected=0, piped=True)
 run_case('agent-notify scoped to legacy',
-         args=['--products', 'claude,opencode', '--agent-notify', '--webhook'],
-         calls=[['--product', 'claude', '--agent-notify'], ['--product', 'opencode', '--webhook']], expected=0)
-run_case('first group failure stops OpenCode', args=['--products', 'claude,opencode', '--desktop'],
-         calls=[['--product', 'claude']], legacy_status=37, expected=37,
-         message='remaining products were not installed')
-run_case('second group failure reports partial success', args=['--products', 'codex,opencode', '--webhook'],
-         calls=[['--product', 'codex'], ['--product', 'opencode', '--webhook']],
-         opencode_status=41, expected=41, message='Partial success:')
-run_case('OpenCode-only failure status', args=['--products', 'opencode', '--desktop'],
-         calls=[['--product', 'opencode', '--desktop']], opencode_status=43, expected=43)
+         args=['--products','claude,opencode','--agent-notify','--webhook'],
+         calls=[['--products','claude,opencode','--agent-notify','--webhook']], expected=0)
+run_case('composed bootstrap failure preserves status',
+         args=['--products','claude,opencode','--desktop'],
+         calls=[['--products','claude,opencode','--desktop']], legacy_status=37, expected=37)
 for args in [
     ['--products'], ['--products', ''], ['--products='],
     ['--products', ',claude'], ['--products', 'claude,'], ['--products', 'claude,,codex'],
     ['--products', 'claude,claude'], ['--products', 'codex,codex'],
     ['--products', 'opencode,opencode', '--desktop'],
+    ['--products','gemini,gemini','--webhook'],
+    ['--products','gemini'],
+    ['--products','gemini','--desktop','--skip-agent-notify'],
     ['--products', 'both'], ['--products', 'Claude'], ['--products', 'claude, codex'],
     ['--products', '*'], ['--products', 'claude,$(touch marker)'],
     ['--products', 'claude', '--products', 'codex'],
@@ -454,7 +453,7 @@ for release in ['v0.99.0', 'v1.9.0', 'v1.43.0', 'v1.45.99']:
 for release in ['v1.46.0', 'v1.100.0', 'v2.0.0']:
     run_case('accept OpenCode release ' + release,
              args=['--products', 'opencode', '--desktop'], release=release,
-             calls=[['--product', 'opencode', '--desktop']], expected=0)
+             calls=[['--products', 'opencode', '--desktop']], expected=0)
 run_case('legacy release behavior unchanged', args=['--product', 'opencode', '--desktop'],
          release='v1.43.0', expected=0)
 for step in ['latest', 'commit', 'bootstrap']:
