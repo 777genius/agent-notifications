@@ -443,7 +443,7 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 	if r.RevokeGemini && (!registered || !filepath.IsAbs(previous.RuntimeRoot) ||
 		filepath.Clean(previous.RuntimeRoot) != previous.RuntimeRoot || filepath.Clean(r.RuntimeRoot) != r.RuntimeRoot ||
 		previous.RuntimeRoot != r.RuntimeRoot || previous.Registration == "") {
-		return l, fmt.Errorf("Gemini revocation requires its registered runtime")
+		return l, fmt.Errorf("gemini revocation requires its registered runtime")
 	}
 	relocating := !r.RefreshOnly && registered && previous.RuntimeRoot != "" && previous.RuntimeRoot != r.RuntimeRoot
 	if relocating && (!r.RelocateVersionedCache || r.RemoveConsumer || r.ConsumerID != "claude-hooks" || r.Owner != "existing-installer" ||

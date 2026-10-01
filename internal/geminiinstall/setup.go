@@ -105,7 +105,7 @@ func Apply(ctx context.Context, r Request) error {
 		return nil
 	}
 	if r.Action == Update && !registered {
-		return errors.New("Gemini consumer is not installed")
+		return errors.New("gemini consumer is not installed")
 	}
 	// Revoke using the recorded consumer identity before resolving live assets.
 	// A moved/replaced runtime must leave consent off even if cleanup conflicts.
@@ -140,7 +140,7 @@ func Apply(ctx context.Context, r Request) error {
 		return errors.New("runtime root differs from managed installation")
 	}
 	if registered && c.RuntimeRoot != r.RuntimeRoot {
-		return errors.New("Gemini runtime relocation refused")
+		return errors.New("gemini runtime relocation refused")
 	}
 	if !r.Desktop && !r.Webhook {
 		return errors.New("choose --desktop or --webhook explicitly")
@@ -164,7 +164,7 @@ func Apply(ctx context.Context, r Request) error {
 			return err
 		}
 		if old.SettingsPath != settings {
-			return errors.New("Gemini config root changed; use the original --config-root")
+			return errors.New("gemini config root changed; use the original --config-root")
 		}
 		previous, previousBytes = &old, data
 	}
@@ -245,7 +245,7 @@ func Apply(ctx context.Context, r Request) error {
 			return errors.New("macOS desktop requires a verified managed helper; pass --native-app")
 		}
 	}
-	noChange := errors.New("Gemini installation unchanged")
+	noChange := errors.New("gemini installation unchanged")
 	gen := l.Generation
 	_, err = installruntime.Commit(ctx, installruntime.Request{
 		ControlRoot: root, Owner: "existing-installer", RuntimeRoot: r.RuntimeRoot,
@@ -383,7 +383,7 @@ func setChannels(ctx context.Context, root, runtimeRoot string, desktop, webhook
 		return errors.New("installation recovery required")
 	}
 	if _, ok := s.Installation.Ledger.Consumers[consumerID]; !ok {
-		return errors.New("Gemini consumer missing")
+		return errors.New("gemini consumer missing")
 	}
 	current, _ := json.Marshal(s.Fields)
 	oldDesktop, oldWebhook, err := channels(current)
@@ -421,12 +421,12 @@ func remove(ctx context.Context, r Request, l installruntime.Ledger) error {
 	r.RuntimeRoot = physical
 	previous, _, err := readReceipt(r.ControlRoot, l)
 	if err != nil {
-		return fmt.Errorf("Gemini consent revoked; cleanup conflict: %w", err)
+		return fmt.Errorf("gemini consent revoked; cleanup conflict: %w", err)
 	}
 	if r.ConfigRoot != "" {
 		requested, err := settingsPath(r)
 		if err != nil || requested != previous.SettingsPath {
-			return errors.New("Gemini consent revoked; original --config-root required for cleanup")
+			return errors.New("gemini consent revoked; original --config-root required for cleanup")
 		}
 	}
 	gen := l.Generation
@@ -450,7 +450,7 @@ func remove(ctx context.Context, r Request, l installruntime.Ledger) error {
 				path := filepath.Join(r.ControlRoot, receiptName)
 				id, ok := installruntime.OwnedFile(l, path)
 				if !ok {
-					return nil, errors.New("Gemini receipt ownership missing")
+					return nil, errors.New("gemini receipt ownership missing")
 				}
 				files = append(files, installruntime.File{Path: path, Before: id, Remove: true})
 				if r.GOOS == "windows" {

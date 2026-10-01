@@ -48,7 +48,7 @@ func (g geminiGate) acquire(ctx context.Context, channel geminievent.Channel) (f
 	}
 	if !g.Recheck(ctx, g.binding(), channel) {
 		release()
-		return nil, errors.New("Gemini channel revoked")
+		return nil, errors.New("gemini channel revoked")
 	}
 	return release, nil
 }

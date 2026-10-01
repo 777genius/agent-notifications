@@ -98,7 +98,7 @@ version = subprocess.check_output([str(binary),'--version'],text=True).strip().s
 assert version.startswith('v'), version
 (commands/'curl').write_text('#!/bin/bash\nset -eu\nout=""; url=""\nwhile [ "$#" -gt 0 ]; do\n case "$1" in -o) out=$2; shift 2 ;; -*) shift ;; *) url=$1; shift ;; esac\ndone\ncase "$url" in\n */checksums.txt) cp '+shlex.quote(str(assets/'checksums.txt'))+' "$out" ;;\n */'+name+') cp '+shlex.quote(str(assets/name))+' "$out" ;;\n */install.sh) cp '+shlex.quote(str(root/'bin/install.sh'))+' "$out" ;;\n *) echo "Unexpected fixture download: $url" >&2; exit 99 ;;\nesac\n')
 (commands/'opencode').write_text('#!/bin/bash\n[ "$#" -eq 1 ] && [ "$1" = --version ] || exit 99\nprintf "1.18.33\\n"\n')
-(commands/'gemini').write_text('#!/bin/bash\nset -eu\n[ "$#" -eq 1 ] && [ "$1" = --version ] || exit 99\ncase "$PWD" in */bootstrap-gemini-TEST-*/project) ;; *) echo "Gemini queried outside TEST project" >&2; exit 99 ;; esac\n[ "$HOME" = "$GEMINI_CLI_HOME" ] && [ -f "$GEMINI_CLI_SYSTEM_SETTINGS_PATH" ] || exit 99\nprintf "0.62.0\\n"\n')
+(commands/'gemini').write_text('#!/bin/bash\nset -eu\n[ "$#" -eq 1 ] && [ "$1" = --version ] || exit 99\ncase "$PWD" in */bootstrap-gemini-TEST-*/profile) ;; *) echo "Gemini queried outside TEST project" >&2; exit 99 ;; esac\n[ "$HOME" = "$GEMINI_CLI_HOME" ] && [ -f "$GEMINI_CLI_SYSTEM_SETTINGS_PATH" ] || exit 99\nprintf "0.62.0\\n"\n')
 for command in commands.iterdir(): command.chmod(0o755)
 env = dict(os.environ, PATH=str(commands)+os.pathsep+os.environ['PATH'],
            GEMINI_CLI_HOME=str(profile), BOOTSTRAP_RELEASE_TAG=version,

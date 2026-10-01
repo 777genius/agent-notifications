@@ -4,6 +4,7 @@ test_env_enter "$0" "$@"
 # Disposable offline wrapper + installer regression, also called by install_test.sh.
 set -eu
 src=$(cd "$(dirname "$0")" && pwd)
+bash "$src/hook-wrapper-logs_test.sh"
 root=$(mktemp -d)
 trap 'rm -rf "$root"' EXIT
 test_env_setup "$root"
