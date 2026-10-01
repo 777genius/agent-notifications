@@ -87,6 +87,13 @@ excerpt = json.loads(long_result.stdout)['systemMessage'].split('\n')[1]
 assert excerpt.startswith('Error: ') and len(excerpt) <= 300
 assert len(excerpt.encode()) <= 300
 
+# Non-UTF-8 filesystem/installer bytes must not invalidate Claude hook JSON.
+(root / 'reason.txt').write_bytes(b'Error: malformed \xff\xc0\xaf\xed\xa0\x80\xf4\x90\x80\x80\xe2\x82\n')
+invalid_result = invoke(plugin, root / 'invalid-utf8-cache')
+invalid_message = json.loads(invalid_result.stdout)['systemMessage']
+assert 'Error: malformed ' in invalid_message and '\ufffd' in invalid_message
+assert logs(root / 'invalid-utf8-cache')[0].read_bytes() == (root / 'reason.txt').read_bytes()
+
 # Codex must retain the actual failure while leaving both streams empty.
 codex = invoke(plugin, root / 'codex-cache', 'codex')
 assert codex.stdout == codex.stderr == b''
@@ -156,5 +163,15 @@ binary.chmod(0o700)
 upgrade = invoke(no_log, root / 'upgrade-cache')
 assert not upgrade.stdout and b'Error: raw installer output' in upgrade.stderr
 assert b'Details: ' in upgrade.stderr
+
+# Offline forced upgrades return zero while keeping the old version. Its
+# explanation is still a failure diagnostic and must retain its full log.
+offline = fixture('offline', 'echo "Keeping existing installation (GitHub unreachable)"; exit 0\n')
+shutil.copyfile(binary, offline / 'bin/claude-notifications')
+(offline / 'bin/claude-notifications').chmod(0o700)
+offline_cache = root / 'offline-cache'
+offline_result = invoke(offline, offline_cache)
+assert not offline_result.stdout and b'GitHub unreachable' in offline_result.stderr
+assert b'Details: ' in offline_result.stderr and len(logs(offline_cache)) == 1
 print('PASS: private attempt logs, diagnostics, JSON, Codex silence and concurrency')
 PY

@@ -176,11 +176,17 @@ run_install() {
         install_attempt "$@" >/dev/null 2>&1
         _install_status=$?
     fi
-    if [ "$_install_status" = 0 ]; then
+    # The installer can return zero for an offline upgrade while retaining
+    # the old binary. Keep its explanation until the target is verified.
+    if [ "$_install_status" = 0 ] && target_binary_ok; then
         [ -z "$INSTALL_LOG" ] || rm -f "$INSTALL_LOG" 2>/dev/null || true
         INSTALL_LOG=''
     elif [ -z "$INSTALL_REASON" ]; then
-        INSTALL_REASON="Installer exited with status $_install_status."
+        if [ "$_install_status" = 0 ]; then
+            INSTALL_REASON='Installer did not publish the target binary.'
+        else
+            INSTALL_REASON="Installer exited with status $_install_status."
+        fi
     fi
     return "$_install_status"
 }
@@ -221,13 +227,31 @@ install_error_excerpt() {
 
 json_system_message() {
     LC_ALL=C awk '
-        BEGIN { printf "{\"systemMessage\":\""; for (i = 1; i < 32; i++) control[sprintf("%c", i)] = i }
+        BEGIN {
+            printf "{\"systemMessage\":\""
+            for (i = 0; i < 256; i++) byte[sprintf("%c", i)] = i
+        }
         NR > 1 { printf "\\n" }
         { for (i = 1; i <= length($0); i++) {
             c = substr($0, i, 1)
+            b = byte[c]
             if (c == "\\" || c == "\"") printf "\\%s", c
-            else if (c in control) printf "\\u%04x", control[c]
-            else printf "%s", c
+            else if (b < 32) printf "\\u%04x", b
+            else if (b < 128) printf "%s", c
+            else {
+                # Preserve valid UTF-8; replace malformed bytes so paths and
+                # diagnostics cannot make the entire JSON response unreadable.
+                width = b >= 194 && b <= 223 ? 2 : b >= 224 && b <= 239 ? 3 : b >= 240 && b <= 244 ? 4 : 0
+                valid = width > 0 && i + width - 1 <= length($0)
+                for (j = 1; valid && j < width; j++) {
+                    nextbyte = byte[substr($0, i + j, 1)]
+                    if (nextbyte < 128 || nextbyte > 191) valid = 0
+                    if (j == 1 && ((b == 224 && nextbyte < 160) || (b == 237 && nextbyte >= 160) ||
+                                  (b == 240 && nextbyte < 144) || (b == 244 && nextbyte >= 144))) valid = 0
+                }
+                if (valid) { printf "%s", substr($0, i, width); i += width - 1 }
+                else printf "\\ufffd"
+            }
         } }
         END { print "\"}" }'
 }
