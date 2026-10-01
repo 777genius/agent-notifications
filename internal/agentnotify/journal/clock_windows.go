@@ -33,16 +33,8 @@ type bootEnvironmentInfo struct {
 }
 
 func WindowsBootSample() (boot string, sec, nsec int64, ok bool) {
-	var info bootEnvironmentInfo
-	var retLen uint32
-	if err := windows.NtQuerySystemInformation(windows.SystemBootEnvironmentInformation, unsafe.Pointer(&info), uint32(unsafe.Sizeof(info)), &retLen); err != nil {
-		return "", 0, 0, false
-	}
-	if info.BootIdentifier == [16]byte{} {
-		return "", 0, 0, false
-	}
-	boot = formatWindowsGUID(info.BootIdentifier)
-	if !validText(boot, 256, true) {
+	boot, ok = windowsBootIdentity(false)
+	if !ok {
 		return "", 0, 0, false
 	}
 	sec, nsec, ok = windowsInterruptTime()
@@ -50,6 +42,39 @@ func WindowsBootSample() (boot string, sec, nsec int64, ok bool) {
 		return "", 0, 0, false
 	}
 	return boot, sec, nsec, true
+}
+
+func windowsBootIdentity(requireLength bool) (string, bool) {
+	var info bootEnvironmentInfo
+	var retLen uint32
+	if err := windows.NtQuerySystemInformation(windows.SystemBootEnvironmentInformation, unsafe.Pointer(&info), uint32(unsafe.Sizeof(info)), &retLen); err != nil {
+		return "", false
+	}
+	// Preserve the existing journal/notifier path; the new precise export
+	// additionally requires a complete native structure before using its GUID.
+	if (requireLength && retLen != uint32(unsafe.Sizeof(info))) || info.BootIdentifier == [16]byte{} {
+		return "", false
+	}
+	boot := formatWindowsGUID(info.BootIdentifier)
+	if !validText(boot, 256, true) {
+		return "", false
+	}
+	return boot, true
+}
+
+// WindowsPreciseBootSample uses the existing interrupt-time epoch; no coarse
+// fallback and no accuracy claim derived from its 100ns representation.
+func WindowsPreciseBootSample() (boot string, sec, nsec int64, ok bool) {
+	boot, ok = windowsBootIdentity(true)
+	if !ok || queryInterruptTimePrecise.Find() != nil {
+		return "", 0, 0, false
+	}
+	var t uint64
+	_, _, _ = queryInterruptTimePrecise.Call(uintptr(unsafe.Pointer(&t)))
+	if t == 0 {
+		return "", 0, 0, false
+	}
+	return boot, int64(t / 10_000_000), int64(t%10_000_000) * 100, true
 }
 
 func formatWindowsGUID(g [16]byte) string {
@@ -60,9 +85,10 @@ func formatWindowsGUID(g [16]byte) string {
 }
 
 var (
-	kernel32           = windows.NewLazySystemDLL("kernel32.dll")
-	queryInterruptTime = kernel32.NewProc("QueryInterruptTime")
-	getTickCount64     = kernel32.NewProc("GetTickCount64")
+	kernel32                  = windows.NewLazySystemDLL("kernel32.dll")
+	queryInterruptTimePrecise = kernel32.NewProc("QueryInterruptTimePrecise")
+	queryInterruptTime        = kernel32.NewProc("QueryInterruptTime")
+	getTickCount64            = kernel32.NewProc("GetTickCount64")
 )
 
 func windowsInterruptTime() (sec, nsec int64, ok bool) {

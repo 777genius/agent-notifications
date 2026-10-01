@@ -35,6 +35,9 @@ var (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "opencode-clock" {
+		os.Exit(runOpenCodeClock(os.Args[2:], os.Stdout))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "gemini-event" {
 		os.Exit(runGeminiEvent(os.Args[2:], os.Stdin, os.Stdout))
 	}
