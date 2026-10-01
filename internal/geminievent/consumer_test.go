@@ -234,6 +234,8 @@ func TestMissingTimestampAttemptsAreInvocationLocal(t *testing.T) {
 // enter a real sender payload; retry settings create extra permission attempts.
 func TestPermissionPrivatePayloadThroughExistingSender(t *testing.T) {
 	c, facts, deadline := consumerFixture(t)
+	// This boundary verifies transport privacy and retry behavior, not cache I/O.
+	facts.Timestamp = ""
 	c.Gate = testGate{channels: Channels{Webhook: true}}
 	facts.Event, facts.Subtype = geminisource.Notification, geminisource.ToolPermission
 	c.Config.Notifications.Webhook.Headers = map[string]string{"X-Private": "PRIVATE_CONFIG_HEADER"}
@@ -347,7 +349,9 @@ func TestAdmissionCapturesBudgetBeforeTypedSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cancel()
-	facts, err := geminisource.Decode(ctx, geminisource.AfterAgent, []byte(`{"session_id":"s","hook_event_name":"AfterAgent","timestamp":"2026-10-01T05:00:00Z"}`))
+	// A timestamp-free native input keeps the real typed-source chain while
+	// measuring admission time independently of cache filesystem latency.
+	facts, err := geminisource.Decode(ctx, geminisource.AfterAgent, []byte(`{"session_id":"s","hook_event_name":"AfterAgent"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
