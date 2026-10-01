@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -13,19 +14,34 @@ import (
 	"github.com/777genius/agent-notifications/internal/installruntime"
 )
 
-// Bind all fixture paths to bytes, modes and inodes, including directories and
-// locks. A status implementation that calls Apply/Recover must fail this check.
-func inspectTree(t *testing.T, base string) map[string]fs.FileInfo {
+// Bind all fixture paths to bytes, modes, write times and inodes, including
+// directories and locks. Windows also captures attributes and owner/group/DACL.
+// A status implementation that calls Apply/Recover must fail this check.
+type inspectPathSnapshot struct {
+	info     fs.FileInfo
+	security string
+	contents installruntime.Identity
+	link     string
+}
+
+func inspectTree(t *testing.T, base string) map[string]inspectPathSnapshot {
 	t.Helper()
-	entries := map[string]fs.FileInfo{}
-	err := filepath.WalkDir(base, func(path string, entry fs.DirEntry, err error) error {
+	entries := map[string]inspectPathSnapshot{}
+	err := filepath.WalkDir(base, func(path string, _ fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		info, err := entry.Info()
-		if err == nil {
-			entries[path] = info
+		info, security, err := inspectPathInfo(path)
+		if err != nil {
+			return err
 		}
+		state := inspectPathSnapshot{info: info, security: security}
+		if info.Mode().IsRegular() {
+			state.contents, err = installruntime.Fingerprint(path)
+		} else if info.Mode()&os.ModeSymlink != 0 {
+			state.link, err = os.Readlink(path)
+		}
+		entries[path] = state
 		return err
 	})
 	if err != nil {
@@ -34,35 +50,38 @@ func inspectTree(t *testing.T, base string) map[string]fs.FileInfo {
 	return entries
 }
 
+func inspectTreeDifference(before, after map[string]inspectPathSnapshot) error {
+	if len(before) != len(after) {
+		return errors.New("inspection created or removed fixture paths")
+	}
+	for path, want := range before {
+		got, ok := after[path]
+		if !ok {
+			return fmt.Errorf("inspection removed path %s", path)
+		}
+		if !os.SameFile(want.info, got.info) {
+			return fmt.Errorf("inspection replaced path %s", path)
+		}
+		if want.info.Mode() != got.info.Mode() || want.security != got.security {
+			return fmt.Errorf("inspection changed mode, attributes or security of %s", path)
+		}
+		if !want.info.ModTime().Equal(got.info.ModTime()) {
+			return fmt.Errorf("inspection changed write time of %s: %s -> %s", path, want.info.ModTime(), got.info.ModTime())
+		}
+		if want.contents != got.contents || want.link != got.link {
+			return fmt.Errorf("inspection changed contents or link of %s", path)
+		}
+	}
+	return nil
+}
+
 func inspectUnchanged(t *testing.T, ctx context.Context, r Request) (Inspection, error) {
 	t.Helper()
 	base := filepath.Dir(r.ControlRoot)
 	before := inspectTree(t, base)
-	identities := map[string]installruntime.Identity{}
-	for path, info := range before {
-		if info.Mode().IsRegular() {
-			id, err := installruntime.Fingerprint(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			identities[path] = id
-		}
-	}
 	result, err := Inspect(ctx, r)
-	after := inspectTree(t, base)
-	if len(before) != len(after) {
-		t.Fatal("inspection created or removed fixture paths")
-	}
-	for path, info := range before {
-		got, ok := after[path]
-		if !ok || !os.SameFile(info, got) || info.Mode() != got.Mode() || !info.ModTime().Equal(got.ModTime()) {
-			t.Fatalf("inspection changed path %s", path)
-		}
-		if want, ok := identities[path]; ok {
-			if got, e := installruntime.Fingerprint(path); e != nil || got != want {
-				t.Fatalf("inspection changed file %s: %v", path, e)
-			}
-		}
+	if change := inspectTreeDifference(before, inspectTree(t, base)); change != nil {
+		t.Fatal(change)
 	}
 	return result, err
 }
