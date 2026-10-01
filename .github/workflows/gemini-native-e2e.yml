@@ -15,6 +15,10 @@ on:
       - 'go.mod'
       - 'go.sum'
 
+concurrency:
+  group: gemini-native-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 

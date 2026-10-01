@@ -420,8 +420,8 @@ def run(args):
         module = test_artifact(value)
         modules[label + "_public_module_tree_sha256"] = g0.package_digest(module)
         modules[label + "_go_mod_sha256"] = sha(bounded_read(module / "go.mod"))
-    artifact_hash = sha(bounded_read(Path(args.binary), 64 * 1024 * 1024))
-    update_hash = sha(bounded_read(Path(args.update_binary), 64 * 1024 * 1024)) if args.update_binary else None
+    artifact_hash = sha(bounded_read(Path(args.binary), 32 * 1024 * 1024))
+    update_hash = sha(bounded_read(Path(args.update_binary), 32 * 1024 * 1024)) if args.update_binary else None
     require(not update_hash or update_hash != artifact_hash, "changed_update_requires_distinct_actual_artifact")
     active_hash = artifact_hash
     lab = g0.new_lab(args.lab_root)
@@ -618,6 +618,7 @@ def run(args):
         levels[platform]["native_cli/provider_substitute"] = "passed_implemented_scenarios"
     except Exception as exc:
         evidence["classification"] = str(exc) if isinstance(exc, Red) else "production_harness_error"
+        evidence["exception_type"] = type(exc).__name__
         raise
     finally:
         if terminal is not None:

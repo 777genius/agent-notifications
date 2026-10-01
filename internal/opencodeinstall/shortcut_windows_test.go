@@ -23,7 +23,10 @@ import (
 func TestWindowsGeminiShortcutLifecycleKeepsOpenCode(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	base := t.TempDir()
+	base, err := installruntime.CanonicalPath(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	home, root, runtimeRoot := filepath.Join(base, "profile with spaces"), filepath.Join(base, "control"), filepath.Join(base, "runtime")
 	executable, err := os.Executable()
 	if err != nil {
@@ -85,6 +88,7 @@ func TestWindowsGeminiShortcutLifecycleKeepsOpenCode(t *testing.T) {
 	if err := windowsShortcutReady(root, executable, home); err != nil {
 		t.Fatalf("Gemini mutation changed OpenCode readiness: %v", err)
 	}
+	runtimeRoot = l.Consumers[GeminiConsumerID].RuntimeRoot
 	gen := l.Generation
 	l, err = installruntime.Commit(ctx, installruntime.Request{
 		ControlRoot: root, RuntimeRoot: runtimeRoot, Owner: "existing-installer", ConsumerID: "gemini-notifications",

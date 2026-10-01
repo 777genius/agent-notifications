@@ -26,19 +26,19 @@ func readNativeSettings(path string) ([]byte, error) {
 	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
 	for _, part := range parts[:len(parts)-1] {
 		next, e := unix.Openat(fd, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
-		unix.Close(fd)
+		_ = unix.Close(fd)
 		if e != nil {
 			return nil, e
 		}
 		fd = next
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 	leaf, err := unix.Openat(fd, parts[len(parts)-1], unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, err
 	}
 	f := os.NewFile(uintptr(leaf), path)
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	st, err := f.Stat()
 	if err != nil || !st.Mode().IsRegular() || st.Size() > geminihooks.MaxSettingsBytes {
 		return nil, errors.New("bounded native settings required")

@@ -27,7 +27,10 @@ func TestRevokeBeforeCleanup(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			base := t.TempDir()
+			base, err := installruntime.CanonicalPath(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
 			root, runtimeRoot := filepath.Join(base, "control"), filepath.Join(base, "runtime")
 			receipt, binary := filepath.Join(root, "gemini-receipt.json"), filepath.Join(runtimeRoot, "sender")
 			l, err := installruntime.Commit(ctx, installruntime.Request{
@@ -39,26 +42,38 @@ func TestRevokeBeforeCleanup(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			// Use the existing shared native staging kernel, never execute a helper.
-			source := filepath.Join(base, "fixture.app")
-			helperRel := filepath.Join("Contents", "MacOS", "terminal-notifier-modern")
-			if err := os.MkdirAll(filepath.Dir(filepath.Join(source, helperRel)), 0700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(source, helperRel), []byte("inert test helper"), 0700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.MkdirAll(filepath.Join(root, "native"), 0700); err != nil {
-				t.Fatal(err)
-			}
-			native, err := installruntime.StageNative(ctx, root, source)
-			if err != nil {
-				t.Fatal(err)
+			// Revoke requires the exact recorded runtime, including Windows casing
+			// and Darwin's physical temporary-directory spelling.
+			runtimeRoot = l.Consumers[consumerID].RuntimeRoot
+			// Windows does not support staging a Mac native bundle. Its shared
+			// delivery contract uses ordinary ledger-owned files instead. Unix
+			// retains native-tree drift coverage; no manifest or helper is executed.
+			sibling := filepath.Join(runtimeRoot, "sibling-asset")
+			var native *installruntime.NativeChange
+			var helper string
+			if runtime.GOOS != "windows" {
+				source := filepath.Join(base, "fixture.app")
+				helperRel := filepath.Join("Contents", "MacOS", "terminal-notifier-modern")
+				if err := os.MkdirAll(filepath.Dir(filepath.Join(source, helperRel)), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(source, helperRel), []byte("inert test helper"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.MkdirAll(filepath.Join(root, "native"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				native, err = installruntime.StageNative(ctx, root, source)
+				if err != nil {
+					t.Fatal(err)
+				}
+				helper = filepath.Join(native.After.Path, helperRel)
 			}
 			enabled := true
 			l, err = installruntime.Commit(ctx, installruntime.Request{
 				ControlRoot: root, RuntimeRoot: runtimeRoot, Owner: "existing-installer", ConsumerID: "opencode-notifications",
-				Consumer:           installruntime.Consumer{Registration: filepath.Join(base, "sibling-plugin")},
+				Consumer:           installruntime.Consumer{Registration: sibling},
+				Files:              []installruntime.File{{Path: sibling, Data: []byte("inert sibling delivery asset"), Mode: 0600}},
 				ExpectedGeneration: &l.Generation, PolicyEnabled: &enabled, Native: native,
 				PolicyFields: map[string]json.RawMessage{"route": json.RawMessage(`{"geminiNotifications":{"desktop":true,"webhook":true},"openCodeNotifications":{"desktop":true,"webhook":false},"foreign":{"keep":true}}`)},
 			})
@@ -75,7 +90,11 @@ func TestRevokeBeforeCleanup(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				if err := os.WriteFile(filepath.Join(native.After.Path, helperRel), []byte("foreign damage"), 0700); err != nil {
+				if helper != "" {
+					if err := os.WriteFile(helper, []byte("foreign damage"), 0700); err != nil {
+						t.Fatal(err)
+					}
+				} else if err := os.WriteFile(sibling, []byte("foreign damage"), 0600); err != nil {
 					t.Fatal(err)
 				}
 				if _, err := installruntime.ReadPolicySnapshot(ctx, root); err == nil {
@@ -93,6 +112,18 @@ func TestRevokeBeforeCleanup(t *testing.T) {
 				if err == nil {
 					t.Fatal("revocation crossed an active effect lease")
 				}
+			}
+			assets := []string{receipt, binary, sibling}
+			if helper != "" {
+				assets = append(assets, helper)
+			}
+			before := map[string]installruntime.Identity{}
+			for _, path := range assets {
+				id, err := installruntime.Fingerprint(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				before[path] = id
 			}
 			if err := RevokeChannels(ctx, root, runtimeRoot); err != nil {
 				t.Fatal(err)
@@ -134,8 +165,10 @@ func TestRevokeBeforeCleanup(t *testing.T) {
 				release()
 				t.Fatal("loaded event command acquired a lease after revocation")
 			}
-			if _, err := os.Stat(filepath.Join(native.After.Path, helperRel)); err != nil {
-				t.Fatal("revocation removed shared helper")
+			for _, path := range assets {
+				if after, err := installruntime.Fingerprint(path); err != nil || after != before[path] {
+					t.Fatalf("revocation changed retained asset %s: %+v %v", path, after, err)
+				}
 			}
 		})
 	}
