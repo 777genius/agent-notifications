@@ -88,7 +88,7 @@ func TestGeminiEventTransportBlockedStdinChild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer stdin.Close()
+	defer func() { _ = stdin.Close() }()
 	var output, diagnostics bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &output, &diagnostics
 	started := time.Now()
