@@ -1041,7 +1041,7 @@ run_setup_stage() {
     log=$(mktemp "${TMPDIR:-/tmp}/bootstrap-output-XXXXXX") || return 1
     if "$@" > "$log" 2> "$log.stderr"; then
         # Preserve all stderr, including skipped/partial setup recovery advice.
-        grep -vE '^phase (prepare|preflight|hooks|agent-notify|complete)$' "$log.stderr" >&2 || true
+        grep -vE '^(phase (prepare|preflight|hooks|agent-notify|complete)|Setting up notifications: (prepare|preflight|hooks|agent notify|complete)\.\.\.)$' "$log.stderr" >&2 || true
         grep -iE '⚠|warning|skipped|not installed|manual setup|could not|keeping existing' "$log" || true
     else
         status=$?
@@ -1960,19 +1960,20 @@ setup_agent_notify_wizard() {
         : > "$wizard_result"
         echo "Warning: installation finished, but agent notification tool status could not be checked." >&2
     fi
-    CLAUDE_AGENT_NOTIFY_STATUS=$(wizard_tool_status "$wizard_result" claude)
-    CODEX_AGENT_NOTIFY_STATUS=$(wizard_tool_status "$wizard_result" codex)
+    CLAUDE_AGENT_NOTIFY_STATUS=$(wizard_tool_status "$wizard_result" claude "$AGENT_NOTIFY_REQUEST")
+    CODEX_AGENT_NOTIFY_STATUS=$(wizard_tool_status "$wizard_result" codex "$AGENT_NOTIFY_REQUEST")
     rm -f "$wizard_result"
     return 0
 }
 
 # --json is the stable operator contract. A successful preserved opt-out is
-# different from an installed tool; missing parsers/results stay explicitly unknown.
+# different from an installed tool. Inspect omits the mutation reason, so auto
+# supplies the preserve-existing intent; missing results stay explicitly unknown.
 wizard_tool_status() {
     local engine status=""
     engine=$(installer_runtime) || { printf '%s\n' 'setup completed; status not checked'; return 0; }
     if [ "$engine" = python3 ]; then
-        status=$(python3 -I - "$1" "$2" <<'PY_STATUS'
+        status=$(python3 -I - "$1" "$2" "${3:-}" <<'PY_STATUS'
 import json, sys
 try:
     result = json.load(open(sys.argv[1]))
@@ -1982,20 +1983,20 @@ try:
         if target.get('outcome') in ('completed', 'installed'):
             print('installed')
         elif target.get('outcome') == 'absent':
-            print('not installed (existing opt-out kept)' if target.get('reason') == 'preserved_existing_opt_out' else 'not installed')
+            print('not installed (existing opt-out kept)' if (target.get('reason') == 'preserved_existing_opt_out' or sys.argv[3] == 'auto') else 'not installed')
 except (ValueError, OSError, TypeError, AttributeError):
     pass
 PY_STATUS
 ) || status=""
     else
-        status=$(run_isolated_node - "$1" "$2" <<'JS_STATUS'
+        status=$(run_isolated_node - "$1" "$2" "${3:-}" <<'JS_STATUS'
 try {
     const r = JSON.parse(require('fs').readFileSync(process.argv[2], 'utf8'));
     const rows = (r.targets || []).filter(t => t.client === process.argv[3] && t.unit === 'agent-notify');
     if (rows.length === 1) {
         const t = rows[0];
         if (['completed', 'installed'].includes(t.outcome)) console.log('installed');
-        else if (t.outcome === 'absent') console.log(t.reason === 'preserved_existing_opt_out' ? 'not installed (existing opt-out kept)' : 'not installed');
+        else if (t.outcome === 'absent') console.log((t.reason === 'preserved_existing_opt_out' || process.argv[4] === 'auto') ? 'not installed (existing opt-out kept)' : 'not installed');
     }
 } catch (_) {}
 JS_STATUS

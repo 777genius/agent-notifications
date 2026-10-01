@@ -982,12 +982,13 @@ PY
 # Stage output is a public contract: success hides machine/binary banners but
 # preserves warnings and shell state; failure replays diagnostics and its code.
 (
-    emit_stage() { PLUGIN_ROOT=fixture-installed; printf 'Ready to use!\n{"generation":12}\n'; echo 'warning: fixture optional setup' >&2; }
+    emit_stage() { PLUGIN_ROOT=fixture-installed; printf 'Ready to use!\n{"generation":12}\n'; printf 'phase prepare\nSetting up notifications: agent notify...\n' >&2; echo 'warning: fixture optional setup' >&2; }
     run_setup_stage 'Installing fixture' emit_stage > "$SANDBOX/stage-ok.out" 2> "$SANDBOX/stage-ok.err"
     [ "$PLUGIN_ROOT" = fixture-installed ]
     grep -F 'Installing fixture...' "$SANDBOX/stage-ok.out"
     ! grep -E 'Ready to use|generation' "$SANDBOX/stage-ok.out"
     grep -F 'warning: fixture optional setup' "$SANDBOX/stage-ok.err"
+    ! grep -E 'phase prepare|Setting up notifications:' "$SANDBOX/stage-ok.err"
     emit_failure() { echo 'diagnostic stdout'; echo 'diagnostic stderr' >&2; return 3; }
     status=0
     run_setup_stage 'Failing fixture' emit_failure > "$SANDBOX/stage-fail.out" 2> "$SANDBOX/stage-fail.err" || status=$?
@@ -1013,8 +1014,10 @@ PY
 
 # Structured results distinguish a successful opt-out from an installed sibling.
 cat > "$SANDBOX/wizard-summary.json" <<'JSON_STATUS'
-{"outcome":"completed","targets":[{"client":"claude","unit":"agent-notify","outcome":"absent","reason":"preserved_existing_opt_out"},{"client":"codex","unit":"agent-notify","outcome":"installed"}]}
+{"outcome":"completed","targets":[{"client":"claude","unit":"agent-notify","outcome":"absent"},{"client":"codex","unit":"agent-notify","outcome":"installed"}]}
 JSON_STATUS
-[ "$(wizard_tool_status "$SANDBOX/wizard-summary.json" claude)" = 'not installed (existing opt-out kept)' ]
+[ "$(wizard_tool_status "$SANDBOX/wizard-summary.json" claude auto)" = 'not installed (existing opt-out kept)' ]
 [ "$(wizard_tool_status "$SANDBOX/wizard-summary.json" codex)" = installed ]
 [ "$(wizard_tool_status "$SANDBOX/wizard-summary.json" other)" = 'setup completed; status not checked' ]
+
+[ "$(wizard_tool_status "$SANDBOX/wizard-summary.json" claude true)" = 'not installed' ]
