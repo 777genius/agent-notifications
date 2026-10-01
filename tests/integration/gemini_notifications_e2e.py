@@ -688,6 +688,9 @@ def run(args):
         if hasattr(exc, "bridge_diagnostic"):
             evidence["bridge_failure"] = exc.bridge_diagnostic
         evidence["exception_type"] = type(exc).__name__
+        if "fixture" in locals():
+            evidence["provider_endpoints"] = {key: fixture.counts.get(key, 0) for key in
+                ("streamGenerateContent", "generateContent", "countTokens")}
         raise
     finally:
         if terminal is not None:
@@ -779,6 +782,10 @@ class PureChecks(unittest.TestCase):
         self.assertEqual(facts["startup_classification"], "public_runtime_global_missing")
         self.assertEqual(facts["stderr_sha256"], hashlib.sha256(err).hexdigest())
         self.assertNotIn("at /tmp", json.dumps(facts))
+        concatenated = b"An unexpected critical error occurred:Error: spawn missing-test-command ENOENT\n    at /tmp/TEST/cli.js:1:2\n"
+        startup = g0.version_probe(1, b"", concatenated)
+        self.assertEqual(startup["Node_error_codes"], ["ENOENT"])
+        self.assertEqual(startup["startup_error_line"], "Error: spawn missing-test-command ENOENT")
         private = b"Error: hook provider session text\n"
         self.assertNotIn("startup_error_line", g0.version_probe(1, b"", private))
         paths = b"Error: Cannot load /tmp/TEST profile/cli.js from https://example.invalid/file\n"

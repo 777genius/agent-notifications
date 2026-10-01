@@ -59,6 +59,7 @@ def version_probe(code, out, err, redactions=()):
     # One bounded Error header only; stack, source excerpt and all other lines
     # are excluded. Do not expose session/provider/hook text even in this probe.
     text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", err.decode("utf-8", "replace"))
+    text = text.replace("An unexpected critical error occurred:", "", 1)
     line = next((line.strip() for line in text.splitlines()
                  if re.match(r"^\s*(?:[A-Za-z]*Error)(?: \[[A-Z_]+\])?:", line)), "")
     if re.fullmatch(r"ReferenceError: (?:File|Blob|ReadableStream|fetch|crypto|navigator) is not defined", line):
@@ -116,6 +117,49 @@ def inside(p, root):
     return p == root or root in p.parents
 
 
+
+def private_windows_lab(root):
+    """Give this just-created TEST root a protected, inherited native DACL."""
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    api = ctypes.WinDLL("advapi32", use_last_error=True)
+    pointer = ctypes.c_void_p
+    kernel.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel.LocalFree.argtypes = (pointer,)
+    kernel.LocalFree.restype = pointer
+    api.OpenProcessToken.argtypes = (wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE))
+    api.GetTokenInformation.argtypes = (wintypes.HANDLE, ctypes.c_int, pointer, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD))
+    api.ConvertSidToStringSidW.argtypes = (pointer, ctypes.POINTER(pointer))
+    api.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD,
+                                                                       ctypes.POINTER(pointer), ctypes.POINTER(wintypes.DWORD))
+    api.SetFileSecurityW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, pointer)
+    token, sid_text, descriptor = wintypes.HANDLE(), pointer(), pointer()
+    try:
+        require(api.OpenProcessToken(kernel.GetCurrentProcess(), 0x0008, ctypes.byref(token)), "TEST_ACL_token_failed")
+        size = wintypes.DWORD()
+        api.GetTokenInformation(token, 1, None, 0, ctypes.byref(size))
+        require(0 < size.value < 65536, "TEST_ACL_token_size")
+        data = ctypes.create_string_buffer(size.value)
+        require(api.GetTokenInformation(token, 1, data, size.value, ctypes.byref(size)), "TEST_ACL_user_failed")
+        sid = ctypes.cast(data, ctypes.POINTER(pointer))[0]
+        require(api.ConvertSidToStringSidW(sid, ctypes.byref(sid_text)), "TEST_ACL_SID_failed")
+        current = ctypes.wstring_at(sid_text)
+        sddl = "D:P(A;OICI;FA;;;" + current + ")(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"
+        require(api.ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, 1, ctypes.byref(descriptor), None),
+                "TEST_ACL_descriptor_failed")
+        # DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION.
+        require(api.SetFileSecurityW(str(root), 0x80000004, descriptor), "TEST_ACL_apply_failed")
+    finally:
+        if descriptor:
+            kernel.LocalFree(descriptor)
+        if sid_text:
+            kernel.LocalFree(sid_text)
+        if token:
+            kernel.CloseHandle(token)
+
+
 def new_lab(value):
     p = physical(value, False)
     require(any(re.fullmatch(r"TEST(?:[-_].*)?", x) for x in p.parts), "TEST_root_required")
@@ -126,6 +170,8 @@ def new_lab(value):
     require(p.parent.is_dir(), "lab_parent_missing")
     require(not any((ancestor / ".git").exists() for ancestor in p.parents), "existing_repository_ancestor_forbidden")
     p.mkdir(mode=0o700)
+    if os.name == "nt":
+        private_windows_lab(p)
     (p / MARKER).write_text("owned disposable Gemini native TEST\n")
     for name in ("profile/.gemini", "tmp", "xdg/config", "xdg/cache", "xdg/data", "xdg/state", "an-control", "an-runtime"):
         (p / name).mkdir(parents=True, mode=0o700)
@@ -497,7 +543,7 @@ class Terminal:
         self.events, self.seen, self.exit = queue.Queue(), set(), None
         self.child_started = None
         self.stage, self.case, self.completed_cases = "starting", "plain", 0
-        self.bridge_errors, self.cleanup_errors = [], []
+        self.bridge_errors, self.cleanup_errors, self.diagnostics = [], [], set()
         self.graceful_requested = self.forced_requested = False
         bridge = Path(__file__).with_name("gemini_native_pty.cjs")
         self.p = subprocess.Popen([str(node), str(bridge)], cwd=lab / "profile", env=env,
@@ -530,9 +576,13 @@ class Terminal:
                 "native_child_started": self.child_started, "own_child_exit": self.exit,
                 "bridge_exit_code": self.p.poll(), "errors": self.bridge_errors,
                 "graceful_requested": self.graceful_requested, "forced_requested": self.forced_requested,
-                "cleanup_classifications": self.cleanup_errors[:4]}
+                "cleanup_classifications": self.cleanup_errors[:4], "native_diagnostics": sorted(self.diagnostics)}
 
     def receive(self, item):
+        if item.get("diagnostic") in ("auth_error", "startup_welcome", "startup_theme", "startup_trust",
+                "startup_update", "startup_model", "startup_terms", "startup_continue", "startup_error",
+                "prompt_seen", "turn_response_seen"):
+            self.diagnostics.add(item["diagnostic"])
         if "error" in item:
             facts = bridge_event_facts(item)
             if len(self.bridge_errors) < 4:
@@ -772,6 +822,9 @@ def main():
         manifest["exception_type"] = type(exc).__name__
         if hasattr(exc, "bridge_diagnostic"):
             manifest["bridge_failure"] = exc.bridge_diagnostic
+        if "fixture" in locals():
+            manifest["provider_endpoints"] = {key: fixture.counts.get(key, 0) for key in
+                ("streamGenerateContent", "generateContent", "countTokens")}
         raise
     finally:
         (lab / "evidence.json").write_text(json.dumps(manifest, indent=2) + "\n")
