@@ -20,6 +20,7 @@ import (
 type windowsPowerShellToastSession struct {
 	appID, controlRoot, executable string
 	requireOpenCodeShortcut        bool
+	trustedReady                   func(context.Context) error
 }
 
 const windowsToastPowerShell = `$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Runtime.WindowsRuntime; $xmlBytes=[Convert]::FromBase64String($env:AGENT_NOTIFICATIONS_TOAST_XML); $xmlText=[Text.Encoding]::UTF8.GetString($xmlBytes); $doc=[Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom.XmlDocument,ContentType=WindowsRuntime]::New(); $doc.LoadXml($xmlText); $toast=[Windows.UI.Notifications.ToastNotification,Windows.UI.Notifications,ContentType=WindowsRuntime]::New($doc); [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($env:AGENT_NOTIFICATIONS_TOAST_APP_ID).Show($toast)`
@@ -78,6 +79,24 @@ func NewOpenCodeWindowsToastDelivery(clock BootClock) *WindowsToastDelivery {
 	return &WindowsToastDelivery{Clock: clock, Open: openOpenCodeWindowsToast}
 }
 
+// NewTrustedWindowsToastDelivery receives identity and shortcut verification
+// only from trusted host composition. Native event/config text must never supply
+// appID. A missing identity or verifier denies delivery; no legacy fallback.
+func NewTrustedWindowsToastDelivery(clock BootClock, appID string, ready func(context.Context) error) *WindowsToastDelivery {
+	return &WindowsToastDelivery{Clock: clock, Open: func(ctx context.Context) (windowsToastSession, error) {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if appID == "" || ready == nil {
+			return nil, errors.New("trusted toast identity unavailable")
+		}
+		if _, err := resolveWindowsPowerShell(); err != nil {
+			return nil, err
+		}
+		return windowsPowerShellToastSession{appID: appID, trustedReady: ready}, nil
+	}}
+}
+
 func openOpenCodeWindowsToast(ctx context.Context) (windowsToastSession, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -104,6 +123,9 @@ func openOpenCodeWindowsToast(ctx context.Context) (windowsToastSession, error) 
 func (s windowsPowerShellToastSession) Ready(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if s.trustedReady != nil {
+		return s.trustedReady(ctx)
 	}
 	if s.requireOpenCodeShortcut {
 		return opencodeinstall.WindowsShortcutReady(s.controlRoot, s.executable)
