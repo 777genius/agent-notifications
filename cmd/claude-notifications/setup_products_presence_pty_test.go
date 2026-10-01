@@ -105,7 +105,7 @@ func TestSetupProductsScopedPresence(t *testing.T) {
 			var result bootstrapResult
 			if name == "invalid-override" {
 				result = f.terminal(nil)
-				if result.code != 2 || !strings.Contains(result.screen, "codex override:") {
+				if result.code != 2 || !strings.Contains(result.screen, "codex override:") || strings.Contains(result.screen, "[*]") {
 					t.Fatalf("invalid authority fell back: %+v", result)
 				}
 			} else {
@@ -113,18 +113,40 @@ func TestSetupProductsScopedPresence(t *testing.T) {
 				if result.code != 0 {
 					t.Fatalf("cancel: %+v", result)
 				}
+				for _, label := range []string{"Claude Code", "OpenCode", "Gemini CLI"} {
+					if !strings.Contains(result.screen, "[*] "+label+" (CLI present)") {
+						t.Fatalf("unrelated CLI lost its default: %s", result.screen)
+					}
+				}
+				wantDefaults := 3
+				if want == "present" {
+					wantDefaults = 4
+				}
+				if strings.Count(result.screen, "[*]") != wantDefaults {
+					t.Fatalf("wrong observed default set: %s", result.screen)
+				}
 				switch want {
 				case "present":
-					if !strings.Contains(result.screen, "Codex (CLI present)") {
+					if !strings.Contains(result.screen, "[*] Codex (CLI present)") {
 						t.Fatalf("usable executable not present: %s", result.screen)
 					}
 				case "absent":
-					if !strings.Contains(result.screen, "Codex (CLI not found in selected PATH)") {
+					if !strings.Contains(result.screen, "[ ] Codex (CLI not found in selected PATH)") {
 						t.Fatalf("absence gained authority: %s", result.screen)
 					}
 				default:
 					if !strings.Contains(result.screen, "codex:") || strings.Contains(result.screen, "Codex (CLI") {
 						t.Fatalf("unavailable executable became selectable: %s", result.screen)
+					}
+					reason := "PATH entry is not a usable regular executable"
+					switch name {
+					case "relative-PATH":
+						reason = "cannot run executable found relative to current directory"
+					case "cyclic-link":
+						reason = "too many levels"
+					}
+					if !strings.Contains(result.screen, reason) {
+						t.Fatalf("unavailable reason lost: %s", result.screen)
 					}
 				}
 			}
