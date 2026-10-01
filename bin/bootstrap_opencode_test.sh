@@ -173,7 +173,10 @@ for attempt in range(2):
 # the default config environment. The other profile must stay byte-identical.
 removal = next(line.removeprefix('Remove: ') for line in result.stdout.splitlines()
                if line.startswith('Remove: ') and 'setup-gemini' in line)
-assert shlex.split(removal) == [str(installed),'setup-gemini','remove','--control-root',str(control)], removal
+removal_args = shlex.split(removal)
+assert len(removal_args) == 5 and removal_args[1:4] == ['setup-gemini','remove','--control-root'], removal
+assert pathlib.Path(removal_args[0]).resolve() == installed.resolve(), removal
+assert pathlib.Path(removal_args[4]).resolve() == control.resolve(), removal
 other_config = lab/'different default TEST config'
 other_control = other_config/'agent-notifications'
 other_control.mkdir(parents=True)
