@@ -11,6 +11,6 @@
     "esbuild": "0.28.2"
   },
   "dependencies": {
-    "universal-agent-plugins-opencode-events": "0.1.0"
+    "universal-agent-plugins-opencode-events": "file:vendor/universal-agent-plugins-opencode-events-0.3.0.tgz"
   }
 }
