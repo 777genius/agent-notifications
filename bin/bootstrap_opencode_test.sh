@@ -8,6 +8,7 @@ esac
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-env.sh"
 test_env_enter "$0" "$@"
 set -euo pipefail
+trap 'printf "TEST OpenCode fixture failed: %s (status %s)\n" "$BASH_COMMAND" "$?" >&2' ERR
 [ "$#" -eq 1 ] || { echo "Usage: bash bin/bootstrap_opencode_test.sh /absolute/native/test-binary" >&2; exit 2; }
 TEST_BINARY="$1"
 [ -f "$TEST_BINARY" ] || exit 2
@@ -27,9 +28,21 @@ esac
 test_env_setup "$SANDBOX"
 # test-env.sh inherits PATH: retain only named tools, never host agent binaries.
 mkdir -p "$SANDBOX/trusted-tools"
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) trusted_shell_wrappers=true ;;
+    *) trusted_shell_wrappers=false ;;
+esac
 for tool in bash sh env cygpath python3 node curl wget tar gzip unzip zip mktemp rm cat cp mv chmod mkdir ln uname tr wc head cmp grep sed awk dirname basename find sort sha256sum shasum cut xargs sleep date stat diff touch readlink dd od go gcc cc pkg-config; do
     tool_path=$(type -P "$tool" 2>/dev/null || true)
-    [ -z "$tool_path" ] || ln -s "$tool_path" "$SANDBOX/trusted-tools/$tool"
+    [ -n "$tool_path" ] || continue
+    if [ "$trusted_shell_wrappers" = true ]; then
+        # MSYS may copy symlink targets. Keep native tools beside their DLLs
+        # while exposing only this finite allowlist through the TEST PATH.
+        printf '#!/bin/bash\nexec %q "$@"\n' "$tool_path" > "$SANDBOX/trusted-tools/$tool"
+        chmod +x "$SANDBOX/trusted-tools/$tool"
+    else
+        ln -s "$tool_path" "$SANDBOX/trusted-tools/$tool"
+    fi
 done
 export PATH="$SANDBOX/trusted-tools"
 

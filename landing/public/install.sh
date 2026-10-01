@@ -96,7 +96,7 @@ main() (
     if [ "$selector" = --product ] && { [ "$singleton" = gemini ] || [ "$singleton" = opencode ]; }; then
         [ -z "$route_seen" ] && [ "$json" -eq 0 ] || { echo "Observers use channel flags only." >&2; exit 1; }
     fi
-    set -- "${original_args[@]}"
+    set -- ${original_args[@]+"${original_args[@]}"}
     if [ -z "$selector" ] || { [ "$selector" = --product ] && [ "$channels" -eq 0 ] && { [ "$singleton" = opencode ] || [ "$singleton" = gemini ]; }; }; then
         pending=1
     fi

@@ -1,0 +1,45 @@
+name: Selector bootstrap E2E
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/selector-bootstrap-e2e.yml'
+      - 'cmd/claude-notifications/setup_products*'
+      - 'internal/agentnotify/setupwizard/**'
+      - 'scripts/selector*'
+      - 'bin/bootstrap.sh'
+      - 'bin/setup.sh'
+      - 'bin/bootstrap_opencode_test.sh'
+      - 'go.mod'
+      - 'go.sum'
+
+jobs:
+  selector:
+    name: Selector on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+      - name: Qualify native bootstrap in disposable profiles
+        run: bash scripts/selector_e2e.sh "$RUNNER_TEMP/TEST-selector-e2e"
+      - name: Qualify public loader and observer lifecycle
+        run: |
+          native_target=$(readlink bin/claude-notifications)
+          case "$native_target" in claude-notifications-darwin-arm64|claude-notifications-darwin-amd64) ;; *) exit 1 ;; esac
+          cp "$RUNNER_TEMP/TEST-selector-e2e/claude-notifications" "bin/$native_target"
+          bash bin/setup_test.sh
+      - name: Preserve native evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: selector-e2e-${{ matrix.os }}
+          path: ${{ runner.temp }}/TEST-selector-e2e
+          if-no-files-found: error

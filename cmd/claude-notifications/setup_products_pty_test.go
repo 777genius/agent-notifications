@@ -393,6 +393,17 @@ func TestBootstrapSelectorPTY(t *testing.T) {
 			if row.public {
 				f.publicJourney()
 			}
+			if row.mode == "rich" && runtime.GOOS == "darwin" {
+				// A stuck Go reader should preserve its stack in native evidence
+				// before the outer watchdog kills the whole TEST process group.
+				wrapper := filepath.Join(f.project, "TEST selector watchdog.py")
+				f.write(wrapper, []byte("import signal, subprocess, sys\np = subprocess.Popen(sys.argv[1:])\ntry:\n code = p.wait(timeout=5)\nexcept subprocess.TimeoutExpired:\n p.send_signal(signal.SIGQUIT)\n code = p.wait(timeout=5)\nsys.exit(code)\n"), 0600)
+				f.script = strings.Replace(f.script, `"$_CONFIG_HELPER" setup-products "$operation" "$@" <&3`,
+					`python3 `+shellQuote(wrapper)+` "$_CONFIG_HELPER" setup-products "$operation" "$@" <&3`, 1)
+				if row.public {
+					f.write(filepath.Join(f.assets, "bootstrap.sh"), []byte(f.script), 0600)
+				}
+			}
 			before := f.snapshot()
 			r := f.terminal([]string{"--ui=" + row.mode}, promptStep{row.control, row.key, nil})
 			if r.code != 0 {
@@ -720,6 +731,25 @@ func TestBootstrapStaleSelectedFacts(t *testing.T) {
 					t.Fatal("refused admission changed the existing binding")
 				}
 			} else {
+				if r.code != 0 {
+					// Report the actual admission error and projections only from
+					// this disposable fixture; no user profile is observed here.
+					for _, entry := range f.env {
+						key, value, ok := strings.Cut(entry, "=")
+						if ok {
+							t.Setenv(key, value)
+						}
+					}
+					raw, _ := json.Marshal(f.confirmedIntent())
+					var intent confirmedBootstrapIntent
+					if err := json.Unmarshal(raw, &intent); err != nil {
+						t.Fatal(err)
+					}
+					ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+					current, generation, err := setupwizard.ObserveBootstrapMCP(ctx, intentWizardRequest(intent))
+					cancel()
+					t.Logf("TEST MCP admission generation=%d error=%v expected=%+v current=%+v", generation, err, intent.MCP.Projection, current)
+				}
 				requireBootstrapSuccess(t, r)
 				f.assertPortable("claude")
 				if f.ownership().Generation <= hooksGeneration {
