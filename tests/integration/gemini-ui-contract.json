@@ -1,0 +1,7 @@
+{
+  "permission_pattern": "Allow once[\\s\\S]*No, suggest changes \\(esc\\)",
+  "approve": "\r",
+  "deny": "\u001b[B\u001b[B\r",
+  "cancel": "\u001b",
+  "source_sha256": "34054c9b546feab9f6c176508c68e8451d50d39bd00e4001fe556ce737274377"
+}

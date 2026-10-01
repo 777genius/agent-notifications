@@ -1,0 +1,675 @@
+#!/usr/bin/env python3
+"""Credential-free Gemini 0.62.0 TEST fixture; native execution is orchestrator-only.
+
+Red: missing CLI-emitted events/UI, nonneutral stdout, unsafe roots, wrong TEST
+file effects, request/output overflow, or unconfirmed child shutdown. G0 uses
+our recorder. G5 may reuse Fixture/Terminal/exercise with production-installed
+hooks and its own delivery observer; a recorder run never claims G5 completion.
+"""
+import argparse
+import hashlib
+import http.server
+import json
+import os
+from pathlib import Path
+import queue
+import re
+import shlex
+import socket
+import signal
+import subprocess
+import sys
+import threading
+import time
+from urllib.parse import urlsplit
+
+VERSION = "0.62.0"
+SOURCE = "b460678f3db508407554afd604cc9d6635becb2a"
+LIMIT = 1024 * 1024
+MARKER = ".an-gemini-TEST"
+CASES = ("plain", "equal", "approve", "deny", "cancel", "recovery")
+
+
+class Red(Exception):
+    pass
+
+
+def require(ok, classification):
+    if not ok:
+        raise Red(classification)
+
+
+def digest(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def physical(value, exists=True):
+    p = Path(value)
+    require(p.is_absolute(), "absolute_path_required")
+    resolved = p.resolve(strict=exists)
+    require(p == resolved, "physical_path_required")
+    require(not any(x in str(p) for x in ("$", "`", "%", "\n", "\r", '"')), "unsupported_path")
+    return resolved
+
+
+def inside(p, root):
+    return p == root or root in p.parents
+
+
+def new_lab(value):
+    p = physical(value, False)
+    require(any(re.fullmatch(r"TEST(?:[-_].*)?", x) for x in p.parts), "TEST_root_required")
+    require(not p.exists(), "lab_must_be_new")
+    require(not inside(p, Path.home().resolve()), "inherited_home_forbidden")
+    repo = Path(__file__).resolve().parents[2]
+    require(not inside(p, repo) and not inside(p, Path.cwd().resolve()), "repository_cwd_forbidden")
+    require(p.parent.is_dir(), "lab_parent_missing")
+    require(not any((ancestor / ".git").exists() for ancestor in p.parents), "existing_repository_ancestor_forbidden")
+    p.mkdir(mode=0o700)
+    (p / MARKER).write_text("owned disposable Gemini native TEST\n")
+    for name in ("profile/.gemini", "tmp", "xdg/config", "xdg/cache", "xdg/data", "xdg/state", "an-control", "an-runtime"):
+        (p / name).mkdir(parents=True, mode=0o700)
+    for name in ("profile/.env", "profile/.gemini/.env", "profile/GEMINI.md"):
+        (p / name).write_text("")
+    # Actual empty git repository, without invoking git or changing history.
+    gitdir = p / "profile/.git"
+    (gitdir / "objects").mkdir(parents=True)
+    (gitdir / "refs/heads").mkdir(parents=True)
+    (gitdir / "HEAD").write_text("ref: refs/heads/TEST\n")
+    (gitdir / "config").write_text("[core]\n\trepositoryformatversion = 0\n\tbare = false\n")
+    for name in ("system.json", "defaults.json", "trusted.json"):
+        (p / name).write_text("{}\n")
+    (p / "events.jsonl").write_text("")
+    return p
+
+
+def minimal_env(lab, node, shell, system_root=None):
+    profile = str(lab / "profile")
+    bins = [str(shell.parent), str(node.parent), str(Path(sys.executable).resolve().parent)]
+    env = {"HOME": profile, "USERPROFILE": profile, "GEMINI_CLI_HOME": profile,
+           "XDG_CONFIG_HOME": str(lab / "xdg/config"), "XDG_CACHE_HOME": str(lab / "xdg/cache"),
+           "XDG_DATA_HOME": str(lab / "xdg/data"), "XDG_STATE_HOME": str(lab / "xdg/state"),
+           "TMPDIR": str(lab / "tmp"), "TMP": str(lab / "tmp"), "TEMP": str(lab / "tmp"),
+           "GEMINI_CLI_SYSTEM_SETTINGS_PATH": str(lab / "system.json"),
+           "GEMINI_CLI_SYSTEM_DEFAULTS_PATH": str(lab / "defaults.json"),
+           "GEMINI_CLI_TRUSTED_FOLDERS_PATH": str(lab / "trusted.json"),
+           "GEMINI_API_KEY": "an-gemini-test-not-a-secret", "GEMINI_FORCE_FILE_STORAGE": "true", "TERM": "xterm-256color"}
+    if os.name == "nt":
+        require(system_root is not None and shell.name.lower() == "pwsh.exe", "Windows_requires_explicit_pwsh_and_SystemRoot")
+        env.update(SystemRoot=str(physical(system_root)), ComSpec=str(shell))
+        bins.append(str(Path(system_root) / "System32"))
+    else:
+        require(shell.name == "bash", "Unix_requires_bash")
+        bins += ["/usr/bin", "/bin"]
+        env.update(LANG="C.UTF-8", LC_ALL="C.UTF-8")
+    env["PATH"] = os.pathsep.join(dict.fromkeys(bins))
+    return env
+
+
+def package_digest(directory):
+    tree, size = hashlib.sha256(), 0
+    files = sorted(p for p in directory.rglob("*") if p.is_file())
+    require(len(files) <= 6000, "package_file_limit")
+    for file in files:
+        require(not file.is_symlink(), "package_symlink_unqualified")
+        size += file.stat().st_size
+        require(size <= 512 * LIMIT, "package_size_limit")
+        tree.update(str(file.relative_to(directory)).replace(os.sep, "/").encode() + b"\0")
+        with file.open("rb") as stream:
+            content = hashlib.sha256()
+            while block := stream.read(65536):
+                content.update(block)
+        tree.update(content.digest())
+    return tree.hexdigest()
+
+
+def cli_identity(executable, install_root):
+    root = physical(install_root)
+    require((root / MARKER).is_file(), "explicit_TEST_installation_marker_missing")
+    require(any(re.fullmatch(r"TEST(?:[-_].*)?", x) for x in root.parts), "TEST_installation_required")
+    require(not inside(root, Path.home().resolve()) and not inside(root, Path(__file__).resolve().parents[2]), "borrowed_installation_forbidden")
+    exe = physical(executable)
+    require(inside(exe, root) and exe.is_file(), "CLI_outside_TEST_installation")
+    for parent in exe.parents:
+        if not inside(parent, root):
+            break
+        package = parent / "package.json"
+        if package.is_file():
+            data = json.loads(package.read_text())
+            if data.get("name") == "@google/gemini-cli":
+                require(data.get("version") == VERSION, "wrong_CLI_version")
+                require(data.get("optionalDependencies", {}).get("@lydell/node-pty") == "1.1.0", "wrong_PTY_pin")
+                return {"version": VERSION, "source_commit": SOURCE,
+                        "package_json_sha256": digest(package.read_bytes()), "installed_package_tree_sha256": package_digest(parent),
+                        "bundle_sha256": digest(exe.read_bytes())}
+    raise Red("CLI_package_identity_missing")
+
+
+def response(parts):
+    return {"candidates": [{"index": 0, "content": {"role": "model", "parts": parts}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 8, "candidatesTokenCount": 8, "totalTokenCount": 16}}
+
+
+class Fixture:
+    """One bounded loopback provider/capture, reusable for built candidate G5.
+
+    No outbound client, hook invocation, hook stdin injection, or transcript log.
+    A caller may supply a fixed-payload capture_validator for actual G5 delivery.
+    """
+    def __init__(self, lab, capture_validator=None):
+        self.lab, self.capture_validator = lab, capture_validator
+        self.lock = threading.Lock()
+        self.case, self.calls, self.requests = "plain", 0, 0
+        self.counts, self.deliveries, self.error = {}, [], None
+        self.server = self.thread = self.connection = None
+        self.closed = threading.Event()
+
+    def arm(self, case):
+        require(case in CASES, "unknown_case")
+        (self.lab / "case.json").write_text(json.dumps({"case": case}))
+        with self.lock:
+            self.case, self.calls = case, 0
+
+    def answer(self, path, body):
+        with self.lock:
+            self.requests += 1
+            require(self.requests <= 128, "provider_request_limit")
+            if path == "/capture":
+                require(self.capture_validator is not None, "capture_contract_missing")
+                # Validator returns ONLY a fixed allowlisted classification.
+                result = self.capture_validator(body)
+                require(result in ("task_complete", "permission_request"), "capture_contract_failed")
+                self.deliveries.append(result)
+                return {}, False
+            match = re.fullmatch(r"/(?:v1beta|v1)/models/[A-Za-z0-9_.-]+:(streamGenerateContent|generateContent|countTokens)", path)
+            require(match is not None, "unsupported_provider_endpoint")
+            method = match[1]
+            self.counts[method] = self.counts.get(method, 0) + 1
+            if method == "countTokens":
+                return {"totalTokens": 16}, False
+            require(isinstance(body.get("contents"), list), "provider_contents_missing")
+            # Nonstream ancillary calls do not consume the interactive stream script.
+            if method == "generateContent":
+                require(self.counts[method] <= 16, "ancillary_generation_limit")
+                return response([{"text": "TEST turn finished."}]), False
+            self.calls += 1
+            require(self.calls <= 4, "unexpected_agent_loop")
+            if self.case in ("approve", "deny", "cancel") and self.calls == 1:
+                target = self.lab / "profile" / ("effect-" + self.case + ".txt")
+                return response([{"functionCall": {"name": "write_file", "args": {
+                    "file_path": str(target), "content": "owned TEST effect\n"}}}]), True
+            return response([{"text": "TEST turn finished."}]), True
+
+    def __enter__(self):
+        fixture = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def setup(self):
+                super().setup()
+                self.connection.settimeout(3)
+                fixture.connection = self.connection
+
+            def finish(self):
+                try:
+                    super().finish()
+                finally:
+                    fixture.connection = None
+
+            def log_message(self, *_):
+                pass
+
+            def do_POST(self):
+                self.connection.settimeout(3)
+                try:
+                    require(not self.headers.get("Transfer-Encoding"), "chunked_request_not_supported")
+                    size = int(self.headers.get("Content-Length", "0"))
+                    require(0 < size <= LIMIT, "provider_body_limit")
+                    raw = self.rfile.read(size)
+                    require(len(raw) == size, "incomplete_provider_body")
+                    body = json.loads(raw)
+                    require(isinstance(body, dict), "provider_object_required")
+                    result, stream = fixture.answer(urlsplit(self.path).path, body)
+                    data = json.dumps(result).encode()
+                    if stream:
+                        data = b"data: " + data + b"\n\n"
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream" if stream else "application/json")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    self.wfile.write(data)
+                except Exception as exc:
+                    fixture.error = str(exc) if isinstance(exc, Red) else "provider_protocol_error"
+                    self.close_connection = True
+
+        class Server(http.server.HTTPServer):
+            def handle_error(self, *_):
+                fixture.error = "server_request_error"  # Never emit a raw traceback.
+
+        # Single server thread, socket deadline, capped request count; no thread per request.
+        self.server = Server(("127.0.0.1", 0), Handler)
+        self.server.timeout = 0.2
+        def serve():
+            while not self.closed.is_set():
+                try:
+                    self.server.handle_request()
+                except OSError:
+                    if not self.closed.is_set():
+                        self.error = "server_socket_error"
+        self.thread = threading.Thread(target=serve, daemon=True)
+        self.thread.start()
+        self.url = "http://127.0.0.1:" + str(self.server.server_port)
+        return self
+
+    def __exit__(self, *_):
+        self.closed.set()
+        connection = self.connection
+        if connection is not None:
+            try:
+                connection.shutdown(socket.SHUT_RDWR)
+                connection.close()
+            except OSError:
+                pass
+        self.server.server_close()
+        self.thread.join(4)
+        require(not self.thread.is_alive(), "server_shutdown_unconfirmed")
+
+
+def bounded_process(argv, data, cwd, env, timeout):
+    """Bound both streams without ever writing raw child output to disk/stdout."""
+    p = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.PIPE,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=os.name != "nt")
+    chunks, overflow = [bytearray(), bytearray()], threading.Event()
+    stopping = threading.Event()
+
+    def reader(stream, index):
+        fd = stream.fileno()
+        try:
+            while not stopping.is_set():
+                part = os.read(fd, 4096)
+                if not part:
+                    return
+                if len(chunks[index]) + len(part) > 65536:
+                    overflow.set()
+                    p.kill()
+                    return
+                chunks[index].extend(part)
+        except OSError:
+            if not stopping.is_set():
+                overflow.set()
+
+    readers = [threading.Thread(target=reader, args=(s, i), daemon=True) for i, s in enumerate((p.stdout, p.stderr))]
+    for t in readers:
+        t.start()
+    def writer():
+        try:
+            view = memoryview(data)
+            fd = p.stdin.fileno()
+            while view and not stopping.is_set():
+                written = os.write(fd, view[:4096])
+                view = view[written:]
+        except (BrokenPipeError, OSError):
+            pass
+        finally:
+            p.stdin.close()
+
+    input_thread = threading.Thread(target=writer, daemon=True)
+    input_thread.start()
+    try:
+        code = p.wait(timeout=timeout)
+        input_thread.join(1)
+        require(not input_thread.is_alive(), "child_stdin_timeout")
+        for t in readers:
+            t.join(1)
+        require(not overflow.is_set() and not any(t.is_alive() for t in readers), "child_output_limit")
+        return code, bytes(chunks[0]), bytes(chunks[1])
+    finally:
+        if os.name != "nt":
+            try:
+                os.killpg(p.pid, signal.SIGKILL)  # Only our new session/process group.
+            except ProcessLookupError:
+                pass
+        elif p.poll() is None:
+            p.kill()
+        p.wait(timeout=2)
+        stopping.set()
+        input_thread.join(1)
+        for t in readers:
+            t.join(1)
+        for s in (p.stdin, p.stdout, p.stderr):
+            s.close()
+
+
+def record_hook(args):
+    lab = physical(args.record_root)
+    require((lab / MARKER).is_file() and Path.cwd().resolve() == lab / "profile", "hook_root_mismatch")
+    result = {"event": args.event, "valid": False, "neutral": False}
+    try:
+        # Deadline also works on Windows pipes; this daemon has no external state.
+        incoming = queue.Queue()
+        def read_payload():
+            data = bytearray()
+            try:
+                while len(data) <= LIMIT:
+                    part = os.read(0, min(4096, LIMIT + 1 - len(data)))
+                    if not part:
+                        break
+                    data.extend(part)
+                incoming.put(bytes(data))
+            except OSError:
+                incoming.put(b"")
+        threading.Thread(target=read_payload, daemon=True).start()
+        raw = incoming.get(timeout=1)
+        require(len(raw) <= LIMIT, "hook_payload_limit")
+        value = json.loads(raw)
+        require(isinstance(value, dict) and value.get("hook_event_name") == args.event, "hook_event_mismatch")
+        require(isinstance(value.get("session_id"), str) and value["session_id"], "hook_session_missing")
+        require(value.get("cwd") == str(lab / "profile"), "hook_cwd_mismatch")
+        require(isinstance(value.get("timestamp"), str) and value["timestamp"], "hook_timestamp_missing")
+        if args.event == "AfterAgent":
+            require(type(value.get("stop_hook_active")) is bool, "hook_stop_flag_missing")
+            result["stop_hook_active"] = value["stop_hook_active"]
+        else:
+            require(value.get("notification_type") == "ToolPermission", "hook_subtype_mismatch")
+            result["subtype"] = "ToolPermission"
+        shell = re.fullmatch(r"(bash|powershell):([0-9][0-9A-Za-z.()_-]*)", args.native_shell or "")
+        require(shell is not None, "actual_hook_shell_missing")
+        result.update(valid=True, session_sha256=digest(value["session_id"].encode()),
+                      timestamp_sha256=digest(value["timestamp"].encode()), shell=shell[1], shell_version=shell[2])
+        commands = json.loads((lab / "probe.json").read_text())
+        if args.event in commands:
+            require(os.name != "nt", "Windows_probe_process_tree_unqualified")
+            child_env = minimal_env(lab, physical(args.node_executable), physical(args.hook_shell), args.system_root)
+            port = int((lab / "provider-port").read_text())
+            require(0 < port < 65536, "provider_port_invalid")
+            child_env["GOOGLE_GEMINI_BASE_URL"] = "http://127.0.0.1:" + str(port)
+            code, out, err = bounded_process(commands[args.event], raw, lab / "profile", child_env, 3)
+            result.update(neutral=code == 0 and out.strip() == b"{}", exit_zero=code == 0,
+                          stdout_sha256=digest(out), stderr_empty=not err)
+        else:
+            result["neutral"] = True
+        result["case"] = json.loads((lab / "case.json").read_text())["case"]
+    except Exception as exc:
+        result["classification"] = str(exc) if isinstance(exc, Red) else "hook_protocol_error"
+    finally:
+        os.close(0)  # Our hook stdin only; raw reader has no buffered-I/O finalizer lock.
+    fd = os.open(lab / "events.jsonl", os.O_WRONLY | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        os.write(fd, (json.dumps(result, separators=(",", ":")) + "\n").encode())
+    finally:
+        os.close(fd)
+    print("{}", flush=True)  # Advisory even when a red classification was recorded.
+
+
+def install_test_hooks(lab, commands, shell, node, system_root=None):
+    (lab / "probe.json").write_text(json.dumps(commands))
+    hooks = {}
+    for event in ("AfterAgent", "Notification"):
+        argv = [str(Path(sys.executable).resolve()), str(Path(__file__).resolve()), "--record-root", str(lab), "--event", event,
+                "--node-executable", str(node), "--hook-shell", str(shell)]
+        if system_root:
+            argv += ["--system-root", str(physical(system_root))]
+        if os.name == "nt":
+            command = "& " + " ".join("'" + x.replace("'", "''") + "'" for x in argv)
+            command += ' --native-shell "powershell:$($PSVersionTable.PSVersion.ToString())"'
+        else:
+            command = shlex.join(argv) + ' --native-shell "bash:${BASH_VERSION}"'
+        group = {"hooks": [{"name": "an-TEST-" + event, "type": "command", "command": command, "timeout": 5000}]}
+        if event == "Notification":
+            group["matcher"] = "ToolPermission"
+        hooks[event] = [group]
+    settings = {"hooks": hooks, "hooksConfig": {"enabled": True, "disabled": [], "notifications": False},
+                "general": {"enableAutoUpdate": False, "enableAutoUpdateNotification": False, "enableNotifications": False},
+                "privacy": {"usageStatisticsEnabled": False},
+                "telemetry": {"enabled": False, "logPrompts": False, "useCollector": False, "useCliAuth": False},
+                "advanced": {"ignoreLocalEnv": True}, "security": {"auth": {"selectedType": "gateway", "useExternal": True}, "disableYoloMode": True, "disableAlwaysAllow": True},
+                "context": {"includeDirectoryTree": False, "memoryBoundaryMarkers": [], "includeDirectories": []},
+                "model": {"name": "gemini-2.5-flash"}, "tools": {"useRipgrep": False, "core": ["write_file"], "confirmationRequired": ["write_file"], "allowed": [], "disableLLMCorrection": True},
+                "skills": {"enabled": False}, "mcpServers": {}}
+    path = lab / "profile/.gemini/settings.json"
+    path.write_text(json.dumps(settings, indent=2) + "\n")
+    return path
+
+
+class Terminal:
+    """Node bridge emits classifications only; native PTY text stays in bounded RAM."""
+    def __init__(self, node, executable, install_root, lab, env, ui, timeout):
+        self.events, self.seen, self.exit = queue.Queue(), set(), None
+        self.child_started = None
+        bridge = Path(__file__).with_name("gemini_native_pty.cjs")
+        self.p = subprocess.Popen([str(node), str(bridge)], cwd=lab / "profile", env=env,
+                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                  start_new_session=os.name != "nt")
+        def reader():
+            try:
+                while line := self.p.stdout.readline(4097):
+                    require(len(line) <= 4096 and line.endswith(b"\n"), "bridge_output_limit")
+                    self.events.put(json.loads(line))
+            except Exception:
+                self.events.put({"error": "bridge_protocol_error"})
+            self.events.put({"closed": True})
+        threading.Thread(target=reader, daemon=True).start()
+        try:
+            self.send({"op": "start", "node": str(node), "executable": str(executable), "installRoot": str(install_root),
+                   "cwd": str(lab / "profile"), "env": env, "permissionPattern": ui["permission_pattern"],
+                   "timeoutMs": int(timeout * 1000)})
+            self.identity = self.wait("ready", 10)
+        except Exception:
+            self.close(graceful=False)
+            raise
+
+    def send(self, message):
+        self.p.stdin.write((json.dumps(message) + "\n").encode())
+        self.p.stdin.flush()
+
+    def write_line(self, text):
+        # A text+Return burst is interpreted as a paste by the native input box.
+        self.send({"op": "write", "data": text})
+        time.sleep(0.15)
+        self.send({"op": "write", "data": "\r"})
+
+    def menu_choice(self, keys):
+        for token in re.findall(r"\x1b\[[AB]|.", keys, re.DOTALL):
+            self.send({"op": "write", "data": token})
+            time.sleep(0.05)
+
+    def drain(self):
+        while not self.events.empty():
+            item = self.events.get_nowait()
+            require("error" not in item and "closed" not in item, item.get("error", "bridge_closed"))
+            if "diagnostic" in item:
+                print(json.dumps({"native_diagnostic": item["diagnostic"]}), flush=True)
+            if "permission" in item:
+                self.seen.add(item["permission"])
+            if "exit" in item:
+                self.exit = item["exit"]
+
+    def wait(self, key, seconds, cleanup=False):
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            try:
+                item = self.events.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            if "native_child_started" in item:
+                self.child_started = item["native_child_started"]
+            if "exit" in item:
+                self.exit = item["exit"]
+            if "ready" in item:
+                self.child_started = True
+            if cleanup and "error" in item:
+                continue
+            if cleanup and "closed" in item and self.child_started is False:
+                return None
+            require("error" not in item and "closed" not in item, item.get("error", "bridge_closed"))
+            if key in item:
+                return item[key]
+        raise Red("bridge_" + key + "_timeout")
+
+    def close(self, graceful=True):
+        failure = None
+        try:
+            if graceful and self.exit is None:
+                self.write_line("/quit")
+                self.exit = self.wait("exit", 8)
+            if graceful:
+                require(self.exit is not None and self.exit["code"] == 0, "native_exit_nonzero")
+        except Exception as exc:
+            failure = exc
+        finally:
+            if self.exit is None and self.child_started is not False:
+                try:
+                    self.send({"op": "stop"})
+                    self.exit = self.wait("exit", 4, cleanup=True)
+                except Exception:
+                    failure = Red("native_shutdown_unconfirmed")
+            try:
+                self.p.stdin.close()
+                self.p.wait(timeout=5)
+            except (BrokenPipeError, subprocess.TimeoutExpired):
+                self.p.kill()
+                self.p.wait(timeout=2)
+                failure = Red("bridge_shutdown_timeout")
+            finally:
+                self.p.stdout.close()
+        if failure:
+            raise failure
+        require(self.exit is not None or self.child_started is False, "native_shutdown_unconfirmed")
+        if graceful:
+            require(not self.exit.get("forced"), "forced_native_shutdown")
+
+
+def observations(lab):
+    raw = (lab / "events.jsonl").read_bytes()
+    require(len(raw) <= 256 * 1024, "observation_limit")
+    rows = [json.loads(x) for x in raw.splitlines()]
+    require(len(rows) <= 128, "observation_count_limit")
+    require(all(x.get("valid") and x.get("neutral") for x in rows), "invalid_or_nonneutral_hook")
+    return rows
+
+
+def exercise(lab, fixture, terminal, ui, observer=observations):
+    """G5 reuses this agent/UI/tool driver; observer must inspect native evidence."""
+    results = []
+    for case in CASES:
+        if case != "plain":
+            fixture.arm(case)
+            terminal.send({"op": "watch", "case": case})
+            terminal.write_line("AN_TEST_" + ("PLAIN" if case in ("equal", "recovery") else case.upper()))
+        end, acted, completion, permission = time.monotonic() + 25, False, False, False
+        cancelled_at = None
+        while time.monotonic() < end:
+            terminal.drain()
+            require(terminal.exit is None, "native_exited_during_case")
+            require(fixture.error is None, fixture.error or "provider_error")
+            rows = [x for x in observer(lab) if x.get("case") == case]
+            permission = any(x["event"] == "Notification" for x in rows)
+            if case in ("approve", "deny", "cancel") and permission and case in terminal.seen and not acted:
+                terminal.menu_choice(ui[case])
+                acted = True
+                if case in ("deny", "cancel"):
+                    cancelled_at = time.monotonic()
+            completion = any(x["event"] == "AfterAgent" for x in rows)
+            if completion and (case not in ("approve", "deny", "cancel") or acted):
+                break
+            if cancelled_at and time.monotonic() - cancelled_at >= 4:
+                break  # Absence is observed for this bounded window, never synthesized.
+            time.sleep(0.05)
+        require(completion or case in ("deny", "cancel") and acted, "AfterAgent_missing_or_timeout")
+        if case in ("approve", "deny", "cancel"):
+            require(permission and case in terminal.seen and acted, "actual_permission_UI_missing")
+            target = lab / "profile" / ("effect-" + case + ".txt")
+            effect = target.is_file() and target.read_bytes() == b"owned TEST effect\n"
+            require(effect if case == "approve" else not target.exists(), "wrong_TEST_tool_effect")
+        results.append({"case": case, "AfterAgent_seen": completion, "permission_UI_seen": permission and case in terminal.seen,
+                        "tool_effect_verified": True if case in ("approve", "deny", "cancel") else None})
+        time.sleep(0.3)  # Hook fires before the UI's next input render.
+    rows = observer(lab)
+    plain = [x for x in rows if x.get("case") in ("plain", "equal") and x["event"] == "AfterAgent"]
+    require(len(plain) == 2 and all(x.get("stop_hook_active") is False for x in plain), "equal_turn_observations_missing")
+    require(len({x["session_sha256"] for x in plain}) == 1, "equal_turn_session_changed")
+    return results, rows
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    for flag in ("gemini-executable", "node-executable", "cli-install-root", "lab-root", "hook-shell", "system-root", "ui-contract", "probe-command", "record-root", "event", "native-shell"):
+        parser.add_argument("--" + flag)
+    parser.add_argument("--timeout", type=int, default=180)
+    args = parser.parse_args()
+    if args.record_root:
+        require(args.event in ("AfterAgent", "Notification"), "unknown_hook_selector")
+        record_hook(args)
+        return
+    require(all((args.gemini_executable, args.node_executable, args.cli_install_root, args.lab_root, args.hook_shell, args.ui_contract)), "explicit_native_inputs_required")
+    require(60 <= args.timeout <= 240, "timeout_out_of_bounds")
+    args.gemini_executable = str(physical(args.gemini_executable))
+    args.cli_install_root = str(physical(args.cli_install_root))
+    identity = cli_identity(args.gemini_executable, args.cli_install_root)
+    node, shell = physical(args.node_executable), physical(args.hook_shell)
+    ui_path = physical(args.ui_contract)
+    require(inside(ui_path, physical(args.cli_install_root)) and ui_path.stat().st_size <= 16384, "UI_contract_must_be_in_TEST_installation")
+    ui = json.loads(ui_path.read_text())
+    require(set(ui) == {"permission_pattern", "approve", "deny", "cancel", "source_sha256"}, "UI_contract_fields")
+    require(re.fullmatch(r"[0-9a-f]{64}", ui["source_sha256"]) is not None, "UI_source_hash_missing")
+    require(all(isinstance(ui[k], str) and 0 < len(ui[k]) <= 32 for k in ("approve", "deny", "cancel")), "UI_keys_invalid")
+    require(all(re.fullmatch(r"(?:[1-9]|\x1b\[[AB])*\r", ui[k]) for k in ("approve", "deny")), "UI_only_menu_navigation_allowed")
+    require(ui["cancel"] in ("\x1b", "\x03"), "UI_cancel_key_invalid")
+    require(isinstance(ui["permission_pattern"], str) and 0 < len(ui["permission_pattern"]) <= 512, "UI_pattern_invalid")
+    re.compile(ui["permission_pattern"])
+    require(os.name != "nt" or not args.probe_command, "Windows_probe_process_tree_unqualified")
+    commands = json.loads(args.probe_command) if args.probe_command else {}
+    require(isinstance(commands, dict) and set(commands) <= {"AfterAgent", "Notification"}, "probe_event_map_required")
+    for argv in commands.values():
+        require(isinstance(argv, list) and argv and all(isinstance(x, str) for x in argv), "probe_fixed_argv_required")
+        target = physical(argv[0])
+        require(any((p / MARKER).is_file() for p in target.parents), "probe_TEST_artifact_marker_missing")
+        require(not inside(target, Path.home().resolve()) and not inside(target, Path(__file__).resolve().parents[2]), "borrowed_probe_forbidden")
+    physical(str(Path(sys.executable).resolve()))
+    physical(str(Path(__file__).resolve()))
+    lab = new_lab(args.lab_root)
+    manifest = {"evidence_level": "native_cli/provider_substitute", "native_execution": "failed",
+                "CLI": identity, "fixture_sha256": digest(Path(__file__).read_bytes()),
+                "PTY_bridge_sha256": digest(Path(__file__).with_name("gemini_native_pty.cjs").read_bytes()),
+                "node_executable_sha256": digest(node.read_bytes()),
+                "platform": sys.platform, "python_version": sys.version.split()[0],
+                "probe_executable_sha256": {event: digest(Path(argv[0]).read_bytes()) for event, argv in commands.items()}, "settings_lifecycle": "TEST_direct_settings_only",
+                "G5": "unverified_requires_production_install_and_delivery", "OS_API": "unverified", "visual": "unverified",
+                "retry_resume": "unqualified", "continuation": "unqualified_no_blocking_hook_installed", "nested": "unqualified"}
+    try:
+        env = minimal_env(lab, node, shell, args.system_root)
+        settings = install_test_hooks(lab, commands, shell, node, args.system_root)
+        before = settings.read_bytes()
+        fixture = Fixture(lab)
+        with fixture:
+            env["GOOGLE_GEMINI_BASE_URL"] = fixture.url
+            (lab / "provider-port").write_text(str(fixture.server.server_port))
+            code, out, _ = bounded_process([str(node), args.gemini_executable, "--version"], b"", lab / "profile", env, 12)
+            require(code == 0 and out.strip() == VERSION.encode(), "native_version_mismatch")
+            fixture.arm("plain")
+            terminal = Terminal(node, args.gemini_executable, args.cli_install_root, lab, env, ui, args.timeout)
+            try:
+                results, rows = exercise(lab, fixture, terminal, ui)
+            finally:
+                terminal.close()
+            require(settings.read_bytes() == before, "unexpected_settings_mutation")
+            manifest.update(native_execution="passed_scenarios", PTY=terminal.identity,
+                            provider_endpoints=fixture.counts, cases=results, observations=rows,
+                            event_counts={event: sum(row["event"] == event for row in rows) for event in ("AfterAgent", "Notification")},
+                            event_categories=["AfterAgent", "Notification:ToolPermission"],
+                            settings_sha256=digest(before), UI_source_sha256=ui["source_sha256"],
+                            own_child_exit=terminal.exit)
+    except Exception as exc:
+        manifest["classification"] = str(exc) if isinstance(exc, Red) else "harness_execution_error"
+        raise
+    finally:
+        (lab / "evidence.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        print(json.dumps({"native_execution": manifest["native_execution"], "evidence": "<TEST>/evidence.json", "G5": manifest["G5"]}))
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as exc:
+        print(json.dumps({"red": str(exc) if isinstance(exc, Red) else "harness_error"}), file=sys.stderr)
+        sys.exit(1)
