@@ -263,9 +263,10 @@ def run(args):
         extension = ".exe" if os.name == "nt" else ""
         shutil.copyfile(binary, evidence_dir / ("claude-notifications-" + args.platform + "-" + args.arch + extension))
         # A second real link from the same source qualifies replacement without
-        # inventing a version or mutating executable bytes. Object cache is shared.
+        # inventing a version or mutating executable bytes. Both are stripped for
+        # the installer's established 32 MiB bound; object cache is shared.
         updated_binary = root / ("claude-notifications-update" + extension)
-        command("build_update", [go, "build", "-trimpath", "-buildvcs=true", "-o", updated_binary,
+        command("build_update", [go, "build", "-trimpath", "-buildvcs=true", "-ldflags=-s -w -buildid=gemini-native-update", "-o", updated_binary,
                                  "./cmd/claude-notifications"], timeout=300)
         update_metadata = command("actual_update_metadata", [go, "version", "-m", updated_binary])
         evidence["update_binary"] = {"physical_path": str(updated_binary), "sha256": sha(updated_binary),

@@ -32,8 +32,9 @@ including real readonly inspect after install and remove. No fake hooks,
 synthetic production executable or injected hook payload qualifies delivery.
 
 The wrapper also links an actual second binary from the same clean source and
-ordinary public modules, retaining debug data instead of stripping it. Cached
-objects avoid a second compilation. Both linked identities and distinct hashes
+ordinary public modules, using a separate real linker build ID. Both artifacts
+are stripped to honor the installer's existing 32 MiB bound. Cached objects avoid
+a second compilation. Both linked identities and distinct hashes
 are recorded and the second artifact qualifies update within the same live
 native session. Both actual binaries are uploaded for interactive qualification.
 Interrupted recovery, continuation, resume/restart and nested agents retain
