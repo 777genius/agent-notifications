@@ -3462,27 +3462,25 @@ func plantWizardCLIPendingIntent(t *testing.T, ctx context.Context, control, run
 func plantWizardCLIPendingJournal(t *testing.T, controlRoot string) {
 	t.Helper()
 	owned := filepath.Join(filepath.Dir(controlRoot), "uap", "managed")
-	staging := filepath.Join(owned, ".agentplugins-staging-pending")
+	opID := "wizard-pending-op"
+	staging := filepath.Join(owned, ".agentplugins-staging-"+opID)
 	if err := os.MkdirAll(staging, 0700); err != nil {
 		t.Fatal(err)
 	}
-	opID := "wizard-pending-op"
 	ops := filepath.Join(filepath.Dir(controlRoot), "uap", "state", "operations")
 	manager := dirswap.Manager{JournalDir: ops, Fault: func(phase string) error {
 		if phase == dirswap.PhaseBackupPending {
-			return errors.New("simulated crash")
+			return errors.New("fixture: leave pending journal")
 		}
 		return nil
 	}}
-	if _, err := manager.Apply(context.Background(), dirswap.Input{
+	receipt, err := manager.Apply(context.Background(), dirswap.Input{
 		OperationID: opID, ClientBindingID: "client-binding-1", Sequence: 1,
 		OwnedBase: owned, ActivePath: filepath.Join(owned, "plugin"), StagingPath: staging,
 		RequireAbsent: true,
-	}); err == nil {
-		t.Fatal("expected pending directory swap")
-	}
-	if _, err := os.Lstat(filepath.Join(ops, opID+".json")); err != nil {
-		t.Fatalf("pending directory swap journal: %v", err)
+	})
+	if err == nil || receipt.OperationID != opID {
+		t.Fatalf("create pending journal: %+v %v", receipt, err)
 	}
 }
 

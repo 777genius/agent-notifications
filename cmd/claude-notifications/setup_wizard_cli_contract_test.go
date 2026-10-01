@@ -153,6 +153,8 @@ func TestSetupWizardInspectReportsDiscoveredMCP(t *testing.T) {
 		t.Fatal(err)
 	}
 	codexHome := filepath.Join(root, "codex")
+	t.Setenv("CODEX_HOME", filepath.Join(root, "env-codex")+string(filepath.Separator))
+	t.Setenv("CLAUDE_CONFIG_DIR", "relative-claude")
 	if err := os.MkdirAll(codexHome, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -372,10 +374,46 @@ func TestParseSetupWizardResolvesEnvOnce(t *testing.T) {
 	}
 }
 
-func TestParseSetupWizardRejectsRelativeEnvProfile(t *testing.T) {
+func TestParseSetupWizardIgnoresRelativeEnvProfiles(t *testing.T) {
 	t.Setenv("CODEX_HOME", "relative-codex")
-	if _, _, err := parseSetupWizard([]string{"--action", "inspect"}); err == nil {
-		t.Fatal("relative CODEX_HOME accepted")
+	t.Setenv("CLAUDE_CONFIG_DIR", "relative-claude")
+	t.Setenv("HOME", t.TempDir())
+	explicit := filepath.Join(t.TempDir(), "explicit")
+	for _, args := range [][]string{
+		{"--action", "inspect"},
+		{"--action", "inspect", "--codex-home", explicit, "--claude-config", explicit},
+	} {
+		req, _, err := parseSetupWizard(args)
+		if err != nil {
+			t.Fatalf("relative snapshots blocked %v: %v", args, err)
+		}
+		if req.EnvCodexHome != "" || req.EnvClaudeConfig != "" {
+			t.Fatalf("relative snapshot or HOME fallback retained: %+v", req)
+		}
+		if len(args) > 2 && (req.CodexHome != explicit || req.ClaudeConfig != explicit) {
+			t.Fatalf("explicit profiles lost: %+v", req)
+		}
+	}
+}
+
+func TestParseSetupWizardCleansEnvSnapshotsKeepsExplicitPathsStrict(t *testing.T) {
+	envCodex := filepath.Join(t.TempDir(), "env-codex")
+	envClaude := filepath.Join(t.TempDir(), "env-claude")
+	t.Setenv("CODEX_HOME", envCodex+string(filepath.Separator))
+	t.Setenv("CLAUDE_CONFIG_DIR", envClaude+string(filepath.Separator))
+	req, _, err := parseSetupWizard([]string{"--action", "inspect"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.EnvCodexHome != envCodex || req.EnvClaudeConfig != envClaude || req.CodexHome != "" || req.ClaudeConfig != "" {
+		t.Fatalf("trailing separator snapshots: %+v", req)
+	}
+	for _, flag := range []string{"package", "plugin-root", "control-root", "runtime-root", "global-config", "codex-home", "claude-config", "client-executable", "helper", "scope-root", "mcp-config", "claude-mcp-config", "claude-executable", "codex-executable"} {
+		for _, bad := range []string{"relative", envCodex + string(filepath.Separator), envCodex + string(filepath.Separator) + ".." + string(filepath.Separator) + "other"} {
+			if _, _, err := parseSetupWizard([]string{"--action", "inspect", "--" + flag, bad}); err == nil {
+				t.Fatalf("accepted noncanonical explicit --%s %q", flag, bad)
+			}
+		}
 	}
 }
 

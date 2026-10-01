@@ -3,8 +3,7 @@ module github.com/777genius/agent-notifications
 go 1.25.8
 
 require (
-	git.sr.ht/~jackmordaunt/go-toast v1.1.2
-	github.com/777genius/plugin-kit-ai/cli v0.0.0-20260920103526-9f0d0cdb8fe8
+	github.com/777genius/plugin-kit-ai/cli v0.0.0-20260930053012-236889b1c082
 	github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.0
 	github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20260930053012-236889b1c082
 	github.com/777genius/plugin-kit-ai/sdk v1.2.0
@@ -24,6 +23,7 @@ require (
 )
 
 require (
+	git.sr.ht/~jackmordaunt/go-toast v1.1.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dlclark/regexp2 v1.12.0 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect

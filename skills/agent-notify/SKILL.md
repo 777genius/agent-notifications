@@ -5,7 +5,7 @@ description: Send an Agent Notifications desktop notification when the user requ
 
 Use the Agent Notifications plugin's `notify` tool. Installation and notification permissions must already be configured. If availability is unclear, use its read-only `notification_status`; a configured route does not prove that the OS will display a banner.
 
-Notify for an actionable question, a blocker requiring the user's help, or a useful milestone. Include the task name in a short title and make the body useful without exposing credentials or private source text on the lock screen. Do not send an alert for every internal step, poll, or notification result.
+Notify during ongoing work when an actionable question, a blocker requiring the user's help, or a useful milestone warrants it. Continue the task after the MCP call when possible. Include the task name in a short title and make the body useful without exposing credentials or private source text on the lock screen. Do not send an alert for every internal step, poll, or notification result.
 
 Choose `attention` for needed user input, `progress` for an intermediate milestone, and `info` for an informational result. Sending a notification does not mean the task is complete.
 
@@ -13,15 +13,15 @@ Send literal content and a stable, event-specific `request_id`. Reuse that ID an
 
 ```json
 {
-  "title": "Notification plugin: review needed",
-  "body": "The implementation is ready for your choice in this task.",
+  "title": "Installer task: input needed",
+  "body": "The Windows setup is ready for a test profile. Which profile should I use?",
   "category": "attention",
   "request_id": "492456bb-3be4-440d-9dcd-bb3324e06c48",
-  "navigation": "required"
+  "navigation": "none"
 }
 ```
 
-Keep `navigation=required` when a click must return to this task. Use `best_effort` or `none` only when an informational alert without exact navigation satisfies the user's request. Never silently downgrade a required return to the task. When the user has explicitly configured setup with `enable --navigation none --allow-unknown-caller true --allow-caller-asserted false`, send suitable informational alerts with `navigation: "none"`; this needs no Codex app and promises no exact Claude terminal navigation. Default-on configure passes those consent flags explicitly; the parser does not imply them. Caller-asserted context still requires separate consent. These flags are stored under route but grant no navigation target and never admit known remote/headless callers. Do not infer locality or session identity from Claude tool metadata. Setup none does not change the tool default of required, and a failed required request must never trigger a silent downgrade. The client supplies the origin: do not put a chat ID, URL, executable, app path, or shell command in tool arguments, or infer a session from the working directory, active window, or MCP process environment.
+For an informational desktop alert, explicitly set `navigation: "none"`. It does not promise a click back to this chat. Keep `navigation=required` when a click must return to this task, and never silently downgrade a failed required request. The tool's default remains `required`, so omitting `navigation` is not equivalent to this example. `best_effort` is available only when an alert without exact navigation still satisfies the request. The user must have configured the route and consent for `none`; default-on configure passes `--navigation none --allow-unknown-caller true --allow-caller-asserted false` explicitly. The parser does not imply that consent. Caller-asserted context requires separate consent. These flags grant no navigation target and never admit known remote/headless callers. Do not infer locality or session identity from Claude tool metadata. The client supplies the origin: do not put a chat ID, URL, executable, app path, or shell command in tool arguments, or infer a session from the working directory, active window, or MCP process environment.
 
 Interpret the receipt rather than assuming that a successful tool call means delivery:
 

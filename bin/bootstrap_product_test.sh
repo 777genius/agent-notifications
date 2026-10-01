@@ -94,6 +94,28 @@ select_product --product codex --navigation none --allow-unknown-caller true --a
 PRODUCT=""; CONFIGURE_ARGS=(); CONFIGURE_NOTIFICATIONS=true
 select_product --product claude
 [ "${CONFIGURE_ARGS[*]}" = "--navigation none --allow-unknown-caller true --allow-caller-asserted false --preserve-policy" ]
+cat > "$SANDBOX/configure-parser" <<'EOF'
+#!/bin/bash
+preserve=0
+policy=0
+enabled=0
+for arg in "$@"; do
+    [ "$arg" != --preserve-policy ] || preserve=$((preserve + 1))
+    [ "$arg" != --policy-only ] || policy=$((policy + 1))
+    [ "$arg" != --preserve-enabled ] || enabled=$((enabled + 1))
+done
+[ "$preserve" -eq "$EXPECTED_PRESERVE" ] && [ "$policy" -eq 1 ] && [ "$enabled" -eq 1 ]
+EOF
+chmod +x "$SANDBOX/configure-parser"
+(
+    CONFIGURE_BINARY="$SANDBOX/configure-parser"
+    PRODUCT=claude
+    export EXPECTED_PRESERVE=1
+    configure_agent_policy portable
+    export EXPECTED_PRESERVE=0
+    CONFIGURE_ARGS=(--navigation none --allow-unknown-caller true --allow-caller-asserted false)
+    configure_agent_policy portable
+)
 for tag in v1.42.0 v1.43.2 v2.0.0; do
     BOOTSTRAP_RELEASE_TAG="$tag"
     BOOTSTRAP_RELEASE_COMMIT="$TEST_RELEASE_COMMIT"
@@ -218,8 +240,7 @@ cli_has_setup_wizard "$wizard" || { echo "wizard-cli missing wizard"; exit 1; }
 read -r _os _arch < <(bootstrap_release_os_arch)
 case "$_os" in linux|darwin|windows) ;; *) echo "unexpected os $_os"; exit 1 ;; esac
 case "$_arch" in amd64|arm64) ;; *) echo "unexpected arch $_arch"; exit 1 ;; esac
-_portable_stage="$SANDBOX/portable-stage"
-mkdir -p "$_portable_stage" "$SANDBOX/portable-src"
+mkdir -p "$SANDBOX/portable-src"
 _asset="agent-notify-portable-${_os}-${_arch}.zip"
 printf 'portable-zip-fixture' > "$SANDBOX/portable-src/$_asset"
 python3 -I - "$SANDBOX/portable-src" "$_asset" <<'PY'
@@ -229,12 +250,35 @@ digest = hashlib.sha256((root/name).read_bytes()).hexdigest()
 (root/'checksums.txt').write_text(digest+'  '+name+'\n')
 PY
 BOOTSTRAP_TAG=v1.43.0
-_CONFIG_STAGE="$_portable_stage"
 fetch_bootstrap_file() { cp "$SANDBOX/portable-src/$(basename "$1")" "$2"; }
 acquire_wizard_portable_asset
-[ "$WIZARD_PACKAGE_ROOT" = "$_portable_stage/$_asset" ] || { echo "portable asset path $WIZARD_PACKAGE_ROOT"; exit 1; }
+[ "$WIZARD_PACKAGE_ROOT" = "$_PORTABLE_STAGE/$_asset" ] || { echo "portable asset path $WIZARD_PACKAGE_ROOT"; exit 1; }
+rm -rf "$_PORTABLE_STAGE"
+_PORTABLE_STAGE=""
+mkdir -p "$SANDBOX/temp" "$SANDBOX/config-stage"
+printf 'preflight-state' > "$SANDBOX/config-stage/baseline"
+printf '%s\n' '#!/bin/sh' 'if [ "$1 $2" = "setup-notifications --help" ]; then echo "--policy-only --preserve-enabled"; exit 0; fi' 'exit 1' > "$SANDBOX/fail-wizard"
+chmod +x "$SANDBOX/fail-wizard"
+(
+    set +e
+    export TMPDIR="$SANDBOX/temp"
+    _CONFIG_STAGE="$SANDBOX/config-stage"
+    CONFIGURE_BINARY="$SANDBOX/fail-wizard"
+    PLUGIN_ROOT="$SANDBOX/runtime"
+    PRODUCT=claude
+    CONFIGURE_ARGS=()
+    configure_agent_policy() { return 0; }
+    bootstrap_abs_command() { return 1; }
+    install_cleanup_traps
+    setup_agent_notify_wizard > "$SANDBOX/retry.log" 2>&1
+    [ "$?" -ne 0 ]
+)
+_retry_package=$(sed -n 's/^  Verified package retained: //p' "$SANDBOX/retry.log")
+[ -f "$_retry_package" ] || { echo "retry package removed: $_retry_package"; exit 1; }
+[ ! -e "$SANDBOX/config-stage" ] || { echo 'preflight state retained with portable asset'; exit 1; }
+grep -F -- "Verified package retained: $_retry_package" "$SANDBOX/retry.log" >/dev/null
+grep -F -- "Use the wizard's retry or next resume command above" "$SANDBOX/retry.log" >/dev/null
 BOOTSTRAP_TAG=""
-_CONFIG_STAGE=""
 WIZARD_PACKAGE_ROOT=""
 # setup_marketplace self-heals a marketplace declared under a retired repo
 # name, but leaves an unrelated source conflict alone.
@@ -320,7 +364,7 @@ mkdir -p "$PLUGIN_ROOT/portable-package"
 printf '{}' > "$PLUGIN_ROOT/portable-package/plugin.json"
 CONFIGURE_BINARY="$SANDBOX/capture-wizard"
 export WIZARD_CAPTURE="$SANDBOX/wizard-args"
-printf '%s\n' '#!/bin/bash' 'printf "%s\n" "$@" > "$WIZARD_CAPTURE"' > "$CONFIGURE_BINARY"
+printf '%s\n' '#!/bin/bash' 'if [ "$1 $2" = "setup-notifications --help" ]; then echo "--policy-only --preserve-enabled"; exit 0; fi' 'printf "%s\n" "$@" > "$WIZARD_CAPTURE"' > "$CONFIGURE_BINARY"
 chmod +x "$CONFIGURE_BINARY"
 configure_agent_policy() { return 0; }
 bootstrap_abs_command() { return 1; }
@@ -705,6 +749,45 @@ def reset_case():
         d.mkdir(parents=True, exist_ok=True)
     trace.write_text('')
 def init_events(): return [e for e in events() if e[:2]==['config','init']]
+# Real HTTP/checksum acquisition and public shell orchestration must emit clean,
+# physical staging paths. A symlinked TMPDIR ending in / used to produce // in
+# --package, rejected by the real Go wizard before any installation action.
+if os.name != 'nt':
+    reset_case(); request_paths.clear()
+    temp_root=sandbox/'physical temp'; temp_root.mkdir()
+    temp_alias=sandbox/'temp alias'; temp_alias.symlink_to(temp_root, target_is_directory=True)
+    release=web/'download/v2.0.0'
+    original_payload=(release/asset_name).read_bytes()
+    original_checksums=(release/'checksums.txt').read_bytes()
+    wizard_payload=capable.replace('setup-notifications', 'setup-notifications wizard', 1).replace("if args[0]=='setup-notifications':", "if args[:2]==['setup-notifications','--help']:\n    print('--policy-only --preserve-enabled'); sys.exit()\nif args[0]=='setup-notifications':", 1).replace('v1.42.0', 'v2.0.0').encode('utf-8')
+    portable_name='agent-notify-portable-'+asset_os+'-'+asset_arch+'.zip'
+    portable_payload=b'verified portable argv fixture'
+    (release/asset_name).write_bytes(wizard_payload)
+    (release/portable_name).write_bytes(portable_payload)
+    (release/'checksums.txt').write_text(
+        hashlib.sha256(wizard_payload).hexdigest()+'  '+asset_name+'\n'+
+        hashlib.sha256(portable_payload).hexdigest()+'  '+portable_name+'\n')
+    try:
+        run(['--product','codex'], extra={'BOOTSTRAP_RELEASE_TAG':'v2.0.0', 'TMPDIR':str(temp_alias)+'/'})
+        es=events()
+        wizard_args=next(e for e in es if e[:2]==['setup-notifications','wizard'])
+        package=wizard_args[wizard_args.index('--package')+1]
+        assert package == os.path.normpath(package) == os.path.realpath(package), package
+        assert pathlib.Path(package).parent.parent == temp_root.resolve(), package
+        assert pathlib.Path(package).name == portable_name
+        for e in es:
+            if e[:1]==['setup-codex']:
+                bundle=e[e.index('--plugin-root')+1]
+                assert bundle == os.path.realpath(bundle), bundle
+            if e[:3]==['config','installer','bootstrap']:
+                for staging_path in (e[3], e[10]):
+                    assert staging_path == os.path.realpath(staging_path), staging_path
+        assert '/download/v2.0.0/'+portable_name in request_paths
+        assert not list(temp_root.iterdir()), 'canonical staging cleanup failed'
+    finally:
+        (release/asset_name).write_bytes(original_payload)
+        (release/'checksums.txt').write_bytes(original_checksums)
+        (release/portable_name).unlink()
 for product in ['claude','codex','both']:
     reset_case(); request_paths.clear()
     run(['--product',product])

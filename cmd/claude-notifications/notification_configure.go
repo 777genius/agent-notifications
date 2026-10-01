@@ -27,6 +27,8 @@ type notificationConfigureRequest struct {
 	Route             *notifysetup.Route
 	RequestPermission bool
 	PreservePolicy    bool
+	PreserveEnabled   bool
+	PolicyOnly        bool
 }
 type notificationConfigureDependencies struct {
 	Home, ClaudeHome, BundleRoot, ControlRoot string
@@ -171,20 +173,21 @@ func configureNotifications(ctx context.Context, request notificationConfigureRe
 	}
 	enabled := true
 	setupRequest := notifysetup.Request{ExpectedGeneration: result.Generation, Enabled: &enabled, Route: request.Route}
-	// Bootstrap defaults seed fresh installs; they do not replace saved consent,
-	// routing, or an explicit opt-out during the later portable handoff.
-	if request.PreservePolicy {
+	// Automatic defaults seed policy. Explicit routes may replace consent while
+	// the portable handoff preserves an existing enablement decision.
+	if request.PreservePolicy || request.PreserveEnabled {
 		policy, err := installruntime.ReadPolicySnapshot(ctx, deps.ControlRoot)
 		if err != nil {
 			return result, err
 		}
-		// Preserve every existing policy decision, including an explicit
-		// enabled=false document that has no route field.
+		// An explicit enabled=false document needs no route to remain disabled.
 		_, routeConfigured := policy.Fields["route"]
 		_, enabledConfigured := policy.Fields["enabled"]
 		if routeConfigured || enabledConfigured {
 			setupRequest.Enabled = nil
-			setupRequest.Route = nil
+			if request.PreservePolicy {
+				setupRequest.Route = nil
+			}
 		}
 	}
 	if e = notifysetup.Inspect(ctx, options, setupRequest, prepared); e != nil {
@@ -197,66 +200,68 @@ func configureNotifications(ctx context.Context, request notificationConfigureRe
 	if inventory == nil {
 		inventory = inspectNotificationInventory
 	}
-	for _, provider := range []registration.Provider{registration.Codex, registration.Claude} {
-		if request.Provider != "both" && request.Provider != string(provider) {
-			continue
-		}
-		home := deps.Home
-		path := filepath.Join(home, ".claude.json")
-		if provider == registration.Codex {
-			home = request.CodexHome
-			if home == "" {
-				home = filepath.Join(deps.Home, ".codex")
+	if !request.PolicyOnly {
+		for _, provider := range []registration.Provider{registration.Codex, registration.Claude} {
+			if request.Provider != "both" && request.Provider != string(provider) {
+				continue
 			}
-			path = filepath.Join(home, "config.toml")
-		} else if deps.ClaudeHome != "" {
-			home = deps.ClaudeHome
-			path = filepath.Join(home, ".claude.json")
-		}
-		if !configurePhysical(home) || !configurePhysical(path) {
-			return result, fail("physical_path_required")
-		}
-		inventoryHome := home
-		if provider == registration.Claude && deps.ClaudeHome == "" {
-			inventoryHome = filepath.Join(deps.Home, ".claude")
-		}
-		inv, e := inventory(ctx, provider, inventoryHome)
-		if e != nil {
-			return result, fail("inventory_unknown")
-		}
-		if inv.State != "clear" {
-			return result, fail("inventory_" + inv.State)
-		}
-		r := clientsetup.Request{ControlRoot: deps.ControlRoot, RuntimeRoot: primary, Command: command, ConfigPath: path, Provider: provider, Mode: clientsetup.Managed, ExpectedGeneration: result.Generation}
-		facts, e := clientsetup.Inspect(ctx, r)
-		if e != nil {
-			return result, e
-		}
-		if provider == registration.Codex {
-			destination := filepath.Join(home, "skills", "agent-notify", "SKILL.md")
-			if inv.Skill {
-				absentSkills = append(absentSkills, destination)
-				if facts.SkillProjected {
-					return result, fail("skill_collision")
+			home := deps.Home
+			path := filepath.Join(home, ".claude.json")
+			if provider == registration.Codex {
+				home = request.CodexHome
+				if home == "" {
+					home = filepath.Join(deps.Home, ".codex")
 				}
-				if _, e := os.Lstat(destination); !os.IsNotExist(e) {
-					return result, fail("skill_collision")
-				}
-			} else {
-				r.SkillProjection = &clientsetup.SkillProjection{SourcePath: filepath.Join(primary, "skills", "agent-notify", "SKILL.md"), DestinationPath: destination}
+				path = filepath.Join(home, "config.toml")
+			} else if deps.ClaudeHome != "" {
+				home = deps.ClaudeHome
+				path = filepath.Join(home, ".claude.json")
 			}
-			if !configurePhysical(destination) {
+			if !configurePhysical(home) || !configurePhysical(path) {
 				return result, fail("physical_path_required")
 			}
-			if _, e = clientsetup.Inspect(ctx, r); e != nil {
+			inventoryHome := home
+			if provider == registration.Claude && deps.ClaudeHome == "" {
+				inventoryHome = filepath.Join(deps.Home, ".claude")
+			}
+			inv, e := inventory(ctx, provider, inventoryHome)
+			if e != nil {
+				return result, fail("inventory_unknown")
+			}
+			if inv.State != "clear" {
+				return result, fail("inventory_" + inv.State)
+			}
+			r := clientsetup.Request{ControlRoot: deps.ControlRoot, RuntimeRoot: primary, Command: command, ConfigPath: path, Provider: provider, Mode: clientsetup.Managed, ExpectedGeneration: result.Generation}
+			facts, e := clientsetup.Inspect(ctx, r)
+			if e != nil {
 				return result, e
 			}
+			if provider == registration.Codex {
+				destination := filepath.Join(home, "skills", "agent-notify", "SKILL.md")
+				if inv.Skill {
+					absentSkills = append(absentSkills, destination)
+					if facts.SkillProjected {
+						return result, fail("skill_collision")
+					}
+					if _, e := os.Lstat(destination); !os.IsNotExist(e) {
+						return result, fail("skill_collision")
+					}
+				} else {
+					r.SkillProjection = &clientsetup.SkillProjection{SourcePath: filepath.Join(primary, "skills", "agent-notify", "SKILL.md"), DestinationPath: destination}
+				}
+				if !configurePhysical(destination) {
+					return result, fail("physical_path_required")
+				}
+				if _, e = clientsetup.Inspect(ctx, r); e != nil {
+					return result, e
+				}
+			}
+			if inv.DisabledPackage {
+				result.Warnings = append(result.Warnings, string(provider)+": later plugin activation requires reconfiguration")
+			}
+			clients = append(clients, r)
+			inventories = append(inventories, inv)
 		}
-		if inv.DisabledPackage {
-			result.Warnings = append(result.Warnings, string(provider)+": later plugin activation requires reconfiguration")
-		}
-		clients = append(clients, r)
-		inventories = append(inventories, inv)
 	}
 	result.Stages = append(result.Stages, notificationConfigureStage{stage, "ready"})
 	fence := func() error {
@@ -531,6 +536,18 @@ func parseNotificationConfigure(args []string) (r notificationConfigureRequest, 
 			}
 			r.PreservePolicy = true
 			continue
+		case "preserve-enabled":
+			if inline {
+				return r, false, errors.New("invalid_arguments")
+			}
+			r.PreserveEnabled = true
+			continue
+		case "policy-only":
+			if inline {
+				return r, false, errors.New("invalid_arguments")
+			}
+			r.PolicyOnly = true
+			continue
 		}
 		if !inline {
 			i++
@@ -543,10 +560,11 @@ func parseNotificationConfigure(args []string) (r notificationConfigureRequest, 
 		case "provider":
 			r.Provider = value
 		case "codex-home":
-			r.CodexHome = value
-			if !filepath.IsAbs(value) || filepath.Clean(value) != value {
+			normalized, normalizeErr := normalizeSetupPhysicalPath(value)
+			if normalizeErr != nil {
 				return r, false, errors.New("invalid_arguments")
 			}
+			r.CodexHome = normalized
 		case "navigation", "app", "team-id", "allow-unknown-caller", "allow-caller-asserted":
 			route = append(route, "--"+key, value)
 		default:

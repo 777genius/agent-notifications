@@ -58,6 +58,15 @@ func commitLegacy(t *testing.T, b portable.Binding, generation uint64) uint64 {
 	return snap.Ledger.Generation
 }
 
+func currentLedgerGeneration(t *testing.T, controlRoot string) uint64 {
+	t.Helper()
+	snap, err := installruntime.ReadInstalledSnapshot(controlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snap.Ledger.Generation
+}
+
 func migrationReservation(t *testing.T, old, replacement portable.Binding) (uint64, *installruntime.PendingMutation) {
 	return migrationReservationWithTarget(t, old, replacement, nil)
 }
@@ -82,7 +91,8 @@ func migrationReservationWithTarget(t *testing.T, old, replacement portable.Bind
 	}
 	ledger, res, err := (Service{}).PublishConfirmedIntent(testCtx(t), ConfirmedIntent{
 		ControlRoot: old.ControlRoot, RuntimeRoot: old.RuntimeRoot, Owner: old.Owner,
-		Action: "update", Primary: replacement.Primary,
+		ExpectedGeneration: currentLedgerGeneration(t, old.ControlRoot),
+		Action:             "update", Primary: replacement.Primary,
 		Targets: []IntentTarget{target},
 	})
 	if err != nil {
@@ -184,7 +194,8 @@ func TestUninstallRetryRejectsConsumerDifferentFromFrozenIntent(t *testing.T) {
 	profile := filepath.Join(filepath.Dir(old.ControlRoot), "profile")
 	confirmed, reservation, err := (Service{}).PublishConfirmedIntent(testCtx(t), ConfirmedIntent{
 		ControlRoot: old.ControlRoot, RuntimeRoot: old.RuntimeRoot, Owner: old.Owner,
-		Action: "uninstall", Targets: []IntentTarget{{
+		ExpectedGeneration: gen,
+		Action:             "uninstall", Targets: []IntentTarget{{
 			Client: string(old.Integration), InstallationID: old.InstallationID,
 			BindingID: old.BindingID, DataReceiptID: "receipt", Profile: profile,
 			OldConsumerKey: oldKey, OldBinding: &old,
@@ -516,7 +527,8 @@ func testMaterializerRemoveGroupRetry(t *testing.T, legacyIntent, emptyReceipt b
 	}
 	confirmed, reservation, err := (Service{}).PublishConfirmedIntent(testCtx(t), ConfirmedIntent{
 		ControlRoot: old.ControlRoot, RuntimeRoot: old.RuntimeRoot, Owner: old.Owner,
-		Action: "uninstall", Targets: targets,
+		ExpectedGeneration: currentLedgerGeneration(t, old.ControlRoot),
+		Action:             "uninstall", Targets: targets,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -639,6 +651,7 @@ func TestMaterializerRemoveRetriesAfterRevoke(t *testing.T) {
 	}
 	confirmed, reservation, err := (Service{}).PublishConfirmedIntent(testCtx(t), ConfirmedIntent{
 		ControlRoot: b.ControlRoot, RuntimeRoot: b.RuntimeRoot, Owner: b.Owner, Action: "uninstall",
+		ExpectedGeneration: currentLedgerGeneration(t, b.ControlRoot),
 		Targets: []IntentTarget{{
 			Client: string(portable.Claude), InstallationID: b.InstallationID, BindingID: b.BindingID,
 			DataReceiptID: client.DataReceiptID, Profile: config, OldConsumerKey: key, OldBinding: &b,
@@ -797,6 +810,7 @@ func testMaterializerRemoveRecoversLegacyUninstall(t *testing.T, integration por
 	}
 	confirmed, reservation, err := (Service{}).PublishConfirmedIntent(testCtx(t), ConfirmedIntent{
 		ControlRoot: b.ControlRoot, RuntimeRoot: b.RuntimeRoot, Owner: b.Owner, Action: "uninstall",
+		ExpectedGeneration: currentLedgerGeneration(t, b.ControlRoot),
 		Targets: []IntentTarget{{
 			Client: string(integration), InstallationID: b.InstallationID, BindingID: b.BindingID,
 			DataReceiptID: intentReceipt, Profile: config,
@@ -943,7 +957,8 @@ func TestRefreshHandoffAcceptsFrozenOldAndNewAfterCallbackRetry(t *testing.T) {
 	}
 	confirmed, res, err := (Service{}).PublishConfirmedIntent(testCtx(t), ConfirmedIntent{
 		ControlRoot: old.ControlRoot, RuntimeRoot: old.RuntimeRoot, Owner: old.Owner,
-		Action: "update", Targets: []IntentTarget{{
+		ExpectedGeneration: currentLedgerGeneration(t, old.ControlRoot),
+		Action:             "update", Targets: []IntentTarget{{
 			Client: string(portable.Claude), InstallationID: id.InstallationID,
 			BindingID: oldBinding.BindingID, DataReceiptID: receiptID, Profile: config,
 			OldConsumerKey: oldKey, NewConsumerKey: newKey,
@@ -1040,6 +1055,7 @@ func TestRestoreMigrationProjectionUsesFrozenOuterAction(t *testing.T) {
 			}
 			confirmed, _, err := (Service{}).PublishConfirmedIntent(testCtx(t), ConfirmedIntent{
 				ControlRoot: old.ControlRoot, RuntimeRoot: old.RuntimeRoot, Owner: old.Owner, Action: action,
+				ExpectedGeneration: currentLedgerGeneration(t, old.ControlRoot),
 				Targets: []IntentTarget{{
 					Client: string(portable.Claude), InstallationID: id.InstallationID, BindingID: oldBinding.BindingID,
 					DataReceiptID: client.DataReceiptID, Profile: config,

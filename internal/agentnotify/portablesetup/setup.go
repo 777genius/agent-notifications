@@ -20,6 +20,7 @@ var (
 	ErrPreflight           = errors.New("portable setup refused")
 	ErrUpdateRequired      = errors.New("existing clients require explicit update before add")
 	ErrIntentConflict      = errors.New("pending setup intent conflict")
+	ErrConcurrentChange    = errors.New("managed installation changed concurrently")
 	ErrExternalUninstall   = errors.New("external uninstall required")
 	ErrAlreadyAbsent       = errors.New("portable binding is already absent")
 	ErrSourceIdentityDrift = errors.New("confirmed source identity drifted")
@@ -617,6 +618,9 @@ func (s Service) PublishConfirmedIntent(ctx context.Context, req ConfirmedIntent
 	if err != nil {
 		return installruntime.Ledger{}, nil, err
 	}
+	if snap.Ledger.Generation != req.ExpectedGeneration {
+		return installruntime.Ledger{}, nil, ErrConcurrentChange
+	}
 	if pending := snap.Ledger.PendingMutation; pending != nil {
 		intent, readErr := ReadIntent(req.ControlRoot)
 		if readErr != nil || !intentMatches(intent, pending.ID, req.Action, req.Targets[0].Client, req.SourceDigest, req.TreeDigest, req.HelperDigest, req.HelperVersion) || (intent.Primary != "" && req.Primary != "" && intent.Primary != req.Primary) || (intent.GlobalConfig != "" && req.GlobalConfig != "" && intent.GlobalConfig != req.GlobalConfig) {
@@ -677,11 +681,14 @@ func (s Service) PublishConfirmedIntent(ctx context.Context, req ConfirmedIntent
 
 // PatchIntentReceipt records a known UAP data receipt on the pending host
 // intent without allocating a new SetupIntentID.
-func (s Service) PatchIntentReceipt(ctx context.Context, controlRoot, runtimeRoot, owner, client, receiptID string) error {
+func (s Service) PatchIntentReceipt(ctx context.Context, controlRoot, runtimeRoot, owner, client, receiptID string, expected *installruntime.PendingMutation) error {
 	if receiptID == "" || client == "" {
 		return nil
 	}
-	return s.patchIntent(ctx, controlRoot, runtimeRoot, owner, func(intent *Intent, _ installruntime.Ledger) (bool, error) {
+	return s.patchIntent(ctx, controlRoot, runtimeRoot, owner, func(intent *Intent, ledger installruntime.Ledger) (bool, error) {
+		if expected == nil || ledger.PendingMutation == nil || *ledger.PendingMutation != *expected {
+			return false, ErrConcurrentChange
+		}
 		changed := false
 		for i, target := range intent.Targets {
 			if target.Client != client {
@@ -699,8 +706,11 @@ func (s Service) PatchIntentReceipt(ctx context.Context, controlRoot, runtimeRoo
 
 // PatchIntentExternalUninstalled records a confirmed Codex native-plugin
 // attestation on the pending intent so resume does not require the flag again.
-func (s Service) PatchIntentExternalUninstalled(ctx context.Context, controlRoot, runtimeRoot, owner string) error {
-	return s.patchIntent(ctx, controlRoot, runtimeRoot, owner, func(intent *Intent, _ installruntime.Ledger) (bool, error) {
+func (s Service) PatchIntentExternalUninstalled(ctx context.Context, controlRoot, runtimeRoot, owner string, expected *installruntime.PendingMutation) error {
+	return s.patchIntent(ctx, controlRoot, runtimeRoot, owner, func(intent *Intent, ledger installruntime.Ledger) (bool, error) {
+		if expected == nil || ledger.PendingMutation == nil || *ledger.PendingMutation != *expected {
+			return false, ErrConcurrentChange
+		}
 		if intent.ExternalUninstalled {
 			return false, nil
 		}
@@ -712,11 +722,14 @@ func (s Service) PatchIntentExternalUninstalled(ctx context.Context, controlRoot
 // PatchIntentGlobalConfig freezes the path before the first portable consumer
 // is committed. Legacy or hooks-only intents may omit it; a later retry must
 // match the frozen path exactly.
-func (s Service) PatchIntentGlobalConfig(ctx context.Context, controlRoot, runtimeRoot, owner, installationID, path string) error {
+func (s Service) PatchIntentGlobalConfig(ctx context.Context, controlRoot, runtimeRoot, owner, installationID, path string, expected *installruntime.PendingMutation) error {
 	if installationID == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return ErrPreflight
 	}
 	return s.patchIntent(ctx, controlRoot, runtimeRoot, owner, func(intent *Intent, ledger installruntime.Ledger) (bool, error) {
+		if expected == nil || ledger.PendingMutation == nil || *ledger.PendingMutation != *expected {
+			return false, ErrConcurrentChange
+		}
 		installed, found, err := portable.InstalledGlobalConfig(ledger, installationID, controlRoot)
 		if err != nil || (found && installed != path) {
 			return false, ErrIntentConflict
@@ -806,52 +819,55 @@ func (s Service) patchIntentLocked(ctx context.Context, controlRoot, runtimeRoot
 
 // FinishConfirmedIntent removes a matching reservation after the whole wizard
 // mutation finished. Incomplete HoldOnly/external uninstall leaves it in place.
-func (s Service) FinishConfirmedIntent(ctx context.Context, req ConfirmedIntent, res *installruntime.PendingMutation) error {
+func (s Service) FinishConfirmedIntent(ctx context.Context, req ConfirmedIntent, res *installruntime.PendingMutation) (uint64, bool, error) {
 	if ctx == nil || res == nil {
-		return nil
+		return 0, false, nil
 	}
 	release, err := installruntime.AcquireCoordinatorLease(ctx, req.ControlRoot)
 	if err != nil {
-		return err
+		return 0, false, err
 	}
 	defer release()
 	if _, err = installruntime.Recover(ctx, req.ControlRoot); err != nil {
-		return err
+		return 0, false, err
 	}
 	snap, err := installruntime.ReadInstalledSnapshot(req.ControlRoot)
 	if err != nil {
-		return err
+		return 0, false, err
 	}
 	if snap.Ledger.PendingMutation == nil {
-		return nil
+		return snap.Ledger.Generation, false, nil
+	}
+	if *snap.Ledger.PendingMutation != *res {
+		return snap.Ledger.Generation, false, nil
 	}
 	consumerID := "reservation-finalizer"
 	commitRoot := req.RuntimeRoot
 	if len(snap.Ledger.Consumers) != 0 {
 		consumerID, commitRoot, err = intentConsumer(snap.Ledger, req.RuntimeRoot)
 		if err != nil {
-			return err
+			return 0, false, err
 		}
 	}
 	path := IntentPath(req.ControlRoot)
 	before, err := installruntime.Fingerprint(path)
 	if err != nil {
-		return err
+		return 0, false, err
 	}
 	var files []installruntime.File
 	if before.Exists {
 		files = []installruntime.File{{Path: path, Before: before, Remove: true}}
 	}
 	gen := snap.Ledger.Generation
-	_, err = installruntime.Commit(ctx, installruntime.Request{
+	ledger, err := installruntime.Commit(ctx, installruntime.Request{
 		ControlRoot: req.ControlRoot, Owner: req.Owner, RuntimeRoot: commitRoot,
 		ConsumerID: consumerID, RefreshOnly: true, ExpectedGeneration: &gen, Reservation: res, ClearReservation: true,
 		Files: files,
 	})
 	if err != nil {
-		return fmt.Errorf("%w: clear confirmed intent: %v", ErrPreflight, err)
+		return 0, false, fmt.Errorf("%w: clear confirmed intent: %v", ErrPreflight, err)
 	}
-	return nil
+	return ledger.Generation, true, nil
 }
 
 func (s Service) publishIntent(ctx context.Context, req Request, gen uint64, action, stage string, units []string) (installruntime.Ledger, *installruntime.PendingMutation, error) {

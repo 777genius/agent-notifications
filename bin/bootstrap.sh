@@ -58,6 +58,7 @@ _CONFIG_STAGE=""
 _CONFIG_HELPER=""
 _PORTABLE_STAGE=""
 _KEEP_CONFIG_STAGE=false
+_KEEP_PORTABLE_STAGE=false
 PRODUCT=""
 BOOTSTRAP_TAG=""
 BOOTSTRAP_COMMIT=""
@@ -1213,7 +1214,9 @@ select_product() {
 bootstrap_cleanup() {
     [ -z "$_BOOTSTRAP_TMP" ] || rm -f "$_BOOTSTRAP_TMP"
     [ -z "$_BOOTSTRAP_STAGE" ] || rm -rf "$_BOOTSTRAP_STAGE"
-    [ -z "$_PORTABLE_STAGE" ] || rm -rf "$_PORTABLE_STAGE"
+    if [ "$_KEEP_PORTABLE_STAGE" != true ]; then
+        [ -z "$_PORTABLE_STAGE" ] || rm -rf "$_PORTABLE_STAGE"
+    fi
     if [ "$_KEEP_CONFIG_STAGE" != true ]; then
         [ -z "$_CONFIG_STAGE" ] || rm -rf "$_CONFIG_STAGE"
     fi
@@ -1337,6 +1340,7 @@ stage_config_helper() {
     # Use the OS temporary root, not a caller-controlled TMPDIR inside a bundle.
     # The verified helper checks canonical overlap before any refresh operation.
     _CONFIG_STAGE=$(mktemp -d "/tmp/bootstrap-config-XXXXXX") || return 1
+    _CONFIG_STAGE=$(cd -P "$_CONFIG_STAGE" && pwd -P) || return 1
     # Snapshot the pre-update registry, not a guessed cache version. Later
     # registrations introduce packaged templates, not historical user settings.
     if { [ "$PRODUCT" = claude ] || [ "$PRODUCT" = both ]; } && [ -e "$INSTALLED_JSON" ]; then
@@ -1480,6 +1484,7 @@ install_codex() {
     local source_base="${BOOTSTRAP_SOURCE_BASE_URL:-https://github.com/${REPO}/archive}"
     local release_base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}"
     _BOOTSTRAP_STAGE=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-codex-XXXXXX") || return 1
+    _BOOTSTRAP_STAGE=$(cd -P "$_BOOTSTRAP_STAGE" && pwd -P) || return 1
     local bundle="$_BOOTSTRAP_STAGE/bundle"
     mkdir "$bundle" || return 1
     fetch_bootstrap_file "$source_base/$BOOTSTRAP_COMMIT.tar.gz" "$_BOOTSTRAP_STAGE/source.tar.gz" || return 1
@@ -1705,7 +1710,7 @@ configure_agent_notify() {
         return 0
     fi
     case "$(uname -s 2>/dev/null)" in
-        Darwin|Linux) use_wizard=true ;;
+        Darwin|Linux|MINGW*|MSYS*|CYGWIN*) use_wizard=true ;;
         *) use_wizard=false ;;
     esac
     if [ "$use_wizard" = true ] && cli_has_setup_wizard "$CONFIGURE_BINARY"; then
@@ -1730,10 +1735,15 @@ configure_agent_policy() {
             [ "$AGENT_NOTIFY_REQUEST" = explicit ] && return 1
             return 0 ;;
     esac
-    if ! "$CONFIGURE_BINARY" setup-notifications configure --provider "$PRODUCT" ${CONFIGURE_ARGS[@]+"${CONFIGURE_ARGS[@]}"}; then
+    local -a configure_cmd=(setup-notifications configure --provider "$PRODUCT")
+    configure_cmd+=(${CONFIGURE_ARGS[@]+"${CONFIGURE_ARGS[@]}"})
+    if [ "${1:-}" = portable ]; then
+        configure_cmd+=(--policy-only --preserve-enabled)
+    fi
+    if ! "$CONFIGURE_BINARY" "${configure_cmd[@]}"; then
         echo -e "${YELLOW}⚠ Agent-notify setup failed; plugin/hooks install succeeded.${NC}" >&2
         echo -e "${YELLOW}  Desktop/hook notifications still work. Retry:${NC}" >&2
-        printf '  %s\n' "$(quote_shell_command "$CONFIGURE_BINARY" setup-notifications configure --provider "$PRODUCT" ${CONFIGURE_ARGS[@]+"${CONFIGURE_ARGS[@]}"})" >&2
+        printf '  %s\n' "$(quote_shell_command "$CONFIGURE_BINARY" "${configure_cmd[@]}")" >&2
         return 1
     fi
     return 0
@@ -1743,10 +1753,9 @@ configure_agent_policy() {
 # hooks-only, not a full MCP install. Explicit --agent-notify is incomplete.
 report_wizard_portable_missing() {
     local reason="$1"
-    local agents="$2"
     echo -e "${YELLOW}⚠ Agent-notify wizard skipped; ${reason}.${NC}" >&2
-    echo -e "${YELLOW}  Plugin/hooks install succeeded. Retry:${NC}" >&2
-    printf '  %s\n' "$(quote_shell_command "$CONFIGURE_BINARY" setup-notifications wizard --action install --install-or-update --agents "$agents" --hooks false --agent-notify true --yes)" >&2
+    echo -e "${YELLOW}  Plugin/hooks install succeeded. Rerun bootstrap for this release when its verified portable package is available.${NC}" >&2
+    [ -z "${BOOTSTRAP_TAG:-}" ] || printf '  Release: %s\n' "$BOOTSTRAP_TAG" >&2
     if [ "$AGENT_NOTIFY_REQUEST" = explicit ]; then
         return 1
     fi
@@ -1777,11 +1786,10 @@ acquire_wizard_portable_asset() {
     [ -n "${BOOTSTRAP_TAG:-}" ] || return 1
     read -r os arch < <(bootstrap_release_os_arch) || return 1
     asset="agent-notify-portable-${os}-${arch}.zip"
-    stage="${_CONFIG_STAGE:-}"
-    if [ -z "$stage" ]; then
-        _PORTABLE_STAGE=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-portable-XXXXXX") || return 1
-        stage="$_PORTABLE_STAGE"
-    fi
+    _PORTABLE_STAGE=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-portable-XXXXXX") || return 1
+    # Wizard paths must be clean and physical, including TMPDIR aliases and /tmp on macOS.
+    _PORTABLE_STAGE=$(cd -P "$_PORTABLE_STAGE" && pwd -P) || return 1
+    stage="$_PORTABLE_STAGE"
     base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG"
     if [ ! -f "$stage/checksums.txt" ]; then
         fetch_bootstrap_file "$base/checksums.txt" "$stage/checksums.txt" || return 1
@@ -1792,6 +1800,13 @@ acquire_wizard_portable_asset() {
 }
 
 setup_agent_notify_wizard() {
+    local policy_help
+    policy_help=$("$CONFIGURE_BINARY" setup-notifications --help </dev/null 2>/dev/null) || policy_help=""
+    if [[ "$policy_help" != *--policy-only* || "$policy_help" != *--preserve-enabled* ]]; then
+        echo "agent-notify setup skipped; installed binary predates portable setup. Plugin/hooks install succeeded. Update to a matching release before enabling MCP." >&2
+        [ "$AGENT_NOTIFY_REQUEST" != explicit ] || return 1
+        return 0
+    fi
     local agents package_root install_root wizard_codex_home="$DEFAULT_CODEX_HOME" i=0
     local claude_exec="" codex_exec="" plugin_root
     WIZARD_PACKAGE_ROOT=""
@@ -1818,7 +1833,7 @@ setup_agent_notify_wizard() {
     fi
     if [ -n "${BOOTSTRAP_TAG:-}" ]; then
         if ! acquire_wizard_portable_asset; then
-            report_wizard_portable_missing "portable package is missing from $BOOTSTRAP_TAG" "$agents" && return 0
+            report_wizard_portable_missing "portable package is missing from $BOOTSTRAP_TAG" && return 0
             return 1
         fi
         package_root="$WIZARD_PACKAGE_ROOT"
@@ -1832,12 +1847,12 @@ setup_agent_notify_wizard() {
         fi
     fi
     if [ -z "${package_root:-}" ]; then
-        report_wizard_portable_missing "portable package is missing from the accepted release" "$agents" && return 0
+        report_wizard_portable_missing "portable package is missing from the accepted release" && return 0
         return 1
     fi
     # Preserve policy enablement and accepted route/consent before the wizard
     # migrates client registration to the portable package.
-    configure_agent_policy || return 1
+    configure_agent_policy portable || return 1
     if [ "$PRODUCT" != codex ]; then
         claude_exec=$(bootstrap_abs_command claude) || true
     fi
@@ -1845,7 +1860,12 @@ setup_agent_notify_wizard() {
         codex_exec=$(bootstrap_abs_command codex) || true
     fi
     set -- setup-notifications wizard --action install --install-or-update --agents "$agents" --hooks false --agent-notify true --yes \
-        --package "$package_root" --plugin-root "$plugin_root" --helper "$CONFIGURE_BINARY"
+        --package "$package_root" --plugin-root "$plugin_root"
+    [ "$AGENT_NOTIFY_REQUEST" != auto ] || set -- "$@" --preserve-existing-units
+    case "$(uname -s 2>/dev/null)" in
+        MINGW*|MSYS*|CYGWIN*) ;; # Go resolves the native managed .exe from the installed primary.
+        *) set -- "$@" --helper "$CONFIGURE_BINARY" ;;
+    esac
     set -- "$@" --codex-home "$wizard_codex_home" --claude-config "$CLAUDE_HOME"
     if [ "$PRODUCT" != codex ]; then
         set -- "$@" --claude-mcp-config "${CLAUDE_CONFIG_DIR:-$INSTALLER_HOME}/.claude.json"
@@ -1860,9 +1880,17 @@ setup_agent_notify_wizard() {
         fi
     fi
     if ! "$CONFIGURE_BINARY" "$@"; then
+        # The retry command refers to the verified same-release ZIP. Retain its
+        # staging directory so EXIT cleanup cannot invalidate that command.
+        if [ -n "$_PORTABLE_STAGE" ] && [[ "$package_root" = "$_PORTABLE_STAGE/"* ]]; then
+            _KEEP_PORTABLE_STAGE=true
+        fi
         echo -e "${YELLOW}⚠ Agent-notify setup failed; plugin/hooks install succeeded.${NC}" >&2
-        echo -e "${YELLOW}  Desktop/hook notifications still work. Retry:${NC}" >&2
-        printf '  %s\n' "$(quote_shell_command "$CONFIGURE_BINARY" "$@")" >&2
+        echo -e "${YELLOW}  Desktop/hook notifications still work.${NC}" >&2
+        [ "$_KEEP_PORTABLE_STAGE" != true ] || printf '  Verified package retained: %s\n' "$package_root" >&2
+        echo "  Use the wizard's retry or next resume command above; it retains the selected clients and owned identity." >&2
+        case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*) echo "  On Windows, run that command in PowerShell (the printed quoting is PowerShell syntax)." >&2 ;; esac
+        [ -z "${BOOTSTRAP_TAG:-}" ] || printf '  If no retry is shown, rerun bootstrap pinned to BOOTSTRAP_RELEASE_TAG=%s.\n' "$BOOTSTRAP_TAG" >&2
         return 1
     fi
     return 0
