@@ -42,6 +42,31 @@ func TestClockSnapshotWindowsNativePreciseWall(t *testing.T) {
 	}
 	s, err := NewSystemSnapshotPort().SampleSnapshot()
 	if err != nil || s.ClockDomain != "windows-kernel" || s.ClockKind != "windows-interrupt-precise" {
+		logWindowsSnapshotPredicates(t)
 		t.Fatal("native precise coordinate unavailable", err)
 	}
+}
+
+// One additional actual A-wall-B triplet diagnoses a failed snapshot; it is
+// neither a retry nor a replacement for the original production assertion.
+// Only predicates and bracket width leave the test, never coordinates or IDs.
+func logWindowsSnapshotPredicates(t *testing.T) {
+	t.Helper()
+	a, okA := (systemCounter{}).SampleCounter()
+	wall := (systemWall{}).SampleWall()
+	b, okB := (systemCounter{}).SampleCounter()
+	lo, okLo := clockNanoseconds(a.Sec, a.Nsec)
+	hi, okHi := clockNanoseconds(b.Sec, b.Nsec)
+	_, okWall := clockNanoseconds(wall.Unix(), int64(wall.Nanosecond()))
+	_, qualified := qualityAllowance(a.Kind)
+	widthAvailable := okA && okB && okLo && okHi && hi >= lo
+	var width int64
+	if widthAvailable {
+		width = hi - lo
+	}
+	t.Logf("native snapshot A_available=%t B_available=%t A_ns_valid=%t B_ns_valid=%t wall_ns_valid=%t wall_nonzero=%t wall_positive=%t wall_100ns_aligned=%t profile_qualified=%t A_uuid_valid=%t B_uuid_valid=%t A_domain_valid=%t B_domain_valid=%t boot_equal=%t domain_equal=%t kind_equal=%t counter_regressed=%t width_available=%t width_ns=%d width_within_bound=%t",
+		okA, okB, okLo, okHi, okWall, !wall.IsZero(), wall.Unix() > 0, wall.Nanosecond()%100 == 0, qualified,
+		validClockUUID(a.Boot), validClockUUID(b.Boot), validClockDomain(a.Kind, a.Domain), validClockDomain(b.Kind, b.Domain),
+		a.Boot == b.Boot, a.Domain == b.Domain, a.Kind == b.Kind, okA && okB && okLo && okHi && hi < lo,
+		widthAvailable, width, widthAvailable && width <= maxSnapshotWidthNs)
 }
