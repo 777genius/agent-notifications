@@ -68,6 +68,9 @@ AGENT_NOTIFY_REQUEST=auto
 CONFIGURE_BINARY=""
 CONFIGURE_ARGS=()
 OPENCODE_ARGS=()
+SELECTED_PRODUCTS=()
+LEGACY_PRODUCT=""
+_SELECTION_PENDING=false
 
 # Isolated JSON/checksum runtime. Prefer python3 -I; Node is the supported
 # fallback because Claude Code already ships it. iTerm2 venv still needs a
@@ -188,7 +191,30 @@ check_prerequisites() {
         fi
         [ "$(bootstrap_release_os_arch)" != "windows arm64" ] || { echo "Windows arm64 is not supported." >&2; exit 1; }
     fi
-    if [ "$PRODUCT" = opencode ] && [ "$(uname -s)" = Darwin ] &&
+    if [ "$PRODUCT" = gemini ]; then
+        local gemini_cli probe host_version probe_status
+        gemini_cli=$(command -v gemini) || { echo "gemini CLI not found in PATH; install Gemini CLI first." >&2; return 1; }
+        probe=$(mktemp -d "/tmp/bootstrap-gemini-TEST-XXXXXX") || return 1
+        mkdir -p "$probe/profile/.gemini" "$probe/tmp" || { rm -rf "$probe"; return 1; }
+        # Native env discovery checks Gemini/home sentinels even when the
+        # caller's environment is empty. Keep cwd and home in the same TEST root.
+        : > "$probe/profile/.gemini/.env"
+        : > "$probe/profile/.env"
+        printf '{}\n' > "$probe/settings.json"
+        printf '{}\n' > "$probe/defaults.json"
+        printf '{}\n' > "$probe/trust.json"
+        probe_status=0
+        host_version=$(cd "$probe/profile" && env -i PATH="$PATH" HOME="$probe/profile" USERPROFILE="$probe/profile" \
+            GEMINI_CLI_HOME="$probe/profile" TMPDIR="$probe/tmp" XDG_CONFIG_HOME="$probe/profile/.config" \
+            GEMINI_CLI_SYSTEM_SETTINGS_PATH="$probe/settings.json" GEMINI_CLI_SYSTEM_DEFAULTS_PATH="$probe/defaults.json" \
+            GEMINI_CLI_TRUSTED_FOLDERS_PATH="$probe/trust.json" "$gemini_cli" --version </dev/null) || probe_status=$?
+        rm -rf "$probe"
+        [ "$probe_status" -eq 0 ] && [ "$host_version" = 0.62.0 ] || {
+            echo "Gemini CLI notifications target 0.62.0; detected ${host_version:-unavailable}." >&2; return 1;
+        }
+        [ "$(bootstrap_release_os_arch)" != "windows arm64" ] || { echo "Windows arm64 is not supported." >&2; return 1; }
+    fi
+    if { [ "$PRODUCT" = opencode ] || [ "$PRODUCT" = gemini ]; } && [ "$(uname -s)" = Darwin ] &&
         [[ " ${OPENCODE_ARGS[*]} " = *" --desktop "* ]] && ! command -v unzip >/dev/null 2>&1; then
         echo "unzip is required for the signed macOS notification helper." >&2
         exit 1
@@ -1107,10 +1133,25 @@ select_product() {
     local seen_agent_notify=false seen_skip_agent_notify=false
     while [ "$#" -gt 0 ]; do
         case "$1" in
-            --product)
-                [ "$#" -ge 2 ] && [ -z "$PRODUCT" ] || { echo "Use --product claude|codex|both|opencode once." >&2; return 1; }
-                PRODUCT="$2"; shift 2 ;;
+            --product|--product=*)
+                [ -z "$PRODUCT" ] || { echo "Use one product selector once." >&2; return 1; }
+                [ "$1" != --product ] || [ "$#" -ge 2 ] || { echo "--product requires a value." >&2; return 1; }
+                case "$1" in
+                    --product) PRODUCT="$2"; shift 2 ;;
+                    *) PRODUCT=${1#--product=}; shift ;;
+                esac ;;
+            --products|--products=*)
+                [ -z "$PRODUCT" ] || { echo "Use one product selector once." >&2; return 1; }
+                case "$1" in
+                    --products) [ "$#" -ge 2 ] || return 1; PRODUCT=$2; shift 2 ;;
+                    *) PRODUCT=${1#--products=}; shift ;;
+                esac
+                PRODUCT="bundle:$PRODUCT" ;;
             --desktop|--webhook)
+                local existing
+                for existing in ${OPENCODE_ARGS[@]+"${OPENCODE_ARGS[@]}"}; do
+                    [ "$existing" != "$1" ] || { echo "Use each observer channel once." >&2; return 1; }
+                done
                 OPENCODE_ARGS+=("$1")
                 shift ;;
             --agent-notify)
@@ -1148,7 +1189,7 @@ select_product() {
                 CONFIGURE_ARGS+=("$1")
                 shift ;;
             --help|-h)
-                echo "Usage: bash bootstrap.sh [--product claude|codex|both|opencode] [--desktop] [--webhook] [--agent-notify|--skip-agent-notify] [--navigation none]"
+                echo "Usage: bash bootstrap.sh [--product claude|codex|both|opencode|gemini | --products claude,codex,opencode,gemini] [--desktop] [--webhook] [--agent-notify|--skip-agent-notify] [--navigation none]"
                 exit 0 ;;
             *) echo "Unknown option: $1" >&2; return 1 ;;
         esac
@@ -1158,51 +1199,66 @@ select_product() {
         return 1
     fi
     if [ -z "$PRODUCT" ]; then
+        # Selection runs later through the release-verified public UAP UI. No
+        # persistent root is initialized before cancel/empty are resolved.
+        PRODUCT=select
+        _SELECTION_PENDING=true
+        return 0
+    fi
+    local csv remaining selected seen="" observers=0
+    case "$PRODUCT" in
+        bundle:*) csv=${PRODUCT#bundle:} ;;
+        both) csv=claude,codex ;;
+        claude|codex|opencode|gemini) csv=$PRODUCT ;;
+        *) echo "Invalid product: $PRODUCT; use claude, codex, both, opencode or gemini." >&2; return 1 ;;
+    esac
+    case "$csv" in ''|,*|*,|*,,*) echo "Product selection contains an empty product." >&2; return 1 ;; esac
+    SELECTED_PRODUCTS=()
+    LEGACY_PRODUCT=""
+    remaining=$csv
+    while :; do
+        selected=${remaining%%,*}
+        case "$selected" in
+            claude|codex|opencode|gemini) ;;
+            *) echo "Unknown product: $selected" >&2; return 1 ;;
+        esac
+        case ",$seen," in *",$selected,"*) echo "Duplicate product: $selected" >&2; return 1 ;; esac
+        seen=${seen:+$seen,}$selected
+        SELECTED_PRODUCTS+=("$selected")
+        case "$selected" in
+            claude|codex)
+                if [ -z "$LEGACY_PRODUCT" ]; then LEGACY_PRODUCT=$selected; else LEGACY_PRODUCT=both; fi ;;
+            opencode|gemini) observers=$((observers+1)) ;;
+        esac
+        case "$remaining" in *,*) remaining=${remaining#*,} ;; *) break ;; esac
+    done
+    if [ "$observers" -gt 0 ] && [ "${#OPENCODE_ARGS[@]}" -eq 0 ]; then
         if ! { exec 3<>/dev/tty; } 2>/dev/null; then
-            echo "No controlling TTY. Specify --product claude|codex|both|opencode." >&2
+            echo "Selected observers require explicit --desktop and/or --webhook consent." >&2
             return 1
         fi
-        printf 'Install notifications for: 1) Claude  2) Codex  3) Claude + Codex  4) OpenCode\nChoice: ' >&3
-        local choice=""
-        IFS= read -r choice <&3 || true
+        printf 'Observer channels: 1) Desktop  2) Webhook  3) Both\nChoice: ' >&3
+        local channel=""
+        IFS= read -r channel <&3 || true
         exec 3>&-
-        case "$choice" in
-            1|claude) PRODUCT=claude ;;
-            2|codex) PRODUCT=codex ;;
-            3|both) PRODUCT=both ;;
-            4|opencode) PRODUCT=opencode ;;
-            *) echo "Invalid product choice; use claude, codex, both or opencode." >&2; return 1 ;;
+        case "$channel" in
+            1) OPENCODE_ARGS=(--desktop) ;;
+            2) OPENCODE_ARGS=(--webhook) ;;
+            3) OPENCODE_ARGS=(--desktop --webhook) ;;
+            *) echo "Choose observer channels explicitly." >&2; return 1 ;;
         esac
     fi
-    case "$PRODUCT" in
-        claude|codex|both|opencode) ;;
-        *) echo "Invalid product: $PRODUCT; use claude, codex, both or opencode." >&2; return 1 ;;
-    esac
-    if [ "$PRODUCT" = opencode ]; then
+    if [ "$observers" -eq 0 ] && [ "${#OPENCODE_ARGS[@]}" -gt 0 ]; then
+        echo "--desktop/--webhook require OpenCode or Gemini." >&2; return 1
+    fi
+    if [ -z "$LEGACY_PRODUCT" ]; then
         if [ "$seen_agent_notify" = true ] || [ "$seen_skip_agent_notify" = true ] || [ "${#CONFIGURE_ARGS[@]}" -ne 0 ]; then
-            echo "OpenCode uses --desktop/--webhook consent, not agent-notify or navigation flags." >&2
+            echo "Observers use --desktop/--webhook consent, not agent-notify or navigation flags." >&2
             return 1
-        fi
-        if [ "${#OPENCODE_ARGS[@]}" -eq 0 ]; then
-            if ! { exec 3<>/dev/tty; } 2>/dev/null; then
-                echo "OpenCode requires explicit --desktop and/or --webhook consent." >&2
-                return 1
-            fi
-            printf 'OpenCode channels: 1) Desktop  2) Webhook  3) Both\nChoice: ' >&3
-            local channel=""
-            IFS= read -r channel <&3 || true
-            exec 3>&-
-            case "$channel" in
-                1) OPENCODE_ARGS=(--desktop) ;;
-                2) OPENCODE_ARGS=(--webhook) ;;
-                3) OPENCODE_ARGS=(--desktop --webhook) ;;
-                *) echo "Choose OpenCode channels explicitly." >&2; return 1 ;;
-            esac
         fi
         CONFIGURE_NOTIFICATIONS=false
         return 0
     fi
-    [ "${#OPENCODE_ARGS[@]}" -eq 0 ] || { echo "--desktop/--webhook require --product opencode." >&2; return 1; }
     if [ "$CONFIGURE_NOTIFICATIONS" = true ]; then
         complete_configure_route || return 1
     elif [ "${#CONFIGURE_ARGS[@]}" -ne 0 ]; then
@@ -1343,7 +1399,7 @@ stage_config_helper() {
     _CONFIG_STAGE=$(cd -P "$_CONFIG_STAGE" && pwd -P) || return 1
     # Snapshot the pre-update registry, not a guessed cache version. Later
     # registrations introduce packaged templates, not historical user settings.
-    if { [ "$PRODUCT" = claude ] || [ "$PRODUCT" = both ]; } && [ -e "$INSTALLED_JSON" ]; then
+    if { [ "$PRODUCT" = claude ] || [ "$PRODUCT" = both ] || [ "$PRODUCT" = select ] || [ "$LEGACY_PRODUCT" = claude ] || [ "$LEGACY_PRODUCT" = both ]; } && [ -e "$INSTALLED_JSON" ]; then
         cp "$INSTALLED_JSON" "$_CONFIG_STAGE/installed-before.json" || return 1
     else
         printf '{"plugins":{}}\n' > "$_CONFIG_STAGE/installed-before.json"
@@ -1581,7 +1637,9 @@ install_claude() {
 
 # A mapped Windows executable cannot delete itself. Run a temporary copy and
 # preserve its status while cleaning up after the process has exited.
-opencode_remove_command() {
+observer_remove_command() {
+    local binary="$1" action="$2"
+    shift 2
     case "$(uname -s)" in
         MINGW*|MSYS*|CYGWIN*)
             local script
@@ -1590,13 +1648,16 @@ set -eu
 stage=$(mktemp -d "${TMPDIR:-/tmp}/agent-notifications-remove.XXXXXX")
 trap 'status=$?; rm -rf "$stage"; exit "$status"' EXIT
 cp "$1" "$stage/remover.exe"
-"$stage/remover.exe" setup-opencode remove
+shift
+"$stage/remover.exe" "$@"
 REMOVE_SCRIPT
 )
-            quote_shell_command bash -c "$script" _ "$1" ;;
-        *) quote_shell_command "$1" setup-opencode remove ;;
+            quote_shell_command bash -c "$script" _ "$binary" "$action" remove "$@" ;;
+        *) quote_shell_command "$binary" "$action" remove "$@" ;;
     esac
 }
+
+opencode_remove_command() { observer_remove_command "$1" setup-opencode; }
 
 # OpenCode setup owns its plugin, native executable and independent channel
 # consent. Acquisition stays temporary; only the verified Go transaction writes
@@ -1619,9 +1680,11 @@ install_opencode() {
     if [ "$os" = darwin ] && [[ " ${OPENCODE_ARGS[*]} " = *" --desktop "* ]]; then
         base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG"
         native="$_CONFIG_STAGE/ClaudeNotifier.app"
-        fetch_bootstrap_file "$base/ClaudeNotifier.app.zip" "$_CONFIG_STAGE/ClaudeNotifier.app.zip" || return 1
-        verify_bootstrap_checksum "$_CONFIG_STAGE" ClaudeNotifier.app.zip || return 1
-        unzip -q "$_CONFIG_STAGE/ClaudeNotifier.app.zip" -d "$_CONFIG_STAGE" || return 1
+        if [ ! -d "$native" ]; then
+            fetch_bootstrap_file "$base/ClaudeNotifier.app.zip" "$_CONFIG_STAGE/ClaudeNotifier.app.zip" || return 1
+            verify_bootstrap_checksum "$_CONFIG_STAGE" ClaudeNotifier.app.zip || return 1
+            unzip -q "$_CONFIG_STAGE/ClaudeNotifier.app.zip" -d "$_CONFIG_STAGE" || return 1
+        fi
         [ -f "$native.managed-runtime.json" ] || { echo "Signed native helper attestation is missing." >&2; return 1; }
         # StageNative checks sealed decoder floor, attestation and OS signature.
         set -- "$@" --native-app "$native"
@@ -1648,21 +1711,63 @@ install_opencode() {
     printf 'Managed installation records: %s/ownership.json\n' "$root"
 }
 
-main() {
-    select_product "$@" || return 1
-    print_header
-    abort_if_wsl_environment
-    check_prerequisites || return 1
-    detect_platform
-    install_cleanup_traps
-    resolve_bootstrap_release || return 1
-    stage_config_helper || { echo "Cannot stage verified config helper; existing runtime retained." >&2; return 1; }
-    if [ "$PRODUCT" = opencode ]; then
-        install_opencode
-        return $?
+install_gemini() {
+    local root binary runtime os arch base native native_root config_path installed
+    root=$(bootstrap_control_root) || return 1
+    read -r os arch < <(bootstrap_release_os_arch) || return 1
+    [ "$os-$arch" != windows-arm64 ] || { echo "Windows arm64 is not a supported release target." >&2; return 1; }
+    binary="$_CONFIG_HELPER"
+    runtime="$root/runtime"
+    if [ "$os" = windows ]; then
+        command -v cygpath >/dev/null 2>&1 || { echo "Git Bash cygpath is required for native Windows paths." >&2; return 1; }
+        binary=$(cygpath -w "$binary") || return 1
+        runtime=$(cygpath -m "$runtime") || return 1
     fi
-    stage_historical_baselines || return 1
-    config_preflight || return 1
+    set -- setup-gemini install --binary "$binary" "${OPENCODE_ARGS[@]}"
+    # Existing shared components supply their authoritative runtime directory.
+    [ -e "$root/ownership.json" ] || set -- "$@" --runtime-root "$runtime"
+    if [ "$os" = darwin ] && [[ " ${OPENCODE_ARGS[*]} " = *" --desktop "* ]]; then
+        base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG"
+        native="$_CONFIG_STAGE/ClaudeNotifier.app"
+        if [ ! -d "$native" ]; then
+            fetch_bootstrap_file "$base/ClaudeNotifier.app.zip" "$_CONFIG_STAGE/ClaudeNotifier.app.zip" || return 1
+            verify_bootstrap_checksum "$_CONFIG_STAGE" ClaudeNotifier.app.zip || return 1
+            unzip -q "$_CONFIG_STAGE/ClaudeNotifier.app.zip" -d "$_CONFIG_STAGE" || return 1
+        fi
+        [ -f "$native.managed-runtime.json" ] || { echo "Signed native helper attestation is missing." >&2; return 1; }
+        # StageNative checks sealed decoder floor, attestation and OS signature.
+        set -- "$@" --native-app "$native"
+    fi
+    "$_CONFIG_HELPER" "$@" </dev/null || return 1
+    native_root="$root"
+    [ "$os" != windows ] || native_root=$(cygpath -m "$root") || return 1
+    runtime=$("$_CONFIG_HELPER" config installer runtime-root "$native_root") || return 1
+    installed="$runtime/claude-notifications-$os-$arch"
+    [ "$os" != windows ] || installed="$installed.exe"
+    initialize_config || return 1
+    config_path=$("$_CONFIG_HELPER" config path) || return 1
+    printf 'Installed executable: %s\nShared settings: %s\n' "$installed" "$config_path"
+    echo "Gemini CLI installed. Restart Gemini CLI to load the user hooks."
+    echo "Gemini CLI sends silent turn completion and tool permission alerts."
+    echo "Hooks must be enabled and trusted in Gemini CLI; existing hook and security settings are preserved."
+    echo "Gemini's built-in desktop notifications may duplicate these alerts. Choose one desktop source or use --webhook only."
+    printf 'Inspect registration and consent: %s\n' "$(quote_shell_command "$installed" setup-gemini inspect --control-root "$native_root")"
+    if [ "$os" = darwin ] && [[ " ${OPENCODE_ARGS[*]} " = *" --desktop "* ]]; then
+        printf 'Check permission: %s\n' "$(quote_shell_command "$installed" setup-gemini permission-status --control-root "$native_root")"
+        printf 'Grant permission: %s\n' "$(quote_shell_command "$installed" setup-gemini request-permission --control-root "$native_root")"
+    fi
+    if [[ " ${OPENCODE_ARGS[*]} " = *" --webhook "* ]]; then
+        echo "Webhook consent is recorded. Configure and enable your webhook destination and status channel in the shared settings before delivery."
+    fi
+    printf 'Remove: %s\n' "$(gemini_remove_command "$installed" "$native_root")"
+    printf 'Managed installation records: %s/ownership.json\n' "$root"
+}
+
+gemini_remove_command() {
+    observer_remove_command "$1" setup-gemini --control-root "$2"
+}
+
+install_legacy_products() {
     if [ "$PRODUCT" != codex ]; then
         # Function assignment scopes child environment while preserving PLUGIN_ROOT.
         CN_PRODUCT=claude install_claude || return 1
@@ -1683,6 +1788,82 @@ main() {
     initialize_config || return 1
     configure_agent_notify || return 1
     [ "$PRODUCT" != claude ] || print_success
+}
+
+main() {
+    if [ "$#" -eq 1 ] && [ "$1" = --capabilities ]; then
+        printf '%s\n' bootstrap-products-v1
+        return 0
+    fi
+    select_product "$@" || return 1
+    local selected selection status=0 completed="" failed="" original_product=$PRODUCT
+    if [ "$_SELECTION_PENDING" = true ]; then
+        if ! { exec 3<>/dev/tty; } 2>/dev/null; then
+            echo "No controlling TTY. Specify --product or --products." >&2
+            return 1
+        fi
+    fi
+    abort_if_wsl_environment
+    detect_platform
+    install_cleanup_traps
+    resolve_bootstrap_release || return 1
+    # Check every selected host/channel before any registration or updates.
+    if [ "$_SELECTION_PENDING" != true ]; then
+        for selected in "${SELECTED_PRODUCTS[@]}"; do
+            PRODUCT=$selected
+            check_prerequisites || return 1
+        done
+        PRODUCT=$original_product
+    fi
+    stage_config_helper || { echo "Cannot stage verified config helper; existing runtime retained." >&2; return 1; }
+    if [ "$_SELECTION_PENDING" = true ] || [[ "$original_product" = bundle:* ]] || [ "$original_product" = gemini ]; then
+        [ "$("$_CONFIG_HELPER" setup-products capabilities </dev/null)" = "setup-products-v1 claude codex opencode gemini" ] || {
+            echo "This published release lacks four-product setup. No products were installed." >&2; return 1;
+        }
+    fi
+    if [ "$_SELECTION_PENDING" = true ]; then
+        selection=$("$_CONFIG_HELPER" setup-products select <&3 2>&3) || { exec 3>&-; return 1; }
+        exec 3>&-
+        [ -n "$selection" ] || return 0
+        PRODUCT=""; SELECTED_PRODUCTS=(); LEGACY_PRODUCT=""; _SELECTION_PENDING=false
+        # Original arguments have no selector; their consent remains applicable.
+        OPENCODE_ARGS=(); CONFIGURE_ARGS=()
+        select_product --products "$selection" "$@" || return 1
+        for selected in "${SELECTED_PRODUCTS[@]}"; do
+            PRODUCT=$selected
+            check_prerequisites || return 1
+        done
+    fi
+    print_header
+    if [ -n "$LEGACY_PRODUCT" ]; then
+        PRODUCT=$LEGACY_PRODUCT
+        stage_historical_baselines || return 1
+        config_preflight || return 1
+    fi
+    # All selectors, channels, host prerequisites and release capabilities have
+    # passed. Each existing product retains its own consent and transaction.
+    if [ -n "$LEGACY_PRODUCT" ]; then
+        PRODUCT=$LEGACY_PRODUCT
+        if install_legacy_products; then
+            completed=$LEGACY_PRODUCT
+        else
+            status=$?; failed=$LEGACY_PRODUCT
+        fi
+    fi
+    if [ "$status" -eq 0 ]; then
+        for selected in "${SELECTED_PRODUCTS[@]}"; do
+            case "$selected" in
+                claude|codex) continue ;;
+                opencode) PRODUCT=opencode; if install_opencode; then completed="${completed:+$completed,}opencode"; else status=$?; failed=opencode; break; fi ;;
+                gemini) PRODUCT=gemini; if install_gemini; then completed="${completed:+$completed,}gemini"; else status=$?; failed=gemini; break; fi ;;
+            esac
+        done
+    fi
+    if [ "$status" -ne 0 ]; then
+        printf 'Setup failed: %s. Completed: %s. Remaining products were not installed.\n' "$failed" "${completed:-none}" >&2
+        [ -z "$completed" ] || echo "Partial success; rerun the selected bundle to continue." >&2
+    fi
+    return "$status"
 }
 
 # Quote argv so a user can paste the retry command into bash. Custom roots with
