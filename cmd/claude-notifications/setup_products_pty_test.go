@@ -56,7 +56,10 @@ func newBootstrapFixture(t *testing.T) *bootstrapFixture {
 	}
 	f := &bootstrapFixture{t: t, root: root, binary: binary}
 	// t.TempDir follows the job's absolute TEST TMPDIR, never a real project.
-	base := t.TempDir()
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	f.project = filepath.Join(base, "new TEST project")
 	f.home = filepath.Join(base, "TEST home")
 	f.tools = filepath.Join(base, "TEST tools")
@@ -69,7 +72,7 @@ func newBootstrapFixture(t *testing.T) *bootstrapFixture {
 	}
 	// Resolve only this finite utility allowlist from the trusted parent. Agent
 	// names, profiles, auth, notification endpoints and ambient env never cross.
-	for _, name := range strings.Fields("bash sh env cp cat chmod mkdir rm mktemp uname tr wc cmp grep sed awk head dirname basename tar gzip unzip sha256sum shasum python3 node sleep tail sort cut mv ln touch stat readlink setsid rmdir") {
+	for _, name := range strings.Fields("bash sh env cp cat chmod mkdir rm mktemp uname tr wc cmp grep sed awk head dirname basename tar gzip unzip sha256sum shasum python3 node sleep tail sort cut mv ln touch stat readlink setsid rmdir codesign xattr") {
 		path, err := exec.LookPath(name)
 		if err != nil {
 			continue
@@ -104,6 +107,20 @@ func newBootstrapFixture(t *testing.T) *bootstrapFixture {
 	asset := "claude-notifications-" + runtime.GOOS + "-" + runtime.GOARCH
 	f.write(filepath.Join(f.assets, asset), data, 0700)
 	f.write(filepath.Join(f.assets, "checksums.txt"), []byte(hex.EncodeToString(digest[:])+"  "+asset+"\n"), 0600)
+	nativeDownload := ""
+	if runtime.GOOS == "darwin" {
+		// Reuse the private signed, inert capability fixture. This qualifies the
+		// install transaction, never a real notification or permission prompt.
+		stage := filepath.Join(f.assets, "TEST native stage")
+		installerNativeFixture(t, stage)
+		nativeArchive := filepath.Join(f.assets, "ClaudeNotifier.app.zip")
+		nativeSum, err := portableasset.Zip(stage, nativeArchive)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.write(filepath.Join(f.assets, "checksums.txt"), []byte(hex.EncodeToString(digest[:])+"  "+asset+"\n"+nativeSum+"  ClaudeNotifier.app.zip\n"), 0600)
+		nativeDownload = " https://TEST.invalid/releases/download/" + tag + "/ClaudeNotifier.app.zip) cp " + shellQuote(nativeArchive) + " \"$out\" ;;\n"
+	}
 	install, err := os.ReadFile(filepath.Join(root, "bin", "install.sh"))
 	if err != nil {
 		t.Fatal(err)
@@ -126,7 +143,7 @@ case "$url" in
  https://raw.githubusercontent.com/777genius/agent-notifications/0123456789abcdef0123456789abcdef01234567/bin/bootstrap.sh) cp `+shellQuote(filepath.Join(f.assets, "bootstrap.sh"))+` "$out" ;;
  https://TEST.invalid/releases/download/`+tag+`/checksums.txt|https://TEST.invalid/releases/download/`+tag+`/`+asset+`|https://TEST.invalid/install.sh|https://raw.githubusercontent.com/777genius/agent-notifications/0123456789abcdef0123456789abcdef01234567/bin/install.sh|https://raw.githubusercontent.com/777genius/agent-notifications/main/bin/install.sh) cp `+shellQuote(f.assets)+`/"${url##*/}" "$out" ;;
  https://TEST.invalid/releases/download/`+tag+`/sound-preview-`+runtime.GOOS+`-`+runtime.GOARCH+`|https://TEST.invalid/releases/download/`+tag+`/list-devices-`+runtime.GOOS+`-`+runtime.GOARCH+`|https://TEST.invalid/releases/download/`+tag+`/list-sounds-`+runtime.GOOS+`-`+runtime.GOARCH+`) exit 22 ;;
- # Fixture asset extensions
+`+nativeDownload+` # Fixture asset extensions
  *) printf '%s\n' "$url" >> `+shellQuote(filepath.Join(f.project, "unexpected-acquisition"))+`; exit 99 ;;
 esac
 `), 0700)

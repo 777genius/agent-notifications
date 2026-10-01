@@ -242,7 +242,7 @@ check_prerequisites() {
         [ "$(bootstrap_release_os_arch)" != "windows arm64" ] || { echo "Windows arm64 is not supported." >&2; return 1; }
     fi
     if { [ "$PRODUCT" = opencode ] || [ "$PRODUCT" = gemini ]; } && [ "$(uname -s)" = Darwin ] &&
-        [[ " ${OPENCODE_ARGS[*]} " = *" --desktop "* ]] && ! command -v unzip >/dev/null 2>&1; then
+        [[ " ${OPENCODE_ARGS[*]-} " = *" --desktop "* ]] && ! command -v unzip >/dev/null 2>&1; then
         echo "unzip is required for the signed macOS notification helper." >&2
         exit 1
     fi
@@ -1131,7 +1131,7 @@ complete_configure_route() {
     done
     if [ -z "$nav" ] && [ -z "$app" ] && [ -z "$team" ] && [ -z "$unknown" ] && [ -z "$asserted" ]; then
         CONFIGURE_ARGS+=(--navigation none --allow-unknown-caller true --allow-caller-asserted false)
-        case " ${CONFIGURE_ARGS[*]} " in *" --preserve-policy "*) ;; *) CONFIGURE_ARGS+=(--preserve-policy) ;; esac
+        case " ${CONFIGURE_ARGS[*]-} " in *" --preserve-policy "*) ;; *) CONFIGURE_ARGS+=(--preserve-policy) ;; esac
         return 0
     fi
     if [ "$nav" = none ]; then
@@ -1257,7 +1257,7 @@ select_product() {
         PRODUCT=select
         _SELECTION_PENDING=true
         _INTERACTIVE_INTENT=true
-        case " ${CONFIGURE_ARGS[*]} " in *" --json "*) echo "Pending questions require complete explicit product/route/channel input with --json." >&2; return 1 ;; esac
+        case " ${CONFIGURE_ARGS[*]-} " in *" --json "*) echo "Pending questions require complete explicit product/route/channel input with --json." >&2; return 1 ;; esac
         # Pure syntax only; applicability is checked after product selection.
         if [ "$AGENT_NOTIFY_REQUEST" = skip ] && [ "${#CONFIGURE_ARGS[@]}" -gt 0 ]; then
             echo "Route flags require --agent-notify." >&2; return 1
@@ -1298,7 +1298,7 @@ select_product() {
         fi
         _CHANNEL_PENDING=true
         _INTERACTIVE_INTENT=true
-        case " ${CONFIGURE_ARGS[*]} " in *" --json "*) echo "Pending questions require complete explicit product/route/channel input with --json." >&2; return 1 ;; esac
+        case " ${CONFIGURE_ARGS[*]-} " in *" --json "*) echo "Pending questions require complete explicit product/route/channel input with --json." >&2; return 1 ;; esac
     fi
     if [ "$observers" -eq 0 ] && [ "${#OPENCODE_ARGS[@]}" -gt 0 ]; then
         echo "--desktop/--webhook require OpenCode or Gemini." >&2; return 1
@@ -1740,7 +1740,7 @@ install_opencode() {
     fi
     # Existing shared components supply their authoritative runtime directory.
     [ -e "$root/ownership.json" ] || set -- "$@" --runtime-root "$runtime"
-    if [ "$os" = darwin ] && [[ " ${OPENCODE_ARGS[*]} " = *" --desktop "* ]]; then
+    if [ "$os" = darwin ] && [[ " ${OPENCODE_ARGS[*]-} " = *" --desktop "* ]]; then
         base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG"
         native="$_CONFIG_STAGE/ClaudeNotifier.app"
         if [ ! -d "$native" ]; then
@@ -1766,11 +1766,11 @@ install_opencode() {
     printf 'Installed executable: %s\nShared settings: %s\n' "$installed" "$config_path"
     echo "OpenCode installed. Restart OpenCode to load the global plugin."
     echo "OpenCode sends silent completion, question, permission and error alerts; no click-to-focus."
-    if [ "$os" = darwin ] && [[ " ${OPENCODE_ARGS[*]} " = *" --desktop "* ]]; then
+    if [ "$os" = darwin ] && [[ " ${OPENCODE_ARGS[*]-} " = *" --desktop "* ]]; then
         printf 'Check permission: %s\n' "$(quote_shell_command "$installed" setup-opencode permission-status)"
         printf 'Grant permission: %s\n' "$(quote_shell_command "$installed" setup-opencode request-permission)"
     fi
-    if [[ " ${OPENCODE_ARGS[*]} " = *" --webhook "* ]]; then
+    if [[ " ${OPENCODE_ARGS[*]-} " = *" --webhook "* ]]; then
         echo "Webhook consent is recorded. Configure and enable your webhook destination and status channel in the shared settings before delivery."
     fi
     printf 'Remove: %s\n' "$(opencode_remove_command "$installed")"
@@ -1796,7 +1796,7 @@ install_gemini() {
     fi
     # Existing shared components supply their authoritative runtime directory.
     [ -e "$root/ownership.json" ] || set -- "$@" --runtime-root "$runtime"
-    if [ "$os" = darwin ] && [[ " ${OPENCODE_ARGS[*]} " = *" --desktop "* ]]; then
+    if [ "$os" = darwin ] && [[ " ${OPENCODE_ARGS[*]-} " = *" --desktop "* ]]; then
         base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG"
         native="$_CONFIG_STAGE/ClaudeNotifier.app"
         if [ ! -d "$native" ]; then
@@ -1825,11 +1825,11 @@ install_gemini() {
     echo "Hooks must be enabled and trusted in Gemini CLI; existing hook and security settings are preserved."
     echo "Gemini's built-in desktop notifications may duplicate these alerts. Choose one desktop source or use --webhook only."
     printf 'Inspect registration and consent: %s\n' "$(quote_shell_command "$installed" setup-gemini inspect --control-root "$native_root")"
-    if [ "$os" = darwin ] && [[ " ${OPENCODE_ARGS[*]} " = *" --desktop "* ]]; then
+    if [ "$os" = darwin ] && [[ " ${OPENCODE_ARGS[*]-} " = *" --desktop "* ]]; then
         printf 'Check permission: %s\n' "$(quote_shell_command "$installed" setup-gemini permission-status --control-root "$native_root")"
         printf 'Grant permission: %s\n' "$(quote_shell_command "$installed" setup-gemini request-permission --control-root "$native_root")"
     fi
-    if [[ " ${OPENCODE_ARGS[*]} " = *" --webhook "* ]]; then
+    if [[ " ${OPENCODE_ARGS[*]-} " = *" --webhook "* ]]; then
         echo "Webhook consent is recorded. Configure and enable your webhook destination and status channel in the shared settings before delivery."
     fi
     printf 'Remove: %s\n' "$(gemini_remove_command "$installed" "$native_root")"
