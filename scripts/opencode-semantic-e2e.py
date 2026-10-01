@@ -353,6 +353,14 @@ export default async function(){record({phase:'loaded',version:'v1'});return{eve
             child_flow = case.startswith('child-')
             removed_flow = case.startswith('removed-')
             mode = case.split('-', 1)[1] if child_flow or removed_flow else case
+            if case == 'reload':
+                if args.version != '2.0.21':
+                    raise ValueError('native plugin reload belongs to the current V2 API')
+                old_trace = len(rows())
+                req('/api/location/reload', {})
+                wait(lambda: any(x.get('phase') == 'cleanup' for x in rows()[old_trace:]), 'native plugin disposal')
+                wait(lambda: any(x.get('phase') == 'loaded' for x in rows()[old_trace:]), 'native plugin reload')
+                mode = 'success'
             if removed_flow and not removed:
                 command([str(binary), 'setup-opencode', 'remove', *common])
                 if installed.exists():
