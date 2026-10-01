@@ -69,6 +69,13 @@ controls the two supported statuses and allowed delivery channels. Shared sound 
 focus settings cannot add those capabilities. Channel consent belongs to Gemini;
 OpenCode consent is separate. Webhook consent alone does not configure an endpoint.
 
+Duplicate suppression records attempts per channel for a 60-second window, with
+at most 256 hashed observation markers. It does not guarantee successful delivery
+or exactly-once notification display. Missing native timestamps are scoped to one
+invocation. An unsafe, unavailable or slow cache suppresses the affected attempt;
+the cache claim budget is 250 ms and there is no automatic delivery retry. A crash
+or cache loss can permit duplicates outside this bounded guarantee.
+
 Restart Gemini after setup or update so its effective hooks are reloaded. Use the
 checked candidate's printed inspect, channel-change, remove and recovery commands;
 installation, repeat, update, inspect and removal were exercised on all five native CI targets.
