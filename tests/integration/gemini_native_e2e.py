@@ -56,10 +56,18 @@ def version_probe(code, out, err, redactions=()):
     if code == 0:
         return facts
     facts["startup_classification"] = "node_startup_error" if codes else "unclassified_public_startup_error"
+    if "ENOENT" in codes:
+        # Fixed public startup operations only; never emit arbitrary file names.
+        operations = ("spawn", "open", "mkdir", "stat", "lstat", "access", "scandir", "chdir", "realpath")
+        facts["missing_operations"] = sorted(op for op in operations
+            if re.search(rb"\b" + op.encode() + rb"\b", err))
+        commands = ("git", "ioreg", "security", "uname", "whoami", "bash", "zsh", "node", "rg")
+        facts["missing_known_commands"] = sorted(command for command in commands
+            if re.search(rb"\bspawn (?:[^\r\n ]*/)?" + command.encode() + rb" ENOENT\b", err))
     # One bounded Error header only; stack, source excerpt and all other lines
     # are excluded. Do not expose session/provider/hook text even in this probe.
     text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", err.decode("utf-8", "replace"))
-    lines = (line.removeprefix("An unexpected critical error occurred:") for line in text.splitlines())
+    lines = (line.removeprefix("An unexpected critical error occurred:").removeprefix("[") for line in text.splitlines())
     line = next((line.strip() for line in lines
                  if re.match(r"^\s*(?:(?:[A-Za-z]*Error)(?: \[[A-Z_]+\])?|ENOENT|EACCES|EPERM|EINVAL|ENOEXEC):", line)), "")
     if re.fullmatch(r"ReferenceError: (?:File|Blob|ReadableStream|fetch|crypto|navigator) is not defined", line):
@@ -758,7 +766,7 @@ def exercise(lab, fixture, terminal, ui, observer=observations):
         if case in ("approve", "deny", "cancel"):
             require(permission and case in terminal.seen and acted, "actual_permission_UI_missing")
             target = lab / "profile" / ("effect-" + case + ".txt")
-            effect = target.is_file() and target.read_bytes() == b"owned TEST effect\n"
+            effect = target.is_file() and target.read_bytes() == b"owned TEST effect" + os.linesep.encode("ascii")
             require(effect if case == "approve" else not target.exists(), "wrong_TEST_tool_effect")
         results.append({"case": case, "AfterAgent_seen": completion, "permission_UI_seen": permission and case in terminal.seen,
                         "tool_effect_verified": True if case in ("approve", "deny", "cancel") else None})

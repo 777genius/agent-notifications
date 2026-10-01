@@ -189,9 +189,15 @@ def snapshot(lab, candidate_hash):
     files = ledger.get("Files", {})
     require(str(settings_path) not in files, "whole_settings_ownership_forbidden")
     for path, expected in ((executable, candidate_hash), (receipt_path, sha(bounded_read(receipt_path, 16384)))):
-        identity = files.get(str(path), {})
-        require(identity.get("Exists") is True and not identity.get("Link") and identity.get("SHA256") == expected
-                and sha(bounded_read(path, 64 * 1024 * 1024)) == expected, "owned_asset_hash")
+        # Windows preserves path spelling in JSON while Go and Python may
+        # canonicalize its casing differently. Accept only one native spelling.
+        matches = [identity for name, identity in files.items()
+                   if os.path.normcase(name) == os.path.normcase(str(path))]
+        require(len(matches) == 1, "owned_asset_path_identity")
+        identity = matches[0]
+        require(identity.get("Exists") is True and not identity.get("Link"), "owned_asset_kind")
+        require(identity.get("SHA256") == expected, "owned_asset_ledger_hash")
+        require(sha(bounded_read(path, 64 * 1024 * 1024)) == expected, "owned_asset_disk_hash")
     for event, name in OWN.items():
         groups = [group for group in settings["hooks"].get(event, []) if any(h.get("name") == name for h in group["hooks"])]
         require(len(groups) == 1 and len(groups[0]["hooks"]) == 1, "two_owned_hooks_required")
