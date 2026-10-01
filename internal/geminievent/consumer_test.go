@@ -304,7 +304,12 @@ func TestContinuousDeadlineCancelsHTTPAndRejectsExpiredObservation(t *testing.T)
 	// Timestamped interprocess admission and its deadline have separate strict tests.
 	facts.Timestamp = ""
 	c.Gate = testGate{channels: Channels{Webhook: true}}
+	calls := 0
 	c.SendWebhook = func(ctx context.Context, _ *config.Config, _ webhook.SendContext) error {
+		calls++
+		if err := ctx.Err(); err != nil {
+			t.Errorf("HTTP handoff already canceled before suspend: %v", err)
+		}
 		c.Clock.(*testClock).seconds.Store(15)
 		select {
 		case <-ctx.Done():
@@ -315,8 +320,8 @@ func TestContinuousDeadlineCancelsHTTPAndRejectsExpiredObservation(t *testing.T)
 		}
 	}
 	r := c.Consume(context.Background(), facts, deadline)
-	if r.Webhook != "unknown" {
-		t.Fatalf("suspended outcome = %+v", r)
+	if calls != 1 || r.Webhook != "unknown" {
+		t.Fatalf("suspended calls = %d, outcome = %+v", calls, r)
 	}
 	c.SendWebhook = func(context.Context, *config.Config, webhook.SendContext) error {
 		t.Error("expired webhook reached")
