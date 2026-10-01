@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/geminisource"
@@ -28,7 +29,9 @@ func privateWindowsCacheFixture(t *testing.T) (Consumer, geminisource.Facts, not
 	if err := installruntime.RestrictPrivatePath(c.Cache.Root); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), ClaimBudget)
+	// Creating the synthetic private lock is fixture preparation. Actual claims
+	// below retain their independent production ClaimBudget.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	release, err := installruntime.Lock(ctx, filepath.Join(c.Cache.Root, ".observations.lock"))
 	if err != nil {
@@ -177,24 +180,47 @@ func TestWindowsCachePrivateOwnerControl(t *testing.T) {
 			if err := checkCacheRoot(c.Cache.Root); err != nil {
 				t.Fatal(err)
 			}
-			effects := 0
-			c.Desktop = deliveryFunc(func(context.Context, notification.Request) notification.Receipt {
-				effects++
-				return notification.Receipt{Status: "submitted"}
-			})
-			c.SendWebhook = func(context.Context, *config.Config, webhook.SendContext) error { effects++; return nil }
-			if got := c.Consume(context.Background(), facts, deadline); got.Status != "submitted" || effects != 2 {
-				t.Fatalf("valid control suppressed: %+v / %d", got, effects)
+			// This test owns ACL acceptance and read-only duplicate admission.
+			// Prepare valid attempted bits outside the claim's filesystem budget;
+			// first delivery and cold-cache publication have separate strict tests.
+			boot := sha256.Sum256([]byte("test-boot"))
+			seed, err := json.Marshal(cacheState{Boot: hex.EncodeToString(boot[:]),
+				Entries: []cacheEntry{{Key: marker(c.Binding, facts), Until: 70, Bits: 3}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := writeCache(c.Cache.Root, seed); err != nil {
+				t.Fatal(err)
 			}
 			path := filepath.Join(c.Cache.Root, "observations.json")
 			assertWindowsCachePrivateOwner(t, path)
 			if foreignRead {
 				windowsCacheEveryoneACE(t, path, "FRFX")
 			}
+			if data, err := readCache(c.Cache.Root); err != nil || !bytes.Equal(data, seed) {
+				t.Fatalf("valid private/read-only cache rejected: %v", err)
+			}
+			lockPath := filepath.Join(c.Cache.Root, ".observations.lock")
+			rootBefore := windowsCacheSecurity(t, c.Cache.Root).String()
+			documentBefore := windowsCacheSecurity(t, path).String()
+			lockBefore := windowsCacheSecurity(t, lockPath).String()
+			effects := 0
+			c.Desktop = deliveryFunc(func(context.Context, notification.Request) notification.Receipt {
+				effects++
+				return notification.Receipt{Status: "submitted"}
+			})
+			c.SendWebhook = func(context.Context, *config.Config, webhook.SendContext) error { effects++; return nil }
 			// Reopen via another RecentCache value to check persisted channel bits.
 			c.Cache = &RecentCache{Root: c.Cache.Root, Clock: c.Clock}
-			if got := c.Consume(context.Background(), facts, deadline); got.Desktop != "duplicate" || got.Webhook != "duplicate" || effects != 2 {
+			want := Receipt{Status: "suppressed", Reason: "no_attempt", Desktop: "duplicate", Webhook: "duplicate"}
+			if got := c.Consume(context.Background(), facts, deadline); got != want || effects != 0 {
 				t.Fatalf("private cache lost persisted bits: %+v / %d", got, effects)
+			}
+			if data, err := readCache(c.Cache.Root); err != nil || !bytes.Equal(data, seed) ||
+				windowsCacheSecurity(t, c.Cache.Root).String() != rootBefore ||
+				windowsCacheSecurity(t, path).String() != documentBefore ||
+				windowsCacheSecurity(t, lockPath).String() != lockBefore {
+				t.Fatalf("duplicate admission mutated private cache bytes/ACL: %v", err)
 			}
 		})
 	}
