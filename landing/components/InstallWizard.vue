@@ -16,9 +16,9 @@ async function changeIntent(value: Intent) {
   await nextTick();
   installTitle.value?.focus({ preventScroll: true });
 }
-const selectedProducts = reactive({ claude: true, codex: false, opencode: false });
+const selectedProducts = reactive({ claude: true, codex: false, opencode: false, gemini: false });
 const selection = computed<AgentProduct[]>(() =>
-  (["claude", "codex", "opencode"] as const).filter((value) => selectedProducts[value]),
+  (["claude", "codex", "opencode", "gemini"] as const).filter((value) => selectedProducts[value]),
 );
 const hasLegacy = computed(() => selectedProducts.claude || selectedProducts.codex);
 function toggleProduct(value: AgentProduct) {
@@ -107,7 +107,7 @@ async function copy() {
         :aria-pressed="selectedProducts[item.value as AgentProduct]"
         @click="toggleProduct(item.value as AgentProduct)"
       >
-        <AgentLogo :agent="item.value as 'claude' | 'codex' | 'opencode'" />
+        <AgentLogo :agent="item.value as AgentProduct" />
         <span class="agent-card-copy"
           ><strong>{{
             item.label
@@ -173,7 +173,7 @@ async function copy() {
       v-if="intent === 'configure'"
       class="setup-panel configuration instructions"
     >
-      <h3>{{ hasLegacy ? t("install.configure.title") : t("install.opencode.guide") }}</h3>
+      <h3>{{ hasLegacy ? t("install.configure.title") : t("install.capabilities.title") }}</h3>
       <p v-if="selectedProducts.claude">
         {{ t("install.configure.claudeBefore") }}
         <code>/claude-notifications-go:settings</code>.
@@ -189,7 +189,12 @@ async function copy() {
         >. {{ t("install.configure.codexAfter") }}
       </p>
       <p v-if="selectedProducts.opencode">{{ t("install.opencode.configure") }}</p>
+      <p v-if="selectedProducts.gemini"><a :href="repo + '/blob/main/docs/gemini-notifications.md'">{{ t("install.gemini.guide") }}</a>. {{ t("install.gemini.configure") }}</p>
       <p v-if="hasLegacy">{{ t("install.configure.shared") }}</p>
+    </div>
+    <div v-else-if="selectedProducts.gemini && target !== 'manual'" class="setup-panel instructions" role="status">
+      <p>{{ t("install.gemini.version") }}</p>
+      <a :href="repo + '/blob/main/docs/gemini-notifications.md'">{{ t("install.gemini.guide") }}</a>
     </div>
     <div v-else-if="target === 'manual'" class="setup-panel instructions">
       <h3>{{ t("install.manual.title") }}</h3>
@@ -204,6 +209,7 @@ async function copy() {
           >{{ t("install.manual.codex") }}</a
         >
       </p>
+      <p v-if="selectedProducts.gemini">{{ t("install.gemini.version") }} <a :href="repo + '/blob/main/docs/gemini-notifications.md'">{{ t("install.gemini.guide") }}</a></p>
     </div>
     <div v-else-if="!snippet" class="setup-panel instructions">
       <p>{{ t("install.chooseTarget") }}</p>
@@ -324,6 +330,7 @@ async function copy() {
       </div>
     </template>
     <footer class="install-footer">
+      <a v-if="selectedProducts.gemini" :href="repo + '/blob/main/docs/gemini-notifications.md'">{{ t("install.gemini.guide") }} ↗</a>
       <a
         v-if="hasLegacy"
         :href="repo + (selectedProducts.codex

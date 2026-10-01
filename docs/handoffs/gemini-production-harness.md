@@ -1,3 +1,5 @@
+> Historical fixture implementation handoff. Executed G0/G5 qualification now passes all five native platforms; see the current result below. Original pending gates describe the worker handoff only.
+
 # Gemini production artifact driver handoff
 
 The patch owns only `tests/integration/gemini_notifications_e2e.py` and this
@@ -203,3 +205,26 @@ drift, foreign/policy preservation, correlated receipt rejection and artifact/
 runner/action guards. It uses no subprocess, HTTP, PTY, fake production hook,
 installer mock, or source-grep passing gate. Results from this workspace are
 recorded in the final handoff response; native execution remains unverified.
+
+## Executed qualification, 2026-10-01
+
+GitHub run `36859247789` at exact AN
+`cee81a77d8aef5369456cc24ad4e9be5184b3264` passed Windows amd64,
+Linux amd64/arm64 and macOS arm64/Intel, with actual native Gemini 0.62.0
+and production AN binaries. All six native cases and the documented lifecycle,
+changed executable update, foreign-hook preservation and two live-session
+revocation cases passed. Both native children exited zero without forced cleanup.
+Public SDK `2d2a26bf372a` and agentplugins `11a842f55d19` were linked with
+`GOWORK=off` and no module replacements.
+
+The owner's Mac separately passed production desktop delivery using the existing
+signed helper, ten submitted receipts (seven completion, three permission),
+including desktop delivery with webhooks disabled. The owner confirmed both fixed
+banner texts in the earlier native run. Its visual attestation retains its original
+artifact binding; final-graph delivery is separate evidence. See
+`gemini-native-harness-evidence.md` for exact binary identities and limitations.
+
+All CI jobs use a deterministic loopback model provider. Windows/Linux/Intel
+notification API/visual desktop and live Google model service remain unqualified;
+public installation awaits a compatible release. Native CLI/webhook qualification
+is complete and does not imply those separate capabilities.

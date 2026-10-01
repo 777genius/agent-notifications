@@ -46,9 +46,78 @@ and visual behavior are unverified. Interactive Mac desktop/API/visual runs
 remain with the main orchestrator. The event producer is the real native CLI;
 the model provider is deterministic real local HTTP. No Google model-service
 qualification is claimed. Green CI means implemented scenarios passed, not
-that pending G5/desktop gates are complete.
+that GUI or live Google model-service gates are complete.
 
-Provider checks passed: four wrapper self-tests, six existing G5 self-tests,
+Historical provider checks passed: four wrapper self-tests, six then-existing G5 self-tests,
 Python compilation in memory, workflow YAML parsing and whitespace checks.
 Commands used `python3 -B ... --self-test`; no npm/build/native execution was
-performed. Native CI remains unrun.
+performed by that provider worker.
+
+Trusted native CI passed all five platforms at AN
+`cee81a77d8aef5369456cc24ad4e9be5184b3264`, run `36859247789`:
+Windows amd64, macOS arm64/Intel and Linux amd64/arm64. Every job exercised
+G0 and G5, all six native cases, production install/repeat/changed-binary update/
+inspect/recovery/remove, foreign preservation and live-session revocation.
+Native children exited zero without forced termination. The current pure suite
+contains ten G5 checks and four wrapper checks. Interactive macOS production
+and owner visual evidence are recorded separately in `gemini-production-harness.md`.
+
+Earlier failures were TEST fixture defects: Windows binary reads required
+`O_BINARY`; native `write_file` uses CRLF on Windows; the explicit Windows
+child environment requires PATHEXT; private TEST ACLs must cover newly created
+children; ConPTY bridge cleanup must follow the confirmed native child exit;
+Intel startup requires `/usr/sbin` for the bundled architecture probe's `sysctl`.
+The production deadline and privacy/ownership checks were preserved.
+
+Final strengthened native run `36869251870` at
+`e7204a400a66ee4f69dbbd772a6cdd08182f9183` also passed all five targets.
+It rechecks denied/cancelled tool effects after recovery to reject late writes.
+No production deadline, privacy or ownership contract was relaxed.
+
+Latest candidate run `36874294985`, exact source
+`1e0665c792b960835f301d8974fb248dba4687e8`, finished successfully on all five
+targets at attempt 2. Only the failed Linux arm64 job was retried once; the
+other four successful target results were retained. Its first attempt reached
+all six native cases but failed `production_webhook_missing` before update and
+remove. Cleanup verified revocation. The cause is not proven, and success on
+retry does not establish that a production defect was fixed.
+
+Both Linux arm64 artifacts remain available: original failure `11167664376`
+and successful retry `11169107128`. Their bounded `G5-evidence.json` SHA-256
+values are respectively
+`59aa0d64b880306245f1ea1d20e04c566372840149c2075a9f1153812437cc8b` and
+`9bd2206600af4132822ecc9d33f868444d7e890eb60fabfab14018d3b9e66493`.
+The successful retry recorded nine final webhook deliveries, native exit zero
+without forced termination, changed-artifact update and verified revocation.
+Headless OS/API and visual gates retain the qualifications stated above.
+
+Subsequent exact candidate `4601d24002dd5c43b43c07706035582c0e7d715f`
+passed all five native G0/G5 targets on the first attempt in run `36879333230`.
+Its only source changes from the preceding candidate are two test fixtures:
+Windows ACL acceptance tests durable duplicate admission without timing cold
+publication, and the aggregate installer Node watchdog is 60s. Production
+code, the 250ms claim budget and strict first-claim/concurrency tests remain.
+The earlier missing-webhook failure above remains part of the evidence.
+
+Final Windows CI separates the entire `internal/geminievent` package from
+other parallel packages while retaining `-race`, atomic coverage and every
+strict first-claim/interprocess assertion. Remaining packages still run in
+parallel, with both coverage profiles combined. This addresses cross-package
+contention as a test risk; it does not prove Defender or a particular syscall
+caused the earlier time-budget failures. Production code and limits are unchanged.
+
+Final exact head `25b79bd7786818918512d700e12b3d9ee3a0bf77` passed all five
+native G0/G5 targets on the first attempt in run `36884579017`. The final
+artifacts are Linux amd64 `11175176260`, Linux arm64 `11174106547`, Windows
+amd64 `11174807311`, macOS arm64 `11174244350` and Intel `11173608782`.
+General source CI and merge status are tracked separately in the plan.
+
+Final general CI on the same exact head also passed: Windows Go 1.25/1.26
+run `36884578935`, macOS Go 1.25/1.26 and Swift run `36884579006`, and
+Ubuntu Go 1.25/1.26, lint and OpenCode bundle run `36884579073`. OpenCode
+native regression run `36884579375` passed all five targets. Source PR #285
+merged as `6ee0d84705d721219ecc56ef8cab6ff2de53becb`; its Git tree
+`4c74f77221ecfcac31fbb0c408163ae4bd3f1e60` exactly matches qualified
+head `25b79bd`. The author is linked to owner `777genius` with
+`iliyazelenkog@gmail.com`; GitHub is the squash committer. Documentation/
+landing PR #286 remains draft. No new release, tags or packages were published.
