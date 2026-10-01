@@ -356,6 +356,11 @@ export default async function(){record({phase:'loaded',version:'v1'});return{eve
             if case == 'reload':
                 if args.version != '2.0.21':
                     raise ValueError('native plugin reload belongs to the current V2 API')
+                warm_session = req('/api/session', {'title': 'TEST-before-reload', 'location': {'directory': str(project)}})['data']['id']
+                previous = len(webhook.bodies)
+                req(prefix + warm_session + '/prompt', {'text': 'TEST-before-reload'})
+                req('/api/experimental/session/' + warm_session + '/wait', method='POST')
+                wait(lambda: len(webhook.bodies) == previous + 1, 'pre-reload native completion')
                 old_trace = len(rows())
                 req('/api/location/reload', {})
                 wait(lambda: any(x.get('phase') == 'cleanup' for x in rows()[old_trace:]), 'native plugin disposal')
