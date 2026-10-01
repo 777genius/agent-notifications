@@ -111,3 +111,13 @@ native G0/G5 targets on the first attempt in run `36884579017`. The final
 artifacts are Linux amd64 `11175176260`, Linux arm64 `11174106547`, Windows
 amd64 `11174807311`, macOS arm64 `11174244350` and Intel `11173608782`.
 General source CI and merge status are tracked separately in the plan.
+
+Final general CI on the same exact head also passed: Windows Go 1.25/1.26
+run `36884578935`, macOS Go 1.25/1.26 and Swift run `36884579006`, and
+Ubuntu Go 1.25/1.26, lint and OpenCode bundle run `36884579073`. OpenCode
+native regression run `36884579375` passed all five targets. Source PR #285
+merged as `6ee0d84705d721219ecc56ef8cab6ff2de53becb`; its Git tree
+`4c74f77221ecfcac31fbb0c408163ae4bd3f1e60` exactly matches qualified
+head `25b79bd`. The author is linked to owner `777genius` with
+`iliyazelenkog@gmail.com`; GitHub is the squash committer. Documentation/
+landing PR #286 remains draft. No new release, tags or packages were published.
