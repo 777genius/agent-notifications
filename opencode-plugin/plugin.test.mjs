@@ -1,81 +1,36 @@
 import assert from 'node:assert/strict';
-import { EventEmitter } from 'node:events';
-import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
-import { forward } from './ipc.mjs';
+import dc from 'node:diagnostics_channel';
 
-test('loaded OpenCode bundle exports exactly one plugin function', async () => {
-  const exports = await import('../internal/opencodeplugin/dist/agent-notifications.js');
-  assert.deepEqual(Object.keys(exports), ['AgentNotifications']);
-  assert.equal(typeof exports.AgentNotifications, 'function');
+// PR294's dual-object boundary plus the retained legacy entry: neither branch
+// may obtain a second loader authority from multiple native export discovery.
+test('self-contained bundle has the exact dual definition and one shared V1 loader', async()=>{
+ const exports=await import('../internal/opencodeplugin/dist/agent-notifications.js');
+ assert.deepEqual(Object.keys(exports),['AgentNotifications','default']);
+ assert.deepEqual(Object.keys(exports.default).sort(),['id','server','setup']);
+ assert.equal(exports.default.id,'agent-notifications');
+ assert.equal(typeof exports.default.server,'function');assert.equal(typeof exports.default.setup,'function');
+ const client={session:{get(){throw Error('must_not_read');},messages(){throw Error('must_not_read');}}};
+ const input={client,directory:'/TEST-unqualified'};
+ assert.equal(await exports.AgentNotifications(input),await exports.default.server(input));
 });
-
-test('IPC sends only neutral wire and treats an ambiguous child failure as non-success', async () => {
-  let sent;
-  const previousSelector = process.env.AGENT_NOTIFICATIONS_CONFIG;
-  process.env.AGENT_NOTIFICATIONS_CONFIG = '/test/selected-config.json';
-  try {
-  const spawnFake = (_binary, args, options) => {
-    assert.deepEqual(args, ['opencode-event', '--protocol', '1']);
-    assert.equal(options.shell, false);
-    assert.equal(options.windowsHide, true);
-    assert.equal(options.env.AGENT_NOTIFICATIONS_CONFIG, '/test/selected-config.json');
-    assert.equal(options.env.AGENT_NOTIFICATIONS_CONTROL_ROOT, '/test/managed-control');
-    const child = new EventEmitter();
-    child.stdin = new PassThrough();
-    child.stdout = new PassThrough();
-    child.stderr = new PassThrough();
-    child.kill = () => {};
-    child.stdin.on('data', (chunk) => { sent = chunk.toString(); });
-    queueMicrotask(() => child.emit('close', 1));
-    return child;
-  };
-  const fact = { version: 1, kind: 'terminal_error', sessionID: 's', turnID: 't', rootSession: true };
-  assert.equal(await forward(fact, spawnFake, '/test/owned-binary', '/test/managed-control', 'linux'), 'rejected');
-  assert.deepEqual(JSON.parse(sent), fact);
-  } finally {
-    if (previousSelector === undefined) delete process.env.AGENT_NOTIFICATIONS_CONFIG;
-    else process.env.AGENT_NOTIFICATIONS_CONFIG = previousSelector;
-  }
-});
-
-test('Windows IPC accepts owned absolute exe paths and sends a narrow startup environment', async () => {
-  const previous = { ...process.env };
-  process.env.SystemRoot = 'C:\\Windows';
-  process.env.USERPROFILE = 'C:\\Users\\test';
-  process.env.SECRET_TEST_TOKEN = 'must-not-leak';
-  try {
-    let calls = 0;
-    const fake = (binary, args, options) => {
-      calls++;
-      assert.equal(binary, 'C:\\Program Files\\Agent Notifications\\agent.exe');
-      assert.deepEqual(args, ['opencode-event', '--protocol', '1']);
-      assert.equal(options.shell, false);
-      assert.equal(options.windowsHide, true);
-      assert.equal(options.env.SystemRoot, 'C:\\Windows');
-      assert.equal(options.env.USERPROFILE, 'C:\\Users\\test');
-      assert.equal(options.env.AGENT_NOTIFICATIONS_CONTROL_ROOT, 'C:\\Users\\test\\control');
-      assert.equal(options.env.SECRET_TEST_TOKEN, undefined);
-      assert.equal(options.env.PATH, undefined);
-      const child = new EventEmitter();
-      child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
-      child.kill = () => {};
-      queueMicrotask(() => { child.stdout.write('{"status":"submitted"}'); child.emit('close', 0); });
-      return child;
-    };
-    assert.equal(await forward({ version: 1 }, fake, 'C:\\Program Files\\Agent Notifications\\agent.exe', 'C:\\Users\\test\\control', 'win32'), 'submitted');
-    assert.equal(calls, 1);
-    for (const [binary, root] of [
-      ['agent.exe', 'C:\\control'], ['C:agent.exe', 'C:\\control'],
-      ['C:\\agent', 'C:\\control'], ['C:\\agent.exe', '\\control'],
-      ['\\\\?\\C:\\agent.exe', 'C:\\control'],
-    ]) {
-      assert.equal(await forward({}, fake, binary, root, 'win32'), 'invalid_plugin');
-    }
-    assert.equal(calls, 1);
-  } finally {
-    for (const key of ['SystemRoot', 'USERPROFILE', 'SECRET_TEST_TOKEN']) {
-      if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key];
-    }
-  }
+// Red if a public runtimeEligibility boolean, env version, content diagnostic or
+// ctx.app.version can authorize an unbound/unqualified installed artifact.
+test('unrendered/unqualified cells are silent even with fabricated public grants',async()=>{
+ const {default:plugin}=await import('../internal/opencodeplugin/dist/agent-notifications.js');
+ const output=[],children=[];
+ const observer=({process:child})=>children.push(child);
+ const previous=console.error;console.error=(...args)=>output.push(args);
+ dc.subscribe('child_process',observer);
+ try {
+  const input={directory:'/TEST-unqualified',runtimeEligibility:true,client:{session:{get(){throw Error('PRIVATE_SENTINEL');},messages(){throw Error('PRIVATE_SENTINEL');}}}};
+  const hooks=await plugin.server(input);
+  assert.equal(hooks.event({event:{type:'session.error',properties:{sessionID:'PRIVATE_SENTINEL',error:{message:'PRIVATE_SENTINEL'}}}}),undefined);
+  const context={app:{version:'2.0.21'},runtimeEligibility:true,location:{directory:'/TEST-unqualified'},
+   session:{get(){throw Error('PRIVATE_SENTINEL');},context(){throw Error('PRIVATE_SENTINEL');}},
+   permission:{get(){throw Error('PRIVATE_SENTINEL');},list(){throw Error('PRIVATE_SENTINEL');}},
+   rpc:{register(){throw Error('PRIVATE_SENTINEL');}},event:{subscribe(){throw Error('PRIVATE_SENTINEL');}}};
+  assert.equal(await plugin.setup(context),undefined);
+  assert.deepEqual(output,[]);assert.deepEqual(children,[]);
+ }finally{dc.unsubscribe('child_process',observer);console.error=previous;}
 });

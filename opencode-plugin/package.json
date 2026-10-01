@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
-    "check": "npm run build && node --test"
+    "check": "npm run build && node --test",
+    "check:candidate": "node verify-candidate.mjs"
   },
   "devDependencies": {
     "esbuild": "0.28.2"
