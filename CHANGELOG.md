@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.46.2] - 2026-10-01
+
+### Changed
+- Fresh macOS Codex and combined bootstrap installs enable chat navigation by default when the registered official Codex Desktop app passes signature verification. Existing navigation policy and explicit choices remain preserved. If the verified app is unavailable, bootstrap reports its fallback to informational notifications without navigation.
+
+### Fixed
+- Managed notification helpers take priority over old concrete helper bundles, so notification clicks reach the originating Codex chat instead of being handled by an obsolete helper. Installation reconciles known obsolete macOS registrations while retaining bundle files and published callback generations, and warns if macOS still selects a different helper.
+- Native helper updates select the supplied release before falling back to an installed helper.
+
+### Platform notes
+- Automatic chat navigation applies to fresh Codex or combined bootstrap installs on macOS. Direct `setup-codex` and Claude-only setup retain their existing default without navigation. Existing installations can explicitly configure their Codex Desktop route.
+- OpenCode notifications remain generic and do not provide chat navigation. Desktop click navigation was confirmed on macOS arm64; other platform checks do not establish visible desktop delivery.
+
 ## [1.46.1] - 2026-10-01
 
 ### Changed
