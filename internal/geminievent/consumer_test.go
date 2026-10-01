@@ -300,6 +300,9 @@ func TestRemainingParentDeadlineReachesBackend(t *testing.T) {
 // while Go's timer still permits HTTP, or a boot change grants another budget.
 func TestContinuousDeadlineCancelsHTTPAndRejectsExpiredObservation(t *testing.T) {
 	c, facts, deadline := consumerFixture(t)
+	// Measure inherited HTTP cancellation independently of cache filesystem latency.
+	// Timestamped interprocess admission and its deadline have separate strict tests.
+	facts.Timestamp = ""
 	c.Gate = testGate{channels: Channels{Webhook: true}}
 	c.SendWebhook = func(ctx context.Context, _ *config.Config, _ webhook.SendContext) error {
 		c.Clock.(*testClock).seconds.Store(15)
