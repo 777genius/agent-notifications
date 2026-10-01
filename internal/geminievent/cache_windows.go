@@ -2,19 +2,11 @@
 
 package geminievent
 
-import (
-	"os"
+import "github.com/777genius/agent-notifications/internal/installruntime"
 
-	"github.com/777genius/agent-notifications/internal/installruntime"
-)
-
-func checkCacheRoot(root string) error { return installruntime.ConfinedDirectory(root) }
+func checkCacheRoot(root string) error { return installruntime.CheckPrivateCacheRoot(root) }
 func readCache(root string) ([]byte, error) {
-	data, identity, err := installruntime.ReadConfinedDocument(root+`\observations.json`, cacheBytes)
-	if err == nil && !identity.Exists {
-		return nil, os.ErrNotExist
-	}
-	return data, err
+	return installruntime.ReadPrivateCacheDocument(root, "observations.json", cacheBytes)
 }
 func writeCache(root string, data []byte) error {
 	// Cooperating readers and writers retain the permanent kernel lock. A crash
