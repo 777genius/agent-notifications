@@ -56,16 +56,25 @@ def version_probe(code, out, err, redactions=()):
     if code == 0:
         return facts
     facts["startup_classification"] = "node_startup_error" if codes else "unclassified_public_startup_error"
+    if "ENOENT" in codes:
+        # Fixed public startup operations only; never emit arbitrary file names.
+        operations = ("spawn", "spawnSync", "open", "mkdir", "stat", "lstat", "access", "scandir", "chdir", "realpath", "dlopen", "uv_cwd", "uv_os_get_passwd", "uv_os_homedir", "uv_exepath")
+        facts["missing_operations"] = sorted(op for op in operations
+            if re.search(rb"\b" + op.encode() + rb"\b", err))
+        commands = ("git", "ioreg", "security", "uname", "whoami", "bash", "zsh", "node", "rg", "sysctl")
+        facts["missing_known_commands"] = sorted(command for command in commands
+            if re.search(rb"\bspawn(?:Sync)? (?:[^\r\n ]*/)?" + command.encode() + rb" ENOENT\b", err))
     # One bounded Error header only; stack, source excerpt and all other lines
     # are excluded. Do not expose session/provider/hook text even in this probe.
     text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", err.decode("utf-8", "replace"))
-    text = text.replace("An unexpected critical error occurred:", "", 1)
-    line = next((line.strip() for line in text.splitlines()
-                 if re.match(r"^\s*(?:[A-Za-z]*Error)(?: \[[A-Z_]+\])?:", line)), "")
+    lines = (line.removeprefix("An unexpected critical error occurred:").lstrip().removeprefix("[") for line in text.splitlines())
+    header = r"(?:(?:[A-Za-z]*Error)(?: \[[A-Z_]+\])?|ENOENT|EACCES|EPERM|EINVAL|ENOEXEC):"
+    line = next((match.group(0).strip() for candidate in lines
+                 if (match := re.match(r"^\s*" + header + r"[^\r\n]*", candidate))), "")
     if re.fullmatch(r"ReferenceError: (?:File|Blob|ReadableStream|fetch|crypto|navigator) is not defined", line):
         facts["startup_classification"] = "public_runtime_global_missing"
-    if not line or len(line) > 512 or re.search(
-            r"prompt|session|transcript|provider|hook|authorization|api.?key|token|secret", line, re.I):
+    if not line or len(line) > 512:
+        facts["startup_header"] = "absent" if not line else "overlong"
         return facts
     for root in sorted((str(p) for p in redactions), key=len, reverse=True):
         for spelling in {root, root.replace("\\", "/"), root.replace("/", "\\")}:
@@ -73,7 +82,12 @@ def version_probe(code, out, err, redactions=()):
     line = re.sub(r"(?:https?|file)://[^\s\"'<>]+", "<URL>", line, flags=re.I)
     line = re.sub(r"\b[A-Za-z]:[\\/][^\r\n\"'<>]+", "<path>", line)
     line = re.sub(r"(?<![A-Za-z0-9])/(?:[^\s\"'<>:]+)", "<path>", line)
-    if all(32 <= ord(c) <= 126 for c in line):
+    line = re.sub(r"<TEST-path>[\\/][^\r\n\"'<>]*", "<TEST-path>", line)
+    if re.search(r"prompt|session|transcript|provider|hook|authorization|api.?key|token|secret", line, re.I):
+        facts["startup_header"] = "sensitive"
+        return facts
+    facts["startup_header"] = "accepted" if all(32 <= ord(c) <= 126 for c in line) else "nonascii"
+    if facts["startup_header"] == "accepted":
         facts["startup_error_line"] = line[:240]
     return facts
 
@@ -134,8 +148,14 @@ def private_windows_lab(root):
     api.ConvertSidToStringSidW.argtypes = (pointer, ctypes.POINTER(pointer))
     api.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD,
                                                                        ctypes.POINTER(pointer), ctypes.POINTER(wintypes.DWORD))
-    api.SetFileSecurityW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, pointer)
-    token, sid_text, descriptor = wintypes.HANDLE(), pointer(), pointer()
+    api.GetSecurityDescriptorDacl.argtypes = (pointer, ctypes.POINTER(wintypes.BOOL), ctypes.POINTER(pointer), ctypes.POINTER(wintypes.BOOL))
+    api.SetNamedSecurityInfoW.argtypes = (wintypes.LPWSTR, ctypes.c_int, wintypes.DWORD, pointer, pointer, pointer, pointer)
+    api.SetNamedSecurityInfoW.restype = wintypes.DWORD
+    api.GetNamedSecurityInfoW.argtypes = (wintypes.LPWSTR, ctypes.c_int, wintypes.DWORD, pointer, pointer,
+                                        pointer, pointer, ctypes.POINTER(pointer))
+    api.GetNamedSecurityInfoW.restype = wintypes.DWORD
+    api.GetSecurityDescriptorControl.argtypes = (pointer, ctypes.POINTER(wintypes.WORD), ctypes.POINTER(wintypes.DWORD))
+    token, sid_text, descriptor, observed = wintypes.HANDLE(), pointer(), pointer(), pointer()
     try:
         require(api.OpenProcessToken(kernel.GetCurrentProcess(), 0x0008, ctypes.byref(token)), "TEST_ACL_token_failed")
         size = wintypes.DWORD()
@@ -146,12 +166,24 @@ def private_windows_lab(root):
         sid = ctypes.cast(data, ctypes.POINTER(pointer))[0]
         require(api.ConvertSidToStringSidW(sid, ctypes.byref(sid_text)), "TEST_ACL_SID_failed")
         current = ctypes.wstring_at(sid_text)
-        sddl = "D:P(A;OICI;FA;;;" + current + ")(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"
+        sddl = "O:" + current + "D:P(A;OICI;FA;;;" + current + ")(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"
         require(api.ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, 1, ctypes.byref(descriptor), None),
                 "TEST_ACL_descriptor_failed")
-        # DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION.
-        require(api.SetFileSecurityW(str(root), 0x80000004, descriptor), "TEST_ACL_apply_failed")
+        present, defaulted, dacl = wintypes.BOOL(), wintypes.BOOL(), pointer()
+        require(api.GetSecurityDescriptorDacl(descriptor, ctypes.byref(present), ctypes.byref(dacl), ctypes.byref(defaulted))
+                and present.value and dacl, "TEST_ACL_DACL_missing")
+        # The modern API explicitly supports protection; the legacy SetFileSecurity
+        # call did not qualify descendant inheritance on the actual Windows runner.
+        require(api.SetNamedSecurityInfoW(str(root), 1, 0x80000005, sid, None, dacl, None) == 0,
+                "TEST_ACL_apply_failed")
+        require(api.GetNamedSecurityInfoW(str(root), 1, 4, None, None, None, None, ctypes.byref(observed)) == 0,
+                "TEST_ACL_readback_failed")
+        control, revision = wintypes.WORD(), wintypes.DWORD()
+        require(api.GetSecurityDescriptorControl(observed, ctypes.byref(control), ctypes.byref(revision))
+                and control.value & 0x1000, "TEST_ACL_protection_missing")
     finally:
+        if observed:
+            kernel.LocalFree(observed)
         if descriptor:
             kernel.LocalFree(descriptor)
         if sid_text:
@@ -174,7 +206,10 @@ def new_lab(value):
         private_windows_lab(p)
     (p / MARKER).write_text("owned disposable Gemini native TEST\n")
     for name in ("profile/.gemini", "tmp", "xdg/config", "xdg/cache", "xdg/data", "xdg/state", "an-control", "an-runtime"):
-        (p / name).mkdir(parents=True, mode=0o700)
+        directory = p / name
+        directory.mkdir(parents=True, mode=0o700)
+        if os.name == "nt":
+            private_windows_lab(directory)
     for name in ("profile/.env", "profile/.gemini/.env", "profile/GEMINI.md"):
         (p / name).write_text("")
     # Actual empty git repository, without invoking git or changing history.
@@ -202,11 +237,11 @@ def minimal_env(lab, node, shell, system_root=None):
            "GEMINI_API_KEY": "an-gemini-test-not-a-secret", "GEMINI_FORCE_FILE_STORAGE": "true", "TERM": "xterm-256color"}
     if os.name == "nt":
         require(system_root is not None and shell.name.lower() == "pwsh.exe", "Windows_requires_explicit_pwsh_and_SystemRoot")
-        env.update(SystemRoot=str(physical(system_root)), ComSpec=str(shell))
+        env.update(SystemRoot=str(physical(system_root)), ComSpec=str(shell), PATHEXT=".COM;.EXE;.BAT;.CMD")
         bins.append(str(Path(system_root) / "System32"))
     else:
         require(shell.name == "bash", "Unix_requires_bash")
-        bins += ["/usr/bin", "/bin"]
+        bins += ["/usr/bin", "/bin", "/usr/sbin"]
         env.update(LANG="C.UTF-8", LC_ALL="C.UTF-8")
     env["PATH"] = os.pathsep.join(dict.fromkeys(bins))
     return env
@@ -269,6 +304,7 @@ class Fixture:
         self.counts, self.deliveries, self.error = {}, [], None
         self.server = self.thread = self.connection = None
         self.closed = threading.Event()
+        self.cleanup_classification = None
 
     def arm(self, case):
         require(case in CASES, "unknown_case")
@@ -367,7 +403,7 @@ class Fixture:
         self.url = "http://127.0.0.1:" + str(self.server.server_port)
         return self
 
-    def __exit__(self, *_):
+    def __exit__(self, exc_type, exc, traceback):
         self.closed.set()
         connection = self.connection
         if connection is not None:
@@ -378,7 +414,12 @@ class Fixture:
                 pass
         self.server.server_close()
         self.thread.join(4)
-        require(not self.thread.is_alive(), "server_shutdown_unconfirmed")
+        if self.thread.is_alive():
+            self.cleanup_classification = "server_shutdown_unconfirmed"
+            if exc is None:
+                raise Red(self.cleanup_classification)
+            # Preserve the scenario/setup exception and attach fixed cleanup facts.
+            exc.provider_cleanup_classification = self.cleanup_classification
 
 
 def bounded_process(argv, data, cwd, env, timeout):
@@ -581,7 +622,8 @@ class Terminal:
     def receive(self, item):
         if item.get("diagnostic") in ("auth_error", "startup_welcome", "startup_theme", "startup_trust",
                 "startup_update", "startup_model", "startup_terms", "startup_continue", "startup_error",
-                "prompt_seen", "turn_response_seen"):
+                "prompt_seen", "turn_response_seen", "hook_timeout", "hook_command_missing", "hook_parse_error",
+                "hook_python_error", "hook_root_error", "hook_input_error"):
             self.diagnostics.add(item["diagnostic"])
         if "error" in item:
             facts = bridge_event_facts(item)
@@ -617,8 +659,6 @@ class Terminal:
             item = self.events.get_nowait()
             error = self.receive(item)
             require(error is None, error)
-            if "diagnostic" in item:
-                print(json.dumps({"native_diagnostic": item["diagnostic"]}), flush=True)
             if "permission" in item:
                 self.seen.add(item["permission"])
             if "exit" in item:
@@ -727,7 +767,7 @@ def exercise(lab, fixture, terminal, ui, observer=observations):
         if case in ("approve", "deny", "cancel"):
             require(permission and case in terminal.seen and acted, "actual_permission_UI_missing")
             target = lab / "profile" / ("effect-" + case + ".txt")
-            effect = target.is_file() and target.read_bytes() == b"owned TEST effect\n"
+            effect = target.is_file() and target.read_bytes() == b"owned TEST effect" + os.linesep.encode("ascii")
             require(effect if case == "approve" else not target.exists(), "wrong_TEST_tool_effect")
         results.append({"case": case, "AfterAgent_seen": completion, "permission_UI_seen": permission and case in terminal.seen,
                         "tool_effect_verified": True if case in ("approve", "deny", "cancel") else None})
@@ -818,6 +858,9 @@ def main():
                             settings_sha256=digest(before), UI_source_sha256=ui["source_sha256"],
                             own_child_exit=terminal.exit)
     except Exception as exc:
+        manifest["native_execution"] = "failed"
+        if hasattr(exc, "provider_cleanup_classification"):
+            manifest["provider_cleanup_classification"] = exc.provider_cleanup_classification
         manifest["classification"] = str(exc) if isinstance(exc, Red) else "harness_execution_error"
         manifest["exception_type"] = type(exc).__name__
         if hasattr(exc, "bridge_diagnostic"):

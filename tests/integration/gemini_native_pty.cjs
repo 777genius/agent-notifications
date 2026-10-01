@@ -9,7 +9,7 @@ let child, deadline, killDeadline, sequence, pattern, forced = false;
 let tail = '', total = 0, permissionSeen = false, stopped = false;
 let stage = 'protocol';
 const diagnostics = new Set();
-const emit = data => process.stdout.write(JSON.stringify(data) + '\n');
+const emit = (data, flushed) => process.stdout.write(JSON.stringify(data) + '\n', flushed);
 class ValidationError extends Error {}
 const check = (ok, code) => { if (!ok) throw new ValidationError(code); };
 const validationCodes = new Set(['duplicate_start', 'TEST_installation_required', 'CLI_physical_path_required',
@@ -84,7 +84,7 @@ function start(m) {
   stage = 'environment_validation';
   const allowed = new Set(['HOME','USERPROFILE','GEMINI_CLI_HOME','XDG_CONFIG_HOME','XDG_CACHE_HOME','XDG_DATA_HOME','XDG_STATE_HOME',
     'TMPDIR','TMP','TEMP','GEMINI_CLI_SYSTEM_SETTINGS_PATH','GEMINI_CLI_SYSTEM_DEFAULTS_PATH','GEMINI_CLI_TRUSTED_FOLDERS_PATH',
-    'GEMINI_API_KEY','GEMINI_FORCE_FILE_STORAGE','GOOGLE_GEMINI_BASE_URL','TERM','PATH','LANG','LC_ALL','SystemRoot','ComSpec']);
+    'GEMINI_API_KEY','GEMINI_FORCE_FILE_STORAGE','GOOGLE_GEMINI_BASE_URL','TERM','PATH','LANG','LC_ALL','SystemRoot','ComSpec','PATHEXT']);
   check(Object.keys(m.env).every(k => allowed.has(k)), 'environment_not_allowlisted');
   const cwd = fs.realpathSync(m.cwd), lab = path.dirname(cwd);
   check(cwd === m.cwd && path.basename(cwd) === 'profile' && fs.existsSync(path.join(lab, '.an-gemini-TEST')), 'TEST_cwd_required');
@@ -104,7 +104,7 @@ function start(m) {
     // Strip CSI/OSC before matching genuine rendered UI; never send its text.
     tail = (tail + data).slice(-65536);
     const plain = tail.replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
-    for (const [label, re] of [['auth_error', /Invalid auth|authentication.*error|No authentication/i], ['startup_welcome', /Welcome to Gemini/i], ['startup_theme', /Choose.*theme|Select.*theme/i], ['startup_trust', /trust this folder|Do you trust/i], ['startup_update', /update.*available/i], ['startup_model', /Select.*model|Choose.*model/i], ['startup_terms', /Terms of Service|usage statistics/i], ['startup_continue', /press.*enter|press.*key/i], ['startup_error', /Error:|error occurred|not supported/i], ['prompt_seen', /AN_TEST_PLAIN/i], ['turn_response_seen', /TEST turn finished/i]]) {
+    for (const [label, re] of [['auth_error', /Invalid auth|authentication.*error|No authentication/i], ['startup_welcome', /Welcome to Gemini/i], ['startup_theme', /Choose.*theme|Select.*theme/i], ['startup_trust', /trust this folder|Do you trust/i], ['startup_update', /update.*available/i], ['startup_model', /Select.*model|Choose.*model/i], ['startup_terms', /Terms of Service|usage statistics/i], ['startup_continue', /press.*enter|press.*key/i], ['startup_error', /Error:|error occurred|not supported/i], ['hook_timeout', /Hook timed out after/i], ['hook_command_missing', /CommandNotFoundException|is not recognized as/i], ['hook_parse_error', /ParserError|Unexpected token/i], ['hook_python_error', /Traceback|usage: gemini_native_e2e/i], ['hook_root_error', /hook_root_mismatch/i], ['hook_input_error', /hook_payload_limit|hook_event_mismatch|hook_session_missing|hook_cwd_mismatch|hook_timestamp_missing|hook_stop_flag_missing|actual_hook_shell_missing/i], ['prompt_seen', /AN_TEST_PLAIN/i], ['turn_response_seen', /TEST turn finished/i]]) {
       if (!diagnostics.has(label) && re.test(plain)) {diagnostics.add(label); emit({diagnostic: label});}
     }
     if (sequence && !permissionSeen && pattern.test(plain)) {
@@ -114,9 +114,14 @@ function start(m) {
   });
   child.onExit(({exitCode, signal}) => {
     clearTimeout(deadline); clearTimeout(killDeadline);
-    emit({exit: {code: exitCode, signal: signal || 0, forced, terminal_bytes: total}});
     child = undefined;
     process.stdin.destroy();
+    emit({exit: {code: exitCode, signal: signal || 0, forced, terminal_bytes: total}}, () => {
+      // ConPTY's internal socket worker can retain the bridge after native exit.
+      // Terminate only this helper, after flushing the confirmed child exit.
+      // Never call pty.kill() after exit: its PID list may already be stale.
+      if (process.platform === 'win32') process.exit(process.exitCode || 0);
+    });
   });
   // ConPTY loads its addon lazily in WindowsPtyAgent's spawn constructor.
   // Validate the actually loaded modules after registering owned-child cleanup.
