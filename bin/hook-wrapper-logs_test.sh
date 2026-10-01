@@ -6,7 +6,7 @@ src=$(cd "$(dirname "$0")" && pwd)
 root=$(mktemp -d)
 trap 'rm -rf "$root"' EXIT
 test_env_setup "$root"
-python3 - "$src/hook-wrapper.sh" "$root" <<'PY'
+python3 - "$src/hook-wrapper.sh" "$root" "$BASH" <<'PY'
 import concurrent.futures
 import json
 import os
@@ -16,6 +16,7 @@ import subprocess
 import sys
 
 source, root = Path(sys.argv[1]), Path(sys.argv[2])
+shell = sys.argv[3]
 env = dict(os.environ, ROOT=root.as_posix(), CN_PRODUCT='claude')
 version = '1.42.0'
 stub = root / 'stubs'
@@ -40,7 +41,7 @@ def invoke(plugin, cache, product='claude', extra=None):
     run_env = dict(env, XDG_CACHE_HOME=cache.as_posix(), CN_PRODUCT=product)
     if extra:
         run_env.update(extra)
-    result = subprocess.run(['bash', '-c', 'export PATH="$ROOT/stubs:$PATH"; unset OS; exec sh "$1" handle-hook Stop',
+    result = subprocess.run([shell, '-c', 'export PATH="$ROOT/stubs:$PATH"; unset OS; exec /usr/bin/sh "$1" handle-hook Stop',
                              'fixture', (plugin / 'bin/hook-wrapper.sh').as_posix()],
                             env=run_env, capture_output=True, timeout=15)
     assert result.returncode == 0, result
