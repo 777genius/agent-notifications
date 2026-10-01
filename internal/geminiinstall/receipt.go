@@ -58,7 +58,7 @@ func readBounded(path string, limit int64) ([]byte, installruntime.Identity, err
 	if err != nil {
 		return nil, before, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	info, err := f.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Size() > limit {
 		return nil, before, errors.New("bounded regular file required")
@@ -81,12 +81,12 @@ func readReceipt(root string, l installruntime.Ledger) (receipt, []byte, error) 
 	c, registered := l.Consumers[consumerID]
 	path := filepath.Join(root, receiptName)
 	if !registered || c.Registration != path {
-		return r, nil, errors.New("Gemini receipt registration is unavailable")
+		return r, nil, errors.New("gemini receipt registration is unavailable")
 	}
 	data, observed, err := readBounded(path, 16<<10)
 	owned, ok := installruntime.OwnedFile(l, path)
 	if err != nil || !ok || !observed.Exists || observed != owned {
-		return r, nil, errors.New("Gemini receipt is missing or changed")
+		return r, nil, errors.New("gemini receipt is missing or changed")
 	}
 	d := json.NewDecoder(bytes.NewReader(data))
 	d.DisallowUnknownFields()
@@ -95,15 +95,15 @@ func readReceipt(root string, l installruntime.Ledger) (receipt, []byte, error) 
 		r.Owned == nil || len(r.Owned.Groups) != 2 || len(c.Commands) == 0 ||
 		!reflect.DeepEqual(c.Commands, command(c.Commands[0], root, r.Binding)) ||
 		!reflect.DeepEqual(r.Specs, hookSpecs(c.Commands[0], root, r.Binding)) {
-		return r, nil, errors.New("Gemini receipt contract is invalid")
+		return r, nil, errors.New("gemini receipt contract is invalid")
 	}
 	var extra any
 	if d.Decode(&extra) != io.EOF {
-		return r, nil, errors.New("Gemini receipt has trailing data")
+		return r, nil, errors.New("gemini receipt has trailing data")
 	}
 	for i, group := range r.Owned.Groups {
 		if group.Event != r.Specs[i].Event || group.Name != r.Specs[i].Name {
-			return r, nil, errors.New("Gemini receipt selectors changed")
+			return r, nil, errors.New("gemini receipt selectors changed")
 		}
 	}
 	return r, data, nil
@@ -112,7 +112,7 @@ func readReceipt(root string, l installruntime.Ledger) (receipt, []byte, error) 
 func receiptBytes(r receipt) ([]byte, error) {
 	data, err := json.MarshalIndent(r, "", "  ")
 	if err != nil || len(data) >= 16<<10 {
-		return nil, errors.New("Gemini receipt exceeded its size limit")
+		return nil, errors.New("gemini receipt exceeded its size limit")
 	}
 	return append(data, '\n'), nil
 }

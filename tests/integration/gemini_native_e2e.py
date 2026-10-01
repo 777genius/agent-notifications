@@ -661,6 +661,7 @@ def main():
                             own_child_exit=terminal.exit)
     except Exception as exc:
         manifest["classification"] = str(exc) if isinstance(exc, Red) else "harness_execution_error"
+        manifest["exception_type"] = type(exc).__name__
         raise
     finally:
         (lab / "evidence.json").write_text(json.dumps(manifest, indent=2) + "\n")

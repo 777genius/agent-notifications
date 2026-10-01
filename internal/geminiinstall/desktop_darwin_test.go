@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/opencodeinstall"
@@ -15,7 +16,8 @@ import (
 // The reused preparation must select an independent Gemini namespace, retain
 // OpenCode's lock, and reject a symlink before writing into a foreign directory.
 func TestGeminiSpoolPreservesOpenCodeAndRejectsLinks(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	root := filepath.Join(t.TempDir(), "control")
 	if _, err := installruntime.Commit(ctx, installruntime.Request{
 		ControlRoot: root, RuntimeRoot: filepath.Join(t.TempDir(), "runtime"), Owner: "existing-installer", ConsumerID: consumerID,

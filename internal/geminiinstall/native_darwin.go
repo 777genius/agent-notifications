@@ -40,7 +40,7 @@ func (n NativeInstallation) Acquire(ctx context.Context) (notifier.NativeLease, 
 	desktop, _ := ChannelsFromSnapshot(s, n.ControlRoot, n.Executable, n.Binding, runtime.GOOS, runtime.GOARCH)
 	if !desktop || s.Installation.Ledger.Native == nil || s.Installation.Ledger.Native.DecoderFloor < 1 {
 		release()
-		return nil, errors.New("Gemini desktop consent or verified native helper unavailable")
+		return nil, errors.New("gemini desktop consent or verified native helper unavailable")
 	}
 	return &nativeLease{bundle: s.Installation.Ledger.Native.Path, release: release}, nil
 }
