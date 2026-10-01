@@ -72,7 +72,7 @@ PY
 # this assertion red. Host PATH shims answer --version only in TEST profiles;
 # neither native agent nor provider is launched.
 python3 -I - "$ROOT" "$SANDBOX" "$TEST_BINARY" "$control" "$installed" <<'PYBUNDLE'
-import hashlib, json, os, pathlib, shlex, shutil, subprocess, sys
+import hashlib, json, os, pathlib, shlex, shutil, subprocess, sys, tarfile
 root, lab, binary, control, installed = map(pathlib.Path, sys.argv[1:])
 if os.name == 'nt':
     print('SKIP mixed candidate bootstrap fixture: Windows native path qualification is separate')
@@ -96,13 +96,48 @@ shutil.copyfile(binary,assets/name)
 (assets/'checksums.txt').write_text(hashlib.sha256(binary.read_bytes()).hexdigest()+'  '+name+'\n')
 version = subprocess.check_output([str(binary),'--version'],text=True).strip().split()[-1]
 assert version.startswith('v'), version
-(commands/'curl').write_text('#!/bin/bash\nset -eu\nout=""; url=""\nwhile [ "$#" -gt 0 ]; do\n case "$1" in -o) out=$2; shift 2 ;; -*) shift ;; *) url=$1; shift ;; esac\ndone\ncase "$url" in\n */checksums.txt) cp '+shlex.quote(str(assets/'checksums.txt'))+' "$out" ;;\n */'+name+') cp '+shlex.quote(str(assets/name))+' "$out" ;;\n */install.sh) cp '+shlex.quote(str(root/'bin/install.sh'))+' "$out" ;;\n *) echo "Unexpected fixture download: $url" >&2; exit 99 ;;\nesac\n')
+commit = '0123456789abcdef0123456789abcdef01234567'
+public_loader = 'https://777genius.github.io/agent-notifications/install.sh'
+raw = 'https://raw.githubusercontent.com/777genius/agent-notifications/'+commit+'/bin'
+(commands/'curl').write_text('''#!/bin/bash
+set -eu
+out=""; url=""; format=""; accept=""
+while [ "$#" -gt 0 ]; do
+ case "$1" in
+  -o) out=$2; shift 2 ;; -w) format=$2; shift 2 ;; -H) accept=$2; shift 2 ;;
+  --connect-timeout|--max-time) shift 2 ;; -*) shift ;; *) url=$1; shift ;;
+ esac
+done
+printf '%s\\n' "$url" >> '''+shlex.quote(str(lab/'loader-requests'))+'''
+case "$url" in
+ https://github.com/777genius/agent-notifications/releases/latest)
+  [ "$format" = '%{url_effective}' ] || exit 99
+  printf '%s' '''+shlex.quote('https://github.com/777genius/agent-notifications/releases/tag/'+version)+''' ;;
+ https://api.github.com/repos/777genius/agent-notifications/commits/'''+version+''')
+  [ "$accept" = 'Accept: application/vnd.github.sha' ] || exit 99
+  printf '%s' '''+shlex.quote(commit)+''' > "$out" ;;
+ '''+public_loader+''') cat '''+shlex.quote(str(root/'bin/setup.sh'))+''' ;;
+ '''+raw+'''/bootstrap.sh) cp '''+shlex.quote(str(root/'bin/bootstrap.sh'))+''' "$out" ;;
+ '''+raw+'''/install.sh) cp '''+shlex.quote(str(root/'bin/install.sh'))+''' "$out" ;;
+ https://candidate-fixture.invalid/releases/download/'''+version+'''/checksums.txt)
+  cp '''+shlex.quote(str(assets/'checksums.txt'))+''' "$out" ;;
+ https://candidate-fixture.invalid/releases/download/'''+version+'''/'''+name+''')
+  cp '''+shlex.quote(str(assets/name))+''' "$out" ;;
+ https://candidate-fixture.invalid/releases/download/'''+version+'''/config.json)
+  cp '''+shlex.quote(str(assets/'config.json'))+''' "$out" ;;
+ https://candidate-fixture.invalid/source/'''+commit+'''.tar.gz)
+  cp '''+shlex.quote(str(assets/'source.tar.gz'))+''' "$out" ;;
+ *) echo "Unexpected fixture download: $url" >&2; exit 99 ;;
+esac
+''')
 (commands/'opencode').write_text('#!/bin/bash\n[ "$#" -eq 1 ] && [ "$1" = --version ] || exit 99\nprintf "1.18.33\\n"\n')
 (commands/'gemini').write_text('#!/bin/bash\nset -eu\n[ "$#" -eq 1 ] && [ "$1" = --version ] || exit 99\ncase "$PWD" in */bootstrap-gemini-TEST-*/profile) ;; *) echo "Gemini queried outside TEST project" >&2; exit 99 ;; esac\n[ "$HOME" = "$GEMINI_CLI_HOME" ] && [ -f "$GEMINI_CLI_SYSTEM_SETTINGS_PATH" ] || exit 99\nprintf "0.62.0\\n"\n')
+for host in ('claude','codex'):
+    (commands/host).write_text('#!/bin/bash\necho "TEST adapter rejects agent execution" >&2\nexit 99\n')
 for command in commands.iterdir(): command.chmod(0o755)
 env = dict(os.environ, PATH=str(commands)+os.pathsep+os.environ['PATH'],
            GEMINI_CLI_HOME=str(profile), BOOTSTRAP_RELEASE_TAG=version,
-           BOOTSTRAP_RELEASE_COMMIT='0123456789abcdef0123456789abcdef01234567',
+           BOOTSTRAP_RELEASE_COMMIT=commit,
            BOOTSTRAP_RELEASES_BASE_URL='https://candidate-fixture.invalid/releases',
            INSTALL_SCRIPT_URL='https://candidate-fixture.invalid/bin/install.sh')
 project = lab/'bundle TEST project'
@@ -114,19 +149,27 @@ import errno, pty, select, signal, time
 
 def persistent_state():
     state = {}
-    for directory in (control, profile):
+    for directory in (control, profile, pathlib.Path(env['OPENCODE_CONFIG_DIR']),
+                      pathlib.Path(env['CLAUDE_CONFIG_DIR']), pathlib.Path(env['CODEX_HOME'])):
+        state[str(directory)] = directory.exists()
         for file in directory.rglob('*'):
-            if file.is_file(): state[str(file)] = hashlib.sha256(file.read_bytes()).hexdigest()
+            state[str(file)] = hashlib.sha256(file.read_bytes()).hexdigest() if file.is_file() else 'directory'
     return state
 
-def run_tty(answer):
+def loader_command(args=()):
+    command = 'set -o pipefail; curl -fsSL '+shlex.quote(public_loader)+' | bash'
+    return command + (' -s -- '+' '.join(map(shlex.quote,args)) if args else '')
+
+def run_tty(answer, channels=None):
     before = persistent_state()
+    requests_before = len((lab/'loader-requests').read_text().splitlines()) if (lab/'loader-requests').exists() else 0
     pid, terminal = pty.fork()
     if pid == 0:
         os.chdir(project)
-        os.execvpe('bash',['bash',str(root/'bin/bootstrap.sh')],env)
+        os.execvpe('bash',['bash','-c',loader_command()],env)
     transcript = b''
     sent = False
+    consent_sent = False
     deadline = time.monotonic()+30
     status = None
     try:
@@ -141,26 +184,45 @@ def run_tty(answer):
                 if b'comma-separated' in transcript and not sent:
                     os.write(terminal,answer)
                     sent = True
+                if channels is not None and b'Observer channels:' in transcript and not consent_sent:
+                    os.write(terminal,channels)
+                    consent_sent = True
             finished, code = os.waitpid(pid,os.WNOHANG)
             if finished:
                 status = os.waitstatus_to_exitcode(code)
                 break
         assert status == 0 and sent, transcript.decode(errors='replace')
-        assert persistent_state() == before, 'cancel/empty mutated persistent product roots'
+        requests = (lab/'loader-requests').read_text().splitlines()[requests_before:]
+        for request in (public_loader,raw+'/bootstrap.sh','https://api.github.com/repos/777genius/agent-notifications/commits/'+version):
+            assert requests.count(request) == 1, ('interactive loader acquisition',requests)
+        if channels is None:
+            assert persistent_state() == before, 'cancel/empty mutated persistent product roots'
+        else:
+            assert consent_sent, 'successful selection never requested observer consent'
         for label in (b'Claude Code',b'Codex',b'OpenCode',b'Gemini CLI'):
             assert label in transcript, transcript.decode(errors='replace')
     finally:
         if status is None:
-            os.kill(pid,signal.SIGKILL)
+            try: os.killpg(pid,signal.SIGKILL)
+            except ProcessLookupError: pass
             os.waitpid(pid,0)
         os.close(terminal)
 
 run_tty(b'cancel\n')
 run_tty(b'\n')
+run_tty(b'3,4\n', b'2\n')
+assert set(json.loads((control/'ownership.json').read_text())['Consumers']) == {'opencode-notifications','gemini-notifications'}, 'interactive loader did not install both selections'
+interactive_policy = json.loads((control/'agent-notifications.json').read_text())
+for observer in ('openCodeNotifications','geminiNotifications'):
+    assert interactive_policy['route'][observer] == {'desktop':False,'webhook':True}, interactive_policy
+assert all(key in settings.read_text() for key in ('"AfterAgent"','"Notification"','foreign TEST comment')), 'interactive loader omitted owned hooks or lost foreign settings'
 for attempt in range(2):
-    result = subprocess.run(['bash',str(root/'bin/bootstrap.sh'),'--products','opencode,gemini','--webhook'],
+    requests_before = len((lab/'loader-requests').read_text().splitlines())
+    result = subprocess.run(['bash','-c',loader_command(['--products','opencode,gemini','--webhook'])],
                             cwd=project,env=env,text=True,capture_output=True,timeout=60)
     assert result.returncode == 0, result.stdout+'\n'+result.stderr
+    requests = (lab/'loader-requests').read_text().splitlines()[requests_before:]
+    assert requests.count(public_loader) == 1 and requests.count(raw+'/bootstrap.sh') == 1, requests
     ledger = json.loads((control/'ownership.json').read_text())
     assert set(ledger['Consumers']) == {'opencode-notifications','gemini-notifications'}, ledger['Consumers']
     policy = json.loads((control/'agent-notifications.json').read_text())
@@ -196,6 +258,70 @@ policy = json.loads((control/'agent-notifications.json').read_text())
 assert policy['route']['geminiNotifications'] == {'desktop':False,'webhook':False}, policy
 assert policy['route']['openCodeNotifications'] == {'desktop':False,'webhook':True}, policy
 print('PASS actual candidate mixed OpenCode/Gemini bootstrap install/repeat/remove')
+# One actual all-four composition on Linux reuses the metadata-only Claude
+# adapter from config_e2e. Mac native app publication remains separately gated.
+if sys.platform == 'linux':
+    source = assets/'source'
+    for relative in ('bin/install.sh','bin/hook-wrapper.sh','bin/codex-hook-wrapper.sh',
+                     'bin/codex-hook-wrapper.cmd','config/config.json','.claude-plugin/plugin.json'):
+        destination = source/relative
+        destination.parent.mkdir(parents=True,exist_ok=True)
+        shutil.copy2(root/relative,destination)
+    manifest = json.loads((source/'.claude-plugin/plugin.json').read_text())
+    manifest['version'] = version[1:]
+    (source/'.claude-plugin/plugin.json').write_text(json.dumps(manifest))
+    with tarfile.open(assets/'source.tar.gz','w:gz') as archive:
+        archive.add(source,arcname='bundle')
+    shutil.copyfile(root/'config/config.json',assets/'config.json')
+    with (assets/'checksums.txt').open('a') as manifest_file:
+        manifest_file.write(hashlib.sha256((assets/'config.json').read_bytes()).hexdigest()+'  config.json\n')
+    (commands/'claude').write_text('#!'+sys.executable+'\n'+'''
+import json, os, pathlib, shutil, sys
+args = sys.argv[1:]
+assert args and args[0] == 'plugin', 'TEST adapter rejects agent execution'
+assert len(args) > 1 and args[1] in ('marketplace','install','update','uninstall'), args
+with open(os.environ['CLAUDE_TEST_TRACE'],'a') as trace: trace.write(json.dumps(args)+'\\n')
+home = pathlib.Path(os.environ['CLAUDE_CONFIG_DIR'])
+market = home/'plugins/marketplaces/claude-notifications-go/.claude-plugin'
+market.mkdir(parents=True,exist_ok=True)
+(market/'plugin.json').write_text(json.dumps({'version':os.environ['TEST_VERSION']}))
+if args[1] == 'marketplace': sys.exit()
+plugin = home/'plugins/cache/claude-notifications-go/claude-notifications-go'/os.environ['TEST_VERSION']
+shutil.copytree(os.environ['TEST_SOURCE'],plugin,dirs_exist_ok=True)
+(home/'plugins/installed_plugins.json').write_text(json.dumps({'plugins':{'claude-notifications-go@claude-notifications-go':[{'installPath':str(plugin),'version':os.environ['TEST_VERSION']}]}}))
+''')
+    (commands/'codex').write_text('#!/bin/bash\necho "TEST adapter rejects agent execution" >&2\nexit 99\n')
+    for command in (commands/'claude',commands/'codex'): command.chmod(0o755)
+    all_four = lab/'all-four TEST'
+    all_env = dict(env, BOOTSTRAP_SOURCE_BASE_URL='https://candidate-fixture.invalid/source',
+                   TEST_SOURCE=str(source), TEST_VERSION=version[1:],
+                   CLAUDE_TEST_TRACE=str(all_four/'claude-registration-trace'))
+    for key in ('HOME','USERPROFILE','APPDATA','LOCALAPPDATA','XDG_CONFIG_HOME','XDG_CACHE_HOME',
+                'XDG_DATA_HOME','XDG_STATE_HOME','XDG_RUNTIME_DIR','XDG_CONFIG_DIRS','XDG_DATA_DIRS',
+                'CODEX_HOME','CLAUDE_HOME','CLAUDE_CONFIG_DIR','TMPDIR','TMP','TEMP',
+                'OPENCODE_CONFIG_DIR','GEMINI_CLI_HOME'):
+        directory = all_four/key
+        directory.mkdir(parents=True,exist_ok=True,mode=0o700)
+        all_env[key] = str(directory)
+    result = subprocess.run(['bash','-c',loader_command(['--products','claude,codex,opencode,gemini',
+                            '--skip-agent-notify','--webhook'])],cwd=all_four,env=all_env,
+                            text=True,capture_output=True,timeout=90)
+    assert result.returncode == 0, result.stdout+'\n'+result.stderr
+    claude_home, codex_home = pathlib.Path(all_env['CLAUDE_CONFIG_DIR']), pathlib.Path(all_env['CODEX_HOME'])
+    registered = json.loads((claude_home/'plugins/installed_plugins.json').read_text())['plugins']['claude-notifications-go@claude-notifications-go'][0]
+    assert registered['version'] == version[1:] and (pathlib.Path(registered['installPath'])/'bin'/name).read_bytes() == binary.read_bytes()
+    assert 'codex-hook-wrapper' in (codex_home/'hooks.json').read_text(), 'all-four omitted Codex hooks'
+    assert (codex_home/'claude-notifications-go/bin'/name).read_bytes() == binary.read_bytes()
+    all_control = pathlib.Path(all_env['XDG_CONFIG_HOME'])/'agent-notifications'
+    ledger = json.loads((all_control/'ownership.json').read_text())
+    assert {'opencode-notifications','gemini-notifications'} <= set(ledger['Consumers']), ledger
+    assert (pathlib.Path(all_env['OPENCODE_CONFIG_DIR'])/'plugins/agent-notifications.js').is_file()
+    native_settings = (pathlib.Path(all_env['GEMINI_CLI_HOME'])/'.gemini/settings.json').read_text()
+    assert all(key in native_settings for key in ('"AfterAgent"','"Notification"')), native_settings
+    policy = json.loads((all_control/'agent-notifications.json').read_text())
+    for observer in ('openCodeNotifications','geminiNotifications'):
+        assert policy['route'][observer] == {'desktop':False,'webhook':True}, policy
+    print('PASS actual piped loader all-four registration with native TEST installers (Linux)')
 PYBUNDLE
 
 # Native Windows qualification uses the standalone executable, never its .bat
