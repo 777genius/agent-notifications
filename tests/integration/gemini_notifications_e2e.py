@@ -263,7 +263,7 @@ def spool_request(value, owner):
     status = next((k for k, text in COPY.items() if text == value.get("body")), None)
     require(status and value.get("title") == "Gemini CLI" and value.get("subtitle", "") == ""
             and value.get("category") == ("info" if status == "task_complete" else "attention")
-            and value.get("silent") is True and value.get("action") is None, "desktop_fixed_copy")
+            and value.get("silent") is True and value.get("action") == "none", "desktop_fixed_copy")
     return status
 
 
@@ -319,8 +319,8 @@ def watch_spool(lab, stop, evidence):
                 except FileNotFoundError:
                     pass  # Actual helper removes requests/receipts promptly.
         evidence["error"] = "spool_watchdog_timeout"
-    except Exception:
-        evidence["error"] = "desktop_spool_contract_failed"
+    except Exception as exc:
+        evidence["error"] = str(exc) if isinstance(exc, Red) else "desktop_spool_contract_failed"
 
 
 def ui_contract(path, install):
@@ -458,7 +458,9 @@ def run(args):
         with g0.Fixture(lab, capture_validator=capture) as fixture:
             env["GOOGLE_GEMINI_BASE_URL"] = fixture.url
             (lab / "provider-port").write_text(str(fixture.server.server_port))
-            code, out, _ = g0.bounded_process([str(node), executable, "--version"], b"", lab / "profile", env, 12)
+            evidence["native_version_probe"] = "running"
+            code, out, _ = g0.bounded_process([str(node), executable, "--version"], b"", lab / "profile", env, 60 if os.name == "nt" else 12)
+            evidence["native_version_probe"] = "finished"
             require(code == 0 and out.strip() == b"0.62.0", "actual_native_version")
             # Known parser errors/help are checked before installation mutations.
             for tail, expected in (([], 2), (["install", "--help"], 2), (["install", "--AN-TEST-unknown"], 2)):
@@ -739,9 +741,9 @@ class PureChecks(unittest.TestCase):
         owner.update(BootID="TEST-boot", NotAfter=123.0)
         request = {"schemaVersion": 1, "correlationID": owner["CorrelationID"], "nonce": owner["Nonce"],
                    "bootID": owner["BootID"], "notAfter": owner["NotAfter"], "title": "Gemini CLI", "body": COPY["task_complete"],
-                   "category": "info", "silent": True, "action": None}
+                   "category": "info", "silent": True, "action": "none"}
         self.assertEqual(spool_request(request, owner), "task_complete")
-        for extra in ({"cwd": "/private"}, {"action": {"type": "focus"}}, {"subtitle": "private"}, {"body": "private"}):
+        for extra in ({"cwd": "/private"}, {"action": None}, {"action": {"type": "focus"}}, {"subtitle": "private"}, {"body": "private"}):
             with self.assertRaises(Red):
                 spool_request(dict(request, **extra), owner)
 
