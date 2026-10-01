@@ -17,6 +17,7 @@ import re
 import stat
 import sys
 import threading
+import tempfile
 import time
 import unittest
 
@@ -64,7 +65,7 @@ def test_artifact(value):
 def bounded_read(path, limit=65536):
     """No following links or opening FIFOs; snapshots stay in bounded memory."""
     physical(str(path.parent))
-    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     try:
         info = os.fstat(fd)
         require(stat.S_ISREG(info.st_mode) and info.st_size <= limit, "bounded_regular_file_required")
@@ -780,6 +781,13 @@ class PureChecks(unittest.TestCase):
                                  "stage": "native_spawn", "native_child_started": False})
         unknown = g0.bridge_event_facts({"error": "private", "stage": "private", "node_error_code": "PRIVATE"})
         self.assertEqual(unknown, {"error": "bridge_protocol_error"})
+
+    def test_bounded_read_preserves_binary_bytes(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-gemini-binary-read-") as root:
+            path = Path(root).resolve() / "candidate.bin"
+            data = b"MZ\r\nowned\x1aTEST\x00\r\n"
+            path.write_bytes(data)
+            self.assertEqual(bounded_read(path), data)
 
     def test_public_version_startup_diagnostic(self):
         # Observable break: Intel --version exit 1 had no ERR_/MODULE code;

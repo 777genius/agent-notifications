@@ -9,7 +9,7 @@ let child, deadline, killDeadline, sequence, pattern, forced = false;
 let tail = '', total = 0, permissionSeen = false, stopped = false;
 let stage = 'protocol';
 const diagnostics = new Set();
-const emit = data => process.stdout.write(JSON.stringify(data) + '\n');
+const emit = (data, flushed) => process.stdout.write(JSON.stringify(data) + '\n', flushed);
 class ValidationError extends Error {}
 const check = (ok, code) => { if (!ok) throw new ValidationError(code); };
 const validationCodes = new Set(['duplicate_start', 'TEST_installation_required', 'CLI_physical_path_required',
@@ -114,9 +114,14 @@ function start(m) {
   });
   child.onExit(({exitCode, signal}) => {
     clearTimeout(deadline); clearTimeout(killDeadline);
-    emit({exit: {code: exitCode, signal: signal || 0, forced, terminal_bytes: total}});
     child = undefined;
     process.stdin.destroy();
+    emit({exit: {code: exitCode, signal: signal || 0, forced, terminal_bytes: total}}, () => {
+      // ConPTY's internal socket worker can retain the bridge after native exit.
+      // Terminate only this helper, after flushing the confirmed child exit.
+      // Never call pty.kill() after exit: its PID list may already be stale.
+      if (process.platform === 'win32') process.exit(process.exitCode || 0);
+    });
   });
   // ConPTY loads its addon lazily in WindowsPtyAgent's spawn constructor.
   // Validate the actually loaded modules after registering owned-child cleanup.

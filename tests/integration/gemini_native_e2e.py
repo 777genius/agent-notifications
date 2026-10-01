@@ -58,7 +58,7 @@ def version_probe(code, out, err, redactions=()):
     facts["startup_classification"] = "node_startup_error" if codes else "unclassified_public_startup_error"
     if "ENOENT" in codes:
         # Fixed public startup operations only; never emit arbitrary file names.
-        operations = ("spawn", "open", "mkdir", "stat", "lstat", "access", "scandir", "chdir", "realpath")
+        operations = ("spawn", "open", "mkdir", "stat", "lstat", "access", "scandir", "chdir", "realpath", "dlopen", "uv_cwd", "uv_os_get_passwd", "uv_os_homedir", "uv_exepath")
         facts["missing_operations"] = sorted(op for op in operations
             if re.search(rb"\b" + op.encode() + rb"\b", err))
         commands = ("git", "ioreg", "security", "uname", "whoami", "bash", "zsh", "node", "rg")
@@ -68,8 +68,9 @@ def version_probe(code, out, err, redactions=()):
     # are excluded. Do not expose session/provider/hook text even in this probe.
     text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", err.decode("utf-8", "replace"))
     lines = (line.removeprefix("An unexpected critical error occurred:").removeprefix("[") for line in text.splitlines())
-    line = next((line.strip() for line in lines
-                 if re.match(r"^\s*(?:(?:[A-Za-z]*Error)(?: \[[A-Z_]+\])?|ENOENT|EACCES|EPERM|EINVAL|ENOEXEC):", line)), "")
+    header = r"(?:(?:[A-Za-z]*Error)(?: \[[A-Z_]+\])?|ENOENT|EACCES|EPERM|EINVAL|ENOEXEC):"
+    line = next((match.group(0).strip() for candidate in lines
+                 if (match := re.search(header + r"[^\r\n]*", candidate))), "")
     if re.fullmatch(r"ReferenceError: (?:File|Blob|ReadableStream|fetch|crypto|navigator) is not defined", line):
         facts["startup_classification"] = "public_runtime_global_missing"
     if not line or len(line) > 512:
