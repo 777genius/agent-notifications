@@ -362,6 +362,11 @@ export default async function(){record({phase:'loaded',version:'v1'});return{eve
                 req('/api/experimental/session/' + warm_session + '/wait', method='POST')
                 wait(lambda: len(webhook.bodies) == previous + 1, 'pre-reload native completion')
                 old_trace = len(rows())
+                # The host intentionally retains unchanged plugin generations.
+                # Change only a nonexecuting comment to exercise replacement.
+                installed.write_text(installed.read_text() + '\n// TEST-native-reload\n')
+                provenance.update({'reload_overlay': 'appended_nonexecuting_test_comment',
+                                   'reload_plugin_sha256': digest(installed)})
                 req('/api/location/reload', {})
                 wait(lambda: any(x.get('phase') == 'cleanup' for x in rows()[old_trace:]), 'native plugin disposal')
                 wait(lambda: any(x.get('phase') == 'loaded' for x in rows()[old_trace:]), 'native plugin reload')
