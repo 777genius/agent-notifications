@@ -31,7 +31,9 @@ jobs:
       - name: Qualify native bootstrap in disposable profiles
         run: bash scripts/selector_e2e.sh "$RUNNER_TEMP/TEST-selector-e2e"
       - name: Qualify public loader and observer lifecycle
+        if: ${{ !cancelled() }}
         run: |
+          test -x "$RUNNER_TEMP/TEST-selector-e2e/claude-notifications"
           native_target=$(readlink bin/claude-notifications)
           case "$native_target" in claude-notifications-darwin-arm64|claude-notifications-darwin-amd64) ;; *) exit 1 ;; esac
           cp "$RUNNER_TEMP/TEST-selector-e2e/claude-notifications" "bin/$native_target"

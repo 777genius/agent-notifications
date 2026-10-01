@@ -397,7 +397,7 @@ func TestBootstrapSelectorPTY(t *testing.T) {
 				// A stuck Go reader should preserve its stack in native evidence
 				// before the outer watchdog kills the whole TEST process group.
 				wrapper := filepath.Join(f.project, "TEST selector watchdog.py")
-				f.write(wrapper, []byte("import signal, subprocess, sys\np = subprocess.Popen(sys.argv[1:])\ntry:\n code = p.wait(timeout=5)\nexcept subprocess.TimeoutExpired:\n p.send_signal(signal.SIGQUIT)\n code = p.wait(timeout=5)\nsys.exit(code)\n"), 0600)
+				f.write(wrapper, []byte("import signal, subprocess, sys\np = subprocess.Popen(sys.argv[1:])\ntry:\n try:\n  code = p.wait(timeout=5)\n except subprocess.TimeoutExpired:\n  p.send_signal(signal.SIGQUIT)\n  code = p.wait(timeout=5)\nfinally:\n if p.poll() is None:\n  p.kill()\n p.wait()\nsys.exit(code)\n"), 0600)
 				f.script = strings.Replace(f.script, `"$_CONFIG_HELPER" setup-products "$operation" "$@" <&3`,
 					`python3 `+shellQuote(wrapper)+` "$_CONFIG_HELPER" setup-products "$operation" "$@" <&3`, 1)
 				if row.public {
