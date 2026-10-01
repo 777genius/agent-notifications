@@ -31,6 +31,8 @@
 
 Desktop notifications for **Claude Code, Codex CLI and OpenCode**. Know when a task finishes, an agent needs input, or a tool needs approval. Claude and Codex also support sounds and click-to-focus.
 
+Built with [Universal Agent Plugins](https://github.com/777genius/universal-agent-plugins). [Create your own plugin for multiple AI agents](https://github.com/777genius/universal-agent-plugins#build-plugins).
+
 OpenCode provides silent, generic completion, question, permission and error alerts for root sessions, with explicit desktop/webhook consent. Tested with OpenCode **1.18.33**; V2 is not supported. [OpenCode setup, privacy and limits](docs/opencode-notifications.md)
 
 Gemini CLI is the fourth agent in the **unreleased candidate**. Public release **1.46.1 does not include Gemini**. The candidate was tested with exact **Gemini CLI 0.62.0** on macOS arm64 and Linux, including real hooks, tool-permission UI and delivery. Both Mac banners were visually confirmed. [Qualification by OS](docs/gemini-notifications.md#qualification-status). Its two fixed alerts mean a turn completed (`AfterAgent`, not success or a final-only answer) or tool permission was requested (`Notification: ToolPermission`). Silent desktop and explicitly opted webhooks only; no sound, click-to-focus, question/error/plan/review alerts or nested-agent parity. Built-in Gemini notifications may duplicate desktop alerts; choose one desktop source or webhook-only. Setup leaves built-in settings unchanged. [Candidate setup and qualification status](docs/gemini-notifications.md)

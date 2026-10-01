@@ -340,5 +340,29 @@
       "restart": "重启 OpenCode 以加载全局插件。在 macOS 上，请按指南授予通知权限。",
       "configure": "使用 config path 查找共享设置。通过 setup-opencode 授予 desktop/webhook 权限；Webhook 地址需另行配置。"
     }
+  },
+  "agentSupport": {
+    "unreleased": "尚未发布",
+    "title": "比较代理功能",
+    "feature": "功能",
+    "yes": "支持",
+    "no": "不支持",
+    "conditional": "支持，但有限制",
+    "legend": "✓ 支持 · ✕ 不支持 · ✓* 有限制",
+    "conditions": "* Codex 的提问取决于当前模式；错误和限额通过最终消息识别。点击聚焦取决于操作系统和终端。",
+    "qualification": "Codex：Windows 钩子通知和提问工具钩子尚未在实际会话中验证。",
+    "v2Link": "什么是 OpenCode V2？",
+    "rows": {
+      "completion": "已完成",
+      "question": "问题",
+      "permission": "权限请求",
+      "review": "审查",
+      "plan": "计划",
+      "limit": "已达到会话限制",
+      "sound": "声音",
+      "focus": "点击聚焦",
+      "webhook": "Webhook",
+      "error": "错误"
+    }
   }
 }

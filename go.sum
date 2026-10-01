@@ -22,6 +22,8 @@ github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20
 github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261001072322-40042e4094f3/go.mod h1:WET4vFo589qPYCrYVIzDJ2XdKDW8M1FypXzko9H9X2E=
 github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261001082730-a70d4c1f6dac h1:wWt5Mn31DH2ja/P7c4N2j49i1UeE9zm2W6qCTXHnXAs=
 github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261001082730-a70d4c1f6dac/go.mod h1:WET4vFo589qPYCrYVIzDJ2XdKDW8M1FypXzko9H9X2E=
+github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261001090905-11a842f55d19 h1:7skINBKWYevUcTVEJO6a33L92AOjeNBu8mSXpP+9Gc4=
+github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261001090905-11a842f55d19/go.mod h1:WET4vFo589qPYCrYVIzDJ2XdKDW8M1FypXzko9H9X2E=
 github.com/777genius/plugin-kit-ai/plugininstall v0.0.0-20260920081413-a5644312f7af h1:HSQLdGxhHBB0QZtA77y27o+KpixsB7bAi6lDPI02PRw=
 github.com/777genius/plugin-kit-ai/plugininstall v0.0.0-20260920081413-a5644312f7af/go.mod h1:c0CmoYlHZaAYEcO1IfyTFybxHvglm3ucFSnnLaP41jY=
 github.com/777genius/plugin-kit-ai/sdk v1.2.0 h1:r+KogVH8b0KdayHIt8UWcF+FYdGMf8kmuLzvikr1Mmo=

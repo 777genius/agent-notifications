@@ -70,6 +70,7 @@ export function command(
     const pipeline = `curl -fsSL ${installerUrl} | bash -s -- ${productFlag}${skip}${channels}`;
     return new Set(selected).size > 1 ? `(set -o pipefail; ${pipeline})` : pipeline;
   }
-  const legacy = hasClaude && hasCodex ? "both" : hasCodex ? "codex" : "claude";
-  return `curl -fsSL ${installerUrl} | bash -s -- --product ${legacy}${skip}`;
+  if (hasClaude && hasCodex)
+    return `(set -o pipefail; curl -fsSL ${installerUrl} | bash -s -- --products claude,codex${skip})`;
+  return `curl -fsSL ${installerUrl} | bash -s -- --product ${hasCodex ? "codex" : "claude"}${skip}`;
 }

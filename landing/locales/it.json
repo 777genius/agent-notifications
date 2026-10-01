@@ -164,5 +164,29 @@
       "restart": "Riavvia OpenCode per caricare il plugin globale. Su macOS, autorizza le notifiche seguendo la guida.",
       "configure": "Usa config path per le impostazioni condivise. Autorizza desktop/webhook con setup-opencode; configura separatamente le destinazioni webhook."
     }
+  },
+  "agentSupport": {
+    "unreleased": "Non pubblicato",
+    "title": "Confronta le funzioni degli agenti",
+    "feature": "Funzione",
+    "yes": "Supportata",
+    "no": "Non supportata",
+    "conditional": "Supportata con limiti",
+    "legend": "✓ Supportata · ✕ Non supportata · ✓* Con limiti",
+    "conditions": "* Le domande di Codex dipendono dalla modalità; errori e limiti vengono rilevati dal messaggio finale. Il focus al clic dipende dal sistema e dal terminale.",
+    "qualification": "Codex: la consegna tramite hook su Windows e l'hook delle domande non sono ancora verificati in sessioni reali.",
+    "v2Link": "Cos'è OpenCode V2?",
+    "rows": {
+      "completion": "Completato",
+      "question": "Domanda",
+      "permission": "Richiesta di autorizzazione",
+      "review": "Revisione",
+      "plan": "Piano",
+      "limit": "Limite di sessione raggiunto",
+      "sound": "Suoni",
+      "focus": "Focus al clic",
+      "webhook": "Webhook",
+      "error": "Errori"
+    }
   }
 }

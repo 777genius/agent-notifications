@@ -5,14 +5,14 @@ import { command, detectTarget } from "../data/install.ts";
 test("one-line setup contract for each product and supported target", () => {
   for (const product of ["claude", "codex", "both"] as const)
     for (const target of ["macos", "linux", "windows"] as const) {
-      const expected =
-        "curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product " +
-        product;
+      const expected = product === "both"
+        ? "(set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --products claude,codex)"
+        : "curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product " + product;
       assert.equal(command(product, target, "install"), expected);
       assert.equal(command(product, target, "update"), expected);
       assert.equal(
         command(product, target, "install", false),
-        expected + " --skip-agent-notify",
+        product === "both" ? expected.slice(0, -1) + " --skip-agent-notify)" : expected + " --skip-agent-notify",
       );
       assert.equal(command(product, target, "configure"), null);
     }
@@ -92,14 +92,15 @@ test("all seven selections produce one loader command with host-scoped consent",
               assert.equal(command(selected, target, intent, agentNotify, channels), null);
               continue;
             }
-            const product = openCode && legacy
+            const multiple = selected.length > 1;
+            const product = multiple
               ? `--products ${selected.join(",")}`
               : `--product ${openCode ? "opencode" : legacy}`;
             const pipeline = "curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- " + product
               + (legacy && !agentNotify ? " --skip-agent-notify" : "")
               + (openCode && channels.desktop ? " --desktop" : "")
               + (openCode && channels.webhook ? " --webhook" : "");
-            const expected = openCode && legacy ? `(set -o pipefail; ${pipeline})` : pipeline;
+            const expected = multiple ? `(set -o pipefail; ${pipeline})` : pipeline;
             const actual = command(selected, target, intent, agentNotify, channels);
             assert.equal(actual, expected);
             assert.equal(actual?.split("\n").length, 1);

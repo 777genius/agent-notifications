@@ -20,7 +20,6 @@ const selectedProducts = reactive({ claude: true, codex: false, opencode: false,
 const selection = computed<AgentProduct[]>(() =>
   (["claude", "codex", "opencode", "gemini"] as const).filter((value) => selectedProducts[value]),
 );
-const hasObserver = computed(() => selectedProducts.opencode || selectedProducts.gemini);
 const hasLegacy = computed(() => selectedProducts.claude || selectedProducts.codex);
 function toggleProduct(value: AgentProduct) {
   if (selectedProducts[value] && selection.value.length === 1) return;
@@ -54,9 +53,8 @@ const osLabel = computed(
 const copyStatus = ref("");
 const commandField = ref<HTMLTextAreaElement>();
 const agentNotify = ref(true);
-const observerChannels = reactive({ desktop: true, webhook: false });
 const snippet = computed(() =>
-  command(selection.value, target.value, intent.value, agentNotify.value, observerChannels),
+  command(selection.value, target.value, intent.value, agentNotify.value),
 );
 const displaySnippet = computed(() => snippet.value);
 onMounted(() => {
@@ -64,7 +62,7 @@ onMounted(() => {
   if (!manualOverride.value) target.value = detected.value;
   showOSPicker.value = target.value === "unknown";
 });
-watch([selection, target, intent, agentNotify, () => observerChannels.desktop, () => observerChannels.webhook], () => {
+watch([selection, target, intent, agentNotify], () => {
   copyStatus.value = "";
 });
 async function copy() {
@@ -155,37 +153,7 @@ async function copy() {
       />
     </div>
 
-    <div class="selected-agent-info" role="group" :aria-label="t('install.capabilities.title')">
-      <article v-for="agent in selection" :key="agent" class="selected-agent-details">
-        <h3>{{ t(`install.products.${agent}`) }}</h3>
-        <p>{{ t(`install.capabilities.${agent}`) }}</p>
-        <details v-if="agent !== 'claude'">
-          <summary>{{ t('install.capabilities.details') }}</summary>
-          <p>{{ agent === 'codex' ? t('install.prerequisiteText') : t(`install.${agent}.version`) }}</p>
-          <a :href="repo + (agent === 'codex' ? '/releases' : `/blob/main/docs/${agent}-notifications.md`)">
-            {{ agent === 'codex' ? t('install.checkReleases') : t(`install.${agent}.guide`) }}
-          </a>
-        </details>
-      </article>
-    </div>
-    <fieldset
-      v-if="hasObserver && intent !== 'configure' && target !== 'manual'"
-      class="observer-channels"
-      aria-describedby="observer-channels-hint"
-    >
-      <legend>{{ t('install.observer.channelsTitle') }}</legend>
-      <p id="observer-channels-hint">{{ t('install.observer.channelsHint') }}</p>
-      <div class="channel-options">
-        <label class="agent-notify-option">
-          <input v-model="observerChannels.desktop" type="checkbox" />
-          <span>{{ t('install.opencode.desktop') }}</span>
-        </label>
-        <label class="agent-notify-option">
-          <input v-model="observerChannels.webhook" type="checkbox" />
-          <span>{{ t('install.opencode.webhook') }}</span>
-        </label>
-      </div>
-    </fieldset>
+    <AgentSupportTable />
     <label
       v-if="hasLegacy && intent !== 'configure' && target !== 'manual' && target !== 'unknown'"
       class="agent-notify-option"
@@ -226,7 +194,6 @@ async function copy() {
     </div>
     <div v-else-if="selectedProducts.gemini && target !== 'manual'" class="setup-panel instructions" role="status">
       <p>{{ t("install.gemini.version") }}</p>
-      <p v-if="!observerChannels.desktop && !observerChannels.webhook">{{ t("install.opencode.chooseChannel") }}</p>
       <a :href="repo + '/blob/main/docs/gemini-notifications.md'">{{ t("install.gemini.guide") }}</a>
     </div>
     <div v-else-if="target === 'manual'" class="setup-panel instructions">
@@ -244,7 +211,6 @@ async function copy() {
       </p>
       <p v-if="selectedProducts.gemini">{{ t("install.gemini.version") }} <a :href="repo + '/blob/main/docs/gemini-notifications.md'">{{ t("install.gemini.guide") }}</a></p>
     </div>
-    <div v-else-if="!snippet && hasObserver && !observerChannels.desktop && !observerChannels.webhook" class="setup-panel instructions"><p>{{ t("install.opencode.chooseChannel") }}</p></div>
     <div v-else-if="!snippet" class="setup-panel instructions">
       <p>{{ t("install.chooseTarget") }}</p>
     </div>
@@ -401,32 +367,3 @@ async function copy() {
     </footer>
   </section>
 </template>
-
-<style scoped>
-.selected-agent-info, .observer-channels {
-  margin: 0 40px 22px;
-  padding: 18px;
-  border: 1px solid #293648;
-  border-radius: 10px;
-}
-.selected-agent-info { display: grid; gap: 16px; }
-.selected-agent-details h3 { margin: 0 0 6px; font-size: 15px; }
-.selected-agent-details p, .observer-channels p {
-  margin: 0 0 8px;
-  color: #9eafc9;
-  font-size: 13px;
-  line-height: 1.6;
-}
-.selected-agent-details summary { cursor: pointer; font-size: 13px; }
-.selected-agent-details details p { margin-top: 8px; }
-.selected-agent-details a { font-size: 13px; text-decoration: underline; }
-.observer-channels legend { padding: 0 6px; font-weight: 650; font-size: 15px; }
-.channel-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.channel-options .agent-notify-option { margin: 0; padding: 12px; align-items: center; }
-.channel-options .agent-notify-option input { margin-top: 0; }
-.channel-options .agent-notify-option span { font-size: 14px; line-height: 1.5; }
-@media (max-width: 700px) {
-  .selected-agent-info, .observer-channels { margin-inline: 0; }
-  .channel-options { grid-template-columns: 1fr; }
-}
-</style>
