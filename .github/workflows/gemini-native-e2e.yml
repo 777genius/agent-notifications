@@ -72,7 +72,7 @@ jobs:
           CANDIDATE_ARCH: ${{ matrix.arch }}
           CANDIDATE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          $hookShell = if ($IsWindows) { (Get-Command pwsh -CommandType Application).Source } else { (Get-Command bash -CommandType Application).Source }
+          $hookShell = if ($IsWindows) { (Get-Command pwsh -CommandType Application | Select-Object -First 1).Source } else { (Get-Command bash -CommandType Application | Select-Object -First 1).Source }
           $argsForCI = @('--trusted-github-runner', '--platform', $env:CANDIDATE_PLATFORM, '--arch', $env:CANDIDATE_ARCH, '--commit', $env:CANDIDATE_COMMIT, '--hook-shell', $hookShell)
           if ($IsWindows) { $argsForCI += @('--system-root', $env:SystemRoot) }
           python -B scripts/gemini-native-ci.py @argsForCI

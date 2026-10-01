@@ -256,6 +256,7 @@ def run(args):
         command("build", [go, "build", "-trimpath", "-buildvcs=true", "-ldflags=-s -w", "-o", binary,
                           "./cmd/claude-notifications"], timeout=300)
         metadata = command("actual_binary_metadata", [go, "version", "-m", binary])
+        (evidence_dir / "go-version-m.txt").write_bytes(metadata)
         evidence["binary"] = {"physical_path": str(binary), "sha256": sha(binary),
                               **build_identity(metadata, modules, args.commit, args.platform, args.arch)}
         (evidence_dir / "go-version-m.txt").write_bytes(metadata)

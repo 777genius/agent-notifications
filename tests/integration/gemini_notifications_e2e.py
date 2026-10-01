@@ -221,7 +221,7 @@ def settle(g0, lab, fixture, terminal, expected, seconds=6):
     stable = None
     while time.monotonic() < end:
         terminal.drain()
-        require(terminal.exit is None and fixture.error is None, "native_or_provider_failure")
+        require(terminal.exit is None and fixture.error is None, fixture.error or ("native_child_exited" if terminal.exit is not None else "native_or_provider_failure"))
         native_rows(g0, lab)
         with fixture.lock:
             actual = {status: fixture.deliveries.count(status) for status in COPY}
@@ -243,7 +243,7 @@ def another_turn(g0, lab, fixture, terminal, case="equal"):
     end = time.monotonic() + 25
     while time.monotonic() < end:
         terminal.drain()
-        require(terminal.exit is None and fixture.error is None, "post_remove_native_or_provider_failure")
+        require(terminal.exit is None and fixture.error is None, fixture.error or ("post_remove_native_child_exited" if terminal.exit is not None else "post_remove_native_or_provider_failure"))
         rows = native_rows(g0, lab)
         fresh = [x for x in rows[len(previous):] if x["case"] == case and x["event"] == "AfterAgent"]
         if fresh:
