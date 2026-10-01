@@ -162,6 +162,16 @@ report_install_failure() {
     fi
 }
 
+# Once the wrapper has established that a version's binary is in place, that
+# version's failure stamp is retired, so a later failure of the version is
+# reported again instead of staying silent. The stamp is usually absent, and
+# cache housekeeping never fails the hook.
+clear_install_failure() {
+    [ "${CN_PRODUCT:-claude}" = "claude" ] && [ -n "$1" ] || return 0
+    [ -d "$STAMP_DIR/install-failed-$1" ] || return 0
+    rmdir "$STAMP_DIR/install-failed-$1" 2>/dev/null || true
+}
+
 path_recent() {
     _mtime=$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null) || return 1
     _now=$(date +%s) || return 1
@@ -263,10 +273,13 @@ else
     if [ -n "$BIN_VER" ] && [ -n "$PLG_VER" ] && [ "$BIN_VER" != "$PLG_VER" ]; then
         NEED_INSTALL=1
         NEED_FORCE=1
-    elif [ -n "$BIN_VER" ] && [ -n "$PLG_VER" ] && [ "$CACHED_VER" != "$PLG_VER" ]; then
-        # Versions match but cache is stale — update cache
-        mkdir -p "$STAMP_DIR" >/dev/null 2>&1 || true
-        printf '%s\n' "$PLG_VER" > "$VERSION_CACHE" 2>/dev/null || true
+    elif [ -n "$BIN_VER" ] && [ -n "$PLG_VER" ]; then
+        if [ "$CACHED_VER" != "$PLG_VER" ]; then
+            # Versions match but cache is stale — update cache
+            mkdir -p "$STAMP_DIR" >/dev/null 2>&1 || true
+            printf '%s\n' "$PLG_VER" > "$VERSION_CACHE" 2>/dev/null || true
+        fi
+        clear_install_failure "$PLG_VER"
     fi
 fi
 
@@ -298,6 +311,9 @@ if [ "$NEED_INSTALL" = 1 ]; then
         if [ -n "$NEW_VER" ]; then
             mkdir -p "$STAMP_DIR" >/dev/null 2>&1 || true
             printf '%s\n' "$NEW_VER" > "$VERSION_CACHE" 2>/dev/null || true
+            if [ "$NEW_VER" = "$TARGET_VER" ]; then
+                clear_install_failure "$NEW_VER"
+            fi
         fi
         # Avoid repeating the same install/update message more than once per version.
         if [ -n "$NEW_VER" ]; then
