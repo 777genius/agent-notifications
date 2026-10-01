@@ -687,6 +687,8 @@ def run(args):
             evidence["setup_failure"] = exc.setup_diagnostic
         if hasattr(exc, "bridge_diagnostic"):
             evidence["bridge_failure"] = exc.bridge_diagnostic
+        if hasattr(exc, "provider_cleanup_classification"):
+            evidence["provider_cleanup_classification"] = exc.provider_cleanup_classification
         evidence["exception_type"] = type(exc).__name__
         if "fixture" in locals():
             evidence["provider_endpoints"] = {key: fixture.counts.get(key, 0) for key in

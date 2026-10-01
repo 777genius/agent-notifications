@@ -61,11 +61,11 @@ def version_probe(code, out, err, redactions=()):
     text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", err.decode("utf-8", "replace"))
     lines = (line.removeprefix("An unexpected critical error occurred:") for line in text.splitlines())
     line = next((line.strip() for line in lines
-                 if re.match(r"^\s*(?:[A-Za-z]*Error)(?: \[[A-Z_]+\])?:", line)), "")
+                 if re.match(r"^\s*(?:(?:[A-Za-z]*Error)(?: \[[A-Z_]+\])?|ENOENT|EACCES|EPERM|EINVAL|ENOEXEC):", line)), "")
     if re.fullmatch(r"ReferenceError: (?:File|Blob|ReadableStream|fetch|crypto|navigator) is not defined", line):
         facts["startup_classification"] = "public_runtime_global_missing"
-    if not line or len(line) > 512 or re.search(
-            r"prompt|session|transcript|provider|hook|authorization|api.?key|token|secret", line, re.I):
+    if not line or len(line) > 512:
+        facts["startup_header"] = "absent" if not line else "overlong"
         return facts
     for root in sorted((str(p) for p in redactions), key=len, reverse=True):
         for spelling in {root, root.replace("\\", "/"), root.replace("/", "\\")}:
@@ -73,7 +73,12 @@ def version_probe(code, out, err, redactions=()):
     line = re.sub(r"(?:https?|file)://[^\s\"'<>]+", "<URL>", line, flags=re.I)
     line = re.sub(r"\b[A-Za-z]:[\\/][^\r\n\"'<>]+", "<path>", line)
     line = re.sub(r"(?<![A-Za-z0-9])/(?:[^\s\"'<>:]+)", "<path>", line)
-    if all(32 <= ord(c) <= 126 for c in line):
+    line = re.sub(r"<TEST-path>[\\/][^\r\n\"'<>]*", "<TEST-path>", line)
+    if re.search(r"prompt|session|transcript|provider|hook|authorization|api.?key|token|secret", line, re.I):
+        facts["startup_header"] = "sensitive"
+        return facts
+    facts["startup_header"] = "accepted" if all(32 <= ord(c) <= 126 for c in line) else "nonascii"
+    if facts["startup_header"] == "accepted":
         facts["startup_error_line"] = line[:240]
     return facts
 
@@ -192,7 +197,10 @@ def new_lab(value):
         private_windows_lab(p)
     (p / MARKER).write_text("owned disposable Gemini native TEST\n")
     for name in ("profile/.gemini", "tmp", "xdg/config", "xdg/cache", "xdg/data", "xdg/state", "an-control", "an-runtime"):
-        (p / name).mkdir(parents=True, mode=0o700)
+        directory = p / name
+        directory.mkdir(parents=True, mode=0o700)
+        if os.name == "nt":
+            private_windows_lab(directory)
     for name in ("profile/.env", "profile/.gemini/.env", "profile/GEMINI.md"):
         (p / name).write_text("")
     # Actual empty git repository, without invoking git or changing history.
@@ -220,7 +228,7 @@ def minimal_env(lab, node, shell, system_root=None):
            "GEMINI_API_KEY": "an-gemini-test-not-a-secret", "GEMINI_FORCE_FILE_STORAGE": "true", "TERM": "xterm-256color"}
     if os.name == "nt":
         require(system_root is not None and shell.name.lower() == "pwsh.exe", "Windows_requires_explicit_pwsh_and_SystemRoot")
-        env.update(SystemRoot=str(physical(system_root)), ComSpec=str(shell))
+        env.update(SystemRoot=str(physical(system_root)), ComSpec=str(shell), PATHEXT=".COM;.EXE;.BAT;.CMD")
         bins.append(str(Path(system_root) / "System32"))
     else:
         require(shell.name == "bash", "Unix_requires_bash")
@@ -287,6 +295,7 @@ class Fixture:
         self.counts, self.deliveries, self.error = {}, [], None
         self.server = self.thread = self.connection = None
         self.closed = threading.Event()
+        self.cleanup_classification = None
 
     def arm(self, case):
         require(case in CASES, "unknown_case")
@@ -385,7 +394,7 @@ class Fixture:
         self.url = "http://127.0.0.1:" + str(self.server.server_port)
         return self
 
-    def __exit__(self, *_):
+    def __exit__(self, exc_type, exc, traceback):
         self.closed.set()
         connection = self.connection
         if connection is not None:
@@ -396,7 +405,12 @@ class Fixture:
                 pass
         self.server.server_close()
         self.thread.join(4)
-        require(not self.thread.is_alive(), "server_shutdown_unconfirmed")
+        if self.thread.is_alive():
+            self.cleanup_classification = "server_shutdown_unconfirmed"
+            if exc is None:
+                raise Red(self.cleanup_classification)
+            # Preserve the scenario/setup exception and attach fixed cleanup facts.
+            exc.provider_cleanup_classification = self.cleanup_classification
 
 
 def bounded_process(argv, data, cwd, env, timeout):
@@ -835,6 +849,9 @@ def main():
                             settings_sha256=digest(before), UI_source_sha256=ui["source_sha256"],
                             own_child_exit=terminal.exit)
     except Exception as exc:
+        manifest["native_execution"] = "failed"
+        if hasattr(exc, "provider_cleanup_classification"):
+            manifest["provider_cleanup_classification"] = exc.provider_cleanup_classification
         manifest["classification"] = str(exc) if isinstance(exc, Red) else "harness_execution_error"
         manifest["exception_type"] = type(exc).__name__
         if hasattr(exc, "bridge_diagnostic"):

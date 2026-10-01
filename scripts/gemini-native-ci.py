@@ -218,8 +218,23 @@ def run(args):
         def command(label, argv, cwd=REPO, child_env=build_env, timeout=180):
             evidence["steps"][label] = "running"
             write_json(evidence_dir / "ci-evidence.json", evidence)
-            code, out, _ = g0.bounded_process([str(x) for x in argv], b"", cwd, child_env, timeout)
+            code, out, err = g0.bounded_process([str(x) for x in argv], b"", cwd, child_env, timeout)
             evidence["steps"][label] = {"exit_code": code}
+            if code != 0 and label in ("G0", "G5"):
+                # Only the driver's fixed early ACL red output may fill a missing
+                # manifest. No general stderr parsing, paths, SIDs or tracebacks.
+                allowed = ("TEST_ACL_token_failed", "TEST_ACL_token_size", "TEST_ACL_user_failed",
+                           "TEST_ACL_SID_failed", "TEST_ACL_descriptor_failed", "TEST_ACL_DACL_missing",
+                           "TEST_ACL_apply_failed", "TEST_ACL_readback_failed", "TEST_ACL_protection_missing")
+                for line in err.splitlines():
+                    if len(line) > 128:
+                        continue
+                    try:
+                        red = json.loads(line)
+                    except (ValueError, UnicodeError):
+                        continue
+                    if type(red) is dict and set(red) == {"red"} and red["red"] in allowed:
+                        evidence["steps"][label]["classification"] = red["red"]
             require(code == 0, "command_failed_" + label)
             return out  # Never persist stdout/stderr, except explicit public Go metadata.
 
@@ -319,12 +334,13 @@ def run(args):
                     # Fixed classifications and version metadata only, never provider or terminal text.
                     print(json.dumps({"native_driver": label, **{key: driver_facts[key] for key in
                         ("classification", "exception_type", "native_version_probe", "setup_failure", "setup_cleanup_failure",
-                         "bridge_failure", "provider_endpoints", "cleanup_classification", "native_execution", "driver")
+                         "bridge_failure", "provider_endpoints", "provider_cleanup_classification", "cleanup_classification", "native_execution", "driver")
                         if key in driver_facts}}), flush=True)
         require(all(evidence.get(label) == "passed_implemented_scenarios" for label in ("G0", "G5")), "native_qualification_failed")
         evidence["status"] = "passed_implemented_scenarios_with_external_gates_pending"
     except Exception as exc:
-        evidence["classification"] = str(exc) if isinstance(exc, Red) else "CI_harness_error"
+        known = isinstance(exc, Red) or ("g0" in locals() and isinstance(exc, g0.Red))
+        evidence["classification"] = str(exc) if known else "CI_harness_error"
     finally:
         evidence["TEST_root"] = str(root) if root else None
         write_json(evidence_dir / "ci-evidence.json", evidence)

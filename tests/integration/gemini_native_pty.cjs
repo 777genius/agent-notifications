@@ -84,7 +84,7 @@ function start(m) {
   stage = 'environment_validation';
   const allowed = new Set(['HOME','USERPROFILE','GEMINI_CLI_HOME','XDG_CONFIG_HOME','XDG_CACHE_HOME','XDG_DATA_HOME','XDG_STATE_HOME',
     'TMPDIR','TMP','TEMP','GEMINI_CLI_SYSTEM_SETTINGS_PATH','GEMINI_CLI_SYSTEM_DEFAULTS_PATH','GEMINI_CLI_TRUSTED_FOLDERS_PATH',
-    'GEMINI_API_KEY','GEMINI_FORCE_FILE_STORAGE','GOOGLE_GEMINI_BASE_URL','TERM','PATH','LANG','LC_ALL','SystemRoot','ComSpec']);
+    'GEMINI_API_KEY','GEMINI_FORCE_FILE_STORAGE','GOOGLE_GEMINI_BASE_URL','TERM','PATH','LANG','LC_ALL','SystemRoot','ComSpec','PATHEXT']);
   check(Object.keys(m.env).every(k => allowed.has(k)), 'environment_not_allowlisted');
   const cwd = fs.realpathSync(m.cwd), lab = path.dirname(cwd);
   check(cwd === m.cwd && path.basename(cwd) === 'profile' && fs.existsSync(path.join(lab, '.an-gemini-TEST')), 'TEST_cwd_required');
