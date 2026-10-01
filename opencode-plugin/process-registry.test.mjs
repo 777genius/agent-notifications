@@ -7,7 +7,7 @@ import dc from 'node:diagnostics_channel';
 import { performance } from 'node:perf_hooks';
 import { absoluteNativePath, createProcessRegistry } from './process-registry.mjs';
 
-const node = '/opt/nodejs/node-v24.21.0-linux-x64/bin/node';
+const node = process.execPath;
 const fixtureLimit = performance.now() + 53000; // Reserve cleanup even if the stop file fails.
 const fixture = `#!${node}
 import fs from 'node:fs';
@@ -314,9 +314,13 @@ test('exact commands, boundary bytes, immutable frame and controlled environment
     const registry = make({ deliveryEnv: { AGENT_NOTIFICATIONS_CONFIG: path.join(home, 'config'), DBUS_SESSION_BUS_ADDRESS: 'TEST-only' } });
     const frame = Buffer.alloc(4096, 65), pending = registry.event({ ...eventOptions(), frame });
     frame.fill(66);
-    assert.equal((await bounded(pending)).output.length, 1024);
+    const eventResult = await bounded(pending);
+    assert.equal(eventResult.status, 'ok');
+    assert.equal(eventResult.output.length, 1024);
     assert.deepEqual(JSON.parse(await fs.readFile(phase(children[0], 'input'))), { bytes: 4096, firstByte: 65 });
-    assert.equal((await bounded(registry.clock(options()))).output.length, 1024);
+    const clockResult = await bounded(registry.clock(options()));
+    assert.equal(clockResult.status, 'ok');
+    assert.equal(clockResult.output.length, 1024);
     const event = JSON.parse(await fs.readFile(phase(children[0], 'start')));
     const clock = JSON.parse(await fs.readFile(phase(children[1], 'start')));
     assert.deepEqual(event.argv, ['opencode-event', '--protocol', '1']);
