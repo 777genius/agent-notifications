@@ -71,7 +71,7 @@ OpenCode consent is separate. Webhook consent alone does not configure an endpoi
 Restart Gemini after setup or update so its effective hooks are reloaded. Use the
 checked candidate's printed inspect, channel-change, remove and recovery commands;
 installation, repeat, update, inspect and removal were exercised on Mac and Linux.
-Removal revokes Gemini consent and remove only owned hooks/runtime files, preserving foreign settings and
+Removal revokes Gemini consent and removes only owned hooks/runtime files, preserving foreign settings and
 other agents. An ownership conflict may retain disabled files for inspection rather
 than overwrite another writer's edits.
 
