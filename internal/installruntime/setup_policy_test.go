@@ -91,7 +91,7 @@ func TestSetupPolicyByteCASAndWriterFloor(t *testing.T) {
 		t.Fatal("manual bytes overwritten")
 	}
 	// Pure disable is allowed without native, but must never bypass writer floor.
-	l.WriterFloor = ReservationWriterFloor + 1
+	l.WriterFloor = OpenCodeWriterFloor + 1
 	if err = writeJSON(filepath.Join(r.ControlRoot, "ownership.json"), l); err != nil {
 		t.Fatal(err)
 	}

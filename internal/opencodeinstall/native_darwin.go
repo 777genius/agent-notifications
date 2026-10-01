@@ -28,6 +28,34 @@ type NativeInstallation struct {
 
 var _ notifier.NativeInstallation = NativeInstallation{}
 
+// LeasedNativeInstallation consumes only the already validated registration
+// lease. StructuredDelivery retains its manifest/probe/spool validation normally.
+func (l *RegistrationLease) NativeInstallation(ctx context.Context) notifier.NativeInstallation {
+	return leasedNativeInstallation{lease: l, ctx: ctx}
+}
+
+type leasedNativeInstallation struct {
+	lease *RegistrationLease
+	ctx   context.Context
+}
+
+func (n leasedNativeInstallation) Acquire(ctx context.Context) (notifier.NativeLease, error) {
+	l := n.lease
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	native := l.snapshot.Installation.Ledger.Native
+	if ctx.Err() != nil || n.ctx == nil || n.ctx.Err() != nil || l.ctx == nil || l.ctx.Err() != nil || l.closed || l.nativeUsed || !l.desktop || native == nil || native.DecoderFloor < 1 {
+		return nil, errors.New("admitted native installation unavailable")
+	}
+	l.nativeUsed = true
+	l.refs++
+	return &nativeLease{bundle: native.Path, release: func() {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		l.dropReference()
+	}}, nil
+}
+
 type nativeLease struct {
 	bundle  string
 	release func()

@@ -217,6 +217,9 @@ func checkPolicyGeneration(root string, l Ledger) error {
 // snapshots. It never restores an entire directory and never downgrades an
 // already promoted callback reader. A foreign edit makes rollback refuse.
 func reverseTransaction(current Ledger, tx transaction) (transaction, error) {
+	if tx.OpenCodeInit != nil || tx.OpenCodePurge != nil {
+		return transaction{}, fmt.Errorf("private registration/removal requires forward recovery")
+	}
 	if tx.Native != nil && tx.Native.Retire {
 		return transaction{}, fmt.Errorf("retirement deletion must finish forward recovery before rollback")
 	}
@@ -231,7 +234,7 @@ func reverseTransaction(current Ledger, tx transaction) (transaction, error) {
 	if after.Schema < tx.After.Schema {
 		after.Schema = tx.After.Schema
 	}
-	if after.PendingMutation != nil || tx.After.PendingMutation != nil || after.WriterFloor >= ReservationWriterFloor {
+	if after.Schema < 4 && (after.PendingMutation != nil || tx.After.PendingMutation != nil || after.WriterFloor >= ReservationWriterFloor) {
 		after.Schema = ledgerSchemaV3
 		if after.WriterFloor < ReservationWriterFloor {
 			after.WriterFloor = ReservationWriterFloor
@@ -321,7 +324,7 @@ func reverseTransaction(current Ledger, tx transaction) (transaction, error) {
 		}
 		reverse.Files = append(reverse.Files, undo)
 	}
-	if err := validateWriterFiles(reverse.Files); err != nil {
+	if err := validateWriterFilesAtFloor(reverse.Files, after.WriterFloor); err != nil {
 		return transaction{}, err
 	}
 	return reverse, nil
