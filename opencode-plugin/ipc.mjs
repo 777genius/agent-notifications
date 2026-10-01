@@ -66,3 +66,24 @@ export async function forward(event, spawnProcess = spawn, binary = executable, 
     child.stdin.end(body);
   });
 }
+
+// V2 ingress keeps reducing native events while deliveries are in progress.
+// Hold capacity until the child closes, including after a timeout requests kill.
+export function createBoundedForwarder({ limit = 16, spawnProcess = spawn, binary = executable, root = controlRoot, platform = process.platform } = {}) {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 64) throw new RangeError('invalid delivery limit');
+  let active = 0;
+  let disposed = false;
+  return {
+    async forward(event) {
+      if (disposed) return 'suppressed';
+      if (active >= limit) return 'capacity';
+      return forward(event, (...args) => {
+        const child = spawnProcess(...args);
+        active++;
+        child.once('close', () => { active--; });
+        return child;
+      }, binary, root, platform);
+    },
+    dispose() { disposed = true; },
+  };
+}

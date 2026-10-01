@@ -6,6 +6,9 @@ on:
     paths:
       - '.github/workflows/opencode-native-e2e.yml'
       - 'scripts/opencode-native-e2e.py'
+      - 'scripts/opencode-semantic-e2e.py'
+      - 'scripts/acquire-opencode-native.py'
+      - 'scripts/opencode-native-pins.json'
       - 'scripts/opencode-private-root-windows.go'
       - 'cmd/claude-notifications/**'
       - 'internal/**'
@@ -105,6 +108,40 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: opencode-native-e2e-${{ matrix.platform }}-${{ matrix.arch }}
-          path: candidate/opencode-native-e2e.json
+          path: candidate/opencode-native-e2e*.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Acquire verified current V2 native package without npm hooks
+        shell: bash
+        env:
+          CANDIDATE_OS: ${{ matrix.platform }}
+          CANDIDATE_ARCH: ${{ matrix.arch }}
+          OPENCODE_V2_BINARY: opencode-v2${{ matrix.platform == 'windows' && '.exe' || '' }}
+        run: |
+          set -euo pipefail
+          python scripts/acquire-opencode-native.py --version 2.0.21 \
+            --os "$CANDIDATE_OS" --arch "$CANDIDATE_ARCH" --output "candidate/$OPENCODE_V2_BINARY"
+
+      - name: Run current V2 native install, spawn, update and revocation
+        shell: bash
+        env:
+          CANDIDATE_BINARY: ${{ matrix.binary }}
+          CANDIDATE_OS: ${{ matrix.platform }}
+          CANDIDATE_ARCH: ${{ matrix.arch }}
+          OPENCODE_V2_BINARY: opencode-v2${{ matrix.platform == 'windows' && '.exe' || '' }}
+        run: |
+          set -euo pipefail
+          python scripts/opencode-native-e2e.py --version 2.0.21 \
+            --binary "candidate/$CANDIDATE_BINARY" --opencode "candidate/$OPENCODE_V2_BINARY" \
+            --os "$CANDIDATE_OS" --arch "$CANDIDATE_ARCH" \
+            --report candidate/opencode-native-e2e-v2.json
+
+      - name: Upload current V2 evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-native-v2-${{ matrix.platform }}-${{ matrix.arch }}
+          path: candidate/opencode-native-e2e-v2.json
           if-no-files-found: warn
           retention-days: 14

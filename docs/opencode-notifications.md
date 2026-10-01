@@ -5,10 +5,17 @@ questions, permission requests and terminal errors**. Alerts contain generic tex
 they are silent and do not navigate to a terminal or session when clicked. It does
 not provide Claude's plan/review events, contextual messages or sound controls.
 
-The tested host is **OpenCode 1.18.33**. [OpenCode V2](https://opencode.ai/v2/docs) uses a different plugin API and is not supported. The public
-installer rejects V2 and reports the detected V1 version; that diagnostic does not
-qualify every V1 release. Setup installs notifications, never OpenCode itself, and
-does not start an agent session.
+The dual-API release candidate uses **one installed plugin** for OpenCode V1 and
+[V2](https://opencode.ai/v2/docs): V1 calls `server`, V2 calls `setup`. Native
+qualification targets are **1.18.33, 2.0.0 and 2.0.21**. The candidate installer
+accepts stable V1 >= 1.18.29 and V2 >= 2.0.0; this range does not qualify every
+release. Prereleases and unknown future API generations are rejected.
+Setup installs notifications, never OpenCode itself, and does not start an agent session.
+
+**Publication pending:** this candidate requires the separately reviewed
+`universal-agent-plugins-opencode-events@0.2.0` package. Qualification consumes its
+exact local tarball; publishing that package and validating a clean registry install
+are separate release steps. These changes do not upgrade an existing installation.
 
 ## Platforms and observed delivery
 
@@ -20,9 +27,12 @@ service or Windows toasts. Linux needs an available desktop session/D-Bus servic
 - The user confirmed a visible completion banner on macOS arm64.
 - Linux amd64 X11/dunst rendered all four real OpenCode events; see the
   [captured banners](evidence/opencode-1.18.33-x11-notifications.png).
-- Native lifecycle/webhook checks passed on all five targets. Headless CI does
+- V1 native lifecycle/webhook checks passed on all five targets. Headless CI does
   not establish visible macOS Intel, Linux ARM64 or Windows banners, or universal
   compatibility with every desktop environment.
+- V2 semantic qualification is Linux amd64. The native workflow adds 2.0.21
+  artifact/install/spawn/update/remove checks on those five targets; adding the
+  lanes is not evidence that they have passed. V2 visible banners are not claimed.
 
 ## Install or update
 
@@ -173,7 +183,19 @@ check other plugins in your OpenCode profile.
 One-shot `opencode run` may exit before asynchronous delivery completes. Delivery
 at host shutdown is best effort; notification delivery after process exit is not
 guaranteed. Root-session events only are covered; nested subagent events, audio,
-click-to-focus, plan/review alerts and OpenCode V2 are outside this integration.
+click-to-focus and plan/review alerts are outside this integration.
+
+V2 completion means one positively verified final answer per native busy period.
+Queued or steered inputs can share that period. A tool step, retry, compaction
+summary or interrupted execution does not itself produce completion. The observer
+checks the root session and its owning directory/workspace before delivery, since
+V2 plugin event subscriptions also receive events from other locations.
+
+Lookup and IPC limits apply per plugin instance. Soft lookup timeouts retain their
+capacity until the native promise settles, including on 2.0.0 where abort signals
+are ignored. Cleanup suppresses late verification without waiting indefinitely;
+there is no delivery replay after an uncertain result. V2 2.0.0 needs a server
+restart to reload the plugin; 2.0.21 supports location reload.
 
 ## Linux amd64 qualification
 

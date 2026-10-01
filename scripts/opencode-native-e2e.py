@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded OpenCode 1.18.33 webhook qualification in a disposable project."""
+"""Bounded native OpenCode webhook/lifecycle qualification in a disposable project."""
 
 import argparse
 import hashlib
@@ -18,6 +18,7 @@ import tempfile
 import threading
 import time
 import zipfile
+from importlib.util import module_from_spec, spec_from_file_location
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
@@ -174,9 +175,10 @@ def main():
     parser.add_argument("--os", choices=("darwin", "linux", "windows"), required=True)
     parser.add_argument("--arch", choices=("arm64", "amd64"), required=True)
     parser.add_argument("--report", type=pathlib.Path, required=True)
+    parser.add_argument("--version", choices=("1.18.33", "2.0.21"), default="1.18.33")
     args = parser.parse_args()
     report = {"schema_version": 1, "status": "fail", "host": platform.platform(),
-              "os": args.os, "arch": args.arch, "opencode_version": VERSION,
+              "os": args.os, "arch": args.arch, "opencode_version": args.version,
               "desktop_visual_outcome": "not_observed"}
     try:
         qualify(args, report)
@@ -191,7 +193,18 @@ def main():
 
 
 def qualify(args, report):
+    v1 = args.version == VERSION
     expected_name, expected_digest = ARCHIVES[(args.os, args.arch)]
+    if not v1 and args.archive:
+        raise RuntimeError("V2 qualification requires the pinned extracted npm binary")
+    if not v1:
+        spec = spec_from_file_location("native_acquisition", pathlib.Path(__file__).with_name("acquire-opencode-native.py"))
+        acquisition = module_from_spec(spec)
+        spec.loader.exec_module(acquisition)
+        pin = acquisition.native_pin(args.version, args.os, args.arch)
+        if digest(args.opencode) != pin["binary_sha256"]:
+            raise RuntimeError("V2 binary differs from the native acquisition pin")
+        report["opencode_acquisition"] = pin
     if args.archive and (args.archive.name != expected_name or digest(args.archive) != expected_digest):
         raise RuntimeError("OpenCode release archive name or SHA-256 differs from v1.18.33 pin")
     actual_os = {"darwin": "darwin", "linux": "linux", "win32": "windows"}.get(sys.platform)
@@ -206,7 +219,7 @@ def qualify(args, report):
     modified = re.search(r"(?m)^\s*build\s+vcs\.modified=(true|false)\s*$", build_info)
     verified_source = bool(revision and modified and revision.group(1) == source_sha
                            and modified.group(1) == "false")
-    if args.archive and not verified_source:
+    if (args.archive or not v1) and not verified_source:
         raise RuntimeError("candidate binary lacks clean VCS metadata for exact checkout HEAD")
     report.update({"candidate_sha": source_sha if verified_source else "local_binary_unattributed",
                    "source_checkout_sha": source_sha,
@@ -230,6 +243,7 @@ def qualify(args, report):
             prepare_sandbox_root(root, args.os)
             project = root / "project"
             project.mkdir()
+            subprocess.run(["git", "init", "-q", str(project)], check=True)
             (project / "README.md").write_text("Disposable native qualification project.\n")
             config_dir = root / "opencode-config"
             config_dir.mkdir()
@@ -238,8 +252,9 @@ def qualify(args, report):
                 "webhook": {"enabled": True, "preset": "custom", "format": "json",
                             "url": f"http://127.0.0.1:{webhook.server_port}/webhook"}}}))
             (project / "opencode.json").write_text(json.dumps({"model": "mock-notification/mock-notification",
-                "provider": {"mock-notification": {"npm": "@ai-sdk/openai-compatible",
-                    "name": "Sandbox provider", "options": {"baseURL": f"http://127.0.0.1:{provider.server_port}/v1",
+                "provider" if v1 else "providers": {"mock-notification": {
+                    "npm" if v1 else "package": "@ai-sdk/openai-compatible" if v1 else "@opencode/ai/providers/openai-compatible",
+                    "name": "Sandbox provider", "options" if v1 else "settings": {"baseURL": f"http://127.0.0.1:{provider.server_port}/v1",
                     "apiKey": "sandbox-only"}, "models": {"mock-notification": {
                     "name": "Sandbox scripted model", "limit": {"context": 128000, "output": 8192}}}}}}))
             env = {key: os.environ[key] for key in ("PATH", "SystemRoot", "WINDIR", "COMSPEC", "PATHEXT",
@@ -261,7 +276,7 @@ def qualify(args, report):
                 extract_opencode(args.archive, opencode, args.os)
             else:
                 opencode = args.opencode.resolve(strict=True)
-            if VERSION not in run([str(opencode), "--version"], cwd=project, env=env):
+            if args.version not in run([str(opencode), "--version"], cwd=project, env=env):
                 raise RuntimeError("OpenCode version mismatch")
             common = ["--control-root", str(root / "control"), "--runtime-root", str(root / "runtime"),
                       "--opencode-config-dir", str(config_dir), "--home", str(home),
@@ -307,7 +322,7 @@ def qualify(args, report):
                     def turn(label):
                         marker = "PRIVATE_PROMPT_" + secrets.token_hex(12)
                         before = provider.count()
-                        run([str(opencode), "run", "--attach", f"http://127.0.0.1:{server_port}",
+                        run([str(opencode), "run", "--attach" if v1 else "--server", f"http://127.0.0.1:{server_port}",
                             "--model", "mock-notification/mock-notification", "--format", "json",
                             f"{label} in this disposable project. {marker}"], cwd=project, env=env, timeout=120)
                         if not any(marker.encode() in body for body in provider.requests[before:]):

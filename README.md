@@ -31,7 +31,7 @@ Desktop notifications for **Claude Code, Codex CLI and OpenCode**. Know when a t
 
 Built with [Universal Agent Plugins](https://github.com/777genius/universal-agent-plugins). [Create your own plugin for multiple AI agents](https://github.com/777genius/universal-agent-plugins#build-plugins).
 
-OpenCode provides silent, generic completion, question, permission and error alerts for root sessions, with explicit desktop/webhook consent. Tested with OpenCode **1.18.33**; V2 is not supported. [OpenCode setup, privacy and limits](docs/opencode-notifications.md)
+OpenCode provides silent, generic completion, question, permission and error alerts for root sessions, with explicit desktop/webhook consent. The dual-API candidate targets **1.18.33, 2.0.0 and 2.0.21** with one installed plugin; SDK publication and a clean registry install are pending. [OpenCode setup, privacy and qualification limits](docs/opencode-notifications.md)
 
 ## Features
 

@@ -437,3 +437,39 @@ jobs:
           path: opencode-qualification/opencode-release-e2e.json
           if-no-files-found: error
           retention-days: 14
+
+      - name: Acquire verified current OpenCode V2 native package
+        shell: bash
+        env:
+          CANDIDATE_OS: ${{ matrix.platform }}
+          CANDIDATE_ARCH: ${{ matrix.arch }}
+          OPENCODE_V2_BINARY: opencode-v2${{ matrix.platform == 'windows' && '.exe' || '' }}
+        run: |
+          set -euo pipefail
+          python scripts/acquire-opencode-native.py --version 2.0.21 \
+            --os "$CANDIDATE_OS" --arch "$CANDIDATE_ARCH" \
+            --output "opencode-qualification/$OPENCODE_V2_BINARY"
+
+      - name: Qualify current OpenCode V2 lifecycle with release artifact
+        shell: bash
+        env:
+          MAIN_BINARY: ${{ matrix.binary }}
+          CANDIDATE_OS: ${{ matrix.platform }}
+          CANDIDATE_ARCH: ${{ matrix.arch }}
+          OPENCODE_V2_BINARY: opencode-v2${{ matrix.platform == 'windows' && '.exe' || '' }}
+        run: |
+          set -euo pipefail
+          python scripts/opencode-native-e2e.py --version 2.0.21 \
+            --binary "dist/$MAIN_BINARY" \
+            --opencode "opencode-qualification/$OPENCODE_V2_BINARY" \
+            --os "$CANDIDATE_OS" --arch "$CANDIDATE_ARCH" \
+            --report opencode-qualification/opencode-release-e2e-v2.json
+
+      - name: Upload current OpenCode V2 release artifact evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-release-e2e-v2-${{ matrix.platform }}-${{ matrix.arch }}
+          path: opencode-qualification/opencode-release-e2e-v2.json
+          if-no-files-found: error
+          retention-days: 14
