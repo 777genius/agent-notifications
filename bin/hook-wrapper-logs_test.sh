@@ -73,6 +73,12 @@ repeated = invoke(plugin, cache)
 assert repeated.stdout == repeated.stderr == b''
 assert len(logs(cache)) == 2
 
+# Cutting off the OSC opener before parsing must not expose its hidden payload.
+(root / 'reason.txt').write_bytes(b'Error: real failure\n\x1b]0;' + b'hidden title line\n' * 24 +
+                                b'Error: HIDDEN_OSC_PAYLOAD\x07\ncleanup complete\n')
+osc_message = json.loads(invoke(plugin, root / 'osc-cache').stdout)['systemMessage']
+assert 'Error: real failure' in osc_message and 'HIDDEN_OSC_PAYLOAD' not in osc_message
+
 # An oversized UTF-8 reason must stay bounded and decodable, without splitting a character.
 (root / 'reason.txt').write_text('Error: ' + 'я' * 350 + '\n', encoding='utf-8')
 long_result = invoke(plugin, root / 'long-cache')

@@ -187,9 +187,9 @@ run_install() {
 
 install_error_excerpt() {
     [ -n "$INSTALL_LOG" ] || return 0
-    # Prefer a substantive error in the tail over progress/cleanup lines.
-    # Parse CSI/OSC escapes, including OSC strings spanning multiple lines.
-    tail -n 20 "$INSTALL_LOG" 2>/dev/null | LC_ALL=C awk '
+    # Prefer the last substantive error over progress/cleanup lines. Parse
+    # from the start: an OSC string can span more than a tail window.
+    LC_ALL=C awk '
         BEGIN { for (i = 0; i < 32; i++) if (i != 9) control[sprintf("%c", i)] = 1 }
         {
             clean = ""
@@ -201,7 +201,8 @@ install_error_excerpt() {
                 if (state == "esc") { state = c == "[" ? "csi" : c == "]" ? "osc" : ""; continue }
                 if (c == "\033") { state = "esc"; continue }
                 if (c in control || c == "\177") continue
-                clean = clean c
+                # Keep enough bytes for the excerpt and its last UTF-8 character.
+                if (length(clean) < 304) clean = clean c
             }
             if (clean ~ /[^ \t]/) last = clean
             if (tolower(clean) ~ /error|failed|fatal|refus|fingerprint|denied/) reason = clean
@@ -215,7 +216,7 @@ install_error_excerpt() {
                 if (i + width - 1 > 300) break
                 printf "%s", substr(text, i, width)
             }
-        }'
+        }' "$INSTALL_LOG" 2>/dev/null
 }
 
 json_system_message() {
