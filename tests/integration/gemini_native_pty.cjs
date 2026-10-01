@@ -7,9 +7,26 @@ const readline = require('node:readline');
 const {createRequire} = require('node:module');
 let child, deadline, killDeadline, sequence, pattern, forced = false;
 let tail = '', total = 0, permissionSeen = false, stopped = false;
+let stage = 'protocol';
 const diagnostics = new Set();
 const emit = data => process.stdout.write(JSON.stringify(data) + '\n');
-const check = (ok, code) => { if (!ok) throw new Error(code); };
+class ValidationError extends Error {}
+const check = (ok, code) => { if (!ok) throw new ValidationError(code); };
+const validationCodes = new Set(['duplicate_start', 'TEST_installation_required', 'CLI_physical_path_required',
+  'CLI_package_missing', 'CLI_PTY_pin_mismatch', 'PTY_outside_explicit_installation', 'PTY_identity_mismatch',
+  'environment_not_allowlisted', 'TEST_cwd_required', 'home_mismatch', 'synthetic_key_required',
+  'loopback_provider_required', 'watchdog_bounds', 'native_PTY_backend_unverified',
+  'bridge_input_limit', 'unknown_case', 'write_bounds', 'unknown_operation']);
+const nodeCodes = new Set(['ERR_DLOPEN_FAILED', 'MODULE_NOT_FOUND', 'ERR_MODULE_NOT_FOUND',
+  'ERR_PACKAGE_PATH_NOT_EXPORTED', 'ERR_REQUIRE_ESM', 'ERR_INVALID_ARG_TYPE', 'ERR_INVALID_ARG_VALUE',
+  'ENOENT', 'EACCES', 'EPERM', 'EINVAL', 'ENOEXEC']);
+function classifyError(error) {
+  if (error instanceof ValidationError && validationCodes.has(error.message))
+    return {error: 'bridge_validation_error', validation: error.message};
+  if (nodeCodes.has(error?.code)) return {error: 'bridge_node_error', node_error_code: error.code};
+  if (error instanceof SyntaxError) return {error: 'bridge_syntax_error'};
+  return {error: 'bridge_unclassified_error'}; // Never forward native arbitrary error text.
+}
 const hash = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 const contains = (file, root) => {
   const rel = path.relative(root, file);
@@ -35,6 +52,7 @@ function stop() {
   }, 2500);
 }
 function start(m) {
+  stage = 'installation_validation';
   check(!child, 'duplicate_start');
   const root = fs.realpathSync(m.installRoot);
   check(root === m.installRoot && fs.existsSync(path.join(root, '.an-gemini-TEST')), 'TEST_installation_required');
@@ -61,7 +79,9 @@ function start(m) {
     if (p === path.dirname(p)) break;
   }
   check(pkg && JSON.parse(fs.readFileSync(pkg)).version === '1.1.0', 'PTY_identity_mismatch');
-  const pty = req(entry); // Loads the CLI's packaged native platform module, never npm scripts.
+  stage = 'native_module_load';
+  const pty = req(entry); // Never npm scripts; Windows native loading may be lazy.
+  stage = 'environment_validation';
   const allowed = new Set(['HOME','USERPROFILE','GEMINI_CLI_HOME','XDG_CONFIG_HOME','XDG_CACHE_HOME','XDG_DATA_HOME','XDG_STATE_HOME',
     'TMPDIR','TMP','TEMP','GEMINI_CLI_SYSTEM_SETTINGS_PATH','GEMINI_CLI_SYSTEM_DEFAULTS_PATH','GEMINI_CLI_TRUSTED_FOLDERS_PATH',
     'GEMINI_API_KEY','GEMINI_FORCE_FILE_STORAGE','GOOGLE_GEMINI_BASE_URL','TERM','PATH','LANG','LC_ALL','SystemRoot','ComSpec']);
@@ -73,6 +93,7 @@ function start(m) {
   check(/^http:\/\/127\.0\.0\.1:[0-9]+$/.test(m.env.GOOGLE_GEMINI_BASE_URL), 'loopback_provider_required');
   check(Number.isInteger(m.timeoutMs) && m.timeoutMs >= 60000 && m.timeoutMs <= 240000, 'watchdog_bounds');
   pattern = new RegExp(m.permissionPattern, 'is');
+  stage = 'native_spawn';
   child = pty.spawn(m.node, [exe, '--model', 'gemini-2.5-flash', '--approval-mode', 'default', '--skip-trust', '--prompt-interactive', 'AN_TEST_PLAIN'], {
     name: 'xterm-256color', cols: 120, rows: 40, cwd, env: m.env
   });
@@ -99,11 +120,14 @@ function start(m) {
   });
   // ConPTY loads its addon lazily in WindowsPtyAgent's spawn constructor.
   // Validate the actually loaded modules after registering owned-child cleanup.
+  stage = 'loaded_backend_validation';
   const addons = Object.keys(require.cache).filter(x => x.endsWith('.node'));
   check(addons.length > 0 && addons.every(x => contains(fs.realpathSync(x), root)), 'native_PTY_backend_unverified');
   emit({ready: {module: '@lydell/node-pty', version: '1.1.0', platform: process.platform, node_version: process.version,
     package_sha256: hash(pkg), entry_sha256: hash(entry), native_backend_sha256: addons.map(hash)}});
+  stage = 'protocol';
 }
+if (require.main === module) {
 const input = readline.createInterface({input: process.stdin, crlfDelay: Infinity});
 input.on('line', line => {
   try {
@@ -117,12 +141,14 @@ input.on('line', line => {
       check(child && typeof m.data === 'string' && m.data.length <= 256, 'write_bounds');
       child.write(m.data);
     } else if (m.op === 'stop') stop();
-    else throw new Error('unknown_operation');
-  } catch {
-    emit({error: 'bridge_protocol_or_startup_error', native_child_started: Boolean(child)}); process.exitCode = 1;
+    else check(false, 'unknown_operation');
+  } catch (error) {
+    emit({...classifyError(error), stage, native_child_started: Boolean(child)}); process.exitCode = 1;
     if (child) stop(); else process.stdin.destroy();
   }
 });
 input.on('close', () => { if (child) stop(); });
 process.on('SIGTERM', stop);
 process.on('SIGINT', stop);
+}
+module.exports = {classifyError, ValidationError}; // Pure classification checks; no native mocks.

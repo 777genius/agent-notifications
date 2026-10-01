@@ -318,7 +318,8 @@ def run(args):
                     driver_facts = json.loads((lab / manifest).read_bytes())
                     # Fixed classifications and version metadata only, never provider or terminal text.
                     print(json.dumps({"native_driver": label, **{key: driver_facts[key] for key in
-                        ("classification", "exception_type", "native_version_probe", "native_execution", "driver")
+                        ("classification", "exception_type", "native_version_probe", "setup_failure", "setup_cleanup_failure",
+                         "bridge_failure", "cleanup_classification", "native_execution", "driver")
                         if key in driver_facts}}), flush=True)
         require(all(evidence.get(label) == "passed_implemented_scenarios" for label in ("G0", "G5")), "native_qualification_failed")
         evidence["status"] = "passed_implemented_scenarios_with_external_gates_pending"

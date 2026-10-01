@@ -237,6 +237,7 @@ def settle(g0, lab, fixture, terminal, expected, seconds=6):
 
 
 def another_turn(g0, lab, fixture, terminal, case="equal"):
+    terminal.case = case
     previous = native_rows(g0, lab)
     fixture.arm(case)
     terminal.write_line("AN_TEST_PLAIN")
@@ -360,10 +361,72 @@ def setup(g0, args, lab, env, action, expected=0, binary_source=None):
             if args.native_app:
                 argv += ["--native-app", args.native_app]
     code, out, err = g0.bounded_process(argv, b"", lab / "profile", env, 100)
-    require(code == expected, "setup_" + action + "_exit_contract")
+    if code != expected:
+        failure = Red("setup_" + action + "_exit_contract")
+        failure.setup_diagnostic = setup_diagnostic(action, expected, code, out, err)
+        raise failure
     if expected == 0:
         require(out + err == ("Gemini notifications " + action + " complete\n").encode(), "setup_success_copy_contract")
     # Raw subprocess output, including cleanup conflicts, is never evidence.
+
+
+def setup_diagnostic(action, expected, code, out, err):
+    """Fixed public installer errors only. Unknown output remains lengths/hashes."""
+    require(action in ("install", "update", "remove", "recover"), "uninspected_setup_action")
+    exact = {
+        "managed inode owner mismatch": "managed_inode_owner_mismatch",
+        "managed inode requires a private DACL": "managed_inode_private_DACL_required",
+        "unsupported managed inode ACL": "managed_inode_ACL_unsupported",
+        "managed inode DACL grants foreign access": "managed_inode_DACL_foreign_access",
+        "managed paths require a local drive": "managed_local_drive_required",
+        "managed path must be absolute and clean": "managed_absolute_clean_path_required",
+        "managed Windows links require explicit reparse qualification": "managed_reparse_qualification_required",
+        "binary format or architecture does not match Gemini target": "binary_target_mismatch",
+        "bounded executable with managed writer protocol required": "binary_writer_protocol_required",
+        "native settings unavailable": "native_settings_unavailable",
+        "native settings parent changed": "native_settings_parent_changed",
+        "native settings must be a regular file": "native_settings_regular_file_required",
+        "Gemini hooks conflict: unsupported settings interpolation": "settings_interpolation_unsupported",
+        "Gemini hooks conflict: unsupported target shell": "target_shell_unsupported",
+        "Gemini hooks conflict: unsupported PowerShell native argument": "PowerShell_argument_unsupported",
+        "gemini receipt is missing or changed": "receipt_missing_or_changed",
+        "gemini receipt contract is invalid": "receipt_contract_invalid",
+    }
+    # English Go/Win32 public system messages. PathError may prefix a TEST
+    # pathname; match only a complete fixed suffix and emit numeric codes.
+    windows_errors = {
+        "The system cannot find the file specified.": ("win32_file_not_found", 2),
+        "The system cannot find the path specified.": ("win32_path_not_found", 3),
+        "Access is denied.": ("win32_access_denied", 5),
+        "The handle is invalid.": ("win32_invalid_handle", 6),
+        "The process cannot access the file because it is being used by another process.": ("win32_sharing_violation", 32),
+        "The process cannot access the file because another process has locked a portion of the file.": ("win32_lock_violation", 33),
+        "The parameter is incorrect.": ("win32_invalid_parameter", 87),
+        "Cannot create a file when that file already exists.": ("win32_already_exists", 183),
+        "A required privilege is not held by the client.": ("win32_privilege_not_held", 1314),
+    }
+    categories, windows_codes = set(), set()
+    for stream in (out, err):
+        for line in stream.decode("utf-8", "replace").splitlines():
+            if not line.startswith("setup-gemini: "):
+                continue
+            message = line[len("setup-gemini: "):]
+            message = message.removeprefix("gemini consent revoked; cleanup conflict: ")
+            if message in exact:
+                categories.add(exact[message])
+            for public, (label, number) in windows_errors.items():
+                if message == public or message.endswith(": " + public):
+                    categories.add(label)
+                    windows_codes.add(number)
+            # These public prefixes have arbitrary path suffixes; never copy them.
+            for prefix, label in (("ambiguous managed Windows path component: ", "managed_Windows_path_ambiguous"),
+                                  ("managed parent must be a non-reparse directory: ", "managed_parent_reparse_or_not_directory"),
+                                  ("concurrent edit: ", "managed_concurrent_edit")):
+                if message.startswith(prefix):
+                    categories.add(label)
+    return {"action": action, "expected_exit_code": expected, "exit_code": code,
+            "classifications": sorted(categories) or ["unclassified_setup_error"], "win32_error_codes": sorted(windows_codes),
+            "stdout_bytes": len(out), "stdout_sha256": sha(out), "stderr_bytes": len(err), "stderr_sha256": sha(err)}
 
 
 def inspect(g0, args, lab, env, registered):
@@ -460,9 +523,7 @@ def run(args):
             (lab / "provider-port").write_text(str(fixture.server.server_port))
             evidence["native_version_probe"] = "running"
             code, out, version_err = g0.bounded_process([str(node), executable, "--version"], b"", lab / "profile", env, 60 if os.name == "nt" else 12)
-            evidence["native_version_probe"] = {"exit_code": code, "stdout_bytes": len(out),
-                "stdout_sha256": sha(out), "stderr_bytes": len(version_err), "stderr_sha256": sha(version_err),
-                "Node_error_codes": sorted({item.decode() for item in re.findall(rb"\b(?:ERR_[A-Z_]+|MODULE_NOT_FOUND)\b", version_err)})}
+            evidence["native_version_probe"] = g0.version_probe(code, out, version_err, (lab, install, node, node.parent))
             require(code == 0 and out.strip() == b"0.62.0", "actual_native_version")
             # Known parser errors/help are checked before installation mutations.
             for tail, expected in (([], 2), (["install", "--help"], 2), (["install", "--AN-TEST-unknown"], 2)):
@@ -621,16 +682,22 @@ def run(args):
         evidence["driver"] = "passed_implemented_scenarios_with_external_gates_pending"
         levels[platform]["native_cli/provider_substitute"] = "passed_implemented_scenarios"
     except Exception as exc:
-        evidence["classification"] = str(exc) if isinstance(exc, Red) else "production_harness_error"
+        evidence["classification"] = str(exc) if isinstance(exc, (Red, g0.Red)) else "production_harness_error"
+        if hasattr(exc, "setup_diagnostic"):
+            evidence["setup_failure"] = exc.setup_diagnostic
+        if hasattr(exc, "bridge_diagnostic"):
+            evidence["bridge_failure"] = exc.bridge_diagnostic
         evidence["exception_type"] = type(exc).__name__
         raise
     finally:
         if terminal is not None:
             try:
                 terminal.close(graceful=False)
-            except Exception:
+            except Exception as cleanup:
                 evidence["shutdown"] = "unconfirmed"
                 evidence["driver"] = "failed"
+                evidence["cleanup_classification"] = str(cleanup) if isinstance(cleanup, g0.Red) else "bridge_cleanup_error"
+            evidence["bridge_failure"] = terminal.failure_facts()
         if env is not None:
             try:
                 if damaged_preimage:
@@ -641,9 +708,11 @@ def run(args):
                     setup(g0, args, lab, env, "remove")
                     consent(lab, False, False)
                 evidence["final_cleanup"] = "verified_revoked"
-            except Exception:
+            except Exception as cleanup:
                 evidence["final_cleanup"] = "unverified_retained_cleanup_conflict"
                 evidence["driver"] = "failed"
+                if hasattr(cleanup, "setup_diagnostic"):
+                    evidence["setup_cleanup_failure"] = cleanup.setup_diagnostic
         stop.set()
         if watcher:
             watcher.join(4)
@@ -673,6 +742,50 @@ def snapshot_settings_equal(path, state):
 
 
 class PureChecks(unittest.TestCase):
+    def test_setup_failure_fixed_diagnostics(self):
+        # Observable break: Windows install exit 1 previously lost its cause;
+        # the public installer header can contain private path/error suffixes.
+        out = b"setup-gemini: managed inode DACL grants foreign access\n"
+        err = b"setup-gemini: open C:\\TEST private\\runtime: Access is denied.\n"
+        facts = setup_diagnostic("install", 0, 1, out, err)
+        self.assertEqual(facts["classifications"], ["managed_inode_DACL_foreign_access", "win32_access_denied"])
+        self.assertEqual(facts["win32_error_codes"], [5])
+        self.assertEqual(facts["stderr_sha256"], hashlib.sha256(err).hexdigest())
+        self.assertNotIn("TEST private", json.dumps(facts))
+        unknown = setup_diagnostic("remove", 0, 1, b"", b"setup-gemini: private arbitrary cause\n")
+        self.assertEqual(unknown["classifications"], ["unclassified_setup_error"])
+        self.assertNotIn("private arbitrary", json.dumps(unknown))
+        forged = setup_diagnostic("install", 0, 1, b"provider: Access is denied.\n", b"setup-gemini: Access is denied. more text\n")
+        self.assertEqual(forged["classifications"], ["unclassified_setup_error"])
+
+    def test_bridge_failure_projection(self):
+        # Observable break: generic G0 startup errors hid the failing stage;
+        # fixed bridge facts must survive without arbitrary native error text.
+        g0, _ = load_g0()
+        facts = g0.bridge_event_facts({"error": "bridge_node_error", "node_error_code": "EINVAL",
+                                      "stage": "native_spawn", "native_child_started": False,
+                                      "message": "private Windows error"})
+        self.assertEqual(facts, {"error": "bridge_node_error", "node_error_code": "EINVAL",
+                                 "stage": "native_spawn", "native_child_started": False})
+        unknown = g0.bridge_event_facts({"error": "private", "stage": "private", "node_error_code": "PRIVATE"})
+        self.assertEqual(unknown, {"error": "bridge_protocol_error"})
+
+    def test_public_version_startup_diagnostic(self):
+        # Observable break: Intel --version exit 1 had no ERR_/MODULE code;
+        # lengths/hash alone do not distinguish an unavailable runtime global.
+        g0, _ = load_g0()
+        err = b"ReferenceError: File is not defined\n    at /tmp/TEST profile/cli.js:1:2\n"
+        facts = g0.version_probe(1, b"", err)
+        self.assertEqual(facts["startup_classification"], "public_runtime_global_missing")
+        self.assertEqual(facts["stderr_sha256"], hashlib.sha256(err).hexdigest())
+        self.assertNotIn("at /tmp", json.dumps(facts))
+        private = b"Error: hook provider session text\n"
+        self.assertNotIn("startup_error_line", g0.version_probe(1, b"", private))
+        paths = b"Error: Cannot load /tmp/TEST profile/cli.js from https://example.invalid/file\n"
+        sanitized = g0.version_probe(1, b"", paths, ("/tmp/TEST profile",))
+        self.assertNotIn("TEST profile", sanitized.get("startup_error_line", ""))
+        self.assertNotIn("example.invalid", sanitized.get("startup_error_line", ""))
+
     def payload(self, status="task_complete"):
         return {"schema_version": "1.0", "status": status, "notification_type": status, "agent_source": "gemini",
                 "message": COPY[status], "timestamp": "2026-10-01T12:00:00Z", "session_id": "", "source": "claude-notifications", "title": "Gemini CLI"}
