@@ -91,6 +91,14 @@ if [ "${1:-}" = --capabilities ]; then
     printf '%s\\n' bootstrap-products-v1
     exit 0
 fi
+if [ "${LEGACY_BOOTSTRAP:-}" = 1 ]; then
+    case "${1:-}" in
+        '') ;;
+        --product)
+            case "${2:-}" in claude|codex|both|opencode) ;; *) exit 2 ;; esac ;;
+        *) exit 2 ;;
+    esac
+fi
 : > "$CASE_DIR/argv0"
 for a in "$@"; do
     printf '%s\\0' "$a" >> "$CASE_DIR/argv0"
@@ -143,7 +151,7 @@ def run_loader(args, env, piped=False, documented=False, bash_executable=None):
 def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, piped=False,
              documented=False, expect_run=True, args=None, calls=None, no_network=False,
              legacy_status=None, opencode_status=None, message=None, help_only=False,
-             release=None, release_only=False, bash_executable=None):
+             release=None, release_only=False, bash_executable=None, legacy_bootstrap=False):
     if args is None:
         args = ['--product', 'both', 'argument with spaces', '*']
     if release is None:
@@ -180,6 +188,8 @@ def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, pipe
         env = dict(os.environ, PATH=runtime_path(case, python=True, node=True, bash_executable=bash_executable),
                    CASE_DIR=bash_path(case), RECORD_DIR=str(case), TMPDIR=bash_path(case / 'tmp space'),
                    FAIL_DOWNLOAD=fail, BOOTSTRAP_STATUS=str(status),
+                   NO_PRODUCT_CAPABILITY='1' if legacy_bootstrap else '0',
+                   LEGACY_BOOTSTRAP='1' if legacy_bootstrap else '0',
                    BOOTSTRAP_RELEASE_TAG='untrusted', BOOTSTRAP_RELEASE_COMMIT='untrusted',
                    INSTALL_SCRIPT_URL='https://example.invalid/not-used')
         if legacy_status is not None:
@@ -367,6 +377,45 @@ run_case('piped one-line entry point', expected=0, piped=True)
 run_case('documented one-line command', expected=0, documented=True)
 run_case('initial loader download failure', fail='setup', expected=0, documented=True, expect_run=False)
 run_case('bootstrap exit status', status=17, expected=17)
+# v1.46.1 accepts the interactive entry point and old single-product selectors,
+# but has neither --capabilities nor --products. Exercise its argv boundary.
+for args in [[], ['--product', 'claude'], ['--product', 'codex'],
+             ['--product', 'both'], ['--product', 'opencode', '--desktop']]:
+    run_case('stable bootstrap passthrough ' + repr(args), args=args,
+             release='v1.46.1', legacy_bootstrap=True, expected=0)
+run_case('stable interactive exit status', args=[], release='v1.46.1',
+         legacy_bootstrap=True, status=37, expected=37)
+for args in [['--product', 'gemini', '--desktop'], ['--product=gemini', '--webhook'],
+             ['--products', 'claude,gemini', '--webhook']]:
+    run_case('stable bootstrap rejects new selector ' + repr(args), args=args,
+             release='v1.46.1', legacy_bootstrap=True,
+             message='No products were installed.')
+for selection, routed in [
+    ('claude', [['--product', 'claude']]),
+    ('codex', [['--product', 'codex']]),
+    ('claude,codex', [['--product', 'both']]),
+    ('opencode', [['--product', 'opencode', '--desktop']]),
+    ('claude,opencode', [['--product', 'claude'], ['--product', 'opencode', '--desktop']]),
+    ('codex,opencode', [['--product', 'codex'], ['--product', 'opencode', '--desktop']]),
+    ('opencode,codex,claude', [['--product', 'both'], ['--product', 'opencode', '--desktop']]),
+]:
+    args = ['--products', selection] + (['--desktop'] if 'opencode' in selection else [])
+    run_case('stable selector fallback ' + selection, args=args, calls=routed,
+             release='v1.46.1', legacy_bootstrap=True, expected=0)
+    if sys.platform == 'darwin':
+        run_case('native Bash stable selector fallback ' + selection, args=args, calls=routed,
+                 release='v1.46.1', legacy_bootstrap=True, expected=0, bash_executable='/bin/bash')
+fallback_args = ['--products=opencode,claude,codex', '--skip-agent-notify', '--webhook']
+fallback_calls = [['--product', 'both', '--skip-agent-notify'],
+                  ['--product', 'opencode', '--webhook']]
+run_case('stable fallback scoped flags', args=fallback_args, calls=fallback_calls,
+         release='v1.46.1', legacy_bootstrap=True, expected=0)
+run_case('stable fallback stops on first failure', args=fallback_args,
+         calls=fallback_calls[:1], release='v1.46.1', legacy_bootstrap=True,
+         legacy_status=37, expected=37)
+run_case('stable fallback preserves second failure', args=fallback_args,
+         calls=fallback_calls, release='v1.46.1', legacy_bootstrap=True,
+         opencode_status=42, expected=42)
 # One composed bootstrap receives the selected bundle so it can preflight
 # every product before mutation. This fixture checks acquisition/argv only;
 # bootstrap_opencode_test.sh qualifies real candidate installation separately.

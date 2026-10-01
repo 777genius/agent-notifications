@@ -773,6 +773,10 @@ def exercise(lab, fixture, terminal, ui, observer=observations):
                         "tool_effect_verified": True if case in ("approve", "deny", "cancel") else None})
         terminal.completed_cases = len(results)
         time.sleep(0.3)  # Hook fires before the UI's next input render.
+    # Recheck rejection after recovery: a delayed write must not pass merely
+    # because it appeared after the initial bounded cancellation observation.
+    for rejected in ("deny", "cancel"):
+        require(not os.path.lexists(lab / "profile" / ("effect-" + rejected + ".txt")), "wrong_TEST_tool_effect")
     rows = observer(lab)
     plain = [x for x in rows if x.get("case") in ("plain", "equal") and x["event"] == "AfterAgent"]
     require(len(plain) == 2 and all(x.get("stop_hook_active") is False for x in plain), "equal_turn_observations_missing")
