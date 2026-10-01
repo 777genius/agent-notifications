@@ -271,6 +271,9 @@ def qualify(args, report):
             env.update({"OPENCODE_CONFIG_DIR": str(config_dir), "AGENT_NOTIFICATIONS_CONFIG": str(config),
                         "AGENT_NOTIFICATIONS_CONTROL_ROOT": str(root / "control"), "CI": "true",
                         "NO_COLOR": "1", "OPENCODE_DISABLE_AUTOUPDATE": "1"})
+            if not v1:
+                env.update({"OPENCODE_SERVER_PASSWORD": "test-only-native-qualification",
+                            "OPENCODE_PASSWORD": "test-only-native-qualification"})
             opencode = root / ("opencode.exe" if args.os == "windows" else "opencode")
             if args.archive:
                 extract_opencode(args.archive, opencode, args.os)

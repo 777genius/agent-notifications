@@ -39,7 +39,7 @@ class Notifications(dbus.service.Object):
 
     @dbus.service.method(INTERFACE, in_signature="", out_signature="as")
     def GetCapabilities(self):
-        return ["body"]
+        return ["body", "actions", "sound"]
 
     @dbus.service.method(INTERFACE, in_signature="", out_signature="ssss")
     def GetServerInformation(self):
@@ -87,6 +87,7 @@ def main():
         finally:
             ready.unlink(missing_ok=True)
             service.remove_from_connection()
+            del name
             bus.close()
 
 
