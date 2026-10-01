@@ -53,7 +53,9 @@ test("production command matrix, aftercare, clipboard and configuration", async 
           await page.getByRole("button", { name: intent, exact: true }).click();
         const value = await page.getByLabel(intent + " command").inputValue();
         expect(value).toBe(
-          `curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product ${product}`,
+          product === "both"
+            ? "(set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --products claude,codex)"
+            : `curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product ${product}`,
         );
       }
       if (os === "windows")
@@ -77,18 +79,18 @@ test("production command matrix, aftercare, clipboard and configuration", async 
   });
   await expect(agentNotify).toBeChecked();
   await expect(page.getByLabel("Install command")).toHaveValue(
-    /--product both$/,
+    /--products claude,codex\)$/,
   );
   await agentNotify.uncheck();
   await expect(page.getByLabel("Install command")).toHaveValue(
-    /--skip-agent-notify$/,
+    /--skip-agent-notify\)$/,
   );
   await agentNotify.check();
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.getByRole("button", { name: "Copy command" }).click();
   await expect(page.getByRole("status")).toContainText("Copied");
   expect(await page.evaluate(() => navigator.clipboard.readText())).toContain(
-    "--product both",
+    "--products claude,codex",
   );
   await page.evaluate(() => {
     Object.defineProperty(navigator, "clipboard", {
@@ -171,7 +173,7 @@ test("pending clipboard completion cannot claim a different command was copied",
   await page.evaluate(() => (window as any).finishCopy());
   await expect(page.getByRole("status")).not.toContainText("Copied");
   await expect(page.getByLabel("Install command")).toHaveValue(
-    /--product both$/,
+    /--products claude,codex\)$/,
   );
 });
 test("assets load, hydration is clean and reduced motion disables background animation", async ({
@@ -455,7 +457,7 @@ test("all agents toggle independently, copied commands and configuration cover t
     { selected: ["codex", "opencode"], expected: "(set -o pipefail; " + prefix.replace("--product ", "--products ") + "codex,opencode --desktop)" },
     { selected: ["opencode"], expected: prefix + "opencode --desktop" },
     { selected: ["codex"], expected: prefix + "codex" },
-    { selected: ["claude", "codex"], expected: prefix + "both" },
+    { selected: ["claude", "codex"], expected: "(set -o pipefail; " + prefix.replace("--product ", "--products ") + "claude,codex)" },
   ] as const;
   for (const { selected, expected } of cases) {
     await chooseAgents(page, selected);
@@ -479,9 +481,16 @@ test("all agents toggle independently, copied commands and configuration cover t
   await expect(table.getByRole("row", { name: /^Sounds/ }).getByRole("cell")).toHaveText(["✓Supported", "✓Supported", "✕Not supported"]);
   await expect(table.getByRole("row", { name: /^Question/ }).getByRole("cell")).toHaveText(["✓Supported", "✓*Supported with limitations", "✓Supported"]);
   await expect(table.getByRole("row", { name: /^Errors/ }).getByRole("cell")).toHaveText(["✓Supported", "✓*Supported with limitations", "✓Supported"]);
-  await expect(page.getByText("Codex: Windows hook delivery and the question tool hook are not yet qualified in live sessions.", { exact: true })).toBeVisible();
+  const compatibility = page.locator(".agent-support details");
+  const qualification = compatibility.getByText("Codex: Windows hook delivery and the question tool hook are not yet qualified in live sessions.", { exact: true });
+  await expect(qualification).not.toBeVisible();
+  await expect(compatibility.getByText(/^\* Codex questions depend/)).not.toBeVisible();
+  await expect(compatibility.getByText(/^OpenCode: silent completion/)).not.toBeVisible();
   await expect(page.getByText(/Tested with OpenCode 1.18.33/)).not.toBeVisible();
   await page.locator(".agent-support summary").click();
+  await expect(qualification).toBeVisible();
+  await expect(compatibility.getByText(/^\* Codex questions depend/)).toBeVisible();
+  await expect(compatibility.getByText(/^OpenCode: silent completion/)).toBeVisible();
   await expect(page.getByText(/Tested with OpenCode 1.18.33/)).toBeVisible();
   await expect(page.getByRole("link", { name: "What is OpenCode V2? ↗" })).toHaveAttribute("href", "https://opencode.ai/v2/docs");
   await expect(page.getByRole("group", { name: "OpenCode notification channels" })).toHaveCount(0);
