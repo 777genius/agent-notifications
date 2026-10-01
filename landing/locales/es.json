@@ -50,5 +50,27 @@
       "guide": "Configuración y límites de OpenCode",
       "restart": "Reinicia OpenCode para cargar el plugin global. En macOS, permite las notificaciones siguiendo la guía.",
       "configure": "Usa config path para los ajustes compartidos. Autoriza desktop/webhook con setup-opencode; configura los destinos webhook por separado."
-    } }
+    } },
+  "agentSupport": {
+    "title": "Comparar funciones de los agentes",
+    "feature": "Función",
+    "yes": "Compatible",
+    "no": "No compatible",
+    "conditional": "Compatible con limitaciones",
+    "legend": "✓ Compatible · ✕ No compatible · ✓* Con limitaciones",
+    "conditions": "* Las preguntas de Codex dependen del modo; los errores y límites se detectan en el mensaje final. El enfoque al hacer clic depende del sistema y terminal.",
+    "v2Link": "¿Qué es OpenCode V2?",
+    "rows": {
+      "completion": "Completado",
+      "question": "Pregunta",
+      "permission": "Solicitud de permiso",
+      "review": "Revisión",
+      "plan": "Plan",
+      "limit": "Límite de sesión alcanzado",
+      "sound": "Sonidos",
+      "focus": "Enfoque al hacer clic",
+      "webhook": "Webhooks",
+      "error": "Errores"
+    }
+  }
 }
