@@ -90,6 +90,11 @@ type Request struct {
 	// before release acquisition. It is internal to the bootstrap orchestrator:
 	// an intervening opt-out must not become an implicit Add.
 	BootstrapExpectedGeneration *uint64
+	// BootstrapExpectedPolicy is captured after the last relevant projection check.
+	BootstrapExpectedPolicy *installruntime.Identity
+	// BootstrapMCP is consumed by the command admission boundary. Plan/Run use
+	// the verified generation, then existing reservation/config CAS protects apply.
+	BootstrapMCP *BootstrapMCPSelection
 	// ClaudeRunner overrides Claude activation probing. Production leaves it
 	// nil so the OS process runner is used. Isolated tests inject a listing
 	// fixture; the field is never parsed from CLI flags.
@@ -193,10 +198,13 @@ func Run(ctx context.Context, req Request) (Result, error) {
 // Ready means the application service can mutate after --yes; it is not a
 // committed installation result.
 type SetupPlan struct {
-	Text    string
-	Ready   bool
-	Request Request
-	Result  Result
+	// annotations contain full preflight destinations/identities that otherwise
+	// exist only in legacy Text. They are never reconstructed by parsing prose.
+	annotations []string
+	Text        string
+	Ready       bool
+	Request     Request
+	Result      Result
 }
 
 // Plan preflights without publishing intent or applying hooks/MCP.
@@ -248,6 +256,7 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 				plan.Result = attachCommand(req, ev.out)
 				return plan, err
 			}
+			plan.annotations = append(plan.annotations, "helper destination="+mat.Roots.HelperExecutable)
 			explicitGlobal, explicitPrimary := req.GlobalConfig, req.Primary
 			id, err := identity(acquired, ev.snap, ev.runtimeRoot, mat, req.Action == ActionInstall)
 			if err != nil {
@@ -342,6 +351,7 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 				for _, agent := range ev.notifyAgents {
 					if digest := liveBindingTreeDigest(mat, id.InstallationID, string(agent)); digest != "" {
 						text += " " + string(agent) + "-source-digest=" + digest
+						plan.annotations = append(plan.annotations, string(agent)+" current-source-digest="+digest)
 					}
 				}
 			}
@@ -387,6 +397,7 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 	ev.out.Outcome, ev.out.Reason = "ready", ""
 	ev.out.InstallationID = req.InstallationID
 	plan.Ready = true
+	req.RuntimeRoot = ev.runtimeRoot
 	plan.Text = text
 	plan.Request = req
 	plan.Result = ev.out
@@ -554,6 +565,27 @@ func evaluate(ctx context.Context, req *Request, requireYes bool) evaluated {
 	if !haveSnap {
 		out.Outcome, out.Reason = "incomplete", "managed_runtime_required"
 		return evaluated{out: out, err: err, stop: true}
+	}
+	if req.Action != ActionInspect && req.BootstrapMCP != nil {
+		observation := *req
+		observation.Agents = nil
+		for _, id := range []string{"claude", "codex"} {
+			if _, ok := req.BootstrapMCP.Projection.Profiles[id]; ok {
+				observation.Agents = append(observation.Agents, id)
+			}
+		}
+		current, generation, policy, observeErr := ObserveBootstrapMCPWithPolicy(ctx, observation)
+		if observeErr == nil && generation != snap.Ledger.Generation {
+			observeErr = ErrRefused
+		}
+		if observeErr == nil {
+			observeErr = CheckBootstrapMCP(*req.BootstrapMCP, current)
+		}
+		if observeErr != nil {
+			out.Outcome, out.Reason = "conflict", "concurrent_change"
+			return evaluated{out: out, err: observeErr, stop: true}
+		}
+		req.BootstrapExpectedPolicy = &policy
 	}
 	runtimeRoot := req.RuntimeRoot
 	if runtimeRoot == "" {
@@ -1652,7 +1684,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 				return out, err
 			}
 			if intent.GlobalConfig == "" {
-				if err := (portablesetup.Service{}).PatchIntentGlobalConfig(ctx, req.ControlRoot, runtimeRoot, snap.Ledger.Owner, id.InstallationID, id.GlobalConfig, out.reservation); err != nil {
+				if err := (portablesetup.Service{ExpectedPolicy: req.BootstrapExpectedPolicy}).PatchIntentGlobalConfig(ctx, req.ControlRoot, runtimeRoot, snap.Ledger.Owner, id.InstallationID, id.GlobalConfig, out.reservation); err != nil {
 					out.Outcome, out.Reason = "incomplete", "pending_intent_patch_failed"
 					if errors.Is(err, portablesetup.ErrIntentConflict) {
 						out.Outcome, out.Reason = "conflict", "pending_intent_conflict"
@@ -2741,7 +2773,7 @@ func materializer(req Request, snap installruntime.InstalledSnapshot, runtimeRoo
 		runner = processadapter.OS{}
 	}
 	uapRoot := filepath.Join(filepath.Dir(req.ControlRoot), "uap")
-	return portablesetup.NewMaterializer(portablesetup.UAPRoots{
+	mat, err := portablesetup.NewMaterializer(portablesetup.UAPRoots{
 		StateFile:           filepath.Join(uapRoot, "state", "state-v2.json"),
 		LockFile:            filepath.Join(uapRoot, "state", "mutation.lock"),
 		OperationsDir:       filepath.Join(uapRoot, "state", "operations"),
@@ -2752,6 +2784,8 @@ func materializer(req Request, snap installruntime.InstalledSnapshot, runtimeRoo
 		CodexRunner:         processadapter.OS{},
 		RequireLiveProfiles: true,
 	})
+	mat.Kernel.ExpectedPolicy = req.BootstrapExpectedPolicy
+	return mat, err
 }
 
 func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot string, mat portablesetup.Materializer, generate bool) (portablesetup.Identity, error) {
@@ -3566,7 +3600,7 @@ func persistExternalUninstalled(ctx context.Context, req Request, runtimeRoot st
 	if !req.ExternalUninstalled {
 		return nil
 	}
-	return (portablesetup.Service{}).PatchIntentExternalUninstalled(ctx, req.ControlRoot, runtimeRoot, "", reservation)
+	return (portablesetup.Service{ExpectedPolicy: req.BootstrapExpectedPolicy}).PatchIntentExternalUninstalled(ctx, req.ControlRoot, runtimeRoot, "", reservation)
 }
 
 func persistKnownReceipt(ctx context.Context, req Request, runtimeRoot string, mat portablesetup.Materializer, installationID, client string, reservation *installruntime.PendingMutation) error {
@@ -3574,7 +3608,7 @@ func persistKnownReceipt(ctx context.Context, req Request, runtimeRoot string, m
 	if receipt == "" {
 		return nil
 	}
-	return (portablesetup.Service{}).PatchIntentReceipt(ctx, req.ControlRoot, runtimeRoot, "", client, receipt, reservation)
+	return (portablesetup.Service{ExpectedPolicy: req.BootstrapExpectedPolicy}).PatchIntentReceipt(ctx, req.ControlRoot, runtimeRoot, "", client, receipt, reservation)
 }
 
 func knownReceiptID(mat portablesetup.Materializer, installationID, clientID string) string {
@@ -3611,9 +3645,9 @@ func publishWizardIntent(ctx context.Context, req Request, snap installruntime.I
 	if len(targets) == 0 {
 		return snap, nil, nil
 	}
-	_, reservation, err := (portablesetup.Service{}).PublishConfirmedIntent(ctx, portablesetup.ConfirmedIntent{
+	_, reservation, err := (portablesetup.Service{ExpectedPolicy: req.BootstrapExpectedPolicy}).PublishConfirmedIntent(ctx, portablesetup.ConfirmedIntent{
 		ControlRoot: req.ControlRoot, RuntimeRoot: runtimeRoot, Owner: snap.Ledger.Owner,
-		ExpectedGeneration: snap.Ledger.Generation, Action: string(req.Action), Stage: "confirmed",
+		ExpectedGeneration: snap.Ledger.Generation, ExpectedPolicy: req.BootstrapExpectedPolicy, Action: string(req.Action), Stage: "confirmed",
 		SourceRevision: req.ReleaseVersion, SourceDigest: req.PackageSHA256,
 		TreeDigest: req.TreeDigest, HelperDigest: req.HelperDigest, HelperVersion: req.HelperVersion,
 		Primary:             req.Primary,
@@ -3673,7 +3707,7 @@ func finishWizardIntent(ctx context.Context, req Request, runtimeRoot string, ou
 		return out, ErrRefused
 	}
 	cp := *out.reservation
-	gen, finished, finishErr := (portablesetup.Service{}).FinishConfirmedIntent(ctx, portablesetup.ConfirmedIntent{
+	gen, finished, finishErr := (portablesetup.Service{ExpectedPolicy: req.BootstrapExpectedPolicy}).FinishConfirmedIntent(ctx, portablesetup.ConfirmedIntent{
 		ControlRoot: req.ControlRoot, RuntimeRoot: runtimeRoot, Owner: snap.Ledger.Owner,
 	}, &cp)
 	if finishErr != nil {

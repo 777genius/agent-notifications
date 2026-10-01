@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
 )
@@ -561,4 +563,110 @@ func boolFlag(v bool) string {
 		return "true"
 	}
 	return "false"
+}
+
+// EscapeConfirmationRows quotes authority reversibly, including non-UTF8 Unix
+// path bytes. No path suffix or warning is elided. Continuations split only
+// between escaped tokens; an oversized plan refuses before reading consent.
+func EscapeConfirmationRows(raw []string) ([]string, error) {
+	rows := []string{}
+	total := len("Apply this plan?")
+	for _, text := range raw {
+		line := `"`
+		for len(text) > 0 {
+			_, n := utf8.DecodeRuneInString(text)
+			token := strconv.QuoteToASCII(text[:n])
+			token = token[1 : len(token)-1]
+			text = text[n:]
+			if len(line)+len(token) > 3800 {
+				rows = append(rows, line+" [continued]")
+				total += len(line) + 12
+				line = "[continuation] "
+			}
+			line += token
+			if total+len(line) > 64<<10 || len(rows) >= 128 {
+				return nil, fmt.Errorf("confirmation summary budget exceeded")
+			}
+		}
+		line += `"`
+		rows = append(rows, line)
+		total += len(line)
+		if len(rows) > 128 || total > 64<<10 {
+			return nil, fmt.Errorf("confirmation summary budget exceeded")
+		}
+	}
+	return rows, nil
+}
+
+// ConfirmationRows derives the final scope from the ready plan and structured
+// decisions populated by preflight, never from parsing the legacy prose.
+func ConfirmationRows(plan SetupPlan) ([]string, error) {
+	if !plan.Ready {
+		return nil, ErrRefused
+	}
+	r := plan.Request
+	raw := []string{"action=" + string(r.Action), "agents=" + strings.Join(r.Agents, ",")}
+	hooks, notify := selectedUnits(r, mustPlanAgents(r.Agents))
+	for _, id := range r.Agents {
+		agent := portable.Integration(id)
+		raw = append(raw, fmt.Sprintf("%s: hooks=%t MCP+skill=%t", id, containsPlanAgent(hooks, agent), containsPlanAgent(notify, agent)))
+		raw = append(raw, id+" profile="+clientConfig(r, agent), id+" MCP config="+discoveryConfigPath(r, agent))
+		if bid := r.BindingIDs[id]; bid != "" {
+			raw = append(raw, id+" binding-id="+bid)
+		}
+		if receipt := r.DataReceiptIDs[id]; receipt != "" {
+			raw = append(raw, id+" retained-data-id="+receipt)
+		}
+		if migration, ok := r.MigrationBindings[id]; ok {
+			raw = append(raw, id+" migration old="+migration.OldConsumerKey+" new="+migration.NewConsumerKey)
+		}
+		if removal, ok := r.RemovalBindings[id]; ok {
+			raw = append(raw, id+" removal consumer="+removal.OldConsumerKey)
+		}
+	}
+	for _, field := range [][2]string{{"control", r.ControlRoot}, {"runtime", r.RuntimeRoot}, {"global config", r.GlobalConfig}, {"helper", r.Helper}, {"package", r.PackageRoot}, {"revision", r.ReleaseVersion}, {"installation-id", r.InstallationID}, {"source-digest", r.TreeDigest}, {"helper-digest", r.HelperDigest}, {"helper-version", r.HelperVersion}} {
+		if field[1] != "" {
+			raw = append(raw, field[0]+"="+field[1])
+		}
+	}
+	for _, target := range plan.Result.Targets {
+		raw = append(raw, fmt.Sprintf("%s %s: %s %s profile=%s config=%s digest=%s", target.Client, target.Unit, target.Outcome, target.Reason, target.Profile, target.ConfigPath, target.TreeDigest))
+	}
+	for _, next := range plan.Result.NextActions {
+		raw = append(raw, "required="+next.Kind+" agents="+strings.Join(next.Agents, ",")+" reason="+next.Reason)
+		for _, arg := range next.Command {
+			raw = append(raw, "required argv="+arg)
+		}
+	}
+	if plan.Result.DataRetained {
+		raw = append(raw, "data retained; data compatibility must be verified")
+	}
+	if plan.Result.Reason != "" {
+		raw = append(raw, "reason="+plan.Result.Reason)
+	}
+	raw = append(raw, plan.annotations...)
+	switch r.Action {
+	case ActionInstall, ActionUpdate, ActionRepair:
+		raw = append(raw, "required follow-up: restart, explicit request-permission, test-notification; delivery not verified")
+	case ActionUninstall:
+		raw = append(raw, "permission dialog skipped; retained data is not removed by unit selection")
+	}
+
+	raw = append(raw, "Restart/trust actions may remain; this plan does not attest activation, authentication or delivery.")
+	return EscapeConfirmationRows(raw)
+}
+func mustPlanAgents(ids []string) []portable.Integration {
+	out := make([]portable.Integration, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, portable.Integration(id))
+	}
+	return out
+}
+func containsPlanAgent(ids []portable.Integration, id portable.Integration) bool {
+	for _, v := range ids {
+		if v == id {
+			return true
+		}
+	}
+	return false
 }

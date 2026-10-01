@@ -10,9 +10,17 @@ case "${1:-}" in
 esac
 readonly _PRODUCT_TEST_UNIT_ONLY
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-SANDBOX=$(mktemp -d /tmp/bootstrap-products-XXXXXX)
+SANDBOX=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-products-TEST-XXXXXX")
 trap 'rm -rf "$SANDBOX"' EXIT
 test_env_setup "$SANDBOX"
+# test-env.sh inherits PATH: retain only named tools, never host agent binaries.
+mkdir -p "$SANDBOX/trusted-tools"
+for tool in bash sh env python3 node curl wget tar gzip unzip zip mktemp rm cat cp mv chmod mkdir ln uname tr wc head cmp grep sed awk dirname basename find sort sha256sum shasum cut xargs sleep date stat diff touch readlink dd od go gcc cc pkg-config; do
+    tool_path=$(type -P "$tool" 2>/dev/null || true)
+    [ -z "$tool_path" ] || ln -s "$tool_path" "$SANDBOX/trusted-tools/$tool"
+done
+export PATH="$SANDBOX/trusted-tools"
+
 # Keep space-containing paths in the bootstrap characterization.
 export HOME="$SANDBOX/home space" USERPROFILE="$SANDBOX/home space" CODEX_HOME="$SANDBOX/codex space"
 export CLAUDE_CONFIG_DIR="$SANDBOX/claude config" CLAUDE_HOME="$SANDBOX/claude home"
@@ -76,17 +84,21 @@ done
     cat > "$SANDBOX/version-cli/opencode" <<'HOST_VERSION'
 #!/bin/bash
 [ "$#" -eq 1 ] && [ "$1" = --version ] || exit 2
-printf '%s\n' "$TEST_OPENCODE_VERSION"
+[ "$PWD" -ef "$HOME" ] && [ "$HOME" -ef "$USERPROFILE" ] || exit 3
+case "$PWD" in */bootstrap-opencode-TEST-*/profile) ;; *) exit 4 ;; esac
+cat "${BASH_SOURCE[0]%/*}/version"
 HOST_VERSION
     chmod +x "$SANDBOX/version-cli/opencode"
     export PATH="$SANDBOX/version-cli:$PATH"
     PRODUCT=opencode
     OPENCODE_ARGS=(--webhook)
     for version in '1.18.33' 'v1.18.33' 'OpenCode version: v1.18.33'; do
-        TEST_OPENCODE_VERSION="$version" check_prerequisites
+        printf '%s\n' "$version" > "$SANDBOX/version-cli/version"
+        check_prerequisites
     done
     for version in '2.0.0' 'OpenCode v2.0.0 (compatibility 1.18.33)' 'unknown'; do
-        if ( TEST_OPENCODE_VERSION="$version" check_prerequisites ); then
+        printf '%s\n' "$version" > "$SANDBOX/version-cli/version"
+        if ( check_prerequisites ); then
             echo "accepted unsupported host output: $version" >&2
             exit 1
         fi
@@ -530,6 +542,39 @@ grep -Fx -- '--install-or-update' "$WIZARD_CAPTURE"
 export CLAUDE_CONFIG_DIR="$SANDBOX/custom claude"
 setup_agent_notify_wizard
 grep -Fx -- "$CLAUDE_CONFIG_DIR/.claude.json" "$WIZARD_CAPTURE"
+
+# Regression: invalid/incomplete multi selections and pending JSON used to
+# acquire a helper or execute host --version before rejecting the request.
+# Exercise the actual script entry point with external acquisition/exec canaries.
+(
+    mkdir -p "$SANDBOX/early-canaries"
+    for tool in curl wget claude codex opencode gemini; do
+        cat > "$SANDBOX/early-canaries/$tool" <<'EARLY_CANARY'
+#!/bin/bash
+printf '%s\n' "$0 $*" >> "$EARLY_CANARY_LOG"
+exit 99
+EARLY_CANARY
+        chmod +x "$SANDBOX/early-canaries/$tool"
+    done
+    export PATH="$SANDBOX/early-canaries:$PATH" EARLY_CANARY_LOG="$SANDBOX/early-effects"
+    for args in '--products opencode' '--products claude,gemini' '--json' '--product gemini --json' '--ui=bad' '--plain --ui=rich' '--navigation none' '--agent-notify --agent-notify'; do
+        status=0
+        bash "$ROOT/bin/bootstrap.sh" $args >"$SANDBOX/early-output" 2>&1 || status=$?
+        [ "$status" -eq 1 ] || { echo "Wrong early refusal status $status for $args" >&2; exit 1; }
+        [ ! -e "$EARLY_CANARY_LOG" ] || { cat "$EARLY_CANARY_LOG" >&2; exit 1; }
+    done
+)
+# Regression: normalization overwrote explicit caller false/false, or appended
+# a second preserve-policy when the caller supplied it with an omitted route.
+(
+    PRODUCT=""; CONFIGURE_ARGS=(); OPENCODE_ARGS=(); _UI_MODE=""; UI_ARGS=()
+    CONFIGURE_NOTIFICATIONS=true
+    select_product --product claude --ui=plain --plain --navigation=none --allow-unknown-caller=false --allow-caller-asserted=false
+    [ "${CONFIGURE_ARGS[*]}" = '--navigation none --allow-unknown-caller false --allow-caller-asserted false' ]
+    PRODUCT=""; CONFIGURE_ARGS=(); _UI_MODE=""; UI_ARGS=()
+    select_product --product claude --preserve-policy
+    [ "${CONFIGURE_ARGS[*]}" = '--preserve-policy --navigation none --allow-unknown-caller true --allow-caller-asserted false' ]
+)
 
 printf 'bootstrap product unit fixtures passed\n'
 [ "$_PRODUCT_TEST_UNIT_ONLY" != true ] || exit 0

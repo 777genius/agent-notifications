@@ -17,6 +17,7 @@ import (
 	"github.com/777genius/agent-notifications/internal/agentnotify/setupwizard"
 	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/installruntime"
+	"github.com/777genius/plugin-kit-ai/cli/installerui"
 )
 
 const setupWizardHelp = `Usage: claude-notifications setup-notifications wizard [OPTIONS]
@@ -70,7 +71,15 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 		}
 		return 0
 	}
+	args, uiMode, uiErr := stripWizardUIMode(args)
+	args, bootstrapIntentFile, intentFlagErr := stripBootstrapIntentFile(args)
+	if intentFlagErr == nil {
+		intentFlagErr = uiErr
+	}
 	args, installOrUpdate, preserveExistingUnits, flagErr := stripInstallOrUpdate(args)
+	if flagErr == nil {
+		flagErr = intentFlagErr
+	}
 	req, jsonOut, err := parseSetupWizard(args)
 	if flagErr != nil && err == nil {
 		err = flagErr
@@ -107,6 +116,15 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 	if (preserveExistingUnits && !installOrUpdate) || (installOrUpdate && !validInstallOrUpdateRequest(req)) {
 		return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "invalid", Reason: "invalid_arguments"}, nil)
 	}
+	if bootstrapIntentFile != "" {
+		if !installOrUpdate || !req.Yes || jsonOut && needsWizardInteraction(req) {
+			return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "invalid", Reason: "invalid_arguments"}, nil)
+		}
+		req, err = admitBootstrapWizardRequest(bootstrapIntentFile, req)
+		if err != nil {
+			return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "conflict", Reason: "concurrent_change"}, err)
+		}
+	}
 	if errOut != nil {
 		req.Progress = func(phase string) {
 			_, _ = fmt.Fprintln(errOut, "phase", phase)
@@ -114,8 +132,17 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 	}
 	needsPrompt := tty && !jsonOut && (req.Action == "" || (req.Action != setupwizard.ActionInspect && (len(req.Agents) == 0 || !req.Yes)))
 	var prompt setupwizard.Prompter
-	if tty && !jsonOut {
-		prompt, err = setupwizard.NewPublicPrompt(in, out)
+	if needsPrompt {
+		if input, ok := in.(*os.File); ok {
+			visible, _ := out.(*os.File)
+			prompt, err = setupwizard.NewTerminalPublicPrompt(input, visible, installerui.TerminalMode(uiMode), os.Getenv("NO_COLOR") != "")
+			if errors.Is(err, setupwizard.ErrPromptUnavailable) {
+				visible, _ = errOut.(*os.File)
+				prompt, err = setupwizard.NewTerminalPublicPrompt(input, visible, installerui.TerminalMode(uiMode), os.Getenv("NO_COLOR") != "")
+			}
+		} else {
+			prompt, err = setupwizard.NewPublicPrompt(in, out)
+		}
 		if err != nil {
 			return writeSetupWizardPromptError(out, jsonOut, req, err)
 		}
@@ -135,13 +162,20 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 	if req.Action != setupwizard.ActionInspect && !req.Yes && tty && !jsonOut {
 		plan, e := setupwizard.Plan(ctx, req)
 		req = plan.Request
-		if !plan.Ready {
+		if e != nil || !plan.Ready {
 			if plan.Text != "" {
 				_, _ = fmt.Fprintln(out, plan.Text)
 			}
 			return writeSetupWizardResult(out, jsonOut, plan.Result, e)
 		}
-		ok, e := prompt.Confirm(ctx, plan.Text)
+		var ok bool
+		if confirmer, hasPlan := prompt.(interface {
+			ConfirmPlan(context.Context, setupwizard.SetupPlan) (bool, error)
+		}); hasPlan {
+			ok, e = confirmer.ConfirmPlan(ctx, plan)
+		} else {
+			ok, e = prompt.Confirm(ctx, plan.Text)
+		}
 		if e != nil {
 			return writeSetupWizardPromptError(out, jsonOut, req, e)
 		}
@@ -224,7 +258,22 @@ func runInstallOrUpdate(ctx context.Context, req setupwizard.Request, preserveEx
 		}
 	}
 	var preserved []string
-	if preserveExistingUnits {
+	if req.BootstrapMCP != nil {
+		current, generation, policy, e := setupwizard.ObserveBootstrapMCPWithPolicy(ctx, req)
+		if e == nil {
+			e = setupwizard.CheckBootstrapMCP(*req.BootstrapMCP, current)
+		}
+		if e != nil {
+			return setupwizard.Result{Action: string(req.Action), Outcome: "conflict", Reason: "concurrent_change"}, e
+		}
+		req.Agents = append([]string(nil), req.BootstrapMCP.Selected...)
+		preserved = append([]string(nil), req.BootstrapMCP.Skipped...)
+		if len(req.Agents) == 0 {
+			return setupwizard.Result{Action: string(req.Action), Outcome: "unchanged", Reason: "existing_opt_out", Targets: preservedUnitTargets(preserved)}, nil
+		}
+		req.BootstrapExpectedGeneration = &generation
+		req.BootstrapExpectedPolicy = &policy
+	} else if preserveExistingUnits {
 		selected, skipped, err := setupwizard.BootstrapAutoTargets(ctx, req, before)
 		if err != nil {
 			return setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "existing_units_unavailable"}, err
@@ -666,4 +715,100 @@ func quotePowerShellArgs(args []string) []string {
 		out[0] = "& " + out[0]
 	}
 	return out
+}
+
+// Private admission accepts only the bootstrap command. Native product/config
+// writers have no new flag. An installed same-release copy can read the original
+// private stage while retaining exact helper version/source/digest provenance.
+func stripBootstrapIntentFile(args []string) ([]string, string, error) {
+	out := []string{}
+	path := ""
+	for n := 0; n < len(args); n++ {
+		key, value, inline := strings.Cut(args[n], "=")
+		if key != "--bootstrap-intent-file" {
+			out = append(out, args[n])
+			continue
+		}
+		if path != "" {
+			return out, path, errors.New("invalid_arguments")
+		}
+		if !inline {
+			n++
+			if n >= len(args) {
+				return out, path, errors.New("invalid_arguments")
+			}
+			value = args[n]
+		}
+		if !validProductPath(value) {
+			return out, path, errors.New("invalid_arguments")
+		}
+		path = value
+	}
+	return out, path, nil
+}
+func needsWizardInteraction(r setupwizard.Request) bool { return !r.Yes || len(r.Agents) == 0 }
+func admitBootstrapWizardRequest(path string, r setupwizard.Request) (setupwizard.Request, error) {
+	provenance, err := currentSelectorProvenance()
+	if err != nil {
+		return r, err
+	}
+	provenance.Stage = []byte(filepath.Dir(path))
+	intent, err := loadBootstrapIntent(path, provenance)
+	if err != nil {
+		return r, err
+	}
+	expected := intentWizardRequest(intent)
+	if !sameWizardBootstrapScope(r, expected) || intent.Request.SkipAgentNotify {
+		return r, errors.New("bootstrap request differs from confirmed intent")
+	}
+	r.BootstrapMCP = &intent.MCP
+	// Observe all confirmed portable profiles, including kept/off siblings, before
+	// narrowing the mutation set. No auto defaults are recalculated at admission.
+	r.EnvClaudeConfig = ""
+	r.EnvCodexHome = ""
+	return r, nil
+}
+func sameWizardBootstrapScope(actual, expected setupwizard.Request) bool {
+	if strings.Join(actual.Agents, ",") != strings.Join(expected.Agents, ",") || actual.ControlRoot != expected.ControlRoot || actual.ClaudeConfig != expected.ClaudeConfig || actual.CodexHome != expected.CodexHome || actual.GlobalConfig != expected.GlobalConfig {
+		return false
+	}
+	// A fresh legacy phase chooses its existing managed runtime during hooks
+	// preparation. A known runtime authority must remain exact; its own creation
+	// is outside the relevant portable binding projection.
+	if expected.RuntimeRoot != "" && actual.RuntimeRoot != "" && actual.RuntimeRoot != expected.RuntimeRoot {
+		return false
+	}
+	for _, id := range expected.Agents {
+		path := actual.ClientExecutables[id]
+		if path == "" {
+			path = actual.ClientExecutable
+		}
+		if path != expected.ClientExecutables[id] || actual.MCPConfig[id] != expected.MCPConfig[id] {
+			return false
+		}
+	}
+	return true
+}
+
+// The same finite UI grammar applies to direct wizard questions. Complete
+// --yes/inspect/JSON paths validate it without constructing a terminal.
+func stripWizardUIMode(args []string) ([]string, string, error) {
+	remaining, uiArgs := []string{}, []string{"select"}
+	for n := 0; n < len(args); n++ {
+		key, _, inline := strings.Cut(args[n], "=")
+		if key != "--ui" && key != "--plain" {
+			remaining = append(remaining, args[n])
+			continue
+		}
+		uiArgs = append(uiArgs, args[n])
+		if key == "--ui" && !inline {
+			n++
+			if n >= len(args) {
+				return remaining, "", errors.New("invalid_arguments")
+			}
+			uiArgs = append(uiArgs, args[n])
+		}
+	}
+	parsed, err := parseSetupProducts(uiArgs)
+	return remaining, parsed.Mode, err
 }
