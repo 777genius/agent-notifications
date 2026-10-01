@@ -206,6 +206,44 @@ test("assets load, hydration is clean and reduced motion disables background ani
   );
   expect(errors).toEqual([]);
 });
+test("background follows the pointer and scroll, sections reveal and motion preference resets them", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.goto("");
+  const orb = page.locator(".page-bg__orb--1");
+  const feature = page.locator(".feature").first();
+  const translation = () => orb.evaluate((node) => {
+    // CSS serializes a zero Y component as a single value.
+    const [x = "0", y = "0"] = getComputedStyle(node).translate.split(" ");
+    return [Number.parseFloat(x), Number.parseFloat(y)];
+  });
+  await expect(feature).toHaveCSS("opacity", "0");
+  const viewport = page.viewportSize()!;
+  await page.mouse.move(20, 200);
+  await expect.poll(async () => (await translation())[0]).toBeLessThan(-40);
+  await page.mouse.move(viewport.width - 20, 200);
+  await expect.poll(async () => (await translation())[0]).toBeGreaterThan(40);
+
+  await page.mouse.move(viewport.width / 2, viewport.height / 2);
+  await expect.poll(async () => Math.abs((await translation())[1])).toBeLessThan(1);
+  await page.evaluate(() => window.scrollTo({ top: 700, behavior: "instant" }));
+  await expect.poll(async () => (await translation())[1]).toBeGreaterThan(60);
+  await feature.scrollIntoViewIfNeeded();
+  await expect(feature).toHaveCSS("opacity", "1");
+  await expect(feature).toHaveCSS("translate", "none");
+
+  // A live accessibility preference change stops motion and reveals remaining content.
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect(orb).toHaveCSS("translate", "none");
+  await expect(orb).toHaveCSS("animation-name", "none");
+  await expect(page.locator(".page-bg__grid")).toHaveCSS("background-position", /^0px 0px(?:, 0px 0px)*$/);
+  await expect(page.locator(".closing")).toHaveCSS("opacity", "1");
+  await page.mouse.move(20, 200);
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+  await expect(page.locator(".page-bg__grid")).toHaveCSS("background-position", /^0px 0px(?:, 0px 0px)*$/);
+});
+
 test("language switch localizes content, URL, metadata and persists the choice", async ({
   page,
 }) => {
@@ -342,7 +380,7 @@ test("installation order, sticky header and custom select keyboard behavior", as
   await page.goto("");
   expect(
     await page
-      .locator("main > *")
+      .locator('main > :not([aria-hidden="true"])')
       .evaluateAll((nodes) =>
         nodes.map((n) => n.id || n.className).slice(0, 3),
       ),
