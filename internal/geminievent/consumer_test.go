@@ -62,15 +62,16 @@ func consumerFixture(t *testing.T) (Consumer, geminisource.Facts, notification.D
 		geminisource.Facts{SessionID: "PRIVATE_NATIVE_SESSION", Event: geminisource.AfterAgent, Timestamp: "2026-10-01T05:00:00Z"}, notification.Deadline{BootID: "test-boot", NotAfter: 14}
 }
 
-// Red condition: concurrent same-marker invocations each reach desktop/HTTP,
-// or the consumer holds its cache lock during a policy/effect handoff.
+// Red condition: concurrent duplicate invocations reach desktop/HTTP again,
+// or an uncontended consumer retains its cache lock at a policy handoff.
+// TestCacheInterprocessClaim covers concurrent first claims separately.
 func TestConcurrentConsumerClaimsEachChannelOnce(t *testing.T) {
 	c, facts, deadline := consumerFixture(t)
-	var desktops, hooks atomic.Int32
+	var desktops, hooks, rechecks atomic.Int32
 	c.Gate = testGate{channels: Channels{true, true}, check: func(ctx context.Context, _ Binding, _ Channel) bool {
-		// Other invocations may legitimately own the lock at this handoff.
-		// Allow their bounded claims to finish; retaining our own lock still
-		// prevents this acquisition and fails the test.
+		rechecks.Add(1)
+		// No other consumer is claiming this marker during a first handoff.
+		// Retaining our own lock prevents acquisition and fails the test.
 		lockCtx, cancel := context.WithTimeout(ctx, time.Second)
 		defer cancel()
 		release, err := installruntime.LockExisting(lockCtx, filepath.Join(c.Cache.Root, ".observations.lock"))
@@ -89,17 +90,30 @@ func TestConcurrentConsumerClaimsEachChannelOnce(t *testing.T) {
 		return notification.Receipt{Status: "submitted"}
 	})
 	c.SendWebhook = func(context.Context, *config.Config, webhook.SendContext) error { hooks.Add(1); return nil }
+	if result := c.Consume(context.Background(), facts, deadline); result.Desktop != "submitted" || result.Webhook != "submitted" {
+		t.Fatalf("first handoff failed: %+v", result)
+	}
+	if desktops.Load() != 1 || hooks.Load() != 1 || rechecks.Load() != 2 {
+		t.Fatalf("first handoff attempts %d/%d, rechecks %d", desktops.Load(), hooks.Load(), rechecks.Load())
+	}
 	var wg sync.WaitGroup
 	for range 12 {
 		wg.Add(1)
-		go func() { defer wg.Done(); c.Consume(context.Background(), facts, deadline) }()
+		go func() {
+			defer wg.Done()
+			if result := c.Consume(context.Background(), facts, deadline); result.Desktop != "duplicate" || result.Webhook != "duplicate" {
+				t.Errorf("parallel duplicate classification: %+v", result)
+			}
+		}()
 	}
 	wg.Wait()
-	if desktops.Load() != 1 || hooks.Load() != 1 {
-		t.Fatalf("same-marker attempts %d/%d", desktops.Load(), hooks.Load())
+	if desktops.Load() != 1 || hooks.Load() != 1 || rechecks.Load() != 2 {
+		t.Fatalf("same-marker attempts %d/%d, rechecks %d", desktops.Load(), hooks.Load(), rechecks.Load())
 	}
 	facts.Timestamp = "2026-10-01T05:00:01Z"
-	c.Consume(context.Background(), facts, deadline)
+	if result := c.Consume(context.Background(), facts, deadline); result.Desktop != "submitted" || result.Webhook != "submitted" {
+		t.Fatalf("distinct observation handoff failed: %+v", result)
+	}
 	if desktops.Load() != 2 || hooks.Load() != 2 {
 		t.Fatalf("distinct equal-copy observations merged: %d/%d", desktops.Load(), hooks.Load())
 	}
@@ -365,7 +379,13 @@ func TestClockWatcherPanicCancelsEffectWithoutCrashing(t *testing.T) {
 	clock.seconds.Store(10)
 	c.Clock, c.Cache.Clock = clock, clock
 	c.Gate = testGate{channels: Channels{Webhook: true}}
+	calls := 0
 	c.SendWebhook = func(ctx context.Context, _ *config.Config, _ webhook.SendContext) error {
+		calls++
+		if err := ctx.Err(); err != nil {
+			t.Errorf("effect started with a canceled context: %v", err)
+			return err
+		}
 		// All synchronous admission checks have finished; fail the clock only
 		// while its asynchronous watcher owns cancellation of the effect.
 		clock.panicNow.Store(true)
@@ -382,7 +402,7 @@ func TestClockWatcherPanicCancelsEffectWithoutCrashing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Webhook != "unknown" || strings.Contains(string(data), "PRIVATE_") {
-		t.Fatalf("unsafe clock failure outcome: %s", data)
+	if calls != 1 || result.Webhook != "unknown" || strings.Contains(string(data), "PRIVATE_") {
+		t.Fatalf("unsafe clock failure outcome: %s, effect calls %d", data, calls)
 	}
 }
