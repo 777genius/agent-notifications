@@ -31,7 +31,7 @@ func checkCacheRoot(root string) error {
 	if err != nil {
 		return err
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 	var st unix.Stat_t
 	if err = unix.Fstat(fd, &st); err != nil || st.Uid != uint32(os.Geteuid()) {
 		return errors.New("unsafe_cache")
@@ -45,7 +45,7 @@ func readCache(root string) ([]byte, error) {
 		return nil, err
 	}
 	f := os.NewFile(uintptr(fd), "observations.json")
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var st unix.Stat_t
 	if err = unix.Fstat(fd, &st); err != nil || st.Uid != uint32(os.Geteuid()) || st.Mode&unix.S_IFMT != unix.S_IFREG || st.Mode&07777 != 0600 || st.Nlink != 1 || st.Size > cacheBytes {
 		return nil, errors.New("unsafe_cache")
@@ -59,7 +59,7 @@ func writeCache(root string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(path)
+	defer func() { _ = os.Remove(path) }()
 	n, err := f.Write(data)
 	if err == nil && n != len(data) {
 		err = io.ErrShortWrite

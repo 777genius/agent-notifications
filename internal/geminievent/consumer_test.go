@@ -243,7 +243,7 @@ func TestPermissionPrivatePayloadThroughExistingSender(t *testing.T) {
 	})
 	c.SendWebhook = func(ctx context.Context, cfg *config.Config, payload webhook.SendContext) error {
 		sender := webhook.NewWithContext(ctx, cfg)
-		defer sender.Shutdown(time.Millisecond)
+		defer func() { _ = sender.Shutdown(time.Millisecond) }()
 		return sender.SendWithContext(payload)
 	}
 	r := c.Consume(context.Background(), facts, deadline)
