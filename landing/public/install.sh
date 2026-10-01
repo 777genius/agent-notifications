@@ -8,7 +8,7 @@ main() (
     multi=0
     new_setup=0
     previous=""
-    [ "$#" -ne 0 ] || new_setup=1
+    # No arguments delegates interactive selection to the released bootstrap.
     for arg in "$@"; do
         case "$arg" in
             --products|--products=*) multi=1; new_setup=1 ;;
@@ -142,6 +142,17 @@ main() (
     }
     if [ "$new_setup" -eq 1 ]; then
         if [ "$(run_bootstrap --capabilities 2>/dev/null)" != bootstrap-products-v1 ]; then
+            if [ "$multi" -eq 1 ] && [ "$gemini" -eq 0 ]; then
+                # Older releases accept one legacy product group per invocation.
+                # Stop on either failure; the second group may fail after the first installed.
+                if [ -n "$legacy_product" ]; then
+                    run_bootstrap --product "$legacy_product" ${legacy_args[@]+"${legacy_args[@]}"}
+                fi
+                if [ "$opencode" -eq 1 ]; then
+                    run_bootstrap --product opencode ${opencode_args[@]+"${opencode_args[@]}"}
+                fi
+                exit 0
+            fi
             echo "This published release lacks four-product setup. No products were installed. Use an updated release when available." >&2
             exit 1
         fi
