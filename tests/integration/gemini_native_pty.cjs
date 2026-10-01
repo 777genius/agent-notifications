@@ -62,8 +62,6 @@ function start(m) {
   }
   check(pkg && JSON.parse(fs.readFileSync(pkg)).version === '1.1.0', 'PTY_identity_mismatch');
   const pty = req(entry); // Loads the CLI's packaged native platform module, never npm scripts.
-  const addons = Object.keys(require.cache).filter(x => x.endsWith('.node'));
-  check(addons.length > 0 && addons.every(x => contains(fs.realpathSync(x), root)), 'native_PTY_backend_unverified');
   const allowed = new Set(['HOME','USERPROFILE','GEMINI_CLI_HOME','XDG_CONFIG_HOME','XDG_CACHE_HOME','XDG_DATA_HOME','XDG_STATE_HOME',
     'TMPDIR','TMP','TEMP','GEMINI_CLI_SYSTEM_SETTINGS_PATH','GEMINI_CLI_SYSTEM_DEFAULTS_PATH','GEMINI_CLI_TRUSTED_FOLDERS_PATH',
     'GEMINI_API_KEY','GEMINI_FORCE_FILE_STORAGE','GOOGLE_GEMINI_BASE_URL','TERM','PATH','LANG','LC_ALL','SystemRoot','ComSpec']);
@@ -99,6 +97,10 @@ function start(m) {
     child = undefined;
     process.stdin.destroy();
   });
+  // ConPTY loads its addon lazily in WindowsPtyAgent's spawn constructor.
+  // Validate the actually loaded modules after registering owned-child cleanup.
+  const addons = Object.keys(require.cache).filter(x => x.endsWith('.node'));
+  check(addons.length > 0 && addons.every(x => contains(fs.realpathSync(x), root)), 'native_PTY_backend_unverified');
   emit({ready: {module: '@lydell/node-pty', version: '1.1.0', platform: process.platform, node_version: process.version,
     package_sha256: hash(pkg), entry_sha256: hash(entry), native_backend_sha256: addons.map(hash)}});
 }
