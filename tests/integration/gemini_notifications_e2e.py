@@ -618,6 +618,7 @@ def run(args):
         levels[platform]["native_cli/provider_substitute"] = "passed_implemented_scenarios"
     except Exception as exc:
         evidence["classification"] = str(exc) if isinstance(exc, Red) else "production_harness_error"
+        evidence["exception_type"] = type(exc).__name__
         raise
     finally:
         if terminal is not None:
