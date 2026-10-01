@@ -4,7 +4,7 @@
 
 ### Prerequisites
 
-- Claude Code, Codex CLI and/or OpenCode for the products you select (OpenCode tested with 1.18.33; V2 unsupported)
+- Claude Code, Codex CLI and/or OpenCode for the products you select (published OpenCode support: 1.18.33; the dual-API candidate is tested with 1.18.33, 2.0.0 and 2.0.21, with SDK 0.2.0 publication pending)
 - `curl` and Bash
 - **Windows users:** Git Bash (included with [Git for Windows](https://git-scm.com/download/win)). Do not use WSL for a native Windows installation.
 - Python remains optional only for iTerm2 exact tab/pane targeting.

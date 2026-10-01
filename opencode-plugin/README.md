@@ -10,8 +10,9 @@ The plugin sends content-free UAP facts to `opencode-event --protocol 1`. It
 does not send native event bodies, prompts, question text, errors, or project
 metadata. Process startup and OpenCode shutdown remain best effort.
 
-One default definition exposes V1 `server` and V2 `setup`. The V1 observer stays
-unchanged; V2 uses a location-aware, bounded event reader and verifies native
+One default definition exposes V1 `server` and V2 `setup`. The V1 entry point remains supported and now uses the 0.2.0 observer: failed
+assistant steps emit terminal errors at idle, context overflow waits for recovery,
+and observed user association filters replayed completions. V2 uses a location-aware, bounded event reader and verifies native
 session context before completion. Completion refers to a settled busy period,
 which may include several queued prompts. Restart after install/update; V2
 2.0.21 also supports native plugin reload, while 2.0.0 requires restart.

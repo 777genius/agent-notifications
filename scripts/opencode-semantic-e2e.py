@@ -352,7 +352,8 @@ export default async function(){record({phase:'loaded',version:'v1'});return{eve
         for case in args.cases.split(','):
             child_flow = case.startswith('child-')
             removed_flow = case.startswith('removed-')
-            mode = case.split('-', 1)[1] if child_flow or removed_flow else case
+            recovery = case.startswith('recover-')
+            mode = case[len('recover-'):] if recovery else case.split('-', 1)[1] if child_flow or removed_flow else case
             if case == 'reload':
                 if args.version != '2.0.21':
                     raise ValueError('native plugin reload belongs to the current V2 API')
@@ -391,7 +392,7 @@ export default async function(){record({phase:'loaded',version:'v1'});return{eve
                 subprocess.run(['git', 'init', '-q', str(target)], check=True)
                 (target / 'opencode.json').write_text(json.dumps(configuration))
                 req('/api/location', directory=target)
-            provider.mode, provider.attempts = mode, 0
+            provider.mode, provider.attempts = ('cancel' if mode == 'queue-cancel' else mode), 0
             provider.entered.clear()
             provider.release.clear()
             body = {'title': 'TEST-' + mode}
@@ -434,9 +435,15 @@ export default async function(){record({phase:'loaded',version:'v1'});return{eve
             prompt = {'parts': [{'type': 'text', 'text': marker}]} if v1 else {'text': marker}
             with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
                 initial = pool.submit(req, prefix + sid + ('/message' if v1 else '/prompt'), prompt)
-                if mode in ('queue', 'steer', 'cancel'):
+                if mode in ('queue', 'steer', 'cancel', 'queue-cancel'):
                     wait(provider.entered.is_set, 'held primary provider')
-                    if mode == 'cancel':
+                    if mode == 'queue-cancel':
+                        second = pool.submit(req, prefix + sid + '/prompt', {'text': marker + '-queued', 'delivery': 'queue'})
+                        wait(lambda: len({x.get('inboxID') for x in rows()[trace_start:] if x.get('sessionID') == sid and
+                             x.get('observer') == str(target) and x.get('type') == 'session.inbox.enqueued'}) == 2,
+                             'queued admission before interrupt')
+                        second.result(timeout=55)
+                    if mode in ('cancel', 'queue-cancel'):
                         ack = req(prefix + sid + ('/abort' if v1 else '/interrupt'), {})
                         if not v1 and ack.get('interrupted') is not True:
                             raise AssertionError('native interruption was not accepted')
@@ -447,7 +454,7 @@ export default async function(){record({phase:'loaded',version:'v1'});return{eve
                              x.get('observer') == str(target) and x.get('type') == 'session.inbox.enqueued'}) >= 2,
                              'overlapping inbox admission') if not v1 else time.sleep(.2)
                     provider.release.set()
-                    if mode != 'cancel':
+                    if mode not in ('cancel', 'queue-cancel'):
                         second.result(timeout=55)
                 elif mode in ('question', 'dismiss', 'permission', 'reject'):
                     if mode in ('question', 'dismiss'):
@@ -482,14 +489,14 @@ export default async function(){record({phase:'loaded',version:'v1'});return{eve
                      for x in rows()[trace_start:]), 'fresh native terminal')
                 wait_prefix = prefix if args.version == '2.0.0' else '/api/experimental/session/'
                 req(wait_prefix + sid + '/wait', method='POST')
-            expected_types = [] if child_flow or removed_flow else ['opencode_error'] if mode == 'failure' else ([] if mode == 'cancel' else
+            expected_types = [] if child_flow or removed_flow else ['opencode_error'] if mode == 'failure' else ([] if mode in ('cancel', 'queue-cancel') else
                 ['question'] if mode == 'dismiss' else ['permission_request'] if mode == 'reject' else
                 ['question', 'task_complete'] if mode == 'question' else
                 ['permission_request', 'task_complete'] if mode in ('permission', 'tool') and v1 or mode == 'permission' else ['task_complete'])
             wait(lambda: len(webhook.bodies) >= before + len(expected_types), 'expected installed alerts')
             # A verifier may take two bounded lookups, followed by a 25s IPC
             # attempt. Observe that whole window before claiming a negative.
-            seconds = 30 if child_flow or removed_flow or mode in ('queue', 'steer', 'cancel', 'retry', 'child', 'overflow', 'dismiss', 'reject', 'locations') else 1
+            seconds = 30 if child_flow or removed_flow or mode in ('queue', 'steer', 'cancel', 'queue-cancel', 'retry', 'child', 'overflow', 'dismiss', 'reject', 'locations') else 1
             deadline = time.monotonic() + seconds
             while time.monotonic() < deadline:
                 if len(webhook.bodies) != before + len(expected_types):
@@ -521,8 +528,32 @@ export default async function(){record({phase:'loaded',version:'v1'});return{eve
                 terminals = [x.get('seq') for x in native if x.get('type') == 'session.execution.succeeded']
                 if len(admissions) != 2 or len(terminals) != 1 or max(admissions.values()) >= terminals[0]:
                     raise AssertionError('native overlap did not coalesce two durable inputs into one busy period')
-            cases.append({'case': case, 'sessionID': sid, 'alerts': actual, 'primary_requests': provider.attempts,
-                          'native_event_types': sorted({x['type'] for x in native if 'type' in x})})
+            primary_requests = provider.attempts
+            followup = None
+            if recovery:
+                provider.mode, provider.attempts = 'success', 0
+                followup_before, followup_trace = len(webhook.bodies), len(rows())
+                next_prompt = {'parts': [{'type': 'text', 'text': 'TEST-recover-same-session'}]} if v1 else {'text': 'TEST-recover-same-session'}
+                req(prefix + sid + ('/message' if v1 else '/prompt'), next_prompt)
+                if not v1:
+                    req(wait_prefix + sid + '/wait', method='POST')
+                wait(lambda: len(webhook.bodies) >= followup_before + 1, 'same-session recovery completion')
+                deadline = time.monotonic() + 30
+                while time.monotonic() < deadline:
+                    if len(webhook.bodies) != followup_before + 1:
+                        raise AssertionError('same-session recovery emitted a duplicate or late alert')
+                    time.sleep(.1)
+                recovered = [json.loads(x)['notification_type'] for x in webhook.bodies[followup_before:]]
+                recovered_native = [x for x in rows()[followup_trace:] if x.get('sessionID') == sid and
+                                    (v1 or x.get('observer') == str(target))]
+                if recovered != ['task_complete'] or (not v1 and not any(
+                        x.get('type') == 'session.execution.succeeded' for x in recovered_native)):
+                    raise AssertionError('same native session did not recover to one completion')
+                followup = {'same_session': True, 'alerts': recovered,
+                            'native_event_types': sorted({x['type'] for x in recovered_native if 'type' in x})}
+            cases.append({'case': case, 'sessionID': sid, 'alerts': actual, 'primary_requests': primary_requests,
+                          'native_event_types': sorted({x['type'] for x in native if 'type' in x}),
+                          **({'recovery': followup} if recovery else {})})
             args.report.write_text(json.dumps({**provenance, 'status': 'running', 'version': args.version, 'cases': cases}, indent=2) + '\n')
             print(json.dumps(cases[-1]), flush=True)
         if not removed:
@@ -584,11 +615,12 @@ def main():
     if not args.cases:
         core = 'success,question,permission,failure,queue,cancel,retry,tool,child,overflow,dismiss,reject'
         if not args.version.startswith('1.'):
-            core += ',steer,locations'
+            core += ',steer,locations,recover-queue-cancel'
         if args.version == '2.0.21':
             core += ',reload'
+        core += ',recover-cancel,recover-queue,recover-dismiss,recover-reject,recover-failure'
         args.cases = core + ',child-success,child-question,child-permission,child-failure,removed-success,removed-question,removed-permission,removed-failure'
-    if args.version.startswith('1.') and any(x in args.cases.split(',') for x in ('steer', 'locations', 'reload')):
+    if args.version.startswith('1.') and any(x in args.cases.split(',') for x in ('steer', 'locations', 'reload', 'recover-queue-cancel')):
         parser.error('steer, global locations and native reload are V2-specific checkpoints')
     report = {'status': 'fail', 'version': args.version}
     try:

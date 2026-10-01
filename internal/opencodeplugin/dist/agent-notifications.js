@@ -59,8 +59,18 @@ function createV2Observer(options) {
     sessions.delete(s.sid);
   }
   function state(sid) {
-    if (sessions.has(sid)) return sessions.get(sid);
-    if (sessions.size === maxSessions) invalidate(sessions.values().next().value);
+    if (sessions.has(sid)) {
+      const existing = sessions.get(sid);
+      sessions.delete(sid);
+      sessions.set(sid, existing);
+      return existing;
+    }
+    if (sessions.size === maxSessions) {
+      const records = [...sessions.values()];
+      const victim = records.find((s2) => s2.ownership === "rejected" || s2.ownership === "child") ?? records.find((s2) => !(s2.started && !s2.result && !s2.interrupted) && !s2.verifying.size) ?? records[0];
+      if (victim.started && !victim.result && !victim.interrupted) diag("session_capacity");
+      invalidate(victim);
+    }
     const s = {
       sid,
       generation: 0,
@@ -130,6 +140,11 @@ function createV2Observer(options) {
     const token = ownershipToken(s);
     void lookup((signal) => options.client.get({ sessionID: s.sid }, { signal })).then((info) => {
       if (!ownedToken(token)) return;
+      if (info === void 0) {
+        s.ownership = "unverified";
+        diag("ownership_unverified");
+        return;
+      }
       if (!object(info) || info.id !== s.sid || info.parentID !== void 0 && !id(info.parentID) || !sameLocation(info.location, own)) {
         s.ownership = "rejected";
         diag("ownership_unverified");
@@ -273,6 +288,7 @@ function createV2Observer(options) {
     if (s.ownership === "rejected" || s.ownership === "child") return;
     let changed = true;
     if (type === "session.execution.started") {
+      if (s.ownership === "unverified") s.ownership = "new";
       s.epoch++;
       s.started = true;
       s.user = "";

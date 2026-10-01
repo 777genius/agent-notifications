@@ -4,8 +4,8 @@ Common installation and runtime issues.
 
 ## OpenCode notifications missing or duplicated
 
-- Confirm the host version with `opencode --version`. Tested: 1.18.33; V2 is
-  unsupported. Update the notifications plugin using the guided OpenCode setup.
+- Confirm the host version with `opencode --version`. Published support: 1.18.33. The dual-API candidate is tested with 1.18.33,
+  2.0.0 and 2.0.21; SDK 0.2.0 publication and registry qualification are pending. Update the notifications plugin using the guided OpenCode setup.
 - Restart OpenCode after install/update/remove. Check that the same
   `OPENCODE_CONFIG_DIR` / `XDG_CONFIG_HOME` environment is used for setup and the
   host; the global plugin should be `plugins/agent-notifications.js` there.
