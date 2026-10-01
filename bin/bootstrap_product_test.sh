@@ -3,6 +3,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-env.sh"
 test_env_enter "$0" "$@"
 # Isolated unit/adapter fixtures: no public network, real host CLIs or Go builds.
 set -euo pipefail
+trap 'printf "TEST bootstrap product fixture failed: %s (status %s)\n" "$BASH_COMMAND" "$?" >&2' ERR
 case "${1:-}" in
     '') [ "$#" -eq 0 ] || exit 2; _PRODUCT_TEST_UNIT_ONLY=false ;;
     --unit-only) [ "$#" -eq 1 ] || exit 2; _PRODUCT_TEST_UNIT_ONLY=true ;;
@@ -15,9 +16,9 @@ trap 'rm -rf "$SANDBOX"' EXIT
 test_env_setup "$SANDBOX"
 # test-env.sh inherits PATH: retain only named tools, never host agent binaries.
 mkdir -p "$SANDBOX/trusted-tools"
-for tool in bash sh env python3 node curl wget tar gzip unzip zip mktemp rm cat cp mv chmod mkdir ln uname tr wc head cmp grep sed awk dirname basename find sort sha256sum shasum cut xargs sleep date stat diff touch readlink dd od go gcc cc pkg-config; do
+for tool in bash sh env cygpath python3 node curl wget tar gzip unzip zip mktemp rm cat cp mv chmod mkdir ln uname tr wc head cmp grep sed awk dirname basename find sort sha256sum shasum cut xargs sleep date stat diff touch readlink dd od go gcc cc pkg-config; do
     tool_path=$(type -P "$tool" 2>/dev/null || true)
-    [ -z "$tool_path" ] || ln -s "$tool_path" "$SANDBOX/trusted-tools/$tool"
+    [ -z "$tool_path" ] || test_env_place_tool "$tool_path" "$SANDBOX/trusted-tools/$tool"
 done
 export PATH="$SANDBOX/trusted-tools"
 
