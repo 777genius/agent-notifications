@@ -303,7 +303,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `wait-all` — suppresses lead's Stop notification, waits until all teammates go idle, then sends a single consolidated notification
   - `never` — completely silent in team mode
 - **TeammateIdle hook** — new hook event for tracking when team members finish their work
-- **Install script promo** — shows link to [claude_agent_teams_ui](https://github.com/777genius/claude_agent_teams_ui) after installation
+- **Install script promo** — shows link to [Agent Teams AI](https://github.com/777genius/agent-teams-ai) after installation
 
 ### Removed
 - **OSC terminal notifications** — removed the `internal/osc` package (OSC escape sequences for SSH/tmux). Feature proved unreliable across terminal emulators

@@ -2550,9 +2550,9 @@ main() {
     echo ""
     echo -e "${YELLOW}────────────────────────────────────────${NC}"
     echo -e "${YELLOW}★${NC} ${BOLD}Boost your productivity${NC}"
-    echo -e "  Check out the advanced task manager for Claude"
-    echo -e "  with a convenient UI, from the creator of this plugin:"
-    echo -e "  ${GREEN}https://github.com/777genius/claude_agent_teams_ui${NC}"
+    echo -e "  Check out Agent Teams AI, a desktop app for AI agent teams"
+    echo -e "  with Claude Code, Codex and more, from the creator of this plugin:"
+    echo -e "  ${GREEN}https://github.com/777genius/agent-teams-ai${NC}"
     echo -e "${YELLOW}────────────────────────────────────────${NC}"
     echo ""
     release_lock

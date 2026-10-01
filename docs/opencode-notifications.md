@@ -5,7 +5,7 @@ questions, permission requests and terminal errors**. Alerts contain generic tex
 they are silent and do not navigate to a terminal or session when clicked. It does
 not provide Claude's plan/review events, contextual messages or sound controls.
 
-The tested host is **OpenCode 1.18.33**. OpenCode V2 is not supported. The public
+The tested host is **OpenCode 1.18.33**. [OpenCode V2](https://opencode.ai/v2/docs) uses a different plugin API and is not supported. The public
 installer rejects V2 and reports the detected V1 version; that diagnostic does not
 qualify every V1 release. Setup installs notifications, never OpenCode itself, and
 does not start an agent session.
@@ -27,7 +27,7 @@ service or Windows toasts. Linux needs an available desktop session/D-Bus servic
 ## Install or update
 
 Install OpenCode first. In the [guided installer](https://777genius.github.io/agent-notifications/#install),
-select **OpenCode** and explicitly allow desktop notifications, webhooks or both. You can also select Claude Code or Codex CLI in the same setup. The copied command uses one loader, for example:
+select **OpenCode**. The guided command enables desktop notifications; webhook destinations and delivery can be configured later. You can also select Claude Code or Codex CLI in the same setup. The copied command uses one loader, for example:
 
 ```bash
 (set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --products claude,opencode --desktop)
