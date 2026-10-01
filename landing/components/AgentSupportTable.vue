@@ -50,11 +50,11 @@ const icons = { yes: "✓", no: "✕", conditional: "✓*" };
     </div>
     <div id="agent-support-notes" class="agent-support-notes">
       <p>{{ t("agentSupport.legend") }}</p>
-      <p>{{ t("agentSupport.conditions") }}</p>
-      <p>{{ t("agentSupport.qualification") }}</p>
-      <p>{{ t("install.opencode.scope") }}</p>
       <details>
         <summary>{{ t("install.capabilities.details") }}</summary>
+        <p>{{ t("agentSupport.conditions") }}</p>
+        <p>{{ t("agentSupport.qualification") }}</p>
+        <p>{{ t("install.opencode.scope") }}</p>
         <p><strong>Codex CLI:</strong> {{ t("install.prerequisiteText") }} <a :href="repo + '/blob/main/docs/CODEX.md'">{{ t("install.products.codex") }} ↗</a></p>
         <p><strong>OpenCode:</strong> {{ t("install.opencode.version") }} <a href="https://opencode.ai/v2/docs">{{ t("agentSupport.v2Link") }} ↗</a></p>
         <p><a :href="repo + '/blob/main/docs/opencode-notifications.md'">{{ t("install.opencode.guide") }} ↗</a></p>
