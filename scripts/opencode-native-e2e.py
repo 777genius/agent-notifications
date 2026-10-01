@@ -41,7 +41,9 @@ def digest(path):
 
 
 def run(args, *, cwd, env, timeout=30):
-    result = subprocess.run(args, cwd=cwd, env=env, capture_output=True, text=True,
+    # Headless run reads Bun.stdin to EOF even when a prompt is supplied. A CI
+    # runner may keep inherited stdin open; this driver supplies no stdin input.
+    result = subprocess.run(args, cwd=cwd, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True,
                             encoding="utf-8", errors="replace", timeout=timeout)
     if result.returncode:
         raise RuntimeError(f"{pathlib.Path(args[0]).name} {args[1]} exited {result.returncode}: "
@@ -283,7 +285,7 @@ def qualify(args, report):
                 def start_server():
                     return subprocess.Popen([str(opencode), "serve", "--port", str(server_port),
                         "--hostname", "127.0.0.1", "--print-logs"], cwd=project, env=env,
-                        stdout=log, stderr=subprocess.STDOUT)
+                        stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
 
                 def stop_server(process):
                     process.terminate()
