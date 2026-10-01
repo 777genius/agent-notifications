@@ -68,7 +68,10 @@ func TestConcurrentConsumerClaimsEachChannelOnce(t *testing.T) {
 	c, facts, deadline := consumerFixture(t)
 	var desktops, hooks atomic.Int32
 	c.Gate = testGate{channels: Channels{true, true}, check: func(ctx context.Context, _ Binding, _ Channel) bool {
-		lockCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+		// Other invocations may legitimately own the lock at this handoff.
+		// Allow their bounded claims to finish; retaining our own lock still
+		// prevents this acquisition and fails the test.
+		lockCtx, cancel := context.WithTimeout(ctx, time.Second)
 		defer cancel()
 		release, err := installruntime.LockExisting(lockCtx, filepath.Join(c.Cache.Root, ".observations.lock"))
 		if err != nil {
@@ -355,6 +358,9 @@ func (c *panicWatchClock) Now() (string, float64, error) {
 // entrypoint recovery, crashes the hook process and leaves HTTP uncanceled.
 func TestClockWatcherPanicCancelsEffectWithoutCrashing(t *testing.T) {
 	c, facts, deadline := consumerFixture(t)
+	// This test exercises cancellation during an effect, independently of
+	// durable-cache admission. A missing native timestamp is invocation-scoped.
+	facts.Timestamp = ""
 	clock := &panicWatchClock{}
 	clock.seconds.Store(10)
 	c.Clock, c.Cache.Clock = clock, clock
