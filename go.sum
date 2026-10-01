@@ -10,10 +10,10 @@ cloud.google.com/go/compute/metadata v0.3.0 h1:Tz+eQXMEqDIKRsmY3cHTL6FVaynIjX2Qx
 cloud.google.com/go/compute/metadata v0.3.0/go.mod h1:zFmK7XCadkQkj6TtorcaGlCW1hT1fIilQDwofLpJ20k=
 git.sr.ht/~jackmordaunt/go-toast v1.1.2 h1:/yrfI55LRt1M7H1vkaw+NaH1+L1CDxrqDltwm5euVuE=
 git.sr.ht/~jackmordaunt/go-toast v1.1.2/go.mod h1:jA4OqHKTQ4AFBdwrSnwnskUIIS3HYzlJSgdzCKqfavo=
-github.com/777genius/plugin-kit-ai/cli v0.0.0-20261001150423-48bdc5ab5c63 h1:JmuwJ8X4BT/kXAkk1oev1gQDRIVJOuCNmIbjBgCMsNs=
-github.com/777genius/plugin-kit-ai/cli v0.0.0-20261001150423-48bdc5ab5c63/go.mod h1:Q5LcHECoKVFDqi8RH8BGPbKtHdkYMxaHzsmzsyfuRp0=
-github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.1-0.20261001150423-48bdc5ab5c63 h1:PSiYmKvxytUEwmDNAP0N8pTPyTZxkewmeUTfr93AXL4=
-github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.1-0.20261001150423-48bdc5ab5c63/go.mod h1:yAlXSURD/jCUKMTMcK2v2aOReglfEpJNTN1IwHDIOQQ=
+github.com/777genius/plugin-kit-ai/cli v0.0.0-20261001182617-f05fe750bb7a h1:IXvIA3ZUHxjhqNeKtL+NYCCgY+z1X+s/N7R/JefDg7Y=
+github.com/777genius/plugin-kit-ai/cli v0.0.0-20261001182617-f05fe750bb7a/go.mod h1:Q5LcHECoKVFDqi8RH8BGPbKtHdkYMxaHzsmzsyfuRp0=
+github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.1-0.20261001182617-f05fe750bb7a h1:hEZw3LdlIBjeXAFbMgSEO2vI92wibGdRzT1eUUgaKlM=
+github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.1-0.20261001182617-f05fe750bb7a/go.mod h1:yAlXSURD/jCUKMTMcK2v2aOReglfEpJNTN1IwHDIOQQ=
 github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261001090905-11a842f55d19 h1:7skINBKWYevUcTVEJO6a33L92AOjeNBu8mSXpP+9Gc4=
 github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261001090905-11a842f55d19/go.mod h1:WET4vFo589qPYCrYVIzDJ2XdKDW8M1FypXzko9H9X2E=
 github.com/777genius/plugin-kit-ai/plugininstall v0.0.0-20260920081413-a5644312f7af h1:HSQLdGxhHBB0QZtA77y27o+KpixsB7bAi6lDPI02PRw=

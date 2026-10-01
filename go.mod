@@ -3,8 +3,8 @@ module github.com/777genius/agent-notifications
 go 1.25.8
 
 require (
-	github.com/777genius/plugin-kit-ai/cli v0.0.0-20261001150423-48bdc5ab5c63
-	github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.1-0.20261001150423-48bdc5ab5c63
+	github.com/777genius/plugin-kit-ai/cli v0.0.0-20261001182617-f05fe750bb7a
+	github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.1-0.20261001182617-f05fe750bb7a
 	github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261001090905-11a842f55d19
 	github.com/777genius/plugin-kit-ai/sdk v1.2.1-0.20261001061845-2d2a26bf372a
 	github.com/creack/pty v1.1.24
