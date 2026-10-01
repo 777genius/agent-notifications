@@ -32,7 +32,7 @@ func (d Document) Effective(assets AssetContext) (*Config, error) {
 			return nil, err
 		}
 	}
-	if assets.Agent != AgentClaude && assets.Agent != AgentCodex && assets.Agent != AgentOpenCode {
+	if assets.Agent != AgentClaude && assets.Agent != AgentCodex && assets.Agent != AgentOpenCode && assets.Agent != AgentGemini {
 		assets.Agent = ""
 	}
 	data, err := profiles.mergedProfile(assets.Agent)

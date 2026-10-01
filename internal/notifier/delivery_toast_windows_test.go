@@ -103,3 +103,46 @@ func TestSystemPowerShellIgnoresUserPath(t *testing.T) {
 		t.Fatalf("PowerShell path = %q, want %q", got, want)
 	}
 }
+
+// Red condition: another consumer's factory silently uses legacy/OpenCode
+// AUMID or reaches toast submission without its trusted shortcut verifier.
+func TestTrustedWindowsToastRequiresOwnReadinessAndIdentity(t *testing.T) {
+	previousSubmit, previousResolve := submitWindowsToast, resolveWindowsPowerShell
+	t.Cleanup(func() { submitWindowsToast, resolveWindowsPowerShell = previousSubmit, previousResolve })
+	resolveWindowsPowerShell = func() (string, error) { return "trusted-powershell.exe", nil }
+	submitted := 0
+	submitWindowsToast = func(_ context.Context, payload windowsToastPayload) error {
+		submitted++
+		if payload.AppID != "AgentNotifications.Gemini.Test" {
+			t.Errorf("wrong trusted identity: %q", payload.AppID)
+		}
+		return nil
+	}
+	failed := NewTrustedWindowsToastDelivery(nil, "AgentNotifications.Gemini.Test", func(context.Context) error { return errors.New("shortcut unavailable") })
+	session, err := failed.Open(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Ready(context.Background()) == nil {
+		t.Fatal("unverified shortcut passed readiness")
+	}
+	good := NewTrustedWindowsToastDelivery(nil, "AgentNotifications.Gemini.Test", func(context.Context) error { return nil })
+	session, err = good.Open(context.Background())
+	if err != nil || session.Ready(context.Background()) != nil {
+		t.Fatalf("trusted readiness failed: %v", err)
+	}
+	if err = session.Submit(context.Background(), notification.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if submitted != 1 {
+		t.Fatalf("trusted submission attempts = %d", submitted)
+	}
+	for _, factory := range []*WindowsToastDelivery{
+		NewTrustedWindowsToastDelivery(nil, "", func(context.Context) error { return nil }),
+		NewTrustedWindowsToastDelivery(nil, "AgentNotifications.Gemini.Test", nil),
+	} {
+		if _, err := factory.Open(context.Background()); err == nil {
+			t.Fatal("missing trusted identity/verifier accepted")
+		}
+	}
+}

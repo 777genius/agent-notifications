@@ -36,6 +36,12 @@ type Sender struct {
 
 // New creates a new professional webhook sender
 func New(cfg *config.Config) *Sender {
+	return NewWithContext(context.Background(), cfg)
+}
+
+// NewWithContext binds every HTTP attempt and retry wait to the caller's
+// cancellation and deadline. New retains its historical background lifetime.
+func NewWithContext(parent context.Context, cfg *config.Config) *Sender {
 	// Create base HTTP client with timeout
 	client := &http.Client{
 		Timeout: 10 * time.Second,
@@ -71,7 +77,7 @@ func New(cfg *config.Config) *Sender {
 	}
 
 	// Create context for graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(parent)
 
 	return &Sender{
 		cfg:            cfg,
