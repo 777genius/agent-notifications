@@ -62,13 +62,14 @@ func TestBootstrapPolicySameGenerationProtectedCAS(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if boundary == "reservation" {
+			switch boundary {
+			case "reservation":
 				_, _, err = service.PublishConfirmedIntent(ctx, req)
-			} else if boundary == "binding" {
+			case "binding":
 				_, err = service.CommitBinding(ctx, Request{Binding: b, ExpectedGeneration: l.Generation, Reservation: reservation})
-			} else if boundary == "patch" {
+			case "patch":
 				err = service.PatchIntentReceipt(ctx, b.ControlRoot, b.RuntimeRoot, b.Owner, "codex", "TEST-receipt", reservation)
-			} else {
+			default:
 				_, _, err = service.FinishConfirmedIntent(ctx, req, reservation)
 			}
 			if !errors.Is(err, ErrConcurrentChange) || !errors.Is(err, installruntime.ErrPolicyConflict) {
