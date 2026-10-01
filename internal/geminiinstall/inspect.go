@@ -50,7 +50,7 @@ func Inspect(ctx context.Context, r Request) (Inspection, error) {
 	}
 	c := s.Installation.Ledger.Consumers[consumerID]
 	if len(c.Commands) == 0 || !RegisteredFromSnapshot(s, root, c.Commands[0], "", r.GOOS, r.GOARCH) {
-		return result, errors.New("Gemini registration is missing or changed")
+		return result, errors.New("gemini registration is missing or changed")
 	}
 	receipt, _, err := readReceipt(root, s.Installation.Ledger)
 	if err != nil {
@@ -58,7 +58,7 @@ func Inspect(ctx context.Context, r Request) (Inspection, error) {
 	}
 	result.Desktop, result.Webhook = ChannelsFromSnapshot(s, root, c.Commands[0], receipt.Binding, r.GOOS, r.GOARCH)
 	if !SnapshotCurrent(root, s) {
-		return Inspection{Status: "conflict"}, errors.New("Gemini installation changed during inspection")
+		return Inspection{Status: "conflict"}, errors.New("gemini installation changed during inspection")
 	}
 	result.Status, result.Registered = "installed", true
 	return result, ctx.Err()

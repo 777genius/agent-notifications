@@ -27,7 +27,7 @@ func readNativeSettings(path string) ([]byte, error) {
 		return nil, err
 	}
 	f := os.NewFile(uintptr(h), path)
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var info windows.ByHandleFileInformation
 	if windows.GetFileInformationByHandle(h, &info) != nil || info.FileAttributes&(windows.FILE_ATTRIBUTE_REPARSE_POINT|windows.FILE_ATTRIBUTE_DIRECTORY) != 0 {
 		return nil, errors.New("native settings must be a regular file")
