@@ -48,7 +48,14 @@ the model provider is deterministic real local HTTP. No Google model-service
 qualification is claimed. Green CI means implemented scenarios passed, not
 that pending G5/desktop gates are complete.
 
-Provider checks passed: four wrapper self-tests, six existing G5 self-tests,
+Historical provider checks passed: four wrapper self-tests, six then-existing G5 self-tests,
 Python compilation in memory, workflow YAML parsing and whitespace checks.
 Commands used `python3 -B ... --self-test`; no npm/build/native execution was
-performed. Native CI remains unrun.
+performed by that provider worker.
+
+Trusted native CI subsequently ran real G0/G5 on five platforms. At AN
+`4b27719a0ceec8453aeb53dded282ff0afe58682`, run `36852524077` passed macOS
+arm64 and Linux amd64/arm64. Windows and macOS Intel remain failed and are
+being corrected; no all-platform pass is claimed. The current pure harness
+suite contains nine G5 checks and four wrapper checks. Interactive macOS
+production evidence is recorded separately in `gemini-production-harness.md`.
