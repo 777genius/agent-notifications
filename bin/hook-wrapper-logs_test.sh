@@ -41,7 +41,15 @@ def invoke(plugin, cache, product='claude', extra=None):
     run_env = dict(env, XDG_CACHE_HOME=cache.as_posix(), CN_PRODUCT=product)
     if extra:
         run_env.update(extra)
-    result = subprocess.run([shell, '-c', 'export PATH="$ROOT/stubs:$PATH"; unset OS; exec /bin/sh "$1" handle-hook Stop',
+    # A native Windows Python passes ROOT as D:/...; convert it before putting
+    # it in POSIX PATH, where the drive colon would split the stub directory.
+    command = '''fixture_root="$ROOT"
+if command -v cygpath >/dev/null 2>&1; then fixture_root=$(cygpath -u "$ROOT"); fi
+export PATH="$fixture_root/stubs:$PATH"
+test "$(uname -s)" = Linux || { echo "fixture uname stub is unavailable" >&2; exit 97; }
+unset OS
+exec /bin/sh "$1" handle-hook Stop'''
+    result = subprocess.run([shell, '-c', command,
                              'fixture', (plugin / 'bin/hook-wrapper.sh').as_posix()],
                             env=run_env, capture_output=True, timeout=15)
     assert result.returncode == 0, result
