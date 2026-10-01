@@ -3,6 +3,12 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-env.sh"
 test_env_enter "$0" "$@"
 # Isolated unit/adapter fixtures: no public network, real host CLIs or Go builds.
 set -euo pipefail
+case "${1:-}" in
+    '') [ "$#" -eq 0 ] || exit 2; _PRODUCT_TEST_UNIT_ONLY=false ;;
+    --unit-only) [ "$#" -eq 1 ] || exit 2; _PRODUCT_TEST_UNIT_ONLY=true ;;
+    *) echo "Usage: bash bootstrap_product_test.sh [--unit-only]" >&2; exit 2 ;;
+esac
+readonly _PRODUCT_TEST_UNIT_ONLY
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SANDBOX=$(mktemp -d /tmp/bootstrap-products-XXXXXX)
 trap 'rm -rf "$SANDBOX"' EXIT
@@ -43,6 +49,20 @@ source "$SANDBOX/functions.sh"
     if BOOTSTRAP_RELEASE_TAG=v1.45.0 resolve_bootstrap_release; then exit 1; fi
     BOOTSTRAP_RELEASE_TAG=v1.46.0 BOOTSTRAP_RELEASE_COMMIT=0123456789abcdef0123456789abcdef01234567 resolve_bootstrap_release
 )
+# A Gemini-containing selection must share observer flags while retaining the
+# legacy group and rejecting duplicate/empty selectors before any acquisition.
+(
+    PRODUCT=""; CONFIGURE_ARGS=(); OPENCODE_ARGS=()
+    select_product --products claude,codex,opencode,gemini --webhook --skip-agent-notify
+    [ "$LEGACY_PRODUCT" = both ]
+    [ "${SELECTED_PRODUCTS[*]}" = "claude codex opencode gemini" ]
+    [ "${OPENCODE_ARGS[*]}" = --webhook ]
+)
+for args in "--products gemini,gemini --webhook" "--products claude,,gemini --webhook" "--product gemini --webhook --agent-notify"; do
+    if ( PRODUCT=""; CONFIGURE_ARGS=(); OPENCODE_ARGS=(); select_product $args ); then
+        echo "accepted invalid Gemini bundle: $args" >&2; exit 1
+    fi
+done
 for args in "--product claude --desktop" "--product codex --webhook" "--product opencode --desktop --agent-notify" "--product opencode --desktop --skip-agent-notify" "--product opencode --desktop --navigation none"; do
     if ( PRODUCT=""; CONFIGURE_ARGS=(); OPENCODE_ARGS=(); select_product $args ); then
         echo "accepted incompatible OpenCode consent flags: $args" >&2
@@ -71,6 +91,36 @@ HOST_VERSION
             exit 1
         fi
     done
+)
+# Gemini's prerequisite may execute only the disposable version fixture here.
+# Assert actual isolated cwd/home, dotenv sentinels and system redirects rather
+# than matching shell source. A changed version must stop before installation.
+(
+    mkdir -p "$SANDBOX/gemini-version-cli"
+    cat > "$SANDBOX/gemini-version-cli/gemini" <<'GEMINI_VERSION'
+#!/bin/bash
+[ "$#" -eq 1 ] && [ "$1" = --version ] || exit 2
+[ "$PWD" -ef "$HOME" ] && [ "$USERPROFILE" -ef "$HOME" ] && [ "$GEMINI_CLI_HOME" -ef "$HOME" ] || exit 3
+[ -z "${GEMINI_SETUP_ENV_CANARY:-}" ] || exit 4
+for file in "$HOME/.gemini/.env" "$HOME/.env"; do
+    [ -f "$file" ] && [ ! -s "$file" ] || exit 5
+done
+for file in "$GEMINI_CLI_SYSTEM_SETTINGS_PATH" "$GEMINI_CLI_SYSTEM_DEFAULTS_PATH" "$GEMINI_CLI_TRUSTED_FOLDERS_PATH"; do
+    [ -f "$file" ] || exit 6
+done
+printf '0.62.0\n'
+GEMINI_VERSION
+    chmod +x "$SANDBOX/gemini-version-cli/gemini"
+    export PATH="$SANDBOX/gemini-version-cli:$PATH" GEMINI_SETUP_ENV_CANARY=synthetic-not-a-secret
+    PRODUCT=gemini
+    OPENCODE_ARGS=(--webhook)
+    check_prerequisites
+    sed 's/0\.62\.0/0.63.0/' "$SANDBOX/gemini-version-cli/gemini" > "$SANDBOX/gemini-version-cli/next"
+    mv "$SANDBOX/gemini-version-cli/next" "$SANDBOX/gemini-version-cli/gemini"
+    chmod +x "$SANDBOX/gemini-version-cli/gemini"
+    if (check_prerequisites); then
+        echo "accepted unqualified Gemini version" >&2; exit 1
+    fi
 )
 quoted=$(quote_shell_command "$SANDBOX/bin space/cli" --package "$SANDBOX/pkg space" --codex-home "$CODEX_HOME")
 eval "set -- $quoted"
@@ -336,12 +386,117 @@ echo "marketplace self-heal fixtures passed"
     config_preflight
 )
 # Dispatch tests preserve shared bundle state and isolate CN_PRODUCT.
+# Exercise Gemini's actual bootstrap route before replacing dispatcher effects.
+# A captured protocol function is the artifact seam; no host CLI is launched.
+(
+    uname() { printf 'Linux\n'; }
+    bootstrap_release_os_arch() { printf 'linux amd64\n'; }
+    gemini_control="$SANDBOX/gemini control ' \$literal"
+    bootstrap_control_root() { printf '%s\n' "$gemini_control"; }
+    PRODUCT=gemini
+    OPENCODE_ARGS=(--webhook)
+    _CONFIG_HELPER=capture_gemini
+    capture_gemini() {
+        case "$1 $2" in
+            'setup-gemini install')
+                printf '%s\n' "$@" > "$SANDBOX/gemini-argv"
+                [ "${GEMINI_INSTALL_FAIL:-0}" = 0 ] ;;
+            'config installer') printf '%s\n' "$SANDBOX/gemini runtime" ;;
+            'config path') printf '%s\n' "$SANDBOX/shared config.json" ;;
+            *) return 1 ;;
+        esac
+    }
+    initialize_config() { printf initialized > "$SANDBOX/gemini-init"; }
+    install_gemini > "$SANDBOX/gemini-output"
+    expected=$(printf '%s\n' setup-gemini install --binary capture_gemini --webhook --runtime-root "$gemini_control/runtime")
+    [ "$(cat "$SANDBOX/gemini-argv")" = "$expected" ] || { echo "Gemini bootstrap lost its actual API or consent" >&2; exit 1; }
+    [ -f "$SANDBOX/gemini-init" ]
+    # Execute the public lifecycle strings against an inert argv recorder with
+    # a different default environment. No candidate/helper/native host runs.
+    mkdir -p "$SANDBOX/gemini runtime" "$SANDBOX/other default"
+    printf 'untouched default\n' > "$SANDBOX/other default/canary"
+    export GEMINI_LIFECYCLE_TRACE="$SANDBOX/gemini-lifecycle-argv"
+    cat > "$SANDBOX/gemini runtime/claude-notifications-linux-amd64" <<'LIFECYCLE_ARGV'
+#!/bin/bash
+set -eu
+printf '%s\n' "$@" > "$GEMINI_LIFECYCLE_TRACE"
+LIFECYCLE_ARGV
+    chmod +x "$SANDBOX/gemini runtime/claude-notifications-linux-amd64"
+    for label_action in 'Inspect registration and consent:|inspect' 'Remove:|remove'; do
+        label=${label_action%|*}; action=${label_action#*|}
+        printed=$(sed -n "s/^[[:space:]]*$label //p" "$SANDBOX/gemini-output")
+        [ -n "$printed" ]
+        XDG_CONFIG_HOME="$SANDBOX/other default" bash -c "$printed"
+        expected=$(printf '%s\n' setup-gemini "$action" --control-root "$gemini_control")
+        [ "$(cat "$GEMINI_LIFECYCLE_TRACE")" = "$expected" ] || { echo "Gemini printed $action lost the actual control root" >&2; exit 1; }
+    done
+    # The permission branch must address the same installation. The artifact
+    # seam accepts an inert attestation; no helper or permission API is run.
+    uname() { printf 'Darwin\n'; }
+    bootstrap_release_os_arch() { printf 'darwin amd64\n'; }
+    OPENCODE_ARGS=(--desktop)
+    _CONFIG_STAGE="$SANDBOX/inert native staging"
+    mkdir -p "$_CONFIG_STAGE/ClaudeNotifier.app"
+    touch "$_CONFIG_STAGE/ClaudeNotifier.app.managed-runtime.json"
+    cp "$SANDBOX/gemini runtime/claude-notifications-linux-amd64" "$SANDBOX/gemini runtime/claude-notifications-darwin-amd64"
+    install_gemini > "$SANDBOX/gemini-output"
+    for label_action in 'Check permission:|permission-status' 'Grant if needed:|request-permission'; do
+        label=${label_action%|*}; action=${label_action#*|}
+        printed=$(sed -n "s/^[[:space:]]*$label //p" "$SANDBOX/gemini-output")
+        [ -n "$printed" ]
+        XDG_CONFIG_HOME="$SANDBOX/other default" bash -c "$printed"
+        expected=$(printf '%s\n' setup-gemini "$action" --control-root "$gemini_control")
+        [ "$(cat "$GEMINI_LIFECYCLE_TRACE")" = "$expected" ] || { echo "Gemini printed $action lost the actual control root" >&2; exit 1; }
+    done
+    # Exercise the actual Windows copy-and-execute branch on this host with an
+    # inert executable fixture. The query/render boundary supplies native paths.
+    uname() { printf 'MINGW64_NT\n'; }
+    bootstrap_release_os_arch() { printf 'windows amd64\n'; }
+    native_control="C:/Gemini TEST control ' \$literal"
+    cygpath() {
+        # The binary needs native backslashes; rendered control paths use -m.
+        # Both cross this inert argv boundary without executing a native host.
+        [ "$1" = -m ] || [ "$1" = -w ] || return 1
+        case "$2" in
+            "$gemini_control") printf '%s\n' "$native_control" ;;
+            "$gemini_control/runtime") printf '%s/runtime\n' "$native_control" ;;
+            *) printf '%s\n' "$2" ;;
+        esac
+    }
+    OPENCODE_ARGS=(--webhook)
+    cat > "$SANDBOX/gemini runtime/claude-notifications-windows-amd64.exe" <<'WINDOWS_REMOVER_ARGV'
+#!/bin/bash
+set -eu
+[ "${0##*/}" = remover.exe ] || exit 91
+printf '%s\n' "$@" > "$GEMINI_LIFECYCLE_TRACE"
+exit "${GEMINI_REMOVE_EXIT:-0}"
+WINDOWS_REMOVER_ARGV
+    chmod +x "$SANDBOX/gemini runtime/claude-notifications-windows-amd64.exe"
+    install_gemini > "$SANDBOX/gemini-output"
+    printed=$(sed -n 's/^[[:space:]]*Remove: //p' "$SANDBOX/gemini-output")
+    XDG_CONFIG_HOME="$SANDBOX/other default" bash -c "$printed"
+    expected=$(printf '%s\n' setup-gemini remove --control-root "$native_control")
+    [ "$(cat "$GEMINI_LIFECYCLE_TRACE")" = "$expected" ] || { echo "Windows remover lost native control-root argv" >&2; exit 1; }
+    status=0
+    GEMINI_REMOVE_EXIT=37 bash -c "$printed" || status=$?
+    [ "$status" = 37 ] || { echo "Windows remover lost failure status" >&2; exit 1; }
+    [ -f "$SANDBOX/gemini runtime/claude-notifications-windows-amd64.exe" ]
+    [ -z "$(find "$TMPDIR" -maxdepth 1 -name 'agent-notifications-remove.*' -print)" ]
+    [ "$(cat "$SANDBOX/other default/canary")" = 'untouched default' ]
+    [ "$(find "$SANDBOX/other default" -type f | wc -l)" -eq 1 ]
+    rm "$SANDBOX/gemini-init"
+    GEMINI_INSTALL_FAIL=1
+    if install_gemini > "$SANDBOX/gemini-output"; then
+        echo "Gemini bootstrap hid installer failure" >&2; exit 1
+    fi
+    [ ! -e "$SANDBOX/gemini-init" ] || { echo "Config initialized after Gemini installation failed" >&2; exit 1; }
+)
 print_header() { :; }; abort_if_wsl_environment() { :; }
 check_prerequisites() { :; }; detect_platform() { :; }
 resolve_bootstrap_release() { BOOTSTRAP_TAG=v1.43.2; }
 install_claude() { [ "$CN_PRODUCT" = claude ]; PLUGIN_ROOT='bundle space'; echo claude >> "$SANDBOX/calls"; }
 install_codex() { [ "${CN_PRODUCT:-}" = sentinel ]; echo codex >> "$SANDBOX/calls"; }
-stage_historical_baselines() { :; }; stage_config_helper() { :; }; config_preflight() { :; }; initialize_config() { :; }
+stage_historical_baselines() { :; }; stage_config_helper() { _CONFIG_STAGE=$(mktemp -d); }; config_preflight() { :; }; initialize_config() { :; }
 export CN_PRODUCT=sentinel
 for product in claude codex both; do
     : > "$SANDBOX/calls"
@@ -377,6 +532,7 @@ setup_agent_notify_wizard
 grep -Fx -- "$CLAUDE_CONFIG_DIR/.claude.json" "$WIZARD_CAPTURE"
 
 printf 'bootstrap product unit fixtures passed\n'
+[ "$_PRODUCT_TEST_UNIT_ONLY" != true ] || exit 0
 # Local HTTP and controlling-PTY integration. Installer/registration are explicit
 # fake adapters here; the fetched bootstrap, archive extraction and curl are real.
 python3 - "$ROOT" "$SANDBOX" <<'PY'
@@ -680,29 +836,21 @@ assert (live/'bin/claude-notifications').read_text() == 'stale'
 # Menu routing for Claude/both uses explicit adapters; Codex below exercises
 # the complete bootstrap HTTP/staging path with fake runtime assets.
 dispatch = (root / 'bin/bootstrap.sh').read_text(encoding='utf-8').replace('main "$@"', '')
-dispatch += '\ncheck_prerequisites() { :; }\nresolve_bootstrap_release() { :; }\nstage_historical_baselines() { :; }\nstage_config_helper() { :; }\nconfig_preflight() { :; }\ninitialize_config() { :; }\ninstall_claude() { echo CLAUDE_ADAPTER; }\ninstall_codex() { echo CODEX_ADAPTER; }\nmain "$@"\n'
+dispatch += '\ncheck_prerequisites() { :; }\nresolve_bootstrap_release() { :; }\nstage_historical_baselines() { :; }\nstage_config_helper() { _CONFIG_STAGE=$(mktemp -d); }\nconfig_preflight() { :; }\ninitialize_config() { :; }\ninstall_claude() { echo CLAUDE_ADAPTER; }\ninstall_codex() { echo CODEX_ADAPTER; }\nmain "$@"\n'
 (web / 'dispatch.sh').write_bytes(dispatch.encode('utf-8'))
-for choice, success in ([('1',True), ('2',True), ('3',True), ('invalid',False)] if os.name != 'nt' else []):
-    entry = '/dispatch.sh' if choice in ['1', '3'] else '/bootstrap.sh'
-    pid, fd = pty.fork()
-    if pid == 0:
-        os.execve(bash,[bash,'-c', 'curl -fsSL '+base+entry+' | bash'],env)
-    output = b''; sent = False; deadline = time.monotonic()+20
-    while time.monotonic() < deadline:
-        if select.select([fd],[],[],0.1)[0]:
-            try: chunk = os.read(fd,65536)
-            except OSError: break
-            if not chunk: break
-            output += chunk
-            if b'Choice:' in output and not sent:
-                os.write(fd,(choice+'\n').encode()); sent=True
-    else:
-        os.kill(pid,9); raise AssertionError('PTY timeout')
-    _, status = os.waitpid(pid,0); os.close(fd)
-    assert sent and (os.waitstatus_to_exitcode(status)==0)==success, output.decode()
-    if choice in ['1','3']: assert b'Claude Code - installed' in output
-    if choice == '1': assert b'Codex - installed' not in output
-    if choice == '3': assert b'Codex - installed' in output
+# The native SelectMany UI is independently exercised against the actual
+# candidate by bootstrap_opencode_test.sh. This fixture checks shell routing.
+for product, success in [('claude',True), ('codex',True), ('both',True), ('invalid',False)]:
+    entry = '/dispatch.sh' if product in ['claude', 'both', 'invalid'] else '/bootstrap.sh'
+    command = 'curl -fsSL '+base+entry+' | bash -s -- --product '+shlex.quote(product)
+    result = subprocess.run([bash,'-c',command],env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=20)
+    output = result.stdout
+    assert (result.returncode==0)==success, output.decode()
+    if product in ['claude','both']: assert b'Claude Code - installed' in output
+    if product == 'claude': assert b'Codex - installed' not in output
+    if product == 'both': assert b'Codex - installed' in output
+    if product == 'invalid': assert b'CLAUDE_ADAPTER' not in output and b'CODEX_ADAPTER' not in output
+
 assert not list(pathlib.Path(env['TMPDIR']).glob('bootstrap-codex-*'))
 assert not list(pathlib.Path(env['TMPDIR']).glob('bootstrap-release-*'))
 # Protected flow E2E. Real shell orchestration and local downloads; explicit

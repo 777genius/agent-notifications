@@ -2,6 +2,8 @@ package geminievent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -67,6 +69,29 @@ func consumerFixture(t *testing.T) (Consumer, geminisource.Facts, notification.D
 // TestCacheInterprocessClaim covers concurrent first claims separately.
 func TestConcurrentConsumerClaimsEachChannelOnce(t *testing.T) {
 	c, facts, deadline := consumerFixture(t)
+	// Prepare the empty durable cache outside the measured claim budget. This
+	// test owns handoff and duplicate semantics, not first filesystem creation;
+	// native G5 independently exercises cold production caches on every target.
+	seedCtx, seedCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	release, err := installruntime.Lock(seedCtx, filepath.Join(c.Cache.Root, ".observations.lock"))
+	if err != nil {
+		seedCancel()
+		t.Fatal(err)
+	}
+	boot, _, err := c.Clock.Now()
+	bootHash := sha256.Sum256([]byte(boot))
+	seed, marshalErr := json.Marshal(cacheState{Boot: hex.EncodeToString(bootHash[:])})
+	if err == nil {
+		err = marshalErr
+	}
+	if err == nil {
+		err = writeCache(c.Cache.Root, seed)
+	}
+	release()
+	seedCancel()
+	if err != nil {
+		t.Fatal(err)
+	}
 	var desktops, hooks, rechecks atomic.Int32
 	c.Gate = testGate{channels: Channels{true, true}, check: func(ctx context.Context, _ Binding, _ Channel) bool {
 		rechecks.Add(1)
@@ -234,6 +259,8 @@ func TestMissingTimestampAttemptsAreInvocationLocal(t *testing.T) {
 // enter a real sender payload; retry settings create extra permission attempts.
 func TestPermissionPrivatePayloadThroughExistingSender(t *testing.T) {
 	c, facts, deadline := consumerFixture(t)
+	// This boundary verifies transport privacy and retry behavior, not cache I/O.
+	facts.Timestamp = ""
 	c.Gate = testGate{channels: Channels{Webhook: true}}
 	facts.Event, facts.Subtype = geminisource.Notification, geminisource.ToolPermission
 	c.Config.Notifications.Webhook.Headers = map[string]string{"X-Private": "PRIVATE_CONFIG_HEADER"}
@@ -300,8 +327,16 @@ func TestRemainingParentDeadlineReachesBackend(t *testing.T) {
 // while Go's timer still permits HTTP, or a boot change grants another budget.
 func TestContinuousDeadlineCancelsHTTPAndRejectsExpiredObservation(t *testing.T) {
 	c, facts, deadline := consumerFixture(t)
+	// Measure inherited HTTP cancellation independently of cache filesystem latency.
+	// Timestamped interprocess admission and its deadline have separate strict tests.
+	facts.Timestamp = ""
 	c.Gate = testGate{channels: Channels{Webhook: true}}
+	calls := 0
 	c.SendWebhook = func(ctx context.Context, _ *config.Config, _ webhook.SendContext) error {
+		calls++
+		if err := ctx.Err(); err != nil {
+			t.Errorf("HTTP handoff already canceled before suspend: %v", err)
+		}
 		c.Clock.(*testClock).seconds.Store(15)
 		select {
 		case <-ctx.Done():
@@ -312,8 +347,8 @@ func TestContinuousDeadlineCancelsHTTPAndRejectsExpiredObservation(t *testing.T)
 		}
 	}
 	r := c.Consume(context.Background(), facts, deadline)
-	if r.Webhook != "unknown" {
-		t.Fatalf("suspended outcome = %+v", r)
+	if calls != 1 || r.Webhook != "unknown" {
+		t.Fatalf("suspended calls = %d, outcome = %+v", calls, r)
 	}
 	c.SendWebhook = func(context.Context, *config.Config, webhook.SendContext) error {
 		t.Error("expired webhook reached")
@@ -339,7 +374,9 @@ func TestAdmissionCapturesBudgetBeforeTypedSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cancel()
-	facts, err := geminisource.Decode(ctx, geminisource.AfterAgent, []byte(`{"session_id":"s","hook_event_name":"AfterAgent","timestamp":"2026-10-01T05:00:00Z"}`))
+	// A timestamp-free native input keeps the real typed-source chain while
+	// measuring admission time independently of cache filesystem latency.
+	facts, err := geminisource.Decode(ctx, geminisource.AfterAgent, []byte(`{"session_id":"s","hook_event_name":"AfterAgent"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
