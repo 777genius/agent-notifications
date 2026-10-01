@@ -579,8 +579,17 @@ def main():
     parser.add_argument('--sdk-tarball', type=pathlib.Path, required=True)
     parser.add_argument('--sdk-source-sha', required=True)
     parser.add_argument('--desktop', action='store_true', help='capture real Notify calls on a private Linux D-Bus')
-    parser.add_argument('--cases', default='success,question,permission,failure,queue,steer,cancel,retry,tool,child,overflow')
+    parser.add_argument('--cases', help='comma-separated subset; defaults to the qualified version-specific matrix')
     args = parser.parse_args()
+    if not args.cases:
+        core = 'success,question,permission,failure,queue,cancel,retry,tool,child,overflow,dismiss,reject'
+        if not args.version.startswith('1.'):
+            core += ',steer,locations'
+        if args.version == '2.0.21':
+            core += ',reload'
+        args.cases = core + ',child-success,child-question,child-permission,child-failure,removed-success,removed-question,removed-permission,removed-failure'
+    if args.version.startswith('1.') and any(x in args.cases.split(',') for x in ('steer', 'locations', 'reload')):
+        parser.error('steer, global locations and native reload are V2-specific checkpoints')
     report = {'status': 'fail', 'version': args.version}
     try:
         report = qualify(args)
