@@ -645,8 +645,10 @@ def main():
             env["GOOGLE_GEMINI_BASE_URL"] = fixture.url
             (lab / "provider-port").write_text(str(fixture.server.server_port))
             manifest["native_version_probe"] = "running"
-            code, out, _ = bounded_process([str(node), args.gemini_executable, "--version"], b"", lab / "profile", env, 60 if os.name == "nt" else 12)
-            manifest["native_version_probe"] = "finished"
+            code, out, version_err = bounded_process([str(node), args.gemini_executable, "--version"], b"", lab / "profile", env, 60 if os.name == "nt" else 12)
+            manifest["native_version_probe"] = {"exit_code": code, "stdout_bytes": len(out),
+                "stdout_sha256": digest(out), "stderr_bytes": len(version_err), "stderr_sha256": digest(version_err),
+                "Node_error_codes": sorted({item.decode() for item in re.findall(rb"\b(?:ERR_[A-Z_]+|MODULE_NOT_FOUND)\b", version_err)})}
             require(code == 0 and out.strip() == VERSION.encode(), "native_version_mismatch")
             fixture.arm("plain")
             terminal = Terminal(node, args.gemini_executable, args.cli_install_root, lab, env, ui, args.timeout)

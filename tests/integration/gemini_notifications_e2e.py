@@ -459,8 +459,10 @@ def run(args):
             env["GOOGLE_GEMINI_BASE_URL"] = fixture.url
             (lab / "provider-port").write_text(str(fixture.server.server_port))
             evidence["native_version_probe"] = "running"
-            code, out, _ = g0.bounded_process([str(node), executable, "--version"], b"", lab / "profile", env, 60 if os.name == "nt" else 12)
-            evidence["native_version_probe"] = "finished"
+            code, out, version_err = g0.bounded_process([str(node), executable, "--version"], b"", lab / "profile", env, 60 if os.name == "nt" else 12)
+            evidence["native_version_probe"] = {"exit_code": code, "stdout_bytes": len(out),
+                "stdout_sha256": sha(out), "stderr_bytes": len(version_err), "stderr_sha256": sha(version_err),
+                "Node_error_codes": sorted({item.decode() for item in re.findall(rb"\b(?:ERR_[A-Z_]+|MODULE_NOT_FOUND)\b", version_err)})}
             require(code == 0 and out.strip() == b"0.62.0", "actual_native_version")
             # Known parser errors/help are checked before installation mutations.
             for tail, expected in (([], 2), (["install", "--help"], 2), (["install", "--AN-TEST-unknown"], 2)):
