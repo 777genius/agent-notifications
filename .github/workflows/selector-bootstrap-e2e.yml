@@ -7,6 +7,7 @@ on:
       - '.github/workflows/selector-bootstrap-e2e.yml'
       - 'cmd/claude-notifications/setup_products*'
       - 'internal/agentnotify/setupwizard/**'
+      - 'internal/opencodeinstall/**'
       - 'scripts/selector*'
       - 'bin/bootstrap.sh'
       - 'bin/setup.sh'
@@ -32,6 +33,9 @@ jobs:
           go-version: '1.26'
       - name: Qualify native bootstrap in disposable profiles
         run: bash scripts/selector_e2e.sh "$RUNNER_TEMP/TEST-selector-e2e"
+      - name: Qualify native owned path aliases
+        if: ${{ !cancelled() }}
+        run: go test -json -race -count=1 -timeout=2m -run '^TestDarwinPlacementPreservesOwnedSystemAlias$' ./internal/opencodeinstall > "$RUNNER_TEMP/TEST-selector-e2e/placement.jsonl"
       - name: Qualify public loader and observer lifecycle
         if: ${{ !cancelled() }}
         run: |
