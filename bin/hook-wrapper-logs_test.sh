@@ -41,7 +41,7 @@ def invoke(plugin, cache, product='claude', extra=None):
     run_env = dict(env, XDG_CACHE_HOME=cache.as_posix(), CN_PRODUCT=product)
     if extra:
         run_env.update(extra)
-    result = subprocess.run([shell, '-c', 'export PATH="$ROOT/stubs:$PATH"; unset OS; exec /usr/bin/sh "$1" handle-hook Stop',
+    result = subprocess.run([shell, '-c', 'export PATH="$ROOT/stubs:$PATH"; unset OS; exec /bin/sh "$1" handle-hook Stop',
                              'fixture', (plugin / 'bin/hook-wrapper.sh').as_posix()],
                             env=run_env, capture_output=True, timeout=15)
     assert result.returncode == 0, result
