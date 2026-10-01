@@ -51,8 +51,10 @@ Desktop/webhook choices apply to **each selected observer agent**, Gemini and
 OpenCode, with consent persisted separately per agent. They do not grant or change
 Claude/Codex notification channels. `--skip-agent-notify` affects only Claude/Codex
 portable MCP/skill setup. Legacy `--product both` remains Claude + Codex.
-Combined-selector parsing and candidate installation require installer qualification;
-command generation alone does not establish that the published loader accepts them.
+The candidate piped loader, interactive menu and all-four installation were qualified
+in an isolated Linux TEST profile with real AN installers. Claude registration used
+a metadata fixture. This does not establish availability in public release 1.46.1.
+See [installer evidence](handoffs/gemini-installer-e2e.md).
 
 ## Settings, duplicates and lifecycle
 

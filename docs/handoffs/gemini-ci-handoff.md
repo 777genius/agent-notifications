@@ -68,3 +68,8 @@ child environment requires PATHEXT; private TEST ACLs must cover newly created
 children; ConPTY bridge cleanup must follow the confirmed native child exit;
 Intel startup requires `/usr/sbin` for the bundled architecture probe's `sysctl`.
 The production deadline and privacy/ownership checks were preserved.
+
+Final strengthened native run `36869251870` at
+`e7204a400a66ee4f69dbbd772a6cdd08182f9183` also passed all five targets.
+It rechecks denied/cancelled tool effects after recovery to reject late writes.
+No production deadline, privacy or ownership contract was relaxed.
