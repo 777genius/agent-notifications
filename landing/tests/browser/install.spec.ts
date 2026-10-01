@@ -532,7 +532,7 @@ test("Gemini selection explains pending release, shared consent and configuratio
     await expect(gemini).toContainText("A completed turn does not imply success or a final answer");
     await expect(page.getByLabel("Install command", { exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Copy command" })).toHaveCount(0);
-    await expect(page.locator(".setup-panel[role=status]")).toContainText("Public release 1.46.0 does not include Gemini");
+    await expect(page.locator(".setup-panel[role=status]")).toContainText("Public release 1.46.1 does not include Gemini");
     const channels = page.getByRole("group", { name: "Observer notification channels" });
     await expect(channels).toContainText("consent saved separately");
     await channels.getByRole("checkbox", { name: "Allow desktop notifications" }).uncheck();
@@ -555,16 +555,21 @@ test("Gemini selection explains pending release, shared consent and configuratio
 
 // Regression: selecting Gemini must preserve the other selected agents' manual links.
 test("mixed Gemini selection keeps Claude and Codex manual instructions", async ({ page }) => {
-  await page.goto("");
-  await chooseAgents(page, ["claude", "codex", "gemini"]);
-  await chooseOS(page, "manual");
   for (const intent of ["Install", "Update"]) {
-    await page.getByRole("button", { name: intent, exact: true }).click();
+    await page.goto("");
+    await chooseOS(page, "macos");
+    await chooseAgents(page, ["claude", "codex"]);
+    // Update is a real action for the published agents. Select it before adding
+    // the unreleased Gemini candidate, which suppresses the public command.
+    if (intent === "Update")
+      await page.getByRole("button", { name: "Update", exact: true }).click();
+    await chooseAgents(page, ["claude", "codex", "gemini"]);
+    await chooseOS(page, "manual");
     const manual = page.locator(".setup-panel.instructions");
     await expect(manual.locator('a[href$="docs/INSTALLATION.md#manual-install"]')).toBeVisible();
     await expect(manual.locator('a[href$="docs/CODEX.md#manual-codex-registration"]')).toBeVisible();
     await expect(manual.getByRole("link", { name: "Gemini candidate setup and limits" })).toBeVisible();
-    await expect(manual).toContainText("Public release 1.46.0 does not include Gemini");
+    await expect(manual).toContainText("Public release 1.46.1 does not include Gemini");
     await expect(page.getByLabel(intent + " command", { exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Copy command" })).toHaveCount(0);
   }

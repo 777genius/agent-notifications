@@ -27,7 +27,7 @@
       "gemini": "Candidato Gemini CLI: alertas silenciosos de turno concluído e permissão de ferramenta. Concluir um turno não implica sucesso nem resposta final. Sem som, foco ao clicar, perguntas, erros, planos, revisões ou paridade para agentes aninhados."
     },
     "gemini": {
-      "version": "Integração não publicada. A versão pública 1.46.0 não inclui Gemini. Alvo: Gemini CLI 0.62.0; qualificação nativa pendente. É necessária uma versão compatível.",
+      "version": "Integração não publicada. A versão pública 1.46.1 não inclui Gemini. Alvo: Gemini CLI 0.62.0; consulte o guia para a validação nativa por sistema. É necessária uma versão compatível.",
       "guide": "Configuração e limites do candidato Gemini",
       "configure": "Consulte o guia Gemini para consentimento dos canais e configurações compartilhadas; nenhum MCP ou skill instalado. Os alertas integrados podem duplicar. Escolha uma fonte desktop ou somente webhooks; as configurações integradas não são alteradas."
     },

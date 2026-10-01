@@ -27,7 +27,7 @@
       "gemini": "Candidat Gemini CLI : alertes silencieuses de tour terminé et de permission d’outil. Un tour terminé ne signifie ni réussite ni réponse finale. Sans son, focus au clic, questions, erreurs, plans, revues ni parité pour les agents imbriqués."
     },
     "gemini": {
-      "version": "Intégration non publiée. La version publique 1.46.0 n’inclut pas Gemini. Cible : Gemini CLI 0.62.0 ; qualification native en attente. Une version compatible est nécessaire.",
+      "version": "Intégration non publiée. La version publique 1.46.1 ne contient pas Gemini. Cible : Gemini CLI 0.62.0 ; consultez le guide pour la validation native par système. Une version compatible est nécessaire.",
       "guide": "Configuration et limites du candidat Gemini",
       "configure": "Consultez le guide Gemini pour le consentement aux canaux et les réglages partagés ; aucun outil MCP ni skill installé. Les alertes intégrées peuvent faire doublon. Choisissez une source bureau ou uniquement les webhooks ; les réglages intégrés restent inchangés."
     },

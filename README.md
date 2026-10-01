@@ -33,7 +33,7 @@ Desktop notifications for **Claude Code, Codex CLI and OpenCode**. Know when a t
 
 OpenCode provides silent, generic completion, question, permission and error alerts for root sessions, with explicit desktop/webhook consent. Tested with OpenCode **1.18.33**; V2 is not supported. [OpenCode setup, privacy and limits](docs/opencode-notifications.md)
 
-Gemini CLI is the fourth agent in the **unreleased candidate**. Public release **1.46.0 does not include Gemini**. Planned qualification targets exact **Gemini CLI 0.62.0**; native qualification is pending. Its two fixed alerts mean a turn completed (`AfterAgent`, not success or a final-only answer) or tool permission was requested (`Notification: ToolPermission`). Silent desktop and explicitly opted webhooks only; no sound, click-to-focus, question/error/plan/review alerts or nested-agent parity. Built-in Gemini notifications may duplicate desktop alerts; choose one desktop source or webhook-only. Setup leaves built-in settings unchanged. [Candidate setup and qualification status](docs/gemini-notifications.md)
+Gemini CLI is the fourth agent in the **unreleased candidate**. Public release **1.46.1 does not include Gemini**. The candidate was tested with exact **Gemini CLI 0.62.0** on macOS arm64 and Linux, including real hooks, tool-permission UI and delivery. Both Mac banners were visually confirmed. [Qualification by OS](docs/gemini-notifications.md#qualification-status). Its two fixed alerts mean a turn completed (`AfterAgent`, not success or a final-only answer) or tool permission was requested (`Notification: ToolPermission`). Silent desktop and explicitly opted webhooks only; no sound, click-to-focus, question/error/plan/review alerts or nested-agent parity. Built-in Gemini notifications may duplicate desktop alerts; choose one desktop source or webhook-only. Setup leaves built-in settings unchanged. [Candidate setup and qualification status](docs/gemini-notifications.md)
 
 ## Features
 
@@ -72,7 +72,7 @@ Use `claude,opencode` or `codex,opencode` for a mixed pair. OpenCode channel fla
 
 Run the same command to update. [Guided installer](https://777genius.github.io/agent-notifications/#install) · [Manual installation, updates and removal](docs/INSTALLATION.md)
 
-For the future Gemini-compatible release, the planned selectors are `--product gemini` and `--products claude,codex,opencode,gemini`. Shared desktop/webhook flags apply to each selected Gemini/OpenCode observer with separate consent. Current release 1.46.0 cannot install Gemini; use the [candidate guide](docs/gemini-notifications.md) until qualification and release are complete. Claude/Codex portable MCP and skill setup does not apply to Gemini.
+For the future Gemini-compatible release, the planned selectors are `--product gemini` and `--products claude,codex,opencode,gemini`. Shared desktop/webhook flags apply to each selected Gemini/OpenCode observer with separate consent. Current release 1.46.1 cannot install Gemini; use the [candidate guide](docs/gemini-notifications.md) until qualification and release are complete. Claude/Codex portable MCP and skill setup does not apply to Gemini.
 
 On a release with the portable setup wizard, the public installer also installs an MCP server
 and the `agent-notify` skill for each selected client. In a new Claude Code or Codex session,

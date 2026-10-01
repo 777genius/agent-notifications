@@ -27,7 +27,7 @@
       "gemini": "Gemini-CLI-Kandidat: lautlose Meldungen bei abgeschlossenem Dialogschritt und Werkzeugfreigabe. Ein abgeschlossener Schritt bedeutet weder Erfolg noch endgültige Antwort. Kein Ton, Klickfokus, Fragen-, Fehler-, Plan-, Review- oder gleichwertiger Unteragenten-Support."
     },
     "gemini": {
-      "version": "Integration unveröffentlicht. Version 1.46.0 enthält Gemini nicht. Ziel: Gemini CLI 0.62.0; native Prüfung ausstehend. Eine kompatible Version ist erforderlich.",
+      "version": "Integration unveröffentlicht. Version 1.46.1 enthält Gemini nicht. Ziel: Gemini CLI 0.62.0; native Prüfergebnisse je Betriebssystem stehen in der Anleitung. Eine kompatible Version ist erforderlich.",
       "guide": "Gemini-Kandidat: Einrichtung und Grenzen",
       "configure": "Kanalzustimmung und gemeinsame Einstellungen stehen im Gemini-Leitfaden; kein MCP-Werkzeug oder Skill. Integrierte Meldungen können doppelt erscheinen. Eine Desktop-Quelle oder nur Webhooks wählen; integrierte Einstellungen bleiben erhalten."
     },

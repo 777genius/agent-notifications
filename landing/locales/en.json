@@ -291,7 +291,7 @@
       "gemini": "Gemini CLI candidate: silent turn-completed and tool-permission alerts. A completed turn does not imply success or a final answer. No sound, click-to-focus, question, error, plan, review or nested-agent parity."
     },
     "gemini": {
-      "version": "Unreleased integration. Public release 1.46.0 does not include Gemini. Target Gemini CLI 0.62.0; native qualification pending. A compatible release is required.",
+      "version": "Unreleased integration. Public release 1.46.1 does not include Gemini. Target Gemini CLI 0.62.0; see the guide for native qualification by OS. A compatible release is required.",
       "guide": "Gemini candidate setup and limits",
       "configure": "Use the Gemini guide for channel consent and shared settings; no MCP tool or skill is installed. Built-in Gemini notifications can duplicate desktop alerts. Choose one desktop source or webhook-only; built-in settings are not changed."
     },

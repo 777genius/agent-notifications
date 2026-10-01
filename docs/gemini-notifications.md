@@ -1,10 +1,11 @@
 # Gemini CLI notifications (unreleased candidate)
 
-Public Agent Notifications **1.46.0 does not contain Gemini support**. This guide
+Public Agent Notifications **1.46.1 does not contain Gemini support**. This guide
 covers the candidate integration; it requires a compatible release or an exact,
 checked candidate bundle supplied for qualification. No release version is assigned
-here. The planned qualification target is **Gemini CLI 0.62.0**. Native qualification
-is pending; source inspection and injected hook tests are not native CLI proof.
+here. The candidate was tested with exact **Gemini CLI 0.62.0** on macOS arm64
+and Linux. Tests use the real CLI and its permission UI with a deterministic local
+provider; they do not call the live Google model service. See qualification by OS below.
 
 ## Two fixed alerts
 
@@ -28,8 +29,8 @@ Gemini capabilities. Claude/Codex capabilities and OpenCode limits remain separa
 Install Gemini CLI first. For candidate qualification, use the orchestrator's checked
 bundle and its direct built-candidate setup instructions in an isolated TEST profile.
 Do not run the public loader or a local `bin/setup.sh` to qualify candidate bytes:
-those paths resolve public releases. Exact helper paths, artifact hashes and native
-results will accompany the qualification evidence; they are pending here.
+those paths resolve public releases. The checked artifact and dependency hashes must match its qualification record.
+The macOS test uses our existing signed ClaudeNotifier helper and delivery backend.
 
 After a compatible release is available, the planned public selector is:
 
@@ -37,7 +38,7 @@ After a compatible release is available, the planned public selector is:
 curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product gemini --desktop
 ```
 
-**This command does not install Gemini support from current release 1.46.0.** For
+**This command does not install Gemini support from current release 1.46.1.** For
 webhook-only delivery, replace `--desktop` with `--webhook`; for both, specify both.
 Choose at least one channel. Webhook URLs must be configured separately.
 
@@ -62,15 +63,15 @@ manually, or use Agent Notifications for webhooks only. Setup does not switch of
 Gemini's built-in notifications or modify their settings.
 
 Use the candidate installer's reported configuration path and Gemini guide rather
-than the Claude/Codex portable MCP wizard. The planned `agents.gemini` profile
+than the Claude/Codex portable MCP wizard. The candidate `agents.gemini` profile
 controls the two supported statuses and allowed delivery channels. Shared sound or
 focus settings cannot add those capabilities. Channel consent belongs to Gemini;
 OpenCode consent is separate. Webhook consent alone does not configure an endpoint.
 
 Restart Gemini after setup or update so its effective hooks are reloaded. Use the
 checked candidate's printed inspect, channel-change, remove and recovery commands;
-exact lifecycle commands await installer qualification. Removal must revoke Gemini
-consent and remove only owned hooks/runtime files, preserving foreign settings and
+installation, repeat, update, inspect and removal were exercised on Mac and Linux.
+Removal revokes Gemini consent and remove only owned hooks/runtime files, preserving foreign settings and
 other agents. An ownership conflict may retain disabled files for inspection rather
 than overwrite another writer's edits.
 
@@ -78,14 +79,18 @@ than overwrite another writer's edits.
 
 | Evidence layer | Status |
 | --- | --- |
-| Exact Gemini CLI 0.62.0 native hooks and permission UI | Pending qualification |
-| macOS actual native/desktop test | Available host; actual evidence pending from orchestrator |
-| Windows native shell / notification API / visual desktop | Unverified here; no visual host available to this worker |
-| Linux native shell / notification API / visual desktop | Unverified here; no visual host available to this worker |
-| Compatible public Agent Notifications release | Pending; 1.46.0 excludes Gemini |
+| Exact Gemini CLI 0.62.0 native hooks and permission UI | Passed on macOS arm64 and Linux amd64/arm64, with a local provider fixture |
+| macOS arm64 desktop and visual test | Real CLI delivered completion and tool-permission alerts through our signed helper; macOS accepted both and the owner confirmed seeing both |
+| Windows amd64 native shell / notification API / visual desktop | Native qualification in progress; notification API and visual desktop unverified |
+| Linux amd64/arm64 native shell and webhook / desktop | Native CLI and production install/update/remove/webhook passed; desktop API and visual desktop unverified |
+| macOS Intel native CLI | Qualification in progress; visual desktop unverified |
+| Compatible public Agent Notifications release | Pending; 1.46.1 excludes Gemini |
 
 A macOS observation will not imply Windows/Linux GUI verification. Injected
 contracts, actual CLI with a local provider fixture (`native_cli/provider_substitute`)
-and live model-service tests must be reported separately. This worker does not
-launch agent runtimes or claim native evidence; the orchestrator supplies final
-qualification and any resulting copy updates.
+and live model-service tests are reported separately. Native tests covered equal
+turns, permission approval/denial/cancellation, recovery to another turn, changed
+executable updates and removal while Gemini remained running. They also verified
+that a damaged receipt revokes consent, blocks new webhook delivery and preserves
+foreign hooks. macOS additionally verified desktop delivery while webhooks were
+disabled. Interrupted crash recovery, resume and nested sessions remain unqualified.
