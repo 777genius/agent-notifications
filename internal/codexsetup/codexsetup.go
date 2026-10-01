@@ -497,6 +497,14 @@ func Run(opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	if !opts.Remove {
+		regCtx, regCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		warning := reconcileNativeRegistration(regCtx, opts.ControlRoot)
+		regCancel()
+		if warning != nil {
+			result.Warnings = append(result.Warnings, "runtime committed; native registration reconciliation incomplete: "+warning.Error())
+		}
+	}
 	if !opts.Remove && !self {
 		if err := dropStaleBinFiles(destination, files); err != nil {
 			return Result{}, err
@@ -510,11 +518,6 @@ func Run(opts Options) (Result, error) {
 		}
 		if err := initializeConfig(source, retryBinary); err != nil {
 			return result, err
-		}
-	}
-	if !opts.Remove {
-		if warning := reconcileNativeRegistration(ctx, opts.ControlRoot); warning != nil {
-			result.Warnings = append(result.Warnings, "runtime committed; native registration reconciliation incomplete: "+warning.Error())
 		}
 	}
 	return result, nil

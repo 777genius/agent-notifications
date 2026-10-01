@@ -303,7 +303,10 @@ func installRuntime(args []string, output io.Writer) error {
 	if err == nil {
 		_, _ = fmt.Fprintf(output, "managed-runtime committed generation=%d\n", ledger.Generation)
 		if !*remove {
-			if warning := reconcileRuntimeNativeRegistration(ctx, *control); warning != nil {
+			regCtx, regCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			warning := reconcileRuntimeNativeRegistration(regCtx, *control)
+			regCancel()
+			if warning != nil {
 				_, _ = fmt.Fprintf(output, "warning: runtime committed; native registration reconciliation incomplete: %v\n", warning)
 			}
 		}

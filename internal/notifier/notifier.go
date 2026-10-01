@@ -295,7 +295,7 @@ func claudeNotifierAppPath(notifierPath string) (string, bool) {
 	bundlePath = strings.TrimSuffix(bundlePath, string(filepath.Separator))
 	name := filepath.Base(bundlePath)
 	if name != "ClaudeNotifier.app" && name != "AgentNotifications.app" &&
-		!(strings.HasPrefix(name, "generation-") && strings.HasSuffix(name, ".app")) {
+		(!strings.HasPrefix(name, "generation-") || !strings.HasSuffix(name, ".app")) {
 		return "", false
 	}
 
