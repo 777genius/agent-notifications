@@ -1,7 +1,9 @@
 package geminievent
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -53,9 +55,13 @@ func TestCacheInterprocessClaim(t *testing.T) {
 			if value := os.Getenv("SystemRoot"); value != "" {
 				cmd.Env = append(cmd.Env, "SystemRoot="+value)
 			}
-			data, err := cmd.CombinedOutput()
+			// Coverage-instrumented children can warn on stderr at os.Exit.
+			// Keep that diagnostic stream separate from the exact stdout protocol.
+			var diagnostics bytes.Buffer
+			cmd.Stderr = &diagnostics
+			data, err := cmd.Output()
 			if err != nil {
-				t.Errorf("cache child: %v / %s", err, data)
+				t.Errorf("cache child: %v / stdout %q / stderr %q", err, data, diagnostics.String())
 				return
 			}
 			switch string(data) {
@@ -63,7 +69,7 @@ func TestCacheInterprocessClaim(t *testing.T) {
 				claimed.Add(1)
 			case "duplicate":
 			default:
-				t.Errorf("unexpected cache child classification: %s", data)
+				t.Errorf("unexpected cache child classification: %q / stderr %q", data, diagnostics.String())
 			}
 		}()
 	}
@@ -80,9 +86,10 @@ func TestCacheWindowBoundAndBindingIsolation(t *testing.T) {
 	ctx := context.Background()
 	claim := func(want bool) {
 		t.Helper()
+		start := time.Now()
 		got, err := c.Cache.claim(ctx, c.Binding, facts, DesktopChannel)
 		if err != nil || got != want {
-			t.Fatalf("claim = %v/%v, want %v", got, err, want)
+			t.Fatalf("claim marker %q = %v/%v, want %v, after %s", facts.Timestamp, got, err, want, time.Since(start))
 		}
 	}
 	claim(true)
@@ -93,11 +100,36 @@ func TestCacheWindowBoundAndBindingIsolation(t *testing.T) {
 	claim(true)
 	c.Clock.(*testClock).seconds.Store(70)
 	claim(true) // Window expires at sixty seconds; no replay of prior observations.
-	for i := range cacheLimit + 1 {
-		facts.Timestamp = "marker-" + strconv.Itoa(i)
-		claim(true)
-	}
+	// Seed a full on-disk fixture instead of requiring 257 synchronous durable
+	// writes to each meet the production claim budget on a busy CI host. Real
+	// claims below still validate, read, evict and publish through the OS adapter;
+	// cache_unavailable is never retried or accepted as success.
 	data, err := readCache(c.Cache.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state cacheState
+	if err = json.Unmarshal(data, &state); err != nil {
+		t.Fatal(err)
+	}
+	state.Entries = nil
+	for i := range cacheLimit {
+		facts.Timestamp = "marker-" + strconv.Itoa(i)
+		state.Entries = append(state.Entries, cacheEntry{marker(c.Binding, facts), 130, 1})
+	}
+	data, err = json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = writeCache(c.Cache.Root, data); err != nil {
+		t.Fatal(err)
+	}
+	claim(false) // A retained marker is still a duplicate at capacity.
+	facts.Timestamp = "marker-0"
+	claim(false)
+	facts.Timestamp = "marker-" + strconv.Itoa(cacheLimit)
+	claim(true) // A distinct marker displaces the first equally old entry.
+	data, err = readCache(c.Cache.Root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,6 +139,7 @@ func TestCacheWindowBoundAndBindingIsolation(t *testing.T) {
 	}
 	facts.Timestamp = "marker-0"
 	claim(true) // Eviction makes no exact-once promise.
+	claim(false)
 }
 
 // Red condition: a held interprocess lock waits beyond its 250ms allowance,
