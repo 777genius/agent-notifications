@@ -29,6 +29,8 @@
 
 Desktop notifications for **Claude Code, Codex CLI and OpenCode**. Know when a task finishes, an agent needs input, or a tool needs approval. Claude and Codex also support sounds and click-to-focus.
 
+Built with [Universal Agent Plugins](https://github.com/777genius/universal-agent-plugins). [Create your own plugin for multiple AI agents](https://github.com/777genius/universal-agent-plugins#build-plugins).
+
 OpenCode provides silent, generic completion, question, permission and error alerts for root sessions, with explicit desktop/webhook consent. Tested with OpenCode **1.18.33**; V2 is not supported. [OpenCode setup, privacy and limits](docs/opencode-notifications.md)
 
 ## Features
