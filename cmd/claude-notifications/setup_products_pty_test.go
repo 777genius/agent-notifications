@@ -779,7 +779,7 @@ func TestBootstrapPartialProgress(t *testing.T) {
 }
 func (f *bootstrapFixture) assertConsumer(id string, present bool) {
 	f.t.Helper()
-	data, err := os.ReadFile(filepath.Join(f.home, "config", "agent-notifications", "ownership.json"))
+	data, err := os.ReadFile(filepath.Join(f.control(), "ownership.json"))
 	if err != nil {
 		f.t.Fatal(err)
 	}
