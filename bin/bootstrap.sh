@@ -1720,7 +1720,7 @@ install_gemini() {
     runtime="$root/runtime"
     if [ "$os" = windows ]; then
         command -v cygpath >/dev/null 2>&1 || { echo "Git Bash cygpath is required for native Windows paths." >&2; return 1; }
-        binary=$(cygpath -m "$binary") || return 1
+        binary=$(cygpath -w "$binary") || return 1
         runtime=$(cygpath -m "$runtime") || return 1
     fi
     set -- setup-gemini install --binary "$binary" "${OPENCODE_ARGS[@]}"

@@ -100,7 +100,7 @@ HOST_VERSION
     cat > "$SANDBOX/gemini-version-cli/gemini" <<'GEMINI_VERSION'
 #!/bin/bash
 [ "$#" -eq 1 ] && [ "$1" = --version ] || exit 2
-[ "$PWD" = "$HOME" ] && [ "$USERPROFILE" = "$HOME" ] && [ "$GEMINI_CLI_HOME" = "$HOME" ] || exit 3
+[ "$PWD" -ef "$HOME" ] && [ "$USERPROFILE" -ef "$HOME" ] && [ "$GEMINI_CLI_HOME" -ef "$HOME" ] || exit 3
 [ -z "${GEMINI_SETUP_ENV_CANARY:-}" ] || exit 4
 for file in "$HOME/.gemini/.env" "$HOME/.env"; do
     [ -f "$file" ] && [ ! -s "$file" ] || exit 5
@@ -454,7 +454,9 @@ LIFECYCLE_ARGV
     bootstrap_release_os_arch() { printf 'windows amd64\n'; }
     native_control="C:/Gemini TEST control ' \$literal"
     cygpath() {
-        [ "$1" = -m ] || return 1
+        # The binary needs native backslashes; rendered control paths use -m.
+        # Both cross this inert argv boundary without executing a native host.
+        [ "$1" = -m ] || [ "$1" = -w ] || return 1
         case "$2" in
             "$gemini_control") printf '%s\n' "$native_control" ;;
             "$gemini_control/runtime") printf '%s/runtime\n' "$native_control" ;;
@@ -836,27 +838,18 @@ assert (live/'bin/claude-notifications').read_text() == 'stale'
 dispatch = (root / 'bin/bootstrap.sh').read_text(encoding='utf-8').replace('main "$@"', '')
 dispatch += '\ncheck_prerequisites() { :; }\nresolve_bootstrap_release() { :; }\nstage_historical_baselines() { :; }\nstage_config_helper() { :; }\nconfig_preflight() { :; }\ninitialize_config() { :; }\ninstall_claude() { echo CLAUDE_ADAPTER; }\ninstall_codex() { echo CODEX_ADAPTER; }\nmain "$@"\n'
 (web / 'dispatch.sh').write_bytes(dispatch.encode('utf-8'))
-for choice, success in ([('1',True), ('2',True), ('3',True), ('invalid',False)] if os.name != 'nt' else []):
-    entry = '/dispatch.sh' if choice in ['1', '3'] else '/bootstrap.sh'
-    pid, fd = pty.fork()
-    if pid == 0:
-        os.execve(bash,[bash,'-c', 'curl -fsSL '+base+entry+' | bash'],env)
-    output = b''; sent = False; deadline = time.monotonic()+20
-    while time.monotonic() < deadline:
-        if select.select([fd],[],[],0.1)[0]:
-            try: chunk = os.read(fd,65536)
-            except OSError: break
-            if not chunk: break
-            output += chunk
-            if b'Choice:' in output and not sent:
-                os.write(fd,(choice+'\n').encode()); sent=True
-    else:
-        os.kill(pid,9); raise AssertionError('PTY timeout')
-    _, status = os.waitpid(pid,0); os.close(fd)
-    assert sent and (os.waitstatus_to_exitcode(status)==0)==success, output.decode()
-    if choice in ['1','3']: assert b'CLAUDE_ADAPTER' in output
-    if choice == '1': assert b'CODEX_ADAPTER' not in output
-    if choice == '3': assert b'CODEX_ADAPTER' in output
+# The native SelectMany UI is independently exercised against the actual
+# candidate by bootstrap_opencode_test.sh. This fixture checks shell routing.
+for product, success in [('claude',True), ('codex',True), ('both',True), ('invalid',False)]:
+    entry = '/dispatch.sh' if product in ['claude', 'both', 'invalid'] else '/bootstrap.sh'
+    command = 'curl -fsSL '+base+entry+' | bash -s -- --product '+shlex.quote(product)
+    result = subprocess.run([bash,'-c',command],env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=20)
+    output = result.stdout
+    assert (result.returncode==0)==success, output.decode()
+    if product in ['claude','both']: assert b'CLAUDE_ADAPTER' in output
+    if product == 'claude': assert b'CODEX_ADAPTER' not in output
+    if product == 'both': assert b'CODEX_ADAPTER' in output
+    if product == 'invalid': assert b'CLAUDE_ADAPTER' not in output and b'CODEX_ADAPTER' not in output
 assert not list(pathlib.Path(env['TMPDIR']).glob('bootstrap-codex-*'))
 assert not list(pathlib.Path(env['TMPDIR']).glob('bootstrap-release-*'))
 # Protected flow E2E. Real shell orchestration and local downloads; explicit

@@ -43,6 +43,81 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
+NODE_ERROR_CODES = frozenset(("ERR_DLOPEN_FAILED", "MODULE_NOT_FOUND", "ERR_MODULE_NOT_FOUND",
+                             "ERR_PACKAGE_PATH_NOT_EXPORTED", "ERR_REQUIRE_ESM", "ERR_INVALID_ARG_TYPE",
+                             "ERR_INVALID_ARG_VALUE", "ENOENT", "EACCES", "EPERM", "EINVAL", "ENOEXEC"))
+
+
+def version_probe(code, out, err, redactions=()):
+    """Only for the isolated public --version startup, never a session/PTY stream."""
+    codes = sorted(c for c in NODE_ERROR_CODES if re.search(rb"\b" + c.encode() + rb"\b", err))
+    facts = {"exit_code": code, "stdout_bytes": len(out), "stdout_sha256": digest(out),
+             "stderr_bytes": len(err), "stderr_sha256": digest(err), "Node_error_codes": codes}
+    if code == 0:
+        return facts
+    facts["startup_classification"] = "node_startup_error" if codes else "unclassified_public_startup_error"
+    if "ENOENT" in codes:
+        # Fixed public startup operations only; never emit arbitrary file names.
+        operations = ("spawn", "spawnSync", "open", "mkdir", "stat", "lstat", "access", "scandir", "chdir", "realpath", "dlopen", "uv_cwd", "uv_os_get_passwd", "uv_os_homedir", "uv_exepath")
+        facts["missing_operations"] = sorted(op for op in operations
+            if re.search(rb"\b" + op.encode() + rb"\b", err))
+        commands = ("git", "ioreg", "security", "uname", "whoami", "bash", "zsh", "node", "rg", "sysctl")
+        facts["missing_known_commands"] = sorted(command for command in commands
+            if re.search(rb"\bspawn(?:Sync)? (?:[^\r\n ]*/)?" + command.encode() + rb" ENOENT\b", err))
+    # One bounded Error header only; stack, source excerpt and all other lines
+    # are excluded. Do not expose session/provider/hook text even in this probe.
+    text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", err.decode("utf-8", "replace"))
+    lines = (line.removeprefix("An unexpected critical error occurred:").lstrip().removeprefix("[") for line in text.splitlines())
+    header = r"(?:(?:[A-Za-z]*Error)(?: \[[A-Z_]+\])?|ENOENT|EACCES|EPERM|EINVAL|ENOEXEC):"
+    line = next((match.group(0).strip() for candidate in lines
+                 if (match := re.match(r"^\s*" + header + r"[^\r\n]*", candidate))), "")
+    if re.fullmatch(r"ReferenceError: (?:File|Blob|ReadableStream|fetch|crypto|navigator) is not defined", line):
+        facts["startup_classification"] = "public_runtime_global_missing"
+    if not line or len(line) > 512:
+        facts["startup_header"] = "absent" if not line else "overlong"
+        return facts
+    for root in sorted((str(p) for p in redactions), key=len, reverse=True):
+        for spelling in {root, root.replace("\\", "/"), root.replace("/", "\\")}:
+            line = re.sub(re.escape(spelling), "<TEST-path>", line, flags=re.I)
+    line = re.sub(r"(?:https?|file)://[^\s\"'<>]+", "<URL>", line, flags=re.I)
+    line = re.sub(r"\b[A-Za-z]:[\\/][^\r\n\"'<>]+", "<path>", line)
+    line = re.sub(r"(?<![A-Za-z0-9])/(?:[^\s\"'<>:]+)", "<path>", line)
+    line = re.sub(r"<TEST-path>[\\/][^\r\n\"'<>]*", "<TEST-path>", line)
+    if re.search(r"prompt|session|transcript|provider|hook|authorization|api.?key|token|secret", line, re.I):
+        facts["startup_header"] = "sensitive"
+        return facts
+    facts["startup_header"] = "accepted" if all(32 <= ord(c) <= 126 for c in line) else "nonascii"
+    if facts["startup_header"] == "accepted":
+        facts["startup_error_line"] = line[:240]
+    return facts
+
+
+BRIDGE_ERRORS = frozenset(("bridge_validation_error", "bridge_node_error", "bridge_syntax_error",
+                          "bridge_unclassified_error", "bridge_protocol_error", "PTY_stop_failed",
+                          "PTY_shutdown_unconfirmed", "native_watchdog_timeout", "terminal_output_limit"))
+BRIDGE_STAGES = frozenset(("protocol", "installation_validation", "native_module_load",
+                          "environment_validation", "native_spawn", "loaded_backend_validation"))
+BRIDGE_VALIDATIONS = frozenset(("duplicate_start", "TEST_installation_required", "CLI_physical_path_required",
+    "CLI_package_missing", "CLI_PTY_pin_mismatch", "PTY_outside_explicit_installation", "PTY_identity_mismatch",
+    "environment_not_allowlisted", "TEST_cwd_required", "home_mismatch", "synthetic_key_required",
+    "loopback_provider_required", "watchdog_bounds", "native_PTY_backend_unverified",
+    "bridge_input_limit", "unknown_case", "write_bounds", "unknown_operation"))
+
+
+def bridge_event_facts(item):
+    """Project only fixed bridge facts; never trust arbitrary native error fields."""
+    facts = {"error": item.get("error") if item.get("error") in BRIDGE_ERRORS else "bridge_protocol_error"}
+    if item.get("stage") in BRIDGE_STAGES:
+        facts["stage"] = item["stage"]
+    if type(item.get("native_child_started")) is bool:
+        facts["native_child_started"] = item["native_child_started"]
+    if facts["error"] == "bridge_node_error" and item.get("node_error_code") in NODE_ERROR_CODES:
+        facts["node_error_code"] = item["node_error_code"]
+    if facts["error"] == "bridge_validation_error" and item.get("validation") in BRIDGE_VALIDATIONS:
+        facts["validation"] = item["validation"]
+    return facts
+
+
 def physical(value, exists=True):
     p = Path(value)
     require(p.is_absolute(), "absolute_path_required")
@@ -56,6 +131,67 @@ def inside(p, root):
     return p == root or root in p.parents
 
 
+
+def private_windows_lab(root):
+    """Give this just-created TEST root a protected, inherited native DACL."""
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    api = ctypes.WinDLL("advapi32", use_last_error=True)
+    pointer = ctypes.c_void_p
+    kernel.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel.LocalFree.argtypes = (pointer,)
+    kernel.LocalFree.restype = pointer
+    api.OpenProcessToken.argtypes = (wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE))
+    api.GetTokenInformation.argtypes = (wintypes.HANDLE, ctypes.c_int, pointer, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD))
+    api.ConvertSidToStringSidW.argtypes = (pointer, ctypes.POINTER(pointer))
+    api.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD,
+                                                                       ctypes.POINTER(pointer), ctypes.POINTER(wintypes.DWORD))
+    api.GetSecurityDescriptorDacl.argtypes = (pointer, ctypes.POINTER(wintypes.BOOL), ctypes.POINTER(pointer), ctypes.POINTER(wintypes.BOOL))
+    api.SetNamedSecurityInfoW.argtypes = (wintypes.LPWSTR, ctypes.c_int, wintypes.DWORD, pointer, pointer, pointer, pointer)
+    api.SetNamedSecurityInfoW.restype = wintypes.DWORD
+    api.GetNamedSecurityInfoW.argtypes = (wintypes.LPWSTR, ctypes.c_int, wintypes.DWORD, pointer, pointer,
+                                        pointer, pointer, ctypes.POINTER(pointer))
+    api.GetNamedSecurityInfoW.restype = wintypes.DWORD
+    api.GetSecurityDescriptorControl.argtypes = (pointer, ctypes.POINTER(wintypes.WORD), ctypes.POINTER(wintypes.DWORD))
+    token, sid_text, descriptor, observed = wintypes.HANDLE(), pointer(), pointer(), pointer()
+    try:
+        require(api.OpenProcessToken(kernel.GetCurrentProcess(), 0x0008, ctypes.byref(token)), "TEST_ACL_token_failed")
+        size = wintypes.DWORD()
+        api.GetTokenInformation(token, 1, None, 0, ctypes.byref(size))
+        require(0 < size.value < 65536, "TEST_ACL_token_size")
+        data = ctypes.create_string_buffer(size.value)
+        require(api.GetTokenInformation(token, 1, data, size.value, ctypes.byref(size)), "TEST_ACL_user_failed")
+        sid = ctypes.cast(data, ctypes.POINTER(pointer))[0]
+        require(api.ConvertSidToStringSidW(sid, ctypes.byref(sid_text)), "TEST_ACL_SID_failed")
+        current = ctypes.wstring_at(sid_text)
+        sddl = "O:" + current + "D:P(A;OICI;FA;;;" + current + ")(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"
+        require(api.ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, 1, ctypes.byref(descriptor), None),
+                "TEST_ACL_descriptor_failed")
+        present, defaulted, dacl = wintypes.BOOL(), wintypes.BOOL(), pointer()
+        require(api.GetSecurityDescriptorDacl(descriptor, ctypes.byref(present), ctypes.byref(dacl), ctypes.byref(defaulted))
+                and present.value and dacl, "TEST_ACL_DACL_missing")
+        # The modern API explicitly supports protection; the legacy SetFileSecurity
+        # call did not qualify descendant inheritance on the actual Windows runner.
+        require(api.SetNamedSecurityInfoW(str(root), 1, 0x80000005, sid, None, dacl, None) == 0,
+                "TEST_ACL_apply_failed")
+        require(api.GetNamedSecurityInfoW(str(root), 1, 4, None, None, None, None, ctypes.byref(observed)) == 0,
+                "TEST_ACL_readback_failed")
+        control, revision = wintypes.WORD(), wintypes.DWORD()
+        require(api.GetSecurityDescriptorControl(observed, ctypes.byref(control), ctypes.byref(revision))
+                and control.value & 0x1000, "TEST_ACL_protection_missing")
+    finally:
+        if observed:
+            kernel.LocalFree(observed)
+        if descriptor:
+            kernel.LocalFree(descriptor)
+        if sid_text:
+            kernel.LocalFree(sid_text)
+        if token:
+            kernel.CloseHandle(token)
+
+
 def new_lab(value):
     p = physical(value, False)
     require(any(re.fullmatch(r"TEST(?:[-_].*)?", x) for x in p.parts), "TEST_root_required")
@@ -66,9 +202,14 @@ def new_lab(value):
     require(p.parent.is_dir(), "lab_parent_missing")
     require(not any((ancestor / ".git").exists() for ancestor in p.parents), "existing_repository_ancestor_forbidden")
     p.mkdir(mode=0o700)
+    if os.name == "nt":
+        private_windows_lab(p)
     (p / MARKER).write_text("owned disposable Gemini native TEST\n")
     for name in ("profile/.gemini", "tmp", "xdg/config", "xdg/cache", "xdg/data", "xdg/state", "an-control", "an-runtime"):
-        (p / name).mkdir(parents=True, mode=0o700)
+        directory = p / name
+        directory.mkdir(parents=True, mode=0o700)
+        if os.name == "nt":
+            private_windows_lab(directory)
     for name in ("profile/.env", "profile/.gemini/.env", "profile/GEMINI.md"):
         (p / name).write_text("")
     # Actual empty git repository, without invoking git or changing history.
@@ -96,11 +237,11 @@ def minimal_env(lab, node, shell, system_root=None):
            "GEMINI_API_KEY": "an-gemini-test-not-a-secret", "GEMINI_FORCE_FILE_STORAGE": "true", "TERM": "xterm-256color"}
     if os.name == "nt":
         require(system_root is not None and shell.name.lower() == "pwsh.exe", "Windows_requires_explicit_pwsh_and_SystemRoot")
-        env.update(SystemRoot=str(physical(system_root)), ComSpec=str(shell))
+        env.update(SystemRoot=str(physical(system_root)), ComSpec=str(shell), PATHEXT=".COM;.EXE;.BAT;.CMD")
         bins.append(str(Path(system_root) / "System32"))
     else:
         require(shell.name == "bash", "Unix_requires_bash")
-        bins += ["/usr/bin", "/bin"]
+        bins += ["/usr/bin", "/bin", "/usr/sbin"]
         env.update(LANG="C.UTF-8", LC_ALL="C.UTF-8")
     env["PATH"] = os.pathsep.join(dict.fromkeys(bins))
     return env
@@ -163,6 +304,7 @@ class Fixture:
         self.counts, self.deliveries, self.error = {}, [], None
         self.server = self.thread = self.connection = None
         self.closed = threading.Event()
+        self.cleanup_classification = None
 
     def arm(self, case):
         require(case in CASES, "unknown_case")
@@ -261,7 +403,7 @@ class Fixture:
         self.url = "http://127.0.0.1:" + str(self.server.server_port)
         return self
 
-    def __exit__(self, *_):
+    def __exit__(self, exc_type, exc, traceback):
         self.closed.set()
         connection = self.connection
         if connection is not None:
@@ -272,7 +414,12 @@ class Fixture:
                 pass
         self.server.server_close()
         self.thread.join(4)
-        require(not self.thread.is_alive(), "server_shutdown_unconfirmed")
+        if self.thread.is_alive():
+            self.cleanup_classification = "server_shutdown_unconfirmed"
+            if exc is None:
+                raise Red(self.cleanup_classification)
+            # Preserve the scenario/setup exception and attach fixed cleanup facts.
+            exc.provider_cleanup_classification = self.cleanup_classification
 
 
 def bounded_process(argv, data, cwd, env, timeout):
@@ -436,6 +583,9 @@ class Terminal:
     def __init__(self, node, executable, install_root, lab, env, ui, timeout):
         self.events, self.seen, self.exit = queue.Queue(), set(), None
         self.child_started = None
+        self.stage, self.case, self.completed_cases = "starting", "plain", 0
+        self.bridge_errors, self.cleanup_errors, self.diagnostics = [], [], set()
+        self.graceful_requested = self.forced_requested = False
         bridge = Path(__file__).with_name("gemini_native_pty.cjs")
         self.p = subprocess.Popen([str(node), str(bridge)], cwd=lab / "profile", env=env,
                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -454,9 +604,40 @@ class Terminal:
                    "cwd": str(lab / "profile"), "env": env, "permissionPattern": ui["permission_pattern"],
                    "timeoutMs": int(timeout * 1000)})
             self.identity = self.wait("ready", 10)
-        except Exception:
-            self.close(graceful=False)
+        except Exception as exc:
+            try:
+                self.close(graceful=False)
+            except Exception:
+                pass  # close records cleanup separately; keep startup primary.
+            exc.bridge_diagnostic = self.failure_facts()
             raise
+
+    def failure_facts(self):
+        return {"stage": self.stage, "case": self.case, "completed_cases": self.completed_cases,
+                "native_child_started": self.child_started, "own_child_exit": self.exit,
+                "bridge_exit_code": self.p.poll(), "errors": self.bridge_errors,
+                "graceful_requested": self.graceful_requested, "forced_requested": self.forced_requested,
+                "cleanup_classifications": self.cleanup_errors[:4], "native_diagnostics": sorted(self.diagnostics)}
+
+    def receive(self, item):
+        if item.get("diagnostic") in ("auth_error", "startup_welcome", "startup_theme", "startup_trust",
+                "startup_update", "startup_model", "startup_terms", "startup_continue", "startup_error",
+                "prompt_seen", "turn_response_seen", "hook_timeout", "hook_command_missing", "hook_parse_error",
+                "hook_python_error", "hook_root_error", "hook_input_error"):
+            self.diagnostics.add(item["diagnostic"])
+        if "error" in item:
+            facts = bridge_event_facts(item)
+            if len(self.bridge_errors) < 4:
+                self.bridge_errors.append(facts)
+            self.stage = facts.get("stage", self.stage)
+            if "native_child_started" in facts:
+                self.child_started = facts["native_child_started"]
+            return facts["error"]
+        if "ready" in item:
+            self.child_started, self.stage = True, "protocol"
+        if "exit" in item:
+            self.exit = item["exit"]
+        return "bridge_closed" if "closed" in item else None
 
     def send(self, message):
         self.p.stdin.write((json.dumps(message) + "\n").encode())
@@ -476,9 +657,8 @@ class Terminal:
     def drain(self):
         while not self.events.empty():
             item = self.events.get_nowait()
-            require("error" not in item and "closed" not in item, item.get("error", "bridge_closed"))
-            if "diagnostic" in item:
-                print(json.dumps({"native_diagnostic": item["diagnostic"]}), flush=True)
+            error = self.receive(item)
+            require(error is None, error)
             if "permission" in item:
                 self.seen.add(item["permission"])
             if "exit" in item:
@@ -491,17 +671,12 @@ class Terminal:
                 item = self.events.get(timeout=0.1)
             except queue.Empty:
                 continue
-            if "native_child_started" in item:
-                self.child_started = item["native_child_started"]
-            if "exit" in item:
-                self.exit = item["exit"]
-            if "ready" in item:
-                self.child_started = True
+            error = self.receive(item)
             if cleanup and "error" in item:
                 continue
             if cleanup and "closed" in item and self.child_started is False:
                 return None
-            require("error" not in item and "closed" not in item, item.get("error", "bridge_closed"))
+            require(error is None, error)
             if key in item:
                 return item[key]
         raise Red("bridge_" + key + "_timeout")
@@ -510,33 +685,45 @@ class Terminal:
         failure = None
         try:
             if graceful and self.exit is None:
+                self.graceful_requested = True
                 self.write_line("/quit")
                 self.exit = self.wait("exit", 8)
             if graceful:
                 require(self.exit is not None and self.exit["code"] == 0, "native_exit_nonzero")
         except Exception as exc:
             failure = exc
+            self.cleanup_errors.append(str(exc) if isinstance(exc, Red) else "bridge_cleanup_error")
         finally:
             if self.exit is None and self.child_started is not False:
                 try:
+                    self.forced_requested = True
                     self.send({"op": "stop"})
                     self.exit = self.wait("exit", 4, cleanup=True)
                 except Exception:
-                    failure = Red("native_shutdown_unconfirmed")
+                    self.cleanup_errors.append("native_shutdown_unconfirmed")
+                    failure = failure or Red("native_shutdown_unconfirmed")
             try:
                 self.p.stdin.close()
                 self.p.wait(timeout=5)
             except (BrokenPipeError, subprocess.TimeoutExpired):
                 self.p.kill()
                 self.p.wait(timeout=2)
-                failure = Red("bridge_shutdown_timeout")
+                self.cleanup_errors.append("bridge_shutdown_timeout")
+                failure = failure or Red("bridge_shutdown_timeout")
             finally:
                 self.p.stdout.close()
+        if failure is None:
+            try:
+                require(self.exit is not None or self.child_started is False, "native_shutdown_unconfirmed")
+                if graceful:
+                    require(not self.exit.get("forced"), "forced_native_shutdown")
+                    require(self.p.returncode == 0, "bridge_exit_nonzero")
+            except Exception as exc:
+                failure = exc
+                self.cleanup_errors.append(str(exc) if isinstance(exc, Red) else "bridge_cleanup_error")
         if failure:
+            failure.bridge_diagnostic = self.failure_facts()
             raise failure
-        require(self.exit is not None or self.child_started is False, "native_shutdown_unconfirmed")
-        if graceful:
-            require(not self.exit.get("forced"), "forced_native_shutdown")
 
 
 def observations(lab):
@@ -552,6 +739,7 @@ def exercise(lab, fixture, terminal, ui, observer=observations):
     """G5 reuses this agent/UI/tool driver; observer must inspect native evidence."""
     results = []
     for case in CASES:
+        terminal.case = case
         if case != "plain":
             fixture.arm(case)
             terminal.send({"op": "watch", "case": case})
@@ -579,10 +767,11 @@ def exercise(lab, fixture, terminal, ui, observer=observations):
         if case in ("approve", "deny", "cancel"):
             require(permission and case in terminal.seen and acted, "actual_permission_UI_missing")
             target = lab / "profile" / ("effect-" + case + ".txt")
-            effect = target.is_file() and target.read_bytes() == b"owned TEST effect\n"
+            effect = target.is_file() and target.read_bytes() == b"owned TEST effect" + os.linesep.encode("ascii")
             require(effect if case == "approve" else not target.exists(), "wrong_TEST_tool_effect")
         results.append({"case": case, "AfterAgent_seen": completion, "permission_UI_seen": permission and case in terminal.seen,
                         "tool_effect_verified": True if case in ("approve", "deny", "cancel") else None})
+        terminal.completed_cases = len(results)
         time.sleep(0.3)  # Hook fires before the UI's next input render.
     rows = observer(lab)
     plain = [x for x in rows if x.get("case") in ("plain", "equal") and x["event"] == "AfterAgent"]
@@ -644,13 +833,22 @@ def main():
         with fixture:
             env["GOOGLE_GEMINI_BASE_URL"] = fixture.url
             (lab / "provider-port").write_text(str(fixture.server.server_port))
-            code, out, _ = bounded_process([str(node), args.gemini_executable, "--version"], b"", lab / "profile", env, 12)
+            manifest["native_version_probe"] = "running"
+            code, out, version_err = bounded_process([str(node), args.gemini_executable, "--version"], b"", lab / "profile", env, 60 if os.name == "nt" else 12)
+            manifest["native_version_probe"] = version_probe(code, out, version_err, (lab, args.cli_install_root, node, node.parent))
             require(code == 0 and out.strip() == VERSION.encode(), "native_version_mismatch")
             fixture.arm("plain")
             terminal = Terminal(node, args.gemini_executable, args.cli_install_root, lab, env, ui, args.timeout)
             try:
                 results, rows = exercise(lab, fixture, terminal, ui)
-            finally:
+            except Exception as exc:
+                try:
+                    terminal.close(graceful=False)
+                except Exception:
+                    pass  # Preserve scenario failure and attach cleanup facts.
+                exc.bridge_diagnostic = terminal.failure_facts()
+                raise
+            else:
                 terminal.close()
             require(settings.read_bytes() == before, "unexpected_settings_mutation")
             manifest.update(native_execution="passed_scenarios", PTY=terminal.identity,
@@ -660,8 +858,16 @@ def main():
                             settings_sha256=digest(before), UI_source_sha256=ui["source_sha256"],
                             own_child_exit=terminal.exit)
     except Exception as exc:
+        manifest["native_execution"] = "failed"
+        if hasattr(exc, "provider_cleanup_classification"):
+            manifest["provider_cleanup_classification"] = exc.provider_cleanup_classification
         manifest["classification"] = str(exc) if isinstance(exc, Red) else "harness_execution_error"
         manifest["exception_type"] = type(exc).__name__
+        if hasattr(exc, "bridge_diagnostic"):
+            manifest["bridge_failure"] = exc.bridge_diagnostic
+        if "fixture" in locals():
+            manifest["provider_endpoints"] = {key: fixture.counts.get(key, 0) for key in
+                ("streamGenerateContent", "generateContent", "countTokens")}
         raise
     finally:
         (lab / "evidence.json").write_text(json.dumps(manifest, indent=2) + "\n")
