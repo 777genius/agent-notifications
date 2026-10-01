@@ -16,6 +16,8 @@ import (
 	"github.com/777genius/agent-notifications/skills"
 )
 
+var reconcileRuntimeNativeRegistration = installruntime.ReconcileNativeRegistration
+
 // The verified staged executable is the sole shell installer mutation adapter.
 // There is no notification delivery, application launch or feature activation.
 func installRuntime(args []string, output io.Writer) error {
@@ -201,27 +203,32 @@ func installRuntime(args []string, output io.Writer) error {
 		*requireNative = true
 	}
 	if !*remove && hasSender {
-		for _, name := range []string{"ClaudeNotifier.app", "terminal-notifier.app"} {
-			candidate := filepath.Join(stage, name)
-			retained := inPlace
-			if _, e := os.Stat(candidate); os.IsNotExist(e) {
-				candidate = filepath.Join(destination, name)
-				retained = true
+		// Exhaust the supplied release before considering any retained helper.
+		// A managed alias in destination must not pin subsequent updates to A.
+		for _, location := range []struct {
+			root     string
+			retained bool
+		}{{stage, inPlace}, {destination, true}} {
+			for _, name := range []string{"AgentNotifications.app", "ClaudeNotifier.app", "terminal-notifier.app"} {
+				candidate := filepath.Join(location.root, name)
+				if _, e := os.Stat(candidate); os.IsNotExist(e) {
+					continue
+				} else if e != nil {
+					return e
+				}
+				if location.retained {
+					native, err = installruntime.StageRetainedNative(ctx, *control, candidate)
+				} else {
+					native, err = installruntime.StageNative(ctx, *control, candidate)
+				}
+				if err != nil {
+					return fmt.Errorf("native package verification failed; obtain the current authenticated release and external attestation before retrying: %w", err)
+				}
+				break
 			}
-			if _, e := os.Stat(candidate); os.IsNotExist(e) {
-				continue
-			} else if e != nil {
-				return e
+			if native != nil {
+				break
 			}
-			if retained {
-				native, err = installruntime.StageRetainedNative(ctx, *control, candidate)
-			} else {
-				native, err = installruntime.StageNative(ctx, *control, candidate)
-			}
-			if err != nil {
-				return fmt.Errorf("native package verification failed; obtain the current authenticated release and external attestation before retrying: %w", err)
-			}
-			break
 		}
 		if native != nil {
 			defer func() {
@@ -295,6 +302,11 @@ func installRuntime(args []string, output io.Writer) error {
 	ledger, err := installruntime.Commit(ctx, req)
 	if err == nil {
 		_, _ = fmt.Fprintf(output, "managed-runtime committed generation=%d\n", ledger.Generation)
+		if !*remove {
+			if warning := reconcileRuntimeNativeRegistration(ctx, *control); warning != nil {
+				_, _ = fmt.Fprintf(output, "warning: runtime committed; native registration reconciliation incomplete: %v\n", warning)
+			}
+		}
 		if *purge {
 			_, _ = fmt.Fprintln(output, "Callback entrypoint purge completed; pending notifications may no longer open targets. Running callbacks are not stopped.")
 		}
