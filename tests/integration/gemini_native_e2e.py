@@ -59,8 +59,8 @@ def version_probe(code, out, err, redactions=()):
     # One bounded Error header only; stack, source excerpt and all other lines
     # are excluded. Do not expose session/provider/hook text even in this probe.
     text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", err.decode("utf-8", "replace"))
-    text = text.replace("An unexpected critical error occurred:", "", 1)
-    line = next((line.strip() for line in text.splitlines()
+    lines = (line.removeprefix("An unexpected critical error occurred:") for line in text.splitlines())
+    line = next((line.strip() for line in lines
                  if re.match(r"^\s*(?:[A-Za-z]*Error)(?: \[[A-Z_]+\])?:", line)), "")
     if re.fullmatch(r"ReferenceError: (?:File|Blob|ReadableStream|fetch|crypto|navigator) is not defined", line):
         facts["startup_classification"] = "public_runtime_global_missing"
@@ -134,8 +134,14 @@ def private_windows_lab(root):
     api.ConvertSidToStringSidW.argtypes = (pointer, ctypes.POINTER(pointer))
     api.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD,
                                                                        ctypes.POINTER(pointer), ctypes.POINTER(wintypes.DWORD))
-    api.SetFileSecurityW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, pointer)
-    token, sid_text, descriptor = wintypes.HANDLE(), pointer(), pointer()
+    api.GetSecurityDescriptorDacl.argtypes = (pointer, ctypes.POINTER(wintypes.BOOL), ctypes.POINTER(pointer), ctypes.POINTER(wintypes.BOOL))
+    api.SetNamedSecurityInfoW.argtypes = (wintypes.LPWSTR, ctypes.c_int, wintypes.DWORD, pointer, pointer, pointer, pointer)
+    api.SetNamedSecurityInfoW.restype = wintypes.DWORD
+    api.GetNamedSecurityInfoW.argtypes = (wintypes.LPWSTR, ctypes.c_int, wintypes.DWORD, pointer, pointer,
+                                        pointer, pointer, ctypes.POINTER(pointer))
+    api.GetNamedSecurityInfoW.restype = wintypes.DWORD
+    api.GetSecurityDescriptorControl.argtypes = (pointer, ctypes.POINTER(wintypes.WORD), ctypes.POINTER(wintypes.DWORD))
+    token, sid_text, descriptor, observed = wintypes.HANDLE(), pointer(), pointer(), pointer()
     try:
         require(api.OpenProcessToken(kernel.GetCurrentProcess(), 0x0008, ctypes.byref(token)), "TEST_ACL_token_failed")
         size = wintypes.DWORD()
@@ -146,12 +152,24 @@ def private_windows_lab(root):
         sid = ctypes.cast(data, ctypes.POINTER(pointer))[0]
         require(api.ConvertSidToStringSidW(sid, ctypes.byref(sid_text)), "TEST_ACL_SID_failed")
         current = ctypes.wstring_at(sid_text)
-        sddl = "D:P(A;OICI;FA;;;" + current + ")(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"
+        sddl = "O:" + current + "D:P(A;OICI;FA;;;" + current + ")(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"
         require(api.ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, 1, ctypes.byref(descriptor), None),
                 "TEST_ACL_descriptor_failed")
-        # DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION.
-        require(api.SetFileSecurityW(str(root), 0x80000004, descriptor), "TEST_ACL_apply_failed")
+        present, defaulted, dacl = wintypes.BOOL(), wintypes.BOOL(), pointer()
+        require(api.GetSecurityDescriptorDacl(descriptor, ctypes.byref(present), ctypes.byref(dacl), ctypes.byref(defaulted))
+                and present.value and dacl, "TEST_ACL_DACL_missing")
+        # The modern API explicitly supports protection; the legacy SetFileSecurity
+        # call did not qualify descendant inheritance on the actual Windows runner.
+        require(api.SetNamedSecurityInfoW(str(root), 1, 0x80000005, sid, None, dacl, None) == 0,
+                "TEST_ACL_apply_failed")
+        require(api.GetNamedSecurityInfoW(str(root), 1, 4, None, None, None, None, ctypes.byref(observed)) == 0,
+                "TEST_ACL_readback_failed")
+        control, revision = wintypes.WORD(), wintypes.DWORD()
+        require(api.GetSecurityDescriptorControl(observed, ctypes.byref(control), ctypes.byref(revision))
+                and control.value & 0x1000, "TEST_ACL_protection_missing")
     finally:
+        if observed:
+            kernel.LocalFree(observed)
         if descriptor:
             kernel.LocalFree(descriptor)
         if sid_text:
@@ -581,7 +599,8 @@ class Terminal:
     def receive(self, item):
         if item.get("diagnostic") in ("auth_error", "startup_welcome", "startup_theme", "startup_trust",
                 "startup_update", "startup_model", "startup_terms", "startup_continue", "startup_error",
-                "prompt_seen", "turn_response_seen"):
+                "prompt_seen", "turn_response_seen", "hook_timeout", "hook_command_missing", "hook_parse_error",
+                "hook_python_error", "hook_root_error", "hook_input_error"):
             self.diagnostics.add(item["diagnostic"])
         if "error" in item:
             facts = bridge_event_facts(item)
@@ -617,8 +636,6 @@ class Terminal:
             item = self.events.get_nowait()
             error = self.receive(item)
             require(error is None, error)
-            if "diagnostic" in item:
-                print(json.dumps({"native_diagnostic": item["diagnostic"]}), flush=True)
             if "permission" in item:
                 self.seen.add(item["permission"])
             if "exit" in item:
