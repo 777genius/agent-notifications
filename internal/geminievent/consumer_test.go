@@ -257,13 +257,18 @@ func TestPermissionPrivatePayloadThroughExistingSender(t *testing.T) {
 func TestRemainingParentDeadlineReachesBackend(t *testing.T) {
 	c, facts, deadline := consumerFixture(t)
 	c.Gate = testGate{channels: Channels{Desktop: true}}
-	parent, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	// Cache durability has its own tests. This boundary verifies the inherited
+	// deadline and cancellation without a short filesystem timing assumption.
+	facts.Timestamp = ""
+	parent, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
+	parentEnd, _ := parent.Deadline()
 	c.Desktop = deliveryFunc(func(ctx context.Context, r notification.Request) notification.Receipt {
 		end, ok := ctx.Deadline()
-		if !ok || time.Until(end) > 50*time.Millisecond || r.Deadline != deadline {
+		if !ok || !end.Equal(parentEnd) || r.Deadline != deadline {
 			t.Errorf("budget refreshed: %+v", r.Deadline)
 		}
+		cancel()
 		<-ctx.Done()
 		return notification.Receipt{Status: "unknown"}
 	})
