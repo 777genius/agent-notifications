@@ -4,9 +4,9 @@ package portablesetup
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/777genius/agent-notifications/internal/installruntime"
@@ -16,7 +16,7 @@ import (
 // enabled=false edit still publishes an intent. Old CommitBinding likewise adds
 // a consumer/locator after reservation. Both must refuse through the kernel CAS.
 func TestBootstrapPolicySameGenerationProtectedCAS(t *testing.T) {
-	for _, boundary := range []string{"reservation", "binding"} {
+	for _, boundary := range []string{"reservation", "binding", "patch", "finalization"} {
 		t.Run(boundary, func(t *testing.T) {
 			ctx := testCtx(t)
 			b, l := bindingFixture(t)
@@ -33,7 +33,7 @@ func TestBootstrapPolicySameGenerationProtectedCAS(t *testing.T) {
 			req := ConfirmedIntent{ControlRoot: b.ControlRoot, RuntimeRoot: b.RuntimeRoot, Owner: b.Owner, ExpectedGeneration: l.Generation, ExpectedPolicy: &observed.Preimage, Action: "install", Targets: []IntentTarget{{Client: "codex", Units: []string{"agent-notify"}}}}
 			service := Service{ExpectedPolicy: &observed.Preimage}
 			var reservation *installruntime.PendingMutation
-			if boundary == "binding" {
+			if boundary != "reservation" {
 				l, reservation, err = service.PublishConfirmedIntent(ctx, req)
 				if err != nil {
 					t.Fatal(err)
@@ -55,12 +55,23 @@ func TestBootstrapPolicySameGenerationProtectedCAS(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			var intent []byte
+			if boundary != "reservation" {
+				intent, err = os.ReadFile(IntentPath(b.ControlRoot))
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
 			if boundary == "reservation" {
 				_, _, err = service.PublishConfirmedIntent(ctx, req)
-			} else {
+			} else if boundary == "binding" {
 				_, err = service.CommitBinding(ctx, Request{Binding: b, ExpectedGeneration: l.Generation, Reservation: reservation})
+			} else if boundary == "patch" {
+				err = service.PatchIntentReceipt(ctx, b.ControlRoot, b.RuntimeRoot, b.Owner, "codex", "TEST-receipt", reservation)
+			} else {
+				_, _, err = service.FinishConfirmedIntent(ctx, req, reservation)
 			}
-			if err == nil || !strings.Contains(err.Error(), "stale explicit policy bytes") {
+			if !errors.Is(err, ErrConcurrentChange) || !errors.Is(err, installruntime.ErrPolicyConflict) {
 				t.Fatalf("manual opt-out passed %s CAS: %v", boundary, err)
 			}
 			after, e := os.ReadFile(filepath.Join(b.ControlRoot, "ownership.json"))
@@ -74,6 +85,12 @@ func TestBootstrapPolicySameGenerationProtectedCAS(t *testing.T) {
 			if boundary == "reservation" {
 				if _, e := os.Lstat(IntentPath(b.ControlRoot)); !os.IsNotExist(e) {
 					t.Fatalf("intent created: %v", e)
+				}
+			}
+			if boundary != "reservation" {
+				after, e = os.ReadFile(IntentPath(b.ControlRoot))
+				if e != nil || !bytes.Equal(after, intent) {
+					t.Fatalf("refused CAS changed intent: %v", e)
 				}
 			}
 			filename, e := b.Filename()

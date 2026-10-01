@@ -191,6 +191,16 @@ func (r Result) ExitCode() int {
 
 func Run(ctx context.Context, req Request) (Result, error) {
 	out, err := run(ctx, &req)
+	// Hooks can return the kernel conflict directly; portable boundaries wrap
+	// it as ErrConcurrentChange. Keep completed targets, but require new consent.
+	if errors.Is(err, installruntime.ErrPolicyConflict) && !errors.Is(err, portablesetup.ErrConcurrentChange) {
+		err = fmt.Errorf("%w: %w", portablesetup.ErrConcurrentChange, err)
+	}
+	if errors.Is(err, portablesetup.ErrConcurrentChange) || out.Reason == "concurrent_change" {
+		out.Outcome, out.Reason = "conflict", "concurrent_change"
+		out.Command, out.NextActions = nil, nil
+		return out, err
+	}
 	return attachCommand(req, out), err
 }
 

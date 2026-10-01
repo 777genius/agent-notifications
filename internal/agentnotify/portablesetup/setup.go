@@ -86,6 +86,15 @@ type Service struct {
 	Remover        Remover
 }
 
+// Translate the protected kernel refusal while retaining its identity through
+// coordinated publication, registration, binding and finalization wrappers.
+func policyConflict(err error) error {
+	if errors.Is(err, installruntime.ErrPolicyConflict) {
+		return fmt.Errorf("%w: %w", ErrConcurrentChange, err)
+	}
+	return err
+}
+
 // Paths that reuse an existing reservation or consumer can bypass Commit;
 // check their admission before locator/UAP effects as well.
 func (s Service) checkPolicy(ctx context.Context, root string) error {
@@ -242,7 +251,7 @@ func (s Service) CommitBinding(ctx context.Context, req Request) (portable.Bindi
 		ConsumerID: key, Consumer: consumer, ExpectedGeneration: &gen, ExpectedPolicy: s.ExpectedPolicy, RefreshOnly: false, Reservation: res,
 	})
 	if err != nil {
-		return portable.Binding{}, err
+		return portable.Binding{}, policyConflict(err)
 	}
 	if _, err = portable.Publish(req.Binding); err != nil {
 		if !existed {
@@ -499,7 +508,7 @@ func (s Service) HandoffReverse(ctx context.Context, req Request) (uint64, error
 		Reservation: res,
 	})
 	if err != nil {
-		return 0, fmt.Errorf("%w: reverse discovery handoff: %v", ErrPreflight, err)
+		return 0, fmt.Errorf("%w: reverse discovery handoff: %w", ErrPreflight, policyConflict(err))
 	}
 	return result.Ledger.Generation, nil
 }
@@ -583,7 +592,7 @@ func (s Service) handoffForward(ctx context.Context, req Request, action string)
 	r.Reservation = res
 	result, err := clientsetup.Apply(ctx, r)
 	if err != nil {
-		return 0, nil, fmt.Errorf("%w: owned discovery handoff: %v", ErrPreflight, err)
+		return 0, nil, fmt.Errorf("%w: owned discovery handoff: %w", ErrPreflight, policyConflict(err))
 	}
 	return result.Ledger.Generation, res, nil
 }
@@ -705,7 +714,7 @@ func (s Service) PublishConfirmedIntent(ctx context.Context, req ConfirmedIntent
 		Files: []installruntime.File{{Path: path, Before: before, Data: payload, Mode: 0600}},
 	})
 	if err != nil {
-		return installruntime.Ledger{}, nil, fmt.Errorf("%w: publish confirmed intent: %v", ErrPreflight, err)
+		return installruntime.Ledger{}, nil, fmt.Errorf("%w: publish confirmed intent: %w", ErrPreflight, policyConflict(err))
 	}
 	return ledger, &res, nil
 }
@@ -843,7 +852,7 @@ func (s Service) patchIntentLocked(ctx context.Context, controlRoot, runtimeRoot
 		Files: []installruntime.File{{Path: path, Before: before, Data: payload, Mode: 0600}},
 	})
 	if err != nil {
-		return fmt.Errorf("%w: patch confirmed intent: %v", ErrPreflight, err)
+		return fmt.Errorf("%w: patch confirmed intent: %w", ErrPreflight, policyConflict(err))
 	}
 	return nil
 }
@@ -896,7 +905,7 @@ func (s Service) FinishConfirmedIntent(ctx context.Context, req ConfirmedIntent,
 		Files: files,
 	})
 	if err != nil {
-		return 0, false, fmt.Errorf("%w: clear confirmed intent: %v", ErrPreflight, err)
+		return 0, false, fmt.Errorf("%w: clear confirmed intent: %w", ErrPreflight, policyConflict(err))
 	}
 	return ledger.Generation, true, nil
 }
@@ -952,7 +961,7 @@ func (s Service) publishIntent(ctx context.Context, req Request, gen uint64, act
 		Files: []installruntime.File{{Path: path, Before: before, Data: payload, Mode: 0600}},
 	})
 	if err != nil {
-		return installruntime.Ledger{}, nil, fmt.Errorf("%w: publish %s reservation: %v", ErrPreflight, action, err)
+		return installruntime.Ledger{}, nil, fmt.Errorf("%w: publish %s reservation: %w", ErrPreflight, action, policyConflict(err))
 	}
 	return ledger, &res, nil
 }
@@ -988,7 +997,7 @@ func (s Service) finishHandoff(ctx context.Context, req Request, res *installrun
 		Files: files,
 	})
 	if err != nil {
-		return fmt.Errorf("%w: clear handoff reservation: %v", ErrPreflight, err)
+		return fmt.Errorf("%w: clear handoff reservation: %w", ErrPreflight, policyConflict(err))
 	}
 	return nil
 }
