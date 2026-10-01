@@ -58,7 +58,7 @@ function createV2Observer(options) {
     s.revision++;
     sessions.delete(s.sid);
   }
-  const activeOwned = (s) => ["root", "pending", "new"].includes(s.ownership) && s.started && !s.result && !s.interrupted && (!s.terminal || s.verifying.size > 0);
+  const activeOwned = (s) => ["root", "pending", "new"].includes(s.ownership) && (s.admissions.size > 0 || s.started && !s.result && !s.interrupted && (!s.terminal || s.verifying.size > 0));
   function state(sid) {
     if (sessions.has(sid)) {
       const existing = sessions.get(sid);
