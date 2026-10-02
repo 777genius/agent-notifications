@@ -221,39 +221,44 @@ func buildDefaultConfig(pluginRoot string) *Config {
 			SuppressQuestionAfterTaskCompleteSeconds:    intPtr(12),
 			SuppressQuestionAfterAnyNotificationSeconds: intPtr(defaultSuppressQuestionAfterAnyNotificationSeconds),
 		},
-		Statuses: map[string]StatusInfo{
-			"task_complete": {
-				Title: "✅ Completed",
-				Sound: filepath.Join(pluginRoot, "sounds", "task-complete.mp3"),
-			},
-			"review_complete": {
-				Title: "🔍 Review",
-				Sound: filepath.Join(pluginRoot, "sounds", "review-complete.mp3"),
-			},
-			"question": {
-				Title: "❓ Question",
-				Sound: filepath.Join(pluginRoot, "sounds", "question.mp3"),
-			},
-			"plan_ready": {
-				Title: "📋 Plan",
-				Sound: filepath.Join(pluginRoot, "sounds", "plan-ready.mp3"),
-			},
-			"session_limit_reached": {
-				Title: "⏱️ Session Limit Reached",
-				Sound: filepath.Join(pluginRoot, "sounds", "error.mp3"),
-			},
-			"api_error": {
-				Title: "🔴 API Error: 401",
-				Sound: filepath.Join(pluginRoot, "sounds", "error.mp3"),
-			},
-			"api_error_overloaded": {
-				Title: "🔴 API Error",
-				Sound: filepath.Join(pluginRoot, "sounds", "error.mp3"),
-			},
-			"permission_request": {
-				Title: "🔐 Permission Request",
-				Sound: filepath.Join(pluginRoot, "sounds", "question.mp3"),
-			},
+		Statuses: defaultStatuses(pluginRoot),
+	}
+}
+
+func defaultStatuses(pluginRoot string) map[string]StatusInfo {
+	return map[string]StatusInfo{
+		"agent_stopping": {Title: "Copilot in VS Code"},
+		"task_complete": {
+			Title: "✅ Completed",
+			Sound: filepath.Join(pluginRoot, "sounds", "task-complete.mp3"),
+		},
+		"review_complete": {
+			Title: "🔍 Review",
+			Sound: filepath.Join(pluginRoot, "sounds", "review-complete.mp3"),
+		},
+		"question": {
+			Title: "❓ Question",
+			Sound: filepath.Join(pluginRoot, "sounds", "question.mp3"),
+		},
+		"plan_ready": {
+			Title: "📋 Plan",
+			Sound: filepath.Join(pluginRoot, "sounds", "plan-ready.mp3"),
+		},
+		"session_limit_reached": {
+			Title: "⏱️ Session Limit Reached",
+			Sound: filepath.Join(pluginRoot, "sounds", "error.mp3"),
+		},
+		"api_error": {
+			Title: "🔴 API Error: 401",
+			Sound: filepath.Join(pluginRoot, "sounds", "error.mp3"),
+		},
+		"api_error_overloaded": {
+			Title: "🔴 API Error",
+			Sound: filepath.Join(pluginRoot, "sounds", "error.mp3"),
+		},
+		"permission_request": {
+			Title: "🔐 Permission Request",
+			Sound: filepath.Join(pluginRoot, "sounds", "question.mp3"),
 		},
 	}
 }
