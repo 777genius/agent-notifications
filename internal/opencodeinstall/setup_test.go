@@ -22,7 +22,10 @@ func fixture(t *testing.T) (context.Context, Request, string) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Linux setup fixture needs executable file mode, which Windows does not expose")
 	}
-	base := t.TempDir()
+	base, err := installruntime.PhysicalPath(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	source := filepath.Join(base, "source-binary")
 	if err := os.WriteFile(source, fixtureBinary("linux", "amd64", "v1"), 0700); err != nil {
 		t.Fatal(err)

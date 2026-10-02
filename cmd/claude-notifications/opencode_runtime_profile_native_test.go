@@ -405,12 +405,20 @@ func TestRuntimePortStartFailureStillSettles(t *testing.T) {
 // Red failure: equal bytes on a new file ID must not preserve the held proof.
 func TestRuntimePortCandidateReplacementDeniesAfterActualWait(t *testing.T) {
 	dir := portFixture(t)
-	host, _ := portStart(t, dir, "replacement-parent")
+	parentName := "replacement-parent"
+	if runtime.GOOS == "darwin" {
+		// Bind the parent to the actual candidate before launch; the subsequent
+		// replacement still changes the held candidate's inode after the probe.
+		parentName = "replace"
+	}
+	host, _ := portStart(t, dir, parentName)
 	in := host
 	in.HostExecutable = filepath.Join(dir, "replace"+portExecutableSuffix())
 	in.PublicExecPath = in.HostExecutable
-	if e := os.Link(host.HostExecutable, in.HostExecutable); e != nil {
-		t.Fatal(e)
+	if runtime.GOOS != "darwin" {
+		if e := os.Link(host.HostExecutable, in.HostExecutable); e != nil {
+			t.Fatal(e)
+		}
 	}
 	original, e := os.ReadFile(in.HostExecutable)
 	if e != nil {
