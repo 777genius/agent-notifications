@@ -1,9 +1,13 @@
 package opencodecodec
 
-import "testing"
+import (
+	"regexp"
+	"testing"
+)
 
 // These are pure closed-data comparisons, not executing-image attestations.
 func TestClosedCandidateAndUnqualifiedClockRows(t *testing.T) {
+	profileID := regexp.MustCompile(`^linux-amd64-proc-boottime-v1:[0-9a-f]{64}$`)
 	images := []struct{ sha, version, generation string }{
 		{"0abbb7c32ab0294c0a7bfa2705f9ff0df5dce5ab721d1f00cccfe393f2a11427", "1.18.33", "v1"},
 		{"9ca0b9953d49997601655e54f846a3efa464f237e47c6f1b04716d0f2e64c4c2", "1.18.34", "v1"},
@@ -15,8 +19,15 @@ func TestClosedCandidateAndUnqualifiedClockRows(t *testing.T) {
 		if !ok || candidate.Version != image.version || candidate.Generation != image.generation {
 			t.Fatal("wrong closed image row")
 		}
-		if _, qualified := LookupQualifiedClock(key); qualified {
-			t.Fatal("module observation granted clock authority")
+		// Reviewed prerequisite rows are data; live image attestation is separate.
+		clock, qualified := LookupQualifiedClock(key)
+		if !qualified || clock.Generation != image.generation || clock.RawKind != "linux-boottime" ||
+			clock.NativeReadBoundNS != 103_000_000 || clock.ComparisonBoundNS != 430_000_000 ||
+			clock.TranslationBoundNS != 224_000_000 {
+			t.Fatal("wrong reviewed clock prerequisite row")
+		}
+		if !profileID.MatchString(clock.ProfileID) || clock.CalibrationID != clock.ProfileID+":same-coordinate" {
+			t.Fatal("noncanonical clock profile or unrelated calibration")
 		}
 		for _, change := range []func(*ImageKey){
 			func(k *ImageKey) { k.SHA256 = "unknown" }, func(k *ImageKey) { k.Entry = "tui" },
