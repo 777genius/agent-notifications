@@ -22,8 +22,12 @@ type localMainCase struct {
 // Red: main enters legacy logging/flags, leaks native/SDK text, blocks a Stop,
 // fails to close/join stalled stdin, or exits abnormally on a closed output pipe.
 func TestCopilotVSCodeBuiltMainProcess(t *testing.T) {
-	bin := filepath.Join(t.TempDir(), "TEST-notifications")
-	build := exec.Command(os.Getenv("TEST_GO_BINARY"), "build", "-p", "2", "-o", bin, ".")
+	bin := filepath.Join(t.TempDir(), "TEST-notifications.exe")
+	goBinary := os.Getenv("TEST_GO_BINARY")
+	if goBinary == "" {
+		goBinary = "go"
+	}
+	build := exec.Command(goBinary, "build", "-p", "2", "-o", bin, ".")
 	if b, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v %s", err, b)
 	}
