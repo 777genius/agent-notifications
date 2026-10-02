@@ -1,6 +1,6 @@
 //go:build windows
 
-package geminievent
+package observation
 
 import "github.com/777genius/agent-notifications/internal/installruntime"
 
