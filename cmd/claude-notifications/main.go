@@ -36,35 +36,8 @@ var (
 )
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "licenses" {
-		if len(os.Args) != 2 {
-			fmt.Fprintln(os.Stderr, "Usage: claude-notifications licenses")
-			os.Exit(2)
-		}
-		fmt.Print(thirdpartynotices.Text())
+	if dispatchEarlyCommand() {
 		return
-	}
-	if len(os.Args) > 1 && os.Args[1] == "gemini-event" {
-		os.Exit(runGeminiEvent(os.Args[2:], os.Stdin, os.Stdout))
-	}
-	if len(os.Args) > 1 && os.Args[1] == "setup-gemini" {
-		os.Exit(geminiSetupMain(os.Args[2:]))
-	}
-	if len(os.Args) > 1 && os.Args[1] == "setup-products" {
-		os.Exit(setupProductsMain(os.Args[2:]))
-	}
-	if len(os.Args) > 1 && os.Args[1] == "opencode-event" {
-		os.Exit(runOpenCodeEvent(os.Args[2:], os.Stdin, os.Stdout))
-	}
-	if len(os.Args) > 1 && os.Args[1] == "setup-opencode" {
-		os.Exit(openCodeSetupMain(os.Args[2:]))
-	}
-	if handled, code := dispatchManagedStdio(os.Args[1:], os.Stderr); handled {
-		os.Exit(code)
-	}
-
-	if len(os.Args) > 1 && (os.Args[1] == "portable-launch" || os.Args[1] == "portable-primary") {
-		os.Exit(agentPortableMain(os.Args[1], os.Args[2:]))
 	}
 
 	if len(os.Args) > 1 && (os.Args[1] == "portable-install" || os.Args[1] == "portable-remove") {
@@ -149,6 +122,46 @@ func main() {
 		printUsage()
 		os.Exit(1)
 	}
+}
+
+// dispatchEarlyCommand preserves the observation routes before global logging.
+func dispatchEarlyCommand() bool {
+	if len(os.Args) > 1 && os.Args[1] == "copilot-vscode-event" {
+		os.Exit(runCopilotVSCodeEvent(os.Args[2:], os.Stdin, os.Stdout))
+	}
+
+	if len(os.Args) > 1 && os.Args[1] == "licenses" {
+		if len(os.Args) != 2 {
+			fmt.Fprintln(os.Stderr, "Usage: claude-notifications licenses")
+			os.Exit(2)
+		}
+		fmt.Print(thirdpartynotices.Text())
+		return true
+	}
+	if len(os.Args) > 1 && os.Args[1] == "gemini-event" {
+		os.Exit(runGeminiEvent(os.Args[2:], os.Stdin, os.Stdout))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "setup-gemini" {
+		os.Exit(geminiSetupMain(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "setup-products" {
+		os.Exit(setupProductsMain(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "opencode-event" {
+		os.Exit(runOpenCodeEvent(os.Args[2:], os.Stdin, os.Stdout))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "setup-opencode" {
+		os.Exit(openCodeSetupMain(os.Args[2:]))
+	}
+	if handled, code := dispatchManagedStdio(os.Args[1:], os.Stderr); handled {
+		os.Exit(code)
+	}
+
+	if len(os.Args) > 1 && (os.Args[1] == "portable-launch" || os.Args[1] == "portable-primary") {
+		os.Exit(agentPortableMain(os.Args[1], os.Args[2:]))
+	}
+
+	return false
 }
 
 type hookSettings struct {
