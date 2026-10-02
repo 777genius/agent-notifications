@@ -6,6 +6,7 @@ import (
 	"math"
 	"strconv"
 
+	"github.com/777genius/agent-notifications/internal/opencodecodec"
 	"github.com/777genius/agent-notifications/internal/strictjson"
 	uap "github.com/777genius/plugin-kit-ai/sdk/opencode"
 )
@@ -133,7 +134,7 @@ func DecodePrivate(raw []byte, selected ClockSelection) (PrivateEvent, error) {
 	}
 	a, c := p.Anchor, p.Calibration
 	clock, err := selected.mapSnapshot(ClockSnapshot{a.Boot, a.Domain, a.RawKind, int64(a.Lo), int64(a.Hi), int64(a.Wall), int64(a.Read)})
-	if err != nil || p.Fence != clock.Fence || c.ID != selected.CalibrationID || c.Epoch != p.Epoch || c.SourceHi < c.SourceLo || c.SourceHi-c.SourceLo > c.Error ||
+	if err != nil || p.Fence != clock.Fence || c.ID != selected.CalibrationID || c.Epoch != p.Epoch || !opencodecodec.SameCoordinateCalibration(a.RawKind, int64(c.SourceLo), int64(c.SourceHi), int64(a.Lo), int64(a.Hi), selected.TranslationBoundNS) ||
 		c.NativeLo != a.Lo || c.NativeHi != a.Hi || int64(c.Error) != selected.TranslationBoundNS || p.EpochStart > a.Lo ||
 		p.Ingress < a.Lo || p.Spawn < p.Ingress || p.Deadline <= p.Spawn || p.Deadline-p.Spawn > 20_000_000_000 {
 		return fail()

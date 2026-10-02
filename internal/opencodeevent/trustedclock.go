@@ -1,6 +1,9 @@
 package opencodeevent
 
-import "context"
+import (
+	"context"
+	"github.com/777genius/agent-notifications/internal/opencodecodec"
+)
 
 // ClockSelection is supplied only by trusted packaged composition. It binds the
 // native clock and original source conversion, never a sender or config grant.
@@ -16,16 +19,25 @@ func (s ClockSelection) valid() bool {
 		s.TranslationBoundNS <= s.Policy.ComparisonBoundNS-2*s.Policy.NativeReadBoundNS
 }
 
-// SelectTrustedClock has no qualified product cells yet. Parent qualification
-// must supply complete source/rate/conversion evidence before adding a cell.
+// SelectTrustedClock preserves the old platform-only diagnostic boundary. A
+// platform is insufficient authority; event composition uses the exact image.
 func SelectTrustedClock(goos, goarch string) (ClockSelection, error) {
-	switch goos + "/" + goarch {
-	case "linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64", "windows/amd64":
-		// Closed ledger cells deliberately have no immutable complete T/source grant.
-		return ClockSelection{}, ErrClockUnavailable
-	default:
+	return ClockSelection{}, ErrClockUnavailable
+}
+
+func SelectTrustedImageClock(key opencodecodec.ImageKey) (ClockSelection, error) {
+	row, ok := opencodecodec.LookupQualifiedClock(key)
+	if !ok {
 		return ClockSelection{}, ErrClockUnavailable
 	}
+	selected := ClockSelection{Policy: TimePolicy{ProfileID: row.ProfileID, RawKind: row.RawKind,
+		NativeReadBoundNS: row.NativeReadBoundNS, ComparisonBoundNS: row.ComparisonBoundNS},
+		CalibrationID: row.CalibrationID, Generation: row.Generation, TranslationBoundNS: row.TranslationBoundNS}
+	candidate, known := opencodecodec.LookupCandidate(key)
+	if !known || selected.Generation != candidate.Generation || !selected.valid() {
+		return ClockSelection{}, ErrClockUnavailable
+	}
+	return selected, nil
 }
 
 // TrustedClock is a thin E0 adapter. Snapshot takes no sender arguments.
@@ -34,11 +46,23 @@ type TrustedClock struct {
 	Selection ClockSelection
 }
 
+// A held-runtime wrapper receives the caller's tightened admission context,
+// while the unchanged E0 port remains argument-free and grants no authority.
+type contextualSnapshotPort interface {
+	SampleSnapshotContext(context.Context) (ClockSnapshot, error)
+}
+
 func (c TrustedClock) Snapshot(ctx context.Context) (ClockSample, error) {
 	if ctx.Err() != nil || c.Source == nil || !c.Selection.valid() {
 		return ClockSample{}, ErrClockUnavailable
 	}
-	s, err := c.Source.SampleSnapshot()
+	var s ClockSnapshot
+	var err error
+	if port, ok := c.Source.(contextualSnapshotPort); ok {
+		s, err = port.SampleSnapshotContext(ctx)
+	} else {
+		s, err = c.Source.SampleSnapshot()
+	}
 	if err != nil || ctx.Err() != nil {
 		return ClockSample{}, ErrClockUnavailable
 	}

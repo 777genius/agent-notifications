@@ -71,10 +71,10 @@ func invalidPrivateFrames(t *testing.T) map[string][]byte {
 		"anchorUnknown":        {`"rawKind":"linux-boottime"`, `"rawKind":"linux-boottime","kind":"continuous"`},
 		"nativeDuplicate":      {`"generation":"v1"`, `"generation":"v1","generation":"v1"`},
 		"nativeUnknown":        {`"generation":"v1"`, `"generation":"v1","terminalID":"made_up"`},
-		"calibrationUnknown":   {`"sourceLoNS":"1000"`, `"sourceLoNS":"1000","quality":true`},
-		"calibrationMissing":   {`"sourceLoNS":"1000",`, ``},
+		"calibrationUnknown":   {`"sourceLoNS":"100000000000"`, `"sourceLoNS":"100000000000","quality":true`},
+		"calibrationMissing":   {`"sourceLoNS":"100000000000",`, ``},
 		"calibrationEpoch":     {`"sourceEpoch":"epoch_original_1","sourceLoNS"`, `"sourceEpoch":"another_epoch","sourceLoNS"`},
-		"oversizedBracket":     {`"sourceHiNS":"2000"`, `"sourceHiNS":"2000000000"`},
+		"oversizedBracket":     {`"sourceHiNS":"100002000000"`, `"sourceHiNS":"101000000000"`},
 		"nativeBindingMissing": {`,"nativeMessageID":"msg_final_error_9"`, ``},
 		"nativeIDControl":      {`"msg_final_error_9"`, `"bad\nID"`},
 		"generation":           {`"generation":"v1"`, `"generation":"v2"`},
@@ -104,7 +104,7 @@ func invalidPrivateFrames(t *testing.T) map[string][]byte {
 	}
 	frames["trailing"] = []byte(base + `{}`)
 	frames["length"] = []byte(base + strings.Repeat(" ", 4097))
-	frames["depth"] = []byte(strings.Replace(base, `"sourceLoNS":"1000"`, `"sourceLoNS":[[[[[[[[[0]]]]]]]]]`, 1))
+	frames["depth"] = []byte(strings.Replace(base, `"sourceLoNS":"100000000000"`, `"sourceLoNS":[[[[[[[[[0]]]]]]]]]`, 1))
 	frames["legacy"] = []byte(`{"version":1,"kind":"terminal_error","sessionID":"s","turnID":"t","rootSession":true}`)
 	return frames
 }

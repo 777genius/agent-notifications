@@ -35,7 +35,7 @@ type runtimeProfileReceipt struct {
 }
 
 // Live image proof is deliberately separate from official host qualification.
-// Parent can bind the shared trusted tuple API here when that module lands.
+// The composition binder retains this private process identity, never IPC flags.
 type runtimeLiveImage struct {
 	GOOS, GOARCH, Entry, SHA256     string
 	Device, Inode, ProcessStartTick uint64
@@ -54,7 +54,7 @@ const (
 // This callback is trusted composition authority, never descriptor transport.
 // Its implementation must bind the shared private native evidence and Select
 // all required observer capabilities. A public Profile/capability map is not a
-// binding result. The pinned module lacks that binder; production supplies nil.
+// binding result. Production requires independent reader and clock rows as well.
 type observerQualification func(opencodehost.Profile, runtimeLiveImage) runtimeObserverGeneration
 
 func canonicalPrivatePath(s string) bool {
@@ -86,7 +86,7 @@ func runOpenCodeRuntimeProfile(args []string, input io.ReadCloser, output io.Wri
 	defer stop()
 	ctx, cancel := context.WithDeadline(signals, started.Add(10*time.Second))
 	defer cancel()
-	return runtimeProfileOperation(ctx, args, input, output, ownedRuntimeDescriptor(), nil)
+	return runtimeProfileOperation(ctx, args, input, output, ownedRuntimeDescriptor(), qualifyRuntimeObserver)
 }
 
 func runtimeProfileOperation(ctx context.Context, args []string, input io.ReadCloser, output io.Writer, owned runtimeProfileInput, qualify observerQualification) int {
@@ -114,7 +114,7 @@ func runtimeProfileOperation(ctx context.Context, args []string, input io.ReadCl
 			evidence, probeErr := clientdetect.ProbeOpenCodeTarget(ctx, clientdetect.ProbeTarget{Executable: in.HostExecutable, Environment: []string{"PATH="}, Timeout: 10 * time.Second})
 			profile := opencodehost.Resolve(evidence.VersionEvidence)
 			after, afterErr := held.Revalidate(ctx)
-			if probeErr == nil && afterErr == nil && before == after && ctx.Err() == nil && qualify != nil {
+			if probeErr == nil && evidence.ProbeStatus == "ok" && afterErr == nil && before == after && ctx.Err() == nil && qualify != nil {
 				generation := qualify(profile.Clone(), before)
 				if generation == observerV1 && profile.Family == opencodehost.ModernV1 || generation == observerV2 && profile.Family == opencodehost.V2 {
 					result.Semantic = "eligible"
