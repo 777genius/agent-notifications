@@ -190,18 +190,27 @@ export function createNativeV2(context, ownedLocation, onIngress, onUncertainty)
   return Object.freeze({ native: Object.freeze({ correlate, session, assistant, questionSource, currentPermission }), reset, project, finalize });
 }
 
+const checkpointNonce = (value) => typeof value === 'string' && value.length === 32 && /^[a-f0-9]{32}$/.test(value);
+
 export function createRPCCheckpoint(context, ready) {
   return Object.freeze({ async register(signal, namespace) {
     if (!await ready() || signal.aborted) return;
     const id = `agent-notifications-${namespace}`;
-    const schema = { type: 'object', properties: { nonce: { type: 'string', pattern: '^[a-f0-9]{32}$' } },
+    // Native conversion rejects patterns; enforce ASCII lowerhex at both ports.
+    const schema = { type: 'object', properties: { nonce: { type: 'string', minLength: 32, maxLength: 32 } },
       required: ['nonce'], additionalProperties: false };
     const registration = await context.rpc.register({ id, methods: {}, events: { checkpoint: { schema } } }, {});
     if (signal.aborted) { await registration.dispose(); return; }
     return Object.freeze({ type: `rpc.${id}.checkpoint`,
-      emit: (nonce) => registration.events.emit('checkpoint', { nonce }),
-      read: (envelope) => envelope.data && Object.keys(envelope.data).length === 1 &&
-        typeof envelope.data.nonce === 'string' && /^[a-f0-9]{32}$/.test(envelope.data.nonce) ? envelope.data.nonce : undefined,
+      emit: async (nonce) => {
+        if (!checkpointNonce(nonce)) throw new TypeError('checkpoint_nonce_invalid');
+        return registration.events.emit('checkpoint', { nonce });
+      },
+      read: (envelope) => {
+        const data = envelope?.data;
+        return data && typeof data === 'object' && !Array.isArray(data) && Reflect.ownKeys(data).length === 1 &&
+          Object.hasOwn(data, 'nonce') && checkpointNonce(data.nonce) ? data.nonce : undefined;
+      },
       dispose: () => registration.dispose() });
   } });
 }

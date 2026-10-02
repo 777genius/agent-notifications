@@ -178,6 +178,38 @@ test('native V1 session and seen-user capacity invalidate held work without evic
  }
 });
 
+// Red if malformed nonces reach native emit, if a trailing newline passes the
+// reader's regexp, or if malformed/extended data can cross the native port.
+// This exercises the real port adapter; native schema conversion acceptance
+// remains ROOT's actual API-only E2E proof, not a simulated converter here.
+test('native V2 RPC checkpoint enforces ASCII lowerhex32 at both port boundaries',async()=>{
+ const emitted=[],result=Object.freeze({native:'emit-result'});let disposed=0;
+ const context={rpc:{register:async()=>({events:{emit:async(name,data)=>{
+  emitted.push({name,data});return result;
+ }},dispose:async()=>disposed++})}};
+ const port=await createRPCCheckpoint(context,async()=>true).register(new AbortController().signal,'owned');
+ const nonce='0123456789abcdef0123456789abcdef';
+ const invalid=[undefined,null,0,true,{},[],new String(nonce),'',nonce.slice(1),nonce+'0',
+  nonce.toUpperCase(),'g'+nonce.slice(1),nonce+'\n','\n'+nonce.slice(1),
+  'é'+nonce.slice(1),'０'+nonce.slice(1)];
+ for(const value of invalid){
+  await assert.rejects(async()=>port.emit(value),{name:'TypeError'});
+  assert.equal(emitted.length,0,'invalid nonce must not call native emit');
+  assert.equal(port.read({data:{nonce:value}}),undefined);
+ }
+ for(const data of [undefined,null,0,true,nonce,{},[],Object.assign([],{nonce}),
+  {nonce,extra:true},Object.assign(Object.create({nonce}),{extra:true}),
+  Object.defineProperty({nonce},'extra',{value:true}),{nonce,[Symbol('extra')]:true}]){
+  assert.equal(port.read({data}),undefined);
+ }
+ assert.equal(port.read(null),undefined);assert.equal(port.read(undefined),undefined);
+ assert.equal(await port.emit(nonce),result);
+ assert.deepEqual(emitted,[{name:'checkpoint',data:{nonce}}]);
+ assert.equal(port.read({type:port.type,data:emitted[0].data}),nonce);
+ assert.equal(port.type,'rpc.agent-notifications-owned.checkpoint');
+ await port.dispose();assert.equal(disposed,1);
+});
+
 function v2({parentID,fork,wrongScope=false,wrongProject=false,workspaceID,beforeEmit,holdInitial=false}={}){
  const location={directory,project:{id:'project'},...(workspaceID?{workspaceID}:{})},facts=[],order=[],queue=[],waiting=[];
  let rows=[],sequence=0,serial=0,disposed=false,markers=0,hold=holdInitial,heldMarkers=[],subscribes=0;
