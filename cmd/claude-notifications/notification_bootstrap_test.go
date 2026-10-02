@@ -116,7 +116,7 @@ check_prerequisites() { :; }
 detect_platform() { :; }
 install_cleanup_traps() { :; }
 resolve_bootstrap_release() { :; }
-stage_config_helper() { :; }
+stage_config_helper() { _CONFIG_STAGE=$(mktemp -d "$HOME/bootstrap-fixture-XXXXXX"); }
 stage_historical_baselines() { :; }
 config_preflight() { :; }
 initialize_config() { :; }
@@ -213,7 +213,7 @@ check_prerequisites() { :; }
 detect_platform() { :; }
 install_cleanup_traps() { :; }
 resolve_bootstrap_release() { :; }
-stage_config_helper() { :; }
+stage_config_helper() { _CONFIG_STAGE=$(mktemp -d "$HOME/bootstrap-fixture-XXXXXX"); }
 stage_historical_baselines() { :; }
 config_preflight() { :; }
 initialize_config() { :; }
@@ -371,7 +371,7 @@ check_prerequisites() { :; }
 detect_platform() { :; }
 install_cleanup_traps() { :; }
 resolve_bootstrap_release() { :; }
-stage_config_helper() { :; }
+stage_config_helper() { _CONFIG_STAGE=$(mktemp -d "$HOME/bootstrap-fixture-XXXXXX"); }
 stage_historical_baselines() { :; }
 config_preflight() { :; }
 initialize_config() { :; }
@@ -423,7 +423,7 @@ check_prerequisites() { :; }
 detect_platform() { :; }
 install_cleanup_traps() { :; }
 resolve_bootstrap_release() { :; }
-stage_config_helper() { :; }
+stage_config_helper() { _CONFIG_STAGE=$(mktemp -d "$HOME/bootstrap-fixture-XXXXXX"); }
 stage_historical_baselines() { :; }
 config_preflight() { :; }
 initialize_config() { :; }
@@ -496,7 +496,7 @@ check_prerequisites() { :; }
 detect_platform() { :; }
 install_cleanup_traps() { :; }
 resolve_bootstrap_release() { BOOTSTRAP_TAG=v1.43.0; }
-stage_config_helper() { :; }
+stage_config_helper() { _CONFIG_STAGE=$(mktemp -d "$HOME/bootstrap-fixture-XXXXXX"); }
 stage_historical_baselines() { :; }
 config_preflight() { :; }
 initialize_config() { :; }
@@ -567,7 +567,7 @@ check_prerequisites() { :; }
 detect_platform() { :; }
 install_cleanup_traps() { :; }
 resolve_bootstrap_release() { BOOTSTRAP_TAG=v9.9.9; }
-stage_config_helper() { :; }
+stage_config_helper() { _CONFIG_STAGE=$(mktemp -d "$HOME/bootstrap-fixture-XXXXXX"); }
 stage_historical_baselines() { :; }
 config_preflight() { :; }
 initialize_config() { :; }

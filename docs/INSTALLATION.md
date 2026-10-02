@@ -147,3 +147,13 @@ Optionally also remove the marketplace registration: `/plugin marketplace remove
 **Codex:** remove the hooks and runtime registered by this installer manually. Use the same Codex home selected during setup: the explicit `--codex-home` path, otherwise `CODEX_HOME`, otherwise `~/.codex` (`%USERPROFILE%\.codex` on Windows). In that directory, delete only this installer's entries from `hooks.json`, then remove the `claude-notifications-go` directory. Preserve hooks registered for other tools.
 
 **Configuration:** uninstalling does not delete your saved settings. Run `agent-notifications config path` to find the active file, and remove it yourself if you no longer want it.
+
+### Reading the installation result
+
+The installer ends with a summary for the selected agents. Installed means that
+registration succeeded; it does not confirm notification delivery. Restart the
+agents, review and trust Codex entries with `/hooks`, and send a test notification.
+If a notification does not arrive, check OS permissions and notification settings.
+Skipped agent-notify setup is reported separately from installed automatic hooks.
+For detailed download and setup diagnostics, prefix the final installer command
+with `BOOTSTRAP_VERBOSE=1`. Failed stages always print their diagnostics.
