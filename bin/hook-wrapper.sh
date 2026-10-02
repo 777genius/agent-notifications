@@ -357,7 +357,18 @@ claim_install() {
             fi
             path_recent "$BACKOFF_OWNER" 300 && return 1
             retire_backoff "$BACKOFF_OWNER" || return 1
-        elif [ -e "$BACKOFF/active" ] || [ -L "$BACKOFF/active" ]; then
+        elif [ -L "$BACKOFF/active" ]; then
+            # The failed lookup may have raced publication or retirement.
+            # Only a stable invalid link is a best-effort cache fallback;
+            # a valid successor owns the install, and churn retries boundedly.
+            _unknown=$(readlink "$BACKOFF/active" 2>/dev/null) || continue
+            backoff_owner && return 1
+            [ "$(readlink "$BACKOFF/active" 2>/dev/null)" = "$_unknown" ] || continue
+            return 0
+        elif [ -e "$BACKOFF/active" ]; then
+            backoff_owner && return 1
+            # Check existence before type: an absent entry can become a link.
+            [ -e "$BACKOFF/active" ] && [ ! -L "$BACKOFF/active" ] || continue
             # Unknown cache entries are not ours to delete.
             return 0
         fi

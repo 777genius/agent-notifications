@@ -9,7 +9,7 @@ trap 'rm -rf "$root"' EXIT
 test_env_setup "$root"
 mkdir -p "$root/stubs"
 # The suite already entered an allowlist environment above.
-ROOT="$root" SRC="$src" bash <<'RUN'
+CLAIM_ONLY="${1:-}" CLAIM_SOURCE="${2:-$src/hook-wrapper.sh}" ROOT="$root" SRC="$src" bash <<'RUN'
 set -eu
 # Release and join only our fixture hooks before the outer sandbox cleanup.
 trap ': > "$ROOT/release-install"; for pid in ${pids:-}; do wait "$pid" || true; done' EXIT
@@ -19,6 +19,122 @@ cd "$ROOT"
 printf '#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo x86_64;; esac\n' > stubs/uname
 chmod +x stubs/uname
 export PATH="$ROOT/stubs:/usr/bin:/bin"
+# Reproduce the failed-owner-lookup race at the actual production boundary.
+# Only an unsuccessful readlink is delayed; B is a real live claimant process.
+# A must dispatch without permission (including permission with an empty claim).
+sed -n '/^backoff_path()/,/^# === Main Logic ===/p' "$CLAIM_SOURCE" > claim-functions.sh
+mkdir claim-tools
+export REAL_READLINK=$(command -v readlink)
+cat > claim-tools/readlink <<'CLAIM_READLINK'
+#!/bin/sh
+if result=$("$REAL_READLINK" "$@" 2>/dev/null); then
+ printf '%s\n' "$result"
+ exit 0
+fi
+if [ "${DELAY_MISSING:-0}" = 1 ] && [ "$1" = "$BACKOFF/active" ] &&
+   mkdir "$CASE_DIR/read-paused" 2>/dev/null; then
+ n=0
+ while [ ! -e "$CASE_DIR/resume-read" ]; do
+  n=$((n + 1)); [ "$n" -lt 500 ] || exit 98
+  sleep 0.02
+ done
+fi
+exit 1
+CLAIM_READLINK
+cat > claimant.sh <<'CLAIMANT'
+#!/bin/sh
+. "$ROOT/claim-functions.sh"
+SCRIPT_DIR="$CASE_DIR/plugin/bin"
+STAMP_DIR="$CASE_DIR/cache"
+TARGET_VER=1.42.0
+backoff_path "$TARGET_VER"
+export BACKOFF
+if claim_install; then status=0; else status=$?; fi
+printf '%s\n%s\n' "$status" "$INSTALL_CLAIM" > "$CASE_DIR/result-$ROLE"
+if [ "$ROLE" = B ]; then
+ n=0
+ while [ ! -e "$CASE_DIR/release-B" ]; do
+  n=$((n + 1)); [ "$n" -lt 500 ] || exit 98
+  sleep 0.02
+ done
+fi
+CLAIMANT
+chmod +x claim-tools/readlink
+claim_barrier() {
+ local n=0
+ while [ ! -e "$1" ]; do
+  n=$((n + 1)); [ "$n" -lt 500 ] || { echo "claim barrier timeout: $1" >&2; return 1; }
+  sleep 0.02
+ done
+}
+failed_lookup_race() (
+ export CASE_DIR="$ROOT/lookup-$1"
+ mkdir -p "$CASE_DIR/plugin/bin" "$CASE_DIR/cache"
+ trap ': > "$CASE_DIR/resume-read"; : > "$CASE_DIR/release-B"; wait "${a_pid:-}" 2>/dev/null || true; wait "${b_pid:-}" 2>/dev/null || true' EXIT
+ # Seed/retire a failed claim for the expired case, using real functions.
+ . "$ROOT/claim-functions.sh"
+ SCRIPT_DIR="$CASE_DIR/plugin/bin" STAMP_DIR="$CASE_DIR/cache" TARGET_VER=1.42.0
+ backoff_path "$TARGET_VER"
+ if [ "$1" = expired ]; then
+  claim_install
+  : > "$INSTALL_CLAIM/failed"
+  touch -t 200001010000 "$INSTALL_CLAIM"
+  retire_backoff "$INSTALL_CLAIM"
+ fi
+ DELAY_MISSING=1 ROLE=A PATH="$ROOT/claim-tools:$PATH" sh claimant.sh &
+ a_pid=$!
+ claim_barrier "$CASE_DIR/read-paused"
+ # A observed no owner. Publish B while A's unsuccessful read is suspended.
+ ROLE=B sh claimant.sh &
+ b_pid=$!
+ claim_barrier "$CASE_DIR/result-B"
+ [ "$(sed -n '1p' "$CASE_DIR/result-B")" = 0 ]
+ b=$(sed -n '2p' "$CASE_DIR/result-B")
+ [ -n "$b" ] && [ -d "$b" ]
+ [ "$(cat "$b/pid")" = "$b_pid" ] && kill -0 "$b_pid"
+ # An aged live owner must still win over the cooldown timestamp.
+ touch -t 200001010000 "$b"
+ : > "$CASE_DIR/resume-read"
+ wait "$a_pid"
+ [ "$(sed -n '1p' "$CASE_DIR/result-A")" = 1 ] || {
+  echo "FAIL: $1 failed lookup allowed duplicate installer; A status/claim:" >&2
+  cat "$CASE_DIR/result-A" >&2
+  return 1
+ }
+ [ -z "$(sed -n '2p' "$CASE_DIR/result-A")" ]
+ [ "$(readlink "$BACKOFF/active")" = "${b##*/}" ]
+ [ -d "$b" ] && [ ! -e "$b/retire" ] && kill -0 "$b_pid"
+ : > "$CASE_DIR/release-B"
+ wait "$b_pid"
+ echo "PASS: $1 failed lookup suppresses A; live B survives"
+)
+lookup_failures=0
+for lookup_case in fresh expired; do
+ failed_lookup_race "$lookup_case" &
+ lookup_pid=$!
+ if wait "$lookup_pid"; then :; else lookup_failures=$((lookup_failures + 1)); fi
+done
+[ "$lookup_failures" = 0 ]
+# Stable invalid symlinks still permit best-effort installation and survive it.
+(
+ . "$ROOT/claim-functions.sh"
+ SCRIPT_DIR="$ROOT/foreign-plugin/bin" STAMP_DIR="$ROOT/foreign-cache" TARGET_VER=1.42.0
+ backoff_path "$TARGET_VER"
+ mkdir -p "$BACKOFF" "$ROOT/foreign-directory"
+ echo keep > "$ROOT/foreign-directory/canary"
+ ln -s "$ROOT/foreign-directory" "$BACKOFF/attempt.foreign"
+ for invalid in ../foreign-directory attempt.missing attempt.foreign; do
+  ln -sn "$invalid" "$BACKOFF/active"
+  claim_install
+  [ -z "$INSTALL_CLAIM" ]
+  [ "$(readlink "$BACKOFF/active")" = "$invalid" ]
+  [ "$(cat "$ROOT/foreign-directory/canary")" = keep ]
+  [ -L "$BACKOFF/attempt.foreign" ]
+  rm "$BACKOFF/active"
+ done
+)
+echo 'PASS: invalid/foreign links remain intact with best-effort fallback'
+[ "$CLAIM_ONLY" != claim-race ] || exit 0
 for product in claude codex; do
  mkdir -p "$product/bin" "$product/.claude-plugin"
  cp "$SRC/hook-wrapper.sh" "$product/bin/"
@@ -451,6 +567,9 @@ main >/dev/null
 [ "$(cat "$venv/canary")" = keep ]
 echo 'PASS: isolated Codex cache and installer regressions'
 RUN
+
+# Focused runs leave the independently owned diagnostics to integration.
+case "${1:-}" in claim-race|wrapper-only) exit 0 ;; esac
 
 # Keep the independent diagnostics suite, after the owned behavioral cases so
 # any legacy diagnostics expectation cannot prevent concurrency validation.
