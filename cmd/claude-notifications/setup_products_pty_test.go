@@ -958,6 +958,11 @@ func (f *bootstrapFixture) releaseAssets() {
 				}
 				return nil
 			}
+			// go build -o can replace the tracked convenience symlink with a
+			// regular CI executable. That output is not part of a Git source archive.
+			if filepath.ToSlash(rel) == "bin/claude-notifications" && info.Mode().IsRegular() {
+				return nil
+			}
 			link := ""
 			if info.Mode()&os.ModeSymlink != 0 {
 				link, err = os.Readlink(path)
