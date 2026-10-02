@@ -319,8 +319,12 @@ class Owned:
         if s['helper']: self.closed += 1
 
     def helper(self, exe, root, env, deadline, expected_sha):
-        end = min(deadline, time.monotonic() + .224)  # helper224ms != whole operation2s
-        need(sha(exe) == expected_sha and time.monotonic() < end, 'copied_helper_sha_or_deadline')
+        # Per-call identity validation shares the original full operation budget.
+        need(time.monotonic() < deadline, 'qualification_operation_deadline')
+        need(sha(exe) == expected_sha, 'copied_helper_sha_mismatch')
+        need(time.monotonic() < deadline, 'qualification_operation_deadline')
+        # Arm BEFORE Popen: command start/wait/EOF retain their original 224ms cap.
+        end = min(deadline, time.monotonic() + .224)
         s = self.launch([str(exe), 'opencode-clock', '--protocol', '1'], root, env, True)
         try:
             self.stop(s, end, terminate=False)

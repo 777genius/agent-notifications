@@ -7,6 +7,7 @@ on:
       - 'scripts/opencode-clock-native-qualification.py'
       - 'scripts/opencode-clock-native-qualification.mjs'
       - 'scripts/testdata/opencode-clock-qualification/closed-inputs.json'
+      - 'scripts/testdata/opencode-clock-qualification/test_fixture.py'
       - 'CLOCK-MATRIX-PORTS.md'
   workflow_dispatch:
     inputs:
@@ -47,6 +48,9 @@ jobs:
         uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+      - name: Check fixture helper deadline boundaries
+        if: matrix.platform == 'linux' && matrix.arch == 'amd64'
+        run: python scripts/testdata/opencode-clock-qualification/test_fixture.py
       - name: Install Linux build dependency
         if: matrix.platform == 'linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
