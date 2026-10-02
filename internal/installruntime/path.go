@@ -43,7 +43,7 @@ func splitDeviceIdentity(id string) (dev, ino string, ok bool) {
 
 // deviceRenumbering maps device numbers recorded before a reboot onto the
 // current ones. Each recorded device must map to exactly one current device and
-// back, so a chain that now crosses a different mount never matches.
+// back, so a chain whose mount structure changed never matches.
 type deviceRenumbering struct{ devices, taken map[string]string }
 
 func newDeviceRenumbering() deviceRenumbering {
