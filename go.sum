@@ -22,6 +22,8 @@ github.com/777genius/plugin-kit-ai/plugininstall v0.0.0-20260920081413-a5644312f
 github.com/777genius/plugin-kit-ai/plugininstall v0.0.0-20260920081413-a5644312f7af/go.mod h1:c0CmoYlHZaAYEcO1IfyTFybxHvglm3ucFSnnLaP41jY=
 github.com/777genius/plugin-kit-ai/sdk v1.2.1-0.20261001061845-2d2a26bf372a h1:PzdFFfhms83PaTuByl4UIAEJXHq6imBa1EISdR7xstM=
 github.com/777genius/plugin-kit-ai/sdk v1.2.1-0.20261001061845-2d2a26bf372a/go.mod h1:5Dzrnf4A5Yocek3zypR6TmZTlakBoWhtm/JD0/osAEM=
+github.com/777genius/plugin-kit-ai/sdk v1.2.1-0.20261002064501-7f3ec1de3103 h1:8JWdDJlzq0tI/w3ywpMUplratVBglfsM0I2QXj9JIPA=
+github.com/777genius/plugin-kit-ai/sdk v1.2.1-0.20261002064501-7f3ec1de3103/go.mod h1:5Dzrnf4A5Yocek3zypR6TmZTlakBoWhtm/JD0/osAEM=
 github.com/MakeNowJust/heredoc v1.0.0 h1:cXCdzVdstXyiTqTvfqk9SDHpKNjxuom+DOlyEeQ4pzQ=
 github.com/MakeNowJust/heredoc v1.0.0/go.mod h1:mG5amYoWBHf8vpLOuehzbGGw0EHxpZZ6lCpQ4fNJ8LE=
 github.com/atotto/clipboard v0.1.4 h1:EH0zSVneZPSuFR11BlR9YppQTVDbh5+16AmcJi4g1z4=

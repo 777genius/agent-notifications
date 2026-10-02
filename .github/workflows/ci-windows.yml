@@ -68,14 +68,14 @@ jobs:
       - name: Qualify observation caches without cross-package contention
         # Keep real first claims and interprocess assertions under the unchanged
         # 250ms production budget, separate from other race-instrumented packages.
-        run: go test -p 1 -v -race -coverprofile=coverage-gemini.txt -covermode=atomic ./internal/geminievent ./internal/notification/observation
+        run: go test -p 1 -v -race -coverprofile=coverage-gemini.txt -covermode=atomic ./internal/geminievent ./internal/notification/observation ./internal/copilotvscodeevent ./cmd/claude-notifications
         shell: bash
 
       - name: Run remaining tests
         run: |
           set -euo pipefail
           packages=$(go list ./...)
-          remaining_packages=$(printf '%s\n' "$packages" | grep -Fvx -e 'github.com/777genius/agent-notifications/internal/geminievent' -e 'github.com/777genius/agent-notifications/internal/notification/observation')
+          remaining_packages=$(printf '%s\n' "$packages" | grep -Fvx -e 'github.com/777genius/agent-notifications/internal/geminievent' -e 'github.com/777genius/agent-notifications/internal/notification/observation' -e 'github.com/777genius/agent-notifications/internal/copilotvscodeevent' -e 'github.com/777genius/agent-notifications/cmd/claude-notifications')
           mapfile -t remaining <<< "$remaining_packages"
           go test -v -race -coverprofile=coverage-rest.txt -covermode=atomic "${remaining[@]}"
           { head -n 1 coverage-rest.txt; tail -n +2 coverage-rest.txt; tail -n +2 coverage-gemini.txt; } > coverage.txt
