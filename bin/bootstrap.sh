@@ -2163,7 +2163,7 @@ main() {
     detect_platform 3>&-
     require_installer_runtime 3>&- || return 1
     resolve_bootstrap_release 3>&- || return 1
-    run_setup_stage "Preparing verified installer" stage_config_helper 3>&- || { echo "Cannot stage verified config helper; existing runtime retained." >&2; return 1; }
+    run_setup_stage "Preparing verified installer" stage_config_helper 3>&- >&2 || { echo "Cannot stage verified config helper; existing runtime retained." >&2; return 1; }
     export BOOTSTRAP_RELEASE_TAG="$BOOTSTRAP_TAG" BOOTSTRAP_RELEASE_COMMIT="$BOOTSTRAP_COMMIT"
     if [ "$_INTERACTIVE_INTENT" = true ] || [[ "$original_product" = bundle:* ]] || [ "$original_product" = gemini ]; then
         selector_collect capabilities || return $?
