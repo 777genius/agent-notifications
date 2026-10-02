@@ -6,7 +6,15 @@ implements the transport Backend contract. `Backend.Clock()` supplies the native
 boot-continuous clock for capturing the transport's original <=15-second budget.
 `Backend.Status(ctx)` returns read-only configuration, explicit intent, desktop
 opt-out, offline capability and `permission: not_checked`; it does not promise OS
-permission or delivery. `Backend.Close(ctx)` refuses future calls and drains all
+permission or delivery. `Backend.StatusForOrigin(ctx, origin)` also reports
+navigation eligibility for that call using the same configuration snapshot and
+Codex route policy as sending. Its `navigation.capability` is `eligible` only for
+an enabled macOS route with an eligible installation, click-to-focus enabled and
+an admitted Codex origin; otherwise it is `disabled` or `unavailable` with a reason.
+This is an offline eligibility result, not the send receipt's `available` capability:
+it does not probe native permissions, verify the current application, inspect chat
+or profile existence, or prove a click succeeded. It exposes no session ID or app path.
+`Backend.Close(ctx)` refuses future calls and drains all
 in-flight calls, including replay lookups; repeat calls can finish a timed-out
 close. No resource is opened at construction and no background worker is owned.
 

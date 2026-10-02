@@ -427,8 +427,8 @@ func (p *flowNotifySpy) Deliver(_ context.Context, r notification.Request) notif
 
 type flowStatus struct{}
 
-func (flowStatus) Status(context.Context) (notifymcp.Status, error) {
-	return notifymcp.Status{Enabled: true, Configuration: "enabled", Capability: "available"}, nil
+func (flowStatus) Status(context.Context, origin.Context) (notifymcp.Status, error) {
+	return notifymcp.Status{Enabled: true, Configuration: "enabled", Capability: "available", Navigation: agentnotify.NavigationStatus{Capability: "eligible", Precision: "chat_id", Scope: "local_current_profile", Reason: "configured_codex_desktop"}}, nil
 }
 
 func proveNotifyTargetsAfterCwdGone(t *testing.T, cwd string) {

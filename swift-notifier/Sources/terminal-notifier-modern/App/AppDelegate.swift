@@ -11,6 +11,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         super.init()
     }
 
+    // Both delegate properties are weak. The app.run owner must retain the
+    // returned delegate, and install it before AppKit finishes launching.
+    static func install(on app: NSApplication) -> AppDelegate {
+        let delegate = AppDelegate()
+        app.delegate = delegate
+        UNUserNotificationCenter.current().delegate = delegate
+        return delegate
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         UNUserNotificationCenter.current().delegate = self
     }
@@ -20,7 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
-        let handle = { [self] in
+        lifecycle.dispatchIngress(completion: completionHandler) { [self] in
             CallbackHandler(lifecycle: lifecycle, legacy: actionExecutor).receive(
                 identifier: response.actionIdentifier,
                 defaultIdentifier: UNNotificationDefaultActionIdentifier,
@@ -28,8 +37,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 userInfo: response.notification.request.content.userInfo,
                 completion: completionHandler)
         }
-        if Thread.isMainThread { handle() }
-        else { DispatchQueue.main.async(execute: handle) }
     }
 
     func userNotificationCenter(
