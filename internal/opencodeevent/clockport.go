@@ -89,7 +89,7 @@ func validClockUUID(s string) bool {
 			if c != '-' {
 				return false
 			}
-		} else if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+		} else if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			return false
 		}
 	}

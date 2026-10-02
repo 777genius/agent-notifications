@@ -24,6 +24,7 @@ func TestOpenCodeClockIsolatedDispatch(t *testing.T) {
 		return
 	}
 	root := t.TempDir()
+	coverageDir := t.TempDir()
 	config := filepath.Join(root, "config", "agent-notifications")
 	if err := os.MkdirAll(config, 0700); err != nil {
 		t.Fatal(err)
@@ -35,7 +36,7 @@ func TestOpenCodeClockIsolatedDispatch(t *testing.T) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestOpenCodeClockIsolatedDispatch$")
 	cmd.Dir = root
-	cmd.Env = []string{"AN_CLOCK_TEST_CHILD=1", "HOME=" + root, "XDG_CONFIG_HOME=" + filepath.Join(root, "config"), "XDG_DATA_HOME=" + filepath.Join(root, "missing-data"), "CLAUDE_PLUGIN_ROOT=" + filepath.Join(root, "missing-plugin"), "AGENT_NOTIFICATIONS_CONFIG=" + filepath.Join(config, "config.json")}
+	cmd.Env = []string{"AN_CLOCK_TEST_CHILD=1", "GOCOVERDIR=" + coverageDir, "HOME=" + root, "XDG_CONFIG_HOME=" + filepath.Join(root, "config"), "XDG_DATA_HOME=" + filepath.Join(root, "missing-data"), "CLAUDE_PLUGIN_ROOT=" + filepath.Join(root, "missing-plugin"), "AGENT_NOTIFICATIONS_CONFIG=" + filepath.Join(config, "config.json")}
 	var out, stderr bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &stderr
