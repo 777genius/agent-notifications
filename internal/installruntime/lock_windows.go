@@ -19,6 +19,10 @@ func tryLock(f *os.File) (bool, error) {
 	return err == nil, err
 }
 
+func prepareLockedFile(f *os.File, writable bool) error {
+	return nil
+}
+
 func openLock(path string, create bool) (*os.File, error) {
 	name, err := windows.UTF16PtrFromString(path)
 	if err != nil {

@@ -32,10 +32,15 @@ type directoryAbsentError struct{}
 func (directoryAbsentError) Error() string { return "projection parent absent" }
 
 func skillPathsValid(r Request, source, destination string) bool {
+	// Historical projections remain removable and may be relocated to the
+	// renamed canonical skill using their exact recorded ownership.
+	sourceName := filepath.Base(filepath.Dir(source))
+	destinationName := filepath.Base(filepath.Dir(destination))
+	skillName := func(name string) bool { return name == "agent-notifications" || name == "agent-notify" }
 	return r.Provider == registration.Codex &&
-		source == filepath.Join(r.RuntimeRoot, "skills", "agent-notify", "SKILL.md") && clean(source) &&
+		skillName(sourceName) && source == filepath.Join(r.RuntimeRoot, "skills", sourceName, "SKILL.md") && clean(source) &&
 		clean(destination) && filepath.Base(destination) == "SKILL.md" &&
-		filepath.Base(filepath.Dir(destination)) == "agent-notify" &&
+		skillName(destinationName) &&
 		destination != r.ConfigPath && destination != r.RuntimeRoot && destination != r.ControlRoot &&
 		!within(r.RuntimeRoot, destination) && !within(r.ControlRoot, destination)
 }
@@ -75,8 +80,15 @@ func projectSkill(r Request, l installruntime.Ledger, old *skillOwnership, inspe
 		paths = append(paths, old.DestinationPath)
 	}
 	selected := r.SkillProjection
-	if selected != nil && !skillPathsValid(r, selected.SourcePath, selected.DestinationPath) {
-		return nil, nil, nil, ErrConflict
+	if selected != nil {
+		if !skillPathsValid(r, selected.SourcePath, selected.DestinationPath) {
+			return nil, nil, nil, ErrConflict
+		}
+		// A historical repair selects both historical paths. New projection
+		// selects both canonical paths; removal relies on recorded ownership.
+		if !r.Remove && filepath.Base(filepath.Dir(selected.SourcePath)) != filepath.Base(filepath.Dir(selected.DestinationPath)) {
+			return nil, nil, nil, ErrConflict
+		}
 	}
 	if r.Remove {
 		if selected != nil && old == nil {
@@ -89,7 +101,7 @@ func projectSkill(r Request, l installruntime.Ledger, old *skillOwnership, inspe
 			}
 			paths = append(paths, selected.DestinationPath)
 		}
-		if selected != nil && old != nil && (selected.SourcePath != old.SourcePath || selected.DestinationPath != old.DestinationPath) {
+		if selected != nil && old != nil && selected.DestinationPath != old.DestinationPath {
 			return nil, nil, nil, ErrConflict
 		}
 		if old != nil {
@@ -99,6 +111,23 @@ func projectSkill(r Request, l installruntime.Ledger, old *skillOwnership, inspe
 	}
 	if selected == nil {
 		return nil, old, paths, nil
+	}
+	// A second spelling in the same skills root would activate two copies.
+	// Only the recorded old projection may occupy that sibling during rename.
+	alternateName := "agent-notify"
+	if filepath.Base(filepath.Dir(selected.DestinationPath)) == alternateName {
+		alternateName = "agent-notifications"
+	}
+	alternate := filepath.Join(filepath.Dir(filepath.Dir(selected.DestinationPath)), alternateName, "SKILL.md")
+	if old == nil || old.DestinationPath != alternate {
+		_, identity, e := read(alternate, maxSkill)
+		if e != nil {
+			return nil, nil, nil, e
+		}
+		if identity.Exists {
+			return nil, nil, nil, ErrConflict
+		}
+		paths = append(paths, alternate)
 	}
 	if _, tracked := l.Files[selected.DestinationPath]; tracked {
 		return nil, nil, nil, ErrConflict

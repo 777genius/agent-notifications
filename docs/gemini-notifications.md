@@ -20,7 +20,7 @@ The candidate integration observes these signals; it does not approve tools or c
 
 Desktop alerts are silent. Webhooks require explicit consent and separately
 configured endpoints. Sound, click-to-focus, questions, errors, plans, reviews,
-session-limit alerts, MCP notification tools and the `agent-notify` skill are not
+session-limit alerts, MCP notification tools and the `agent-notifications` skill are not
 Gemini capabilities. Claude/Codex capabilities and OpenCode limits remain separate.
 
 ## Candidate setup and compatible-release setup

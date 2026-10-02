@@ -542,7 +542,7 @@ func agentNotifySetupExecute(ctx context.Context, args []string, out io.Writer, 
 	if a.operation == "register" || a.operation == "remove" {
 		var projection *clientsetup.SkillProjection
 		if destination := a.values["skill-destination"]; destination != "" {
-			projection = &clientsetup.SkillProjection{SourcePath: filepath.Join(s.Ledger.RuntimeRoot, "skills", "agent-notify", "SKILL.md"), DestinationPath: destination}
+			projection = &clientsetup.SkillProjection{SourcePath: filepath.Join(s.Ledger.RuntimeRoot, "skills", "agent-notifications", "SKILL.md"), DestinationPath: destination}
 		}
 		result, err := clientsetup.Apply(ctx, clientsetup.Request{SkillProjection: projection, ControlRoot: root, RuntimeRoot: runtimeRoot, Command: a.values["command"], ConfigPath: a.values["config"], Provider: registration.Provider(a.values["provider"]), Mode: clientsetup.Managed, ExpectedGeneration: a.generation, Remove: a.operation == "remove"})
 		if err != nil {

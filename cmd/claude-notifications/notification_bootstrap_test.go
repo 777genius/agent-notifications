@@ -1069,7 +1069,7 @@ func TestNotificationBootstrapRealInstaller(t *testing.T) {
 	}
 	t.Setenv("NOTIFICATION_TEST_EXECUTABLE", executable)
 	bundle := filepath.Join(home, "source")
-	for _, dir := range []string{"bin", ".claude-plugin", "config", "skills/agent-notify"} {
+	for _, dir := range []string{"bin", ".claude-plugin", "config", "skills/agent-notifications"} {
 		if err := os.MkdirAll(filepath.Join(bundle, dir), 0700); err != nil {
 			t.Fatal(err)
 		}
@@ -1087,11 +1087,11 @@ func TestNotificationBootstrapRealInstaller(t *testing.T) {
 		t.Fatal(err)
 	}
 	write(filepath.Join(bundle, "config", "config.json"), string(packagedConfig))
-	packagedSkill, err := os.ReadFile(filepath.Join(notificationRepoRoot(t), "skills", "agent-notify", "SKILL.md"))
+	packagedSkill, err := os.ReadFile(filepath.Join(notificationRepoRoot(t), "skills", "agent-notifications", "SKILL.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	write(filepath.Join(bundle, "skills", "agent-notify", "SKILL.md"), string(packagedSkill))
+	write(filepath.Join(bundle, "skills", "agent-notifications", "SKILL.md"), string(packagedSkill))
 	for _, name := range []string{"codex-hook-wrapper.sh", "codex-hook-wrapper.cmd"} {
 		write(filepath.Join(bundle, "bin", name), "inert hook")
 	}

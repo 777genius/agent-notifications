@@ -174,7 +174,7 @@ func TestInstallRuntimeRelocatesFromRestoredVersionedCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	oldRoot, newRoot := filepath.Join(cache, "1.45.18"), filepath.Join(cache, "1.46.0")
-	oldSkill := filepath.Join(oldRoot, "skills", "agent-notify", "SKILL.md")
+	oldSkill := filepath.Join(oldRoot, "skills", "agent-notifications", "SKILL.md")
 	oldLauncher := filepath.Join(oldRoot, "bin", "agent-notifications")
 	if err := os.Remove(filepath.Join(oldRoot, "bin", entry)); err != nil {
 		t.Fatal(err)
@@ -206,7 +206,7 @@ func TestInstallRuntimeRelocatesFromRestoredVersionedCache(t *testing.T) {
 	if err := json.Unmarshal(data, &ledger); err != nil {
 		t.Fatal(err)
 	}
-	newSkill := filepath.Join(newRoot, "skills", "agent-notify", "SKILL.md")
+	newSkill := filepath.Join(newRoot, "skills", "agent-notifications", "SKILL.md")
 	if ledger.RuntimeRoot != newRoot || ledger.Consumers["claude-hooks"].RuntimeRoot != newRoot ||
 		!ledger.Files[filepath.Join(newRoot, "bin", entry)].Exists || !ledger.Files[newSkill].Exists {
 		t.Fatalf("unexpected ownership after relocation: %+v", ledger)

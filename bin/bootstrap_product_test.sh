@@ -37,6 +37,8 @@ export HOME="$SANDBOX/home space" USERPROFILE="$SANDBOX/home space" CODEX_HOME="
 export CLAUDE_CONFIG_DIR="$SANDBOX/claude config" CLAUDE_HOME="$SANDBOX/claude home"
 mkdir -p "$HOME" "$CODEX_HOME" "$CLAUDE_CONFIG_DIR" "$CLAUDE_HOME"
 sed '/^main "\$@"$/d' "$ROOT/bin/bootstrap.sh" > "$SANDBOX/functions.sh"
+# This source is also loaded by subprocess fixtures later in the suite.
+printf '\nbootstrap_macos_command() { return 1; }\n' >> "$SANDBOX/functions.sh"
 
 # Startup path resolution must be nounset-safe on Git Bash and must not require
 # a home fallback when an explicit Claude path is available.
@@ -58,6 +60,103 @@ env -u HOME USERPROFILE="$SANDBOX/windows profile" CLAUDE_HOME="$SANDBOX/legacy 
     bash -c 'source "$1"; [ "$CLAUDE_HOME" = "$2" ]' \
     _ "$SANDBOX/functions.sh" "$SANDBOX/explicit config"
 source "$SANDBOX/functions.sh"
+# All macOS application queries in this suite must be explicitly mocked.
+bootstrap_macos_command() { echo "Unexpected macOS application query in fixture" >&2; return 1; }
+
+# Regression: an omitted route on macOS must reach configure with the registered
+# official app (including spaces) and preserve-policy; explicit decisions must
+# bypass discovery, and an unverified identity must never become a local route.
+(
+    trace="$SANDBOX/default-codex-discovery"
+    configure_trace="$SANDBOX/default-codex-configure"
+    mkdir -p "$SANDBOX/apps with spaces/ChatGPT.app" "$SANDBOX/apps with spaces/Codex.app"
+    uname() { printf '%s\n' "${TEST_OS:-Darwin}"; }
+    bootstrap_macos_command() {
+        printf '%s\n' "$1" >> "$trace"
+        case "$1" in
+            /usr/bin/osascript)
+                [ "$#" -eq 5 ] && [ "$2" = -l ] && [ "$3" = JavaScript ] && [ "$4" = -e ] || return 2
+                [ "${TEST_LS_AVAILABLE:-true}" = true ] || return 1
+                printf '%s\n' "$TEST_LS_APP" ;;
+            /usr/bin/codesign)
+                [ "$#" -eq 7 ] && [ "$2" = --verify ] && [ "$3" = --strict ] &&
+                    [ "$4" = --all-architectures ] && [ "$5" = -R ] || return 2
+                [ "$6" = '=anchor apple generic and identifier "com.openai.codex" and certificate leaf[subject.OU] = "2DC432GLL2" and certificate leaf[field.1.2.840.113635.100.6.1.13] exists' ] || return 2
+                [ "$7" = "$(cd -P "$TEST_LS_APP" && pwd -P)" ] || return 2
+                [ "${TEST_SIGNATURE_VALID:-true}" = true ] ;;
+            *) return 2 ;;
+        esac
+    }
+    cat > "$SANDBOX/default-route-configure" <<'CONFIGURE_ROUTE'
+#!/bin/bash
+printf '%s\n' "$@" > "$TEST_CONFIGURE_TRACE"
+CONFIGURE_ROUTE
+    chmod +x "$SANDBOX/default-route-configure"
+    CONFIGURE_BINARY="$SANDBOX/default-route-configure"
+    export TEST_CONFIGURE_TRACE="$configure_trace"
+    for registered_name in ChatGPT Codex; do
+        TEST_LS_APP="$SANDBOX/apps with spaces/$registered_name.app"
+        physical_app=$(cd -P "$TEST_LS_APP" && pwd -P)
+        for product in codex both; do
+            : > "$trace"
+            PRODUCT=""; CONFIGURE_ARGS=(); CONFIGURE_NOTIFICATIONS=true
+            select_product --product "$product"
+            [ "${#CONFIGURE_ARGS[@]}" -eq 9 ]
+            [ "${CONFIGURE_ARGS[*]}" = "--app $physical_app --team-id 2DC432GLL2 --allow-unknown-caller true --allow-caller-asserted false --preserve-policy" ]
+            [ "$(cat "$trace")" = $'/usr/bin/osascript\n/usr/bin/codesign' ]
+            configure_agent_policy portable
+            printf '%s\n' setup-notifications configure --provider "$product" \
+                --app "$physical_app" --team-id 2DC432GLL2 \
+                --allow-unknown-caller true --allow-caller-asserted false --preserve-policy \
+                --policy-only --preserve-enabled > "$SANDBOX/default-route-expected"
+            cmp "$configure_trace" "$SANDBOX/default-route-expected"
+        done
+    done
+    : > "$trace"
+    PRODUCT=""; CONFIGURE_ARGS=(); OPENCODE_ARGS=()
+    select_product --products codex,gemini --webhook
+    [ "${CONFIGURE_ARGS[*]}" = "--app $physical_app --team-id 2DC432GLL2 --allow-unknown-caller true --allow-caller-asserted false --preserve-policy" ]
+    [ "$(cat "$trace")" = $'/usr/bin/osascript\n/usr/bin/codesign' ]
+    OPENCODE_ARGS=()
+    for explicit_route in none app; do
+        : > "$trace"
+        PRODUCT=""; CONFIGURE_ARGS=()
+        if [ "$explicit_route" = none ]; then
+            select_product --product codex --navigation none --allow-unknown-caller false --allow-caller-asserted false
+            [ "${CONFIGURE_ARGS[*]}" = "--navigation none --allow-unknown-caller false --allow-caller-asserted false" ]
+        else
+            select_product --product both --app "$physical_app" --team-id ABCDE12345 --allow-unknown-caller false --allow-caller-asserted true
+            [ "${CONFIGURE_ARGS[*]}" = "--app $physical_app --team-id ABCDE12345 --allow-unknown-caller false --allow-caller-asserted true" ]
+        fi
+        [ ! -s "$trace" ]
+    done
+    for failure in signature missing unsafe; do
+        : > "$trace"
+        TEST_SIGNATURE_VALID=true; TEST_LS_AVAILABLE=true
+        TEST_LS_APP="$SANDBOX/apps with spaces/ChatGPT.app"
+        case "$failure" in
+            signature) TEST_SIGNATURE_VALID=false ;;
+            missing) TEST_LS_AVAILABLE=false ;;
+            unsafe) TEST_LS_APP+=$'\nspoof.app' ;;
+        esac
+        PRODUCT=""; CONFIGURE_ARGS=()
+        select_product --product codex 2> "$SANDBOX/default-route-fallback"
+        [ "${CONFIGURE_ARGS[*]}" = "--navigation none --allow-unknown-caller true --allow-caller-asserted false --preserve-policy" ]
+        grep -q 'defaulting to navigation none' "$SANDBOX/default-route-fallback"
+        if [ "$failure" != signature ]; then
+            [ "$(cat "$trace")" = /usr/bin/osascript ]
+        fi
+    done
+    for fallback in claude Linux MINGW64_NT; do
+        : > "$trace"
+        TEST_OS=Darwin; product=codex
+        if [ "$fallback" = claude ]; then product=claude; else TEST_OS="$fallback"; fi
+        PRODUCT=""; CONFIGURE_ARGS=()
+        select_product --product "$product"
+        [ "${CONFIGURE_ARGS[*]}" = "--navigation none --allow-unknown-caller true --allow-caller-asserted false --preserve-policy" ]
+        [ ! -s "$trace" ]
+    done
+)
 
 # Consent failures must stop at argument parsing, before acquiring artifacts.
 (
@@ -597,7 +696,9 @@ if os.name != "nt":
     import pty
 root, sandbox = map(pathlib.Path, sys.argv[1:])
 web = sandbox / 'http'; web.mkdir()
-(web / 'bootstrap.sh').write_bytes((root / 'bin/bootstrap.sh').read_bytes())
+fixture_bootstrap = (root / 'bin/bootstrap.sh').read_text(encoding='utf-8').replace(
+    '\nmain "$@"', '\nbootstrap_macos_command() { return 1; }\nmain "$@"')
+(web / 'bootstrap.sh').write_text(fixture_bootstrap, encoding='utf-8')
 (web / 'latest').write_text('{"tag_name":"v1.42.0"}')
 release_commits = {'v1.42.0': 'a' * 40, 'v1.43.0': 'b' * 40, 'v2.0.0': 'c' * 40}
 (web / 'commits').mkdir()
@@ -813,7 +914,7 @@ cli = sandbox / 'clis'; cli.mkdir()
 (cli / 'codex').write_bytes(b'#!/bin/sh\nexit 99\n'); (cli / 'codex').chmod(0o755)
 assert pathlib.Path(bash).is_file(), 'fixture controller Bash must exist'
 env['PATH'] = str(cli) + os.pathsep + (os.environ['PATH'] if os.name == 'nt' else '/usr/bin:/bin')
-script = str(root / 'bin/bootstrap.sh')
+script = str(web / 'bootstrap.sh')
 def run(args, expected=0, extra=None):
     process = subprocess.Popen([bash, script]+args, env=dict(env, **(extra or {})), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
     try:
@@ -892,7 +993,7 @@ assert r.returncode == 0, r.stdout.decode()
 assert (live/'bin/claude-notifications').read_text() == 'stale'
 # Menu routing for Claude/both uses explicit adapters; Codex below exercises
 # the complete bootstrap HTTP/staging path with fake runtime assets.
-dispatch = (root / 'bin/bootstrap.sh').read_text(encoding='utf-8').replace('main "$@"', '')
+dispatch = fixture_bootstrap.replace('main "$@"', '')
 dispatch += '\ncheck_prerequisites() { :; }\nresolve_bootstrap_release() { :; }\nstage_historical_baselines() { :; }\nstage_config_helper() { _CONFIG_STAGE=$(mktemp -d); }\nconfig_preflight() { :; }\ninitialize_config() { :; }\ninstall_claude() { echo CLAUDE_ADAPTER; }\ninstall_codex() { echo CODEX_ADAPTER; }\nmain "$@"\n'
 (web / 'dispatch.sh').write_bytes(dispatch.encode('utf-8'))
 # The native SelectMany UI is independently exercised against the actual

@@ -45,7 +45,7 @@ func configureFixture(t *testing.T) (setupCommandFixture, notificationConfigureR
 		t.Fatal(err)
 	}
 	setupCommandWrite(t, filepath.Join(f.runtime, "config", "config.json"), setupCommandRead(t, f.global), 0600)
-	_, err := installruntime.Commit(setupCommandContext(t), installruntime.Request{ControlRoot: f.control, RuntimeRoot: f.runtime, Owner: "existing-installer", ConsumerID: "hooks", RefreshOnly: true, Files: []installruntime.File{{Path: filepath.Join(f.runtime, "skills", "agent-notify", "SKILL.md"), Data: []byte("canonical test skill"), Mode: 0600}}})
+	_, err := installruntime.Commit(setupCommandContext(t), installruntime.Request{ControlRoot: f.control, RuntimeRoot: f.runtime, Owner: "existing-installer", ConsumerID: "hooks", RefreshOnly: true, Files: []installruntime.File{{Path: filepath.Join(f.runtime, "skills", "agent-notifications", "SKILL.md"), Data: []byte("canonical test skill"), Mode: 0600}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestNotificationConfigureBothAndRetry(t *testing.T) {
 	if _, err = configureNotifications(ctx, request, deps); err != nil {
 		t.Fatal("retry:", err)
 	}
-	if setupCommandRead(t, filepath.Join(request.CodexHome, "skills", "agent-notify", "SKILL.md")) != "canonical test skill" {
+	if setupCommandRead(t, filepath.Join(request.CodexHome, "skills", "agent-notifications", "SKILL.md")) != "canonical test skill" {
 		t.Fatal("skill source")
 	}
 }
@@ -296,7 +296,7 @@ func TestNotificationConfigureSkillConflictAndRefresh(t *testing.T) {
 	if !reflect.DeepEqual(before, setupCommandTree(t, f.root)) {
 		t.Fatal("conflict wrote")
 	}
-	source := filepath.Join(f.runtime, "skills", "agent-notify", "SKILL.md")
+	source := filepath.Join(f.runtime, "skills", "agent-notifications", "SKILL.md")
 	fp, err := installruntime.Fingerprint(source)
 	if err != nil {
 		t.Fatal(err)
@@ -309,7 +309,7 @@ func TestNotificationConfigureSkillConflictAndRefresh(t *testing.T) {
 	if _, err = configureNotifications(setupCommandContext(t), request, original); err != nil {
 		t.Fatal(err)
 	}
-	if setupCommandRead(t, filepath.Join(request.CodexHome, "skills", "agent-notify", "SKILL.md")) != "refreshed canonical skill" {
+	if setupCommandRead(t, filepath.Join(request.CodexHome, "skills", "agent-notifications", "SKILL.md")) != "refreshed canonical skill" {
 		t.Fatal("skill not refreshed")
 	}
 }
@@ -350,7 +350,7 @@ func TestNotificationConfigurePluginSingleSource(t *testing.T) {
 	if _, err := configureNotifications(setupCommandContext(t), request, deps); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(request.CodexHome, "skills", "agent-notify", "SKILL.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(request.CodexHome, "skills", "agent-notifications", "SKILL.md")); !os.IsNotExist(err) {
 		t.Fatal("duplicate user projection", err)
 	}
 	request.Route = nil
@@ -402,11 +402,16 @@ func TestNotificationConfigureUnknownStatusIsNotDisabled(t *testing.T) {
 }
 
 func TestNotificationConfigureSkillAbsenceRace(t *testing.T) {
-	for _, at := range []string{"registration", "enable"} {
+	for _, at := range []string{"registration", "enable", "legacy-registration", "legacy-enable"} {
 		t.Run(at, func(t *testing.T) {
+			name := "agent-notifications"
+			if strings.HasPrefix(at, "legacy-") {
+				name = "agent-notify"
+				at = strings.TrimPrefix(at, "legacy-")
+			}
 			f, request, deps := configureFixture(t)
 			request.Provider = "codex"
-			destination := filepath.Join(request.CodexHome, "skills", "agent-notify", "SKILL.md")
+			destination := filepath.Join(request.CodexHome, "skills", name, "SKILL.md")
 			checks := 0
 			deps.Inventory = func(context.Context, registration.Provider, string) (notificationInventory, error) {
 				return notificationInventory{State: "clear", Skill: true, Revalidate: func(context.Context) error {

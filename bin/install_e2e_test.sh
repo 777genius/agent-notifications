@@ -1307,7 +1307,7 @@ test_windows_native_hooks_configured_existing_binary() {
     local fake_path="$TEST_DIR/fakebin"
 
     mkdir -p "$bin_dir" "$hooks_dir" "$fake_path"
-    printf '{"hooks":{}}\n' > "$hooks_dir/hooks.json"
+    printf '{"foreign":"keep","hooks":{}}\n' > "$hooks_dir/hooks.json"
 
     cat > "$fake_path/uname" <<'UNAME_EOF'
 #!/bin/sh
@@ -1370,6 +1370,9 @@ set AGENT_NOTIFICATIONS_LAUNCHER=${launcher}
 EOF
         [ -f "$target/${launcher}.bat" ] || exit 1
     done
+    # Model the managed runtime as the sole hooks writer. The legacy
+    # windows-hooks response above deliberately omits the foreign field.
+    printf '{"foreign":"keep","hooks":{"Stop":[{"hooks":[{"type":"command","command":"%s/%s","args":["handle-hook","Stop"],"timeout":30}]}]}}\n' "$target" "$entry" > "$target/../hooks/hooks.json"
     exit 0
 fi
 exit 0
@@ -1389,10 +1392,11 @@ FAKE_EXE_EOF
 
     assert_exit_code 0 $exit_code "Installer succeeds with existing Windows binary"
     assert_executable "$bin_dir/claude-notifications-windows-amd64-focus.exe" "Existing focus handler preserved"
-    assert_contains "$output" "Windows exec-form hooks configured" "Windows hooks configuration message shown"
+    assert_not_contains "$output" "Windows exec-form hooks configured" "Shell installer leaves managed hooks untouched"
 
     local hooks_json
     hooks_json=$(cat "$hooks_dir/hooks.json")
+    assert_contains "$hooks_json" '"foreign":"keep"' "Foreign hook metadata preserved"
     assert_contains "$hooks_json" '"args"[[:space:]]*:[[:space:]]*\[' "hooks.json uses exec-form args"
     assert_not_contains "$hooks_json" '"shell"[[:space:]]*:' "hooks.json does not force a shell"
     assert_not_contains "$hooks_json" '\$input' "hooks.json does not pipe stdin through a shell"
@@ -1591,7 +1595,7 @@ test_windows_native_hooks_real_exec_launch() {
     local stage_dir="$TEST_DIR/stage"
     local hooks_dir="$plugin_root/hooks"
     mkdir -p "$bin_dir" "$stage_dir" "$hooks_dir"
-    printf '{"hooks":{}}\n' > "$hooks_dir/hooks.json"
+    printf '{"foreign":"keep","hooks":{}}\n' > "$hooks_dir/hooks.json"
 
     local exe_path="$stage_dir/claude-notifications-windows-amd64.exe"
     if [ "$(go env GOPROXY)" != "off" ]; then
@@ -1667,10 +1671,11 @@ test_windows_native_hooks_real_exec_launch() {
     exit_code=$?
 
     assert_exit_code 0 $exit_code "Installer succeeds with real Windows binary"
-    assert_contains "$output" "Windows exec-form hooks configured" "Installer rewrites hooks for exec form"
+    assert_not_contains "$output" "Windows exec-form hooks configured" "Installer does not replace managed hooks"
 
     local hooks_json
     hooks_json=$(cat "$hooks_dir/hooks.json")
+    assert_contains "$hooks_json" '"foreign"' "Real managed writer preserves foreign hook metadata"
     assert_contains "$hooks_json" '"args"[[:space:]]*:[[:space:]]*\[' "real hooks.json uses exec-form args"
     assert_not_contains "$hooks_json" '"shell"[[:space:]]*:' "real hooks.json does not force a shell"
     assert_not_contains "$hooks_json" '\$input' "real hooks.json does not pipe stdin through a shell"

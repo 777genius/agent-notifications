@@ -81,20 +81,32 @@ final class DesktopThreadExecutor {
         self.admission = admission
     }
     func execute(_ action: DesktopThreadAction, token: CallbackToken = CallbackToken(),
-                 isActive: @escaping () -> Bool = { true }, completion: @escaping (DesktopOpenResult) -> Void) {
+                 isActive: @escaping () -> Bool = { true },
+                 phase: @escaping (CallbackPhase) -> Void = { _ in }, completion: @escaping (DesktopOpenResult) -> Void) {
         guard token.isActive && isActive() else { completion(.open_unknown); return }
         do { try action.validate() }
         catch { completion(.malformed_action); return }
         guard admission.acquire() else { completion(.open_unknown); return }
+        // Includes time queued for the admitted preflight, not just Security work.
+        phase(.preflight_started)
         verificationWork { [self] in
             let result = preflight(action, token: token)
             deliverResult { [self] in
                 admission.release()
                 // isActive is a compatibility seam, called only on the callback queue.
                 guard token.isActive && isActive() else { completion(.open_unknown); return }
+                phase(.preflight_finished)
                 switch result {
                 case .success(let app):
-                    opener.open(action.url, application: app) { completion($0 ? .open_requested : .open_failed) }
+                    phase(.open_submitted)
+                    var completed = false
+                    opener.open(action.url, application: app) { success in
+                        guard !completed else { return }
+                        completed = true
+                        guard token.isActive && isActive() else { completion(.open_unknown); return }
+                        phase(.open_completed)
+                        completion(success ? .open_requested : .open_failed)
+                    }
                 case .failure(let outcome): completion(outcome)
                 }
             }

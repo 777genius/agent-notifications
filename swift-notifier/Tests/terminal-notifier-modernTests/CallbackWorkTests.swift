@@ -33,6 +33,89 @@ final class CallbackWorkTests: XCTestCase {
             completions.append(completion)
         }
     }
+    // The old 10s budget expires after verification and before Workspace replies.
+    // Uses existing handler/executor APIs so the same fixture is red on old code.
+    func testTypedCallbackSurvivesSlowVerificationAndWorkspaceReply() throws {
+        var time = 0.0
+        var timers: [(Double, () -> Void)] = []
+        var lines: [String] = []
+        var completions = 0
+        let owner = CallbackLifecycle(schedule: { delay, work in timers.append((time + delay, work)) },
+            exit: {}, diagnostic: { lines.append($0) }, now: { time })
+        let opener = Opener()
+        let executor = DesktopThreadExecutor(discovery: Discovery(), verifier: Verifier(check: {
+            time = 9.5
+            return true
+        }), opener: opener, verificationWork: { $0() }, deliverResult: { $0() },
+            admission: PreflightAdmission(limit: 1))
+        try receive(CallbackHandler(lifecycle: owner, desktop: executor), action()) { completions += 1 }
+        XCTAssertEqual(opener.completions.count, 1)
+        time = 10
+        timers.filter { $0.0 <= time }.forEach { $0.1() }
+        XCTAssertEqual(completions, 0)
+        time = 20.5 // Workspace takes another 11s after verification.
+        opener.completions[0](true)
+        XCTAssertEqual(completions, 1)
+        let terminal = try lines.map { try JSONDecoder().decode(CallbackDiagnostic.self, from: Data($0.utf8)) }
+            .filter { $0.event == "callback_terminal" }
+        XCTAssertEqual(terminal.compactMap { $0.outcome }, ["open_requested"])
+        timers[0].1(); opener.completions[0](false)
+        XCTAssertEqual(completions, 1)
+    }
+
+    func testTypedDeadlineSuppressesLateWorkspaceResultAndKeepsIdleBudget() throws {
+        var time = 0.0
+        var timers: [(Double, () -> Void)] = []
+        var lines: [String] = []
+        var completions = 0
+        var exits = 0
+        let owner = CallbackLifecycle(schedule: { delay, work in timers.append((delay, work)) },
+            exit: { exits += 1 }, diagnostic: { lines.append($0) }, now: { time })
+        let opener = Opener()
+        let executor = DesktopThreadExecutor(discovery: Discovery(), verifier: Verifier(), opener: opener,
+            verificationWork: { $0() }, deliverResult: { $0() }, admission: PreflightAdmission(limit: 1))
+        try receive(CallbackHandler(lifecycle: owner, desktop: executor), action()) { completions += 1 }
+        XCTAssertEqual(timers.map { $0.0 }, [30])
+        time = 30
+        timers[0].1()
+        XCTAssertEqual(completions, 1)
+        XCTAssertEqual(timers.map { $0.0 }, [30, 10])
+        let count = lines.count
+        opener.completions[0](true); opener.completions[0](false); timers[0].1()
+        XCTAssertEqual(lines.count, count)
+        XCTAssertEqual(completions, 1)
+        timers[1].1()
+        XCTAssertEqual(exits, 1)
+        let events = try lines.map { try JSONDecoder().decode(CallbackDiagnostic.self, from: Data($0.utf8)) }
+        XCTAssertEqual(events.last?.outcome, "open_unknown")
+        XCTAssertFalse(events.contains { $0.event == "open_completed" })
+    }
+
+    func testPhaseOrderElapsedAndPrivacyForTypedCallback() throws {
+        var time = 100.0
+        var lines: [String] = []
+        let owner = CallbackLifecycle(schedule: { _, _ in }, exit: {},
+            diagnostic: { lines.append($0) }, now: { time })
+        let opener = Opener()
+        let executor = DesktopThreadExecutor(discovery: Discovery(), verifier: Verifier(check: {
+            time = 109.5; return true
+        }), opener: opener, verificationWork: { $0() }, deliverResult: { $0() },
+            admission: PreflightAdmission(limit: 1))
+        try receive(CallbackHandler(lifecycle: owner, desktop: executor), action())
+        time = 111
+        opener.completions[0](true); opener.completions[0](false)
+        let events = try lines.map { try JSONDecoder().decode(CallbackDiagnostic.self, from: Data($0.utf8)) }
+        XCTAssertEqual(events.map { $0.event }, ["callback_received", "preflight_started", "preflight_finished",
+            "open_submitted", "open_completed", "callback_terminal"])
+        XCTAssertEqual(events.compactMap { $0.elapsedSeconds }, [0, 0, 9.5, 9.5, 11, 11])
+        XCTAssertTrue(events.allSatisfy { $0.correlationID == UUID(uuidString: action().correlationID)! })
+        for line in lines {
+            let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+            XCTAssertTrue(Set(object.keys).isSubset(of: ["event", "correlationID", "outcome", "elapsedSeconds"]))
+            XCTAssertFalse(line.contains("private-thread") || line.contains("disposable") || line.contains("codex://"))
+        }
+    }
+
     func testHeldSecurityKeepsSlotsAfterTimeoutAndOtherCallbacksProgress() throws {
         let entered = expectation(description: "two blocked checks")
         entered.expectedFulfillmentCount = 2
@@ -72,7 +155,7 @@ final class CallbackWorkTests: XCTestCase {
         wait(for: [returned], timeout: 2)
         XCTAssertEqual(completions, 24)
         XCTAssertEqual(opener.completions.count, 0)
-        XCTAssertEqual(events.count, 48)
+        XCTAssertEqual(events.filter { $0.contains("callback_received") || $0.contains("callback_terminal") }.count, 48)
         // No further candidate checks after cancellation; overfulfilment of entered fails.
     }
     func testMainQueueDeadlineFiresWhileVerifierRemainsHeld() throws {
@@ -83,7 +166,7 @@ final class CallbackWorkTests: XCTestCase {
         defer { gate.signal() }
         var completions = 0
         let owner = CallbackLifecycle(schedule: { delay, work in
-            XCTAssertEqual(delay, 10)
+            XCTAssertTrue([10.0, 30.0].contains(delay))
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: work)
         }, exit: {})
         let opener = Opener()
@@ -163,6 +246,7 @@ final class CallbackWorkTests: XCTestCase {
         opener.completions[1](false); opener.completions[0](true)
         opener.completions[1](true); opener.completions[0](false)
         let events = try lines.map { try JSONDecoder().decode(CallbackDiagnostic.self, from: Data($0.utf8)) }
+            .filter { $0.event.hasPrefix("callback_") }
         XCTAssertEqual(events.map { $0.event }, ["callback_received", "callback_received", "callback_terminal", "callback_terminal"])
         XCTAssertEqual(events.map { $0.correlationID }, [1, 2, 2, 1].map { UUID(uuidString: action($0).correlationID)! })
         XCTAssertEqual(events.compactMap { $0.outcome }, ["open_failed", "open_requested"])
@@ -195,8 +279,10 @@ final class CallbackWorkTests: XCTestCase {
         var completions = 0
         var activations: [String] = []
         var lines: [String] = []
-        let owner = CallbackLifecycle(schedule: { _, work in timers.append(work) }, exit: { exits += 1 },
-                                      diagnostic: { lines.append($0) })
+        let owner = CallbackLifecycle(schedule: { delay, work in
+            XCTAssertEqual(delay, 10) // legacy callbacks and idle retain their original budget
+            timers.append(work)
+        }, exit: { exits += 1 }, diagnostic: { lines.append($0) })
         let a = Child(), b = Child()
         var children = [a, b]
         let executor = ActionExecutor(makeCommand: { command in
