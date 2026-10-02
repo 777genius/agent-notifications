@@ -1,5 +1,5 @@
 ---
-name: agent-notify
+name: agent-notifications
 description: Send an Agent Notifications desktop notification when the user requests one, attention is needed, or a meaningful milestone warrants an alert during ongoing work.
 ---
 

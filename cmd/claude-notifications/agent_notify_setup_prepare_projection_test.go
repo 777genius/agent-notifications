@@ -128,7 +128,7 @@ func TestSetupSkillProjectionComposition(t *testing.T) {
 	setupPrepareIsolation(t)
 	f := newSetupCommandFixture(t)
 	ctx := setupCommandContext(t)
-	source := filepath.Join(f.runtime, "skills", "agent-notify", "SKILL.md")
+	source := filepath.Join(f.runtime, "skills", "agent-notifications", "SKILL.md")
 	stage := func(data string) {
 		g := f.generation(t)
 		before, err := installruntime.Fingerprint(source)
@@ -141,7 +141,7 @@ func TestSetupSkillProjectionComposition(t *testing.T) {
 		}
 	}
 	stage("first skill")
-	destination := filepath.Join(f.root, "user-skills", "agent-notify", "SKILL.md")
+	destination := filepath.Join(f.root, "user-skills", "agent-notifications", "SKILL.md")
 	if err := os.MkdirAll(filepath.Dir(destination), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -196,8 +196,8 @@ func TestSetupPrepareProjectionParser(t *testing.T) {
 	for _, args := range [][]string{
 		{"prepare", "--expected-generation", "1"},
 		{"prepare", "--expected-generation", "1", "--legacy-config", "relative", "--defaults-config", "/defaults"},
-		{"register", "--expected-generation", "1", "--provider", "claude", "--command", "/command", "--config", "/config", "--skill-destination", "/user/agent-notify/SKILL.md"},
-		{"remove", "--expected-generation", "1", "--provider", "codex", "--command", "/command", "--config", "/config", "--skill-destination", "/user/agent-notify/SKILL.md"},
+		{"register", "--expected-generation", "1", "--provider", "claude", "--command", "/command", "--config", "/config", "--skill-destination", "/user/agent-notifications/SKILL.md"},
+		{"remove", "--expected-generation", "1", "--provider", "codex", "--command", "/command", "--config", "/config", "--skill-destination", "/user/agent-notifications/SKILL.md"},
 	} {
 		if _, _, err := parseAgentNotifySetup(args); err == nil {
 			t.Fatal(args)
@@ -211,7 +211,7 @@ func TestSetupProjectionPhysicalConflicts(t *testing.T) {
 			setupPrepareIsolation(t)
 			f := newSetupCommandFixture(t)
 			ctx := setupCommandContext(t)
-			source := filepath.Join(f.runtime, "skills", "agent-notify", "SKILL.md")
+			source := filepath.Join(f.runtime, "skills", "agent-notifications", "SKILL.md")
 			g := f.generation(t)
 			if kind != "unowned-source" {
 				_, err := installruntime.Commit(ctx, installruntime.Request{ControlRoot: f.control, RuntimeRoot: f.runtime, Owner: "existing-installer", ConsumerID: "hooks", RefreshOnly: true, ExpectedGeneration: &g, Files: []installruntime.File{{Path: source, Data: []byte("skill"), Mode: 0600}}})
@@ -219,14 +219,14 @@ func TestSetupProjectionPhysicalConflicts(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			destination := filepath.Join(f.root, "user", "agent-notify", "SKILL.md")
+			destination := filepath.Join(f.root, "user", "agent-notifications", "SKILL.md")
 			if err := os.MkdirAll(filepath.Dir(destination), 0700); err != nil {
 				t.Fatal(err)
 			}
 			code := 1
 			switch kind {
 			case "relative":
-				destination = "relative/agent-notify/SKILL.md"
+				destination = "relative/agent-notifications/SKILL.md"
 				code = 2
 			case "inside-runtime":
 				destination = source
@@ -235,7 +235,7 @@ func TestSetupProjectionPhysicalConflicts(t *testing.T) {
 				if err := os.Symlink(filepath.Join(f.root, "user"), alias); err != nil {
 					t.Fatal(err)
 				}
-				destination = filepath.Join(alias, "agent-notify", "SKILL.md")
+				destination = filepath.Join(alias, "agent-notifications", "SKILL.md")
 			case "symlink-file":
 				if err := os.Symlink(source, destination); err != nil {
 					t.Fatal(err)
@@ -260,13 +260,13 @@ func TestSetupProjectionCreatesPhysicalParents(t *testing.T) {
 	setupPrepareIsolation(t)
 	f := newSetupCommandFixture(t)
 	ctx := setupCommandContext(t)
-	source := filepath.Join(f.runtime, "skills", "agent-notify", "SKILL.md")
+	source := filepath.Join(f.runtime, "skills", "agent-notifications", "SKILL.md")
 	g := f.generation(t)
 	_, err := installruntime.Commit(ctx, installruntime.Request{ControlRoot: f.control, RuntimeRoot: f.runtime, Owner: "existing-installer", ConsumerID: "hooks", RefreshOnly: true, ExpectedGeneration: &g, Files: []installruntime.File{{Path: source, Data: []byte("owned skill"), Mode: 0600}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	destination := filepath.Join(f.root, "absent", "agent-notify", "SKILL.md")
+	destination := filepath.Join(f.root, "absent", "agent-notifications", "SKILL.md")
 	g = f.generation(t)
 	args := f.args(t, "register", "--provider", "codex", "--command", f.command, "--config", f.config, "--skill-destination", destination)
 	r := setupCommandRun(t, ctx, args, f.composition, 0)

@@ -104,9 +104,9 @@ func Build(req BuildRequest) (Package, error) {
 		return Package{}, err
 	}
 	files := map[string][]byte{
-		"plugin.json":                  append(pluginJSON, '\n'),
-		"mcp.json":                     append(mcpJSON, '\n'),
-		"skills/agent-notify/SKILL.md": skills.AgentNotify(),
+		"plugin.json":                         append(pluginJSON, '\n'),
+		"mcp.json":                            append(mcpJSON, '\n'),
+		"skills/agent-notifications/SKILL.md": skills.AgentNotify(),
 	}
 	for rel, data := range files {
 		path := filepath.Join(req.OutputRoot, filepath.FromSlash(rel))

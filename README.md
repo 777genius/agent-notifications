@@ -77,7 +77,7 @@ Run the same command to update. [Guided installer](https://777genius.github.io/a
 For the future Gemini-compatible release, the planned selectors are `--product gemini` and `--products claude,codex,opencode,gemini`. Shared desktop/webhook flags apply to each selected Gemini/OpenCode observer with separate consent. Current release 1.46.1 cannot install Gemini; use the [candidate guide](docs/gemini-notifications.md) until qualification and release are complete. Claude/Codex portable MCP and skill setup does not apply to Gemini.
 
 On a release with the portable setup wizard, the public installer also installs an MCP server
-and the `agent-notify` skill for each selected client. In a new Claude Code or Codex session,
+and the `agent-notifications` skill for each selected client. In a new Claude Code or Codex session,
 the agent can call `notify` while it is still working, for example when input is needed.
 For an informational alert, explicitly pass `navigation: "none"`; that alert does not open
 the exact chat when clicked. Hooks still handle their own client events. Use

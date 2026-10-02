@@ -181,10 +181,19 @@ func inspectCodexNotificationPackages(ctx context.Context, home string, probe no
 		if json.Unmarshal(m["name"], &name) != nil || name != parts[0] || json.Unmarshal(m["version"], &version) != nil || version != item.Version {
 			return unknown()
 		}
-		canonicalSkill := filepath.Join(cache, "skills", "agent-notify", "SKILL.md")
+		canonicalSkill := filepath.Join(cache, "skills", "agent-notifications", "SKILL.md")
+		skillName := "agent-notifications"
 		skillRaw, err := read(canonicalSkill)
 		if err != nil {
 			return unknown()
+		}
+		legacySkill := filepath.Join(cache, "skills", "agent-notify", "SKILL.md")
+		legacyRaw, err := read(legacySkill)
+		if err != nil || (len(skillRaw) > 0 && len(legacyRaw) > 0) {
+			return unknown()
+		}
+		if len(legacyRaw) > 0 {
+			canonicalSkill, skillName, skillRaw = legacySkill, "agent-notify", legacyRaw
 		}
 		declaration, err := read(filepath.Join(cache, ".mcp.json"))
 		if err != nil {
@@ -209,14 +218,14 @@ func inspectCodexNotificationPackages(ctx context.Context, home string, probe no
 			}
 		}
 		for _, discovered := range observed.Skills {
-			if discovered.Enabled && discovered.PluginID == id && discovered.Name == parts[0]+":agent-notify" && (len(skillRaw) == 0 || discovered.Path != canonicalSkill) {
+			if discovered.Enabled && discovered.PluginID == id && (discovered.Name == parts[0]+":agent-notifications" || discovered.Name == parts[0]+":agent-notify") && (len(skillRaw) == 0 || discovered.Path != canonicalSkill || discovered.Name != parts[0]+":"+skillName) {
 				return unknown()
 			}
 		}
 		if len(skillRaw) > 0 {
 			anchors := 0
 			for _, s := range observed.Skills {
-				if s.Enabled && s.PluginID == id && s.Name == parts[0]+":agent-notify" && s.Path == canonicalSkill {
+				if s.Enabled && s.PluginID == id && s.Name == parts[0]+":"+skillName && s.Path == canonicalSkill {
 					anchors++
 				}
 			}

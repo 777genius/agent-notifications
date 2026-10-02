@@ -428,6 +428,24 @@ func Run(opts Options) (Result, error) {
 	}
 	prepare := func() ([]installruntime.File, error) {
 		snapshot, _ := installruntime.ReadInstalledSnapshot(opts.ControlRoot)
+		var extra []installruntime.File
+		for _, file := range files {
+			if file.Path != filepath.Join(destination, "skills", "agent-notifications", "SKILL.md") {
+				continue
+			}
+			legacy := filepath.Join(destination, "skills", "agent-notify", "SKILL.md")
+			before, err := installruntime.Fingerprint(legacy)
+			if err != nil {
+				return nil, err
+			}
+			if before.Exists {
+				owned, ok := installruntime.OwnedFile(snapshot.Ledger, legacy)
+				if snapshot.Recovery || !ok || before.Link != "" || owned != before {
+					return nil, fmt.Errorf("legacy skill is not an unchanged owned regular file: %s", legacy)
+				}
+				extra = append(extra, installruntime.File{Path: legacy, Before: before, Remove: true})
+			}
+		}
 		for p := range snapshot.Ledger.Files {
 			if filepath.Base(p) == "config.json" && filepath.Base(filepath.Dir(p)) == "config" {
 				return nil, fmt.Errorf("legacy user config is recorded as immutable; a compatible kernel must migrate its ownership to mutable config before repair/removal (user bytes preserved)")
@@ -469,7 +487,7 @@ func Run(opts Options) (Result, error) {
 				return nil, closeErr
 			}
 		}
-		return []installruntime.File{{Path: hooksPath, Before: before, Data: append(data, '\n'), Mode: 0600}}, nil
+		return append(extra, installruntime.File{Path: hooksPath, Before: before, Data: append(data, '\n'), Mode: 0600}), nil
 	}
 	if opts.DryRun {
 		_, err = prepare()
@@ -726,7 +744,7 @@ func stageRuntimeFiles(source, destination string) ([]installruntime.File, error
 	if within(source, destination) || within(destination, source) {
 		return nil, fmt.Errorf("source and destination overlap")
 	}
-	return installruntime.StageFiles(source, destination, func(rel string) bool {
+	files, err := installruntime.StageFiles(source, destination, func(rel string) bool {
 		parts := strings.Split(rel, string(filepath.Separator))
 		if !runtimeEntry(parts[0]) {
 			return false
@@ -735,7 +753,7 @@ func stageRuntimeFiles(source, destination string) ([]installruntime.File, error
 			return false
 		}
 		if parts[0] == "skills" {
-			return len(parts) == 1 || (parts[1] == "agent-notify" && (len(parts) == 2 || (len(parts) == 3 && parts[2] == "SKILL.md")))
+			return len(parts) == 1 || ((parts[1] == "agent-notifications" || parts[1] == "agent-notify") && (len(parts) == 2 || (len(parts) == 3 && parts[2] == "SKILL.md")))
 		}
 		// Only the iTerm2 exact-tab focus helper is a runtime dependency; the
 		// rest of scripts/ is dev/CI tooling that does not belong in the bundle.
@@ -747,6 +765,19 @@ func stageRuntimeFiles(source, destination string) ([]installruntime.File, error
 		}
 		return parts[0] != ".claude-plugin" || len(parts) == 1 || parts[1] == "plugin.json"
 	})
+	if err != nil {
+		return nil, err
+	}
+	skillCount := 0
+	for _, file := range files {
+		if file.Path == filepath.Join(destination, "skills", "agent-notifications", "SKILL.md") || file.Path == filepath.Join(destination, "skills", "agent-notify", "SKILL.md") {
+			skillCount++
+		}
+	}
+	if skillCount > 1 {
+		return nil, fmt.Errorf("bundle contains both canonical and legacy skills")
+	}
+	return files, nil
 }
 
 func appendBundleLauncherFiles(destination string, files []installruntime.File) ([]installruntime.File, error) {
