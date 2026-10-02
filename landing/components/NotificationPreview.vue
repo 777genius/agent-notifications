@@ -9,6 +9,10 @@ const notificationDefinitions = [
   { key: "permission", agent: "codex" },
   { key: "limit", agent: "claude" },
   { key: "error", agent: "codex" },
+  { key: "opencodeComplete", agent: "opencode" },
+  { key: "opencodeQuestion", agent: "opencode" },
+  { key: "opencodePermission", agent: "opencode" },
+  { key: "opencodeError", agent: "opencode" },
 ] as const;
 const projectNames = [
   "checkout-service",
@@ -93,7 +97,8 @@ onUnmounted(() => {
             <h3>{{ item.title }}</h3>
             <span>{{ t("common.now") }}</span>
           </div>
-          <strong>main · {{ workspace }}</strong>
+          <strong v-if="item.agent === 'opencode'">OpenCode</strong>
+          <strong v-else>{{ item.agent === 'claude' ? 'Claude Code' : 'Codex CLI' }} · main · {{ workspace }}</strong>
           <p>{{ item.body }}</p>
           <span v-if="'detail' in item" class="notification-detail">{{
             item.detail

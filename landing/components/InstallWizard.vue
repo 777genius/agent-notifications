@@ -5,7 +5,7 @@ import {
   products,
   targets,
   repo,
-  type Product,
+  type AgentProduct,
   type Target,
   type Intent,
 } from "~/data/install";
@@ -16,17 +16,13 @@ async function changeIntent(value: Intent) {
   await nextTick();
   installTitle.value?.focus({ preventScroll: true });
 }
-const selectedProducts = reactive({ claude: true, codex: false });
-const product = computed<Product>(() =>
-  selectedProducts.claude && selectedProducts.codex
-    ? "both"
-    : selectedProducts.codex
-      ? "codex"
-      : "claude",
+const selectedProducts = reactive({ claude: true, codex: false, opencode: false, gemini: false });
+const selection = computed<AgentProduct[]>(() =>
+  (["claude", "codex", "opencode", "gemini"] as const).filter((value) => selectedProducts[value]),
 );
-function toggleProduct(value: "claude" | "codex") {
-  const other = value === "claude" ? "codex" : "claude";
-  if (selectedProducts[value] && !selectedProducts[other]) return;
+const hasLegacy = computed(() => selectedProducts.claude || selectedProducts.codex);
+function toggleProduct(value: AgentProduct) {
+  if (selectedProducts[value] && selection.value.length === 1) return;
   selectedProducts[value] = !selectedProducts[value];
 }
 const target = ref<Target>("unknown");
@@ -47,11 +43,7 @@ const localizedTargets = computed(() =>
   })),
 );
 const agentName = computed(() =>
-  product.value === "both"
-    ? t("install.products.both")
-    : product.value === "claude"
-      ? "Claude Code"
-      : "Codex CLI",
+  selection.value.map((value) => t(`install.products.${value}`)).join(" + "),
 );
 const osLabel = computed(
   () =>
@@ -62,7 +54,7 @@ const copyStatus = ref("");
 const commandField = ref<HTMLTextAreaElement>();
 const agentNotify = ref(true);
 const snippet = computed(() =>
-  command(product.value, target.value, intent.value, agentNotify.value),
+  command(selection.value, target.value, intent.value, agentNotify.value),
 );
 const displaySnippet = computed(() => snippet.value);
 onMounted(() => {
@@ -70,7 +62,7 @@ onMounted(() => {
   if (!manualOverride.value) target.value = detected.value;
   showOSPicker.value = target.value === "unknown";
 });
-watch([product, target, intent, agentNotify], () => {
+watch([selection, target, intent, agentNotify], () => {
   copyStatus.value = "";
 });
 async function copy() {
@@ -112,22 +104,22 @@ async function copy() {
         :key="item.value"
         class="agent-card"
         :aria-label="item.label"
-        :aria-pressed="product === item.value || product === 'both'"
-        @click="toggleProduct(item.value as 'claude' | 'codex')"
+        :aria-pressed="selectedProducts[item.value as AgentProduct]"
+        @click="toggleProduct(item.value as AgentProduct)"
       >
-        <AgentLogo :agent="item.value as 'claude' | 'codex'" />
+        <AgentLogo :agent="item.value as AgentProduct" />
         <span class="agent-card-copy"
           ><strong>{{
-            item.value === "claude" ? "Claude Code" : "Codex CLI"
+            item.label
           }}</strong
           ><span>{{
             t("install.requires", {
-              agent: item.value === "claude" ? "Claude Code" : "Codex CLI",
+              agent: item.label,
             })
           }}</span></span
         >
         <span class="agent-check" aria-hidden="true">{{
-          product === item.value || product === "both" ? "✓" : ""
+          selectedProducts[item.value as AgentProduct] ? "✓" : ""
         }}</span>
       </button>
     </div>
@@ -161,14 +153,9 @@ async function copy() {
       />
     </div>
 
-    <p v-if="product !== 'claude'" class="notice install-prerequisite">
-      <strong>{{ t("install.prerequisiteTitle") }}</strong>
-      {{ t("install.prerequisiteText") }}
-      <a :href="repo + '/releases'">{{ t("install.checkReleases") }}</a>.
-    </p>
-
+    <AgentSupportTable />
     <label
-      v-if="intent !== 'configure' && target !== 'manual' && target !== 'unknown'"
+      v-if="hasLegacy && intent !== 'configure' && target !== 'manual' && target !== 'unknown'"
       class="agent-notify-option"
     >
       <input
@@ -186,13 +173,13 @@ async function copy() {
       v-if="intent === 'configure'"
       class="setup-panel configuration instructions"
     >
-      <h3>{{ t("install.configure.title") }}</h3>
-      <p v-if="product !== 'codex'">
+      <h3>{{ hasLegacy ? t("install.configure.title") : t("install.capabilities.title") }}</h3>
+      <p v-if="selectedProducts.claude">
         {{ t("install.configure.claudeBefore") }}
         <code>/claude-notifications-go:settings</code>.
         {{ t("install.configure.claudeAfter") }}
       </p>
-      <p v-if="product !== 'claude'">
+      <p v-if="selectedProducts.codex">
         {{ t("install.configure.codexBefore") }}
         <code>config path</code>
         {{ t("install.configure.codexMiddle") }}
@@ -201,21 +188,28 @@ async function copy() {
           >{{ t("install.configure.codexLink") }}</a
         >. {{ t("install.configure.codexAfter") }}
       </p>
-      <p>{{ t("install.configure.shared") }}</p>
+      <p v-if="selectedProducts.opencode">{{ t("install.opencode.configure") }}</p>
+      <p v-if="selectedProducts.gemini"><a :href="repo + '/blob/main/docs/gemini-notifications.md'">{{ t("install.gemini.guide") }}</a>. {{ t("install.gemini.configure") }}</p>
+      <p v-if="hasLegacy">{{ t("install.configure.shared") }}</p>
+    </div>
+    <div v-else-if="selectedProducts.gemini && target !== 'manual'" class="setup-panel instructions" role="status">
+      <p>{{ t("install.gemini.version") }}</p>
+      <a :href="repo + '/blob/main/docs/gemini-notifications.md'">{{ t("install.gemini.guide") }}</a>
     </div>
     <div v-else-if="target === 'manual'" class="setup-panel instructions">
       <h3>{{ t("install.manual.title") }}</h3>
-      <p v-if="product !== 'codex'">
+      <p v-if="selectedProducts.claude">
         <a :href="repo + '/blob/main/docs/INSTALLATION.md#manual-install'">{{
           t("install.manual.claude")
         }}</a>
       </p>
-      <p v-if="product !== 'claude'">
+      <p v-if="selectedProducts.codex">
         <a
           :href="repo + '/blob/main/docs/CODEX.md#manual-codex-registration'"
           >{{ t("install.manual.codex") }}</a
         >
       </p>
+      <p v-if="selectedProducts.gemini">{{ t("install.gemini.version") }} <a :href="repo + '/blob/main/docs/gemini-notifications.md'">{{ t("install.gemini.guide") }}</a></p>
     </div>
     <div v-else-if="!snippet" class="setup-panel instructions">
       <p>{{ t("install.chooseTarget") }}</p>
@@ -234,7 +228,7 @@ async function copy() {
             <span>{{ target === "windows" ? "Git Bash" : "Bash" }}</span>
           </div>
         </div>
-        <div class="install-command-line">
+        <div class="install-command-line" dir="ltr">
           <button
             class="copy-icon"
             :aria-label="t('install.copyCommand')"
@@ -261,7 +255,7 @@ async function copy() {
             :value="displaySnippet"
             readonly
             spellcheck="false"
-            rows="1"
+            :rows="displaySnippet?.split('\n').length ?? 1"
             wrap="off"
           />
         </div>
@@ -320,38 +314,37 @@ async function copy() {
             <h3>
               {{
                 t("install.steps.restart", {
-                  agent:
-                    product === "both"
-                      ? t("install.steps.bothAgents")
-                      : agentName,
+                  agent: agentName,
                 })
               }}
             </h3>
-            <p v-if="product !== 'codex'">
+            <p v-if="selectedProducts.claude">
               {{ t("install.steps.restartClaude") }}
             </p>
-            <p v-if="product !== 'claude'">
+            <p v-if="selectedProducts.codex">
               {{ t("install.steps.restartCodex") }}
             </p>
+            <p v-if="selectedProducts.opencode">{{ t("install.opencode.restart") }}</p>
           </div>
         </article>
       </div>
     </template>
     <footer class="install-footer">
+      <a v-if="selectedProducts.gemini" :href="repo + '/blob/main/docs/gemini-notifications.md'">{{ t("install.gemini.guide") }} ↗</a>
       <a
-        :href="
-          repo +
-          (product === 'claude'
-            ? '/blob/main/docs/INSTALLATION.md#manual-install'
-            : '/blob/main/docs/CODEX.md#manual-codex-registration')
-        "
-        >{{ t("install.help") }} ↗</a
-      >
+        v-if="hasLegacy"
+        :href="repo + (selectedProducts.codex
+          ? '/blob/main/docs/CODEX.md#manual-codex-registration'
+          : '/blob/main/docs/INSTALLATION.md#manual-install')"
+      >{{ t("install.help") }} ↗</a>
       <a
-        v-if="product === 'both'"
+        v-if="selectedProducts.claude && selectedProducts.codex"
         :href="repo + '/blob/main/docs/INSTALLATION.md#manual-install'"
-        >{{ t("install.claudeHelp") }} ↗</a
-      >
+      >{{ t("install.claudeHelp") }} ↗</a>
+      <a
+        v-if="selectedProducts.opencode"
+        :href="repo + '/blob/main/docs/opencode-notifications.md'"
+      >{{ t("install.opencode.guide") }} ↗</a>
       <div>
         <button
           v-if="intent !== 'install'"

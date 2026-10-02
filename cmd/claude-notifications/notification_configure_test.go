@@ -45,7 +45,7 @@ func configureFixture(t *testing.T) (setupCommandFixture, notificationConfigureR
 		t.Fatal(err)
 	}
 	setupCommandWrite(t, filepath.Join(f.runtime, "config", "config.json"), setupCommandRead(t, f.global), 0600)
-	_, err := installruntime.Commit(setupCommandContext(t), installruntime.Request{ControlRoot: f.control, RuntimeRoot: f.runtime, Owner: "existing-installer", ConsumerID: "hooks", RefreshOnly: true, Files: []installruntime.File{{Path: filepath.Join(f.runtime, "skills", "agent-notify", "SKILL.md"), Data: []byte("canonical test skill"), Mode: 0600}}})
+	_, err := installruntime.Commit(setupCommandContext(t), installruntime.Request{ControlRoot: f.control, RuntimeRoot: f.runtime, Owner: "existing-installer", ConsumerID: "hooks", RefreshOnly: true, Files: []installruntime.File{{Path: filepath.Join(f.runtime, "skills", "agent-notifications", "SKILL.md"), Data: []byte("canonical test skill"), Mode: 0600}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,8 +99,26 @@ func TestNotificationConfigureBothAndRetry(t *testing.T) {
 	if _, err = configureNotifications(ctx, request, deps); err != nil {
 		t.Fatal("retry:", err)
 	}
-	if setupCommandRead(t, filepath.Join(request.CodexHome, "skills", "agent-notify", "SKILL.md")) != "canonical test skill" {
+	if setupCommandRead(t, filepath.Join(request.CodexHome, "skills", "agent-notifications", "SKILL.md")) != "canonical test skill" {
 		t.Fatal("skill source")
+	}
+}
+
+// A portable/UAP-owned MCP entry is intentionally opaque to the legacy
+// registrar. Policy preparation must not inspect or rewrite that entry.
+func TestNotificationConfigurePolicyOnlyPreservesMCP(t *testing.T) {
+	f, request, deps := configureFixture(t)
+	request.Provider = "claude"
+	request.PolicyOnly = true
+	entry := `{"mcpServers":{"agent-notify":{"command":"uap-owned-launcher","args":["--existing"]}},"other":"keep"}`
+	path := filepath.Join(f.root, ".claude.json")
+	setupCommandWrite(t, path, entry, 0600)
+	result, err := configureNotifications(setupCommandContext(t), request, deps)
+	if err != nil || !result.ExplicitIntent || result.Reason != "configured" {
+		t.Fatalf("policy preparation: result=%+v err=%v", result, err)
+	}
+	if got := setupCommandRead(t, path); got != entry {
+		t.Fatalf("MCP entry changed: %s", got)
 	}
 }
 func TestNotificationConfigurePreflightNoWrites(t *testing.T) {
@@ -278,7 +296,7 @@ func TestNotificationConfigureSkillConflictAndRefresh(t *testing.T) {
 	if !reflect.DeepEqual(before, setupCommandTree(t, f.root)) {
 		t.Fatal("conflict wrote")
 	}
-	source := filepath.Join(f.runtime, "skills", "agent-notify", "SKILL.md")
+	source := filepath.Join(f.runtime, "skills", "agent-notifications", "SKILL.md")
 	fp, err := installruntime.Fingerprint(source)
 	if err != nil {
 		t.Fatal(err)
@@ -291,7 +309,7 @@ func TestNotificationConfigureSkillConflictAndRefresh(t *testing.T) {
 	if _, err = configureNotifications(setupCommandContext(t), request, original); err != nil {
 		t.Fatal(err)
 	}
-	if setupCommandRead(t, filepath.Join(request.CodexHome, "skills", "agent-notify", "SKILL.md")) != "refreshed canonical skill" {
+	if setupCommandRead(t, filepath.Join(request.CodexHome, "skills", "agent-notifications", "SKILL.md")) != "refreshed canonical skill" {
 		t.Fatal("skill not refreshed")
 	}
 }
@@ -332,7 +350,7 @@ func TestNotificationConfigurePluginSingleSource(t *testing.T) {
 	if _, err := configureNotifications(setupCommandContext(t), request, deps); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(request.CodexHome, "skills", "agent-notify", "SKILL.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(request.CodexHome, "skills", "agent-notifications", "SKILL.md")); !os.IsNotExist(err) {
 		t.Fatal("duplicate user projection", err)
 	}
 	request.Route = nil
@@ -384,11 +402,16 @@ func TestNotificationConfigureUnknownStatusIsNotDisabled(t *testing.T) {
 }
 
 func TestNotificationConfigureSkillAbsenceRace(t *testing.T) {
-	for _, at := range []string{"registration", "enable"} {
+	for _, at := range []string{"registration", "enable", "legacy-registration", "legacy-enable"} {
 		t.Run(at, func(t *testing.T) {
+			name := "agent-notifications"
+			if strings.HasPrefix(at, "legacy-") {
+				name = "agent-notify"
+				at = strings.TrimPrefix(at, "legacy-")
+			}
 			f, request, deps := configureFixture(t)
 			request.Provider = "codex"
-			destination := filepath.Join(request.CodexHome, "skills", "agent-notify", "SKILL.md")
+			destination := filepath.Join(request.CodexHome, "skills", name, "SKILL.md")
 			checks := 0
 			deps.Inventory = func(context.Context, registration.Provider, string) (notificationInventory, error) {
 				return notificationInventory{State: "clear", Skill: true, Revalidate: func(context.Context) error {
@@ -543,5 +566,62 @@ func TestNotificationConfigurePreservesUniversalPolicyOnFailure(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(f.root, ".claude", "claude-notifications-go", "config.json")); !os.IsNotExist(err) {
 		t.Fatal("legacy config created", err)
+	}
+}
+
+func TestNotificationConfigureExplicitConsentPreservesEnablement(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		t.Run(map[bool]string{true: "enabled", false: "opted_out"}[enabled], func(t *testing.T) {
+			f, request, deps := configureFixture(t)
+			ctx := setupCommandContext(t)
+			request.PolicyOnly = true
+			request.Route = &notifysetup.Route{AllowUnknownCaller: true, AllowCallerAsserted: true}
+			if _, err := configureNotifications(ctx, request, deps); err != nil {
+				t.Fatal(err)
+			}
+			if !enabled {
+				snap, err := installruntime.ReadInstalledSnapshot(f.control)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := notifysetup.Apply(ctx, notifysetup.Options{ControlRoot: f.control, RuntimeRoot: f.runtime, Owner: "existing-installer", ConsumerID: "hooks", GlobalConfig: resolvedNotificationGlobal(t)}, notifysetup.Request{Enabled: &enabled, ExpectedGeneration: snap.Ledger.Generation}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, err := installruntime.ReadPolicySnapshot(ctx, f.control)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defaults, _, err := parseNotificationConfigure([]string{"--provider", "both", "--navigation", "none", "--allow-unknown-caller", "true", "--allow-caller-asserted", "false", "--policy-only", "--preserve-enabled", "--preserve-policy"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := configureNotifications(ctx, defaults, deps); err != nil {
+				t.Fatal(err)
+			}
+			preserved, err := installruntime.ReadPolicySnapshot(ctx, f.control)
+			if err != nil || !reflect.DeepEqual(before.Fields, preserved.Fields) {
+				t.Fatalf("automatic defaults replaced saved policy: %+v %v", preserved.Fields, err)
+			}
+			explicit, _, err := parseNotificationConfigure([]string{"--provider", "both", "--navigation", "none", "--allow-unknown-caller", "false", "--allow-caller-asserted", "false", "--policy-only", "--preserve-enabled"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := configureNotifications(ctx, explicit, deps)
+			if err != nil || result.ExplicitIntent != enabled {
+				t.Fatalf("explicit consent update: %+v %v", result, err)
+			}
+			after, err := installruntime.ReadPolicySnapshot(ctx, f.control)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var route notifysetup.Route
+			if err := json.Unmarshal(after.Fields["route"], &route); err != nil {
+				t.Fatal(err)
+			}
+			if after.Policy.Enabled != enabled || route.AllowUnknownCaller || route.AllowCallerAsserted || route.LocalRouting {
+				t.Fatalf("consent or enablement changed incorrectly: policy=%+v route=%+v", after.Policy, route)
+			}
+		})
 	}
 }

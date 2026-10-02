@@ -22,6 +22,7 @@ import (
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/logging"
 	"github.com/777genius/agent-notifications/internal/notifier"
+	"github.com/777genius/agent-notifications/internal/thirdpartynotices"
 	"github.com/777genius/agent-notifications/internal/winfocus"
 )
 
@@ -35,6 +36,29 @@ var (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "licenses" {
+		if len(os.Args) != 2 {
+			fmt.Fprintln(os.Stderr, "Usage: claude-notifications licenses")
+			os.Exit(2)
+		}
+		fmt.Print(thirdpartynotices.Text())
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "gemini-event" {
+		os.Exit(runGeminiEvent(os.Args[2:], os.Stdin, os.Stdout))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "setup-gemini" {
+		os.Exit(geminiSetupMain(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "setup-products" {
+		os.Exit(setupProductsMain(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "opencode-event" {
+		os.Exit(runOpenCodeEvent(os.Args[2:], os.Stdin, os.Stdout))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "setup-opencode" {
+		os.Exit(openCodeSetupMain(os.Args[2:]))
+	}
 	if handled, code := dispatchManagedStdio(os.Args[1:], os.Stderr); handled {
 		os.Exit(code)
 	}
@@ -806,9 +830,12 @@ func printUsage() {
 	fmt.Println("                          [--print] [--dry-run] [--codex-home <dir>] [--plugin-root <dir>]")
 	fmt.Println("                          [--agent-notify|--skip-agent-notify] [--navigation none]")
 	fmt.Println("                          [--allow-unknown-caller true|false --allow-caller-asserted true|false]")
+	fmt.Println("  setup-gemini            Install/update/remove/inspect/recover Gemini user hooks and channel consent")
+	fmt.Println("  setup-products          Select Claude/Codex/OpenCode/Gemini through the setup terminal")
 	fmt.Println("  setup-notifications     Direct MCP configure/status and setup-notifications wizard")
 	fmt.Println("  config                  Shared configuration path/inspect/init/edit/preflight-update")
 	fmt.Println("  version                 Show version information")
+	fmt.Println("  licenses                Print terminal dependency copyright and license notices")
 	fmt.Println("  help                    Show this help message")
 	fmt.Println()
 	fmt.Println("Examples:")

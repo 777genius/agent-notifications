@@ -5,6 +5,11 @@ on:
     branches: [ main, develop ]
   pull_request:
 
+# Only a newer run for the same PR supersedes its checks.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     name: Test on Windows
@@ -60,8 +65,20 @@ jobs:
           }
         shell: pwsh
 
-      - name: Run tests
-        run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+      - name: Qualify Gemini cache without cross-package contention
+        # Keep real first claims and interprocess assertions under the unchanged
+        # 250ms production budget, separate from other race-instrumented packages.
+        run: go test -v -race -coverprofile=coverage-gemini.txt -covermode=atomic ./internal/geminievent
+        shell: bash
+
+      - name: Run remaining tests
+        run: |
+          set -euo pipefail
+          packages=$(go list ./...)
+          remaining_packages=$(printf '%s\n' "$packages" | grep -Fvx 'github.com/777genius/agent-notifications/internal/geminievent')
+          mapfile -t remaining <<< "$remaining_packages"
+          go test -v -race -coverprofile=coverage-rest.txt -covermode=atomic "${remaining[@]}"
+          { head -n 1 coverage-rest.txt; tail -n +2 coverage-rest.txt; tail -n +2 coverage-gemini.txt; } > coverage.txt
         shell: bash
 
       - name: Repeat config crash recovery
@@ -69,7 +86,7 @@ jobs:
         shell: bash
 
       - name: Build binary
-        run: go build -o bin/claude-notifications.exe ./cmd/claude-notifications
+        run: go build -ldflags="-s -w" -trimpath -o bin/claude-notifications.exe ./cmd/claude-notifications
 
       - name: Test binary execution (help)
         run: ./bin/claude-notifications.exe help

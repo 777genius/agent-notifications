@@ -22,7 +22,8 @@ From the bundle directory:
 ./bin/agent-notifications setup-codex --plugin-root .
 ```
 
-On Windows, run the installed primary launcher in PowerShell (the downloaded
+Windows support for Codex hook delivery is not declared until the Windows launcher
+is qualified. For manual registration, run the installed primary launcher in PowerShell (the downloaded
 `claude-notifications-windows-amd64.exe` remains compatible):
 
 ```powershell
@@ -71,9 +72,10 @@ What works today:
   reports map to the API Error / Session Limit statuses, a trailing question mark maps to
   Question, otherwise Task Complete. The Codex rollout transcript is not parsed (it is an
   internal, unstable format).
-- **Question payloads** - when Codex emits `PreToolUse` for `request_user_input`,
+- **Question payloads (experimental)** - if Codex emits `PreToolUse` for `request_user_input`,
   the plugin delivers the question/header text. Options, ids, and secret fields are excluded.
-  Delivery depends on the active Codex mode exposing this tool hook.
+  Live firing of this tool hook is not yet qualified; do not rely on it for every
+  question. Delivery also depends on the active Codex mode exposing the tool.
 - **PermissionRequest** - Codex is waiting for your approval of a tool call; delivered as the
   time-sensitive Permission Request status. Only the tool name is shown, never the tool input.
 - **SubagentStop** (opt-in) - with `notifyOnSubagentStop: true` and `suppressForSubagents: false`,
@@ -86,6 +88,7 @@ Known limitations:
 - The error statuses for Codex come from a text heuristic over the final message (short messages
   with failure phrasing), not from structured error data - false negatives are possible.
 - The `request_user_input` question hook is limited to the modes where Codex exposes that tool.
+- Windows support for the Codex route is not declared until the Windows launcher is proven.
 - Codex hooks require a trust review (`/hooks` inside Codex); changed definitions require review again.
 
 Both products share one config file (the shared file selected by `config path`).

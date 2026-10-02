@@ -1,7 +1,7 @@
 {
   "seo": {
     "title": "Agent Notifications - Stay in flow",
-    "description": "Desktop notifications for Claude Code and Codex CLI. Know when work finishes, a question needs you, or something goes wrong."
+    "description": "Desktop notifications and webhooks for Claude Code, Codex CLI and OpenCode. Gemini CLI integration is unreleased."
   },
   "language": {
     "label": "Language",
@@ -12,7 +12,8 @@
   },
   "accessibility": {
     "skip": "Skip to content",
-    "platforms": "Supported operating systems"
+    "platforms": "Supported operating systems",
+    "agents": "Supported agent integrations"
   },
   "brand": { "tagline": "FOR YOUR CODING AGENTS" },
   "nav": {
@@ -26,7 +27,7 @@
     "title": "Stay in flow",
     "emphasis": "We'll get your attention",
     "leadFirst": "Let your agent work. Know when it's done.",
-    "leadSecond": "Sounds, desktop notifications and webhooks for Claude Code and Codex CLI.",
+    "leadSecond": "Desktop notifications and webhooks for Claude Code, Codex CLI and OpenCode. Gemini CLI integration is unreleased.",
     "primary": "Set up notifications",
     "secondary": "Explore on GitHub",
     "note": "Open source · Runs locally"
@@ -38,14 +39,14 @@
     "titleSecond": "Lose the constant checking",
     "items": {
       "1": {
-        "label": "DESKTOP NOTIFICATIONS",
-        "title": "Step away, stay informed",
-        "text": "Get a desktop notification when your agent finishes or needs your attention. Spend less time watching a terminal."
+        "label": "CLICK TO FOCUS",
+        "title": "Return with one click",
+        "text": "Click a notification to return to its terminal, editor or tab where supported. Claude Code and Codex CLI only; support depends on your terminal and OS."
       },
       "2": {
         "label": "SOUND CONTROLS",
         "title": "A sound for every moment",
-        "text": "Pick sounds, set the volume, and choose an audio device. Keep the signals you want and quiet the rest."
+        "text": "Pick sounds, set the volume, and choose an audio device. Keep the signals you want and quiet the rest. Claude Code and Codex CLI only."
       },
       "3": {
         "label": "WEBHOOK INTEGRATIONS",
@@ -54,19 +55,21 @@
       }
     },
     "preview": {
+      "focus": "Click to return",
+      "return": "Back to your terminal",
       "done": "Your agent is done",
       "ready": "Ready when you are.",
       "sound": "Your sound. Your volume.",
       "event": "Agent event"
     },
-    "foot": "Click-to-focus support depends on your terminal and OS.",
+    "foot": "Click-to-focus support depends on your terminal and OS. OpenCode: silent completion, question, permission and error alerts for root sessions. No sound or click-to-focus.",
     "details": "See platform details"
   },
   "terminalSupport": {
     "eyebrow": "ONE CLICK. THE RIGHT WINDOW.",
     "titleFirst": "Built for your setup",
     "titleSecond": "Not just one terminal",
-    "intro": "Click-to-focus adapts to what you already run. Here is exactly how precise the click gets on each platform.",
+    "intro": "Claude Code and Codex CLI only. Click-to-focus adapts to what you already run. Here is exactly how precise the click gets on each platform.",
     "columns": {
       "app": "Terminal / IDE",
       "macos": "macOS",
@@ -130,8 +133,8 @@
     "subtitle": "Everything you need to get back to work.",
     "items": {
       "1": {
-        "question": "Do I need both agents installed?",
-        "answer": "No. Select Claude Code, Codex CLI, or both. Install the selected agent CLI first; the command installs this notification plugin."
+        "question": "Do I need every agent installed?",
+        "answer": "Select any combination of Claude Code, Codex CLI and OpenCode. Install the selected agents first; the commands below install notifications."
       },
       "2": {
         "question": "Are Codex hooks installed automatically?",
@@ -143,11 +146,11 @@
       },
       "4": {
         "question": "Can I choose what makes a sound?",
-        "answer": "Yes. Configure sounds, volume, audio device and notification channels. Choose Configure in the guide for the steps specific to your agent."
+        "answer": "Yes. Configure sounds, volume, audio device and notification channels. Choose Configure in the guide for the steps specific to your agent. Claude Code and Codex CLI only."
       },
       "5": {
         "question": "Does click-to-focus work everywhere?",
-        "answer": "Support varies by OS and terminal. iTerm2 needs its Python API for precise tab targeting. Windows focuses a window, not an exact tab.",
+        "answer": "Support varies by OS and terminal. iTerm2 needs its Python API for precise tab targeting. Windows focuses a window, not an exact tab. OpenCode: silent completion, question, permission and error alerts for root sessions. No sound or click-to-focus.",
         "link": "Check supported environments."
       },
       "6": {
@@ -182,7 +185,23 @@
       "review": { "title": "🔍 Review", "body": "Review complete. No issues found in the updated installer." },
       "permission": { "title": "🔐 Permission Request", "body": "Approval required: shell" },
       "limit": { "title": "⏱️ Session Limit Reached", "body": "Session limit reached. Please wait before continuing." },
-      "error": { "title": "🔴 API Error: 401", "body": "Authentication expired. Please sign in again." }
+      "error": { "title": "🔴 API Error: 401", "body": "Authentication expired. Please sign in again." },
+      "opencodeComplete": {
+        "title": "OpenCode",
+        "body": "Task completed"
+      },
+      "opencodeQuestion": {
+        "title": "OpenCode",
+        "body": "OpenCode asked a question"
+      },
+      "opencodePermission": {
+        "title": "OpenCode",
+        "body": "OpenCode requested permission"
+      },
+      "opencodeError": {
+        "title": "OpenCode",
+        "body": "An error needs your attention"
+      }
     }
   },
   "select": {
@@ -191,8 +210,8 @@
   },
   "install": {
     "title": "Set up notifications",
-    "intro": "Follow the steps below to add desktop notifications to {agent}.",
-    "chooseAgent": "Choose your agent",
+    "intro": "Follow the steps below to add notifications to {agent}.",
+    "chooseAgent": "Choose your agents",
     "requires": "Requires {agent}",
     "bothAgents": "Both agents",
     "bothSelected": "✓ Both agents selected",
@@ -205,7 +224,9 @@
     "products": {
       "claude": "Claude Code",
       "codex": "Codex CLI",
-      "both": "Both agents"
+      "both": "Claude Code + Codex CLI",
+      "opencode": "OpenCode",
+      "gemini": "Gemini CLI"
     },
     "targets": {
       "unknown": "Choose target OS",
@@ -225,7 +246,7 @@
       "codexMiddle": "and apply edits using the",
       "codexLink": "documented manual configuration",
       "codexAfter": "Claude Code is not required for Codex-only setup.",
-      "shared": "Both agents share this configuration. Your settings are preserved when updating."
+      "shared": "Shared settings are preserved when updating."
     },
     "manual": {
       "title": "Follow the manual route",
@@ -259,7 +280,60 @@
     "configureSettings": "⚙ Configure settings",
     "agentNotify": {
       "label": "Let agents send you notifications when they need your attention",
-      "hint": "Adds a tool so an agent can notify you during a task, not only when work stops."
+      "hint": "Adds a notification tool for Claude Code and Codex CLI during a task, not only when work stops."
+    },
+    "capabilities": {
+      "title": "Selected agent capabilities",
+      "details": "Compatibility details",
+      "claude": "Completion, review, question, plan, session limit and API error alerts, with sounds and click-to-focus where supported.",
+      "codex": "Completion and permission alerts, with sounds and click-to-focus where supported. Review and trust installed hooks in /hooks.",
+      "opencode": "Silent completion, question, permission and error alerts for root sessions. No sound or click-to-focus.",
+      "gemini": "Gemini CLI candidate: silent turn-completed and tool-permission alerts. A completed turn does not imply success or a final answer. No sound, click-to-focus, question, error, plan, review or nested-agent parity."
+    },
+    "gemini": {
+      "version": "Unreleased integration. Public release 1.46.1 does not include Gemini. Target Gemini CLI 0.62.0; see the guide for native qualification by OS. A compatible release is required.",
+      "guide": "Gemini candidate setup and limits",
+      "configure": "Use the Gemini guide for channel consent and shared settings; no MCP tool or skill is installed. Built-in Gemini notifications can duplicate desktop alerts. Choose one desktop source or webhook-only; built-in settings are not changed."
+    },
+    "observer": {
+      "channelsTitle": "Observer notification channels",
+      "channelsHint": "These choices apply to each selected OpenCode/Gemini agent, with consent saved separately. Choose at least one channel; configure webhook URLs separately."
+    },
+    "opencode": {
+      "channelsTitle": "OpenCode notification channels",
+      "channelsHint": "These choices apply only to OpenCode. Allow at least one channel; webhook URLs are configured separately.",
+      "scope": "OpenCode: silent completion, question, permission and error alerts for root sessions. No sound or click-to-focus.",
+      "version": "Tested with OpenCode 1.18.33. Requires plugin release 1.46.0 or newer. OpenCode V2 is not supported.",
+      "desktop": "Allow desktop notifications",
+      "webhook": "Allow webhook notifications",
+      "chooseChannel": "Choose at least one notification channel.",
+      "guide": "OpenCode setup and limitations",
+      "restart": "Restart OpenCode to load the global plugin. On macOS, grant notification permission using the setup guide.",
+      "configure": "Use config path for shared settings. Enable desktop/webhook consent with setup-opencode; configure webhook endpoints separately."
+    }
+  },
+  "agentSupport": {
+    "unreleased": "Unreleased",
+    "title": "Compare agent features",
+    "feature": "Feature",
+    "yes": "Supported",
+    "no": "Not supported",
+    "conditional": "Supported with limitations",
+    "legend": "✓ Supported · ✕ Not supported · ✓* Supported with limitations",
+    "conditions": "* Codex questions depend on the active mode; errors and limits are detected from the final message. Click-to-focus depends on your OS and terminal.",
+    "qualification": "Codex: Windows hook delivery and the question tool hook are not yet qualified in live sessions.",
+    "v2Link": "What is OpenCode V2?",
+    "rows": {
+      "completion": "Completed",
+      "question": "Question",
+      "permission": "Permission Request",
+      "review": "Review",
+      "plan": "Plan",
+      "limit": "Session Limit Reached",
+      "sound": "Sounds",
+      "focus": "Click-to-focus",
+      "webhook": "Webhooks",
+      "error": "Errors"
     }
   }
 }

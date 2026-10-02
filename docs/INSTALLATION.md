@@ -2,18 +2,33 @@
 
 # Installation
 
-### Prerequisites
+## Gemini candidate availability
 
-- Claude Code and/or Codex CLI for the products you select
+Gemini CLI is a fourth product in the unreleased candidate. Public release **1.46.0
+does not include Gemini**. The qualification target is exact **Gemini CLI 0.62.0**;
+native qualification and a compatible release are pending. Follow the
+[Gemini candidate guide](gemini-notifications.md) for checked-bundle setup and
+planned single-pipeline selectors `--product gemini` or
+`--products claude,codex,opencode,gemini`. Do not use a local `bin/setup.sh` to
+qualify candidate bytes: it downloads the public release.
+
+For the compatible candidate, `--desktop`/`--webhook` apply to each selected
+Gemini/OpenCode observer with separately saved consent. At least one channel is
+required. Claude/Codex portable MCP/skill choices and legacy `both` remain unchanged.
+Gemini configuration uses its guide, not the portable MCP wizard.
+
+## Prerequisites
+
+- Claude Code, Codex CLI and/or OpenCode for the products you select (OpenCode tested with 1.18.33; V2 unsupported)
 - `curl` and Bash
 - **Windows users:** Git Bash (included with [Git for Windows](https://git-scm.com/download/win)). Do not use WSL for a native Windows installation.
 - Python remains optional only for iTerm2 exact tab/pane targeting.
 
 ### Quick Install (Recommended)
 
-Prefer a guided setup? [Open the installation guide](https://777genius.github.io/agent-notifications/#install) to choose your agent, OS and task.
+Prefer a guided setup? [Open the installation guide](https://777genius.github.io/agent-notifications/#install) to choose your agents, OS and task.
 
-The short setup loader handles release lookup and validation internally, then downloads the installer from the exact release commit. Run it and choose Claude, Codex, or both:
+The short setup loader handles release lookup and validation internally, then downloads the installer from the exact release commit. Run it and choose Claude, Codex, Claude + Codex, or OpenCode:
 
 ```bash
 curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash
@@ -27,13 +42,48 @@ For automation or terminals without a controlling TTY, choose explicitly and pre
 (set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product codex)
 ```
 
-Use `claude`, `codex`, or `both`. This installs the notifications plugin; the selected Claude Code / Codex CLI must already be on `PATH`.
+Use `claude`, `codex`, or `both` for Claude/Codex. For OpenCode, use `--product opencode --desktop`, `--webhook`, or both channel flags (explicit consent required). The selected host CLI must already be on `PATH`; this installs notifications only.
+
+You can select any combination of the three agents in the guided setup. Mixed selections containing OpenCode use one loader command:
+
+```bash
+(set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --products claude,codex,opencode --desktop)
+```
+
+Use `claude,opencode` or `codex,opencode` for two agents. The loader downloads and validates one installer, then runs Claude/Codex setup followed by OpenCode setup. It stops at the first failure; an earlier successful installation remains installed. Fix the reported error and rerun the same command to complete setup.
+
+`--desktop` and `--webhook` grant consent only for OpenCode; choose at least one, and configure webhook URLs separately. `--skip-agent-notify` applies only to the Claude/Codex notification tool. These flags do not change Claude/Codex notification channels. Single-agent commands and `--product both` remain supported.
 
 After installation:
 
 - **Claude:** restart Claude Code. Optionally run `/claude-notifications-go:settings` to configure sounds.
 - **Codex:** start Codex, run `/hooks`, then review and trust the installed hooks. The installer registers them automatically; no JSON editing or manual registration command is needed. Trust approval remains yours.
 - **Both:** complete both steps above.
+- **OpenCode:** restart OpenCode to load its global plugin. On Mac, explicitly grant notification permission. OpenCode bootstrap requires release v1.46.0 or newer; see [OpenCode setup, channels and limits](opencode-notifications.md).
+
+When the selected release supports the portable wizard, the installer also registers the
+`agent-notify` MCP server and `agent-notifications` skill for the selected clients. Restart each selected client
+and open a new session before checking its MCP tools. The agent can call `notify` during a
+task, not only after a Stop hook. Check the read-only `notification_status` first:
+when `navigation.capability` is `eligible`, prefer `navigation: "required"` to keep
+the configured return to the chat, including for informational notifications.
+Eligibility uses this call's client context and configuration; it does not verify
+that the app, profile or chat can actually open. Use `navigation: "none"` only for
+an alert that does not need a return to the chat, including setups without a desktop
+route. Never silently downgrade a request that requires a return to the chat.
+`notify` returns `submitted` when the OS accepted the request, which does not prove
+that a banner was visible or the chat opened.
+Desktop notification permission and a visible test send must be checked separately.
+
+The installer reports incomplete setup separately from successful hooks. Keep its retry
+command and selected profile if MCP or skill setup fails; rerun the installer or its
+`setup-notifications wizard` repair action after the cause is resolved. `--skip-agent-notify`
+is an explicit hooks-only choice and does not remove an existing MCP installation.
+Automatic updates preserve an absent MCP client when another selected client already has a binding.
+Use an explicit `--agent-notify` request to add that client later.
+An interrupted installation made by an older UAP release may have a schema 3 directory
+journal without ownership proof. A newer installer stops with `recovery_required` and
+preserves its files for manual inspection; do not delete that journal to force a retry.
 
 Codex requires a published stable plugin release v1.42.0 or newer. The installer downloads matching source and binaries, respects `CODEX_HOME`, and keeps a permanent runtime copy there. It reports an error if no supported release is published yet.
 
@@ -71,7 +121,7 @@ Run these slash commands in the Claude Code chat, not in your system terminal:
 
 Run the [secure install command](#quick-install-recommended) again and choose the product(s) you want to update.
 
-For Claude, restart Claude Code. For Codex, restart Codex and inspect `/hooks`; changed hook definitions may need trust approval again. The installer refreshes the Codex runtime and registration automatically. Existing foreign hooks and shared settings in the file selected by `config path` are preserved.
+For OpenCode, rerun with explicitly chosen desktop/webhook flags; the idempotent install action updates the registered runtime. Restart OpenCode. For Claude, restart Claude Code. For Codex, restart Codex and inspect `/hooks`; changed hook definitions may need trust approval again. The installer refreshes the Codex runtime and registration automatically. Existing foreign hooks and shared settings in the file selected by `config path` are preserved.
 
 <details>
 <summary>Manual Claude update (if bootstrap didn't work)</summary>
@@ -89,6 +139,8 @@ If the binary auto-update didn't work (e.g. no internet at the time), run `/clau
 
 ### Uninstalling
 
+**OpenCode:** use the installer's printed **Remove** command, then restart OpenCode. On Windows it runs a temporary executable copy so the managed `.exe` can be deleted; on macOS/Linux it invokes the installed executable directly. Removal revokes its consent before deleting owned files and preserves other consumers. [Detailed removal/recovery commands](opencode-notifications.md#change-channels-remove-or-recover).
+
 **Claude:**
 
 ```text
@@ -100,3 +152,13 @@ Optionally also remove the marketplace registration: `/plugin marketplace remove
 **Codex:** remove the hooks and runtime registered by this installer manually. Use the same Codex home selected during setup: the explicit `--codex-home` path, otherwise `CODEX_HOME`, otherwise `~/.codex` (`%USERPROFILE%\.codex` on Windows). In that directory, delete only this installer's entries from `hooks.json`, then remove the `claude-notifications-go` directory. Preserve hooks registered for other tools.
 
 **Configuration:** uninstalling does not delete your saved settings. Run `agent-notifications config path` to find the active file, and remove it yourself if you no longer want it.
+
+### Reading the installation result
+
+The installer ends with a summary for the selected agents. Installed means that
+registration succeeded; it does not confirm notification delivery. Restart the
+agents, review and trust Codex entries with `/hooks`, and send a test notification.
+If a notification does not arrive, check OS permissions and notification settings.
+Skipped agent-notify setup is reported separately from installed automatic hooks.
+For detailed download and setup diagnostics, prefix the final installer command
+with `BOOTSTRAP_VERBOSE=1`. Failed stages always print their diagnostics.

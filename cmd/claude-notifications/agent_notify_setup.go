@@ -29,6 +29,9 @@ import (
 const agentNotifySetupHelp = `Usage: claude-notifications setup-notifications OPERATION [OPTIONS]
 Operations: configure | wizard | prepare | status | register | remove | enable | disable | permission-status | request-permission
 Configure requires --provider codex|claude|both and an explicit fresh route.
+  --policy-only skips legacy MCP/skill registration before portable UAP handoff.
+  --preserve-policy keeps existing enablement, consent and route on repeat setup.
+  --preserve-enabled keeps enablement while applying explicit route/consent choices.
 Wizard is a separate master: setup-notifications wizard --help
   --codex-home ABS and --request-permission are configure-only choices.
   Configure resolves primary runtime, generation and canonical global internally.
@@ -539,7 +542,7 @@ func agentNotifySetupExecute(ctx context.Context, args []string, out io.Writer, 
 	if a.operation == "register" || a.operation == "remove" {
 		var projection *clientsetup.SkillProjection
 		if destination := a.values["skill-destination"]; destination != "" {
-			projection = &clientsetup.SkillProjection{SourcePath: filepath.Join(s.Ledger.RuntimeRoot, "skills", "agent-notify", "SKILL.md"), DestinationPath: destination}
+			projection = &clientsetup.SkillProjection{SourcePath: filepath.Join(s.Ledger.RuntimeRoot, "skills", "agent-notifications", "SKILL.md"), DestinationPath: destination}
 		}
 		result, err := clientsetup.Apply(ctx, clientsetup.Request{SkillProjection: projection, ControlRoot: root, RuntimeRoot: runtimeRoot, Command: a.values["command"], ConfigPath: a.values["config"], Provider: registration.Provider(a.values["provider"]), Mode: clientsetup.Managed, ExpectedGeneration: a.generation, Remove: a.operation == "remove"})
 		if err != nil {

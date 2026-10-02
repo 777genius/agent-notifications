@@ -5,8 +5,6 @@ package portablesetup
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -90,10 +88,10 @@ func writePackage(t *testing.T, root, probe string) {
 		t.Fatal(err)
 	}
 	files := map[string][]byte{
-		"plugin.json":                  []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.0"}`),
-		"mcp.json":                     []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"agent-notify":{"type":"stdio","command":"./bin/probe","args":[],"env":{}}}}`),
-		"skills/agent-notify/SKILL.md": []byte("---\nname: agent-notify\ndescription: Isolated portable setup fixture\n---\nFixture only.\n"),
-		"bin/probe":                    body,
+		"plugin.json":                         []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.0"}`),
+		"mcp.json":                            []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"agent-notify":{"type":"stdio","command":"./bin/probe","args":[],"env":{}}}}`),
+		"skills/agent-notifications/SKILL.md": []byte("---\nname: agent-notifications\ndescription: Isolated portable setup fixture\n---\nFixture only.\n"),
+		"bin/probe":                           body,
 	}
 	for rel, data := range files {
 		path := filepath.Join(root, rel)
@@ -370,27 +368,23 @@ func TestUAPMaterializerRepeatedRemoveOfRetainedInstallationIsAlreadyAbsent(t *t
 
 func plantUAPPendingJournal(t *testing.T, ops, owned, opID string) {
 	t.Helper()
-	staging := filepath.Join(owned, ".agentplugins-staging-pending")
+	staging := filepath.Join(owned, ".agentplugins-staging-"+opID)
 	if err := os.MkdirAll(staging, 0700); err != nil {
 		t.Fatal(err)
 	}
-	sum := sha256.Sum256([]byte(opID))
-	receipt := dirswap.Receipt{
-		SchemaVersion: 3, Operation: dirswap.OperationSwap, OperationID: opID,
-		ClientBindingID: "client-binding-1", Sequence: 1, OwnedBase: owned,
-		ActivePath: filepath.Join(owned, "plugin"), StagingPath: staging,
-		BackupPath: filepath.Join(owned, ".agentplugins-backup-"+hex.EncodeToString(sum[:8])),
-		Phase:      dirswap.PhaseIntent,
-	}
-	body, err := json.MarshalIndent(receipt, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(ops, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(ops, opID+".json"), append(body, '\n'), 0600); err != nil {
-		t.Fatal(err)
+	manager := dirswap.Manager{JournalDir: ops, Fault: func(phase string) error {
+		if phase == dirswap.PhaseBackupPending {
+			return errors.New("fixture: leave a pending journal")
+		}
+		return nil
+	}}
+	receipt, err := manager.Apply(context.Background(), dirswap.Input{
+		OperationID: opID, ClientBindingID: "client-binding-1", Sequence: 1,
+		OwnedBase: owned, ActivePath: filepath.Join(owned, "plugin"), StagingPath: staging,
+		RequireAbsent: true,
+	})
+	if err == nil || receipt.OperationID != opID {
+		t.Fatalf("create pending journal: %+v %v", receipt, err)
 	}
 }
 
@@ -1259,6 +1253,11 @@ func TestUAPMaterializerApplyGroupBothClientsShareDataIndependentLocators(t *tes
 		ControlRoot: codex.ControlRoot, GlobalConfig: codex.GlobalConfig, RuntimeRoot: codex.RuntimeRoot,
 		Primary: codex.Primary,
 	}
+	claudeID := id
+	claudeID.ScopeRoot = filepath.Join(root, "claude project scope")
+	if err := os.MkdirAll(claudeID.ScopeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
 	got, err := mat.ApplyGroup(testCtx(t), []MaterializeRequest{
 		{
 			Identity: id, Integration: portable.Codex, ExpectedGeneration: ledger.Generation,
@@ -1266,7 +1265,7 @@ func TestUAPMaterializerApplyGroupBothClientsShareDataIndependentLocators(t *tes
 			OperationID: "portable-group-codex",
 		},
 		{
-			Identity: id, Integration: portable.Claude, ExpectedGeneration: ledger.Generation,
+			Identity: claudeID, Integration: portable.Claude, ExpectedGeneration: ledger.Generation,
 			PackageRoot: pkg, ClientConfigRoot: claudeConfig, ClientExecutable: probe,
 			OperationID: "portable-group-claude",
 		},
@@ -1276,6 +1275,18 @@ func TestUAPMaterializerApplyGroupBothClientsShareDataIndependentLocators(t *tes
 	}
 	if len(got) != 2 {
 		t.Fatalf("group bindings: %+v", got)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(id.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []Identity{id, claudeID} {
+		if got[i].ScopeRoot != physicalRoot(want.ScopeRoot) || !portable.ExactCommittedBinding(snap.Ledger, got[i]) {
+			t.Fatalf("group callback did not commit the selected identity: got=%+v want=%+v", got[i], want)
+		}
+		if exact, err := portable.ExactLocator(got[i]); err != nil || !exact {
+			t.Fatalf("group locator differs from returned identity: %+v exact=%v err=%v", got[i], exact, err)
+		}
 	}
 	if got[0].DataRoot != got[1].DataRoot {
 		t.Fatalf("clients did not share PLUGIN_DATA: %s vs %s", got[0].DataRoot, got[1].DataRoot)
@@ -1301,6 +1312,34 @@ func TestUAPMaterializerApplyGroupBothClientsShareDataIndependentLocators(t *tes
 		t.Fatal(err)
 	}
 	lease.Release()
+	for _, tc := range []struct {
+		name   string
+		change func(*MaterializeRequest)
+	}{
+		{"duplicate client", func(r *MaterializeRequest) { r.Integration = portable.Codex }},
+		{"unknown client", func(r *MaterializeRequest) { r.Integration = portable.Integration("unknown") }},
+		{"installation", func(r *MaterializeRequest) { r.Identity.InstallationID = "00000000-0000-4000-8000-000000000098" }},
+		{"component", func(r *MaterializeRequest) { r.Identity.ComponentID = "other" }},
+		{"owner", func(r *MaterializeRequest) { r.Identity.Owner = "other" }},
+		{"control root", func(r *MaterializeRequest) { r.Identity.ControlRoot = filepath.Join(root, "other-control") }},
+		{"runtime root", func(r *MaterializeRequest) { r.Identity.RuntimeRoot = filepath.Join(root, "other-runtime") }},
+		{"invalid scope", func(r *MaterializeRequest) { r.Identity.ScopeRoot = "relative" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reqs := []MaterializeRequest{
+				{Identity: id, Integration: portable.Codex, ExpectedGeneration: snap.Ledger.Generation, PackageRoot: pkg, ClientConfigRoot: codexConfig, ClientExecutable: probe},
+				{Identity: claudeID, Integration: portable.Claude, ExpectedGeneration: snap.Ledger.Generation, PackageRoot: pkg, ClientConfigRoot: claudeConfig, ClientExecutable: probe},
+			}
+			tc.change(&reqs[1])
+			if _, err := mat.ApplyGroup(testCtx(t), reqs); err == nil {
+				t.Fatal("invalid group was accepted")
+			}
+			after, err := installruntime.ReadInstalledSnapshot(id.ControlRoot)
+			if err != nil || !reflect.DeepEqual(after.Ledger, snap.Ledger) {
+				t.Fatalf("invalid group mutated the runtime: %v", err)
+			}
+		})
+	}
 	other := filepath.Join(root, "other package")
 	if err := os.MkdirAll(other, 0700); err != nil {
 		t.Fatal(err)
