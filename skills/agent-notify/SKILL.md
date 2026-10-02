@@ -3,7 +3,7 @@ name: agent-notify
 description: Send an Agent Notifications desktop notification when the user requests one, attention is needed, or a meaningful milestone warrants an alert during ongoing work.
 ---
 
-Use the Agent Notifications plugin's `notify` tool. Installation and notification permissions must already be configured. Before choosing navigation, use its read-only `notification_status` for this chat. Its navigation eligibility reflects configuration and caller context, not proof that the OS will display a banner or open the chat.
+Use the Agent Notifications plugin's `notify` tool. Installation and notification permissions must already be configured. When using MCP and `notification_status` is available, check that read-only tool for this chat before choosing navigation. Its navigation eligibility reflects configuration and caller context, not proof that the OS will display a banner or open the chat.
 
 Leave routine task/turn completion to automatic lifecycle hooks. Do not call `notify` merely to say done or summarize the final result just before the final response, or relabel that same completion as `progress` or `attention`.
 A normal "notify me when done" request does not ask for an extra alert on top of the completion hook.
@@ -42,4 +42,4 @@ Interpret the receipt rather than assuming that a successful tool call means del
 
 Client approval still applies. Do not change notification permissions, approval rules, enablement, or installation to make a tool call succeed. A permission prompt or notification callback is not itself a reason to send another notification.
 
-If MCP is unavailable, an already-configured session-scoped CLI integration may pass the same JSON through stdin to the installed `notify` command. Use only context supplied by that integration; do not fabricate a context file or claim that caller-asserted context is client-attested. If no qualified integration is available, report the missing setup instead of guessing a target.
+If MCP is unavailable, an already-configured session-scoped CLI integration may pass the same JSON through stdin to the installed `notify` command. This CLI has no `notification_status` operation. Use the integration's declared route and the user's intent: prefer `required` for task-related alerts, and use `none` or `best_effort` only when returning to the chat is optional. Missing status never justifies silently downgrading a required return. Use only context supplied by that integration; do not fabricate a context file or claim that caller-asserted context is client-attested. If no qualified integration is available, report the missing setup instead of guessing a target.
