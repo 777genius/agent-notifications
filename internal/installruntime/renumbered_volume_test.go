@@ -180,6 +180,112 @@ func TestRenumberedVolumeKeepsNativeManaged(t *testing.T) {
 		}
 		requireFreshNativeIdentities(t, recovered.Native)
 	})
+	t.Run("retire a legacy candidate", func(t *testing.T) {
+		nativeDrainCheck = func(context.Context, string) error { return nil }
+		t.Cleanup(func() { nativeDrainCheck = verifyNativeDrain })
+		ctx, r, _, _ := installTwoNativeGenerations(t)
+		l, err := readLedger(r.ControlRoot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		candidate := filepath.Join(filepath.Dir(l.Native.Path), ".candidate-legacy.app")
+		if err := os.MkdirAll(filepath.Join(candidate, "Contents"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(candidate, "Contents", "legacy"), []byte("legacy"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		sum, err := treeFingerprint(candidate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, err := nativeDirectoryID(candidate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		l.Native.PreviousPath, l.Native.PreviousSHA256, l.Native.PreviousDirectoryID = candidate, sum, id
+		l.Native.DecoderFloor = 1
+		if err := writeJSON(filepath.Join(r.ControlRoot, "ownership.json"), l); err != nil {
+			t.Fatal(err)
+		}
+		renumberNativeDevices(t, r.ControlRoot)
+		r.RetireNative, r.ExpectedGeneration = true, &l.Generation
+		retired, err := Commit(ctx, r)
+		if err != nil {
+			t.Fatalf("renumbered volume blocked retiring a candidate: %v", err)
+		}
+		if _, err := os.Lstat(candidate); retired.Native.PreviousPath != "" || !os.IsNotExist(err) {
+			t.Fatalf("retirement kept the candidate predecessor: %v", err)
+		}
+		r.RetireNative, r.ExpectedGeneration = false, nil
+		next, err := Commit(ctx, r)
+		if err != nil {
+			t.Fatalf("retirement left the install blocked: %v", err)
+		}
+		requireFreshNativeIdentities(t, next.Native)
+	})
+}
+
+// Refresh only rebinds what still matches: an older generation that was
+// replaced or cannot be opened keeps its recorded identity and never blocks.
+func TestRefreshKeepsUnmatchedGenerations(t *testing.T) {
+	for _, damage := range []string{"replaced", "symlink", "unreadable"} {
+		t.Run(damage, func(t *testing.T) {
+			if damage == "unreadable" && os.Geteuid() == 0 {
+				t.Skip("root opens unreadable directories")
+			}
+			ctx, r, first, _ := installTwoNativeGenerations(t)
+			change, err := StageNative(ctx, r.ControlRoot, nativeFixture(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.Native = change
+			if _, err := Commit(ctx, r); err != nil {
+				t.Fatal(err)
+			}
+			r.Native = nil
+			before := renumberNativeDevices(t, r.ControlRoot)
+			oldest := first.After.Path
+			switch damage {
+			case "replaced":
+				if err := os.Rename(oldest, oldest+".moved"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.CopyFS(oldest, os.DirFS(oldest+".moved")); err != nil {
+					t.Fatal(err)
+				}
+			case "symlink":
+				if err := os.Rename(oldest, oldest+".moved"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(oldest+".moved", oldest); err != nil {
+					t.Fatal(err)
+				}
+			case "unreadable":
+				if err := os.Chmod(oldest, 0); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = os.Chmod(oldest, 0700) })
+			}
+			next, err := Commit(ctx, r)
+			if err != nil {
+				t.Fatalf("%s older generation blocked a commit: %v", damage, err)
+			}
+			recorded := func(record *NativeRecord) string {
+				for _, gen := range record.Published {
+					if gen.Path == oldest {
+						return gen.DirectoryID
+					}
+				}
+				t.Fatal("older generation missing from the record")
+				return ""
+			}
+			if got, want := recorded(next.Native), recorded(before.Native); got != want {
+				t.Fatalf("refresh rebound a %s generation: %s, recorded %s", damage, got, want)
+			}
+			requireFreshNativeIdentities(t, &NativeRecord{Path: next.Native.Path, DirectoryID: next.Native.DirectoryID, PreviousPath: next.Native.PreviousPath, PreviousDirectoryID: next.Native.PreviousDirectoryID})
+		})
+	}
 }
 
 func TestReplacedNativeDirectoryStillRefused(t *testing.T) {

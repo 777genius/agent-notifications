@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestPersistedIdentityMatches(t *testing.T) {
@@ -53,12 +55,44 @@ func TestRefreshNativeIdentitiesLeavesSharedRecordIntact(t *testing.T) {
 	}
 	live := NativeRecord{Path: gens[1].Path, DirectoryID: gens[1].DirectoryID, PreviousPath: gens[0].Path, PreviousDirectoryID: gens[0].DirectoryID, Published: gens}
 	stale := gens[0].DirectoryID
-	retired := live
-	if err := refreshNativeIdentities(&retired); err != nil {
-		t.Fatal(err)
-	}
+	copied := live
+	refreshNativeIdentities(&copied)
 	if live.Published[0].DirectoryID != stale {
 		t.Fatal("refresh rewrote the record it was copied from")
 	}
-	requireFreshNativeIdentities(t, &retired)
+	requireFreshNativeIdentities(t, &copied)
+}
+
+// A real mount point exercises the parent lookup: a directory on a different
+// device from its parent must keep refusing an identity with another device.
+func TestRenumberedIdentityRefusedAtMountPoint(t *testing.T) {
+	mount := nestedMountPoint(t)
+	id, err := nativeDirectoryID(mount)
+	if err != nil || id == "" {
+		t.Fatalf("mount point identity: %q %v", id, err)
+	}
+	if err := checkNativeDirectoryID(mount, id); err != nil {
+		t.Fatalf("exact identity refused at a mount point: %v", err)
+	}
+	shifted := shiftDevice(t, id)
+	if err := checkNativeDirectoryID(mount, shifted); err == nil {
+		t.Fatal("identity with another device accepted at a mount point")
+	}
+	record := NativeRecord{Path: mount, DirectoryID: shifted}
+	refreshNativeIdentities(&record)
+	if record.DirectoryID != shifted {
+		t.Fatal("refresh rebound a mount point")
+	}
+}
+
+func nestedMountPoint(t *testing.T) string {
+	t.Helper()
+	for _, path := range []string{"/System/Volumes/VM", "/System/Volumes/Preboot", "/dev/shm", "/dev/pts", "/run/lock"} {
+		var st, parent unix.Stat_t
+		if unix.Lstat(path, &st) == nil && unix.Lstat(filepath.Dir(path), &parent) == nil && st.Mode&unix.S_IFMT == unix.S_IFDIR && st.Dev != parent.Dev {
+			return path
+		}
+	}
+	t.Skip("no mount point below a top-level directory")
+	return ""
 }

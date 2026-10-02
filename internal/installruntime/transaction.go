@@ -692,11 +692,10 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 	if err := validateNative(native); err != nil {
 		return l, err
 	}
-	// Only next changes: tx.Before must stay equal to the ledger on disk.
-	if nativeChecked {
-		if err := refreshNativeIdentities(next.Native); err != nil {
-			return l, err
-		}
+	// Refresh next only: tx.Before must match the ledger on disk, and
+	// qualifyRetirement requires the live record unchanged.
+	if nativeChecked && (native == nil || !native.Retire) {
+		refreshNativeIdentities(next.Native)
 	}
 	files := append([]File(nil), r.Files...)
 	if r.PolicyEnabled != nil || len(r.PolicyFields) != 0 || (r.RemoveConsumer && len(next.Consumers) == 0) {

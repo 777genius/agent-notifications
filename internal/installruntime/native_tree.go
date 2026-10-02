@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -247,39 +248,28 @@ func checkNativeDirectoryID(path, expected string) error {
 
 // refreshNativeIdentities records the current identity of every generation that
 // still matches its stored one, so a ledger written before the volume was
-// renumbered converges and older writers sharing it keep accepting it.
-func refreshNativeIdentities(record *NativeRecord) error {
+// renumbered converges and older writers sharing it keep accepting it. A
+// generation that cannot be opened keeps its stored identity.
+func refreshNativeIdentities(record *NativeRecord) {
 	if record == nil {
-		return nil
+		return
 	}
-	refresh := func(path string, id *string) error {
+	refresh := func(path string, id *string) {
 		if path == "" || *id == "" {
-			return nil
+			return
 		}
 		fresh, parent, err := nativeDirectoryIdentity(path)
-		if err != nil {
-			return err
-		}
-		if fresh != "" && fresh != *id && PersistedIdentityMatches(*id, fresh, parent) {
+		if err == nil && PersistedIdentityMatches(*id, fresh, parent) {
 			*id = fresh
 		}
-		return nil
 	}
-	if err := refresh(record.Path, &record.DirectoryID); err != nil {
-		return err
-	}
-	if err := refresh(record.PreviousPath, &record.PreviousDirectoryID); err != nil {
-		return err
-	}
-	// Retirement copies the live record, so the slice may still back the
-	// pre-commit ledger that crash recovery compares against.
-	record.Published = append([]NativeGeneration(nil), record.Published...)
+	refresh(record.Path, &record.DirectoryID)
+	refresh(record.PreviousPath, &record.PreviousDirectoryID)
+	// Never write through to a record this one was shallow-copied from.
+	record.Published = slices.Clone(record.Published)
 	for i := range record.Published {
-		if err := refresh(record.Published[i].Path, &record.Published[i].DirectoryID); err != nil {
-			return err
-		}
+		refresh(record.Published[i].Path, &record.Published[i].DirectoryID)
 	}
-	return nil
 }
 
 func checkOpenedNativeRoot(root *os.Root, expected []PathAnchor) error {
