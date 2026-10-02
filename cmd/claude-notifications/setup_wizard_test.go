@@ -8,12 +8,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -3302,16 +3304,27 @@ func TestSetupWizardResumeOmittedUninstallFromPendingE2E(t *testing.T) {
 	}
 }
 
+// Cache only immutable executable bytes. Every fixture gets its own path and
+// inode; per-test HOME and client state remain isolated at execution time.
+var wizardProbeBuild struct {
+	once sync.Once
+	body []byte
+	err  error
+}
+
 func buildWizardProbe(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	src := filepath.Join(dir, "probe.go")
-	if err := os.WriteFile(src, []byte(`package main
+	out := filepath.Join(dir, "probe")
+	wizardProbeBuild.once.Do(func() {
+		src := filepath.Join(dir, "probe.go")
+		if err := os.WriteFile(src, []byte(`package main
 import (
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 func main() {
 	if strings.Join(os.Args[1:], " ") == "plugin list --json" {
@@ -3347,13 +3360,24 @@ func main() {
 	json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true})
 }
 `), 0600); err != nil {
-		t.Fatal(err)
+			wizardProbeBuild.err = err
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "go", "build", "-p", "2", "-buildvcs=false", "-o", out, src)
+		cmd.Env = append(testenv.Build(t, filepath.Join(dir, "build-home")), "GOTOOLCHAIN=local")
+		if body, err := cmd.CombinedOutput(); err != nil {
+			wizardProbeBuild.err = fmt.Errorf("build probe: %s: %w", body, err)
+			return
+		}
+		wizardProbeBuild.body, wizardProbeBuild.err = os.ReadFile(out)
+	})
+	if wizardProbeBuild.err != nil {
+		t.Fatal(wizardProbeBuild.err)
 	}
-	out := filepath.Join(dir, "probe")
-	cmd := exec.Command("go", "build", "-o", out, src)
-	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
-	if body, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build probe: %s %v", body, err)
+	if err := os.WriteFile(out, wizardProbeBuild.body, 0700); err != nil {
+		t.Fatal(err)
 	}
 	return out
 }
