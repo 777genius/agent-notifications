@@ -267,31 +267,39 @@ function helper(raw, current) {
   return { lo, hi, wall, offsetLo: wall - error - hi, offsetHi: wall + error - lo };
 }
 async function qualify() {
-  let clock, rounds = 0;
+  let clock, rounds = 0, diagnosticStage = 'prepare';
   try {
     // Import/ABI preparation and genuine host initialization do not consume the 2s operation.
     clock = process.platform === 'linux' ? linuxSource() : await ffiSource();
     writeFileSync(localFile('clock-ready'), 'ready\n', { mode: 0o600, flag: 'wx' });
+    diagnosticStage = 'arm_wait';
     const waitStart = performance.now();
     while (!existsSync(localFile('clock-start'))) {
       requireCheck(performance.now() - waitStart <= 45000, 'diagnostic_arm_deadline');
       await new Promise(r => setTimeout(r, 5));
     }
+    diagnosticStage = 'arm_validate';
     requireCheck(readFileSync(localFile('clock-start'), 'ascii') === 'start\n', 'fresh_arm_required');
     const operationStart = performance.now(); let firstLo, previousNative, previousPair;
     for (let i = 0; i < 3; i++) {
+      diagnosticStage = 'round_before';
       const before = clock.pair(); firstLo ??= before.lo;
       if (previousPair) requireCheck(before.lo >= previousPair.lo && before.wall >= previousPair.wall, 'source_wall_or_counter_regression');
+      diagnosticStage = 'round_request';
       const response = localFile(`clock-response-${i}.json`);
       requireCheck(!existsSync(response), 'fresh_response_required');
       writeFileSync(localFile(`clock-request-${i}`), `${i}\n`, { mode: 0o600, flag: 'wx' });
+      diagnosticStage = 'round_response_wait';
       while (!existsSync(response)) {
         requireCheck(performance.now() - operationStart <= 2000 && clock.pair().hi - firstLo <= 2000000000n, 'qualification_operation_deadline');
         await new Promise(r => setTimeout(r, 5));
       }
+      diagnosticStage = 'round_decode';
       requireCheck(statSync(response).size <= 4096, 'helper_transport_limit');
       const native = helper(readFileSync(response, 'utf8'), before), after = clock.pair();
+      diagnosticStage = 'round_deadline';
       requireCheck(performance.now() - operationStart <= 2000 && after.hi - firstLo <= 2000000000n, 'qualification_operation_deadline');
+      diagnosticStage = 'round_checks';
       requireCheck(native.lo >= before.lo && native.hi <= after.hi && after.wall >= before.wall, 'native_causal_overlap_or_date_regression');
       if (previousNative) requireCheck(native.lo >= previousNative.hi && native.wall >= previousNative.wall, 'helper_cross_round_regression');
       if (process.platform === 'win32') {
@@ -308,17 +316,20 @@ async function qualify() {
       maximum('maxOuterWidthNs', after.hi - before.lo);
       previousNative = native; previousPair = after; rounds++;
     }
+    diagnosticStage = 'final_native';
     requireCheck(clock.pair().hi - firstLo <= 2000000000n, 'qualification_operation_deadline');
+    diagnosticStage = 'clock_close';
     clock.close(); clock = undefined;
     requireCheck(performance.now() - operationStart <= 2000, 'qualification_operation_deadline');
-    record({ kind: 'clock_result', status: 'api_prequalification_passed', roundCount: rounds, checks,
+    diagnosticStage = 'result_publish';
+    record({ kind: 'clock_result', status: 'api_prequalification_passed', diagnosticStage: 'complete', roundCount: rounds, checks,
       aggregate: Object.fromEntries(Object.entries(aggregate).map(([k, v]) => [k, typeof v === 'bigint' ? v.toString() : v])),
       datePrecisePredicatesObserved: aggregate.preciseComparisons > 0, sourceWallBoundQualified: false,
       candidateRQualified: false, candidateTQualified: false, productionClockModuleBound: false,
       timePolicyQualified: false, suspendExperimentPerformed: false, providerCalls: 0 }, operationStart);
   } catch (error) {
     const reason = /^[a-z0-9_]{1,80}$/.test(error?.message ?? '') ? error.message : 'native_api_exception';
-    record({ kind: 'clock_result', status: 'api_prequalification_gap', failureReason: reason, roundCount: rounds,
+    record({ kind: 'clock_result', status: 'api_prequalification_gap', failureReason: reason, diagnosticStage, roundCount: rounds,
       productionClockModuleBound: false, timePolicyQualified: false, sourceWallBoundQualified: false });
   } finally { clock?.close(); }
 }

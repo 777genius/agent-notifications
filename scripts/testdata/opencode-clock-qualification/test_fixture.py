@@ -67,9 +67,10 @@ class HelperDeadlineTests(unittest.TestCase):
         fixture.time, fixture.sha = self.real_time, self.real_sha
         self.private.cleanup()
 
-    def call(self, deadline=2.0, expected=None):
+    def call(self, deadline=2.0, expected=None, diagnostics=None):
+        options = {} if diagnostics is None else {"diagnostics": diagnostics}
         self.owner.helper(self.image, Path(self.private.name), {}, deadline,
-                          self.expected_sha if expected is None else expected)
+                          self.expected_sha if expected is None else expected, **options)
 
     def test_hash_preparation_does_not_consume_command_window(self):
         self.hash_duration = 0.300  # Preparation is longer than the command cap.
@@ -106,6 +107,49 @@ class HelperDeadlineTests(unittest.TestCase):
             self.call(expected="0" * 64)
         self.assertEqual(self.hash_calls, 1)
         self.assertEqual(self.launches, 0)
+
+
+    def test_expired_admission_reports_round_without_hash(self):
+        self.now = 2.0
+        diagnostic = {'failureRound': 1}
+        with self.assertRaisesRegex(RuntimeError, '^qualification_operation_deadline$'):
+            self.call(diagnostics=diagnostic)
+        self.assertEqual(diagnostic, {'failurePhase': 'helper_admission', 'failureRound': 1})
+        self.assertEqual(self.hash_calls, 0)
+        self.assertEqual(self.launches, 0)
+
+    def test_hash_deadline_reports_hash_phase_without_launch(self):
+        self.hash_duration = 2.001
+        diagnostic = {'failureRound': 2}
+        with self.assertRaisesRegex(RuntimeError, '^qualification_operation_deadline$'):
+            self.call(diagnostics=diagnostic)
+        self.assertEqual(diagnostic, {'failurePhase': 'helper_sha', 'failureRound': 2})
+        self.assertEqual(self.hash_calls, 1)
+        self.assertEqual(self.launches, 0)
+
+
+class SafeJSDiagnosticsTests(unittest.TestCase):
+    def test_completed_rounds_remain_visible_for_late_parent_failure(self):
+        report = {'failurePhase': 'result_wait', 'failureRound': None}
+        fixture.copy_js_diagnostics([{'kind': 'loader'}, {'kind': 'clock_result', 'pid': 42,
+            'diagnosticStage': 'complete', 'roundCount': 3, 'privateRaw': 'not exported'}], 42, report)
+        self.assertEqual(report, {'failurePhase': 'result_wait', 'failureRound': None,
+                                 'jsStage': 'complete', 'jsCompletedRounds': 3})
+
+    def test_other_pid_does_not_supply_diagnostics(self):
+        report = {}
+        fixture.copy_js_diagnostics([{}, {'kind': 'clock_result', 'pid': 99,
+            'diagnosticStage': 'complete', 'roundCount': 3}], 42, report)
+        self.assertEqual(report, {})
+
+    def test_private_or_malformed_fields_cannot_enter_safe_report(self):
+        for stage, rounds in [('/private/runtime/path', 3), ('complete', True), ('complete', 4)]:
+            with self.subTest(stage=stage, rounds=rounds):
+                report = {}
+                with self.assertRaisesRegex(RuntimeError, '^closed_js_diagnostic_required$'):
+                    fixture.copy_js_diagnostics([{}, {'kind': 'clock_result', 'pid': 42,
+                        'diagnosticStage': stage, 'roundCount': rounds}], 42, report)
+                self.assertEqual(report, {})
 
 
 if __name__ == "__main__":

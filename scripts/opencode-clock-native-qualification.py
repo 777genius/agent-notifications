@@ -46,6 +46,31 @@ def need(value, reason):
         raise RuntimeError(reason)
 
 
+# Static diagnostic enums only; these fields carry no clock/identity authority.
+FAILURE_PHASES = frozenset(('preparation', 'host_launch', 'host_ready', 'public_entry', 'ffi_ready', 'loader_identity', 'initial_live_image', 'arm', 'request_wait', 'request_validate', 'helper_admission', 'helper_sha', 'helper_launch', 'helper_wait', 'helper_stdout_eof', 'helper_stderr_eof', 'helper_eof_check', 'helper_close', 'helper_output', 'helper_decode', 'post_helper', 'response_commit', 'result_wait', 'result_identity', 'final_checks', 'bounds', 'final_live_image', 'projection', 'host_wait', 'host_stdout_eof', 'host_stderr_eof', 'host_eof_check', 'host_close', 'host_final_pipe', 'trace_hash', 'post_host_reap', 'safe_projection'))
+JS_STAGES = frozenset(('prepare', 'arm_wait', 'arm_validate', 'round_before', 'round_request', 'round_response_wait', 'round_decode', 'round_deadline', 'round_checks', 'final_native', 'clock_close', 'result_publish', 'complete'))
+
+
+def failure_phase(report, value, round_index=None):
+    if report is None:
+        return
+    need(value in FAILURE_PHASES and (round_index is None or type(round_index) is int and 0 <= round_index < 3),
+         'closed_failure_phase_required')
+    report.update(failurePhase=value, failureRound=round_index)
+
+
+def copy_js_diagnostics(result_rows, expected_pid, report):
+    if len(result_rows) != 2:
+        return
+    result = result_rows[1]
+    if result.get('kind') != 'clock_result' or result.get('pid') != expected_pid:
+        return
+    stage, completed = result.get('diagnosticStage'), result.get('roundCount')
+    need(stage in JS_STAGES and type(completed) is int and 0 <= completed <= 3,
+         'closed_js_diagnostic_required')
+    report.update(jsStage=stage, jsCompletedRounds=completed)
+
+
 def require_workflow_commit(commit, report):
     expected = os.environ.get('CLOCK_SOURCE_COMMIT', '')
     observed_valid = re.fullmatch(r'[0-9a-f]{40}', commit) is not None
@@ -293,8 +318,11 @@ class Owned:
             t = threading.Thread(target=drain, daemon=True); state['threads'].append(t); t.start()
         return state
 
-    def stop(self, s, deadline=None, terminate=True):
+    def stop(self, s, deadline=None, terminate=True, diagnostics=None):
         p = s['p']
+        prefix = 'helper' if s['helper'] else 'host'
+        round_index = diagnostics.get('failureRound') if diagnostics is not None else None
+        failure_phase(diagnostics, prefix + '_wait', round_index)
         # Natural helper reap/EOF shares its original absolute deadline. Cleanup has
         # a separate bounded budget and can never qualify bytes from a timed-out call.
         end = deadline if deadline is not None else time.monotonic() + 5
@@ -311,24 +339,37 @@ class Owned:
                 if os.name == 'nt': p.kill()
                 else: os.killpg(p.pid, signal.SIGKILL)
         p.wait(timeout=remaining())
-        for t in s['threads']: t.join(timeout=remaining())
+        for index, t in enumerate(s['threads']):
+            failure_phase(diagnostics, prefix + ('_stdout_eof' if index == 0 else '_stderr_eof'), round_index)
+            t.join(timeout=remaining())
+        failure_phase(diagnostics, prefix + '_eof_check', round_index)
         need(not any(t.is_alive() for t in s['threads']), 'owned_pipe_eof_missing')
+        failure_phase(diagnostics, prefix + '_close', round_index)
         p.stdout.close(); p.stderr.close()
         remaining()  # Unproved/late closure retains ownership until cleanup reobserves it.
         self.live.pop(p.pid)
         if s['helper']: self.closed += 1
 
-    def helper(self, exe, root, env, deadline, expected_sha):
+    def helper(self, exe, root, env, deadline, expected_sha, diagnostics=None):
+        round_index = diagnostics.get('failureRound') if diagnostics is not None else None
+        failure_phase(diagnostics, 'helper_admission', round_index)
         # Per-call identity validation shares the original full operation budget.
         need(time.monotonic() < deadline, 'qualification_operation_deadline')
+        failure_phase(diagnostics, 'helper_sha', round_index)
         need(sha(exe) == expected_sha, 'copied_helper_sha_mismatch')
         need(time.monotonic() < deadline, 'qualification_operation_deadline')
+        failure_phase(diagnostics, 'helper_launch', round_index)
         # Arm BEFORE Popen: command start/wait/EOF retain their original 224ms cap.
         end = min(deadline, time.monotonic() + .224)
         s = self.launch([str(exe), 'opencode-clock', '--protocol', '1'], root, env, True)
         try:
-            self.stop(s, end, terminate=False)
+            if diagnostics is None:
+                self.stop(s, end, terminate=False)
+            else:
+                self.stop(s, end, terminate=False, diagnostics=diagnostics)
+            failure_phase(diagnostics, 'helper_output', round_index)
             need(s['p'].returncode == 0 and not s['overflow'] and not s['pipeError'] and not s['buffers'][1], 'actual_helper_close_output_failure')
+            failure_phase(diagnostics, 'helper_decode', round_index)
             raw = bytes(s['buffers'][0]); decode_helper(raw)
             self.helper_hashes.append(hashlib.sha256(raw).hexdigest())
             need(time.monotonic() < end, 'helper_original_deadline')
@@ -402,6 +443,7 @@ def sys_platform():
 
 
 def run_version(root, version, args, helper, helper_sha, manifest_sha, ownership, report, exe):
+    failure_phase(report, 'preparation')
     (root / 'project').mkdir(mode=0o700)
     env = environment(root)
     copied_helper = root / ('helper.exe' if args.os == 'windows' else 'helper')
@@ -427,8 +469,11 @@ def run_version(root, version, args, helper, helper_sha, manifest_sha, ownership
                   'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'TMPDIR', 'TEMP', 'TMP', 'SystemRoot'}}
     with socket.socket() as sock:
         sock.bind(('127.0.0.1', 0)); port = sock.getsockname()[1]
+    failure_phase(report, 'host_launch')
     host = ownership.launch([str(exe), 'serve', '--port', str(port), '--hostname', '127.0.0.1'], root, env)
+    failed = False
     try:
+        failure_phase(report, 'host_ready')
         url = f'http://127.0.0.1:{port}'; deadline = time.monotonic() + 35
         while time.monotonic() < deadline:
             need(host['p'].poll() is None and not host['overflow'] and not host['pipeError'], 'host_exited_or_log_overflow')
@@ -442,12 +487,15 @@ def run_version(root, version, args, helper, helper_sha, manifest_sha, ownership
         else: raise RuntimeError('native_readiness_deadline')
         # These read-only public location ports are input-proved by the Linux P0 source fixture.
         trigger = '/api/plugin?' + urllib.parse.urlencode({'location[directory]': str(root / 'project')}) if v2 else '/config?' + urllib.parse.urlencode({'directory': str(root / 'project')})
+        failure_phase(report, 'public_entry')
         get(url, trigger, headers, 8)
+        failure_phase(report, 'ffi_ready')
         deadline = time.monotonic() + 5
         while not (root / 'clock-ready').exists() and time.monotonic() < deadline:
             need(host['p'].poll() is None and not any(r.get('kind') == 'clock_result' for r in rows(root)), 'native_ffi_preparation_gap')
             time.sleep(.01)
         need((root / 'clock-ready').is_file() and (root / 'clock-ready').read_bytes() == b'ready\n', 'native_preparation_deadline')
+        failure_phase(report, 'loader_identity')
         loader = rows(root)
         need(len(loader) == 1 and loader[0]['kind'] == 'loader' and loader[0]['pid'] == host['p'].pid and
              loader[0]['ppid'] == os.getpid() and loader[0]['execPath'] == str(exe) and
@@ -455,26 +503,35 @@ def run_version(root, version, args, helper, helper_sha, manifest_sha, ownership
              loader[0]['sourceManifestSha256'] == manifest_sha and loader[0]['bunVersion'] == VERSIONS[version][1] and
              loader[0]['publicContextVerified'] is True and loader[0]['platform'] == metadata['platform'] and
              loader[0]['arch'] == metadata['arch'] and loader[0]['branch'] == metadata['branch'], 'public_loader_identity_mismatch')
+        failure_phase(report, 'initial_live_image')
         live_image(host['p'], exe)
         report['liveImageAndPublicLoaderVerified'] = True
         before_calls = ownership.started; before_closes = ownership.closed
+        failure_phase(report, 'arm')
         deadline = time.monotonic() + 2
         (root / 'clock-start').write_bytes(b'start\n')
         for i in range(3):
+            failure_phase(report, 'request_wait', i)
             request = root / f'clock-request-{i}'; response = root / f'clock-response-{i}.json'
             while not request.exists() and time.monotonic() < deadline:
                 need(host['p'].poll() is None and not any(r.get('kind') == 'clock_result' for r in rows(root)), 'clock_fixture_failed')
                 time.sleep(.002)
+            failure_phase(report, 'request_validate', i)
             need(time.monotonic() < deadline and request.is_file() and not request.is_symlink() and
                  request.read_bytes() == f'{i}\n'.encode() and not response.exists(), 'fresh_helper_request_deadline')
-            raw = ownership.helper(copied_helper, root, helper_env, deadline, helper_sha)
+            raw = ownership.helper(copied_helper, root, helper_env, deadline, helper_sha, diagnostics=report)
+            failure_phase(report, 'post_helper', i)
             need(time.monotonic() < deadline, 'qualification_operation_deadline')
+            failure_phase(report, 'response_commit', i)
             scratch = root / f'response-{i}.tmp'
             with scratch.open('xb') as out: out.write(raw)
             scratch.chmod(0o600); os.replace(scratch, response)  # ONLY genuine bytes AFTER actual close + EOF.
+        failure_phase(report, 'result_wait')
         while len(rows(root)) < 2 and time.monotonic() < deadline: time.sleep(.002)
         result_rows = rows(root)
+        copy_js_diagnostics(result_rows, host['p'].pid, report)
         need(time.monotonic() < deadline, 'qualification_operation_deadline')
+        failure_phase(report, 'result_identity')
         need(len(result_rows) == 2, 'bounded_clock_result_required'); result = result_rows[1]
         need(result.get('kind') == 'clock_result' and result.get('pid') == host['p'].pid and
              result.get('status') == 'api_prequalification_passed' and result.get('roundCount') == 3 and
@@ -482,9 +539,11 @@ def run_version(root, version, args, helper, helper_sha, manifest_sha, ownership
              result.get('sourceWallBoundQualified') is False, 'native_api_prequalification_gap')
         mandatory = {'canonicalHelper', 'goDomainBootKind', 'integerRoundtrip', 'pairWidth', 'nativeBracket', 'causalOverlap', 'wallContinuity', 'monotonicNonregression'}
         mandatory |= {'procfs', 'nsfs', 'bigintFs', 'bootGrammar', 'currentThreadDomain', 'currentCallingThread'} if args.os == 'linux' else {'machTimebaseAndSysctl'} if args.os == 'darwin' else {'system32ApiSet', 'ntBootExact32', 'voidUnsigned100ns', 'goPreciseWallContained'}
+        failure_phase(report, 'final_checks')
         need(all(result.get('checks', {}).get(k) is True for k in mandatory) and
              ownership.started - before_calls == ownership.closed - before_closes == 3 and
              sha(exe) == report['imageSha256'] and sha(copied_helper) == helper_sha and sha(module) == metadata['moduleSha256'] and not host['overflow'] and not host['pipeError'], 'native_checks_or_actual_close_incomplete')
+        failure_phase(report, 'bounds')
         bounds = result.get('aggregate', {})
         need(set(bounds) == {'maxPairWidthNs', 'maxOuterWidthNs', 'maxGoWidthNs', 'maxDatePreciseDistanceNs', 'preciseComparisons'}, 'closed_safe_bounds_required')
         for k in set(bounds) - {'preciseComparisons'}:
@@ -494,22 +553,36 @@ def run_version(root, version, args, helper, helper_sha, manifest_sha, ownership
              type(bounds['preciseComparisons']) is int and (bounds['preciseComparisons'] > 0 if args.os == 'windows' else bounds['preciseComparisons'] == 0), 'observed_bound_limits')
         if args.os == 'windows':
             need(all(type(result['checks'].get(k)) is bool for k in ('dateInsidePreciseInterval', 'dateWithinTwoMsOfPrecise')), 'actual_date_precise_predicates_required')
+        failure_phase(report, 'final_live_image')
         live_image(host['p'], exe)
         need(time.monotonic() < deadline, 'qualification_operation_deadline')
+        failure_phase(report, 'projection')
         # Closed safe projection; raw loader/image paths, UUIDs and all clocks remain private.
         safe_result = dict(status='api_prequalification_passed', bun=loader[0]['bunVersion'], roundCount=3,
                       checks={k: result['checks'][k] for k in sorted(mandatory)}, bounds=bounds,
                       datePrecisePredicates={k: result['checks'].get(k) for k in ('dateInsidePreciseInterval', 'dateWithinTwoMsOfPrecise')})
+    except Exception:
+        failed = True
+        try:
+            copy_js_diagnostics(rows(root), host['p'].pid, report)
+        except Exception:
+            pass  # Diagnostic reads never replace the primary refusal.
+        raise
     finally:
         try:
-            ownership.stop(host)
+            ownership.stop(host, diagnostics=None if failed else report)
+            if not failed: failure_phase(report, 'host_final_pipe')
             need(not host['overflow'] and not host['pipeError'], 'host_final_pipe_failure')
         finally: headers.clear(); env.clear(); helper_env.clear()
+        if not failed: failure_phase(report, 'trace_hash')
         report['traceSha256'] = sha(root / 'loader-private.jsonl') if (root / 'loader-private.jsonl').exists() else None
+    failure_phase(report, 'post_host_reap')
     # Includes final identity/hash validation, evidence projection and actual host reap.
     need(time.monotonic() < deadline, 'qualification_operation_deadline')
+    failure_phase(report, 'safe_projection')
     report.update(safe_result)
     need(time.monotonic() < deadline, 'qualification_operation_deadline')
+    report.pop('failurePhase', None); report.pop('failureRound', None)
 
 
 def main():
