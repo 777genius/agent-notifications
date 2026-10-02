@@ -128,12 +128,15 @@ func checkLocalMainProcess(t *testing.T, bin string, tc localMainCase) {
 		_, _ = io.WriteString(in, tc.input)
 		_ = in.Close()
 	}
-	if err = cmd.Wait(); err != nil {
-		if !tc.closed || cmd.ProcessState.ExitCode() != 1 {
-			t.Fatal("non-neutral exit", err)
+	err = cmd.Wait()
+	t.Logf("argv=%q inputSHA256=%x elapsed=%s exit=%d deadline=%v stdoutSHA256=%x stderrSHA256=%x", cmd.Args, sha256.Sum256([]byte(tc.input)), time.Since(start), cmd.ProcessState.ExitCode(), ctx.Err(), sha256.Sum256(stdout.Bytes()), sha256.Sum256(stderr.Bytes()))
+	if tc.closed {
+		if cmd.ProcessState.ExitCode() != 1 {
+			t.Fatal("closed output did not fail", err)
 		}
+	} else if err != nil {
+		t.Fatal("non-neutral exit", err)
 	}
-	t.Logf("argv=%q inputSHA256=%x elapsed=%s exit=%d stdoutSHA256=%x stderrSHA256=%x", cmd.Args, sha256.Sum256([]byte(tc.input)), time.Since(start), cmd.ProcessState.ExitCode(), sha256.Sum256(stdout.Bytes()), sha256.Sum256(stderr.Bytes()))
 	if ctx.Err() != nil || time.Since(start) > 2500*time.Millisecond || stderr.Len() != 0 || (!tc.closed && stdout.String() != "{}\n") {
 		t.Fatalf("process contract failed: %q %q", stdout.String(), stderr.String())
 	}
