@@ -18,6 +18,10 @@ import sys
 source, root = Path(sys.argv[1]), Path(sys.argv[2])
 shell = sys.argv[3]
 env = dict(os.environ, ROOT=root.as_posix(), CN_PRODUCT='claude')
+# This Linux/POSIX wrapper fixture needs real links, even from native Python.
+# Its fresh child does not inherit the other suite's scoped MSYS setting.
+if os.name == 'nt':
+    env['MSYS'] = (env.get('MSYS', '') + ' winsymlinks:nativestrict').strip()
 version = '1.42.0'
 stub = root / 'stubs'
 stub.mkdir()
