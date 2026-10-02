@@ -5,7 +5,9 @@ package installruntime
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"os"
 	"os/exec"
@@ -99,14 +101,49 @@ func renumberWrite(t *testing.T, path string, body []byte, mode os.FileMode) {
 		t.Fatal(err)
 	}
 }
-func (e *renumberEnv) command(args ...string) ([]byte, error) {
-	return exec.CommandContext(e.ctx, e.sender, args...).CombinedOutput()
+func (e *renumberEnv) command(args ...string) (stdout, stderr []byte, err error) {
+	var out, diagnostic bytes.Buffer
+	cmd := exec.CommandContext(e.ctx, e.sender, args...)
+	cmd.Stdout, cmd.Stderr = &out, &diagnostic
+	err = cmd.Run()
+	return out.Bytes(), diagnostic.Bytes(), err
+}
+
+// Fixture IDs are deliberately distinct from the product signing identity.
+// Real subprocess installers must reject these apps before LaunchServices writes.
+func renumberFixtureInfoPlist(root string) []byte {
+	id := fmt.Sprintf("com.agentnotify.test.renumber.%x", sha256.Sum256([]byte(root)))
+	return []byte(`<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>` + id + `</string><key>CFBundleExecutable</key><string>terminal-notifier-modern</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleVersion</key><string>1</string></dict></plist>`)
+}
+
+func renumberRegistrationWarnings(body []byte) error {
+	if len(body) == 0 {
+		return nil
+	}
+	if body[len(body)-1] != '\n' {
+		return fmt.Errorf("unterminated registration warning")
+	}
+	const prefix = "warning: runtime committed; native registration reconciliation incomplete: "
+	for _, line := range strings.Split(string(body[:len(body)-1]), "\n") {
+		if !strings.HasPrefix(line, prefix) || strings.TrimSpace(strings.TrimPrefix(line, prefix)) == "" {
+			return fmt.Errorf("unexpected CLI diagnostic %q", line)
+		}
+		for _, char := range line {
+			if char < 32 || char == 127 {
+				return fmt.Errorf("control character in CLI diagnostic %q", line)
+			}
+		}
+	}
+	return nil
 }
 func (e *renumberEnv) run(t *testing.T, args ...string) []byte {
 	t.Helper()
-	out, err := e.command(args...)
+	out, stderr, err := e.command(args...)
 	if err != nil {
-		t.Fatalf("%v: %v\n%s", args, err, out)
+		t.Fatalf("%v: %v\nstdout: %s\nstderr: %s", args, err, out, stderr)
+	}
+	if err := renumberRegistrationWarnings(stderr); err != nil {
+		t.Fatalf("%v: %v\nstdout: %q\nstderr: %q", args, err, out, stderr)
 	}
 	return out
 }
@@ -117,6 +154,7 @@ func (e *renumberEnv) stage(t *testing.T, marker string) string {
 	// The Linux basename permits legacy inert fixtures on both systems. Darwin
 	// qualified CLI coverage separately supplies a signed native Mach-O bundle.
 	renumberWrite(t, filepath.Join(stage, "ClaudeNotifier.app", "Contents", "MacOS", "terminal-notifier-modern"), []byte("#!/bin/sh\nexit 97\n# "+marker+"\n"), 0755)
+	renumberWrite(t, filepath.Join(stage, "ClaudeNotifier.app", "Contents", "Info.plist"), renumberFixtureInfoPlist(e.root), 0644)
 	return stage
 }
 func (e *renumberEnv) install(t *testing.T, stage string, extra ...string) Ledger {
@@ -127,19 +165,28 @@ func (e *renumberEnv) install(t *testing.T, stage string, extra ...string) Ledge
 	}
 	args := []string{"internal-install-runtime", "--stage", stage, "--target", e.target, "--control-root", e.control, "--entry", entry}
 	args = append(args, extra...)
-	out := e.run(t, args...)
+	out, stderr, err := e.command(args...)
+	if err != nil {
+		t.Fatalf("install failed: %v\nstdout: %s\nstderr: %s", err, out, stderr)
+	}
 	l, err := readLedger(e.control)
 	if err != nil || l.Native == nil {
 		t.Fatalf("installed ledger: %+v %v", l, err)
 	}
 	want := fmt.Sprintf("managed-runtime committed generation=%d\n", l.Generation)
+	printPath := false
 	for _, option := range extra {
 		if option == "--print-native-path" {
+			printPath = true
 			want = l.Native.Path + "\n"
 		}
 	}
-	if string(out) != want {
-		t.Fatalf("CLI successful commit output: %q; want %q", out, want)
+	if printPath {
+		if string(out) != want || renumberRegistrationWarnings(stderr) != nil {
+			t.Fatalf("CLI path-only commit: stdout=%q stderr=%q; want path %q and only registration warnings", out, stderr, want)
+		}
+	} else if !bytes.HasPrefix(out, []byte(want)) || len(stderr) != 0 || renumberRegistrationWarnings(out[len(want):]) != nil {
+		t.Fatalf("CLI successful commit: stdout=%q stderr=%q; want %q and only registration warnings", out, stderr, want)
 	}
 	return l
 }
@@ -221,8 +268,8 @@ func TestRenumberE2ENonDarwinExactness(t *testing.T) {
 	if _, err := ReadInstalledSnapshot(e.control); err == nil {
 		t.Fatal("Linux accepted rewritten persisted dev")
 	}
-	if out, err := e.command("internal-install-runtime", "--stage", e.stage(t, "B"), "--target", e.target, "--control-root", e.control); err == nil {
-		t.Fatalf("Linux update accepted dev mismatch: %s", out)
+	if out, stderr, err := e.command("internal-install-runtime", "--stage", e.stage(t, "B"), "--target", e.target, "--control-root", e.control); err == nil {
+		t.Fatalf("Linux update accepted dev mismatch: stdout=%s stderr=%s", out, stderr)
 	}
 	if got, err := treeFingerprint(l.Native.Path); err != nil || got != l.Native.SHA256 {
 		t.Fatal("refusal changed old generation", err)
@@ -244,8 +291,8 @@ func TestRenumberE2ECLIOutputContract(t *testing.T) {
 	if _, err := os.Stat(l.Native.Path); err != nil {
 		t.Fatal("printed unpublished native", err)
 	}
-	if out, err := e.command("internal-install-runtime", "--stage", filepath.Join(e.root, "absent"), "--target", e.target, "--control-root", e.control, "--print-native-path"); err == nil || bytes.Contains(out, []byte(l.Native.Path+"\n")) {
-		t.Fatalf("failure printed success path: %q %v", out, err)
+	if out, stderr, err := e.command("internal-install-runtime", "--stage", filepath.Join(e.root, "absent"), "--target", e.target, "--control-root", e.control, "--print-native-path"); err == nil || bytes.Contains(out, []byte(l.Native.Path+"\n")) {
+		t.Fatalf("failure printed success path: stdout=%q stderr=%q err=%v", out, stderr, err)
 	}
 	blank := filepath.Join(e.root, "plain-release")
 	renumberWrite(t, filepath.Join(blank, "claude-notifications-linux-amd64"), renumberRead(t, e.sender), 0755)
@@ -262,4 +309,87 @@ func renumberRead(t *testing.T, path string) []byte {
 		t.Fatal(err)
 	}
 	return body
+}
+
+// Reject unrelated output instead of treating every advisory as harmless.
+func TestRenumberE2ERegistrationWarningContract(t *testing.T) {
+	const warning = "warning: runtime committed; native registration reconciliation incomplete: fixture bundle is not the product\n"
+	for _, test := range []struct {
+		name  string
+		body  string
+		valid bool
+	}{
+		{"quiet", "", true},
+		{"registration advisory", warning, true},
+		{"missing newline", strings.TrimSuffix(warning, "\n"), false},
+		{"empty explanation", "warning: runtime committed; native registration reconciliation incomplete: \n", false},
+		{"unrelated advisory", "warning: download incomplete\n", false},
+		{"appended pollution", warning + "unexpected runtime output\n", false},
+		{"blank appended line", warning + "\n", false},
+		{"terminal escape", strings.TrimSuffix(warning, "\n") + "\x1b[31m\n", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := renumberRegistrationWarnings([]byte(test.body))
+			if (err == nil) != test.valid {
+				t.Fatalf("warning validation accepted=%t want=%t body=%q err=%v", err == nil, test.valid, test.body, err)
+			}
+		})
+	}
+}
+
+// Merging stderr into stdout or losing failure diagnostics makes this red even
+// on Linux, where production registration itself correctly remains a no-op.
+func TestRenumberE2ECommandStreams(t *testing.T) {
+	root := t.TempDir()
+	sender := filepath.Join(root, "stream-fixture")
+	renumberWrite(t, sender, []byte("#!/bin/sh\nprintf '%s\\n' \"$1\"\nprintf '%s\\n' \"$2\" >&2\nexit \"$3\"\n"), 0700)
+	e := renumberEnv{sender: sender, ctx: context.Background()}
+	const warning = "warning: runtime committed; native registration reconciliation incomplete: fixture bundle is not the product"
+	for _, status := range []int{0, 7} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			out, stderr, err := e.command("/fixture/native", warning, fmt.Sprint(status))
+			if string(out) != "/fixture/native\n" || string(stderr) != warning+"\n" || (err == nil) != (status == 0) {
+				t.Fatalf("subprocess stream contract: stdout=%q stderr=%q err=%v status=%d", out, stderr, err, status)
+			}
+		})
+	}
+}
+
+// Read actual fixture metadata; a missing plist, product ID, or one shared ID
+// across unrelated sandboxes would again risk touching real OS registration.
+func TestRenumberE2EFixtureBundleIsolation(t *testing.T) {
+	bundleID := func(root, marker string) string {
+		sender := filepath.Join(root, "inert-sender")
+		renumberWrite(t, sender, []byte("inert fixture bytes"), 0700)
+		e := renumberEnv{root: root, sender: sender}
+		stage := e.stage(t, marker)
+		var plist struct {
+			Dict struct {
+				Keys   []string `xml:"key"`
+				Values []string `xml:"string"`
+			} `xml:"dict"`
+		}
+		if err := xml.Unmarshal(renumberRead(t, filepath.Join(stage, "ClaudeNotifier.app", "Contents", "Info.plist")), &plist); err != nil {
+			t.Fatal(err)
+		}
+		for i, key := range plist.Dict.Keys {
+			if key == "CFBundleIdentifier" && i < len(plist.Dict.Values) {
+				id := plist.Dict.Values[i]
+				if id == nativeProductBundleID || !strings.HasPrefix(id, "com.agentnotify.test.renumber.") {
+					t.Fatalf("fixture could register as the product: %q", id)
+				}
+				return id
+			}
+		}
+		t.Fatal("fixture has no bundle identifier")
+		return ""
+	}
+	root := t.TempDir()
+	id := bundleID(root, "A")
+	if got := bundleID(root, "B"); got != id {
+		t.Fatalf("one fixture changed bundle identity between generations: %q %q", id, got)
+	}
+	if got := bundleID(t.TempDir(), "A"); got == id {
+		t.Fatalf("unrelated fixtures share bundle identity: %q", id)
+	}
 }

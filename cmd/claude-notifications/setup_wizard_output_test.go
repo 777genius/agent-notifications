@@ -86,3 +86,27 @@ func TestSetupWizardHumanIncompleteAndRemoval(t *testing.T) {
 		t.Fatal(out.String())
 	}
 }
+
+// Maintenance failure stays visible in both CLI contracts without failing a
+// committed installation or contaminating JSON with human summary lines.
+func TestSetupWizardMaintenanceWarningOutput(t *testing.T) {
+	warning := "runtime committed; native registration reconciliation incomplete: registration unavailable"
+	result := setupwizard.Result{Action: "install", Outcome: "completed", Targets: []setupwizard.TargetResult{{Client: "codex", Unit: "hooks", Outcome: "completed", Warnings: []string{warning}}}}
+	for _, jsonOut := range []bool{false, true} {
+		var out bytes.Buffer
+		if code := writeSetupWizardResult(&out, jsonOut, result, nil); code != 0 {
+			t.Fatalf("maintenance warning failed setup: %d", code)
+		}
+		if jsonOut {
+			var got setupwizard.Result
+			if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Targets) != 1 || len(got.Targets[0].Warnings) != 1 || got.Targets[0].Warnings[0] != warning {
+				t.Fatalf("JSON lost warning: %s", out.String())
+			}
+		} else if !strings.Contains(out.String(), "Warning: "+warning) || !strings.Contains(out.String(), "Installation complete") {
+			t.Fatalf("human output hid committed-setup warning: %s", out.String())
+		}
+	}
+}
