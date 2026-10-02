@@ -40,6 +40,8 @@ type runtimeLiveImage struct {
 	GOOS, GOARCH, Entry, SHA256     string
 	Device, Inode, ProcessStartTick uint64
 	NativePID                       int
+	// Complete OS fingerprint; lifetime handles deliberately stay outside equality.
+	fingerprint [32]byte
 }
 type runtimeObserverGeneration uint8
 
@@ -103,13 +105,15 @@ func runtimeProfileOperation(ctx context.Context, args []string, input io.ReadCl
 			validPrivateOrigin(in.Origin) && canonicalPrivatePath(in.ControlRoot) && canonicalPrivatePath(in.HostExecutable) && in.PublicExecPath == in.HostExecutable
 	}
 	if valid && ctx.Err() == nil {
-		before, liveErr := verifyRuntimeLiveImage(ctx, in)
+		held, liveErr := holdRuntimeLiveImage(ctx, in)
 		if liveErr == nil {
+			defer held.Close()
+			before := held.image
 			// Source-backed settlement contract: this exact pinned API runs/waits
 			// synchronously, even on startup, output, identity or cancellation error.
 			evidence, probeErr := clientdetect.ProbeOpenCodeTarget(ctx, clientdetect.ProbeTarget{Executable: in.HostExecutable, Environment: []string{"PATH="}, Timeout: 10 * time.Second})
 			profile := opencodehost.Resolve(evidence.VersionEvidence)
-			after, afterErr := verifyRuntimeLiveImage(ctx, in)
+			after, afterErr := held.Revalidate(ctx)
 			if probeErr == nil && afterErr == nil && before == after && ctx.Err() == nil && qualify != nil {
 				generation := qualify(profile.Clone(), before)
 				if generation == observerV1 && profile.Family == opencodehost.ModernV1 || generation == observerV2 && profile.Family == opencodehost.V2 {
