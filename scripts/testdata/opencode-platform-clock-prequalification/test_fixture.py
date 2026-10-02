@@ -141,6 +141,20 @@ class PureVectors(unittest.TestCase):
                 self.assertEqual(owned.summary()['allOwnedHandlesClosed'], expected_live == 0)
                 self.assertTrue(all(value is False for value in H.QUALIFICATIONS.values()))
 
+    def test_rejected_symlink_has_only_safe_path_role(self):
+        with tempfile.TemporaryDirectory(prefix='TEST-path-role-', dir=ROOT) as directory:
+            root = Path(directory); target = root / 'PRIVATE-target'; target.mkdir()
+            (target / 'leaf').write_bytes(b'private')
+            self.assertEqual(H.canonical_path(target / 'leaf'), target / 'leaf')
+            link = root / 'PRIVATE-link'
+            try: link.symlink_to(target, target_is_directory=True)
+            except OSError: self.skipTest('Actual symlink creation unavailable; no junction proof')
+            with self.assertRaisesRegex(RuntimeError, '^symlink_ancestry$') as caught:
+                H.canonical_path(link / 'leaf', 'go_dependency_directory')
+            observed = caught.exception.path_failure
+            self.assertEqual(observed, {'role': 'go_dependency_directory', 'ancestorDepth': 1, 'kind': 'symlink'})
+            self.assertNotIn('PRIVATE', json.dumps(observed))
+
     def test_exact_head_refusal(self):
         self.assertEqual(H.commit_match('ab' * 20, 'ab' * 20), 'ab' * 20)
         for observed, expected in [('ab' * 20, 'cd' * 20), ('AB' * 20, 'AB' * 20), ('a' * 39, 'a' * 39), ('a' * 41, 'a' * 41), ('', '')]:

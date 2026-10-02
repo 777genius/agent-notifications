@@ -309,10 +309,15 @@ class Owned:
                 'maxOwnedWeight': self.highwater, 'allOwnedHandlesClosed': not self.live}
 
 
-def canonical_path(path):
+def canonical_path(path, role='path'):
     p = Path(path).absolute()
-    for at in (p, *p.parents):
-        need(not at.is_symlink() and not (hasattr(at, 'is_junction') and at.is_junction()), 'symlink_ancestry')
+    for depth, at in enumerate((p, *p.parents)):
+        symlink = at.is_symlink()
+        junction = not symlink and hasattr(at, 'is_junction') and at.is_junction()
+        if symlink or junction:
+            error = RuntimeError('symlink_ancestry')
+            error.path_failure = {'role': role, 'ancestorDepth': depth, 'kind': 'symlink' if symlink else 'junction'}
+            raise error
     need(p.resolve() == p, 'canonical_native_path')
     return p
 
@@ -439,7 +444,7 @@ def build_helper(owned, env, root, commit, os_name, arch):
     leaves, modules = [], {}
     for package in dependencies:
         need(not package.get('Error') and not package.get('Incomplete'), 'complete_go_dependency_closure')
-        directory = canonical_path(package['Dir'])
+        directory = canonical_path(package['Dir'], 'go_dependency_directory')
         module = package.get('Module')
         if module:
             need(not module.get('Replace'), 'unreviewed_go_module_replace')
@@ -449,7 +454,7 @@ def build_helper(owned, env, root, commit, os_name, arch):
                                      'sum': module.get('Sum'), 'goModSHA256': sha(module['GoMod'])}
         for category in ('GoFiles', 'CgoFiles', 'CFiles', 'CXXFiles', 'MFiles', 'HFiles', 'FFiles', 'SFiles', 'SysoFiles', 'EmbedFiles'):
             for name in package.get(category, []):
-                p = canonical_path(directory / name)
+                p = canonical_path(directory / name, 'go_dependency_leaf')
                 need(p.is_relative_to(directory) and p.is_file(), 'original_go_leaf_containment')
                 record = {'package': package['ImportPath'], 'category': category, 'leaf': name,
                           'actualSHA256': sha(p), 'actualBytes': p.stat().st_size,
@@ -622,6 +627,13 @@ def isolate_linux():
 
 
 def run_case(root, metadata, os_name, arch, job_end):
+    case_started = time.monotonic(); operation_started = None; round_number = None
+    stage = 'initial_custody'; disposed_observed = False
+    def observation():
+        now = time.monotonic()
+        return {'stage': stage, 'caseElapsedMs': round((now - case_started) * 1000, 3),
+                'operationElapsedMs': None if operation_started is None else round((now - operation_started) * 1000, 3),
+                'helperRound': round_number, 'disposedFrameObserved': disposed_observed}
     own = Owned(job_end)
     env = environment(root)
     metadata_path = root / 'metadata.json'
@@ -652,11 +664,13 @@ def run_case(root, metadata, os_name, arch, job_end):
         write_json(root / 'loader.private.json', loader)
         kernel_image(host['p'], exe, os_name)
         resources_before = native_resources(host['p'], os_name)
-        operation_end = min(js_end, job_end, time.monotonic() + 2)
+        operation_started = time.monotonic()
+        operation_end = min(js_end, job_end, operation_started + 2)
         own.send(host, {'kind': 'begin'}, operation_end)
         helper_receipts = []
         helper_lifecycle = []
         for round_number in range(3):
+            stage = 'helper_round'
             request = own.message(host, 'helper_request', operation_end)
             need(request['round'] == round_number, 'single_planned_round')
             s, end = own.start_helper(helper, metadata['helperSha256'], root, env, operation_end)
@@ -674,26 +688,35 @@ def run_case(root, metadata, os_name, arch, job_end):
                 path = root / ('helper-' + str(round_number) + '.private')
                 path.write_bytes(raw); path.chmod(0o600)
                 helper_receipts.append(digest(raw))
+                stage = 'helper_deadline_guard'
                 remaining(end)
+                stage = 'helper_response'
                 own.send(host, {'kind': 'helper_response', 'round': round_number,
                                 'raw': base64.b64encode(raw).decode()}, operation_end)
             finally:
                 if s['p'].pid in own.live: own.cleanup()
+        stage = 'disposed'
         result = own.message(host, 'disposed', operation_end)
+        disposed_observed = True
         validate_result(result, os_name)
         write_json(root / 'helper-lifecycle.private.json', helper_lifecycle)
+        stage = 'resource_recheck'
         resources_after = native_resources(host['p'], os_name)
         need(resources_after <= resources_before, 'actual_module_resource_leak')
         kernel_image(host['p'], exe, os_name)
+        stage = 'finish'
         own.send(host, {'kind': 'finish'}, operation_end)
         host['p'].stdin.close()
+        stage = 'host_close'
         own.close(host, operation_end)
+        stage = 'final_custody_hashes'
         remaining(operation_end)
         need(sha(exe) == metadata['imageSha256'] and sha(helper) == metadata['helperSha256'] and
              sha(fixture) == metadata['fixtureSha256'] and
              all(sha(root / x['path']) == x['actualSHA256'] for x in metadata['moduleLeaves']), 'final_actual_source_image_hashes')
         if loader_files:
             need(windows_loader_files() == loader_files, 'actual_os_loader_file_lifetime')
+        stage = 'final_custody_guard'
         remaining(operation_end)
         safe.update({k: result[k] for k in ('status', 'actualModuleBound', 'rounds', 'samples', 'comparisons',
                      'datePredicates', 'disposeCalls', 'sampleAfterDisposeRefused', 'operationElapsedMs', 'jsElapsedMs', 'checks')})
@@ -705,6 +728,8 @@ def run_case(root, metadata, os_name, arch, job_end):
     except Exception as error:
         safe['status'] = 'unqualified'
         safe['failureReason'] = failure_reason(error)
+        safe['failureObservation'] = observation()
+        if hasattr(error, 'path_failure'): safe['pathFailure'] = error.path_failure
     finally:
         own.cleanup()
         safe.update(own.summary())
@@ -713,11 +738,13 @@ def run_case(root, metadata, os_name, arch, job_end):
                 safe['helperStarts'] == safe['helperActualCloses'] == 3 and
                 safe['ownedStarts'] == safe['ownedActualCloses'] == 4 and safe['maxOwnedWeight'] <= 2):
             safe.update(status='unqualified', failureReason='actual_lifecycle_counts')
+        stage = 'final_stream_custody'
         if host:
             for index, data in enumerate(host['buffers']):
                 path = root / ('module-stream-' + str(index) + '.private'); path.write_bytes(data); path.chmod(0o600)
         if safe['status'] == 'module_prequalification_observed' and time.monotonic() >= operation_end:
             safe.update(status='unqualified', failureReason='original_preparation_deadline')
+            safe['failureObservation'] = observation()
     return safe
 
 
@@ -775,7 +802,8 @@ def stage_case(owned, env, parent_root, version, item, leaves, helper, helper_sh
 
 
 def parent_main(args):
-    job_end = time.monotonic() + BUDGETS['jobSeconds']
+    parent_started = time.monotonic(); stage = 'initial_custody'
+    job_end = parent_started + BUDGETS['jobSeconds']
     # Deadline-only watchdog; never a sampling clock or a timing fallback.
     # Cooperative checks additionally refuse every late successful observation.
     watchdog = threading.Timer(BUDGETS['jobSeconds'], _thread.interrupt_main)
@@ -810,7 +838,9 @@ def parent_main(args):
         value = closed_inputs(parse(raw_inputs))
         write_json(root / 'reviewed-closed-inputs.json', value)
         report['closedPrimaryInputs'] = primary_sources(owned, env, root, value)
+        stage = 'go_build_source_closure'
         helper, build = build_helper(owned, env, root, commit, args.os, args.arch)
+        stage = 'cases'
         report['goBuildClosure'] = build
         report['goBuildClosureSHA256'] = digest(canonical(build))
         checkout(owned, env, expected)
@@ -871,6 +901,8 @@ def parent_main(args):
         report['status'] = 'module_prequalification_observed'
     except Exception as error:
         report['failureReason'] = failure_reason(error)
+        report['failureObservation'] = {'stage': stage, 'parentElapsedMs': round((time.monotonic() - parent_started) * 1000, 3)}
+        if hasattr(error, 'path_failure'): report['pathFailure'] = error.path_failure
     except KeyboardInterrupt:
         report.update(status='unqualified', failureReason='absolute_deadline' if time.monotonic() >= job_end else 'parent_interrupted')
     finally:
