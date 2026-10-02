@@ -62,7 +62,7 @@ After installation:
 - **OpenCode:** restart OpenCode to load its global plugin. On Mac, explicitly grant notification permission. OpenCode bootstrap requires release v1.46.0 or newer; see [OpenCode setup, channels and limits](opencode-notifications.md).
 
 When the selected release supports the portable wizard, the installer also registers the
-`agent-notify` MCP server and skill for the selected clients. Restart each selected client
+`agent-notify` MCP server and `agent-notifications` skill for the selected clients. Restart each selected client
 and open a new session before checking its MCP tools. The agent can call `notify` during a
 task, not only after a Stop hook. Check the read-only `notification_status` first:
 when `navigation.capability` is `eligible`, prefer `navigation: "required"` to keep

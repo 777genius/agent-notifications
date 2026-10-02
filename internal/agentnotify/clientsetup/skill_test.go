@@ -17,8 +17,8 @@ import (
 func skillFixture(t *testing.T) fixture {
 	t.Helper()
 	f := fresh(t, registration.Codex)
-	source := filepath.Join(f.r.RuntimeRoot, "skills", "agent-notify", "SKILL.md")
-	destination := filepath.Join(filepath.Dir(f.r.ConfigPath), "skills", "agent-notify", "SKILL.md")
+	source := filepath.Join(f.r.RuntimeRoot, "skills", "agent-notifications", "SKILL.md")
+	destination := filepath.Join(filepath.Dir(f.r.ConfigPath), "skills", "agent-notifications", "SKILL.md")
 	for _, p := range []string{source, destination} {
 		if e := os.MkdirAll(filepath.Dir(p), 0700); e != nil {
 			t.Fatal(e)
@@ -159,13 +159,13 @@ func TestSkillConflicts(t *testing.T) {
 			case "runtime-destination":
 				s.DestinationPath = s.SourcePath
 			case "control-destination":
-				s.DestinationPath = filepath.Join(f.r.ControlRoot, "agent-notify", "SKILL.md")
+				s.DestinationPath = filepath.Join(f.r.ControlRoot, "agent-notifications", "SKILL.md")
 			case "config-destination":
 				f.r.ConfigPath = s.DestinationPath
 			case "relative":
-				s.DestinationPath = "agent-notify/SKILL.md"
+				s.DestinationPath = "agent-notifications/SKILL.md"
 			case "unclean":
-				s.DestinationPath = filepath.Dir(s.DestinationPath) + "/../agent-notify/SKILL.md"
+				s.DestinationPath = filepath.Dir(s.DestinationPath) + "/../agent-notifications/SKILL.md"
 			case "wrong-name":
 				s.DestinationPath = filepath.Join(filepath.Dir(s.DestinationPath), "OTHER.md")
 			case "claude":
@@ -181,7 +181,7 @@ func TestSkillConflicts(t *testing.T) {
 
 func TestSkillCreatesMissingParents(t *testing.T) {
 	f := skillFixture(t)
-	destination := filepath.Join(filepath.Dir(f.r.ConfigPath), "absent", "agent-notify", "SKILL.md")
+	destination := filepath.Join(filepath.Dir(f.r.ConfigPath), "absent", "agent-notifications", "SKILL.md")
 	f.r.SkillProjection.DestinationPath = destination
 	x := f.apply(t)
 	if !x.Changed || !bytes.Equal(get(t, f.r.SkillProjection.SourcePath), get(t, destination)) {
@@ -230,7 +230,7 @@ func TestSkillForeignReplacement(t *testing.T) {
 }
 func relocation(t *testing.T, f fixture) string {
 	t.Helper()
-	p := filepath.Join(filepath.Dir(f.r.ConfigPath), "other-skills", "agent-notify", "SKILL.md")
+	p := filepath.Join(filepath.Dir(f.r.ConfigPath), "other-skills", "agent-notifications", "SKILL.md")
 	if e := os.MkdirAll(filepath.Dir(p), 0700); e != nil {
 		t.Fatal(e)
 	}

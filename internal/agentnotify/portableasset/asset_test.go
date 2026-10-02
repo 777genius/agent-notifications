@@ -25,7 +25,7 @@ func TestAssetName(t *testing.T) {
 
 func TestCanonicalSkillMatchesPortableLayoutCopy(t *testing.T) {
 	root := repoRoot(t)
-	body, err := os.ReadFile(filepath.Join(root, "portable-package", "skills", "agent-notify", "SKILL.md"))
+	body, err := os.ReadFile(filepath.Join(root, "portable-package", "skills", "agent-notifications", "SKILL.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
