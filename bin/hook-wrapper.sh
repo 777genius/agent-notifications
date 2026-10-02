@@ -148,7 +148,35 @@ install_attempt() {
         printf '%s\n' "$INSTALL_REASON"
         return 1
     fi
-    INSTALL_TARGET_DIR="$SCRIPT_DIR" "$INSTALL_SCRIPT" "$@"
+    if [ -n "${INSTALL_CLAIM:-}" ]; then
+        # The wrapper can die while its child survives. The actual process that
+        # execs the installer publishes a separate immutable lifetime witness.
+        INSTALL_TARGET_DIR="$SCRIPT_DIR" sh -c '
+            expected=$1; backoff=$2; installer=$3; shift 3
+            cd "$backoff/active" 2>/dev/null || exit 1
+            [ ! -L owner ] && [ "$(cat owner 2>/dev/null)" = "$expected" ] || exit 1
+            candidate=$(umask 077; mktemp "$backoff/installer.XXXXXXXXXX") || exit 1
+            birth=$(TZ=UTC0 LC_ALL=C ps -o lstart= -p "$$" 2>/dev/null |
+                LC_ALL=C awk "NF { \$1=\$1; print; exit }")
+            nonce=$(printf "%s\n" "$expected" | tail -n 1)
+            (umask 077; printf "%s\n%s\n%s\n" "$$" "$birth" "$nonce" > "$candidate") ||
+                { rm -f "$candidate"; exit 1; }
+            witness=$(cat "$candidate")
+            [ ! -e installer ] && [ ! -L installer ] &&
+                ln "$candidate" installer 2>/dev/null &&
+                [ -f installer ] && [ ! -L installer ] &&
+                [ "$(cat installer 2>/dev/null)" = "$witness" ] ||
+                { rm -f "$candidate"; exit 1; }
+            rm -f "$candidate"
+            # If cleanup won before publication, abort before any mutation.
+            [ ! -L owner ] && [ "$(cat owner 2>/dev/null)" = "$expected" ] ||
+                { rm -f installer; exit 1; }
+            exec "$installer" "$@"
+        ' install-claim "$INSTALL_CLAIM" "$BACKOFF" "$INSTALL_SCRIPT" "$@"
+    else
+        INSTALL_REASON='Installer ownership could not be established.'
+        return 1
+    fi
 }
 
 # Each attempt owns a private log. Failure to open it must still run the installer.
@@ -300,108 +328,160 @@ clear_install_failure() {
     fi
 }
 
-# A permanent namespace contains a single atomic symlink to a private attempt.
-# Unlike renaming an expired shared directory, this has no ABA takeover: only
-# the winner of mkdir <unique-attempt>/retire may unlink that attempt's link.
-# Never recreate an attempt directory or remove another live hook's attempt.
+# The active directory is published empty, then populated atomically while cd
+# holds that exact inode. A reaper may remove empty initialization; in that case
+# publishing into the unlinked inode fails before the installer can start.
+# Published owners are nonempty, so delayed rmdir cannot delete a successor.
 backoff_path() {
     _rootkey=$(printf '%s' "$SCRIPT_DIR" | cksum | cut -d' ' -f1)
     BACKOFF="$STAMP_DIR/install-backoff-${1:-unknown}-$_rootkey"
 }
 
+process_birth() {
+    TZ=UTC0 LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null | LC_ALL=C awk '
+        NF { $1=$1; print; exit }'
+}
+
+# Records are immutable within an active inode. An installer witness can
+# survive removal of the wrapper record during a parent-death handoff race.
+backoff_record() {
+    for _record in owner installer; do
+        if [ -f "$_record" ] && [ ! -L "$_record" ]; then
+            cat "$_record" 2>/dev/null
+            return $?
+        fi
+    done
+    return 1
+}
+
 backoff_owner() {
     [ -d "$BACKOFF" ] && [ ! -L "$BACKOFF" ] || return 1
-    _attempt=$(readlink "$BACKOFF/active" 2>/dev/null) || return 1
-    case "$_attempt" in attempt.*) ;; *) return 1 ;; esac
-    case "$_attempt" in */*|*..*) return 1 ;; esac
-    BACKOFF_OWNER="$BACKOFF/$_attempt"
-    [ -d "$BACKOFF_OWNER" ] && [ ! -L "$BACKOFF_OWNER" ]
+    [ -d "$BACKOFF/active" ] && [ ! -L "$BACKOFF/active" ] || return 1
+    BACKOFF_OWNER=$(cd "$BACKOFF/active" 2>/dev/null && backoff_record) || return 1
+    [ -n "$BACKOFF_OWNER" ]
+}
+
+# Missing birth capability cannot prove that a live PID belongs to somebody
+# else, so it conservatively remains busy, without an arbitrary lifetime limit.
+backoff_record_live() {
+    [ -f "$1" ] && [ ! -L "$1" ] || return 1
+    _pid=''
+    _birth=''
+    { IFS= read -r _pid; IFS= read -r _birth; } < "$1" 2>/dev/null || return 1
+    case "$_pid" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$_pid" -gt 0 ] && kill -0 "$_pid" 2>/dev/null || return 1
+    [ -n "$_birth" ] || return 0
+    _current_birth=$(process_birth "$_pid")
+    [ -z "$_current_birth" ] || [ "$_birth" = "$_current_birth" ]
+}
+
+backoff_owner_live() {
+    [ ! -e failed ] || return 1
+    backoff_record_live owner || backoff_record_live installer
+}
+
+# Delete only a witness observed before checking liveness. A child publishing
+# afterward leaves a nonempty inode, protecting it from rmdir and new claims.
+cleanup_backoff_records() {
+    rm -f failed 2>/dev/null || return 1
+    if [ -n "$1" ] && [ ! -L installer ] &&
+        [ "$(cat installer 2>/dev/null)" = "$1" ]; then
+        rm -f installer 2>/dev/null || return 1
+    fi
+    rm -f owner 2>/dev/null || return 1
+    rmdir "$BACKOFF/active" 2>/dev/null || true
 }
 
 retire_backoff() {
     backoff_owner || return 1
-    # A delayed expiry/finish must never retire a successor it did not observe.
-    [ -z "${1:-}" ] || [ "$BACKOFF_OWNER" = "$1" ] || return 1
     _retiring="$BACKOFF_OWNER"
-    # This gate belongs to an immutable unique attempt, never a shared pathname.
-    mkdir "$_retiring/retire" 2>/dev/null || return 1
-    if [ "$(readlink "$BACKOFF/active" 2>/dev/null)" = "${_retiring##*/}" ]; then
-        rm -f "$BACKOFF/active" 2>/dev/null || return 1
-    fi
-    # Move the unique namespace away before deleting the gate, so delayed
-    # readers can never acquire a second retirement gate for the old owner.
-    mv "$_retiring" "$_retiring.retired" 2>/dev/null || return 1
-    rm -f "$_retiring.retired/pid" "$_retiring.retired/failed" 2>/dev/null || true
-    rmdir "$_retiring.retired/retire" "$_retiring.retired" 2>/dev/null || true
+    [ -z "${1:-}" ] || [ "$_retiring" = "$1" ] || return 1
+    (
+        cd "$BACKOFF/active" 2>/dev/null || exit 1
+        [ "$(backoff_record)" = "$_retiring" ] || exit 1
+        _installer=$(cat installer 2>/dev/null) || _installer=''
+        # Only the finishing hook can retire its still-live ownership. Other
+        # callers, including manual repair, must leave a genuine installer alone.
+        [ -n "${1:-}" ] || ! backoff_owner_live || exit 1
+        cleanup_backoff_records "$_installer"
+    )
 }
 
-# Return 0 to run, 1 to dispatch the retained binary. Cache failure runs the
-# installer normally; backoff is best effort. Two rounds bound stale takeover.
+# Return 0 only for a published claim, 1 to dispatch the retained binary.
+# Cache failures never authorize an unclaimed installer.
 claim_install() {
     INSTALL_CLAIM=''
     backoff_path "$TARGET_VER"
-    (umask 077; mkdir -p "$STAMP_DIR" && mkdir -p "$BACKOFF") 2>/dev/null || return 0
-    [ -d "$BACKOFF" ] && [ ! -L "$BACKOFF" ] || return 0
+    (umask 077; mkdir -p "$STAMP_DIR" && mkdir -p "$BACKOFF") 2>/dev/null || return 1
+    [ -d "$BACKOFF" ] && [ ! -L "$BACKOFF" ] || return 1
     _round=0
-    while [ "$_round" -lt 2 ]; do
+    while [ "$_round" -lt 3 ]; do
         _round=$((_round + 1))
         if backoff_owner; then
-            # A running attempt cannot expire underneath its hook, even when
-            # downloads take longer than the failure cooldown.
-            _pid=''
-            if [ ! -e "$BACKOFF_OWNER/failed" ] && [ ! -L "$BACKOFF_OWNER/pid" ]; then
-                IFS= read -r _pid < "$BACKOFF_OWNER/pid" 2>/dev/null || true
-                case "$_pid" in ''|*[!0-9]*) ;; *)
-                    [ "$_pid" -gt 0 ] && kill -0 "$_pid" 2>/dev/null && return 1 ;;
-                esac
-            fi
-            path_recent "$BACKOFF_OWNER" 300 && return 1
-            retire_backoff "$BACKOFF_OWNER" || return 1
-        elif [ -L "$BACKOFF/active" ]; then
-            # The failed lookup may have raced publication or retirement.
-            # Only a stable invalid link is a best-effort cache fallback;
-            # a valid successor owns the install, and churn retries boundedly.
-            _unknown=$(readlink "$BACKOFF/active" 2>/dev/null) || continue
-            backoff_owner && return 1
-            [ "$(readlink "$BACKOFF/active" 2>/dev/null)" = "$_unknown" ] || continue
-            return 0
-        elif [ -e "$BACKOFF/active" ]; then
-            backoff_owner && return 1
-            # Check existence before type: an absent entry can become a link.
-            [ -e "$BACKOFF/active" ] && [ ! -L "$BACKOFF/active" ] || continue
-            # Unknown cache entries are not ours to delete.
-            return 0
+            _observed="$BACKOFF_OWNER"
+            (
+                cd "$BACKOFF/active" 2>/dev/null || exit 2
+                [ "$(backoff_record)" = "$_observed" ] || exit 2
+                _installer=$(cat installer 2>/dev/null) || _installer=''
+                backoff_owner_live && exit 1
+                path_recent . 300 && exit 1
+                # Removal operates only in the observed inode. Another reaper
+                # can already have removed it; no retirement mutex can get stuck.
+                cleanup_backoff_records "$_installer" || exit 1
+            )
+            _retired=$?
+            [ "$_retired" = 1 ] && return 1
+        elif [ -d "$BACKOFF/active" ] && [ ! -L "$BACKOFF/active" ]; then
+            # Empty initialization (or interrupted cleanup) has no claim. rmdir
+            # refuses a populated publication or any unknown cache contents.
+            rmdir "$BACKOFF/active" 2>/dev/null || continue
+        elif [ -e "$BACKOFF/active" ] || [ -L "$BACKOFF/active" ]; then
+            # The unpublished legacy symlink format and unknown entries cannot
+            # authorize unclaimed mutation. A fresh read handles lookup races.
+            backoff_owner && continue
+            return 1
         fi
-        _mine=$(umask 077; mktemp -d "$BACKOFF/attempt.XXXXXXXXXX" 2>/dev/null) || return 0
-        if ! printf '%s\n' "$$" > "$_mine/pid"; then
+        _mine=$(umask 077; mktemp -d "$BACKOFF/attempt.XXXXXXXXXX" 2>/dev/null) || return 1
+        case "$_mine" in "$BACKOFF"/attempt.*) ;; *) return 1 ;; esac
+        [ -d "$_mine" ] && [ ! -L "$_mine" ] || return 1
+        _birth=$(process_birth "$$")
+        if ! (umask 077; printf '%s\n%s\n%s\n' "$$" "$_birth" "${_mine##*/}" > "$_mine/owner"); then
+            rm -f "$_mine/owner" 2>/dev/null || true
+            rmdir "$_mine" 2>/dev/null || true
+            return 1
+        fi
+        _claim=$(cat "$_mine/owner")
+        if (umask 077; mkdir "$BACKOFF/active") 2>/dev/null &&
+            (cd "$BACKOFF/active" 2>/dev/null &&
+                [ ! -e owner ] && [ ! -L owner ] &&
+                ln "$_mine/owner" owner 2>/dev/null &&
+                [ -f owner ] && [ ! -L owner ] &&
+                [ "$(cat owner 2>/dev/null)" = "$_claim" ]); then
+            INSTALL_CLAIM="$_claim"
+            rm -f "$_mine/owner" 2>/dev/null || true
             rmdir "$_mine" 2>/dev/null || true
             return 0
         fi
-        # -n prevents an existing directory symlink from becoming a destination
-        # directory on both Linux and macOS. Never use -f: it steals ownership.
-        if ln -sn "${_mine##*/}" "$BACKOFF/active" 2>/dev/null &&
-            [ "$(readlink "$BACKOFF/active" 2>/dev/null)" = "${_mine##*/}" ]; then
-            INSTALL_CLAIM="$_mine"
-            return 0
-        fi
-        rm -f "$_mine/pid" 2>/dev/null || true
+        rm -f "$_mine/owner" 2>/dev/null || true
         rmdir "$_mine" 2>/dev/null || true
-        # A concurrent winner owns the install (or its finished cooldown).
-        [ -L "$BACKOFF/active" ] && return 1
+        # Retry an initialization removed before publication. A published
+        # concurrent winner is recognized at the next iteration.
     done
     return 1
 }
 
 finish_install_claim() {
     [ -n "$INSTALL_CLAIM" ] || return 0
-    # Success or incidental contention retires only our own attempt. A manual
-    # repair may have already retired it and a new hook may own the link.
-    [ "$(readlink "$BACKOFF/active" 2>/dev/null)" = "${INSTALL_CLAIM##*/}" ] || return 0
+    backoff_owner && [ "$BACKOFF_OWNER" = "$INSTALL_CLAIM" ] || return 0
     if target_binary_ok || wait_for_install_publication; then
         retire_backoff "$INSTALL_CLAIM" || true
     else
-        : > "$INSTALL_CLAIM/failed" 2>/dev/null || true
-        touch "$INSTALL_CLAIM" 2>/dev/null || true
+        (
+            cd "$BACKOFF/active" 2>/dev/null || exit 0
+            [ ! -L owner ] && [ "$(cat owner 2>/dev/null)" = "$INSTALL_CLAIM" ] || exit 0
+            : > failed 2>/dev/null || true
+            touch . 2>/dev/null || true
+        )
     fi
 }
 
@@ -510,7 +590,7 @@ else
         if [ "$CACHED_VER" != "$PLG_VER" ]; then
             # Versions match but cache is stale — update cache
             mkdir -p "$STAMP_DIR" >/dev/null 2>&1 || true
-            printf '%s\n' "$PLG_VER" > "$VERSION_CACHE" 2>/dev/null || true
+            printf '%s\n' "$PLG_VER" 2>/dev/null > "$VERSION_CACHE" || true
         fi
         clear_install_failure "$PLG_VER"
     fi
@@ -550,7 +630,7 @@ if [ "$NEED_INSTALL" = 1 ]; then
         # Update version cache after successful install
         if [ -n "$NEW_VER" ]; then
             mkdir -p "$STAMP_DIR" >/dev/null 2>&1 || true
-            printf '%s\n' "$NEW_VER" > "$VERSION_CACHE" 2>/dev/null || true
+            printf '%s\n' "$NEW_VER" 2>/dev/null > "$VERSION_CACHE" || true
             if [ "$NEW_VER" = "$TARGET_VER" ]; then
                 clear_install_failure "$NEW_VER"
             fi
@@ -567,7 +647,7 @@ if [ "$NEED_INSTALL" = 1 ]; then
             fi
 
             if [ "$PREV_KEY" != "$STAMP_KEY" ]; then
-                printf '%s\n' "$STAMP_KEY" > "$STAMP_FILE" 2>/dev/null || true
+                printf '%s\n' "$STAMP_KEY" 2>/dev/null > "$STAMP_FILE" || true
                 # Disabled: the system message was shown too frequently despite the stamp file.
                 # if [ "$NEED_FORCE" = 1 ]; then
                 #     printf '{"systemMessage":"[claude-notifications] Updated to v%s"}\n' "$NEW_VER"
