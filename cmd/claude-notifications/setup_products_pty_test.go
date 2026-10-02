@@ -915,6 +915,25 @@ func (f *bootstrapFixture) releaseAssets() {
 	}
 	gz := gzip.NewWriter(file)
 	tw := tar.NewWriter(gz)
+	// Model the public Git source archive, not ignored binaries from earlier CI
+	// builds. All executable release payloads come from the candidate assets.
+	git, err := exec.LookPath("git")
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	trackedCommand := exec.Command(git, "ls-files", "-z")
+	trackedCommand.Dir, trackedCommand.Env = f.root, f.env
+	trackedOutput, err := trackedCommand.Output()
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	tracked := make(map[string]bool)
+	for _, name := range strings.Split(strings.TrimSuffix(string(trackedOutput), "\x00"), "\x00") {
+		for name != "." && name != "" {
+			tracked[filepath.FromSlash(name)] = true
+			name = filepath.ToSlash(filepath.Dir(name))
+		}
+	}
 	// Finite source roots include the real manifest, config defaults, wrappers and
 	// skills used by existing Codex/Claude installers. Never archive .git/cache.
 	for _, dir := range []string{".claude-plugin", "bin", "config", "hooks", "commands", "skills", "portable-package", "sounds"} {
@@ -932,6 +951,12 @@ func (f *bootstrapFixture) releaseAssets() {
 			rel, err := filepath.Rel(f.root, path)
 			if err != nil {
 				return err
+			}
+			if !tracked[rel] {
+				if entry.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
 			}
 			link := ""
 			if info.Mode()&os.ModeSymlink != 0 {

@@ -992,16 +992,17 @@ if os.name != 'nt':
         (release/portable_name).unlink()
 for product in ['claude','codex','both']:
     reset_case(); request_paths.clear()
-    run(['--product',product])
+    output=run(['--product',product])
     assert sum(path.endswith('/'+asset_name) for path in request_paths)==1
     neutral=pathlib.Path(env['XDG_CONFIG_HOME'])/'agent-notifications/config.json'
-    assert neutral.exists() and len(init_events())==1
+    expected_inits = 2 if product == 'both' else 1
+    assert neutral.exists() and len(init_events())==expected_inits, (product, str(neutral), events(), output)
     es=events(); init_index=next(i for i,e in enumerate(es) if e[:2]==['config','init'])
     assert any(e[:2]==['claude','plugin'] or e[:1]==['setup-codex'] for e in es[:init_index])
     # Idempotent repair preserves the exact document.
     neutral.write_bytes(b'{ "future": [1, 2], "secret": "canary" }\n')
     before=neutral.read_bytes(); trace.write_text('')
-    run(['--product',product]); assert neutral.read_bytes()==before and len(init_events())==1
+    run(['--product',product]); assert neutral.read_bytes()==before and len(init_events())==expected_inits
 
 # All files changed by Claude registration are protected before the mocked
 # CLI can mutate any one, whether the explicit target exists or is absent.
@@ -1107,7 +1108,8 @@ for product in ['codex','both']:
     output=run(['--product',product],1,{'FAIL_SETUP_INIT':'1'})
     assert 'Partial setup' in output and 'registration failed' not in output
     assert (pathlib.Path(env['CODEX_HOME'])/'fixture-registration').read_text()=='registered'
-    assert not init_events()
+    # Claude's completed phase remains committed if the later Codex phase fails.
+    assert len(init_events()) == (1 if product == 'both' else 0)
     line=next(line for line in output.splitlines() if line.startswith('Config-only retry'))
     shell_command=line.split(': ',1)[1]
     command=shlex.split(shell_command)
@@ -1117,9 +1119,10 @@ for product in ['codex','both']:
     r=subprocess.run([bash,'-c',shell_command],env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=20)
     assert r.returncode==0, r.stdout.decode()
     assert events()==[['config','init','--json']] and request_paths==requests_before
-# Fresh registration failure never reaches init.
+# A failed phase never initializes config; a completed sibling keeps its init.
 for product,fail in [('claude',{'FAIL_CLAUDE':'1'}),('codex',{'FAIL_REGISTER':'1'}),('both',{'FAIL_REGISTER':'1'})]:
-    reset_case(); run(['--product',product],1,fail); assert not init_events()
+    reset_case(); run(['--product',product],1,fail)
+    assert len(init_events()) == (1 if product == 'both' else 0)
 # Init failure retains a verified executable for a config-only retry.
 reset_case()
 output=run(['--product','both'],1,{'FAIL_INIT':'1'})
@@ -1161,13 +1164,24 @@ def place_runtime_cmd(dest, src):
         return
     dest.write_text('#!/bin/sh\nexec {} "$@"\n'.format(shlex.quote(src.replace('\\', '/'))))
     dest.chmod(0o755)
-if shutil.which('node'):
+def fixture_tool(name):
+    found = shutil.which(name)
+    if found:
+        return found
+    # Native Windows lookup applies PATHEXT, while our Bash wrappers have no
+    # extension. These paths are used only as shell commands in child scripts.
+    for directory in os.environ['PATH'].split(os.pathsep):
+        candidate = pathlib.Path(directory) / name
+        if candidate.is_file():
+            return str(candidate)
+    return None
+if fixture_tool('node'):
     node_only = sandbox / 'http-node-only-bin'
     node_only.mkdir()
     for name in ['bash', 'sh', 'mktemp', 'rm', 'cat', 'chmod', 'mkdir', 'ln', 'uname',
                  'tr', 'wc', 'head', 'cp', 'mv', 'env', 'true', 'false', 'grep', 'sed', 'awk',
                  'tar', 'gzip', 'curl', 'node', 'sha256sum', 'shasum', 'dirname', 'realpath']:
-        place_runtime_cmd(node_only / name, shutil.which(name))
+        place_runtime_cmd(node_only / name, fixture_tool(name))
     assert not (node_only / 'python3').exists()
     reset_case()
     env['PATH'] = str(cli) + os.pathsep + str(node_only)
