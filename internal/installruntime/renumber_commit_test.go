@@ -297,11 +297,7 @@ func TestRenumberRecoveryLedgerRetry(t *testing.T) {
 					t.Fatal("recovery rewrote journal before-images", err)
 				}
 			}
-			r.Fault = nil
-			r.Native = nil
-			r.Files = nil
-			r.RecoverOnly = true
-			result, err := Commit(ctx, r)
+			result, err := Commit(ctx, Request{ControlRoot: r.ControlRoot, RecoverOnly: true})
 			if err != nil {
 				t.Fatal(err)
 			}
