@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -85,6 +86,15 @@ type Request struct {
 	// ExternalUninstalled is host attestation that Codex already removed the
 	// native plugin, or never activated it. --yes does not set this.
 	ExternalUninstalled bool
+	// BootstrapExpectedGeneration fences an automatic client selection made
+	// before release acquisition. It is internal to the bootstrap orchestrator:
+	// an intervening opt-out must not become an implicit Add.
+	BootstrapExpectedGeneration *uint64
+	// BootstrapExpectedPolicy is captured after the last relevant projection check.
+	BootstrapExpectedPolicy *installruntime.Identity
+	// BootstrapMCP is consumed by the command admission boundary. Plan/Run use
+	// the verified generation, then existing reservation/config CAS protects apply.
+	BootstrapMCP *BootstrapMCPSelection
 	// ClaudeRunner overrides Claude activation probing. Production leaves it
 	// nil so the OS process runner is used. Isolated tests inject a listing
 	// fixture; the field is never parsed from CLI flags.
@@ -125,7 +135,7 @@ type TargetResult struct {
 }
 
 // ReadinessFact is independent of binary download. Inspect and mutation both
-// report these fields; not_verified/unsupported are not installation failure.
+// report these fields; not_checked/not_verified are not installation failure.
 type ReadinessFact struct {
 	Client     string `json:"client"`
 	Runtime    string `json:"runtime"`
@@ -156,6 +166,9 @@ type Result struct {
 	// DataRetained is true after the last live binding is removed while
 	// PLUGIN_DATA remains. Absent inspect rows are not a license to run.
 	DataRetained bool `json:"dataRetained,omitempty"`
+
+	// reservation belongs to this invocation, never a later ledger snapshot.
+	reservation *installruntime.PendingMutation
 }
 
 func (r Result) ExitCode() int {
@@ -178,6 +191,16 @@ func (r Result) ExitCode() int {
 
 func Run(ctx context.Context, req Request) (Result, error) {
 	out, err := run(ctx, &req)
+	// Hooks can return the kernel conflict directly; portable boundaries wrap
+	// it as ErrConcurrentChange. Keep completed targets, but require new consent.
+	if errors.Is(err, installruntime.ErrPolicyConflict) && !errors.Is(err, portablesetup.ErrConcurrentChange) {
+		err = fmt.Errorf("%w: %w", portablesetup.ErrConcurrentChange, err)
+	}
+	if errors.Is(err, portablesetup.ErrConcurrentChange) || out.Reason == "concurrent_change" {
+		out.Outcome, out.Reason = "conflict", "concurrent_change"
+		out.Command, out.NextActions = nil, nil
+		return out, err
+	}
 	return attachCommand(req, out), err
 }
 
@@ -185,10 +208,13 @@ func Run(ctx context.Context, req Request) (Result, error) {
 // Ready means the application service can mutate after --yes; it is not a
 // committed installation result.
 type SetupPlan struct {
-	Text    string
-	Ready   bool
-	Request Request
-	Result  Result
+	// annotations contain full preflight destinations/identities that otherwise
+	// exist only in legacy Text. They are never reconstructed by parsing prose.
+	annotations []string
+	Text        string
+	Ready       bool
+	Request     Request
+	Result      Result
 }
 
 // Plan preflights without publishing intent or applying hooks/MCP.
@@ -240,6 +266,7 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 				plan.Result = attachCommand(req, ev.out)
 				return plan, err
 			}
+			plan.annotations = append(plan.annotations, "helper destination="+mat.Roots.HelperExecutable)
 			explicitGlobal, explicitPrimary := req.GlobalConfig, req.Primary
 			id, err := identity(acquired, ev.snap, ev.runtimeRoot, mat, req.Action == ActionInstall)
 			if err != nil {
@@ -334,6 +361,7 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 				for _, agent := range ev.notifyAgents {
 					if digest := liveBindingTreeDigest(mat, id.InstallationID, string(agent)); digest != "" {
 						text += " " + string(agent) + "-source-digest=" + digest
+						plan.annotations = append(plan.annotations, string(agent)+" current-source-digest="+digest)
 					}
 				}
 			}
@@ -379,6 +407,7 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 	ev.out.Outcome, ev.out.Reason = "ready", ""
 	ev.out.InstallationID = req.InstallationID
 	plan.Ready = true
+	req.RuntimeRoot = ev.runtimeRoot
 	plan.Text = text
 	plan.Request = req
 	plan.Result = ev.out
@@ -386,6 +415,18 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 }
 
 func run(ctx context.Context, req *Request) (Result, error) {
+	// Evaluation fills omitted unit flags and may restore pending-intent maps.
+	// A recovered kernel journal changes the live set, so keep the caller's
+	// request intact for the second evaluation.
+	original := *req
+	original.Agents = append([]string(nil), req.Agents...)
+	original.PackageRoots = maps.Clone(req.PackageRoots)
+	original.ClientExecutables = maps.Clone(req.ClientExecutables)
+	original.BindingIDs = maps.Clone(req.BindingIDs)
+	original.MigrationBindings = maps.Clone(req.MigrationBindings)
+	original.RemovalBindings = maps.Clone(req.RemovalBindings)
+	original.DataReceiptIDs = maps.Clone(req.DataReceiptIDs)
+	original.MCPConfig = maps.Clone(req.MCPConfig)
 	ev := evaluate(ctx, req, true)
 	if ev.stop {
 		return ev.out, ev.err
@@ -393,6 +434,48 @@ func run(ctx context.Context, req *Request) (Result, error) {
 	if req.Action == ActionInspect {
 		got, err := inspect(ctx, *req, ev.agents, ev.snap, ev.runtimeRoot, ev.out)
 		return attachReadiness(*req, ev.agents, got, false), err
+	}
+	if ev.snap.Recovery {
+		// A journal replay advances the ledger generation. Recover before any
+		// target mutation, then evaluate the recovered state again so intent
+		// publication fences the generation that actually owns those targets.
+		// Automatic bootstrap selected clients from the old state and must
+		// reselect them in a new invocation instead of adopting the replay.
+		if req.BootstrapExpectedGeneration != nil {
+			ev.out.Outcome, ev.out.Reason = "conflict", "concurrent_change"
+			return ev.out, ErrRefused
+		}
+		release, err := installruntime.AcquireCoordinatorLease(ctx, req.ControlRoot)
+		if err != nil {
+			ev.out.Outcome, ev.out.Reason = "incomplete", "recovery_required"
+			return ev.out, err
+		}
+		current, err := installruntime.ReadInstalledSnapshot(req.ControlRoot)
+		if err == nil && (current.Ledger.Generation != ev.snap.Ledger.Generation || !current.Recovery) {
+			err = portablesetup.ErrConcurrentChange
+		}
+		var recovered installruntime.Ledger
+		if err == nil {
+			recovered, err = installruntime.Recover(ctx, req.ControlRoot)
+		}
+		release()
+		if errors.Is(err, portablesetup.ErrConcurrentChange) {
+			ev.out.Outcome, ev.out.Reason = "conflict", "concurrent_change"
+			return ev.out, err
+		}
+		if err != nil {
+			ev.out.Outcome, ev.out.Reason = "incomplete", "recovery_required"
+			return ev.out, err
+		}
+		*req = original
+		ev = evaluate(ctx, req, true)
+		if ev.stop {
+			return ev.out, ev.err
+		}
+		if ev.snap.Recovery || ev.snap.Ledger.Generation != recovered.Generation {
+			ev.out.Outcome, ev.out.Reason = "conflict", "concurrent_change"
+			return ev.out, portablesetup.ErrConcurrentChange
+		}
 	}
 	var got Result
 	var err error
@@ -460,6 +543,11 @@ func evaluate(ctx context.Context, req *Request, requireYes bool) evaluated {
 			out.Generation = snap.Ledger.Generation
 		}
 	}
+	if req.Action != ActionInspect && req.BootstrapExpectedGeneration != nil &&
+		(!haveSnap || snap.Ledger.Generation != *req.BootstrapExpectedGeneration) {
+		out.Outcome, out.Reason = "conflict", "concurrent_change"
+		return evaluated{out: out, err: ErrRefused, stop: true}
+	}
 	if req.Action != ActionInspect {
 		resumed := false
 		if haveSnap {
@@ -487,6 +575,27 @@ func evaluate(ctx context.Context, req *Request, requireYes bool) evaluated {
 	if !haveSnap {
 		out.Outcome, out.Reason = "incomplete", "managed_runtime_required"
 		return evaluated{out: out, err: err, stop: true}
+	}
+	if req.Action != ActionInspect && req.BootstrapMCP != nil {
+		observation := *req
+		observation.Agents = nil
+		for _, id := range []string{"claude", "codex"} {
+			if _, ok := req.BootstrapMCP.Projection.Profiles[id]; ok {
+				observation.Agents = append(observation.Agents, id)
+			}
+		}
+		current, generation, policy, observeErr := ObserveBootstrapMCPWithPolicy(ctx, observation)
+		if observeErr == nil && generation != snap.Ledger.Generation {
+			observeErr = ErrRefused
+		}
+		if observeErr == nil {
+			observeErr = CheckBootstrapMCP(*req.BootstrapMCP, current)
+		}
+		if observeErr != nil {
+			out.Outcome, out.Reason = "conflict", "concurrent_change"
+			return evaluated{out: out, err: observeErr, stop: true}
+		}
+		req.BootstrapExpectedPolicy = &policy
 	}
 	runtimeRoot := req.RuntimeRoot
 	if runtimeRoot == "" {
@@ -659,7 +768,7 @@ func holdCodexUninstall(ctx context.Context, req *Request, mat portablesetup.Mat
 		if agent != portable.Codex || !liveNotifyClient(mat, id.InstallationID, string(agent)) {
 			continue
 		}
-		snap, err := installruntime.ReadInstalledSnapshot(req.ControlRoot)
+		snap, err := readWizardSnapshot(req.ControlRoot, out.reservation)
 		if err != nil {
 			return out, err
 		}
@@ -669,7 +778,7 @@ func holdCodexUninstall(ctx context.Context, req *Request, mat portablesetup.Mat
 		}
 		if attestCodexExternalUninstall(ctx, clientExecutable(*req, agent), req.CodexHome, managedCodexPluginSpec(mat, id.InstallationID)) {
 			req.ExternalUninstalled = true
-			_ = persistExternalUninstalled(ctx, *req, runtimeRoot)
+			_ = persistExternalUninstalled(ctx, *req, runtimeRoot, out.reservation)
 			return out, nil
 		}
 		err = mat.Remove(ctx, portablesetup.MaterializeRequest{
@@ -1357,6 +1466,43 @@ func markInspectedIdentity(view uapinstaller.Inspection, out Result) Result {
 	return markInspectedDataRetained(view, out)
 }
 
+// BootstrapAutoTargets preserves absent MCP units when an installation or
+// owned direct registration already exists. Historical state has no durable
+// per-client opt-out bit, so an absent sibling requires an explicit Add.
+// A read error or ambiguous state must never be interpreted as a fresh install.
+func BootstrapAutoTargets(ctx context.Context, req Request, before Result) (selected, skipped []string, err error) {
+	view, err := inspectUAPState(ctx, req)
+	if err != nil {
+		return nil, nil, err
+	}
+	if view.Recovery.Required || len(view.Installations) > 1 {
+		return nil, nil, fmt.Errorf("existing portable installation requires inspection")
+	}
+	live := map[string]bool{}
+	for _, target := range before.Targets {
+		if target.Unit != "direct-mcp" && target.Unit != "agent-notify" {
+			continue
+		}
+		if target.Outcome == "unknown" {
+			return nil, nil, fmt.Errorf("existing MCP registration could not be inspected")
+		}
+		if target.Outcome == "installed" {
+			live[target.Client] = true
+		}
+	}
+	if len(view.Installations) == 0 && len(live) == 0 {
+		return append([]string(nil), req.Agents...), nil, nil
+	}
+	for _, agent := range req.Agents {
+		if live[agent] {
+			selected = append(selected, agent)
+		} else {
+			skipped = append(skipped, agent)
+		}
+	}
+	return selected, skipped, nil
+}
+
 func markInspectedDataRetained(view uapinstaller.Inspection, out Result) Result {
 	for _, installation := range view.Installations {
 		if installation.DataRetained {
@@ -1412,6 +1558,10 @@ func reportPendingWizardIntent(req Request, snap installruntime.InstalledSnapsho
 }
 
 func install(ctx context.Context, req Request, snap installruntime.InstalledSnapshot, runtimeRoot string, hookAgents, notifyAgents []portable.Integration, out Result) (Result, error) {
+	if snap.Ledger.PendingMutation != nil {
+		reservation := *snap.Ledger.PendingMutation
+		out.reservation = &reservation
+	}
 	explicitGlobal, explicitPrimary := req.GlobalConfig, req.Primary
 	var releasePackage func()
 	defer func() {
@@ -1544,14 +1694,14 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 				return out, err
 			}
 			if intent.GlobalConfig == "" {
-				if err := (portablesetup.Service{}).PatchIntentGlobalConfig(ctx, req.ControlRoot, runtimeRoot, snap.Ledger.Owner, id.InstallationID, id.GlobalConfig); err != nil {
+				if err := (portablesetup.Service{ExpectedPolicy: req.BootstrapExpectedPolicy}).PatchIntentGlobalConfig(ctx, req.ControlRoot, runtimeRoot, snap.Ledger.Owner, id.InstallationID, id.GlobalConfig, out.reservation); err != nil {
 					out.Outcome, out.Reason = "incomplete", "pending_intent_patch_failed"
 					if errors.Is(err, portablesetup.ErrIntentConflict) {
 						out.Outcome, out.Reason = "conflict", "pending_intent_conflict"
 					}
 					return out, err
 				}
-				snap, err = installruntime.ReadInstalledSnapshot(req.ControlRoot)
+				snap, err = readWizardSnapshot(req.ControlRoot, out.reservation)
 				if err != nil {
 					out.Outcome, out.Reason = "incomplete", "pending_intent_unreadable"
 					return out, err
@@ -1559,6 +1709,8 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 			}
 		}
 	}
+	// Freeze every client identity before publishing intent or changing hooks.
+	notifyIdentities := make(map[portable.Integration]portablesetup.Identity, len(notifyAgents))
 	if len(notifyAgents) > 0 && (req.Action == ActionInstall || req.Action == ActionUpdate || req.Action == ActionRepair) {
 		for _, agent := range notifyAgents {
 			target, err := targetIdentity(id, req, snap, mat, agent)
@@ -1566,7 +1718,11 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 				out.Outcome, out.Reason = "incomplete", "binding_identity_invalid"
 				return out, err
 			}
-			path := target.GlobalConfig
+			notifyIdentities[agent] = target
+		}
+		for _, agent := range notifyAgents {
+			var err error
+			path := notifyIdentities[agent].GlobalConfig
 			_, migrating := req.MigrationBindings[string(agent)]
 			if migrating || !liveNotifyClient(mat, id.InstallationID, string(agent)) {
 				err = config.PrepareGlobalConfigParent(path)
@@ -1581,8 +1737,13 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		}
 	}
 	reportProgress(req, "preflight")
-	snap, err := publishWizardIntent(ctx, req, snap, runtimeRoot, hookAgents, notifyAgents, true)
+	snap, reservation, err := publishWizardIntent(ctx, req, snap, runtimeRoot, hookAgents, notifyAgents, true)
+	out.reservation = reservation
 	if err != nil {
+		if errors.Is(err, portablesetup.ErrConcurrentChange) {
+			out.Outcome, out.Reason = "conflict", "concurrent_change"
+			return out, err
+		}
 		if conflict, handled := pendingIntentConflict(req, err, out); handled {
 			return conflict, err
 		}
@@ -1596,7 +1757,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		if err != nil || out.Outcome == "incomplete" || out.Outcome == "invalid" {
 			return out, err
 		}
-		current, err := installruntime.ReadInstalledSnapshot(req.ControlRoot)
+		current, err := readWizardSnapshot(req.ControlRoot, out.reservation)
 		if err != nil {
 			out.Outcome, out.Reason = "incomplete", err.Error()
 			return out, err
@@ -1651,7 +1812,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		var reqs []portablesetup.MaterializeRequest
 		for _, agent := range notifyAgents {
 			reqs = append(reqs, portablesetup.MaterializeRequest{
-				Identity: id, Integration: agent, ExpectedGeneration: generation,
+				Identity: notifyIdentities[agent], Integration: agent, ExpectedGeneration: generation,
 				PackageRoot: clientPackageRoot(req, agent), ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
 				SourceRevision: req.ReleaseVersion, SourceDigest: req.PackageSHA256,
 				TreeDigest: req.TreeDigest, HelperDigest: req.HelperDigest, HelperVersion: req.HelperVersion,
@@ -1680,7 +1841,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 			out.Outcome, out.Reason = "incomplete", "portable_install_failed"
 			return out, fmt.Errorf("group apply returned %d bindings", len(got))
 		}
-		generation, err = rereadGeneration(req.ControlRoot)
+		generation, err = rereadWizardGeneration(req.ControlRoot, out.reservation)
 		if err != nil {
 			out.Outcome, out.Reason = "incomplete", err.Error()
 			return out, err
@@ -1689,7 +1850,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		for i, agent := range notifyAgents {
 			out.Targets = append(out.Targets, completedNotifyTarget(mat, got[i].InstallationID, string(agent), got[i].BindingID))
 			id.InstallationID = got[i].InstallationID
-			_ = persistKnownReceipt(ctx, req, runtimeRoot, mat, id.InstallationID, string(agent))
+			_ = persistKnownReceipt(ctx, req, runtimeRoot, mat, id.InstallationID, string(agent), out.reservation)
 			if err := recordLiveProfile(got[i].DataRoot, string(agent), clientConfig(req, agent)); err != nil {
 				out.Outcome, out.Reason = "incomplete", err.Error()
 				return out, err
@@ -1719,7 +1880,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		var err error
 		if migrating {
 			materialize.OperationID += "-projection"
-			current, readErr := installruntime.ReadInstalledSnapshot(req.ControlRoot)
+			current, readErr := readWizardSnapshot(req.ControlRoot, out.reservation)
 			if readErr != nil {
 				return portableInstallFailed(agent, req, out, readErr), readErr
 			}
@@ -1748,7 +1909,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 					if _, err = mat.RestoreMigrationProjection(ctx, oldRepair); err != nil {
 						return portableInstallFailed(agent, req, out, err), err
 					}
-					materialize.ExpectedGeneration, err = rereadGeneration(req.ControlRoot)
+					materialize.ExpectedGeneration, err = rereadWizardGeneration(req.ControlRoot, out.reservation)
 					if err != nil {
 						return portableInstallFailed(agent, req, out, err), err
 					}
@@ -1811,7 +1972,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 			return portableInstallFailed(agent, req, out, err), err
 		}
 		if migrating {
-			current, readErr := installruntime.ReadInstalledSnapshot(req.ControlRoot)
+			current, readErr := readWizardSnapshot(req.ControlRoot, out.reservation)
 			if readErr != nil || current.Ledger.PendingMutation == nil {
 				if readErr == nil {
 					readErr = fmt.Errorf("%w: migration reservation missing", ErrRefused)
@@ -1830,7 +1991,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 				return portableInstallFailed(agent, req, out, err), err
 			}
 		}
-		generation, err = rereadGeneration(req.ControlRoot)
+		generation, err = rereadWizardGeneration(req.ControlRoot, out.reservation)
 		if err != nil {
 			out.Outcome, out.Reason = "incomplete", err.Error()
 			return out, err
@@ -1838,7 +1999,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 		out.Generation = generation
 		out.Targets = append(out.Targets, completedNotifyTarget(mat, got.InstallationID, string(agent), got.BindingID))
 		id.InstallationID = got.InstallationID
-		_ = persistKnownReceipt(ctx, req, runtimeRoot, mat, id.InstallationID, string(agent))
+		_ = persistKnownReceipt(ctx, req, runtimeRoot, mat, id.InstallationID, string(agent), out.reservation)
 		if err := recordLiveProfile(got.DataRoot, string(agent), clientConfig(req, agent)); err != nil {
 			out.Outcome, out.Reason = "incomplete", err.Error()
 			return out, err
@@ -1857,6 +2018,10 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 }
 
 func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSnapshot, runtimeRoot string, hookAgents, notifyAgents []portable.Integration, out Result) (Result, error) {
+	if snap.Ledger.PendingMutation != nil {
+		reservation := *snap.Ledger.PendingMutation
+		out.reservation = &reservation
+	}
 	mat := portablesetup.Materializer{}
 	id := portablesetup.Identity{}
 	if len(notifyAgents) > 0 {
@@ -1932,6 +2097,7 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 			return out, nil
 		}
 	}
+	notifyIdentities := make(map[portable.Integration]portablesetup.Identity, len(notifyAgents))
 	portablePresent := id.InstallationID != "" && !retainedEmpty
 	if portablePresent {
 		for _, agent := range notifyAgents {
@@ -1957,17 +2123,30 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 			out.Outcome, out.Reason = "incomplete", "removal_identity_invalid"
 			return out, err
 		}
+		for _, agent := range notifyAgents {
+			target, err := targetIdentity(id, req, snap, mat, agent)
+			if err != nil {
+				out.Outcome, out.Reason = "incomplete", "binding_identity_invalid"
+				return out, err
+			}
+			notifyIdentities[agent] = target
+		}
 	}
 	reportProgress(req, "preflight")
-	snap, err := publishWizardIntent(ctx, req, snap, runtimeRoot, hookAgents, notifyAgents, portablePresent)
+	snap, reservation, err := publishWizardIntent(ctx, req, snap, runtimeRoot, hookAgents, notifyAgents, portablePresent)
+	out.reservation = reservation
 	if err != nil {
+		if errors.Is(err, portablesetup.ErrConcurrentChange) {
+			out.Outcome, out.Reason = "conflict", "concurrent_change"
+			return out, err
+		}
 		if conflict, handled := pendingIntentConflict(req, err, out); handled {
 			return conflict, err
 		}
 		out.Outcome, out.Reason = "incomplete", err.Error()
 		return out, err
 	}
-	_ = persistExternalUninstalled(ctx, req, runtimeRoot)
+	_ = persistExternalUninstalled(ctx, req, runtimeRoot, out.reservation)
 	out.Generation = snap.Ledger.Generation
 	if len(notifyAgents) > 0 {
 		// §7.5: persist removal intent, then satisfy Codex attestation before
@@ -1985,7 +2164,7 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 		// finished removing the portable bindings. Hooks may be the final
 		// runtime consumer and their removal can retire that helper.
 		reportProgress(req, "hooks")
-		current, err := installruntime.ReadInstalledSnapshot(req.ControlRoot)
+		current, err := readWizardSnapshot(req.ControlRoot, out.reservation)
 		if err != nil {
 			out.Outcome, out.Reason = "incomplete", err.Error()
 			return out, err
@@ -1994,7 +2173,7 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 		if err != nil || out.Outcome == "incomplete" || out.Outcome == "invalid" {
 			return out, err
 		}
-		generation, err := rereadGeneration(req.ControlRoot)
+		generation, err := rereadWizardGeneration(req.ControlRoot, out.reservation)
 		if err != nil {
 			out.Outcome, out.Reason = "incomplete", err.Error()
 			return out, err
@@ -2043,7 +2222,7 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 		for i, agent := range notifyAgents {
 			dataRoots[i] = liveDataRoot(mat, id.InstallationID, string(agent))
 			reqs = append(reqs, portablesetup.MaterializeRequest{
-				Identity: id, Integration: agent, ExpectedGeneration: generation,
+				Identity: notifyIdentities[agent], Integration: agent, ExpectedGeneration: generation,
 				ClientConfigRoot: clientConfig(req, agent), ClientExecutable: clientExecutable(req, agent),
 				OperationID:         wizardMutationID(req.Action, "group", generation),
 				ExternalUninstalled: req.ExternalUninstalled,
@@ -2077,7 +2256,7 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 			removed++
 			out.Targets = append(out.Targets, TargetResult{Client: string(agent), Unit: "agent-notify", Outcome: "completed"})
 		}
-		generation, err = rereadGeneration(req.ControlRoot)
+		generation, err = rereadWizardGeneration(req.ControlRoot, out.reservation)
 		if err != nil {
 			out.Outcome, out.Reason = "incomplete", err.Error()
 			return out, err
@@ -2107,7 +2286,7 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 		if agent == portable.Codex && !req.ExternalUninstalled {
 			if attestCodexExternalUninstall(ctx, clientExecutable(req, agent), req.CodexHome, expectedCodexSpec) {
 				req.ExternalUninstalled = true
-				_ = persistExternalUninstalled(ctx, req, runtimeRoot)
+				_ = persistExternalUninstalled(ctx, req, runtimeRoot, out.reservation)
 			}
 		}
 		target, targetErr := targetIdentity(id, req, snap, mat, agent)
@@ -2149,7 +2328,7 @@ func uninstall(ctx context.Context, req Request, snap installruntime.InstalledSn
 			return out, err
 		}
 		removed++
-		generation, err = rereadGeneration(req.ControlRoot)
+		generation, err = rereadWizardGeneration(req.ControlRoot, out.reservation)
 		if err != nil {
 			out.Outcome, out.Reason = "incomplete", err.Error()
 			return out, err
@@ -2604,7 +2783,7 @@ func materializer(req Request, snap installruntime.InstalledSnapshot, runtimeRoo
 		runner = processadapter.OS{}
 	}
 	uapRoot := filepath.Join(filepath.Dir(req.ControlRoot), "uap")
-	return portablesetup.NewMaterializer(portablesetup.UAPRoots{
+	mat, err := portablesetup.NewMaterializer(portablesetup.UAPRoots{
 		StateFile:           filepath.Join(uapRoot, "state", "state-v2.json"),
 		LockFile:            filepath.Join(uapRoot, "state", "mutation.lock"),
 		OperationsDir:       filepath.Join(uapRoot, "state", "operations"),
@@ -2615,6 +2794,8 @@ func materializer(req Request, snap installruntime.InstalledSnapshot, runtimeRoo
 		CodexRunner:         processadapter.OS{},
 		RequireLiveProfiles: true,
 	})
+	mat.Kernel.ExpectedPolicy = req.BootstrapExpectedPolicy
+	return mat, err
 }
 
 func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot string, mat portablesetup.Materializer, generate bool) (portablesetup.Identity, error) {
@@ -3321,8 +3502,22 @@ func discoveryProvider(agent portable.Integration) registration.Provider {
 	}
 }
 
-func rereadGeneration(controlRoot string) (uint64, error) {
+// A refresh may advance generation for this operation, but cannot acquire a
+// reservation from an unrelated invocation. The initial token is immutable.
+func readWizardSnapshot(controlRoot string, reservation *installruntime.PendingMutation) (installruntime.InstalledSnapshot, error) {
 	snap, err := installruntime.ReadInstalledSnapshot(controlRoot)
+	if err != nil {
+		return snap, err
+	}
+	pending := snap.Ledger.PendingMutation
+	if (pending == nil) != (reservation == nil) || (pending != nil && *pending != *reservation) {
+		return snap, portablesetup.ErrConcurrentChange
+	}
+	return snap, nil
+}
+
+func rereadWizardGeneration(controlRoot string, reservation *installruntime.PendingMutation) (uint64, error) {
+	snap, err := readWizardSnapshot(controlRoot, reservation)
 	if err != nil {
 		return 0, err
 	}
@@ -3411,19 +3606,19 @@ func attachKnownReceipts(req Request, snap installruntime.InstalledSnapshot, run
 	return targets
 }
 
-func persistExternalUninstalled(ctx context.Context, req Request, runtimeRoot string) error {
+func persistExternalUninstalled(ctx context.Context, req Request, runtimeRoot string, reservation *installruntime.PendingMutation) error {
 	if !req.ExternalUninstalled {
 		return nil
 	}
-	return (portablesetup.Service{}).PatchIntentExternalUninstalled(ctx, req.ControlRoot, runtimeRoot, "")
+	return (portablesetup.Service{ExpectedPolicy: req.BootstrapExpectedPolicy}).PatchIntentExternalUninstalled(ctx, req.ControlRoot, runtimeRoot, "", reservation)
 }
 
-func persistKnownReceipt(ctx context.Context, req Request, runtimeRoot string, mat portablesetup.Materializer, installationID, client string) error {
+func persistKnownReceipt(ctx context.Context, req Request, runtimeRoot string, mat portablesetup.Materializer, installationID, client string, reservation *installruntime.PendingMutation) error {
 	receipt := knownReceiptID(mat, installationID, client)
 	if receipt == "" {
 		return nil
 	}
-	return (portablesetup.Service{}).PatchIntentReceipt(ctx, req.ControlRoot, runtimeRoot, "", client, receipt)
+	return (portablesetup.Service{ExpectedPolicy: req.BootstrapExpectedPolicy}).PatchIntentReceipt(ctx, req.ControlRoot, runtimeRoot, "", client, receipt, reservation)
 }
 
 func knownReceiptID(mat portablesetup.Materializer, installationID, clientID string) string {
@@ -3447,31 +3642,42 @@ func knownReceiptID(mat portablesetup.Materializer, installationID, clientID str
 	return ""
 }
 
-func publishWizardIntent(ctx context.Context, req Request, snap installruntime.InstalledSnapshot, runtimeRoot string, hookAgents, notifyAgents []portable.Integration, portablePresent bool) (installruntime.InstalledSnapshot, error) {
+func publishWizardIntent(ctx context.Context, req Request, snap installruntime.InstalledSnapshot, runtimeRoot string, hookAgents, notifyAgents []portable.Integration, portablePresent bool) (installruntime.InstalledSnapshot, *installruntime.PendingMutation, error) {
 	if snap.Ledger.PendingMutation != nil {
-		return snap, nil
+		reservation := *snap.Ledger.PendingMutation
+		return snap, &reservation, nil
 	}
 	if !wizardWillMutate(hookAgents, notifyAgents, portablePresent, req.Action == ActionInstall) {
-		return snap, nil
+		return snap, nil, nil
 	}
 	targets := wizardIntentTargets(req, hookAgents, notifyAgents)
 	targets = attachKnownReceipts(req, snap, runtimeRoot, targets)
 	if len(targets) == 0 {
-		return snap, nil
+		return snap, nil, nil
 	}
-	if _, _, err := (portablesetup.Service{}).PublishConfirmedIntent(ctx, portablesetup.ConfirmedIntent{
+	_, reservation, err := (portablesetup.Service{ExpectedPolicy: req.BootstrapExpectedPolicy}).PublishConfirmedIntent(ctx, portablesetup.ConfirmedIntent{
 		ControlRoot: req.ControlRoot, RuntimeRoot: runtimeRoot, Owner: snap.Ledger.Owner,
-		ExpectedGeneration: snap.Ledger.Generation, Action: string(req.Action), Stage: "confirmed",
+		ExpectedGeneration: snap.Ledger.Generation, ExpectedPolicy: req.BootstrapExpectedPolicy, Action: string(req.Action), Stage: "confirmed",
 		SourceRevision: req.ReleaseVersion, SourceDigest: req.PackageSHA256,
 		TreeDigest: req.TreeDigest, HelperDigest: req.HelperDigest, HelperVersion: req.HelperVersion,
 		Primary:             req.Primary,
 		GlobalConfig:        req.GlobalConfig,
 		ExternalUninstalled: req.ExternalUninstalled,
 		Targets:             targets,
-	}); err != nil {
-		return snap, err
+	})
+	if err != nil {
+		return snap, nil, err
 	}
-	return installruntime.ReadInstalledSnapshot(req.ControlRoot)
+	// Another invocation may complete this intent and publish a new one before
+	// the refresh. Keep the token returned by publication and reject substitution.
+	current, err := installruntime.ReadInstalledSnapshot(req.ControlRoot)
+	if err != nil {
+		return snap, reservation, err
+	}
+	if reservation == nil || current.Ledger.PendingMutation == nil || *current.Ledger.PendingMutation != *reservation {
+		return snap, reservation, portablesetup.ErrConcurrentChange
+	}
+	return current, reservation, nil
 }
 
 func shouldFinishWizardIntent(out Result) bool {
@@ -3491,6 +3697,10 @@ func shouldFinishWizardIntent(out Result) bool {
 }
 
 func finishWizardIntent(ctx context.Context, req Request, runtimeRoot string, out Result, err error) (Result, error) {
+	if errors.Is(err, portablesetup.ErrConcurrentChange) {
+		out.Outcome, out.Reason = "conflict", "concurrent_change"
+		return out, err
+	}
 	if !shouldFinishWizardIntent(out) {
 		return out, err
 	}
@@ -3502,16 +3712,23 @@ func finishWizardIntent(ctx context.Context, req Request, runtimeRoot string, ou
 	if snap.Ledger.PendingMutation == nil {
 		return out, err
 	}
-	cp := *snap.Ledger.PendingMutation
-	if finishErr := (portablesetup.Service{}).FinishConfirmedIntent(ctx, portablesetup.ConfirmedIntent{
+	if out.reservation == nil || *snap.Ledger.PendingMutation != *out.reservation {
+		out.Outcome, out.Reason = "conflict", "concurrent_change"
+		return out, ErrRefused
+	}
+	cp := *out.reservation
+	gen, finished, finishErr := (portablesetup.Service{ExpectedPolicy: req.BootstrapExpectedPolicy}).FinishConfirmedIntent(ctx, portablesetup.ConfirmedIntent{
 		ControlRoot: req.ControlRoot, RuntimeRoot: runtimeRoot, Owner: snap.Ledger.Owner,
-	}, &cp); finishErr != nil {
+	}, &cp)
+	if finishErr != nil {
 		out.Outcome, out.Reason = "incomplete", "intent_cleanup_failed"
 		return out, finishErr
 	}
-	if gen, readErr := rereadGeneration(req.ControlRoot); readErr == nil {
-		out.Generation = gen
+	if !finished {
+		out.Outcome, out.Reason = "conflict", "concurrent_change"
+		return out, ErrRefused
 	}
+	out.Generation = gen
 	return out, err
 }
 
@@ -3647,7 +3864,7 @@ func attachReadiness(req Request, agents []portable.Integration, out Result, mut
 			Runtime:    runtime,
 			Hooks:      "not_checked",
 			MCP:        "not_checked",
-			Permission: "unsupported",
+			Permission: "not_checked",
 			Restart:    "not_required",
 			Delivery:   "not_verified",
 		}

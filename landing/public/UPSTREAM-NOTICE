@@ -9,3 +9,16 @@ standard and third-party components retain their respective licenses,
 copyrights, and trademarks.
 
 Apple and Linux platform silhouettes: Simple Icons 16.30.0 (CC0-1.0), https://simpleicons.org/. Brand marks belong to their respective owners. Windows mark is a geometric four-pane representation.
+
+OpenCode logo: official dark square SVG from https://opencode.ai/brand,
+anomalyco/opencode packages/console/app/src/asset/brand/opencode-logo-dark-square.svg
+at commit 9388b94a97ee0df65b57c0d5e31d5380ec510a72.
+Copyright OpenCode contributors. OpenCode marks belong to their owners; their
+use identifies the supported host and does not imply endorsement.
+
+Gemini logo: unmodified official SVG referenced by https://gemini.google.com/,
+retrieved 2026-10-01 from
+https://www.gstatic.com/lamda/images/gemini_sparkle_aurora_33f86dc0c0257da337c63.svg
+SHA-256: f56df33f86dc0c0257da337c63bf7ad68c0a1b27b796ec707e147984351bccb3.
+The SVG includes a self-contained embedded JPEG texture. Gemini and Google marks
+belong to Google LLC; use identifies the supported host and implies no endorsement.

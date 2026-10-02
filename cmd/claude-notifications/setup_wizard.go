@@ -17,6 +17,7 @@ import (
 	"github.com/777genius/agent-notifications/internal/agentnotify/setupwizard"
 	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/installruntime"
+	"github.com/777genius/plugin-kit-ai/cli/installerui"
 )
 
 const setupWizardHelp = `Usage: claude-notifications setup-notifications wizard [OPTIONS]
@@ -29,6 +30,7 @@ Without --action, a new machine defaults to install; an existing portable
 installation is offered inspect, add/reinstall, uninstall, update, or repair.
   --action install|uninstall|inspect|update|repair
   --install-or-update       Bootstrap-only: install selected clients or update owned bindings first
+  --preserve-existing-units Bootstrap auto mode: leave absent MCP units off when another binding already exists
   --agents claude,codex   Omit on inspect to report both clients
   --hooks true|false          Omit on install of new targets to include hooks; omit on update/repair to keep live units; omit on uninstall to select all units
   --agent-notify true|false   Omit on install of new targets to include portable MCP+skill; omit on update/repair to keep live units
@@ -69,7 +71,15 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 		}
 		return 0
 	}
-	args, installOrUpdate, flagErr := stripInstallOrUpdate(args)
+	args, uiMode, uiErr := stripWizardUIMode(args)
+	args, bootstrapIntentFile, intentFlagErr := stripBootstrapIntentFile(args)
+	if intentFlagErr == nil {
+		intentFlagErr = uiErr
+	}
+	args, installOrUpdate, preserveExistingUnits, flagErr := stripInstallOrUpdate(args)
+	if flagErr == nil {
+		flagErr = intentFlagErr
+	}
 	req, jsonOut, err := parseSetupWizard(args)
 	if flagErr != nil && err == nil {
 		err = flagErr
@@ -103,18 +113,40 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 	if req.ReleaseDownloadRoot == "" {
 		req.ReleaseDownloadRoot = portableasset.DefaultReleaseDownloadRoot
 	}
-	if installOrUpdate && !validInstallOrUpdateRequest(req) {
+	if (preserveExistingUnits && !installOrUpdate) || (installOrUpdate && !validInstallOrUpdateRequest(req)) {
 		return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "invalid", Reason: "invalid_arguments"}, nil)
+	}
+	if bootstrapIntentFile != "" {
+		if !installOrUpdate || !req.Yes || jsonOut && needsWizardInteraction(req) {
+			return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "invalid", Reason: "invalid_arguments"}, nil)
+		}
+		req, err = admitBootstrapWizardRequest(bootstrapIntentFile, req)
+		if err != nil {
+			return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "conflict", Reason: "concurrent_change"}, err)
+		}
 	}
 	if errOut != nil {
 		req.Progress = func(phase string) {
-			_, _ = fmt.Fprintln(errOut, "phase", phase)
+			if jsonOut {
+				_, _ = fmt.Fprintln(errOut, "phase", phase)
+			} else if phase != "complete" {
+				_, _ = fmt.Fprintln(errOut, "Setting up notifications: "+strings.ReplaceAll(phase, "-", " ")+"...")
+			}
 		}
 	}
 	needsPrompt := tty && !jsonOut && (req.Action == "" || (req.Action != setupwizard.ActionInspect && (len(req.Agents) == 0 || !req.Yes)))
 	var prompt setupwizard.Prompter
-	if tty && !jsonOut {
-		prompt, err = setupwizard.NewPublicPrompt(in, out)
+	if needsPrompt {
+		if input, ok := in.(*os.File); ok {
+			visible, _ := out.(*os.File)
+			prompt, err = setupwizard.NewTerminalPublicPrompt(input, visible, installerui.TerminalMode(uiMode), os.Getenv("NO_COLOR") != "")
+			if errors.Is(err, setupwizard.ErrPromptUnavailable) {
+				visible, _ = errOut.(*os.File)
+				prompt, err = setupwizard.NewTerminalPublicPrompt(input, visible, installerui.TerminalMode(uiMode), os.Getenv("NO_COLOR") != "")
+			}
+		} else {
+			prompt, err = setupwizard.NewPublicPrompt(in, out)
+		}
 		if err != nil {
 			return writeSetupWizardPromptError(out, jsonOut, req, err)
 		}
@@ -134,13 +166,20 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 	if req.Action != setupwizard.ActionInspect && !req.Yes && tty && !jsonOut {
 		plan, e := setupwizard.Plan(ctx, req)
 		req = plan.Request
-		if !plan.Ready {
+		if e != nil || !plan.Ready {
 			if plan.Text != "" {
 				_, _ = fmt.Fprintln(out, plan.Text)
 			}
 			return writeSetupWizardResult(out, jsonOut, plan.Result, e)
 		}
-		ok, e := prompt.Confirm(ctx, plan.Text)
+		var ok bool
+		if confirmer, hasPlan := prompt.(interface {
+			ConfirmPlan(context.Context, setupwizard.SetupPlan) (bool, error)
+		}); hasPlan {
+			ok, e = confirmer.ConfirmPlan(ctx, plan)
+		} else {
+			ok, e = prompt.Confirm(ctx, plan.Text)
+		}
 		if e != nil {
 			return writeSetupWizardPromptError(out, jsonOut, req, e)
 		}
@@ -152,7 +191,7 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 	}
 	var result setupwizard.Result
 	if installOrUpdate {
-		result, err = runInstallOrUpdate(ctx, req)
+		result, err = runInstallOrUpdate(ctx, req, preserveExistingUnits)
 	} else {
 		result, err = setupwizard.Run(ctx, req)
 	}
@@ -161,20 +200,27 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 
 // The bootstrap flag is intentionally outside the public wizard Request. It
 // changes orchestration, not the meaning of any explicit wizard action.
-func stripInstallOrUpdate(args []string) ([]string, bool, error) {
+func stripInstallOrUpdate(args []string) ([]string, bool, bool, error) {
 	filtered := make([]string, 0, len(args))
-	found := false
+	found, preserve := false, false
 	for _, arg := range args {
-		if arg != "--install-or-update" {
+		if arg != "--install-or-update" && arg != "--preserve-existing-units" {
 			filtered = append(filtered, arg)
 			continue
 		}
+		if arg == "--preserve-existing-units" {
+			if preserve {
+				return filtered, false, false, errors.New("invalid_arguments")
+			}
+			preserve = true
+			continue
+		}
 		if found {
-			return filtered, false, errors.New("invalid_arguments")
+			return filtered, false, false, errors.New("invalid_arguments")
 		}
 		found = true
 	}
-	return filtered, found, nil
+	return filtered, found, preserve, nil
 }
 
 func validInstallOrUpdateRequest(req setupwizard.Request) bool {
@@ -195,7 +241,15 @@ func validInstallOrUpdateRequest(req setupwizard.Request) bool {
 	return true
 }
 
-func runInstallOrUpdate(ctx context.Context, req setupwizard.Request) (setupwizard.Result, error) {
+func runInstallOrUpdate(ctx context.Context, req setupwizard.Request, preserveExistingUnits bool) (result setupwizard.Result, err error) {
+	defer func() {
+		if result.Reason == "concurrent_change" {
+			// The original auto selection is stale. A direct mutation retry
+			// would turn an opt-out into an implicit Add.
+			result.Command = nil
+			result.NextActions = nil
+		}
+	}()
 	inspect := req
 	inspect.Action = setupwizard.ActionInspect
 	before, inspectErr := setupwizard.Run(ctx, inspect)
@@ -206,6 +260,44 @@ func runInstallOrUpdate(ctx context.Context, req setupwizard.Request) (setupwiza
 		if next.Kind == "recover" || next.Kind == "resume" {
 			return setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "pending_setup_required", NextActions: before.NextActions}, setupwizard.ErrRefused
 		}
+	}
+	var preserved []string
+	if req.BootstrapMCP != nil {
+		current, generation, policy, e := setupwizard.ObserveBootstrapMCPWithPolicy(ctx, req)
+		if e == nil {
+			e = setupwizard.CheckBootstrapMCP(*req.BootstrapMCP, current)
+		}
+		if e != nil {
+			return setupwizard.Result{Action: string(req.Action), Outcome: "conflict", Reason: "concurrent_change"}, e
+		}
+		req.Agents = append([]string(nil), req.BootstrapMCP.Selected...)
+		preserved = append([]string(nil), req.BootstrapMCP.Skipped...)
+		if len(req.Agents) == 0 {
+			return setupwizard.Result{Action: string(req.Action), Outcome: "unchanged", Reason: "existing_opt_out", Targets: preservedUnitTargets(preserved)}, nil
+		}
+		req.BootstrapExpectedGeneration = &generation
+		req.BootstrapExpectedPolicy = &policy
+	} else if preserveExistingUnits {
+		selected, skipped, err := setupwizard.BootstrapAutoTargets(ctx, req, before)
+		if err != nil {
+			return setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "existing_units_unavailable"}, err
+		}
+		req.Agents, preserved = selected, skipped
+		if len(selected) == 0 {
+			return setupwizard.Result{Action: string(req.Action), Outcome: "unchanged", Reason: "existing_opt_out", Targets: preservedUnitTargets(preserved)}, nil
+		}
+		// Selection is a policy decision about currently live bindings. The
+		// package fetch can take time, so every later Plan and Run must still
+		// see this ledger generation (or one produced by our own phase).
+		expected := before.Generation
+		req.BootstrapExpectedGeneration = &expected
+	}
+	if req.PackageRoot == "" {
+		pinned, err := setupwizard.PinCurrentReleasePackage(ctx, req)
+		if err != nil {
+			return setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "package_acquisition_failed"}, err
+		}
+		req = pinned
 	}
 	// A group update can expose another behind client only after the first
 	// binding moves. Replan the original selection until every selected client
@@ -220,7 +312,9 @@ func runInstallOrUpdate(ctx context.Context, req setupwizard.Request) (setupwiza
 			if runErr != nil || result.ExitCode() != 0 {
 				return result, runErr
 			}
-			return verifyInstallOrUpdate(ctx, req, result)
+			verified, verifyErr := verifyInstallOrUpdate(ctx, req, result)
+			verified.Targets = append(verified.Targets, preservedUnitTargets(preserved)...)
+			return verified, verifyErr
 		}
 		if plan.Result.Reason != "update_required" || !validInstallOrUpdateActions(req.Agents, plan.Result.NextActions) {
 			return plan.Result, err
@@ -237,9 +331,20 @@ func runInstallOrUpdate(ctx context.Context, req setupwizard.Request) (setupwiza
 			if runErr != nil || result.ExitCode() != 0 {
 				return result, runErr
 			}
+			if req.BootstrapExpectedGeneration != nil {
+				*req.BootstrapExpectedGeneration = result.Generation
+			}
 		}
 	}
 	return setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "update_required_after_retries"}, setupwizard.ErrRefused
+}
+
+func preservedUnitTargets(clients []string) []setupwizard.TargetResult {
+	var targets []setupwizard.TargetResult
+	for _, client := range clients {
+		targets = append(targets, setupwizard.TargetResult{Client: client, Unit: "agent-notify", Outcome: "absent", Reason: "preserved_existing_opt_out"})
+	}
+	return targets
 }
 
 func validInstallOrUpdateActions(selected []string, next []setupwizard.NextAction) bool {
@@ -315,41 +420,9 @@ func writeSetupWizardResult(out io.Writer, jsonOut bool, result setupwizard.Resu
 			return 1
 		}
 	} else {
-		line := fmt.Sprintf("%s; reason=%s; generation=%d", result.Outcome, result.Reason, result.Generation)
-		if result.InstallationID != "" {
-			line += " installation-id=" + result.InstallationID
-		}
-		if result.DataRetained {
-			line += " data_retained=true"
-		}
-		_, _ = fmt.Fprintln(out, line+".")
-		for _, target := range result.Targets {
-			line := target.Client + " " + target.Unit + ": " + target.Outcome
-			if target.Reason != "" {
-				line += " " + target.Reason
-			}
-			if target.Profile != "" {
-				line += " profile=" + target.Profile
-			}
-			if target.TreeDigest != "" {
-				line += " digest=" + target.TreeDigest
-			}
-			if target.ConfigPath != "" {
-				line += " mcp=" + target.ConfigPath
-			}
-			_, _ = fmt.Fprintln(out, line)
-		}
-		for _, fact := range result.Readiness {
-			_, _ = fmt.Fprintf(out, "%s readiness: runtime=%s hooks=%s mcp=%s permission=%s restart=%s delivery=%s\n",
-				fact.Client, fact.Runtime, fact.Hooks, fact.MCP, fact.Permission, fact.Restart, fact.Delivery)
-		}
-		for _, next := range result.NextActions {
-			_, _ = fmt.Fprintf(out, "next %s: %s\n", next.Kind, strings.Join(quoteWizardArgs(wizardPrintableCommand(next.Command)), " "))
-		}
-		if len(result.Command) > 0 {
-			_, _ = fmt.Fprintf(out, "retry: %s\n", strings.Join(quoteWizardArgs(wizardPrintableCommand(result.Command)), " "))
-		}
+		writeSetupWizardSummary(out, result)
 	}
+
 	if result.ExitCode() != 0 {
 		return result.ExitCode()
 	}
@@ -445,6 +518,16 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 		}
 		values[key] = value
 	}
+	for _, key := range []string{"package", "plugin-root", "control-root", "runtime-root", "global-config", "codex-home", "claude-config", "client-executable", "helper", "scope-root", "mcp-config", "claude-mcp-config", "claude-executable", "codex-executable"} {
+		if values[key] == "" {
+			continue
+		}
+		normalized, err := normalizeSetupPhysicalPath(values[key])
+		if err != nil {
+			return req, jsonOut, err
+		}
+		values[key] = normalized
+	}
 	switch values["action"] {
 	case "install":
 		req.Action = setupwizard.ActionInstall
@@ -515,6 +598,16 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 	env := setupwizard.ApplyEnvDefaults(setupwizard.Request{})
 	req.EnvCodexHome = env.CodexHome
 	req.EnvClaudeConfig = env.ClaudeConfig
+	for _, path := range []*string{&req.EnvCodexHome, &req.EnvClaudeConfig} {
+		if runtime.GOOS == "windows" {
+			*path = strings.ReplaceAll(*path, "/", `\`)
+		}
+		if !filepath.IsAbs(*path) {
+			*path = ""
+			continue
+		}
+		*path = filepath.Clean(*path)
+	}
 	req.ClientExecutable = values["client-executable"]
 	if values["claude-executable"] != "" || values["codex-executable"] != "" {
 		req.ClientExecutables = map[string]string{}
@@ -537,12 +630,20 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 			req.MCPConfig["claude"] = values["claude-mcp-config"]
 		}
 	}
-	for _, p := range []string{req.PackageRoot, req.PluginRoot, req.ControlRoot, req.RuntimeRoot, req.GlobalConfig, req.CodexHome, req.ClaudeConfig, req.EnvCodexHome, req.EnvClaudeConfig, req.ClientExecutable, req.Helper, req.ScopeRoot, req.ClientExecutables["claude"], req.ClientExecutables["codex"]} {
-		if p != "" && (!filepath.IsAbs(p) || filepath.Clean(p) != p) {
-			return req, jsonOut, errors.New("invalid_arguments")
-		}
-	}
 	return req, jsonOut, nil
+}
+
+// MSYS hands native Windows processes absolute paths using forward slashes.
+// Canonicalize only that separator form; Clean must still reject traversal and
+// nonphysical paths before the values reach the installer or its ACL checks.
+func normalizeSetupPhysicalPath(path string) (string, error) {
+	if runtime.GOOS == "windows" {
+		path = strings.ReplaceAll(path, "/", `\`)
+	}
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return "", errors.New("invalid_arguments")
+	}
+	return path, nil
 }
 
 func parseBoolFlag(v string) (bool, error) {
@@ -583,4 +684,100 @@ func quotePowerShellArgs(args []string) []string {
 		out[0] = "& " + out[0]
 	}
 	return out
+}
+
+// Private admission accepts only the bootstrap command. Native product/config
+// writers have no new flag. An installed same-release copy can read the original
+// private stage while retaining exact helper version/source/digest provenance.
+func stripBootstrapIntentFile(args []string) ([]string, string, error) {
+	out := []string{}
+	path := ""
+	for n := 0; n < len(args); n++ {
+		key, value, inline := strings.Cut(args[n], "=")
+		if key != "--bootstrap-intent-file" {
+			out = append(out, args[n])
+			continue
+		}
+		if path != "" {
+			return out, path, errors.New("invalid_arguments")
+		}
+		if !inline {
+			n++
+			if n >= len(args) {
+				return out, path, errors.New("invalid_arguments")
+			}
+			value = args[n]
+		}
+		if !validProductPath(value) {
+			return out, path, errors.New("invalid_arguments")
+		}
+		path = value
+	}
+	return out, path, nil
+}
+func needsWizardInteraction(r setupwizard.Request) bool { return !r.Yes || len(r.Agents) == 0 }
+func admitBootstrapWizardRequest(path string, r setupwizard.Request) (setupwizard.Request, error) {
+	provenance, err := currentSelectorProvenance()
+	if err != nil {
+		return r, err
+	}
+	provenance.Stage = []byte(filepath.Dir(path))
+	intent, err := loadBootstrapIntent(path, provenance)
+	if err != nil {
+		return r, err
+	}
+	expected := intentWizardRequest(intent)
+	if !sameWizardBootstrapScope(r, expected) || intent.Request.SkipAgentNotify {
+		return r, errors.New("bootstrap request differs from confirmed intent")
+	}
+	r.BootstrapMCP = &intent.MCP
+	// Observe all confirmed portable profiles, including kept/off siblings, before
+	// narrowing the mutation set. No auto defaults are recalculated at admission.
+	r.EnvClaudeConfig = ""
+	r.EnvCodexHome = ""
+	return r, nil
+}
+func sameWizardBootstrapScope(actual, expected setupwizard.Request) bool {
+	if strings.Join(actual.Agents, ",") != strings.Join(expected.Agents, ",") || actual.ControlRoot != expected.ControlRoot || actual.ClaudeConfig != expected.ClaudeConfig || actual.CodexHome != expected.CodexHome || actual.GlobalConfig != expected.GlobalConfig {
+		return false
+	}
+	// A fresh legacy phase chooses its existing managed runtime during hooks
+	// preparation. A known runtime authority must remain exact; its own creation
+	// is outside the relevant portable binding projection.
+	if expected.RuntimeRoot != "" && actual.RuntimeRoot != "" && actual.RuntimeRoot != expected.RuntimeRoot {
+		return false
+	}
+	for _, id := range expected.Agents {
+		path := actual.ClientExecutables[id]
+		if path == "" {
+			path = actual.ClientExecutable
+		}
+		if path != expected.ClientExecutables[id] || actual.MCPConfig[id] != expected.MCPConfig[id] {
+			return false
+		}
+	}
+	return true
+}
+
+// The same finite UI grammar applies to direct wizard questions. Complete
+// --yes/inspect/JSON paths validate it without constructing a terminal.
+func stripWizardUIMode(args []string) ([]string, string, error) {
+	remaining, uiArgs := []string{}, []string{"select"}
+	for n := 0; n < len(args); n++ {
+		key, _, inline := strings.Cut(args[n], "=")
+		if key != "--ui" && key != "--plain" {
+			remaining = append(remaining, args[n])
+			continue
+		}
+		uiArgs = append(uiArgs, args[n])
+		if key == "--ui" && !inline {
+			n++
+			if n >= len(args) {
+				return remaining, "", errors.New("invalid_arguments")
+			}
+			uiArgs = append(uiArgs, args[n])
+		}
+	}
+	parsed, err := parseSetupProducts(uiArgs)
+	return remaining, parsed.Mode, err
 }

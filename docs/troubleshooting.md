@@ -2,6 +2,33 @@
 
 Common installation and runtime issues.
 
+## OpenCode notifications missing or duplicated
+
+- Confirm the host version with `opencode --version`. Tested: 1.18.33; V2 is
+  unsupported. Update the notifications plugin using the guided OpenCode setup.
+- Restart OpenCode after install/update/remove. Check that the same
+  `OPENCODE_CONFIG_DIR` / `XDG_CONFIG_HOME` environment is used for setup and the
+  host; the global plugin should be `plugins/agent-notifications.js` there.
+- Choose desktop/webhook consent explicitly. Shared status/channel settings may
+  disable delivery; webhook consent also needs an enabled endpoint.
+- On macOS, use the installed executable's `setup-opencode permission-status`
+  and `setup-opencode request-permission`. Check ClaudeNotifier in System
+  Settings > Notifications and Focus. Missing/damaged attestation requires a
+  verified native helper update, not an unverified fallback.
+- On Linux, verify an active desktop notification service and session D-Bus.
+  On Windows, install natively via Git Bash and check OS notification settings.
+- Duplicate banners can come from OpenCode's native Agent/Permissions/Errors
+  switches or another notification plugin. Disable the overlapping source.
+- Silent alerts and no click-to-focus are expected for OpenCode. One-shot host
+  exit can end asynchronous delivery before completion; use a persistent session
+  when validating delivery.
+- Ownership conflicts preserve foreign/edited files. Inspect the reported path;
+  do not delete unrelated plugins. Interrupted transactions use
+  `setup-opencode recover` before retrying setup.
+
+See [OpenCode setup, supported targets and visual evidence](opencode-notifications.md).
+
+
 ## `Failed to add marketplace: ... its network source differs from the one declared for it in settings`
 
 ### Symptom

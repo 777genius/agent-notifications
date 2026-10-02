@@ -54,7 +54,9 @@ Agent IDs must match `[a-z][a-z0-9_-]{0,63}`. Overrides allow only `notification
 `statuses`, and `debug`; nested agent sections and schema metadata are forbidden.
 Unknown valid agent IDs and additive top-level settings are preserved for future
 runtimes. Unknown fields inside `agents.<id>` are rejected by strict agent
-validation rather than preserved. Current runtimes apply only `claude` and `codex`.
+validation rather than preserved. Claude/Codex hooks select their own profiles; OpenCode has a separate observer
+profile and consent. Gemini profile support is pending the compatible integration
+described below.
 
 `config edit` and the settings wizard edit global fields only and preserve agent
 sections. `/agents/...` edits are rejected; use a text editor for these sections.
@@ -70,6 +72,22 @@ Expanded paths are never written back to config. Existing files are not rewritte
 
 Claude-managed hook commands must retain `${CLAUDE_PLUGIN_ROOT}` because Claude
 itself substitutes that name. The new name is for config resource paths.
+
+## Gemini candidate profile
+
+Public release **1.46.0 does not include Gemini**; `agents.gemini` requires the
+compatible candidate/runtime. Exact **Gemini CLI 0.62.0** native qualification is
+pending. See the [Gemini guide](gemini-notifications.md) for candidate setup.
+
+The candidate uses separate Gemini desktop/webhook consent, independently of
+OpenCode. Shared selection flags apply to each selected observer, but consent is
+stored per agent. Webhook endpoints are configured separately. The two fixed
+signals are turn completed and tool permission requested; completion does not
+mean success or final answer. Sound/focus settings cannot enable those features
+for Gemini. No question/error/plan/review or nested-agent parity is promised.
+The portable MCP/skill wizard remains Claude/Codex only. Gemini built-in alerts
+may duplicate desktop delivery: choose one source manually or webhook-only.
+Setup does not alter built-in notification settings.
 
 ## Rollback
 

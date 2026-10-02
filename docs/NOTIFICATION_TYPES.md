@@ -13,3 +13,18 @@ The Claude triggers are listed below. Codex uses a different event mapping, desc
 | Session Limit Reached | ⏱️ | Session limit reached | Stop/SubagentStop hooks (state machine detects "Session limit reached" text in last 3 assistant messages) |
 | API Error | 🔴 | Authentication expired, rate limit, server error, connection error | Stop/SubagentStop hooks (state machine detects via `isApiErrorMessage` flag + `error` field from JSONL) |
 | Permission Request | 🔐 | Codex is waiting for tool approval | Codex `PermissionRequest` hook (Codex only) |
+
+## Gemini CLI (unreleased candidate)
+
+Public release **1.46.0 does not include Gemini**. Target **Gemini CLI 0.62.0**
+is pending native qualification. [Candidate setup and limits](gemini-notifications.md).
+
+| Event | Meaning | Planned fixed body |
+| --- | --- | --- |
+| `AfterAgent` | A turn completed; not necessarily success or final answer | `Gemini CLI completed a turn` |
+| `Notification: ToolPermission` | Tool permission requested | `Gemini CLI requested tool permission` |
+
+Silent desktop and explicitly opted webhooks only. No sound, click-to-focus,
+question/error/plan/review/session-limit alerts or nested-agent parity. Built-in
+Gemini alerts can duplicate desktop delivery; choose one desktop source manually
+or webhook-only. Setup does not change built-in notification settings.

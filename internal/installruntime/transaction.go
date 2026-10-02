@@ -18,6 +18,10 @@ import (
 // ErrPolicyRecovery leaves pending installer work untouched for its owner.
 var ErrPolicyRecovery = errors.New("pending installation transaction requires installer recovery")
 
+// ErrPolicyConflict refuses a stale ExpectedPolicy under the commit locks,
+// before publishing any transaction or product mutation.
+var ErrPolicyConflict = errors.New("stale explicit policy bytes")
+
 // Identity includes existence: an empty file is not an absent file.
 type Identity struct {
 	Link   string
@@ -74,6 +78,13 @@ type transaction struct {
 // Request stages ordinary file bytes before Commit. Prepare runs under the
 // component and config locks, and may only compute adapter-owned JSON changes.
 type Request struct {
+	// RevokeOpenCode permits only the exact desktop/webhook false policy patch
+	// when delivery assets are damaged. It still requires a registered consumer,
+	// generation and policy CAS; no asset, native or other policy mutation is allowed.
+	RevokeOpenCode bool
+	// RevokeGemini permits only Gemini's exact desktop/webhook false patch.
+	// Damaged assets do not prevent revocation; ownership and CAS still apply.
+	RevokeGemini bool
 	// PolicyOnly requires an already-managed runtime and existing kernel locks.
 	// It refuses recovery and asset/consumer mutations; setup cannot accidentally
 	// promote native or rewrite hooks from an unrelated pending transaction.
@@ -251,6 +262,12 @@ func retainedPortablePrimaryFiles(l Ledger, oldRoot, newRoot, movingID string, s
 // order. The durable redo record precedes every live mutation. Recovery checks
 // every identity before changing anything and refuses ambiguous foreign edits.
 func Commit(ctx context.Context, r Request) (Ledger, error) {
+	if r.RevokeOpenCode && !openCodeRevokeOnly(r) {
+		return Ledger{}, fmt.Errorf("invalid OpenCode channel revocation")
+	}
+	if r.RevokeGemini && !geminiRevokeOnly(r) {
+		return Ledger{}, fmt.Errorf("invalid Gemini channel revocation")
+	}
 	if err := reservationRequestInvalid(r); err != nil {
 		return Ledger{}, err
 	}
@@ -268,7 +285,9 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 			return Ledger{}, err
 		}
 	}
-	if filepath.IsAbs(r.RuntimeRoot) {
+	// Only the already-validated exact Gemini false patch may use a recorded
+	// runtime name without resolving damaged assets. Compare it under both locks.
+	if filepath.IsAbs(r.RuntimeRoot) && !r.RevokeGemini {
 		r.RuntimeRoot, err = CanonicalPath(r.RuntimeRoot)
 		if err != nil {
 			return Ledger{}, err
@@ -400,7 +419,7 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 		return l, err
 	}
 
-	if l.Native != nil && !policyDisableOnly(r) {
+	if l.Native != nil && !policyDisableOnly(r) && !r.RevokeOpenCode && !r.RevokeGemini {
 		if err := validateNativeRecord(l.Native); err != nil {
 			return l, err
 		}
@@ -422,6 +441,14 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 		return l, fmt.Errorf("component owned by %s at %s; explicit takeover required", l.Owner, l.RuntimeRoot)
 	}
 	previous, registered := l.Consumers[r.ConsumerID]
+	if r.RevokeOpenCode && (!registered || previous.RuntimeRoot != r.RuntimeRoot || previous.Registration == "") {
+		return l, fmt.Errorf("OpenCode revocation requires its registered runtime")
+	}
+	if r.RevokeGemini && (!registered || !filepath.IsAbs(previous.RuntimeRoot) ||
+		filepath.Clean(previous.RuntimeRoot) != previous.RuntimeRoot || filepath.Clean(r.RuntimeRoot) != r.RuntimeRoot ||
+		previous.RuntimeRoot != r.RuntimeRoot || previous.Registration == "") {
+		return l, fmt.Errorf("gemini revocation requires its registered runtime")
+	}
 	relocating := !r.RefreshOnly && registered && previous.RuntimeRoot != "" && previous.RuntimeRoot != r.RuntimeRoot
 	if relocating && (!r.RelocateVersionedCache || r.RemoveConsumer || r.ConsumerID != "claude-hooks" || r.Owner != "existing-installer" ||
 		!versionedClaudeCachePeers(previous.RuntimeRoot, r.RuntimeRoot)) {
@@ -495,17 +522,22 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 		}
 	}
 	for path, want := range l.Files {
+		if r.RevokeOpenCode || r.RevokeGemini {
+			break
+		}
+		// Claude owns the previous versioned cache: it may prune files or
+		// restore the marketplace checkout, whose launcher link and skill mode
+		// differ from what the installer wrote. Nothing here writes to that
+		// root and every entry under it is de-owned below, so drift there is
+		// not a foreign edit and its files are not read.
+		if retireOldCache && pathWithinRoot(previous.RuntimeRoot, path) {
+			continue
+		}
 		got, e := Fingerprint(path)
 		if e != nil {
 			return l, e
 		}
 		if got == want {
-			continue
-		}
-		// Claude owns the previous versioned cache. Once no consumer points at
-		// it, its files may already have been pruned by Claude. De-own only
-		// missing files; a changed existing file is still a foreign edit.
-		if retireOldCache && pathWithinRoot(previous.RuntimeRoot, path) && !got.Exists {
 			continue
 		}
 		if replacing[path] && !got.Exists && want.Exists {
@@ -538,7 +570,7 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 		return l, err
 	}
 	if r.ExpectedPolicy != nil && *r.ExpectedPolicy != policyBefore {
-		return l, fmt.Errorf("stale explicit policy bytes")
+		return l, ErrPolicyConflict
 	}
 	next.Enabled = policy.Enabled
 	if r.PolicyEnabled != nil || len(r.PolicyFields) != 0 {

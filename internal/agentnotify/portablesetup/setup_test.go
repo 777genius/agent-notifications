@@ -859,7 +859,7 @@ func TestPublishConfirmedIntentRecordsTargetsAndClears(t *testing.T) {
 	}
 	if _, _, err := svc.PublishConfirmedIntent(ctx, ConfirmedIntent{
 		ControlRoot: b.ControlRoot, RuntimeRoot: b.RuntimeRoot, Owner: b.Owner,
-		Action: "install", SourceDigest: "abc", GlobalConfig: filepath.Join(filepath.Dir(b.GlobalConfig), "other.json"),
+		ExpectedGeneration: published.Generation, Action: "install", SourceDigest: "abc", GlobalConfig: filepath.Join(filepath.Dir(b.GlobalConfig), "other.json"),
 		Targets: []IntentTarget{{Client: "codex", Units: []string{"agent-notify"}}},
 	}); !errors.Is(err, ErrIntentConflict) {
 		t.Fatalf("pending global config drift was not refused: %v", err)
@@ -867,7 +867,7 @@ func TestPublishConfirmedIntentRecordsTargetsAndClears(t *testing.T) {
 	if len(intent.Targets) != 1 || intent.Targets[0].Profile != profile || strings.Join(intent.Targets[0].Units, ",") != "hooks,agent-notify" {
 		t.Fatalf("targets: %+v", intent.Targets)
 	}
-	if err := svc.FinishConfirmedIntent(ctx, ConfirmedIntent{ControlRoot: b.ControlRoot, RuntimeRoot: b.RuntimeRoot, Owner: b.Owner}, res); err != nil {
+	if _, _, err := svc.FinishConfirmedIntent(ctx, ConfirmedIntent{ControlRoot: b.ControlRoot, RuntimeRoot: b.RuntimeRoot, Owner: b.Owner}, res); err != nil {
 		t.Fatal(err)
 	}
 	snap, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
@@ -876,6 +876,17 @@ func TestPublishConfirmedIntentRecordsTargetsAndClears(t *testing.T) {
 	}
 	if _, err := os.Lstat(IntentPath(b.ControlRoot)); !os.IsNotExist(err) {
 		t.Fatal("finish retained intent file")
+	}
+	if _, _, err := svc.PublishConfirmedIntent(ctx, ConfirmedIntent{
+		ControlRoot: b.ControlRoot, RuntimeRoot: b.RuntimeRoot, Owner: b.Owner,
+		ExpectedGeneration: ledger.Generation, Action: "install", Stage: "confirmed",
+		Targets: []IntentTarget{{Client: "codex", Units: []string{"agent-notify"}}},
+	}); !errors.Is(err, ErrConcurrentChange) {
+		t.Fatalf("stale confirmed intent published: %v", err)
+	}
+	snap, err = installruntime.ReadInstalledSnapshot(b.ControlRoot)
+	if err != nil || snap.Ledger.PendingMutation != nil {
+		t.Fatalf("stale intent changed reservation: %+v %v", snap.Ledger.PendingMutation, err)
 	}
 }
 
@@ -930,10 +941,10 @@ func TestFinishConfirmedIntentAfterClaudeCacheRelocationAndPortableRemoval(t *te
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err = svc.FinishConfirmedIntent(ctx, ConfirmedIntent{ControlRoot: control, RuntimeRoot: filepath.Join(root, "unrelated"), Owner: owner}, reservation); err == nil {
+	if _, _, err = svc.FinishConfirmedIntent(ctx, ConfirmedIntent{ControlRoot: control, RuntimeRoot: filepath.Join(root, "unrelated"), Owner: owner}, reservation); err == nil {
 		t.Fatal("unrelated runtime root finalized the intent")
 	}
-	if err = svc.FinishConfirmedIntent(ctx, ConfirmedIntent{ControlRoot: control, RuntimeRoot: oldRoot, Owner: owner}, reservation); err != nil {
+	if _, _, err = svc.FinishConfirmedIntent(ctx, ConfirmedIntent{ControlRoot: control, RuntimeRoot: oldRoot, Owner: owner}, reservation); err != nil {
 		t.Fatalf("finish after removing last old-root consumer: %v", err)
 	}
 	snap, err := installruntime.ReadInstalledSnapshot(control)
@@ -954,10 +965,10 @@ func TestFinishConfirmedIntentAfterClaudeCacheRelocationAndPortableRemoval(t *te
 	if err != nil {
 		t.Fatalf("retained reinstall could not publish intent: %v", err)
 	}
-	if err := svc.PatchIntentReceipt(ctx, control, oldRoot, owner, "claude", "receipt-1"); err != nil {
+	if err := svc.PatchIntentReceipt(ctx, control, oldRoot, owner, "claude", "receipt-1", reinstallReservation); err != nil {
 		t.Fatalf("retained reinstall could not patch intent: %v", err)
 	}
-	if err := svc.FinishConfirmedIntent(ctx, ConfirmedIntent{ControlRoot: control, RuntimeRoot: oldRoot, Owner: owner}, reinstallReservation); err != nil {
+	if _, _, err := svc.FinishConfirmedIntent(ctx, ConfirmedIntent{ControlRoot: control, RuntimeRoot: oldRoot, Owner: owner}, reinstallReservation); err != nil {
 		t.Fatalf("retained reinstall could not finish intent: %v", err)
 	}
 	intent, err := os.Lstat(IntentPath(control))
@@ -979,7 +990,7 @@ func TestPatchIntentGlobalConfigFreezesLegacyPendingIntent(t *testing.T) {
 	if err != nil || res == nil {
 		t.Fatalf("publish old intent: %v", err)
 	}
-	if err := svc.PatchIntentGlobalConfig(ctx, b.ControlRoot, b.RuntimeRoot, b.Owner, b.InstallationID, b.GlobalConfig); err != nil {
+	if err := svc.PatchIntentGlobalConfig(ctx, b.ControlRoot, b.RuntimeRoot, b.Owner, b.InstallationID, b.GlobalConfig, res); err != nil {
 		t.Fatalf("freeze path: %v", err)
 	}
 	intent, err := ReadIntent(b.ControlRoot)
@@ -987,11 +998,117 @@ func TestPatchIntentGlobalConfigFreezesLegacyPendingIntent(t *testing.T) {
 		t.Fatalf("frozen intent: %+v %v", intent, err)
 	}
 	other := filepath.Join(filepath.Dir(b.GlobalConfig), "other.json")
-	if err := svc.PatchIntentGlobalConfig(ctx, b.ControlRoot, b.RuntimeRoot, b.Owner, b.InstallationID, other); !errors.Is(err, ErrIntentConflict) {
+	if err := svc.PatchIntentGlobalConfig(ctx, b.ControlRoot, b.RuntimeRoot, b.Owner, b.InstallationID, other, res); !errors.Is(err, ErrIntentConflict) {
 		t.Fatalf("changed path accepted: %v", err)
 	}
 	intent, err = ReadIntent(b.ControlRoot)
 	if err != nil || intent.GlobalConfig != b.GlobalConfig {
 		t.Fatalf("conflict changed intent: %+v %v", intent, err)
+	}
+}
+
+func TestPublishConfirmedIntentRefusesStaleCompatibleReservation(t *testing.T) {
+	b, ledger := bindingFixture(t)
+	ctx := testCtx(t)
+	req := ConfirmedIntent{ControlRoot: b.ControlRoot, RuntimeRoot: b.RuntimeRoot, Owner: b.Owner,
+		ExpectedGeneration: ledger.Generation, Action: "install", Stage: "confirmed",
+		Targets: []IntentTarget{{Client: "codex", Units: []string{"agent-notify"}}}}
+	published, original, err := (Service{}).PublishConfirmedIntent(ctx, req)
+	if err != nil || original == nil {
+		t.Fatalf("publish: %+v %v", original, err)
+	}
+	if _, adopted, err := (Service{}).PublishConfirmedIntent(ctx, req); !errors.Is(err, ErrConcurrentChange) || adopted != nil {
+		t.Fatalf("stale caller adopted compatible reservation: %+v %v", adopted, err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
+	if err != nil || snap.Ledger.Generation != published.Generation || snap.Ledger.PendingMutation == nil || *snap.Ledger.PendingMutation != *original {
+		t.Fatalf("stale publish changed reservation: %+v %v", snap.Ledger, err)
+	}
+}
+
+func TestFinishConfirmedIntentIgnoresStaleReservation(t *testing.T) {
+	b, ledger := bindingFixture(t)
+	ctx := testCtx(t)
+	svc := Service{}
+	req := ConfirmedIntent{ControlRoot: b.ControlRoot, RuntimeRoot: b.RuntimeRoot, Owner: b.Owner,
+		ExpectedGeneration: ledger.Generation, Action: "install", Stage: "confirmed",
+		Targets: []IntentTarget{{Client: "codex", Units: []string{"agent-notify"}}}}
+	_, original, err := svc.PublishConfirmedIntent(ctx, req)
+	if err != nil || original == nil {
+		t.Fatalf("publish A: %+v %v", original, err)
+	}
+	gen, finished, err := svc.FinishConfirmedIntent(ctx, req, original)
+	if err != nil || !finished {
+		t.Fatalf("finish A: generation=%d finished=%v err=%v", gen, finished, err)
+	}
+	req.ExpectedGeneration = gen
+	published, newer, err := svc.PublishConfirmedIntent(ctx, req)
+	if err != nil || newer == nil || newer.ID == original.ID {
+		t.Fatalf("publish C: %+v %v", newer, err)
+	}
+	before, err := os.ReadFile(IntentPath(b.ControlRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gen, finished, err = svc.FinishConfirmedIntent(ctx, req, original)
+	if err != nil || finished || gen != published.Generation {
+		t.Fatalf("stale finish: generation=%d finished=%v err=%v", gen, finished, err)
+	}
+	after, err := os.ReadFile(IntentPath(b.ControlRoot))
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("stale finish changed C payload: %q %v", after, err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
+	if err != nil || snap.Ledger.Generation != published.Generation || snap.Ledger.PendingMutation == nil || *snap.Ledger.PendingMutation != *newer {
+		t.Fatalf("stale finish changed C reservation: %+v %v", snap.Ledger, err)
+	}
+}
+
+func TestIntentPatchRefusesNewerReservation(t *testing.T) {
+	for _, operation := range []string{"global_config", "receipt", "external_uninstall"} {
+		t.Run(operation, func(t *testing.T) {
+			b, ledger := bindingFixture(t)
+			ctx := testCtx(t)
+			svc := Service{}
+			req := ConfirmedIntent{ControlRoot: b.ControlRoot, RuntimeRoot: b.RuntimeRoot, Owner: b.Owner,
+				ExpectedGeneration: ledger.Generation, Action: "install", Stage: "confirmed",
+				Targets: []IntentTarget{{Client: "codex", InstallationID: b.InstallationID, Units: []string{"agent-notify"}}}}
+			_, original, err := svc.PublishConfirmedIntent(ctx, req)
+			if err != nil || original == nil {
+				t.Fatalf("publish A: %v", err)
+			}
+			gen, finished, err := svc.FinishConfirmedIntent(ctx, req, original)
+			if err != nil || !finished {
+				t.Fatalf("finish A: %v", err)
+			}
+			req.ExpectedGeneration = gen
+			published, newer, err := svc.PublishConfirmedIntent(ctx, req)
+			if err != nil || newer == nil || newer.ID == original.ID {
+				t.Fatalf("publish C: %+v %v", newer, err)
+			}
+			before, err := os.ReadFile(IntentPath(b.ControlRoot))
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch operation {
+			case "global_config":
+				err = svc.PatchIntentGlobalConfig(ctx, b.ControlRoot, b.RuntimeRoot, b.Owner, b.InstallationID, b.GlobalConfig, original)
+			case "receipt":
+				err = svc.PatchIntentReceipt(ctx, b.ControlRoot, b.RuntimeRoot, b.Owner, "codex", "stale-receipt", original)
+			case "external_uninstall":
+				err = svc.PatchIntentExternalUninstalled(ctx, b.ControlRoot, b.RuntimeRoot, b.Owner, original)
+			}
+			if !errors.Is(err, ErrConcurrentChange) {
+				t.Fatalf("stale patch accepted: %v", err)
+			}
+			after, err := os.ReadFile(IntentPath(b.ControlRoot))
+			if err != nil || string(after) != string(before) {
+				t.Fatalf("new intent changed: %q %v", after, err)
+			}
+			snap, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
+			if err != nil || snap.Ledger.Generation != published.Generation || snap.Ledger.PendingMutation == nil || *snap.Ledger.PendingMutation != *newer {
+				t.Fatalf("new reservation changed: %+v %v", snap.Ledger, err)
+			}
+		})
 	}
 }

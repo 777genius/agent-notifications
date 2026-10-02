@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.46.1] - 2026-10-01
+
+### Changed
+- Public bootstrap and Claude `/init` now use the portable UAP installer wizard, preserving selected profiles, explicit channel consent, opt-outs and recovery ([#270](https://github.com/777genius/agent-notifications/pull/270), [#105](https://github.com/777genius/agent-notifications/issues/105)).
+
+### Fixed
+- Failed hook installations keep a private log for each attempt and show Claude a short, ANSI-free error with the log path. Codex hooks remain silent, successful attempts delete their own logs, and unavailable logging does not prevent installation.
+- Updating between versioned Claude plugin caches no longer fails with `managed fingerprint changed without transaction` when the retired cache has been restored to the marketplace checkout's contents, whose skill file mode and launcher link differ from what the installer wrote. Files under the cache being retired are de-owned whatever changed in them; a cache still shared with a portable binding keeps the strict check ([#278](https://github.com/777genius/agent-notifications/issues/278)).
+- The hook wrapper retires a version's `install-failed` stamp once it has established that the version's binary is in place (after a successful install, a version probe, or a version-cache hit), so a later failure of the same version is reported again instead of staying silent ([#278](https://github.com/777genius/agent-notifications/issues/278)).
+
+## [1.46.0] - 2026-09-30
+
+### Added
+- **OpenCode notifications** for root-session completion, questions, permission requests and terminal errors through the published, pinned UAP OpenCode events adapter 0.1.0 ([#267](https://github.com/777genius/agent-notifications/pull/267)).
+- Managed OpenCode install, update and removal with explicit desktop and webhook consent. Removal revokes delivery even from an already-loaded plugin ([#268](https://github.com/777genius/agent-notifications/pull/268), [#269](https://github.com/777genius/agent-notifications/pull/269)).
+- OpenCode selection and channel consent in the guided installer, official OpenCode branding, and setup guidance across the landing's 12 languages, README and documentation.
+- OpenCode support on macOS arm64/amd64, Linux arm64/amd64 and Windows amd64, qualified with OpenCode 1.18.33. Native lifecycle checks cover completion webhook delivery, update and revocation on all five targets.
+
+### Platform notes
+- OpenCode sends generic notifications. Plan and review events, sound and click-to-focus/navigation are not part of this integration; delivery when the OpenCode process exits is best effort.
+- Desktop banners were observed on macOS arm64 and Linux X11 with dunst. Visual delivery on the remaining native CI targets has not been observed.
+
 ## [1.45.18] - 2026-09-27
 
 ### Added
@@ -281,7 +303,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `wait-all` — suppresses lead's Stop notification, waits until all teammates go idle, then sends a single consolidated notification
   - `never` — completely silent in team mode
 - **TeammateIdle hook** — new hook event for tracking when team members finish their work
-- **Install script promo** — shows link to [claude_agent_teams_ui](https://github.com/777genius/claude_agent_teams_ui) after installation
+- **Install script promo** — shows link to [Agent Teams AI](https://github.com/777genius/agent-teams-ai) after installation
 
 ### Removed
 - **OSC terminal notifications** — removed the `internal/osc` package (OSC escape sequences for SSH/tmux). Feature proved unreliable across terminal emulators
