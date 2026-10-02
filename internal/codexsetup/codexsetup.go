@@ -427,7 +427,7 @@ func Run(opts Options) (Result, error) {
 		files = append(files, aliases...)
 	}
 	prepare := func() ([]installruntime.File, error) {
-		snapshot, _ := installruntime.ReadInstalledSnapshot(opts.ControlRoot)
+		snapshot, snapshotErr := installruntime.ReadInstalledSnapshot(opts.ControlRoot)
 		var extra []installruntime.File
 		for _, skillRoot := range []string{filepath.Join(destination, "skills"), filepath.Join(destination, "portable-package", "skills")} {
 			for _, file := range files {
@@ -445,6 +445,9 @@ func Run(opts Options) (Result, error) {
 					return nil, err
 				}
 				if before.Exists {
+					if snapshotErr != nil {
+						return nil, snapshotErr
+					}
 					owned, ok := installruntime.OwnedFile(snapshot.Ledger, sibling)
 					if snapshot.Recovery || !ok || before.Link != "" || owned != before {
 						return nil, fmt.Errorf("sibling skill is not an unchanged owned regular file: %s", sibling)
