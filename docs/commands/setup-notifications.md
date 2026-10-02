@@ -191,7 +191,14 @@ policy; adding Claude does not clear a Codex route. Claude informational calls u
 request-level `navigation: "none"` and an explicit request ID.
 
 Bootstrap, Claude init, and `setup-codex` enable agent-notify by default
-(`--agent-notify`, with `--navigation none --allow-unknown-caller true --allow-caller-asserted false` when no route is supplied).
+(`--agent-notify`). For a fresh macOS Codex or combined bootstrap install, an
+omitted route uses the registered official Codex Desktop application after
+verifying its bundle ID and Developer ID signature. Clicking notifications then
+opens the originating chat. Existing navigation policy and explicit route choices
+are preserved. If the verified application is unavailable, bootstrap reports the
+fallback to `--navigation none`. Claude-only bootstrap, Claude init, and direct
+`setup-codex` use `--navigation none` when no route is supplied. All these defaults
+pass `--allow-unknown-caller true --allow-caller-asserted false` explicitly.
 Pass `--skip-agent-notify` to keep hooks-only setup. If agent-notify
 configure fails after a successful install, the installer reports the
 error and leaves hooks/plugin in place; retry
@@ -201,6 +208,12 @@ preserves intent after the MCP entry exists. `--request-permission` is optional 
 result continues to enable. Otherwise setup reads permission status without prompting
 and reports it separately from saved intent. No notification is sent. Registration preserves client disable
 and tool restrictions and still requires client activation.
+
+On macOS, managed installs publish `bin/AgentNotifications.app` for helper
+discovery and reconcile LaunchServices after the runtime commit. Known obsolete
+helper registrations inside installed runtime roots are removed; bundle files
+and retained callback generations remain intact. A registration failure is
+reported as a warning without rolling back the installed runtime.
 
 Global settings use the path reported by `claude-notifications config path`; existing legacy settings at `$HOME/.claude/claude-notifications-go/config.json` remain selected when present.
 Claude MCP lives at `$HOME/.claude.json`, or absolute `$CLAUDE_CONFIG_DIR/.claude.json`.

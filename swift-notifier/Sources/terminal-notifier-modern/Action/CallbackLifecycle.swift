@@ -22,12 +22,17 @@ final class CallbackToken {
     func cancel() { lock.lock(); cancelled = true; lock.unlock() }
 }
 
+enum CallbackPhase: String {
+    case preflight_started, preflight_finished, open_submitted, open_completed
+}
+
 struct CallbackDiagnostic: Codable {
     let event: String
     let correlationID: UUID
     let outcome: String?
+    var elapsedSeconds: Double? = nil
     var json: String {
-        // Only fixed event/outcome enums and a UUID enter this encoder.
+        // Only fixed event/outcome enums, a UUID and monotonic elapsed time enter this encoder.
         String(decoding: try! JSONEncoder().encode(self), as: UTF8.self)
     }
 }
@@ -37,9 +42,12 @@ struct CallbackDiagnostic: Codable {
 final class CallbackWork {
     let token: CallbackToken
     private let acquire: (@escaping () -> Void) -> (() -> Void)
-    init(token: CallbackToken, acquire: @escaping (@escaping () -> Void) -> (() -> Void)) {
-        self.token = token; self.acquire = acquire
+    private let phase: (CallbackPhase) -> Void
+    init(token: CallbackToken, phase: @escaping (CallbackPhase) -> Void = { _ in },
+         acquire: @escaping (@escaping () -> Void) -> (() -> Void)) {
+        self.token = token; self.phase = phase; self.acquire = acquire
     }
+    func recordPhase(_ value: CallbackPhase) { phase(value) }
     func own(cancel: @escaping () -> Void) -> () -> Void { acquire(cancel) }
 }
 
@@ -52,6 +60,7 @@ final class CallbackLifecycle {
     private struct Pending {
         let token: CallbackToken
         let correlation: UUID
+        let started: Double
         let completion: () -> Void
     }
     private struct Owned { let callback: UUID; let cancel: () -> Void }
@@ -127,9 +136,12 @@ final class CallbackLifecycle {
             operation(done, { work.token.isActive })
         }
     }
-    func acceptOwned(correlation: UUID = UUID(), completion: @escaping () -> Void,
+    func acceptOwned(correlation: UUID = UUID(), budget: Double = 10, completion: @escaping () -> Void,
                      operation: (@escaping (CallbackOutcome) -> Void, CallbackWork) -> Void) {
-        diagnostic(CallbackDiagnostic(event: "callback_received", correlationID: correlation, outcome: nil).json)
+        precondition(budget > 0 && budget.isFinite)
+        let started = now()
+        diagnostic(CallbackDiagnostic(event: "callback_received", correlationID: correlation,
+                                      outcome: nil, elapsedSeconds: 0).json)
         guard !stopped else {
             diagnostic(CallbackDiagnostic(event: "callback_terminal", correlationID: correlation,
                                           outcome: CallbackOutcome.ignored.rawValue).json)
@@ -137,10 +149,14 @@ final class CallbackLifecycle {
         }
         generation += 1
         let id = UUID()
-        let token = CallbackToken(deadline: now() + 10, now: now)
-        callbacks[id] = Pending(token: token, correlation: correlation, completion: completion)
-        schedule(10) { [weak self] in self?.finish(id, outcome: .open_unknown) }
-        let work = CallbackWork(token: token) { [self] cancel in
+        let token = CallbackToken(deadline: started + budget, now: now)
+        callbacks[id] = Pending(token: token, correlation: correlation, started: started, completion: completion)
+        schedule(budget) { [weak self] in self?.finish(id, outcome: .open_unknown) }
+        let work = CallbackWork(token: token, phase: { [weak self] phase in
+            guard let self = self, token.isActive, self.callbacks[id] != nil else { return }
+            self.diagnostic(CallbackDiagnostic(event: phase.rawValue, correlationID: correlation,
+                outcome: nil, elapsedSeconds: max(0, self.now() - started)).json)
+        }) { [self] cancel in
             let child = UUID()
             owned[child] = Owned(callback: id, cancel: cancel)
             generation += 1
@@ -161,7 +177,8 @@ final class CallbackLifecycle {
         let cancellations = owned.values.filter { $0.callback == id }.map { $0.cancel }
         cancellations.forEach { $0() }
         diagnostic(CallbackDiagnostic(event: "callback_terminal", correlationID: pending.correlation,
-                                      outcome: result.rawValue).json)
+                                      outcome: result.rawValue,
+                                      elapsedSeconds: max(0, now() - pending.started)).json)
         pending.completion()
         finishingCallbacks -= 1
         armIdle()

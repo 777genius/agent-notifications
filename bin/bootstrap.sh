@@ -1170,6 +1170,42 @@ publish_setup_summary() {
 
 # ──────────────────────────────────────────────
 
+# Keep macOS discovery read-only and independent of PATH or application names.
+# The small command boundary also lets shell fixtures avoid querying the user's
+# LaunchServices database or signing tools.
+bootstrap_macos_command() {
+    "$@"
+}
+
+bootstrap_default_codex_app() {
+    local app physical_app
+    app=$(bootstrap_macos_command /usr/bin/osascript -l JavaScript -e '
+ObjC.import("AppKit");
+var url = $.NSWorkspace.sharedWorkspace.URLForApplicationWithBundleIdentifier("com.openai.codex");
+var path = ObjC.unwrap(url.path);
+if (typeof path !== "string" || path.length === 0) throw new Error("Codex application unavailable");
+path;
+' </dev/null 2>/dev/null) || return 1
+    # LaunchServices output is untrusted. Resolve symlinks before pinning the
+    # app, and reject ambiguous/control-containing paths before verification.
+    case "$app" in
+        /*.app) ;;
+        *) return 1 ;;
+    esac
+    case "$app" in *[[:cntrl:]]*|*..*) return 1 ;; esac
+    [ "${#app}" -le 1024 ] && [ -d "$app" ] || return 1
+    physical_app=$(cd -P "$app" && pwd -P) || return 1
+    case "$physical_app" in /*.app) ;; *) return 1 ;; esac
+    case "$physical_app" in *[[:cntrl:]]*|*..*) return 1 ;; esac
+    [ "${#physical_app}" -le 1024 ] || return 1
+    # Same offline Developer ID requirement as the configure CLI. An app name
+    # or a registered bundle ID alone does not establish the official identity.
+    bootstrap_macos_command /usr/bin/codesign --verify --strict --all-architectures -R \
+        '=anchor apple generic and identifier "com.openai.codex" and certificate leaf[subject.OU] = "2DC432GLL2" and certificate leaf[field.1.2.840.113635.100.6.1.13] exists' \
+        "$physical_app" </dev/null >/dev/null 2>&1 || return 1
+    printf '%s\n' "$physical_app"
+}
+
 # Match the CLI contract before any installation work. Incomplete consent or
 # mixed none/local pairs must not reach configure as a printed retry.
 complete_configure_route() {
@@ -1192,7 +1228,21 @@ complete_configure_route() {
         i=$((i + 1))
     done
     if [ -z "$nav" ] && [ -z "$app" ] && [ -z "$team" ] && [ -z "$unknown" ] && [ -z "$asserted" ]; then
-        CONFIGURE_ARGS+=(--navigation none --allow-unknown-caller true --allow-caller-asserted false)
+        if { [ "${LEGACY_PRODUCT:-$PRODUCT}" = codex ] || [ "${LEGACY_PRODUCT:-$PRODUCT}" = both ]; } && [ "$(uname -s)" = Darwin ]; then
+            if app=$(bootstrap_default_codex_app); then
+                CONFIGURE_ARGS+=(--app "$app" --team-id 2DC432GLL2)
+                echo "Verified Codex Desktop default: $app. Existing navigation policy is preserved." >&2
+            else
+                CONFIGURE_ARGS+=(--navigation none)
+                echo "No registered, verified official Codex Desktop app found; defaulting to navigation none. Existing navigation policy is preserved." >&2
+            fi
+        else
+            CONFIGURE_ARGS+=(--navigation none)
+            if [ "${LEGACY_PRODUCT:-$PRODUCT}" = codex ] || [ "${LEGACY_PRODUCT:-$PRODUCT}" = both ]; then
+                echo "Codex Desktop default navigation requires macOS; defaulting to navigation none. Existing navigation policy is preserved." >&2
+            fi
+        fi
+        CONFIGURE_ARGS+=(--allow-unknown-caller true --allow-caller-asserted false)
         case " ${CONFIGURE_ARGS[*]-} " in *" --preserve-policy "*) ;; *) CONFIGURE_ARGS+=(--preserve-policy) ;; esac
         return 0
     fi

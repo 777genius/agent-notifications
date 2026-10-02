@@ -65,17 +65,17 @@ jobs:
           }
         shell: pwsh
 
-      - name: Qualify Gemini cache without cross-package contention
+      - name: Qualify observation caches without cross-package contention
         # Keep real first claims and interprocess assertions under the unchanged
         # 250ms production budget, separate from other race-instrumented packages.
-        run: go test -v -race -coverprofile=coverage-gemini.txt -covermode=atomic ./internal/geminievent
+        run: go test -p 1 -v -race -coverprofile=coverage-gemini.txt -covermode=atomic ./internal/geminievent ./internal/notification/observation
         shell: bash
 
       - name: Run remaining tests
         run: |
           set -euo pipefail
           packages=$(go list ./...)
-          remaining_packages=$(printf '%s\n' "$packages" | grep -Fvx 'github.com/777genius/agent-notifications/internal/geminievent')
+          remaining_packages=$(printf '%s\n' "$packages" | grep -Fvx -e 'github.com/777genius/agent-notifications/internal/geminievent' -e 'github.com/777genius/agent-notifications/internal/notification/observation')
           mapfile -t remaining <<< "$remaining_packages"
           go test -v -race -coverprofile=coverage-rest.txt -covermode=atomic "${remaining[@]}"
           { head -n 1 coverage-rest.txt; tail -n +2 coverage-rest.txt; tail -n +2 coverage-gemini.txt; } > coverage.txt

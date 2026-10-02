@@ -71,6 +71,8 @@ type Options struct {
 	DryRun bool
 }
 
+var reconcileNativeRegistration = installruntime.ReconcileNativeRegistration
+
 // Result describes what a setup run did (or would do).
 type Result struct {
 	CodexHome   string
@@ -78,8 +80,9 @@ type Result struct {
 	HooksPath   string
 	BackupPath  string
 	Events      []string
-	Replaced    bool // an earlier registration was updated in place
-	ForeignKept int  // hook entries owned by other tools that were preserved
+	Replaced    bool     // an earlier registration was updated in place
+	Warnings    []string // post-success maintenance failures
+	ForeignKept int      // hook entries owned by other tools that were preserved
 }
 
 // hookHandler is one handler entry in hooks.json.
@@ -371,7 +374,7 @@ func Run(opts Options) (Result, error) {
 	}
 	var native *installruntime.NativeChange
 	if !opts.DryRun && !opts.Remove {
-		for _, name := range []string{"ClaudeNotifier.app", "terminal-notifier.app"} {
+		for _, name := range []string{"AgentNotifications.app", "ClaudeNotifier.app", "terminal-notifier.app"} {
 			candidate := filepath.Join(source, "bin", name)
 			if _, e := os.Stat(candidate); os.IsNotExist(e) {
 				continue
@@ -521,6 +524,14 @@ func Run(opts Options) (Result, error) {
 	})
 	if err != nil {
 		return Result{}, err
+	}
+	if !opts.Remove {
+		regCtx, regCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		warning := reconcileNativeRegistration(regCtx, opts.ControlRoot)
+		regCancel()
+		if warning != nil {
+			result.Warnings = append(result.Warnings, "runtime committed; native registration reconciliation incomplete: "+warning.Error())
+		}
 	}
 	if !opts.Remove && !self {
 		if err := dropStaleBinFiles(destination, files); err != nil {
@@ -1090,7 +1101,7 @@ func SortedEvents() []string {
 
 func runtimeBinary(name string) bool {
 	switch name {
-	case "terminal-notifier.app", "codex-hook-wrapper.sh", "codex-hook-wrapper.cmd", "hook-wrapper.sh", "install.sh", "claude-notifications", "agent-notifications", "claude-notifications.bat", "agent-notifications.bat", "claude-notifications.cmd", "agent-notifications.cmd", "ClaudeNotifier.app":
+	case "AgentNotifications.app", "terminal-notifier.app", "codex-hook-wrapper.sh", "codex-hook-wrapper.cmd", "hook-wrapper.sh", "install.sh", "claude-notifications", "agent-notifications", "claude-notifications.bat", "agent-notifications.bat", "claude-notifications.cmd", "agent-notifications.cmd", "ClaudeNotifier.app":
 		return true
 	}
 	for _, platform := range []string{"linux", "darwin", "windows"} {

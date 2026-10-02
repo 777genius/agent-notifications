@@ -3311,7 +3311,7 @@ type wizardProbeImage struct {
 	sha256 [32]byte
 }
 
-var compiledWizardProbe = sync.OnceValues(func() (image wizardProbeImage, err error) {
+func compileWizardProbe(t *testing.T) (image wizardProbeImage, err error) {
 	dir, err := os.MkdirTemp("", "TEST-wizard-probe-build-")
 	if err != nil {
 		return image, err
@@ -3366,21 +3366,32 @@ func main() {
 		return image, err
 	}
 	out := filepath.Join(dir, "probe")
-	cmd := exec.Command("go", "build", "-o", out, src)
-	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "build", "-p", "2", "-buildvcs=false", "-o", out, src)
+	cmd.Env = append(testenv.Build(t, filepath.Join(dir, "build-home")), "GOTOOLCHAIN=local")
 	if body, err := cmd.CombinedOutput(); err != nil {
-		return image, fmt.Errorf("build probe: %s %w", body, err)
+		return image, fmt.Errorf("build probe: %s: %w", body, err)
 	}
 	body, err := os.ReadFile(out)
 	if err != nil {
 		return image, err
 	}
 	return wizardProbeImage{data: string(body), sha256: sha256.Sum256(body)}, nil
-})
+}
+
+var wizardProbeBuild struct {
+	once  sync.Once
+	image wizardProbeImage
+	err   error
+}
 
 func buildWizardProbe(t *testing.T) string {
 	t.Helper()
-	image, err := compiledWizardProbe()
+	wizardProbeBuild.once.Do(func() {
+		wizardProbeBuild.image, wizardProbeBuild.err = compileWizardProbe(t)
+	})
+	image, err := wizardProbeBuild.image, wizardProbeBuild.err
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -83,6 +83,9 @@ func runSetupCodex(args []string) {
 		return
 	}
 
+	for _, warning := range result.Warnings {
+		fmt.Fprintf(os.Stderr, "setup-codex warning: %s\n", warning)
+	}
 	fmt.Println("Codex notifications registered.")
 	fmt.Printf("  plugin copy: %s\n", result.InstallDir)
 	fmt.Printf("  hooks file:  %s\n", result.HooksPath)
