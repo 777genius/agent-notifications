@@ -1058,6 +1058,8 @@ else:
 // it; there is no production hook, helper substitution or timing-based race.
 func (f *bootstrapFixture) barrier(function string) (string, func()) {
 	f.t.Helper()
+	// Stream the boundary before releasing it; normal stages buffer diagnostics.
+	f.env = append(f.env, "BOOTSTRAP_VERBOSE=1")
 	release := filepath.Join(f.project, "release-"+function)
 	visible := "TEST boundary " + function
 	f.script = strings.Replace(f.script, function+"() {", "fixture_"+function+"() {", 1)

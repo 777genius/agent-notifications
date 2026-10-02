@@ -498,7 +498,8 @@ assert_eq() {
 assert_contains() {
     local haystack="$1" needle="$2" msg="$3"
     TESTS_RUN=$((TESTS_RUN + 1))
-    if echo "$haystack" | grep -qE "$needle"; then
+    # grep -q may close early; avoid producer SIGPIPE under pipefail.
+    if grep -qE "$needle" <<< "$haystack"; then
         echo -e "  ${GREEN}✓${NC} $msg"
         TESTS_PASSED=$((TESTS_PASSED + 1))
         return 0
@@ -515,7 +516,7 @@ assert_contains() {
 assert_not_contains() {
     local haystack="$1" needle="$2" msg="$3"
     TESTS_RUN=$((TESTS_RUN + 1))
-    if ! echo "$haystack" | grep -qE "$needle"; then
+    if ! grep -qE "$needle" <<< "$haystack"; then
         echo -e "  ${GREEN}✓${NC} $msg"
         TESTS_PASSED=$((TESTS_PASSED + 1))
         return 0

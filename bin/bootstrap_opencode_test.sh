@@ -248,8 +248,8 @@ for attempt in range(2):
     assert len(set(c['Commands'][0] for c in ledger['Consumers'].values())) == 1, 'observer binary fork'
 # Execute the actual command printed by the candidate bootstrap after changing
 # the default config environment. The other profile must stay byte-identical.
-removal = next(line.removeprefix('Remove: ') for line in result.stdout.splitlines()
-               if line.startswith('Remove: ') and 'setup-gemini' in line)
+removal = next(line.strip().removeprefix('Remove: ') for line in result.stdout.splitlines()
+               if line.strip().startswith('Remove: ') and 'setup-gemini' in line)
 removal_args = shlex.split(removal)
 assert len(removal_args) == 5 and removal_args[1:4] == ['setup-gemini','remove','--control-root'], removal
 assert pathlib.Path(removal_args[0]).resolve() == installed.resolve(), removal
@@ -322,6 +322,10 @@ shutil.copytree(os.environ['TEST_SOURCE'],plugin,dirs_exist_ok=True)
                             '--skip-agent-notify','--webhook'])],cwd=all_four,env=all_env,
                             text=True,capture_output=True,timeout=90)
     assert result.returncode == 0, result.stdout+'\n'+result.stderr
+    assert result.stdout.count('Installation complete') == 1, result.stdout
+    for client in ('Claude Code', 'Codex', 'OpenCode', 'Gemini CLI'):
+        assert client + ' - installed;' in result.stdout, result.stdout
+    assert 'Delivery has not been verified.' in result.stdout, result.stdout
     claude_home, codex_home = pathlib.Path(all_env['CLAUDE_CONFIG_DIR']), pathlib.Path(all_env['CODEX_HOME'])
     registered = json.loads((claude_home/'plugins/installed_plugins.json').read_text())['plugins']['claude-notifications-go@claude-notifications-go'][0]
     assert registered['version'] == version[1:] and (pathlib.Path(registered['installPath'])/'bin'/name).read_bytes() == binary.read_bytes()
@@ -347,7 +351,7 @@ if [ "$os" = windows ]; then
     printf '{"foreign":{"TEST":"keep"}}\n' > "$gemini_profile/.gemini/settings.json"
     export GEMINI_CLI_HOME="$(cygpath -w "$gemini_profile")"
     install_gemini > "$SANDBOX/gemini-output"
-    printed=$(sed -n 's/^Remove: //p' "$SANDBOX/gemini-output")
+    printed=$(sed -n 's/^[[:space:]]*Remove: //p' "$SANDBOX/gemini-output")
     other_default="$SANDBOX/different default TEST config"
     mkdir -p "$other_default"
     printf 'untouched default\n' > "$other_default/canary"

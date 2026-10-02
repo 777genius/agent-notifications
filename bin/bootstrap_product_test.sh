@@ -447,7 +447,7 @@ LIFECYCLE_ARGV
     chmod +x "$SANDBOX/gemini runtime/claude-notifications-linux-amd64"
     for label_action in 'Inspect registration and consent:|inspect' 'Remove:|remove'; do
         label=${label_action%|*}; action=${label_action#*|}
-        printed=$(sed -n "s/^$label //p" "$SANDBOX/gemini-output")
+        printed=$(sed -n "s/^[[:space:]]*$label //p" "$SANDBOX/gemini-output")
         [ -n "$printed" ]
         XDG_CONFIG_HOME="$SANDBOX/other default" bash -c "$printed"
         expected=$(printf '%s\n' setup-gemini "$action" --control-root "$gemini_control")
@@ -463,9 +463,9 @@ LIFECYCLE_ARGV
     touch "$_CONFIG_STAGE/ClaudeNotifier.app.managed-runtime.json"
     cp "$SANDBOX/gemini runtime/claude-notifications-linux-amd64" "$SANDBOX/gemini runtime/claude-notifications-darwin-amd64"
     install_gemini > "$SANDBOX/gemini-output"
-    for label_action in 'Check permission:|permission-status' 'Grant permission:|request-permission'; do
+    for label_action in 'Check permission:|permission-status' 'Grant if needed:|request-permission'; do
         label=${label_action%|*}; action=${label_action#*|}
-        printed=$(sed -n "s/^$label //p" "$SANDBOX/gemini-output")
+        printed=$(sed -n "s/^[[:space:]]*$label //p" "$SANDBOX/gemini-output")
         [ -n "$printed" ]
         XDG_CONFIG_HOME="$SANDBOX/other default" bash -c "$printed"
         expected=$(printf '%s\n' setup-gemini "$action" --control-root "$gemini_control")
@@ -496,7 +496,7 @@ exit "${GEMINI_REMOVE_EXIT:-0}"
 WINDOWS_REMOVER_ARGV
     chmod +x "$SANDBOX/gemini runtime/claude-notifications-windows-amd64.exe"
     install_gemini > "$SANDBOX/gemini-output"
-    printed=$(sed -n 's/^Remove: //p' "$SANDBOX/gemini-output")
+    printed=$(sed -n 's/^[[:space:]]*Remove: //p' "$SANDBOX/gemini-output")
     XDG_CONFIG_HOME="$SANDBOX/other default" bash -c "$printed"
     expected=$(printf '%s\n' setup-gemini remove --control-root "$native_control")
     [ "$(cat "$GEMINI_LIFECYCLE_TRACE")" = "$expected" ] || { echo "Windows remover lost native control-root argv" >&2; exit 1; }
@@ -519,7 +519,7 @@ check_prerequisites() { :; }; detect_platform() { :; }
 resolve_bootstrap_release() { BOOTSTRAP_TAG=v1.43.2; }
 install_claude() { [ "$CN_PRODUCT" = claude ]; PLUGIN_ROOT='bundle space'; echo claude >> "$SANDBOX/calls"; }
 install_codex() { [ "${CN_PRODUCT:-}" = sentinel ]; echo codex >> "$SANDBOX/calls"; }
-stage_historical_baselines() { :; }; stage_config_helper() { :; }; config_preflight() { :; }; initialize_config() { :; }
+stage_historical_baselines() { :; }; stage_config_helper() { _CONFIG_STAGE=$(mktemp -d); }; config_preflight() { :; }; initialize_config() { :; }
 export CN_PRODUCT=sentinel
 for product in claude codex both; do
     : > "$SANDBOX/calls"
@@ -542,7 +542,7 @@ mkdir -p "$PLUGIN_ROOT/portable-package"
 printf '{}' > "$PLUGIN_ROOT/portable-package/plugin.json"
 CONFIGURE_BINARY="$SANDBOX/capture-wizard"
 export WIZARD_CAPTURE="$SANDBOX/wizard-args"
-printf '%s\n' '#!/bin/bash' 'if [ "$1 $2" = "setup-notifications --help" ]; then echo "--policy-only --preserve-enabled"; exit 0; fi' 'printf "%s\n" "$@" > "$WIZARD_CAPTURE"' > "$CONFIGURE_BINARY"
+printf '%s\n' '#!/bin/bash' 'if [ "$1 $2" = "setup-notifications --help" ]; then echo "--policy-only --preserve-enabled"; exit 0; fi' 'if [ "${4:-}" = inspect ]; then printf '"'"'{"targets":[]}\n'"'"'; exit 0; fi' 'printf "%s\n" "$@" > "$WIZARD_CAPTURE"' > "$CONFIGURE_BINARY"
 chmod +x "$CONFIGURE_BINARY"
 configure_agent_policy() { return 0; }
 bootstrap_abs_command() { return 1; }
@@ -893,7 +893,7 @@ assert (live/'bin/claude-notifications').read_text() == 'stale'
 # Menu routing for Claude/both uses explicit adapters; Codex below exercises
 # the complete bootstrap HTTP/staging path with fake runtime assets.
 dispatch = (root / 'bin/bootstrap.sh').read_text(encoding='utf-8').replace('main "$@"', '')
-dispatch += '\ncheck_prerequisites() { :; }\nresolve_bootstrap_release() { :; }\nstage_historical_baselines() { :; }\nstage_config_helper() { :; }\nconfig_preflight() { :; }\ninitialize_config() { :; }\ninstall_claude() { echo CLAUDE_ADAPTER; }\ninstall_codex() { echo CODEX_ADAPTER; }\nmain "$@"\n'
+dispatch += '\ncheck_prerequisites() { :; }\nresolve_bootstrap_release() { :; }\nstage_historical_baselines() { :; }\nstage_config_helper() { _CONFIG_STAGE=$(mktemp -d); }\nconfig_preflight() { :; }\ninitialize_config() { :; }\ninstall_claude() { echo CLAUDE_ADAPTER; }\ninstall_codex() { echo CODEX_ADAPTER; }\nmain "$@"\n'
 (web / 'dispatch.sh').write_bytes(dispatch.encode('utf-8'))
 # The native SelectMany UI is independently exercised against the actual
 # candidate by bootstrap_opencode_test.sh. This fixture checks shell routing.
@@ -903,10 +903,11 @@ for product, success in [('claude',True), ('codex',True), ('both',True), ('inval
     result = subprocess.run([bash,'-c',command],env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=20)
     output = result.stdout
     assert (result.returncode==0)==success, output.decode()
-    if product in ['claude','both']: assert b'CLAUDE_ADAPTER' in output
-    if product == 'claude': assert b'CODEX_ADAPTER' not in output
-    if product == 'both': assert b'CODEX_ADAPTER' in output
+    if product in ['claude','both']: assert b'Claude Code - installed' in output
+    if product == 'claude': assert b'Codex - installed' not in output
+    if product == 'both': assert b'Codex - installed' in output
     if product == 'invalid': assert b'CLAUDE_ADAPTER' not in output and b'CODEX_ADAPTER' not in output
+
 assert not list(pathlib.Path(env['TMPDIR']).glob('bootstrap-codex-*'))
 assert not list(pathlib.Path(env['TMPDIR']).glob('bootstrap-release-*'))
 # Protected flow E2E. Real shell orchestration and local downloads; explicit
@@ -1194,3 +1195,55 @@ print('protected flow fixtures passed (fake config CLI; real Go integration pend
 server.shutdown(); server.server_close()
 print('local HTTP / curl-pipe PTY adapter fixtures passed (fake installer and binary)')
 PY
+
+# Stage output is a public contract: success hides machine/binary banners but
+# preserves warnings and shell state; failure replays diagnostics and its code.
+(
+    emit_stage() { PLUGIN_ROOT=fixture-installed; printf 'Ready to use!\n{"generation":12}\n\033[33mwarning: extension needs activation\033[0m\n\033[33m  Log out and log back in, then run:\033[0m\n  gnome-extensions enable fixture@example.test\n'; printf 'phase prepare\nSetting up notifications: agent notify...\n' >&2; echo 'warning: fixture optional setup' >&2; }
+    run_setup_stage 'Installing fixture' emit_stage > "$SANDBOX/stage-ok.out" 2> "$SANDBOX/stage-ok.err"
+    [ "$PLUGIN_ROOT" = fixture-installed ]
+    grep -F 'Installing fixture...' "$SANDBOX/stage-ok.out"
+    if grep -E 'Ready to use|generation' "$SANDBOX/stage-ok.out"; then exit 1; fi
+    grep -F 'Log out and log back in' "$SANDBOX/stage-ok.out"
+    grep -F 'gnome-extensions enable fixture@example.test' "$SANDBOX/stage-ok.out"
+    grep -F 'warning: fixture optional setup' "$SANDBOX/stage-ok.err"
+    if grep -E 'phase prepare|Setting up notifications:' "$SANDBOX/stage-ok.err"; then exit 1; fi
+    # A real stage failure must return so captured recovery advice is replayed.
+    INSTALLED_JSON="$SANDBOX/missing-installed-plugins.json"
+    status=0
+    run_setup_stage 'Locating fixture plugin' find_plugin_root > "$SANDBOX/root-fail.out" 2> "$SANDBOX/root-fail.err" || status=$?
+    [ "$status" -eq 1 ]
+    grep -F 'installed_plugins.json not found' "$SANDBOX/root-fail.err"
+    grep -F 'Try restarting Claude Code' "$SANDBOX/root-fail.err"
+    emit_failure() { echo 'diagnostic stdout'; echo 'diagnostic stderr' >&2; return 3; }
+    status=0
+    run_setup_stage 'Failing fixture' emit_failure > "$SANDBOX/stage-fail.out" 2> "$SANDBOX/stage-fail.err" || status=$?
+    [ "$status" -eq 3 ]
+    grep -F 'diagnostic stdout' "$SANDBOX/stage-fail.err"
+    grep -F 'diagnostic stderr' "$SANDBOX/stage-fail.err"
+    BOOTSTRAP_VERBOSE=1 run_setup_stage 'Verbose fixture' emit_stage > "$SANDBOX/stage-verbose.out" 2>/dev/null
+    grep -F 'generation' "$SANDBOX/stage-verbose.out"
+    PRODUCT=both CLAUDE_AGENT_NOTIFY_STATUS='not configured by this run' CODEX_AGENT_NOTIFY_STATUS='not configured by this run'
+    print_iterm2_python_api_notice() { :; }
+    print_success > "$SANDBOX/summary.out"
+    grep -F 'Claude Code - installed; restart required.' "$SANDBOX/summary.out"
+    grep -F 'Codex - installed; restart required.' "$SANDBOX/summary.out"
+    grep -F 'Run /hooks in Codex' "$SANDBOX/summary.out"
+    grep -F 'not configured by this run' "$SANDBOX/summary.out"
+    grep -F 'Delivery has not been verified.' "$SANDBOX/summary.out"
+    [ "$(grep -c '^Installation complete$' "$SANDBOX/summary.out")" -eq 1 ]
+    BOOTSTRAP_SUMMARY_FILE="$SANDBOX/aggregate.txt"
+    print_success > "$SANDBOX/collected.out"
+    [ ! -s "$SANDBOX/collected.out" ]
+    grep -F 'Delivery has not been verified.' "$BOOTSTRAP_SUMMARY_FILE"
+)
+
+# Structured results distinguish a successful opt-out from an installed sibling.
+cat > "$SANDBOX/wizard-summary.json" <<'JSON_STATUS'
+{"outcome":"completed","targets":[{"client":"claude","unit":"agent-notify","outcome":"absent"},{"client":"codex","unit":"agent-notify","outcome":"installed"}]}
+JSON_STATUS
+[ "$(wizard_tool_status "$SANDBOX/wizard-summary.json" claude auto)" = 'not installed (existing opt-out kept)' ]
+[ "$(wizard_tool_status "$SANDBOX/wizard-summary.json" codex)" = installed ]
+[ "$(wizard_tool_status "$SANDBOX/wizard-summary.json" other)" = 'setup completed; status not checked' ]
+
+[ "$(wizard_tool_status "$SANDBOX/wizard-summary.json" claude true)" = 'not installed' ]
