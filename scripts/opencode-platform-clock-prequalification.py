@@ -422,7 +422,7 @@ def json_stream(raw):
 
 def build_helper(owned, env, root, commit, os_name, arch):
     version_raw = owned.command(['go', 'version'], root, env)
-    need(re.fullmatch(rb'go version go1\.26(?:\.[0-9]+)? ' + os_name.encode() + b'/' + arch.encode() + rb'\r?\n', version_raw), 'existing_pinned_native_go')
+    need(re.fullmatch(rb'go version go1\.27\.1 ' + os_name.encode() + b'/' + arch.encode() + rb'\r?\n', version_raw), 'existing_pinned_native_go')
     binary = root / ('helper.exe' if os_name == 'windows' else 'helper')
     command = ['go', 'build', '-trimpath', '-buildvcs=true', '-o', str(binary), './cmd/claude-notifications']
     owned.command(command, REPO, env, 300)

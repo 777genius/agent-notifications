@@ -48,7 +48,7 @@ jobs:
       - name: Set up existing pinned native compiler
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26'
+          go-version: '1.27.1'
           cache: false
       - name: Set up existing Python baseline
         uses: actions/setup-python@v7
