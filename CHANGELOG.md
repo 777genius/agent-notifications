@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- One OpenCode plugin supports V1 `server` and V2 `setup`, qualified against 1.18.33, 2.0.0 and 2.0.21. V2 notifications verify native ownership and settled execution, suppress child sessions, and recover after temporary ownership failures ([#294](https://github.com/777genius/agent-notifications/pull/294)). SDK 0.2.0 publication and registry qualification remain pending.
+
+### Changed
+- OpenCode V1 now consumes the 0.2.0 observer instead of 0.1.0: failed assistant steps produce terminal errors at idle, context overflow waits for recovery, and observed user association filters replayed completions. The V1 entry point remains supported.
+
 ## [1.46.1] - 2026-10-01
 
 ### Changed

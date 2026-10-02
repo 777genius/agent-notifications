@@ -1249,6 +1249,12 @@ def qualify(args, report):
                 report['scenarios'].append(outcome)
         setup(candidate, 'update', root, env, args, app)
         require(registration(root,plugin,managed,files['embedded'])==r, 'update_rotated_registration')
+        # PR294's post-update restart must still load the owned bundle and deliver
+        # a fresh root turn through the same strong native projection/effect checks.
+        owner.stop(server)
+        server = owner.launch([str(host),'serve','--hostname','127.0.0.1','--port',str(server_port)],root,env,'updated-host',cwd=projects[0])
+        readiness(server,base,projects[0],args.version,headers)
+        native_case(base,projects[0],root,'completion',v2,headers,provider,webhook,key,report)
         setup(candidate, 'recover', root, env, args)
         setup(candidate, 'remove', root, env, args)
         require(not plugin.exists() and not managed.exists() and server.poll() is None, 'remove_custody_or_host_survival')
