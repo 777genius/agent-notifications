@@ -41,7 +41,10 @@ func admissionFixture(t *testing.T) (context.Context, Admission, AdmissionReques
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	t.Cleanup(cancel)
-	base := t.TempDir()
+	base, err := installruntime.CanonicalPath(t.TempDir())
+	if err != nil {
+		t.Fatal("canonical private fixture root", err)
+	}
 	root := filepath.Join(base, "control")
 	runtimeRoot := filepath.Join(base, "runtime")
 	binary := filepath.Join(runtimeRoot, "claude-notifications-linux-amd64")
@@ -49,7 +52,7 @@ func admissionFixture(t *testing.T) (context.Context, Admission, AdmissionReques
 	bundle := []byte("inert private renderer fixture")
 	sum := sha256.Sum256(bundle)
 	reg := installruntime.OpenCodeRegistration{Origin: strings.Repeat("11", 32), Salt: strings.Repeat("22", 32), Namespace: strings.Repeat("33", 32), BundleSHA256: hex.EncodeToString(sum[:]), OriginBound: true}
-	_, err := installruntime.Commit(ctx, installruntime.Request{ControlRoot: root, RuntimeRoot: runtimeRoot, Owner: "existing-installer", ConsumerID: "opencode-notifications",
+	_, err = installruntime.Commit(ctx, installruntime.Request{ControlRoot: root, RuntimeRoot: runtimeRoot, Owner: "existing-installer", ConsumerID: "opencode-notifications",
 		Consumer: installruntime.Consumer{Registration: plugin, Commands: []string{binary, "opencode-event", "--protocol", "1"}, OpenCode: &reg},
 		Files:    []installruntime.File{{Path: plugin, Data: bundle, Mode: 0600}, {Path: binary, Data: []byte("inert " + installruntime.WriterProtocolMarker + installruntime.OpenCodeWriterProtocolMarker), Mode: 0700}}})
 	if err != nil {
@@ -336,6 +339,7 @@ func TestAdmissionStoreContentionExpiresOriginalBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(release)
 	tryAdmission(t, ctx, a, r, Expired)
 	release()
 	r.Provenance = freshProvenance(c.sample)

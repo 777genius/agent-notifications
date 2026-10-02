@@ -6,14 +6,17 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -3302,9 +3305,22 @@ func TestSetupWizardResumeOmittedUninstallFromPendingE2E(t *testing.T) {
 	}
 }
 
-func buildWizardProbe(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
+// Cache only immutable fixture bytes; every test still owns a distinct executable.
+type wizardProbeImage struct {
+	data   string
+	sha256 [32]byte
+}
+
+var compiledWizardProbe = sync.OnceValues(func() (image wizardProbeImage, err error) {
+	dir, err := os.MkdirTemp("", "TEST-wizard-probe-build-")
+	if err != nil {
+		return image, err
+	}
+	defer func() {
+		if cleanupErr := os.RemoveAll(dir); err == nil && cleanupErr != nil {
+			image, err = wizardProbeImage{}, cleanupErr
+		}
+	}()
 	src := filepath.Join(dir, "probe.go")
 	if err := os.WriteFile(src, []byte(`package main
 import (
@@ -3347,13 +3363,34 @@ func main() {
 	json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true})
 }
 `), 0600); err != nil {
-		t.Fatal(err)
+		return image, err
 	}
 	out := filepath.Join(dir, "probe")
 	cmd := exec.Command("go", "build", "-o", out, src)
 	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
 	if body, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build probe: %s %v", body, err)
+		return image, fmt.Errorf("build probe: %s %w", body, err)
+	}
+	body, err := os.ReadFile(out)
+	if err != nil {
+		return image, err
+	}
+	return wizardProbeImage{data: string(body), sha256: sha256.Sum256(body)}, nil
+})
+
+func buildWizardProbe(t *testing.T) string {
+	t.Helper()
+	image, err := compiledWizardProbe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "probe")
+	if err := os.WriteFile(out, []byte(image.data), 0700); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(out)
+	if err != nil || sha256.Sum256(body) != image.sha256 {
+		t.Fatal("materialized wizard probe differs from immutable fixture", err)
 	}
 	return out
 }

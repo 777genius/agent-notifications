@@ -12,6 +12,21 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <time.h>
+#include <mach/machine.h>
+
+#ifndef PROC_PIDARCHINFO
+// Apple xnu-10063.121.3 bsd/sys/proc_info_private.h, blob
+// da1088959ad360426d409d540d709d83b8ce710b: absent in some public SDKs.
+struct proc_archinfo {
+ cpu_type_t p_cputype;
+ cpu_subtype_t p_cpusubtype;
+};
+#define PROC_PIDARCHINFO 19
+_Static_assert(sizeof(cpu_type_t) == 4, "proc architecture CPU ABI");
+_Static_assert(sizeof(cpu_subtype_t) == 4, "proc architecture subtype ABI");
+_Static_assert(sizeof(struct proc_archinfo) == 8 &&
+ offsetof(struct proc_archinfo, p_cpusubtype) == 4, "proc architecture layout");
+#endif
 
 int an_runtime_process(int pid, struct an_runtime_process *out, char *path, size_t capacity) {
  struct proc_bsdinfo b = {0};

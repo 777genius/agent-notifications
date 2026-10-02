@@ -16,6 +16,11 @@ import (
 func privateRegistrationRequest(t *testing.T) (context.Context, Request) {
 	t.Helper()
 	ctx, r := request(t)
+	root, err := CanonicalPath(r.RuntimeRoot)
+	if err != nil {
+		t.Fatal("canonical private runtime root", err)
+	}
+	r.RuntimeRoot = root
 	r.ConsumerID = openCodeConsumer
 	bundle := []byte("inert private origin " + strings.Repeat("1", 64))
 	r.Consumer = Consumer{Registration: filepath.Join(r.RuntimeRoot, "agent-notifications.js"),
@@ -110,9 +115,13 @@ func TestOpenCodeCrashForwardRecovery(t *testing.T) {
 			if l, err = Commit(ctx, patch); err != nil {
 				t.Fatal(err)
 			}
+			coverage, err := os.MkdirTemp(r.ControlRoot, "crash-cover-")
+			if err != nil {
+				t.Fatal("owned crash-helper coverage directory", err)
+			}
 			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestOpenCodeCrashForwardRecovery$")
 			cmd.Dir = r.ControlRoot
-			cmd.Env = []string{"E1_PRIVATE_CRASH_ROOT=" + r.ControlRoot, "E1_PRIVATE_CRASH_MODE=" + mode}
+			cmd.Env = []string{"E1_PRIVATE_CRASH_ROOT=" + r.ControlRoot, "E1_PRIVATE_CRASH_MODE=" + mode, "GOCOVERDIR=" + coverage}
 			out, err := cmd.CombinedOutput()
 			exit, ok := err.(*exec.ExitError)
 			if !ok || exit.ExitCode() != 73 {

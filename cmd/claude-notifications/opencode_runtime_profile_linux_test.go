@@ -31,6 +31,11 @@ func nativeProfileFixture(t *testing.T) string {
 	dir := t.TempDir()
 	program := `package main
 import("os";"os/exec";"fmt";"time";"path/filepath";"encoding/json";"strings";"strconv")
+type profileDiagnosticWriter struct {file *os.File; remaining int}
+func(w *profileDiagnosticWriter) Write(p []byte)(int,error){
+ n:=len(p);if n>w.remaining {n=w.remaining}
+ if _,e:=w.file.Write(p[:n]);e!=nil {return 0,e};w.remaining-=n;return len(p),nil
+}
 func main(){
  image,_:=os.Executable();base:=filepath.Base(image);dir:=filepath.Dir(image)
  if len(os.Args)==2&&os.Args[1]=="serve" {
@@ -41,14 +46,15 @@ func main(){
   var launch struct {Helper,Input string;Environment []string}
   if json.Unmarshal(raw,&launch)!=nil {os.Exit(3)}
   output,err:=os.OpenFile(prefix+".receipt",os.O_CREATE|os.O_WRONLY,0600);if err!=nil {os.Exit(4)}
+  diagnostics,err:=os.OpenFile(prefix+".stderr",os.O_CREATE|os.O_WRONLY,0600);if err!=nil {os.Exit(5)}
   child:=exec.Command(launch.Helper,"-test.run=^TestRuntimeProfileHelperProcess$")
-  child.Env=launch.Environment;child.Stdin=strings.NewReader(launch.Input);child.Stdout=output;child.Stderr=output
+  child.Env=launch.Environment;child.Stdin=strings.NewReader(launch.Input);child.Stdout=output;child.Stderr=&profileDiagnosticWriter{diagnostics,4096}
   status:="ok"
   if child.Start()!=nil {status="failed"} else {
    os.WriteFile(prefix+".helper",[]byte(strconv.Itoa(child.Process.Pid)),0600)
    if child.Wait()!=nil {status="failed"}
   }
-  output.Close();os.WriteFile(prefix+".done",[]byte(status),0600)
+  output.Close();diagnostics.Close();os.WriteFile(prefix+".done",[]byte(status),0600)
   for {time.Sleep(time.Second)}
  }
  cwd,_:=os.Getwd();proof,_:=json.Marshal(map[string]any{"pid":os.Getpid(),"argv":os.Args[1:],"env":os.Environ(),"cwd":cwd})
@@ -130,7 +136,11 @@ func launchProfileHelper(t *testing.T, host, in runtimeProfileInput, raw, qualif
 		}
 		raw = string(body)
 	}
-	environment := append(descriptorEnvironment(in), "AN_TEST_PROFILE_HELPER=1", "TMPDIR="+os.Getenv("TMPDIR"))
+	coverage, err := os.MkdirTemp(host.ControlRoot, "helper-cover-")
+	if err != nil {
+		t.Fatal("owned helper coverage directory", err)
+	}
+	environment := append(descriptorEnvironment(in), "GOCOVERDIR="+coverage, "AN_TEST_PROFILE_HELPER=1", "TMPDIR="+os.Getenv("TMPDIR"))
 	if qualification != "" {
 		environment = append(environment, "AN_TEST_PROFILE_QUALIFICATION="+qualification)
 	}
@@ -153,6 +163,15 @@ func profileOutput(t *testing.T, host runtimeProfileInput) []byte {
 	status, err := os.ReadFile(prefix + ".done")
 	if err != nil || string(status) != "ok" {
 		t.Fatal("failure semantics broke valid closure transport", err, string(status))
+	}
+	diagnostics, err := os.Open(prefix + ".stderr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	diagnostic, err := io.ReadAll(io.LimitReader(diagnostics, 4097))
+	diagnostics.Close()
+	if err != nil || len(diagnostic) != 0 {
+		t.Fatalf("helper stderr must be empty and bounded: %q (%v)", diagnostic, err)
 	}
 	out, err := os.ReadFile(prefix + ".receipt")
 	if err != nil {
