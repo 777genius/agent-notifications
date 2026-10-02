@@ -15,6 +15,11 @@ on:
         type: choice
         options: [draft, public]
         default: draft
+      platform:
+        description: Qualify all platforms or only a failed Windows phase
+        type: choice
+        options: [all, windows-amd64]
+        default: all
       expected_stable:
         description: Latest stable must remain this tag
         default: v1.46.1
@@ -30,10 +35,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - {runner: ubuntu-latest, os: linux, arch: amd64}
-          - {runner: ubuntu-24.04-arm, os: linux, arch: arm64}
-          - {runner: windows-latest, os: windows, arch: amd64}
+        include: ${{ fromJSON(inputs.platform == 'windows-amd64' && '[{"runner":"windows-latest","os":"windows","arch":"amd64"}]' || '[{"runner":"ubuntu-latest","os":"linux","arch":"amd64"},{"runner":"ubuntu-24.04-arm","os":"linux","arch":"arm64"},{"runner":"windows-latest","os":"windows","arch":"amd64"}]') }}
     steps:
       - name: Validate exact source input
         shell: bash
