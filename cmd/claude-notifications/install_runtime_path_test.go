@@ -233,7 +233,11 @@ func assertRuntimePathTree(t *testing.T, root string, before map[string]runtimeP
 	}
 	for path, want := range before {
 		got, ok := after[path]
-		if !ok || !os.SameFile(want.info, got.info) || want.info.Mode() != got.info.Mode() ||
+		if !ok {
+			t.Errorf("refresh removed %s", path)
+			continue
+		}
+		if !os.SameFile(want.info, got.info) || want.info.Mode() != got.info.Mode() ||
 			!want.info.ModTime().Equal(got.info.ModTime()) || want.identity != got.identity {
 			t.Errorf("refresh mutated or replaced %s: sameFile=%v mode=%v/%v mtime=%v/%v identity=%+v/%+v", path, os.SameFile(want.info, got.info), want.info.Mode(), got.info.Mode(), want.info.ModTime(), got.info.ModTime(), want.identity, got.identity)
 		}
