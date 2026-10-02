@@ -3,6 +3,7 @@
 package opencodeinstall
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -14,6 +15,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
+	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 )
 
@@ -92,9 +94,23 @@ func stageWindowsShortcutForSetup(home, target string, desktop bool, ledger inst
 // staging for a fixed observer identity. It never publishes shortcut bytes.
 func StageWindowsShortcut(product DesktopProduct, home, target string, desktop bool, ledger installruntime.Ledger) (*installruntime.File, error) {
 	id, err := identityFor(product)
+	if err != nil || id.consumer == "" {
+		return nil, errors.New("verified portable Local key required")
+	}
+	return stageWindowsShortcutForIdentity(id, home, target, desktop, ledger)
+}
+
+// StageLocalWindowsShortcut takes the verified recorded portable key, never a
+// second fixed registration. Legacy product wrappers keep their fixed identities.
+func StageLocalWindowsShortcut(key, home, target string, desktop bool, ledger installruntime.Ledger) (*installruntime.File, error) {
+	id, err := localWindowsIdentity(key, ledger)
 	if err != nil {
 		return nil, err
 	}
+	return stageWindowsShortcutForIdentity(id, home, target, desktop, ledger)
+}
+
+func stageWindowsShortcutForIdentity(id desktopIdentity, home, target string, desktop bool, ledger installruntime.Ledger) (*installruntime.File, error) {
 	ownedPath, err := ownedWindowsShortcutPathFor(ledger, id)
 	if err != nil {
 		return nil, err
@@ -300,12 +316,59 @@ func windowsShortcutReadyFor(product DesktopProduct, controlRoot, executable, ho
 	if err != nil {
 		return err
 	}
+	if id.consumer == "" {
+		return errors.New("verified portable Local key required")
+	}
+	return windowsShortcutReadyIdentity(id, controlRoot, executable, home)
+}
+
+func WindowsLocalShortcutReady(key, controlRoot, executable string) error {
 	ledger, recovery, err := installruntime.ReadOwnership(controlRoot)
 	if err != nil {
 		return err
 	}
 	if recovery {
 		return errors.New("installation recovery required")
+	}
+	id, err := localWindowsIdentity(key, ledger)
+	if err != nil {
+		return err
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	return windowsShortcutReadyIdentity(id, controlRoot, executable, home)
+}
+
+func localWindowsIdentity(key string, ledger installruntime.Ledger) (desktopIdentity, error) {
+	id, _ := identityFor(CopilotVSCodeDesktop)
+	consumer, ok := ledger.Consumers[key]
+	var binding portable.Binding
+	if !ok || json.Unmarshal([]byte(consumer.Registration), &binding) != nil || binding.Integration != portable.CopilotVSCode ||
+		binding.ComponentID != ledger.ID || binding.Owner != ledger.Owner || !portable.ExactCommittedBinding(ledger, binding) {
+		return id, errors.New("verified portable Local consumer required")
+	}
+	want, _, _, err := binding.Registration()
+	if err != nil || key != want {
+		return id, errors.New("portable Local consumer key mismatch")
+	}
+	id.consumer = key
+	return id, nil
+}
+
+func windowsShortcutReadyIdentity(id desktopIdentity, controlRoot, executable, home string) error {
+	ledger, recovery, err := installruntime.ReadOwnership(controlRoot)
+	if err != nil {
+		return err
+	}
+	if recovery {
+		return errors.New("installation recovery required")
+	}
+	if id.appID == CopilotVSCodeToastAppID {
+		if _, err := localWindowsIdentity(id.consumer, ledger); err != nil {
+			return err
+		}
 	}
 	consumer, ok := ledger.Consumers[id.consumer]
 	if !ok || len(consumer.Commands) == 0 || !filepath.IsAbs(executable) || !sameWindowsFile(consumer.Commands[0], executable) {

@@ -17,6 +17,16 @@ import (
 type NativeInstallation interface {
 	Acquire(context.Context) (NativeLease, error)
 }
+
+// LocalAuthorityLease adds result-bearing checks to the one retained lease.
+// Release-only adapters remain compatible. Complete runs on every acquired
+// Local return, before Release; it must never acquire another installation lease.
+type LocalAuthorityLease interface {
+	NativeLease
+	BeforeHandoff(context.Context) error
+	Complete(context.Context) error
+}
+
 type NativeLease interface {
 	BundlePath() string
 	ExecutablePath() string
@@ -84,8 +94,8 @@ func (d *StructuredDelivery) CheckReadiness(ctx context.Context, r notification.
 	return notification.Readiness{CorrelationID: out.CorrelationID, Status: out.Status, Reason: out.Reason, Backend: out.Backend, Navigation: out.Navigation}
 }
 
-func (d *StructuredDelivery) checkAndDeliver(ctx context.Context, r notification.Request, readOnly bool) notification.Receipt {
-	out := notification.Receipt{CorrelationID: r.CorrelationID, Status: "rejected", Reason: "malformed_request", Backend: "macos_native", Navigation: notification.NavigationResult{Capability: "unavailable", Precision: "none", Reason: "navigation_unavailable"}}
+func (d *StructuredDelivery) checkAndDeliver(ctx context.Context, r notification.Request, readOnly bool) (out notification.Receipt) {
+	out = notification.Receipt{CorrelationID: r.CorrelationID, Status: "rejected", Reason: "malformed_request", Backend: "macos_native", Navigation: notification.NavigationResult{Capability: "unavailable", Precision: "none", Reason: "navigation_unavailable"}}
 	finish := func(status, reason string) notification.Receipt { out.Status = status; out.Reason = reason; return out }
 	// Check literal content and identity even when disabled. Nothing below uses
 	// legacy bracket extraction, status synthesis, or policy defaults.
@@ -154,7 +164,19 @@ func (d *StructuredDelivery) checkAndDeliver(ctx context.Context, r notification
 		}
 		return finish("rejected", "unsupported_notifier")
 	}
-	defer lease.Release()
+	possibleHandoff := false
+	defer func() {
+		defer lease.Release()
+		if local, ok := lease.(LocalAuthorityLease); ok {
+			if err := local.Complete(operation); err != nil {
+				if possibleHandoff {
+					out.Status, out.Reason, out.RetrySafe = "unknown", "authority_changed", false
+				} else {
+					out.Status, out.Reason = "rejected", "authority_changed"
+				}
+			}
+		}
+	}()
 	if _, err = d.remaining(r); err != nil || operation.Err() != nil {
 		return finish("rejected", "expired")
 	}
@@ -198,8 +220,18 @@ func (d *StructuredDelivery) checkAndDeliver(ctx context.Context, r notification
 		_ = d.Spool.Expire(attempt)
 		return finish("rejected", "expired")
 	}
+	if local, ok := lease.(LocalAuthorityLease); ok {
+		if err := local.BeforeHandoff(operation); err != nil {
+			_ = d.Spool.Expire(attempt)
+			return finish("rejected", "authority_changed")
+		}
+	}
+	// Launch can panic after a possible handoff. Conservatively retain the span
+	// and attempt; the caller's existing uncertain claim prevents resending.
+	possibleHandoff = true
 	handedOff, launchErr := d.Process.Launch(operation, lease.BundlePath(), attempt.RequestPath, attempt.ReceiptPath)
 	if !handedOff {
+		possibleHandoff = false
 		_ = d.Spool.Expire(attempt)
 		return finish("rejected", "launch_failed")
 	}
