@@ -283,7 +283,7 @@ func installRuntime(args []string, output io.Writer) error {
 		prepare := req.Prepare
 		req.Prepare = func() ([]installruntime.File, error) {
 			// Recheck ownership under the component lock before any promotion.
-			path := filepath.Join(req.RuntimeRoot, "skills", "agent-notify", "SKILL.md")
+			path := filepath.Join(req.RuntimeRoot, "skills", "agent-notifications", "SKILL.md")
 			before, err := installruntime.Fingerprint(path)
 			if err != nil {
 				return nil, err
@@ -320,6 +320,22 @@ func installRuntime(args []string, output io.Writer) error {
 				if err != nil {
 					return nil, err
 				}
+			}
+			legacy := filepath.Join(req.RuntimeRoot, "skills", "agent-notify", "SKILL.md")
+			legacyBefore, err := installruntime.Fingerprint(legacy)
+			if err != nil {
+				return nil, err
+			}
+			if legacyBefore.Exists {
+				ledger, recovery, err := installruntime.ReadOwnership(req.ControlRoot)
+				if err != nil {
+					return nil, err
+				}
+				owned, ok := installruntime.OwnedFile(ledger, legacy)
+				if recovery || !ok || legacyBefore.Link != "" || owned != legacyBefore {
+					return nil, fmt.Errorf("legacy skill is not an unchanged owned regular file: %s", legacy)
+				}
+				extra = append(extra, installruntime.File{Path: legacy, Before: legacyBefore, Remove: true})
 			}
 			return append(extra, installruntime.File{Path: path, Before: before, Data: skills.AgentNotify(), Mode: 0600}), nil
 		}

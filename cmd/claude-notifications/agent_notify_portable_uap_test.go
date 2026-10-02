@@ -45,7 +45,7 @@ func TestUAPProjectedCodexLaunchRunsProductionMCP(t *testing.T) {
 	}{
 		{"plugin.json", []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.0"}`), 0600},
 		{"mcp.json", []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"agent-notify":{"type":"stdio","command":"./bin/probe","args":[],"env":{}}}}`), 0600},
-		{"skills/agent-notify/SKILL.md", []byte("---\nname: agent-notify\ndescription: Isolated UAP projection fixture\n---\nFixture only.\n"), 0600},
+		{"skills/agent-notifications/SKILL.md", []byte("---\nname: agent-notifications\ndescription: Isolated UAP projection fixture\n---\nFixture only.\n"), 0600},
 		{"bin/probe", binary, 0700},
 	} {
 		path := filepath.Join(pkg, rel.name)

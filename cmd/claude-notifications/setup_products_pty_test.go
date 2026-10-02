@@ -1152,8 +1152,10 @@ func (f *bootstrapFixture) assertNoPortable(client string) {
 		}
 	}
 	if client == "codex" {
-		if _, err := os.Stat(filepath.Join(f.home, "codex", "skills", "agent-notify")); !os.IsNotExist(err) {
-			f.t.Fatalf("unselected Codex skill appeared: %v", err)
+		for _, name := range []string{"agent-notifications", "agent-notify"} {
+			if _, err := os.Stat(filepath.Join(f.home, "codex", "skills", name)); !os.IsNotExist(err) {
+				f.t.Fatalf("unselected Codex skill appeared: %s: %v", name, err)
+			}
 		}
 	}
 }
