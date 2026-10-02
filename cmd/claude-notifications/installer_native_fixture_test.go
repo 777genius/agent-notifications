@@ -38,12 +38,16 @@ func installerNativeFixture(t *testing.T, stage string) {
 	if err != nil || !caps.Supports(1, "none") {
 		t.Fatal("invalid inert native fixture capabilities")
 	}
+	// LaunchServices identifies bundles from Info.plist, independently of the
+	// explicit signing identifier required by the real native qualification guard.
+	// A subprocess installer must never register this inert fake as the product.
+	fixtureID := fmt.Sprintf("com.agentnotify.test.installer.%x", sha256.Sum256([]byte(stage)))
 	bundle := filepath.Join(stage, "ClaudeNotifier.app")
 	executable := filepath.Join(bundle, "Contents", "MacOS", "terminal-notifier-modern")
 	embeddedPut(t, filepath.Join(bundle, "Contents", "Info.plist"), []byte(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>CFBundleIdentifier</key><string>com.777genius.agent-notifications</string>
+<key>CFBundleIdentifier</key><string>`+fixtureID+`</string>
 <key>CFBundleExecutable</key><string>terminal-notifier-modern</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 </dict></plist>
@@ -73,6 +77,8 @@ func installerNativeFixture(t *testing.T, stage string) {
 		arch = "arm64"
 	}
 	run("/usr/bin/clang", source, "-arch", arch, "-x", "c", "-", "-o", executable)
+	// The guard requires the product signing identifier. Retain that identifier
+	// while the distinct CFBundleIdentifier prevents product LS registration.
 	// Replace any linker-generated ad-hoc signature with the bundle seal.
 	run("/usr/bin/codesign", "", "--force", "--sign", "-", "--identifier", "com.777genius.agent-notifications", bundle)
 	// Hash only after signing; never modify resources inside the signed bundle.
