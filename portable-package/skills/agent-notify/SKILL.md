@@ -1,6 +1,6 @@
 ---
 name: agent-notify
-description: Send an Agent Notifications desktop notification for actionable attention, meaningful in-progress milestones, or explicit separate alerts. Leave routine task/turn completion to automatic lifecycle hooks.
+description: Send an Agent Notifications desktop notification when the user requests one, attention is needed, or a meaningful milestone warrants an alert during ongoing work.
 ---
 
 Use the Agent Notifications plugin's `notify` tool. Installation and notification permissions must already be configured. If availability is unclear, use its read-only `notification_status`; a configured route does not prove that the OS will display a banner.
