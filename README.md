@@ -9,6 +9,8 @@
   <a href="docs/CODEX.md"><img src="brand/codex-logo.svg" width="64" height="64" alt="Codex CLI" title="Codex CLI" /></a>
   &nbsp;&nbsp;
   <a href="docs/opencode-notifications.md"><img src="brand/opencode-logo.svg" width="64" height="64" alt="OpenCode" title="OpenCode" /></a>
+  &nbsp;&nbsp;
+  <a href="docs/gemini-notifications.md"><img src="landing/public/agents/gemini.svg" width="64" height="64" alt="Gemini CLI (candidate)" title="Gemini CLI (unreleased candidate)" /></a>
 </p>
 
 [![Ubuntu CI](https://github.com/777genius/agent-notifications/actions/workflows/ci-ubuntu.yml/badge.svg?branch=main&event=push)](https://github.com/777genius/agent-notifications/actions/workflows/ci-ubuntu.yml?query=branch%3Amain+event%3Apush)
@@ -31,7 +33,11 @@ Desktop notifications for **Claude Code, Codex CLI and OpenCode**. Know when a t
 
 Built with [Universal Agent Plugins](https://github.com/777genius/universal-agent-plugins). [Create your own plugin for multiple AI agents](https://github.com/777genius/universal-agent-plugins#build-plugins).
 
+Terminal dependency [copyright and license notices](internal/thirdpartynotices/THIRD_PARTY_NOTICES.txt) are included in portable packages and release assets. Run `claude-notifications licenses` to read the same notices from the binary.
+
 OpenCode provides silent, generic completion, question, permission and error alerts for root sessions, with explicit desktop/webhook consent. Tested with OpenCode **1.18.33**; V2 is not supported. [OpenCode setup, privacy and limits](docs/opencode-notifications.md)
+
+Gemini CLI is the fourth agent in the **unreleased candidate**. Public release **1.46.1 does not include Gemini**. The candidate was tested with exact **Gemini CLI 0.62.0** on macOS arm64 and Linux, including real hooks, tool-permission UI and delivery. Both Mac banners were visually confirmed. [Qualification by OS](docs/gemini-notifications.md#qualification-status). Its two fixed alerts mean a turn completed (`AfterAgent`, not success or a final-only answer) or tool permission was requested (`Notification: ToolPermission`). Silent desktop and explicitly opted webhooks only; no sound, click-to-focus, question/error/plan/review alerts or nested-agent parity. Built-in Gemini notifications may duplicate desktop alerts; choose one desktop source or webhook-only. Setup leaves built-in settings unchanged. [Candidate setup and qualification status](docs/gemini-notifications.md)
 
 ## Features
 
@@ -70,13 +76,17 @@ Use `claude,opencode` or `codex,opencode` for a mixed pair. OpenCode channel fla
 
 Run the same command to update. [Guided installer](https://777genius.github.io/agent-notifications/#install) · [Manual installation, updates and removal](docs/INSTALLATION.md)
 
+For the future Gemini-compatible release, the planned selectors are `--product gemini` and `--products claude,codex,opencode,gemini`. Shared desktop/webhook flags apply to each selected Gemini/OpenCode observer with separate consent. Current release 1.46.1 cannot install Gemini; use the [candidate guide](docs/gemini-notifications.md) until qualification and release are complete. Claude/Codex portable MCP and skill setup does not apply to Gemini.
+
 On a release with the portable setup wizard, the public installer also installs an MCP server
-and the `agent-notify` skill for each selected client. In a new Claude Code or Codex session,
+and the `agent-notifications` skill for each selected client. In a new Claude Code or Codex session,
 the agent can call `notify` while it is still working, for example when input is needed.
-For an informational alert, explicitly pass `navigation: "none"`; that alert does not open
-the exact chat when clicked. Hooks still handle their own client events. Use
-`--skip-agent-notify` for hooks only. `notification_status` reads configuration but does not
-prove that the desktop displayed a banner. OS notification permission, client activation,
+Check `notification_status` for this chat first. When `navigation.capability` is `eligible`,
+prefer `navigation: "required"` for task-related alerts, including informational ones.
+Use `none` or `best_effort` only when returning to the chat is optional; never silently
+downgrade a required return. Leave routine completion alerts to hooks to avoid duplicates.
+Use `--skip-agent-notify` for hooks only. Status reports configuration and caller-context
+eligibility; it does not prove that a banner appeared or the chat opened. OS permission, client activation,
 and a visible test notification are separate checks.
 Automatic updates preserve an absent MCP client when another selected client is installed;
 use explicit `--agent-notify` to add that client later.

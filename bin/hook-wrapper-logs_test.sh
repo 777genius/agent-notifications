@@ -49,9 +49,11 @@ export PATH="$fixture_root/stubs:$PATH"
 test "$(uname -s)" = Linux || { echo "fixture uname stub is unavailable" >&2; exit 97; }
 unset OS
 exec /bin/sh "$1" handle-hook Stop'''
+    # Git Bash starts several real child tools for this diagnostics fixture.
+    # This watchdog bounds the scenario, not production hook latency.
     result = subprocess.run([shell, '-c', command,
                              'fixture', (plugin / 'bin/hook-wrapper.sh').as_posix()],
-                            env=run_env, capture_output=True, timeout=15)
+                            env=run_env, capture_output=True, timeout=60 if os.name == 'nt' else 15)
     assert result.returncode == 0, result
     return result
 

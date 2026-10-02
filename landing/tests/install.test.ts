@@ -138,3 +138,66 @@ exit "$install_status"`,
     assert.equal(result.stdout, partial ? "partial-input" : "");
   }
 });
+
+// The candidate selector must include every chosen observer and scope portable flags.
+test("Gemini candidate commands preserve canonical selectors and shared observer consent", () => {
+  const prefix = "curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- ";
+  const cases = [
+    { products: ["gemini"], expected: prefix + "--product gemini --webhook" },
+    { products: ["gemini", "gemini"], expected: prefix + "--product gemini --webhook" },
+    { products: ["gemini", "opencode"], expected: "(set -o pipefail; " + prefix + "--products opencode,gemini --webhook)" },
+    { products: ["gemini", "claude"], expected: "(set -o pipefail; " + prefix + "--products claude,gemini --skip-agent-notify --webhook)" },
+    { products: ["gemini", "codex"], expected: "(set -o pipefail; " + prefix + "--products codex,gemini --skip-agent-notify --webhook)" },
+    { products: ["gemini", "codex", "claude"], expected: "(set -o pipefail; " + prefix + "--products claude,codex,gemini --skip-agent-notify --webhook)" },
+    { products: ["gemini", "opencode", "claude"], expected: "(set -o pipefail; " + prefix + "--products claude,opencode,gemini --skip-agent-notify --webhook)" },
+    { products: ["gemini", "opencode", "codex"], expected: "(set -o pipefail; " + prefix + "--products codex,opencode,gemini --skip-agent-notify --webhook)" },
+    { products: ["gemini", "codex", "opencode", "claude", "gemini"], expected: "(set -o pipefail; " + prefix + "--products claude,codex,opencode,gemini --skip-agent-notify --webhook)" },
+  ] as const;
+  for (const { products, expected } of cases)
+    for (const target of ["macos", "linux", "windows"] as const) {
+      assert.equal(command(products, target, "install", false, { desktop: false, webhook: true }), expected);
+      assert.equal(command(products, target, "update", false, { desktop: false, webhook: true }), expected);
+      assert.equal(command(products, target, "install", true, { desktop: false, webhook: false }), null);
+      assert.equal(command(products, target, "configure"), null);
+      assert.equal(command(products, "unknown", "install"), null);
+      assert.equal(command(products, "manual", "install"), null);
+    }
+  assert.equal(command("gemini", "linux", "install"), prefix + "--product gemini --desktop");
+  assert.equal(command("gemini", "linux", "install", false, { desktop: true, webhook: true }), prefix + "--product gemini --desktop --webhook");
+});
+
+test("Gemini mixed command reports download failure with one pipeline", () => {
+  const snippet = command(["opencode", "gemini"], "linux", "install")!;
+  const result = spawnSync("bash", [], {
+    input: `curl() { return 22; }\n${snippet}`,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 22, result.stderr);
+});
+
+// Exercise the copied shell text: the downloaded script must receive literal selectors
+// and consent flags as separate argv tokens. This does not qualify the candidate loader.
+test("Gemini copied pipelines deliver exact installer argv", () => {
+  const cases = [
+    {
+      snippet: command("gemini", "linux", "install", false, { desktop: false, webhook: true })!,
+      argv: ["--product", "gemini", "--webhook"],
+    },
+    {
+      snippet: command(["gemini", "opencode"], "linux", "update", false)!,
+      argv: ["--products", "opencode,gemini", "--desktop"],
+    },
+    {
+      snippet: command(["gemini", "opencode", "codex", "claude", "gemini"], "linux", "install", false, { desktop: true, webhook: true })!,
+      argv: ["--products", "claude,codex,opencode,gemini", "--skip-agent-notify", "--desktop", "--webhook"],
+    },
+  ];
+  for (const { snippet, argv } of cases) {
+    const result = spawnSync("bash", [], {
+      input: `curl() { cat <<'INSTALLER'\nprintf '%s\\n' "$@"\nINSTALLER\n}\n${snippet}`,
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, argv.join("\n") + "\n");
+  }
+});

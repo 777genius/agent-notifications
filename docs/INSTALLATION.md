@@ -2,7 +2,22 @@
 
 # Installation
 
-### Prerequisites
+## Gemini candidate availability
+
+Gemini CLI is a fourth product in the unreleased candidate. Public release **1.46.0
+does not include Gemini**. The qualification target is exact **Gemini CLI 0.62.0**;
+native qualification and a compatible release are pending. Follow the
+[Gemini candidate guide](gemini-notifications.md) for checked-bundle setup and
+planned single-pipeline selectors `--product gemini` or
+`--products claude,codex,opencode,gemini`. Do not use a local `bin/setup.sh` to
+qualify candidate bytes: it downloads the public release.
+
+For the compatible candidate, `--desktop`/`--webhook` apply to each selected
+Gemini/OpenCode observer with separately saved consent. At least one channel is
+required. Claude/Codex portable MCP/skill choices and legacy `both` remain unchanged.
+Gemini configuration uses its guide, not the portable MCP wizard.
+
+## Prerequisites
 
 - Claude Code, Codex CLI and/or OpenCode for the products you select (OpenCode tested with 1.18.33; V2 unsupported)
 - `curl` and Bash
@@ -47,12 +62,17 @@ After installation:
 - **OpenCode:** restart OpenCode to load its global plugin. On Mac, explicitly grant notification permission. OpenCode bootstrap requires release v1.46.0 or newer; see [OpenCode setup, channels and limits](opencode-notifications.md).
 
 When the selected release supports the portable wizard, the installer also registers the
-`agent-notify` MCP server and skill for the selected clients. Restart each selected client
+`agent-notify` MCP server and `agent-notifications` skill for the selected clients. Restart each selected client
 and open a new session before checking its MCP tools. The agent can call `notify` during a
-task, not only after a Stop hook. For an informational notification, use
-`navigation: "none"`; it does not promise a click back to the exact chat. `notify` returns
-`submitted` when the OS accepted the request, which does not prove that a banner was visible.
-The read-only `notification_status` reports configuration and suppression, not display.
+task, not only after a Stop hook. Check the read-only `notification_status` first:
+when `navigation.capability` is `eligible`, prefer `navigation: "required"` to keep
+the configured return to the chat, including for informational notifications.
+Eligibility uses this call's client context and configuration; it does not verify
+that the app, profile or chat can actually open. Use `navigation: "none"` only for
+an alert that does not need a return to the chat, including setups without a desktop
+route. Never silently downgrade a request that requires a return to the chat.
+`notify` returns `submitted` when the OS accepted the request, which does not prove
+that a banner was visible or the chat opened.
 Desktop notification permission and a visible test send must be checked separately.
 
 The installer reports incomplete setup separately from successful hooks. Keep its retry
@@ -132,3 +152,13 @@ Optionally also remove the marketplace registration: `/plugin marketplace remove
 **Codex:** remove the hooks and runtime registered by this installer manually. Use the same Codex home selected during setup: the explicit `--codex-home` path, otherwise `CODEX_HOME`, otherwise `~/.codex` (`%USERPROFILE%\.codex` on Windows). In that directory, delete only this installer's entries from `hooks.json`, then remove the `claude-notifications-go` directory. Preserve hooks registered for other tools.
 
 **Configuration:** uninstalling does not delete your saved settings. Run `agent-notifications config path` to find the active file, and remove it yourself if you no longer want it.
+
+### Reading the installation result
+
+The installer ends with a summary for the selected agents. Installed means that
+registration succeeded; it does not confirm notification delivery. Restart the
+agents, review and trust Codex entries with `/hooks`, and send a test notification.
+If a notification does not arrive, check OS permissions and notification settings.
+Skipped agent-notify setup is reported separately from installed automatic hooks.
+For detailed download and setup diagnostics, prefix the final installer command
+with `BOOTSTRAP_VERBOSE=1`. Failed stages always print their diagnostics.

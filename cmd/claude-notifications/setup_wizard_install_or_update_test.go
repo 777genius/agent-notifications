@@ -65,7 +65,7 @@ func TestWizardInstallOrUpdateBootstrapE2E(t *testing.T) {
 				}
 				old = result
 			}
-			if err := os.WriteFile(filepath.Join(env.pkg, "skills", "agent-notify", "SKILL.md"), []byte("---\nname: agent-notify\ndescription: Updated bootstrap fixture\n---\n"), 0600); err != nil {
+			if err := os.WriteFile(filepath.Join(env.pkg, "skills", "agent-notifications", "SKILL.md"), []byte("---\nname: agent-notifications\ndescription: Updated bootstrap fixture\n---\n"), 0600); err != nil {
 				t.Fatal(err)
 			}
 			candidate := env.pkg
@@ -274,7 +274,7 @@ func TestWizardInstallOrUpdateRejectsOptOutBeforeIntentPublish(t *testing.T) {
 	}
 	candidate := filepath.Join(env.root, "candidate")
 	copyWizardPackage(t, env.pkg, candidate)
-	if err := os.WriteFile(filepath.Join(candidate, "skills", "agent-notify", "SKILL.md"), []byte("---\nname: agent-notify\ndescription: Candidate\n---\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(candidate, "skills", "agent-notifications", "SKILL.md"), []byte("---\nname: agent-notifications\ndescription: Candidate\n---\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	req.PackageRoot = candidate
@@ -357,7 +357,7 @@ func TestWizardInstallOrUpdateRetainedDataE2E(t *testing.T) {
 	if code != 0 || !removed.DataRetained {
 		t.Fatalf("retained uninstall: %d %+v", code, removed)
 	}
-	if err := os.WriteFile(filepath.Join(env.pkg, "skills", "agent-notify", "SKILL.md"), []byte("---\nname: agent-notify\ndescription: Retained bootstrap update\n---\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(env.pkg, "skills", "agent-notifications", "SKILL.md"), []byte("---\nname: agent-notifications\ndescription: Retained bootstrap update\n---\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	code, restored := invoke("install", env.pkg, "--install-or-update")

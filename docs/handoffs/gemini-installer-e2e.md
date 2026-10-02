@@ -45,3 +45,27 @@ TEST lab:
 
 Independent GPT-6.1 Sol high static review and orchestrator diff review passed.
 The focused real fixture passed on its first runtime execution.
+
+## Aggregate runtime fallback watchdog
+
+The existing Node-only commit/checksum scenario starts several real Node/Bash
+processes and asserts both valid and corrupt checksum outcomes. Its aggregate
+fixture watchdog was changed from 20s to 60s after Windows CI timeout evidence;
+production hook/cache budgets and semantic assertions were unchanged. The full
+actual `installer_runtime_fallback_e2e_test.sh` passed on Linux in the same
+fresh TEST lab with this test-only patch. This is not Windows runtime proof.
+
+Patch SHA-256:
+`fe6153ba6641dc44e5a6e5f74948a9d286d65bdccb0111634cd580a580db7df0`.
+Executed log SHA-256:
+`9ced22ed675173cde794d85852f0905dfc85b8c5544a005cd4885f50ea7c69c3`.
+
+The pre-existing hook-wrapper diagnostics fixture subsequently exceeded its
+15s aggregate Git Bash watchdog on Windows after strict cache tests passed.
+Only Windows uses a 60s fixture watchdog now; other platforms retain 15s.
+All private log, JSON/ANSI, Codex silence and two-process atomic assertions
+remain. The actual Linux fixture passed in the same TEST lab; its output
+SHA-256 is `9da383a5fc933110f4c52f3ef70a4b03774655e7b46648a32b1e6de7eb638dd9`.
+Patch SHA-256 is `c76b4e967e43de158cbd07ddb4f3b55432af01a4ae99ea9b2de7f5d9b9f7a8ba`.
+This does not attribute the Windows timeout to a proven cause or relax a
+production hook deadline.

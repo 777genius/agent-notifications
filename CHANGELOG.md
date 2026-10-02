@@ -7,11 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.47.0] - 2026-10-01
-
-### Added
-- Gemini CLI notifications through the public UAP SDK, with explicit desktop/webhook consent and managed setup, update and removal. Guided bootstrap can select Claude, Codex, OpenCode and Gemini together ([#283](https://github.com/777genius/agent-notifications/pull/283)).
-
 ### Changed
 - Fresh macOS Codex and combined bootstrap installs enable chat navigation by default when the registered official Codex Desktop app passes signature verification. Existing navigation policy and explicit choices remain preserved. If the verified app is unavailable, bootstrap reports its fallback to informational notifications without navigation.
 
@@ -20,9 +15,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Native helper updates select the supplied release before falling back to an installed helper.
 - Codex desktop callbacks allow a bounded 30 seconds for application verification and opening, while legacy callbacks retain their 10-second budget. Safe system-log phase diagnostics make failed clicks traceable after the helper is relaunched by macOS.
 
-### Platform notes
-- Automatic chat navigation applies to fresh Codex or combined bootstrap installs on macOS. Direct `setup-codex` and Claude-only setup retain their existing default without navigation. Existing installations can explicitly configure their Codex Desktop route.
-- Gemini CLI support is qualified with version 0.62.0; unsupported Gemini versions are rejected before installation. OpenCode and Gemini notifications do not provide Codex chat navigation. Desktop click navigation was confirmed on macOS arm64; other platform checks do not establish visible desktop delivery.
 
 ## [1.46.1] - 2026-10-01
 

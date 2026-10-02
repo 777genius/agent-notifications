@@ -1,3 +1,5 @@
+> Historical worker handoff below. Current executed qualification is recorded in the final production supplement: all five native platforms passed. Static-worker limitations are retained as provenance, not current blockers.
+
 # Gemini native harness handoff — an-next-g0
 
 The worker implemented and statically checked the fixture. **No Gemini process, Google model service, AN consumer, desktop backend, or production installer was run. G0 and G5 remain unverified.** The trusted orchestrator must inspect and fingerprint these files before executing them outside the provider sandbox, with the guard unchanged.
@@ -124,3 +126,33 @@ Native trials required these narrowly scoped fixture corrections:
 UI provenance: exact `ToolConfirmationMessage.tsx` at upstream commit `b460678f3db508407554afd604cc9d6635becb2a`, with `RadioButtonSelect`/`useSelectionList` navigation inspected. The fixed TEST settings disable session/permanent approval, leaving Allow once, external editor and No/suggest changes. Actual rendered menu detection was required before any choice.
 
 These are `native_cli/provider_substitute` results. Production setup, AN delivery, desktop API and a visible Gemini banner are **not** proved by the SDK probe. G5 remains pending until the production candidate is installed and exercised.
+
+
+## Production qualification supplement, 2026-10-01
+
+The trusted production G0/G5 run passed on macOS arm64/Intel, Linux amd64/arm64
+and Windows amd64 at `cee81a77d8aef5369456cc24ad4e9be5184b3264`, GitHub run
+`36859247789`. This supersedes earlier static-worker and partial-platform statuses.
+Desktop GUI remains unverified on Windows, Linux and macOS Intel.
+
+On the owner's Mac, the final public graph was exercised with actual CI binary
+source `884e2b6f522010f0cac015d89a9933071e6d85d9`, driver source
+`91b0c64732567962ac1a017e501b6643004ce90d`, public SDK revision `2d2a26bf372a`
+and public agentplugins revision `11a842f55d19`. The binary's actual Go build
+metadata confirms those modules without replacements. Candidate SHA-256:
+`af603968ab97fabd10593e5fdc72830719115b60b1c20a6224abfe930d5de162`;
+changed update candidate: `b560c7e38f16c1e604385b62a497331fbcf59569269b416549cdcb8b7dbd7d7f`.
+
+Actual install/repeat/update/inspect/remove, six native scenarios and foreign-hook
+preservation passed. Cached commands after normal removal produced no new webhook;
+a damaged receipt revoked consent while retaining foreign hooks. Both owned native
+sessions exited zero without forced termination. The existing signed macOS helper
+returned ten correlated submitted receipts with the fixed copy checked, seven
+completion and three permission alerts. Desktop submission was also observed while
+webhooks were disabled. The owner separately confirmed seeing both fixed alert
+texts in the earlier native trial. That visual record retains its earlier source
+binding; it is not relabeled as a fresh attestation for this final-graph run.
+
+Evidence is stored in the owned disposable `TEST-g5-final-11` lab, with hashes and
+qualification linkage. This is actual CLI plus loopback-provider evidence, not a
+live Google model-service trial or GUI qualification for other operating systems.

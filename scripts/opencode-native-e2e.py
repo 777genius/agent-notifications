@@ -41,7 +41,10 @@ def digest(path):
 
 
 def run(args, *, cwd, env, timeout=30):
-    result = subprocess.run(args, cwd=cwd, env=env, capture_output=True, text=True,
+    # Headless run reads Bun.stdin to EOF even when a prompt is supplied. A CI
+    # runner may keep inherited stdin open. Use an explicitly closed pipe on
+    # every platform, including Windows where DEVNULL is a NUL device handle.
+    result = subprocess.run(args, cwd=cwd, env=env, input="", capture_output=True, text=True,
                             encoding="utf-8", errors="replace", timeout=timeout)
     if result.returncode:
         raise RuntimeError(f"{pathlib.Path(args[0]).name} {args[1]} exited {result.returncode}: "
@@ -283,7 +286,7 @@ def qualify(args, report):
                 def start_server():
                     return subprocess.Popen([str(opencode), "serve", "--port", str(server_port),
                         "--hostname", "127.0.0.1", "--print-logs"], cwd=project, env=env,
-                        stdout=log, stderr=subprocess.STDOUT)
+                        stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
 
                 def stop_server(process):
                     process.terminate()
@@ -307,9 +310,15 @@ def qualify(args, report):
                     def turn(label):
                         marker = "PRIVATE_PROMPT_" + secrets.token_hex(12)
                         before = provider.count()
-                        run([str(opencode), "run", "--attach", f"http://127.0.0.1:{server_port}",
-                            "--model", "mock-notification/mock-notification", "--format", "json",
-                            f"{label} in this disposable project. {marker}"], cwd=project, env=env, timeout=120)
+                        try:
+                            run([str(opencode), "run", "--attach", f"http://127.0.0.1:{server_port}",
+                                "--model", "mock-notification/mock-notification", "--format", "json",
+                                f"{label} in this disposable project. {marker}"], cwd=project, env=env, timeout=120)
+                        finally:
+                            # Bounded counts distinguish a startup stall from
+                            # a delivery failure without exporting prompt data.
+                            report["last_turn_provider_requests"] = provider.count() - before
+                            report["last_turn_webhooks"] = webhook.count()
                         if not any(marker.encode() in body for body in provider.requests[before:]):
                             raise RuntimeError("OpenCode did not send the turn to the scripted model")
                         return marker

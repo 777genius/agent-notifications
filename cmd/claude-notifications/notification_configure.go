@@ -237,17 +237,20 @@ func configureNotifications(ctx context.Context, request notificationConfigureRe
 				return result, e
 			}
 			if provider == registration.Codex {
-				destination := filepath.Join(home, "skills", "agent-notify", "SKILL.md")
+				destination := filepath.Join(home, "skills", "agent-notifications", "SKILL.md")
 				if inv.Skill {
-					absentSkills = append(absentSkills, destination)
 					if facts.SkillProjected {
 						return result, fail("skill_collision")
 					}
-					if _, e := os.Lstat(destination); !os.IsNotExist(e) {
-						return result, fail("skill_collision")
+					for _, name := range []string{"agent-notifications", "agent-notify"} {
+						path := filepath.Join(home, "skills", name, "SKILL.md")
+						absentSkills = append(absentSkills, path)
+						if _, e := os.Lstat(path); !os.IsNotExist(e) {
+							return result, fail("skill_collision")
+						}
 					}
 				} else {
-					r.SkillProjection = &clientsetup.SkillProjection{SourcePath: filepath.Join(primary, "skills", "agent-notify", "SKILL.md"), DestinationPath: destination}
+					r.SkillProjection = &clientsetup.SkillProjection{SourcePath: filepath.Join(primary, "skills", "agent-notifications", "SKILL.md"), DestinationPath: destination}
 				}
 				if !configurePhysical(destination) {
 					return result, fail("physical_path_required")

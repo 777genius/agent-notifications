@@ -67,7 +67,19 @@ final class CallbackLifecycle {
     private var owned: [UUID: Owned] = [:]
     private var generation = 0
     private var callbacks: [UUID: Pending] = [:]
-    private(set) var stopped = false
+    private var operationStarted = false
+    private var operationPending = false
+    private var finishingCallbacks = 0
+    // Delegate ingress can arrive off-main before its main-queue work is accepted.
+    // Only this reservation count and the stop claim cross that boundary.
+    private let ingressLock = NSLock()
+    private var pendingIngress = 0
+    private var didStop = false
+    private(set) var exitCode: Int32?
+    var stopped: Bool {
+        ingressLock.lock(); defer { ingressLock.unlock() }
+        return didStop
+    }
     var inFlight: Int { callbacks.count }
     var ownedCount: Int { owned.count }
     init(schedule: @escaping Schedule, exit: @escaping () -> Void,
@@ -76,6 +88,48 @@ final class CallbackLifecycle {
         self.schedule = schedule; self.exit = exit; self.diagnostic = diagnostic; self.now = now
     }
     func start() { armIdle() }
+    // Acquire on the delegate's incoming thread; release on main only after
+    // receive has established callback ownership (or completed synchronously).
+    func reserveIngress() -> (() -> Void)? {
+        ingressLock.lock()
+        guard !didStop else { ingressLock.unlock(); return nil }
+        pendingIngress += 1
+        ingressLock.unlock()
+        var released = false
+        return { [self] in
+            ingressLock.lock()
+            guard !released else { ingressLock.unlock(); return }
+            released = true
+            pendingIngress -= 1
+            ingressLock.unlock()
+            armIdle()
+        }
+    }
+    func dispatchIngress(completion: @escaping () -> Void, operation: @escaping () -> Void) {
+        guard let release = reserveIngress() else { completion(); return }
+        let handle = {
+            defer { release() }
+            operation()
+        }
+        if Thread.isMainThread { handle() }
+        else { DispatchQueue.main.async(execute: handle) }
+    }
+    // A finite send shares the callback owner. Its result can be published
+    // immediately, but process exit must also wait for accepted callback work.
+    // Starting invalidates any earlier callback-only idle timer; completion is
+    // idempotent so late OS replies cannot replace a timeout/error exit status.
+    func beginOperation() -> (Int32) -> Void {
+        precondition(!operationStarted && !stopped)
+        operationStarted = true
+        operationPending = true
+        generation += 1
+        return { [weak self] code in
+            guard let self = self, self.operationPending else { return }
+            self.operationPending = false
+            self.exitCode = code
+            self.armIdle()
+        }
+    }
     func accept(completion: @escaping () -> Void,
                 operation: (@escaping (CallbackOutcome) -> Void, @escaping () -> Bool) -> Void) {
         acceptOwned(completion: completion) { done, work in
@@ -116,6 +170,7 @@ final class CallbackLifecycle {
     }
     private func finish(_ id: UUID, outcome: CallbackOutcome) {
         guard let pending = callbacks.removeValue(forKey: id) else { return }
+        finishingCallbacks += 1
         let result = pending.token.isActive ? outcome : .open_unknown
         pending.token.cancel()
         // Snapshot permits a synchronous cancellation/reap seam to release ownership.
@@ -125,17 +180,34 @@ final class CallbackLifecycle {
                                       outcome: result.rawValue,
                                       elapsedSeconds: max(0, now() - pending.started)).json)
         pending.completion()
+        finishingCallbacks -= 1
         armIdle()
     }
     private func armIdle() {
-        guard callbacks.isEmpty, owned.isEmpty, !stopped else { return }
+        guard callbacks.isEmpty, owned.isEmpty, !operationPending,
+              finishingCallbacks == 0, ingressAllowsIdle else { return }
+        if exitCode != nil {
+            claimExit()
+            return
+        }
         generation += 1
         let expected = generation
         schedule(10) { [weak self] in
             guard let self = self, self.generation == expected,
-                  self.callbacks.isEmpty, self.owned.isEmpty, !self.stopped else { return }
-            self.stopped = true
-            self.exit()
+                  self.callbacks.isEmpty, self.owned.isEmpty,
+                  !self.operationPending, self.finishingCallbacks == 0 else { return }
+            self.claimExit()
         }
+    }
+    private var ingressAllowsIdle: Bool {
+        ingressLock.lock(); defer { ingressLock.unlock() }
+        return !didStop && pendingIngress == 0
+    }
+    private func claimExit() {
+        ingressLock.lock()
+        guard !didStop, pendingIngress == 0 else { ingressLock.unlock(); return }
+        didStop = true
+        ingressLock.unlock()
+        exit()
     }
 }

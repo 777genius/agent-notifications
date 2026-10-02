@@ -165,9 +165,9 @@ a concurrent installer change can produce `generation_changed` after preparation
 has persisted, with readiness and the newly observed generation. Reread status;
 preparation and registration are not an atomic transaction.
 
-Codex register optionally accepts `--skill-destination /physical/user/skills/agent-notify/SKILL.md`.
+Codex register optionally accepts `--skill-destination /physical/user/skills/agent-notifications/SKILL.md`.
 Explicit setup safely creates missing physical destination parents; read-only inspection does not create them. Source comes
-exclusively from the authoritative ledger runtime's `skills/agent-notify/SKILL.md`,
+exclusively from the authoritative ledger runtime's `skills/agent-notifications/SKILL.md`,
 which must be ledger-owned. The selected copy must be outside runtime/control.
 Explicit selection refreshes through the clientsetup ownership transaction; omission
 preserves a recorded copy. Same bytes are a no-op. Foreign, tampered, relative or
