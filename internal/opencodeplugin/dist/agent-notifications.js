@@ -606,7 +606,8 @@ function createObserver(options) {
       return;
     }
     if (strict && ["session.updated", "session.deleted"].includes(type) && id2(nativeSessionID(event))) {
-      const s = state(nativeSessionID(event));
+      const sid = nativeSessionID(event), s = state(sid), info = p.info;
+      if (type === "session.updated" && object(info) && info.id === sid && (p.sessionID === void 0 || p.sessionID === sid) && info.parentID === void 0 && typeof options.location === "string" && info.directory === options.location && object(info.time) && Number.isSafeInteger(info.time.created) && info.time.created >= 0 && Number.isSafeInteger(info.time.updated) && info.time.updated >= 0 && info.time.archived === void 0 && info.time.compacting === void 0 && info.revert === void 0) return;
       s.rootSession = void 0;
       s.scopeMatched = false;
       s.cancelled = true;
@@ -2288,7 +2289,7 @@ function parseUptime(text) {
   return ns((BigInt(first[0]) * 1000000000n + BigInt(first[1]) * quantum).toString());
 }
 function createLinuxClock() {
-  if (process.platform !== "linux" || process.arch !== "x64") fail();
+  if (process.platform !== "linux" || !["x64", "arm64"].includes(process.arch)) fail();
   const fds = [];
   let disposed = false, previous;
   try {
@@ -2661,6 +2662,14 @@ var rowTypes = /* @__PURE__ */ new Set([
   "shell"
 ]);
 var followsAssistant = (value, row) => value.slice(value.indexOf(row) + 1).some((item) => ["user", "assistant", "compaction"].includes(item.type));
+var ephemeralTypes = /* @__PURE__ */ new Set([
+  "session.usage.updated",
+  "session.text.delta",
+  "session.reasoning.delta",
+  "session.tool.input.delta",
+  "session.tool.progress",
+  "session.compaction.delta"
+]);
 function createNativeV2(context, ownedLocation, onIngress, onUncertainty) {
   const own = scope(ownedLocation), projectID = ownedLocation?.project?.id, bindings = /* @__PURE__ */ new Map(), projected = /* @__PURE__ */ new WeakMap();
   if (!own || !id5(projectID)) throw new TypeError("scope_unverified");
@@ -2679,6 +2688,7 @@ function createNativeV2(context, ownedLocation, onIngress, onUncertainty) {
   }
   function correlate(event) {
     const { type, data: p } = event;
+    if (ephemeralTypes.has(type)) return;
     if (type === "location.shutdown") return { location: scope(event.location)?.directory };
     const sid = type === "form.created" ? p.form?.sessionID : p.sessionID;
     if (!id5(sid) || sid === "global") return;
@@ -2901,13 +2911,14 @@ function createNativeV2(context, ownedLocation, onIngress, onUncertainty) {
   }
   return Object.freeze({ native: Object.freeze({ correlate, session, assistant, questionSource, currentPermission }), reset, project, finalize });
 }
+var checkpointNonce = (value) => typeof value === "string" && value.length === 32 && /^[a-f0-9]{32}$/.test(value);
 function createRPCCheckpoint(context, ready) {
   return Object.freeze({ async register(signal, namespace) {
     if (!await ready() || signal.aborted) return;
     const id6 = `agent-notifications-${namespace}`;
     const schema = {
       type: "object",
-      properties: { nonce: { type: "string", pattern: "^[a-f0-9]{32}$" } },
+      properties: { nonce: { type: "string", minLength: 32, maxLength: 32 } },
       required: ["nonce"],
       additionalProperties: false
     };
@@ -2918,8 +2929,14 @@ function createRPCCheckpoint(context, ready) {
     }
     return Object.freeze({
       type: `rpc.${id6}.checkpoint`,
-      emit: (nonce) => registration.events.emit("checkpoint", { nonce }),
-      read: (envelope) => envelope.data && Object.keys(envelope.data).length === 1 && typeof envelope.data.nonce === "string" && /^[a-f0-9]{32}$/.test(envelope.data.nonce) ? envelope.data.nonce : void 0,
+      emit: async (nonce) => {
+        if (!checkpointNonce(nonce)) throw new TypeError("checkpoint_nonce_invalid");
+        return registration.events.emit("checkpoint", { nonce });
+      },
+      read: (envelope) => {
+        const data = envelope?.data;
+        return data && typeof data === "object" && !Array.isArray(data) && Reflect.ownKeys(data).length === 1 && Object.hasOwn(data, "nonce") && checkpointNonce(data.nonce) ? data.nonce : void 0;
+      },
       dispose: () => registration.dispose()
     });
   } });
