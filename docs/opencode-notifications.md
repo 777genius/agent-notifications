@@ -24,6 +24,16 @@ service or Windows toasts. Linux needs an available desktop session/D-Bus servic
   not establish visible macOS Intel, Linux ARM64 or Windows banners, or universal
   compatibility with every desktop environment.
 
+## Dual candidate evidence boundary
+
+The installed dual candidate fixture in `scripts/opencode-native-e2e.py` is source
+preparation only. Its eleven native cells cover V1 1.18.33 and V2 2.0.21 on all
+five platform pairs, plus Linux amd64 V1 1.18.34. No cell has been executed or
+qualified by this preparation. Exact bundle/SDK/image custody, authoritative
+managed configuration, production parent/profile and complete clock qualification
+must precede delivery cases. Historical V1 evidence below does not qualify this
+candidate or V2. Missing prerequisites report unqualified and stop business phases.
+
 ## Install or update
 
 Install OpenCode first. In the [guided installer](https://777genius.github.io/agent-notifications/#install),
