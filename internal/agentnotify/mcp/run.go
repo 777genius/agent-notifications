@@ -103,7 +103,11 @@ func Run(ctx context.Context, owned io.ReadWriteCloser, o Options) error {
 			return next(callCtx, method, req)
 		}
 	})
-	s.AddTool(&sdk.Tool{Name: "notify", Description: "Submit an explicit notification. Unknown outcomes are not safe to retry automatically.", InputSchema: notifySchema(), Annotations: &sdk.ToolAnnotations{ReadOnlyHint: false, IdempotentHint: false}}, func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
+	s.AddTool(&sdk.Tool{Name: "notify", Description: "Send requested alerts or actionable in-progress notifications, including unresolved blockers while waiting. " +
+		"Leave routine task/turn completion to lifecycle hooks, including ordinary 'notify me when done' requests; do not relabel completion as progress/attention. " +
+		"Send completion only if hooks are known disabled/unavailable or the user explicitly requests an additional separate alert. " +
+		"Unknown hook state is not absence; notification_status does not report hook state. Do not duplicate a question/approval event covered by a known hook. " +
+		"Unknown outcomes are not safe to retry automatically.", InputSchema: notifySchema(), Annotations: &sdk.ToolAnnotations{ReadOnlyHint: false, IdempotentHint: false}}, func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
 		p, ok := decodePayload(req.Params.Arguments)
 		if !ok {
 			return toolResult(rejected("invalid_arguments")), nil

@@ -1,11 +1,17 @@
 ---
 name: agent-notify
-description: Send an Agent Notifications desktop notification when the user requests one, attention is needed, or a meaningful milestone warrants an alert during ongoing work.
+description: Send an Agent Notifications desktop notification for actionable attention, meaningful in-progress milestones, or explicit separate alerts. Leave routine task/turn completion to automatic lifecycle hooks.
 ---
 
 Use the Agent Notifications plugin's `notify` tool. Installation and notification permissions must already be configured. If availability is unclear, use its read-only `notification_status`; a configured route does not prove that the OS will display a banner.
 
-Notify during ongoing work when an actionable question, a blocker requiring the user's help, or a useful milestone warrants it. Continue the task after the MCP call when possible. Include the task name in a short title and make the body useful without exposing credentials or private source text on the lock screen. Do not send an alert for every internal step, poll, or notification result.
+Leave routine task/turn completion to automatic lifecycle hooks. Do not call `notify` merely to say done or summarize the final result just before the final response, or relabel that same completion as `progress` or `attention`.
+A normal "notify me when done" request does not ask for an extra alert on top of the completion hook.
+
+Send a completion alert only when completion hooks are known disabled or unavailable (for example, an explicit MCP-only installation), or the user explicitly requests an additional separate alert.
+Unknown hook state is not evidence of absence; `notification_status` does not report hook state.
+
+Notify during ongoing work when an actionable question, a blocker requiring the user's help, or a useful milestone warrants it, including an unresolved blocker when work pauses. If a known hook covers the same question or approval event, do not duplicate it. Continue the task after the MCP call when possible. Include the task name in a short title and make the body useful without exposing credentials or private source text on the lock screen. Do not send an alert for every internal step, poll, or notification result.
 
 Choose `attention` for needed user input, `progress` for an intermediate milestone, and `info` for an informational result. Sending a notification does not mean the task is complete.
 
