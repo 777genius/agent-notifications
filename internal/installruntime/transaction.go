@@ -47,6 +47,7 @@ type Consumer struct {
 	RuntimeRoot  string
 	Registration string
 	Commands     []string
+	OpenCode     *OpenCodeRegistration `json:",omitempty"`
 }
 type Ledger struct {
 	WriterFloor      int
@@ -64,12 +65,14 @@ type Ledger struct {
 	PendingMutation  *PendingMutation `json:",omitempty"`
 }
 type transaction struct {
-	ConfigPaths []string
-	Native      *NativeChange
-	Schema      int
-	Before      Ledger
-	After       Ledger
-	Files       []File
+	OpenCodeInit  *File      `json:",omitempty"`
+	OpenCodePurge *PurgeTree `json:",omitempty"`
+	ConfigPaths   []string
+	Native        *NativeChange
+	Schema        int
+	Before        Ledger
+	After         Ledger
+	Files         []File
 	// Rollback marks a durable reverse decision. Retry must resume it instead
 	// of reversing the reverse and republishing the interrupted upgrade.
 	Rollback bool `json:",omitempty"`
@@ -163,6 +166,9 @@ func readLedger(root string) (Ledger, error) {
 	err = json.Unmarshal(data, &l)
 	if err == nil && (!acceptedLedgerSchema(l.Schema) || l.ID == "" || l.Generation == 0 || l.Consumers == nil || l.Files == nil) {
 		err = fmt.Errorf("invalid ownership ledger")
+	}
+	if err == nil && l.Consumers[openCodeConsumer].OpenCode != nil && (l.Schema != 4 || l.WriterFloor < OpenCodeWriterFloor) {
+		err = fmt.Errorf("private registration requires compatible persisted protocol")
 	}
 	return l, err
 }
@@ -370,7 +376,7 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 	if err != nil {
 		return l, err
 	}
-	if l.WriterFloor > ReservationWriterFloor {
+	if l.WriterFloor > OpenCodeWriterFloor {
 		return l, fmt.Errorf("installed writer floor requires a newer compatible kernel")
 	}
 	if err := validateWriterFiles(r.Files); err != nil {
@@ -504,8 +510,13 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 		if _, exists := l.Consumers[r.ConsumerID]; !exists && !r.PurgeNative {
 			return l, nil
 		}
-		if len(r.Files) != 0 {
-			return l, fmt.Errorf("consumer removal cannot install files")
+		for _, f := range r.Files {
+			if r.ConsumerID != openCodeConsumer || !f.Remove || len(l.Consumers) <= 1 {
+				return l, fmt.Errorf("consumer removal cannot install files")
+			}
+		}
+		if previous.OpenCode != nil && r.ExpectedGeneration == nil {
+			return l, fmt.Errorf("private removal requires expected generation")
 		}
 	}
 	if r.ExpectedGeneration != nil && *r.ExpectedGeneration != l.Generation {
@@ -735,6 +746,9 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 	seen := map[string]bool{}
 	for i := range files {
 		f := files[i]
+		if f.Path == filepath.Join(root, "opencode-admission") || pathWithinRoot(filepath.Join(root, "opencode-admission"), f.Path) || f.Path == filepath.Join(root, OpenCodeStoreLock) {
+			return l, fmt.Errorf("private admission state requires kernel decision")
+		}
 		if !filepath.IsAbs(f.Path) || seen[f.Path] {
 			return l, fmt.Errorf("invalid or duplicate mutation path")
 		}
@@ -782,7 +796,23 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 			}
 		}
 	}
-	tx := transaction{Schema: transactionSchemaFor(next, r), Before: l, After: next, Files: files, Native: native, ConfigPaths: r.ConfigPaths}
+	if !r.PolicyOnly && !policyDisableOnly(r) {
+		if err := protectOpenCodeProtocol(l, next); err != nil {
+			return l, err
+		}
+	}
+	var init *File
+	var purge *PurgeTree
+	if !r.PolicyOnly && !policyDisableOnly(r) {
+		init, purge, err = prepareOpenCodeState(ctx, root, l, next, policyFields)
+		if err != nil {
+			return l, err
+		}
+	}
+	if err := validateWriterFilesAtFloor(files, next.WriterFloor); err != nil {
+		return l, err
+	}
+	tx := transaction{Schema: transactionSchemaFor(next, r), Before: l, After: next, Files: files, Native: native, ConfigPaths: r.ConfigPaths, OpenCodeInit: init, OpenCodePurge: purge}
 	if err := writeTransaction(marker, tx); err != nil {
 		return l, err
 	}
@@ -797,6 +827,12 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 	return next, nil
 }
 func recoverTransaction(ctx context.Context, root string, current Ledger, tx transaction, fault func(string) error) error {
+	if tx.After.WriterFloor > OpenCodeWriterFloor {
+		return fmt.Errorf("recovery requires a newer compatible kernel")
+	}
+	if err := validateOpenCodeDecision(root, tx); err != nil {
+		return err
+	}
 	if !reflect.DeepEqual(current, tx.Before) && !reflect.DeepEqual(current, tx.After) {
 		return fmt.Errorf("transaction ledger snapshot mismatch")
 	}
@@ -876,6 +912,9 @@ func recoverTransaction(ctx context.Context, root string, current Ledger, tx tra
 		}
 	}
 	if err := cleanupPurgedNative(tx.Native, fault); err != nil {
+		return err
+	}
+	if err := recoverOpenCodeState(ctx, root, tx, fault); err != nil {
 		return err
 	}
 	// Publish the final policy only after all assets and the ledger are durable.

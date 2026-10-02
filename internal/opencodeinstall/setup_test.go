@@ -30,7 +30,7 @@ func fixture(t *testing.T) (context.Context, Request, string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
 	r := Request{Action: Install, ControlRoot: filepath.Join(base, "control"), RuntimeRoot: filepath.Join(base, "runtime"),
-		BinarySource: source, HomeDir: filepath.Join(base, "home"), Desktop: true, GOOS: "linux", GOARCH: "amd64"}
+		BinarySource: source, HomeDir: filepath.Join(base, "home"), Desktop: true, GOOS: "linux", GOARCH: "amd64", Renderer: registrationFixtureRenderer{}}
 	return ctx, r, filepath.Join(r.HomeDir, ".config", "opencode", "plugins", pluginName)
 }
 
@@ -51,7 +51,7 @@ func fixtureBinary(goos, goarch, version string) []byte {
 		copy(data[0x40:], "PE\x00\x00")
 		binary.LittleEndian.PutUint16(data[0x44:0x46], uint16(p.machine))
 	}
-	return append(data, []byte(version+installruntime.WriterProtocolMarker)...)
+	return append(data, []byte(version+installruntime.WriterProtocolMarker+installruntime.OpenCodeWriterProtocolMarker)...)
 }
 
 func TestSupportedPlatformBinariesAndValidation(t *testing.T) {
@@ -104,6 +104,7 @@ func TestWindowsNativeInstallUpdateRemoveAndForeignProtection(t *testing.T) {
 	p, _ := targetPlatform("windows", "amd64")
 	r := Request{
 		Action: Install, ControlRoot: filepath.Join(base, "control"), RuntimeRoot: filepath.Join(base, "runtime"),
+		Renderer:     registrationFixtureRenderer{},
 		BinarySource: filepath.Join(base, "source.exe"), HomeDir: filepath.Join(base, "home"),
 		OpenCodeConfigDir: filepath.Join(base, "opencode-config"), Desktop: true, GOOS: "windows", GOARCH: "amd64",
 	}
@@ -517,7 +518,9 @@ func TestExistingComponentSuppliesRuntimeRoot(t *testing.T) {
 	}
 }
 
-func TestRemoveResumesAfterSharedPluginCAS(t *testing.T) {
+// Removing the bundle separately must fail while the incarnation remains live;
+// the formerly split removal operation could erase claims before unregistering.
+func TestSharedPluginCannotBeRemovedBeforeRegistration(t *testing.T) {
 	ctx, r, plugin := fixture(t)
 	if err := Apply(ctx, r); err != nil {
 		t.Fatal(err)
@@ -547,8 +550,8 @@ func TestRemoveResumesAfterSharedPluginCAS(t *testing.T) {
 	_, err = installruntime.Commit(ctx, installruntime.Request{ControlRoot: r.ControlRoot, RuntimeRoot: r.RuntimeRoot,
 		Owner: "existing-installer", ConsumerID: consumerID, RefreshOnly: true, ExpectedGeneration: &gen,
 		Files: []installruntime.File{{Path: plugin, Before: owned, Remove: true}}})
-	if err != nil {
-		t.Fatal(err)
+	if err == nil {
+		t.Fatal("active registration lost its bound bundle")
 	}
 	r.Action = Remove
 	if err := Apply(ctx, r); err != nil {

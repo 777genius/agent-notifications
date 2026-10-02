@@ -30,6 +30,20 @@ func managedWriter(path string) bool {
 }
 
 func validateWriterFiles(files []File) error {
+	return validateWriterFilesWithMarker(files, WriterProtocolMarker)
+}
+
+func validateWriterFilesAtFloor(files []File, floor int) error {
+	if err := validateWriterFiles(files); err != nil {
+		return err
+	}
+	if floor >= OpenCodeWriterFloor {
+		return validateWriterFilesWithMarker(files, OpenCodeWriterProtocolMarker)
+	}
+	return nil
+}
+
+func validateWriterFilesWithMarker(files []File, marker string) error {
 	for _, file := range files {
 		if file.Remove || !managedWriter(file.Path) {
 			continue
@@ -44,7 +58,7 @@ func validateWriterFiles(files []File) error {
 			target = filepath.Clean(target)
 			validated := false
 			for _, candidate := range files {
-				if filepath.Clean(candidate.Path) == target && !candidate.Remove && candidate.Link == "" && managedWriter(candidate.Path) && bytes.Contains(candidate.Data, []byte(WriterProtocolMarker)) {
+				if filepath.Clean(candidate.Path) == target && !candidate.Remove && candidate.Link == "" && managedWriter(candidate.Path) && bytes.Contains(candidate.Data, []byte(marker)) {
 					validated = true
 				}
 			}
@@ -53,8 +67,8 @@ func validateWriterFiles(files []File) error {
 			}
 			return fmt.Errorf("managed writer alias %s requires a validated regular managed target in the transaction", file.Path)
 		}
-		if !bytes.Contains(file.Data, []byte(WriterProtocolMarker)) {
-			return fmt.Errorf("managed writer %s is below protocol floor %d; use a compatible install kernel/package for rollback", filepath.Base(file.Path), WriterFloor)
+		if !bytes.Contains(file.Data, []byte(marker)) {
+			return fmt.Errorf("managed writer %s lacks the required protocol declaration; use a compatible install kernel/package for rollback", filepath.Base(file.Path))
 		}
 	}
 	return nil
