@@ -18,6 +18,9 @@ import (
 // ErrPolicyRecovery leaves pending installer work untouched for its owner.
 var ErrPolicyRecovery = errors.New("pending installation transaction requires installer recovery")
 
+// ErrPolicyConflict is a raw-policy refusal before any journal publication.
+var ErrPolicyConflict = errors.New("managed policy observation changed or invalid")
+
 // Identity includes existence: an empty file is not an absent file.
 type Identity struct {
 	Link   string
@@ -88,6 +91,10 @@ type Request struct {
 	// It refuses recovery and asset/consumer mutations; setup cannot accidentally
 	// promote native or rewrite hooks from an unrelated pending transaction.
 	PolicyOnly bool
+	// PolicyDocument is an exact raw config edit for the existing OpenCode
+	// policy. Nil preserves it. Prepare must only fence the observed full ledger
+	// and return no files; the kernel alone derives the publication path.
+	PolicyDocument []byte
 	// PolicyEnabled changes explicit intent; nil preserves it. Mutations require
 	// an expected generation and share component/config locking and recovery.
 	PolicyEnabled *bool
@@ -263,7 +270,24 @@ func retainedPortablePrimaryFiles(l Ledger, oldRoot, newRoot, movingID string, s
 // Commit serializes all component decisions, then config locks in canonical
 // order. The durable redo record precedes every live mutation. Recovery checks
 // every identity before changing anything and refuses ambiguous foreign edits.
-func Commit(ctx context.Context, r Request) (Ledger, error) {
+func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
+	journalAttempted := false
+	if r.PolicyDocument != nil {
+		defer func() {
+			if resultErr != nil && !journalAttempted && !errors.Is(resultErr, ErrPolicyRecovery) {
+				resultErr = ErrPolicyConflict
+			}
+		}()
+	}
+	if r.PolicyDocument != nil {
+		if !rawPolicyRequest(r) {
+			return Ledger{}, fmt.Errorf("invalid raw OpenCode policy request")
+		}
+		r.PolicyDocument = append([]byte{}, r.PolicyDocument...)
+		generation, policy := *r.ExpectedGeneration, *r.ExpectedPolicy
+		r.ExpectedGeneration, r.ExpectedPolicy = &generation, &policy
+	}
+
 	if r.RevokeOpenCode && !openCodeRevokeOnly(r) {
 		return Ledger{}, fmt.Errorf("invalid OpenCode channel revocation")
 	}
@@ -443,6 +467,11 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 		return l, fmt.Errorf("component owned by %s at %s; explicit takeover required", l.Owner, l.RuntimeRoot)
 	}
 	previous, registered := l.Consumers[r.ConsumerID]
+	if r.PolicyDocument != nil && (!registered || previous.RuntimeRoot != r.RuntimeRoot ||
+		l.ID == "" || l.Schema != 4 || l.WriterFloor != OpenCodeWriterFloor || l.PolicyGeneration == 0 ||
+		!validRawPolicyRegistration(l, previous)) {
+		return l, fmt.Errorf("raw policy requires an existing origin-bound OpenCode registration")
+	}
 	if r.RevokeOpenCode && (!registered || previous.RuntimeRoot != r.RuntimeRoot || previous.Registration == "") {
 		return l, fmt.Errorf("OpenCode revocation requires its registered runtime")
 	}
@@ -579,6 +608,14 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 	if r.ExpectedPolicy != nil && *r.ExpectedPolicy != policyBefore {
 		return l, fmt.Errorf("stale explicit policy bytes")
 	}
+	if r.PolicyDocument != nil {
+		if !policyBefore.Exists || policyBefore.Link != "" || l.Enabled != policy.Enabled {
+			return l, fmt.Errorf("raw policy requires unchanged existing intent")
+		}
+		if err := validateRawPolicyDocument(policyFields, r.PolicyDocument); err != nil {
+			return l, err
+		}
+	}
 	next.Enabled = policy.Enabled
 	if r.PolicyEnabled != nil || len(r.PolicyFields) != 0 {
 		if r.RemoveConsumer || len(next.Consumers) == 0 || r.ExpectedGeneration == nil {
@@ -700,6 +737,9 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 		return l, err
 	}
 	files := append([]File(nil), r.Files...)
+	if r.PolicyDocument != nil {
+		files = append(files, File{Path: policyPath, Before: policyBefore, Data: r.PolicyDocument, Mode: policyBefore.Mode})
+	}
 	if r.PolicyEnabled != nil || len(r.PolicyFields) != 0 || (r.RemoveConsumer && len(next.Consumers) == 0) {
 		f, e := policyFile(policyRoot, next.Enabled, policyFields, policyBefore)
 		if e != nil {
@@ -809,6 +849,7 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 		return l, err
 	}
 	tx := transaction{Schema: transactionSchemaFor(next, r), Before: l, After: next, Files: files, Native: native, ConfigPaths: r.ConfigPaths, OpenCodeInit: init, OpenCodePurge: purge}
+	journalAttempted = true
 	if err := writeTransaction(marker, tx); err != nil {
 		return l, err
 	}

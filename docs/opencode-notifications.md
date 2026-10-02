@@ -46,7 +46,7 @@ commit.
 
 Use `--webhook` instead of `--desktop` for webhook-only consent, or supply both.
 Webhook consent alone does not configure a destination: add your endpoint to the
-[shared settings](CONFIGURATION.md#manual-configuration), enable the desired
+[installed OpenCode settings](#edit-installed-opencode-settings), enable the desired
 webhook and status channel, and restart OpenCode. Saved settings can further
 restrict authorized delivery; setup does not enable portable MCP notifications.
 The OpenCode installer does not register Claude marketplace plugins or Codex hooks.
@@ -100,6 +100,63 @@ and pass `--native-app /absolute/path/ClaudeNotifier.app`. Keep the adjacent
 sealed protocol, attestation and code signature before enabling desktop consent.
 Webhook-only setup does not require the native helper. Existing installations
 may omit `--runtime-root` to use their authoritative recorded location.
+
+## Edit installed OpenCode settings
+
+Use the executable from the managed runtime to select OpenCode explicitly:
+
+```bash
+"$NOTIFICATIONS_BIN" config path --target opencode --json
+"$NOTIFICATIONS_BIN" config inspect --target opencode --json
+```
+
+This selects `agent-notifications.json` in the managed control directory, the
+same file the installed event consumer reads. Selection verifies the existing
+ownership ledger, platform command, origin-bound plugin and its control-root
+binding. The default control location follows the platform paths above. If setup
+used `--control-root`, pass that same existing directory to **every** config
+command, for example `config inspect --target opencode --control-root
+/absolute/path/to/control --json`. A control root is accepted only with matching
+installed metadata; it is not an arbitrary config-file path.
+
+Copy the opaque `revision` from that inspection. Submit only supported config
+leaf edits through private stdin. For example, configure the webhook destination
+without persisting an expanded secret:
+
+```bash
+printf '%s\n' '{"set":{"/notifications/webhook/enabled":true,"/notifications/webhook/url":"${MY_WEBHOOK_URL}"}}' |
+  "$NOTIFICATIONS_BIN" config edit --target opencode --stdin --expect-revision 'REVISION_FROM_INSPECT'
+```
+
+Replace `REVISION_FROM_INSPECT` with the inspected revision and make
+`MY_WEBHOOK_URL` available to OpenCode's environment. Keep any saved patch and
+inspection private. For a custom control root, include `--control-root` on the
+edit as well. Inspect again after success. Settings are read on subsequent events;
+a settings-only edit does not replace the loaded plugin or require a restart.
+
+The editor uses the existing config leaf validation and raw-value preservation,
+then the managed transaction's policy CAS, component/config locks and generation
+publication. Unedited policy fields, other agents' route settings, setup channel
+consent and the OpenCode origin remain intact. No-op edits retain the generation.
+A setup/update/removal or byte change invalidates the revision; inspect again and
+review the intended edit after `ConfigConflict`. If a commit is uncertain, inspect
+and resolve any reported recovery before retrying. Interrupted managed transactions
+use the existing `setup-opencode recover` lifecycle.
+
+OpenCode channel consent still comes from the explicit setup `--desktop` and
+`--webhook` flags. Config edits can restrict delivery and configure endpoints;
+they do not grant setup consent or change registrations. Missing, corrupt,
+unrecognized, recovery-pending or differently bound installations fail instead
+of creating a policy or falling back to shared settings. Use the matching installed
+executable; a plugin from a different embedded release must be updated through
+setup first. Managed config `init`, imports and `preflight-update` are unsupported.
+The managed policy retains its existing schema 1; schema 2 agent-profile migration
+is outside this command.
+
+Omitting `--target`, or using `--target shared`, preserves ordinary config
+selection and its `AGENT_NOTIFICATIONS_CONFIG` override. The OpenCode target
+ignores that override and `AGENT_NOTIFICATIONS_CONTROL_ROOT`; use the verified
+control-root selection above.
 
 ## macOS notification permission
 
