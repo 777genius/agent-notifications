@@ -8,6 +8,7 @@ esac
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-env.sh"
 test_env_enter "$0" "$@"
 set -euo pipefail
+trap 'printf "TEST OpenCode fixture failed: %s (status %s)\n" "$BASH_COMMAND" "$?" >&2' ERR
 [ "$#" -eq 1 ] || { echo "Usage: bash bin/bootstrap_opencode_test.sh /absolute/native/test-binary" >&2; exit 2; }
 TEST_BINARY="$1"
 [ -f "$TEST_BINARY" ] || exit 2
@@ -16,7 +17,7 @@ TEST_BINARY="$1"
 source_size=$(wc -c < "$TEST_BINARY" | tr -d '[:space:]')
 printf 'OpenCode fixture native source: %s bytes\n' "$source_size"
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-SANDBOX=$(mktemp -d /tmp/bootstrap-opencode-XXXXXX)
+SANDBOX=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-opencode-TEST-XXXXXX")
 trap 'rm -rf "$SANDBOX"' EXIT
 # Give all Windows sandbox children the established private inherited DACL
 # before creating HOME/config/plugin paths. chmod alone does not create it.
@@ -25,6 +26,15 @@ case "$(uname -s)" in
         (cd "$ROOT" && GOTMPDIR="$(cygpath -m "$TMPDIR")" go run scripts/opencode-private-root-windows.go "$(cygpath -m "$SANDBOX")") ;;
 esac
 test_env_setup "$SANDBOX"
+# test-env.sh inherits PATH: retain only named tools, never host agent binaries.
+mkdir -p "$SANDBOX/trusted-tools"
+for tool in bash sh env cygpath python3 node curl wget tar gzip unzip zip mktemp rm cat cp mv chmod mkdir ln uname tr wc head cmp grep sed awk dirname basename find sort sha256sum shasum cut xargs sleep date stat diff touch readlink dd od go gcc cc pkg-config; do
+    tool_path=$(type -P "$tool" 2>/dev/null || true)
+    [ -n "$tool_path" ] || continue
+    test_env_place_tool "$tool_path" "$SANDBOX/trusted-tools/$tool"
+done
+export PATH="$SANDBOX/trusted-tools"
+
 export OPENCODE_CONFIG_DIR="$SANDBOX/opencode profile"
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
@@ -170,6 +180,7 @@ def run_tty(answer, channels=None):
     transcript = b''
     sent = False
     consent_sent = False
+    approved = False
     deadline = time.monotonic()+30
     status = None
     try:
@@ -184,9 +195,12 @@ def run_tty(answer, channels=None):
                 if b'comma-separated' in transcript and not sent:
                     os.write(terminal,answer)
                     sent = True
-                if channels is not None and b'Observer channels:' in transcript and not consent_sent:
+                if channels is not None and b'Notification channels' in transcript and not consent_sent:
                     os.write(terminal,channels)
                     consent_sent = True
+                if channels is not None and b'Apply this plan?' in transcript and not approved:
+                    os.write(terminal,b'y\n')
+                    approved = True
             finished, code = os.waitpid(pid,os.WNOHANG)
             if finished:
                 status = os.waitstatus_to_exitcode(code)
@@ -198,7 +212,7 @@ def run_tty(answer, channels=None):
         if channels is None:
             assert persistent_state() == before, 'cancel/empty mutated persistent product roots'
         else:
-            assert consent_sent, 'successful selection never requested observer consent'
+            assert consent_sent and approved, 'successful selection omitted channel selection or final consent'
         for label in (b'Claude Code',b'Codex',b'OpenCode',b'Gemini CLI'):
             assert label in transcript, transcript.decode(errors='replace')
     finally:
@@ -209,7 +223,8 @@ def run_tty(answer, channels=None):
         os.close(terminal)
 
 run_tty(b'cancel\n')
-run_tty(b'\n')
+# Detected products are defaults; none tests accepted-empty without proceeding.
+run_tty(b'none\n')
 run_tty(b'3,4\n', b'2\n')
 assert set(json.loads((control/'ownership.json').read_text())['Consumers']) == {'opencode-notifications','gemini-notifications'}, 'interactive loader did not install both selections'
 interactive_policy = json.loads((control/'agent-notifications.json').read_text())

@@ -18,6 +18,10 @@ import (
 // ErrPolicyRecovery leaves pending installer work untouched for its owner.
 var ErrPolicyRecovery = errors.New("pending installation transaction requires installer recovery")
 
+// ErrPolicyConflict refuses a stale ExpectedPolicy under the commit locks,
+// before publishing any transaction or product mutation.
+var ErrPolicyConflict = errors.New("stale explicit policy bytes")
+
 // Identity includes existence: an empty file is not an absent file.
 type Identity struct {
 	Link   string
@@ -566,7 +570,7 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 		return l, err
 	}
 	if r.ExpectedPolicy != nil && *r.ExpectedPolicy != policyBefore {
-		return l, fmt.Errorf("stale explicit policy bytes")
+		return l, ErrPolicyConflict
 	}
 	next.Enabled = policy.Enabled
 	if r.PolicyEnabled != nil || len(r.PolicyFields) != 0 {

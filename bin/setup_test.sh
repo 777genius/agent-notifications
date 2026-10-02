@@ -86,6 +86,11 @@ if [ "${FAIL_DOWNLOAD:-}" = "$kind" ]; then exit 22; fi
 # execs it, so sys.argv cannot prove setup.sh forwarded the literal argument.
 bootstrap_stub = '''#!/usr/bin/env bash
 set -eu
+if [ "${1:-}" = --selector-capabilities ]; then
+    [ "${LEGACY_BOOTSTRAP:-}" != 1 ] || exit 1
+    printf 'terminal-selector-v1\n'
+    exit 0
+fi
 if [ "${1:-}" = --capabilities ]; then
     [ "${NO_PRODUCT_CAPABILITY:-}" != 1 ] || exit 1
     printf '%s\\n' bootstrap-products-v1
@@ -356,7 +361,7 @@ def runtime_path(case, python=False, node=False, bash_executable=None):
     bin_dir = case / 'runtime-bin'
     bin_dir.mkdir()
     names = ['bash', 'sh', 'mktemp', 'rm', 'cat', 'chmod', 'mkdir', 'ln', 'uname',
-             'tr', 'wc', 'grep', 'head', 'cp', 'mv', 'env', 'true', 'false', 'dirname', 'basename',
+             'tr', 'wc', 'cmp', 'grep', 'head', 'cp', 'mv', 'env', 'true', 'false', 'dirname', 'basename',
              'printf', 'pwd', 'cygpath']
     if python:
         names.append('python3')
@@ -398,6 +403,18 @@ def run_runtime_case(name, python=False, node=False, expected=0, stub_python=Fal
         assert not list((case / 'tmp space').iterdir()), name + ': leaked staging directory'
         print('PASS ' + name)
 
+
+# Regression: pending JSON previously acquired a helper and entered UI; malformed
+# UI flags and incomplete multi observers must also stop before acquisition.
+for args in [['--json'], ['--product', 'gemini', '--json'],
+             ['--products', 'opencode'], ['--ui=wat'],
+             ['--plain', '--ui=rich'], ['--yes'], ['--unknown']]:
+    run_case('pure parse refuses ' + repr(args), args=args, no_network=True)
+for args in [['--plain'], ['--ui=plain'], ['--product', 'gemini', '--plain']]:
+    run_case('terminal feature forwarding ' + repr(args), args=args, expected=0)
+run_case('complete legacy JSON remains explicit',
+         args=['--product', 'claude', '--json'], expected=0)
+
 run_case('pinned release and exact argv', expected=0)
 run_case('piped one-line entry point', expected=0, piped=True)
 run_case('documented one-line command', expected=0, documented=True)
@@ -405,12 +422,19 @@ run_case('initial loader download failure', fail='setup', expected=0, documented
 run_case('bootstrap exit status', status=17, expected=17)
 # v1.46.1 accepts the interactive entry point and old single-product selectors,
 # but has neither --capabilities nor --products. Exercise its argv boundary.
-for args in [[], ['--product', 'claude'], ['--product', 'codex'],
+for args in [['--product', 'claude'], ['--product', 'codex'],
              ['--product', 'both'], ['--product', 'opencode', '--desktop']]:
     run_case('stable bootstrap passthrough ' + repr(args), args=args,
              release='v1.46.1', legacy_bootstrap=True, expected=0)
-run_case('stable interactive exit status', args=[], release='v1.46.1',
-         legacy_bootstrap=True, status=37, expected=37)
+# Regression: UI presentation alone must not feature-gate a complete explicit
+# request; the public loader must forward it to the older published bootstrap.
+run_case('complete explicit UI without terminal feature',
+         args=['--product', 'opencode', '--webhook', '--plain'],
+         release='v1.46.1', legacy_bootstrap=True, expected=0)
+# Regression: an old published no-selector menu could install without the new
+# shared final consent. Explicit compatibility above remains intentional.
+run_case('stable interactive feature refusal', args=[], release='v1.46.1',
+         legacy_bootstrap=True, message='needs terminal selector support')
 for args in [['--product', 'gemini', '--desktop'], ['--product=gemini', '--webhook'],
              ['--products', 'claude,gemini', '--webhook']]:
     run_case('stable bootstrap rejects new selector ' + repr(args), args=args,
@@ -516,11 +540,11 @@ for args in [
     run_case('early selector rejection ' + repr(args), args=args, no_network=True)
 for args in [['--help', '--products', 'opencode'], ['--products=claude', '-h']]:
     run_case('new mode help ' + repr(args), args=args, help_only=True)
-# Unknown legacy arguments, literal metacharacters and standalone help continue
-# to reach the released bootstrap without loader reinterpretation.
+# Complete legacy selectors still forward literal metacharacters unchanged.
+# No-selector unknown input belongs to the new pure-parse refusal boundary.
 for args in [[], ['--help'], ['--product', 'claude'], ['--product', 'codex'],
              ['--product', 'opencode', '--desktop'],
-             ['--unknown', 'space path', '*', '$(touch marker)', '--products-not-a-selector']]:
+             ['--product', 'claude', '--unknown', 'space path', '*', '$(touch marker)', '--products-not-a-selector']]:
     run_case('legacy passthrough ' + repr(args), args=args, expected=0)
 for release in ['v0.99.0', 'v1.9.0', 'v1.43.0', 'v1.45.99']:
     run_case('reject unsupported OpenCode release ' + release,

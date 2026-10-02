@@ -78,9 +78,37 @@ type Request struct {
 }
 
 type Service struct {
-	Stager    Stager
-	Activator Activator
-	Remover   Remover
+	// ExpectedPolicy belongs to one verified bootstrap admission, including all
+	// coordinated handoff and binding commits. Nil preserves legacy callers.
+	ExpectedPolicy *installruntime.Identity
+	Stager         Stager
+	Activator      Activator
+	Remover        Remover
+}
+
+// Translate the protected kernel refusal while retaining its identity through
+// coordinated publication, registration, binding and finalization wrappers.
+func policyConflict(err error) error {
+	if errors.Is(err, installruntime.ErrPolicyConflict) {
+		return fmt.Errorf("%w: %w", ErrConcurrentChange, err)
+	}
+	return err
+}
+
+// Paths that reuse an existing reservation or consumer can bypass Commit;
+// check their admission before locator/UAP effects as well.
+func (s Service) checkPolicy(ctx context.Context, root string) error {
+	if s.ExpectedPolicy == nil {
+		return nil
+	}
+	current, err := installruntime.ReadPolicySnapshot(ctx, root)
+	if err != nil {
+		return err
+	}
+	if current.Preimage != *s.ExpectedPolicy {
+		return fmt.Errorf("%w: stale explicit policy bytes", ErrConcurrentChange)
+	}
+	return nil
 }
 
 func decorate(env Envelope, name string) Envelope {
@@ -203,6 +231,9 @@ func (s Service) CommitBinding(ctx context.Context, req Request) (portable.Bindi
 		return portable.Binding{}, err
 	}
 	if existing, ok := snap.Ledger.Consumers[key]; ok && reflect.DeepEqual(existing, consumer) {
+		if err := s.checkPolicy(ctx, req.Binding.ControlRoot); err != nil {
+			return portable.Binding{}, err
+		}
 		if _, err = portable.Publish(req.Binding); err != nil {
 			return portable.Binding{}, err
 		}
@@ -217,17 +248,17 @@ func (s Service) CommitBinding(ctx context.Context, req Request) (portable.Bindi
 	gen := req.ExpectedGeneration
 	ledger, err := installruntime.Commit(ctx, installruntime.Request{
 		ControlRoot: req.Binding.ControlRoot, Owner: req.Binding.Owner, RuntimeRoot: req.Binding.RuntimeRoot,
-		ConsumerID: key, Consumer: consumer, ExpectedGeneration: &gen, RefreshOnly: false, Reservation: res,
+		ConsumerID: key, Consumer: consumer, ExpectedGeneration: &gen, ExpectedPolicy: s.ExpectedPolicy, RefreshOnly: false, Reservation: res,
 	})
 	if err != nil {
-		return portable.Binding{}, err
+		return portable.Binding{}, policyConflict(err)
 	}
 	if _, err = portable.Publish(req.Binding); err != nil {
 		if !existed {
 			next := ledger.Generation
 			_, _ = installruntime.Commit(ctx, installruntime.Request{
 				ControlRoot: req.Binding.ControlRoot, Owner: req.Binding.Owner, RuntimeRoot: req.Binding.RuntimeRoot,
-				ConsumerID: key, RemoveConsumer: true, ExpectedGeneration: &next, Reservation: res,
+				ConsumerID: key, RemoveConsumer: true, ExpectedGeneration: &next, ExpectedPolicy: s.ExpectedPolicy, Reservation: res,
 			})
 		}
 		return portable.Binding{}, err
@@ -473,16 +504,19 @@ func (s Service) HandoffReverse(ctx context.Context, req Request) (uint64, error
 	result, err := clientsetup.Apply(ctx, clientsetup.Request{
 		ControlRoot: req.Binding.ControlRoot, RuntimeRoot: req.Binding.RuntimeRoot, Command: command,
 		ConfigPath: req.Discovery.ConfigPath, Provider: provider, Mode: clientsetup.Managed,
-		ExpectedGeneration: req.ExpectedGeneration, SkillProjection: req.Discovery.Skill,
+		ExpectedGeneration: req.ExpectedGeneration, ExpectedPolicy: s.ExpectedPolicy, SkillProjection: req.Discovery.Skill,
 		Reservation: res,
 	})
 	if err != nil {
-		return 0, fmt.Errorf("%w: reverse discovery handoff: %v", ErrPreflight, err)
+		return 0, fmt.Errorf("%w: reverse discovery handoff: %w", ErrPreflight, policyConflict(err))
 	}
 	return result.Ledger.Generation, nil
 }
 
 func (s Service) handoffForward(ctx context.Context, req Request, action string) (uint64, *installruntime.PendingMutation, error) {
+	if err := s.checkPolicy(ctx, req.Binding.ControlRoot); err != nil {
+		return 0, nil, err
+	}
 	if req.Discovery.ConfigPath == "" {
 		return req.ExpectedGeneration, nil, nil
 	}
@@ -497,7 +531,7 @@ func (s Service) handoffForward(ctx context.Context, req Request, action string)
 	r := clientsetup.Request{
 		ControlRoot: req.Binding.ControlRoot, RuntimeRoot: req.Binding.RuntimeRoot, Command: command,
 		ConfigPath: req.Discovery.ConfigPath, Provider: provider, Mode: clientsetup.Managed,
-		ExpectedGeneration: req.ExpectedGeneration, SkillProjection: req.Discovery.Skill,
+		ExpectedGeneration: req.ExpectedGeneration, ExpectedPolicy: s.ExpectedPolicy, SkillProjection: req.Discovery.Skill,
 	}
 	facts, err := clientsetup.Inspect(ctx, r)
 	if err != nil {
@@ -558,7 +592,7 @@ func (s Service) handoffForward(ctx context.Context, req Request, action string)
 	r.Reservation = res
 	result, err := clientsetup.Apply(ctx, r)
 	if err != nil {
-		return 0, nil, fmt.Errorf("%w: owned discovery handoff: %v", ErrPreflight, err)
+		return 0, nil, fmt.Errorf("%w: owned discovery handoff: %w", ErrPreflight, policyConflict(err))
 	}
 	return result.Ledger.Generation, res, nil
 }
@@ -600,6 +634,9 @@ func intentConsumer(ledger installruntime.Ledger, runtimeRoot string) (string, s
 // PublishConfirmedIntent records the confirmed SetupIntent and kernel
 // reservation before live hooks/MCP mutation. It takes the coordinator lease.
 func (s Service) PublishConfirmedIntent(ctx context.Context, req ConfirmedIntent) (installruntime.Ledger, *installruntime.PendingMutation, error) {
+	if req.ExpectedPolicy == nil {
+		req.ExpectedPolicy = s.ExpectedPolicy
+	}
 	if ctx == nil {
 		return installruntime.Ledger{}, nil, ErrPreflight
 	}
@@ -622,6 +659,9 @@ func (s Service) PublishConfirmedIntent(ctx context.Context, req ConfirmedIntent
 		return installruntime.Ledger{}, nil, ErrConcurrentChange
 	}
 	if pending := snap.Ledger.PendingMutation; pending != nil {
+		if err := (Service{ExpectedPolicy: req.ExpectedPolicy}).checkPolicy(ctx, req.ControlRoot); err != nil {
+			return installruntime.Ledger{}, nil, err
+		}
 		intent, readErr := ReadIntent(req.ControlRoot)
 		if readErr != nil || !intentMatches(intent, pending.ID, req.Action, req.Targets[0].Client, req.SourceDigest, req.TreeDigest, req.HelperDigest, req.HelperVersion) || (intent.Primary != "" && req.Primary != "" && intent.Primary != req.Primary) || (intent.GlobalConfig != "" && req.GlobalConfig != "" && intent.GlobalConfig != req.GlobalConfig) {
 			return installruntime.Ledger{}, nil, fmt.Errorf("%w: pending %s", ErrIntentConflict, intent.Action)
@@ -670,11 +710,11 @@ func (s Service) PublishConfirmedIntent(ctx context.Context, req ConfirmedIntent
 	gen := snap.Ledger.Generation
 	ledger, err := installruntime.Commit(ctx, installruntime.Request{
 		ControlRoot: req.ControlRoot, Owner: req.Owner, RuntimeRoot: commitRoot,
-		ConsumerID: consumerID, RefreshOnly: true, ExpectedGeneration: &gen, Reservation: &res,
+		ConsumerID: consumerID, RefreshOnly: true, ExpectedGeneration: &gen, ExpectedPolicy: req.ExpectedPolicy, Reservation: &res,
 		Files: []installruntime.File{{Path: path, Before: before, Data: payload, Mode: 0600}},
 	})
 	if err != nil {
-		return installruntime.Ledger{}, nil, fmt.Errorf("%w: publish confirmed intent: %v", ErrPreflight, err)
+		return installruntime.Ledger{}, nil, fmt.Errorf("%w: publish confirmed intent: %w", ErrPreflight, policyConflict(err))
 	}
 	return ledger, &res, nil
 }
@@ -808,11 +848,11 @@ func (s Service) patchIntentLocked(ctx context.Context, controlRoot, runtimeRoot
 	res := *pending
 	_, err = installruntime.Commit(ctx, installruntime.Request{
 		ControlRoot: controlRoot, Owner: owner, RuntimeRoot: commitRoot,
-		ConsumerID: consumerID, RefreshOnly: true, ExpectedGeneration: &gen, Reservation: &res,
+		ConsumerID: consumerID, RefreshOnly: true, ExpectedGeneration: &gen, ExpectedPolicy: s.ExpectedPolicy, Reservation: &res,
 		Files: []installruntime.File{{Path: path, Before: before, Data: payload, Mode: 0600}},
 	})
 	if err != nil {
-		return fmt.Errorf("%w: patch confirmed intent: %v", ErrPreflight, err)
+		return fmt.Errorf("%w: patch confirmed intent: %w", ErrPreflight, policyConflict(err))
 	}
 	return nil
 }
@@ -861,11 +901,11 @@ func (s Service) FinishConfirmedIntent(ctx context.Context, req ConfirmedIntent,
 	gen := snap.Ledger.Generation
 	ledger, err := installruntime.Commit(ctx, installruntime.Request{
 		ControlRoot: req.ControlRoot, Owner: req.Owner, RuntimeRoot: commitRoot,
-		ConsumerID: consumerID, RefreshOnly: true, ExpectedGeneration: &gen, Reservation: res, ClearReservation: true,
+		ConsumerID: consumerID, RefreshOnly: true, ExpectedGeneration: &gen, ExpectedPolicy: s.ExpectedPolicy, Reservation: res, ClearReservation: true,
 		Files: files,
 	})
 	if err != nil {
-		return 0, false, fmt.Errorf("%w: clear confirmed intent: %v", ErrPreflight, err)
+		return 0, false, fmt.Errorf("%w: clear confirmed intent: %w", ErrPreflight, policyConflict(err))
 	}
 	return ledger.Generation, true, nil
 }
@@ -917,11 +957,11 @@ func (s Service) publishIntent(ctx context.Context, req Request, gen uint64, act
 	}
 	ledger, err := installruntime.Commit(ctx, installruntime.Request{
 		ControlRoot: req.Binding.ControlRoot, Owner: req.Binding.Owner, RuntimeRoot: req.Binding.RuntimeRoot,
-		ConsumerID: key, RefreshOnly: true, ExpectedGeneration: &gen, Reservation: &res,
+		ConsumerID: key, RefreshOnly: true, ExpectedGeneration: &gen, ExpectedPolicy: s.ExpectedPolicy, Reservation: &res,
 		Files: []installruntime.File{{Path: path, Before: before, Data: payload, Mode: 0600}},
 	})
 	if err != nil {
-		return installruntime.Ledger{}, nil, fmt.Errorf("%w: publish %s reservation: %v", ErrPreflight, action, err)
+		return installruntime.Ledger{}, nil, fmt.Errorf("%w: publish %s reservation: %w", ErrPreflight, action, policyConflict(err))
 	}
 	return ledger, &res, nil
 }
@@ -953,11 +993,11 @@ func (s Service) finishHandoff(ctx context.Context, req Request, res *installrun
 	gen := snap.Ledger.Generation
 	_, err = installruntime.Commit(ctx, installruntime.Request{
 		ControlRoot: req.Binding.ControlRoot, Owner: req.Binding.Owner, RuntimeRoot: req.Binding.RuntimeRoot,
-		ConsumerID: key, RefreshOnly: true, ExpectedGeneration: &gen, Reservation: res, ClearReservation: true,
+		ConsumerID: key, RefreshOnly: true, ExpectedGeneration: &gen, ExpectedPolicy: s.ExpectedPolicy, Reservation: res, ClearReservation: true,
 		Files: files,
 	})
 	if err != nil {
-		return fmt.Errorf("%w: clear handoff reservation: %v", ErrPreflight, err)
+		return fmt.Errorf("%w: clear handoff reservation: %w", ErrPreflight, policyConflict(err))
 	}
 	return nil
 }
