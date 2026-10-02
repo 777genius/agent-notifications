@@ -92,6 +92,34 @@ def write_json(path, value):
     Path(path).chmod(0o600)
 
 
+def exception_diagnostic(root, error, report):
+    # Failure-only, bounded private content. Never read HTTP bodies, headers,
+    # environment or traceback, and never replace the original refusal.
+    try:
+        chain, seen = [], set()
+        for _ in range(3):
+            if error is None or id(error) in seen: break
+            seen.add(id(error))
+            raw = str(error).encode('utf-8', errors='replace')
+            bounded = raw[:2048]
+            cls = type(error)
+            row = {'type': cls.__name__ if re.fullmatch(r'[A-Za-z0-9_]{1,80}', cls.__name__) else 'Exception',
+                   'module': cls.__module__ if re.fullmatch(r'[A-Za-z0-9_.]{1,120}', cls.__module__) else 'unknown',
+                   'message': bounded.decode('utf-8', errors='replace'),
+                   'messageSHA256': hashlib.sha256(bounded).hexdigest(),
+                   'messageBytes': len(bounded), 'messageTruncated': len(raw) > len(bounded)}
+            if isinstance(error, urllib.error.HTTPError): row['httpStatus'] = error.code
+            if isinstance(error, OSError) and isinstance(error.errno, int): row['errno'] = error.errno
+            chain.append(row)
+            error = error.__cause__ or (None if error.__suppress_context__ else error.__context__)
+        path = root / 'native-exception.private.json'
+        write_json(path, {'schema': 1, 'failurePhase': report.get('failurePhase'), 'chain': chain})
+        report['nativeExceptionDiagnostic'] = {'privateSHA256': sha(path),
+            'chain': [{k: v for k, v in row.items() if k != 'message'} for row in chain]}
+    except Exception:
+        pass  # A failed diagnostic never changes failure, cleanup or qualification.
+
+
 def unique(pairs):
     result = {}
     for k, v in pairs:
@@ -651,6 +679,7 @@ def main():
             except Exception as error:
                 item['status'] = 'qualification_gap'
                 item['failureReason'] = str(error) if isinstance(error, RuntimeError) and re.fullmatch(r'[a-z0-9_]{1,80}', str(error)) else 'native_exception'
+                exception_diagnostic(cell_root, error, item)
                 need(not ownership.live, 'failed_version_owned_handle_pending')
         report['status'] = 'api_prequalification_passed' if all(v['status'] == 'api_prequalification_passed' for v in report['versions']) else 'qualification_gap'
     except Exception as error:
