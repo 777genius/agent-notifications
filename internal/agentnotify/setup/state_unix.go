@@ -295,7 +295,14 @@ func matches(f *os.File, want string) error {
 	if e != nil {
 		return e
 	}
-	if id != want {
+	if id == want {
+		return nil
+	}
+	var parent unix.Stat_t
+	if e = unix.Fstatat(int(f.Fd()), "..", &parent, unix.AT_SYMLINK_NOFOLLOW); e != nil {
+		return e
+	}
+	if !installruntime.PersistedIdentityMatches(want, id, fmt.Sprintf("%d:%d", parent.Dev, parent.Ino)) {
 		return fmt.Errorf("owned directory identity changed")
 	}
 	return nil

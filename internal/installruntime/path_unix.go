@@ -215,6 +215,32 @@ func safeRemoveDirectory(path, want string, anchors []PathAnchor) error {
 	return parent.Sync()
 }
 
+// PersistedIdentityMatches compares a device:inode identity recorded by an
+// earlier process with a fresh one. A volume's device number is assigned at
+// mount time and can change across reboots, so a different device is accepted
+// only for the same inode on the same device as the freshly opened parent,
+// which still refuses a mount point substituted at that path.
+func PersistedIdentityMatches(stored, fresh, freshParent string) bool {
+	if stored == fresh {
+		return true
+	}
+	storedDev, storedIno, ok := splitDeviceIdentity(stored)
+	if !ok {
+		return false
+	}
+	freshDev, freshIno, ok := splitDeviceIdentity(fresh)
+	if !ok {
+		return false
+	}
+	parentDev, _, ok := splitDeviceIdentity(freshParent)
+	return ok && storedIno == freshIno && freshDev == parentDev && storedDev != freshDev
+}
+
+func splitDeviceIdentity(id string) (dev, ino string, ok bool) {
+	dev, ino, ok = strings.Cut(id, ":")
+	return dev, ino, ok && dev != "" && ino != "" && !strings.Contains(ino, ":")
+}
+
 func openedDirectoryIdentity(f *os.File) (string, error) {
 	var st unix.Stat_t
 	if err := unix.Fstat(int(f.Fd()), &st); err != nil {

@@ -26,7 +26,11 @@ func renameNative(from, to string, expected []PathAnchor, sourceID ...string) er
 		if err := unix.Fstatat(int(parent.Fd()), filepath.Base(from), &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 			return err
 		}
-		if st.Mode&unix.S_IFMT != unix.S_IFDIR || fmt.Sprintf("%d:%d", st.Dev, st.Ino) != sourceID[0] {
+		parentID := ""
+		if len(anchors) != 0 {
+			parentID = anchors[len(anchors)-1].Identity
+		}
+		if st.Mode&unix.S_IFMT != unix.S_IFDIR || !PersistedIdentityMatches(sourceID[0], fmt.Sprintf("%d:%d", st.Dev, st.Ino), parentID) {
 			return fmt.Errorf("native rename source inode changed")
 		}
 	}

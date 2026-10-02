@@ -415,7 +415,8 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 		return l, err
 	}
 
-	if l.Native != nil && !policyDisableOnly(r) && !r.RevokeOpenCode && !r.RevokeGemini {
+	nativeChecked := l.Native != nil && !policyDisableOnly(r) && !r.RevokeOpenCode && !r.RevokeGemini
+	if nativeChecked {
 		if err := validateNativeRecord(l.Native); err != nil {
 			return l, err
 		}
@@ -687,6 +688,12 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 	}
 	if err := validateNative(native); err != nil {
 		return l, err
+	}
+	// Only next changes: tx.Before must stay equal to the ledger on disk.
+	if nativeChecked {
+		if err := refreshNativeIdentities(next.Native); err != nil {
+			return l, err
+		}
 	}
 	files := append([]File(nil), r.Files...)
 	if r.PolicyEnabled != nil || len(r.PolicyFields) != 0 || (r.RemoveConsumer && len(next.Consumers) == 0) {

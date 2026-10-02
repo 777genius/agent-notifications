@@ -20,6 +20,10 @@ func safeRemoveDirectory(path, want string, anchors []PathAnchor) error {
 	return fmt.Errorf("confined purge unsupported on this platform")
 }
 
+func PersistedIdentityMatches(stored, fresh, freshParent string) bool {
+	return stored == fresh
+}
+
 func openedDirectoryIdentity(f *os.File) (string, error) {
 	return "", fmt.Errorf("directory identity unsupported on this platform")
 }

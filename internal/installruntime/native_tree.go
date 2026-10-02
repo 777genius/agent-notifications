@@ -204,34 +204,80 @@ func removeFailedNativeStage(path string, expected []PathAnchor, id string) erro
 }
 
 func nativeDirectoryID(path string) (string, error) {
-	var err error
+	id, _, err := nativeDirectoryIdentity(path)
+	return id, err
+}
+
+// nativeDirectoryIdentity also returns the parent's identity from the same
+// anchored walk, which PersistedIdentityMatches needs to rule out a mount point.
+func nativeDirectoryIdentity(path string) (id, parent string, err error) {
 	path, err = platformAnchorPath(path)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if path == "" {
-		return "", nil
+		return "", "", nil
 	}
 	anchors, err := pathAnchors(filepath.Join(path, ".identity"), false)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if len(anchors) == 0 || anchors[len(anchors)-1].Path != path {
-		return "", nil
+		return "", "", nil
 	}
-	return anchors[len(anchors)-1].Identity, nil
+	if len(anchors) > 1 {
+		parent = anchors[len(anchors)-2].Identity
+	}
+	return anchors[len(anchors)-1].Identity, parent, nil
 }
 func checkNativeDirectoryID(path, expected string) error {
 	// Legacy records have byte identities only; new promotions always bind inodes.
 	if expected == "" {
 		return nil
 	}
-	got, err := nativeDirectoryID(path)
+	got, parent, err := nativeDirectoryIdentity(path)
 	if err != nil {
 		return err
 	}
-	if got != expected {
+	if !PersistedIdentityMatches(expected, got, parent) {
 		return fmt.Errorf("native directory inode changed: %s", path)
+	}
+	return nil
+}
+
+// refreshNativeIdentities records the current identity of every generation that
+// still matches its stored one, so a ledger written before the volume was
+// renumbered converges and older writers sharing it keep accepting it.
+func refreshNativeIdentities(record *NativeRecord) error {
+	if record == nil {
+		return nil
+	}
+	refresh := func(path string, id *string) error {
+		if path == "" || *id == "" {
+			return nil
+		}
+		fresh, parent, err := nativeDirectoryIdentity(path)
+		if err != nil {
+			return err
+		}
+		if fresh != "" && fresh != *id && PersistedIdentityMatches(*id, fresh, parent) {
+			*id = fresh
+		}
+		return nil
+	}
+	if err := refresh(record.Path, &record.DirectoryID); err != nil {
+		return err
+	}
+	if err := refresh(record.PreviousPath, &record.PreviousDirectoryID); err != nil {
+		return err
+	}
+	// Retirement copies the live record, so the slice may still back the
+	// pre-commit ledger that crash recovery compares against.
+	record.Published = append([]NativeGeneration(nil), record.Published...)
+	for i := range record.Published {
+		if err := refresh(record.Published[i].Path, &record.Published[i].DirectoryID); err != nil {
+			return err
+		}
 	}
 	return nil
 }

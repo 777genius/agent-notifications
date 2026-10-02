@@ -281,6 +281,11 @@ func safeRemoveDirectory(path, want string, anchors []PathAnchor) error {
 	return windowsDeleteHandle(child)
 }
 
+// Volume serial numbers persist across reboots, so recorded identities stay exact.
+func PersistedIdentityMatches(stored, fresh, freshParent string) bool {
+	return stored == fresh
+}
+
 func openedDirectoryIdentity(f *os.File) (string, error) {
 	var info windows.ByHandleFileInformation
 	if err := windows.GetFileInformationByHandle(windows.Handle(f.Fd()), &info); err != nil {
