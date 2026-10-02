@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.47.0] - 2026-10-02
+
+### Added
+- Interactive agent selection in the public installer, with separate installation scope and notification consent for each selected product. Cancellation performs no installation; partial failures retain completed installations and show recovery guidance ([#296](https://github.com/777genius/agent-notifications/pull/296)).
+- The `licenses` command and third-party license notices in portable packages and release assets.
+
+### Fixed
+- Managed macOS installations recover after APFS device numbers change across a reboot, while preserving inode, physical parent, content and volume ownership checks. Install, update, reselection, purge and interrupted recovery accept valid persisted identities without adopting replacement assets ([#301](https://github.com/777genius/agent-notifications/issues/301)).
+- Failed lazy hook installations wait 300 seconds before retrying the same product, release and runtime root, prevent concurrent duplicate attempts, and continue dispatching an available previous binary. Manual repair and a different release bypass the matching cooldown ([#302](https://github.com/777genius/agent-notifications/issues/302)).
+- macOS LaunchServices registration uses committed durable native generations instead of temporary downloaded apps. Failed and disposable acquisitions do not register; existing stale system entries are not removed automatically ([#302](https://github.com/777genius/agent-notifications/issues/302)).
+- Interrupted policy enable/admission refuses changed or missing active native assets before publication, while explicit notification revocation remains possible with damaged assets. No-op native refresh reports the verified retained generation when path output is requested.
+
 ## [1.46.1] - 2026-10-01
 
 ### Changed
