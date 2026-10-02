@@ -83,6 +83,19 @@ jobs:
       - name: Test binary execution (help)
         run: ./bin/claude-notifications help
 
+      - name: Qualify native selector bootstrap E2E (isolated, offline)
+        id: selector-e2e
+        if: matrix.go == '1.26'
+        run: bash scripts/selector_e2e.sh "$RUNNER_TEMP/TEST-selector-e2e"
+
+      - name: Upload selector bootstrap evidence
+        if: always() && matrix.go == '1.26' && steps.selector-e2e.outcome != 'skipped'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: selector-e2e-${{ runner.os }}
+          path: ${{ runner.temp }}/TEST-selector-e2e
+          if-no-files-found: error
+
       - name: Test one-line setup loader (isolated, offline)
         run: bash bin/setup_test.sh
 
