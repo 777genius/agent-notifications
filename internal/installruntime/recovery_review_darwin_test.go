@@ -32,6 +32,8 @@ func reviewManagedNative(t *testing.T, channel string) (context.Context, Request
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Commit canonicalizes runtime roots (for example /var -> /private/var on macOS).
+	r.RuntimeRoot = l.Consumers[r.ConsumerID].RuntimeRoot
 	enabled := true
 	r.Native, r.Files = nil, nil
 	r.RefreshOnly, r.PolicyOnly = true, true
