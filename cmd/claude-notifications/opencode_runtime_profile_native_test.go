@@ -6,7 +6,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/opencodehost"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,24 +22,41 @@ import (
 const portDeniedReceipt = "{\"protocol\":1,\"semantic\":\"unverified\",\"generation\":\"none\",\"resourceClosure\":\"reaped_or_not_started\"}\n"
 const portEligibleReceipt = "{\"protocol\":1,\"semantic\":\"eligible\",\"generation\":\"v2\",\"resourceClosure\":\"reaped_or_not_started\"}\n"
 
+// Both TEST parent programs retain actual Start/Wait and independent streams.
+// Returning the consumed input length keeps draining stderr after the file cap.
+const portFixtureChildSource = `
+type portDiagnosticWriter struct {file *os.File; remaining int}
+func(w *portDiagnosticWriter) Write(p []byte)(int,error){
+ n:=len(p);if n>w.remaining {n=w.remaining}
+ if _,e:=w.file.Write(p[:n]);e!=nil {return 0,e};w.remaining-=n;return len(p),nil
+}
+func portRunChild(prefix,helper,input string,environment []string){
+ output,e:=os.OpenFile(prefix+".receipt",os.O_CREATE|os.O_WRONLY,0600);if e!=nil {os.Exit(4)}
+ diagnostics,e:=os.OpenFile(prefix+".stderr",os.O_CREATE|os.O_WRONLY,0600);if e!=nil {os.Exit(5)}
+ child:=exec.Command(helper,"-test.run=^TestRuntimePortHelper$");child.Env=environment;child.Stdin=strings.NewReader(input);child.Stdout=output;child.Stderr=&portDiagnosticWriter{diagnostics,4096}
+ status:="ok";if e:=child.Start();e!=nil {status=fmt.Sprintf("start: %v",e)} else {os.WriteFile(prefix+".helper",[]byte(strconv.Itoa(child.Process.Pid)),0600);if e:=child.Wait();e!=nil {status=fmt.Sprintf("wait: %v",e)}}
+ output.Close();diagnostics.Close();os.WriteFile(prefix+".done",[]byte(status),0600)
+}
+`
+
 // SERVER TEST bytes only. The actual serve process owns Start/Wait of its
 // helper; the driver is a sibling. These fixtures never qualify official bytes.
 func portFixture(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
+	dir := portFixtureRoot(t, t.TempDir())
 	program := `package main
 import("os";"os/exec";"fmt";"time";"path/filepath";"encoding/json";"strings";"strconv")
+` + portFixtureChildSource + `
 func main(){
- image,_:=os.Executable();dir:=filepath.Dir(image);base:=strings.TrimSuffix(filepath.Base(image),".exe")
+ // Fixture routing uses the launched spelling: Darwin may resolve a hard link
+ // to the original executable path. This supplies no production image proof.
+ image:=os.Args[0];dir:=filepath.Dir(image);base:=strings.TrimSuffix(filepath.Base(image),".exe")
  if len(os.Args)==2&&os.Args[1]=="serve" {
   prefix:=image+"."+strconv.Itoa(os.Getpid());os.WriteFile(prefix+".host",[]byte("ready"),0600)
   var raw []byte
   for {var e error;raw,e=os.ReadFile(prefix+".launch");if e==nil {break};time.Sleep(5*time.Millisecond)}
   var launch struct{Helper,Input string;Environment []string};if json.Unmarshal(raw,&launch)!=nil {os.Exit(3)}
-  output,e:=os.OpenFile(prefix+".receipt",os.O_CREATE|os.O_WRONLY,0600);if e!=nil {os.Exit(4)}
-  child:=exec.Command(launch.Helper,"-test.run=^TestRuntimePortHelper$");child.Env=launch.Environment;child.Stdin=strings.NewReader(launch.Input);child.Stdout=output;child.Stderr=output
-  status:="ok";if child.Start()!=nil {status="failed"} else {os.WriteFile(prefix+".helper",[]byte(strconv.Itoa(child.Process.Pid)),0600);if child.Wait()!=nil {status="failed"}}
-  output.Close();os.WriteFile(prefix+".done",[]byte(status),0600)
+  portRunChild(prefix,launch.Helper,launch.Input,launch.Environment)
   for {time.Sleep(time.Second)}
  }
  cwd,_:=os.Getwd();proof,_:=json.Marshal(struct{PID int;Argv,Env []string;Cwd string}{os.Getpid(),os.Args[1:],os.Environ(),cwd});os.WriteFile(filepath.Join(dir,base+".probe"),proof,0600)
@@ -60,7 +79,7 @@ func portExecutableSuffix() string {
 	}
 	return ""
 }
-func portAwait(t *testing.T, path string) {
+func portAwait(t *testing.T, path string, prefix ...string) {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
@@ -68,6 +87,9 @@ func portAwait(t *testing.T, path string) {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+	if len(prefix) != 0 {
+		t.Fatalf("TEST barrier missing %s; %s", filepath.Base(path), portFailureDiagnostics(prefix[0]))
 	}
 	t.Fatal("TEST barrier missing", filepath.Base(path))
 }
@@ -96,7 +118,7 @@ func portStart(t *testing.T, dir, mode string) (runtimeProfileInput, *exec.Cmd) 
 	}
 	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
 	in := runtimeProfileInput{Protocol: 1, HostExecutable: image, Origin: strings.Repeat("11", 32), ControlRoot: dir, NativePID: cmd.Process.Pid, Entry: "serve", PublicExecPath: image}
-	portAwait(t, portPrefix(in)+".host")
+	portAwait(t, portPrefix(in)+".host", portPrefix(in))
 	return in, cmd
 }
 func portLaunch(t *testing.T, host, in runtimeProfileInput, raw, mode string) {
@@ -112,7 +134,11 @@ func portLaunch(t *testing.T, host, in runtimeProfileInput, raw, mode string) {
 		}
 		raw = string(data)
 	}
-	env := []string{"AGENT_NOTIFICATIONS_HOST_EXECUTABLE=" + in.HostExecutable, "AGENT_NOTIFICATIONS_ORIGIN=" + in.Origin, "AGENT_NOTIFICATIONS_CONTROL_ROOT=" + in.ControlRoot, "AGENT_NOTIFICATIONS_NATIVE_PID=" + strconv.Itoa(in.NativePID), "AGENT_NOTIFICATIONS_HOST_ENTRY=" + in.Entry, "AGENT_NOTIFICATIONS_PUBLIC_EXEC_PATH=" + in.PublicExecPath, "AN_TEST_PORT_HELPER=1", "AN_TEST_PORT_MODE=" + mode, "AN_TEST_PORT_PREFIX=" + portPrefix(host), "TMPDIR=" + os.Getenv("TMPDIR"), "TMP=" + os.Getenv("TMP"), "TEMP=" + os.Getenv("TEMP")}
+	coverage, e := os.MkdirTemp(host.ControlRoot, "helper-cover-")
+	if e != nil {
+		t.Fatal("owned helper coverage directory", e)
+	}
+	env := []string{"AGENT_NOTIFICATIONS_HOST_EXECUTABLE=" + in.HostExecutable, "AGENT_NOTIFICATIONS_ORIGIN=" + in.Origin, "AGENT_NOTIFICATIONS_CONTROL_ROOT=" + in.ControlRoot, "AGENT_NOTIFICATIONS_NATIVE_PID=" + strconv.Itoa(in.NativePID), "AGENT_NOTIFICATIONS_HOST_ENTRY=" + in.Entry, "AGENT_NOTIFICATIONS_PUBLIC_EXEC_PATH=" + in.PublicExecPath, "GOCOVERDIR=" + coverage, "AN_TEST_PORT_HELPER=1", "AN_TEST_PORT_MODE=" + mode, "AN_TEST_PORT_PREFIX=" + portPrefix(host), "TMPDIR=" + os.Getenv("TMPDIR"), "TMP=" + os.Getenv("TMP"), "TEMP=" + os.Getenv("TEMP")}
 	data, e := json.Marshal(struct {
 		Helper, Input string
 		Environment   []string
@@ -126,16 +152,38 @@ func portLaunch(t *testing.T, host, in runtimeProfileInput, raw, mode string) {
 }
 func portOutput(t *testing.T, in runtimeProfileInput) []byte {
 	t.Helper()
-	portAwait(t, portPrefix(in)+".done")
+	portAwait(t, portPrefix(in)+".done", portPrefix(in))
 	status, e := os.ReadFile(portPrefix(in) + ".done")
 	if e != nil || string(status) != "ok" {
-		t.Fatal("helper not waited successfully", e, string(status))
+		t.Fatalf("helper not waited successfully: %v; %s", e, portFailureDiagnostics(portPrefix(in)))
 	}
+	portAssertDiagnostics(t, portPrefix(in))
 	data, e := os.ReadFile(portPrefix(in) + ".receipt")
 	if e != nil {
 		t.Fatal(e)
 	}
 	return data
+}
+func portBoundedDiagnostic(name string) ([]byte, error) {
+	f, e := os.Open(name)
+	if e != nil {
+		return nil, e
+	}
+	defer f.Close()
+	return io.ReadAll(io.LimitReader(f, 4097))
+}
+func portFailureDiagnostics(prefix string) string {
+	status, statusErr := portBoundedDiagnostic(prefix + ".done")
+	diagnostic, diagnosticErr := portBoundedDiagnostic(prefix + ".stderr")
+	stdout, stdoutErr := portBoundedDiagnostic(prefix + ".receipt")
+	return fmt.Sprintf("wait status=%q (%v); stderr=%q (%v); stdout=%q (%v)", status, statusErr, diagnostic, diagnosticErr, stdout, stdoutErr)
+}
+func portAssertDiagnostics(t *testing.T, prefix string) {
+	t.Helper()
+	diagnostic, e := portBoundedDiagnostic(prefix + ".stderr")
+	if e != nil || len(diagnostic) != 0 {
+		t.Fatalf("helper stderr must be empty and bounded: %s", portFailureDiagnostics(prefix))
+	}
 }
 func portNoCallback(t *testing.T, in runtimeProfileInput) {
 	t.Helper()
@@ -333,7 +381,7 @@ func TestRuntimePortCancelledProbeWaitsBeforeReceipt(t *testing.T) {
 	dir := portFixture(t)
 	in, _ := portStart(t, dir, "slow")
 	portLaunch(t, in, in, "", "accept")
-	portAwait(t, portProbeName(in))
+	portAwait(t, portProbeName(in), portPrefix(in))
 	if e := os.WriteFile(portPrefix(in)+".cancel", []byte("cancel"), 0600); e != nil {
 		t.Fatal(e)
 	}
@@ -369,7 +417,7 @@ func TestRuntimePortCandidateReplacementDeniesAfterActualWait(t *testing.T) {
 		t.Fatal(e)
 	}
 	portLaunch(t, host, in, "", "accept")
-	portAwait(t, portProbeName(in))
+	portAwait(t, portProbeName(in), portPrefix(host))
 	if e = os.Rename(in.HostExecutable, in.HostExecutable+".old"); e != nil {
 		t.Fatal("native replacement fixture unavailable", e)
 	}
@@ -389,7 +437,7 @@ func TestRuntimePortHeldParentDeathRevokes(t *testing.T) {
 	dir := portFixture(t)
 	in, parent := portStart(t, dir, "death")
 	portLaunch(t, in, in, "", "lease")
-	portAwait(t, portPrefix(in)+".held")
+	portAwait(t, portPrefix(in)+".held", portPrefix(in))
 	// The deliberate orphan uses its own settlement marker and native termination
 	// check, since the dead host cannot emit its ordinary child-Wait marker.
 	if e := parent.Process.Kill(); e != nil {
@@ -399,9 +447,9 @@ func TestRuntimePortHeldParentDeathRevokes(t *testing.T) {
 	if e := os.WriteFile(portPrefix(in)+".recheck", []byte("recheck"), 0600); e != nil {
 		t.Fatal(e)
 	}
-	portAwait(t, portPrefix(in)+".settled")
+	portAwait(t, portPrefix(in)+".settled", portPrefix(in))
 	portNoProbe(t, in)
-	portAwait(t, portPrefix(in)+".helper")
+	portAwait(t, portPrefix(in)+".helper", portPrefix(in))
 	raw, e := os.ReadFile(portPrefix(in) + ".helper")
 	if e != nil {
 		t.Fatal(e)
@@ -413,6 +461,7 @@ func TestRuntimePortHeldParentDeathRevokes(t *testing.T) {
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if portProcessSettled(pid) {
+			portAssertDiagnostics(t, portPrefix(in))
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -423,11 +472,11 @@ func TestRuntimePortLeaseCancellationCannotRenew(t *testing.T) {
 	dir := portFixture(t)
 	in, _ := portStart(t, dir, "leasecancel")
 	portLaunch(t, in, in, "", "leaseCancel")
-	portAwait(t, portPrefix(in)+".held")
+	portAwait(t, portPrefix(in)+".held", portPrefix(in))
 	if e := os.WriteFile(portPrefix(in)+".recheck", []byte("recheck"), 0600); e != nil {
 		t.Fatal(e)
 	}
-	portAwait(t, portPrefix(in)+".settled")
+	portAwait(t, portPrefix(in)+".settled", portPrefix(in))
 	_ = portOutput(t, in)
 	portNoProbe(t, in)
 }
@@ -438,11 +487,11 @@ func TestRuntimePortOriginCancellationFirstFreshRecheckDenies(t *testing.T) {
 	dir := portFixture(t)
 	in, _ := portStart(t, dir, "origin-cancel")
 	portLaunch(t, in, in, "", "leaseOriginCancel")
-	portAwait(t, portPrefix(in)+".held")
+	portAwait(t, portPrefix(in)+".held", portPrefix(in))
 	if e := os.WriteFile(portPrefix(in)+".recheck", []byte("recheck"), 0600); e != nil {
 		t.Fatal(e)
 	}
-	portAwait(t, portPrefix(in)+".settled")
+	portAwait(t, portPrefix(in)+".settled", portPrefix(in))
 	_ = portOutput(t, in)
 	portNoProbe(t, in)
 }
@@ -452,7 +501,7 @@ func TestRuntimePortHeldTargetModeMutationRevokes(t *testing.T) {
 	dir := portFixture(t)
 	in, _ := portStart(t, dir, "modechange")
 	portLaunch(t, in, in, "", "lease")
-	portAwait(t, portPrefix(in)+".held")
+	portAwait(t, portPrefix(in)+".held", portPrefix(in))
 	if e := os.Chmod(in.HostExecutable, 0444); e != nil {
 		t.Fatal(e)
 	}
@@ -460,7 +509,7 @@ func TestRuntimePortHeldTargetModeMutationRevokes(t *testing.T) {
 	if e := os.WriteFile(portPrefix(in)+".recheck", []byte("recheck"), 0600); e != nil {
 		t.Fatal(e)
 	}
-	portAwait(t, portPrefix(in)+".settled")
+	portAwait(t, portPrefix(in)+".settled", portPrefix(in))
 	_ = portOutput(t, in)
 	portNoProbe(t, in)
 }

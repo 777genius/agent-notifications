@@ -5,11 +5,22 @@ package main
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"runtime"
 	"testing"
 
 	"golang.org/x/sys/windows"
 )
+
+func portFixtureRoot(t *testing.T, dir string) string {
+	t.Helper()
+	// Resolve existing short Windows ancestors before deriving ledger/image names.
+	root, e := filepath.EvalSymlinks(dir)
+	if e != nil || !runtimeWindowsPath(root) {
+		t.Fatal("canonical bounded TEST DOS root unavailable", e)
+	}
+	return root
+}
 
 func portProcessSettled(pid int) bool {
 	h, e := windows.OpenProcess(windows.SYNCHRONIZE|windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
@@ -59,7 +70,10 @@ func TestRuntimeWindowsBirthAndParentAreActual(t *testing.T) {
 	if _, e := runtimeWindowsLive(windows.CurrentProcess(), uint32(os.Getpid())); e == nil {
 		t.Fatal("self handle masqueraded as parent")
 	}
-	if _, e := runtimeWindowsBirth(windows.InvalidHandle); e == nil {
+	if birth, e := runtimeWindowsBirth(windows.CurrentProcess()); e != nil || birth == 0 {
+		t.Fatal("current-process pseudo handle lost actual birth", e)
+	}
+	if _, e := runtimeWindowsBirth(windows.Handle(0)); e == nil {
 		t.Fatal("invalid process birth accepted")
 	}
 	if _, e := verifyRuntimeLiveImage(context.Background(), runtimeProfileInput{NativePID: os.Getpid(), Entry: "serve"}); e == nil {

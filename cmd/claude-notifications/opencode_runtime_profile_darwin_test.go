@@ -16,6 +16,11 @@ import (
 	"testing"
 )
 
+func portFixtureRoot(t *testing.T, dir string) string {
+	t.Helper()
+	return dir
+}
+
 func portProcessSettled(pid int) bool { return syscall.Kill(pid, 0) == syscall.ESRCH }
 func portAssertProcessSettled(t *testing.T, pid int) {
 	t.Helper()
@@ -32,15 +37,13 @@ func TestRuntimeDarwinLargeEnvironmentDeniesBeforeCallback(t *testing.T) {
 	source := filepath.Join(dir, "fixture.go")
 	program := `package main
 import("os";"os/exec";"encoding/json";"strings";"strconv";"time";"fmt")
+` + portFixtureChildSource + `
 func main(){image,_:=os.Executable()
  if len(os.Args)!=2||os.Args[1]!="not-serve" {os.WriteFile(image+".probe",[]byte("probe"),0600);fmt.Print("2.0.21");return}
  prefix:=image+"."+strconv.Itoa(os.Getpid());os.WriteFile(prefix+".host",[]byte("ready"),0600)
  var raw []byte;for {var e error;raw,e=os.ReadFile(prefix+".launch");if e==nil {break};time.Sleep(5*time.Millisecond)}
  var launch struct{Helper,Input string;Environment []string};if json.Unmarshal(raw,&launch)!=nil {os.Exit(3)}
- out,e:=os.OpenFile(prefix+".receipt",os.O_CREATE|os.O_WRONLY,0600);if e!=nil {os.Exit(4)}
- child:=exec.Command(launch.Helper,"-test.run=^TestRuntimePortHelper$");child.Env=launch.Environment;child.Stdin=strings.NewReader(launch.Input);child.Stdout=out;child.Stderr=out
- status:="ok";if child.Start()!=nil {status="failed"} else {if child.Wait()!=nil {status="failed"}}
- out.Close();os.WriteFile(prefix+".done",[]byte(status),0600);for {time.Sleep(time.Second)}
+ portRunChild(prefix,launch.Helper,launch.Input,launch.Environment);for {time.Sleep(time.Second)}
 }`
 	if e := os.WriteFile(source, []byte(program), 0600); e != nil {
 		t.Fatal(e)
