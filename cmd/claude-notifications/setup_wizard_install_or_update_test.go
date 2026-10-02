@@ -5,6 +5,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"os"
 	"path/filepath"
@@ -63,7 +65,7 @@ func TestWizardInstallOrUpdateBootstrapE2E(t *testing.T) {
 				}
 				old = result
 			}
-			if err := os.WriteFile(filepath.Join(env.pkg, "skills", "agent-notify", "SKILL.md"), []byte("---\nname: agent-notify\ndescription: Updated bootstrap fixture\n---\n"), 0600); err != nil {
+			if err := os.WriteFile(filepath.Join(env.pkg, "skills", "agent-notifications", "SKILL.md"), []byte("---\nname: agent-notifications\ndescription: Updated bootstrap fixture\n---\n"), 0600); err != nil {
 				t.Fatal(err)
 			}
 			candidate := env.pkg
@@ -99,6 +101,209 @@ func TestWizardInstallOrUpdateBootstrapE2E(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A repeated automatic bootstrap must not turn a previously absent sibling
+// into a new MCP binding. The explicit request may add that sibling.
+func TestWizardInstallOrUpdatePreservesMixedOptOut(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	shared := []string{
+		"--action", "install", "--hooks", "false", "--agent-notify", "true", "--yes", "--json",
+		"--package", env.pkg, "--control-root", env.control, "--runtime-root", env.runtime,
+		"--global-config", env.global, "--codex-home", env.codexHome, "--claude-config", env.claudeConfig,
+		"--claude-executable", env.probe, "--codex-executable", env.probe,
+		"--helper", env.probe, "--scope-root", env.scope,
+	}
+	invoke := func(agents string, flags ...string) (int, setupwizard.Result) {
+		t.Helper()
+		args := append([]string{"--agents", agents}, shared...)
+		args = append(args, flags...)
+		var out bytes.Buffer
+		code := executeSetupWizardWith(ctx, args, &out, io.Discard, strings.NewReader(""), false)
+		return code, decodeWizardJSON(t, out)
+	}
+	if code, first := invoke("codex"); code != 0 || first.Outcome != "completed" {
+		t.Fatalf("initial Codex: %d %+v", code, first)
+	}
+	code, repeated := invoke("claude,codex", "--install-or-update", "--preserve-existing-units")
+	if code != 0 || (repeated.Outcome != "completed" && repeated.Outcome != "unchanged") {
+		t.Fatalf("auto repeat: %d %+v", code, repeated)
+	}
+	if wizardCLINotifyDigest(repeated, "claude") != "" {
+		t.Fatalf("auto repeat added opted-out Claude: %+v", repeated.Targets)
+	}
+	if code, added := invoke("claude,codex", "--install-or-update"); code != 0 || wizardCLINotifyDigest(added, "claude") == "" {
+		t.Fatalf("explicit Add: %d %+v", code, added)
+	}
+}
+
+// /init must update to the current binary's verified release asset even when
+// an older portable package remains recorded in the installation.
+func TestWizardInstallOrUpdateFetchesCurrentRelease(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	off, on := false, true
+	req := setupwizard.Request{
+		Action: setupwizard.ActionInstall, Agents: []string{"codex"}, Hooks: &off, AgentNotify: &on, Yes: true,
+		PackageRoot: env.pkg, ControlRoot: env.control, RuntimeRoot: env.runtime, GlobalConfig: env.global,
+		CodexHome: env.codexHome, ClientExecutable: env.probe, Helper: env.probe, ScopeRoot: env.scope,
+	}
+	old, err := setupwizard.Run(ctx, req)
+	if err != nil || old.Outcome != "completed" {
+		t.Fatalf("old package install: %+v %v", old, err)
+	}
+	archive := filepath.Join(env.root, "new-release.zip")
+	if _, err := portableasset.Build(portableasset.BuildRequest{
+		Version: "1.43.1", GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
+		Executable: env.probe, OutputRoot: filepath.Join(env.root, "new-release-build"), Archive: archive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asset := portableasset.AssetName(runtime.GOOS, runtime.GOARCH)
+	digest := sha256.Sum256(data)
+	checksums := []byte(hex.EncodeToString(digest[:]) + "  " + asset + "\n")
+	req.PackageRoot = ""
+	req.DefaultReleaseVersion = "1.43.1"
+	req.ReleaseDownloadRoot = "https://fixture.invalid/releases"
+	req.PackageFetcher = func(_ context.Context, url string) ([]byte, error) {
+		if strings.HasSuffix(url, "/checksums.txt") {
+			return checksums, nil
+		}
+		if strings.HasSuffix(url, "/"+asset) {
+			return data, nil
+		}
+		return nil, os.ErrNotExist
+	}
+	updated, err := runInstallOrUpdate(ctx, req, false)
+	if err != nil || (updated.Outcome != "completed" && updated.Outcome != "unchanged") {
+		t.Fatalf("new release update: %+v %v", updated, err)
+	}
+	if wizardCLINotifyDigest(old, "codex") == wizardCLINotifyDigest(updated, "codex") {
+		t.Fatalf("old portable digest retained: old=%+v new=%+v", old.Targets, updated.Targets)
+	}
+}
+
+// A user can remove a binding while a release is downloading. The automatic
+// update must not reinterpret that removal as consent to add it again.
+func TestWizardInstallOrUpdateDoesNotUndoConcurrentOptOut(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	off, on := false, true
+	req := setupwizard.Request{
+		Action: setupwizard.ActionInstall, Agents: []string{"codex"}, Hooks: &off, AgentNotify: &on, Yes: true,
+		PackageRoot: env.pkg, ControlRoot: env.control, RuntimeRoot: env.runtime, GlobalConfig: env.global,
+		CodexHome: env.codexHome, ClientExecutable: env.probe, Helper: env.probe, ScopeRoot: env.scope,
+	}
+	if installed, err := setupwizard.Run(ctx, req); err != nil || installed.Outcome != "completed" {
+		t.Fatalf("initial install: %+v %v", installed, err)
+	}
+	archive := filepath.Join(env.root, "new-release.zip")
+	if _, err := portableasset.Build(portableasset.BuildRequest{
+		Version: "1.43.1", GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
+		Executable: env.probe, OutputRoot: filepath.Join(env.root, "new-release-build"), Archive: archive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asset := portableasset.AssetName(runtime.GOOS, runtime.GOARCH)
+	digest := sha256.Sum256(data)
+	checksums := []byte(hex.EncodeToString(digest[:]) + "  " + asset + "\n")
+	req.PackageRoot = ""
+	req.DefaultReleaseVersion = "1.43.1"
+	req.ReleaseDownloadRoot = "https://fixture.invalid/releases"
+	removed := false
+	req.PackageFetcher = func(_ context.Context, url string) ([]byte, error) {
+		if !removed {
+			removed = true
+			uninstall := req
+			uninstall.Action = setupwizard.ActionUninstall
+			uninstall.PackageFetcher = nil
+			uninstall.ExternalUninstalled = true
+			if result, err := setupwizard.Run(ctx, uninstall); err != nil || result.Outcome != "completed" {
+				t.Fatalf("concurrent opt-out: %+v %v", result, err)
+			}
+		}
+		if strings.HasSuffix(url, "/checksums.txt") {
+			return checksums, nil
+		}
+		if strings.HasSuffix(url, "/"+asset) {
+			return data, nil
+		}
+		return nil, os.ErrNotExist
+	}
+	result, err := runInstallOrUpdate(ctx, req, true)
+	if !removed || err == nil || result.Outcome != "conflict" || result.Reason != "concurrent_change" {
+		t.Fatalf("auto update restored concurrent opt-out: %+v %v", result, err)
+	}
+	if len(result.Command) != 0 || len(result.NextActions) != 0 {
+		t.Fatalf("stale auto selection offered an unsafe direct retry: %+v", result)
+	}
+	inspect := req
+	inspect.Action = setupwizard.ActionInspect
+	inspect.PackageFetcher = nil
+	view, err := setupwizard.Run(ctx, inspect)
+	if err != nil || wizardCLINotifyDigest(view, "codex") != "" {
+		t.Fatalf("opt-out did not remain absent: %+v %v", view, err)
+	}
+}
+
+func TestWizardInstallOrUpdateRejectsOptOutBeforeIntentPublish(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	off, on := false, true
+	req := setupwizard.Request{
+		Action: setupwizard.ActionInstall, Agents: []string{"codex"}, Hooks: &off, AgentNotify: &on, Yes: true,
+		PackageRoot: env.pkg, ControlRoot: env.control, RuntimeRoot: env.runtime, GlobalConfig: env.global,
+		CodexHome: env.codexHome, ClientExecutable: env.probe, Helper: env.probe, ScopeRoot: env.scope,
+	}
+	if installed, err := setupwizard.Run(ctx, req); err != nil || installed.Outcome != "completed" {
+		t.Fatalf("initial install: %+v %v", installed, err)
+	}
+	candidate := filepath.Join(env.root, "candidate")
+	copyWizardPackage(t, env.pkg, candidate)
+	if err := os.WriteFile(filepath.Join(candidate, "skills", "agent-notifications", "SKILL.md"), []byte("---\nname: agent-notifications\ndescription: Candidate\n---\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	req.PackageRoot = candidate
+	removed := false
+	req.Progress = func(phase string) {
+		if phase != "preflight" || removed {
+			return
+		}
+		removed = true
+		uninstall := req
+		uninstall.Action = setupwizard.ActionUninstall
+		uninstall.Progress = nil
+		uninstall.ExternalUninstalled = true
+		if result, err := setupwizard.Run(ctx, uninstall); err != nil || result.Outcome != "completed" {
+			t.Fatalf("concurrent opt-out: %+v %v", result, err)
+		}
+	}
+	result, err := runInstallOrUpdate(ctx, req, true)
+	if !removed || err == nil || result.Outcome != "conflict" || result.Reason != "concurrent_change" {
+		t.Fatalf("stale update published intent: %+v %v", result, err)
+	}
+	if len(result.Command) != 0 || len(result.NextActions) != 0 {
+		t.Fatalf("stale auto selection offered an unsafe direct retry: %+v", result)
+	}
+	inspect := req
+	inspect.Action, inspect.Progress = setupwizard.ActionInspect, nil
+	view, err := setupwizard.Run(ctx, inspect)
+	if err != nil || wizardCLINotifyDigest(view, "codex") != "" {
+		t.Fatalf("opt-out did not remain absent: %+v %v", view, err)
 	}
 }
 
@@ -152,7 +357,7 @@ func TestWizardInstallOrUpdateRetainedDataE2E(t *testing.T) {
 	if code != 0 || !removed.DataRetained {
 		t.Fatalf("retained uninstall: %d %+v", code, removed)
 	}
-	if err := os.WriteFile(filepath.Join(env.pkg, "skills", "agent-notify", "SKILL.md"), []byte("---\nname: agent-notify\ndescription: Retained bootstrap update\n---\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(env.pkg, "skills", "agent-notifications", "SKILL.md"), []byte("---\nname: agent-notifications\ndescription: Retained bootstrap update\n---\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	code, restored := invoke("install", env.pkg, "--install-or-update")

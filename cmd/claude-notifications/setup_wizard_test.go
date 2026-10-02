@@ -6,8 +6,6 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -615,7 +613,7 @@ func TestSetupWizardTTYMixedAddKeepsPerClientUnits(t *testing.T) {
 		t.Fatalf("uninstall keep mutated mixed units: %+v", view.Targets)
 	}
 	out.Reset()
-	if code := executeSetupWizardWith(ctx, shared, &out, io.Discard, strings.NewReader("2\n1\ny\n"), true); code != 0 || !strings.Contains(out.String(), "completed") {
+	if code := executeSetupWizardWith(ctx, shared, &out, io.Discard, strings.NewReader("2\n1\ny\n"), true); code != 0 || !strings.Contains(out.String(), "Installation complete") {
 		t.Fatalf("mixed tty keep run: %d %s", code, out.String())
 	}
 	out.Reset()
@@ -684,7 +682,7 @@ func TestSetupWizardTTYAddSecondClientKeepProposesDefaultsE2E(t *testing.T) {
 		t.Fatalf("add keep still planned bound claude: %s", out.String())
 	}
 	out.Reset()
-	if code := executeSetupWizardWith(ctx, both, &out, io.Discard, strings.NewReader("2\n1\ny\n"), true); code != 0 || !strings.Contains(out.String(), "completed") {
+	if code := executeSetupWizardWith(ctx, both, &out, io.Discard, strings.NewReader("2\n1\ny\n"), true); code != 0 || !strings.Contains(out.String(), "Installation complete") {
 		t.Fatalf("add keep run: %d %s", code, out.String())
 	}
 	out.Reset()
@@ -813,7 +811,7 @@ func TestSetupWizardTTYUpdateRepairOmittedKeepsMixedE2E(t *testing.T) {
 		t.Fatalf("mixed install result: %+v", got)
 	}
 	out.Reset()
-	if code := executeSetupWizardWith(ctx, shared, &out, io.Discard, strings.NewReader("4\ny\n"), true); code != 0 || !strings.Contains(out.String(), "completed") {
+	if code := executeSetupWizardWith(ctx, shared, &out, io.Discard, strings.NewReader("4\ny\n"), true); code != 0 || !strings.Contains(out.String(), "Update complete") {
 		t.Fatalf("tty omitted update: %d %s", code, out.String())
 	}
 	if strings.Contains(out.String(), "Units: 1) Hooks") || strings.Contains(out.String(), "differ per client") {
@@ -829,7 +827,7 @@ func TestSetupWizardTTYUpdateRepairOmittedKeepsMixedE2E(t *testing.T) {
 	}
 	assertMixed("tty update", decodeWizardJSON(t, out))
 	out.Reset()
-	if code := executeSetupWizardWith(ctx, shared, &out, io.Discard, strings.NewReader("5\ny\n"), true); code != 0 || !strings.Contains(out.String(), "completed") {
+	if code := executeSetupWizardWith(ctx, shared, &out, io.Discard, strings.NewReader("5\ny\n"), true); code != 0 || !strings.Contains(out.String(), "Repair complete") {
 		t.Fatalf("tty omitted repair: %d %s", code, out.String())
 	}
 	if strings.Contains(out.String(), "Units: 1) Hooks") || strings.Contains(out.String(), "differ per client") {
@@ -1189,7 +1187,7 @@ func TestSetupWizardTTYExistingOmitsActionE2E(t *testing.T) {
 	if !strings.Contains(out.String(), "Existing agent-notify") {
 		t.Fatalf("existing action not offered: %s", out.String())
 	}
-	if !strings.Contains(out.String(), "codex agent-notify: installed") {
+	if !strings.Contains(out.String(), "Codex - notification tool and skill: installed") {
 		t.Fatalf("existing inspect missed notify: %s", out.String())
 	}
 	out.Reset()
@@ -1326,7 +1324,7 @@ func TestSetupWizardSecondClientDifferentDigestE2E(t *testing.T) {
 	}
 	other := filepath.Join(env.root, "other-package")
 	writeWizardPackage(t, other, env.probe)
-	if err := os.WriteFile(filepath.Join(other, "skills", "agent-notify", "SKILL.md"), []byte("---\nname: agent-notify\ndescription: Revised\n---\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(other, "skills", "agent-notifications", "SKILL.md"), []byte("---\nname: agent-notifications\ndescription: Revised\n---\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()
@@ -1430,7 +1428,7 @@ func TestSetupWizardTwoPhaseUpdateThenAddE2E(t *testing.T) {
 	}
 	other := filepath.Join(env.root, "other-package")
 	writeWizardPackage(t, other, env.probe)
-	if err := os.WriteFile(filepath.Join(other, "skills", "agent-notify", "SKILL.md"), []byte("---\nname: agent-notify\ndescription: Revised\n---\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(other, "skills", "agent-notifications", "SKILL.md"), []byte("---\nname: agent-notifications\ndescription: Revised\n---\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()
@@ -2699,7 +2697,7 @@ func TestSetupWizardAmbiguousInstallationsConflictE2E(t *testing.T) {
 	}
 	other := filepath.Join(env.root, "other-package")
 	writeWizardPackage(t, other, env.probe)
-	if err := os.WriteFile(filepath.Join(other, "skills", "agent-notify", "SKILL.md"), []byte("---\nname: agent-notify\ndescription: Other installation\n---\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(other, "skills", "agent-notifications", "SKILL.md"), []byte("---\nname: agent-notifications\ndescription: Other installation\n---\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()
@@ -3367,10 +3365,10 @@ func writeWizardPackage(t *testing.T, root, probe string) {
 		t.Fatal(err)
 	}
 	files := map[string][]byte{
-		"plugin.json":                  []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.0"}`),
-		"mcp.json":                     []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"agent-notify":{"type":"stdio","command":"./bin/probe","args":[],"env":{}}}}`),
-		"skills/agent-notify/SKILL.md": []byte("---\nname: agent-notify\ndescription: Wizard CLI e2e\n---\n"),
-		"bin/probe":                    body,
+		"plugin.json":                         []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.0"}`),
+		"mcp.json":                            []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"agent-notify":{"type":"stdio","command":"./bin/probe","args":[],"env":{}}}}`),
+		"skills/agent-notifications/SKILL.md": []byte("---\nname: agent-notifications\ndescription: Wizard CLI e2e\n---\n"),
+		"bin/probe":                           body,
 	}
 	for rel, data := range files {
 		path := filepath.Join(root, rel)
@@ -3464,29 +3462,25 @@ func plantWizardCLIPendingIntent(t *testing.T, ctx context.Context, control, run
 func plantWizardCLIPendingJournal(t *testing.T, controlRoot string) {
 	t.Helper()
 	owned := filepath.Join(filepath.Dir(controlRoot), "uap", "managed")
-	staging := filepath.Join(owned, ".agentplugins-staging-pending")
+	opID := "wizard-pending-op"
+	staging := filepath.Join(owned, ".agentplugins-staging-"+opID)
 	if err := os.MkdirAll(staging, 0700); err != nil {
 		t.Fatal(err)
 	}
-	opID := "wizard-pending-op"
-	sum := sha256.Sum256([]byte(opID))
-	receipt := dirswap.Receipt{
-		SchemaVersion: 3, Operation: dirswap.OperationSwap, OperationID: opID,
-		ClientBindingID: "client-binding-1", Sequence: 1, OwnedBase: owned,
-		ActivePath: filepath.Join(owned, "plugin"), StagingPath: staging,
-		BackupPath: filepath.Join(owned, ".agentplugins-backup-"+hex.EncodeToString(sum[:8])),
-		Phase:      dirswap.PhaseIntent,
-	}
-	body, err := json.MarshalIndent(receipt, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
 	ops := filepath.Join(filepath.Dir(controlRoot), "uap", "state", "operations")
-	if err := os.MkdirAll(ops, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(ops, opID+".json"), append(body, '\n'), 0600); err != nil {
-		t.Fatal(err)
+	manager := dirswap.Manager{JournalDir: ops, Fault: func(phase string) error {
+		if phase == dirswap.PhaseBackupPending {
+			return errors.New("fixture: leave pending journal")
+		}
+		return nil
+	}}
+	receipt, err := manager.Apply(context.Background(), dirswap.Input{
+		OperationID: opID, ClientBindingID: "client-binding-1", Sequence: 1,
+		OwnedBase: owned, ActivePath: filepath.Join(owned, "plugin"), StagingPath: staging,
+		RequireAbsent: true,
+	})
+	if err == nil || receipt.OperationID != opID {
+		t.Fatalf("create pending journal: %+v %v", receipt, err)
 	}
 }
 

@@ -48,7 +48,7 @@ final class NSNotificationDelegate: NSObject, NSUserNotificationCenterDelegate {
         _ center: NSUserNotificationCenter,
         didActivate notification: NSUserNotification
     ) {
-        let handle = { [self] in
+        ProcessCallbackLifecycle.shared.dispatchIngress(completion: {}) { [self] in
             let clicked = notification.activationType == .contentsClicked ||
                           notification.activationType == .actionButtonClicked
             CallbackHandler(lifecycle: ProcessCallbackLifecycle.shared, legacy: actionExecutor).receive(
@@ -56,8 +56,6 @@ final class NSNotificationDelegate: NSObject, NSUserNotificationCenterDelegate {
                 notificationID: notification.identifier ?? "", userInfo: notification.userInfo ?? [:],
                 completion: {})
         }
-        if Thread.isMainThread { handle() }
-        else { DispatchQueue.main.async(execute: handle) }
     }
 
     func userNotificationCenter(

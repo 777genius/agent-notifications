@@ -835,6 +835,21 @@ func (m Materializer) validate(req MaterializeRequest, install bool) error {
 }
 
 func (m Materializer) engine(req MaterializeRequest, generation *uint64, res *installruntime.PendingMutation) (*uapinstaller.Engine, error) {
+	return m.engineWithIdentities(req, generation, res, nil)
+}
+
+// Group callbacks resolve the identity selected for the committed client.
+func (m Materializer) engineWithIdentities(req MaterializeRequest, generation *uint64, res *installruntime.PendingMutation, identities map[string]Identity) (*uapinstaller.Engine, error) {
+	identityFor := func(client string) (Identity, error) {
+		if identities == nil {
+			return req.Identity, nil
+		}
+		id, ok := identities[client]
+		if !ok {
+			return Identity{}, fmt.Errorf("%w: unexpected group client %s", ErrPreflight, client)
+		}
+		return id, nil
+	}
 	helper := m.Roots.HelperExecutable
 	if req.HelperExecutable != "" {
 		helper = req.HelperExecutable
@@ -862,7 +877,11 @@ func (m Materializer) engine(req MaterializeRequest, generation *uint64, res *in
 		TrustedLocalPackages: true,
 		ServerName:           portableServerName,
 		ProjectArgs: func(facts uapinstaller.BindingFacts) ([]string, error) {
-			b, err := Complete(req.Identity, integrationOf(facts), facts.ClientID, facts.Scope, facts.TargetPath, facts.DataRoot)
+			id, err := identityFor(facts.ClientID)
+			if err != nil {
+				return nil, err
+			}
+			b, err := Complete(id, integrationOf(facts), facts.ClientID, facts.Scope, facts.TargetPath, facts.DataRoot)
 			if err != nil {
 				return nil, err
 			}
@@ -878,7 +897,11 @@ func (m Materializer) engine(req MaterializeRequest, generation *uint64, res *in
 			return []string{"portable-launch", "--locator", name}, nil
 		},
 		OnCommittedBinding: func(ctx context.Context, facts uapinstaller.BindingFacts) error {
-			pb, err := Complete(req.Identity, integrationOf(facts), facts.ClientID, facts.Scope, facts.TargetPath, facts.DataRoot)
+			id, err := identityFor(facts.ClientID)
+			if err != nil {
+				return err
+			}
+			pb, err := Complete(id, integrationOf(facts), facts.ClientID, facts.Scope, facts.TargetPath, facts.DataRoot)
 			if err != nil {
 				return err
 			}
@@ -1060,6 +1083,29 @@ func integrationOf(facts uapinstaller.BindingFacts) portable.Integration {
 	}
 }
 
+// validateGroupIdentities allows each client to retain its own scope while
+// sharing the installation and managed runtime custody.
+func validateGroupIdentities(reqs []MaterializeRequest) (map[string]Identity, error) {
+	identities := make(map[string]Identity, len(reqs))
+	base := reqs[0].Identity
+	for _, req := range reqs {
+		client := string(req.Integration)
+		if req.Integration != portable.Claude && req.Integration != portable.Codex {
+			return nil, fmt.Errorf("%w: unsupported group client %s", ErrPreflight, client)
+		}
+		if _, exists := identities[client]; exists {
+			return nil, fmt.Errorf("%w: duplicate group client %s", ErrPreflight, client)
+		}
+		id := req.Identity
+		if id.InstallationID != base.InstallationID || id.ComponentID != base.ComponentID || id.Owner != base.Owner ||
+			physicalRoot(id.ControlRoot) != physicalRoot(base.ControlRoot) || physicalRoot(id.RuntimeRoot) != physicalRoot(base.RuntimeRoot) {
+			return nil, fmt.Errorf("%w: group installation identity differs for %s", ErrPreflight, client)
+		}
+		identities[client] = id
+	}
+	return identities, nil
+}
+
 func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest) ([]portable.Binding, error) {
 	if ctx == nil || len(reqs) != 2 {
 		return nil, ErrPreflight
@@ -1074,6 +1120,18 @@ func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest)
 			}
 		}
 	}
+	identities, err := validateGroupIdentities(reqs)
+	if err != nil {
+		return nil, err
+	}
+	// Validate all binding templates before recovery or reservation mutation.
+	templates := make([]portable.Binding, len(reqs))
+	for i, req := range reqs {
+		templates[i], err = Complete(req.Identity, req.Integration, string(req.Integration), string(domain.ScopeUser), req.Identity.ScopeRoot, req.Identity.ControlRoot)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if err := m.recoverOwnedJournals(ctx, reqs[0]); err != nil {
 		return nil, err
 	}
@@ -1085,12 +1143,8 @@ func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest)
 	generation := reqs[0].ExpectedGeneration
 	var res *installruntime.PendingMutation
 	for i := range reqs {
-		template, err := Complete(reqs[i].Identity, reqs[i].Integration, string(reqs[i].Integration), string(domain.ScopeUser), reqs[i].Identity.ScopeRoot, reqs[i].Identity.ControlRoot)
-		if err != nil {
-			return nil, err
-		}
 		gen, next, err := m.Kernel.handoffForward(ctx, Request{
-			Binding: template, ExpectedGeneration: generation, Discovery: reqs[i].Discovery,
+			Binding: templates[i], ExpectedGeneration: generation, Discovery: reqs[i].Discovery,
 			SourceRevision: reqs[i].SourceRevision, SourceDigest: reqs[i].SourceDigest,
 			TreeDigest: reqs[i].TreeDigest, HelperDigest: reqs[i].HelperDigest, HelperVersion: reqs[i].HelperVersion,
 			Profile: reqs[i].ClientConfigRoot,
@@ -1111,7 +1165,7 @@ func (m Materializer) ApplyGroup(ctx context.Context, reqs []MaterializeRequest)
 			break
 		}
 	}
-	eng, err := m.engine(engineReq, &generation, res)
+	eng, err := m.engineWithIdentities(engineReq, &generation, res, identities)
 	if err != nil {
 		return nil, err
 	}
@@ -1192,6 +1246,9 @@ func (m Materializer) RemoveGroup(ctx context.Context, reqs []MaterializeRequest
 		if reqs[i].HoldOnly {
 			return nil, fmt.Errorf("%w: group remove does not hold a Codex attestation", ErrPreflight)
 		}
+	}
+	if _, err := validateGroupIdentities(reqs); err != nil {
+		return nil, err
 	}
 	state, err := m.Store.Load()
 	if err != nil {

@@ -132,6 +132,13 @@ git push origin vX.Y.Z
 gh run watch                   # wait for release.yml to finish
 ```
 
+Before creating the draft, `release.yml` qualifies the actual downloaded binary artifacts
+on all five native targets with `scripts/opencode-native-e2e.py` and the SHA-256-pinned
+OpenCode 1.18.33 CLI. This checks completion webhook delivery, managed update and
+revocation after removal in disposable projects and profiles. The uploaded
+`opencode-release-e2e-<platform>-<arch>` reports bind the evidence to the release commit
+and binary SHA-256. These checks do not prove desktop banner delivery.
+
 The workflow creates a **draft**, never an automatically published release. Inspect it with
 `gh release view vX.Y.Z --json isDraft,assets` and download the assets into a disposable
 test directory with `gh release download vX.Y.Z --dir TEST_DIRECTORY`.

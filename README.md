@@ -3,9 +3,19 @@
 </p>
 <h1 align="center"><a href="https://777genius.github.io/agent-notifications/">Agent Notifications</a></h1>
 
-[![Ubuntu CI](https://github.com/777genius/agent-notifications/workflows/Ubuntu%20CI/badge.svg)](https://github.com/777genius/agent-notifications/actions)
-[![macOS CI](https://github.com/777genius/agent-notifications/workflows/macOS%20CI/badge.svg)](https://github.com/777genius/agent-notifications/actions)
-[![Windows CI](https://github.com/777genius/agent-notifications/workflows/Windows%20CI/badge.svg)](https://github.com/777genius/agent-notifications/actions)
+<p align="center">
+  <a href="#install-or-update"><img src="landing/public/agents/claude.png" width="64" height="64" alt="Claude Code" title="Claude Code" /></a>
+  &nbsp;&nbsp;
+  <a href="docs/CODEX.md"><img src="brand/codex-logo.svg" width="64" height="64" alt="Codex CLI" title="Codex CLI" /></a>
+  &nbsp;&nbsp;
+  <a href="docs/opencode-notifications.md"><img src="brand/opencode-logo.svg" width="64" height="64" alt="OpenCode" title="OpenCode" /></a>
+  &nbsp;&nbsp;
+  <a href="docs/gemini-notifications.md"><img src="landing/public/agents/gemini.svg" width="64" height="64" alt="Gemini CLI (candidate)" title="Gemini CLI (unreleased candidate)" /></a>
+</p>
+
+[![Ubuntu CI](https://github.com/777genius/agent-notifications/actions/workflows/ci-ubuntu.yml/badge.svg?branch=main&event=push)](https://github.com/777genius/agent-notifications/actions/workflows/ci-ubuntu.yml?query=branch%3Amain+event%3Apush)
+[![macOS CI](https://github.com/777genius/agent-notifications/actions/workflows/ci-macos.yml/badge.svg?branch=main&event=push)](https://github.com/777genius/agent-notifications/actions/workflows/ci-macos.yml?query=branch%3Amain+event%3Apush)
+[![Windows CI](https://github.com/777genius/agent-notifications/actions/workflows/ci-windows.yml/badge.svg?branch=main&event=push)](https://github.com/777genius/agent-notifications/actions/workflows/ci-windows.yml?query=branch%3Amain+event%3Apush)
 [![Go Reference](https://pkg.go.dev/badge/github.com/777genius/agent-notifications.svg)](https://pkg.go.dev/github.com/777genius/agent-notifications)
 [![codecov](https://codecov.io/gh/777genius/agent-notifications/graph/badge.svg?branch=main)](https://codecov.io/gh/777genius/agent-notifications)
 
@@ -19,20 +29,28 @@
 </table>
 </div>
 
-Desktop notifications and sounds for **Claude Code and Codex CLI**. Know when a task finishes, an agent needs input, or a tool needs approval. Click a notification to return to work.
+Desktop notifications for **Claude Code, Codex CLI and OpenCode**. Know when a task finishes, an agent needs input, or a tool needs approval. Claude and Codex also support sounds and click-to-focus.
+
+Built with [Universal Agent Plugins](https://github.com/777genius/universal-agent-plugins). [Create your own plugin for multiple AI agents](https://github.com/777genius/universal-agent-plugins#build-plugins).
+
+Terminal dependency [copyright and license notices](internal/thirdpartynotices/THIRD_PARTY_NOTICES.txt) are included in portable packages and release assets. Run `claude-notifications licenses` to read the same notices from the binary.
+
+OpenCode provides silent, generic completion, question, permission and error alerts for root sessions, with explicit desktop/webhook consent. Tested with OpenCode **1.18.33**; V2 is not supported. [OpenCode setup, privacy and limits](docs/opencode-notifications.md)
+
+Gemini CLI is the fourth agent in the **unreleased candidate**. Public release **1.46.1 does not include Gemini**. The candidate was tested with exact **Gemini CLI 0.62.0** on macOS arm64 and Linux, including real hooks, tool-permission UI and delivery. Both Mac banners were visually confirmed. [Qualification by OS](docs/gemini-notifications.md#qualification-status). Its two fixed alerts mean a turn completed (`AfterAgent`, not success or a final-only answer) or tool permission was requested (`Notification: ToolPermission`). Silent desktop and explicitly opted webhooks only; no sound, click-to-focus, question/error/plan/review alerts or nested-agent parity. Built-in Gemini notifications may duplicate desktop alerts; choose one desktop source or webhook-only. Setup leaves built-in settings unchanged. [Candidate setup and qualification status](docs/gemini-notifications.md)
 
 ## Features
 
-- **Task and attention alerts:** completions, reviews, questions, plans, session limits and API errors for Claude; completions and permission requests for Codex, with opt-in subagent alerts. [Event details](docs/NOTIFICATION_TYPES.md)
-- **Click-to-focus:** return to the originating terminal or editor, with exact tab/pane targeting for supported integrations including Ghostty, iTerm2, Warp, tmux, kitty and WezTerm. [Supported terminals](docs/CLICK_TO_FOCUS.md)
-- **Useful context:** project, git branch and session labels in notifications.
-- **Custom sounds:** built-in or custom MP3, WAV, FLAC, OGG and AIFF, with volume control, previews and audio output selection.
+- **Task and attention alerts:** completions, reviews, questions, plans, session limits and API errors for Claude; completions and permission requests for Codex, with opt-in subagent alerts; four generic root-session alerts for OpenCode. [Event details](docs/NOTIFICATION_TYPES.md)
+- **Click-to-focus (Claude/Codex):** return to the originating terminal or editor, with exact tab/pane targeting for supported integrations including Ghostty, iTerm2, Warp, tmux, kitty and WezTerm. [Supported terminals](docs/CLICK_TO_FOCUS.md)
+- **Useful context (Claude/Codex):** project, git branch and session labels in notifications.
+- **Custom sounds (Claude/Codex):** built-in or custom MP3, WAV, FLAC, OGG and AIFF, with volume control, previews and audio output selection.
 - **Less noise:** focus-aware delivery, optional delay, duplicate-question suppression, filters by status, branch or folder, opt-in respect for the desktop's Do Not Disturb state, and opt-in muting while the display is asleep (macOS). [Do Not Disturb](docs/DO_NOT_DISTURB.md) · [Display sleep](docs/CONFIGURATION.md#mute-sound-while-display-is-asleep)
-- **Your settings per agent:** shared configuration with separate Claude and Codex overrides; control desktop and webhook delivery per status. [Agent settings](docs/AGENT_CONFIGURATION.md)
+- **Your settings per agent:** shared configuration with separate Claude, Codex and OpenCode overrides; control desktop and webhook delivery per status. [Agent settings](docs/AGENT_CONFIGURATION.md)
 - **Webhooks:** Slack, Discord, Telegram, Lark/Feishu and custom endpoints, including Teams, ntfy, PagerDuty, Zapier, n8n and Make. Retries, rate limits and circuit breakers are built in. [Integrations](docs/webhooks/README.md)
 - **Cross-platform:** macOS (Intel/Apple Silicon), Linux (x64/ARM64) and Windows 10+ (x64). [Platform details](docs/PLATFORMS.md)
 
-[Codex setup and event behavior](docs/CODEX.md)
+[Codex setup and event behavior](docs/CODEX.md) · [OpenCode setup and event behavior](docs/opencode-notifications.md)
 
 ## Install Or Update
 
@@ -44,12 +62,34 @@ On Windows, run the installer in **Git Bash**. Python is optional only for exact
 curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash
 ```
 
-The short setup loader resolves the latest stable release and downloads the installer from that release's exact commit. Release lookup and validation happen automatically. Choose **Claude**, **Codex**, or **both**. For non-interactive setup, append `-s -- --product claude`, `codex`, or `both` after `bash`.
+The short setup loader resolves the latest stable release and downloads the installer from that release's exact commit. Release lookup and validation happen automatically. Choose **Claude**, **Codex**, **Claude + Codex**, or **OpenCode**. For non-interactive setup, append `-s -- --product claude`, `codex`, or `both` after `bash`. For OpenCode use `-s -- --product opencode --desktop`, `--webhook`, or both channel flags. To install notifications for all three agents with one command:
+
+```bash
+(set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --products claude,codex,opencode --desktop)
+```
+
+Use `claude,opencode` or `codex,opencode` for a mixed pair. OpenCode channel flags apply only to OpenCode; `--skip-agent-notify` applies only to Claude/Codex. Webhook URLs are configured separately. Setup stops at the first failure and preserves earlier successful installations; fix the error and rerun. [Installer options](docs/INSTALLATION.md).
 
 - **Claude:** restart Claude Code.
 - **Codex:** restart Codex, open `/hooks`, then review and trust the installed hooks.
+- **OpenCode:** restart OpenCode to load the global plugin. On Mac, [grant notification permission](docs/opencode-notifications.md#macos-notification-permission). Requires plugin release v1.46.0 or newer.
 
 Run the same command to update. [Guided installer](https://777genius.github.io/agent-notifications/#install) · [Manual installation, updates and removal](docs/INSTALLATION.md)
+
+For the future Gemini-compatible release, the planned selectors are `--product gemini` and `--products claude,codex,opencode,gemini`. Shared desktop/webhook flags apply to each selected Gemini/OpenCode observer with separate consent. Current release 1.46.1 cannot install Gemini; use the [candidate guide](docs/gemini-notifications.md) until qualification and release are complete. Claude/Codex portable MCP and skill setup does not apply to Gemini.
+
+On a release with the portable setup wizard, the public installer also installs an MCP server
+and the `agent-notifications` skill for each selected client. In a new Claude Code or Codex session,
+the agent can call `notify` while it is still working, for example when input is needed.
+Check `notification_status` for this chat first. When `navigation.capability` is `eligible`,
+prefer `navigation: "required"` for task-related alerts, including informational ones.
+Use `none` or `best_effort` only when returning to the chat is optional; never silently
+downgrade a required return. Leave routine completion alerts to hooks to avoid duplicates.
+Use `--skip-agent-notify` for hooks only. Status reports configuration and caller-context
+eligibility; it does not prove that a banner appeared or the chat opened. OS permission, client activation,
+and a visible test notification are separate checks.
+Automatic updates preserve an absent MCP client when another selected client is installed;
+use explicit `--agent-notify` to add that client later.
 
 ## Settings
 
@@ -99,7 +139,7 @@ Run the same command and choose the product(s) you want to update:
 curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash
 ```
 
-For Claude, restart Claude Code. For Codex, restart Codex and inspect `/hooks`; changed hook definitions may need trust approval again. The installer refreshes the Codex runtime and registration automatically. Existing foreign hooks and shared settings in the file selected by `config path` are preserved.
+For OpenCode, rerun the installer with explicitly selected desktop/webhook channels and restart OpenCode. For Claude, restart Claude Code. For Codex, restart Codex and inspect `/hooks`; changed hook definitions may need trust approval again. The installer refreshes the Codex runtime and registration automatically. Existing foreign hooks and shared settings in the file selected by `config path` are preserved.
 
 <details>
 <summary>Manual Claude update (if bootstrap didn't work)</summary>
@@ -116,6 +156,8 @@ If the binary auto-update didn't work (e.g. no internet at the time), run `/clau
 </details>
 
 ### Uninstalling
+
+**OpenCode:** use the installer's printed **Remove** command, then restart OpenCode. Windows removal runs a temporary copy of the managed executable. [Removal and recovery](docs/opencode-notifications.md#change-channels-remove-or-recover).
 
 **Claude:**
 
@@ -182,7 +224,8 @@ definitions and unknown fields are preserved, and every run saves a uniquely nam
 the previous file next to it.
 
 Then start Codex, run `/hooks`, review the entries and trust them. Open a new session so MCP
-can start; `/mcp` should list `agent_notifications`.
+can start. The manual compatibility path may list `agent_notifications`; the portable public
+installer uses `agent-notify`.
 
 Useful flags: `--dry-run` shows what would change, `--print` outputs the JSON so you can merge it
 yourself, `--codex-home` and `--plugin-root` override the paths, `--skip-agent-notify` skips MCP

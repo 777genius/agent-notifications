@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -138,6 +139,100 @@ func TestInstallRuntimeVersionedClaudeCacheRelocation(t *testing.T) {
 	}
 	if contents, err := os.ReadFile(oldPrimary); err != nil || string(contents) != "new"+installruntime.WriterProtocolMarker {
 		t.Fatalf("retained portable primary was not upgraded: %q, %v", contents, err)
+	}
+}
+
+// Reproduces #278: Claude restored the retired cache from the marketplace
+// checkout, so the downloaded binary is gone, the skill carries the checkout's
+// mode and the launcher points at the repository's relative link.
+func TestInstallRuntimeRelocatesFromRestoredVersionedCache(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := filepath.Join(root, ".claude", "plugins", "cache", "claude-notifications-go", "claude-notifications-go")
+	control := filepath.Join(root, "control")
+	entry := "claude-notifications-linux-amd64"
+	if runtime.GOOS == "windows" {
+		entry = "claude-notifications-windows-amd64.exe"
+	}
+	install := func(version, content string, relocate bool) error {
+		stage := filepath.Join(root, "stage-"+version)
+		if err := os.MkdirAll(stage, 0700); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(stage, entry), []byte(content+installruntime.WriterProtocolMarker), 0700); err != nil {
+			return err
+		}
+		args := []string{"--stage", stage, "--target", filepath.Join(cache, version, "bin"), "--entry", entry, "--control-root", control}
+		if relocate {
+			args = append(args, "--relocate-versioned-cache")
+		}
+		return installRuntime(args, io.Discard)
+	}
+	if err := install("1.45.18", "old", false); err != nil {
+		t.Fatal(err)
+	}
+	oldRoot, newRoot := filepath.Join(cache, "1.45.18"), filepath.Join(cache, "1.46.0")
+	oldSkill := filepath.Join(oldRoot, "skills", "agent-notifications", "SKILL.md")
+	oldLauncher := filepath.Join(oldRoot, "bin", "agent-notifications")
+	if err := os.Remove(filepath.Join(oldRoot, "bin", entry)); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		// Windows launchers are scripts and modes are normalized; drift the bytes.
+		if err := os.WriteFile(oldSkill, []byte("checkout"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		if err := os.Chmod(oldSkill, 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(oldLauncher); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("claude-notifications", oldLauncher); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := install("1.46.0", "new", true); err != nil {
+		t.Fatalf("restored old cache blocked the update: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(control, "ownership.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ledger installruntime.Ledger
+	if err := json.Unmarshal(data, &ledger); err != nil {
+		t.Fatal(err)
+	}
+	newSkill := filepath.Join(newRoot, "skills", "agent-notifications", "SKILL.md")
+	if ledger.RuntimeRoot != newRoot || ledger.Consumers["claude-hooks"].RuntimeRoot != newRoot ||
+		!ledger.Files[filepath.Join(newRoot, "bin", entry)].Exists || !ledger.Files[newSkill].Exists {
+		t.Fatalf("unexpected ownership after relocation: %+v", ledger)
+	}
+	for path := range ledger.Files {
+		if strings.HasPrefix(path, oldRoot+string(filepath.Separator)) {
+			t.Fatalf("retired cache still owned: %s", path)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(oldRoot, "bin", entry)); !os.IsNotExist(err) {
+		t.Fatal("retired cache binary republished")
+	}
+	if runtime.GOOS == "windows" {
+		return
+	}
+	if target, err := os.Readlink(oldLauncher); err != nil || target != "claude-notifications" {
+		t.Fatalf("retired launcher changed: %q, %v", target, err)
+	}
+	if info, err := os.Stat(oldSkill); err != nil || info.Mode().Perm() != 0644 {
+		t.Fatalf("retired skill changed: %v, %v", info, err)
+	}
+	if target, err := os.Readlink(filepath.Join(newRoot, "bin", "agent-notifications")); err != nil || target != entry {
+		t.Fatalf("new launcher not published: %q, %v", target, err)
+	}
+	if info, err := os.Stat(newSkill); err != nil || info.Mode().Perm() != 0600 {
+		t.Fatalf("new skill not published: %v, %v", info, err)
 	}
 }
 

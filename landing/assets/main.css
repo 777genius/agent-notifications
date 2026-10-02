@@ -280,6 +280,23 @@ h3 {
   border-radius: 5px;
   color: #8febf5;
 }
+.page-content {
+  position: relative;
+  isolation: isolate;
+}
+[data-reveal] {
+  transition: opacity 600ms ease-out, translate 600ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.reveal-pending {
+  opacity: 0;
+  translate: 0 24px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .reveal-pending {
+    opacity: 1;
+    translate: none;
+  }
+}
 .hero-wrap {
   position: relative;
 }
@@ -1204,7 +1221,7 @@ footer .brand {
 }
 .agent-cards {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 18px;
   margin: 0 40px;
 }
@@ -1497,6 +1514,7 @@ footer .brand {
 }
 @media (max-width: 700px) {
   .agent-cards {
+    grid-template-columns: 1fr;
     margin-inline: 0;
     gap: 12px;
   }

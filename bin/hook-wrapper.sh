@@ -135,13 +135,127 @@ get_plugin_version() {
     [ -f "$PLUGIN_JSON" ] && grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' "$PLUGIN_JSON" | head -n 1 || true
 }
 
-# Run install.sh silently. The caller reports a safe, once-per-version failure.
-run_install() {
-    [ -f "$INSTALL_SCRIPT" ] || return 1
+install_attempt() {
+    if [ ! -f "$INSTALL_SCRIPT" ]; then
+        INSTALL_REASON='Installer script is missing.'
+        printf '%s\n' "$INSTALL_REASON"
+        return 1
+    fi
     # A package rollback must not delegate mutation to a historical writer.
     # This compatibility declaration does not authenticate the package origin.
-    LC_ALL=C grep -aqF 'agent-notifications-managed-writer-protocol-v1' "$INSTALL_SCRIPT" || return 1
-    INSTALL_TARGET_DIR="$SCRIPT_DIR" "$INSTALL_SCRIPT" "$@" >/dev/null 2>&1
+    if ! LC_ALL=C grep -aqF 'agent-notifications-managed-writer-protocol-v1' "$INSTALL_SCRIPT"; then
+        INSTALL_REASON='Installer does not support the managed writer protocol.'
+        printf '%s\n' "$INSTALL_REASON"
+        return 1
+    fi
+    INSTALL_TARGET_DIR="$SCRIPT_DIR" "$INSTALL_SCRIPT" "$@"
+}
+
+# Each attempt owns a private log. Failure to open it must still run the installer.
+run_install() {
+    INSTALL_LOG=''
+    INSTALL_REASON=''
+    _log_ver=$(get_plugin_version)
+    _log_ver=${_log_ver:-unknown}
+    if (umask 077; mkdir -p "$STAMP_DIR") 2>/dev/null; then
+        INSTALL_LOG=$(umask 077; mktemp "$STAMP_DIR/install-$_log_ver-XXXXXX" 2>/dev/null) || INSTALL_LOG=''
+    fi
+    _install_ran=0
+    if [ -n "$INSTALL_LOG" ]; then
+        # The outer redirect also silences a failed log open. The flag
+        # distinguishes that from an installer failure, without retrying it.
+        { {
+            _install_ran=1
+            install_attempt "$@"
+            _install_status=$?
+        } >"$INSTALL_LOG" 2>&1; } 2>/dev/null
+    fi
+    if [ "$_install_ran" = 0 ]; then
+        [ -z "$INSTALL_LOG" ] || rm -f "$INSTALL_LOG" 2>/dev/null || true
+        INSTALL_LOG=''
+        install_attempt "$@" >/dev/null 2>&1
+        _install_status=$?
+    fi
+    # The installer can return zero for an offline upgrade while retaining
+    # the old binary. Keep its explanation until the target is verified.
+    if [ "$_install_status" = 0 ] && target_binary_ok; then
+        [ -z "$INSTALL_LOG" ] || rm -f "$INSTALL_LOG" 2>/dev/null || true
+        INSTALL_LOG=''
+    elif [ -z "$INSTALL_REASON" ]; then
+        if [ "$_install_status" = 0 ]; then
+            INSTALL_REASON='Installer did not publish the target binary.'
+        else
+            INSTALL_REASON="Installer exited with status $_install_status."
+        fi
+    fi
+    return "$_install_status"
+}
+
+install_error_excerpt() {
+    [ -n "$INSTALL_LOG" ] || return 0
+    # Prefer the last substantive error over progress/cleanup lines. Parse
+    # from the start: an OSC string can span more than a tail window.
+    LC_ALL=C awk '
+        BEGIN { for (i = 0; i < 32; i++) if (i != 9) control[sprintf("%c", i)] = 1 }
+        {
+            clean = ""
+            for (i = 1; i <= length($0); i++) {
+                c = substr($0, i, 1)
+                if (state == "osc") { if (c == "\007") state = ""; else if (c == "\033") state = "osc-esc"; continue }
+                if (state == "osc-esc") { if (c == "\\") state = ""; else if (c != "\033") state = "osc"; continue }
+                if (state == "string") { if (c == "\033") state = "string-esc"; continue }
+                if (state == "string-esc") { if (c == "\\") state = ""; else if (c != "\033") state = "string"; continue }
+                if (state == "csi") { if (c ~ /[@-~]/) state = ""; continue }
+                if (state == "esc") { state = c == "[" ? "csi" : c == "]" ? "osc" : c ~ /^[PX^_]$/ ? "string" : ""; continue }
+                if (c == "\033") { state = "esc"; continue }
+                if (c in control || c == "\177") continue
+                # Keep enough bytes for the excerpt and its last UTF-8 character.
+                if (length(clean) < 304) clean = clean c
+            }
+            if (clean ~ /[^ \t]/) last = clean
+            if (tolower(clean) ~ /error|failed|fatal|refus|fingerprint|denied/) reason = clean
+        }
+        END {
+            text = reason != "" ? reason : last
+            # A byte budget also bounds characters. Never split a UTF-8 codepoint.
+            for (i = 1; i <= length(text) && i <= 300; i += width) {
+                c = substr(text, i, 1)
+                width = c ~ /[\300-\337]/ ? 2 : c ~ /[\340-\357]/ ? 3 : c ~ /[\360-\364]/ ? 4 : 1
+                if (i + width - 1 > 300) break
+                printf "%s", substr(text, i, width)
+            }
+        }' "$INSTALL_LOG" 2>/dev/null
+}
+
+json_system_message() {
+    LC_ALL=C awk '
+        BEGIN {
+            printf "{\"systemMessage\":\""
+            for (i = 0; i < 256; i++) byte[sprintf("%c", i)] = i
+        }
+        NR > 1 { printf "\\n" }
+        { for (i = 1; i <= length($0); i++) {
+            c = substr($0, i, 1)
+            b = byte[c]
+            if (c == "\\" || c == "\"") printf "\\%s", c
+            else if (b < 32) printf "\\u%04x", b
+            else if (b < 128) printf "%s", c
+            else {
+                # Preserve valid UTF-8; replace malformed bytes so paths and
+                # diagnostics cannot make the entire JSON response unreadable.
+                width = b >= 194 && b <= 223 ? 2 : b >= 224 && b <= 239 ? 3 : b >= 240 && b <= 244 ? 4 : 0
+                valid = width > 0 && i + width - 1 <= length($0)
+                for (j = 1; valid && j < width; j++) {
+                    nextbyte = byte[substr($0, i + j, 1)]
+                    if (nextbyte < 128 || nextbyte > 191) valid = 0
+                    if (j == 1 && ((b == 224 && nextbyte < 160) || (b == 237 && nextbyte >= 160) ||
+                                  (b == 240 && nextbyte < 144) || (b == 244 && nextbyte >= 144))) valid = 0
+                }
+                if (valid) { printf "%s", substr($0, i, width); i += width - 1 }
+                else printf "\\ufffd"
+            }
+        } }
+        END { print "\"}" }'
 }
 
 report_install_failure() {
@@ -154,12 +268,33 @@ report_install_failure() {
     # mkdir is atomic across concurrent hooks. If cache writes fail, still
     # report the failure rather than hiding a missing runtime indefinitely.
     if mkdir "$_failure_stamp" 2>/dev/null || [ ! -d "$_failure_stamp" ]; then
-        if ! binary_ok; then
-            printf '{"systemMessage":"[claude-notifications] Installation of v%s failed. Run bin/install.sh manually for details."}\n' "$_failed_ver"
+        _reason=$(install_error_excerpt)
+        _reason=${_reason:-${INSTALL_REASON:-Installation could not be completed.}}
+        _message="[claude-notifications] Installation of v$_failed_ver failed:
+$_reason"
+        if [ -n "$INSTALL_LOG" ]; then
+            _message="$_message
+Details: $INSTALL_LOG"
         else
-            printf '[claude-notifications] Installation of v%s failed. Run bin/install.sh manually for details.\n' "$_failed_ver" >&2
+            _message="$_message
+Run bin/install.sh manually for details."
+        fi
+        if ! binary_ok; then
+            printf '%s' "$_message" | json_system_message
+        else
+            printf '%s\n' "$_message" >&2
         fi
     fi
+}
+
+# Once the wrapper has established that a version's binary is in place, that
+# version's failure stamp is retired, so a later failure of the version is
+# reported again instead of staying silent. The stamp is usually absent, and
+# cache housekeeping never fails the hook.
+clear_install_failure() {
+    [ "${CN_PRODUCT:-claude}" = "claude" ] && [ -n "$1" ] || return 0
+    [ -d "$STAMP_DIR/install-failed-$1" ] || return 0
+    rmdir "$STAMP_DIR/install-failed-$1" 2>/dev/null || true
 }
 
 path_recent() {
@@ -263,10 +398,13 @@ else
     if [ -n "$BIN_VER" ] && [ -n "$PLG_VER" ] && [ "$BIN_VER" != "$PLG_VER" ]; then
         NEED_INSTALL=1
         NEED_FORCE=1
-    elif [ -n "$BIN_VER" ] && [ -n "$PLG_VER" ] && [ "$CACHED_VER" != "$PLG_VER" ]; then
-        # Versions match but cache is stale — update cache
-        mkdir -p "$STAMP_DIR" >/dev/null 2>&1 || true
-        printf '%s\n' "$PLG_VER" > "$VERSION_CACHE" 2>/dev/null || true
+    elif [ -n "$BIN_VER" ] && [ -n "$PLG_VER" ]; then
+        if [ "$CACHED_VER" != "$PLG_VER" ]; then
+            # Versions match but cache is stale — update cache
+            mkdir -p "$STAMP_DIR" >/dev/null 2>&1 || true
+            printf '%s\n' "$PLG_VER" > "$VERSION_CACHE" 2>/dev/null || true
+        fi
+        clear_install_failure "$PLG_VER"
     fi
 fi
 
@@ -298,6 +436,9 @@ if [ "$NEED_INSTALL" = 1 ]; then
         if [ -n "$NEW_VER" ]; then
             mkdir -p "$STAMP_DIR" >/dev/null 2>&1 || true
             printf '%s\n' "$NEW_VER" > "$VERSION_CACHE" 2>/dev/null || true
+            if [ "$NEW_VER" = "$TARGET_VER" ]; then
+                clear_install_failure "$NEW_VER"
+            fi
         fi
         # Avoid repeating the same install/update message more than once per version.
         if [ -n "$NEW_VER" ]; then
