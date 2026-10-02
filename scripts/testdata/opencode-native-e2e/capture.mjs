@@ -9,7 +9,9 @@ if (relative(root, file).startsWith('..') || isAbsolute(relative(root, file))) t
 const marker = JSON.parse(readFileSync(resolve(root, '.owned-test-root.json')));
 if (marker.purpose !== 'TEST installed AN dual native') throw Error('TEST marker');
 const key = readFileSync(resolve(root, 'trace-key'));
-const safe = new Set(['v1','v2','question','bash','shell','pending','answered','cancelled','running','idle','failed','completed','succeeded','interrupted','user','assistant','tool','text','reject','eligible','unverified','none','reaped_or_not_started']);
+// Keep summary/control classification readable; IDs, text, agent names and native
+// lineage remain HMAC-correlated in the original envelopes, without new aliases.
+const safe = new Set(['v1','v2','question','bash','shell','pending','answered','cancelled','running','idle','failed','completed','succeeded','interrupted','user','assistant','tool','text','reject','eligible','unverified','none','reaped_or_not_started','manual','compaction']);
 let bytes = 0, count = 0, overflow = false;
 function redact(v, name = '', depth = 0) {
   if (depth > 12) throw Error('capture depth');

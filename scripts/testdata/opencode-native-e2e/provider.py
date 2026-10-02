@@ -1,11 +1,138 @@
 """Private deterministic provider and bounded HTTP helpers adapted from P0.
 No replacement product plugin, reducer, qualified profile or event injection.
 """
-import hashlib, hmac, json, pathlib, socket, threading, time, urllib.request, urllib.error, urllib.parse
+import hashlib, hmac, json, pathlib, re, socket, threading, time, urllib.request, urllib.error, urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 SCENARIOS = ('completion', 'form', 'permission', 'error')
-ALL_SCENARIOS = SCENARIOS + ('retry', 'interrupt')
-SAFE = {'question','bash','shell','pending','answered','cancelled','running','idle','failed','completed','succeeded','interrupted','user','assistant','tool','text','once','always','reject'}
+ALL_SCENARIOS = SCENARIOS + ('retry', 'interrupt', 'compaction', 'child')
+SAFE = {'question','bash','shell','pending','answered','cancelled','running','idle','failed','completed','succeeded','interrupted','user','assistant','tool','text','once','always','reject','manual','compaction'}
+CHILD_AGENT = 'an-e2e-child'
+CHILD_PROMPT = 'AN_TEST_CHILD_REPLY_ONLY. Return a short text answer. Do not call tools.'
+CHILD_CALL = 'call_an_test_child'
+SUMMARY = '''## Objective
+- Continue the private TEST conversation.
+## Requirements
+- Use only the private TEST conversation.
+## Decisions
+- (none)
+## Work State
+### Completed
+- The previous text turn completed.
+### Active
+- (none)
+### Blocked
+- (none)
+## Next Move
+1. Await the next user turn.
+## Relevant Files
+- (none)
+## Important Context
+- (none)
+'''
+# V1 core compaction.ts:16-46 has a different inline template from V2.
+V1_SUMMARY = '''## Objective
+- Continue the private TEST conversation.
+## Important Details
+- Use only the private TEST conversation; the previous text turn completed.
+## Work State
+### Completed
+- The previous text turn completed.
+### Active
+- (none)
+### Blocked
+- (none)
+## Next Move
+1. Await the next user turn.
+2. (none)
+## Relevant Files
+- (none)
+'''
+
+
+def summary_response(v2):
+    return SUMMARY if v2 else V1_SUMMARY
+
+
+def child_config(v2):
+    # Native V2 config/plugin/agent.ts consumes plural document.info.agents;
+    # its child catalog uses selected AGENT permissions, not session-only rules.
+    rules = [{'action':'*','resource':'*','effect':'deny'},
+             {'action':'question','resource':'*','effect':'allow'},
+             {'action':'shell','resource':'*','effect':'ask'},
+             {'action':'subagent','resource':CHILD_AGENT,'effect':'allow'}]
+    if v2:
+        return {'permissions':rules,'agents':{CHILD_AGENT:{'description':'Private TEST text-only child',
+                'mode':'subagent','hidden':False,'permissions':[rules[0]]}}}
+    return {'permission':{'*':'deny','question':'allow','bash':'ask','shell':'ask',
+            'task':{'*':'deny',CHILD_AGENT:'allow'}},
+            'agent':{CHILD_AGENT:{'description':'Private TEST text-only child','mode':'subagent'}}}
+
+
+def text_content(value):
+    if isinstance(value,str): return value
+    if isinstance(value,list):
+        return '\n'.join(p.get('text','') for p in value if isinstance(p,dict) and p.get('type')=='text')
+    return ''
+
+
+def summary_request(body, v2=True):
+    # V1 compaction.test.ts:1376-1423,1499 directly asserts the actual LLM user
+    # request. V2 compaction.ts:139-158 supplies its distinct new-summary literal.
+    messages = body.get('messages',[])
+    if not v2:
+        if len(messages)!=1 or messages[0].get('role')!='user': return False
+        text = text_content(messages[0].get('content'))
+        return all(marker in text for marker in ('Here is the conversation so far:',
+                   '<conversation>','</conversation>','Create a new anchored summary'))
+    return any('You MUST summarize the conversation above into a structured summary' in text_content(m.get('content'))
+               for m in messages if m.get('role')=='user')
+
+
+def child_call(tools, v2):
+    """Only the frozen built-in foreground tool and specifically advertised TEST agent."""
+    name = 'subagent' if v2 else 'task'
+    matches = [t.get('function',{}) for t in tools if t.get('type')=='function' and t.get('function',{}).get('name')==name]
+    if len(matches)!=1: raise ValueError('native_child_tool_missing_or_ambiguous')
+    tool = matches[0]
+    if not any(line.startswith('- '+CHILD_AGENT+':') for line in tool.get('description','').splitlines()):
+        raise ValueError('configured_test_child_agent_not_advertised')
+    args = {'description':'Private TEST child reply','prompt':CHILD_PROMPT,
+            ('agent' if v2 else 'subagent_type'):CHILD_AGENT}
+    params = tool.get('parameters',{})
+    props = params.get('properties',{})
+    if (params.get('type')!='object' or not set(args).issubset(props)
+            or not set(params.get('required',[])).issubset(args)
+            or any(props[k].get('type')!='string' or ('enum' in props[k] and v not in props[k]['enum'])
+                   or ('const' in props[k] and v!=props[k]['const']) for k,v in args.items())):
+        raise ValueError('qualified_child_tool_schema_missing')
+    return {'index':0,'id':CHILD_CALL,'type':'function','function':{'name':name,'arguments':json.dumps(args)}}
+
+
+def child_result(messages, v2):
+    """Read the REAL host's completed foreground tool response, not a supplied parentID."""
+    matches = [m for m in messages if m.get('role')=='tool' and m.get('tool_call_id')==CHILD_CALL]
+    if len(matches)!=1: raise ValueError('native_child_result_binding_missing')
+    content = text_content(matches[0].get('content'))
+    pattern = (r'<subagent sessionID="([^"<>\s]+)" state="completed">\n[\s\S]*\n</subagent>' if v2
+               else r'<task id="([^"<>\s]+)" state="completed">\n<task_result>\n[\s\S]*\n</task_result>\n</task>')
+    match = re.fullmatch(pattern,content)
+    if not match: raise ValueError('native_foreground_child_did_not_complete')
+    return match[1]
+
+
+def child_response(body, v2, phase):
+    """Pure provider protocol planner. No host calls, native events or product grants."""
+    messages = body.get('messages',[])
+    if phase==0:
+        if any(m.get('role')=='tool' for m in messages): raise ValueError('child_initial_request_has_history')
+        return 'launch',child_call(body.get('tools',[]),v2),None
+    if phase==1:
+        users = [text_content(m.get('content')) for m in messages if m.get('role')=='user']
+        if not users or CHILD_PROMPT not in users[-1] or any(m.get('role')=='tool' for m in messages):
+            raise ValueError('native_child_prompt_missing')
+        return 'child',None,None
+    if phase==2: return 'resume',None,child_result(messages,v2)
+    raise ValueError('unexpected_child_provider_request_no_retry')
 
 def redact(value, key, name='', depth=0):
     if depth>12: return '[depth-limit]'
@@ -53,6 +180,13 @@ class Provider(OwnedHTTPServer):
         self.interrupt_started = threading.Event()
         self.interrupt_release = threading.Event()
         self.interrupt_hold_expired = False
+        self.v2 = False
+        self.manual_active = False
+        self.child_phase = 0
+        self.child_resumed = threading.Event()
+        self.child_release = threading.Event()
+        self.child_hold_expired = False
+        self.child_session = None
     def record(self, obj):
         with self.lock:
             model=obj['model']
@@ -73,8 +207,32 @@ class ProviderHandler(BaseHTTPRequestHandler):
         model = request.get('model','')
         scenario = model.removeprefix('p0-')
         if scenario not in ALL_SCENARIOS: self.send_error(400); return
-        attempt=self.server.record({'model':model,'stream':request.get('stream',False),'toolSchemas':request.get('tools',[]),'messageRoles':[x.get('role') for x in request.get('messages',[])]})
+        call, response_text, kind, result_session = None, 'P0 deterministic completion.', 'ordinary', None
+        try:
+            if scenario=='child':
+                with self.server.lock:
+                    kind,call,result_session = child_response(request,self.server.v2,self.server.child_phase)
+                    self.server.child_phase += 1
+            elif summary_request(request,self.server.v2):
+                if not self.server.manual_active or scenario not in ('compaction','completion'):
+                    raise ValueError('unplanned_native_compaction_request')
+                kind,response_text = 'summary',summary_response(self.server.v2)
+            elif scenario=='compaction' or self.server.manual_active:
+                raise ValueError('manual_compaction_provider_prompt_missing')
+        except ValueError as error:
+            with self.server.lock: self.server.gaps.append({'scenario':scenario,'reason':str(error)})
+            self.send_error(400); return
+        attempt=self.server.record({'model':model,'stream':request.get('stream',False),'toolSchemas':request.get('tools',[]),
+                                    'messageRoles':[x.get('role') for x in request.get('messages',[])],
+                                    'requestKind':kind,'childResultSession':result_session})
         if len(self.server.records)>32: self.send_error(429); return
+        if kind=='resume':
+            self.server.child_session = result_session
+            self.server.child_resumed.set()
+            if not self.server.child_release.wait(timeout=12):
+                self.server.child_hold_expired = True
+                self.close_connection=True
+                return
         if scenario=='error':
             data=json.dumps({'error':{'message':'P0 intentional permanent error','type':'invalid_request_error'}}).encode()
             self.send_response(400); self.send_header('Content-Type','application/json'); self.send_header('Content-Length',str(len(data))); self.end_headers(); self.wfile.write(data); return
@@ -98,7 +256,6 @@ class ProviderHandler(BaseHTTPRequestHandler):
             # or fixture cleanup; an expired hold is a gap, never success.
             self.close_connection=True
             return
-        call=None
         seen_tool=any(x.get('role')=='tool' for x in request.get('messages',[]))
         if scenario in ('form','permission') and not seen_tool:
             # Select only actually declared native tools. No event injection or arbitrary shell tool.
@@ -122,7 +279,7 @@ class ProviderHandler(BaseHTTPRequestHandler):
         if request.get('stream'):
             self.send_response(200); self.send_header('Content-Type','text/event-stream'); self.end_headers()
             sequence=[({'role':'assistant'},None)]
-            sequence += [({'tool_calls':[call]},None),({},'tool_calls')] if call else [({'content':'P0 deterministic completion.'},None),({},'stop')]
+            sequence += [({'tool_calls':[call]},None),({},'tool_calls')] if call else [({'content':response_text},None),({},'stop')]
             try:
                 for delta,finish in sequence:
                     chunk={'id':'chatcmpl-p0','object':'chat.completion.chunk','created':int(time.time()),'model':model,'choices':[{'index':0,'delta':delta,'finish_reason':finish}]}
@@ -130,7 +287,7 @@ class ProviderHandler(BaseHTTPRequestHandler):
                 self.wfile.write(b'data: [DONE]\n\n'); self.wfile.flush()
             except (BrokenPipeError,ConnectionResetError): pass
         else:
-            message={'role':'assistant','content':None,'tool_calls':[{k:v for k,v in call.items() if k!='index'}]} if call else {'role':'assistant','content':'P0 deterministic completion.'}
+            message={'role':'assistant','content':None,'tool_calls':[{k:v for k,v in call.items() if k!='index'}]} if call else {'role':'assistant','content':response_text}
             data=json.dumps({'id':'chatcmpl-p0','object':'chat.completion','created':int(time.time()),'model':model,'choices':[{'index':0,'message':message,'finish_reason':'tool_calls' if call else 'stop'}],'usage':{'prompt_tokens':10,'completion_tokens':6,'total_tokens':16}}).encode()
             self.send_response(200); self.send_header('Content-Type','application/json'); self.send_header('Content-Length',str(len(data))); self.end_headers(); self.wfile.write(data)
 

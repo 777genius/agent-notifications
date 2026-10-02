@@ -26,7 +26,7 @@ from http.server import BaseHTTPRequestHandler
 REPO = pathlib.Path(__file__).resolve().parents[1]
 FIXTURES = REPO / "scripts/testdata/opencode-native-e2e"
 sys.path.insert(0, str(FIXTURES))
-from provider import OwnedHTTPServer, Provider, request, data, redact as private_redact
+from provider import OwnedHTTPServer, Provider, CHILD_AGENT, CHILD_CALL, child_config, request, data, redact as private_redact
 
 VERSIONS = ("1.18.33", "1.18.34", "2.0.21")
 PLATFORMS = (("linux", "amd64"), ("linux", "arm64"), ("darwin", "amd64"),
@@ -46,7 +46,8 @@ GAPS = {
     "uncertain_claim_retention": "Disconnected POST is observable; durable claim/duplicate replay is unproved",
     "clock_provenance": "Per-native production clock/source conversion and complete T qualification required",
     "owned_event_child_close": "Fixture leaders reap; product registry inner resourceClosure needs independent proof",
-    "compaction_child_locations": "Root/fork/two-location staged; compaction and true-task-child source driver unavailable",
+    "compaction_child_locations": "Manual/foreground-child/root-fork/two-location bodies staged; actual native effects and final product settlement unrun",
+    "driver_source_acceptance": "Exact pinned public driver contracts source-bound; independent exact-source acceptance and native behavior remain unproved",
     "nonlinux_external_desktop": "Managed native/path protocol is separate from external desktop submission counts",
 }
 
@@ -65,6 +66,18 @@ def digest(path):
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def reviewed_driver_contract(version, path=None):
+    # Pure source custody only. This neither grants a profile/clock nor removes
+    # the unconditional production pre-model stop. No hosted TASK-INPUTS needed.
+    path = pathlib.Path(path) if path is not None else FIXTURES/'driver-contracts.json'
+    require(path.is_file() and not path.is_symlink() and
+            digest(path)=='a80070f86c57fa9e3ee9837109466bee332733e13a7faa1898cf212e3f243b57',
+            'reviewed_driver_source_contract_required')
+    contract = json.loads(path.read_text())
+    require(version in contract['versions'], 'driver_generation_source_required')
+    return contract
 
 
 def sri(path):
@@ -313,6 +326,7 @@ class Owned:
         for s in self.servers:
             if isinstance(s, Provider):
                 s.interrupt_release.set()
+                s.child_release.set()
             if isinstance(s, Webhook):
                 s.release.set()
         failures = []
@@ -480,11 +494,56 @@ def correlated(value, sid):
     return isinstance(value, list) and any(correlated(v, sid) for v in value)
 
 
+def native_position(event, sid):
+    """Actual V2 durable envelope; no global seq or invented data.executionID."""
+    d = event.get('durable',{})
+    seq, created = d.get('seq'),event.get('created')
+    if (isinstance(sid,str) and sid and event.get('data',{}).get('sessionID')==sid and d.get('aggregateID')==sid
+            and type(seq) is int and seq>=0 and type(d.get('version')) is int and d['version']>=1
+            and isinstance(event.get('id'),str) and event['id']
+            and type(created) in (int,float) and 0<created<1e16):
+        return seq
+    return None
+
+
+def execution_window(native, name, sid=None):
+    """One native execution interval in the session log. Sparse seq is valid."""
+    kind = 'session.execution.failed' if name=='error' else 'session.execution.succeeded'
+    for end in reversed(native):
+        if end.get('type')!=kind: continue
+        root = sid or end.get('data',{}).get('sessionID')
+        last = native_position(end,root)
+        if last is None: continue
+        starts = [e for e in native if e.get('type')=='session.execution.started'
+                  and native_position(e,root) is not None and native_position(e,root)<last]
+        if not starts: continue
+        start = max(starts,key=lambda e:native_position(e,root))
+        first = native_position(start,root)
+        if start['created']>end['created']: continue
+        if any(e.get('type') in ('session.execution.succeeded','session.execution.failed','session.execution.interrupted')
+               and native_position(e,root) is not None and first<native_position(e,root)<last for e in native):
+            continue
+        return start,end
+    return None
+
+
+def final_steps(native, name, sid=None):
+    window = execution_window(native,name,sid)
+    if not window: return []
+    start,end = window
+    root = end['data']['sessionID']
+    first,last = native_position(start,root),native_position(end,root)
+    steps = [e for e in native if e.get('type') in ('session.step.ended','session.step.failed')
+             and native_position(e,root) is not None and first<native_position(e,root)<last]
+    if not steps: return []
+    step = max(steps,key=lambda e:native_position(e,root))
+    return [step] if step['type']==('session.step.failed' if name=='error' else 'session.step.ended') else []
+
+
 def native_final(events, name, v2, excluded=()):
     if v2:
-        terminal = [e for e in events if e.get('type') == ('session.execution.failed' if name == 'error' else 'session.execution.succeeded')]
-        steps = [e for e in events if e.get('type') == ('session.step.failed' if name == 'error' else 'session.step.ended') and e.get('data', {}).get('assistantMessageID') and e['data']['assistantMessageID'] not in excluded]
-        return any(t.get('data', {}).get('executionID') and t['data']['executionID'] == s.get('data', {}).get('executionID') for t in terminal for s in steps)
+        return any(s['data'].get('assistantMessageID') and s['data']['assistantMessageID'] not in excluded
+                   for s in final_steps(events,name))
     assistants = [e.get('properties', {}).get('info', {}) for e in events if e.get('type') == 'message.updated']
     finals = [m for m in assistants if m.get('role') == 'assistant' and m.get('id') and m.get('parentID') and m.get('time', {}).get('completed') and not m.get('summary') and m['id'] not in excluded]
     if name == 'error':
@@ -516,15 +575,40 @@ def ordinary_projection(history, candidates, session, error, aborted):
     return False
 
 
+def read_history(base, project, enc, v2, headers):
+    if not v2:
+        return data(request(base,project,'/session/'+enc+'/message',auth_headers=headers))
+    # PublicSessionMessage is typed and has no per-message sessionID/role/parentID.
+    # The route binds the session. A finite fresh fixture must fit its bounded page.
+    answer = request(base,project,'/api/session/'+enc+'/message?limit=200&order=asc',v2=True,auth_headers=headers)
+    require(isinstance(answer,dict) and set(answer)=={'data','cursor'} and isinstance(answer['data'],list)
+            and isinstance(answer['cursor'],dict) and not answer['cursor'], 'typed_message_page_incomplete_or_invalid')
+    return answer['data']
+
+
+def v2_ordinary_projection(history, native, sid, name):
+    steps = final_steps(native,name,sid)
+    if not isinstance(history,list) or len(steps)!=1: return False
+    expected = steps[0]['data']
+    for info in history:
+        if not isinstance(info,dict): continue
+        completed = info.get('time',{}).get('completed')
+        if (info.get('type')!='assistant' or info.get('id')!=expected.get('assistantMessageID')
+                or not info.get('agent') or not isinstance(info.get('content'),list)
+                or type(completed) not in (int,float) or not 0<completed<1e16): continue
+        if name=='error':
+            if expected.get('error') and info.get('error')==expected['error']: return True
+        elif not info.get('error') and info.get('finish')==expected.get('finish') and info.get('finish'):
+            return True
+    return False
+
+
 def final_projection(base, project, enc, sid_hash, native, name, v2, headers, key):
-    prefix = '/api/session' if v2 else '/session'
-    history = data(request(base,project,prefix+'/'+enc+('/context' if v2 else '/message'),v2=v2,auth_headers=headers))
+    history = read_history(base,project,enc,v2,headers)
     if v2:
-        terminal_type = 'session.execution.failed' if name=='error' else 'session.execution.succeeded'
-        executions = {e.get('data',{}).get('executionID') for e in native if e.get('type')==terminal_type and e.get('data',{}).get('executionID')}
-        candidates = {e.get('data',{}).get('assistantMessageID') for e in native
-                      if e.get('type')==('session.step.failed' if name=='error' else 'session.step.ended')
-                      and e.get('data',{}).get('executionID') in executions}
+        require(v2_ordinary_projection(private_redact(history,key),native,sid_hash,name),
+                'matching_final_typed_assistant_projection_missing')
+        return
     else:
         candidates = {}
         for event in native:
@@ -542,6 +626,135 @@ def pending(base, project, enc, name, v2, headers, sid):
     items = data(request(base, project, path, v2=v2, auth_headers=headers))
     require(isinstance(items, list), 'pending_list_shape')
     return path, next((i for i in items if i.get('sessionID') == sid), None)
+
+
+def compaction_request(sid, v2):
+    enc = urllib.parse.quote(sid,safe='')
+    return (f'/api/session/{enc}/compact',{}) if v2 else (
+        f'/session/{enc}/summarize',{'providerID':'p0','modelID':'p0-compaction','auto':False})
+
+
+def summary_projection(history, native, sid, v2, excluded=(), admitted=None, compaction_types=None):
+    """Independent summary classification; never an ordinary assistant completion."""
+    if not isinstance(history,list): return None
+    if v2:
+        if compaction_types!=('session.compaction.started','session.compaction.ended'): return None
+        window = execution_window(native,'completion',sid)
+        if not window: return None
+        first,last = (native_position(e,sid) for e in window)
+        inside = [e for e in native if native_position(e,sid) is not None and first<native_position(e,sid)<last]
+        starts = [e for e in inside if e.get('type')==compaction_types[0]]
+        ends = [e for e in inside if e.get('type')==compaction_types[1]]
+        if (len(starts)!=1 or len(ends)!=1 or not admitted or admitted in excluded
+                or starts[0]['data'].get('reason')!='manual' or starts[0]['data'].get('inputID')!=admitted
+                or ends[0]['data'].get('reason')!='manual' or native_position(starts[0],sid)>=native_position(ends[0],sid)
+                or starts[0]['created']>ends[0]['created']
+                or any(e.get('type') in ('session.compaction.failed','session.step.ended','session.step.failed') for e in inside)):
+            return None
+        end = ends[0]['data']
+        for item in history:
+            created = item.get('time',{}).get('created') if isinstance(item,dict) else None
+            if (isinstance(item,dict) and admitted and item.get('id')==admitted and admitted not in excluded
+                    and item.get('type')=='compaction' and item.get('status')=='completed'
+                    and item.get('reason')=='manual' and not item.get('error')
+                    and type(created) in (int,float) and 0<created<1e16
+                    and end.get('text') and end['text']==item.get('summary') and end.get('recent')==item.get('recent')
+                    and end.get('model')==item.get('model')):
+                return admitted
+        return None
+    users = {m.get('info',{}).get('id') for m in history if isinstance(m,dict)
+             and m.get('info',{}).get('sessionID')==sid and m.get('info',{}).get('role')=='user'
+             and any(p.get('type')=='compaction' and p.get('auto') is False
+                     and p.get('sessionID')==sid and p.get('messageID')==m['info'].get('id')
+                     for p in m.get('parts',[]) if isinstance(p,dict))}
+    observed = {e.get('properties',{}).get('info',{}).get('id'):e['properties']['info']
+                for e in native if e.get('type')=='message.updated' and e.get('properties',{}).get('info',{}).get('summary') is True}
+    for message in history:
+        info = message.get('info',{}) if isinstance(message,dict) else {}
+        mid, completed = info.get('id'), info.get('time',{}).get('completed')
+        other = observed.get(mid,{})
+        if (mid and mid not in excluded and info.get('sessionID')==sid and info.get('role')=='assistant'
+                and info.get('summary') is True and info.get('finish') and not info.get('error') and info.get('parentID') in users
+                and isinstance(completed,(int,float)) and not isinstance(completed,bool) and completed>0
+                and other.get('sessionID')==sid and other.get('role')=='assistant' and not other.get('error')
+                and other.get('finish')==info['finish'] and other.get('parentID')==info['parentID']
+                and other.get('time',{}).get('completed')==completed):
+            return mid
+    return None
+
+
+def child_ancestry(projection, native, parent, child, tool_child, directory, v2, agent=CHILD_AGENT):
+    """True ancestry joins three independent native boundaries; fork lineage is insufficient."""
+    if (not parent or not child or child==parent or child!=tool_child or not isinstance(projection,dict)
+            or projection.get('id')!=child or projection.get('parentID')!=parent
+            or (projection.get('location',{}).get('directory') if v2 else projection.get('directory'))!=directory
+            or projection.get('agent')!=agent):
+        return False
+    for event in native:
+        if event.get('type')!='session.created': continue
+        info = event.get('data',{}) if v2 else event.get('properties',{}).get('info',{})
+        if (info.get('sessionID' if v2 else 'id')==child and info.get('parentID')==parent
+                and (not v2 or (native_position(event,child) is not None and info.get('agent')==agent
+                               and info.get('location',{}).get('directory')==directory))):
+            return True
+    return False
+
+
+def child_tool_identity(native, parent, child, call, agent, tool, v2):
+    """Native executed tool/result identity, separate from the provider's tool response."""
+    if not v2:
+        for event in native:
+            part = event.get('properties',{}).get('part',{})
+            state = part.get('state',{})
+            metadata = state.get('metadata',{})
+            if (event.get('type')=='message.part.updated' and part.get('type')=='tool'
+                    and part.get('sessionID')==parent and part.get('messageID') and part.get('callID')==call
+                    and part.get('tool')==tool and state.get('status')=='completed'
+                    and metadata.get('parentSessionId')==parent and metadata.get('sessionId')==child):
+                return True
+        return False
+    events = [e for e in native if native_position(e,parent) is not None and e['data'].get('id')==call]
+    for success in events:
+        d = success['data']
+        if (success.get('type')!='session.tool.success' or success['durable']['version']!=2
+                or d.get('executed') is not True or not d.get('assistantMessageID')
+                or d.get('metadata',{}).get('sessionID')!=child or d.get('metadata',{}).get('status')!='completed'):
+            continue
+        same = [e for e in events if e['data'].get('assistantMessageID')==d['assistantMessageID']]
+        return any(a.get('type')=='session.tool.input.started' and a['data'].get('name')==tool
+                   and b.get('type')=='session.tool.called' and b['data'].get('executed') is True
+                   and b['data'].get('input',{}).get('agent')==agent
+                   and native_position(a,parent)<native_position(b,parent)<native_position(success,parent)
+                   for a in same for b in same)
+    return False
+
+
+def permission_nonexecution(native, session, call, tool, v2):
+    """Positive native execution-state evidence, never absence of redacted text.
+
+    V1 part status:error alone cannot distinguish rejection from an executed
+    command failure. No supplied V1 source contract proves non-execution.
+    This predicate grants no independent external-effect/settlement proof.
+    """
+    if not v2:
+        return False
+    events = [e for e in native if native_position(e,session) is not None
+              and e.get('data',{}).get('id')==call]
+    if any(e.get('data',{}).get('executed') is True
+           or e.get('type')=='session.tool.success' for e in events):
+        return False
+    for failed in events:
+        d = failed['data']
+        if (failed.get('type')!='session.tool.failed' or failed['durable']['version']!=2
+                or d.get('executed') is not False or not d.get('assistantMessageID')
+                or not d.get('error')):
+            continue
+        return any(e.get('type')=='session.tool.input.started'
+                   and e['data'].get('name')==tool
+                   and e['data'].get('assistantMessageID')==d['assistantMessageID']
+                   and native_position(e,session)<native_position(failed,session)
+                   for e in events)
+    return False
 
 
 def native_case(base, project, root, name, v2, headers, provider, webhook, key, report, delivery=True, session_id=None, excluded=()):
@@ -588,6 +801,7 @@ def native_case(base, project, root, name, v2, headers, provider, webhook, key, 
                         _, remaining = pending(base, project, enc, name, v2, headers, sid)
                         require(remaining is None, 'attention_still_pending_after_close')
                         closed_attention = True
+                        require(v2 or name!='permission', 'v1_permission_nonexecution_source_contract_unproved')
             elif name not in ('form', 'permission') and native_final(native, name, v2, excluded):
                 if delivery:
                     observed = effects(root, webhook, start, name)
@@ -595,7 +809,9 @@ def native_case(base, project, root, name, v2, headers, provider, webhook, key, 
                     require((len(desktop_rows(root)), webhook.count()) == start, 'effect_after_remove')
                     observed = True
             close_event = ('form.cancelled' if v2 else 'question.rejected') if name == 'form' else 'permission.replied'
-            if observed and not worker.is_alive() and (name not in ('form', 'permission') or close_event in types):
+            nonexecution = name!='permission' or permission_nonexecution(
+                native,sid_hash,private_redact('call_p0_permission',key),private_redact('shell',key),v2)
+            if observed and nonexecution and not worker.is_alive() and (name not in ('form', 'permission') or close_event in types):
                 break
             time.sleep(.15)
         else:
@@ -615,13 +831,149 @@ def native_case(base, project, root, name, v2, headers, provider, webhook, key, 
     if name in ('completion','error'):
         final_projection(base,project,enc,sid_hash,native,name,v2,headers,key)
     if name == 'permission':
-        require(not any(private_redact('P0_OWNED_TEST',key) in json.dumps(e) for e in native), 'harmless_shell_executed')
+        require(permission_nonexecution(native,sid_hash,private_redact('call_p0_permission',key),
+                                        private_redact('shell',key),v2), 'permission_native_nonexecution_unproved')
     outcome = {'scenario': name, 'status': 'observed', 'nativeTypes': sorted({e['type'] for e in native}),
                'providerCalls': 1, 'desktopCount': len(desktop_rows(root))-start[0], 'webhookCount': webhook.count()-start[1],
                'nativeCorrelation': sid_hash, 'rootProjectionSHA256': hashlib.sha256(json.dumps(private_redact(projection, key), sort_keys=True).encode()).hexdigest(),
                'settlement': 'unproved_product_final_checkpoint_and_owned_close'}
     report['scenarios'].append(outcome)
     return outcome
+
+
+def manual_compaction(base, project, root, v2, headers, provider, webhook, key, report):
+    """One public manual compact between two real user turns, external pattern 1/0/1."""
+    compaction_types = tuple(reviewed_driver_contract('2.0.21')['v2CompactionTypes']) if v2 else None
+    prefix = '/api/session' if v2 else '/session'
+    create = {'title':'TEST manual compaction'}
+    if v2: create.update(location={'directory':str(project)},model={'providerID':'p0','id':'p0-completion'})
+    sid = data(request(base,project,prefix,create,v2=v2,auth_headers=headers))['id']
+    enc, sid_hash = urllib.parse.quote(sid,safe=''),private_redact(sid,key)
+    native_case(base,project,root,'completion',v2,headers,provider,webhook,key,report,session_id=sid)
+    before_history = read_history(base,project,enc,v2,headers)
+    require(isinstance(before_history,list),'compaction_history_shape')
+    old_ids = tuple(private_redact(m.get('info',m).get('id'),key) for m in before_history)
+    start_trace, start_provider = len(trace(root)),len(provider.records)
+    counts = (len(desktop_rows(root)),webhook.count())
+    path,payload = compaction_request(sid,v2)
+    deadline = time.monotonic()+40
+    provider.manual_active = True
+    try:
+        answer = data(request(base,project,path,payload,v2=v2,auth_headers=headers,timeout=35))
+        require((isinstance(answer,dict) and isinstance(answer.get('id'),str) and answer['id']) if v2 else answer is True,
+                'manual_compaction_admission_shape_unproved')
+        admitted = private_redact(answer['id'],key) if v2 else None
+        summary_id, native = None, []
+        while time.monotonic()<deadline:
+            native = [r['value'] for r in trace(root)[start_trace:] if r['kind'] in ('native-v1','native-v2')
+                      and correlated(r['value'],sid_hash)]
+            history = read_history(base,project,enc,v2,headers)
+            summary_id = summary_projection(private_redact(history,key),native,sid_hash,v2,old_ids,admitted,compaction_types)
+            types = {e.get('type') for e in native}
+            require(not native_final(native,'completion',v2,old_ids),'compaction_false_ordinary_completion')
+            require(not types.intersection({'session.execution.failed','session.execution.interrupted','session.compaction.failed','session.error'}),
+                    'compaction_failed_or_interrupted')
+            require((len(desktop_rows(root)),webhook.count())==counts,'compaction_external_effect')
+            if summary_id and ('session.execution.succeeded' if v2 else 'session.idle') in types: break
+            time.sleep(.15)
+        else: raise Unqualified('manual_summary_or_public_projection_contract_unproved')
+        calls = provider.records[start_provider:]
+        require(len(calls)==1 and calls[0]['requestKind']=='summary' and not provider.gaps,'manual_compaction_provider_count')
+    finally:
+        provider.manual_active = False
+    native_case(base,project,root,'completion',v2,headers,provider,webhook,key,report,session_id=sid,
+                excluded=(*old_ids,summary_id))
+    report['scenarios'].append({'scenario':'manual_compaction','status':'observed','externalPattern':[1,0,1],
+                               'summaryIdentity':summary_id,'nativeCorrelation':sid_hash,'providerCalls':3,
+                               'summaryClass':'compaction','settlement':'unproved_product_final_checkpoint_and_owned_close'})
+
+
+def child_wait_ready(v2, prompt_running, resumed, faults):
+    # V2 /prompt acknowledges durable inbox admission, before agent execution.
+    # V1 /message instead returns the completed blocking prompt result.
+    return bool(resumed or faults or (not v2 and not prompt_running))
+
+
+def task_child(base, project, root, v2, headers, provider, webhook, key, report):
+    """Actual built-in foreground tool; hold its parent's provider reply after the child ends."""
+    prefix = '/api/session' if v2 else '/session'
+    create = {'title':'TEST actual tool child'}
+    if v2:
+        create.update(location={'directory':str(project)},model={'providerID':'p0','id':'p0-child'},
+                      permissions=[{'action':'*','resource':'*','effect':'deny'},
+                                   {'action':'subagent','resource':CHILD_AGENT,'effect':'allow'}])
+    parent = data(request(base,project,prefix,create,v2=v2,auth_headers=headers))['id']
+    enc, parent_hash = urllib.parse.quote(parent,safe=''),private_redact(parent,key)
+    start_trace, start_provider = len(trace(root)),len(provider.records)
+    counts = (len(desktop_rows(root)),webhook.count())
+    payload = {'text':'PRIVATE_NATIVE_TEST child'} if v2 else {
+        'model':{'providerID':'p0','modelID':'p0-child'},'parts':[{'type':'text','text':'PRIVATE_NATIVE_TEST child'}]}
+    errors, admitted_input = [], []
+    def submit():
+        try:
+            answer = request(base,project,prefix+'/'+enc+('/prompt' if v2 else '/message'),payload,
+                             v2=v2,auth_headers=headers,timeout=35)
+            if v2:
+                admitted = data(answer)
+                require(isinstance(admitted,dict) and isinstance(admitted.get('id'),str)
+                        and admitted['id'].startswith('msg_'), 'actual_child_prompt_admission_unproved')
+                admitted_input.append(private_redact(admitted['id'],key))
+        except Exception as error: errors.append(type(error).__name__)
+    worker = threading.Thread(target=submit)
+    report.setdefault('_promptThreads',[]).append(worker)
+    deadline = time.monotonic()+40
+    worker.start()
+    try:
+        # This is provider IO control, not a product checkpoint or alternate reader.
+        wait_for(lambda: child_wait_ready(v2,worker.is_alive(),provider.child_resumed.is_set(),provider.gaps or errors),
+                 max(0,deadline-time.monotonic()),'native foreground child result')
+        require(provider.child_resumed.is_set() and not provider.gaps and not errors and not provider.child_hold_expired,
+                'actual_child_tool_or_config_contract_unproved')
+        child = provider.child_session
+        child_hash = private_redact(child,key)
+        projection = data(request(base,project,prefix+'/'+urllib.parse.quote(child,safe=''),v2=v2,auth_headers=headers))
+        child_deadline = min(deadline,time.monotonic()+12)
+        child_native = []
+        while time.monotonic()<child_deadline:
+            native = [r['value'] for r in trace(root)[start_trace:] if r['kind'] in ('native-v1','native-v2')]
+            child_native = [e for e in native if correlated(e,child_hash)]
+            if (child_ancestry(private_redact(projection,key),native,parent_hash,child_hash,child_hash,
+                               private_redact(str(project),key),v2,private_redact(CHILD_AGENT,key))
+                    and child_tool_identity(native,parent_hash,child_hash,private_redact(CHILD_CALL,key),
+                                            private_redact(CHILD_AGENT,key),private_redact('subagent' if v2 else 'task',key),v2)
+                    and native_final(child_native,'completion',v2)):
+                final_projection(base,project,urllib.parse.quote(child,safe=''),child_hash,child_native,
+                                 'completion',v2,headers,key)
+                break
+            require(not provider.child_hold_expired,'child_provider_hold_expired')
+            time.sleep(.15)
+        else: raise Unqualified('actual_child_creation_tool_result_parent_or_final_projection_unproved')
+        require((len(desktop_rows(root)),webhook.count())==counts,'child_external_effect_before_parent_final')
+        provider.child_release.set()
+        def root_complete():
+            native = [r['value'] for r in trace(root)[start_trace:] if r['kind'] in ('native-v1','native-v2')
+                      and correlated(r['value'],parent_hash)]
+            return native_final(native,'completion',v2) and not worker.is_alive() and effects(root,webhook,counts,'completion')
+        wait_for(root_complete,max(0,deadline-time.monotonic()),'actual parent completion after child')
+        require(not errors and not provider.gaps and not provider.child_hold_expired,'child_prompt_or_provider_unsettled')
+        require([c['requestKind'] for c in provider.records[start_provider:]]==['launch','child','resume'],
+                'native_child_provider_count_or_order')
+        parent_native = [r['value'] for r in trace(root)[start_trace:] if r['kind'] in ('native-v1','native-v2')
+                         and correlated(r['value'],parent_hash)]
+        final_projection(base,project,enc,parent_hash,parent_native,'completion',v2,headers,key)
+        parent_projection = data(request(base,project,prefix+'/'+enc,v2=v2,auth_headers=headers))
+        require(parent_projection.get('id')==parent and not parent_projection.get('parentID'),'task_parent_not_root')
+    finally:
+        provider.child_release.set()
+        worker.join(timeout=1)
+    report['scenarios'].append({'scenario':'actual_foreground_tool_child','status':'observed','providerCalls':3,
+                               'childCorrelation':child_hash,'parentCorrelation':parent_hash,
+                               'toolCallCorrelation':private_redact(CHILD_CALL,key),
+                               'promptAdmissionCorrelation':admitted_input[0] if v2 else None,
+                               'childDesktopCount':0,'childWebhookCount':0,'rootDesktopCount':1,'rootWebhookCount':1,
+                               'projectionSHA256':hashlib.sha256(json.dumps(projection,sort_keys=True).encode()).hexdigest(),
+                               'settlement':'unproved_product_final_checkpoint_and_owned_close'})
+    native_case(base,project,root,'completion',v2,headers,provider,webhook,key,report)
 
 
 def scope_roots(base, projects, root, v2, headers, provider, webhook, key, report):
@@ -649,7 +1001,7 @@ def scope_roots(base, projects, root, v2, headers, provider, webhook, key, repor
     fork = data(request(base,projects[0],prefix+'/'+enc+'/fork',{},v2=v2,auth_headers=headers))['id']
     require(fork not in ids, 'fork_did_not_create_new_root')
     forkenc = projection(projects[0],fork)  # V2 parentID is true ancestry, not fork lineage.
-    history = data(request(base,projects[0],prefix+'/'+forkenc+('/context' if v2 else '/message'),v2=v2,auth_headers=headers))
+    history = read_history(base,projects[0],forkenc,v2,headers)
     require(isinstance(history,list) and history, 'fork_copied_history_missing')
     copied = [m.get('info',m).get('id') for m in history]
     require(all(isinstance(mid,str) for mid in copied), 'fork_history_id_missing')
@@ -661,11 +1013,11 @@ def scope_roots(base, projects, root, v2, headers, provider, webhook, key, repor
     fork_hash = private_redact(fork,key)
     def matches(event):
         props = event.get('data' if v2 else 'properties',{})
-        identity = props.get('sessionID')==fork_hash or event.get('aggregateID')==fork_hash or props.get('info',{}).get('id')==fork_hash
+        identity = props.get('sessionID')==fork_hash or event.get('durable',{}).get('aggregateID')==fork_hash or props.get('info',{}).get('id')==fork_hash
         return identity and (not v2 or props.get('parentID')==private_redact(ids[0],key))
     require(any(matches(e) for e in creations), 'native_fork_lineage_not_correlated')
     report['scenarios'].append({'scenario':'two_location_roots_and_root_fork','status':'observed',
-                               'ordinaryTurns':3,'copiedMessagesExcluded':len(copied),'trueTaskChild':'unproved',
+                               'ordinaryTurns':3,'copiedMessagesExcluded':len(copied),'forkClass':'root_lineage',
                                'settlement':'unproved_product_final_checkpoint_and_owned_close'})
 
 
@@ -772,6 +1124,9 @@ def native_app(record):
 
 def qualify(args, report):
     m, c, files, candidate, archive = load_manifest(args.manifest, args.os, args.arch, args.version, args.manifest_sha256)
+    if args.suite=='full':
+        contract = reviewed_driver_contract(args.version)
+        require(c['hostSourceCommit']==contract['versions'][args.version], 'driver_host_source_pin_mismatch')
     require(candidate == args.binary.resolve(strict=True) and archive == args.archive.resolve(strict=True), 'cli_manifest_paths_differ')
     report.update(candidateCommit=m['candidateCommit'], manifestSHA256=digest(args.manifest),
                   candidateSHA256=digest(candidate), embeddedSHA256=digest(files['embedded']), sdkArchiveSHA256=m['sdk']['archive']['sha256'])
@@ -828,14 +1183,15 @@ def qualify(args, report):
         provider = owner.serve(Provider(root, key))
         provider.prompt_threads = []
         v2 = args.version == '2.0.21'
-        models = {'p0-' + n: {'name': 'Private ' + n, 'limit': {'context': 128000, 'output': 8192}} for n in (*COPY, 'retry', 'interrupt')}
+        provider.v2 = v2
+        models = {'p0-' + n: {'name': 'Private ' + n, 'limit': {'context': 128000, 'output': 8192}} for n in (*COPY, 'retry', 'interrupt','compaction','child')}
         endpoint = f'http://127.0.0.1:{provider.server_port}/v1'
         if v2:
             config = {'model':'p0/p0-completion','update':'disable','share':'disabled','warming':False,'formatter':False,'lsp':False,'websearch':False,
-                      'permissions':[{'action':'*','resource':'*','effect':'deny'},{'action':'question','resource':'*','effect':'allow'},{'action':'shell','resource':'*','effect':'ask'}],
+                      **child_config(True),
                       'providers':{'p0':{'name':'TEST loopback','package':'@opencode/ai/providers/openai-compatible','env':[], 'settings':{'baseURL':endpoint,'apiKey':'sandbox-only','timeout':10000},'models':models}}}
         else:
-            config = {'model':'p0/p0-completion','permission':{'*':'deny','question':'allow','bash':'ask','shell':'ask'},
+            config = {'model':'p0/p0-completion',**child_config(False),
                       'provider':{'p0':{'npm':'@ai-sdk/openai-compatible','name':'TEST loopback','options':{'baseURL':endpoint,'apiKey':'sandbox-only'},'models':models}}}
         write_json(projects[0] / 'opencode.json', config)
         env['OPENCODE_CONFIG'] = str(projects[0] / 'opencode.json')
@@ -874,9 +1230,12 @@ def qualify(args, report):
         raise Unqualified('production_clock_selection_pre_model_gate_unobservable')
         # Staged business/lifecycle body: root must close the exact gate above through
         # product integration, never by a fixture boolean, clock/frame or fake grant.
+        if args.suite=='full': reviewed_driver_contract(args.version)
         for name in COPY if args.suite=='full' else ('completion',):
             native_case(base, projects[0], root, name, v2, headers, provider, webhook, key, report)
         if args.suite=='full':
+            manual_compaction(base,projects[0],root,v2,headers,provider,webhook,key,report)
+            task_child(base,projects[0],root,v2,headers,provider,webhook,key,report)
             scope_roots(base,projects,root,v2,headers,provider,webhook,key,report)
             for name in ('retry','interrupt'):
                 start=(len(desktop_rows(root)),webhook.count())
