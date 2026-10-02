@@ -26,7 +26,7 @@ export function parseUptime(text) {
 // Public qualification seam reads the real module. It grants no clock policy.
 // Trusted composition excludes adversarial proc mounts and patched builtins.
 export function createLinuxClock() {
-  if (process.platform !== 'linux' || process.arch !== 'x64') fail();
+  if (process.platform !== 'linux' || !['x64', 'arm64'].includes(process.arch)) fail();
   const fds = [];
   let disposed = false, previous;
   try {
