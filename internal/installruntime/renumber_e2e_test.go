@@ -375,7 +375,7 @@ func TestRenumberE2EFixtureBundleIsolation(t *testing.T) {
 		for i, key := range plist.Dict.Keys {
 			if key == "CFBundleIdentifier" && i < len(plist.Dict.Values) {
 				id := plist.Dict.Values[i]
-				if id == nativeProductBundleID || !strings.HasPrefix(id, "com.agentnotify.test.renumber.") {
+				if id == "com.777genius.agent-notifications" || !strings.HasPrefix(id, "com.agentnotify.test.renumber.") {
 					t.Fatalf("fixture could register as the product: %q", id)
 				}
 				return id

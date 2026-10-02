@@ -104,7 +104,11 @@ func TestClaudeHookCLIConfigWarningsStayOnStderr(t *testing.T) {
 		t.Fatal(err)
 	}
 	validConfig := `{"notifications":{"desktop":{"enabled":false},"webhook":{"enabled":false}}}`
-	if err := os.WriteFile(filepath.Join(configDir, "config.json"), []byte(validConfig), 0o644); err != nil {
+	configPath := filepath.Join(configDir, "config.json")
+	if err := os.WriteFile(configPath, []byte(validConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(configPath, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
