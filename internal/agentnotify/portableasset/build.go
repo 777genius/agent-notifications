@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/777genius/agent-notifications/internal/thirdpartynotices"
 	"github.com/777genius/agent-notifications/skills"
 )
 
@@ -104,6 +105,7 @@ func Build(req BuildRequest) (Package, error) {
 		return Package{}, err
 	}
 	files := map[string][]byte{
+		thirdpartynotices.Filename:     []byte(thirdpartynotices.Text()),
 		"plugin.json":                  append(pluginJSON, '\n'),
 		"mcp.json":                     append(mcpJSON, '\n'),
 		"skills/agent-notify/SKILL.md": skills.AgentNotify(),

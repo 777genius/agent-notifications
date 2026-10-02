@@ -66,6 +66,28 @@ func TestBuildZipExtractRoundTrip(t *testing.T) {
 	if err := VerifyLayout(extracted); err != nil {
 		t.Fatal(err)
 	}
+	// Removing notices from Build, ZIP or Extract must break distribution proof.
+	notices, err := os.ReadFile(filepath.Join(extracted, "THIRD_PARTY_NOTICES.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"charm.land/huh/v2", "charm.land/bubbletea/v2", "Permission is hereby granted", "Redistribution and use in source and binary forms"} {
+		if !bytes.Contains(notices, []byte(required)) {
+			t.Fatalf("packaged notices omit %q", required)
+		}
+	}
+	// Historical packages contain the original layout without the new notice.
+	if err := os.Remove(filepath.Join(root, "THIRD_PARTY_NOTICES.txt")); err != nil {
+		t.Fatal(err)
+	}
+	oldArchive := filepath.Join(base, "historical.zip")
+	oldSum, err := Zip(root, oldArchive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenArchive(oldArchive, filepath.Join(base, "historical"), oldSum); err != nil {
+		t.Fatalf("historical package rejected: %v", err)
+	}
 	wrong := strings.Repeat("0", 64)
 	if _, err := OpenArchive(archive, filepath.Join(base, "bad"), wrong); err == nil {
 		t.Fatal("checksum mismatch accepted")

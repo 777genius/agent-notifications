@@ -46,21 +46,7 @@ func DefaultRequest(action Action) Request {
 }
 
 func settingsPath(r Request) (string, error) {
-	root := r.ConfigRoot
-	if root == "" {
-		home := r.GeminiHome
-		if home == "" {
-			home = r.HomeDir
-		}
-		if !filepath.IsAbs(home) {
-			return "", errors.New("absolute Gemini home or --config-root required")
-		}
-		root = filepath.Join(home, ".gemini")
-	}
-	if !filepath.IsAbs(root) {
-		return "", errors.New("absolute Gemini config root required")
-	}
-	root, err := installruntime.CanonicalPath(root)
+	root, err := ResolveConfigRoot(r)
 	if err != nil {
 		return "", err
 	}
