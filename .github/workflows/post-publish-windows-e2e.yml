@@ -1,113 +1,72 @@
 name: Post-publish Windows E2E
-
-# Manual, on-demand smoke test that exercises the PUBLIC release artifacts
-# (not a local build) on a real Windows runner. Used to validate a specific
-# published tag from public URLs only, in an isolated profile - this never
-# touches a real user's machine, HOME, or config.
-
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag to validate (e.g. v1.42.0)'
+        description: Exact partial prerelease tag
         required: true
-
+        default: v1.47.0
+      source_sha:
+        description: Exact product source SHA
+        required: true
+        default: 192196fbf35710f9f138a5b2728919b3e215f25b
+      phase:
+        description: Asset visibility
+        type: choice
+        options: [draft, public]
+        default: draft
+      expected_stable:
+        description: Latest stable must remain this tag
+        default: v1.46.1
+        required: true
+permissions:
+  contents: read
 jobs:
-  windows-e2e:
-    name: Validate public release on Windows
-    runs-on: windows-latest
+  package-e2e:
+    name: Prerelease ${{ matrix.os }} ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
-    defaults:
-      run:
-        shell: bash
-    env:
-      TAG: ${{ inputs.tag }}
-      RELEASE_URL: https://github.com/777genius/agent-notifications/releases/download/${{ inputs.tag }}
-      CHECKSUMS_URL: https://github.com/777genius/agent-notifications/releases/download/${{ inputs.tag }}/checksums.txt
-      MODERN_NOTIFIER_URL: https://github.com/777genius/agent-notifications/releases/download/${{ inputs.tag }}/ClaudeNotifier.app.zip
-
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: ubuntu-latest, os: linux, arch: amd64}
+          - {runner: ubuntu-24.04-arm, os: linux, arch: arm64}
+          - {runner: windows-latest, os: windows, arch: amd64}
     steps:
-      - name: Prepare isolated profile
-        shell: pwsh
-        run: |
-          $root = Join-Path $env:RUNNER_TEMP 'e2e-home'
-          New-Item -ItemType Directory -Force -Path $root | Out-Null
-          foreach ($name in @('.claude', '.codex', 'tmp', 'APPDATA', 'LOCALAPPDATA', 'bundle')) {
-            New-Item -ItemType Directory -Force -Path (Join-Path $root $name) | Out-Null
-          }
-          # The runner temp/workspace ACLs may grant access to other users.
-          # The installer intentionally rejects those paths for managed state.
-          $userSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-          & icacls $root /inheritance:r /grant:r "*${userSid}:(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /T
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          @(
-            "E2E_HOME=$root"
-            "HOME=$root"
-            "USERPROFILE=$root"
-            "APPDATA=$(Join-Path $root 'APPDATA')"
-            "LOCALAPPDATA=$(Join-Path $root 'LOCALAPPDATA')"
-            "CODEX_HOME=$(Join-Path $root '.codex')"
-            "CLAUDE_CONFIG_DIR=$(Join-Path $root '.claude')"
-            "TMPDIR=$(Join-Path $root 'tmp')"
-            "TMP=$(Join-Path $root 'tmp')"
-            "TEMP=$(Join-Path $root 'tmp')"
-            "INSTALL_TARGET_DIR=$(Join-Path $root 'bundle')"
-          ) | Add-Content -Path $env:GITHUB_ENV
-
-      - name: Download install.sh from main
-        run: |
-          set -euo pipefail
-          curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/main/bin/install.sh -o "$E2E_HOME/install.sh"
-
-      - name: Fresh install of public release (install.sh, isolated target dir)
-        run: |
-          set -euo pipefail
-          bash "$E2E_HOME/install.sh"
-          echo "--- installed files ---"
-          ls -la "$INSTALL_TARGET_DIR/bin" || ls -la "$INSTALL_TARGET_DIR"
-
-      - name: Checksum verification against public checksums.txt
-        run: |
-          set -euo pipefail
-          curl -fsSL "$CHECKSUMS_URL" -o "$RUNNER_TEMP/checksums.txt"
-          EXE=$(find "$INSTALL_TARGET_DIR" -iname "claude-notifications-windows-amd64.exe" | head -1)
-          echo "exe=$EXE"
-          EXPECTED=$(grep "claude-notifications-windows-amd64.exe" "$RUNNER_TEMP/checksums.txt" | awk '{print $1}')
-          # sha256sum prefixes the whole output line with a backslash when the
-          # file path itself contains one (GNU coreutils escaping convention);
-          # our path mixes \ and / on Windows, so strip that marker, not the hash.
-          ACTUAL=$(sha256sum "$EXE" | awk '{print $1}')
-          ACTUAL="${ACTUAL#\\}"
-          echo "expected=$EXPECTED actual=$ACTUAL"
-          [ "$EXPECTED" = "$ACTUAL" ] || { echo "CHECKSUM MISMATCH"; exit 1; }
-
-      - name: Version + config smoke test
-        run: |
-          set -euo pipefail
-          EXE=$(find "$INSTALL_TARGET_DIR" -iname "claude-notifications-windows-amd64.exe" | head -1)
-          "$EXE" version
-          env HOME="$E2E_HOME" CLAUDE_CONFIG_DIR="$E2E_HOME/.claude" "$EXE" config path
-          env HOME="$E2E_HOME" CLAUDE_CONFIG_DIR="$E2E_HOME/.claude" "$EXE" config inspect || true
-
-      - name: Repeat install (update path, idempotency + historical-baseline check)
-        run: |
-          set -euo pipefail
-          bash "$E2E_HOME/install.sh" 2>&1 | tee "$RUNNER_TEMP/repeat-install.log"
-          echo "exit_code=${PIPESTATUS[0]}"
-          if grep -qi "traceback\|assertionerror" "$RUNNER_TEMP/repeat-install.log"; then
-            echo "FOUND_PYTHON_TRACEBACK=true" >> "$GITHUB_ENV"
-          else
-            echo "FOUND_PYTHON_TRACEBACK=false" >> "$GITHUB_ENV"
-          fi
-
-      - name: windows-hooks exec-form output
-        run: |
-          set -euo pipefail
-          EXE=$(find "$INSTALL_TARGET_DIR" -iname "claude-notifications-windows-amd64.exe" | head -1)
-          "$EXE" windows-hooks --exe "$EXE"
-
-      - name: Summary
-        run: |
-          set -euo pipefail
-          echo "Tag validated: $TAG"
-          echo "Python traceback seen on repeat install: ${FOUND_PYTHON_TRACEBACK:-unknown}"
+      - name: Validate exact source input
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: '[[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]'
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.source_sha }}
+          path: SOURCE
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: SCRIPT
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Download and qualify exact release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TEST_TAG: ${{ inputs.tag }}
+          TEST_PHASE: ${{ inputs.phase }}
+          TEST_STABLE: ${{ inputs.expected_stable }}
+          TEST_SOURCE_SHA: ${{ inputs.source_sha }}
+          TEST_OS: ${{ matrix.os }}
+          TEST_ARCH: ${{ matrix.arch }}
+        run: python SCRIPT/scripts/prerelease-package-e2e.py --source SOURCE --report evidence/package-e2e.json
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: prerelease-package-${{ inputs.phase }}-${{ matrix.os }}-${{ matrix.arch }}
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 14
