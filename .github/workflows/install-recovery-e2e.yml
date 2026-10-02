@@ -2,8 +2,6 @@ name: Install reboot recovery E2E
 
 on:
   pull_request:
-  push:
-    branches: [fix/install-reboot-retry-301302]
   workflow_dispatch:
 
 permissions:
@@ -110,4 +108,11 @@ jobs:
         if: always()
         shell: bash
         run: |
-          case "$RECOVERY_SANDBOX" in "$RUNNER_TEMP"/an-install-recovery-*) rm -rf "$RECOVERY_SANDBOX";; esac
+          case "$RECOVERY_SANDBOX" in "$RUNNER_TEMP"/an-install-recovery-*)
+            # Downloaded module directories are read-only. Change only this
+            # owned sandbox cache before removing its test artifacts.
+            if [ -d "$RECOVERY_SANDBOX/gomod" ]; then
+              chmod -R u+w "$RECOVERY_SANDBOX/gomod"
+            fi
+            rm -rf "$RECOVERY_SANDBOX"
+          ;; esac

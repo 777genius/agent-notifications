@@ -206,41 +206,6 @@ func renumberLedger(t *testing.T, root string) Ledger {
 	}
 	return l
 }
-func renumberJournal(t *testing.T, root string) transaction {
-	t.Helper()
-	marker := filepath.Join(root, "transaction.json")
-	tx, err := readTransactionFile(marker)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = json.Unmarshal(renumberPersisted(t, tx), &tx); err != nil {
-		t.Fatal(err)
-	}
-	if err = writeTransaction(marker, tx); err != nil {
-		t.Fatal(err)
-	}
-	renumberLedger(t, root)
-	return tx
-}
-func renumberFresh(t *testing.T, l Ledger) {
-	t.Helper()
-	if l.Native == nil {
-		t.Fatal("missing native")
-	}
-	pairs := [][2]string{{l.Native.Path, l.Native.DirectoryID}, {l.Native.PreviousPath, l.Native.PreviousDirectoryID}}
-	for _, g := range l.Native.Published {
-		pairs = append(pairs, [2]string{g.Path, g.DirectoryID})
-	}
-	for _, pair := range pairs {
-		if pair[0] == "" {
-			continue
-		}
-		id, err := nativeDirectoryID(pair[0])
-		if err != nil || id != pair[1] {
-			t.Fatalf("ledger did not refresh %s: stored=%s disk=%s %v", pair[0], pair[1], id, err)
-		}
-	}
-}
 func TestRenumberE2ENonDarwinExactness(t *testing.T) {
 	if runtime.GOOS == "darwin" {
 		t.Skip("non-Darwin exactness; Darwin has real renumber flows")
