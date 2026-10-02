@@ -65,6 +65,7 @@ jobs:
           TEST_SOURCE_SHA: ${{ inputs.source_sha }}
           TEST_OS: ${{ matrix.os }}
           TEST_ARCH: ${{ matrix.arch }}
+          TEST_BASH: ${{ matrix.os == 'windows' && 'C:/Program Files/Git/bin/bash.exe' || 'bash' }}
         run: python SCRIPT/scripts/prerelease-package-e2e.py --source SOURCE --report evidence/package-e2e.json
       - uses: actions/upload-artifact@v7
         if: always()

@@ -141,8 +141,8 @@ def main():
                 target.mkdir()
                 env.update(INSTALL_TARGET_DIR=str(target), RELEASE_URL=base, CHECKSUMS_URL=base + '/checksums.txt')
                 for attempt in ('fresh', 'repeat'):
-                    output = run(['bash', (source / 'bin/install.sh').as_posix()], env=env, cwd=home)
-                    (report_path.parent / f'install-{attempt}.log').write_text(output)
+                    output = run([os.environ.get('TEST_BASH', 'bash'), (source / 'bin/install.sh').as_posix()], env=env, cwd=home)
+                    (report_path.parent / f'install-{attempt}.log').write_text(output, encoding="utf-8")
                     installed = target / binary_name
                     assert installed.is_file(), 'installed binary missing'
                     assert digest(installed) == report['asset_sha256'][binary_name]
@@ -153,7 +153,7 @@ def main():
                     report['installer_' + attempt] = 'PASS'
                 output = run([sys.executable, str(source / 'scripts/release-artifact-e2e.py'),
                               '--binary', str(installed), '--version', tag], env=env, cwd=home)
-                (report_path.parent / 'webhook.log').write_text(output)
+                (report_path.parent / 'webhook.log').write_text(output, encoding="utf-8")
                 report['webhook'] = json.loads(output.strip().splitlines()[-1])
                 assert report['webhook']['result'] == 'PASS' and report['webhook']['webhook_deliveries'] == 9
             finally:
@@ -166,7 +166,7 @@ def main():
         report['error'] = str(error)
         raise
     finally:
-        report_path.write_text(json.dumps(report, indent=2) + '\n')
+        report_path.write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
 
 
 if __name__ == '__main__':
