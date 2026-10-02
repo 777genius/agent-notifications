@@ -110,7 +110,10 @@ def main():
             _windows_acl_diagnostic(root, 'after private-root normalization')
             for case in ('fresh', 'legacy', 'explicit'):
                 home = root / case
-                home.mkdir()
+                # A Linux umask of 0002 would otherwise make this ancestry
+                # group-writable, which the config store correctly rejects.
+                # Windows must retain the protected DACL inherited from root.
+                home.mkdir(mode=0o777 if os.name == 'nt' else 0o700)
                 env = {key: os.environ[key] for key in
                        ('PATH', 'SystemRoot', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT')
                        if key in os.environ}
@@ -137,7 +140,9 @@ def main():
                 if case == 'explicit':
                     env['AGENT_NOTIFICATIONS_CONFIG'] = str(home / 'custom' / 'config.json')
                 if case == 'legacy':
-                    legacy.parent.mkdir(parents=True, mode=0o777 if os.name == 'nt' else 0o700)
+                    private_mode = 0o777 if os.name == 'nt' else 0o700
+                    legacy.parent.parent.mkdir(mode=private_mode)
+                    legacy.parent.mkdir(mode=private_mode)
                     legacy.write_text('{}')
                     legacy.chmod(0o600)
                 selected = Path(run('config', 'path').stdout.strip())
