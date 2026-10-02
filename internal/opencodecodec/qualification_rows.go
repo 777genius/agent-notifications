@@ -21,6 +21,7 @@ var candidateImages = [...]struct {
 }
 
 type ClockRow struct {
+	OriginalNativeAge                                       string
 	ProfileID, CalibrationID, Generation, RawKind            string
 	NativeReadBoundNS, ComparisonBoundNS, TranslationBoundNS int64
 }

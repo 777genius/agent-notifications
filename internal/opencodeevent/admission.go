@@ -41,12 +41,14 @@ type ClockSample struct {
 // platform ledger. Wire provenance cannot select or enlarge either bound.
 // R is native-only; T includes the independently qualified source/JS terms.
 type TimePolicy struct {
-	ProfileID, RawKind                   string
+	ProfileID, RawKind, OriginalNativeAge string
 	NativeReadBoundNS, ComparisonBoundNS int64
 }
 
 func (p TimePolicy) valid() bool {
-	return boundedToken(p.ProfileID) &&
+	return (p.OriginalNativeAge == "" || p.OriginalNativeAge == "bounded" ||
+		(p.OriginalNativeAge == "unverified_original_date" && p.RawKind == "windows-interrupt-precise")) &&
+		boundedToken(p.ProfileID) &&
 		(p.RawKind == "linux-boottime" || p.RawKind == "darwin-monotonic-raw" || p.RawKind == "windows-interrupt-precise") &&
 		p.NativeReadBoundNS >= 0 && p.NativeReadBoundNS <= int64(103*time.Millisecond) &&
 		p.ComparisonBoundNS >= 2*p.NativeReadBoundNS && p.ComparisonBoundNS <= int64(2*time.Second)

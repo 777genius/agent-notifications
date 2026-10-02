@@ -421,6 +421,9 @@ test('Linux amd64 image tuples, bounds and legacy profile ID formula remain equi
   for (const [row, expected] of vectors) {
     assert.equal(describeClockPolicy(row).profileID, expected);
     assert.equal(describeClockPolicy(row).calibrationID, expected + ':same-coordinate');
+    const selected = selectClockCell(row.generation);
+    assert.throws(() => describeClockPolicy({ ...row, originalNativeAge: 'unverified_original_date' }));
+    assert.equal(selectClockCell(row.generation), selected);
   }
 });
 
@@ -489,4 +492,33 @@ test('unresolved native preparation expires inside the existing budget and dispo
     gate.resolve({ sample() { assert.fail('expired source sampled'); }, dispose() { closes++; } });
     await Promise.resolve(); await Promise.resolve(); assert.equal(closes, 1);
   } finally { f.delivery.dispose(); }
+});
+
+
+test('original native age exception is explicit, image-exact and cannot select a clock', () => {
+  const row = { protocol: 1, generation: 'v1', goos: 'windows', goarch: 'amd64',
+    ...describeClockSource('windows', 'amd64'),
+    images: [{ version: '1.18.33', imageSHA256: '52f60248a576b34c9a6dcaa27e0a7f08089af35bcdc0dfb10c04d3e00a98314c' }],
+    algorithmSourceMerkleSHA256: 'd'.repeat(64), nativeReadBoundNS: '103000000',
+    comparisonBoundNS: '430000000', translationBoundNS: '224000000', sourceWallBoundNS: '2000000',
+    originalNativeAge: 'unverified_original_date' };
+  const selected = selectClockCell('v1'), policy = describeClockPolicy(row);
+  assert.equal(policy.originalNativeAge, 'unverified_original_date');
+  // Independent Python canonical-JSON vector binds mode with the SAME image.
+  assert.equal(policy.profileID, 'windows-amd64-windows-interrupt-precise-v1:591cfa5af34b8c88fca19f94bec620d2a5fce5c2558707e0b92ed61c8cceaff2');
+  assert.ok(Object.isFrozen(policy)); assert.equal(selectClockCell('v1'), selected);
+  for (const change of [r => { delete r.originalNativeAge; }, r => { r.originalNativeAge = 'bounded'; },
+    r => { r.originalNativeAge = ''; }, r => { r.originalNativeAge = 'unknown'; },
+    r => { r.images[0].imageSHA256 = 'a'.repeat(64); }, r => { r.images[0].version = '1.18.34'; },
+    r => { r.generation = 'v2'; r.images[0].version = '2.0.21'; },
+    r => { r.goos = 'darwin'; Object.assign(r, describeClockSource('darwin', 'amd64')); },
+    r => { r.goos = 'linux'; Object.assign(r, describeClockSource('linux', 'amd64')); delete r.sourceWallBoundNS; },
+    r => { r.goarch = 'arm64'; }]) {
+    const bad = structuredClone(row); change(bad); assert.throws(() => describeClockPolicy(bad));
+  }
+  const legacy = { ...row, images: [{ version: '1.18.33', imageSHA256: 'a'.repeat(64) }] };
+  delete legacy.originalNativeAge;
+  assert.equal(describeClockPolicy(legacy).originalNativeAge, 'bounded');
+  assert.notEqual(policy.profileID, describeClockPolicy(legacy).profileID);
+  assert.equal(policy.calibrationID, policy.profileID + ':same-coordinate');
 });

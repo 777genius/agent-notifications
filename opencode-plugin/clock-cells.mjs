@@ -28,7 +28,7 @@ export function describeClockSource(goos, goarch) {
 export function describeClockPolicy(row) {
   const keys = ['protocol', 'generation', 'goos', 'goarch', 'images', 'algorithmSourceMerkleSHA256',
     'sourceKind', 'rawKind', 'nativeReadBoundNS', 'comparisonBoundNS', 'translationBoundNS'];
-  closed(row, [...keys, 'sourceWallBoundNS'], keys);
+  closed(row, [...keys, 'sourceWallBoundNS', 'originalNativeAge'], keys);
   const descriptor = describeClockSource(row.goos, row.goarch);
   const legacy = row.goos === 'linux' && row.goarch === 'amd64';
   const pins = legacy ? images[row.generation] : undefined;
@@ -57,12 +57,20 @@ export function describeClockPolicy(row) {
     if (image.version !== versions[index] || !hashOK(image.imageSHA256) || legacy && image.imageSHA256 !== pins[index][1])
       throw new TypeError('qualification_unverified');
   }
+  const exceptional = row.goos === 'windows' && row.goarch === 'amd64' && row.generation === 'v1' &&
+    row.images.length === 1 && row.images[0].version === '1.18.33' &&
+    row.images[0].imageSHA256 === '52f60248a576b34c9a6dcaa27e0a7f08089af35bcdc0dfb10c04d3e00a98314c';
+  const originalNativeAge = Object.hasOwn(row, 'originalNativeAge') ? row.originalNativeAge : 'bounded';
+  if (exceptional ? originalNativeAge !== 'unverified_original_date' : originalNativeAge !== 'bounded')
+    throw new TypeError('qualification_unverified');
+  // Hash the explicit exception; absent legacy metadata keeps canonical IDs.
+  // Entry is independently enforced by the owned serve binding, never IPC.
   const prefix = legacy ? 'linux-amd64-proc-boottime-v1' : `${row.goos}-${row.goarch}-${row.sourceKind}-v1`;
   const profileID = `${prefix}:${createHash('sha256').update(canonical(row)).digest('hex')}`;
   return Object.freeze({ profileID, calibrationID: `${profileID}:same-coordinate`, generation: row.generation,
     images: Object.freeze(row.images.map(image => Object.freeze({ ...image }))),
     goos: row.goos, goarch: row.goarch, sourceKind: descriptor.sourceKind, rawKind: descriptor.rawKind,
-    nativeReadBoundNS, comparisonBoundNS, translationBoundNS,
+    originalNativeAge, nativeReadBoundNS, comparisonBoundNS, translationBoundNS,
     ...(sourceWallBoundNS === undefined ? {} : { sourceWallBoundNS }) });
 }
 const cells = Object.freeze(compiledRows.map(describeClockPolicy));

@@ -33,12 +33,28 @@ func LookupCandidate(key ImageKey) (Candidate, bool) {
 	return Candidate{}, false
 }
 
+// ValidOriginalNativeAge validates trusted metadata, never grants an image row.
+func ValidOriginalNativeAge(key ImageKey, candidate Candidate, mode string) bool {
+	if _, ok := LookupSourceDescriptor(key.GOOS, key.GOARCH); !ok || key.Entry != "serve" {
+		return false
+	}
+	exceptional := key.GOOS == "windows" && key.GOARCH == "amd64" &&
+		candidate.Generation == "v1" && candidate.Version == "1.18.33" &&
+		key.SHA256 == "52f60248a576b34c9a6dcaa27e0a7f08089af35bcdc0dfb10c04d3e00a98314c"
+	if exceptional {
+		return mode == "unverified_original_date"
+	}
+	return mode == "" || mode == "bounded"
+}
+
 func LookupQualifiedClock(key ImageKey) (ClockRow, bool) {
-	if _, ok := LookupCandidate(key); !ok {
+	candidate, known := LookupCandidate(key)
+	if !known {
 		return ClockRow{}, false
 	}
 	for _, item := range qualifiedClockRows {
-		if descriptor, ok := LookupSourceDescriptor(key.GOOS, key.GOARCH); ok && item.key == key && item.row.RawKind == descriptor.RawKind {
+		if descriptor, ok := LookupSourceDescriptor(key.GOOS, key.GOARCH); ok && item.key == key && item.row.RawKind == descriptor.RawKind &&
+			item.row.Generation == candidate.Generation && ValidOriginalNativeAge(key, candidate, item.row.OriginalNativeAge) {
 			return item.row, true
 		}
 	}

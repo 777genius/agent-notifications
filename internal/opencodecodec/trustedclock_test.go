@@ -113,3 +113,39 @@ func TestSourceDescriptorsDoNotGrantImages(t *testing.T) {
 		}
 	}
 }
+
+// Closed metadata cannot turn the recognized exception into clock authority.
+func TestOriginalNativeAgePolicy(t *testing.T) {
+	key := ImageKey{"windows", "amd64", "serve", "52f60248a576b34c9a6dcaa27e0a7f08089af35bcdc0dfb10c04d3e00a98314c"}
+	candidate := Candidate{"1.18.33", "v1"}
+	if !ValidOriginalNativeAge(key, candidate, "unverified_original_date") {
+		t.Fatal("explicit exact exception rejected")
+	}
+	for _, mode := range []string{"", "bounded", "unknown"} {
+		if ValidOriginalNativeAge(key, candidate, mode) {
+			t.Fatal("exception concealed by mode", mode)
+		}
+	}
+	for _, change := range []func(*ImageKey, *Candidate){
+		func(k *ImageKey, c *Candidate) { k.SHA256 = "unknown" },
+		func(k *ImageKey, c *Candidate) { k.GOOS = "linux" },
+		func(k *ImageKey, c *Candidate) { k.GOOS = "darwin" },
+		func(k *ImageKey, c *Candidate) { k.GOARCH = "arm64" },
+		func(k *ImageKey, c *Candidate) { k.Entry = "tui" },
+		func(k *ImageKey, c *Candidate) { c.Generation = "v2"; c.Version = "2.0.21" },
+		func(k *ImageKey, c *Candidate) { c.Version = "1.18.34" },
+	} {
+		k, c := key, candidate
+		change(&k, &c)
+		if ValidOriginalNativeAge(k, c, "unverified_original_date") {
+			t.Fatal("exception escaped exact tuple", k, c)
+		}
+	}
+	if _, ok := LookupQualifiedClock(key); ok {
+		t.Fatal("metadata recognition granted absent clock row")
+	}
+	legacy := ImageKey{"linux", "amd64", "serve", "0abbb7c32ab0294c0a7bfa2705f9ff0df5dce5ab721d1f00cccfe393f2a11427"}
+	if !ValidOriginalNativeAge(legacy, candidate, "") || !ValidOriginalNativeAge(legacy, candidate, "bounded") || ValidOriginalNativeAge(legacy, candidate, "unknown") {
+		t.Fatal("legacy default or closed enum changed")
+	}
+}

@@ -209,3 +209,28 @@ func TestPrivateLiteralRemainsNeutralWireOne(t *testing.T) {
 		t.Fatal("neutral-only authorized")
 	}
 }
+
+// Pure accepted-policy/freshness vectors: no native clock or registration grant.
+func TestUnverifiedOriginalAgeKeepsReportedDOBAndBudgets(t *testing.T) {
+	policy := TimePolicy{ProfileID: "TEST-explicit-unverified", RawKind: "windows-interrupt-precise", OriginalNativeAge: "unverified_original_date"}
+	now := authoritySample()
+	now.Fence = policy.Fence(now.BootID, now.Domain)
+	if !policy.accepts(now) {
+		t.Fatal("trusted exceptional mode lost")
+	}
+	for _, change := range []func(*Provenance){
+		func(p *Provenance) { p.NativeCreatedNS = now.WallNS - int64(60*time.Second) - 1 },
+		func(p *Provenance) { p.NativeCreatedNS = now.WallNS + int64(2*time.Second) + 1 },
+		func(p *Provenance) { p.DeadlineTickNS = now.TickNS },
+	} {
+		p := freshProvenance(now)
+		change(&p)
+		if _, status := freshness(now, p); status != Expired {
+			t.Fatal("unverified mode bypassed reported DOB/budget", status)
+		}
+	}
+	policy.OriginalNativeAge = "unknown"
+	if policy.accepts(now) {
+		t.Fatal("unknown trusted mode accepted")
+	}
+}
