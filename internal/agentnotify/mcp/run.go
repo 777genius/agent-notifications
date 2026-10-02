@@ -108,6 +108,9 @@ func Run(ctx context.Context, owned io.ReadWriteCloser, o Options) error {
 		"Leave routine task/turn completion to lifecycle hooks, including ordinary 'notify me when done' requests; do not relabel completion as progress/attention. " +
 		"Send completion only if hooks are known disabled/unavailable or the user explicitly requests an additional separate alert. " +
 		"Unknown hook state is not absence; notification_status does not report hook state. Do not duplicate a question/approval event covered by a known hook. " +
+		"In Codex Desktop, do not notify before, while waiting on, or after the same native question (request_user_input/request_user_input_async) or approval/permission prompt, including permission to call notify. " +
+		"Do not relabel that prompt as a blocker, milestone, progress or info; only an explicit request for an additional separate alert permits a duplicate. " +
+		"Unknown native settings/delivery do not justify a fallback; notification_status does not report them. Separate in-progress milestones and blockers without native prompts may still notify. " +
 		"Check notification_status before choosing navigation. " +
 		"Unknown outcomes are not safe to retry automatically.", InputSchema: notifySchema(), Annotations: &sdk.ToolAnnotations{ReadOnlyHint: false, IdempotentHint: false}}, func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
 		p, ok := decodePayload(req.Params.Arguments)
