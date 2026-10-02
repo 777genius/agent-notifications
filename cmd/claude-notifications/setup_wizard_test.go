@@ -1327,7 +1327,7 @@ func TestSetupWizardSecondClientDifferentDigestE2E(t *testing.T) {
 	}
 	other := filepath.Join(env.root, "other-package")
 	writeWizardPackage(t, other, env.probe)
-	if err := os.WriteFile(filepath.Join(other, "skills", "agent-notify", "SKILL.md"), []byte("---\nname: agent-notify\ndescription: Revised\n---\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(other, "skills", "agent-notifications", "SKILL.md"), []byte("---\nname: agent-notifications\ndescription: Revised\n---\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()
@@ -1431,7 +1431,7 @@ func TestSetupWizardTwoPhaseUpdateThenAddE2E(t *testing.T) {
 	}
 	other := filepath.Join(env.root, "other-package")
 	writeWizardPackage(t, other, env.probe)
-	if err := os.WriteFile(filepath.Join(other, "skills", "agent-notify", "SKILL.md"), []byte("---\nname: agent-notify\ndescription: Revised\n---\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(other, "skills", "agent-notifications", "SKILL.md"), []byte("---\nname: agent-notifications\ndescription: Revised\n---\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()
@@ -2700,7 +2700,7 @@ func TestSetupWizardAmbiguousInstallationsConflictE2E(t *testing.T) {
 	}
 	other := filepath.Join(env.root, "other-package")
 	writeWizardPackage(t, other, env.probe)
-	if err := os.WriteFile(filepath.Join(other, "skills", "agent-notify", "SKILL.md"), []byte("---\nname: agent-notify\ndescription: Other installation\n---\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(other, "skills", "agent-notifications", "SKILL.md"), []byte("---\nname: agent-notifications\ndescription: Other installation\n---\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()
@@ -3402,10 +3402,10 @@ func writeWizardPackage(t *testing.T, root, probe string) {
 		t.Fatal(err)
 	}
 	files := map[string][]byte{
-		"plugin.json":                  []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.0"}`),
-		"mcp.json":                     []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"agent-notify":{"type":"stdio","command":"./bin/probe","args":[],"env":{}}}}`),
-		"skills/agent-notify/SKILL.md": []byte("---\nname: agent-notify\ndescription: Wizard CLI e2e\n---\n"),
-		"bin/probe":                    body,
+		"plugin.json":                         []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.0"}`),
+		"mcp.json":                            []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"agent-notify":{"type":"stdio","command":"./bin/probe","args":[],"env":{}}}}`),
+		"skills/agent-notifications/SKILL.md": []byte("---\nname: agent-notifications\ndescription: Wizard CLI e2e\n---\n"),
+		"bin/probe":                           body,
 	}
 	for rel, data := range files {
 		path := filepath.Join(root, rel)

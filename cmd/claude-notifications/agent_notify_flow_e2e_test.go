@@ -70,10 +70,10 @@ func TestAgentNotifyIsolatedInstallFlowE2E(t *testing.T) {
 	pkg := filepath.Join(f.root, "package source with spaces")
 	probe := filepath.Join(pkg, "bin", "probe")
 	files := map[string][]byte{
-		"plugin.json":                  []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.0"}`),
-		"mcp.json":                     []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"agent-notify":{"type":"stdio","command":"./bin/probe","args":[],"env":{}}}}`),
-		"skills/agent-notify/SKILL.md": []byte("---\nname: agent-notify\ndescription: Isolated flow fixture\n---\n"),
-		"bin/probe":                    binary,
+		"plugin.json":                         []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.0"}`),
+		"mcp.json":                            []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"agent-notify":{"type":"stdio","command":"./bin/probe","args":[],"env":{}}}}`),
+		"skills/agent-notifications/SKILL.md": []byte("---\nname: agent-notifications\ndescription: Isolated flow fixture\n---\n"),
+		"bin/probe":                           binary,
 	}
 	for rel, data := range files {
 		path := filepath.Join(pkg, rel)
@@ -115,7 +115,7 @@ func TestAgentNotifyIsolatedInstallFlowE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 	codexConfig := filepath.Join(request.CodexHome, "config.toml")
-	skillDest := filepath.Join(request.CodexHome, "skills", "agent-notify", "SKILL.md")
+	skillDest := filepath.Join(request.CodexHome, "skills", "agent-notifications", "SKILL.md")
 	identity := portablesetup.Identity{
 		InstallationID: "00000000-0000-4000-8000-000000000009", ComponentID: snap.Ledger.ID, Owner: "existing-installer",
 		ScopeRoot: filepath.Join(f.root, "scope"), ControlRoot: f.control, GlobalConfig: globalPath,
@@ -124,7 +124,7 @@ func TestAgentNotifyIsolatedInstallFlowE2E(t *testing.T) {
 	discovery := portablesetup.Discovery{
 		ConfigPath: codexConfig, Command: f.command,
 		Skill: &clientsetup.SkillProjection{
-			SourcePath: filepath.Join(f.runtime, "skills", "agent-notify", "SKILL.md"), DestinationPath: skillDest,
+			SourcePath: filepath.Join(f.runtime, "skills", "agent-notifications", "SKILL.md"), DestinationPath: skillDest,
 		},
 	}
 	got, err := mat.Install(ctx, portablesetup.MaterializeRequest{
@@ -427,8 +427,8 @@ func (p *flowNotifySpy) Deliver(_ context.Context, r notification.Request) notif
 
 type flowStatus struct{}
 
-func (flowStatus) Status(context.Context) (notifymcp.Status, error) {
-	return notifymcp.Status{Enabled: true, Configuration: "enabled", Capability: "available"}, nil
+func (flowStatus) Status(context.Context, origin.Context) (notifymcp.Status, error) {
+	return notifymcp.Status{Enabled: true, Configuration: "enabled", Capability: "available", Navigation: agentnotify.NavigationStatus{Capability: "eligible", Precision: "chat_id", Scope: "local_current_profile", Reason: "configured_codex_desktop"}}, nil
 }
 
 func proveNotifyTargetsAfterCwdGone(t *testing.T, cwd string) {

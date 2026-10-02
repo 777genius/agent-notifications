@@ -189,7 +189,7 @@ func extractEntry(destRoot string, f *zip.File, seen map[string]bool) (int64, er
 
 func allowedArchivePath(name string) bool {
 	switch name {
-	case "plugin.json", "mcp.json", "skills/agent-notify/SKILL.md", thirdpartynotices.Filename:
+	case "plugin.json", "mcp.json", "skills/agent-notifications/SKILL.md", "skills/agent-notify/SKILL.md", thirdpartynotices.Filename:
 		return true
 	}
 	if strings.HasPrefix(name, "bin/") && strings.Count(name, "/") == 1 {
@@ -232,9 +232,21 @@ func VerifyLayout(root string) error {
 	if !ok || (server.Command != "./bin/"+binaryName("linux") && server.Command != "./bin/"+binaryName("windows")) {
 		return fmt.Errorf("%w: mcp command", ErrInvalidLayout)
 	}
-	skill := filepath.Join(root, filepath.FromSlash("skills/agent-notify/SKILL.md"))
-	info, err := os.Lstat(skill)
-	if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
+	// Repair must preserve historical package bytes, while admitting only one
+	// skill prevents both names from becoming active after an update.
+	skills := 0
+	for _, name := range []string{"agent-notifications", "agent-notify"} {
+		skill := filepath.Join(root, "skills", name, "SKILL.md")
+		info, err := os.Lstat(skill)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
+			return fmt.Errorf("%w: skill", ErrInvalidLayout)
+		}
+		skills++
+	}
+	if skills != 1 {
 		return fmt.Errorf("%w: skill", ErrInvalidLayout)
 	}
 	binRel := strings.TrimPrefix(server.Command, "./")

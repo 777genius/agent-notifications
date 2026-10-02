@@ -22,9 +22,9 @@ func TestExplicitSkillAssetInstallAndRefresh(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	const skill = "skills/agent-notify/SKILL.md"
+	const skill = "skills/agent-notifications/SKILL.md"
 	write(skill, "first skill")
-	for _, rel := range []string{"skills/foreign/SKILL.md", "skills/agent-notify/private.txt", "skills/agent-notify/nested/SKILL.md"} {
+	for _, rel := range []string{"skills/foreign/SKILL.md", "skills/agent-notifications/private.txt", "skills/agent-notifications/nested/SKILL.md"} {
 		write(rel, "not an owned asset")
 	}
 	for _, content := range []string{"first skill", "updated skill"} {
@@ -44,7 +44,7 @@ func TestExplicitSkillAssetInstallAndRefresh(t *testing.T) {
 			t.Fatalf("skill = %q, %v", got, err)
 		}
 	}
-	for _, rel := range []string{"skills/foreign", "skills/agent-notify/private.txt", "skills/agent-notify/nested"} {
+	for _, rel := range []string{"skills/foreign", "skills/agent-notifications/private.txt", "skills/agent-notifications/nested"} {
 		if _, err := os.Lstat(filepath.Join(destination, filepath.FromSlash(rel))); !os.IsNotExist(err) {
 			t.Fatalf("unowned asset copied: %s, %v", rel, err)
 		}
