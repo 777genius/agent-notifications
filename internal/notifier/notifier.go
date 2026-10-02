@@ -282,8 +282,8 @@ func buildNotifierCommand(notifierPath string, args []string) *exec.Cmd {
 	return exec.Command(notifierPath, args...)
 }
 
-// claudeNotifierAppPath extracts ClaudeNotifier.app from the embedded
-// terminal-notifier-modern executable path.
+// claudeNotifierAppPath recognizes modern helpers in conventional bundles, the
+// product-owned alias, and durable managed generation bundles.
 func claudeNotifierAppPath(notifierPath string) (string, bool) {
 	cleanPath := filepath.Clean(notifierPath)
 	suffix := filepath.Join("Contents", "MacOS", "terminal-notifier-modern")
@@ -293,7 +293,9 @@ func claudeNotifierAppPath(notifierPath string) (string, bool) {
 
 	bundlePath := strings.TrimSuffix(cleanPath, suffix)
 	bundlePath = strings.TrimSuffix(bundlePath, string(filepath.Separator))
-	if !strings.HasSuffix(bundlePath, "ClaudeNotifier.app") {
+	name := filepath.Base(bundlePath)
+	if name != "ClaudeNotifier.app" && name != "AgentNotifications.app" &&
+		(!strings.HasPrefix(name, "generation-") || !strings.HasSuffix(name, ".app")) {
 		return "", false
 	}
 
