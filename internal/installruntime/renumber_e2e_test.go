@@ -66,6 +66,11 @@ func renumberSandbox(t *testing.T) *renumberEnv {
 	t.Setenv("GOSUMDB", "off")
 	t.Setenv("GOTELEMETRY", "off")
 	t.Setenv("AGENT_NOTIFICATIONS_CONFIG", "")
+	// Empty is an invalid explicit override. Setenv registers restoration;
+	// remove it while this fixture resolves its isolated default config.
+	if err := os.Unsetenv("AGENT_NOTIFICATIONS_CONFIG"); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	t.Cleanup(cancel)
 	sender := filepath.Join(root, "sender")
