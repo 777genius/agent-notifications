@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -200,9 +201,14 @@ func runtimePathTree(t *testing.T, root string) map[string]runtimePathState {
 		if err != nil {
 			return err
 		}
-		info, err := entry.Info()
+		// Read current metadata by path, not cached Windows enumeration data.
+		info, err := os.Lstat(path)
 		if err != nil {
 			return err
+		}
+		// Freeze Windows lazy file IDs before the operation under test.
+		if !os.SameFile(info, info) {
+			return fmt.Errorf("cannot capture file identity: %s", path)
 		}
 		var id installruntime.Identity
 		if !entry.IsDir() {
@@ -229,7 +235,7 @@ func assertRuntimePathTree(t *testing.T, root string, before map[string]runtimeP
 		got, ok := after[path]
 		if !ok || !os.SameFile(want.info, got.info) || want.info.Mode() != got.info.Mode() ||
 			!want.info.ModTime().Equal(got.info.ModTime()) || want.identity != got.identity {
-			t.Errorf("refresh mutated or replaced %s", path)
+			t.Errorf("refresh mutated or replaced %s: sameFile=%v mode=%v/%v mtime=%v/%v identity=%+v/%+v", path, os.SameFile(want.info, got.info), want.info.Mode(), got.info.Mode(), want.info.ModTime(), got.info.ModTime(), want.identity, got.identity)
 		}
 	}
 }
