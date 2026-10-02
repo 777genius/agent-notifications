@@ -460,7 +460,8 @@ func TestRenumberE2EDarwinSetupOwnership(t *testing.T) {
 	if l.Native.DecoderFloor != 1 {
 		t.Fatal("native fixture not qualified")
 	}
-	global := filepath.Join(e.root, "global.json")
+	// Use the CLI-selected macOS config path inside the isolated HOME.
+	global := filepath.Join(os.Getenv("HOME"), "Library", "Application Support", "agent-notifications", "config.json")
 	renumberWrite(t, global, []byte(`{"notifications":{"desktop":{"enabled":false,"sound":false,"clickToFocus":false}}}`), 0600)
 	enable := func() ([]byte, error) {
 		l, err := readLedger(e.control)
