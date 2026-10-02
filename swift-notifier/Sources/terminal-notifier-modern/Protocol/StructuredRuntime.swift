@@ -65,9 +65,13 @@ enum StructuredRuntime {
         // Parse completely before AppKit or UN access, even for mixed modes.
         guard let request = try? PermissionSetupRequest(arguments: arguments) else { exit(1) }
         let deadline = ContinuousClock.now() + 120
+        var finish: ((Int32) -> Void)?
+        var timer: Timer?
         let setup = PermissionSetup(request: request, expired: { ContinuousClock.now() >= deadline }) { data in
             FileHandle.standardOutput.write(data)
-            exit(0)
+            timer?.invalidate()
+            if let finish = finish { finish(0) }
+            else { exit(0) }
         }
         guard let identifier = Bundle.main.bundleIdentifier, !identifier.isEmpty,
               Bundle.main.bundleURL.pathExtension == "app",
@@ -77,12 +81,15 @@ enum StructuredRuntime {
         }
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
+        let appDelegate = AppDelegate.install(on: app)
+        finish = appDelegate.lifecycle.beginOperation()
         // Continuous time also bounds suspension. The deadline does not cancel
         // an OS authorization UI already dispatched, or prove its grant outcome.
-        let timer = Timer(timeInterval: 0.1, repeats: true) { _ in
+        let deadlineTimer = Timer(timeInterval: 0.1, repeats: true) { _ in
             if ContinuousClock.now() >= deadline { setup.timeout() }
         }
-        RunLoop.main.add(timer, forMode: .common)
+        timer = deadlineTimer
+        RunLoop.main.add(deadlineTimer, forMode: .common)
         DispatchQueue.main.async {
             setup.start(settings: { completion in
                 UNUserNotificationCenter.current().getNotificationSettings { settings in
@@ -94,7 +101,7 @@ enum StructuredRuntime {
                 }
             }, timer: { _ in /* Main run loop timer installed before work dispatch. */ })
         }
-        withExtendedLifetime(setup) { app.run() }
+        withExtendedLifetime((setup, appDelegate)) { app.run() }
         exit(1)
     }
 
@@ -175,17 +182,25 @@ enum StructuredRuntime {
         }
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
+        let appDelegate = AppDelegate.install(on: app)
+        let finish = appDelegate.lifecycle.beginOperation()
+        var timer: Timer?
         let delivery = StructuredDelivery(backend: StructuredUNBackend(), bootID: boot,
-                                          now: ContinuousClock.now, emit: { emit($0) })
+                                          now: ContinuousClock.now, emit: { receipt in
+            timer?.invalidate()
+            do { try files.write(receipt); finish(0) }
+            catch { finish(1) } // no receipt is an unknown handoff, never a retry signal
+        })
         // Short polling also catches suspend: continuous clock, not a fresh launch budget.
-        let timer = Timer(timeInterval: 0.05, repeats: true) { _ in
+        let deadlineTimer = Timer(timeInterval: 0.05, repeats: true) { _ in
             if ContinuousClock.now() >= request.notAfter {
                 delivery.timeout()
             }
         }
-        RunLoop.main.add(timer, forMode: .common)
+        timer = deadlineTimer
+        RunLoop.main.add(deadlineTimer, forMode: .common)
         DispatchQueue.main.async { delivery.start(data: data, correlationID: files.correlationID, nonce: files.nonce) }
-        withExtendedLifetime(delivery) { app.run() }
+        withExtendedLifetime((delivery, appDelegate)) { app.run() }
         exit(1)
     }
 }

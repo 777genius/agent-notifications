@@ -227,6 +227,22 @@ For click-to-focus changes:
 - Plugin runtime log: `<plugin-root>/notification-debug.log`
 - Claude process debug log: printed by `scripts/e2e-real-claude.sh` for each run
 
+Native notification callbacks write bounded `callback_received` and `callback_terminal`
+JSON to macOS unified logging. Send errors remain on stderr; callback diagnostics must
+not enter that channel because the legacy sender treats stderr as a delivery failure.
+
+```sh
+/usr/bin/log show --last 15m --style compact --predicate 'subsystem == "com.777genius.agent-notifications" AND category == "notification-callback"'
+```
+
+Callback records contain a correlation UUID and terminal outcome, without notification
+text or chat IDs. `os_accepted` confirms notification submission; `open_requested`
+confirms an NSWorkspace handoff. Neither proves that the destination chat rendered.
+For a click regression, use a disposable test chat/project and check both a click after
+the sender exits and a click while another send or permission setup is still running.
+Lifecycle tests verify accepted callback drain; they do not prove which process macOS
+selects to receive a click.
+
 If a smoke test fails, keep both logs and the command output together when opening an issue or PR.
 
 The checked-in `bin/agent-notifications` symlink delegates to `bin/claude-notifications`; building the legacy development target also makes the primary command available. Installation replaces both launchers with links to the same platform executable.

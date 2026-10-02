@@ -58,6 +58,10 @@ final class CallbackLifecycle {
     private var owned: [UUID: Owned] = [:]
     private var generation = 0
     private var callbacks: [UUID: Pending] = [:]
+    private var operationStarted = false
+    private var operationPending = false
+    private var finishingCallbacks = 0
+    private(set) var exitCode: Int32?
     private(set) var stopped = false
     var inFlight: Int { callbacks.count }
     var ownedCount: Int { owned.count }
@@ -67,6 +71,22 @@ final class CallbackLifecycle {
         self.schedule = schedule; self.exit = exit; self.diagnostic = diagnostic; self.now = now
     }
     func start() { armIdle() }
+    // A finite send/setup shares the callback owner. Its result can be published
+    // immediately, but process exit must also wait for accepted callback work.
+    // Starting invalidates any earlier callback-only idle timer; completion is
+    // idempotent so late OS replies cannot replace a timeout/error exit status.
+    func beginOperation() -> (Int32) -> Void {
+        precondition(!operationStarted && !stopped)
+        operationStarted = true
+        operationPending = true
+        generation += 1
+        return { [weak self] code in
+            guard let self = self, self.operationPending else { return }
+            self.operationPending = false
+            self.exitCode = code
+            self.armIdle()
+        }
+    }
     func accept(completion: @escaping () -> Void,
                 operation: (@escaping (CallbackOutcome) -> Void, @escaping () -> Bool) -> Void) {
         acceptOwned(completion: completion) { done, work in
@@ -100,6 +120,7 @@ final class CallbackLifecycle {
     }
     private func finish(_ id: UUID, outcome: CallbackOutcome) {
         guard let pending = callbacks.removeValue(forKey: id) else { return }
+        finishingCallbacks += 1
         let result = pending.token.isActive ? outcome : .open_unknown
         pending.token.cancel()
         // Snapshot permits a synchronous cancellation/reap seam to release ownership.
@@ -108,15 +129,23 @@ final class CallbackLifecycle {
         diagnostic(CallbackDiagnostic(event: "callback_terminal", correlationID: pending.correlation,
                                       outcome: result.rawValue).json)
         pending.completion()
+        finishingCallbacks -= 1
         armIdle()
     }
     private func armIdle() {
-        guard callbacks.isEmpty, owned.isEmpty, !stopped else { return }
+        guard callbacks.isEmpty, owned.isEmpty, !operationPending,
+              finishingCallbacks == 0, !stopped else { return }
+        if exitCode != nil {
+            stopped = true
+            exit()
+            return
+        }
         generation += 1
         let expected = generation
         schedule(10) { [weak self] in
             guard let self = self, self.generation == expected,
-                  self.callbacks.isEmpty, self.owned.isEmpty, !self.stopped else { return }
+                  self.callbacks.isEmpty, self.owned.isEmpty,
+                  !self.operationPending, !self.stopped else { return }
             self.stopped = true
             self.exit()
         }
