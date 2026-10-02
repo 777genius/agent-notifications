@@ -292,9 +292,106 @@ Run bin/install.sh manually for details."
 # reported again instead of staying silent. The stamp is usually absent, and
 # cache housekeeping never fails the hook.
 clear_install_failure() {
-    [ "${CN_PRODUCT:-claude}" = "claude" ] && [ -n "$1" ] || return 0
-    [ -d "$STAMP_DIR/install-failed-$1" ] || return 0
-    rmdir "$STAMP_DIR/install-failed-$1" 2>/dev/null || true
+    [ -n "$1" ] || return 0
+    backoff_path "$1"
+    retire_backoff || true
+    if [ "${CN_PRODUCT:-claude}" = "claude" ]; then
+        rmdir "$STAMP_DIR/install-failed-$1" 2>/dev/null || true
+    fi
+}
+
+# A permanent namespace contains a single atomic symlink to a private attempt.
+# Unlike renaming an expired shared directory, this has no ABA takeover: only
+# the winner of mkdir <unique-attempt>/retire may unlink that attempt's link.
+# Never recreate an attempt directory or remove another live hook's attempt.
+backoff_path() {
+    _rootkey=$(printf '%s' "$SCRIPT_DIR" | cksum | cut -d' ' -f1)
+    BACKOFF="$STAMP_DIR/install-backoff-${1:-unknown}-$_rootkey"
+}
+
+backoff_owner() {
+    [ -d "$BACKOFF" ] && [ ! -L "$BACKOFF" ] || return 1
+    _attempt=$(readlink "$BACKOFF/active" 2>/dev/null) || return 1
+    case "$_attempt" in attempt.*) ;; *) return 1 ;; esac
+    case "$_attempt" in */*|*..*) return 1 ;; esac
+    BACKOFF_OWNER="$BACKOFF/$_attempt"
+    [ -d "$BACKOFF_OWNER" ] && [ ! -L "$BACKOFF_OWNER" ]
+}
+
+retire_backoff() {
+    backoff_owner || return 1
+    # A delayed expiry/finish must never retire a successor it did not observe.
+    [ -z "${1:-}" ] || [ "$BACKOFF_OWNER" = "$1" ] || return 1
+    _retiring="$BACKOFF_OWNER"
+    # This gate belongs to an immutable unique attempt, never a shared pathname.
+    mkdir "$_retiring/retire" 2>/dev/null || return 1
+    if [ "$(readlink "$BACKOFF/active" 2>/dev/null)" = "${_retiring##*/}" ]; then
+        rm -f "$BACKOFF/active" 2>/dev/null || return 1
+    fi
+    # Move the unique namespace away before deleting the gate, so delayed
+    # readers can never acquire a second retirement gate for the old owner.
+    mv "$_retiring" "$_retiring.retired" 2>/dev/null || return 1
+    rm -f "$_retiring.retired/pid" "$_retiring.retired/failed" 2>/dev/null || true
+    rmdir "$_retiring.retired/retire" "$_retiring.retired" 2>/dev/null || true
+}
+
+# Return 0 to run, 1 to dispatch the retained binary. Cache failure runs the
+# installer normally; backoff is best effort. Two rounds bound stale takeover.
+claim_install() {
+    INSTALL_CLAIM=''
+    backoff_path "$TARGET_VER"
+    (umask 077; mkdir -p "$STAMP_DIR" && mkdir -p "$BACKOFF") 2>/dev/null || return 0
+    [ -d "$BACKOFF" ] && [ ! -L "$BACKOFF" ] || return 0
+    _round=0
+    while [ "$_round" -lt 2 ]; do
+        _round=$((_round + 1))
+        if backoff_owner; then
+            # A running attempt cannot expire underneath its hook, even when
+            # downloads take longer than the failure cooldown.
+            _pid=''
+            if [ ! -e "$BACKOFF_OWNER/failed" ] && [ ! -L "$BACKOFF_OWNER/pid" ]; then
+                IFS= read -r _pid < "$BACKOFF_OWNER/pid" 2>/dev/null || true
+                case "$_pid" in ''|*[!0-9]*) ;; *)
+                    [ "$_pid" -gt 0 ] && kill -0 "$_pid" 2>/dev/null && return 1 ;;
+                esac
+            fi
+            path_recent "$BACKOFF_OWNER" 300 && return 1
+            retire_backoff "$BACKOFF_OWNER" || return 1
+        elif [ -e "$BACKOFF/active" ] || [ -L "$BACKOFF/active" ]; then
+            # Unknown cache entries are not ours to delete.
+            return 0
+        fi
+        _mine=$(umask 077; mktemp -d "$BACKOFF/attempt.XXXXXXXXXX" 2>/dev/null) || return 0
+        if ! printf '%s\n' "$$" > "$_mine/pid"; then
+            rmdir "$_mine" 2>/dev/null || true
+            return 0
+        fi
+        # -n prevents an existing directory symlink from becoming a destination
+        # directory on both Linux and macOS. Never use -f: it steals ownership.
+        if ln -sn "${_mine##*/}" "$BACKOFF/active" 2>/dev/null &&
+            [ "$(readlink "$BACKOFF/active" 2>/dev/null)" = "${_mine##*/}" ]; then
+            INSTALL_CLAIM="$_mine"
+            return 0
+        fi
+        rm -f "$_mine/pid" 2>/dev/null || true
+        rmdir "$_mine" 2>/dev/null || true
+        # A concurrent winner owns the install (or its finished cooldown).
+        [ -L "$BACKOFF/active" ] && return 1
+    done
+    return 1
+}
+
+finish_install_claim() {
+    [ -n "$INSTALL_CLAIM" ] || return 0
+    # Success or incidental contention retires only our own attempt. A manual
+    # repair may have already retired it and a new hook may own the link.
+    [ "$(readlink "$BACKOFF/active" 2>/dev/null)" = "${INSTALL_CLAIM##*/}" ] || return 0
+    if target_binary_ok || wait_for_install_publication; then
+        retire_backoff "$INSTALL_CLAIM" || true
+    else
+        : > "$INSTALL_CLAIM/failed" 2>/dev/null || true
+        touch "$INSTALL_CLAIM" 2>/dev/null || true
+    fi
 }
 
 path_recent() {
@@ -411,14 +508,21 @@ fi
 # Install if needed and notify user
 if [ "$NEED_INSTALL" = 1 ]; then
     TARGET_VER=$(get_plugin_version)
-    if [ "$NEED_FORCE" = 1 ]; then
-        run_install --force || true
-    else
-        run_install || true
+    INSTALL_RAN=0
+    INSTALL_LOG=''
+    INSTALL_REASON=''
+    if claim_install; then
+        INSTALL_RAN=1
+        if [ "$NEED_FORCE" = 1 ]; then
+            run_install --force || true
+        else
+            run_install || true
+        fi
+        finish_install_claim
     fi
 
     REPORT_FAILURE=0
-    if [ "${CN_PRODUCT:-claude}" = "claude" ] && ! target_binary_ok; then
+    if [ "$INSTALL_RAN" = 1 ] && [ "${CN_PRODUCT:-claude}" = "claude" ] && ! target_binary_ok; then
         _target_failure_stamp="$STAMP_DIR/install-failed-${TARGET_VER:-unknown}"
         if [ ! -d "$_target_failure_stamp" ] && ! wait_for_install_publication; then
             REPORT_FAILURE=1

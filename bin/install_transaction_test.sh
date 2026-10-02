@@ -32,7 +32,7 @@ assert_output() {
 }
 test_env_setup "$sandbox"
 sed '/^main "\$@"$/d' "$root/install.sh" > "$sandbox/functions.sh"
-for scenario in staged staged_corrupt offline fresh_offline download checksum missing_checksum executable interrupt desktop fresh_desktop success fresh_success postcommit_manifest optional_interrupt legacy_fallback retained_legacy failed_fallback; do
+for scenario in fresh_disposable codex_success promotion_failure staged staged_corrupt offline fresh_offline download checksum missing_checksum executable interrupt desktop fresh_desktop success fresh_success postcommit_manifest optional_interrupt legacy_fallback retained_legacy failed_fallback; do
     case_dir="$sandbox/$scenario"
     mkdir -p "$case_dir"
     (
@@ -46,6 +46,7 @@ for scenario in staged staged_corrupt offline fresh_offline download checksum mi
             FOCUS_HANDLER_NAME='' FOCUS_HANDLER_PATH=''
         }
         detect_platform
+        [ "$scenario" != codex_success ] || export CN_PRODUCT=codex
         FORCE_UPDATE=true
         [ "$scenario" != desktop ] || FORCE_UPDATE=false
         printf '#!/bin/bash\necho old-version\n' > "$BINARY_PATH"
@@ -84,7 +85,7 @@ for scenario in staged staged_corrupt offline fresh_offline download checksum mi
 #!/bin/bash
 # agent-notifications-managed-writer-protocol-v1
 if [ "$1" = internal-install-runtime ]; then
-    stage="" target="" entry="" refresh=false
+    stage="" target="" entry="" refresh=false print_native=false
     shift
     while [ "$#" -gt 0 ]; do
         case "$1" in
@@ -93,6 +94,7 @@ if [ "$1" = internal-install-runtime ]; then
             --entry) entry=$2; shift 2 ;;
             --control-root|--consumer) shift 2 ;;
             --refresh) refresh=true; shift ;;
+            --print-native-path) print_native=true; shift ;;
             --require-native|--remove|--purge-native) shift ;;
             *) shift ;;
         esac
@@ -117,12 +119,21 @@ if [ "$1" = internal-install-runtime ]; then
             chmod +x "$target/$base" 2>/dev/null || true
         fi
     done
+    mkdir -p "$target/native-generation/ClaudeNotifier.app"
+    echo committed >> "$target/registration-order"
+    if [ "$print_native" = true ]; then printf '%s\n' "$target/native-generation/ClaudeNotifier.app"; fi
     exit 0
 fi
 echo claude-notifications-new-version
 exit 0
 PAYLOAD
             [ "$scenario" != executable ] || printf '#!/bin/bash\nexit 1\n' > "$SCRIPT_DIR/payload"
+            if [ "$scenario" = promotion_failure ]; then
+                sed '/^    for f in /i\
+    exit 9
+' "$SCRIPT_DIR/payload" > "$SCRIPT_DIR/failed-payload"
+                mv "$SCRIPT_DIR/failed-payload" "$SCRIPT_DIR/payload"
+            fi
             head -c 1000000 /dev/zero >> "$SCRIPT_DIR/payload"
             [ "$scenario" != missing_checksum ] || return 1
             local sum
@@ -145,7 +156,7 @@ PAYLOAD
         }
         download_terminal_notifier_modern() {
             case "$scenario" in
-                success|fresh_success|staged|postcommit_manifest|optional_interrupt) ;;
+                success|fresh_success|fresh_disposable|codex_success|promotion_failure|staged|postcommit_manifest|optional_interrupt) ;;
                 *) return 1 ;;
             esac
             mkdir -p "$SCRIPT_DIR/ClaudeNotifier.app/Contents/MacOS"
@@ -165,6 +176,12 @@ PAYLOAD
             "$BINARY_PATH" --version | grep -q new-version
             [ "$scenario" != optional_interrupt ] || sh -c 'kill -TERM "$PPID"'
         }
+        launch_services_register() {
+            [ -d "$1" ] || return 93
+            [ "$(cat "$case_dir/registration-order")" = committed ] || return 94
+            printf '%s\n' "$1" >> "$case_dir/registrations"
+            echo registered >> "$case_dir/registration-order"
+        }
         create_claude_notifications_app() { :; }
         setup_iterm2_venv() { :; }
         if [ "$scenario" = postcommit_manifest ]; then
@@ -182,13 +199,23 @@ PAYLOAD
                 real_guard_install_paths "$@"
             }
         fi
-        if [[ "$scenario" == staged* ]]; then
+        if [[ "$scenario" == staged* || "$scenario" == fresh_disposable ]]; then
             download_checksums
             mkdir "$case_dir/assets"
             cp "$SCRIPT_DIR/payload" "$case_dir/assets/$BINARY_NAME"
             cp "$CHECKSUMS_PATH" "$case_dir/assets/checksums.txt"
             export INSTALL_STAGED_ASSETS="$case_dir/assets"
-            [ "$scenario" != staged_corrupt ] || printf corrupt >> "$INSTALL_STAGED_ASSETS/$BINARY_NAME"
+            [ "$scenario" != fresh_disposable ] || export INSTALL_DISPOSABLE_ACQUISITION=true
+            if [ "$scenario" = fresh_disposable ]; then
+        assert 'disposable acquisition must not commit or register' test ! -e "$case_dir/registration-order"
+    fi
+    if [ -f "$case_dir/registration-order" ]; then
+        assert_output "$case_dir/native-generation/ClaudeNotifier.app" 'registration must target only the durable CLI result' cat "$case_dir/registrations"
+        assert_output "$(printf 'committed\nregistered')" 'registration must run exactly once after commit' cat "$case_dir/registration-order"
+    else
+        assert 'failed promotion must not register' test ! -e "$case_dir/registrations"
+    fi
+    [ "$scenario" != staged_corrupt ] || printf corrupt >> "$INSTALL_STAGED_ASSETS/$BINARY_NAME"
             # A staged main binary must not be fetched a second time or silently
             # skipped merely because the release server went offline afterward.
             download_binary() { echo 'unexpected binary download' >&2; return 97; }
@@ -199,7 +226,7 @@ PAYLOAD
     ) > "$case_dir/output" 2>&1 && status=0 || status=$?
     binary="$case_dir/claude-notifications-darwin-amd64"
     case "$scenario" in
-        staged|success|fresh_success|postcommit_manifest|optional_interrupt)
+        staged|success|fresh_success|fresh_disposable|codex_success|postcommit_manifest|optional_interrupt)
             "$binary" | grep -q new-version
             [ -x "$case_dir/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern" ]
             assert_output new-notifier 'attested modern notifier must be published' "$case_dir/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern"
@@ -214,7 +241,7 @@ PAYLOAD
     [ "$scenario" != staged_corrupt ] || assert 'corrupt staged binary must fail installation' test "$status" != 0
     [ "$scenario" != postcommit_manifest ] || assert 'promotion must not write a manifest after commit' test ! -e "$case_dir/postcommit-attempt"
     assert_output utility 'existing utility was not preserved' cat "$case_dir/sound-preview"
-    if [[ "$scenario" != fresh_* && "$scenario" != desktop && "$scenario" != *legacy* && "$scenario" != *fallback && "$scenario" != success && "$scenario" != staged && "$scenario" != postcommit_manifest && "$scenario" != optional_interrupt ]]; then
+    if [[ "$scenario" != fresh_* && "$scenario" != desktop && "$scenario" != *legacy* && "$scenario" != *fallback && "$scenario" != success && "$scenario" != staged && "$scenario" != postcommit_manifest && "$scenario" != optional_interrupt && "$scenario" != codex_success ]]; then
         assert_output old-notifier 'existing notifier was not preserved' "$case_dir/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern"
     fi
     if [ "$scenario" = failed_fallback ]; then
@@ -383,10 +410,18 @@ scenario=notifier_integrity
     }
     xattr() { :; }
     codesign() { [ "$signature" = valid ]; }
+    launch_services_register() { printf '%s\n' "$1" >> "$INSTALL_TARGET_DIR/registrations"; }
+    INSTALL_PRIVATE_DOWNLOAD=true
     MAX_RETRIES=1 RETRY_DELAY=0 signature=valid
     printf '%s  ClaudeNotifier.app.zip\n' "$archive_digest" > "$CHECKSUMS_PATH"
     download_terminal_notifier_modern
     [ -x "$SCRIPT_DIR/ClaudeNotifier.app/Contents/MacOS/terminal-notifier-modern" ]
+    assert 'private staged download must never register' test ! -e "$INSTALL_TARGET_DIR/registrations"
+    INSTALL_PRIVATE_DOWNLOAD=false
+    rm -rf "$SCRIPT_DIR/ClaudeNotifier.app" "$SCRIPT_DIR/ClaudeNotifier.app.managed-runtime.json"
+    download_terminal_notifier_modern
+    assert_output "$SCRIPT_DIR/ClaudeNotifier.app" 'durable direct download registers once' cat "$INSTALL_TARGET_DIR/registrations"
+    INSTALL_PRIVATE_DOWNLOAD=true
     rm -rf "$SCRIPT_DIR/ClaudeNotifier.app" "$SCRIPT_DIR/ClaudeNotifier.app.managed-runtime.json"
     for phase in checksum_mismatch checksum_missing checksum_duplicate signature_failure; do
         signature=valid

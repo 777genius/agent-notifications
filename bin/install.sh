@@ -1756,8 +1756,10 @@ download_terminal_notifier_modern() {
             rm -rf "$MODERN_APP"
             return 1
         fi
-        # Register with Launch Services
-        /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$MODERN_APP" 2>/dev/null || true
+        # Private downloads are not durable LaunchServices destinations.
+        if [ "${INSTALL_PRIVATE_DOWNLOAD:-false}" != true ]; then
+            launch_services_register "$MODERN_APP"
+        fi
         echo -e "${GREEN}✓${NC} ClaudeNotifier installed (modern notifications + click-to-focus)"
         return 0
     else
@@ -2306,6 +2308,11 @@ disposable_acquisition() {
     return 0
 }
 
+launch_services_register() {
+    [ -n "$1" ] || return 0
+    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$1" >/dev/null 2>&1 || true
+}
+
 stage_and_promote_runtime() (
     local live_dir="$SCRIPT_DIR"
     local live_binary="$BINARY_PATH"
@@ -2355,11 +2362,13 @@ stage_and_promote_runtime() (
         # consumer. setup-codex registers the durable runtime afterwards.
         copy_verified_stage "$stage" "$live_dir" || exit 1
     elif [ "${CN_PRODUCT:-claude}" = "codex" ] && [ "$PLATFORM" = "darwin" ]; then
-        "$BINARY_PATH" internal-install-runtime --refresh --stage "$stage" --target "$live_dir" --entry "$BINARY_NAME" --require-native || exit 1
+        native_path=$("$BINARY_PATH" internal-install-runtime --refresh --stage "$stage" --target "$live_dir" --entry "$BINARY_NAME" --require-native --print-native-path) || exit 1
+        launch_services_register "$native_path"
     elif [ "${CN_PRODUCT:-claude}" = "codex" ]; then
         "$BINARY_PATH" internal-install-runtime --refresh --stage "$stage" --target "$live_dir" --entry "$BINARY_NAME" || exit 1
     elif [ "$PLATFORM" = "darwin" ]; then
-        "$BINARY_PATH" internal-install-runtime --stage "$stage" --target "$live_dir" --entry "$BINARY_NAME" --require-native --relocate-versioned-cache || exit 1
+        native_path=$("$BINARY_PATH" internal-install-runtime --stage "$stage" --target "$live_dir" --entry "$BINARY_NAME" --require-native --relocate-versioned-cache --print-native-path) || exit 1
+        launch_services_register "$native_path"
     else
         "$BINARY_PATH" internal-install-runtime --stage "$stage" --target "$live_dir" --entry "$BINARY_NAME" --relocate-versioned-cache || exit 1
     fi
