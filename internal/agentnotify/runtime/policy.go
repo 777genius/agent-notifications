@@ -15,6 +15,7 @@ import (
 	"github.com/777genius/agent-notifications/internal/agentnotify/origin"
 	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/installruntime"
+	"github.com/777genius/agent-notifications/internal/notifier/nativeprotocol"
 	"github.com/777genius/agent-notifications/internal/strictjson"
 )
 
@@ -210,9 +211,13 @@ func navigationStatus(s Status, p agentnotify.Policy, o *origin.Context, platfor
 	if o == nil {
 		return no("unavailable", "context_unavailable")
 	}
-	n := origin.ResolveCodex(*o, p.Route).Navigation
+	target := origin.ResolveCodex(*o, p.Route)
+	n := target.Navigation
 	if n.Capability != "available" {
 		return no(n.Capability, n.Reason)
+	}
+	if !nativeprotocol.ValidDesktopThreadTarget(target.Desktop.ThreadID, target.Desktop.ApplicationPath, target.Desktop.TeamID) {
+		return no("unavailable", "invalid_target")
 	}
 	return agentnotify.NavigationStatus{Capability: "eligible", Precision: n.Precision, Scope: n.Scope, Reason: n.Reason}
 }

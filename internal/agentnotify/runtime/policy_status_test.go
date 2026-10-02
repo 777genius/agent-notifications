@@ -18,7 +18,7 @@ import (
 
 func TestStatusNavigationEligibility(t *testing.T) {
 	base := Status{ExplicitIntent: true, OfflineCapability: "eligible"}
-	policy := agentnotify.Policy{Delivery: notification.PolicySnapshot{ExplicitEnabled: true, DesktopEnabled: true, ClickToFocus: true}, Route: origin.RoutePolicy{LocalRouting: true, ApplicationPath: "/private/Codex.app", TeamID: "private-team"}}
+	policy := agentnotify.Policy{Delivery: notification.PolicySnapshot{ExplicitEnabled: true, DesktopEnabled: true, ClickToFocus: true}, Route: origin.RoutePolicy{LocalRouting: true, ApplicationPath: "/private/Codex.app", TeamID: "A1B2C3D4E5"}}
 	caller := origin.Context{Provider: "codex", Namespace: "mcp", SessionID: "private-thread", Provenance: origin.ClientMetadata, Locality: origin.Local, Interface: origin.Desktop}
 	for _, tc := range []struct {
 		name               string
@@ -35,6 +35,25 @@ func TestStatusNavigationEligibility(t *testing.T) {
 		{"application missing", func(_ *Status, p *agentnotify.Policy, _ *origin.Context) { p.Route.ApplicationPath = "" }, "unavailable", "application_unavailable"},
 		{"provider unsupported", func(_ *Status, _ *agentnotify.Policy, o *origin.Context) { o.Provider = "claude" }, "unavailable", "provider_unsupported"},
 		{"thread missing", func(_ *Status, _ *agentnotify.Policy, o *origin.Context) { o.SessionID = "" }, "unavailable", "invalid_origin"},
+		{"thread dot", func(_ *Status, _ *agentnotify.Policy, o *origin.Context) { o.SessionID = "." }, "unavailable", "invalid_target"},
+		{"thread parent", func(_ *Status, _ *agentnotify.Policy, o *origin.Context) { o.SessionID = ".." }, "unavailable", "invalid_target"},
+		{"thread line separator", func(_ *Status, _ *agentnotify.Policy, o *origin.Context) { o.SessionID = "thread\u2028id" }, "unavailable", "invalid_target"},
+		{"thread paragraph separator", func(_ *Status, _ *agentnotify.Policy, o *origin.Context) { o.SessionID = "thread\u2029id" }, "unavailable", "invalid_target"},
+		{"relative app", func(_ *Status, p *agentnotify.Policy, _ *origin.Context) { p.Route.ApplicationPath = "Codex.app" }, "unavailable", "invalid_target"},
+		{"unclean app", func(_ *Status, p *agentnotify.Policy, _ *origin.Context) {
+			p.Route.ApplicationPath = "/private/../Codex.app"
+		}, "unavailable", "invalid_target"},
+		{"wrong app suffix", func(_ *Status, p *agentnotify.Policy, _ *origin.Context) { p.Route.ApplicationPath = "/private/Codex" }, "unavailable", "invalid_target"},
+		{"app separator", func(_ *Status, p *agentnotify.Policy, _ *origin.Context) {
+			p.Route.ApplicationPath = "/private/Codex\u2028.app"
+		}, "unavailable", "invalid_target"},
+		{"short team", func(_ *Status, p *agentnotify.Policy, _ *origin.Context) { p.Route.TeamID = "ABC" }, "unavailable", "invalid_target"},
+		{"lowercase team", func(_ *Status, p *agentnotify.Policy, _ *origin.Context) { p.Route.TeamID = "a1B2C3D4E5" }, "unavailable", "invalid_target"},
+		{"punctuation team", func(_ *Status, p *agentnotify.Policy, _ *origin.Context) { p.Route.TeamID = "A1B2C3D4E-" }, "unavailable", "invalid_target"},
+		{"unicode and punctuation", func(_ *Status, p *agentnotify.Policy, o *origin.Context) {
+			o.SessionID = "thread-_:/.café🐈"
+			p.Route.ApplicationPath = "/Applications/Codex café.app"
+		}, "eligible", "configured_codex_desktop"},
 		{"hidden", func(_ *Status, _ *agentnotify.Policy, o *origin.Context) { o.Hidden = true }, "unavailable", "hidden_target"},
 		{"remote", func(_ *Status, _ *agentnotify.Policy, o *origin.Context) { o.Locality = origin.Remote }, "unavailable", "local_gui_unavailable"},
 		{"headless", func(_ *Status, _ *agentnotify.Policy, o *origin.Context) { o.Interface = origin.Headless }, "unavailable", "local_gui_unavailable"},
@@ -82,7 +101,7 @@ func TestContextualStatusReadsOnceWithoutEffectsOrIdentityDisclosure(t *testing.
 		ControlRoot: filepath.Join(root, "control"), JournalRoot: filepath.Join(root, "journal"), SpoolRoot: filepath.Join(root, "spool"), GlobalConfig: filepath.Join(root, "global"), BootClock: statusBoot{},
 		ReadSnapshot: func(context.Context, string) (installruntime.PolicySnapshot, error) {
 			reads++
-			return installruntime.PolicySnapshot{Installation: installruntime.InstalledSnapshot{Enabled: true, Ledger: installruntime.Ledger{Native: &installruntime.NativeRecord{DecoderFloor: 1}}}, Fields: map[string]json.RawMessage{"schemaVersion": json.RawMessage(`1`), "enabled": json.RawMessage(`true`), "route": json.RawMessage(`{"localRouting":true,"allowUnknownCaller":true,"applicationPath":"/private/Codex.app","teamID":"private-team"}`)}}, nil
+			return installruntime.PolicySnapshot{Installation: installruntime.InstalledSnapshot{Enabled: true, Ledger: installruntime.Ledger{Native: &installruntime.NativeRecord{DecoderFloor: 1}}}, Fields: map[string]json.RawMessage{"schemaVersion": json.RawMessage(`1`), "enabled": json.RawMessage(`true`), "route": json.RawMessage(`{"localRouting":true,"allowUnknownCaller":true,"applicationPath":"/private/Codex.app","teamID":"A1B2C3D4E5"}`)}}, nil
 		},
 		ReadGlobal: func(string) ([]byte, error) {
 			globals++
