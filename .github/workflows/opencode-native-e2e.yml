@@ -1,110 +1,106 @@
-name: OpenCode native webhook E2E
-
+name: OpenCode installed dual native E2E (qualification required)
 on:
   workflow_dispatch:
+    inputs:
+      evidence_url:
+        description: 'HTTPS parent evidence tar sealed after exact clean source checkout/build; no SDK copies or grants'
+        type: string
+        required: true
+      evidence_sha256:
+        description: 'Reviewed SHA256 of that immutable external evidence tar'
+        type: string
+        required: true
   pull_request:
     paths:
       - '.github/workflows/opencode-native-e2e.yml'
       - 'scripts/opencode-native-e2e.py'
+      - 'scripts/testdata/opencode-native-e2e/**'
       - 'scripts/opencode-private-root-windows.go'
       - 'cmd/claude-notifications/**'
       - 'internal/**'
       - 'opencode-plugin/**'
       - 'go.mod'
       - 'go.sum'
-
 permissions:
   contents: read
-
 jobs:
-  native-webhook:
-    name: OpenCode ${{ matrix.platform }} ${{ matrix.arch }}
-    runs-on: ${{ matrix.runner }}
+  native:
+    name: '${{ matrix.target.platform }}/${{ matrix.target.arch }} ${{ matrix.version }}'
+    runs-on: ${{ matrix.target.runner }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
+        version: ['1.18.33', '2.0.21']
+        target:
+          - {runner: ubuntu-22.04, platform: linux, arch: amd64}
+          - {runner: ubuntu-22.04-arm, platform: linux, arch: arm64}
+          - {runner: macos-15, platform: darwin, arch: arm64}
+          - {runner: macos-15-intel, platform: darwin, arch: amd64}
+          - {runner: windows-latest, platform: windows, arch: amd64}
         include:
-          - runner: macos-15
-            platform: darwin
-            arch: arm64
-            binary: claude-notifications-darwin-arm64
-            archive: opencode-darwin-arm64.zip
-          - runner: macos-15-intel
-            platform: darwin
-            arch: amd64
-            binary: claude-notifications-darwin-amd64
-            archive: opencode-darwin-x64.zip
-          - runner: ubuntu-22.04-arm
-            platform: linux
-            arch: arm64
-            binary: claude-notifications-linux-arm64
-            archive: opencode-linux-arm64.tar.gz
-          - runner: ubuntu-22.04
-            platform: linux
-            arch: amd64
-            binary: claude-notifications-linux-amd64
-            archive: opencode-linux-x64.tar.gz
-          - runner: windows-latest
-            platform: windows
-            arch: amd64
-            binary: claude-notifications-windows-amd64.exe
-            archive: opencode-windows-x64.zip
-
+          - version: '1.18.34'
+            target: {runner: ubuntu-22.04, platform: linux, arch: amd64}
+    env:
+      AN_EVIDENCE_URL: ${{ inputs.evidence_url }}
+      AN_EVIDENCE_SHA256: ${{ inputs.evidence_sha256 }}
+      AN_OS: ${{ matrix.target.platform }}
+      AN_ARCH: ${{ matrix.target.arch }}
+      AN_VERSION: ${{ matrix.version }}
     steps:
-      - name: Checkout exact candidate
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-
-      - name: Set up Go
-        uses: actions/setup-go@v7
-        with:
-          go-version: '1.26'
-
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-
-      - name: Install Linux build dependency
-        if: matrix.platform == 'linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
-
-      - name: Build native candidate and fetch exact OpenCode CLI
+      - uses: actions/setup-go@v7
+        with: {go-version: '1.27', cache: false}
+      - uses: actions/setup-node@v6
+        with: {node-version: '24.21.0'}
+      - uses: actions/setup-python@v7
+        with: {python-version: '3.12'}
+      - name: Initialize unqualified report before any fixture check
+        shell: bash
+        run: |
+          mkdir -p .task-tools/artifacts
+          python -c 'import json,pathlib; pathlib.Path(".task-tools/artifacts/native-report.json").write_text(json.dumps({"status":"unqualified","businessPhasesStarted":False,"firstFailedPrerequisite":"fixture_checks_not_completed"})+"\n")'
+      - name: Inert fixture parser checks
+        run: python -B scripts/testdata/opencode-native-e2e/test_fixture.py
+      - name: Linux build and private bus prerequisites
+        if: matrix.target.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev dbus iproute2
+      - name: Stage immutable external parent artifacts
+        id: parent
+        shell: bash
+        run: python -B scripts/testdata/opencode-native-e2e/ci_inputs.py --stage-evidence
+      - name: Verify exact source, clean build and bundle/SDK bytes before any host
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
-          CANDIDATE_BINARY: ${{ matrix.binary }}
-          OPENCODE_ARCHIVE: ${{ matrix.archive }}
+          AN_MANIFEST: ${{ steps.parent.outputs.manifest }}
+          AN_MANIFEST_SHA256: ${{ steps.parent.outputs.sha256 }}
+        run: python -B scripts/testdata/opencode-native-e2e/ci_inputs.py
+      - name: Preserve managed native and Windows path protocol checks
+        shell: bash
         run: |
           set -euo pipefail
-          mkdir -p candidate
-          CGO_ENABLED=1 go build -ldflags="-s -w" -trimpath -buildvcs=true -o "candidate/$CANDIDATE_BINARY" ./cmd/claude-notifications
-          gh release download v1.18.33 --repo anomalyco/opencode \
-            --pattern "$OPENCODE_ARCHIVE" --dir candidate
-
-      - name: Run isolated native OpenCode turns and revocation check
+          go test -count=1 ./internal/opencodeinstall -run 'Test.*(Native|Shortcut|Desktop)'
+      - name: Guard and execute exact reviewed installed fixture
         shell: bash
         env:
-          CANDIDATE_BINARY: ${{ matrix.binary }}
-          OPENCODE_ARCHIVE: ${{ matrix.archive }}
-          CANDIDATE_OS: ${{ matrix.platform }}
-          CANDIDATE_ARCH: ${{ matrix.arch }}
+          AN_MANIFEST: ${{ steps.parent.outputs.manifest }}
+          AN_MANIFEST_SHA256: ${{ steps.parent.outputs.sha256 }}
         run: |
           set -euo pipefail
-          python scripts/opencode-native-e2e.py \
-            --binary "candidate/$CANDIDATE_BINARY" \
-            --archive "candidate/$OPENCODE_ARCHIVE" \
-            --os "$CANDIDATE_OS" --arch "$CANDIDATE_ARCH" \
-            --report candidate/opencode-native-e2e.json
-
-      - name: Upload concise evidence
+          export AN_SUITE=smoke
+          if [ "$AN_OS/$AN_ARCH" = linux/amd64 ]; then export AN_SUITE=full; fi
+          if [ "$AN_OS" = linux ]; then
+            sudo --preserve-env=PATH,AN_MANIFEST,AN_MANIFEST_SHA256,AN_OS,AN_ARCH,AN_VERSION,AN_SUITE unshare --net -- bash -c 'ip link set lo up; python -B scripts/testdata/opencode-native-e2e/ci_inputs.py --execute'
+          else
+            python -B scripts/testdata/opencode-native-e2e/ci_inputs.py --execute
+          fi
+      - uses: actions/upload-artifact@v7
         if: always()
-        uses: actions/upload-artifact@v7
         with:
-          name: opencode-native-e2e-${{ matrix.platform }}-${{ matrix.arch }}
-          path: candidate/opencode-native-e2e.json
-          if-no-files-found: warn
+          name: opencode-native-${{ matrix.target.platform }}-${{ matrix.target.arch }}-${{ matrix.version }}
+          path: .task-tools/artifacts/native-report.json
+          if-no-files-found: error
           retention-days: 14
