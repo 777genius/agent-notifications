@@ -3324,7 +3324,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 )
 func main() {
 	if strings.Join(os.Args[1:], " ") == "plugin list --json" {
