@@ -55,9 +55,9 @@ jobs:
   windows-shell:
     name: Bootstrap shell on Windows
     runs-on: windows-2025
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-      - name: Qualify disposable Git Bash fixtures
+      - name: Qualify disposable Git Bash and HTTP fixtures
         shell: bash
-        run: bash bin/bootstrap_product_test.sh --unit-only
+        run: bash bin/bootstrap_product_test.sh

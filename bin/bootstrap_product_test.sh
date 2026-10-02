@@ -16,6 +16,16 @@ trap 'rm -rf "$SANDBOX"' EXIT
 test_env_setup "$SANDBOX"
 # test-env.sh inherits PATH: retain only named tools, never host agent binaries.
 mkdir -p "$SANDBOX/trusted-tools"
+# Native Python cannot CreateProcess a Bash wrapper on Windows. Keep the one
+# controller executable explicit while child PATH remains the finite allowlist.
+TEST_BOOTSTRAP_BASH=$(type -P bash)
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        [ ! -f "$TEST_BOOTSTRAP_BASH.exe" ] || TEST_BOOTSTRAP_BASH="$TEST_BOOTSTRAP_BASH.exe"
+        TEST_BOOTSTRAP_BASH=$(cygpath -w "$TEST_BOOTSTRAP_BASH")
+        ;;
+esac
+export TEST_BOOTSTRAP_BASH
 for tool in bash sh env cygpath python3 node curl wget tar gzip unzip zip mktemp rm cat cp mv chmod mkdir ln uname tr wc head cmp grep sed awk dirname basename find sort sha256sum shasum cut xargs sleep date stat diff touch readlink dd od go gcc cc pkg-config; do
     tool_path=$(type -P "$tool" 2>/dev/null || true)
     [ -z "$tool_path" ] || test_env_place_tool "$tool_path" "$SANDBOX/trusted-tools/$tool"
@@ -593,8 +603,9 @@ release_commits = {'v1.42.0': 'a' * 40, 'v1.43.0': 'b' * 40, 'v2.0.0': 'c' * 40}
 (web / 'commits').mkdir()
 for tag, commit in release_commits.items():
     (web / 'commits' / tag).write_text(commit)
-uname_os=subprocess.check_output(['uname','-s'],text=True).strip().lower()
-uname_arch=subprocess.check_output(['uname','-m'],text=True).strip().lower()
+bash = os.environ['TEST_BOOTSTRAP_BASH']
+uname_os=subprocess.check_output([bash,'-c','uname -s'],text=True).strip().lower()
+uname_arch=subprocess.check_output([bash,'-c','uname -m'],text=True).strip().lower()
 asset_os='windows' if uname_os.startswith(('mingw','msys','cygwin')) else uname_os
 asset_arch='arm64' if uname_arch in ('arm64','aarch64') else 'amd64'
 asset_name='claude-notifications-'+asset_os+'-'+asset_arch+('.exe' if asset_os=='windows' else '')
@@ -800,7 +811,7 @@ env = {key: os.environ[key] for key in env_keys if key in os.environ}
 env.update(BOOTSTRAP_LATEST_RELEASE_API_URL=base+'/latest', BOOTSTRAP_COMMIT_API_BASE_URL=base+'/commits', BOOTSTRAP_RAW_BASE_URL=base+'/raw', BOOTSTRAP_RAW_CONTENT_URL=base+'/raw', BOOTSTRAP_SOURCE_BASE_URL=base, BOOTSTRAP_RELEASES_BASE_URL=base)
 cli = sandbox / 'clis'; cli.mkdir()
 (cli / 'codex').write_bytes(b'#!/bin/sh\nexit 99\n'); (cli / 'codex').chmod(0o755)
-bash = shutil.which('bash'); assert bash
+assert pathlib.Path(bash).is_file(), 'fixture controller Bash must exist'
 env['PATH'] = str(cli) + os.pathsep + (os.environ['PATH'] if os.name == 'nt' else '/usr/bin:/bin')
 script = str(root / 'bin/bootstrap.sh')
 def run(args, expected=0, extra=None):
@@ -811,7 +822,7 @@ def run(args, expected=0, extra=None):
         # Killing only Bash leaves curl/helper children holding the output pipe,
         # so subprocess.run's timeout cleanup can itself wait indefinitely.
         if os.name == 'nt':
-            subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)],
+            subprocess.run([str(pathlib.Path(os.environ['SystemRoot'])/'System32/taskkill.exe'), '/F', '/T', '/PID', str(process.pid)],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
         else:
             os.killpg(process.pid, signal.SIGKILL)
@@ -927,9 +938,7 @@ def path_ids(values):
 def native_shell_path(value):
     if os.name != 'nt':
         return value
-    cygpath=shutil.which('cygpath')
-    assert cygpath, 'native Windows fixture requires cygpath'
-    return subprocess.check_output([cygpath,'-w',value],text=True).strip()
+    return subprocess.check_output([bash,'-c','cygpath -w "$1"','_',value],text=True).strip()
 def reset_case():
     # Every directory is an explicit child of this fixture, never host state.
     for key in ['HOME','XDG_CONFIG_HOME','CODEX_HOME','CLAUDE_CONFIG_DIR']:
