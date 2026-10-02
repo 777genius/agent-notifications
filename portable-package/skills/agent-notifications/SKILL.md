@@ -11,6 +11,12 @@ A normal "notify me when done" request does not ask for an extra alert on top of
 Send a completion alert only when completion hooks are known disabled or unavailable (for example, an explicit MCP-only installation), or the user explicitly requests an additional separate alert.
 Unknown hook state is not evidence of absence; `notification_status` does not report hook state.
 
+In Codex Desktop, leave native questions (`request_user_input`, `request_user_input_async`) and approval/permission prompts to the app's notification flow. Do not call `notify` for the same event before opening the prompt, while waiting for the response, or after it closes. This also covers permission to call `notify` itself.
+
+Do not relabel the same native prompt as a blocker, milestone, `progress`, or `info` to send an extra alert. A general instruction to notify when attention is needed does not request a duplicate; only an explicit request for an additional separate alert does.
+
+Apply this rule without checking whether a banner appeared. Unknown native notification settings or delivery are not evidence that a fallback alert is needed; `notification_status` does not report them. Separate in-progress milestones and blockers without a native question/approval prompt may still use `notify`.
+
 Notify during ongoing work when an actionable question, a blocker requiring the user's help, or a useful milestone warrants it, including an unresolved blocker when work pauses. If a known hook covers the same question or approval event, do not duplicate it. Continue the task after the MCP call when possible. Include the task name in a short title and make the body useful without exposing credentials or private source text on the lock screen. Do not send an alert for every internal step, poll, or notification result.
 
 Choose `attention` for needed user input, `progress` for an intermediate milestone, and `info` for an informational result. Sending a notification does not mean the task is complete.
