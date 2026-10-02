@@ -318,9 +318,10 @@ func TestInstallRuntimeRefreshPrintNativePathRefusesInvalidState(t *testing.T) {
 				if err := os.Rename(f.ledger.Native.Path, old); err != nil {
 					t.Fatal(err)
 				}
-				if damage == "native-inode" {
+				switch damage {
+				case "native-inode":
 					writeRuntimePathFile(t, filepath.Join(f.ledger.Native.Path, "Contents", "MacOS", "terminal-notifier-modern"), []byte("inert native"), 0700)
-				} else if damage == "native-symlink" {
+				case "native-symlink":
 					if err := os.Symlink(old, f.ledger.Native.Path); err != nil {
 						t.Fatal(err)
 					}
