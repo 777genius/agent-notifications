@@ -38,6 +38,8 @@ jobs:
           git archive 27ea07236aa5ce7f939d8bd153c2a1ae19f99c1c | tar -x -C "$sandbox/baseline"
           cp bin/e2e_backoff_test.sh "$sandbox/baseline/bin/"
           cp internal/installruntime/renumber_e2e{,_darwin}_test.go "$sandbox/baseline/internal/installruntime/"
+          # The fixed historical baseline retains its own pinned dependency versions.
+          (cd "$sandbox/baseline"; go mod download; go mod verify)
           printf 'RECOVERY_SANDBOX=%s\n' "$sandbox" >> "$GITHUB_ENV"
       - name: Focused Go and shell integration (offline, isolated)
         shell: bash
