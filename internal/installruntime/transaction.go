@@ -833,11 +833,26 @@ func recoverTransaction(ctx context.Context, root string, current Ledger, tx tra
 			return fmt.Errorf("recovery conflict; preserving foreign edit: %s", f.Path)
 		}
 	}
-	// A policy-only replay has no native promotion to validate. Check its
-	// detached after-image before publishing policy, unless the persisted
-	// mutation proves the same bounded revocation accepted by Commit.
+	// Without a native promotion, replay must still prove the active callback
+	// before publishing policy. Identity refresh permits missing paths and does
+	// not check bytes. Only a proven bounded revocation may bypass this.
 	preserveNative := boundedPolicyRevocation(root, tx)
 	if tx.Native == nil && !preserveNative {
+		if native := tx.After.Native; native != nil {
+			if err := validateNativeRecord(native); err != nil {
+				return err
+			}
+			if err := checkNativeDirectoryID(native.Path, native.DirectoryID); err != nil {
+				return err
+			}
+			digest, err := treeFingerprint(native.Path)
+			if err != nil {
+				return err
+			}
+			if digest == "" || digest != native.SHA256 {
+				return fmt.Errorf("native live fingerprint conflict")
+			}
+		}
 		if _, err := refreshLedgerIdentities(tx.After); err != nil {
 			return err
 		}

@@ -117,6 +117,37 @@ func installRuntime(args []string, output io.Writer) error {
 		}
 		files = changed
 		if len(files) == 0 {
+			if *printNativePath {
+				root := *control
+				if root == "" {
+					root, err = installruntime.ControlRoot()
+					if err != nil {
+						return err
+					}
+				}
+				// Observe retained ownership without committing or adopting utilities.
+				snapshot, err := installruntime.ReadInstalledSnapshot(root)
+				if err != nil {
+					return err
+				}
+				if snapshot.Recovery {
+					return installruntime.ErrPolicyRecovery
+				}
+				ledger := snapshot.Ledger
+				if ledger.ID != "" && ledger.Owner != "existing-installer" {
+					return fmt.Errorf("component owned by %s at %s; explicit takeover required", ledger.Owner, ledger.RuntimeRoot)
+				}
+				if ledger.Native != nil {
+					root, err = installruntime.CanonicalPath(root)
+					if err != nil {
+						return err
+					}
+					if ledger.Native.Path != filepath.Clean(ledger.Native.Path) || filepath.Dir(ledger.Native.Path) != filepath.Join(root, "native") {
+						return fmt.Errorf("native owner outside persistent directory")
+					}
+				}
+				return printRuntimeNativePath(output, ledger)
+			}
 			return nil
 		}
 	}
@@ -296,17 +327,21 @@ func installRuntime(args []string, output io.Writer) error {
 	ledger, err := installruntime.Commit(ctx, req)
 	if err == nil {
 		if *printNativePath {
-			path := ""
-			if ledger.Native != nil {
-				path = ledger.Native.Path
-			}
-			_, err = fmt.Fprintln(output, path)
-			return err
+			return printRuntimeNativePath(output, ledger)
 		}
 		_, _ = fmt.Fprintf(output, "managed-runtime committed generation=%d\n", ledger.Generation)
 		if *purge {
 			_, _ = fmt.Fprintln(output, "Callback entrypoint purge completed; pending notifications may no longer open targets. Running callbacks are not stopped.")
 		}
 	}
+	return err
+}
+
+func printRuntimeNativePath(output io.Writer, ledger installruntime.Ledger) error {
+	path := ""
+	if ledger.Native != nil {
+		path = ledger.Native.Path
+	}
+	_, err := fmt.Fprintln(output, path)
 	return err
 }
