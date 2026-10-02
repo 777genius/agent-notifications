@@ -81,10 +81,12 @@ For the future Gemini-compatible release, the planned selectors are `--product g
 On a release with the portable setup wizard, the public installer also installs an MCP server
 and the `agent-notifications` skill for each selected client. In a new Claude Code or Codex session,
 the agent can call `notify` while it is still working, for example when input is needed.
-For an informational alert, explicitly pass `navigation: "none"`; that alert does not open
-the exact chat when clicked. Hooks still handle their own client events. Use
-`--skip-agent-notify` for hooks only. `notification_status` reads configuration but does not
-prove that the desktop displayed a banner. OS notification permission, client activation,
+Check `notification_status` for this chat first. When `navigation.capability` is `eligible`,
+prefer `navigation: "required"` for task-related alerts, including informational ones.
+Use `none` or `best_effort` only when returning to the chat is optional; never silently
+downgrade a required return. Leave routine completion alerts to hooks to avoid duplicates.
+Use `--skip-agent-notify` for hooks only. Status reports configuration and caller-context
+eligibility; it does not prove that a banner appeared or the chat opened. OS permission, client activation,
 and a visible test notification are separate checks.
 Automatic updates preserve an absent MCP client when another selected client is installed;
 use explicit `--agent-notify` to add that client later.
