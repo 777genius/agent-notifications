@@ -429,21 +429,28 @@ func Run(opts Options) (Result, error) {
 	prepare := func() ([]installruntime.File, error) {
 		snapshot, _ := installruntime.ReadInstalledSnapshot(opts.ControlRoot)
 		var extra []installruntime.File
-		for _, file := range files {
-			if file.Path != filepath.Join(destination, "skills", "agent-notifications", "SKILL.md") {
-				continue
-			}
-			legacy := filepath.Join(destination, "skills", "agent-notify", "SKILL.md")
-			before, err := installruntime.Fingerprint(legacy)
-			if err != nil {
-				return nil, err
-			}
-			if before.Exists {
-				owned, ok := installruntime.OwnedFile(snapshot.Ledger, legacy)
-				if snapshot.Recovery || !ok || before.Link != "" || owned != before {
-					return nil, fmt.Errorf("legacy skill is not an unchanged owned regular file: %s", legacy)
+		for _, skillRoot := range []string{filepath.Join(destination, "skills"), filepath.Join(destination, "portable-package", "skills")} {
+			for _, file := range files {
+				var sibling string
+				switch file.Path {
+				case filepath.Join(skillRoot, "agent-notifications", "SKILL.md"):
+					sibling = filepath.Join(skillRoot, "agent-notify", "SKILL.md")
+				case filepath.Join(skillRoot, "agent-notify", "SKILL.md"):
+					sibling = filepath.Join(skillRoot, "agent-notifications", "SKILL.md")
+				default:
+					continue
 				}
-				extra = append(extra, installruntime.File{Path: legacy, Before: before, Remove: true})
+				before, err := installruntime.Fingerprint(sibling)
+				if err != nil {
+					return nil, err
+				}
+				if before.Exists {
+					owned, ok := installruntime.OwnedFile(snapshot.Ledger, sibling)
+					if snapshot.Recovery || !ok || before.Link != "" || owned != before {
+						return nil, fmt.Errorf("sibling skill is not an unchanged owned regular file: %s", sibling)
+					}
+					extra = append(extra, installruntime.File{Path: sibling, Before: before, Remove: true})
+				}
 			}
 		}
 		for p := range snapshot.Ledger.Files {
@@ -768,14 +775,16 @@ func stageRuntimeFiles(source, destination string) ([]installruntime.File, error
 	if err != nil {
 		return nil, err
 	}
-	skillCount := 0
-	for _, file := range files {
-		if file.Path == filepath.Join(destination, "skills", "agent-notifications", "SKILL.md") || file.Path == filepath.Join(destination, "skills", "agent-notify", "SKILL.md") {
-			skillCount++
+	for _, skillRoot := range []string{filepath.Join(destination, "skills"), filepath.Join(destination, "portable-package", "skills")} {
+		skillCount := 0
+		for _, file := range files {
+			if file.Path == filepath.Join(skillRoot, "agent-notifications", "SKILL.md") || file.Path == filepath.Join(skillRoot, "agent-notify", "SKILL.md") {
+				skillCount++
+			}
 		}
-	}
-	if skillCount > 1 {
-		return nil, fmt.Errorf("bundle contains both canonical and legacy skills")
+		if skillCount > 1 {
+			return nil, fmt.Errorf("bundle contains both canonical and legacy skills: %s", skillRoot)
+		}
 	}
 	return files, nil
 }
