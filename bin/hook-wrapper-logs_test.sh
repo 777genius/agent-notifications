@@ -90,8 +90,8 @@ assert logs(cache) == saved
 # Expiring the real failed claim permits a new independent attempt/log, while
 # the existing failure stamp still suppresses a repeated notification.
 claims = list((cache / 'claude-notifications-go').glob('install-backoff-*/active'))
-assert len(claims) == 1 and claims[0].is_symlink()
-owner = claims[0].parent / os.readlink(claims[0])
+assert len(claims) == 1 and claims[0].is_dir() and not claims[0].is_symlink()
+owner = claims[0]
 assert (owner / 'failed').is_file()
 os.utime(owner, (946684800, 946684800))
 retried = invoke(plugin, cache)
@@ -194,7 +194,7 @@ repaired = invoke(plugin, cache)
 assert repaired.stdout == repaired.stderr == b''
 assert len(logs(cache)) == 2
 assert not (cache / 'claude-notifications-go/install-failed-1.42.0').exists(), (repaired, (plugin / 'bin/claude-notifications').read_bytes())
-assert not claims[0].is_symlink()
+assert not claims[0].exists()
 (plugin / 'bin/claude-notifications').unlink()
 script.write_text('#!/bin/sh\n# agent-notifications-managed-writer-protocol-v1\necho "Error: failed again"; exit 9\n', newline='\n')
 assert 'failed again' in json.loads(invoke(plugin, cache).stdout)['systemMessage']
@@ -202,34 +202,34 @@ assert len(logs(cache)) == 3
 # A later successful hook installation removes its own temporary log and keeps
 # every complete failure log. Recovery clears both the claim and failure stamp.
 failure_logs = {log: log.read_bytes() for log in logs(cache)}
-owner = claims[0].parent / os.readlink(claims[0])
+owner = claims[0]
 assert (owner / 'failed').is_file()
 os.utime(owner, (946684800, 946684800))
 script.write_text(repair_script, newline='\n')
 recovered = invoke(plugin, cache)
 assert recovered.stdout == recovered.stderr == b''
 assert {log: log.read_bytes() for log in logs(cache)} == failure_logs
-assert not claims[0].is_symlink()
+assert not claims[0].exists()
 assert not (cache / 'claude-notifications-go/install-failed-1.42.0').exists()
 
-# A broken cache or mktemp must never stop the installer or expose its raw output.
+# Cache/claim failures suppress installation without exposing raw output.
 no_log = fixture('no-log', 'echo ran >> "$ROOT/ran"; echo "Error: raw installer output"; exit 8\n')
 unusable = root / 'not-a-directory'
 unusable.write_text('occupied')
 fallback = invoke(no_log, unusable)
-assert (root / 'ran').read_text() == 'ran\n'
-assert not fallback.stderr
-assert 'status 8' in json.loads(fallback.stdout)['systemMessage']
+assert not (root / 'ran').exists()
+assert fallback.stdout == fallback.stderr == b''
 (stub / 'mktemp').write_text('#!/bin/sh\nexit 1\n', newline='\n')
 (stub / 'mktemp').chmod(0o700)
 fallback = invoke(no_log, root / 'mktemp-failure', 'codex')
-assert (root / 'ran').read_text() == 'ran\nran\n'
+assert not (root / 'ran').exists()
 assert fallback.stdout == fallback.stderr == b''
 # A successful mktemp followed by a failed log open must invoke the installer once.
 (root / 'log-is-directory').mkdir()
-(stub / 'mktemp').write_text('#!/bin/sh\nprintf "%s\\n" "$ROOT/log-is-directory"\n', newline='\n')
+real_mktemp = shutil.which('mktemp')
+(stub / 'mktemp').write_text('#!/bin/sh\ncase "$*" in *install-1.42.0-*) printf "%s\\n" "$ROOT/log-is-directory";; *) exec '+real_mktemp+' "$@";; esac\n', newline='\n')
 fallback = invoke(no_log, root / 'open-failure')
-assert (root / 'ran').read_text() == 'ran\nran\nran\n'
+assert (root / 'ran').read_text() == 'ran\n'
 assert not fallback.stderr and 'status 8' in json.loads(fallback.stdout)['systemMessage']
 (stub / 'mktemp').unlink()
 # A usable older Claude binary keeps diagnostics on stderr, including the reason.

@@ -60,10 +60,10 @@ echo fixture-release-request >> "$CASE_ROOT/downloads"
 {
     printf 'installer=%s parent=%s\n' "$$" "$PPID"
     while IFS= read -r active; do
-        owner=$(readlink "$active" || true)
+        owner=$(cat "$active/owner" 2>/dev/null || true)
         printf 'active=%s owner=%s pid=' "$active" "$owner"
-        cat "$(dirname "$active")/$owner/pid" 2>/dev/null || true
-    done < <(find "$CASE_ROOT/cache" -type l -name active 2>/dev/null)
+        head -n 1 "$active/installer" 2>/dev/null || true
+    done < <(find "$CASE_ROOT/cache" -type d -name active 2>/dev/null)
 } > "$CASE_ROOT/install-start.$$"
 if [ "${HOLD:-0}" = 1 ]; then
     : > "$CASE_ROOT/entered"
@@ -105,13 +105,12 @@ claim() {
     printf '%s/install-backoff-1.42.0-%s' "$stamp" "$key"
 }
 age_claims() {
-    # Only physical, owned attempt directories; active is a symlink. Touching
-    # the namespace alone would leave the actual cooldown unchanged.
+    # Only physical active directories carry the cooldown timestamp.
     local path
     case "$CASE_ROOT" in "$root"/*) ;; *) return 1;; esac
     while IFS= read -r path; do
         touch -t "$1" "$path"
-    done < <(find "$CASE_ROOT/cache" -type d -name 'attempt.*' -path '*/install-backoff-*/*')
+    done < <(find "$CASE_ROOT/cache" -type d -name active -path '*/install-backoff-*/*')
 }
 no_active_claim() {
     local path; path=$(claim)
@@ -152,7 +151,7 @@ concurrent_expiration() {
     parallel_hooks
     echo "fresh concurrency: $(lines "$CASE_ROOT/attempts") installs (expected 1)"
     [ "$(lines "$CASE_ROOT/attempts")" = 1 ] || failures=1
-    [ "$(find "$CASE_ROOT/cache" -type d -name 'attempt.*' | wc -l | tr -d ' ')" -ge 1 ] || failures=1
+    [ "$(find "$CASE_ROOT/cache" -type d -name active | wc -l | tr -d ' ')" -ge 1 ] || failures=1
     # Exercise every expiry even if the fresh window failed, preserving both
     # the cumulative bound and the independent one-run bound for each window.
     for round in 1 2 3; do
@@ -187,10 +186,10 @@ active_claim() {
     while [ ! -e "$CASE_ROOT/entered" ]; do n=$((n+1)); [ "$n" -lt 1000 ] || return 1; sleep 0.02; done
     # An active owner must survive wall-clock skew/expiration of its pathname.
     age_claims 200001010000
-    local attempt_before; attempt_before=$(readlink "$(claim)/active" || true)
+    local attempt_before; attempt_before=$(cat "$(claim)/active/owner" 2>/dev/null || true)
     for i in $(seq 1 20); do hook "active-$i" & done
     sleep 1
-    local attempt_after; attempt_after=$(readlink "$(claim)/active" || true)
+    local attempt_after; attempt_after=$(cat "$(claim)/active/owner" 2>/dev/null || true)
     : > "$CASE_ROOT/release-barrier"
     wait "$owner"
     wait
@@ -227,9 +226,9 @@ bad_claims() {
             empty) mkdir "$path"; touch -t 200001010000 "$path";;
         esac
         hook 1; hook 2
-        # A corrupt namespace cannot store a cooldown. Both hooks must fall
-        # back to installation rather than suppressing an unowned claim.
-        local expected=1; [ "$kind" = empty ] || expected=2
+        # An unknown namespace suppresses mutation; a future failed timestamp
+        # and an empty namespace still admit one properly claimed retry.
+        local expected=1; [ "$kind" != future ] || expected=2; [ "$kind" != file ] || expected=0
         echo "bad claim $kind: $(lines "$CASE_ROOT/attempts") installs (expected $expected)"
         [ "$(lines "$CASE_ROOT/attempts")" = "$expected" ] || return 1
     done
@@ -238,7 +237,7 @@ cache_unwritable() {
     fixture cache-unwritable
     rmdir "$CASE_ROOT/cache"; echo blocked > "$CASE_ROOT/cache"
     hook 1; hook 2
-    [ "$(lines "$CASE_ROOT/attempts")" = 2 ]
+    [ "$(lines "$CASE_ROOT/attempts")" = 0 ]
     [ "$(lines "$CASE_ROOT/dispatches")" = 2 ]
 }
 manual_repair() {
