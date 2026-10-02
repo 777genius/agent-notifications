@@ -21,7 +21,7 @@ REPO = '777genius/agent-notifications'
 def run(args, **kwargs):
     result = subprocess.run(args, text=True, capture_output=True, timeout=180, **kwargs)
     if result.returncode:
-        raise RuntimeError(f'{args[0]} failed ({result.returncode}): {result.stderr[-3000:]}')
+        raise RuntimeError(f'{args[0]} failed ({result.returncode}): {result.stdout[-3000:]}\n{result.stderr[-3000:]}')
     return result.stdout
 
 

@@ -20,7 +20,8 @@ on:
         default: v1.46.1
         required: true
 permissions:
-  contents: read
+  # GitHub hides draft releases from read-only tokens; no mutation calls are used.
+  contents: write
 jobs:
   package-e2e:
     name: Prerelease ${{ matrix.os }} ${{ matrix.arch }}
