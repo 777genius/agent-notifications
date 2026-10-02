@@ -14,6 +14,11 @@ set -eu
 # Release and join only our fixture hooks before the outer sandbox cleanup.
 trap ': > "$ROOT/release-install"; for pid in ${pids:-}; do wait "$pid" || true; done' EXIT
 cd "$ROOT"
+# Git Bash defaults to copying ln -s targets; this POSIX claim fixture
+# requires real links. Scope native symlink mode to the disposable child.
+case "$(uname -s)" in
+ MINGW*|MSYS*|CYGWIN*) export MSYS="${MSYS:+$MSYS }winsymlinks:nativestrict" ;;
+esac
 # This fixture exercises the POSIX shared wrapper on every CI host. Native
 # commandWindows execution is covered by the Go setup E2E separately.
 printf '#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo x86_64;; esac\n' > stubs/uname
