@@ -7,13 +7,13 @@ not provide Claude's plan/review events, contextual messages or sound controls.
 
 The dual-API release candidate uses **one installed plugin** for OpenCode V1 and
 [V2](https://opencode.ai/v2/docs): V1 calls `server`, V2 calls `setup`. Native
-qualification targets are **1.18.33, 2.0.0 and 2.0.21**. The candidate installer
+qualification targets are **1.18.33, 1.18.34 and 2.0.21**. The candidate installer
 accepts stable V1 >= 1.18.29 and V2 >= 2.0.0; this range does not qualify every
 release. Prereleases and unknown future API generations are rejected.
 Setup installs notifications, never OpenCode itself, and does not start an agent session.
 
 **Publication pending:** this candidate requires the separately reviewed
-`universal-agent-plugins-opencode-events@0.2.0` package. Qualification consumes its
+`universal-agent-plugins-opencode-events@0.3.0` package. Qualification consumes its
 exact local tarball; publishing that package and validating a clean registry install
 are separate release steps. These changes do not upgrade an existing installation.
 
@@ -30,9 +30,10 @@ service or Windows toasts. Linux needs an available desktop session/D-Bus servic
 - V1 native lifecycle/webhook checks passed on all five targets. Headless CI does
   not establish visible macOS Intel, Linux ARM64 or Windows banners, or universal
   compatibility with every desktop environment.
-- V2 semantic qualification is Linux amd64. The native workflow adds 2.0.21
-  artifact/install/spawn/update/remove checks on those five targets; adding the
-  lanes is not evidence that they have passed. V2 visible banners are not claimed.
+- Retained V2 native completion observations provide corroboration, but full
+  current-candidate qualification remains pending. Installed lifecycle and delivery
+  qualification are still owed on the native targets; workflow lanes alone do not
+  establish that they passed. V2 visible banners are not claimed.
 
 ## Dual candidate evidence boundary
 

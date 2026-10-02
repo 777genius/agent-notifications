@@ -510,7 +510,12 @@ def run_version(root, version, args, helper, helper_sha, manifest_sha, ownership
                 need(isinstance(info, dict) and info.get('version') == version and
                      (info.get('pid') == host['p'].pid if v2 else info.get('healthy') is True), 'native_health_identity_mismatch')
                 break
-            except urllib.error.HTTPError: raise
+            except urllib.error.HTTPError as error:
+                if not v2 or error.code != 503: raise
+                # Pinned V2 /api/info returns Retry-After:1 while starting/stopping.
+                # This is readiness polling only; never reset its original deadline.
+                error.close()
+                time.sleep(min(1, max(0, deadline - time.monotonic())))
             except (OSError, urllib.error.URLError): time.sleep(.05)
         else: raise RuntimeError('native_readiness_deadline')
         # These read-only public location ports are input-proved by the Linux P0 source fixture.

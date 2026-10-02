@@ -575,15 +575,49 @@ def ordinary_projection(history, candidates, session, error, aborted):
     return False
 
 
+def typed_message_page(answer):
+    # Native cursors identify FIRST/LAST, not whether another page exists.
+    # A full limit200 page cannot prove completeness for this fresh TEST read.
+    require(isinstance(answer,dict) and set(answer)=={'data','cursor'} and isinstance(answer['data'],list)
+            and len(answer['data'])<200 and isinstance(answer['cursor'],dict), 'typed_message_page_incomplete_or_invalid')
+    rows,cursor=answer['data'],answer['cursor']
+    require(all(isinstance(row,dict) and isinstance(row.get('id'),str) and row['id'] for row in rows)
+            and len({row['id'] for row in rows})==len(rows), 'typed_message_page_identity')
+    if not rows:
+        require(cursor=={}, 'typed_message_empty_cursor')
+        return rows
+    require(set(cursor)=={'previous','next'}, 'typed_message_boundary_cursors')
+    def unique(pairs):
+        value={}
+        for key,item in pairs:
+            require(key not in value, 'typed_message_cursor_encoding')
+            value[key]=item
+        return value
+    def invalid_constant(value):
+        raise Unqualified('typed_message_cursor_encoding')
+    for direction,row in [('previous',rows[0]),('next',rows[-1])]:
+        value=cursor[direction]
+        require(isinstance(value,str) and 0<len(value)<=1024 and re.fullmatch('[A-Za-z0-9_-]+',value),
+                'typed_message_cursor_encoding')
+        try:
+            raw=base64.b64decode(value+'='*((-len(value))%4),altchars=b'-_',validate=True)
+            require(base64.urlsafe_b64encode(raw).decode().rstrip('=')==value, 'typed_message_cursor_encoding')
+            decoded=json.loads(raw.decode('utf-8'),object_pairs_hook=unique,parse_constant=invalid_constant)
+        except Unqualified:
+            raise
+        except Exception as error:
+            raise Unqualified('typed_message_cursor_encoding') from error
+        require(decoded=={'id':row['id'],'order':'asc','direction':direction}, 'typed_message_cursor_boundary')
+    return rows
+
+
 def read_history(base, project, enc, v2, headers):
     if not v2:
         return data(request(base,project,'/session/'+enc+'/message',auth_headers=headers))
     # PublicSessionMessage is typed and has no per-message sessionID/role/parentID.
     # The route binds the session. A finite fresh fixture must fit its bounded page.
     answer = request(base,project,'/api/session/'+enc+'/message?limit=200&order=asc',v2=True,auth_headers=headers)
-    require(isinstance(answer,dict) and set(answer)=={'data','cursor'} and isinstance(answer['data'],list)
-            and isinstance(answer['cursor'],dict) and not answer['cursor'], 'typed_message_page_incomplete_or_invalid')
-    return answer['data']
+    return typed_message_page(answer)
 
 
 def v2_ordinary_projection(history, native, sid, name):
