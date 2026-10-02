@@ -62,16 +62,14 @@ enum StructuredNotificationContent {
 
 enum StructuredRuntime {
     static func requestPermission(arguments: [String]) -> Never {
+        // This direct child belongs to the installer and ends with its IPC result.
+        // It must not acquire click work that could outlive the parent timeout.
         // Parse completely before AppKit or UN access, even for mixed modes.
         guard let request = try? PermissionSetupRequest(arguments: arguments) else { exit(1) }
         let deadline = ContinuousClock.now() + 120
-        var finish: ((Int32) -> Void)?
-        var timer: Timer?
         let setup = PermissionSetup(request: request, expired: { ContinuousClock.now() >= deadline }) { data in
             FileHandle.standardOutput.write(data)
-            timer?.invalidate()
-            if let finish = finish { finish(0) }
-            else { exit(0) }
+            exit(0)
         }
         guard let identifier = Bundle.main.bundleIdentifier, !identifier.isEmpty,
               Bundle.main.bundleURL.pathExtension == "app",
@@ -81,15 +79,12 @@ enum StructuredRuntime {
         }
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
-        let appDelegate = AppDelegate.install(on: app)
-        finish = appDelegate.lifecycle.beginOperation()
         // Continuous time also bounds suspension. The deadline does not cancel
         // an OS authorization UI already dispatched, or prove its grant outcome.
-        let deadlineTimer = Timer(timeInterval: 0.1, repeats: true) { _ in
+        let timer = Timer(timeInterval: 0.1, repeats: true) { _ in
             if ContinuousClock.now() >= deadline { setup.timeout() }
         }
-        timer = deadlineTimer
-        RunLoop.main.add(deadlineTimer, forMode: .common)
+        RunLoop.main.add(timer, forMode: .common)
         DispatchQueue.main.async {
             setup.start(settings: { completion in
                 UNUserNotificationCenter.current().getNotificationSettings { settings in
@@ -101,7 +96,7 @@ enum StructuredRuntime {
                 }
             }, timer: { _ in /* Main run loop timer installed before work dispatch. */ })
         }
-        withExtendedLifetime((setup, appDelegate)) { app.run() }
+        withExtendedLifetime(setup) { app.run() }
         exit(1)
     }
 

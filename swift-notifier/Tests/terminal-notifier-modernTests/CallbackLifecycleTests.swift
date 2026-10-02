@@ -116,6 +116,84 @@ final class CallbackLifecycleTests: XCTestCase {
         XCTAssertEqual(owner.exitCode, ExitCode.success)
     }
 
+    func testBackgroundDelegateIngressPreventsExitBeforeMainQueueAcceptance() {
+        XCTAssertTrue(Thread.isMainThread)
+        var events: [String] = []
+        var callbackDone: ((CallbackOutcome) -> Void)?
+        let accepted = expectation(description: "callback accepted on main")
+        let enqueued = DispatchSemaphore(value: 0)
+        let owner = CallbackLifecycle(schedule: { _, _ in }, exit: { events.append("exit") })
+        let finish = owner.beginOperation()
+        DispatchQueue.global().async {
+            XCTAssertFalse(Thread.isMainThread)
+            owner.dispatchIngress(completion: { XCTFail("ingress rejected before operation finished") }) {
+                XCTAssertTrue(Thread.isMainThread)
+                owner.accept(completion: { events.append("callback") }) { done, _ in callbackDone = done }
+                accepted.fulfill()
+            }
+            enqueued.signal()
+        }
+        // Keep main occupied until the delegate has queued its work, then finish
+        // the send before allowing receive/accept to run. The former path exits here.
+        guard enqueued.wait(timeout: .now() + 2) == .success else {
+            XCTFail("delegate did not enqueue"); return
+        }
+        events.append("result")
+        finish(ExitCode.success)
+        XCTAssertEqual(events, ["result"])
+        XCTAssertFalse(owner.stopped)
+        XCTAssertEqual(owner.inFlight, 0)
+        wait(for: [accepted], timeout: 2)
+        XCTAssertEqual(owner.inFlight, 1)
+        XCTAssertEqual(events, ["result"])
+        callbackDone?(.open_requested)
+        XCTAssertEqual(events, ["result", "callback", "exit"])
+        callbackDone?(.open_failed)
+        XCTAssertEqual(events.count, 3)
+    }
+
+    func testIngressReleaseExitsFinishedOperationOnceAndRejectsAfterStop() throws {
+        var exits = 0
+        var completions = 0
+        let owner = CallbackLifecycle(schedule: { _, _ in }, exit: { exits += 1 })
+        let finish = owner.beginOperation()
+        let release = try XCTUnwrap(owner.reserveIngress())
+        finish(ExitCode.failed)
+        XCTAssertEqual(exits, 0)
+        release(); release()
+        XCTAssertEqual(exits, 1)
+        XCTAssertEqual(owner.exitCode, ExitCode.failed)
+        owner.dispatchIngress(completion: {
+            completions += 1
+            // Rejection must call the OS completion outside the ingress lock.
+            XCTAssertNil(owner.reserveIngress())
+        }) { XCTFail("started callback after stop") }
+        XCTAssertEqual(completions, 1)
+        XCTAssertEqual(exits, 1)
+    }
+
+    func testIngressBlocksCallbackOnlyIdleAndReleaseRestartsIdleOnce() throws {
+        var timers: [() -> Void] = []
+        var exits = 0
+        let owner = CallbackLifecycle(schedule: { delay, work in
+            XCTAssertEqual(delay, 10)
+            timers.append(work)
+        }, exit: { exits += 1 })
+        owner.start()
+        let release = try XCTUnwrap(owner.reserveIngress())
+        timers[0]()
+        XCTAssertEqual(exits, 0)
+        owner.start()
+        XCTAssertEqual(timers.count, 1)
+        release(); release()
+        XCTAssertEqual(timers.count, 2)
+        timers[0]()
+        XCTAssertEqual(exits, 0)
+        timers[1](); timers[1]()
+        XCTAssertEqual(exits, 1)
+        XCTAssertNil(owner.reserveIngress())
+    }
+
     func testCallbackAndChildDrainBeforeOperationDoNotExitEarly() {
         var exits = 0
         var callbackDone: ((CallbackOutcome) -> Void)?

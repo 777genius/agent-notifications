@@ -29,7 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
-        let handle = { [self] in
+        lifecycle.dispatchIngress(completion: completionHandler) { [self] in
             CallbackHandler(lifecycle: lifecycle, legacy: actionExecutor).receive(
                 identifier: response.actionIdentifier,
                 defaultIdentifier: UNNotificationDefaultActionIdentifier,
@@ -37,8 +37,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 userInfo: response.notification.request.content.userInfo,
                 completion: completionHandler)
         }
-        if Thread.isMainThread { handle() }
-        else { DispatchQueue.main.async(execute: handle) }
     }
 
     func userNotificationCenter(

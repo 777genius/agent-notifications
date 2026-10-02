@@ -61,8 +61,16 @@ final class CallbackLifecycle {
     private var operationStarted = false
     private var operationPending = false
     private var finishingCallbacks = 0
+    // Delegate ingress can arrive off-main before its main-queue work is accepted.
+    // Only this reservation count and the stop claim cross that boundary.
+    private let ingressLock = NSLock()
+    private var pendingIngress = 0
+    private var didStop = false
     private(set) var exitCode: Int32?
-    private(set) var stopped = false
+    var stopped: Bool {
+        ingressLock.lock(); defer { ingressLock.unlock() }
+        return didStop
+    }
     var inFlight: Int { callbacks.count }
     var ownedCount: Int { owned.count }
     init(schedule: @escaping Schedule, exit: @escaping () -> Void,
@@ -71,7 +79,33 @@ final class CallbackLifecycle {
         self.schedule = schedule; self.exit = exit; self.diagnostic = diagnostic; self.now = now
     }
     func start() { armIdle() }
-    // A finite send/setup shares the callback owner. Its result can be published
+    // Acquire on the delegate's incoming thread; release on main only after
+    // receive has established callback ownership (or completed synchronously).
+    func reserveIngress() -> (() -> Void)? {
+        ingressLock.lock()
+        guard !didStop else { ingressLock.unlock(); return nil }
+        pendingIngress += 1
+        ingressLock.unlock()
+        var released = false
+        return { [self] in
+            ingressLock.lock()
+            guard !released else { ingressLock.unlock(); return }
+            released = true
+            pendingIngress -= 1
+            ingressLock.unlock()
+            armIdle()
+        }
+    }
+    func dispatchIngress(completion: @escaping () -> Void, operation: @escaping () -> Void) {
+        guard let release = reserveIngress() else { completion(); return }
+        let handle = {
+            defer { release() }
+            operation()
+        }
+        if Thread.isMainThread { handle() }
+        else { DispatchQueue.main.async(execute: handle) }
+    }
+    // A finite send shares the callback owner. Its result can be published
     // immediately, but process exit must also wait for accepted callback work.
     // Starting invalidates any earlier callback-only idle timer; completion is
     // idempotent so late OS replies cannot replace a timeout/error exit status.
@@ -134,10 +168,9 @@ final class CallbackLifecycle {
     }
     private func armIdle() {
         guard callbacks.isEmpty, owned.isEmpty, !operationPending,
-              finishingCallbacks == 0, !stopped else { return }
+              finishingCallbacks == 0, ingressAllowsIdle else { return }
         if exitCode != nil {
-            stopped = true
-            exit()
+            claimExit()
             return
         }
         generation += 1
@@ -145,9 +178,19 @@ final class CallbackLifecycle {
         schedule(10) { [weak self] in
             guard let self = self, self.generation == expected,
                   self.callbacks.isEmpty, self.owned.isEmpty,
-                  !self.operationPending, !self.stopped else { return }
-            self.stopped = true
-            self.exit()
+                  !self.operationPending, self.finishingCallbacks == 0 else { return }
+            self.claimExit()
         }
+    }
+    private var ingressAllowsIdle: Bool {
+        ingressLock.lock(); defer { ingressLock.unlock() }
+        return !didStop && pendingIngress == 0
+    }
+    private func claimExit() {
+        ingressLock.lock()
+        guard !didStop, pendingIngress == 0 else { ingressLock.unlock(); return }
+        didStop = true
+        ingressLock.unlock()
+        exit()
     }
 }
