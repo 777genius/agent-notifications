@@ -33,6 +33,16 @@ type Receipt struct {
 	RetrySafe  bool                          `json:"retry_safe"`
 }
 
+// NavigationStatus describes offline policy eligibility for the current call.
+// Eligible is not proof that a native helper, app, profile or chat can open.
+// Target identities and application configuration are deliberately excluded.
+type NavigationStatus struct {
+	Capability string `json:"capability"`
+	Precision  string `json:"precision"`
+	Scope      string `json:"scope,omitempty"`
+	Reason     string `json:"reason"`
+}
+
 // AdmissionPort is configured by composition. Rates/capacity are atomic journal
 // responsibilities, never a second service limiter. Each admission carries the
 // validated authoritative policy snapshot for that request. FinalizeOutcome is

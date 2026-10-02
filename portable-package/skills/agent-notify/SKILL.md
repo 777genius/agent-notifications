@@ -3,7 +3,7 @@ name: agent-notify
 description: Send an Agent Notifications desktop notification when the user requests one, attention is needed, or a meaningful milestone warrants an alert during ongoing work.
 ---
 
-Use the Agent Notifications plugin's `notify` tool. Installation and notification permissions must already be configured. If availability is unclear, use its read-only `notification_status`; a configured route does not prove that the OS will display a banner.
+Use the Agent Notifications plugin's `notify` tool. Installation and notification permissions must already be configured. Before choosing navigation, use its read-only `notification_status` for this chat. Its navigation eligibility reflects configuration and caller context, not proof that the OS will display a banner or open the chat.
 
 Leave routine task/turn completion to automatic lifecycle hooks. Do not call `notify` merely to say done or summarize the final result just before the final response, or relabel that same completion as `progress` or `attention`.
 A normal "notify me when done" request does not ask for an extra alert on top of the completion hook.
@@ -23,11 +23,15 @@ Send literal content and a stable, event-specific `request_id`. Reuse that ID an
   "body": "The Windows setup is ready for a test profile. Which profile should I use?",
   "category": "attention",
   "request_id": "492456bb-3be4-440d-9dcd-bb3324e06c48",
-  "navigation": "none"
+  "navigation": "required"
 }
 ```
 
-For an informational desktop alert, explicitly set `navigation: "none"`. It does not promise a click back to this chat. Keep `navigation=required` when a click must return to this task, and never silently downgrade a failed required request. The tool's default remains `required`, so omitting `navigation` is not equivalent to this example. `best_effort` is available only when an alert without exact navigation still satisfies the request. The user must have configured the route and consent for `none`; default-on configure passes `--navigation none --allow-unknown-caller true --allow-caller-asserted false` explicitly. The parser does not imply that consent. Caller-asserted context requires separate consent. These flags grant no navigation target and never admit known remote/headless callers. Do not infer locality or session identity from Claude tool metadata. The client supplies the origin: do not put a chat ID, URL, executable, app path, or shell command in tool arguments, or infer a session from the working directory, active window, or MCP process environment.
+When `notification_status.navigation.capability` is `eligible`, prefer `navigation: "required"` for task-related alerts, including informational results. Their category does not disable click navigation. The example above uses this mode, which is also the tool default. Eligibility is checked again when sending; it is not a delivery or click guarantee.
+
+Use `navigation: "none"` when an alert intentionally needs no return to the chat, or navigation is unavailable and an information-only alert still satisfies the request (for example, an MCP-only setup without a desktop route). `best_effort` permits a click target when possible without requiring one. Neither mode guarantees a return to this task. If returning to the chat is required, explain unavailable navigation instead of silently downgrading it, including after a failed `required` call. An older server omitting the navigation status field does not prove navigation is disabled.
+
+The user must have configured the route and consent for `none`; default-on configure passes `--navigation none --allow-unknown-caller true --allow-caller-asserted false` explicitly. The parser does not imply that consent. Caller-asserted context requires separate consent. These flags grant no navigation target and never admit known remote/headless callers. Do not infer locality or session identity from Claude tool metadata. The client supplies the origin: do not put a chat ID, URL, executable, app path, or shell command in tool arguments, or infer a session from the working directory, active window, or MCP process environment.
 
 Interpret the receipt rather than assuming that a successful tool call means delivery:
 
