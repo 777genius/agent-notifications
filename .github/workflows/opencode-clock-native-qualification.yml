@@ -67,20 +67,21 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          GITHUB_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          CLOCK_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
           CLOCK_PLATFORM: ${{ matrix.platform }}
           CLOCK_ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
-          launcher=()
-          if [[ "$CLOCK_PLATFORM" == linux ]]; then
-            launcher=(sudo --preserve-env=PATH,GH_TOKEN,GITHUB_SHA)
-          fi
-          "${launcher[@]}" "$(command -v python)" scripts/opencode-clock-native-qualification.py \
+          launcher=("$(command -v python)" scripts/opencode-clock-native-qualification.py \
             --os "$CLOCK_PLATFORM" --arch "$CLOCK_ARCH" \
             --temp-base "$RUNNER_TEMP" \
             --source-manifest "$RUNNER_TEMP/clock-source-manifest.json" \
-            --report "$RUNNER_TEMP/clock-safe-evidence.json"
+            --report "$RUNNER_TEMP/clock-safe-evidence.json")
+          if [[ "$CLOCK_PLATFORM" == linux ]]; then
+            sudo --preserve-env=PATH,GH_TOKEN,CLOCK_SOURCE_COMMIT "${launcher[@]}"
+          else
+            "${launcher[@]}"
+          fi
       - name: Make only the sanitized Linux report readable for upload
         if: always() && matrix.platform == 'linux'
         shell: bash

@@ -46,6 +46,15 @@ def need(value, reason):
         raise RuntimeError(reason)
 
 
+def require_workflow_commit(commit, report):
+    expected = os.environ.get('CLOCK_SOURCE_COMMIT', '')
+    observed_valid = re.fullmatch(r'[0-9a-f]{40}', commit) is not None
+    expected_valid = re.fullmatch(r'[0-9a-f]{40}', expected) is not None
+    report.update(observedCommit=commit if observed_valid else None,
+                  expectedCommit=expected if expected_valid else None)
+    need(observed_valid and expected_valid and commit == expected, 'exact_workflow_ref_required')
+
+
 def sha(path):
     with Path(path).open('rb') as stream:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
@@ -531,7 +540,7 @@ def main():
         report.update(sourceManifestSha256=manifest_sha, sourceImplementationHashes=bindings,
                       primaryInputHashes=load(args.source_manifest)['inputHashes'])
         commit = command(['git', 'rev-parse', 'HEAD'], REPO).decode().strip()
-        need(re.fullmatch(r'[0-9a-f]{40}', commit) and commit == os.environ.get('GITHUB_SHA'), 'exact_workflow_ref_required')
+        require_workflow_commit(commit, report)
         checkpoint = '6602b0674b4c1041ae971008f60b84fedd178b74'
         command(['git', 'merge-base', '--is-ancestor', checkpoint, commit], REPO)
         report['reviewedBaseCheckpoint'] = checkpoint
