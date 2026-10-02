@@ -2,6 +2,8 @@
 import { repo } from "~/data/install";
 
 const { t } = useI18n();
+const pageRoot = ref<HTMLElement>();
+useScrollReveal(pageRoot);
 const localeHead = useLocaleHead({ seo: true });
 const base = useRuntimeConfig().app.baseURL;
 const brandLogo = `${base}agent-notifications-logo.png`;
@@ -75,7 +77,7 @@ const faqIcons = [
 </script>
 
 <template>
-  <div class="site">
+  <div ref="pageRoot" class="site">
     <a class="skip" href="#main">{{ t("accessibility.skip") }}</a>
     <header class="header">
       <a class="brand" href="#">
@@ -93,9 +95,9 @@ const faqIcons = [
       </div>
     </header>
 
-    <main id="main">
+    <main id="main" class="page-content">
+      <PageBackground />
       <div class="hero-wrap">
-        <PageBackground />
         <section class="hero">
           <div class="hero-copy">
             <p class="eyebrow"><span class="dot" /> {{ t("hero.eyebrow") }}</p>
@@ -113,16 +115,19 @@ const faqIcons = [
         </section>
       </div>
 
-      <div class="compatibility" role="group" :aria-label="t('accessibility.platforms')">
-        <PlatformLogos />
+      <div data-reveal class="compatibility">
+        <span role="group" :aria-label="t('accessibility.platforms')"><PlatformLogos /></span>
+        <span class="supported-agents" role="group" :aria-label="t('accessibility.agents')">
+          <AgentLogo v-for="agent in ['claude', 'codex', 'opencode', 'gemini'] as const" :key="agent" :agent="agent" />
+        </span>
       </div>
-      <InstallWizard />
+      <InstallWizard data-reveal />
 
       <section id="features" class="section anchor-offset">
-        <p class="eyebrow">{{ t("features.eyebrow") }}</p>
-        <h2>{{ t("features.titleFirst") }}<br />{{ t("features.titleSecond") }}</h2>
+        <p data-reveal class="eyebrow">{{ t("features.eyebrow") }}</p>
+        <h2 data-reveal>{{ t("features.titleFirst") }}<br />{{ t("features.titleSecond") }}</h2>
         <div class="feature-grid">
-          <article v-for="feature in features" :key="feature.number" class="panel feature">
+          <article v-for="feature in features" :key="feature.number" data-reveal class="panel feature">
             <div class="feature-visual" aria-hidden="true">
               <div v-if="feature.number === '01'" class="mini-notification">
                 <span class="signal-icon">↖</span>
@@ -150,17 +155,17 @@ const faqIcons = [
         </p>
       </section>
 
-      <TerminalSupportTable />
+      <TerminalSupportTable data-reveal />
 
       <section id="faq" class="section faq anchor-offset">
-        <div class="faq-header">
+        <div data-reveal class="faq-header">
           <p class="eyebrow">{{ t("faq.eyebrow") }}</p>
           <h2>{{ t("faq.title") }}</h2>
           <p>{{ t("faq.subtitle") }}</p>
         </div>
         <div class="faq-content">
           <div class="faq-list">
-            <details v-for="index in 6" :key="index">
+            <details v-for="index in 6" :key="index" data-reveal>
               <summary>
                 <span class="faq-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path :d="faqIcons[index - 1]" /></svg></span>
                 <span>{{ t(`faq.items.${index}.question`) }}</span>
@@ -177,7 +182,7 @@ const faqIcons = [
         </div>
       </section>
 
-      <section class="closing">
+      <section data-reveal class="closing">
         <p class="eyebrow">{{ t("closing.eyebrow") }}</p>
         <h2>{{ t("closing.title") }}</h2>
         <a class="primary" href="#install">{{ t("closing.action") }} ↗</a>
@@ -192,3 +197,8 @@ const faqIcons = [
     </footer>
   </div>
 </template>
+
+<style scoped>
+.compatibility { flex-wrap: wrap; gap: 20px; }
+.supported-agents { display: inline-flex; align-items: center; gap: 16px; }
+</style>

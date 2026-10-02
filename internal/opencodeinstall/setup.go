@@ -251,8 +251,11 @@ func Apply(ctx context.Context, r Request) error {
 
 func plan(r Request, ledger installruntime.Ledger, desired []byte) (uap.Placement, installruntime.Identity, error) {
 	digest := sha256.Sum256(desired)
-	base, err := uap.Plan(uap.Input{HomeDir: r.HomeDir, XDGConfigHome: r.XDGConfigHome, Override: r.OpenCodeConfigDir,
-		FileName: pluginName, DesiredSHA256: hex.EncodeToString(digest[:])})
+	input, err := placementInput(r, ledger, hex.EncodeToString(digest[:]))
+	if err != nil {
+		return uap.Placement{}, installruntime.Identity{}, err
+	}
+	base, err := uap.Plan(input)
 	if err != nil {
 		return base, installruntime.Identity{}, err
 	}
@@ -274,8 +277,8 @@ func plan(r Request, ledger installruntime.Ledger, desired []byte) (uap.Placemen
 	if claim, ok := installruntime.OwnedFile(ledger, base.Target); ok {
 		owned = claim.SHA256
 	}
-	placement, err := uap.Plan(uap.Input{HomeDir: r.HomeDir, XDGConfigHome: r.XDGConfigHome, Override: r.OpenCodeConfigDir,
-		FileName: pluginName, DesiredSHA256: hex.EncodeToString(digest[:]), OwnedSHA256: owned, Existing: existing})
+	input.OwnedSHA256, input.Existing = owned, existing
+	placement, err := uap.Plan(input)
 	return placement, id, err
 }
 
