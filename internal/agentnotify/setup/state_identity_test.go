@@ -26,7 +26,7 @@ func TestPersistedIdentitySetupOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	state, err := mkdir(root, "state")
 	if err != nil {
 		t.Fatal(err)
@@ -59,7 +59,9 @@ func TestPersistedIdentitySetupOwnership(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		child.Close()
+		if err = child.Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for _, name := range []string{"namespace", "journal.json", "lock"} {
 		data := []byte("fixture")
@@ -76,7 +78,9 @@ func TestPersistedIdentitySetupOwnership(t *testing.T) {
 	if (err == nil) != (runtime.GOOS == "darwin") {
 		t.Fatalf("%s ready marker: %v", runtime.GOOS, err)
 	}
-	state.Close()
+	if err = state.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if err = os.Rename(filepath.Join(rootPath, "state"), filepath.Join(rootPath, "saved")); err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +88,7 @@ func TestPersistedIdentitySetupOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer replacement.Close()
+	defer func() { _ = replacement.Close() }()
 	if matches(replacement, root, stored) == nil {
 		t.Fatal("replacement setup state accepted")
 	}
