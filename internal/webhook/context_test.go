@@ -40,7 +40,9 @@ func TestNewWithContextCancelsActualHTTPRequest(t *testing.T) {
 	if attempts.Load() != 1 || time.Since(start) > time.Second {
 		t.Fatalf("HTTP attempts/time = %d/%s", attempts.Load(), time.Since(start))
 	}
-	if err := sender.Shutdown(time.Millisecond); err != nil {
+	// Cleanup starts a waiter goroutine; its scheduling is not the cancellation
+	// contract above and can exceed one millisecond on Windows CI.
+	if err := sender.Shutdown(time.Second); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -89,7 +89,7 @@ def write_json(path, obj):
     path.chmod(0o600)
 
 
-def run(args, *, cwd, env, timeout=30, input=None):
+def run(args, *, cwd, env, timeout=30, input=""):
     result = subprocess.run(args, cwd=cwd, env=env, input=input, capture_output=True,
                             text=True, encoding="utf-8", errors="replace", timeout=timeout)
     require(result.returncode == 0, "candidate_command_failed")

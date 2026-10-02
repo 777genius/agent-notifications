@@ -3,6 +3,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-env.sh"
 test_env_enter "$0" "$@"
 # Isolated unit/adapter fixtures: no public network, real host CLIs or Go builds.
 set -euo pipefail
+trap 'printf "TEST bootstrap product fixture failed: %s (status %s)\n" "$BASH_COMMAND" "$?" >&2' ERR
 case "${1:-}" in
     '') [ "$#" -eq 0 ] || exit 2; _PRODUCT_TEST_UNIT_ONLY=false ;;
     --unit-only) [ "$#" -eq 1 ] || exit 2; _PRODUCT_TEST_UNIT_ONLY=true ;;
@@ -10,9 +11,27 @@ case "${1:-}" in
 esac
 readonly _PRODUCT_TEST_UNIT_ONLY
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-SANDBOX=$(mktemp -d /tmp/bootstrap-products-XXXXXX)
+SANDBOX=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-products-TEST-XXXXXX")
 trap 'rm -rf "$SANDBOX"' EXIT
 test_env_setup "$SANDBOX"
+# test-env.sh inherits PATH: retain only named tools, never host agent binaries.
+mkdir -p "$SANDBOX/trusted-tools"
+# Native Python cannot CreateProcess a Bash wrapper on Windows. Keep the one
+# controller executable explicit while child PATH remains the finite allowlist.
+TEST_BOOTSTRAP_BASH=$(type -P bash)
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        [ ! -f "$TEST_BOOTSTRAP_BASH.exe" ] || TEST_BOOTSTRAP_BASH="$TEST_BOOTSTRAP_BASH.exe"
+        TEST_BOOTSTRAP_BASH=$(cygpath -w "$TEST_BOOTSTRAP_BASH")
+        ;;
+esac
+export TEST_BOOTSTRAP_BASH
+for tool in bash sh env cygpath python3 node curl wget tar gzip unzip zip mktemp rm cat cp mv chmod mkdir ln uname tr wc head cmp grep sed awk dirname basename find sort sha256sum shasum cut xargs sleep date stat diff touch readlink dd od go gcc cc pkg-config; do
+    tool_path=$(type -P "$tool" 2>/dev/null || true)
+    [ -z "$tool_path" ] || test_env_place_tool "$tool_path" "$SANDBOX/trusted-tools/$tool"
+done
+export PATH="$SANDBOX/trusted-tools"
+
 # Keep space-containing paths in the bootstrap characterization.
 export HOME="$SANDBOX/home space" USERPROFILE="$SANDBOX/home space" CODEX_HOME="$SANDBOX/codex space"
 export CLAUDE_CONFIG_DIR="$SANDBOX/claude config" CLAUDE_HOME="$SANDBOX/claude home"
@@ -76,17 +95,21 @@ done
     cat > "$SANDBOX/version-cli/opencode" <<'HOST_VERSION'
 #!/bin/bash
 [ "$#" -eq 1 ] && [ "$1" = --version ] || exit 2
-printf '%s\n' "$TEST_OPENCODE_VERSION"
+[ "$PWD" -ef "$HOME" ] && [ "$HOME" -ef "$USERPROFILE" ] || exit 3
+case "$PWD" in */bootstrap-opencode-TEST-*/profile) ;; *) exit 4 ;; esac
+cat "${BASH_SOURCE[0]%/*}/version"
 HOST_VERSION
     chmod +x "$SANDBOX/version-cli/opencode"
     export PATH="$SANDBOX/version-cli:$PATH"
     PRODUCT=opencode
     OPENCODE_ARGS=(--webhook)
     for version in '1.18.29' '1.18.33' 'v1.18.33' 'OpenCode version: v1.18.33' '1.19.0' '2.0.0' 'v2.0.21'; do
-        TEST_OPENCODE_VERSION="$version" check_prerequisites
+        printf '%s\n' "$version" > "$SANDBOX/version-cli/version"
+        check_prerequisites
     done
     for version in '1.18.28' '1.17.99' '3.0.0' '2.0.0-beta.1' '2.0.0+build' '02.0.0' '2.00.0' '2.0.000' '2.9999999.0' 'OpenCode v2.0.0 (compatibility 1.18.33)' 'unknown' $'2.0.0\n1.18.33'; do
-        if ( TEST_OPENCODE_VERSION="$version" check_prerequisites ); then
+        printf '%s\n' "$version" > "$SANDBOX/version-cli/version"
+        if ( check_prerequisites ); then
             echo "accepted unsupported host output: $version" >&2
             exit 1
         fi
@@ -424,7 +447,7 @@ LIFECYCLE_ARGV
     chmod +x "$SANDBOX/gemini runtime/claude-notifications-linux-amd64"
     for label_action in 'Inspect registration and consent:|inspect' 'Remove:|remove'; do
         label=${label_action%|*}; action=${label_action#*|}
-        printed=$(sed -n "s/^$label //p" "$SANDBOX/gemini-output")
+        printed=$(sed -n "s/^[[:space:]]*$label //p" "$SANDBOX/gemini-output")
         [ -n "$printed" ]
         XDG_CONFIG_HOME="$SANDBOX/other default" bash -c "$printed"
         expected=$(printf '%s\n' setup-gemini "$action" --control-root "$gemini_control")
@@ -440,9 +463,9 @@ LIFECYCLE_ARGV
     touch "$_CONFIG_STAGE/ClaudeNotifier.app.managed-runtime.json"
     cp "$SANDBOX/gemini runtime/claude-notifications-linux-amd64" "$SANDBOX/gemini runtime/claude-notifications-darwin-amd64"
     install_gemini > "$SANDBOX/gemini-output"
-    for label_action in 'Check permission:|permission-status' 'Grant permission:|request-permission'; do
+    for label_action in 'Check permission:|permission-status' 'Grant if needed:|request-permission'; do
         label=${label_action%|*}; action=${label_action#*|}
-        printed=$(sed -n "s/^$label //p" "$SANDBOX/gemini-output")
+        printed=$(sed -n "s/^[[:space:]]*$label //p" "$SANDBOX/gemini-output")
         [ -n "$printed" ]
         XDG_CONFIG_HOME="$SANDBOX/other default" bash -c "$printed"
         expected=$(printf '%s\n' setup-gemini "$action" --control-root "$gemini_control")
@@ -473,7 +496,7 @@ exit "${GEMINI_REMOVE_EXIT:-0}"
 WINDOWS_REMOVER_ARGV
     chmod +x "$SANDBOX/gemini runtime/claude-notifications-windows-amd64.exe"
     install_gemini > "$SANDBOX/gemini-output"
-    printed=$(sed -n 's/^Remove: //p' "$SANDBOX/gemini-output")
+    printed=$(sed -n 's/^[[:space:]]*Remove: //p' "$SANDBOX/gemini-output")
     XDG_CONFIG_HOME="$SANDBOX/other default" bash -c "$printed"
     expected=$(printf '%s\n' setup-gemini remove --control-root "$native_control")
     [ "$(cat "$GEMINI_LIFECYCLE_TRACE")" = "$expected" ] || { echo "Windows remover lost native control-root argv" >&2; exit 1; }
@@ -496,7 +519,7 @@ check_prerequisites() { :; }; detect_platform() { :; }
 resolve_bootstrap_release() { BOOTSTRAP_TAG=v1.43.2; }
 install_claude() { [ "$CN_PRODUCT" = claude ]; PLUGIN_ROOT='bundle space'; echo claude >> "$SANDBOX/calls"; }
 install_codex() { [ "${CN_PRODUCT:-}" = sentinel ]; echo codex >> "$SANDBOX/calls"; }
-stage_historical_baselines() { :; }; stage_config_helper() { :; }; config_preflight() { :; }; initialize_config() { :; }
+stage_historical_baselines() { :; }; stage_config_helper() { _CONFIG_STAGE=$(mktemp -d); }; config_preflight() { :; }; initialize_config() { :; }
 export CN_PRODUCT=sentinel
 for product in claude codex both; do
     : > "$SANDBOX/calls"
@@ -519,7 +542,7 @@ mkdir -p "$PLUGIN_ROOT/portable-package"
 printf '{}' > "$PLUGIN_ROOT/portable-package/plugin.json"
 CONFIGURE_BINARY="$SANDBOX/capture-wizard"
 export WIZARD_CAPTURE="$SANDBOX/wizard-args"
-printf '%s\n' '#!/bin/bash' 'if [ "$1 $2" = "setup-notifications --help" ]; then echo "--policy-only --preserve-enabled"; exit 0; fi' 'printf "%s\n" "$@" > "$WIZARD_CAPTURE"' > "$CONFIGURE_BINARY"
+printf '%s\n' '#!/bin/bash' 'if [ "$1 $2" = "setup-notifications --help" ]; then echo "--policy-only --preserve-enabled"; exit 0; fi' 'if [ "${4:-}" = inspect ]; then printf '"'"'{"targets":[]}\n'"'"'; exit 0; fi' 'printf "%s\n" "$@" > "$WIZARD_CAPTURE"' > "$CONFIGURE_BINARY"
 chmod +x "$CONFIGURE_BINARY"
 configure_agent_policy() { return 0; }
 bootstrap_abs_command() { return 1; }
@@ -530,6 +553,39 @@ grep -Fx -- '--install-or-update' "$WIZARD_CAPTURE"
 export CLAUDE_CONFIG_DIR="$SANDBOX/custom claude"
 setup_agent_notify_wizard
 grep -Fx -- "$CLAUDE_CONFIG_DIR/.claude.json" "$WIZARD_CAPTURE"
+
+# Regression: invalid/incomplete multi selections and pending JSON used to
+# acquire a helper or execute host --version before rejecting the request.
+# Exercise the actual script entry point with external acquisition/exec canaries.
+(
+    mkdir -p "$SANDBOX/early-canaries"
+    for tool in curl wget claude codex opencode gemini; do
+        cat > "$SANDBOX/early-canaries/$tool" <<'EARLY_CANARY'
+#!/bin/bash
+printf '%s\n' "$0 $*" >> "$EARLY_CANARY_LOG"
+exit 99
+EARLY_CANARY
+        chmod +x "$SANDBOX/early-canaries/$tool"
+    done
+    export PATH="$SANDBOX/early-canaries:$PATH" EARLY_CANARY_LOG="$SANDBOX/early-effects"
+    for args in '--products opencode' '--products claude,gemini' '--json' '--product gemini --json' '--ui=bad' '--plain --ui=rich' '--navigation none' '--agent-notify --agent-notify'; do
+        status=0
+        bash "$ROOT/bin/bootstrap.sh" $args >"$SANDBOX/early-output" 2>&1 || status=$?
+        [ "$status" -eq 1 ] || { echo "Wrong early refusal status $status for $args" >&2; exit 1; }
+        [ ! -e "$EARLY_CANARY_LOG" ] || { cat "$EARLY_CANARY_LOG" >&2; exit 1; }
+    done
+)
+# Regression: normalization overwrote explicit caller false/false, or appended
+# a second preserve-policy when the caller supplied it with an omitted route.
+(
+    PRODUCT=""; CONFIGURE_ARGS=(); OPENCODE_ARGS=(); _UI_MODE=""; UI_ARGS=()
+    CONFIGURE_NOTIFICATIONS=true
+    select_product --product claude --ui=plain --plain --navigation=none --allow-unknown-caller=false --allow-caller-asserted=false
+    [ "${CONFIGURE_ARGS[*]}" = '--navigation none --allow-unknown-caller false --allow-caller-asserted false' ]
+    PRODUCT=""; CONFIGURE_ARGS=(); _UI_MODE=""; UI_ARGS=()
+    select_product --product claude --preserve-policy
+    [ "${CONFIGURE_ARGS[*]}" = '--preserve-policy --navigation none --allow-unknown-caller true --allow-caller-asserted false' ]
+)
 
 printf 'bootstrap product unit fixtures passed\n'
 [ "$_PRODUCT_TEST_UNIT_ONLY" != true ] || exit 0
@@ -547,8 +603,9 @@ release_commits = {'v1.42.0': 'a' * 40, 'v1.43.0': 'b' * 40, 'v2.0.0': 'c' * 40}
 (web / 'commits').mkdir()
 for tag, commit in release_commits.items():
     (web / 'commits' / tag).write_text(commit)
-uname_os=subprocess.check_output(['uname','-s'],text=True).strip().lower()
-uname_arch=subprocess.check_output(['uname','-m'],text=True).strip().lower()
+bash = os.environ['TEST_BOOTSTRAP_BASH']
+uname_os=subprocess.check_output([bash,'-c','uname -s'],text=True).strip().lower()
+uname_arch=subprocess.check_output([bash,'-c','uname -m'],text=True).strip().lower()
 asset_os='windows' if uname_os.startswith(('mingw','msys','cygwin')) else uname_os
 asset_arch='arm64' if uname_arch in ('arm64','aarch64') else 'amd64'
 asset_name='claude-notifications-'+asset_os+'-'+asset_arch+('.exe' if asset_os=='windows' else '')
@@ -754,7 +811,7 @@ env = {key: os.environ[key] for key in env_keys if key in os.environ}
 env.update(BOOTSTRAP_LATEST_RELEASE_API_URL=base+'/latest', BOOTSTRAP_COMMIT_API_BASE_URL=base+'/commits', BOOTSTRAP_RAW_BASE_URL=base+'/raw', BOOTSTRAP_RAW_CONTENT_URL=base+'/raw', BOOTSTRAP_SOURCE_BASE_URL=base, BOOTSTRAP_RELEASES_BASE_URL=base)
 cli = sandbox / 'clis'; cli.mkdir()
 (cli / 'codex').write_bytes(b'#!/bin/sh\nexit 99\n'); (cli / 'codex').chmod(0o755)
-bash = shutil.which('bash'); assert bash
+assert pathlib.Path(bash).is_file(), 'fixture controller Bash must exist'
 env['PATH'] = str(cli) + os.pathsep + (os.environ['PATH'] if os.name == 'nt' else '/usr/bin:/bin')
 script = str(root / 'bin/bootstrap.sh')
 def run(args, expected=0, extra=None):
@@ -765,7 +822,7 @@ def run(args, expected=0, extra=None):
         # Killing only Bash leaves curl/helper children holding the output pipe,
         # so subprocess.run's timeout cleanup can itself wait indefinitely.
         if os.name == 'nt':
-            subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)],
+            subprocess.run([str(pathlib.Path(os.environ['SystemRoot'])/'System32/taskkill.exe'), '/F', '/T', '/PID', str(process.pid)],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
         else:
             os.killpg(process.pid, signal.SIGKILL)
@@ -836,7 +893,7 @@ assert (live/'bin/claude-notifications').read_text() == 'stale'
 # Menu routing for Claude/both uses explicit adapters; Codex below exercises
 # the complete bootstrap HTTP/staging path with fake runtime assets.
 dispatch = (root / 'bin/bootstrap.sh').read_text(encoding='utf-8').replace('main "$@"', '')
-dispatch += '\ncheck_prerequisites() { :; }\nresolve_bootstrap_release() { :; }\nstage_historical_baselines() { :; }\nstage_config_helper() { :; }\nconfig_preflight() { :; }\ninitialize_config() { :; }\ninstall_claude() { echo CLAUDE_ADAPTER; }\ninstall_codex() { echo CODEX_ADAPTER; }\nmain "$@"\n'
+dispatch += '\ncheck_prerequisites() { :; }\nresolve_bootstrap_release() { :; }\nstage_historical_baselines() { :; }\nstage_config_helper() { _CONFIG_STAGE=$(mktemp -d); }\nconfig_preflight() { :; }\ninitialize_config() { :; }\ninstall_claude() { echo CLAUDE_ADAPTER; }\ninstall_codex() { echo CODEX_ADAPTER; }\nmain "$@"\n'
 (web / 'dispatch.sh').write_bytes(dispatch.encode('utf-8'))
 # The native SelectMany UI is independently exercised against the actual
 # candidate by bootstrap_opencode_test.sh. This fixture checks shell routing.
@@ -846,10 +903,11 @@ for product, success in [('claude',True), ('codex',True), ('both',True), ('inval
     result = subprocess.run([bash,'-c',command],env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=20)
     output = result.stdout
     assert (result.returncode==0)==success, output.decode()
-    if product in ['claude','both']: assert b'CLAUDE_ADAPTER' in output
-    if product == 'claude': assert b'CODEX_ADAPTER' not in output
-    if product == 'both': assert b'CODEX_ADAPTER' in output
+    if product in ['claude','both']: assert b'Claude Code - installed' in output
+    if product == 'claude': assert b'Codex - installed' not in output
+    if product == 'both': assert b'Codex - installed' in output
     if product == 'invalid': assert b'CLAUDE_ADAPTER' not in output and b'CODEX_ADAPTER' not in output
+
 assert not list(pathlib.Path(env['TMPDIR']).glob('bootstrap-codex-*'))
 assert not list(pathlib.Path(env['TMPDIR']).glob('bootstrap-release-*'))
 # Protected flow E2E. Real shell orchestration and local downloads; explicit
@@ -881,9 +939,7 @@ def path_ids(values):
 def native_shell_path(value):
     if os.name != 'nt':
         return value
-    cygpath=shutil.which('cygpath')
-    assert cygpath, 'native Windows fixture requires cygpath'
-    return subprocess.check_output([cygpath,'-w',value],text=True).strip()
+    return subprocess.check_output([bash,'-c','cygpath -w "$1"','_',value],text=True).strip()
 def reset_case():
     # Every directory is an explicit child of this fixture, never host state.
     for key in ['HOME','XDG_CONFIG_HOME','CODEX_HOME','CLAUDE_CONFIG_DIR']:
@@ -937,16 +993,17 @@ if os.name != 'nt':
         (release/portable_name).unlink()
 for product in ['claude','codex','both']:
     reset_case(); request_paths.clear()
-    run(['--product',product])
+    output=run(['--product',product])
     assert sum(path.endswith('/'+asset_name) for path in request_paths)==1
     neutral=pathlib.Path(env['XDG_CONFIG_HOME'])/'agent-notifications/config.json'
-    assert neutral.exists() and len(init_events())==1
+    expected_inits = 2 if product == 'both' else 1
+    assert neutral.exists() and len(init_events())==expected_inits, (product, str(neutral), events(), output)
     es=events(); init_index=next(i for i,e in enumerate(es) if e[:2]==['config','init'])
     assert any(e[:2]==['claude','plugin'] or e[:1]==['setup-codex'] for e in es[:init_index])
     # Idempotent repair preserves the exact document.
     neutral.write_bytes(b'{ "future": [1, 2], "secret": "canary" }\n')
     before=neutral.read_bytes(); trace.write_text('')
-    run(['--product',product]); assert neutral.read_bytes()==before and len(init_events())==1
+    run(['--product',product]); assert neutral.read_bytes()==before and len(init_events())==expected_inits
 
 # All files changed by Claude registration are protected before the mocked
 # CLI can mutate any one, whether the explicit target exists or is absent.
@@ -1052,7 +1109,8 @@ for product in ['codex','both']:
     output=run(['--product',product],1,{'FAIL_SETUP_INIT':'1'})
     assert 'Partial setup' in output and 'registration failed' not in output
     assert (pathlib.Path(env['CODEX_HOME'])/'fixture-registration').read_text()=='registered'
-    assert not init_events()
+    # Claude's completed phase remains committed if the later Codex phase fails.
+    assert len(init_events()) == (1 if product == 'both' else 0)
     line=next(line for line in output.splitlines() if line.startswith('Config-only retry'))
     shell_command=line.split(': ',1)[1]
     command=shlex.split(shell_command)
@@ -1062,9 +1120,10 @@ for product in ['codex','both']:
     r=subprocess.run([bash,'-c',shell_command],env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=20)
     assert r.returncode==0, r.stdout.decode()
     assert events()==[['config','init','--json']] and request_paths==requests_before
-# Fresh registration failure never reaches init.
+# A failed phase never initializes config; a completed sibling keeps its init.
 for product,fail in [('claude',{'FAIL_CLAUDE':'1'}),('codex',{'FAIL_REGISTER':'1'}),('both',{'FAIL_REGISTER':'1'})]:
-    reset_case(); run(['--product',product],1,fail); assert not init_events()
+    reset_case(); run(['--product',product],1,fail)
+    assert len(init_events()) == (1 if product == 'both' else 0)
 # Init failure retains a verified executable for a config-only retry.
 reset_case()
 output=run(['--product','both'],1,{'FAIL_INIT':'1'})
@@ -1106,13 +1165,24 @@ def place_runtime_cmd(dest, src):
         return
     dest.write_text('#!/bin/sh\nexec {} "$@"\n'.format(shlex.quote(src.replace('\\', '/'))))
     dest.chmod(0o755)
-if shutil.which('node'):
+def fixture_tool(name):
+    found = shutil.which(name)
+    if found:
+        return found
+    # Native Windows lookup applies PATHEXT, while our Bash wrappers have no
+    # extension. These paths are used only as shell commands in child scripts.
+    for directory in os.environ['PATH'].split(os.pathsep):
+        candidate = pathlib.Path(directory) / name
+        if candidate.is_file():
+            return str(candidate)
+    return None
+if fixture_tool('node'):
     node_only = sandbox / 'http-node-only-bin'
     node_only.mkdir()
     for name in ['bash', 'sh', 'mktemp', 'rm', 'cat', 'chmod', 'mkdir', 'ln', 'uname',
                  'tr', 'wc', 'head', 'cp', 'mv', 'env', 'true', 'false', 'grep', 'sed', 'awk',
                  'tar', 'gzip', 'curl', 'node', 'sha256sum', 'shasum', 'dirname', 'realpath']:
-        place_runtime_cmd(node_only / name, shutil.which(name))
+        place_runtime_cmd(node_only / name, fixture_tool(name))
     assert not (node_only / 'python3').exists()
     reset_case()
     env['PATH'] = str(cli) + os.pathsep + str(node_only)
@@ -1125,3 +1195,55 @@ print('protected flow fixtures passed (fake config CLI; real Go integration pend
 server.shutdown(); server.server_close()
 print('local HTTP / curl-pipe PTY adapter fixtures passed (fake installer and binary)')
 PY
+
+# Stage output is a public contract: success hides machine/binary banners but
+# preserves warnings and shell state; failure replays diagnostics and its code.
+(
+    emit_stage() { PLUGIN_ROOT=fixture-installed; printf 'Ready to use!\n{"generation":12}\n\033[33mwarning: extension needs activation\033[0m\n\033[33m  Log out and log back in, then run:\033[0m\n  gnome-extensions enable fixture@example.test\n'; printf 'phase prepare\nSetting up notifications: agent notify...\n' >&2; echo 'warning: fixture optional setup' >&2; }
+    run_setup_stage 'Installing fixture' emit_stage > "$SANDBOX/stage-ok.out" 2> "$SANDBOX/stage-ok.err"
+    [ "$PLUGIN_ROOT" = fixture-installed ]
+    grep -F 'Installing fixture...' "$SANDBOX/stage-ok.out"
+    if grep -E 'Ready to use|generation' "$SANDBOX/stage-ok.out"; then exit 1; fi
+    grep -F 'Log out and log back in' "$SANDBOX/stage-ok.out"
+    grep -F 'gnome-extensions enable fixture@example.test' "$SANDBOX/stage-ok.out"
+    grep -F 'warning: fixture optional setup' "$SANDBOX/stage-ok.err"
+    if grep -E 'phase prepare|Setting up notifications:' "$SANDBOX/stage-ok.err"; then exit 1; fi
+    # A real stage failure must return so captured recovery advice is replayed.
+    INSTALLED_JSON="$SANDBOX/missing-installed-plugins.json"
+    status=0
+    run_setup_stage 'Locating fixture plugin' find_plugin_root > "$SANDBOX/root-fail.out" 2> "$SANDBOX/root-fail.err" || status=$?
+    [ "$status" -eq 1 ]
+    grep -F 'installed_plugins.json not found' "$SANDBOX/root-fail.err"
+    grep -F 'Try restarting Claude Code' "$SANDBOX/root-fail.err"
+    emit_failure() { echo 'diagnostic stdout'; echo 'diagnostic stderr' >&2; return 3; }
+    status=0
+    run_setup_stage 'Failing fixture' emit_failure > "$SANDBOX/stage-fail.out" 2> "$SANDBOX/stage-fail.err" || status=$?
+    [ "$status" -eq 3 ]
+    grep -F 'diagnostic stdout' "$SANDBOX/stage-fail.err"
+    grep -F 'diagnostic stderr' "$SANDBOX/stage-fail.err"
+    BOOTSTRAP_VERBOSE=1 run_setup_stage 'Verbose fixture' emit_stage > "$SANDBOX/stage-verbose.out" 2>/dev/null
+    grep -F 'generation' "$SANDBOX/stage-verbose.out"
+    PRODUCT=both CLAUDE_AGENT_NOTIFY_STATUS='not configured by this run' CODEX_AGENT_NOTIFY_STATUS='not configured by this run'
+    print_iterm2_python_api_notice() { :; }
+    print_success > "$SANDBOX/summary.out"
+    grep -F 'Claude Code - installed; restart required.' "$SANDBOX/summary.out"
+    grep -F 'Codex - installed; restart required.' "$SANDBOX/summary.out"
+    grep -F 'Run /hooks in Codex' "$SANDBOX/summary.out"
+    grep -F 'not configured by this run' "$SANDBOX/summary.out"
+    grep -F 'Delivery has not been verified.' "$SANDBOX/summary.out"
+    [ "$(grep -c '^Installation complete$' "$SANDBOX/summary.out")" -eq 1 ]
+    BOOTSTRAP_SUMMARY_FILE="$SANDBOX/aggregate.txt"
+    print_success > "$SANDBOX/collected.out"
+    [ ! -s "$SANDBOX/collected.out" ]
+    grep -F 'Delivery has not been verified.' "$BOOTSTRAP_SUMMARY_FILE"
+)
+
+# Structured results distinguish a successful opt-out from an installed sibling.
+cat > "$SANDBOX/wizard-summary.json" <<'JSON_STATUS'
+{"outcome":"completed","targets":[{"client":"claude","unit":"agent-notify","outcome":"absent"},{"client":"codex","unit":"agent-notify","outcome":"installed"}]}
+JSON_STATUS
+[ "$(wizard_tool_status "$SANDBOX/wizard-summary.json" claude auto)" = 'not installed (existing opt-out kept)' ]
+[ "$(wizard_tool_status "$SANDBOX/wizard-summary.json" codex)" = installed ]
+[ "$(wizard_tool_status "$SANDBOX/wizard-summary.json" other)" = 'setup completed; status not checked' ]
+
+[ "$(wizard_tool_status "$SANDBOX/wizard-summary.json" claude true)" = 'not installed' ]

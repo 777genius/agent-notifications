@@ -269,6 +269,7 @@ jobs:
         run: |
           mkdir -p dist
           find dist-artifacts -type f -exec cp {} dist/ \;
+          cp internal/thirdpartynotices/THIRD_PARTY_NOTICES.txt dist/
           ls -lh dist/
 
       - name: Create checksums

@@ -22,6 +22,7 @@ import (
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/logging"
 	"github.com/777genius/agent-notifications/internal/notifier"
+	"github.com/777genius/agent-notifications/internal/thirdpartynotices"
 	"github.com/777genius/agent-notifications/internal/winfocus"
 )
 
@@ -40,6 +41,14 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == "opencode-clock" {
 		os.Exit(runOpenCodeClock(os.Args[2:], os.Stdout))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "licenses" {
+		if len(os.Args) != 2 {
+			fmt.Fprintln(os.Stderr, "Usage: claude-notifications licenses")
+			os.Exit(2)
+		}
+		fmt.Print(thirdpartynotices.Text())
+		return
 	}
 	if len(os.Args) > 1 && os.Args[1] == "gemini-event" {
 		os.Exit(runGeminiEvent(os.Args[2:], os.Stdin, os.Stdout))
@@ -832,6 +841,7 @@ func printUsage() {
 	fmt.Println("  setup-notifications     Direct MCP configure/status and setup-notifications wizard")
 	fmt.Println("  config                  Shared configuration path/inspect/init/edit/preflight-update")
 	fmt.Println("  version                 Show version information")
+	fmt.Println("  licenses                Print terminal dependency copyright and license notices")
 	fmt.Println("  help                    Show this help message")
 	fmt.Println()
 	fmt.Println("Examples:")

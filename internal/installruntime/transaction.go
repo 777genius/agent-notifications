@@ -18,7 +18,8 @@ import (
 // ErrPolicyRecovery leaves pending installer work untouched for its owner.
 var ErrPolicyRecovery = errors.New("pending installation transaction requires installer recovery")
 
-// ErrPolicyConflict is a raw-policy refusal before any journal publication.
+// ErrPolicyConflict refuses a stale ExpectedPolicy or invalid raw-policy
+// observation under the commit locks, before any journal or product mutation.
 var ErrPolicyConflict = errors.New("managed policy observation changed or invalid")
 
 // Identity includes existence: an empty file is not an absent file.
@@ -606,7 +607,7 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 		return l, err
 	}
 	if r.ExpectedPolicy != nil && *r.ExpectedPolicy != policyBefore {
-		return l, fmt.Errorf("stale explicit policy bytes")
+		return l, ErrPolicyConflict
 	}
 	if r.PolicyDocument != nil {
 		if !policyBefore.Exists || policyBefore.Link != "" || l.Enabled != policy.Enabled {

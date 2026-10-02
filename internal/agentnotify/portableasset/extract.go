@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/777genius/agent-notifications/internal/thirdpartynotices"
 )
 
 var (
@@ -187,7 +189,7 @@ func extractEntry(destRoot string, f *zip.File, seen map[string]bool) (int64, er
 
 func allowedArchivePath(name string) bool {
 	switch name {
-	case "plugin.json", "mcp.json", "skills/agent-notify/SKILL.md":
+	case "plugin.json", "mcp.json", "skills/agent-notify/SKILL.md", thirdpartynotices.Filename:
 		return true
 	}
 	if strings.HasPrefix(name, "bin/") && strings.Count(name, "/") == 1 {

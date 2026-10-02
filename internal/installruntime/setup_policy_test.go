@@ -83,8 +83,19 @@ func TestSetupPolicyByteCASAndWriterFloor(t *testing.T) {
 	if err = os.WriteFile(path, []byte(data), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = Commit(ctx, r); err == nil {
-		t.Fatal("manual policy CAS bypassed")
+	ownershipPath := filepath.Join(r.ControlRoot, "ownership.json")
+	ownership, err := os.ReadFile(ownershipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = Commit(ctx, r); !errors.Is(err, ErrPolicyConflict) {
+		t.Fatalf("manual policy CAS lost typed refusal: %v", err)
+	}
+	if after, err := os.ReadFile(ownershipPath); err != nil || string(after) != string(ownership) {
+		t.Fatalf("policy conflict changed ownership: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(r.ControlRoot, "transaction.json")); !os.IsNotExist(err) {
+		t.Fatalf("policy conflict published a transaction: %v", err)
 	}
 	got, _ := os.ReadFile(path)
 	if string(got) != data {
