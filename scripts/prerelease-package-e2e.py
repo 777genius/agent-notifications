@@ -80,7 +80,7 @@ def main():
                 command += ['--pattern', name]
             run(command)
             entries = {}
-            for line in (assets / 'checksums.txt').read_text().splitlines():
+            for line in (assets / 'checksums.txt').read_text(encoding='utf-8').splitlines():
                 if not line.strip() or line.startswith('#'):
                     continue
                 match = re.fullmatch(r'([0-9a-fA-F]{64})\s+\*?([^\r\n]+)', line)
@@ -108,7 +108,7 @@ def main():
                     names.add(info.filename)
                 assert sum(i.file_size for i in bundle.infolist()) <= 160 << 20
                 bundle.extractall(package)
-            manifest = json.loads((package / 'plugin.json').read_text())
+            manifest = json.loads((package / 'plugin.json').read_text(encoding='utf-8'))
             assert manifest['version'] == tag.removeprefix('v')
             zipped = package / 'bin' / ('claude-notifications.exe' if goos == 'windows' else 'claude-notifications')
             zipped.chmod(0o755)
@@ -137,11 +137,19 @@ def main():
                     (staged / item.name).write_bytes(item.read_bytes())
                 base = (f'http://127.0.0.1:{server.server_port}/download/{tag}' if phase == 'draft'
                         else f'https://github.com/{REPO}/releases/download/{tag}')
-                target = home / 'bundle'
-                target.mkdir()
+                consumer = root / 'TEST-consumer'
+                target = consumer / 'bin'
+                target.mkdir(parents=True)
+                for relative in ('bin/hook-wrapper.sh', 'bin/codex-hook-wrapper.sh',
+                                 'bin/install.sh', '.claude-plugin/plugin.json'):
+                    copied = consumer / relative
+                    copied.parent.mkdir(parents=True, exist_ok=True)
+                    copied.write_bytes((source / relative).read_bytes())
+                    copied.chmod(0o755 if relative.endswith('.sh') else 0o600)
+                env.update(PLUGIN_ROOT=str(consumer), CLAUDE_PLUGIN_ROOT=str(consumer))
                 env.update(INSTALL_TARGET_DIR=str(target), RELEASE_URL=base, CHECKSUMS_URL=base + '/checksums.txt')
                 for attempt in ('fresh', 'repeat'):
-                    output = run([os.environ.get('TEST_BASH', 'bash'), (source / 'bin/install.sh').as_posix()], env=env, cwd=home)
+                    output = run([os.environ.get('TEST_BASH', 'bash'), (consumer / 'bin/install.sh').as_posix()], env=env, cwd=home)
                     (report_path.parent / f'install-{attempt}.log').write_text(output, encoding="utf-8")
                     installed = target / binary_name
                     assert installed.is_file(), 'installed binary missing'
@@ -151,6 +159,87 @@ def main():
                         assert digest(target / name) == report['asset_sha256'][name], f'installed companion mismatch: {name}'
                     assert run([str(installed), 'version'], env=env, cwd=home).strip() == 'claude-notifications ' + tag
                     report['installer_' + attempt] = 'PASS'
+                report['installed_runtime_version'] = 'claude-notifications ' + tag
+                # Red if a real hook silently drops/misroutes a payload or replaces
+                # the opted-in candidate with the latest stable runtime.
+                hook_env = {k: v for k, v in env.items() if k not in
+                            ('RELEASE_URL', 'CHECKSUMS_URL', 'INSTALL_TARGET_DIR')}
+                bash = os.environ.get('TEST_BASH', 'bash')
+                if goos == 'windows':
+                    assert Path(bash).as_posix() == 'C:/Program Files/Git/bin/bash.exe'
+                config = Path(run([str(installed), 'config', 'path'], env=hook_env, cwd=home).strip())
+                run([str(installed), 'config', 'init'], env=hook_env, cwd=home)
+                deliveries = []
+
+                class Sink(http.server.BaseHTTPRequestHandler):
+                    def log_message(self, *_):
+                        pass
+
+                    def do_POST(self):
+                        body = self.rfile.read(int(self.headers['Content-Length'])).decode('utf-8')
+                        deliveries.append((self.path, json.loads(body)))
+                        self.send_response(200)
+                        self.end_headers()
+                        self.wfile.write(b'ok')
+
+                sink = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Sink)
+                sink_worker = threading.Thread(target=sink.serve_forever, daemon=True)
+                sink_worker.start()
+                try:
+                    config.write_text(json.dumps({
+                        'schemaVersion': 2,
+                        'notifications': {
+                            'desktop': {'enabled': False, 'sound': False, 'terminalBell': False},
+                            'webhook': {'enabled': True, 'preset': 'slack',
+                                        'url': f'http://127.0.0.1:{sink.server_port}/unexpected-shared'},
+                        },
+                        'agents': {product: {'notifications': {'webhook': {
+                            'url': f'http://127.0.0.1:{sink.server_port}/{product}'}}}
+                            for product in ('claude', 'codex')},
+                        'future': {'preserved': 9007199254740993},
+                    }), encoding='utf-8')
+                    before = config.read_bytes()
+                    run([str(installed), 'config', 'init'], env=hook_env, cwd=home)
+                    assert config.read_bytes() == before
+                    for attempt in ('fresh', 'repeat'):
+                        for product in ('claude', 'codex'):
+                            cwd = root / f'TEST-hook-{attempt}-{product}'
+                            cwd.mkdir()
+                            marker = f'package-{phase}-{goos}-{arch}-{attempt}-{product}'
+                            event = 'Stop' if product == 'codex' else 'Notification'
+                            payload = dict(hook_event_name=event, session_id=marker, cwd=str(cwd))
+                            if product == 'codex':
+                                payload.update(turn_id=marker, last_assistant_message=marker,
+                                               stop_hook_active=False)
+                            else:
+                                payload.update(notification_type='permission_prompt', message=marker)
+                            wrapper = target / ('codex-hook-wrapper.sh' if product == 'codex'
+                                                else 'hook-wrapper.sh')
+                            command = [bash, wrapper.as_posix(), 'handle-hook', event]
+                            if product == 'codex':
+                                command += ['--product', 'codex']
+                            count = len(deliveries)
+                            output = run(command, input=json.dumps(payload), env=hook_env, cwd=cwd)
+                            assert len(deliveries) == count + 1, (marker, output, deliveries)
+                            path, body = deliveries[-1]
+                            assert path == '/' + product and marker in body['attachments'][0]['text'], (marker, path, body)
+                            assert sum(marker in json.dumps(item) for _, item in deliveries) == 1
+                            assert config.read_bytes() == before, 'hook rewrote custom config'
+                            assert digest(installed) == report['asset_sha256'][binary_name], 'hook changed runtime'
+                            version = run([str(installed), 'version'], env=hook_env, cwd=cwd).strip()
+                            report['installed_runtime_version'] = version
+                            assert version == 'claude-notifications ' + tag, version
+                            selected_version = run([bash, wrapper.as_posix(), 'version'],
+                                                   env=hook_env, cwd=cwd).strip()
+                            assert selected_version == 'claude-notifications ' + tag, selected_version
+                        report['hook_chain_' + attempt] = 'PASS'
+                    assert len(deliveries) == 4
+                    report['hook_chain'] = dict(result='PASS', webhook_deliveries=4,
+                                                installed_runtime_version=version)
+                finally:
+                    sink.shutdown()
+                    sink.server_close()
+                    sink_worker.join()
                 output = run([sys.executable, str(source / 'scripts/release-artifact-e2e.py'),
                               '--binary', str(installed), '--version', tag], env=env, cwd=home)
                 (report_path.parent / 'webhook.log').write_text(output, encoding="utf-8")
