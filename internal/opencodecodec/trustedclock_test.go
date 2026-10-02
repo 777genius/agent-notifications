@@ -160,3 +160,55 @@ func TestOriginalNativeAgePolicy(t *testing.T) {
 		t.Fatal("legacy default or closed enum changed")
 	}
 }
+
+// Regression: the eight official pending images must be recognized as candidates,
+// while exact lookup and every single-field mutation still grant no clock.
+func TestPendingPlatformCandidatesRemainUnqualified(t *testing.T) {
+	for _, image := range []struct{ goos, goarch, version, generation, sha string }{
+		{"linux", "arm64", "1.18.33", "v1", "986fef2069a03b5181a9ec920786836f98fe3e4950c630941908687854e42757"},
+		{"linux", "arm64", "2.0.21", "v2", "d2f4c9ee106d9930d20ca5cf5f2c2216aab6fed836992cf24979d9481242c01c"},
+		{"darwin", "amd64", "1.18.33", "v1", "f53aae8eb68d832ab1bcd27bed88c02de910be61f4b5f90068ae8e93d5e794c9"},
+		{"darwin", "amd64", "2.0.21", "v2", "4642b7da61279c8aa5d389d9f29454936e449fea6bc510689e9cc976fff6579f"},
+		{"darwin", "arm64", "1.18.33", "v1", "139ddeb6a46ba276827bb8f79c7b28208621746e4fd6914d9ae71cc1a0a57524"},
+		{"darwin", "arm64", "2.0.21", "v2", "0b2b68c1efaf20a29aaf636c2ffccc1abb56243a82f48cce45e257d232e03442"},
+		{"windows", "amd64", "1.18.33", "v1", "52f60248a576b34c9a6dcaa27e0a7f08089af35bcdc0dfb10c04d3e00a98314c"},
+		{"windows", "amd64", "2.0.21", "v2", "ec7a3909bad41ef88e4650f737ab6f0b0c402a7f49a588812d0a79820c2dfc1f"},
+	} {
+		key := ImageKey{image.goos, image.goarch, "serve", image.sha}
+		candidate, ok := LookupCandidate(key)
+		if !ok || candidate != (Candidate{image.version, image.generation}) {
+			t.Fatal("official pending candidate missing or changed", key)
+		}
+		if _, ok := LookupQualifiedClock(key); ok {
+			t.Fatal("pending candidate granted a clock", key)
+		}
+		for _, change := range []func(*ImageKey){
+			func(k *ImageKey) { k.SHA256 = "unknown" }, func(k *ImageKey) { k.Entry = "tui" },
+			func(k *ImageKey) {
+				if k.GOOS == "linux" {
+					k.GOOS = "darwin"
+				} else {
+					k.GOOS = "linux"
+				}
+			},
+			func(k *ImageKey) {
+				if k.GOARCH == "amd64" {
+					k.GOARCH = "arm64"
+				} else {
+					k.GOARCH = "amd64"
+				}
+			},
+			func(k *ImageKey) { k.GOOS = "freebsd" }, func(k *ImageKey) { k.GOARCH = "x64" },
+			func(k *ImageKey) { k.GOARCH = "386" },
+		} {
+			bad := key
+			change(&bad)
+			if _, ok := LookupCandidate(bad); ok {
+				t.Fatal("mixed/unsupported pending tuple recognized", bad)
+			}
+			if _, ok := LookupQualifiedClock(bad); ok {
+				t.Fatal("mixed/unsupported pending tuple granted a clock", bad)
+			}
+		}
+	}
+}

@@ -46,11 +46,11 @@ export function createProcessRegistry(configuration) {
     ? { USERPROFILE: privateCwd, APPDATA: privateCwd, LOCALAPPDATA: privateCwd, TEMP: privateCwd, TMP: privateCwd }
     : { HOME: privateCwd, XDG_CONFIG_HOME: privateCwd, XDG_RUNTIME_DIR: privateCwd };
   const clockEnv = { ...base, ...environment(osEnv, osKeys) };
-  const eventEnv = { ...clockEnv, ...environment(deliveryEnv, deliveryKeys), AGENT_NOTIFICATIONS_CONTROL_ROOT: controlRoot };
   const profileEnv = { ...clockEnv, AGENT_NOTIFICATIONS_CONTROL_ROOT: controlRoot,
     AGENT_NOTIFICATIONS_ORIGIN: origin, AGENT_NOTIFICATIONS_NATIVE_PID: String(nativePID),
     AGENT_NOTIFICATIONS_HOST_EXECUTABLE: publicExecPath, AGENT_NOTIFICATIONS_HOST_ENTRY: 'serve',
     AGENT_NOTIFICATIONS_PUBLIC_EXEC_PATH: publicExecPath };
+  const eventEnv = { ...profileEnv, ...environment(deliveryEnv, deliveryKeys) };
   const entries = new Set(), watchers = new Set();
   let disposed = false, disabled = false;
   const status = () => Object.freeze({ accepting: !disposed && !disabled, disposed,

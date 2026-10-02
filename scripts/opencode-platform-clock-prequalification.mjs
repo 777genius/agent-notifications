@@ -43,10 +43,10 @@ export function helperFrame(raw, platform) {
 }
 export function productSample(s, platform) {
   need(s && Object.isFrozen(s), 'frozen_actual_sample');
-  const keys = platform === 'linux' ? ['boot', 'domain', 'loNS', 'hiNS', 'wallNS', 'offsetLoNS', 'offsetHiNS'] :
+  const keys = platform === 'linux' ? ['boot', 'domain', 'rawKind', 'loNS', 'hiNS', 'wallNS', 'offsetLoNS', 'offsetHiNS'] :
     ['boot', 'domain', 'rawKind', 'loNS', 'hiNS', 'wallNS'];
   need(Object.keys(s).length === keys.length && keys.every(k => Object.hasOwn(s, k)), 'actual_sample_shape');
-  const kind = platform === 'linux' ? 'linux-boottime' : s.rawKind;
+  const kind = s.rawKind;
   tuple(s.boot, s.domain, kind, platform);
   for (const k of ['loNS', 'hiNS', 'wallNS']) need(typeof s[k] === 'bigint' && s[k] > 0n && s[k] <= MAX, 'actual_wall_counter_types');
   need(s.hiNS >= s.loNS && s.hiNS - s.loNS <= (platform === 'linux' ? 110000000n : 100000000n), 'actual_pair_width');

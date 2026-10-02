@@ -42,7 +42,7 @@ type ClockSample struct {
 // R is native-only; T includes the independently qualified source/JS terms.
 type TimePolicy struct {
 	ProfileID, RawKind, OriginalNativeAge string
-	NativeReadBoundNS, ComparisonBoundNS int64
+	NativeReadBoundNS, ComparisonBoundNS  int64
 }
 
 func (p TimePolicy) valid() bool {

@@ -83,6 +83,9 @@ jobs:
           launcher=("$(command -v python)" scripts/opencode-platform-clock-prequalification.py
             --execute-ci --os "$CLOCK_PLATFORM" --arch "$CLOCK_ARCH"
             --temp-base "$temp_base" --report "$RUNNER_TEMP/platform-clock-safe-evidence.json")
+          if [[ "$CLOCK_PLATFORM" == linux && "$CLOCK_ARCH" == amd64 && -z "$PLATFORM_CLOCK_CURRENT_PRIMARY_JSON" ]]; then
+            launcher+=(--current-primary scripts/testdata/opencode-platform-clock-prequalification/current-linux-amd64-primary.json)
+          fi
           [[ ${#launcher[@]} -gt 0 && -n "${launcher[0]}" ]]
           "${launcher[@]}"
       - name: Upload only closed public-safe observations

@@ -12,6 +12,7 @@ test('proc grammar has exact BigInt ns and rejects truncation/noncanonical/overf
 // Ordinary Node checks API availability and its OWN actual proc/ns identity.
 // This is not a Bun/image qualification or a native source-policy grant.
 test('real held proc/ns fds have bounded intervals and disposal closes authority',()=>{
+ const selected=[selectClockCell('v1'),selectClockCell('v2')];
  const c=createLinuxClock();
  try {
   const a=c.sample(), b=c.sample();
@@ -19,7 +20,7 @@ test('real held proc/ns fds have bounded intervals and disposal closes authority
   assert.equal(a.boot,b.boot);assert.equal(a.domain,b.domain);assert.ok(b.loNS>=a.loNS);
   assert.match(a.domain,/^linux-time:[1-9][0-9]*:[1-9][0-9]*$/);
  }finally{c.dispose();}
- assert.throws(()=>c.sample());assert.equal(selectClockCell('v1'),undefined);assert.equal(selectClockCell('v2'),undefined);
+ assert.throws(()=>c.sample());assert.deepEqual([selectClockCell('v1'),selectClockCell('v2')],selected);
 });
 // Red if a caller-supplied manifest can register authority, change the fixed
 // error budget, inherit an unknown image or bypass the closed evidence schema.
@@ -29,10 +30,14 @@ test('manifest description is immutable acyclic data and cannot enable a product
   {version:'2.0.21',imageSHA256:'f916986543348d7953d8d43aa048516cdbc3f84f4d0dc9c0c5b9d1da3030cea7'}],
   algorithmSourceMerkleSHA256:'d'.repeat(64),sourceKind:'linux-proc-boottime',rawKind:'linux-boottime',
   nativeReadBoundNS:'103000000',comparisonBoundNS:'430000000',translationBoundNS:'224000000'};
+ const selected=[selectClockCell('v1'),selectClockCell('v2')];
  const policy=describeClockPolicy(row);assert.ok(Object.isFrozen(policy));assert.equal(policy.comparisonBoundNS,430000000n);
- assert.equal(selectClockCell('v1'),undefined);assert.equal(selectClockCell('v2'),undefined);
+ assert.deepEqual([selectClockCell('v1'),selectClockCell('v2')],selected);
+ assert.equal(selectClockCell('unknown'),undefined);
  for(const change of [m=>m.supported=true,m=>m.goBinarySHA256='a'.repeat(64),m=>m.comparisonBoundNS='2000000000',
-  m=>m.images[0].version='2.0.22',m=>m.algorithmSourceMerkleSHA256='0'.repeat(64)]){
+  m=>m.images[0].version='2.0.22',m=>m.images[0].imageSHA256='a'.repeat(64),
+  m=>m.algorithmSourceMerkleSHA256='0'.repeat(64)]){
   const m=structuredClone(row);change(m);assert.throws(()=>describeClockPolicy(m));
+  assert.deepEqual([selectClockCell('v1'),selectClockCell('v2')],selected);
  }
 });

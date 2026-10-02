@@ -85,3 +85,38 @@ func TestPureNativeBinderRequiresCompletePrivateTuple(t *testing.T) {
 		}
 	}
 }
+
+// Regression: recognizing an official pending image must not accept copied Linux
+// reader proofs, even when the claimed runtime identity and probe look complete.
+func TestPendingPlatformImagesCannotBindCopiedReader(t *testing.T) {
+	for _, image := range []struct{ goos, goarch, version, generation, sha string }{
+		{"linux", "arm64", "1.18.33", "v1", "986fef2069a03b5181a9ec920786836f98fe3e4950c630941908687854e42757"},
+		{"linux", "arm64", "2.0.21", "v2", "d2f4c9ee106d9930d20ca5cf5f2c2216aab6fed836992cf24979d9481242c01c"},
+		{"darwin", "amd64", "1.18.33", "v1", "f53aae8eb68d832ab1bcd27bed88c02de910be61f4b5f90068ae8e93d5e794c9"},
+		{"darwin", "amd64", "2.0.21", "v2", "4642b7da61279c8aa5d389d9f29454936e449fea6bc510689e9cc976fff6579f"},
+		{"darwin", "arm64", "1.18.33", "v1", "139ddeb6a46ba276827bb8f79c7b28208621746e4fd6914d9ae71cc1a0a57524"},
+		{"darwin", "arm64", "2.0.21", "v2", "0b2b68c1efaf20a29aaf636c2ffccc1abb56243a82f48cce45e257d232e03442"},
+		{"windows", "amd64", "1.18.33", "v1", "52f60248a576b34c9a6dcaa27e0a7f08089af35bcdc0dfb10c04d3e00a98314c"},
+		{"windows", "amd64", "2.0.21", "v2", "ec7a3909bad41ef88e4650f737ab6f0b0c402a7f49a588812d0a79820c2dfc1f"},
+	} {
+		t.Run(image.goos+"/"+image.goarch+"/"+image.version, func(t *testing.T) {
+			descriptor, ok := opencodehost.NativeObserverEvidence(image.version)
+			if !ok {
+				t.Fatal("missing Linux source fixture")
+			}
+			copied := descriptor.Tuple
+			copied.GOOS, copied.GOARCH, copied.ImageSHA256 = image.goos, image.goarch, image.sha
+			e := opencodehost.VersionEvidence{Version: image.version, Source: "host_runtime", ProbeStatus: "ok", ExecutableIdentity: "TEST-copied-proof-only"}
+			live := runtimeLiveImage{GOOS: image.goos, GOARCH: image.goarch, Entry: "serve", SHA256: image.sha, NativePID: 1, ProcessStartTick: 1}
+			if selectBoundNativeObserver(e, copied) != observerUnverified {
+				t.Fatal("copied Linux proofs bound a pending image")
+			}
+			if _, ok := runtimeReaderTuple(live, image.version); ok {
+				t.Fatal("pending image acquired an independent reader")
+			}
+			if qualifyRuntimeObserver(opencodehost.Resolve(e), live) != observerUnverified {
+				t.Fatal("pending image acquired runtime authority")
+			}
+		})
+	}
+}

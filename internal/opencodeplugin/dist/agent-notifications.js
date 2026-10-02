@@ -1,4 +1,547 @@
 // Generated with the UAP observer pinned in package-lock.json.
+var __defProp = Object.defineProperty;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __esm = (fn, res, err) => function __init() {
+  if (err) throw err[0];
+  try {
+    return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+  } catch (e) {
+    throw err = [e], e;
+  }
+};
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
+
+// protocol.mjs
+import { createHash } from "node:crypto";
+function ns(value) {
+  if (typeof value !== "string" || !/^(0|[1-9][0-9]{0,18})$/.test(value)) invalid();
+  const result2 = BigInt(value);
+  if (result2 > int64Max) invalid();
+  return result2;
+}
+function closed(value, keys, required = keys) {
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype || Reflect.ownKeys(value).some((key) => !keys.includes(key)) || required.some((key) => !Object.hasOwn(value, key))) invalid();
+  return value;
+}
+function domainOK(x, kind = "linux-boottime") {
+  if (kind === "darwin-monotonic-raw") return x === "darwin-kernel";
+  if (kind === "windows-interrupt-precise") return x === "windows-kernel";
+  if (kind !== "linux-boottime" || typeof x !== "string" || !/^linux-time:[1-9][0-9]*:[1-9][0-9]*$/.test(x)) return false;
+  return x.split(":").slice(1).every((part) => part.length <= 20 && BigInt(part) <= 18446744073709551615n);
+}
+function parseJSON(bytes, max = 4096) {
+  if (!Buffer.isBuffer(bytes) || bytes.length > max) invalid();
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  const token = /\s*("(?:[^"\\\u0000-\u001f]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*"|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|true|false|null|[{}\[\],:])/y;
+  let at = 0, entries = 0;
+  function next() {
+    token.lastIndex = at;
+    const m = token.exec(text);
+    if (!m) invalid();
+    at = token.lastIndex;
+    return m[1];
+  }
+  function value(t, depth) {
+    if (depth > 8 || ++entries > 96) invalid();
+    if (t === "{") {
+      const keys = /* @__PURE__ */ new Set();
+      let k = next();
+      if (k === "}") return;
+      for (; ; ) {
+        if (!k.startsWith('"')) invalid();
+        const key = JSON.parse(k);
+        if (keys.has(key)) invalid();
+        keys.add(key);
+        if (next() !== ":") invalid();
+        value(next(), depth + 1);
+        k = next();
+        if (k === "}") return;
+        if (k !== ",") invalid();
+        k = next();
+      }
+    }
+    if (t === "[") {
+      let v = next();
+      if (v === "]") return;
+      for (; ; ) {
+        value(v, depth + 1);
+        v = next();
+        if (v === "]") return;
+        if (v !== ",") invalid();
+        v = next();
+      }
+    }
+    if (["}", "]", ",", ":"].includes(t) || !t.startsWith('"') && !["true", "false", "null"].includes(t) && (!/^-?(0|[1-9][0-9]*)$/.test(t) || !Number.isSafeInteger(Number(t)))) invalid();
+  }
+  value(next(), 0);
+  if (text.slice(at).trim()) invalid();
+  return JSON.parse(text);
+}
+function profileReceipt(output) {
+  const receipt = closed(parseJSON(output, 1024), ["protocol", "semantic", "generation", "resourceClosure"]);
+  if (receipt.protocol !== 1 || receipt.resourceClosure !== "reaped_or_not_started" || !(receipt.semantic === "unverified" && receipt.generation === "none" || receipt.semantic === "eligible" && ["v1", "v2"].includes(receipt.generation))) invalid();
+  return Object.freeze(receipt);
+}
+function clockReceipt(output) {
+  const r = closed(parseJSON(output, 1024), [
+    "protocol",
+    "boot",
+    "clockDomain",
+    "clockKind",
+    "monoLoNs",
+    "monoHiNs",
+    "wallUnixNs",
+    "uncertaintyNs"
+  ]);
+  const lo = ns(r.monoLoNs), hi = ns(r.monoHiNs);
+  if (r.protocol !== 1 || !bootOK(r.boot) || !domainOK(r.clockDomain, r.clockKind) || hi < lo || hi - lo > 100000000n || ns(r.wallUnixNs) === 0n || ns(r.uncertaintyNs) !== hi - lo + 3000000n) invalid();
+  return Object.freeze({
+    boot: r.boot,
+    domain: r.clockDomain,
+    rawKind: r.clockKind,
+    monoLoNS: r.monoLoNs,
+    monoHiNS: r.monoHiNs,
+    wallNS: r.wallUnixNs,
+    readUncertaintyNS: r.uncertaintyNs
+  });
+}
+function fence(anchor, policy) {
+  const hash = createHash("sha256");
+  for (const string of ["AN/OpenCode/clock-policy/v1", anchor.boot, anchor.domain, anchor.rawKind, policy.profileID]) {
+    const data = Buffer.from(string), length = Buffer.alloc(4);
+    length.writeUInt32BE(data.length);
+    hash.update(length).update(data);
+  }
+  for (const bound of [policy.nativeReadBoundNS, policy.comparisonBoundNS]) {
+    const data = Buffer.alloc(8);
+    data.writeBigInt64BE(bound);
+    hash.update(data);
+  }
+  return hash.digest("hex");
+}
+function validateFrame(frame, policy) {
+  const p = closed(frame, ["protocol", "origin", "event", "provenance"]);
+  if (p.protocol !== 1 || typeof p.origin !== "string" || !/^[a-f0-9]{64}$/.test(p.origin)) invalid();
+  const e = closed(
+    p.event,
+    ["version", "kind", "sessionID", "turnID", "rootSession", "provenance", "messageID", "requestID", "nativeType"],
+    ["version", "kind", "sessionID", "turnID", "rootSession", "provenance"]
+  );
+  if (e.version !== 1 || e.rootSession !== true || !identity(e.sessionID) || !identity(e.turnID) || !["turn_idle_verified", "question_asked", "permission_asked", "terminal_error"].includes(e.kind) || e.nativeType !== void 0 || e.messageID !== void 0 && !identity(e.messageID) || e.requestID !== void 0 && !identity(e.requestID) || e.kind === "turn_idle_verified" && (!identity(e.messageID) || e.requestID !== void 0) || e.kind.endsWith("_asked") && (!identity(e.requestID) || e.messageID !== void 0) || e.kind === "terminal_error" && (e.messageID !== void 0 || e.requestID !== void 0)) invalid();
+  const native = closed(
+    e.provenance,
+    ["generation", "observationID", "nativeTime", "timeBasis", "nativeEventID", "nativeMessageID"],
+    ["generation", "observationID", "nativeTime", "timeBasis"]
+  );
+  if (!identity(native.observationID) || !Number.isSafeInteger(native.nativeTime) || native.nativeTime <= 0 || BigInt(native.nativeTime) * 1000000n > int64Max || !["v1", "v2"].includes(native.generation) || native.generation !== policy.generation || native.nativeEventID !== void 0 && !identity(native.nativeEventID) || native.nativeMessageID !== void 0 && !identity(native.nativeMessageID) || native.generation === "v2" && (!identity(native.nativeEventID) || native.timeBasis !== "envelope_created") || native.generation === "v1" && native.timeBasis !== (e.kind === "turn_idle_verified" ? "assistant_completed" : "assistant_created_lower_bound") || native.generation === "v1" && e.kind === "terminal_error" && !identity(native.nativeMessageID)) invalid();
+  const v = closed(p.provenance, [
+    "sourceEpoch",
+    "epochStartedTickNS",
+    "policyID",
+    "fence",
+    "anchor",
+    "ingressTickNS",
+    "spawnTickNS",
+    "deadlineTickNS",
+    "calibration"
+  ]);
+  if (!identity(v.sourceEpoch, 128) || !/^[\x20-\x7e]+$/.test(v.sourceEpoch) || v.policyID !== policy.profileID || !rawKindOK(policy.rawKind) || policy.nativeReadBoundNS < 3000000n || policy.nativeReadBoundNS > 103000000n || policy.comparisonBoundNS < 2n * policy.nativeReadBoundNS || policy.comparisonBoundNS > 2000000000n || policy.translationBoundNS < 0n || 2n * policy.nativeReadBoundNS + policy.translationBoundNS > policy.comparisonBoundNS) invalid();
+  const a = closed(v.anchor, ["boot", "domain", "rawKind", "monoLoNS", "monoHiNS", "wallNS", "readUncertaintyNS"]);
+  const lo = ns(a.monoLoNS), hi = ns(a.monoHiNS);
+  if (!bootOK(a.boot) || !domainOK(a.domain, a.rawKind) || a.rawKind !== policy.rawKind || hi < lo || hi - lo > 100000000n || ns(a.wallNS) === 0n || ns(a.readUncertaintyNS) !== hi - lo + 3000000n || ns(a.readUncertaintyNS) > policy.nativeReadBoundNS || v.fence !== fence(a, policy)) invalid();
+  const start = ns(v.epochStartedTickNS), ingress = ns(v.ingressTickNS), spawn2 = ns(v.spawnTickNS), deadline = ns(v.deadlineTickNS);
+  if (start > lo || lo > ingress || ingress > spawn2 || spawn2 >= deadline || spawn2 - ingress > 30000000000n || deadline - spawn2 > 20000000000n) invalid();
+  const c = closed(v.calibration, ["calibrationID", "sourceEpoch", "sourceLoNS", "sourceHiNS", "nativeLoNS", "nativeHiNS", "errorNS"]);
+  if (c.calibrationID !== policy.calibrationID || c.sourceEpoch !== v.sourceEpoch || ns(c.sourceLoNS) >= ns(c.sourceHiNS) || ns(c.sourceHiNS) - ns(c.sourceLoNS) > policy.translationBoundNS || ns(c.sourceLoNS) > hi || lo >= ns(c.sourceHiNS) || c.nativeLoNS !== a.monoLoNS || c.nativeHiNS !== a.monoHiNS || ns(c.errorNS) !== policy.translationBoundNS) invalid();
+  return frame;
+}
+function encodeFrame(frame, policy) {
+  validateFrame(frame, policy);
+  const output = Buffer.from(JSON.stringify(frame));
+  if (output.length > 4096) invalid();
+  return output;
+}
+var invalid, int64Max, identity, bootOK, rawKindOK;
+var init_protocol = __esm({
+  "protocol.mjs"() {
+    invalid = () => {
+      throw new TypeError("invalid_private_protocol");
+    };
+    int64Max = 9223372036854775807n;
+    identity = (x, limit = 256) => typeof x === "string" && x.length > 0 && !/[\u0000-\u001f\u007f]/u.test(x) && Buffer.byteLength(x) <= limit;
+    bootOK = (x) => typeof x === "string" && /^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(x) && x !== "00000000-0000-0000-0000-000000000000";
+    rawKindOK = (kind) => ["linux-boottime", "darwin-monotonic-raw", "windows-interrupt-precise"].includes(kind);
+  }
+});
+
+// native-clock-contract.mjs
+function uint64(value) {
+  if (typeof value !== "bigint" && !Number.isSafeInteger(value)) unavailable();
+  const n = BigInt(value);
+  if (n < 0n || n > U64) unavailable();
+  return n;
+}
+function positiveNS(value) {
+  if (typeof value !== "bigint" || value <= 0n || value > int64Max) unavailable();
+  return value;
+}
+function machNS(ticks, numer, denom) {
+  ticks = uint64(ticks);
+  if (!Number.isInteger(numer) || !Number.isInteger(denom) || numer <= 0 || denom <= 0 || numer > 4294967295 || denom > 4294967295 || ticks > U64 / BigInt(numer)) unavailable();
+  return positiveNS(ticks * BigInt(numer) / BigInt(denom));
+}
+function interruptNS(ticks) {
+  return positiveNS(uint64(ticks) * 100n);
+}
+function filetimeNS(ticks) {
+  return positiveNS((uint64(ticks) - 116444736000000000n) * 100n);
+}
+function darwinBoot(bytes, length, status) {
+  if (status !== 0 || length !== 37n || !(bytes instanceof Uint8Array) || bytes.length < 37 || bytes[36] !== 0 || !bytes.subarray(0, 36).every((b) => b > 0 && b < 128)) unavailable();
+  const boot = Buffer.from(bytes.subarray(0, 36)).toString("ascii").toLowerCase();
+  if (!bootOK(boot)) unavailable();
+  return boot;
+}
+function windowsBoot(bytes, length, status) {
+  if (status !== 0 || length !== 32 || !(bytes instanceof Uint8Array) || bytes.length !== 32) unavailable();
+  const b = Buffer.from(bytes), hex = (n, w) => n.toString(16).padStart(w, "0");
+  const boot = `${hex(b.readUInt32LE(0), 8)}-${hex(b.readUInt16LE(4), 4)}-${hex(b.readUInt16LE(6), 4)}-${b.subarray(8, 10).toString("hex")}-${b.subarray(10, 16).toString("hex")}`;
+  if (!bootOK(boot)) unavailable();
+  return boot;
+}
+function address(value, alignment = 1) {
+  if (!Number.isSafeInteger(value) || value <= 0 || value % alignment !== 0) unavailable();
+  return value;
+}
+function closeAll(releases) {
+  let failed = false;
+  for (const release of releases.splice(0).reverse()) {
+    try {
+      release();
+    } catch {
+      failed = true;
+    }
+  }
+  if (failed) unavailable();
+}
+function abi(definitions) {
+  return Object.freeze(Object.fromEntries(Object.entries(definitions).map(([key, [returns, ...args]]) => [key, Object.freeze({ returns, args: Object.freeze(args) })])));
+}
+function withWallOffset(sample, sourceWallBoundNS) {
+  if (!bootOK(sample.boot) || !domainOK(sample.domain, sample.rawKind) || typeof sourceWallBoundNS !== "bigint" || sourceWallBoundNS < 0n || sourceWallBoundNS > 2000000000n || typeof sample.loNS !== "bigint" || sample.loNS < 0n || sample.loNS > int64Max || sample.rawKind !== "linux-boottime" && sample.loNS === 0n || typeof sample.hiNS !== "bigint" || sample.hiNS <= sample.loNS || sample.hiNS > int64Max || sample.hiNS - sample.loNS > (sample.rawKind === "linux-boottime" ? 110000000n : 100000000n)) unavailable();
+  const wallNS = positiveNS(sample.wallNS);
+  const offsetLoNS = wallNS - sample.hiNS - sourceWallBoundNS, offsetHiNS = wallNS - sample.loNS + sourceWallBoundNS;
+  if (offsetLoNS < -int64Max || offsetHiNS > int64Max) unavailable();
+  return Object.freeze({ ...sample, offsetLoNS, offsetHiNS });
+}
+function createNativeClock(port, domain) {
+  let disposed = false, previous, boot, rawKind, quantum2;
+  function dispose() {
+    if (!disposed) {
+      disposed = true;
+      port.close();
+    }
+  }
+  try {
+    rawKind = domain === "darwin-kernel" ? "darwin-monotonic-raw" : domain === "windows-kernel" ? "windows-interrupt-precise" : unavailable();
+    quantum2 = domain === "darwin-kernel" ? 1n : 100n;
+    port.verify();
+    boot = port.readBoot();
+    if (!bootOK(boot)) unavailable();
+  } catch {
+    try {
+      dispose();
+    } catch {
+    }
+    unavailable();
+  }
+  function sample() {
+    try {
+      if (disposed) unavailable();
+      port.verify();
+      if (port.readBoot() !== boot) unavailable();
+      const loNS = positiveNS(port.readCounter());
+      const wallNS = positiveNS(port.readWall());
+      const last = positiveNS(port.readCounter()), hiNS = positiveNS(last + quantum2);
+      if (last < loNS || hiNS - loNS > 100000000n || previous && (loNS < previous.last || wallNS < previous.wallNS)) unavailable();
+      if (port.readBoot() !== boot) unavailable();
+      port.verify();
+      previous = { last, wallNS };
+      return Object.freeze({ boot, domain, rawKind, loNS, hiNS, wallNS });
+    } catch {
+      try {
+        dispose();
+      } catch {
+      }
+      unavailable();
+    }
+  }
+  return Object.freeze({ sample, dispose, imageSHA256: port.imageSHA256 });
+}
+var unavailable, U64, darwinABI, windowsKernelABI, windowsNtABI, interruptABI;
+var init_native_clock_contract = __esm({
+  "native-clock-contract.mjs"() {
+    init_protocol();
+    unavailable = () => {
+      throw new TypeError("clock_unavailable");
+    };
+    U64 = 18446744073709551615n;
+    darwinABI = abi({
+      mach_continuous_time: ["u64"],
+      mach_timebase_info: ["i32", "ptr"],
+      sysctlbyname: ["i32", "ptr", "ptr", "ptr", "ptr", "u64"]
+    });
+    windowsKernelABI = abi({
+      GetSystemDirectoryW: ["u32", "ptr", "u32"],
+      LoadLibraryExW: ["u64", "ptr", "u64", "u32"],
+      GetProcAddress: ["ptr", "u64", "ptr"],
+      FreeLibrary: ["i32", "u64"],
+      GetSystemTimePreciseAsFileTime: ["void", "ptr"]
+    });
+    windowsNtABI = abi({ NtQuerySystemInformation: ["i32", "u32", "ptr", "u32", "ptr"] });
+    interruptABI = Object.freeze({ returns: "void", args: Object.freeze(["ptr"]) });
+  }
+});
+
+// native-clock-image.mjs
+import { openSync as openSync2, closeSync as closeSync2, readSync as readSync2, fstatSync as fstatSync2, statSync as statSync3, realpathSync as realpathSync2, constants as constants2 } from "node:fs";
+import { createHash as createHash3 } from "node:crypto";
+function holdFile(path2) {
+  const fd = openSync2(path2, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0));
+  try {
+    let verify = function() {
+      if (disposed || !same2(initial, fstatSync2(fd, { bigint: true })) || !same2(initial, statSync3(path2, { bigint: true }))) unavailable();
+    };
+    const initial = fstatSync2(fd, { bigint: true });
+    if (!initial.isFile() || !["dev", "ino", "size", "mtimeNs", "ctimeNs"].every((k) => typeof initial[k] === "bigint") || initial.ino <= 0n || initial.size <= 0n || initial.size > 536870912n) unavailable();
+    const hash = createHash3("sha256"), block = Buffer.alloc(65536);
+    let offset = 0;
+    while (offset < Number(initial.size)) {
+      const count = readSync2(fd, block, 0, Math.min(block.length, Number(initial.size) - offset), offset);
+      if (count <= 0) unavailable();
+      hash.update(block.subarray(0, count));
+      offset += count;
+    }
+    const digest = hash.digest("hex");
+    let disposed = false;
+    verify();
+    return Object.freeze({ digest, verify, close() {
+      if (!disposed) {
+        disposed = true;
+        closeSync2(fd);
+      }
+    } });
+  } catch {
+    try {
+      closeSync2(fd);
+    } catch {
+    }
+    unavailable();
+  }
+}
+function pinNativeImage() {
+  const bun = globalThis.Bun?.version;
+  if (!images2.some((row) => row[0] === process.platform && row[1] === process.arch && row[2] === bun)) unavailable();
+  const path2 = realpathSync2(process.execPath), held2 = holdFile(path2);
+  try {
+    if (!images2.some((row) => row[0] === process.platform && row[1] === process.arch && row[2] === bun && row[3] === held2.digest)) unavailable();
+    return Object.freeze({ imageSHA256: held2.digest, close: held2.close, verify() {
+      if (globalThis.Bun?.version !== bun || realpathSync2(process.execPath) !== path2) unavailable();
+      held2.verify();
+    } });
+  } catch {
+    held2.close();
+    unavailable();
+  }
+}
+var images2, same2;
+var init_native_clock_image = __esm({
+  "native-clock-image.mjs"() {
+    init_native_clock_contract();
+    images2 = Object.freeze([
+      ["darwin", "x64", "1.3.14", "f53aae8eb68d832ab1bcd27bed88c02de910be61f4b5f90068ae8e93d5e794c9"],
+      ["darwin", "arm64", "1.3.14", "139ddeb6a46ba276827bb8f79c7b28208621746e4fd6914d9ae71cc1a0a57524"],
+      ["win32", "x64", "1.3.14", "52f60248a576b34c9a6dcaa27e0a7f08089af35bcdc0dfb10c04d3e00a98314c"],
+      ["darwin", "x64", "1.4.2", "4642b7da61279c8aa5d389d9f29454936e449fea6bc510689e9cc976fff6579f"],
+      ["darwin", "arm64", "1.4.2", "0b2b68c1efaf20a29aaf636c2ffccc1abb56243a82f48cce45e257d232e03442"],
+      ["win32", "x64", "1.4.2", "ec7a3909bad41ef88e4650f737ab6f0b0c402a7f49a588812d0a79820c2dfc1f"]
+    ].map(Object.freeze));
+    same2 = (a, b) => ["dev", "ino", "size", "mtimeNs", "ctimeNs"].every((k) => a[k] === b[k]);
+  }
+});
+
+// darwin-clock.mjs
+var darwin_clock_exports = {};
+__export(darwin_clock_exports, {
+  createDarwinClock: () => createDarwinClock
+});
+async function createDarwinClock({ signal } = {}) {
+  if (signal?.aborted || process.platform !== "darwin" || !["x64", "arm64"].includes(process.arch)) unavailable();
+  const releases = [];
+  const abort = () => {
+    try {
+      closeAll(releases);
+    } catch {
+    }
+  };
+  signal?.addEventListener("abort", abort, { once: true });
+  try {
+    let readBoot = function() {
+      buffer.fill(0);
+      size[0] = BigInt(buffer.byteLength);
+      const status = lib.sysctlbyname(address(ptr(name)), aligned(buffer), aligned(size), null, 0n);
+      return darwinBoot(new Uint8Array(buffer.buffer), size[0], status);
+    };
+    const image = pinNativeImage();
+    releases.push(image.close);
+    const { dlopen, ptr } = await import("bun:ffi");
+    if (signal?.aborted) unavailable();
+    if (typeof dlopen !== "function" || typeof ptr !== "function") unavailable();
+    const library = dlopen("/usr/lib/libSystem.B.dylib", darwinABI);
+    releases.push(() => library.close());
+    const lib = library.symbols, aligned = (view) => address(ptr(view), view.BYTES_PER_ELEMENT);
+    const base = new Uint32Array(2);
+    if (lib.mach_timebase_info(aligned(base)) !== 0 || base[0] === 0 || base[1] === 0) unavailable();
+    const numer = base[0], denom = base[1];
+    const name = Buffer.from("kern.bootsessionuuid\0");
+    const buffer = new Uint32Array(16), size = new BigUint64Array(1);
+    return createNativeClock({
+      imageSHA256: image.imageSHA256,
+      readBoot,
+      readCounter: () => machNS(lib.mach_continuous_time(), numer, denom),
+      readWall() {
+        const ms = Date.now();
+        if (!Number.isSafeInteger(ms)) unavailable();
+        return positiveNS(BigInt(ms) * 1000000n);
+      },
+      verify() {
+        image.verify();
+        base.fill(0);
+        if (lib.mach_timebase_info(aligned(base)) !== 0 || base[0] !== numer || base[1] !== denom) unavailable();
+      },
+      close: () => closeAll(releases)
+    }, "darwin-kernel");
+  } catch {
+    try {
+      closeAll(releases);
+    } catch {
+    }
+    unavailable();
+  } finally {
+    signal?.removeEventListener("abort", abort);
+  }
+}
+var init_darwin_clock = __esm({
+  "darwin-clock.mjs"() {
+    init_native_clock_image();
+    init_native_clock_contract();
+  }
+});
+
+// windows-clock.mjs
+var windows_clock_exports = {};
+__export(windows_clock_exports, {
+  createWindowsClock: () => createWindowsClock
+});
+import { lstatSync, realpathSync as realpathSync3 } from "node:fs";
+async function createWindowsClock({ signal } = {}) {
+  if (signal?.aborted || process.platform !== "win32" || process.arch !== "x64") unavailable();
+  const releases = [];
+  const abort = () => {
+    try {
+      closeAll(releases);
+    } catch {
+    }
+  };
+  signal?.addEventListener("abort", abort, { once: true });
+  try {
+    let verifyPaths = function() {
+      for (const path2 of ["C:\\", "C:\\Windows", directory, ...files]) {
+        if (lstatSync(path2).isSymbolicLink() || realpathSync3(path2).toLowerCase() !== path2.toLowerCase()) unavailable();
+      }
+    }, library = function(path2, abi2) {
+      const lib = dlopen(path2, abi2);
+      releases.push(() => lib.close());
+      return lib.symbols;
+    };
+    const image = pinNativeImage();
+    releases.push(image.close);
+    const files = ["kernel32.dll", "ntdll.dll"].map((name2) => `${directory}\\${name2}`);
+    verifyPaths();
+    const held2 = [];
+    for (const path2 of files) {
+      const file = holdFile(path2);
+      held2.push(file);
+      releases.push(file.close);
+    }
+    const { dlopen, ptr, linkSymbols } = await import("bun:ffi");
+    if (signal?.aborted) unavailable();
+    if (typeof dlopen !== "function" || typeof ptr !== "function" || typeof linkSymbols !== "function") unavailable();
+    const aligned = (view) => address(ptr(view), view.BYTES_PER_ELEMENT);
+    const kernel = library(files[0], windowsKernelABI);
+    const system = new Uint16Array(32768);
+    const length = kernel.GetSystemDirectoryW(aligned(system), system.length);
+    if (!Number.isInteger(length) || length <= 0 || length >= system.length || system[length] !== 0 || String.fromCharCode(...system.subarray(0, length)).toLowerCase() !== directory.toLowerCase()) unavailable();
+    const contract = Buffer.from("api-ms-win-core-realtime-l1-1-1.dll\0", "utf16le");
+    const handle = uint64(kernel.LoadLibraryExW(address(ptr(contract), 2), 0n, 2048));
+    if (handle === 0n) unavailable();
+    releases.push(() => {
+      if (kernel.FreeLibrary(handle) === 0) unavailable();
+    });
+    const name = Buffer.from("QueryInterruptTimePrecise\0");
+    const target = address(kernel.GetProcAddress(handle, address(ptr(name))));
+    const wrapper = linkSymbols({ QueryInterruptTimePrecise: { ...interruptABI, ptr: target } });
+    releases.push(() => wrapper.close());
+    const nt = library(files[1], windowsNtABI);
+    const info = new BigUint64Array(4), returned = new Uint32Array(1);
+    const counter = new BigUint64Array(1), wall = new BigUint64Array(1);
+    return createNativeClock({
+      imageSHA256: image.imageSHA256,
+      readBoot() {
+        info.fill(0n);
+        returned[0] = 0;
+        const status = nt.NtQuerySystemInformation(90, aligned(info), 32, aligned(returned));
+        return windowsBoot(new Uint8Array(info.buffer), returned[0], status);
+      },
+      readCounter() {
+        counter[0] = 0n;
+        wrapper.symbols.QueryInterruptTimePrecise(aligned(counter));
+        return interruptNS(counter[0]);
+      },
+      readWall() {
+        wall[0] = 0n;
+        kernel.GetSystemTimePreciseAsFileTime(aligned(wall));
+        return filetimeNS(wall[0]);
+      },
+      verify() {
+        image.verify();
+        verifyPaths();
+        for (const file of held2) file.verify();
+      },
+      close: () => closeAll(releases)
+    }, "windows-kernel");
+  } catch {
+    try {
+      closeAll(releases);
+    } catch {
+    }
+    unavailable();
+  } finally {
+    signal?.removeEventListener("abort", abort);
+  }
+}
+var directory;
+var init_windows_clock = __esm({
+  "windows-clock.mjs"() {
+    init_native_clock_image();
+    init_native_clock_contract();
+    directory = "C:\\Windows\\System32";
+  }
+});
+
 // node_modules/universal-agent-plugins-opencode-events/observer-core.js
 var id = (x) => typeof x === "string" && x.length > 0 && !/[\u0000-\u001f]/u.test(x) && new TextEncoder().encode(x).length <= 256;
 var timestamp = (x) => Number.isSafeInteger(x) && x > 0;
@@ -1714,163 +2257,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // process-registry.mjs
+init_protocol();
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { performance as performance2 } from "node:perf_hooks";
-
-// protocol.mjs
-import { createHash } from "node:crypto";
-var invalid = () => {
-  throw new TypeError("invalid_private_protocol");
-};
-var int64Max = 9223372036854775807n;
-function ns(value) {
-  if (typeof value !== "string" || !/^(0|[1-9][0-9]{0,18})$/.test(value)) invalid();
-  const result2 = BigInt(value);
-  if (result2 > int64Max) invalid();
-  return result2;
-}
-function closed(value, keys, required = keys) {
-  if (!value || Object.getPrototypeOf(value) !== Object.prototype || Reflect.ownKeys(value).some((key) => !keys.includes(key)) || required.some((key) => !Object.hasOwn(value, key))) invalid();
-  return value;
-}
-var identity = (x, limit = 256) => typeof x === "string" && x.length > 0 && !/[\u0000-\u001f\u007f]/u.test(x) && Buffer.byteLength(x) <= limit;
-var bootOK = (x) => typeof x === "string" && /^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(x) && x !== "00000000-0000-0000-0000-000000000000";
-var domainOK = (x) => typeof x === "string" && /^linux-time:[1-9][0-9]*:[1-9][0-9]*$/.test(x);
-function parseJSON(bytes, max = 4096) {
-  if (!Buffer.isBuffer(bytes) || bytes.length > max) invalid();
-  const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  const token = /\s*("(?:[^"\\\u0000-\u001f]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*"|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|true|false|null|[{}\[\],:])/y;
-  let at = 0, entries = 0;
-  function next() {
-    token.lastIndex = at;
-    const m = token.exec(text);
-    if (!m) invalid();
-    at = token.lastIndex;
-    return m[1];
-  }
-  function value(t, depth) {
-    if (depth > 8 || ++entries > 96) invalid();
-    if (t === "{") {
-      const keys = /* @__PURE__ */ new Set();
-      let k = next();
-      if (k === "}") return;
-      for (; ; ) {
-        if (!k.startsWith('"')) invalid();
-        const key = JSON.parse(k);
-        if (keys.has(key)) invalid();
-        keys.add(key);
-        if (next() !== ":") invalid();
-        value(next(), depth + 1);
-        k = next();
-        if (k === "}") return;
-        if (k !== ",") invalid();
-        k = next();
-      }
-    }
-    if (t === "[") {
-      let v = next();
-      if (v === "]") return;
-      for (; ; ) {
-        value(v, depth + 1);
-        v = next();
-        if (v === "]") return;
-        if (v !== ",") invalid();
-        v = next();
-      }
-    }
-    if (["}", "]", ",", ":"].includes(t) || !t.startsWith('"') && !["true", "false", "null"].includes(t) && (!/^-?(0|[1-9][0-9]*)$/.test(t) || !Number.isSafeInteger(Number(t)))) invalid();
-  }
-  value(next(), 0);
-  if (text.slice(at).trim()) invalid();
-  return JSON.parse(text);
-}
-function profileReceipt(output) {
-  const receipt = closed(parseJSON(output, 1024), ["protocol", "semantic", "generation", "resourceClosure"]);
-  if (receipt.protocol !== 1 || receipt.resourceClosure !== "reaped_or_not_started" || !(receipt.semantic === "unverified" && receipt.generation === "none" || receipt.semantic === "eligible" && ["v1", "v2"].includes(receipt.generation))) invalid();
-  return Object.freeze(receipt);
-}
-function clockReceipt(output) {
-  const r = closed(parseJSON(output, 1024), [
-    "protocol",
-    "boot",
-    "clockDomain",
-    "clockKind",
-    "monoLoNs",
-    "monoHiNs",
-    "wallUnixNs",
-    "uncertaintyNs"
-  ]);
-  const lo = ns(r.monoLoNs), hi = ns(r.monoHiNs);
-  if (r.protocol !== 1 || !bootOK(r.boot) || !domainOK(r.clockDomain) || r.clockKind !== "linux-boottime" || hi < lo || hi - lo > 100000000n || ns(r.wallUnixNs) === 0n || ns(r.uncertaintyNs) !== hi - lo + 3000000n) invalid();
-  return Object.freeze({
-    boot: r.boot,
-    domain: r.clockDomain,
-    rawKind: r.clockKind,
-    monoLoNS: r.monoLoNs,
-    monoHiNS: r.monoHiNs,
-    wallNS: r.wallUnixNs,
-    readUncertaintyNS: r.uncertaintyNs
-  });
-}
-function fence(anchor, policy) {
-  const hash = createHash("sha256");
-  for (const string of ["AN/OpenCode/clock-policy/v1", anchor.boot, anchor.domain, anchor.rawKind, policy.profileID]) {
-    const data = Buffer.from(string), length = Buffer.alloc(4);
-    length.writeUInt32BE(data.length);
-    hash.update(length).update(data);
-  }
-  for (const bound of [policy.nativeReadBoundNS, policy.comparisonBoundNS]) {
-    const data = Buffer.alloc(8);
-    data.writeBigInt64BE(bound);
-    hash.update(data);
-  }
-  return hash.digest("hex");
-}
-function validateFrame(frame, policy) {
-  const p = closed(frame, ["protocol", "origin", "event", "provenance"]);
-  if (p.protocol !== 1 || typeof p.origin !== "string" || !/^[a-f0-9]{64}$/.test(p.origin)) invalid();
-  const e = closed(
-    p.event,
-    ["version", "kind", "sessionID", "turnID", "rootSession", "provenance", "messageID", "requestID", "nativeType"],
-    ["version", "kind", "sessionID", "turnID", "rootSession", "provenance"]
-  );
-  if (e.version !== 1 || e.rootSession !== true || !identity(e.sessionID) || !identity(e.turnID) || !["turn_idle_verified", "question_asked", "permission_asked", "terminal_error"].includes(e.kind) || e.nativeType !== void 0 || e.messageID !== void 0 && !identity(e.messageID) || e.requestID !== void 0 && !identity(e.requestID) || e.kind === "turn_idle_verified" && (!identity(e.messageID) || e.requestID !== void 0) || e.kind.endsWith("_asked") && (!identity(e.requestID) || e.messageID !== void 0) || e.kind === "terminal_error" && (e.messageID !== void 0 || e.requestID !== void 0)) invalid();
-  const native = closed(
-    e.provenance,
-    ["generation", "observationID", "nativeTime", "timeBasis", "nativeEventID", "nativeMessageID"],
-    ["generation", "observationID", "nativeTime", "timeBasis"]
-  );
-  if (!identity(native.observationID) || !Number.isSafeInteger(native.nativeTime) || native.nativeTime <= 0 || BigInt(native.nativeTime) * 1000000n > int64Max || !["v1", "v2"].includes(native.generation) || native.generation !== policy.generation || native.nativeEventID !== void 0 && !identity(native.nativeEventID) || native.nativeMessageID !== void 0 && !identity(native.nativeMessageID) || native.generation === "v2" && (!identity(native.nativeEventID) || native.timeBasis !== "envelope_created") || native.generation === "v1" && native.timeBasis !== (e.kind === "turn_idle_verified" ? "assistant_completed" : "assistant_created_lower_bound") || native.generation === "v1" && e.kind === "terminal_error" && !identity(native.nativeMessageID)) invalid();
-  const v = closed(p.provenance, [
-    "sourceEpoch",
-    "epochStartedTickNS",
-    "policyID",
-    "fence",
-    "anchor",
-    "ingressTickNS",
-    "spawnTickNS",
-    "deadlineTickNS",
-    "calibration"
-  ]);
-  if (!identity(v.sourceEpoch, 128) || !/^[\x20-\x7e]+$/.test(v.sourceEpoch) || v.policyID !== policy.profileID || policy.rawKind !== "linux-boottime" || policy.nativeReadBoundNS < 3000000n || policy.nativeReadBoundNS > 103000000n || policy.comparisonBoundNS < 2n * policy.nativeReadBoundNS || policy.comparisonBoundNS > 2000000000n || policy.translationBoundNS < 0n || 2n * policy.nativeReadBoundNS + policy.translationBoundNS > policy.comparisonBoundNS) invalid();
-  const a = closed(v.anchor, ["boot", "domain", "rawKind", "monoLoNS", "monoHiNS", "wallNS", "readUncertaintyNS"]);
-  const lo = ns(a.monoLoNS), hi = ns(a.monoHiNS);
-  if (!bootOK(a.boot) || !domainOK(a.domain) || a.rawKind !== policy.rawKind || hi < lo || hi - lo > 100000000n || ns(a.wallNS) === 0n || ns(a.readUncertaintyNS) !== hi - lo + 3000000n || ns(a.readUncertaintyNS) > policy.nativeReadBoundNS || v.fence !== fence(a, policy)) invalid();
-  const start = ns(v.epochStartedTickNS), ingress = ns(v.ingressTickNS), spawn2 = ns(v.spawnTickNS), deadline = ns(v.deadlineTickNS);
-  if (start > lo || lo > ingress || ingress > spawn2 || spawn2 >= deadline || spawn2 - ingress > 30000000000n || deadline - spawn2 > 20000000000n) invalid();
-  const c = closed(v.calibration, ["calibrationID", "sourceEpoch", "sourceLoNS", "sourceHiNS", "nativeLoNS", "nativeHiNS", "errorNS"]);
-  if (c.calibrationID !== policy.calibrationID || c.sourceEpoch !== v.sourceEpoch || ns(c.sourceLoNS) >= ns(c.sourceHiNS) || ns(c.sourceHiNS) - ns(c.sourceLoNS) > policy.translationBoundNS || ns(c.sourceLoNS) > hi || lo >= ns(c.sourceHiNS) || c.nativeLoNS !== a.monoLoNS || c.nativeHiNS !== a.monoHiNS || ns(c.errorNS) !== policy.translationBoundNS) invalid();
-  return frame;
-}
-function encodeFrame(frame, policy) {
-  validateFrame(frame, policy);
-  const output = Buffer.from(JSON.stringify(frame));
-  if (output.length > 4096) invalid();
-  return output;
-}
-
-// process-registry.mjs
 var deliveryKeys = process.platform === "win32" ? ["AGENT_NOTIFICATIONS_CONFIG", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP"] : ["AGENT_NOTIFICATIONS_CONFIG", "HOME", "XDG_CONFIG_HOME", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR"];
 var osKeys = process.platform === "win32" ? ["SystemRoot", "WINDIR"] : [];
 var result = (status, output = Buffer.alloc(0)) => Object.freeze({ status, output });
@@ -1908,7 +2298,6 @@ function createProcessRegistry(configuration) {
   }));
   const base = process.platform === "win32" ? { USERPROFILE: privateCwd, APPDATA: privateCwd, LOCALAPPDATA: privateCwd, TEMP: privateCwd, TMP: privateCwd } : { HOME: privateCwd, XDG_CONFIG_HOME: privateCwd, XDG_RUNTIME_DIR: privateCwd };
   const clockEnv = { ...base, ...environment(osEnv, osKeys) };
-  const eventEnv = { ...clockEnv, ...environment(deliveryEnv, deliveryKeys), AGENT_NOTIFICATIONS_CONTROL_ROOT: controlRoot2 };
   const profileEnv = {
     ...clockEnv,
     AGENT_NOTIFICATIONS_CONTROL_ROOT: controlRoot2,
@@ -1918,6 +2307,7 @@ function createProcessRegistry(configuration) {
     AGENT_NOTIFICATIONS_HOST_ENTRY: "serve",
     AGENT_NOTIFICATIONS_PUBLIC_EXEC_PATH: publicExecPath
   };
+  const eventEnv = { ...profileEnv, ...environment(deliveryEnv, deliveryKeys) };
   const entries = /* @__PURE__ */ new Set(), watchers = /* @__PURE__ */ new Set();
   let disposed = false, disabled = false;
   const status = () => Object.freeze({
@@ -2138,6 +2528,7 @@ function createProcessRegistry(configuration) {
 }
 
 // owned-host.mjs
+init_protocol();
 var executable = "__AGENT_NOTIFICATIONS_EXECUTABLE__";
 var controlRoot = "__AGENT_NOTIFICATIONS_CONTROL_ROOT__";
 var origin = "__AGENT_NOTIFICATIONS_ORIGIN__";
@@ -2147,11 +2538,11 @@ var identity2 = (name) => {
   return Object.freeze({ name, dev: stat.dev, ino: stat.ino, size: stat.isDirectory() ? void 0 : stat.size, mtime: stat.isDirectory() ? void 0 : stat.mtimeNs, mode: stat.mode });
 };
 var equal = (a, b) => ["name", "dev", "ino", "size", "mtime", "mode"].every((key) => a[key] === b[key]);
-async function prepareOwnedHost(directory, generation, appVersion) {
+async function prepareOwnedHost(directory2, generation, appVersion) {
   let registry, privateCwd;
   try {
-    if (!/^[a-f0-9]{64}$/.test(origin) || !absoluteNativePath(directory)) return;
-    const files = [executable, controlRoot, directory, process.execPath].map(identity2);
+    if (!/^[a-f0-9]{64}$/.test(origin) || !absoluteNativePath(directory2)) return;
+    const files = [executable, controlRoot, directory2, process.execPath].map(identity2);
     const isOwned = () => {
       try {
         return files.every((original) => equal(original, identity2(original.name)));
@@ -2206,6 +2597,7 @@ async function prepareOwnedHost(directory, generation, appVersion) {
 }
 
 // clock-cells.mjs
+init_protocol();
 import { createHash as createHash2 } from "node:crypto";
 
 // clock-qualification-data.mjs
@@ -2262,8 +2654,17 @@ var images = Object.freeze({
 });
 var hashOK = (value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value) && !/^0+$/.test(value);
 var canonical = (value) => Array.isArray(value) ? `[${value.map(canonical).join(",")}]` : value && typeof value === "object" ? `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}` : JSON.stringify(value);
+function describeClockSource(goos, goarch) {
+  if (goos === "linux" && ["amd64", "arm64"].includes(goarch))
+    return Object.freeze({ sourceKind: "linux-proc-boottime", rawKind: "linux-boottime" });
+  if (goos === "darwin" && ["amd64", "arm64"].includes(goarch))
+    return Object.freeze({ sourceKind: "darwin-mach-continuous", rawKind: "darwin-monotonic-raw" });
+  if (goos === "windows" && goarch === "amd64")
+    return Object.freeze({ sourceKind: "windows-interrupt-precise", rawKind: "windows-interrupt-precise" });
+  throw new TypeError("qualification_unverified");
+}
 function describeClockPolicy(row) {
-  closed(row, [
+  const keys = [
     "protocol",
     "generation",
     "goos",
@@ -2275,34 +2676,60 @@ function describeClockPolicy(row) {
     "nativeReadBoundNS",
     "comparisonBoundNS",
     "translationBoundNS"
-  ]);
-  const pins = images[row.generation];
-  if (row.protocol !== 1 || row.goos !== "linux" || row.goarch !== "amd64" || !pins || row.sourceKind !== "linux-proc-boottime" || row.rawKind !== "linux-boottime" || row.nativeReadBoundNS !== "103000000" || row.comparisonBoundNS !== "430000000" || row.translationBoundNS !== "224000000" || !hashOK(row.algorithmSourceMerkleSHA256) || !Array.isArray(row.images) || row.images.length !== pins.length) throw new TypeError("qualification_unverified");
+  ];
+  closed(row, [...keys, "sourceWallBoundNS", "originalNativeAge"], keys);
+  const descriptor = describeClockSource(row.goos, row.goarch);
+  const legacy = row.goos === "linux" && row.goarch === "amd64";
+  const pins = legacy ? images[row.generation] : void 0;
+  const versions = legacy ? pins?.map((pin) => pin[0]) : row.generation === "v1" ? ["1.18.33"] : row.generation === "v2" ? ["2.0.21"] : void 0;
+  if (row.protocol !== 1 || !versions || row.sourceKind !== descriptor.sourceKind || row.rawKind !== descriptor.rawKind || !hashOK(row.algorithmSourceMerkleSHA256) || !Array.isArray(row.images) || row.images.length !== versions.length)
+    throw new TypeError("qualification_unverified");
+  const nativeReadBoundNS = ns(row.nativeReadBoundNS), comparisonBoundNS = ns(row.comparisonBoundNS), translationBoundNS = ns(row.translationBoundNS);
+  let sourceWallBoundNS;
+  if (row.goos === "linux") {
+    if (Object.hasOwn(row, "sourceWallBoundNS") || row.nativeReadBoundNS !== "103000000" || row.comparisonBoundNS !== "430000000" || row.translationBoundNS !== "224000000")
+      throw new TypeError("qualification_unverified");
+  } else {
+    sourceWallBoundNS = ns(row.sourceWallBoundNS);
+    if (nativeReadBoundNS < 3000000n || nativeReadBoundNS > 103000000n || comparisonBoundNS > 2000000000n || 2n * nativeReadBoundNS + translationBoundNS > comparisonBoundNS || sourceWallBoundNS > comparisonBoundNS) throw new TypeError("qualification_unverified");
+  }
   for (const [index, image] of row.images.entries()) {
     closed(image, ["version", "imageSHA256"]);
-    if (image.version !== pins[index][0] || image.imageSHA256 !== pins[index][1]) throw new TypeError("qualification_unverified");
+    if (image.version !== versions[index] || !hashOK(image.imageSHA256) || legacy && image.imageSHA256 !== pins[index][1])
+      throw new TypeError("qualification_unverified");
   }
-  const profileID = `linux-amd64-proc-boottime-v1:${createHash2("sha256").update(canonical(row)).digest("hex")}`;
+  const exceptional = row.goos === "windows" && row.goarch === "amd64" && row.generation === "v1" && row.images.length === 1 && row.images[0].version === "1.18.33" && row.images[0].imageSHA256 === "52f60248a576b34c9a6dcaa27e0a7f08089af35bcdc0dfb10c04d3e00a98314c";
+  const originalNativeAge = Object.hasOwn(row, "originalNativeAge") ? row.originalNativeAge : "bounded";
+  if (exceptional ? originalNativeAge !== "unverified_original_date" : originalNativeAge !== "bounded")
+    throw new TypeError("qualification_unverified");
+  const prefix = legacy ? "linux-amd64-proc-boottime-v1" : `${row.goos}-${row.goarch}-${row.sourceKind}-v1`;
+  const profileID = `${prefix}:${createHash2("sha256").update(canonical(row)).digest("hex")}`;
   return Object.freeze({
     profileID,
     calibrationID: `${profileID}:same-coordinate`,
     generation: row.generation,
-    rawKind: "linux-boottime",
-    nativeReadBoundNS: 103000000n,
-    comparisonBoundNS: 430000000n,
-    translationBoundNS: 224000000n
+    images: Object.freeze(row.images.map((image) => Object.freeze({ ...image }))),
+    goos: row.goos,
+    goarch: row.goarch,
+    sourceKind: descriptor.sourceKind,
+    rawKind: descriptor.rawKind,
+    originalNativeAge,
+    nativeReadBoundNS,
+    comparisonBoundNS,
+    translationBoundNS,
+    ...sourceWallBoundNS === void 0 ? {} : { sourceWallBoundNS }
   });
 }
 var cells = Object.freeze(clock_qualification_data_default.map(describeClockPolicy));
 function selectClockCell(generation) {
-  return process.platform === "linux" && process.arch === "x64" ? cells.find((cell) => cell.generation === generation) : void 0;
+  const goos = process.platform === "win32" ? "windows" : process.platform;
+  const goarch = process.arch === "x64" ? "amd64" : process.arch;
+  const matches = cells.filter((cell) => cell.goos === goos && cell.goarch === goarch && cell.generation === generation);
+  return matches.length === 1 ? matches[0] : void 0;
 }
 
-// prepared-delivery.mjs
-import { randomBytes as randomBytes2 } from "node:crypto";
-import { performance as performance3 } from "node:perf_hooks";
-
 // linux-clock.mjs
+init_protocol();
 import { openSync, closeSync, readSync, fstatSync, statSync as statSync2, statfsSync, readlinkSync, constants } from "node:fs";
 var fail = () => {
   throw new TypeError("clock_unavailable");
@@ -2353,6 +2780,7 @@ function createLinuxClock() {
         const result2 = Object.freeze({
           boot,
           domain,
+          rawKind: "linux-boottime",
           loNS: lo,
           hiNS: hi,
           wallNS,
@@ -2396,40 +2824,66 @@ function createLinuxClock() {
   }
 }
 
+// platform-clock.mjs
+init_native_clock_contract();
+async function createPlatformClock({ signal } = {}) {
+  if (signal?.aborted) unavailable();
+  if (process.platform === "linux") return createLinuxClock();
+  if (process.platform === "darwin") return (await Promise.resolve().then(() => (init_darwin_clock(), darwin_clock_exports))).createDarwinClock({ signal });
+  if (process.platform === "win32") return (await Promise.resolve().then(() => (init_windows_clock(), windows_clock_exports))).createWindowsClock({ signal });
+  unavailable();
+}
+
 // prepared-delivery.mjs
+import { randomBytes as randomBytes2 } from "node:crypto";
+import { performance as performance3 } from "node:perf_hooks";
+init_native_clock_contract();
+init_protocol();
 var bad = () => {
   throw new TypeError("source_unverified");
 };
 var overlaps = (a, b, bound) => a.offsetLoNS <= b.offsetHiNS + bound && a.offsetHiNS >= b.offsetLoNS - bound;
 function anchorMatches(anchor, before, after, policy) {
   const lo = ns(anchor.monoLoNS), hi = ns(anchor.monoHiNS), wall = ns(anchor.wallNS);
-  return anchor.boot === before.boot && anchor.boot === after.boot && anchor.domain === before.domain && anchor.domain === after.domain && anchor.rawKind === policy.rawKind && ns(anchor.readUncertaintyNS) <= policy.nativeReadBoundNS && before.loNS <= hi && lo < after.hiNS && after.hiNS - before.loNS <= policy.translationBoundNS && overlaps({
+  return bootOK(anchor.boot) && domainOK(anchor.domain, anchor.rawKind) && before.rawKind === policy.rawKind && after.rawKind === policy.rawKind && anchor.boot === before.boot && anchor.boot === after.boot && anchor.domain === before.domain && anchor.domain === after.domain && anchor.rawKind === policy.rawKind && ns(anchor.readUncertaintyNS) <= policy.nativeReadBoundNS && before.loNS <= hi && lo < after.hiNS && after.hiNS - before.loNS <= policy.translationBoundNS && overlaps({
     offsetLoNS: wall - hi - policy.nativeReadBoundNS,
     offsetHiNS: wall - lo + policy.nativeReadBoundNS
   }, after, policy.comparisonBoundNS);
 }
-function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, onInvalidate, sourceFactory = createLinuxClock }) {
-  let epoch, source, anchor, activation, activating, last, ingress, disposed = false;
+function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, onInvalidate, sourceFactory = createPlatformClock }) {
+  let epoch, source, anchor, activation, pending, last, ingress, disposed = false;
   const originals = /* @__PURE__ */ new Map(), prepared = /* @__PURE__ */ new WeakMap();
   function invalidate(reason = "clock") {
-    if (!epoch && !source) return;
+    if (!epoch && !source && !pending) return;
+    const attempt = pending;
+    pending = void 0;
     epoch = void 0;
     originals.clear();
     anchor = void 0;
+    activation = void 0;
     ingress = void 0;
     last = void 0;
+    attempt?.controller.abort();
+    const retired = source;
+    source = void 0;
     try {
-      source?.dispose();
+      retired?.dispose();
     } catch {
     }
-    source = void 0;
-    onInvalidate?.(reason);
-    registry.cancel();
+    try {
+      onInvalidate?.(reason);
+    } catch {
+    } finally {
+      registry.cancel();
+    }
   }
   function sample() {
     try {
       if (disposed || !source || !isOwned()) bad();
-      const value = source.sample();
+      const raw = source.sample();
+      if (raw.rawKind !== policy.rawKind) bad();
+      const value = withWallOffset(raw, policy.rawKind === "linux-boottime" ? 2000000n : policy.sourceWallBoundNS);
+      if (policy.rawKind === "linux-boottime" && (raw.offsetLoNS !== value.offsetLoNS || raw.offsetHiNS !== value.offsetHiNS)) bad();
       if (last && (value.boot !== last.boot || value.domain !== last.domain || value.loNS < last.loNS || !overlaps(last, value, policy.comparisonBoundNS))) bad();
       if (activation && !overlaps(activation, value, policy.comparisonBoundNS)) bad();
       last = value;
@@ -2440,7 +2894,7 @@ function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, on
     }
   }
   const ms = (record) => Number(record.loNS / 1000000n);
-  const clock = Object.freeze({ id: "linux-proc-boottime", now() {
+  const clock = Object.freeze({ id: policy.sourceKind ?? (policy.rawKind === "linux-boottime" ? "linux-proc-boottime" : policy.rawKind), now() {
     if (ingress) {
       const original = ingress;
       ingress = void 0;
@@ -2451,42 +2905,90 @@ function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, on
   } });
   async function activate() {
     if (disposed) return false;
-    if (epoch) return true;
-    if (activating) return activating;
-    activating = (async () => {
-      const pending = randomBytes2(16).toString("hex");
+    if (epoch) {
+      if (isOwned()) return true;
+      invalidate();
+      return false;
+    }
+    if (pending) return pending.promise;
+    const attempt = { controller: new AbortController(), deadline: performance3.now() + 2e3 };
+    pending = attempt;
+    const isCurrent = () => {
       try {
-        source = sourceFactory();
-        activation = void 0;
-        const before = sample();
-        const r = await registry.clock({
-          isCurrent: () => !disposed && source !== void 0 && isOwned(),
-          deadline: performance3.now() + 2e3
-        });
-        const after = sample(), original = clockReceipt(r.output);
-        if (r.status !== "ok" || !anchorMatches(original, before, after, policy) || after.loNS - before.loNS > 2000000000n) bad();
-        anchor = original;
-        activation = before;
-        epoch = Object.freeze({ id: pending, started: before.loNS, after: after.hiNS });
-        return true;
+        return pending === attempt && !disposed && !attempt.controller.signal.aborted && performance3.now() < attempt.deadline && isOwned();
       } catch {
-        invalidate();
         return false;
       }
-    })().finally(() => {
-      activating = void 0;
-    });
-    return activating;
+    };
+    const timer = setTimeout(() => {
+      if (pending === attempt) invalidate();
+    }, 2e3);
+    attempt.promise = (async () => {
+      const id6 = randomBytes2(16).toString("hex");
+      try {
+        const acquired = await new Promise((resolve, reject) => {
+          const signal = attempt.controller.signal;
+          const abort = () => reject(new TypeError("source_unverified"));
+          signal.addEventListener("abort", abort, { once: true });
+          let preparing;
+          try {
+            preparing = sourceFactory({ signal });
+          } catch (error) {
+            preparing = Promise.reject(error);
+          }
+          Promise.resolve(preparing).then((value) => {
+            signal.removeEventListener("abort", abort);
+            if (!isCurrent()) {
+              try {
+                value?.dispose();
+              } catch {
+              }
+              reject(new TypeError("source_unverified"));
+            } else resolve(value);
+          }, (error) => {
+            signal.removeEventListener("abort", abort);
+            reject(error);
+          });
+        });
+        if (!isCurrent()) {
+          try {
+            acquired?.dispose();
+          } catch {
+          }
+          bad();
+        }
+        source = acquired;
+        activation = void 0;
+        if (policy.rawKind !== "linux-boottime" && !policy.images?.some((image) => image.imageSHA256 === source.imageSHA256)) bad();
+        const before = sample();
+        const r = await registry.clock({ signal: attempt.controller.signal, isCurrent, deadline: attempt.deadline });
+        if (!isCurrent() || performance3.now() >= attempt.deadline || r.status !== "ok") bad();
+        const after = sample(), original = clockReceipt(r.output);
+        if (!anchorMatches(original, before, after, policy) || after.loNS - before.loNS > 2000000000n) bad();
+        anchor = original;
+        activation = before;
+        epoch = Object.freeze({ id: id6, started: before.loNS, after: after.hiNS });
+        return true;
+      } catch {
+        if (pending === attempt) invalidate();
+        return false;
+      } finally {
+        clearTimeout(timer);
+        if (pending === attempt) pending = void 0;
+      }
+    })();
+    return attempt.promise;
   }
   function retain(record) {
     if (!epoch) bad();
-    for (const [tick] of originals) if (record.loNS - tick > 30000000000n) originals.delete(tick);
-    if (!originals.has(record.loNS)) {
+    for (const [tick2] of originals) if (record.loNS - tick2 > 30000000000n) originals.delete(tick2);
+    const tick = record.loNS / 1000000n * 1000000n;
+    if (!originals.has(tick)) {
       if (originals.size >= 256) {
         invalidate();
         bad();
       }
-      originals.set(record.loNS, Object.freeze({ sample: record, epoch, anchor }));
+      originals.set(tick, Object.freeze({ sample: record, epoch, anchor }));
     }
   }
   function beginIngress(event) {
@@ -2529,7 +3031,7 @@ function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, on
         policyID: policy.profileID,
         fence: fence(original.anchor, policy),
         anchor: original.anchor,
-        ingressTickNS: String(tick),
+        ingressTickNS: String(original.sample.loNS),
         calibration: Object.freeze({
           calibrationID: policy.calibrationID,
           sourceEpoch: original.epoch.id,
@@ -2605,10 +3107,13 @@ function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, on
   });
 }
 
+// ipc.mjs
+init_protocol();
+
 // native-v1.mjs
 var id4 = (x) => typeof x === "string" && x.length > 0 && !/[\u0000-\u001f]/u.test(x) && Buffer.byteLength(x) <= 256;
 var stamp = (x) => Number.isSafeInteger(x) && x > 0;
-function createNativeV1(client, directory, fail2) {
+function createNativeV1(client, directory2, fail2) {
   const requests = /* @__PURE__ */ new Map(), users = /* @__PURE__ */ new Map();
   function ingest(event) {
     const p = event?.properties;
@@ -2663,7 +3168,7 @@ function createNativeV1(client, directory, fail2) {
     const result2 = await client.session.get({ path: { id: event.sessionID }, signal: handoff.signal });
     if (!handoff.isCurrent() || handoff.signal.aborted) return false;
     const info = result2?.data ?? result2;
-    if (info?.id !== event.sessionID || info.parentID !== void 0 || info.directory !== directory) return false;
+    if (info?.id !== event.sessionID || info.parentID !== void 0 || info.directory !== directory2) return false;
     const snapshot = await client.session.messages({ path: { id: event.sessionID }, query: { limit: 30 }, signal: handoff.signal });
     if (!handoff.isCurrent() || handoff.signal.aborted || users.get(event.sessionID)?.id !== event.turnID || request && requests.get(event.requestID) !== request) return false;
     const rows = Array.isArray(snapshot) ? snapshot : snapshot?.data;
@@ -2672,7 +3177,7 @@ function createNativeV1(client, directory, fail2) {
     if (!messages.every((row) => id4(row?.id) && row.sessionID === event.sessionID)) return false;
     const answer = messages.findLast((row) => row.role === "assistant" && row.summary !== true);
     const lastUser = messages.findLast((row) => row.role === "user");
-    if (lastUser && lastUser.id !== event.turnID || !answer || answer.parentID !== event.turnID || answer.path?.cwd !== directory || messages.at(-1) !== answer || !stamp(answer.time?.created)) return false;
+    if (lastUser && lastUser.id !== event.turnID || !answer || answer.parentID !== event.turnID || answer.path?.cwd !== directory2 || messages.at(-1) !== answer || !stamp(answer.time?.created)) return false;
     if (event.kind === "turn_idle_verified") return answer.id === event.messageID && answer.finish === "stop" && answer.time?.completed === event.provenance.nativeTime && answer.error == null;
     if (event.kind === "terminal_error") return answer.id === event.provenance.nativeMessageID && answer.time.created === event.provenance.nativeTime && stamp(answer.time?.completed) && answer.error && !/abort|cancel/i.test(answer.error.name ?? "");
     return request?.messageID === answer.id && answer.time.created === event.provenance.nativeTime;
@@ -2688,7 +3193,7 @@ var id5 = (x) => typeof x === "string" && x.length > 0 && Buffer.byteLength(x) <
 var stamp2 = (x) => Number.isSafeInteger(x) && x > 0;
 var cancelled = (error) => /abort|cancel|interrupt/i.test(error?._tag ?? error?.name ?? error?.type ?? "");
 var scope = (x) => x && typeof x.directory === "string" ? Object.freeze({ directory: x.directory, workspaceID: x.workspaceID }) : void 0;
-var same2 = (a, b) => a && b && a.directory === b.directory && a.workspaceID === b.workspaceID;
+var same3 = (a, b) => a && b && a.directory === b.directory && a.workspaceID === b.workspaceID;
 var rowTypes = /* @__PURE__ */ new Set([
   "user",
   "assistant",
@@ -2853,7 +3358,7 @@ function createNativeV2(context, ownedLocation, onIngress, onUncertainty) {
     if (signal.aborted || binding(run) !== b || info?.id !== run.sessionID || info.parentID !== void 0 && !id5(info.parentID)) return;
     const observed = b.scope;
     const native = scope(info.location);
-    if (!native || native.directory !== own.directory || info.projectID !== projectID || observed && !same2(observed, own) || own.workspaceID !== void 0 && !same2(observed, own) || native.workspaceID !== void 0 && native.workspaceID !== own.workspaceID) return;
+    if (!native || native.directory !== own.directory || info.projectID !== projectID || observed && !same3(observed, own) || own.workspaceID !== void 0 && !same3(observed, own) || native.workspaceID !== void 0 && native.workspaceID !== own.workspaceID) return;
     return Object.freeze({ ...run, location: native.directory, rootSession: info.parentID === void 0 });
   }
   async function rows(run, signal) {
@@ -3018,6 +3523,7 @@ async function server(input) {
       registry: owned.registry,
       origin: owned.origin,
       policy,
+      sourceFactory: createPlatformClock,
       isOwned: owned.isOwned,
       onInvalidate: () => observer?.dispose()
     });
@@ -3095,6 +3601,7 @@ async function setup(context) {
       registry: owned.registry,
       origin: owned.origin,
       policy,
+      sourceFactory: createPlatformClock,
       isOwned: isNativeOwned,
       onInvalidate: (reason) => {
         if (reason === "clock") observer?.dispose();

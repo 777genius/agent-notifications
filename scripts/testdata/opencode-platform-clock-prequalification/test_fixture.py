@@ -271,6 +271,13 @@ assert.equal(h.productSample(sample, 'win32').wall, 1800000000000000000n);
 assert.throws(() => h.productSample({...sample}, 'win32'));
 assert.throws(() => h.productSample(Object.freeze({...sample, wallNS: 1}), 'win32'));
 assert.throws(() => h.productSample(Object.freeze({...sample, hiNS: sample.loNS + 100000001n}), 'win32'));
+const linux = Object.freeze({ ...sample, domain: 'linux-time:4:19', rawKind: 'linux-boottime',
+  offsetLoNS: 1799999987997990000n, offsetHiNS: 1799999988002000000n });
+assert.equal(h.productSample(linux, 'linux').kind, 'linux-boottime');
+for (const bad of [{...linux, rawKind: 'process-hrtime'}, {...linux, extra: true}])
+  assert.throws(() => h.productSample(Object.freeze(bad), 'linux'));
+const {rawKind: removedKind, ...missingKind} = linux;
+assert.throws(() => h.productSample(Object.freeze(missingKind), 'linux'));
 assert.deepEqual(h.preciseDate(1000000000n, 1000, 1000000100n), {dateInsideNativeInterval: true, datePreciseDistanceNs: '0'});
 assert.deepEqual(h.preciseDate(1000000100n, 1000, 1000000200n), {dateInsideNativeInterval: false, datePreciseDistanceNs: '100'});
 assert.deepEqual(h.preciseDate(999999000n, 1000, 999999999n), {dateInsideNativeInterval: false, datePreciseDistanceNs: '1'});

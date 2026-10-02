@@ -16,7 +16,9 @@ import { spawn } from 'node:child_process';
 const root = process.cwd(), mode = path.basename(process.argv[1], '.mjs');
 const mark = (name, data = '') => fs.writeFileSync(path.join(root, process.pid + '-' + name), data);
 const start = () => mark('start', JSON.stringify({ argv: process.argv.slice(2), cwd: root,
-  keys: Object.keys(process.env).sort(), home: process.env.HOME, config: process.env.AGENT_NOTIFICATIONS_CONFIG }));
+  keys: Object.keys(process.env).sort(), home: process.env.HOME, config: process.env.AGENT_NOTIFICATIONS_CONFIG,
+  native: Object.fromEntries(['CONTROL_ROOT', 'ORIGIN', 'NATIVE_PID', 'HOST_EXECUTABLE', 'HOST_ENTRY', 'PUBLIC_EXEC_PATH']
+    .map(key => ['AGENT_NOTIFICATIONS_' + key, process.env['AGENT_NOTIFICATIONS_' + key]])) }));
 if (mode === 'tail') {
   const program = "const fs = require('node:fs'); const root = process.argv[1]; fs.writeFileSync(root + '/tail-start', ''); const end = () => { fs.writeFileSync(root + '/tail-done', ''); process.exit(0); }; setTimeout(end, 5000); setInterval(() => { if (fs.existsSync(root + '/stop')) end(); }, 20);";
   spawn(process.execPath, ['-e', program, root], { stdio: ['ignore', 'inherit', 'inherit'], env: { HOME: root } });
@@ -36,7 +38,9 @@ if (mode === 'tail') {
   process.stdin.on('data', chunk => { bytes += chunk.length; firstByte ??= chunk[0]; });
   process.stdin.on('end', () => {
     mark('input', JSON.stringify({ bytes, firstByte }));
-    if (mode === 'boundary') { process.stderr.write(Buffer.alloc(1024, 83)); process.stdout.write(Buffer.alloc(1024, 79)); }
+    if (process.argv[2] === 'opencode-runtime-profile')
+      process.stdout.write(JSON.stringify({ protocol: 1, semantic: 'unverified', generation: 'none', resourceClosure: 'reaped_or_not_started' }));
+    else if (mode === 'boundary') { process.stderr.write(Buffer.alloc(1024, 83)); process.stdout.write(Buffer.alloc(1024, 79)); }
     else process.stdout.write('fixture-response');
   });
 }
@@ -327,12 +331,48 @@ test('exact commands, boundary bytes, immutable frame and controlled environment
     assert.deepEqual(clock.argv, ['opencode-clock', '--protocol', '1']);
     assert.equal(clock.cwd, home); assert.equal(event.home, home);
     assert.deepEqual(clock.keys, ['HOME', 'XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR']);
-    assert.deepEqual(event.keys, ['AGENT_NOTIFICATIONS_CONFIG', 'AGENT_NOTIFICATIONS_CONTROL_ROOT', 'DBUS_SESSION_BUS_ADDRESS', 'HOME', 'XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR']);
+    assert.deepEqual(event.keys, ['AGENT_NOTIFICATIONS_CONFIG', 'AGENT_NOTIFICATIONS_CONTROL_ROOT',
+      'AGENT_NOTIFICATIONS_HOST_ENTRY', 'AGENT_NOTIFICATIONS_HOST_EXECUTABLE', 'AGENT_NOTIFICATIONS_NATIVE_PID',
+      'AGENT_NOTIFICATIONS_PUBLIC_EXEC_PATH', 'DBUS_SESSION_BUS_ADDRESS', 'HOME', 'XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR']);
     assert.equal(clock.config, undefined); assert.equal(event.config, path.join(home, 'config'));
     assert.equal((await registry.event({ ...eventOptions(), frame: Buffer.alloc(4097) })).status, 'invalid_request');
     assert.equal(children.length, 2);
     for (const key of ['PATH', 'NODE_OPTIONS', 'PLUGINKITsupervisor', 'MCPGODEBUG', 'HTTP_PROXY'])
       assert.throws(() => make({ deliveryEnv: { [key]: 'TEST-poison' } }), /invalid_environment/);
+  });
+});
+
+// Red if event loses the owned native descriptor or either child inherits ambient authority.
+test('event and profile children receive the same owned native runtime descriptor', focus, async () => {
+  await withFixture('normal', async ({ make, home, children, phase }) => {
+    const descriptor = {
+      AGENT_NOTIFICATIONS_CONTROL_ROOT: home, AGENT_NOTIFICATIONS_ORIGIN: 'a'.repeat(64),
+      AGENT_NOTIFICATIONS_NATIVE_PID: String(process.pid), AGENT_NOTIFICATIONS_HOST_EXECUTABLE: process.execPath,
+      AGENT_NOTIFICATIONS_HOST_ENTRY: 'serve', AGENT_NOTIFICATIONS_PUBLIC_EXEC_PATH: process.execPath,
+    };
+    const poison = [...Object.keys(descriptor), 'TEST_AMBIENT_UNTRUSTED', 'HTTP_PROXY'];
+    const saved = poison.map(key => [key, process.env[key]]);
+    try {
+      for (const key of poison) process.env[key] = 'TEST-ambient-poison';
+      const registry = make({ origin: descriptor.AGENT_NOTIFICATIONS_ORIGIN,
+        deliveryEnv: { AGENT_NOTIFICATIONS_CONFIG: path.join(home, 'config') } });
+      assert.equal((await bounded(registry.event(eventOptions()))).status, 'ok');
+      assert.equal((await bounded(registry.profile(options()))).status, 'ok');
+      assert.equal((await bounded(registry.clock(options()))).status, 'ok');
+      const [event, profile, clock] = await Promise.all(children.map(child =>
+        fs.readFile(phase(child, 'start')).then(bytes => JSON.parse(bytes))));
+      assert.deepEqual(event.native, descriptor); assert.deepEqual(profile.native, descriptor);
+      assert.deepEqual(clock.native, {}); assert.equal(clock.config, undefined);
+      assert.equal(profile.config, undefined); assert.equal(event.config, path.join(home, 'config'));
+      for (const child of [event, profile, clock]) {
+        assert.ok(!child.keys.includes('TEST_AMBIENT_UNTRUSTED') && !child.keys.includes('HTTP_PROXY'));
+      }
+      for (const key of Object.keys(descriptor))
+        assert.throws(() => make({ deliveryEnv: { [key]: 'TEST-unowned-descriptor' } }), /invalid_environment/);
+      assert.equal(children.length, 3); assert.ok(children.every(child => child.closed && child.exited));
+    } finally {
+      for (const [key, value] of saved) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    }
   });
 });
 

@@ -17,7 +17,7 @@ func runtimeImageKey(live runtimeLiveImage) opencodecodec.ImageKey {
 // only production caller follows the successful synchronous probe, equal held
 // before/after images, and an independent packaged-reader qualification lookup.
 func selectBoundNativeObserver(e opencodehost.VersionEvidence, actual opencodehost.NativeObserverTuple) runtimeObserverGeneration {
-	descriptor, ok := opencodehost.NativeObserverEvidence(e.Version)
+	descriptor, ok := opencodehost.NativeObserverEvidenceForImage(e.Version, actual.GOOS, actual.GOARCH, actual.ImageSHA256)
 	if !ok {
 		return observerUnverified
 	}
@@ -66,7 +66,7 @@ func runtimeReaderTuple(live runtimeLiveImage, version string) (opencodehost.Nat
 	if _, ok := opencodecodec.LookupCandidate(runtimeImageKey(live)); !ok {
 		return opencodehost.NativeObserverTuple{}, false
 	}
-	descriptor, described := opencodehost.NativeObserverEvidence(version)
+	descriptor, described := opencodehost.NativeObserverEvidenceForImage(version, live.GOOS, live.GOARCH, live.SHA256)
 	if !described {
 		return opencodehost.NativeObserverTuple{}, false
 	}
