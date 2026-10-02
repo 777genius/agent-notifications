@@ -79,10 +79,22 @@ saved = logs(cache)
 assert len(saved) == 1 and saved[0].read_bytes() == reason
 assert os.name == 'nt' or saved[0].stat().st_mode & 0o777 == 0o600
 assert 'Details: ' + saved[0].as_posix() in message
-# Repeated failures keep their logs but emit only one notification.
+# Same-root hooks inside the cooldown neither install nor create another log.
 repeated = invoke(plugin, cache)
 assert repeated.stdout == repeated.stderr == b''
+assert logs(cache) == saved
+# Expiring the real failed claim permits a new independent attempt/log, while
+# the existing failure stamp still suppresses a repeated notification.
+claims = list((cache / 'claude-notifications-go').glob('install-backoff-*/active'))
+assert len(claims) == 1 and claims[0].is_symlink()
+owner = claims[0].parent / os.readlink(claims[0])
+assert (owner / 'failed').is_file()
+os.utime(owner, (946684800, 946684800))
+retried = invoke(plugin, cache)
+assert retried.stdout == retried.stderr == b''
 assert len(logs(cache)) == 2
+assert all(log.read_bytes() == reason for log in logs(cache))
+assert all(os.name == 'nt' or log.stat().st_mode & 0o777 == 0o600 for log in logs(cache))
 
 # Cutting off the OSC opener before parsing must not expose its hidden payload.
 (root / 'reason.txt').write_bytes(b'Error: real failure\n\x1b]0;' + b'hidden title line\n' * 24 +
@@ -118,7 +130,7 @@ codex = invoke(plugin, root / 'codex-cache', 'codex')
 assert codex.stdout == codex.stderr == b''
 assert len(logs(root / 'codex-cache', 'codex')) == 1
 
-# Concurrent attempts must have independent complete logs and one atomic notification.
+# Simultaneous same-root hooks elect one installer and keep one complete log.
 parallel = fixture('parallel', 'printf "begin:%s\\n" "$$"; sleep 0.1; printf "Error: attempt:%s\\n" "$$"; exit 7\n')
 parallel_cache = root / 'parallel-cache'
 with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
@@ -127,9 +139,25 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
 assert sum(bool(r.stdout) for r in results) == 1
 assert all(not r.stderr for r in results)
 attempts = logs(parallel_cache)
+assert len(attempts) == 1
+first, last = attempts[0].read_text().splitlines()
+assert last == 'Error: attempt:' + first.split(':')[1]
+assert os.name == 'nt' or attempts[0].stat().st_mode & 0o777 == 0o600
+
+# Separate roots permit simultaneous independent attempts for the same version.
+# Their complete private logs remain distinct; notification suppression is atomic.
+parallel_other = fixture('parallel-other', 'printf "begin:%s\\n" "$$"; sleep 0.1; printf "Error: attempt:%s\\n" "$$"; exit 7\n')
+independent_cache = root / 'independent-cache'
+with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+    futures = [pool.submit(invoke, target, independent_cache) for target in (parallel, parallel_other)]
+    results = [f.result() for f in futures]
+assert sum(bool(r.stdout) for r in results) == 1
+assert all(not r.stderr for r in results)
+attempts = logs(independent_cache)
 assert len(attempts) == 2 and attempts[0].name != attempts[1].name
 pids = []
 for log in attempts:
+    assert os.name == 'nt' or log.stat().st_mode & 0o777 == 0o600
     first, last = log.read_text().splitlines()
     pid = first.split(':')[1]
     assert last == 'Error: attempt:' + pid
@@ -138,7 +166,7 @@ assert len(set(pids)) == 2
 
 # Success removes only its own log and resets notification suppression after recovery.
 script = plugin / 'bin/install.sh'
-script.write_text('''#!/bin/sh
+repair_script = '''#!/bin/sh
 # agent-notifications-managed-writer-protocol-v1
 cat > "$INSTALL_TARGET_DIR/claude-notifications" <<'BIN'
 #!/bin/sh
@@ -146,14 +174,39 @@ if [ "$1" = version ]; then echo 1.42.0; fi
 BIN
 chmod +x "$INSTALL_TARGET_DIR/claude-notifications"
 echo repaired
-''', newline='\n')
+'''
+script.write_text(repair_script, newline='\n')
+# Hook repair remains suppressed until expiry; explicit manual installation
+# bypasses that claim immediately. The next successful hook clears suppression.
+still_suppressed = invoke(plugin, cache)
+assert still_suppressed.stdout == still_suppressed.stderr == b''
+assert not (plugin / 'bin/claude-notifications').exists()
+assert len(logs(cache)) == 2
+manual = subprocess.run([shell, str(script)],
+                        env=dict(env, INSTALL_TARGET_DIR=str(plugin / 'bin'), XDG_CACHE_HOME=str(cache)),
+                        capture_output=True, timeout=15)
+assert manual.returncode == 0 and manual.stdout == b'repaired\n' and not manual.stderr, manual
 repaired = invoke(plugin, cache)
 assert repaired.stdout == repaired.stderr == b''
 assert len(logs(cache)) == 2
 assert not (cache / 'claude-notifications-go/install-failed-1.42.0').exists(), (repaired, (plugin / 'bin/claude-notifications').read_bytes())
+assert not claims[0].is_symlink()
 (plugin / 'bin/claude-notifications').unlink()
 script.write_text('#!/bin/sh\n# agent-notifications-managed-writer-protocol-v1\necho "Error: failed again"; exit 9\n', newline='\n')
 assert 'failed again' in json.loads(invoke(plugin, cache).stdout)['systemMessage']
+assert len(logs(cache)) == 3
+# A later successful hook installation removes its own temporary log and keeps
+# every complete failure log. Recovery clears both the claim and failure stamp.
+failure_logs = {log: log.read_bytes() for log in logs(cache)}
+owner = claims[0].parent / os.readlink(claims[0])
+assert (owner / 'failed').is_file()
+os.utime(owner, (946684800, 946684800))
+script.write_text(repair_script, newline='\n')
+recovered = invoke(plugin, cache)
+assert recovered.stdout == recovered.stderr == b''
+assert {log: log.read_bytes() for log in logs(cache)} == failure_logs
+assert not claims[0].is_symlink()
+assert not (cache / 'claude-notifications-go/install-failed-1.42.0').exists()
 
 # A broken cache or mktemp must never stop the installer or expose its raw output.
 no_log = fixture('no-log', 'echo ran >> "$ROOT/ran"; echo "Error: raw installer output"; exit 8\n')
