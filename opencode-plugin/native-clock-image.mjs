@@ -41,7 +41,7 @@ export function pinNativeImage() {
   const path = realpathSync(process.execPath), held = holdFile(path);
   try {
     if (!images.some(row => row[0] === process.platform && row[1] === process.arch && row[2] === bun && row[3] === held.digest)) unavailable();
-    return Object.freeze({ close: held.close, verify() {
+    return Object.freeze({ imageSHA256: held.digest, close: held.close, verify() {
       if (globalThis.Bun?.version !== bun || realpathSync(process.execPath) !== path) unavailable();
       held.verify();
     } });

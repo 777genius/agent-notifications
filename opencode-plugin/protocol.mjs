@@ -18,7 +18,13 @@ const identity = (x, limit = 256) => typeof x === 'string' && x.length > 0 &&
   !/[\u0000-\u001f\u007f]/u.test(x) && Buffer.byteLength(x) <= limit;
 export const bootOK = (x) => typeof x === 'string' &&
   /^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(x) && x !== '00000000-0000-0000-0000-000000000000';
-export const domainOK = (x) => typeof x === 'string' && /^linux-time:[1-9][0-9]*:[1-9][0-9]*$/.test(x);
+export const rawKindOK = (kind) => ['linux-boottime', 'darwin-monotonic-raw', 'windows-interrupt-precise'].includes(kind);
+export function domainOK(x, kind = 'linux-boottime') {
+  if (kind === 'darwin-monotonic-raw') return x === 'darwin-kernel';
+  if (kind === 'windows-interrupt-precise') return x === 'windows-kernel';
+  if (kind !== 'linux-boottime' || typeof x !== 'string' || !/^linux-time:[1-9][0-9]*:[1-9][0-9]*$/.test(x)) return false;
+  return x.split(':').slice(1).every(part => part.length <= 20 && BigInt(part) <= 18446744073709551615n);
+}
 
 // JSON.parse alone loses duplicate fields. Bound the grammar before decoding.
 export function parseJSON(bytes, max = 4096) {
@@ -62,7 +68,7 @@ export function clockReceipt(output) {
   const r = closed(parseJSON(output, 1024), ['protocol', 'boot', 'clockDomain', 'clockKind',
     'monoLoNs', 'monoHiNs', 'wallUnixNs', 'uncertaintyNs']);
   const lo = ns(r.monoLoNs), hi = ns(r.monoHiNs);
-  if (r.protocol !== 1 || !bootOK(r.boot) || !domainOK(r.clockDomain) || r.clockKind !== 'linux-boottime' ||
+  if (r.protocol !== 1 || !bootOK(r.boot) || !domainOK(r.clockDomain, r.clockKind) ||
       hi < lo || hi - lo > 100000000n || ns(r.wallUnixNs) === 0n || ns(r.uncertaintyNs) !== hi - lo + 3000000n) invalid();
   return Object.freeze({ boot: r.boot, domain: r.clockDomain, rawKind: r.clockKind,
     monoLoNS: r.monoLoNs, monoHiNS: r.monoHiNs, wallNS: r.wallUnixNs, readUncertaintyNS: r.uncertaintyNs });
@@ -102,13 +108,13 @@ export function validateFrame(frame, policy) {
   const v = closed(p.provenance, ['sourceEpoch', 'epochStartedTickNS', 'policyID', 'fence', 'anchor',
     'ingressTickNS', 'spawnTickNS', 'deadlineTickNS', 'calibration']);
   if (!identity(v.sourceEpoch, 128) || !/^[\x20-\x7e]+$/.test(v.sourceEpoch) ||
-      v.policyID !== policy.profileID || policy.rawKind !== 'linux-boottime' ||
+      v.policyID !== policy.profileID || !rawKindOK(policy.rawKind) ||
       policy.nativeReadBoundNS < 3000000n || policy.nativeReadBoundNS > 103000000n ||
       policy.comparisonBoundNS < 2n * policy.nativeReadBoundNS || policy.comparisonBoundNS > 2000000000n ||
       policy.translationBoundNS < 0n || 2n * policy.nativeReadBoundNS + policy.translationBoundNS > policy.comparisonBoundNS) invalid();
   const a = closed(v.anchor, ['boot', 'domain', 'rawKind', 'monoLoNS', 'monoHiNS', 'wallNS', 'readUncertaintyNS']);
   const lo = ns(a.monoLoNS), hi = ns(a.monoHiNS);
-  if (!bootOK(a.boot) || !domainOK(a.domain) || a.rawKind !== policy.rawKind || hi < lo || hi - lo > 100000000n ||
+  if (!bootOK(a.boot) || !domainOK(a.domain, a.rawKind) || a.rawKind !== policy.rawKind || hi < lo || hi - lo > 100000000n ||
       ns(a.wallNS) === 0n || ns(a.readUncertaintyNS) !== hi - lo + 3000000n || ns(a.readUncertaintyNS) > policy.nativeReadBoundNS ||
       v.fence !== fence(a, policy)) invalid();
   const start = ns(v.epochStartedTickNS), ingress = ns(v.ingressTickNS), spawn = ns(v.spawnTickNS), deadline = ns(v.deadlineTickNS);

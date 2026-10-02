@@ -1,13 +1,16 @@
 import { randomBytes } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
-import { createLinuxClock } from './linux-clock.mjs';
-import { clockReceipt, encodeFrame, fence, ns } from './protocol.mjs';
+import { createPlatformClock } from './platform-clock.mjs';
+import { withWallOffset } from './native-clock-contract.mjs';
+import { bootOK, domainOK, clockReceipt, encodeFrame, fence, ns } from './protocol.mjs';
 
 const bad = () => { throw new TypeError('source_unverified'); };
 const overlaps = (a, b, bound) => a.offsetLoNS <= b.offsetHiNS + bound && a.offsetHiNS >= b.offsetLoNS - bound;
 export function anchorMatches(anchor, before, after, policy) {
   const lo = ns(anchor.monoLoNS), hi = ns(anchor.monoHiNS), wall = ns(anchor.wallNS);
-  return anchor.boot === before.boot && anchor.boot === after.boot && anchor.domain === before.domain &&
+  return bootOK(anchor.boot) && domainOK(anchor.domain, anchor.rawKind) &&
+    before.rawKind === policy.rawKind && after.rawKind === policy.rawKind &&
+    anchor.boot === before.boot && anchor.boot === after.boot && anchor.domain === before.domain &&
     anchor.domain === after.domain && anchor.rawKind === policy.rawKind &&
     ns(anchor.readUncertaintyNS) <= policy.nativeReadBoundNS && before.loNS <= hi && lo < after.hiNS &&
     after.hiNS - before.loNS <= policy.translationBoundNS &&
@@ -17,20 +20,27 @@ export function anchorMatches(anchor, before, after, policy) {
 
 // Ports are private composition dependencies. The plugin never accepts them
 // from host configuration/environment; only the closed compiled ledger supplies policy.
-export function createPreparedDelivery({ registry, origin, policy, isOwned, onInvalidate, sourceFactory = createLinuxClock }) {
-  let epoch, source, anchor, activation, activating, last, ingress, disposed = false;
+export function createPreparedDelivery({ registry, origin, policy, isOwned, onInvalidate, sourceFactory = createPlatformClock }) {
+  let epoch, source, anchor, activation, pending, last, ingress, disposed = false;
   const originals = new Map(), prepared = new WeakMap();
   function invalidate(reason = 'clock') {
-    if (!epoch && !source) return;
-    epoch = undefined; originals.clear(); anchor = undefined; ingress = undefined; last = undefined;
-    try { source?.dispose(); } catch {} source = undefined;
-    onInvalidate?.(reason);
-    registry.cancel();
+    if (!epoch && !source && !pending) return;
+    const attempt = pending; pending = undefined;
+    epoch = undefined; originals.clear(); anchor = undefined; activation = undefined; ingress = undefined; last = undefined;
+    attempt?.controller.abort();
+    const retired = source; source = undefined;
+    try { retired?.dispose(); } catch {}
+    try { onInvalidate?.(reason); } catch {} finally { registry.cancel(); }
   }
   function sample() {
     try {
       if (disposed || !source || !isOwned()) bad();
-      const value = source.sample();
+      const raw = source.sample();
+      if (raw.rawKind !== policy.rawKind) bad();
+      const value = withWallOffset(raw, policy.rawKind === 'linux-boottime' ? 2000000n : policy.sourceWallBoundNS);
+      // Proc offsets retain the independently fixed Q2ms recipe.
+      if (policy.rawKind === 'linux-boottime' &&
+          (raw.offsetLoNS !== value.offsetLoNS || raw.offsetHiNS !== value.offsetHiNS)) bad();
       if (last && (value.boot !== last.boot || value.domain !== last.domain || value.loNS < last.loNS ||
           !overlaps(last, value, policy.comparisonBoundNS))) bad();
       if (activation && !overlaps(activation, value, policy.comparisonBoundNS)) bad();
@@ -39,36 +49,63 @@ export function createPreparedDelivery({ registry, origin, policy, isOwned, onIn
     } catch { invalidate(); bad(); }
   }
   const ms = (record) => Number(record.loNS / 1000000n);
-  const clock = Object.freeze({ id: 'linux-proc-boottime', now() {
+  const clock = Object.freeze({ id: policy.sourceKind ?? (policy.rawKind === 'linux-boottime' ? 'linux-proc-boottime' : policy.rawKind), now() {
     if (ingress) { const original = ingress; ingress = undefined; last = original; return ms(original); }
     return ms(sample());
   } });
   async function activate() {
     if (disposed) return false;
-    if (epoch) return true;
-    if (activating) return activating;
-    activating = (async () => {
-      const pending = randomBytes(16).toString('hex');
+    if (epoch) { if (isOwned()) return true; invalidate(); return false; }
+    if (pending) return pending.promise;
+    const attempt = { controller: new AbortController(), deadline: performance.now() + 2000 };
+    pending = attempt;
+    const isCurrent = () => {
+      try { return pending === attempt && !disposed && !attempt.controller.signal.aborted &&
+        performance.now() < attempt.deadline && isOwned(); } catch { return false; }
+    };
+    // The same existing 2s preparation budget covers ABI setup AND helper close.
+    const timer = setTimeout(() => { if (pending === attempt) invalidate(); }, 2000);
+    attempt.promise = (async () => {
+      const id = randomBytes(16).toString('hex');
       try {
-        source = sourceFactory(); activation = undefined;
+        const acquired = await new Promise((resolve, reject) => {
+          const signal = attempt.controller.signal;
+          const abort = () => reject(new TypeError('source_unverified'));
+          signal.addEventListener('abort', abort, { once: true });
+          let preparing;
+          try { preparing = sourceFactory({ signal }); } catch (error) { preparing = Promise.reject(error); }
+          Promise.resolve(preparing).then(value => {
+            signal.removeEventListener('abort', abort);
+            if (!isCurrent()) { try { value?.dispose(); } catch {} reject(new TypeError('source_unverified')); }
+            else resolve(value);
+          }, error => { signal.removeEventListener('abort', abort); reject(error); });
+        });
+        if (!isCurrent()) { try { acquired?.dispose(); } catch {} bad(); }
+        source = acquired; activation = undefined;
+        if (policy.rawKind !== 'linux-boottime' &&
+            !policy.images?.some(image => image.imageSHA256 === source.imageSHA256)) bad();
         const before = sample();
-        const r = await registry.clock({ isCurrent: () => !disposed && source !== undefined && isOwned(),
-          deadline: performance.now() + 2000 });
+        const r = await registry.clock({ signal: attempt.controller.signal, isCurrent, deadline: attempt.deadline });
+        if (!isCurrent() || performance.now() >= attempt.deadline || r.status !== 'ok') bad();
         const after = sample(), original = clockReceipt(r.output);
-        if (r.status !== 'ok' || !anchorMatches(original, before, after, policy) || after.loNS - before.loNS > 2000000000n) bad();
+        if (!anchorMatches(original, before, after, policy) || after.loNS - before.loNS > 2000000000n) bad();
         anchor = original; activation = before;
-        epoch = Object.freeze({ id: pending, started: before.loNS, after: after.hiNS });
+        epoch = Object.freeze({ id, started: before.loNS, after: after.hiNS });
         return true;
-      } catch { invalidate(); return false; }
-    })().finally(() => { activating = undefined; });
-    return activating;
+      } catch { if (pending === attempt) invalidate(); return false; }
+      finally { clearTimeout(timer); if (pending === attempt) pending = undefined; }
+    })();
+    return attempt.promise;
   }
   function retain(record) {
     if (!epoch) bad();
     for (const [tick] of originals) if (record.loNS - tick > 30000000000n) originals.delete(tick);
-    if (!originals.has(record.loNS)) {
+    // SDK handoffs carry integer milliseconds. Keep the first genuine sample
+    // in that bucket and serialize its exact counter, without restamping it.
+    const tick = record.loNS / 1000000n * 1000000n;
+    if (!originals.has(tick)) {
       if (originals.size >= 256) { invalidate(); bad(); }
-      originals.set(record.loNS, Object.freeze({ sample: record, epoch, anchor }));
+      originals.set(tick, Object.freeze({ sample: record, epoch, anchor }));
     }
   }
   function beginIngress(event) {
@@ -105,7 +142,7 @@ export function createPreparedDelivery({ registry, origin, policy, isOwned, onIn
           birthNS < activation.wallNS + (original.epoch.after - activation.loNS)) bad();
       const provenance = Object.freeze({ sourceEpoch: original.epoch.id,
         epochStartedTickNS: String(original.epoch.started), policyID: policy.profileID,
-        fence: fence(original.anchor, policy), anchor: original.anchor, ingressTickNS: String(tick),
+        fence: fence(original.anchor, policy), anchor: original.anchor, ingressTickNS: String(original.sample.loNS),
         calibration: Object.freeze({ calibrationID: policy.calibrationID, sourceEpoch: original.epoch.id,
           sourceLoNS: String(activation.loNS), sourceHiNS: String(original.epoch.after),
           nativeLoNS: original.anchor.monoLoNS, nativeHiNS: original.anchor.monoHiNS,

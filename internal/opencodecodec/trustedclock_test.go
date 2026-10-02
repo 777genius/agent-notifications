@@ -73,3 +73,43 @@ func TestFixedContainingCalibration(t *testing.T) {
 		t.Fatal("unqualified coordinate inherited proc quantum")
 	}
 }
+
+// Baseline rejects valid overlapping Darwin/Windows coordinates. These pure
+// checks prove the selector/arithmetic only, never clock/native qualification.
+func TestClosedNativeContainingCalibration(t *testing.T) {
+	for _, kind := range []string{"linux-boottime", "darwin-monotonic-raw", "windows-interrupt-precise"} {
+		if !SameCoordinateCalibration(kind, 100, 200, 150, 160, 100) {
+			t.Fatal("known containing interval rejected", kind)
+		}
+		if SameCoordinateCalibration(kind, 100, 150, 150, 160, 100) ||
+			SameCoordinateCalibration(kind, 100, 201, 150, 160, 100) ||
+			SameCoordinateCalibration(kind, 100, 200, 160, 150, 100) {
+			t.Fatal("half-open, width or reversal invariant weakened", kind)
+		}
+	}
+	for _, kind := range []string{"", "darwin-continuous", "windows-interrupt-coarse", "unknown"} {
+		if SameCoordinateCalibration(kind, 100, 200, 150, 160, 100) {
+			t.Fatal("unknown coordinate accepted", kind)
+		}
+	}
+}
+
+func TestSourceDescriptorsDoNotGrantImages(t *testing.T) {
+	for _, pair := range [][2]string{{"linux", "arm64"}, {"darwin", "arm64"}, {"darwin", "amd64"}, {"windows", "amd64"}} {
+		if descriptor, ok := LookupSourceDescriptor(pair[0], pair[1]); !ok || descriptor.RawKind == "" {
+			t.Fatal("implemented source missing", pair)
+		}
+		key := ImageKey{pair[0], pair[1], "serve", "unknown"}
+		if _, ok := LookupCandidate(key); ok {
+			t.Fatal("source descriptor granted an image", pair)
+		}
+		if _, ok := LookupQualifiedClock(key); ok {
+			t.Fatal("source descriptor granted qualification", pair)
+		}
+	}
+	for _, pair := range [][2]string{{"windows", "arm64"}, {"darwin", "386"}, {"linux", "x64"}, {"freebsd", "amd64"}} {
+		if _, ok := LookupSourceDescriptor(pair[0], pair[1]); ok {
+			t.Fatal("unknown platform accepted", pair)
+		}
+	}
+}

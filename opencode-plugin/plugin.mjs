@@ -2,6 +2,7 @@ import { createObserver } from 'universal-agent-plugins-opencode-events/v1';
 import { createV2Observer } from 'universal-agent-plugins-opencode-events/v2';
 import { prepareOwnedHost } from './owned-host.mjs';
 import { selectClockCell } from './clock-cells.mjs';
+import { createPlatformClock } from './platform-clock.mjs';
 import { createPreparedDelivery } from './ipc.mjs';
 import { createNativeV1 } from './native-v1.mjs';
 import { createNativeV2, createRPCCheckpoint } from './native-v2.mjs';
@@ -26,7 +27,7 @@ async function server(input) {
     let observer, view, stopped = false;
     const publications = new WeakSet();
     const delivery = createPreparedDelivery({ registry: owned.registry, origin: owned.origin, policy,
-      isOwned: owned.isOwned, onInvalidate: () => observer?.dispose() });
+      sourceFactory: createPlatformClock, isOwned: owned.isOwned, onInvalidate: () => observer?.dispose() });
     view = createNativeV1(input.client, input.directory, delivery.invalidate);
     const stop = () => { if (stopped) return; stopped = true; observer?.dispose(); view.dispose(); delivery.dispose(); void owned.dispose(); };
     holder.stop = stop;
@@ -73,7 +74,7 @@ async function setup(context) {
       context.location?.directory === location.directory && context.location?.workspaceID === location.workspaceID &&
       context.location?.project?.id === location.projectID;
     const delivery = createPreparedDelivery({ registry: owned.registry, origin: owned.origin, policy,
-      isOwned: isNativeOwned, onInvalidate: (reason) => { if (reason === 'clock') observer?.dispose(); view?.reset(); connection?.abort(); } });
+      sourceFactory: createPlatformClock, isOwned: isNativeOwned, onInvalidate: (reason) => { if (reason === 'clock') observer?.dispose(); view?.reset(); connection?.abort(); } });
     const stop = async () => {
       if (stopped) return; stopped = true;
       observer?.dispose(); delivery.dispose(); connection?.abort(); view?.reset();

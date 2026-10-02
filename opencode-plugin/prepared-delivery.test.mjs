@@ -29,7 +29,7 @@ async function setup(run,generation='v2'){
  const record=()=>{
   if(fail)throw Error('PRIVATE_CLOCK_DETAIL');
   const wall=1700000000000000000n+tick-1000000000000n+wallJump;
-  return Object.freeze({boot,domain,loNS:tick,hiNS:tick+10000000n,wallNS:wall,offsetLoNS:wall-tick-12000000n,offsetHiNS:wall-tick+2000000n});
+  return Object.freeze({boot,domain,rawKind:'linux-boottime',loNS:tick,hiNS:tick+10000000n,wallNS:wall,offsetLoNS:wall-tick-12000000n,offsetHiNS:wall-tick+2000000n});
  };
  const sourceFactory=()=>({sample:record,dispose(){}});
  let invalidations=0, invalidationCallback;

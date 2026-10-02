@@ -58,7 +58,7 @@ export function createLinuxClock() {
             previous && lo < previous.loNS) fail();
         const wallNS = ns((BigInt(wallMs) * 1000000n).toString());
         const hi = ns((last + quantum).toString());
-        const result = Object.freeze({ boot, domain, loNS: lo, hiNS: hi, wallNS,
+        const result = Object.freeze({ boot, domain, rawKind: 'linux-boottime', loNS: lo, hiNS: hi, wallNS,
           offsetLoNS: wallNS - hi - 2000000n, offsetHiNS: wallNS - lo + 2000000n });
         if (previous && (result.offsetLoNS > previous.offsetHiNS + 430000000n ||
             result.offsetHiNS < previous.offsetLoNS - 430000000n)) fail();

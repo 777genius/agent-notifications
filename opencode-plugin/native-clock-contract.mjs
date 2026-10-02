@@ -1,4 +1,4 @@
-import { bootOK, int64Max } from './protocol.mjs';
+import { bootOK, domainOK, int64Max } from './protocol.mjs';
 
 export const unavailable = () => { throw new TypeError('clock_unavailable'); };
 const U64 = 18446744073709551615n;
@@ -63,6 +63,22 @@ export const windowsKernelABI = abi({
 export const windowsNtABI = abi({ NtQuerySystemInformation: ['i32', 'u32', 'ptr', 'u32', 'ptr'] });
 export const interruptABI = Object.freeze({ returns: 'void', args: Object.freeze(['ptr']) });
 
+// Convert a bracket only with an explicit compiled source-wall premise.
+// This arithmetic does not infer an accuracy bound from quantum or samples.
+export function withWallOffset(sample, sourceWallBoundNS) {
+  if (!bootOK(sample.boot) || !domainOK(sample.domain, sample.rawKind) ||
+      typeof sourceWallBoundNS !== 'bigint' || sourceWallBoundNS < 0n || sourceWallBoundNS > 2000000000n ||
+      typeof sample.loNS !== 'bigint' || sample.loNS < 0n || sample.loNS > int64Max ||
+      sample.rawKind !== 'linux-boottime' && sample.loNS === 0n ||
+      typeof sample.hiNS !== 'bigint' || sample.hiNS <= sample.loNS || sample.hiNS > int64Max ||
+      sample.hiNS - sample.loNS > (sample.rawKind === 'linux-boottime' ? 110000000n : 100000000n)) unavailable();
+  const wallNS = positiveNS(sample.wallNS);
+  const offsetLoNS = wallNS - sample.hiNS - sourceWallBoundNS,
+    offsetHiNS = wallNS - sample.loNS + sourceWallBoundNS;
+  if (offsetLoNS < -int64Max || offsetHiNS > int64Max) unavailable();
+  return Object.freeze({ ...sample, offsetLoNS, offsetHiNS });
+}
+
 // A library port, not a qualification seam: fixed coordinates, no Q/T policy,
 // no offsets inferred from sampling and no source Date synthesis on Windows.
 export function createNativeClock(port, domain) {
@@ -91,5 +107,5 @@ export function createNativeClock(port, domain) {
       return Object.freeze({ boot, domain, rawKind, loNS, hiNS, wallNS });
     } catch { try { dispose(); } catch {} unavailable(); }
   }
-  return Object.freeze({ sample, dispose });
+  return Object.freeze({ sample, dispose, imageSHA256: port.imageSHA256 });
 }
