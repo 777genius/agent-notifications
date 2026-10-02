@@ -85,7 +85,7 @@ func TestConcurrentConsumerClaimsEachChannelOnce(t *testing.T) {
 		err = marshalErr
 	}
 	if err == nil {
-		err = writeCache(c.Cache.Root, seed)
+		err = writeCacheFixture(c.Cache.Root, seed)
 	}
 	release()
 	seedCancel()
