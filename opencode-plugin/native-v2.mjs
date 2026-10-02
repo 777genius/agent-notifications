@@ -7,6 +7,12 @@ const rowTypes = new Set(['user', 'assistant', 'compaction', 'idle', 'agent-swit
   'location-switched', 'synthetic', 'system', 'skill', 'shell']);
 const followsAssistant = (value, row) => value.slice(value.indexOf(row) + 1).some((item) => ['user', 'assistant', 'compaction'].includes(item.type));
 
+// OpenCode 2.0.21 session-event.ts at 8a8bd622a3d7dc29ccf30ec17f84e363ed95ed72:
+// These six Event.ephemeral kinds have no observer semantic authority.
+const ephemeralTypes = new Set(['session.usage.updated', 'session.text.delta',
+  'session.reasoning.delta', 'session.tool.input.delta', 'session.tool.progress',
+  'session.compaction.delta']);
+
 // Native identity view, not a reducer: all scheduling, sequence/tombstone and
 // checkpoint semantics remain in the single packed SDK engine.
 export function createNativeV2(context, ownedLocation, onIngress, onUncertainty) {
@@ -22,6 +28,7 @@ export function createNativeV2(context, ownedLocation, onIngress, onUncertainty)
   }
   function correlate(event) {
     const { type, data: p } = event;
+    if (ephemeralTypes.has(type)) return;
     if (type === 'location.shutdown') return { location: scope(event.location)?.directory };
     const sid = type === 'form.created' ? p.form?.sessionID : p.sessionID;
     if (!id(sid) || sid === 'global') return;

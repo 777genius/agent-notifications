@@ -211,7 +211,7 @@ test('native V2 RPC checkpoint enforces ASCII lowerhex32 at both port boundaries
 });
 
 function v2({parentID,fork,wrongScope=false,wrongProject=false,workspaceID,beforeEmit,holdInitial=false}={}){
- const location={directory,project:{id:'project'},...(workspaceID?{workspaceID}:{})},facts=[],order=[],queue=[],waiting=[];
+ const location={directory,project:{id:'project'},...(workspaceID?{workspaceID}:{})},facts=[],sdkFacts=[],diagnostics=[],order=[],queue=[],waiting=[];
  let rows=[],sequence=0,serial=0,disposed=false,markers=0,hold=holdInitial,heldMarkers=[],subscribes=0;
  const pump=()=>{while(waiting.length && queue.length)waiting.shift()(queue.shift());};
  const push=(e)=>{queue.push({done:false,value:e});pump();};
@@ -233,12 +233,14 @@ function v2({parentID,fork,wrongScope=false,wrongProject=false,workspaceID,befor
   }}};
  const view=createNativeV2(context,location,()=>{},()=>{throw Error('unexpected_native_capacity');});
  const observer=createV2Observer({context,location:directory,native:view.native,runtimeEligibility:()=> 'supported',
-  checkpoint:createRPCCheckpoint(context,async()=>true),beforeEmit:async(e,h)=>{order.push('before');const fact=view.project(e);
+  onDiagnostic:reason=>diagnostics.push(reason),checkpoint:createRPCCheckpoint(context,async()=>true),beforeEmit:async(e,h)=>{order.push('before');const fact=view.project(e);
    return Boolean(fact && (beforeEmit?await beforeEmit(fact,h):true) && await view.finalize(e,h));},
-  emit:(e)=>{order.push('emit');const fact=view.project(e);if(fact)facts.push(fact);}});
+  emit:(e)=>{order.push('emit');sdkFacts.push(e);const fact=view.project(e);if(fact)facts.push(fact);}});
  const event=(type,data={},seq,loc)=>{serial++;const e={id:`evt_${serial}`,created:1700000000000+serial,type,data:{sessionID:'s',...data}};
   if(type.startsWith('session.')){sequence=seq??sequence+1;e.durable={aggregateID:'s',seq:sequence,version:1};}
   if(loc)e.location=loc;push(e);return e;};
+ // Explicit live-only envelope: no durable field and no durable sequence advance.
+ const nondurable=(type,data={},loc)=>{const e={id:`evt_${++serial}`,created:1700000000000+serial,type,data:{sessionID:'s',...data},...(loc?{location:loc}:{})};push(e);return e;};
  const birth=()=>{
   if(sequence===0)event('session.created',{location},1);event('session.inbox.enqueued',{inboxID:'inbox-user',item:{type:'user'}});
   const start=event('session.execution.started');event('session.inbox.delivered',{inboxID:'inbox-user'});
@@ -253,7 +255,7 @@ function v2({parentID,fork,wrongScope=false,wrongProject=false,workspaceID,befor
    {id:`msg_${end.id.slice(4)}`,type:'idle'}];return end;
  };
  observer.start();
- return {facts,order,birth,question,terminal,event,observer,markers:()=>markers,subscribes:()=>subscribes,
+ return {facts,sdkFacts,diagnostics,order,birth,question,terminal,event,nondurable,observer,markers:()=>markers,subscribes:()=>subscribes,
   setRows:v=>rows=v,end(){queue.push({done:true});pump();},unhold(){hold=false;for(const e of heldMarkers)push(e);heldMarkers=[];},
   async stop(){observer.dispose();await observer.done();}};
 }
@@ -407,4 +409,113 @@ test('native V2 pending permission snapshot is the last awaited read after root 
  const result=view.native.currentPermission({sessionID:'s',turnID:'evt_run',userID:'user',location:directory,requestID:'request'},new AbortController().signal);
  await until(()=>reached);assert.equal(readPending,false);pending=false;
  release({id:'s',projectID:'project',location:{directory}});await assert.rejects(result,/pending_absent/);assert.equal(readPending,true);
+});
+
+// Independent closed schema cases from OpenCode 8a8bd622 session-event.ts.
+const liveOnly = [
+ ['session.text.delta',{assistantMessageID:'msg_assistant',ordinal:0,delta:'fragment'}],
+ ['session.usage.updated',{cost:0,tokens:{input:1,output:1,reasoning:0,cache:{read:0,write:0}}}],
+ ['session.reasoning.delta',{assistantMessageID:'msg_assistant',ordinal:0,delta:'fragment'}],
+ ['session.tool.input.delta',{assistantMessageID:'msg_assistant',id:'call',delta:'fragment'}],
+ ['session.tool.progress',{assistantMessageID:'msg_assistant',id:'call',metadata:{progress:1}}],
+ ['session.compaction.delta',{text:'fragment'}],
+];
+const sequenceDefect=reason=>/sequence|correlation_unverified|identity_contradiction/.test(reason);
+test('native V2 nondurable text delta and usage preserve one public SDK completion and original identity',async t=>{
+ const h=v2();try{
+  await until(()=>h.markers()===1);const run=h.birth();
+  h.event('session.text.started',{assistantMessageID:'msg_assistant',ordinal:0});
+  const delta=h.nondurable(...liveOnly[0]);
+  h.event('session.text.ended',{assistantMessageID:'msg_assistant',ordinal:0,text:'fragment'});
+  h.event('session.step.streamed',{assistantMessageID:'msg_assistant',type:'assistant'});
+  const usage=h.nondurable(...liveOnly[1]);const end=h.terminal();
+  assert.equal(Object.hasOwn(delta,'durable'),false);assert.equal(Object.hasOwn(usage,'durable'),false);
+  await until(()=>h.sdkFacts.length>0 || h.diagnostics.some(sequenceDefect));
+  for(let i=0;i<30;i++)await pause();
+  t.diagnostic(JSON.stringify({publicSDKFacts:h.sdkFacts,projectedFacts:h.facts,diagnostics:h.diagnostics,
+   original:{run:run.id,user:'inbox-user',assistant:'msg_assistant',terminal:end.id},durableTerminalSeq:end.durable.seq}));
+  assert.equal(h.sdkFacts.length,1,'live fragments must not block the genuine terminal');
+  assert.equal(h.facts.length,1);assert.equal(h.sdkFacts[0].turnID,'inbox-user');
+  assert.equal(h.facts[0].turnID,run.id);assert.equal(h.sdkFacts[0].sessionID,'s');
+  assert.equal(h.sdkFacts[0].kind,'turn_idle_verified');assert.equal(h.sdkFacts[0].rootSession,true);
+  assert.equal(h.sdkFacts[0].messageID,'msg_assistant');
+  assert.equal(h.sdkFacts[0].provenance.nativeEventID,end.id);
+  assert.equal(h.sdkFacts[0].provenance.nativeTime,end.created);
+  assert.equal(end.durable.seq,10,'ephemeral events must not consume durable sequence');
+  assert.deepEqual(h.diagnostics.filter(sequenceDefect),[]);
+ }finally{await h.stop();assert.equal(h.order.filter(x=>x==='rpc-dispose').length,1);assert.ok(h.diagnostics.includes('observer_disposed'));}
+});
+// Every exact kind is irrelevant before ingress and identity scope mutation;
+// 513 irrelevant sessions also cannot consume the adapter's 512 binding slots.
+test('native V2 six live-only kinds leave ingress, scope, question binding and capacity unchanged',async()=>{
+ const location={directory,workspaceID:'workspace',project:{id:'project'}},ingress=[];let uncertain=0;
+ const rows=[{id:'user',type:'user'},{id:'msg_assistant',type:'assistant',content:[{type:'tool',id:'call',name:'question'}]}];
+ const context={session:{get:async()=>({id:'s',projectID:'project',location:{directory}}),context:async()=>rows}};
+ const view=createNativeV2(context,location,e=>ingress.push(e),()=>uncertain++);
+ const send=(type,data={},extra={})=>view.native.correlate({id:'evt_'+ingress.length,created:1700000000000,type,data:{sessionID:'s',...data},...extra});
+ send('session.execution.started',{}, {id:'evt_run',location});
+ send('session.inbox.enqueued',{inboxID:'user',item:{type:'user'}});send('session.inbox.delivered',{inboxID:'user'});
+ send('session.step.started',{assistantMessageID:'msg_assistant',type:'assistant'});
+ send('form.created',{form:{id:'form',sessionID:'s',fields:[{}],metadata:{kind:'question',tool:{messageID:'msg_assistant',id:'call'}}}});
+ const run={sessionID:'s',turnID:'evt_run',userID:'user',location:directory,requestID:'form',messageID:'msg_assistant',callID:'call'};
+ const signal=new AbortController().signal;
+ for(const [type,data] of liveOnly){
+  const before=ingress.length;
+  assert.equal(send(type,data,{location:{directory:'/OTHER',workspaceID:'other'}}),undefined,type);
+  assert.equal(ingress.length,before,type);
+  assert.equal((await view.native.questionSource(run,signal))?.requestID,'form',type);
+  for(let i=0;i<513;i++)assert.equal(send(type,{...data,sessionID:`ephemeral-${i}`}),undefined,type);
+  assert.equal(ingress.length,before,type);assert.equal(uncertain,0,type);
+ }
+});
+test('native V2 every live-only kind permits completion but durable compaction controls remain silent',async()=>{
+ for(const [type,data] of liveOnly){
+  const h=v2();try{
+   await until(()=>h.markers()===1);h.birth();h.nondurable(type,data);h.terminal();
+   await until(()=>h.facts.length===1 || h.diagnostics.some(sequenceDefect));
+   assert.equal(h.facts.length,1,type);assert.deepEqual(h.diagnostics.filter(sequenceDefect),[],type);
+  }finally{await h.stop();}
+ }
+ for(const control of ['session.compaction.started','session.compaction.ended','session.compaction.failed']){
+  const h=v2();try{
+   await until(()=>h.markers()===1);h.birth();
+   h.event('session.compaction.started',{reason:'manual',recent:'',inputID:'manual'});
+   h.event('session.step.started',{type:'compaction',inputID:'manual'});
+   h.nondurable(...liveOnly[5]);
+   h.event(control.endsWith('failed')?'session.step.failed':'session.step.ended',{type:'compaction',inputID:'manual'});
+   if(control!=='session.compaction.started')h.event(control,control.endsWith('failed')?{reason:'manual',error:{_tag:'APIError'}}:
+    {reason:'manual',model:{},providerState:{},providerContext:[],text:'summary',recent:'',cost:0,tokens:liveOnly[1][1].tokens});
+   const end=h.event('session.execution.succeeded');
+   h.setRows([{id:'inbox-user',type:'user'},{id:'summary',type:'compaction'}, {id:`msg_${end.id.slice(4)}`,type:'idle'}]);
+   for(let i=0;i<30;i++)await pause();assert.deepEqual(h.facts,[],control);
+  }finally{await h.stop();}
+ }
+});
+test('native V2 semantic and unknown nondurable events retain fail-closed native order',async()=>{
+ for(const mode of ['missing','invalid','aggregate','version','nonincreasing','conflict','unknown','viewed']){
+  const h=v2();try{
+   await until(()=>h.markers()===1);h.birth();
+   const type=mode==='unknown'?'session.future.delta':mode==='viewed'?'session.viewed':'session.text.ended';
+   const e=h.nondurable(type,{assistantMessageID:'msg_assistant',ordinal:0,text:'fragment'});
+   if(['invalid','aggregate','version','nonincreasing','conflict'].includes(mode))e.durable={aggregateID:mode==='aggregate'?'foreign':'s',seq:mode==='invalid'?'6':mode==='nonincreasing'?5:6,version:mode==='version'?-1:1};
+   if(mode==='conflict'){const other=h.event('session.text.ended',{assistantMessageID:'msg_assistant',ordinal:0,text:'other'},7);other.id=e.id;}
+   h.terminal();await until(()=>h.diagnostics.some(sequenceDefect));
+   for(let i=0;i<30;i++)await pause();assert.deepEqual(h.facts,[],mode);
+  }finally{await h.stop();}
+ }
+});
+
+test('native V2 resolved question and permission stay silent after live-only traffic',async()=>{
+ for(const kind of ['question','permission']){
+  let release,reached=false;const held=new Promise(r=>release=r);
+  const h=v2({beforeEmit:()=>{reached=true;return held;}});try{
+   await until(()=>h.markers()===1);h.birth();
+   const ask=()=>kind==='question'?h.question('resolved'):h.event('permission.asked',{id:'resolved',action:'read',resources:[],source:{type:'tool',messageID:'msg_assistant',id:'call'}});
+   ask();await until(()=>reached);
+   h.event(kind==='question'?'form.replied':'permission.replied',kind==='question'?{id:'resolved'}:{requestID:'resolved'});
+   for(const pair of liveOnly)h.nondurable(...pair);
+   release(true);for(let i=0;i<30;i++)await pause();ask();
+   for(let i=0;i<30;i++)await pause();assert.deepEqual(h.facts,[],kind);
+  }finally{release?.(false);await h.stop();}
+ }
 });
