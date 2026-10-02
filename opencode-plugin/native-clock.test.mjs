@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, renameSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { address, closeAll, createNativeClock, darwinABI, darwinBoot, filetimeNS,
-  interruptABI, interruptNS, machNS, uint64, windowsBoot, windowsKernelABI, windowsNtABI } from './native-clock-contract.mjs';
+  interruptABI, interruptNS, machNS, uint64, withWallOffset, windowsBoot, windowsKernelABI, windowsNtABI } from './native-clock-contract.mjs';
 import { parseUptime } from './linux-clock.mjs';
 import { selectClockCell } from './clock-cells.mjs';
 
@@ -146,6 +146,7 @@ test('Linux arm64 shares official proc floor grammar; nearest int64 overflow is 
 });
 
 test('portable Node imports stay inert; absent native platform/image proof denies, cells remain closed', async () => {
+  const selected = [selectClockCell('v1'), selectClockCell('v2')];
   const { createDarwinClock } = await import('./darwin-clock.mjs');
   const { createWindowsClock } = await import('./windows-clock.mjs');
   const { pinNativeImage } = await import('./native-clock-image.mjs');
@@ -154,7 +155,7 @@ test('portable Node imports stay inert; absent native platform/image proof denie
   denied(pinNativeImage);
   await assert.rejects(createDarwinClock(), { message: 'clock_unavailable' });
   await assert.rejects(createWindowsClock(), { message: 'clock_unavailable' });
-  assert.equal(selectClockCell('v1'), undefined); assert.equal(selectClockCell('v2'), undefined);
+  assert.deepEqual([selectClockCell('v1'), selectClockCell('v2')], selected);
 });
 
 test('held source image proof binds exact file bytes and refuses replacement or use after release', async () => {
@@ -174,4 +175,350 @@ test('held source image proof binds exact file bytes and refuses replacement or 
     denied(held.verify);
     held.close(); held.close(); denied(held.verify);
   } finally { held?.close(); rmSync(dir, { recursive: true }); }
+});
+
+// Baseline denies native receipts/frames and async preparation never becomes
+// ready. These inert boundaries exercise production lifecycle arithmetic only;
+// their literal policies/images are test data and grant no native qualification.
+import { createPreparedDelivery } from './prepared-delivery.mjs';
+import { describeClockPolicy, describeClockSource } from './clock-cells.mjs';
+import { clockReceipt, domainOK, parseJSON } from './protocol.mjs';
+
+const deferred = () => {
+  let resolve;
+  const promise = new Promise(r => { resolve = r; });
+  return { promise, resolve };
+};
+function deliveryFixture(rawKind = 'darwin-monotonic-raw', generation = 'v2', factory) {
+  const domain = rawKind === 'linux-boottime' ? 'linux-time:4:7' :
+    rawKind === 'darwin-monotonic-raw' ? 'darwin-kernel' : 'windows-kernel';
+  const quantum = rawKind === 'linux-boottime' ? 10000000n : rawKind === 'darwin-monotonic-raw' ? 1n : 100n;
+  const initial = rawKind === 'linux-boottime' ? 1000000000000n :
+    rawKind === 'darwin-monotonic-raw' ? 1000000000007n : 1000000000100n;
+  const wallBase = 1700000000000000000n;
+  let tick = initial, closes = 0, cancels = 0, events = 0, frame, mutate, receiptMutation, helperGate, queued, spawnGap = 0n;
+  const calls = [], helpers = [];
+  const source = { imageSHA256: 'a'.repeat(64), sample() {
+    calls.push('sample');
+    const wallNS = wallBase + tick - initial;
+    const value = { boot, domain, rawKind, loNS: tick, hiNS: tick + quantum, wallNS };
+    if (rawKind === 'linux-boottime') Object.assign(value,
+      { offsetLoNS: wallNS - value.hiNS - 2000000n, offsetHiNS: wallNS - tick + 2000000n });
+    return mutate ? mutate(value) : value;
+  }, dispose() { closes++; calls.push('dispose'); } };
+  const registry = {
+    async clock(options) {
+      calls.push('helper'); helpers.push(options);
+      const receipt = { protocol: 1, boot, clockDomain: domain, clockKind: rawKind,
+        monoLoNs: String(tick + 1000000n), monoHiNs: String(tick + 2000000n),
+        wallUnixNs: String(wallBase + tick - initial), uncertaintyNs: '4000000' };
+      const output = Buffer.from(JSON.stringify(receiptMutation ? receiptMutation(receipt) : receipt));
+      tick += 10000000n;
+      if (helperGate) await helperGate.promise;
+      return { status: 'ok', output };
+    },
+    event(options) {
+      events++; calls.push('admission');
+      const finish = () => { const afterSpawn = options.prepare(); calls.push('spawn'); tick += spawnGap; frame = afterSpawn(); return Promise.resolve(); };
+      if (queued) { queued.options = options; queued.finish = finish; return queued.promise; }
+      return finish();
+    },
+    cancel() { cancels++; calls.push('cancel'); },
+  };
+  const policy = { generation, images: [{ imageSHA256: 'a'.repeat(64) }], profileID: 'TEST-inert-policy', calibrationID: 'TEST-inert-calibration', rawKind,
+    sourceKind: rawKind === 'linux-boottime' ? 'linux-proc-boottime' : rawKind === 'darwin-monotonic-raw' ?
+      'darwin-mach-continuous' : 'windows-interrupt-precise', sourceWallBoundNS: 2000000n,
+    nativeReadBoundNS: 103000000n, comparisonBoundNS: 430000000n, translationBoundNS: 224000000n };
+  const delivery = createPreparedDelivery({ registry, origin: 'a'.repeat(64), policy, isOwned: () => true,
+    sourceFactory: factory ? options => factory(options, source) : () => source });
+  return { delivery, source, calls, helpers, advance(n) { tick += n; }, tick: () => tick,
+    closes: () => closes, cancels: () => cancels, events: () => events, frame: () => parseJSON(frame),
+    mutate(fn) { mutate = fn; }, receipt(fn) { receiptMutation = fn; }, gap(n) { spawnGap = n; }, gateHelper(gate) { helperGate = gate; }, queue(gate) { queued = gate; },
+    fact() { return { version: 1, kind: 'question_asked', sessionID: 's', turnID: 'original-turn', requestID: 'r', rootSession: true,
+      provenance: { generation, observationID: 'original-observation', nativeTime: Number((wallBase + tick - initial) / 1000000n),
+        timeBasis: generation === 'v1' ? 'assistant_created_lower_bound' : 'envelope_created',
+        ...(generation === 'v2' ? { nativeEventID: 'original-native-event' } : {}) } }; },
+    handoff() {
+      delivery.beginIngress({ type: 'question.asked' });
+      const ms = delivery.clock.now(), controller = new AbortController();
+      return { clockID: delivery.clock.id, ingressMonotonicMs: ms, metadataDeadline: ms + 2000,
+        signal: controller.signal, isCurrent: () => !controller.signal.aborted, controller };
+    },
+  };
+}
+
+test('async preparation finishes before helper and synchronous admission; exact native ingress/birth/anchor survive', async () => {
+  for (const rawKind of ['linux-boottime', 'darwin-monotonic-raw', 'windows-interrupt-precise']) {
+    for (const generation of ['v1', 'v2']) {
+      const gate = deferred();
+      const f = deliveryFixture(rawKind, generation, async (options, source) => {
+        f.calls.push('preparing'); assert.equal(options.signal.aborted, false);
+        await gate.promise; f.calls.push('prepared'); return source;
+      });
+      try {
+        const activation = f.delivery.activate();
+        assert.equal(f.delivery.ready(), false); assert.equal(f.helpers.length, 0);
+        gate.resolve(); assert.equal(await activation, true);
+        assert.ok(f.calls.indexOf('prepared') < f.calls.indexOf('sample'));
+        assert.ok(f.calls.indexOf('sample') < f.calls.indexOf('helper'));
+        f.advance(60000000n); const ingress = f.tick(), event = f.fact(), handoff = f.handoff();
+        assert.equal(await f.delivery.beforeEmit(event, handoff), true);
+        const n = f.calls.length, emitted = f.delivery.emit(event, handoff);
+        // The entire seam completed on this stack before awaiting its result.
+        assert.deepEqual(f.calls.slice(n), ['admission', 'sample', 'spawn', 'sample']);
+        const frame = f.frame();
+        assert.deepEqual(frame.event, event);
+        assert.equal(frame.provenance.ingressTickNS, String(ingress));
+        assert.equal(frame.provenance.anchor.monoLoNS, rawKind === 'linux-boottime' ? '1000001000000' :
+          rawKind === 'darwin-monotonic-raw' ? '1000001000007' : '1000001000100');
+        assert.equal(frame.provenance.calibration.nativeLoNS, frame.provenance.anchor.monoLoNS);
+        assert.equal(frame.provenance.sourceEpoch, frame.provenance.calibration.sourceEpoch);
+        await emitted;
+      } finally { f.delivery.dispose(); }
+      assert.equal(f.closes(), 1);
+    }
+  }
+});
+
+test('cancelled async preparation disposes late source and cannot retire or revive replacement epoch', async () => {
+  const gate = deferred(); let first = true, signal, lateCloses = 0;
+  const f = deliveryFixture('darwin-monotonic-raw', 'v2', (options, source) => {
+    if (!first) return source;
+    first = false; signal = options.signal;
+    return gate.promise;
+  });
+  try {
+    const old = f.delivery.activate(); f.delivery.invalidate('reader');
+    assert.equal(signal.aborted, true); assert.equal(await old, false); assert.equal(f.cancels(), 1);
+    assert.equal(await f.delivery.activate(), true);
+    gate.resolve({ sample() { assert.fail('late source sampled'); }, dispose() { lateCloses++; } });
+    await Promise.resolve(); await Promise.resolve();
+    assert.equal(lateCloses, 1); assert.equal(f.delivery.ready(), true); assert.equal(f.helpers.length, 1);
+  } finally { f.delivery.dispose(); }
+  assert.equal(f.closes(), 1);
+});
+
+test('helper completion from retired epoch is cancelled and cannot publish a new epoch', async () => {
+  const f = deliveryFixture(), gate = deferred(); f.gateHelper(gate);
+  try {
+    const old = f.delivery.activate(); await Promise.resolve(); await Promise.resolve();
+    assert.equal(f.helpers.length, 1); const options = f.helpers[0];
+    f.delivery.invalidate('reader'); assert.equal(options.signal.aborted, true); assert.equal(options.isCurrent(), false);
+    f.gateHelper(undefined); assert.equal(await f.delivery.activate(), true);
+    gate.resolve(); assert.equal(await old, false); assert.equal(f.delivery.ready(), true);
+  } finally { f.delivery.dispose(); }
+  // Each accepted preparation is disposed, including the retired activation.
+  assert.equal(f.closes(), 2);
+});
+
+test('old prepared work cannot survive reader epoch replacement or handoff cancellation', async () => {
+  for (const mode of ['epoch', 'signal']) {
+    const f = deliveryFixture();
+    try {
+      assert.equal(await f.delivery.activate(), true); f.advance(60000000n);
+      const event = f.fact(), handoff = f.handoff(); assert.equal(await f.delivery.beforeEmit(event, handoff), true);
+      if (mode === 'epoch') { f.delivery.invalidate('reader'); assert.equal(await f.delivery.activate(), true); }
+      else handoff.controller.abort();
+      await f.delivery.emit(event, handoff); assert.equal(f.events(), 0);
+    } finally { f.delivery.dispose(); }
+  }
+});
+
+test('malformed source identities/intervals fail closed and dispose on activation', async () => {
+  for (const change of [v => ({ ...v, boot: 'bad' }), v => ({ ...v, domain: 'windows-kernel' }),
+    v => ({ ...v, rawKind: 'windows-interrupt-precise' }), v => ({ ...v, rawKind: 'unknown' }),
+    v => ({ ...v, loNS: Number(v.loNS) }), v => ({ ...v, hiNS: v.loNS }),
+    v => ({ ...v, hiNS: v.loNS + 100000001n }), v => ({ ...v, wallNS: 0n })]) {
+    const f = deliveryFixture(); f.mutate(change);
+    assert.equal(await f.delivery.activate(), false); assert.equal(f.delivery.ready(), false);
+    assert.equal(f.helpers.length, 0); assert.equal(f.closes(), 1); assert.equal(f.cancels(), 1);
+    f.delivery.dispose(); assert.equal(f.closes(), 1);
+  }
+});
+
+test('closed platform policy descriptions cannot populate qualification; no implicit native source-wall premise', () => {
+  for (const [goos, goarch] of [['linux', 'arm64'], ['darwin', 'arm64'], ['darwin', 'amd64'], ['windows', 'amd64']]) {
+    const descriptor = describeClockSource(goos, goarch);
+    for (const generation of ['v1', 'v2']) {
+      const row = { protocol: 1, goos, goarch, generation, ...descriptor,
+        images: [{ version: generation === 'v1' ? '1.18.33' : '2.0.21', imageSHA256: 'a'.repeat(64) }],
+        algorithmSourceMerkleSHA256: 'd'.repeat(64), nativeReadBoundNS: '103000000',
+        comparisonBoundNS: '430000000', translationBoundNS: '224000000',
+        ...(goos === 'linux' ? {} : { sourceWallBoundNS: '2000000' }) };
+      const selected = selectClockCell(generation);
+      const policy = describeClockPolicy(row); assert.equal(policy.rawKind, descriptor.rawKind);
+      assert.ok(Object.isFrozen(policy)); assert.equal(selectClockCell(generation), selected);
+      for (const change of [r => { r.rawKind = 'unknown'; }, r => { r.sourceKind = 'wrong'; },
+        r => { r.images[0].imageSHA256 = 'bad'; }, r => { r.images[0].version = '2.0.22'; },
+        r => { r.goarch = '386'; }, r => { r.comparisonBoundNS = '2000000001'; }]) {
+        const bad = structuredClone(row); change(bad); assert.throws(() => describeClockPolicy(bad));
+      }
+      if (goos !== 'linux') {
+        const missing = { ...row }; delete missing.sourceWallBoundNS;
+        assert.throws(() => describeClockPolicy(missing));
+      }
+    }
+  }
+  for (const pair of [['windows', 'arm64'], ['linux', 'x64'], ['freebsd', 'amd64']])
+    assert.throws(() => describeClockSource(...pair));
+  // Legacy amd64 image matching remains exact; a data description cannot grant it.
+  const row = { protocol: 1, goos: 'linux', goarch: 'amd64', generation: 'v2',
+    ...describeClockSource('linux', 'amd64'), images: [{ version: '2.0.21', imageSHA256: 'a'.repeat(64) }],
+    algorithmSourceMerkleSHA256: 'd'.repeat(64), nativeReadBoundNS: '103000000',
+    comparisonBoundNS: '430000000', translationBoundNS: '224000000' };
+  assert.throws(() => describeClockPolicy(row));
+});
+
+test('native receipt domain/raw-kind pairing is closed and interval uncertainty remains exact', () => {
+  for (const [kind, domain] of [['darwin-monotonic-raw', 'darwin-kernel'], ['windows-interrupt-precise', 'windows-kernel']]) {
+    const value = { protocol: 1, boot, clockDomain: domain, clockKind: kind,
+      monoLoNs: '1000', monoHiNs: '2000', wallUnixNs: '1700000000000000000', uncertaintyNs: '3001000' };
+    assert.equal(clockReceipt(Buffer.from(JSON.stringify(value))).rawKind, kind);
+    for (const change of [v => { v.clockDomain += ':1'; }, v => { v.clockKind = 'linux-boottime'; },
+      v => { v.boot = changedBoot.toUpperCase(); }, v => { v.uncertaintyNs = '3000000'; },
+      v => { v.monoHiNs = '100001001'; }, v => { v.monoLoNs = '01000'; }]) {
+      const bad = { ...value }; change(bad); assert.throws(() => clockReceipt(Buffer.from(JSON.stringify(bad))));
+    }
+  }
+  assert.equal(domainOK('linux-time:18446744073709551616:7'), false);
+  assert.equal(domainOK('linux-time:04:7'), false);
+});
+
+// Baseline identity/interval checks must remain strict after admitting known
+// kinds; a second helper cannot replace the genuine activation anchor.
+test('validly shaped but wrong helper boot/domain/kind and disjoint calibration deny', async () => {
+  for (const change of [r => ({ ...r, boot: changedBoot }),
+    r => ({ ...r, clockDomain: 'windows-kernel', clockKind: 'windows-interrupt-precise' }),
+    r => ({ ...r, monoLoNs: '1000010000008', monoHiNs: '1000011000008' })]) {
+    const f = deliveryFixture(); f.receipt(change);
+    assert.equal(await f.delivery.activate(), false); assert.equal(f.closes(), 1);
+    f.delivery.dispose(); assert.equal(f.delivery.ready(), false);
+  }
+});
+
+test('post-spawn and queued admission refuse pauses without enlarging 110ms or metadata budgets', async () => {
+  for (const mode of ['spawn', 'queued']) {
+    const f = deliveryFixture();
+    try {
+      assert.equal(await f.delivery.activate(), true); f.advance(60000000n);
+      const event = f.fact(), h = f.handoff(); assert.equal(await f.delivery.beforeEmit(event, h), true);
+      if (mode === 'spawn') {
+        f.gap(110000000n); assert.throws(() => f.delivery.emit(event, h));
+      } else {
+        const queue = deferred(); f.queue(queue);
+        const work = f.delivery.emit(event, h);
+        f.advance(2000000000n); assert.throws(queue.finish); queue.resolve(); await work;
+      }
+      assert.equal(f.delivery.ready(), false); assert.equal(f.closes(), 1); assert.equal(f.cancels(), 1);
+    } finally { f.delivery.dispose(); }
+  }
+});
+
+// Independent Python canonical-JSON vectors freeze the prior Linux description
+// formula. Production roots must be rebound to final changed source bytes.
+test('Linux amd64 image tuples, bounds and legacy profile ID formula remain equivalent', () => {
+  const vectors = [[{"protocol":1,"generation":"v1","goos":"linux","goarch":"amd64","images":[{"version":"1.18.33","imageSHA256":"0abbb7c32ab0294c0a7bfa2705f9ff0df5dce5ab721d1f00cccfe393f2a11427"},{"version":"1.18.34","imageSHA256":"9ca0b9953d49997601655e54f846a3efa464f237e47c6f1b04716d0f2e64c4c2"}],"algorithmSourceMerkleSHA256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","sourceKind":"linux-proc-boottime","rawKind":"linux-boottime","nativeReadBoundNS":"103000000","comparisonBoundNS":"430000000","translationBoundNS":"224000000"},"linux-amd64-proc-boottime-v1:cc07fb25402ff8be38f898fa18fcdabfdb5c72900ee9668a46503156eff53144"],[{"protocol":1,"generation":"v2","goos":"linux","goarch":"amd64","images":[{"version":"2.0.21","imageSHA256":"f916986543348d7953d8d43aa048516cdbc3f84f4d0dc9c0c5b9d1da3030cea7"}],"algorithmSourceMerkleSHA256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","sourceKind":"linux-proc-boottime","rawKind":"linux-boottime","nativeReadBoundNS":"103000000","comparisonBoundNS":"430000000","translationBoundNS":"224000000"},"linux-amd64-proc-boottime-v1:1e07a40d3ae80b2a66066e437dd0a577bbfc978e3e2ff7ad4ab8fcf1f70f7d15"]];
+  for (const [row, expected] of vectors) {
+    assert.equal(describeClockPolicy(row).profileID, expected);
+    assert.equal(describeClockPolicy(row).calibrationID, expected + ':same-coordinate');
+    const selected = selectClockCell(row.generation);
+    assert.throws(() => describeClockPolicy({ ...row, originalNativeAge: 'unverified_original_date' }));
+    assert.equal(selectClockCell(row.generation), selected);
+  }
+});
+
+
+test('native offset arithmetic requires an explicit premise and respects integer interval edges', () => {
+  const sample = { boot, domain: 'darwin-kernel', rawKind: 'darwin-monotonic-raw',
+    loNS: 1000n, hiNS: 1001n, wallNS: 1700000000000000000n };
+  const result = withWallOffset(sample, 2000000n);
+  assert.equal(result.offsetLoNS, 1699999999997998999n);
+  assert.equal(result.offsetHiNS, 1700000000001999000n);
+  assert.equal(result.loNS, sample.loNS); assert.ok(Object.isFrozen(result));
+  for (const bound of [undefined, 2000000, -1n, 2000000001n]) denied(() => withWallOffset(sample, bound));
+  for (const change of [s => ({ ...s, loNS: 0n, hiNS: 1n }), s => ({ ...s, hiNS: MAX + 1n }),
+    s => ({ ...s, wallNS: 1n, loNS: MAX - 1n, hiNS: MAX }),
+    s => ({ ...s, domain: 'darwin-kernel:1' })]) denied(() => withWallOffset(change(sample), 2000000n));
+});
+
+test('source disposal while preparing denies every future activation and closes a late binding once', async () => {
+  const gate = deferred(); let signal, closes = 0;
+  const f = deliveryFixture('windows-interrupt-precise', 'v1', options => { signal = options.signal; return gate.promise; });
+  const work = f.delivery.activate(); f.delivery.dispose();
+  assert.equal(signal.aborted, true); assert.equal(await work, false);
+  assert.equal(await f.delivery.activate(), false); assert.equal(f.helpers.length, 0);
+  gate.resolve({ sample() { assert.fail('disposed binding sampled'); }, dispose() { closes++; } });
+  await Promise.resolve(); await Promise.resolve(); f.delivery.dispose(); assert.equal(closes, 1);
+});
+
+test('pre-epoch native birth stays denied without rebirth or provenance replacement', async () => {
+  for (const kind of ['darwin-monotonic-raw', 'windows-interrupt-precise']) {
+    const f = deliveryFixture(kind);
+    try {
+      assert.equal(await f.delivery.activate(), true);
+      const old = f.fact(), nativeTime = old.provenance.nativeTime;
+      assert.equal(f.delivery.allowsBirth(nativeTime), false);
+      f.advance(60000000n); const handoff = f.handoff();
+      assert.equal(await f.delivery.beforeEmit(old, handoff), false);
+      assert.equal(old.provenance.nativeTime, nativeTime);
+      assert.equal(old.provenance.observationID, 'original-observation');
+      assert.equal(f.delivery.ready(), false); assert.equal(f.events(), 0);
+    } finally { f.delivery.dispose(); }
+  }
+});
+
+
+// An authenticated but different native image must not inherit the descriptor.
+// Both hashes are inert test identities; production pins are untouched.
+test('well-formed wrong native image denies before counter/helper and disposes the binding', async () => {
+  for (const kind of ['darwin-monotonic-raw', 'windows-interrupt-precise']) {
+    const f = deliveryFixture(kind); f.source.imageSHA256 = 'b'.repeat(64);
+    assert.equal(await f.delivery.activate(), false);
+    assert.equal(f.calls.includes('sample'), false); assert.equal(f.helpers.length, 0);
+    assert.equal(f.closes(), 1); assert.equal(f.cancels(), 1);
+    f.delivery.dispose(); assert.equal(f.closes(), 1);
+  }
+});
+
+// Cancellation alone does not prove an unresolved preparation is bounded.
+// This uses the real existing 2s timer, with no native/FFI/process boundary.
+test('unresolved native preparation expires inside the existing budget and disposes its late result', { timeout: 5000 }, async () => {
+  const gate = deferred(); let signal, closes = 0;
+  const f = deliveryFixture('darwin-monotonic-raw', 'v2', options => { signal = options.signal; return gate.promise; });
+  try {
+    assert.equal(await f.delivery.activate(), false);
+    assert.equal(signal.aborted, true); assert.equal(f.helpers.length, 0);
+    assert.equal(f.delivery.ready(), false); assert.equal(f.cancels(), 1);
+    gate.resolve({ sample() { assert.fail('expired source sampled'); }, dispose() { closes++; } });
+    await Promise.resolve(); await Promise.resolve(); assert.equal(closes, 1);
+  } finally { f.delivery.dispose(); }
+});
+
+
+test('original native age exception is explicit, image-exact and cannot select a clock', () => {
+  const row = { protocol: 1, generation: 'v1', goos: 'windows', goarch: 'amd64',
+    ...describeClockSource('windows', 'amd64'),
+    images: [{ version: '1.18.33', imageSHA256: '52f60248a576b34c9a6dcaa27e0a7f08089af35bcdc0dfb10c04d3e00a98314c' }],
+    algorithmSourceMerkleSHA256: 'd'.repeat(64), nativeReadBoundNS: '103000000',
+    comparisonBoundNS: '430000000', translationBoundNS: '224000000', sourceWallBoundNS: '2000000',
+    originalNativeAge: 'unverified_original_date' };
+  const selected = selectClockCell('v1'), policy = describeClockPolicy(row);
+  assert.equal(policy.originalNativeAge, 'unverified_original_date');
+  // Independent Python canonical-JSON vector binds mode with the SAME image.
+  assert.equal(policy.profileID, 'windows-amd64-windows-interrupt-precise-v1:591cfa5af34b8c88fca19f94bec620d2a5fce5c2558707e0b92ed61c8cceaff2');
+  assert.ok(Object.isFrozen(policy)); assert.equal(selectClockCell('v1'), selected);
+  for (const change of [r => { delete r.originalNativeAge; }, r => { r.originalNativeAge = 'bounded'; },
+    r => { r.originalNativeAge = ''; }, r => { r.originalNativeAge = 'unknown'; },
+    r => { r.images[0].imageSHA256 = 'a'.repeat(64); }, r => { r.images[0].version = '1.18.34'; },
+    r => { r.generation = 'v2'; r.images[0].version = '2.0.21'; },
+    r => { r.goos = 'darwin'; Object.assign(r, describeClockSource('darwin', 'amd64')); },
+    r => { r.goos = 'linux'; Object.assign(r, describeClockSource('linux', 'amd64')); delete r.sourceWallBoundNS; },
+    r => { r.goarch = 'arm64'; }]) {
+    const bad = structuredClone(row); change(bad); assert.throws(() => describeClockPolicy(bad));
+  }
+  const legacy = { ...row, images: [{ version: '1.18.33', imageSHA256: 'a'.repeat(64) }] };
+  delete legacy.originalNativeAge;
+  assert.equal(describeClockPolicy(legacy).originalNativeAge, 'bounded');
+  assert.notEqual(policy.profileID, describeClockPolicy(legacy).profileID);
+  assert.equal(policy.calibrationID, policy.profileID + ':same-coordinate');
 });

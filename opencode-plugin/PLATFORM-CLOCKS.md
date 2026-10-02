@@ -136,3 +136,28 @@ private TEST fixture containing the exact copied source closure. It exercises
 no native clock, proc read, FFI, host, runtime or provider; filesystem image
 lifetime checks write only inside that fixture. Passing tests establish source
 contracts, never native qualification or product E2E.
+
+
+## Accepted Windows V1 original-age restriction
+
+Trusted compiled policy exposes `originalNativeAge`: `bounded` or
+`unverified_original_date`; absent legacy metadata means `bounded`.
+The latter requires Windows amd64, serve, V1 1.18.33, official executable
+SHA `52f60248a576b34c9a6dcaa27e0a7f08089af35bcdc0dfb10c04d3e00a98314c`.
+The exact floor must explicitly declare it; current 1.18.34, V2, other tuples
+and unknown modes cannot inherit it. JS has no entry field; host custody
+independently enforces serve. Canonical policy ID binds the explicit mode;
+legacy absent-field Linux IDs and the existing policy fence remain unchanged.
+This describes native-origin age as **UNVERIFIED**, separately from clock,
+reader and installed evidence. Every qualification row remains empty.
+Original numeric DOB/units, activation filters and Go -2s..60s checks remain
+reported-DOB filters, not proof of true historical age for Windows V1.
+R/T/source-wall math, actual boot/domain, sourceEpoch, hydration silence,
+30s ingress-to-spawn, 20s child, 50s total and tightening-only guards remain.
+Claim key/store format, 4096 capacity, conservative uncertain retention,
+verified >=24h pruning, durable claim before effect and no retry remain.
+Windows V1 promises at-most-one attempt per key within verified 24h retention.
+Owner acceptance supersedes true-origin 60s and no-replay-after-24h claims here.
+A host-buffered stale completion may pass once and again after verified pruning;
+eligible older duplicates are not proved impossible, and no frequency is claimed.
+Stock V1/V2 remain required; native/installed/full-product qualification is pending.

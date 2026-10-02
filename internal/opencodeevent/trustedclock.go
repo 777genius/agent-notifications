@@ -30,7 +30,11 @@ func SelectTrustedImageClock(key opencodecodec.ImageKey) (ClockSelection, error)
 	if !ok {
 		return ClockSelection{}, ErrClockUnavailable
 	}
-	selected := ClockSelection{Policy: TimePolicy{ProfileID: row.ProfileID, RawKind: row.RawKind,
+	mode := row.OriginalNativeAge
+	if mode == "" {
+		mode = "bounded"
+	}
+	selected := ClockSelection{Policy: TimePolicy{ProfileID: row.ProfileID, RawKind: row.RawKind, OriginalNativeAge: mode,
 		NativeReadBoundNS: row.NativeReadBoundNS, ComparisonBoundNS: row.ComparisonBoundNS},
 		CalibrationID: row.CalibrationID, Generation: row.Generation, TranslationBoundNS: row.TranslationBoundNS}
 	candidate, known := opencodecodec.LookupCandidate(key)

@@ -6,9 +6,11 @@ import { address, closeAll, createNativeClock, filetimeNS, interruptABI, interru
 // Bounded bootstrap: only the protected default OS directory. Other layouts
 // are denied; no environment/WINDIR/search-path or api-set disk-file fallback.
 const directory = 'C:\\Windows\\System32';
-export async function createWindowsClock() {
-  if (process.platform !== 'win32' || process.arch !== 'x64') unavailable();
+export async function createWindowsClock({ signal } = {}) {
+  if (signal?.aborted || process.platform !== 'win32' || process.arch !== 'x64') unavailable();
   const releases = [];
+  const abort = () => { try { closeAll(releases); } catch {} };
+  signal?.addEventListener('abort', abort, { once: true });
   try {
     const image = pinNativeImage(); releases.push(image.close);
     const files = ['kernel32.dll', 'ntdll.dll'].map(name => `${directory}\\${name}`);
@@ -21,6 +23,7 @@ export async function createWindowsClock() {
     const held = [];
     for (const path of files) { const file = holdFile(path); held.push(file); releases.push(file.close); }
     const { dlopen, ptr, linkSymbols } = await import('bun:ffi');
+    if (signal?.aborted) unavailable();
     if (typeof dlopen !== 'function' || typeof ptr !== 'function' || typeof linkSymbols !== 'function') unavailable();
     function library(path, abi) {
       const lib = dlopen(path, abi); releases.push(() => lib.close()); return lib.symbols;
@@ -47,6 +50,7 @@ export async function createWindowsClock() {
     const info = new BigUint64Array(4), returned = new Uint32Array(1);
     const counter = new BigUint64Array(1), wall = new BigUint64Array(1);
     return createNativeClock({
+      imageSHA256: image.imageSHA256,
       readBoot() {
         info.fill(0n); returned[0] = 0;
         const status = nt.NtQuerySystemInformation(90, aligned(info), 32, aligned(returned));
@@ -64,4 +68,5 @@ export async function createWindowsClock() {
       close: () => closeAll(releases),
     }, 'windows-kernel');
   } catch { try { closeAll(releases); } catch {} unavailable(); }
+  finally { signal?.removeEventListener('abort', abort); }
 }
