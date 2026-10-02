@@ -793,6 +793,13 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 			return l, err
 		}
 	}
+	// Refuse a retained-native conflict before persisting a decision that its
+	// own replay cannot complete. Request flags alone do not prove revocation.
+	if tx.Native == nil && tx.After.Native != nil && !boundedPolicyRevocation(root, tx) {
+		if err := validateRetainedNative(tx.After.Native); err != nil {
+			return l, err
+		}
+	}
 	if err := writeTransaction(marker, tx); err != nil {
 		return l, err
 	}
@@ -806,6 +813,27 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 	}
 	return readLedger(root)
 }
+
+func validateRetainedNative(native *NativeRecord) error {
+	if native == nil {
+		return nil
+	}
+	if err := validateNativeRecord(native); err != nil {
+		return err
+	}
+	if err := checkNativeDirectoryID(native.Path, native.DirectoryID); err != nil {
+		return err
+	}
+	digest, err := treeFingerprint(native.Path)
+	if err != nil {
+		return err
+	}
+	if digest == "" || digest != native.SHA256 {
+		return fmt.Errorf("native live fingerprint conflict")
+	}
+	return nil
+}
+
 func recoverTransaction(ctx context.Context, root string, current Ledger, tx transaction, fault func(string) error) error {
 	if current.WriterFloor > ReservationWriterFloor || tx.Before.WriterFloor > ReservationWriterFloor || tx.After.WriterFloor > ReservationWriterFloor {
 		return fmt.Errorf("installed writer floor requires a newer compatible kernel")
@@ -842,20 +870,8 @@ func recoverTransaction(ctx context.Context, root string, current Ledger, tx tra
 	// not check bytes. Only a proven bounded revocation may bypass this.
 	preserveNative := boundedPolicyRevocation(root, tx)
 	if tx.Native == nil && !preserveNative {
-		if native := tx.After.Native; native != nil {
-			if err := validateNativeRecord(native); err != nil {
-				return err
-			}
-			if err := checkNativeDirectoryID(native.Path, native.DirectoryID); err != nil {
-				return err
-			}
-			digest, err := treeFingerprint(native.Path)
-			if err != nil {
-				return err
-			}
-			if digest == "" || digest != native.SHA256 {
-				return fmt.Errorf("native live fingerprint conflict")
-			}
+		if err := validateRetainedNative(tx.After.Native); err != nil {
+			return err
 		}
 		if _, err := refreshLedgerIdentities(tx.After); err != nil {
 			return err
