@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"sort"
 	"strings"
 )
@@ -374,14 +373,14 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 	}
 	if readErr == nil {
 		if r.RollbackPending {
-			if !reflect.DeepEqual(l, pending.Before) && !reflect.DeepEqual(l, pending.After) {
+			if !ledgerMatchesJournal(l, pending.Before, pending.Native) && !ledgerMatchesJournal(l, pending.After, pending.Native) {
 				return l, fmt.Errorf("rollback ledger mismatch")
 			}
 			if pending.Rollback {
 				if e := recoverTransaction(ctx, root, l, pending, r.Fault); e != nil {
 					return l, e
 				}
-				return pending.After, nil
+				return readLedger(root)
 			}
 			reverse, e := reverseTransaction(l, pending)
 			if e != nil {
@@ -393,12 +392,15 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 			if e = recoverTransaction(ctx, root, l, reverse, r.Fault); e != nil {
 				return l, e
 			}
-			return reverse.After, nil
+			return readLedger(root)
 		}
 		if err := recoverTransaction(ctx, root, l, pending, nil); err != nil {
 			return l, err
 		}
-		l = pending.After
+		l, err = readLedger(root)
+		if err != nil {
+			return l, err
+		}
 		if r.RecoverOnly {
 			return l, nil
 		}
@@ -778,6 +780,10 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 			}
 		}
 	}
+	next, err = refreshLedgerIdentities(next)
+	if err != nil {
+		return l, err
+	}
 	tx := transaction{Schema: transactionSchemaFor(next, r), Before: l, After: next, Files: files, Native: native, ConfigPaths: r.ConfigPaths}
 	if err := writeTransaction(marker, tx); err != nil {
 		return l, err
@@ -790,10 +796,10 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 	if err := recoverTransaction(ctx, root, l, tx, r.Fault); err != nil {
 		return l, err
 	}
-	return next, nil
+	return readLedger(root)
 }
 func recoverTransaction(ctx context.Context, root string, current Ledger, tx transaction, fault func(string) error) error {
-	if !reflect.DeepEqual(current, tx.Before) && !reflect.DeepEqual(current, tx.After) {
+	if !ledgerMatchesJournal(current, tx.Before, tx.Native) && !ledgerMatchesJournal(current, tx.After, tx.Native) {
 		return fmt.Errorf("transaction ledger snapshot mismatch")
 	}
 	if current.Generation != tx.Before.Generation && current.Generation != tx.After.Generation {
@@ -802,14 +808,16 @@ func recoverTransaction(ctx context.Context, root string, current Ledger, tx tra
 	if current.ID != "" && current.ID != tx.After.ID {
 		return fmt.Errorf("transaction owner mismatch")
 	}
-	for _, f := range tx.Files {
+	tx.Files = append([]File(nil), tx.Files...)
+	for i, f := range tx.Files {
 		anchors, e := pathAnchors(f.Path, false)
 		if e != nil {
 			return e
 		}
-		if e = checkAnchors(f.Parents, anchors); e != nil {
+		if e = checkPersistedAnchors(f.Parents, anchors); e != nil {
 			return e
 		}
+		tx.Files[i].Parents = anchors
 		got, err := replacementFingerprint(f)
 		if err != nil {
 			return err
@@ -863,7 +871,11 @@ func recoverTransaction(ctx context.Context, root string, current Ledger, tx tra
 			}
 		}
 	}
-	if err := writeJSON(filepath.Join(root, "ownership.json"), tx.After); err != nil {
+	after, err := refreshLedgerIdentities(tx.After)
+	if err != nil {
+		return err
+	}
+	if err := writeJSON(filepath.Join(root, "ownership.json"), after); err != nil {
 		return err
 	}
 	if fault != nil {

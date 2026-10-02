@@ -217,6 +217,24 @@ func checkPolicyGeneration(root string, l Ledger) error {
 // snapshots. It never restores an entire directory and never downgrades an
 // already promoted callback reader. A foreign edit makes rollback refuse.
 func reverseTransaction(current Ledger, tx transaction) (transaction, error) {
+	if tx.Native != nil && len(tx.Native.Parents) != 0 {
+		anchors, err := pathAnchors(tx.Native.After.Path, false)
+		if err != nil {
+			return transaction{}, err
+		}
+		if err := checkPersistedAnchors(tx.Native.Parents, anchors); err != nil {
+			return transaction{}, err
+		}
+	}
+	for _, f := range tx.Files {
+		anchors, err := pathAnchors(f.Path, false)
+		if err != nil {
+			return transaction{}, err
+		}
+		if err := checkPersistedAnchors(f.Parents, anchors); err != nil {
+			return transaction{}, err
+		}
+	}
 	if tx.Native != nil && tx.Native.Retire {
 		return transaction{}, fmt.Errorf("retirement deletion must finish forward recovery before rollback")
 	}

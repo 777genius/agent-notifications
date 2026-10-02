@@ -30,6 +30,7 @@ func installRuntime(args []string, output io.Writer) error {
 	refresh := flags.Bool("refresh", false, "refresh files for existing consumers without adding a registration")
 	relocateCache := flags.Bool("relocate-versioned-cache", false, "move Claude hooks between versioned plugin caches")
 	purge := flags.Bool("purge-native", false, "explicitly remove retained callback on final uninstall")
+	printNativePath := flags.Bool("print-native-path", false, "print only the committed durable native generation path")
 	consumer := flags.String("consumer", "claude-hooks", "managed consumer identity")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -294,6 +295,14 @@ func installRuntime(args []string, output io.Writer) error {
 	}
 	ledger, err := installruntime.Commit(ctx, req)
 	if err == nil {
+		if *printNativePath {
+			path := ""
+			if ledger.Native != nil {
+				path = ledger.Native.Path
+			}
+			_, err = fmt.Fprintln(output, path)
+			return err
+		}
 		_, _ = fmt.Fprintf(output, "managed-runtime committed generation=%d\n", ledger.Generation)
 		if *purge {
 			_, _ = fmt.Fprintln(output, "Callback entrypoint purge completed; pending notifications may no longer open targets. Running callbacks are not stopped.")
