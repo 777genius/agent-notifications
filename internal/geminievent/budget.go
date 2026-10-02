@@ -2,7 +2,6 @@ package geminievent
 
 import (
 	"context"
-	"math"
 	"time"
 
 	"github.com/777genius/agent-notifications/internal/notification"
@@ -13,10 +12,6 @@ const TotalBudget = observation.TotalBudget
 
 // Clock is a same-boot continuous clock, including elapsed time during suspend.
 type Clock = observation.Clock
-
-func validTime(boot string, now float64, err error) bool {
-	return err == nil && boot != "" && now >= 0 && !math.IsNaN(now) && !math.IsInf(now, 0)
-}
 
 // Admission captures the total budget before stdin/source/locks. Cancel must
 // be called after the invocation. Continuous-clock expiry also cancels HTTP.

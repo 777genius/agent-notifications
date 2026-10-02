@@ -72,7 +72,14 @@ jobs:
           fi
 
       - name: Run tests
-        run: go test -timeout 20m -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+        run: |
+          set -euo pipefail
+          go test -timeout 20m -v -race -coverprofile=coverage-cmd.txt -covermode=atomic ./cmd/claude-notifications
+          packages=$(go list ./...)
+          remaining_packages=$(printf '%s\n' "$packages" | grep -Fvx 'github.com/777genius/agent-notifications/cmd/claude-notifications')
+          mapfile -t remaining <<< "$remaining_packages"
+          go test -timeout 20m -v -race -coverprofile=coverage-ubuntu-rest.txt -covermode=atomic "${remaining[@]}"
+          { head -n 1 coverage-ubuntu-rest.txt; tail -n +2 coverage-ubuntu-rest.txt; tail -n +2 coverage-cmd.txt; } > coverage.txt
 
       - name: Upload coverage to Codecov
         if: matrix.go == '1.26'
