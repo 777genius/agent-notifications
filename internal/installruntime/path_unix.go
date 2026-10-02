@@ -236,11 +236,6 @@ func PersistedIdentityMatches(stored, fresh, freshParent string) bool {
 	return ok && storedIno == freshIno && freshDev == parentDev && storedDev != freshDev
 }
 
-func splitDeviceIdentity(id string) (dev, ino string, ok bool) {
-	dev, ino, ok = strings.Cut(id, ":")
-	return dev, ino, ok && dev != "" && ino != "" && !strings.Contains(ino, ":")
-}
-
 func openedDirectoryIdentity(f *os.File) (string, error) {
 	var st unix.Stat_t
 	if err := unix.Fstat(int(f.Fd()), &st); err != nil {

@@ -373,6 +373,9 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 		return l, err
 	}
 	if readErr == nil {
+		if err := rebindRenumberedJournal(&pending); err != nil {
+			return l, err
+		}
 		if r.RollbackPending {
 			if !reflect.DeepEqual(l, pending.Before) && !reflect.DeepEqual(l, pending.After) {
 				return l, fmt.Errorf("rollback ledger mismatch")
