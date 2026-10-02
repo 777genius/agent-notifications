@@ -17,6 +17,9 @@ on:
       - 'go.mod'
       - 'go.sum'
 
+permissions:
+  contents: read
+
 jobs:
   selector:
     name: Selector on ${{ matrix.os }}
@@ -27,8 +30,10 @@ jobs:
       matrix:
         os: [macos-15, macos-26]
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: '1.26'
       - name: Qualify native bootstrap in disposable profiles
@@ -57,7 +62,9 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Qualify disposable Git Bash and HTTP fixtures
         shell: bash
         run: bash bin/bootstrap_product_test.sh

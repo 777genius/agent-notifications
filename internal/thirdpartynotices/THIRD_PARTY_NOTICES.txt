@@ -88,7 +88,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-github.com/777genius/plugin-kit-ai/cli v0.0.0-20261001182617-f05fe750bb7a
+github.com/777genius/plugin-kit-ai/cli v0.0.0-20261001223030-8064798523dc
 ========================================================================
 
 LICENSE (SHA-256 cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30)
@@ -689,7 +689,7 @@ SOFTWARE.
 golang.org/x/sync v0.22.0
 golang.org/x/sys v0.44.0
 golang.org/x/term v0.34.0
-Go runtime (toolchain Go 1.25.13)
+Go runtime (build toolchain version recorded in binary build information)
 ========================================================================
 
 LICENSE (SHA-256 911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad)

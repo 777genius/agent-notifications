@@ -2,10 +2,12 @@ name: Landing
 
 on:
   pull_request:
-    paths: ['landing/**', '.github/workflows/landing.yml']
+    paths: ['landing/**', '.github/workflows/landing.yml', 'scripts/stage-released-loader*']
   push:
     branches: [main]
-    paths: ['landing/**', '.github/workflows/landing.yml']
+    paths: ['landing/**', '.github/workflows/landing.yml', 'scripts/stage-released-loader*']
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -17,6 +19,7 @@ concurrency:
 
 jobs:
   verify:
+    if: github.event_name != 'release' || !github.event.release.prerelease
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -30,11 +33,18 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run test
+      - name: Verify release loader staging contract
+        run: python3 ../scripts/stage-released-loader-test.py
       - run: npm run generate
         env:
           NUXT_APP_BASE_URL: /agent-notifications/
       - run: npx playwright install --with-deps chromium
       - run: npm run test:browser
+      - name: Keep public installer compatible with the published release
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 ../scripts/stage-released-loader.py .output/public/install.sh
       - uses: actions/upload-artifact@v7
         with:
           name: notification-landing
@@ -47,7 +57,7 @@ jobs:
           path: landing/test-results
 
   deploy:
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    if: github.event_name == 'release' || (github.ref == 'refs/heads/main' && github.event_name != 'pull_request')
     needs: verify
     runs-on: ubuntu-latest
     permissions:
