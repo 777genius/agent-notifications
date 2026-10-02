@@ -10,7 +10,8 @@ test_env_setup "$root"
 mkdir -p "$root/stubs"
 # The suite already entered an allowlist environment above.
 CLAIM_ONLY="${1:-}" CLAIM_SOURCE="${2:-$src/hook-wrapper.sh}" ROOT="$root" SRC="$src" bash <<'RUN'
-set -eu
+set -Eeu
+trap 'echo "FAIL: wrapper fixture line $LINENO" >&2' ERR
 # Release and join only our fixture hooks before the outer sandbox cleanup.
 trap ': > "$ROOT/release-install"; for pid in ${pids:-}; do wait "$pid" || true; done' EXIT
 cd "$ROOT"
@@ -130,9 +131,13 @@ done
  ln -s "$ROOT/foreign-directory" "$BACKOFF/attempt.foreign"
  for invalid in ../foreign-directory attempt.missing attempt.foreign; do
   ln -sn "$invalid" "$BACKOFF/active"
+  # Windows native links can canonicalize the supplied target spelling.
+  # Compare the real preimage so this asserts preservation on every host.
+  original_link=$(readlink "$BACKOFF/active")
+  [ -L "$BACKOFF/active" ]
   claim_install
   [ -z "$INSTALL_CLAIM" ]
-  [ "$(readlink "$BACKOFF/active")" = "$invalid" ]
+  [ "$(readlink "$BACKOFF/active")" = "$original_link" ]
   [ "$(cat "$ROOT/foreign-directory/canary")" = keep ]
   [ -L "$BACKOFF/attempt.foreign" ]
   rm "$BACKOFF/active"
