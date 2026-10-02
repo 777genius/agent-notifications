@@ -222,7 +222,15 @@ def main():
                             output = run(command, input=json.dumps(payload), env=hook_env, cwd=cwd)
                             assert len(deliveries) == count + 1, (marker, output, deliveries)
                             path, body = deliveries[-1]
-                            assert path == '/' + product and marker in body['attachments'][0]['text'], (marker, path, body)
+                            attachment = body['attachments'][0]
+                            assert path == '/' + product, (marker, path, body)
+                            # NotificationPayload intentionally projects Question + session,
+                            # whereas Codex Stop projects last_assistant_message.
+                            if product == 'claude':
+                                assert attachment['footer'] == f'Session: {marker} | Claude Code', body
+                                assert 'Question' in attachment['text'], body
+                            else:
+                                assert marker in attachment['text'], body
                             assert sum(marker in json.dumps(item) for _, item in deliveries) == 1
                             assert config.read_bytes() == before, 'hook rewrote custom config'
                             assert digest(installed) == report['asset_sha256'][binary_name], 'hook changed runtime'
