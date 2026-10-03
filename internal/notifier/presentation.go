@@ -21,10 +21,10 @@ func legacyPresentation(status analyzer.Status, message, statusTitle string, ses
 	sessionName, gitBranch, cleanMessage := extractSessionInfo(message)
 
 	// Build clean title (status only + session name)
-	// Format: "✅ Completed [peak]" or "✅ Completed"
+	// Format: "✅ [peak]" or "✅ Completed"
 	title := statusTitle
 	if sessionName != "" && sessionLabel {
-		title = fmt.Sprintf("%s [%s]", title, sessionName)
+		title = appendSessionLabel(status, title, sessionName)
 	}
 
 	// Build subtitle from branch and folder name
@@ -63,12 +63,21 @@ func hookPresentation(status analyzer.Status, content HookPresentation, statusTi
 			subtitle = joinContext(shortenTitle(content.SessionName, 100), content.Folder)
 		}
 	} else if sessionLabel && content.SessionName != "" {
-		title += " [" + shortenTitle(content.SessionName, 100) + "]"
+		title = appendSessionLabel(status, title, shortenTitle(content.SessionName, 100))
 	}
 	return legacyDesktopPresentation{
 		Content:       notification.Content{Title: title, Subtitle: subtitle, Body: content.Body},
 		TimeSensitive: isTimeSensitiveStatus(status),
 	}
+}
+
+// appendSessionLabel keeps custom status titles intact while avoiding a redundant
+// default completion word when the session name already identifies the task.
+func appendSessionLabel(status analyzer.Status, statusTitle, sessionName string) string {
+	if status == analyzer.StatusTaskComplete && statusTitle == "✅ Completed" && strings.TrimSpace(sessionName) != "" {
+		statusTitle = "✅"
+	}
+	return statusTitle + " [" + sessionName + "]"
 }
 
 func joinContext(first, second string) string {
