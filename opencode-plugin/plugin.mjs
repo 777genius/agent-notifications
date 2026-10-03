@@ -24,19 +24,24 @@ async function server(input, options = {}) {
     if (holder.retired) { await owned.dispose(); return silent; }
     const policy = selectClockCell('v1');
     if (!policy) { await owned.dispose(); return silent; }
-    let observer, view, stopped = false;
+    let observer, view, stopped = false, stopping;
     const publications = new WeakSet();
     const delivery = createPreparedDelivery({ registry: owned.registry, origin: owned.origin, policy,
       sourceFactory: createPlatformClock, isOwned: owned.isOwned, onInvalidate: () => observer?.dispose() });
     view = createNativeV1(input.client, input.directory, delivery.invalidate);
-    const stop = () => { if (stopped) return; stopped = true; observer?.dispose(); view.dispose(); delivery.dispose(); void owned.dispose(); };
+    const stop = () => {
+      if (stopped) return stopping;
+      stopped = true; observer?.dispose(); view.dispose(); delivery.dispose();
+      stopping = owned.dispose();
+      return stopping;
+    };
     holder.stop = stop;
     try {
       if (!await delivery.activate() || holder.retired) { stop(); return silent; }
       observer = createObserver({ client: input.client, location: input.directory,
         runtimeEligibility: owned.runtimeEligibility, callbackAuthority: 'qualified_native_sync', clock: delivery.clock,
         beforeEmit: async (event, handoff) => await delivery.beforeEmit(event, handoff) && await view.finalize(event, handoff), emit: delivery.emit });
-      return Object.freeze({ event({ event }) {
+      return Object.freeze({ dispose: stop, event({ event }) {
         // Capture and control reduction occur on the native publication stack.
         // Never await a lookup/child before close/tombstone ingress.
         if (stopped) return;

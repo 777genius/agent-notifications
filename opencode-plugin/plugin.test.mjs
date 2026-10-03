@@ -93,3 +93,48 @@ test('queued V2 user admission fences held completion until a fresh native execu
   assert.equal(facts.length,1);
  }finally{release();observer.dispose();await observer.done();view.reset();}
 });
+
+// Native V1 finalization calls Hooks.dispose without publishing a shutdown event.
+// Red if the factory omits that hook or repeated disposal settles before the same
+// owned reaping promise; existing registry tests exercise actual child/pipe close.
+test('native V1 factory disposal revokes synchronously and shares pending owned reaping', async()=>{
+ const {build}=await import('esbuild');
+ const key='TEST-agent-notifications-v1-dispose-'+process.pid;
+ const ports=`globalThis[${JSON.stringify(key)}]`;
+ const stubs={
+  './owned-host.mjs':`export const prepareOwnedHost=async()=>${ports}.owned;`,
+  './clock-cells.mjs':'export const selectClockCell=()=>({});',
+  './platform-clock.mjs':'export const createPlatformClock=()=>{throw Error("must_not_sample");};',
+  './ipc.mjs':`export const createPreparedDelivery=()=>${ports}.delivery;`,
+  './native-v1.mjs':`export const createNativeV1=()=>${ports}.view;`,
+  './native-v2.mjs':'export const createNativeV2=()=>{};export const createRPCCheckpoint=()=>{};',
+  'universal-agent-plugins-opencode-events/v1':`export const createObserver=()=>${ports}.observer;`,
+  'universal-agent-plugins-opencode-events/v2':'export const createV2Observer=()=>{};',
+ };
+ const built=await build({entryPoints:[new URL('./plugin.mjs',import.meta.url).pathname],
+  bundle:true,write:false,platform:'node',format:'esm',plugins:[{name:'native-factory-ports',setup(b){
+   b.onResolve({filter:/.*/},args=>Object.hasOwn(stubs,args.path)?{path:args.path,namespace:'test-ports'}:undefined);
+   b.onLoad({filter:/.*/,namespace:'test-ports'},args=>({contents:stubs[args.path],loader:'js'}));
+  }}]});
+ const {default:plugin,AgentNotifications}=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text).toString('base64'));
+ try {
+  for(const ingress of [false,true]){
+   const order=[];let reaps=0,observations=0,settled=false,release;
+   const reaped=new Promise(resolve=>release=resolve);
+   globalThis[key]={owned:{registry:{},dispose(){reaps++;order.push('owned');return reaped;}},
+    delivery:{activate:async()=>true,clock:{},dispose(){order.push('delivery');},beginIngress(){},},
+    view:{dispose(){order.push('view');},ingest(){throw Error('post-dispose-ingress');}},
+    observer:{dispose(){order.push('observer');},observe(){observations++;return Promise.resolve();}}};
+   const client={session:{get(){},messages(){}}},input={client,directory:'/TEST-native-finalizer'};
+   const hooks=await plugin.server(input);assert.equal(await AgentNotifications(input),hooks);
+   assert.equal(typeof hooks.dispose,'function','native finalizer requires a dispose hook');
+   if(ingress)hooks.event({event:{type:'server.instance.disposed'}});
+   const first=hooks.dispose(),again=hooks.dispose();
+   assert.equal(first,reaped);assert.equal(again,first,'repeat must await the same owned close');
+   first.then(()=>settled=true);await Promise.resolve();assert.equal(settled,false);
+   assert.deepEqual(order,['observer','view','delivery','owned']);assert.equal(reaps,1);
+   hooks.event({event:{type:'message.updated',properties:{info:{role:'user'}}}});assert.equal(observations,0);
+   release({reaped:true});assert.deepEqual(await first,{reaped:true});assert.equal(await again,await first);
+  }
+ }finally{delete globalThis[key];}
+});
