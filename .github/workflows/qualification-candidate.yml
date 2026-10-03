@@ -57,7 +57,7 @@ jobs:
           ASSET_ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
-          python -B "$RUNNER_TEMP/portable-build-native.py" --source "$GITHUB_WORKSPACE" --head "$FINAL_SOURCE_HEAD" --source-manifest-sha256 "$FINAL_SOURCE_MANIFEST_SHA256" --os "$ASSET_OS" --arch "$ASSET_ARCH" --out "$RUNNER_TEMP/TEST-portable-assets-$ASSET_OS-$ASSET_ARCH" --recipe-sha256 6d6274cf846050066d748dba7dd2f375845e24604793f78aae98a680d104fd9a
+          python -B "$RUNNER_TEMP/portable-build-native.py" --source "$GITHUB_WORKSPACE" --head "$FINAL_SOURCE_HEAD" --source-manifest-sha256 "$FINAL_SOURCE_MANIFEST_SHA256" --os "$ASSET_OS" --arch "$ASSET_ARCH" --out "$RUNNER_TEMP/TEST-portable-assets-$ASSET_OS-$ASSET_ARCH" --recipe-sha256 918468086aef2848f6e63d77289e93b00e051ba2c8a8c5ac0c06052cb49b4dc2
       - uses: actions/upload-artifact@v7
         if: always()
         with:

@@ -30,7 +30,7 @@ def inventory(root, source_manifest_sha256, original_checkout_only=False):
   filesystem[name]={'representation':representation,'mode':p.lstat().st_mode&0o777,'payloadSHA256':entries[name]['sha256']}
  head=subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip()
  manifest={'entries':entries,'hashes':{n:r['sha256'] for n,r in entries.items()},'head':head,'modes':{n:r['mode'] for n,r in entries.items()}}
- need(len(entries)==1171 and (original_checkout_only or hashlib.sha256((json.dumps(manifest,sort_keys=True,indent=2)+'\n').encode()).hexdigest()==source_manifest_sha256),'exact approved whole-source manifest')
+ need(len(entries)==1173 and (original_checkout_only or hashlib.sha256((json.dumps(manifest,sort_keys=True,indent=2)+'\n').encode()).hexdigest()==source_manifest_sha256),'exact approved whole-source manifest')
  return {'manifest':manifest,'filesystem':filesystem}
 
 def main(a):
