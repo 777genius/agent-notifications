@@ -90,9 +90,7 @@ func WritePrivateCacheDocument(root, name string, data []byte) (err error) {
 		return err
 	}
 	temp := ".observations-" + hex.EncodeToString(random[:])
-	handle, err := windowsOpenAt(parent, temp,
-		windows.GENERIC_READ|windows.GENERIC_WRITE|windows.DELETE|windows.WRITE_DAC|windows.WRITE_OWNER|windows.READ_CONTROL,
-		windows.FILE_CREATE, windows.FILE_NON_DIRECTORY_FILE)
+	handle, err := windowsCreatePrivateCacheAt(parent, temp)
 	if err != nil {
 		return err
 	}
@@ -106,11 +104,6 @@ func WritePrivateCacheDocument(root, name string, data []byte) (err error) {
 			err = closeErr
 		}
 	}()
-	// Set the exact current-user owner and protected user/SYSTEM/Administrators
-	// DACL before any observation bytes become readable through the temp name.
-	if err = restrictPrivateWindowsHandle(handle); err != nil {
-		return err
-	}
 	written, err := f.Write(data)
 	if err != nil {
 		return err
@@ -128,6 +121,18 @@ func WritePrivateCacheDocument(root, name string, data []byte) (err error) {
 	// A close error still denies the claim, even if its attempted bit has already
 	// been published. The caller also checks its deadline before granting delivery.
 	return nil
+}
+
+// Create with a private descriptor in the initial NtCreateFile call. Tightening
+// an inherited DACL afterward cannot revoke a foreign reader's existing handle.
+func windowsCreatePrivateCacheAt(parent windows.Handle, name string) (windows.Handle, error) {
+	security, err := privateWindowsSecurityDescriptor(false)
+	if err != nil {
+		return 0, err
+	}
+	return windowsOpenAtWithSecurity(parent, name,
+		windows.GENERIC_READ|windows.GENERIC_WRITE|windows.DELETE|windows.WRITE_DAC|windows.WRITE_OWNER|windows.READ_CONTROL,
+		windows.FILE_CREATE, windows.FILE_NON_DIRECTORY_FILE, security)
 }
 
 func validatePrivateCacheReplacement(parent windows.Handle, name string) (err error) {
