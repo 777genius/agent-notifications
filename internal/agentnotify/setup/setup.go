@@ -246,7 +246,7 @@ func qualified(s installruntime.PolicySnapshot, o Options, g uint64) error {
 	if l.ID == "" || l.Owner != o.Owner || l.Generation != g {
 		return fail("generation_changed", fmt.Errorf("expected existing owner and generation"))
 	}
-	if l.WriterFloor > installruntime.ReservationWriterFloor {
+	if l.WriterFloor > installruntime.SupportedWriterFloor {
 		return fail("newer_installer_required", fmt.Errorf("installed writer floor is newer"))
 	}
 	registered := false
