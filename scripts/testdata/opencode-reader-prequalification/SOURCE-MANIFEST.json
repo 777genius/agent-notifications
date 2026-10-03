@@ -26,6 +26,14 @@
       "bytes": 15058,
       "sha256": "e0e8313eed61f54d45138301d54fbde677353c611a5db9f2abe5972d59b4c78c"
     },
+    "R3-R4-CAUSE.md": {
+      "bytes": 1661,
+      "sha256": "4a9f7af558577443e6408db0ed999c5593630eb28aa6db4238d2e55d20901837"
+    },
+    "R3-R4.patch": {
+      "bytes": 1206,
+      "sha256": "6e37ffb39c78af30bf0b9696c98a1621e08693cbcbeff9c213f71bc178eaf269"
+    },
     "RUN.md": {
       "bytes": 6846,
       "sha256": "38cafb0efb1aba3b95d31dde4913b14fabfbfe39aa4584a749f930465487d27e"
@@ -55,8 +63,8 @@
       "sha256": "678f7b015f83af4caa2ec5acc87c44d85b5994a2f80a923f79274ee92a891f80"
     },
     "driver.py": {
-      "bytes": 20452,
-      "sha256": "c7c1bd6ece7c69bfc659d5bc5895b4cdddbc938aef4f4df1f504cf1c90ef2049"
+      "bytes": 20577,
+      "sha256": "f0ed55c4326c6fe49e53f2087cbd607367a3be464dee9b15ee5f85f82f2b5a3a"
     },
     "official-archive-layouts.json": {
       "bytes": 2385,
@@ -154,7 +162,29 @@
     ]
   ],
   "plannedDefaultProviderTransactions": 0,
-  "predecessorManifestSHA256": "0bd622a14cb104663a908e0cf859120d6f757c09c10348fd3f87de82916479a7",
+  "plannedV1CompletionCells": [
+    [
+      "linux",
+      "arm64",
+      "1.18.33"
+    ],
+    [
+      "darwin",
+      "amd64",
+      "1.18.33"
+    ],
+    [
+      "darwin",
+      "arm64",
+      "1.18.33"
+    ],
+    [
+      "windows",
+      "amd64",
+      "1.18.33"
+    ]
+  ],
+  "predecessorManifestSHA256": "4ce86075b534faf7f87bbb6cf57f7981b5721b3b35b2358ea8151e92a46de958",
   "priorManifestSHA256": "48deafc3ea189b8bc3266ac492f7df308d4a39a11e335220303ba52fa76b3843",
   "productionQualified": false,
   "sdkCommit": "3e438a228809c0839c1704721ade3a2385d98bf5",

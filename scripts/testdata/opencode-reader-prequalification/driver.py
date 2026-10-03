@@ -113,7 +113,9 @@ def main(a):
  fixed={str(x):sha(x) for x in [a.archive,a.bundle,a.build_receipt,pins,HERE/'official-archive-layouts.json',P(__file__),HERE/'retained/provider.py']}
  os.umask(0o077);root.mkdir(mode=0o700)
  if a.os=='windows':private_windows(root)
- project=root/'project';project.mkdir(mode=0o700);host=unpack(a.archive,root,pin,a.os,a.arch);e=env(root);key=secrets.token_bytes(32);(root/'trace-key').write_bytes(key)
+ project=root/'project';project.mkdir(mode=0o700);host=unpack(a.archive,root,pin,a.os,a.arch);e=env(root)
+ if a.version=='1.18.33':e.update(NPM_CONFIG_OFFLINE='true',NPM_CONFIG_FETCH_RETRIES='0',OPENCODE_DISABLE_MODELS_FETCH='1')
+ key=secrets.token_bytes(32);(root/'trace-key').write_bytes(key)
  write(root/'.owned-test-root.json',{'purpose':'TEST portable packaged SDK reader'})
  write(root/'reader-authority-private.json',{'version':a.version,'os':a.os,'arch':a.arch,'official':pin,'parentPID':os.getpid(),'directory':str(project.resolve()),'imageSHA256':pin['executableSHA256'],'apiOnlyReadiness':True,'mode':a.mode})
  provider=Provider(root,key);provider.mode=a.mode;provider.http_attempts=0;provider.RequestHandlerClass=CountedProvider
