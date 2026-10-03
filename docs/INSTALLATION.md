@@ -2,24 +2,17 @@
 
 # Installation
 
-## Gemini candidate availability
+## Gemini availability
 
-Gemini CLI is a fourth product in the unreleased candidate. Public release **1.46.0
-does not include Gemini**. The qualification target is exact **Gemini CLI 0.62.0**;
-native qualification and a compatible release are pending. Follow the
-[Gemini candidate guide](gemini-notifications.md) for checked-bundle setup and
-planned single-pipeline selectors `--product gemini` or
-`--products claude,codex,opencode,gemini`. Do not use a local `bin/setup.sh` to
-qualify candidate bytes: it downloads the public release.
-
-For the compatible candidate, `--desktop`/`--webhook` apply to each selected
-Gemini/OpenCode observer with separately saved consent. At least one channel is
-required. Claude/Codex portable MCP/skill choices and legacy `both` remain unchanged.
-Gemini configuration uses its guide, not the portable MCP wizard.
+Gemini CLI support is available in the **[v1.47.0 Linux/Windows prerelease](https://github.com/777genius/agent-notifications/releases/tag/v1.47.0)**.
+Use that release's explicit installation instructions. The public loader and
+unpinned `bin/setup.sh` still select stable **v1.46.1**, which excludes Gemini.
+The prerelease has no macOS assets; macOS Gemini support remains a candidate.
+See the [Gemini guide](gemini-notifications.md) for capabilities and qualification.
 
 ## Prerequisites
 
-- Claude Code, Codex CLI and/or OpenCode for the products you select (published OpenCode support: 1.18.33; the dual-API candidate is tested with 1.18.33, 2.0.0 and 2.0.21, with SDK 0.2.0 publication pending)
+- Claude Code, Codex CLI and/or OpenCode for stable setup (published OpenCode support is tested with 1.18.33; published V2 support is not declared). The dual-API candidate targets 1.18.33, 2.0.0 and 2.0.21; final platform qualification and publication remain pending. See [OpenCode candidate setup and limits](opencode-notifications.md), including the stock Windows V1 original-event-age limitation. Gemini CLI 0.62.0 is the tested host for the opt-in prerelease.
 - `curl` and Bash
 - **Windows users:** Git Bash (included with [Git for Windows](https://git-scm.com/download/win)). Do not use WSL for a native Windows installation.
 - Python remains optional only for iTerm2 exact tab/pane targeting.
