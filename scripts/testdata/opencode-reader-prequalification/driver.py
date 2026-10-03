@@ -6,6 +6,7 @@ sys.path.insert(0,str(HERE/'retained'))
 from provider import Provider,ProviderHandler
 HTTP_DIAGNOSTICS={};CURRENT_STAGE='not_started'
 FLAGS={'productionQualified':False,'installedQualified':False,'timePolicyQualified':False,'sourceEpochQualified':False,'finalSpanQualified':False,'platformLifetimeQualified':False,'loadedMappedBytesQualified':False}
+PLANNED_TEST_PROMPT='Reply with one short TEST completion.'
 def need(v,c):
  if not v:raise ValueError(c)
 def sha(p):
@@ -133,11 +134,15 @@ def wait_file(path,end,proc):
    need(path.stat().st_size<=16384,'reader_receipt_bound');value=json.loads(path.read_text());remaining(end);return value
   need(proc.poll() is None,'owned_host_ended_before_reader')
   time.sleep(min(.02,remaining(end)))
+def native_user_has_planned_prompt(user):
+ parts=user.get('parts')
+ return isinstance(parts,list) and len(parts)==1 and isinstance(parts[0],dict) and parts[0].get('type')=='text' and parts[0].get('text')==PLANNED_TEST_PROMPT
 def independent_v1_fact(root,key,sid,history):
  rows=[json.loads(l) for l in (root/'reader-private.jsonl').read_text().splitlines()];H=lambda x:'h:'+hmac.new(key,str(x).encode(),hashlib.sha256).hexdigest()[:24]
  facts=[r['value'] for r in rows if r['kind']=='sdk-fact'];need(len(facts)==1,'one_actual_SDK_fact')
  fact=facts[0]['event'];answers=[x['info'] for x in history if x['info']['role']=='assistant'];users=[x['info'] for x in history if x['info']['role']=='user']
  need(len(answers)==len(users)==1,'one_native_user_assistant');a,u=answers[0],users[0]
+ need(native_user_has_planned_prompt(next(x for x in history if x['info']['role']=='user')),'exact_planned_native_user_text')
  need(facts[0]['currentAtCallback'] and facts[0]['clockID']=='local-performance' and fact['rootSession'] and fact['kind']=='turn_idle_verified' and fact['sessionID']==H(sid) and fact['turnID']==H(u['id']) and fact['messageID']==H(a['id']),'native_fact_identity')
  need(a['sessionID']==sid and a['parentID']==u['id'] and a.get('finish')=='stop' and not a.get('summary') and not a.get('error') and isinstance(a['time']['completed'],int),'ordinary_final_native_assistant')
  need(not any(p.get('type')=='tool' for x in history for p in x.get('parts',[])),'zero_native_tools')
@@ -178,6 +183,23 @@ def tui_readiness_snapshot(raw,raw_bytes,reader_done,reader_error):
   for key,label in [('emptyPromptInCompleteFrame','Ask anything…'.encode()),('buildLabelInCompleteFrame',b'Build'),('modelLabelInCompleteFrame',b'TEST completion'),('providerLabelInCompleteFrame',b'TEST loopback')]:d[key]|=label in text
   d['labelMatchingFrameCount']+=int(all(label in text for label in ['Ask anything…'.encode(),b'Build',b'TEST completion',b'TEST loopback']))
  d['originalReadyPredicate']=raw_bytes<=1048576 and tui_input_frame(raw)
+ return d
+
+def windows_tui_input_hint(raw):
+ # Historical output scheduling hint for one TEST input, never geometry or fact authority.
+ need(len(raw)<=1048576,'bounded_TUI_readiness_output')
+ clears=list(re.finditer(rb'\x1b\[2J|\x1bc',raw));start=clears[-1].end() if clears else 0;epoch=raw[start:]
+ labels=[('emptyPromptOffset','Ask anything…'.encode()),('buildLabelOffset',b'Build'),('modelLabelOffset',b'TEST completion'),('providerLabelOffset',b'TEST loopback')]
+ positions={key:epoch.rfind(label) for key,label in labels}
+ cursors=list(re.finditer(rb'\x1b\[([1-9][0-9]*);([1-9][0-9]*)H',epoch));cursor=cursors[-1] if cursors else None
+ visibility=re.findall(rb'\x1b\[\?25([hl])',epoch);visible=bool(visibility) and visibility[-1]==b'h'
+ edits=list(re.finditer(rb'\x1b\[[0-?]*[ -/]*[JKXPML]',epoch));edit=edits[-1].start() if edits else -1
+ present=all(x>=0 for x in positions.values());lo=min(positions.values());hi=max(positions[key]+len(label) for key,label in labels)
+ tail=epoch[cursor.end():] if cursor is not None else epoch
+ tail_closed=not re.sub(rb'\x1b\[[0-9;]*m|\x1b\[\?(?:25|2026)[hl]',b'',tail)
+ hint=present and cursor is not None and visible and edit<lo and cursor.start()>=hi and tail_closed
+ d={'inputSchedulingHint':bool(hint),'fullClearObserved':bool(clears),'captureSegmentStartOffset':start,'positionedCursorObserved':cursor is not None,'lastCursorOffset':start+cursor.start() if cursor is not None else -1,'cursorVisibilityObserved':bool(visibility),'lastObservedCursorShow':visible,'lastEraseOrDeleteOffset':start+edit if edit>=0 else -1,'allLabelsInCaptureSegment':present,'noObservedEraseAfterMatchedLabels':present and edit<lo,'cursorTokenAfterMatchedLabels':present and cursor is not None and cursor.start()>=hi,'closedCursorTail':bool(tail_closed)}
+ for key,pos in positions.items():d[key]=start+pos if pos>=0 else -1
  return d
 
 def main(a):
@@ -223,7 +245,7 @@ def main(a):
   write(project/'opencode.json',config);e['OPENCODE_CONFIG']=str(project/'opencode.json')
   stage('owned_local_entry_spawn')
   log=(root/'host-private.log').open('xb')
-  prompt='Reply with one short TEST completion.'
+  prompt=PLANNED_TEST_PROMPT
   argv=[str(host)] if a.entry=='tui' else [str(host),'run','--format','json',prompt]
   if a.entry=='tui':common_end=time.monotonic()+35+35+6
   def phase_end(seconds):
@@ -326,9 +348,9 @@ def main(a):
     with changed:
      raw=bytes(win_terminal.raw) if win_terminal is not None else bytes(ui_output)
      need((win_terminal.error is None if win_terminal is not None else not pty_overflow and pty_failure is None),'native_TUI_readiness_reader')
-     if tui_input_frame(raw):remaining(startup_end);break
+     if (windows_tui_input_hint(raw)['inputSchedulingHint'] if win_terminal is not None else tui_input_frame(raw)):remaining(startup_end);break
      changed.wait(min(.02,remaining(startup_end)))
-   result['TUIInputReadyOutputSHA256']=hashlib.sha256(raw).hexdigest();result['TUIInputReadyBytes']=len(raw)
+   result['WindowsInputSchedulingCaptureSHA256' if win_terminal is not None else 'TUIInputReadyOutputSHA256']=hashlib.sha256(raw).hexdigest();result['WindowsInputSchedulingCaptureBytes' if win_terminal is not None else 'TUIInputReadyBytes']=len(raw)
    tui_current();remaining(startup_end)
    if win_terminal is not None:win_terminal.send((prompt+'\r').encode())
    else:os.write(pty_master,(prompt+'\r').encode())
@@ -399,6 +421,7 @@ def main(a):
      reader_done=win_terminal.reader_done if win_terminal is not None else pty_eof or pty_failure is not None
      reader_error=win_terminal.error if win_terminal is not None else ('capture exceeded' if pty_overflow else pty_failure)
     result['TUIReadinessBeforeCleanup']=tui_readiness_snapshot(raw,raw_bytes,reader_done,reader_error)
+    if win_terminal is not None:result['TUIReadinessBeforeCleanup']['windowsInputSchedulingHint']=windows_tui_input_hint(raw) if raw_bytes<=1048576 else {'inputSchedulingHint':False,'captureOverBound':True}
    except Exception:result['TUIReadinessBeforeCleanup']={'snapshotBeforeCleanup':True,'snapshotUnavailable':True}
   write(root/'first-exception-private.json',{'stage':CURRENT_STAGE,'kind':type(error).__name__,'message':str(error)[:512]})
  finally:

@@ -7,7 +7,7 @@
   "actualReaderBundleSHA256": "d48042526d8b657ad48c461c8abae4ea9254a9e3b1390085e0dd20ccdb7eab9a",
   "overlaySHA256": {
     "consumer.mjs": "e568cd36834fe4ba0646e76134de26179a432e85c12c77f075ba05e21fea5d39",
-    "driver.py": "bac355a347893736df124dd26d59b447cc0ea2de7e836f328fd783d37b484061",
+    "driver.py": "af9f6ff1ffd609ed62bd890b8610e324d40d81b628403091fa5756d15edcc6fa",
     "official-archive-layouts.json": "a0ac3dc8d3bf26956b061e46063efc19257ee3149208f26a763656a585532649",
     "retained/windows_conpty.py": "8220425ee006e13a95e4c98d215452ac238d257055387c36cec6fc8585f5ea9f",
     "retained/harness.py": "cd6147929a58363e24063e4c520b87cf5bc08fe39b16ced689d4cee7750fbb78"
@@ -63,6 +63,33 @@
     "scope": "Additional boolean labels/positioned-cursor across bounded raw capture, complete-frame and same-frame-label counts, observed last cursor visibility; diagnostic only, original predicate/helper/limits/control untouched.",
     "rawContentExported": false,
     "authorityChanged": false,
+    "nativeExecutedByPreparer": false,
+    "providerRequestsByPreparer": 0,
+    "qualificationGranted": false
+  },
+  "priorWindowsConPTYPresentationReadiness": {
+    "baseCommit": "f4d5e3258f70d735e1f5b3e159f7f3f9d36a770e",
+    "priorDriverSHA256": "bac355a347893736df124dd26d59b447cc0ea2de7e836f328fd783d37b484061",
+    "currentDriverSHA256": "4616ffbe3f6100ae927c547005ace44c4a99113e5f625fd00d0dbbf80279e8dc",
+    "primaryConPTYSourceReviewSHA256": "4f6c29f4609a8563dc2d11a230b23a50c9fa19358a43ebc9b26a37cf5b76d98c",
+    "actualDiagnosticResultSHA256": "5be79fe8318d60ce28bb5220b5df103f04eac2bd0c3996f6e9ccc423e92ee2d7",
+    "scope": "Windows-only current full-clear epoch + exact literal four HOME labels + final visible positioned cursor; reject later erase/delete edits and nonclosed cursor tail. POSIX original SYNC predicate unchanged.",
+    "presentationOffsetsStillUnobserved": true,
+    "candidateFailClosedWithoutCurrentEpochProof": true,
+    "originalLimitsAndUltimateNativeHistoryFactGuardsUnchanged": true,
+    "rawContentExported": false,
+    "nativeExecutedByPreparer": false,
+    "providerRequestsByPreparer": 0,
+    "qualificationGranted": false
+  },
+  "windowsInputSchedulingHint": {
+    "baseCommit": "f4d5e3258f70d735e1f5b3e159f7f3f9d36a770e",
+    "priorRejectedPresentationDriverSHA256": "4616ffbe3f6100ae927c547005ace44c4a99113e5f625fd00d0dbbf80279e8dc",
+    "currentDriverSHA256": "af9f6ff1ffd609ed62bd890b8610e324d40d81b628403091fa5756d15edcc6fa",
+    "scope": "Historical bounded output hint schedules only one planned TEST input in fresh owned console/project; zero current geometry or qualifier authority. Last observed clear narrows segment, otherwise fresh capture origin0.",
+    "nativeFinalOracleRequiresExactlyOneTextPartEqualPlannedPrompt": true,
+    "plannedPromptSourceConstant": "PLANNED_TEST_PROMPT",
+    "POSIXPredicateAndAllTimingProviderFactCleanupGuardsUnchanged": true,
     "nativeExecutedByPreparer": false,
     "providerRequestsByPreparer": 0,
     "qualificationGranted": false
