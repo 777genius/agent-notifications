@@ -76,3 +76,15 @@ func writeCache(root string, data []byte) error {
 	}
 	return os.Rename(path, filepath.Join(root, "observations.json"))
 }
+
+type pathCache struct{ root string }
+
+func openCache(root string) (*pathCache, error) {
+	if err := checkCacheRoot(root); err != nil {
+		return nil, err
+	}
+	return &pathCache{root: root}, nil
+}
+func (c *pathCache) Read() ([]byte, error)   { return readCache(c.root) }
+func (c *pathCache) Write(data []byte) error { return writeCache(c.root, data) }
+func (c *pathCache) Close()                  {}

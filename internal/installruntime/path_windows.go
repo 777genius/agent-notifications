@@ -17,6 +17,12 @@ import (
 // junction substitution and reparse changes while Win32 path operations run.
 // Each child is opened only after its parent has been pinned and checked.
 func windowsParents(path string, create bool) ([]windows.Handle, []PathAnchor, error) {
+	return windowsParentsWithSharing(path, create, true)
+}
+
+// Private cache sessions deny directory deletion for their entire claim. Keep
+// write sharing so cooperating claims can publish children under the cache lock.
+func windowsParentsWithSharing(path string, create, shareDelete bool) ([]windows.Handle, []PathAnchor, error) {
 	var handles []windows.Handle
 	var anchors []PathAnchor
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
@@ -61,7 +67,11 @@ func windowsParents(path string, create bool) ([]windows.Handle, []PathAnchor, e
 			if create {
 				disposition = windows.FILE_OPEN_IF
 			}
-			h, err = windowsOpenAt(handles[len(handles)-1], filepath.Base(p), windows.FILE_READ_ATTRIBUTES|windows.FILE_TRAVERSE, disposition, windows.FILE_DIRECTORY_FILE)
+			sharing := uint32(windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE)
+			if shareDelete {
+				sharing |= windows.FILE_SHARE_DELETE
+			}
+			h, err = windowsOpenAtWithSharing(handles[len(handles)-1], filepath.Base(p), windows.FILE_READ_ATTRIBUTES|windows.FILE_TRAVERSE, disposition, windows.FILE_DIRECTORY_FILE, nil, sharing)
 		}
 		if err != nil {
 			return handles, anchors, err
