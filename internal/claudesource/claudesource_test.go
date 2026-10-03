@@ -21,6 +21,27 @@ type neverEOFReader struct {
 	pos  int
 }
 
+// Regression: the typed SDK mapping must not drop current tool input or the
+// optional native title retained by the original Claude hook envelope.
+func TestDecodePreservesCurrentQuestionAndNativeTitle(t *testing.T) {
+	input := `{"session_id":"session-1","session_title":"Fix [SDK] | release","cwd":"/sandbox","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Restart Codex?"}]}}`
+	event, err := Decode(context.Background(), "PreToolUse", strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, ok := event.Payload.(hooks.PreToolUsePayload)
+	if !ok || string(payload.ToolInput) != `{"questions":[{"question":"Restart Codex?"}]}` {
+		t.Fatalf("current tool input was lost: %#v", event.Payload)
+	}
+	if event.Session.Title != "Fix [SDK] | release" || event.Session.SessionID != "session-1" {
+		t.Fatalf("session title or identity changed: %+v", event.Session)
+	}
+	invalid, err := Decode(context.Background(), "Stop", strings.NewReader(`{"session_id":"session-1","session_title":42}`))
+	if err != nil || invalid.Session.Title != "" {
+		t.Fatalf("malformed optional title blocked delivery: event=%+v err=%v", invalid, err)
+	}
+}
+
 type sdkFailureContext struct {
 	context.Context
 	err error

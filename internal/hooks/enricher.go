@@ -14,8 +14,9 @@ import (
 // enricher: the notification status plus an optional pre-rendered body.
 // An empty Body means "let the message generator use its defaults".
 type TurnInsight struct {
-	Status analyzer.Status
-	Body   string
+	Status   analyzer.Status
+	Body     string
+	Question string // current tool question, independent of transcript summaries
 }
 
 // CodexTurnEnricher derives notification policy inputs for Codex events.
@@ -46,13 +47,10 @@ func (heuristicEnricher) EnrichStop(_ context.Context, _ Event, p StopPayload) T
 }
 
 func (heuristicEnricher) EnrichPreToolUse(_ context.Context, _ Event, p PreToolUsePayload) TurnInsight {
-	if p.ToolName != codexQuestionTool {
+	if p.ToolName != codexQuestionTool && p.ToolName != "request_user_input_async" {
 		return TurnInsight{Status: analyzer.StatusUnknown}
 	}
-	return TurnInsight{
-		Status: analyzer.StatusQuestion,
-		Body:   questionBodyFromToolInput(p.ToolInput),
-	}
+	return questionInsight(p.ToolInput, p.ToolName == "request_user_input_async")
 }
 
 // requestUserInputArgs mirrors the allowlisted subset of the Codex
@@ -63,26 +61,37 @@ type requestUserInputArgs struct {
 	Questions []struct {
 		Header   string `json:"header"`
 		Question string `json:"question"`
+		Title    string `json:"title"` // asynchronous user-input schema
 	} `json:"questions"`
 }
 
 func questionBodyFromToolInput(toolInput json.RawMessage) string {
+	return questionInsight(toolInput, false).Body
+}
+
+func questionInsight(toolInput json.RawMessage, async bool) TurnInsight {
+	insight := TurnInsight{Status: analyzer.StatusQuestion}
 	var args requestUserInputArgs
 	if err := json.Unmarshal(toolInput, &args); err != nil || len(args.Questions) == 0 {
-		return ""
+		return insight
 	}
 
 	first := strings.TrimSpace(args.Questions[0].Question)
+	if async {
+		first = strings.TrimSpace(args.Questions[0].Title)
+	}
+	insight.Question = truncateRunes(summary.CleanMarkdown(first), 150)
 	if first == "" {
 		first = strings.TrimSpace(args.Questions[0].Header)
 	}
 	if first == "" {
-		return ""
+		return insight
 	}
 
 	body := truncateRunes(summary.CleanMarkdown(first), 150)
 	if extra := len(args.Questions) - 1; extra > 0 {
 		body = fmt.Sprintf("%s (+%d more)", body, extra)
 	}
-	return body
+	insight.Body = body
+	return insight
 }

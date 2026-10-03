@@ -262,7 +262,9 @@ What works today:
   Question, otherwise Task Complete. The Codex rollout transcript is not parsed (it is an
   internal, unstable format).
 - **Question payloads (experimental)** - if Codex emits `PreToolUse` for `request_user_input`,
-  the plugin delivers the question/header text. Options, ids, and secret fields are excluded.
+  the plugin puts the actual first question in the headline and its text in the body.
+  The macOS subtitle identifies the session and project. A header-only payload stays a
+  body fallback. Options, ids, and secret fields are excluded.
   Live firing of this tool hook is not yet qualified; do not rely on it for every question.
 - **PermissionRequest** - Codex is waiting for your approval of a tool call; delivered as the
   time-sensitive Permission Request status. Only the tool name is shown, never the tool input.
@@ -280,6 +282,23 @@ Known limitations:
 - Codex hooks require a trust review (`/hooks` inside Codex); changed definitions require review again.
 
 Both products share one config file (the shared file selected by `config path`).
+
+Desktop hook notifications prefer a native session name over the generated `[word id]`
+label. Claude uses an optional `session_title` hook field, then exact-session
+`custom-title` / `ai-title` transcript metadata. Codex reads the latest matching
+`thread_name` from `$CODEX_HOME/session_index.jsonl` (default `~/.codex`). These are
+bounded, read-only, best-effort native file formats, not a public live Desktop API.
+Missing, unsupported, or out-of-window metadata retains the generated label; no
+session is resumed and no model call generates a name. Renames are read on the next hook.
+
+Claude `AskUserQuestion` uses the current `tool_input` rather than a previous question
+from the transcript. Missing question text gets the ordinary question fallback.
+Additional questions are counted in the body; long headlines are shortened separately.
+The async Codex `questions[].title` schema is also understood if a hook supplies it,
+but the bundled hook matcher still registers only `request_user_input`. Native Codex
+Desktop duplicate suppression remains in effect. Literal explicit `notify` titles and
+webhook formatting are unchanged. Set `desktop.showSessionLabel: false` to hide both
+native names and generated labels while retaining the current question.
 
 ## Platform Support
 
@@ -458,7 +477,7 @@ The following JSON illustrates the schema. Do not replace your existing document
 | `notifyOnSubagentStop` | `false` | Send notifications when subagents (Task tool) complete. Has no effect unless `suppressForSubagents` is also set to `false`. |
 | `suppressForSubagents` | `true` | Suppress subagent (`SubagentStop`) notifications, plus any `Stop` notification whose transcript is a subagent/teammate transcript. Detection uses the hook event for `SubagentStop` (Claude Code passes the parent session `transcript_path` to that hook, so a path check alone can't identify it). Set to `false` together with `notifyOnSubagentStop: true` to get a notification each time a subagent finishes. |
 | `notifyOnTextResponse` | `true` | Send notifications for text-only responses (no tool usage) |
-| `desktop.showSessionLabel` | `true` | Append the `[name id]` session label to the notification title. |
+| `desktop.showSessionLabel` | `true` | Show the native session name, with `[name id]` as fallback. Question notifications identify the session in the macOS subtitle. `false` hides both kinds of session label. |
 | `respectJudgeMode` | `true` | Honor `CLAUDE_HOOK_JUDGE_MODE=true` env var to suppress notifications |
 | `notifyOnlyWhenUnfocused` | `false` | Skip the desktop notification only when the focused terminal window can be matched to the current Claude Code session. Best-effort per platform; if focus can't be determined the notification is still shown. |
 | `notifyDelaySeconds` | `0` | Wait N seconds before delivering a desktop notification (capped at 25s by the hook timeout). With `notifyOnlyWhenUnfocused`, focus is re-checked after the wait. Webhooks are unaffected. |

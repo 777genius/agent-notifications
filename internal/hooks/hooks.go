@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -59,15 +60,24 @@ func (d notificationDelivery) delivered() bool {
 
 // HookData represents the data received from Claude Code hooks
 type HookData struct {
-	TranscriptPath       string `json:"transcript_path"`
-	LastAssistantMessage string `json:"last_assistant_message,omitempty"`
-	SessionID            string `json:"session_id"`
-	CWD                  string `json:"cwd"`
-	ToolName             string `json:"tool_name,omitempty"`
-	HookEventName        string `json:"hook_event_name,omitempty"`
+	SessionTitle         json.RawMessage `json:"session_title,omitempty"`
+	ToolInput            json.RawMessage `json:"tool_input,omitempty"`
+	TranscriptPath       string          `json:"transcript_path"`
+	LastAssistantMessage string          `json:"last_assistant_message,omitempty"`
+	SessionID            string          `json:"session_id"`
+	CWD                  string          `json:"cwd"`
+	ToolName             string          `json:"tool_name,omitempty"`
+	HookEventName        string          `json:"hook_event_name,omitempty"`
 	// Team-related fields (present in TeammateIdle, TaskCreated, TaskCompleted hooks)
 	TeamName     string `json:"team_name,omitempty"`
 	TeammateName string `json:"teammate_name,omitempty"`
+}
+
+// NativeTitle tolerates missing or malformed optional title metadata.
+func (d HookData) NativeTitle() string {
+	var title string
+	_ = json.Unmarshal(d.SessionTitle, &title)
+	return title
 }
 
 // notifierInterface defines the interface for sending desktop notifications
@@ -301,6 +311,14 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 			break
 		}
 		status = h.handlePreToolUse(ev, p)
+		if p.ToolName == "AskUserQuestion" {
+			in := questionInsight(p.ToolInput, false)
+			if in.Body == "" {
+				// The transcript may still contain the previous question.
+				in.Body = summary.GenerateSimple(status, h.cfg)
+			}
+			insight = &in
+		}
 	case NotificationPayload:
 		// Notification hook fires when Claude needs user input (permission
 		// dialogs, questions), so it always maps to question status.
@@ -669,7 +687,7 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 		if err := h.stateMgr.UpdateLastNotificationWithIdentity(keys.stateKey, status, message, stopHash, body, turnTS, hookEvent); err != nil {
 			logging.Warn("Failed to update last notification: %v", err)
 		}
-	})
+	}, h.notificationDetails(ev, insight))
 	bench.Elapsed("notify.send")
 
 	if !recordedDelivery && !delivery.delivered() {
@@ -760,7 +778,7 @@ func (h *Handler) handleTeammateIdle(ev Event, p TeammateIdlePayload) error {
 		if err := h.stateMgr.UpdateLastNotificationWithIdentity(stateKey, status, body, "", body, "", "TeammateIdle"); err != nil {
 			logging.Warn("TeammateIdle: failed to update notification state: %v", err)
 		}
-	})
+	}, h.notificationDetails(ev, nil))
 
 	logging.Debug("=== Hook completed: TeammateIdle (team notification sent) ===")
 	return nil
@@ -1062,7 +1080,7 @@ func joinMessageParts(body, actions string) string {
 //
 // body is the summary text (no metadata prefix, no action segments).
 // actions is the formatted action summary (e.g. "📝 1 new  ▶ 2 cmds  ⏱ 41s") or "".
-func (h *Handler) sendNotifications(status analyzer.Status, body, actions, sessionID, cwd string, onFirstDelivery func()) notificationDelivery {
+func (h *Handler) sendNotifications(status analyzer.Status, body, actions, sessionID, cwd string, onFirstDelivery func(), details ...hookNotificationDetails) notificationDelivery {
 	// Add panic recovery to prevent notification failures from crashing the plugin
 	defer errorhandler.HandlePanic()
 
@@ -1118,7 +1136,18 @@ func (h *Handler) sendNotifications(status analyzer.Status, body, actions, sessi
 
 	// Send desktop notification (check per-status enabled)
 	if h.cfg.IsStatusDesktopEnabled(statusStr) {
-		delivery.desktopDelivered = h.sendDesktopNotification(status, enhancedMessage, sessionID, cwd)
+		var opts []notifier.SendOption
+		if len(details) > 0 && (details[0].title != "" || details[0].question != "") {
+			label := details[0].title
+			if label == "" {
+				label = sessionName
+			}
+			opts = append(opts, notifier.WithHookPresentation(notifier.HookPresentation{
+				SessionName: label, Branch: gitBranch, Folder: folderName,
+				Body: joined, Question: details[0].question,
+			}))
+		}
+		delivery.desktopDelivered = h.sendDesktopNotification(status, enhancedMessage, sessionID, cwd, opts...)
 		if delivery.desktopDelivered && !delivery.webhookQueued && onFirstDelivery != nil {
 			onFirstDelivery()
 		}
@@ -1151,7 +1180,7 @@ func (h *Handler) sendNotifications(status analyzer.Status, body, actions, sessi
 // docs/DO_NOT_DISTURB.md). Detection fails open the same way DND does.
 //
 // Webhook delivery is unaffected by any of these options.
-func (h *Handler) sendDesktopNotification(status analyzer.Status, message, sessionID, cwd string) bool {
+func (h *Handler) sendDesktopNotification(status analyzer.Status, message, sessionID, cwd string, opts ...notifier.SendOption) bool {
 	if delay := h.cfg.GetNotifyDelaySeconds(); delay > 0 {
 		if delay > maxNotifyDelaySeconds {
 			logging.Warn("notifyDelaySeconds=%d exceeds the hook timeout budget; clamping to %ds", delay, maxNotifyDelaySeconds)
@@ -1168,7 +1197,7 @@ func (h *Handler) sendDesktopNotification(status analyzer.Status, message, sessi
 
 	// Do Not Disturb is evaluated at delivery time, after any notifyDelaySeconds
 	// wait, so toggling DND during the grace period is honoured.
-	var sendOpts []notifier.SendOption
+	sendOpts := append([]notifier.SendOption(nil), opts...)
 	muted := false
 	if mode := h.cfg.GetDoNotDisturbMode(); mode != config.DNDModeOff && isDoNotDisturb() {
 		if mode == config.DNDModeSuppress {

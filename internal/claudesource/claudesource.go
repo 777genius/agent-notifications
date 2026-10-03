@@ -112,6 +112,7 @@ func decodeWithIO(ctx context.Context, hookEvent string, input io.Reader) (hooks
 		PayloadEventName: wire.HookEventName,
 		Session: hooks.SessionContext{
 			SessionID:      sessionID,
+			Title:          wire.NativeTitle(),
 			CWD:            wire.CWD,
 			TranscriptPath: wire.TranscriptPath,
 		},
@@ -189,6 +190,7 @@ func decodeWithIO(ctx context.Context, hookEvent string, input io.Reader) (hooks
 
 	event.Session = hooks.SessionContext{
 		SessionID:      restoreString(observed.sessionID, sessionID, restored),
+		Title:          wire.NativeTitle(),
 		CWD:            restoreString(observed.cwd, wire.CWD, restored),
 		TranscriptPath: restoreString(observed.transcriptPath, wire.TranscriptPath, restored),
 	}
@@ -197,7 +199,8 @@ func decodeWithIO(ctx context.Context, hookEvent string, input io.Reader) (hooks
 	switch hookEvent {
 	case "PreToolUse":
 		event.Payload = hooks.PreToolUsePayload{
-			ToolName: restoreString(observed.toolName, wire.ToolName, restored),
+			ToolName:  restoreString(observed.toolName, wire.ToolName, restored),
+			ToolInput: append(json.RawMessage(nil), wire.ToolInput...),
 		}
 	case "Notification":
 		event.Payload = hooks.NotificationPayload{}

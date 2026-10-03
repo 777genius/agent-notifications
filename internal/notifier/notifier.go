@@ -98,6 +98,9 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 	}
 
 	presentation := legacyPresentation(status, message, statusInfo.Title, n.cfg.IsSessionLabelEnabled())
+	if sendOpts.hookPresentation != nil {
+		presentation = hookPresentation(status, *sendOpts.hookPresentation, statusInfo.Title, n.cfg.IsSessionLabelEnabled())
+	}
 	title, cleanMessage, subtitle := presentation.Title, presentation.Body, presentation.Subtitle
 	timeSensitive := presentation.TimeSensitive
 
