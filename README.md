@@ -10,7 +10,7 @@
   &nbsp;&nbsp;
   <a href="docs/opencode-notifications.md"><img src="brand/opencode-logo.svg" width="64" height="64" alt="OpenCode" title="OpenCode" /></a>
   &nbsp;&nbsp;
-  <a href="docs/gemini-notifications.md"><img src="landing/public/agents/gemini.svg" width="64" height="64" alt="Gemini CLI (candidate)" title="Gemini CLI (unreleased candidate)" /></a>
+  <a href="docs/gemini-notifications.md"><img src="landing/public/agents/gemini.svg" width="64" height="64" alt="Gemini CLI" title="Gemini CLI" /></a>
 </p>
 
 [![Ubuntu CI](https://github.com/777genius/agent-notifications/actions/workflows/ci-ubuntu.yml/badge.svg?branch=main&event=push)](https://github.com/777genius/agent-notifications/actions/workflows/ci-ubuntu.yml?query=branch%3Amain+event%3Apush)
@@ -18,6 +18,53 @@
 [![Windows CI](https://github.com/777genius/agent-notifications/actions/workflows/ci-windows.yml/badge.svg?branch=main&event=push)](https://github.com/777genius/agent-notifications/actions/workflows/ci-windows.yml?query=branch%3Amain+event%3Apush)
 [![Go Reference](https://pkg.go.dev/badge/github.com/777genius/agent-notifications.svg)](https://pkg.go.dev/github.com/777genius/agent-notifications)
 [![codecov](https://codecov.io/gh/777genius/agent-notifications/graph/badge.svg?branch=main)](https://codecov.io/gh/777genius/agent-notifications)
+
+Desktop notifications for **Claude Code, Codex CLI and OpenCode**. Know when a task finishes, an agent needs input, or a tool needs approval. Claude and Codex also support sounds and click-to-focus.
+
+## Install Or Update
+
+**[Guided installer (stable)](https://777genius.github.io/agent-notifications/#install)** or run:
+
+```bash
+curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash
+```
+
+Choose **Claude Code**, **Codex CLI**, **OpenCode**, or a combination. Install the selected agent CLIs first. Run the same command to update.
+
+**Windows:** use **Git Bash**, not WSL, for a native Windows installation.
+
+After setup:
+
+- **Claude:** restart Claude Code.
+- **Codex:** restart Codex, then review and trust the installed hooks in `/hooks`.
+- **OpenCode:** restart OpenCode; on macOS, [grant notification permission](docs/opencode-notifications.md#macos-notification-permission).
+
+**Gemini CLI:** available in the **[1.47.0 Linux/Windows prerelease](https://github.com/777genius/agent-notifications/releases/tag/v1.47.0)** through its explicit installation instructions. The command above installs stable **1.46.1**, which does not include Gemini. macOS Gemini support is still a candidate.
+
+<details>
+<summary>Non-interactive installation and optional notification tools</summary>
+
+For Codex only:
+
+```bash
+(set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product codex)
+```
+
+Use `--product claude` or `--product both` for Claude or Claude + Codex. For all three stable agents:
+
+```bash
+(set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --products claude,codex,opencode --desktop)
+```
+
+For OpenCode, choose `--desktop`, `--webhook`, or both; webhook destinations need separate configuration. These flags do not change Claude/Codex channels.
+
+Claude/Codex setup also installs the `agent-notify` MCP server and `agent-notifications` skill so an agent can notify you during a task. Open a new session after setup. Use `--skip-agent-notify` for hooks only. [Setup and recovery details](docs/INSTALLATION.md).
+
+</details>
+
+[Manual installation](docs/INSTALLATION.md#manual-install) · [Manual Codex registration](docs/CODEX.md#manual-codex-registration) · [Uninstall](docs/INSTALLATION.md#uninstalling) · [Troubleshooting](docs/troubleshooting.md)
+
+## Features
 
 <div>
 <table>
@@ -29,612 +76,52 @@
 </table>
 </div>
 
-Desktop notifications for **Claude Code, Codex CLI and OpenCode**. Know when a task finishes, an agent needs input, or a tool needs approval. Claude and Codex also support sounds and click-to-focus.
-
-Built with [Universal Agent Plugins](https://github.com/777genius/universal-agent-plugins). [Create your own plugin for multiple AI agents](https://github.com/777genius/universal-agent-plugins#build-plugins).
-
-Terminal dependency [copyright and license notices](internal/thirdpartynotices/THIRD_PARTY_NOTICES.txt) are included in portable packages and release assets. Run `claude-notifications licenses` to read the same notices from the binary.
-
-OpenCode provides silent, generic completion, question, permission and error alerts for root sessions, with explicit desktop/webhook consent. Tested with OpenCode **1.18.33**; V2 is not supported. [OpenCode setup, privacy and limits](docs/opencode-notifications.md)
-
-Gemini CLI is the fourth agent in the **unreleased candidate**. Public release **1.46.1 does not include Gemini**. The candidate was tested with exact **Gemini CLI 0.62.0** on macOS arm64 and Linux, including real hooks, tool-permission UI and delivery. Both Mac banners were visually confirmed. [Qualification by OS](docs/gemini-notifications.md#qualification-status). Its two fixed alerts mean a turn completed (`AfterAgent`, not success or a final-only answer) or tool permission was requested (`Notification: ToolPermission`). Silent desktop and explicitly opted webhooks only; no sound, click-to-focus, question/error/plan/review alerts or nested-agent parity. Built-in Gemini notifications may duplicate desktop alerts; choose one desktop source or webhook-only. Setup leaves built-in settings unchanged. [Candidate setup and qualification status](docs/gemini-notifications.md)
-
-## Features
-
-- **Task and attention alerts:** completions, reviews, questions, plans, session limits and API errors for Claude; completions and permission requests for Codex, with opt-in subagent alerts; four generic root-session alerts for OpenCode. [Event details](docs/NOTIFICATION_TYPES.md)
-- **Click-to-focus (Claude/Codex):** return to the originating terminal or editor, with exact tab/pane targeting for supported integrations including Ghostty, iTerm2, Warp, tmux, kitty and WezTerm. [Supported terminals](docs/CLICK_TO_FOCUS.md)
+- **Task and attention alerts:** completions, questions, tool approvals and more, depending on the agent. See the table below.
+- **Click-to-focus and sounds (Claude/Codex):** return to the originating terminal or editor; choose built-in or custom sounds, volume and audio output. [Supported terminals](docs/CLICK_TO_FOCUS.md) · [Sound settings](docs/CONFIGURATION.md#sound-options)
 - **Useful context (Claude/Codex):** project, git branch and session labels in notifications.
-- **Custom sounds (Claude/Codex):** built-in or custom MP3, WAV, FLAC, OGG and AIFF, with volume control, previews and audio output selection.
-- **Less noise:** focus-aware delivery, optional delay, duplicate-question suppression, filters by status, branch or folder, opt-in respect for the desktop's Do Not Disturb state, and opt-in muting while the display is asleep (macOS). [Do Not Disturb](docs/DO_NOT_DISTURB.md) · [Display sleep](docs/CONFIGURATION.md#mute-sound-while-display-is-asleep)
-- **Your settings per agent:** shared configuration with separate Claude, Codex and OpenCode overrides; control desktop and webhook delivery per status. [Agent settings](docs/AGENT_CONFIGURATION.md)
-- **Webhooks:** Slack, Discord, Telegram, Lark/Feishu and custom endpoints, including Teams, ntfy, PagerDuty, Zapier, n8n and Make. Retries, rate limits and circuit breakers are built in. [Integrations](docs/webhooks/README.md)
-- **Cross-platform:** macOS (Intel/Apple Silicon), Linux (x64/ARM64) and Windows 10+ (x64). [Platform details](docs/PLATFORMS.md)
+- **Less noise:** focus-aware delivery, delays, filters and optional subagent alerts. [Configuration](docs/CONFIGURATION.md#focus-aware--delayed-notifications) · [Do Not Disturb](docs/DO_NOT_DISTURB.md)
+- **Webhooks:** Slack, Discord, Telegram, Lark/Feishu and custom endpoints. [Integration guides](docs/webhooks/README.md)
+- **Cross-platform:** macOS (Intel/Apple Silicon), Linux (x64/ARM64) and Windows 10+ (x64). Agent and delivery limits are listed below. [Platform details](docs/PLATFORMS.md)
 
-[Codex setup and event behavior](docs/CODEX.md) · [OpenCode setup and event behavior](docs/opencode-notifications.md)
+## Supported Agents
 
-## Install Or Update
+| Agent | Alerts | Sounds / click-to-focus | Details |
+| --- | --- | --- | --- |
+| **Claude Code** | Completions, reviews, questions, plans, session limits and API errors | Yes | [Notification types](docs/NOTIFICATION_TYPES.md) |
+| **Codex CLI** | Turn completion and tool permissions; questions and errors depend on host events or final-message detection | Yes | [Setup and limits](docs/CODEX.md) |
+| **OpenCode** | Root-session completion, questions, permissions and errors | No | [Setup and limits](docs/opencode-notifications.md) |
+| **Gemini CLI** | Turn completion and tool permissions | No | [Prerelease setup and qualification](docs/gemini-notifications.md) |
 
-👉 **[Open the guided installer](https://777genius.github.io/agent-notifications/#install)**
-
-On Windows, run the installer in **Git Bash**. Python is optional only for exact iTerm2 tab/pane targeting.
-
-```bash
-curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash
-```
-
-The short setup loader resolves the latest stable release and downloads the installer from that release's exact commit. Release lookup and validation happen automatically. Choose **Claude**, **Codex**, **Claude + Codex**, or **OpenCode**. For non-interactive setup, append `-s -- --product claude`, `codex`, or `both` after `bash`. For OpenCode use `-s -- --product opencode --desktop`, `--webhook`, or both channel flags. To install notifications for all three agents with one command:
-
-```bash
-(set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --products claude,codex,opencode --desktop)
-```
-
-Use `claude,opencode` or `codex,opencode` for a mixed pair. OpenCode channel flags apply only to OpenCode; `--skip-agent-notify` applies only to Claude/Codex. Webhook URLs are configured separately. Setup stops at the first failure and preserves earlier successful installations; fix the error and rerun. [Installer options](docs/INSTALLATION.md).
-
-- **Claude:** restart Claude Code.
-- **Codex:** restart Codex, open `/hooks`, then review and trust the installed hooks.
-- **OpenCode:** restart OpenCode to load the global plugin. On Mac, [grant notification permission](docs/opencode-notifications.md#macos-notification-permission). Requires plugin release v1.46.0 or newer.
-
-Run the same command to update. [Guided installer](https://777genius.github.io/agent-notifications/#install) · [Manual installation, updates and removal](docs/INSTALLATION.md)
-
-For the future Gemini-compatible release, the planned selectors are `--product gemini` and `--products claude,codex,opencode,gemini`. Shared desktop/webhook flags apply to each selected Gemini/OpenCode observer with separate consent. Current release 1.46.1 cannot install Gemini; use the [candidate guide](docs/gemini-notifications.md) until qualification and release are complete. Claude/Codex portable MCP and skill setup does not apply to Gemini.
-
-On a release with the portable setup wizard, the public installer also installs an MCP server
-and the `agent-notifications` skill for each selected client. In a new Claude Code or Codex session,
-the agent can call `notify` while it is still working, for example when input is needed.
-Check `notification_status` for this chat first. When `navigation.capability` is `eligible`,
-prefer `navigation: "required"` for task-related alerts, including informational ones.
-Use `none` or `best_effort` only when returning to the chat is optional; never silently
-downgrade a required return. Leave routine completion alerts to hooks to avoid duplicates.
-Use `--skip-agent-notify` for hooks only. Status reports configuration and caller-context
-eligibility; it does not prove that a banner appeared or the chat opened. OS permission, client activation,
-and a visible test notification are separate checks.
-Automatic updates preserve an absent MCP client when another selected client is installed;
-use explicit `--agent-notify` to add that client later.
+OpenCode is tested with **1.18.33**; V2 is unsupported. Gemini is tested with **0.62.0**; a completed turn does not necessarily mean task success or a final answer. OpenCode/Gemini alerts use generic text and require explicit desktop/webhook consent.
 
 ## Settings
 
-In Claude Code, run `/claude-notifications-go:settings` for the configuration wizard or `/claude-notifications-go:sounds` to browse and preview sounds.
+In Claude Code, run `/claude-notifications-go:settings` for the settings wizard or `/claude-notifications-go:sounds` to preview sounds.
 
-The primary CLI is `agent-notifications`. Use `agent-notifications config path` to locate your settings and `agent-notifications config inspect --json` to inspect them safely. The `claude-notifications` alias and Claude slash-command namespace remain compatible with existing installations.
+Use the installed launcher to find or safely inspect settings. The commands below assume `agent-notifications` is on your `PATH`; otherwise, use its full path.
+
+```bash
+agent-notifications config path
+agent-notifications config inspect --json
+```
+
+Settings are shared, with optional per-agent overrides. The `claude-notifications` alias and Claude's existing slash-command names remain supported.
 
 [Configuration reference](docs/CONFIGURATION.md) · [Per-agent overrides](docs/AGENT_CONFIGURATION.md) · [Sound previews](docs/interactive-sound-preview.md)
 
-Codex requires a published stable plugin release v1.42.0 or newer. The installer downloads matching source and binaries, respects `CODEX_HOME`, and keeps a permanent runtime copy there. It reports an error if no supported release is published yet.
-
-> If installation fails, use [manual Claude installation](#manual-install) or [manual Codex registration](#manual-codex-registration), depending on the product.
-
-### Manual Install
-
-<details>
-<summary>Step-by-step installation inside Claude Code (if bootstrap doesn't work)</summary>
-
-Run these slash commands in the Claude Code chat, not in your system terminal:
-
-```text
-# 1) Add marketplace
-/plugin marketplace add 777genius/agent-notifications
-# 2) Install plugin
-/plugin install claude-notifications-go@claude-notifications-go
-# 3) Restart Claude Code
-# 4) Download binary
-/claude-notifications-go:init
-# 5) (Optional) Configure sounds and settings
-/claude-notifications-go:settings
-```
-
-> **Compatibility:** `claude-notifications-go` is the frozen Claude Code marketplace,
-> plugin, and command namespace. The public product is **Agent Notifications**, but changing
-> these technical identifiers breaks existing installations and updates. See
-> [Claude plugin identity compatibility](docs/CLAUDE_PLUGIN_IDENTITY.md).
-
-</details>
-
-> Having issues with installation? See [Troubleshooting](#troubleshooting).
-
-### Updating
-
-Run the same command and choose the product(s) you want to update:
-
-```bash
-curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash
-```
-
-For OpenCode, rerun the installer with explicitly selected desktop/webhook channels and restart OpenCode. For Claude, restart Claude Code. For Codex, restart Codex and inspect `/hooks`; changed hook definitions may need trust approval again. The installer refreshes the Codex runtime and registration automatically. Existing foreign hooks and shared settings in the file selected by `config path` are preserved.
-
-<details>
-<summary>Manual Claude update (if bootstrap didn't work)</summary>
-
-Claude Code also periodically checks for plugin updates automatically. Binaries are updated on the next hook invocation when a version mismatch is detected.
-
-To update manually via Claude Code UI:
-
-1. Run `/plugin`, select **Marketplaces**, choose `claude-notifications-go`, then select **Update marketplace**
-2. Select **Installed**, choose `claude-notifications-go`, then select **Update now**
-
-If the binary auto-update didn't work (e.g. no internet at the time), run `/claude-notifications-go:init` to download it manually. If hook definitions changed in the new version, restart Claude Code to apply them.
-
-</details>
-
-### Uninstalling
-
-**OpenCode:** use the installer's printed **Remove** command, then restart OpenCode. Windows removal runs a temporary copy of the managed executable. [Removal and recovery](docs/opencode-notifications.md#change-channels-remove-or-recover).
-
-**Claude:**
-
-```text
-/plugin uninstall claude-notifications-go@claude-notifications-go
-```
-
-Optionally also remove the marketplace registration: `/plugin marketplace remove claude-notifications-go`.
-
-**Codex:** Codex has no plugin manager, so removal is manual. Delete the hook entries this installer added from `~/.codex/hooks.json` (`%USERPROFILE%\.codex\hooks.json` on Windows), then remove the installed copy at `~/.codex/claude-notifications-go` (`%USERPROFILE%\.codex\claude-notifications-go` on Windows). This does not touch hooks you registered yourself for other tools.
-
-**Configuration:** uninstalling does not delete your saved settings. Run `agent-notifications config path` to find the active file, and remove it yourself if you no longer want it.
-
-## Supported Notification Types
-
-The Claude triggers are listed below. Codex uses a different event mapping, described in [Codex support](#codex-cli-support-beta).
-
-| Status | Icon | Description | Trigger |
-|--------|------|-------------|---------|
-| Task Complete | ✅ | Main task completed | Stop/SubagentStop hooks (state machine detects active tools like Write/Edit/Bash, or ExitPlanMode followed by tool usage) |
-| Review Complete | 🔍 | Code review finished | Stop/SubagentStop hooks (state machine detects only read-like tools: Read/Grep/Glob with no active tools, plus long text response >200 chars) |
-| Question | ❓ | Claude has a question | PreToolUse hook (AskUserQuestion) OR Notification hook |
-| Plan Ready | 📋 | Plan ready for approval | PreToolUse hook (ExitPlanMode) |
-| Session Limit Reached | ⏱️ | Session limit reached | Stop/SubagentStop hooks (state machine detects "Session limit reached" text in last 3 assistant messages) |
-| API Error | 🔴 | Authentication expired, rate limit, server error, connection error | Stop/SubagentStop hooks (state machine detects via `isApiErrorMessage` flag + `error` field from JSONL) |
-| Permission Request | 🔐 | Codex is waiting for tool approval | Codex `PermissionRequest` hook (Codex only) |
-
-## Codex CLI Support (beta)
-
-The same binary can notify for OpenAI Codex CLI sessions.
-
-### Setup
-
-Use the [one-command installer](#quick-install-recommended) and choose Codex or both.
-It downloads matching release source and binaries, registers the hooks, and keeps a stable
-runtime copy. Then start Codex and approve the entries in `/hooks`.
-
-### Manual Codex registration
-
-Skip this section if you used the one-command installer. For manual setup, download a
-matching release bundle and binary (v1.42.0 or newer). The Go registration command needs
-no `jq` and is not automatically added to your `PATH`.
-
-From the bundle directory:
-
-```bash
-./bin/agent-notifications setup-codex --plugin-root .
-```
-
-On Windows, run the installed primary launcher in PowerShell (the downloaded
-`claude-notifications-windows-amd64.exe` remains compatible):
-
-```powershell
-.\bin\agent-notifications.bat setup-codex --plugin-root .
-```
-
-Run these commands in the bundle directory. If you have explicitly added the binary to
-`PATH`, `agent-notifications setup-codex --plugin-root <bundle-directory>` also works.
-
-It installs a self-contained copy of the plugin at `~/.codex/claude-notifications-go` and writes
-the hook entries into `~/.codex/hooks.json`. Agent-initiated notify (MCP) is enabled by default
-with `--navigation none --allow-unknown-caller true --allow-caller-asserted false`. Pass `--skip-agent-notify` for hooks only. Existing foreign hook
-definitions and unknown fields are preserved, and every run saves a uniquely named backup of
-the previous file next to it.
-
-Then start Codex, run `/hooks`, review the entries and trust them. Open a new session so MCP
-can start. The manual compatibility path may list `agent_notifications`; the portable public
-installer uses `agent-notify`.
-
-Useful flags: `--dry-run` shows what would change, `--print` outputs the JSON so you can merge it
-yourself, `--codex-home` and `--plugin-root` override the paths, `--skip-agent-notify` skips MCP
-registration. If agent-notify setup fails, hook registration remains in place.
-
-For manual updates, run the registration command again to refresh the installed copy.
-Unchanged hook definitions retain trust; changed definitions require review again.
-The one-command installer handles this registration step automatically.
-
-Claude Code installation and updates continue to use the [one-command installer](#install-or-update).
-Both products share settings at the shared file selected by `config path`; installing
-Codex does not require installing Claude Code. Keep your existing settings file when updating.
-
-<details>
-<summary>How registration works</summary>
-
-`setup-codex` registers user hooks explicitly, using a stable runtime directory independent
-of the plugin cache. This is the setup path covered by this project's installer tests.
-The bundle also includes a Codex plugin manifest. Codex versions can differ in plugin-hook
-loading; follow the [current Codex hooks documentation](https://learn.chatgpt.com/docs/hooks)
-for native plugin setup. Use one registration path to avoid duplicate hooks, and inspect
-`/hooks` after installation.
-
-Codex includes the command string in its trust hash, so the registration deliberately points at
-the stable `~/.codex/claude-notifications-go` copy rather than a versioned plugin cache
-directory — that is what keeps the trust valid across updates.
-
-</details>
-
-What works today:
-
-- **Stop** - a turn finishes; the status comes from the final assistant message: short failure
-  reports map to the API Error / Session Limit statuses, a trailing question mark maps to
-  Question, otherwise Task Complete. The Codex rollout transcript is not parsed (it is an
-  internal, unstable format).
-- **Question payloads (experimental)** - if Codex emits `PreToolUse` for `request_user_input`,
-  the plugin delivers the question/header text. Options, ids, and secret fields are excluded.
-  Live firing of this tool hook is not yet qualified; do not rely on it for every question.
-- **PermissionRequest** - Codex is waiting for your approval of a tool call; delivered as the
-  time-sensitive Permission Request status. Only the tool name is shown, never the tool input.
-- **SubagentStop** (opt-in) - with `notifyOnSubagentStop: true` and `suppressForSubagents: false`,
-  subagent completions notify with the subagent's final message.
-
-Known limitations:
-
-- PermissionRequest cannot fire when Codex never asks for approval (`bypassPermissions`,
-  `--ask-for-approval never`, headless `codex exec`).
-- The error statuses for Codex come from a text heuristic over the final message (short messages
-  with failure phrasing), not from structured error data - false negatives are possible.
-- The `request_user_input` question hook is limited to the modes where Codex exposes that tool.
-- Windows support for the Codex route is not declared until the Windows launcher is proven.
-- Codex hooks require a trust review (`/hooks` inside Codex); changed definitions require review again.
-
-Both products share one config file (the shared file selected by `config path`).
-
-## Platform Support
-
-**Supported platforms:**
-- macOS (Intel & Apple Silicon)
-- Linux (x64 & ARM64)
-- Windows 10+ (x64)
-
-**No additional dependencies:**
-- ✅ Binaries auto-download from GitHub Releases
-- ✅ Pure Go - no C compiler needed
-- ✅ All libraries bundled
-- ✅ Works offline after first setup
-
-**Windows-specific features:**
-- Native Toast notifications (Windows 10+)
-- After installation, notifications work in PowerShell, CMD, Git Bash, or WSL
-- MP3/WAV/OGG/FLAC audio playback via native Windows APIs
-- System sounds not accessible - use built-in MP3s or custom files
-
-### Click-to-Focus (macOS & Linux)
-
-Clicking a notification activates your terminal window. Auto-detects terminal and platform.
-
-**macOS** — via AX API with bundle ID detection:
-
-| Terminal | Focus method |
-|----------|-------------|
-| Ghostty | Exact tab focus via Ghostty AppleScript, with AXDocument fallback |
-| VS Code / Insiders / Cursor | AXTitle (focus-window subcommand) |
-| iTerm2 | Exact tab/pane targeting via iTerm2 Python API when available, otherwise app-level iTerm activation |
-| Warp | Exact window/tab/pane via `WARP_FOCUS_URL` (`warp://session/<uuid>`), AXTitle fallback on older Warp |
-| kitty, WezTerm, Alacritty, Hyper, Apple Terminal | AXTitle (focus-window subcommand) |
-| Any other (custom `terminalBundleId`) | AXTitle (focus-window subcommand) |
-
-**Linux** — via D-Bus daemon with automatic compositor detection:
-
-| Terminal | Supported compositors |
-|----------|----------------------|
-| VS Code | GNOME, KDE, Sway, X11 |
-| Warp | GNOME, KDE, Sway, X11 — exact pane via `WARP_FOCUS_URL` |
-| GNOME Terminal, Konsole, Alacritty, kitty, WezTerm, Tilix, Terminator, XFCE4 Terminal, MATE Terminal | GNOME, KDE, Sway, X11 |
-| JetBrains IDEs (IntelliJ IDEA, PhpStorm, WebStorm, PyCharm, GoLand, …) | GNOME, KDE, Sway, X11 — the IDE window, not the terminal tab |
-| Any other | Fallback by name |
-
-Linux focus methods (tried in order): Warp session URL (`xdg-open`), GNOME extension, GNOME Shell Eval, GNOME FocusApp, wlrctl (Sway/wlroots), kdotool (KDE), xdotool (X11).
-
-**Multiplexers:** tmux and kitty (macOS only), zellij and WezTerm (macOS & Linux) — click switches to the correct pane/tab. Linux zellij targets the exact pane; see the [Click-to-Focus Guide](docs/CLICK_TO_FOCUS.md#multiplexers) for the full per-platform breakdown.
-
-**iTerm2 note:** to open the exact iTerm2 tab or split pane, enable `iTerm2 > Settings > General > Magic > Enable Python API`. If you just toggled it, restart iTerm2 once. Without the Python API, the plugin falls back to app-level iTerm activation instead of exact tab targeting.
-
-**Windows** — clicking a notification raises the originating terminal **window** (Windows Terminal, VS Code, conhost, …) via a protocol-activated toast. Window-level only: tab/split-pane targeting isn't possible (one window hosts all tabs), and picking among multiple WT windows in one process is best-effort. See the guide for details.
-
-See **[Click-to-Focus Guide](docs/CLICK_TO_FOCUS.md)** for configuration details.
-
-## Configuration
-
-The following workflow requires the coordinated config-capable runtime and installer; older releases may not provide these commands. Do not use a legacy full-file writer as a fallback.
-
-Run `/claude-notifications-go:settings` to configure sounds, volume, webhooks, and other options via an interactive wizard. You can re-run it anytime to reconfigure.
-
-### Manual Configuration
-
-Use the installed config-capable executable (shown as `$NOTIFICATIONS_BIN` in recipes):
-
-```bash
-"$NOTIFICATIONS_BIN" config path --json
-"$NOTIFICATIONS_BIN" config inspect --json
-```
-
-One file is selected per environment context: explicit **E**, otherwise existing **L**, otherwise **N**. Existing L is preserved; there is no automatic migration, copy, merge or synchronization.
-
-| Selection | Native file path |
-|---|---|
-| E: `AGENT_NOTIFICATIONS_CONFIG` | An absolute **file**, not a directory |
-| L: existing legacy file, macOS/Linux | `$HOME/.claude/claude-notifications-go/config.json` |
-| L: existing legacy file, Windows | `%USERPROFILE%\.claude\claude-notifications-go\config.json` |
-| N: fresh macOS | `$HOME/Library/Application Support/agent-notifications/config.json` |
-| N: fresh Linux | Absolute nonempty `$XDG_CONFIG_HOME/agent-notifications/config.json`, otherwise `$HOME/.config/agent-notifications/config.json` |
-| N: fresh Windows | `%APPDATA%\agent-notifications\config.json` |
-
-Relative XDG_CONFIG_HOME is ignored with a diagnostic. Windows uses USERPROFILE for L, not Git Bash HOME; missing/relative APPDATA without L is an error. macOS ignores XDG_CONFIG_HOME. Missing home in automatic mode is an error; a valid explicit E supports portable contexts without HOME/APPDATA.
-
-Unset E enables automatic selection; set-empty, whitespace-only, relative, `~/file` and invalid native paths are errors, never fallback. The resolver does not expand variables or tilde in E. Expand them in the calling shell if intended; Git Bash may use `cygpath -w` to supply a native absolute Windows path. Do not trim legitimate spaces in filenames.
-
-For writable targets, `.lock` filenames and generated `.tmp-<32 hex digits>` / `.backup-<32 hex digits>` names are reserved for coordination and recovery metadata. Choose another filename for a portable config.
-
-If L and N both exist, L wins with a diagnostic even if identical or N is newer. To intentionally select N, set E in **every** new adapter and CLI environment. Unsetting E restores legacy-first selection. Old binaries ignore E. `CODEX_HOME`, `CLAUDE_HOME`, `CLAUDE_CONFIG_DIR`, product, cwd and bundle/install paths do not select notification config. They retain their resource/installation meanings; permission markers, venv and state paths do not move.
-
-`config init` is create-only: existing valid config is a byte/mode/mtime-preserving no-op; invalid existing config is an error. Hooks never write config and use in-memory defaults only for truly missing automatic config after historical recovery checks. Explicit missing E, corrupt/unreadable canonical files and unresolved recovery artifacts are errors, with no bundle/default fallback.
-
-Use the [settings recipe](commands/settings.md) for `config edit --stdin --expect-revision TOKEN`: private input, only requested JSON Pointer leaf edits, raw values, and an explicit user decision after any conflict. A volume plus one status sound edit preserves every other raw field, status, channel, webhook secret/payload and future-agent setting. Inspect is a safe projection, not a replacement document; absent free-form values are not unset.
-
-Before any updater deletes/refreshes cache, personalized or unknown historical cache-only/custom-root settings require explicit import using a verified new helper: stop old writers, inspect the selected destination, then `config init --from FILE` only if that destination is missing. Never auto-copy a bundle, guess the newest cache, overwrite existing canonical config, or treat this as migration/reset. If preflight/helper is unavailable, stop the update and retain the old runtime. For existing invalid config, stop writers and explicitly repair/recover it while preserving damaged bytes; init cannot reset it.
-
-Existing L with v1-shaped JSON remains readable by the old Go reader, which ignores additive unknown fields. The old wizard loses unknown fields and is an unsupported concurrent writer. N/E require a bridge-aware runtime, or explicit stopped-writer recovery to a single legacy canonical file with a private backup and all contexts switched; two live copies are not a workaround. No downloadable bridge release is promised here. Native Windows replacement/ACL, macOS/Linux crash/concurrency and OS E2E qualification remain release gates, not results established by this documentation patch.
-
-For support, share only `config inspect --json`, never `cat` of config; keep saved diagnostics private and review paths before posting. The response includes selection (path/source/exists/diagnostics), revision, schemaVersion, valid, optional errorCode, and safe settings: desktopEnabled, desktopSound, volume and known-status enabled/desktopEnabled/webhookEnabled. It omits free-form sounds, webhook secrets/payloads and unknown fields.
-
-The following JSON illustrates the schema. Do not replace your existing document with it; apply only explicitly requested leaf edits:
-
-```json
-{
-  "notifications": {
-    "desktop": {
-      "enabled": true,
-      "sound": true,
-      "volume": 1.0,
-      "audioDevice": "",
-      "clickToFocus": true,
-      "terminalBundleId": "",
-      "showSessionLabel": true,
-      "appIcon": "${AGENT_NOTIFICATIONS_ROOT}/claude_icon.png"
-    },
-    "webhook": {
-      "enabled": false,
-      "preset": "slack",
-      "url": "",
-      "chat_id": "",
-      "format": "json",
-      "headers": {},
-      "payloadFields": {}
-    },
-    "suppressQuestionAfterTaskCompleteSeconds": 12,
-    "suppressQuestionAfterAnyNotificationSeconds": 7,
-    "notifyOnSubagentStop": false,
-    "suppressForSubagents": true,
-    "notifyOnTextResponse": true,
-    "respectJudgeMode": true,
-    "notifyOnlyWhenUnfocused": false,
-    "notifyDelaySeconds": 0,
-    "suppressFilters": [
-      {
-        "name": "Suppress ClaudeProbe completions (remote-control)",
-        "status": "task_complete",
-        "gitBranch": "",
-        "folder": "ClaudeProbe"
-      }
-    ]
-  },
-  "statuses": {
-    "task_complete": {
-      "title": "✅ Completed",
-      "sound": "${AGENT_NOTIFICATIONS_ROOT}/sounds/task-complete.mp3"
-    },
-    "review_complete": {
-      "title": "🔍 Review",
-      "sound": "${AGENT_NOTIFICATIONS_ROOT}/sounds/review-complete.mp3"
-    },
-    "question": {
-      "title": "❓ Question",
-      "sound": "${AGENT_NOTIFICATIONS_ROOT}/sounds/question.mp3"
-    },
-    "plan_ready": {
-      "title": "📋 Plan",
-      "sound": "${AGENT_NOTIFICATIONS_ROOT}/sounds/plan-ready.mp3"
-    },
-    "session_limit_reached": {
-      "title": "⏱️ Session Limit Reached",
-      "sound": "${AGENT_NOTIFICATIONS_ROOT}/sounds/error.mp3"
-    },
-    "api_error": {
-      "title": "🔴 API Error: 401",
-      "sound": "${AGENT_NOTIFICATIONS_ROOT}/sounds/error.mp3"
-    },
-    "api_error_overloaded": {
-      "title": "🔴 API Error",
-      "sound": "${AGENT_NOTIFICATIONS_ROOT}/sounds/error.mp3"
-    }
-  }
-}
-```
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `notifyOnSubagentStop` | `false` | Send notifications when subagents (Task tool) complete. Has no effect unless `suppressForSubagents` is also set to `false`. |
-| `suppressForSubagents` | `true` | Suppress subagent (`SubagentStop`) notifications, plus any `Stop` notification whose transcript is a subagent/teammate transcript. Detection uses the hook event for `SubagentStop` (Claude Code passes the parent session `transcript_path` to that hook, so a path check alone can't identify it). Set to `false` together with `notifyOnSubagentStop: true` to get a notification each time a subagent finishes. |
-| `notifyOnTextResponse` | `true` | Send notifications for text-only responses (no tool usage) |
-| `desktop.showSessionLabel` | `true` | Append the `[name id]` session label to the notification title. |
-| `respectJudgeMode` | `true` | Honor `CLAUDE_HOOK_JUDGE_MODE=true` env var to suppress notifications |
-| `notifyOnlyWhenUnfocused` | `false` | Skip the desktop notification only when the focused terminal window can be matched to the current Claude Code session. Best-effort per platform; if focus can't be determined the notification is still shown. |
-| `notifyDelaySeconds` | `0` | Wait N seconds before delivering a desktop notification (capped at 25s by the hook timeout). With `notifyOnlyWhenUnfocused`, focus is re-checked after the wait. Webhooks are unaffected. |
-| `suppressQuestionAfterTaskCompleteSeconds` | `12` | Suppress question notifications for N seconds after task complete |
-| `suppressQuestionAfterAnyNotificationSeconds` | `7` | Suppress question notifications for N seconds after any notification |
-| `suppressFilters` | `[]` | Array of rules to suppress notifications by status, git branch, and/or folder. Each rule is an AND of its fields; omitted fields match any value. Set `gitBranch` to `""` to match sessions outside git repos. |
-
-Each status can be individually disabled by adding `"enabled": false`.
-
-You can also override individual channels per status:
-
-```json
-{
-  "statuses": {
-    "question": {
-      "title": "❓ Question",
-      "sound": "${AGENT_NOTIFICATIONS_ROOT}/sounds/question.mp3",
-      "desktop": { "enabled": true },
-      "webhook": { "enabled": false }
-    }
-  }
-}
-```
-
-`statuses.<name>.enabled` is still the master switch for both channels. Use
-`desktop.enabled` and `webhook.enabled` when you want one channel on and the
-other off for the same status.
-
-### Focus-Aware & Delayed Notifications
-
-Two independent options cut notification noise when you're already watching the terminal:
-
-- **`notifyOnlyWhenUnfocused`** - skip the desktop notification only when the focused terminal window can be matched to the current Claude Code session.
-- **`notifyDelaySeconds`** - wait N seconds before delivering, so a quick task can finish before any banner appears (capped at 25s to stay within the hook timeout).
-
-They compose: with both set, the plugin waits, then notifies only if the terminal still isn't focused - "tell me once I've looked away."
-
-```json
-{
-  "notifications": {
-    "notifyOnlyWhenUnfocused": true,
-    "notifyDelaySeconds": 10
-  }
-}
-```
-
-Both apply to **desktop notifications only** - webhook delivery is never delayed or suppressed. Focus detection is best-effort and degrades safely by notifying when unsure:
-
-- macOS: Ghostty can be matched by exact terminal/session metadata; other terminal apps require the frontmost window title to match the project folder and existing Screen Recording access.
-- Linux: X11 sessions compare `$WINDOWID` to the active window. In JetBrains IDE terminals the active window must belong to the IDE process and its title must name the project (KDE Plasma: `kdotool`, X11: `xdotool`); an inherited `$WINDOWID` is ignored there. Other Wayland sessions and terminals without `$WINDOWID` are treated as unknown.
-- Windows: the foreground window must belong to the hook process ancestry and its title must contain the project folder. Ambiguous multi-window or multi-tab terminal hosts are treated as unknown.
-
-Unknown means "show the notification", not "suppress it".
-
-### Sound Options
-
-**Built-in sounds** (included):
-- `${AGENT_NOTIFICATIONS_ROOT}/sounds/task-complete.mp3`
-- `${AGENT_NOTIFICATIONS_ROOT}/sounds/review-complete.mp3`
-- `${AGENT_NOTIFICATIONS_ROOT}/sounds/question.mp3`
-- `${AGENT_NOTIFICATIONS_ROOT}/sounds/plan-ready.mp3`
-- `${AGENT_NOTIFICATIONS_ROOT}/sounds/error.mp3`
-
-**System sounds:**
-- macOS: `/System/Library/Sounds/Glass.aiff`, `/System/Library/Sounds/Hero.aiff`, etc.
-- Linux: `/usr/share/sounds/**/*.ogg` (varies by distribution)
-- Windows: Use built-in MP3s (system sounds not easily accessible)
-
-**Supported formats:** MP3, WAV, FLAC, OGG/Vorbis, AIFF
-
-### List Available Sounds
-
-See all available notification sounds on your system:
-
-```bash
-# List all sounds (built-in + system)
-bin/list-sounds
-
-# Output as JSON
-bin/list-sounds --json
-
-# Preview a sound
-bin/list-sounds --play task-complete
-
-# Preview at specific volume
-bin/list-sounds --play Glass --volume 0.5
-```
-
-Or use the skill command: `/claude-notifications-go:sounds`
-
-### Audio Device Selection
-
-Route notification sounds to a specific audio output device instead of the system default:
-
-```bash
-# List available audio devices
-bin/list-devices
-
-# Output:
-#   0: MacBook Pro-Lautsprecher
-#   1: Babyface (23314790) (default)
-#   2: Immersed
-```
-
-Then add the device name to the shared file selected by `config path`:
-
-```json
-{
-  "notifications": {
-    "desktop": {
-      "audioDevice": "MacBook Pro-Lautsprecher"
-    }
-  }
-}
-```
-
-Leave `audioDevice` empty or omit it to use the system default device.
-
-### Test Sound Playback
-
-Preview any sound file with optional volume control:
-
-```bash
-# Test built-in sound (full volume)
-bin/sound-preview sounds/task-complete.mp3
-
-# Test with reduced volume (30% - recommended for testing)
-bin/sound-preview --volume 0.3 sounds/task-complete.mp3
-
-# Test macOS system sound at 30% volume
-bin/sound-preview --volume 0.3 /System/Library/Sounds/Glass.aiff
-
-# Test custom sound at 50% volume
-bin/sound-preview --volume 0.5 /path/to/your/sound.wav
-
-# Show all options
-bin/sound-preview --help
-```
-
-**Volume flag:** Use `--volume` to control playback volume (0.0 to 1.0). Default is 1.0 (full volume).
-
-
-## Manual Testing
-
-The plugin is invoked automatically by Claude Code hooks. To test manually:
-
-```bash
-# Test PreToolUse hook
-echo '{"session_id":"test","transcript_path":"/path/to/transcript.jsonl","tool_name":"ExitPlanMode"}' | \
-  agent-notifications handle-hook PreToolUse
-
-# Test Stop hook
-echo '{"session_id":"test","transcript_path":"/path/to/transcript.jsonl"}' | \
-  agent-notifications handle-hook Stop
-```
+## Documentation
+
+- [Installation, updates and removal](docs/INSTALLATION.md)
+- [Notification types](docs/NOTIFICATION_TYPES.md) and [click-to-focus](docs/CLICK_TO_FOCUS.md)
+- [Webhooks](docs/webhooks/README.md)
+- [Troubleshooting](docs/troubleshooting.md) and [plugin compatibility](docs/PLUGIN_COMPATIBILITY.md)
+- [Architecture](docs/ARCHITECTURE.md) and [local development](docs/LOCAL_DEVELOPMENT.md)
+- [Changelog](CHANGELOG.md)
+
+Built with [Universal Agent Plugins](https://github.com/777genius/universal-agent-plugins). [Build plugins for multiple AI agents](https://github.com/777genius/universal-agent-plugins#build-plugins).
 
 ## Contributing
 
-See **[CONTRIBUTING.md](CONTRIBUTING.md)** for development setup, testing, building, and submitting changes.
-For local plugin workflows and real-`claude` smoke/manual E2E testing, see **[docs/LOCAL_DEVELOPMENT.md](docs/LOCAL_DEVELOPMENT.md)**.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development and testing. Pull requests are subject to the [Contributor License Agreement](.github/CLA.md); contributors keep copyright.
 
-## Troubleshooting
-
-See **[Troubleshooting Guide](docs/troubleshooting.md)** for common issues:
-
-- **Ubuntu 24.04**: `EXDEV: cross-device link not permitted` during `/plugin install` (TMPDIR workaround)
-- **Windows**: install issues related to `%TEMP%` / `%TMP%` location
-- **Windows / Git Bash**: GitHub Releases download fails because of proxy / TLS inspection / certificate revocation
-
-## Documentation
-
-- [Troubleshooting](docs/troubleshooting.md)
-- [Plugin compatibility](docs/PLUGIN_COMPATIBILITY.md)
-- [Architecture](docs/ARCHITECTURE.md) and [local development](docs/LOCAL_DEVELOPMENT.md)
-- [Contributing](CONTRIBUTING.md) and [changelog](CHANGELOG.md)
-
-GPL-3.0-or-later. See [LICENSE](LICENSE).
-
-By opening a pull request you agree to the [Contributor License Agreement](.github/CLA.md). You keep copyright. That does not replace GPL-3.0-or-later on the public repository. It lets the project owner sublicense that work under additional terms (for example a commercial license) while keeping the GPL-3.0-or-later grant from the submission date.
+GPL-3.0-or-later. See [LICENSE](LICENSE) and [third-party notices](internal/thirdpartynotices/THIRD_PARTY_NOTICES.txt).
