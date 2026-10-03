@@ -28,10 +28,7 @@ func TestUAPProjectedCodexLaunchRunsProductionMCP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	exe, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
+	exe := managedFixtureExecutable(t)
 	binary, err := os.ReadFile(exe)
 	if err != nil {
 		t.Fatal(err)

@@ -59,10 +59,7 @@ func TestAgentNotifyIsolatedInstallFlowE2E(t *testing.T) {
 		t.Fatal("global restrictions changed")
 	}
 
-	exe, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
+	exe := managedFixtureExecutable(t)
 	binary, err := os.ReadFile(exe)
 	if err != nil {
 		t.Fatal(err)
