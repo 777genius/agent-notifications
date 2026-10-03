@@ -14,12 +14,13 @@ The Claude triggers are listed below. Codex uses a different event mapping, desc
 | API Error | 🔴 | Authentication expired, rate limit, server error, connection error | Stop/SubagentStop hooks (state machine detects via `isApiErrorMessage` flag + `error` field from JSONL) |
 | Permission Request | 🔐 | Codex is waiting for tool approval | Codex `PermissionRequest` hook (Codex only) |
 
-## Gemini CLI (unreleased candidate)
+## Gemini CLI
 
-Public release **1.46.0 does not include Gemini**. Target **Gemini CLI 0.62.0**
-is pending native qualification. [Candidate setup and limits](gemini-notifications.md).
+Available in the **[v1.47.0 Linux/Windows prerelease](https://github.com/777genius/agent-notifications/releases/tag/v1.47.0)**;
+stable **v1.46.1** excludes Gemini and macOS support remains a candidate.
+Tested with **Gemini CLI 0.62.0**. [Setup, qualification and limits](gemini-notifications.md).
 
-| Event | Meaning | Planned fixed body |
+| Event | Meaning | Fixed body |
 | --- | --- | --- |
 | `AfterAgent` | A turn completed; not necessarily success or final answer | `Gemini CLI completed a turn` |
 | `Notification: ToolPermission` | Tool permission requested | `Gemini CLI requested tool permission` |
