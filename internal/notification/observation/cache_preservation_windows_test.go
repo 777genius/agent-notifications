@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -102,8 +103,15 @@ func TestWindowsCacheFailedPreparationPreservesAttempt(t *testing.T) {
 	if err = checkCacheRoot(c.Root); err != nil {
 		t.Fatalf("creation fault made the private root unreadable: %v", err)
 	}
-	if claimed, err := c.Claim(context.Background(), markerB, 1); claimed || err == nil || err.Error() != "cache_unavailable" {
-		t.Fatalf("failed preparation granted delivery: %v/%v", claimed, err)
+	claimed, claimErr := c.Claim(context.Background(), markerB, 1)
+	var failure *ClaimFailure
+	if claimed || !errors.As(claimErr, &failure) || claimErr.Error() != "cache_unavailable" {
+		t.Fatalf("failed preparation granted delivery: %v/%v", claimed, claimErr)
+	}
+	// The real FILE_ADD_FILE denial must be distinguished from an unrelated
+	// timeout. Publication uncertainty stays conservative even on this failure.
+	if failure.Phase != "publish" || failure.Class != "permission" || failure.OSCode != uint32(windows.ERROR_ACCESS_DENIED) || !failure.MayHavePublished {
+		t.Fatalf("preparation failure diagnostics: %#v", failure)
 	}
 	got, err := os.ReadFile(path)
 	if err != nil || !bytes.Equal(got, seed) {

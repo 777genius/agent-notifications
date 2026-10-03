@@ -95,14 +95,37 @@ jobs:
         shell: bash
 
       - name: Qualify observation caches without cross-package contention
-        # Keep real first claims and interprocess assertions under the unchanged
-        # 250ms production budget, separate from other race-instrumented packages.
-        run: go test -p 1 -v -race -coverprofile=coverage-gemini.txt -covermode=atomic ./internal/geminievent ./internal/notification/observation ./internal/copilotvscodeevent ./cmd/claude-notifications
+        id: observation
+        # Preserve the first strict failure and its trace. There is no automatic
+        # retry: publication may have committed before a deadline/close error.
+        env:
+          AGENT_NOTIFICATIONS_OBSERVATION_DIAGNOSTICS: '1'
         shell: bash
+        run: |
+          mkdir -p observation-evidence
+          git rev-parse HEAD > observation-evidence/source.txt
+          go version > observation-evidence/go.txt
+          qualification_status=0
+          go test -p 1 -v -race -coverprofile=coverage-gemini-event.txt -covermode=atomic -trace=observation-evidence/geminievent.trace ./internal/geminievent || qualification_status=$?
+          go test -p 1 -v -race -coverprofile=coverage-observation.txt -covermode=atomic ./internal/notification/observation ./internal/copilotvscodeevent ./cmd/claude-notifications || qualification_status=$?
+          { head -n 1 coverage-gemini-event.txt; tail -n +2 coverage-gemini-event.txt; tail -n +2 coverage-observation.txt; } > coverage-gemini.txt
+          exit "$qualification_status"
 
       - name: Repeat Gemini channel consent and failed-marker suppression
-        run: go test -race -count=20 -run '^TestChannelConsentIndependentAndNoRetry$' ./internal/geminievent
+        id: observation_repeat
+        env:
+          AGENT_NOTIFICATIONS_OBSERVATION_DIAGNOSTICS: '1'
+        run: go test -race -count=20 -run '^TestChannelConsentIndependentAndNoRetry$' -trace=observation-evidence/geminievent-repeat.trace ./internal/geminievent
         shell: bash
+
+      - name: Preserve failed observation attempt
+        if: ${{ failure() && (steps.observation.outcome == 'failure' || steps.observation_repeat.outcome == 'failure') }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-observation-failure-go-${{ matrix.go }}
+          path: observation-evidence/
+          retention-days: 14
+          if-no-files-found: warn
 
       - name: Run remaining tests
         run: |
