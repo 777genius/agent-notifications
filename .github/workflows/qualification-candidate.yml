@@ -8,6 +8,7 @@ on:
       parent_run_id: {type: string, required: true}
       parent_artifact_id: {type: string, required: true}
       parent_sha256: {type: string, required: true}
+      parent_manifest_sha256: {type: string, required: true}
       ci_inputs_sha256: {type: string, required: true}
       harness_sha256: {type: string, required: true}
       product_checker_sha256: {type: string, required: true}
@@ -36,6 +37,7 @@ jobs:
     env:
       TEST_PRODUCT_HEAD: ${{ inputs.product_head }}
       TEST_PARENT_SHA256: ${{ inputs.parent_sha256 }}
+      TEST_PARENT_MANIFEST_SHA256: ${{ inputs.parent_manifest_sha256 }}
       TEST_CI_INPUTS_SHA256: ${{ inputs.ci_inputs_sha256 }}
       TEST_HARNESS_SHA256: ${{ inputs.harness_sha256 }}
       TEST_PRODUCT_CHECKER_SHA256: ${{ inputs.product_checker_sha256 }}
