@@ -3,6 +3,8 @@ package installruntime_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
@@ -12,6 +14,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -157,16 +160,17 @@ func treeBytes(t *testing.T, root string) map[string]string {
 // RED: exact false cannot persist through damaged shared files/runtime, changes
 // foreign ownership, or restoration/omitted repeat choices resurrect consent.
 func TestCopilotRevokeSurvivesSharedDamage(t *testing.T) {
-	damages := []string{"missing-shared", "replaced-shared", "missing-runtime", "symlink-runtime", "missing-native-tree"}
+	damages := []string{"missing-shared", "replaced-shared", "missing-runtime", "symlink-runtime", "missing-native-tree", "missing-native-native-only", "missing-native-manual-only"}
 	if runtime.GOOS == "windows" {
 		// native_path_other.go refuses staging before any candidate is allocated.
-		damages[4] = "unsupported-native-staging"
+		damages = append(damages[:4], "unsupported-native-staging")
 	}
 	for _, damage := range damages {
 		t.Run(damage, func(t *testing.T) {
 			root, runtime, b, before := registeredLocalFixture(t)
 			original := filepath.Join(runtime, "shared")
-			if damage == "missing-native-tree" || damage == "unsupported-native-staging" {
+			missingNative := strings.HasPrefix(damage, "missing-native-")
+			if missingNative || damage == "unsupported-native-staging" {
 				source := filepath.Join(filepath.Dir(root), "TEST-retained.app")
 				if err := os.MkdirAll(filepath.Join(source, "Contents", "MacOS"), 0700); err != nil {
 					t.Fatal(err)
@@ -206,7 +210,7 @@ func TestCopilotRevokeSurvivesSharedDamage(t *testing.T) {
 				if err := os.Remove(original); err != nil {
 					t.Fatal(err)
 				}
-			case "missing-native-tree":
+			case "missing-native-tree", "missing-native-native-only", "missing-native-manual-only":
 				if err := os.Rename(before.Native.Path, before.Native.Path+"-retained"); err != nil {
 					t.Fatal(err)
 				}
@@ -224,7 +228,14 @@ func TestCopilotRevokeSurvivesSharedDamage(t *testing.T) {
 					}
 				}
 			}
-			after, err := copilotvscodeinstall.RevokeChannels(localTestContext(t), b, copilotvscodeinstall.RevokeAll)
+			selection := copilotvscodeinstall.RevokeAll
+			switch damage {
+			case "missing-native-native-only":
+				selection = copilotvscodeinstall.RevokeNative
+			case "missing-native-manual-only":
+				selection = copilotvscodeinstall.RevokeManual
+			}
+			after, err := copilotvscodeinstall.RevokeChannels(localTestContext(t), b, selection)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -241,11 +252,11 @@ func TestCopilotRevokeSurvivesSharedDamage(t *testing.T) {
 			}
 			route := policy["route"].(map[string]any)
 			local := route["copilotVSCodeNotifications"].(map[string]any)
-			if local["desktop"] != false || local["webhook"] != false || local["manual"].(map[string]any)["enabled"] != false || route["sibling"].(map[string]any)["desktop"] != true || local["future"].(map[string]any)["keep"] != float64(7) || len(local["manual"].(map[string]any)["foreign"].([]any)) != 2 {
+			if local["desktop"] != (selection == copilotvscodeinstall.RevokeManual) || local["webhook"] != local["desktop"] || local["manual"].(map[string]any)["enabled"] != (selection == copilotvscodeinstall.RevokeNative) || route["sibling"].(map[string]any)["desktop"] != true || local["future"].(map[string]any)["keep"] != float64(7) || len(local["manual"].(map[string]any)["foreign"].([]any)) != 2 {
 				t.Fatal("incorrect leaf revocation/preservation")
 			}
 			// Restore the owned bytes/root; denial must survive repair and omitted choices.
-			if damage == "missing-native-tree" {
+			if missingNative {
 				if err := os.Rename(before.Native.Path+"-retained", before.Native.Path); err != nil {
 					t.Fatal(err)
 				}
@@ -276,7 +287,7 @@ func TestCopilotRevokeSurvivesSharedDamage(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !bytes.Contains(patch["route"], []byte(`"desktop":false`)) || !bytes.Contains(patch["route"], []byte(`"enabled":false`)) {
+			if !bytes.Contains(patch["route"], []byte(fmt.Sprintf(`"desktop":%t`, selection == copilotvscodeinstall.RevokeManual))) || !bytes.Contains(patch["route"], []byte(fmt.Sprintf(`"enabled":%t`, selection == copilotvscodeinstall.RevokeNative))) {
 				t.Fatal("omitted repeat revived consent")
 			}
 			gate := copilotvscodeinstall.Gate{Binding: b}
@@ -492,5 +503,168 @@ func TestCopilotRecordedConsentCannotMintPhysicalProof(t *testing.T) {
 	}
 	if calls == 0 {
 		t.Fatal("zero physical proof never reached the authority boundary")
+	}
+}
+
+// RED: an admitted false-only journal must survive equivalent control-root
+// spellings despite damaged native assets, while a foreign binding still refuses.
+func TestCopilotRevocationRecoveryControlRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("native retained staging requires a supported native platform")
+	}
+	for _, name := range []string{"trailing-slash", "darwin-alias", "wrong-control"} {
+		t.Run(name, func(t *testing.T) {
+			root, runtimeRoot, b, before := registeredLocalFixture(t)
+			recoveryRoot := root + string(filepath.Separator)
+			if name == "darwin-alias" {
+				if runtime.GOOS != "darwin" || !strings.HasPrefix(root, "/private/var/") {
+					t.Skip("fixture has no supported Darwin /var alias")
+				}
+				recoveryRoot = strings.TrimPrefix(root, "/private")
+			}
+			source := filepath.Join(filepath.Dir(root), "TEST-retained.app")
+			if err := os.MkdirAll(filepath.Join(source, "Contents", "MacOS"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(source, "Contents", "MacOS", "inert"), []byte("never executed"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			candidate, err := installruntime.StageRetainedNative(localTestContext(t), root, source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			key, consumer, _, err := b.Registration()
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, err = installruntime.Commit(localTestContext(t), installruntime.Request{ControlRoot: root, RuntimeRoot: runtimeRoot, Owner: b.Owner, ConsumerID: key, RefreshOnly: true, ExpectedGeneration: &before.Generation, Native: candidate})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(before.Native.Path, before.Native.Path+"-retained"); err != nil {
+				t.Fatal(err)
+			}
+			snapshot, err := installruntime.ReadRevocationSnapshot(localTestContext(t), root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			crash := fmt.Errorf("transaction crash")
+			revoke := installruntime.Request{ControlRoot: root, RuntimeRoot: runtimeRoot, Owner: b.Owner, ConsumerID: key, Consumer: consumer, PolicyOnly: true, RefreshOnly: true, RevokeCopilotVSCode: true, ExpectedGeneration: &snapshot.Generation, ExpectedPolicy: &snapshot.Preimage,
+				PolicyFields: map[string]json.RawMessage{"route": json.RawMessage(`{"copilotVSCodeNotifications":{"desktop":false,"webhook":false}}`)},
+				Fault: func(phase string) error {
+					if phase == "transaction" {
+						return crash
+					}
+					return nil
+				}}
+			if name != "wrong-control" {
+				alternate := revoke
+				alternate.ControlRoot, alternate.Fault = recoveryRoot, nil
+				untouched := treeBytes(t, filepath.Dir(root))
+				if _, err := installruntime.Commit(localTestContext(t), alternate); err == nil {
+					t.Fatal("initial revoke admitted a different binding spelling")
+				}
+				if !reflect.DeepEqual(untouched, treeBytes(t, filepath.Dir(root))) {
+					t.Fatal("refused initial revoke changed control state")
+				}
+			}
+			_, err = installruntime.Commit(localTestContext(t), revoke)
+			if err != crash {
+				t.Fatalf("expected durable transaction interruption, got %v", err)
+			}
+			marker := filepath.Join(root, "transaction.json")
+			if name == "wrong-control" {
+				// Keep registration, journal and live ledger mutually consistent:
+				// only the binding's control identity is foreign.
+				b.ControlRoot = filepath.Join(filepath.Dir(root), "TEST-other-control")
+				b.GlobalConfig = filepath.Join(b.ControlRoot, "agent-notifications.json")
+				wrongKey, wrongConsumer, _, err := b.Registration()
+				if err != nil {
+					t.Fatal(err)
+				}
+				var envelope struct {
+					SHA256      string
+					Transaction json.RawMessage
+				}
+				data, err := os.ReadFile(marker)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := json.Unmarshal(data, &envelope); err != nil {
+					t.Fatal(err)
+				}
+				var journal map[string]json.RawMessage
+				if err := json.Unmarshal(envelope.Transaction, &journal); err != nil {
+					t.Fatal(err)
+				}
+				for _, state := range []string{"Before", "After"} {
+					var ledger installruntime.Ledger
+					if err := json.Unmarshal(journal[state], &ledger); err != nil {
+						t.Fatal(err)
+					}
+					delete(ledger.Consumers, key)
+					ledger.Consumers[wrongKey] = wrongConsumer
+					journal[state], err = json.Marshal(ledger)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if state == "Before" {
+						if err := os.WriteFile(filepath.Join(root, "ownership.json"), journal[state], 0600); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				envelope.Transaction, err = json.Marshal(journal)
+				if err != nil {
+					t.Fatal(err)
+				}
+				sum := sha256.Sum256(envelope.Transaction)
+				envelope.SHA256 = hex.EncodeToString(sum[:])
+				data, err = json.Marshal(envelope)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(marker, data, 0600); err != nil {
+					t.Fatal(err)
+				}
+				untouched := treeBytes(t, filepath.Dir(root))
+				if _, err := installruntime.Commit(localTestContext(t), installruntime.Request{ControlRoot: recoveryRoot, RecoverOnly: true}); err == nil {
+					t.Fatal("recovery accepted a foreign control binding")
+				}
+				if !reflect.DeepEqual(untouched, treeBytes(t, filepath.Dir(root))) {
+					t.Fatal("refused recovery changed control state")
+				}
+				return
+			}
+			after, err := installruntime.Commit(localTestContext(t), installruntime.Request{ControlRoot: recoveryRoot, RecoverOnly: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(before.Native, after.Native) {
+				t.Fatal("recovery changed retained native record")
+			}
+			if _, err := os.Lstat(marker); !os.IsNotExist(err) {
+				t.Fatalf("recovery retained journal: %v", err)
+			}
+			data, err := os.ReadFile(filepath.Join(root, "agent-notifications.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var policy struct {
+				Enabled bool
+				Route   struct {
+					Local struct {
+						Desktop, Webhook bool
+						Manual           struct{ Enabled bool }
+					} `json:"copilotVSCodeNotifications"`
+				}
+			}
+			if err := json.Unmarshal(data, &policy); err != nil {
+				t.Fatal(err)
+			}
+			if !policy.Enabled || policy.Route.Local.Desktop || policy.Route.Local.Webhook || !policy.Route.Local.Manual.Enabled {
+				t.Fatal("recovery failed to persist only native false policy")
+			}
+		})
 	}
 }
