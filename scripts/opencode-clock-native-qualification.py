@@ -480,6 +480,10 @@ def run_version(root, version, args, helper, helper_sha, manifest_sha, ownership
     module = plugin_dir / 'clock-qualification.js'
     shutil.copyfile(HERE / 'opencode-clock-native-qualification.mjs', module); module.chmod(0o600)
     v2 = version == '2.0.21'
+    diagnostic = getattr(args, 'darwin_v2_final_custody_diagnostic', False) is True and v2
+    def custody_timing(stage):
+        report.setdefault('finalCustodyTiming', []).append({'stage': stage,
+            'operationElapsedMs': round((time.monotonic() - (deadline - 2)) * 1000, 3)})
     metadata = {'executable': str(exe), 'imageSha256': sha(exe), 'parentPID': os.getpid(),
                 'platform': 'win32' if args.os == 'windows' else args.os, 'arch': 'x64' if args.arch == 'amd64' else 'arm64',
                 'moduleSha256': sha(module), 'bun': VERSIONS[version][1], 'branch': 'v2' if v2 else 'v1',
@@ -573,9 +577,11 @@ def run_version(root, version, args, helper, helper_sha, manifest_sha, ownership
         mandatory = {'canonicalHelper', 'goDomainBootKind', 'integerRoundtrip', 'pairWidth', 'nativeBracket', 'causalOverlap', 'wallContinuity', 'monotonicNonregression'}
         mandatory |= {'procfs', 'nsfs', 'bigintFs', 'bootGrammar', 'currentThreadDomain', 'currentCallingThread'} if args.os == 'linux' else {'machTimebaseAndSysctl'} if args.os == 'darwin' else {'system32ApiSet', 'ntBootExact32', 'voidUnsigned100ns', 'goPreciseWallContained'}
         failure_phase(report, 'final_checks')
+        if diagnostic: custody_timing('final_checks_before')
         need(all(result.get('checks', {}).get(k) is True for k in mandatory) and
              ownership.started - before_calls == ownership.closed - before_closes == 3 and
              sha(exe) == report['imageSha256'] and sha(copied_helper) == helper_sha and sha(module) == metadata['moduleSha256'] and not host['overflow'] and not host['pipeError'], 'native_checks_or_actual_close_incomplete')
+        if diagnostic: custody_timing('final_checks_after')
         failure_phase(report, 'bounds')
         bounds = result.get('aggregate', {})
         need(set(bounds) == {'maxPairWidthNs', 'maxOuterWidthNs', 'maxGoWidthNs', 'maxDatePreciseDistanceNs', 'preciseComparisons'}, 'closed_safe_bounds_required')
@@ -587,7 +593,9 @@ def run_version(root, version, args, helper, helper_sha, manifest_sha, ownership
         if args.os == 'windows':
             need(all(type(result['checks'].get(k)) is bool for k in ('dateInsidePreciseInterval', 'dateWithinTwoMsOfPrecise')), 'actual_date_precise_predicates_required')
         failure_phase(report, 'final_live_image')
+        if diagnostic: custody_timing('final_live_image_before')
         live_image(host['p'], exe)
+        if diagnostic: custody_timing('final_live_image_after')
         need(time.monotonic() < deadline, 'qualification_operation_deadline')
         failure_phase(report, 'projection')
         # Closed safe projection; raw loader/image paths, UUIDs and all clocks remain private.
@@ -625,6 +633,7 @@ def main():
     parser.add_argument('--source-manifest', type=Path, default=INPUTS)
     parser.add_argument('--report', type=Path)
     parser.add_argument('--temp-base', type=Path, default=Path(tempfile.gettempdir()))
+    parser.add_argument('--darwin-v2-final-custody-diagnostic', action='store_true')
     parser.add_argument('--prepare-check', action='store_true', help='private-directory/environment lifecycle only; no host/helper/build/fetch')
     args = parser.parse_args(); os.umask(0o077)
     if args.prepare_check:
@@ -638,6 +647,8 @@ def main():
     need(args.os and args.arch and args.source_manifest and args.report, 'run_arguments_required')
     need(args.os == sys_platform() and args.arch == {'x86_64': 'amd64', 'AMD64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64'}.get(platform.machine()) and
          (args.os, args.arch) in [('linux', 'amd64'), ('linux', 'arm64'), ('darwin', 'amd64'), ('darwin', 'arm64'), ('windows', 'amd64')], 'actual_native_cell_required')
+    need(not args.darwin_v2_final_custody_diagnostic or (args.os, args.arch) == ('darwin', 'amd64'),
+         'closed_darwin_v2_custody_diagnostic')
     root = private_root(args.temp_base); ownership = Owned()
     report = {'schema': 1, 'purpose': 'native_clock_api_prequalification', 'status': 'preparation_gap',
               'platform': args.os, 'arch': args.arch, 'productionClockModuleBound': False, 'timePolicyQualified': False,
@@ -645,6 +656,8 @@ def main():
               'modelCalls': 0, 'businessCalls': 0, 'sessionCreates': 0, 'suspendExperiments': 0,
               'osIdentitySha256': hashlib.sha256(json.dumps([platform.system(), platform.release(), platform.version(), platform.machine()]).encode()).hexdigest(),
               'harnessSha256': sha(__file__), 'moduleSha256': sha(HERE / 'opencode-clock-native-qualification.mjs'), 'versions': []}
+    if args.darwin_v2_final_custody_diagnostic:
+        report.update(purpose='darwin_v2_final_custody_timing_diagnostic', diagnosticOnly=True)
     try:
         manifest_sha, bindings, identities = source_manifest(args.source_manifest, root)
         report.update(sourceManifestSha256=manifest_sha, sourceImplementationHashes=bindings,
@@ -672,7 +685,7 @@ def main():
                       buildEnvironment={'CGO_ENABLED': '1'},
                       sourceHashes={str(p.relative_to(REPO)): sha(p) for p in source_paths}, buildCommand=['go', 'build', '-trimpath', '-buildvcs=true', './cmd/claude-notifications'])
         prepared = []
-        for version in VERSIONS:
+        for version in (['2.0.21'] if args.darwin_v2_final_custody_diagnostic else VERSIONS):
             cell_root = root / ('TEST-' + version); cell_root.mkdir(mode=0o700)
             item = {'version': version, 'status': 'qualification_gap'}; report['versions'].append(item)
             exe = official_image(cell_root, version, args.os, args.arch, item, identities)

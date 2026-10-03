@@ -11,6 +11,11 @@ on:
       - 'CLOCK-MATRIX-PORTS.md'
   workflow_dispatch:
     inputs:
+      darwin_v2_final_custody_diagnostic:
+        description: TEST only, single Darwin amd64 stock V2 numeric final custody timings, no grants
+        required: false
+        type: boolean
+        default: false
       source_manifest_json:
         description: Optional identical closed primary inputs JSON (defaults to checked-in manifest)
         required: false
@@ -26,13 +31,7 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - { runner: ubuntu-22.04, platform: linux, arch: amd64 }
-          - { runner: ubuntu-22.04-arm, platform: linux, arch: arm64 }
-          - { runner: macos-15-intel, platform: darwin, arch: amd64 }
-          - { runner: macos-15, platform: darwin, arch: arm64 }
-          - { runner: windows-latest, platform: windows, arch: amd64 }
+      matrix: ${{ fromJSON(inputs.darwin_v2_final_custody_diagnostic && '{"include":[{"runner":"macos-15-intel","platform":"darwin","arch":"amd64"}]}' || '{"include":[{"runner":"ubuntu-22.04","platform":"linux","arch":"amd64"},{"runner":"ubuntu-22.04-arm","platform":"linux","arch":"arm64"},{"runner":"macos-15-intel","platform":"darwin","arch":"amd64"},{"runner":"macos-15","platform":"darwin","arch":"arm64"},{"runner":"windows-latest","platform":"windows","arch":"amd64"}]}') }}
     steps:
       - name: Checkout exact workflow candidate
         uses: actions/checkout@v7
@@ -74,6 +73,7 @@ jobs:
           CLOCK_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
           CLOCK_PLATFORM: ${{ matrix.platform }}
           CLOCK_ARCH: ${{ matrix.arch }}
+          DARWIN_V2_CUSTODY_DIAGNOSTIC: ${{ inputs.darwin_v2_final_custody_diagnostic || false }}
         run: |
           set -euo pipefail
           launcher=("$(command -v python)" scripts/opencode-clock-native-qualification.py \
@@ -81,6 +81,9 @@ jobs:
             --temp-base "$RUNNER_TEMP" \
             --source-manifest "$RUNNER_TEMP/clock-source-manifest.json" \
             --report "$RUNNER_TEMP/clock-safe-evidence.json")
+          if [[ "$DARWIN_V2_CUSTODY_DIAGNOSTIC" == true ]]; then
+            launcher+=(--darwin-v2-final-custody-diagnostic)
+          fi
           if [[ "$CLOCK_PLATFORM" == linux ]]; then
             sudo --preserve-env=PATH,GH_TOKEN,CLOCK_SOURCE_COMMIT "${launcher[@]}"
           else
@@ -97,7 +100,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: clock-api-${{ matrix.platform }}-${{ matrix.arch }}
+          name: clock-api-${{ matrix.platform }}-${{ matrix.arch }}${{ inputs.darwin_v2_final_custody_diagnostic && '-final-custody-diagnostic' || '' }}
           path: ${{ runner.temp }}/clock-safe-evidence.json
           if-no-files-found: warn
           retention-days: 14
