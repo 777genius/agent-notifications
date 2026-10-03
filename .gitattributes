@@ -28,3 +28,8 @@
 *.jpeg binary
 *.ico binary
 *.exe binary
+
+# Exact-byte TEST reader capsule and source custody across Windows checkout.
+scripts/testdata/opencode-reader-prequalification/** text eol=lf
+scripts/testdata/opencode-reader-prequalification/capsule.tar -text
+scripts/testdata/opencode-reader-prequalification/retained/sdk.tgz -text

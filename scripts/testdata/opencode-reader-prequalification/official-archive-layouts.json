@@ -1,0 +1,76 @@
+{
+  "archives": {
+    "046c0e0e8eec8f6085d46c0eca29ece65fb00e21df0881c81cbcf7392458b1d2": {
+      "archiveBytes": 89243766,
+      "members": {
+        "package/bin/opencode": 199936296,
+        "package/package.json": 240
+      }
+    },
+    "06db2c0a75138b1c4637431fde2023372756d0ce9588a1095f05addc67a07fad": {
+      "archiveBytes": 92690551,
+      "members": {
+        "package/bin/opencode.exe": 206958472,
+        "package/package.json": 238
+      }
+    },
+    "149a676b59224b196626abda2fdbd34c8329ac326b57c4891ba3de446f3ca3c1": {
+      "archiveBytes": 60275143,
+      "members": {
+        "package/bin/opencode": 185354368,
+        "package/package.json": 138
+      }
+    },
+    "196d0caf1c0553fcd12ef15ff14439ea7e6bc7a4e87ea5238bcb57bbe6e54b93": {
+      "archiveBytes": 60060899,
+      "members": {
+        "package/bin/opencode": 184854672,
+        "package/package.json": 142
+      }
+    },
+    "51f2d53efd10d127d9c97ce3f7d15c584bdb25b7b69a79d0b2f4307d7a6140f8": {
+      "archiveBytes": 77699256,
+      "members": {
+        "package/bin/opencode": 180079664,
+        "package/package.json": 242
+      }
+    },
+    "57db421ab689d6831178c84736ba1e667c9c27627866849a114fa57afbc81785": {
+      "archiveBytes": 90441783,
+      "members": {
+        "package/bin/opencode": 204256736,
+        "package/package.json": 236
+      }
+    },
+    "960a9005eb49b5ffc300ccc2039280b20fc2a5252434d5c9794d726460825deb": {
+      "archiveBytes": 82684632,
+      "members": {
+        "package/bin/opencode": 191786256,
+        "package/package.json": 238
+      }
+    },
+    "cd2c704ad653137b62992bca2b32383f8daa31b3c9462e566278e1efba07b31d": {
+      "archiveBytes": 46045337,
+      "members": {
+        "package/bin/opencode": 144800738,
+        "package/package.json": 144
+      }
+    },
+    "e23cf36d4db46214dbf947b7b78bac63d2f0a9e6e987c5d6e47c573d8bb6ff32": {
+      "archiveBytes": 48221422,
+      "members": {
+        "package/bin/opencode": 150274128,
+        "package/package.json": 140
+      }
+    },
+    "fc76bd4a0f258027594f6a8900e220fd06f7345cb5e67f73dc3b4f53ba3f580e": {
+      "archiveBytes": 60196031,
+      "members": {
+        "package/bin/opencode.exe": 180320648,
+        "package/package.json": 140
+      }
+    }
+  },
+  "metadataSourceSHA256": "e8195e80d3366ce96d21a8c14959e8034d0be834f76e3734cfe716c373f36f43",
+  "purpose": "Closed official archive layout only, no runtime grant"
+}

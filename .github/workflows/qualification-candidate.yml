@@ -1,6 +1,13 @@
-name: Packaged OpenCode seven native reader witnesses
+name: Packaged OpenCode bounded reader continuation
 on:
   workflow_dispatch:
+    inputs:
+      plan:
+        description: 'five-undemonstrated plans two TEST mock transactions; Darwin V1 API diagnostics plan zero'
+        required: true
+        default: five-undemonstrated
+        type: choice
+        options: [five-undemonstrated, darwin-v1-api-diagnostics]
 permissions:
   contents: read
 jobs:
@@ -11,20 +18,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { runner: ubuntu-22.04-arm, os: linux, arch: arm64, version: '1.18.33', mode: one-completion }
-          - { runner: ubuntu-22.04-arm, os: linux, arch: arm64, version: '2.0.21', mode: api-only }
-          - { runner: macos-15-intel, os: darwin, arch: amd64, version: '1.18.33', mode: one-completion }
-          - { runner: macos-15-intel, os: darwin, arch: amd64, version: '2.0.21', mode: api-only }
-          - { runner: macos-15, os: darwin, arch: arm64, version: '1.18.33', mode: one-completion }
-          - { runner: macos-15, os: darwin, arch: arm64, version: '2.0.21', mode: api-only }
-          - { runner: windows-latest, os: windows, arch: amd64, version: '1.18.33', mode: one-completion }
+        include: ${{ fromJSON(inputs.plan == 'darwin-v1-api-diagnostics' && '[{"runner":"macos-15-intel","os":"darwin","arch":"amd64","version":"1.18.33","mode":"api-only"},{"runner":"macos-15","os":"darwin","arch":"arm64","version":"1.18.33","mode":"api-only"}]' || '[{"runner":"ubuntu-22.04-arm","os":"linux","arch":"arm64","version":"1.18.33","mode":"one-completion"},{"runner":"ubuntu-22.04-arm","os":"linux","arch":"arm64","version":"2.0.21","mode":"api-only"},{"runner":"macos-15-intel","os":"darwin","arch":"amd64","version":"2.0.21","mode":"api-only"},{"runner":"macos-15","os":"darwin","arch":"arm64","version":"2.0.21","mode":"api-only"},{"runner":"windows-latest","os":"windows","arch":"amd64","version":"1.18.33","mode":"one-completion"}]') }}
     env:
       CELL_OS: ${{ matrix.os }}
       CELL_ARCH: ${{ matrix.arch }}
       CELL_VERSION: ${{ matrix.version }}
       CELL_MODE: ${{ matrix.mode }}
     steps:
+      - name: Fail closed on unknown observation plan
+        shell: bash
+        env:
+          PLAN_NAME: ${{ inputs.plan }}
+        run: |
+          case "$PLAN_NAME" in
+            five-undemonstrated|darwin-v1-api-diagnostics) ;;
+            *) echo 'Unknown observation plan refused' >&2; exit 1 ;;
+          esac
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}

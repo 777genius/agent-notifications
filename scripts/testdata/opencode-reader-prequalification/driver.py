@@ -4,6 +4,7 @@ from http.server import BaseHTTPRequestHandler
 P=pathlib.Path;HERE=P(__file__).resolve().parent
 sys.path.insert(0,str(HERE/'retained'))
 from provider import Provider,ProviderHandler
+HTTP_DIAGNOSTICS={};CURRENT_STAGE='not_started'
 FLAGS={'productionQualified':False,'installedQualified':False,'timePolicyQualified':False,'sourceEpochQualified':False,'finalSpanQualified':False,'platformLifetimeQualified':False,'loadedMappedBytesQualified':False}
 def need(v,c):
  if not v:raise ValueError(c)
@@ -19,6 +20,7 @@ class DeadlineSocket(socket.socket):
  def recv(self,*a,**k):self.settimeout(remaining(self.end));return super().recv(*a,**k)
  def recv_into(self,*a,**k):self.settimeout(remaining(self.end));return super().recv_into(*a,**k)
 def request(port,project,path,headers,v2,payload=None,method=None,timeout=2,startup=False):
+ receipt=HTTP_DIAGNOSTICS.setdefault(CURRENT_STAGE,{'attempts':0,'lastStatus':None});receipt['attempts']+=1;receipt['lastStatus']=None
  end=time.monotonic()+timeout;raw=socket.create_connection(('127.0.0.1',port),timeout=remaining(end))
  sock=DeadlineSocket(fileno=raw.detach());sock.end=end;remaining(end)
  conn=http.client.HTTPConnection('127.0.0.1',port,timeout=remaining(end));conn.sock=sock
@@ -26,7 +28,7 @@ def request(port,project,path,headers,v2,payload=None,method=None,timeout=2,star
  try:
   body=json.dumps(payload).encode() if payload is not None else None
   sock.settimeout(remaining(end));conn.request(method or ('POST' if body is not None else 'GET'),path,body,{'Content-Type':'application/json',**headers})
-  sock.settimeout(remaining(end));resp=conn.getresponse();data=resp.read(1048577);remaining(end)
+  sock.settimeout(remaining(end));resp=conn.getresponse();receipt['lastStatus']=resp.status;data=resp.read(1048577);remaining(end)
   if startup and resp.status==503:raise ConnectionError('owned_native_starting_503')
   need(200<=resp.status<300 and len(data)<=1048576,'native_HTTP_response')
   value=json.loads(data) if data else None;return value.get('data',value) if isinstance(value,dict) else value
@@ -55,16 +57,26 @@ def private_windows(root):
 def unpack(archive,root,pin,os_name,arch):
  need(sha(archive)==pin['archiveSHA256'],'official_archive_SHA');raw=archive.read_bytes();alg,b64=pin['archiveSRI'].split('-',1)
  need(alg=='sha512' and base64.b64encode(hashlib.sha512(raw).digest()).decode()==b64,'SRI_before_parse')
+ layouts=HERE/'official-archive-layouts.json';need(sha(layouts)=='e1e76b888788ca7e4fe4376ac9e657fea21ca58ed8b2c963e2290ac207cf3977','closed_archive_layout_source')
+ layout=json.loads(layouts.read_text())['archives'][pin['archiveSHA256']];need(archive.stat().st_size==layout['archiveBytes'],'exact_official_archive_bytes')
+ name='package/bin/'+('opencode.exe' if os_name=='windows' else 'opencode');expected=layout['members'];need(set(expected)=={'package/package.json',name},'exact_two_official_members')
  with tarfile.open(archive,'r:gz') as t:
-  members=t.getmembers();need(len(members)<=24 and sum(m.size for m in members)<=160*1024*1024,'bounded_archive')
-  bins=[m for m in members if m.isfile() and m.name in ['package/bin/opencode','package/bin/opencode.exe']];need(len(bins)==1,'one_regular_stock_image')
-  m=bins[0];need(m.size<150*1024*1024 and not any(x.islnk() or x.issym() for x in members),'no_archive_alias')
-  target=root/('opencode.exe' if os_name=='windows' else 'opencode');data=t.extractfile(m).read();need(hashlib.sha256(data).hexdigest()==pin['executableSHA256'],'official_image_SHA')
-  if os_name=='linux':need(data[:4]==b'\x7fELF' and struct.unpack('<H',data[18:20])[0]==(62 if arch=='amd64' else 183),'ELF_arch')
-  elif os_name=='darwin':need(data[:4]==b'\xcf\xfa\xed\xfe' and struct.unpack('<I',data[4:8])[0]==(0x1000007 if arch=='amd64' else 0x100000c),'MachO_arch')
-  else:
-   off=struct.unpack('<I',data[60:64])[0];need(data[:2]==b'MZ' and data[off:off+4]==b'PE\0\0' and struct.unpack('<H',data[off+4:off+6])[0]==0x8664,'PE_arch')
-  target.write_bytes(data);target.chmod(0o700);return target
+  members=t.getmembers();need(len(members)==len(expected) and len({m.name for m in members})==len(expected) and all(m.isfile() and m.name in expected and m.size==expected[m.name] for m in members),'exact_bounded_official_archive_layout')
+  m=next(m for m in members if m.name==name);need(m.size>0,'positive_exact_image_bytes');target=root/('opencode.exe' if os_name=='windows' else 'opencode');imageHash=hashlib.sha256()
+  with t.extractfile(m) as source,target.open('xb') as out:
+   left=m.size
+   while left:
+    block=source.read(min(left,1024*1024));need(block and len(block)<=left,'exact_bounded_image_read');out.write(block);imageHash.update(block);left-=len(block)
+   need(source.read(1)==b'','exact_image_EOF')
+  need(imageHash.hexdigest()==pin['executableSHA256'],'official_image_SHA')
+  with target.open('rb') as image:
+   data=image.read(64)
+   if os_name=='linux':need(data[:4]==b'\x7fELF' and struct.unpack('<H',data[18:20])[0]==(62 if arch=='amd64' else 183),'ELF_arch')
+   elif os_name=='darwin':need(data[:4]==b'\xcf\xfa\xed\xfe' and struct.unpack('<I',data[4:8])[0]==(0x1000007 if arch=='amd64' else 0x100000c),'MachO_arch')
+   else:
+    off=struct.unpack('<I',data[60:64])[0];need(data[:2]==b'MZ' and off+6<=m.size,'bounded_PE_header');image.seek(off);pe=image.read(6);need(pe[:4]==b'PE\0\0' and struct.unpack('<H',pe[4:6])[0]==0x8664,'PE_arch')
+  target.chmod(0o700);return target
+
 def wait_file(path,end,proc):
  while True:
   need(proc.poll() is None,'owned_host_ended_before_reader');remaining(end)
@@ -81,6 +93,11 @@ def independent_v1_fact(root,key,sid,history):
  p=fact['provenance'];need(p['generation']=='v1' and p['timeBasis']=='assistant_completed' and p['nativeTime']==a['time']['completed'],'original_native_time_no_restamp')
  need(any(r['kind']=='native-v1' and r['value'].get('type')=='message.updated' and r['value'].get('properties',{}).get('info',{}).get('id')==H(a['id']) and r['value']['properties']['info'].get('time',{}).get('completed')==a['time']['completed'] for r in rows),'independent_final_callback')
 def main(a):
+ global CURRENT_STAGE
+ HTTP_DIAGNOSTICS.clear()
+ def stage(value):
+  global CURRENT_STAGE
+  CURRENT_STAGE=value
  actual_os={'Linux':'linux','Darwin':'darwin','Windows':'windows'}[platform.system()];actual_arch={'x86_64':'amd64','AMD64':'amd64','arm64':'arm64','aarch64':'arm64'}[platform.machine()]
  need((a.os,a.arch)==(actual_os,actual_arch),'native_runner_cell');need(a.version in ['1.18.33','2.0.21'] and a.mode in ['api-only','one-completion'],'closed_scope')
  need(a.version=='1.18.33' or a.mode=='api-only','completion_fallback_V1_only')
@@ -93,7 +110,7 @@ def main(a):
  need(all(build['sourceLeafSHA256'].get(n)==sha(HERE/n) for n in ['consumer.mjs','candidate/native-v1.mjs','candidate/native-v2.mjs','candidate/protocol.mjs','retained/sdk.tgz','retained/pack-receipt.json']),'exact_compiled_source_graph')
  pins=HERE/'official-host-pins.json';need(sha(pins)=='59368f673e651f00e8a4d0a675365ba15f0752eacabc3e2ea68a2e91cf6b166f','official_closed_cell_pins')
  pin=next(x for x in json.loads(pins.read_text())['cells'] if (x['os'],x['arch'],x['version'])==(a.os,a.arch,a.version))
- fixed={str(x):sha(x) for x in [a.archive,a.bundle,a.build_receipt,pins,P(__file__),HERE/'retained/provider.py']}
+ fixed={str(x):sha(x) for x in [a.archive,a.bundle,a.build_receipt,pins,HERE/'official-archive-layouts.json',P(__file__),HERE/'retained/provider.py']}
  os.umask(0o077);root.mkdir(mode=0o700)
  if a.os=='windows':private_windows(root)
  project=root/'project';project.mkdir(mode=0o700);host=unpack(a.archive,root,pin,a.os,a.arch);e=env(root);key=secrets.token_bytes(32);(root/'trace-key').write_bytes(key)
@@ -102,6 +119,7 @@ def main(a):
  provider=Provider(root,key);provider.mode=a.mode;provider.http_attempts=0;provider.RequestHandlerClass=CountedProvider
  worker=threading.Thread(target=provider.serve_forever);worker.start();proc=None;log=None;headers={};v2=a.version=='2.0.21';success=False
  result={'status':'unqualified','cell':{'os':a.os,'arch':a.arch,'version':a.version},'mode':a.mode,'plannedProviderTransactions':1 if a.mode=='one-completion' else 0,'packagedReaderTransportObserved':False,'factoryFinalizationObserved':False,'sourceDescriptorGranted':False,**FLAGS}
+ stage('configured_loader_preparation')
  try:
   plug=root/'reader.js';shutil.copyfile(a.bundle,plug)
   models={'p0-completion':{'name':'TEST completion','limit':{'context':128000,'output':8192}}};endpoint=f'http://127.0.0.1:{provider.server_port}/v1'
@@ -113,22 +131,29 @@ def main(a):
   else:config.update(plugin=[[plug.resolve().as_uri(),{}]],permission={'*':'deny'},provider={'p0':{'npm':'@ai-sdk/openai-compatible','name':'TEST loopback','options':{'baseURL':endpoint,'apiKey':'sandbox-only'},'models':models}})
   write(project/'opencode.json',config);e['OPENCODE_CONFIG']=str(project/'opencode.json')
   with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
+  stage('owned_host_spawn')
   log=(root/'host-private.log').open('xb');proc=subprocess.Popen([str(host),'serve','--hostname','127.0.0.1','--port',str(port)],cwd=project,env=e,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=(a.os!='windows'))
-  startup=time.monotonic()+35
+  stage('owned_host_health');startup=time.monotonic()+35
   while True:
    need(proc.poll() is None,'host_startup_closed');remaining(startup)
    try:
     info=request(port,project,'/api/info' if v2 else '/global/health',headers,v2,timeout=min(1,remaining(startup)),startup=True);need(info['version']==a.version and (info.get('pid')==proc.pid if v2 else info.get('healthy') is True),'actual_host_identity');break
    except (ConnectionError,TimeoutError,OSError):time.sleep(min(.05,remaining(startup)))
+  stage('native_project_activation')
   request(port,project,'/api/plugin' if v2 else '/config',headers,v2)
+  stage('native_reader_readiness')
   ready=wait_file(root/'reader-ready.json',time.monotonic()+6,proc);need(ready['version']==a.version and ready['nativePID']==proc.pid and ready['parentPID']==os.getpid() and P(ready['actualExecPath']).resolve()==host.resolve() and ready['ownedImageSHA256']==pin['executableSHA256'],'actual_native_loader_image_scope')
   if v2:need(ready['firstReaderClosureObserved'] is True and ready['actualAbortRequested'] is True,'actual_first_reader_abort_ready_witness')
   if not v2:
+   stage('native_owned_session_create')
    sid=request(port,project,'/session',headers,False,{'title':'TEST reader owned'})['id'];enc=urllib.parse.quote(sid,safe='')
-   if a.mode=='api-only':request(port,project,'/session/'+enc,headers,False,{'title':'TEST empty reader'},'PATCH');request(port,project,'/session/'+enc,headers,False,method='DELETE')
+   if a.mode=='api-only':
+    stage('native_empty_session_callbacks');request(port,project,'/session/'+enc,headers,False,{'title':'TEST empty reader'},'PATCH');request(port,project,'/session/'+enc,headers,False,method='DELETE')
    else:
-    request(port,project,'/session/'+enc+'/message',headers,False,{'model':{'providerID':'p0','modelID':'p0-completion'},'parts':[{'type':'text','text':'Reply with one short TEST completion.'}]},timeout=35)
+    stage('native_one_completion');request(port,project,'/session/'+enc+'/message',headers,False,{'model':{'providerID':'p0','modelID':'p0-completion'},'parts':[{'type':'text','text':'Reply with one short TEST completion.'}]},timeout=35)
+  stage('native_reader_disposal')
   closed=wait_file(root/'reader-closed.json',time.monotonic()+6,proc);need(closed['actualSDKDispose'] and closed['ownedImageSHA256']==pin['executableSHA256'],'actual_factory_dispose')
+  stage('independent_reader_oracle')
   rows=[json.loads(x) for x in (root/'reader-private.jsonl').read_text().splitlines()];need(len(rows)<=512 and (root/'reader-private.jsonl').stat().st_size<=1048576 and not any(x['kind']=='uncertainty' for x in rows),'bounded_certain_real_ingress')
   if v2:
    need(closed['actualSDKDone'] and closed['subscriptions']==closed['actualNativeReaderClosures']==closed['registrations']==closed['actualRegistrationDisposals']==2 and closed['markerReads']==2 and closed['sdkFacts']==0,'two_actual_readers_RPC_markers_and_closures')
@@ -142,17 +167,25 @@ def main(a):
     H=lambda x:'h:'+hmac.new(key,str(x).encode(),hashlib.sha256).hexdigest()[:24]
     matching=[x['value'] for x in rows if x['kind']=='native-v1' and x['value'].get('properties',{}).get('info',{}).get('id')==H(sid)]
     need({'session.created','session.updated','session.deleted'}<={x['type'] for x in matching} and closed['sdkFacts']==0,'actual_empty_session_callback_membership')
-   else:independent_v1_fact(root,key,sid,request(port,project,'/session/'+enc+'/message',headers,False));result['factoryFinalizationObserved']=True
+   else:
+    stage('independent_native_history');independent_v1_fact(root,key,sid,request(port,project,'/session/'+enc+'/message',headers,False));result['factoryFinalizationObserved']=True
   need(provider.http_attempts==(1 if a.mode=='one-completion' else 0) and len(provider.records)==provider.http_attempts and not provider.gaps,'explicit_exact_provider_budget_no_retry')
   result.update(packagedReaderTransportObserved=True,ownedImageSHA256=pin['executableSHA256'],bundleSHA256=a.bundle_sha256,traceSHA256=sha(root/'reader-private.jsonl'),closedReceiptSHA256=sha(root/'reader-closed.json'));success=True
- except Exception as error:result['failure']=type(error).__name__+': '+str(error)
+ except Exception as error:
+  result['firstFailedStage']=CURRENT_STAGE;result['exceptionKind']=type(error).__name__;result['failure']=type(error).__name__
+  write(root/'first-exception-private.json',{'stage':CURRENT_STAGE,'kind':type(error).__name__,'message':str(error)[:512]})
  finally:
   if proc is not None and proc.poll() is None:
    proc.terminate();result['ownedHostStopRequested']=True
    try:proc.wait(timeout=6)
    except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=2);result['hostForcedKillUsed']=True;success=False
   result['ownedLeaderWaitObserved']=proc is not None and proc.poll() is not None;result['hostProcessTreeClosure']='unproved_portable_leader_only'
-  if log is not None:log.close()
+  if log is not None:
+   log.close();hp=root/'host-private.log';size=hp.stat().st_size;result['hostPrivateLogSHA256']=sha(hp);result['hostPrivateLogBytes']=size
+   with hp.open('rb') as source,(root/'host-startup-prefix-private.log').open('xb') as dest:dest.write(source.read(65536))
+   result['hostStartupPrefixBytes']=min(size,65536);result['hostStartupPrefixTruncated']=size>65536
+   if size>1048576:result['hostPrivateLogOverflow']=True;success=False
+  result['ownHTTPDiagnostics']={k:dict(v) for k,v in HTTP_DIAGNOSTICS.items()}
   provider.shutdown();provider.server_close();worker.join(timeout=3);result['providerThreadJoined']=not worker.is_alive()
   result['actualProviderHTTPRequestAttempts']=provider.http_attempts;result['actualProviderTransactions']=len(provider.records);result['actualToolCalls']=0 if not provider.records or all(x.get('requestKind')=='ordinary' for x in provider.records) else None
   result['sourcesArchiveBundleUnchanged']=all(sha(P(n))==h for n,h in fixed.items()) and sha(host)==pin['executableSHA256']

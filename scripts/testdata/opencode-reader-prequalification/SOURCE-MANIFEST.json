@@ -1,12 +1,15 @@
 {
   "changedOriginalLeaves": [
-    "consumer.mjs",
     "driver.py"
   ],
   "defaultMode": "api-only",
   "executionPerformed": false,
   "explicitV1CompletionFallbackTransactionsPerCell": 1,
   "files": {
+    "ARCHIVE-PREFLIGHT-RUN.md": {
+      "bytes": 947,
+      "sha256": "21ddc727098710f76f1f60bb779862b7bf3f91955d9b320443dd10b3bf0cfe1e"
+    },
     "R1-R2-REVIEW-DELTA.md": {
       "bytes": 1864,
       "sha256": "12bed0d103ca9d68d83cbee331484bdada58275195a75fb9690fa37fd371374b"
@@ -15,9 +18,21 @@
       "bytes": 3534,
       "sha256": "7d1e9c54f558ee8fc65a9712b993bd228e84266fbd368caea3a3c6e658717066"
     },
+    "R2-R3-CAUSE.md": {
+      "bytes": 3329,
+      "sha256": "7fa032cb73f134330428959995458a69e50d27ae137bc7592f5840857875e79c"
+    },
+    "R2-R3.patch": {
+      "bytes": 15058,
+      "sha256": "e0e8313eed61f54d45138301d54fbde677353c611a5db9f2abe5972d59b4c78c"
+    },
     "RUN.md": {
       "bytes": 6846,
       "sha256": "38cafb0efb1aba3b95d31dde4913b14fabfbfe39aa4584a749f930465487d27e"
+    },
+    "archive-preflight.py": {
+      "bytes": 3478,
+      "sha256": "45cfb0c72b3696edd94b4ebf65636b3298bd676185491e008267a6d0e0dc5ed1"
     },
     "build.py": {
       "bytes": 6704,
@@ -40,8 +55,16 @@
       "sha256": "678f7b015f83af4caa2ec5acc87c44d85b5994a2f80a923f79274ee92a891f80"
     },
     "driver.py": {
-      "bytes": 18162,
-      "sha256": "b4f76bec84e9aa1cc9fcf87c653eec757c608b092ad92252984176be1b07e244"
+      "bytes": 20452,
+      "sha256": "c7c1bd6ece7c69bfc659d5bc5895b4cdddbc938aef4f4df1f504cf1c90ef2049"
+    },
+    "official-archive-layouts.json": {
+      "bytes": 2385,
+      "sha256": "e1e76b888788ca7e4fe4376ac9e657fea21ca58ed8b2c963e2290ac207cf3977"
+    },
+    "official-archive-metadata.json": {
+      "bytes": 7219,
+      "sha256": "e8195e80d3366ce96d21a8c14959e8034d0be834f76e3734cfe716c373f36f43"
     },
     "official-host-pins.json": {
       "bytes": 5510,
@@ -131,6 +154,7 @@
     ]
   ],
   "plannedDefaultProviderTransactions": 0,
+  "predecessorManifestSHA256": "0bd622a14cb104663a908e0cf859120d6f757c09c10348fd3f87de82916479a7",
   "priorManifestSHA256": "48deafc3ea189b8bc3266ac492f7df308d4a39a11e335220303ba52fa76b3843",
   "productionQualified": false,
   "sdkCommit": "3e438a228809c0839c1704721ade3a2385d98bf5",
