@@ -1,0 +1,101 @@
+name: Claude SDK native blackbox E2E
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/claude-sdk-e2e.yml'
+      - 'scripts/claude_sdk_e2e.py'
+      - 'cmd/claude-notifications/**'
+      - 'internal/claudesource/**'
+      - 'internal/hooks/**'
+      - 'internal/teamstate/**'
+      - 'internal/state/**'
+      - 'internal/installruntime/**'
+      - 'internal/config/**'
+      - 'internal/webhook/**'
+      - 'hooks/hooks.json'
+      - 'bin/hook-wrapper.sh'
+      - 'config/config.json'
+      - '.claude-plugin/plugin.json'
+      - 'go.mod'
+      - 'go.sum'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: claude-sdk-e2e-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sdk-blackbox:
+    name: Claude SDK ${{ matrix.os }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            os: linux
+          - runner: macos-15
+            os: darwin
+          - runner: windows-2025
+            os: windows
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Linux ALSA build prerequisite
+        if: matrix.os == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Build real product and run focused race and CLI checks
+        shell: pwsh
+        run: |
+          $testRoot = Join-Path $env:RUNNER_TEMP 'NEWTEST-claude-sdk-build'
+          New-Item -ItemType Directory -Force $testRoot | Out-Null
+          $env:HOME = Join-Path $testRoot 'TEST-home'
+          $env:USERPROFILE = $env:HOME
+          $env:TMPDIR = Join-Path $testRoot 'TEST-tmp'
+          $env:TEMP = $env:TMPDIR
+          $env:TMP = $env:TMPDIR
+          New-Item -ItemType Directory -Force $env:HOME, $env:TMPDIR | Out-Null
+          $env:GOTELEMETRY = 'off'
+          $binary = Join-Path $testRoot $(if ($IsWindows) { 'claude-sdk.exe' } else { 'claude-sdk' })
+          go build -o $binary ./cmd/claude-notifications
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go test -race ./internal/claudesource
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go test -race ./cmd/claude-notifications -run '^(TestClaudeHookCLI.*|TestWindowsManagedHooksPreserveForeignOnRemove)$'
+          exit $LASTEXITCODE
+      - name: Actual native hook processes and bounded webhook evidence
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        env:
+          CANDIDATE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $actual = git rev-parse HEAD
+          if ($actual -ne $env:CANDIDATE_COMMIT) { throw 'Candidate commit mismatch' }
+          $testRoot = Join-Path $env:RUNNER_TEMP 'NEWTEST-claude-sdk-build'
+          $binary = Join-Path $testRoot $(if ($IsWindows) { 'claude-sdk.exe' } else { 'claude-sdk' })
+          $report = Join-Path $env:RUNNER_TEMP 'claude-sdk-evidence/receipt.json'
+          python -B scripts/claude_sdk_e2e.py --binary $binary --temp-root $env:RUNNER_TEMP --report $report
+          exit $LASTEXITCODE
+      - name: Upload exact-commit native receipt on pass or failure
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: claude-sdk-${{ matrix.os }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/claude-sdk-evidence/receipt.json
+          if-no-files-found: warn
+          retention-days: 14
