@@ -200,6 +200,69 @@ class DriverContractTests(unittest.TestCase):
     """Pure examples from frozen public routes, core projections and tool renderers.
     These envelopes are parser inputs, never injected into a live native reader.
     """
+    def test_terminal_capture_duplicates_preserve_single_native_execution(self):
+        # Actual terminal_scenario oracle, with only inert transport/time inputs.
+        # Two legitimate location subscribers can record the same original ID.
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        key=b'TEST-terminal-envelope-correlation'
+        sid=r.private_redact('root',key)
+        def event(kind,seq,**data): return wire(kind,seq,sid,**data)
+        retry=[event('session.execution.started',2),
+               event('session.retry.scheduled',6,assistantMessageID='assistant',attempt=2),
+               event('session.step.ended',11,assistantMessageID='assistant'),
+               event('session.execution.succeeded',12)]
+        interrupt=[event('session.execution.started',2),
+                   event('session.step.failed',9,assistantMessageID='assistant'),
+                   event('session.execution.interrupted',10,reason='user')]
+        def observe(events,scenario='retry'):
+            class InertThread:
+                def __init__(self,target): self.target=target
+                def start(self): self.target()
+                def is_alive(self): return False
+                def join(self,timeout=None): pass
+            now=[0.0]; reads=[0]
+            clock=SimpleNamespace(monotonic=lambda:now[0],sleep=lambda n:now.__setitem__(0,now[0]+n))
+            provider=SimpleNamespace(records=[],prompt_threads=[],interrupt_hold_expired=False,
+                       interrupt_started=SimpleNamespace(is_set=lambda:True),
+                       interrupt_release=SimpleNamespace(set=lambda:None))
+            def request(*args,**kwargs):
+                path=args[2]
+                if path.endswith('/prompt'): provider.records.extend([None]*(2 if scenario=='retry' else 1))
+                if path.endswith('/interrupt'): return {'interrupted':True}
+                return {'id':'root'}
+            def trace(root):
+                reads[0]+=1
+                return [] if reads[0]==1 else [{'kind':'native-v2','value':e} for e in events]
+            with patch.multiple(r,request=request,trace=trace,time=clock,
+                                threading=SimpleNamespace(Thread=InertThread)):
+                return r.terminal_scenario('http://127.0.0.1',repo,repo,scenario,True,provider,key)
+        self.assertEqual(observe(retry)['status'],'native_observed')
+        doubled=[copy.deepcopy(e) for e in retry for _ in range(2)]
+        self.assertEqual(observe(doubled)['status'],'native_observed')
+        # Same original ID never conceals altered type, data, native time or seq.
+        for field,value in (('type','session.execution.failed'),('created',999),
+                            ('data',{'sessionID':sid,'assistantMessageID':'other'}),
+                            ('durable',{'aggregateID':sid,'seq':99,'version':1})):
+            wrong=copy.deepcopy(doubled);wrong[1][field]=value
+            self.assertEqual(observe(wrong)['status'],'gap')
+        # A second distinct event is not a duplicate, even if its payload matches.
+        for index in (0,1,3):
+            extra=copy.deepcopy(retry[index]);extra['id']+='-distinct'
+            self.assertEqual(observe(retry+[extra])['status'],'gap')
+        self.assertEqual(observe([retry[0],retry[2],retry[1],retry[3]])['status'],'gap')
+        for kind in ('session.execution.failed','session.execution.interrupted'):
+            self.assertEqual(observe(retry+[event(kind,13)])['status'],'gap')
+        missing=copy.deepcopy(retry);missing[1].pop('id')
+        self.assertEqual(observe(missing)['status'],'gap')
+        self.assertEqual(observe(interrupt,'interrupt')['status'],'native_observed')
+        self.assertEqual(observe([copy.deepcopy(e) for e in interrupt for _ in range(2)],'interrupt')['status'],'native_observed')
+        wrong=copy.deepcopy(interrupt);wrong[-1]['data']['reason']='other'
+        self.assertEqual(observe(wrong,'interrupt')['status'],'gap')
+        for extra in (event('session.execution.succeeded',11),event('session.execution.failed',11),
+                      {**copy.deepcopy(interrupt[-1]),'id':'evt_distinct-interruption'}):
+            self.assertEqual(observe(interrupt+[extra],'interrupt')['status'],'gap')
+
     def test_manual_routes_are_distinct_and_never_request_auto_resume(self):
         self.assertEqual(r.compaction_request('root/a',False),('/session/root%2Fa/summarize',
                          {'providerID':'p0','modelID':'p0-compaction','auto':False}))

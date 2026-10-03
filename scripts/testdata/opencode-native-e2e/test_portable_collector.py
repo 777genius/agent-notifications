@@ -24,6 +24,43 @@ class ClosedDiagnostic(unittest.TestCase):
         self.assertEqual(diagnostic(self.encode(row)), row)
         self.assertIsNone(diagnostic('unrelated native log'))
 
+    def test_closed_invalidated_is_separate_and_never_submission(self):
+        # Actual producer six-field post-Wait record, not a submitted receipt.
+        from portable import Observation
+        denied={'protocol':1,'kind':'event','ipc':'invalidated','childClosure':'closed',
+                'exitCode':0,'forcedKill':False}
+        self.assertEqual(diagnostic(self.encode(denied)),denied)  # Old parser RED.
+        for change in ({'receipt':None},{'receipt':self.record()['receipt']},
+                       {'extra':'secret'},{'ipc':'deadline'},{'kind':'clock'},
+                       {'protocol':True},{'exitCode':False},{'exitCode':1},
+                       {'forcedKill':True},{'forcedKill':0},{'childClosure':'unproved'}):
+            with self.subTest(change=change):
+                with self.assertRaises(ValueError):diagnostic(self.encode({**denied,**change}))
+        missing=dict(denied);missing.pop('exitCode')
+        with self.assertRaises(ValueError):diagnostic(self.encode(missing))
+        def require(value,code):
+            if not value:raise ValueError(code)
+        with tempfile.TemporaryDirectory(prefix='TEST-closed-denied-') as d:
+            root=pathlib.Path(d);log=root/'host-private.log'
+            observation=Observation.__new__(Observation)
+            observation.args=SimpleNamespace(version='2.0.21')
+            observation.require=require
+            observation.cursors,observation.partial,observation.rows={},{},[]
+            observation.closedDenied=[]
+            log.write_text(self.encode(self.record())+'\n'+self.encode(denied)+'\n')
+            self.assertEqual(observation.update(root,closed=True),[self.record()])
+            self.assertEqual(observation.closedDenied,[denied])
+            self.assertEqual(observation.update(root,closed=True),[self.record()])
+            with log.open('a') as stream:stream.write(self.encode(denied)+'\n')
+            with self.assertRaisesRegex(ValueError,'unexpected_closed_denied_event'):
+                observation.update(root,closed=True)
+            observation.args.version='1.18.33'
+            observation.cursors,observation.partial,observation.rows={},{},[]
+            observation.closedDenied=[]
+            log.write_text(self.encode(denied)+'\n')
+            with self.assertRaisesRegex(ValueError,'closed_denied_native_generation_mismatch'):
+                observation.update(root,closed=True)
+
     def test_extra_secret_duplicate_and_incomplete_records_deny(self):
         row=self.record();row['receipt']['reason']='PRIVATE_SECRET'
         with self.assertRaises(ValueError):diagnostic(self.encode(row))

@@ -28,15 +28,22 @@ def diagnostic(line):
     if line.count(PREFIX) != 1 or len(line) > 4096:
         raise ValueError('diagnostic_line_bound')
     value = json.loads(line.split(PREFIX, 1)[1], object_pairs_hook=unique)
-    if not isinstance(value, dict) or set(value) != {
-            'protocol', 'kind', 'ipc', 'childClosure', 'exitCode', 'forcedKill', 'receipt'}:
+    if not isinstance(value, dict):
         raise ValueError('diagnostic_schema')
-    receipt = value['receipt']
+    invalidated = value.get('ipc') == 'invalidated'
+    fields = {'protocol', 'kind', 'ipc', 'childClosure', 'exitCode', 'forcedKill'}
+    if set(value) != (fields if invalidated else fields | {'receipt'}):
+        raise ValueError('diagnostic_schema')
     if (type(value['protocol']) is not int or value['protocol'] != 1 or
-            value['kind'] != 'event' or value['ipc'] != 'ok' or
-            value['childClosure'] != 'closed' or type(value['exitCode']) is not int or
-            value['exitCode'] != 0 or value['forcedKill'] is not False or
-            not isinstance(receipt, dict) or set(receipt) != {'status', 'desktop', 'webhook'} or
+            value['kind'] != 'event' or value['childClosure'] != 'closed' or
+            type(value['exitCode']) is not int or value['exitCode'] != 0 or
+            value['forcedKill'] is not False):
+        raise ValueError('diagnostic_actual_closed_dual_submission_required')
+    if invalidated:
+        return value  # Explicit non-success, never positive submission authority.
+    receipt = value['receipt']
+    if (value['ipc'] != 'ok' or not isinstance(receipt, dict) or
+            set(receipt) != {'status', 'desktop', 'webhook'} or
             any(receipt[key] != 'submitted' for key in receipt)):
         raise ValueError('diagnostic_actual_closed_dual_submission_required')
     return value
@@ -133,6 +140,7 @@ class Observation:
         self.root = None
         require(args.business_proof is not None and args.business_proof_sha256 is not None, 'sealed_business_prerequisites_required')
         self.cursors, self.partial, self.rows = {}, {}, []
+        self.closedDenied = []
         self.proof = pathlib.Path(args.business_proof).absolute()
         require(self.proof.is_file() and not self.proof.is_symlink() and
                 digest(self.proof) == args.business_proof_sha256, 'sealed_business_prerequisites_missing')
@@ -179,8 +187,8 @@ class Observation:
         # installer-owned file, not a copied bundle or modified factory.
         module = root / 'diagnostic-entry'
         module.mkdir(mode=0o700)
-        (module / 'server.js').write_text('export { default } from ' + json.dumps(plugin.absolute().as_uri()) + ';\n')
-        config['plugins'] = ['-' + str(plugin.absolute()),
+        (module / 'server.js').write_text('import installed from ' + json.dumps(plugin.absolute().as_uri()) + ';\nexport default {id: \"an-test-diagnostic-entry\", setup: installed.setup};\n')
+        config['plugins'] = ['-agent-notifications',
                              {'package': str(module.absolute()), 'options': {'diagnostics': True}}]
 
     def update(self, root, closed=False):
@@ -202,8 +210,13 @@ class Observation:
             for rawline in lines:
                 row = diagnostic(rawline.decode('utf-8', errors='strict'))
                 if row is not None:
-                    self.rows.append(row)
-                    self.require(len(self.rows) <= 32, 'actual_event_attempt_budget')
+                    if row['ipc'] == 'invalidated':
+                        self.require(self.args.version == '2.0.21', 'closed_denied_native_generation_mismatch')
+                        self.closedDenied.append(row)
+                        self.require(len(self.closedDenied) <= 1, 'unexpected_closed_denied_event')
+                    else:
+                        self.rows.append(row)
+                    self.require(len(self.rows) + len(self.closedDenied) <= 32, 'actual_event_attempt_budget')
             if closed:
                 self.require(PREFIX.encode() not in self.partial[name], 'closed_diagnostic_line_incomplete')
         return list(self.rows)
@@ -264,11 +277,21 @@ class Observation:
         rows = self.update(root, closed=True)
         self.require(len(self.actual_provider.records) == 21 and not self.actual_provider.gaps, 'late_or_unexpected_provider_transaction')
         self.require(len(rows) == self.webhook.count() == 14, 'closed_event_submission_membership_mismatch')
+        self.require(len(self.closedDenied) == (1 if self.args.version == '2.0.21' else 0),
+                     'closed_denied_event_membership_mismatch')
+        if self.closedDenied:
+            tail = report.get('scenarios', [])[-4:]
+            self.require(len(tail) == 4 and all(
+                row.get('scenario') == 'completion' and row.get('status') == 'observed' and
+                row.get('providerCalls') == 1 and row.get('desktopCount') == count and
+                row.get('webhookCount') == count for row, count in zip(tail, (1, 0, 0, 1))),
+                'independent_remove_stale_silence_required')
         self.require(all(self.digest(path) == pin for path,pin in self.fixed.items()), 'source_supplier_changed')
         if self.args.os == 'linux':
             self.require(len(self.desktop_rows(root)) == len(rows), 'dbus_closed_event_count_mismatch')
         report.update(status='installed_business_lifecycle_observed', productOwnedClose='14_actual_event_children_closed_diagnostics_only', **FLAGS,
-                      actualClosedSubmittedChildren=len(rows), diagnosticTransport='native_host_stderr',
+                      actualClosedSubmittedChildren=len(rows), actualClosedDeniedChildren=len(self.closedDenied),
+                      closedDeniedPositiveAuthority=False, diagnosticTransport='native_host_stderr',
                       desktopEvidence='independent_private_dbus' if self.args.os == 'linux' else 'actual_closed_child_backend_submitted',
                       primitiveEvidence=self.primitives, businessPrerequisitesSHA256=self.digest(self.proof),
                       WindowsV1OriginalAge='user_accepted_original_native_age_limitation' if self.args.os == 'windows' and self.args.version.startswith('1.') else 'not_applicable',
