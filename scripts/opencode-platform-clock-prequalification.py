@@ -635,6 +635,13 @@ def isolate_linux():
     # No sockets are used: the only communication is owned stdin/stdout pipes.
 
 
+def require_sampler_nonincrease(os_name, loader_before, after, import_before=None):
+    # Windows runtime/module imports precede the sole sampler creation.
+    before = import_before if os_name == 'windows' else loader_before
+    need(type(before) is int and 0 <= before <= 0xffffffff, 'actual_sampler_resource_baseline')
+    need(after <= before, 'actual_module_resource_leak')
+
+
 def run_case(root, metadata, os_name, arch, job_end):
     case_started = time.monotonic(); operation_started = None; round_number = None
     stage = 'initial_custody'; disposed_observed = False
@@ -677,6 +684,42 @@ def run_case(root, metadata, os_name, arch, job_end):
         operation_started = time.monotonic()
         operation_end = min(js_end, job_end, operation_started + 2)
         own.send(host, {'kind': 'begin'}, operation_end)
+        if os_name == 'windows':
+            stage = 'source_import_observation'
+            ready = own.message(host, 'source_ready', operation_end)
+            windows_leaf = next(x for x in metadata['moduleLeaves'] if x['path'] == 'opencode-plugin/windows-clock.mjs')
+            need(set(ready) == {'kind', 'pid', 'sourceCommit', 'windowsModuleSHA256', 'samplerCreated', 'samples'} and
+                 ready['pid'] == host['p'].pid and ready['sourceCommit'] == metadata['sourceCommit'] and
+                 ready['windowsModuleSHA256'] == windows_leaf['actualSHA256'] and
+                 ready['samplerCreated'] is False and type(ready['samples']) is int and ready['samples'] == 0,
+                 'actual_presampler_source_import')
+            imported_resources = native_resources(host['p'], os_name)
+            sampler_resource_before_at = time.monotonic()
+            safe['nativeImportResourceObservation'] = {
+                'measurementKind': 'GetProcessHandleCount', 'before': resources_before, 'after': imported_resources,
+                'delta': imported_resources - resources_before,
+                'baselineStage': 'loader_received_before_begin', 'stage': stage,
+                'beforeCaseElapsedMs': round((resource_before_at - case_started) * 1000, 3),
+                'beforeHostElapsedMs': round((resource_before_at - host['startedAt']) * 1000, 3),
+                'samplerCreated': False, 'samples': 0,
+                'operationElapsedMs': round((time.monotonic() - operation_started) * 1000, 3)}
+            own.send(host, {'kind': 'sampler_begin'}, operation_end)
+            safe['nativeResourceCheckpoints'] = []
+        def resource_checkpoint(checkpoint, checkpoint_round, expected_samples):
+            if os_name != 'windows': return
+            ready = own.message(host, 'resource_checkpoint', operation_end)
+            need(set(ready) == {'kind', 'pid', 'stage', 'round', 'samples'} and
+                 ready['pid'] == host['p'].pid and ready['stage'] == checkpoint and
+                 ready['round'] == checkpoint_round and
+                 (ready['round'] is None or type(ready['round']) is int) and
+                 type(ready['samples']) is int and ready['samples'] == expected_samples,
+                 'actual_resource_checkpoint')
+            count = native_resources(host['p'], os_name)
+            safe['nativeResourceCheckpoints'].append({'stage': checkpoint, 'round': checkpoint_round,
+                'samples': expected_samples, 'count': count,
+                'operationElapsedMs': round((time.monotonic() - operation_started) * 1000, 3)})
+            own.send(host, {'kind': 'resource_continue', 'stage': checkpoint, 'round': checkpoint_round}, operation_end)
+        if os_name == 'windows': resource_checkpoint('sampler_created', None, 0)
         helper_receipts = []
         helper_lifecycle = []
         for round_number in range(3):
@@ -705,6 +748,9 @@ def run_case(root, metadata, os_name, arch, job_end):
                                 'raw': base64.b64encode(raw).decode()}, operation_end)
             finally:
                 if s['p'].pid in own.live: own.cleanup()
+            if os_name == 'windows':
+                stage = 'helper_compared_resource_observation'
+                resource_checkpoint('helper_compared', round_number, (round_number + 1) * (BUDGETS['chunkSize'] + 4))
         stage = 'disposed'
         result = own.message(host, 'disposed', operation_end)
         disposed_observed = True
@@ -717,16 +763,24 @@ def run_case(root, metadata, os_name, arch, job_end):
             # Non-authorizing numeric diagnostics from the two existing native reads.
             safe['nativeResourceObservation'] = {
                 'measurementKind': 'GetProcessHandleCount', 'version': metadata['version'],
-                'before': resources_before, 'after': resources_after, 'delta': resources_after - resources_before,
-                'baselineStage': 'loader_received_before_begin', 'stage': stage,
-                'beforeCaseElapsedMs': round((resource_before_at - case_started) * 1000, 3),
+                'before': imported_resources, 'after': resources_after, 'delta': resources_after - imported_resources,
+                'baselineStage': 'actual_plain_import_before_sampler', 'stage': stage,
+                'beforeCaseElapsedMs': round((sampler_resource_before_at - case_started) * 1000, 3),
                 'afterCaseElapsedMs': round((resource_after_at - case_started) * 1000, 3),
-                'beforeHostElapsedMs': round((resource_before_at - host['startedAt']) * 1000, 3),
+                'beforeHostElapsedMs': round((sampler_resource_before_at - host['startedAt']) * 1000, 3),
                 'afterHostElapsedMs': round((resource_after_at - host['startedAt']) * 1000, 3),
                 'afterOperationElapsedMs': round((resource_after_at - operation_started) * 1000, 3),
                 'disposedFrameObserved': disposed_observed, 'helperRound': round_number,
                 'helperStarts': own.helpers, 'helperActualCloses': own.helper_closes}
-        need(resources_after <= resources_before, 'actual_module_resource_leak')
+        if os_name == 'windows':
+            safe['nativeImportResourceObservation']['postDispose'] = resources_after
+            safe['nativeImportResourceObservation']['samplerPhaseDelta'] = resources_after - imported_resources
+            safe['nativeResourceCheckpoints'].append({'stage': 'disposed', 'round': None,
+                'samples': result['samples'], 'count': resources_after,
+                'operationElapsedMs': round((time.monotonic() - operation_started) * 1000, 3)})
+        # Strict sampler nonincrease; retain pre-begin/import growth separately.
+        require_sampler_nonincrease(os_name, resources_before, resources_after,
+                                    imported_resources if os_name == 'windows' else None)
         kernel_image(host['p'], exe, os_name)
         stage = 'finish'
         own.send(host, {'kind': 'finish'}, operation_end)

@@ -31,6 +31,22 @@ class PureVectors(unittest.TestCase):
         guard = patch.object(H.subprocess, 'Popen', side_effect=AssertionError('pure_test_spawn_refused'))
         guard.start(); self.addCleanup(guard.stop)
 
+    def test_sampler_resource_boundary_keeps_persistent_growth_fail_closed(self):
+        # Independent lifecycle counts; no native resource read or child spawn.
+        H.require_sampler_nonincrease('windows', 80, 95, 95)
+        H.require_sampler_nonincrease('windows', 172, 172, 172)
+        for os_name, loader, after, imported in [('windows', 80, 96, 95),
+                                                  ('windows', 81, 98, 96),
+                                                  ('linux', 80, 95, 95),
+                                                  ('darwin', 80, 95, 95)]:
+            with self.subTest(os_name=os_name, after=after):
+                with self.assertRaisesRegex(RuntimeError, '^actual_module_resource_leak$'):
+                    H.require_sampler_nonincrease(os_name, loader, after, imported)
+        for missing in [None, True, -1]:
+            with self.subTest(imported=missing):
+                with self.assertRaisesRegex(RuntimeError, '^actual_sampler_resource_baseline$'):
+                    H.require_sampler_nonincrease('windows', 80, 80, missing)
+
     def test_helper_hash_preflight_launch_budget(self):
         with tempfile.TemporaryDirectory(prefix='TEST-helper-preflight-', dir=ROOT) as directory:
             helper = Path(directory) / 'private-helper-bytes'

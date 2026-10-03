@@ -159,9 +159,30 @@ async function execute(rootInput) {
     const operationStart = performance.now();
     const dispatch = await import(pathToFileURL(modulePaths['opencode-plugin/platform-clock.mjs']).href);
     budgetCheck(performance.now(), operationStart, samples, 0);
+    if (process.platform === 'win32') {
+      // Diagnostic import phase only: no dlopen, linkSymbols or sampler call.
+      const windowsPath = modulePaths['opencode-plugin/windows-clock.mjs'];
+      await import(pathToFileURL(windowsPath).href);
+      const ffi = await import('bun:ffi');
+      need(['dlopen', 'ptr', 'linkSymbols'].every(k => typeof ffi[k] === 'function'), 'actual_plain_ffi_exports');
+      budgetCheck(performance.now(), operationStart, samples, 0);
+      send({ kind: 'source_ready', pid: process.pid, sourceCommit: m.sourceCommit,
+        windowsModuleSHA256: hash(readFileSync(windowsPath)), samplerCreated: false, samples });
+      await receive('sampler_begin');
+      budgetCheck(performance.now(), operationStart, samples, 0);
+    }
     clock = await dispatch.createPlatformClock(); // The only clock implementation called here.
     need(clock && Object.isFrozen(clock) && typeof clock.sample === 'function' && typeof clock.dispose === 'function', 'actual_module_lifecycle');
     budgetCheck(performance.now(), operationStart, samples, 0);
+    async function resourceCheckpoint(stage, round) {
+      if (process.platform !== 'win32') return;
+      budgetCheck(performance.now(), operationStart, samples, 0);
+      send({ kind: 'resource_checkpoint', pid: process.pid, stage, round, samples });
+      const reply = await receive('resource_continue');
+      need(reply.stage === stage && reply.round === round, 'resource_checkpoint_identity');
+      budgetCheck(performance.now(), operationStart, samples, 0);
+    }
+    if (process.platform === 'win32') await resourceCheckpoint('sampler_created', null);
     function sample() {
       budgetCheck(performance.now(), operationStart, ++samples, 0); image.verify();
       const value = productSample(clock.sample(), process.platform);
@@ -195,6 +216,8 @@ async function execute(rootInput) {
         const predicate = preciseDate(nativeBefore.wall, dateMs, nativeAfter.wall);
         datePredicates.push(predicate);
         record.nativeDateComparison = { nativeBefore, dateMs, nativeAfter, predicate, dateType: typeof dateMs };
+        // Read resource counts AFTER both clock endpoints/comparison, never inside224ms.
+        await resourceCheckpoint('helper_compared', round);
       }
     }
     clock.dispose(); disposed = true; clock.dispose();
