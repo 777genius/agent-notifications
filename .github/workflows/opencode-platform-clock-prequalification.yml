@@ -16,6 +16,11 @@ on:
       - 'go.sum'
   workflow_dispatch:
     inputs:
+      v2_helper_admission_canary:
+        description: TEST only, stock V2 Windows amd64 and Darwin amd64 fixture canary, all grants false
+        type: boolean
+        required: false
+        default: false
       current_primary_json:
         description: Separately reviewed immutable current 1.18.34 Linux x64 archive SHA256 and SRI primary (see fixture README)
         type: string
@@ -31,13 +36,7 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - { runner: ubuntu-22.04, platform: linux, arch: amd64 }
-          - { runner: ubuntu-22.04-arm, platform: linux, arch: arm64 }
-          - { runner: macos-15-intel, platform: darwin, arch: amd64 }
-          - { runner: macos-15, platform: darwin, arch: arm64 }
-          - { runner: windows-latest, platform: windows, arch: amd64 }
+      matrix: ${{ fromJSON(inputs.v2_helper_admission_canary && '{"include":[{"runner":"macos-15-intel","platform":"darwin","arch":"amd64"},{"runner":"windows-latest","platform":"windows","arch":"amd64"}]}' || '{"include":[{"runner":"ubuntu-22.04","platform":"linux","arch":"amd64"},{"runner":"ubuntu-22.04-arm","platform":"linux","arch":"arm64"},{"runner":"macos-15-intel","platform":"darwin","arch":"amd64"},{"runner":"macos-15","platform":"darwin","arch":"arm64"},{"runner":"windows-latest","platform":"windows","arch":"amd64"}]}') }}
     steps:
       - name: Checkout exact source candidate
         uses: actions/checkout@v7
@@ -73,6 +72,7 @@ jobs:
           SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
           CLOCK_PLATFORM: ${{ matrix.platform }}
           CLOCK_ARCH: ${{ matrix.arch }}
+          V2_HELPER_ADMISSION_CANARY: ${{ inputs.v2_helper_admission_canary || false }}
           PLATFORM_CLOCK_CURRENT_PRIMARY_JSON: ${{ inputs.current_primary_json || vars.OPENCODE_PLATFORM_CLOCK_CURRENT_PRIMARY_JSON }}
         run: |
           set -euo pipefail
@@ -83,6 +83,9 @@ jobs:
           launcher=("$(command -v python)" scripts/opencode-platform-clock-prequalification.py
             --execute-ci --os "$CLOCK_PLATFORM" --arch "$CLOCK_ARCH"
             --temp-base "$temp_base" --report "$RUNNER_TEMP/platform-clock-safe-evidence.json")
+          if [[ "$V2_HELPER_ADMISSION_CANARY" == true ]]; then
+            launcher+=(--v2-helper-admission-canary)
+          fi
           if [[ "$CLOCK_PLATFORM" == linux && "$CLOCK_ARCH" == amd64 && -z "$PLATFORM_CLOCK_CURRENT_PRIMARY_JSON" ]]; then
             launcher+=(--current-primary scripts/testdata/opencode-platform-clock-prequalification/current-linux-amd64-primary.json)
           fi
@@ -92,7 +95,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: platform-clock-module-${{ matrix.platform }}-${{ matrix.arch }}
+          name: platform-clock-module-${{ matrix.platform }}-${{ matrix.arch }}${{ inputs.v2_helper_admission_canary && '-helper-admission-canary' || '' }}
           path: ${{ runner.temp }}/platform-clock-safe-evidence.json
           if-no-files-found: error
           retention-days: 14
