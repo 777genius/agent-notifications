@@ -155,6 +155,25 @@ def tui_input_frame(raw):
   if all(x in text for x in ['Ask anything…'.encode(),b'Build',b'TEST completion',b'TEST loopback']):return True
  return False
 
+def tui_readiness_snapshot(raw,raw_bytes,reader_done,reader_error):
+ # Content-free diagnostic only; it never authorizes input or extends a wait.
+ error='none' if reader_error is None else 'other_reader_error'
+ if reader_error is not None:
+  if reader_error.startswith('ConPTY_ReadFile_'):error='read_failure'
+  elif reader_error.startswith('capture exceeded'):error='capture_overflow'
+  elif reader_error.startswith('console reader failure:'):error='reader_exception'
+  elif reader_error in {'PTY_absolute_deadline','PTY_select_failure','PTY_read_failure'}:error=reader_error
+ d={'snapshotBeforeCleanup':True,'rawBytes':raw_bytes,'scannedBytes':len(raw),'withinReadinessBound':raw_bytes<=1048576,'readerDone':bool(reader_done),'readerError':error,'syncStartSeen':b'\x1b[?2026h' in raw,'syncEndSeen':b'\x1b[?2026l' in raw,'completeFrameSeen':False,'cursorInCompleteFrame':False,'emptyPromptInCompleteFrame':False,'buildLabelInCompleteFrame':False,'modelLabelInCompleteFrame':False,'providerLabelInCompleteFrame':False}
+ for frame in raw.split(b'\x1b[?2026h')[1:]:
+  stop=frame.find(b'\x1b[?2026l')
+  if stop<0:continue
+  frame=frame[:stop];d['completeFrameSeen']=True
+  d['cursorInCompleteFrame']|=bool(re.search(rb'\x1b\[[1-9][0-9]*;[1-9][0-9]*H\x1b\[\?25h',frame))
+  text=re.sub(rb'\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\))',b'',frame)
+  for key,label in [('emptyPromptInCompleteFrame','Ask anything…'.encode()),('buildLabelInCompleteFrame',b'Build'),('modelLabelInCompleteFrame',b'TEST completion'),('providerLabelInCompleteFrame',b'TEST loopback')]:d[key]|=label in text
+ d['originalReadyPredicate']=raw_bytes<=1048576 and tui_input_frame(raw)
+ return d
+
 def main(a):
  global CURRENT_STAGE
  HTTP_DIAGNOSTICS.clear()
@@ -365,6 +384,16 @@ def main(a):
  except Exception as error:
   result['firstFailedStage']=CURRENT_STAGE;result['exceptionKind']=type(error).__name__;result['failure']=type(error).__name__
   if isinstance(error,ValueError) and str(error) in {'original_deadline','native_TUI_ended_before_input','native_TUI_readiness_reader'}:result['failureCode']=str(error)
+  if a.entry=='tui':
+   try:
+    changed=win_terminal.output_changed if win_terminal is not None else ui_changed
+    with changed:
+     captured=win_terminal.raw if win_terminal is not None else ui_output
+     raw=bytes(captured[:1048576]);raw_bytes=len(captured)
+     reader_done=win_terminal.reader_done if win_terminal is not None else pty_eof or pty_failure is not None
+     reader_error=win_terminal.error if win_terminal is not None else ('capture exceeded' if pty_overflow else pty_failure)
+    result['TUIReadinessBeforeCleanup']=tui_readiness_snapshot(raw,raw_bytes,reader_done,reader_error)
+   except Exception:result['TUIReadinessBeforeCleanup']={'snapshotBeforeCleanup':True,'snapshotUnavailable':True}
   write(root/'first-exception-private.json',{'stage':CURRENT_STAGE,'kind':type(error).__name__,'message':str(error)[:512]})
  finally:
   if win_terminal is not None and not win_terminal.closed and proc.poll() is None:
