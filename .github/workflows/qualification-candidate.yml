@@ -64,9 +64,9 @@ jobs:
               $log = "evidence/$revision-$iteration.log"
               $trace = "evidence/$revision-$iteration.trace"
               if ($iteration -le 10) {
-                & $binary -test.v -test.run $target "-test.trace=$trace" 2>&1 | Tee-Object $log
+                & $binary '-test.v' '-test.run' $target "-test.trace=$trace" 2>&1 | Tee-Object $log
               } else {
-                & $binary -test.v -test.run $target 2>&1 | Tee-Object $log
+                & $binary '-test.v' '-test.run' $target 2>&1 | Tee-Object $log
               }
               $code = $LASTEXITCODE
               "$revision iteration=$iteration exit=$code" | Add-Content evidence/status.txt
