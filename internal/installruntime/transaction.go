@@ -1058,8 +1058,15 @@ func boundedPolicyRevocation(root string, tx transaction) bool {
 			}
 			if local && before.Owner == "existing-installer" && localPortableConsumer(id, consumer) {
 				var binding struct{ ComponentID, ControlRoot string }
-				if json.Unmarshal([]byte(consumer.Registration), &binding) == nil && binding.ComponentID == before.ID && binding.ControlRoot == root {
-					registered = true
+				if json.Unmarshal([]byte(consumer.Registration), &binding) == nil && binding.ComponentID == before.ID {
+					// Admission requires the exact recorded spelling. A durable
+					// journal may be recovered through a fixed OS alias or a clean
+					// spelling, without accepting arbitrary directory symlinks.
+					bindingRoot, bindingErr := PhysicalPath(binding.ControlRoot)
+					recoveryRoot, recoveryErr := PhysicalPath(filepath.Clean(root))
+					if bindingErr == nil && recoveryErr == nil && bindingRoot == recoveryRoot {
+						registered = true
+					}
 				}
 			}
 			if channel == "" || before.Owner == "existing-installer" && consumer.Registration != "" &&
