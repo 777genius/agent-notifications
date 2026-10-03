@@ -165,9 +165,9 @@ func TestChannelConsentIndependentAndNoRetry(t *testing.T) {
 				return errors.New("PRIVATE_TRANSPORT_ERROR")
 			}
 			r := c.Consume(context.Background(), facts, deadline)
-			c.Consume(context.Background(), facts, deadline)
+			second := c.Consume(context.Background(), facts, deadline)
 			if desktops != boolInt(channels.Desktop) || hooks != boolInt(channels.Webhook) {
-				t.Fatalf("consent/failure attempts %d/%d", desktops, hooks)
+				t.Fatalf("consent/failure attempts %d/%d, first=%+v, second=%+v", desktops, hooks, r, second)
 			}
 			raw, _ := json.Marshal(r)
 			if strings.Contains(string(raw), "PRIVATE_") {

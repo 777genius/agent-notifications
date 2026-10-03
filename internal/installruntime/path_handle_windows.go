@@ -17,6 +17,10 @@ func windowsOpenAt(parent windows.Handle, name string, access, disposition, opti
 }
 
 func windowsOpenAtWithSecurity(parent windows.Handle, name string, access, disposition, options uint32, security *windows.SECURITY_DESCRIPTOR) (windows.Handle, error) {
+	return windowsOpenAtWithSharing(parent, name, access, disposition, options, security, windowsShare(options))
+}
+
+func windowsOpenAtWithSharing(parent windows.Handle, name string, access, disposition, options uint32, security *windows.SECURITY_DESCRIPTOR, sharing uint32) (windows.Handle, error) {
 	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `\/:`) {
 		return 0, fmt.Errorf("invalid relative Windows component")
 	}
@@ -29,7 +33,7 @@ func windowsOpenAtWithSecurity(parent windows.Handle, name string, access, dispo
 	attrs.Length = uint32(unsafe.Sizeof(attrs))
 	var handle windows.Handle
 	var status windows.IO_STATUS_BLOCK
-	err = windows.NtCreateFile(&handle, access|windows.SYNCHRONIZE, &attrs, &status, nil, windows.FILE_ATTRIBUTE_NORMAL, windowsShare(options), disposition, options|windows.FILE_OPEN_REPARSE_POINT|windows.FILE_SYNCHRONOUS_IO_NONALERT, 0, 0)
+	err = windows.NtCreateFile(&handle, access|windows.SYNCHRONIZE, &attrs, &status, nil, windows.FILE_ATTRIBUTE_NORMAL, sharing, disposition, options|windows.FILE_OPEN_REPARSE_POINT|windows.FILE_SYNCHRONOUS_IO_NONALERT, 0, 0)
 	// The descriptor is passed indirectly through OBJECT_ATTRIBUTES.
 	runtime.KeepAlive(security)
 	return handle, windowsStatusError(err)

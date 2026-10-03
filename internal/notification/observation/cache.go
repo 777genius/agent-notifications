@@ -49,9 +49,11 @@ func (c *RecentCache) Claim(ctx context.Context, key string, bit uint8) (bool, e
 	if err != nil || !filepath.IsAbs(root) || filepath.Clean(root) != root {
 		return false, errors.New("cache_unavailable")
 	}
-	if err = checkCacheRoot(root); err != nil {
+	cache, err := openCache(root)
+	if err != nil {
 		return false, errors.New("cache_unavailable")
 	}
+	defer cache.Close()
 	lockCtx, cancel := context.WithTimeout(ctx, ClaimBudget)
 	defer cancel()
 	unlock, err := installruntime.Lock(lockCtx, filepath.Join(root, ".observations.lock"))
@@ -63,7 +65,7 @@ func (c *RecentCache) Claim(ctx context.Context, key string, bit uint8) (bool, e
 	if !validTime(boot, now, err) || lockCtx.Err() != nil {
 		return false, errors.New("cache_unavailable")
 	}
-	data, err := readCache(root)
+	data, err := cache.Read()
 	if err != nil && !os.IsNotExist(err) {
 		return false, errors.New("cache_unavailable")
 	}
@@ -83,7 +85,7 @@ func (c *RecentCache) Claim(ctx context.Context, key string, bit uint8) (bool, e
 	if err != nil || len(data) > cacheBytes || lockCtx.Err() != nil {
 		return false, errors.New("cache_unavailable")
 	}
-	if err = writeCache(root, data); err != nil {
+	if err = cache.Write(data); err != nil {
 		return false, errors.New("cache_unavailable")
 	}
 	if lockCtx.Err() != nil {
