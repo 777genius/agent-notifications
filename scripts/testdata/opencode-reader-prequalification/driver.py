@@ -197,7 +197,7 @@ def windows_tui_input_hint(raw):
  present=all(x>=0 for x in positions.values());lo=min(positions.values());hi=max(positions[key]+len(label) for key,label in labels)
  tail=epoch[cursor.end():] if cursor is not None else epoch
  tail_closed=not re.sub(rb'\x1b\[[0-9;]*m|\x1b\[\?(?:25|2026)[hl]',b'',tail)
- hint=present and cursor is not None and visible and edit<lo and cursor.start()>=hi and tail_closed
+ hint=present and cursor is not None and visible and cursor.start()>=hi and tail_closed
  d={'inputSchedulingHint':bool(hint),'fullClearObserved':bool(clears),'captureSegmentStartOffset':start,'positionedCursorObserved':cursor is not None,'lastCursorOffset':start+cursor.start() if cursor is not None else -1,'cursorVisibilityObserved':bool(visibility),'lastObservedCursorShow':visible,'lastEraseOrDeleteOffset':start+edit if edit>=0 else -1,'allLabelsInCaptureSegment':present,'noObservedEraseAfterMatchedLabels':present and edit<lo,'cursorTokenAfterMatchedLabels':present and cursor is not None and cursor.start()>=hi,'closedCursorTail':bool(tail_closed)}
  for key,pos in positions.items():d[key]=start+pos if pos>=0 else -1
  return d
