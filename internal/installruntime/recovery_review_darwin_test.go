@@ -313,7 +313,7 @@ func TestRecoveryReviewRevocationFences(t *testing.T) {
 					}
 				})
 			}
-			before.WriterFloor = ReservationWriterFloor + 1
+			before.WriterFloor = SupportedWriterFloor + 1
 			if err := writeJSON(filepath.Join(r.ControlRoot, "ownership.json"), before); err != nil {
 				t.Fatal(err)
 			}
@@ -566,7 +566,7 @@ func TestRecoveryReviewUnboundedPolicyReplay(t *testing.T) {
 				n.DirectoryID = "1:0"
 				tx.After.Native = &n
 			case "floor":
-				tx.After.WriterFloor = ReservationWriterFloor + 1
+				tx.After.WriterFloor = SupportedWriterFloor + 1
 			case "generation":
 				tx.After.Generation++
 			case "rollback":

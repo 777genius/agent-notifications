@@ -227,9 +227,10 @@ func TestCopilotRevokeSurvivesSharedDamage(t *testing.T) {
 				}
 			}
 			selection := copilotvscodeinstall.RevokeAll
-			if damage == "missing-native-native-only" {
+			switch damage {
+			case "missing-native-native-only":
 				selection = copilotvscodeinstall.RevokeNative
-			} else if damage == "missing-native-manual-only" {
+			case "missing-native-manual-only":
 				selection = copilotvscodeinstall.RevokeManual
 			}
 			after, err := copilotvscodeinstall.RevokeChannels(localTestContext(t), b, selection)
