@@ -16,6 +16,52 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// PrivateCacheRoot retains validated directory handles for one locked cache
+// claim. It is not shared between goroutines or retained across claims.
+type PrivateCacheRoot struct {
+	handles []windows.Handle
+}
+
+func OpenPrivateCacheRoot(root string) (*PrivateCacheRoot, error) {
+	var handles []windows.Handle
+	var err error
+	trace.WithRegion(context.Background(), "observation.windows/root", func() {
+		handles, err = privateCacheRootHandles(root)
+	})
+	if err != nil {
+		closeWindowsParents(handles)
+		return nil, err
+	}
+	return &PrivateCacheRoot{handles: handles}, nil
+}
+
+func (r *PrivateCacheRoot) Close() {
+	if r != nil {
+		closeWindowsParents(r.handles)
+		r.handles = nil
+	}
+}
+
+func (r *PrivateCacheRoot) parent() (windows.Handle, error) {
+	if r == nil || len(r.handles) == 0 {
+		return 0, fmt.Errorf("private cache root is closed")
+	}
+	parent := r.handles[len(r.handles)-1]
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(parent, &info); err != nil {
+		return 0, err
+	}
+	if info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 || info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0 {
+		return 0, fmt.Errorf("private cache root must be a non-reparse directory")
+	}
+	// ACLs can change while directory handles remain open. Never reuse a
+	// security decision from session creation for a later read or publication.
+	if err := privateWindowsHandle(parent); err != nil {
+		return 0, err
+	}
+	return parent, nil
+}
+
 // CheckPrivateCacheRoot requires an existing local non-reparse directory with
 // the installation lock's owner/private-DACL policy. It never repairs access.
 func CheckPrivateCacheRoot(root string) error {
@@ -33,12 +79,20 @@ func CheckPrivateCacheRoot(root string) error {
 // with the installation lock's owner/private-DACL policy; no ACL is changed.
 // A missing document returns an error recognizable by os.IsNotExist.
 func ReadPrivateCacheDocument(root, name string, limit int64) ([]byte, error) {
-	handles, err := privateCacheRootHandles(root)
-	defer closeWindowsParents(handles)
+	r, err := OpenPrivateCacheRoot(root)
 	if err != nil {
 		return nil, err
 	}
-	f, err := windowsRegularAt(handles[len(handles)-1], name, false)
+	defer r.Close()
+	return r.Read(name, limit)
+}
+
+func (r *PrivateCacheRoot) Read(name string, limit int64) ([]byte, error) {
+	parent, err := r.parent()
+	if err != nil {
+		return nil, err
+	}
+	f, err := windowsRegularAt(parent, name, false)
 	if err != nil {
 		return nil, err
 	}
@@ -78,22 +132,29 @@ func ReadPrivateCacheDocument(root, name string, limit int64) ([]byte, error) {
 // deliberately omits physical-disk Sync, unlike durable installer/journal writes.
 // Preparation failures preserve the previous document; publication is one
 // replacing rename relative to the held, validated private root.
-func WritePrivateCacheDocument(root, name string, data []byte) (err error) {
+func WritePrivateCacheDocument(root, name string, data []byte) error {
+	r, err := OpenPrivateCacheRoot(root)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	return r.Write(name, data)
+}
+
+func (r *PrivateCacheRoot) Write(name string, data []byte) (err error) {
 	if len(data) == 0 {
 		return fmt.Errorf("private cache write requires bytes")
 	}
 	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `\/:`) {
 		return fmt.Errorf("invalid relative Windows component")
 	}
-	var handles []windows.Handle
+	var parent windows.Handle
 	trace.WithRegion(context.Background(), "observation.publish/root", func() {
-		handles, err = privateCacheRootHandles(root)
+		parent, err = r.parent()
 	})
-	defer closeWindowsParents(handles)
 	if err != nil {
 		return err
 	}
-	parent := handles[len(handles)-1]
 	var random [16]byte
 	trace.WithRegion(context.Background(), "observation.publish/random", func() {
 		_, err = rand.Read(random[:])
@@ -201,15 +262,15 @@ func validatePrivateCacheReplacement(parent windows.Handle, name string) (err er
 }
 
 func privateCacheRootHandles(root string) ([]windows.Handle, error) {
-	handles, _, err := windowsParents(root, false)
+	handles, _, err := windowsParentsWithSharing(root, false, false)
 	if err != nil {
 		return handles, err
 	}
 	// windowsParents checks/pins ancestors, but its handles lack READ_CONTROL.
 	// Open the root relative to its held parent with security-query access.
-	handle, err := windowsOpenAt(handles[len(handles)-1], filepath.Base(root),
+	handle, err := windowsOpenAtWithSharing(handles[len(handles)-1], filepath.Base(root),
 		windows.READ_CONTROL|windows.FILE_READ_ATTRIBUTES|windows.FILE_TRAVERSE,
-		windows.FILE_OPEN, windows.FILE_DIRECTORY_FILE)
+		windows.FILE_OPEN, windows.FILE_DIRECTORY_FILE, nil, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE)
 	if err != nil {
 		return handles, err
 	}

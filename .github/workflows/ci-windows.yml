@@ -89,6 +89,11 @@ jobs:
           go test -run '^$' -bench '^BenchmarkWindowsPrivateLock$' -benchtime=100x -count=5 -benchmem ./internal/installruntime
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Compare Windows cache root traversal
+        if: matrix.go == '1.26'
+        run: go test -run '^$' -bench '^BenchmarkWindowsPrivateCacheRoot$' -benchtime=100x -count=3 -benchmem ./internal/installruntime
+        shell: bash
+
       - name: Qualify observation caches without cross-package contention
         id: observation
         # Preserve the first strict failure and its trace. There is no automatic
@@ -106,8 +111,15 @@ jobs:
           { head -n 1 coverage-gemini-event.txt; tail -n +2 coverage-gemini-event.txt; tail -n +2 coverage-observation.txt; } > coverage-gemini.txt
           exit "$qualification_status"
 
+      - name: Repeat Gemini channel consent and failed-marker suppression
+        id: observation_repeat
+        env:
+          AGENT_NOTIFICATIONS_OBSERVATION_DIAGNOSTICS: '1'
+        run: go test -race -count=20 -run '^TestChannelConsentIndependentAndNoRetry$' -trace=observation-evidence/geminievent-repeat.trace ./internal/geminievent
+        shell: bash
+
       - name: Preserve failed observation attempt
-        if: ${{ failure() && steps.observation.outcome == 'failure' }}
+        if: ${{ failure() && (steps.observation.outcome == 'failure' || steps.observation_repeat.outcome == 'failure') }}
         uses: actions/upload-artifact@v7
         with:
           name: windows-observation-failure-go-${{ matrix.go }}

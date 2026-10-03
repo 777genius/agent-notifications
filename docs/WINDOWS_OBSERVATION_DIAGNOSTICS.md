@@ -26,8 +26,8 @@ cache document. `Unwrap` is deliberately unavailable. With
 labels/numbers to stderr after releasing the cache lock. Default execution is
 silent; stdout is unchanged.
 
-Windows CI records the original Gemini qualification attempt with Go runtime
-trace and enables sanitized stderr diagnostics. If qualification fails, the
+Windows CI records the original Gemini qualification attempt and the separate
+consent/no-retry repetition with Go runtime trace and sanitized stderr diagnostics. If qualification fails, the
 `windows-observation-failure-go-*` artifact contains its trace, checked-out SHA
 and Go version. Tests keep their real first claims, process concurrency,
 security assertions and deadline; no failed attempt is rerun as success.

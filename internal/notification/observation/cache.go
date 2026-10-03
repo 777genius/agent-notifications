@@ -54,9 +54,11 @@ func (c *RecentCache) Claim(ctx context.Context, key string, bit uint8) (bool, e
 		return false, diag.fail(err, "invalid_path")
 	}
 	diag.enter("root")
-	if err = checkCacheRoot(root); err != nil {
+	cache, err := openCache(root)
+	if err != nil {
 		return false, diag.fail(err, "validation")
 	}
+	defer cache.Close()
 	lockCtx, cancel := context.WithTimeout(ctx, ClaimBudget)
 	defer cancel()
 	diag.budget, diag.budgetStarted = lockCtx, time.Now()
@@ -75,7 +77,7 @@ func (c *RecentCache) Claim(ctx context.Context, key string, bit uint8) (bool, e
 		return false, diag.fail(err, "none")
 	}
 	diag.enter("read")
-	data, err := readCache(root)
+	data, err := cache.Read()
 	if err != nil && !os.IsNotExist(err) {
 		return false, diag.fail(err, "validation")
 	}
@@ -102,7 +104,7 @@ func (c *RecentCache) Claim(ctx context.Context, key string, bit uint8) (bool, e
 		return false, diag.fail(err, "none")
 	}
 	diag.enter("publish")
-	if err = writeCache(root, data); err != nil {
+	if err = cache.Write(data); err != nil {
 		return false, diag.fail(err, "validation")
 	}
 	diag.enter("published")
