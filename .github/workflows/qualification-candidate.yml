@@ -3,11 +3,11 @@ on:
   workflow_dispatch:
     inputs:
       plan:
-        description: 'five-undemonstrated plans two TEST mock transactions; Darwin V1 API diagnostics plan zero'
+        description: 'five-undemonstrated plans two TEST mock transactions; Darwin V1 and Windows V2 API plans zero'
         required: true
         default: five-undemonstrated
         type: choice
-        options: [five-undemonstrated, darwin-v1-api-diagnostics]
+        options: [five-undemonstrated, darwin-v1-api-diagnostics, windows-v2-api]
 permissions:
   contents: read
 jobs:
@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.plan == 'darwin-v1-api-diagnostics' && '[{"runner":"macos-15-intel","os":"darwin","arch":"amd64","version":"1.18.33","mode":"api-only"},{"runner":"macos-15","os":"darwin","arch":"arm64","version":"1.18.33","mode":"api-only"}]' || '[{"runner":"ubuntu-22.04-arm","os":"linux","arch":"arm64","version":"1.18.33","mode":"one-completion"},{"runner":"ubuntu-22.04-arm","os":"linux","arch":"arm64","version":"2.0.21","mode":"api-only"},{"runner":"macos-15-intel","os":"darwin","arch":"amd64","version":"2.0.21","mode":"api-only"},{"runner":"macos-15","os":"darwin","arch":"arm64","version":"2.0.21","mode":"api-only"},{"runner":"windows-latest","os":"windows","arch":"amd64","version":"1.18.33","mode":"one-completion"}]') }}
+        include: ${{ fromJSON(inputs.plan == 'windows-v2-api' && '[{"runner":"windows-latest","os":"windows","arch":"amd64","version":"2.0.21","mode":"api-only"}]' || inputs.plan == 'darwin-v1-api-diagnostics' && '[{"runner":"macos-15-intel","os":"darwin","arch":"amd64","version":"1.18.33","mode":"api-only"},{"runner":"macos-15","os":"darwin","arch":"arm64","version":"1.18.33","mode":"api-only"}]' || '[{"runner":"ubuntu-22.04-arm","os":"linux","arch":"arm64","version":"1.18.33","mode":"one-completion"},{"runner":"ubuntu-22.04-arm","os":"linux","arch":"arm64","version":"2.0.21","mode":"api-only"},{"runner":"macos-15-intel","os":"darwin","arch":"amd64","version":"2.0.21","mode":"api-only"},{"runner":"macos-15","os":"darwin","arch":"arm64","version":"2.0.21","mode":"api-only"},{"runner":"windows-latest","os":"windows","arch":"amd64","version":"1.18.33","mode":"one-completion"}]') }}
     env:
       CELL_OS: ${{ matrix.os }}
       CELL_ARCH: ${{ matrix.arch }}
@@ -31,7 +31,7 @@ jobs:
           PLAN_NAME: ${{ inputs.plan }}
         run: |
           case "$PLAN_NAME" in
-            five-undemonstrated|darwin-v1-api-diagnostics) ;;
+            five-undemonstrated|darwin-v1-api-diagnostics|windows-v2-api) ;;
             *) echo 'Unknown observation plan refused' >&2; exit 1 ;;
           esac
       - uses: actions/checkout@v7
