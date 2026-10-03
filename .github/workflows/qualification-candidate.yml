@@ -39,6 +39,10 @@ jobs:
       AN_ARCH: ${{ matrix.target.arch }}
       AN_VERSION: ${{ matrix.version }}
     steps:
+      - name: Preserve exact text bytes in both TEST checkouts
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@v7
         with: {path: transport, persist-credentials: false}
       - uses: actions/checkout@v7
@@ -57,8 +61,8 @@ jobs:
         run: |
           mkdir -p .task-tools/artifacts
           python -c 'import json,pathlib; pathlib.Path(".task-tools/artifacts/native-report.json").write_text(json.dumps({"status":"unqualified","businessPhasesStarted":False,"firstFailedPrerequisite":"fixture_checks_not_completed"})+"\n")'
-      - name: Inert fixture parser checks
-        run: python -B scripts/testdata/opencode-native-e2e/test_fixture.py
+      - name: Inert fixture parser checks through pinned TEST supplier
+        run: python -B ../transport/run-inert-checker.py
       - name: Linux build and private bus prerequisites
         if: matrix.target.platform == 'linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev dbus iproute2
