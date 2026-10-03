@@ -80,13 +80,13 @@ jobs:
           Write-Host "Baseline lock preparation at $env:LOCK_BASE_SHA"
           Push-Location $baseline
           try {
-            go test -run '^$' -bench '^BenchmarkWindowsPrivateLock$' -benchtime=20x -benchmem ./internal/installruntime
+            go test -run '^$' -bench '^BenchmarkWindowsPrivateLock$' -benchtime=100x -count=5 -benchmem ./internal/installruntime
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           } finally {
             Pop-Location
           }
           Write-Host 'Current lock preparation'
-          go test -run '^$' -bench '^BenchmarkWindowsPrivateLock$' -benchtime=20x -benchmem ./internal/installruntime
+          go test -run '^$' -bench '^BenchmarkWindowsPrivateLock$' -benchtime=100x -count=5 -benchmem ./internal/installruntime
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Qualify observation caches without cross-package contention

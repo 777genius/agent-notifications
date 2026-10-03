@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"testing"
 	"time"
 )
@@ -32,8 +33,10 @@ func BenchmarkWindowsPrivateLock(b *testing.B) {
 					b.Fatal(err)
 				}
 			}
+			latencies := make([]time.Duration, b.N)
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
+				started := time.Now()
 				if !warm {
 					path = filepath.Join(root, fmt.Sprintf("lock-%d", i))
 				}
@@ -46,7 +49,13 @@ func BenchmarkWindowsPrivateLock(b *testing.B) {
 				if err != nil {
 					b.Fatal(err)
 				}
+				latencies[i] = time.Since(started)
 			}
+			b.StopTimer()
+			sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
+			b.ReportMetric(float64(latencies[len(latencies)/2].Nanoseconds()), "p50-ns/lock")
+			b.ReportMetric(float64(latencies[(len(latencies)*95-1)/100].Nanoseconds()), "p95-ns/lock")
+			b.ReportMetric(float64(latencies[len(latencies)-1].Nanoseconds()), "max-ns/lock")
 		})
 	}
 }

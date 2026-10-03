@@ -34,9 +34,13 @@ func openLock(path string, create bool) (*os.File, error) {
 	if create {
 		disposition = windows.OPEN_ALWAYS
 		access |= windows.WRITE_DAC | windows.WRITE_OWNER
-		// Set the exact owner and protected DACL during creation. A new private
-		// inode must not need a second metadata write to establish its policy.
-		sd, err := privateWindowsSecurityDescriptor(false)
+		user, err := windows.GetCurrentProcessToken().GetTokenUser()
+		if err != nil {
+			return nil, err
+		}
+		// Preserve the kernel's default owner during creation. The handle-bound
+		// snapshot below decides whether owner/DACL normalization is necessary.
+		sd, err := windows.SecurityDescriptorFromString("D:P(A;;FA;;;" + user.User.Sid.String() + ")(A;;FA;;;SY)(A;;FA;;;BA)")
 		if err != nil {
 			return nil, err
 		}
