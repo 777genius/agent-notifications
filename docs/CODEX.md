@@ -12,8 +12,8 @@ runtime copy. Then start Codex and approve the entries in `/hooks`.
 
 ### Manual Codex registration
 
-Skip this section if you used the one-command installer. For manual setup, download a
-matching release bundle and binary (v1.42.0 or newer). The Go registration command needs
+Skip this section if you used the one-command installer. For manual setup, download the
+latest stable release's matching bundle and binary. The Go registration command needs
 no `jq` and is not automatically added to your `PATH`.
 
 From the bundle directory:

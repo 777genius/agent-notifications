@@ -23,7 +23,7 @@ Desktop notifications for **Claude Code, Codex CLI and OpenCode**. Know when a t
 
 ## Install Or Update
 
-**[Guided installer](https://777genius.github.io/agent-notifications/#install)** or run:
+**[Guided installer (stable)](https://777genius.github.io/agent-notifications/#install)** or run:
 
 ```bash
 curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash
