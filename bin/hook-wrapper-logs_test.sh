@@ -11,6 +11,7 @@ import concurrent.futures
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
@@ -227,7 +228,11 @@ assert fallback.stdout == fallback.stderr == b''
 # A successful mktemp followed by a failed log open must invoke the installer once.
 (root / 'log-is-directory').mkdir()
 real_mktemp = shutil.which('mktemp')
-(stub / 'mktemp').write_text('#!/bin/sh\ncase "$*" in *install-1.42.0-*) printf "%s\\n" "$ROOT/log-is-directory";; *) exec '+real_mktemp+' "$@";; esac\n', newline='\n')
+assert real_mktemp is not None, 'fixture requires the real mktemp command'
+# Native Windows discovery returns a drive path with backslashes and spaces.
+# Preserve it as one shell word when delegating claim-directory creation.
+mktemp_command = shlex.quote(real_mktemp.replace('\\', '/'))
+(stub / 'mktemp').write_text('#!/bin/sh\ncase "$*" in *install-1.42.0-*) printf "%s\\n" "$ROOT/log-is-directory";; *) exec '+mktemp_command+' "$@";; esac\n', newline='\n')
 fallback = invoke(no_log, root / 'open-failure')
 assert (root / 'ran').read_text() == 'ran\n'
 assert not fallback.stderr and 'status 8' in json.loads(fallback.stdout)['systemMessage']
