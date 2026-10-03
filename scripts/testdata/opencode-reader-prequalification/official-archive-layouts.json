@@ -49,6 +49,13 @@
         "package/package.json": 238
       }
     },
+    "b83e8ac66d752d05ead4b6a439d3a2cfa32bcd9817c708825a389b5d5cba4f19": {
+      "archiveBytes": 60309530,
+      "members": {
+        "package/bin/opencode": 185632896,
+        "package/package.json": 138
+      }
+    },
     "cd2c704ad653137b62992bca2b32383f8daa31b3c9462e566278e1efba07b31d": {
       "archiveBytes": 46045337,
       "members": {

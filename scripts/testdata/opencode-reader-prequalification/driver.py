@@ -1,5 +1,5 @@
 """TEST portable genuine packaged-reader observation, never installed AN E2E."""
-import argparse,base64,hashlib,hmac,http.client,json,os,pathlib,platform,secrets,shutil,socket,stat,struct,subprocess,sys,tarfile,threading,time,urllib.parse
+import argparse,base64,hashlib,hmac,http.client,json,os,pathlib,platform,re,secrets,shutil,socket,stat,struct,subprocess,sys,tarfile,threading,time,urllib.parse
 from http.server import BaseHTTPRequestHandler
 P=pathlib.Path;HERE=P(__file__).resolve().parent
 sys.path.insert(0,str(HERE/'retained'))
@@ -57,7 +57,7 @@ def private_windows(root):
 def unpack(archive,root,pin,os_name,arch):
  need(sha(archive)==pin['archiveSHA256'],'official_archive_SHA');raw=archive.read_bytes();alg,b64=pin['archiveSRI'].split('-',1)
  need(alg=='sha512' and base64.b64encode(hashlib.sha512(raw).digest()).decode()==b64,'SRI_before_parse')
- layouts=HERE/'official-archive-layouts.json';need(sha(layouts)=='e1e76b888788ca7e4fe4376ac9e657fea21ca58ed8b2c963e2290ac207cf3977','closed_archive_layout_source')
+ layouts=HERE/'official-archive-layouts.json';need(sha(layouts)=='a0ac3dc8d3bf26956b061e46063efc19257ee3149208f26a763656a585532649','closed_archive_layout_source')
  layout=json.loads(layouts.read_text())['archives'][pin['archiveSHA256']];need(archive.stat().st_size==layout['archiveBytes'],'exact_official_archive_bytes')
  name='package/bin/'+('opencode.exe' if os_name=='windows' else 'opencode');expected=layout['members'];need(set(expected)=={'package/package.json',name},'exact_two_official_members')
  with tarfile.open(archive,'r:gz') as t:
@@ -79,8 +79,10 @@ def unpack(archive,root,pin,os_name,arch):
 
 def wait_file(path,end,proc):
  while True:
-  need(proc.poll() is None,'owned_host_ended_before_reader');remaining(end)
-  if path.is_file():need(path.stat().st_size<=16384,'reader_receipt_bound');return json.loads(path.read_text())
+  remaining(end)
+  if path.is_file():
+   need(path.stat().st_size<=16384,'reader_receipt_bound');value=json.loads(path.read_text());remaining(end);return value
+  need(proc.poll() is None,'owned_host_ended_before_reader')
   time.sleep(min(.02,remaining(end)))
 def independent_v1_fact(root,key,sid,history):
  rows=[json.loads(l) for l in (root/'reader-private.jsonl').read_text().splitlines()];H=lambda x:'h:'+hmac.new(key,str(x).encode(),hashlib.sha256).hexdigest()[:24]
@@ -92,6 +94,18 @@ def independent_v1_fact(root,key,sid,history):
  need(not any(p.get('type')=='tool' for x in history for p in x.get('parts',[])),'zero_native_tools')
  p=fact['provenance'];need(p['generation']=='v1' and p['timeBasis']=='assistant_completed' and p['nativeTime']==a['time']['completed'],'original_native_time_no_restamp')
  need(any(r['kind']=='native-v1' and r['value'].get('type')=='message.updated' and r['value'].get('properties',{}).get('info',{}).get('id')==H(a['id']) and r['value']['properties']['info'].get('time',{}).get('completed')==a['time']['completed'] for r in rows),'independent_final_callback')
+def tui_input_frame(raw):
+ # Native completed render only, not plugin readiness or arbitrary terminal text.
+ need(len(raw)<=1048576,'bounded_TUI_readiness_output')
+ for frame in raw.split(b'\x1b[?2026h')[1:]:
+  stop=frame.find(b'\x1b[?2026l')
+  if stop<0:continue
+  frame=frame[:stop]
+  if not re.search(rb'\x1b\[[1-9][0-9]*;[1-9][0-9]*H\x1b\[\?25h',frame):continue
+  text=re.sub(rb'\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\))',b'',frame)
+  if all(x in text for x in ['Ask anything…'.encode(),b'Build',b'TEST completion',b'TEST loopback']):return True
+ return False
+
 def main(a):
  global CURRENT_STAGE
  HTTP_DIAGNOSTICS.clear()
@@ -99,8 +113,8 @@ def main(a):
   global CURRENT_STAGE
   CURRENT_STAGE=value
  actual_os={'Linux':'linux','Darwin':'darwin','Windows':'windows'}[platform.system()];actual_arch={'x86_64':'amd64','AMD64':'amd64','arm64':'arm64','aarch64':'arm64'}[platform.machine()]
- need((a.os,a.arch)==(actual_os,actual_arch),'native_runner_cell');need(a.version in ['1.18.33','2.0.21'] and a.mode in ['api-only','one-completion'],'closed_scope')
- need(a.version=='1.18.33' or a.mode=='api-only','completion_fallback_V1_only')
+ need((a.os,a.arch)==(actual_os,actual_arch),'native_runner_cell');need(a.version in ['1.18.33','1.18.34'] and a.mode=='one-completion' and a.entry in ['tui','run'],'closed_local_V1_scope')
+ need(a.mode=='one-completion','one_planned_native_transaction')
  if a.host_netns_fd is not None:
   need(actual_os=='linux','Linux_NET_FD_only');import importlib.util
   hp=HERE/'retained/owned-test-cgroup.py';need(sha(hp)=='8a349bffd8a202daae9173b0686ec547bb3cffa126669e72c73ca0aa744d56f8','NET_helper_pin');sp=importlib.util.spec_from_file_location('owned_reader_NET',hp);hm=importlib.util.module_from_spec(sp);sp.loader.exec_module(hm);hm.private_netns(a.host_netns_fd);os.close(a.host_netns_fd)
@@ -114,47 +128,172 @@ def main(a):
  os.umask(0o077);root.mkdir(mode=0o700)
  if a.os=='windows':private_windows(root)
  project=root/'project';project.mkdir(mode=0o700);host=unpack(a.archive,root,pin,a.os,a.arch);e=env(root)
- if a.version=='1.18.33':e.update(NPM_CONFIG_OFFLINE='true',NPM_CONFIG_FETCH_RETRIES='0',OPENCODE_DISABLE_MODELS_FETCH='1')
+ if a.version in ['1.18.33','1.18.34']:e.update(NPM_CONFIG_OFFLINE='true',NPM_CONFIG_FETCH_RETRIES='0',OPENCODE_DISABLE_MODELS_FETCH='1')
  key=secrets.token_bytes(32);(root/'trace-key').write_bytes(key)
  write(root/'.owned-test-root.json',{'purpose':'TEST portable packaged SDK reader'})
- write(root/'reader-authority-private.json',{'version':a.version,'os':a.os,'arch':a.arch,'official':pin,'parentPID':os.getpid(),'directory':str(project.resolve()),'imageSHA256':pin['executableSHA256'],'apiOnlyReadiness':True,'mode':a.mode})
+ write(root/'reader-authority-private.json',{'version':a.version,'os':a.os,'arch':a.arch,'official':pin,'parentPID':os.getpid(),'directory':str(project.resolve()),'imageSHA256':pin['executableSHA256'],'apiOnlyReadiness':False,'mode':a.mode,'entry':a.entry})
  provider=Provider(root,key);provider.mode=a.mode;provider.http_attempts=0;provider.RequestHandlerClass=CountedProvider
- worker=threading.Thread(target=provider.serve_forever);worker.start();proc=None;log=None;headers={};v2=a.version=='2.0.21';success=False
- result={'status':'unqualified','cell':{'os':a.os,'arch':a.arch,'version':a.version},'mode':a.mode,'plannedProviderTransactions':1 if a.mode=='one-completion' else 0,'packagedReaderTransportObserved':False,'factoryFinalizationObserved':False,'sourceDescriptorGranted':False,**FLAGS}
+ worker=threading.Thread(target=provider.serve_forever);worker.start();proc=None;log=None;ui_output=bytearray();ui_changed=threading.Condition();pty_master=None;pty_worker=None;pty_overflow=False;pty_failure=None;pty_eof=False;common_end=None;win_terminal=None;hpc_closer=None;win_last_exit=None;headers={};v2=a.version=='2.0.21';success=False
+ result={'status':'unqualified','cell':{'os':a.os,'arch':a.arch,'version':a.version,'entry':a.entry},'mode':a.mode,'plannedProviderTransactions':1 if a.mode=='one-completion' else 0,'packagedReaderTransportObserved':False,'factoryFinalizationObserved':False,'sourceDescriptorGranted':False,**FLAGS}
+ if a.os=='windows':fixed.update({str(HERE/'retained'/n):sha(HERE/'retained'/n) for n in ['windows_conpty.py','harness.py']})
  stage('configured_loader_preparation')
  try:
   plug=root/'reader.js';shutil.copyfile(a.bundle,plug)
   models={'p0-completion':{'name':'TEST completion','limit':{'context':128000,'output':8192}}};endpoint=f'http://127.0.0.1:{provider.server_port}/v1'
-  config={'model':'p0/p0-completion'}
+  config={'model':'p0/p0-completion','agent':{'title':{'disable':True}}}
   if v2:
    entry=root/'plugin-entry';entry.mkdir(mode=0o700);(entry/'server.js').write_text('export { default } from '+json.dumps(plug.resolve().as_uri())+';\n')
    config.update(update='disable',share='disabled',warming=False,formatter=False,lsp=False,websearch=False,plugins=[{'package':str(entry.resolve())}],permissions=[{'action':'*','resource':'*','effect':'deny'}],providers={'p0':{'name':'TEST loopback','package':'@opencode/ai/providers/openai-compatible','env':[],'settings':{'baseURL':endpoint,'apiKey':'sandbox-only','timeout':10000},'models':models}})
    password=secrets.token_hex(16);e['OPENCODE_PASSWORD']=password;headers={'Authorization':'Basic '+base64.b64encode(('opencode:'+password).encode()).decode()}
   else:config.update(plugin=[[plug.resolve().as_uri(),{}]],permission={'*':'deny'},provider={'p0':{'npm':'@ai-sdk/openai-compatible','name':'TEST loopback','options':{'baseURL':endpoint,'apiKey':'sandbox-only'},'models':models}})
   write(project/'opencode.json',config);e['OPENCODE_CONFIG']=str(project/'opencode.json')
-  with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
-  stage('owned_host_spawn')
-  log=(root/'host-private.log').open('xb');proc=subprocess.Popen([str(host),'serve','--hostname','127.0.0.1','--port',str(port)],cwd=project,env=e,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=(a.os!='windows'))
-  stage('owned_host_health');startup=time.monotonic()+35
-  while True:
-   need(proc.poll() is None,'host_startup_closed');remaining(startup)
-   try:
-    info=request(port,project,'/api/info' if v2 else '/global/health',headers,v2,timeout=min(1,remaining(startup)),startup=True);need(info['version']==a.version and (info.get('pid')==proc.pid if v2 else info.get('healthy') is True),'actual_host_identity');break
-   except (ConnectionError,TimeoutError,OSError):time.sleep(min(.05,remaining(startup)))
-  stage('native_project_activation')
-  request(port,project,'/api/plugin' if v2 else '/config',headers,v2)
+  stage('owned_local_entry_spawn')
+  log=(root/'host-private.log').open('xb')
+  prompt='Reply with one short TEST completion.'
+  argv=[str(host)] if a.entry=='tui' else [str(host),'run','--format','json',prompt]
+  if a.entry=='tui':common_end=time.monotonic()+35+35+6
+  def phase_end(seconds):
+   end=time.monotonic()+seconds
+   return min(common_end,end) if common_end is not None else end
+  def tui_current():
+   if common_end is not None:remaining(common_end)
+  if a.entry=='tui' and actual_os=='windows':
+   import ctypes,importlib.util
+   wp=HERE/'retained/windows_conpty.py';need(sha(wp)=='1c2bb5c8874862103aea6de9173ae0b23eed4a551b293d2b1155caf263be160e','reviewed_direct_ConPTY_source')
+   need(sha(HERE/'retained/harness.py')=='cd6147929a58363e24063e4c520b87cf5bc08fe39b16ced689d4cee7750fbb78','ConPTY_inert_harness_source');spec=importlib.util.spec_from_file_location('owned_entry_ConPTY',wp);wm=importlib.util.module_from_spec(spec);spec.loader.exec_module(wm)
+   hpc_owner_lock=threading.Lock()
+   def close_owned_terminal():
+    with hpc_owner_lock:win_terminal.close()
+   class EntryConPTY(wm.ConPTY):
+    # Same owned creation/Job logic; only actual output termination is evidence.
+    def read(self):
+     buf,size=ctypes.create_string_buffer(65536),wm.W.DWORD()
+     error=None;self.eof_reason=None
+     try:
+      while True:
+       ok=self.k.ReadFile(self.output,buf,len(buf),ctypes.byref(size),None)
+       if not ok:
+        code=ctypes.get_last_error()
+        if code==109:self.eof_reason='broken_pipe_109'
+        else:error='ConPTY_ReadFile_'+str(code)
+        break
+       if not size.value:self.eof_reason='read_zero';break
+       with self.output_changed:
+        self.raw.extend(buf.raw[:size.value])
+        if len(self.raw)>4*1024*1024:error='capture exceeded 4 MiB';break
+        self.output_changed.notify_all()
+     except Exception as exc:error='console reader failure: '+repr(exc)
+     finally:
+      with self.output_changed:
+       self.error=error;self.reader_done=True;self.output_changed.notify_all()
+   win_terminal=EntryConPTY(argv,e,project,remaining(common_end))
+   class DirectNativeProcess:
+    pid=int(win_terminal.pi.dwProcessId)
+    def poll(self):return win_last_exit if win_terminal.closed else win_terminal.poll()
+    def wait(self,timeout):
+     nonlocal win_last_exit
+     end=min(common_end,time.monotonic()+timeout)
+     remaining(end)
+     while self.poll() is None:remaining(end);time.sleep(min(.02,remaining(end)))
+     remaining(end);win_last_exit=self.poll();remaining(end);return win_last_exit
+    def terminate(self):close_owned_terminal()
+    def kill(self):close_owned_terminal()
+   proc=DirectNativeProcess()
+  elif a.entry=='tui':
+   import pty,select,fcntl,termios
+   pty_master,slave=pty.openpty();fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack('HHHH',32,120,0,0));e['TERM']='xterm-256color'
+   try:proc=subprocess.Popen(argv,cwd=project,env=e,stdin=slave,stdout=slave,stderr=slave,start_new_session=True)
+   finally:os.close(slave)
+   def drain_pty():
+    nonlocal pty_overflow,pty_failure,pty_eof
+    total=0
+    while True:
+     if time.monotonic()>=common_end:pty_failure="PTY_absolute_deadline";return
+     try:ready,_,_=select.select([pty_master],[],[],min(.1,remaining(common_end)))
+     except (OSError,ValueError):pty_failure="PTY_select_failure";return
+     if not ready:continue
+     try:block=os.read(pty_master,65536)
+     except OSError as error:
+      if error.errno==5 and time.monotonic()<common_end:pty_eof=True;return
+      pty_failure="PTY_read_failure";return
+     if time.monotonic()>=common_end:pty_failure="PTY_absolute_deadline";return
+     if not block:pty_eof=True;return
+     total+=len(block)
+     if total>1048576:pty_overflow=True
+     else:
+      log.write(block)
+      with ui_changed:ui_output.extend(block);ui_changed.notify_all()
+   pty_worker=threading.Thread(target=drain_pty);pty_worker.start()
+  else:proc=subprocess.Popen(argv,cwd=project,env=e,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
+  # Private OS argv witness, not own.entry or plugin process.argv authority.
+  if actual_os=='linux':
+   actual_argv=(P('/proc')/str(proc.pid)/'cmdline').read_bytes().split(b'\0')
+   need(actual_argv[-1:]==[b''] and actual_argv[:-1]==[os.fsencode(x) for x in argv],'actual_stock_entry_argv')
+   need((P('/proc')/str(proc.pid)/'exe').resolve()==host.resolve(),'actual_stock_entry_image')
+   write(root/'native-entry-private.json',{'pid':proc.pid,'argv':argv,'entry':a.entry,'osWitness':'proc_cmdline_and_exe','qualificationGranted':False})
+  elif actual_os=='darwin':
+   actual_argv=subprocess.check_output(['ps','-ww','-p',str(proc.pid),'-o','command='],timeout=2).decode().strip()
+   need(actual_argv==(' '.join(argv)),'actual_stock_entry_argv')
+   write(root/'native-entry-private.json',{'pid':proc.pid,'argvText':actual_argv,'entry':a.entry,'osWitness':'ps_command_only','qualificationGranted':False})
+  else:
+   native_command=subprocess.check_output(['powershell','-NoProfile','-NonInteractive','-Command',
+    "(Get-CimInstance Win32_Process -Filter 'ProcessId = "+str(proc.pid)+"').CommandLine"],timeout=2).decode().strip()
+   need(len(native_command.encode())<=4096 and native_command==subprocess.list2cmdline(argv),'actual_stock_entry_commandline')
+   write(root/'native-entry-private.json',{'pid':proc.pid,'commandLine':native_command,'entry':a.entry,'osWitness':'Win32_Process_CommandLine','qualificationGranted':False})
   stage('native_reader_readiness')
-  ready=wait_file(root/'reader-ready.json',time.monotonic()+6,proc);need(ready['version']==a.version and ready['nativePID']==proc.pid and ready['parentPID']==os.getpid() and P(ready['actualExecPath']).resolve()==host.resolve() and ready['ownedImageSHA256']==pin['executableSHA256'],'actual_native_loader_image_scope')
-  if v2:need(ready['firstReaderClosureObserved'] is True and ready['actualAbortRequested'] is True,'actual_first_reader_abort_ready_witness')
-  if not v2:
-   stage('native_owned_session_create')
-   sid=request(port,project,'/session',headers,False,{'title':'TEST reader owned'})['id'];enc=urllib.parse.quote(sid,safe='')
-   if a.mode=='api-only':
-    stage('native_empty_session_callbacks');request(port,project,'/session/'+enc,headers,False,{'title':'TEST empty reader'},'PATCH');request(port,project,'/session/'+enc,headers,False,method='DELETE')
-   else:
-    stage('native_one_completion');request(port,project,'/session/'+enc+'/message',headers,False,{'model':{'providerID':'p0','modelID':'p0-completion'},'parts':[{'type':'text','text':'Reply with one short TEST completion.'}]},timeout=35)
+  startup_end=phase_end(35)
+  ready=wait_file(root/'reader-ready.json',startup_end,proc);tui_current()
+  need(ready['version']==a.version and ready['nativePID']==proc.pid and ready['parentPID']==os.getpid() and P(ready['actualExecPath']).resolve()==host.resolve() and ready['ownedImageSHA256']==pin['executableSHA256'],'actual_native_loader_image_scope')
+  if a.entry=='tui':
+   stage('native_TUI_input_readiness')
+   changed=win_terminal.output_changed if win_terminal is not None else ui_changed
+   while True:
+    remaining(startup_end);need(proc.poll() is None,'native_TUI_ended_before_input')
+    with changed:
+     raw=bytes(win_terminal.raw) if win_terminal is not None else bytes(ui_output)
+     need((win_terminal.error is None if win_terminal is not None else not pty_overflow and pty_failure is None),'native_TUI_readiness_reader')
+     if tui_input_frame(raw):remaining(startup_end);break
+     changed.wait(min(.02,remaining(startup_end)))
+   result['TUIInputReadyOutputSHA256']=hashlib.sha256(raw).hexdigest();result['TUIInputReadyBytes']=len(raw)
+   tui_current();remaining(startup_end)
+   if win_terminal is not None:win_terminal.send((prompt+'\r').encode())
+   else:os.write(pty_master,(prompt+'\r').encode())
   stage('native_reader_disposal')
-  closed=wait_file(root/'reader-closed.json',time.monotonic()+6,proc);need(closed['actualSDKDispose'] and closed['ownedImageSHA256']==pin['executableSHA256'],'actual_factory_dispose')
+  closed=wait_file(root/'reader-closed.json',phase_end(35+6),proc);tui_current();need(closed['actualSDKDispose'] and closed['ownedImageSHA256']==pin['executableSHA256'],'actual_factory_dispose')
+  stage('native_entry_natural_finish')
+  if a.entry=='tui':
+   tui_current()
+   if win_terminal is not None:win_terminal.send(b'\x03')
+   else:os.write(pty_master,b'\x03') # stock app_exit key after settled prompt
+  exit_end=phase_end(6);remaining(exit_end);code=proc.wait(timeout=remaining(exit_end));remaining(exit_end);need(code==0,'native_entry_natural_exit')
+  if win_terminal is not None:
+   accounting=wm.JOB_ACCOUNTING();win_terminal.ok(win_terminal.k.QueryInformationJobObject(win_terminal.job,1,ctypes.byref(accounting),ctypes.sizeof(accounting),None))
+   tui_current();need(accounting.active_processes==0,'natural_ConPTY_job_empty')
+   # With zero clients, release the pseudoconsole's writer while its reader
+   # remains alive. Only a running closer may take HPCON ownership.
+   hpc=win_terminal.hpc;need(bool(hpc),'owned_HPCON')
+   hpc_errors=[];hpc_completed=[False]
+   def release_hpc():
+    with hpc_owner_lock:
+     # Cleanup owns an unstarted/delayed closer's handle. Never close twice.
+     if win_terminal.closed or win_terminal.hpc.value!=hpc.value:
+      hpc_errors.append('HPCON_cleanup_owned');return
+     win_terminal.hpc=wm.W.HANDLE()
+    try:win_terminal.k.ClosePseudoConsole(hpc);hpc_completed[0]=True
+    except Exception as error:hpc_errors.append(type(error).__name__)
+   close_end=phase_end(3);remaining(close_end)
+   hpc_closer=threading.Thread(target=release_hpc,daemon=True);hpc_closer.start()
+   hpc_closer.join(timeout=remaining(close_end));remaining(close_end)
+   need(not hpc_closer.is_alive() and hpc_completed[0] and not hpc_errors,'HPCON_zero_client_release')
+   end=phase_end(2);remaining(end)
+   win_terminal.reader.join(timeout=remaining(end));remaining(end)
+   need(not win_terminal.reader.is_alive() and win_terminal.reader_done and win_terminal.error is None and
+    win_terminal.eof_reason in ['broken_pipe_109','read_zero'] and len(win_terminal.raw)<=1048576,'natural_ConPTY_output_EOF')
+   result['ConPTYOutputEOFReason']=win_terminal.eof_reason;result['ConPTYClosedAfterZeroClients']=True
+   log.write(win_terminal.raw);close_owned_terminal();tui_current();need(not win_terminal.forced,'ConPTY_no_forced_close')
+  if pty_worker is not None:
+   eof_end=phase_end(2);remaining(eof_end);pty_worker.join(timeout=remaining(eof_end));remaining(eof_end);need(not pty_worker.is_alive() and pty_eof and not pty_overflow and pty_failure is None,'bounded_PTY_EOF')
+  result['nativeEntryTransport']=a.entry;result['nativeEntryNaturalExit']=True
   stage('independent_reader_oracle')
   rows=[json.loads(x) for x in (root/'reader-private.jsonl').read_text().splitlines()];need(len(rows)<=512 and (root/'reader-private.jsonl').stat().st_size<=1048576 and not any(x['kind']=='uncertainty' for x in rows),'bounded_certain_real_ingress')
   if v2:
@@ -170,18 +309,35 @@ def main(a):
     matching=[x['value'] for x in rows if x['kind']=='native-v1' and x['value'].get('properties',{}).get('info',{}).get('id')==H(sid)]
     need({'session.created','session.updated','session.deleted'}<={x['type'] for x in matching} and closed['sdkFacts']==0,'actual_empty_session_callback_membership')
    else:
-    stage('independent_native_history');independent_v1_fact(root,key,sid,request(port,project,'/session/'+enc+'/message',headers,False));result['factoryFinalizationObserved']=True
+    stage('independent_native_history');hp=root/'reader-history-private.json';need(hp.stat().st_size<=1048576,'bounded_native_history');native=json.loads(hp.read_text());independent_v1_fact(root,key,native['sessionID'],native['history']);result['factoryFinalizationObserved']=True;result['privateNativeHistorySHA256']=sha(hp);result['nativeEntryWitnessSHA256']=sha(root/'native-entry-private.json')
+    need(sum(x['kind']=='native-cleanup-enter' for x in rows)==sum(x['kind']=='native-cleanup-return' for x in rows)==1 and all(x['value'].get('actualTrackedJobsSettled') is True for x in rows if x['kind']=='native-cleanup-return'),'actual_native_dispose_callback_return')
   need(provider.http_attempts==(1 if a.mode=='one-completion' else 0) and len(provider.records)==provider.http_attempts and not provider.gaps,'explicit_exact_provider_budget_no_retry')
-  result.update(packagedReaderTransportObserved=True,ownedImageSHA256=pin['executableSHA256'],bundleSHA256=a.bundle_sha256,traceSHA256=sha(root/'reader-private.jsonl'),closedReceiptSHA256=sha(root/'reader-closed.json'));success=True
+  tui_current();result.update(packagedReaderTransportObserved=True,ownedImageSHA256=pin['executableSHA256'],bundleSHA256=a.bundle_sha256,traceSHA256=sha(root/'reader-private.jsonl'),closedReceiptSHA256=sha(root/'reader-closed.json'));success=True
  except Exception as error:
   result['firstFailedStage']=CURRENT_STAGE;result['exceptionKind']=type(error).__name__;result['failure']=type(error).__name__
   write(root/'first-exception-private.json',{'stage':CURRENT_STAGE,'kind':type(error).__name__,'message':str(error)[:512]})
  finally:
+  if win_terminal is not None and not win_terminal.closed and proc.poll() is None:
+   win_last_exit=97;close_owned_terminal();result['hostForcedKillUsed']=True;success=False
   if proc is not None and proc.poll() is None:
    proc.terminate();result['ownedHostStopRequested']=True
    try:proc.wait(timeout=6)
    except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=2);result['hostForcedKillUsed']=True;success=False
+  if win_terminal is not None and not win_terminal.closed:
+   win_last_exit=proc.poll();close_owned_terminal()
+   if win_terminal.forced or win_terminal.error is not None:success=False
+  if hpc_closer is not None and hpc_closer.ident is not None:
+   hpc_closer.join(timeout=2)
+   if hpc_closer.is_alive():success=False
   result['ownedLeaderWaitObserved']=proc is not None and proc.poll() is not None;result['hostProcessTreeClosure']='unproved_portable_leader_only'
+  if pty_worker is not None:
+   pty_worker.join(timeout=2)
+   if pty_worker.is_alive() or pty_overflow or pty_failure is not None:success=False
+  if pty_master is not None:
+   os.close(pty_master)
+   if pty_worker is not None:
+    pty_worker.join(timeout=2)
+    if pty_worker.is_alive():success=False
   if log is not None:
    log.close();hp=root/'host-private.log';size=hp.stat().st_size;result['hostPrivateLogSHA256']=sha(hp);result['hostPrivateLogBytes']=size
    with hp.open('rb') as source,(root/'host-startup-prefix-private.log').open('xb') as dest:dest.write(source.read(65536))
@@ -198,4 +354,4 @@ if __name__=='__main__':
  p=argparse.ArgumentParser()
  for n in ['root','archive','bundle','build-receipt']:p.add_argument('--'+n,type=P,required=True)
  for n in ['bundle-sha256','build-receipt-sha256','os','arch','version']:p.add_argument('--'+n,required=True)
- p.add_argument('--host-netns-fd',type=int);p.add_argument('--mode',choices=['api-only','one-completion'],default='api-only');sys.exit(main(p.parse_args()))
+ p.add_argument('--entry',choices=['tui','run'],required=True);p.add_argument('--host-netns-fd',type=int);p.add_argument('--mode',choices=['one-completion'],default='one-completion');sys.exit(main(p.parse_args()))

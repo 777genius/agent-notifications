@@ -1,46 +1,45 @@
-name: Packaged OpenCode bounded reader continuation
+name: TEST stock V1 local-entry reader capture
 on:
   workflow_dispatch:
     inputs:
-      plan:
-        description: 'five-undemonstrated plans two TEST mock transactions; API plans zero; four-v1-one-completion plans four'
-        required: true
-        default: five-undemonstrated
-        type: choice
-        options: [five-undemonstrated, darwin-v1-api-diagnostics, windows-v2-api, four-v1-one-completion]
-permissions:
-  contents: read
+      plan: {description: 'Eight explicit floor V1 local entries, one TEST request each, no retry', required: true, default: eight-v1-local-entries, type: choice, options: [eight-v1-local-entries]}
+permissions: {contents: read}
 jobs:
   reader:
-    name: Reader ${{ matrix.os }} ${{ matrix.arch }} ${{ matrix.version }}
+    name: Reader ${{ matrix.os }} ${{ matrix.arch }} ${{ matrix.version }} ${{ matrix.entry }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 8
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.plan == 'four-v1-one-completion' && '[{"runner":"ubuntu-22.04-arm","os":"linux","arch":"arm64","version":"1.18.33","mode":"one-completion"},{"runner":"macos-15-intel","os":"darwin","arch":"amd64","version":"1.18.33","mode":"one-completion"},{"runner":"macos-15","os":"darwin","arch":"arm64","version":"1.18.33","mode":"one-completion"},{"runner":"windows-latest","os":"windows","arch":"amd64","version":"1.18.33","mode":"one-completion"}]' || inputs.plan == 'windows-v2-api' && '[{"runner":"windows-latest","os":"windows","arch":"amd64","version":"2.0.21","mode":"api-only"}]' || inputs.plan == 'darwin-v1-api-diagnostics' && '[{"runner":"macos-15-intel","os":"darwin","arch":"amd64","version":"1.18.33","mode":"api-only"},{"runner":"macos-15","os":"darwin","arch":"arm64","version":"1.18.33","mode":"api-only"}]' || '[{"runner":"ubuntu-22.04-arm","os":"linux","arch":"arm64","version":"1.18.33","mode":"one-completion"},{"runner":"ubuntu-22.04-arm","os":"linux","arch":"arm64","version":"2.0.21","mode":"api-only"},{"runner":"macos-15-intel","os":"darwin","arch":"amd64","version":"2.0.21","mode":"api-only"},{"runner":"macos-15","os":"darwin","arch":"arm64","version":"2.0.21","mode":"api-only"},{"runner":"windows-latest","os":"windows","arch":"amd64","version":"1.18.33","mode":"one-completion"}]') }}
+        include:
+          - {runner: ubuntu-22.04-arm, os: linux, arch: arm64, version: 1.18.33, entry: run}
+          - {runner: ubuntu-22.04-arm, os: linux, arch: arm64, version: 1.18.33, entry: tui}
+          - {runner: macos-15-intel, os: darwin, arch: amd64, version: 1.18.33, entry: run}
+          - {runner: macos-15-intel, os: darwin, arch: amd64, version: 1.18.33, entry: tui}
+          - {runner: macos-15, os: darwin, arch: arm64, version: 1.18.33, entry: run}
+          - {runner: macos-15, os: darwin, arch: arm64, version: 1.18.33, entry: tui}
+          - {runner: windows-latest, os: windows, arch: amd64, version: 1.18.33, entry: run}
+          - {runner: windows-latest, os: windows, arch: amd64, version: 1.18.33, entry: tui}
     env:
       CELL_OS: ${{ matrix.os }}
       CELL_ARCH: ${{ matrix.arch }}
       CELL_VERSION: ${{ matrix.version }}
-      CELL_MODE: ${{ matrix.mode }}
+      CELL_ENTRY: ${{ matrix.entry }}
     steps:
-      - name: Fail closed on unknown observation plan
+      - name: Refuse an unknown capture plan
         shell: bash
-        env:
-          PLAN_NAME: ${{ inputs.plan }}
+        env: {PLAN_NAME: '${{ inputs.plan }}'}
+        run: test "$PLAN_NAME" = eight-v1-local-entries
+      - name: Preserve exact TEST source text bytes
+        shell: bash
         run: |
-          case "$PLAN_NAME" in
-            five-undemonstrated|darwin-v1-api-diagnostics|windows-v2-api|four-v1-one-completion) ;;
-            *) echo 'Unknown observation plan refused' >&2; exit 1 ;;
-          esac
+          git config --global core.autocrlf false
+          git config --global core.eol lf
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
+        with: {ref: '${{ github.sha }}', persist-credentials: false}
       - uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
+        with: {python-version: '3.12'}
       - name: Fresh Windows short TEST base
         if: matrix.os == 'windows'
         shell: pwsh
@@ -48,36 +47,35 @@ jobs:
           $base = 'C:\PREADER'
           if (Test-Path -LiteralPath $base) { throw 'Preexisting TEST short base refused' }
           New-Item -ItemType Directory -Path $base | Out-Null
-      - name: Stage sealed actual ROOT build and one official stock image
+      - name: Stage exact actual reader capsule and one fixed official image
         shell: bash
         run: |
           set -euo pipefail
           F=scripts/testdata/opencode-reader-prequalification
-          BASE="$RUNNER_TEMP"
+          BASE=$(python -c 'import os; print(os.path.realpath(os.environ["RUNNER_TEMP"]))')
           if [ "$CELL_OS" = windows ]; then BASE='C:\PREADER'; fi
-          python "$F/stage-local.py" --root "$BASE/TEST-reader-inputs" --os "$CELL_OS" --arch "$CELL_ARCH" --version "$CELL_VERSION"
-      - name: One planned native observation, without retries
+          python -B "$F/stage-local.py" --root "$BASE/TEST-reader-inputs" --os "$CELL_OS" --arch "$CELL_ARCH" --version "$CELL_VERSION" --entry "$CELL_ENTRY"
+      - name: One planned genuine local entry observation, no retries
         shell: bash
         run: |
           set -euo pipefail
           F=scripts/testdata/opencode-reader-prequalification
-          BASE="$RUNNER_TEMP"
+          BASE=$(python -c 'import os; print(os.path.realpath(os.environ["RUNNER_TEMP"]))')
           if [ "$CELL_OS" = windows ]; then BASE='C:\PREADER'; fi
           I="$BASE/TEST-reader-inputs"
-          python "$F/driver.py" --root "$BASE/TEST-reader-case" --archive "$I/$CELL_VERSION.tgz" --bundle "$I/reader.js" --bundle-sha256 e1972d06202ad3a6ca24febe53a63d1def3a02eea8f2f985fbc1876e03913122 --build-receipt "$I/build-receipt.json" --build-receipt-sha256 9041efb60a225440b06da3e2eeaceee269f984fcfa95e34c6d7a2ad138deedc6 --os "$CELL_OS" --arch "$CELL_ARCH" --version "$CELL_VERSION" --mode "$CELL_MODE"
-      - name: Retain closed safe case result
+          python -B "$F/driver.py" --root "$BASE/TEST-reader-case" --archive "$I/$CELL_VERSION.tgz" --bundle "$I/reader.js" --bundle-sha256 d48042526d8b657ad48c461c8abae4ea9254a9e3b1390085e0dd20ccdb7eab9a --build-receipt "$I/build-receipt.json" --build-receipt-sha256 a1e49f8f8393fef92099013e8088d30c5bee178c3bd9823341e85c619380dd9d --os "$CELL_OS" --arch "$CELL_ARCH" --version "$CELL_VERSION" --entry "$CELL_ENTRY" --mode one-completion
+      - name: Export only bounded safe case result
         if: always()
         shell: bash
         run: |
           set -euo pipefail
-          BASE="$RUNNER_TEMP"
+          BASE=$(python -c 'import os; print(os.path.realpath(os.environ["RUNNER_TEMP"]))')
           if [ "$CELL_OS" = windows ]; then BASE='C:\PREADER'; fi
-          mkdir -p "$RUNNER_TEMP/TEST-reader-safe-export"
-          if [ -f "$BASE/TEST-reader-case/result.json" ]; then cp "$BASE/TEST-reader-case/result.json" "$RUNNER_TEMP/TEST-reader-safe-export/result.json"; fi
+          python -c 'import pathlib,stat,sys; p=pathlib.Path(sys.argv[1])/"TEST-reader-case/result.json"; out=pathlib.Path(sys.argv[2])/"TEST-reader-safe-export"; out.mkdir(exist_ok=False); exists=p.exists(); assert not exists or (stat.S_ISREG(p.lstat().st_mode) and not p.is_symlink() and p.stat().st_size<=1048576); (out/"result.json").write_bytes(p.read_bytes()) if exists else None' "$BASE" "$RUNNER_TEMP"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: reader-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.version }}
+          name: reader-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.version }}-${{ matrix.entry }}
           path: ${{ runner.temp }}/TEST-reader-safe-export/result.json
           if-no-files-found: error
           retention-days: 14

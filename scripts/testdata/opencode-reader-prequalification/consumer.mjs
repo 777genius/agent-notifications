@@ -72,6 +72,9 @@ function publish(name,value) {
   writeFileSync(tmp,JSON.stringify(value)+'\n',{mode:0o600,flag:'wx'}); renameSync(tmp,target);
 }
 const slots = new WeakMap();
+const localV1Entry = own.entry === 'tui' || own.entry === 'run';
+if (localV1Entry && (own.mode !== 'one-completion' || !['1.18.33','1.18.34'].includes(own.version)))
+  throw Error('closed V1 local entry fixture');
 function scopeOK(directory) { try { return witness() && realpathSync(directory)===project; } catch { return false; } }
 function receipt(generation, extra={}) {
   return {schemaVersion:1,scope:'TEST packaged SDK reader',generation,version:own.version,
@@ -113,7 +116,28 @@ async function server(input) {
       record('sdk-fact',{event,clockID:handoff.clockID,ingressMonotonicMs:handoff.ingressMonotonicMs,
         currentAtCallback:handoff.isCurrent(),nativeCallbackCount:nativeCalls});
       if(own.mode!=='one-completion') { fail('unplanned_completion_fact'); return; }
-      queueMicrotask(()=>void stop().catch(()=>fail('consumer_dispose_failed')));
+      if (localV1Entry) {
+        // Independent TEST oracle query through the native client's ordinary API.
+        // Raw native history is private and never passed to the SDK reducer.
+        const ctrl = new AbortController(), deadline = performance.now()+2000;
+        const job = (async()=>{
+          try {
+            const reply = await boundedDrain(input.client.session.messages({
+              path:{id:event.sessionID},query:{limit:30},signal:ctrl.signal}),deadline);
+            const history = Array.isArray(reply) ? reply : reply?.data;
+            if (!Array.isArray(history) || history.length > 30) throw Error('native history shape');
+            const raw = JSON.stringify({sessionID:event.sessionID,history})+'\n';
+            if (Buffer.byteLength(raw)>1024*1024) throw Error('native history bound');
+            if (!scopeOK(input.directory)) throw Error('native history scope lost');
+            writeFileSync(resolve(root,'reader-history-private.json'),raw,{mode:0o600,flag:'wx'});
+            record('independent-native-history',{entry:own.entry,messages:history.length});
+          } finally { ctrl.abort(); }
+        })();
+        jobs.add(job);
+        void job.then(()=>{jobs.delete(job);return stop();},()=>{
+          jobs.delete(job);fail('native_history_missing');return stop();
+        }).catch(()=>fail('consumer_dispose_failed'));
+      } else queueMicrotask(()=>void stop().catch(()=>fail('consumer_dispose_failed')));
     }});
   const hooks={event({event}) {
     if (stopped) { record('after-dispose-native',{type:event?.type}); return; }
@@ -124,7 +148,11 @@ async function server(input) {
     Promise.resolve(job).finally(()=>{jobs.delete(job);if(own.mode==='api-only'&&event?.type==='session.deleted')
       queueMicrotask(()=>void stop().catch(()=>fail('consumer_dispose_failed')));}).catch(()=>fail('callback_failure'));
     record('sdk-observe-invoked',{type:event?.type});
-  },dispose:()=>stop(true)};
+  },async dispose() {
+    record('native-cleanup-enter',{entry:own.entry??'serve'});
+    await stop(true);
+    record('native-cleanup-return',{entry:own.entry??'serve',actualTrackedJobsSettled:jobs.size===0});
+  }};
   slots.set(input.client,hooks); record('loader',{branch:'v1',scopeVerified:true});
   publish('reader-ready.json',receipt('v1',{nativeCallbackReady:true})); return hooks;
 }
