@@ -6,7 +6,7 @@ PRODUCT_HEAD = os.environ['TEST_PRODUCT_HEAD']
 OLD_CHECKER = os.environ['TEST_PRODUCT_CHECKER_SHA256']
 assert re.fullmatch('[0-9a-f]{40}', PRODUCT_HEAD)
 assert re.fullmatch('[0-9a-f]{64}', OLD_CHECKER)
-SUPPLIER = '8cbaa51017c0b355d0362019b2eaf82be6d97a0c27087cf70f73175eaed5d2ec'
+SUPPLIER = '2697133dfc9d4a5d19b3cc6355a9d3a37873513ad3b8f68f083b53c7e56d3991'
 root = P.cwd().resolve()
 checker = root / 'scripts/testdata/opencode-native-e2e/test_fixture.py'
 source = P(__file__).resolve().with_name('inert-test-fixture.py')
