@@ -5,10 +5,17 @@ questions, permission requests and terminal errors**. Alerts contain generic tex
 they are silent and do not navigate to a terminal or session when clicked. It does
 not provide Claude's plan/review events, contextual messages or sound controls.
 
-The tested host is **OpenCode 1.18.33**. [OpenCode V2](https://opencode.ai/v2/docs) uses a different plugin API and is not supported. The public
-installer rejects V2 and reports the detected V1 version; that diagnostic does not
-qualify every V1 release. Setup installs notifications, never OpenCode itself, and
-does not start an agent session.
+The dual-API release candidate uses **one installed plugin** for OpenCode V1 and
+[V2](https://opencode.ai/v2/docs): V1 calls `server`, V2 calls `setup`. Native
+qualification targets are **1.18.33, 1.18.34 and 2.0.21**. The candidate installer
+accepts stable V1 >= 1.18.29 and V2 >= 2.0.0; this range does not qualify every
+release. Prereleases and unknown future API generations are rejected.
+Setup installs notifications, never OpenCode itself, and does not start an agent session.
+
+**Publication pending:** this candidate requires the separately reviewed
+`universal-agent-plugins-opencode-events@0.3.0` package. Qualification consumes its
+exact local tarball; publishing that package and validating a clean registry install
+are separate release steps. These changes do not upgrade an existing installation.
 
 ## Platforms and observed delivery
 
@@ -20,9 +27,31 @@ service or Windows toasts. Linux needs an available desktop session/D-Bus servic
 - The user confirmed a visible completion banner on macOS arm64.
 - Linux amd64 X11/dunst rendered all four real OpenCode events; see the
   [captured banners](evidence/opencode-1.18.33-x11-notifications.png).
-- Native lifecycle/webhook checks passed on all five targets. Headless CI does
+- V1 native lifecycle/webhook checks passed on all five targets. Headless CI does
   not establish visible macOS Intel, Linux ARM64 or Windows banners, or universal
   compatibility with every desktop environment.
+- Retained V2 native completion observations provide corroboration, but full
+  current-candidate qualification remains pending. Installed lifecycle and delivery
+  qualification are still owed on the native targets; workflow lanes alone do not
+  establish that they passed. V2 visible banners are not claimed.
+
+**Windows V1 limitation:** stock OpenCode V1 events do not always allow the
+original event age to be verified independently. A delayed completion can notify
+once, and the same completion can notify again after its 24-hour deduplication
+claim expires. Root-session and workspace filters, origin-bound provenance,
+deduplication within that claim lifetime, and lookup and IPC limits still apply.
+This accepted limitation does not qualify every Windows V1 version or establish
+that the current candidate has completed native qualification.
+
+## Dual candidate evidence boundary
+
+The installed dual candidate fixture in `scripts/opencode-native-e2e.py` is source
+preparation only. Its eleven native cells cover V1 1.18.33 and V2 2.0.21 on all
+five platform pairs, plus Linux amd64 V1 1.18.34. No cell has been executed or
+qualified by this preparation. Exact bundle/SDK/image custody, authoritative
+managed configuration, production parent/profile and complete clock qualification
+must precede delivery cases. Historical V1 evidence below does not qualify this
+candidate or V2. Missing prerequisites report unqualified and stop business phases.
 
 ## Install or update
 
@@ -46,7 +75,7 @@ commit.
 
 Use `--webhook` instead of `--desktop` for webhook-only consent, or supply both.
 Webhook consent alone does not configure a destination: add your endpoint to the
-[shared settings](CONFIGURATION.md#manual-configuration), enable the desired
+[installed OpenCode settings](#edit-installed-opencode-settings), enable the desired
 webhook and status channel, and restart OpenCode. Saved settings can further
 restrict authorized delivery; setup does not enable portable MCP notifications.
 The OpenCode installer does not register Claude marketplace plugins or Codex hooks.
@@ -100,6 +129,63 @@ and pass `--native-app /absolute/path/ClaudeNotifier.app`. Keep the adjacent
 sealed protocol, attestation and code signature before enabling desktop consent.
 Webhook-only setup does not require the native helper. Existing installations
 may omit `--runtime-root` to use their authoritative recorded location.
+
+## Edit installed OpenCode settings
+
+Use the executable from the managed runtime to select OpenCode explicitly:
+
+```bash
+"$NOTIFICATIONS_BIN" config path --target opencode --json
+"$NOTIFICATIONS_BIN" config inspect --target opencode --json
+```
+
+This selects `agent-notifications.json` in the managed control directory, the
+same file the installed event consumer reads. Selection verifies the existing
+ownership ledger, platform command, origin-bound plugin and its control-root
+binding. The default control location follows the platform paths above. If setup
+used `--control-root`, pass that same existing directory to **every** config
+command, for example `config inspect --target opencode --control-root
+/absolute/path/to/control --json`. A control root is accepted only with matching
+installed metadata; it is not an arbitrary config-file path.
+
+Copy the opaque `revision` from that inspection. Submit only supported config
+leaf edits through private stdin. For example, configure the webhook destination
+without persisting an expanded secret:
+
+```bash
+printf '%s\n' '{"set":{"/notifications/webhook/enabled":true,"/notifications/webhook/url":"${MY_WEBHOOK_URL}"}}' |
+  "$NOTIFICATIONS_BIN" config edit --target opencode --stdin --expect-revision 'REVISION_FROM_INSPECT'
+```
+
+Replace `REVISION_FROM_INSPECT` with the inspected revision and make
+`MY_WEBHOOK_URL` available to OpenCode's environment. Keep any saved patch and
+inspection private. For a custom control root, include `--control-root` on the
+edit as well. Inspect again after success. Settings are read on subsequent events;
+a settings-only edit does not replace the loaded plugin or require a restart.
+
+The editor uses the existing config leaf validation and raw-value preservation,
+then the managed transaction's policy CAS, component/config locks and generation
+publication. Unedited policy fields, other agents' route settings, setup channel
+consent and the OpenCode origin remain intact. No-op edits retain the generation.
+A setup/update/removal or byte change invalidates the revision; inspect again and
+review the intended edit after `ConfigConflict`. If a commit is uncertain, inspect
+and resolve any reported recovery before retrying. Interrupted managed transactions
+use the existing `setup-opencode recover` lifecycle.
+
+OpenCode channel consent still comes from the explicit setup `--desktop` and
+`--webhook` flags. Config edits can restrict delivery and configure endpoints;
+they do not grant setup consent or change registrations. Missing, corrupt,
+unrecognized, recovery-pending or differently bound installations fail instead
+of creating a policy or falling back to shared settings. Use the matching installed
+executable; a plugin from a different embedded release must be updated through
+setup first. Managed config `init`, imports and `preflight-update` are unsupported.
+The managed policy retains its existing schema 1; schema 2 agent-profile migration
+is outside this command.
+
+Omitting `--target`, or using `--target shared`, preserves ordinary config
+selection and its `AGENT_NOTIFICATIONS_CONFIG` override. The OpenCode target
+ignores that override and `AGENT_NOTIFICATIONS_CONTROL_ROOT`; use the verified
+control-root selection above.
 
 ## macOS notification permission
 
@@ -173,7 +259,19 @@ check other plugins in your OpenCode profile.
 One-shot `opencode run` may exit before asynchronous delivery completes. Delivery
 at host shutdown is best effort; notification delivery after process exit is not
 guaranteed. Root-session events only are covered; nested subagent events, audio,
-click-to-focus, plan/review alerts and OpenCode V2 are outside this integration.
+click-to-focus and plan/review alerts are outside this integration.
+
+V2 completion means one positively verified final answer per native busy period.
+Queued or steered inputs can share that period. A tool step, retry, compaction
+summary or interrupted execution does not itself produce completion. The observer
+checks the root session and its owning directory/workspace before delivery, since
+V2 plugin event subscriptions also receive events from other locations.
+
+Lookup and IPC limits apply per plugin instance. Soft lookup timeouts retain their
+capacity until the native promise settles, including on 2.0.0 where abort signals
+are ignored. Cleanup suppresses late verification without waiting indefinitely;
+there is no delivery replay after an uncertain result. V2 2.0.0 needs a server
+restart to reload the plugin; 2.0.21 supports location reload.
 
 ## Linux amd64 qualification
 

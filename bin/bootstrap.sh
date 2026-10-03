@@ -212,10 +212,19 @@ check_prerequisites() {
             "$opencode_cli" --version </dev/null) || probe_status=$?
         rm -rf "$probe"
         [ "$probe_status" -eq 0 ] || { echo "Cannot determine OpenCode version." >&2; return 1; }
-        if [[ "$host_version" =~ (^|[^0-9])v?([0-9]+)\.([0-9]+)\.([0-9]+)($|[^0-9]) ]] && [ "${BASH_REMATCH[2]}" = 1 ]; then
-            echo "OpenCode notifications were tested with 1.18.33; detected $host_version."
+        # Accept one complete stable version, never an embedded compatibility
+        # number, prerelease or an unknown future API generation.
+        local host_supported=false
+        if [[ "$host_version" =~ ^(OpenCode\ version:\ )?v?(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$ ]]; then
+            if (( BASH_REMATCH[2] == 2 || (BASH_REMATCH[2] == 1 &&
+                (BASH_REMATCH[3] > 18 || (BASH_REMATCH[3] == 18 && BASH_REMATCH[4] >= 29))) )); then
+                host_supported=true
+            fi
+        fi
+        if [ "$host_supported" = true ]; then
+            echo "OpenCode notifications were tested with 1.18.33, 2.0.0 and 2.0.21; detected $host_version."
         else
-            echo "Unsupported OpenCode version. Tested host: 1.18.33; V2 is not supported. Detected: $host_version" >&2
+            echo "Unsupported OpenCode version. Requires stable V1 >= 1.18.29 or V2 >= 2.0.0; tested: 1.18.33, 2.0.0 and 2.0.21." >&2
             exit 1
         fi
         [ "$(bootstrap_release_os_arch)" != "windows arm64" ] || { echo "Windows arm64 is not supported." >&2; exit 1; }

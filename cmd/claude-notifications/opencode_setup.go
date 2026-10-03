@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/777genius/agent-notifications/internal/opencodeinstall"
+	"github.com/777genius/agent-notifications/internal/opencodeplugin"
 )
 
 func runOpenCodeSetup(args []string, output io.Writer) int {
@@ -18,6 +19,7 @@ func runOpenCodeSetup(args []string, output io.Writer) int {
 	}
 	action := opencodeinstall.Action(args[0])
 	r := opencodeinstall.DefaultRequest(action)
+	r.Renderer = opencodeplugin.RegistrationRenderer{}
 	f := flag.NewFlagSet("setup-opencode "+args[0], flag.ContinueOnError)
 	f.SetOutput(output)
 	f.StringVar(&r.ControlRoot, "control-root", r.ControlRoot, "managed control root")

@@ -92,7 +92,9 @@ Claude/Codex setup also installs the `agent-notify` MCP server and `agent-notifi
 | **OpenCode** | Root-session completion, questions, permissions and errors | No | [Setup and limits](docs/opencode-notifications.md) |
 | **Gemini CLI** | Turn completion and tool permissions | No | [Prerelease setup and qualification](docs/gemini-notifications.md) |
 
-OpenCode is tested with **1.18.33**; V2 is unsupported. Gemini is tested with **0.62.0**; a completed turn does not necessarily mean task success or a final answer. OpenCode/Gemini alerts use generic text and require explicit desktop/webhook consent.
+Published OpenCode support is tested with **1.18.33**; published V2 support is not declared. The dual-API candidate targets **1.18.33, 2.0.0 and 2.0.21** with one installed plugin; final platform qualification, SDK publication and a clean registry install remain pending. [Candidate setup and qualification limits](docs/opencode-notifications.md). Gemini is tested with **0.62.0**; a completed turn does not necessarily mean task success or a final answer. OpenCode/Gemini alerts use generic text and require explicit desktop/webhook consent.
+
+For the OpenCode candidate on stock Windows V1, the original event age is not always independently verifiable. A delayed completion may notify once and recur after the 24-hour claim lifetime; filters, provenance, deduplication and limits still apply.
 
 ## Settings
 

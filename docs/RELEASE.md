@@ -134,10 +134,19 @@ gh run watch                   # wait for release.yml to finish
 
 Before creating the draft, `release.yml` qualifies the actual downloaded binary artifacts
 on all five native targets with `scripts/opencode-native-e2e.py` and the SHA-256-pinned
-OpenCode 1.18.33 CLI. This checks completion webhook delivery, managed update and
+OpenCode 1.18.33 CLI, followed by the integrity-verified native npm package for
+OpenCode 2.0.21. This checks completion webhook delivery, managed update and
 revocation after removal in disposable projects and profiles. The uploaded
 `opencode-release-e2e-<platform>-<arch>` reports bind the evidence to the release commit
-and binary SHA-256. These checks do not prove desktop banner delivery.
+and binary SHA-256. These checks do not prove desktop banner delivery or the
+Linux semantic matrix (questions, permission, errors, retry, cancellation,
+compaction, child sessions and global reader ownership).
+
+The dual-API candidate consumes an exact reviewed UAP 0.2.0 tarball before
+publication. Publish the SDK only with separate owner authorization, verify the
+registry artifact against that tarball's integrity, and require a clean registry
+install to reproduce the tested bundle before declaring the product merge/release
+ready. Adding CI lanes does not establish that they have passed.
 
 The workflow creates a **draft**, never an automatically published release. Inspect it with
 `gh release view vX.Y.Z --json isDraft,assets` and download the assets into a disposable

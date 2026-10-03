@@ -7,14 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- One OpenCode plugin supports V1 `server` and V2 `setup`, with native qualification targeting 1.18.33, 1.18.34 and 2.0.21; final candidate qualification remains pending. V2 notifications verify native ownership and settled execution, suppress child sessions, and recover after temporary ownership failures ([#294](https://github.com/777genius/agent-notifications/pull/294)). SDK 0.3.0 publication and registry qualification remain pending.
+
 ### Changed
+- OpenCode V1 now consumes the 0.3.0 observer instead of 0.1.0: failed assistant steps produce terminal errors at idle, context overflow waits for recovery, and observed user association filters replayed completions. The V1 entry point remains supported.
 - Fresh macOS Codex and combined bootstrap installs enable chat navigation by default when the registered official Codex Desktop app passes signature verification. Existing navigation policy and explicit choices remain preserved. If the verified app is unavailable, bootstrap reports its fallback to informational notifications without navigation.
 
 ### Fixed
 - Managed notification helpers take priority over old concrete helper bundles, so notification clicks reach the originating Codex chat instead of being handled by an obsolete helper. Installation reconciles known obsolete macOS registrations while retaining bundle files and published callback generations, and warns if macOS still selects a different helper.
 - Native helper updates select the supplied release before falling back to an installed helper.
 - Codex desktop callbacks allow a bounded 30 seconds for application verification and opening, while legacy callbacks retain their 10-second budget. Safe system-log phase diagnostics make failed clicks traceable after the helper is relaunched by macOS.
-
 
 ## [1.46.1] - 2026-10-01
 

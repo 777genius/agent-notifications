@@ -202,11 +202,11 @@ HOST_VERSION
     export PATH="$SANDBOX/version-cli:$PATH"
     PRODUCT=opencode
     OPENCODE_ARGS=(--webhook)
-    for version in '1.18.33' 'v1.18.33' 'OpenCode version: v1.18.33'; do
+    for version in '1.18.29' '1.18.33' 'v1.18.33' 'OpenCode version: v1.18.33' '1.19.0' '2.0.0' 'v2.0.21'; do
         printf '%s\n' "$version" > "$SANDBOX/version-cli/version"
         check_prerequisites
     done
-    for version in '2.0.0' 'OpenCode v2.0.0 (compatibility 1.18.33)' 'unknown'; do
+    for version in '1.18.28' '1.17.99' '3.0.0' '2.0.0-beta.1' '2.0.0+build' '02.0.0' '2.00.0' '2.0.000' '2.9999999.0' 'OpenCode v2.0.0 (compatibility 1.18.33)' 'unknown' $'2.0.0\n1.18.33'; do
         printf '%s\n' "$version" > "$SANDBOX/version-cli/version"
         if ( check_prerequisites ); then
             echo "accepted unsupported host output: $version" >&2

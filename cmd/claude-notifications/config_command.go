@@ -42,7 +42,7 @@ func configCommand(args []string, in io.Reader, out, stderr io.Writer) int {
 		switch flag {
 		case "--json", "--stdin":
 			flags[flag] = "true"
-		case "--from", "--expect-revision":
+		case "--from", "--expect-revision", "--target", "--control-root":
 			i++
 			if i == len(args) {
 				return invalid()
@@ -63,6 +63,9 @@ func configCommand(args []string, in io.Reader, out, stderr io.Writer) int {
 		return invalid()
 	}
 	for k := range flags {
+		if k == "--target" || (k == "--control-root" && flags["--target"] == "opencode") {
+			continue
+		}
 		if !set[k] {
 			return invalid()
 		}
@@ -79,18 +82,55 @@ func configCommand(args []string, in io.Reader, out, stderr io.Writer) int {
 	if from, ok := flags["--from"]; ok && !filepath.IsAbs(from) {
 		return invalid()
 	}
-	env := config.SnapshotEnv()
-	root := os.Getenv("PLUGIN_ROOT")
-	if root == "" {
-		root = getPluginRoot()
+	managed := flags["--target"] == "opencode"
+	if target, present := flags["--target"]; present && target != "shared" && !managed {
+		return invalid()
 	}
-	_, legacy := config.ConsumerContext(root)
-	assets := config.ValidationAssets(root)
+	if managed && op != "path" && op != "inspect" && op != "edit" {
+		return invalid()
+	}
+	if control, present := flags["--control-root"]; present && (!managed || !filepath.IsAbs(control) || control == "") {
+		return invalid()
+	}
+	var env config.EnvSnapshot
+	var legacy config.LegacyContext
+	assets := config.ValidationAssets("")
+	if !managed {
+		env = config.SnapshotEnv()
+		root := os.Getenv("PLUGIN_ROOT")
+		if root == "" {
+			root = getPluginRoot()
+		}
+		_, legacy = config.ConsumerContext(root)
+		assets = config.ValidationAssets(root)
+	}
 	emit := func(v any) int {
 		if err := json.NewEncoder(out).Encode(v); err != nil {
 			return fail(err)
 		}
 		return 0
+	}
+	var policy config.ManagedOpenCodeDocument
+	if managed {
+		var err error
+		policy, err = config.ReadManagedOpenCode(context.Background(), flags["--control-root"], assets)
+		if err != nil {
+			return fail(err)
+		}
+		if op == "path" {
+			if flags["--json"] != "" {
+				return emit(policy.Selection)
+			}
+			if _, err := fmt.Fprintln(out, policy.Selection.Path); err != nil {
+				return fail(err)
+			}
+			return 0
+		}
+		if op == "inspect" {
+			inspection := config.InspectDocument(policy.Selection, policy.Selection.Path, policy.Document.Bytes())
+			inspection.Revision = policy.Revision
+			return emit(inspection)
+		}
 	}
 	switch op {
 	case "path":
@@ -175,6 +215,13 @@ func configCommand(args []string, in io.Reader, out, stderr io.Writer) int {
 			var edits config.Edits
 			if dec.Decode(&edits) != nil {
 				return invalid()
+			}
+			if managed {
+				result, err := config.ApplyManagedOpenCodeEdits(context.Background(), flags["--control-root"], assets, flags["--expect-revision"], edits)
+				if err != nil {
+					return fail(err)
+				}
+				return emit(result)
 			}
 			// Pure validation precedes Store lock/directory creation.
 			current, _, err := config.ReadDocument(config.ReadRequest{Env: env, Assets: assets, Legacy: legacy, ReadSnapshot: config.ReadFileSnapshot})
