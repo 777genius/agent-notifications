@@ -15,10 +15,17 @@ import (
 var managedFixture struct {
 	once            sync.Once
 	dir, executable string
+	cwd             string
 	err             error
 }
 
 func TestMain(m *testing.M) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "locate TEST package source:", err)
+		os.Exit(1)
+	}
+	managedFixture.cwd = cwd
 	code := m.Run()
 	if managedFixture.dir != "" {
 		if err := os.RemoveAll(managedFixture.dir); err != nil {
@@ -53,6 +60,7 @@ func managedFixtureExecutable(t *testing.T) string {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 		build := exec.CommandContext(ctx, compiler, "test", "-c", "-ldflags=-s -w", "-o", managedFixture.executable, ".")
+		build.Dir = managedFixture.cwd
 		build.Env = append(os.Environ(), "GOFLAGS=-mod=readonly")
 		if out, err := build.CombinedOutput(); err != nil {
 			managedFixture.err = fmt.Errorf("compile TEST managed executable: %w: %s", err, out)
