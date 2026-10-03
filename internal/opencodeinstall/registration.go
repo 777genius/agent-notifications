@@ -44,7 +44,7 @@ type RegistrationLease struct {
 	registration       installruntime.OpenCodeRegistration
 	desktop, webhook   bool
 	refs               int
-	closed, nativeUsed bool
+	closed, nativeUsed bool //nolint:unused // nativeUsed fences the Darwin retained native delivery.
 	release            func()
 }
 

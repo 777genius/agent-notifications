@@ -42,7 +42,7 @@ func renderRegistration(asset, executable, controlRoot, origin string) ([]byte, 
 		return nil, errors.New("invalid_opencode_bundle")
 	}
 	for _, c := range origin {
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			return nil, errors.New("invalid_opencode_bundle")
 		}
 	}

@@ -16,8 +16,8 @@ func TestEntryStalledOwnedStdinIsClosedAndJoined(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer input.Close()
-	defer writer.Close()
+	defer func() { _ = input.Close() }()
+	defer func() { _ = writer.Close() }()
 	source := &mutableSnapshot{sample: independentSnapshot()}
 	entry, err := BeginEntry(context.Background(), time.Now(), source)
 	if err != nil {

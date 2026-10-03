@@ -73,8 +73,10 @@ func runtimeFileHash(ctx context.Context, f *os.File) (string, error) {
 		}
 	}
 }
+
+//nolint:unused // Used by the Darwin and Windows retained image leases.
 func runtimeSameMetadata(a, b os.FileInfo) bool {
-	return a != nil && b != nil && a.Mode().IsRegular() && b.Mode().IsRegular() && os.SameFile(a, b) && a.Size() == b.Size() && a.Mode() == b.Mode() && a.ModTime() == b.ModTime()
+	return a != nil && b != nil && a.Mode().IsRegular() && b.Mode().IsRegular() && os.SameFile(a, b) && a.Size() == b.Size() && a.Mode() == b.Mode() && a.ModTime().Equal(b.ModTime())
 }
 
 // kern.procargs2 is saved argv consistency only. Stop at the complete second

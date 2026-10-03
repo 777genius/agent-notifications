@@ -73,7 +73,11 @@ func main(){
 	if err := os.WriteFile(source, []byte(program), 0600); err != nil {
 		t.Fatal(err)
 	}
-	build := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"), "build", "-o", filepath.Join(dir, "fixture"), source)
+	compiler, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	build := exec.Command(compiler, "build", "-o", filepath.Join(dir, "fixture"), source)
 	build.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("TEST native fixture: %v %s", err, out)
@@ -169,7 +173,7 @@ func profileOutput(t *testing.T, host runtimeProfileInput) []byte {
 		t.Fatal(err)
 	}
 	diagnostic, err := io.ReadAll(io.LimitReader(diagnostics, 4097))
-	diagnostics.Close()
+	_ = diagnostics.Close()
 	if err != nil || len(diagnostic) != 0 {
 		t.Fatalf("helper stderr must be empty and bounded: %q (%v)", diagnostic, err)
 	}
@@ -416,8 +420,8 @@ func TestRuntimeProfileStalledInputCancellationProvesNotStarted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer input.Close()
-	defer writer.Close()
+	defer func() { _ = input.Close() }()
+	defer func() { _ = writer.Close() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	var output bytes.Buffer

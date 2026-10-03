@@ -43,12 +43,12 @@ func verifyRuntimeLiveImage(ctx context.Context, in runtimeProfileInput) (runtim
 	if err != nil {
 		return fail()
 	}
-	defer image.Close()
+	defer func() { _ = image.Close() }()
 	target, err := os.Open(in.HostExecutable)
 	if err != nil {
 		return fail()
 	}
-	defer target.Close()
+	defer func() { _ = target.Close() }()
 	a, errA := image.Stat()
 	b, errB := target.Stat()
 	if errA != nil || errB != nil || !a.Mode().IsRegular() || !os.SameFile(a, b) {
@@ -95,7 +95,7 @@ func runtimeProcessStart(proc string) (uint64, error) {
 	if err != nil {
 		return 0, errRuntimeLiveImage
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(f, 4097))
 	end := strings.LastIndexByte(string(raw), ')')
 	if err != nil || len(raw) > 4096 || end < 0 {
