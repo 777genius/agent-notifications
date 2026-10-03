@@ -17,7 +17,7 @@ export default Object.freeze([
         "imageSHA256": "9ca0b9953d49997601655e54f846a3efa464f237e47c6f1b04716d0f2e64c4c2"
       }
     ],
-    "algorithmSourceMerkleSHA256": "298fada0b99e4e45d874a2e055a564a46b22b43e185d6540448066af7a31c2d1",
+    "algorithmSourceMerkleSHA256": "07002a75c48a9b3d13e84c97bfcee767975500bb8edfedbb3d7ac6ca60863991",
     "sourceKind": "linux-proc-boottime",
     "rawKind": "linux-boottime",
     "nativeReadBoundNS": "103000000",
@@ -35,7 +35,7 @@ export default Object.freeze([
         "imageSHA256": "f916986543348d7953d8d43aa048516cdbc3f84f4d0dc9c0c5b9d1da3030cea7"
       }
     ],
-    "algorithmSourceMerkleSHA256": "298fada0b99e4e45d874a2e055a564a46b22b43e185d6540448066af7a31c2d1",
+    "algorithmSourceMerkleSHA256": "07002a75c48a9b3d13e84c97bfcee767975500bb8edfedbb3d7ac6ca60863991",
     "sourceKind": "linux-proc-boottime",
     "rawKind": "linux-boottime",
     "nativeReadBoundNS": "103000000",
