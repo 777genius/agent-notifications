@@ -164,13 +164,19 @@ def tui_readiness_snapshot(raw,raw_bytes,reader_done,reader_error):
   elif reader_error.startswith('console reader failure:'):error='reader_exception'
   elif reader_error in {'PTY_absolute_deadline','PTY_select_failure','PTY_read_failure'}:error=reader_error
  d={'snapshotBeforeCleanup':True,'rawBytes':raw_bytes,'scannedBytes':len(raw),'withinReadinessBound':raw_bytes<=1048576,'readerDone':bool(reader_done),'readerError':error,'syncStartSeen':b'\x1b[?2026h' in raw,'syncEndSeen':b'\x1b[?2026l' in raw,'completeFrameSeen':False,'cursorInCompleteFrame':False,'emptyPromptInCompleteFrame':False,'buildLabelInCompleteFrame':False,'modelLabelInCompleteFrame':False,'providerLabelInCompleteFrame':False}
+ text=re.sub(rb'\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\))',b'',raw)
+ for key,label in [('emptyPromptAnywhere','Ask anything…'.encode()),('buildLabelAnywhere',b'Build'),('modelLabelAnywhere',b'TEST completion'),('providerLabelAnywhere',b'TEST loopback')]:d[key]=label in text
+ d['positionedCursorAnywhere']=bool(re.search(rb'\x1b\[[1-9][0-9]*;[1-9][0-9]*H\x1b\[\?25h',raw))
+ visibility=re.findall(rb'\x1b\[\?25([hl])',raw);d['cursorVisibilityObserved']=bool(visibility);d['lastCursorVisible']=bool(visibility) and visibility[-1]==b'h'
+ d['completeFrameCount']=0;d['labelMatchingFrameCount']=0
  for frame in raw.split(b'\x1b[?2026h')[1:]:
   stop=frame.find(b'\x1b[?2026l')
   if stop<0:continue
-  frame=frame[:stop];d['completeFrameSeen']=True
+  frame=frame[:stop];d['completeFrameSeen']=True;d['completeFrameCount']+=1
   d['cursorInCompleteFrame']|=bool(re.search(rb'\x1b\[[1-9][0-9]*;[1-9][0-9]*H\x1b\[\?25h',frame))
   text=re.sub(rb'\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\))',b'',frame)
   for key,label in [('emptyPromptInCompleteFrame','Ask anything…'.encode()),('buildLabelInCompleteFrame',b'Build'),('modelLabelInCompleteFrame',b'TEST completion'),('providerLabelInCompleteFrame',b'TEST loopback')]:d[key]|=label in text
+  d['labelMatchingFrameCount']+=int(all(label in text for label in ['Ask anything…'.encode(),b'Build',b'TEST completion',b'TEST loopback']))
  d['originalReadyPredicate']=raw_bytes<=1048576 and tui_input_frame(raw)
  return d
 

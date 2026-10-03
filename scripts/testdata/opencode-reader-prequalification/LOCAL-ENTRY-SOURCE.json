@@ -7,7 +7,7 @@
   "actualReaderBundleSHA256": "d48042526d8b657ad48c461c8abae4ea9254a9e3b1390085e0dd20ccdb7eab9a",
   "overlaySHA256": {
     "consumer.mjs": "e568cd36834fe4ba0646e76134de26179a432e85c12c77f075ba05e21fea5d39",
-    "driver.py": "79d57af3578d8af764a2a3d491584c4d1c852daf94561d4cca40eebffcb56e81",
+    "driver.py": "bac355a347893736df124dd26d59b447cc0ea2de7e836f328fd783d37b484061",
     "official-archive-layouts.json": "a0ac3dc8d3bf26956b061e46063efc19257ee3149208f26a763656a585532649",
     "retained/windows_conpty.py": "8220425ee006e13a95e4c98d215452ac238d257055387c36cec6fc8585f5ea9f",
     "retained/harness.py": "cd6147929a58363e24063e4c520b87cf5bc08fe39b16ced689d4cee7750fbb78"
@@ -51,6 +51,18 @@
     "scope": "Content-free before-cleanup byte/reader/boolean snapshot only; original acceptance predicate and all deadlines/transport/effect guards unchanged.",
     "rawFramePromptPathsOrErrorTextExported": false,
     "snapshotDoesNotGrantReadiness": true,
+    "nativeExecutedByPreparer": false,
+    "providerRequestsByPreparer": 0,
+    "qualificationGranted": false
+  },
+  "windowsTUIReadinessDiagnosticR2": {
+    "baseCommit": "497cd4902028c3cf6c1ebefae2bfa3c4064a4180",
+    "priorDriverSHA256": "79d57af3578d8af764a2a3d491584c4d1c852daf94561d4cca40eebffcb56e81",
+    "currentDriverSHA256": "bac355a347893736df124dd26d59b447cc0ea2de7e836f328fd783d37b484061",
+    "actualFailureResultSHA256": "2c92200656612973eb58e907df83bdc0ac8a265fb0606728f5e232a26e0782bc",
+    "scope": "Additional boolean labels/positioned-cursor across bounded raw capture, complete-frame and same-frame-label counts, observed last cursor visibility; diagnostic only, original predicate/helper/limits/control untouched.",
+    "rawContentExported": false,
+    "authorityChanged": false,
     "nativeExecutedByPreparer": false,
     "providerRequestsByPreparer": 0,
     "qualificationGranted": false
