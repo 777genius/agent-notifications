@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 	"time"
 
@@ -19,7 +20,10 @@ import (
 
 func localPolicyFixture(t *testing.T) (string, string, installruntime.Ledger) {
 	t.Helper()
-	base := t.TempDir()
+	base, err := installruntime.CanonicalPath(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	root, runtime := filepath.Join(base, "control"), filepath.Join(base, "runtime")
 	if err := os.Mkdir(runtime, 0700); err != nil {
 		t.Fatal(err)
@@ -32,7 +36,13 @@ func localPolicyFixture(t *testing.T) (string, string, installruntime.Ledger) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return root, runtime, ledger
+	root, err = installruntime.CanonicalPath(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Commit canonicalizes RuntimeRoot, but the binding bytes, key and command
+	// are immutable. Build them from the committed name, never a temp alias.
+	return root, ledger.RuntimeRoot, ledger
 }
 
 func patchLocalPolicy(t *testing.T, root, runtime, route string) installruntime.Ledger {
@@ -100,6 +110,9 @@ func registeredLocalFixture(t *testing.T) (string, string, portable.Binding, ins
 	if err != nil {
 		t.Fatal(err)
 	}
+	if l.RuntimeRoot != b.RuntimeRoot || !reflect.DeepEqual(l.Consumers[key], consumer) {
+		t.Fatalf("committed portable record differs from canonical fixture: want %+v, got %+v", consumer, l.Consumers[key])
+	}
 	return root, runtime, b, l
 }
 
@@ -144,17 +157,36 @@ func treeBytes(t *testing.T, root string) map[string]string {
 // RED: exact false cannot persist through damaged shared files/runtime, changes
 // foreign ownership, or restoration/omitted repeat choices resurrect consent.
 func TestCopilotRevokeSurvivesSharedDamage(t *testing.T) {
-	for _, damage := range []string{"missing-shared", "replaced-shared", "missing-runtime", "symlink-runtime", "missing-native-tree"} {
+	damages := []string{"missing-shared", "replaced-shared", "missing-runtime", "symlink-runtime", "missing-native-tree"}
+	if runtime.GOOS == "windows" {
+		// native_path_other.go refuses staging before any candidate is allocated.
+		damages[4] = "unsupported-native-staging"
+	}
+	for _, damage := range damages {
 		t.Run(damage, func(t *testing.T) {
 			root, runtime, b, before := registeredLocalFixture(t)
 			original := filepath.Join(runtime, "shared")
-			if damage == "missing-native-tree" {
+			if damage == "missing-native-tree" || damage == "unsupported-native-staging" {
 				source := filepath.Join(filepath.Dir(root), "TEST-retained.app")
 				if err := os.MkdirAll(filepath.Join(source, "Contents", "MacOS"), 0700); err != nil {
 					t.Fatal(err)
 				}
 				if err := os.WriteFile(filepath.Join(source, "Contents", "MacOS", "inert"), []byte("never executed"), 0600); err != nil {
 					t.Fatal(err)
+				}
+				if damage == "unsupported-native-staging" {
+					if err := os.Mkdir(filepath.Join(root, "native"), 0700); err != nil {
+						t.Fatal(err)
+					}
+					untouched := treeBytes(t, filepath.Dir(root))
+					candidate, err := installruntime.StageRetainedNative(localTestContext(t), root, source)
+					if err == nil || err.Error() != "native bundle staging requires a supported native platform" || candidate != nil {
+						t.Fatalf("unsupported native staging did not refuse: candidate=%+v err=%v", candidate, err)
+					}
+					if !reflect.DeepEqual(untouched, treeBytes(t, filepath.Dir(root))) {
+						t.Fatal("unsupported staging changed source, ownership or runtime")
+					}
+					return
 				}
 				candidate, err := installruntime.StageRetainedNative(localTestContext(t), root, source)
 				if err != nil {

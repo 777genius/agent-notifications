@@ -476,11 +476,11 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 		}
 		var binding struct{ ComponentID, ControlRoot string }
 		if json.Unmarshal([]byte(previous.Registration), &binding) != nil || binding.ComponentID != l.ID || binding.ControlRoot != r.ControlRoot {
-			return l, fmt.Errorf("Local revocation binding/owner mismatch")
+			return l, fmt.Errorf("local revocation binding/owner mismatch")
 		}
 	}
 	if r.RevokeCopilotVSCode && (!registered || !reflect.DeepEqual(previous, r.Consumer) || !localPortableConsumer(r.ConsumerID, previous)) {
-		return l, fmt.Errorf("Local revocation requires its exact recorded portable consumer")
+		return l, fmt.Errorf("local revocation requires its exact recorded portable consumer")
 	}
 	if r.RevokeOpenCode && (!registered || previous.RuntimeRoot != r.RuntimeRoot || previous.Registration == "") {
 		return l, fmt.Errorf("OpenCode revocation requires its registered runtime")

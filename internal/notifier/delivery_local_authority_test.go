@@ -11,6 +11,7 @@ import (
 	"github.com/777genius/agent-notifications/internal/notification/observation"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -22,14 +23,14 @@ import (
 // These tests use a real retained kernel lease, profile file and private spool.
 // The process seam never launches a native application or claims physical P2.
 type localBoundaryLease struct {
-	profile          string
+	profile, bundle  string
 	release          func()
 	released         bool
 	before, complete int
 }
 
-func (l *localBoundaryLease) BundlePath() string     { return "/TEST/Notifier.app" }
-func (l *localBoundaryLease) ExecutablePath() string { return "/TEST/Notifier.app/helper" }
+func (l *localBoundaryLease) BundlePath() string     { return l.bundle }
+func (l *localBoundaryLease) ExecutablePath() string { return filepath.Join(l.bundle, "helper") }
 func (l *localBoundaryLease) Release()               { l.released = true; l.release() }
 func (l *localBoundaryLease) check() error {
 	if l.released {
@@ -63,14 +64,15 @@ func (i *localBoundaryInstallation) Acquire(ctx context.Context) (NativeLease, e
 
 type localBoundarySpool struct {
 	*PrivateNativeSpool
-	drift    func()
-	prepared NativeAttempt
-	expires  int
+	drift      func()
+	prepared   NativeAttempt
+	prepareErr error
+	expires    int
 }
 
 func (s *localBoundarySpool) Prepare(ctx context.Context, r notification.Request, encode func(string) ([]byte, error)) (NativeAttempt, error) {
 	a, err := s.PrivateNativeSpool.Prepare(ctx, r, encode)
-	s.prepared = a
+	s.prepared, s.prepareErr = a, err
 	if err == nil && s.drift != nil {
 		s.drift()
 	}
@@ -123,11 +125,20 @@ func (p *localBoundaryProcess) Launch(_ context.Context, _ string, request, rece
 // a successful receipt is never checked. The same original nonce/deadline and
 // handed-off spool must survive uncertainty, with exactly one acquired lease.
 func TestLocalAuthorityAtRetainedNativeBoundary(t *testing.T) {
-	for _, phase := range []string{"before", "after", "probe-return"} {
+	phases := []string{"before", "after", "probe-return"}
+	if runtime.GOOS == "windows" {
+		// delivery_files_other.go refuses the real private spool on Windows.
+		// Exercise that refusal with the same lease and Consumer, before handoff.
+		phases = []string{"unsupported-spool", "probe-return"}
+	}
+	for _, phase := range phases {
 		t.Run(phase, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			base := t.TempDir()
+			base, err := installruntime.CanonicalPath(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
 			root := filepath.Join(base, "control")
 			runtime := filepath.Join(base, "runtime")
 			if err := os.Mkdir(runtime, 0700); err != nil {
@@ -144,7 +155,7 @@ func TestLocalAuthorityAtRetainedNativeBoundary(t *testing.T) {
 			if err := os.WriteFile(profile, []byte("owned-profile"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			lease := &localBoundaryLease{profile: profile}
+			lease := &localBoundaryLease{profile: profile, bundle: filepath.Join(base, "TEST-Notifier.app")}
 			installation := &localBoundaryInstallation{root: root, snapshot: snapshot, lease: lease}
 			clock := &pr3Clock{now: 100}
 			spoolRoot := filepath.Join(base, "spool")
@@ -173,12 +184,12 @@ func TestLocalAuthorityAtRetainedNativeBoundary(t *testing.T) {
 			request.Target = notification.DesktopTarget{}
 			request.Deadline.NotAfter = 104 // Original four-second Local admission.
 			var got notification.Receipt
-			if phase == "after" {
-				document, err := config.ParseDocument([]byte(`{"schemaVersion":2,"notifications":{"desktop":{"enabled":true}}}`), "/TEST/config", false)
+			if phase == "after" || phase == "unsupported-spool" {
+				document, err := config.ParseDocument([]byte(`{"schemaVersion":2,"notifications":{"desktop":{"enabled":true}}}`), filepath.Join(base, "TEST-config.json"), false)
 				if err != nil {
 					t.Fatal(err)
 				}
-				cfg, err := document.Effective(config.AssetContext{Agent: config.AgentCopilotVSCode, PluginRoot: "/TEST"})
+				cfg, err := document.Effective(config.AssetContext{Agent: config.AgentCopilotVSCode, PluginRoot: base})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -192,13 +203,20 @@ func TestLocalAuthorityAtRetainedNativeBoundary(t *testing.T) {
 				}
 				consumer := local.Consumer{Binding: local.Binding{InstallationID: "TEST-install", BindingID: "TEST-binding", ProfileIdentity: "TEST-profile", Product: "copilot-vscode", Generation: 1}, Gate: localBoundaryGate{profile: profile}, Config: cfg, Desktop: delivery, Clock: clock, Cache: &observation.RecentCache{Root: cacheRoot, Clock: clock}}
 				receipt := consumer.Consume(ctx, facts, request.Deadline)
-				if receipt.Status != "unknown" {
+				if phase == "unsupported-spool" {
+					if receipt.Status != "rejected" || receipt.Reason != "delivery_unavailable" || spool.prepareErr == nil || spool.prepareErr.Error() != "unsupported private filesystem" {
+						t.Fatalf("real consumer did not retain the exact unsupported-spool refusal: %+v err=%v", receipt, spool.prepareErr)
+					}
+				} else if receipt.Status != "unknown" {
 					t.Fatalf("completion drift was not uncertain at real consumer: %+v", receipt)
 				}
 				got = notification.Receipt{Status: receipt.Status}
 				entries, err := os.ReadDir(cacheRoot)
 				if err != nil {
 					t.Fatal(err)
+				}
+				if _, err := os.Stat(filepath.Join(cacheRoot, "observations.json")); err != nil {
+					t.Fatalf("real consumer never retained its claim: %v", err)
 				}
 				retained := map[string][]byte{}
 				for _, entry := range entries {
@@ -212,7 +230,11 @@ func TestLocalAuthorityAtRetainedNativeBoundary(t *testing.T) {
 					t.Fatal(err)
 				}
 				again := consumer.Consume(ctx, facts, request.Deadline)
-				if again.Status != "suppressed" || installation.acquires != 1 || process.launches != 1 {
+				wantLaunches := 1
+				if phase == "unsupported-spool" {
+					wantLaunches = 0
+				}
+				if again.Status != "suppressed" || again.Reason != "duplicate" || installation.acquires != 1 || process.launches != wantLaunches {
 					t.Fatalf("restored profile resent the retained attempt: %+v acquires=%d launches=%d", again, installation.acquires, process.launches)
 				}
 				for name, want := range retained {
@@ -257,6 +279,18 @@ func TestLocalAuthorityAtRetainedNativeBoundary(t *testing.T) {
 				}
 				if _, err := os.Stat(spool.prepared.Directory); !os.IsNotExist(err) {
 					t.Fatal("owned attempt survived expiry")
+				}
+			} else if phase == "unsupported-spool" {
+				if process.launches != 0 || lease.before != 0 || spool.expires != 0 || spool.prepared != (NativeAttempt{}) {
+					t.Fatal("unsupported private spool reached handoff or fabricated an attempt")
+				}
+				entries, err := os.ReadDir(spoolRoot)
+				if err != nil || len(entries) != 0 {
+					t.Fatalf("unsupported private spool changed its root: entries=%v err=%v", entries, err)
+				}
+				raw, err := os.ReadFile(profile)
+				if err != nil || string(raw) != "owned-profile" {
+					t.Fatal("unsupported spool changed the real profile")
 				}
 			} else if process.launches != 0 || lease.before != 0 {
 				t.Fatal("early return reached handoff")
