@@ -694,6 +694,22 @@ def run_case(root, metadata, os_name, arch, job_end):
                 'samplerCreated': False, 'samples': 0,
                 'operationElapsedMs': round((time.monotonic() - operation_started) * 1000, 3)}
             own.send(host, {'kind': 'sampler_begin'}, operation_end)
+            safe['nativeResourceCheckpoints'] = []
+        def resource_checkpoint(checkpoint, checkpoint_round, expected_samples):
+            if os_name != 'windows': return
+            ready = own.message(host, 'resource_checkpoint', operation_end)
+            need(set(ready) == {'kind', 'pid', 'stage', 'round', 'samples'} and
+                 ready['pid'] == host['p'].pid and ready['stage'] == checkpoint and
+                 ready['round'] == checkpoint_round and
+                 (ready['round'] is None or type(ready['round']) is int) and
+                 type(ready['samples']) is int and ready['samples'] == expected_samples,
+                 'actual_resource_checkpoint')
+            count = native_resources(host['p'], os_name)
+            safe['nativeResourceCheckpoints'].append({'stage': checkpoint, 'round': checkpoint_round,
+                'samples': expected_samples, 'count': count,
+                'operationElapsedMs': round((time.monotonic() - operation_started) * 1000, 3)})
+            own.send(host, {'kind': 'resource_continue', 'stage': checkpoint, 'round': checkpoint_round}, operation_end)
+        if os_name == 'windows': resource_checkpoint('sampler_created', None, 0)
         helper_receipts = []
         helper_lifecycle = []
         for round_number in range(3):
@@ -722,6 +738,9 @@ def run_case(root, metadata, os_name, arch, job_end):
                                 'raw': base64.b64encode(raw).decode()}, operation_end)
             finally:
                 if s['p'].pid in own.live: own.cleanup()
+            if os_name == 'windows':
+                stage = 'helper_compared_resource_observation'
+                resource_checkpoint('helper_compared', round_number, (round_number + 1) * (BUDGETS['chunkSize'] + 4))
         stage = 'disposed'
         result = own.message(host, 'disposed', operation_end)
         disposed_observed = True
@@ -746,6 +765,9 @@ def run_case(root, metadata, os_name, arch, job_end):
         if os_name == 'windows':
             safe['nativeImportResourceObservation']['postDispose'] = resources_after
             safe['nativeImportResourceObservation']['samplerPhaseDelta'] = resources_after - imported_resources
+            safe['nativeResourceCheckpoints'].append({'stage': 'disposed', 'round': None,
+                'samples': result['samples'], 'count': resources_after,
+                'operationElapsedMs': round((time.monotonic() - operation_started) * 1000, 3)})
         # Preserve the ORIGINAL total nonincrease gate; diagnostics grant nothing.
         need(resources_after <= resources_before, 'actual_module_resource_leak')
         kernel_image(host['p'], exe, os_name)
