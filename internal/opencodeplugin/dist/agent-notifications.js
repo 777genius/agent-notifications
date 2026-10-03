@@ -2265,6 +2265,35 @@ var deliveryKeys = process.platform === "win32" ? ["AGENT_NOTIFICATIONS_CONFIG",
 var osKeys = process.platform === "win32" ? ["SystemRoot", "WINDIR"] : [];
 var result = (status, output = Buffer.alloc(0)) => Object.freeze({ status, output });
 var closedObject = (value, keys) => value && Object.getPrototypeOf(value) === Object.prototype && Reflect.ownKeys(value).every((key) => keys.includes(key));
+function eventDiagnostic(outcome, output, unresolved, code, forcedKill) {
+  const record = {
+    protocol: 1,
+    kind: "event",
+    ipc: outcome,
+    childClosure: unresolved ? "unproved" : "closed",
+    exitCode: code,
+    forcedKill
+  };
+  if (outcome === "ok") {
+    try {
+      const receipt = closed(parseJSON(output, 1024), ["status", "reason", "desktop", "webhook"], ["status"]);
+      if (!["submitted", "unknown", "unavailable", "rejected", "suppressed"].includes(receipt.status)) throw new TypeError();
+      const safe = { status: receipt.status };
+      for (const key of ["desktop", "webhook"]) {
+        if (!Object.hasOwn(receipt, key)) continue;
+        if (!["submitted", "unknown", "unavailable", "rejected"].includes(receipt[key])) throw new TypeError();
+        safe[key] = receipt[key];
+      }
+      record.receipt = safe;
+    } catch {
+      record.receipt = "invalid";
+    }
+  }
+  try {
+    console.error("[agent-notifications] " + JSON.stringify(record));
+  } catch {
+  }
+}
 function absoluteNativePath(value, platform = process.platform) {
   if (typeof value !== "string" || value.includes("\0")) return false;
   if (platform !== "win32") return path.posix.isAbsolute(value);
@@ -2280,12 +2309,13 @@ function environment(values, allowed) {
   return { ...values };
 }
 function createProcessRegistry(configuration) {
-  if (!closedObject(configuration, ["executable", "privateCwd", "controlRoot", "osEnv", "deliveryEnv", "origin"]))
+  if (!closedObject(configuration, ["executable", "privateCwd", "controlRoot", "osEnv", "deliveryEnv", "origin", "diagnostics"]))
     throw new TypeError("invalid_configuration");
-  const { executable: executable2, privateCwd, controlRoot: controlRoot2, osEnv = {}, deliveryEnv = {}, origin: origin2 } = configuration;
+  const { executable: executable2, privateCwd, controlRoot: controlRoot2, osEnv = {}, deliveryEnv = {}, origin: origin2, diagnostics = false } = configuration;
   if (![executable2, privateCwd, controlRoot2].every((value) => absoluteNativePath(value)) || process.platform === "win32" && !executable2.toLowerCase().endsWith(".exe"))
     throw new TypeError("invalid_paths");
   if (origin2 !== void 0 && !/^[a-f0-9]{64}$/.test(origin2)) throw new TypeError("invalid_origin");
+  if (typeof diagnostics !== "boolean") throw new TypeError("invalid_diagnostics");
   const nativePID = process.pid, publicExecPath = process.execPath;
   const profileInput = Buffer.from(JSON.stringify({
     protocol: 1,
@@ -2466,6 +2496,7 @@ function createProcessRegistry(configuration) {
         const valid = current(signal, isCurrent);
         const outcome = entry.unresolved ? "ipc_termination_unproved" : !valid ? "invalidated" : failure ?? (performance2.now() > stopAt ? "deadline" : code === 0 ? "ok" : "exited");
         resolve(result(outcome, outcome === "ok" ? output : void 0));
+        if (kind === "event" && diagnostics) eventDiagnostic(outcome, output, entry.unresolved, code, forcedKill);
         changed();
       });
       deadlineTimer = setTimeout(() => terminate("deadline"), delay(stopAt));
@@ -2538,7 +2569,7 @@ var identity2 = (name) => {
   return Object.freeze({ name, dev: stat.dev, ino: stat.ino, size: stat.isDirectory() ? void 0 : stat.size, mtime: stat.isDirectory() ? void 0 : stat.mtimeNs, mode: stat.mode });
 };
 var equal = (a, b) => ["name", "dev", "ino", "size", "mtime", "mode"].every((key) => a[key] === b[key]);
-async function prepareOwnedHost(directory2, generation, appVersion) {
+async function prepareOwnedHost(directory2, generation, appVersion, diagnostics = false) {
   let registry, privateCwd;
   try {
     if (!/^[a-f0-9]{64}$/.test(origin) || !absoluteNativePath(directory2)) return;
@@ -2558,6 +2589,7 @@ async function prepareOwnedHost(directory2, generation, appVersion) {
       controlRoot,
       origin,
       privateCwd,
+      diagnostics,
       osEnv: pick(process.platform === "win32" ? ["SystemRoot", "WINDIR"] : []),
       deliveryEnv: pick(deliveryKeys2)
     });
@@ -2617,7 +2649,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "9ca0b9953d49997601655e54f846a3efa464f237e47c6f1b04716d0f2e64c4c2"
       }
     ],
-    "algorithmSourceMerkleSHA256": "298fada0b99e4e45d874a2e055a564a46b22b43e185d6540448066af7a31c2d1",
+    "algorithmSourceMerkleSHA256": "07002a75c48a9b3d13e84c97bfcee767975500bb8edfedbb3d7ac6ca60863991",
     "sourceKind": "linux-proc-boottime",
     "rawKind": "linux-boottime",
     "nativeReadBoundNS": "103000000",
@@ -2635,7 +2667,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "f916986543348d7953d8d43aa048516cdbc3f84f4d0dc9c0c5b9d1da3030cea7"
       }
     ],
-    "algorithmSourceMerkleSHA256": "298fada0b99e4e45d874a2e055a564a46b22b43e185d6540448066af7a31c2d1",
+    "algorithmSourceMerkleSHA256": "07002a75c48a9b3d13e84c97bfcee767975500bb8edfedbb3d7ac6ca60863991",
     "sourceKind": "linux-proc-boottime",
     "rawKind": "linux-boottime",
     "nativeReadBoundNS": "103000000",
@@ -3493,7 +3525,7 @@ var servers = /* @__PURE__ */ new WeakMap();
 var setups = /* @__PURE__ */ new WeakMap();
 var silent = Object.freeze({ event() {
 } });
-async function server(input) {
+async function server(input, options = {}) {
   if (!input?.client || typeof input.client.session?.get !== "function" || typeof input.client.session?.messages !== "function") return silent;
   const existing = servers.get(input.client);
   if (existing) {
@@ -3506,7 +3538,7 @@ async function server(input) {
   }
   const holder = { directory: input.directory, retired: false };
   const starting = (async () => {
-    const owned = await prepareOwnedHost(input.directory, "v1");
+    const owned = await prepareOwnedHost(input.directory, "v1", void 0, options?.diagnostics === true);
     if (!owned) return silent;
     if (holder.retired) {
       await owned.dispose();
@@ -3583,7 +3615,7 @@ async function setup(context) {
   if (!context || typeof context.event?.subscribe !== "function" || typeof context.session?.get !== "function" || typeof context.session?.context !== "function" || typeof context.permission?.get !== "function" || typeof context.permission?.list !== "function" || typeof context.rpc?.register !== "function") return;
   if (setups.has(context)) return setups.get(context);
   const starting = (async () => {
-    const owned = await prepareOwnedHost(context.location?.directory, "v2", context.app?.version);
+    const owned = await prepareOwnedHost(context.location?.directory, "v2", context.app?.version, context.options?.diagnostics === true);
     if (!owned) return;
     const policy = selectClockCell("v2");
     if (!policy) {
@@ -3683,7 +3715,7 @@ async function setup(context) {
   setups.set(context, starting);
   return starting;
 }
-var AgentNotifications = (input) => server(input);
+var AgentNotifications = (input, options) => server(input, options);
 var plugin_default = Object.freeze({ id: "agent-notifications", server, setup });
 export {
   AgentNotifications,
