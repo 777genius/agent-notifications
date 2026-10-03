@@ -133,7 +133,7 @@ func renumberPending(t *testing.T, e *renumberEnv, boundary string, purge bool) 
 	if _, err := Commit(e.ctx, r); !errors.Is(err, renumberCrash) {
 		t.Fatalf("requested durable boundary %s not reached: %v", boundary, err)
 	}
-	return renumberJournal(t, e.control), paths
+	return renumberE2EJournal(t, e.control), paths
 }
 func TestRenumberE2EDarwinRecovery(t *testing.T) {
 	for _, boundary := range []string{"transaction", "native", "ledger"} {
@@ -571,7 +571,7 @@ func (e *renumberEnv) signedStage(t *testing.T, marker string) string {
 	return stage
 }
 
-func renumberJournal(t *testing.T, root string) transaction {
+func renumberE2EJournal(t *testing.T, root string) transaction {
 	t.Helper()
 	marker := filepath.Join(root, "transaction.json")
 	tx, err := readTransactionFile(marker)
