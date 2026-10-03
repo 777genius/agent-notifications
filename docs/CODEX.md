@@ -22,8 +22,7 @@ From the bundle directory:
 ./bin/agent-notifications setup-codex --plugin-root .
 ```
 
-Windows support for Codex hook delivery is not declared until the Windows launcher
-is qualified. For manual registration, run the installed primary launcher in PowerShell (the downloaded
+For manual registration on Windows, run the installed primary launcher in PowerShell (the downloaded
 `claude-notifications-windows-amd64.exe` remains compatible):
 
 ```powershell
@@ -34,13 +33,18 @@ Run these commands in the bundle directory. If you have explicitly added the bin
 `PATH`, `agent-notifications setup-codex --plugin-root <bundle-directory>` also works.
 
 It installs a self-contained copy of the plugin at `~/.codex/claude-notifications-go` and writes
-the hook entries into `~/.codex/hooks.json`. Existing foreign hook definitions and unknown fields are preserved,
+the hook entries into `~/.codex/hooks.json`. Agent-initiated notify (MCP) is enabled by default
+with `--navigation none --allow-unknown-caller true --allow-caller-asserted false`.
+Pass `--skip-agent-notify` for hooks only. Existing foreign hook definitions and unknown fields are preserved,
 and every run saves a uniquely named backup of the previous file next to it.
 
-Then start Codex, run `/hooks`, review the entries and trust them.
+Then start Codex, run `/hooks`, review the entries and trust them. Open a new session so MCP
+can start. The manual compatibility path may list `agent_notifications`; the portable public
+installer uses `agent-notify`.
 
 Useful flags: `--dry-run` shows what would change, `--print` outputs the JSON so you can merge it
-yourself, `--codex-home` and `--plugin-root` override the paths.
+yourself, `--codex-home` and `--plugin-root` override the paths, and `--skip-agent-notify`
+skips MCP registration. If agent-notify setup fails, hook registration remains in place.
 
 For manual updates, run the registration command again to refresh the installed copy.
 Unchanged hook definitions retain trust; changed definitions require review again.
@@ -88,7 +92,7 @@ Known limitations:
 - The error statuses for Codex come from a text heuristic over the final message (short messages
   with failure phrasing), not from structured error data - false negatives are possible.
 - The `request_user_input` question hook is limited to the modes where Codex exposes that tool.
-- Windows support for the Codex route is not declared until the Windows launcher is proven.
+- Native Windows hook-chain checks passed for the [v1.47.0 prerelease](https://github.com/777genius/agent-notifications/releases/tag/v1.47.0); those checks do not establish visible desktop banners or sounds.
 - Codex hooks require a trust review (`/hooks` inside Codex); changed definitions require review again.
 
 Both products share one config file (the shared file selected by `config path`).
