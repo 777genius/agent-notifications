@@ -71,6 +71,23 @@ func hookPresentation(status analyzer.Status, content HookPresentation, statusTi
 	}
 }
 
+// HookDesktopContent shares literal hook presentation with trusted integrations.
+// Delivery policy, consent and routing remain the caller's responsibility.
+func HookDesktopContent(status analyzer.Status, content HookPresentation, statusTitle string, sessionLabel bool) notification.Content {
+	return hookPresentation(status, content, statusTitle, sessionLabel).Content
+}
+
+// Platforms without a native subtitle keep literal context in the body.
+func desktopBodyWithSubtitle(content notification.Content) string {
+	if content.Subtitle == "" {
+		return content.Body
+	}
+	if content.Body == "" {
+		return content.Subtitle
+	}
+	return content.Subtitle + "\n" + content.Body
+}
+
 // appendSessionLabel keeps custom status titles intact while avoiding a redundant
 // default completion word when the session name already identifies the task.
 func appendSessionLabel(status analyzer.Status, statusTitle, sessionName string) string {

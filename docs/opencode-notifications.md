@@ -1,9 +1,13 @@
 # OpenCode notifications
 
 Agent Notifications adds a global OpenCode plugin for **root-session completion,
-questions, permission requests and terminal errors**. Alerts contain generic text;
-they are silent and do not navigate to a terminal or session when clicked. It does
-not provide Claude's plan/review events, contextual messages or sound controls.
+questions, permission requests and terminal errors**. Desktop completion uses
+`✅ [Native session title]` when available, and questions show their actual text
+as `❓ Actual question?` with the session title as context. macOS uses a native
+subtitle; Linux and Windows include that context above the body. Missing context
+falls back to generic OpenCode copy. Alerts remain silent and do not navigate to
+a terminal or session when clicked. Plan/review events and sound controls are
+outside this integration.
 
 The tested host is **OpenCode 1.18.33**. [OpenCode V2](https://opencode.ai/v2/docs) uses a different plugin API and is not supported. The public
 installer rejects V2 and reports the detected V1 version; that diagnostic does not
@@ -157,10 +161,15 @@ resolve the reported ownership conflict explicitly rather than deleting blindly.
 
 ## Privacy, duplicate notifications and limits
 
-The observer sends content-free facts to the local owned executable. It does not
-forward prompts, question text, native error bodies or project metadata. Desktop
-and webhook messages use generic copy; configuring a webhook intentionally sends
-those generic events to your selected endpoint. Each request rechecks current
+The shared observer sends content-free facts. The product plugin adds an optional
+bounded desktop display envelope with a freshly verified native session title
+and an immutable snapshot of the exact request's question text. Multiple questions
+appear in their original order. Headers, answer options, prompts, paths and native
+error bodies are excluded. Invalid or oversized metadata falls back to generic
+copy. Turning off `notifications.desktop.showSessionLabel` hides session names
+while keeping concrete question text. Webhook messages and receipts remain
+generic; configuring a webhook intentionally sends those generic events to your
+selected endpoint. Each request rechecks current
 consent, registration and owned plugin/executable identities. See
 [configuration](CONFIGURATION.md) for channel and status restrictions.
 

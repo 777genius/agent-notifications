@@ -24,11 +24,11 @@ func TestWindowsPowerShellToastSessionForwardsSilentPolicy(t *testing.T) {
 		got = p
 		return nil
 	}
-	r := notification.Request{Content: notification.Content{Title: "title", Body: "body"}, Policy: notification.PolicySnapshot{SoundEnabled: false}}
+	r := notification.Request{Content: notification.Content{Title: "title", Body: "body", Subtitle: "session context"}, Policy: notification.PolicySnapshot{SoundEnabled: false}}
 	if err := (windowsPowerShellToastSession{}).Submit(context.Background(), r); err != nil {
 		t.Fatal(err)
 	}
-	if !got.Silent || got.Title != r.Content.Title || got.Body != r.Content.Body || got.AppID != windowsToastAppID {
+	if !got.Silent || got.Title != r.Content.Title || got.Body != "session context\nbody" || got.AppID != windowsToastAppID {
 		t.Fatalf("wrong toast payload: %+v", got)
 	}
 }

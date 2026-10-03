@@ -13,9 +13,13 @@ import (
 	"github.com/godbus/dbus/v5"
 )
 
-type testNotifications struct{ last atomic.Uint32 }
+type testNotifications struct {
+	last atomic.Uint32
+	body atomic.Value
+}
 
-func (s *testNotifications) Notify(string, uint32, string, string, string, []string, map[string]dbus.Variant, int32) (uint32, *dbus.Error) {
+func (s *testNotifications) Notify(_ string, _ uint32, _ string, _ string, body string, _ []string, _ map[string]dbus.Variant, _ int32) (uint32, *dbus.Error) {
+	s.body.Store(body)
 	return s.last.Add(1), nil
 }
 
@@ -55,6 +59,10 @@ func TestFreedesktopSessionBusSubmit(t *testing.T) {
 	clock := &pr3Clock{now: 100}
 	d := NewFreedesktopDelivery(clock)
 	req := linuxNoneRequest(clock)
+	// Regression: D-Bus has no native subtitle slot; dropping the subtitle
+	// would remove session identification from a concrete-question banner.
+	req.Content.Subtitle = "Installer work"
+	req.Content.Body = "Use the new installer?"
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	ready := d.CheckReadiness(ctx, req)
@@ -64,5 +72,8 @@ func TestFreedesktopSessionBusSubmit(t *testing.T) {
 	receipt := d.Deliver(ctx, req)
 	if receipt.Status != "submitted" || receipt.Reason != "session_notification" || server.last.Load() != 1 {
 		t.Fatal(receipt, server.last.Load())
+	}
+	if server.body.Load() != "Installer work\nUse the new installer?" {
+		t.Fatalf("lost subtitle: %v", server.body.Load())
 	}
 }

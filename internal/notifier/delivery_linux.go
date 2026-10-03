@@ -183,7 +183,7 @@ func (n *dbusNotifications) Submit(ctx context.Context, r notification.Request) 
 		hints["suppress-sound"] = dbus.MakeVariant(true)
 	}
 	var id uint32
-	err := n.conn.Object("org.freedesktop.Notifications", "/org/freedesktop/Notifications").CallWithContext(ctx, "org.freedesktop.Notifications.Notify", 0, "agent-notifications", uint32(0), "", r.Content.Title, r.Content.Body, []string{}, hints, expire).Store(&id)
+	err := n.conn.Object("org.freedesktop.Notifications", "/org/freedesktop/Notifications").CallWithContext(ctx, "org.freedesktop.Notifications.Notify", 0, "agent-notifications", uint32(0), "", r.Content.Title, desktopBodyWithSubtitle(r.Content), []string{}, hints, expire).Store(&id)
 	return id, err
 }
 
