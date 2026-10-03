@@ -387,3 +387,67 @@ var (
 	_ io.Reader = (*neverEOFReader)(nil)
 	_           = hooks.Event{}
 )
+
+func TestSourceDecodeShortObjectWithOpenWriter(t *testing.T) {
+	reader, writer := io.Pipe()
+	done := make(chan struct{})
+	written := make(chan error, 1)
+	var event hooks.Event
+	var decodeErr error
+	go func() {
+		defer close(done)
+		event, decodeErr = Source{}.Decode(context.Background(), "Stop", reader)
+	}()
+	go func() {
+		_, err := writer.Write([]byte("{}"))
+		written <- err
+	}()
+	t.Cleanup(func() {
+		_ = reader.Close()
+		_ = writer.Close()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Error("Decode() did not exit after pipe cleanup")
+		}
+	})
+
+	select {
+	case err := <-written:
+		if err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Write() did not deliver the short object")
+	}
+	// Keep the writer open: decoding the complete object must not need a third byte.
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Decode() waited for a third byte of complete {} with writer open")
+	}
+	if decodeErr != nil {
+		t.Fatalf("Decode() error = %v", decodeErr)
+	}
+	if event.Product != hooks.ProductClaude || event.Session.SessionID != "unknown" || string(event.Raw) != "{}" {
+		t.Fatalf("event = %+v", event)
+	}
+	if stop, ok := event.Payload.(hooks.StopPayload); !ok || stop.AssistantMessage != "" {
+		t.Fatalf("Payload = %#v", event.Payload)
+	}
+}
+
+func TestSkipUTF8BOMPreservesPartialPrefixes(t *testing.T) {
+	for _, input := range []string{"", "\xEF", "\xEF\xBB", "\xEFx", "\xEF\xBBx", "\xBB\xBF{}", "{}", "\xEF\xBB\xBF{}"} {
+		t.Run(strconv.Quote(input), func(t *testing.T) {
+			got, err := io.ReadAll(skipUTF8BOM(strings.NewReader(input)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := strings.TrimPrefix(input, "\xEF\xBB\xBF")
+			if string(got) != want {
+				t.Fatalf("skipUTF8BOM(%q) = %q, want %q", input, got, want)
+			}
+		})
+	}
+}

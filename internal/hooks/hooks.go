@@ -768,9 +768,12 @@ func (h *Handler) handleTeammateIdle(ev Event, p TeammateIdlePayload) error {
 
 func skipUTF8BOM(input io.Reader) io.Reader {
 	reader := bufio.NewReader(input)
-	prefix, err := reader.Peek(3)
-	if err == nil && bytes.Equal(prefix, []byte{0xEF, 0xBB, 0xBF}) {
-		_, _ = reader.Discard(3)
+	prefix, err := reader.Peek(1)
+	if err == nil && prefix[0] == 0xEF {
+		prefix, err = reader.Peek(3)
+		if err == nil && bytes.Equal(prefix, []byte{0xEF, 0xBB, 0xBF}) {
+			_, _ = reader.Discard(3)
+		}
 	}
 	return reader
 }
