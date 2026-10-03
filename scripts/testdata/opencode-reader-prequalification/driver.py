@@ -208,7 +208,7 @@ def main(a):
    if common_end is not None:remaining(common_end)
   if a.entry=='tui' and actual_os=='windows':
    import ctypes,importlib.util
-   wp=HERE/'retained/windows_conpty.py';need(sha(wp)=='1c2bb5c8874862103aea6de9173ae0b23eed4a551b293d2b1155caf263be160e','reviewed_direct_ConPTY_source')
+   wp=HERE/'retained/windows_conpty.py';need(sha(wp)=='8220425ee006e13a95e4c98d215452ac238d257055387c36cec6fc8585f5ea9f','reviewed_direct_ConPTY_source')
    need(sha(HERE/'retained/harness.py')=='cd6147929a58363e24063e4c520b87cf5bc08fe39b16ced689d4cee7750fbb78','ConPTY_inert_harness_source');spec=importlib.util.spec_from_file_location('owned_entry_ConPTY',wp);wm=importlib.util.module_from_spec(spec);spec.loader.exec_module(wm)
    hpc_owner_lock=threading.Lock()
    def close_owned_terminal():
@@ -364,6 +364,7 @@ def main(a):
   tui_current();result.update(packagedReaderTransportObserved=True,ownedImageSHA256=pin['executableSHA256'],bundleSHA256=a.bundle_sha256,traceSHA256=sha(root/'reader-private.jsonl'),closedReceiptSHA256=sha(root/'reader-closed.json'));success=True
  except Exception as error:
   result['firstFailedStage']=CURRENT_STAGE;result['exceptionKind']=type(error).__name__;result['failure']=type(error).__name__
+  if isinstance(error,ValueError) and str(error) in {'original_deadline','native_TUI_ended_before_input','native_TUI_readiness_reader'}:result['failureCode']=str(error)
   write(root/'first-exception-private.json',{'stage':CURRENT_STAGE,'kind':type(error).__name__,'message':str(error)[:512]})
  finally:
   if win_terminal is not None and not win_terminal.closed and proc.poll() is None:

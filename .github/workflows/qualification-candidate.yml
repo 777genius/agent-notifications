@@ -1,8 +1,8 @@
-name: TEST Windows stock V1 local-entry reader continuation
+name: TEST Windows stock V1 TUI reader continuation
 on:
   workflow_dispatch:
     inputs:
-      plan: {description: 'Two Windows floor V1 local entries, one TEST request each, no retry', required: true, default: windows-v1-local-entries, type: choice, options: [windows-v1-local-entries]}
+      plan: {description: 'One Windows floor V1 TUI, one TEST request, no retry', required: true, default: windows-v1-local-tui, type: choice, options: [windows-v1-local-tui]}
 permissions: {contents: read}
 jobs:
   reader:
@@ -13,7 +13,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {runner: windows-latest, os: windows, arch: amd64, version: 1.18.33, entry: run}
           - {runner: windows-latest, os: windows, arch: amd64, version: 1.18.33, entry: tui}
     env:
       CELL_OS: ${{ matrix.os }}
@@ -24,7 +23,7 @@ jobs:
       - name: Refuse an unknown capture plan
         shell: bash
         env: {PLAN_NAME: '${{ inputs.plan }}'}
-        run: test "$PLAN_NAME" = windows-v1-local-entries
+        run: test "$PLAN_NAME" = windows-v1-local-tui
       - name: Preserve exact TEST source text bytes
         shell: bash
         run: |

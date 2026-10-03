@@ -128,6 +128,11 @@ class ConPTY:
                                                      self.hpc, ctypes.sizeof(W.HANDLE), None, None))
             startup = STARTUPINFOEX()
             startup.StartupInfo.cb = ctypes.sizeof(startup)
+            # Explicit NULL standard handles bind to this console, not runner stdio.
+            startup.StartupInfo.dwFlags = 0x100  # STARTF_USESTDHANDLES
+            startup.StartupInfo.hStdInput = None
+            startup.StartupInfo.hStdOutput = None
+            startup.StartupInfo.hStdError = None
             startup.lpAttributeList = ctypes.cast(attributes, W.LPVOID)
             command = ctypes.create_unicode_buffer(subprocess.list2cmdline(argv))
             environment = ctypes.create_unicode_buffer('\0'.join(k + '=' + v for k, v in sorted(env.items())) + '\0\0')
