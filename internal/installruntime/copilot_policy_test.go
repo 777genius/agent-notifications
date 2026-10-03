@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -157,16 +158,17 @@ func treeBytes(t *testing.T, root string) map[string]string {
 // RED: exact false cannot persist through damaged shared files/runtime, changes
 // foreign ownership, or restoration/omitted repeat choices resurrect consent.
 func TestCopilotRevokeSurvivesSharedDamage(t *testing.T) {
-	damages := []string{"missing-shared", "replaced-shared", "missing-runtime", "symlink-runtime", "missing-native-tree"}
+	damages := []string{"missing-shared", "replaced-shared", "missing-runtime", "symlink-runtime", "missing-native-tree", "missing-native-native-only", "missing-native-manual-only"}
 	if runtime.GOOS == "windows" {
 		// native_path_other.go refuses staging before any candidate is allocated.
-		damages[4] = "unsupported-native-staging"
+		damages = append(damages[:4], "unsupported-native-staging")
 	}
 	for _, damage := range damages {
 		t.Run(damage, func(t *testing.T) {
 			root, runtime, b, before := registeredLocalFixture(t)
 			original := filepath.Join(runtime, "shared")
-			if damage == "missing-native-tree" || damage == "unsupported-native-staging" {
+			missingNative := strings.HasPrefix(damage, "missing-native-")
+			if missingNative || damage == "unsupported-native-staging" {
 				source := filepath.Join(filepath.Dir(root), "TEST-retained.app")
 				if err := os.MkdirAll(filepath.Join(source, "Contents", "MacOS"), 0700); err != nil {
 					t.Fatal(err)
@@ -206,7 +208,7 @@ func TestCopilotRevokeSurvivesSharedDamage(t *testing.T) {
 				if err := os.Remove(original); err != nil {
 					t.Fatal(err)
 				}
-			case "missing-native-tree":
+			case "missing-native-tree", "missing-native-native-only", "missing-native-manual-only":
 				if err := os.Rename(before.Native.Path, before.Native.Path+"-retained"); err != nil {
 					t.Fatal(err)
 				}
@@ -224,7 +226,13 @@ func TestCopilotRevokeSurvivesSharedDamage(t *testing.T) {
 					}
 				}
 			}
-			after, err := copilotvscodeinstall.RevokeChannels(localTestContext(t), b, copilotvscodeinstall.RevokeAll)
+			selection := copilotvscodeinstall.RevokeAll
+			if damage == "missing-native-native-only" {
+				selection = copilotvscodeinstall.RevokeNative
+			} else if damage == "missing-native-manual-only" {
+				selection = copilotvscodeinstall.RevokeManual
+			}
+			after, err := copilotvscodeinstall.RevokeChannels(localTestContext(t), b, selection)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -241,11 +249,11 @@ func TestCopilotRevokeSurvivesSharedDamage(t *testing.T) {
 			}
 			route := policy["route"].(map[string]any)
 			local := route["copilotVSCodeNotifications"].(map[string]any)
-			if local["desktop"] != false || local["webhook"] != false || local["manual"].(map[string]any)["enabled"] != false || route["sibling"].(map[string]any)["desktop"] != true || local["future"].(map[string]any)["keep"] != float64(7) || len(local["manual"].(map[string]any)["foreign"].([]any)) != 2 {
+			if local["desktop"] != (selection == copilotvscodeinstall.RevokeManual) || local["webhook"] != local["desktop"] || local["manual"].(map[string]any)["enabled"] != (selection == copilotvscodeinstall.RevokeNative) || route["sibling"].(map[string]any)["desktop"] != true || local["future"].(map[string]any)["keep"] != float64(7) || len(local["manual"].(map[string]any)["foreign"].([]any)) != 2 {
 				t.Fatal("incorrect leaf revocation/preservation")
 			}
 			// Restore the owned bytes/root; denial must survive repair and omitted choices.
-			if damage == "missing-native-tree" {
+			if missingNative {
 				if err := os.Rename(before.Native.Path+"-retained", before.Native.Path); err != nil {
 					t.Fatal(err)
 				}
@@ -276,7 +284,7 @@ func TestCopilotRevokeSurvivesSharedDamage(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !bytes.Contains(patch["route"], []byte(`"desktop":false`)) || !bytes.Contains(patch["route"], []byte(`"enabled":false`)) {
+			if !bytes.Contains(patch["route"], []byte(fmt.Sprintf(`"desktop":%t`, selection == copilotvscodeinstall.RevokeManual))) || !bytes.Contains(patch["route"], []byte(fmt.Sprintf(`"enabled":%t`, selection == copilotvscodeinstall.RevokeNative))) {
 				t.Fatal("omitted repeat revived consent")
 			}
 			gate := copilotvscodeinstall.Gate{Binding: b}
