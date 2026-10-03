@@ -169,10 +169,30 @@ func (d *StructuredDelivery) checkAndDeliver(ctx context.Context, r notification
 		defer lease.Release()
 		if local, ok := lease.(LocalAuthorityLease); ok {
 			if err := local.Complete(operation); err != nil {
+				reason := "authority_changed"
+				if operation.Err() != nil {
+					switch out.Reason {
+					case "expired", "timeout", "handoff_unconfirmed":
+						// Completion also denies a done context. Preserve the
+						// termination already observed by the delivery path.
+						reason = out.Reason
+					default:
+						if possibleHandoff {
+							// Cancellation can race a correlated receipt. An
+							// unproven completion cannot retain os_accepted.
+							reason = "handoff_unconfirmed"
+							if _, deadlineErr := d.remaining(r); deadlineErr != nil {
+								reason = "timeout"
+							}
+						} else if out.Status == "ready" {
+							reason = "expired"
+						}
+					}
+				}
 				if possibleHandoff {
-					out.Status, out.Reason, out.RetrySafe = "unknown", "authority_changed", false
+					out.Status, out.Reason, out.RetrySafe = "unknown", reason, false
 				} else {
-					out.Status, out.Reason = "rejected", "authority_changed"
+					out.Status, out.Reason = "rejected", reason
 				}
 			}
 		}

@@ -107,7 +107,72 @@ func StageLocalWindowsShortcut(key, home, target string, desktop bool, ledger in
 	if err != nil {
 		return nil, err
 	}
+	if !desktop {
+		shared, err := localWindowsShortcutShared(key, target, ledger)
+		if err != nil || shared {
+			return nil, err
+		}
+		path, err := ownedWindowsShortcutPathFor(ledger, id)
+		if err != nil {
+			return nil, err
+		}
+		if path == "" {
+			return nil, nil
+		}
+		owned, ok := installruntime.OwnedFile(ledger, path)
+		actual, err := installruntime.Fingerprint(path)
+		if err != nil || !ok || !owned.Exists || owned.Link != "" || actual != owned {
+			return nil, errors.New("local toast shortcut changed")
+		}
+		actualTarget, appID, arguments, err := inspectWindowsShortcut(path)
+		if err != nil || !sameWindowsFile(actualTarget, target) || appID != id.appID || arguments != "--help" {
+			return nil, errors.New("local toast shortcut identity mismatch")
+		}
+		// Carry this verified preimage into CAS; do not fingerprint again and
+		// accidentally adopt a replacement after the ownership/COM checks.
+		return &installruntime.File{Path: path, Before: actual, Remove: true}, nil
+	}
 	return stageWindowsShortcutForIdentity(id, home, target, desktop, ledger)
+}
+
+// Registrations, not global desktop intent, retain the shared Local identity.
+// A malformed portable record makes last-binding ownership ambiguous: refuse
+// removal, including when a different valid peer was already found.
+func localWindowsShortcutShared(key, target string, ledger installruntime.Ledger) (bool, error) {
+	selected := ledger.Consumers[key]
+	var binding portable.Binding
+	if json.Unmarshal([]byte(selected.Registration), &binding) != nil || len(selected.Commands) != 1 || !sameWindowsFile(selected.Commands[0], target) {
+		return false, errors.New("local toast executable is not registered")
+	}
+	shared := false
+	for peerKey, consumer := range ledger.Consumers {
+		if peerKey == key {
+			continue
+		}
+		var peer portable.Binding
+		if err := json.Unmarshal([]byte(consumer.Registration), &peer); err != nil {
+			if strings.HasPrefix(peerKey, "portable:") {
+				return false, errors.New("ambiguous portable toast shortcut peer")
+			}
+			continue
+		}
+		if strings.HasPrefix(peerKey, "portable:") {
+			wantKey, _, _, err := peer.Registration()
+			if err != nil || wantKey != peerKey || !portable.ExactCommittedBinding(ledger, peer) {
+				return false, errors.New("ambiguous portable toast shortcut peer")
+			}
+		}
+		if peer.Integration != portable.CopilotVSCode {
+			continue
+		}
+		peerID, err := localWindowsIdentity(peerKey, ledger)
+		if err != nil || peerID.appID != CopilotVSCodeToastAppID || !sameWindowsPath(peer.ControlRoot, binding.ControlRoot) ||
+			len(consumer.Commands) != 1 || !sameWindowsFile(consumer.Commands[0], target) {
+			return false, errors.New("unverified Local toast shortcut peer")
+		}
+		shared = true
+	}
+	return shared, nil
 }
 
 func stageWindowsShortcutForIdentity(id desktopIdentity, home, target string, desktop bool, ledger installruntime.Ledger) (*installruntime.File, error) {
