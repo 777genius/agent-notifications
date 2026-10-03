@@ -290,8 +290,8 @@ func TestRenumberE2EDarwinRefusals(t *testing.T) {
 			if _, err := ReadInstalledSnapshot(e.control); err == nil {
 				t.Fatal("snapshot accepted substituted native", kind)
 			}
-			if out, err := e.command("internal-install-runtime", "--remove", "--purge-native", "--target", e.target, "--control-root", e.control); err == nil {
-				t.Fatalf("purge accepted substitution: %s", out)
+			if out, stderr, err := e.command("internal-install-runtime", "--remove", "--purge-native", "--target", e.target, "--control-root", e.control); err == nil {
+				t.Fatalf("purge accepted substitution: stdout=%s stderr=%s", out, stderr)
 			}
 			if got, err := treeFingerprint(retained); err != nil || got != l.Native.SHA256 {
 				t.Fatal("refusal harmed retained original", err)
@@ -463,15 +463,15 @@ func TestRenumberE2EDarwinSetupOwnership(t *testing.T) {
 	// Use the CLI-selected macOS config path inside the isolated HOME.
 	global := filepath.Join(os.Getenv("HOME"), "Library", "Application Support", "agent-notifications", "config.json")
 	renumberWrite(t, global, []byte(`{"notifications":{"desktop":{"enabled":false,"sound":false,"clickToFocus":false}}}`), 0600)
-	enable := func() ([]byte, error) {
+	enable := func() ([]byte, []byte, error) {
 		l, err := readLedger(e.control)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return e.command("setup-notifications", "enable", "--control-root", e.control, "--runtime-root", filepath.Dir(e.target), "--global-config", global, "--expected-generation", fmt.Sprint(l.Generation), "--navigation", "none", "--allow-unknown-caller", "false", "--allow-caller-asserted", "false", "--json")
 	}
-	if out, err := enable(); err != nil {
-		t.Fatalf("setup fixture initialization: %v %s", err, out)
+	if out, stderr, err := enable(); err != nil {
+		t.Fatalf("setup fixture initialization: %v stdout=%s stderr=%s", err, out, stderr)
 	}
 	policyPath := filepath.Join(e.control, "agent-notifications.json")
 	var fields map[string]json.RawMessage
@@ -494,8 +494,8 @@ func TestRenumberE2EDarwinSetupOwnership(t *testing.T) {
 	fields["setupState"], _ = json.Marshal(owner)
 	body, _ := json.Marshal(fields)
 	renumberWrite(t, policyPath, body, 0600)
-	if out, err := enable(); err != nil {
-		t.Fatalf("setup rejects same-inode device renumber: %v %s", err, out)
+	if out, stderr, err := enable(); err != nil {
+		t.Fatalf("setup rejects same-inode device renumber: %v stdout=%s stderr=%s", err, out, stderr)
 	}
 	if err := json.Unmarshal(renumberRead(t, policyPath), &fields); err != nil {
 		t.Fatal(err)
@@ -519,8 +519,8 @@ func TestRenumberE2EDarwinSetupOwnership(t *testing.T) {
 	if err := copyNativeTree(original, state); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := enable(); err == nil {
-		t.Fatalf("setup accepted replaced state inode: %s", out)
+	if out, stderr, err := enable(); err == nil {
+		t.Fatalf("setup accepted replaced state inode: stdout=%s stderr=%s", out, stderr)
 	}
 	if _, err := os.Stat(filepath.Join(original, "journal")); err != nil {
 		t.Fatal("setup refusal harmed original journal", err)
@@ -544,8 +544,10 @@ int main(int argc, char **argv) {
 	if out, err := exec.CommandContext(e.ctx, "cc", source, "-o", exe).CombinedOutput(); err != nil {
 		t.Fatalf("compile inert native fixture: %v %s", err, out)
 	}
-	renumberWrite(t, filepath.Join(app, "Contents", "Info.plist"), []byte(`<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.777genius.agent-notifications</string><key>CFBundleExecutable</key><string>terminal-notifier-modern</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleVersion</key><string>1</string></dict></plist>`), 0644)
+	renumberWrite(t, filepath.Join(app, "Contents", "Info.plist"), renumberFixtureInfoPlist(e.root), 0644)
 	renumberWrite(t, filepath.Join(app, "Contents", "Resources", "managed-runtime.json"), []byte(`{"SchemaVersion":1,"ProtocolVersion":1,"DecoderFloor":1}`), 0644)
+	// Native qualification requires the product signing identifier, while the
+	// fixture Info.plist prevents this inert app from registering as the product.
 	if out, err := exec.CommandContext(e.ctx, "codesign", "--force", "--sign", "-", "--timestamp=none", "--identifier", "com.777genius.agent-notifications", app).CombinedOutput(); err != nil {
 		t.Fatalf("sign native fixture: %v %s", err, out)
 	}
