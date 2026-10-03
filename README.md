@@ -78,7 +78,7 @@ Claude/Codex setup also installs the `agent-notify` MCP server and `agent-notifi
 
 - **Task and attention alerts:** completions, questions, tool approvals and more, depending on the agent. See the table below.
 - **Click-to-focus and sounds (Claude/Codex):** return to the originating terminal or editor; choose built-in or custom sounds, volume and audio output. [Supported terminals](docs/CLICK_TO_FOCUS.md) · [Sound settings](docs/CONFIGURATION.md#sound-options)
-- **Useful context (Claude/Codex):** project, git branch and session labels in notifications.
+- **Useful context (Claude/Codex):** project, git branch and native session names, with generated labels as fallback. Question hooks show the current question. [Session context](docs/CONFIGURATION.md#session-context)
 - **Less noise:** focus-aware delivery, delays, filters and optional subagent alerts. [Configuration](docs/CONFIGURATION.md#focus-aware--delayed-notifications) · [Do Not Disturb](docs/DO_NOT_DISTURB.md)
 - **Webhooks:** Slack, Discord, Telegram, Lark/Feishu and custom endpoints. [Integration guides](docs/webhooks/README.md)
 - **Cross-platform:** macOS (Intel/Apple Silicon), Linux (x64/ARM64) and Windows 10+ (x64). Agent and delivery limits are listed below. [Platform details](docs/PLATFORMS.md)

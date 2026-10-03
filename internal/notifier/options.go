@@ -4,7 +4,22 @@ package notifier
 type SendOption func(*sendOptions)
 
 type sendOptions struct {
-	muteSound bool
+	muteSound        bool
+	hookPresentation *HookPresentation
+}
+
+// HookPresentation carries literal hook content without the legacy bracket
+// envelope. It affects presentation only, never navigation or consent.
+type HookPresentation struct {
+	SessionName string
+	Branch      string
+	Folder      string
+	Body        string
+	Question    string
+}
+
+func WithHookPresentation(content HookPresentation) SendOption {
+	return func(o *sendOptions) { o.hookPresentation = &content }
 }
 
 // WithoutSound delivers the notification without playing the plugin's own audio

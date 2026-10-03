@@ -44,3 +44,42 @@ func legacyPresentation(status analyzer.Status, message, statusTitle string, ses
 
 	return legacyDesktopPresentation{Content: notification.Content{Title: title, Body: cleanMessage, Subtitle: subtitle}, TimeSensitive: timeSensitive}
 }
+
+func hookPresentation(status analyzer.Status, content HookPresentation, statusTitle string, sessionLabel bool) legacyDesktopPresentation {
+	title := statusTitle
+	subtitle := joinContext(content.Branch, content.Folder)
+	if content.Question != "" && status == analyzer.StatusQuestion {
+		title += ": " + shortenTitle(content.Question, 80)
+		subtitle = content.Folder
+		if sessionLabel {
+			subtitle = joinContext(shortenTitle(content.SessionName, 100), content.Folder)
+		}
+	} else if sessionLabel && content.SessionName != "" {
+		title += " [" + shortenTitle(content.SessionName, 100) + "]"
+	}
+	return legacyDesktopPresentation{
+		Content:       notification.Content{Title: title, Subtitle: subtitle, Body: content.Body},
+		TimeSensitive: isTimeSensitiveStatus(status),
+	}
+}
+
+func joinContext(first, second string) string {
+	if second == "." {
+		second = ""
+	}
+	if first == "" {
+		return second
+	}
+	if second == "" {
+		return first
+	}
+	return first + " · " + second
+}
+
+func shortenTitle(text string, limit int) string {
+	runes := []rune(strings.Join(strings.Fields(text), " "))
+	if len(runes) > limit {
+		return string(runes[:limit-1]) + "…"
+	}
+	return string(runes)
+}

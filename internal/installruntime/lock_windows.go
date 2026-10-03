@@ -136,21 +136,25 @@ func privateWindowsHandle(h windows.Handle) error {
 	return nil
 }
 
-func restrictPrivateWindowsHandle(h windows.Handle) error {
+func privateWindowsSecurityDescriptor(directory bool) (*windows.SECURITY_DESCRIPTOR, error) {
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	sid := user.User.Sid
-	var info windows.ByHandleFileInformation
-	if err = windows.GetFileInformationByHandle(h, &info); err != nil {
-		return err
-	}
 	inherit := ""
-	if info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0 {
+	if directory {
 		inherit = "OICI"
 	}
-	sd, err := windows.SecurityDescriptorFromString("O:" + sid.String() + "D:P(A;" + inherit + ";FA;;;" + sid.String() + ")(A;" + inherit + ";FA;;;SY)(A;" + inherit + ";FA;;;BA)")
+	return windows.SecurityDescriptorFromString("O:" + sid.String() + "D:P(A;" + inherit + ";FA;;;" + sid.String() + ")(A;" + inherit + ";FA;;;SY)(A;" + inherit + ";FA;;;BA)")
+}
+
+func restrictPrivateWindowsHandle(h windows.Handle) error {
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(h, &info); err != nil {
+		return err
+	}
+	sd, err := privateWindowsSecurityDescriptor(info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0)
 	if err != nil {
 		return err
 	}
