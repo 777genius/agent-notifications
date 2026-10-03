@@ -349,17 +349,23 @@ func installRuntime(args []string, output io.Writer) error {
 	}
 	ledger, err := installruntime.Commit(ctx, req)
 	if err == nil {
-		if *printNativePath {
-			return printRuntimeNativePath(output, ledger)
+		if !*printNativePath {
+			_, _ = fmt.Fprintf(output, "managed-runtime committed generation=%d\n", ledger.Generation)
 		}
-		_, _ = fmt.Fprintf(output, "managed-runtime committed generation=%d\n", ledger.Generation)
 		if !*remove {
 			regCtx, regCancel := context.WithTimeout(context.Background(), 10*time.Second)
 			warning := reconcileRuntimeNativeRegistration(regCtx, *control)
 			regCancel()
 			if warning != nil {
-				_, _ = fmt.Fprintf(output, "warning: runtime committed; native registration reconciliation incomplete: %v\n", warning)
+				warningOutput := output
+				if *printNativePath {
+					warningOutput = os.Stderr
+				}
+				_, _ = fmt.Fprintf(warningOutput, "warning: runtime committed; native registration reconciliation incomplete: %v\n", warning)
 			}
+		}
+		if *printNativePath {
+			return printRuntimeNativePath(output, ledger)
 		}
 		if *purge {
 			_, _ = fmt.Fprintln(output, "Callback entrypoint purge completed; pending notifications may no longer open targets. Running callbacks are not stopped.")

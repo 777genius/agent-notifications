@@ -392,6 +392,9 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 		return l, err
 	}
 	if readErr == nil {
+		if err := preflightTransactionAnchors(pending); err != nil {
+			return l, err
+		}
 		if r.RollbackPending {
 			if !ledgerMatchesJournal(l, pending.Before, pending.Native) && !ledgerMatchesJournal(l, pending.After, pending.Native) {
 				return l, fmt.Errorf("rollback ledger mismatch")
@@ -835,6 +838,13 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 			return l, err
 		}
 	}
+	// Refuse a retained-native conflict before persisting a decision that its
+	// own replay cannot complete. Request flags alone do not prove revocation.
+	if tx.Native == nil && tx.After.Native != nil && !boundedPolicyRevocation(root, tx) {
+		if err := validateRetainedNative(tx.After.Native); err != nil {
+			return l, err
+		}
+	}
 	if err := writeTransaction(marker, tx); err != nil {
 		return l, err
 	}
@@ -848,8 +858,29 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 	}
 	return readLedger(root)
 }
+
+func validateRetainedNative(native *NativeRecord) error {
+	if native == nil {
+		return nil
+	}
+	if err := validateNativeRecord(native); err != nil {
+		return err
+	}
+	if err := checkNativeDirectoryID(native.Path, native.DirectoryID); err != nil {
+		return err
+	}
+	digest, err := treeFingerprint(native.Path)
+	if err != nil {
+		return err
+	}
+	if digest == "" || digest != native.SHA256 {
+		return fmt.Errorf("native live fingerprint conflict")
+	}
+	return nil
+}
+
 func recoverTransaction(ctx context.Context, root string, current Ledger, tx transaction, fault func(string) error) error {
-	if current.WriterFloor > ReservationWriterFloor || tx.Before.WriterFloor > ReservationWriterFloor || tx.After.WriterFloor > ReservationWriterFloor {
+	if current.WriterFloor > SupportedWriterFloor || tx.Before.WriterFloor > SupportedWriterFloor || tx.After.WriterFloor > SupportedWriterFloor {
 		return fmt.Errorf("installed writer floor requires a newer compatible kernel")
 	}
 	if !ledgerMatchesJournal(current, tx.Before, tx.Native) && !ledgerMatchesJournal(current, tx.After, tx.Native) {
@@ -860,6 +891,9 @@ func recoverTransaction(ctx context.Context, root string, current Ledger, tx tra
 	}
 	if current.ID != "" && current.ID != tx.After.ID {
 		return fmt.Errorf("transaction owner mismatch")
+	}
+	if err := preflightTransactionAnchors(tx); err != nil {
+		return err
 	}
 	tx.Files = append([]File(nil), tx.Files...)
 	for i, f := range tx.Files {
@@ -884,20 +918,8 @@ func recoverTransaction(ctx context.Context, root string, current Ledger, tx tra
 	// not check bytes. Only a proven bounded revocation may bypass this.
 	preserveNative := boundedPolicyRevocation(root, tx)
 	if tx.Native == nil && !preserveNative {
-		if native := tx.After.Native; native != nil {
-			if err := validateNativeRecord(native); err != nil {
-				return err
-			}
-			if err := checkNativeDirectoryID(native.Path, native.DirectoryID); err != nil {
-				return err
-			}
-			digest, err := treeFingerprint(native.Path)
-			if err != nil {
-				return err
-			}
-			if digest == "" || digest != native.SHA256 {
-				return fmt.Errorf("native live fingerprint conflict")
-			}
+		if err := validateRetainedNative(tx.After.Native); err != nil {
+			return err
 		}
 		if _, err := refreshLedgerIdentities(tx.After); err != nil {
 			return err
@@ -988,7 +1010,7 @@ func boundedPolicyRevocation(root string, tx transaction) bool {
 	if tx.Rollback || tx.Native != nil || len(tx.Files) != 1 || before.ID == "" || before.Owner == "" ||
 		before.Generation == 0 || after.Generation <= before.Generation || after.PolicyGeneration <= before.PolicyGeneration ||
 		after.Generation != before.Generation+1 || after.PolicyGeneration != before.PolicyGeneration+1 ||
-		before.WriterFloor > ReservationWriterFloor || len(before.Consumers) == 0 {
+		before.WriterFloor > SupportedWriterFloor || len(before.Consumers) == 0 {
 		return false
 	}
 	physicalRoot, err := filepath.EvalSymlinks(root)
@@ -1014,25 +1036,31 @@ func boundedPolicyRevocation(root string, tx transaction) bool {
 	if err != nil || after.Enabled != newPolicy.Enabled {
 		return false
 	}
-	expected := before
-	// Retain the normal, monotonic protocol migration, including legacy
-	// ledgers and pending reservations. No other schema/floor delta qualifies.
-	applyReservationProtocol(&expected, Request{}, before)
-	expected.Generation, expected.PolicyGeneration, expected.Enabled = after.Generation, after.PolicyGeneration, after.Enabled
-	if !reflect.DeepEqual(expected, after) {
-		return false
-	}
 	// Global disable keeps every other policy member unchanged. Channel
 	// revocations keep global intent and require that consumer's registration.
-	patches := []string{"", "geminiNotifications", "openCodeNotifications"}
+	patches := []string{"", "geminiNotifications", "openCodeNotifications", "copilot-native", "copilot-manual", "copilot-all"}
 	for _, channel := range patches {
 		if channel == "" && newPolicy.Enabled || channel != "" && (before.Enabled != oldPolicy.Enabled || newPolicy.Enabled != oldPolicy.Enabled || before.PendingMutation != nil) {
+			continue
+		}
+		local := channel == "copilot-native" || channel == "copilot-manual" || channel == "copilot-all"
+		expected := before
+		// Preserve the exact monotonic migration used by the admitted request.
+		applyReservationProtocol(&expected, Request{RevokeCopilotVSCode: local}, before)
+		expected.Generation, expected.PolicyGeneration, expected.Enabled = after.Generation, after.PolicyGeneration, after.Enabled
+		if !reflect.DeepEqual(expected, after) {
 			continue
 		}
 		registered := false
 		for id, consumer := range before.Consumers {
 			if !filepath.IsAbs(consumer.RuntimeRoot) || filepath.Clean(consumer.RuntimeRoot) != consumer.RuntimeRoot {
 				continue
+			}
+			if local && before.Owner == "existing-installer" && localPortableConsumer(id, consumer) {
+				var binding struct{ ComponentID, ControlRoot string }
+				if json.Unmarshal([]byte(consumer.Registration), &binding) == nil && binding.ComponentID == before.ID && binding.ControlRoot == root {
+					registered = true
+				}
 			}
 			if channel == "" || before.Owner == "existing-installer" && consumer.Registration != "" &&
 				(channel == "geminiNotifications" && id == "gemini-notifications" || channel == "openCodeNotifications" && id == "opencode-notifications") {
@@ -1048,6 +1076,14 @@ func boundedPolicyRevocation(root string, tx transaction) bool {
 		}
 		if channel != "" {
 			patch := json.RawMessage(fmt.Sprintf(`{"%s":{"desktop":false,"webhook":false}}`, channel))
+			switch channel {
+			case "copilot-native":
+				patch = json.RawMessage(`{"copilotVSCodeNotifications":{"desktop":false,"webhook":false}}`)
+			case "copilot-manual":
+				patch = json.RawMessage(`{"copilotVSCodeNotifications":{"manual":{"enabled":false}}}`)
+			case "copilot-all":
+				patch = json.RawMessage(`{"copilotVSCodeNotifications":{"desktop":false,"webhook":false,"manual":{"enabled":false}}}`)
+			}
 			if mergePolicyFields(fields, map[string]json.RawMessage{"route": patch}) != nil {
 				continue
 			}
