@@ -33,7 +33,13 @@ def joined_rejection(native,history,pending,session,call,tool,command):
     answers=[e.get('properties',{}).get('info',{}) for e in native if e.get('type')=='message.updated' and e.get('properties',{}).get('info',{}).get('id')==assistant]
     if not any(a.get('sessionID')==session and a.get('role')=='assistant' and a.get('parentID')==info['parentID'] and a.get('time')==info.get('time') and not a.get('error') for a in answers):return None
     actual=[p for p in final if isinstance(p,dict) and p.get('type')=='tool' and p.get('callID')==call]
-    if len(actual)!=1 or any(actual[0].get(k)!=error.get(k) for k in ('id','sessionID','messageID','callID','tool','state')):return None
+    if len(actual)!=1:return None
+    compared_error=error;actual_state=actual[0].get('state')
+    # Stock failToolCall retains optional undefined metadata; capture marks it,
+    # while JSON history omits it. Normalize only this same-running-part case.
+    if state.get('metadata')=='[unsupported]' and 'metadata' not in before['state'] and isinstance(actual_state,dict) and 'metadata' not in actual_state:
+        compared_error=copy.deepcopy(error);compared_error['state'].pop('metadata')
+    if any(actual[0].get(k)!=compared_error.get(k) for k in ('id','sessionID','messageID','callID','tool','state')):return None
     users=[e.get('properties',{}).get('info',{}) for e in native if e.get('type')=='message.updated' and e.get('properties',{}).get('info',{}).get('role')=='user']
     if not any(u.get('id')==info['parentID'] and u.get('sessionID')==session for u in users):return None
     return {'sessionID':session,'requestID':request,'assistantID':assistant,'userID':info['parentID'],'callID':call,'tool':tool,'nativeAskedIndex':ai,'nativeReplyIndex':ri,'nativeErrorIndex':ei,'sourceContractSHA256':SOURCE_CONTRACT_SHA256,'matchingFinalPartSHA256':hashlib.sha256(json.dumps(actual[0],sort_keys=True,separators=(',',':')).encode()).hexdigest(),'genuineWrappedError':state['error'],'finalFinish':info.get('finish'),'requestedCommandHMAC':command,'nativeRejectionJoined':True,'commandNonexecution': 'pending_complete_host_close_recording'}

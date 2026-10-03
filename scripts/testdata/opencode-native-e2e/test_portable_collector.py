@@ -1,11 +1,13 @@
 """ROOT-only pure diagnostic transport negatives, no native/helper/model."""
 import json
+import copy
 import unittest
 import pathlib
 import tempfile
 from types import SimpleNamespace
 from portable import PortableOwned
 from portable import diagnostic, PREFIX
+from portable_permission import joined_rejection
 
 
 class ClosedDiagnostic(unittest.TestCase):
@@ -89,6 +91,50 @@ class PublicFinalization(unittest.TestCase):
         owner,host,calls,report=self.fixture(v2=True);owner.stop(host);owner.close()
         self.assertEqual(calls,['stop','close'])
         self.assertEqual(report['portablePublicDisposal'],[])
+
+
+class PermissionMetadata(unittest.TestCase):
+    # Regression: a genuine optional-undefined error property is captured as a
+    # sentinel but omitted from JSON history; defined metadata is never ignored.
+    def test_optional_undefined_metadata_preserves_strict_permission_join(self):
+        pending={'id':'R','sessionID':'S','permission':'bash','tool':{'messageID':'A','callID':'C'}}
+        run={'id':'P','type':'tool','sessionID':'S','messageID':'A','callID':'C','tool':'bash',
+             'state':{'status':'running','input':{'command':'command-hmac'},'time':{'start':100}}}
+        failed=copy.deepcopy(run);failed['state'].update(status='error',error='error-hmac',time={'start':100,'end':110})
+        info={'id':'A','sessionID':'S','role':'assistant','parentID':'U','time':{'created':90,'completed':120}}
+        native=[{'type':'message.updated','properties':{'info':{'id':'U','sessionID':'S','role':'user'}}},
+                {'type':'message.part.updated','properties':{'part':run}},
+                {'type':'permission.asked','properties':copy.deepcopy(pending)},
+                {'type':'permission.replied','properties':{'sessionID':'S','requestID':'R','reply':'reject'}},
+                {'type':'message.part.updated','properties':{'part':failed}},
+                {'type':'message.updated','properties':{'info':copy.deepcopy(info)}}]
+        history=[{'info':info,'parts':[copy.deepcopy(failed)]}]
+        args=(native,history,pending,'S','C','bash','command-hmac')
+        self.assertTrue(joined_rejection(*args))
+        failed['state']['metadata']='[unsupported]'
+        original=copy.deepcopy(args)
+        self.assertTrue(joined_rejection(*args))  # Old code rejects this observed shape.
+        self.assertEqual(args,original)
+        for name,change in (
+            ('defined-native-metadata',lambda n,h:n[4]['properties']['part']['state'].update(metadata={'detail':'native'})),
+            ('running-metadata-present',lambda n,h:n[1]['properties']['part']['state'].update(metadata={})),
+            ('history-metadata-present',lambda n,h:h[0]['parts'][0]['state'].update(metadata={})),
+            ('null-native-metadata',lambda n,h:n[4]['properties']['part']['state'].update(metadata=None)),
+            ('error-mismatch',lambda n,h:h[0]['parts'][0]['state'].update(error='different')),
+            ('input-mismatch',lambda n,h:h[0]['parts'][0]['state']['input'].update(command='different')),
+            ('time-mismatch',lambda n,h:h[0]['parts'][0]['state']['time'].update(end=111)),
+            ('error-before-reject',lambda n,h:n.__setitem__(slice(3,5),[n[4],n[3]])),
+            ('output-present',lambda n,h:n[4]['properties']['part']['state'].update(output='unexpected')),
+            ('identity-mismatch',lambda n,h:h[0]['parts'][0].update(messageID='other')),
+        ):
+            with self.subTest(name=name):
+                v=copy.deepcopy(args);change(v[0],v[1]);self.assertIsNone(joined_rejection(*v))
+        v=copy.deepcopy(args)
+        for state in (v[0][1]['properties']['part']['state'],v[0][4]['properties']['part']['state'],v[1][0]['parts'][0]['state']):
+            state['metadata']={'detail':'same'}
+        self.assertTrue(joined_rejection(*v))
+        v[1][0]['parts'][0]['state']['metadata']['detail']='different'
+        self.assertIsNone(joined_rejection(*v))
 
 
 if __name__ == '__main__':unittest.main()
