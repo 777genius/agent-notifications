@@ -120,14 +120,21 @@ func TestWindowsLocalShortcutRetainedUntilLastBinding(t *testing.T) {
 		t.Fatalf("last binding must stage exact owned removal: %+v %v", file, err)
 	}
 	sibling := l.Consumers["sibling"]
-	l, err = installruntime.Commit(ctx, installruntime.Request{ControlRoot: root, RuntimeRoot: run, Owner: l.Owner, ConsumerID: keyB, RemoveConsumer: true, ExpectedGeneration: &l.Generation, Files: []installruntime.File{*file}})
+	l, err = installruntime.Commit(ctx, installruntime.Request{ControlRoot: root, RuntimeRoot: run, Owner: l.Owner, ConsumerID: keyB, RefreshOnly: true, ExpectedGeneration: &l.Generation, Files: []installruntime.File{*file}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(l.Consumers[keyB], cB) {
+		t.Fatal("shortcut removal changed the last recorded consumer")
+	}
+	l, err = installruntime.Commit(ctx, installruntime.Request{ControlRoot: root, RuntimeRoot: run, Owner: l.Owner, ConsumerID: keyB, RemoveConsumer: true, ExpectedGeneration: &l.Generation})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("last removal did not remove owned shortcut: %v", err)
 	}
-	if !reflect.DeepEqual(l.Consumers["sibling"], sibling) {
-		t.Fatal("last removal changed legacy sibling")
+	if _, remains := l.Consumers[keyB]; remains || !reflect.DeepEqual(l.Consumers["sibling"], sibling) {
+		t.Fatal("last removal retained the selected binding or changed the legacy sibling")
 	}
 }
