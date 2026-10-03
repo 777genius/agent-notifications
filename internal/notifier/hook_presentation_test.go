@@ -18,7 +18,7 @@ func TestHookPresentationLiteralNativeTitleAndQuestion(t *testing.T) {
 		Folder: "agent-notifications", Body: "Restart Codex?", Question: "Restart Codex?",
 	}
 	question := hookPresentation(analyzer.StatusQuestion, content, "❓ Question", true)
-	if question.Title != "❓ Question: Restart Codex?" || question.Subtitle != "Fix [SDK] | installer · agent-notifications" || question.Body != "Restart Codex?" {
+	if question.Title != "❓ Restart Codex?" || question.Subtitle != "Fix [SDK] | installer · agent-notifications" || question.Body != "Restart Codex?" {
 		t.Fatalf("question presentation = %+v", question)
 	}
 	complete := hookPresentation(analyzer.StatusTaskComplete, content, "✅ Completed", true)
@@ -29,6 +29,24 @@ func TestHookPresentationLiteralNativeTitleAndQuestion(t *testing.T) {
 		hidden := hookPresentation(status, content, "Status", false)
 		if strings.Contains(hidden.Title+hidden.Subtitle+hidden.Body, content.SessionName) {
 			t.Fatalf("hidden session identity leaked: %+v", hidden)
+		}
+	}
+}
+
+func TestHookPresentationQuestionStatusTitles(t *testing.T) {
+	for _, tc := range []struct {
+		statusTitle, question, want string
+	}{
+		{"Question", "Restart Codex?", "Restart Codex?"},
+		{"", "Restart Codex?", "Restart Codex?"},
+		{"Action required", "Restart Codex?", "Action required: Restart Codex?"},
+		{"❓ Question", "", "❓ Question [Installer]"},
+	} {
+		got := hookPresentation(analyzer.StatusQuestion, HookPresentation{
+			SessionName: "Installer", Question: tc.question,
+		}, tc.statusTitle, true)
+		if got.Title != tc.want {
+			t.Fatalf("status title %q, question %q: got %q, want %q", tc.statusTitle, tc.question, got.Title, tc.want)
 		}
 	}
 }
@@ -78,7 +96,7 @@ func TestSendDesktopUsesStructuredHookPresentation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if title != cfg.Statuses["question"].Title+": Use the new installer?" || body != tc.wantBody {
+			if title != "❓ Use the new installer?" || body != tc.wantBody {
 				t.Fatalf("delivered title=%q body=%q", title, body)
 			}
 		})

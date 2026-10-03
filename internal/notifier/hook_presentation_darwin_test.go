@@ -62,7 +62,7 @@ func TestSendDesktopNativeHookContentRetainsThreadID(t *testing.T) {
 	if arg("-threadID") != "original-thread-id" || arg("-subtitle") != "Fix [SDK] | installer · agent-notifications" || arg("-message") != "Restart Codex?" {
 		t.Fatalf("native delivery changed identity/content: %v", captured)
 	}
-	if arg("-title") != cfg.Statuses["question"].Title+": Restart Codex?" {
+	if arg("-title") != "❓ Restart Codex?" {
 		t.Fatalf("native question headline = %q", arg("-title"))
 	}
 }
@@ -104,7 +104,7 @@ func TestSendDesktopNativeHookFailureRetainsQuestionContext(t *testing.T) {
 	})); err != nil {
 		t.Fatal(err)
 	}
-	if title != cfg.Statuses["question"].Title+": Restart Codex?" || body != "Fix [SDK] | installer · sandbox\nRestart Codex?" {
+	if title != "❓ Restart Codex?" || body != "Fix [SDK] | installer · sandbox\nRestart Codex?" {
 		t.Fatalf("native fallback lost literal context: title=%q body=%q", title, body)
 	}
 }

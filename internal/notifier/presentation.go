@@ -49,7 +49,15 @@ func hookPresentation(status analyzer.Status, content HookPresentation, statusTi
 	title := statusTitle
 	subtitle := joinContext(content.Branch, content.Folder)
 	if content.Question != "" && status == analyzer.StatusQuestion {
-		title += ": " + shortenTitle(content.Question, 80)
+		question := shortenTitle(content.Question, 80)
+		switch statusTitle {
+		case "❓ Question":
+			title = "❓ " + question
+		case "Question", "":
+			title = question
+		default:
+			title += ": " + question
+		}
 		subtitle = content.Folder
 		if sessionLabel {
 			subtitle = joinContext(shortenTitle(content.SessionName, 100), content.Folder)

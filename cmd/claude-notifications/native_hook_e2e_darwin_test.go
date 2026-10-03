@@ -101,7 +101,7 @@ func (f nativeHookFixture) question(t *testing.T, product, turn, transcript stri
 func assertNativeHookQuestion(t *testing.T, args []string, subtitle string) {
 	t.Helper()
 	for flag, want := range map[string]string{
-		"-title":    "❓ Question: Use the new installer?",
+		"-title":    "❓ Use the new installer?",
 		"-subtitle": subtitle, "-message": "Use the new installer?", "-threadID": nativeHookSession,
 	} {
 		var got string
