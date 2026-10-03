@@ -52,9 +52,10 @@ func safeSessionID(id string) bool {
 		return false
 	}
 	for _, c := range id {
-		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_') {
-			return false
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' {
+			continue
 		}
+		return false
 	}
 	return true
 }
@@ -87,7 +88,7 @@ func codexNativeTitle(id, transcript string) string {
 	if f == nil {
 		return ""
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	lines := bytes.Split(readWindow(f, size, indexReadBytes, true), []byte{'\n'})
 	for i := len(lines) - 1; i >= 0; i-- {
 		var record struct {
@@ -114,7 +115,7 @@ func claudeNativeTitle(id, transcript string) string {
 	if f == nil {
 		return ""
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	head := readWindow(f, size, transcriptReadBytes, false)
 	windows := [][]byte{head}
 	if size > transcriptReadBytes {

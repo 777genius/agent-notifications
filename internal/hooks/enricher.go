@@ -65,10 +65,6 @@ type requestUserInputArgs struct {
 	} `json:"questions"`
 }
 
-func questionBodyFromToolInput(toolInput json.RawMessage) string {
-	return questionInsight(toolInput, false).Body
-}
-
 func questionInsight(toolInput json.RawMessage, async bool) TurnInsight {
 	insight := TurnInsight{Status: analyzer.StatusQuestion}
 	var args requestUserInputArgs
