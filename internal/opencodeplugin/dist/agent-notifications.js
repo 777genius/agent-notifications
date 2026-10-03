@@ -32,9 +32,9 @@ function domainOK(x, kind = "linux-boottime") {
   if (kind !== "linux-boottime" || typeof x !== "string" || !/^linux-time:[1-9][0-9]*:[1-9][0-9]*$/.test(x)) return false;
   return x.split(":").slice(1).every((part) => part.length <= 20 && BigInt(part) <= 18446744073709551615n);
 }
-function parseJSON(bytes, max = 4096) {
-  if (!Buffer.isBuffer(bytes) || bytes.length > max) invalid();
-  const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+function parseJSON(bytes2, max = 4096) {
+  if (!Buffer.isBuffer(bytes2) || bytes2.length > max) invalid();
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes2);
   const token = /\s*("(?:[^"\\\u0000-\u001f]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*"|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|true|false|null|[{}\[\],:])/y;
   let at = 0, entries = 0;
   function next() {
@@ -123,7 +123,11 @@ function fence(anchor, policy) {
   return hash.digest("hex");
 }
 function validateFrame(frame, policy) {
-  const p = closed(frame, ["protocol", "origin", "event", "provenance"]);
+  const p = closed(
+    frame,
+    ["protocol", "origin", "event", "provenance", "display"],
+    ["protocol", "origin", "event", "provenance"]
+  );
   if (p.protocol !== 1 || typeof p.origin !== "string" || !/^[a-f0-9]{64}$/.test(p.origin)) invalid();
   const e = closed(
     p.event,
@@ -160,13 +164,23 @@ function validateFrame(frame, policy) {
 }
 function encodeFrame(frame, policy) {
   validateFrame(frame, policy);
-  const output = Buffer.from(JSON.stringify(frame));
+  const { display, ...neutral } = frame;
+  const output = Buffer.from(JSON.stringify(neutral));
   if (output.length > 4096) invalid();
+  if (display !== void 0) {
+    try {
+      const decorated = Buffer.from(JSON.stringify({ ...neutral, display }));
+      parseJSON(decorated);
+      return decorated;
+    } catch {
+    }
+  }
   return output;
 }
 var invalid, int64Max, identity, bootOK, rawKindOK;
 var init_protocol = __esm({
   "protocol.mjs"() {
+    "use strict";
     invalid = () => {
       throw new TypeError("invalid_private_protocol");
     };
@@ -199,15 +213,15 @@ function interruptNS(ticks) {
 function filetimeNS(ticks) {
   return positiveNS((uint64(ticks) - 116444736000000000n) * 100n);
 }
-function darwinBoot(bytes, length, status) {
-  if (status !== 0 || length !== 37n || !(bytes instanceof Uint8Array) || bytes.length < 37 || bytes[36] !== 0 || !bytes.subarray(0, 36).every((b) => b > 0 && b < 128)) unavailable();
-  const boot = Buffer.from(bytes.subarray(0, 36)).toString("ascii").toLowerCase();
+function darwinBoot(bytes2, length, status) {
+  if (status !== 0 || length !== 37n || !(bytes2 instanceof Uint8Array) || bytes2.length < 37 || bytes2[36] !== 0 || !bytes2.subarray(0, 36).every((b) => b > 0 && b < 128)) unavailable();
+  const boot = Buffer.from(bytes2.subarray(0, 36)).toString("ascii").toLowerCase();
   if (!bootOK(boot)) unavailable();
   return boot;
 }
-function windowsBoot(bytes, length, status) {
-  if (status !== 0 || length !== 32 || !(bytes instanceof Uint8Array) || bytes.length !== 32) unavailable();
-  const b = Buffer.from(bytes), hex = (n, w) => n.toString(16).padStart(w, "0");
+function windowsBoot(bytes2, length, status) {
+  if (status !== 0 || length !== 32 || !(bytes2 instanceof Uint8Array) || bytes2.length !== 32) unavailable();
+  const b = Buffer.from(bytes2), hex = (n, w) => n.toString(16).padStart(w, "0");
   const boot = `${hex(b.readUInt32LE(0), 8)}-${hex(b.readUInt16LE(4), 4)}-${hex(b.readUInt16LE(6), 4)}-${b.subarray(8, 10).toString("hex")}-${b.subarray(10, 16).toString("hex")}`;
   if (!bootOK(boot)) unavailable();
   return boot;
@@ -284,6 +298,7 @@ function createNativeClock(port, domain) {
 var unavailable, U64, darwinABI, windowsKernelABI, windowsNtABI, interruptABI;
 var init_native_clock_contract = __esm({
   "native-clock-contract.mjs"() {
+    "use strict";
     init_protocol();
     unavailable = () => {
       throw new TypeError("clock_unavailable");
@@ -312,9 +327,10 @@ import { createHash as createHash3 } from "node:crypto";
 function holdFile(path2) {
   const fd = openSync2(path2, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0));
   try {
-    let verify = function() {
+    let verify2 = function() {
       if (disposed || !same2(initial, fstatSync2(fd, { bigint: true })) || !same2(initial, statSync3(path2, { bigint: true }))) unavailable();
     };
+    var verify = verify2;
     const initial = fstatSync2(fd, { bigint: true });
     if (!initial.isFile() || !["dev", "ino", "size", "mtimeNs", "ctimeNs"].every((k) => typeof initial[k] === "bigint") || initial.ino <= 0n || initial.size <= 0n || initial.size > 536870912n) unavailable();
     const hash = createHash3("sha256"), block = Buffer.alloc(65536);
@@ -327,8 +343,8 @@ function holdFile(path2) {
     }
     const digest = hash.digest("hex");
     let disposed = false;
-    verify();
-    return Object.freeze({ digest, verify, close() {
+    verify2();
+    return Object.freeze({ digest, verify: verify2, close() {
       if (!disposed) {
         disposed = true;
         closeSync2(fd);
@@ -360,6 +376,7 @@ function pinNativeImage() {
 var images2, same2;
 var init_native_clock_image = __esm({
   "native-clock-image.mjs"() {
+    "use strict";
     init_native_clock_contract();
     images2 = Object.freeze([
       ["darwin", "x64", "1.3.14", "f53aae8eb68d832ab1bcd27bed88c02de910be61f4b5f90068ae8e93d5e794c9"],
@@ -389,12 +406,13 @@ async function createDarwinClock({ signal } = {}) {
   };
   signal?.addEventListener("abort", abort, { once: true });
   try {
-    let readBoot = function() {
+    let readBoot2 = function() {
       buffer.fill(0);
       size[0] = BigInt(buffer.byteLength);
       const status = lib.sysctlbyname(address(ptr(name)), aligned(buffer), aligned(size), null, 0n);
       return darwinBoot(new Uint8Array(buffer.buffer), size[0], status);
     };
+    var readBoot = readBoot2;
     const image = pinNativeImage();
     releases.push(image.close);
     const { dlopen, ptr } = await import("bun:ffi");
@@ -410,7 +428,7 @@ async function createDarwinClock({ signal } = {}) {
     const buffer = new Uint32Array(16), size = new BigUint64Array(1);
     return createNativeClock({
       imageSHA256: image.imageSHA256,
-      readBoot,
+      readBoot: readBoot2,
       readCounter: () => machNS(lib.mach_continuous_time(), numer, denom),
       readWall() {
         const ms = Date.now();
@@ -436,6 +454,7 @@ async function createDarwinClock({ signal } = {}) {
 }
 var init_darwin_clock = __esm({
   "darwin-clock.mjs"() {
+    "use strict";
     init_native_clock_image();
     init_native_clock_contract();
   }
@@ -458,19 +477,20 @@ async function createWindowsClock({ signal } = {}) {
   };
   signal?.addEventListener("abort", abort, { once: true });
   try {
-    let verifyPaths = function() {
+    let verifyPaths2 = function() {
       for (const path2 of ["C:\\", "C:\\Windows", directory, ...files]) {
         if (lstatSync(path2).isSymbolicLink() || realpathSync3(path2).toLowerCase() !== path2.toLowerCase()) unavailable();
       }
-    }, library = function(path2, abi2) {
+    }, library2 = function(path2, abi2) {
       const lib = dlopen(path2, abi2);
       releases.push(() => lib.close());
       return lib.symbols;
     };
+    var verifyPaths = verifyPaths2, library = library2;
     const image = pinNativeImage();
     releases.push(image.close);
     const files = ["kernel32.dll", "ntdll.dll"].map((name2) => `${directory}\\${name2}`);
-    verifyPaths();
+    verifyPaths2();
     const held2 = [];
     for (const path2 of files) {
       const file = holdFile(path2);
@@ -481,7 +501,7 @@ async function createWindowsClock({ signal } = {}) {
     if (signal?.aborted) unavailable();
     if (typeof dlopen !== "function" || typeof ptr !== "function" || typeof linkSymbols !== "function") unavailable();
     const aligned = (view) => address(ptr(view), view.BYTES_PER_ELEMENT);
-    const kernel = library(files[0], windowsKernelABI);
+    const kernel = library2(files[0], windowsKernelABI);
     const system = new Uint16Array(32768);
     const length = kernel.GetSystemDirectoryW(aligned(system), system.length);
     if (!Number.isInteger(length) || length <= 0 || length >= system.length || system[length] !== 0 || String.fromCharCode(...system.subarray(0, length)).toLowerCase() !== directory.toLowerCase()) unavailable();
@@ -495,7 +515,7 @@ async function createWindowsClock({ signal } = {}) {
     const target = address(kernel.GetProcAddress(handle, address(ptr(name))));
     const wrapper = linkSymbols({ QueryInterruptTimePrecise: { ...interruptABI, ptr: target } });
     releases.push(() => wrapper.close());
-    const nt = library(files[1], windowsNtABI);
+    const nt = library2(files[1], windowsNtABI);
     const info = new BigUint64Array(4), returned = new Uint32Array(1);
     const counter = new BigUint64Array(1), wall = new BigUint64Array(1);
     return createNativeClock({
@@ -518,7 +538,7 @@ async function createWindowsClock({ signal } = {}) {
       },
       verify() {
         image.verify();
-        verifyPaths();
+        verifyPaths2();
         for (const file of held2) file.verify();
       },
       close: () => closeAll(releases)
@@ -536,6 +556,7 @@ async function createWindowsClock({ signal } = {}) {
 var directory;
 var init_windows_clock = __esm({
   "windows-clock.mjs"() {
+    "use strict";
     init_native_clock_image();
     init_native_clock_contract();
     directory = "C:\\Windows\\System32";
@@ -2261,7 +2282,7 @@ init_protocol();
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { performance as performance2 } from "node:perf_hooks";
-var deliveryKeys = process.platform === "win32" ? ["AGENT_NOTIFICATIONS_CONFIG", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP"] : ["AGENT_NOTIFICATIONS_CONFIG", "HOME", "XDG_CONFIG_HOME", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR"];
+var deliveryKeys = process.platform === "win32" ? ["AGENT_NOTIFICATIONS_WEBHOOK_URL", "AGENT_NOTIFICATIONS_CONFIG", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP"] : ["AGENT_NOTIFICATIONS_WEBHOOK_URL", "AGENT_NOTIFICATIONS_CONFIG", "HOME", "XDG_CONFIG_HOME", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR"];
 var osKeys = process.platform === "win32" ? ["SystemRoot", "WINDIR"] : [];
 var result = (status, output = Buffer.alloc(0)) => Object.freeze({ status, output });
 var closedObject = (value, keys) => value && Object.getPrototypeOf(value) === Object.prototype && Reflect.ownKeys(value).every((key) => keys.includes(key));
@@ -2323,7 +2344,7 @@ function createProcessRegistry(configuration) {
     origin: origin2,
     controlRoot: controlRoot2,
     nativePID,
-    entry: "serve",
+    entry: "native",
     publicExecPath
   }));
   const base = process.platform === "win32" ? { USERPROFILE: privateCwd, APPDATA: privateCwd, LOCALAPPDATA: privateCwd, TEMP: privateCwd, TMP: privateCwd } : { HOME: privateCwd, XDG_CONFIG_HOME: privateCwd, XDG_RUNTIME_DIR: privateCwd };
@@ -2334,7 +2355,7 @@ function createProcessRegistry(configuration) {
     AGENT_NOTIFICATIONS_ORIGIN: origin2,
     AGENT_NOTIFICATIONS_NATIVE_PID: String(nativePID),
     AGENT_NOTIFICATIONS_HOST_EXECUTABLE: publicExecPath,
-    AGENT_NOTIFICATIONS_HOST_ENTRY: "serve",
+    AGENT_NOTIFICATIONS_HOST_ENTRY: "native",
     AGENT_NOTIFICATIONS_PUBLIC_EXEC_PATH: publicExecPath
   };
   const eventEnv = { ...profileEnv, ...environment(deliveryEnv, deliveryKeys) };
@@ -2582,7 +2603,7 @@ async function prepareOwnedHost(directory2, generation, appVersion, diagnostics 
       }
     };
     privateCwd = mkdtempSync(join(tmpdir(), "agent-notifications-"));
-    const deliveryKeys2 = process.platform === "win32" ? ["AGENT_NOTIFICATIONS_CONFIG", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP"] : ["AGENT_NOTIFICATIONS_CONFIG", "HOME", "XDG_CONFIG_HOME", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR"];
+    const deliveryKeys2 = process.platform === "win32" ? ["AGENT_NOTIFICATIONS_WEBHOOK_URL", "AGENT_NOTIFICATIONS_CONFIG", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP"] : ["AGENT_NOTIFICATIONS_WEBHOOK_URL", "AGENT_NOTIFICATIONS_CONFIG", "HOME", "XDG_CONFIG_HOME", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR"];
     const pick = (keys) => Object.fromEntries(keys.filter((key) => process.env[key] !== void 0).map((key) => [key, process.env[key]]));
     registry = createProcessRegistry({
       executable,
@@ -2649,7 +2670,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "9ca0b9953d49997601655e54f846a3efa464f237e47c6f1b04716d0f2e64c4c2"
       }
     ],
-    "algorithmSourceMerkleSHA256": "feaae40687531811671a07ca846a49c816c0c1f1843d2786b3aa894b800207e3",
+    "algorithmSourceMerkleSHA256": "c1d06f26e18c34ca189c7ee492e5a83d786d4b1c3f90abd60674155973a4078e",
     "sourceKind": "linux-proc-boottime",
     "rawKind": "linux-boottime",
     "nativeReadBoundNS": "103000000",
@@ -2667,7 +2688,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "f916986543348d7953d8d43aa048516cdbc3f84f4d0dc9c0c5b9d1da3030cea7"
       }
     ],
-    "algorithmSourceMerkleSHA256": "feaae40687531811671a07ca846a49c816c0c1f1843d2786b3aa894b800207e3",
+    "algorithmSourceMerkleSHA256": "c1d06f26e18c34ca189c7ee492e5a83d786d4b1c3f90abd60674155973a4078e",
     "sourceKind": "linux-proc-boottime",
     "rawKind": "linux-boottime",
     "nativeReadBoundNS": "103000000",
@@ -2685,7 +2706,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "986fef2069a03b5181a9ec920786836f98fe3e4950c630941908687854e42757"
       }
     ],
-    "algorithmSourceMerkleSHA256": "4e252df5022f3ae136b8441e04d91feecd98d096531d44c91ea6cf8c51aec465",
+    "algorithmSourceMerkleSHA256": "dfe05a220ff0842fc706194c96cfa359d02362ab78e765007ef8317ac16ff85a",
     "sourceKind": "linux-proc-boottime",
     "rawKind": "linux-boottime",
     "nativeReadBoundNS": "103000000",
@@ -2704,7 +2725,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "d2f4c9ee106d9930d20ca5cf5f2c2216aab6fed836992cf24979d9481242c01c"
       }
     ],
-    "algorithmSourceMerkleSHA256": "4e252df5022f3ae136b8441e04d91feecd98d096531d44c91ea6cf8c51aec465",
+    "algorithmSourceMerkleSHA256": "dfe05a220ff0842fc706194c96cfa359d02362ab78e765007ef8317ac16ff85a",
     "sourceKind": "linux-proc-boottime",
     "rawKind": "linux-boottime",
     "nativeReadBoundNS": "103000000",
@@ -2723,7 +2744,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "f53aae8eb68d832ab1bcd27bed88c02de910be61f4b5f90068ae8e93d5e794c9"
       }
     ],
-    "algorithmSourceMerkleSHA256": "cb9ac37b84db5d991d60f22e2e19b84219914ef88956c6010a04a51123a316dd",
+    "algorithmSourceMerkleSHA256": "8e64b9214bd6ac2431f48f603f3be9d9feaca811efff603e738538e12849e819",
     "sourceKind": "darwin-mach-continuous",
     "rawKind": "darwin-monotonic-raw",
     "nativeReadBoundNS": "103000000",
@@ -2743,7 +2764,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "4642b7da61279c8aa5d389d9f29454936e449fea6bc510689e9cc976fff6579f"
       }
     ],
-    "algorithmSourceMerkleSHA256": "cb9ac37b84db5d991d60f22e2e19b84219914ef88956c6010a04a51123a316dd",
+    "algorithmSourceMerkleSHA256": "8e64b9214bd6ac2431f48f603f3be9d9feaca811efff603e738538e12849e819",
     "sourceKind": "darwin-mach-continuous",
     "rawKind": "darwin-monotonic-raw",
     "nativeReadBoundNS": "103000000",
@@ -2763,7 +2784,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "139ddeb6a46ba276827bb8f79c7b28208621746e4fd6914d9ae71cc1a0a57524"
       }
     ],
-    "algorithmSourceMerkleSHA256": "8f8b25d89ad21a84e2531c1d909920d8e0706f3458d9bb208fb7cf5deb7a0a62",
+    "algorithmSourceMerkleSHA256": "333aea7b8c5e83b85ad6bf9a6ad07a42c0e5f103dec09aea3101b188333b4a13",
     "sourceKind": "darwin-mach-continuous",
     "rawKind": "darwin-monotonic-raw",
     "nativeReadBoundNS": "103000000",
@@ -2783,7 +2804,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "0b2b68c1efaf20a29aaf636c2ffccc1abb56243a82f48cce45e257d232e03442"
       }
     ],
-    "algorithmSourceMerkleSHA256": "8f8b25d89ad21a84e2531c1d909920d8e0706f3458d9bb208fb7cf5deb7a0a62",
+    "algorithmSourceMerkleSHA256": "333aea7b8c5e83b85ad6bf9a6ad07a42c0e5f103dec09aea3101b188333b4a13",
     "sourceKind": "darwin-mach-continuous",
     "rawKind": "darwin-monotonic-raw",
     "nativeReadBoundNS": "103000000",
@@ -2803,7 +2824,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "52f60248a576b34c9a6dcaa27e0a7f08089af35bcdc0dfb10c04d3e00a98314c"
       }
     ],
-    "algorithmSourceMerkleSHA256": "cdbd316fc1554ab6c2623960a751832b31179b49a0bac6bad02debe3a7c30e11",
+    "algorithmSourceMerkleSHA256": "91cb8e9ada360300c56f53704df1b78d76a45c9f308a32364b6c6089b9128452",
     "sourceKind": "windows-interrupt-precise",
     "rawKind": "windows-interrupt-precise",
     "nativeReadBoundNS": "103000000",
@@ -2823,7 +2844,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "ec7a3909bad41ef88e4650f737ab6f0b0c402a7f49a588812d0a79820c2dfc1f"
       }
     ],
-    "algorithmSourceMerkleSHA256": "cdbd316fc1554ab6c2623960a751832b31179b49a0bac6bad02debe3a7c30e11",
+    "algorithmSourceMerkleSHA256": "91cb8e9ada360300c56f53704df1b78d76a45c9f308a32364b6c6089b9128452",
     "sourceKind": "windows-interrupt-precise",
     "rawKind": "windows-interrupt-precise",
     "nativeReadBoundNS": "103000000",
@@ -2951,19 +2972,19 @@ function createLinuxClock() {
   const fds = [];
   let disposed = false, previous;
   try {
-    let verify = function() {
+    let verify2 = function() {
       if (disposed) fail();
       for (const [index, fd] of fds.entries()) if (!same(held(fd, index === 2 ? NSFS : PROCFS), identities[index])) fail();
       const current = statSync2(fixed[2], { bigint: true });
       if (!same(current, identities[2]) || statfsSync(fixed[2], { bigint: true }).type !== NSFS || readlinkSync(fixed[2]) !== `time:[${current.ino}]` || read(fds[1], 37) !== `${boot}
 `) fail();
-    }, sample = function() {
+    }, sample2 = function() {
       try {
-        verify();
+        verify2();
         const lo = parseUptime(read(fds[0], 128));
         const wallMs = Date.now();
         const last = parseUptime(read(fds[0], 128));
-        verify();
+        verify2();
         if (!Number.isSafeInteger(wallMs) || wallMs <= 0 || last < lo || last - lo > 100000000n || previous && lo < previous.loNS) fail();
         const wallNS = ns((BigInt(wallMs) * 1000000n).toString());
         const hi = ns((last + quantum).toString());
@@ -2981,10 +3002,10 @@ function createLinuxClock() {
         previous = result2;
         return result2;
       } catch {
-        dispose();
+        dispose2();
         fail();
       }
-    }, dispose = function() {
+    }, dispose2 = function() {
       if (disposed) return;
       disposed = true;
       for (const fd of fds) {
@@ -2994,6 +3015,7 @@ function createLinuxClock() {
         }
       }
     };
+    var verify = verify2, sample = sample2, dispose = dispose2;
     for (const [index, file] of fixed.entries()) {
       fds.push(openSync(file, constants.O_RDONLY | (constants.O_CLOEXEC ?? 524288) | (index === 2 ? 0 : constants.O_NOFOLLOW)));
     }
@@ -3002,7 +3024,7 @@ function createLinuxClock() {
     if (!bootOK(boot) || read(fds[1], 37) !== `${boot}
 `) fail();
     const domain = `linux-time:${identities[2].dev}:${identities[2].ino}`;
-    return Object.freeze({ sample, dispose });
+    return Object.freeze({ sample: sample2, dispose: dispose2 });
   } catch {
     for (const fd of fds) {
       try {
@@ -3040,7 +3062,7 @@ function anchorMatches(anchor, before, after, policy) {
     offsetHiNS: wall - lo + policy.nativeReadBoundNS
   }, after, policy.comparisonBoundNS);
 }
-function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, onInvalidate, sourceFactory = createPlatformClock }) {
+function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, onInvalidate, enrich, sourceFactory = createPlatformClock }) {
   let epoch, source, anchor, activation, pending, last, ingress, disposed = false;
   const originals = /* @__PURE__ */ new Map(), prepared = /* @__PURE__ */ new WeakMap();
   function invalidate(reason = "clock") {
@@ -3200,6 +3222,13 @@ function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, on
   };
   async function beforeEmit(event, handoff) {
     try {
+      let display;
+      if (enrich) {
+        try {
+          display = (await enrich(event))?.display;
+        } catch {
+        }
+      }
       const tick = BigInt(handoff.ingressMonotonicMs) * 1000000n;
       const original = originals.get(tick);
       if (!original || !current(original, handoff) || event.rootSession !== true || !event.provenance) return false;
@@ -3232,12 +3261,12 @@ function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, on
           errorNS: String(policy.translationBoundNS)
         })
       });
-      encodeFrame({ protocol: 1, origin: origin2, event, provenance: {
+      encodeFrame({ protocol: 1, origin: origin2, event, ...display ? { display } : {}, provenance: {
         ...provenance,
         spawnTickNS: String(after.loNS),
         deadlineTickNS: String(after.loNS + 20000000000n)
       } }, policy);
-      prepared.set(event, { original, provenance });
+      prepared.set(event, { original, provenance, display });
       return true;
     } catch {
       invalidate();
@@ -3269,7 +3298,7 @@ function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, on
             invalidate();
             bad();
           }
-          return encodeFrame({ protocol: 1, origin: origin2, event, provenance: {
+          return encodeFrame({ protocol: 1, origin: origin2, event, ...held2.display ? { display: held2.display } : {}, provenance: {
             ...held2.provenance,
             spawnTickNS: String(spawnTick),
             deadlineTickNS: String(deadline)
@@ -3298,6 +3327,114 @@ function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, on
 }
 
 // ipc.mjs
+init_protocol();
+
+// display.ts
+var object3 = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+var bytes = (value) => new TextEncoder().encode(value).length;
+var validID = (value) => typeof value === "string" && value.length > 0 && bytes(value) <= 256 && !/[\u0000-\u001f\u007f]/u.test(value);
+function cleanText(value, limit) {
+  if (typeof value !== "string" || bytes(value) > limit || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(value) || /[\ud800-\udfff]/u.test(value)) return "";
+  return value.trim().replace(/\s+/gu, " ");
+}
+function createDisplayContext(client, timeoutMs = 1e3, maxLookups = 8) {
+  const requests = /* @__PURE__ */ new Map();
+  const turns = /* @__PURE__ */ new Map();
+  const seenTurns = /* @__PURE__ */ new Set();
+  let activeLookups = 0;
+  const key = (sessionID, requestID) => JSON.stringify([sessionID, requestID]);
+  function capture(event) {
+    if (!object3(event) || !object3(event.properties)) return;
+    const p = event.properties;
+    if (event.type === "message.updated" && object3(p.info) && p.info.role === "user" && validID(p.info.sessionID) && validID(p.info.id)) {
+      const turnKey = key(p.info.sessionID, p.info.id);
+      if (turns.get(p.info.sessionID) !== p.info.id && !seenTurns.has(turnKey)) {
+        for (const [k2, snapshot2] of requests) {
+          if (snapshot2.sessionID === p.info.sessionID) {
+            snapshot2.active = false;
+            requests.delete(k2);
+          }
+        }
+        turns.set(p.info.sessionID, p.info.id);
+        if (turns.size > 512) turns.delete(turns.keys().next().value);
+        seenTurns.add(turnKey);
+        if (seenTurns.size > 512) seenTurns.delete(seenTurns.values().next().value);
+      }
+    }
+    if (["question.replied", "question.rejected"].includes(String(event.type)) && validID(p.sessionID) && validID(p.requestID)) {
+      const k2 = key(p.sessionID, p.requestID), snapshot2 = requests.get(k2);
+      if (snapshot2) {
+        snapshot2.active = false;
+        requests.delete(k2);
+      }
+    }
+    if (event.type !== "question.asked" || !validID(p.sessionID) || !validID(p.id)) return;
+    const k = key(p.sessionID, p.id);
+    const existing = requests.get(k);
+    if (existing) {
+      existing.observers++;
+      return existing;
+    }
+    if (requests.size >= 512) return;
+    let question = "";
+    if (Array.isArray(p.questions) && p.questions.length > 0 && p.questions.length <= 8) {
+      const parts = p.questions.map((q) => object3(q) ? cleanText(q.question, 1024) : "");
+      const combined = parts.join(" \xB7 ");
+      if (parts.every(Boolean) && bytes(combined) <= 2048) question = combined;
+    }
+    const snapshot = { sessionID: p.sessionID, requestID: p.id, question, active: true, observers: 1 };
+    requests.set(k, snapshot);
+    return snapshot;
+  }
+  function release(snapshot) {
+    if (!snapshot || --snapshot.observers > 0) return;
+    snapshot.active = false;
+    const k = key(snapshot.sessionID, snapshot.requestID);
+    if (requests.get(k) === snapshot) requests.delete(k);
+  }
+  async function title(sessionID) {
+    if (activeLookups >= maxLookups) return "";
+    activeLookups++;
+    const controller = new AbortController();
+    let timer;
+    const lookup = Promise.resolve().then(() => client.session.get({ path: { id: sessionID }, signal: controller.signal }));
+    lookup.then(() => {
+      activeLookups--;
+    }, () => {
+      activeLookups--;
+    });
+    try {
+      const result2 = await Promise.race([lookup, new Promise((resolve) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          resolve(void 0);
+        }, timeoutMs);
+      })]);
+      const info = object3(result2) && "data" in result2 ? result2.data : result2;
+      return object3(info) && info.id === sessionID ? cleanText(info.title, 1024) : "";
+    } catch {
+      return "";
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  async function enrich(fact) {
+    if (fact.rootSession !== true || !validID(fact.sessionID)) return fact;
+    const snapshot = fact.kind === "question_asked" && validID(fact.requestID) ? requests.get(key(fact.sessionID, fact.requestID)) : void 0;
+    const sessionTitle = await title(fact.sessionID);
+    const question = snapshot?.active ? snapshot.question : "";
+    if (!sessionTitle && !question) return fact;
+    return { ...fact, display: {
+      sessionID: fact.sessionID,
+      ...fact.kind === "question_asked" && fact.requestID ? { requestID: fact.requestID } : {},
+      ...sessionTitle ? { sessionTitle } : {},
+      ...question ? { question } : {}
+    } };
+  }
+  return { capture, release, enrich };
+}
+
+// plugin.mjs
 init_protocol();
 
 // native-v1.mjs
@@ -3683,6 +3820,35 @@ var servers = /* @__PURE__ */ new WeakMap();
 var setups = /* @__PURE__ */ new WeakMap();
 var silent = Object.freeze({ event() {
 } });
+async function reportDelivery(delivery) {
+  const result2 = await delivery;
+  if (!result2) return;
+  let outcome = result2.status;
+  if (outcome === "ok") {
+    try {
+      outcome = parseJSON(result2.output, 1024).status;
+    } catch {
+      outcome = "invalid_receipt";
+    }
+  }
+  if (outcome !== "submitted" && outcome !== "suppressed")
+    console.error(
+      "Agent Notifications OpenCode delivery:",
+      [
+        "rejected",
+        "unavailable",
+        "unknown",
+        "invalidated",
+        "deadline",
+        "exited",
+        "capacity",
+        "stream_error",
+        "overflow",
+        "ipc_termination_unproved",
+        "invalid_receipt"
+      ].includes(outcome) ? outcome : "unavailable"
+    );
+}
 async function server(input, options = {}) {
   if (!input?.client || typeof input.client.session?.get !== "function" || typeof input.client.session?.messages !== "function") return silent;
   const existing = servers.get(input.client);
@@ -3709,12 +3875,14 @@ async function server(input, options = {}) {
     }
     let observer, view, stopped = false, stopping;
     const publications = /* @__PURE__ */ new WeakSet();
+    const display = createDisplayContext(input.client);
     const delivery = createPreparedDelivery({
       registry: owned.registry,
       origin: owned.origin,
       policy,
       sourceFactory: createPlatformClock,
       isOwned: owned.isOwned,
+      enrich: display.enrich,
       onInvalidate: () => observer?.dispose()
     });
     view = createNativeV1(input.client, input.directory, delivery.invalidate);
@@ -3739,8 +3907,9 @@ async function server(input, options = {}) {
         runtimeEligibility: owned.runtimeEligibility,
         callbackAuthority: "qualified_native_sync",
         clock: delivery.clock,
+        onDiagnostic: (reason) => console.error("Agent Notifications OpenCode observer:", reason),
         beforeEmit: async (event, handoff) => await delivery.beforeEmit(event, handoff) && await view.finalize(event, handoff),
-        emit: delivery.emit
+        emit: (event, handoff) => reportDelivery(delivery.emit(event, handoff))
       });
       return Object.freeze({ dispose: stop, event({ event }) {
         if (stopped) return;
@@ -3748,6 +3917,7 @@ async function server(input, options = {}) {
           if (publications.has(event)) return;
           publications.add(event);
         }
+        let snapshot;
         try {
           delivery.beginIngress(event);
           if (event?.type === "location.shutdown" || event?.type === "server.instance.disposed") {
@@ -3755,9 +3925,11 @@ async function server(input, options = {}) {
             return;
           }
           if (event?.type === "message.updated" && event.properties?.info?.role === "user" && !delivery.allowsBirth(event.properties.info.time?.created)) return;
+          snapshot = display.capture(event);
           view.ingest(event);
-          void observer.observe(event).catch(stop);
+          void observer.observe(event).catch(stop).finally(() => display.release(snapshot));
         } catch {
+          display.release(snapshot);
           stop();
         }
       } });
@@ -3777,6 +3949,7 @@ async function setup(context) {
     const owned = await prepareOwnedHost(context.location?.directory, "v2", context.app?.version, context.options?.diagnostics === true);
     if (!owned) return;
     const policy = selectClockCell("v2");
+    const display = context.client?.session?.get ? createDisplayContext(context.client) : void 0;
     if (!policy) {
       await owned.dispose();
       return;
@@ -3794,6 +3967,7 @@ async function setup(context) {
       policy,
       sourceFactory: createPlatformClock,
       isOwned: isNativeOwned,
+      enrich: display?.enrich,
       onInvalidate: (reason) => {
         if (reason === "clock") observer?.dispose();
         view?.reset();
@@ -3823,7 +3997,7 @@ async function setup(context) {
         };
         signal.addEventListener("abort", abort, { once: true });
         const current = connection;
-        let iterator;
+        let iterator, snapshot;
         const opening = delivery.activate().then((ready) => {
           if (!ready || stopped || signal.aborted || current.signal.aborted) throw new TypeError("reader_unverified");
           iterator = context.event.subscribe({ signal: current.signal })[Symbol.asyncIterator]();
@@ -3831,9 +4005,12 @@ async function setup(context) {
         return { [Symbol.asyncIterator]() {
           return this;
         }, async next() {
+          display?.release(snapshot);
+          snapshot = void 0;
           try {
             await opening;
             const item = await iterator.next();
+            if (!item.done) snapshot = display?.capture(item.value);
             if (item.done) delivery.invalidate("reader");
             return item;
           } catch {
@@ -3841,6 +4018,8 @@ async function setup(context) {
             throw new TypeError("reader_unverified");
           }
         }, async return() {
+          display?.release(snapshot);
+          snapshot = void 0;
           signal.removeEventListener("abort", abort);
           delivery.invalidate("reader");
           current.abort();
@@ -3856,13 +4035,14 @@ async function setup(context) {
         native: view.native,
         checkpoint: createRPCCheckpoint(context, delivery.activate),
         clock: delivery.clock,
+        onDiagnostic: (reason) => console.error("Agent Notifications OpenCode observer:", reason),
         beforeEmit: async (event, handoff) => {
           const fact = view.project(event);
           return Boolean(fact && await delivery.beforeEmit(fact, handoff) && await view.finalize(event, handoff));
         },
         emit: (event, handoff) => {
           const fact = view.project(event);
-          return fact ? delivery.emit(fact, handoff) : void 0;
+          return fact ? reportDelivery(delivery.emit(fact, handoff)) : void 0;
         }
       });
       observer.start();
