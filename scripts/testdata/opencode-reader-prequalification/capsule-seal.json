@@ -1,0 +1,18 @@
+{
+  "buildReceiptSHA256": "9041efb60a225440b06da3e2eeaceee269f984fcfa95e34c6d7a2ad138deedc6",
+  "bundleSHA256": "e1972d06202ad3a6ca24febe53a63d1def3a02eea8f2f985fbc1876e03913122",
+  "capsuleSHA256": "f9921873a344ea17e6dd77521be84e42942c945e9a969b8b6a52b0a1c98c5fd6",
+  "compileReceiptSHA256": "c6a92fe9f420cec046f770b9b93eab73bb38970be88503fcd4d23f565147450f",
+  "finalSpanQualified": false,
+  "installedQualified": false,
+  "kind": "ACTUAL_ROOT_BUILD_TWO_FILE_CAPSULE_NOT_NATIVE_QUALIFICATION",
+  "nativeExecutedByPreparer": false,
+  "productionQualified": false,
+  "publicMain": "e637d0bcecce7b118cd2f2afc33671f888550f58",
+  "qualificationGranted": false,
+  "sourceEpochQualified": false,
+  "sourceHead": "ba3c22429e07934f187ba3d18cb777a0fc2fd6fa",
+  "sourceManifestSHA256": "0bd622a14cb104663a908e0cf859120d6f757c09c10348fd3f87de82916479a7",
+  "sourceReviewSHA256": "e2f061aaffb830cd79247948a743fe1164a427ca762548bcd6aa7777de031e3d",
+  "timePolicyQualified": false
+}
