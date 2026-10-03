@@ -3,12 +3,14 @@ on:
   workflow_dispatch:
     inputs:
       version_group: {type: choice, required: true, default: all, options: [all, v1, v2]}
+      platform_group: {type: choice, required: true, default: all, options: [all, linux-arm64, darwin-arm64, darwin-amd64, windows-amd64]}
       product_head: {type: string, required: true}
       parent_run_id: {type: string, required: true}
       parent_artifact_id: {type: string, required: true}
       parent_sha256: {type: string, required: true}
       ci_inputs_sha256: {type: string, required: true}
       harness_sha256: {type: string, required: true}
+      product_checker_sha256: {type: string, required: true}
 
 # Only a newer run for the same PR supersedes its checks.
 concurrency:
@@ -27,7 +29,7 @@ jobs:
       fail-fast: false
       matrix:
         version: ${{ fromJSON(inputs.version_group == 'v1' && '["1.18.33"]' || inputs.version_group == 'v2' && '["2.0.21"]' || '["1.18.33","2.0.21"]') }}
-        target: [{runner: ubuntu-22.04-arm, platform: linux, arch: arm64}, {runner: macos-15, platform: darwin, arch: arm64}, {runner: macos-15-intel, platform: darwin, arch: amd64}, {runner: windows-latest, platform: windows, arch: amd64}]
+        target: ${{ fromJSON(inputs.platform_group == 'linux-arm64' && '[{"runner":"ubuntu-22.04-arm","platform":"linux","arch":"arm64"}]' || inputs.platform_group == 'darwin-arm64' && '[{"runner":"macos-15","platform":"darwin","arch":"arm64"}]' || inputs.platform_group == 'darwin-amd64' && '[{"runner":"macos-15-intel","platform":"darwin","arch":"amd64"}]' || inputs.platform_group == 'windows-amd64' && '[{"runner":"windows-latest","platform":"windows","arch":"amd64"}]' || '[{"runner":"ubuntu-22.04-arm","platform":"linux","arch":"arm64"},{"runner":"macos-15","platform":"darwin","arch":"arm64"},{"runner":"macos-15-intel","platform":"darwin","arch":"amd64"},{"runner":"windows-latest","platform":"windows","arch":"amd64"}]') }}
     defaults:
       run:
         working-directory: product
@@ -36,6 +38,7 @@ jobs:
       TEST_PARENT_SHA256: ${{ inputs.parent_sha256 }}
       TEST_CI_INPUTS_SHA256: ${{ inputs.ci_inputs_sha256 }}
       TEST_HARNESS_SHA256: ${{ inputs.harness_sha256 }}
+      TEST_PRODUCT_CHECKER_SHA256: ${{ inputs.product_checker_sha256 }}
       AN_OS: ${{ matrix.target.platform }}
       AN_ARCH: ${{ matrix.target.arch }}
       AN_VERSION: ${{ matrix.version }}
@@ -43,7 +46,9 @@ jobs:
       - name: Preserve exact text bytes in both TEST checkouts
         shell: bash
         working-directory: ${{ github.workspace }}
-        run: git config --global core.autocrlf false
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
       - uses: actions/checkout@v7
         with: {path: transport, persist-credentials: false}
       - uses: actions/checkout@v7
@@ -104,10 +109,17 @@ jobs:
           export AN_SUITE=business
           if [ "$AN_OS/$AN_ARCH" = linux/amd64 ]; then export AN_SUITE=full; fi
           if [ "$AN_OS" = linux ]; then
-            sudo --preserve-env=PATH,AN_MANIFEST,AN_MANIFEST_SHA256,AN_OS,AN_ARCH,AN_VERSION,AN_SUITE unshare --net -- bash -c 'ip link set lo up; python -B ../transport/held-native-adapter.py --held-source .task-tools/artifacts/held-native-driver.py --held-sha256 92eaac38ca6186a0e411292d71afb295fc9d00be4c45826da38d2ada5f64e2d3 --held-permission-source .task-tools/artifacts/held-portable_permission.py --held-permission-sha256 f499590b9c8c3bfee37156633bf8a5a36024be208b9c26addfd70cbd000874cd --held-provider-source .task-tools/artifacts/held-provider.py --held-provider-sha256 57633468d4187d44b65abd245ad29d49a380619fe1e61049a1612272cad80e49'
+            sudo --preserve-env=PATH,AN_MANIFEST,AN_MANIFEST_SHA256,AN_OS,AN_ARCH,AN_VERSION,AN_SUITE,TEST_HARNESS_SHA256,TEST_CI_INPUTS_SHA256,TEST_PRODUCT_HEAD unshare --net -- bash -c 'ip link set lo up; python -B ../transport/held-native-adapter.py --held-source .task-tools/artifacts/held-native-driver.py --held-sha256 c39d33626abe9217bbfad05178927658c210290649f1fd1bccdd2b755d6aace3 --held-permission-source .task-tools/artifacts/held-portable_permission.py --held-permission-sha256 f499590b9c8c3bfee37156633bf8a5a36024be208b9c26addfd70cbd000874cd --held-provider-source .task-tools/artifacts/held-provider.py --held-provider-sha256 57633468d4187d44b65abd245ad29d49a380619fe1e61049a1612272cad80e49 --held-portable-source .task-tools/artifacts/held-portable.py --held-portable-sha256 d7861c41fc43a3bcfea54ebd8b23bc0ebe53c452b992af6756960537974f91c6'
           else
-            python -B ../transport/held-native-adapter.py --held-source .task-tools/artifacts/held-native-driver.py --held-sha256 92eaac38ca6186a0e411292d71afb295fc9d00be4c45826da38d2ada5f64e2d3 --held-permission-source .task-tools/artifacts/held-portable_permission.py --held-permission-sha256 f499590b9c8c3bfee37156633bf8a5a36024be208b9c26addfd70cbd000874cd --held-provider-source .task-tools/artifacts/held-provider.py --held-provider-sha256 57633468d4187d44b65abd245ad29d49a380619fe1e61049a1612272cad80e49
+            python -B ../transport/held-native-adapter.py --held-source .task-tools/artifacts/held-native-driver.py --held-sha256 c39d33626abe9217bbfad05178927658c210290649f1fd1bccdd2b755d6aace3 --held-permission-source .task-tools/artifacts/held-portable_permission.py --held-permission-sha256 f499590b9c8c3bfee37156633bf8a5a36024be208b9c26addfd70cbd000874cd --held-provider-source .task-tools/artifacts/held-provider.py --held-provider-sha256 57633468d4187d44b65abd245ad29d49a380619fe1e61049a1612272cad80e49 --held-portable-source .task-tools/artifacts/held-portable.py --held-portable-sha256 d7861c41fc43a3bcfea54ebd8b23bc0ebe53c452b992af6756960537974f91c6
           fi
+      - name: Make only two SAFE public receipts readable for artifact upload
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$AN_OS" = linux ]; then sudo "$(command -v python)" -B ../transport/safe-upload.py; else python -B ../transport/safe-upload.py; fi
+          python -c 'import pathlib; root=pathlib.Path(".task-tools/artifacts"); [p.read_bytes() for p in (root/"native-report.json",root/"held-driver-supplier.json") if p.exists()]'
       - uses: actions/upload-artifact@v7
         if: always()
         with:

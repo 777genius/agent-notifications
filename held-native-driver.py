@@ -1072,6 +1072,25 @@ def scope_roots(base, projects, root, v2, headers, provider, webhook, key, repor
                                'settlement':'unproved_product_final_checkpoint_and_owned_close'})
 
 
+def terminal_v2_events(native):
+    """One original native envelope despite legitimate per-location captures."""
+    originals, ordered = {}, []
+    for event in native:
+        require(isinstance(event,dict) and isinstance(event.get('id'),str) and event['id'],
+                'native_terminal_event_identity_missing')
+        try:
+            encoded=json.dumps(event,sort_keys=True,separators=(',',':'),allow_nan=False)
+        except (TypeError,ValueError):
+            raise Unqualified('native_terminal_event_envelope_invalid')
+        identity=event['id']
+        if identity in originals:
+            require(originals[identity]==encoded,'native_terminal_event_identity_conflict')
+        else:
+            originals[identity]=encoded
+            ordered.append(event)
+    return ordered
+
+
 def terminal_scenario(base, project, root, name, v2, provider, key, auth_headers=None):
     """Actual native retry/abort discriminator; no injected callbacks or prompt retry."""
     model='p0-'+name
@@ -1101,6 +1120,7 @@ def terminal_scenario(base, project, root, name, v2, provider, key, auth_headers
     try:
         while time.monotonic()<deadline:
             native=[r['value'] for r in trace(root)[start:] if r.get('kind') in ('native-v1','native-v2') and belongs(r.get('value'))]
+            if v2: native=terminal_v2_events(native)
             types=[n.get('type') for n in native]
             outcome['nativeEvents']=sorted(set(t for t in types if t))
             assistants=[n.get('properties',{}).get('info',{}) for n in native if n.get('type')=='message.updated' and n.get('properties',{}).get('info',{}).get('role')=='assistant']
@@ -1120,7 +1140,7 @@ def terminal_scenario(base, project, root, name, v2, provider, key, auth_headers
                     retry_positions=[i for i,n in enumerate(native) if n.get('type')=='session.retry.scheduled' and n.get('data',{}).get('assistantMessageID') and n.get('data',{}).get('attempt',0)>0]
                     final_positions=[i for i,n in enumerate(native) if n.get('type')=='session.step.ended' and n.get('data',{}).get('assistantMessageID')]
                     succeeded=[i for i,t in enumerate(types) if t=='session.execution.succeeded']
-                    proof=bool(retry_positions and final_positions and succeeded and min(retry_positions)<max(final_positions)<succeeded[-1]) and types.count('session.execution.started')==1 and len(succeeded)==1 and not {'session.execution.failed','session.execution.interrupted'}.intersection(types)
+                    proof=bool(len(retry_positions)==1 and final_positions and succeeded and min(retry_positions)<max(final_positions)<succeeded[-1]) and types.count('session.execution.started')==1 and len(succeeded)==1 and not {'session.execution.failed','session.execution.interrupted'}.intersection(types)
                 else:
                     retry_positions=[i for i,n in enumerate(native) if n.get('type')=='session.status' and n.get('properties',{}).get('status',{}).get('type')=='retry']
                     final_positions=[i for i,n in enumerate(native) if n.get('type')=='message.updated' and n.get('properties',{}).get('info',{}).get('time',{}).get('completed') and not n.get('properties',{}).get('info',{}).get('error')]

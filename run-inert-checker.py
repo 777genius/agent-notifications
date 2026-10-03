@@ -1,9 +1,11 @@
-"""TEST-only checker supplier. Product runtime bytes and A5A assets stay unchanged."""
-import hashlib, json, os, pathlib, stat, subprocess, sys, types
+"""TEST-only checker supplier. Mandatory actual candidate pins; product runtime bytes stay unchanged."""
+import hashlib, importlib.util, json, os, pathlib, re, stat, subprocess, sys, types
 
 P = pathlib.Path
-PRODUCT_HEAD = 'a5a30b10bc2bfc378a07b70ba5fbe155ff120a33'
-OLD_CHECKER = 'f4552aabfdd59129c669016099c37b72b2dda0c986090a14c2d76536acddb921'
+PRODUCT_HEAD = os.environ['TEST_PRODUCT_HEAD']
+OLD_CHECKER = os.environ['TEST_PRODUCT_CHECKER_SHA256']
+assert re.fullmatch('[0-9a-f]{40}', PRODUCT_HEAD)
+assert re.fullmatch('[0-9a-f]{64}', OLD_CHECKER)
 SUPPLIER = '8cbaa51017c0b355d0362019b2eaf82be6d97a0c27087cf70f73175eaed5d2ec'
 root = P.cwd().resolve()
 checker = root / 'scripts/testdata/opencode-native-e2e/test_fixture.py'
@@ -21,6 +23,13 @@ def product_unchanged():
     assert digest(root / 'scripts/opencode-native-e2e.py') == os.environ['TEST_HARNESS_SHA256']
 
 product_unchanged()
+# Reuse the exact independently reviewed Windows canonical/physical boundary.
+adapter = P(__file__).resolve().with_name('held-native-adapter.py')
+assert digest(adapter) == 'e113e2bed20a082359e55f6d194c70d766c8ecf9bdd4f131fd8d37764dbe61fa'
+spec = importlib.util.spec_from_file_location('inert_source_custody', adapter)
+custody = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(custody)  # Guarded module: main/native execution is not invoked.
+before = custody.source_inventory(root)
 assert not source.is_symlink() and stat.S_ISREG(source.lstat().st_mode) and 0 < source.stat().st_size < 128 * 1024
 supplier_bytes = source.read_bytes()
 assert hashlib.sha256(supplier_bytes).hexdigest() == SUPPLIER
@@ -46,7 +55,11 @@ except SystemExit as outcome:
 finally:
     sys.modules['__main__'], sys.argv, sys.path[:] = original_main, original_argv, original_path
     product_unchanged()
-    receipt['trackedProductBytesUnchanged'] = True
+    after = custody.source_inventory(root)
+    assert after == before
+    receipt.update(trackedProductBytesUnchanged=True, canonicalSourceInventorySHA256=before[0],
+                   actualSourceFileCount=before[1], physicalSourceInventorySHA256=before[2],
+                   canonicalAndPhysicalSourceUnchanged=True)
     artifacts = root / '.task-tools/artifacts'
     artifacts.mkdir(parents=True, exist_ok=True)
     (artifacts / 'inert-checker-supplier.json').write_text(json.dumps(receipt, sort_keys=True) + '\n')
