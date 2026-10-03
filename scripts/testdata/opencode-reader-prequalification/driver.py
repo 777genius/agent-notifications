@@ -16,6 +16,55 @@ def write(p,v):
  p.chmod(0o600)
 def remaining(end):
  n=end-time.monotonic();need(n>0,'original_deadline');return n
+def windows_commandline_record(raw,base):
+ # Native amd64 UNICODE_STRING, decoded only from the returned owned allocation.
+ need(16<=len(raw)<=4096 and 0<base<1<<64,'Windows_commandline_record_size')
+ length,maximum,pointer=struct.unpack_from('<HH4xQ',raw)
+ need(length>0 and length%2==maximum%2==0 and maximum>=length and pointer>=base and pointer%2==0,'Windows_commandline_record_header')
+ offset=pointer-base
+ need(offset>=16 and offset<=len(raw) and maximum<=len(raw)-offset,'Windows_commandline_record_pointer')
+ command=raw[offset:offset+length].decode('utf-16-le',errors='strict')
+ need('\x00'not in command and len(command.encode('utf-8'))<=4096,'Windows_commandline_record_text')
+ return command
+
+def windows_entry_witness(process_handle,pid,argv,host,end):
+ # Same fixed class60/no-PEB contract as the existing native Windows runtime port.
+ import ctypes
+ from ctypes import wintypes as W
+ need(ctypes.sizeof(ctypes.c_void_p)==8 and ctypes.sizeof(ctypes.c_wchar)==2,'Windows_native_amd64_ABI')
+ remaining(end)
+ k=ctypes.WinDLL('kernel32.dll',use_last_error=True,winmode=0x800)
+ nt=ctypes.WinDLL('ntdll.dll',use_last_error=True,winmode=0x800)
+ signatures={
+  'GetCurrentProcess':([],W.HANDLE),'GetProcessId':([W.HANDLE],W.DWORD),
+  'DuplicateHandle':([W.HANDLE,W.HANDLE,W.HANDLE,ctypes.POINTER(W.HANDLE),W.DWORD,W.BOOL,W.DWORD],W.BOOL),
+  'WaitForSingleObject':([W.HANDLE,W.DWORD],W.DWORD),
+  'GetProcessTimes':([W.HANDLE,*([ctypes.POINTER(W.FILETIME)]*4)],W.BOOL),
+  'QueryFullProcessImageNameW':([W.HANDLE,W.DWORD,W.LPWSTR,ctypes.POINTER(W.DWORD)],W.BOOL),
+  'CloseHandle':([W.HANDLE],W.BOOL)}
+ for name,(args,result)in signatures.items():f=getattr(k,name);f.argtypes=args;f.restype=result
+ query=nt.NtQueryInformationProcess;query.argtypes=[W.HANDLE,ctypes.c_int,ctypes.c_void_p,W.ULONG,ctypes.POINTER(W.ULONG)];query.restype=ctypes.c_int32
+ owned=W.HANDLE();current=k.GetCurrentProcess();remaining(end)
+ # Duplicate the already-owned child object, never reopen an arbitrary PID.
+ need(k.DuplicateHandle(current,process_handle,current,ctypes.byref(owned),0x101000,False,0),'Windows_owned_limited_handle')
+ try:
+  remaining(end);need(k.GetProcessId(owned)==pid and k.WaitForSingleObject(owned,0)==258,'Windows_owned_live_process')
+  creation,exit_time,kernel,user=W.FILETIME(),W.FILETIME(),W.FILETIME(),W.FILETIME()
+  remaining(end);need(k.GetProcessTimes(owned,ctypes.byref(creation),ctypes.byref(exit_time),ctypes.byref(kernel),ctypes.byref(user)),'Windows_owned_birth')
+  birth=(creation.dwHighDateTime<<32)|creation.dwLowDateTime;need(birth>0,'Windows_positive_birth')
+  storage=(ctypes.c_uint64*512)();size=W.ULONG();remaining(end)
+  need(query(owned,60,ctypes.byref(storage),ctypes.sizeof(storage),ctypes.byref(size))==0,'Windows_commandline_query')
+  need(16<=size.value<=ctypes.sizeof(storage),'Windows_commandline_return_size');remaining(end)
+  command=windows_commandline_record(ctypes.string_at(ctypes.addressof(storage),size.value),ctypes.addressof(storage))
+  need(command==subprocess.list2cmdline(argv),'actual_stock_entry_commandline')
+  image=ctypes.create_unicode_buffer(2048);chars=W.DWORD(len(image));remaining(end)
+  need(k.QueryFullProcessImageNameW(owned,0,image,ctypes.byref(chars)) and 0<chars.value<len(image),'Windows_owned_image_query')
+  image_name=ctypes.string_at(ctypes.addressof(image),chars.value*2).decode('utf-16-le',errors='strict')
+  need('\x00'not in image_name and os.path.normcase(image_name)==os.path.normcase(str(host)),'actual_stock_entry_image')
+  remaining(end);need(k.GetProcessId(owned)==pid and k.WaitForSingleObject(owned,0)==258,'Windows_owned_still_live');remaining(end)
+  return {'pid':pid,'commandLine':command,'imagePath':image_name,'creationFILETIME':birth,'osWitness':'NtQueryInformationProcess_class60_owned_handle_and_QueryFullProcessImageNameW','qualificationGranted':False}
+ finally:need(k.CloseHandle(owned),'Windows_witness_handle_closed')
+
 class DeadlineSocket(socket.socket):
  def recv(self,*a,**k):self.settimeout(remaining(self.end));return super().recv(*a,**k)
  def recv_into(self,*a,**k):self.settimeout(remaining(self.end));return super().recv_into(*a,**k)
@@ -236,10 +285,10 @@ def main(a):
    need(actual_argv==(' '.join(argv)),'actual_stock_entry_argv')
    write(root/'native-entry-private.json',{'pid':proc.pid,'argvText':actual_argv,'entry':a.entry,'osWitness':'ps_command_only','qualificationGranted':False})
   else:
-   native_command=subprocess.check_output(['powershell','-NoProfile','-NonInteractive','-Command',
-    "(Get-CimInstance Win32_Process -Filter 'ProcessId = "+str(proc.pid)+"').CommandLine"],timeout=2).decode().strip()
-   need(len(native_command.encode())<=4096 and native_command==subprocess.list2cmdline(argv),'actual_stock_entry_commandline')
-   write(root/'native-entry-private.json',{'pid':proc.pid,'commandLine':native_command,'entry':a.entry,'osWitness':'Win32_Process_CommandLine','qualificationGranted':False})
+   witness_end=phase_end(2)
+   native_handle=win_terminal.pi.hProcess if win_terminal is not None else int(proc._handle)
+   witness=windows_entry_witness(native_handle,proc.pid,argv,host,witness_end)
+   remaining(witness_end);write(root/'native-entry-private.json',{**witness,'entry':a.entry});remaining(witness_end)
   stage('native_reader_readiness')
   startup_end=phase_end(35)
   ready=wait_file(root/'reader-ready.json',startup_end,proc);tui_current()

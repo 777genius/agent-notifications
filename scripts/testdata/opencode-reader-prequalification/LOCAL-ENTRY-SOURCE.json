@@ -7,7 +7,7 @@
   "actualReaderBundleSHA256": "d48042526d8b657ad48c461c8abae4ea9254a9e3b1390085e0dd20ccdb7eab9a",
   "overlaySHA256": {
     "consumer.mjs": "e568cd36834fe4ba0646e76134de26179a432e85c12c77f075ba05e21fea5d39",
-    "driver.py": "2570c7312bdb4ac6f86f553db3a54bb844e8ece265b8b5b156693a56ce077f13",
+    "driver.py": "e612e7f6f55b53467dc0b0a9d4e59f26d86c9203192cf0abb2d00bd8da1ced6f",
     "official-archive-layouts.json": "a0ac3dc8d3bf26956b061e46063efc19257ee3149208f26a763656a585532649",
     "retained/windows_conpty.py": "1c2bb5c8874862103aea6de9173ae0b23eed4a551b293d2b1155caf263be160e",
     "retained/harness.py": "cd6147929a58363e24063e4c520b87cf5bc08fe39b16ced689d4cee7750fbb78"
@@ -18,5 +18,16 @@
   },
   "nativeExecutedByPreparer": false,
   "providerRequestsByPreparer": 0,
-  "qualificationGranted": false
+  "qualificationGranted": false,
+  "windowsWitnessSource": {
+    "baseCommit": "57ee848652505fd8d9f6609c4e7118596d0a086b",
+    "sourceManifestSHA256": "6347b10dc67cde8487f9047b4cd7d66638add81bed3a04cf4cd2f353c29351f9",
+    "sourcePatchSHA256": "ff69b0788a66737d5588f80bef8774f4834296a1fe8f85167d406ceec186a400",
+    "priorDriverSHA256": "2570c7312bdb4ac6f86f553db3a54bb844e8ece265b8b5b156693a56ce077f13",
+    "currentDriverSHA256": "e612e7f6f55b53467dc0b0a9d4e59f26d86c9203192cf0abb2d00bd8da1ced6f",
+    "scope": "Finite existing Windows owned native-child handle witness replaces auxiliary PowerShell query; unchanged original two-second window, no warmup/retry/budget change.",
+    "sourceHighReview": "PENDING_SEPARATE_INDEPENDENT_REVIEW",
+    "actualWindowsCapture": "NOT_EXECUTED_CURRENT_SUCCESSOR",
+    "originalFailedWindowsReceiptsRemainFailed": true
+  }
 }

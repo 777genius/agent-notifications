@@ -1,8 +1,8 @@
-name: TEST stock V1 local-entry reader capture
+name: TEST Windows stock V1 local-entry reader continuation
 on:
   workflow_dispatch:
     inputs:
-      plan: {description: 'Eight explicit floor V1 local entries, one TEST request each, no retry', required: true, default: eight-v1-local-entries, type: choice, options: [eight-v1-local-entries]}
+      plan: {description: 'Two Windows floor V1 local entries, one TEST request each, no retry', required: true, default: windows-v1-local-entries, type: choice, options: [windows-v1-local-entries]}
 permissions: {contents: read}
 jobs:
   reader:
@@ -13,12 +13,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {runner: ubuntu-22.04-arm, os: linux, arch: arm64, version: 1.18.33, entry: run}
-          - {runner: ubuntu-22.04-arm, os: linux, arch: arm64, version: 1.18.33, entry: tui}
-          - {runner: macos-15-intel, os: darwin, arch: amd64, version: 1.18.33, entry: run}
-          - {runner: macos-15-intel, os: darwin, arch: amd64, version: 1.18.33, entry: tui}
-          - {runner: macos-15, os: darwin, arch: arm64, version: 1.18.33, entry: run}
-          - {runner: macos-15, os: darwin, arch: arm64, version: 1.18.33, entry: tui}
           - {runner: windows-latest, os: windows, arch: amd64, version: 1.18.33, entry: run}
           - {runner: windows-latest, os: windows, arch: amd64, version: 1.18.33, entry: tui}
     env:
@@ -30,7 +24,7 @@ jobs:
       - name: Refuse an unknown capture plan
         shell: bash
         env: {PLAN_NAME: '${{ inputs.plan }}'}
-        run: test "$PLAN_NAME" = eight-v1-local-entries
+        run: test "$PLAN_NAME" = windows-v1-local-entries
       - name: Preserve exact TEST source text bytes
         shell: bash
         run: |
