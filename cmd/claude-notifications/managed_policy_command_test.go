@@ -68,7 +68,7 @@ func managedPolicyFixture(t *testing.T, custom ...string) (string, installruntim
 		}
 		files[p] = id
 	}
-	l := installruntime.Ledger{Schema: 4, WriterFloor: 3, ID: "TEST-managed-policy", Owner: "existing-installer", RuntimeRoot: runtimeRoot, Generation: 7, PolicyGeneration: 11,
+	l := installruntime.Ledger{Schema: 4, WriterFloor: installruntime.OpenCodeWriterFloor, ID: "TEST-managed-policy", Owner: "existing-installer", RuntimeRoot: runtimeRoot, Generation: 7, PolicyGeneration: 11,
 		Consumers: map[string]installruntime.Consumer{"opencode-notifications": {RuntimeRoot: runtimeRoot, Registration: plugin, Commands: []string{binary, "opencode-event", "--protocol", "1"}, OpenCode: &r}, "unrelated-agent": {RuntimeRoot: runtimeRoot, Registration: plugin}}, Files: files}
 	data, err := json.Marshal(l)
 	if err != nil {

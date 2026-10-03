@@ -3,6 +3,8 @@ package installruntime
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -212,7 +214,15 @@ func mergePolicyFields(fields, changes map[string]json.RawMessage) error {
 			}
 		}
 		for member, value := range patch {
-			current[member] = value
+			if key == "route" && member == "copilotVSCodeNotifications" {
+				merged, err := mergeCopilotPolicy(current[member], value)
+				if err != nil {
+					return err
+				}
+				current[member] = merged
+			} else {
+				current[member] = value
+			}
 		}
 		merged, err := json.Marshal(current)
 		if err != nil {
@@ -233,7 +243,7 @@ func policyDisableOnly(r Request) bool {
 }
 
 func openCodeRevokeOnly(r Request) bool {
-	if r.RevokeGemini || !r.PolicyOnly || !r.RefreshOnly || r.Owner != "existing-installer" || r.ConsumerID != "opencode-notifications" ||
+	if r.RevokeCopilotVSCode || r.RevokeGemini || !r.PolicyOnly || !r.RefreshOnly || r.Owner != "existing-installer" || r.ConsumerID != "opencode-notifications" ||
 		r.ExpectedGeneration == nil || r.ExpectedPolicy == nil || r.PolicyEnabled != nil ||
 		len(r.PolicyFields) != 1 || string(r.PolicyFields["route"]) != `{"openCodeNotifications":{"desktop":false,"webhook":false}}` ||
 		len(r.Files) != 0 || len(r.ConfigPaths) != 0 || r.Prepare != nil || r.Native != nil ||
@@ -245,7 +255,7 @@ func openCodeRevokeOnly(r Request) bool {
 }
 
 func geminiRevokeOnly(r Request) bool {
-	if r.RevokeOpenCode || !r.PolicyOnly || !r.RefreshOnly || r.Owner != "existing-installer" || r.ConsumerID != "gemini-notifications" ||
+	if r.RevokeCopilotVSCode || r.RevokeOpenCode || !r.PolicyOnly || !r.RefreshOnly || r.Owner != "existing-installer" || r.ConsumerID != "gemini-notifications" ||
 		r.ExpectedGeneration == nil || r.ExpectedPolicy == nil || r.PolicyEnabled != nil ||
 		len(r.PolicyFields) != 1 || string(r.PolicyFields["route"]) != `{"geminiNotifications":{"desktop":false,"webhook":false}}` ||
 		len(r.Files) != 0 || len(r.ConfigPaths) != 0 || r.Prepare != nil || r.Native != nil ||
@@ -263,7 +273,7 @@ func rawPolicyRequest(r Request) bool {
 		r.ExpectedGeneration != nil && r.ExpectedPolicy != nil && r.Prepare != nil &&
 		r.PolicyEnabled == nil && len(r.PolicyFields) == 0 && len(r.Files) == 0 && len(r.ConfigPaths) == 0 &&
 		r.Native == nil && !r.RemoveConsumer && !r.PurgeNative && !r.RetireNative && !r.RollbackPending &&
-		!r.RecoverOnly && !r.RevokeOpenCode && !r.RevokeGemini && !r.RelocateVersionedCache &&
+		!r.RecoverOnly && !r.RevokeOpenCode && !r.RevokeGemini && !r.RevokeCopilotVSCode && !r.RelocateVersionedCache &&
 		r.Reservation == nil && !r.ClearReservation && reflect.DeepEqual(r.Consumer, Consumer{})
 }
 
@@ -345,4 +355,132 @@ func validRawPolicyRegistration(l Ledger, c Consumer) bool {
 	executable, executableOK := OwnedFile(l, c.Commands[0])
 	return ok && bundle.Exists && bundle.Link == "" && bundle.SHA256 == c.OpenCode.BundleSHA256 &&
 		executableOK && executable.Exists && executable.Link == ""
+}
+
+// Only the fixed Local object and its manual object merge at leaf granularity.
+// Unknown leaves survive; malformed existing containers are never reconstructed.
+func mergeCopilotPolicy(old, patch json.RawMessage) (json.RawMessage, error) {
+	current, err := copilotObject(old, true)
+	if err != nil {
+		return nil, err
+	}
+	// A malformed existing manual container also refuses a native-only patch.
+	if _, err := copilotObject(current["manual"], true); err != nil {
+		return nil, err
+	}
+	changes, err := copilotObject(patch, false)
+	if err != nil {
+		return nil, err
+	}
+	for key, value := range changes {
+		if key == "manual" {
+			manual, err := copilotObject(current[key], true)
+			if err != nil {
+				return nil, err
+			}
+			leaves, err := copilotObject(value, false)
+			if err != nil {
+				return nil, err
+			}
+			for leaf, raw := range leaves {
+				manual[leaf] = raw
+			}
+			value, err = json.Marshal(manual)
+			if err != nil {
+				return nil, err
+			}
+		}
+		current[key] = value
+	}
+	return json.Marshal(current)
+}
+
+func copilotObject(raw json.RawMessage, absent bool) (map[string]json.RawMessage, error) {
+	if raw == nil && absent {
+		return map[string]json.RawMessage{}, nil
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil || fields == nil {
+		return nil, fmt.Errorf("invalid Local policy container")
+	}
+	return fields, nil
+}
+
+// RevokeCopilotVSCode permits precisely native, manual, or all false leaves.
+// Consumer bytes must be supplied from the single recorded portable binding.
+func copilotRevokeOnly(r Request) bool {
+	if r.RevokeGemini || r.RevokeOpenCode || !r.PolicyOnly || !r.RefreshOnly ||
+		r.Owner != "existing-installer" || r.ExpectedGeneration == nil || r.ExpectedPolicy == nil ||
+		r.PolicyEnabled != nil || len(r.PolicyFields) != 1 || len(r.Files) != 0 ||
+		len(r.ConfigPaths) != 0 || r.Prepare != nil || r.Native != nil || r.RemoveConsumer ||
+		r.PurgeNative || r.RetireNative || r.RollbackPending || r.RecoverOnly ||
+		r.Reservation != nil || r.ClearReservation || r.RelocateVersionedCache {
+		return false
+	}
+	if !filepath.IsAbs(r.RuntimeRoot) || filepath.Clean(r.RuntimeRoot) != r.RuntimeRoot ||
+		r.Consumer.RuntimeRoot != r.RuntimeRoot || !localPortableConsumer(r.ConsumerID, r.Consumer) {
+		return false
+	}
+	raw := r.PolicyFields["route"]
+	if strictjson.Validate(raw, strictjson.Budget{Bytes: 1024, Depth: 4, Entries: 8}) != nil {
+		return false
+	}
+	route, err := copilotObject(raw, false)
+	if err != nil || len(route) != 1 {
+		return false
+	}
+	leaves, err := copilotObject(route["copilotVSCodeNotifications"], false)
+	if err != nil {
+		return false
+	}
+	native, manual := false, false
+	for key, raw := range leaves {
+		switch key {
+		case "desktop", "webhook":
+			if !bytes.Equal(bytes.TrimSpace(raw), []byte("false")) {
+				return false
+			}
+			native = true
+		case "manual":
+			m, err := copilotObject(raw, false)
+			if err != nil || len(m) != 1 || !bytes.Equal(bytes.TrimSpace(m["enabled"]), []byte("false")) {
+				return false
+			}
+			manual = true
+		default:
+			return false
+		}
+	}
+	if native && (leaves["desktop"] == nil || leaves["webhook"] == nil) {
+		return false
+	}
+	return native || manual
+}
+
+// No per-file consumer ownership is inferred. This only recognizes the recorded
+// registration's identity; portable owns the complete binding validation.
+func localPortableConsumer(key string, c Consumer) bool {
+	if !strings.HasPrefix(key, "portable:") || len(c.Commands) != 1 ||
+		!filepath.IsAbs(c.RuntimeRoot) || filepath.Clean(c.RuntimeRoot) != c.RuntimeRoot ||
+		!pathWithinRoot(c.RuntimeRoot, c.Commands[0]) || filepath.Clean(c.Commands[0]) != c.Commands[0] {
+		return false
+	}
+	sum := sha256.Sum256([]byte(c.Registration))
+	if key != "portable:"+hex.EncodeToString(sum[:]) {
+		return false
+	}
+	if strictjson.Validate([]byte(c.Registration), strictjson.Budget{Bytes: 16384, Depth: 4, Entries: 32}) != nil {
+		return false
+	}
+	var b struct{ Integration, Owner, RuntimeRoot string }
+	return json.Unmarshal([]byte(c.Registration), &b) == nil && b.Integration == "copilot-vscode" &&
+		b.Owner == "existing-installer" && b.RuntimeRoot == c.RuntimeRoot
+}
+
+func localPolicyMutation(r Request) bool {
+	if r.RevokeCopilotVSCode || localPortableConsumer(r.ConsumerID, r.Consumer) {
+		return true
+	}
+	var route map[string]json.RawMessage
+	return json.Unmarshal(r.PolicyFields["route"], &route) == nil && route["copilotVSCodeNotifications"] != nil
 }

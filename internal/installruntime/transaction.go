@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/777genius/agent-notifications/internal/strictjson"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -88,6 +89,9 @@ type Request struct {
 	// RevokeGemini permits only Gemini's exact desktop/webhook false patch.
 	// Damaged assets do not prevent revocation; ownership and CAS still apply.
 	RevokeGemini bool
+	// RevokeCopilotVSCode is the exact false-only portable Local specialization.
+	// It skips delivery readiness, never written-file anchors, ownership or CAS.
+	RevokeCopilotVSCode bool
 	// PolicyOnly requires an already-managed runtime and existing kernel locks.
 	// It refuses recovery and asset/consumer mutations; setup cannot accidentally
 	// promote native or rewrite hooks from an unrelated pending transaction.
@@ -166,6 +170,9 @@ func readLedger(root string) (Ledger, error) {
 	}
 	if err != nil {
 		return l, err
+	}
+	if strictjson.Validate(data, strictjson.Budget{Bytes: maxManagedFile, Depth: 32, Entries: 100000}) != nil {
+		return l, fmt.Errorf("invalid ownership ledger JSON")
 	}
 	err = json.Unmarshal(data, &l)
 	if err == nil && (!acceptedLedgerSchema(l.Schema) || l.ID == "" || l.Generation == 0 || l.Consumers == nil || l.Files == nil) {
@@ -289,6 +296,9 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 		r.ExpectedGeneration, r.ExpectedPolicy = &generation, &policy
 	}
 
+	if r.RevokeCopilotVSCode && !copilotRevokeOnly(r) {
+		return Ledger{}, fmt.Errorf("invalid Copilot VS Code channel revocation")
+	}
 	if r.RevokeOpenCode && !openCodeRevokeOnly(r) {
 		return Ledger{}, fmt.Errorf("invalid OpenCode channel revocation")
 	}
@@ -314,7 +324,7 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 	}
 	// Only the already-validated exact Gemini false patch may use a recorded
 	// runtime name without resolving damaged assets. Compare it under both locks.
-	if filepath.IsAbs(r.RuntimeRoot) && !r.RevokeGemini {
+	if filepath.IsAbs(r.RuntimeRoot) && !r.RevokeGemini && !r.RevokeCopilotVSCode {
 		r.RuntimeRoot, err = CanonicalPath(r.RuntimeRoot)
 		if err != nil {
 			return Ledger{}, err
@@ -397,10 +407,14 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 	if err != nil {
 		return l, err
 	}
-	if l.WriterFloor > OpenCodeWriterFloor {
+	if l.WriterFloor > SupportedWriterFloor {
 		return l, fmt.Errorf("installed writer floor requires a newer compatible kernel")
 	}
-	if err := validateWriterFiles(r.Files); err != nil {
+	floor := l.WriterFloor
+	if localPolicyMutation(r) && floor < LocalPolicyWriterFloor {
+		floor = LocalPolicyWriterFloor
+	}
+	if err := validateWriterFilesAtFloor(r.Files, floor); err != nil {
 		return l, err
 	}
 	if readErr == nil {
@@ -430,6 +444,9 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 			return l, err
 		}
 		l = pending.After
+		if l.WriterFloor > SupportedWriterFloor {
+			return l, fmt.Errorf("recovered writer floor requires a newer compatible kernel")
+		}
 		if r.RecoverOnly {
 			return l, nil
 		}
@@ -442,11 +459,22 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 		}
 	}
 
+	// Recovery can promote the floor: never continue with pre-recovery capability.
+	if l.WriterFloor > SupportedWriterFloor {
+		return l, fmt.Errorf("recovered writer floor requires a newer compatible kernel")
+	}
+	floor = l.WriterFloor
+	if localPolicyMutation(r) && floor < LocalPolicyWriterFloor {
+		floor = LocalPolicyWriterFloor
+	}
+	if err := validateWriterFilesAtFloor(r.Files, floor); err != nil {
+		return l, err
+	}
 	if err := reservationAllows(r, l); err != nil {
 		return l, err
 	}
 
-	if l.Native != nil && !policyDisableOnly(r) && !r.RevokeOpenCode && !r.RevokeGemini {
+	if l.Native != nil && !policyDisableOnly(r) && !r.RevokeOpenCode && !r.RevokeGemini && !r.RevokeCopilotVSCode {
 		if err := validateNativeRecord(l.Native); err != nil {
 			return l, err
 		}
@@ -472,6 +500,19 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 		l.ID == "" || l.Schema != 4 || l.WriterFloor != OpenCodeWriterFloor || l.PolicyGeneration == 0 ||
 		!validRawPolicyRegistration(l, previous)) {
 		return l, fmt.Errorf("raw policy requires an existing origin-bound OpenCode registration")
+	}
+	if r.RevokeCopilotVSCode {
+		// Structural ledger validity is required even when its delivery tree is damaged.
+		if err := validateNativeRecord(l.Native); err != nil {
+			return l, err
+		}
+		var binding struct{ ComponentID, ControlRoot string }
+		if json.Unmarshal([]byte(previous.Registration), &binding) != nil || binding.ComponentID != l.ID || binding.ControlRoot != r.ControlRoot {
+			return l, fmt.Errorf("local revocation binding/owner mismatch")
+		}
+	}
+	if r.RevokeCopilotVSCode && (!registered || !reflect.DeepEqual(previous, r.Consumer) || !localPortableConsumer(r.ConsumerID, previous)) {
+		return l, fmt.Errorf("local revocation requires its exact recorded portable consumer")
 	}
 	if r.RevokeOpenCode && (!registered || previous.RuntimeRoot != r.RuntimeRoot || previous.Registration == "") {
 		return l, fmt.Errorf("OpenCode revocation requires its registered runtime")
@@ -559,7 +600,7 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 		}
 	}
 	for path, want := range l.Files {
-		if r.RevokeOpenCode || r.RevokeGemini {
+		if r.RevokeOpenCode || r.RevokeGemini || r.RevokeCopilotVSCode {
 			break
 		}
 		// Claude owns the previous versioned cache: it may prune files or
@@ -777,7 +818,7 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 			files = append(files, File{Path: path, Before: before, Remove: true})
 		}
 	}
-	if err := validateWriterFiles(files); err != nil {
+	if err := validateWriterFilesAtFloor(files, next.WriterFloor); err != nil {
 		return l, err
 	}
 	seen := map[string]bool{}
@@ -865,7 +906,7 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 	return next, nil
 }
 func recoverTransaction(ctx context.Context, root string, current Ledger, tx transaction, fault func(string) error) error {
-	if tx.After.WriterFloor > OpenCodeWriterFloor {
+	if tx.After.WriterFloor > SupportedWriterFloor {
 		return fmt.Errorf("recovery requires a newer compatible kernel")
 	}
 	if err := validateOpenCodeDecision(root, tx); err != nil {

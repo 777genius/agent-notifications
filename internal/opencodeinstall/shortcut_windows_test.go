@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
+	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 )
 
@@ -302,5 +303,59 @@ func TestWindowsSharedRemovalUsesOwnedShortcutPathAfterHomeChange(t *testing.T) 
 	}
 	if _, ok := ledger.Consumers["other-test-consumer"]; !ok {
 		t.Fatal("other consumer removed")
+	}
+}
+
+// RED: Local stage/readiness consults a fixed consumer instead of the verified
+// portable key, creates a second identity, or accepts a copied/wrong binding.
+func TestWindowsLocalShortcutUsesRecordedPortableConsumer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	base, err := installruntime.CanonicalPath(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, run, home := filepath.Join(base, "control"), filepath.Join(base, "runtime"), filepath.Join(base, "TEST-profile")
+	l, err := installruntime.Commit(ctx, installruntime.Request{ControlRoot: root, RuntimeRoot: run, Owner: "existing-installer", ConsumerID: "sibling", Consumer: installruntime.Consumer{Registration: "sibling"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	primary := filepath.Join(run, "primary.exe")
+	b := portable.Binding{Version: 1, Integration: portable.CopilotVSCode, InstallationID: "TEST-install", BindingID: "TEST-binding", ScopeID: "TEST-scope", ComponentID: l.ID, Owner: l.Owner, ScopeRoot: base, DataRoot: base, ControlRoot: root, GlobalConfig: filepath.Join(root, "agent-notifications.json"), RuntimeRoot: run, Primary: "primary.exe"}
+	key, c, _, err := b.Registration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, err = installruntime.Commit(ctx, installruntime.Request{ControlRoot: root, RuntimeRoot: run, Owner: l.Owner, ConsumerID: key, Consumer: c, ExpectedGeneration: &l.Generation, Files: []installruntime.File{{Path: primary, Data: []byte("inert TEST writer " + installruntime.LocalWriterProtocolMarker), Mode: 0700}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := StageLocalWindowsShortcut(key, home, primary, true, l)
+	if err != nil || file == nil {
+		t.Fatalf("Local stage: %+v %v", file, err)
+	}
+	l, err = installruntime.Commit(ctx, installruntime.Request{ControlRoot: root, RuntimeRoot: run, Owner: l.Owner, ConsumerID: key, RefreshOnly: true, ExpectedGeneration: &l.Generation, Files: []installruntime.File{*file}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := localWindowsIdentity(key, l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := windowsShortcutReadyIdentity(id, root, primary, home); err != nil {
+		t.Fatal(err)
+	}
+	if len(l.Consumers) != 2 || l.Consumers[key].Registration != c.Registration {
+		t.Fatal("Local shortcut minted another registration")
+	}
+	if _, err := StageWindowsShortcut(CopilotVSCodeDesktop, home, primary, true, l); err == nil {
+		t.Fatal("Local fixed-key wrapper admitted shortcut")
+	}
+	if _, err := StageLocalWindowsShortcut("portable:wrong", home, primary, true, l); err == nil {
+		t.Fatal("wrong portable consumer admitted shortcut")
+	}
+	file, err = StageLocalWindowsShortcut(key, home, primary, false, l)
+	if err != nil || file == nil || !file.Remove {
+		t.Fatalf("Local owned cleanup stage: %+v %v", file, err)
 	}
 }

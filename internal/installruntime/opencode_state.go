@@ -14,8 +14,10 @@ import (
 	"github.com/777genius/agent-notifications/internal/strictjson"
 )
 
-const OpenCodeWriterFloor = 3
-const OpenCodeWriterProtocolMarker = "agent-notifications-managed-writer-protocol-v3"
+// OpenCode private Init/Purge recovery must be refused by the published Local3 kernel
+// before it reads blobs or publishes generic files. Ledger/journal schema4 is retained.
+const OpenCodeWriterFloor = 4
+const OpenCodeWriterProtocolMarker = "agent-notifications-managed-writer-protocol-v4"
 const OpenCodeStoreLimit = 1 << 20
 const OpenCodeStoreLock = ".opencode-admission.lock"
 const openCodeConsumer = "opencode-notifications"

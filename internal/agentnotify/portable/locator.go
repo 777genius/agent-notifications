@@ -29,8 +29,9 @@ var errExists = errors.New("portable_locator_exists")
 type Integration string
 
 const (
-	Codex  Integration = "codex"
-	Claude Integration = "claude"
+	Codex         Integration = "codex"
+	Claude        Integration = "claude"
+	CopilotVSCode Integration = "copilot-vscode"
 )
 
 // Binding is immutable consumer identity. Generation is deliberately excluded:
@@ -85,7 +86,7 @@ func primaryPath(root, primary string) string {
 // commit under the component lock/CAS before publishing locator bytes. Calling
 // this pure function does not establish UAP receipt ownership or authorize setup.
 func (b Binding) Registration() (string, installruntime.Consumer, []byte, error) {
-	if b.Version != 1 || (b.Integration != Codex && b.Integration != Claude) || b.Owner != "existing-installer" {
+	if b.Version != 1 || (b.Integration != Codex && b.Integration != Claude && b.Integration != CopilotVSCode) || b.Owner != "existing-installer" {
 		return "", installruntime.Consumer{}, nil, ErrInvalid
 	}
 	for _, s := range []string{b.InstallationID, b.BindingID, b.ScopeID, b.ComponentID} {
@@ -413,7 +414,7 @@ func Acquire(ctx context.Context, data, name string) (*Lease, error) {
 // consumer on every policy read. Revocation does not require deleting shared data.
 func (b Binding) CheckSnapshot(snapshot installruntime.InstalledSnapshot) error {
 	ledger := snapshot.Ledger
-	if snapshot.Recovery || ledger.ID != b.ComponentID || ledger.Owner != b.Owner || !samePhysicalPath(ledger.RuntimeRoot, b.RuntimeRoot) || ledger.WriterFloor > installruntime.ReservationWriterFloor || ledger.DecoderFloor > 1 {
+	if snapshot.Recovery || ledger.ID != b.ComponentID || ledger.Owner != b.Owner || !samePhysicalPath(ledger.RuntimeRoot, b.RuntimeRoot) || ledger.WriterFloor > installruntime.SupportedWriterFloor || ledger.DecoderFloor > 1 {
 		return ErrInvalid
 	}
 	key, want, _, err := b.Registration()

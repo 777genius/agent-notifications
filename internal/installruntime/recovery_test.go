@@ -2,13 +2,19 @@ package installruntime
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func recoveryTransaction() transaction {
@@ -330,4 +336,224 @@ func copyTree(src, dst string) error {
 		}
 		return closeErr
 	})
+}
+
+// Public first-journal crash must refuse malformed write sets without durable effects.
+// Only public Commit/Recover and the existing first-journal Fault seam are used.
+func TestSchema4PublicRecoveryIntegrity(t *testing.T) {
+	for _, kind := range []string{
+		"valid", "valid-policy-only", "valid-empty-changes", "legacy-v1", "legacy-v2", "legacy-v3",
+		"unsupported-schema-before-blob", "unsupported-floor-before-blob",
+		"duplicate-changes-before-blob", "casefold-changes-before-blob",
+		"unknown-changes-before-blob", "extra-carrier-before-blob",
+		"missing-changes-before-blob", "null-changes-before-blob", "null-files-before-blob", "object-changes-before-blob",
+		"casefold-files-before-blob", "duplicate-envelope-before-blob",
+	} {
+		t.Run(kind, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			base := t.TempDir()
+			root, run := filepath.Join(base, "TEST-control"), filepath.Join(base, "TEST-runtime")
+			if err := os.Mkdir(run, 0700); err != nil {
+				t.Fatal(err)
+			}
+			initial := Request{ControlRoot: root, RuntimeRoot: run,
+				Owner: "existing-installer", ConsumerID: "TEST-sibling", Consumer: Consumer{Registration: "TEST-sibling"}}
+			ledger, err := Commit(ctx, initial)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if kind == "valid-empty-changes" {
+				ledger, err = Commit(ctx, Request{ControlRoot: root, RuntimeRoot: run,
+					Owner: ledger.Owner, ConsumerID: "TEST-sibling", RefreshOnly: true, ExpectedGeneration: &ledger.Generation,
+					PolicyFields: map[string]json.RawMessage{"route": json.RawMessage(`{"copilotVSCodeNotifications":{"desktop":false}}`)}})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			payload := bytes.Repeat([]byte("TEST"), 300000)
+			path := filepath.Join(run, "TEST-payload")
+			files := []File{{Path: path, Data: payload, Mode: 0600}}
+			if kind == "valid-policy-only" || kind == "valid-empty-changes" {
+				files = nil
+			}
+			policyFields := map[string]json.RawMessage{"route": json.RawMessage(`{"copilotVSCodeNotifications":{"desktop":false}}`)}
+			if strings.HasPrefix(kind, "legacy-") || kind == "valid-empty-changes" {
+				policyFields = nil
+			}
+			crash := errors.New("TEST first journal crash")
+			_, err = Commit(ctx, Request{ControlRoot: root, RuntimeRoot: run,
+				Owner: ledger.Owner, ConsumerID: "TEST-sibling", RefreshOnly: true, ExpectedGeneration: &ledger.Generation,
+				Files:        files,
+				PolicyFields: policyFields,
+				Fault: func(phase string) error {
+					if phase == "transaction" {
+						return crash
+					}
+					return nil
+				}})
+			if !errors.Is(err, crash) {
+				t.Fatalf("first journal crash: %v", err)
+			}
+			marker := filepath.Join(root, "transaction.json")
+			raw, err := os.ReadFile(marker)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var envelope struct {
+				SHA256      string
+				Transaction json.RawMessage
+			}
+			if err := json.Unmarshal(raw, &envelope); err != nil {
+				t.Fatal(err)
+			}
+			var tx map[string]json.RawMessage
+			if err := json.Unmarshal(envelope.Transaction, &tx); err != nil {
+				t.Fatal(err)
+			}
+			legacy := strings.HasPrefix(kind, "legacy-")
+			if !legacy && string(tx["Schema"]) != "4" {
+				t.Fatalf("expected schema4 journal: %s", tx["Schema"])
+			}
+			malformed := kind != "valid" && kind != "valid-policy-only" && kind != "valid-empty-changes" && !legacy
+			if malformed || legacy {
+				var changes struct{ Changes json.RawMessage }
+				if !legacy {
+					if err := json.Unmarshal(tx["Files"], &changes); err != nil {
+						t.Fatal(err)
+					}
+				}
+				switch kind {
+				case "legacy-v1", "legacy-v2", "legacy-v3":
+					tx["Schema"] = json.RawMessage(strings.TrimPrefix(kind, "legacy-v"))
+				case "unsupported-schema-before-blob":
+					tx["Schema"] = json.RawMessage("5")
+				case "unsupported-floor-before-blob":
+					var after map[string]json.RawMessage
+					if err := json.Unmarshal(tx["After"], &after); err != nil {
+						t.Fatal(err)
+					}
+					after["WriterFloor"] = json.RawMessage(fmt.Sprintf("%d", SupportedWriterFloor+1))
+					tx["After"], err = json.Marshal(after)
+					if err != nil {
+						t.Fatal(err)
+					}
+				case "duplicate-changes-before-blob":
+					tx["Files"] = json.RawMessage(`{"Changes":` + string(changes.Changes) + `,"Changes":[]}`)
+				case "casefold-changes-before-blob":
+					tx["Files"] = json.RawMessage(`{"Changes":` + string(changes.Changes) + `,"changes":[]}`)
+				case "unknown-changes-before-blob":
+					tx["Files"] = json.RawMessage(`{"PendingChanges":` + string(changes.Changes) + `}`)
+				case "extra-carrier-before-blob":
+					tx["Files"] = json.RawMessage(`{"Changes":` + string(changes.Changes) + `,"PendingChanges":[]}`)
+				case "missing-changes-before-blob":
+					tx["Files"] = json.RawMessage(`{}`)
+				case "null-changes-before-blob":
+					tx["Files"] = json.RawMessage(`{"Changes":null}`)
+				case "null-files-before-blob":
+					tx["Files"] = json.RawMessage(`null`)
+				case "object-changes-before-blob":
+					tx["Files"] = json.RawMessage(`{"Changes":{}}`)
+				case "casefold-files-before-blob":
+					tx["files"] = json.RawMessage(`{"Changes":[]}`)
+				}
+				compact, err := json.Marshal(tx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				sum := sha256.Sum256(compact)
+				envelope.SHA256, envelope.Transaction = hex.EncodeToString(sum[:]), compact
+				raw, err = json.Marshal(envelope)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if kind == "duplicate-envelope-before-blob" {
+					raw = []byte(`{"SHA256":"` + envelope.SHA256 + `","Transaction":` + string(compact) + `,"Transaction":` + string(compact) + `}`)
+				}
+				if err := os.WriteFile(marker, raw, 0600); err != nil {
+					t.Fatal(err)
+				}
+				if malformed {
+					blobs := filepath.Join(root, "transaction.blobs")
+					if err := os.Rename(blobs, blobs+"-held"); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if kind == "valid-empty-changes" && string(tx["Files"]) != `{"Changes":[]}` {
+				var empty struct{ Changes json.RawMessage }
+				if json.Unmarshal(tx["Files"], &empty) != nil || string(empty.Changes) != "[]" {
+					t.Fatalf("public empty journal did not encode an array: %s", tx["Files"])
+				}
+			}
+			before := recoveryFilesystemSnapshot(t, base)
+			after, err := Recover(ctx, root)
+			if !malformed {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if kind != "valid-policy-only" && kind != "valid-empty-changes" {
+					got, err := os.ReadFile(path)
+					if err != nil || !bytes.Equal(got, payload) {
+						t.Fatalf("valid recovery lost payload: %v", err)
+					}
+				}
+				if !legacy && (after.WriterFloor != 3 || after.Schema != 3) {
+					t.Fatalf("valid recovery lost barrier: floor=%d schema=%d", after.WriterFloor, after.Schema)
+				}
+				if _, err := ReadInstalledSnapshot(root); err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			unchanged := reflect.DeepEqual(before, recoveryFilesystemSnapshot(t, base))
+			if err == nil || !unchanged {
+				_, payloadErr := os.Stat(path)
+				_, markerErr := os.Stat(marker)
+				_, readinessErr := ReadInstalledSnapshot(root)
+				t.Fatalf("malformed schema4 recovery: err=%v unchanged=%v floor=%d generation=%d->%d payload=%v journal=%v readiness=%v",
+					err, unchanged, after.WriterFloor, ledger.Generation, after.Generation, payloadErr, markerErr, readinessErr)
+			}
+			if strings.Contains(err.Error(), "no such file") {
+				t.Fatalf("malformed journal reached unavailable blobs: %v", err)
+			}
+			if kind == "unsupported-schema-before-blob" && !strings.Contains(err.Error(), "unsupported transaction schema") {
+				t.Fatalf("unknown schema reached unavailable blobs: %v", err)
+			}
+			if kind == "unsupported-floor-before-blob" && !strings.Contains(err.Error(), "unsupported transaction writer floor") {
+				t.Fatalf("unknown floor reached unavailable blobs: %v", err)
+			}
+		})
+	}
+}
+
+func recoveryFilesystemSnapshot(t *testing.T, root string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		out[rel] = info.Mode().String()
+		if !entry.IsDir() {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			out[rel] += fmt.Sprintf(":%x", sha256.Sum256(data))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
