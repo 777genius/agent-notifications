@@ -677,6 +677,23 @@ def run_case(root, metadata, os_name, arch, job_end):
         operation_started = time.monotonic()
         operation_end = min(js_end, job_end, operation_started + 2)
         own.send(host, {'kind': 'begin'}, operation_end)
+        if os_name == 'windows':
+            stage = 'source_import_observation'
+            ready = own.message(host, 'source_ready', operation_end)
+            windows_leaf = next(x for x in metadata['moduleLeaves'] if x['path'] == 'opencode-plugin/windows-clock.mjs')
+            need(set(ready) == {'kind', 'pid', 'sourceCommit', 'windowsModuleSHA256', 'samplerCreated', 'samples'} and
+                 ready['pid'] == host['p'].pid and ready['sourceCommit'] == metadata['sourceCommit'] and
+                 ready['windowsModuleSHA256'] == windows_leaf['actualSHA256'] and
+                 ready['samplerCreated'] is False and type(ready['samples']) is int and ready['samples'] == 0,
+                 'actual_presampler_source_import')
+            imported_resources = native_resources(host['p'], os_name)
+            safe['nativeImportResourceObservation'] = {
+                'measurementKind': 'GetProcessHandleCount', 'before': resources_before, 'after': imported_resources,
+                'delta': imported_resources - resources_before,
+                'baselineStage': 'loader_received_before_begin', 'stage': stage,
+                'samplerCreated': False, 'samples': 0,
+                'operationElapsedMs': round((time.monotonic() - operation_started) * 1000, 3)}
+            own.send(host, {'kind': 'sampler_begin'}, operation_end)
         helper_receipts = []
         helper_lifecycle = []
         for round_number in range(3):
@@ -726,6 +743,10 @@ def run_case(root, metadata, os_name, arch, job_end):
                 'afterOperationElapsedMs': round((resource_after_at - operation_started) * 1000, 3),
                 'disposedFrameObserved': disposed_observed, 'helperRound': round_number,
                 'helperStarts': own.helpers, 'helperActualCloses': own.helper_closes}
+        if os_name == 'windows':
+            safe['nativeImportResourceObservation']['postDispose'] = resources_after
+            safe['nativeImportResourceObservation']['samplerPhaseDelta'] = resources_after - imported_resources
+        # Preserve the ORIGINAL total nonincrease gate; diagnostics grant nothing.
         need(resources_after <= resources_before, 'actual_module_resource_leak')
         kernel_image(host['p'], exe, os_name)
         stage = 'finish'

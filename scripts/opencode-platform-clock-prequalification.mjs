@@ -159,6 +159,18 @@ async function execute(rootInput) {
     const operationStart = performance.now();
     const dispatch = await import(pathToFileURL(modulePaths['opencode-plugin/platform-clock.mjs']).href);
     budgetCheck(performance.now(), operationStart, samples, 0);
+    if (process.platform === 'win32') {
+      // Diagnostic import phase only: no dlopen, linkSymbols or sampler call.
+      const windowsPath = modulePaths['opencode-plugin/windows-clock.mjs'];
+      await import(pathToFileURL(windowsPath).href);
+      const ffi = await import('bun:ffi');
+      need(['dlopen', 'ptr', 'linkSymbols'].every(k => typeof ffi[k] === 'function'), 'actual_plain_ffi_exports');
+      budgetCheck(performance.now(), operationStart, samples, 0);
+      send({ kind: 'source_ready', pid: process.pid, sourceCommit: m.sourceCommit,
+        windowsModuleSHA256: hash(readFileSync(windowsPath)), samplerCreated: false, samples });
+      await receive('sampler_begin');
+      budgetCheck(performance.now(), operationStart, samples, 0);
+    }
     clock = await dispatch.createPlatformClock(); // The only clock implementation called here.
     need(clock && Object.isFrozen(clock) && typeof clock.sample === 'function' && typeof clock.dispose === 'function', 'actual_module_lifecycle');
     budgetCheck(performance.now(), operationStart, samples, 0);
