@@ -76,6 +76,11 @@ func (f nativeHookFixture) question(t *testing.T, product, turn, transcript stri
 	if title != nil {
 		payload["session_title"] = title
 	}
+	return f.runHook(t, product, "PreToolUse", payload)
+}
+
+func (f nativeHookFixture) runHook(t *testing.T, product, event string, payload map[string]any) []string {
+	t.Helper()
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		t.Fatal(err)
@@ -85,7 +90,7 @@ func (f nativeHookFixture) question(t *testing.T, product, turn, transcript stri
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, f.binary, "handle-hook", "PreToolUse", "--product", product)
+	cmd := exec.CommandContext(ctx, f.binary, "handle-hook", event, "--product", product)
 	cmd.Dir, cmd.Env, cmd.Stdin = f.cwd, f.env, strings.NewReader(string(raw))
 	output, err := cmd.CombinedOutput()
 	if err != nil || len(output) != 0 {
@@ -177,4 +182,29 @@ func TestNativeHookE2ECodexMetadataFallback(t *testing.T) {
 func TestNativeHookE2EHiddenLabel(t *testing.T) {
 	f := newNativeHookFixture(t, false)
 	assertNativeHookQuestion(t, f.question(t, "claude", "turn-1", "", "Hidden [SDK] | name"), "sandbox-project")
+}
+
+// Regression: the public completion hook must deliver the concise native title
+// while retaining the opaque thread identity and the final assistant message.
+func TestNativeHookE2EClaudeCompletionTitle(t *testing.T) {
+	f := newNativeHookFixture(t, true)
+	args := f.runHook(t, "claude", "Stop", map[string]any{
+		"session_id": nativeHookSession, "cwd": f.cwd, "hook_event_name": "Stop",
+		"session_title": "Понятные уведомления", "last_assistant_message": "Completed the notification change.",
+	})
+	for flag, want := range map[string]string{
+		"-title": "✅ [Понятные уведомления]", "-subtitle": "sandbox-project",
+		"-message": "Completed the notification change.", "-threadID": nativeHookSession,
+	} {
+		var got string
+		count := 0
+		for i := 0; i+1 < len(args); i++ {
+			if args[i] == flag {
+				got, count = args[i+1], count+1
+			}
+		}
+		if count != 1 || got != want {
+			t.Fatalf("%s: got %q (%d occurrences), want %q; args=%q", flag, got, count, want, args)
+		}
+	}
 }

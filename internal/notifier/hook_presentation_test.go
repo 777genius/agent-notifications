@@ -22,7 +22,7 @@ func TestHookPresentationLiteralNativeTitleAndQuestion(t *testing.T) {
 		t.Fatalf("question presentation = %+v", question)
 	}
 	complete := hookPresentation(analyzer.StatusTaskComplete, content, "✅ Completed", true)
-	if complete.Title != "✅ Completed [Fix [SDK] | installer]" || complete.Subtitle != "feat/very-long-branch · agent-notifications" {
+	if complete.Title != "✅ [Fix [SDK] | installer]" || complete.Subtitle != "feat/very-long-branch · agent-notifications" {
 		t.Fatalf("completion presentation = %+v", complete)
 	}
 	for _, status := range []analyzer.Status{analyzer.StatusQuestion, analyzer.StatusTaskComplete} {
@@ -100,5 +100,66 @@ func TestSendDesktopUsesStructuredHookPresentation(t *testing.T) {
 				t.Fatalf("delivered title=%q body=%q", title, body)
 			}
 		})
+	}
+}
+
+// Regression: default completion titles become concise only when a visible
+// session label is appended; custom titles and other statuses retain their text.
+func TestCompletionSessionLabelTitles(t *testing.T) {
+	for _, tc := range []struct {
+		name, title, label, want string
+		status                   analyzer.Status
+		show                     bool
+	}{
+		{"default", "✅ Completed", "Понятные уведомления", "✅ [Понятные уведомления]", analyzer.StatusTaskComplete, true},
+		{"custom", "✅ Shipped", "Session", "✅ Shipped [Session]", analyzer.StatusTaskComplete, true},
+		{"custom near default", "✅ Completed!", "Session", "✅ Completed! [Session]", analyzer.StatusTaskComplete, true},
+		{"hidden", "✅ Completed", "Session", "✅ Completed", analyzer.StatusTaskComplete, false},
+		{"absent", "✅ Completed", "", "✅ Completed", analyzer.StatusTaskComplete, true},
+		{"other status", "✅ Completed", "Session", "✅ Completed [Session]", analyzer.StatusReviewComplete, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			message := "Exact body"
+			if tc.label != "" {
+				message = "[" + tc.label + "|main sandbox] " + message
+			}
+			for path, got := range map[string]legacyDesktopPresentation{
+				"structured": hookPresentation(tc.status, HookPresentation{SessionName: tc.label, Branch: "main", Folder: "sandbox", Body: "Exact body"}, tc.title, tc.show),
+				"legacy":     legacyPresentation(tc.status, message, tc.title, tc.show),
+			} {
+				if got.Title != tc.want || got.Body != "Exact body" {
+					t.Fatalf("%s presentation = %+v, want title %q and unchanged body", path, got, tc.want)
+				}
+				wantSubtitle := "main · sandbox"
+				if path == "legacy" && tc.label == "" {
+					wantSubtitle = ""
+				}
+				if got.Subtitle != wantSubtitle {
+					t.Fatalf("%s subtitle = %q, want %q", path, got.Subtitle, wantSubtitle)
+				}
+			}
+		})
+	}
+}
+
+// Session shortening belongs to structured presentation only; the concise
+// completion prefix must neither change its rune limit nor shorten legacy labels.
+func TestCompletionSessionLabelTruncation(t *testing.T) {
+	label := strings.Repeat("界", 101)
+	structured := hookPresentation(analyzer.StatusTaskComplete, HookPresentation{SessionName: label}, "✅ Completed", true)
+	if structured.Title != "✅ ["+strings.Repeat("界", 99)+"…]" {
+		t.Fatalf("structured completion title = %q", structured.Title)
+	}
+	legacy := legacyPresentation(analyzer.StatusTaskComplete, "["+label+"] body", "✅ Completed", true)
+	if legacy.Title != "✅ ["+label+"]" {
+		t.Fatalf("legacy completion title = %q", legacy.Title)
+	}
+	legacyBlank := legacyPresentation(analyzer.StatusTaskComplete, "[ \t ] body", "✅ Completed", true)
+	if legacyBlank.Title != "✅ Completed [ \t ]" {
+		t.Fatalf("blank legacy label changed default title: %q", legacyBlank.Title)
+	}
+	blank := hookPresentation(analyzer.StatusTaskComplete, HookPresentation{SessionName: " \t "}, "✅ Completed", true)
+	if blank.Title != "✅ Completed []" {
+		t.Fatalf("empty normalized label changed default title: %q", blank.Title)
 	}
 }
