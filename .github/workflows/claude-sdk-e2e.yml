@@ -1,0 +1,128 @@
+name: Claude SDK native blackbox E2E
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/claude-sdk-e2e.yml'
+      - 'scripts/claude_sdk_e2e.py'
+      - 'cmd/claude-notifications/**'
+      - 'internal/**'
+      - 'pkg/**'
+      - 'hooks/hooks.json'
+      - 'bin/hook-wrapper.sh'
+      - 'config/config.json'
+      - '.claude-plugin/plugin.json'
+      - 'go.mod'
+      - 'go.sum'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: claude-sdk-e2e-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sdk-blackbox:
+    name: Claude SDK ${{ matrix.os }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            os: linux
+          - runner: macos-15
+            os: darwin
+          - runner: windows-2025
+            os: windows
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Linux ALSA build prerequisite
+        if: matrix.os == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Build real product and run focused race and CLI checks
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $testRoot = Join-Path $env:RUNNER_TEMP ("NEWTEST-claude-sdk-build-" + [guid]::NewGuid())
+          New-Item -ItemType Directory $testRoot | Out-Null
+          if ($IsWindows) {
+            # Remove inherited access only on the newly created TEST root.
+            $owner = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+            $acl = [System.Security.AccessControl.DirectorySecurity]::new()
+            $acl.SetOwner($owner)
+            $acl.SetAccessRuleProtection($true, $false)
+            foreach ($sid in @($owner, [System.Security.Principal.SecurityIdentifier]::new('S-1-5-18'),
+                              [System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))) {
+              $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+                $sid, 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow')
+              $acl.AddAccessRule($rule)
+            }
+            Set-Acl -LiteralPath $testRoot -AclObject $acl
+          } else {
+            chmod 700 $testRoot
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "CLAUDE_SDK_TEST_ROOT=$testRoot"
+          $env:HOME = Join-Path $testRoot 'TEST-home'
+          $env:USERPROFILE = $env:HOME
+          $env:TMPDIR = Join-Path $testRoot 'TEST-tmp'
+          $env:TEMP = $env:TMPDIR
+          $env:TMP = $env:TMPDIR
+          New-Item -ItemType Directory -Force $env:HOME, $env:TMPDIR | Out-Null
+          $env:GOTELEMETRY = 'off'
+          $env:GOTOOLCHAIN = 'local'
+          $env:GOMODCACHE = Join-Path $env:GITHUB_WORKSPACE '.test-cache/gomod'
+          $env:GOCACHE = Join-Path $env:GITHUB_WORKSPACE '.test-cache/gocache'
+          # Ignore generated caches/output locally before downloading or building.
+          $exclude = git rev-parse --git-path info/exclude
+          Add-Content -LiteralPath $exclude -Value @('/.test-cache/', '/.test-tools/', '/tmp/')
+          $tracked = git diff --name-only HEAD
+          if ($tracked) { throw 'Tracked source drift before build' }
+          go mod download
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $binary = Join-Path $testRoot $(if ($IsWindows) { 'claude-sdk.exe' } else { 'claude-sdk' })
+          # Match the shipped release artifact, including its bounded installer size.
+          go build -ldflags="-s -w" -trimpath -o $binary ./cmd/claude-notifications
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go test -race ./internal/claudesource
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go test -race ./cmd/claude-notifications -run '^(TestClaudeHookCLI.*|TestWindowsManagedHooksPreserveForeignOnRemove)$'
+          exit $LASTEXITCODE
+      - name: Actual native hook processes and bounded webhook evidence
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        env:
+          CANDIDATE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $actual = git rev-parse HEAD
+          if ($actual -ne $env:CANDIDATE_COMMIT) { throw 'Candidate commit mismatch' }
+          $testRoot = $env:CLAUDE_SDK_TEST_ROOT
+          if (-not $testRoot -or -not (Test-Path -LiteralPath $testRoot)) { throw 'Missing private TEST root' }
+          $binary = Join-Path $testRoot $(if ($IsWindows) { 'claude-sdk.exe' } else { 'claude-sdk' })
+          $report = Join-Path $env:RUNNER_TEMP 'claude-sdk-evidence/receipt.json'
+          python -B scripts/claude_sdk_e2e.py --binary $binary --temp-root $testRoot --report $report
+          exit $LASTEXITCODE
+      - name: Upload exact-commit native receipt on pass or failure
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: claude-sdk-${{ matrix.os }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/claude-sdk-evidence/receipt.json
+          if-no-files-found: error
+          retention-days: 14
