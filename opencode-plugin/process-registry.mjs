@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { profileReceipt } from './protocol.mjs';
+import { closed, parseJSON, profileReceipt } from './protocol.mjs';
 
 const deliveryKeys = process.platform === 'win32'
   ? ['AGENT_NOTIFICATIONS_CONFIG', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP']
@@ -10,6 +10,27 @@ const osKeys = process.platform === 'win32' ? ['SystemRoot', 'WINDIR'] : [];
 const result = (status, output = Buffer.alloc(0)) => Object.freeze({ status, output });
 const closedObject = (value, keys) => value && Object.getPrototypeOf(value) === Object.prototype
   && Reflect.ownKeys(value).every((key) => keys.includes(key));
+
+// Opt-in troubleshooting metadata from an actually closed owned child only.
+// This is not a profile, clock, visible-banner or native GUI lifetime proof.
+function eventDiagnostic(outcome, output, unresolved, code, forcedKill) {
+  const record = { protocol: 1, kind: 'event', ipc: outcome,
+    childClosure: unresolved ? 'unproved' : 'closed', exitCode: code, forcedKill };
+  if (outcome === 'ok') {
+    try {
+      const receipt = closed(parseJSON(output, 1024), ['status', 'reason', 'desktop', 'webhook'], ['status']);
+      if (!['submitted', 'unknown', 'unavailable', 'rejected', 'suppressed'].includes(receipt.status)) throw new TypeError();
+      const safe = { status: receipt.status };
+      for (const key of ['desktop', 'webhook']) {
+        if (!Object.hasOwn(receipt, key)) continue;
+        if (!['submitted', 'unknown', 'unavailable', 'rejected'].includes(receipt[key])) throw new TypeError();
+        safe[key] = receipt[key];
+      }
+      record.receipt = safe; // No raw reason, IDs, frame, body or native text.
+    } catch { record.receipt = 'invalid'; }
+  }
+  try { console.error('[agent-notifications] ' + JSON.stringify(record)); } catch {}
+}
 
 // Shared native-path guard; platform is explicit so installers can validate targets.
 export function absoluteNativePath(value, platform = process.platform) {
@@ -32,13 +53,14 @@ function environment(values, allowed) {
 // Caller supplies installation-owned paths and an already provisioned private cwd.
 // There is deliberately no spawn injection, arbitrary command, queue or retry port.
 export function createProcessRegistry(configuration) {
-  if (!closedObject(configuration, ['executable', 'privateCwd', 'controlRoot', 'osEnv', 'deliveryEnv', 'origin']))
+  if (!closedObject(configuration, ['executable', 'privateCwd', 'controlRoot', 'osEnv', 'deliveryEnv', 'origin', 'diagnostics']))
     throw new TypeError('invalid_configuration');
-  const { executable, privateCwd, controlRoot, osEnv = {}, deliveryEnv = {}, origin } = configuration;
+  const { executable, privateCwd, controlRoot, osEnv = {}, deliveryEnv = {}, origin, diagnostics = false } = configuration;
   if (![executable, privateCwd, controlRoot].every((value) => absoluteNativePath(value))
     || (process.platform === 'win32' && !executable.toLowerCase().endsWith('.exe')))
     throw new TypeError('invalid_paths');
   if (origin !== undefined && !/^[a-f0-9]{64}$/.test(origin)) throw new TypeError('invalid_origin');
+  if (typeof diagnostics !== 'boolean') throw new TypeError('invalid_diagnostics');
   const nativePID = process.pid, publicExecPath = process.execPath;
   const profileInput = Buffer.from(JSON.stringify({ protocol: 1, hostExecutable: publicExecPath, origin, controlRoot,
     nativePID, entry: 'serve', publicExecPath }));
@@ -171,6 +193,7 @@ export function createProcessRegistry(configuration) {
           : !valid ? 'invalidated'
             : failure ?? (performance.now() > stopAt ? 'deadline' : code === 0 ? 'ok' : 'exited');
         resolve(result(outcome, outcome === 'ok' ? output : undefined));
+        if (kind === 'event' && diagnostics) eventDiagnostic(outcome, output, entry.unresolved, code, forcedKill);
         changed();
       });
       deadlineTimer = setTimeout(() => terminate('deadline'), delay(stopAt));

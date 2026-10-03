@@ -9,7 +9,7 @@ import { createNativeV2, createRPCCheckpoint } from './native-v2.mjs';
 
 const servers = new WeakMap(), setups = new WeakMap();
 const silent = Object.freeze({ event() {} });
-async function server(input) {
+async function server(input, options = {}) {
   if (!input?.client || typeof input.client.session?.get !== 'function' ||
       typeof input.client.session?.messages !== 'function') return silent;
   const existing = servers.get(input.client);
@@ -19,7 +19,7 @@ async function server(input) {
   }
   const holder = { directory: input.directory, retired: false };
   const starting = (async () => {
-    const owned = await prepareOwnedHost(input.directory, 'v1');
+    const owned = await prepareOwnedHost(input.directory, 'v1', undefined, options?.diagnostics === true);
     if (!owned) return silent;
     if (holder.retired) { await owned.dispose(); return silent; }
     const policy = selectClockCell('v1');
@@ -63,7 +63,7 @@ async function setup(context) {
       typeof context.permission?.list !== 'function' || typeof context.rpc?.register !== 'function') return;
   if (setups.has(context)) return setups.get(context);
   const starting = (async () => {
-    const owned = await prepareOwnedHost(context.location?.directory, 'v2', context.app?.version);
+    const owned = await prepareOwnedHost(context.location?.directory, 'v2', context.app?.version, context.options?.diagnostics === true);
     if (!owned) return;
     const policy = selectClockCell('v2');
     if (!policy) { await owned.dispose(); return; }
@@ -125,5 +125,5 @@ async function setup(context) {
 
 // Retained named legacy entry and modern object route share ONE startup per
 // native client. Discovery of both exports cannot create two authority grants.
-export const AgentNotifications = (input) => server(input);
+export const AgentNotifications = (input, options) => server(input, options);
 export default Object.freeze({ id: 'agent-notifications', server, setup });

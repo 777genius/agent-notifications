@@ -107,7 +107,7 @@ func policyRevision(t *testing.T) string {
 	}
 	return i.Revision
 }
-func treeBytes(t *testing.T, root string) map[string]string {
+func treeBytes(t *testing.T, root string, skipped ...string) map[string]string {
 	t.Helper()
 	result := map[string]string{}
 	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
@@ -116,6 +116,11 @@ func treeBytes(t *testing.T, root string) map[string]string {
 		}
 		if d.IsDir() {
 			return nil
+		}
+		for _, skip := range skipped {
+			if p == skip {
+				return nil
+			}
 		}
 		b, err := os.ReadFile(p)
 		if err != nil {
@@ -287,7 +292,9 @@ func TestManagedPolicyCLIRespectsExistingLocks(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			root, _ := managedPolicyFixture(t)
 			rev := policyRevision(t)
+			lockPaths := []string{filepath.Join(root, ".component-install.lock"), filepath.Join(root, "agent-notifications.json.lock"), filepath.Join(root, installruntime.OpenCodeStoreLock)}
 			before := treeBytes(t, root)
+			readableBefore := treeBytes(t, root, lockPaths...)
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 			release, err := installruntime.LockExisting(ctx, filepath.Join(root, name))
@@ -295,28 +302,48 @@ func TestManagedPolicyCLIRespectsExistingLocks(t *testing.T) {
 				t.Fatal(err)
 			}
 			done := make(chan int, 1)
+			finished := false
+			defer func() {
+				release()
+				if !finished {
+					select {
+					case <-done:
+					case <-time.After(5 * time.Second):
+						t.Error("edit did not close after fixture unlock")
+					}
+				}
+			}()
 			go func() {
 				var out, stderr bytes.Buffer
 				done <- configCommand([]string{"edit", "--target", "opencode", "--stdin", "--expect-revision", rev}, strings.NewReader(`{"set":{"/notifications/desktop/volume":0.25}}`), &out, &stderr)
 			}()
 			select {
 			case <-done:
-				release()
+				finished = true
 				t.Fatal("edit bypassed held lock")
 			case <-time.After(100 * time.Millisecond):
 			}
-			if !reflect.DeepEqual(before, treeBytes(t, root)) {
-				release()
+			// Windows denies reads of held lock bytes; compare every other file
+			// now and verify permanent lock bytes after all own handles close.
+			if !reflect.DeepEqual(readableBefore, treeBytes(t, root, lockPaths...)) {
 				t.Fatal("files changed while lock held")
 			}
 			release()
 			select {
 			case code := <-done:
+				finished = true
 				if code != 0 {
 					t.Fatal("edit failed after lock release")
 				}
 			case <-time.After(5 * time.Second):
 				t.Fatal("edit failed to resume")
+			}
+			after := treeBytes(t, root)
+			for _, path := range lockPaths {
+				data, exists := after[path]
+				if !exists || data != before[path] {
+					t.Fatalf("permanent lock bytes changed: %s", path)
+				}
 			}
 		})
 	}
@@ -358,6 +385,10 @@ func TestManagedPolicyCLIExplicitRootAndSharedCompatibility(t *testing.T) {
 	}
 	managedBefore := treeBytes(t, root)
 	ordinary := filepath.Join(home, "TEST-shared.json")
+	expectedOrdinary, err := installruntime.CanonicalPath(ordinary)
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv(config.OverrideEnv, ordinary)
 	for _, selector := range [][]string{nil, {"--target", "shared"}} {
 		initArgs := append([]string{"init", "--json"}, selector...)
@@ -367,7 +398,7 @@ func TestManagedPolicyCLIExplicitRootAndSharedCompatibility(t *testing.T) {
 		}
 		inspectArgs := append([]string{"inspect", "--json"}, selector...)
 		code, out, stderr = policyCLI(t, inspectArgs, "")
-		if code != 0 || json.Unmarshal(out, &inspection) != nil || inspection.Selection.Path != ordinary {
+		if code != 0 || json.Unmarshal(out, &inspection) != nil || inspection.Selection.Path != expectedOrdinary || inspection.Selection.Source != "explicit" || !inspection.Selection.Exists {
 			t.Fatalf("ordinary selection: %s %s", out, stderr)
 		}
 		editArgs := append([]string{"edit", "--stdin", "--expect-revision", inspection.Revision}, selector...)

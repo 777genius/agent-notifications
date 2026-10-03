@@ -673,6 +673,7 @@ def run_case(root, metadata, os_name, arch, job_end):
         write_json(root / 'loader.private.json', loader)
         kernel_image(host['p'], exe, os_name)
         resources_before = native_resources(host['p'], os_name)
+        resource_before_at = time.monotonic() if os_name == 'windows' else None
         operation_started = time.monotonic()
         operation_end = min(js_end, job_end, operation_started + 2)
         own.send(host, {'kind': 'begin'}, operation_end)
@@ -711,6 +712,20 @@ def run_case(root, metadata, os_name, arch, job_end):
         write_json(root / 'helper-lifecycle.private.json', helper_lifecycle)
         stage = 'resource_recheck'
         resources_after = native_resources(host['p'], os_name)
+        if os_name == 'windows':
+            resource_after_at = time.monotonic()
+            # Non-authorizing numeric diagnostics from the two existing native reads.
+            safe['nativeResourceObservation'] = {
+                'measurementKind': 'GetProcessHandleCount', 'version': metadata['version'],
+                'before': resources_before, 'after': resources_after, 'delta': resources_after - resources_before,
+                'baselineStage': 'loader_received_before_begin', 'stage': stage,
+                'beforeCaseElapsedMs': round((resource_before_at - case_started) * 1000, 3),
+                'afterCaseElapsedMs': round((resource_after_at - case_started) * 1000, 3),
+                'beforeHostElapsedMs': round((resource_before_at - host['startedAt']) * 1000, 3),
+                'afterHostElapsedMs': round((resource_after_at - host['startedAt']) * 1000, 3),
+                'afterOperationElapsedMs': round((resource_after_at - operation_started) * 1000, 3),
+                'disposedFrameObserved': disposed_observed, 'helperRound': round_number,
+                'helperStarts': own.helpers, 'helperActualCloses': own.helper_closes}
         need(resources_after <= resources_before, 'actual_module_resource_leak')
         kernel_image(host['p'], exe, os_name)
         stage = 'finish'

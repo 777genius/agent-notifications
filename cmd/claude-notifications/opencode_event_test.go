@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 )
@@ -10,7 +11,7 @@ func TestOpenCodeCommandFailsClosedWithBoundedReceipt(t *testing.T) {
 	const secret = "PRIVATE_SESSION_811"
 	frame := `{"version":1,"kind":"turn_idle_verified","sessionID":"` + secret + `","turnID":"t","messageID":"m","rootSession":true}`
 	var output bytes.Buffer
-	if code := runOpenCodeEvent([]string{"--protocol", "1"}, strings.NewReader(frame), &output); code != 0 {
+	if code := runOpenCodeEvent([]string{"--protocol", "1"}, io.NopCloser(strings.NewReader(frame)), &output); code != 0 {
 		t.Fatalf("exit code %d", code)
 	}
 	if got := output.String(); got != "{\"status\":\"suppressed\",\"reason\":\"not_registered\"}\n" || strings.Contains(got, secret) {

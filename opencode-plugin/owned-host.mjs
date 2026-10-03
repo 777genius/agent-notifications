@@ -13,7 +13,7 @@ const identity = (name) => {
   return Object.freeze({ name, dev: stat.dev, ino: stat.ino, size: stat.isDirectory() ? undefined : stat.size, mtime: stat.isDirectory() ? undefined : stat.mtimeNs, mode: stat.mode });
 };
 const equal = (a, b) => ['name', 'dev', 'ino', 'size', 'mtime', 'mode'].every((key) => a[key] === b[key]);
-export async function prepareOwnedHost(directory, generation, appVersion) {
+export async function prepareOwnedHost(directory, generation, appVersion, diagnostics = false) {
   let registry, privateCwd;
   try {
     if (!/^[a-f0-9]{64}$/.test(origin) || !absoluteNativePath(directory)) return;
@@ -27,7 +27,7 @@ export async function prepareOwnedHost(directory, generation, appVersion) {
       ['AGENT_NOTIFICATIONS_CONFIG', 'HOME', 'XDG_CONFIG_HOME', 'DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR'];
     const pick = (keys) => Object.fromEntries(keys.filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]]));
     registry = createProcessRegistry({ executable, controlRoot, origin, privateCwd,
-      osEnv: pick(process.platform === 'win32' ? ['SystemRoot', 'WINDIR'] : []), deliveryEnv: pick(deliveryKeys) });
+      diagnostics, osEnv: pick(process.platform === 'win32' ? ['SystemRoot', 'WINDIR'] : []), deliveryEnv: pick(deliveryKeys) });
     const response = await registry.profile({ isCurrent: isOwned });
     const receipt = profileReceipt(response.output);
     // generation is the closed helper contract, not raw semver/range authority.

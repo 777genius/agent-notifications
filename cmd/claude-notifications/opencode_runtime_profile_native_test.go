@@ -31,9 +31,11 @@ func(w *portDiagnosticWriter) Write(p []byte)(int,error){
  if _,e:=w.file.Write(p[:n]);e!=nil {return 0,e};w.remaining-=n;return len(p),nil
 }
 func portRunChild(prefix,helper,input string,environment []string){
+ os.WriteFile(prefix+".parent-stage",[]byte("child_streams"),0600)
  output,e:=os.OpenFile(prefix+".receipt",os.O_CREATE|os.O_WRONLY,0600);if e!=nil {os.Exit(4)}
  diagnostics,e:=os.OpenFile(prefix+".stderr",os.O_CREATE|os.O_WRONLY,0600);if e!=nil {os.Exit(5)}
  child:=exec.Command(helper,"-test.run=^TestRuntimePortHelper$");child.Env=environment;child.Stdin=strings.NewReader(input);child.Stdout=output;child.Stderr=&portDiagnosticWriter{diagnostics,4096}
+ os.WriteFile(prefix+".parent-stage",[]byte("child_start_wait"),0600)
  status:="ok";if e:=child.Start();e!=nil {status=fmt.Sprintf("start: %v",e)} else {os.WriteFile(prefix+".helper",[]byte(strconv.Itoa(child.Process.Pid)),0600);if e:=child.Wait();e!=nil {status=fmt.Sprintf("wait: %v",e)}}
  output.Close();diagnostics.Close();os.WriteFile(prefix+".done",[]byte(status),0600)
 }
@@ -52,10 +54,11 @@ func main(){
  // to the original executable path. This supplies no production image proof.
  image:=os.Args[0];dir:=filepath.Dir(image);base:=strings.TrimSuffix(filepath.Base(image),".exe")
  if len(os.Args)==2&&os.Args[1]=="serve" {
-  prefix:=image+"."+strconv.Itoa(os.Getpid());os.WriteFile(prefix+".host",[]byte("ready"),0600)
+  prefix:=image+"."+strconv.Itoa(os.Getpid());os.WriteFile(prefix+".parent-stage",[]byte("await_launch"),0600);os.WriteFile(prefix+".host",[]byte("ready"),0600)
   var raw []byte
   for {var e error;raw,e=os.ReadFile(prefix+".launch");if e==nil {break};time.Sleep(5*time.Millisecond)}
-  var launch struct{Helper,Input string;Environment []string};if json.Unmarshal(raw,&launch)!=nil {os.Exit(3)}
+  os.WriteFile(prefix+".parent-stage",[]byte("launch_read"),0600)
+  var launch struct{Helper,Input string;Environment []string};if json.Unmarshal(raw,&launch)!=nil {os.WriteFile(prefix+".parent-stage",[]byte("launch_invalid"),0600);os.Exit(3)}
   portRunChild(prefix,launch.Helper,launch.Input,launch.Environment)
   for {time.Sleep(time.Second)}
  }
@@ -146,7 +149,20 @@ func portLaunch(t *testing.T, host, in runtimeProfileInput, raw, mode string) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if e = os.WriteFile(portPrefix(host)+".launch", data, 0600); e != nil {
+	// Publish the complete descriptor before the owned parent can observe it.
+	launch, e := os.CreateTemp(host.ControlRoot, "TEST-port-launch-")
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer os.Remove(launch.Name())
+	if _, e = launch.Write(data); e != nil {
+		_ = launch.Close()
+		t.Fatal(e)
+	}
+	if e = launch.Close(); e != nil {
+		t.Fatal(e)
+	}
+	if e = os.Rename(launch.Name(), portPrefix(host)+".launch"); e != nil {
 		t.Fatal(e)
 	}
 }
@@ -173,10 +189,11 @@ func portBoundedDiagnostic(name string) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(f, 4097))
 }
 func portFailureDiagnostics(prefix string) string {
+	stage, stageErr := portBoundedDiagnostic(prefix + ".parent-stage")
 	status, statusErr := portBoundedDiagnostic(prefix + ".done")
 	diagnostic, diagnosticErr := portBoundedDiagnostic(prefix + ".stderr")
 	stdout, stdoutErr := portBoundedDiagnostic(prefix + ".receipt")
-	return fmt.Sprintf("wait status=%q (%v); stderr=%q (%v); stdout=%q (%v)", status, statusErr, diagnostic, diagnosticErr, stdout, stdoutErr)
+	return fmt.Sprintf("parent stage=%q (%v); wait status=%q (%v); stderr=%q (%v); stdout=%q (%v)", stage, stageErr, status, statusErr, diagnostic, diagnosticErr, stdout, stdoutErr)
 }
 func portAssertDiagnostics(t *testing.T, prefix string) {
 	t.Helper()
