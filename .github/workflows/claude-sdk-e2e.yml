@@ -49,6 +49,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -71,6 +72,16 @@ jobs:
           $env:TMP = $env:TMPDIR
           New-Item -ItemType Directory -Force $env:HOME, $env:TMPDIR | Out-Null
           $env:GOTELEMETRY = 'off'
+          $env:GOTOOLCHAIN = 'local'
+          $env:GOMODCACHE = Join-Path $env:GITHUB_WORKSPACE '.test-cache/gomod'
+          $env:GOCACHE = Join-Path $env:GITHUB_WORKSPACE '.test-cache/gocache'
+          # Ignore generated caches/output locally before downloading or building.
+          $exclude = git rev-parse --git-path info/exclude
+          Add-Content -LiteralPath $exclude -Value @('/.test-cache/', '/.test-tools/', '/tmp/')
+          $tracked = git diff --name-only HEAD
+          if ($tracked) { throw 'Tracked source drift before build' }
+          go mod download
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $binary = Join-Path $testRoot $(if ($IsWindows) { 'claude-sdk.exe' } else { 'claude-sdk' })
           go build -o $binary ./cmd/claude-notifications
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -97,5 +108,5 @@ jobs:
         with:
           name: claude-sdk-${{ matrix.os }}-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/claude-sdk-evidence/receipt.json
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14

@@ -121,7 +121,8 @@ class Harness:
                                  "installer_preservation": "native Windows" if os.name == "nt"
                                  else "POSIX host with same-source .exe-shaped artifact"},
                        "limitations": []}
-        for path in (self.home, self.project, self.tmp, self.stage, self.control,
+        self.control.mkdir(mode=0o700)
+        for path in (self.home, self.project, self.tmp, self.stage,
                      self.package / "bin", self.package / "hooks", self.package / "config",
                      self.package / ".claude-plugin"):
             path.mkdir(parents=True, exist_ok=True)
@@ -229,14 +230,18 @@ class Harness:
         require(Path(root).resolve() == self.source, "source cwd must be the verified repository root")
         revision = inspect(["git", "rev-parse", "HEAD"])
         inspect(["git", "merge-base", "--is-ancestor", BASE, revision])
+        tracked_changes = inspect(["git", "diff", "--name-only", "HEAD"])
+        require(not tracked_changes, "same-source verification requires a clean tracked source tree")
         info = inspect([self.args.go, "version", "-m", self.binary])
         require(f"path\t{MODULE}" in info, "artifact is not the actual product command")
         require(f"vcs.revision={revision}" in info, "artifact/source revision mismatch")
+        require("vcs.modified=false" in info and "vcs.modified=true" not in info,
+                "artifact must be built from clean source; ignore generated caches/output before building")
         require("github.com/777genius/plugin-kit-ai/sdk\t" in info, "Claude SDK missing from binary")
         expected_os = {"Linux": "linux", "Darwin": "darwin", "Windows": "windows"}[platform.system()]
         require(f"GOOS={expected_os}" in info, "artifact is not native to this host")
         self.report.update({"source_cwd": str(self.source), "source_sha": revision,
-                            "source_tracked_changes": inspect(["git", "diff", "--name-only", "HEAD"]),
+                            "source_tracked_changes": tracked_changes,
                             "binary": {"path": str(self.binary), "sha256": sha(self.binary),
                                        "build_info": info, "vcs_modified": "vcs.modified=true" in info}})
         # Copy product resources, not runtime/auth/configuration directories.
@@ -277,6 +282,10 @@ class Harness:
                                                      "clickToFocus": False})
         self.cfg["notifications"]["webhook"].update({"enabled": True, "preset": "custom",
                                                      "format": "json", "headers": {},
+                                                     "payloadFields": {"raw_body": "${{raw_body}}",
+                                                                       "session_name": "${{session_name}}",
+                                                                       "cwd": "${{cwd}}",
+                                                                       "folder": "${{folder}}"},
                                                      "url": f"http://127.0.0.1:{self.sink.server_port}/webhook"})
         self.config_path = self.home / ".claude/claude-notifications-go/config.json"
         write_json(self.config_path, self.cfg)
@@ -284,6 +293,7 @@ class Harness:
         # A real empty transcript prevents attempts to read any source project.
         self.transcript = self.project / "TEST transcript.jsonl"
         self.transcript.write_bytes(b"")
+        self.transcript.chmod(0o600)
         self.hooks_path = self.package / "hooks/hooks.json"
         self.exe_name = "claude-notifications-windows-amd64.exe"
         if platform.machine().lower() in ("arm64", "aarch64"):
@@ -391,9 +401,21 @@ class Harness:
         actual = received[0]["payload"]
         expected = {"schema_version": "1.0", "agent_source": "claude", "source": "claude-notifications",
                     "status": status, "notification_type": status, "session_id": session,
-                    "message": message}
+                    "raw_body": message, "cwd": payload["cwd"],
+                    "folder": Path(payload["cwd"]).name}
         for key, value in expected.items():
             require(actual.get(key) == value, f"{event} {key}: expected {str(value)[:200]!r}, got {str(actual.get(key))[:200]!r}")
+        # Supported runtime templates expose body and metadata independently.
+        # Assert the complete joined text without copying session-name or summary algorithms.
+        label = actual.get("session_name")
+        require(isinstance(label, str) and re.fullmatch(r"[^\[\]|\r\n]+", label),
+                "invalid webhook session label")
+        if session == "unknown":
+            require(label == "unknown", "missing session must retain the unknown label")
+        prefix = re.escape(label) + r"(?:\|[^\[\]\r\n]+)? " + re.escape(expected["folder"])
+        require(isinstance(actual.get("message"), str) and
+                re.fullmatch(r"\[" + prefix + r"\] " + re.escape(message), actual["message"]),
+                "webhook message must have anchored metadata and the exact original body suffix")
         require(PLACEHOLDER not in json.dumps(actual), "SDK placeholder leaked into webhook")
         require(received[0]["content_type"] == "application/json", "wrong webhook content type")
         require(received[0]["user_agent"] == "claude-notifications/1.0", "wrong real product sender")
@@ -456,39 +478,57 @@ class Harness:
                     "members": [{"agentId": "lead", "name": "team-lead", "agentType": "team-lead"},
                                 {"agentId": "alice", "name": "alice", "agentType": "general-purpose"},
                                 {"agentId": "bob", "name": "bob", "agentType": "general-purpose"}]})
-        path = self.tmp / f"claude-team-state-{team}.json"
+        path = self.tmp / f"claude-team-notify-{team}.json"
         before = len(self.sink.snapshot())
         self.success(self.run(self.command("Stop"), json.dumps(self.payload("Stop", lead,
                                            last_assistant_message="Lead work complete.")).encode()))
         state = json.loads(path.read_text())
-        require(state["lead_stopped"] is True and state["lead_stop_at"] > 0,
+        require(state["team_name"] == team and state["lead_stopped"] is True and state["lead_stop_at"] > 0,
                 "lead Stop did not mark stopped")
+        stopped = state
         require(not state.get("notified_at") and not state["idle_members"], "premature team state completion")
         require(len(self.sink.snapshot()) == before, "lead Stop prematurely notified")
         alice = self.payload("TeammateIdle", "TEST-idle-alice", team_name=team, teammate_name="alice")
         self.success(self.run(self.command("TeammateIdle"), json.dumps(alice).encode()))
         state = json.loads(path.read_text())
-        require(set(state["idle_members"]) == {"alice"} and not state.get("notified_at"),
-                "first idle did not persist partial team state")
+        require(state["team_name"] == team and state["lead_stopped"] is True and
+                state["lead_stop_at"] == stopped["lead_stop_at"] and
+                set(state["idle_members"]) == {"alice"} and state["idle_members"]["alice"] > 0 and
+                not state.get("notified_at"), "first idle did not persist partial team state")
+        partial = state
         require(len(self.sink.snapshot()) == before, "partial team prematurely notified")
         body = 'Team "TEST-sdk-team": all teammates finished work'
         self.emit("TeammateIdle", "TEST-idle-bob", "task_complete", body,
                   fields={"team_name": team, "teammate_name": "bob"}, persisted=False)
         state = json.loads(path.read_text())
-        require(set(state["idle_members"]) == {"alice", "bob"} and state["notified_at"] > 0,
-                "team completion claim not persisted")
+        # Completion resets lead/idle flags durably for the next cycle.
+        # The webhook belongs to the final idle event; persisted notification identity belongs to the lead.
+        require(state["team_name"] == team and state["lead_stopped"] is False and
+                state["idle_members"] == {} and state["lead_stop_at"] == stopped["lead_stop_at"] and
+                state["notified_at"] >= state["lead_stop_at"], "team completion claim/reset not persisted")
         notification_state = self.state(lead)
-        require(notification_state["last_notification_body"] == body and
+        require(notification_state["session_id"] == lead and notification_state["last_notification_ts"] > 0 and
+                notification_state["last_notification_body"] == body and
                 notification_state["last_notification_event"] == "TeammateIdle" and
                 notification_state["last_notification_status"] == "task_complete",
                 "team notification not persisted under lead")
+        require(PLACEHOLDER not in json.dumps(state) + json.dumps(notification_state),
+                "SDK placeholder leaked into team/lead state")
         # Change event session to bypass the early dedup lock. The durable team
         # completion claim itself must suppress a replay in another process.
         replay = self.payload("TeammateIdle", "TEST-idle-replay", team_name=team, teammate_name="bob")
         self.success(self.run(self.command("TeammateIdle"), json.dumps(replay).encode()))
         require(len(self.sink.snapshot()) == before + 1, "team replay emitted duplicate")
-        require(json.loads(path.read_text())["notified_at"] == state["notified_at"], "team replay changed claim")
-        return {"team_state": state, "lead_notification_state": notification_state,
+        replay_state = json.loads(path.read_text())
+        require(replay_state["team_name"] == team and replay_state["lead_stopped"] is False and
+                replay_state["lead_stop_at"] == stopped["lead_stop_at"] and
+                replay_state["notified_at"] == state["notified_at"] and
+                set(replay_state["idle_members"]) == {"bob"} and replay_state["idle_members"]["bob"] > 0,
+                "team replay changed claim or failed to persist idle without a new lead Stop")
+        require(self.state(lead) == notification_state, "team replay changed lead notification state")
+        return {"stopped_team_state": stopped, "partial_team_state": partial, "team_state": state,
+                "replay_team_state": replay_state, "lead_notification_state": notification_state,
+                "webhook_session_id": "TEST-idle-bob", "notification_state_session_id": lead,
                 "webhook_count": 1, "replay_bypasses_session_lock": True}
 
     def bom_trailing(self):
@@ -511,21 +551,23 @@ class Harness:
         # Each field is below 1 MiB; their *SDK projection* is above it. Keep
         # cwd lexically in the disposable project, with an impossible component
         # so no traversal can reach an existing project or resolve real paths.
-        session = "TEST-session-" + "s" * 600000
+        session = "TEST-combined"
         cwd = str(self.project) + os.sep + "c" * 600000
         message = "Combined projection preserved the original final message."
-        require(len(session.encode()) < 1024 * 1024 and len(cwd.encode()) < 1024 * 1024,
+        original = message + " " + "x" * 600000
+        require(all(len(value.encode()) < 1024 * 1024 for value in (session, cwd, original)),
                 "individual field accidentally tests per-field fallback")
-        fields = {"cwd": cwd, "last_assistant_message": message}
-        require(len(json.dumps(self.payload("Stop", session, **fields)).encode()) > 1024 * 1024,
-                "combined payload must exceed SDK cap")
-        actual = self.emit("Stop", session, "task_complete", message, fields=fields,
-                           persisted=False)
+        require(len(cwd.encode()) + len(original.encode()) > 1024 * 1024,
+                "SDK projection fields must exceed aggregate cap independently of envelope overhead")
+        fields = {"cwd": cwd, "last_assistant_message": original}
+        wire_bytes = len(json.dumps(self.payload("Stop", session, **fields)).encode())
+        require(wire_bytes > 1024 * 1024, "combined payload must exceed SDK cap")
+        actual = self.emit("Stop", session, "task_complete", message, fields=fields)
         require(actual["session_id"] == session, "combined projection lost original session")
         return {"session_bytes": len(session.encode()), "cwd_bytes": len(cwd.encode()),
-                "combined_bytes": len(json.dumps(self.payload("Stop", session, **fields)).encode()),
+                "original_final_message_bytes": len(original.encode()), "combined_bytes": wire_bytes,
                 "original_session_restored": True, "original_final_message_restored": True,
-                "state_limitation": "oversized session filename cannot be persisted by product"}
+                "original_cwd_delivered": True}
 
     def missing_session(self):
         log = self.package / "notification-debug.log"
@@ -535,8 +577,10 @@ class Harness:
                   wire=json.dumps(payload).encode())
         delta = log.read_bytes()[offset:].decode(errors="replace")
         warning = "Session ID is empty, using 'unknown'"
-        lines = [line for line in delta.splitlines() if warning in line]
-        require(len(lines) == 1 and "WARN" in lines[0], "missing exact WARN text with quoted 'unknown'")
+        lines = [line for line in delta.splitlines()
+                 if re.fullmatch(r"\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] \[WARN\] PID:\d+: " +
+                                 re.escape(warning), line)]
+        require(len(lines) == 1, "missing exact WARN level/text with quoted 'unknown'")
         return {"warn_line": lines[0], "fallback_session_id": "unknown", "stdout_bytes": 0}
 
     def managed_execution(self):
@@ -615,13 +659,7 @@ def main():
     harness = Harness(args)
     report = harness.execute()
     destination = args.report.resolve()
-    try:
-        write_json(destination, report)
-    except PermissionError:
-        destination = Path("/tmp/an-sdk-e2e-delivery-harness-a1-artifacts/claude-sdk-receipt.json")
-        report["requested_report_path"] = str(args.report.resolve())
-        report["report_fallback_path"] = str(destination)
-        write_json(destination, report)
+    write_json(destination, report)
     print(json.dumps({"result": report["result"], "counts": report["counts"], "report": str(destination),
                       "failed_checks": [c["name"] for c in report["checks"] if c["result"] == "FAIL"]}))
     return 1 if report["result"] == "FAIL" else 0
