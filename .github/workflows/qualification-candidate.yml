@@ -7,6 +7,9 @@ on:
       parent_size: {type: string, required: true}
       product_head: {type: string, required: true}
       parent_manifest_sha256: {type: string, required: true}
+      supplement_url: {type: string, required: true, description: 'Temporary sole-file TEST HTTP supplement URL'}
+      supplement_sha256: {type: string, required: true}
+      supplement_size: {type: string, required: true}
 permissions: {contents: read}
 jobs:
   upload:
@@ -29,6 +32,21 @@ jobs:
         with:
           name: TEST-sealed-parent
           path: parent-evidence.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+      - name: Fetch sole SHA-authenticated reviewed installed12 supplement
+        env:
+          TEST_SUPPLEMENT_URL: ${{ inputs.supplement_url }}
+          TEST_SUPPLEMENT_SHA256: ${{ inputs.supplement_sha256 }}
+          TEST_SUPPLEMENT_SIZE: ${{ inputs.supplement_size }}
+          TEST_PRODUCT_HEAD: ${{ inputs.product_head }}
+          TEST_PARENT_MANIFEST_SHA256: ${{ inputs.parent_manifest_sha256 }}
+        run: python -B fetch-supplement.py
+      - uses: actions/upload-artifact@v7
+        with:
+          name: TEST-installed12-supplement
+          path: installed12-supplement.tar.gz
           if-no-files-found: error
           compression-level: 0
           retention-days: 1
