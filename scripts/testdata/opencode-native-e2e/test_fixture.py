@@ -1,6 +1,7 @@
 """Inert parser/custody regressions. No native/model/installer/notification launch."""
 import importlib.util
 import ast
+import base64
 import copy
 import io
 import tarfile
@@ -370,14 +371,19 @@ class DriverContractTests(unittest.TestCase):
         self.assertFalse(r.v2_ordinary_projection([{**message,'error':{'type':'interrupted'}}],failed,'root','error'))
         original=r.request
         try:
+            # Native cursors name first/last boundaries even for one message.
+            def boundary(direction):
+                raw=json.dumps({'id':'final','order':'asc','direction':direction},separators=(',',':')).encode()
+                return base64.urlsafe_b64encode(raw).decode().rstrip('=')
             def respond(*args,**kwargs):
                 self.assertEqual(args[2],'/api/session/root/message?limit=200&order=asc')
-                return {'data':[message],'cursor':{}}
+                return {'data':[message],'cursor':{direction:boundary(direction) for direction in ('previous','next')}}
             r.request=respond
             self.assertEqual(r.read_history('http://127.0.0.1',repo,'root',True,{}),[message])
-            r.request=lambda *a,**kw: {'data':[message],'cursor':{'next':'more'}}
-            with self.assertRaisesRegex(r.Unqualified,'typed_message_page_incomplete_or_invalid'):
-                r.read_history('http://127.0.0.1',repo,'root',True,{})
+            for malformed in ({},{'next':'more'}):
+                r.request=lambda *a,**kw: {'data':[message],'cursor':malformed}
+                with self.assertRaisesRegex(r.Unqualified,'typed_message_boundary_cursors'):
+                    r.read_history('http://127.0.0.1',repo,'root',True,{})
         finally: r.request=original
 
     def test_v2_test_child_uses_plural_config_and_native_created_agent_location(self):
