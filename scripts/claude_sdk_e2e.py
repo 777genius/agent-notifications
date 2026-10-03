@@ -24,6 +24,7 @@ from pathlib import Path
 import platform
 import re
 import shutil
+import shlex
 import signal
 import subprocess
 import sys
@@ -104,6 +105,27 @@ class Harness:
         self.source = args.source.resolve()
         self.binary = args.binary.resolve()
         self.lab = Path(tempfile.mkdtemp(prefix="NEWTEST-claude-sdk-", dir=args.temp_root)).resolve()
+        if os.name == "nt":
+            # Protect only this fresh lab before creating any children.
+            acl_script = r"""
+$ErrorActionPreference = 'Stop'
+$owner = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$acl = [System.Security.AccessControl.DirectorySecurity]::new()
+$acl.SetOwner($owner)
+$acl.SetAccessRuleProtection($true, $false)
+foreach ($sid in @($owner, [System.Security.Principal.SecurityIdentifier]::new('S-1-5-18'),
+                  [System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))) {
+    $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+        $sid, 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow')
+    $acl.AddAccessRule($rule)
+}
+Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
+"""
+            acl_env = {key: os.environ[key] for key in
+                       ("PATH", "SystemRoot", "WINDIR", "COMSPEC", "PATHEXT") if key in os.environ}
+            acl_env["CLAUDE_SDK_TEST_LAB"] = str(self.lab)
+            subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", acl_script],
+                           env=acl_env, check=True, timeout=30, capture_output=True)
         self.home = self.lab / "TEST home"
         self.project = self.lab / "TEST project"
         self.package = self.lab / "TEST plugin package with spaces"
@@ -248,7 +270,7 @@ class Harness:
         for relative in ("bin/hook-wrapper.sh", "hooks/hooks.json", "config/config.json",
                          ".claude-plugin/plugin.json"):
             shutil.copy2(self.source / relative, self.package / relative)
-        self.template = json.loads((self.package / "hooks/hooks.json").read_text())
+        self.template = json.loads((self.package / "hooks/hooks.json").read_text(encoding="utf-8"))
         require(set(self.template["hooks"]) == set(EVENTS), "unexpected product hook manifest")
         self.report["resource_hashes"] = {relative: sha(self.package / relative)
                                            for relative in ("hooks/hooks.json", "bin/hook-wrapper.sh",
@@ -264,7 +286,7 @@ class Harness:
         record, out, err = self.run([self.installed_binary, "version"])
         require(record["returncode"] == 0 and not record["timed_out"], repr(err))
         self.report["binary"]["version_stdout"] = out.decode(errors="replace").strip()
-        manifest_version = json.loads((self.package / ".claude-plugin/plugin.json").read_text())["version"]
+        manifest_version = json.loads((self.package / ".claude-plugin/plugin.json").read_text(encoding="utf-8"))["version"]
         # A supplied development binary may report "dev". The shipped wrapper
         # accepts unknown versions; known versions must actually agree.
         versions = re.findall(r"\d+\.\d+\.\d+", out.decode(errors="replace"))
@@ -273,7 +295,7 @@ class Harness:
         self.thread = threading.Thread(target=self.sink.serve_forever, daemon=True)
         self.thread.start()
         self.report["loopback"] = {"host": "127.0.0.1", "port": self.sink.server_port}
-        self.cfg = json.loads((self.package / "config/config.json").read_text())
+        self.cfg = json.loads((self.package / "config/config.json").read_text(encoding="utf-8"))
         self.cfg["notifications"].update({"suppressForSubagents": False,
                                          "notifyOnSubagentStop": True, "teamMode": "wait-all",
                                          "suppressQuestionAfterTaskCompleteSeconds": 0,
@@ -327,7 +349,7 @@ class Harness:
         require(not record["timed_out"] and record["returncode"] == 0, repr(err[-2000:]))
 
     def managed(self, event):
-        data = json.loads(self.hooks_path.read_text())
+        data = json.loads(self.hooks_path.read_text(encoding="utf-8"))
         expected = {"type": "command", "command": str(self.package / "bin" / self.exe_name),
                     "args": ["handle-hook", event], "timeout": 30}
         matches = [handler for group in data["hooks"][event] for handler in group.get("hooks", [])
@@ -337,7 +359,7 @@ class Harness:
         return [matches[0]["command"], *matches[0]["args"]]
 
     def preserve(self):
-        data = json.loads(self.hooks_path.read_text())
+        data = json.loads(self.hooks_path.read_text(encoding="utf-8"))
         require(data["foreignTop"] == self.fixture["foreignTop"], "foreign top fields changed")
         require("ForeignEvent" in data["hooks"] and data["hooks"]["ForeignEvent"] is None,
                 "foreign null event lost")
@@ -387,7 +409,7 @@ class Harness:
                 "transcript_path": str(self.transcript), "hook_event_name": event, **fields}
 
     def state(self, session):
-        return json.loads((self.tmp / f"claude-session-state-{session}.json").read_text())
+        return json.loads((self.tmp / f"claude-session-state-{session}.json").read_text(encoding="utf-8"))
 
     def emit(self, event, session, status, message, *, fields=None, route="installed", wire=None,
              trace=False, persisted=True):
@@ -435,8 +457,23 @@ class Harness:
                               "webhook_bytes": received[0]["bytes"]})
         if trace and os.name != "nt":
             trace_text = result[2].decode(errors="replace")
-            invocation = str(self.installed_binary) + f" handle-hook {event}"
-            require(invocation in trace_text, "sh trace did not prove actual staged binary argv")
+            expected_argv = [str(self.installed_binary), "handle-hook", event]
+            proven = False
+            for line in trace_text.splitlines():
+                if not line.startswith("+ "):
+                    continue
+                invocation = line[2:]
+                # Linux dash leaves spaced paths unquoted; macOS sh quotes them.
+                if invocation == " ".join(expected_argv):
+                    proven = True
+                    break
+                try:
+                    if shlex.split(invocation) == expected_argv:
+                        proven = True
+                        break
+                except ValueError:
+                    continue
+            require(proven, "sh trace did not prove actual staged binary argv")
         return actual
 
     def interactive(self, tool, status, message, session):
@@ -482,7 +519,7 @@ class Harness:
         before = len(self.sink.snapshot())
         self.success(self.run(self.command("Stop"), json.dumps(self.payload("Stop", lead,
                                            last_assistant_message="Lead work complete.")).encode()))
-        state = json.loads(path.read_text())
+        state = json.loads(path.read_text(encoding="utf-8"))
         require(state["team_name"] == team and state["lead_stopped"] is True and state["lead_stop_at"] > 0,
                 "lead Stop did not mark stopped")
         stopped = state
@@ -490,7 +527,7 @@ class Harness:
         require(len(self.sink.snapshot()) == before, "lead Stop prematurely notified")
         alice = self.payload("TeammateIdle", "TEST-idle-alice", team_name=team, teammate_name="alice")
         self.success(self.run(self.command("TeammateIdle"), json.dumps(alice).encode()))
-        state = json.loads(path.read_text())
+        state = json.loads(path.read_text(encoding="utf-8"))
         require(state["team_name"] == team and state["lead_stopped"] is True and
                 state["lead_stop_at"] == stopped["lead_stop_at"] and
                 set(state["idle_members"]) == {"alice"} and state["idle_members"]["alice"] > 0 and
@@ -500,7 +537,7 @@ class Harness:
         body = 'Team "TEST-sdk-team": all teammates finished work'
         self.emit("TeammateIdle", "TEST-idle-bob", "task_complete", body,
                   fields={"team_name": team, "teammate_name": "bob"}, persisted=False)
-        state = json.loads(path.read_text())
+        state = json.loads(path.read_text(encoding="utf-8"))
         # Completion resets lead/idle flags durably for the next cycle.
         # The webhook belongs to the final idle event; persisted notification identity belongs to the lead.
         require(state["team_name"] == team and state["lead_stopped"] is False and
@@ -519,7 +556,7 @@ class Harness:
         replay = self.payload("TeammateIdle", "TEST-idle-replay", team_name=team, teammate_name="bob")
         self.success(self.run(self.command("TeammateIdle"), json.dumps(replay).encode()))
         require(len(self.sink.snapshot()) == before + 1, "team replay emitted duplicate")
-        replay_state = json.loads(path.read_text())
+        replay_state = json.loads(path.read_text(encoding="utf-8"))
         require(replay_state["team_name"] == team and replay_state["lead_stopped"] is False and
                 replay_state["lead_stop_at"] == stopped["lead_stop_at"] and
                 replay_state["notified_at"] == state["notified_at"] and
@@ -590,7 +627,7 @@ class Harness:
 
     def remove(self):
         self.install(remove=True)
-        data = json.loads(self.hooks_path.read_text())
+        data = json.loads(self.hooks_path.read_text(encoding="utf-8"))
         expected = copy.deepcopy(self.fixture)
         expected["laterForeignEdit"] = {"enabled": False}
         for event in EVENTS:

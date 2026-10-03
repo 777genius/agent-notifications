@@ -63,8 +63,27 @@ jobs:
       - name: Build real product and run focused race and CLI checks
         shell: pwsh
         run: |
-          $testRoot = Join-Path $env:RUNNER_TEMP 'NEWTEST-claude-sdk-build'
-          New-Item -ItemType Directory -Force $testRoot | Out-Null
+          $ErrorActionPreference = 'Stop'
+          $testRoot = Join-Path $env:RUNNER_TEMP ("NEWTEST-claude-sdk-build-" + [guid]::NewGuid())
+          New-Item -ItemType Directory $testRoot | Out-Null
+          if ($IsWindows) {
+            # Remove inherited access only on the newly created TEST root.
+            $owner = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+            $acl = [System.Security.AccessControl.DirectorySecurity]::new()
+            $acl.SetOwner($owner)
+            $acl.SetAccessRuleProtection($true, $false)
+            foreach ($sid in @($owner, [System.Security.Principal.SecurityIdentifier]::new('S-1-5-18'),
+                              [System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))) {
+              $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+                $sid, 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow')
+              $acl.AddAccessRule($rule)
+            }
+            Set-Acl -LiteralPath $testRoot -AclObject $acl
+          } else {
+            chmod 700 $testRoot
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "CLAUDE_SDK_TEST_ROOT=$testRoot"
           $env:HOME = Join-Path $testRoot 'TEST-home'
           $env:USERPROFILE = $env:HOME
           $env:TMPDIR = Join-Path $testRoot 'TEST-tmp'
@@ -97,10 +116,11 @@ jobs:
         run: |
           $actual = git rev-parse HEAD
           if ($actual -ne $env:CANDIDATE_COMMIT) { throw 'Candidate commit mismatch' }
-          $testRoot = Join-Path $env:RUNNER_TEMP 'NEWTEST-claude-sdk-build'
+          $testRoot = $env:CLAUDE_SDK_TEST_ROOT
+          if (-not $testRoot -or -not (Test-Path -LiteralPath $testRoot)) { throw 'Missing private TEST root' }
           $binary = Join-Path $testRoot $(if ($IsWindows) { 'claude-sdk.exe' } else { 'claude-sdk' })
           $report = Join-Path $env:RUNNER_TEMP 'claude-sdk-evidence/receipt.json'
-          python -B scripts/claude_sdk_e2e.py --binary $binary --temp-root $env:RUNNER_TEMP --report $report
+          python -B scripts/claude_sdk_e2e.py --binary $binary --temp-root $testRoot --report $report
           exit $LASTEXITCODE
       - name: Upload exact-commit native receipt on pass or failure
         if: always()
