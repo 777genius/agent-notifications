@@ -145,7 +145,8 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
                                  "installer_preservation": "native Windows" if os.name == "nt"
                                  else "POSIX host with same-source .exe-shaped artifact"},
                        "limitations": []}
-        self.control.mkdir(mode=0o700)
+        # Windows children inherit the protected lab DACL; mkdir(0700) adds OWNER RIGHTS.
+        self.control.mkdir(mode=0o777 if os.name == "nt" else 0o700)
         for path in (self.home, self.project, self.tmp, self.stage,
                      self.package / "bin", self.package / "hooks", self.package / "config",
                      self.package / ".claude-plugin"):
@@ -267,6 +268,7 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
         self.report.update({"source_cwd": str(self.source), "source_sha": revision,
                             "source_tracked_changes": tracked_changes,
                             "binary": {"path": str(self.binary), "sha256": sha(self.binary),
+                                       "size_bytes": self.binary.stat().st_size,
                                        "build_info": info, "vcs_modified": "vcs.modified=true" in info}})
         # Copy product resources, not runtime/auth/configuration directories.
         for relative in ("bin/hook-wrapper.sh", "hooks/hooks.json", "config/config.json",
