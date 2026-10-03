@@ -59,6 +59,8 @@ export function compare(before, go, after, platform) {
   need(before.lo <= go.lo && go.hi <= after.hi && after.lo >= before.lo && after.wall >= before.wall,
     'causal_counter_containment');
   need(after.hi - before.lo <= 2000000000n, 'original_preparation_counter_span');
+  // Same full native endpoint span as production anchorMatches.
+  need(after.hi - before.lo <= BigInt(budgets.helperMs) * 1000000n, 'actual_translation_counter_span');
   // Fixed local source assumptions only. Neither predicate grants a wall policy.
   const wallAllowance = platform === 'win32' ? 0n : 2000000n;
   need(go.wall >= before.wall - wallAllowance && go.wall <= after.wall + wallAllowance, 'causal_wall_containment');

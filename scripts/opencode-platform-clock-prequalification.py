@@ -270,14 +270,14 @@ class Owned:
 
     def start_helper(self, helper, expected_sha, cwd, env, operation_end):
         # The immediate actual-file SHA consumes the ORIGINAL operation/job
-        # budgets. The 224ms child allowance begins only at launch, never at SHA.
+        # budgets. Translation224ms is the actual native before/after span,
+        # not a Python launch/EOF timer; the child uses the existing Go ceiling.
         remaining(operation_end); remaining(self.end)
         actual_sha = sha(helper)
         remaining(operation_end); remaining(self.end)
         need(actual_sha == expected_sha, 'actual_helper_hash')
         launch_start = time.monotonic()
-        end = min(operation_end, self.end, launch_start + BUDGETS['helperMs'] / 1000,
-                  launch_start + BUDGETS['goMs'] / 1000)
+        end = min(operation_end, self.end, launch_start + BUDGETS['goMs'] / 1000)
         s = self.start([str(helper), 'opencode-clock', '--protocol', '1'], cwd, env, 'helper', 1024)
         return s, end
 
@@ -733,15 +733,17 @@ def run_case(root, metadata, os_name, arch, job_end):
         host['p'].stdin.close()
         stage = 'host_close'
         own.close(host, operation_end)
+        # Product preparation ends at genuine host/helper closure. Retained
+        # custody hashes use the original host/job ceiling, not a new grant.
         stage = 'final_custody_hashes'
-        remaining(operation_end)
+        remaining(js_end)
         need(sha(exe) == metadata['imageSha256'] and sha(helper) == metadata['helperSha256'] and
              sha(fixture) == metadata['fixtureSha256'] and
              all(sha(root / x['path']) == x['actualSHA256'] for x in metadata['moduleLeaves']), 'final_actual_source_image_hashes')
         if loader_files:
             need(windows_loader_files() == loader_files, 'actual_os_loader_file_lifetime')
         stage = 'final_custody_guard'
-        remaining(operation_end)
+        remaining(js_end)
         safe.update({k: result[k] for k in ('status', 'actualModuleBound', 'rounds', 'samples', 'comparisons',
                      'datePredicates', 'disposeCalls', 'sampleAfterDisposeRefused', 'operationElapsedMs', 'jsElapsedMs', 'checks')})
         safe.update(kernelExecutingImageVerified=True, nativeResourceNonincrease=True,
@@ -766,8 +768,8 @@ def run_case(root, metadata, os_name, arch, job_end):
         if host:
             for index, data in enumerate(host['buffers']):
                 path = root / ('module-stream-' + str(index) + '.private'); path.write_bytes(data); path.chmod(0o600)
-        if safe['status'] == 'module_prequalification_observed' and time.monotonic() >= operation_end:
-            safe.update(status='unqualified', failureReason='original_preparation_deadline')
+        if safe['status'] == 'module_prequalification_observed' and time.monotonic() >= js_end:
+            safe.update(status='unqualified', failureReason='original_js_deadline')
             safe['failureObservation'] = observation()
     return safe
 
@@ -788,7 +790,7 @@ def validate_result(v, os_name):
     for comparison in v['comparisons']:
         need(set(comparison) == {'outerWidthNs', 'goWidthNs'} and
              all(isinstance(n, str) and re.fullmatch('(0|[1-9][0-9]{0,18})', n) for n in comparison.values()) and
-             int(comparison['outerWidthNs']) <= 2000000000 and int(comparison['goWidthNs']) <= 100000000, 'fixed_parity_bounds')
+             int(comparison['outerWidthNs']) <= BUDGETS['helperMs'] * 1000000 and int(comparison['goWidthNs']) <= 100000000, 'fixed_parity_bounds')
     need(len(v['datePredicates']) == (3 if os_name == 'windows' else 0), 'separate_windows_date_observations')
     for observation in v['datePredicates']:
         need(set(observation) == {'dateInsideNativeInterval', 'datePreciseDistanceNs'} and

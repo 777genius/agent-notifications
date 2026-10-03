@@ -37,7 +37,12 @@ func portRunChild(prefix,helper,input string,environment []string){
  child:=exec.Command(helper,"-test.run=^TestRuntimePortHelper$");child.Env=environment;child.Stdin=strings.NewReader(input);child.Stdout=output;child.Stderr=&portDiagnosticWriter{diagnostics,4096}
  os.WriteFile(prefix+".parent-stage",[]byte("child_start_wait"),0600)
  status:="ok";if e:=child.Start();e!=nil {status=fmt.Sprintf("start: %v",e)} else {os.WriteFile(prefix+".helper",[]byte(strconv.Itoa(child.Process.Pid)),0600);if e:=child.Wait();e!=nil {status=fmt.Sprintf("wait: %v",e)}}
- output.Close();diagnostics.Close();os.WriteFile(prefix+".done",[]byte(status),0600)
+ output.Close();diagnostics.Close()
+ // Existence commits the complete Wait result, never an empty in-progress file.
+ done,e:=os.CreateTemp(prefix[:strings.LastIndexByte(prefix,os.PathSeparator)+1],"TEST-port-done-");if e!=nil {os.Exit(6)}
+ if _,e=done.Write([]byte(status));e!=nil {done.Close();os.Remove(done.Name());os.Exit(7)}
+ if e=done.Close();e!=nil {os.Remove(done.Name());os.Exit(8)}
+ if e=os.Rename(done.Name(),prefix+".done");e!=nil {os.Remove(done.Name());os.Exit(9)}
 }
 `
 
@@ -171,7 +176,7 @@ func portOutput(t *testing.T, in runtimeProfileInput) []byte {
 	portAwait(t, portPrefix(in)+".done", portPrefix(in))
 	status, e := os.ReadFile(portPrefix(in) + ".done")
 	if e != nil || string(status) != "ok" {
-		t.Fatalf("helper not waited successfully: %v; %s", e, portFailureDiagnostics(portPrefix(in)))
+		t.Fatalf("helper not waited successfully: %v; first status=%q; %s", e, status, portFailureDiagnostics(portPrefix(in)))
 	}
 	portAssertDiagnostics(t, portPrefix(in))
 	data, e := os.ReadFile(portPrefix(in) + ".receipt")

@@ -38,8 +38,9 @@ class PureVectors(unittest.TestCase):
             expected = 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'
             original_sha = H.sha
             # A 300ms SHA still leaves 1.7s in the original operation. It must
-            # leave the full 224ms launch allowance, with no new 2s grant.
-            for operation_end, job_end, wanted_end in [(102.0, 900.0, 100.524),
+            # retain only the original operation/Go window; translation224ms
+            # is independently checked on actual native endpoints, not this timer.
+            for operation_end, job_end, wanted_end in [(102.0, 900.0, 102.0),
                                                        (100.4, 900.0, 100.4),
                                                        (102.0, 100.4, 100.4)]:
                 with self.subTest(operation_end=operation_end, job_end=job_end):
@@ -238,6 +239,10 @@ class PureVectors(unittest.TestCase):
             value = copy.deepcopy(result); value[key] = bad
             with self.subTest(key=key):
                 with self.assertRaises(RuntimeError): H.validate_result(value, 'linux')
+        value = copy.deepcopy(result); value['comparisons'][0]['outerWidthNs'] = '224000000'
+        H.validate_result(value, 'linux')
+        value['comparisons'][0]['outerWidthNs'] = '224000001'
+        with self.assertRaises(RuntimeError): H.validate_result(value, 'linux')
         value = copy.deepcopy(result); value['comparisons'][0]['outerWidthNs'] = '2000000001'
         with self.assertRaises(RuntimeError): H.validate_result(value, 'linux')
         value = copy.deepcopy(result); value['rawBoot'] = 'not-public'
@@ -276,6 +281,12 @@ assert.throws(() => h.decimal('01'));
 const before = { boot: good.boot, domain: 'windows-kernel', kind: 'windows-interrupt-precise', lo: 11999900000n, hi: 11999950000n, wall: 1799999999999999000n };
 const after = { ...before, lo: 12000015000n, hi: 12000020000n, wall: 1800000000000001000n };
 assert.deepEqual(h.compare(before, good, after, 'win32'), { outerWidthNs: '120000', goWidthNs: '10000' });
+// Independent endpoint vectors, with no claim about physical clock rate.
+const boundary = { ...after, lo: before.lo + 223900000n, hi: before.lo + 224000000n };
+assert.equal(h.compare(before, good, boundary, 'win32').outerWidthNs, '224000000');
+assert.throws(() => h.compare(before, good, { ...boundary, hi: boundary.hi + 1n }, 'win32'), /actual_translation_counter_span/);
+// A point-only comparison would pass; the full high endpoint must refuse.
+assert.throws(() => h.compare(before, good, { ...boundary, lo: before.lo + 220000000n, hi: before.lo + 225000000n }, 'win32'), /actual_translation_counter_span/);
 assert.throws(() => h.compare(before, {...good, boot: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'}, after, 'win32'));
 assert.throws(() => h.compare(before, {...good, lo: before.lo - 1n}, after, 'win32'));
 assert.throws(() => h.compare(before, {...good, wall: before.wall - 1n}, after, 'win32'));
