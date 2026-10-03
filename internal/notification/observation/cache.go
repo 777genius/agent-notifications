@@ -41,6 +41,7 @@ type cacheState struct {
 func (c *RecentCache) Claim(ctx context.Context, key string, bit uint8) (bool, error) {
 	diag := startClaimDiagnostics(ctx)
 	defer diag.end()
+	defer diag.emitFailure()
 	if c == nil || c.Clock == nil || len(key) != sha256.Size*2 || (bit != 1 && bit != 2) {
 		return false, diag.fail(nil, "invalid_request")
 	}

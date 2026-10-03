@@ -36,6 +36,7 @@ type claimDiagnostics struct {
 	phase         string
 	region        *trace.Region
 	publication   bool
+	failure       *ClaimFailure
 }
 
 func startClaimDiagnostics(ctx context.Context) *claimDiagnostics {
@@ -67,23 +68,7 @@ func (d *claimDiagnostics) fail(err error, fallback string) error {
 	now := time.Now()
 	f := &ClaimFailure{Phase: d.phase, Class: fallback, TotalElapsed: now.Sub(d.started),
 		StageElapsed: now.Sub(d.stageStarted), BudgetState: "not_started", MayHavePublished: d.publication}
-	defer func() {
-		tracing := trace.IsEnabled()
-		diagnostics := os.Getenv("AGENT_NOTIFICATIONS_OBSERVATION_DIAGNOSTICS") == "1"
-		if tracing || diagnostics {
-			detail := fmt.Sprintf(
-				"phase=%s class=%s code=%d elapsed_ns=%d stage_ns=%d budget_ns=%d budget=%s publication_possible=%t",
-				f.Phase, f.Class, f.OSCode, f.TotalElapsed, f.StageElapsed, f.BudgetElapsed, f.BudgetState, f.MayHavePublished)
-			if tracing {
-				trace.Log(d.ctx, "observation.claim.failure", detail)
-			}
-			if diagnostics {
-				// Explicit operator diagnostics stay on stderr; hook stdout and
-				// public receipts remain unchanged. No raw error is formatted.
-				_, _ = fmt.Fprintln(os.Stderr, "observation.claim.failure", detail)
-			}
-		}
-	}()
+	d.failure = f
 	if d.budget != nil {
 		f.BudgetElapsed = now.Sub(d.budgetStarted)
 		f.BudgetState = "active"
@@ -118,4 +103,28 @@ func (d *claimDiagnostics) fail(err error, fallback string) error {
 		}
 	}
 	return f
+}
+
+// Emit after Claim has released its lock, so an opt-in diagnostic sink cannot
+// extend lock ownership for another claim.
+func (d *claimDiagnostics) emitFailure() {
+	f := d.failure
+	if f == nil {
+		return
+	}
+	tracing := trace.IsEnabled()
+	diagnostics := os.Getenv("AGENT_NOTIFICATIONS_OBSERVATION_DIAGNOSTICS") == "1"
+	if tracing || diagnostics {
+		detail := fmt.Sprintf(
+			"phase=%s class=%s code=%d elapsed_ns=%d stage_ns=%d budget_ns=%d budget=%s publication_possible=%t",
+			f.Phase, f.Class, f.OSCode, f.TotalElapsed, f.StageElapsed, f.BudgetElapsed, f.BudgetState, f.MayHavePublished)
+		if tracing {
+			trace.Log(d.ctx, "observation.claim.failure", detail)
+		}
+		if diagnostics {
+			// Explicit operator diagnostics stay on stderr; hook stdout and
+			// public receipts remain unchanged. No raw error is formatted.
+			_, _ = fmt.Fprintln(os.Stderr, "observation.claim.failure", detail)
+		}
+	}
 }

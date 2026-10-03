@@ -34,19 +34,51 @@ jobs:
         run: |
           go test -race -run '^(TestClaimFailureDiagnosticsRedactPrivatePath|TestUnavailableCacheAndLockBudgetAreNeutral)$' ./internal/notification/observation
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Preserve plain and traced strict failures
+      - name: Build instrumented baseline and candidate
+        shell: pwsh
+        run: |
+          $baseline = Join-Path $env:RUNNER_TEMP 'TEST-observation-baseline'
+          git fetch --no-tags --depth=1 origin 2201a6aa843be2d134acb001c9088e1347cbc627
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git worktree add --detach $baseline 2201a6aa843be2d134acb001c9088e1347cbc627
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $files = @('internal/notification/observation/cache.go', 'internal/notification/observation/cache_failure.go', 'internal/installruntime/private_cache_windows.go')
+          foreach ($file in $files) { Copy-Item $file (Join-Path $baseline $file) }
+          git -C $baseline diff | Out-File evidence/baseline-instrumentation.diff
+          go test -race -cover -c -o evidence/current.test.exe ./internal/geminievent
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $output = Join-Path $PWD 'evidence/baseline.test.exe'
+          Push-Location $baseline
+          try {
+            go test -race -cover -c -o $output ./internal/geminievent
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally { Pop-Location }
+      - name: Compare fresh test processes with strict assertions
         shell: pwsh
         run: |
           $target = '^Test(CacheWindowBoundAndBindingIsolation|ConcurrentConsumerClaimsEachChannelOnce|ChannelConsentIndependentAndNoRetry)$'
-          go test -v -race -count=200 -run $target '-coverprofile=evidence/plain-coverage.out' -covermode=atomic ./internal/geminievent 2>&1 | Tee-Object evidence/plain.log
-          $plain = $LASTEXITCODE
-          go test -v -race -count=200 -run $target '-trace=evidence/claim.trace' '-coverprofile=evidence/traced-coverage.out' -covermode=atomic ./internal/geminievent 2>&1 | Tee-Object evidence/traced.log
-          $traced = $LASTEXITCODE
-          "plain=$plain traced=$traced" | Out-File evidence/status.txt
-          if (Test-Path evidence/claim.trace) {
-            go tool trace -d=1 evidence/claim.trace > evidence/trace-events.txt
+          $failed = $false
+          foreach ($iteration in 1..30) {
+            foreach ($revision in @('baseline', 'current')) {
+              $binary = Join-Path $PWD "evidence/$revision.test.exe"
+              $log = "evidence/$revision-$iteration.log"
+              $trace = "evidence/$revision-$iteration.trace"
+              if ($iteration -le 10) {
+                & $binary -test.v -test.run $target "-test.trace=$trace" 2>&1 | Tee-Object $log
+              } else {
+                & $binary -test.v -test.run $target 2>&1 | Tee-Object $log
+              }
+              $code = $LASTEXITCODE
+              "$revision iteration=$iteration exit=$code" | Add-Content evidence/status.txt
+              if ($code -ne 0) { $failed = $true }
+              if ((Test-Path $trace) -and ($code -ne 0 -or $iteration -eq 1)) {
+                go tool trace -d=parsed $trace > "evidence/$revision-$iteration-events.txt"
+                if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              }
+            }
           }
-          if ($plain -ne 0 -or $traced -ne 0) { exit 1 }
+          Remove-Item evidence/*.test.exe
+          if ($failed) { exit 1 }
       - name: Preserve original evidence
         if: always()
         uses: actions/upload-artifact@v7
