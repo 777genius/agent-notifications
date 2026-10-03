@@ -74,6 +74,44 @@ test('concurrent duplicates cannot overwrite the question; multiple actual quest
   assert.equal((await display.enrich(fact())).display?.question, 'Use the new installer? · Restart OpenCode?');
 });
 
+// Regression: the SDK can admit a duplicate while the first observation loses
+// admission and returns. Releasing the loser during the winner's title await
+// must not clear the active request's original concrete question.
+test('a losing duplicate observation cannot release the winning emit snapshot', async () => {
+  let resolve!: (value: unknown) => void;
+  const display = createDisplayContext({ session: { get: () => new Promise((done) => { resolve = done; }) } });
+  const first = display.capture(asked());
+  const duplicate = display.capture(asked('s', 'r', 'DUPLICATE REPLACEMENT'));
+  const winningEmit = display.enrich(fact());
+  await Promise.resolve();
+  display.release(first);
+  resolve({ id: 's', title: 'Installer work' });
+  assert.deepEqual((await winningEmit).display, {
+    sessionID: 's', requestID: 'r', sessionTitle: 'Installer work', question: 'Use the new installer?',
+  });
+  display.release(duplicate);
+  const afterAllObservers = display.enrich(fact());
+  await Promise.resolve();
+  resolve({ id: 's', title: 'Installer work' });
+  assert.equal((await afterAllObservers).display?.question, undefined);
+});
+
+// A shared lifetime must not override native resolution: both observations
+// can still be in flight when the user answers/rejects the request.
+test('resolution invalidates a duplicate-held snapshot during delayed enrichment', async () => {
+  let resolve!: (value: unknown) => void;
+  const display = createDisplayContext({ session: { get: () => new Promise((done) => { resolve = done; }) } });
+  const first = display.capture(asked());
+  const duplicate = display.capture(asked());
+  const winningEmit = display.enrich(fact());
+  await Promise.resolve();
+  display.release(first);
+  display.capture({ type: 'question.rejected', properties: { sessionID: 's', requestID: 'r' } });
+  resolve({ id: 's', title: 'Installer work' });
+  assert.equal((await winningEmit).display?.question, undefined);
+  display.release(duplicate);
+});
+
 test('bounded metadata failure preserves the neutral fact and never invents header text', async () => {
   const display = createDisplayContext({ session: { get: async () => { throw new Error('PRIVATE ERROR'); } } });
   display.capture(asked('s', 'r', ''));

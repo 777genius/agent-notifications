@@ -15,7 +15,7 @@ export interface Display {
 export interface SessionClient {
   session: { get(input: { path: { id: string }; signal: AbortSignal }): Promise<unknown> };
 }
-type Snapshot = { sessionID: string; requestID: string; question: string; active: boolean };
+type Snapshot = { sessionID: string; requestID: string; question: string; active: boolean; observers: number };
 const object = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 const bytes = (value: string) => new TextEncoder().encode(value).length;
@@ -58,7 +58,13 @@ export function createDisplayContext(client: SessionClient, timeoutMs = 1000, ma
     }
     if (event.type !== 'question.asked' || !validID(p.sessionID) || !validID(p.id)) return;
     const k = key(p.sessionID, p.id);
-    if (requests.has(k)) return; // A concurrent duplicate cannot replace the first snapshot.
+    const existing = requests.get(k);
+    if (existing) {
+      // The SDK may admit any concurrent observation. Keep the first immutable
+      // text alive until all observations finish, including an awaited emit.
+      existing.observers++;
+      return existing;
+    }
     if (requests.size >= 512) return;
     let question = '';
     if (Array.isArray(p.questions) && p.questions.length > 0 && p.questions.length <= 8) {
@@ -66,12 +72,12 @@ export function createDisplayContext(client: SessionClient, timeoutMs = 1000, ma
       const combined = parts.join(' · ');
       if (parts.every(Boolean) && bytes(combined) <= 2048) question = combined;
     }
-    const snapshot = { sessionID: p.sessionID, requestID: p.id, question, active: true };
+    const snapshot = { sessionID: p.sessionID, requestID: p.id, question, active: true, observers: 1 };
     requests.set(k, snapshot);
     return snapshot;
   }
   function release(snapshot: Snapshot | undefined) {
-    if (!snapshot) return;
+    if (!snapshot || --snapshot.observers > 0) return;
     snapshot.active = false;
     const k = key(snapshot.sessionID, snapshot.requestID);
     if (requests.get(k) === snapshot) requests.delete(k);
