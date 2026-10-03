@@ -289,7 +289,8 @@ label. Claude uses an optional `session_title` hook field, then exact-session
 `thread_name` from `$CODEX_HOME/session_index.jsonl` (default `~/.codex`). These are
 bounded, read-only, best-effort native file formats, not a public live Desktop API.
 Missing, unsupported, or out-of-window metadata retains the generated label; no
-session is resumed and no model call generates a name. Renames are read on the next hook.
+session is resumed and no model call generates a name. Each hook rereads supported
+metadata; Claude renames outside the bounded transcript head/tail windows can be missed.
 
 Claude `AskUserQuestion` uses the current `tool_input` rather than a previous question
 from the transcript. Missing question text gets the ordinary question fallback.
@@ -477,7 +478,7 @@ The following JSON illustrates the schema. Do not replace your existing document
 | `notifyOnSubagentStop` | `false` | Send notifications when subagents (Task tool) complete. Has no effect unless `suppressForSubagents` is also set to `false`. |
 | `suppressForSubagents` | `true` | Suppress subagent (`SubagentStop`) notifications, plus any `Stop` notification whose transcript is a subagent/teammate transcript. Detection uses the hook event for `SubagentStop` (Claude Code passes the parent session `transcript_path` to that hook, so a path check alone can't identify it). Set to `false` together with `notifyOnSubagentStop: true` to get a notification each time a subagent finishes. |
 | `notifyOnTextResponse` | `true` | Send notifications for text-only responses (no tool usage) |
-| `desktop.showSessionLabel` | `true` | Show the native session name, with `[name id]` as fallback. Question notifications identify the session in the macOS subtitle. `false` hides both kinds of session label. |
+| `desktop.showSessionLabel` | `true` | Show the native session name, with `[name id]` as fallback. Questions identify the session in the native macOS subtitle or the body on backends without subtitles. `false` hides both kinds of session label. |
 | `respectJudgeMode` | `true` | Honor `CLAUDE_HOOK_JUDGE_MODE=true` env var to suppress notifications |
 | `notifyOnlyWhenUnfocused` | `false` | Skip the desktop notification only when the focused terminal window can be matched to the current Claude Code session. Best-effort per platform; if focus can't be determined the notification is still shown. |
 | `notifyDelaySeconds` | `0` | Wait N seconds before delivering a desktop notification (capped at 25s by the hook timeout). With `notifyOnlyWhenUnfocused`, focus is re-checked after the wait. Webhooks are unaffected. |

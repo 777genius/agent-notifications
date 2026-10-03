@@ -47,8 +47,8 @@ func TestHookPresentationShortensOnlyHeadline(t *testing.T) {
 	}
 }
 
-// Regression: the SendDesktop boundary must use the structured content rather
-// than parse the legacy envelope when native presentation is requested.
+// Regression: subtitleless delivery must retain native/generated question
+// identity, hide it when disabled, and never parse the stale legacy envelope.
 func TestSendDesktopUsesStructuredHookPresentation(t *testing.T) {
 	if runtime.GOOS == "darwin" {
 		t.Skip("this test exercises the beeep delivery boundary")
@@ -58,15 +58,29 @@ func TestSendDesktopUsesStructuredHookPresentation(t *testing.T) {
 	cfg.Notifications.Desktop.Sound = false
 	n := New(cfg)
 	t.Cleanup(func() { _ = n.Close() })
-	var title, body string
-	withBeeepNotify(t, func(t, b string, _ any) error { title, body = t, b; return nil })
-	err := n.SendDesktop(analyzer.StatusQuestion, "[OLD|wrong folder] stale question", "original-id", t.TempDir(), WithHookPresentation(HookPresentation{
-		Question: "Use the new installer?", Body: "Use the new installer?", SessionName: "SDK | [release]",
-	}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(title, "Use the new installer?") || body != "Use the new installer?" || strings.Contains(title+body, "OLD") {
-		t.Fatalf("delivered title=%q body=%q", title, body)
+	bell := false
+	cfg.Notifications.Desktop.TerminalBell = &bell
+	for _, tc := range []struct {
+		name, label, wantBody string
+		show                  bool
+	}{
+		{"native", "SDK | [release]", "SDK | [release] · sandbox\nUse the new installer?", true},
+		{"generated fallback", "bold 00000000", "bold 00000000 · sandbox\nUse the new installer?", true},
+		{"hidden", "SDK | [release]", "sandbox\nUse the new installer?", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg.Notifications.Desktop.ShowSessionLabel = &tc.show
+			var title, body string
+			withBeeepNotify(t, func(t, b string, _ any) error { title, body = t, b; return nil })
+			err := n.SendDesktop(analyzer.StatusQuestion, "[OLD|wrong folder] stale question", "original-id", t.TempDir(), WithHookPresentation(HookPresentation{
+				Question: "Use the new installer?", Body: "Use the new installer?", SessionName: tc.label, Folder: "sandbox",
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if title != cfg.Statuses["question"].Title+": Use the new installer?" || body != tc.wantBody {
+				t.Fatalf("delivered title=%q body=%q", title, body)
+			}
+		})
 	}
 }

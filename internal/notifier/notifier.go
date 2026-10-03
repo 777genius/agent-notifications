@@ -141,6 +141,13 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 		}
 	}
 
+	// The remaining backends only display title and body. Structured hooks
+	// carry question identity in the subtitle, so preserve that literal context
+	// here after the native macOS path has had its clean three-field layout.
+	if sendOpts.hookPresentation != nil && subtitle != "" {
+		cleanMessage = subtitle + "\n" + cleanMessage
+	}
+
 	// Linux: Try daemon for click-to-focus support
 	if platform.IsLinux() && n.cfg.Notifications.Desktop.ClickToFocus {
 		if err := sendLinuxNotification(title, cleanMessage, appIcon, n.cfg, cwd); err != nil {

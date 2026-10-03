@@ -65,12 +65,23 @@ func TestWindowsCacheDocumentBoundsAndIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(c.Root, "observations.json")
+	assertWindowsCachePrivateOwner(t, path)
 	alias := filepath.Join(c.Root, "alias.json")
 	if err := os.Link(path, alias); err != nil {
 		t.Fatal(err)
 	}
 	if data, err := readCache(c.Root); err == nil || data != nil {
 		t.Fatalf("hardlinked document accepted: %v", err)
+	}
+	// Red condition: replacement trusts a hardlinked target, discarding the
+	// checked document name while another name still refers to its old inode.
+	if err := writeCache(c.Root, []byte("replacement")); err == nil {
+		t.Fatal("hardlinked replacement target accepted")
+	}
+	for _, name := range []string{path, alias} {
+		if data, err := os.ReadFile(name); err != nil || string(data) != "{}" {
+			t.Fatalf("rejected replacement mutated %s: %q/%v", name, data, err)
+		}
 	}
 	if err := os.Remove(alias); err != nil {
 		t.Fatal(err)
@@ -81,6 +92,7 @@ func TestWindowsCacheDocumentBoundsAndIdentity(t *testing.T) {
 	if err := writeCache(c.Root, []byte(strings.Repeat(" ", cacheBytes+1))); err != nil {
 		t.Fatal(err)
 	}
+	assertWindowsCachePrivateOwner(t, path)
 	if data, err := readCache(c.Root); err == nil || data != nil {
 		t.Fatalf("oversized document accepted: %v", err)
 	}
