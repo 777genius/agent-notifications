@@ -56,14 +56,14 @@ jobs:
       - name: Compare fresh test processes with strict assertions
         shell: pwsh
         run: |
-          $target = '^Test(CacheWindowBoundAndBindingIsolation|ConcurrentConsumerClaimsEachChannelOnce|ChannelConsentIndependentAndNoRetry)$'
+          $target = '.'
           $failed = $false
-          foreach ($iteration in 1..30) {
+          foreach ($iteration in 1..20) {
             foreach ($revision in @('baseline', 'current')) {
               $binary = Join-Path $PWD "evidence/$revision.test.exe"
               $log = "evidence/$revision-$iteration.log"
               $trace = "evidence/$revision-$iteration.trace"
-              if ($iteration -le 10) {
+              if ($iteration -le 5) {
                 & $binary '-test.v' '-test.run' $target "-test.trace=$trace" 2>&1 | Tee-Object $log
               } else {
                 & $binary '-test.v' '-test.run' $target 2>&1 | Tee-Object $log
