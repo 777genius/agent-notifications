@@ -1667,3 +1667,15 @@ func TestBuildFocusScript_RegularTerminal_InvalidCWD_FallbackToActivate(t *testi
 		t.Error("Should fallback to -activate when cwd is invalid")
 	}
 }
+
+func TestBuildNotifierCommandUsesLaunchServicesForManagedNativePaths(t *testing.T) {
+	for _, bundle := range []string{"AgentNotifications.app", "generation-0123456789abcdef0123456789abcdef.app"} {
+		app := filepath.Join(t.TempDir(), bundle)
+		binary := filepath.Join(app, "Contents", "MacOS", "terminal-notifier-modern")
+		cmd := buildNotifierCommand(binary, []string{"-title", "managed"})
+		want := []string{"open", "-W", "-n", "-g", app, "--args", "-launchedViaLaunchServices", "-title", "managed"}
+		if strings.Join(cmd.Args, "\x00") != strings.Join(want, "\x00") {
+			t.Fatalf("managed modern helper would run without bundle metadata: %v", cmd.Args)
+		}
+	}
+}

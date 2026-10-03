@@ -72,13 +72,16 @@ Darwin execution and installed client E2E are separate, unclaimed qualifications
 
 Codex callers may set `SkillProjection: &clientsetup.SkillProjection{SourcePath:
 managedSource, DestinationPath: selectedDestination}`. The source must be exactly
-`<RuntimeRoot>/skills/agent-notify/SKILL.md`, a ledger-owned regular file matching
+`<RuntimeRoot>/skills/agent-notifications/SKILL.md`, a ledger-owned regular file matching
 its fingerprint, at most 64 KiB. No plugin cache, environment, cwd or client
 configuration is searched for a source or destination. The destination is an
-explicit absolute clean physical user path ending in `agent-notify/SKILL.md`,
+explicit absolute clean physical user path ending in `agent-notifications/SKILL.md`,
 outside runtime/control and distinct from the MCP config. The selected physical
-skills root and `agent-notify` parent **must already exist**, prepared by the
-explicit installer caller. This API creates no directories, including on reads.
+skills root and `agent-notifications` parent may be created under the commit
+lock. Read-only inspection creates no directories.
+The historical `agent-notify` source and projection paths remain accepted for
+owned repair, refresh, relocation and removal. Renaming a projection removes the
+unchanged legacy copy in the same transaction; an unowned sibling skill conflicts.
 Symlinks in either file path or its parents are refused. New skill files are 0600.
 
 A projection extends per-consumer ownership to schema 2 with exact source,

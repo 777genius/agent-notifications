@@ -12,6 +12,11 @@ import (
 // PendingMutation. Ordinary installs keep WriterFloor. The floor never decreases.
 const ReservationWriterFloor = 2
 
+// LocalPolicyWriterFloor protects binding-scoped native/manual consent. It is
+// independent of the reservation protocol; older unrelated installs stay at 2.
+const LocalPolicyWriterFloor = 3
+const transactionSchemaV4 = 4
+
 // CoordinatorLockName is the single ControlRoot process lock that serializes
 // setup coordinators. The kernel lock inode is separate; death releases this
 // lease, but a persisted reservation remains.
@@ -33,7 +38,7 @@ func acceptedLedgerSchema(schema int) bool {
 }
 
 func acceptedTransactionSchema(schema int) bool {
-	return schema == transactionSchemaV1 || schema == transactionSchemaV2 || schema == transactionSchemaV3
+	return schema == transactionSchemaV1 || schema == transactionSchemaV2 || schema == transactionSchemaV3 || schema == transactionSchemaV4
 }
 
 // legacyAcceptedLedgerSchema is the frozen v1 writer contract: schema 3 is
@@ -102,7 +107,10 @@ func applyReservationProtocol(next *Ledger, r Request, current Ledger) {
 	if next.WriterFloor < WriterFloor {
 		next.WriterFloor = WriterFloor
 	}
-	if reservationMutation(r) || current.PendingMutation != nil || current.WriterFloor >= ReservationWriterFloor || current.Schema == ledgerSchemaV3 {
+	if localPolicyMutation(r) && next.WriterFloor < LocalPolicyWriterFloor {
+		next.WriterFloor = LocalPolicyWriterFloor
+	}
+	if next.WriterFloor >= ReservationWriterFloor || reservationMutation(r) || current.PendingMutation != nil || current.WriterFloor >= ReservationWriterFloor || current.Schema == ledgerSchemaV3 {
 		if next.WriterFloor < ReservationWriterFloor {
 			next.WriterFloor = ReservationWriterFloor
 		}
@@ -115,6 +123,9 @@ func applyReservationProtocol(next *Ledger, r Request, current Ledger) {
 }
 
 func transactionSchemaFor(next Ledger, r Request) int {
+	if localPolicyMutation(r) || next.WriterFloor >= LocalPolicyWriterFloor {
+		return transactionSchemaV4
+	}
 	if reservationMutation(r) || next.Schema == ledgerSchemaV3 || next.WriterFloor >= ReservationWriterFloor {
 		return transactionSchemaV3
 	}
@@ -167,6 +178,9 @@ func recoverOnlyNoJournal(root string) (Ledger, error) {
 	l, err := readLedger(root)
 	if err != nil {
 		return l, err
+	}
+	if l.WriterFloor > SupportedWriterFloor {
+		return l, fmt.Errorf("installed writer floor requires a newer compatible kernel")
 	}
 	if err := checkPolicyGeneration(root, l); err != nil {
 		return l, err

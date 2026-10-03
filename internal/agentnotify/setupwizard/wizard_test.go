@@ -71,10 +71,10 @@ func writePackage(t *testing.T, root, probe string) {
 		t.Fatal(err)
 	}
 	files := map[string][]byte{
-		"plugin.json":                  []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.0"}`),
-		"mcp.json":                     []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"agent-notify":{"type":"stdio","command":"./bin/probe","args":[],"env":{}}}}`),
-		"skills/agent-notify/SKILL.md": []byte("---\nname: agent-notify\ndescription: Wizard fixture\n---\n"),
-		"bin/probe":                    body,
+		"plugin.json":                         []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.0"}`),
+		"mcp.json":                            []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"agent-notify":{"type":"stdio","command":"./bin/probe","args":[],"env":{}}}}`),
+		"skills/agent-notifications/SKILL.md": []byte("---\nname: agent-notifications\ndescription: Wizard fixture\n---\n"),
+		"bin/probe":                           body,
 	}
 	for rel, data := range files {
 		path := filepath.Join(root, rel)
@@ -4435,7 +4435,7 @@ func TestWizardSecondClientAddDoesNotReviseExisting(t *testing.T) {
 	}
 	otherPkg := filepath.Join(filepath.Dir(control), "other-package")
 	writePackage(t, otherPkg, probe)
-	if err := os.WriteFile(filepath.Join(otherPkg, "skills", "agent-notify", "SKILL.md"), []byte("---\nname: agent-notify\ndescription: Revised\n---\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(otherPkg, "skills", "agent-notifications", "SKILL.md"), []byte("---\nname: agent-notifications\ndescription: Revised\n---\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	mismatch := base
@@ -4547,7 +4547,7 @@ func TestWizardTwoPhaseUpdateThenAdd(t *testing.T) {
 	}
 	otherPkg := filepath.Join(filepath.Dir(control), "other-package")
 	writePackage(t, otherPkg, probe)
-	if err := os.WriteFile(filepath.Join(otherPkg, "skills", "agent-notify", "SKILL.md"), []byte("---\nname: agent-notify\ndescription: Revised\n---\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(otherPkg, "skills", "agent-notifications", "SKILL.md"), []byte("---\nname: agent-notifications\ndescription: Revised\n---\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	mismatch := base
@@ -5478,7 +5478,7 @@ func TestWizardAmbiguousInstallationsConflictWithoutID(t *testing.T) {
 	}
 	otherPkg := filepath.Join(filepath.Dir(control), "other-package")
 	writePackage(t, otherPkg, probe)
-	if err := os.WriteFile(filepath.Join(otherPkg, "skills", "agent-notify", "SKILL.md"), []byte("---\nname: agent-notify\ndescription: Other installation\n---\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(otherPkg, "skills", "agent-notifications", "SKILL.md"), []byte("---\nname: agent-notifications\ndescription: Other installation\n---\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	second := base

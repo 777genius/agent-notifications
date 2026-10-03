@@ -46,6 +46,10 @@
     "respectDisplaySleep": null
   },
   "statuses": {
+    "agent_stopping": {
+      "title": "Copilot in VS Code",
+      "sound": ""
+    },
     "api_error": {
       "title": "🔴 API Error: 401",
       "sound": "ASSET_ROOT/sounds/question.mp3"
