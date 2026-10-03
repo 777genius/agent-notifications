@@ -33,6 +33,7 @@ import (
 	"github.com/777genius/agent-notifications/internal/agentnotify/portableasset"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portablesetup"
 	"github.com/777genius/agent-notifications/internal/agentnotify/registration"
+	"github.com/777genius/agent-notifications/internal/codexsetup"
 	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/testenv"
@@ -8187,5 +8188,15 @@ func TestFinishWizardIntentDoesNotClearNewerOperation(t *testing.T) {
 				t.Fatalf("new intent changed: %q %v", retained, err)
 			}
 		})
+	}
+}
+
+// Dropping maintenance diagnostics at the Codex-to-wizard boundary must fail
+// while the committed hooks keep their successful outcome and path.
+func TestCodexHooksTargetPreservesMaintenanceWarning(t *testing.T) {
+	warning := "runtime committed; native registration reconciliation incomplete: registration unavailable"
+	target, err := codexHooksTarget(codexsetup.Result{HooksPath: "/TEST/codex/hooks.json", Warnings: []string{warning}}, nil)
+	if err != nil || target.Outcome != "completed" || target.Reason != "/TEST/codex/hooks.json" || len(target.Warnings) != 1 || target.Warnings[0] != warning {
+		t.Fatalf("committed hooks lost maintenance diagnostics: %+v %v", target, err)
 	}
 }
