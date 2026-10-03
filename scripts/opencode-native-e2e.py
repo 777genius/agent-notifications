@@ -37,6 +37,7 @@ COPY = {"completion": ("Task completed", "task_complete"),
         "form": ("OpenCode asked a question", "question"),
         "permission": ("OpenCode requested permission", "permission_request"),
         "error": ("An error needs your attention", "opencode_error")}
+PORTABLE = None
 GAPS = {
     "production_checkpoint_cancel": "No public pause of product reader/final checkpoint/spawn ordering",
     "duplicate_loader": "No source-qualified public duplicate topology for one registration/fact",
@@ -138,8 +139,11 @@ def prepare_sandbox_root(root, os_name):
     if os_name != "windows":
         return
     repo = pathlib.Path(__file__).resolve().parents[1]
-    run(["go", "run", str(repo / "scripts" / "opencode-private-root-windows.go"),
-         str(root)], cwd=repo, env=os.environ, timeout=90)
+    if PORTABLE is not None:
+        PORTABLE.windows_private_root(repo, root)
+    else:
+        run(["go", "run", str(repo / "scripts" / "opencode-private-root-windows.go"),
+             str(root)], cwd=repo, env=os.environ, timeout=90)
 
 
 
@@ -446,7 +450,7 @@ def registration(root, plugin, managed, asset):
 
 def configure(candidate, root, env, endpoint):
     policy = root / 'control/agent-notifications.json'
-    inspected = json.loads(run([str(candidate), 'config', 'inspect', '--json'], cwd=root, env=env))
+    inspected = json.loads(run([str(candidate), 'config', 'inspect', '--target', 'opencode', '--control-root', str(root/'control'), '--json'], cwd=root, env=env))
     require(pathlib.Path(inspected['selection']['path']) == policy and inspected['valid'] is True,
             'public_config_cli_does_not_select_managed_policy')
     before = json.loads(policy.read_text())
@@ -460,18 +464,22 @@ def configure(candidate, root, env, endpoint):
         edits['/statuses/' + status + '/title'] = 'PRIVATE_CONFIG_SENTINEL'
         edits['/statuses/' + status + '/desktop/enabled'] = True
         edits['/statuses/' + status + '/webhook/enabled'] = True
-    run([str(candidate), 'config', 'edit', '--stdin', '--expect-revision', inspected['revision']],
+    run([str(candidate), 'config', 'edit', '--target', 'opencode', '--control-root', str(root/'control'), '--stdin', '--expect-revision', inspected['revision']],
         cwd=root, env=env, input=json.dumps({'set': edits}))
     after = json.loads(policy.read_text())
     require(all(after.get(k) == before.get(k) for k in ('route', 'schemaVersion', 'enabled')), 'config_lost_setup_route')
     return after
 
 def desktop_rows(root):
+    if PORTABLE is not None:
+        return PORTABLE.desktop_rows(root)
     file = root / 'desktop-private.jsonl'
     return [json.loads(x) for x in file.read_text().splitlines()] if file.exists() else []
 
 
 def effects(root, webhook, start, name):
+    if PORTABLE is not None:
+        return PORTABLE.effects(root, webhook, start, name)
     desktop = desktop_rows(root)[start[0]:]
     posts = webhook.posts[start[1]:]
     require(len(desktop) <= 1 and len(posts) <= 1, 'duplicate_external_effect')
@@ -809,6 +817,8 @@ def native_case(base, project, root, name, v2, headers, provider, webhook, key, 
     worker = threading.Thread(target=submit)
     worker.start()
     observed = closed_attention = False
+    permission_pending = None
+    permission_join = None
     native = []
     try:
         deadline = time.monotonic() + 40
@@ -823,6 +833,8 @@ def native_case(base, project, root, name, v2, headers, provider, webhook, key, 
                     if v2 and name == 'form':
                         detail = data(request(base, project, f'/api/session/{enc}/form/{rid}', v2=True, auth_headers=headers))
                         require(detail.get('state', {}).get('status') == 'pending', 'form_not_pending')
+                    if PORTABLE is not None and name == 'permission' and not v2:
+                        permission_pending = private_redact(item, key)
                     # Keep the real native question/permission pending through both effects.
                     if effects(root, webhook, start, name):
                         observed = True
@@ -835,7 +847,7 @@ def native_case(base, project, root, name, v2, headers, provider, webhook, key, 
                         _, remaining = pending(base, project, enc, name, v2, headers, sid)
                         require(remaining is None, 'attention_still_pending_after_close')
                         closed_attention = True
-                        require(v2 or name!='permission', 'v1_permission_nonexecution_source_contract_unproved')
+                        require(PORTABLE is not None or v2 or name!='permission', 'v1_permission_nonexecution_source_contract_unproved')
             elif name not in ('form', 'permission') and native_final(native, name, v2, excluded):
                 if delivery:
                     observed = effects(root, webhook, start, name)
@@ -843,7 +855,9 @@ def native_case(base, project, root, name, v2, headers, provider, webhook, key, 
                     require((len(desktop_rows(root)), webhook.count()) == start, 'effect_after_remove')
                     observed = True
             close_event = ('form.cancelled' if v2 else 'question.rejected') if name == 'form' else 'permission.replied'
-            nonexecution = name!='permission' or permission_nonexecution(
+            if PORTABLE is not None and name == 'permission' and not v2 and closed_attention:
+                permission_join = PORTABLE.permission_join(globals(), base, project, enc, native, sid_hash, headers, key, permission_pending)
+            nonexecution = bool(permission_join) or name!='permission' or permission_nonexecution(
                 native,sid_hash,private_redact('call_p0_permission',key),private_redact('shell',key),v2)
             if observed and nonexecution and not worker.is_alive() and (name not in ('form', 'permission') or close_event in types):
                 break
@@ -865,12 +879,15 @@ def native_case(base, project, root, name, v2, headers, provider, webhook, key, 
     if name in ('completion','error'):
         final_projection(base,project,enc,sid_hash,native,name,v2,headers,key)
     if name == 'permission':
-        require(permission_nonexecution(native,sid_hash,private_redact('call_p0_permission',key),
+        require(bool(permission_join) or permission_nonexecution(native,sid_hash,private_redact('call_p0_permission',key),
                                         private_redact('shell',key),v2), 'permission_native_nonexecution_unproved')
     outcome = {'scenario': name, 'status': 'observed', 'nativeTypes': sorted({e['type'] for e in native}),
                'providerCalls': 1, 'desktopCount': len(desktop_rows(root))-start[0], 'webhookCount': webhook.count()-start[1],
                'nativeCorrelation': sid_hash, 'rootProjectionSHA256': hashlib.sha256(json.dumps(private_redact(projection, key), sort_keys=True).encode()).hexdigest(),
                'settlement': 'unproved_product_final_checkpoint_and_owned_close'}
+    if permission_join:
+        outcome['nativeRejectionJoin'] = permission_join
+        outcome['OSCommandNonexecution'] = 'unproved_no_portable_process_trace'
     report['scenarios'].append(outcome)
     return outcome
 
@@ -1158,7 +1175,7 @@ def native_app(record):
 
 def qualify(args, report):
     m, c, files, candidate, archive = load_manifest(args.manifest, args.os, args.arch, args.version, args.manifest_sha256)
-    if args.suite=='full':
+    if args.suite in ('full','business'):
         contract = reviewed_driver_contract(args.version)
         require(c['hostSourceCommit']==contract['versions'][args.version], 'driver_host_source_pin_mismatch')
     require(candidate == args.binary.resolve(strict=True) and archive == args.archive.resolve(strict=True), 'cli_manifest_paths_differ')
@@ -1171,9 +1188,16 @@ def qualify(args, report):
     actual_arch = {'arm64': 'arm64', 'aarch64': 'arm64', 'x86_64': 'amd64', 'AMD64': 'amd64'}.get(platform.machine())
     require((args.os, args.arch) == (actual_os, actual_arch), 'actual_native_platform_mismatch')
     network_guard()
+    global PORTABLE
+    if args.suite == 'business':
+        from portable import Observation
+        PORTABLE = Observation(args, m, files, require, digest)
     root = fresh_root(args.artifacts)
     prepare_sandbox_root(root, args.os)
     env, owner = environment(root), Owned()
+    if PORTABLE is not None:
+        from portable import PortableOwned
+        owner = PortableOwned(owner, root, report, require)
     key = secrets.token_bytes(32)
     (root / 'trace-key').write_bytes(key)
     report['privateEvidenceRoot'] = root.name
@@ -1202,6 +1226,7 @@ def qualify(args, report):
         skill.parent.mkdir(parents=True)
         skill.write_text('---\nname: foreign\ndescription: preserved TEST skill\n---\nForeign body.\n')
         foreign_files = {p: digest(p) for p in (foreign, skill)}
+        if PORTABLE is not None: PORTABLE.root = root
         app = native_app(c['nativeApp'])
         setup(candidate, 'install', root, env, args, app)
         plugin = config_dir / 'plugins/agent-notifications.js'
@@ -1227,12 +1252,13 @@ def qualify(args, report):
         else:
             config = {'model':'p0/p0-completion',**child_config(False),
                       'provider':{'p0':{'npm':'@ai-sdk/openai-compatible','name':'TEST loopback','options':{'baseURL':endpoint,'apiKey':'sandbox-only'},'models':models}}}
+        if PORTABLE is not None: PORTABLE.configure_loader(config, plugin, root, v2)
         write_json(projects[0] / 'opencode.json', config)
         env['OPENCODE_CONFIG'] = str(projects[0] / 'opencode.json')
-        shutil.copyfile(FIXTURES / 'capture.mjs', config_dir / 'plugins/an-test-capture.js')
+        shutil.copyfile(FIXTURES / ('portable-capture.mjs' if PORTABLE is not None else 'capture.mjs'), config_dir / 'plugins/an-test-capture.js')
         write_json(root / 'profile-descriptor.json', {'origin':r['Origin'],'executable':str(managed),'controlRoot':str(root/'control')})
         if args.os == 'linux':
-            bus = owner.launch(['dbus-daemon', '--session', '--nofork', '--address=unix:path='+str(root/'xdg-run/bus'), '--print-address=1'], root, env, 'bus')
+            bus = owner.launch(['dbus-daemon', '--session', '--nofork', '--address=unix:abstract=TEST-an-'+root.name.removeprefix('TEST-installed-'), '--print-address=1'], root, env, 'bus')
             buslog = root / 'bus-private.log'
             wait_for(lambda: bus.poll() is None and buslog.stat().st_size > 0, 3, 'private foreground bus')
             address = buslog.read_text().splitlines()[0]
@@ -1250,24 +1276,28 @@ def qualify(args, report):
             del password
         server_port = port()
         base = f'http://127.0.0.1:{server_port}'
+        if PORTABLE is not None: owner.bind(request, base, projects[0], v2, headers)
         server = owner.launch([str(host), 'serve', '--hostname', '127.0.0.1', '--port', str(server_port)], root, env, 'host', cwd=projects[0])
         readiness(server, base, projects[0], args.version, headers)
         request(base, projects[0], '/api/plugin' if v2 else '/config', v2=v2, auth_headers=headers)
-        wait_for(lambda: any(x['kind']=='profile' for x in trace(root)), 10, 'native parent profile')
-        profiles = [x['value'] for x in trace(root) if x['kind']=='profile']
-        require(len(profiles)==1 and profiles[0].get('nativePID')==server.pid and profiles[0]['code']==0 and not profiles[0]['bad'] and not profiles[0]['forced'] and profiles[0]['actualClose'], 'profile_query_unclosed')
-        receipt = closed(profiles[0]['receipt'], ('protocol','semantic','generation','resourceClosure'), 'profile_receipt_schema')
-        require(receipt.get('protocol')==1, 'profile_protocol_mismatch')
-        require(receipt.get('semantic')=='eligible' and receipt.get('generation')==('v2' if v2 else 'v1') and receipt.get('resourceClosure')=='reaped_or_not_started', 'production_profile_unqualified')
-        # No public native command on this base proves complete production clock
-        # selection/source conversion before a model turn. Snapshot alone is E0.
-        raise Unqualified('production_clock_selection_pre_model_gate_unobservable')
-        # Staged business/lifecycle body: root must close the exact gate above through
-        # product integration, never by a fixture boolean, clock/frame or fake grant.
-        if args.suite=='full': reviewed_driver_contract(args.version)
-        for name in COPY if args.suite=='full' else ('completion',):
+        if PORTABLE is not None:
+            PORTABLE.ready(root, server, provider, trace)
+        else:
+            wait_for(lambda: any(x['kind']=='profile' for x in trace(root)), 10, 'native parent profile')
+            profiles = [x['value'] for x in trace(root) if x['kind']=='profile']
+            require(len(profiles)==1 and profiles[0].get('nativePID')==server.pid and profiles[0]['code']==0 and not profiles[0]['bad'] and not profiles[0]['forced'] and profiles[0]['actualClose'], 'profile_query_unclosed')
+            receipt = closed(profiles[0]['receipt'], ('protocol','semantic','generation','resourceClosure'), 'profile_receipt_schema')
+            require(receipt.get('protocol')==1, 'profile_protocol_mismatch')
+            require(receipt.get('semantic')=='eligible' and receipt.get('generation')==('v2' if v2 else 'v1') and receipt.get('resourceClosure')=='reaped_or_not_started', 'production_profile_unqualified')
+            # No public native command on this base proves complete production clock
+            # selection/source conversion before a model turn. Snapshot alone is E0.
+            raise Unqualified('production_clock_selection_pre_model_gate_unobservable')
+            # Staged business/lifecycle body: root must close the exact gate above through
+            # product integration, never by a fixture boolean, clock/frame or fake grant.
+        if args.suite in ('full','business'): reviewed_driver_contract(args.version)
+        for name in COPY if args.suite in ('full','business') else ('completion',):
             native_case(base, projects[0], root, name, v2, headers, provider, webhook, key, report)
-        if args.suite=='full':
+        if args.suite in ('full','business'):
             manual_compaction(base,projects[0],root,v2,headers,provider,webhook,key,report)
             task_child(base,projects[0],root,v2,headers,provider,webhook,key,report)
             scope_roots(base,projects,root,v2,headers,provider,webhook,key,report)
@@ -1306,6 +1336,10 @@ def qualify(args, report):
         require(all(digest(p)==sha for p,sha in foreign_files.items()), 'foreign_file_changed')
         after=json.loads((root/'control/agent-notifications.json').read_text())
         require(after.get('notifications')==policy.get('notifications'), 'foreign_policy_changed')
+        if PORTABLE is not None: PORTABLE.finish(root, provider, webhook, report)
+    except Exception as error:
+        report['primaryFailure'] = str(error) if isinstance(error, Unqualified) else type(error).__name__
+        raise
     finally:
         threads = report.pop('_promptThreads', [])
         if 'provider' in locals():
@@ -1320,10 +1354,17 @@ def qualify(args, report):
             if t.is_alive():
                 cleanup_error = Unqualified('prompt_thread_unclosed_after_host_reap')
         if cleanup_error:
-            raise cleanup_error
+            report['cleanupFailure'] = str(cleanup_error)
+            if 'primaryFailure' not in report: raise cleanup_error
         env.pop('OPENCODE_PASSWORD', None)
         report['fixtureLeadersReaped'] = all(p.poll() is not None for p in owner.processes)
+        if 'provider' in locals():
+            report['actualProviderTransactions'] = len(provider.records)
+            report['actualProviderGaps'] = len(provider.gaps)
+        if 'webhook' in locals(): report['actualIndependentWebhookSubmissions'] = webhook.count()
         report['productOwnedClose'] = 'unproved'
+        if PORTABLE is not None and not cleanup_error and report.get('businessBodyComplete'):
+            PORTABLE.seal(root, report)
         if (root/'native-private.jsonl').exists():
             report['privateTraceSHA256'] = digest(root/'native-private.jsonl')
 
@@ -1336,10 +1377,12 @@ def main():
     parser.add_argument('--os',choices=('linux','darwin','windows'),required=True)
     parser.add_argument('--arch',choices=('amd64','arm64'),required=True)
     parser.add_argument('--version',choices=VERSIONS,required=True)
-    parser.add_argument('--suite',choices=('smoke','full'),default='smoke')
+    parser.add_argument('--suite',choices=('smoke','full','business'),default='smoke')
     parser.add_argument('--artifacts',type=pathlib.Path,default=REPO/'.task-tools/artifacts/native')
     parser.add_argument('--receiver-record',type=pathlib.Path)
     parser.add_argument('--validate-only',action='store_true')
+    parser.add_argument('--business-proof',type=pathlib.Path)
+    parser.add_argument('--business-proof-sha256')
     args=parser.parse_args()
     require(args.report.absolute().resolve().is_relative_to(REPO/'.task-tools/artifacts'), 'report_outside_artifacts')
     os.umask(0o077)
@@ -1349,7 +1392,7 @@ def main():
     code=1
     try:
         qualify(args,report)
-        code=0 if report['status']=='inputs_verified_only' else 1
+        code=0 if report['status'] in ('inputs_verified_only','installed_business_lifecycle_observed') else 1
     except Exception as e:
         report['firstFailedPrerequisite']=str(e) if isinstance(e,Unqualified) else type(e).__name__
     finally:

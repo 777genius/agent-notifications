@@ -97,6 +97,10 @@ def main():
                     '--manifest', str(manifest), '--manifest-sha256', sha, '--binary', str(binary),
                     '--archive', str(archive), '--os', cell['os'], '--arch', cell['arch'],
                     '--version', cell['version'], '--suite', os.environ['AN_SUITE'], '--report', str(report)]
+            if os.environ['AN_SUITE'] == 'business':
+                proof = manifest.parent / ('business-' + '-'.join(cell[key] for key in ('os','arch','version')) + '.json')
+                r.require(proof.is_file() and not proof.is_symlink(), 'sealed_business_prerequisites_required')
+                argv += ['--business-proof',str(proof),'--business-proof-sha256',r.digest(proof)]
             if cell['os'] == 'linux':
                 argv += ['--receiver-record', str(receiver_record)]
             return subprocess.call(argv)

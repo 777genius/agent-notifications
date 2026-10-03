@@ -2,6 +2,12 @@ name: OpenCode installed dual native E2E (qualification required)
 on:
   workflow_dispatch:
     inputs:
+      plan:
+        description: Eight portable business cells or original eleven-cell matrix
+        type: choice
+        options: [all-eleven, portable-eight]
+        default: all-eleven
+        required: true
       evidence_url:
         description: 'HTTPS parent evidence tar sealed after exact clean source checkout/build; no SDK copies or grants'
         type: string
@@ -38,15 +44,8 @@ jobs:
       fail-fast: false
       matrix:
         version: ['1.18.33', '2.0.21']
-        target:
-          - {runner: ubuntu-22.04, platform: linux, arch: amd64}
-          - {runner: ubuntu-22.04-arm, platform: linux, arch: arm64}
-          - {runner: macos-15, platform: darwin, arch: arm64}
-          - {runner: macos-15-intel, platform: darwin, arch: amd64}
-          - {runner: windows-latest, platform: windows, arch: amd64}
-        include:
-          - version: '1.18.34'
-            target: {runner: ubuntu-22.04, platform: linux, arch: amd64}
+        target: ${{ fromJSON(inputs.plan == 'portable-eight' && '[{"runner":"ubuntu-22.04-arm","platform":"linux","arch":"arm64"},{"runner":"macos-15","platform":"darwin","arch":"arm64"},{"runner":"macos-15-intel","platform":"darwin","arch":"amd64"},{"runner":"windows-latest","platform":"windows","arch":"amd64"}]' || '[{"runner":"ubuntu-22.04","platform":"linux","arch":"amd64"},{"runner":"ubuntu-22.04-arm","platform":"linux","arch":"arm64"},{"runner":"macos-15","platform":"darwin","arch":"arm64"},{"runner":"macos-15-intel","platform":"darwin","arch":"amd64"},{"runner":"windows-latest","platform":"windows","arch":"amd64"}]') }}
+        include: ${{ fromJSON(inputs.plan == 'portable-eight' && '[]' || '[{"version":"1.18.34","target":{"runner":"ubuntu-22.04","platform":"linux","arch":"amd64"}}]') }}
     env:
       AN_EVIDENCE_URL: ${{ inputs.evidence_url }}
       AN_EVIDENCE_SHA256: ${{ inputs.evidence_sha256 }}
@@ -96,7 +95,7 @@ jobs:
           AN_MANIFEST_SHA256: ${{ steps.parent.outputs.sha256 }}
         run: |
           set -euo pipefail
-          export AN_SUITE=smoke
+          export AN_SUITE=business
           if [ "$AN_OS/$AN_ARCH" = linux/amd64 ]; then export AN_SUITE=full; fi
           if [ "$AN_OS" = linux ]; then
             sudo --preserve-env=PATH,AN_MANIFEST,AN_MANIFEST_SHA256,AN_OS,AN_ARCH,AN_VERSION,AN_SUITE unshare --net -- bash -c 'ip link set lo up; python -B scripts/testdata/opencode-native-e2e/ci_inputs.py --execute'
