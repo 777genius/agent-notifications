@@ -25,10 +25,12 @@ func TestClaimFailureDiagnosticsRedactPrivatePath(t *testing.T) {
 	}
 	previous := os.Stderr
 	os.Stderr = w
-	t.Cleanup(func() { os.Stderr = previous; w.Close(); r.Close() })
+	t.Cleanup(func() { os.Stderr = previous; _ = w.Close(); _ = r.Close() })
 	claimed, err := c.Claim(context.Background(), key, 1)
 	os.Stderr = previous
-	w.Close()
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
 	log, readErr := io.ReadAll(r)
 	if readErr != nil {
 		t.Fatal(readErr)
