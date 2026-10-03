@@ -47,6 +47,38 @@ class PureVectors(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, '^actual_sampler_resource_baseline$'):
                     H.require_sampler_nonincrease('windows', 80, 80, missing)
 
+    def test_held_helper_admission_refuses_change_without_rehashing_inside_span(self):
+        with tempfile.TemporaryDirectory(prefix='TEST-held-helper-', dir=ROOT) as directory:
+            helper = Path(directory) / 'helper'; helper.write_bytes(b'abc')
+            pinned = 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'
+            owned = H.Owned(H.time.monotonic() + 60)
+            try:
+                owned.admit_helper(helper, pinned)
+                with patch.object(H, 'sha', side_effect=AssertionError('no_sha_inside_native_span')), \
+                     patch.object(owned, 'start', return_value={'startedAt': 1.0}):
+                    owned.start_helper(helper, pinned, Path(directory), {}, H.time.monotonic() + 2)
+                with self.assertRaisesRegex(RuntimeError, '^held_helper_image_changed$'):
+                    owned.verify_helper(helper, '0' * 64)
+                helper.write_bytes(b'abcd')
+                with self.assertRaisesRegex(RuntimeError, '^held_helper_image_changed$'):
+                    owned.verify_helper(helper, pinned)
+                self.assertFalse(owned.summary()['allOwnedHandlesClosed'])
+            finally: owned.cleanup()
+            self.assertTrue(owned.summary()['allOwnedHandlesClosed'])
+
+    def test_failed_span_diagnostic_keeps_exact_numeric_widths_and_rejects_forgery(self):
+        good = {'round': 1, 'outerWidthNs': 225000001, 'goWidthNs': 7000}
+        for widths in [good, dict(good, round=True), dict(good, outerWidthNs=224000000),
+                       dict(good, goWidthNs=100000001)]:
+            owned = H.Owned(H.time.monotonic() + 2)
+            state = {'overflow': False, 'pipeError': False, 'lines': H.queue.Queue()}
+            state['lines'].put(H.canonical({'kind': 'failure', 'reason': 'actual_translation_counter_span',
+                                          'nativeComparisonWidths': widths, **H.QUALIFICATIONS}))
+            expected = 'actual_translation_counter_span' if widths is good else 'closed_comparison_width_diagnostic'
+            with self.assertRaisesRegex(RuntimeError, '^' + expected + '$') as caught:
+                owned.message(state, 'helper_request', H.time.monotonic() + 2)
+            if widths is good: self.assertEqual(caught.exception.nativeComparisonWidths, good)
+
     def test_helper_hash_preflight_launch_budget(self):
         with tempfile.TemporaryDirectory(prefix='TEST-helper-preflight-', dir=ROOT) as directory:
             helper = Path(directory) / 'private-helper-bytes'

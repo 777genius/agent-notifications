@@ -133,7 +133,7 @@ async function execute(rootInput) {
   need(process.env.BUN_BE_BUN === '1' && Object.keys(process.env).every(k => m.environmentKeys.includes(k)), 'minimal_actual_environment');
   const fixture = contained(root, fileURLToPath(import.meta.url));
   const imagePath = contained(root, realpathSync(process.execPath)), image = heldImage(imagePath);
-  let clock, lines, disposed = false, previous, samples = 0;
+  let clock, lines, disposed = false, previous, samples = 0, nativeComparisonWidths;
   const globalStart = performance.now();
   const watchdog = setTimeout(() => { process.exitCode = 1; process.stdin.destroy(); }, budgets.jsMs);
   try {
@@ -204,7 +204,14 @@ async function execute(rootInput) {
       const after = sample(), bytes = Buffer.from(reply.raw, 'base64');
       need(bytes.toString('base64') === reply.raw, 'canonical_helper_base64');
       const go = helperFrame(bytes, process.platform);
-      const comparison = compare(before, go, after, process.platform); comparisons.push(comparison);
+      let comparison;
+      try { comparison = compare(before, go, after, process.platform); }
+      catch (error) {
+        if (error?.message === 'actual_translation_counter_span') nativeComparisonWidths = { round,
+          outerWidthNs: Number(after.hi - before.lo), goWidthNs: Number(go.hi - go.lo) };
+        throw error;
+      }
+      comparisons.push(comparison);
       const record = { before, go, after, helper: bytes.toString('utf8'),
         types: { sourceCounter: typeof before.lo, sourceWall: typeof before.wall,
           goCounter: 'protocol1_decimal_string', goWall: 'protocol1_decimal_string' } };
@@ -240,7 +247,8 @@ async function execute(rootInput) {
     need(performance.now() - globalStart < budgets.jsMs, 'original_js_deadline');
   } catch (error) {
     try { send({ kind: 'failure', reason: error?.message === 'clock_unavailable' ? 'actual_create_platform_clock_unavailable' :
-      /^[a-z0-9_]{1,80}$/.test(error?.message ?? '') ? error.message : 'actual_module_exception', ...qualifications }); } catch {}
+      /^[a-z0-9_]{1,80}$/.test(error?.message ?? '') ? error.message : 'actual_module_exception',
+      ...(nativeComparisonWidths ? { nativeComparisonWidths } : {}), ...qualifications }); } catch {}
     process.exitCode = 1;
   } finally {
     clearTimeout(watchdog);

@@ -183,6 +183,7 @@ class Owned:
     def __init__(self, job_end):
         self.end = job_end
         self.live = {}
+        self.held_helper = None
         self.cleanup_end = None
         self.starts = self.closes = self.helpers = self.helper_closes = self.highwater = 0
 
@@ -234,7 +235,16 @@ class Owned:
             reason = value.get('reason', '')
             need(isinstance(reason, str) and re.fullmatch('[a-z0-9_]{1,80}', reason) and
                  all(value.get(k) is False for k in QUALIFICATIONS), 'closed_failure_diagnostic')
-            raise RuntimeError(reason)
+            error = RuntimeError(reason)
+            if 'nativeComparisonWidths' in value:
+                widths = value['nativeComparisonWidths']
+                need(reason == 'actual_translation_counter_span' and isinstance(widths, dict) and
+                     set(widths) == {'round', 'outerWidthNs', 'goWidthNs'} and
+                     all(type(x) is int for x in widths.values()) and 0 <= widths['round'] < 3 and
+                     224000000 < widths['outerWidthNs'] <= 2000000000 and
+                     0 <= widths['goWidthNs'] <= 100000000, 'closed_comparison_width_diagnostic')
+                error.nativeComparisonWidths = widths
+            raise error
         need(not s['overflow'] and not s['pipeError'] and value.get('kind') == kind, 'child_frame_order_or_failure')
         return value
 
@@ -268,17 +278,43 @@ class Owned:
         if s['label'] == 'helper': self.helper_closes += 1
         if natural: need(p.returncode == 0 and not s['overflow'] and not s['pipeError'], 'actual_natural_close')
 
+    def admit_helper(self, helper, expected_sha):
+        remaining(self.end)
+        need(self.held_helper is None and not helper.is_symlink(), 'single_held_helper_image')
+        fd = os.open(helper, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0))
+        self.held_helper = (fd, helper, expected_sha, None, None)  # Register before any fallible stat.
+        self.held_helper = (fd, helper, expected_sha, os.fstat(fd), helper.lstat())
+        self.verify_helper(helper, expected_sha)
+        need(sha(helper) == expected_sha, 'actual_helper_hash')
+        self.verify_helper(helper, expected_sha)
+        remaining(self.end)
+
+    def verify_helper(self, helper, expected_sha):
+        need(self.held_helper is not None, 'held_helper_image_required')
+        fd, path, pinned_sha, fd_original, path_original = self.held_helper
+        keys = ('st_dev', 'st_ino', 'st_mode', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+        # Windows3.12 path .exe mode/ctime differs from fstat representation.
+        # Bind device/inode, then compare each full snapshot to its own original.
+        need(helper == path and expected_sha == pinned_sha and
+             (fd_original.st_dev, fd_original.st_ino) == (path_original.st_dev, path_original.st_ino) and
+             all(stat.S_ISREG(s.st_mode) and all(getattr(s, k) == getattr(original, k) for k in keys)
+                 for s, original in ((os.fstat(fd), fd_original), (helper.lstat(), path_original))),
+             'held_helper_image_changed')
+
     def start_helper(self, helper, expected_sha, cwd, env, operation_end):
-        # The immediate actual-file SHA consumes the ORIGINAL operation/job
-        # budgets. Translation224ms is the actual native before/after span,
-        # not a Python launch/EOF timer; the child uses the existing Go ceiling.
+        # Actual module cases hold the preflight SHA-verified file; cheap exact
+        # fd/path identity checks preserve custody inside the native224ms span.
         remaining(operation_end); remaining(self.end)
-        actual_sha = sha(helper)
-        remaining(operation_end); remaining(self.end)
-        need(actual_sha == expected_sha, 'actual_helper_hash')
+        if self.held_helper is not None:
+            self.verify_helper(helper, expected_sha)
+        else:  # Direct/pure callers retain the original immediate SHA contract.
+            actual_sha = sha(helper)
+            remaining(operation_end); remaining(self.end)
+            need(actual_sha == expected_sha, 'actual_helper_hash')
         launch_start = time.monotonic()
         end = min(operation_end, self.end, launch_start + BUDGETS['goMs'] / 1000)
         s = self.start([str(helper), 'opencode-clock', '--protocol', '1'], cwd, env, 'helper', 1024)
+        if self.held_helper is not None: self.verify_helper(helper, expected_sha)
         return s, end
 
     def cleanup(self):
@@ -292,6 +328,10 @@ class Owned:
         for s in states:
             try: self.close(s, self.cleanup_end, natural=False)
             except Exception: pass
+        if self.held_helper is not None:
+            try:
+                os.close(self.held_helper[0]); self.held_helper = None
+            except OSError: pass  # Keep failed closure visible in the ownership summary.
 
     def command(self, argv, cwd, env, seconds=30, cap=4194304):
         s = self.start(argv, cwd, env, 'preparation', cap)
@@ -306,7 +346,7 @@ class Owned:
     def summary(self):
         return {'ownedStarts': self.starts, 'ownedActualCloses': self.closes,
                 'helperStarts': self.helpers, 'helperActualCloses': self.helper_closes,
-                'maxOwnedWeight': self.highwater, 'allOwnedHandlesClosed': not self.live}
+                'maxOwnedWeight': self.highwater, 'allOwnedHandlesClosed': not self.live and self.held_helper is None}
 
 
 def canonical_path(path, role='path'):
@@ -667,7 +707,8 @@ def run_case(root, metadata, os_name, arch, job_end):
     try:
         loader_files = windows_loader_files() if os_name == 'windows' else []
         if loader_files: write_json(root / 'os-loader-files.private.json', loader_files)
-        need(sha(exe) == metadata['imageSha256'] and sha(helper) == metadata['helperSha256'] and
+        own.admit_helper(helper, metadata['helperSha256'])
+        need(sha(exe) == metadata['imageSha256'] and
              sha(fixture) == metadata['fixtureSha256'], 'owned_actual_file_hashes')
         host = own.start([str(exe), str(fixture), '--private-fixture', str(root)], root, env, 'module', interactive=True)
         js_end = min(job_end, host['startedAt'] + BUDGETS['jsMs'] / 1000)
@@ -729,6 +770,7 @@ def run_case(root, metadata, os_name, arch, job_end):
             s, end = own.start_helper(helper, metadata['helperSha256'], root, env, operation_end)
             try:
                 own.close(s, end)
+                own.verify_helper(helper, metadata['helperSha256'])
                 need(not s['buffers'][1], 'helper_stderr_refused')
                 raw = bytes(s['buffers'][0]); frame(raw, os_name)
                 st = helper.stat()
@@ -809,11 +851,12 @@ def run_case(root, metadata, os_name, arch, job_end):
         safe['status'] = 'unqualified'
         safe['failureReason'] = failure_reason(error)
         safe['failureObservation'] = observation()
+        if hasattr(error, 'nativeComparisonWidths'): safe['nativeComparisonWidths'] = error.nativeComparisonWidths
         if hasattr(error, 'path_failure'): safe['pathFailure'] = error.path_failure
     finally:
         own.cleanup()
         safe.update(own.summary())
-        if own.live or safe['helperStarts'] != safe['helperActualCloses']: safe['status'] = 'unqualified'
+        if own.live or own.held_helper is not None or safe['helperStarts'] != safe['helperActualCloses']: safe['status'] = 'unqualified'
         if safe['status'] == 'module_prequalification_observed' and not (
                 safe['helperStarts'] == safe['helperActualCloses'] == 3 and
                 safe['ownedStarts'] == safe['ownedActualCloses'] == 4 and safe['maxOwnedWeight'] <= 2):
@@ -903,6 +946,9 @@ def parent_main(args):
                 'sampleObservationsAreNotFutureWallRateSuspendOrComparisonBounds': True}, **QUALIFICATIONS}
     try:
         need((args.os, args.arch) in CELLS, 'planned_native_cell')
+        if args.v2_helper_admission_canary:
+            need((args.os, args.arch) in [('windows', 'amd64'), ('darwin', 'amd64')], 'closed_v2_helper_canary')
+            report.update(plannedVersions=['2.0.21'], purpose='v2_helper_admission_fixture_canary', diagnosticOnly=True)
         actual_os = {'Linux': 'linux', 'Darwin': 'darwin', 'Windows': 'windows'}.get(platform.system())
         actual_arch = {'x86_64': 'amd64', 'AMD64': 'amd64', 'arm64': 'arm64', 'aarch64': 'arm64'}.get(platform.machine())
         need((actual_os, actual_arch) == (args.os, args.arch), 'actual_host_no_uname_reinterpretation')
@@ -1012,6 +1058,7 @@ def parent_main(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--execute-ci', action='store_true')
+    parser.add_argument('--v2-helper-admission-canary', action='store_true')
     parser.add_argument('--isolated-cell', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--os', choices=('linux', 'darwin', 'windows'))
     parser.add_argument('--arch', choices=('amd64', 'arm64'))
