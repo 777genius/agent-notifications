@@ -6,7 +6,7 @@ def need(v,c):
  if not v:raise ValueError(c)
 def sha(p):
  need(p.is_file() and not p.is_symlink(),'regular input');return hashlib.sha256(p.read_bytes()).hexdigest()
-def inventory(root, source_manifest_sha256, original_checkout_only=False):
+def inventory(root, source_manifest_sha256, source_record_count, original_checkout_only=False):
  entries,filesystem={},{}
  rows=subprocess.check_output(['git','-C',str(root),'ls-tree','-rz','HEAD']).split(b'\0')
  for row in rows:
@@ -30,7 +30,7 @@ def inventory(root, source_manifest_sha256, original_checkout_only=False):
   filesystem[name]={'representation':representation,'mode':p.lstat().st_mode&0o777,'payloadSHA256':entries[name]['sha256']}
  head=subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip()
  manifest={'entries':entries,'hashes':{n:r['sha256'] for n,r in entries.items()},'head':head,'modes':{n:r['mode'] for n,r in entries.items()}}
- need(len(entries)==1173 and (original_checkout_only or hashlib.sha256((json.dumps(manifest,sort_keys=True,indent=2)+'\n').encode()).hexdigest()==source_manifest_sha256),'exact approved whole-source manifest')
+ need(0<source_record_count<=4096 and len(entries)==source_record_count and (original_checkout_only or hashlib.sha256((json.dumps(manifest,sort_keys=True,indent=2)+'\n').encode()).hexdigest()==source_manifest_sha256),'exact approved whole-source manifest')
  return {'manifest':manifest,'filesystem':filesystem}
 
 def main(a):
@@ -40,7 +40,7 @@ def main(a):
  want={'Linux':'linux','Darwin':'darwin','Windows':'windows'}[platform.system()];arch={'aarch64':'arm64','arm64':'arm64','x86_64':'amd64','AMD64':'amd64'}[platform.machine()]
  need((want,arch)==(a.os,a.arch) and (want,arch) in [('linux','arm64'),('darwin','amd64'),('darwin','arm64'),('windows','amd64')],'actual native cell')
  # Windows eol=crlf attributes override autocrlf=false; canonical assets use a fresh TEST Git clone.
- original_src=src;original_before=inventory(src,a.source_manifest_sha256,original_checkout_only=True) if a.os=='windows' else None
+ original_src=src;original_before=inventory(src,a.source_manifest_sha256,a.source_record_count,original_checkout_only=True) if a.os=='windows' else None
  root.mkdir(mode=0o700);logs=root/'logs';logs.mkdir();commands=[]
  byte_checkout=None
  if a.os=='windows':
@@ -55,7 +55,7 @@ def main(a):
   subprocess.run(argv,env=git_env,check=True,timeout=120,stdout=subprocess.DEVNULL)
   need(subprocess.check_output([git,'-C',str(src),'rev-parse','HEAD'],env=git_env,text=True).strip()==a.head and not subprocess.check_output([git,'-C',str(src),'status','--porcelain','--untracked-files=all'],env=git_env),'exact clean TEST byte checkout')
   byte_checkout={'kind':'fresh_TEST_Git_clone_raw_blob_checkout','originalCheckout':str(original_src),'source':str(src),'attributesSHA256':sha(attributes),'head':a.head}
- before=inventory(src,a.source_manifest_sha256)
+ before=inventory(src,a.source_manifest_sha256,a.source_record_count)
  go=P(shutil.which('go')).resolve();env={k:os.environ[k] for k in ('PATH','SystemRoot','WINDIR','COMSPEC','PATHEXT') if k in os.environ}
  for key,sub in [('HOME','home'),('USERPROFILE','home'),('TMPDIR','tmp'),('TEMP','tmp'),('TMP','tmp'),('GOCACHE','gocache'),('GOMODCACHE','gomodcache')]:
   (root/sub).mkdir(mode=0o700,exist_ok=True);env[key]=str(root/sub)
@@ -86,8 +86,8 @@ def main(a):
   with tarfile.open(archive,'w') as packed:packed.add(bundle,arcname='ClaudeNotifier.app');packed.add(sidecar,arcname=sidecar.name)
   need(appfiles=={str(p.relative_to(bundle)):{'sha256':sha(p),'mode':p.stat().st_mode&0o777} for p in sorted(bundle.rglob('*')) if p.is_file()},'signed app changed')
   app={'archiveSHA256':sha(archive),'executableSHA256':sha(executable),'sidecarSHA256':sha(sidecar),'sidecarMode':sidecar.stat().st_mode&0o777,'files':appfiles,'signatureVerification':'native_codesign_deep_strict_identifier','signatureKind':'TEST_ad_hoc','architectures':['amd64','arm64'],'registered':False,'notarized':False}
- need(before==inventory(src, a.source_manifest_sha256) and not subprocess.check_output(['git','-C',str(src),'status','--porcelain','--untracked-files=all']),'final source changed')
- need(original_before is None or original_before==inventory(original_src,a.source_manifest_sha256,original_checkout_only=True),'original Actions checkout changed')
+ need(before==inventory(src, a.source_manifest_sha256, a.source_record_count) and not subprocess.check_output(['git','-C',str(src),'status','--porcelain','--untracked-files=all']),'final source changed')
+ need(original_before is None or original_before==inventory(original_src,a.source_manifest_sha256,a.source_record_count,original_checkout_only=True),'original Actions checkout changed')
  result={'status':'native_assets_built_only','byteExactCheckout':byte_checkout,'originalCheckoutUnchanged':True,'candidateCommit':a.head,'os':a.os,'arch':a.arch,'goVersion':version.strip(),'goSHA256':sha(go),'binary':{'name':binary.name,'sha256':sha(binary),'size':binary.stat().st_size,'mode':binary.stat().st_mode&0o777},'buildinfo':info,'sourceUnchanged':True,'approvedSourceManifestSHA256':a.source_manifest_sha256,'trackedSymlinkRepresentation':{n:r for n,r in before['filesystem'].items() if before['manifest']['modes'][n]=='120000'},'sourceInventorySHA256':hashlib.sha256(json.dumps(before,sort_keys=True,separators=(',',':')).encode()).hexdigest(),'goModSHA256':sha(src/'go.mod'),'goSumSHA256':sha(src/'go.sum'),'commands':commands,'app':app,'businessExecuted':False,'qualificationGranted':False}
  (root/'result.json').write_text(json.dumps(result,indent=2,sort_keys=True)+'\n')
  # Only finite final assets/logs leave the runner. No private HOME or module cache.
@@ -117,7 +117,7 @@ def retain_failure(a,error):
  (export/'failure.json').write_text(json.dumps(result,sort_keys=True,indent=2)+'\n')
 
 if __name__=='__main__':
- p=argparse.ArgumentParser();p.add_argument('--source',type=P,required=True);p.add_argument('--out',type=P,required=True);p.add_argument('--head',required=True);p.add_argument('--recipe-sha256',required=True);p.add_argument('--source-manifest-sha256',required=True);p.add_argument('--os',choices=['linux','darwin','windows'],required=True);p.add_argument('--arch',choices=['amd64','arm64'],required=True);a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('--source',type=P,required=True);p.add_argument('--out',type=P,required=True);p.add_argument('--head',required=True);p.add_argument('--recipe-sha256',required=True);p.add_argument('--source-manifest-sha256',required=True);p.add_argument('--source-record-count',type=int,required=True);p.add_argument('--os',choices=['linux','darwin','windows'],required=True);p.add_argument('--arch',choices=['amd64','arm64'],required=True);a=p.parse_args()
  try:main(a)
  except Exception as error:
   try:retain_failure(a,error)

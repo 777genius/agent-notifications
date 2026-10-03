@@ -10,6 +10,7 @@ on:
         description: Actual ROOT-approved full canonical source manifest SHA256 for source_ref
         type: string
         required: true
+      source_record_count: {description: Actual accepted whole-source manifest record count, type: string, required: true}
 permissions:
   contents: read
 jobs:
@@ -53,11 +54,12 @@ jobs:
         env:
           FINAL_SOURCE_HEAD: ${{ inputs.source_ref }}
           FINAL_SOURCE_MANIFEST_SHA256: ${{ inputs.source_manifest_sha256 }}
+          FINAL_SOURCE_RECORD_COUNT: ${{ inputs.source_record_count }}
           ASSET_OS: ${{ matrix.os }}
           ASSET_ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
-          python -B "$RUNNER_TEMP/portable-build-native.py" --source "$GITHUB_WORKSPACE" --head "$FINAL_SOURCE_HEAD" --source-manifest-sha256 "$FINAL_SOURCE_MANIFEST_SHA256" --os "$ASSET_OS" --arch "$ASSET_ARCH" --out "$RUNNER_TEMP/TEST-portable-assets-$ASSET_OS-$ASSET_ARCH" --recipe-sha256 918468086aef2848f6e63d77289e93b00e051ba2c8a8c5ac0c06052cb49b4dc2
+          python -B "$RUNNER_TEMP/portable-build-native.py" --source "$GITHUB_WORKSPACE" --head "$FINAL_SOURCE_HEAD" --source-manifest-sha256 "$FINAL_SOURCE_MANIFEST_SHA256" --source-record-count "$FINAL_SOURCE_RECORD_COUNT" --os "$ASSET_OS" --arch "$ASSET_ARCH" --out "$RUNNER_TEMP/TEST-portable-assets-$ASSET_OS-$ASSET_ARCH" --recipe-sha256 05285c13ab24a87c3146f6ea2711ac7be6c51174b44af134a249043cfe8794a9
       - uses: actions/upload-artifact@v7
         if: always()
         with:
