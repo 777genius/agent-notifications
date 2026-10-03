@@ -97,7 +97,7 @@ jobs:
                 local -a files=()
                 while IFS= read -r file; do
                   [ -n "$file" ] && files+=("internal/installruntime/$file")
-                done < <(env GOOS="$target" go list -f '{{range .GoFiles}}{{println .}}{{end}}' ./internal/installruntime)
+                done < <(env GOOS="$target" go list -f "{{range .GoFiles}}{{println .}}{{end}}" ./internal/installruntime)
                 [ "${#files[@]}" -gt 0 ] || return 1
                 env GOOS="$target" go vet "${files[@]}"
               }
