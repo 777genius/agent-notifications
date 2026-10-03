@@ -415,20 +415,26 @@ class DriverContractTests(unittest.TestCase):
             self.assertFalse(r.child_tool_identity([wrong],'parent','child','call','an-e2e-child','task',False))
         wrong=copy.deepcopy(v1);wrong['properties']['part']['state']['metadata']['sessionId']='sibling'
         self.assertFalse(r.child_tool_identity([wrong],'parent','child','call','an-e2e-child','task',False))
+        # Pinned native publisher records providerExecuted, so local subagent completion is false.
         native=[wire('session.tool.input.started',4,'parent',id='call',assistantMessageID='assistant',name='subagent'),
-                wire('session.tool.called',5,'parent',id='call',assistantMessageID='assistant',executed=True,input={'agent':'an-e2e-child'}),
-                wire('session.tool.success',9,'parent',id='call',assistantMessageID='assistant',executed=True,
+                wire('session.tool.called',5,'parent',id='call',assistantMessageID='assistant',executed=False,input={'agent':'an-e2e-child'}),
+                wire('session.tool.success',9,'parent',id='call',assistantMessageID='assistant',executed=False,
                      metadata={'sessionID':'child','status':'completed'})]
         native[-1]['durable']['version']=2
         args=('parent','child','call','an-e2e-child','subagent',True)
         self.assertTrue(r.child_tool_identity(native,*args))
-        for mutate in ('call','message','child','agent','not_executed','version','reversed','parent'):
+        for mutate in ('call','message','child','agent','provider_called','provider_success','missing_called','missing_success','nonbool_called','nonbool_success','version','reversed','parent'):
             wrong=copy.deepcopy(native)
             if mutate=='call': wrong[-1]['data']['id']='other'
             if mutate=='message': wrong[-1]['data']['assistantMessageID']='other'
             if mutate=='child': wrong[-1]['data']['metadata']['sessionID']='sibling'
             if mutate=='agent': wrong[1]['data']['input']['agent']='general'
-            if mutate=='not_executed': wrong[-1]['data']['executed']=False
+            if mutate=='provider_called': wrong[1]['data']['executed']=True
+            if mutate=='provider_success': wrong[-1]['data']['executed']=True
+            if mutate=='missing_called': del wrong[1]['data']['executed']
+            if mutate=='missing_success': del wrong[-1]['data']['executed']
+            if mutate=='nonbool_called': wrong[1]['data']['executed']=0
+            if mutate=='nonbool_success': wrong[-1]['data']['executed']=0
             if mutate=='version': wrong[-1]['durable']['version']=1
             if mutate=='reversed': wrong[1]['durable']['seq']=10
             if mutate=='parent': wrong[-1]['durable']['aggregateID']='child'

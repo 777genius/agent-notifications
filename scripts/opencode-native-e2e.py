@@ -743,7 +743,7 @@ def child_ancestry(projection, native, parent, child, tool_child, directory, v2,
 
 
 def child_tool_identity(native, parent, child, call, agent, tool, v2):
-    """Native executed tool/result identity, separate from the provider's tool response."""
+    """Native local tool/result identity; V2 executed denotes provider execution."""
     if not v2:
         for event in native:
             part = event.get('properties',{}).get('part',{})
@@ -759,12 +759,12 @@ def child_tool_identity(native, parent, child, call, agent, tool, v2):
     for success in events:
         d = success['data']
         if (success.get('type')!='session.tool.success' or success['durable']['version']!=2
-                or d.get('executed') is not True or not d.get('assistantMessageID')
+                or d.get('executed') is not False or not d.get('assistantMessageID')
                 or d.get('metadata',{}).get('sessionID')!=child or d.get('metadata',{}).get('status')!='completed'):
             continue
         same = [e for e in events if e['data'].get('assistantMessageID')==d['assistantMessageID']]
         return any(a.get('type')=='session.tool.input.started' and a['data'].get('name')==tool
-                   and b.get('type')=='session.tool.called' and b['data'].get('executed') is True
+                   and b.get('type')=='session.tool.called' and b['data'].get('executed') is False
                    and b['data'].get('input',{}).get('agent')==agent
                    and native_position(a,parent)<native_position(b,parent)<native_position(success,parent)
                    for a in same for b in same)
@@ -1252,7 +1252,11 @@ def qualify(args, report):
         else:
             config = {'model':'p0/p0-completion',**child_config(False),
                       'provider':{'p0':{'npm':'@ai-sdk/openai-compatible','name':'TEST loopback','options':{'baseURL':endpoint,'apiKey':'sandbox-only'},'models':models}}}
-        if PORTABLE is not None: PORTABLE.configure_loader(config, plugin, root, v2)
+        if PORTABLE is not None:
+            PORTABLE.configure_loader(config, plugin, root, v2)
+            if not v2:
+                # V1 auto-discovery wins over file tuples; this public overlay is merged last.
+                env['OPENCODE_CONFIG_CONTENT'] = json.dumps({'plugin': config['plugin']})
         write_json(projects[0] / 'opencode.json', config)
         env['OPENCODE_CONFIG'] = str(projects[0] / 'opencode.json')
         shutil.copyfile(FIXTURES / ('portable-capture.mjs' if PORTABLE is not None else 'capture.mjs'), config_dir / 'plugins/an-test-capture.js')
