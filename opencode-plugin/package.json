@@ -5,11 +5,17 @@
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
-    "check": "npm run build && node --experimental-strip-types --test *.test.mjs *.test.ts",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm run build && node --test *.test.mjs *.test.ts",
     "check:candidate": "node verify-candidate.mjs"
   },
   "devDependencies": {
-    "esbuild": "0.28.2"
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2",
+    "@types/node": "22.20.2"
+  },
+  "engines": {
+    "node": ">=22.18.0"
   },
   "dependencies": {
     "universal-agent-plugins-opencode-events": "file:vendor/universal-agent-plugins-opencode-events-0.3.0.tgz"

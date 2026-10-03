@@ -20,7 +20,7 @@ export function anchorMatches(anchor, before, after, policy) {
 
 // Ports are private composition dependencies. The plugin never accepts them
 // from host configuration/environment; only the closed compiled ledger supplies policy.
-export function createPreparedDelivery({ registry, origin, policy, isOwned, onInvalidate, sourceFactory = createPlatformClock }) {
+export function createPreparedDelivery({ registry, origin, policy, isOwned, onInvalidate, enrich, sourceFactory = createPlatformClock }) {
   let epoch, source, anchor, activation, pending, last, ingress, disposed = false;
   const originals = new Map(), prepared = new WeakMap();
   function invalidate(reason = 'clock') {
@@ -125,6 +125,10 @@ export function createPreparedDelivery({ registry, origin, policy, isOwned, onIn
   };
   async function beforeEmit(event, handoff) {
     try {
+      // Optional display awaits precede every original clock/current check.
+      // Keep the SDK fact itself as the WeakMap key and native authority.
+      let display;
+      if (enrich) { try { display = (await enrich(event))?.display; } catch {} }
       const tick = BigInt(handoff.ingressMonotonicMs) * 1000000n;
       const original = originals.get(tick);
       if (!original || !current(original, handoff) || event.rootSession !== true || !event.provenance) return false;
@@ -147,9 +151,9 @@ export function createPreparedDelivery({ registry, origin, policy, isOwned, onIn
           sourceLoNS: String(activation.loNS), sourceHiNS: String(original.epoch.after),
           nativeLoNS: original.anchor.monoLoNS, nativeHiNS: original.anchor.monoHiNS,
           errorNS: String(policy.translationBoundNS) }) });
-      encodeFrame({ protocol: 1, origin, event, provenance: { ...provenance,
+      encodeFrame({ protocol: 1, origin, event, ...(display ? { display } : {}), provenance: { ...provenance,
         spawnTickNS: String(after.loNS), deadlineTickNS: String(after.loNS + 20000000000n) } }, policy);
-      prepared.set(event, { original, provenance });
+      prepared.set(event, { original, provenance, display });
       return true;
     } catch { invalidate(); return false; }
   }
@@ -171,7 +175,7 @@ export function createPreparedDelivery({ registry, origin, policy, isOwned, onIn
           if (epoch !== held.original.epoch || handoff.signal.aborted || after.hiNS - before.loNS > 110000000n ||
               after.hiNS - held.original.sample.loNS > 30000000000n || after.hiNS >= deadline ||
               ms(after) >= handoff.metadataDeadline) { invalidate(); bad(); }
-          return encodeFrame({ protocol: 1, origin, event, provenance: { ...held.provenance,
+          return encodeFrame({ protocol: 1, origin, event, ...(held.display ? { display: held.display } : {}), provenance: { ...held.provenance,
             spawnTickNS: String(spawnTick), deadlineTickNS: String(deadline) } }, policy);
         };
       },

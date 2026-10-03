@@ -5,6 +5,8 @@ package notifier
 import (
 	"context"
 	"errors"
+	"html"
+	"sync"
 	"time"
 
 	"github.com/777genius/agent-notifications/internal/notification"
@@ -129,7 +131,12 @@ func (d *FreedesktopDelivery) checkAndDeliver(ctx context.Context, r notificatio
 	return finish("submitted", "session_notification")
 }
 
-type dbusNotifications struct{ conn *dbus.Conn }
+type dbusNotifications struct {
+	conn             *dbus.Conn
+	capabilitiesOnce sync.Once
+	capabilitiesErr  error
+	bodyMarkup       bool
+}
 
 func openSessionNotifications(ctx context.Context) (sessionNotifications, error) {
 	type outcome struct {
@@ -163,7 +170,16 @@ func (n *dbusNotifications) Ready(ctx context.Context) error {
 	if !owned {
 		return errors.New("notifications unavailable")
 	}
-	return nil
+	n.capabilitiesOnce.Do(func() {
+		var capabilities []string
+		n.capabilitiesErr = n.conn.Object("org.freedesktop.Notifications", "/org/freedesktop/Notifications").CallWithContext(ctx, "org.freedesktop.Notifications.GetCapabilities", 0).Store(&capabilities)
+		for _, capability := range capabilities {
+			if capability == "body-markup" {
+				n.bodyMarkup = true
+			}
+		}
+	})
+	return n.capabilitiesErr
 }
 
 func (n *dbusNotifications) Submit(ctx context.Context, r notification.Request) (uint32, error) {
@@ -183,7 +199,13 @@ func (n *dbusNotifications) Submit(ctx context.Context, r notification.Request) 
 		hints["suppress-sound"] = dbus.MakeVariant(true)
 	}
 	var id uint32
-	err := n.conn.Object("org.freedesktop.Notifications", "/org/freedesktop/Notifications").CallWithContext(ctx, "org.freedesktop.Notifications.Notify", 0, "agent-notifications", uint32(0), "", r.Content.Title, r.Content.Body, []string{}, hints, expire).Store(&id)
+	body := desktopBodyWithSubtitle(r.Content)
+	// Body markup is XML-based. Literal session/question text must not create
+	// links, hide tags or turn ampersands into entities on capable servers.
+	if n.bodyMarkup {
+		body = html.EscapeString(body)
+	}
+	err := n.conn.Object("org.freedesktop.Notifications", "/org/freedesktop/Notifications").CallWithContext(ctx, "org.freedesktop.Notifications.Notify", 0, "agent-notifications", uint32(0), "", r.Content.Title, body, []string{}, hints, expire).Store(&id)
 	return id, err
 }
 

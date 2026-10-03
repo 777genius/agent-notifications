@@ -3,12 +3,14 @@
 package installruntime
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime/trace"
 	"strings"
 
 	"golang.org/x/sys/windows"
@@ -21,7 +23,11 @@ type PrivateCacheRoot struct {
 }
 
 func OpenPrivateCacheRoot(root string) (*PrivateCacheRoot, error) {
-	handles, err := privateCacheRootHandles(root)
+	var handles []windows.Handle
+	var err error
+	trace.WithRegion(context.Background(), "observation.windows/root", func() {
+		handles, err = privateCacheRootHandles(root)
+	})
 	if err != nil {
 		closeWindowsParents(handles)
 		return nil, err
@@ -59,7 +65,11 @@ func (r *PrivateCacheRoot) parent() (windows.Handle, error) {
 // CheckPrivateCacheRoot requires an existing local non-reparse directory with
 // the installation lock's owner/private-DACL policy. It never repairs access.
 func CheckPrivateCacheRoot(root string) error {
-	handles, err := privateCacheRootHandles(root)
+	var handles []windows.Handle
+	var err error
+	trace.WithRegion(context.Background(), "observation.windows/root", func() {
+		handles, err = privateCacheRootHandles(root)
+	})
 	defer closeWindowsParents(handles)
 	return err
 }
@@ -138,16 +148,25 @@ func (r *PrivateCacheRoot) Write(name string, data []byte) (err error) {
 	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `\/:`) {
 		return fmt.Errorf("invalid relative Windows component")
 	}
-	parent, err := r.parent()
+	var parent windows.Handle
+	trace.WithRegion(context.Background(), "observation.publish/root", func() {
+		parent, err = r.parent()
+	})
 	if err != nil {
 		return err
 	}
 	var random [16]byte
-	if _, err = rand.Read(random[:]); err != nil {
+	trace.WithRegion(context.Background(), "observation.publish/random", func() {
+		_, err = rand.Read(random[:])
+	})
+	if err != nil {
 		return err
 	}
 	temp := ".observations-" + hex.EncodeToString(random[:])
-	handle, err := windowsCreatePrivateCacheAt(parent, temp)
+	var handle windows.Handle
+	trace.WithRegion(context.Background(), "observation.publish/create", func() {
+		handle, err = windowsCreatePrivateCacheAt(parent, temp)
+	})
 	if err != nil {
 		return err
 	}
@@ -155,23 +174,38 @@ func (r *PrivateCacheRoot) Write(name string, data []byte) (err error) {
 	published := false
 	defer func() {
 		if !published {
-			_ = windowsDeleteHandle(handle)
+			trace.WithRegion(context.Background(), "observation.publish/cleanup", func() {
+				_ = windowsDeleteHandle(handle)
+			})
 		}
-		if closeErr := f.Close(); err == nil {
+		var closeErr error
+		trace.WithRegion(context.Background(), "observation.publish/close", func() {
+			closeErr = f.Close()
+		})
+		if err == nil {
 			err = closeErr
 		}
 	}()
-	written, err := f.Write(data)
+	var written int
+	trace.WithRegion(context.Background(), "observation.publish/write", func() {
+		written, err = f.Write(data)
+	})
 	if err != nil {
 		return err
 	}
 	if written != len(data) {
 		return io.ErrShortWrite
 	}
-	if err = validatePrivateCacheReplacement(parent, name); err != nil {
+	trace.WithRegion(context.Background(), "observation.publish/target", func() {
+		err = validatePrivateCacheReplacement(parent, name)
+	})
+	if err != nil {
 		return err
 	}
-	if err = windowsRenameHandle(handle, parent, name, true); err != nil {
+	trace.WithRegion(context.Background(), "observation.publish/rename", func() {
+		err = windowsRenameHandle(handle, parent, name, true)
+	})
+	if err != nil {
 		return err
 	}
 	published = true

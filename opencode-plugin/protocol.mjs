@@ -84,7 +84,8 @@ export function fence(anchor, policy) {
   return hash.digest('hex');
 }
 export function validateFrame(frame, policy) {
-  const p = closed(frame, ['protocol', 'origin', 'event', 'provenance']);
+  const p = closed(frame, ['protocol', 'origin', 'event', 'provenance', 'display'],
+    ['protocol', 'origin', 'event', 'provenance']);
   if (p.protocol !== 1 || typeof p.origin !== 'string' || !/^[a-f0-9]{64}$/.test(p.origin)) invalid();
   const e = closed(p.event, ['version', 'kind', 'sessionID', 'turnID', 'rootSession', 'provenance', 'messageID', 'requestID', 'nativeType'],
     ['version', 'kind', 'sessionID', 'turnID', 'rootSession', 'provenance']);
@@ -129,7 +130,16 @@ export function validateFrame(frame, policy) {
 }
 export function encodeFrame(frame, policy) {
   validateFrame(frame, policy);
-  const output = Buffer.from(JSON.stringify(frame));
+  const { display, ...neutral } = frame;
+  const output = Buffer.from(JSON.stringify(neutral));
   if (output.length > 4096) invalid();
+  if (display !== undefined) {
+    try {
+      const decorated = Buffer.from(JSON.stringify({ ...neutral, display }));
+      // Optional desktop data cannot enlarge the closed wire/JSON budget.
+      parseJSON(decorated);
+      return decorated;
+    } catch { /* retain the exact neutral frame */ }
+  }
   return output;
 }

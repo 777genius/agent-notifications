@@ -85,6 +85,7 @@ type privateProvenance struct {
 
 type PrivateEvent struct {
 	Event      uap.ObservedEvent
+	Display    json.RawMessage
 	Origin     string
 	Fact       FactIdentity
 	Provenance Provenance
@@ -98,7 +99,12 @@ func DecodePrivate(raw []byte, selected ClockSelection) (PrivateEvent, error) {
 	if strictjson.Validate(raw, strictjson.Budget{Bytes: 4096, Depth: 8, Entries: 96}) != nil {
 		return fail()
 	}
-	obj, err := ClosedObject(raw, []string{"protocol", "origin", "event", "provenance"}, nil)
+	neutral, display, err := splitDisplay(raw)
+	if err != nil {
+		return fail()
+	}
+	out.Display = display // optional desktop data never participates in authority
+	obj, err := ClosedObject(neutral, []string{"protocol", "origin", "event", "provenance"}, nil)
 	if err != nil || string(obj["protocol"]) != "1" || json.Unmarshal(obj["origin"], &out.Origin) != nil || !hexKey(out.Origin) {
 		return fail()
 	}

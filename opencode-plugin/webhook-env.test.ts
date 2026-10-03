@@ -3,7 +3,23 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createProcessRegistry } from './process-registry.mjs';
+// Explicit types for the real JS registry ports exercised by this test.
+type HandoffOptions = Readonly<{ isCurrent: () => boolean; signal?: AbortSignal; deadline?: number }>;
+type ChildResult = Readonly<{ status: 'invalid_request' | 'invalidated' | 'registry_unavailable'
+  | 'capacity_suppressed' | 'deadline' | 'spawn_failed' | 'aborted' | 'stream_error'
+  | 'output_limit' | 'ipc_termination_unproved' | 'ok' | 'exited'; output: Buffer }>;
+type ProcessRegistry = Readonly<{
+  event(options: HandoffOptions & { frame: Buffer }): Promise<ChildResult>;
+  profile(options: HandoffOptions): Promise<ChildResult>;
+  clock(options: HandoffOptions): Promise<ChildResult>;
+  dispose(): Promise<Readonly<{ accepting: boolean; disposed: boolean; occupied: number;
+    unresolved: number; reaped: boolean; status: 'drained' | 'ipc_termination_unproved' | 'pending' }>>;
+}>;
+type RegistryFactory = (configuration: Readonly<{ executable: string; privateCwd: string;
+  controlRoot: string; origin?: string; deliveryEnv?: Readonly<Record<string, string>>;
+  osEnv?: Readonly<Record<string, string>>; diagnostics?: boolean }>) => ProcessRegistry;
+const registryModule: unknown = await import(new URL('./process-registry.mjs', import.meta.url).href);
+const { createProcessRegistry } = registryModule as { createProcessRegistry: RegistryFactory };
 
 // Red if the real event child loses its URL, or profile/clock inherit the secret.
 // Every process and file belongs to this disposable TEST directory.

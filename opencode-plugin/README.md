@@ -7,8 +7,24 @@ AN imports the strict `/v1` and `/v2` factories. esbuild remains 0.28.2.
 
 After the parent provisions Node/npm and bootstraps the locked dependencies,
 `npm run check:candidate` byte-verifies the archive, installed packed files and
-lock. `npm run check` builds the self-contained ESM asset and runs focused Node
+lock. `npm run check` typechecks with pinned TypeScript 7.0.2, builds the self-contained ESM asset and runs focused Node
 tests. Neither command starts OpenCode, installs the plugin or publishes npm.
+
+The plugin sends content-free UAP facts to `opencode-event --protocol 1`, with
+an optional product-owned desktop display envelope containing an exact-session
+native title and the actual `questions[].question` text. The shared observer and
+SDK remain content-free. Options, headers, prompts, paths and native errors never
+enter display metadata. Webhooks and delivery receipts retain generic copy.
+
+Title lookups are fresh, verify the returned session ID, time out after one
+second and allow at most eight native requests in flight. Question text is
+snapshotted before observer awaits and matched to the exact session/request;
+resolution and new turns invalidate pending display context. Invalid or missing
+optional data falls back to the neutral notification. The whole wire remains
+bounded to 4096 bytes. Display lookups do not change original causal timestamps, metadata deadlines, owned child closure or admission authority. V2 retains neutral display when the V1 session client API is unavailable.
+
+
+Use Node 22.18 or newer.
 
 The default export is exactly `{id, server, setup}`. The retained named
 `AgentNotifications(input)` routes through the same memoized V1 startup as

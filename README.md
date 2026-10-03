@@ -24,12 +24,16 @@ Desktop notifications for **Claude Code, Codex CLI and OpenCode**. Know when a t
 <div>
 <table>
   <tr>
-    <td align="center"><img width="250" height="350" alt="image" src="https://github.com/user-attachments/assets/e7aa6d8e-5d28-48f7-bafe-ad696857b938" /></td>
-    <td align="center"><img width="350" alt="image" src="https://i.imgur.com/Nrt6dEo.png" /></td>
-    <td align="center"><img width="220" alt="image" src="https://github.com/user-attachments/assets/4b5929d8-1a51-4a15-a3d5-dda5482554cc" /></td>
+    <td align="center" colspan="2"><img width="760" alt="macOS notification preview: a current question, a plan and a completed task with a readable session title" src="docs/images/notifications-macos.png" /></td>
+  </tr>
+  <tr>
+    <td align="center"><img width="320" alt="Windows notification preview with Agent Notifications branding, native session titles and a current question" src="docs/images/notifications-windows.png" /></td>
+    <td align="center"><img width="320" alt="Linux notification preview with Agent Notifications branding, native session titles and a current question" src="docs/images/notifications-linux.png" /></td>
   </tr>
 </table>
 </div>
+
+*Illustrative notification previews. Appearance varies by desktop environment.*
 
 ## Install Or Update
 
@@ -78,7 +82,7 @@ Claude/Codex setup also installs the `agent-notify` MCP server and `agent-notifi
 
 - **Task and attention alerts:** completions, questions, tool approvals and more, depending on the agent. See the table below.
 - **Click-to-focus and sounds (Claude/Codex):** return to the originating terminal or editor; choose built-in or custom sounds, volume and audio output. [Supported terminals](docs/CLICK_TO_FOCUS.md) · [Sound settings](docs/CONFIGURATION.md#sound-options)
-- **Useful context (Claude/Codex):** project, git branch and native session names, with generated labels as fallback. Question hooks show the current question. [Session context](docs/CONFIGURATION.md#session-context)
+- **Useful context:** Claude/Codex show project, git branch and native session names, with generated labels as fallback. OpenCode desktop alerts show native session names when available. Question alerts show the current question when supplied by the host. OpenCode webhooks retain generic text. [Session context](docs/CONFIGURATION.md#session-context) · [OpenCode context](docs/opencode-notifications.md)
 - **Less noise:** focus-aware delivery, delays, filters and optional subagent alerts. [Configuration](docs/CONFIGURATION.md#focus-aware--delayed-notifications) · [Do Not Disturb](docs/DO_NOT_DISTURB.md)
 - **Webhooks:** Slack, Discord, Telegram, Lark/Feishu and custom endpoints. [Integration guides](docs/webhooks/README.md)
 - **Cross-platform:** macOS (Intel/Apple Silicon), Linux (x64/ARM64) and Windows 10+ (x64). Agent and delivery limits are listed below. [Platform details](docs/PLATFORMS.md)
@@ -92,7 +96,7 @@ Claude/Codex setup also installs the `agent-notify` MCP server and `agent-notifi
 | **OpenCode** | Root-session completion, questions, permissions and errors | No | [Setup and limits](docs/opencode-notifications.md) |
 | **Gemini CLI** | Turn completion and tool permissions | No | [Prerelease setup and qualification](docs/gemini-notifications.md) |
 
-Published OpenCode support is tested with **1.18.33**; published V2 support is not declared. The dual-API candidate targets **1.18.33, 2.0.0 and 2.0.21** with one installed plugin; final platform qualification, SDK publication and a clean registry install remain pending. [Candidate setup and qualification limits](docs/opencode-notifications.md). Gemini is tested with **0.62.0**; a completed turn does not necessarily mean task success or a final answer. OpenCode/Gemini alerts use generic text and require explicit desktop/webhook consent.
+Published OpenCode support is tested with **1.18.33**; published V2 support is not declared. The dual-API candidate targets **1.18.33, 2.0.0 and 2.0.21** with one installed plugin; final platform qualification, SDK publication and a clean registry install remain pending. [Candidate setup and qualification limits](docs/opencode-notifications.md). Gemini is tested with **0.62.0**; a completed turn does not necessarily mean task success or a final answer. OpenCode/Gemini alerts require explicit desktop/webhook consent. Gemini alerts and OpenCode webhooks use generic text. OpenCode desktop alerts may include bounded native session titles and current question text.
 
 For the OpenCode candidate on stock Windows V1, the original event age is not always independently verifiable. A delayed completion may notify once and recur after the 24-hour claim lifetime; filters, provenance, deduplication and limits still apply.
 

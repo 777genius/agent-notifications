@@ -9,15 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - One OpenCode plugin supports V1 `server` and V2 `setup`, with native qualification targeting 1.18.33, 1.18.34 and 2.0.21; final candidate qualification remains pending. V2 notifications verify native ownership and settled execution, suppress child sessions, and recover after temporary ownership failures ([#294](https://github.com/777genius/agent-notifications/pull/294)). SDK 0.3.0 publication and registry qualification remain pending.
+- Interactive agent selection in the public installer, with separate installation scope and notification consent for each selected product. Cancellation performs no installation; partial failures retain completed installations and show recovery guidance ([#296](https://github.com/777genius/agent-notifications/pull/296)).
+- The `licenses` command and third-party license notices in portable packages and release assets.
 
 ### Changed
 - OpenCode V1 now consumes the 0.3.0 observer instead of 0.1.0: failed assistant steps produce terminal errors at idle, context overflow waits for recovery, and observed user association filters replayed completions. The V1 entry point remains supported.
+- Claude CLI hooks now use the SDK-backed event source while preserving command invocation and notification handling ([#264](https://github.com/777genius/agent-notifications/pull/264), [#266](https://github.com/777genius/agent-notifications/pull/266)).
 - Fresh macOS Codex and combined bootstrap installs enable chat navigation by default when the registered official Codex Desktop app passes signature verification. Existing navigation policy and explicit choices remain preserved. If the verified app is unavailable, bootstrap reports its fallback to informational notifications without navigation.
 
 ### Fixed
+- Managed macOS installations recover after APFS device numbers change across a reboot, while preserving inode, physical parent, content and volume ownership checks. Install, update, reselection, purge and interrupted recovery accept valid persisted identities without adopting replacement assets ([#301](https://github.com/777genius/agent-notifications/issues/301)).
+- Failed lazy hook installations wait 300 seconds before retrying the same product, release and runtime root, prevent concurrent duplicate attempts, and continue dispatching an available previous binary. Manual repair and a different release bypass the matching cooldown ([#302](https://github.com/777genius/agent-notifications/issues/302)).
+- macOS LaunchServices registration uses committed durable native generations instead of temporary downloaded apps. Failed and disposable acquisitions do not register; successful commits reconcile obsolete conventional registrations owned by this product while retaining active, previous and published native generations. Foreign registrations remain untouched ([#302](https://github.com/777genius/agent-notifications/issues/302)).
+- Interrupted policy enable/admission refuses changed or missing active native assets before publication, while explicit notification revocation remains possible with damaged assets. No-op native refresh reports the verified retained generation when path output is requested.
 - Managed notification helpers take priority over old concrete helper bundles, so notification clicks reach the originating Codex chat instead of being handled by an obsolete helper. Installation reconciles known obsolete macOS registrations while retaining bundle files and published callback generations, and warns if macOS still selects a different helper.
+- The setup wizard displays nonfatal Codex native registration warnings in its summary and JSON output without failing successfully committed hooks.
 - Native helper updates select the supplied release before falling back to an installed helper.
 - Codex desktop callbacks allow a bounded 30 seconds for application verification and opening, while legacy callbacks retain their 10-second budget. Safe system-log phase diagnostics make failed clicks traceable after the helper is relaunched by macOS.
+- Codex setup safely adopts owner-owned legacy locks with read-only group/world permissions, preserving inode and contents while keeping foreign files and unsafe permissions rejected ([#290](https://github.com/777genius/agent-notifications/pull/290)).
+- Installation preserves existing merged Claude hooks instead of applying legacy cleanup to user settings ([#265](https://github.com/777genius/agent-notifications/pull/265)).
+- Unchanged managed legacy skills migrate to the canonical `agent-notifications` skill without replacing user edits ([#306](https://github.com/777genius/agent-notifications/pull/306)).
 
 ## [1.46.1] - 2026-10-01
 

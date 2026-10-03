@@ -450,3 +450,77 @@ func TestComposedWebhookEnvRestrictedAtActualHTTPBoundary(t *testing.T) {
 		})
 	}
 }
+
+// Optional desktop context crosses the production private decoder without
+// altering the original claim identity/time, channel consent or webhook copy.
+func TestComposedOptionalDisplayIsDesktopOnlyAndCannotChangeAuthority(t *testing.T) {
+	for _, tc := range []struct {
+		name, display string
+		context       bool
+	}{
+		{"native", `{"sessionID":"ses_private_sentinel","requestID":"req_native_4","sessionTitle":"Native title","question":"Continue?"}`, true},
+		{"other session", `{"sessionID":"other","requestID":"req_native_4","sessionTitle":"Native title","question":"Continue?"}`, false},
+		{"other request", `{"sessionID":"ses_private_sentinel","requestID":"other","question":"Continue?"}`, false},
+		{"unexpected field", `{"sessionID":"ses_private_sentinel","requestID":"req_native_4","question":"Continue?","prompt":"PRIVATE"}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, c, _ := composedFixture(t, "http://127.0.0.1:1")
+			var desktop []notification.Request
+			c.Desktop = func(*Handoff) notification.DeliveryPort {
+				return desktopFunc(func(_ context.Context, req notification.Request) notification.Receipt {
+					desktop = append(desktop, req)
+					return notification.Receipt{Status: "submitted"}
+				})
+			}
+			webhooks := 0
+			c.SendWebhook = func(ctx context.Context, cfg *config.Config, msg webhook.SendContext) error {
+				webhooks++
+				if msg.Message != "OpenCode asked a question" || msg.RawBody != msg.Message || cfg.Statuses[string(msg.Status)].Title != "OpenCode" {
+					t.Fatal("desktop context changed generic webhook")
+				}
+				encoded, _ := json.Marshal(msg)
+				if bytes.Contains(encoded, []byte("Native title")) || bytes.Contains(encoded, []byte("Continue?")) {
+					t.Fatal("desktop context leaked")
+				}
+				return nil
+			}
+			original := literalPrivate(t, "v1", "question_asked")
+			var frame map[string]json.RawMessage
+			if err := json.Unmarshal(original, &frame); err != nil {
+				t.Fatal(err)
+			}
+			frame["display"] = json.RawMessage(tc.display)
+			raw, err := json.Marshal(frame)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, err := DecodePrivate(original, c.Selection)
+			if err != nil {
+				t.Fatal(err)
+			}
+			after, err := DecodePrivate(raw, c.Selection)
+			if err != nil || before.Fact != after.Fact || before.Provenance != after.Provenance || before.Origin != after.Origin {
+				t.Fatal("display changed native authority")
+			}
+			result := c.Consume(ctx, time.Now(), io.NopCloser(bytes.NewReader(raw)))
+			if result.Status != "submitted" || len(desktop) != 1 || webhooks != 1 {
+				t.Fatalf("delivery: %+v", result)
+			}
+			req := desktop[0]
+			if tc.context {
+				if req.Content.Title != "❓ Continue?" || req.Content.Subtitle != "Native title" || req.Content.Body != "Continue?" {
+					t.Fatal("desktop context absent")
+				}
+			} else if req.Content.Title != "OpenCode" || req.Content.Subtitle != "" || req.Content.Body != "OpenCode asked a question" {
+				t.Fatal("invalid optional association escaped")
+			}
+			if !req.Silent || req.Navigation != notification.None || req.Policy.SoundEnabled {
+				t.Fatal("display changed delivery policy")
+			}
+			receipt, _ := json.Marshal(result)
+			if bytes.Contains(receipt, []byte("Native title")) || bytes.Contains(receipt, []byte("Continue?")) {
+				t.Fatal("private receipt")
+			}
+		})
+	}
+}

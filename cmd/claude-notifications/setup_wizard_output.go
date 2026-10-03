@@ -56,6 +56,9 @@ func writeSetupWizardSummary(out io.Writer, result setupwizard.Result) {
 		if target.ConfigPath != "" {
 			_, _ = fmt.Fprintln(out, "    MCP config: "+target.ConfigPath)
 		}
+		for _, warning := range target.Warnings {
+			_, _ = fmt.Fprintln(out, "    Warning: "+warning)
+		}
 	}
 	for _, fact := range result.Readiness {
 		_, _ = fmt.Fprintf(out, "  %s - runtime: %s; hooks: %s; notification tool: %s\n", setupClientName(fact.Client), readableSetupState(fact.Runtime), readableSetupState(fact.Hooks), readableSetupState(fact.MCP))

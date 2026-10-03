@@ -150,7 +150,7 @@ func (s windowsPowerShellToastSession) Submit(ctx context.Context, r notificatio
 	return submitWindowsToast(ctx, windowsToastPayload{
 		AppID:  appID,
 		Title:  r.Content.Title,
-		Body:   r.Content.Body,
+		Body:   desktopBodyWithSubtitle(r.Content),
 		Silent: r.Silent || !r.Policy.SoundEnabled,
 	})
 }
