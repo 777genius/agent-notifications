@@ -124,8 +124,10 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
             acl_env = {key: os.environ[key] for key in
                        ("PATH", "SystemRoot", "WINDIR", "COMSPEC", "PATHEXT") if key in os.environ}
             acl_env["CLAUDE_SDK_TEST_LAB"] = str(self.lab)
-            subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", acl_script],
-                           env=acl_env, check=True, timeout=30, capture_output=True)
+            acl_shell = shutil.which("pwsh") or shutil.which("powershell.exe")
+            require(acl_shell is not None, "PowerShell is required for a private Windows TEST lab")
+            subprocess.run([acl_shell, "-NoProfile", "-NonInteractive", "-Command", acl_script],
+                           env=acl_env, stdin=subprocess.DEVNULL, check=True, timeout=30, capture_output=True)
         self.home = self.lab / "TEST home"
         self.project = self.lab / "TEST project"
         self.package = self.lab / "TEST plugin package with spaces"
