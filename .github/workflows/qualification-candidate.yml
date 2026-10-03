@@ -1,198 +1,130 @@
-name: Qualification candidate
-
+name: TEST installed12 local entry, HOST4 plus GHA8
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - '.github/workflows/qualification-candidate.yml'
-
-permissions:
-  contents: read
-
-concurrency:
-  group: qualification-candidate-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
+    inputs:
+      product_head: {type: string, required: true}
+      parent_run_id: {type: string, required: true}
+      parent_artifact_id: {type: string, required: true}
+      parent_sha256: {type: string, required: true}
+      parent_manifest_sha256: {type: string, required: true}
+      ci_inputs_sha256: {type: string, required: true}
+      harness_sha256: {type: string, required: true}
+      supplement_artifact_id: {type: string, required: true}
+      supplement_sha256: {type: string, required: true}
+permissions: {contents: read, actions: read}
 jobs:
-  portable-candidate:
-    name: Candidate ${{ matrix.platform }} ${{ matrix.arch }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 35
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-15-intel
-            platform: darwin
-            arch: amd64
-            binary: claude-notifications-darwin-amd64
-            macos_deployment_target: '12.0'
-          - os: macos-15
-            platform: darwin
-            arch: arm64
-            binary: claude-notifications-darwin-arm64
-            macos_deployment_target: '12.0'
-          - os: ubuntu-22.04
-            platform: linux
-            arch: amd64
-            binary: claude-notifications-linux-amd64
-          - os: ubuntu-22.04-arm
-            platform: linux
-            arch: arm64
-            binary: claude-notifications-linux-arm64
-          - os: windows-latest
-            platform: windows
-            arch: amd64
-            binary: claude-notifications-windows-amd64.exe
-
+  plan:
+    runs-on: ubuntu-latest
+    outputs: {matrix: '${{ steps.cells.outputs.matrix }}'}
     steps:
-      - name: Checkout exact candidate
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-
-      - name: Set up Go
-        uses: actions/setup-go@v7
-        with:
-          go-version: '1.26'
-
-      - name: Set up Python evidence controller
-        uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-
-      - name: Install Linux build dependencies
-        if: matrix.platform == 'linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
-
-      - name: Build exact binary and portable package
-        env:
-          CGO_ENABLED: '1'
-          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_deployment_target }}
-          CANDIDATE_BINARY: ${{ matrix.binary }}
-          CANDIDATE_OS: ${{ matrix.platform }}
-          CANDIDATE_ARCH: ${{ matrix.arch }}
+      - uses: actions/checkout@v7
+        with: {ref: '${{ github.sha }}', persist-credentials: false}
+      - id: cells
         shell: bash
         run: |
-          set -euo pipefail
-          mkdir -p candidate
-          version="$(sed -n 's/^var ConsumerVersion = "\([^"]*\)"$/\1/p' internal/config/runtime.go)"
-          test -n "$version"
-          go build -ldflags="-s -w" -trimpath -o "candidate/$CANDIDATE_BINARY" ./cmd/claude-notifications
-          go run ./cmd/build-portable-package \
-            -version "$version" \
-            -os "$CANDIDATE_OS" \
-            -arch "$CANDIDATE_ARCH" \
-            -executable "candidate/$CANDIDATE_BINARY" \
-            -output "candidate/agent-notify-portable-$CANDIDATE_OS-$CANDIDATE_ARCH.zip" \
-            -workdir "$RUNNER_TEMP/portable-$CANDIDATE_OS-$CANDIDATE_ARCH"
-
-      - name: Verify macOS deployment target
-        if: matrix.platform == 'darwin'
-        env:
-          CANDIDATE_BINARY: ${{ matrix.binary }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          minos="$(otool -l "candidate/$CANDIDATE_BINARY" | awk '$1 == "minos" { print $2; exit }')"
-          case "$minos" in
-            12|12.*) ;;
-            *) echo "unexpected minimum macOS version: ${minos:-missing}" >&2; exit 1 ;;
-          esac
-
-      - name: Qualify built artifact in disposable profiles
-        env:
-          CANDIDATE_BINARY: ${{ matrix.binary }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ "${{ runner.os }}" != Windows ]; then
-            chmod +x "candidate/$CANDIDATE_BINARY"
-          fi
-          version="$(sed -n 's/^var ConsumerVersion = "\([^"]*\)"$/\1/p' internal/config/runtime.go)"
-          python scripts/release-artifact-e2e.py \
-            --binary "candidate/$CANDIDATE_BINARY" \
-            --version "v$version" | tee candidate/artifact-e2e.log
-
-      - name: Record exact candidate identity
-        env:
-          CANDIDATE_BINARY: ${{ matrix.binary }}
-          CANDIDATE_OS: ${{ matrix.platform }}
-          CANDIDATE_ARCH: ${{ matrix.arch }}
-          CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          CANDIDATE_REF: ${{ github.head_ref || github.ref_name }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import hashlib
-          import json
-          import os
-          import pathlib
-          import platform
-          import subprocess
-
-          root = pathlib.Path('candidate')
-          binary = root / os.environ['CANDIDATE_BINARY']
-          archive = root / f"agent-notify-portable-{os.environ['CANDIDATE_OS']}-{os.environ['CANDIDATE_ARCH']}.zip"
-
-          def sha256(path):
-              digest = hashlib.sha256()
-              with path.open('rb') as stream:
-                  for chunk in iter(lambda: stream.read(1024 * 1024), b''):
-                      digest.update(chunk)
-              return digest.hexdigest()
-
-          modules = subprocess.check_output(
-              ['go', 'list', '-m', '-f', '{{.Path}} {{.Version}}', 'all'], text=True
-          ).splitlines()
-          uap_prefix = 'github.com/777genius/plugin-kit-ai/'
-          uap = sorted(line for line in modules if line.startswith(uap_prefix))
-          required_uap_modules = {
-              'github.com/777genius/plugin-kit-ai/cli',
-              'github.com/777genius/plugin-kit-ai/install/integrationctl',
-              'github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins',
-              'github.com/777genius/plugin-kit-ai/sdk',
-          }
-          pinned_uap_modules = {line.split(maxsplit=1)[0] for line in uap}
-          missing_uap_modules = sorted(required_uap_modules - pinned_uap_modules)
-          if missing_uap_modules:
-              raise SystemExit(f'missing required UAP module pins: {missing_uap_modules}')
-          if any(len(line.split(maxsplit=1)) != 2 for line in uap):
-              raise SystemExit(f'unversioned UAP module in exact candidate graph: {uap}')
-          version = subprocess.check_output([str(binary), 'version'], text=True).strip()
-          record = {
-              'schema_version': 1,
-              'status': 'pass',
-              'candidate_sha': os.environ['CANDIDATE_SHA'],
-              'candidate_ref': os.environ['CANDIDATE_REF'],
-              'run_id': int(os.environ['GITHUB_RUN_ID']),
-              'run_attempt': int(os.environ['GITHUB_RUN_ATTEMPT']),
-              'os': os.environ['CANDIDATE_OS'],
-              'arch': os.environ['CANDIDATE_ARCH'],
-              'runner_os_release': platform.platform(),
-              'version_output': version,
-              'binary': {'name': binary.name, 'size': binary.stat().st_size, 'sha256': sha256(binary)},
-              'portable': {'name': archive.name, 'size': archive.stat().st_size, 'sha256': sha256(archive)},
-              'uap_modules': uap,
-              'qualification': {
-                  'artifact_e2e': 'pass',
-                  'desktop_outcome': 'not_run',
-                  'client_restart': 'not_run',
-                  'machine_reboot_login': 'not_run',
-              },
-          }
-          (root / 'candidate-evidence.json').write_text(
-              json.dumps(record, indent=2, sort_keys=True) + '\n', encoding='utf-8'
-          )
+          python3 - <<'PY'
+          import hashlib,json,os,pathlib
+          p=pathlib.Path('scripts/testdata/opencode-installed12/installed12-plan.json')
+          assert hashlib.sha256(p.read_bytes()).hexdigest()=='43e800a04df0dac060c3e969dd8f461ee93c36b08be64654b65b68ecd5175f26'
+          d=json.loads(p.read_bytes());rows=[r for r in d['cells'] if r['route']=='GHA']
+          assert len(d['cells'])==12 and len(rows)==8 and all(r['version']=='1.18.33' and r['entry'] in ('run','tui') and (r['os'],r['arch'])!=('linux','amd64') for r in rows)
+          with open(os.environ['GITHUB_OUTPUT'],'a') as f:f.write('matrix='+json.dumps({'include':rows},separators=(',',':'))+'\n')
           PY
-          cat candidate/candidate-evidence.json
-
-      - name: Upload exact candidate and evidence
-        if: always()
-        uses: actions/upload-artifact@v7
+  native:
+    needs: plan
+    name: '${{ matrix.id }}'
+    runs-on: '${{ matrix.runner }}'
+    timeout-minutes: 20
+    strategy: {fail-fast: false, matrix: '${{ fromJSON(needs.plan.outputs.matrix) }}'}
+    defaults:
+      run: {working-directory: TEST-product, shell: bash}
+    env:
+      TEST_PRODUCT_HEAD: '${{ inputs.product_head }}'
+      TEST_PARENT_SHA256: '${{ inputs.parent_sha256 }}'
+      TEST_PARENT_MANIFEST_SHA256: '${{ inputs.parent_manifest_sha256 }}'
+      TEST_CI_INPUTS_SHA256: '${{ inputs.ci_inputs_sha256 }}'
+      TEST_HARNESS_SHA256: '${{ inputs.harness_sha256 }}'
+      AN_OS: '${{ matrix.os }}'
+      AN_ARCH: '${{ matrix.arch }}'
+      AN_VERSION: '${{ matrix.version }}'
+      AN_ENTRY: '${{ matrix.entry }}'
+    steps:
+      - name: Preserve exact source bytes
+        working-directory: '${{ github.workspace }}'
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+      - uses: actions/checkout@v7
+        with: {path: transport, ref: '${{ github.sha }}', persist-credentials: false}
+      - uses: actions/checkout@v7
+        with: {path: TEST-product, ref: '${{ inputs.product_head }}', persist-credentials: false}
+      - uses: actions/setup-go@v7
+        with: {go-version: '1.27', cache: false}
+      - uses: actions/setup-node@v6
+        with: {node-version: '24.21.0'}
+      - uses: actions/setup-python@v7
+        with: {python-version: '3.12'}
+      - name: Linux private bus prerequisites, before native phase
+        if: matrix.os == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y dbus iproute2
+      - uses: actions/download-artifact@v7
         with:
-          name: qualification-candidate-${{ matrix.platform }}-${{ matrix.arch }}
-          path: candidate/
+          artifact-ids: '${{ inputs.parent_artifact_id }}'
+          run-id: '${{ inputs.parent_run_id }}'
+          repository: '${{ github.repository }}'
+          github-token: '${{ github.token }}'
+          path: downloaded-parent
+      - uses: actions/download-artifact@v7
+        with:
+          artifact-ids: '${{ inputs.supplement_artifact_id }}'
+          run-id: '${{ inputs.parent_run_id }}'
+          repository: '${{ github.repository }}'
+          github-token: '${{ github.token }}'
+          path: downloaded-supplement
+      - name: Authenticated final parent and narrow exact SDK alias
+        id: parent
+        env: {TEST_PARENT_DIRECTORY: '${{ github.workspace }}/downloaded-parent'}
+        run: python -B ../transport/scripts/testdata/opencode-installed12/consume-parent.py
+      - name: Stage reviewed finite supplement and check all twelve source gates
+        id: supplement
+        env: {SUPPLEMENT_SHA256: '${{ inputs.supplement_sha256 }}'}
+        run: |
+          python -B ../transport/scripts/testdata/opencode-installed12/stage-installed12.py \
+            --directory ../downloaded-supplement --sha256 "$SUPPLEMENT_SHA256" \
+            --manifest "${{ steps.parent.outputs.manifest }}" --manifest-sha256 "${{ steps.parent.outputs.sha256 }}" \
+            --os "$AN_OS" --arch "$AN_ARCH" --version "$AN_VERSION" --entry "$AN_ENTRY"
+      - name: Final public source/build preflight and actual Linux receiver build
+        env: {AN_MANIFEST: '${{ steps.parent.outputs.manifest }}', AN_MANIFEST_SHA256: '${{ steps.parent.outputs.sha256 }}'}
+        run: python -B scripts/testdata/opencode-native-e2e/ci_inputs.py
+      - name: One planned genuine installed completion, no retries
+        env:
+          FINAL_MANIFEST: '${{ steps.parent.outputs.manifest }}'
+          FINAL_MANIFEST_SHA256: '${{ steps.parent.outputs.sha256 }}'
+          THIN_DRIVER: '${{ steps.supplement.outputs.driver }}'
+          CELL_GATE: '${{ steps.supplement.outputs.gate }}'
+          CELL_GATE_SHA256: '${{ steps.supplement.outputs.gate_sha256 }}'
+        run: |
+          set -euo pipefail
+          REPO=$(python -c 'import pathlib; print(pathlib.Path.cwd().resolve())')
+          args=(python -B "$THIN_DRIVER" --repo "$REPO" --manifest "$REPO/$FINAL_MANIFEST" --manifest-sha256 "$FINAL_MANIFEST_SHA256" --final-gate "$CELL_GATE" --final-gate-sha256 "$CELL_GATE_SHA256" --artifacts "$REPO/.task-tools/artifacts/installed12-cases" --os "$AN_OS" --arch "$AN_ARCH" --version "$AN_VERSION" --entry "$AN_ENTRY")
+          if [ "$AN_OS" = linux ]; then
+            args+=(--receiver-record "$REPO/.task-tools/artifacts/receiver-record.json")
+            # Retain the runner file owner for private-env Git source guards.
+            sudo --preserve-env=PATH unshare --net -- bash -c 'ip link set lo up; uid=$1; shift; exec sudo -u "#$uid" --preserve-env=PATH -- "$@"' bash "$(id -u)" "${args[@]}"
+          else
+            "${args[@]}"
+          fi
+      - name: Export only closed SAFE scalar/digest result, never private traces
+        if: always()
+        run: |
+          python -B ../transport/scripts/testdata/opencode-installed12/safe-export.py \
+            --cases .task-tools/artifacts/installed12-cases \
+            --output .task-tools/artifacts/installed12-safe/result.json \
+            --os "$AN_OS" --arch "$AN_ARCH" --version "$AN_VERSION" --entry "$AN_ENTRY"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: 'installed12-${{ matrix.id }}'
+          path: TEST-product/.task-tools/artifacts/installed12-safe/result.json
           if-no-files-found: error
           retention-days: 14

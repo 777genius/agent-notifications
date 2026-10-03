@@ -1,0 +1,126 @@
+{
+  "schema": 1,
+  "purpose": "TEST twelve installed V1 local completions, one attempt per cell",
+  "cells": [
+    {
+      "id": "linux-amd64-1.18.33-run",
+      "os": "linux",
+      "arch": "amd64",
+      "version": "1.18.33",
+      "entry": "run",
+      "route": "HOST",
+      "runner": null,
+      "plannedProviderAttempts": 1
+    },
+    {
+      "id": "linux-amd64-1.18.33-tui",
+      "os": "linux",
+      "arch": "amd64",
+      "version": "1.18.33",
+      "entry": "tui",
+      "route": "HOST",
+      "runner": null,
+      "plannedProviderAttempts": 1
+    },
+    {
+      "id": "linux-amd64-1.18.34-run",
+      "os": "linux",
+      "arch": "amd64",
+      "version": "1.18.34",
+      "entry": "run",
+      "route": "HOST",
+      "runner": null,
+      "plannedProviderAttempts": 1
+    },
+    {
+      "id": "linux-amd64-1.18.34-tui",
+      "os": "linux",
+      "arch": "amd64",
+      "version": "1.18.34",
+      "entry": "tui",
+      "route": "HOST",
+      "runner": null,
+      "plannedProviderAttempts": 1
+    },
+    {
+      "id": "linux-arm64-1.18.33-run",
+      "os": "linux",
+      "arch": "arm64",
+      "version": "1.18.33",
+      "entry": "run",
+      "route": "GHA",
+      "runner": "ubuntu-22.04-arm",
+      "plannedProviderAttempts": 1
+    },
+    {
+      "id": "linux-arm64-1.18.33-tui",
+      "os": "linux",
+      "arch": "arm64",
+      "version": "1.18.33",
+      "entry": "tui",
+      "route": "GHA",
+      "runner": "ubuntu-22.04-arm",
+      "plannedProviderAttempts": 1
+    },
+    {
+      "id": "darwin-amd64-1.18.33-run",
+      "os": "darwin",
+      "arch": "amd64",
+      "version": "1.18.33",
+      "entry": "run",
+      "route": "GHA",
+      "runner": "macos-15-intel",
+      "plannedProviderAttempts": 1
+    },
+    {
+      "id": "darwin-amd64-1.18.33-tui",
+      "os": "darwin",
+      "arch": "amd64",
+      "version": "1.18.33",
+      "entry": "tui",
+      "route": "GHA",
+      "runner": "macos-15-intel",
+      "plannedProviderAttempts": 1
+    },
+    {
+      "id": "darwin-arm64-1.18.33-run",
+      "os": "darwin",
+      "arch": "arm64",
+      "version": "1.18.33",
+      "entry": "run",
+      "route": "GHA",
+      "runner": "macos-15",
+      "plannedProviderAttempts": 1
+    },
+    {
+      "id": "darwin-arm64-1.18.33-tui",
+      "os": "darwin",
+      "arch": "arm64",
+      "version": "1.18.33",
+      "entry": "tui",
+      "route": "GHA",
+      "runner": "macos-15",
+      "plannedProviderAttempts": 1
+    },
+    {
+      "id": "windows-amd64-1.18.33-run",
+      "os": "windows",
+      "arch": "amd64",
+      "version": "1.18.33",
+      "entry": "run",
+      "route": "GHA",
+      "runner": "windows-latest",
+      "plannedProviderAttempts": 1
+    },
+    {
+      "id": "windows-amd64-1.18.33-tui",
+      "os": "windows",
+      "arch": "amd64",
+      "version": "1.18.33",
+      "entry": "tui",
+      "route": "GHA",
+      "runner": "windows-latest",
+      "plannedProviderAttempts": 1
+    }
+  ]
+}
