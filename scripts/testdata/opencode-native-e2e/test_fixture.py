@@ -289,18 +289,32 @@ class DriverContractTests(unittest.TestCase):
 
     def test_summary_provider_distinguishes_native_generation_and_v1_conversation_envelope(self):
         import provider as p
-        # Frozen V1 compaction tests assert one user LLM message and these
-        # conversation/anchor literals. No native envelope is injected here.
+        # Stock V1 request preparation adds one system string before the
+        # compactor's anchored user message. No native envelope is injected.
         content = ('Here is the conversation so far:\n<conversation>\n'
                    '[User]: older context\n</conversation>\nCreate a new anchored summary')
         body = {'model':'p0-compaction','messages':[{'role':'user','content':content}]}
         self.assertTrue(p.summary_request(body,False))
         self.assertFalse(p.summary_request(body,True))
+        system={'role':'system','content':'Stock compaction system prompt.'}
+        prepared={**body,'messages':[system,*body['messages']]}
+        self.assertTrue(p.summary_request(prepared,False))  # Old one-message filter rejects stock preparation.
+        self.assertFalse(p.summary_request(prepared,True))
+        for header in ({'role':'system','content':''},{'role':'system','content':' \n\t'},
+                       {'role':'system','content':None},{'role':'system','content':[{'type':'text','text':'system'}]},
+                       {'role':'system','content':'x'*(1024*1024+1)},
+                       {'role':'developer','content':'system'},{'role':'user','content':'system'}):
+            with self.subTest(headerRole=header['role'],contentType=type(header['content']).__name__):
+                self.assertFalse(p.summary_request({**body,'messages':[header,*body['messages']]},False))
+        for role in ('system','user','assistant','tool'):
+            self.assertFalse(p.summary_request({**body,'messages':[system,{'role':role,'content':'extra'},*body['messages']]},False))
+        self.assertFalse(p.summary_request({**body,'messages':[*body['messages'],system]},False))
         for changed in (content.replace('Create a new anchored summary','ordinary reply'),
                         content.replace('<conversation>',''),
                         content.replace('Here is the conversation so far:',''),
                         content.replace('</conversation>','')):
             self.assertFalse(p.summary_request({'messages':[{'role':'user','content':changed}]},False))
+            self.assertFalse(p.summary_request({'messages':[system,{'role':'user','content':changed}]},False))
         self.assertFalse(p.summary_request({'messages':[{'role':'system','content':content}]},False))
         v2 = {'messages':[{'role':'user','content':
               'You MUST summarize the conversation above into a structured summary that will be given to another agent to resume the work.'}]}

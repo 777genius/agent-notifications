@@ -76,11 +76,19 @@ def text_content(value):
 
 
 def summary_request(body, v2=True):
-    # V1 compaction.test.ts:1376-1423,1499 directly asserts the actual LLM user
-    # request. V2 compaction.ts:139-158 supplies its distinct new-summary literal.
+    # V1 compaction supplies one user message; LLMRequestPrep.prepare prepends
+    # one system string on the stock non-OAuth/non-workflow provider path.
+    # V2 compaction supplies its distinct new-summary literal.
     messages = body.get('messages',[])
     if not v2:
-        if len(messages)!=1 or messages[0].get('role')!='user': return False
+        if not isinstance(messages,list): return False
+        if len(messages)==2:
+            system=messages[0]
+            if not isinstance(system,dict) or system.get('role')!='system': return False
+            content=system.get('content')
+            if not isinstance(content,str) or not content.strip() or len(content)>1024*1024: return False
+            messages=messages[1:]
+        if len(messages)!=1 or not isinstance(messages[0],dict) or messages[0].get('role')!='user': return False
         text = text_content(messages[0].get('content'))
         return all(marker in text for marker in ('Here is the conversation so far:',
                    '<conversation>','</conversation>','Create a new anchored summary'))
