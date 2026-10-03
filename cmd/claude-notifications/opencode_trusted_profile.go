@@ -42,7 +42,22 @@ func selectBoundNativeObserver(e opencodehost.VersionEvidence, actual opencodeho
 
 func qualifyRuntimeObserver(profile opencodehost.Profile, live runtimeLiveImage) runtimeObserverGeneration {
 	candidate, ok := opencodecodec.LookupCandidate(runtimeImageKey(live))
-	if !ok || profile.Version != candidate.Version || live.NativePID <= 0 || live.ProcessStartTick == 0 {
+	if !ok || profile.Version != candidate.Version || live.NativePID <= 0 {
+		return observerUnverified
+	}
+	// Each held native lease supplies its own private lifetime identity.
+	// Darwin/Windows fingerprints include their birth and image metadata;
+	// Linux retains the actual proc start tick instead of a synthetic value.
+	switch live.GOOS {
+	case "linux":
+		if live.ProcessStartTick == 0 {
+			return observerUnverified
+		}
+	case "darwin", "windows":
+		if live.fingerprint == ([32]byte{}) {
+			return observerUnverified
+		}
+	default:
 		return observerUnverified
 	}
 	reader, bound := runtimeReaderTuple(live, candidate.Version)

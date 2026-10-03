@@ -108,7 +108,14 @@ func TestPlatformImagesCannotBindCopiedReader(t *testing.T) {
 			copied := descriptor.Tuple
 			copied.GOOS, copied.GOARCH, copied.ImageSHA256 = image.goos, image.goarch, image.sha
 			e := opencodehost.VersionEvidence{Version: image.version, Source: "host_runtime", ProbeStatus: "ok", ExecutableIdentity: "TEST-copied-proof-only"}
-			live := runtimeLiveImage{GOOS: image.goos, GOARCH: image.goarch, Entry: "serve", SHA256: image.sha, NativePID: 1, ProcessStartTick: 1}
+			live := runtimeLiveImage{GOOS: image.goos, GOARCH: image.goarch, Entry: "serve", SHA256: image.sha, NativePID: 1}
+			// Match the actual native port shape; this is a pure binding fixture,
+			// not native process or platform qualification evidence.
+			if image.goos == "linux" {
+				live.ProcessStartTick = 1
+			} else {
+				live.fingerprint = [32]byte{1}
+			}
 			if selectBoundNativeObserver(e, copied) != observerUnverified {
 				t.Fatal("copied Linux proofs bound another image")
 			}
@@ -122,6 +129,22 @@ func TestPlatformImagesCannotBindCopiedReader(t *testing.T) {
 			}
 			if selectBoundNativeObserver(e, reader) != want || qualifyRuntimeObserver(opencodehost.Resolve(e), live) != want {
 				t.Fatal("exact independent reader and clock data did not select")
+			}
+			missingIdentity := live
+			if image.goos == "linux" {
+				missingIdentity.ProcessStartTick = 0
+				missingIdentity.fingerprint = [32]byte{1}
+			} else {
+				missingIdentity.fingerprint = [32]byte{}
+				missingIdentity.ProcessStartTick = 1
+			}
+			if qualifyRuntimeObserver(opencodehost.Resolve(e), missingIdentity) != observerUnverified {
+				t.Fatal("another platform's identity substituted for missing native lifetime proof")
+			}
+			unknownPlatform := live
+			unknownPlatform.GOOS = "unknown"
+			if qualifyRuntimeObserver(opencodehost.Resolve(e), unknownPlatform) != observerUnverified {
+				t.Fatal("unknown platform inherited native observer authority")
 			}
 			live.SHA256 = "unknown"
 			if _, ok := runtimeReaderTuple(live, image.version); ok || qualifyRuntimeObserver(opencodehost.Resolve(e), live) != observerUnverified {
