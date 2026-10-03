@@ -126,6 +126,11 @@ func applyCodexHooks(ctx context.Context, req Request, reservation *installrunti
 		Context: ctx, ControlRoot: req.ControlRoot, CodexHome: req.CodexHome,
 		PluginRoot: pluginRoot, Remove: remove, Reservation: reservation,
 	})
+	return codexHooksTarget(result, err)
+}
+
+func codexHooksTarget(result codexsetup.Result, err error) (TargetResult, error) {
+	target := TargetResult{Client: "codex", Unit: "hooks", Warnings: result.Warnings}
 	if err != nil {
 		reason := "hooks_failed"
 		var init *codexsetup.InitializationError

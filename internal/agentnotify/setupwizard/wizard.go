@@ -132,6 +132,8 @@ type TargetResult struct {
 	// ConfigPath is the owned MCP file inspect used for a direct-mcp
 	// target. Empty on hooks/notify rows so JSON omits it.
 	ConfigPath string `json:"configPath,omitempty"`
+	// Warnings are post-commit maintenance diagnostics, not installation failure.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // ReadinessFact is independent of binary download. Inspect and mutation both
