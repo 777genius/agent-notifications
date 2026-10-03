@@ -388,6 +388,7 @@ var (
 	_           = hooks.Event{}
 )
 
+// TestSourceDecodeShortObjectWithOpenWriter requires decoding without closing stdin.
 func TestSourceDecodeShortObjectWithOpenWriter(t *testing.T) {
 	reader, writer := io.Pipe()
 	done := make(chan struct{})
@@ -437,6 +438,7 @@ func TestSourceDecodeShortObjectWithOpenWriter(t *testing.T) {
 	}
 }
 
+// TestSkipUTF8BOMPreservesPartialPrefixes guards against discarding incomplete BOM bytes.
 func TestSkipUTF8BOMPreservesPartialPrefixes(t *testing.T) {
 	for _, input := range []string{"", "\xEF", "\xEF\xBB", "\xEFx", "\xEF\xBBx", "\xBB\xBF{}", "{}", "\xEF\xBB\xBF{}"} {
 		t.Run(strconv.Quote(input), func(t *testing.T) {

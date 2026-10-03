@@ -235,6 +235,7 @@ func decodeLegacyPayload(input io.Reader) (json.RawMessage, hooks.HookData, erro
 	return append(json.RawMessage(nil), raw...), wire, nil
 }
 
+// skipUTF8BOM probes three bytes only after a possible UTF-8 BOM prefix.
 func skipUTF8BOM(input io.Reader) io.Reader {
 	reader := bufio.NewReader(input)
 	prefix, err := reader.Peek(1)

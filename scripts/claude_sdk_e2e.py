@@ -41,11 +41,13 @@ PLACEHOLDER = "agent-notifications-sdk-placeholder"
 
 
 def require(condition, message):
+    """Fail a check when an independently asserted contract is violated."""
     if not condition:
         raise AssertionError(message)
 
 
 def sha(path):
+    """Hash the complete artifact or captured stream without loading it all at once."""
     h = hashlib.sha256()
     with open(path, "rb") as stream:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
@@ -54,6 +56,7 @@ def sha(path):
 
 
 def write_json(path, value):
+    """Write UTF-8 JSON evidence and request mode 0600."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     path.chmod(0o600)
@@ -63,18 +66,21 @@ class Sink(ThreadingHTTPServer):
     daemon_threads = True
 
     def __init__(self):
+        """Start a loopback receiver with synchronized receipt storage."""
         self.received = []
         self.errors = []
         self.lock = threading.Lock()
         super().__init__(("127.0.0.1", 0), Receiver)
 
     def snapshot(self):
+        """Copy delivered webhook receipts under the receiver lock."""
         with self.lock:
             return list(self.received)
 
 
 class Receiver(BaseHTTPRequestHandler):
     def do_POST(self):
+        """Record bounded loopback webhook bodies and reject invalid deliveries."""
         self.connection.settimeout(5)
         try:
             size = int(self.headers.get("Content-Length", "0"))
@@ -96,11 +102,13 @@ class Receiver(BaseHTTPRequestHandler):
             self.send_error(400)
 
     def log_message(self, *_):
+        """Suppress HTTP server console output so receipts remain the evidence source."""
         pass
 
 
 class Harness:
     def __init__(self, args):
+        """Create a private TEST lab and a product environment isolated from user configuration."""
         self.args = args
         self.source = args.source.resolve()
         self.binary = args.binary.resolve()
@@ -181,6 +189,7 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
             Path(self.env[key]).mkdir(parents=True, exist_ok=True)
 
     def run(self, argv, data=b"", *, timeout=15, open_stdin=False, cwd=None):
+        """Capture a bounded subprocess, preserving open stdin for the short-object probe."""
         argv = [str(item) for item in argv]
         number = len(self.commands) + 1
         stdout_path = self.lab / f"command-{number:03d}.stdout"
@@ -227,6 +236,7 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
         return record, stdout_path.read_bytes(), stderr_path.read_bytes()
 
     def success(self, result):
+        """Require successful termination and empty SDK decision stdout."""
         record, out, err = result
         require(not record["timed_out"], f"command {len(self.commands)} timed out: {record['argv']}")
         require(record["returncode"] == 0, f"exit {record['returncode']}: {err[-1000:]!r}")
@@ -234,6 +244,7 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
         return record
 
     def check(self, name, fn):
+        """Record an independent check failure while allowing later checks to run."""
         before = len(self.commands)
         start = time.monotonic()
         try:
@@ -246,7 +257,9 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
                                 "elapsed_seconds": round(time.monotonic() - start, 3)})
 
     def prepare(self):
+        """Verify clean same-source provenance and stage an isolated product fixture."""
         def inspect(argv):
+            """Read bounded source and binary provenance using the isolated environment."""
             record, out, err = self.run(argv, cwd=self.source)
             require(not record["timed_out"] and record["returncode"] == 0, err.decode(errors="replace"))
             return out.decode().strip()
@@ -341,6 +354,7 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
         return {"verified_source_sha": revision, "staged_package": str(self.package)}
 
     def install(self, *, remove=False, refresh=False):
+        """Invoke the actual installer against the private fixture home and package."""
         argv = [self.installed_binary, "internal-install-runtime", "--target", self.package / "bin",
                 "--entry", self.exe_name, "--control-root", self.control]
         if remove:
@@ -353,6 +367,7 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
         require(not record["timed_out"] and record["returncode"] == 0, repr(err[-2000:]))
 
     def managed(self, event):
+        """Return only the generated hook argv owned by this staged installation."""
         data = json.loads(self.hooks_path.read_text(encoding="utf-8"))
         expected = {"type": "command", "command": str(self.package / "bin" / self.exe_name),
                     "args": ["handle-hook", event], "timeout": 30}
@@ -363,6 +378,7 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
         return [matches[0]["command"], *matches[0]["args"]]
 
     def preserve(self):
+        """Require foreign hook groups, handlers, and unrelated settings to survive."""
         data = json.loads(self.hooks_path.read_text(encoding="utf-8"))
         require(data["foreignTop"] == self.fixture["foreignTop"], "foreign top fields changed")
         require("ForeignEvent" in data["hooks"] and data["hooks"]["ForeignEvent"] is None,
@@ -378,6 +394,7 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
         return data
 
     def install_preservation(self):
+        """Check first install, repeat install, and repair without losing foreign hooks."""
         self.install()
         first = self.preserve()
         self.install()
@@ -398,6 +415,7 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
                 "hooks_sha256": sha(self.hooks_path)}
 
     def command(self, event, route="installed", trace=False):
+        """Choose direct CLI or the actual installed native hook invocation."""
         if route == "direct":
             return [self.installed_binary, "handle-hook", event]
         if route == "managed" or os.name == "nt":
@@ -409,14 +427,17 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
         return ["sh", *(["-x"] if trace else []), *args]
 
     def payload(self, event, session, **fields):
+        """Build a fixture payload with independent session and project identity."""
         return {"session_id": session, "cwd": str(self.project),
                 "transcript_path": str(self.transcript), "hook_event_name": event, **fields}
 
     def state(self, session):
+        """Read the persisted session state produced by the real hook process."""
         return json.loads((self.tmp / f"claude-session-state-{session}.json").read_text(encoding="utf-8"))
 
     def emit(self, event, session, status, message, *, fields=None, route="installed", wire=None,
              trace=False, persisted=True):
+        """Verify one real webhook, its complete message, and matching persisted state."""
         before = len(self.sink.snapshot())
         payload = self.payload(event, session, **(fields or {}))
         data = wire if wire is not None else json.dumps(payload, ensure_ascii=False).encode()
@@ -481,6 +502,7 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
         return actual
 
     def interactive(self, tool, status, message, session):
+        """Verify tool notification delivery and the persisted interactive state."""
         self.emit("PreToolUse", session, status, message, fields={"tool_name": tool})
         state = self.state(session)
         require(state["last_interactive_tool"] == tool and state["last_ts"] > 0,
@@ -489,6 +511,7 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
         return {"interactive_tool": tool, "status": status, "state": state}
 
     def short(self, route):
+        """Require exactly two JSON bytes to finish while the stdin writer stays open."""
         before = len(self.sink.snapshot())
         result = self.run(self.command("PreToolUse", route), b"{}", open_stdin=True, timeout=3)
         self.success(result)
@@ -497,6 +520,7 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
         return {"exact_stdin": "{}", "writer_open_at_exit": True}
 
     def malformed(self):
+        """Verify loud direct CLI errors and the POSIX wrapper fail-open contract."""
         before = len(self.sink.snapshot())
         record, out, err = self.run(self.command("Stop", "direct"), b"{oops")
         require(not record["timed_out"] and record["returncode"] != 0 and out == b"",
@@ -512,6 +536,7 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
                 "wrapper_failopen": os.name != "nt"}
 
     def team(self):
+        """Verify durable team completion, reset, and replay suppression."""
         team = "TEST-sdk-team"
         lead = "TEST-team-lead"
         write_json(self.home / ".claude/teams" / team / "config.json",
@@ -573,6 +598,7 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
                 "webhook_count": 1, "replay_bypasses_session_lock": True}
 
     def bom_trailing(self):
+        """Verify the first JSON value is accepted after a BOM despite trailing data."""
         for route in ("direct", "installed"):
             session = f"TEST-bom-{route}"
             payload = self.payload("Stop", session, last_assistant_message="BOM fixture complete.")
@@ -583,6 +609,7 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
     def oversized(self):
         # A useful first sentence remains observable after the real product's
         # normal summary truncation; no implementation is called for expected text.
+        """Require an original final message larger than the SDK projection limit."""
         original = "Oversized final message restored correctly. " + "x" * (1024 * 1024 + 256)
         self.emit("Stop", "TEST-oversized", "task_complete", "Oversized final message restored correctly.",
                   fields={"last_assistant_message": original})
@@ -592,6 +619,7 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
         # Each field is below 1 MiB; their *SDK projection* is above it. Keep
         # cwd lexically in the disposable project, with an impossible component
         # so no traversal can reach an existing project or resolve real paths.
+        """Require original fields to survive an aggregate projection above the SDK limit."""
         session = "TEST-combined"
         cwd = str(self.project) + os.sep + "c" * 600000
         message = "Combined projection preserved the original final message."
@@ -611,6 +639,7 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
                 "original_cwd_delivered": True}
 
     def missing_session(self):
+        """Verify the exact warning and unknown-session notification fallback."""
         log = self.package / "notification-debug.log"
         offset = log.stat().st_size if log.exists() else 0
         payload = self.payload("Stop", "", last_assistant_message="Missing session fixture complete.")
@@ -625,11 +654,13 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
         return {"warn_line": lines[0], "fallback_session_id": "unknown", "stdout_bytes": 0}
 
     def managed_execution(self):
+        """Execute the owned generated hook as a real subprocess."""
         self.emit("Stop", "TEST-managed-owned", "task_complete", "Managed hook fixture complete.",
                   fields={"last_assistant_message": "Managed hook fixture complete."}, route="managed")
         return {"argv": self.managed("Stop"), "webhook_agent_source": "claude"}
 
     def remove(self):
+        """Remove owned installation data while retaining the complete foreign document."""
         self.install(remove=True)
         data = json.loads(self.hooks_path.read_text(encoding="utf-8"))
         expected = copy.deepcopy(self.fixture)
@@ -645,6 +676,7 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
         return {"foreign_document_preserved": True, "hooks_sha256": sha(self.hooks_path)}
 
     def execute(self):
+        """Run the native qualification matrix and return its observed evidence."""
         self.check("verified_same_source_sandbox_setup", self.prepare)
         if self.checks[-1]["result"] == "PASS":
             self.check("real_install_repeat_repair_foreign_preservation", self.install_preservation)
@@ -690,6 +722,7 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
 
 
 def main():
+    """Parse qualification inputs, write the receipt, and fail on observed check failures."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", required=True, type=Path, help="actual same-source native Go binary")
     parser.add_argument("--source", type=Path, default=Path(__file__).resolve().parents[1])
