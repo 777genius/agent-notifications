@@ -298,7 +298,11 @@ function absoluteNativePath(value, platform) {
   return (drive || unc) && path.win32.normalize(value) === value;
 }
 async function forward(event, spawnProcess = spawn, binary = executable, root = controlRoot, platform = process.platform) {
-  const body = Buffer.from(JSON.stringify(event));
+  let body = Buffer.from(JSON.stringify(event));
+  if (body.length > maxWireBytes && event.display !== void 0) {
+    const { display: _display, ...neutral } = event;
+    body = Buffer.from(JSON.stringify(neutral));
+  }
   if (body.length > maxWireBytes || !absoluteNativePath(binary, platform) || !absoluteNativePath(root, platform) || platform === "win32" && !binary.toLowerCase().endsWith(".exe")) return "invalid_plugin";
   return new Promise((resolve) => {
     let settled = false;
@@ -367,20 +371,133 @@ async function forward(event, spawnProcess = spawn, binary = executable, root = 
   });
 }
 
+// display.ts
+var object2 = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+var bytes = (value) => new TextEncoder().encode(value).length;
+var validID = (value) => typeof value === "string" && value.length > 0 && bytes(value) <= 256 && !/[\u0000-\u001f\u007f]/u.test(value);
+function cleanText(value, limit) {
+  if (typeof value !== "string" || bytes(value) > limit || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(value) || /[\ud800-\udfff]/u.test(value)) return "";
+  return value.trim().replace(/\s+/gu, " ");
+}
+function createDisplayContext(client, timeoutMs = 1e3, maxLookups = 8) {
+  const requests = /* @__PURE__ */ new Map();
+  const turns = /* @__PURE__ */ new Map();
+  const seenTurns = /* @__PURE__ */ new Set();
+  let activeLookups = 0;
+  const key = (sessionID, requestID) => JSON.stringify([sessionID, requestID]);
+  function capture(event) {
+    if (!object2(event) || !object2(event.properties)) return;
+    const p = event.properties;
+    if (event.type === "message.updated" && object2(p.info) && p.info.role === "user" && validID(p.info.sessionID) && validID(p.info.id)) {
+      const turnKey = key(p.info.sessionID, p.info.id);
+      if (turns.get(p.info.sessionID) !== p.info.id && !seenTurns.has(turnKey)) {
+        for (const [k2, snapshot2] of requests) {
+          if (snapshot2.sessionID === p.info.sessionID) {
+            snapshot2.active = false;
+            requests.delete(k2);
+          }
+        }
+        turns.set(p.info.sessionID, p.info.id);
+        if (turns.size > 512) turns.delete(turns.keys().next().value);
+        seenTurns.add(turnKey);
+        if (seenTurns.size > 512) seenTurns.delete(seenTurns.values().next().value);
+      }
+    }
+    if (["question.replied", "question.rejected"].includes(String(event.type)) && validID(p.sessionID) && validID(p.requestID)) {
+      const k2 = key(p.sessionID, p.requestID), snapshot2 = requests.get(k2);
+      if (snapshot2) {
+        snapshot2.active = false;
+        requests.delete(k2);
+      }
+    }
+    if (event.type !== "question.asked" || !validID(p.sessionID) || !validID(p.id)) return;
+    const k = key(p.sessionID, p.id);
+    const existing = requests.get(k);
+    if (existing) {
+      existing.observers++;
+      return existing;
+    }
+    if (requests.size >= 512) return;
+    let question = "";
+    if (Array.isArray(p.questions) && p.questions.length > 0 && p.questions.length <= 8) {
+      const parts = p.questions.map((q) => object2(q) ? cleanText(q.question, 1024) : "");
+      const combined = parts.join(" \xB7 ");
+      if (parts.every(Boolean) && bytes(combined) <= 2048) question = combined;
+    }
+    const snapshot = { sessionID: p.sessionID, requestID: p.id, question, active: true, observers: 1 };
+    requests.set(k, snapshot);
+    return snapshot;
+  }
+  function release(snapshot) {
+    if (!snapshot || --snapshot.observers > 0) return;
+    snapshot.active = false;
+    const k = key(snapshot.sessionID, snapshot.requestID);
+    if (requests.get(k) === snapshot) requests.delete(k);
+  }
+  async function title(sessionID) {
+    if (activeLookups >= maxLookups) return "";
+    activeLookups++;
+    const controller = new AbortController();
+    let timer;
+    const lookup = Promise.resolve().then(() => client.session.get({ path: { id: sessionID }, signal: controller.signal }));
+    lookup.then(() => {
+      activeLookups--;
+    }, () => {
+      activeLookups--;
+    });
+    try {
+      const result = await Promise.race([lookup, new Promise((resolve) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          resolve(void 0);
+        }, timeoutMs);
+      })]);
+      const info = object2(result) && "data" in result ? result.data : result;
+      return object2(info) && info.id === sessionID ? cleanText(info.title, 1024) : "";
+    } catch {
+      return "";
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  async function enrich(fact) {
+    if (fact.rootSession !== true || !validID(fact.sessionID)) return fact;
+    const snapshot = fact.kind === "question_asked" && validID(fact.requestID) ? requests.get(key(fact.sessionID, fact.requestID)) : void 0;
+    const sessionTitle = await title(fact.sessionID);
+    const question = snapshot?.active ? snapshot.question : "";
+    if (!sessionTitle && !question) return fact;
+    return { ...fact, display: {
+      sessionID: fact.sessionID,
+      ...fact.kind === "question_asked" && fact.requestID ? { requestID: fact.requestID } : {},
+      ...sessionTitle ? { sessionTitle } : {},
+      ...question ? { question } : {}
+    } };
+  }
+  return { capture, release, enrich };
+}
+
 // plugin.mjs
 var AgentNotifications = async ({ client }) => {
+  const display = createDisplayContext(client);
   const observer = createObserver({
     client,
     emit: async (event) => {
       if (event.kind === "unknown" || event.rootSession !== true) return;
-      const outcome = await forward(event);
+      const outcome = await forward(await display.enrich(event));
       if (outcome !== "submitted" && outcome !== "suppressed") {
         console.error("Agent Notifications OpenCode delivery:", outcome);
       }
     },
     onDiagnostic: (reason) => console.error("Agent Notifications OpenCode observer:", reason)
   });
-  return { event: async ({ event }) => observer.observe(event) };
+  return { event: async ({ event }) => {
+    const snapshot = display.capture(event);
+    try {
+      await observer.observe(event);
+    } finally {
+      display.release(snapshot);
+    }
+  } };
 };
 export {
   AgentNotifications

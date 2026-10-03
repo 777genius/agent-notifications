@@ -79,3 +79,20 @@ test('Windows IPC accepts owned absolute exe paths and sends a narrow startup en
     }
   }
 });
+
+// Optional desktop data must not drop an otherwise valid notification when its
+// JSON escaping/combined fields would exceed the total 4096-byte wire budget.
+test('oversized optional display falls back to exactly the neutral wire', async () => {
+  let sent;
+  const fake = () => {
+    const child = new EventEmitter();
+    child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+    child.kill = () => {};
+    child.stdin.on('data', (chunk) => { sent = JSON.parse(chunk.toString()); });
+    queueMicrotask(() => { child.stdout.write('{"status":"submitted"}'); child.emit('close', 0); });
+    return child;
+  };
+  const neutral = { version: 1, kind: 'question_asked', sessionID: 's', turnID: 't', requestID: 'r', rootSession: true };
+  assert.equal(await forward({ ...neutral, display: { question: '"'.repeat(4096) } }, fake, '/test/owned-binary', '/test/managed-control', 'linux'), 'submitted');
+  assert.deepEqual(sent, neutral);
+});

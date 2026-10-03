@@ -25,7 +25,12 @@ function absoluteNativePath(value, platform) {
 }
 
 export async function forward(event, spawnProcess = spawn, binary = executable, root = controlRoot, platform = process.platform) {
-  const body = Buffer.from(JSON.stringify(event));
+  let body = Buffer.from(JSON.stringify(event));
+  // Optional display data must never prevent a legitimate neutral notification.
+  if (body.length > maxWireBytes && event.display !== undefined) {
+    const { display: _display, ...neutral } = event;
+    body = Buffer.from(JSON.stringify(neutral));
+  }
   if (body.length > maxWireBytes || !absoluteNativePath(binary, platform) || !absoluteNativePath(root, platform) || (platform === 'win32' && !binary.toLowerCase().endsWith('.exe'))) return 'invalid_plugin';
   return new Promise((resolve) => {
     let settled = false;

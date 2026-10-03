@@ -1,5 +1,5 @@
 // Package opencodeevent consumes the bounded, neutral OpenCode observer wire.
-// It never displays or forwards native event data or opaque identifiers.
+// Optional product display context is desktop-only; webhooks remain neutral.
 package opencodeevent
 
 import (
@@ -73,6 +73,11 @@ func mapEvent(kind uap.Kind) (message, bool) {
 	}
 }
 
+func mapStatus(kind uap.Kind) analyzer.Status {
+	m, _ := mapEvent(kind)
+	return m.status
+}
+
 // Consume reads exactly one bounded JSON object. Unknown v1 facts and
 // subagent facts are intentionally silent. Delivery is at most once per call.
 func (c Consumer) Consume(ctx context.Context, input io.Reader) Receipt {
@@ -80,10 +85,11 @@ func (c Consumer) Consume(ctx context.Context, input io.Reader) Receipt {
 	if err != nil || len(raw) == 0 || len(raw) > uap.MaxBytes {
 		return Receipt{Status: "rejected", Reason: "invalid_frame"}
 	}
-	if strictjson.Validate(raw, strictjson.Budget{Bytes: uap.MaxBytes, Depth: 8, Entries: 64}) != nil {
+	neutral, display, err := splitDisplay(raw)
+	if err != nil || strictjson.Validate(neutral, strictjson.Budget{Bytes: uap.MaxBytes, Depth: 8, Entries: 64}) != nil {
 		return Receipt{Status: "rejected", Reason: "invalid_frame"}
 	}
-	event, err := uap.Decode(raw)
+	event, err := uap.Decode(neutral)
 	if err != nil {
 		return Receipt{Status: "rejected", Reason: "invalid_frame"}
 	}
@@ -114,7 +120,7 @@ func (c Consumer) Consume(ctx context.Context, input io.Reader) Receipt {
 			boot, now, clockErr := c.Clock.Now()
 			if clockErr == nil && boot != "" {
 				receipt := c.Desktop.Deliver(ctx, notification.Request{
-					Content:       m.content,
+					Content:       desktopContent(event, display, m.content, c.Config.IsSessionLabelEnabled()),
 					CorrelationID: uuid.NewString(),
 					Deadline:      notification.Deadline{BootID: boot, NotAfter: now + 10},
 					Policy:        notification.PolicySnapshot{Valid: true, ExplicitEnabled: true, DesktopEnabled: true, SoundEnabled: false},
