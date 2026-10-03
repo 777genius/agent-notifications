@@ -9,8 +9,9 @@ import (
 // Pure binder contract fixtures. Complete strings pass a pure comparison;
 // nothing in these tests claims a verified OS parent or native/runtime success.
 func TestPureNativeBinderRequiresCompletePrivateTuple(t *testing.T) {
-	for _, version := range []string{"1.18.33", "1.18.34", "2.0.21"} {
-		d, ok := opencodehost.NativeObserverEvidence(version)
+	for _, reader := range qualifiedRuntimeReaders {
+		version := reader.Version
+		d, ok := opencodehost.NativeObserverEvidenceForImage(version, reader.GOOS, reader.GOARCH, reader.ImageSHA256)
 		if !ok {
 			t.Fatal("missing source descriptor")
 		}
@@ -25,8 +26,8 @@ func TestPureNativeBinderRequiresCompletePrivateTuple(t *testing.T) {
 		changes := map[string]func(*opencodehost.NativeObserverTuple){
 			"version":    func(v *opencodehost.NativeObserverTuple) { v.Version = "2.0.22" },
 			"image":      func(v *opencodehost.NativeObserverTuple) { v.ImageSHA256 = "unknown" },
-			"platform":   func(v *opencodehost.NativeObserverTuple) { v.GOOS = "windows" },
-			"arch":       func(v *opencodehost.NativeObserverTuple) { v.GOARCH = "arm64" },
+			"platform":   func(v *opencodehost.NativeObserverTuple) { v.GOOS = "unknown" },
+			"arch":       func(v *opencodehost.NativeObserverTuple) { v.GOARCH = "unknown" },
 			"entry":      func(v *opencodehost.NativeObserverTuple) { v.Entry = "serve" },
 			"reader":     func(v *opencodehost.NativeObserverTuple) { v.ReaderContract = "" },
 			"provenance": func(v *opencodehost.NativeObserverTuple) { v.ProvenanceBasis = "" },
@@ -86,9 +87,9 @@ func TestPureNativeBinderRequiresCompletePrivateTuple(t *testing.T) {
 	}
 }
 
-// Regression: recognizing an official pending image must not accept copied Linux
-// reader proofs, even when the claimed runtime identity and probe look complete.
-func TestPendingPlatformImagesCannotBindCopiedReader(t *testing.T) {
+// Regression: accepted exact platform evidence cannot inherit copied Linux
+// proofs, even when the claimed runtime identity and probe look complete.
+func TestPlatformImagesCannotBindCopiedReader(t *testing.T) {
 	for _, image := range []struct{ goos, goarch, version, generation, sha string }{
 		{"linux", "arm64", "1.18.33", "v1", "986fef2069a03b5181a9ec920786836f98fe3e4950c630941908687854e42757"},
 		{"linux", "arm64", "2.0.21", "v2", "d2f4c9ee106d9930d20ca5cf5f2c2216aab6fed836992cf24979d9481242c01c"},
@@ -109,13 +110,22 @@ func TestPendingPlatformImagesCannotBindCopiedReader(t *testing.T) {
 			e := opencodehost.VersionEvidence{Version: image.version, Source: "host_runtime", ProbeStatus: "ok", ExecutableIdentity: "TEST-copied-proof-only"}
 			live := runtimeLiveImage{GOOS: image.goos, GOARCH: image.goarch, Entry: "serve", SHA256: image.sha, NativePID: 1, ProcessStartTick: 1}
 			if selectBoundNativeObserver(e, copied) != observerUnverified {
-				t.Fatal("copied Linux proofs bound a pending image")
+				t.Fatal("copied Linux proofs bound another image")
 			}
-			if _, ok := runtimeReaderTuple(live, image.version); ok {
-				t.Fatal("pending image acquired an independent reader")
+			reader, ok := runtimeReaderTuple(live, image.version)
+			if !ok {
+				t.Fatal("accepted image missing independent literal reader")
 			}
-			if qualifyRuntimeObserver(opencodehost.Resolve(e), live) != observerUnverified {
-				t.Fatal("pending image acquired runtime authority")
+			want := observerV1
+			if image.generation == "v2" {
+				want = observerV2
+			}
+			if selectBoundNativeObserver(e, reader) != want || qualifyRuntimeObserver(opencodehost.Resolve(e), live) != want {
+				t.Fatal("exact independent reader and clock data did not select")
+			}
+			live.SHA256 = "unknown"
+			if _, ok := runtimeReaderTuple(live, image.version); ok || qualifyRuntimeObserver(opencodehost.Resolve(e), live) != observerUnverified {
+				t.Fatal("unknown image inherited reader or clock eligibility")
 			}
 		})
 	}

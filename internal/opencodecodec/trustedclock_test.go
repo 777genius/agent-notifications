@@ -152,8 +152,14 @@ func TestOriginalNativeAgePolicy(t *testing.T) {
 			t.Fatal("exception escaped exact tuple", k, c)
 		}
 	}
-	if _, ok := LookupQualifiedClock(key); ok {
-		t.Fatal("metadata recognition granted absent clock row")
+	clock, ok := LookupQualifiedClock(key)
+	if !ok || clock.OriginalNativeAge != "unverified_original_date" {
+		t.Fatal("accepted Windows V1 row concealed the explicit age limitation")
+	}
+	unknown := key
+	unknown.SHA256 = "unknown"
+	if _, ok := LookupQualifiedClock(unknown); ok {
+		t.Fatal("recognized age policy granted an unknown image clock")
 	}
 	legacy := ImageKey{"linux", "amd64", "serve", "0abbb7c32ab0294c0a7bfa2705f9ff0df5dce5ab721d1f00cccfe393f2a11427"}
 	if !ValidOriginalNativeAge(legacy, candidate, "") || !ValidOriginalNativeAge(legacy, candidate, "bounded") || ValidOriginalNativeAge(legacy, candidate, "unknown") {
@@ -161,9 +167,9 @@ func TestOriginalNativeAgePolicy(t *testing.T) {
 	}
 }
 
-// Regression: the eight official pending images must be recognized as candidates,
-// while exact lookup and every single-field mutation still grant no clock.
-func TestPendingPlatformCandidatesRemainUnqualified(t *testing.T) {
+// Exact accepted prerequisites preserve image, numeric and mode boundaries;
+// every single-field mixed or unsupported tuple remains denied.
+func TestPlatformCandidatesRequireExactClockPrerequisites(t *testing.T) {
 	for _, image := range []struct{ goos, goarch, version, generation, sha string }{
 		{"linux", "arm64", "1.18.33", "v1", "986fef2069a03b5181a9ec920786836f98fe3e4950c630941908687854e42757"},
 		{"linux", "arm64", "2.0.21", "v2", "d2f4c9ee106d9930d20ca5cf5f2c2216aab6fed836992cf24979d9481242c01c"},
@@ -179,8 +185,21 @@ func TestPendingPlatformCandidatesRemainUnqualified(t *testing.T) {
 		if !ok || candidate != (Candidate{image.version, image.generation}) {
 			t.Fatal("official pending candidate missing or changed", key)
 		}
-		if _, ok := LookupQualifiedClock(key); ok {
-			t.Fatal("pending candidate granted a clock", key)
+		descriptor, described := LookupSourceDescriptor(image.goos, image.goarch)
+		clock, qualified := LookupQualifiedClock(key)
+		wantAge := "bounded"
+		if image.goos == "windows" && image.generation == "v1" {
+			wantAge = "unverified_original_date"
+		}
+		if !described || !qualified || clock.Generation != image.generation || clock.RawKind != descriptor.RawKind ||
+			clock.OriginalNativeAge != wantAge || clock.NativeReadBoundNS != 103_000_000 ||
+			clock.ComparisonBoundNS != 430_000_000 || clock.TranslationBoundNS != 224_000_000 {
+			t.Fatal("wrong exact accepted clock prerequisite", key)
+		}
+		prefix := image.goos + "-" + image.goarch + "-" + descriptor.SourceKind + "-v1:"
+		if !regexp.MustCompile("^"+regexp.QuoteMeta(prefix)+"[0-9a-f]{64}$").MatchString(clock.ProfileID) ||
+			clock.CalibrationID != clock.ProfileID+":same-coordinate" {
+			t.Fatal("unrelated profile or calibration", key)
 		}
 		for _, change := range []func(*ImageKey){
 			func(k *ImageKey) { k.SHA256 = "unknown" }, func(k *ImageKey) { k.Entry = "tui" },
