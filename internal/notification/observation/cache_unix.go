@@ -1,6 +1,6 @@
 //go:build linux || darwin
 
-package geminievent
+package observation
 
 import (
 	"errors"

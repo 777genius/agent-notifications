@@ -104,10 +104,10 @@ func TestNotificationCodexQualifiedCacheSeam(t *testing.T) {
 			if err != nil || inv.State != "clear" || inv.Skill {
 				t.Fatal(inv, err)
 			}
-			if err = os.MkdirAll(filepath.Join(cache, "skills", "agent-notify"), 0700); err != nil {
+			if err = os.MkdirAll(filepath.Join(cache, "skills", "agent-notifications"), 0700); err != nil {
 				t.Fatal(err)
 			}
-			skillPath := filepath.Join(cache, "skills", "agent-notify", "SKILL.md")
+			skillPath := filepath.Join(cache, "skills", "agent-notifications", "SKILL.md")
 			write(skillPath, "canonical skill")
 			if inv.Revalidate(context.Background()) == nil {
 				t.Fatal("skill drift missed")
@@ -115,12 +115,12 @@ func TestNotificationCodexQualifiedCacheSeam(t *testing.T) {
 			if _, err = inspectCodexNotificationPackages(context.Background(), home, probe); err == nil {
 				t.Fatal("skill without discovery anchor accepted")
 			}
-			observed.Skills = []notificationCodexSkill{{Name: "claude-notifications-go:agent-notify", PluginID: id, Path: skillPath, Enabled: true}}
+			observed.Skills = []notificationCodexSkill{{Name: "claude-notifications-go:agent-notifications", PluginID: id, Path: skillPath, Enabled: true}}
 			inv, err = inspectCodexNotificationPackages(context.Background(), home, probe)
 			if err != nil || !inv.Skill {
 				t.Fatal(inv, err)
 			}
-			observed.Skills[0].Path = "/authored/source-not-cache/skills/agent-notify/SKILL.md"
+			observed.Skills[0].Path = "/authored/source-not-cache/skills/agent-notifications/SKILL.md"
 			if _, err = inspectCodexNotificationPackages(context.Background(), home, probe); err == nil {
 				t.Fatal("authored source accepted")
 			}
@@ -154,8 +154,8 @@ func TestNotificationCodexQualifiedCacheSeam(t *testing.T) {
 
 func TestNotificationCodexSkillsInventoryExchange(t *testing.T) {
 	home := setupCommandRoot(t)
-	path := filepath.Join(home, "plugins", "cache", "market", "claude-notifications-go", "1.41.0", "skills", "agent-notify", "SKILL.md")
-	result, _ := json.Marshal(map[string]any{"id": 2, "result": map[string]any{"data": []any{map[string]any{"cwd": home, "errors": []any{}, "skills": []any{map[string]any{"name": "claude-notifications-go:agent-notify", "pluginId": "claude-notifications-go@market", "enabled": true, "path": path}}}}}})
+	path := filepath.Join(home, "plugins", "cache", "market", "claude-notifications-go", "1.41.0", "skills", "agent-notifications", "SKILL.md")
+	result, _ := json.Marshal(map[string]any{"id": 2, "result": map[string]any{"data": []any{map[string]any{"cwd": home, "errors": []any{}, "skills": []any{map[string]any{"name": "claude-notifications-go:agent-notifications", "pluginId": "claude-notifications-go@market", "enabled": true, "path": path}}}}}})
 	var sent strings.Builder
 	skills, err := notificationCodexSkillsExchange(&sent, strings.NewReader("{\"id\":1,\"result\":{}}\n"+string(result)+"\n"), home)
 	if err != nil || len(skills) != 1 || skills[0].Path != path {

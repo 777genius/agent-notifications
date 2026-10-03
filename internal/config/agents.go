@@ -17,6 +17,7 @@ const (
 	AgentCodex                 AgentID = "codex"
 	AgentOpenCode              AgentID = "opencode"
 	AgentGemini                AgentID = "gemini"
+	AgentCopilotVSCode         AgentID = "copilot-vscode"
 	AssetRootPlaceholder               = "AGENT_NOTIFICATIONS_ROOT"
 	LegacyAssetRootPlaceholder         = "CLAUDE_PLUGIN_ROOT"
 )

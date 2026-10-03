@@ -2442,7 +2442,6 @@ main() {
     if check_existing; then
         # Even if binary exists, ensure symlink is created
         create_symlink || return 1
-        configure_windows_native_hooks
 
         # Download utility binaries (sound-preview, list-devices)
         download_utilities
@@ -2496,7 +2495,6 @@ main() {
 
         # Ensure symlink exists
         create_symlink || return 1
-        configure_windows_native_hooks
 
         echo ""
         echo -e "${GREEN}========================================${NC}"
@@ -2520,7 +2518,6 @@ main() {
     fi
 
     create_symlink || return 1
-    configure_windows_native_hooks
     download_utilities
 
     if [ "$PLATFORM" = "darwin" ]; then

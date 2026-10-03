@@ -34,6 +34,16 @@ type Sender struct {
 	cancel context.CancelFunc
 }
 
+// noRedirectsKey is private to the context-aware sender's opt-in mode.
+type noRedirectsKey struct{}
+
+// WithNoRedirects restricts the existing sender to the configured endpoint.
+// It preserves the caller's deadline/cancellation; ordinary callers still follow
+// redirects. Retry configuration remains the caller's responsibility.
+func WithNoRedirects(ctx context.Context) context.Context {
+	return context.WithValue(ctx, noRedirectsKey{}, true)
+}
+
 // New creates a new professional webhook sender
 func New(cfg *config.Config) *Sender {
 	return NewWithContext(context.Background(), cfg)
@@ -45,6 +55,12 @@ func NewWithContext(parent context.Context, cfg *config.Config) *Sender {
 	// Create base HTTP client with timeout
 	client := &http.Client{
 		Timeout: 10 * time.Second,
+	}
+
+	if noRedirects, _ := parent.Value(noRedirectsKey{}).(bool); noRedirects {
+		client.CheckRedirect = func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
 	}
 
 	// Parse retry config

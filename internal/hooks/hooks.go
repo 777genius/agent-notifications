@@ -109,6 +109,18 @@ func NewHandler(pluginRoot string) (*Handler, error) {
 	return newHandlerWithConfig(pluginRoot, cfg, ProductClaude, nil)
 }
 
+// NewHandlerWithClaudeSource creates a Claude handler with an explicit event
+// source while retaining NewHandler's stderr warning contract for config
+// diagnostics.
+func NewHandlerWithClaudeSource(pluginRoot string, source EventSource) (*Handler, error) {
+	cfg, err := config.LoadForAgent(pluginRoot, config.AgentClaude)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load config: %w", err)
+	}
+
+	return newHandlerWithConfig(pluginRoot, cfg, ProductClaude, source)
+}
+
 // NewHandlerWithSource creates a handler for the composition root with an
 // explicit product and event source. Unlike NewHandler, config warnings go to
 // the file log only: observation routes must not write to stderr.

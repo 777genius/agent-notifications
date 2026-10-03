@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -22,6 +21,12 @@ import (
 	"github.com/777genius/agent-notifications/internal/webhook"
 	"golang.org/x/sys/windows"
 )
+
+func init() {
+	writeCacheFixture = func(root string, data []byte) error {
+		return installruntime.WriteConfinedExclusive(root, "observations.json", data)
+	}
+}
 
 func privateWindowsCacheFixture(t *testing.T) (Consumer, geminisource.Facts, notification.Deadline) {
 	t.Helper()
@@ -113,13 +118,13 @@ func TestWindowsCacheRejectsEveryoneModifyBeforeEffect(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err = writeCache(c.Cache.Root, forged); err != nil {
+			if err = installruntime.WriteConfinedExclusive(c.Cache.Root, "observations.json", forged); err != nil {
 				t.Fatal(err)
 			}
 			path := filepath.Join(c.Cache.Root, "observations.json")
 			assertWindowsCachePrivateOwner(t, path)
 			// The exact same bytes are valid before weakening one object's ACL.
-			if data, err := readCache(c.Cache.Root); err != nil || !bytes.Equal(data, forged) {
+			if data, err := installruntime.ReadPrivateCacheDocument(c.Cache.Root, "observations.json", 48*1024); err != nil || !bytes.Equal(data, forged) {
 				t.Fatalf("invalid control document: %v", err)
 			}
 			if claimed, err := c.Cache.claim(context.Background(), c.Binding, facts, DesktopChannel); err != nil || claimed {
@@ -134,10 +139,10 @@ func TestWindowsCacheRejectsEveryoneModifyBeforeEffect(t *testing.T) {
 			lockPath := filepath.Join(c.Cache.Root, ".observations.lock")
 			assertWindowsCachePrivateOwner(t, lockPath)
 			lockBefore := windowsCacheSecurity(t, lockPath).String()
-			if target == "root" && checkCacheRoot(c.Cache.Root) == nil {
+			if target == "root" && installruntime.CheckPrivateCacheRoot(c.Cache.Root) == nil {
 				t.Fatal("Everyone Modify root accepted")
 			}
-			if data, err := readCache(c.Cache.Root); err == nil || data != nil {
+			if data, err := installruntime.ReadPrivateCacheDocument(c.Cache.Root, "observations.json", 48*1024); err == nil || data != nil {
 				t.Fatalf("unsafe cache bytes returned: %v", err)
 			}
 			c.Gate = testGate{channels: Channels{true, true}, check: func(context.Context, Binding, Channel) bool {
@@ -177,7 +182,7 @@ func TestWindowsCachePrivateOwnerControl(t *testing.T) {
 			if foreignRead {
 				windowsCacheEveryoneACE(t, c.Cache.Root, "FRFX")
 			}
-			if err := checkCacheRoot(c.Cache.Root); err != nil {
+			if err := installruntime.CheckPrivateCacheRoot(c.Cache.Root); err != nil {
 				t.Fatal(err)
 			}
 			// This test owns ACL acceptance and read-only duplicate admission.
@@ -189,7 +194,7 @@ func TestWindowsCachePrivateOwnerControl(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := writeCache(c.Cache.Root, seed); err != nil {
+			if err := installruntime.WriteConfinedExclusive(c.Cache.Root, "observations.json", seed); err != nil {
 				t.Fatal(err)
 			}
 			path := filepath.Join(c.Cache.Root, "observations.json")
@@ -197,7 +202,7 @@ func TestWindowsCachePrivateOwnerControl(t *testing.T) {
 			if foreignRead {
 				windowsCacheEveryoneACE(t, path, "FRFX")
 			}
-			if data, err := readCache(c.Cache.Root); err != nil || !bytes.Equal(data, seed) {
+			if data, err := installruntime.ReadPrivateCacheDocument(c.Cache.Root, "observations.json", 48*1024); err != nil || !bytes.Equal(data, seed) {
 				t.Fatalf("valid private/read-only cache rejected: %v", err)
 			}
 			lockPath := filepath.Join(c.Cache.Root, ".observations.lock")
@@ -216,44 +221,12 @@ func TestWindowsCachePrivateOwnerControl(t *testing.T) {
 			if got := c.Consume(context.Background(), facts, deadline); got != want || effects != 0 {
 				t.Fatalf("private cache lost persisted bits: %+v / %d", got, effects)
 			}
-			if data, err := readCache(c.Cache.Root); err != nil || !bytes.Equal(data, seed) ||
+			if data, err := installruntime.ReadPrivateCacheDocument(c.Cache.Root, "observations.json", 48*1024); err != nil || !bytes.Equal(data, seed) ||
 				windowsCacheSecurity(t, c.Cache.Root).String() != rootBefore ||
 				windowsCacheSecurity(t, path).String() != documentBefore ||
 				windowsCacheSecurity(t, lockPath).String() != lockBefore {
 				t.Fatalf("duplicate admission mutated private cache bytes/ACL: %v", err)
 			}
 		})
-	}
-}
-
-// Red condition: a missing file loses its absence classification, a second
-// name can alias trusted bytes, or the retained document bound is bypassed.
-func TestWindowsCacheDocumentBoundsAndIdentity(t *testing.T) {
-	c, _, _ := privateWindowsCacheFixture(t)
-	if data, err := readCache(c.Cache.Root); !os.IsNotExist(err) || data != nil {
-		t.Fatalf("missing document: %v", err)
-	}
-	if err := writeCache(c.Cache.Root, []byte("{}")); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(c.Cache.Root, "observations.json")
-	alias := filepath.Join(c.Cache.Root, "alias.json")
-	if err := os.Link(path, alias); err != nil {
-		t.Fatal(err)
-	}
-	if data, err := readCache(c.Cache.Root); err == nil || data != nil {
-		t.Fatalf("hardlinked document accepted: %v", err)
-	}
-	if err := os.Remove(alias); err != nil {
-		t.Fatal(err)
-	}
-	if data, err := readCache(c.Cache.Root); err != nil || string(data) != "{}" {
-		t.Fatalf("single-link control rejected: %v", err)
-	}
-	if err := writeCache(c.Cache.Root, []byte(strings.Repeat(" ", cacheBytes+1))); err != nil {
-		t.Fatal(err)
-	}
-	if data, err := readCache(c.Cache.Root); err == nil || data != nil {
-		t.Fatalf("oversized document accepted: %v", err)
 	}
 }
