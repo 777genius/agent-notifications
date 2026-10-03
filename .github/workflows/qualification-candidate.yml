@@ -4,6 +4,9 @@ on:
     inputs:
       parent_url: {type: string, required: true, description: 'Temporary single-file TEST HTTP URL'}
       parent_sha256: {type: string, required: true, description: 'Independently sealed original tar SHA256'}
+      parent_size: {type: string, required: true}
+      product_head: {type: string, required: true}
+      parent_manifest_sha256: {type: string, required: true}
 permissions: {contents: read}
 jobs:
   upload:
@@ -18,6 +21,9 @@ jobs:
         env:
           TEST_PARENT_URL: ${{ inputs.parent_url }}
           TEST_PARENT_SHA256: ${{ inputs.parent_sha256 }}
+          TEST_PARENT_SIZE: ${{ inputs.parent_size }}
+          TEST_PRODUCT_HEAD: ${{ inputs.product_head }}
+          TEST_PARENT_MANIFEST_SHA256: ${{ inputs.parent_manifest_sha256 }}
         run: python -B fetch-parent.py
       - uses: actions/upload-artifact@v7
         with:
