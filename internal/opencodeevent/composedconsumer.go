@@ -70,9 +70,7 @@ func (c ComposedConsumer) ConsumeEntry(entry *Entry, input io.ReadCloser) Receip
 	}
 	assets := c.Assets
 	assets.Agent = config.AgentOpenCode
-	if assets.LookupEnv == nil {
-		assets.LookupEnv = func(string) (string, bool) { return "", false }
-	}
+	assets.LookupEnv = config.OpenCodeWebhookLookup(assets.LookupEnv)
 	cfg, err := doc.Effective(assets)
 	if err != nil {
 		return Receipt{Status: "rejected", Reason: "invalid_config"}

@@ -30,7 +30,7 @@ func TestClosedCandidateAndUnqualifiedClockRows(t *testing.T) {
 			t.Fatal("noncanonical clock profile or unrelated calibration")
 		}
 		for _, change := range []func(*ImageKey){
-			func(k *ImageKey) { k.SHA256 = "unknown" }, func(k *ImageKey) { k.Entry = "tui" },
+			func(k *ImageKey) { k.SHA256 = "unknown" }, func(k *ImageKey) { k.Entry = "unknown" },
 			func(k *ImageKey) { k.GOOS = "darwin" }, func(k *ImageKey) { k.GOARCH = "arm64" },
 		} {
 			bad := key
@@ -142,7 +142,7 @@ func TestOriginalNativeAgePolicy(t *testing.T) {
 		func(k *ImageKey, c *Candidate) { k.GOOS = "linux" },
 		func(k *ImageKey, c *Candidate) { k.GOOS = "darwin" },
 		func(k *ImageKey, c *Candidate) { k.GOARCH = "arm64" },
-		func(k *ImageKey, c *Candidate) { k.Entry = "tui" },
+		func(k *ImageKey, c *Candidate) { k.Entry = "unknown" },
 		func(k *ImageKey, c *Candidate) { c.Generation = "v2"; c.Version = "2.0.21" },
 		func(k *ImageKey, c *Candidate) { c.Version = "1.18.34" },
 	} {
@@ -150,6 +150,15 @@ func TestOriginalNativeAgePolicy(t *testing.T) {
 		change(&k, &c)
 		if ValidOriginalNativeAge(k, c, "unverified_original_date") {
 			t.Fatal("exception escaped exact tuple", k, c)
+		}
+	}
+	// Both accepted V1 local modes retain the same exact Windows age exception.
+	for _, entry := range []string{"tui", "run"} {
+		local := key
+		local.Entry = entry
+		if !ValidOriginalNativeAge(local, candidate, "unverified_original_date") ||
+			ValidOriginalNativeAge(local, candidate, "") || ValidOriginalNativeAge(local, candidate, "bounded") {
+			t.Fatal("local Windows original age mode escaped its exact exception", local)
 		}
 	}
 	clock, ok := LookupQualifiedClock(key)
@@ -171,6 +180,8 @@ func TestOriginalNativeAgePolicy(t *testing.T) {
 // every single-field mixed or unsupported tuple remains denied.
 func TestPlatformCandidatesRequireExactClockPrerequisites(t *testing.T) {
 	for _, image := range []struct{ goos, goarch, version, generation, sha string }{
+		{"linux", "amd64", "1.18.33", "v1", "0abbb7c32ab0294c0a7bfa2705f9ff0df5dce5ab721d1f00cccfe393f2a11427"},
+		{"linux", "amd64", "1.18.34", "v1", "9ca0b9953d49997601655e54f846a3efa464f237e47c6f1b04716d0f2e64c4c2"},
 		{"linux", "arm64", "1.18.33", "v1", "986fef2069a03b5181a9ec920786836f98fe3e4950c630941908687854e42757"},
 		{"linux", "arm64", "2.0.21", "v2", "d2f4c9ee106d9930d20ca5cf5f2c2216aab6fed836992cf24979d9481242c01c"},
 		{"darwin", "amd64", "1.18.33", "v1", "f53aae8eb68d832ab1bcd27bed88c02de910be61f4b5f90068ae8e93d5e794c9"},
@@ -188,6 +199,9 @@ func TestPlatformCandidatesRequireExactClockPrerequisites(t *testing.T) {
 		descriptor, described := LookupSourceDescriptor(image.goos, image.goarch)
 		clock, qualified := LookupQualifiedClock(key)
 		wantAge := "bounded"
+		if image.goos == "linux" && image.goarch == "amd64" {
+			wantAge = ""
+		}
 		if image.goos == "windows" && image.generation == "v1" {
 			wantAge = "unverified_original_date"
 		}
@@ -197,12 +211,40 @@ func TestPlatformCandidatesRequireExactClockPrerequisites(t *testing.T) {
 			t.Fatal("wrong exact accepted clock prerequisite", key)
 		}
 		prefix := image.goos + "-" + image.goarch + "-" + descriptor.SourceKind + "-v1:"
+		if image.goos == "linux" && image.goarch == "amd64" {
+			prefix = "linux-amd64-proc-boottime-v1:"
+		}
 		if !regexp.MustCompile("^"+regexp.QuoteMeta(prefix)+"[0-9a-f]{64}$").MatchString(clock.ProfileID) ||
 			clock.CalibrationID != clock.ProfileID+":same-coordinate" {
 			t.Fatal("unrelated profile or calibration", key)
 		}
+		// The independent image fixtures cover all six accepted V1 physical cells.
+		// Exact local keys reuse physical policy, while V2 never inherits V1 entry.
+		for _, entry := range []string{"tui", "run"} {
+			local := key
+			local.Entry = entry
+			localCandidate, known := LookupCandidate(local)
+			localClock, qualified := LookupQualifiedClock(local)
+			if image.generation == "v2" {
+				if known || qualified {
+					t.Fatal("V2 image inherited a local V1 entry", local)
+				}
+				continue
+			}
+			if !known || localCandidate != (Candidate{image.version, "v1"}) || !qualified || localClock != clock {
+				t.Fatal("accepted exact local entry missing its physical policy", local)
+			}
+			foreign := local
+			foreign.SHA256 = "unobserved-image"
+			if _, ok := LookupCandidate(foreign); ok {
+				t.Fatal("local entry borrowed an unobserved image", foreign)
+			}
+			if _, ok := LookupQualifiedClock(foreign); ok {
+				t.Fatal("local entry borrowed an unobserved clock", foreign)
+			}
+		}
 		for _, change := range []func(*ImageKey){
-			func(k *ImageKey) { k.SHA256 = "unknown" }, func(k *ImageKey) { k.Entry = "tui" },
+			func(k *ImageKey) { k.SHA256 = "unknown" }, func(k *ImageKey) { k.Entry = "unknown" },
 			func(k *ImageKey) {
 				if k.GOOS == "linux" {
 					k.GOOS = "darwin"

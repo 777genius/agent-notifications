@@ -68,7 +68,7 @@ func runOpenCodeEvent(args []string, input io.Reader, output io.Writer) int {
 				}
 				guardedSource := runtimeGuardedSnapshot{source: source, guard: guard, ctx: entry.Context()}
 				consumer := opencodeevent.ComposedConsumer{ControlRoot: root, Executable: executable, GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
-					Source: guardedSource, Selection: selected, Assets: config.AssetContext{PluginRoot: filepath.Dir(executable)},
+					Source: guardedSource, Selection: selected, Assets: config.AssetContext{PluginRoot: filepath.Dir(executable), LookupEnv: config.OpenCodeWebhookLookup(os.LookupEnv)},
 					Desktop: func(h *opencodeevent.Handoff) notification.DeliveryPort {
 						return runtimeGuardedDelivery{port: newOpenCodeDesktopPort(h, root), guard: guard}
 					},

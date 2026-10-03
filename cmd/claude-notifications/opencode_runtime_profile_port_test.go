@@ -89,6 +89,33 @@ func TestRuntimeDarwinOnlyCompleteServePrefix(t *testing.T) {
 	}
 }
 
+// Default TUI has argc=1. Environment text must not change its entry, and
+// local run requires every declared argument to be complete before parsing.
+func TestRuntimeDarwinStockLocalEntriesUseOnlyCompleteArgv(t *testing.T) {
+	pack := func(args []string, environment string) []byte {
+		raw := make([]byte, 4)
+		binary.LittleEndian.PutUint32(raw, uint32(len(args)))
+		raw = append(raw, []byte("/TEST/opencode\x00\x00")...)
+		for _, arg := range args {
+			raw = append(raw, []byte(arg+"\x00")...)
+		}
+		return append(raw, []byte(environment)...)
+	}
+	tui := pack([]string{"/TEST/opencode"}, "--attach=http://TEST.invalid\x00serve\x00")
+	if got := runtimeDarwinEntry(tui); got != "tui" {
+		t.Fatalf("stock argc=1 default rejected or environment interpreted: %q", got)
+	}
+	run := pack([]string{"/TEST/opencode", "run", "hello TEST"}, "")
+	if got := runtimeDarwinEntry(run); got != "run" {
+		t.Fatalf("stock local run rejected: %q", got)
+	}
+	for _, raw := range [][]byte{run[:len(run)-1], pack([]string{"/TEST/opencode", "run", "--attach=http://TEST.invalid"}, ""), append(tui, make([]byte, 4096)...)} {
+		if runtimeDarwinEntry(raw) != "" {
+			t.Fatal("incomplete, remote or capacity-sized argv became local authority")
+		}
+	}
+}
+
 // Red failure: a capacity-sized KERN_PROCARGS2 result can be environment tail,
 // even when the saved argc and tail strings look like an executable/serve prefix.
 func TestRuntimeDarwinFullCapacityTailCannotProveServe(t *testing.T) {

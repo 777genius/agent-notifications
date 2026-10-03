@@ -21,6 +21,16 @@
 
 Desktop notifications for **Claude Code, Codex CLI and OpenCode**. Know when a task finishes, an agent needs input, or a tool needs approval. Claude and Codex also support sounds and click-to-focus.
 
+<div>
+<table>
+  <tr>
+    <td align="center"><img width="250" height="350" alt="image" src="https://github.com/user-attachments/assets/e7aa6d8e-5d28-48f7-bafe-ad696857b938" /></td>
+    <td align="center"><img width="350" alt="image" src="https://i.imgur.com/Nrt6dEo.png" /></td>
+    <td align="center"><img width="220" alt="image" src="https://github.com/user-attachments/assets/4b5929d8-1a51-4a15-a3d5-dda5482554cc" /></td>
+  </tr>
+</table>
+</div>
+
 ## Install Or Update
 
 **[Guided installer (stable)](https://777genius.github.io/agent-notifications/#install)** or run:
@@ -66,19 +76,9 @@ Claude/Codex setup also installs the `agent-notify` MCP server and `agent-notifi
 
 ## Features
 
-<div>
-<table>
-  <tr>
-    <td align="center"><img width="250" height="350" alt="image" src="https://github.com/user-attachments/assets/e7aa6d8e-5d28-48f7-bafe-ad696857b938" /></td>
-    <td align="center"><img width="350" alt="image" src="https://i.imgur.com/Nrt6dEo.png" /></td>
-    <td align="center"><img width="220" alt="image" src="https://github.com/user-attachments/assets/4b5929d8-1a51-4a15-a3d5-dda5482554cc" /></td>
-  </tr>
-</table>
-</div>
-
 - **Task and attention alerts:** completions, questions, tool approvals and more, depending on the agent. See the table below.
 - **Click-to-focus and sounds (Claude/Codex):** return to the originating terminal or editor; choose built-in or custom sounds, volume and audio output. [Supported terminals](docs/CLICK_TO_FOCUS.md) · [Sound settings](docs/CONFIGURATION.md#sound-options)
-- **Useful context (Claude/Codex):** project, git branch and session labels in notifications.
+- **Useful context (Claude/Codex):** project, git branch and native session names, with generated labels as fallback. Question hooks show the current question. [Session context](docs/CONFIGURATION.md#session-context)
 - **Less noise:** focus-aware delivery, delays, filters and optional subagent alerts. [Configuration](docs/CONFIGURATION.md#focus-aware--delayed-notifications) · [Do Not Disturb](docs/DO_NOT_DISTURB.md)
 - **Webhooks:** Slack, Discord, Telegram, Lark/Feishu and custom endpoints. [Integration guides](docs/webhooks/README.md)
 - **Cross-platform:** macOS (Intel/Apple Silicon), Linux (x64/ARM64) and Windows 10+ (x64). Agent and delivery limits are listed below. [Platform details](docs/PLATFORMS.md)

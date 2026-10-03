@@ -19,7 +19,7 @@ var errRuntimeLiveImage = errors.New("live_image_unverified")
 
 func verifyRuntimeLiveImage(ctx context.Context, in runtimeProfileInput) (runtimeLiveImage, error) {
 	fail := func() (runtimeLiveImage, error) { return runtimeLiveImage{}, errRuntimeLiveImage }
-	if ctx.Err() != nil || in.NativePID <= 0 || in.NativePID != os.Getppid() || in.Entry != "serve" || !canonicalPrivatePath(in.HostExecutable) || in.PublicExecPath != in.HostExecutable {
+	if ctx.Err() != nil || in.NativePID <= 0 || in.NativePID != os.Getppid() || !runtimeEntryRequest(in.Entry) || !canonicalPrivatePath(in.HostExecutable) || in.PublicExecPath != in.HostExecutable {
 		return fail()
 	}
 	proc := "/proc/" + strconv.Itoa(in.NativePID)
@@ -28,15 +28,19 @@ func verifyRuntimeLiveImage(ctx context.Context, in runtimeProfileInput) (runtim
 		return fail()
 	}
 	// Reject a wrong entry or argv wrapper; this is live binding, not authority
-	// for arbitrary TEST bytes, TUI, desktop, or a version threshold.
+	// for arbitrary TEST bytes, desktop, or a version threshold.
 	args, err := os.Open(proc + "/cmdline")
 	if err != nil {
 		return fail()
 	}
 	cmdline, err := io.ReadAll(io.LimitReader(args, 4097))
 	_ = args.Close()
-	argv := strings.Split(string(cmdline), "\x00")
-	if err != nil || len(cmdline) > 4096 || len(argv) < 3 || argv[1] != "serve" {
+	if err != nil || len(cmdline) == 0 || len(cmdline) > 4096 || cmdline[len(cmdline)-1] != 0 {
+		return fail()
+	}
+	argv := strings.Split(string(cmdline[:len(cmdline)-1]), "\x00")
+	entry := runtimeNativeEntry(argv)
+	if !runtimeEntryMatches(in.Entry, entry) {
 		return fail()
 	}
 	image, err := os.Open(proc + "/exe")
@@ -87,7 +91,7 @@ func verifyRuntimeLiveImage(ctx context.Context, in runtimeProfileInput) (runtim
 		endTarget.Size() != b.Size() || !endTarget.ModTime().Equal(b.ModTime()) || in.NativePID != os.Getppid() || ctx.Err() != nil {
 		return fail()
 	}
-	return runtimeLiveImage{GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, Entry: in.Entry, SHA256: ha, Device: uint64(sa.Dev), Inode: sa.Ino, ProcessStartTick: start, NativePID: in.NativePID}, nil
+	return runtimeLiveImage{GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, Entry: entry, SHA256: ha, Device: uint64(sa.Dev), Inode: sa.Ino, ProcessStartTick: start, NativePID: in.NativePID}, nil
 }
 
 func runtimeProcessStart(proc string) (uint64, error) {

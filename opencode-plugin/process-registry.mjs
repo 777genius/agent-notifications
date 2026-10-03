@@ -4,8 +4,8 @@ import { performance } from 'node:perf_hooks';
 import { closed, parseJSON, profileReceipt } from './protocol.mjs';
 
 const deliveryKeys = process.platform === 'win32'
-  ? ['AGENT_NOTIFICATIONS_CONFIG', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP']
-  : ['AGENT_NOTIFICATIONS_CONFIG', 'HOME', 'XDG_CONFIG_HOME', 'DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR'];
+  ? ['AGENT_NOTIFICATIONS_WEBHOOK_URL', 'AGENT_NOTIFICATIONS_CONFIG', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP']
+  : ['AGENT_NOTIFICATIONS_WEBHOOK_URL', 'AGENT_NOTIFICATIONS_CONFIG', 'HOME', 'XDG_CONFIG_HOME', 'DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR'];
 const osKeys = process.platform === 'win32' ? ['SystemRoot', 'WINDIR'] : [];
 const result = (status, output = Buffer.alloc(0)) => Object.freeze({ status, output });
 const closedObject = (value, keys) => value && Object.getPrototypeOf(value) === Object.prototype
@@ -63,14 +63,14 @@ export function createProcessRegistry(configuration) {
   if (typeof diagnostics !== 'boolean') throw new TypeError('invalid_diagnostics');
   const nativePID = process.pid, publicExecPath = process.execPath;
   const profileInput = Buffer.from(JSON.stringify({ protocol: 1, hostExecutable: publicExecPath, origin, controlRoot,
-    nativePID, entry: 'serve', publicExecPath }));
+    nativePID, entry: 'native', publicExecPath }));
   const base = process.platform === 'win32'
     ? { USERPROFILE: privateCwd, APPDATA: privateCwd, LOCALAPPDATA: privateCwd, TEMP: privateCwd, TMP: privateCwd }
     : { HOME: privateCwd, XDG_CONFIG_HOME: privateCwd, XDG_RUNTIME_DIR: privateCwd };
   const clockEnv = { ...base, ...environment(osEnv, osKeys) };
   const profileEnv = { ...clockEnv, AGENT_NOTIFICATIONS_CONTROL_ROOT: controlRoot,
     AGENT_NOTIFICATIONS_ORIGIN: origin, AGENT_NOTIFICATIONS_NATIVE_PID: String(nativePID),
-    AGENT_NOTIFICATIONS_HOST_EXECUTABLE: publicExecPath, AGENT_NOTIFICATIONS_HOST_ENTRY: 'serve',
+    AGENT_NOTIFICATIONS_HOST_EXECUTABLE: publicExecPath, AGENT_NOTIFICATIONS_HOST_ENTRY: 'native',
     AGENT_NOTIFICATIONS_PUBLIC_EXEC_PATH: publicExecPath };
   const eventEnv = { ...profileEnv, ...environment(deliveryEnv, deliveryKeys) };
   const entries = new Set(), watchers = new Set();

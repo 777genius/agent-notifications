@@ -153,12 +153,16 @@ leaf edits through private stdin. For example, configure the webhook destination
 without persisting an expanded secret:
 
 ```bash
-printf '%s\n' '{"set":{"/notifications/webhook/enabled":true,"/notifications/webhook/url":"${MY_WEBHOOK_URL}"}}' |
+printf '%s\n' '{"set":{"/notifications/webhook/enabled":true,"/notifications/webhook/url":"${AGENT_NOTIFICATIONS_WEBHOOK_URL}"}}' |
   "$NOTIFICATIONS_BIN" config edit --target opencode --stdin --expect-revision 'REVISION_FROM_INSPECT'
 ```
 
 Replace `REVISION_FROM_INSPECT` with the inspected revision and make
-`MY_WEBHOOK_URL` available to OpenCode's environment. Keep any saved patch and
+`AGENT_NOTIFICATIONS_WEBHOOK_URL` available to OpenCode's environment before
+starting it. Managed OpenCode webhook URLs support only this environment token
+(or a literal URL); other URL tokens are rejected with
+`ConfigOpenCodeWebhookEnvUnsupported`. The value is passed only to event delivery,
+never clock or profile helpers, and the saved document retains the token. Keep any saved patch and
 inspection private. For a custom control root, include `--control-root` on the
 edit as well. Inspect again after success. Settings are read on subsequent events;
 a settings-only edit does not replace the loaded plugin or require a restart.

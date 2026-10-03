@@ -235,6 +235,33 @@ func reverseTransaction(current Ledger, tx transaction) (transaction, error) {
 	if tx.OpenCodeInit != nil || tx.OpenCodePurge != nil {
 		return transaction{}, fmt.Errorf("private registration/removal requires forward recovery")
 	}
+	// Prove the original journal's common volume mapping before capturing a
+	// new reverse decision. Never normalize a contradictory source journal.
+	if err := preflightTransactionAnchors(tx); err != nil {
+		return transaction{}, err
+	}
+	if tx.Native != nil && len(tx.Native.Parents) != 0 {
+		anchors, err := pathAnchors(tx.Native.After.Path, false)
+		if err != nil {
+			return transaction{}, err
+		}
+		if err := checkPersistedAnchors(tx.Native.Parents, anchors); err != nil {
+			return transaction{}, err
+		}
+	}
+	fileParents := make([][]PathAnchor, len(tx.Files))
+	for i, f := range tx.Files {
+		anchors, err := pathAnchors(f.Path, false)
+		if err != nil {
+			return transaction{}, err
+		}
+		if err := checkPersistedAnchors(f.Parents, anchors); err != nil {
+			return transaction{}, err
+		}
+		// Native.Parents is freshly captured below. File chains in the new
+		// decision must use the same observation epoch, while tx stays intact.
+		fileParents[i] = anchors
+	}
 	if tx.Native != nil && tx.Native.Retire {
 		return transaction{}, fmt.Errorf("retirement deletion must finish forward recovery before rollback")
 	}
@@ -309,7 +336,7 @@ func reverseTransaction(current Ledger, tx transaction) (transaction, error) {
 			After:    *after.Native,
 		}
 	}
-	for _, f := range tx.Files {
+	for i, f := range tx.Files {
 		if err := checkReplacementRollback(f); err != nil {
 			return transaction{}, err
 		}
@@ -320,7 +347,7 @@ func reverseTransaction(current Ledger, tx transaction) (transaction, error) {
 		if actual != f.Before && actual != desired(f) {
 			return transaction{}, fmt.Errorf("rollback conflict; preserving foreign edit: %s", f.Path)
 		}
-		undo := File{Parents: f.Parents, Path: f.Path, Before: actual, Data: f.BeforeData, Mode: f.Before.Mode, Link: f.Before.Link, Remove: !f.Before.Exists}
+		undo := File{Parents: fileParents[i], Path: f.Path, Before: actual, Data: f.BeforeData, Mode: f.Before.Mode, Link: f.Before.Link, Remove: !f.Before.Exists}
 		if actual.Exists && actual.Link == "" {
 			undo.WindowsReplacementID, err = windowsReplacementIdentity(f.Path)
 			if err != nil {
@@ -340,6 +367,9 @@ func reverseTransaction(current Ledger, tx transaction) (transaction, error) {
 		reverse.Files = append(reverse.Files, undo)
 	}
 	if err := validateWriterFilesAtFloor(reverse.Files, after.WriterFloor); err != nil {
+		return transaction{}, err
+	}
+	if err := preflightTransactionAnchors(reverse); err != nil {
 		return transaction{}, err
 	}
 	return reverse, nil

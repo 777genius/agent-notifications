@@ -101,7 +101,7 @@ func runtimeProfileOperation(ctx context.Context, args []string, input io.ReadCl
 	valid := err == nil && strictjson.Validate(raw, strictjson.Budget{Bytes: 4096, Depth: 8, Entries: 96}) == nil
 	if valid {
 		_, err = opencodeevent.ClosedObject(raw, []string{"protocol", "hostExecutable", "origin", "controlRoot", "nativePID", "entry", "publicExecPath"}, nil)
-		valid = err == nil && json.Unmarshal(raw, &in) == nil && in == owned && in.Protocol == 1 && in.NativePID > 0 && in.Entry == "serve" &&
+		valid = err == nil && json.Unmarshal(raw, &in) == nil && in == owned && in.Protocol == 1 && in.NativePID > 0 && runtimeEntryRequest(in.Entry) &&
 			validPrivateOrigin(in.Origin) && canonicalPrivatePath(in.ControlRoot) && canonicalPrivatePath(in.HostExecutable) && in.PublicExecPath == in.HostExecutable
 	}
 	if valid && ctx.Err() == nil {

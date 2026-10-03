@@ -53,16 +53,22 @@ func runWindowsToast(ctx context.Context, p windowsToastPayload) error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", windowsToastPowerShell)
-	cmd.Env = append(os.Environ(),
-		"AGENT_NOTIFICATIONS_TOAST_XML="+base64.StdEncoding.EncodeToString(data),
-		"AGENT_NOTIFICATIONS_TOAST_APP_ID="+p.AppID,
-	)
+	cmd := windowsToastCommand(ctx, powershell, data, p.AppID)
 	err = cmd.Run()
 	if ctx.Err() != nil {
 		return errors.Join(ctx.Err(), err)
 	}
 	return err
+}
+
+// Construction shares the native child privacy boundary without launching it.
+func windowsToastCommand(ctx context.Context, powershell string, data []byte, appID string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", windowsToastPowerShell)
+	cmd.Env = append(nativeNotificationEnvironment(),
+		"AGENT_NOTIFICATIONS_TOAST_XML="+base64.StdEncoding.EncodeToString(data),
+		"AGENT_NOTIFICATIONS_TOAST_APP_ID="+appID,
+	)
+	return cmd
 }
 
 func openWindowsToast(ctx context.Context) (windowsToastSession, error) {

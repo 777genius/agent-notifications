@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -17,6 +18,42 @@ import (
 )
 
 const managedOpenCodeConsumer = "opencode-notifications"
+const OpenCodeWebhookURLEnv = "AGENT_NOTIFICATIONS_WEBHOOK_URL"
+
+// OpenCodeWebhookLookup excludes all ambient values except the event-only URL.
+func OpenCodeWebhookLookup(lookup func(string) (string, bool)) func(string) (string, bool) {
+	return func(key string) (string, bool) {
+		if key == OpenCodeWebhookURLEnv && lookup != nil {
+			return lookup(key)
+		}
+		return "", false
+	}
+}
+
+// Managed saves validate the selected raw URL without expanding or storing secrets.
+func (d Document) validateOpenCodeWebhookEnv() error {
+	data := d.original
+	if d.schema == 2 {
+		var err error
+		data, err = d.prepareProfiles().mergedProfile(AgentOpenCode)
+		if err != nil {
+			return err
+		}
+	}
+	var cfg Config
+	if err := decodeTyped(data, &cfg); err != nil {
+		return &Error{Code: ConfigInvalid}
+	}
+	unsupported := false
+	_ = os.Expand(cfg.Notifications.Webhook.URL, func(key string) string {
+		unsupported = unsupported || key != OpenCodeWebhookURLEnv
+		return ""
+	})
+	if unsupported {
+		return &Error{Code: ConfigOpenCodeWebhookEnvUnsupported}
+	}
+	return nil
+}
 
 // ManagedOpenCodeDocument is an observation of the installed route, never a
 // config path override. The opaque revision binds bytes, installation identity,
@@ -171,6 +208,9 @@ func ApplyManagedOpenCodeEdits(ctx context.Context, root string, assets AssetCon
 	assets.PluginRoot = current.snapshot.Installation.Ledger.Consumers[managedOpenCodeConsumer].RuntimeRoot
 	next, err := ApplyRawEdits(current.Document, edits, assets)
 	if err != nil {
+		return result, err
+	}
+	if err = next.validateOpenCodeWebhookEnv(); err != nil {
 		return result, err
 	}
 	// The managed policy has the kernel's smaller budget, even though the

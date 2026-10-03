@@ -415,3 +415,38 @@ func TestComposedContinuousAbortDuringHeldStoreLock(t *testing.T) {
 		t.Fatal("held store ignored native deadline")
 	}
 }
+
+// Red if event delivery fails to resolve the allowed token, or an arbitrary
+// injected environment value can escape into the webhook transport.
+func TestComposedWebhookEnvRestrictedAtActualHTTPBoundary(t *testing.T) {
+	for _, token := range []string{config.OpenCodeWebhookURLEnv, "MY_WEBHOOK_URL"} {
+		t.Run(token, func(t *testing.T) {
+			requests := make(chan struct{}, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests <- struct{}{}
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer server.Close()
+			ctx, c, _ := composedFixture(t, "${"+token+"}")
+			c.Assets.LookupEnv = func(key string) (string, bool) {
+				if key != config.OpenCodeWebhookURLEnv {
+					t.Error("unsupported environment lookup reached ambient authority")
+				}
+				return server.URL, true
+			}
+			c.Desktop = func(*Handoff) notification.DeliveryPort {
+				return desktopFunc(func(context.Context, notification.Request) notification.Receipt {
+					return notification.Receipt{Status: "submitted"}
+				})
+			}
+			result := c.Consume(ctx, time.Now(), ownedLiteral(t, "v1", "turn_idle_verified"))
+			if token == config.OpenCodeWebhookURLEnv {
+				if result.Desktop != "submitted" || result.Webhook != "submitted" || len(requests) != 1 {
+					t.Fatalf("allowed URL did not reach both channels: %+v", result)
+				}
+			} else if result.Reason != "invalid_config" || len(requests) != 0 {
+				t.Fatalf("unsupported URL reached delivery: %+v", result)
+			}
+		})
+	}
+}

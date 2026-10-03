@@ -23,8 +23,8 @@ export async function prepareOwnedHost(directory, generation, appVersion, diagno
     };
     privateCwd = mkdtempSync(join(tmpdir(), 'agent-notifications-'));
     const deliveryKeys = process.platform === 'win32' ?
-      ['AGENT_NOTIFICATIONS_CONFIG', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP'] :
-      ['AGENT_NOTIFICATIONS_CONFIG', 'HOME', 'XDG_CONFIG_HOME', 'DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR'];
+      ['AGENT_NOTIFICATIONS_WEBHOOK_URL', 'AGENT_NOTIFICATIONS_CONFIG', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP'] :
+      ['AGENT_NOTIFICATIONS_WEBHOOK_URL', 'AGENT_NOTIFICATIONS_CONFIG', 'HOME', 'XDG_CONFIG_HOME', 'DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR'];
     const pick = (keys) => Object.fromEntries(keys.filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]]));
     registry = createProcessRegistry({ executable, controlRoot, origin, privateCwd,
       diagnostics, osEnv: pick(process.platform === 'win32' ? ['SystemRoot', 'WINDIR'] : []), deliveryEnv: pick(deliveryKeys) });

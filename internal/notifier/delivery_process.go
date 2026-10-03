@@ -3,12 +3,29 @@ package notifier
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 
+	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/notifier/nativeprotocol"
 )
+
+// The webhook destination belongs to event HTTP delivery, never native children.
+// Preserve every other inherited value, including OS/provider configuration.
+func nativeNotificationEnvironment() []string {
+	env := make([]string, 0)
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if key == config.OpenCodeWebhookURLEnv || runtime.GOOS == "windows" && strings.EqualFold(key, config.OpenCodeWebhookURLEnv) {
+			continue
+		}
+		env = append(env, entry)
+	}
+	return env
+}
 
 // ManagedNativeProcess executes only the paths returned by a verified lease.
 // It never uses PATH lookup, bundle-ID lookup, or the legacy notifier finder.
@@ -51,12 +68,14 @@ func (ManagedNativeProcess) Launch(ctx context.Context, bundle, request, receipt
 // Command construction has no effects and is tested without executing an app.
 func nativeProbeCommand(ctx context.Context, executable string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, executable, "--capabilities-json")
+	cmd.Env = nativeNotificationEnvironment()
 	cmd.Dir = "/"
 	cmd.WaitDelay = 100 * time.Millisecond
 	return cmd
 }
 func nativeLaunchCommand(ctx context.Context, bundle, request, receipt string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "/usr/bin/open", "-n", "-a", bundle, "--args", "--send-json", "--request-file", request, "--receipt-file", receipt, "-launchedViaLaunchServices")
+	cmd.Env = nativeNotificationEnvironment()
 	cmd.Dir = "/"
 	cmd.WaitDelay = 100 * time.Millisecond
 	return cmd
@@ -74,6 +93,7 @@ func (ManagedNativeProcess) ProbePermission(ctx context.Context, executable, cor
 }
 func nativePermissionCommand(ctx context.Context, executable, correlation, nonce string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, executable, "--capabilities-json", "--permission-status", "--correlation-id", correlation, "--nonce", nonce)
+	cmd.Env = nativeNotificationEnvironment()
 	cmd.Dir = "/"
 	cmd.WaitDelay = 100 * time.Millisecond
 	return cmd

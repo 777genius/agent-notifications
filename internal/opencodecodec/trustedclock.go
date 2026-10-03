@@ -35,7 +35,12 @@ func LookupCandidate(key ImageKey) (Candidate, bool) {
 
 // ValidOriginalNativeAge validates trusted metadata, never grants an image row.
 func ValidOriginalNativeAge(key ImageKey, candidate Candidate, mode string) bool {
-	if _, ok := LookupSourceDescriptor(key.GOOS, key.GOARCH); !ok || key.Entry != "serve" {
+	if _, ok := LookupSourceDescriptor(key.GOOS, key.GOARCH); !ok {
+		return false
+	}
+	// Exact candidate/clock row lookups remain mandatory. Local entries are V1
+	// only; accepting an age mode never supplies their missing qualification.
+	if key.Entry != "serve" && !(candidate.Generation == "v1" && (key.Entry == "tui" || key.Entry == "run")) {
 		return false
 	}
 	exceptional := key.GOOS == "windows" && key.GOARCH == "amd64" &&

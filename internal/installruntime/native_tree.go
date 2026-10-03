@@ -95,7 +95,7 @@ func checkNativeParents(change *NativeChange) error {
 	if err != nil {
 		return err
 	}
-	return checkAnchors(change.Parents, got)
+	return checkPersistedAnchors(change.Parents, got)
 }
 
 // Unused candidates still require ownership proof. Identical live bytes do not
@@ -204,33 +204,41 @@ func removeFailedNativeStage(path string, expected []PathAnchor, id string) erro
 }
 
 func nativeDirectoryID(path string) (string, error) {
-	var err error
-	path, err = platformAnchorPath(path)
+	id, _, err := nativeDirectoryIdentity(path)
+	return id, err
+}
+
+func nativeDirectoryIdentity(path string) (string, string, error) {
+	path, err := platformAnchorPath(path)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if path == "" {
-		return "", nil
+		return "", "", nil
 	}
 	anchors, err := pathAnchors(filepath.Join(path, ".identity"), false)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if len(anchors) == 0 || anchors[len(anchors)-1].Path != path {
-		return "", nil
+		return "", "", nil
 	}
-	return anchors[len(anchors)-1].Identity, nil
+	parentDev := ""
+	if len(anchors) > 1 {
+		parentDev = objectDevice(anchors[len(anchors)-2].Identity)
+	}
+	return anchors[len(anchors)-1].Identity, parentDev, nil
 }
 func checkNativeDirectoryID(path, expected string) error {
 	// Legacy records have byte identities only; new promotions always bind inodes.
 	if expected == "" {
 		return nil
 	}
-	got, err := nativeDirectoryID(path)
+	got, parentDev, err := nativeDirectoryIdentity(path)
 	if err != nil {
 		return err
 	}
-	if got != expected {
+	if !MatchPersistedDirectory(expected, got, parentDev) {
 		return fmt.Errorf("native directory inode changed: %s", path)
 	}
 	return nil

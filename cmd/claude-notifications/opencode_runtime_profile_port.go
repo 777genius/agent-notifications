@@ -79,38 +79,37 @@ func runtimeSameMetadata(a, b os.FileInfo) bool {
 	return a != nil && b != nil && a.Mode().IsRegular() && b.Mode().IsRegular() && os.SameFile(a, b) && a.Size() == b.Size() && a.Mode() == b.Mode() && a.ModTime().Equal(b.ModTime())
 }
 
-// kern.procargs2 is saved argv consistency only. Stop at the complete second
-// argument; never interpret the remaining environment as image authority. A
-// full-capacity result may be an environment tail rather than the argv prefix.
-func runtimeDarwinServePrefix(raw []byte) bool {
+// Stop after exactly argc strings. The environment tail never supplies argv
+// or entry authority; reject capacity-sized and incomplete native reads.
+func runtimeDarwinEntry(raw []byte) string {
 	if len(raw) < 4 || len(raw) >= 4096 {
-		return false
+		return ""
 	}
 	argc := binary.LittleEndian.Uint32(raw[:4])
-	if argc < 2 || argc > 4096 {
-		return false
+	if argc < 1 || argc > 4096 {
+		return ""
 	}
 	rest := raw[4:]
 	i := strings.IndexByte(string(rest), 0)
 	if i <= 0 || !utf8.Valid(rest[:i]) {
-		return false
+		return ""
 	}
 	rest = rest[i+1:]
 	for len(rest) > 0 && rest[0] == 0 {
 		rest = rest[1:]
 	}
-	for arg := 0; arg < 2; arg++ {
+	argv := make([]string, 0, argc)
+	for arg := uint32(0); arg < argc; arg++ {
 		i = strings.IndexByte(string(rest), 0)
-		if i <= 0 || !utf8.Valid(rest[:i]) {
-			return false
+		if i < 0 || !utf8.Valid(rest[:i]) {
+			return ""
 		}
-		if arg == 1 && string(rest[:i]) != "serve" {
-			return false
-		}
+		argv = append(argv, string(rest[:i]))
 		rest = rest[i+1:]
 	}
-	return true
+	return runtimeNativeEntry(argv)
 }
+func runtimeDarwinServePrefix(raw []byte) bool { return runtimeDarwinEntry(raw) == "serve" }
 func runtimeStrictUTF16(raw []byte) (string, bool) {
 	if len(raw) == 0 || len(raw)%2 != 0 {
 		return "", false

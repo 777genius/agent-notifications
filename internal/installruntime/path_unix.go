@@ -206,7 +206,11 @@ func safeRemoveDirectory(path, want string, anchors []PathAnchor) error {
 	if err != nil {
 		return err
 	}
-	if st.Mode&unix.S_IFMT != unix.S_IFDIR || fmt.Sprintf("%d:%d", st.Dev, st.Ino) != want {
+	var parentStat unix.Stat_t
+	if err := unix.Fstat(int(parent.Fd()), &parentStat); err != nil {
+		return err
+	}
+	if st.Mode&unix.S_IFMT != unix.S_IFDIR || !MatchPersistedDirectory(want, fmt.Sprintf("%d:%d", st.Dev, st.Ino), fmt.Sprintf("%d", parentStat.Dev)) {
 		return fmt.Errorf("purge directory replaced: %s", path)
 	}
 	if err = unix.Unlinkat(int(parent.Fd()), filepath.Base(path), unix.AT_REMOVEDIR); err != nil {

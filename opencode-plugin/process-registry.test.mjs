@@ -348,7 +348,7 @@ test('event and profile children receive the same owned native runtime descripto
     const descriptor = {
       AGENT_NOTIFICATIONS_CONTROL_ROOT: home, AGENT_NOTIFICATIONS_ORIGIN: 'a'.repeat(64),
       AGENT_NOTIFICATIONS_NATIVE_PID: String(process.pid), AGENT_NOTIFICATIONS_HOST_EXECUTABLE: process.execPath,
-      AGENT_NOTIFICATIONS_HOST_ENTRY: 'serve', AGENT_NOTIFICATIONS_PUBLIC_EXEC_PATH: process.execPath,
+      AGENT_NOTIFICATIONS_HOST_ENTRY: 'native', AGENT_NOTIFICATIONS_PUBLIC_EXEC_PATH: process.execPath,
     };
     const poison = [...Object.keys(descriptor), 'TEST_AMBIENT_UNTRUSTED', 'HTTP_PROXY'];
     const saved = poison.map(key => [key, process.env[key]]);

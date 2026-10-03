@@ -146,3 +146,19 @@ func TestTrustedWindowsToastRequiresOwnReadinessAndIdentity(t *testing.T) {
 		}
 	}
 }
+
+// Red if the real PowerShell command resets filtering while appending its payload.
+// Construct only; this test never starts PowerShell or submits a notification.
+func TestWindowsToastCommandExcludesWebhookDestination(t *testing.T) {
+	t.Setenv("AGENT_NOTIFICATIONS_WEBHOOK_URL", "https://example.invalid/TEST-private-url")
+	t.Setenv("TEST_PROVIDER_ENV", "TEST-provider-value")
+	cmd := windowsToastCommand(context.Background(), "TEST-powershell.exe", []byte("TEST-xml"), "TEST-app")
+	assertNativeEnvironment(t, cmd.Env)
+	found := false
+	for _, entry := range cmd.Env {
+		found = found || entry == "AGENT_NOTIFICATIONS_TOAST_APP_ID=TEST-app"
+	}
+	if !found {
+		t.Fatal("toast-specific environment lost")
+	}
+}

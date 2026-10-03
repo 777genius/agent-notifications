@@ -55,13 +55,13 @@ func runtimeDarwinProcessInfo(pid int) (runtimeDarwinProcess, error) {
 	}
 	return runtimeDarwinProcess{uint32(p.pid), uint32(p.parent), uint32(p.cpu), uint32(p.subtype), uint64(p.seconds), uint64(p.micros), name}, nil
 }
-func runtimeDarwinServe(pid int) bool {
+func runtimeDarwinNativeEntry(pid int) string {
 	buf := make([]byte, 4096)
 	var n C.size_t
 	if C.an_runtime_args(C.int(pid), (*C.uchar)(unsafe.Pointer(&buf[0])), C.size_t(len(buf)), &n) != 1 || uint64(n) > uint64(len(buf)) {
-		return false
+		return ""
 	}
-	return runtimeDarwinServePrefix(buf[:int(n)])
+	return runtimeDarwinEntry(buf[:int(n)])
 }
 func runtimeDarwinMapped(ctx context.Context, pid int, device, inode uint64) bool {
 	var address uint64
@@ -94,7 +94,7 @@ func verifyRuntimeLiveImage(ctx context.Context, in runtimeProfileInput) (runtim
 	return h.image, nil
 }
 func holdRuntimeLiveImage(ctx context.Context, in runtimeProfileInput) (*runtimeImageLease, error) {
-	if ctx.Err() != nil || in.NativePID <= 0 || uint64(in.NativePID) > 0x7fffffff || in.NativePID != os.Getppid() || in.Entry != "serve" || !canonicalPrivatePath(in.HostExecutable) || in.PublicExecPath != in.HostExecutable {
+	if ctx.Err() != nil || in.NativePID <= 0 || uint64(in.NativePID) > 0x7fffffff || in.NativePID != os.Getppid() || !runtimeEntryRequest(in.Entry) || !canonicalPrivatePath(in.HostExecutable) || in.PublicExecPath != in.HostExecutable {
 		return nil, errRuntimePort
 	}
 	watch := runtimeDarwinWatch(in.NativePID)
@@ -127,7 +127,8 @@ func holdRuntimeLiveImage(ctx context.Context, in runtimeProfileInput) (*runtime
 			return fail()
 		}
 		live, e := runtimeDarwinProcessInfo(in.NativePID)
-		if e != nil || live != process || !runtimeDarwinMachine(live.CPU, live.Subtype, runtime.GOARCH) || !runtimeDarwinServe(in.NativePID) {
+		entry := runtimeDarwinNativeEntry(in.NativePID)
+		if e != nil || live != process || !runtimeDarwinMachine(live.CPU, live.Subtype, runtime.GOARCH) || !runtimeEntryMatches(in.Entry, entry) {
 			return fail()
 		}
 		a, e := image.Stat()
@@ -152,11 +153,11 @@ func holdRuntimeLiveImage(ctx context.Context, in runtimeProfileInput) (*runtime
 		end, e2 := runtimeDarwinProcessInfo(in.NativePID)
 		na, e3 := os.Stat(live.Name)
 		nb, e4 := os.Stat(in.HostExecutable)
-		if e != nil || e1 != nil || e2 != nil || e3 != nil || e4 != nil || ha != hb || end != live || !runtimeSameMetadata(a, na) || !runtimeSameMetadata(b, nb) || os.Getppid() != in.NativePID || !runtimeDarwinServe(in.NativePID) || !runtimeDarwinMapped(ctx, in.NativePID, device, inode) || ctx.Err() != nil || !runtimeDarwinUnchanged(watch) {
+		if e != nil || e1 != nil || e2 != nil || e3 != nil || e4 != nil || ha != hb || end != live || !runtimeSameMetadata(a, na) || !runtimeSameMetadata(b, nb) || os.Getppid() != in.NativePID || runtimeDarwinNativeEntry(in.NativePID) != entry || !runtimeDarwinMapped(ctx, in.NativePID, device, inode) || ctx.Err() != nil || !runtimeDarwinUnchanged(watch) {
 			return fail()
 		}
 		encoded, _ := json.Marshal(runtimeDarwinSnapshot{live, ha, device, inode, a.Size(), a.ModTime().UTC().Format(time.RFC3339Nano), uint32(a.Mode())})
-		return runtimeLiveImage{GOOS: "darwin", GOARCH: runtime.GOARCH, Entry: "serve", SHA256: ha, NativePID: in.NativePID, fingerprint: sha256.Sum256(encoded)}, nil
+		return runtimeLiveImage{GOOS: "darwin", GOARCH: runtime.GOARCH, Entry: entry, SHA256: ha, NativePID: in.NativePID, fingerprint: sha256.Sum256(encoded)}, nil
 	}
 	first, err := read(ctx)
 	if err != nil {

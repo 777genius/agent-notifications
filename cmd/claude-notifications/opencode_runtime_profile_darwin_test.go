@@ -61,8 +61,8 @@ func main(){image,_:=os.Executable()
 	t.Cleanup(func() { _ = parent.Process.Kill(); _ = parent.Wait() })
 	in := runtimeProfileInput{Protocol: 1, HostExecutable: image, Origin: strings.Repeat("11", 32), ControlRoot: dir, NativePID: parent.Process.Pid, Entry: "serve", PublicExecPath: image}
 	portAwait(t, image+"."+strconv.Itoa(parent.Process.Pid)+".host")
-	if runtimeDarwinServe(parent.Process.Pid) {
-		t.Fatal("large saved environment supplied false serve evidence")
+	if runtimeDarwinNativeEntry(parent.Process.Pid) != "" {
+		t.Fatal("large saved environment supplied false native entry evidence")
 	}
 	portLaunch(t, in, in, "", "accept")
 	if out := portOutput(t, in); string(out) != portDeniedReceipt {

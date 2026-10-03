@@ -81,7 +81,7 @@ func runtimeWindowsImageName(h windows.Handle) (string, error) {
 	}
 	return name, nil
 }
-func runtimeWindowsServe(h windows.Handle) (string, error) {
+func runtimeWindowsNativeCommand(h windows.Handle) (string, error) {
 	// An aligned fixed owned allocation, with no size-probe/retry or PEB read.
 	buf := make([]uint64, 512)
 	raw := unsafe.Slice((*byte)(unsafe.Pointer(&buf[0])), 4096)
@@ -96,7 +96,7 @@ func runtimeWindowsServe(h windows.Handle) (string, error) {
 		return "", errRuntimePort
 	}
 	argv, err := windows.DecomposeCommandLine(command)
-	if err != nil || len(argv) < 2 || argv[1] != "serve" {
+	if err != nil || runtimeNativeEntry(argv) == "" {
 		return "", errRuntimePort
 	}
 	return command, nil
@@ -152,7 +152,7 @@ func verifyRuntimeLiveImage(ctx context.Context, in runtimeProfileInput) (runtim
 	return held.image, nil
 }
 func holdRuntimeLiveImage(ctx context.Context, in runtimeProfileInput) (*runtimeImageLease, error) {
-	if ctx.Err() != nil || in.NativePID <= 0 || uint64(in.NativePID) > 0xffffffff || in.Entry != "serve" || in.PublicExecPath != in.HostExecutable || !runtimeWindowsPath(in.HostExecutable) {
+	if ctx.Err() != nil || in.NativePID <= 0 || uint64(in.NativePID) > 0xffffffff || !runtimeEntryRequest(in.Entry) || in.PublicExecPath != in.HostExecutable || !runtimeWindowsPath(in.HostExecutable) {
 		return nil, errRuntimePort
 	}
 	parent, err := runtimeWindowsParent()
@@ -190,9 +190,11 @@ func holdRuntimeLiveImage(ctx context.Context, in runtimeProfileInput) (*runtime
 		}
 		live, e := runtimeWindowsLive(process, parent)
 		current, e1 := runtimeWindowsImageName(process)
-		command, e2 := runtimeWindowsServe(process)
+		command, e2 := runtimeWindowsNativeCommand(process)
+		argv, argvErr := windows.DecomposeCommandLine(command)
+		entry := runtimeNativeEntry(argv)
 		var emulated, native uint16
-		if e != nil || e1 != nil || e2 != nil || current != name || windows.IsWow64Process2(process, &emulated, &native) != nil {
+		if e != nil || e1 != nil || e2 != nil || argvErr != nil || !runtimeEntryMatches(in.Entry, entry) || current != name || windows.IsWow64Process2(process, &emulated, &native) != nil {
 			return fail()
 		}
 		headerStat, headerErr := image.Stat()
@@ -229,12 +231,12 @@ func holdRuntimeLiveImage(ctx context.Context, in runtimeProfileInput) (*runtime
 		nb, e7 := candidate.Stat()
 		end, e8 := runtimeWindowsLive(process, parent)
 		endName, e9 := runtimeWindowsImageName(process)
-		endCommand, e10 := runtimeWindowsServe(process)
+		endCommand, e10 := runtimeWindowsNativeCommand(process)
 		if e != nil || e1 != nil || e4 != nil || e5 != nil || e6 != nil || e7 != nil || e8 != nil || e9 != nil || e10 != nil || ha != hb || id != nid || tid != cid || !runtimeSameMetadata(a, na) || !runtimeSameMetadata(b, nb) || end != live || endName != current || endCommand != command || ctx.Err() != nil {
 			return fail()
 		}
 		encoded, _ := json.Marshal(runtimeWindowsSnapshot{live, current, command, ha, id, a.Size(), a.ModTime().UTC().Format(time.RFC3339Nano), uint32(a.Mode())})
-		return runtimeLiveImage{GOOS: "windows", GOARCH: "amd64", Entry: "serve", SHA256: ha, NativePID: in.NativePID, fingerprint: sha256.Sum256(encoded)}, nil
+		return runtimeLiveImage{GOOS: "windows", GOARCH: "amd64", Entry: entry, SHA256: ha, NativePID: in.NativePID, fingerprint: sha256.Sum256(encoded)}, nil
 	}
 	first, err := read(ctx)
 	if err != nil {

@@ -32,6 +32,7 @@ const (
 // SessionContext carries the host-neutral session identity shared by all events.
 type SessionContext struct {
 	SessionID      string
+	Title          string // optional native title; presentation only, never identity
 	TurnID         string
 	CWD            string
 	TranscriptPath string

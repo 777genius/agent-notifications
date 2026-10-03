@@ -20,7 +20,7 @@ process.stdin.on('end', () => {
  const matching = d.protocol === 1 && d.nativePID === process.ppid && d.hostExecutable === d.publicExecPath &&
   d.hostExecutable === process.env.AGENT_NOTIFICATIONS_HOST_EXECUTABLE &&
   String(d.nativePID) === process.env.AGENT_NOTIFICATIONS_NATIVE_PID && d.origin === process.env.AGENT_NOTIFICATIONS_ORIGIN &&
-  d.controlRoot === process.env.AGENT_NOTIFICATIONS_CONTROL_ROOT && d.entry === 'serve' &&
+  d.controlRoot === process.env.AGENT_NOTIFICATIONS_CONTROL_ROOT && d.entry === 'native' && d.entry === process.env.AGENT_NOTIFICATIONS_HOST_ENTRY &&
   !process.env.PATH && !process.env.SECRET_TEST_TOKEN;
  fs.writeFileSync(root + '/descriptor', JSON.stringify(matching));
  if (mode === 'overflow') { process.stdout.write('x'.repeat(1025)); setInterval(() => {}, 20); return; }

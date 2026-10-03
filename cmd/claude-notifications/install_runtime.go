@@ -32,6 +32,7 @@ func installRuntime(args []string, output io.Writer) error {
 	refresh := flags.Bool("refresh", false, "refresh files for existing consumers without adding a registration")
 	relocateCache := flags.Bool("relocate-versioned-cache", false, "move Claude hooks between versioned plugin caches")
 	purge := flags.Bool("purge-native", false, "explicitly remove retained callback on final uninstall")
+	printNativePath := flags.Bool("print-native-path", false, "print only the committed durable native generation path")
 	consumer := flags.String("consumer", "claude-hooks", "managed consumer identity")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -118,6 +119,37 @@ func installRuntime(args []string, output io.Writer) error {
 		}
 		files = changed
 		if len(files) == 0 {
+			if *printNativePath {
+				root := *control
+				if root == "" {
+					root, err = installruntime.ControlRoot()
+					if err != nil {
+						return err
+					}
+				}
+				// Observe retained ownership without committing or adopting utilities.
+				snapshot, err := installruntime.ReadInstalledSnapshot(root)
+				if err != nil {
+					return err
+				}
+				if snapshot.Recovery {
+					return installruntime.ErrPolicyRecovery
+				}
+				ledger := snapshot.Ledger
+				if ledger.ID != "" && ledger.Owner != "existing-installer" {
+					return fmt.Errorf("component owned by %s at %s; explicit takeover required", ledger.Owner, ledger.RuntimeRoot)
+				}
+				if ledger.Native != nil {
+					root, err = installruntime.CanonicalPath(root)
+					if err != nil {
+						return err
+					}
+					if ledger.Native.Path != filepath.Clean(ledger.Native.Path) || filepath.Dir(ledger.Native.Path) != filepath.Join(root, "native") {
+						return fmt.Errorf("native owner outside persistent directory")
+					}
+				}
+				return printRuntimeNativePath(output, ledger)
+			}
 			return nil
 		}
 	}
@@ -317,18 +349,36 @@ func installRuntime(args []string, output io.Writer) error {
 	}
 	ledger, err := installruntime.Commit(ctx, req)
 	if err == nil {
-		_, _ = fmt.Fprintf(output, "managed-runtime committed generation=%d\n", ledger.Generation)
+		if !*printNativePath {
+			_, _ = fmt.Fprintf(output, "managed-runtime committed generation=%d\n", ledger.Generation)
+		}
 		if !*remove {
 			regCtx, regCancel := context.WithTimeout(context.Background(), 10*time.Second)
 			warning := reconcileRuntimeNativeRegistration(regCtx, *control)
 			regCancel()
 			if warning != nil {
-				_, _ = fmt.Fprintf(output, "warning: runtime committed; native registration reconciliation incomplete: %v\n", warning)
+				warningOutput := output
+				if *printNativePath {
+					warningOutput = os.Stderr
+				}
+				_, _ = fmt.Fprintf(warningOutput, "warning: runtime committed; native registration reconciliation incomplete: %v\n", warning)
 			}
+		}
+		if *printNativePath {
+			return printRuntimeNativePath(output, ledger)
 		}
 		if *purge {
 			_, _ = fmt.Fprintln(output, "Callback entrypoint purge completed; pending notifications may no longer open targets. Running callbacks are not stopped.")
 		}
 	}
+	return err
+}
+
+func printRuntimeNativePath(output io.Writer, ledger installruntime.Ledger) error {
+	path := ""
+	if ledger.Native != nil {
+		path = ledger.Native.Path
+	}
+	_, err := fmt.Fprintln(output, path)
 	return err
 }

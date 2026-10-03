@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -76,7 +77,7 @@ func managedPolicyFixture(t *testing.T, custom ...string) (string, installruntim
 	}
 	write(filepath.Join(root, "ownership.json"), data)
 	write(filepath.Join(root, "policy-generation.json"), []byte(`{"Generation":11,"Enabled":false}`))
-	write(filepath.Join(root, "agent-notifications.json"), []byte(`{"schemaVersion":1,"enabled":false,"route":{"openCodeNotifications":{"desktop":false,"webhook":true,"future":99},"unrelatedAgent":{"enabled":true}},"notifications":{"desktop":{"enabled":false},"webhook":{"enabled":true,"url":"${TEST_ENDPOINT}"}},"statuses":{"task_complete":{"enabled":true},"foreign_status":{"enabled":false}},"future":{"integer":9007199254740993}}`))
+	write(filepath.Join(root, "agent-notifications.json"), []byte(`{"schemaVersion":1,"enabled":false,"route":{"openCodeNotifications":{"desktop":false,"webhook":true,"future":99},"unrelatedAgent":{"enabled":true}},"notifications":{"desktop":{"enabled":false},"webhook":{"enabled":true,"url":"${AGENT_NOTIFICATIONS_WEBHOOK_URL}"}},"statuses":{"task_complete":{"enabled":true},"foreign_status":{"enabled":false}},"future":{"integer":9007199254740993}}`))
 	for _, name := range []string{".component-install.lock", "agent-notifications.json.lock", installruntime.OpenCodeStoreLock} {
 		write(filepath.Join(root, name), nil)
 	}
@@ -167,7 +168,7 @@ func TestManagedPolicyCLIEditUsesInstalledPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, literal := range []string{"9007199254740993", "${TEST_ENDPOINT}", "unrelatedAgent", "foreign_status", "\"future\": 99"} {
+	for _, literal := range []string{"9007199254740993", "${AGENT_NOTIFICATIONS_WEBHOOK_URL}", "unrelatedAgent", "foreign_status", "\"future\": 99"} {
 		if !bytes.Contains(data, []byte(literal)) {
 			t.Fatalf("lost raw policy value: %s", literal)
 		}
@@ -375,12 +376,12 @@ func TestManagedPolicyCLIExplicitRootAndSharedCompatibility(t *testing.T) {
 	if code != 0 || json.Unmarshal(out, &inspection) != nil || inspection.Selection.Path != filepath.Join(root, "agent-notifications.json") {
 		t.Fatalf("custom route: %s %s", out, stderr)
 	}
-	code, _, stderr = policyCLI(t, []string{"edit", "--target", "opencode", "--control-root", root, "--stdin", "--expect-revision", inspection.Revision}, `{"set":{"/notifications/webhook/url":"${TEST_OTHER_ENDPOINT}"}}`)
+	code, _, stderr = policyCLI(t, []string{"edit", "--target", "opencode", "--control-root", root, "--stdin", "--expect-revision", inspection.Revision}, `{"set":{"/notifications/webhook/url":"https://example.invalid/TEST-literal-endpoint"}}`)
 	if code != 0 {
 		t.Fatalf("custom edit: %s", stderr)
 	}
 	edited, err := os.ReadFile(inspection.Selection.Path)
-	if err != nil || !bytes.Contains(edited, []byte("${TEST_OTHER_ENDPOINT}")) {
+	if err != nil || !bytes.Contains(edited, []byte("https://example.invalid/TEST-literal-endpoint")) {
 		t.Fatal("custom root edit went elsewhere")
 	}
 	managedBefore := treeBytes(t, root)
@@ -402,7 +403,7 @@ func TestManagedPolicyCLIExplicitRootAndSharedCompatibility(t *testing.T) {
 			t.Fatalf("ordinary selection: %s %s", out, stderr)
 		}
 		editArgs := append([]string{"edit", "--stdin", "--expect-revision", inspection.Revision}, selector...)
-		code, _, stderr = policyCLI(t, editArgs, `{"set":{"/notifications/desktop/volume":0.4}}`)
+		code, _, stderr = policyCLI(t, editArgs, `{"set":{"/notifications/desktop/volume":0.4,"/notifications/webhook/url":"${TEST_SHARED_ENDPOINT}"}}`)
 		if code != 0 {
 			t.Fatalf("ordinary edit: %s", stderr)
 		}
@@ -427,5 +428,29 @@ func TestManagedPolicyCLIRejectsUnpublishableEdits(t *testing.T) {
 		if code == 0 || !reflect.DeepEqual(before, treeBytes(t, root)) {
 			t.Fatal("unpublishable or setup-owned edit wrote files")
 		}
+	}
+}
+
+// Red if managed saves accept a URL token the event child cannot resolve, or
+// save expanded credentials instead of the operator's token.
+func TestManagedPolicyCLIWebhookEnvContract(t *testing.T) {
+	root, _ := managedPolicyFixture(t)
+	t.Setenv(config.OpenCodeWebhookURLEnv, "https://example.invalid/TEST-private-secret")
+	rev := policyRevision(t)
+	before := treeBytes(t, root)
+	for _, token := range []string{"${MY_WEBHOOK_URL}", "$MY_WEBHOOK_URL", "https://example.invalid/${MY_WEBHOOK_URL}"} {
+		input, _ := json.Marshal(config.Edits{Set: map[string]json.RawMessage{"/notifications/webhook/url": json.RawMessage(strconv.Quote(token))}})
+		code, out, stderr := policyCLI(t, []string{"edit", "--target", "opencode", "--stdin", "--expect-revision", rev}, string(input))
+		if code == 0 || strings.TrimSpace(stderr) != string(config.ConfigOpenCodeWebhookEnvUnsupported) || len(out) != 0 || !reflect.DeepEqual(before, treeBytes(t, root)) {
+			t.Fatalf("unsupported URL token was published or leaked: %s", stderr)
+		}
+	}
+	code, _, stderr := policyCLI(t, []string{"edit", "--target", "opencode", "--stdin", "--expect-revision", rev}, `{"set":{"/notifications/desktop/volume":0.25}}`)
+	if code != 0 {
+		t.Fatalf("supported token edit: %s", stderr)
+	}
+	saved, err := os.ReadFile(filepath.Join(root, "agent-notifications.json"))
+	if err != nil || !bytes.Contains(saved, []byte("${AGENT_NOTIFICATIONS_WEBHOOK_URL}")) || bytes.Contains(saved, []byte("TEST-private-secret")) {
+		t.Fatal("managed save expanded the event-only secret")
 	}
 }

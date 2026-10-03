@@ -13,11 +13,26 @@ func runtimeImageKey(live runtimeLiveImage) opencodecodec.ImageKey {
 	return opencodecodec.ImageKey{GOOS: live.GOOS, GOARCH: live.GOARCH, Entry: live.Entry, SHA256: live.SHA256}
 }
 
+// The entry is derived from the held native argv, never from event assertions.
+// These names select literal reader evidence and do not qualify a new image.
+func runtimeReaderEntry(entry string) (string, bool) {
+	switch entry {
+	case "serve":
+		return "official_native_serve_default_dual_autoload", true
+	case "tui":
+		return "official_native_tui_default_dual_autoload", true
+	case "run":
+		return "official_native_run_local_dual_autoload", true
+	default:
+		return "", false
+	}
+}
+
 // Pure comparison only. These strings do not authenticate any OS process. The
 // only production caller follows the successful synchronous probe, equal held
 // before/after images, and an independent packaged-reader qualification lookup.
 func selectBoundNativeObserver(e opencodehost.VersionEvidence, actual opencodehost.NativeObserverTuple) runtimeObserverGeneration {
-	descriptor, ok := opencodehost.NativeObserverEvidenceForImage(e.Version, actual.GOOS, actual.GOARCH, actual.ImageSHA256)
+	descriptor, ok := opencodehost.NativeObserverEvidenceForEntry(e.Version, actual.GOOS, actual.GOARCH, actual.ImageSHA256, actual.Entry)
 	if !ok {
 		return observerUnverified
 	}
@@ -81,12 +96,16 @@ func runtimeReaderTuple(live runtimeLiveImage, version string) (opencodehost.Nat
 	if _, ok := opencodecodec.LookupCandidate(runtimeImageKey(live)); !ok {
 		return opencodehost.NativeObserverTuple{}, false
 	}
-	descriptor, described := opencodehost.NativeObserverEvidenceForImage(version, live.GOOS, live.GOARCH, live.SHA256)
+	entry, recognized := runtimeReaderEntry(live.Entry)
+	if !recognized {
+		return opencodehost.NativeObserverTuple{}, false
+	}
+	descriptor, described := opencodehost.NativeObserverEvidenceForEntry(version, live.GOOS, live.GOARCH, live.SHA256, entry)
 	if !described {
 		return opencodehost.NativeObserverTuple{}, false
 	}
 	for _, reader := range qualifiedRuntimeReaders {
-		if reader == descriptor.Tuple && reader.Version == version && reader.ImageSHA256 == live.SHA256 && reader.GOOS == live.GOOS && reader.GOARCH == live.GOARCH && reader.Entry == "official_native_serve_default_dual_autoload" {
+		if reader == descriptor.Tuple && reader.Version == version && reader.ImageSHA256 == live.SHA256 && reader.GOOS == live.GOOS && reader.GOARCH == live.GOARCH && reader.Entry == entry {
 			return reader, true
 		}
 	}

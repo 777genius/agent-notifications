@@ -65,10 +65,43 @@ jobs:
           }
         shell: pwsh
 
+      - name: Compare cold and warm Windows lock preparation
+        if: matrix.go == '1.26'
+        shell: pwsh
+        env:
+          LOCK_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          $baseline = Join-Path $env:RUNNER_TEMP 'TEST-windows-lock-baseline'
+          git fetch --no-tags --depth=1 origin $env:LOCK_BASE_SHA
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git worktree add --detach $baseline $env:LOCK_BASE_SHA
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item internal/installruntime/lock_bench_windows_test.go "$baseline/internal/installruntime/lock_bench_windows_test.go"
+          Write-Host "Baseline lock preparation at $env:LOCK_BASE_SHA"
+          Push-Location $baseline
+          try {
+            go test -run '^$' -bench '^BenchmarkWindowsPrivateLock$' -benchtime=100x -count=5 -benchmem ./internal/installruntime
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            Pop-Location
+          }
+          Write-Host 'Current lock preparation'
+          go test -run '^$' -bench '^BenchmarkWindowsPrivateLock$' -benchtime=100x -count=5 -benchmem ./internal/installruntime
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Compare Windows cache root traversal
+        if: matrix.go == '1.26'
+        run: go test -run '^$' -bench '^BenchmarkWindowsPrivateCacheRoot$' -benchtime=100x -count=3 -benchmem ./internal/installruntime
+        shell: bash
+
       - name: Qualify observation caches without cross-package contention
         # Keep real first claims and interprocess assertions under the unchanged
         # 250ms production budget, separate from other race-instrumented packages.
         run: go test -p 1 -v -race -coverprofile=coverage-gemini.txt -covermode=atomic ./internal/geminievent ./internal/notification/observation ./internal/copilotvscodeevent ./cmd/claude-notifications
+        shell: bash
+
+      - name: Repeat Gemini channel consent and failed-marker suppression
+        run: go test -race -count=20 -run '^TestChannelConsentIndependentAndNoRetry$' ./internal/geminievent
         shell: bash
 
       - name: Run remaining tests
