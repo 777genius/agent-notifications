@@ -18,6 +18,11 @@ func TestOpenCodeInitRecoveryAfterDeviceRenumber(t *testing.T) {
 	for _, mode := range []string{"renumber", "substituted-inode", "conflicting-device"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx, r := privateRegistrationRequest(t)
+			physicalRoot, err := CanonicalPath(r.ControlRoot)
+			if err != nil {
+				t.Fatal("canonical private control root", err)
+			}
+			r.ControlRoot = physicalRoot
 			crash := errors.New("private init interruption")
 			r.Fault = func(phase string) error {
 				if phase == "transaction" {
@@ -28,11 +33,6 @@ func TestOpenCodeInitRecoveryAfterDeviceRenumber(t *testing.T) {
 			if _, err := Commit(ctx, r); !errors.Is(err, crash) {
 				t.Fatal("private transaction did not reach interruption", err)
 			}
-			physicalRoot, err := CanonicalPath(r.ControlRoot)
-			if err != nil {
-				t.Fatal("canonical private control root", err)
-			}
-			r.ControlRoot = physicalRoot
 			marker := filepath.Join(r.ControlRoot, "transaction.json")
 			tx, err := readTransactionFile(marker)
 			if err != nil || tx.OpenCodeInit == nil || len(tx.OpenCodeInit.Parents) == 0 {

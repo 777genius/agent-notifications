@@ -40,7 +40,7 @@ func ValidOriginalNativeAge(key ImageKey, candidate Candidate, mode string) bool
 	}
 	// Exact candidate/clock row lookups remain mandatory. Local entries are V1
 	// only; accepting an age mode never supplies their missing qualification.
-	if key.Entry != "serve" && !(candidate.Generation == "v1" && (key.Entry == "tui" || key.Entry == "run")) {
+	if key.Entry != "serve" && (candidate.Generation != "v1" || (key.Entry != "tui" && key.Entry != "run")) {
 		return false
 	}
 	exceptional := key.GOOS == "windows" && key.GOARCH == "amd64" &&
