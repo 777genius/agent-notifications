@@ -38,9 +38,9 @@ jobs:
         shell: pwsh
         run: |
           $target = '^Test(CacheWindowBoundAndBindingIsolation|ConcurrentConsumerClaimsEachChannelOnce|ChannelConsentIndependentAndNoRetry)$'
-          go test -v -race -count=200 -run $target -coverprofile=evidence/plain-coverage.out -covermode=atomic ./internal/geminievent 2>&1 | Tee-Object evidence/plain.log
+          go test -v -race -count=200 -run $target '-coverprofile=evidence/plain-coverage.out' -covermode=atomic ./internal/geminievent 2>&1 | Tee-Object evidence/plain.log
           $plain = $LASTEXITCODE
-          go test -v -race -count=200 -run $target -trace=evidence/claim.trace -coverprofile=evidence/traced-coverage.out -covermode=atomic ./internal/geminievent 2>&1 | Tee-Object evidence/traced.log
+          go test -v -race -count=200 -run $target '-trace=evidence/claim.trace' '-coverprofile=evidence/traced-coverage.out' -covermode=atomic ./internal/geminievent 2>&1 | Tee-Object evidence/traced.log
           $traced = $LASTEXITCODE
           "plain=$plain traced=$traced" | Out-File evidence/status.txt
           if (Test-Path evidence/claim.trace) {

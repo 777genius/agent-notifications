@@ -106,8 +106,10 @@ func (d *claimDiagnostics) fail(err error, fallback string) error {
 		if errors.As(err, &errno) {
 			f.OSCode = uint32(errno)
 			f.Class = "os_error"
-			if runtime.GOOS == "windows" && (errno == 32 || errno == 33) {
+			if runtime.GOOS == "windows" && errno == 32 {
 				f.Class = "sharing_violation"
+			} else if runtime.GOOS == "windows" && errno == 33 {
+				f.Class = "lock_violation"
 			} else if os.IsPermission(err) {
 				f.Class = "permission"
 			} else if os.IsNotExist(err) {
