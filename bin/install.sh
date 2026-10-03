@@ -1756,8 +1756,8 @@ download_terminal_notifier_modern() {
             rm -rf "$MODERN_APP"
             return 1
         fi
-        # Register with Launch Services
-        /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$MODERN_APP" 2>/dev/null || true
+        # Acquisition has not committed a native generation. LaunchServices
+        # registration belongs to successful durable publication below.
         echo -e "${GREEN}✓${NC} ClaudeNotifier installed (modern notifications + click-to-focus)"
         return 0
     else
@@ -2306,6 +2306,11 @@ disposable_acquisition() {
     return 0
 }
 
+launch_services_register() {
+    [ -n "$1" ] || return 0
+    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$1" >/dev/null 2>&1 || true
+}
+
 stage_and_promote_runtime() (
     local live_dir="$SCRIPT_DIR"
     local live_binary="$BINARY_PATH"
@@ -2354,12 +2359,27 @@ stage_and_promote_runtime() (
         # Acquisition into a disposable Codex bundle must not Commit a live
         # consumer. setup-codex registers the durable runtime afterwards.
         copy_verified_stage "$stage" "$live_dir" || exit 1
-    elif [ "${CN_PRODUCT:-claude}" = "codex" ] && [ "$PLATFORM" = "darwin" ]; then
-        "$BINARY_PATH" internal-install-runtime --refresh --stage "$stage" --target "$live_dir" --entry "$BINARY_NAME" --require-native || exit 1
+    elif [ "$PLATFORM" = "darwin" ]; then
+        local -a runtime_args=(internal-install-runtime --stage "$stage" --target "$live_dir" --entry "$BINARY_NAME" --require-native)
+        if [ "${CN_PRODUCT:-claude}" = "codex" ]; then
+            runtime_args+=(--refresh)
+        else
+            runtime_args+=(--relocate-versioned-cache)
+        fi
+        # Released helpers can publish successfully without path-only output.
+        # Probe the verified staged helper, not the installed version or alias.
+        local runtime_help
+        runtime_help=$("$BINARY_PATH" internal-install-runtime --help 2>&1) || true
+        if printf '%s\n' "$runtime_help" | grep -Eq '^[[:space:]]+-{1,2}print-native-path([[:space:]]|$)'; then
+            native_path=$("$BINARY_PATH" "${runtime_args[@]}" --print-native-path) || exit 1
+            launch_services_register "$native_path"
+        else
+            "$BINARY_PATH" "${runtime_args[@]}" || exit 1
+            # Old helpers cannot expose their committed generation. Skip LS
+            # registration rather than register staging or guess from an alias.
+        fi
     elif [ "${CN_PRODUCT:-claude}" = "codex" ]; then
         "$BINARY_PATH" internal-install-runtime --refresh --stage "$stage" --target "$live_dir" --entry "$BINARY_NAME" || exit 1
-    elif [ "$PLATFORM" = "darwin" ]; then
-        "$BINARY_PATH" internal-install-runtime --stage "$stage" --target "$live_dir" --entry "$BINARY_NAME" --require-native --relocate-versioned-cache || exit 1
     else
         "$BINARY_PATH" internal-install-runtime --stage "$stage" --target "$live_dir" --entry "$BINARY_NAME" --relocate-versioned-cache || exit 1
     fi
