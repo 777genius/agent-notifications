@@ -426,6 +426,15 @@ def json_stream(raw):
 
 
 def build_helper(owned, env, root, commit, os_name, arch):
+    if os_name == 'windows':
+        # setup-go may expose its unchanged toolchain through a cache junction.
+        # Bind the physical toolchain before collecting original source leaves.
+        root_raw = owned.command(['go', 'env', 'GOROOT'], root, env)
+        go_root = canonical_path(Path(root_raw.decode('utf8').strip()).resolve(strict=True), 'native_go_toolchain')
+        go_exe = canonical_path(go_root / 'bin' / 'go.exe', 'native_go_toolchain')
+        selected_go = shutil.which('go', path=env['PATH'])
+        need(selected_go and go_exe.is_file() and go_exe.samefile(selected_go), 'same_native_go_toolchain')
+        env = dict(env, GOROOT=str(go_root), PATH=str(go_root / 'bin') + os.pathsep + env['PATH'])
     version_raw = owned.command(['go', 'version'], root, env)
     need(re.fullmatch(rb'go version go1\.27\.1 ' + os_name.encode() + b'/' + arch.encode() + rb'\r?\n', version_raw), 'existing_pinned_native_go')
     binary = root / ('helper.exe' if os_name == 'windows' else 'helper')

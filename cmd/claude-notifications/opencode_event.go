@@ -20,6 +20,12 @@ import (
 
 func runOpenCodeEvent(args []string, input io.Reader, output io.Writer) int {
 	started := time.Now()
+	if len(args) == 2 && args[0] == "--protocol" && args[1] == "1" {
+		if _, ok := input.(io.ReadCloser); !ok {
+			_ = json.NewEncoder(output).Encode(opencodeevent.Receipt{Status: "rejected", Reason: "invalid_frame"})
+			return 0
+		}
+	}
 	signals, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	ctx, cancel := context.WithDeadline(signals, started.Add(20*time.Second))

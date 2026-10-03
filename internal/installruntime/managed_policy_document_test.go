@@ -27,7 +27,10 @@ const rawPolicyAfter = `{
 // provider runs: these checks exercise only the existing transaction boundary.
 func rawPolicyFixture(t *testing.T) (Request, Ledger) {
 	t.Helper()
-	base := t.TempDir()
+	base, err := CanonicalPath(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	root, run := filepath.Join(base, "control"), filepath.Join(base, "runtime")
 	write := func(path string, data []byte, mode os.FileMode) {
 		t.Helper()

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 )
@@ -30,7 +31,7 @@ func TestOpenCodeCommandEarlyGuardsDoNotConsumeInput(t *testing.T) {
 			t.Setenv("AGENT_NOTIFICATIONS_CONTROL_ROOT", tc.root)
 			input := strings.NewReader("input must remain available")
 			var output bytes.Buffer
-			if runOpenCodeEvent(tc.args, input, &output) != 0 || output.String() != tc.receipt || input.Len() != len("input must remain available") {
+			if runOpenCodeEvent(tc.args, io.NopCloser(input), &output) != 0 || output.String() != tc.receipt || input.Len() != len("input must remain available") {
 				t.Fatal("early guard read unsafe input or leaked receipt", output.String())
 			}
 		})

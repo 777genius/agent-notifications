@@ -35,6 +35,14 @@ service or Windows toasts. Linux needs an available desktop session/D-Bus servic
   qualification are still owed on the native targets; workflow lanes alone do not
   establish that they passed. V2 visible banners are not claimed.
 
+**Windows V1 limitation:** stock OpenCode V1 events do not always allow the
+original event age to be verified independently. A delayed completion can notify
+once, and the same completion can notify again after its 24-hour deduplication
+claim expires. Root-session and workspace filters, origin-bound provenance,
+deduplication within that claim lifetime, and lookup and IPC limits still apply.
+This accepted limitation does not qualify every Windows V1 version or establish
+that the current candidate has completed native qualification.
+
 ## Dual candidate evidence boundary
 
 The installed dual candidate fixture in `scripts/opencode-native-e2e.py` is source

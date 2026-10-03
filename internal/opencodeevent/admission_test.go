@@ -228,6 +228,15 @@ func TestAdmissionCapacityAndVerifiedRetention(t *testing.T) {
 	for _, transition := range []string{"sameBoot", "newBoot", "newDomain", "newFence"} {
 		t.Run(transition, func(t *testing.T) {
 			ctx, a, r, c := admissionFixture(t)
+			// Each admission below models a separate command, with its own
+			// unchanged deadline; filesystem setup is not part of that command.
+			admit := func(want AdmissionStatus) {
+				commandCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				request := r
+				request.CommandStarted = time.Now()
+				tryAdmission(t, commandCtx, a, request, want)
+			}
 			reg := *r.Expected.Installation.Ledger.Consumers["opencode-notifications"].OpenCode
 			// Independent external store fixture: no product claim-key generator.
 			rows := make([]map[string]any, 4096)
@@ -247,7 +256,7 @@ func TestAdmissionCapacityAndVerifiedRetention(t *testing.T) {
 				t.Fatal(err)
 			}
 			store.Close()
-			tryAdmission(t, ctx, a, r, Capacity)
+			admit(Capacity)
 			advance := func(d time.Duration) {
 				c.sample.TickNS += int64(d)
 				c.sample.WallNS += int64(d)
@@ -270,16 +279,16 @@ func TestAdmissionCapacityAndVerifiedRetention(t *testing.T) {
 			}
 			c.sample.Fence = a.TimePolicy.Fence(c.sample.BootID, c.sample.Domain)
 			r.Provenance = freshProvenance(c.sample)
-			tryAdmission(t, ctx, a, r, Capacity)
+			admit(Capacity)
 			advance(24*time.Hour - time.Nanosecond)
-			tryAdmission(t, ctx, a, r, Capacity)
+			admit(Capacity)
 			advance(time.Nanosecond)
 			if transition == "sameBoot" {
-				tryAdmission(t, ctx, a, r, Capacity)
+				admit(Capacity)
 				advance(time.Nanosecond)
 			}
-			tryAdmission(t, ctx, a, r, Admitted)
-			tryAdmission(t, ctx, a, r, Duplicate)
+			admit(Admitted)
+			admit(Duplicate)
 		})
 	}
 }

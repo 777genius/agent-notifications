@@ -32,6 +32,10 @@ func managedPolicyFixture(t *testing.T, custom ...string) (string, installruntim
 	if len(custom) > 0 {
 		root = filepath.Join(filepath.Dir(root), custom[0])
 	}
+	root, err = installruntime.CanonicalPath(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	write := func(path string, data []byte) {
 		t.Helper()
 		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
