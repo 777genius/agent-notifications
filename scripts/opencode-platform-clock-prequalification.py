@@ -635,6 +635,13 @@ def isolate_linux():
     # No sockets are used: the only communication is owned stdin/stdout pipes.
 
 
+def require_sampler_nonincrease(os_name, loader_before, after, import_before=None):
+    # Windows runtime/module imports precede the sole sampler creation.
+    before = import_before if os_name == 'windows' else loader_before
+    need(type(before) is int and 0 <= before <= 0xffffffff, 'actual_sampler_resource_baseline')
+    need(after <= before, 'actual_module_resource_leak')
+
+
 def run_case(root, metadata, os_name, arch, job_end):
     case_started = time.monotonic(); operation_started = None; round_number = None
     stage = 'initial_custody'; disposed_observed = False
@@ -687,10 +694,13 @@ def run_case(root, metadata, os_name, arch, job_end):
                  ready['samplerCreated'] is False and type(ready['samples']) is int and ready['samples'] == 0,
                  'actual_presampler_source_import')
             imported_resources = native_resources(host['p'], os_name)
+            sampler_resource_before_at = time.monotonic()
             safe['nativeImportResourceObservation'] = {
                 'measurementKind': 'GetProcessHandleCount', 'before': resources_before, 'after': imported_resources,
                 'delta': imported_resources - resources_before,
                 'baselineStage': 'loader_received_before_begin', 'stage': stage,
+                'beforeCaseElapsedMs': round((resource_before_at - case_started) * 1000, 3),
+                'beforeHostElapsedMs': round((resource_before_at - host['startedAt']) * 1000, 3),
                 'samplerCreated': False, 'samples': 0,
                 'operationElapsedMs': round((time.monotonic() - operation_started) * 1000, 3)}
             own.send(host, {'kind': 'sampler_begin'}, operation_end)
@@ -753,11 +763,11 @@ def run_case(root, metadata, os_name, arch, job_end):
             # Non-authorizing numeric diagnostics from the two existing native reads.
             safe['nativeResourceObservation'] = {
                 'measurementKind': 'GetProcessHandleCount', 'version': metadata['version'],
-                'before': resources_before, 'after': resources_after, 'delta': resources_after - resources_before,
-                'baselineStage': 'loader_received_before_begin', 'stage': stage,
-                'beforeCaseElapsedMs': round((resource_before_at - case_started) * 1000, 3),
+                'before': imported_resources, 'after': resources_after, 'delta': resources_after - imported_resources,
+                'baselineStage': 'actual_plain_import_before_sampler', 'stage': stage,
+                'beforeCaseElapsedMs': round((sampler_resource_before_at - case_started) * 1000, 3),
                 'afterCaseElapsedMs': round((resource_after_at - case_started) * 1000, 3),
-                'beforeHostElapsedMs': round((resource_before_at - host['startedAt']) * 1000, 3),
+                'beforeHostElapsedMs': round((sampler_resource_before_at - host['startedAt']) * 1000, 3),
                 'afterHostElapsedMs': round((resource_after_at - host['startedAt']) * 1000, 3),
                 'afterOperationElapsedMs': round((resource_after_at - operation_started) * 1000, 3),
                 'disposedFrameObserved': disposed_observed, 'helperRound': round_number,
@@ -768,8 +778,9 @@ def run_case(root, metadata, os_name, arch, job_end):
             safe['nativeResourceCheckpoints'].append({'stage': 'disposed', 'round': None,
                 'samples': result['samples'], 'count': resources_after,
                 'operationElapsedMs': round((time.monotonic() - operation_started) * 1000, 3)})
-        # Preserve the ORIGINAL total nonincrease gate; diagnostics grant nothing.
-        need(resources_after <= resources_before, 'actual_module_resource_leak')
+        # Strict sampler nonincrease; retain pre-begin/import growth separately.
+        require_sampler_nonincrease(os_name, resources_before, resources_after,
+                                    imported_resources if os_name == 'windows' else None)
         kernel_image(host['p'], exe, os_name)
         stage = 'finish'
         own.send(host, {'kind': 'finish'}, operation_end)
