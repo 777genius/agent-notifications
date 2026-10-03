@@ -84,6 +84,11 @@ func main() {
 		os.Exit(configCommand(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
 	case "internal-writer-protocol":
 		fmt.Println(installruntime.WriterProtocolMarker)
+		// Keep legacy output and retain every supported declaration in packaged bytes.
+		if len(os.Args) == 3 && os.Args[2] == "--all" {
+			fmt.Println(installruntime.LocalWriterProtocolMarker)
+			fmt.Println(installruntime.OpenCodeWriterProtocolMarker)
+		}
 	case "internal-install-runtime":
 		if err := installRuntime(os.Args[2:], os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, err)
