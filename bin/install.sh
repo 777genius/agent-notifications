@@ -22,6 +22,8 @@ else
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fi
 
+INSTALL_BUNDLE_MANIFEST="$SCRIPT_DIR/../.claude-plugin/plugin.json"
+
 # Ensure target directory exists
 mkdir -p "$SCRIPT_DIR" 2>/dev/null || true
 
@@ -91,7 +93,7 @@ prepare_install_config_preflight() {
         INSTALL_PRIVATE_DOWNLOAD=true
         detect_platform
         REQUIRE_CHECKSUM=true
-        pin_release_urls
+        pin_release_urls || exit 1
         download_and_verify_binary && verify_executable
     ) >/dev/null 2>&1; then
         config_preflight_stop
@@ -774,13 +776,14 @@ get_latest_release_tag() {
 pin_release_urls() {
     [ "$RELEASE_URL" = "$DEFAULT_RELEASE_URL" ] || return 0
 
-    local tag=""
-    tag=$(get_latest_release_tag || true)
-
-    if [ -z "$tag" ]; then
-        echo -e "${YELLOW}⚠ Could not resolve latest release tag, using /releases/latest fallback${NC}"
-        return 0
+    # The source bundle and native runtime share one ConsumerVersion. A global
+    # Latest lookup can silently downgrade a newer platform-specific bundle.
+    local tag="" manifest="$INSTALL_BUNDLE_MANIFEST" version
+    if [ -f "$manifest" ]; then
+        version=$(grep -Eo '"version"[[:space:]]*:[[:space:]]*"[0-9]+\.[0-9]+\.[0-9]+"' "$manifest" | head -1 | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+')
+        [ -n "$version" ] && tag="v$version"
     fi
+    [ -n "$tag" ] || { echo 'Missing source bundle version; rerun the public platform installer.' >&2; return 1; }
 
     PINNED_RELEASE_TAG="$tag"
     RELEASE_URL="${RELEASES_BASE_URL}/download/${PINNED_RELEASE_TAG}"
@@ -1027,7 +1030,10 @@ download_utility() (
 
     local downloaded=false
     guard_install_paths "$temp_path"
-    if command -v curl &> /dev/null; then
+    if [ -n "${INSTALL_STAGED_ASSETS:-}" ] && [ -f "$INSTALL_STAGED_ASSETS/$util_name" ]; then
+        cp "$INSTALL_STAGED_ASSETS/$util_name" "$temp_path" || return 1
+        downloaded=true
+    elif command -v curl &> /dev/null; then
         if curl -fsSL "${CURL_EXTRA_OPTS[@]}" --connect-timeout "$CONNECT_TIMEOUT" --max-time "$CURL_TIMEOUT" "$url" -o "$temp_path" 2>/dev/null; then
             downloaded=true
         fi
@@ -1687,7 +1693,11 @@ download_terminal_notifier_modern() {
     local attempt=1
     local downloaded=false
 
-    while [ $attempt -le $MAX_RETRIES ]; do
+    if [ -n "${INSTALL_STAGED_ASSETS:-}" ] && [ -f "$INSTALL_STAGED_ASSETS/$MODERN_ASSET_NAME" ]; then
+        cp "$INSTALL_STAGED_ASSETS/$MODERN_ASSET_NAME" "$TEMP_ZIP" || return 1
+        downloaded=true
+    fi
+    while [ "$downloaded" != true ] && [ $attempt -le $MAX_RETRIES ]; do
         if [ $attempt -gt 1 ]; then
             echo -e "${YELLOW}Retry ${attempt}/${MAX_RETRIES}...${NC}"
             sleep $RETRY_DELAY
@@ -2490,7 +2500,7 @@ main() {
         return 0
     fi
 
-    pin_release_urls
+    pin_release_urls || return 1
 
     # All destructive verification operates only on the private staging directory.
     # Publish the main version last, after required desktop dependencies are usable.
