@@ -62,6 +62,7 @@ _KEEP_PORTABLE_STAGE=false
 PRODUCT=""
 BOOTSTRAP_TAG=""
 BOOTSTRAP_COMMIT=""
+BOOTSTRAP_BUNDLE_COMMIT=""
 _BOOTSTRAP_TMP=""  # temp file path for trap (set -u safe)
 CONFIGURE_NOTIFICATIONS=true
 AGENT_NOTIFY_REQUEST=auto
@@ -319,12 +320,151 @@ is_legacy_marketplace_repo() {
     return 1
 }
 
+platform_channel_claude() {
+    [ "${BOOTSTRAP_RELEASE_CHANNEL:-}" = 1 ] && [ "$MARKETPLACE_SOURCE" = "$REPO" ]
+}
+
+channel_refuse_downgrade() {
+    local installed="${1#v}" selected="${2#v}" i part
+    local before_parts=() after_parts=()
+    IFS=. read -r -a before_parts <<< "$installed"
+    IFS=. read -r -a after_parts <<< "$selected"
+    [ "${#before_parts[@]}" = 3 ] && [ "${#after_parts[@]}" = 3 ] || return 1
+    for i in 0 1 2; do
+        part=${before_parts[$i]}
+        [[ "$part" =~ ^(0|[1-9][0-9]*)$ ]] && [ "${#part}" -le 9 ] || return 1
+        [ "$part" -le "${after_parts[$i]}" ] || {
+            echo 'Platform channel is older than the installed version; installation retained.' >&2; return 1;
+        }
+        [ "$part" -eq "${after_parts[$i]}" ] || return 0
+    done
+}
+
+channel_marketplace_add() {
+    local ref="$1" declared overlay registry checkout_ref installed_root
+    case "$ref" in
+        release/platform-macos|release/platform-linux-windows) ;;
+        *) printf '%s\n' "$ref" | grep -Eq '^[0-9a-f]{40}$' || return 1 ;;
+    esac
+    config_preflight || return 1
+    local installed
+    installed=$(get_installed_plugin_version) || return 1
+    installed=${installed#v}
+    case "$installed" in
+        ''|unknown)
+            installed_root=$(get_installed_plugin_root) || return 1
+            [ -z "$installed_root" ] || installed=$(get_manifest_version "$installed_root/.claude-plugin/plugin.json") ;;
+    esac
+    if [ -n "$installed" ]; then
+        channel_refuse_downgrade "$installed" "$BOOTSTRAP_TAG" || return 1
+    fi
+    registry="$_CONFIG_STAGE/marketplaces-before.json"
+    "$_CLAUDE_EXEC" plugin marketplace list --json </dev/null > "$registry" || return 1
+    declared=$("$_CONFIG_HELPER" config installer marketplace "$registry" "$MARKETPLACE_NAME") || return 1
+    if [ "${_CHANNEL_ADOPTED:-}" != 1 ]; then
+        if [ -z "$declared" ]; then
+            # Native list output encodes this fixed ASCII identity literally.
+            # An unclassified declaration is custom, never permission to replace.
+            if grep -Fq "$MARKETPLACE_NAME" "$registry" || [ -e "$MARKETPLACE_DIR" ]; then
+                echo 'Unclassified marketplace declaration retained.' >&2; return 1
+            fi
+        else
+            [ "$declared" = "$REPO" ] || { echo 'Custom marketplace retained.' >&2; return 1; }
+            checkout_ref=$(git -C "$MARKETPLACE_DIR" symbolic-ref --quiet --short HEAD) || {
+                echo 'Pinned marketplace retained. Select a platform branch explicitly to migrate.' >&2; return 1;
+            }
+            case "$checkout_ref" in
+                main|release/platform-macos|release/platform-linux-windows) ;;
+                *) echo 'Custom marketplace branch retained.' >&2; return 1 ;;
+            esac
+        fi
+    fi
+    overlay="$_CONFIG_STAGE/channel-settings.json"
+    # Only this controlled declaration is supplied. Claude's native settings
+    # writer preserves unrelated settings, policy, plugin data and enabled state.
+    printf '{"extraKnownMarketplaces":{"%s":{"source":{"source":"github","repo":"%s","ref":"%s"}}}}\n' "$MARKETPLACE_NAME" "$REPO" "$ref" > "$overlay"
+    "$_CLAUDE_EXEC" --settings "$overlay" plugin marketplace add "$REPO#$ref" </dev/null || return 1
+    _CHANNEL_ADOPTED=1
+}
+
+channel_install_plugin() (
+    # A version number alone is not a source generation. Claude reuses an
+    # existing same-version cache, so retain it until the native CLI has copied
+    # the complete qualified checkout. Never uninstall or remove a marketplace.
+    local old
+    root=""; backup=""; failed=""
+    old=$(get_installed_plugin_version) || return 1
+    root=$(get_installed_plugin_root) || return 1
+    old=${old#v}
+    case "$old" in
+        ''|unknown) [ -z "$root" ] || old=$(get_manifest_version "$root/.claude-plugin/plugin.json") ;;
+    esac
+    config_preflight || return 1
+    channel_restore_cache() {
+        if [ -n "$backup" ] && [ -d "$backup" ]; then
+            if [ -e "$root" ]; then
+                failed=$(mktemp -d "$CACHE_DIR/$MARKETPLACE_NAME/.channel-incomplete.XXXXXX") || return 1
+                rmdir "$failed" && mv "$root" "$failed" || return 1
+                echo "Incomplete cache retained: $failed" >&2
+            fi
+            mv "$backup" "$root" || return 1
+        fi
+    }
+    trap channel_restore_cache EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    if [ "$old" = "${BOOTSTRAP_TAG#v}" ] && [ -n "$root" ]; then
+        case "$root" in "$CACHE_DIR/$MARKETPLACE_NAME/$old") ;; *) echo 'Unrecognized cache root; retaining installation.' >&2; return 1 ;; esac
+        [ -d "$root" ] && [ ! -L "$root" ] || return 1
+        backup_parent=$(mktemp -d "$CACHE_DIR/$MARKETPLACE_NAME/.channel-backup.XXXXXX") || return 1
+        backup="$backup_parent/cache"
+        mv "$root" "$backup" || return 1
+    fi
+    if [ -n "$old$root" ]; then
+        "$_CLAUDE_EXEC" plugin update "$PLUGIN_KEY" </dev/null || return 1
+    else
+        "$_CLAUDE_EXEC" plugin install "$PLUGIN_KEY" </dev/null || return 1
+    fi
+    verify_installed_plugin_version "${BOOTSTRAP_TAG#v}" || return 1
+    if [ -n "$backup" ]; then
+        # Keep the existing runtime's exact fingerprints until its native SDK
+        # promotes replacements. This includes launcher links and skill0600;
+        # Git's ordinary source copy cannot reproduce their owned state.
+        local existing relative
+        for existing in "$backup"/bin/claude-notifications* "$backup"/bin/agent-notifications* \
+            "$backup"/bin/sound-preview* "$backup"/bin/list-devices* "$backup"/bin/list-sounds* \
+            "$backup"/bin/ClaudeNotifier.app "$backup"/bin/AgentNotifications.app \
+            "$backup"/skills/agent-notifications/SKILL.md "$backup"/skills/agent-notify/SKILL.md; do
+            [ -e "$existing" ] || [ -L "$existing" ] || continue
+            relative=${existing#"$backup"/}
+            config_preflight || return 1
+            mkdir -p "$(dirname "$root/$relative")" || return 1
+            rm -rf -- "$root/$relative" || return 1
+            cp -pPR "$existing" "$root/$relative" || return 1
+        done
+        case "$(uname -s)" in
+            MINGW*|MSYS*|CYGWIN*)
+                config_preflight || return 1
+                cp -p "$backup/hooks/hooks.json" "$root/hooks/hooks.json" || return 1 ;;
+        esac
+    fi
+    # Finish native promotion while the old same-version cache is recoverable.
+    find_plugin_root || return 1
+    download_binary || return 1
+    [ -z "$backup" ] || echo "Previous source cache retained for recovery: $backup"
+    backup=""
+)
+
 setup_marketplace() {
     echo ""
     echo -e "${BLUE}📦 Setting up marketplace...${NC}"
 
     config_preflight || return 1
     local output
+    if platform_channel_claude; then
+        channel_marketplace_add "$BOOTSTRAP_BUNDLE_COMMIT"
+        return $?
+    fi
     # Try adding marketplace — if already added, update instead
     # </dev/null prevents stdin conflicts when running via `curl | bash`
     if output=$("$_CLAUDE_EXEC" plugin marketplace add "$MARKETPLACE_SOURCE" </dev/null 2>&1); then
@@ -588,6 +728,13 @@ sync_marketplace_checkout() {
     echo ""
     echo -e "${BLUE}🔄 Syncing marketplace checkout...${NC}"
 
+    if platform_channel_claude; then
+        [ "$(git -C "$MARKETPLACE_DIR" rev-parse HEAD)" = "$BOOTSTRAP_BUNDLE_COMMIT" ] &&
+            [ "$(get_manifest_version "$MARKETPLACE_PLUGIN_JSON")" = "${BOOTSTRAP_TAG#v}" ] || {
+            echo 'Platform source checkout does not match the qualified snapshot.' >&2; return 1;
+        }
+        return 0
+    fi
     if [ "$MARKETPLACE_SOURCE" != "$REPO" ]; then
         echo -e "${BLUE}  Using custom marketplace source; skipping direct git sync${NC}"
         return 0
@@ -713,6 +860,10 @@ install_plugin() {
     echo ""
     echo -e "${BLUE}📦 Installing plugin...${NC}"
 
+    if platform_channel_claude; then
+        channel_install_plugin
+        return $?
+    fi
     # Remember old version directories before clearing cache.
     # After install, we create lightweight "shim" dirs for old versions that
     # forward hook-wrapper.sh to the currently installed version.
@@ -1475,11 +1626,33 @@ fetch_bootstrap_commit_file() {
 resolve_bootstrap_release() {
     BOOTSTRAP_TAG="${BOOTSTRAP_RELEASE_TAG:-}"
     if [ -z "$BOOTSTRAP_TAG" ]; then
-        _BOOTSTRAP_TMP=$(mktemp "${TMPDIR:-/tmp}/bootstrap-release-XXXXXX") || return 1
-        fetch_bootstrap_file "${BOOTSTRAP_LATEST_RELEASE_API_URL:-https://api.github.com/repos/${REPO}/releases/latest}" "$_BOOTSTRAP_TMP" || return 1
-        BOOTSTRAP_TAG=$(grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' "$_BOOTSTRAP_TMP" | head -1 | sed -E 's/.*"([^"]+)".*/\1/') || return 1
-        rm -f "$_BOOTSTRAP_TMP"
-        _BOOTSTRAP_TMP=""
+        local controller raw platform row os arch
+        _BOOTSTRAP_STAGE=$(mktemp -d "${TMPDIR:-/tmp}/bootstrap-channel-XXXXXX") || return 1
+        controller="${BOOTSTRAP_CONTROLLER_COMMIT:-}"
+        if [ -z "$controller" ]; then
+            fetch_bootstrap_commit_file "https://api.github.com/repos/$REPO/commits/main" "$_BOOTSTRAP_STAGE/controller" || return 1
+            [ "$(wc -c < "$_BOOTSTRAP_STAGE/controller" | tr -d '[:space:]')" = 40 ] || return 1
+            controller=$(cat "$_BOOTSTRAP_STAGE/controller")
+        fi
+        printf '%s\n' "$controller" | grep -Eq '^[0-9a-f]{40}$' || return 1
+        raw="$BOOTSTRAP_RAW_CONTENT_URL/$controller"
+        fetch_bootstrap_file "$raw/bin/release-channel.sh" "$_BOOTSTRAP_STAGE/channel.sh" || return 1
+        fetch_bootstrap_file "$raw/release-channels.tsv" "$_BOOTSTRAP_STAGE/channels.tsv" || return 1
+        source "$_BOOTSTRAP_STAGE/channel.sh"
+        platform=$(release_channel_platform) || return 1
+        IFS=$'\t' read -r os arch <<< "$platform"
+        row=$(release_channel_select "$_BOOTSTRAP_STAGE/channels.tsv" "$os" "$arch") || return 1
+        IFS=$'\t' read -r BOOTSTRAP_RELEASE_TAG BOOTSTRAP_RELEASE_COMMIT BOOTSTRAP_SOURCE_COMMIT BOOTSTRAP_SOURCE_REF <<< "$row"
+        BOOTSTRAP_RELEASE_CHANNEL=1
+        [ "$MARKETPLACE_SOURCE" = "$REPO" ] || {
+            echo 'Custom source retained. Use explicit matching release/source pins for this marketplace.' >&2; return 1;
+        }
+        BOOTSTRAP_TAG="$BOOTSTRAP_RELEASE_TAG"
+        fetch_bootstrap_commit_file "https://api.github.com/repos/$REPO/commits/$BOOTSTRAP_TAG" "$_BOOTSTRAP_STAGE/release" || return 1
+        [ "$(wc -c < "$_BOOTSTRAP_STAGE/release" | tr -d '[:space:]')" = 40 ] &&
+            [ "$(cat "$_BOOTSTRAP_STAGE/release")" = "$BOOTSTRAP_RELEASE_COMMIT" ] || return 1
+        rm -rf "$_BOOTSTRAP_STAGE"
+        _BOOTSTRAP_STAGE=""
     fi
     # Reject prereleases, malformed tags and releases predating setup-codex.
     printf '%s\n' "$BOOTSTRAP_TAG" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || {
@@ -1507,12 +1680,19 @@ resolve_bootstrap_release() {
         }
     fi
 
+    BOOTSTRAP_BUNDLE_COMMIT="${BOOTSTRAP_SOURCE_COMMIT:-$BOOTSTRAP_COMMIT}"
+    if [ -n "$BOOTSTRAP_BUNDLE_COMMIT" ]; then
+        printf '%s\n' "$BOOTSTRAP_BUNDLE_COMMIT" | grep -Eq '^[0-9a-f]{40}$' || return 1
+    fi
     # Keep explicit overrides separate from the default so managed installs
     # can still select their compatible writer.
 }
 
 resolve_bootstrap_commit() {
-    [ -n "$BOOTSTRAP_COMMIT" ] && return 0
+    if [ -n "$BOOTSTRAP_COMMIT" ]; then
+        BOOTSTRAP_BUNDLE_COMMIT="${BOOTSTRAP_SOURCE_COMMIT:-$BOOTSTRAP_COMMIT}"
+        return 0
+    fi
     _BOOTSTRAP_TMP=$(mktemp "${TMPDIR:-/tmp}/bootstrap-commit-XXXXXX") || return 1
     fetch_bootstrap_commit_file "${BOOTSTRAP_COMMIT_API_BASE_URL:-https://api.github.com/repos/${REPO}/commits}/$BOOTSTRAP_TAG" "$_BOOTSTRAP_TMP" || return 1
     [ "$(LC_ALL=C wc -c < "$_BOOTSTRAP_TMP" | tr -d '[:space:]')" = 40 ] &&
@@ -1520,6 +1700,7 @@ resolve_bootstrap_commit() {
         echo "Release tag did not resolve to a commit SHA." >&2; return 1;
     }
     IFS= read -r BOOTSTRAP_COMMIT < "$_BOOTSTRAP_TMP" || [ -n "$BOOTSTRAP_COMMIT" ] || return 1
+    BOOTSTRAP_BUNDLE_COMMIT="${BOOTSTRAP_SOURCE_COMMIT:-$BOOTSTRAP_COMMIT}"
     rm -f "$_BOOTSTRAP_TMP"
     _BOOTSTRAP_TMP=""
 }
@@ -1562,7 +1743,7 @@ stage_config_helper() {
     else
         printf '{"plugins":{}}\n' > "$_CONFIG_STAGE/installed-before.json"
     fi
-    local os arch name base capability
+    local os arch name base capability companion
     os=$(uname -s | tr '[:upper:]' '[:lower:]')
     case "$os" in darwin|linux) ;; mingw*|msys*|cygwin*) os=windows ;; *) return 1 ;; esac
     case "$(uname -m)" in x86_64|amd64) arch=amd64 ;; arm64|aarch64) arch=arm64 ;; *) return 1 ;; esac
@@ -1583,6 +1764,18 @@ stage_config_helper() {
     resolve_bootstrap_commit || return 1
     "$_CONFIG_HELPER" config path --json > "$_CONFIG_STAGE/path.json" || return 1
     fetch_bootstrap_file "$(select_bootstrap_install_script)" "$_CONFIG_STAGE/install.sh" || return 1
+    if [ "${BOOTSTRAP_RELEASE_CHANNEL:-}" = 1 ]; then
+        # Required companions are verified before any marketplace/cache mutation.
+        case "$os" in
+            windows) companion="claude-notifications-windows-$arch-focus.exe" ;;
+            darwin) companion=ClaudeNotifier.app.zip ;;
+            *) companion="" ;;
+        esac
+        if [ -n "$companion" ]; then
+            fetch_bootstrap_file "$base/$companion" "$_CONFIG_STAGE/$companion" || return 1
+            verify_bootstrap_checksum "$_CONFIG_STAGE" "$companion" || return 1
+        fi
+    fi
 }
 
 bootstrap_control_root() {
@@ -1617,11 +1810,11 @@ select_bootstrap_install_script() {
         printf '%s\n' "$INSTALL_SCRIPT_URL"
         return 0
     fi
-    if bootstrap_has_managed_ledger; then
+    if [ "${BOOTSTRAP_RELEASE_CHANNEL:-}" != 1 ] && bootstrap_has_managed_ledger; then
         printf '%s\n' "$MANAGED_INSTALL_SCRIPT_URL"
         return 0
     fi
-    printf '%s\n' "${BOOTSTRAP_RAW_BASE_URL:-$BOOTSTRAP_RAW_CONTENT_URL}/${BOOTSTRAP_COMMIT}/bin/install.sh"
+    printf '%s\n' "${BOOTSTRAP_RAW_BASE_URL:-$BOOTSTRAP_RAW_CONTENT_URL}/${BOOTSTRAP_BUNDLE_COMMIT}/bin/install.sh"
 }
 
 # Released CLIs before agent-notify pairing reject unknown setup-codex flags and
@@ -1704,7 +1897,7 @@ install_codex() {
     _BOOTSTRAP_STAGE=$(cd -P "$_BOOTSTRAP_STAGE" && pwd -P) || return 1
     local bundle="$_BOOTSTRAP_STAGE/bundle"
     mkdir "$bundle" || return 1
-    fetch_bootstrap_file "$source_base/$BOOTSTRAP_COMMIT.tar.gz" "$_BOOTSTRAP_STAGE/source.tar.gz" || return 1
+    fetch_bootstrap_file "$source_base/$BOOTSTRAP_BUNDLE_COMMIT.tar.gz" "$_BOOTSTRAP_STAGE/source.tar.gz" || return 1
     tar -xzf "$_BOOTSTRAP_STAGE/source.tar.gz" --strip-components=1 -C "$bundle" || return 1
     [ "$(get_manifest_version "$bundle/.claude-plugin/plugin.json")" = "$version" ] || {
         echo "Source bundle must match Codex-capable release $tag (minimum v1.42.0)." >&2; return 1;
@@ -1747,6 +1940,11 @@ install_codex() {
             CN_PRODUCT=codex "$binary" setup-codex --plugin-root "$bundle" "$@" </dev/null
         fi
     }
+    if [ "${BOOTSTRAP_RELEASE_CHANNEL:-}" = 1 ]; then
+        local installed_version
+        installed_version=$(get_manifest_version "${setup_codex_home:-$DEFAULT_CODEX_HOME}/claude-notifications-go/.claude-plugin/plugin.json")
+        [ -z "$installed_version" ] || channel_refuse_downgrade "$installed_version" "$BOOTSTRAP_TAG" || return 1
+    fi
     run_codex_setup --dry-run || return 1
     config_preflight || return 1
     run_codex_setup || return $?
@@ -1790,6 +1988,11 @@ install_claude() {
     install_plugin || return 1
     find_plugin_root || return 1
     download_binary || return 1
+    if platform_channel_claude; then
+        channel_marketplace_add "$BOOTSTRAP_SOURCE_REF" || {
+            echo 'Installed snapshot works, but channel tracking could not be enabled. Rerun setup.' >&2; return 1;
+        }
+    fi
     setup_iterm2_venv || return 1
     CONFIGURE_BINARY=$(installed_notification_binary "$PLUGIN_ROOT") || return 1
     if [ "$PRODUCT" = both ]; then
@@ -2215,6 +2418,8 @@ main() {
     resolve_bootstrap_release 3>&- || return 1
     run_setup_stage "Preparing verified installer" stage_config_helper 3>&- >&2 || { echo "Cannot stage verified config helper; existing runtime retained." >&2; return 1; }
     export BOOTSTRAP_RELEASE_TAG="$BOOTSTRAP_TAG" BOOTSTRAP_RELEASE_COMMIT="$BOOTSTRAP_COMMIT"
+    export BOOTSTRAP_SOURCE_COMMIT="$BOOTSTRAP_BUNDLE_COMMIT" BOOTSTRAP_SOURCE_REF="${BOOTSTRAP_SOURCE_REF:-}"
+    export BOOTSTRAP_RELEASE_CHANNEL="${BOOTSTRAP_RELEASE_CHANNEL:-}"
     if [ "$_INTERACTIVE_INTENT" = true ] || [[ "$original_product" = bundle:* ]] || [ "$original_product" = gemini ]; then
         selector_collect capabilities || return $?
         selector_exact 'setup-products-v1 claude codex opencode gemini' capabilities || return 1

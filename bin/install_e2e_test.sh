@@ -2152,8 +2152,8 @@ test_mock_wrong_payload_recovers_after_retry() {
     cleanup_test_dir
 }
 
-test_mock_pin_latest_to_exact_tag() {
-    echo -e "\n${CYAN}▶ test_mock_pin_latest_to_exact_tag${NC}"
+test_mock_pin_bundle_to_exact_tag() {
+    echo -e "\n${CYAN}▶ test_mock_pin_bundle_to_exact_tag${NC}"
 
     if ! command -v python3 &>/dev/null; then
         skip_test "Pin latest release" "python3 not available"
@@ -2161,11 +2161,14 @@ test_mock_pin_latest_to_exact_tag() {
     fi
 
     setup_test_dir
-    export MOCK_LATEST_TAG="v-test.1"
+    export MOCK_LATEST_TAG="v0.0.1"
+    local bundle_tag=v1.47.1 target="$TEST_DIR/bundle/bin"
+    mkdir -p "$target" "$TEST_DIR/bundle/.claude-plugin"
+    printf '{"version":"1.47.1"}\n' > "$TEST_DIR/bundle/.claude-plugin/plugin.json"
     start_mock_server $MOCK_PORT || { unset MOCK_LATEST_TAG; skip_test "Pin latest release" "mock server failed"; return; }
 
     local binary_name=$(get_binary_name)
-    local pinned_dir="$FIXTURES_DIR/download/$MOCK_LATEST_TAG"
+    local pinned_dir="$FIXTURES_DIR/download/$bundle_tag"
     mkdir -p "$pinned_dir"
     cp "$FIXTURES_DIR/mock_binary" "$pinned_dir/$binary_name"
 
@@ -2183,16 +2186,16 @@ test_mock_pin_latest_to_exact_tag() {
     output=$(unset RELEASE_URL CHECKSUMS_URL MODERN_NOTIFIER_URL; SKIP_CONNECTIVITY_CHECK=true \
              RELEASES_BASE_URL="http://localhost:$MOCK_PORT" \
              LATEST_RELEASE_API_URL="http://localhost:$MOCK_PORT/api/latest" \
-             INSTALL_TARGET_DIR="$TEST_DIR" \
+             INSTALL_TARGET_DIR="$target" \
              run_with_timeout 60 bash "$INSTALL_SCRIPT" 2>&1)
     exit_code=$?
     set -e
 
-    assert_contains "$output" "Release:.*$MOCK_LATEST_TAG" "Installer resolves latest to a concrete tag"
-    assert_contains "$output" "From: http://localhost:$MOCK_PORT/download/$MOCK_LATEST_TAG/$binary_name" "Pinned download URL is used"
+    assert_contains "$output" "Release:.*$bundle_tag" "Installer pins its bundle version despite an older global Latest"
+    assert_contains "$output" "From: http://localhost:$MOCK_PORT/download/$bundle_tag/$binary_name" "Pinned download URL is used"
     assert_exit_code 0 $exit_code "Install succeeds with pinned release tag"
-    assert_file_exists "$TEST_DIR/$binary_name" "Pinned release binary downloaded"
-    assert_desktop_runtime "$TEST_DIR"
+    assert_file_exists "$target/$binary_name" "Pinned release binary downloaded"
+    assert_desktop_runtime "$target"
 
     rm -rf "$FIXTURES_DIR/download"
     unset MOCK_LATEST_TAG
@@ -3034,7 +3037,7 @@ main() {
     test_mock_checksum_mismatch
     test_mock_partial_download_reports_transport_error
     test_mock_wrong_payload_recovers_after_retry
-    test_mock_pin_latest_to_exact_tag
+    test_mock_pin_bundle_to_exact_tag
     test_mock_zip_corrupted
 
     if [ "$RUN_MOCK_ONLY" != true ]; then

@@ -1,0 +1,59 @@
+# Platform release channels
+
+The public installer reads `release-channels.tsv` from one immutable controller
+commit. Each row binds an OS/architecture to a stable version tag, the tag's
+release commit, an immutable source commit, and its platform branch.
+
+| Platform | Qualified version | Source branch |
+| --- | --- | --- |
+| Linux amd64 / arm64, Windows amd64 | 1.47.1 | `release/platform-linux-windows` |
+| macOS amd64 / arm64 | 1.46.1 | `release/platform-macos` |
+
+GitHub Latest stays 1.46.1 for legacy installers. A platform channel can select
+an explicitly qualified partial release even when GitHub labels it Pre-release.
+No scan for the newest tag or fallback to Latest is used. Invalid/missing rows,
+unsupported architectures and failed downloads stop selection before installation.
+
+## Existing installations
+
+Rerun the public install command once to adopt a channel. An ordinary Claude
+marketplace checkout on `main` is moved using Claude's native settings writer;
+custom repositories, branches and detached/pinned checkouts are retained.
+The initial installation uses the source SHA. Successful setup then records the
+platform branch for subsequent Claude plugin updates. Standalone Codex copies a
+complete bundle; update it by rerunning setup. No new background updater is added.
+
+Same-version source refresh temporarily retains the old cache in a private
+`.channel-backup.*` directory. Restart Claude after migration; hooks from running
+sessions can encounter the short cache replacement interval. A failed refresh
+restores the old same-version cache and retains the incomplete copy for diagnosis.
+Saved settings, plugin data and disabled state are not removed. Setup never uses
+marketplace removal or plugin uninstall for channel migration.
+
+Explicit release/installer URL overrides keep their operator semantics. A local
+bundle's repair installer downloads its own manifest version, so an older macOS
+release cannot silently downgrade a newer Linux/Windows bundle. A channel older
+than an installed Claude version is rejected.
+
+## Promotion order
+
+1. Qualify and publish native assets according to `RELEASE.md`; leave release tags
+   immutable. Skipped platforms retain their previously qualified release.
+2. Prepare source branches from their respective release commits. Patch only
+   distribution scripts as necessary, preserving all source/native manifest and
+   `ConsumerVersion` values. Review the exact commits and test installation in new
+   isolated TEST homes on the affected platforms. Verify release checksums and
+   source provenance; never combine main's older manifest with newer binaries.
+3. Publish the qualified platform branch heads. Source commits in the index must
+   refer to those reviewed immutable commits, not moving branch names.
+4. Update the complete index in one reviewed commit. Run the parser, loader,
+   installer and cache-recovery tests. Deploy the loader pinned to that controller
+   commit. Publish source branches before activating the index.
+5. Future source promotions should change the plugin version with the native
+   release, because Claude's ordinary updater reuses same-version caches. Use
+   bootstrap again when adopting a distribution-only change at the same version.
+
+Branches may advance after index selection: installation still uses the indexed
+SHA, while subsequent Claude updates follow only qualified branch promotions.
+Rollback the index/branch to a qualified snapshot; do not rewrite release tags or
+silently downgrade users with a newer installed version.

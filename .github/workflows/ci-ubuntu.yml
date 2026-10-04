@@ -111,6 +111,11 @@ jobs:
       - name: Test one-line setup loader (isolated, offline)
         run: bash bin/setup_test.sh
 
+      - name: Test platform channels and cache recovery (isolated)
+        run: |
+          bash bin/release_channel_test.sh
+          bash bin/release_channel_native_test.sh
+
       - name: Test python/node installer runtime fallback (isolated, offline)
         run: bash bin/installer_runtime_fallback_e2e_test.sh
 

@@ -162,6 +162,10 @@ jobs:
         run: bash bin/setup_test.sh
         shell: bash
 
+      - name: Test platform channels and cache recovery (isolated)
+        shell: bash
+        run: bash bin/release_channel_test.sh
+
       - name: Test python/node installer runtime fallback (isolated, offline)
         run: bash bin/installer_runtime_fallback_e2e_test.sh
         shell: bash
