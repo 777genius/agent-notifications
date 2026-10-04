@@ -38,6 +38,12 @@ export function createNativeV1(client, directory, fail) {
   }
   async function finalize(event, handoff) {
     if (!handoff.isCurrent() || handoff.signal.aborted || users.get(event.sessionID)?.id !== event.turnID) return false;
+    // The pinned strict SDK has already finalized this root/current message.
+    // Retain the live native user/control binding without a second HTTP snapshot.
+    if (event.kind === 'turn_idle_verified') return event.version === 1 && event.rootSession === true &&
+      event.requestID === undefined && id(event.sessionID) && id(event.turnID) && id(event.messageID) &&
+      event.provenance?.generation === 'v1' && event.provenance.timeBasis === 'assistant_completed' &&
+      id(event.provenance.observationID) && stamp(event.provenance.nativeTime);
     const request = event.requestID ? requests.get(event.requestID) : undefined;
     if (event.requestID && (!request || request.sessionID !== event.sessionID || request.turnID !== event.turnID ||
         !id(request.messageID) || !id(request.callID))) return false;
@@ -56,8 +62,6 @@ export function createNativeV1(client, directory, fail) {
     const lastUser = messages.findLast((row) => row.role === 'user');
     if (lastUser && lastUser.id !== event.turnID || !answer || answer.parentID !== event.turnID || answer.path?.cwd !== directory ||
         messages.at(-1) !== answer || !stamp(answer.time?.created)) return false;
-    if (event.kind === 'turn_idle_verified') return answer.id === event.messageID && answer.finish === 'stop' &&
-      answer.time?.completed === event.provenance.nativeTime && answer.error == null;
     if (event.kind === 'terminal_error') return answer.id === event.provenance.nativeMessageID &&
       answer.time.created === event.provenance.nativeTime && stamp(answer.time?.completed) && answer.error &&
       !/abort|cancel/i.test(answer.error.name ?? '');

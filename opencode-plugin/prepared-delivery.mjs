@@ -130,10 +130,13 @@ export function createPreparedDelivery({ registry, origin, policy, isOwned, onIn
   async function beforeEmit(event, handoff) {
     let diagnosticStage = 'prep.catch.original';
     try {
-      // Optional display awaits precede every original clock/current check.
+      const completion = policy.generation === 'v1' && event.version === 1 &&
+        event.kind === 'turn_idle_verified' && event.provenance?.generation === 'v1' &&
+        event.provenance.timeBasis === 'assistant_completed';
+      // Completion uses neutral display rather than another optional native GET.
       // Keep the SDK fact itself as the WeakMap key and native authority.
       let display;
-      if (enrich) { try { display = (await enrich(event))?.display; } catch {} }
+      if (!completion && enrich) { try { display = (await enrich(event))?.display; } catch {} }
       const tick = BigInt(handoff.ingressMonotonicMs) * 1000000n;
       const original = originals.get(tick);
       if (!original) return refuse('prep.original');
@@ -142,16 +145,25 @@ export function createPreparedDelivery({ registry, origin, policy, isOwned, onIn
       diagnosticStage = 'prep.catch.sample';
       const before = sample(), remaining = handoff.metadataDeadline - clock.now();
       if (remaining <= 0) return refuse('prep.remaining');
-      diagnosticStage = 'prep.catch.helper';
-      const response = await registry.clock({ signal: handoff.signal, isCurrent: () => current(original, handoff),
-        deadline: performance.now() + Math.min(remaining, 2000) });
-      if (!current(original, handoff)) return refuse('prep.current_after_helper');
-      if (response.status !== 'ok') return refuse('prep.helper');
-      diagnosticStage = 'prep.catch.calibration';
-      const after = sample(), calibrationCheck = clockReceipt(response.output);
-      if (!anchorMatches(calibrationCheck, before, after, policy) ||
-          !overlaps(original.sample, after, policy.comparisonBoundNS) || after.loNS - before.loNS > 2000000000n) bad();
-      // Keep the genuine PRE-ACTIVATION anchor; the later helper is only a check.
+      let after;
+      if (completion) {
+        // Activation supplies the serialized native/source calibration. Fresh
+        // samples still enforce its offset, ownership and monotonic bounds.
+        after = sample();
+        if (!current(original, handoff)) return refuse('prep.current');
+      } else {
+        diagnosticStage = 'prep.catch.helper';
+        const response = await registry.clock({ signal: handoff.signal, isCurrent: () => current(original, handoff),
+          deadline: performance.now() + Math.min(remaining, 2000) });
+        if (!current(original, handoff)) return refuse('prep.current_after_helper');
+        if (response.status !== 'ok') return refuse('prep.helper');
+        diagnosticStage = 'prep.catch.calibration';
+        after = sample();
+        const calibrationCheck = clockReceipt(response.output);
+        if (!anchorMatches(calibrationCheck, before, after, policy)) bad();
+      }
+      if (!overlaps(original.sample, after, policy.comparisonBoundNS) || after.loNS - before.loNS > 2000000000n) bad();
+      // Keep the genuine PRE-ACTIVATION anchor; no completion restamping.
       diagnosticStage = 'prep.catch.birth';
       const birthNS = BigInt(event.provenance.nativeTime) * 1000000n;
       if (birthNS < original.sample.wallNS - 60000000000n || birthNS > original.sample.wallNS + 2000000000n ||

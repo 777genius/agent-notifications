@@ -7,13 +7,13 @@ import { createNativeV2, createRPCCheckpoint } from './native-v2.mjs';
 const pause=()=>new Promise(setImmediate);
 async function until(check){const end=Date.now()+2500;while(!check()){assert.ok(Date.now()<end,'observable phase did not arrive');await pause();}}
 const directory='/TEST-native-observer';
-function v1({parentID, beforeEmit, getDirectory=directory}={}){
+function v1({parentID, beforeEmit, onLookup, getDirectory=directory}={}){
  const facts=[];let rows=[],observer;
  let view;
- const client={session:{get:async({path})=>({data:{id:path.id,parentID,directory:getDirectory}}),
-  messages:async()=>({data:structuredClone(rows)})}};
+ const client={session:{get:async({path})=>{onLookup?.('get');return {data:{id:path.id,parentID,directory:getDirectory}};},
+  messages:async()=>{onLookup?.('messages');return {data:structuredClone(rows)};}}};
  observer=createObserver({client,location:directory,runtimeEligibility:()=> 'supported',callbackAuthority:'qualified_native_sync',beforeEmit:async(event,handoff)=>{
-   if(beforeEmit && await beforeEmit(event,handoff)!==true)return false;return view.finalize(event,handoff);},
+   if(beforeEmit && await beforeEmit(event,handoff,view)!==true)return false;return view.finalize(event,handoff);},
   emit:(fact)=>facts.push(fact)});
  view=createNativeV1(client,directory,()=>observer.dispose());
  const observe=(type,properties)=>{const event={type,properties};view.ingest(event);return observer.observe(event);};
@@ -518,4 +518,46 @@ test('native V2 resolved question and permission stay silent after live-only tra
    for(let i=0;i<30;i++)await pause();assert.deepEqual(h.facts,[],kind);
   }finally{release?.(false);await h.stop();}
  }
+});
+
+// Red if native completion repeats HTTP after the actual strict SDK snapshot,
+// or its own binding admits a substituted root/turn/provenance or expired handoff.
+test('native V1 SDK-finalized completion keeps live bindings without later HTTP',async()=>{
+ let finalized=false,laterReads=0;
+ const h=v1({onLookup:()=>{if(finalized){laterReads++;throw Error('PRIVATE_CLOSED_CLIENT');}},
+  beforeEmit:async(event,handoff,view)=>{
+   finalized=true;
+   for(const changed of [{rootSession:false},{turnID:'foreign'},
+    {provenance:{...event.provenance,generation:'v2'}},
+    {provenance:{...event.provenance,nativeTime:0}}])
+    assert.equal(await view.finalize({...event,...changed},handoff),false);
+   assert.equal(await view.finalize(event,{...handoff,isCurrent:()=>false}),false);
+   const controller=new AbortController();controller.abort();
+   assert.equal(await view.finalize(event,{...handoff,signal:controller.signal}),false);
+   return true;
+  }});
+ try{
+  await h.birth();const answer=h.assistant('a','u',{finish:'stop',time:{created:1100,completed:1200}});
+  h.set([h.user(),answer]);await h.observe('message.updated',{info:answer});
+  await h.observe('session.idle',{sessionID:'s'});
+  assert.equal(h.facts.length,1);assert.equal(h.facts[0].kind,'turn_idle_verified');
+  assert.equal(laterReads,0);
+ }finally{h.dispose();}
+});
+// Red if completion simplification also removes attention/error's later snapshot.
+for(const kind of ['question_asked','terminal_error'])test(`native V1 ${kind} retains later get/messages`,async()=>{
+ let finalized=false;const later=[];
+ const h=v1({onLookup:name=>{if(finalized)later.push(name);},beforeEmit:()=>{finalized=true;return true;}});
+ try{
+  await h.birth();
+  if(kind==='question_asked')await h.ask();
+  else{
+   const answer=h.assistant('a','u',{time:{created:1100,completed:1200},error:{name:'APIError'}});
+   h.set([h.user(),answer]);await h.observe('message.updated',{info:answer});
+   await h.observe('session.error',{sessionID:'s',error:answer.error});
+   await h.observe('session.idle',{sessionID:'s'});
+  }
+  assert.equal(h.facts.length,1);assert.equal(h.facts[0].kind,kind);
+  assert.deepEqual(later,['get','messages']);
+ }finally{h.dispose();}
 });

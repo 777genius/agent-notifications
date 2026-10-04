@@ -19,7 +19,7 @@ else {let input='';process.stdin.on('data',b=>input+=b);process.stdin.on('end',(
  if(input)fs.writeFileSync('event-frame',input);setTimeout(()=>process.stdout.write('{"status":"suppressed"}'),200);
 });}
 `;
-async function setup(run,generation='v2',onDiagnostic){
+async function setup(run,generation='v2',onDiagnostic,enrich){
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'TEST-prepared-'));
  const executable=path.join(root,'fixture.mjs'),children=[];
  const observer=({process:child})=>{const r={child,closed:false};children.push(r);child.once('close',()=>r.closed=true);};
@@ -33,7 +33,7 @@ async function setup(run,generation='v2',onDiagnostic){
  };
  const sourceFactory=()=>({sample:record,dispose(){}});
  let invalidations=0, invalidationCallback;
- const delivery=createPreparedDelivery({registry,origin:'a'.repeat(64),policy:{...policy,generation},sourceFactory,isOwned:()=>active,
+ const delivery=createPreparedDelivery({registry,origin:'a'.repeat(64),policy:{...policy,generation},sourceFactory,enrich,isOwned:()=>active,
   onDiagnostic:onDiagnostic ? reason=>onDiagnostic(reason,delivery,invalidations) : undefined,
   onInvalidate:()=>{invalidations++;invalidationCallback?.();}});
  const writeClock=()=>fs.writeFile(path.join(root,'clock.json'),JSON.stringify({protocol:1,boot,clockDomain:domain,clockKind:'linux-boottime',monoLoNs:String(tick+1000000n),monoHiNs:String(tick+2000000n),wallUnixNs:String(record().wallNS),uncertaintyNs:'4000000'}));
@@ -153,4 +153,54 @@ test('preparation exception retires authority before a throwing diagnostic callb
  assert.equal(observed[0].reason,'prep.catch.birth');
  assert.equal(observed[0].ready,false);
  assert.ok(observed[0].invalidations>0);
+});
+
+// Red if completion skips the genuine activation bracket as well as the later helper.
+test('V1 completion still requires the original bounded activation calibration',async()=>{
+ await setup(async({delivery,children,postGap,gapObserver})=>{
+  postGap(300000000n);dc.subscribe('child_process',gapObserver);
+  try{assert.equal(await delivery.activate(),false);}finally{dc.unsubscribe('child_process',gapObserver);}
+  assert.equal(delivery.ready(),false);assert.equal(children.length,1);assert.equal(children[0].closed,true);
+ },'v1');
+});
+// Red if completion adds optional metadata/helper waits or restamps its anchor.
+// This uses the existing synthetic source and actual owned TEST child, not native qualification.
+test('V1 completion keeps original provenance and neutral display without a later helper',async()=>{
+ let enrichment=0;
+ await setup(async({delivery,advance,fact,handoff,children,root})=>{
+  assert.equal(await delivery.activate(),true);advance(60000000n);
+  const seed=fact(),event=Object.freeze({...seed,kind:'turn_idle_verified',turnID:'user',messageID:'assistant',requestID:undefined,
+   provenance:Object.freeze({...seed.provenance,generation:'v1',timeBasis:'assistant_completed',nativeEventID:undefined})});
+  const h=handoff(),before=children.length;
+  assert.equal(await delivery.beforeEmit(event,h),true);assert.equal(children.length,before);assert.equal(enrichment,0);
+  await delivery.emit(event,h);assert.equal(children.length,before+1);assert.equal(children.at(-1).closed,true);
+  const frame=parseJSON(await fs.readFile(path.join(root,'event-frame')));
+  assert.equal(frame.display,undefined);assert.equal(frame.provenance.anchor.monoLoNS,'1000001000000');
+  assert.equal(frame.provenance.calibration.nativeLoNS,'1000001000000');
+  assert.equal(frame.provenance.calibration.sourceLoNS,'1000000000000');
+  assert.equal(frame.provenance.ingressTickNS,'1000060000000');
+ },'v1',undefined,async()=>{enrichment++;throw Error('PRIVATE_METADATA');});
+});
+// Red if the shorter completion path bypasses live source/control/deadline or offset checks.
+for(const mode of ['source','abort','offset','deadline'])test(`V1 completion ${mode} refuses without IPC`,async()=>{
+ await setup(async({delivery,advance,fact,handoff,children,root,revoke,jump})=>{
+  assert.equal(await delivery.activate(),true);advance(60000000n);
+  const seed=fact(),event=Object.freeze({...seed,kind:'turn_idle_verified',turnID:'user',messageID:'assistant',requestID:undefined,
+   provenance:Object.freeze({...seed.provenance,generation:'v1',timeBasis:'assistant_completed',nativeEventID:undefined})});
+  const h=handoff(),before=children.length;
+  if(mode==='source')revoke();if(mode==='abort')h.controller.abort();if(mode==='offset')jump();if(mode==='deadline')advance(2100000000n);
+  assert.equal(await delivery.beforeEmit(event,h),false);await delivery.emit(event,h);
+  assert.equal(children.length,before);await assert.rejects(fs.access(path.join(root,'event-frame')));
+ },'v1');
+});
+// Red if the V1-only optimization removes attention/error's existing helper calibration.
+for(const kind of ['question_asked','terminal_error'])test(`V1 ${kind} still closes the later helper`,async()=>{
+ await setup(async({delivery,advance,writeClock,fact,handoff,children})=>{
+  assert.equal(await delivery.activate(),true);advance(60000000n);await writeClock();
+  const seed=fact(),event=Object.freeze({...seed,kind,turnID:'user',requestID:kind==='question_asked'?'request':undefined,
+   provenance:Object.freeze({...seed.provenance,generation:'v1',timeBasis:'assistant_created_lower_bound',nativeEventID:undefined,
+    ...(kind==='terminal_error'?{nativeMessageID:'assistant'}:{})})});
+  const h=handoff(),before=children.length;
+  assert.equal(await delivery.beforeEmit(event,h),true);assert.equal(children.length,before+1);assert.equal(children.at(-1).closed,true);
+ },'v1');
 });
