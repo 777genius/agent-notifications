@@ -3,6 +3,7 @@
 package observation
 
 import (
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -54,6 +55,10 @@ func readCache(root string) ([]byte, error) {
 }
 
 func writeCache(root string, data []byte) error {
+	return writeCacheContext(context.Background(), root, data)
+}
+
+func writeCacheContext(ctx context.Context, root string, data []byte) error {
 	path := filepath.Join(root, ".observations-"+uuid.NewString())
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
@@ -74,6 +79,9 @@ func writeCache(root string, data []byte) error {
 	if closeErr != nil {
 		return closeErr
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return os.Rename(path, filepath.Join(root, "observations.json"))
 }
 
@@ -85,6 +93,8 @@ func openCache(root string) (*pathCache, error) {
 	}
 	return &pathCache{root: root}, nil
 }
-func (c *pathCache) Read() ([]byte, error)   { return readCache(c.root) }
-func (c *pathCache) Write(data []byte) error { return writeCache(c.root, data) }
-func (c *pathCache) Close()                  {}
+func (c *pathCache) Read() ([]byte, error) { return readCache(c.root) }
+func (c *pathCache) Write(ctx context.Context, data []byte) error {
+	return writeCacheContext(ctx, c.root, data)
+}
+func (c *pathCache) Close() {}
