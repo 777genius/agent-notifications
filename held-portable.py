@@ -206,7 +206,9 @@ class Observation:
         prefix = result.stderr[:65536]
         self.private_root_diagnostic = {'stage': 'private_root_DACL_pinned_helper', 'exitCode': result.returncode,
                                         'stderrPrefixBytes': len(prefix), 'stderrPrefixSHA256': hashlib.sha256(prefix).hexdigest(),
-                                        'stderrTruncated': len(result.stderr) > len(prefix)}
+                                        'stderrTruncated': len(result.stderr) > len(prefix),
+                                        'helperSourceSHA256': source_hash, 'helperBinarySHA256': helper_hash,
+                                        'helperRecordSHA256': hashlib.sha256(record_raw).hexdigest()}
         self.require(result.returncode == 0, 'windows_private_dacl_failed')
 
     def configure_loader(self, config, plugin, root, v2):

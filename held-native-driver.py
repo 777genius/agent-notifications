@@ -90,12 +90,26 @@ def write_json(path, obj):
     path.chmod(0o600)
 
 
-def run(args, *, cwd, env, timeout=30, input=""):
-    result = subprocess.run(args, cwd=cwd, env=env, input=input, capture_output=True,
-                            text=True, encoding="utf-8", errors="replace", timeout=timeout)
+PREBUSINESS_COMMAND_STAGES = frozenset((
+    'candidate_build_info', 'checkout_head', 'checkout_tracked_status',
+    'checkout_untracked_status', 'parent_manifest_tracking', 'stock_host_version',
+    'initial_installer_install'))
+
+
+def run(args, *, cwd, env, timeout=30, input="", diagnostic_stage=None):
+    require(diagnostic_stage is None or diagnostic_stage in PREBUSINESS_COMMAND_STAGES,
+            'invalid_command_diagnostic_stage')
+    result = subprocess.run(args, cwd=cwd, env=env, input=input.encode('utf-8'),
+                            capture_output=True, timeout=timeout)
+    if result.returncode != 0 and diagnostic_stage is not None and PORTABLE is not None:
+        prefix = result.stderr[:65536]
+        PORTABLE.command_diagnostic = {'stage': diagnostic_stage, 'exitCode': result.returncode,
+                                      'stderrPrefixBytes': len(prefix), 'stderrPrefixSHA256': hashlib.sha256(prefix).hexdigest(),
+                                      'stderrTruncated': len(result.stderr) > len(prefix)}
     require(result.returncode == 0, "candidate_command_failed")
-    # Output stays private. Never copy raw native stderr/password/policy into public reports.
-    return result.stdout
+    # Match the former text=True UTF-8 replacement/universal-newline result exactly.
+    # Raw native stderr/password/policy never enters public reports.
+    return result.stdout.decode('utf-8', errors='replace').replace('\r\n', '\n').replace('\r', '\n')
 
 
 def port():
@@ -432,7 +446,7 @@ def readiness(proc, base, project, version, headers):
     raise Unqualified('native_readiness_budget_exhausted')
 
 
-def setup(candidate, action, root, env, args, native_app=None):
+def setup(candidate, action, root, env, args, native_app=None, *, diagnostic_stage=None):
     common = ['--control-root', str(root / 'control'), '--runtime-root', str(root / 'runtime'),
               '--opencode-config-dir', env['OPENCODE_CONFIG_DIR'], '--home', env['HOME'],
               '--xdg-config-home', env['XDG_CONFIG_HOME']]
@@ -442,7 +456,7 @@ def setup(candidate, action, root, env, args, native_app=None):
         if args.os == 'darwin':
             require(native_app is not None, 'verified_native_app_required')
             extra += ['--native-app', str(native_app)]
-    run([str(candidate), 'setup-opencode', action, *common, *extra], cwd=root, env=env)
+    run([str(candidate), 'setup-opencode', action, *common, *extra], cwd=root, env=env, diagnostic_stage=diagnostic_stage)
 
 
 def registration(root, plugin, managed, asset):
@@ -1230,18 +1244,18 @@ def qualify(args, report):
     (root / 'trace-key').write_bytes(key)
     report['privateEvidenceRoot'] = root.name
     try:
-        build = run(['go', 'version', '-m', str(candidate)], cwd=root, env=env)
-        checkout = run(['git', 'rev-parse', 'HEAD'], cwd=REPO, env=env).strip()
-        dirty = run(['git', 'status', '--porcelain', '--untracked-files=no'], cwd=REPO, env=env)
+        build = run(['go', 'version', '-m', str(candidate)], cwd=root, env=env, diagnostic_stage='candidate_build_info')
+        checkout = run(['git', 'rev-parse', 'HEAD'], cwd=REPO, env=env, diagnostic_stage='checkout_head').strip()
+        dirty = run(['git', 'status', '--porcelain', '--untracked-files=no'], cwd=REPO, env=env, diagnostic_stage='checkout_tracked_status')
         dirty += run(['git', 'ls-files', '--others', '--exclude-standard', '--', '.',
-                      ':(exclude).task-tools/artifacts'], cwd=REPO, env=env)
-        tracked = run(['git', 'ls-files', '--', str(args.manifest.resolve().relative_to(REPO))], cwd=REPO, env=env)
+                      ':(exclude).task-tools/artifacts'], cwd=REPO, env=env, diagnostic_stage='checkout_untracked_status')
+        tracked = run(['git', 'ls-files', '--', str(args.manifest.resolve().relative_to(REPO))], cwd=REPO, env=env, diagnostic_stage='parent_manifest_tracking')
         require(not tracked, 'external_parent_manifest_required')
         verify_source_binding(m, checkout, build, dirty)
         host = root / ('opencode.exe' if args.os == 'windows' else 'opencode')
         extract_opencode(archive, host, args.os)
         require(digest(host) == c['executableSHA256'], 'host_executable_hash_mismatch')
-        version_out = run([str(host), '--version'], cwd=root, env=env).strip()
+        version_out = run([str(host), '--version'], cwd=root, env=env, diagnostic_stage='stock_host_version').strip()
         require(version_out in (args.version, 'opencode v' + args.version), 'exact_host_version_required')
         projects = [root / 'project-a', root / 'project-b']
         for project in projects:
@@ -1256,7 +1270,7 @@ def qualify(args, report):
         foreign_files = {p: digest(p) for p in (foreign, skill)}
         if PORTABLE is not None: PORTABLE.root = root
         app = native_app(c['nativeApp'])
-        setup(candidate, 'install', root, env, args, app)
+        setup(candidate, 'install', root, env, args, app, diagnostic_stage='initial_installer_install')
         plugin = config_dir / 'plugins/agent-notifications.js'
         managed = root / 'runtime' / ('claude-notifications-' + args.os + '-' + args.arch + ('.exe' if args.os == 'windows' else ''))
         require(digest(managed) == digest(candidate), 'managed_image_mismatch')
@@ -1434,6 +1448,8 @@ def main():
         if PORTABLE is not None:
             reason = PORTABLE.failure_code(e)
             if reason is not None: report['failureReason'] = reason
+            if hasattr(PORTABLE, 'command_diagnostic'):
+                report['prebusinessCommandFailure'] = dict(PORTABLE.command_diagnostic)
             if hasattr(PORTABLE, 'private_root_diagnostic'):
                 report['privateRootSetup'] = dict(PORTABLE.private_root_diagnostic)
     finally:
