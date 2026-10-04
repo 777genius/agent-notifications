@@ -25,11 +25,11 @@
       "claude": "Alertes de fin, revue, questions, plans, limites de session et erreurs API. Sons et retour en un clic si pris en charge.",
       "codex": "Alertes de fin et de permissions. Sons et retour en un clic si pris en charge. Vérifiez et autorisez les hooks installés dans /hooks.",
       "opencode": "Alertes silencieuses de fin, questions, permissions et erreurs pour les sessions principales. Aucun son ni retour en un clic.",
-      "gemini": "Candidat Gemini CLI : alertes silencieuses de tour terminé et de permission d’outil. Un tour terminé ne signifie ni réussite ni réponse finale. Sans son, focus au clic, questions, erreurs, plans, revues ni parité pour les agents imbriqués."
+      "gemini": "Gemini CLI (Linux / Windows) : alertes silencieuses de tour terminé et de permission d’outil. Un tour terminé ne signifie ni réussite ni réponse finale. Sans son, focus au clic, questions, erreurs, plans, revues ni parité pour les agents imbriqués."
     },
     "gemini": {
-      "version": "Linux / Windows: 1.47.1 (Gemini CLI 0.62.0). macOS: 1.46.1 (Claude, Codex CLI, OpenCode).",
-      "guide": "Configuration et limites du candidat Gemini",
+      "version": "Linux / Windows: 1.47.1 (Gemini CLI 0.62.0). macOS: 1.46.1 (Claude, Codex CLI, OpenCode; Gemini indisponible)",
+      "guide": "Configuration et limites de Gemini",
       "configure": "Consultez le guide Gemini pour le consentement aux canaux et les réglages partagés ; aucun outil MCP ni skill installé. Les alertes intégrées peuvent faire doublon. Choisissez une source bureau ou uniquement les webhooks ; les réglages intégrés restent inchangés."
     },
     "observer": {

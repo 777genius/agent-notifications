@@ -41,11 +41,11 @@
       "claude": "Avisos de finalización, revisión, preguntas, planes, límites de sesión y errores de API. Sonidos y regreso con un clic cuando sean compatibles.",
       "codex": "Avisos de finalización y permisos. Sonidos y regreso con un clic cuando sean compatibles. Revisa y autoriza los hooks instalados en /hooks.",
       "opencode": "Avisos silenciosos de finalización, preguntas, permisos y errores en sesiones principales. Sin sonidos ni regreso con un clic.",
-      "gemini": "Candidato Gemini CLI: avisos silenciosos de turno terminado y permiso de herramientas. Terminar un turno no implica éxito ni respuesta final. Sin sonido, enfoque al pulsar, preguntas, errores, planes, revisiones ni paridad para agentes anidados."
+      "gemini": "Gemini CLI (Linux / Windows): avisos silenciosos de turno terminado y permiso de herramientas. Terminar un turno no implica éxito ni respuesta final. Sin sonido, enfoque al pulsar, preguntas, errores, planes, revisiones ni paridad para agentes anidados."
     },
     "gemini": {
-      "version": "Linux / Windows: 1.47.1 (Gemini CLI 0.62.0). macOS: 1.46.1 (Claude, Codex CLI, OpenCode).",
-      "guide": "Configuración y límites del candidato Gemini",
+      "version": "Linux / Windows: 1.47.1 (Gemini CLI 0.62.0). macOS: 1.46.1 (Claude, Codex CLI, OpenCode; Gemini no disponible)",
+      "guide": "Configuración y límites de Gemini",
       "configure": "Consulta la guía Gemini para consentimiento de canales y ajustes compartidos; no se instala MCP ni skill. Los avisos integrados pueden duplicarse. Elige una fuente de escritorio o solo webhooks; los ajustes integrados no se modifican."
     },
     "observer": {
