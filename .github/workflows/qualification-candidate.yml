@@ -1,4 +1,4 @@
-name: TEST portable business final four native assets
+name: TEST portable business final five native assets
 on:
   workflow_dispatch:
     inputs:
@@ -22,6 +22,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - {runner: ubuntu-22.04, os: linux, arch: amd64}
           - {runner: ubuntu-22.04-arm, os: linux, arch: arm64}
           - {runner: macos-15-intel, os: darwin, arch: amd64}
           - {runner: macos-15, os: darwin, arch: arm64}
@@ -59,7 +60,7 @@ jobs:
           ASSET_ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
-          python -B "$RUNNER_TEMP/portable-build-native.py" --source "$GITHUB_WORKSPACE" --head "$FINAL_SOURCE_HEAD" --source-manifest-sha256 "$FINAL_SOURCE_MANIFEST_SHA256" --source-record-count "$FINAL_SOURCE_RECORD_COUNT" --os "$ASSET_OS" --arch "$ASSET_ARCH" --out "$RUNNER_TEMP/TEST-portable-assets-$ASSET_OS-$ASSET_ARCH" --recipe-sha256 05285c13ab24a87c3146f6ea2711ac7be6c51174b44af134a249043cfe8794a9
+          python -B "$RUNNER_TEMP/portable-build-native.py" --source "$GITHUB_WORKSPACE" --head "$FINAL_SOURCE_HEAD" --source-manifest-sha256 "$FINAL_SOURCE_MANIFEST_SHA256" --source-record-count "$FINAL_SOURCE_RECORD_COUNT" --os "$ASSET_OS" --arch "$ASSET_ARCH" --out "$RUNNER_TEMP/TEST-portable-assets-$ASSET_OS-$ASSET_ARCH" --recipe-sha256 70852d45bd5320be0686b7faf0033d6a77390b7142c5fedf5ee2d53898773a60
       - uses: actions/upload-artifact@v7
         if: always()
         with:

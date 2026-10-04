@@ -38,7 +38,7 @@ def main(a):
  src=a.source.resolve();root=a.out.absolute();need(root.name.startswith('TEST-') and not root.exists(),'fresh TEST build')
  need(subprocess.check_output(['git','-C',str(src),'rev-parse','HEAD'],text=True).strip()==a.head and not subprocess.check_output(['git','-C',str(src),'status','--porcelain','--untracked-files=all']),'clean final checkout')
  want={'Linux':'linux','Darwin':'darwin','Windows':'windows'}[platform.system()];arch={'aarch64':'arm64','arm64':'arm64','x86_64':'amd64','AMD64':'amd64'}[platform.machine()]
- need((want,arch)==(a.os,a.arch) and (want,arch) in [('linux','arm64'),('darwin','amd64'),('darwin','arm64'),('windows','amd64')],'actual native cell')
+ need((want,arch)==(a.os,a.arch) and (want,arch) in [('linux','amd64'),('linux','arm64'),('darwin','amd64'),('darwin','arm64'),('windows','amd64')],'actual native cell')
  # Windows eol=crlf attributes override autocrlf=false; canonical assets use a fresh TEST Git clone.
  original_src=src;original_before=inventory(src,a.source_manifest_sha256,a.source_record_count,original_checkout_only=True) if a.os=='windows' else None
  root.mkdir(mode=0o700);logs=root/'logs';logs.mkdir();commands=[]
