@@ -181,6 +181,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org go mod download
           python - <<'PYTOAST'
           import hashlib, os, pathlib, shutil, subprocess, sys
           root = pathlib.Path.cwd().resolve(strict=True)
