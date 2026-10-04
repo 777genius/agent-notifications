@@ -1,9 +1,12 @@
 # OpenCode plugin bundle
 
-This candidate consumes the actual **unpublished 0.3.0** npm pack at
+The Agent Notifications 1.48.0 bundle consumes the actual **unpublished 0.3.0** npm pack at
 `vendor/universal-agent-plugins-opencode-events-0.3.0.tgz`, with the genuine
 npm-generated relative file lock. The published 0.2.0 root API stays in the SDK;
-AN imports the strict `/v1` and `/v2` factories. esbuild remains 0.28.2.
+AN imports the strict `/v1` and `/v2` factories. The built ESM bundle is self-contained;
+separate SDK publication is not a consumer release gate. esbuild remains 0.28.2.
+The reviewed archive SHA-256 is
+`c3d5aaaf6ecc3116b48ab1ae3f0e00b47720f239df9938f0c499d03f2c21a752`.
 
 After the parent provisions Node/npm and bootstraps the locked dependencies,
 `npm run check:candidate` byte-verifies the archive, installed packed files and
@@ -30,8 +33,8 @@ The default export is exactly `{id, server, setup}`. The retained named
 `AgentNotifications(input)` routes through the same memoized V1 startup as
 `default.server(input)`: discovering both exports cannot acquire two registries
 or observers. V2 uses its direct native subscription and public RPC source path.
-These loader shapes describe candidate source; installed delivery still requires
-qualification.
+These loader shapes serve both API generations through one installed plugin.
+Installed delivery remains bounded by exact-source qualification and host lifetime.
 
 The V1 source requires a live observed user/ordinary assistant association and
 fresh root/location metadata. Idle alone, retry, interruption and a manual summary
@@ -41,9 +44,9 @@ V2 binds the original execution-start and terminal envelope identities, validate
 native session context and pending attention, and consumes its final checkpoint on
 the same reader. Queued input fences obsolete completion; HTTP prompt admission
 alone does not establish a settled execution. Fork lineage is distinct from true
-child ancestry. These behaviors have focused source tests, with installed/native
-qualification still pending. Restart the host after install or update to load the
-reviewed candidate; reload support alone is not a delivery qualification.
+child ancestry. These behaviors have focused source tests; release reports bind installed/native
+checks to the released bytes. Restart the host after install or update to load the
+reviewed bundle; reload support alone is not a delivery qualification.
 
 The renderer must replace exactly one quoted token each for executable,
 control root and origin. Origin comes from the existing E1 registration; JS
@@ -51,11 +54,12 @@ never creates or repairs it. One max-four registry holds profile probes at
 weight two and clock/event children at weight one through actual close.
 Missing inner reaping proof permanently retains both profile reservations.
 
-Production clock selection is **unverified**. `createLinuxClock()` exposes the
+Production clock selection uses reviewed compiled qualification rows, bound to
+the exact host image and semantic source. `createLinuxClock()` exposes the
 actual synchronous proc reader for parent qualification; describing a closed
 manifest cannot register it. Only compiled reviewed evidence may populate
 `clock-qualification-data.mjs`, with the same independently selected Go policy. The fixed
-candidate budget is R=103ms/T=430ms, not a measured maximum or today's grant.
+policy budget is R=103ms/T=430ms, not a measured maximum or a runtime grant.
 
 Private protocol 1 wraps unchanged neutral wire 1. Native IDs/timestamps and
 original source ingress/anchor/deadline remain private; outbound delivery is
@@ -68,14 +72,21 @@ The installed fixture retains the SOURCE13 driver and eleven custody cells: V1
 1.18.33 and V2 2.0.21 on all five platform pairs, plus V1 1.18.34 on Linux amd64.
 It stages completion, pending question/permission, permanent error, retry/interrupt,
 manual compaction, foreground child, independent roots/fork and install/update/
-remove/reinstall scenarios. Its production clock pre-model stop remains explicit.
-Inert fixture checks establish source/parser contracts only; all installed cells,
-product final settlement, durable claims and owned child closure remain unproved.
+remove/reinstall scenarios. Missing custody or production clock prerequisites stop
+business phases. Inert fixture checks establish source/parser contracts only.
 
-The committed generated asset is deliberately retained at its existing three
-quoted executable/root/origin placeholders. It has not been rebuilt for the
-current clock source and pending SDK corrections. Root must integrate the separate
-SDK V1 fix and V2 RPC schema correction, repack the SDK and update its metadata
-and lock together, then deterministically rebuild and review the embedded asset.
-Until that work is complete, this source merge makes no artifact-coherence,
-SDK publication or fully supported delivery claim.
+The 1.48.0 tag release gate runs seven Linux/Windows cells: V1 1.18.33 and V2
+2.0.21 on Linux amd64/arm64 and Windows amd64, plus Linux amd64 V1 1.18.34.
+All five native artifacts retain canaries, including both macOS architectures and
+the signed/notarized helper. Exact release reports, rather than configured lanes,
+establish successful qualification. Intel macOS desktop delivery remains
+unqualified; historical macOS ARM business evidence is separate. One-shot host
+shutdown remains best effort. Stock Windows V1 may notify a delayed completion
+once and again after the 24-hour claim expires when original event age cannot be
+independently verified.
+
+The committed generated asset retains its three quoted executable/root/origin
+placeholders. Release preparation verifies the reviewed SDK archive and lock,
+rebuilds the bundle and requires byte equality with that tracked embedded asset.
+This consumer verification does not publish the standalone SDK or grant eligibility
+to an unqualified host. See [release qualification boundaries](../docs/opencode-notifications.md#release-qualification-boundary).
