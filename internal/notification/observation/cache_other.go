@@ -19,6 +19,7 @@ func openCache(root string) (*pathCache, error) {
 	}
 	return &pathCache{root: root}, nil
 }
+func (c *pathCache) Prepare(context.Context) error              { return errors.New("cache_unavailable") }
 func (c *pathCache) Read() ([]byte, error)                      { return readCache(c.root) }
 func (c *pathCache) Write(_ context.Context, data []byte) error { return writeCache(c.root, data) }
 func (c *pathCache) Close()                                     {}

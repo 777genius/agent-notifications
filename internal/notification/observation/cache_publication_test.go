@@ -36,6 +36,9 @@ func TestCacheCanceledPublicationPreservesDocument(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer cache.Close()
+			if err := cache.Prepare(context.Background()); err != nil {
+				t.Fatal(err)
+			}
 			ctx, cancel := context.WithCancel(context.Background())
 			want := context.Canceled
 			if deadline {

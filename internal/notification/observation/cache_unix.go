@@ -59,20 +59,67 @@ func writeCache(root string, data []byte) error {
 }
 
 func writeCacheContext(ctx context.Context, root string, data []byte) error {
-	path := filepath.Join(root, ".observations-"+uuid.NewString())
+	cache := &pathCache{root: root}
+	defer cache.Close()
+	if err := cache.Prepare(ctx); err != nil {
+		return err
+	}
+	return cache.Write(ctx, data)
+}
+
+type pathCache struct {
+	root string
+	temp string
+	file *os.File
+}
+
+func openCache(root string) (*pathCache, error) {
+	if err := checkCacheRoot(root); err != nil {
+		return nil, err
+	}
+	return &pathCache{root: root}, nil
+}
+func (c *pathCache) Read() ([]byte, error) { return readCache(c.root) }
+func (c *pathCache) Prepare(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	path := filepath.Join(c.root, ".observations-"+uuid.NewString())
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = os.Remove(path) }()
-	n, err := f.Write(data)
+	c.temp, c.file = path, f
+	if err := ctx.Err(); err != nil {
+		c.Close()
+		return err
+	}
+	return nil
+}
+func (c *pathCache) Close() {
+	if c.file != nil {
+		_ = c.file.Close()
+		c.file = nil
+	}
+	if c.temp != "" {
+		_ = os.Remove(c.temp)
+		c.temp = ""
+	}
+}
+func (c *pathCache) Write(ctx context.Context, data []byte) error {
+	if c.file == nil {
+		return errors.New("cache preparation is closed")
+	}
+	defer c.Close()
+	n, err := c.file.Write(data)
 	if err == nil && n != len(data) {
 		err = io.ErrShortWrite
 	}
 	if err == nil {
-		err = f.Sync()
+		err = c.file.Sync()
 	}
-	closeErr := f.Close()
+	closeErr := c.file.Close()
+	c.file = nil
 	if err != nil {
 		return err
 	}
@@ -82,19 +129,9 @@ func writeCacheContext(ctx context.Context, root string, data []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return os.Rename(path, filepath.Join(root, "observations.json"))
-}
-
-type pathCache struct{ root string }
-
-func openCache(root string) (*pathCache, error) {
-	if err := checkCacheRoot(root); err != nil {
-		return nil, err
+	if err := os.Rename(c.temp, filepath.Join(c.root, "observations.json")); err != nil {
+		return err
 	}
-	return &pathCache{root: root}, nil
+	c.temp = ""
+	return nil
 }
-func (c *pathCache) Read() ([]byte, error) { return readCache(c.root) }
-func (c *pathCache) Write(ctx context.Context, data []byte) error {
-	return writeCacheContext(ctx, c.root, data)
-}
-func (c *pathCache) Close() {}
