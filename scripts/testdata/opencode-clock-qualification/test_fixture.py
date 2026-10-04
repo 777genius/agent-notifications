@@ -2,8 +2,8 @@
 
 Load the actual fixture or an explicitly supplied TEST copy. No Popen, helper, FFI,
 OpenCode, build, native clock, session or model operation is performed.
-The actual helper method runs only to its natural-wait boundary. SHA reads
-a real private file; fake elapsed time makes the boundary deterministic.
+The actual helper method runs only to its natural-wait boundary. Final custody
+runs actual SHA checks over private files; controlled elapsed time determines deadlines.
 """
 import hashlib
 import io
@@ -251,6 +251,41 @@ class HostReadinessTests(unittest.TestCase):
             self.check([])
         self.assertEqual(self.calls, [])
         self.assertEqual(self.sleeps, [])
+
+
+class FinalCustodyDeadlineTests(unittest.TestCase):
+    """Actual custody hashes over independent bytes, with only elapsed time controlled."""
+    def check(self, before, hash_duration):
+        with tempfile.TemporaryDirectory(prefix='TEST-final-custody-') as directory:
+            image = Path(directory) / 'image'
+            image.write_bytes(b'independent TEST custody bytes\n')
+            expected = hashlib.sha256(image.read_bytes()).hexdigest()
+            now, real_sha, reads = [before], fixture.sha, []
+            def timed_hash(path):
+                reads.append(path)
+                value = real_sha(path)
+                now[0] += hash_duration
+                return value
+            with mock.patch.object(fixture, 'time', types.SimpleNamespace(monotonic=lambda: now[0])), \
+                 mock.patch.object(fixture, 'sha', timed_hash):
+                try:
+                    end = fixture.final_custody_hashes(((image, expected),), 2.0)
+                finally:
+                    self.reads, self.now = reads, now[0]
+            return end
+
+    def test_late_native_result_refuses_before_custody_hash(self):
+        with self.assertRaisesRegex(RuntimeError, '^qualification_operation_deadline$'):
+            self.check(2.001, 0)
+        self.assertEqual(self.reads, [])
+
+    def test_hash_crosses_native_deadline_but_cannot_cross_custody_deadline(self):
+        self.assertAlmostEqual(self.check(1.9, .7), 6.9)
+        self.assertAlmostEqual(self.now, 2.6)
+        self.assertEqual(len(self.reads), 1)
+        with self.assertRaisesRegex(RuntimeError, '^qualification_custody_deadline$'):
+            self.check(1.9, 5.001)
+        self.assertEqual(len(self.reads), 1)
 
 
 if __name__ == "__main__":

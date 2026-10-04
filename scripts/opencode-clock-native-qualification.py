@@ -47,7 +47,7 @@ def need(value, reason):
 
 
 # Static diagnostic enums only; these fields carry no clock/identity authority.
-FAILURE_PHASES = frozenset(('preparation', 'host_launch', 'host_ready', 'public_entry', 'ffi_ready', 'loader_identity', 'initial_live_image', 'arm', 'request_wait', 'request_validate', 'helper_admission', 'helper_sha', 'helper_launch', 'helper_wait', 'helper_stdout_eof', 'helper_stderr_eof', 'helper_eof_check', 'helper_close', 'helper_output', 'helper_decode', 'post_helper', 'response_commit', 'result_wait', 'result_identity', 'final_checks', 'bounds', 'final_live_image', 'projection', 'host_wait', 'host_stdout_eof', 'host_stderr_eof', 'host_eof_check', 'host_close', 'host_final_pipe', 'trace_hash', 'post_host_reap', 'safe_projection'))
+FAILURE_PHASES = frozenset(('preparation', 'host_launch', 'host_ready', 'public_entry', 'ffi_ready', 'loader_identity', 'initial_live_image', 'arm', 'request_wait', 'request_validate', 'helper_admission', 'helper_sha', 'helper_launch', 'helper_wait', 'helper_stdout_eof', 'helper_stderr_eof', 'helper_eof_check', 'helper_close', 'helper_output', 'helper_decode', 'post_helper', 'response_commit', 'result_wait', 'result_identity', 'final_checks', 'bounds', 'final_custody_hashes', 'final_live_image', 'projection', 'host_wait', 'host_stdout_eof', 'host_stderr_eof', 'host_eof_check', 'host_close', 'host_final_pipe', 'trace_hash', 'post_host_reap', 'safe_projection'))
 JS_STAGES = frozenset(('prepare', 'arm_wait', 'arm_validate', 'round_before', 'round_request', 'round_response_wait', 'round_decode', 'round_deadline', 'round_checks', 'final_native', 'clock_close', 'result_publish', 'complete'))
 
 
@@ -83,6 +83,16 @@ def require_workflow_commit(commit, report):
 def sha(path):
     with Path(path).open('rb') as stream:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
+def final_custody_hashes(images, operation_deadline):
+    handoff = time.monotonic()
+    need(handoff < operation_deadline, 'qualification_operation_deadline')
+    end = handoff + 5  # Separate TEST custody phase, using the existing cleanup duration.
+    need(time.monotonic() < end, 'qualification_custody_deadline')
+    need(all(sha(path) == expected for path, expected in images), 'native_checks_or_actual_close_incomplete')
+    need(time.monotonic() < end, 'qualification_custody_deadline')
+    return end
 
 
 def write_json(path, value):
@@ -500,6 +510,7 @@ def run_version(root, version, args, helper, helper_sha, manifest_sha, ownership
     failure_phase(report, 'host_launch')
     host = ownership.launch([str(exe), 'serve', '--port', str(port), '--hostname', '127.0.0.1'], root, env)
     failed = False
+    custody_deadline = None
     try:
         failure_phase(report, 'host_ready')
         url = f'http://127.0.0.1:{port}'; deadline = time.monotonic() + 35
@@ -575,7 +586,7 @@ def run_version(root, version, args, helper, helper_sha, manifest_sha, ownership
         failure_phase(report, 'final_checks')
         need(all(result.get('checks', {}).get(k) is True for k in mandatory) and
              ownership.started - before_calls == ownership.closed - before_closes == 3 and
-             sha(exe) == report['imageSha256'] and sha(copied_helper) == helper_sha and sha(module) == metadata['moduleSha256'] and not host['overflow'] and not host['pipeError'], 'native_checks_or_actual_close_incomplete')
+             not host['overflow'] and not host['pipeError'], 'native_checks_or_actual_close_incomplete')
         failure_phase(report, 'bounds')
         bounds = result.get('aggregate', {})
         need(set(bounds) == {'maxPairWidthNs', 'maxOuterWidthNs', 'maxGoWidthNs', 'maxDatePreciseDistanceNs', 'preciseComparisons'}, 'closed_safe_bounds_required')
@@ -586,9 +597,13 @@ def run_version(root, version, args, helper, helper_sha, manifest_sha, ownership
              type(bounds['preciseComparisons']) is int and (bounds['preciseComparisons'] > 0 if args.os == 'windows' else bounds['preciseComparisons'] == 0), 'observed_bound_limits')
         if args.os == 'windows':
             need(all(type(result['checks'].get(k)) is bool for k in ('dateInsidePreciseInterval', 'dateWithinTwoMsOfPrecise')), 'actual_date_precise_predicates_required')
+        failure_phase(report, 'final_custody_hashes')
+        custody_deadline = final_custody_hashes(((exe, report['imageSha256']),
+            (copied_helper, helper_sha), (module, metadata['moduleSha256'])), deadline)
         failure_phase(report, 'final_live_image')
+        need(time.monotonic() < custody_deadline, 'qualification_custody_deadline')
         live_image(host['p'], exe)
-        need(time.monotonic() < deadline, 'qualification_operation_deadline')
+        need(time.monotonic() < custody_deadline, 'qualification_custody_deadline')
         failure_phase(report, 'projection')
         # Closed safe projection; raw loader/image paths, UUIDs and all clocks remain private.
         safe_result = dict(status='api_prequalification_passed', bun=loader[0]['bunVersion'], roundCount=3,
@@ -603,18 +618,19 @@ def run_version(root, version, args, helper, helper_sha, manifest_sha, ownership
         raise
     finally:
         try:
-            ownership.stop(host, diagnostics=None if failed else report)
+            ownership.stop(host, deadline=None if failed else custody_deadline,
+                           diagnostics=None if failed else report)
             if not failed: failure_phase(report, 'host_final_pipe')
             need(not host['overflow'] and not host['pipeError'], 'host_final_pipe_failure')
         finally: headers.clear(); env.clear(); helper_env.clear()
         if not failed: failure_phase(report, 'trace_hash')
         report['traceSha256'] = sha(root / 'loader-private.jsonl') if (root / 'loader-private.jsonl').exists() else None
     failure_phase(report, 'post_host_reap')
-    # Includes final identity/hash validation, evidence projection and actual host reap.
-    need(time.monotonic() < deadline, 'qualification_operation_deadline')
+    # Custody includes final hashes/identity, actual host reap/EOF and projection.
+    need(time.monotonic() < custody_deadline, 'qualification_custody_deadline')
     failure_phase(report, 'safe_projection')
     report.update(safe_result)
-    need(time.monotonic() < deadline, 'qualification_operation_deadline')
+    need(time.monotonic() < custody_deadline, 'qualification_custody_deadline')
     report.pop('failurePhase', None); report.pop('failureRound', None)
 
 
