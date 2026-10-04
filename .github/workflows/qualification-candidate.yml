@@ -40,7 +40,7 @@ jobs:
           try {
             for ($round = 1; $round -le 40; $round++) {
               $start = [DateTime]::UtcNow.ToString('O')
-              $args = @('-test.v','-test.run=^TestChannelConsentIndependentAndNoRetry$','-test.count=20','-test.timeout=60s',"-test.trace=$evidence/original-$round.trace")
+              $args = @('-test.v','-test.run=^Test(CacheWindowBoundAndBindingIsolation|ChannelConsentIndependentAndNoRetry)$','-test.count=20','-test.timeout=60s',"-test.trace=$evidence/original-$round.trace")
               $process = Start-Process -FilePath "$evidence/original.test.exe" -ArgumentList $args -NoNewWindow -Wait -PassThru -RedirectStandardOutput "$evidence/original-$round.stdout.log" -RedirectStandardError "$evidence/original-$round.stderr.log"
               $testPid = $process.Id
               $process.WaitForExit()
@@ -62,6 +62,7 @@ jobs:
             }
           }
           if ($failed) { throw 'Original strict failure retained; inspect original process logs and matching OS/Go trace.' }
+          exit 0
       - name: Retain bounded original OS evidence
         if: always()
         uses: actions/upload-artifact@v7
