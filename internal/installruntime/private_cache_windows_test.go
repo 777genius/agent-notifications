@@ -130,7 +130,7 @@ func TestWindowsPrivateCacheRootRechecksACL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer prepared.Close()
+	defer func() { _ = prepared.Close() }()
 	original, err := windows.GetSecurityInfo(handle, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
 		t.Fatal(err)
@@ -187,7 +187,7 @@ func TestWindowsPreparedCacheWriteIsSingleUse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer prepared.Close()
+	defer func() { _ = prepared.Close() }()
 	if err := prepared.WriteContext(context.Background(), []byte("first")); err != nil {
 		t.Fatal(err)
 	}
