@@ -230,7 +230,7 @@ def main():
                             # NotificationPayload intentionally projects Question + session,
                             # whereas Codex Stop projects last_assistant_message.
                             if product == 'claude':
-                                assert attachment['footer'] == f'Session: {marker} | Claude Code', body
+                                assert attachment['footer'] == f'Session: {marker} | Claude', body
                                 assert 'Question' in attachment['text'], body
                             else:
                                 assert marker in attachment['text'], body
