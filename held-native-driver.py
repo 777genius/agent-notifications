@@ -1287,7 +1287,33 @@ def native_app(record):
     return app
 
 
+def darwin_args2_capacity_probe(proc):
+    import ctypes
+    import errno
+    require(sys.platform == 'darwin' and proc.poll() is None, 'darwin_args2_owned_host_required')
+    lib = ctypes.CDLL('/usr/lib/libSystem.B.dylib', use_errno=True)
+    lib.sysctl.argtypes = (ctypes.POINTER(ctypes.c_int), ctypes.c_uint, ctypes.c_void_p,
+                          ctypes.POINTER(ctypes.c_size_t), ctypes.c_void_p, ctypes.c_size_t)
+    lib.sysctl.restype = ctypes.c_int
+    mib, buffer, size = (ctypes.c_int * 3)(1, 49, proc.pid), (ctypes.c_ubyte * 4096)(), ctypes.c_size_t(4096)
+    ctypes.set_errno(0)
+    begin = time.monotonic()
+    result = lib.sysctl(mib, 3, buffer, ctypes.byref(size), None, 0)
+    error = ctypes.get_errno()
+    elapsed = (time.monotonic() - begin) * 1000
+    alive = proc.poll() is None
+    if result == 0:
+        outcome = 'ok_bounded' if 4 <= size.value < 4096 else 'capacity_ambiguous' if size.value >= 4096 else 'other_error'
+    else:
+        outcome = {errno.ENOMEM: 'enomem', errno.EPERM: 'denied', errno.EACCES: 'denied', errno.ESRCH: 'gone'}.get(error, 'other_error')
+    return {'outcome': outcome, 'returnedBytes': size.value, 'elapsedMs': elapsed,
+            'ownedChildAliveBeforeAfter': alive}
+
+
 def qualify(args, report):
+    probe_only = os.environ.get('TEST_DARWIN_ARGS2_PROBE_ONLY') == 'true'
+    if probe_only:
+        require(args.os == 'darwin' and args.suite == 'business' and not args.validate_only, 'darwin_args2_probe_mode_required')
     m, c, files, candidate, archive = load_manifest(args.manifest, args.os, args.arch, args.version, args.manifest_sha256)
     if args.suite in ('full','business'):
         contract = reviewed_driver_contract(args.version)
@@ -1408,6 +1434,13 @@ def qualify(args, report):
         request(base, projects[0], '/api/plugin' if v2 else '/config', v2=v2, auth_headers=headers)
         if PORTABLE is not None:
             PORTABLE.ready(root, server, provider, trace)
+            if probe_only:
+                require(not provider.records and not provider.gaps and webhook.count() == 0, 'darwin_args2_probe_provider_effect')
+                report.update(darwinArgs2Probe=darwin_args2_capacity_probe(server),
+                              status='darwin_args2_probe_pending_cleanup', suite='darwin_args2_diagnostic',
+                              purpose='TEST Darwin owned-host args2 capacity only', qualificationGranted=False,
+                              semanticEvidencePromoted=False)
+                return
         else:
             wait_for(lambda: any(x['kind']=='profile' for x in trace(root)), 10, 'native parent profile')
             profiles = [x['value'] for x in trace(root) if x['kind']=='profile']
@@ -1493,6 +1526,11 @@ def qualify(args, report):
             report['actualProviderGaps'] = len(provider.gaps)
         if 'webhook' in locals(): report['actualIndependentWebhookSubmissions'] = webhook.count()
         report['productOwnedClose'] = 'unproved'
+        if probe_only and report.get('darwinArgs2Probe') is not None and not cleanup_error:
+            require(not provider.records and not provider.gaps and webhook.count() == 0, 'darwin_args2_probe_late_effect')
+            require(report['fixtureLeadersReaped'] and report['fixtureCleanup']['fixtureServerThreadsAlive'] == 0
+                    and report['fixtureCleanup']['logHandlesClosed'], 'darwin_args2_probe_cleanup_unclosed')
+            report['status'] = 'darwin_args2_probe_observed_only'
         if PORTABLE is not None and not cleanup_error and report.get('businessBodyComplete'):
             PORTABLE.seal(root, report)
         if (root/'native-private.jsonl').exists():
@@ -1588,7 +1626,7 @@ def main():
     code=1
     try:
         qualify(args,report)
-        code=0 if report['status'] in ('inputs_verified_only','installed_business_lifecycle_observed','windows_programs_probe_observed_only') else 1
+        code=0 if report['status'] in ('inputs_verified_only','installed_business_lifecycle_observed','windows_programs_probe_observed_only','darwin_args2_probe_observed_only') else 1
     except Exception as e:
         report['firstFailedPrerequisite']=str(e) if isinstance(e,Unqualified) else type(e).__name__
         if PORTABLE is not None:
