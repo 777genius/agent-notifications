@@ -932,7 +932,7 @@ test_lock_stale_removal() {
     touch -t 200001010000 "$TEST_DIR/.install.lock/.owner.dead/heartbeat"
     set +e
     local dead_output
-    dead_output=$(INSTALL_TARGET_DIR="$TEST_DIR" bash -c 'source "$1"; acquire_lock; release_lock' _ "$sourceable_install" 2>&1)
+    dead_output=$(INSTALL_TARGET_DIR="$TEST_DIR" bash -c 'source "$1"; acquire_lock && release_lock' _ "$sourceable_install" 2>&1)
     local dead_exit=$?
     set -e
     assert_exit_code 0 "$dead_exit" "Dead stale owner lock is reclaimed"
