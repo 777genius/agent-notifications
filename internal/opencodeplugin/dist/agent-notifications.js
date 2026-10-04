@@ -2741,7 +2741,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "9ca0b9953d49997601655e54f846a3efa464f237e47c6f1b04716d0f2e64c4c2"
       }
     ],
-    "algorithmSourceMerkleSHA256": "5876ee9919ebc3dc205ed28c627dc442eeda4ed8740485dd6693e85c6e1b2b7a",
+    "algorithmSourceMerkleSHA256": "5dc7a1ca7a6dc68955aac0cfcd90ad208902201c8757f7c70dce8bf43d8c134c",
     "sourceKind": "linux-proc-boottime",
     "rawKind": "linux-boottime",
     "nativeReadBoundNS": "103000000",
@@ -2759,7 +2759,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "f916986543348d7953d8d43aa048516cdbc3f84f4d0dc9c0c5b9d1da3030cea7"
       }
     ],
-    "algorithmSourceMerkleSHA256": "5876ee9919ebc3dc205ed28c627dc442eeda4ed8740485dd6693e85c6e1b2b7a",
+    "algorithmSourceMerkleSHA256": "5dc7a1ca7a6dc68955aac0cfcd90ad208902201c8757f7c70dce8bf43d8c134c",
     "sourceKind": "linux-proc-boottime",
     "rawKind": "linux-boottime",
     "nativeReadBoundNS": "103000000",
@@ -2777,7 +2777,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "986fef2069a03b5181a9ec920786836f98fe3e4950c630941908687854e42757"
       }
     ],
-    "algorithmSourceMerkleSHA256": "36142dcce44377ee322252472eba570c46eeb8e662d88565759cb778b397aa74",
+    "algorithmSourceMerkleSHA256": "6e9b6fcdaa05af2d9a3f1686be95be3840e7a9d61b4f932e4cea182797f0d324",
     "sourceKind": "linux-proc-boottime",
     "rawKind": "linux-boottime",
     "nativeReadBoundNS": "103000000",
@@ -2796,7 +2796,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "d2f4c9ee106d9930d20ca5cf5f2c2216aab6fed836992cf24979d9481242c01c"
       }
     ],
-    "algorithmSourceMerkleSHA256": "36142dcce44377ee322252472eba570c46eeb8e662d88565759cb778b397aa74",
+    "algorithmSourceMerkleSHA256": "6e9b6fcdaa05af2d9a3f1686be95be3840e7a9d61b4f932e4cea182797f0d324",
     "sourceKind": "linux-proc-boottime",
     "rawKind": "linux-boottime",
     "nativeReadBoundNS": "103000000",
@@ -2815,7 +2815,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "f53aae8eb68d832ab1bcd27bed88c02de910be61f4b5f90068ae8e93d5e794c9"
       }
     ],
-    "algorithmSourceMerkleSHA256": "f7264cd5ef3e39b3a0deae00b03165079715369c40565e830c37dbbaf83a7398",
+    "algorithmSourceMerkleSHA256": "53af9d0ab1d1b1b043b8f5901b6dbbd6b47b2d1982f70f9ff6fa504ad6a54600",
     "sourceKind": "darwin-mach-continuous",
     "rawKind": "darwin-monotonic-raw",
     "nativeReadBoundNS": "103000000",
@@ -2835,7 +2835,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "4642b7da61279c8aa5d389d9f29454936e449fea6bc510689e9cc976fff6579f"
       }
     ],
-    "algorithmSourceMerkleSHA256": "f7264cd5ef3e39b3a0deae00b03165079715369c40565e830c37dbbaf83a7398",
+    "algorithmSourceMerkleSHA256": "53af9d0ab1d1b1b043b8f5901b6dbbd6b47b2d1982f70f9ff6fa504ad6a54600",
     "sourceKind": "darwin-mach-continuous",
     "rawKind": "darwin-monotonic-raw",
     "nativeReadBoundNS": "103000000",
@@ -2855,7 +2855,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "139ddeb6a46ba276827bb8f79c7b28208621746e4fd6914d9ae71cc1a0a57524"
       }
     ],
-    "algorithmSourceMerkleSHA256": "7e224fd8f330a4e55221c8b3a49cf2283e3db2f3f1bf30cd0ae447f2e10fea1a",
+    "algorithmSourceMerkleSHA256": "36f8663f5cb861f9c49bface19c772d98d87c59e2fe6e0ce1f7fb9eb9ba45f38",
     "sourceKind": "darwin-mach-continuous",
     "rawKind": "darwin-monotonic-raw",
     "nativeReadBoundNS": "103000000",
@@ -2875,7 +2875,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "0b2b68c1efaf20a29aaf636c2ffccc1abb56243a82f48cce45e257d232e03442"
       }
     ],
-    "algorithmSourceMerkleSHA256": "7e224fd8f330a4e55221c8b3a49cf2283e3db2f3f1bf30cd0ae447f2e10fea1a",
+    "algorithmSourceMerkleSHA256": "36f8663f5cb861f9c49bface19c772d98d87c59e2fe6e0ce1f7fb9eb9ba45f38",
     "sourceKind": "darwin-mach-continuous",
     "rawKind": "darwin-monotonic-raw",
     "nativeReadBoundNS": "103000000",
@@ -2895,7 +2895,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "52f60248a576b34c9a6dcaa27e0a7f08089af35bcdc0dfb10c04d3e00a98314c"
       }
     ],
-    "algorithmSourceMerkleSHA256": "303ea1bc29aac017a8dea7483239a6d4b5bec726d6579c7cd5ac75ad339570c2",
+    "algorithmSourceMerkleSHA256": "78af47b910c8b037898364e95f28b91c9afe100183a54e3af5d714f9875558cc",
     "sourceKind": "windows-interrupt-precise",
     "rawKind": "windows-interrupt-precise",
     "nativeReadBoundNS": "103000000",
@@ -2915,7 +2915,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "ec7a3909bad41ef88e4650f737ab6f0b0c402a7f49a588812d0a79820c2dfc1f"
       }
     ],
-    "algorithmSourceMerkleSHA256": "303ea1bc29aac017a8dea7483239a6d4b5bec726d6579c7cd5ac75ad339570c2",
+    "algorithmSourceMerkleSHA256": "78af47b910c8b037898364e95f28b91c9afe100183a54e3af5d714f9875558cc",
     "sourceKind": "windows-interrupt-precise",
     "rawKind": "windows-interrupt-precise",
     "nativeReadBoundNS": "103000000",
@@ -3301,8 +3301,9 @@ function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, on
   async function beforeEmit(event, handoff) {
     let diagnosticStage = "prep.catch.original";
     try {
+      const completion = policy.generation === "v1" && event.version === 1 && event.kind === "turn_idle_verified" && event.provenance?.generation === "v1" && event.provenance.timeBasis === "assistant_completed";
       let display;
-      if (enrich) {
+      if (!completion && enrich) {
         try {
           display = (await enrich(event))?.display;
         } catch {
@@ -3316,17 +3317,25 @@ function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, on
       diagnosticStage = "prep.catch.sample";
       const before = sample(), remaining = handoff.metadataDeadline - clock.now();
       if (remaining <= 0) return refuse("prep.remaining");
-      diagnosticStage = "prep.catch.helper";
-      const response = await registry.clock({
-        signal: handoff.signal,
-        isCurrent: () => current(original, handoff),
-        deadline: performance3.now() + Math.min(remaining, 2e3)
-      });
-      if (!current(original, handoff)) return refuse("prep.current_after_helper");
-      if (response.status !== "ok") return refuse("prep.helper");
-      diagnosticStage = "prep.catch.calibration";
-      const after = sample(), calibrationCheck = clockReceipt(response.output);
-      if (!anchorMatches(calibrationCheck, before, after, policy) || !overlaps(original.sample, after, policy.comparisonBoundNS) || after.loNS - before.loNS > 2000000000n) bad();
+      let after;
+      if (completion) {
+        after = sample();
+        if (!current(original, handoff)) return refuse("prep.current");
+      } else {
+        diagnosticStage = "prep.catch.helper";
+        const response = await registry.clock({
+          signal: handoff.signal,
+          isCurrent: () => current(original, handoff),
+          deadline: performance3.now() + Math.min(remaining, 2e3)
+        });
+        if (!current(original, handoff)) return refuse("prep.current_after_helper");
+        if (response.status !== "ok") return refuse("prep.helper");
+        diagnosticStage = "prep.catch.calibration";
+        after = sample();
+        const calibrationCheck = clockReceipt(response.output);
+        if (!anchorMatches(calibrationCheck, before, after, policy)) bad();
+      }
+      if (!overlaps(original.sample, after, policy.comparisonBoundNS) || after.loNS - before.loNS > 2000000000n) bad();
       diagnosticStage = "prep.catch.birth";
       const birthNS = BigInt(event.provenance.nativeTime) * 1000000n;
       if (birthNS < original.sample.wallNS - 60000000000n || birthNS > original.sample.wallNS + 2000000000n || birthNS < activation.wallNS + (original.epoch.after - activation.loNS)) bad();
@@ -3577,6 +3586,7 @@ function createNativeV1(client, directory2, fail2) {
   }
   async function finalize(event, handoff) {
     if (!handoff.isCurrent() || handoff.signal.aborted || users.get(event.sessionID)?.id !== event.turnID) return false;
+    if (event.kind === "turn_idle_verified") return event.version === 1 && event.rootSession === true && event.requestID === void 0 && id4(event.sessionID) && id4(event.turnID) && id4(event.messageID) && event.provenance?.generation === "v1" && event.provenance.timeBasis === "assistant_completed" && id4(event.provenance.observationID) && stamp(event.provenance.nativeTime);
     const request = event.requestID ? requests.get(event.requestID) : void 0;
     if (event.requestID && (!request || request.sessionID !== event.sessionID || request.turnID !== event.turnID || !id4(request.messageID) || !id4(request.callID))) return false;
     const result2 = await client.session.get({ path: { id: event.sessionID }, signal: handoff.signal });
@@ -3592,7 +3602,6 @@ function createNativeV1(client, directory2, fail2) {
     const answer = messages.findLast((row) => row.role === "assistant" && row.summary !== true);
     const lastUser = messages.findLast((row) => row.role === "user");
     if (lastUser && lastUser.id !== event.turnID || !answer || answer.parentID !== event.turnID || answer.path?.cwd !== directory2 || messages.at(-1) !== answer || !stamp(answer.time?.created)) return false;
-    if (event.kind === "turn_idle_verified") return answer.id === event.messageID && answer.finish === "stop" && answer.time?.completed === event.provenance.nativeTime && answer.error == null;
     if (event.kind === "terminal_error") return answer.id === event.provenance.nativeMessageID && answer.time.created === event.provenance.nativeTime && stamp(answer.time?.completed) && answer.error && !/abort|cancel/i.test(answer.error.name ?? "");
     return request?.messageID === answer.id && answer.time.created === event.provenance.nativeTime;
   }
