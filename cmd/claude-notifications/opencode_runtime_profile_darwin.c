@@ -52,7 +52,7 @@ int an_runtime_region(int pid, uint64_t address, struct an_runtime_region *out) 
 }
 int an_runtime_args(int pid, unsigned char *out, size_t capacity, size_t *length) {
  int mib[3] = {CTL_KERN, KERN_PROCARGS2, pid};
- if (capacity != 4096 || pid <= 0) return 0;
+ if (capacity != 65536 || pid <= 0) return 0;
  size_t n = capacity;
  // No size allocation query, ENOMEM retry, or environment-tail traversal.
  // Full capacity is ambiguous: XNU may have returned only the saved data tail.

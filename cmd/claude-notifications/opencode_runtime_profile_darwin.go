@@ -56,7 +56,7 @@ func runtimeDarwinProcessInfo(pid int) (runtimeDarwinProcess, error) {
 	return runtimeDarwinProcess{uint32(p.pid), uint32(p.parent), uint32(p.cpu), uint32(p.subtype), uint64(p.seconds), uint64(p.micros), name}, nil
 }
 func runtimeDarwinNativeEntry(pid int) string {
-	buf := make([]byte, 4096)
+	buf := make([]byte, runtimeDarwinArgsCapacity)
 	var n C.size_t
 	if C.an_runtime_args(C.int(pid), (*C.uchar)(unsafe.Pointer(&buf[0])), C.size_t(len(buf)), &n) != 1 || uint64(n) > uint64(len(buf)) {
 		return ""

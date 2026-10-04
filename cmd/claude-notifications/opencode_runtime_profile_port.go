@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -8,7 +9,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"strings"
 	"unicode/utf16"
 	"unicode/utf8"
 )
@@ -79,18 +79,24 @@ func runtimeSameMetadata(a, b os.FileInfo) bool {
 	return a != nil && b != nil && a.Mode().IsRegular() && b.Mode().IsRegular() && os.SameFile(a, b) && a.Size() == b.Size() && a.Mode() == b.Mode() && a.ModTime().Equal(b.ModTime())
 }
 
-// Stop after exactly argc strings. The environment tail never supplies argv
-// or entry authority; reject capacity-sized and incomplete native reads.
+const runtimeDarwinArgsCapacity = 64 << 10
+
+// Stop after exactly argc strings within the original sub-4096-byte prefix.
+// The larger fixed read accommodates environment bytes, which never supply
+// entry authority; reject capacity-sized and incomplete native reads.
 func runtimeDarwinEntry(raw []byte) string {
-	if len(raw) < 4 || len(raw) >= 4096 {
+	if len(raw) < 4 || len(raw) >= runtimeDarwinArgsCapacity {
 		return ""
+	}
+	if len(raw) >= 4096 {
+		raw = raw[:4095]
 	}
 	argc := binary.LittleEndian.Uint32(raw[:4])
 	if argc < 1 || argc > 4096 {
 		return ""
 	}
 	rest := raw[4:]
-	i := strings.IndexByte(string(rest), 0)
+	i := bytes.IndexByte(rest, 0)
 	if i <= 0 || !utf8.Valid(rest[:i]) {
 		return ""
 	}
@@ -100,7 +106,7 @@ func runtimeDarwinEntry(raw []byte) string {
 	}
 	argv := make([]string, 0, argc)
 	for arg := uint32(0); arg < argc; arg++ {
-		i = strings.IndexByte(string(rest), 0)
+		i = bytes.IndexByte(rest, 0)
 		if i < 0 || !utf8.Valid(rest[:i]) {
 			return ""
 		}

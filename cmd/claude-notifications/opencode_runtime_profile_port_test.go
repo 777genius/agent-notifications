@@ -80,7 +80,7 @@ func TestRuntimeDarwinOnlyCompleteServePrefix(t *testing.T) {
 		append([]byte{255, 255, 255, 255}, raw[4:]...),
 		[]byte("\x02\x00\x00\x00/TEST/fixture\x00fixture\x00tui\x00"),
 		[]byte("\x02\x00\x00\x00\xff\x00fixture\x00serve\x00"),
-		append(append([]byte(nil), raw...), []byte(strings.Repeat("x", 4096))...),
+		append(append([]byte(nil), raw...), make([]byte, 64<<10-len(raw))...),
 	}
 	for i, b := range cases {
 		if runtimeDarwinServePrefix(b) {
@@ -109,7 +109,7 @@ func TestRuntimeDarwinStockLocalEntriesUseOnlyCompleteArgv(t *testing.T) {
 	if got := runtimeDarwinEntry(run); got != "run" {
 		t.Fatalf("stock local run rejected: %q", got)
 	}
-	for _, raw := range [][]byte{run[:len(run)-1], pack([]string{"/TEST/opencode", "run", "--attach=http://TEST.invalid"}, ""), append(tui, make([]byte, 4096)...)} {
+	for _, raw := range [][]byte{run[:len(run)-1], pack([]string{"/TEST/opencode", "run", "--attach=http://TEST.invalid"}, ""), append(tui, make([]byte, 64<<10-len(tui))...)} {
 		if runtimeDarwinEntry(raw) != "" {
 			t.Fatal("incomplete, remote or capacity-sized argv became local authority")
 		}
@@ -119,14 +119,37 @@ func TestRuntimeDarwinStockLocalEntriesUseOnlyCompleteArgv(t *testing.T) {
 // Red failure: a capacity-sized KERN_PROCARGS2 result can be environment tail,
 // even when the saved argc and tail strings look like an executable/serve prefix.
 func TestRuntimeDarwinFullCapacityTailCannotProveServe(t *testing.T) {
-	raw := make([]byte, 4096)
+	raw := make([]byte, 64<<10)
 	binary.LittleEndian.PutUint32(raw, 2)
 	copy(raw[4:], "/TEST/environment-tail\x00fixture\x00serve\x00")
-	if !runtimeDarwinServePrefix(raw[:4095]) {
+	if !runtimeDarwinServePrefix(raw[:len(raw)-1]) {
 		t.Fatal("fixture lacks a complete apparent serve prefix below capacity")
 	}
 	if runtimeDarwinServePrefix(raw) {
 		t.Fatal("full-capacity environment tail became serve evidence")
+	}
+}
+
+// Red on the original reader: a valid short serve argv was denied solely
+// because the saved environment exceeded its 4KiB total retrieval buffer.
+func TestRuntimeDarwinLargeEnvironmentKeepsBoundedArgvAuthority(t *testing.T) {
+	prefix := append([]byte{2, 0, 0, 0}, []byte("/TEST/opencode\x00\x00/TEST/opencode\x00serve\x00")...)
+	for _, size := range []int{8192, 12288} {
+		environment := []byte("PAD=" + strings.Repeat("x", size) + "\x00not-serve\x00--attach=TEST\x00\xff")
+		raw := append(append([]byte(nil), prefix...), environment...)
+		if got := runtimeDarwinEntry(raw); got != "serve" {
+			t.Fatalf("valid serve with %d environment bytes rejected: %q", size, got)
+		}
+	}
+	unsupported := append([]byte{2, 0, 0, 0}, []byte("/TEST/opencode\x00\x00/TEST/opencode\x00attach\x00")...)
+	unsupported = append(unsupported, []byte("PAD="+strings.Repeat("x", 12288)+"\x00serve\x00")...)
+	longArgv := append([]byte{2, 0, 0, 0}, []byte("/TEST/opencode\x00\x00"+strings.Repeat("x", 4096)+"\x00serve\x00")...)
+	badUTF8 := append([]byte(nil), prefix...)
+	badUTF8[len(badUTF8)-2] = 0xff
+	for _, raw := range [][]byte{prefix[:len(prefix)-1], badUTF8, unsupported, longArgv} {
+		if runtimeDarwinEntry(raw) != "" {
+			t.Fatal("truncated, malformed, unsupported or oversized argv supplied entry authority")
+		}
 	}
 }
 

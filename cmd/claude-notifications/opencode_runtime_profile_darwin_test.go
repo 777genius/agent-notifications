@@ -29,8 +29,8 @@ func portAssertProcessSettled(t *testing.T, pid int) {
 	}
 }
 
-// Native CI only: oversized saved args/environment must deny before the probe
-// or callback. The disposable non-serve parent owns and Waits the actual helper.
+// Native CI only: large environment text cannot turn a non-serve parent into
+// serve authority before the probe/callback. The parent owns and Waits the helper.
 func TestRuntimeDarwinLargeEnvironmentDeniesBeforeCallback(t *testing.T) {
 	dir := t.TempDir()
 	image := filepath.Join(dir, "large-env-fixture")
@@ -61,8 +61,8 @@ func main(){image,_:=os.Executable()
 	t.Cleanup(func() { _ = parent.Process.Kill(); _ = parent.Wait() })
 	in := runtimeProfileInput{Protocol: 1, HostExecutable: image, Origin: strings.Repeat("11", 32), ControlRoot: dir, NativePID: parent.Process.Pid, Entry: "serve", PublicExecPath: image}
 	portAwait(t, image+"."+strconv.Itoa(parent.Process.Pid)+".host")
-	if runtimeDarwinNativeEntry(parent.Process.Pid) != "" {
-		t.Fatal("large saved environment supplied false native entry evidence")
+	if runtimeDarwinNativeEntry(parent.Process.Pid) != "tui" {
+		t.Fatal("large environment changed the non-serve project argv entry")
 	}
 	portLaunch(t, in, in, "", "accept")
 	if out := portOutput(t, in); string(out) != portDeniedReceipt {
