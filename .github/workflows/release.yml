@@ -400,9 +400,57 @@ jobs:
         shell: bash
 
 
+  prepare-opencode-inputs:
+    name: Seal same-run OpenCode release inputs
+    needs: [build-matrix, build-notifier]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      sha256: ${{ steps.seal.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with: {go-version: '1.27.1', cache: false}
+      - uses: actions/setup-node@v6
+        with: {node-version: '24.21.0'}
+      - uses: actions/setup-python@v7
+        with: {python-version: '3.12'}
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: binaries-*
+          merge-multiple: true
+          path: dist
+      - uses: actions/download-artifact@v8
+        with:
+          name: ClaudeNotifier
+          path: .task-tools/artifacts/release-helper
+      - name: Rebuild and verify the exact self-contained observer
+        working-directory: opencode-plugin
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ../.task-tools/artifacts
+          cp ../internal/opencodeplugin/dist/agent-notifications.js ../.task-tools/artifacts/original-observer.js
+          npm ci --ignore-scripts
+          npm run check:candidate
+          npm run build
+          cmp ../.task-tools/artifacts/original-observer.js ../internal/opencodeplugin/dist/agent-notifications.js
+          cp ../internal/opencodeplugin/dist/agent-notifications.js ../.task-tools/artifacts/rebuilt-observer.js
+      - name: Seal actual reviewed source bytes and exact release binary custody
+        id: seal
+        run: python -B scripts/release-opencode-inputs.py --rebuilt .task-tools/artifacts/rebuilt-observer.js
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-opencode-inputs-${{ github.sha }}
+          path: .task-tools/artifacts/release-opencode-inputs.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
   qualify-opencode:
     name: Qualify release OpenCode ${{ matrix.target.platform }}/${{ matrix.target.arch }} ${{ matrix.version }}
-    needs: [build-matrix, build-notifier]
+    needs: [build-matrix, prepare-opencode-inputs]
     runs-on: ${{ matrix.target.runner }}
     timeout-minutes: 20
     strategy:
@@ -412,16 +460,15 @@ jobs:
         target:
           - {runner: ubuntu-22.04, platform: linux, arch: amd64, binary: claude-notifications-linux-amd64}
           - {runner: ubuntu-22.04-arm, platform: linux, arch: arm64, binary: claude-notifications-linux-arm64}
-          - {runner: macos-15, platform: darwin, arch: arm64, binary: claude-notifications-darwin-arm64}
-          - {runner: macos-15-intel, platform: darwin, arch: amd64, binary: claude-notifications-darwin-amd64}
+          # Both Mac assets retain normal build/artifact canaries. Desktop
+          # OpenCode qualification is not claimed on noninteractive Mac runners.
           - {runner: windows-latest, platform: windows, arch: amd64, binary: claude-notifications-windows-amd64.exe}
         include:
           - version: '1.18.34'
             target: {runner: ubuntu-22.04, platform: linux, arch: amd64, binary: claude-notifications-linux-amd64}
     env:
-      # These are reviewed immutable inputs for this exact tag/build, never grants.
-      AN_EVIDENCE_URL: ${{ vars.OPENCODE_RELEASE_EVIDENCE_URL }}
-      AN_EVIDENCE_SHA256: ${{ vars.OPENCODE_RELEASE_EVIDENCE_SHA256 }}
+      AN_EVIDENCE_ARCHIVE: .task-tools/artifacts/custody/release-opencode-inputs.tar.gz
+      AN_EVIDENCE_SHA256: ${{ needs.prepare-opencode-inputs.outputs.sha256 }}
       AN_OS: ${{ matrix.target.platform }}
       AN_ARCH: ${{ matrix.target.arch }}
       AN_VERSION: ${{ matrix.version }}
@@ -445,16 +492,11 @@ jobs:
         with:
           name: binaries-${{ matrix.target.platform }}-${{ matrix.target.arch }}
           path: dist
-      - name: Download actual signed release helper
-        if: matrix.target.platform == 'darwin'
+      - name: Download same-run sealed release custody
         uses: actions/download-artifact@v8
         with:
-          name: ClaudeNotifier
-          path: .task-tools/artifacts/release-native-app
-      - name: Extract actual signed release helper
-        if: matrix.target.platform == 'darwin'
-        shell: bash
-        run: ditto -x -k .task-tools/artifacts/release-native-app/ClaudeNotifier.app.zip .task-tools/artifacts/release-native-app
+          name: release-opencode-inputs-${{ github.sha }}
+          path: .task-tools/artifacts/custody
       - name: Make normal release binary executable
         if: runner.os != 'Windows'
         shell: bash
@@ -462,7 +504,7 @@ jobs:
       - name: Linux private bus prerequisites
         if: matrix.target.platform == 'linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev dbus iproute2
-      - name: Stage immutable external parent artifacts
+      - name: Verify and stage same-run parent archive
         id: parent
         shell: bash
         run: python -B scripts/testdata/opencode-native-e2e/ci_inputs.py --stage-evidence

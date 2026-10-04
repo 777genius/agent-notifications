@@ -7,8 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.48.0] - 2026-10-05
+
 ### Added
-- One OpenCode plugin supports V1 `server` and V2 `setup`, with native qualification targeting 1.18.33, 1.18.34 and 2.0.21; final candidate qualification remains pending. V2 notifications verify native ownership and settled execution, suppress child sessions, and recover after temporary ownership failures ([#294](https://github.com/777genius/agent-notifications/pull/294)). SDK 0.3.0 publication and registry qualification remain pending.
+- One OpenCode plugin supports V1 `server` and V2 `setup`, with compatibility targeting 1.18.33, 1.18.34 and 2.0.21. V2 notifications verify native ownership and settled execution, suppress child sessions, and recover after temporary ownership failures ([#294](https://github.com/777genius/agent-notifications/pull/294)). The self-contained bundle incorporates SDK 0.3.0 built from the reviewed vendored tarball; separate SDK publication remains pending.
 - Interactive agent selection in the public installer, with separate installation scope and notification consent for each selected product. Cancellation performs no installation; partial failures retain completed installations and show recovery guidance ([#296](https://github.com/777genius/agent-notifications/pull/296)).
 - The `licenses` command and third-party license notices in portable packages and release assets.
 
@@ -29,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Codex setup safely adopts owner-owned legacy locks with read-only group/world permissions, preserving inode and contents while keeping foreign files and unsafe permissions rejected ([#290](https://github.com/777genius/agent-notifications/pull/290)).
 - Installation preserves existing merged Claude hooks instead of applying legacy cleanup to user settings ([#265](https://github.com/777genius/agent-notifications/pull/265)).
 - Unchanged managed legacy skills migrate to the canonical `agent-notifications` skill without replacing user edits ([#306](https://github.com/777genius/agent-notifications/pull/306)).
+
+### Platform notes
+- Intel macOS binaries are included; desktop notification delivery on Intel remains unqualified. Binary/version and package checks do not establish visible banners.
+- Persistent OpenCode TUI/serve hosts are supported; one-shot `opencode run` delivery remains best effort during host shutdown.
+- Stock Windows OpenCode V1 1.18.33 retains the accepted delayed-event limitation: a delayed completion can notify once and recur after the 24-hour claim lifetime.
+- Gemini availability remains qualified on Linux amd64/arm64 and Windows amd64.
 
 ## [1.46.1] - 2026-10-01
 

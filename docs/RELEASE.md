@@ -137,21 +137,29 @@ git push origin vX.Y.Z
 gh run watch                   # wait for release.yml to finish
 ```
 
-Before creating the draft, `release.yml` qualifies the actual downloaded binary artifacts
-on all five native targets with `scripts/opencode-native-e2e.py` and the SHA-256-pinned
-OpenCode 1.18.33 CLI, followed by the integrity-verified native npm package for
-OpenCode 2.0.21. This checks completion webhook delivery, managed update and
-revocation after removal in disposable projects and profiles. The uploaded
-`opencode-release-e2e-<platform>-<arch>` reports bind the evidence to the release commit
-and binary SHA-256. These checks do not prove desktop banner delivery or the
-Linux semantic matrix (questions, permission, errors, retry, cancellation,
-compaction, child sessions and global reader ownership).
+Before creating the draft, `release.yml` checks the downloaded artifacts on all five
+native targets with `scripts/release-artifact-e2e.py`. Both macOS architectures
+remain in the build and artifact canary matrix, and ClaudeNotifier.app is signed
+and notarized. Artifact checks do not establish visible desktop banners.
 
-The dual-API candidate consumes an exact reviewed UAP 0.2.0 tarball before
-publication. Publish the SDK only with separate owner authorization, verify the
-registry artifact against that tarball's integrity, and require a clean registry
-install to reproduce the tested bundle before declaring the product merge/release
-ready. Adding CI lanes does not establish that they have passed.
+OpenCode qualification uses the same-run binaries in seven Linux/Windows cells:
+V1 1.18.33 and V2 2.0.21 on Linux amd64/arm64 and Windows amd64, plus V1 1.18.34
+on Linux amd64. SHA-256-pinned host archives, native executable hashes, exact
+release source and binary hashes bind the reports to the candidate. The checks
+cover completion delivery, managed update and revocation in disposable projects.
+They do not replace the broader semantic matrix or desktop delivery evidence.
+
+For v1.48.0, the owner explicitly accepts shipping the Intel macOS build without
+Intel desktop delivery qualification because no Intel GUI host is available.
+Historical real Mac ARM desktop evidence must be described separately from the
+new release artifact checks; neither qualifies Intel desktop delivery.
+
+The self-contained bundle incorporates UAP SDK 0.3.0 built from the reviewed
+vendored tarball. Preparation verifies
+its lockfile integrity and an identical rebuild of the tracked embedded bundle.
+Publishing that separate SDK requires separate owner authorization; it is not a
+prerequisite for this self-contained consumer release. Adding CI lanes does not
+establish that they have passed.
 
 The workflow creates a **draft**, never an automatically published release. Inspect it with
 `gh release view vX.Y.Z --json isDraft,assets` and download the assets into a disposable
