@@ -27,15 +27,36 @@ func (r *receiver) GetCapabilities() ([]string, *dbus.Error) {
 	return []string{}, nil
 }
 
+// Independent literal UI contract for these controlled TEST sessions only.
+// Generic fallback is allowed when native optional display metadata is absent.
+func testDesktopPresentation(title, body string) bool {
+	if title == "OpenCode" {
+		return body == "Task completed" || body == "OpenCode asked a question" || body == "OpenCode requested permission" || body == "An error needs your attention"
+	}
+	switch title {
+	case "✅ [TEST completion]", "✅ [TEST manual compaction]", "✅ [TEST actual tool child]", "✅ [TEST scope root]", "✅ [TEST scope root (fork #1)]", "✅ [P0 terminal retry]":
+		return body == "Task completed"
+	case "OpenCode [TEST permission]":
+		return body == "OpenCode requested permission"
+	case "OpenCode [TEST error]":
+		return body == "An error needs your attention"
+	case "❓ Question [TEST form]":
+		return body == "OpenCode asked a question"
+	case "❓ P0 test choice?":
+		return body == "P0 test choice?" || body == "TEST form\nP0 test choice?"
+	default:
+		return false
+	}
+}
+
 func (r *receiver) Notify(app string, replaces uint32, icon, title, body string, actions []string, hints map[string]dbus.Variant, expiry int32) (uint32, *dbus.Error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.next++
 	silent, ok := hints["suppress-sound"]
-	valid := app == "agent-notifications" && replaces == 0 && icon == "" && title == "OpenCode" && len(actions) == 0 && len(hints) == 1 && ok && silent.Value() == true && expiry > 0 && expiry <= 15000
+	valid := app == "agent-notifications" && replaces == 0 && icon == "" && len(actions) == 0 && len(hints) == 1 && ok && silent.Value() == true && expiry > 0 && expiry <= 15000
 	// Do not persist arbitrary product payloads or user/private identifiers on failure.
-	bodies := map[string]bool{"Task completed": true, "OpenCode asked a question": true, "OpenCode requested permission": true, "An error needs your attention": true}
-	valid = valid && bodies[body]
+	valid = valid && testDesktopPresentation(title, body)
 	row := map[string]any{"count": r.next, "valid": valid, "silent": ok && silent.Value() == true, "actions": len(actions), "expiry": expiry}
 	if valid {
 		row["body"] = body
