@@ -22,7 +22,7 @@ import (
 	"github.com/777genius/agent-notifications/internal/opencodeinstall"
 )
 
-const probeOriginalScriptSHA = "485891c20f7b34ebd774e24ad3fdfdb6eae2555f301adf47b806022669ac6d40"
+const probeOriginalScriptSHA = "ddec5af80c3e1ee1b7e40bb0b23ad97f4f525311a5674a852d2cc08d6346054a"
 const probePrefix = "AN_TOAST_PHASE:"
 
 type probeStream struct {
@@ -83,7 +83,7 @@ func TestTESTWindowsToastPhaseProbe(t *testing.T) {
 	}
 	script := windowsToastPowerShell
 	pieces := []struct{ name, code string }{
-		{"add_type", "Add-Type -AssemblyName System.Runtime.WindowsRuntime"},
+		{"type_resolve", "[Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime] | Out-Null"},
 		{"xml_type", "$doc=[Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom.XmlDocument,ContentType=WindowsRuntime]::New()"},
 		{"xml_load", "$doc.LoadXml($xmlText)"},
 		{"toast_new", "$toast=[Windows.UI.Notifications.ToastNotification,Windows.UI.Notifications,ContentType=WindowsRuntime]::New($doc)"},
@@ -164,7 +164,7 @@ func TestTESTWindowsToastPhaseProbe(t *testing.T) {
 	})
 	receipt := delivery.Deliver(parent, notification.Request{Content: notification.Content{Title: "TEST toast phase probe", Body: "TEST diagnostic submission", Category: "info"}, Deadline: notification.Deadline{BootID: boot, NotAfter: now + 15}, Policy: notification.PolicySnapshot{Valid: true, ExplicitEnabled: true, DesktopEnabled: true}, Navigation: notification.None, Silent: true})
 	scriptSHA := sha256.Sum256([]byte(script))
-	record := map[string]any{"schema": 1, "purpose": "TEST Windows toast phase probe", "qualificationGranted": false, "visibleToastProved": false, "originalScriptSHA256": probeOriginalScriptSHA, "markedScriptSHA256": hex.EncodeToString(scriptSHA[:]), "projectionSHA256": probeOriginalScriptSHA, "phases": append([]map[string]any{}, stdout.phases...), "commandInvoked": called.Load(), "commandStartCallElapsedNS": startNS, "commandStartReturnElapsedNS": startReturnNS, "processStarted": processStarted, "shortcutReady": shortcutReady, "commandWaitReturnElapsedNS": waitNS, "waitReturned": waitNS > 0, "exitCode": exitCode, "commandCancelCalled": cancelled.Load(), "commandCancelSucceeded": cancelSucceeded.Load(), "stdoutBytes": stdout.bytes, "stdoutSHA256": hex.EncodeToString(stdout.hash.Sum(nil)), "stdoutUnknownLines": stdout.unknown, "stdoutPartialLine": stdout.pending != "", "stderrBytes": stderr.bytes, "stderrSHA256": hex.EncodeToString(stderr.hash.Sum(nil)), "desktopStatus": receipt.Status, "desktopReason": receipt.Reason}
+	record := map[string]any{"schema": 1, "purpose": "TEST Windows toast candidate phase probe", "baselineProductScriptSHA256": "485891c20f7b34ebd774e24ad3fdfdb6eae2555f301adf47b806022669ac6d40", "candidateSourceSHA256": "c3dc779e3e6e6dc5825f5ee64d974eb2b2842d5d63f4ca2e723bd458d42000ae", "candidateScriptSHA256": "ddec5af80c3e1ee1b7e40bb0b23ad97f4f525311a5674a852d2cc08d6346054a", "qualificationGranted": false, "visibleToastProved": false, "originalScriptSHA256": probeOriginalScriptSHA, "markedScriptSHA256": hex.EncodeToString(scriptSHA[:]), "projectionSHA256": probeOriginalScriptSHA, "phases": append([]map[string]any{}, stdout.phases...), "commandInvoked": called.Load(), "commandStartCallElapsedNS": startNS, "commandStartReturnElapsedNS": startReturnNS, "processStarted": processStarted, "shortcutReady": shortcutReady, "commandWaitReturnElapsedNS": waitNS, "waitReturned": waitNS > 0, "exitCode": exitCode, "commandCancelCalled": cancelled.Load(), "commandCancelSucceeded": cancelSucceeded.Load(), "stdoutBytes": stdout.bytes, "stdoutSHA256": hex.EncodeToString(stdout.hash.Sum(nil)), "stdoutUnknownLines": stdout.unknown, "stdoutPartialLine": stdout.pending != "", "stderrBytes": stderr.bytes, "stderrSHA256": hex.EncodeToString(stderr.hash.Sum(nil)), "desktopStatus": receipt.Status, "desktopReason": receipt.Reason}
 	raw, err := json.Marshal(record)
 	if err != nil {
 		t.Fatal("TEST_probe_record_encoding_failed")

@@ -147,27 +147,29 @@ def run(args, *, cwd, env, timeout=30, input="", diagnostic_stage=None):
 def windows_toast_phase_probe(root, env, managed, product_head):
     # Explicit TEST-only preprovider observation, never installed/business acceptance.
     base = REPO / '.task-tools/artifacts'
-    source, binary, receipt = (base / n for n in ('held-toast-phase-probe_windows_test.go', 'windows-toast-phase-probe.exe', 'windows-toast-phase-probe-build.json'))
-    require(all(p.is_file() and not any(q.is_symlink() for q in (p, *p.parents)) for p in (source, binary, receipt)), 'toast_probe_binding')
-    require(digest(source) == '03415e5af66b7ed5020cd9224114234586527cacc5e23d6796db9d670d882343' and receipt.stat().st_size <= 4096, 'toast_probe_binding')
+    source, binary, receipt, candidate = (base / n for n in ('held-toast-phase-probe_windows_test.go', 'windows-toast-phase-probe.exe', 'windows-toast-phase-probe-build.json', 'held-toast-candidate_delivery_toast_windows.go'))
+    require(all(p.is_file() and not any(q.is_symlink() for q in (p, *p.parents)) for p in (source, binary, receipt, candidate)), 'toast_probe_binding')
+    require(digest(source) == '440867d0d16b031f97cb7a92a015b488a86536fb22217c8d57e6c1ff7b4ea47f' and digest(candidate) == 'c3dc779e3e6e6dc5825f5ee64d974eb2b2842d5d63f4ca2e723bd458d42000ae' and receipt.stat().st_size <= 4096, 'toast_probe_binding')
     build = json.loads(receipt.read_bytes())
-    require(type(build) is dict and set(build) == {'schema','productCommit','probeSourceSHA256','binarySHA256','goToolSHA256','overlaySHA256','compileExitCode','compileStdoutSHA256','compileStderrSHA256'} and type(build['schema']) is int and build['schema'] == 1 and build['productCommit'] == product_head and build['probeSourceSHA256'] == digest(source) and build['binarySHA256'] == digest(binary) and type(build['compileExitCode']) is int and build['compileExitCode'] == 0 and all(type(build[k]) is str and re.fullmatch('[0-9a-f]{64}',build[k]) for k in set(build)-{'schema','productCommit','compileExitCode'}), 'toast_probe_binding')
-    pins = {p:digest(p) for p in (source,binary,receipt,managed)}
+    require(type(build) is dict and set(build) == {'schema','productCommit','candidateSourceSHA256','probeSourceSHA256','binarySHA256','goToolSHA256','overlaySHA256','compileExitCode','compileStdoutSHA256','compileStderrSHA256'} and type(build['schema']) is int and build['schema'] == 1 and build['productCommit'] == product_head and build['candidateSourceSHA256'] == digest(candidate) and build['probeSourceSHA256'] == digest(source) and build['binarySHA256'] == digest(binary) and type(build['compileExitCode']) is int and build['compileExitCode'] == 0 and all(type(build[k]) is str and re.fullmatch('[0-9a-f]{64}',build[k]) for k in set(build)-{'schema','productCommit','compileExitCode'}), 'toast_probe_binding')
+    pins = {p:digest(p) for p in (source,binary,receipt,managed,candidate)}
     child_env = dict(env, TEST_AN_TOAST_CONTROL_ROOT=str(root/'control'), TEST_AN_TOAST_INSTALLED_EXECUTABLE=str(managed))
     out = run([str(binary),'-test.run=^TestTESTWindowsToastPhaseProbe$','-test.count=1','-test.v'],cwd=root,env=child_env)
     prefix = 'AN_WINDOWS_TOAST_PHASE_PROBE '
     lines = [line.split(prefix,1)[1] for line in out.splitlines() if prefix in line]
     require(len(lines) == 1 and len(lines[0]) <= 8192 and all(digest(p) == pin for p,pin in pins.items()), 'toast_probe_result')
     value = json.loads(lines[0])
-    keys = {'schema','purpose','qualificationGranted','visibleToastProved','originalScriptSHA256','markedScriptSHA256','projectionSHA256','phases','commandInvoked','commandStartCallElapsedNS','commandStartReturnElapsedNS','commandWaitReturnElapsedNS','waitReturned','processStarted','shortcutReady','exitCode','commandCancelCalled','commandCancelSucceeded','stdoutBytes','stdoutSHA256','stdoutUnknownLines','stdoutPartialLine','stderrBytes','stderrSHA256','desktopStatus','desktopReason'}
-    require(type(value) is dict and set(value) == keys and type(value['schema']) is int and value['schema'] == 1 and value['purpose'] == 'TEST Windows toast phase probe' and value['qualificationGranted'] is False and value['visibleToastProved'] is False, 'toast_probe_result')
+    keys = {'schema','purpose','baselineProductScriptSHA256','candidateSourceSHA256','candidateScriptSHA256','qualificationGranted','visibleToastProved','originalScriptSHA256','markedScriptSHA256','projectionSHA256','phases','commandInvoked','commandStartCallElapsedNS','commandStartReturnElapsedNS','commandWaitReturnElapsedNS','waitReturned','processStarted','shortcutReady','exitCode','commandCancelCalled','commandCancelSucceeded','stdoutBytes','stdoutSHA256','stdoutUnknownLines','stdoutPartialLine','stderrBytes','stderrSHA256','desktopStatus','desktopReason'}
+    require(type(value) is dict and set(value) == keys and type(value['schema']) is int and value['schema'] == 1 and value['purpose'] == 'TEST Windows toast candidate phase probe' and value['qualificationGranted'] is False and value['visibleToastProved'] is False, 'toast_probe_result')
     require(all(type(value[k]) is bool for k in ('commandInvoked','waitReturned','processStarted','shortcutReady','commandCancelCalled','commandCancelSucceeded','stdoutPartialLine')) and all(type(value[k]) is int and 0 <= value[k] <= 30_000_000_000 for k in ('commandStartCallElapsedNS','commandStartReturnElapsedNS','commandWaitReturnElapsedNS')) and all(type(value[k]) is int and 0 <= value[k] <= 65536 for k in ('stdoutBytes','stderrBytes','stdoutUnknownLines')), 'toast_probe_result')
     require(value['exitCode'] is None or type(value['exitCode']) is int and -1 <= value['exitCode'] <= 4294967295, 'toast_probe_result')
-    require(all(type(value[k]) is str and re.fullmatch('[0-9a-f]{64}',value[k]) for k in ('originalScriptSHA256','markedScriptSHA256','projectionSHA256','stdoutSHA256','stderrSHA256')) and value['originalScriptSHA256'] == value['projectionSHA256'] == '485891c20f7b34ebd774e24ad3fdfdb6eae2555f301adf47b806022669ac6d40', 'toast_probe_result')
-    phases = {'script.enter', *(name+suffix for name in ('add_type','xml_type','xml_load','toast_new','notifier_show') for suffix in ('.before','.after'))}
+    require(all(type(value[k]) is str and re.fullmatch('[0-9a-f]{64}',value[k]) for k in ('originalScriptSHA256','markedScriptSHA256','projectionSHA256','stdoutSHA256','stderrSHA256')) and value['originalScriptSHA256'] == value['projectionSHA256'] == 'ddec5af80c3e1ee1b7e40bb0b23ad97f4f525311a5674a852d2cc08d6346054a' and value['candidateScriptSHA256'] == 'ddec5af80c3e1ee1b7e40bb0b23ad97f4f525311a5674a852d2cc08d6346054a' and value['baselineProductScriptSHA256'] == '485891c20f7b34ebd774e24ad3fdfdb6eae2555f301adf47b806022669ac6d40' and value['candidateSourceSHA256'] == digest(candidate), 'toast_probe_result')
+    phases = {'script.enter', *(name+suffix for name in ('type_resolve','xml_type','xml_load','toast_new','notifier_show') for suffix in ('.before','.after'))}
     require(type(value['phases']) is list and len(value['phases']) <= 11 and all(type(v) is dict and set(v) == {'phase','observedElapsedNS'} and type(v['phase']) is str and v['phase'] in phases and type(v['observedElapsedNS']) is int and 0 <= v['observedElapsedNS'] <= 30_000_000_000 for v in value['phases']) and len({v['phase'] for v in value['phases']}) == len(value['phases']), 'toast_probe_result')
     require(value['desktopStatus'] in ('rejected','suppressed','unknown','submitted') and value['desktopReason'] in ('malformed_request','configuration_invalid','disabled','navigation_disabled','navigation_unavailable','unsupported_notifier','expired','handoff_unconfirmed','native_submission_deadline','native_submission_cancelled','session_notification'), 'toast_probe_result')
-    return dict(value, helperExitCode=0, helperReaped=True, probeSourceSHA256=pins[source], helperBinarySHA256=pins[binary], helperBuildRecordSHA256=pins[receipt])
+    expected = ['script.enter', *(name+suffix for name in ('type_resolve','xml_type','xml_load','toast_new','notifier_show') for suffix in ('.before','.after'))]
+    observed = (value['shortcutReady'] and value['processStarted'] and value['waitReturned'] and value['exitCode'] == 0 and not value['commandCancelCalled'] and value['desktopStatus'] == 'submitted' and value['desktopReason'] == 'session_notification' and 0 < value['commandWaitReturnElapsedNS'] < 15_000_000_000 and [v['phase'] for v in value['phases']] == expected and value['stdoutUnknownLines'] == 0 and not value['stdoutPartialLine'])
+    return dict(value, candidateNaturalSubmissionObserved=observed, helperExitCode=0, helperReaped=True, probeSourceSHA256=pins[source], helperBinarySHA256=pins[binary], helperBuildRecordSHA256=pins[receipt])
 
 
 def windows_programs_probe(root, env, product_head):
@@ -1415,6 +1417,7 @@ def qualify(args, report):
             require(mode in ('true','false'), 'toast_probe_explicit_mode')
             if mode == 'true':
                 report['windowsToastPhaseProbe'] = windows_toast_phase_probe(root, env, managed, m['candidateCommit'])
+                require(report['windowsToastPhaseProbe']['candidateNaturalSubmissionObserved'], 'toast_candidate_submission_not_observed')
                 report.update(status='windows_toast_phase_probe_observed_only', businessPhasesStarted=False, actualProviderTransactions=0, actualProviderGaps=0, actualIndependentWebhookSubmissions=0)
                 return
         webhook = owner.serve(Webhook())
