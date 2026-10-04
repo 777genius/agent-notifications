@@ -38,28 +38,74 @@ class ClosedDiagnostic(unittest.TestCase):
                 with self.assertRaises(ValueError):diagnostic(self.encode({**denied,**change}))
         missing=dict(denied);missing.pop('exitCode')
         with self.assertRaises(ValueError):diagnostic(self.encode(missing))
+        for version in ('1.18.33','1.18.34','2.0.21'):
+            for count in (0,1,2):
+                with self.subTest(version=version,count=count), tempfile.TemporaryDirectory(prefix='TEST-closed-denied-') as d:
+                    root=pathlib.Path(d);log=root/'host-private.log'
+                    observation=self.observation(version)
+                    log.write_text(self.encode(self.record())+'\n'+(self.encode(denied)+'\n')*count)
+                    self.assertEqual(observation.update(root,closed=True),[self.record()])
+                    self.assertEqual(observation.closedDenied,[denied]*count)
+                    self.assertEqual(observation.update(root,closed=True),[self.record()])
+            with tempfile.TemporaryDirectory(prefix='TEST-negative-only-') as d:
+                root=pathlib.Path(d);(root/'host-private.log').write_text(self.encode(denied)+'\n')
+                self.assertEqual(self.observation(version).update(root,closed=True),[])
+        with tempfile.TemporaryDirectory(prefix='TEST-unsupported-generation-') as d:
+            root=pathlib.Path(d);(root/'host-private.log').write_text(self.encode(denied)+'\n')
+            with self.assertRaisesRegex(ValueError,'closed_denied_native_generation_mismatch'):
+                self.observation('1.18.35').update(root,closed=True)
+
+    def observation(self,version):
+        from portable import Observation
         def require(value,code):
             if not value:raise ValueError(code)
-        with tempfile.TemporaryDirectory(prefix='TEST-closed-denied-') as d:
-            root=pathlib.Path(d);log=root/'host-private.log'
-            observation=Observation.__new__(Observation)
-            observation.args=SimpleNamespace(version='2.0.21')
-            observation.require=require
-            observation.cursors,observation.partial,observation.rows={},{},[]
-            observation.closedDenied=[]
-            log.write_text(self.encode(self.record())+'\n'+self.encode(denied)+'\n')
-            self.assertEqual(observation.update(root,closed=True),[self.record()])
-            self.assertEqual(observation.closedDenied,[denied])
-            self.assertEqual(observation.update(root,closed=True),[self.record()])
-            with log.open('a') as stream:stream.write(self.encode(denied)+'\n')
-            with self.assertRaisesRegex(ValueError,'unexpected_closed_denied_event'):
-                observation.update(root,closed=True)
-            observation.args.version='1.18.33'
-            observation.cursors,observation.partial,observation.rows={},{},[]
-            observation.closedDenied=[]
-            log.write_text(self.encode(denied)+'\n')
-            with self.assertRaisesRegex(ValueError,'closed_denied_native_generation_mismatch'):
-                observation.update(root,closed=True)
+        observation=Observation.__new__(Observation)
+        observation.args=SimpleNamespace(version=version,os='linux')
+        observation.require=require
+        observation.cursors,observation.partial,observation.rows={},{},[]
+        observation.closedDenied=[]
+        return observation
+
+    def test_combined_attempt_bound_counts_non_authoritative_negatives(self):
+        denied={k:v for k,v in self.record().items() if k!='receipt'};denied['ipc']='invalidated'
+        for version in ('1.18.33','1.18.34','2.0.21'):
+            for positive_count,negative_count in ((0,32),(30,2),(31,2),(0,33)):
+                with self.subTest(version=version,counts=(positive_count,negative_count)), tempfile.TemporaryDirectory(prefix='TEST-event-budget-') as d:
+                    root=pathlib.Path(d);observation=self.observation(version)
+                    (root/'host-private.log').write_text((self.encode(self.record())+'\n')*positive_count+(self.encode(denied)+'\n')*negative_count)
+                    if positive_count+negative_count<=32:
+                        self.assertEqual(len(observation.update(root,closed=True)),positive_count)
+                        self.assertEqual(len(observation.closedDenied),negative_count)
+                    else:
+                        with self.assertRaisesRegex(ValueError,'actual_event_attempt_budget'):observation.update(root,closed=True)
+
+    def test_seal_keeps_positive_membership_and_v2_quiet_tail_with_any_negative_count(self):
+        import hashlib
+        denied={k:v for k,v in self.record().items() if k!='receipt'};denied['ipc']='invalidated'
+        for version in ('1.18.33','1.18.34','2.0.21'):
+            for count,positives,providers,webhooks,noisy in ((0,14,21,14,False),(1,14,21,14,False),(2,14,21,14,False),
+                    (0,13,21,14,False),(0,14,20,14,False),(0,14,21,13,False),(0,14,21,14,True)):
+                if noisy and version!='2.0.21':continue
+                with self.subTest(version=version,counts=(count,positives,providers,webhooks),noisy=noisy), tempfile.TemporaryDirectory(prefix='TEST-seal-membership-') as d:
+                    root=pathlib.Path(d);observation=self.observation(version)
+                    (root/'host-private.log').write_text((self.encode(self.record())+'\n')*positives+(self.encode(denied)+'\n')*count)
+                    (root/'desktop-private.jsonl').write_text((json.dumps({'valid':True,'body':'Task completed'})+'\n')*positives)
+                    observation.actual_provider=SimpleNamespace(records=[None]*providers,gaps=[])
+                    observation.webhook=SimpleNamespace(count=lambda:webhooks)
+                    observation.proof=root/'proof.json';observation.proof.write_text('{}');observation.primitives={}
+                    observation.digest=lambda path:hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
+                    observation.fixed={str(observation.proof):observation.digest(observation.proof)}
+                    tail=[{'scenario':'completion','status':'observed','providerCalls':1,'desktopCount':n,'webhookCount':n} for n in (1,0,0,1)]
+                    if noisy:tail[1]['desktopCount']=1
+                    report={'scenarios':tail}
+                    if positives!=14 or providers!=21 or webhooks!=14 or noisy:
+                        with self.assertRaises(ValueError):observation.seal(root,report)
+                    else:
+                        observation.seal(root,report)
+                        self.assertEqual(report['actualClosedSubmittedChildren'],14)
+                        self.assertEqual(report['actualClosedDeniedChildren'],count)
+                        self.assertIs(report['closedDeniedPositiveAuthority'],False)
+                        self.assertIs(report['installedQualificationGranted'],False)
 
     def test_extra_secret_duplicate_and_incomplete_records_deny(self):
         row=self.record();row['receipt']['reason']='PRIVATE_SECRET'

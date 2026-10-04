@@ -211,9 +211,9 @@ class Observation:
                 row = diagnostic(rawline.decode('utf-8', errors='strict'))
                 if row is not None:
                     if row['ipc'] == 'invalidated':
-                        self.require(self.args.version == '2.0.21', 'closed_denied_native_generation_mismatch')
+                        self.require(self.args.version in ('1.18.33', '1.18.34', '2.0.21'),
+                                     'closed_denied_native_generation_mismatch')
                         self.closedDenied.append(row)
-                        self.require(len(self.closedDenied) <= 1, 'unexpected_closed_denied_event')
                     else:
                         self.rows.append(row)
                     self.require(len(self.rows) + len(self.closedDenied) <= 32, 'actual_event_attempt_budget')
@@ -281,9 +281,7 @@ class Observation:
         rows = self.update(root, closed=True)
         self.require(len(self.actual_provider.records) == 21 and not self.actual_provider.gaps, 'late_or_unexpected_provider_transaction')
         self.require(len(rows) == self.webhook.count() == 14, 'closed_event_submission_membership_mismatch')
-        self.require(len(self.closedDenied) == (1 if self.args.version == '2.0.21' else 0),
-                     'closed_denied_event_membership_mismatch')
-        if self.closedDenied:
+        if self.args.version == '2.0.21':
             tail = report.get('scenarios', [])[-4:]
             self.require(len(tail) == 4 and all(
                 row.get('scenario') == 'completion' and row.get('status') == 'observed' and
