@@ -17,7 +17,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: ${{ matrix.go }}
-      - name: Materialize isolated baseline and access-only candidate
+      - name: Materialize isolated baseline and temporary-attribute candidate
         shell: bash
         run: |
           set -euo pipefail
@@ -25,24 +25,24 @@ jobs:
           git rev-parse HEAD > evidence/workflow-source.txt
           go version > evidence/go.txt
           git worktree add --detach "$RUNNER_TEMP/cache-baseline" HEAD
-          git worktree add --detach "$RUNNER_TEMP/cache-narrow" HEAD
+          git worktree add --detach "$RUNNER_TEMP/cache-temporary" HEAD
           python - <<'PYTHON'
           import os
           from pathlib import Path
-          p = Path(os.environ['RUNNER_TEMP']) / 'cache-narrow/internal/installruntime/private_cache_windows.go'
-          old = 'windows.GENERIC_READ|windows.GENERIC_WRITE|windows.DELETE|windows.WRITE_DAC|windows.WRITE_OWNER|windows.READ_CONTROL'
-          new = 'windows.FILE_WRITE_DATA|windows.DELETE|windows.READ_CONTROL'
+          p = Path(os.environ['RUNNER_TEMP']) / 'cache-temporary/internal/installruntime/path_handle_windows.go'
+          old = 'err = windows.NtCreateFile(&handle, access|windows.SYNCHRONIZE, &attrs, &status, nil, windows.FILE_ATTRIBUTE_NORMAL,'
+          new = 'fileAttributes := uint32(windows.FILE_ATTRIBUTE_NORMAL)\n\tif security != nil && disposition == windows.FILE_CREATE && options&windows.FILE_NON_DIRECTORY_FILE != 0 {\n\t\tfileAttributes = windows.FILE_ATTRIBUTE_TEMPORARY\n\t}\n\terr = windows.NtCreateFile(&handle, access|windows.SYNCHRONIZE, &attrs, &status, nil, fileAttributes,'
           text = p.read_text()
           assert text.count(old) == 1
           p.write_text(text.replace(old, new))
           PYTHON
-          git -C "$RUNNER_TEMP/cache-narrow" diff > evidence/narrow-access.patch
+          git -C "$RUNNER_TEMP/cache-temporary" diff > evidence/temporary-attribute.patch
       - name: Build fresh native test executables and verify security contracts
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $evidence = Join-Path $PWD 'evidence'
-          foreach ($variant in @('baseline', 'narrow')) {
+          foreach ($variant in @('baseline', 'temporary')) {
             Push-Location (Join-Path $env:RUNNER_TEMP "cache-$variant")
             go test '-race' '-count=1' './internal/installruntime' *> (Join-Path $evidence "$variant-security.log")
             if ($LASTEXITCODE -ne 0) { throw "$variant security checks failed" }
@@ -58,9 +58,18 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $evidence = Join-Path $PWD 'evidence'
           $failed = $false
+          $recording = $null
+          try {
+            if (Get-Command New-MpPerformanceRecording -ErrorAction SilentlyContinue) {
+              $recording = Start-Job -ArgumentList $evidence -ScriptBlock {
+                param($out)
+                New-MpPerformanceRecording -RecordTo (Join-Path $out 'defender.etl') -Seconds 60 *> (Join-Path $out 'defender-recording.log')
+              }
+            } else { 'Defender performance cmdlet unavailable' | Set-Content (Join-Path $evidence 'defender-recording.log') }
+          } catch { $_ | Out-String | Set-Content (Join-Path $evidence 'defender-recording.log') }
           'round,variant,trace,exit' | Set-Content (Join-Path $evidence 'status.csv')
           for ($round = 1; $round -le 10; $round++) {
-            $variants = if (($round % 2) -eq 1) { @('baseline','narrow') } else { @('narrow','baseline') }
+            $variants = if (($round % 2) -eq 1) { @('baseline','temporary') } else { @('temporary','baseline') }
             foreach ($variant in $variants) {
               $args = @('-test.v', '-test.run=^TestChannelConsentIndependentAndNoRetry$', '-test.count=20', '-test.timeout=60s')
               $traced = $round -le 5
@@ -75,12 +84,23 @@ jobs:
               if ($code -ne 0) { $failed = $true }
             }
           }
+          if ($recording) {
+            $null = Wait-Job $recording -Timeout 65
+            Receive-Job $recording *> (Join-Path $evidence 'defender-job.log')
+            if ($recording.State -eq 'Running') { Stop-Job $recording }
+            Remove-Job $recording
+          }
+          if (Test-Path (Join-Path $evidence 'defender.etl')) {
+            try {
+              Get-MpPerformanceReport -Path (Join-Path $evidence 'defender.etl') -TopScans 20 -TopFiles 20 -TopProcesses 20 -Raw | ConvertTo-Json -Depth 20 | Set-Content (Join-Path $evidence 'defender-report.json')
+            } catch { $_ | Out-String | Set-Content (Join-Path $evidence 'defender-report-error.log') }
+          }
           if ($failed) { throw 'At least one original strict paired process failed. Inspect preserved status, logs and traces.' }
       - name: Retain original paired evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: windows-create-paired-go-${{ matrix.go }}
+          name: windows-temporary-paired-go-${{ matrix.go }}
           path: evidence/
           retention-days: 14
           if-no-files-found: error
