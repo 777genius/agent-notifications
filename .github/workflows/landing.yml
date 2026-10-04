@@ -39,7 +39,7 @@ jobs:
         run: python3 ../scripts/stage-released-loader-test.py
       - run: npm run generate
         env:
-          NUXT_APP_BASE_URL: /agent-notifications/
+          NUXT_APP_BASE_URL: /
       - run: npx playwright install --with-deps chromium
       - run: npm run test:browser
       - name: Keep public installer compatible with the published release
