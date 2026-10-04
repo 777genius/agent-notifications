@@ -21,17 +21,12 @@
 
 Desktop notifications for **Claude Code, Codex CLI and OpenCode**. Know when a task finishes, an agent needs input, or a tool needs approval. Claude and Codex also support sounds and click-to-focus.
 
-<div>
-<table>
-  <tr>
-    <td align="center" colspan="2"><img width="760" alt="macOS notification preview: a current question, a plan and a completed task with a readable session title" src="docs/images/notifications-macos.png" /></td>
-  </tr>
-  <tr>
-    <td align="center"><img width="320" alt="Windows notification preview with Agent Notifications branding, native session titles and a current question" src="docs/images/notifications-windows.png" /></td>
-    <td align="center"><img width="320" alt="Linux notification preview with Agent Notifications branding, native session titles and a current question" src="docs/images/notifications-linux.png" /></td>
-  </tr>
-</table>
-</div>
+<p align="center">
+  <img width="100%" alt="macOS, Windows, Linux (left to right)" src="docs/images/notification-platform-labels.svg" />
+  <a href="docs/images/notifications-macos.png"><img width="31%" align="top" alt="macOS notification preview" src="docs/images/notifications-macos.png" /></a>
+  <a href="docs/images/notifications-windows.png"><img width="31%" align="top" alt="Windows notification preview" src="docs/images/notifications-windows.png" /></a>
+  <a href="docs/images/notifications-linux.png"><img width="31%" align="top" alt="Linux notification preview" src="docs/images/notifications-linux.png" /></a>
+</p>
 
 *Illustrative notification previews. Appearance varies by desktop environment.*
 
