@@ -15,11 +15,11 @@ async function chooseOS(page: Page, value: string) {
   await page.getByRole("combobox", { name: "Target operating system" }).click();
   await page.getByRole("option", { name: labels[value], exact: true }).click();
 }
-async function chooseAgents(page: Page, selected: readonly ("claude" | "codex" | "opencode" | "gemini")[]) {
+async function chooseAgents(page: Page, selected: readonly ("claude" | "codex" | "opencode")[]) {
   const labels = { claude: "Claude", codex: "Codex CLI", opencode: "OpenCode", gemini: "Gemini CLI" };
   // Select desired cards first so switching hosts never needs an empty selection.
   for (const wanted of [true, false])
-    for (const value of ["claude", "codex", "opencode", "gemini"] as const) {
+    for (const value of ["claude", "codex", "opencode"] as const) {
       const card = page.getByRole("button", { name: labels[value], exact: true });
       if (selected.includes(value) === wanted &&
           (await card.getAttribute("aria-pressed")) !== String(wanted))
@@ -500,7 +500,7 @@ test("guided reference layout, detected OS and mode focus", async ({
   await context.close();
 });
 
-test("all agents toggle independently, copied commands and configuration cover the selection", async ({ page }) => {
+test("released agents toggle independently, copied commands and configuration cover the selection", async ({ page }) => {
   await page.goto("");
   await chooseOS(page, "macos");
   const labels = { claude: "Claude", codex: "Codex CLI", opencode: "OpenCode", gemini: "Gemini CLI" };
@@ -589,7 +589,8 @@ test("installation deep link and navigation expose the comparison and four agent
   await expect(page.locator("#install")).toBeInViewport();
 });
 
-test("Gemini selection explains pending release and configuration without offering a released command", async ({ page }) => {
+// Regression: the unreleased card must remain visible without changing the active installation.
+test("Gemini selection stays disabled while candidate capabilities remain visible", async ({ page }) => {
   await page.goto("");
   await chooseOS(page, "linux");
   const table = page.getByRole("table", { name: "Compare agent features" });
@@ -607,42 +608,41 @@ test("Gemini selection explains pending release and configuration without offeri
   await page.locator(".agent-support summary").click();
   await expect(details).toContainText("A completed turn does not imply success or a final answer");
   await expect(details).toContainText("silent turn-completed and tool-permission alerts");
-  for (const selected of [["gemini"], ["gemini", "opencode"], ["claude", "codex", "opencode", "gemini"]] as const) {
-    await chooseAgents(page, selected);
-    await expect(page.getByLabel("Install command", { exact: true })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Copy command" })).toHaveCount(0);
-    await expect(page.locator(".setup-panel[role=status]")).toContainText("Public release 1.46.1 does not include Gemini");
-    await expect(page.getByRole("group", { name: "Observer notification channels" })).toHaveCount(0);
-    await page.getByRole("button", { name: "Configure", exact: true }).click();
-    const config = page.locator(".configuration");
-    await expect(config.getByRole("link", { name: "Gemini candidate setup and limits" })).toHaveAttribute("href", /docs\/gemini-notifications.md$/);
-    await expect(config).toContainText("no MCP tool or skill is installed");
-    await expect(config).toContainText("webhook-only; built-in settings are not changed");
-    if (selected.length === 1)
-      await expect(page.getByRole("checkbox", { name: /Let agents send/ })).toHaveCount(0);
-    await page.getByRole("button", { name: "Install", exact: true }).click();
-  }
-  await chooseAgents(page, ["claude"]);
+  const gemini = page.getByRole("button", { name: "Gemini CLI", exact: true });
+  await expect(gemini).toBeVisible();
+  await expect(gemini).toBeDisabled();
+  await expect(gemini).toHaveAttribute("aria-pressed", "false");
+  // Native activation is ignored, and keyboard traversal skips disabled controls.
+  await gemini.evaluate((button) => (button as HTMLButtonElement).click());
+  const openCode = page.getByRole("button", { name: "OpenCode", exact: true });
+  await openCode.focus();
+  await page.keyboard.press("Tab");
+  await expect(page.getByRole("button", { name: "Change", exact: true })).toBeFocused();
+  await expect(gemini).toHaveAttribute("aria-pressed", "false");
   await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--product claude$/);
+  await chooseAgents(page, ["claude", "codex", "opencode"]);
+  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--products claude,codex,opencode --desktop/);
+  await page.getByRole("button", { name: "Configure", exact: true }).click();
+  await expect(page.locator(".configuration")).toContainText("/claude-notifications-go:settings");
+  await expect(page.locator(".configuration")).toContainText("config path");
+  await expect(gemini).toBeDisabled();
+  await page.getByRole("button", { name: "Install", exact: true }).click();
+  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--products claude,codex,opencode --desktop/);
 });
 
-// Regression: selecting Gemini must preserve the other selected agents' manual links.
-test("mixed Gemini selection keeps Claude and Codex manual instructions", async ({ page }) => {
+// Manual instructions must remain available for the released agents in both intents.
+test("Claude and Codex keep manual instructions with Gemini disabled", async ({ page }) => {
   for (const intent of ["Install", "Update"]) {
     await page.goto("");
     await chooseOS(page, "macos");
     await chooseAgents(page, ["claude", "codex"]);
-    // Update is a real action for the published agents. Select it before adding
-    // the unreleased Gemini candidate, which suppresses the public command.
     if (intent === "Update")
       await page.getByRole("button", { name: "Update", exact: true }).click();
-    await chooseAgents(page, ["claude", "codex", "gemini"]);
     await chooseOS(page, "manual");
     const manual = page.locator(".setup-panel.instructions");
     await expect(manual.locator('a[href$="docs/INSTALLATION.md#manual-install"]')).toBeVisible();
     await expect(manual.locator('a[href$="docs/CODEX.md#manual-codex-registration"]')).toBeVisible();
-    await expect(manual.getByRole("link", { name: "Gemini candidate setup and limits" })).toBeVisible();
-    await expect(manual).toContainText("Public release 1.46.1 does not include Gemini");
+    await expect(page.getByRole("button", { name: "Gemini CLI", exact: true })).toBeDisabled();
     await expect(page.getByLabel(intent + " command", { exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Copy command" })).toHaveCount(0);
   }
@@ -658,6 +658,15 @@ test("agent comparison stays readable on mobile and keeps all agents visible", a
     const table = page.getByRole("table", { name: "Compare agent features" });
     await expect(table.getByRole("columnheader")).toHaveCount(5);
     await expect(table.getByRole("row")).toHaveCount(11);
+    // The comparison belongs below the command and both next-step cards at every width.
+    const comparison = await table.boundingBox();
+    expect(comparison).not.toBeNull();
+    await expect(page.locator(".next-step")).toHaveCount(2);
+    for (const preceding of [page.locator(".installation-command"), ...await page.locator(".next-step").all()]) {
+      const bounds = await preceding.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(comparison!.y).toBeGreaterThanOrEqual(bounds!.y + bounds!.height);
+    }
     await expect(page.getByRole("checkbox")).toHaveCount(0);
     await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--product opencode --desktop$/);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
