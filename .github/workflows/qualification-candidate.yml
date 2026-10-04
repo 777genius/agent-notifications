@@ -4,6 +4,7 @@ on:
     inputs:
       version_group: {type: choice, required: true, default: all, options: [all, v1, v2]}
       platform_group: {type: choice, required: true, default: all, options: [all, linux-arm64, darwin-arm64, darwin-amd64, windows-amd64]}
+      windows_programs_probe_only: {type: boolean, required: true, default: true}
       product_head: {type: string, required: true}
       parent_run_id: {type: string, required: true}
       parent_artifact_id: {type: string, required: true}
@@ -36,6 +37,7 @@ jobs:
         working-directory: product
     env:
       TEST_PRODUCT_HEAD: ${{ inputs.product_head }}
+      TEST_WINDOWS_PROGRAMS_PROBE_ONLY: ${{ inputs.windows_programs_probe_only }}
       TEST_PARENT_SHA256: ${{ inputs.parent_sha256 }}
       TEST_PARENT_MANIFEST_SHA256: ${{ inputs.parent_manifest_sha256 }}
       TEST_CI_INPUTS_SHA256: ${{ inputs.ci_inputs_sha256 }}
@@ -103,6 +105,12 @@ jobs:
             test ! -e .task-tools/artifacts/windows-private-root-helper.json
             GOPROXY=off GOSUMDB=off GOVCS='*:off' GOWORK=off GOTOOLCHAIN=local go build -trimpath -mod=readonly -buildvcs=true -o .task-tools/artifacts/windows-private-root-helper.exe scripts/opencode-private-root-windows.go
             python -c 'import hashlib,json,os,pathlib,subprocess; root=pathlib.Path(".task-tools/artifacts"); source=pathlib.Path("scripts/opencode-private-root-windows.go"); binary=root/"windows-private-root-helper.exe"; head=subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip(); h=lambda p:hashlib.sha256(p.read_bytes()).hexdigest(); assert head==os.environ["TEST_PRODUCT_HEAD"] and h(source)=="d0995c320cb3b03a287a43915d2319a1b71f93b1d112c1f60ecc61cb276c15bd"; record={"schema":1,"candidateCommit":head,"sourceSHA256":h(source),"binarySHA256":h(binary)}; (root/"windows-private-root-helper.json").write_text(json.dumps(record,sort_keys=True)+"\n"); binary.chmod(0o444); (root/"windows-private-root-helper.json").chmod(0o444)'
+            test ! -e .task-tools/artifacts/held-windows-programs-probe.go
+            test ! -e .task-tools/artifacts/windows-programs-probe.exe
+            test ! -e .task-tools/artifacts/windows-programs-probe-build.json
+            python -c 'import hashlib,pathlib; src=pathlib.Path("../transport/held-windows-programs-probe.go"); dst=pathlib.Path(".task-tools/artifacts/held-windows-programs-probe.go"); assert not any(p.is_symlink() for p in (src,*src.parents,*dst.parents)) and src.is_file() and 0<src.stat().st_size<=16384; raw=src.read_bytes(); assert hashlib.sha256(raw).hexdigest()=="a3a83a56d0a74e897e9cd7a7c1c89601c2f831f7aafe3af84c97a72d2dce5309"; f=dst.open("xb"); f.write(raw); f.close(); dst.chmod(0o444)'
+            GOPROXY=off GOSUMDB=off GOVCS='*:off' GOWORK=off GOTOOLCHAIN=local go build -trimpath -mod=readonly -buildvcs=true -o .task-tools/artifacts/windows-programs-probe.exe .task-tools/artifacts/held-windows-programs-probe.go
+            python -c 'import hashlib,json,os,pathlib,subprocess; root=pathlib.Path(".task-tools/artifacts"); source=root/"held-windows-programs-probe.go"; binary=root/"windows-programs-probe.exe"; head=subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip(); h=lambda p:hashlib.sha256(p.read_bytes()).hexdigest(); assert head==os.environ["TEST_PRODUCT_HEAD"] and not any(p.is_symlink() for p in (source,binary,*source.parents)) and h(source)=="a3a83a56d0a74e897e9cd7a7c1c89601c2f831f7aafe3af84c97a72d2dce5309"; record={"schema":1,"candidateCommit":head,"sourceSHA256":h(source),"binarySHA256":h(binary)}; dst=root/"windows-programs-probe-build.json"; f=dst.open("x"); f.write(json.dumps(record,sort_keys=True)+"\n"); f.close(); binary.chmod(0o444); dst.chmod(0o444)'
           fi
       - name: Stage exact held native TEST supplier outside tracked source
         shell: bash
@@ -118,9 +126,9 @@ jobs:
           export AN_SUITE=business
           if [ "$AN_OS/$AN_ARCH" = linux/amd64 ]; then export AN_SUITE=full; fi
           if [ "$AN_OS" = linux ]; then
-            sudo --preserve-env=PATH,AN_MANIFEST,AN_MANIFEST_SHA256,AN_OS,AN_ARCH,AN_VERSION,AN_SUITE,TEST_HARNESS_SHA256,TEST_CI_INPUTS_SHA256,TEST_PRODUCT_HEAD unshare --net -- bash -c 'ip link set lo up; python -B ../transport/held-native-adapter.py --held-source .task-tools/artifacts/held-native-driver.py --held-sha256 560537dec0a5167bc0874ed408090f44c3a771472237c841506ebb57eadafd7e --held-permission-source .task-tools/artifacts/held-portable_permission.py --held-permission-sha256 f499590b9c8c3bfee37156633bf8a5a36024be208b9c26addfd70cbd000874cd --held-provider-source .task-tools/artifacts/held-provider.py --held-provider-sha256 57633468d4187d44b65abd245ad29d49a380619fe1e61049a1612272cad80e49 --held-portable-source .task-tools/artifacts/held-portable.py --held-portable-sha256 3315bfaade44fa1a328269e36954a7858c7b5631ecc41171ba0ccc9116634cac'
+            sudo --preserve-env=PATH,AN_MANIFEST,AN_MANIFEST_SHA256,AN_OS,AN_ARCH,AN_VERSION,AN_SUITE,TEST_HARNESS_SHA256,TEST_CI_INPUTS_SHA256,TEST_PRODUCT_HEAD unshare --net -- bash -c 'ip link set lo up; python -B ../transport/held-native-adapter.py --held-source .task-tools/artifacts/held-native-driver.py --held-sha256 5aae71561187a7cff163633148f51e6992572c26d68bb29b20d24174533db5ad --held-permission-source .task-tools/artifacts/held-portable_permission.py --held-permission-sha256 f499590b9c8c3bfee37156633bf8a5a36024be208b9c26addfd70cbd000874cd --held-provider-source .task-tools/artifacts/held-provider.py --held-provider-sha256 57633468d4187d44b65abd245ad29d49a380619fe1e61049a1612272cad80e49 --held-portable-source .task-tools/artifacts/held-portable.py --held-portable-sha256 3315bfaade44fa1a328269e36954a7858c7b5631ecc41171ba0ccc9116634cac'
           else
-            python -B ../transport/held-native-adapter.py --held-source .task-tools/artifacts/held-native-driver.py --held-sha256 560537dec0a5167bc0874ed408090f44c3a771472237c841506ebb57eadafd7e --held-permission-source .task-tools/artifacts/held-portable_permission.py --held-permission-sha256 f499590b9c8c3bfee37156633bf8a5a36024be208b9c26addfd70cbd000874cd --held-provider-source .task-tools/artifacts/held-provider.py --held-provider-sha256 57633468d4187d44b65abd245ad29d49a380619fe1e61049a1612272cad80e49 --held-portable-source .task-tools/artifacts/held-portable.py --held-portable-sha256 3315bfaade44fa1a328269e36954a7858c7b5631ecc41171ba0ccc9116634cac
+            python -B ../transport/held-native-adapter.py --held-source .task-tools/artifacts/held-native-driver.py --held-sha256 5aae71561187a7cff163633148f51e6992572c26d68bb29b20d24174533db5ad --held-permission-source .task-tools/artifacts/held-portable_permission.py --held-permission-sha256 f499590b9c8c3bfee37156633bf8a5a36024be208b9c26addfd70cbd000874cd --held-provider-source .task-tools/artifacts/held-provider.py --held-provider-sha256 57633468d4187d44b65abd245ad29d49a380619fe1e61049a1612272cad80e49 --held-portable-source .task-tools/artifacts/held-portable.py --held-portable-sha256 3315bfaade44fa1a328269e36954a7858c7b5631ecc41171ba0ccc9116634cac
           fi
       - name: Make only two SAFE public receipts readable for artifact upload
         if: always()

@@ -144,6 +144,42 @@ def run(args, *, cwd, env, timeout=30, input="", diagnostic_stage=None):
     return result.stdout.decode('utf-8', errors='replace').replace('\r\n', '\n').replace('\r', '\n')
 
 
+def windows_programs_probe(root, env, product_head):
+    # TEST-only prebusiness diagnostic; every native path stays private.
+    source = REPO / '.task-tools/artifacts/held-windows-programs-probe.go'
+    binary = REPO / '.task-tools/artifacts/windows-programs-probe.exe'
+    receipt = REPO / '.task-tools/artifacts/windows-programs-probe-build.json'
+    require(all(p.is_file() and not any(q.is_symlink() for q in (p, *p.parents)) for p in (source, binary, receipt)), 'known_folder_helper_binding')
+    require(digest(source) == 'a3a83a56d0a74e897e9cd7a7c1c89601c2f831f7aafe3af84c97a72d2dce5309' and 0 < source.stat().st_size <= 16384 and 0 < receipt.stat().st_size <= 2048, 'known_folder_helper_binding')
+    build = json.loads(receipt.read_bytes())
+    require(isinstance(build, dict) and set(build) == {'schema', 'candidateCommit', 'sourceSHA256', 'binarySHA256'} and type(build['schema']) is int and build['schema'] == 1 and
+            build['candidateCommit'] == product_head and build['sourceSHA256'] == digest(source) and build['binarySHA256'] == digest(binary), 'known_folder_helper_binding')
+    pins = {p: digest(p) for p in (source, binary, receipt)}
+    custody = {'helperSourceSHA256': pins[source], 'helperBinarySHA256': pins[binary], 'helperBuildRecordSHA256': pins[receipt]}
+    try:
+        result = subprocess.run([str(binary), str(root)], cwd=root, env=env, capture_output=True, timeout=5)
+    except subprocess.TimeoutExpired:
+        # subprocess.run kills and waits; this is only the diagnostic helper.
+        PORTABLE.windows_programs_probe = dict(custody, status='helper_timeout', helperReaped=True, forced=True, qualificationGranted=False)
+        require(False, 'known_folder_helper_timeout')
+    require(all(digest(p) == h for p, h in pins.items()) and result.returncode in (0, 1) and not result.stderr and 0 < len(result.stdout) <= 4096, 'known_folder_helper_result')
+    record = json.loads(result.stdout)
+    require(isinstance(record, dict) and set(record) == {'schema', 'status', 'reason', 'before', 'after', 'candidatesAbsentBefore', 'twoOwnedCandidatesPrepared', 'qualificationGranted'} and
+            type(record['schema']) is int and record['schema'] == 1 and record['status'] in ('rejected', 'observed_only') and
+            record['reason'] in ('', 'owned_environment_required', 'before_lookup_rejected', 'owned_directory_preparation_rejected', 'after_lookup_rejected') and
+            type(record['twoOwnedCandidatesPrepared']) is bool and record['qualificationGranted'] is False and
+            isinstance(record['candidatesAbsentBefore'], list) and len(record['candidatesAbsentBefore']) == 2 and all(type(v) is bool for v in record['candidatesAbsentBefore']), 'known_folder_helper_result')
+    for value in (record['before'], record['after']):
+        require(isinstance(value, dict) and set(value) == {'windowsCode', 'insideOwnedRoot', 'pathSHA256'} and
+                type(value['windowsCode']) is int and 0 <= value['windowsCode'] <= 0xffffffff and type(value['insideOwnedRoot']) is bool and
+                isinstance(value['pathSHA256'], str) and (value['pathSHA256'] == '' or re.fullmatch('[0-9a-f]{64}', value['pathSHA256'])), 'known_folder_helper_result')
+    PORTABLE.windows_programs_probe = dict(record, **custody, helperExitCode=result.returncode, helperReaped=True, forced=False)
+    require(result.returncode == 0 and record['status'] == 'observed_only' and record['reason'] == '' and record['twoOwnedCandidatesPrepared'] and
+            record['after']['windowsCode'] == 0 and record['after']['insideOwnedRoot'] and bool(record['after']['pathSHA256']) and
+            ((record['before']['windowsCode'] == 0 and record['before']['insideOwnedRoot'] and record['before']['pathSHA256'] == record['after']['pathSHA256']) or
+             (record['before']['windowsCode'] in (3, 0x80070003) and all(record['candidatesAbsentBefore']))), 'known_folder_probe_rejected')
+
+
 def port():
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -1284,6 +1320,14 @@ def qualify(args, report):
         tracked = run(['git', 'ls-files', '--', str(args.manifest.resolve().relative_to(REPO))], cwd=REPO, env=env, diagnostic_stage='parent_manifest_tracking')
         require(not tracked, 'external_parent_manifest_required')
         verify_source_binding(m, checkout, build, dirty)
+        if args.os == 'windows':
+            require(PORTABLE is not None and args.suite == 'business', 'known_folder_business_fixture_required')
+            require(os.environ.get('TEST_WINDOWS_PROGRAMS_PROBE_ONLY') in ('true', 'false'), 'known_folder_explicit_mode_required')
+            windows_programs_probe(root, env, checkout)
+            report['windowsProgramsProbe'] = dict(PORTABLE.windows_programs_probe)
+            if os.environ['TEST_WINDOWS_PROGRAMS_PROBE_ONLY'] == 'true':
+                report['status'] = 'windows_programs_probe_observed_only'
+                return
         host = root / ('opencode.exe' if args.os == 'windows' else 'opencode')
         extract_opencode(archive, host, args.os)
         require(digest(host) == c['executableSHA256'], 'host_executable_hash_mismatch')
@@ -1474,7 +1518,7 @@ def main():
     code=1
     try:
         qualify(args,report)
-        code=0 if report['status'] in ('inputs_verified_only','installed_business_lifecycle_observed') else 1
+        code=0 if report['status'] in ('inputs_verified_only','installed_business_lifecycle_observed','windows_programs_probe_observed_only') else 1
     except Exception as e:
         report['firstFailedPrerequisite']=str(e) if isinstance(e,Unqualified) else type(e).__name__
         if PORTABLE is not None:
@@ -1482,6 +1526,8 @@ def main():
             if reason is not None: report['failureReason'] = reason
             if hasattr(PORTABLE, 'command_diagnostic'):
                 report['prebusinessCommandFailure'] = dict(PORTABLE.command_diagnostic)
+            if hasattr(PORTABLE, 'windows_programs_probe'):
+                report['windowsProgramsProbe'] = dict(PORTABLE.windows_programs_probe)
             if hasattr(PORTABLE, 'private_root_diagnostic'):
                 report['privateRootSetup'] = dict(PORTABLE.private_root_diagnostic)
     finally:
