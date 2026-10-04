@@ -18,6 +18,7 @@ const (
 	AgentOpenCode              AgentID = "opencode"
 	AgentGemini                AgentID = "gemini"
 	AgentCopilotVSCode         AgentID = "copilot-vscode"
+	AgentCursor                AgentID = "cursor"
 	AssetRootPlaceholder               = "AGENT_NOTIFICATIONS_ROOT"
 	LegacyAssetRootPlaceholder         = "CLAUDE_PLUGIN_ROOT"
 )
