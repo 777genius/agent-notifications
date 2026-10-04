@@ -7,7 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.47.1] - 2026-10-04
+
+### Platform notes
+- Opt-in Linux amd64/arm64 and Windows amd64 prerelease. macOS assets are omitted; latest stable and main plugin manifests remain on v1.46.1. macOS changes listed below are source-only in this partial release.
+
 ### Added
+- Notification headlines use native session titles and current questions for Claude, Codex and OpenCode ([#317](https://github.com/777genius/agent-notifications/pull/317), [#326](https://github.com/777genius/agent-notifications/pull/326)).
 - Interactive agent selection in the public installer, with separate installation scope and notification consent for each selected product. Cancellation performs no installation; partial failures retain completed installations and show recovery guidance ([#296](https://github.com/777genius/agent-notifications/pull/296)).
 - The `licenses` command and third-party license notices in portable packages and release assets.
 
@@ -16,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fresh macOS Codex and combined bootstrap installs enable chat navigation by default when the registered official Codex Desktop app passes signature verification. Existing navigation policy and explicit choices remain preserved. If the verified app is unavailable, bootstrap reports its fallback to informational notifications without navigation.
 
 ### Fixed
+- Prepare private observation cache files before the transaction budget, preserve the cache on preparation expiry, and reuse validated Windows cache root handles ([#324](https://github.com/777genius/agent-notifications/pull/324), [#329](https://github.com/777genius/agent-notifications/pull/329), [#332](https://github.com/777genius/agent-notifications/pull/332)).
+- Preserve committed setup maintenance warnings ([#327](https://github.com/777genius/agent-notifications/pull/327)).
 - Managed macOS installations recover after APFS device numbers change across a reboot, while preserving inode, physical parent, content and volume ownership checks. Install, update, reselection, purge and interrupted recovery accept valid persisted identities without adopting replacement assets ([#301](https://github.com/777genius/agent-notifications/issues/301)).
 - Failed lazy hook installations wait 300 seconds before retrying the same product, release and runtime root, prevent concurrent duplicate attempts, and continue dispatching an available previous binary. Manual repair and a different release bypass the matching cooldown ([#302](https://github.com/777genius/agent-notifications/issues/302)).
 - macOS LaunchServices registration uses committed durable native generations instead of temporary downloaded apps. Failed and disposable acquisitions do not register; successful commits reconcile obsolete conventional registrations owned by this product while retaining active, previous and published native generations. Foreign registrations remain untouched ([#302](https://github.com/777genius/agent-notifications/issues/302)).

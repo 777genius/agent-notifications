@@ -61,18 +61,6 @@ jobs:
     strategy:
       matrix:
         include:
-          # macOS builds - use native runners (CGO required for malgo)
-          - os: macos-15-intel
-            platform: darwin
-            arch: amd64
-            binary: claude-notifications-darwin-amd64
-            macos_deployment_target: '12.0'
-          - os: macos-15
-            platform: darwin
-            arch: arm64
-            binary: claude-notifications-darwin-arm64
-            macos_deployment_target: '12.0'
-
           # Linux builds - use native runners
           - os: ubuntu-22.04
             platform: linux
@@ -171,79 +159,9 @@ jobs:
           path: dist/*
           retention-days: 1
 
-  build-notifier:
-    name: Build ClaudeNotifier.app (macOS)
-    needs: verify-version
-    runs-on: macos-15
-    timeout-minutes: 60
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      - name: Import Apple certificate
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-        run: |
-          CERTIFICATE_PATH="$RUNNER_TEMP/certificate.p12"
-          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
-          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
-
-          if ! echo -n "$APPLE_CERTIFICATE" | base64 --decode > "$CERTIFICATE_PATH" 2>/dev/null; then
-            echo -n "$APPLE_CERTIFICATE" | base64 -D > "$CERTIFICATE_PATH"
-          fi
-
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
-          security import "$CERTIFICATE_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" \
-            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          security set-key-partition-list -S apple-tool:,apple: \
-            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
-          EXISTING_KEYCHAINS=()
-          while IFS= read -r keychain; do
-            keychain="${keychain//\"/}"
-            if [ -n "$keychain" ]; then
-              EXISTING_KEYCHAINS+=("$keychain")
-            fi
-          done < <(security list-keychains -d user)
-
-          security list-keychains -d user -s "$KEYCHAIN_PATH" "${EXISTING_KEYCHAINS[@]}"
-
-      - name: Build, sign, and notarize ClaudeNotifier.app
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          cd swift-notifier
-          bash scripts/build-app.sh --ci
-
-      - name: Create zip artifact
-        run: |
-          cd swift-notifier
-          if [ ! -f ClaudeNotifier.app.managed-runtime.json ]; then
-            echo "missing managed runtime attestation sidecar" >&2
-            exit 1
-          fi
-          ditto -c -k --keepParent ClaudeNotifier.app ClaudeNotifier.app.zip
-          zip -u ClaudeNotifier.app.zip ClaudeNotifier.app.managed-runtime.json
-          unzip -l ClaudeNotifier.app.zip | grep -F ClaudeNotifier.app.managed-runtime.json
-          ls -lh ClaudeNotifier.app.zip
-
-      - name: Upload notifier artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: ClaudeNotifier
-          path: swift-notifier/ClaudeNotifier.app.zip
-          retention-days: 1
-
   create-release:
     name: Prepare draft GitHub Release
-    needs: [build-matrix, build-notifier, test-binaries]
+    needs: [build-matrix, test-binaries]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -258,12 +176,6 @@ jobs:
         with:
           pattern: binaries-*
           path: dist-artifacts
-
-      - name: Download notifier artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: ClaudeNotifier
-          path: dist-artifacts/ClaudeNotifier
 
       - name: Organize binaries
         run: |
@@ -284,7 +196,7 @@ jobs:
         with:
           files: dist/*
           draft: true
-          prerelease: false
+          prerelease: true
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -309,16 +221,6 @@ jobs:
             arch: arm64
             binary: claude-notifications-linux-arm64
             opencode_archive: opencode-linux-arm64.tar.gz
-          - os: macos-15-intel
-            platform: darwin
-            arch: amd64
-            binary: claude-notifications-darwin-amd64
-            opencode_archive: opencode-darwin-x64.zip
-          - os: macos-26
-            platform: darwin
-            arch: arm64
-            binary: claude-notifications-darwin-arm64
-            opencode_archive: opencode-darwin-arm64.zip
           - os: windows-latest
             platform: windows
             arch: amd64
