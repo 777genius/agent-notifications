@@ -14,7 +14,7 @@ observation_profile_start() {
     return 0
   fi
   # Memory mode is bounded. A named instance prevents stopping another recorder.
-  if wpr.exe -start GeneralProfile -instancename "$AN_OBSERVATION_PROFILE_INSTANCE" \
+  if wpr.exe -start GeneralProfile -start FileIO -start Minifilter -instancename "$AN_OBSERVATION_PROFILE_INSTANCE" \
       > "observation-evidence/$1-os-start.log" 2>&1; then
     AN_OBSERVATION_PROFILE_STARTED=1
   fi

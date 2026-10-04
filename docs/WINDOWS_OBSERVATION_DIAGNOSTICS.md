@@ -67,13 +67,13 @@ cure; production creation rights and attributes remain unchanged.
 
 ## Native OS recording
 
-Windows CI also attempts a bounded-memory `GeneralProfile` WPR recording around
+Windows CI also attempts a bounded-memory `GeneralProfile`, `FileIO` and `Minifilter` WPR recording around
 each original Gemini package/consent attempt. It stops immediately after that
 attempt, before unrelated package fixtures can evict the relevant interval.
 On failure the same artifact retains `geminievent-os.etl` or
 `geminievent-repeat-os.etl` and the corresponding recorder logs alongside the Go
 trace and exact source SHA. A Go trace identifies the syscall boundary; the OS
-trace can add kernel scheduling, disk I/O and stack evidence. Missing or failed
+trace can add kernel scheduling, disk/file I/O, filter operations and stack evidence. Missing or failed
 WPR recording is recorded in its logs and does not change the strict test result.
 
 The helper runs only in Windows GitHub Actions, uses a run/attempt/phase-specific
