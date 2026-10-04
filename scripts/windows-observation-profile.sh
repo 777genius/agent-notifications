@@ -28,8 +28,16 @@ observation_profile_stop() {
   # Attempt stop once, only for the successfully started instance. Never cancel
   # other sessions or change antivirus/driver policy to obtain a trace.
   AN_OBSERVATION_PROFILE_STARTED=0
-  wpr.exe -stop "observation-evidence/$AN_OBSERVATION_PROFILE_PHASE-os.etl" \
+  if wpr.exe -stop "observation-evidence/$AN_OBSERVATION_PROFILE_PHASE-os.etl" \
     -skipPdbGen -compress -instancename "$AN_OBSERVATION_PROFILE_INSTANCE" \
-    > "observation-evidence/$AN_OBSERVATION_PROFILE_PHASE-os-stop.log" 2>&1 || true
+    > "observation-evidence/$AN_OBSERVATION_PROFILE_PHASE-os-stop.log" 2>&1; then
+    if [[ -s "observation-evidence/$AN_OBSERVATION_PROFILE_PHASE-os.etl" ]]; then
+      printf 'OS profile %s retained\n' "$AN_OBSERVATION_PROFILE_PHASE"
+    else
+      printf 'OS profile %s empty; see recorder logs\n' "$AN_OBSERVATION_PROFILE_PHASE"
+    fi
+  else
+    printf 'OS profile %s unavailable; see recorder logs\n' "$AN_OBSERVATION_PROFILE_PHASE"
+  fi
   return 0
 }
