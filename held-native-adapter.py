@@ -2,9 +2,9 @@
 """TEST-only held driver supplier; original public input/source validators execute unchanged."""
 import argparse,hashlib,importlib.util,json,os,pathlib,re,subprocess,sys,types,stat
 P=pathlib.Path;OLD=os.environ['TEST_HARNESS_SHA256'];CI=os.environ['TEST_CI_INPUTS_SHA256']
-ORIGINAL_PERMISSION='54fd3092c8050e3469a1cfedf9ca46d4d4bea3feb8eb3165367aa22e74210554';PERMISSION='f499590b9c8c3bfee37156633bf8a5a36024be208b9c26addfd70cbd000874cd';DRIVER='8dc41bd680352c206b21d44d55371729f822a128fc69b705e3d5d1291a77ed58';HEAD=os.environ['TEST_PRODUCT_HEAD']
+ORIGINAL_PERMISSION='54fd3092c8050e3469a1cfedf9ca46d4d4bea3feb8eb3165367aa22e74210554';PERMISSION='f499590b9c8c3bfee37156633bf8a5a36024be208b9c26addfd70cbd000874cd';DRIVER='f0c3fa6b2441b15fbef186496fca9ccd117140dbdeb2d3d599f428fe1e95a49c';HEAD=os.environ['TEST_PRODUCT_HEAD']
 ORIGINAL_PROVIDER='e20390e5efdef97ce3fc2987fa739564ad3b43cafb021a8e8da74f51b0cbb653';PROVIDER='57633468d4187d44b65abd245ad29d49a380619fe1e61049a1612272cad80e49'
-ORIGINAL_PORTABLE='7e1d88f5b82baea92adefa8e1d48700acf39d220f6b7f41e64bc69029e8f87f8';PORTABLE='53b609b6954bbae82f4fc8c6e2b71dd54d2229b60bfa962fc880e63e1753b0bd'
+ORIGINAL_PORTABLE='7e1d88f5b82baea92adefa8e1d48700acf39d220f6b7f41e64bc69029e8f87f8';PORTABLE='d0b0f504adca3488506d56d5335b0a13add3217cca88119edacd81166d2357e9'
 FLAGS=('clockQualified','sourceEpochQualified','timePolicyQualified','installedQualificationGranted','fullNativeQualified','visibleDesktopQualified','platformLifetimeQualified')
 def need(v,m):
  if not v:raise ValueError(m)

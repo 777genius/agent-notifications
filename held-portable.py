@@ -8,6 +8,33 @@ import time
 from portable_permission import native_join
 
 PREFIX = '[agent-notifications] '
+PUBLIC_STATUS = {'submitted', 'unknown', 'unavailable', 'rejected', 'suppressed', 'unrecognized'}
+PUBLIC_CHANNEL = PUBLIC_STATUS - {'suppressed'}
+PLAIN_OBSERVER_REASONS = {
+    'job_capacity', 'job_expired', 'job_failed', 'lookup_capacity', 'lookup_timeout', 'lookup_failed',
+    'frame_capacity', 'observed event callback failed', 'messages lookup capacity exceeded',
+    'lookup failed or timed out', 'session_capacity', 'native_provenance_unverified', 'invalid session ancestry',
+    'invalid messages lookup', 'invalid or mismatched messages', 'scope_unverified', 'invalid native event',
+    'invalid message.updated', 'invalid session.status', 'invalid session.idle', 'invalid request',
+    'invalid question shape', 'invalid permission shape', 'unmatched or resolved request', 'request_capacity',
+    'request_identity_ambiguous', 'unmatched request turn', 'unmatched request message',
+    'callback_attention_authority_unverified', 'invalid resolution', 'invalid session.error',
+    'unmatched error message', 'runtime_unsupported', 'runtime_unverified', 'ownership_unverified',
+    'context_unverified', 'admission_capacity', 'verification_capacity', 'root_execution_unverified',
+    'terminal_assistant_unverified', 'question_source_unverified', 'metadata_capacity', 'invalid_native_envelope',
+    'invalid_event', 'location_shutdown', 'native_mapping_failed', 'native_correlation_unverified', 'invalid_session',
+    'scope_mismatch', 'native_identity_contradiction', 'invalid_native_sequence', 'native_sequence_contradiction',
+    'invalid_inbox', 'unmatched_delivery', 'unmatched_step', 'native_terminal_contradiction', 'invalid_failure',
+    'invalid_request', 'request_identity_unverified', 'form_checkpoint_unready', 'question_source_unavailable',
+    'permission_pending_authority_unavailable', 'compaction_terminal_suppressed', 'subscription_ended',
+    'subscription_error', 'subscription_replacements_exhausted', 'observer_disposed', 'checkpoint_schema_unverified',
+    'checkpoint_continuity_unverified', 'checkpoint_capacity', 'checkpoint_failed', 'form_checkpoint_unavailable',
+    'checkpoint_registration_unverified', 'checkpoint_dispose_failed'
+}
+PLAIN_DELIVERY_REASONS = {
+    'rejected', 'unavailable', 'unknown', 'invalidated', 'deadline', 'exited', 'capacity', 'stream_error', 'overflow',
+    'ipc_termination_unproved', 'invalid_receipt'
+}
 FLAGS = {'clockQualified': False, 'sourceEpochQualified': False,
          'timePolicyQualified': False, 'installedQualificationGranted': False, 'fullNativeQualified': False, 'visibleDesktopQualified': False,
          'platformLifetimeQualified': False}
@@ -29,6 +56,18 @@ def failure_code(error):
     return error.args[0] if type(error) is ValueError and len(error.args) == 1 and isinstance(error.args[0], str) and error.args[0] in codes else None
 
 
+def plain_reason(line):
+    if len(line) > 4096:
+        return None
+    for channel, allowed in (('observer', PLAIN_OBSERVER_REASONS), ('delivery', PLAIN_DELIVERY_REASONS)):
+        prefix = 'Agent Notifications OpenCode ' + channel + ': '
+        if line.count(prefix) == 1:
+            reason = line.split(prefix, 1)[1].removesuffix('\r')
+            if reason in allowed:
+                return {'channel': channel, 'reason': reason}
+    return None
+
+
 def reject_diagnostic(value):
     receipt = value.get('receipt')
     receipt = receipt if isinstance(receipt, dict) else {}
@@ -41,6 +80,9 @@ def reject_diagnostic(value):
         'receiptStatusSubmitted': receipt.get('status') == 'submitted',
         'desktopSubmitted': receipt.get('desktop') == 'submitted',
         'webhookSubmitted': receipt.get('webhook') == 'submitted'}
+    error.receiptEnums = {key: receipt.get(key) if type(receipt.get(key)) is str and
+        receipt.get(key) in allowed else 'unrecognized'
+        for key, allowed in (('status', PUBLIC_STATUS), ('desktop', PUBLIC_CHANNEL), ('webhook', PUBLIC_CHANNEL))}
     raise error
 
 
@@ -170,6 +212,7 @@ class Observation:
         self.cursors, self.partial, self.rows = {}, {}, []
         self.closedDenied = []
         self.firstRejected = None
+        self.receiptEnums, self.plainReason = None, None
         self.proof = pathlib.Path(args.business_proof).absolute()
         require(self.proof.is_file() and not self.proof.is_symlink() and
                 digest(self.proof) == args.business_proof_sha256, 'sealed_business_prerequisites_missing')
@@ -241,6 +284,7 @@ class Observation:
 
     def failure_snapshot(self):
         return {'schema': 1, 'firstRejected': self.firstRejected,
+                'receiptEnums': self.receiptEnums, 'plainReason': self.plainReason,
                 'counts': {'submitted': len(self.rows), 'invalidated': len(self.closedDenied),
                            'logRoles': len(self.cursors), 'logBytes': sum(self.cursors.values())}}
 
@@ -265,11 +309,14 @@ class Observation:
                     line = rawline.decode('utf-8', errors='strict')
                 except UnicodeDecodeError:
                     raise ValueError('diagnostic_utf8_decode_failed') from None
+                if self.plainReason is None:
+                    self.plainReason = plain_reason(line)
                 try:
                     row = diagnostic(line)
                 except ValueError as error:
                     if self.firstRejected is None and hasattr(error, 'predicates'):
                         self.firstRejected = error.predicates
+                        self.receiptEnums = error.receiptEnums
                     raise
                 if row is not None:
                     if row['ipc'] == 'invalidated':

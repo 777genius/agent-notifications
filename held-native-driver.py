@@ -1499,18 +1499,56 @@ def qualify(args, report):
             report['privateTraceSHA256'] = digest(root/'native-private.jsonl')
 
 
+PUBLIC_STATUS = {'submitted', 'unknown', 'unavailable', 'rejected', 'suppressed', 'unrecognized'}
+PUBLIC_CHANNEL = PUBLIC_STATUS - {'suppressed'}
+PLAIN_OBSERVER_REASONS = {
+    'job_capacity', 'job_expired', 'job_failed', 'lookup_capacity', 'lookup_timeout', 'lookup_failed',
+    'frame_capacity', 'observed event callback failed', 'messages lookup capacity exceeded',
+    'lookup failed or timed out', 'session_capacity', 'native_provenance_unverified', 'invalid session ancestry',
+    'invalid messages lookup', 'invalid or mismatched messages', 'scope_unverified', 'invalid native event',
+    'invalid message.updated', 'invalid session.status', 'invalid session.idle', 'invalid request',
+    'invalid question shape', 'invalid permission shape', 'unmatched or resolved request', 'request_capacity',
+    'request_identity_ambiguous', 'unmatched request turn', 'unmatched request message',
+    'callback_attention_authority_unverified', 'invalid resolution', 'invalid session.error',
+    'unmatched error message', 'runtime_unsupported', 'runtime_unverified', 'ownership_unverified',
+    'context_unverified', 'admission_capacity', 'verification_capacity', 'root_execution_unverified',
+    'terminal_assistant_unverified', 'question_source_unverified', 'metadata_capacity', 'invalid_native_envelope',
+    'invalid_event', 'location_shutdown', 'native_mapping_failed', 'native_correlation_unverified', 'invalid_session',
+    'scope_mismatch', 'native_identity_contradiction', 'invalid_native_sequence', 'native_sequence_contradiction',
+    'invalid_inbox', 'unmatched_delivery', 'unmatched_step', 'native_terminal_contradiction', 'invalid_failure',
+    'invalid_request', 'request_identity_unverified', 'form_checkpoint_unready', 'question_source_unavailable',
+    'permission_pending_authority_unavailable', 'compaction_terminal_suppressed', 'subscription_ended',
+    'subscription_error', 'subscription_replacements_exhausted', 'observer_disposed', 'checkpoint_schema_unverified',
+    'checkpoint_continuity_unverified', 'checkpoint_capacity', 'checkpoint_failed', 'form_checkpoint_unavailable',
+    'checkpoint_registration_unverified', 'checkpoint_dispose_failed'
+}
+PLAIN_DELIVERY_REASONS = {
+    'rejected', 'unavailable', 'unknown', 'invalidated', 'deadline', 'exited', 'capacity', 'stream_error', 'overflow',
+    'ipc_termination_unproved', 'invalid_receipt'
+}
+
 def safe_failure_observation(snapshot):
     predicates = {'protocolIsOne', 'kindIsEvent', 'childClosed', 'exitZero', 'forcedFalse',
                   'ipcOK', 'receiptStatusSubmitted', 'desktopSubmitted', 'webhookSubmitted'}
     limits = {'submitted': 33, 'invalidated': 2, 'logRoles': 3, 'logBytes': 3 * (8 * 1024 * 1024 + 1)}
-    if type(snapshot) is not dict or set(snapshot) != {'schema', 'firstRejected', 'counts'} or type(snapshot['schema']) is not int or snapshot['schema'] != 1:
+    if type(snapshot) is not dict or set(snapshot) != {'schema', 'firstRejected', 'receiptEnums', 'plainReason', 'counts'} or type(snapshot['schema']) is not int or snapshot['schema'] != 1:
         return None
     first, counts = snapshot['firstRejected'], snapshot['counts']
     if first is not None and (type(first) is not dict or set(first) != predicates or any(type(v) is not bool for v in first.values())):
         return None
     if type(counts) is not dict or set(counts) != set(limits) or any(type(counts[k]) is not int or not 0 <= counts[k] <= limit for k, limit in limits.items()):
         return None
-    return {'schema': 1, 'firstRejected': None if first is None else dict(first), 'counts': dict(counts)}
+    enums, plain = snapshot['receiptEnums'], snapshot['plainReason']
+    if (enums is None) != (first is None) or (enums is not None and (type(enums) is not dict or set(enums) != {'status', 'desktop', 'webhook'} or
+            any(type(enums[k]) is not str or enums[k] not in allowed for k, allowed in
+                (('status', PUBLIC_STATUS), ('desktop', PUBLIC_CHANNEL), ('webhook', PUBLIC_CHANNEL))))):
+        return None
+    if plain is not None and (type(plain) is not dict or set(plain) != {'channel', 'reason'} or
+            type(plain['channel']) is not str or plain['channel'] not in ('observer', 'delivery') or type(plain['reason']) is not str or
+            plain['reason'] not in (PLAIN_OBSERVER_REASONS if plain['channel'] == 'observer' else PLAIN_DELIVERY_REASONS)):
+        return None
+    return {'schema': 1, 'firstRejected': None if first is None else dict(first), 'counts': dict(counts),
+            'receiptEnums': None if enums is None else dict(enums), 'plainReason': None if plain is None else dict(plain)}
 
 
 def main():
