@@ -16,18 +16,6 @@ on:
         description: 'Reviewed SHA256 of that immutable external evidence tar'
         type: string
         required: true
-  pull_request:
-    paths:
-      - '.github/workflows/opencode-native-e2e.yml'
-      - 'scripts/opencode-native-e2e.py'
-      - 'scripts/testdata/opencode-native-e2e/**'
-      - 'scripts/opencode-private-root-windows.go'
-      - 'cmd/claude-notifications/**'
-      - 'internal/**'
-      - 'opencode-plugin/**'
-      - 'go.mod'
-      - 'go.sum'
-
 # Only a newer run for the same PR supersedes its checks.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}

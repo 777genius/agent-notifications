@@ -48,6 +48,10 @@ bundle and original SDK/qualification proof records. Reuse the parent's actual
 reviewed proof bytes with their exact provenance, not new SDK copies. Embedded JS,
 npm lock and its actual vendored file tar remain in the exact checkout; archive
 staging cannot replace source. All eleven custody cells stay mandatory.
+Installed native qualification requires manual dispatch with reviewed parent evidence;
+ordinary final-head PR CI does not prove installed E2E. Keep checkpoint 4d4 parent
+VCS identity distinct from final CI: the reviewed 4d4->577 equivalence covers only
+five TEST paths (1221 unchanged entries), without relabeling the original 11 FAILs.
 CI seals the staged manifest SHA, verifies actual Go `vcs.revision`/clean build,
 clean tracked checkout/HEAD and every bundle/SDK/artifact hash before any host.
 Untracked source files also fail; only `.task-tools/artifacts` is excluded from

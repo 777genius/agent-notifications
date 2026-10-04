@@ -6,7 +6,7 @@
   "scripts": {
     "build": "node build.mjs",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && npm run build && node --test *.test.mjs *.test.ts",
+    "check": "npm run typecheck && npm run build && node --test *.test.mjs *.test.ts *.test.mts",
     "check:candidate": "node verify-candidate.mjs"
   },
   "devDependencies": {
