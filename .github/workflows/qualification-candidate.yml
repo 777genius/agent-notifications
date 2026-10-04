@@ -112,17 +112,32 @@ jobs:
           set -euo pipefail
           REPO=$(python -c 'import pathlib; print(pathlib.Path.cwd().resolve())')
           PYTHON=$(python -c 'import sys; print(sys.executable)')
+          if [ "$AN_OS" = linux ]; then
+            # Preserve only this fresh TEST checkout; do not open shared runner-home permissions.
+            "$PYTHON" -B -c '
+          import os,pathlib,sys
+          r=pathlib.Path(sys.argv[1]);assert r.name=="TEST-product" and r.resolve()==r and r.is_dir() and (r/".git").is_dir() and not (r/".git").is_symlink() and not (r/".git/objects/info/alternates").exists()
+          for p in r.rglob("*"):
+           if p.is_symlink():
+            t=os.readlink(p);assert not pathlib.Path(t).is_absolute() and (p.parent/t).resolve().is_relative_to(r)
+          ' "$REPO"
+            ORIGINAL_REPO="$REPO"
+            ROOT="/tmp/TEST-AN-Linux-installed-$AN_ARCH-$AN_VERSION-$AN_ENTRY"
+            test ! -e "$ROOT"
+            sudo mkdir -m 700 "$ROOT"
+            sudo cp -a -- "$REPO" "$ROOT/TEST-product"
+            sudo chown -R 0:0 "$ROOT"
+            REPO="$ROOT/TEST-product"
+            case "$THIN_DRIVER" in "$ORIGINAL_REPO/"*) THIN_DRIVER="$REPO/${THIN_DRIVER#"$ORIGINAL_REPO/"}";; *) exit 2;; esac
+            case "$CELL_GATE" in "$ORIGINAL_REPO/"*) CELL_GATE="$REPO/${CELL_GATE#"$ORIGINAL_REPO/"}";; *) exit 2;; esac
+            BOOT="$ROOT/bootstrap"
+            sudo mkdir -m 700 "$BOOT"
+            sudo mkdir -m 700 "$BOOT/home" "$BOOT/tmp"
+          fi
           args=("$PYTHON" -B "$THIN_DRIVER" --repo "$REPO" --manifest "$REPO/$FINAL_MANIFEST" --manifest-sha256 "$FINAL_MANIFEST_SHA256" --final-gate "$CELL_GATE" --final-gate-sha256 "$CELL_GATE_SHA256" --artifacts "$REPO/.task-tools/artifacts/installed12-cases" --os "$AN_OS" --arch "$AN_ARCH" --version "$AN_VERSION" --entry "$AN_ENTRY")
           if [ "$AN_OS" = linux ]; then
             args+=(--receiver-record "$REPO/.task-tools/artifacts/receiver-record.json")
-            # ROOT-owned fresh TEST source makes curated-HOME Git trust and cap0 writes agree.
-            test "${REPO##*/}" = TEST-product && test -d "$REPO/.git" && test ! -L "$REPO" && test ! -L "$REPO/.git"
-            sudo chown -R 0:0 "$REPO"
-            BOOT="$REPO/.task-tools/artifacts/installed12-root-bootstrap"
-            test ! -e "$BOOT"
-            sudo mkdir -m 700 "$BOOT"
-            sudo mkdir -m 700 "$BOOT/home" "$BOOT/tmp"
-            sudo --preserve-env=PATH unshare --net -- bash -c 'set -eu; ip link set lo up; exec setpriv --reuid=0 --regid=0 --clear-groups --no-new-privs --bounding-set=-all --inh-caps=-all --ambient-caps=-all "$@"' bash "$PYTHON" -B -c 'import os,pathlib,re,sys;status=pathlib.Path("/proc/self/status").read_text();assert os.getuid()==os.geteuid()==os.getgid()==os.getegid()==0 and os.getgroups()==[];caps={k:int(re.search("^"+k+r":\s*([0-9a-fA-F]+)$",status,re.M).group(1),16) for k in ("CapInh","CapPrm","CapEff","CapBnd","CapAmb")};assert all(v==0 for v in caps.values()) and re.search(r"^NoNewPrivs:\s*1$",status,re.M);print("TEST Linux context: UID/EUID/GID/EGID=0 groups=[] fiveCaps=0 NoNewPrivs=1",flush=True);env={"PATH":os.environ["PATH"],"HOME":sys.argv[1],"TMPDIR":sys.argv[2],"LANG":"C.UTF-8","TZ":"UTC","GOTOOLCHAIN":"local","GOENV":"off","GOPROXY":"off","GOSUMDB":"off","GOTELEMETRY":"off"};os.execve(sys.argv[3],sys.argv[3:],env)' "$BOOT/home" "$BOOT/tmp" "${args[@]}"
+            sudo --preserve-env=PATH unshare --net -- bash -c 'set -eu; ip link set lo up; exec setpriv --reuid=0 --regid=0 --clear-groups --no-new-privs --bounding-set=-all,+sys_ptrace --inh-caps=-all --ambient-caps=-all "$@"' bash "$PYTHON" -B -c 'import json,os,pathlib,re,shutil,sys;status=pathlib.Path("/proc/self/status").read_text();assert os.getuid()==os.geteuid()==os.getgid()==os.getegid()==0 and os.getgroups()==[];caps={k:int(re.search("^"+k+r":\s*([0-9a-fA-F]+)$",status,re.M).group(1),16) for k in ("CapInh","CapPrm","CapEff","CapBnd","CapAmb")};assert caps=={"CapInh":0,"CapPrm":0x80000,"CapEff":0x80000,"CapBnd":0x80000,"CapAmb":0} and re.search(r"^NoNewPrivs:\s*1$",status,re.M);print("TEST Linux context: UID/EUID/GID/EGID=0 groups=[] P/E/B=SYS_PTRACE-only I/A=0 NoNewPrivs=1",flush=True);argv=sys.argv[3:];repo=pathlib.Path(argv[argv.index("--repo")+1]);gate=pathlib.Path(argv[argv.index("--final-gate")+1]);assert gate.stat().st_size<=1048576;proof=repo/json.loads(gate.read_text())["cellProof"]["path"];assert proof.resolve().is_relative_to(repo);paths=[(pathlib.Path(argv[0]),os.R_OK|os.X_OK),(pathlib.Path(argv[2]),os.R_OK),(gate,os.R_OK),(proof,os.R_OK),(pathlib.Path(argv[argv.index("--manifest")+1]),os.R_OK),(pathlib.Path(shutil.which("go")),os.R_OK|os.X_OK),(pathlib.Path(shutil.which("node")),os.R_OK|os.X_OK)];assert all(p.is_file() and os.access(p,mode) for p,mode in paths);env={"PATH":os.environ["PATH"],"HOME":sys.argv[1],"TMPDIR":sys.argv[2],"LANG":"C.UTF-8","TZ":"UTC","GOTOOLCHAIN":"local","GOENV":"off","GOPROXY":"off","GOSUMDB":"off","GOTELEMETRY":"off"};os.chdir(repo);os.execve(argv[0],argv,env)' "$BOOT/home" "$BOOT/tmp" "${args[@]}"
           else
             "${args[@]}"
           fi
@@ -131,11 +146,13 @@ jobs:
         run: |
           if [ "$AN_OS" = linux ]; then
             PYTHON=$(python -c 'import sys; print(sys.executable)')
-            SAFE="$GITHUB_WORKSPACE/TEST-installed12-safe"
+            ROOT="/tmp/TEST-AN-Linux-installed-$AN_ARCH-$AN_VERSION-$AN_ENTRY"
+            SAFE="/tmp/TEST-AN-Linux-installed-SAFE-$AN_ARCH-$AN_VERSION-$AN_ENTRY"
             test ! -e "$SAFE"
             sudo mkdir -m 755 "$SAFE"
-            sudo --preserve-env=PATH unshare --net -- bash -c 'set -eu; ip link set lo up; exec setpriv --reuid=0 --regid=0 --clear-groups --no-new-privs --bounding-set=-all --inh-caps=-all --ambient-caps=-all "$@"' bash "$PYTHON" -B ../transport/scripts/testdata/opencode-installed12/safe-export.py \
-              --cases .task-tools/artifacts/installed12-cases --output "$SAFE/result.json" \
+            sudo cp -p -- ../transport/scripts/testdata/opencode-installed12/safe-export.py "$SAFE/safe-export.py"
+            sudo --preserve-env=PATH unshare --net -- bash -c 'set -eu; ip link set lo up; cd "$1"; shift; exec setpriv --reuid=0 --regid=0 --clear-groups --no-new-privs --bounding-set=-all --inh-caps=-all --ambient-caps=-all "$@"' bash "$SAFE" "$PYTHON" -B "$SAFE/safe-export.py" \
+              --cases "$ROOT/TEST-product/.task-tools/artifacts/installed12-cases" --output "$SAFE/result.json" \
               --os "$AN_OS" --arch "$AN_ARCH" --version "$AN_VERSION" --entry "$AN_ENTRY"
           else
             python -B ../transport/scripts/testdata/opencode-installed12/safe-export.py \
@@ -147,6 +164,6 @@ jobs:
         if: always()
         with:
           name: 'installed12-${{ matrix.id }}'
-          path: "${{ matrix.os == 'linux' && 'TEST-installed12-safe/result.json' || 'TEST-product/.task-tools/artifacts/installed12-safe/result.json' }}"
+          path: "${{ matrix.os == 'linux' && format('/tmp/TEST-AN-Linux-installed-SAFE-{0}-{1}-{2}/result.json', matrix.arch, matrix.version, matrix.entry) || 'TEST-product/.task-tools/artifacts/installed12-safe/result.json' }}"
           if-no-files-found: error
           retention-days: 14
