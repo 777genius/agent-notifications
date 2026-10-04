@@ -70,7 +70,7 @@ jobs:
         if: matrix.go == '1.26'
         shell: pwsh
         env:
-          LOCK_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          LOCK_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
         run: |
           $baseline = Join-Path $env:RUNNER_TEMP 'TEST-windows-lock-baseline'
           git fetch --no-tags --depth=1 origin $env:LOCK_BASE_SHA
