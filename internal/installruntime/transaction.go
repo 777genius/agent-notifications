@@ -493,7 +493,7 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 		}
 	}
 	if r.RevokeCursor && (!registered || !reflect.DeepEqual(previous, r.Consumer) || !cursorPortableConsumer(r.ConsumerID, previous)) {
-		return l, fmt.Errorf("Cursor revocation requires its exact recorded portable consumer")
+		return l, fmt.Errorf("cursor revocation requires its exact recorded portable consumer")
 	}
 	if r.RevokeCopilotVSCode && (!registered || !reflect.DeepEqual(previous, r.Consumer) || !localPortableConsumer(r.ConsumerID, previous)) {
 		return l, fmt.Errorf("local revocation requires its exact recorded portable consumer")
@@ -843,7 +843,7 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 	// Global disable is also reconstructible, but an explicit Cursor request
 	// must preserve the ledger's global intent even when its leaves were already false.
 	if r.RevokeCursor && (tx.Before.Enabled != tx.After.Enabled || !boundedPolicyRevocation(root, tx)) {
-		return l, fmt.Errorf("Cursor revocation journal cannot reconstruct exact false-only operation")
+		return l, fmt.Errorf("cursor revocation journal cannot reconstruct exact false-only operation")
 	}
 	if !boundedPolicyRevocation(root, tx) {
 		tx.After, err = refreshLedgerIdentities(next)

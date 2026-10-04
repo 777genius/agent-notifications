@@ -220,7 +220,7 @@ func TestCursorPolicyRevocationPreflight(t *testing.T) {
 			before := map[string][]byte{}
 			for _, name := range []string{"ownership.json", "policy-generation.json", "agent-notifications.json"} {
 				raw, err := os.ReadFile(filepath.Join(root, name))
-				if err != nil && !(drift == "deleted" && os.IsNotExist(err)) {
+				if err != nil && (drift != "deleted" || !os.IsNotExist(err)) {
 					t.Fatal(err)
 				}
 				before[name] = raw
