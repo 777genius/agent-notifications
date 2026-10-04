@@ -10,7 +10,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: e0cf2a14cd3c95c0fce425e7ed6bb733f7d290fc
+          ref: 9fb603544188b5ef8b61d3e4cfb26178b81696c2
       - uses: actions/setup-go@v7
         with:
           go-version: '1.26'
@@ -50,7 +50,7 @@ jobs:
           $xperf = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/Windows Performance Toolkit/xperf.exe'
           foreach ($phase in @('geminievent','geminievent-repeat')) {
             if (Test-Path "observation-evidence/$phase-os.etl") {
-              & $xperf -i "observation-evidence/$phase-os.etl" -o "observation-evidence/$phase-tracestats.txt" -a tracestats
+              & $xperf -i "observation-evidence/$phase-os.etl" -o "observation-evidence/$phase-tracestats.txt" -a tracestats -detail stack
               if ($LASTEXITCODE -ne 0) { throw 'OS trace decoding failed' }
             }
           }
@@ -58,9 +58,9 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          wpr.exe -profiledetails GeneralProfile
+          wpr.exe -profiledetails GeneralProfile+FileIO+Minifilter
           if ($LASTEXITCODE -ne 0) { throw 'Profile details unavailable' }
-          wpr.exe -exportprofile GeneralProfile observation-evidence/general-profile.wprp
+          wpr.exe -exportprofile GeneralProfile+FileIO+Minifilter observation-evidence/general-profile.wprp
           if ($LASTEXITCODE -ne 0) { throw 'Profile export unavailable' }
           Get-Content observation-evidence/general-profile.wprp
           foreach ($phase in @('geminievent','geminievent-repeat')) {
