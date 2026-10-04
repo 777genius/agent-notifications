@@ -19,7 +19,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/777genius/agent-notifications.svg)](https://pkg.go.dev/github.com/777genius/agent-notifications)
 [![codecov](https://codecov.io/gh/777genius/agent-notifications/graph/badge.svg?branch=main)](https://codecov.io/gh/777genius/agent-notifications)
 
-Desktop notifications for **Claude, Codex CLI and OpenCode**. Know when a task finishes, an agent needs input, or a tool needs approval. Claude and Codex also support sounds and click-to-focus.
+Desktop notifications for **Claude, Codex CLI and OpenCode**, plus **Gemini CLI on Linux/Windows (v1.47.1)**. Know when a task finishes, an agent needs input, or a tool needs approval. Claude and Codex also support sounds and click-to-focus.
 
 <p align="center">
   <img width="100%" alt="macOS, Windows, Linux (left to right)" src="docs/images/notification-platform-labels.svg" />
@@ -36,7 +36,7 @@ Desktop notifications for **Claude, Codex CLI and OpenCode**. Know when a task f
 curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash
 ```
 
-Choose **Claude**, **Codex CLI**, **OpenCode**, or a combination. Install the selected agent CLIs first. Run the same command to update.
+Choose **Claude**, **Codex CLI**, **OpenCode**, **Gemini CLI** (Linux/Windows), or a combination. Install the selected agent CLIs first. Run the same command to update.
 
 **Windows:** use **Git Bash**, not WSL, for a native Windows installation.
 
@@ -45,6 +45,7 @@ After setup:
 - **Claude:** restart Claude.
 - **Codex:** restart Codex, then review and trust the installed hooks in `/hooks`.
 - **OpenCode:** restart OpenCode; on macOS, [grant notification permission](docs/opencode-notifications.md#macos-notification-permission).
+- **Gemini CLI (Linux/Windows):** restart Gemini to reload its hooks.
 
 The installer selects a verified complete release for your platform:
 
@@ -65,13 +66,13 @@ For Codex only:
 (set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product codex)
 ```
 
-Use `--product claude` or `--product both` for Claude or Claude + Codex. For all three stable agents:
+Use `--product claude` or `--product both` for Claude or Claude + Codex. For Claude, Codex and OpenCode on any supported platform:
 
 ```bash
 (set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --products claude,codex,opencode --desktop)
 ```
 
-For OpenCode, choose `--desktop`, `--webhook`, or both; webhook destinations need separate configuration. These flags do not change Claude/Codex channels.
+On Linux/Windows, add `,gemini` to `--products` for all four agents, or use `--product gemini` for Gemini only. For OpenCode/Gemini, choose `--desktop`, `--webhook`, or both; webhook destinations need separate configuration. These flags do not change Claude/Codex channels.
 
 Claude/Codex setup also installs the `agent-notify` MCP server and `agent-notifications` skill so an agent can notify you during a task. Open a new session after setup. Use `--skip-agent-notify` for hooks only. [Setup and recovery details](docs/INSTALLATION.md).
 
@@ -95,7 +96,7 @@ Claude/Codex setup also installs the `agent-notify` MCP server and `agent-notifi
 | **Claude** | Completions, reviews, questions, plans, session limits and API errors | Yes | [Notification types](docs/NOTIFICATION_TYPES.md) |
 | **Codex CLI** | Turn completion and tool permissions; questions and errors depend on host events or final-message detection | Yes | [Setup and limits](docs/CODEX.md) |
 | **OpenCode** | Root-session completion, questions, permissions and errors | No | [Setup and limits](docs/opencode-notifications.md) |
-| **Gemini CLI** | Turn completion and tool permissions | No | [Prerelease setup and qualification](docs/gemini-notifications.md) |
+| **Gemini CLI** | Turn completion and tool permissions | No | [Linux/Windows setup and qualification](docs/gemini-notifications.md) |
 
 OpenCode is tested with **1.18.33**; V2 is unsupported. Gemini is tested with **0.62.0**; a completed turn does not necessarily mean task success or a final answer. OpenCode/Gemini alerts require explicit desktop/webhook consent. Gemini alerts and OpenCode webhooks use generic text.
 
