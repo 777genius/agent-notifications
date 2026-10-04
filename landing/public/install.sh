@@ -201,16 +201,30 @@ main() (
         exit 1
     }
     repo=777genius/agent-notifications
-    release_base="https://github.com/$repo/releases/tag/"
-    latest_url=$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/$repo/releases/latest")
-    case "$latest_url" in
-        "$release_base"*) tag=${latest_url#"$release_base"} ;;
-        *) echo "Invalid stable release tag redirect." >&2; exit 1 ;;
-    esac
-    if [[ ! "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-        echo "Invalid stable release tag redirect." >&2
+    if [ -n "${BOOTSTRAP_MARKETPLACE_SOURCE:-}" ] && [ "$BOOTSTRAP_MARKETPLACE_SOURCE" != "$repo" ]; then
+        echo 'Custom source retained. Use its matching pinned bootstrap instead of the platform installer.' >&2
         exit 1
     fi
+    stage=$(mktemp -d "${TMPDIR:-/tmp}/agent-notifications-setup.XXXXXX")
+    trap 'rm -rf "$stage"' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap 'exit 129' HUP
+    controller="${BOOTSTRAP_CONTROLLER_COMMIT:-}"
+    if [ -z "$controller" ]; then
+        curl -fsSL -H 'Accept: application/vnd.github.sha' "https://api.github.com/repos/$repo/commits/main" -o "$stage/controller"
+        [ "$(wc -c < "$stage/controller" | tr -d '[:space:]')" = 40 ] || { echo 'Invalid controller response.' >&2; exit 1; }
+        controller=$(cat "$stage/controller")
+    fi
+    [[ "$controller" =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid channel controller commit.' >&2; exit 1; }
+    controller_raw="https://raw.githubusercontent.com/$repo/$controller"
+    curl -fsSL "$controller_raw/bin/release-channel.sh" -o "$stage/release-channel.sh"
+    curl -fsSL "$controller_raw/release-channels.tsv" -o "$stage/channels.tsv"
+    source "$stage/release-channel.sh"
+    platform=$(release_channel_platform)
+    IFS=$'\t' read -r os arch <<< "$platform"
+    row=$(release_channel_select "$stage/channels.tsv" "$os" "$arch")
+    IFS=$'\t' read -r tag release_commit source_commit source_ref <<< "$row"
     if [ "$multi" -eq 1 ] && [ "$opencode" -eq 1 ]; then
         version=${tag#v}
         major=${version%%.*}
@@ -223,24 +237,17 @@ main() (
             exit 1
         fi
     fi
-    stage=$(mktemp -d "${TMPDIR:-/tmp}/agent-notifications-setup.XXXXXX")
-    trap 'rm -rf "$stage"' EXIT
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
-    trap 'exit 129' HUP
-
     curl -fsSL -H 'Accept: application/vnd.github.sha' "https://api.github.com/repos/$repo/commits/$tag" -o "$stage/commit"
-    [ "$(LC_ALL=C wc -c < "$stage/commit" | tr -d '[:space:]')" = 40 ] && LC_ALL=C grep -Eq '^[0-9a-f]{40}$' "$stage/commit" || {
-        echo "Invalid release commit." >&2
-        exit 1
-    }
-    IFS= read -r commit < "$stage/commit" || [ -n "${commit:-}" ]
-    raw="https://raw.githubusercontent.com/$repo/$commit/bin"
-    # A failed or interrupted download must never execute a partial script.
+    [ "$(wc -c < "$stage/commit" | tr -d '[:space:]')" = 40 ] || { echo 'Invalid release commit response.' >&2; exit 1; }
+    commit=$(cat "$stage/commit")
+    [ "$commit" = "$release_commit" ] || { echo 'Release provenance mismatch.' >&2; exit 1; }
+    raw="https://raw.githubusercontent.com/$repo/$source_commit/bin"
     curl -fsSL "$raw/bootstrap.sh" -o "$stage/bootstrap.sh"
     run_bootstrap() {
         env BOOTSTRAP_RELEASE_TAG="$tag" BOOTSTRAP_RELEASE_COMMIT="$commit" \
-            INSTALL_SCRIPT_URL="$raw/install.sh" bash "$stage/bootstrap.sh" "$@"
+            BOOTSTRAP_RELEASE_CHANNEL=1 BOOTSTRAP_SOURCE_COMMIT="$source_commit" \
+            BOOTSTRAP_SOURCE_REF="$source_ref" INSTALL_SCRIPT_URL="$raw/install.sh" \
+            bash "$stage/bootstrap.sh" "$@"
     }
     if [ "$pending" -eq 1 ]; then
         feature_status=0

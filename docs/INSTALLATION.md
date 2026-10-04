@@ -4,15 +4,15 @@
 
 ## Gemini availability
 
-Gemini CLI support is available in the **[v1.47.0 Linux/Windows prerelease](https://github.com/777genius/agent-notifications/releases/tag/v1.47.0)**.
-Use that release's explicit installation instructions. The public loader and
-unpinned `bin/setup.sh` still select stable **v1.46.1**, which excludes Gemini.
-The prerelease has no macOS assets; macOS Gemini support remains a candidate.
-See the [Gemini guide](gemini-notifications.md) for capabilities and qualification.
+The public installer selects **1.47.1 for Linux amd64/arm64 and Windows amd64**,
+and **1.46.1 for macOS amd64/arm64**. Gemini CLI is available on Linux/Windows;
+macOS keeps Claude, Codex and OpenCode. GitHub Latest remains 1.46.1 for legacy
+installers. Rerun setup once to adopt a normal Claude marketplace's platform
+channel. [Channel selection and promotion](PLATFORM_RELEASE_CHANNELS.md).
 
 ## Prerequisites
 
-- Claude, Codex CLI and/or OpenCode for stable setup (published OpenCode support is tested with 1.18.33; published V2 support is not declared). The dual-API candidate targets 1.18.33, 2.0.0 and 2.0.21; final platform qualification and publication remain pending. See [OpenCode candidate setup and limits](opencode-notifications.md), including the stock Windows V1 original-event-age limitation. Gemini CLI 0.62.0 is the tested host for the opt-in prerelease.
+- Claude, Codex CLI and/or OpenCode for stable setup (published OpenCode support is tested with 1.18.33; published V2 support is not declared). The dual-API candidate targets 1.18.33, 2.0.0 and 2.0.21; final platform qualification and publication remain pending. See [OpenCode candidate setup and limits](opencode-notifications.md), including the stock Windows V1 original-event-age limitation. Gemini CLI 0.62.0 is the tested host on Linux/Windows.
 - `curl` and Bash
 - **Windows users:** Git Bash (included with [Git for Windows](https://git-scm.com/download/win)). Do not use WSL for a native Windows installation.
 - Python remains optional only for iTerm2 exact tab/pane targeting.
@@ -21,7 +21,7 @@ See the [Gemini guide](gemini-notifications.md) for capabilities and qualificati
 
 Prefer a guided setup? [Open the installation guide](https://777genius.github.io/agent-notifications/#install) to choose your agents, OS and task.
 
-The short setup loader handles release lookup and validation internally, then downloads the installer from the exact release commit. Run it and choose Claude, Codex, Claude + Codex, or OpenCode:
+The short setup loader handles release lookup and validation internally, then downloads the installer from its qualified immutable source snapshot. Run it and choose Claude, Codex, Claude + Codex, or OpenCode:
 
 ```bash
 curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash

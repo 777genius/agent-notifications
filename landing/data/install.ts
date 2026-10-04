@@ -21,6 +21,17 @@ export const intents = ["install", "update", "configure"] as const;
 export const repo = "https://github.com/777genius/agent-notifications";
 export const installerUrl =
   "https://777genius.github.io/agent-notifications/install.sh";
+export function platformReleaseVersion(snapshot: string, target: Target): string | null {
+  const os = target === "macos" ? "darwin" : target;
+  if (!["darwin", "linux", "windows"].includes(os)) return null;
+  const versions = snapshot.split("\n")
+    .map((line) => line.split("\t"))
+    .filter((row) => row.length === 6 && row[0] === os)
+    .map((row) => row[2]!)
+    .filter((tag) => /^v\d+\.\d+\.\d+$/.test(tag))
+    .map((tag) => tag.slice(1));
+  return [...new Set(versions)].join(" / ") || null;
+}
 export function detectTarget(ua: string, touchPoints = 0): Target {
   const browser = Bowser.getParser(ua);
   if (
@@ -55,7 +66,7 @@ export function command(
         ? ["claude", "codex"]
         : [product]
       : product;
-  if (!selected.length) return null;
+  if (!selected.length || (target === "macos" && selected.includes("gemini"))) return null;
   const hasObserver = selected.includes("opencode") || selected.includes("gemini");
   if (hasObserver && !openCodeChannels.desktop && !openCodeChannels.webhook)
     return null;

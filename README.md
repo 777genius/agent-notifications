@@ -46,7 +46,15 @@ After setup:
 - **Codex:** restart Codex, then review and trust the installed hooks in `/hooks`.
 - **OpenCode:** restart OpenCode; on macOS, [grant notification permission](docs/opencode-notifications.md#macos-notification-permission).
 
-**Gemini CLI:** available in the **[1.47.0 Linux/Windows prerelease](https://github.com/777genius/agent-notifications/releases/tag/v1.47.0)** through its explicit installation instructions. The command above installs stable **1.46.1**, which does not include Gemini. macOS Gemini support is still a candidate.
+The installer selects a verified complete release for your platform:
+
+| Platform | Version | Agents |
+| --- | --- | --- |
+| Linux amd64 / arm64 | 1.47.1 | Claude, Codex, OpenCode, Gemini |
+| Windows amd64 | 1.47.1 | Claude, Codex, OpenCode, Gemini |
+| macOS amd64 / arm64 | 1.46.1 | Claude, Codex, OpenCode |
+
+Run the command once to migrate a normal Claude marketplace installation to its platform channel. Claude's plugin updater then follows that channel; rerun setup to update a standalone Codex bundle. Explicitly pinned/custom marketplace sources are retained. GitHub's global Latest remains 1.46.1 for older installers. See [platform channels](docs/PLATFORM_RELEASE_CHANNELS.md).
 
 <details>
 <summary>Non-interactive installation and optional notification tools</summary>

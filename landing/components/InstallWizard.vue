@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {
   command,
+  platformReleaseVersion,
   detectTarget,
   products,
   targets,
@@ -9,6 +10,7 @@ import {
   type Target,
   type Intent,
 } from "~/data/install";
+import channelSnapshot from "../../release-channels.tsv?raw";
 const { t } = useI18n();
 const installTitle = ref<HTMLHeadingElement>();
 async function changeIntent(value: Intent) {
@@ -56,6 +58,13 @@ const agentNotify = ref(true);
 const snippet = computed(() =>
   command(selection.value, target.value, intent.value, agentNotify.value),
 );
+const qualifiedVersion = computed(() => platformReleaseVersion(channelSnapshot, target.value));
+watch(target, (value) => {
+  if (value !== "linux" && value !== "windows" && selectedProducts.gemini) {
+    selectedProducts.gemini = false;
+    if (!selection.value.length) selectedProducts.claude = true;
+  }
+});
 const displaySnippet = computed(() => snippet.value);
 onMounted(() => {
   detected.value = detectTarget(navigator.userAgent, navigator.maxTouchPoints);
@@ -92,6 +101,7 @@ async function copy() {
       <p>{{ t("install.intro", { agent: agentName }) }}</p>
     </header>
 
+    <p v-if="qualifiedVersion" class="install-release-version">{{ t("install.platformRelease", { version: qualifiedVersion, os: osLabel }) }}</p>
     <div
       class="agent-cards"
       role="group"
@@ -104,7 +114,7 @@ async function copy() {
         :key="item.value"
         class="agent-card"
         :aria-label="item.label"
-        :disabled="item.value === 'gemini'"
+        :disabled="item.value === 'gemini' && target !== 'linux' && target !== 'windows'"
         :aria-pressed="selectedProducts[item.value as AgentProduct]"
         @click="toggleProduct(item.value as AgentProduct)"
       >
@@ -192,7 +202,7 @@ async function copy() {
       <p v-if="selectedProducts.gemini"><a :href="repo + '/blob/main/docs/gemini-notifications.md'">{{ t("install.gemini.guide") }}</a>. {{ t("install.gemini.configure") }}</p>
       <p v-if="hasLegacy">{{ t("install.configure.shared") }}</p>
     </div>
-    <div v-else-if="selectedProducts.gemini && target !== 'manual'" class="setup-panel instructions" role="status">
+    <div v-else-if="selectedProducts.gemini && target !== 'linux' && target !== 'windows' && target !== 'manual'" class="setup-panel instructions" role="status">
       <p>{{ t("install.gemini.version") }}</p>
       <a :href="repo + '/blob/main/docs/gemini-notifications.md'">{{ t("install.gemini.guide") }}</a>
     </div>

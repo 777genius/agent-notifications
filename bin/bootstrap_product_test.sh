@@ -909,7 +909,7 @@ env_keys = (
     'CLAUDE_CONFIG_DIR', 'TMP', 'TEMP', 'TMPDIR',
 )
 env = {key: os.environ[key] for key in env_keys if key in os.environ}
-env.update(BOOTSTRAP_LATEST_RELEASE_API_URL=base+'/latest', BOOTSTRAP_COMMIT_API_BASE_URL=base+'/commits', BOOTSTRAP_RAW_BASE_URL=base+'/raw', BOOTSTRAP_RAW_CONTENT_URL=base+'/raw', BOOTSTRAP_SOURCE_BASE_URL=base, BOOTSTRAP_RELEASES_BASE_URL=base)
+env.update(BOOTSTRAP_RELEASE_TAG='v1.42.0', BOOTSTRAP_LATEST_RELEASE_API_URL=base+'/latest', BOOTSTRAP_COMMIT_API_BASE_URL=base+'/commits', BOOTSTRAP_RAW_BASE_URL=base+'/raw', BOOTSTRAP_RAW_CONTENT_URL=base+'/raw', BOOTSTRAP_SOURCE_BASE_URL=base, BOOTSTRAP_RELEASES_BASE_URL=base)
 cli = sandbox / 'clis'; cli.mkdir()
 (cli / 'codex').write_bytes(b'#!/bin/sh\nexit 99\n'); (cli / 'codex').chmod(0o755)
 assert pathlib.Path(bash).is_file(), 'fixture controller Bash must exist'

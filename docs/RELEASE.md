@@ -2,6 +2,11 @@
 
 Step-by-step guide for publishing a new version.
 
+For a release that skips a platform, promote only its qualified
+[platform release channels](PLATFORM_RELEASE_CHANNELS.md). Keep skipped-platform
+rows and global Latest on the previously qualified version. Publish source
+branches before activating the immutable source SHAs in the channel index.
+
 ## 0. Pre-release risk checklist
 
 Run these checks for releases that touch the hook pipeline.
