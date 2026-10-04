@@ -1237,6 +1237,10 @@ footer .brand {
   border-radius: 10px;
   min-width: 0;
 }
+.agent-card:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 .agent-card[aria-pressed="true"] {
   border-color: #32bfff;
   box-shadow:
