@@ -186,7 +186,7 @@ jobs:
           import hashlib, os, pathlib, shutil, subprocess, sys
           root = pathlib.Path.cwd().resolve(strict=True)
           transport = root.parent / 'transport'
-          pins = {'toast_phase_probe_windows_test.go': 'f7111771f211888dabb3ace32b42e4f4e9d2a001d2bb7addb7e934ab217ced6a', 'build-toast-phase-overlay.py': 'e7703bab73bd3e5d26668a87bd5f84ffb8e71898fc6a2602ff97a7b0cb63053a'}
+          pins = {'toast_phase_probe_windows_test.go': '03415e5af66b7ed5020cd9224114234586527cacc5e23d6796db9d670d882343', 'build-toast-phase-overlay.py': '26b7ac8e125c73e6a15a0f0d8790f6cb7f32e60ce0e95d7d7d3fe5f7136b4d0b'}
           assert os.environ['TEST_WINDOWS_PROGRAMS_PROBE_ONLY'] == 'false'
           for name, expected in pins.items():
               path = transport / name
@@ -212,9 +212,9 @@ jobs:
           export AN_SUITE=business
           if [ "$AN_OS/$AN_ARCH" = linux/amd64 ]; then export AN_SUITE=full; fi
           if [ "$AN_OS" = linux ]; then
-            sudo --preserve-env=PATH,AN_MANIFEST,AN_MANIFEST_SHA256,AN_OS,AN_ARCH,AN_VERSION,AN_SUITE,TEST_HARNESS_SHA256,TEST_CI_INPUTS_SHA256,TEST_PRODUCT_HEAD unshare --net -- bash -c 'ip link set lo up; python -B ../transport/held-native-adapter.py --held-source .task-tools/artifacts/held-native-driver.py --held-sha256 be8bf53571e1cd7ac8e35bef350a2bb37cbe86209868511f3a27b6a6d814650f --held-permission-source .task-tools/artifacts/held-portable_permission.py --held-permission-sha256 f499590b9c8c3bfee37156633bf8a5a36024be208b9c26addfd70cbd000874cd --held-provider-source .task-tools/artifacts/held-provider.py --held-provider-sha256 57633468d4187d44b65abd245ad29d49a380619fe1e61049a1612272cad80e49 --held-portable-source .task-tools/artifacts/held-portable.py --held-portable-sha256 67742afdf71c9e1aebfceb9e66110d13b397dc4aabac40775968497751682d45'
+            sudo --preserve-env=PATH,AN_MANIFEST,AN_MANIFEST_SHA256,AN_OS,AN_ARCH,AN_VERSION,AN_SUITE,TEST_HARNESS_SHA256,TEST_CI_INPUTS_SHA256,TEST_PRODUCT_HEAD unshare --net -- bash -c 'ip link set lo up; python -B ../transport/held-native-adapter.py --held-source .task-tools/artifacts/held-native-driver.py --held-sha256 d5dfe0a2cd218465d55d18050046c9d4db7af6e4a0346017967580980701d4ac --held-permission-source .task-tools/artifacts/held-portable_permission.py --held-permission-sha256 f499590b9c8c3bfee37156633bf8a5a36024be208b9c26addfd70cbd000874cd --held-provider-source .task-tools/artifacts/held-provider.py --held-provider-sha256 57633468d4187d44b65abd245ad29d49a380619fe1e61049a1612272cad80e49 --held-portable-source .task-tools/artifacts/held-portable.py --held-portable-sha256 67742afdf71c9e1aebfceb9e66110d13b397dc4aabac40775968497751682d45'
           else
-            python -B ../transport/held-native-adapter.py --held-source .task-tools/artifacts/held-native-driver.py --held-sha256 be8bf53571e1cd7ac8e35bef350a2bb37cbe86209868511f3a27b6a6d814650f --held-permission-source .task-tools/artifacts/held-portable_permission.py --held-permission-sha256 f499590b9c8c3bfee37156633bf8a5a36024be208b9c26addfd70cbd000874cd --held-provider-source .task-tools/artifacts/held-provider.py --held-provider-sha256 57633468d4187d44b65abd245ad29d49a380619fe1e61049a1612272cad80e49 --held-portable-source .task-tools/artifacts/held-portable.py --held-portable-sha256 67742afdf71c9e1aebfceb9e66110d13b397dc4aabac40775968497751682d45
+            python -B ../transport/held-native-adapter.py --held-source .task-tools/artifacts/held-native-driver.py --held-sha256 d5dfe0a2cd218465d55d18050046c9d4db7af6e4a0346017967580980701d4ac --held-permission-source .task-tools/artifacts/held-portable_permission.py --held-permission-sha256 f499590b9c8c3bfee37156633bf8a5a36024be208b9c26addfd70cbd000874cd --held-provider-source .task-tools/artifacts/held-provider.py --held-provider-sha256 57633468d4187d44b65abd245ad29d49a380619fe1e61049a1612272cad80e49 --held-portable-source .task-tools/artifacts/held-portable.py --held-portable-sha256 67742afdf71c9e1aebfceb9e66110d13b397dc4aabac40775968497751682d45
           fi
       - name: Make only two SAFE public receipts readable for artifact upload
         if: always()

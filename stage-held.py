@@ -2,7 +2,7 @@
 import hashlib,pathlib,shutil,stat,os
 P=pathlib.Path;source=P(__file__).resolve().with_name('held-native-driver.py');out=P.cwd()/'.task-tools/artifacts/held-native-driver.py'
 assert not source.is_symlink()and stat.S_ISREG(source.lstat().st_mode)and 0<source.stat().st_size<=2*1024*1024
-raw=source.read_bytes();assert hashlib.sha256(raw).hexdigest()=='be8bf53571e1cd7ac8e35bef350a2bb37cbe86209868511f3a27b6a6d814650f'
+raw=source.read_bytes();assert hashlib.sha256(raw).hexdigest()=='d5dfe0a2cd218465d55d18050046c9d4db7af6e4a0346017967580980701d4ac'
 assert not out.exists()and not any(p.is_symlink()for p in out.parents)
 out.parent.mkdir(parents=True,exist_ok=True);out.write_bytes(raw);out.chmod(0o444)
 

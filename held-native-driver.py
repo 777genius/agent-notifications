@@ -149,7 +149,7 @@ def windows_toast_phase_probe(root, env, managed, product_head):
     base = REPO / '.task-tools/artifacts'
     source, binary, receipt = (base / n for n in ('held-toast-phase-probe_windows_test.go', 'windows-toast-phase-probe.exe', 'windows-toast-phase-probe-build.json'))
     require(all(p.is_file() and not any(q.is_symlink() for q in (p, *p.parents)) for p in (source, binary, receipt)), 'toast_probe_binding')
-    require(digest(source) == 'f7111771f211888dabb3ace32b42e4f4e9d2a001d2bb7addb7e934ab217ced6a' and receipt.stat().st_size <= 4096, 'toast_probe_binding')
+    require(digest(source) == '03415e5af66b7ed5020cd9224114234586527cacc5e23d6796db9d670d882343' and receipt.stat().st_size <= 4096, 'toast_probe_binding')
     build = json.loads(receipt.read_bytes())
     require(type(build) is dict and set(build) == {'schema','productCommit','probeSourceSHA256','binarySHA256','goToolSHA256','overlaySHA256','compileExitCode','compileStdoutSHA256','compileStderrSHA256'} and type(build['schema']) is int and build['schema'] == 1 and build['productCommit'] == product_head and build['probeSourceSHA256'] == digest(source) and build['binarySHA256'] == digest(binary) and type(build['compileExitCode']) is int and build['compileExitCode'] == 0 and all(type(build[k]) is str and re.fullmatch('[0-9a-f]{64}',build[k]) for k in set(build)-{'schema','productCommit','compileExitCode'}), 'toast_probe_binding')
     pins = {p:digest(p) for p in (source,binary,receipt,managed)}

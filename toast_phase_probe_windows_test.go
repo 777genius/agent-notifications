@@ -90,13 +90,13 @@ func TestTESTWindowsToastPhaseProbe(t *testing.T) {
 		{"notifier_show", "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($env:AGENT_NOTIFICATIONS_TOAST_APP_ID).Show($toast)"},
 	}
 	allowed := map[string]bool{}
-	markers := []string{"Write-Output '" + probePrefix + "script.enter'; "}
+	markers := []string{"[Console]::Out.WriteLine('" + probePrefix + "script.enter'); [Console]::Out.Flush(); "}
 	allowed[probePrefix+"script.enter"] = true
 	for _, piece := range pieces {
 		if strings.Count(script, piece.code) != 1 {
 			t.Fatal("TEST_probe_script_boundary_changed")
 		}
-		before, after := "Write-Output '"+probePrefix+piece.name+".before'; ", "; Write-Output '"+probePrefix+piece.name+".after'"
+		before, after := "[Console]::Out.WriteLine('"+probePrefix+piece.name+".before'); [Console]::Out.Flush(); ", "; [Console]::Out.WriteLine('"+probePrefix+piece.name+".after'); [Console]::Out.Flush()"
 		markers = append(markers, before, after)
 		allowed[probePrefix+piece.name+".before"], allowed[probePrefix+piece.name+".after"] = true, true
 		script = strings.Replace(script, piece.code, before+piece.code+after, 1)

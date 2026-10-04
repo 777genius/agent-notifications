@@ -19,7 +19,7 @@ assert not subprocess.check_output(['git', '-C', str(r), 'status', '--porcelain'
 assert sha(a.go) == a.go_sha256
 assert subprocess.check_output([str(a.go), 'version'], env=env, text=True, timeout=10).strip() == 'go version go1.27.1 windows/amd64'
 source = P(__file__).with_name('toast_phase_probe_windows_test.go').resolve(strict=True)
-assert sha(source) == 'f7111771f211888dabb3ace32b42e4f4e9d2a001d2bb7addb7e934ab217ced6a'
+assert sha(source) == '03415e5af66b7ed5020cd9224114234586527cacc5e23d6796db9d670d882343'
 out = r / '.task-tools/artifacts'
 out.mkdir(parents=True, exist_ok=True)
 held, virtual = out / 'held-toast-phase-probe_windows_test.go', r / 'internal/notifier/zz_TEST_toast_phase_probe_windows_test.go'
