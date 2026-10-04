@@ -145,82 +145,119 @@ func (r *PrivateCacheRoot) Write(name string, data []byte) error {
 	return r.WriteContext(context.Background(), name, data)
 }
 
-// WriteContext checks cancellation immediately before replacing the document.
-// Synchronous filesystem calls and a rename already in flight cannot be canceled;
-// callers must still check their deadline after publication before delivery.
-func (r *PrivateCacheRoot) WriteContext(ctx context.Context, name string, data []byte) (err error) {
+// WriteContext prepares and publishes under the supplied context. Claim callers
+// may instead prepare before their transaction budget starts.
+func (r *PrivateCacheRoot) WriteContext(ctx context.Context, name string, data []byte) error {
 	if len(data) == 0 {
 		return fmt.Errorf("private cache write requires bytes")
 	}
+	prepared, err := r.PrepareWrite(ctx, name)
+	if err != nil {
+		return err
+	}
+	return prepared.WriteContext(ctx, data)
+}
+
+// PrivateCacheWrite owns one empty private temporary file. It is single-use and
+// must be closed if the caller decides not to publish. It never owns the root.
+type PrivateCacheWrite struct {
+	root      *PrivateCacheRoot
+	name      string
+	file      *os.File
+	ctx       context.Context
+	published bool
+}
+
+// PrepareWrite allocates without reading or modifying attempt history. The
+// caller context governs preflight; synchronous creation cannot be interrupted.
+func (r *PrivateCacheRoot) PrepareWrite(ctx context.Context, name string) (*PrivateCacheWrite, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `\/:`) {
-		return fmt.Errorf("invalid relative Windows component")
+		return nil, fmt.Errorf("invalid relative Windows component")
 	}
 	var parent windows.Handle
-	trace.WithRegion(ctx, "observation.publish/root", func() {
-		parent, err = r.parent()
-	})
+	var err error
+	trace.WithRegion(ctx, "observation.publish/root", func() { parent, err = r.parent() })
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var random [16]byte
-	trace.WithRegion(ctx, "observation.publish/random", func() {
-		_, err = rand.Read(random[:])
-	})
+	trace.WithRegion(ctx, "observation.publish/random", func() { _, err = rand.Read(random[:]) })
 	if err != nil {
-		return err
+		return nil, err
 	}
 	temp := ".observations-" + hex.EncodeToString(random[:])
 	var handle windows.Handle
-	trace.WithRegion(ctx, "observation.publish/create", func() {
-		handle, err = windowsCreatePrivateCacheAt(parent, temp)
-	})
+	trace.WithRegion(ctx, "observation.publish/create", func() { handle, err = windowsCreatePrivateCacheAt(parent, temp) })
 	if err != nil {
-		return err
+		return nil, err
 	}
-	f := os.NewFile(uintptr(handle), temp)
-	published := false
+	prepared := &PrivateCacheWrite{root: r, name: name, file: os.NewFile(uintptr(handle), temp), ctx: ctx}
+	if err := ctx.Err(); err != nil {
+		_ = prepared.Close()
+		return nil, err
+	}
+	return prepared, nil
+}
+
+// Close removes an unused temp and releases its handle. Publication checks this
+// close before granting admission; deferred claim cleanup is idempotent.
+func (w *PrivateCacheWrite) Close() error {
+	if w == nil || w.file == nil {
+		return nil
+	}
+	f := w.file
+	w.file = nil
+	if !w.published {
+		trace.WithRegion(w.ctx, "observation.publish/cleanup", func() { _ = windowsDeleteHandle(windows.Handle(f.Fd())) })
+	}
+	var err error
+	trace.WithRegion(w.ctx, "observation.publish/close", func() { err = f.Close() })
+	return err
+}
+
+// WriteContext publishes once, revalidating root and target under the caller's
+// lock. Its checked close and pre-rename deadline guard precede admission.
+func (w *PrivateCacheWrite) WriteContext(ctx context.Context, data []byte) (err error) {
+	if w == nil || w.file == nil {
+		return fmt.Errorf("private cache preparation is closed")
+	}
+	w.ctx = ctx
 	defer func() {
-		if !published {
-			trace.WithRegion(ctx, "observation.publish/cleanup", func() {
-				_ = windowsDeleteHandle(handle)
-			})
-		}
-		var closeErr error
-		trace.WithRegion(ctx, "observation.publish/close", func() {
-			closeErr = f.Close()
-		})
-		if err == nil {
+		if closeErr := w.Close(); err == nil {
 			err = closeErr
 		}
 	}()
+	if len(data) == 0 {
+		return fmt.Errorf("private cache write requires bytes")
+	}
+	var parent windows.Handle
+	trace.WithRegion(ctx, "observation.publish/root", func() { parent, err = w.root.parent() })
+	if err != nil {
+		return err
+	}
 	var written int
-	trace.WithRegion(ctx, "observation.publish/write", func() {
-		written, err = f.Write(data)
-	})
+	trace.WithRegion(ctx, "observation.publish/write", func() { written, err = w.file.Write(data) })
 	if err != nil {
 		return err
 	}
 	if written != len(data) {
 		return io.ErrShortWrite
 	}
-	trace.WithRegion(ctx, "observation.publish/target", func() {
-		err = validatePrivateCacheReplacement(parent, name)
-	})
+	trace.WithRegion(ctx, "observation.publish/target", func() { err = validatePrivateCacheReplacement(parent, w.name) })
 	if err != nil {
 		return err
 	}
 	if err = ctx.Err(); err != nil {
 		return err
 	}
-	trace.WithRegion(ctx, "observation.publish/rename", func() {
-		err = windowsRenameHandle(handle, parent, name, true)
-	})
+	trace.WithRegion(ctx, "observation.publish/rename", func() { err = windowsRenameHandle(windows.Handle(w.file.Fd()), parent, w.name, true) })
 	if err != nil {
 		return err
 	}
-	published = true
-	// A close error still denies the claim, even if its attempted bit has already
-	// been published. The caller also checks its deadline before granting delivery.
+	w.published = true
 	return nil
 }
 

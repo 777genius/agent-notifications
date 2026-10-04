@@ -104,6 +104,7 @@ async function copy() {
         :key="item.value"
         class="agent-card"
         :aria-label="item.label"
+        :disabled="item.value === 'gemini'"
         :aria-pressed="selectedProducts[item.value as AgentProduct]"
         @click="toggleProduct(item.value as AgentProduct)"
       >
@@ -153,7 +154,6 @@ async function copy() {
       />
     </div>
 
-    <AgentSupportTable />
     <label
       v-if="hasLegacy && intent !== 'configure' && target !== 'manual' && target !== 'unknown'"
       class="agent-notify-option"
@@ -329,6 +329,7 @@ async function copy() {
         </article>
       </div>
     </template>
+    <AgentSupportTable />
     <footer class="install-footer">
       <a v-if="selectedProducts.gemini" :href="repo + '/blob/main/docs/gemini-notifications.md'">{{ t("install.gemini.guide") }} ↗</a>
       <a

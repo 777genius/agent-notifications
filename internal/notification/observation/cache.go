@@ -16,6 +16,9 @@ import (
 const cacheLimit = 256
 const cacheBytes = 48 * 1024
 const cacheWindow = 60.0
+
+// ClaimBudget bounds the locked read/publication transaction after preflight.
+// The caller context also governs root and private temporary-file preparation.
 const ClaimBudget = 250 * time.Millisecond
 
 // RecentCache stores attempts, not successful deliveries or replayable events.
@@ -59,6 +62,10 @@ func (c *RecentCache) Claim(ctx context.Context, key string, bit uint8) (bool, e
 		return false, diag.fail(err, "validation")
 	}
 	defer cache.Close()
+	diag.enter("prepare")
+	if err = cache.Prepare(ctx); err != nil {
+		return false, diag.fail(err, "validation")
+	}
 	lockCtx, cancel := context.WithTimeout(ctx, ClaimBudget)
 	defer cancel()
 	diag.budget, diag.budgetStarted = lockCtx, time.Now()

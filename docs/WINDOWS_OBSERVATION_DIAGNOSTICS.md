@@ -1,6 +1,8 @@
 # Windows observation-cache diagnostics
 
-Observation claims keep the 250ms production budget and fail closed. A
+Observation claims fail closed. The 250ms budget covers the locked read/publication
+transaction after root and private temporary-file preflight; the original caller
+context covers both phases. Complete claim duration can exceed 250ms. A
 `cache_unavailable` result does not establish whether the cause was a deadline,
 private-file validation or a Windows I/O error. It also does not prove that an
 attempted bit was not published. Never retry an uncertain claim automatically.
@@ -9,12 +11,12 @@ The public error message and notification receipts remain `cache_unavailable`.
 Internally, declare `var failure *observation.ClaimFailure` and call
 `errors.As(err, &failure)` to inspect bounded details:
 
-- `Phase`: validation, path/root preparation, lock, clock, read/decode,
+- `Phase`: validation, path/root preparation, temp preparation, lock, clock, read/decode,
   record/encode, publication or the check after publication.
 - `Class` and `OSCode`: sanitized failure category and numeric OS error.
   Windows sharing violation (32) and lock violation (33) are distinct.
 - `TotalElapsed`, `StageElapsed` and `BudgetElapsed`: elapsed durations.
-  Root/path preflight precedes the existing claim timer, so total duration can
+  Root/path and private temporary-file preflight precede the claim timer, so total duration can
   exceed budget duration. `BudgetState` records the timer independently of the
   operation's error; an I/O error and an expired deadline can coexist.
 - `MayHavePublished`: conservative uncertainty once publication starts.
@@ -82,3 +84,21 @@ not cancel existing sessions, retry tests, change antivirus settings or install
 tools. Unlike sanitized claim diagnostics, the raw OS trace includes paths and
 process metadata from the disposable test runner. Do not run it on a real user
 profile or infer a driver cause from a successful control recording.
+
+## Preflight and transaction boundary
+
+Each claim allocates one private empty temporary file before starting its 250ms
+transaction context. The caller context is checked before and after allocation;
+it is never refreshed. Preflight does not inspect or change attempt history.
+Locking, current document/clock decisions, writing, target validation, replacing
+rename and checked close remain in the transaction. The pre-rename and final
+deadline checks still deny expired or uncertain publication.
+
+Unused preparations are deleted and closed on duplicate, lock, read, decode or
+cancellation exits. A duplicate now also requires a writable private cache root:
+creation failure returns `cache_unavailable` before duplicate detection. This is
+a conservative admission failure, never permission to deliver or retry.
+
+This boundary change addresses the attributed temporary creation stalls without
+claiming they are faster. Other synchronous I/O can still exhaust the transaction
+or caller deadline. No first-valid assertion, fixed window or private ACL is relaxed.
