@@ -32,7 +32,7 @@ const icons = { yes: "✓", no: "✕", conditional: "✓*" };
                 <AgentLogo :agent="agent" />
                 <span>{{ t(`install.products.${agent}`) }}</span>
               </span>
-              <small v-if="agent === 'gemini'" class="agent-support-unreleased">{{ t("agentSupport.unreleased") }}</small>
+              <small v-if="agent === 'gemini'" class="agent-support-platforms">{{ t("agentSupport.platforms") }}</small>
             </th>
           </tr>
         </thead>
@@ -80,7 +80,7 @@ tbody th { color: #9eafc9; font-weight: 450; }
 td { text-align: center; }
 .agent-support-heading { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
 .agent-support-heading .agent-logo { width: 22px; height: 22px; }
-.agent-support-unreleased { display: block; margin-top: 4px; color: #d6bd8b; font-size: 11px; font-weight: 450; }
+.agent-support-platforms { display: block; margin-top: 4px; color: #d6bd8b; font-size: 11px; font-weight: 450; }
 .support-mark { display: inline-block; min-width: 30px; font-size: 17px; font-weight: 650; }
 .support-yes { color: #80d8b0; }
 .support-no { color: #71809a; }

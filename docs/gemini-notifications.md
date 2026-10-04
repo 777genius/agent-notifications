@@ -1,9 +1,9 @@
 # Gemini CLI notifications
 
-Gemini support is available in the **[Agent Notifications v1.47.0 prerelease](https://github.com/777genius/agent-notifications/releases/tag/v1.47.0)**
-for Linux amd64/arm64 and Windows amd64. Stable **v1.46.1** does not include
-Gemini; the public installer still selects that stable release. The prerelease
-has no macOS assets, so macOS Gemini support remains a candidate.
+Gemini support is available in **[Agent Notifications v1.47.1](https://github.com/777genius/agent-notifications/releases/tag/v1.47.1)**
+for Linux amd64/arm64 and Windows amd64. The public installer selects that
+qualified version on those platforms. macOS remains on 1.46.1, which excludes
+Gemini; macOS Gemini support remains a candidate.
 
 The integration was tested with exact **Gemini CLI 0.62.0** on macOS arm64/Intel, Linux amd64/arm64 and Windows amd64. Tests use the real CLI and its permission UI with a deterministic local
 provider; they do not call the live Google model service. See qualification by OS below.
@@ -25,14 +25,11 @@ configured endpoints. Sound, click-to-focus, questions, errors, plans, reviews,
 session-limit alerts, MCP notification tools and the `agent-notifications` skill are not
 Gemini capabilities. Claude/Codex capabilities and OpenCode limits remain separate.
 
-## Prerelease installation and candidate setup
+## Installation and candidate setup
 
-Install Gemini CLI first. On Linux or Windows, follow the
-[v1.47.0 prerelease installation instructions](https://github.com/777genius/agent-notifications/releases/tag/v1.47.0).
-That route requires a separate checkout of the release tag and both pinned
-`RELEASE_URL` and `CHECKSUMS_URL`. An unpinned loader, including `bin/setup.sh`
-from that tag, still downloads stable v1.46.1 and cannot install Gemini support.
-Do not apply this Linux/Windows prerelease to a macOS installation.
+Install Gemini CLI first. On Linux or Windows, use the public platform installer
+shown below. Its source bundle and binaries come from the same qualified release.
+Do not install Linux/Windows assets on macOS.
 
 For macOS candidate qualification, use the orchestrator's checked
 bundle and its direct built-candidate setup instructions in an isolated TEST profile.
@@ -40,17 +37,15 @@ Do not run the public loader or a local `bin/setup.sh` to qualify candidate byte
 those paths resolve public releases. The checked artifact and dependency hashes must match its qualification record.
 The macOS test uses our existing signed ClaudeNotifier helper and delivery backend.
 
-### Selectors for a future compatible stable release
+### Platform installer selectors
 
-The source implements `--product gemini` and combined selections. Once Gemini
-is included in a stable release, the public loader can use:
+On Linux or Windows, use:
 
 ```bash
 curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product gemini --desktop
 ```
 
-**This command does not install Gemini support from current release 1.46.1.** For
-webhook-only delivery, replace `--desktop` with `--webhook`; for both, specify both.
+For webhook-only delivery, replace `--desktop` with `--webhook`; for both, specify both.
 Choose at least one channel. Webhook URLs must be configured separately.
 
 The combined selector is one pipeline, in canonical product order:
@@ -106,7 +101,7 @@ than overwrite another writer's edits.
 | Windows amd64 native shell / notification API / visual desktop | Native CLI, production lifecycle and webhook passed; notification API and visual desktop unverified |
 | Linux amd64/arm64 native shell and webhook / desktop | Native CLI and production install/update/remove/webhook passed; desktop API and visual desktop unverified |
 | macOS Intel native CLI | Native CLI, production lifecycle and webhook passed; visual desktop unverified |
-| Public Agent Notifications availability | v1.47.0 opt-in prerelease for Linux amd64/arm64 and Windows amd64; stable v1.46.1 excludes Gemini; no macOS prerelease assets |
+| Public Agent Notifications availability | v1.47.1 platform channel for Linux amd64/arm64 and Windows amd64; macOS v1.46.1 excludes Gemini |
 
 A macOS observation will not imply Windows/Linux GUI verification. Injected
 contracts, actual CLI with a local provider fixture (`native_cli/provider_substitute`)

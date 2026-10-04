@@ -1,11 +1,11 @@
 {
-  "seo": { "title": "Agent Notifications - एकाग्र होकर काम करें", "description": "Claude, Codex CLI और OpenCode के लिए डेस्कटॉप सूचनाएं और वेबहुक। Gemini CLI एकीकरण अभी जारी नहीं हुआ है।" },
+  "seo": { "title": "Agent Notifications - एकाग्र होकर काम करें", "description": "Claude, Codex CLI और OpenCode के लिए डेस्कटॉप सूचनाएं और वेबहुक। Gemini CLI: Linux / Windows." },
   "language": { "label": "भाषा", "current": "वर्तमान भाषा: {language}", "search": "भाषाएँ खोजें", "noResults": "कोई भाषा नहीं मिली", "switchError": "भाषा नहीं बदली जा सकी। कृपया फिर से कोशिश करें।" },
   "accessibility": { "skip": "सीधे सामग्री पर जाएँ", "platforms": "समर्थित ऑपरेटिंग सिस्टम",
     "agents": "समर्थित एजेंट एकीकरण" },
   "brand": { "tagline": "आपके कोडिंग एजेंटों के लिए" },
   "nav": { "ariaLabel": "मुख्य", "features": "सुविधाएँ", "install": "इंस्टॉल करें", "faq": "अक्सर पूछे जाने वाले सवाल" },
-  "hero": { "eyebrow": "कम निगरानी। ज़्यादा निर्माण।", "title": "एकाग्र होकर काम करें", "emphasis": "ज़रूरत पर हम आपको बताएँगे", "leadFirst": "अपने एजेंट को काम करने दें। पूरा होने पर जानें।", "leadSecond": "Claude, Codex CLI और OpenCode के लिए डेस्कटॉप सूचनाएं और वेबहुक। Gemini CLI एकीकरण अभी जारी नहीं हुआ है।", "primary": "सूचनाएँ सेट करें", "secondary": "GitHub पर देखें", "note": "खुला स्रोत · स्थानीय रूप से चलता है" },
+  "hero": { "eyebrow": "कम निगरानी। ज़्यादा निर्माण।", "title": "एकाग्र होकर काम करें", "emphasis": "ज़रूरत पर हम आपको बताएँगे", "leadFirst": "अपने एजेंट को काम करने दें। पूरा होने पर जानें।", "leadSecond": "Claude, Codex CLI और OpenCode के लिए डेस्कटॉप सूचनाएं और वेबहुक। Gemini CLI: Linux / Windows.", "primary": "सूचनाएँ सेट करें", "secondary": "GitHub पर देखें", "note": "खुला स्रोत · स्थानीय रूप से चलता है" },
   "common": { "now": "अभी", "beta": "बीटा" },
   "features": {
     "eyebrow": "सही संकेत। सही समय पर।", "titleFirst": "अपना ध्यान बनाए रखें", "titleSecond": "बार-बार जाँचना छोड़ें",
@@ -122,6 +122,7 @@
   },
   "select": { "scrollUp": "विकल्प ऊपर स्क्रॉल करें", "scrollDown": "विकल्प नीचे स्क्रॉल करें" },
   "install": {
+    "platformRelease": "{os} के लिए सत्यापित संस्करण: {version}।",
     "agentNotify": {"label": "एजेंट को सूचना भेजने दें जब उन्हें आपके ध्यान की ज़रूरत हो", "hint": "Claude और Codex CLI में सूचना टूल जोड़ता है, ताकि काम रुकने पर ही नहीं, कार्य के दौरान भी सूचना भेज सकें।"},
     "title": "सूचनाएँ सेट करें", "intro": "नीचे दिए चरणों से {agent} में सूचनाएँ जोड़ें।", "chooseAgent": "अपने एजेंट चुनें", "requires": "{agent} आवश्यक है", "bothAgents": "दोनों एजेंट", "bothSelected": "✓ दोनों एजेंट चुने गए", "installBoth": "दोनों एजेंटों के लिए इंस्टॉल करें", "chooseComputer": "वह कंप्यूटर चुनें जहाँ आपका एजेंट चलता है", "selected": "चुना गया", "detected": "अपने-आप पहचाना गया", "change": "बदलें", "targetOs": "लक्ष्य ऑपरेटिंग सिस्टम",
     "products": { "claude": "Claude", "codex": "Codex CLI", "both": "Claude + Codex CLI",
@@ -144,7 +145,7 @@
       "gemini": "Gemini CLI उम्मीदवार: टर्न पूरा होने और टूल अनुमति के लिए मौन सूचनाएँ। टर्न पूरा होने का अर्थ सफलता या अंतिम उत्तर नहीं है। ध्वनि, क्लिक से फ़ोकस, प्रश्न, त्रुटि, योजना, समीक्षा सूचनाएँ या नेस्टेड एजेंट समानता नहीं।"
     },
     "gemini": {
-      "version": "यह एकीकरण अभी जारी नहीं हुआ है। सार्वजनिक संस्करण 1.46.1 में Gemini नहीं है। लक्ष्य Gemini CLI 0.62.0 है; ऑपरेटिंग सिस्टम के अनुसार मूल सत्यापन के नतीजों के लिए गाइड देखें। संगत रिलीज़ ज़रूरी है.",
+      "version": "Linux / Windows: 1.47.1 (Gemini CLI 0.62.0). macOS: 1.46.1 (Claude, Codex CLI, OpenCode).",
       "guide": "Gemini उम्मीदवार सेटअप और सीमाएँ",
       "configure": "चैनल सहमति और साझा सेटिंग के लिए Gemini गाइड देखें; MCP टूल या स्किल इंस्टॉल नहीं होता। अंतर्निहित सूचनाएँ दोहर सकती हैं। एक डेस्कटॉप स्रोत या केवल webhook चुनें; अंतर्निहित सेटिंग नहीं बदलतीं।"
     },
@@ -166,7 +167,7 @@
     }
   },
   "agentSupport": {
-    "unreleased": "अभी जारी नहीं",
+    "platforms": "Linux / Windows",
     "title": "एजेंट सुविधाओं की तुलना",
     "feature": "सुविधा",
     "yes": "समर्थित",
