@@ -11,6 +11,7 @@ on:
       harness_sha256: {type: string, required: true}
       supplement_artifact_id: {type: string, required: true}
       supplement_sha256: {type: string, required: true}
+      cell_group: {type: choice, required: false, default: all, options: [all, linux]}
 permissions: {contents: read, actions: read}
 jobs:
   plan:
@@ -21,6 +22,7 @@ jobs:
         with: {ref: '${{ github.sha }}', persist-credentials: false}
       - id: cells
         shell: bash
+        env: {TEST_CELL_GROUP: '${{ inputs.cell_group }}'}
         run: |
           python3 - <<'PY'
           import hashlib,json,os,pathlib
@@ -28,6 +30,9 @@ jobs:
           assert hashlib.sha256(p.read_bytes()).hexdigest()=='43e800a04df0dac060c3e969dd8f461ee93c36b08be64654b65b68ecd5175f26'
           d=json.loads(p.read_bytes());rows=[r for r in d['cells'] if r['route']=='GHA']
           assert len(d['cells'])==12 and len(rows)==8 and all(r['version']=='1.18.33' and r['entry'] in ('run','tui') and (r['os'],r['arch'])!=('linux','amd64') for r in rows)
+          group=os.environ['TEST_CELL_GROUP'];assert group in ('all','linux')
+          if group=='linux':rows=[r for r in rows if r['os']=='linux']
+          assert len(rows)==(2 if group=='linux' else 8)
           with open(os.environ['GITHUB_OUTPUT'],'a') as f:f.write('matrix='+json.dumps({'include':rows},separators=(',',':'))+'\n')
           PY
   native:
@@ -106,7 +111,8 @@ jobs:
         run: |
           set -euo pipefail
           REPO=$(python -c 'import pathlib; print(pathlib.Path.cwd().resolve())')
-          args=(python -B "$THIN_DRIVER" --repo "$REPO" --manifest "$REPO/$FINAL_MANIFEST" --manifest-sha256 "$FINAL_MANIFEST_SHA256" --final-gate "$CELL_GATE" --final-gate-sha256 "$CELL_GATE_SHA256" --artifacts "$REPO/.task-tools/artifacts/installed12-cases" --os "$AN_OS" --arch "$AN_ARCH" --version "$AN_VERSION" --entry "$AN_ENTRY")
+          PYTHON=$(python -c 'import sys; print(sys.executable)')
+          args=("$PYTHON" -B "$THIN_DRIVER" --repo "$REPO" --manifest "$REPO/$FINAL_MANIFEST" --manifest-sha256 "$FINAL_MANIFEST_SHA256" --final-gate "$CELL_GATE" --final-gate-sha256 "$CELL_GATE_SHA256" --artifacts "$REPO/.task-tools/artifacts/installed12-cases" --os "$AN_OS" --arch "$AN_ARCH" --version "$AN_VERSION" --entry "$AN_ENTRY")
           if [ "$AN_OS" = linux ]; then
             args+=(--receiver-record "$REPO/.task-tools/artifacts/receiver-record.json")
             # Retain the runner file owner for private-env Git source guards.
