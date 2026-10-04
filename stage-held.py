@@ -20,7 +20,7 @@ dest.write_bytes(raw);dest.chmod(0o444)
 
 portable=P(__file__).resolve().with_name('held-portable.py');dest=P.cwd()/'.task-tools/artifacts/held-portable.py'
 assert not portable.is_symlink()and stat.S_ISREG(portable.lstat().st_mode)and 0<portable.stat().st_size<=2*1024*1024
-raw=portable.read_bytes();assert hashlib.sha256(raw).hexdigest()=='67742afdf71c9e1aebfceb9e66110d13b397dc4aabac40775968497751682d45'
+raw=portable.read_bytes();assert hashlib.sha256(raw).hexdigest()=='ae69dcdc3016d5b4a15d6c4558136ccf70098adab9cde43a0a21dbd363b20eb0'
 assert not dest.exists()and not any(p.is_symlink()for p in dest.parents)
 dest.write_bytes(raw);dest.chmod(0o444)
 
