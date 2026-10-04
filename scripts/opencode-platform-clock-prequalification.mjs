@@ -133,7 +133,7 @@ async function execute(rootInput) {
   need(process.env.BUN_BE_BUN === '1' && Object.keys(process.env).every(k => m.environmentKeys.includes(k)), 'minimal_actual_environment');
   const fixture = contained(root, fileURLToPath(import.meta.url));
   const imagePath = contained(root, realpathSync(process.execPath)), image = heldImage(imagePath);
-  let clock, lines, disposed = false, previous, samples = 0, measuredInstances = 0, warmupSample, nativeComparisonWidths;
+  let clock, lines, disposed = false, previous, samples = 0, measuredInstances = 0, warmupSample, nativeComparisonWidths, abortMeasured;
   const globalStart = performance.now();
   const watchdog = setTimeout(() => { process.exitCode = 1; process.stdin.destroy(); }, budgets.jsMs);
   try {
@@ -158,15 +158,39 @@ async function execute(rootInput) {
     await receive('begin');
     const operationStart = performance.now();
     const dispatch = await import(pathToFileURL(modulePaths['opencode-plugin/platform-clock.mjs']).href);
-    async function createClock() {
-      clock = await dispatch.createPlatformClock(); disposed = false;
+    const descriptorEvents = [], ownedFD = new WeakMap();
+    function imageFDs() {
+      budgetCheck(performance.now(), operationStart, samples, 0);
+      const result = [];
+      for (let fd = 0; fd < 64; fd++) {
+        try { const st = fstatSync(fd, { bigint: true });
+          if (['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs'].every(k => st[k] === image.fileIdentity[k])) result.push(fd);
+        } catch (e) { need(e?.code === 'EBADF', 'owned_descriptor_scan'); }
+      }
+      budgetCheck(performance.now(), operationStart, samples, 0); return result;
+    }
+    function openedDescriptor(before, label) {
+      const added = imageFDs().filter(fd => !before.includes(fd));
+      need(added.length === 1, 'owned_image_descriptor_delta');
+      descriptorEvents.push({ label, fd: added[0], action: 'opened', identity: image.fileIdentity }); return added[0];
+    }
+    function closedDescriptor(fd, label) {
+      let closed = false;
+      try { fstatSync(fd); } catch (e) { closed = e?.code === 'EBADF'; }
+      need(closed, 'owned_image_descriptor_not_closed'); descriptorEvents.push({ label, fd, action: 'closed' });
+    }
+    async function createClock(signal) {
+      const before = process.platform === 'win32' ? imageFDs() : null;
+      clock = await dispatch.createPlatformClock({ signal }); disposed = false;
+      if (before) ownedFD.set(clock, openedDescriptor(before, 'clock'));
       need(clock && Object.isFrozen(clock) && typeof clock.sample === 'function' && typeof clock.dispose === 'function', 'actual_module_lifecycle');
       budgetCheck(performance.now(), operationStart, samples, 0);
     }
-    function disposeClock() {
-      clock.dispose(); disposed = true; clock.dispose();
+    function disposeClock(subject = clock) {
+      subject.dispose(); if (subject === clock) disposed = true; subject.dispose();
+      if (process.platform === 'win32') closedDescriptor(ownedFD.get(subject), 'dispose');
       let refused = false;
-      try { clock.sample(); } catch (e) { refused = e instanceof TypeError && e.message === 'clock_unavailable'; }
+      try { subject.sample(); } catch (e) { refused = e instanceof TypeError && e.message === 'clock_unavailable'; }
       need(refused, 'actual_dispose_is_sticky'); image.verify();
       budgetCheck(performance.now(), operationStart, samples, 0);
     }
@@ -174,12 +198,17 @@ async function execute(rootInput) {
     if (process.platform === 'win32') {
       // Plain imports precede warmup; no sampler is created during these imports.
       const windowsPath = modulePaths['opencode-plugin/windows-clock.mjs'];
-      await import(pathToFileURL(windowsPath).href);
-      const ffi = await import('bun:ffi');
-      need(['dlopen', 'ptr', 'linkSymbols'].every(k => typeof ffi[k] === 'function'), 'actual_plain_ffi_exports');
-      budgetCheck(performance.now(), operationStart, samples, 0);
-      // Intentional TEST boundary: one real lifecycle precedes the fixed baseline.
-      await createClock(); warmupSample = sample(); disposeClock();
+      const windows = await import(pathToFileURL(windowsPath).href);
+      // Fresh module: cancel A during its real first async initialization; B is the sole warmup.
+      const cancelFirst = new AbortController(), beforeFirst = imageFDs();
+      const cancelled = windows.createWindowsClock({ signal: cancelFirst.signal });
+      const cancelledFD = openedDescriptor(beforeFirst, 'cancelled-first-init');
+      cancelFirst.abort(); closedDescriptor(cancelledFD, 'first-init-abort');
+      const warmup = createClock();
+      let rejected = false;
+      try { await cancelled; } catch (e) { rejected = e instanceof TypeError && e.message === 'clock_unavailable'; }
+      need(rejected, 'first_init_cancel_rejected'); await warmup;
+      warmupSample = sample(); disposeClock();
       send({ kind: 'source_ready', pid: process.pid, sourceCommit: m.sourceCommit,
         windowsModuleSHA256: hash(readFileSync(windowsPath)), samplerCreated: true, samples,
         warmup: { samples: 1, disposeCalls: 2, sampleAfterDisposeRefused: true } });
@@ -232,6 +261,8 @@ async function execute(rootInput) {
       // Windows native precise wall vs Date is reported separately, with zero
       // quantum/error grants and no required successful Date predicate.
       if (process.platform === 'win32') {
+        const first = clock;
+        if (round === 0) { abortMeasured = new AbortController(); await createClock(abortMeasured.signal); measuredInstances++; }
         const nativeBefore = sample(), dateMs = Date.now(), nativeAfter = sample();
         const predicate = preciseDate(nativeBefore.wall, dateMs, nativeAfter.wall);
         datePredicates.push(predicate);
@@ -239,22 +270,31 @@ async function execute(rootInput) {
         // Read resource counts AFTER both clock endpoints/comparison, never inside224ms.
         await resourceCheckpoint('helper_compared', round);
         if (round === 0) {
-          disposeClock(); await resourceCheckpoint('instance_disposed', round);
-          await createClock(); measuredInstances++;
+          disposeClock(first); sample(); // Genuine B read AFTER A's close and sticky refusal.
+          await resourceCheckpoint('instance_disposed', round);
           await resourceCheckpoint('sampler_created', 1);
         }
       }
     }
-    disposeClock();
+    if (process.platform === 'win32') {
+      abortMeasured.abort(); closedDescriptor(ownedFD.get(clock), 'measured-abort');
+      // Abort closure has already been independently witnessed; dispose remains idempotent.
+      let refused = false; try { clock.sample(); } catch (e) { refused = e instanceof TypeError && e.message === 'clock_unavailable'; }
+      need(refused, 'actual_abort_is_sticky'); clock.dispose(); clock.dispose(); disposed = true;
+    } else disposeClock();
+    image.verify(); budgetCheck(performance.now(), operationStart, samples, 0);
     const evidence = { kind: 'disposed', status: 'module_prequalification_observed', actualModuleBound: true,
       rounds: budgets.rounds, samples, comparisons, datePredicates, disposeCalls: measuredInstances * 2,
-      ...(process.platform === 'win32' ? { warmupSamples: 1, measuredSamples: samples - 1, measuredInstances } : {}),
+      ...(process.platform === 'win32' ? { warmupSamples: 1, measuredSamples: samples - 1, measuredInstances,
+        ownedClockLifetime: { descriptorOpens: descriptorEvents.filter(e => e.action === 'opened').length,
+          descriptorCloses: descriptorEvents.filter(e => e.action === 'closed').length,
+          firstInitCancelRejected: true, overlapDisposalPreservedB: true, abortSticky: true } } : {}),
       sampleAfterDisposeRefused: true, operationElapsedMs: performance.now() - operationStart,
       jsElapsedMs: performance.now() - globalStart, checks: { actualTupleParity: true,
         causalCounterContainment: true, causalWallContainment: true, actualWallCounterTypes: true,
         currentImageHeldFile: true, sampleNonregression: true, samplerBounds: true, stickyDisposal: true },
       ...qualifications };
-    writeFileSync(resolve(root, 'samples.private.json'), JSON.stringify({ actual, warmupSample, raw, evidence },
+    writeFileSync(resolve(root, 'samples.private.json'), JSON.stringify({ actual, warmupSample, descriptorEvents, raw, evidence },
       (_, v) => typeof v === 'bigint' ? String(v) : v) + '\n', { flag: 'wx', mode: 0o600 });
     send(evidence); await receive('finish');
     budgetCheck(performance.now(), operationStart, samples, 0);

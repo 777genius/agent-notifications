@@ -380,8 +380,10 @@ class PureVectors(unittest.TestCase):
         value = copy.deepcopy(result); value['rawBoot'] = 'not-public'
         with self.assertRaises(RuntimeError): H.validate_result(value, 'linux')
         with self.assertRaises(RuntimeError): H.validate_result(result, 'windows')
-        windows = copy.deepcopy(result); windows['samples'] = 109
-        windows.update(warmupSamples=1, measuredSamples=108, measuredInstances=2, disposeCalls=4)
+        windows = copy.deepcopy(result); windows['samples'] = 110
+        windows.update(warmupSamples=1, measuredSamples=109, measuredInstances=2, disposeCalls=4,
+            ownedClockLifetime={'descriptorOpens': 4, 'descriptorCloses': 4, 'firstInitCancelRejected': True,
+                                'overlapDisposalPreservedB': True, 'abortSticky': True})
         windows['datePredicates'] = [{'dateInsideNativeInterval': False, 'datePreciseDistanceNs': '1'}] * 3
         H.validate_result(windows, 'windows')
         for key, value in [('warmupSamples', 0), ('measuredSamples', 107), ('measuredInstances', 1), ('disposeCalls', 2)]:
@@ -392,6 +394,9 @@ class PureVectors(unittest.TestCase):
                 with self.subTest(counter=key, value=value):
                     malformed = copy.deepcopy(windows); malformed[key] = value
                     with self.assertRaises(RuntimeError): H.validate_result(malformed, 'windows')
+        for key, value in [('descriptorCloses', 3), ('descriptorCloses', 4.0), ('overlapDisposalPreservedB', False), ('abortSticky', 1)]:
+            malformed = copy.deepcopy(windows); malformed['ownedClockLifetime'][key] = value
+            with self.assertRaises(RuntimeError): H.validate_result(malformed, 'windows')
         windows['datePredicates'][0] = {'dateInsideNativeInterval': True, 'datePreciseDistanceNs': '1'}
         with self.assertRaises(RuntimeError): H.validate_result(windows, 'windows')
 

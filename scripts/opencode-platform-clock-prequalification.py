@@ -793,11 +793,8 @@ def run_case(root, metadata, os_name, arch, job_end):
                  'actual_resource_checkpoint')
             count = native_resources(host['p'], os_name)
             if checkpoint == 'instance_disposed':
-                settled = {}; safe['firstMeasuredDisposal'] = settled
-                count = settle_sampler_resources(warmed_resources, count, operation_end,
-                    lambda: native_resources(host['p'], os_name), settled)
+                # Aggregate count is diagnostic: live overlapping B still owns its image.
                 measured_resource_counts.append(count)
-                require_repeated_sampler_nonincrease(warmed_resources, measured_resource_counts, 1)
             safe['nativeResourceCheckpoints'].append({'stage': checkpoint, 'round': checkpoint_round,
                 'samples': expected_samples, 'count': count,
                 'operationElapsedMs': round((time.monotonic() - operation_started) * 1000, 3)})
@@ -834,10 +831,10 @@ def run_case(root, metadata, os_name, arch, job_end):
                 if s['p'].pid in own.live: own.cleanup()
             if os_name == 'windows':
                 stage = 'helper_compared_resource_observation'
-                resource_checkpoint('helper_compared', round_number, (round_number + 1) * (BUDGETS['chunkSize'] + 4) + 1)
+                resource_checkpoint('helper_compared', round_number, (round_number + 1) * (BUDGETS['chunkSize'] + 4) + (1 if round_number == 0 else 2))
                 if round_number == 0:
-                    resource_checkpoint('instance_disposed', 0, 37)
-                    resource_checkpoint('sampler_created', 1, 37)
+                    resource_checkpoint('instance_disposed', 0, 38)
+                    resource_checkpoint('sampler_created', 1, 38)
         stage = 'disposed'
         result = own.message(host, 'disposed', operation_end)
         disposed_observed = True
@@ -865,18 +862,12 @@ def run_case(root, metadata, os_name, arch, job_end):
             safe['nativeResourceCheckpoints'].append({'stage': 'disposed', 'round': None,
                 'samples': result['samples'], 'count': resources_after,
                 'operationElapsedMs': round((time.monotonic() - operation_started) * 1000, 3)})
-        # Keep first snapshot fields unchanged; Windows has a separate temporal criterion.
-        if os_name == 'windows':
-            stage = 'resource_settling'
-            safe['nativeResourceSettlingObservation'] = {}
-            resources_after = settle_sampler_resources(warmed_resources, resources_after, operation_end,
-                lambda: native_resources(host['p'], os_name), safe['nativeResourceSettlingObservation'])
         if os_name == 'windows':
             measured_resource_counts.append(resources_after)
-            require_repeated_sampler_nonincrease(warmed_resources, measured_resource_counts, 2)
-            safe['repeatedResourceCriterion'] = {'baselineStage': 'actual_postwarmup_before_measured_instances',
-                'baseline': warmed_resources, 'disposedCounts': measured_resource_counts,
-                'firstInstanceZeroGrowthProved': False, 'runtimeOwnershipProved': False}
+            safe['ownedClockResourceCriterion'] = {'criterion': 'identity_bound_descriptor_close_overlap_abort',
+                'baseline': warmed_resources, 'aggregateCheckpointCounts': measured_resource_counts,
+                'aggregateCountsDiagnosticOnly': True, 'processWideGrowthCauseVerified': False,
+                'ownedClockLifetime': result['ownedClockLifetime']}
         else:
             require_sampler_nonincrease(os_name, resources_before, resources_after)
         remaining(operation_end)
@@ -901,8 +892,8 @@ def run_case(root, metadata, os_name, arch, job_end):
         safe.update({k: result[k] for k in ('status', 'actualModuleBound', 'rounds', 'samples', 'comparisons',
                      'datePredicates', 'disposeCalls', 'sampleAfterDisposeRefused', 'operationElapsedMs', 'jsElapsedMs', 'checks')})
         if os_name == 'windows':
-            safe.update({k: result[k] for k in ('warmupSamples', 'measuredSamples', 'measuredInstances')})
-        safe.update(kernelExecutingImageVerified=True, nativeResourceNonincrease=True,
+            safe.update({k: result[k] for k in ('warmupSamples', 'measuredSamples', 'measuredInstances', 'ownedClockLifetime')})
+        safe.update(kernelExecutingImageVerified=True, nativeResourceNonincrease=os_name != 'windows',
                     protectedLoaderFileSHA256=[x['sha256'] for x in loader_files],
                     actualHelperOutputReceiptSHA256=helper_receipts,
                     rawPrivateReceiptSHA256=sha(root / 'samples.private.json'),
@@ -935,13 +926,20 @@ def validate_result(v, os_name):
     keys = {'kind', 'status', 'actualModuleBound', 'rounds', 'samples', 'comparisons', 'datePredicates',
             'disposeCalls', 'sampleAfterDisposeRefused', 'operationElapsedMs', 'jsElapsedMs', 'checks', *QUALIFICATIONS}
     if os_name == 'windows':
-        keys.update(('warmupSamples', 'measuredSamples', 'measuredInstances'))
+        keys.update(('warmupSamples', 'measuredSamples', 'measuredInstances', 'ownedClockLifetime'))
         need(all(type(v.get(k)) is int for k in
                  ('warmupSamples', 'measuredSamples', 'measuredInstances', 'disposeCalls')) and
-             v.get('warmupSamples') == 1 and v.get('measuredSamples') == 108 and
+             v.get('warmupSamples') == 1 and v.get('measuredSamples') == 109 and
              v.get('measuredInstances') == 2, 'actual_repeated_module_lifecycle')
+        lifetime = v.get('ownedClockLifetime')
+        need(isinstance(lifetime, dict) and set(lifetime) == {'descriptorOpens', 'descriptorCloses',
+             'firstInitCancelRejected', 'overlapDisposalPreservedB', 'abortSticky'} and
+             type(lifetime['descriptorOpens']) is int and lifetime['descriptorOpens'] == 4 and
+             type(lifetime['descriptorCloses']) is int and lifetime['descriptorCloses'] == 4 and
+             all(lifetime[k] is True for k in ('firstInitCancelRejected', 'overlapDisposalPreservedB', 'abortSticky')),
+             'actual_owned_descriptor_lifetime')
     need(set(v) == keys and v['status'] == 'module_prequalification_observed' and v['actualModuleBound'] is True and
-         v['rounds'] == 3 and type(v['samples']) is int and v['samples'] == (109 if os_name == 'windows' else 102) and
+         v['rounds'] == 3 and type(v['samples']) is int and v['samples'] == (110 if os_name == 'windows' else 102) and
          v['disposeCalls'] == (4 if os_name == 'windows' else 2) and v['sampleAfterDisposeRefused'] is True, 'closed_actual_module_result')
     need(all(v[k] is False for k in QUALIFICATIONS), 'qualification_grant_refused')
     need(type(v['operationElapsedMs']) in (int, float) and 0 <= v['operationElapsedMs'] < 2000 and

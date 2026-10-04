@@ -90,8 +90,9 @@ children. Native Windows/macOS do not claim a network namespace.
 Budgets are fixed: preparation 2s, JS 25s, Go 20s, individual helper 224ms, whole
 job 900s absolute, sample cap 512 and chunks of at most 32. Three rounds sample
 102 actual values on Linux/macOS. Windows uses one real warmup sample plus
-108 measured samples, totaling109, including separate native-wall/Date brackets.
-After warmup, measured instance1 owns round0 and instance2 owns rounds1-2.
+109 measured samples, totaling110, including separate native-wall/Date brackets.
+After warmup, A owns round0, then overlapping B owns rounds1-2. B also
+samples after A closes; both retain the original native-wall/Date brackets.
 The same three actual helpers and original512 sample cap remain unchanged.
 Parent and JS deadlines include comparison, disposal, final
 hash/image checks and natural host exit/EOF. Each immediate helper-file SHA runs
@@ -114,27 +115,32 @@ assumption, never a newly qualified wall/R/T budget. The Linux reader's existing
 10ms proc interval and Q2/T430 refusals are unchanged. Disposal is observed on
 the actual object, repeated disposal is tested, and subsequent sampling must
 refuse. Linux/Darwin first post-disposal kernel FD snapshots must not increase.
-Windows TEST resource acceptance intentionally uses a repeated-lifecycle boundary.
-One actual stock-Bun product clock is created, sampled once, disposed twice and
-checked for sticky sample refusal BEFORE the fixed external handle baseline.
-Two successive measured clocks then share the original three native comparisons:
-round0 on the first, rounds1-2 on the second. Each is disposed twice and refuses
-sampling. After EACH disposal the external GetProcessHandleCount must be <= the
-SAME post-warmup baseline. No baseline reset or +N allowance is permitted.
-The original4096 handle cap, absolute2s operation deadline,224ms endpoint span,
-512 sample cap and25s whole-JS ceiling remain unchanged; warmup consumes these
-same budgets. Only already accepted temporal resampling may occur inside the
-remaining original2s, never a new settling budget. Final image checks, finish,
-natural wait and pipe EOF must also fit the original deadline.
-
-SAFE evidence records the explicit post-warmup baseline, both disposal counts,
-1 warmup/108 measured/109 total samples and both real measured instances.
-This criterion can mask a fixed first-use product leak absorbed into warmup,
-unrelated handle cancellation, or growth that starts only after the sampled
-lifetimes. It detects observed per-instance growth, not all future unbounded
-growth. It proves neither first-instance zero increase nor runtime ownership;
-all clock/runtime eligibility and time-policy qualifications remain FALSE.
-Original577 and typedPSS47eed failures retain their original scope and results.
+Windows TEST acceptance is explicitly `identity_bound_descriptor_close_overlap_abort`.
+One fresh-module A is cancelled during its genuine first asynchronous binding
+initialization; overlapping B is the sole warmup, samples once, closes twice and
+refuses further sampling. Two measured clocks then overlap: A owns round0, B
+samples before and after A disposes twice, then owns rounds1-2. Aborting B must
+close its own image and make sampling refuse; repeated disposal remains safe.
+A bounded read-only fstat scan of descriptors0..63 brackets each genuine clock
+creation. Exactly one new descriptor must match all five original executable
+identity fields; disposal/abort must immediately produce real EBADF for that FD.
+No close getter, fake filesystem/native frame, PSS or production test hook is used.
+Missing, extra, reused or out-of-range descriptors deny observation. Raw descriptor
+numbers/identities remain private; SAFE exposes only four opens/four successful
+closes and the closed overlap/cancellation predicates. A nearest Node filesystem
+test forwards real open/close calls and requires actual EBADF; deleting closeSync
+must fail even if disposed flags and repeated disposal still look correct.
+The protected DLL/FFI binding is retained once per actual loaded module until
+owned host exit. Instance disposal cannot retire another instance's callable.
+GetProcessHandleCount, the unchanged4096 cap and the post-warmup baseline remain
+numeric diagnostics; Windows never reports nativeResourceNonincrease=true.
+Unknown process-wide growth and its cause remain unverified, including long-lived
+host exhaustion. Natural host/helper Wait and EOF remain mandatory and prove
+terminal closure only. Absolute2s/224ms/512samples/25s, final identity/hash checks,
+finish and all three natural helper closures remain unchanged, without resampling,
+GC, extra warmup, retries or renewed deadlines. SAFE distinguishes1 warmup,
+109 measured and110 total samples. Original577/47eed/ad9 failures keep their
+original failed criteria; this amendment does not qualify time policy or runtime.
 
 Signed operational assumptions remain explicit: trusted process globals and
 builtins, protected immutable OS mappings, Darwin's protected libSystem/dyld,
