@@ -541,7 +541,9 @@ def run_version(root, version, args, helper, helper_sha, manifest_sha, ownership
         report['liveImageAndPublicLoaderVerified'] = True
         before_calls = ownership.started; before_closes = ownership.closed
         failure_phase(report, 'arm')
-        deadline = time.monotonic() + 2
+        operation_started = time.monotonic()
+        deadline = operation_started + 2
+        elapsed = report['operationElapsedNs'] = {}
         (root / 'clock-start').write_bytes(b'start\n')
         for i in range(3):
             failure_phase(report, 'request_wait', i)
@@ -563,6 +565,7 @@ def run_version(root, version, args, helper, helper_sha, manifest_sha, ownership
         while len(rows(root)) < 2 and time.monotonic() < deadline: time.sleep(.002)
         result_rows = rows(root)
         copy_js_diagnostics(result_rows, host['p'].pid, report)
+        elapsed['resultRead'] = int((time.monotonic() - operation_started) * 1000000000)
         need(time.monotonic() < deadline, 'qualification_operation_deadline')
         failure_phase(report, 'result_identity')
         need(len(result_rows) == 2, 'bounded_clock_result_required'); result = result_rows[1]
@@ -576,6 +579,7 @@ def run_version(root, version, args, helper, helper_sha, manifest_sha, ownership
         need(all(result.get('checks', {}).get(k) is True for k in mandatory) and
              ownership.started - before_calls == ownership.closed - before_closes == 3 and
              sha(exe) == report['imageSha256'] and sha(copied_helper) == helper_sha and sha(module) == metadata['moduleSha256'] and not host['overflow'] and not host['pipeError'], 'native_checks_or_actual_close_incomplete')
+        elapsed['finalChecksComplete'] = int((time.monotonic() - operation_started) * 1000000000)
         failure_phase(report, 'bounds')
         bounds = result.get('aggregate', {})
         need(set(bounds) == {'maxPairWidthNs', 'maxOuterWidthNs', 'maxGoWidthNs', 'maxDatePreciseDistanceNs', 'preciseComparisons'}, 'closed_safe_bounds_required')
@@ -587,7 +591,9 @@ def run_version(root, version, args, helper, helper_sha, manifest_sha, ownership
         if args.os == 'windows':
             need(all(type(result['checks'].get(k)) is bool for k in ('dateInsidePreciseInterval', 'dateWithinTwoMsOfPrecise')), 'actual_date_precise_predicates_required')
         failure_phase(report, 'final_live_image')
+        elapsed['finalImageStart'] = int((time.monotonic() - operation_started) * 1000000000)
         live_image(host['p'], exe)
+        elapsed['finalImageComplete'] = int((time.monotonic() - operation_started) * 1000000000)
         need(time.monotonic() < deadline, 'qualification_operation_deadline')
         failure_phase(report, 'projection')
         # Closed safe projection; raw loader/image paths, UUIDs and all clocks remain private.
