@@ -12,7 +12,7 @@ channel. [Channel selection and promotion](PLATFORM_RELEASE_CHANNELS.md).
 
 ## Prerequisites
 
-- Claude, Codex CLI and/or OpenCode for stable setup (OpenCode tested with 1.18.33; V2 unsupported). Gemini CLI 0.62.0 is the tested host on Linux/Windows.
+- Claude, Codex CLI and/or OpenCode for stable setup (published OpenCode support is tested with 1.18.33; published V2 support is not declared). The dual-API candidate targets 1.18.33, 2.0.0 and 2.0.21; final platform qualification and publication remain pending. See [OpenCode candidate setup and limits](opencode-notifications.md), including the stock Windows V1 original-event-age limitation. Gemini CLI 0.62.0 is the tested host on Linux/Windows.
 - `curl` and Bash
 - **Windows users:** Git Bash (included with [Git for Windows](https://git-scm.com/download/win)). Do not use WSL for a native Windows installation.
 - Python remains optional only for iTerm2 exact tab/pane targeting.

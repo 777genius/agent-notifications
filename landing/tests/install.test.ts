@@ -139,8 +139,8 @@ exit "$install_status"`,
   }
 });
 
-// The candidate selector must include every chosen observer and scope portable flags.
-test("Gemini qualified commands preserve canonical selectors and shared observer consent", () => {
+// The released selector must include every chosen observer and scope portable flags.
+test("Gemini released commands preserve canonical selectors and shared observer consent", () => {
   const prefix = "curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- ";
   const cases = [
     { products: ["gemini"], expected: prefix + "--product gemini --webhook" },
@@ -159,6 +159,8 @@ test("Gemini qualified commands preserve canonical selectors and shared observer
       assert.equal(command(products, target, "update", false, { desktop: false, webhook: true }), expected);
       assert.equal(command(products, target, "install", true, { desktop: false, webhook: false }), null);
       assert.equal(command(products, target, "configure"), null);
+      assert.equal(command(products, "macos", "install"), null);
+      assert.equal(command(products, "macos", "update"), null);
       assert.equal(command(products, "unknown", "install"), null);
       assert.equal(command(products, "manual", "install"), null);
     }
@@ -176,7 +178,7 @@ test("Gemini mixed command reports download failure with one pipeline", () => {
 });
 
 // Exercise the copied shell text: the downloaded script must receive literal selectors
-// and consent flags as separate argv tokens. This does not qualify the candidate loader.
+// and consent flags as separate argv tokens. This does not qualify the public loader.
 test("Gemini copied pipelines deliver exact installer argv", () => {
   const cases = [
     {

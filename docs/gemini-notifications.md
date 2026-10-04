@@ -3,7 +3,7 @@
 Gemini support is available in **[Agent Notifications v1.47.1](https://github.com/777genius/agent-notifications/releases/tag/v1.47.1)**
 for Linux amd64/arm64 and Windows amd64. The public installer selects that
 qualified version on those platforms. macOS remains on 1.46.1, which excludes
-Gemini; macOS Gemini support remains a candidate.
+Gemini. Gemini installation is not available on macOS.
 
 The integration was tested with exact **Gemini CLI 0.62.0** on macOS arm64/Intel, Linux amd64/arm64 and Windows amd64. Tests use the real CLI and its permission UI with a deterministic local
 provider; they do not call the live Google model service. See qualification by OS below.
@@ -25,17 +25,11 @@ configured endpoints. Sound, click-to-focus, questions, errors, plans, reviews,
 session-limit alerts, MCP notification tools and the `agent-notifications` skill are not
 Gemini capabilities. Claude/Codex capabilities and OpenCode limits remain separate.
 
-## Installation and candidate setup
+## Installation
 
 Install Gemini CLI first. On Linux or Windows, use the public platform installer
 shown below. Its source bundle and binaries come from the same qualified release.
 Do not install Linux/Windows assets on macOS.
-
-For macOS candidate qualification, use the orchestrator's checked
-bundle and its direct built-candidate setup instructions in an isolated TEST profile.
-Do not run the public loader or a local `bin/setup.sh` to qualify candidate bytes:
-those paths resolve public releases. The checked artifact and dependency hashes must match its qualification record.
-The macOS test uses our existing signed ClaudeNotifier helper and delivery backend.
 
 ### Platform installer selectors
 
@@ -58,9 +52,10 @@ Desktop/webhook choices apply to **each selected observer agent**, Gemini and
 OpenCode, with consent persisted separately per agent. They do not grant or change
 Claude/Codex notification channels. `--skip-agent-notify` affects only Claude/Codex
 portable MCP/skill setup. Legacy `--product both` remains Claude + Codex.
-The candidate piped loader, interactive menu and all-four installation were qualified
+The piped loader, interactive menu and all-four installation were qualified
 in an isolated Linux TEST profile with real AN installers. Claude registration used
-a metadata fixture. This does not establish availability in public release 1.46.1.
+a metadata fixture. The installer evidence records qualification before publication;
+public availability is the v1.47.1 Linux/Windows platform channel shown above.
 See [installer evidence](handoffs/gemini-installer-e2e.md).
 
 ## Settings, duplicates and lifecycle

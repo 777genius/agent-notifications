@@ -8,10 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- One OpenCode plugin supports V1 `server` and V2 `setup`, with native qualification targeting 1.18.33, 1.18.34 and 2.0.21; final candidate qualification remains pending. V2 notifications verify native ownership and settled execution, suppress child sessions, and recover after temporary ownership failures ([#294](https://github.com/777genius/agent-notifications/pull/294)). SDK 0.3.0 publication and registry qualification remain pending.
 - Interactive agent selection in the public installer, with separate installation scope and notification consent for each selected product. Cancellation performs no installation; partial failures retain completed installations and show recovery guidance ([#296](https://github.com/777genius/agent-notifications/pull/296)).
 - The `licenses` command and third-party license notices in portable packages and release assets.
 
 ### Changed
+- OpenCode V1 now consumes the 0.3.0 observer instead of 0.1.0: failed assistant steps produce terminal errors at idle, context overflow waits for recovery, and observed user association filters replayed completions. The V1 entry point remains supported.
 - Claude CLI hooks now use the SDK-backed event source while preserving command invocation and notification handling ([#264](https://github.com/777genius/agent-notifications/pull/264), [#266](https://github.com/777genius/agent-notifications/pull/266)).
 - Fresh macOS Codex and combined bootstrap installs enable chat navigation by default when the registered official Codex Desktop app passes signature verification. Existing navigation policy and explicit choices remain preserved. If the verified app is unavailable, bootstrap reports its fallback to informational notifications without navigation.
 

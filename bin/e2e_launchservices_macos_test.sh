@@ -147,7 +147,9 @@ private=$(mktemp -d "$root/live/.install-stage.XXXXXX")
 (SCRIPT_DIR="$private"; INSTALL_PRIVATE_DOWNLOAD=true; detect_platform; download_checksums; download_terminal_notifier_modern) > "$root/private.log" 2>&1
 "$root/query" "$id" > "$root/private-urls"
 failed=0
-if [ -s "$root/private-urls" ]; then echo 'FAIL: private staged download registered in LaunchServices'; cat "$root/private-urls"; failed=$((failed+1)); else echo 'PASS: private stage has no registration'; fi
+# The release fixture can share this ID in LaunchServices. Only paths inside
+# our controlled private acquisition stage prove forbidden stage registration.
+if grep -Fq "$private/" "$root/private-urls"; then echo 'FAIL: private staged download registered in LaunchServices'; cat "$root/private-urls"; failed=$((failed+1)); else echo 'PASS: private stage has no registration'; fi
 # Make the next registration observation independent of the private-only check.
 "$lsregister" -u "$private/ClaudeNotifier.app" >/dev/null 2>&1 || true
 rm -rf "$private"

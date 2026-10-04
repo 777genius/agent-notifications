@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -161,6 +162,68 @@ func TestWindowsCurrentProfileUsesKnownProgramsFolder(t *testing.T) {
 	}
 	if !sameWindowsPath(got, filepath.Join(programs, shortcutName)) {
 		t.Fatalf("shortcut path = %q, Programs = %q", got, programs)
+	}
+}
+
+// Shell profile lookup runs in a fresh process, using only a new TEST profile.
+// Missing Programs must not prevent planning, and staging must not create it.
+func TestWindowsCurrentProfileStagesMissingPrograms(t *testing.T) {
+	const child = "AN_TEST_MISSING_PROGRAMS_CHILD"
+	if os.Getenv(child) != "1" {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		executable, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.CommandContext(ctx, executable, "-test.run=^TestWindowsCurrentProfileStagesMissingPrograms$")
+		cmd.Env = append(os.Environ(), child+"=1")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("fresh-profile shortcut staging: %v\n%s", err, output)
+		}
+		return
+	}
+	base, err := installruntime.CanonicalPath(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(base, "home")
+	for key, name := range map[string]string{
+		"USERPROFILE": "home", "APPDATA": "appdata", "LOCALAPPDATA": "localappdata", "TEMP": "tmp", "TMP": "tmp",
+	} {
+		path := filepath.Join(base, name)
+		if err := os.MkdirAll(path, 0700); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv(key, path)
+	}
+	if _, err := windows.KnownFolderPath(windows.FOLDERID_Programs, 0); err == nil {
+		t.Fatal("fresh-profile fixture unexpectedly passed existing-folder verification")
+	}
+	programs, err := windows.KnownFolderPath(windows.FOLDERID_Programs, windows.KF_FLAG_DONT_VERIFY)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel, err := filepath.Rel(base, programs)
+	if err != nil || !filepath.IsAbs(programs) || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		t.Fatal("native Programs metadata is outside the fresh TEST profile")
+	}
+	if _, err := os.Lstat(programs); !os.IsNotExist(err) {
+		t.Fatalf("fixture Programs was not absent: %v", err)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := StageWindowsShortcut(OpenCodeDesktop, home, executable, true, installruntime.Ledger{})
+	if err != nil || file == nil {
+		t.Fatalf("missing Programs rejected shortcut staging: %v", err)
+	}
+	if !sameWindowsPath(file.Path, filepath.Join(programs, shortcutName)) || file.Before.Exists || len(file.Data) == 0 {
+		t.Fatal("staging did not preserve the native planned path and absent preimage")
+	}
+	if _, err := os.Lstat(programs); !os.IsNotExist(err) {
+		t.Fatalf("path planning or staging created Programs: %v", err)
 	}
 }
 

@@ -60,7 +60,7 @@ const snippet = computed(() =>
 );
 const qualifiedVersion = computed(() => platformReleaseVersion(channelSnapshot, target.value));
 watch(target, (value) => {
-  if (value !== "linux" && value !== "windows" && selectedProducts.gemini) {
+  if ((value === "macos" || value === "unknown") && selectedProducts.gemini) {
     selectedProducts.gemini = false;
     if (!selection.value.length) selectedProducts.claude = true;
   }
@@ -114,7 +114,7 @@ async function copy() {
         :key="item.value"
         class="agent-card"
         :aria-label="item.label"
-        :disabled="item.value === 'gemini' && target !== 'linux' && target !== 'windows'"
+        :disabled="item.value === 'gemini' && (target === 'macos' || target === 'unknown')"
         :aria-pressed="selectedProducts[item.value as AgentProduct]"
         @click="toggleProduct(item.value as AgentProduct)"
       >
