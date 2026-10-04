@@ -113,7 +113,7 @@ func TestSetupProductsScopedPresence(t *testing.T) {
 				if result.code != 0 {
 					t.Fatalf("cancel: %+v", result)
 				}
-				for _, label := range []string{"Claude Code", "OpenCode", "Gemini CLI"} {
+				for _, label := range []string{"Claude", "OpenCode", "Gemini CLI"} {
 					if !strings.Contains(result.screen, "[*] "+label+" (CLI present)") {
 						t.Fatalf("unrelated CLI lost its default: %s", result.screen)
 					}

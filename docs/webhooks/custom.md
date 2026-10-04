@@ -3,7 +3,7 @@
 Use the installed config-capable executable as `$NOTIFICATIONS_BIN`. Locate settings with `config path` and use [revision-checked leaf edits](../../commands/settings.md). JSON examples below illustrate fields, not whole-file replacements. Keep unrequested fields and literal environment templates unchanged. `config inspect --json` is the safe support output; it intentionally omits URLs, headers, payloads, free-form sounds and unknown fields. Never share raw config or assume omitted values are unset. Keep diagnostic files private and review logs for credentials before sharing.
 
 
-Integrate Claude Code notifications with any webhook-compatible service.
+Integrate Claude notifications with any webhook-compatible service.
 
 ## Overview
 
@@ -70,7 +70,7 @@ Custom webhooks receive a JSON payload:
 
 The formal contract also lives as a JSON Schema at [`docs/webhooks/payload-schema.json`](payload-schema.json), for consumers that want to validate payloads programmatically.
 
-Slack, Discord, Telegram, and Lark presets also now include the agent name (`Claude Code` / `Codex`) in their footer/author/username so it is visible to humans reading the chat message, not just to machine consumers of the custom JSON format. Discord shows it once, via the top-level `username` field, rather than repeating it in the footer.
+Slack, Discord, Telegram, and Lark presets also now include the agent name (`Claude` / `Codex`) in their footer/author/username so it is visible to humans reading the chat message, not just to machine consumers of the custom JSON format. Discord shows it once, via the top-level `username` field, rather than repeating it in the footer.
 
 `schema_version`, `status`, `notification_type`, and `agent_source` are reserved: `payloadFields` cannot override them, even if your config sets one of those keys. Any such entry is dropped (with a warning in the debug log) instead of silently corrupting the identity contract other systems rely on.
 

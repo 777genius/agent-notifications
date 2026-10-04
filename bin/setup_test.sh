@@ -119,7 +119,7 @@ if [ "$status" -eq 0 ] && [ -n "${BOOTSTRAP_SUMMARY_FILE:-}" ]; then
     [ "$selection" != both ] || selection=claude,codex
     for client in ${selection//,/ }; do
         case "$client" in
-            claude) label="Claude Code" ;;
+            claude) label="Claude" ;;
             codex) label=Codex ;;
             opencode) label=OpenCode ;;
             gemini) label="Gemini CLI" ;;
@@ -254,7 +254,7 @@ def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, pipe
                 for call in calls:
                     selected = ['claude', 'codex'] if call[1] == 'both' else call[1].split(',')
                     for client in selected:
-                        label = {'claude': 'Claude Code', 'codex': 'Codex', 'opencode': 'OpenCode', 'gemini': 'Gemini CLI'}[client]
+                        label = {'claude': 'Claude', 'codex': 'Codex', 'opencode': 'OpenCode', 'gemini': 'Gemini CLI'}[client]
                         assert label + ' - installed; restart required.' in result.stdout, (name, result.stdout)
         elif expected is None:
             assert result.returncode != 0, (name, result.stdout, result.stderr)

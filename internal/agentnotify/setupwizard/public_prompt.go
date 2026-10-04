@@ -50,7 +50,7 @@ func NewTerminalPublicPrompt(in, out *os.File, mode installerui.TerminalMode, no
 
 func (p *PublicPrompt) SelectAgents(ctx context.Context, clients []AgentCapability) ([]string, error) {
 	options := []installerui.Option{
-		{ID: "claude", Label: agentChoiceLabel(clients, "claude", "Claude Code")},
+		{ID: "claude", Label: agentChoiceLabel(clients, "claude", "Claude")},
 		{ID: "codex", Label: agentChoiceLabel(clients, "codex", "Codex")},
 	}
 	req := installerui.SelectRequest{Title: "Install notifications for", Options: options}

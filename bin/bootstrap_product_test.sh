@@ -1004,7 +1004,7 @@ for product, success in [('claude',True), ('codex',True), ('both',True), ('inval
     result = subprocess.run([bash,'-c',command],env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=20)
     output = result.stdout
     assert (result.returncode==0)==success, output.decode()
-    if product in ['claude','both']: assert b'Claude Code - installed' in output
+    if product in ['claude','both']: assert b'Claude - installed' in output
     if product == 'claude': assert b'Codex - installed' not in output
     if product == 'both': assert b'Codex - installed' in output
     if product == 'invalid': assert b'CLAUDE_ADAPTER' not in output and b'CODEX_ADAPTER' not in output
@@ -1315,7 +1315,7 @@ PY
     run_setup_stage 'Locating fixture plugin' find_plugin_root > "$SANDBOX/root-fail.out" 2> "$SANDBOX/root-fail.err" || status=$?
     [ "$status" -eq 1 ]
     grep -F 'installed_plugins.json not found' "$SANDBOX/root-fail.err"
-    grep -F 'Try restarting Claude Code' "$SANDBOX/root-fail.err"
+    grep -F 'Try restarting Claude' "$SANDBOX/root-fail.err"
     emit_failure() { echo 'diagnostic stdout'; echo 'diagnostic stderr' >&2; return 3; }
     status=0
     run_setup_stage 'Failing fixture' emit_failure > "$SANDBOX/stage-fail.out" 2> "$SANDBOX/stage-fail.err" || status=$?
@@ -1327,7 +1327,7 @@ PY
     PRODUCT=both CLAUDE_AGENT_NOTIFY_STATUS='not configured by this run' CODEX_AGENT_NOTIFY_STATUS='not configured by this run'
     print_iterm2_python_api_notice() { :; }
     print_success > "$SANDBOX/summary.out"
-    grep -F 'Claude Code - installed; restart required.' "$SANDBOX/summary.out"
+    grep -F 'Claude - installed; restart required.' "$SANDBOX/summary.out"
     grep -F 'Codex - installed; restart required.' "$SANDBOX/summary.out"
     grep -F 'Run /hooks in Codex' "$SANDBOX/summary.out"
     grep -F 'not configured by this run' "$SANDBOX/summary.out"

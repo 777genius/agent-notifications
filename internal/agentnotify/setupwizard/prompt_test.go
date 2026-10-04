@@ -27,7 +27,7 @@ func TestFillInteractiveSelectsBothAndConfirms(t *testing.T) {
 	if got.Hooks == nil || !*got.Hooks || got.AgentNotify == nil || !*got.AgentNotify {
 		t.Fatalf("units: hooks=%v notify=%v", got.Hooks, got.AgentNotify)
 	}
-	if !strings.Contains(out.String(), "Claude Code") || strings.Contains(out.String(), "[y/N]") {
+	if !strings.Contains(out.String(), "Claude") || strings.Contains(out.String(), "[y/N]") {
 		t.Fatalf("prompt text: %s", out.String())
 	}
 	if !strings.Contains(out.String(), "Units:") || !strings.Contains(out.String(), "Agent-initiated notify") {
@@ -454,7 +454,7 @@ func TestFillInteractiveShowsDiscoverCapabilities(t *testing.T) {
 	if err != nil || strings.Join(got.Agents, ",") != "claude" {
 		t.Fatalf("discover picker: %+v %v", got, err)
 	}
-	if !strings.Contains(out.String(), "Claude Code (executable present, installed)") || !strings.Contains(out.String(), "Codex (executable not found)") {
+	if !strings.Contains(out.String(), "Claude (executable present, installed)") || !strings.Contains(out.String(), "Codex (executable not found)") {
 		t.Fatalf("capability labels: %s", out.String())
 	}
 }

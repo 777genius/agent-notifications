@@ -32,7 +32,7 @@ or JSON are reverted on `main`; user caches pick that up on their next refresh.
 
 ## 1. Bump version
 
-> **Frozen Claude Code identity:** do not rename any `claude-notifications-go` `name` in
+> **Frozen Claude identity:** do not rename any `claude-notifications-go` `name` in
 > `.claude-plugin/plugin.json` or `.claude-plugin/marketplace.json`. These values identify the
 > installed plugin, marketplace registration, cache, updater, and slash-command namespace.
 > Product branding belongs in `displayName`, descriptions, and repository URLs. See

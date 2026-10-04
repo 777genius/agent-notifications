@@ -252,7 +252,7 @@ abort_if_wsl_environment() {
     echo -e "${YELLOW}This installer is running inside WSL, so it would install Linux binaries under /home instead of Windows binaries.${NC}" >&2
     echo -e "${YELLOW}If you started this from PowerShell or Windows Terminal, your bash command is probably WSL bash, not Git Bash.${NC}" >&2
     echo "" >&2
-    echo -e "${YELLOW}For Windows Claude Code, open Git Bash and use the installer at:${NC}" >&2
+    echo -e "${YELLOW}For Windows Claude, open Git Bash and use the installer at:${NC}" >&2
     echo -e "  https://777genius.github.io/agent-notifications/#install" >&2
     echo "" >&2
     echo -e "${YELLOW}For an intentional WSL install, set CLAUDE_NOTIFICATIONS_ALLOW_WSL=1 on the final bash command.${NC}" >&2
@@ -1640,7 +1640,7 @@ configure_windows_native_hooks() {
     guard_install_paths "$hooks_path" "$tmp_hooks"
     if printf '%s\n' "$hooks_json" > "$tmp_hooks" 2>/dev/null && mv "$tmp_hooks" "$hooks_path" 2>/dev/null; then
         echo -e "${GREEN}✓${NC} Windows exec-form hooks configured"
-        echo -e "${YELLOW}  Restart Claude Code to apply the Windows hook update.${NC}"
+        echo -e "${YELLOW}  Restart Claude to apply the Windows hook update.${NC}"
     else
         guard_install_paths "$tmp_hooks"
         rm -f "$tmp_hooks" 2>/dev/null || true
@@ -2568,7 +2568,7 @@ main() {
     echo -e "${YELLOW}────────────────────────────────────────${NC}"
     echo -e "${YELLOW}★${NC} ${BOLD}Boost your productivity${NC}"
     echo -e "  Check out Agent Teams AI, a desktop app for AI agent teams"
-    echo -e "  with Claude Code, Codex and more, from the creator of this plugin:"
+    echo -e "  with Claude, Codex and more, from the creator of this plugin:"
     echo -e "  ${GREEN}https://github.com/777genius/agent-teams-ai${NC}"
     echo -e "${YELLOW}────────────────────────────────────────${NC}"
     echo ""
