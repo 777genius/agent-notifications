@@ -2,11 +2,15 @@ package installruntime
 
 import (
 	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 )
 
 // Channel revocation must not strand a journal when policy drift requires
@@ -156,5 +160,87 @@ func TestPolicyRevocationPreflight(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+// Regression: even a fresh CAS must not journal unrelated global intent drift
+// through the Cursor exception, including when every delivery asset is healthy.
+func TestCursorPolicyRevocationPreflight(t *testing.T) {
+	for _, drift := range []string{"enabled", "disabled-already-false", "deleted", "route-container", "cursor-container", "component", "control"} {
+		t.Run(drift, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			root := filepath.Join(t.TempDir(), "TEST-control")
+			runtime := filepath.Join(filepath.Dir(root), "TEST-runtime")
+			enabled := drift == "deleted" || drift == "disabled-already-false"
+			l, err := Commit(ctx, Request{ControlRoot: root, RuntimeRoot: runtime, Owner: "existing-installer", ConsumerID: "sibling", Consumer: Consumer{Registration: "unrelated"}, Files: []File{{Path: filepath.Join(runtime, "shared"), Data: []byte("inert"), Mode: 0700}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			binding := map[string]any{"version": 1, "integration": "cursor", "installationID": "TEST-install", "bindingID": "TEST-cursor", "scopeID": "TEST-profile", "componentID": l.ID, "owner": l.Owner, "scopeRoot": filepath.Dir(root), "dataRoot": filepath.Dir(root), "controlRoot": root, "globalConfig": filepath.Join(root, "agent-notifications.json"), "runtimeRoot": runtime, "primary": "shared"}
+			if drift == "component" {
+				binding["componentID"] = "foreign"
+			}
+			if drift == "control" {
+				binding["controlRoot"] = filepath.Join(root, "foreign")
+			}
+			raw, err := json.Marshal(binding)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sum := sha256.Sum256(raw)
+			key := "portable:" + hex.EncodeToString(sum[:])
+			c := Consumer{RuntimeRoot: runtime, Registration: string(raw), Commands: []string{filepath.Join(runtime, "shared")}}
+			l, err = Commit(ctx, Request{ControlRoot: root, RuntimeRoot: runtime, Owner: l.Owner, ConsumerID: key, Consumer: c, ExpectedGeneration: &l.Generation, PolicyEnabled: &enabled, PolicyFields: map[string]json.RawMessage{"route": json.RawMessage(`{"cursorNotifications":{"desktop":false,"webhook":false}}`)}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(root, "agent-notifications.json")
+			data := []byte(`{"schemaVersion":1,"enabled":true}`)
+			switch drift {
+			case "component", "control", "disabled-already-false":
+				data = []byte(`{"schemaVersion":1,"enabled":false,"route":{"cursorNotifications":{"desktop":false,"webhook":false}}}`)
+			case "deleted":
+				err = os.Remove(path)
+			case "route-container":
+				data = []byte(`{"schemaVersion":1,"enabled":false,"route":null}`)
+			case "cursor-container":
+				data = []byte(`{"schemaVersion":1,"enabled":false,"route":{"cursorNotifications":null}}`)
+			}
+			if drift != "deleted" {
+				err = os.WriteFile(path, data, 0600)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			s, err := ReadRevocationSnapshot(ctx, root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := map[string][]byte{}
+			for _, name := range []string{"ownership.json", "policy-generation.json", "agent-notifications.json"} {
+				raw, err := os.ReadFile(filepath.Join(root, name))
+				if err != nil && !(drift == "deleted" && os.IsNotExist(err)) {
+					t.Fatal(err)
+				}
+				before[name] = raw
+			}
+			_, err = Commit(ctx, Request{ControlRoot: root, RuntimeRoot: runtime, Owner: l.Owner, ConsumerID: key, Consumer: c, RevokeCursor: true, PolicyOnly: true, RefreshOnly: true, ExpectedGeneration: &s.Generation, ExpectedPolicy: &s.Preimage, PolicyFields: map[string]json.RawMessage{"route": json.RawMessage(`{"cursorNotifications":{"desktop":false,"webhook":false}}`)}})
+			if err == nil {
+				t.Fatal("Cursor admitted unrelated global/container drift")
+			}
+			for name, raw := range before {
+				got, err := os.ReadFile(filepath.Join(root, name))
+				if drift == "deleted" && name == "agent-notifications.json" && os.IsNotExist(err) {
+					continue
+				}
+				if err != nil || !bytes.Equal(raw, got) {
+					t.Fatal("refusal changed durable state", name, err)
+				}
+			}
+			if _, err := os.Lstat(filepath.Join(root, "transaction.json")); !os.IsNotExist(err) {
+				t.Fatal("refusal stranded journal", err)
+			}
+		})
 	}
 }

@@ -29,6 +29,7 @@ var errExists = errors.New("portable_locator_exists")
 type Integration string
 
 const (
+	Cursor        Integration = "cursor"
 	Codex         Integration = "codex"
 	Claude        Integration = "claude"
 	CopilotVSCode Integration = "copilot-vscode"
@@ -86,7 +87,7 @@ func primaryPath(root, primary string) string {
 // commit under the component lock/CAS before publishing locator bytes. Calling
 // this pure function does not establish UAP receipt ownership or authorize setup.
 func (b Binding) Registration() (string, installruntime.Consumer, []byte, error) {
-	if b.Version != 1 || (b.Integration != Codex && b.Integration != Claude && b.Integration != CopilotVSCode) || b.Owner != "existing-installer" {
+	if b.Version != 1 || (b.Integration != Codex && b.Integration != Claude && b.Integration != CopilotVSCode && b.Integration != Cursor) || b.Owner != "existing-installer" {
 		return "", installruntime.Consumer{}, nil, ErrInvalid
 	}
 	for _, s := range []string{b.InstallationID, b.BindingID, b.ScopeID, b.ComponentID} {
