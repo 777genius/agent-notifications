@@ -25,7 +25,7 @@ def product_unchanged():
 product_unchanged()
 # Reuse the exact independently reviewed Windows canonical/physical boundary.
 adapter = P(__file__).resolve().with_name('held-native-adapter.py')
-assert digest(adapter) == 'd217fd551906d109ddf536a231d7d17cca24b3e25104015135c47210ffddc32d'
+assert digest(adapter) == '66fc062f5a3800e4fd7cf64d8345a25dc16eb6ca5e89836c44a1cae3d3451ecb'
 spec = importlib.util.spec_from_file_location('inert_source_custody', adapter)
 custody = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(custody)  # Guarded module: main/native execution is not invoked.

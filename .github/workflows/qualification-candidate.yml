@@ -6,6 +6,7 @@ on:
       platform_group: {type: choice, required: true, default: all, options: [all, linux-arm64, darwin-arm64, darwin-amd64, windows-amd64]}
       windows_programs_probe_only: {type: boolean, required: true, default: true}
       darwin_args2_probe_only: {type: boolean, required: true, default: false}
+      darwin_permission_status_only: {type: boolean, required: true, default: false}
       windows_toast_phase_probe_only: {type: boolean, required: true, default: false}
       product_head: {type: string, required: true}
       parent_run_id: {type: string, required: true}
@@ -84,6 +85,7 @@ jobs:
       TEST_PRODUCT_HEAD: ${{ inputs.product_head }}
       TEST_WINDOWS_PROGRAMS_PROBE_ONLY: ${{ inputs.windows_programs_probe_only }}
       TEST_DARWIN_ARGS2_PROBE_ONLY: ${{ inputs.darwin_args2_probe_only }}
+      TEST_DARWIN_PERMISSION_STATUS_ONLY: ${{ inputs.darwin_permission_status_only }}
       TEST_WINDOWS_TOAST_PHASE_PROBE_ONLY: ${{ inputs.windows_toast_phase_probe_only }}
       TEST_PARENT_SHA256: ${{ inputs.parent_sha256 }}
       TEST_PARENT_MANIFEST_SHA256: ${{ inputs.parent_manifest_sha256 }}
@@ -209,12 +211,16 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$AN_OS" = windows ]; then export TEST_INSTALLER_DIAGNOSTIC_NODE="$(node -p 'process.execPath')"; fi
+          if [ "$TEST_DARWIN_PERMISSION_STATUS_ONLY" = true ]; then
+            test "$AN_OS" = darwin
+            test "$TEST_DARWIN_ARGS2_PROBE_ONLY" = false
+          fi
           export AN_SUITE=business
           if [ "$AN_OS/$AN_ARCH" = linux/amd64 ]; then export AN_SUITE=full; fi
           if [ "$AN_OS" = linux ]; then
-            sudo --preserve-env=PATH,AN_MANIFEST,AN_MANIFEST_SHA256,AN_OS,AN_ARCH,AN_VERSION,AN_SUITE,TEST_HARNESS_SHA256,TEST_CI_INPUTS_SHA256,TEST_PRODUCT_HEAD unshare --net -- bash -c 'ip link set lo up; python -B ../transport/held-native-adapter.py --held-source .task-tools/artifacts/held-native-driver.py --held-sha256 8e0377cfda427113b1c6d71fd3b62b369544381cec7d6ff89844ccb29308baa9 --held-permission-source .task-tools/artifacts/held-portable_permission.py --held-permission-sha256 f499590b9c8c3bfee37156633bf8a5a36024be208b9c26addfd70cbd000874cd --held-provider-source .task-tools/artifacts/held-provider.py --held-provider-sha256 57633468d4187d44b65abd245ad29d49a380619fe1e61049a1612272cad80e49 --held-portable-source .task-tools/artifacts/held-portable.py --held-portable-sha256 ae69dcdc3016d5b4a15d6c4558136ccf70098adab9cde43a0a21dbd363b20eb0'
+            sudo --preserve-env=PATH,AN_MANIFEST,AN_MANIFEST_SHA256,AN_OS,AN_ARCH,AN_VERSION,AN_SUITE,TEST_HARNESS_SHA256,TEST_CI_INPUTS_SHA256,TEST_PRODUCT_HEAD unshare --net -- bash -c 'ip link set lo up; python -B ../transport/held-native-adapter.py --held-source .task-tools/artifacts/held-native-driver.py --held-sha256 12867794b752a157fbb5567f157b75469f4cb29fc7186f86488b2b2a5dc73e16 --held-permission-source .task-tools/artifacts/held-portable_permission.py --held-permission-sha256 f499590b9c8c3bfee37156633bf8a5a36024be208b9c26addfd70cbd000874cd --held-provider-source .task-tools/artifacts/held-provider.py --held-provider-sha256 57633468d4187d44b65abd245ad29d49a380619fe1e61049a1612272cad80e49 --held-portable-source .task-tools/artifacts/held-portable.py --held-portable-sha256 ae69dcdc3016d5b4a15d6c4558136ccf70098adab9cde43a0a21dbd363b20eb0'
           else
-            python -B ../transport/held-native-adapter.py --held-source .task-tools/artifacts/held-native-driver.py --held-sha256 8e0377cfda427113b1c6d71fd3b62b369544381cec7d6ff89844ccb29308baa9 --held-permission-source .task-tools/artifacts/held-portable_permission.py --held-permission-sha256 f499590b9c8c3bfee37156633bf8a5a36024be208b9c26addfd70cbd000874cd --held-provider-source .task-tools/artifacts/held-provider.py --held-provider-sha256 57633468d4187d44b65abd245ad29d49a380619fe1e61049a1612272cad80e49 --held-portable-source .task-tools/artifacts/held-portable.py --held-portable-sha256 ae69dcdc3016d5b4a15d6c4558136ccf70098adab9cde43a0a21dbd363b20eb0
+            python -B ../transport/held-native-adapter.py --held-source .task-tools/artifacts/held-native-driver.py --held-sha256 12867794b752a157fbb5567f157b75469f4cb29fc7186f86488b2b2a5dc73e16 --held-permission-source .task-tools/artifacts/held-portable_permission.py --held-permission-sha256 f499590b9c8c3bfee37156633bf8a5a36024be208b9c26addfd70cbd000874cd --held-provider-source .task-tools/artifacts/held-provider.py --held-provider-sha256 57633468d4187d44b65abd245ad29d49a380619fe1e61049a1612272cad80e49 --held-portable-source .task-tools/artifacts/held-portable.py --held-portable-sha256 ae69dcdc3016d5b4a15d6c4558136ccf70098adab9cde43a0a21dbd363b20eb0
           fi
       - name: Make only two SAFE public receipts readable for artifact upload
         if: always()

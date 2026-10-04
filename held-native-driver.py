@@ -1338,7 +1338,25 @@ def darwin_args2_capacity_probe(proc):
             'ownedChildAliveBeforeAfter': alive}
 
 
+def darwin_permission_status(candidate, root, env):
+    result = subprocess.run([str(candidate), 'setup-opencode', 'permission-status',
+                             '--control-root', str(root / 'control')], cwd=root, env=env,
+                            stdin=subprocess.DEVNULL, capture_output=True, timeout=30)
+    known = {('OpenCode notification permission: ' + value + '\n').encode(): value
+             for value in ('allowed', 'denied', 'undetermined', 'unavailable')}
+    valid = result.returncode == 0 and not result.stdout and result.stderr in known
+    return {'permission': known[result.stderr] if valid else 'unavailable',
+            'closedFiniteOutput': valid, 'commandExitZero': result.returncode == 0}
+
+
 def qualify(args, report):
+    permission_only = os.environ.get('TEST_DARWIN_PERMISSION_STATUS_ONLY', 'false')
+    require(permission_only in ('true', 'false'), 'darwin_permission_status_explicit_mode')
+    permission_only = permission_only == 'true'
+    if permission_only:
+        require(args.os == 'darwin' and args.suite == 'business' and not args.validate_only
+                and os.environ.get('TEST_DARWIN_ARGS2_PROBE_ONLY', 'false') == 'false',
+                'darwin_permission_status_mode_required')
     probe_only = os.environ.get('TEST_DARWIN_ARGS2_PROBE_ONLY') == 'true'
     if probe_only:
         require(args.os == 'darwin' and args.suite == 'business' and not args.validate_only, 'darwin_args2_probe_mode_required')
@@ -1412,6 +1430,13 @@ def qualify(args, report):
         report['renderedInstalledSHA256'] = digest(plugin)
         # Seal real installation output before any host launch; random origin is never fabricated.
         write_json(root / 'installation-private.json', {'renderedSHA256': digest(plugin), 'registration': r, 'manifestSHA256': digest(args.manifest)})
+        if permission_only:
+            report.update(businessPhasesStarted=False, nativeHostStarted=False,
+                          actualProviderTransactions=0, actualProviderGaps=0,
+                          actualIndependentWebhookSubmissions=0, qualificationGranted=False)
+            report['darwinPermissionStatus'] = darwin_permission_status(managed, root, env)
+            require(report['darwinPermissionStatus']['closedFiniteOutput'], 'darwin_permission_status_unavailable')
+            return
         if args.os == 'windows':
             mode = os.environ.get('TEST_WINDOWS_TOAST_PHASE_PROBE_ONLY', 'false')
             require(mode in ('true','false'), 'toast_probe_explicit_mode')
@@ -1562,6 +1587,13 @@ def qualify(args, report):
             report['actualProviderGaps'] = len(provider.gaps)
         if 'webhook' in locals(): report['actualIndependentWebhookSubmissions'] = webhook.count()
         report['productOwnedClose'] = 'unproved'
+        if permission_only and report.get('darwinPermissionStatus') is not None and 'primaryFailure' not in report:
+            require(cleanup_error is None and report['fixtureLeadersReaped']
+                    and report['fixtureCleanup']['fixtureServerThreadsAlive'] == 0
+                    and report['fixtureCleanup']['logHandlesClosed']
+                    and 'provider' not in locals() and 'webhook' not in locals()
+                    and not owner.processes, 'darwin_permission_status_cleanup_unclosed')
+            report['status'] = 'darwin_permission_status_observed_only'
         if probe_only and report.get('darwinArgs2Probe') is not None and not cleanup_error:
             require(not provider.records and not provider.gaps and webhook.count() == 0, 'darwin_args2_probe_late_effect')
             require(report['fixtureLeadersReaped'] and report['fixtureCleanup']['fixtureServerThreadsAlive'] == 0
@@ -1662,7 +1694,7 @@ def main():
     code=1
     try:
         qualify(args,report)
-        code=0 if report['status'] in ('inputs_verified_only','installed_business_lifecycle_observed','windows_programs_probe_observed_only','darwin_args2_probe_observed_only','windows_toast_phase_probe_observed_only') else 1
+        code=0 if report['status'] in ('inputs_verified_only','installed_business_lifecycle_observed','windows_programs_probe_observed_only','darwin_args2_probe_observed_only','windows_toast_phase_probe_observed_only','darwin_permission_status_observed_only') else 1
     except Exception as e:
         report['firstFailedPrerequisite']=str(e) if isinstance(e,Unqualified) else type(e).__name__
         if PORTABLE is not None:
