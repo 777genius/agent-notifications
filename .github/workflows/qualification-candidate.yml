@@ -115,22 +115,38 @@ jobs:
           args=("$PYTHON" -B "$THIN_DRIVER" --repo "$REPO" --manifest "$REPO/$FINAL_MANIFEST" --manifest-sha256 "$FINAL_MANIFEST_SHA256" --final-gate "$CELL_GATE" --final-gate-sha256 "$CELL_GATE_SHA256" --artifacts "$REPO/.task-tools/artifacts/installed12-cases" --os "$AN_OS" --arch "$AN_ARCH" --version "$AN_VERSION" --entry "$AN_ENTRY")
           if [ "$AN_OS" = linux ]; then
             args+=(--receiver-record "$REPO/.task-tools/artifacts/receiver-record.json")
-            # Retain the runner file owner for private-env Git source guards.
-            sudo --preserve-env=PATH unshare --net -- bash -c 'ip link set lo up; uid=$1; shift; exec sudo -u "#$uid" --preserve-env=PATH -- "$@"' bash "$(id -u)" "${args[@]}"
+            # ROOT-owned fresh TEST source makes curated-HOME Git trust and cap0 writes agree.
+            test "${REPO##*/}" = TEST-product && test -d "$REPO/.git" && test ! -L "$REPO" && test ! -L "$REPO/.git"
+            sudo chown -R 0:0 "$REPO"
+            BOOT="$REPO/.task-tools/artifacts/installed12-root-bootstrap"
+            test ! -e "$BOOT"
+            sudo mkdir -m 700 "$BOOT"
+            sudo mkdir -m 700 "$BOOT/home" "$BOOT/tmp"
+            sudo --preserve-env=PATH unshare --net -- bash -c 'set -eu; ip link set lo up; exec setpriv --reuid=0 --regid=0 --clear-groups --no-new-privs --bounding-set=-all --inh-caps=-all --ambient-caps=-all "$@"' bash "$PYTHON" -B -c 'import os,pathlib,re,sys;status=pathlib.Path("/proc/self/status").read_text();assert os.getuid()==os.geteuid()==os.getgid()==os.getegid()==0 and os.getgroups()==[];caps={k:int(re.search("^"+k+r":\s*([0-9a-fA-F]+)$",status,re.M).group(1),16) for k in ("CapInh","CapPrm","CapEff","CapBnd","CapAmb")};assert all(v==0 for v in caps.values()) and re.search(r"^NoNewPrivs:\s*1$",status,re.M);print("TEST Linux context: UID/EUID/GID/EGID=0 groups=[] fiveCaps=0 NoNewPrivs=1",flush=True);env={"PATH":os.environ["PATH"],"HOME":sys.argv[1],"TMPDIR":sys.argv[2],"LANG":"C.UTF-8","TZ":"UTC","GOTOOLCHAIN":"local","GOENV":"off","GOPROXY":"off","GOSUMDB":"off","GOTELEMETRY":"off"};os.execve(sys.argv[3],sys.argv[3:],env)' "$BOOT/home" "$BOOT/tmp" "${args[@]}"
           else
             "${args[@]}"
           fi
       - name: Export only closed SAFE scalar/digest result, never private traces
         if: always()
         run: |
-          python -B ../transport/scripts/testdata/opencode-installed12/safe-export.py \
-            --cases .task-tools/artifacts/installed12-cases \
-            --output .task-tools/artifacts/installed12-safe/result.json \
-            --os "$AN_OS" --arch "$AN_ARCH" --version "$AN_VERSION" --entry "$AN_ENTRY"
+          if [ "$AN_OS" = linux ]; then
+            PYTHON=$(python -c 'import sys; print(sys.executable)')
+            SAFE="$GITHUB_WORKSPACE/TEST-installed12-safe"
+            test ! -e "$SAFE"
+            sudo mkdir -m 755 "$SAFE"
+            sudo --preserve-env=PATH unshare --net -- bash -c 'set -eu; ip link set lo up; exec setpriv --reuid=0 --regid=0 --clear-groups --no-new-privs --bounding-set=-all --inh-caps=-all --ambient-caps=-all "$@"' bash "$PYTHON" -B ../transport/scripts/testdata/opencode-installed12/safe-export.py \
+              --cases .task-tools/artifacts/installed12-cases --output "$SAFE/result.json" \
+              --os "$AN_OS" --arch "$AN_ARCH" --version "$AN_VERSION" --entry "$AN_ENTRY"
+          else
+            python -B ../transport/scripts/testdata/opencode-installed12/safe-export.py \
+              --cases .task-tools/artifacts/installed12-cases \
+              --output .task-tools/artifacts/installed12-safe/result.json \
+              --os "$AN_OS" --arch "$AN_ARCH" --version "$AN_VERSION" --entry "$AN_ENTRY"
+          fi
       - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: 'installed12-${{ matrix.id }}'
-          path: TEST-product/.task-tools/artifacts/installed12-safe/result.json
+          path: "${{ matrix.os == 'linux' && 'TEST-installed12-safe/result.json' || 'TEST-product/.task-tools/artifacts/installed12-safe/result.json' }}"
           if-no-files-found: error
           retention-days: 14
