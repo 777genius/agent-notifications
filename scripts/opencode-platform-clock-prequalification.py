@@ -638,6 +638,13 @@ def native_resources(p, os_name):
     return count.value
 
 
+def pss_type_label(object_type):
+    # Closed Microsoft PSS_OBJECT_TYPE labels; unsupported kinds stay unknown.
+    if object_type is None: return 'unknown'
+    need(type(object_type) is int and 0 <= object_type <= 6, 'pss_object_type')
+    return ('unknown', 'Process', 'Thread', 'Mutant', 'Event', 'Section', 'Semaphore')[object_type]
+
+
 def windows_handle_metadata(own, host, end):
     # Parent-only PSS metadata. No target-handle mutations, object names or VA reads.
     p = host['p']
@@ -696,14 +703,9 @@ def windows_handle_metadata(own, host, end):
                  'pss_handle_metadata_shape')
             seen.add(handle)
             object_type = int(entry.type) if entry.flags & 1 else None
-            need(object_type is None or 0 <= object_type <= 6, 'pss_object_type')
-            row = {'handle': handle, 'validFields': int(entry.flags), 'objectType': object_type}
-            if entry.flags & 1 and entry.typeNameLength:
-                need(entry.typeName and entry.typeNameLength <= 128 and entry.typeNameLength % 2 == 0,
-                     'pss_type_label_bound')
-                label = ctypes.string_at(entry.typeName, entry.typeNameLength).decode('utf-16le')
-                need(re.fullmatch('[A-Za-z][A-Za-z0-9 ]{0,63}', label), 'pss_type_label')
-                row['typeName'] = label  # Generic OS type only, never ObjectName.
+            row = {'handle': handle, 'validFields': int(entry.flags), 'objectType': object_type,
+                   'typeName': pss_type_label(object_type)}
+            # TypeName/ObjectName pointers stay opaque; no undocumented string grammar.
             if object_type == 2 and entry.flags & 8:
                 thread = entry.info.thread
                 need(thread.pid > 0 and thread.tid > 0, 'pss_thread_identity')

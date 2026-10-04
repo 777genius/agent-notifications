@@ -31,6 +31,18 @@ class PureVectors(unittest.TestCase):
         guard = patch.object(H.subprocess, 'Popen', side_effect=AssertionError('pure_test_spawn_refused'))
         guard.start(); self.addCleanup(guard.stop)
 
+    def test_pss_type_enum_is_closed_and_unsupported_is_unknown(self):
+        # Microsoft API constants, independent of target handles or kernel calls.
+        self.assertEqual(H.pss_type_label(2), 'Thread')
+        self.assertEqual(H.pss_type_label(4), 'Event')
+        self.assertEqual(H.pss_type_label(5), 'Section')
+        for absent_or_unsupported in (None, 0):
+            self.assertEqual(H.pss_type_label(absent_or_unsupported), 'unknown')
+        for invalid in (-1, 7, True, '2'):
+            with self.subTest(value=invalid):
+                with self.assertRaisesRegex(RuntimeError, '^pss_object_type$'):
+                    H.pss_type_label(invalid)
+
     def test_handle_metadata_differences_are_private_and_do_not_assert_ownership(self):
         def snapshot(rows):
             return {'status': 'metadata_observed', 'countBefore': len(rows), 'countAfter': len(rows),
