@@ -185,7 +185,7 @@ jobs:
           import hashlib, os, pathlib, shutil, subprocess, sys
           root = pathlib.Path.cwd().resolve(strict=True)
           transport = root.parent / 'transport'
-          pins = {'toast_phase_probe_windows_test.go': 'f7111771f211888dabb3ace32b42e4f4e9d2a001d2bb7addb7e934ab217ced6a', 'build-toast-phase-overlay.py': '350565c4497434038c3247bf7a930780f50c956593b01cd60efc9fde7a3312c2'}
+          pins = {'toast_phase_probe_windows_test.go': 'f7111771f211888dabb3ace32b42e4f4e9d2a001d2bb7addb7e934ab217ced6a', 'build-toast-phase-overlay.py': 'e7703bab73bd3e5d26668a87bd5f84ffb8e71898fc6a2602ff97a7b0cb63053a'}
           assert os.environ['TEST_WINDOWS_PROGRAMS_PROBE_ONLY'] == 'false'
           for name, expected in pins.items():
               path = transport / name

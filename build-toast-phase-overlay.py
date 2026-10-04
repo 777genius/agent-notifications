@@ -31,6 +31,11 @@ binary = out / 'windows-toast-phase-probe.exe'
 assert not binary.exists()
 argv = [str(a.go), 'test', '-mod=readonly', '-overlay='+str(overlay), '-c', '-o', str(binary), './internal/notifier']
 result = subprocess.run(argv, cwd=r, env=env, capture_output=True, timeout=180)
+if result.returncode != 0:
+    sys.stdout.buffer.write(result.stdout)
+    sys.stdout.buffer.flush()
+    sys.stderr.buffer.write(result.stderr)
+    sys.stderr.buffer.flush()
 assert result.returncode == 0 and sha(a.go) == a.go_sha256 and sha(held) == sha(source)
 assert not subprocess.check_output(['git', '-C', str(r), 'status', '--porcelain', '--untracked-files=no'], env=env)
 record = {'schema': 1, 'productCommit': head, 'probeSourceSHA256': sha(source), 'binarySHA256': sha(binary), 'goToolSHA256': sha(a.go), 'overlaySHA256': sha(overlay), 'compileExitCode': 0, 'compileStdoutSHA256': hashlib.sha256(result.stdout).hexdigest(), 'compileStderrSHA256': hashlib.sha256(result.stderr).hexdigest()}
