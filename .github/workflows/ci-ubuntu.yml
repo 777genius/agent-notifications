@@ -15,17 +15,22 @@ jobs:
     name: OpenCode plugin bundle
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: TEST-opencode-plugin-ci
     steps:
       - uses: actions/checkout@v7
+        with:
+          path: TEST-opencode-plugin-ci
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: opencode-plugin/package-lock.json
+          cache-dependency-path: TEST-opencode-plugin-ci/opencode-plugin/package-lock.json
       - run: npm ci
-        working-directory: opencode-plugin
+        working-directory: TEST-opencode-plugin-ci/opencode-plugin
       - run: npm run check
-        working-directory: opencode-plugin
+        working-directory: TEST-opencode-plugin-ci/opencode-plugin
       - run: git diff --exit-code -- internal/opencodeplugin/dist/agent-notifications.js
 
   test:

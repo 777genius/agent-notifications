@@ -42,10 +42,7 @@ func TestGeminiSetupUsesActualFlagRootsAndSeparateConsent(t *testing.T) {
 		t.Fatal(err)
 	}
 	root, runtimeRoot, profile := filepath.Join(base, "control"), filepath.Join(base, "runtime"), filepath.Join(base, "TEST-profile")
-	executable, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
+	executable := managedFixtureExecutable(t)
 	var output bytes.Buffer
 	args := []string{"install", "--control-root", root, "--runtime-root", runtimeRoot, "--home", profile, "--config-root", filepath.Join(profile, "native"), "--binary", executable, "--webhook"}
 	if runGeminiSetup(args, &output) != 0 {

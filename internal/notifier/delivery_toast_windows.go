@@ -23,7 +23,7 @@ type windowsPowerShellToastSession struct {
 	trustedReady                   func(context.Context) error
 }
 
-const windowsToastPowerShell = `$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Runtime.WindowsRuntime; $xmlBytes=[Convert]::FromBase64String($env:AGENT_NOTIFICATIONS_TOAST_XML); $xmlText=[Text.Encoding]::UTF8.GetString($xmlBytes); $doc=[Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom.XmlDocument,ContentType=WindowsRuntime]::New(); $doc.LoadXml($xmlText); $toast=[Windows.UI.Notifications.ToastNotification,Windows.UI.Notifications,ContentType=WindowsRuntime]::New($doc); [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($env:AGENT_NOTIFICATIONS_TOAST_APP_ID).Show($toast)`
+const windowsToastPowerShell = `$ErrorActionPreference='Stop'; [Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime] | Out-Null; $xmlBytes=[Convert]::FromBase64String($env:AGENT_NOTIFICATIONS_TOAST_XML); $xmlText=[Text.Encoding]::UTF8.GetString($xmlBytes); $doc=[Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom.XmlDocument,ContentType=WindowsRuntime]::New(); $doc.LoadXml($xmlText); $toast=[Windows.UI.Notifications.ToastNotification,Windows.UI.Notifications,ContentType=WindowsRuntime]::New($doc); [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($env:AGENT_NOTIFICATIONS_TOAST_APP_ID).Show($toast)`
 
 var submitWindowsToast = runWindowsToast
 var resolveWindowsPowerShell = systemWindowsPowerShell
@@ -53,16 +53,22 @@ func runWindowsToast(ctx context.Context, p windowsToastPayload) error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", windowsToastPowerShell)
-	cmd.Env = append(os.Environ(),
-		"AGENT_NOTIFICATIONS_TOAST_XML="+base64.StdEncoding.EncodeToString(data),
-		"AGENT_NOTIFICATIONS_TOAST_APP_ID="+p.AppID,
-	)
+	cmd := windowsToastCommand(ctx, powershell, data, p.AppID)
 	err = cmd.Run()
 	if ctx.Err() != nil {
 		return errors.Join(ctx.Err(), err)
 	}
 	return err
+}
+
+// Construction shares the native child privacy boundary without launching it.
+func windowsToastCommand(ctx context.Context, powershell string, data []byte, appID string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", windowsToastPowerShell)
+	cmd.Env = append(nativeNotificationEnvironment(),
+		"AGENT_NOTIFICATIONS_TOAST_XML="+base64.StdEncoding.EncodeToString(data),
+		"AGENT_NOTIFICATIONS_TOAST_APP_ID="+appID,
+	)
+	return cmd
 }
 
 func openWindowsToast(ctx context.Context) (windowsToastSession, error) {

@@ -30,6 +30,8 @@ const (
 	ConfigEnvConflict          Code = "ConfigEnvConflict"
 )
 
+const ConfigOpenCodeWebhookEnvUnsupported Code = "ConfigOpenCodeWebhookEnvUnsupported"
+
 // Error deliberately excludes underlying parser/OS messages and document values.
 // Pointer is a JSON pointer; diagnostics intended for external use should omit it
 // because unknown field names can themselves contain secrets.

@@ -36,10 +36,7 @@ func TestGeminiDesktopOwnsOneRetainedLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	root, runtimeRoot := filepath.Join(base, "control"), filepath.Join(base, "runtime")
-	executable, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
+	executable := managedFixtureExecutable(t)
 	var output bytes.Buffer
 	if runGeminiSetup([]string{"install", "--control-root", root, "--runtime-root", runtimeRoot, "--config-root", filepath.Join(base, "TEST-profile", ".gemini"), "--binary", executable, "--desktop"}, &output) != 0 {
 		t.Fatal(output.String())

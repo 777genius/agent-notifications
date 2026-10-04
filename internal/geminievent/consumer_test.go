@@ -164,8 +164,43 @@ func TestChannelConsentIndependentAndNoRetry(t *testing.T) {
 				hooks++
 				return errors.New("PRIVATE_TRANSPORT_ERROR")
 			}
+			// Consent/failure handoff is invocation-scoped, independently of the
+			// production 250ms durable publication allowance. Timestamped replay
+			// below uses a persisted attempted marker, prepared outside that budget.
+			timestamp := facts.Timestamp
+			facts.Timestamp = ""
 			r := c.Consume(context.Background(), facts, deadline)
+			facts.Timestamp = timestamp
+			if channels.Desktop || channels.Webhook {
+				boot, now, err := c.Clock.Now()
+				if err != nil {
+					t.Fatal(err)
+				}
+				bootHash := sha256.Sum256([]byte(boot))
+				seed, err := json.Marshal(cacheState{Boot: hex.EncodeToString(bootHash[:]), Entries: []cacheEntry{{
+					Key: marker(c.Binding, facts), Until: now + 60,
+					Bits: uint8(boolInt(channels.Desktop) + 2*boolInt(channels.Webhook)),
+				}}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				seedCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				release, err := installruntime.Lock(seedCtx, filepath.Join(c.Cache.Root, ".observations.lock"))
+				if err != nil {
+					cancel()
+					t.Fatal(err)
+				}
+				err = writeCacheFixture(c.Cache.Root, seed)
+				release()
+				cancel()
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
 			second := c.Consume(context.Background(), facts, deadline)
+			if channels.Desktop && (r.Desktop != "unknown" || second.Desktop != "duplicate") || channels.Webhook && (r.Webhook != "unknown" || second.Webhook != "duplicate") {
+				t.Fatalf("failed handoff/persisted replay classification: first=%+v, second=%+v", r, second)
+			}
 			if desktops != boolInt(channels.Desktop) || hooks != boolInt(channels.Webhook) {
 				t.Fatalf("consent/failure attempts %d/%d, first=%+v, second=%+v", desktops, hooks, r, second)
 			}

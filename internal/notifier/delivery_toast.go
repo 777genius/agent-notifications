@@ -131,8 +131,15 @@ func (d *WindowsToastDelivery) checkAndDeliver(ctx context.Context, r notificati
 	}
 	err = session.Submit(operation, r)
 	if err != nil {
-		if operation.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return finish("unknown", "handoff_unconfirmed")
+		operationErr := operation.Err()
+		if operationErr != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			reason := "handoff_unconfirmed"
+			if errors.Is(operationErr, context.DeadlineExceeded) || operationErr == nil && errors.Is(err, context.DeadlineExceeded) {
+				reason = "native_submission_deadline"
+			} else if errors.Is(operationErr, context.Canceled) || operationErr == nil && errors.Is(err, context.Canceled) {
+				reason = "native_submission_cancelled"
+			}
+			return finish("unknown", reason)
 		}
 		return finish("rejected", "unsupported_notifier")
 	}

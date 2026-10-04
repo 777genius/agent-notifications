@@ -28,6 +28,10 @@ func readRegularFile(path string) ([]byte, error) {
 	return nil, fmt.Errorf("confined file reads unsupported on this platform")
 }
 
+func readRegularFileLimit(path string, limit int64) ([]byte, error) {
+	return nil, fmt.Errorf("confined file reads unsupported on this platform")
+}
+
 func readControlDocument(path string) ([]byte, error) {
 	return nil, fmt.Errorf("confined file reads unsupported on this platform")
 }
