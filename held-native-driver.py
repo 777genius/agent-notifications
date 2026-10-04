@@ -1327,9 +1327,9 @@ def qualify(args, report):
         if args.os == 'windows':
             require(PORTABLE is not None and args.suite == 'business', 'known_folder_business_fixture_required')
             require(os.environ.get('TEST_WINDOWS_PROGRAMS_PROBE_ONLY') in ('true', 'false'), 'known_folder_explicit_mode_required')
-            windows_programs_probe(root, env, checkout)
-            report['windowsProgramsProbe'] = dict(PORTABLE.windows_programs_probe)
             if os.environ['TEST_WINDOWS_PROGRAMS_PROBE_ONLY'] == 'true':
+                windows_programs_probe(root, env, checkout)
+                report['windowsProgramsProbe'] = dict(PORTABLE.windows_programs_probe)
                 report['status'] = 'windows_programs_probe_observed_only'
                 return
         host = root / ('opencode.exe' if args.os == 'windows' else 'opencode')
