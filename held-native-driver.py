@@ -144,6 +144,32 @@ def run(args, *, cwd, env, timeout=30, input="", diagnostic_stage=None):
     return result.stdout.decode('utf-8', errors='replace').replace('\r\n', '\n').replace('\r', '\n')
 
 
+def windows_toast_phase_probe(root, env, managed, product_head):
+    # Explicit TEST-only preprovider observation, never installed/business acceptance.
+    base = REPO / '.task-tools/artifacts'
+    source, binary, receipt = (base / n for n in ('held-toast-phase-probe_windows_test.go', 'windows-toast-phase-probe.exe', 'windows-toast-phase-probe-build.json'))
+    require(all(p.is_file() and not any(q.is_symlink() for q in (p, *p.parents)) for p in (source, binary, receipt)), 'toast_probe_binding')
+    require(digest(source) == 'f7111771f211888dabb3ace32b42e4f4e9d2a001d2bb7addb7e934ab217ced6a' and receipt.stat().st_size <= 4096, 'toast_probe_binding')
+    build = json.loads(receipt.read_bytes())
+    require(type(build) is dict and set(build) == {'schema','productCommit','probeSourceSHA256','binarySHA256','goToolSHA256','overlaySHA256','compileExitCode','compileStdoutSHA256','compileStderrSHA256'} and type(build['schema']) is int and build['schema'] == 1 and build['productCommit'] == product_head and build['probeSourceSHA256'] == digest(source) and build['binarySHA256'] == digest(binary) and type(build['compileExitCode']) is int and build['compileExitCode'] == 0 and all(type(build[k]) is str and re.fullmatch('[0-9a-f]{64}',build[k]) for k in set(build)-{'schema','productCommit','compileExitCode'}), 'toast_probe_binding')
+    pins = {p:digest(p) for p in (source,binary,receipt,managed)}
+    child_env = dict(env, TEST_AN_TOAST_CONTROL_ROOT=str(root/'control'), TEST_AN_TOAST_INSTALLED_EXECUTABLE=str(managed))
+    out = run([str(binary),'-test.run=^TestTESTWindowsToastPhaseProbe$','-test.count=1','-test.v'],cwd=root,env=child_env)
+    prefix = 'AN_WINDOWS_TOAST_PHASE_PROBE '
+    lines = [line.split(prefix,1)[1] for line in out.splitlines() if prefix in line]
+    require(len(lines) == 1 and len(lines[0]) <= 8192 and all(digest(p) == pin for p,pin in pins.items()), 'toast_probe_result')
+    value = json.loads(lines[0])
+    keys = {'schema','purpose','qualificationGranted','visibleToastProved','originalScriptSHA256','markedScriptSHA256','projectionSHA256','phases','commandInvoked','commandStartCallElapsedNS','commandStartReturnElapsedNS','commandWaitReturnElapsedNS','waitReturned','processStarted','shortcutReady','exitCode','commandCancelCalled','commandCancelSucceeded','stdoutBytes','stdoutSHA256','stdoutUnknownLines','stdoutPartialLine','stderrBytes','stderrSHA256','desktopStatus','desktopReason'}
+    require(type(value) is dict and set(value) == keys and type(value['schema']) is int and value['schema'] == 1 and value['purpose'] == 'TEST Windows toast phase probe' and value['qualificationGranted'] is False and value['visibleToastProved'] is False, 'toast_probe_result')
+    require(all(type(value[k]) is bool for k in ('commandInvoked','waitReturned','processStarted','shortcutReady','commandCancelCalled','commandCancelSucceeded','stdoutPartialLine')) and all(type(value[k]) is int and 0 <= value[k] <= 30_000_000_000 for k in ('commandStartCallElapsedNS','commandStartReturnElapsedNS','commandWaitReturnElapsedNS')) and all(type(value[k]) is int and 0 <= value[k] <= 65536 for k in ('stdoutBytes','stderrBytes','stdoutUnknownLines')), 'toast_probe_result')
+    require(value['exitCode'] is None or type(value['exitCode']) is int and -1 <= value['exitCode'] <= 4294967295, 'toast_probe_result')
+    require(all(type(value[k]) is str and re.fullmatch('[0-9a-f]{64}',value[k]) for k in ('originalScriptSHA256','markedScriptSHA256','projectionSHA256','stdoutSHA256','stderrSHA256')) and value['originalScriptSHA256'] == value['projectionSHA256'] == '485891c20f7b34ebd774e24ad3fdfdb6eae2555f301adf47b806022669ac6d40', 'toast_probe_result')
+    phases = {'script.enter', *(name+suffix for name in ('add_type','xml_type','xml_load','toast_new','notifier_show') for suffix in ('.before','.after'))}
+    require(type(value['phases']) is list and len(value['phases']) <= 11 and all(type(v) is dict and set(v) == {'phase','observedElapsedNS'} and type(v['phase']) is str and v['phase'] in phases and type(v['observedElapsedNS']) is int and 0 <= v['observedElapsedNS'] <= 30_000_000_000 for v in value['phases']) and len({v['phase'] for v in value['phases']}) == len(value['phases']), 'toast_probe_result')
+    require(value['desktopStatus'] in ('rejected','suppressed','unknown','submitted') and value['desktopReason'] in ('malformed_request','configuration_invalid','disabled','navigation_disabled','navigation_unavailable','unsupported_notifier','expired','handoff_unconfirmed','native_submission_deadline','native_submission_cancelled','session_notification'), 'toast_probe_result')
+    return dict(value, helperExitCode=0, helperReaped=True, probeSourceSHA256=pins[source], helperBinarySHA256=pins[binary], helperBuildRecordSHA256=pins[receipt])
+
+
 def windows_programs_probe(root, env, product_head):
     # TEST-only prebusiness diagnostic; every native path stays private.
     source = REPO / '.task-tools/artifacts/held-windows-programs-probe.go'
@@ -1384,6 +1410,13 @@ def qualify(args, report):
         report['renderedInstalledSHA256'] = digest(plugin)
         # Seal real installation output before any host launch; random origin is never fabricated.
         write_json(root / 'installation-private.json', {'renderedSHA256': digest(plugin), 'registration': r, 'manifestSHA256': digest(args.manifest)})
+        if args.os == 'windows':
+            mode = os.environ.get('TEST_WINDOWS_TOAST_PHASE_PROBE_ONLY', 'false')
+            require(mode in ('true','false'), 'toast_probe_explicit_mode')
+            if mode == 'true':
+                report['windowsToastPhaseProbe'] = windows_toast_phase_probe(root, env, managed, m['candidateCommit'])
+                report.update(status='windows_toast_phase_probe_observed_only', businessPhasesStarted=False, actualProviderTransactions=0, actualProviderGaps=0, actualIndependentWebhookSubmissions=0)
+                return
         webhook = owner.serve(Webhook())
         policy = configure(candidate, root, env, f'http://127.0.0.1:{webhook.server_port}/webhook')
         report['authoritativePolicySHA256'] = digest(root / 'control/agent-notifications.json')
@@ -1626,7 +1659,7 @@ def main():
     code=1
     try:
         qualify(args,report)
-        code=0 if report['status'] in ('inputs_verified_only','installed_business_lifecycle_observed','windows_programs_probe_observed_only','darwin_args2_probe_observed_only') else 1
+        code=0 if report['status'] in ('inputs_verified_only','installed_business_lifecycle_observed','windows_programs_probe_observed_only','darwin_args2_probe_observed_only','windows_toast_phase_probe_observed_only') else 1
     except Exception as e:
         report['firstFailedPrerequisite']=str(e) if isinstance(e,Unqualified) else type(e).__name__
         if PORTABLE is not None:

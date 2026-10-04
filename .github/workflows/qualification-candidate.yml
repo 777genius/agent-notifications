@@ -6,6 +6,7 @@ on:
       platform_group: {type: choice, required: true, default: all, options: [all, linux-arm64, darwin-arm64, darwin-amd64, windows-amd64]}
       windows_programs_probe_only: {type: boolean, required: true, default: true}
       darwin_args2_probe_only: {type: boolean, required: true, default: false}
+      windows_toast_phase_probe_only: {type: boolean, required: true, default: false}
       product_head: {type: string, required: true}
       parent_run_id: {type: string, required: true}
       parent_artifact_id: {type: string, required: true}
@@ -83,6 +84,7 @@ jobs:
       TEST_PRODUCT_HEAD: ${{ inputs.product_head }}
       TEST_WINDOWS_PROGRAMS_PROBE_ONLY: ${{ inputs.windows_programs_probe_only }}
       TEST_DARWIN_ARGS2_PROBE_ONLY: ${{ inputs.darwin_args2_probe_only }}
+      TEST_WINDOWS_TOAST_PHASE_PROBE_ONLY: ${{ inputs.windows_toast_phase_probe_only }}
       TEST_PARENT_SHA256: ${{ inputs.parent_sha256 }}
       TEST_PARENT_MANIFEST_SHA256: ${{ inputs.parent_manifest_sha256 }}
       TEST_CI_INPUTS_SHA256: ${{ inputs.ci_inputs_sha256 }}
@@ -174,6 +176,27 @@ jobs:
             GOPROXY=off GOSUMDB=off GOVCS='*:off' GOWORK=off GOTOOLCHAIN=local go build -trimpath -mod=readonly -buildvcs=true -o .task-tools/artifacts/windows-programs-probe.exe .task-tools/artifacts/held-windows-programs-probe.go
             python -c 'import hashlib,json,os,pathlib,subprocess; root=pathlib.Path(".task-tools/artifacts"); source=root/"held-windows-programs-probe.go"; binary=root/"windows-programs-probe.exe"; head=subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip(); h=lambda p:hashlib.sha256(p.read_bytes()).hexdigest(); assert head==os.environ["TEST_PRODUCT_HEAD"] and not any(p.is_symlink() for p in (source,binary,*source.parents)) and h(source)=="e9270ee40a6493b4669040d4aa8cb3355b07fb6d889af6354c811f2f3f541b27"; record={"schema":1,"candidateCommit":head,"sourceSHA256":h(source),"binarySHA256":h(binary)}; dst=root/"windows-programs-probe-build.json"; f=dst.open("x"); f.write(json.dumps(record,sort_keys=True)+"\n"); f.close(); binary.chmod(0o444); dst.chmod(0o444)'
           fi
+      - name: Compile only the pinned Windows toast phase TEST overlay before providers
+        if: matrix.target.platform == 'windows' && inputs.windows_toast_phase_probe_only
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PYTOAST'
+          import hashlib, os, pathlib, shutil, subprocess, sys
+          root = pathlib.Path.cwd().resolve(strict=True)
+          transport = root.parent / 'transport'
+          pins = {'toast_phase_probe_windows_test.go': 'f7111771f211888dabb3ace32b42e4f4e9d2a001d2bb7addb7e934ab217ced6a', 'build-toast-phase-overlay.py': '350565c4497434038c3247bf7a930780f50c956593b01cd60efc9fde7a3312c2'}
+          assert os.environ['TEST_WINDOWS_PROGRAMS_PROBE_ONLY'] == 'false'
+          for name, expected in pins.items():
+              path = transport / name
+              assert path.is_file() and not any(p.is_symlink() for p in (path, *path.parents))
+              assert hashlib.sha256(path.read_bytes()).hexdigest() == expected
+          tool = pathlib.Path(shutil.which('go')).resolve(strict=True)
+          tool_sha = hashlib.sha256(tool.read_bytes()).hexdigest()
+          subprocess.run([sys.executable, '-B', str(transport/'build-toast-phase-overlay.py'), '--repo', str(root), '--go', str(tool), '--go-sha256', tool_sha], check=True)
+          assert hashlib.sha256(tool.read_bytes()).hexdigest() == tool_sha
+          assert all(hashlib.sha256((transport/name).read_bytes()).hexdigest() == expected for name, expected in pins.items())
+          PYTOAST
       - name: Stage exact held native TEST supplier outside tracked source
         shell: bash
         run: python -B ../transport/stage-held.py
@@ -188,9 +211,9 @@ jobs:
           export AN_SUITE=business
           if [ "$AN_OS/$AN_ARCH" = linux/amd64 ]; then export AN_SUITE=full; fi
           if [ "$AN_OS" = linux ]; then
-            sudo --preserve-env=PATH,AN_MANIFEST,AN_MANIFEST_SHA256,AN_OS,AN_ARCH,AN_VERSION,AN_SUITE,TEST_HARNESS_SHA256,TEST_CI_INPUTS_SHA256,TEST_PRODUCT_HEAD unshare --net -- bash -c 'ip link set lo up; python -B ../transport/held-native-adapter.py --held-source .task-tools/artifacts/held-native-driver.py --held-sha256 2fb383c56495304d1da0d14318033dd4de1bb348e1011f12fadc0f5c2f5ed45b --held-permission-source .task-tools/artifacts/held-portable_permission.py --held-permission-sha256 f499590b9c8c3bfee37156633bf8a5a36024be208b9c26addfd70cbd000874cd --held-provider-source .task-tools/artifacts/held-provider.py --held-provider-sha256 57633468d4187d44b65abd245ad29d49a380619fe1e61049a1612272cad80e49 --held-portable-source .task-tools/artifacts/held-portable.py --held-portable-sha256 67742afdf71c9e1aebfceb9e66110d13b397dc4aabac40775968497751682d45'
+            sudo --preserve-env=PATH,AN_MANIFEST,AN_MANIFEST_SHA256,AN_OS,AN_ARCH,AN_VERSION,AN_SUITE,TEST_HARNESS_SHA256,TEST_CI_INPUTS_SHA256,TEST_PRODUCT_HEAD unshare --net -- bash -c 'ip link set lo up; python -B ../transport/held-native-adapter.py --held-source .task-tools/artifacts/held-native-driver.py --held-sha256 be8bf53571e1cd7ac8e35bef350a2bb37cbe86209868511f3a27b6a6d814650f --held-permission-source .task-tools/artifacts/held-portable_permission.py --held-permission-sha256 f499590b9c8c3bfee37156633bf8a5a36024be208b9c26addfd70cbd000874cd --held-provider-source .task-tools/artifacts/held-provider.py --held-provider-sha256 57633468d4187d44b65abd245ad29d49a380619fe1e61049a1612272cad80e49 --held-portable-source .task-tools/artifacts/held-portable.py --held-portable-sha256 67742afdf71c9e1aebfceb9e66110d13b397dc4aabac40775968497751682d45'
           else
-            python -B ../transport/held-native-adapter.py --held-source .task-tools/artifacts/held-native-driver.py --held-sha256 2fb383c56495304d1da0d14318033dd4de1bb348e1011f12fadc0f5c2f5ed45b --held-permission-source .task-tools/artifacts/held-portable_permission.py --held-permission-sha256 f499590b9c8c3bfee37156633bf8a5a36024be208b9c26addfd70cbd000874cd --held-provider-source .task-tools/artifacts/held-provider.py --held-provider-sha256 57633468d4187d44b65abd245ad29d49a380619fe1e61049a1612272cad80e49 --held-portable-source .task-tools/artifacts/held-portable.py --held-portable-sha256 67742afdf71c9e1aebfceb9e66110d13b397dc4aabac40775968497751682d45
+            python -B ../transport/held-native-adapter.py --held-source .task-tools/artifacts/held-native-driver.py --held-sha256 be8bf53571e1cd7ac8e35bef350a2bb37cbe86209868511f3a27b6a6d814650f --held-permission-source .task-tools/artifacts/held-portable_permission.py --held-permission-sha256 f499590b9c8c3bfee37156633bf8a5a36024be208b9c26addfd70cbd000874cd --held-provider-source .task-tools/artifacts/held-provider.py --held-provider-sha256 57633468d4187d44b65abd245ad29d49a380619fe1e61049a1612272cad80e49 --held-portable-source .task-tools/artifacts/held-portable.py --held-portable-sha256 67742afdf71c9e1aebfceb9e66110d13b397dc4aabac40775968497751682d45
           fi
       - name: Make only two SAFE public receipts readable for artifact upload
         if: always()
