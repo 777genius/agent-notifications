@@ -10,6 +10,8 @@ from portable_permission import native_join
 PREFIX = '[agent-notifications] '
 PUBLIC_STATUS = {'submitted', 'unknown', 'unavailable', 'rejected', 'suppressed', 'unrecognized'}
 PUBLIC_CHANNEL = PUBLIC_STATUS - {'suppressed'}
+PUBLIC_RECEIPT_REASONS = frozenset(('malformed_request', 'configuration_invalid', 'navigation_disabled', 'navigation_unavailable', 'unsupported_notifier', 'expired', 'spool_unavailable', 'authority_changed', 'launch_failed', 'timeout', 'handoff_unconfirmed', 'readiness_unavailable', 'activation_required', 'permission_denied', 'unsupported_version', 'unsupported_action', 'invalid_file', 'os_rejected', 'invalid_command', 'invalid_frame', 'invalid_config', 'unsupported_fact', 'not_registered', 'channels_disabled', 'delivery_uncertain', 'delivery_unavailable', 'invalid_fact', 'snapshot_changed', 'time_authority_unverified', 'store_unavailable', 'duplicate', 'capacity', 'native_submission_deadline', 'native_submission_cancelled', 'webhook_deadline', 'webhook_cancelled'))
+PUBLIC_COMPOSITION_STAGES = frozenset(('emit.empty', 'prep.catch.birth', 'prep.catch.calibration', 'prep.catch.frame', 'prep.catch.helper', 'prep.catch.original', 'prep.catch.sample', 'prep.current', 'prep.current_after_helper', 'prep.helper', 'prep.native', 'prep.original', 'prep.remaining', 'v1.activation.denied', 'v1.activation.ok', 'v1.before_emit', 'v1.final.denied', 'v1.ingress.catch', 'v1.observe.reject', 'v1.owned.denied', 'v1.policy.denied', 'v1.stop', 'v2.activation.denied', 'v2.activation.ok', 'v2.before_emit', 'v2.fact.denied', 'v2.final.denied', 'v2.owned.denied', 'v2.policy.denied', 'v2.stop'))
 PLAIN_OBSERVER_REASONS = {
     'job_capacity', 'job_expired', 'job_failed', 'lookup_capacity', 'lookup_timeout', 'lookup_failed',
     'frame_capacity', 'observed event callback failed', 'messages lookup capacity exceeded',
@@ -68,6 +70,15 @@ def plain_reason(line):
     return None
 
 
+def composition_stage(line):
+    prefix = 'Agent Notifications OpenCode composition: '
+    if len(line) <= 4096 and line.count(prefix) == 1:
+        stage = line.split(prefix, 1)[1].removesuffix('\r')
+        if stage in PUBLIC_COMPOSITION_STAGES:
+            return stage
+    return None
+
+
 def reject_diagnostic(value):
     receipt = value.get('receipt')
     receipt = receipt if isinstance(receipt, dict) else {}
@@ -83,6 +94,10 @@ def reject_diagnostic(value):
     error.receiptEnums = {key: receipt.get(key) if type(receipt.get(key)) is str and
         receipt.get(key) in allowed else 'unrecognized'
         for key, allowed in (('status', PUBLIC_STATUS), ('desktop', PUBLIC_CHANNEL), ('webhook', PUBLIC_CHANNEL))}
+    fields = {'status', 'desktop', 'webhook'}
+    reason = receipt.get('reason')
+    error.receiptReason = reason if (fields <= set(receipt) <= fields | {'reason'} and
+        receipt.get('status') != 'submitted' and type(reason) is str and reason in PUBLIC_RECEIPT_REASONS) else None
     raise error
 
 
@@ -111,8 +126,9 @@ def diagnostic(line):
         return value  # Explicit non-success, never positive submission authority.
     receipt = value['receipt']
     if (value['ipc'] != 'ok' or not isinstance(receipt, dict) or
-            set(receipt) != {'status', 'desktop', 'webhook'} or
-            any(receipt[key] != 'submitted' for key in receipt)):
+            not {'status', 'desktop', 'webhook'} <= set(receipt) <= {'status', 'desktop', 'webhook', 'reason'} or
+            ('reason' in receipt and (type(receipt['reason']) is not str or receipt['reason'] not in PUBLIC_RECEIPT_REASONS)) or
+            any(receipt[key] != 'submitted' for key in ('status', 'desktop', 'webhook'))):
         reject_diagnostic(value)
     return value
 
@@ -212,7 +228,8 @@ class Observation:
         self.cursors, self.partial, self.rows = {}, {}, []
         self.closedDenied = []
         self.firstRejected = None
-        self.receiptEnums, self.plainReason = None, None
+        self.receiptEnums, self.plainReason, self.receiptReason = None, None, None
+        self.compositionStages = []
         self.proof = pathlib.Path(args.business_proof).absolute()
         require(self.proof.is_file() and not self.proof.is_symlink() and
                 digest(self.proof) == args.business_proof_sha256, 'sealed_business_prerequisites_missing')
@@ -283,10 +300,13 @@ class Observation:
                              {'package': str(module.absolute()), 'options': {'diagnostics': True}}]
 
     def failure_snapshot(self):
-        return {'schema': 1, 'firstRejected': self.firstRejected,
-                'receiptEnums': self.receiptEnums, 'plainReason': self.plainReason,
+        snapshot = {'schema': 1, 'firstRejected': self.firstRejected,
+                'receiptEnums': self.receiptEnums, 'plainReason': self.plainReason, 'receiptReason': self.receiptReason,
                 'counts': {'submitted': len(self.rows), 'invalidated': len(self.closedDenied),
                            'logRoles': len(self.cursors), 'logBytes': sum(self.cursors.values())}}
+        if self.compositionStages:
+            snapshot['compositionStages'] = list(self.compositionStages)
+        return snapshot
 
     def update(self, root, closed=False):
         for name in ('host', 'updated-host', 'reinstalled-host'):
@@ -309,6 +329,9 @@ class Observation:
                     line = rawline.decode('utf-8', errors='strict')
                 except UnicodeDecodeError:
                     raise ValueError('diagnostic_utf8_decode_failed') from None
+                stage = composition_stage(line)
+                if stage is not None and stage not in self.compositionStages:
+                    self.compositionStages.append(stage)  # At most the30 exact literals; debug snapshot only.
                 if self.plainReason is None:
                     self.plainReason = plain_reason(line)
                 try:
@@ -317,6 +340,7 @@ class Observation:
                     if self.firstRejected is None and hasattr(error, 'predicates'):
                         self.firstRejected = error.predicates
                         self.receiptEnums = error.receiptEnums
+                        self.receiptReason = error.receiptReason
                     raise
                 if row is not None:
                     if row['ipc'] == 'invalidated':

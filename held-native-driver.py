@@ -1501,6 +1501,8 @@ def qualify(args, report):
 
 PUBLIC_STATUS = {'submitted', 'unknown', 'unavailable', 'rejected', 'suppressed', 'unrecognized'}
 PUBLIC_CHANNEL = PUBLIC_STATUS - {'suppressed'}
+PUBLIC_RECEIPT_REASONS = frozenset(('malformed_request', 'configuration_invalid', 'navigation_disabled', 'navigation_unavailable', 'unsupported_notifier', 'expired', 'spool_unavailable', 'authority_changed', 'launch_failed', 'timeout', 'handoff_unconfirmed', 'readiness_unavailable', 'activation_required', 'permission_denied', 'unsupported_version', 'unsupported_action', 'invalid_file', 'os_rejected', 'invalid_command', 'invalid_frame', 'invalid_config', 'unsupported_fact', 'not_registered', 'channels_disabled', 'delivery_uncertain', 'delivery_unavailable', 'invalid_fact', 'snapshot_changed', 'time_authority_unverified', 'store_unavailable', 'duplicate', 'capacity', 'native_submission_deadline', 'native_submission_cancelled', 'webhook_deadline', 'webhook_cancelled'))
+PUBLIC_COMPOSITION_STAGES = frozenset(('emit.empty', 'prep.catch.birth', 'prep.catch.calibration', 'prep.catch.frame', 'prep.catch.helper', 'prep.catch.original', 'prep.catch.sample', 'prep.current', 'prep.current_after_helper', 'prep.helper', 'prep.native', 'prep.original', 'prep.remaining', 'v1.activation.denied', 'v1.activation.ok', 'v1.before_emit', 'v1.final.denied', 'v1.ingress.catch', 'v1.observe.reject', 'v1.owned.denied', 'v1.policy.denied', 'v1.stop', 'v2.activation.denied', 'v2.activation.ok', 'v2.before_emit', 'v2.fact.denied', 'v2.final.denied', 'v2.owned.denied', 'v2.policy.denied', 'v2.stop'))
 PLAIN_OBSERVER_REASONS = {
     'job_capacity', 'job_expired', 'job_failed', 'lookup_capacity', 'lookup_timeout', 'lookup_failed',
     'frame_capacity', 'observed event callback failed', 'messages lookup capacity exceeded',
@@ -1531,7 +1533,8 @@ def safe_failure_observation(snapshot):
     predicates = {'protocolIsOne', 'kindIsEvent', 'childClosed', 'exitZero', 'forcedFalse',
                   'ipcOK', 'receiptStatusSubmitted', 'desktopSubmitted', 'webhookSubmitted'}
     limits = {'submitted': 33, 'invalidated': 2, 'logRoles': 3, 'logBytes': 3 * (8 * 1024 * 1024 + 1)}
-    if type(snapshot) is not dict or set(snapshot) != {'schema', 'firstRejected', 'receiptEnums', 'plainReason', 'counts'} or type(snapshot['schema']) is not int or snapshot['schema'] != 1:
+    fields = {'schema', 'firstRejected', 'receiptEnums', 'plainReason', 'receiptReason', 'counts'}
+    if type(snapshot) is not dict or not fields <= set(snapshot) <= fields | {'compositionStages'} or type(snapshot['schema']) is not int or snapshot['schema'] != 1:
         return None
     first, counts = snapshot['firstRejected'], snapshot['counts']
     if first is not None and (type(first) is not dict or set(first) != predicates or any(type(v) is not bool for v in first.values())):
@@ -1539,6 +1542,14 @@ def safe_failure_observation(snapshot):
     if type(counts) is not dict or set(counts) != set(limits) or any(type(counts[k]) is not int or not 0 <= counts[k] <= limit for k, limit in limits.items()):
         return None
     enums, plain = snapshot['receiptEnums'], snapshot['plainReason']
+    reason = snapshot['receiptReason']
+    if 'compositionStages' in snapshot:
+        stages = snapshot['compositionStages']
+        if (type(stages) is not list or not 1 <= len(stages) <= 30 or
+                any(type(stage) is not str or stage not in PUBLIC_COMPOSITION_STAGES for stage in stages) or len(set(stages)) != len(stages)):
+            return None
+    if reason is not None and (first is None or type(reason) is not str or reason not in PUBLIC_RECEIPT_REASONS):
+        return None
     if (enums is None) != (first is None) or (enums is not None and (type(enums) is not dict or set(enums) != {'status', 'desktop', 'webhook'} or
             any(type(enums[k]) is not str or enums[k] not in allowed for k, allowed in
                 (('status', PUBLIC_STATUS), ('desktop', PUBLIC_CHANNEL), ('webhook', PUBLIC_CHANNEL))))):
@@ -1547,8 +1558,11 @@ def safe_failure_observation(snapshot):
             type(plain['channel']) is not str or plain['channel'] not in ('observer', 'delivery') or type(plain['reason']) is not str or
             plain['reason'] not in (PLAIN_OBSERVER_REASONS if plain['channel'] == 'observer' else PLAIN_DELIVERY_REASONS)):
         return None
-    return {'schema': 1, 'firstRejected': None if first is None else dict(first), 'counts': dict(counts),
-            'receiptEnums': None if enums is None else dict(enums), 'plainReason': None if plain is None else dict(plain)}
+    safe = {'schema': 1, 'firstRejected': None if first is None else dict(first), 'counts': dict(counts),
+            'receiptEnums': None if enums is None else dict(enums), 'plainReason': None if plain is None else dict(plain), 'receiptReason': reason}
+    if 'compositionStages' in snapshot:
+        safe['compositionStages'] = list(snapshot['compositionStages'])
+    return safe
 
 
 def main():
