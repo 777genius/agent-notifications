@@ -16,7 +16,7 @@ If the work belongs to your employer, say so in the PR. Do not include someone e
 
 - **Go 1.25.0+** (CI covers the minimum Go 1.25 and Go 1.26; automatic toolchain switching is disabled)
 - **Make** (for build commands)
-- **Claude Code** (tested on v2.0.15)
+- **Claude** (tested on v2.0.15)
 
 ## Getting Started
 
@@ -37,7 +37,7 @@ make build
 # Install plugin
 /plugin install claude-notifications-go@claude-notifications-go
 
-# Restart Claude Code for hooks to take effect
+# Restart Claude for hooks to take effect
 
 # Download binary and configure settings
 /claude-notifications-go:init

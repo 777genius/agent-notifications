@@ -16,7 +16,7 @@ async function chooseOS(page: Page, value: string) {
   await page.getByRole("option", { name: labels[value], exact: true }).click();
 }
 async function chooseAgents(page: Page, selected: readonly ("claude" | "codex" | "opencode" | "gemini")[]) {
-  const labels = { claude: "Claude Code", codex: "Codex CLI", opencode: "OpenCode", gemini: "Gemini CLI" };
+  const labels = { claude: "Claude", codex: "Codex CLI", opencode: "OpenCode", gemini: "Gemini CLI" };
   // Select desired cards first so switching hosts never needs an empty selection.
   for (const wanted of [true, false])
     for (const value of ["claude", "codex", "opencode", "gemini"] as const) {
@@ -491,7 +491,7 @@ test("guided reference layout, detected OS and mode focus", async ({
 test("all agents toggle independently, copied commands and configuration cover the selection", async ({ page }) => {
   await page.goto("");
   await chooseOS(page, "macos");
-  const labels = { claude: "Claude Code", codex: "Codex CLI", opencode: "OpenCode", gemini: "Gemini CLI" };
+  const labels = { claude: "Claude", codex: "Codex CLI", opencode: "OpenCode", gemini: "Gemini CLI" };
   const prefix = "curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product ";
   const cases = [
     { selected: ["claude"], expected: prefix + "claude" },
@@ -518,7 +518,7 @@ test("all agents toggle independently, copied commands and configuration cover t
   await page.getByRole("button", { name: "Copy command" }).click();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("(set -o pipefail; " + prefix.replace("--product ", "--products ") + "claude,codex,opencode --desktop)");
   const table = page.getByRole("table", { name: "Compare agent features" });
-  await expect(table.getByRole("columnheader")).toHaveText(["Feature", "Claude Code", "Codex CLI", "OpenCode", /Gemini CLI\s*Unreleased/]);
+  await expect(table.getByRole("columnheader")).toHaveText(["Feature", "Claude", "Codex CLI", "OpenCode", /Gemini CLI\s*Unreleased/]);
   await expect(table.getByRole("row", { name: /^Completed/ }).getByRole("cell")).toHaveText(["✓Supported", "✓Supported", "✓Supported", "✓Supported"]);
   await expect(table.getByRole("row", { name: /^Review/ }).getByRole("cell")).toHaveText(["✓Supported", "✕Not supported", "✕Not supported", "✕Not supported"]);
   await expect(table.getByRole("row", { name: /^Sounds/ }).getByRole("cell")).toHaveText(["✓Supported", "✓Supported", "✕Not supported", "✕Not supported"]);
@@ -558,7 +558,7 @@ test("first feature explains supported click-to-focus and its agent scope", asyn
   await expect(feature.getByRole("heading", { name: "Return with one click" })).toBeVisible();
   await expect(feature).toContainText("CLICK TO FOCUS");
   await expect(feature).toContainText("terminal, editor or tab where supported");
-  await expect(feature).toContainText("Claude Code and Codex CLI only");
+  await expect(feature).toContainText("Claude and Codex CLI only");
   await expect(feature).toContainText("terminal and OS");
 });
 

@@ -65,7 +65,7 @@ func (p *LinePrompt) SelectAgents(ctx context.Context, clients []AgentCapability
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	claude, codex := "Claude Code", "Codex"
+	claude, codex := "Claude", "Codex"
 	if len(clients) > 0 {
 		claude = agentChoiceLabel(clients, "claude", claude)
 		codex = agentChoiceLabel(clients, "codex", codex)

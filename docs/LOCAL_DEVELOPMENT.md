@@ -113,14 +113,14 @@ What to collect:
 5. Relevant OS notification settings:
    - macOS: `System Settings > Notifications > Agent Notifications`
    - Linux: desktop-environment notification settings and whether the session is local desktop vs headless/remote
-   - Windows: `Settings > System > Notifications > Claude Code Notifications`
+   - Windows: `Settings > System > Notifications > Claude Code Notifications` (legacy registered name)
 6. On macOS / Linux, if click-to-focus is part of the report, whether clicking the notification activates the expected window.
 
 Interpretation:
 
 - If the log says the desktop notification was sent successfully but no banner appears, the problem is likely in the OS notification layer or app notification settings rather than in Claude hook parsing.
 - If the log shows a notifier-specific error such as `beeep.Notify failed`, we likely have a platform integration bug.
-- If the direct command works but notifications from Claude Code are still delayed or missing, the next place to inspect is the hook invocation path rather than notification delivery.
+- If the direct command works but notifications from Claude are still delayed or missing, the next place to inspect is the hook invocation path rather than notification delivery.
 
 ### Smoke test against the currently installed plugin
 

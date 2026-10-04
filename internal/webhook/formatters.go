@@ -45,7 +45,7 @@ func agentDisplayName(source string) string {
 	case config.AgentGemini:
 		return "Gemini CLI"
 	case config.AgentClaude:
-		return "Claude Code"
+		return "Claude"
 	default:
 		return normalized
 	}

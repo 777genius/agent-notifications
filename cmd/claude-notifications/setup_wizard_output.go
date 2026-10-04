@@ -124,7 +124,7 @@ func setupPrintableCommand(command []string) string {
 func setupClientName(client string) string {
 	switch client {
 	case "claude":
-		return "Claude Code"
+		return "Claude"
 	case "codex":
 		return "Codex"
 	case "opencode":

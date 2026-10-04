@@ -50,9 +50,9 @@ For manual updates, run the registration command again to refresh the installed 
 Unchanged hook definitions retain trust; changed definitions require review again.
 The one-command installer handles this registration step automatically.
 
-Claude Code installation and updates continue to use the [existing installation steps](INSTALLATION.md).
+Claude installation and updates continue to use the [existing installation steps](INSTALLATION.md).
 Both products share settings at the shared file selected by `config path`; installing
-Codex does not require installing Claude Code. Keep your existing settings file when updating.
+Codex does not require installing Claude. Keep your existing settings file when updating.
 
 <details>
 <summary>How registration works</summary>
