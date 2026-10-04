@@ -4,75 +4,47 @@ on:
 permissions:
   contents: read
 jobs:
-  windows-wpr-helper:
+  windows-preflight:
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ['1.25', '1.26']
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: 9fb603544188b5ef8b61d3e4cfb26178b81696c2
+          ref: 10806b8400640cda3039bcc91af3e6750b929d77
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.26'
-      - name: Verify canonical helper around the original cache-window attempt
+          go-version: ${{ matrix.go }}
+      - name: Verify prepared private file lifecycle and ACL invalidation
         shell: bash
-        env:
-          AGENT_NOTIFICATIONS_OBSERVATION_DIAGNOSTICS: '1'
         run: |
           mkdir -p observation-evidence
           git rev-parse HEAD > observation-evidence/source.txt
           go version > observation-evidence/go.txt
-          source scripts/windows-observation-profile.sh
-          trap observation_profile_stop EXIT
-          observation_profile_start geminievent
-          status=0
-          go test -race -cover -covermode=atomic -count=1 -run '^TestCacheWindowBoundAndBindingIsolation$' -trace=observation-evidence/geminievent.trace ./internal/geminievent || status=$?
-          observation_profile_stop
-          test -s observation-evidence/geminievent-os.etl
-          exit "$status"
-      - name: Verify the separate original consent-repetition instance
+          go test -race -v -run '^TestWindows(PreparedCacheWriteIsSingleUse|PrivateCacheRootRechecksACL|PrivateCacheRootPinsPathUntilClose|PrivateCacheCreationExcludesInheritedReaders)$' ./internal/installruntime
+      - name: Qualify shared cache transaction and preparation contracts
         shell: bash
         env:
           AGENT_NOTIFICATIONS_OBSERVATION_DIAGNOSTICS: '1'
-        run: |
-          source scripts/windows-observation-profile.sh
-          trap observation_profile_stop EXIT
-          observation_profile_start geminievent-repeat
-          status=0
-          go test -race -count=20 -run '^TestChannelConsentIndependentAndNoRetry$' -trace=observation-evidence/geminievent-repeat.trace ./internal/geminievent || status=$?
-          observation_profile_stop
-          test -s observation-evidence/geminievent-repeat-os.etl
-          exit "$status"
-      - name: Decode native OS event statistics
-        if: always()
-        shell: pwsh
-        run: |
-          $xperf = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/Windows Performance Toolkit/xperf.exe'
-          foreach ($phase in @('geminievent','geminievent-repeat')) {
-            if (Test-Path "observation-evidence/$phase-os.etl") {
-              & $xperf -i "observation-evidence/$phase-os.etl" -o "observation-evidence/$phase-tracestats.txt" -a tracestats -detail stack
-              if ($LASTEXITCODE -ne 0) { throw 'OS trace decoding failed' }
-            }
-          }
-      - name: Log recorder provider coverage
-        if: always()
-        shell: pwsh
-        run: |
-          wpr.exe -profiledetails GeneralProfile+FileIO+Minifilter
-          if ($LASTEXITCODE -ne 0) { throw 'Profile details unavailable' }
-          wpr.exe -exportprofile GeneralProfile+FileIO+Minifilter observation-evidence/general-profile.wprp
-          if ($LASTEXITCODE -ne 0) { throw 'Profile export unavailable' }
-          Get-Content observation-evidence/general-profile.wprp
-          foreach ($phase in @('geminievent','geminievent-repeat')) {
-            if (Test-Path "observation-evidence/$phase-tracestats.txt") {
-              Get-Content "observation-evidence/$phase-tracestats.txt"
-            }
-          }
-      - name: Retain exact helper proof
+        run: go test -p 1 -race -v -trace=observation-evidence/observation.trace ./internal/notification/observation
+      - name: Qualify original Gemini package and record successful preparations
+        shell: bash
+        env:
+          AGENT_NOTIFICATIONS_OBSERVATION_DIAGNOSTICS: '1'
+        run: go test -p 1 -race -v -cover -covermode=atomic -trace=observation-evidence/geminievent.trace ./internal/geminievent
+      - name: Retain unchanged strict channel consent repetition
+        shell: bash
+        env:
+          AGENT_NOTIFICATIONS_OBSERVATION_DIAGNOSTICS: '1'
+        run: go test -race -count=20 -run '^TestChannelConsentIndependentAndNoRetry$' -trace=observation-evidence/geminievent-repeat.trace ./internal/geminievent
+      - name: Retain original outcomes and source
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: windows-canonical-wpr-helper
+          name: windows-preflight-go-${{ matrix.go }}
           path: observation-evidence/
           retention-days: 14
           if-no-files-found: error
