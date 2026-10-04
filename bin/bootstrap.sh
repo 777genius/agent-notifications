@@ -344,7 +344,7 @@ channel_marketplace_add() {
     local ref="$1" declared overlay registry checkout_ref installed_root
     case "$ref" in
         release/platform-macos|release/platform-linux-windows) ;;
-        *) printf '%s\n' "$ref" | grep -Eq '^[0-9a-f]{40}$' || return 1 ;;
+        *) printf '%s\n' "$ref" | grep -Eq '^dist/platform-source/[0-9a-f]{40}$' || return 1 ;;
     esac
     config_preflight || return 1
     local installed
@@ -371,7 +371,13 @@ channel_marketplace_add() {
         else
             [ "$declared" = "$REPO" ] || { echo 'Custom marketplace retained.' >&2; return 1; }
             checkout_ref=$(git -C "$MARKETPLACE_DIR" symbolic-ref --quiet --short HEAD) || {
-                echo 'Pinned marketplace retained. Select a platform branch explicitly to migrate.' >&2; return 1;
+                local snapshot_tag checkout_commit
+                checkout_commit=$(git -C "$MARKETPLACE_DIR" rev-parse HEAD) || return 1
+                snapshot_tag=$(git -C "$MARKETPLACE_DIR" describe --exact-match --tags HEAD) || return 1
+                [ "$snapshot_tag" = "dist/platform-source/$checkout_commit" ] || {
+                    echo 'Pinned marketplace retained.' >&2; return 1;
+                }
+                checkout_ref="$BOOTSTRAP_SOURCE_REF"
             }
             case "$checkout_ref" in
                 main|release/platform-macos|release/platform-linux-windows) ;;
@@ -433,7 +439,7 @@ channel_install_plugin() (
         local existing relative
         for existing in "$backup"/bin/claude-notifications* "$backup"/bin/agent-notifications* \
             "$backup"/bin/sound-preview* "$backup"/bin/list-devices* "$backup"/bin/list-sounds* \
-            "$backup"/bin/ClaudeNotifier.app "$backup"/bin/AgentNotifications.app \
+            "$backup"/bin/ClaudeNotifier.app "$backup"/bin/AgentNotifications.app "$backup"/bin/terminal-notifier.app \
             "$backup"/skills/agent-notifications/SKILL.md "$backup"/skills/agent-notify/SKILL.md; do
             [ -e "$existing" ] || [ -L "$existing" ] || continue
             relative=${existing#"$backup"/}
@@ -462,7 +468,7 @@ setup_marketplace() {
     config_preflight || return 1
     local output
     if platform_channel_claude; then
-        channel_marketplace_add "$BOOTSTRAP_BUNDLE_COMMIT"
+        channel_marketplace_add "dist/platform-source/$BOOTSTRAP_BUNDLE_COMMIT"
         return $?
     fi
     # Try adding marketplace — if already added, update instead
@@ -1764,6 +1770,13 @@ stage_config_helper() {
     resolve_bootstrap_commit || return 1
     "$_CONFIG_HELPER" config path --json > "$_CONFIG_STAGE/path.json" || return 1
     fetch_bootstrap_file "$(select_bootstrap_install_script)" "$_CONFIG_STAGE/install.sh" || return 1
+
+}
+
+stage_channel_companions() {
+    local os arch name base companion
+    read -r os arch < <(bootstrap_release_os_arch) || return 1
+    base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}/download/$BOOTSTRAP_TAG"
     if [ "${BOOTSTRAP_RELEASE_CHANNEL:-}" = 1 ]; then
         # Required companions are verified before any marketplace/cache mutation.
         case "$os" in
@@ -1890,6 +1903,7 @@ report_config_init_failure() {
 }
 
 install_codex() {
+    stage_channel_companions || return 1
     local tag="$BOOTSTRAP_TAG" version="${BOOTSTRAP_TAG#v}"
     local source_base="${BOOTSTRAP_SOURCE_BASE_URL:-https://github.com/${REPO}/archive}"
     local release_base="${BOOTSTRAP_RELEASES_BASE_URL:-https://github.com/${REPO}/releases}"
@@ -1983,6 +1997,7 @@ notification_command_available() {
 }
 
 install_claude() {
+    stage_channel_companions || return 1
     setup_marketplace || return 1
     sync_marketplace_checkout || return 1
     install_plugin || return 1

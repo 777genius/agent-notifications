@@ -19,7 +19,9 @@ unsupported architectures and failed downloads stop selection before installatio
 Rerun the public install command once to adopt a channel. An ordinary Claude
 marketplace checkout on `main` is moved using Claude's native settings writer;
 custom repositories, branches and detached/pinned checkouts are retained.
-The initial installation uses the source SHA. Successful setup then records the
+The initial installation uses an immutable `dist/platform-source/SHA` tag and
+verifies the checkout against its source SHA. Claude marketplace refs accept
+branches/tags, so the tag provides an immutable snapshot without a moving ref. Successful setup then records the
 platform branch for subsequent Claude plugin updates. Standalone Codex copies a
 complete bundle; update it by rerunning setup. No new background updater is added.
 
@@ -44,7 +46,8 @@ than an installed Claude version is rejected.
    `ConsumerVersion` values. Review the exact commits and test installation in new
    isolated TEST homes on the affected platforms. Verify release checksums and
    source provenance; never combine main's older manifest with newer binaries.
-3. Publish the qualified platform branch heads. Source commits in the index must
+3. Publish the qualified platform branch heads and immutable
+   `dist/platform-source/SHA` tags at those exact commits. Never move these tags. Source commits in the index must
    refer to those reviewed immutable commits, not moving branch names.
 4. Update the complete index in one reviewed commit. Run the parser, loader,
    installer and cache-recovery tests. Deploy the loader pinned to that controller
