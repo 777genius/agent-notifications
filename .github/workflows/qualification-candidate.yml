@@ -4,103 +4,69 @@ on:
 permissions:
   contents: read
 jobs:
-  windows-create:
-    name: Paired private cache create Go ${{ matrix.go }}
+  windows-os-attribution:
     runs-on: windows-latest
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        go: ['1.25', '1.26']
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version: ${{ matrix.go }}
-      - name: Materialize isolated baseline and temporary-attribute candidate
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p evidence
-          git rev-parse HEAD > evidence/workflow-source.txt
-          go version > evidence/go.txt
-          git worktree add --detach "$RUNNER_TEMP/cache-baseline" HEAD
-          git worktree add --detach "$RUNNER_TEMP/cache-temporary" HEAD
-          python - <<'PYTHON'
-          import os
-          from pathlib import Path
-          p = Path(os.environ['RUNNER_TEMP']) / 'cache-temporary/internal/installruntime/path_handle_windows.go'
-          old = 'err = windows.NtCreateFile(&handle, access|windows.SYNCHRONIZE, &attrs, &status, nil, windows.FILE_ATTRIBUTE_NORMAL,'
-          new = 'fileAttributes := uint32(windows.FILE_ATTRIBUTE_NORMAL)\n\tif security != nil && disposition == windows.FILE_CREATE && options&windows.FILE_NON_DIRECTORY_FILE != 0 {\n\t\tfileAttributes = windows.FILE_ATTRIBUTE_TEMPORARY\n\t}\n\terr = windows.NtCreateFile(&handle, access|windows.SYNCHRONIZE, &attrs, &status, nil, fileAttributes,'
-          text = p.read_text()
-          assert text.count(old) == 1
-          p.write_text(text.replace(old, new))
-          PYTHON
-          git -C "$RUNNER_TEMP/cache-temporary" diff > evidence/temporary-attribute.patch
-      - name: Build fresh native test executables and verify security contracts
+          go-version: '1.26'
+      - name: Build original strict consumer test with native OS profile
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $evidence = Join-Path $PWD 'evidence'
-          foreach ($variant in @('baseline', 'temporary')) {
-            Push-Location (Join-Path $env:RUNNER_TEMP "cache-$variant")
-            go test '-race' '-count=1' './internal/installruntime' *> (Join-Path $evidence "$variant-security.log")
-            if ($LASTEXITCODE -ne 0) { throw "$variant security checks failed" }
-            go test '-c' '-race' '-cover' '-covermode=atomic' '-o' (Join-Path $evidence "$variant.test.exe") './internal/geminievent'
-            if ($LASTEXITCODE -ne 0) { throw "$variant test build failed" }
-            Pop-Location
-          }
-      - name: Preserve all strict paired results from fresh processes
+          New-Item -ItemType Directory evidence | Out-Null
+          git rev-parse HEAD > evidence/source.txt
+          go version > evidence/go.txt
+          go test '-c' '-race' '-cover' '-covermode=atomic' '-o' evidence/original.test.exe './internal/geminievent'
+          if ($LASTEXITCODE -ne 0) { throw 'test build failed' }
+          wpr -profiles *> evidence/wpr-profiles.txt
+          fltmc filters *> evidence/filter-inventory.txt
+          fltmc instances *> evidence/filter-instances.txt
+          Get-MpComputerStatus | Select-Object AMRunningMode,AntivirusEnabled,RealTimeProtectionEnabled,BehaviorMonitorEnabled,IoavProtectionEnabled | ConvertTo-Json > evidence/defender-state.json
+      - name: Retain OS evidence at the first original strict failure
         shell: pwsh
         env:
           AGENT_NOTIFICATIONS_OBSERVATION_DIAGNOSTICS: '1'
         run: |
-          $ErrorActionPreference = 'Stop'
+          $ErrorActionPreference = 'Continue'
           $evidence = Join-Path $PWD 'evidence'
           $failed = $false
-          $recording = $null
+          $started = $false
+          'round,pid,start_utc,end_utc,exit' | Set-Content evidence/status.csv
+          wpr -start GeneralProfile *> evidence/wpr-start.log
+          $started = $LASTEXITCODE -eq 0
           try {
-            if (Get-Command New-MpPerformanceRecording -ErrorAction SilentlyContinue) {
-              $recording = Start-Job -ArgumentList $evidence -ScriptBlock {
-                param($out)
-                New-MpPerformanceRecording -RecordTo (Join-Path $out 'defender.etl') -Seconds 60 *> (Join-Path $out 'defender-recording.log')
-              }
-            } else { 'Defender performance cmdlet unavailable' | Set-Content (Join-Path $evidence 'defender-recording.log') }
-          } catch { $_ | Out-String | Set-Content (Join-Path $evidence 'defender-recording.log') }
-          'round,variant,trace,exit' | Set-Content (Join-Path $evidence 'status.csv')
-          for ($round = 1; $round -le 10; $round++) {
-            $variants = if (($round % 2) -eq 1) { @('baseline','temporary') } else { @('temporary','baseline') }
-            foreach ($variant in $variants) {
-              $args = @('-test.v', '-test.run=^TestChannelConsentIndependentAndNoRetry$', '-test.count=20', '-test.timeout=60s')
-              $traced = $round -le 5
-              if ($traced) { $args += "-test.trace=$evidence/$variant-$round.trace" }
-              $oldPreference = $ErrorActionPreference
-              $ErrorActionPreference = 'Continue'
-              & (Join-Path $evidence "$variant.test.exe") @args *> (Join-Path $evidence "$variant-$round.log")
-              $code = $LASTEXITCODE
-              $ErrorActionPreference = $oldPreference
-              "$round,$variant,$traced,$code" | Add-Content (Join-Path $evidence 'status.csv')
-              Write-Host "round=$round variant=$variant trace=$traced exit=$code"
-              if ($code -ne 0) { $failed = $true }
+            for ($round = 1; $round -le 40; $round++) {
+              $start = [DateTime]::UtcNow.ToString('O')
+              $args = @('-test.v','-test.run=^TestChannelConsentIndependentAndNoRetry$','-test.count=20','-test.timeout=60s',"-test.trace=$evidence/original-$round.trace")
+              $process = Start-Process -FilePath "$evidence/original.test.exe" -ArgumentList $args -NoNewWindow -PassThru -RedirectStandardOutput "$evidence/original-$round.stdout.log" -RedirectStandardError "$evidence/original-$round.stderr.log"
+              $testPid = $process.Id
+              $process.WaitForExit()
+              $code = $process.ExitCode
+              $end = [DateTime]::UtcNow.ToString('O')
+              "$round,$testPid,$start,$end,$code" | Add-Content evidence/status.csv
+              Write-Host "round=$round pid=$testPid exit=$code"
+              if ($code -ne 0) { $failed = $true; break }
+            }
+          } finally {
+            if ($started) { wpr -stop "$evidence/original-os.etl" 'Original strict observation failure attribution' -skipPdbGen -compress *> evidence/wpr-stop.log }
+          }
+          $xperf = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/Windows Performance Toolkit/xperf.exe'
+          if (Test-Path $xperf) {
+            & $xperf -help processing *> evidence/xperf-actions.txt
+            if (Test-Path evidence/original-os.etl) {
+              & $xperf -i evidence/original-os.etl -o evidence/diskio.txt -a diskio -summary *> evidence/xperf-diskio.log
+              & $xperf -i evidence/original-os.etl -o evidence/cswitch.txt -a cswitch -summary *> evidence/xperf-cswitch.log
             }
           }
-          if ($recording) {
-            $null = Wait-Job $recording -Timeout 65
-            Receive-Job $recording *> (Join-Path $evidence 'defender-job.log')
-            if ($recording.State -eq 'Running') { Stop-Job $recording }
-            Remove-Job $recording
-          }
-          if (Test-Path (Join-Path $evidence 'defender.etl')) {
-            try {
-              Get-MpPerformanceReport -Path (Join-Path $evidence 'defender.etl') -TopScans 20 -TopFiles 20 -TopProcesses 20 -Raw | ConvertTo-Json -Depth 20 | Set-Content (Join-Path $evidence 'defender-report.json')
-            } catch { $_ | Out-String | Set-Content (Join-Path $evidence 'defender-report-error.log') }
-          }
-          if ($failed) { throw 'At least one original strict paired process failed. Inspect preserved status, logs and traces.' }
-      - name: Retain original paired evidence
+          if ($failed) { throw 'Original strict failure retained; inspect original process logs and matching OS/Go trace.' }
+      - name: Retain bounded original OS evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: windows-temporary-paired-go-${{ matrix.go }}
+          name: windows-original-os-attribution
           path: evidence/
           retention-days: 14
           if-no-files-found: error
