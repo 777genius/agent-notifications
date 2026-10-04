@@ -4,6 +4,8 @@ package portable
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -344,4 +346,27 @@ func testContext(t *testing.T) context.Context {
 	c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	t.Cleanup(cancel)
 	return c
+}
+
+// Regression: Cursor cannot produce its recorded key/command while unknown
+// integrations must continue to refuse registration.
+func TestCursorRegistration(t *testing.T) {
+	b, _, _ := fixture(t)
+	b.Integration = Cursor
+	key, c, raw, err := b.Registration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(raw)
+	if key != "portable:"+hex.EncodeToString(sum[:]) || c.Registration != string(raw) || c.RuntimeRoot != b.RuntimeRoot || len(c.Commands) != 1 || c.Commands[0] != primaryPath(b.RuntimeRoot, b.Primary) {
+		t.Fatal("Cursor registration identity differs")
+	}
+	decoded, err := decode(raw)
+	if err != nil || decoded != b {
+		t.Fatal("Cursor binding did not round trip", err)
+	}
+	b.Integration = Integration("unknown")
+	if _, _, _, err := b.Registration(); err != ErrInvalid {
+		t.Fatal("unknown integration admitted", err)
+	}
 }

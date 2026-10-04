@@ -93,6 +93,8 @@ type Request struct {
 	// RevokeCopilotVSCode is the exact false-only portable Local specialization.
 	// It skips delivery readiness, never written-file anchors, ownership or CAS.
 	RevokeCopilotVSCode bool
+	// RevokeCursor permits only the exact recorded portable Cursor false pair.
+	RevokeCursor bool
 	// PolicyOnly requires an already-managed runtime and existing kernel locks.
 	// It refuses recovery and asset/consumer mutations; setup cannot accidentally
 	// promote native or rewrite hooks from an unrelated pending transaction.
@@ -297,6 +299,9 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 		r.ExpectedGeneration, r.ExpectedPolicy = &generation, &policy
 	}
 
+	if r.RevokeCursor && !cursorRevokeOnly(r) {
+		return Ledger{}, fmt.Errorf("invalid Cursor channel revocation")
+	}
 	if r.RevokeCopilotVSCode && !copilotRevokeOnly(r) {
 		return Ledger{}, fmt.Errorf("invalid Copilot VS Code channel revocation")
 	}
@@ -323,9 +328,9 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 			return Ledger{}, err
 		}
 	}
-	// Only the already-validated exact Gemini false patch may use a recorded
+	// Only already-validated bounded channel revocations may use a recorded
 	// runtime name without resolving damaged assets. Compare it under both locks.
-	if filepath.IsAbs(r.RuntimeRoot) && !r.RevokeGemini && !r.RevokeCopilotVSCode {
+	if filepath.IsAbs(r.RuntimeRoot) && !r.RevokeGemini && !r.RevokeCopilotVSCode && !r.RevokeCursor {
 		r.RuntimeRoot, err = CanonicalPath(r.RuntimeRoot)
 		if err != nil {
 			return Ledger{}, err
@@ -482,7 +487,7 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 		return l, err
 	}
 
-	if l.Native != nil && !policyDisableOnly(r) && !r.RevokeOpenCode && !r.RevokeGemini && !r.RevokeCopilotVSCode {
+	if l.Native != nil && !policyDisableOnly(r) && !r.RevokeOpenCode && !r.RevokeGemini && !r.RevokeCopilotVSCode && !r.RevokeCursor {
 		if err := validateNativeRecord(l.Native); err != nil {
 			return l, err
 		}
@@ -509,15 +514,18 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 		!validRawPolicyRegistration(l, previous)) {
 		return l, fmt.Errorf("raw policy requires an existing origin-bound OpenCode registration")
 	}
-	if r.RevokeCopilotVSCode {
+	if r.RevokeCopilotVSCode || r.RevokeCursor {
 		// Structural ledger validity is required even when its delivery tree is damaged.
 		if err := validateNativeRecord(l.Native); err != nil {
 			return l, err
 		}
 		var binding struct{ ComponentID, ControlRoot string }
 		if json.Unmarshal([]byte(previous.Registration), &binding) != nil || binding.ComponentID != l.ID || binding.ControlRoot != r.ControlRoot {
-			return l, fmt.Errorf("local revocation binding/owner mismatch")
+			return l, fmt.Errorf("portable revocation binding/owner mismatch")
 		}
+	}
+	if r.RevokeCursor && (!registered || !reflect.DeepEqual(previous, r.Consumer) || !cursorPortableConsumer(r.ConsumerID, previous)) {
+		return l, fmt.Errorf("cursor revocation requires its exact recorded portable consumer")
 	}
 	if r.RevokeCopilotVSCode && (!registered || !reflect.DeepEqual(previous, r.Consumer) || !localPortableConsumer(r.ConsumerID, previous)) {
 		return l, fmt.Errorf("local revocation requires its exact recorded portable consumer")
@@ -608,7 +616,7 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 		}
 	}
 	for path, want := range l.Files {
-		if r.RevokeOpenCode || r.RevokeGemini || r.RevokeCopilotVSCode {
+		if r.RevokeOpenCode || r.RevokeGemini || r.RevokeCopilotVSCode || r.RevokeCursor {
 			break
 		}
 		// Claude owns the previous versioned cache: it may prune files or
@@ -899,6 +907,11 @@ func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
 		return l, err
 	}
 	tx := transaction{Schema: transactionSchemaFor(next, r), Before: l, After: next, Files: files, Native: native, ConfigPaths: r.ConfigPaths, OpenCodeInit: init, OpenCodePurge: purge}
+	// Global disable is also reconstructible, but an explicit Cursor request
+	// must preserve the ledger's global intent even when its leaves were already false.
+	if r.RevokeCursor && (tx.Before.Enabled != tx.After.Enabled || !boundedPolicyRevocation(root, tx)) {
+		return l, fmt.Errorf("cursor revocation journal cannot reconstruct exact false-only operation")
+	}
 	if !boundedPolicyRevocation(root, tx) {
 		tx.After, err = refreshLedgerIdentities(next)
 		if err != nil {
@@ -1131,7 +1144,7 @@ func boundedPolicyRevocation(root string, tx transaction) bool {
 	}
 	// Global disable keeps every other policy member unchanged. Channel
 	// revocations keep global intent and require that consumer's registration.
-	patches := []string{"", "geminiNotifications", "openCodeNotifications", "copilot-native", "copilot-manual", "copilot-all"}
+	patches := []string{"", "geminiNotifications", "openCodeNotifications", "copilot-native", "copilot-manual", "copilot-all", "cursorNotifications"}
 	for _, channel := range patches {
 		if channel == "" && newPolicy.Enabled || channel != "" && (before.Enabled != oldPolicy.Enabled || newPolicy.Enabled != oldPolicy.Enabled || before.PendingMutation != nil) {
 			continue
@@ -1139,7 +1152,7 @@ func boundedPolicyRevocation(root string, tx transaction) bool {
 		local := channel == "copilot-native" || channel == "copilot-manual" || channel == "copilot-all"
 		expected := before
 		// Preserve the exact monotonic migration used by the admitted request.
-		applyReservationProtocol(&expected, Request{RevokeCopilotVSCode: local}, before)
+		applyReservationProtocol(&expected, Request{RevokeCopilotVSCode: local, RevokeCursor: channel == "cursorNotifications"}, before)
 		expected.Generation, expected.PolicyGeneration, expected.Enabled = after.Generation, after.PolicyGeneration, after.Enabled
 		if !reflect.DeepEqual(expected, after) {
 			continue
@@ -1149,7 +1162,7 @@ func boundedPolicyRevocation(root string, tx transaction) bool {
 			if !filepath.IsAbs(consumer.RuntimeRoot) || filepath.Clean(consumer.RuntimeRoot) != consumer.RuntimeRoot {
 				continue
 			}
-			if local && before.Owner == "existing-installer" && localPortableConsumer(id, consumer) {
+			if before.Owner == "existing-installer" && (local && localPortableConsumer(id, consumer) || channel == "cursorNotifications" && cursorPortableConsumer(id, consumer)) {
 				var binding struct{ ComponentID, ControlRoot string }
 				if json.Unmarshal([]byte(consumer.Registration), &binding) == nil && binding.ComponentID == before.ID {
 					// Admission requires the exact recorded spelling. A durable
