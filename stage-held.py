@@ -2,7 +2,7 @@
 import hashlib,pathlib,shutil,stat,os
 P=pathlib.Path;source=P(__file__).resolve().with_name('held-native-driver.py');out=P.cwd()/'.task-tools/artifacts/held-native-driver.py'
 assert not source.is_symlink()and stat.S_ISREG(source.lstat().st_mode)and 0<source.stat().st_size<=2*1024*1024
-raw=source.read_bytes();assert hashlib.sha256(raw).hexdigest()=='46d455cbbc70549971eaf760bd325ed79902b6ea1ab2bc5cd8dcfc79acb20f1c'
+raw=source.read_bytes();assert hashlib.sha256(raw).hexdigest()=='8dc41bd680352c206b21d44d55371729f822a128fc69b705e3d5d1291a77ed58'
 assert not out.exists()and not any(p.is_symlink()for p in out.parents)
 out.parent.mkdir(parents=True,exist_ok=True);out.write_bytes(raw);out.chmod(0o444)
 
@@ -20,7 +20,7 @@ dest.write_bytes(raw);dest.chmod(0o444)
 
 portable=P(__file__).resolve().with_name('held-portable.py');dest=P.cwd()/'.task-tools/artifacts/held-portable.py'
 assert not portable.is_symlink()and stat.S_ISREG(portable.lstat().st_mode)and 0<portable.stat().st_size<=2*1024*1024
-raw=portable.read_bytes();assert hashlib.sha256(raw).hexdigest()=='93bdb3a062be81444e65ea809642072bab0d2f9fafa06a827a253448de44a909'
+raw=portable.read_bytes();assert hashlib.sha256(raw).hexdigest()=='53b609b6954bbae82f4fc8c6e2b71dd54d2229b60bfa962fc880e63e1753b0bd'
 assert not dest.exists()and not any(p.is_symlink()for p in dest.parents)
 dest.write_bytes(raw);dest.chmod(0o444)
 

@@ -1499,6 +1499,20 @@ def qualify(args, report):
             report['privateTraceSHA256'] = digest(root/'native-private.jsonl')
 
 
+def safe_failure_observation(snapshot):
+    predicates = {'protocolIsOne', 'kindIsEvent', 'childClosed', 'exitZero', 'forcedFalse',
+                  'ipcOK', 'receiptStatusSubmitted', 'desktopSubmitted', 'webhookSubmitted'}
+    limits = {'submitted': 33, 'invalidated': 2, 'logRoles': 3, 'logBytes': 3 * (8 * 1024 * 1024 + 1)}
+    if type(snapshot) is not dict or set(snapshot) != {'schema', 'firstRejected', 'counts'} or type(snapshot['schema']) is not int or snapshot['schema'] != 1:
+        return None
+    first, counts = snapshot['firstRejected'], snapshot['counts']
+    if first is not None and (type(first) is not dict or set(first) != predicates or any(type(v) is not bool for v in first.values())):
+        return None
+    if type(counts) is not dict or set(counts) != set(limits) or any(type(counts[k]) is not int or not 0 <= counts[k] <= limit for k, limit in limits.items()):
+        return None
+    return {'schema': 1, 'firstRejected': None if first is None else dict(first), 'counts': dict(counts)}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('binary','archive','manifest','report'):
@@ -1528,6 +1542,11 @@ def main():
         if PORTABLE is not None:
             reason = PORTABLE.failure_code(e)
             if reason is not None: report['failureReason'] = reason
+            try:
+                snapshot = safe_failure_observation(PORTABLE.failure_snapshot())
+                if snapshot is not None: report['publicDiagnosticFailure'] = snapshot
+            except Exception:
+                pass  # Telemetry never replaces the existing primary failure.
             if hasattr(PORTABLE, 'command_diagnostic'):
                 report['prebusinessCommandFailure'] = dict(PORTABLE.command_diagnostic)
             if hasattr(PORTABLE, 'windows_programs_probe'):

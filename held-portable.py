@@ -29,6 +29,21 @@ def failure_code(error):
     return error.args[0] if type(error) is ValueError and len(error.args) == 1 and isinstance(error.args[0], str) and error.args[0] in codes else None
 
 
+def reject_diagnostic(value):
+    receipt = value.get('receipt')
+    receipt = receipt if isinstance(receipt, dict) else {}
+    error = ValueError('diagnostic_actual_closed_dual_submission_required')
+    error.predicates = {
+        'protocolIsOne': type(value['protocol']) is int and value['protocol'] == 1,
+        'kindIsEvent': value['kind'] == 'event', 'childClosed': value['childClosure'] == 'closed',
+        'exitZero': type(value['exitCode']) is int and value['exitCode'] == 0,
+        'forcedFalse': value['forcedKill'] is False, 'ipcOK': value['ipc'] == 'ok',
+        'receiptStatusSubmitted': receipt.get('status') == 'submitted',
+        'desktopSubmitted': receipt.get('desktop') == 'submitted',
+        'webhookSubmitted': receipt.get('webhook') == 'submitted'}
+    raise error
+
+
 def diagnostic(line):
     # Native logger prefixes are harmless; the content-free record is closed.
     if PREFIX not in line:
@@ -49,14 +64,14 @@ def diagnostic(line):
             value['kind'] != 'event' or value['childClosure'] != 'closed' or
             type(value['exitCode']) is not int or value['exitCode'] != 0 or
             value['forcedKill'] is not False):
-        raise ValueError('diagnostic_actual_closed_dual_submission_required')
+        reject_diagnostic(value)
     if invalidated:
         return value  # Explicit non-success, never positive submission authority.
     receipt = value['receipt']
     if (value['ipc'] != 'ok' or not isinstance(receipt, dict) or
             set(receipt) != {'status', 'desktop', 'webhook'} or
             any(receipt[key] != 'submitted' for key in receipt)):
-        raise ValueError('diagnostic_actual_closed_dual_submission_required')
+        reject_diagnostic(value)
     return value
 
 
@@ -154,6 +169,7 @@ class Observation:
         require(args.business_proof is not None and args.business_proof_sha256 is not None, 'sealed_business_prerequisites_required')
         self.cursors, self.partial, self.rows = {}, {}, []
         self.closedDenied = []
+        self.firstRejected = None
         self.proof = pathlib.Path(args.business_proof).absolute()
         require(self.proof.is_file() and not self.proof.is_symlink() and
                 digest(self.proof) == args.business_proof_sha256, 'sealed_business_prerequisites_missing')
@@ -223,6 +239,11 @@ class Observation:
         config['plugins'] = ['-agent-notifications',
                              {'package': str(module.absolute()), 'options': {'diagnostics': True}}]
 
+    def failure_snapshot(self):
+        return {'schema': 1, 'firstRejected': self.firstRejected,
+                'counts': {'submitted': len(self.rows), 'invalidated': len(self.closedDenied),
+                           'logRoles': len(self.cursors), 'logBytes': sum(self.cursors.values())}}
+
     def update(self, root, closed=False):
         for name in ('host', 'updated-host', 'reinstalled-host'):
             path = root / (name + '-private.log')
@@ -244,7 +265,12 @@ class Observation:
                     line = rawline.decode('utf-8', errors='strict')
                 except UnicodeDecodeError:
                     raise ValueError('diagnostic_utf8_decode_failed') from None
-                row = diagnostic(line)
+                try:
+                    row = diagnostic(line)
+                except ValueError as error:
+                    if self.firstRejected is None and hasattr(error, 'predicates'):
+                        self.firstRejected = error.predicates
+                    raise
                 if row is not None:
                     if row['ipc'] == 'invalidated':
                         self.require(self.args.version == '2.0.21', 'closed_denied_native_generation_mismatch')

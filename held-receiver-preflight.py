@@ -1,5 +1,5 @@
 """TEST-only Linux ARM receiver build/stage. No receiver execution or product VCS claim."""
-import argparse,hashlib,json,os,pathlib,re,shutil,signal,stat,struct,subprocess,time
+import argparse,hashlib,importlib.util,json,os,pathlib,re,shutil,signal,stat,struct,subprocess,time
 P=pathlib.Path
 SOURCE_COMMIT='9b964362482af82656deddf8122ba7e821f962c6'
 SOURCE_SHA='e5d5d1d699c2fbd0e3024ae0b2ed5772d19b36238952fc6b40f84d8dde2e5e77'
@@ -50,12 +50,35 @@ def build(a):
  need(subprocess.check_output(['git','-C',str(repo),'rev-parse','HEAD'],text=True,timeout=10).strip()==SOURCE_COMMIT and source.read_bytes()==before and sha(go)==tool_before and all(sha(root/n)==h for n,h in mod_before.items())and all(sha(cache/n)==h for n,h in CACHE.items()),'source_tools_module_unchanged')
  put(root/'result.json',{'status':'ACTUAL_TEST_RECEIVER_BUILD_PASS','sourceCommit':SOURCE_COMMIT,'sourceSHA256':SOURCE_SHA,'sourceAndToolsUnchanged':True,'goSHA256':tool_before,'goVersion':version.decode().strip(),'module':{'path':'github.com/godbus/dbus/v5','version':'v5.2.2','sum':SUM,'goModSum':MODSUM},'cacheSHA256':CACHE,'commands':commands,'binarySHA256':binary_sha,'buildInfoSHA256':sha(root/'buildinfo.txt'),'productVCSClaimed':False,'nativeExecuted':False,'providerRequests':0,'qualificationGranted':False})
 
-def stage(a):
- repo=P.cwd().resolve();root=a.input.absolute();need(os.uname().sysname=='Linux'and os.uname().machine in ('aarch64','arm64'),'actual_Linux_ARM_stage');need({p.name for p in root.iterdir()}=={'receiver','result.json','buildinfo.txt'},'sole_three_receiver_artifact_files')
+def checked_receiver_artifact(root):
+ need(os.uname().sysname=='Linux'and os.uname().machine in ('aarch64','arm64'),'actual_Linux_ARM_stage');need({p.name for p in root.iterdir()}=={'receiver','result.json','buildinfo.txt'},'sole_three_receiver_artifact_files')
  result=json.loads(regular(root/'result.json',32768).read_text());need(result['status']=='ACTUAL_TEST_RECEIVER_BUILD_PASS'and result['sourceCommit']==SOURCE_COMMIT and result['sourceSHA256']==SOURCE_SHA and result['sourceAndToolsUnchanged'] is True and result['goVersion']=='go version go1.27.1 linux/arm64'and result['module']=={'path':'github.com/godbus/dbus/v5','version':'v5.2.2','sum':SUM,'goModSum':MODSUM}and result['cacheSHA256']==CACHE and result['productVCSClaimed'] is False and result['nativeExecuted'] is False and result['providerRequests']==0 and result['qualificationGranted'] is False,'genuine_separate_TEST_receiver_build')
  need([c['label']for c in result['commands']]==['go-version','public-module','build','buildinfo']and all(c['exitCode']==0 and c['forcedKillUsed'] is False and c['naturalWait'] is True and c['pipeEOF'] is True and c['processGroupAbsent'] is True for c in result['commands']),'actual_build_commands_closed')
  need(elf(root/'receiver')==result['binarySHA256']and sha(regular(root/'buildinfo.txt',16384))==result['buildInfoSHA256'],'actual_artifact_bytes')
+ return result
+
+def stage(a):
+ repo=P.cwd().resolve();root=a.input.absolute();result=checked_receiver_artifact(root)
  dest=repo/'.task-tools/artifacts/TEST-linux-arm64-receiver';need(not dest.exists()and not any(p.is_symlink()for p in dest.parents),'fresh_receiver_stage');dest.mkdir(mode=0o700);shutil.copyfile(root/'receiver',dest/'receiver');(dest/'receiver').chmod(0o555);shutil.copyfile(root/'result.json',dest/'result.json');(dest/'result.json').chmod(0o444)
  need(sha(dest/'receiver')==result['binarySHA256'],'actual_staged_receiver_hash');put(repo/'.task-tools/artifacts/receiver-record.json',{'path':str((dest/'receiver').relative_to(repo)),'sha256':result['binarySHA256']})
+
+def verify(a):
+ repo=P.cwd().resolve();root=a.input.absolute();result=checked_receiver_artifact(root)
+ ci=repo/'scripts/testdata/opencode-native-e2e/ci_inputs.py';harness=repo/'scripts/opencode-native-e2e.py'
+ for p,key in ((ci,'TEST_CI_INPUTS_SHA256'),(harness,'TEST_HARNESS_SHA256')):need(sha(regular(p,256*1024))==os.environ[key],'exact_original_public_preflight_source')
+ spec=importlib.util.spec_from_file_location('original_receiver_ci_inputs',ci);inputs=importlib.util.module_from_spec(spec);spec.loader.exec_module(inputs);r=inputs.r
+ manifest=repo/os.environ['AN_MANIFEST'];manifest_sha=os.environ['AN_MANIFEST_SHA256']
+ m,cell,files,binary,archive=r.load_manifest(manifest,os.environ['AN_OS'],os.environ['AN_ARCH'],os.environ['AN_VERSION'],manifest_sha)
+ r.require((cell['os'],cell['arch'])==('linux','arm64'),'exact_Linux_ARM_receiver_preflight')
+ tracked=subprocess.check_output(['git','ls-files','--',str(manifest.resolve().relative_to(repo))],text=True);r.require(not tracked,'external_parent_manifest_required')
+ checkout=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip();dirty=subprocess.check_output(['git','status','--porcelain','--untracked-files=no'],text=True)
+ dirty+=subprocess.check_output(['git','ls-files','--others','--exclude-standard','--','.',':(exclude).task-tools/artifacts'],text=True)
+ build=subprocess.check_output(['go','version','-m',str(binary)],text=True);r.verify_source_binding(m,checkout,build,dirty);r.require(checkout==os.environ['TEST_PRODUCT_HEAD'],'actual_product_checkout')
+ record=inputs.artifacts/'receiver-record.json';before=record.read_bytes();need(stat.S_IMODE(regular(record,4096).stat().st_mode)==0o444,'readonly_existing_receiver_record');data=json.loads(before)
+ staged=repo/'.task-tools/artifacts/TEST-linux-arm64-receiver';expected={'path':str((staged/'receiver').relative_to(repo)),'sha256':result['binarySHA256']};need(data==expected,'exact_current_staged_receiver_record')
+ receiver=r.checked_file(repo,data);need(receiver==staged/'receiver' and elf(receiver)==result['binarySHA256'] and stat.S_IMODE(receiver.stat().st_mode)==0o555,'actual_staged_current_ARM_receiver')
+ need(sha(regular(staged/'result.json',32768))==sha(root/'result.json') and record.read_bytes()==before,'actual_build_receipt_and_record_unchanged')
+ print(json.dumps({'status':'existing_public_and_current_receiver_preflight_passed','productCommit':checkout,'receiverSHA256':result['binarySHA256'],'receiverRecordUnchanged':True,'receiverRebuilt':False,'nativeExecuted':False,'providerRequests':0,'qualificationGranted':False}))
+
 if __name__=='__main__':
- p=argparse.ArgumentParser();sub=p.add_subparsers(dest='mode',required=True);b=sub.add_parser('build');b.add_argument('--source',type=P,required=True);b.add_argument('--output',type=P,required=True);s=sub.add_parser('stage');s.add_argument('--input',type=P,required=True);a=p.parse_args();build(a)if a.mode=='build'else stage(a)
+ p=argparse.ArgumentParser();sub=p.add_subparsers(dest='mode',required=True);b=sub.add_parser('build');b.add_argument('--source',type=P,required=True);b.add_argument('--output',type=P,required=True);s=sub.add_parser('stage');s.add_argument('--input',type=P,required=True);v=sub.add_parser('verify');v.add_argument('--input',type=P,required=True);a=p.parse_args();{'build':build,'stage':stage,'verify':verify}[a.mode](a)

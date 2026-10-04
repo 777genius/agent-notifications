@@ -43,7 +43,7 @@ jobs:
       - name: Compile one genuine current TEST receiver, no native execution
         working-directory: receiver-source
         run: |
-          python -c 'import hashlib,pathlib; assert hashlib.sha256(pathlib.Path("../transport/held-receiver-preflight.py").read_bytes()).hexdigest()=="c84305d8bc1e6256b1dc64ad5e6893ae69889aaa92709e9929d192507742b392"'
+          python -c 'import hashlib,pathlib; assert hashlib.sha256(pathlib.Path("../transport/held-receiver-preflight.py").read_bytes()).hexdigest()=="9495a29fc407e9a49f6e5a7bc6825c4739434f70b9ea6ba7884b9207a776cba1"'
           python -B ../transport/held-receiver-preflight.py build --source scripts/testdata/opencode-native-e2e/receiver.go --output .task-tools/artifacts/TEST-linux-arm64-receiver-build
       - uses: actions/upload-artifact@v7
         with:
@@ -141,14 +141,20 @@ jobs:
         if: matrix.target.platform == 'linux'
         shell: bash
         run: |
-          python -c 'import hashlib,pathlib; assert hashlib.sha256(pathlib.Path("../transport/held-receiver-preflight.py").read_bytes()).hexdigest()=="c84305d8bc1e6256b1dc64ad5e6893ae69889aaa92709e9929d192507742b392"'
+          python -c 'import hashlib,pathlib; assert hashlib.sha256(pathlib.Path("../transport/held-receiver-preflight.py").read_bytes()).hexdigest()=="9495a29fc407e9a49f6e5a7bc6825c4739434f70b9ea6ba7884b9207a776cba1"'
           python -B ../transport/held-receiver-preflight.py stage --input ../downloaded-receiver
       - name: Verify exact source, clean build and bundle/SDK bytes before any host
         shell: bash
         env:
           AN_MANIFEST: ${{ steps.parent.outputs.manifest }}
           AN_MANIFEST_SHA256: ${{ steps.parent.outputs.sha256 }}
-        run: python -B scripts/testdata/opencode-native-e2e/ci_inputs.py
+        run: |
+          if [ "$AN_OS" = linux ]; then
+            python -c 'import hashlib,pathlib; assert hashlib.sha256(pathlib.Path("../transport/held-receiver-preflight.py").read_bytes()).hexdigest()=="9495a29fc407e9a49f6e5a7bc6825c4739434f70b9ea6ba7884b9207a776cba1"'
+            python -B ../transport/held-receiver-preflight.py verify --input ../downloaded-receiver
+          else
+            python -B scripts/testdata/opencode-native-e2e/ci_inputs.py
+          fi
       - name: Preserve managed native and Windows path protocol checks
         shell: bash
         run: |
@@ -180,9 +186,9 @@ jobs:
           export AN_SUITE=business
           if [ "$AN_OS/$AN_ARCH" = linux/amd64 ]; then export AN_SUITE=full; fi
           if [ "$AN_OS" = linux ]; then
-            sudo --preserve-env=PATH,AN_MANIFEST,AN_MANIFEST_SHA256,AN_OS,AN_ARCH,AN_VERSION,AN_SUITE,TEST_HARNESS_SHA256,TEST_CI_INPUTS_SHA256,TEST_PRODUCT_HEAD unshare --net -- bash -c 'ip link set lo up; python -B ../transport/held-native-adapter.py --held-source .task-tools/artifacts/held-native-driver.py --held-sha256 46d455cbbc70549971eaf760bd325ed79902b6ea1ab2bc5cd8dcfc79acb20f1c --held-permission-source .task-tools/artifacts/held-portable_permission.py --held-permission-sha256 f499590b9c8c3bfee37156633bf8a5a36024be208b9c26addfd70cbd000874cd --held-provider-source .task-tools/artifacts/held-provider.py --held-provider-sha256 57633468d4187d44b65abd245ad29d49a380619fe1e61049a1612272cad80e49 --held-portable-source .task-tools/artifacts/held-portable.py --held-portable-sha256 93bdb3a062be81444e65ea809642072bab0d2f9fafa06a827a253448de44a909'
+            sudo --preserve-env=PATH,AN_MANIFEST,AN_MANIFEST_SHA256,AN_OS,AN_ARCH,AN_VERSION,AN_SUITE,TEST_HARNESS_SHA256,TEST_CI_INPUTS_SHA256,TEST_PRODUCT_HEAD unshare --net -- bash -c 'ip link set lo up; python -B ../transport/held-native-adapter.py --held-source .task-tools/artifacts/held-native-driver.py --held-sha256 8dc41bd680352c206b21d44d55371729f822a128fc69b705e3d5d1291a77ed58 --held-permission-source .task-tools/artifacts/held-portable_permission.py --held-permission-sha256 f499590b9c8c3bfee37156633bf8a5a36024be208b9c26addfd70cbd000874cd --held-provider-source .task-tools/artifacts/held-provider.py --held-provider-sha256 57633468d4187d44b65abd245ad29d49a380619fe1e61049a1612272cad80e49 --held-portable-source .task-tools/artifacts/held-portable.py --held-portable-sha256 53b609b6954bbae82f4fc8c6e2b71dd54d2229b60bfa962fc880e63e1753b0bd'
           else
-            python -B ../transport/held-native-adapter.py --held-source .task-tools/artifacts/held-native-driver.py --held-sha256 46d455cbbc70549971eaf760bd325ed79902b6ea1ab2bc5cd8dcfc79acb20f1c --held-permission-source .task-tools/artifacts/held-portable_permission.py --held-permission-sha256 f499590b9c8c3bfee37156633bf8a5a36024be208b9c26addfd70cbd000874cd --held-provider-source .task-tools/artifacts/held-provider.py --held-provider-sha256 57633468d4187d44b65abd245ad29d49a380619fe1e61049a1612272cad80e49 --held-portable-source .task-tools/artifacts/held-portable.py --held-portable-sha256 93bdb3a062be81444e65ea809642072bab0d2f9fafa06a827a253448de44a909
+            python -B ../transport/held-native-adapter.py --held-source .task-tools/artifacts/held-native-driver.py --held-sha256 8dc41bd680352c206b21d44d55371729f822a128fc69b705e3d5d1291a77ed58 --held-permission-source .task-tools/artifacts/held-portable_permission.py --held-permission-sha256 f499590b9c8c3bfee37156633bf8a5a36024be208b9c26addfd70cbd000874cd --held-provider-source .task-tools/artifacts/held-provider.py --held-provider-sha256 57633468d4187d44b65abd245ad29d49a380619fe1e61049a1612272cad80e49 --held-portable-source .task-tools/artifacts/held-portable.py --held-portable-sha256 53b609b6954bbae82f4fc8c6e2b71dd54d2229b60bfa962fc880e63e1753b0bd
           fi
       - name: Make only two SAFE public receipts readable for artifact upload
         if: always()
