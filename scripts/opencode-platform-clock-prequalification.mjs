@@ -231,7 +231,7 @@ async function execute(rootInput) {
     let refused = false;
     try { clock.sample(); } catch (e) { refused = e instanceof TypeError && e.message === 'clock_unavailable'; }
     need(refused, 'actual_dispose_is_sticky');
-    image.verify(); image.close();
+    image.verify();
     budgetCheck(performance.now(), operationStart, samples, 0);
     const evidence = { kind: 'disposed', status: 'module_prequalification_observed', actualModuleBound: true,
       rounds: budgets.rounds, samples, comparisons, datePredicates, disposeCalls: 2,

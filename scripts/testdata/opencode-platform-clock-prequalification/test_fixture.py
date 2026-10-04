@@ -31,6 +31,32 @@ class PureVectors(unittest.TestCase):
         guard = patch.object(H.subprocess, 'Popen', side_effect=AssertionError('pure_test_spawn_refused'))
         guard.start(); self.addCleanup(guard.stop)
 
+    def test_handle_metadata_differences_are_private_and_do_not_assert_ownership(self):
+        def snapshot(rows):
+            return {'status': 'metadata_observed', 'countBefore': len(rows), 'countAfter': len(rows),
+                    'countBracketAgrees': True, 'witnessHandlesClosed': True, 'entries': rows}
+        base = snapshot([{'handle': 101, 'typeName': 'File'}])
+        created = snapshot(base['entries'] + [{'handle': 202, 'typeName': 'File'},
+                                              {'handle': 303, 'typeName': 'Event'}])
+        helper = snapshot(created['entries'] + [{'handle': 404, 'typeName': 'Thread',
+                           'thread': {'pid': 901, 'tid': 902, 'startAddress': 987654}}])
+        disposed = snapshot([base['entries'][0], helper['entries'][-1]])
+        summary = H.safe_handle_metadata(disposed, base, created, helper)
+        self.assertEqual(summary['newSincePostImportTypes'], {'Thread': 1})
+        self.assertEqual(summary['removedSincePreviousTypes'], {'File': 1, 'Event': 1})
+        self.assertEqual(summary['samplerCreationNewIdsNowAbsentTypes'], {'File': 1, 'Event': 1})
+        self.assertTrue(summary['matchingNumericIdsMayBeReused'])
+        for private in ('handle', 'thread', 'pid', 'tid', 'startAddress', '987654'):
+            self.assertNotIn(private, json.dumps(summary))
+        reused = snapshot([{'handle': 101, 'typeName': 'Thread'}])
+        reused_summary = H.safe_handle_metadata(reused, base)
+        self.assertEqual(reused_summary['newSincePostImportTypes'], {})
+        self.assertEqual(reused_summary['changedMatchingIdMetadata'], 1)
+        self.assertIsNone(H.safe_handle_metadata(disposed)['newSincePostImportTypes'])
+        unavailable = {'status': 'api_unavailable', 'witnessHandlesClosed': True, 'entries': []}
+        self.assertEqual(H.safe_handle_metadata(unavailable),
+                         {'status': 'api_unavailable', 'witnessHandlesClosed': True})
+
     def test_sampler_resource_boundary_keeps_persistent_growth_fail_closed(self):
         # Independent lifecycle counts; no native resource read or child spawn.
         H.require_sampler_nonincrease('windows', 80, 95, 95)
