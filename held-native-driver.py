@@ -96,6 +96,36 @@ PREBUSINESS_COMMAND_STAGES = frozenset((
     'initial_installer_install'))
 
 
+def seal_installer_stderr(raw, *, cwd, env):
+    # Post-failure TEST diagnostic only. The key is public; no plaintext fallback.
+    helper = REPO / '.task-tools/artifacts/held-installer-stderr-encrypt.mts'
+    node = pathlib.Path(os.environ.get('TEST_INSTALLER_DIAGNOSTIC_NODE', ''))
+    try:
+        require(node.is_absolute() and node.is_file() and not any(p.is_symlink() for p in (node, *node.parents)), 'diagnostic_node_binding')
+        require(helper.is_file() and not any(p.is_symlink() for p in (helper, *helper.parents)) and
+                0 < helper.stat().st_size <= 16384 and digest(helper) == '685f1d86232e98a2ad7222f13921eec2bd723990754ed4b610b091e1f0abdf40', 'diagnostic_helper_binding')
+        node_hash = digest(node)
+        sealed = subprocess.run([str(node), '--no-warnings', str(helper)], cwd=cwd, env=env,
+                                input=raw[:190], capture_output=True, timeout=5)
+        require(sealed.returncode == 0 and not sealed.stderr and 0 < len(sealed.stdout) <= 2048 and
+                digest(node) == node_hash and digest(helper) == '685f1d86232e98a2ad7222f13921eec2bd723990754ed4b610b091e1f0abdf40', 'diagnostic_result_rejected')
+        record = json.loads(sealed.stdout)
+        require(isinstance(record, dict) and set(record) == {'schema', 'keyID', 'publicKeySHA256', 'plaintextPrefixBytes', 'ciphertextBase64'} and
+                type(record['schema']) is int and record['schema'] == 1 and
+                record['keyID'] == 'TEST-AN-Windows-installer-sealed-failure-key-r1' and
+                record['publicKeySHA256'] == '686ad7bb936635572301fa3c03c23706b7a7de225068330a8258b2b0f4664acf' and
+                type(record['plaintextPrefixBytes']) is int and record['plaintextPrefixBytes'] == min(len(raw), 190), 'diagnostic_record_rejected')
+        ciphertext = base64.b64decode(record['ciphertextBase64'], validate=True)
+        require(len(ciphertext) == 256 and base64.b64encode(ciphertext).decode('ascii') == record['ciphertextBase64'], 'diagnostic_ciphertext_rejected')
+        return dict(record, status='sealed', helperExitCode=0, helperReaped=True, forced=False,
+                    plaintextPrefixTruncated=len(raw) > 190, helperSourceSHA256='685f1d86232e98a2ad7222f13921eec2bd723990754ed4b610b091e1f0abdf40', nodeBinarySHA256=node_hash)
+    except subprocess.TimeoutExpired:
+        # subprocess.run kills and waits for this TEST helper before raising.
+        return {'status': 'unavailable', 'reason': 'helper_timeout', 'forced': True, 'helperReaped': True}
+    except Exception:
+        return {'status': 'unavailable', 'reason': 'helper_not_started_or_result_rejected', 'closure': 'unproved'}
+
+
 def run(args, *, cwd, env, timeout=30, input="", diagnostic_stage=None):
     require(diagnostic_stage is None or diagnostic_stage in PREBUSINESS_COMMAND_STAGES,
             'invalid_command_diagnostic_stage')
@@ -106,6 +136,8 @@ def run(args, *, cwd, env, timeout=30, input="", diagnostic_stage=None):
         PORTABLE.command_diagnostic = {'stage': diagnostic_stage, 'exitCode': result.returncode,
                                       'stderrPrefixBytes': len(prefix), 'stderrPrefixSHA256': hashlib.sha256(prefix).hexdigest(),
                                       'stderrTruncated': len(result.stderr) > len(prefix)}
+        if diagnostic_stage == 'initial_installer_install' and sys.platform == 'win32':
+            PORTABLE.command_diagnostic['sealedStderr'] = seal_installer_stderr(result.stderr, cwd=cwd, env=env)
     require(result.returncode == 0, "candidate_command_failed")
     # Match the former text=True UTF-8 replacement/universal-newline result exactly.
     # Raw native stderr/password/policy never enters public reports.
