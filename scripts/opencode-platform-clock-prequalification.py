@@ -653,6 +653,27 @@ def pss_type_label(object_type):
     return ('unknown', 'Process', 'Thread', 'Mutant', 'Event', 'Section', 'Semaphore')[object_type]
 
 
+def pss_type_name_diagnostic(raw, pointer_present, length, object_type):
+    # Closed reasons from the existing bounded read; never export decoded text.
+    fallback = pss_type_label(object_type); name = None
+    reason = ('pointerAbsent' if not pointer_present else 'lengthZero' if length == 0 else
+              'lengthOdd' if length % 2 else 'lengthOverBound' if length > 128 else None)
+    if reason is None:
+        need(isinstance(raw, bytes) and len(raw) == length, 'pss_type_name_byte_contract')
+        try: name = raw.decode('utf-16-le')
+        except UnicodeError: reason = 'decodeRejected'
+        else: reason = 'labelAccepted' if pss_type_name_label(name) != 'unknown' else 'labelRejected'
+    label = fallback if reason in ('pointerAbsent', 'lengthZero', 'lengthOdd', 'lengthOverBound') else pss_type_name_label(name)
+    diagnostic = {'reason': reason, 'enumTypeFlagAbsent': object_type is None,
+        'enumUnsupported': object_type == 0, 'supportedEnumOverwrittenUnknown': fallback != 'unknown' and label == 'unknown',
+        'decodedContainsNul': isinstance(name, str) and '\0' in name,
+        'decodedEndsWithNul': isinstance(name, str) and name.endswith('\0')}
+    for kind in ('Thread', 'File', 'IoCompletion'):
+        diagnostic['decodedIs' + kind] = name == kind
+        diagnostic['decodedIs' + kind + 'WithOneTrailingNul'] = name == kind + '\0'
+    return label, diagnostic
+
+
 def windows_handle_metadata(own, host, end):
     # Parent-only PSS metadata. Names are collected internally by PSS;
     # only TypeName is read. ObjectName stays opaque and is never stored.
@@ -718,12 +739,8 @@ def windows_handle_metadata(own, host, end):
             # TypeName is byte-counted UTF-16, valid until marker free. No names
             # of files, pipes, events, sockets or other objects are ever read.
             length = int(entry.typeNameLength)
-            if entry.typeName and 0 < length <= 128 and length % 2 == 0:
-                try:
-                    name = ctypes.string_at(entry.typeName, length).decode('utf-16-le')
-                except UnicodeError:
-                    name = None
-                row['typeName'] = pss_type_name_label(name)
+            raw = ctypes.string_at(entry.typeName, length) if entry.typeName and 0 < length <= 128 and length % 2 == 0 else None
+            row['typeName'], row['typeDiagnostic'] = pss_type_name_diagnostic(raw, bool(entry.typeName), length, object_type)
             if object_type == 2 and entry.flags & 8:
                 thread = entry.info.thread
                 need(thread.pid > 0 and thread.tid > 0, 'pss_thread_identity')
@@ -760,9 +777,23 @@ def safe_handle_metadata(current, baseline=None, created=None, previous=None):
         for row in selected:
             label = pss_type_name_label(row.get('typeName')); result[label] = result.get(label, 0) + 1
         return result
+    def diagnostics(selected):
+        reasons = ('pointerAbsent', 'lengthZero', 'lengthOdd', 'lengthOverBound', 'decodeRejected', 'labelRejected', 'labelAccepted', 'notCollected')
+        flags = ('enumTypeFlagAbsent', 'enumUnsupported', 'supportedEnumOverwrittenUnknown', 'decodedContainsNul', 'decodedEndsWithNul',
+                 'decodedIsThread', 'decodedIsFile', 'decodedIsIoCompletion', 'decodedIsThreadWithOneTrailingNul', 'decodedIsFileWithOneTrailingNul', 'decodedIsIoCompletionWithOneTrailingNul')
+        result = {'reasonCounts': dict.fromkeys(reasons, 0), 'booleanCounts': dict.fromkeys(flags, 0)}
+        for row in selected:
+            d = row.get('typeDiagnostic', {'reason': 'notCollected'}); need(d.get('reason') in reasons, 'pss_closed_reason')
+            result['reasonCounts'][d['reason']] += 1
+            for key in flags:
+                need(type(d.get(key, False)) is bool, 'pss_closed_boolean'); result['booleanCounts'][key] += d.get(key, False)
+        return result
     base, creation, prior = table(baseline), table(created), table(previous)
     return {k: current[k] for k in ('status', 'countBefore', 'countAfter', 'countBracketAgrees', 'witnessHandlesClosed')} | {
         'entries': len(rows), 'typeCounts': types(rows.values()), 'matchingNumericIdsMayBeReused': True,
+        'typeDiagnostics': diagnostics(rows.values()),
+        'newSincePreviousTypeDiagnostics': diagnostics(rows[k] for k in rows.keys() - prior.keys()) if prior is not None else None,
+        'removedSincePreviousTypeDiagnostics': diagnostics(prior[k] for k in prior.keys() - rows.keys()) if prior is not None else None,
         'newSincePreviousTypes': types(rows[k] for k in rows.keys() - prior.keys()) if prior is not None else None,
         'removedSincePreviousTypes': types(prior[k] for k in prior.keys() - rows.keys()) if prior is not None else None,
         'newSincePostImportTypes': types(rows[k] for k in rows.keys() - base.keys()) if base is not None else None,
