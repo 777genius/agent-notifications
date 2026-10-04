@@ -150,7 +150,7 @@ def windows_programs_probe(root, env, product_head):
     binary = REPO / '.task-tools/artifacts/windows-programs-probe.exe'
     receipt = REPO / '.task-tools/artifacts/windows-programs-probe-build.json'
     require(all(p.is_file() and not any(q.is_symlink() for q in (p, *p.parents)) for p in (source, binary, receipt)), 'known_folder_helper_binding')
-    require(digest(source) == 'a3a83a56d0a74e897e9cd7a7c1c89601c2f831f7aafe3af84c97a72d2dce5309' and 0 < source.stat().st_size <= 16384 and 0 < receipt.stat().st_size <= 2048, 'known_folder_helper_binding')
+    require(digest(source) == 'e9270ee40a6493b4669040d4aa8cb3355b07fb6d889af6354c811f2f3f541b27' and 0 < source.stat().st_size <= 16384 and 0 < receipt.stat().st_size <= 2048, 'known_folder_helper_binding')
     build = json.loads(receipt.read_bytes())
     require(isinstance(build, dict) and set(build) == {'schema', 'candidateCommit', 'sourceSHA256', 'binarySHA256'} and type(build['schema']) is int and build['schema'] == 1 and
             build['candidateCommit'] == product_head and build['sourceSHA256'] == digest(source) and build['binarySHA256'] == digest(binary), 'known_folder_helper_binding')
@@ -164,20 +164,24 @@ def windows_programs_probe(root, env, product_head):
         require(False, 'known_folder_helper_timeout')
     require(all(digest(p) == h for p, h in pins.items()) and result.returncode in (0, 1) and not result.stderr and 0 < len(result.stdout) <= 4096, 'known_folder_helper_result')
     record = json.loads(result.stdout)
-    require(isinstance(record, dict) and set(record) == {'schema', 'status', 'reason', 'before', 'after', 'candidatesAbsentBefore', 'twoOwnedCandidatesPrepared', 'qualificationGranted'} and
-            type(record['schema']) is int and record['schema'] == 1 and record['status'] in ('rejected', 'observed_only') and
-            record['reason'] in ('', 'owned_environment_required', 'before_lookup_rejected', 'owned_directory_preparation_rejected', 'after_lookup_rejected') and
-            type(record['twoOwnedCandidatesPrepared']) is bool and record['qualificationGranted'] is False and
-            isinstance(record['candidatesAbsentBefore'], list) and len(record['candidatesAbsentBefore']) == 2 and all(type(v) is bool for v in record['candidatesAbsentBefore']), 'known_folder_helper_result')
-    for value in (record['before'], record['after']):
-        require(isinstance(value, dict) and set(value) == {'windowsCode', 'insideOwnedRoot', 'pathSHA256'} and
-                type(value['windowsCode']) is int and 0 <= value['windowsCode'] <= 0xffffffff and type(value['insideOwnedRoot']) is bool and
+    require(isinstance(record, dict) and set(record) == {'schema', 'status', 'reason', 'before', 'resolved', 'after', 'resolutionFlags', 'resolvedOwnedDirectoryPrepared', 'afterAttempted', 'qualificationGranted'} and
+            type(record['schema']) is int and record['schema'] == 2 and record['status'] in ('rejected', 'observed_only') and
+            record['reason'] in ('', 'owned_environment_required', 'before_lookup_rejected', 'resolved_lookup_rejected', 'owned_directory_preparation_rejected', 'after_lookup_rejected') and
+            type(record['resolvedOwnedDirectoryPrepared']) is bool and type(record['afterAttempted']) is bool and record['qualificationGranted'] is False and
+            type(record['resolutionFlags']) is int and record['resolutionFlags'] in (0, 0x4000), 'known_folder_helper_result')
+    for value in (record['before'], record['resolved'], record['after']):
+        require(isinstance(value, dict) and set(value) == {'windowsCode', 'insideOwnedRoot', 'existingAncestorsNonReparse', 'pathSHA256'} and
+                type(value['windowsCode']) is int and 0 <= value['windowsCode'] <= 0xffffffff and type(value['insideOwnedRoot']) is bool and type(value['existingAncestorsNonReparse']) is bool and
                 isinstance(value['pathSHA256'], str) and (value['pathSHA256'] == '' or re.fullmatch('[0-9a-f]{64}', value['pathSHA256'])), 'known_folder_helper_result')
     PORTABLE.windows_programs_probe = dict(record, **custody, helperExitCode=result.returncode, helperReaped=True, forced=False)
-    require(result.returncode == 0 and record['status'] == 'observed_only' and record['reason'] == '' and record['twoOwnedCandidatesPrepared'] and
-            record['after']['windowsCode'] == 0 and record['after']['insideOwnedRoot'] and bool(record['after']['pathSHA256']) and
-            ((record['before']['windowsCode'] == 0 and record['before']['insideOwnedRoot'] and record['before']['pathSHA256'] == record['after']['pathSHA256']) or
-             (record['before']['windowsCode'] in (3, 0x80070003) and all(record['candidatesAbsentBefore']))), 'known_folder_probe_rejected')
+    require(result.returncode == 0 and record['status'] == 'observed_only' and record['reason'] == '' and record['resolvedOwnedDirectoryPrepared'] and record['afterAttempted'] and
+            record['after']['windowsCode'] == record['resolved']['windowsCode'] == 0 and record['after']['insideOwnedRoot'] and record['resolved']['insideOwnedRoot'] and
+            record['after']['existingAncestorsNonReparse'] and record['resolved']['existingAncestorsNonReparse'] and bool(record['resolved']['pathSHA256']) and
+            record['resolved']['pathSHA256'] == record['after']['pathSHA256'] and
+            ((record['before']['windowsCode'] == 0 and record['before']['insideOwnedRoot'] and record['before']['existingAncestorsNonReparse'] and
+              record['resolutionFlags'] == 0 and record['before']['pathSHA256'] == record['resolved']['pathSHA256']) or
+             (record['before']['windowsCode'] in (3, 0x80070003) and record['resolutionFlags'] == 0x4000 and not record['before']['insideOwnedRoot'] and
+              not record['before']['existingAncestorsNonReparse'] and record['before']['pathSHA256'] == '')), 'known_folder_probe_rejected')
 
 
 def port():
