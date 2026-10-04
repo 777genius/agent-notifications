@@ -109,7 +109,7 @@ func TestWindowsToastSubmitTimeoutIsUnknownWithoutBeeep(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("submit not started")
 	}
-	if got.Status != "unknown" || got.Reason != "handoff_unconfirmed" {
+	if got.Status != "unknown" || got.Reason != "native_submission_deadline" || got.RetrySafe || session.submits.Load() != 1 || session.closes.Load() != 1 {
 		t.Fatal(got)
 	}
 }
@@ -134,5 +134,40 @@ func TestWindowsToastReadyFailureDoesNotSubmit(t *testing.T) {
 	got := d.Deliver(context.Background(), windowsNoneRequest(clock))
 	if got.Status != "rejected" || got.Reason != "unsupported_notifier" || session.submits.Load() != 0 {
 		t.Fatal(got, session.submits.Load())
+	}
+}
+
+// Actual standard context cancellation and returned error chains retain unknown
+// effect semantics. Private error text is never used as a reason; no fallback.
+func TestWindowsToastSubmitCancellationClassificationPreservesUnknown(t *testing.T) {
+	withFatalBeeep(t)
+	for _, tc := range []struct {
+		name, reason string
+		err          error
+		cancelParent bool
+	}{
+		{"returned deadline", "native_submission_deadline", context.DeadlineExceeded, false},
+		{"returned cancellation", "native_submission_cancelled", context.Canceled, false},
+		{"parent cancellation takes precedence", "native_submission_cancelled", context.DeadlineExceeded, true},
+		{"joined errors prefer deadline", "native_submission_deadline", errors.Join(context.Canceled, context.DeadlineExceeded), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			parent, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			session := &fakeToastSession{submit: func(ctx context.Context, _ notification.Request) error {
+				if tc.cancelParent {
+					cancel()
+					<-ctx.Done()
+				} else if ctx.Err() != nil {
+					t.Fatal("submission context already expired")
+				}
+				return errors.Join(errors.New("PRIVATE_SUBMIT_ERROR_SENTINEL"), tc.err)
+			}}
+			d, clock := windowsDelivery(t, session)
+			got := d.Deliver(parent, windowsNoneRequest(clock))
+			if got.Status != "unknown" || got.Reason != tc.reason || got.RetrySafe || session.opens.Load() != 1 || session.submits.Load() != 1 || session.closes.Load() != 1 {
+				t.Fatal("classification changed effect/lifetime or lost finite reason", got)
+			}
+		})
 	}
 }

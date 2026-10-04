@@ -11,6 +11,19 @@ const result = (status, output = Buffer.alloc(0)) => Object.freeze({ status, out
 const closedObject = (value, keys) => value && Object.getPrototypeOf(value) === Object.prototype
   && Reflect.ownKeys(value).every((key) => keys.includes(key));
 
+const receiptFailureReasons = new Set([
+  'malformed_request', 'configuration_invalid', 'navigation_disabled', 'navigation_unavailable',
+  'unsupported_notifier', 'expired', 'spool_unavailable', 'authority_changed',
+  'launch_failed', 'timeout', 'handoff_unconfirmed', 'readiness_unavailable',
+  'activation_required', 'permission_denied', 'unsupported_version', 'unsupported_action',
+  'invalid_file', 'os_rejected', 'invalid_command', 'invalid_frame',
+  'invalid_config', 'unsupported_fact', 'not_registered', 'channels_disabled',
+  'delivery_uncertain', 'delivery_unavailable', 'invalid_fact', 'snapshot_changed',
+  'time_authority_unverified', 'store_unavailable', 'duplicate', 'capacity',
+  'native_submission_deadline', 'native_submission_cancelled',
+  'webhook_deadline', 'webhook_cancelled'
+]);
+
 // Opt-in troubleshooting metadata from an actually closed owned child only.
 // This is not a profile, clock, visible-banner or native GUI lifetime proof.
 function eventDiagnostic(outcome, output, unresolved, code, forcedKill) {
@@ -26,7 +39,8 @@ function eventDiagnostic(outcome, output, unresolved, code, forcedKill) {
         if (!['submitted', 'unknown', 'unavailable', 'rejected'].includes(receipt[key])) throw new TypeError();
         safe[key] = receipt[key];
       }
-      record.receipt = safe; // No raw reason, IDs, frame, body or native text.
+      if (receipt.status !== 'submitted' && typeof receipt.reason === 'string' && receiptFailureReasons.has(receipt.reason)) safe.reason = receipt.reason;
+      record.receipt = safe; // Only fixed reason literals; no raw reason, IDs, frame, body or native text.
     } catch { record.receipt = 'invalid'; }
   }
   try { console.error('[agent-notifications] ' + JSON.stringify(record)); } catch {}

@@ -19,7 +19,7 @@ else {let input='';process.stdin.on('data',b=>input+=b);process.stdin.on('end',(
  if(input)fs.writeFileSync('event-frame',input);setTimeout(()=>process.stdout.write('{"status":"suppressed"}'),200);
 });}
 `;
-async function setup(run,generation='v2'){
+async function setup(run,generation='v2',onDiagnostic){
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'TEST-prepared-'));
  const executable=path.join(root,'fixture.mjs'),children=[];
  const observer=({process:child})=>{const r={child,closed:false};children.push(r);child.once('close',()=>r.closed=true);};
@@ -33,7 +33,9 @@ async function setup(run,generation='v2'){
  };
  const sourceFactory=()=>({sample:record,dispose(){}});
  let invalidations=0, invalidationCallback;
- const delivery=createPreparedDelivery({registry,origin:'a'.repeat(64),policy:{...policy,generation},sourceFactory,isOwned:()=>active,onInvalidate:()=>{invalidations++;invalidationCallback?.();}});
+ const delivery=createPreparedDelivery({registry,origin:'a'.repeat(64),policy:{...policy,generation},sourceFactory,isOwned:()=>active,
+  onDiagnostic:onDiagnostic ? reason=>onDiagnostic(reason,delivery,invalidations) : undefined,
+  onInvalidate:()=>{invalidations++;invalidationCallback?.();}});
  const writeClock=()=>fs.writeFile(path.join(root,'clock.json'),JSON.stringify({protocol:1,boot,clockDomain:domain,clockKind:'linux-boottime',monoLoNs:String(tick+1000000n),monoHiNs:String(tick+2000000n),wallUnixNs:String(record().wallNS),uncertaintyNs:'4000000'}));
  await writeClock();dc.subscribe('child_process',observer);
  const advance=(n)=>{tick+=n;};
@@ -131,4 +133,24 @@ test('completed helper inside 2s is refused when the independent calibration bra
   try{assert.equal(await delivery.beforeEmit(event,h),false);}finally{dc.unsubscribe('child_process',gapObserver);}
   assert.equal(children.at(-1).closed,true);assert.equal(delivery.ready(),false);
  });
+});
+
+// Red on R3 if a preparation exception calls diagnostics while its epoch is live.
+// Observe inside the callback, assert outside: callback exceptions are deliberately contained.
+test('preparation exception retires authority before a throwing diagnostic callback',async()=>{
+ const observed=[];
+ await setup(async({delivery,advance,writeClock,fact,handoff,children})=>{
+  assert.equal(await delivery.activate(),true);
+  const old=fact();advance(60000000n);const h=handoff();await writeClock();
+  assert.equal(await delivery.beforeEmit(old,h),false);
+  assert.equal(delivery.ready(),false);
+  assert.ok(children.every(child=>child.closed));
+ },'v2',(reason,delivery,invalidations)=>{
+  observed.push({reason,ready:delivery.ready(),invalidations});
+  throw Error('PRIVATE_DIAGNOSTIC_CALLBACK');
+ });
+ assert.equal(observed.length,1);
+ assert.equal(observed[0].reason,'prep.catch.birth');
+ assert.equal(observed[0].ready,false);
+ assert.ok(observed[0].invalidations>0);
 });

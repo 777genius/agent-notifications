@@ -524,3 +524,107 @@ func TestComposedOptionalDisplayIsDesktopOnlyAndCannotChangeAuthority(t *testing
 		})
 	}
 }
+
+// Red if a finite backend failure disappears, private text escapes, or a reason
+// is attributed to successful desktop delivery / webhook-only uncertainty.
+func TestComposedFiniteDesktopFailureReasonAndPrivacy(t *testing.T) {
+	for _, tc := range []struct {
+		name, desktop, reason, status, wantReason string
+		missingHook, failedHook                   bool
+	}{
+		{"unknown toast", "unknown", "handoff_unconfirmed", "unknown", "handoff_unconfirmed", false, false},
+		{"submission deadline", "unknown", "native_submission_deadline", "unknown", "native_submission_deadline", false, false},
+		{"submission cancelled", "unknown", "native_submission_cancelled", "unknown", "native_submission_cancelled", false, false},
+		{"private reason", "unknown", "PRIVATE_BACKEND_REASON_SENTINEL", "unknown", "delivery_uncertain", false, false},
+		{"rejected desktop", "rejected", "unsupported_notifier", "rejected", "unsupported_notifier", true, false},
+		{"successful desktop", "submitted", "handoff_unconfirmed", "submitted", "", false, false},
+		{"webhook uncertainty", "rejected", "unsupported_notifier", "unknown", "delivery_uncertain", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			posts := make(chan struct{}, 2)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				posts <- struct{}{}
+				if tc.failedHook {
+					w.WriteHeader(http.StatusServiceUnavailable)
+				}
+			}))
+			defer server.Close()
+			ctx, c, _ := composedFixture(t, server.URL)
+			if tc.missingHook {
+				c.SendWebhook = nil
+			}
+			desktopCalls := 0
+			c.Desktop = func(*Handoff) notification.DeliveryPort {
+				return desktopFunc(func(context.Context, notification.Request) notification.Receipt {
+					desktopCalls++
+					return notification.Receipt{Status: tc.desktop, Reason: tc.reason}
+				})
+			}
+			got := c.Consume(ctx, time.Now(), ownedLiteral(t, "v1", "turn_idle_verified"))
+			if got.Status != tc.status || got.Desktop != tc.desktop || got.Reason != tc.wantReason || desktopCalls != 1 {
+				t.Fatal("failure reason changed outcome or disappeared", got, desktopCalls)
+			}
+			wantPosts := 1
+			if tc.missingHook {
+				wantPosts = 0
+			}
+			if len(posts) != wantPosts {
+				t.Fatal("webhook effects changed", len(posts))
+			}
+			raw, _ := json.Marshal(got)
+			if bytes.Contains(raw, []byte("PRIVATE_BACKEND_REASON_SENTINEL")) {
+				t.Fatal("private backend reason escaped")
+			}
+			before := privateState(t, c)
+			dup := c.Consume(ctx, time.Now(), ownedLiteral(t, "v1", "turn_idle_verified"))
+			if dup.Reason != string(Duplicate) || desktopCalls != 1 || len(posts) != wantPosts || !bytes.Equal(before, privateState(t, c)) {
+				t.Fatal("failure reason reopened durable claim", dup)
+			}
+		})
+	}
+}
+
+// Red if wrapped standard webhook causes disappear, private error text escapes,
+// or a webhook cause replaces an unknown desktop cause / reopens its claim.
+func TestComposedFiniteWebhookFailureReasonAndPrivacy(t *testing.T) {
+	marker := errors.New("PRIVATE_WEBHOOK_ERROR_SENTINEL")
+	for _, tc := range []struct {
+		name, desktop, desktopReason, wantReason string
+		err                                      error
+	}{
+		{"deadline", "submitted", "", "webhook_deadline", errors.Join(marker, context.DeadlineExceeded)},
+		{"cancelled", "submitted", "", "webhook_cancelled", errors.Join(marker, context.Canceled)},
+		{"other private error", "submitted", "", "delivery_uncertain", marker},
+		{"both standard causes", "submitted", "", "webhook_deadline", errors.Join(marker, context.Canceled, context.DeadlineExceeded)},
+		{"unknown desktop retains cause", "unknown", "handoff_unconfirmed", "handoff_unconfirmed", errors.Join(marker, context.DeadlineExceeded)},
+		{"unknown desktop private cause", "unknown", "PRIVATE_WEBHOOK_ERROR_SENTINEL", "delivery_uncertain", errors.Join(marker, context.Canceled)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, c, _ := composedFixture(t, "https://TEST.invalid/webhook")
+			desktopCalls, webhookCalls := 0, 0
+			c.Desktop = func(*Handoff) notification.DeliveryPort {
+				return desktopFunc(func(context.Context, notification.Request) notification.Receipt {
+					desktopCalls++
+					return notification.Receipt{Status: tc.desktop, Reason: tc.desktopReason}
+				})
+			}
+			c.SendWebhook = func(context.Context, *config.Config, webhook.SendContext) error {
+				webhookCalls++
+				return tc.err
+			}
+			got := c.Consume(ctx, time.Now(), ownedLiteral(t, "v1", "turn_idle_verified"))
+			if got.Status != "unknown" || got.Desktop != tc.desktop || got.Webhook != "unknown" || got.Reason != tc.wantReason || desktopCalls != 1 || webhookCalls != 1 {
+				t.Fatal("webhook failure changed outcome or disappeared", got, desktopCalls, webhookCalls)
+			}
+			raw, _ := json.Marshal(got)
+			if bytes.Contains(raw, []byte("PRIVATE_WEBHOOK_ERROR_SENTINEL")) {
+				t.Fatal("private webhook error escaped")
+			}
+			before := privateState(t, c)
+			dup := c.Consume(ctx, time.Now(), ownedLiteral(t, "v1", "turn_idle_verified"))
+			if dup.Reason != string(Duplicate) || desktopCalls != 1 || webhookCalls != 1 || !bytes.Equal(before, privateState(t, c)) {
+				t.Fatal("webhook failure reopened durable claim", dup)
+			}
+		})
+	}
+}

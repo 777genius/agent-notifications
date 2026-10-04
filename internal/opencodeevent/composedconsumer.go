@@ -3,6 +3,7 @@ package opencodeevent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"path/filepath"
 	"time"
@@ -90,6 +91,8 @@ func (c ComposedConsumer) ConsumeEntry(entry *Entry, input io.ReadCloser) Receip
 	desktop, hook := h.Channels()
 	key := string(m.status)
 	result := Receipt{}
+	desktopReason := ""
+	webhookReason := ""
 	ready := func() bool { return entry.Check() && h.Context().Err() == nil }
 	if desktop && cfg.IsStatusDesktopEnabled(key) {
 		result.Desktop = "unavailable"
@@ -104,6 +107,18 @@ func (c ComposedConsumer) ConsumeEntry(entry *Entry, input io.ReadCloser) Receip
 				default:
 					result.Desktop = "unknown"
 				}
+				if r.Status == "unknown" || r.Status == "rejected" || r.Status == "unavailable" {
+					switch r.Reason {
+					case "malformed_request", "configuration_invalid", "navigation_disabled",
+						"navigation_unavailable", "unsupported_notifier", "expired",
+						"spool_unavailable", "authority_changed", "launch_failed",
+						"timeout", "handoff_unconfirmed", "readiness_unavailable",
+						"activation_required", "permission_denied", "unsupported_version",
+						"unsupported_action", "invalid_file", "os_rejected",
+						"native_submission_deadline", "native_submission_cancelled":
+						desktopReason = r.Reason
+					}
+				}
 			}
 		}
 	}
@@ -114,11 +129,22 @@ func (c ComposedConsumer) ConsumeEntry(entry *Entry, input io.ReadCloser) Receip
 				Status: m.status, Message: m.content.Body, RawBody: m.content.Body, AgentSource: string(config.AgentOpenCode)})
 			if err != nil {
 				result.Webhook = "unknown"
+				if errors.Is(err, context.DeadlineExceeded) {
+					webhookReason = "webhook_deadline"
+				} else if errors.Is(err, context.Canceled) {
+					webhookReason = "webhook_cancelled"
+				}
 			} else {
 				result.Webhook = "submitted"
 			}
 		}
 	}
 	result.Status, result.Reason = aggregateStatus(result.Desktop, result.Webhook)
+	// Preserve a finite contributing desktop failure, never a success or raw provider detail.
+	if desktopReason != "" && (result.Status == "rejected" || result.Status == "unknown" && result.Desktop == "unknown") {
+		result.Reason = desktopReason
+	} else if result.Status == "unknown" && result.Webhook == "unknown" && result.Desktop != "unknown" && webhookReason != "" {
+		result.Reason = webhookReason
+	}
 	return result
 }

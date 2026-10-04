@@ -20,9 +20,13 @@ export function anchorMatches(anchor, before, after, policy) {
 
 // Ports are private composition dependencies. The plugin never accepts them
 // from host configuration/environment; only the closed compiled ledger supplies policy.
-export function createPreparedDelivery({ registry, origin, policy, isOwned, onInvalidate, enrich, sourceFactory = createPlatformClock }) {
+export function createPreparedDelivery({ registry, origin, policy, isOwned, onInvalidate, onDiagnostic, enrich, sourceFactory = createPlatformClock }) {
   let epoch, source, anchor, activation, pending, last, ingress, disposed = false;
   const originals = new Map(), prepared = new WeakMap();
+  const refuse = reason => {
+    try { onDiagnostic?.(reason); } catch {}
+    return false;
+  };
   function invalidate(reason = 'clock') {
     if (!epoch && !source && !pending) return;
     const attempt = pending; pending = undefined;
@@ -124,6 +128,7 @@ export function createPreparedDelivery({ registry, origin, policy, isOwned, onIn
     return handoff.clockID === clock.id && !handoff.signal.aborted && handoff.isCurrent();
   };
   async function beforeEmit(event, handoff) {
+    let diagnosticStage = 'prep.catch.original';
     try {
       // Optional display awaits precede every original clock/current check.
       // Keep the SDK fact itself as the WeakMap key and native authority.
@@ -131,16 +136,23 @@ export function createPreparedDelivery({ registry, origin, policy, isOwned, onIn
       if (enrich) { try { display = (await enrich(event))?.display; } catch {} }
       const tick = BigInt(handoff.ingressMonotonicMs) * 1000000n;
       const original = originals.get(tick);
-      if (!original || !current(original, handoff) || event.rootSession !== true || !event.provenance) return false;
+      if (!original) return refuse('prep.original');
+      if (!current(original, handoff)) return refuse('prep.current');
+      if (event.rootSession !== true || !event.provenance) return refuse('prep.native');
+      diagnosticStage = 'prep.catch.sample';
       const before = sample(), remaining = handoff.metadataDeadline - clock.now();
-      if (remaining <= 0) return false;
+      if (remaining <= 0) return refuse('prep.remaining');
+      diagnosticStage = 'prep.catch.helper';
       const response = await registry.clock({ signal: handoff.signal, isCurrent: () => current(original, handoff),
         deadline: performance.now() + Math.min(remaining, 2000) });
-      if (!current(original, handoff) || response.status !== 'ok') return false;
+      if (!current(original, handoff)) return refuse('prep.current_after_helper');
+      if (response.status !== 'ok') return refuse('prep.helper');
+      diagnosticStage = 'prep.catch.calibration';
       const after = sample(), calibrationCheck = clockReceipt(response.output);
       if (!anchorMatches(calibrationCheck, before, after, policy) ||
           !overlaps(original.sample, after, policy.comparisonBoundNS) || after.loNS - before.loNS > 2000000000n) bad();
       // Keep the genuine PRE-ACTIVATION anchor; the later helper is only a check.
+      diagnosticStage = 'prep.catch.birth';
       const birthNS = BigInt(event.provenance.nativeTime) * 1000000n;
       if (birthNS < original.sample.wallNS - 60000000000n || birthNS > original.sample.wallNS + 2000000000n ||
           birthNS < activation.wallNS + (original.epoch.after - activation.loNS)) bad();
@@ -151,11 +163,15 @@ export function createPreparedDelivery({ registry, origin, policy, isOwned, onIn
           sourceLoNS: String(activation.loNS), sourceHiNS: String(original.epoch.after),
           nativeLoNS: original.anchor.monoLoNS, nativeHiNS: original.anchor.monoHiNS,
           errorNS: String(policy.translationBoundNS) }) });
+      diagnosticStage = 'prep.catch.frame';
       encodeFrame({ protocol: 1, origin, event, ...(display ? { display } : {}), provenance: { ...provenance,
         spawnTickNS: String(after.loNS), deadlineTickNS: String(after.loNS + 20000000000n) } }, policy);
       prepared.set(event, { original, provenance, display });
       return true;
-    } catch { invalidate(); return false; }
+    } catch {
+      invalidate();
+      return refuse(diagnosticStage);
+    }
   }
   // No async function here. Registry acquires a slot, samples immediately before
   // spawn, then samples immediately after spawn, before any frame reaches stdin.
