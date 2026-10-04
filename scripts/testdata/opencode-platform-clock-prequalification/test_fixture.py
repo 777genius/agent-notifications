@@ -33,6 +33,24 @@ class PureVectors(unittest.TestCase):
         guard = patch.object(H.subprocess, 'Popen', side_effect=AssertionError('pure_test_spawn_refused'))
         guard.start(); self.addCleanup(guard.stop)
 
+    def test_handle_projection_keeps_kernel_strings_and_numeric_ids_private(self):
+        # Privacy contract: valid types survive, arbitrary name data cannot leak.
+        current = {'status': 'metadata_observed', 'countBefore': 3, 'countAfter': 3,
+                   'countBracketAgrees': True, 'witnessHandlesClosed': True, 'entries': [
+                       {'handle': 123, 'typeName': 'File'},
+                       {'handle': 456, 'typeName': 'IoCompletion'},
+                       {'handle': 789, 'typeName': 'PRIVATE-object-name-sentinel'}]}
+        projected = H.safe_handle_metadata(current)
+        self.assertEqual(projected['typeCounts'], {'File': 1, 'IoCompletion': 1, 'unknown': 1})
+        encoded = json.dumps(projected)
+        self.assertNotIn('PRIVATE-object-name-sentinel', encoded)
+        self.assertNotIn('123', encoded)
+        self.assertNotIn('456', encoded)
+        self.assertNotIn('789', encoded)
+        self.assertTrue(projected['matchingNumericIdsMayBeReused'])
+        for value in [None, 1, 'file', 'File\0', 'File/private-path']:
+            self.assertEqual(H.pss_type_name_label(value), 'unknown')
+
     def test_sampler_resource_boundary_keeps_persistent_growth_fail_closed(self):
         # Independent lifecycle counts; no native resource read or child spawn.
         H.require_sampler_nonincrease('windows', 80, 95, 95)

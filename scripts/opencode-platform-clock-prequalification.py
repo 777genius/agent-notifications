@@ -638,6 +638,138 @@ def native_resources(p, os_name):
     return count.value
 
 
+def pss_type_name_label(name):
+    # Static executive types only; arbitrary kernel strings never enter SAFE.
+    labels = ('File', 'Thread', 'Event', 'Mutant', 'Semaphore', 'Section', 'Process',
+              'Key', 'Token', 'IoCompletion', 'Timer', 'Job', 'Directory',
+              'SymbolicLink', 'Desktop', 'WindowStation', 'ALPC Port')
+    return name if isinstance(name, str) and name in labels else 'unknown'
+
+
+def pss_type_label(object_type):
+    # Closed Microsoft PSS_OBJECT_TYPE labels; unsupported kinds stay unknown.
+    if object_type is None: return 'unknown'
+    need(type(object_type) is int and 0 <= object_type <= 6, 'pss_object_type')
+    return ('unknown', 'Process', 'Thread', 'Mutant', 'Event', 'Section', 'Semaphore')[object_type]
+
+
+def windows_handle_metadata(own, host, end):
+    # Parent-only PSS metadata. Names are collected internally by PSS;
+    # only TypeName is read. ObjectName stays opaque and is never stored.
+    p = host['p']
+    need(os.name == 'nt' and ctypes.sizeof(ctypes.c_void_p) == 8 and
+         own.live.get(p.pid) is host and host['label'] == 'module' and p.poll() is None,
+         'owned_windows_handle_subject')
+    remaining(end)
+    U32, P = ctypes.c_uint32, ctypes.c_void_p
+    class ThreadInfo(ctypes.Structure):
+        _fields_ = [('exitStatus', U32), ('teb', P), ('pid', U32), ('tid', U32),
+                    ('affinity', ctypes.c_size_t), ('priority', ctypes.c_int32),
+                    ('basePriority', ctypes.c_int32), ('start', P)]
+    class TypeInfo(ctypes.Union):
+        _fields_ = [('thread', ThreadInfo), ('storage', ctypes.c_uint64 * 6)]
+    class Entry(ctypes.Structure):
+        _fields_ = [('handle', P), ('flags', U32), ('type', U32), ('captureTime', U32 * 2),
+                    ('attributes', U32), ('access', U32), ('handleCount', U32), ('pointerCount', U32),
+                    ('pagedCharge', U32), ('nonpagedCharge', U32), ('creationTime', U32 * 2),
+                    ('typeNameLength', ctypes.c_uint16), ('typeName', P),
+                    ('objectNameLength', ctypes.c_uint16), ('objectName', P), ('info', TypeInfo)]
+    need(ctypes.sizeof(ThreadInfo) == 48 and ctypes.sizeof(Entry) == 136 and
+         Entry.info.offset == 88 and ThreadInfo.start.offset == 40, 'pss_win64_abi')
+    k = ctypes.WinDLL(r'C:\Windows\System32\kernel32.dll')
+    names = ('PssCaptureSnapshot', 'PssWalkMarkerCreate', 'PssWalkSnapshot',
+             'PssWalkMarkerFree', 'PssFreeSnapshot')
+    if not all(hasattr(k, name) for name in names):
+        return {'status': 'api_unavailable', 'witnessHandlesClosed': True, 'entries': []}
+    signatures = {'PssCaptureSnapshot': [P, U32, U32, ctypes.POINTER(P)],
+        'PssWalkMarkerCreate': [P, ctypes.POINTER(P)], 'PssWalkSnapshot': [P, U32, P, P, U32],
+        'PssWalkMarkerFree': [P], 'PssFreeSnapshot': [P, P], 'GetProcessId': [P]}
+    for name, args in signatures.items():
+        getattr(k, name).argtypes = args; getattr(k, name).restype = U32
+    k.GetCurrentProcess.argtypes = []; k.GetCurrentProcess.restype = P
+    subject = P(int(p._handle))
+    need(k.GetProcessId(subject) == p.pid, 'pss_owned_process_handle')
+    count_before = native_resources(p, 'windows')
+    snapshot, marker = P(), P()
+    captured = marked = False; entries = []; seen = set()
+    try:
+        # HANDLES|NAME_INFORMATION|TYPE_SPECIFIC. No basic/clone/trace/context.
+        # NAME_INFORMATION supplies TypeName; ObjectName is deliberately ignored.
+        remaining(end)
+        status = k.PssCaptureSnapshot(subject, 0x2c, 0, ctypes.byref(snapshot))
+        captured = status == 0
+        need(captured and snapshot.value, 'pss_capture_failed')
+        remaining(end)
+        status = k.PssWalkMarkerCreate(None, ctypes.byref(marker)); marked = status == 0
+        need(marked and marker.value, 'pss_marker_failed')
+        while True:
+            remaining(end)
+            entry = Entry()
+            status = k.PssWalkSnapshot(snapshot, 2, marker, ctypes.byref(entry), ctypes.sizeof(entry))
+            if status == 259: break  # ERROR_NO_MORE_ITEMS, never partial success.
+            need(status == 0 and len(entries) < 1024, 'pss_complete_walk_bound')
+            handle = int(entry.handle or 0)
+            need(0 < handle < 2**64 - 1 and handle not in seen and entry.flags & ~0x0f == 0,
+                 'pss_handle_metadata_shape')
+            seen.add(handle)
+            object_type = int(entry.type) if entry.flags & 1 else None
+            row = {'handle': handle, 'validFields': int(entry.flags), 'objectType': object_type,
+                   'typeName': pss_type_label(object_type)}
+            # TypeName is byte-counted UTF-16, valid until marker free. No names
+            # of files, pipes, events, sockets or other objects are ever read.
+            length = int(entry.typeNameLength)
+            if entry.typeName and 0 < length <= 128 and length % 2 == 0:
+                try:
+                    name = ctypes.string_at(entry.typeName, length).decode('utf-16-le')
+                except UnicodeError:
+                    name = None
+                row['typeName'] = pss_type_name_label(name)
+            if object_type == 2 and entry.flags & 8:
+                thread = entry.info.thread
+                need(thread.pid > 0 and thread.tid > 0, 'pss_thread_identity')
+                row['thread'] = {'pid': int(thread.pid), 'tid': int(thread.tid),
+                    'exitStatus': int(thread.exitStatus), 'startAddress': int(thread.start or 0)}
+            # Copy fields now, before marker free; never dereference ObjectName.
+            entries.append(row)
+    finally:
+        errors = []
+        # Snapshot belongs to this observer, not the target. Never CloseHandle(HPSS).
+        for release, args in ((k.PssWalkMarkerFree, (marker,)) if marked and marker.value else (None, ()),
+                              (k.PssFreeSnapshot, (k.GetCurrentProcess(), snapshot)) if captured and snapshot.value else (None, ())):
+            if release is not None:
+                try: errors.append(release(*args) != 0)
+                except Exception: errors.append(True)
+        need(not any(errors), 'pss_witness_release_failed')
+    remaining(end)
+    need(p.poll() is None and k.GetProcessId(subject) == p.pid, 'pss_live_subject_after')
+    count_after = native_resources(p, 'windows')
+    return {'status': 'metadata_observed', 'captureFlags': 0x2c, 'pid': p.pid,
+        'countBefore': count_before, 'countAfter': count_after, 'entries': entries,
+        'countBracketAgrees': count_before == count_after == len(entries), 'witnessHandlesClosed': True}
+
+
+def safe_handle_metadata(current, baseline=None, created=None, previous=None):
+    # Numeric handle IDs are snapshot keys, not proof against handle reuse.
+    if current['status'] != 'metadata_observed':
+        return {'status': current['status'], 'witnessHandlesClosed': current['witnessHandlesClosed']}
+    rows = {row['handle']: row for row in current['entries']}
+    def table(snapshot):
+        return {row['handle']: row for row in snapshot['entries']} if snapshot and snapshot['status'] == 'metadata_observed' else None
+    def types(selected):
+        result = {}
+        for row in selected:
+            label = pss_type_name_label(row.get('typeName')); result[label] = result.get(label, 0) + 1
+        return result
+    base, creation, prior = table(baseline), table(created), table(previous)
+    return {k: current[k] for k in ('status', 'countBefore', 'countAfter', 'countBracketAgrees', 'witnessHandlesClosed')} | {
+        'entries': len(rows), 'typeCounts': types(rows.values()), 'matchingNumericIdsMayBeReused': True,
+        'newSincePreviousTypes': types(rows[k] for k in rows.keys() - prior.keys()) if prior is not None else None,
+        'removedSincePreviousTypes': types(prior[k] for k in prior.keys() - rows.keys()) if prior is not None else None,
+        'newSincePostImportTypes': types(rows[k] for k in rows.keys() - base.keys()) if base is not None else None,
+        'samplerCreationNewIdsNowAbsentTypes': types(creation[k] for k in creation.keys() - base.keys() - rows.keys()) if base is not None and creation is not None else None,
+        'changedMatchingIdMetadata': sum(rows[k] != base[k] for k in rows.keys() & base.keys()) if base is not None else None}
+
+
 def windows_loader_files():
     # Authenticate bootstrap/held disk files, NOT a duplicate clock reader.
     # Product DLL/API-set use is conditional on the explicitly protected mapping
@@ -743,12 +875,30 @@ def run_case(root, metadata, os_name, arch, job_end):
              loader['loader'] == 'stock_BUN_BE_BUN_private_source_import' and
              all(loader[k] == metadata[k] for k in ('platform', 'arch', 'bun', 'imageSha256', 'fixtureSha256', 'sourceCommit')) and
              loader['modulePaths'] == {x['path']: str(root / x['path']) for x in metadata['moduleLeaves']}, 'actual_private_loader')
+        if os_name == 'windows':
+            need(isinstance(loader.get('bunRevision'), str) and
+                 re.fullmatch('[a-f0-9]{40}', loader['bunRevision']), 'actual_bun_revision')
+            safe['actualBunRevision'] = loader['bunRevision']
         write_json(root / 'loader.private.json', loader)
         kernel_image(host['p'], exe, os_name)
         resources_before = native_resources(host['p'], os_name)
         resource_before_at = time.monotonic() if os_name == 'windows' else None
         operation_started = time.monotonic()
         operation_end = min(js_end, job_end, operation_started + 2)
+        handle_snapshots = {}
+        def handle_metadata_checkpoint(checkpoint, checkpoint_round=None):
+            if os_name != 'windows': return
+            snapshot = windows_handle_metadata(own, host, operation_end)
+            key = checkpoint + ('-' + str(checkpoint_round) if checkpoint_round is not None else '')
+            path = root / ('windows-handles-' + key + '.private.json')
+            write_json(path, snapshot)
+            previous = next(reversed(handle_snapshots.values()), None)
+            handle_snapshots[key] = snapshot
+            summary = safe_handle_metadata(snapshot, handle_snapshots.get('post_import'),
+                                           handle_snapshots.get('sampler_created'), previous)
+            safe.setdefault('nativeHandleMetadata', []).append({'stage': checkpoint, 'round': checkpoint_round,
+                'privateSHA256': sha(path), **summary})
+            remaining(operation_end)
         own.send(host, {'kind': 'begin'}, operation_end)
         if os_name == 'windows':
             stage = 'source_import_observation'
@@ -769,6 +919,7 @@ def run_case(root, metadata, os_name, arch, job_end):
                 'beforeHostElapsedMs': round((resource_before_at - host['startedAt']) * 1000, 3),
                 'samplerCreated': False, 'samples': 0,
                 'operationElapsedMs': round((time.monotonic() - operation_started) * 1000, 3)}
+            handle_metadata_checkpoint('post_import')
             own.send(host, {'kind': 'sampler_begin'}, operation_end)
             safe['nativeResourceCheckpoints'] = []
         def resource_checkpoint(checkpoint, checkpoint_round, expected_samples):
@@ -784,6 +935,7 @@ def run_case(root, metadata, os_name, arch, job_end):
             safe['nativeResourceCheckpoints'].append({'stage': checkpoint, 'round': checkpoint_round,
                 'samples': expected_samples, 'count': count,
                 'operationElapsedMs': round((time.monotonic() - operation_started) * 1000, 3)})
+            handle_metadata_checkpoint(checkpoint, checkpoint_round)
             own.send(host, {'kind': 'resource_continue', 'stage': checkpoint, 'round': checkpoint_round}, operation_end)
         if os_name == 'windows': resource_checkpoint('sampler_created', None, 0)
         helper_receipts = []
@@ -845,6 +997,7 @@ def run_case(root, metadata, os_name, arch, job_end):
             safe['nativeResourceCheckpoints'].append({'stage': 'disposed', 'round': None,
                 'samples': result['samples'], 'count': resources_after,
                 'operationElapsedMs': round((time.monotonic() - operation_started) * 1000, 3)})
+        handle_metadata_checkpoint('disposed')
         # Keep first snapshot fields unchanged; Windows has a separate temporal criterion.
         if os_name == 'windows':
             stage = 'resource_settling'

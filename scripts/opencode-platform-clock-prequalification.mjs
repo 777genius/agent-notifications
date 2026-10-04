@@ -153,7 +153,8 @@ async function execute(rootInput) {
       need(!next.done && Buffer.byteLength(next.value) <= budgets.frameBytes, 'parent_frame_limit_or_eof');
       const v = JSON.parse(next.value); need(v.kind === kind, 'parent_frame_order'); return v;
     }
-    send({ kind: 'loader', ...actual, pid: process.pid, ppid: process.ppid, executable: imagePath,
+    send({ kind: 'loader', ...actual, bunRevision: globalThis.Bun?.revision,
+      pid: process.pid, ppid: process.ppid, executable: imagePath,
       fixture, modulePaths, imageFileIdentity: image.fileIdentity, loader: 'stock_BUN_BE_BUN_private_source_import' });
     await receive('begin');
     const operationStart = performance.now();
