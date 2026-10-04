@@ -105,8 +105,14 @@ jobs:
           mkdir -p observation-evidence
           git rev-parse HEAD > observation-evidence/source.txt
           go version > observation-evidence/go.txt
+          source scripts/windows-observation-profile.sh
+          trap observation_profile_stop EXIT
           qualification_status=0
+          observation_profile_start geminievent
           go test -p 1 -v -race -coverprofile=coverage-gemini-event.txt -covermode=atomic -trace=observation-evidence/geminievent.trace ./internal/geminievent || qualification_status=$?
+          # Stop immediately after this package so unrelated tests cannot evict
+          # the failing syscall from the bounded OS recording.
+          observation_profile_stop
           go test -p 1 -v -race -coverprofile=coverage-observation.txt -covermode=atomic ./internal/notification/observation ./internal/copilotvscodeevent ./cmd/claude-notifications || qualification_status=$?
           { head -n 1 coverage-gemini-event.txt; tail -n +2 coverage-gemini-event.txt; tail -n +2 coverage-observation.txt; } > coverage-gemini.txt
           exit "$qualification_status"
@@ -115,7 +121,11 @@ jobs:
         id: observation_repeat
         env:
           AGENT_NOTIFICATIONS_OBSERVATION_DIAGNOSTICS: '1'
-        run: go test -race -count=20 -run '^TestChannelConsentIndependentAndNoRetry$' -trace=observation-evidence/geminievent-repeat.trace ./internal/geminievent
+        run: |
+          source scripts/windows-observation-profile.sh
+          trap observation_profile_stop EXIT
+          observation_profile_start geminievent-repeat
+          go test -race -count=20 -run '^TestChannelConsentIndependentAndNoRetry$' -trace=observation-evidence/geminievent-repeat.trace ./internal/geminievent
         shell: bash
 
       - name: Preserve failed observation attempt
