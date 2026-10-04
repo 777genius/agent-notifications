@@ -49,6 +49,9 @@ def main():
         assert phase in ('draft', 'public')
         assert (goos, arch) in (('linux', 'amd64'), ('linux', 'arm64'), ('windows', 'amd64'))
         assert run(['git', '-C', str(source), 'rev-parse', 'HEAD']).strip() == sha
+        tag_ref = api(f'repos/{REPO}/git/ref/tags/{tag}')['object']
+        assert tag_ref['type'] == 'commit' and tag_ref['sha'] == sha, 'release tag/source mismatch'
+        report['tag_commit'] = tag_ref['sha']
         def latest():
             value = api(f'repos/{REPO}/releases/latest')
             assert value['tag_name'] == stable and not value['prerelease'] and not value['draft']

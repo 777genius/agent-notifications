@@ -5,11 +5,10 @@ on:
       tag:
         description: Exact partial prerelease tag
         required: true
-        default: v1.47.0
+        default: v1.47.1
       source_sha:
         description: Exact product source SHA
         required: true
-        default: 192196fbf35710f9f138a5b2728919b3e215f25b
       phase:
         description: Asset visibility
         type: choice
