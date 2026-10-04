@@ -22,6 +22,11 @@ type receiver struct {
 	next    uint32
 }
 
+// The real readiness RPC advertises plain body text, with no markup support.
+func (r *receiver) GetCapabilities() ([]string, *dbus.Error) {
+	return []string{}, nil
+}
+
 func (r *receiver) Notify(app string, replaces uint32, icon, title, body string, actions []string, hints map[string]dbus.Variant, expiry int32) (uint32, *dbus.Error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

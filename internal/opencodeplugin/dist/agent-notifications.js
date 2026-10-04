@@ -466,31 +466,25 @@ __export(windows_clock_exports, {
   createWindowsClock: () => createWindowsClock
 });
 import { lstatSync, realpathSync as realpathSync3 } from "node:fs";
-async function createWindowsClock({ signal } = {}) {
-  if (signal?.aborted || process.platform !== "win32" || process.arch !== "x64") unavailable();
+function verifyPaths() {
+  for (const path2 of ["C:\\", "C:\\Windows", directory, `${directory}\\kernel32.dll`, `${directory}\\ntdll.dll`]) {
+    if (lstatSync(path2).isSymbolicLink() || realpathSync3(path2).toLowerCase() !== path2.toLowerCase()) unavailable();
+  }
+}
+async function initializeBinding() {
   const releases = [];
-  const abort = () => {
-    try {
-      closeAll(releases);
-    } catch {
-    }
-  };
-  signal?.addEventListener("abort", abort, { once: true });
   try {
-    let verifyPaths2 = function() {
-      for (const path2 of ["C:\\", "C:\\Windows", directory, ...files]) {
-        if (lstatSync(path2).isSymbolicLink() || realpathSync3(path2).toLowerCase() !== path2.toLowerCase()) unavailable();
-      }
-    }, library2 = function(path2, abi2) {
+    let library2 = function(path2, abi2) {
       const lib = dlopen(path2, abi2);
       releases.push(() => lib.close());
       return lib.symbols;
+    }, verify2 = function() {
+      verifyPaths();
+      for (const file of held2) file.verify();
     };
-    var verifyPaths = verifyPaths2, library = library2;
-    const image = pinNativeImage();
-    releases.push(image.close);
+    var library = library2, verify = verify2;
+    verifyPaths();
     const files = ["kernel32.dll", "ntdll.dll"].map((name2) => `${directory}\\${name2}`);
-    verifyPaths2();
     const held2 = [];
     for (const path2 of files) {
       const file = holdFile(path2);
@@ -498,7 +492,6 @@ async function createWindowsClock({ signal } = {}) {
       releases.push(file.close);
     }
     const { dlopen, ptr, linkSymbols } = await import("bun:ffi");
-    if (signal?.aborted) unavailable();
     if (typeof dlopen !== "function" || typeof ptr !== "function" || typeof linkSymbols !== "function") unavailable();
     const aligned = (view) => address(ptr(view), view.BYTES_PER_ELEMENT);
     const kernel = library2(files[0], windowsKernelABI);
@@ -516,9 +509,49 @@ async function createWindowsClock({ signal } = {}) {
     const wrapper = linkSymbols({ QueryInterruptTimePrecise: { ...interruptABI, ptr: target } });
     releases.push(() => wrapper.close());
     const nt = library2(files[1], windowsNtABI);
+    verify2();
+    return Object.freeze({
+      kernel: Object.freeze(kernel),
+      nt: Object.freeze(nt),
+      aligned,
+      verify: verify2,
+      interrupt: wrapper.symbols.QueryInterruptTimePrecise,
+      retained: Object.freeze(releases)
+    });
+  } catch {
+    try {
+      closeAll(releases);
+    } catch {
+    }
+    unavailable();
+  }
+}
+async function createWindowsClock({ signal } = {}) {
+  if (signal?.aborted || process.platform !== "win32" || process.arch !== "x64") unavailable();
+  const releases = [];
+  let clock;
+  const abort = () => {
+    try {
+      if (clock) clock.dispose();
+      else closeAll(releases);
+    } catch {
+    }
+  };
+  function closeInstance() {
+    signal?.removeEventListener("abort", abort);
+    closeAll(releases);
+  }
+  signal?.addEventListener("abort", abort, { once: true });
+  try {
+    if (signal?.aborted) unavailable();
+    const image = pinNativeImage();
+    releases.push(image.close);
+    const binding = await (bindingAttempt ??= initializeBinding());
+    if (signal?.aborted) unavailable();
+    const { kernel, nt, aligned } = binding;
     const info = new BigUint64Array(4), returned = new Uint32Array(1);
     const counter = new BigUint64Array(1), wall = new BigUint64Array(1);
-    return createNativeClock({
+    clock = createNativeClock({
       imageSHA256: image.imageSHA256,
       readBoot() {
         info.fill(0n);
@@ -528,7 +561,7 @@ async function createWindowsClock({ signal } = {}) {
       },
       readCounter() {
         counter[0] = 0n;
-        wrapper.symbols.QueryInterruptTimePrecise(aligned(counter));
+        binding.interrupt(aligned(counter));
         return interruptNS(counter[0]);
       },
       readWall() {
@@ -537,23 +570,22 @@ async function createWindowsClock({ signal } = {}) {
         return filetimeNS(wall[0]);
       },
       verify() {
+        if (signal?.aborted) unavailable();
         image.verify();
-        verifyPaths2();
-        for (const file of held2) file.verify();
+        binding.verify();
       },
-      close: () => closeAll(releases)
+      close: closeInstance
     }, "windows-kernel");
+    return clock;
   } catch {
     try {
-      closeAll(releases);
+      closeInstance();
     } catch {
     }
     unavailable();
-  } finally {
-    signal?.removeEventListener("abort", abort);
   }
 }
-var directory;
+var directory, bindingAttempt;
 var init_windows_clock = __esm({
   "windows-clock.mjs"() {
     "use strict";
@@ -2670,7 +2702,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "9ca0b9953d49997601655e54f846a3efa464f237e47c6f1b04716d0f2e64c4c2"
       }
     ],
-    "algorithmSourceMerkleSHA256": "bd84c7226386dc06c9cf77dfcab4cce74aa76dd0ee3b69ca92efa32c8fb508a7",
+    "algorithmSourceMerkleSHA256": "a0e768970e9e8578c4d84a69d37db67e83956bd489e8dbf1531064c738f57008",
     "sourceKind": "linux-proc-boottime",
     "rawKind": "linux-boottime",
     "nativeReadBoundNS": "103000000",
@@ -2688,7 +2720,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "f916986543348d7953d8d43aa048516cdbc3f84f4d0dc9c0c5b9d1da3030cea7"
       }
     ],
-    "algorithmSourceMerkleSHA256": "bd84c7226386dc06c9cf77dfcab4cce74aa76dd0ee3b69ca92efa32c8fb508a7",
+    "algorithmSourceMerkleSHA256": "a0e768970e9e8578c4d84a69d37db67e83956bd489e8dbf1531064c738f57008",
     "sourceKind": "linux-proc-boottime",
     "rawKind": "linux-boottime",
     "nativeReadBoundNS": "103000000",
@@ -2706,7 +2738,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "986fef2069a03b5181a9ec920786836f98fe3e4950c630941908687854e42757"
       }
     ],
-    "algorithmSourceMerkleSHA256": "859f6f3ca26367a88355c6fab9c050b8b25e65c9a5b34b5e58d804f93a14abd9",
+    "algorithmSourceMerkleSHA256": "a3df71ec52095c4301262108d6385101bdf67a6d3f04cbf43e9448685cbc6cd9",
     "sourceKind": "linux-proc-boottime",
     "rawKind": "linux-boottime",
     "nativeReadBoundNS": "103000000",
@@ -2725,7 +2757,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "d2f4c9ee106d9930d20ca5cf5f2c2216aab6fed836992cf24979d9481242c01c"
       }
     ],
-    "algorithmSourceMerkleSHA256": "859f6f3ca26367a88355c6fab9c050b8b25e65c9a5b34b5e58d804f93a14abd9",
+    "algorithmSourceMerkleSHA256": "a3df71ec52095c4301262108d6385101bdf67a6d3f04cbf43e9448685cbc6cd9",
     "sourceKind": "linux-proc-boottime",
     "rawKind": "linux-boottime",
     "nativeReadBoundNS": "103000000",
@@ -2744,7 +2776,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "f53aae8eb68d832ab1bcd27bed88c02de910be61f4b5f90068ae8e93d5e794c9"
       }
     ],
-    "algorithmSourceMerkleSHA256": "cd52cfbcec31ee93c6420491d04e312086765fbae5620b5344e5fb2d35c92c48",
+    "algorithmSourceMerkleSHA256": "1a236c7de2d536c1d97e926082552c389fd50212fa76c7b806317c3312f52920",
     "sourceKind": "darwin-mach-continuous",
     "rawKind": "darwin-monotonic-raw",
     "nativeReadBoundNS": "103000000",
@@ -2764,7 +2796,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "4642b7da61279c8aa5d389d9f29454936e449fea6bc510689e9cc976fff6579f"
       }
     ],
-    "algorithmSourceMerkleSHA256": "cd52cfbcec31ee93c6420491d04e312086765fbae5620b5344e5fb2d35c92c48",
+    "algorithmSourceMerkleSHA256": "1a236c7de2d536c1d97e926082552c389fd50212fa76c7b806317c3312f52920",
     "sourceKind": "darwin-mach-continuous",
     "rawKind": "darwin-monotonic-raw",
     "nativeReadBoundNS": "103000000",
@@ -2784,7 +2816,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "139ddeb6a46ba276827bb8f79c7b28208621746e4fd6914d9ae71cc1a0a57524"
       }
     ],
-    "algorithmSourceMerkleSHA256": "c45182f790ad03fc51291e369f8bd4ed4a19fcf90b3f9f7c961d45e25b7b907e",
+    "algorithmSourceMerkleSHA256": "473b1f8b560d310d303414f5b7e7843a06f5be0ce2c09900c261b896cbc6db2b",
     "sourceKind": "darwin-mach-continuous",
     "rawKind": "darwin-monotonic-raw",
     "nativeReadBoundNS": "103000000",
@@ -2804,7 +2836,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "0b2b68c1efaf20a29aaf636c2ffccc1abb56243a82f48cce45e257d232e03442"
       }
     ],
-    "algorithmSourceMerkleSHA256": "c45182f790ad03fc51291e369f8bd4ed4a19fcf90b3f9f7c961d45e25b7b907e",
+    "algorithmSourceMerkleSHA256": "473b1f8b560d310d303414f5b7e7843a06f5be0ce2c09900c261b896cbc6db2b",
     "sourceKind": "darwin-mach-continuous",
     "rawKind": "darwin-monotonic-raw",
     "nativeReadBoundNS": "103000000",
@@ -2824,7 +2856,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "52f60248a576b34c9a6dcaa27e0a7f08089af35bcdc0dfb10c04d3e00a98314c"
       }
     ],
-    "algorithmSourceMerkleSHA256": "5fef401b953c661fc7856266637eb781cfbd5a8c53e869ed801a752af153638e",
+    "algorithmSourceMerkleSHA256": "2839a4ec7314df24ffded536c2165cd3e25a626485b40716f0293c25292173cd",
     "sourceKind": "windows-interrupt-precise",
     "rawKind": "windows-interrupt-precise",
     "nativeReadBoundNS": "103000000",
@@ -2844,7 +2876,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "ec7a3909bad41ef88e4650f737ab6f0b0c402a7f49a588812d0a79820c2dfc1f"
       }
     ],
-    "algorithmSourceMerkleSHA256": "5fef401b953c661fc7856266637eb781cfbd5a8c53e869ed801a752af153638e",
+    "algorithmSourceMerkleSHA256": "2839a4ec7314df24ffded536c2165cd3e25a626485b40716f0293c25292173cd",
     "sourceKind": "windows-interrupt-precise",
     "rawKind": "windows-interrupt-precise",
     "nativeReadBoundNS": "103000000",
