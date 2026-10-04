@@ -12,11 +12,32 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: '1.26'
-      - name: Build original strict consumer test with native OS profile
+      - name: Reproduce the ordinary Windows CI preparation before profiling
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory evidence | Out-Null
+          go mod download
+          if ($LASTEXITCODE -ne 0) { throw 'dependency download failed' }
+          go mod verify
+          if ($LASTEXITCODE -ne 0) { throw 'dependency verification failed' }
+          go build '-o' bin/claude-notifications.exe './cmd/claude-notifications'
+          if ($LASTEXITCODE -ne 0) { throw 'qualification binary build failed' }
+          $version = (Get-Content .claude-plugin/plugin.json | ConvertFrom-Json).version
+          python scripts/release-artifact-e2e.py --binary bin/claude-notifications.exe --version "v$version" *> evidence/binary-qualification.log
+          if ($LASTEXITCODE -ne 0) { throw 'binary qualification failed' }
+          go vet './...' *> evidence/vet.log
+          if ($LASTEXITCODE -ne 0) { throw 'vet failed' }
+          go test '-run=^$' '-bench=^BenchmarkWindowsPrivateLock$' '-benchtime=100x' '-count=5' '-benchmem' './internal/installruntime' *> evidence/lock-baseline.log
+          if ($LASTEXITCODE -ne 0) { throw 'lock benchmark failed' }
+          go test '-run=^$' '-bench=^BenchmarkWindowsPrivateLock$' '-benchtime=100x' '-count=5' '-benchmem' './internal/installruntime' *> evidence/lock-current.log
+          if ($LASTEXITCODE -ne 0) { throw 'lock benchmark failed' }
+          go test '-run=^$' '-bench=^BenchmarkWindowsPrivateCacheRoot$' '-benchtime=100x' '-count=3' '-benchmem' './internal/installruntime' *> evidence/root-benchmark.log
+          if ($LASTEXITCODE -ne 0) { throw 'root benchmark failed' }
+      - name: Build original strict consumer test with native OS profile
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
           git rev-parse HEAD > evidence/source.txt
           go version > evidence/go.txt
           go test '-c' '-race' '-cover' '-covermode=atomic' '-o' evidence/original.test.exe './internal/geminievent'
@@ -38,7 +59,12 @@ jobs:
           wpr -start GeneralProfile *> evidence/wpr-start.log
           $started = $LASTEXITCODE -eq 0
           try {
+            go test '-p=1' '-v' '-race' '-coverprofile=evidence/coverage.txt' '-covermode=atomic' '-trace=evidence/full-qualification.trace' './internal/geminievent' *> evidence/full-qualification.log
+            $qualificationCode = $LASTEXITCODE
+            "full,0,,,${qualificationCode}" | Add-Content evidence/status.csv
+            if ($qualificationCode -ne 0) { $failed = $true }
             for ($round = 1; $round -le 40; $round++) {
+              if ($failed) { break }
               $start = [DateTime]::UtcNow.ToString('O')
               $args = @('-test.v','-test.run=^Test(CacheWindowBoundAndBindingIsolation|ChannelConsentIndependentAndNoRetry)$','-test.count=20','-test.timeout=60s',"-test.trace=$evidence/original-$round.trace")
               $process = Start-Process -FilePath "$evidence/original.test.exe" -ArgumentList $args -NoNewWindow -Wait -PassThru -RedirectStandardOutput "$evidence/original-$round.stdout.log" -RedirectStandardError "$evidence/original-$round.stderr.log"
