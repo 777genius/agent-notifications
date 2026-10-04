@@ -682,6 +682,31 @@ def require_sampler_nonincrease(os_name, loader_before, after, import_before=Non
     need(after <= before, 'actual_module_resource_leak')
 
 
+def settle_sampler_resources(before, initial, operation_end, read_resources, observation):
+    # TEST temporal boundary only; no new budget, baseline or sampler read.
+    require_sampler_nonincrease('windows', before, before, before)
+    need(type(initial) is int and 0 <= initial <= 0xffffffff, 'native_handle_snapshot_bound')
+    started = time.monotonic()
+    observation.update(criterion='live_count_at_or_below_post_import_before_original_operation_end',
+                       baseline=before, immediate=initial, immediateNonincrease=initial <= before,
+                       final=initial, readsAfterImmediate=0, settlingElapsedMs=0,
+                       remainingOperationMs=round((operation_end - started) * 1000, 3), settled=False)
+    remaining(operation_end)
+    after = initial
+    while after > before:
+        time.sleep(min(0.01, remaining(operation_end)))
+        remaining(operation_end)
+        after = read_resources()  # Actual live GetProcessHandleCount; failures propagate.
+        need(type(after) is int and 0 <= after <= 0xffffffff, 'native_handle_snapshot_bound')
+        observed_at = time.monotonic()
+        observation.update(final=after, readsAfterImmediate=observation['readsAfterImmediate'] + 1,
+                           settlingElapsedMs=round((observed_at - started) * 1000, 3),
+                           remainingOperationMs=round((operation_end - observed_at) * 1000, 3))
+        remaining(operation_end)  # A low count arriving at/after expiry cannot qualify.
+    observation['settled'] = True
+    return after
+
+
 def run_case(root, metadata, os_name, arch, job_end):
     case_started = time.monotonic(); operation_started = None; round_number = None
     stage = 'initial_custody'; disposed_observed = False
@@ -820,10 +845,17 @@ def run_case(root, metadata, os_name, arch, job_end):
             safe['nativeResourceCheckpoints'].append({'stage': 'disposed', 'round': None,
                 'samples': result['samples'], 'count': resources_after,
                 'operationElapsedMs': round((time.monotonic() - operation_started) * 1000, 3)})
-        # Strict sampler nonincrease; retain pre-begin/import growth separately.
+        # Keep first snapshot fields unchanged; Windows has a separate temporal criterion.
+        if os_name == 'windows':
+            stage = 'resource_settling'
+            safe['nativeResourceSettlingObservation'] = {}
+            resources_after = settle_sampler_resources(imported_resources, resources_after, operation_end,
+                lambda: native_resources(host['p'], os_name), safe['nativeResourceSettlingObservation'])
         require_sampler_nonincrease(os_name, resources_before, resources_after,
                                     imported_resources if os_name == 'windows' else None)
+        remaining(operation_end)
         kernel_image(host['p'], exe, os_name)
+        remaining(operation_end)
         stage = 'finish'
         own.send(host, {'kind': 'finish'}, operation_end)
         host['p'].stdin.close()

@@ -9,6 +9,8 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
+import types
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -46,6 +48,56 @@ class PureVectors(unittest.TestCase):
             with self.subTest(imported=missing):
                 with self.assertRaisesRegex(RuntimeError, '^actual_sampler_resource_baseline$'):
                     H.require_sampler_nonincrease('windows', 80, 80, missing)
+
+    def test_resource_settling_keeps_real_open_file_growth_fail_closed(self):
+        # Real kernel FD/handle counts, controlled deadline only. These policy
+        # vectors do not establish Bun cleanup causality or native qualification.
+        os_name = {'linux': 'linux', 'darwin': 'darwin', 'win32': 'windows'}[sys.platform]
+        subject = types.SimpleNamespace(pid=os.getpid(), _handle=-1, poll=lambda: None)
+        count = lambda: H.native_resources(subject, os_name)
+        with tempfile.TemporaryDirectory(prefix='TEST-resource-settle-', dir=ROOT) as directory:
+            count()  # Load this test's measurement library before its baseline.
+            baseline = count()
+            record = {}
+            with patch.object(H.time, 'monotonic', return_value=100.0):
+                result = H.settle_sampler_resources(baseline, baseline, 100.02,
+                    lambda: self.fail('immediate pass must not reread'), record)
+            self.assertEqual(result, baseline)
+            self.assertTrue(record['immediateNonincrease'])
+            self.assertEqual(record['readsAfterImmediate'], 0)
+            for mode in ('release', 'persistent', 'late_read'):
+                with self.subTest(mode=mode):
+                    fd = os.open(Path(directory) / mode, os.O_CREAT | os.O_RDWR, 0o600)
+                    opened = count()
+                    self.assertGreater(opened, baseline)
+                    clock = [100.0]; record = {}; closed = [False]
+                    def release():
+                        if not closed[0]: os.close(fd); closed[0] = True
+                    def pause(seconds):
+                        clock[0] += seconds
+                        if mode == 'release': release()
+                    def read_live():
+                        if mode == 'late_read':
+                            release(); clock[0] = 100.02
+                        return count()
+                    try:
+                        with patch.object(H.time, 'monotonic', side_effect=lambda: clock[0]), \
+                             patch.object(H.time, 'sleep', side_effect=pause):
+                            if mode == 'release':
+                                final = H.settle_sampler_resources(baseline, opened, 100.02, read_live, record)
+                                self.assertLessEqual(final, baseline)
+                                self.assertTrue(record['settled'])
+                                self.assertEqual(record['readsAfterImmediate'], 1)
+                            else:
+                                with self.assertRaisesRegex(RuntimeError, '^absolute_deadline$'):
+                                    H.settle_sampler_resources(baseline, opened, 100.02, read_live, record)
+                                self.assertFalse(record['settled'])
+                                if mode == 'persistent': self.assertGreater(record['final'], baseline)
+                                else: self.assertLessEqual(record['final'], baseline)
+                        self.assertEqual(record['baseline'], baseline)
+                        self.assertEqual(record['immediate'], opened)
+                        self.assertFalse(record['immediateNonincrease'])
+                    finally: release()
 
     def test_held_helper_admission_refuses_change_without_rehashing_inside_span(self):
         with tempfile.TemporaryDirectory(prefix='TEST-held-helper-', dir=ROOT) as directory:
