@@ -4,7 +4,7 @@ export type Product = AgentProduct | "both";
 export type Target = "unknown" | "macos" | "linux" | "windows" | "manual";
 export type Intent = "install" | "update" | "configure";
 export const products = [
-  { value: "claude", label: "Claude Code" },
+  { value: "claude", label: "Claude" },
   { value: "codex", label: "Codex CLI" },
   { value: "both", label: "Claude + Codex" },
   { value: "opencode", label: "OpenCode" },

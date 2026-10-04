@@ -39,7 +39,7 @@ func TestSetupProductsSelect(t *testing.T) {
 			if code != tc.code || selected.String() != tc.want {
 				t.Fatalf("selection: code=%d output=%q prompts=%q", code, selected.String(), prompts.String())
 			}
-			for _, label := range []string{"Claude Code", "Codex", "OpenCode", "Gemini CLI", "comma-separated"} {
+			for _, label := range []string{"Claude", "Codex", "OpenCode", "Gemini CLI", "comma-separated"} {
 				if !strings.Contains(prompts.String(), label) {
 					t.Fatalf("product multiselect omitted %q: %s", label, prompts.String())
 				}

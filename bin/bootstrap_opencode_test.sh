@@ -213,7 +213,7 @@ def run_tty(answer, channels=None):
             assert persistent_state() == before, 'cancel/empty mutated persistent product roots'
         else:
             assert consent_sent and approved, 'successful selection omitted channel selection or final consent'
-        for label in (b'Claude Code',b'Codex',b'OpenCode',b'Gemini CLI'):
+        for label in (b'Claude',b'Codex',b'OpenCode',b'Gemini CLI'):
             assert label in transcript, transcript.decode(errors='replace')
     finally:
         if status is None:
@@ -323,7 +323,7 @@ shutil.copytree(os.environ['TEST_SOURCE'],plugin,dirs_exist_ok=True)
                             text=True,capture_output=True,timeout=90)
     assert result.returncode == 0, result.stdout+'\n'+result.stderr
     assert result.stdout.count('Installation complete') == 1, result.stdout
-    for client in ('Claude Code', 'Codex', 'OpenCode', 'Gemini CLI'):
+    for client in ('Claude', 'Codex', 'OpenCode', 'Gemini CLI'):
         assert client + ' - installed;' in result.stdout, result.stdout
     assert 'Delivery has not been verified.' in result.stdout, result.stdout
     claude_home, codex_home = pathlib.Path(all_env['CLAUDE_CONFIG_DIR']), pathlib.Path(all_env['CODEX_HOME'])
