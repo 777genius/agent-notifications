@@ -2318,6 +2318,44 @@ var deliveryKeys = process.platform === "win32" ? ["AGENT_NOTIFICATIONS_WEBHOOK_
 var osKeys = process.platform === "win32" ? ["SystemRoot", "WINDIR"] : [];
 var result = (status, output = Buffer.alloc(0)) => Object.freeze({ status, output });
 var closedObject = (value, keys) => value && Object.getPrototypeOf(value) === Object.prototype && Reflect.ownKeys(value).every((key) => keys.includes(key));
+var receiptFailureReasons = /* @__PURE__ */ new Set([
+  "malformed_request",
+  "configuration_invalid",
+  "navigation_disabled",
+  "navigation_unavailable",
+  "unsupported_notifier",
+  "expired",
+  "spool_unavailable",
+  "authority_changed",
+  "launch_failed",
+  "timeout",
+  "handoff_unconfirmed",
+  "readiness_unavailable",
+  "activation_required",
+  "permission_denied",
+  "unsupported_version",
+  "unsupported_action",
+  "invalid_file",
+  "os_rejected",
+  "invalid_command",
+  "invalid_frame",
+  "invalid_config",
+  "unsupported_fact",
+  "not_registered",
+  "channels_disabled",
+  "delivery_uncertain",
+  "delivery_unavailable",
+  "invalid_fact",
+  "snapshot_changed",
+  "time_authority_unverified",
+  "store_unavailable",
+  "duplicate",
+  "capacity",
+  "native_submission_deadline",
+  "native_submission_cancelled",
+  "webhook_deadline",
+  "webhook_cancelled"
+]);
 function eventDiagnostic(outcome, output, unresolved, code, forcedKill) {
   const record = {
     protocol: 1,
@@ -2337,6 +2375,7 @@ function eventDiagnostic(outcome, output, unresolved, code, forcedKill) {
         if (!["submitted", "unknown", "unavailable", "rejected"].includes(receipt[key])) throw new TypeError();
         safe[key] = receipt[key];
       }
+      if (receipt.status !== "submitted" && typeof receipt.reason === "string" && receiptFailureReasons.has(receipt.reason)) safe.reason = receipt.reason;
       record.receipt = safe;
     } catch {
       record.receipt = "invalid";
@@ -2702,7 +2741,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "9ca0b9953d49997601655e54f846a3efa464f237e47c6f1b04716d0f2e64c4c2"
       }
     ],
-    "algorithmSourceMerkleSHA256": "a0e768970e9e8578c4d84a69d37db67e83956bd489e8dbf1531064c738f57008",
+    "algorithmSourceMerkleSHA256": "5876ee9919ebc3dc205ed28c627dc442eeda4ed8740485dd6693e85c6e1b2b7a",
     "sourceKind": "linux-proc-boottime",
     "rawKind": "linux-boottime",
     "nativeReadBoundNS": "103000000",
@@ -2720,7 +2759,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "f916986543348d7953d8d43aa048516cdbc3f84f4d0dc9c0c5b9d1da3030cea7"
       }
     ],
-    "algorithmSourceMerkleSHA256": "a0e768970e9e8578c4d84a69d37db67e83956bd489e8dbf1531064c738f57008",
+    "algorithmSourceMerkleSHA256": "5876ee9919ebc3dc205ed28c627dc442eeda4ed8740485dd6693e85c6e1b2b7a",
     "sourceKind": "linux-proc-boottime",
     "rawKind": "linux-boottime",
     "nativeReadBoundNS": "103000000",
@@ -2738,7 +2777,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "986fef2069a03b5181a9ec920786836f98fe3e4950c630941908687854e42757"
       }
     ],
-    "algorithmSourceMerkleSHA256": "a3df71ec52095c4301262108d6385101bdf67a6d3f04cbf43e9448685cbc6cd9",
+    "algorithmSourceMerkleSHA256": "36142dcce44377ee322252472eba570c46eeb8e662d88565759cb778b397aa74",
     "sourceKind": "linux-proc-boottime",
     "rawKind": "linux-boottime",
     "nativeReadBoundNS": "103000000",
@@ -2757,7 +2796,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "d2f4c9ee106d9930d20ca5cf5f2c2216aab6fed836992cf24979d9481242c01c"
       }
     ],
-    "algorithmSourceMerkleSHA256": "a3df71ec52095c4301262108d6385101bdf67a6d3f04cbf43e9448685cbc6cd9",
+    "algorithmSourceMerkleSHA256": "36142dcce44377ee322252472eba570c46eeb8e662d88565759cb778b397aa74",
     "sourceKind": "linux-proc-boottime",
     "rawKind": "linux-boottime",
     "nativeReadBoundNS": "103000000",
@@ -2776,7 +2815,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "f53aae8eb68d832ab1bcd27bed88c02de910be61f4b5f90068ae8e93d5e794c9"
       }
     ],
-    "algorithmSourceMerkleSHA256": "1a236c7de2d536c1d97e926082552c389fd50212fa76c7b806317c3312f52920",
+    "algorithmSourceMerkleSHA256": "f7264cd5ef3e39b3a0deae00b03165079715369c40565e830c37dbbaf83a7398",
     "sourceKind": "darwin-mach-continuous",
     "rawKind": "darwin-monotonic-raw",
     "nativeReadBoundNS": "103000000",
@@ -2796,7 +2835,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "4642b7da61279c8aa5d389d9f29454936e449fea6bc510689e9cc976fff6579f"
       }
     ],
-    "algorithmSourceMerkleSHA256": "1a236c7de2d536c1d97e926082552c389fd50212fa76c7b806317c3312f52920",
+    "algorithmSourceMerkleSHA256": "f7264cd5ef3e39b3a0deae00b03165079715369c40565e830c37dbbaf83a7398",
     "sourceKind": "darwin-mach-continuous",
     "rawKind": "darwin-monotonic-raw",
     "nativeReadBoundNS": "103000000",
@@ -2816,7 +2855,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "139ddeb6a46ba276827bb8f79c7b28208621746e4fd6914d9ae71cc1a0a57524"
       }
     ],
-    "algorithmSourceMerkleSHA256": "473b1f8b560d310d303414f5b7e7843a06f5be0ce2c09900c261b896cbc6db2b",
+    "algorithmSourceMerkleSHA256": "7e224fd8f330a4e55221c8b3a49cf2283e3db2f3f1bf30cd0ae447f2e10fea1a",
     "sourceKind": "darwin-mach-continuous",
     "rawKind": "darwin-monotonic-raw",
     "nativeReadBoundNS": "103000000",
@@ -2836,7 +2875,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "0b2b68c1efaf20a29aaf636c2ffccc1abb56243a82f48cce45e257d232e03442"
       }
     ],
-    "algorithmSourceMerkleSHA256": "473b1f8b560d310d303414f5b7e7843a06f5be0ce2c09900c261b896cbc6db2b",
+    "algorithmSourceMerkleSHA256": "7e224fd8f330a4e55221c8b3a49cf2283e3db2f3f1bf30cd0ae447f2e10fea1a",
     "sourceKind": "darwin-mach-continuous",
     "rawKind": "darwin-monotonic-raw",
     "nativeReadBoundNS": "103000000",
@@ -2856,7 +2895,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "52f60248a576b34c9a6dcaa27e0a7f08089af35bcdc0dfb10c04d3e00a98314c"
       }
     ],
-    "algorithmSourceMerkleSHA256": "2839a4ec7314df24ffded536c2165cd3e25a626485b40716f0293c25292173cd",
+    "algorithmSourceMerkleSHA256": "303ea1bc29aac017a8dea7483239a6d4b5bec726d6579c7cd5ac75ad339570c2",
     "sourceKind": "windows-interrupt-precise",
     "rawKind": "windows-interrupt-precise",
     "nativeReadBoundNS": "103000000",
@@ -2876,7 +2915,7 @@ var clock_qualification_data_default = Object.freeze([
         "imageSHA256": "ec7a3909bad41ef88e4650f737ab6f0b0c402a7f49a588812d0a79820c2dfc1f"
       }
     ],
-    "algorithmSourceMerkleSHA256": "2839a4ec7314df24ffded536c2165cd3e25a626485b40716f0293c25292173cd",
+    "algorithmSourceMerkleSHA256": "303ea1bc29aac017a8dea7483239a6d4b5bec726d6579c7cd5ac75ad339570c2",
     "sourceKind": "windows-interrupt-precise",
     "rawKind": "windows-interrupt-precise",
     "nativeReadBoundNS": "103000000",
@@ -3094,9 +3133,16 @@ function anchorMatches(anchor, before, after, policy) {
     offsetHiNS: wall - lo + policy.nativeReadBoundNS
   }, after, policy.comparisonBoundNS);
 }
-function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, onInvalidate, enrich, sourceFactory = createPlatformClock }) {
+function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, onInvalidate, onDiagnostic, enrich, sourceFactory = createPlatformClock }) {
   let epoch, source, anchor, activation, pending, last, ingress, disposed = false;
   const originals = /* @__PURE__ */ new Map(), prepared = /* @__PURE__ */ new WeakMap();
+  const refuse = (reason) => {
+    try {
+      onDiagnostic?.(reason);
+    } catch {
+    }
+    return false;
+  };
   function invalidate(reason = "clock") {
     if (!epoch && !source && !pending) return;
     const attempt = pending;
@@ -3253,6 +3299,7 @@ function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, on
     return handoff.clockID === clock.id && !handoff.signal.aborted && handoff.isCurrent();
   };
   async function beforeEmit(event, handoff) {
+    let diagnosticStage = "prep.catch.original";
     try {
       let display;
       if (enrich) {
@@ -3263,17 +3310,24 @@ function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, on
       }
       const tick = BigInt(handoff.ingressMonotonicMs) * 1000000n;
       const original = originals.get(tick);
-      if (!original || !current(original, handoff) || event.rootSession !== true || !event.provenance) return false;
+      if (!original) return refuse("prep.original");
+      if (!current(original, handoff)) return refuse("prep.current");
+      if (event.rootSession !== true || !event.provenance) return refuse("prep.native");
+      diagnosticStage = "prep.catch.sample";
       const before = sample(), remaining = handoff.metadataDeadline - clock.now();
-      if (remaining <= 0) return false;
+      if (remaining <= 0) return refuse("prep.remaining");
+      diagnosticStage = "prep.catch.helper";
       const response = await registry.clock({
         signal: handoff.signal,
         isCurrent: () => current(original, handoff),
         deadline: performance3.now() + Math.min(remaining, 2e3)
       });
-      if (!current(original, handoff) || response.status !== "ok") return false;
+      if (!current(original, handoff)) return refuse("prep.current_after_helper");
+      if (response.status !== "ok") return refuse("prep.helper");
+      diagnosticStage = "prep.catch.calibration";
       const after = sample(), calibrationCheck = clockReceipt(response.output);
       if (!anchorMatches(calibrationCheck, before, after, policy) || !overlaps(original.sample, after, policy.comparisonBoundNS) || after.loNS - before.loNS > 2000000000n) bad();
+      diagnosticStage = "prep.catch.birth";
       const birthNS = BigInt(event.provenance.nativeTime) * 1000000n;
       if (birthNS < original.sample.wallNS - 60000000000n || birthNS > original.sample.wallNS + 2000000000n || birthNS < activation.wallNS + (original.epoch.after - activation.loNS)) bad();
       const provenance = Object.freeze({
@@ -3293,6 +3347,7 @@ function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, on
           errorNS: String(policy.translationBoundNS)
         })
       });
+      diagnosticStage = "prep.catch.frame";
       encodeFrame({ protocol: 1, origin: origin2, event, ...display ? { display } : {}, provenance: {
         ...provenance,
         spawnTickNS: String(after.loNS),
@@ -3302,7 +3357,7 @@ function createPreparedDelivery({ registry, origin: origin2, policy, isOwned, on
       return true;
     } catch {
       invalidate();
-      return false;
+      return refuse(diagnosticStage);
     }
   }
   function emit(event, handoff) {
@@ -3848,13 +3903,23 @@ function createRPCCheckpoint(context, ready) {
 }
 
 // plugin.mjs
+var compositionDiagnostic = (enabled, stage) => {
+  if (!enabled) return;
+  try {
+    console.error("Agent Notifications OpenCode composition: " + stage);
+  } catch {
+  }
+};
 var servers = /* @__PURE__ */ new WeakMap();
 var setups = /* @__PURE__ */ new WeakMap();
 var silent = Object.freeze({ event() {
 } });
-async function reportDelivery(delivery) {
+async function reportDelivery(delivery, diagnostics = false) {
   const result2 = await delivery;
-  if (!result2) return;
+  if (!result2) {
+    compositionDiagnostic(diagnostics, "emit.empty");
+    return;
+  }
   let outcome = result2.status;
   if (outcome === "ok") {
     try {
@@ -3894,14 +3959,19 @@ async function server(input, options = {}) {
   }
   const holder = { directory: input.directory, retired: false };
   const starting = (async () => {
-    const owned = await prepareOwnedHost(input.directory, "v1", void 0, options?.diagnostics === true);
-    if (!owned) return silent;
+    let diagnostics = false;
+    const owned = await prepareOwnedHost(input.directory, "v1", void 0, diagnostics = options?.diagnostics === true);
+    if (!owned) {
+      compositionDiagnostic(diagnostics, "v1.owned.denied");
+      return silent;
+    }
     if (holder.retired) {
       await owned.dispose();
       return silent;
     }
     const policy = selectClockCell("v1");
     if (!policy) {
+      compositionDiagnostic(diagnostics, "v1.policy.denied");
       await owned.dispose();
       return silent;
     }
@@ -3915,12 +3985,14 @@ async function server(input, options = {}) {
       sourceFactory: createPlatformClock,
       isOwned: owned.isOwned,
       enrich: display.enrich,
+      onDiagnostic: diagnostics ? (reason) => compositionDiagnostic(true, reason) : void 0,
       onInvalidate: () => observer?.dispose()
     });
     view = createNativeV1(input.client, input.directory, delivery.invalidate);
     const stop = () => {
       if (stopped) return stopping;
       stopped = true;
+      compositionDiagnostic(diagnostics, "v1.stop");
       observer?.dispose();
       view.dispose();
       delivery.dispose();
@@ -3930,9 +4002,11 @@ async function server(input, options = {}) {
     holder.stop = stop;
     try {
       if (!await delivery.activate() || holder.retired) {
+        compositionDiagnostic(diagnostics, "v1.activation.denied");
         stop();
         return silent;
       }
+      compositionDiagnostic(diagnostics, "v1.activation.ok");
       observer = createObserver({
         client: input.client,
         location: input.directory,
@@ -3940,8 +4014,15 @@ async function server(input, options = {}) {
         callbackAuthority: "qualified_native_sync",
         clock: delivery.clock,
         onDiagnostic: (reason) => console.error("Agent Notifications OpenCode observer:", reason),
-        beforeEmit: async (event, handoff) => await delivery.beforeEmit(event, handoff) && await view.finalize(event, handoff),
-        emit: (event, handoff) => reportDelivery(delivery.emit(event, handoff))
+        beforeEmit: async (event, handoff) => {
+          compositionDiagnostic(diagnostics, "v1.before_emit");
+          const prepared = await delivery.beforeEmit(event, handoff);
+          if (!prepared) return prepared;
+          const final = await view.finalize(event, handoff);
+          if (!final) compositionDiagnostic(diagnostics, "v1.final.denied");
+          return final;
+        },
+        emit: (event, handoff) => reportDelivery(delivery.emit(event, handoff), diagnostics)
       });
       return Object.freeze({ dispose: stop, event({ event }) {
         if (stopped) return;
@@ -3959,8 +4040,12 @@ async function server(input, options = {}) {
           if (event?.type === "message.updated" && event.properties?.info?.role === "user" && !delivery.allowsBirth(event.properties.info.time?.created)) return;
           snapshot = display.capture(event);
           view.ingest(event);
-          void observer.observe(event).catch(stop).finally(() => display.release(snapshot));
+          void observer.observe(event).catch((error) => {
+            compositionDiagnostic(diagnostics, "v1.observe.reject");
+            return stop(error);
+          }).finally(() => display.release(snapshot));
         } catch {
+          compositionDiagnostic(diagnostics, "v1.ingress.catch");
           display.release(snapshot);
           stop();
         }
@@ -3978,11 +4063,16 @@ async function setup(context) {
   if (!context || typeof context.event?.subscribe !== "function" || typeof context.session?.get !== "function" || typeof context.session?.context !== "function" || typeof context.permission?.get !== "function" || typeof context.permission?.list !== "function" || typeof context.rpc?.register !== "function") return;
   if (setups.has(context)) return setups.get(context);
   const starting = (async () => {
-    const owned = await prepareOwnedHost(context.location?.directory, "v2", context.app?.version, context.options?.diagnostics === true);
-    if (!owned) return;
+    let diagnostics = false;
+    const owned = await prepareOwnedHost(context.location?.directory, "v2", context.app?.version, diagnostics = context.options?.diagnostics === true);
+    if (!owned) {
+      compositionDiagnostic(diagnostics, "v2.owned.denied");
+      return;
+    }
     const policy = selectClockCell("v2");
     const display = context.client?.session?.get ? createDisplayContext(context.client) : void 0;
     if (!policy) {
+      compositionDiagnostic(diagnostics, "v2.policy.denied");
       await owned.dispose();
       return;
     }
@@ -4000,6 +4090,7 @@ async function setup(context) {
       sourceFactory: createPlatformClock,
       isOwned: isNativeOwned,
       enrich: display?.enrich,
+      onDiagnostic: diagnostics ? (reason) => compositionDiagnostic(true, reason) : void 0,
       onInvalidate: (reason) => {
         if (reason === "clock") observer?.dispose();
         view?.reset();
@@ -4009,6 +4100,7 @@ async function setup(context) {
     const stop = async () => {
       if (stopped) return;
       stopped = true;
+      compositionDiagnostic(diagnostics, "v2.stop");
       observer?.dispose();
       delivery.dispose();
       connection?.abort();
@@ -4018,9 +4110,11 @@ async function setup(context) {
     try {
       view = createNativeV2(context, context.location, delivery.nativeIngress, delivery.invalidate);
       if (!await delivery.activate()) {
+        compositionDiagnostic(diagnostics, "v2.activation.denied");
         await stop();
         return;
       }
+      compositionDiagnostic(diagnostics, "v2.activation.ok");
       const readerContext = { app: context.app, event: { subscribe({ signal }) {
         connection = new AbortController();
         const abort = () => {
@@ -4069,12 +4163,21 @@ async function setup(context) {
         clock: delivery.clock,
         onDiagnostic: (reason) => console.error("Agent Notifications OpenCode observer:", reason),
         beforeEmit: async (event, handoff) => {
+          compositionDiagnostic(diagnostics, "v2.before_emit");
           const fact = view.project(event);
-          return Boolean(fact && await delivery.beforeEmit(fact, handoff) && await view.finalize(event, handoff));
+          if (!fact) {
+            compositionDiagnostic(diagnostics, "v2.fact.denied");
+            return Boolean(fact);
+          }
+          const prepared = await delivery.beforeEmit(fact, handoff);
+          if (!prepared) return Boolean(prepared);
+          const final = await view.finalize(event, handoff);
+          if (!final) compositionDiagnostic(diagnostics, "v2.final.denied");
+          return Boolean(final);
         },
         emit: (event, handoff) => {
           const fact = view.project(event);
-          return fact ? reportDelivery(delivery.emit(fact, handoff)) : void 0;
+          return fact ? reportDelivery(delivery.emit(fact, handoff), diagnostics) : void 0;
         }
       });
       observer.start();
