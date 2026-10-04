@@ -2,7 +2,11 @@
 
 package observation
 
-import "github.com/777genius/agent-notifications/internal/installruntime"
+import (
+	"context"
+
+	"github.com/777genius/agent-notifications/internal/installruntime"
+)
 
 func checkCacheRoot(root string) error { return installruntime.CheckPrivateCacheRoot(root) }
 func readCache(root string) ([]byte, error) {
@@ -23,6 +27,8 @@ func openCache(root string) (*windowsCache, error) {
 	}
 	return &windowsCache{root: session}, nil
 }
-func (c *windowsCache) Read() ([]byte, error)   { return c.root.Read("observations.json", cacheBytes) }
-func (c *windowsCache) Write(data []byte) error { return c.root.Write("observations.json", data) }
-func (c *windowsCache) Close()                  { c.root.Close() }
+func (c *windowsCache) Read() ([]byte, error) { return c.root.Read("observations.json", cacheBytes) }
+func (c *windowsCache) Write(ctx context.Context, data []byte) error {
+	return c.root.WriteContext(ctx, "observations.json", data)
+}
+func (c *windowsCache) Close() { c.root.Close() }

@@ -104,7 +104,7 @@ func (c *RecentCache) Claim(ctx context.Context, key string, bit uint8) (bool, e
 		return false, diag.fail(err, "none")
 	}
 	diag.enter("publish")
-	if err = cache.Write(data); err != nil {
+	if err = cache.Write(lockCtx, data); err != nil {
 		return false, diag.fail(err, "validation")
 	}
 	diag.enter("published")

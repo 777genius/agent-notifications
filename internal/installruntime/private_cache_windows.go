@@ -141,7 +141,14 @@ func WritePrivateCacheDocument(root, name string, data []byte) error {
 	return r.Write(name, data)
 }
 
-func (r *PrivateCacheRoot) Write(name string, data []byte) (err error) {
+func (r *PrivateCacheRoot) Write(name string, data []byte) error {
+	return r.WriteContext(context.Background(), name, data)
+}
+
+// WriteContext checks cancellation immediately before replacing the document.
+// Synchronous filesystem calls and a rename already in flight cannot be canceled;
+// callers must still check their deadline after publication before delivery.
+func (r *PrivateCacheRoot) WriteContext(ctx context.Context, name string, data []byte) (err error) {
 	if len(data) == 0 {
 		return fmt.Errorf("private cache write requires bytes")
 	}
@@ -149,14 +156,14 @@ func (r *PrivateCacheRoot) Write(name string, data []byte) (err error) {
 		return fmt.Errorf("invalid relative Windows component")
 	}
 	var parent windows.Handle
-	trace.WithRegion(context.Background(), "observation.publish/root", func() {
+	trace.WithRegion(ctx, "observation.publish/root", func() {
 		parent, err = r.parent()
 	})
 	if err != nil {
 		return err
 	}
 	var random [16]byte
-	trace.WithRegion(context.Background(), "observation.publish/random", func() {
+	trace.WithRegion(ctx, "observation.publish/random", func() {
 		_, err = rand.Read(random[:])
 	})
 	if err != nil {
@@ -164,7 +171,7 @@ func (r *PrivateCacheRoot) Write(name string, data []byte) (err error) {
 	}
 	temp := ".observations-" + hex.EncodeToString(random[:])
 	var handle windows.Handle
-	trace.WithRegion(context.Background(), "observation.publish/create", func() {
+	trace.WithRegion(ctx, "observation.publish/create", func() {
 		handle, err = windowsCreatePrivateCacheAt(parent, temp)
 	})
 	if err != nil {
@@ -174,12 +181,12 @@ func (r *PrivateCacheRoot) Write(name string, data []byte) (err error) {
 	published := false
 	defer func() {
 		if !published {
-			trace.WithRegion(context.Background(), "observation.publish/cleanup", func() {
+			trace.WithRegion(ctx, "observation.publish/cleanup", func() {
 				_ = windowsDeleteHandle(handle)
 			})
 		}
 		var closeErr error
-		trace.WithRegion(context.Background(), "observation.publish/close", func() {
+		trace.WithRegion(ctx, "observation.publish/close", func() {
 			closeErr = f.Close()
 		})
 		if err == nil {
@@ -187,7 +194,7 @@ func (r *PrivateCacheRoot) Write(name string, data []byte) (err error) {
 		}
 	}()
 	var written int
-	trace.WithRegion(context.Background(), "observation.publish/write", func() {
+	trace.WithRegion(ctx, "observation.publish/write", func() {
 		written, err = f.Write(data)
 	})
 	if err != nil {
@@ -196,13 +203,16 @@ func (r *PrivateCacheRoot) Write(name string, data []byte) (err error) {
 	if written != len(data) {
 		return io.ErrShortWrite
 	}
-	trace.WithRegion(context.Background(), "observation.publish/target", func() {
+	trace.WithRegion(ctx, "observation.publish/target", func() {
 		err = validatePrivateCacheReplacement(parent, name)
 	})
 	if err != nil {
 		return err
 	}
-	trace.WithRegion(context.Background(), "observation.publish/rename", func() {
+	if err = ctx.Err(); err != nil {
+		return err
+	}
+	trace.WithRegion(ctx, "observation.publish/rename", func() {
 		err = windowsRenameHandle(handle, parent, name, true)
 	})
 	if err != nil {
