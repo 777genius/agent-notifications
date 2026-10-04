@@ -10,7 +10,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: d4332d858aaf8d4b61f25adc997bef761203730c
+          ref: e0cf2a14cd3c95c0fce425e7ed6bb733f7d290fc
       - uses: actions/setup-go@v7
         with:
           go-version: '1.26'
@@ -52,6 +52,20 @@ jobs:
             if (Test-Path "observation-evidence/$phase-os.etl") {
               & $xperf -i "observation-evidence/$phase-os.etl" -o "observation-evidence/$phase-tracestats.txt" -a tracestats
               if ($LASTEXITCODE -ne 0) { throw 'OS trace decoding failed' }
+            }
+          }
+      - name: Log recorder provider coverage
+        if: always()
+        shell: pwsh
+        run: |
+          wpr.exe -profiledetails GeneralProfile
+          if ($LASTEXITCODE -ne 0) { throw 'Profile details unavailable' }
+          wpr.exe -exportprofile GeneralProfile observation-evidence/general-profile.wprp
+          if ($LASTEXITCODE -ne 0) { throw 'Profile export unavailable' }
+          Get-Content observation-evidence/general-profile.wprp
+          foreach ($phase in @('geminievent','geminievent-repeat')) {
+            if (Test-Path "observation-evidence/$phase-tracestats.txt") {
+              Get-Content "observation-evidence/$phase-tracestats.txt"
             }
           }
       - name: Retain exact helper proof
