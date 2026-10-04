@@ -707,6 +707,13 @@ def settle_sampler_resources(before, initial, operation_end, read_resources, obs
     return after
 
 
+def require_repeated_sampler_nonincrease(baseline, observed, expected):
+    # One external fixed baseline, checked before advancing either instance.
+    need(type(expected) is int and expected in (1, 2) and len(observed) == expected, 'actual_repeated_disposal_count')
+    for count in observed:
+        require_sampler_nonincrease('windows', baseline, count, baseline)
+
+
 def run_case(root, metadata, os_name, arch, job_end):
     case_started = time.monotonic(); operation_started = None; round_number = None
     stage = 'initial_custody'; disposed_observed = False
@@ -749,25 +756,29 @@ def run_case(root, metadata, os_name, arch, job_end):
         resource_before_at = time.monotonic() if os_name == 'windows' else None
         operation_started = time.monotonic()
         operation_end = min(js_end, job_end, operation_started + 2)
+        measured_resource_counts = []
         own.send(host, {'kind': 'begin'}, operation_end)
         if os_name == 'windows':
-            stage = 'source_import_observation'
+            stage = 'postwarmup_resource_observation'
             ready = own.message(host, 'source_ready', operation_end)
             windows_leaf = next(x for x in metadata['moduleLeaves'] if x['path'] == 'opencode-plugin/windows-clock.mjs')
-            need(set(ready) == {'kind', 'pid', 'sourceCommit', 'windowsModuleSHA256', 'samplerCreated', 'samples'} and
+            need(set(ready) == {'kind', 'pid', 'sourceCommit', 'windowsModuleSHA256', 'samplerCreated', 'samples', 'warmup'} and
                  ready['pid'] == host['p'].pid and ready['sourceCommit'] == metadata['sourceCommit'] and
                  ready['windowsModuleSHA256'] == windows_leaf['actualSHA256'] and
-                 ready['samplerCreated'] is False and type(ready['samples']) is int and ready['samples'] == 0,
-                 'actual_presampler_source_import')
-            imported_resources = native_resources(host['p'], os_name)
+                 ready['samplerCreated'] is True and type(ready['samples']) is int and ready['samples'] == 1 and
+                 ready['warmup'] == {'samples': 1, 'disposeCalls': 2, 'sampleAfterDisposeRefused': True} and
+                 type(ready['warmup']['samples']) is int and type(ready['warmup']['disposeCalls']) is int and
+                 ready['warmup']['sampleAfterDisposeRefused'] is True,
+                 'actual_postwarmup_source_baseline')
+            warmed_resources = native_resources(host['p'], os_name)
             sampler_resource_before_at = time.monotonic()
-            safe['nativeImportResourceObservation'] = {
-                'measurementKind': 'GetProcessHandleCount', 'before': resources_before, 'after': imported_resources,
-                'delta': imported_resources - resources_before,
-                'baselineStage': 'loader_received_before_begin', 'stage': stage,
+            safe['nativeWarmupResourceObservation'] = {
+                'measurementKind': 'GetProcessHandleCount', 'before': resources_before, 'after': warmed_resources,
+                'delta': warmed_resources - resources_before,
+                'baselineStage': 'loader_received_before_begin', 'stage': 'actual_postwarmup_baseline',
                 'beforeCaseElapsedMs': round((resource_before_at - case_started) * 1000, 3),
                 'beforeHostElapsedMs': round((resource_before_at - host['startedAt']) * 1000, 3),
-                'samplerCreated': False, 'samples': 0,
+                'samplerCreated': True, 'warmup': ready['warmup'], 'samples': 1,
                 'operationElapsedMs': round((time.monotonic() - operation_started) * 1000, 3)}
             own.send(host, {'kind': 'sampler_begin'}, operation_end)
             safe['nativeResourceCheckpoints'] = []
@@ -781,11 +792,17 @@ def run_case(root, metadata, os_name, arch, job_end):
                  type(ready['samples']) is int and ready['samples'] == expected_samples,
                  'actual_resource_checkpoint')
             count = native_resources(host['p'], os_name)
+            if checkpoint == 'instance_disposed':
+                settled = {}; safe['firstMeasuredDisposal'] = settled
+                count = settle_sampler_resources(warmed_resources, count, operation_end,
+                    lambda: native_resources(host['p'], os_name), settled)
+                measured_resource_counts.append(count)
+                require_repeated_sampler_nonincrease(warmed_resources, measured_resource_counts, 1)
             safe['nativeResourceCheckpoints'].append({'stage': checkpoint, 'round': checkpoint_round,
                 'samples': expected_samples, 'count': count,
                 'operationElapsedMs': round((time.monotonic() - operation_started) * 1000, 3)})
             own.send(host, {'kind': 'resource_continue', 'stage': checkpoint, 'round': checkpoint_round}, operation_end)
-        if os_name == 'windows': resource_checkpoint('sampler_created', None, 0)
+        if os_name == 'windows': resource_checkpoint('sampler_created', None, 1)
         helper_receipts = []
         helper_lifecycle = []
         for round_number in range(3):
@@ -817,7 +834,10 @@ def run_case(root, metadata, os_name, arch, job_end):
                 if s['p'].pid in own.live: own.cleanup()
             if os_name == 'windows':
                 stage = 'helper_compared_resource_observation'
-                resource_checkpoint('helper_compared', round_number, (round_number + 1) * (BUDGETS['chunkSize'] + 4))
+                resource_checkpoint('helper_compared', round_number, (round_number + 1) * (BUDGETS['chunkSize'] + 4) + 1)
+                if round_number == 0:
+                    resource_checkpoint('instance_disposed', 0, 37)
+                    resource_checkpoint('sampler_created', 1, 37)
         stage = 'disposed'
         result = own.message(host, 'disposed', operation_end)
         disposed_observed = True
@@ -830,8 +850,8 @@ def run_case(root, metadata, os_name, arch, job_end):
             # Non-authorizing numeric diagnostics from the two existing native reads.
             safe['nativeResourceObservation'] = {
                 'measurementKind': 'GetProcessHandleCount', 'version': metadata['version'],
-                'before': imported_resources, 'after': resources_after, 'delta': resources_after - imported_resources,
-                'baselineStage': 'actual_plain_import_before_sampler', 'stage': stage,
+                'before': warmed_resources, 'after': resources_after, 'delta': resources_after - warmed_resources,
+                'baselineStage': 'actual_postwarmup_before_measured_instances', 'stage': stage,
                 'beforeCaseElapsedMs': round((sampler_resource_before_at - case_started) * 1000, 3),
                 'afterCaseElapsedMs': round((resource_after_at - case_started) * 1000, 3),
                 'beforeHostElapsedMs': round((sampler_resource_before_at - host['startedAt']) * 1000, 3),
@@ -840,8 +860,8 @@ def run_case(root, metadata, os_name, arch, job_end):
                 'disposedFrameObserved': disposed_observed, 'helperRound': round_number,
                 'helperStarts': own.helpers, 'helperActualCloses': own.helper_closes}
         if os_name == 'windows':
-            safe['nativeImportResourceObservation']['postDispose'] = resources_after
-            safe['nativeImportResourceObservation']['samplerPhaseDelta'] = resources_after - imported_resources
+            safe['nativeWarmupResourceObservation']['postDispose'] = resources_after
+            safe['nativeWarmupResourceObservation']['samplerPhaseDelta'] = resources_after - warmed_resources
             safe['nativeResourceCheckpoints'].append({'stage': 'disposed', 'round': None,
                 'samples': result['samples'], 'count': resources_after,
                 'operationElapsedMs': round((time.monotonic() - operation_started) * 1000, 3)})
@@ -849,10 +869,16 @@ def run_case(root, metadata, os_name, arch, job_end):
         if os_name == 'windows':
             stage = 'resource_settling'
             safe['nativeResourceSettlingObservation'] = {}
-            resources_after = settle_sampler_resources(imported_resources, resources_after, operation_end,
+            resources_after = settle_sampler_resources(warmed_resources, resources_after, operation_end,
                 lambda: native_resources(host['p'], os_name), safe['nativeResourceSettlingObservation'])
-        require_sampler_nonincrease(os_name, resources_before, resources_after,
-                                    imported_resources if os_name == 'windows' else None)
+        if os_name == 'windows':
+            measured_resource_counts.append(resources_after)
+            require_repeated_sampler_nonincrease(warmed_resources, measured_resource_counts, 2)
+            safe['repeatedResourceCriterion'] = {'baselineStage': 'actual_postwarmup_before_measured_instances',
+                'baseline': warmed_resources, 'disposedCounts': measured_resource_counts,
+                'firstInstanceZeroGrowthProved': False, 'runtimeOwnershipProved': False}
+        else:
+            require_sampler_nonincrease(os_name, resources_before, resources_after)
         remaining(operation_end)
         kernel_image(host['p'], exe, os_name)
         remaining(operation_end)
@@ -874,6 +900,8 @@ def run_case(root, metadata, os_name, arch, job_end):
         remaining(js_end)
         safe.update({k: result[k] for k in ('status', 'actualModuleBound', 'rounds', 'samples', 'comparisons',
                      'datePredicates', 'disposeCalls', 'sampleAfterDisposeRefused', 'operationElapsedMs', 'jsElapsedMs', 'checks')})
+        if os_name == 'windows':
+            safe.update({k: result[k] for k in ('warmupSamples', 'measuredSamples', 'measuredInstances')})
         safe.update(kernelExecutingImageVerified=True, nativeResourceNonincrease=True,
                     protectedLoaderFileSHA256=[x['sha256'] for x in loader_files],
                     actualHelperOutputReceiptSHA256=helper_receipts,
@@ -906,9 +934,15 @@ def run_case(root, metadata, os_name, arch, job_end):
 def validate_result(v, os_name):
     keys = {'kind', 'status', 'actualModuleBound', 'rounds', 'samples', 'comparisons', 'datePredicates',
             'disposeCalls', 'sampleAfterDisposeRefused', 'operationElapsedMs', 'jsElapsedMs', 'checks', *QUALIFICATIONS}
+    if os_name == 'windows':
+        keys.update(('warmupSamples', 'measuredSamples', 'measuredInstances'))
+        need(all(type(v.get(k)) is int for k in
+                 ('warmupSamples', 'measuredSamples', 'measuredInstances', 'disposeCalls')) and
+             v.get('warmupSamples') == 1 and v.get('measuredSamples') == 108 and
+             v.get('measuredInstances') == 2, 'actual_repeated_module_lifecycle')
     need(set(v) == keys and v['status'] == 'module_prequalification_observed' and v['actualModuleBound'] is True and
-         v['rounds'] == 3 and type(v['samples']) is int and v['samples'] == (108 if os_name == 'windows' else 102) and
-         v['disposeCalls'] == 2 and v['sampleAfterDisposeRefused'] is True, 'closed_actual_module_result')
+         v['rounds'] == 3 and type(v['samples']) is int and v['samples'] == (109 if os_name == 'windows' else 102) and
+         v['disposeCalls'] == (4 if os_name == 'windows' else 2) and v['sampleAfterDisposeRefused'] is True, 'closed_actual_module_result')
     need(all(v[k] is False for k in QUALIFICATIONS), 'qualification_grant_refused')
     need(type(v['operationElapsedMs']) in (int, float) and 0 <= v['operationElapsedMs'] < 2000 and
          type(v['jsElapsedMs']) in (int, float) and 0 <= v['jsElapsedMs'] < 25000, 'original_result_budgets')

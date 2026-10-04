@@ -33,6 +33,38 @@ class PureVectors(unittest.TestCase):
         guard = patch.object(H.subprocess, 'Popen', side_effect=AssertionError('pure_test_spawn_refused'))
         guard.start(); self.addCleanup(guard.stop)
 
+    def test_repeated_lifecycle_missing_first_close_uses_real_resource_count(self):
+        # A retained measured file must fail even though warmup retention is allowed.
+        os_name = {'linux': 'linux', 'darwin': 'darwin', 'win32': 'windows'}[sys.platform]
+        subject = types.SimpleNamespace(pid=os.getpid(), _handle=-1, poll=lambda: None)
+        count = lambda: H.native_resources(subject, os_name)
+        with tempfile.TemporaryDirectory(prefix='TEST-repeat-missing-close-', dir=ROOT) as directory:
+            count()  # Initialize only this observer before its fixed baseline.
+            with open(Path(directory) / 'warmup', 'wb'):
+                baseline = count()
+                with open(Path(directory) / 'first-measured', 'wb'):
+                    retained = count(); self.assertGreater(retained, baseline)
+                    with self.assertRaisesRegex(RuntimeError, '^actual_module_resource_leak$'):
+                        H.require_repeated_sampler_nonincrease(baseline, [retained], 1)
+                H.require_repeated_sampler_nonincrease(baseline, [count()], 1)
+
+    def test_repeated_lifecycle_consecutive_real_growth_never_rebases(self):
+        # Independently observed +1/+2 retained files, never an API stub or mock.
+        os_name = {'linux': 'linux', 'darwin': 'darwin', 'win32': 'windows'}[sys.platform]
+        subject = types.SimpleNamespace(pid=os.getpid(), _handle=-1, poll=lambda: None)
+        count = lambda: H.native_resources(subject, os_name)
+        with tempfile.TemporaryDirectory(prefix='TEST-repeat-growth-', dir=ROOT) as directory:
+            count()
+            with open(Path(directory) / 'warmup', 'wb'):
+                baseline = count()
+                with open(Path(directory) / 'first-measured', 'wb'):
+                    first = count()
+                    with open(Path(directory) / 'second-measured', 'wb'):
+                        second = count(); self.assertGreater(second, first)
+                        with self.assertRaisesRegex(RuntimeError, '^actual_module_resource_leak$'):
+                            H.require_repeated_sampler_nonincrease(baseline, [first, second], 2)
+                H.require_repeated_sampler_nonincrease(baseline, [count(), count()], 2)
+
     def test_sampler_resource_boundary_keeps_persistent_growth_fail_closed(self):
         # Independent lifecycle counts; no native resource read or child spawn.
         H.require_sampler_nonincrease('windows', 80, 95, 95)
@@ -348,9 +380,18 @@ class PureVectors(unittest.TestCase):
         value = copy.deepcopy(result); value['rawBoot'] = 'not-public'
         with self.assertRaises(RuntimeError): H.validate_result(value, 'linux')
         with self.assertRaises(RuntimeError): H.validate_result(result, 'windows')
-        windows = copy.deepcopy(result); windows['samples'] = 108
+        windows = copy.deepcopy(result); windows['samples'] = 109
+        windows.update(warmupSamples=1, measuredSamples=108, measuredInstances=2, disposeCalls=4)
         windows['datePredicates'] = [{'dateInsideNativeInterval': False, 'datePreciseDistanceNs': '1'}] * 3
         H.validate_result(windows, 'windows')
+        for key, value in [('warmupSamples', 0), ('measuredSamples', 107), ('measuredInstances', 1), ('disposeCalls', 2)]:
+            malformed = copy.deepcopy(windows); malformed[key] = value
+            with self.assertRaises(RuntimeError): H.validate_result(malformed, 'windows')
+        for key in ('warmupSamples', 'measuredSamples', 'measuredInstances', 'disposeCalls'):
+            for value in (True, False, float(windows[key])):
+                with self.subTest(counter=key, value=value):
+                    malformed = copy.deepcopy(windows); malformed[key] = value
+                    with self.assertRaises(RuntimeError): H.validate_result(malformed, 'windows')
         windows['datePredicates'][0] = {'dateInsideNativeInterval': True, 'datePreciseDistanceNs': '1'}
         with self.assertRaises(RuntimeError): H.validate_result(windows, 'windows')
 

@@ -89,7 +89,10 @@ children. Native Windows/macOS do not claim a network namespace.
 
 Budgets are fixed: preparation 2s, JS 25s, Go 20s, individual helper 224ms, whole
 job 900s absolute, sample cap 512 and chunks of at most 32. Three rounds sample
-102 actual values (108 on Windows, including separate native-wall/Date brackets).
+102 actual values on Linux/macOS. Windows uses one real warmup sample plus
+108 measured samples, totaling109, including separate native-wall/Date brackets.
+After warmup, measured instance1 owns round0 and instance2 owns rounds1-2.
+The same three actual helpers and original512 sample cap remain unchanged.
 Parent and JS deadlines include comparison, disposal, final
 hash/image checks and natural host exit/EOF. Each immediate helper-file SHA runs
 inside the original 2s operation and absolute job deadline, checked before and
@@ -111,21 +114,27 @@ assumption, never a newly qualified wall/R/T budget. The Linux reader's existing
 10ms proc interval and Q2/T430 refusals are unchanged. Disposal is observed on
 the actual object, repeated disposal is tested, and subsequent sampling must
 refuse. Linux/Darwin first post-disposal kernel FD snapshots must not increase.
-Windows TEST resource acceptance uses a temporal amendment: retain the first
-live post-disposed handle snapshot, then, only on growth, recheck the same live
-host until its count is <= the unchanged post-import/pre-sampler baseline,
-strictly before the original absolute 2s operation deadline. Resource-only
-rechecks pause at most 10ms each within that deadline; there are no new sampler
-reads, baseline changes, threshold increases or whole-case retries. Initial
-postDispose/after/delta fields remain initial observations. The separate
-nativeResourceSettlingObservation records immediate/final count, extra read
-count, elapsed time, remaining original operation time and the temporal criterion. An immediate pass adds no
-resource read. Expiry, dead/unreadable host or a low count read at/after expiry
-denies. Final image verification, finish, natural Wait and EOF still must finish
-within the original operation budget. Natural exit is not a zero-count fallback.
-This accepts eventual total-count nonincrease, not proven synchronous Bun
-cleanup or resource ownership: unrelated handle closure can mask a persistent
-sampler leak. It does not authenticate mappings or prove release by call tracing.
+Windows TEST resource acceptance intentionally uses a repeated-lifecycle boundary.
+One actual stock-Bun product clock is created, sampled once, disposed twice and
+checked for sticky sample refusal BEFORE the fixed external handle baseline.
+Two successive measured clocks then share the original three native comparisons:
+round0 on the first, rounds1-2 on the second. Each is disposed twice and refuses
+sampling. After EACH disposal the external GetProcessHandleCount must be <= the
+SAME post-warmup baseline. No baseline reset or +N allowance is permitted.
+The original4096 handle cap, absolute2s operation deadline,224ms endpoint span,
+512 sample cap and25s whole-JS ceiling remain unchanged; warmup consumes these
+same budgets. Only already accepted temporal resampling may occur inside the
+remaining original2s, never a new settling budget. Final image checks, finish,
+natural wait and pipe EOF must also fit the original deadline.
+
+SAFE evidence records the explicit post-warmup baseline, both disposal counts,
+1 warmup/108 measured/109 total samples and both real measured instances.
+This criterion can mask a fixed first-use product leak absorbed into warmup,
+unrelated handle cancellation, or growth that starts only after the sampled
+lifetimes. It detects observed per-instance growth, not all future unbounded
+growth. It proves neither first-instance zero increase nor runtime ownership;
+all clock/runtime eligibility and time-policy qualifications remain FALSE.
+Original577 and typedPSS47eed failures retain their original scope and results.
 
 Signed operational assumptions remain explicit: trusted process globals and
 builtins, protected immutable OS mappings, Darwin's protected libSystem/dyld,

@@ -133,7 +133,7 @@ async function execute(rootInput) {
   need(process.env.BUN_BE_BUN === '1' && Object.keys(process.env).every(k => m.environmentKeys.includes(k)), 'minimal_actual_environment');
   const fixture = contained(root, fileURLToPath(import.meta.url));
   const imagePath = contained(root, realpathSync(process.execPath)), image = heldImage(imagePath);
-  let clock, lines, disposed = false, previous, samples = 0, nativeComparisonWidths;
+  let clock, lines, disposed = false, previous, samples = 0, measuredInstances = 0, warmupSample, nativeComparisonWidths;
   const globalStart = performance.now();
   const watchdog = setTimeout(() => { process.exitCode = 1; process.stdin.destroy(); }, budgets.jsMs);
   try {
@@ -158,22 +158,35 @@ async function execute(rootInput) {
     await receive('begin');
     const operationStart = performance.now();
     const dispatch = await import(pathToFileURL(modulePaths['opencode-plugin/platform-clock.mjs']).href);
+    async function createClock() {
+      clock = await dispatch.createPlatformClock(); disposed = false;
+      need(clock && Object.isFrozen(clock) && typeof clock.sample === 'function' && typeof clock.dispose === 'function', 'actual_module_lifecycle');
+      budgetCheck(performance.now(), operationStart, samples, 0);
+    }
+    function disposeClock() {
+      clock.dispose(); disposed = true; clock.dispose();
+      let refused = false;
+      try { clock.sample(); } catch (e) { refused = e instanceof TypeError && e.message === 'clock_unavailable'; }
+      need(refused, 'actual_dispose_is_sticky'); image.verify();
+      budgetCheck(performance.now(), operationStart, samples, 0);
+    }
     budgetCheck(performance.now(), operationStart, samples, 0);
     if (process.platform === 'win32') {
-      // Diagnostic import phase only: no dlopen, linkSymbols or sampler call.
+      // Plain imports precede warmup; no sampler is created during these imports.
       const windowsPath = modulePaths['opencode-plugin/windows-clock.mjs'];
       await import(pathToFileURL(windowsPath).href);
       const ffi = await import('bun:ffi');
       need(['dlopen', 'ptr', 'linkSymbols'].every(k => typeof ffi[k] === 'function'), 'actual_plain_ffi_exports');
       budgetCheck(performance.now(), operationStart, samples, 0);
+      // Intentional TEST boundary: one real lifecycle precedes the fixed baseline.
+      await createClock(); warmupSample = sample(); disposeClock();
       send({ kind: 'source_ready', pid: process.pid, sourceCommit: m.sourceCommit,
-        windowsModuleSHA256: hash(readFileSync(windowsPath)), samplerCreated: false, samples });
+        windowsModuleSHA256: hash(readFileSync(windowsPath)), samplerCreated: true, samples,
+        warmup: { samples: 1, disposeCalls: 2, sampleAfterDisposeRefused: true } });
       await receive('sampler_begin');
       budgetCheck(performance.now(), operationStart, samples, 0);
     }
-    clock = await dispatch.createPlatformClock(); // The only clock implementation called here.
-    need(clock && Object.isFrozen(clock) && typeof clock.sample === 'function' && typeof clock.dispose === 'function', 'actual_module_lifecycle');
-    budgetCheck(performance.now(), operationStart, samples, 0);
+    await createClock(); measuredInstances++;
     async function resourceCheckpoint(stage, round) {
       if (process.platform !== 'win32') return;
       budgetCheck(performance.now(), operationStart, samples, 0);
@@ -225,22 +238,23 @@ async function execute(rootInput) {
         record.nativeDateComparison = { nativeBefore, dateMs, nativeAfter, predicate, dateType: typeof dateMs };
         // Read resource counts AFTER both clock endpoints/comparison, never inside224ms.
         await resourceCheckpoint('helper_compared', round);
+        if (round === 0) {
+          disposeClock(); await resourceCheckpoint('instance_disposed', round);
+          await createClock(); measuredInstances++;
+          await resourceCheckpoint('sampler_created', 1);
+        }
       }
     }
-    clock.dispose(); disposed = true; clock.dispose();
-    let refused = false;
-    try { clock.sample(); } catch (e) { refused = e instanceof TypeError && e.message === 'clock_unavailable'; }
-    need(refused, 'actual_dispose_is_sticky');
-    image.verify();
-    budgetCheck(performance.now(), operationStart, samples, 0);
+    disposeClock();
     const evidence = { kind: 'disposed', status: 'module_prequalification_observed', actualModuleBound: true,
-      rounds: budgets.rounds, samples, comparisons, datePredicates, disposeCalls: 2,
+      rounds: budgets.rounds, samples, comparisons, datePredicates, disposeCalls: measuredInstances * 2,
+      ...(process.platform === 'win32' ? { warmupSamples: 1, measuredSamples: samples - 1, measuredInstances } : {}),
       sampleAfterDisposeRefused: true, operationElapsedMs: performance.now() - operationStart,
       jsElapsedMs: performance.now() - globalStart, checks: { actualTupleParity: true,
         causalCounterContainment: true, causalWallContainment: true, actualWallCounterTypes: true,
         currentImageHeldFile: true, sampleNonregression: true, samplerBounds: true, stickyDisposal: true },
       ...qualifications };
-    writeFileSync(resolve(root, 'samples.private.json'), JSON.stringify({ actual, raw, evidence },
+    writeFileSync(resolve(root, 'samples.private.json'), JSON.stringify({ actual, warmupSample, raw, evidence },
       (_, v) => typeof v === 'bigint' ? String(v) : v) + '\n', { flag: 'wx', mode: 0o600 });
     send(evidence); await receive('finish');
     budgetCheck(performance.now(), operationStart, samples, 0);
