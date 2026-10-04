@@ -8,7 +8,7 @@ const localeHead = useLocaleHead({ seo: true });
 const base = useRuntimeConfig().app.baseURL;
 const brandLogo = `${base}agent-notifications-logo.png`;
 const publicBrandLogo =
-  "https://777genius.github.io/agent-notifications/agent-notifications-logo.png";
+  "https://agent-notifications.com/agent-notifications-logo.png";
 
 useHead(() => ({
   title: t("seo.title"),
@@ -49,7 +49,7 @@ useHead(() => ({
           price: "0",
           priceCurrency: "USD",
         },
-        url: "https://777genius.github.io/agent-notifications/",
+        url: "https://agent-notifications.com/",
         image: publicBrandLogo,
         downloadUrl: repo,
       }),

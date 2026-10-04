@@ -8,7 +8,7 @@ import (
 )
 
 var productOrder = []string{"claude", "codex", "opencode", "gemini"}
-var productLabels = map[string]string{"claude": "Claude Code", "codex": "Codex", "opencode": "OpenCode", "gemini": "Gemini CLI"}
+var productLabels = map[string]string{"claude": "Claude", "codex": "Codex", "opencode": "OpenCode", "gemini": "Gemini CLI"}
 var scopeKeys = []string{"claude-config", "codex-home", "opencode-config-dir", "gemini-home", "gemini-config-root", "claude-executable", "codex-executable", "opencode-executable", "gemini-executable", "control-root"}
 
 type setupProductsArgs struct {

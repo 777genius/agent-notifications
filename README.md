@@ -4,7 +4,7 @@
 <h1 align="center"><a href="https://777genius.github.io/agent-notifications/">Agent Notifications</a></h1>
 
 <p align="center">
-  <a href="#install-or-update"><img src="landing/public/agents/claude.png" width="64" height="64" alt="Claude Code" title="Claude Code" /></a>
+  <a href="#install-or-update"><img src="landing/public/agents/claude.png" width="64" height="64" alt="Claude" title="Claude" /></a>
   &nbsp;&nbsp;
   <a href="docs/CODEX.md"><img src="brand/codex-logo.svg" width="64" height="64" alt="Codex CLI" title="Codex CLI" /></a>
   &nbsp;&nbsp;
@@ -19,7 +19,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/777genius/agent-notifications.svg)](https://pkg.go.dev/github.com/777genius/agent-notifications)
 [![codecov](https://codecov.io/gh/777genius/agent-notifications/graph/badge.svg?branch=main)](https://codecov.io/gh/777genius/agent-notifications)
 
-Desktop notifications for **Claude Code, Codex CLI and OpenCode**. Know when a task finishes, an agent needs input, or a tool needs approval. Claude and Codex also support sounds and click-to-focus.
+Desktop notifications for **Claude, Codex CLI and OpenCode**. Know when a task finishes, an agent needs input, or a tool needs approval. Claude and Codex also support sounds and click-to-focus.
 
 <p align="center">
   <img width="100%" alt="macOS, Windows, Linux (left to right)" src="docs/images/notification-platform-labels.svg" />
@@ -28,23 +28,21 @@ Desktop notifications for **Claude Code, Codex CLI and OpenCode**. Know when a t
   <a href="docs/images/notifications-linux.png"><img width="31%" align="top" alt="Linux notification preview" src="docs/images/notifications-linux.png" /></a>
 </p>
 
-*Illustrative notification previews. Appearance varies by desktop environment.*
-
 ## Install Or Update
 
-**[Guided installer (stable)](https://777genius.github.io/agent-notifications/#install)** or run:
+**[Guided installer](https://777genius.github.io/agent-notifications/#install)** or run:
 
 ```bash
 curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash
 ```
 
-Choose **Claude Code**, **Codex CLI**, **OpenCode**, or a combination. Install the selected agent CLIs first. Run the same command to update.
+Choose **Claude**, **Codex CLI**, **OpenCode**, or a combination. Install the selected agent CLIs first. Run the same command to update.
 
 **Windows:** use **Git Bash**, not WSL, for a native Windows installation.
 
 After setup:
 
-- **Claude:** restart Claude Code.
+- **Claude:** restart Claude.
 - **Codex:** restart Codex, then review and trust the installed hooks in `/hooks`.
 - **OpenCode:** restart OpenCode; on macOS, [grant notification permission](docs/opencode-notifications.md#macos-notification-permission).
 
@@ -86,7 +84,7 @@ Claude/Codex setup also installs the `agent-notify` MCP server and `agent-notifi
 
 | Agent | Alerts | Sounds / click-to-focus | Details |
 | --- | --- | --- | --- |
-| **Claude Code** | Completions, reviews, questions, plans, session limits and API errors | Yes | [Notification types](docs/NOTIFICATION_TYPES.md) |
+| **Claude** | Completions, reviews, questions, plans, session limits and API errors | Yes | [Notification types](docs/NOTIFICATION_TYPES.md) |
 | **Codex CLI** | Turn completion and tool permissions; questions and errors depend on host events or final-message detection | Yes | [Setup and limits](docs/CODEX.md) |
 | **OpenCode** | Root-session completion, questions, permissions and errors | No | [Setup and limits](docs/opencode-notifications.md) |
 | **Gemini CLI** | Turn completion and tool permissions | No | [Prerelease setup and qualification](docs/gemini-notifications.md) |
@@ -97,7 +95,7 @@ For the OpenCode candidate on stock Windows V1, the original event age is not al
 
 ## Settings
 
-In Claude Code, run `/claude-notifications-go:settings` for the settings wizard or `/claude-notifications-go:sounds` to preview sounds.
+In Claude, run `/claude-notifications-go:settings` for the settings wizard or `/claude-notifications-go:sounds` to preview sounds.
 
 Use the installed launcher to find or safely inspect settings. The commands below assume `agent-notifications` is on your `PATH`; otherwise, use its full path.
 

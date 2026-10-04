@@ -16,7 +16,7 @@ async function chooseOS(page: Page, value: string) {
   await page.getByRole("option", { name: labels[value], exact: true }).click();
 }
 async function chooseAgents(page: Page, selected: readonly ("claude" | "codex" | "opencode" | "gemini")[]) {
-  const labels = { claude: "Claude Code", codex: "Codex CLI", opencode: "OpenCode", gemini: "Gemini CLI" };
+  const labels = { claude: "Claude", codex: "Codex CLI", opencode: "OpenCode", gemini: "Gemini CLI" };
   // Select desired cards first so switching hosts never needs an empty selection.
   for (const wanted of [true, false])
     for (const value of ["claude", "codex", "opencode", "gemini"] as const) {
@@ -114,7 +114,7 @@ test("unknown target, manual route and mobile layout", async ({ browser }) => {
     reducedMotion: "reduce",
   });
   const page = await context.newPage();
-  await page.goto("http://127.0.0.1:4173/agent-notifications/");
+  await page.goto("http://127.0.0.1:4173/");
   await expect(page.getByRole("button", { name: "Copy command" })).toHaveCount(
     0,
   );
@@ -135,7 +135,7 @@ test("unknown target, manual route and mobile layout", async ({ browser }) => {
   await page.screenshot({ path: "test-results/mobile.png", fullPage: true });
   await context.close();
 });
-test("keyboard navigation, base-path reload and desktop screenshot", async ({
+test("keyboard navigation, root-path reload and desktop screenshot", async ({
   page,
 }) => {
   await page.goto("");
@@ -146,10 +146,18 @@ test("keyboard navigation, base-path reload and desktop screenshot", async ({
   await page.keyboard.press("Enter");
   await page.reload();
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+    "href",
+    /^https:\/\/agent-notifications\.com\/?$/,
+  );
+  await expect(page.locator('meta[property="og:image"]')).toHaveAttribute(
+    "content",
+    "https://agent-notifications.com/agent-notifications-logo.png",
+  );
   for (const asset of await page
     .locator("script[src]")
     .evaluateAll((nodes) => nodes.map((n) => (n as HTMLScriptElement).src)))
-    expect(asset).toContain("/agent-notifications/");
+    expect(new URL(asset).pathname).toMatch(/^\/_nuxt\//);
   await page.screenshot({ path: "test-results/desktop.png", fullPage: true });
 });
 test("pending clipboard completion cannot claim a different command was copied", async ({
@@ -260,12 +268,16 @@ test("language switch localizes content, URL, metadata and persists the choice",
   );
   await chooseLanguage(page, /Current language/, "简体中文");
   await expect(page).toHaveURL(
-    /\/agent-notifications\/zh\/?\?source=i18n#features$/,
+    /\/zh\/?\?source=i18n#features$/,
   );
   await expect(page.getByRole("heading", { level: 1 })).toContainText(
     "保持专注",
   );
   await expect(page.locator("html")).toHaveAttribute("lang", "zh-CN");
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+    "href",
+    /^https:\/\/agent-notifications\.com\/zh\/?$/,
+  );
   await expect(page).toHaveTitle(
     "Agent Notifications - 专注工作，及时获知进展",
   );
@@ -296,7 +308,7 @@ test("language switch localizes content, URL, metadata and persists the choice",
   );
   await chooseLanguage(page, /当前语言/, "English");
   await expect(page).toHaveURL(
-    /\/agent-notifications\/?\?source=i18n#features$/,
+    /\/\?source=i18n#features$/,
   );
   await expect(page.getByRole("heading", { level: 1 })).toContainText(
     "Stay in flow",
@@ -314,7 +326,7 @@ test("failed locale payload keeps the working language and reports the error", a
   await expect(page.getByRole("heading", { level: 1 })).toContainText(
     "Stay in flow",
   );
-  await expect(page).toHaveURL(/\/agent-notifications\/?$/);
+  await expect(page).toHaveURL(/^http:\/\/127\.0\.0\.1:4173\/$/);
 });
 test("language menu is searchable, keyboard accessible and closes outside", async ({
   page,
@@ -456,7 +468,7 @@ test("guided reference layout, detected OS and mode focus", async ({
     reducedMotion: "reduce",
   });
   const page = await context.newPage();
-  await page.goto("http://127.0.0.1:4173/agent-notifications/");
+  await page.goto("http://127.0.0.1:4173/");
   await expect(page.locator(".os-summary")).toContainText("macOS");
   await expect(page.locator(".os-summary")).toContainText(
     "Detected automatically",
@@ -491,7 +503,7 @@ test("guided reference layout, detected OS and mode focus", async ({
 test("all agents toggle independently, copied commands and configuration cover the selection", async ({ page }) => {
   await page.goto("");
   await chooseOS(page, "macos");
-  const labels = { claude: "Claude Code", codex: "Codex CLI", opencode: "OpenCode", gemini: "Gemini CLI" };
+  const labels = { claude: "Claude", codex: "Codex CLI", opencode: "OpenCode", gemini: "Gemini CLI" };
   const prefix = "curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product ";
   const cases = [
     { selected: ["claude"], expected: prefix + "claude" },
@@ -518,7 +530,7 @@ test("all agents toggle independently, copied commands and configuration cover t
   await page.getByRole("button", { name: "Copy command" }).click();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("(set -o pipefail; " + prefix.replace("--product ", "--products ") + "claude,codex,opencode --desktop)");
   const table = page.getByRole("table", { name: "Compare agent features" });
-  await expect(table.getByRole("columnheader")).toHaveText(["Feature", "Claude Code", "Codex CLI", "OpenCode", /Gemini CLI\s*Unreleased/]);
+  await expect(table.getByRole("columnheader")).toHaveText(["Feature", "Claude", "Codex CLI", "OpenCode", /Gemini CLI\s*Unreleased/]);
   await expect(table.getByRole("row", { name: /^Completed/ }).getByRole("cell")).toHaveText(["✓Supported", "✓Supported", "✓Supported", "✓Supported"]);
   await expect(table.getByRole("row", { name: /^Review/ }).getByRole("cell")).toHaveText(["✓Supported", "✕Not supported", "✕Not supported", "✕Not supported"]);
   await expect(table.getByRole("row", { name: /^Sounds/ }).getByRole("cell")).toHaveText(["✓Supported", "✓Supported", "✕Not supported", "✕Not supported"]);
@@ -558,7 +570,7 @@ test("first feature explains supported click-to-focus and its agent scope", asyn
   await expect(feature.getByRole("heading", { name: "Return with one click" })).toBeVisible();
   await expect(feature).toContainText("CLICK TO FOCUS");
   await expect(feature).toContainText("terminal, editor or tab where supported");
-  await expect(feature).toContainText("Claude Code and Codex CLI only");
+  await expect(feature).toContainText("Claude and Codex CLI only");
   await expect(feature).toContainText("terminal and OS");
 });
 

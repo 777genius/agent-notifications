@@ -821,7 +821,7 @@ func parseFocusWindowOptions(args []string) (notifier.FocusWindowOptions, error)
 }
 
 func printUsage() {
-	fmt.Println("agent-notifications - Smart notifications for Claude Code and Codex")
+	fmt.Println("agent-notifications - Smart notifications for Claude and Codex")
 	fmt.Println()
 	fmt.Printf("Version: %s\n", version)
 	fmt.Println()
@@ -841,7 +841,7 @@ func printUsage() {
 	fmt.Println("  agent-notifications help")
 	fmt.Println()
 	fmt.Println("Commands:")
-	fmt.Println("  handle-hook <HookName>  Handle a Claude Code hook event")
+	fmt.Println("  handle-hook <HookName>  Handle a Claude hook event")
 	fmt.Println("                          HookName: PreToolUse, Stop, SubagentStop, Notification")
 	fmt.Println("  daemon                  Run the notification daemon (Linux only)")
 	fmt.Println("                          For click-to-focus support on desktop notifications")

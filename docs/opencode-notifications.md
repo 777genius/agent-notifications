@@ -60,7 +60,7 @@ candidate or V2. Missing prerequisites report unqualified and stop business phas
 ## Install or update
 
 Install OpenCode first. In the [guided installer](https://777genius.github.io/agent-notifications/#install),
-select **OpenCode**. The guided command enables desktop notifications; webhook destinations and delivery can be configured later. You can also select Claude Code or Codex CLI in the same setup. The copied command uses one loader, for example:
+select **OpenCode**. The guided command enables desktop notifications; webhook destinations and delivery can be configured later. You can also select Claude or Codex CLI in the same setup. The copied command uses one loader, for example:
 
 ```bash
 (set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --products claude,opencode --desktop)

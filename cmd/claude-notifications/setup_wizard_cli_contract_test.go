@@ -270,7 +270,7 @@ func TestSetupWizardTTYShowsDiscoverCapabilities(t *testing.T) {
 	if code := executeSetupWizardWith(ctx, []string{"--control-root", root}, &out, io.Discard, strings.NewReader("\n"), true); code != 0 {
 		t.Fatalf("tty discover cancel: %d %s", code, out.String())
 	}
-	if !strings.Contains(out.String(), "Claude Code (executable not found)") || !strings.Contains(out.String(), "Codex (executable present)") {
+	if !strings.Contains(out.String(), "Claude (executable not found)") || !strings.Contains(out.String(), "Codex (executable present)") {
 		t.Fatalf("discover labels: %s", out.String())
 	}
 }

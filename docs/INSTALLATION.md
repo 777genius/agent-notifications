@@ -12,7 +12,7 @@ See the [Gemini guide](gemini-notifications.md) for capabilities and qualificati
 
 ## Prerequisites
 
-- Claude Code, Codex CLI and/or OpenCode for stable setup (published OpenCode support is tested with 1.18.33; published V2 support is not declared). The dual-API candidate targets 1.18.33, 2.0.0 and 2.0.21; final platform qualification and publication remain pending. See [OpenCode candidate setup and limits](opencode-notifications.md), including the stock Windows V1 original-event-age limitation. Gemini CLI 0.62.0 is the tested host for the opt-in prerelease.
+- Claude, Codex CLI and/or OpenCode for stable setup (published OpenCode support is tested with 1.18.33; published V2 support is not declared). The dual-API candidate targets 1.18.33, 2.0.0 and 2.0.21; final platform qualification and publication remain pending. See [OpenCode candidate setup and limits](opencode-notifications.md), including the stock Windows V1 original-event-age limitation. Gemini CLI 0.62.0 is the tested host for the opt-in prerelease.
 - `curl` and Bash
 - **Windows users:** Git Bash (included with [Git for Windows](https://git-scm.com/download/win)). Do not use WSL for a native Windows installation.
 - Python remains optional only for iTerm2 exact tab/pane targeting.
@@ -49,7 +49,7 @@ Use `claude,opencode` or `codex,opencode` for two agents. The loader downloads a
 
 After installation:
 
-- **Claude:** restart Claude Code. Optionally run `/claude-notifications-go:settings` to configure sounds.
+- **Claude:** restart Claude. Optionally run `/claude-notifications-go:settings` to configure sounds.
 - **Codex:** start Codex, run `/hooks`, then review and trust the installed hooks. The installer registers them automatically; no JSON editing or manual registration command is needed. Trust approval remains yours.
 - **Both:** complete both steps above.
 - **OpenCode:** restart OpenCode to load its global plugin. On Mac, explicitly grant notification permission. OpenCode bootstrap requires release v1.46.0 or newer; see [OpenCode setup, channels and limits](opencode-notifications.md).
@@ -85,23 +85,23 @@ Codex requires a published stable plugin release v1.42.0 or newer. The installer
 ### Manual Install
 
 <details>
-<summary>Step-by-step installation inside Claude Code (if bootstrap doesn't work)</summary>
+<summary>Step-by-step installation inside Claude (if bootstrap doesn't work)</summary>
 
-Run these slash commands in the Claude Code chat, not in your system terminal:
+Run these slash commands in the Claude chat, not in your system terminal:
 
 ```text
 # 1) Add marketplace
 /plugin marketplace add 777genius/agent-notifications
 # 2) Install plugin
 /plugin install claude-notifications-go@claude-notifications-go
-# 3) Restart Claude Code
+# 3) Restart Claude
 # 4) Download binary
 /claude-notifications-go:init
 # 5) (Optional) Configure sounds and settings
 /claude-notifications-go:settings
 ```
 
-> **Compatibility:** `claude-notifications-go` is the frozen Claude Code marketplace,
+> **Compatibility:** `claude-notifications-go` is the frozen Claude marketplace,
 > plugin, and command namespace. The public product is **Agent Notifications**, but changing
 > these technical identifiers breaks existing installations and updates. See
 > [Claude plugin identity compatibility](CLAUDE_PLUGIN_IDENTITY.md).
@@ -114,19 +114,19 @@ Run these slash commands in the Claude Code chat, not in your system terminal:
 
 Run the [secure install command](#quick-install-recommended) again and choose the product(s) you want to update.
 
-For OpenCode, rerun with explicitly chosen desktop/webhook flags; the idempotent install action updates the registered runtime. Restart OpenCode. For Claude, restart Claude Code. For Codex, restart Codex and inspect `/hooks`; changed hook definitions may need trust approval again. The installer refreshes the Codex runtime and registration automatically. Existing foreign hooks and shared settings in the file selected by `config path` are preserved.
+For OpenCode, rerun with explicitly chosen desktop/webhook flags; the idempotent install action updates the registered runtime. Restart OpenCode. For Claude, restart Claude. For Codex, restart Codex and inspect `/hooks`; changed hook definitions may need trust approval again. The installer refreshes the Codex runtime and registration automatically. Existing foreign hooks and shared settings in the file selected by `config path` are preserved.
 
 <details>
 <summary>Manual Claude update (if bootstrap didn't work)</summary>
 
-Claude Code also periodically checks for plugin updates automatically. Binaries are updated on the next hook invocation when a version mismatch is detected.
+Claude also periodically checks for plugin updates automatically. Binaries are updated on the next hook invocation when a version mismatch is detected.
 
-To update manually via Claude Code UI:
+To update manually via Claude UI:
 
 1. Run `/plugin`, select **Marketplaces**, choose `claude-notifications-go`, then select **Update marketplace**
 2. Select **Installed**, choose `claude-notifications-go`, then select **Update now**
 
-If the binary auto-update didn't work (e.g. no internet at the time), run `/claude-notifications-go:init` to download it manually. If hook definitions changed in the new version, restart Claude Code to apply them.
+If the binary auto-update didn't work (e.g. no internet at the time), run `/claude-notifications-go:init` to download it manually. If hook definitions changed in the new version, restart Claude to apply them.
 
 </details>
 

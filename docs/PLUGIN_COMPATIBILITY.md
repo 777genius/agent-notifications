@@ -1,6 +1,6 @@
 # Plugin Compatibility
 
-Compatible with other Claude Code plugins that spawn background Claude instances.
+Compatible with other Claude plugins that spawn background Claude instances.
 
 ## OpenCode
 
