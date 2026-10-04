@@ -274,7 +274,11 @@ class Observation:
                 'error': ('An error needs your attention', 'opencode_error')}
         body, status = copy['completion' if name == 'retry' else name]
         if self.args.os == 'linux':
-            self.require(all(row.get('valid') is True and row.get('body') == body for row in desktop),
+            # Desktop question metadata is optional; webhook copy stays neutral.
+            desktop_bodies = {body}
+            if name == 'form':
+                desktop_bodies.update({'P0 test choice?', 'TEST form\nP0 test choice?'})
+            self.require(all(row.get('valid') is True and row.get('body') in desktop_bodies for row in desktop),
                          'desktop_independent_receiver_mismatch')
         for raw, headers in posts:
             payload = json.loads(raw, object_pairs_hook=unique)

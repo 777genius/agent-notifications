@@ -4,7 +4,7 @@ import argparse,hashlib,importlib.util,json,os,pathlib,re,subprocess,sys,types,s
 P=pathlib.Path;OLD=os.environ['TEST_HARNESS_SHA256'];CI=os.environ['TEST_CI_INPUTS_SHA256']
 ORIGINAL_PERMISSION='54fd3092c8050e3469a1cfedf9ca46d4d4bea3feb8eb3165367aa22e74210554';PERMISSION='f499590b9c8c3bfee37156633bf8a5a36024be208b9c26addfd70cbd000874cd';DRIVER='46d455cbbc70549971eaf760bd325ed79902b6ea1ab2bc5cd8dcfc79acb20f1c';HEAD=os.environ['TEST_PRODUCT_HEAD']
 ORIGINAL_PROVIDER='e20390e5efdef97ce3fc2987fa739564ad3b43cafb021a8e8da74f51b0cbb653';PROVIDER='57633468d4187d44b65abd245ad29d49a380619fe1e61049a1612272cad80e49'
-ORIGINAL_PORTABLE='7e1d88f5b82baea92adefa8e1d48700acf39d220f6b7f41e64bc69029e8f87f8';PORTABLE='3315bfaade44fa1a328269e36954a7858c7b5631ecc41171ba0ccc9116634cac'
+ORIGINAL_PORTABLE='7e1d88f5b82baea92adefa8e1d48700acf39d220f6b7f41e64bc69029e8f87f8';PORTABLE='93bdb3a062be81444e65ea809642072bab0d2f9fafa06a827a253448de44a909'
 FLAGS=('clockQualified','sourceEpochQualified','timePolicyQualified','installedQualificationGranted','fullNativeQualified','visibleDesktopQualified','platformLifetimeQualified')
 def need(v,m):
  if not v:raise ValueError(m)
