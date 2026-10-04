@@ -1,11 +1,11 @@
 {
-  "seo": { "title": "Agent Notifications - حافظ على تركيزك", "description": "إشعارات سطح المكتب وWebhooks لـ Claude وCodex CLI وOpenCode. تكامل Gemini CLI لم يُنشر بعد." },
+  "seo": { "title": "Agent Notifications - حافظ على تركيزك", "description": "إشعارات سطح المكتب وWebhooks لـ Claude وCodex CLI وOpenCode. Gemini CLI: Linux / Windows." },
   "language": { "label": "اللغة", "current": "اللغة الحالية: {language}", "search": "ابحث عن لغة", "noResults": "لم يتم العثور على لغات", "switchError": "تعذر تغيير اللغة. يرجى المحاولة مجددًا." },
   "accessibility": { "skip": "انتقل إلى المحتوى", "platforms": "أنظمة التشغيل المدعومة",
     "agents": "تكاملات الوكلاء المدعومة" },
   "brand": { "tagline": "لوكلاء البرمجة لديك" },
   "nav": { "ariaLabel": "الرئيسية", "features": "المزايا", "install": "التثبيت", "faq": "الأسئلة الشائعة" },
-  "hero": { "eyebrow": "مراقبة أقل. إنجاز أكثر.", "title": "حافظ على تركيزك", "emphasis": "سننبهك عند الحاجة", "leadFirst": "دع وكيلك يعمل. واعرف متى ينتهي.", "leadSecond": "إشعارات سطح المكتب وWebhooks لـ Claude وCodex CLI وOpenCode. تكامل Gemini CLI لم يُنشر بعد.", "primary": "إعداد الإشعارات", "secondary": "استكشف على GitHub", "note": "مفتوح المصدر · يعمل محليًا" },
+  "hero": { "eyebrow": "مراقبة أقل. إنجاز أكثر.", "title": "حافظ على تركيزك", "emphasis": "سننبهك عند الحاجة", "leadFirst": "دع وكيلك يعمل. واعرف متى ينتهي.", "leadSecond": "إشعارات سطح المكتب وWebhooks لـ Claude وCodex CLI وOpenCode. Gemini CLI: Linux / Windows.", "primary": "إعداد الإشعارات", "secondary": "استكشف على GitHub", "note": "مفتوح المصدر · يعمل محليًا" },
   "common": { "now": "الآن", "beta": "تجريبي" },
   "features": {
     "eyebrow": "التنبيه المناسب. في الوقت المناسب.", "titleFirst": "حافظ على انتباهك", "titleSecond": "تخلص من التحقق المستمر",
@@ -122,6 +122,7 @@
   },
   "select": { "scrollUp": "تمرير الخيارات إلى الأعلى", "scrollDown": "تمرير الخيارات إلى الأسفل" },
   "install": {
+    "platformRelease": "الإصدار المعتمد لـ {os}: {version}.",
     "agentNotify": {"label": "السماح للوكلاء بإرسال إشعارات عند حاجتهم إلى انتباهك", "hint": "يضيف أداة إشعارات لـ Claude وCodex CLI أثناء المهمة، وليس فقط عند توقف العمل."},
     "title": "إعداد الإشعارات", "intro": "اتبع الخطوات أدناه لإضافة إشعارات إلى {agent}.", "chooseAgent": "اختر وكلاءك", "requires": "يتطلب {agent}", "bothAgents": "كلا الوكيلين", "bothSelected": "✓ تم اختيار كلا الوكيلين", "installBoth": "التثبيت لكلا الوكيلين", "chooseComputer": "اختر الحاسوب الذي يعمل عليه وكيلك", "selected": "محدد", "detected": "تم اكتشافه تلقائيًا", "change": "تغيير", "targetOs": "نظام التشغيل المستهدف",
     "products": { "claude": "Claude", "codex": "Codex CLI", "both": "Claude + Codex CLI",
@@ -144,7 +145,7 @@
       "gemini": "تكامل Gemini CLI المرشح: تنبيهات صامتة لانتهاء الدور وطلب إذن الأداة. انتهاء الدور لا يعني النجاح أو الإجابة النهائية. لا صوت أو تركيز بالنقر أو تنبيهات للأسئلة والأخطاء والخطط والمراجعات أو تكافؤ للوكلاء المتداخلين."
     },
     "gemini": {
-      "version": "التكامل غير منشور. الإصدار العام 1.46.1 لا يتضمن Gemini. الإصدار المستهدف Gemini CLI 0.62.0؛ راجع الدليل لنتائج التحقق الأصلي حسب نظام التشغيل. يلزم إصدار متوافق.",
+      "version": "Linux / Windows: 1.47.1 (Gemini CLI 0.62.0). macOS: 1.46.1 (Claude, Codex CLI, OpenCode).",
       "guide": "إعداد Gemini المرشح وحدوده",
       "configure": "راجع دليل Gemini للموافقة على القنوات والإعدادات المشتركة؛ لا تُثبّت أداة MCP أو مهارة. قد تتكرر التنبيهات المدمجة. اختر مصدرًا واحدًا لسطح المكتب أو webhooks فقط؛ لا تتغير الإعدادات المدمجة."
     },
@@ -166,7 +167,7 @@
     }
   },
   "agentSupport": {
-    "unreleased": "غير منشور",
+    "platforms": "Linux / Windows",
     "title": "مقارنة ميزات الوكلاء",
     "feature": "الميزة",
     "yes": "مدعوم",

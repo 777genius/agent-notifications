@@ -2,10 +2,10 @@ name: Landing
 
 on:
   pull_request:
-    paths: ['landing/**', '.github/workflows/landing.yml', 'scripts/stage-released-loader*']
+    paths: ['landing/**', '.github/workflows/landing.yml', 'scripts/stage-released-loader*', 'release-channels.tsv', 'bin/setup.sh', 'bin/release-channel.sh']
   push:
     branches: [main]
-    paths: ['landing/**', '.github/workflows/landing.yml', 'scripts/stage-released-loader*']
+    paths: ['landing/**', '.github/workflows/landing.yml', 'scripts/stage-released-loader*', 'release-channels.tsv', 'bin/setup.sh', 'bin/release-channel.sh']
   release:
     types: [published]
   workflow_dispatch:

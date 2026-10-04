@@ -1,7 +1,7 @@
 {
   "seo": {
     "title": "Agent Notifications - 专注工作，及时获知进展",
-    "description": "适用于 Claude、Codex CLI 和 OpenCode 的桌面通知与 Webhook。 Gemini CLI 集成尚未发布。"
+    "description": "适用于 Claude、Codex CLI 和 OpenCode 的桌面通知与 Webhook。 Gemini CLI: Linux / Windows."
   },
   "language": {
     "label": "语言",
@@ -29,7 +29,7 @@
     "title": "保持专注",
     "emphasis": "需要你时，我们会提醒",
     "leadFirst": "让智能体安心工作，完成时你自然会知道。",
-    "leadSecond": "适用于 Claude、Codex CLI 和 OpenCode 的桌面通知与 Webhook。 Gemini CLI 集成尚未发布。",
+    "leadSecond": "适用于 Claude、Codex CLI 和 OpenCode 的桌面通知与 Webhook。 Gemini CLI: Linux / Windows.",
     "primary": "设置通知",
     "secondary": "在 GitHub 上查看",
     "note": "开源 · 本地运行"
@@ -234,6 +234,7 @@
     "scrollDown": "向下滚动选项"
   },
   "install": {
+    "platformRelease": "{os} 的已验证版本：{version}。",
     "title": "设置通知",
     "intro": "按照以下步骤为 {agent} 添加通知。",
     "chooseAgent": "选择智能体",
@@ -320,7 +321,7 @@
       "gemini": "Gemini CLI 候选集成：静默提示回合结束和工具权限请求。回合结束不代表成功或最终答复。不支持声音、点击聚焦、问题、错误、计划、审查通知或嵌套代理功能对等。"
     },
     "gemini": {
-      "version": "此集成尚未发布。公开版本1.46.1不包含Gemini。目标为Gemini CLI 0.62.0；各操作系统的原生验证结果请参阅指南。需要兼容版本。",
+      "version": "Linux / Windows: 1.47.1 (Gemini CLI 0.62.0). macOS: 1.46.1 (Claude, Codex CLI, OpenCode).",
       "guide": "Gemini 候选集成设置与限制",
       "configure": "渠道授权和共享设置请参阅 Gemini 指南；不安装 MCP 工具或技能。内置通知可能重复。请选择一个桌面通知来源或仅使用 webhook；不会修改内置设置。"
     },
@@ -342,7 +343,7 @@
     }
   },
   "agentSupport": {
-    "unreleased": "尚未发布",
+    "platforms": "Linux / Windows",
     "title": "比较代理功能",
     "feature": "功能",
     "yes": "支持",

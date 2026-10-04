@@ -1,63 +1,46 @@
 #!/usr/bin/env python3
-"""A release mismatch or failed download must not replace the public loader."""
-import base64
+"""A dirty controller or invalid loader must not replace the public installer."""
 import importlib.util
-import json
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
 
-spec = importlib.util.spec_from_file_location("release_loader", Path(__file__).with_name("stage-released-loader.py"))
+spec = importlib.util.spec_from_file_location('release_loader', Path(__file__).with_name('stage-released-loader.py'))
 loader = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(loader)
 
 
 class ReleaseLoaderTest(unittest.TestCase):
-    def test_stable_release_uses_exact_commit_and_keeps_release_bytes(self):
-        commit = "a" * 40
-        body = b"#!/usr/bin/env bash\nprintf 'released loader\\n'\n"
-        responses = {
-            f"repos/{loader.REPOSITORY}/releases/latest": {"tag_name": "v1.46.1"},
-            f"repos/{loader.REPOSITORY}/commits/v1.46.1": {"sha": commit},
-            f"repos/{loader.REPOSITORY}/contents/bin/setup.sh?ref={commit}": {
-                "type": "file", "encoding": "base64", "content": base64.encodebytes(body).decode(),
-            },
-        }
-        calls = []
-
-        def gh(args):
-            self.assertEqual(args[:2], ["gh", "api"])
-            calls.append(args[2])
-            return json.dumps(responses[args[2]]).encode()
-
-        with tempfile.TemporaryDirectory(prefix="TEST-release-loader-") as directory:
-            target = Path(directory) / "install.sh"
-            target.write_bytes(b"unreleased candidate")
-            with patch.object(loader.subprocess, "check_output", side_effect=gh):
+    def test_published_loader_pins_controller_snapshot(self):
+        commit = 'a' * 40
+        body = b'#!/usr/bin/env bash\ncontroller="${BOOTSTRAP_CONTROLLER_COMMIT:-}"\nprintf "%s\\n" "$controller"\n'
+        real_run = subprocess.run
+        with tempfile.TemporaryDirectory(prefix='TEST-channel-loader-') as directory:
+            target = Path(directory) / 'install.sh'
+            with patch.object(loader.subprocess, 'check_output', side_effect=[commit.encode(), body]), \
+                    patch.object(loader.subprocess, 'run', wraps=subprocess.run) as run:
+                # Only git's cleanliness check is fixture-controlled; Bash syntax
+                # and the staged artifact are real executions in a TEST directory.
+                run.side_effect = lambda args, **kw: subprocess.CompletedProcess(args, 0) if args[0] == 'git' else real_run(args, **kw)
                 loader.stage(target)
-            self.assertEqual(target.read_bytes(), body)
-            self.assertEqual(calls, list(responses))
+            result = subprocess.check_output(['bash', str(target)], env={})
+            self.assertEqual(result.decode().strip(), commit)
             self.assertEqual(list(Path(directory).iterdir()), [target])
 
-    def test_invalid_release_or_failed_fetch_preserves_existing_loader(self):
-        failures = [
-            [{"tag_name": "v1.47.0-rc.1"}],
-            [{"tag_name": "v1.46.1"}, {"sha": "main"}],
-            [{"tag_name": "v1.46.1"}, {"sha": "a" * 40}, subprocess.CalledProcessError(1, "gh")],
-        ]
-        for responses in failures:
-            with self.subTest(responses=responses), tempfile.TemporaryDirectory(prefix="TEST-release-loader-") as directory:
-                target = Path(directory) / "install.sh"
-                target.write_bytes(b"current public loader")
-                encoded = [json.dumps(value).encode() if isinstance(value, dict) else value for value in responses]
-                with patch.object(loader.subprocess, "check_output", side_effect=encoded):
+    def test_failure_preserves_existing_public_installer(self):
+        for sha, body, dirty in [('main', b'', False), ('a'*40, b'broken', False), ('a'*40, b'', True)]:
+            with self.subTest(sha=sha, dirty=dirty), tempfile.TemporaryDirectory(prefix='TEST-channel-loader-') as directory:
+                target = Path(directory) / 'install.sh'
+                target.write_bytes(b'current installer')
+                with patch.object(loader.subprocess, 'check_output', side_effect=[sha.encode(), body]), \
+                        patch.object(loader.subprocess, 'run', side_effect=subprocess.CalledProcessError(1, 'git') if dirty else None):
                     with self.assertRaises((ValueError, subprocess.CalledProcessError)):
                         loader.stage(target)
-                self.assertEqual(target.read_bytes(), b"current public loader")
+                self.assertEqual(target.read_bytes(), b'current installer')
                 self.assertEqual(list(Path(directory).iterdir()), [target])
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

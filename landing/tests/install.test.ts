@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { command, detectTarget } from "../data/install.ts";
+import { command, detectTarget, platformReleaseVersion } from "../data/install.ts";
 test("one-line setup contract for each product and supported target", () => {
   for (const product of ["claude", "codex", "both"] as const)
     for (const target of ["macos", "linux", "windows"] as const) {
@@ -140,7 +140,7 @@ exit "$install_status"`,
 });
 
 // The candidate selector must include every chosen observer and scope portable flags.
-test("Gemini candidate commands preserve canonical selectors and shared observer consent", () => {
+test("Gemini qualified commands preserve canonical selectors and shared observer consent", () => {
   const prefix = "curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- ";
   const cases = [
     { products: ["gemini"], expected: prefix + "--product gemini --webhook" },
@@ -154,7 +154,7 @@ test("Gemini candidate commands preserve canonical selectors and shared observer
     { products: ["gemini", "codex", "opencode", "claude", "gemini"], expected: "(set -o pipefail; " + prefix + "--products claude,codex,opencode,gemini --skip-agent-notify --webhook)" },
   ] as const;
   for (const { products, expected } of cases)
-    for (const target of ["macos", "linux", "windows"] as const) {
+    for (const target of ["linux", "windows"] as const) {
       assert.equal(command(products, target, "install", false, { desktop: false, webhook: true }), expected);
       assert.equal(command(products, target, "update", false, { desktop: false, webhook: true }), expected);
       assert.equal(command(products, target, "install", true, { desktop: false, webhook: false }), null);
@@ -200,4 +200,17 @@ test("Gemini copied pipelines deliver exact installer argv", () => {
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stdout, argv.join("\n") + "\n");
   }
+});
+
+// A regression would advertise a global version or offer a Gemini command on macOS.
+test("platform availability follows the published channel snapshot", () => {
+  const row = (os: string, arch: string, version: string) => [os, arch, version, "a".repeat(40), "b".repeat(40), "release/platform-" + os].join("\t");
+  const snapshot = [row("darwin", "amd64", "v1.46.1"), row("darwin", "arm64", "v1.46.1"), row("linux", "amd64", "v1.47.1"), row("windows", "amd64", "v1.47.1")].join("\n");
+  assert.equal(platformReleaseVersion(snapshot, "macos"), "1.46.1");
+  assert.equal(platformReleaseVersion(snapshot, "linux"), "1.47.1");
+  assert.equal(platformReleaseVersion(snapshot, "windows"), "1.47.1");
+  assert.equal(platformReleaseVersion(snapshot, "unknown"), null);
+  assert.equal(platformReleaseVersion(snapshot, "manual"), null);
+  assert.equal(command("gemini", "macos", "install"), null);
+  assert.equal(command(["claude", "gemini"], "macos", "update"), null);
 });

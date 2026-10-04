@@ -109,6 +109,11 @@ assert version.startswith('v'), version
 commit = '0123456789abcdef0123456789abcdef01234567'
 public_loader = 'https://777genius.github.io/agent-notifications/install.sh'
 raw = 'https://raw.githubusercontent.com/777genius/agent-notifications/'+commit+'/bin'
+rows = ['# agent-notifications-platform-channels-v1']
+for channel_os, channel_arch in [('darwin','amd64'),('darwin','arm64'),('linux','amd64'),('linux','arm64'),('windows','amd64')]:
+    ref = 'release/platform-macos' if channel_os == 'darwin' else 'release/platform-linux-windows'
+    rows.append('\t'.join([channel_os,channel_arch,version,commit,commit,ref]))
+(assets/'channels.tsv').write_text('\n'.join(rows)+'\n')
 (commands/'curl').write_text('''#!/bin/bash
 set -eu
 out=""; url=""; format=""; accept=""
@@ -123,10 +128,12 @@ case "$url" in
  https://github.com/777genius/agent-notifications/releases/latest)
   [ "$format" = '%{url_effective}' ] || exit 99
   printf '%s' '''+shlex.quote('https://github.com/777genius/agent-notifications/releases/tag/'+version)+''' ;;
- https://api.github.com/repos/777genius/agent-notifications/commits/'''+version+''')
+ https://api.github.com/repos/777genius/agent-notifications/commits/main|https://api.github.com/repos/777genius/agent-notifications/commits/'''+version+''')
   [ "$accept" = 'Accept: application/vnd.github.sha' ] || exit 99
   printf '%s' '''+shlex.quote(commit)+''' > "$out" ;;
  '''+public_loader+''') cat '''+shlex.quote(str(root/'bin/setup.sh'))+''' ;;
+ '''+raw+'''/release-channel.sh) cp '''+shlex.quote(str(root/'bin/release-channel.sh'))+''' "$out" ;;
+ https://raw.githubusercontent.com/777genius/agent-notifications/'''+commit+'''/release-channels.tsv) cp '''+shlex.quote(str(assets/'channels.tsv'))+''' "$out" ;;
  '''+raw+'''/bootstrap.sh) cp '''+shlex.quote(str(root/'bin/bootstrap.sh'))+''' "$out" ;;
  '''+raw+'''/install.sh) cp '''+shlex.quote(str(root/'bin/install.sh'))+''' "$out" ;;
  https://candidate-fixture.invalid/releases/download/'''+version+'''/checksums.txt)
@@ -293,10 +300,17 @@ if sys.platform == 'linux':
     (commands/'claude').write_text('#!'+sys.executable+'\n'+'''
 import json, os, pathlib, shutil, sys
 args = sys.argv[1:]
+if args and args[0] == '--settings':
+    overlay = json.loads(pathlib.Path(args[1]).read_text())
+    assert overlay['extraKnownMarketplaces']['claude-notifications-go']['source']['repo'] == '777genius/agent-notifications'
+    args = args[2:]
 assert args and args[0] == 'plugin', 'TEST adapter rejects agent execution'
 assert len(args) > 1 and args[1] in ('marketplace','install','update','uninstall'), args
 with open(os.environ['CLAUDE_TEST_TRACE'],'a') as trace: trace.write(json.dumps(args)+'\\n')
 home = pathlib.Path(os.environ['CLAUDE_CONFIG_DIR'])
+if args[1:] == ['marketplace','list','--json']:
+    print('[]')
+    sys.exit()
 market = home/'plugins/marketplaces/claude-notifications-go/.claude-plugin'
 market.mkdir(parents=True,exist_ok=True)
 (market/'plugin.json').write_text(json.dumps({'version':os.environ['TEST_VERSION']}))
@@ -305,6 +319,8 @@ plugin = home/'plugins/cache/claude-notifications-go/claude-notifications-go'/os
 shutil.copytree(os.environ['TEST_SOURCE'],plugin,dirs_exist_ok=True)
 (home/'plugins/installed_plugins.json').write_text(json.dumps({'plugins':{'claude-notifications-go@claude-notifications-go':[{'installPath':str(plugin),'version':os.environ['TEST_VERSION']}]}}))
 ''')
+    (commands/'git').write_text('#!/bin/bash\nset -eu\n[ "$#" = 4 ] && [ "$1" = -C ] && [ "$2" = "$CLAUDE_CONFIG_DIR/plugins/marketplaces/claude-notifications-go" ] && [ "$3" = rev-parse ] && [ "$4" = HEAD ] || exit 99\nprintf "%s\\n" '+shlex.quote(commit)+'\n')
+    (commands/'git').chmod(0o755)
     (commands/'codex').write_text('#!/bin/bash\necho "TEST adapter rejects agent execution" >&2\nexit 99\n')
     for command in (commands/'claude',commands/'codex'): command.chmod(0o755)
     all_four = lab/'all-four TEST'

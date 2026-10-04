@@ -126,6 +126,20 @@ func newBootstrapFixture(t *testing.T) *bootstrapFixture {
 		t.Fatal(err)
 	}
 	f.write(filepath.Join(f.assets, "install.sh"), install, 0600)
+	module, err := os.ReadFile(filepath.Join(root, "bin", "release-channel.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.write(filepath.Join(f.assets, "release-channel.sh"), module, 0600)
+	rows := "# agent-notifications-platform-channels-v1\n"
+	for _, platform := range []struct{ os, arch string }{{"darwin", "amd64"}, {"darwin", "arm64"}, {"linux", "amd64"}, {"linux", "arm64"}, {"windows", "amd64"}} {
+		ref := "release/platform-linux-windows"
+		if platform.os == "darwin" {
+			ref = "release/platform-macos"
+		}
+		rows += strings.Join([]string{platform.os, platform.arch, tag, "0123456789abcdef0123456789abcdef01234567", "0123456789abcdef0123456789abcdef01234567", ref}, "\t") + "\n"
+	}
+	f.write(filepath.Join(f.assets, "release-channels.tsv"), []byte(rows), 0600)
 	// Acquisition canaries prove pure-parse/noTTY outcomes stopped before even
 	// temporary downloads. There is deliberately no public-network fallback.
 	f.write(filepath.Join(f.tools, "curl"), []byte(`#!/usr/bin/env bash
@@ -138,7 +152,9 @@ done
 printf '%s\n' "$url" >> `+shellQuote(filepath.Join(base, "acquisitions"))+`
 case "$url" in
  https://github.com/777genius/agent-notifications/releases/latest) printf '%s' 'https://github.com/777genius/agent-notifications/releases/tag/`+tag+`' ;;
- https://api.github.com/repos/777genius/agent-notifications/commits/`+tag+`) printf '%s' 0123456789abcdef0123456789abcdef01234567 > "$out" ;;
+ https://api.github.com/repos/777genius/agent-notifications/commits/main|https://api.github.com/repos/777genius/agent-notifications/commits/`+tag+`) printf '%s' 0123456789abcdef0123456789abcdef01234567 > "$out" ;;
+ https://raw.githubusercontent.com/777genius/agent-notifications/0123456789abcdef0123456789abcdef01234567/bin/release-channel.sh) cp `+shellQuote(filepath.Join(f.assets, "release-channel.sh"))+` "$out" ;;
+ https://raw.githubusercontent.com/777genius/agent-notifications/0123456789abcdef0123456789abcdef01234567/release-channels.tsv) cp `+shellQuote(filepath.Join(f.assets, "release-channels.tsv"))+` "$out" ;;
  https://777genius.github.io/agent-notifications/install.sh) cat `+shellQuote(filepath.Join(f.assets, "loader.sh"))+` ;;
  https://raw.githubusercontent.com/777genius/agent-notifications/0123456789abcdef0123456789abcdef01234567/bin/bootstrap.sh) cp `+shellQuote(filepath.Join(f.assets, "bootstrap.sh"))+` "$out" ;;
  https://TEST.invalid/releases/download/`+tag+`/checksums.txt|https://TEST.invalid/releases/download/`+tag+`/`+asset+`|https://TEST.invalid/install.sh|https://raw.githubusercontent.com/777genius/agent-notifications/0123456789abcdef0123456789abcdef01234567/bin/install.sh|https://raw.githubusercontent.com/777genius/agent-notifications/main/bin/install.sh) cp `+shellQuote(f.assets)+`/"${url##*/}" "$out" ;;
