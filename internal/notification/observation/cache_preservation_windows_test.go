@@ -109,8 +109,8 @@ func TestWindowsCacheFailedPreparationPreservesAttempt(t *testing.T) {
 		t.Fatalf("failed preparation granted delivery: %v/%v", claimed, claimErr)
 	}
 	// The real FILE_ADD_FILE denial must be distinguished from an unrelated
-	// timeout. Publication uncertainty stays conservative even on this failure.
-	if failure.Phase != "publish" || failure.Class != "permission" || failure.OSCode != uint32(windows.ERROR_ACCESS_DENIED) || !failure.MayHavePublished {
+	// timeout. Preflight cannot have published and has not started the transaction.
+	if failure.Phase != "prepare" || failure.Class != "permission" || failure.OSCode != uint32(windows.ERROR_ACCESS_DENIED) || failure.MayHavePublished || failure.BudgetState != "not_started" {
 		t.Fatalf("preparation failure diagnostics: %#v", failure)
 	}
 	got, err := os.ReadFile(path)

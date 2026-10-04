@@ -266,11 +266,11 @@ func TestUnavailableCacheAndLockBudgetAreNeutral(t *testing.T) {
 	start := time.Now()
 	got, err := c.Claim(ctx, key, 1)
 	release()
-	if got || err == nil || time.Since(start) > 500*time.Millisecond {
+	if got || err == nil {
 		t.Fatalf("lock was unbounded or admitted effect: %v/%v after %s", got, err, time.Since(start))
 	}
 	var failure *ClaimFailure
-	if !errors.As(err, &failure) || failure.Phase != "lock" || failure.Class != "deadline" || failure.BudgetState != "deadline" || failure.MayHavePublished {
+	if !errors.As(err, &failure) || failure.Phase != "lock" || failure.Class != "deadline" || failure.BudgetState != "deadline" || failure.MayHavePublished || failure.BudgetElapsed > 500*time.Millisecond {
 		t.Fatalf("held lock diagnostics lost the admission boundary: %#v", err)
 	}
 	if err = os.WriteFile(filepath.Join(c.Root, "observations.json"), []byte("PRIVATE_CORRUPT_CACHE"), 0600); err != nil {

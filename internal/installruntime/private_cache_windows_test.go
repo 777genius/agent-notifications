@@ -126,6 +126,11 @@ func TestWindowsPrivateCacheRootRechecksACL(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer session.Close()
+	prepared, err := session.PrepareWrite(context.Background(), "observations.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prepared.Close()
 	original, err := windows.GetSecurityInfo(handle, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
 		t.Fatal(err)
@@ -157,12 +162,45 @@ func TestWindowsPrivateCacheRootRechecksACL(t *testing.T) {
 	if _, err := session.Read("observations.json", 100); err == nil {
 		t.Fatal("changed root ACL permitted read")
 	}
-	if err := session.Write("observations.json", []byte("next")); err == nil {
+	if err := prepared.WriteContext(context.Background(), []byte("next")); err == nil {
 		t.Fatal("changed root ACL permitted publication")
 	}
 	data, err := os.ReadFile(filepath.Join(root, "observations.json"))
 	if err != nil || !bytes.Equal(data, []byte("prior")) {
 		t.Fatalf("rejected publication changed cache: %q / %v", data, err)
+	}
+}
+
+// Red condition: a consumed preparation permits a second replacement or leaves
+// its temporary file behind after the checked publication close.
+func TestWindowsPreparedCacheWriteIsSingleUse(t *testing.T) {
+	root := t.TempDir()
+	if err := RestrictPrivatePath(root); err != nil {
+		t.Fatal(err)
+	}
+	session, err := OpenPrivateCacheRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	prepared, err := session.PrepareWrite(context.Background(), "observations.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prepared.Close()
+	if err := prepared.WriteContext(context.Background(), []byte("first")); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepared.WriteContext(context.Background(), []byte("second")); err == nil {
+		t.Fatal("consumed preparation published twice")
+	}
+	data, err := session.Read("observations.json", 100)
+	if err != nil || !bytes.Equal(data, []byte("first")) {
+		t.Fatalf("second write changed document: %q/%v", data, err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "observations.json" {
+		t.Fatalf("publication left temp: %v/%v", entries, err)
 	}
 }
 

@@ -17,7 +17,8 @@ func writeCache(root string, data []byte) error {
 }
 
 type windowsCache struct {
-	root *installruntime.PrivateCacheRoot
+	root     *installruntime.PrivateCacheRoot
+	prepared *installruntime.PrivateCacheWrite
 }
 
 func openCache(root string) (*windowsCache, error) {
@@ -28,7 +29,15 @@ func openCache(root string) (*windowsCache, error) {
 	return &windowsCache{root: session}, nil
 }
 func (c *windowsCache) Read() ([]byte, error) { return c.root.Read("observations.json", cacheBytes) }
-func (c *windowsCache) Write(ctx context.Context, data []byte) error {
-	return c.root.WriteContext(ctx, "observations.json", data)
+func (c *windowsCache) Prepare(ctx context.Context) error {
+	var err error
+	c.prepared, err = c.root.PrepareWrite(ctx, "observations.json")
+	return err
 }
-func (c *windowsCache) Close() { c.root.Close() }
+func (c *windowsCache) Write(ctx context.Context, data []byte) error {
+	return c.prepared.WriteContext(ctx, data)
+}
+func (c *windowsCache) Close() {
+	_ = c.prepared.Close()
+	c.root.Close()
+}
