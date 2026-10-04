@@ -114,7 +114,7 @@ test("unknown target, manual route and mobile layout", async ({ browser }) => {
     reducedMotion: "reduce",
   });
   const page = await context.newPage();
-  await page.goto("http://127.0.0.1:4173/agent-notifications/");
+  await page.goto("http://127.0.0.1:4173/");
   await expect(page.getByRole("button", { name: "Copy command" })).toHaveCount(
     0,
   );
@@ -135,7 +135,7 @@ test("unknown target, manual route and mobile layout", async ({ browser }) => {
   await page.screenshot({ path: "test-results/mobile.png", fullPage: true });
   await context.close();
 });
-test("keyboard navigation, base-path reload and desktop screenshot", async ({
+test("keyboard navigation, root-path reload and desktop screenshot", async ({
   page,
 }) => {
   await page.goto("");
@@ -146,10 +146,18 @@ test("keyboard navigation, base-path reload and desktop screenshot", async ({
   await page.keyboard.press("Enter");
   await page.reload();
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+    "href",
+    "https://agent-notifications.com/",
+  );
+  await expect(page.locator('meta[property="og:image"]')).toHaveAttribute(
+    "content",
+    "https://agent-notifications.com/agent-notifications-logo.png",
+  );
   for (const asset of await page
     .locator("script[src]")
     .evaluateAll((nodes) => nodes.map((n) => (n as HTMLScriptElement).src)))
-    expect(asset).toContain("/agent-notifications/");
+    expect(new URL(asset).pathname).toMatch(/^\/_nuxt\//);
   await page.screenshot({ path: "test-results/desktop.png", fullPage: true });
 });
 test("pending clipboard completion cannot claim a different command was copied", async ({
@@ -260,12 +268,16 @@ test("language switch localizes content, URL, metadata and persists the choice",
   );
   await chooseLanguage(page, /Current language/, "简体中文");
   await expect(page).toHaveURL(
-    /\/agent-notifications\/zh\/?\?source=i18n#features$/,
+    /\/zh\/?\?source=i18n#features$/,
   );
   await expect(page.getByRole("heading", { level: 1 })).toContainText(
     "保持专注",
   );
   await expect(page.locator("html")).toHaveAttribute("lang", "zh-CN");
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+    "href",
+    /^https:\/\/agent-notifications\.com\/zh\/?$/,
+  );
   await expect(page).toHaveTitle(
     "Agent Notifications - 专注工作，及时获知进展",
   );
@@ -296,7 +308,7 @@ test("language switch localizes content, URL, metadata and persists the choice",
   );
   await chooseLanguage(page, /当前语言/, "English");
   await expect(page).toHaveURL(
-    /\/agent-notifications\/?\?source=i18n#features$/,
+    /\/\?source=i18n#features$/,
   );
   await expect(page.getByRole("heading", { level: 1 })).toContainText(
     "Stay in flow",
@@ -314,7 +326,7 @@ test("failed locale payload keeps the working language and reports the error", a
   await expect(page.getByRole("heading", { level: 1 })).toContainText(
     "Stay in flow",
   );
-  await expect(page).toHaveURL(/\/agent-notifications\/?$/);
+  await expect(page).toHaveURL(/^http:\/\/127\.0\.0\.1:4173\/$/);
 });
 test("language menu is searchable, keyboard accessible and closes outside", async ({
   page,
@@ -456,7 +468,7 @@ test("guided reference layout, detected OS and mode focus", async ({
     reducedMotion: "reduce",
   });
   const page = await context.newPage();
-  await page.goto("http://127.0.0.1:4173/agent-notifications/");
+  await page.goto("http://127.0.0.1:4173/");
   await expect(page.locator(".os-summary")).toContainText("macOS");
   await expect(page.locator(".os-summary")).toContainText(
     "Detected automatically",

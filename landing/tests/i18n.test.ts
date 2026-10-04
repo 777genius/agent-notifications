@@ -64,14 +64,18 @@ test("locale manifest accepts only published locale codes", () => {
 });
 
 test("crawler files publish every localized route", async () => {
-  const [robots, sitemap] = await Promise.all([
+  const [robots, sitemap, manifestText] = await Promise.all([
     readFile(new URL("../public/robots.txt", import.meta.url), "utf8"),
     readFile(new URL("../public/sitemap.xml", import.meta.url), "utf8"),
+    readFile(new URL("../public/site.webmanifest", import.meta.url), "utf8"),
   ]);
-  assert.match(robots, /Sitemap: https:\/\/777genius\.github\.io\/agent-notifications\/sitemap\.xml/);
-  for (const path of ["agent-notifications/", ...supportedLocales.filter((locale) => locale.code !== "en").map((locale) => `agent-notifications/${locale.code}/`)])
-    assert.match(sitemap, new RegExp(`<loc>https://777genius\\.github\\.io/${path}</loc>`));
+  assert.match(robots, /Sitemap: https:\/\/agent-notifications\.com\/sitemap\.xml/);
+  for (const path of ["", ...supportedLocales.filter((locale) => locale.code !== "en").map((locale) => `${locale.code}/`)])
+    assert.match(sitemap, new RegExp(`<loc>https://agent-notifications\\.com/${path}</loc>`));
   assert.match(sitemap, /hreflang="x-default"/);
   for (const locale of supportedLocales)
     assert.match(sitemap, new RegExp(`hreflang="${locale.code === "en" ? "en" : locale.language}"`));
+  const manifest = JSON.parse(manifestText);
+  assert.equal(manifest.start_url, "/");
+  assert.equal(manifest.scope, "/");
 });
