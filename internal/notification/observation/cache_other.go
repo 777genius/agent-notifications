@@ -2,7 +2,10 @@
 
 package observation
 
-import "errors"
+import (
+	"context"
+	"errors"
+)
 
 func checkCacheRoot(string) error      { return errors.New("cache_unavailable") }
 func readCache(string) ([]byte, error) { return nil, errors.New("cache_unavailable") }
@@ -16,6 +19,6 @@ func openCache(root string) (*pathCache, error) {
 	}
 	return &pathCache{root: root}, nil
 }
-func (c *pathCache) Read() ([]byte, error)   { return readCache(c.root) }
-func (c *pathCache) Write(data []byte) error { return writeCache(c.root, data) }
-func (c *pathCache) Close()                  {}
+func (c *pathCache) Read() ([]byte, error)                      { return readCache(c.root) }
+func (c *pathCache) Write(_ context.Context, data []byte) error { return writeCache(c.root, data) }
+func (c *pathCache) Close()                                     {}

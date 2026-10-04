@@ -43,3 +43,24 @@ processes have their own runtime and are not included in the parent's trace.
 A blocked Windows syscall in a Go trace does not identify its external cause.
 Do not attribute a stall to antivirus or another filter driver without further
 OS evidence. A passing run also cannot identify an earlier unrecorded failure.
+
+## Attributed creation stalls
+
+The original failures from main run [37152371344](https://github.com/777genius/agent-notifications/actions/runs/37152371344)
+and PR run [37163324811](https://github.com/777genius/agent-notifications/actions/runs/37163324811)
+spent 288-791ms in `NtCreateFile` while creating the private publication temp.
+All eight captured failed claims then published before the final deadline check
+denied delivery. The responsible filesystem/filter driver remains unidentified.
+
+Publication now receives the existing claim context and checks it immediately
+before the replacing rename. An already-expired preparation preserves the old
+document and removes its temp rather than persisting an undelivered attempt.
+The final deadline check remains necessary: a synchronous rename or close can
+itself outlast the budget, and an uncertain committed attempt cannot be retried.
+This guard does not interrupt blocked Windows I/O or guarantee availability.
+
+The paired [access-mask experiment](https://github.com/777genius/agent-notifications/actions/runs/37189195501)
+failed for both the original and narrowed-rights variant on Go 1.25. The paired
+[temporary-attribute experiment](https://github.com/777genius/agent-notifications/actions/runs/37190645407)
+passed both variants on both Go versions. Neither establishes an availability
+cure; production creation rights and attributes remain unchanged.
