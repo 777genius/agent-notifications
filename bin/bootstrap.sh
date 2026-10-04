@@ -2002,7 +2002,9 @@ install_claude() {
     sync_marketplace_checkout || return 1
     install_plugin || return 1
     find_plugin_root || return 1
-    download_binary || return 1
+    # The channel transaction already promoted the runtime while its backup
+    # was recoverable. Do not repeat that promotion outside the transaction.
+    if ! platform_channel_claude; then download_binary || return 1; fi
     if platform_channel_claude; then
         channel_marketplace_add "$BOOTSTRAP_SOURCE_REF" || {
             echo 'Installed snapshot works, but channel tracking could not be enabled. Rerun setup.' >&2; return 1;
