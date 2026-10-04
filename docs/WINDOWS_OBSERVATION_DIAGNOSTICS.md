@@ -67,6 +67,24 @@ failed for both the original and narrowed-rights variant on Go 1.25. The paired
 passed both variants on both Go versions. Neither establishes an availability
 cure; production creation rights and attributes remain unchanged.
 
+## Native OS recording
+
+Windows CI also attempts a bounded-memory `GeneralProfile`, `FileIO` and `Minifilter` WPR recording around
+each original Gemini package/consent attempt. It stops immediately after that
+attempt, before unrelated package fixtures can evict the relevant interval.
+On failure the same artifact retains `geminievent-os.etl` or
+`geminievent-repeat-os.etl` and the corresponding recorder logs alongside the Go
+trace and exact source SHA. A Go trace identifies the syscall boundary; the OS
+trace can add kernel scheduling, disk/file I/O, filter operations and stack evidence. Missing or failed
+WPR recording is recorded in its logs and does not change the strict test result.
+
+The helper runs only in Windows GitHub Actions, uses a run/attempt/phase-specific
+recording instance and stops only an instance it successfully started. It does
+not cancel existing sessions, retry tests, change antivirus settings or install
+tools. Unlike sanitized claim diagnostics, the raw OS trace includes paths and
+process metadata from the disposable test runner. Do not run it on a real user
+profile or infer a driver cause from a successful control recording.
+
 ## Preflight and transaction boundary
 
 Each claim allocates one private empty temporary file before starting its 250ms
