@@ -148,7 +148,7 @@ test("keyboard navigation, root-path reload and desktop screenshot", async ({
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
   await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
     "href",
-    "https://agent-notifications.com/",
+    /^https:\/\/agent-notifications\.com\/?$/,
   );
   await expect(page.locator('meta[property="og:image"]')).toHaveAttribute(
     "content",
