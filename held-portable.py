@@ -1,5 +1,6 @@
 """Installed business observation only. No clock/reader/source-epoch grant."""
 import json
+import hashlib
 import pathlib
 import os
 import subprocess
@@ -21,13 +22,23 @@ def unique(pairs):
     return value
 
 
+def failure_code(error):
+    codes = {'duplicate_diagnostic_key', 'diagnostic_line_bound', 'diagnostic_schema',
+             'diagnostic_actual_closed_dual_submission_required', 'diagnostic_json_decode_failed',
+             'diagnostic_utf8_decode_failed'}
+    return error.args[0] if type(error) is ValueError and len(error.args) == 1 and isinstance(error.args[0], str) and error.args[0] in codes else None
+
+
 def diagnostic(line):
     # Native logger prefixes are harmless; the content-free record is closed.
     if PREFIX not in line:
         return None
     if line.count(PREFIX) != 1 or len(line) > 4096:
         raise ValueError('diagnostic_line_bound')
-    value = json.loads(line.split(PREFIX, 1)[1], object_pairs_hook=unique)
+    try:
+        value = json.loads(line.split(PREFIX, 1)[1], object_pairs_hook=unique)
+    except json.JSONDecodeError:
+        raise ValueError('diagnostic_json_decode_failed') from None
     if not isinstance(value, dict):
         raise ValueError('diagnostic_schema')
     invalidated = value.get('ipc') == 'invalidated'
@@ -135,8 +146,10 @@ class PortableOwned:
 
 
 class Observation:
+    failure_code = staticmethod(failure_code)
     def __init__(self, args, manifest, files, require, digest):
         self.args, self.require, self.digest = args, require, digest
+        self.candidate_commit = manifest['candidateCommit']
         self.root = None
         require(args.business_proof is not None and args.business_proof_sha256 is not None, 'sealed_business_prerequisites_required')
         self.cursors, self.partial, self.rows = {}, {}, []
@@ -175,8 +188,25 @@ class Observation:
             child.mkdir(mode=0o700)
             env[key] = str(child)
         env.update(GOPROXY='off',GOSUMDB='off',GOTOOLCHAIN='local',GOENV='off',GOWORK='off')
-        result = subprocess.run(['go','run',str(repo/'scripts/opencode-private-root-windows.go'),str(root)],
-                                cwd=root,env=env,capture_output=True,timeout=90)
+        helper = repo / '.task-tools/artifacts/windows-private-root-helper.exe'
+        record_path = repo / '.task-tools/artifacts/windows-private-root-helper.json'
+        self.require(not any(p.is_symlink() for p in (helper, record_path, *helper.parents)) and helper.is_file() and record_path.is_file() and
+                     0 < helper.stat().st_size <= 16777216 and 0 < record_path.stat().st_size <= 4096, 'windows_private_helper_record_missing')
+        record_raw = record_path.read_bytes()
+        record = json.loads(record_raw, object_pairs_hook=unique)
+        source_hash = hashlib.sha256((repo / 'scripts/opencode-private-root-windows.go').read_bytes()).hexdigest()
+        helper_hash = hashlib.sha256(helper.read_bytes()).hexdigest()
+        self.require(isinstance(record, dict) and set(record) == {'schema', 'candidateCommit', 'sourceSHA256', 'binarySHA256'} and
+                     type(record['schema']) is int and record['schema'] == 1 and record['candidateCommit'] == self.candidate_commit and
+                     record['sourceSHA256'] == source_hash == 'd0995c320cb3b03a287a43915d2319a1b71f93b1d112c1f60ecc61cb276c15bd' and
+                     record['binarySHA256'] == helper_hash, 'windows_private_helper_source_binding')
+        result = subprocess.run([str(helper), str(root)], cwd=root, env=env, capture_output=True, timeout=90)
+        self.require(hashlib.sha256(helper.read_bytes()).hexdigest() == helper_hash and record_path.read_bytes() == record_raw,
+                     'windows_private_helper_changed')
+        prefix = result.stderr[:65536]
+        self.private_root_diagnostic = {'stage': 'private_root_DACL_pinned_helper', 'exitCode': result.returncode,
+                                        'stderrPrefixBytes': len(prefix), 'stderrPrefixSHA256': hashlib.sha256(prefix).hexdigest(),
+                                        'stderrTruncated': len(result.stderr) > len(prefix)}
         self.require(result.returncode == 0, 'windows_private_dacl_failed')
 
     def configure_loader(self, config, plugin, root, v2):
@@ -208,7 +238,11 @@ class Observation:
             lines = raw.split(b'\n')
             self.partial[name] = lines.pop()
             for rawline in lines:
-                row = diagnostic(rawline.decode('utf-8', errors='strict'))
+                try:
+                    line = rawline.decode('utf-8', errors='strict')
+                except UnicodeDecodeError:
+                    raise ValueError('diagnostic_utf8_decode_failed') from None
+                row = diagnostic(line)
                 if row is not None:
                     if row['ipc'] == 'invalidated':
                         self.require(self.args.version == '2.0.21', 'closed_denied_native_generation_mismatch')

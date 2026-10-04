@@ -292,6 +292,7 @@ class Owned:
     """Exact handles only. Cleanup is fixture custody, not product IPC close proof."""
     def __init__(self):
         self.processes, self.servers, self.threads, self.logs = [], [], [], []
+        self.cleanup = dict(stdinCloseAttempts=0, terminateAttempts=0, killAttempts=0, waitReturns=0)
 
     def launch(self, argv, root, env, name, stdin=subprocess.DEVNULL, cwd=None):
         log = (root / (name + '-private.log')).open('wb')
@@ -310,21 +311,28 @@ class Owned:
 
     def stop(self, proc):
         if proc.stdin is not None and not proc.stdin.closed:
+            self.cleanup['stdinCloseAttempts'] += 1
             proc.stdin.close()
             try:
                 proc.wait(timeout=3)
+                self.cleanup['waitReturns'] += 1
                 return
             except subprocess.TimeoutExpired:
                 pass
         if proc.poll() is None:
+            self.cleanup['terminateAttempts'] += 1
             proc.terminate()
             try:
                 proc.wait(timeout=3)
+                self.cleanup['waitReturns'] += 1
             except subprocess.TimeoutExpired:
+                self.cleanup['killAttempts'] += 1
                 proc.kill()
                 proc.wait(timeout=3)
+                self.cleanup['waitReturns'] += 1
         else:
             proc.wait(timeout=3)
+            self.cleanup['waitReturns'] += 1
 
     def close(self):
         for s in self.servers:
@@ -1382,6 +1390,10 @@ def qualify(args, report):
             if 'primaryFailure' not in report: raise cleanup_error
         env.pop('OPENCODE_PASSWORD', None)
         report['fixtureLeadersReaped'] = all(p.poll() is not None for p in owner.processes)
+        report['fixtureCleanup'] = dict(owner.cleanup, trackedLeaderCount=len(owner.processes),
+                                       exitedLeaderCount=sum(p.poll() is not None for p in owner.processes),
+                                       fixtureServerThreadsAlive=sum(t.is_alive() for t in owner.threads),
+                                       logHandlesClosed=all(log.closed for log in owner.logs))
         if 'provider' in locals():
             report['actualProviderTransactions'] = len(provider.records)
             report['actualProviderGaps'] = len(provider.gaps)
@@ -1419,6 +1431,11 @@ def main():
         code=0 if report['status'] in ('inputs_verified_only','installed_business_lifecycle_observed') else 1
     except Exception as e:
         report['firstFailedPrerequisite']=str(e) if isinstance(e,Unqualified) else type(e).__name__
+        if PORTABLE is not None:
+            reason = PORTABLE.failure_code(e)
+            if reason is not None: report['failureReason'] = reason
+            if hasattr(PORTABLE, 'private_root_diagnostic'):
+                report['privateRootSetup'] = dict(PORTABLE.private_root_diagnostic)
     finally:
         args.report.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
         write_json(args.report,report)
