@@ -35,7 +35,7 @@ jobs:
 
   test:
     name: Test on Ubuntu
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
 
     strategy:
@@ -75,6 +75,51 @@ jobs:
             echo "$fmt_output"
             exit 1
           fi
+
+      - name: Require qualified Cursor installed physical contracts
+        if: matrix.go == '1.26'
+        env:
+          GOWORK: 'off'
+          GOTOOLCHAIN: local
+        run: |
+          set -euo pipefail
+          umask 077
+          evidence=$(mktemp -d "$RUNNER_TEMP/TEST-cursor-physical-XXXXXX")
+          printf 'CURSOR_PHYSICAL_EVIDENCE=%s\n' "$evidence" >> "$GITHUB_ENV"
+          mkdir "$evidence/tmp"
+          export TMPDIR="$evidence/tmp"
+          {
+            uname -r
+            cat /etc/os-release
+            stat -f -c '%T' / "$PWD" "$TMPDIR"
+          } | tee "$evidence/host.log"
+          go test -count=1 -timeout=3m -v \
+            github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/directoryidentity \
+            github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/dirswap \
+            2>&1 | tee "$evidence/native.log"
+          for marker in \
+            'ACTUAL_IOCTL=SUCCESS; fd_tuple=SUPPORTED;' \
+            'QUALIFICATION=SUPPORTED; same-byte replacement denied' \
+            'QUALIFICATION=SUPPORTED; substituted ancestor denied with unchanged child' \
+            'FRESH_PROCESS_REVALIDATED'; do
+            grep -F "$marker" "$evidence/native.log"
+          done
+          go test -count=1 -timeout=3m -v ./internal/copilotvscodeinstall \
+            -run '^TestCursor' 2>&1 | tee "$evidence/cursor.log"
+          if grep -F 'NOT_RUN positive' "$evidence/cursor.log"; then
+            exit 1
+          fi
+          grep -F 'ACTUAL_TEST_PHYSICAL_HOST: tuple=linux/amd64' "$evidence/cursor.log"
+          grep -F 'P1_ORIGINAL_TOKEN_REVALIDATED=true; PUBLIC_SELECTED_ACK_PROJECTION_DATA_ADMISSION=true' "$evidence/cursor.log"
+          grep -F 'SIBLING_R2_SELECTED_R1_POSITIVE=true' "$evidence/cursor.log"
+
+      - name: Preserve Cursor physical qualification
+        if: always() && matrix.go == '1.26'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cursor-installed-physical-go-${{ matrix.go }}
+          path: ${{ env.CURSOR_PHYSICAL_EVIDENCE }}/*.log
+          if-no-files-found: warn
 
       - name: Run tests
         run: |

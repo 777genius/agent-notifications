@@ -13,7 +13,7 @@ import (
 // transport both use portable.Binding.Registration's canonical SHA256 identity.
 func recorded(s installruntime.PolicySnapshot, b portable.Binding) bool {
 	l := s.Installation.Ledger
-	if b.Integration != portable.CopilotVSCode || s.Installation.Recovery || l.PendingMutation != nil ||
+	if (b.Integration != portable.CopilotVSCode && b.Integration != portable.Cursor) || s.Installation.Recovery || l.PendingMutation != nil ||
 		l.ID == "" || l.ID != b.ComponentID || l.Owner != b.Owner || l.WriterFloor > installruntime.SupportedWriterFloor {
 		return false
 	}
@@ -23,6 +23,10 @@ func recorded(s installruntime.PolicySnapshot, b portable.Binding) bool {
 
 func consumerBinding(s installruntime.PolicySnapshot, b portable.Binding) copilotvscodeevent.Binding {
 	key, _, _, _ := b.Registration()
+	product := config.AgentCopilotVSCode
+	if b.Integration == portable.Cursor {
+		product = config.AgentCursor
+	}
 	return copilotvscodeevent.Binding{InstallationID: b.InstallationID, BindingID: key,
-		ProfileIdentity: b.ScopeID, Product: string(config.AgentCopilotVSCode), Generation: s.Installation.Ledger.Generation}
+		ProfileIdentity: b.ScopeID, Product: string(product), Generation: s.Installation.Ledger.Generation}
 }

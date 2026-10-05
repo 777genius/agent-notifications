@@ -14,20 +14,21 @@ import (
 	"github.com/777genius/agent-notifications/internal/notifier"
 )
 
-// PhysicalProof is an immutable normalized observation. All fields are private;
-// N2a supplies NO affirmative constructor. The later receipt adapter in this
-// package must derive them from actual public NewLocal/Engine/observed receipts,
-// never configuration, a bool, or fabricated SDK facts. Zero values deny.
+// PhysicalProof is an immutable normalized observation. All fields are private.
+// Only the private Cursor producer derives affirmative Cursor facts from the
+// public installed observations. Local still has no producer. Zero values deny.
 type PhysicalProof struct {
 	binding                                                      portable.Binding
 	physical, selectedLocalClass, qualifiedTuple                 bool
 	goos, goarch, receiptDigest, packageDigest, projectionDigest string
 	primaryDigest, helperDigest                                  string
+	selectedCursorClass                                          bool
+	cursorObservation, configObservation                         string
 }
 
 // ProofPort reloads actual physical profile/receipt/package/projection authority.
 // It is not a lease and never executes a native app. Missing/unqualified proof
-// denies. No production implementation is wired at this checkpoint.
+// denies. The private Cursor producer retains this existing interface.
 type ProofPort interface {
 	CheckLocal(context.Context, portable.Binding, installruntime.InstalledSnapshot) (PhysicalProof, error)
 }
@@ -37,7 +38,11 @@ func digest(s string) bool {
 	return err == nil && len(data) == 32 && s != "0000000000000000000000000000000000000000000000000000000000000000"
 }
 func (p PhysicalProof) matches(b portable.Binding, s installruntime.PolicySnapshot) bool {
-	if !p.physical || !p.selectedLocalClass || !p.qualifiedTuple || p.binding != b ||
+	class := b.Integration == portable.CopilotVSCode && p.selectedLocalClass && !p.selectedCursorClass
+	if b.Integration == portable.Cursor {
+		class = p.selectedCursorClass && !p.selectedLocalClass && p.cursorObservation != "" && p.configObservation != "" && runtime.GOOS == "linux" && runtime.GOARCH == "amd64"
+	}
+	if !p.physical || !class || !p.qualifiedTuple || p.binding != b ||
 		p.goos != runtime.GOOS || p.goarch != runtime.GOARCH || !digest(p.receiptDigest) ||
 		!digest(p.packageDigest) || !digest(p.projectionDigest) || !digest(p.primaryDigest) {
 		return false
@@ -68,19 +73,30 @@ type Gate struct {
 
 var _ copilotvscodeevent.Gate = Gate{}
 
-func (g Gate) qualify(ctx context.Context, s installruntime.PolicySnapshot, expected copilotvscodeevent.Binding) (Consent, error) {
-	if ctx.Err() != nil || g.Proof == nil || s.Installation.Ledger.WriterFloor < installruntime.LocalPolicyWriterFloor || g.Binding.CheckSnapshot(s.Installation) != nil || !recorded(s, g.Binding) || consumerBinding(s, g.Binding) != expected {
-		return Consent{}, ErrDenied
+func (g Gate) qualify(ctx context.Context, s installruntime.PolicySnapshot, expected copilotvscodeevent.Binding) (Consent, PhysicalProof, error) {
+	if ctx == nil || ctx.Err() != nil || g.Proof == nil || s.Installation.Ledger.WriterFloor < installruntime.LocalPolicyWriterFloor || g.Binding.CheckSnapshot(s.Installation) != nil || !recorded(s, g.Binding) || consumerBinding(s, g.Binding) != expected {
+		return Consent{}, PhysicalProof{}, ErrDenied
 	}
 	consent, err := ReadConsent(s, g.Binding)
+	if g.Binding.Integration == portable.Cursor {
+		consent, err = ReadCursorConsent(s, g.Binding)
+	}
 	if err != nil {
-		return Consent{}, err
+		return Consent{}, PhysicalProof{}, err
 	}
 	proof, err := checkProofPort(ctx, g.Proof, g.Binding, s.Installation)
 	if err != nil || !proof.matches(g.Binding, s) {
-		return Consent{}, ErrDenied
+		return Consent{}, PhysicalProof{}, ErrDenied
 	}
-	return consent, nil
+	if g.Binding.Integration == portable.Cursor {
+		cfg, identity, err := readCursorConfig(g.Binding)
+		if err != nil || identity != proof.configObservation {
+			return Consent{}, PhysicalProof{}, ErrDenied
+		}
+		consent.desktop = consent.desktop && cfg.IsStatusDesktopEnabled("agent_stopping")
+		consent.webhook = consent.webhook && cfg.IsStatusWebhookEnabled("agent_stopping")
+	}
+	return consent, proof, nil
 }
 
 // ConsumerBinding returns only a qualified N1 value; it is not an authorizedGrant.
@@ -90,7 +106,7 @@ func (g Gate) ConsumerBinding(ctx context.Context) (copilotvscodeevent.Binding, 
 		return copilotvscodeevent.Binding{}, err
 	}
 	b := consumerBinding(s, g.Binding)
-	if _, err := g.qualify(ctx, s, b); err != nil {
+	if _, _, err := g.qualify(ctx, s, b); err != nil {
 		return copilotvscodeevent.Binding{}, err
 	}
 	return b, nil
@@ -100,7 +116,7 @@ func (g Gate) Channels(ctx context.Context, b copilotvscodeevent.Binding) copilo
 	if err != nil {
 		return copilotvscodeevent.Channels{}
 	}
-	c, err := g.qualify(ctx, s, b)
+	c, _, err := g.qualify(ctx, s, b)
 	if err != nil {
 		return copilotvscodeevent.Channels{}
 	}
@@ -122,7 +138,15 @@ func (g Gate) acquire(ctx context.Context, b copilotvscodeevent.Binding, channel
 	if err != nil {
 		return nil, err
 	}
-	lease := &authorityLease{gate: g, binding: b, channel: channel, expected: current, release: release}
+	initial := PhysicalProof{}
+	if g.Binding.Integration == portable.Cursor {
+		_, initial, err = g.qualify(ctx, current, b)
+		if err != nil {
+			release()
+			return nil, err
+		}
+	}
+	lease := &authorityLease{gate: g, binding: b, channel: channel, expected: current, release: release, initial: initial}
 	if err := lease.check(ctx); err != nil {
 		release()
 		return nil, err
@@ -134,6 +158,7 @@ type authorityLease struct {
 	gate     Gate
 	binding  copilotvscodeevent.Binding
 	channel  copilotvscodeevent.Channel
+	initial  PhysicalProof
 	expected installruntime.PolicySnapshot
 	release  func()
 	once     sync.Once
@@ -165,9 +190,12 @@ func (l *authorityLease) check(ctx context.Context) error {
 	if err != nil || !reflect.DeepEqual(current, l.expected.Installation) {
 		return ErrDenied
 	}
-	consent, err := l.gate.qualify(ctx, l.expected, l.binding)
+	consent, proof, err := l.gate.qualify(ctx, l.expected, l.binding)
 	if err != nil {
 		return err
+	}
+	if l.gate.Binding.Integration == portable.Cursor && proof != l.initial {
+		return ErrDenied
 	}
 	if l.channel == copilotvscodeevent.DesktopChannel && consent.desktop || l.channel == copilotvscodeevent.WebhookChannel && consent.webhook {
 		return nil

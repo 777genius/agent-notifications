@@ -2,12 +2,36 @@ package copilotvscodeinstall
 
 import (
 	"context"
+	"runtime"
+
+	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
 	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/copilotvscodeevent"
+	"github.com/777genius/agent-notifications/internal/cursorevent"
 	"github.com/777genius/agent-notifications/internal/notification"
 	"github.com/777genius/agent-notifications/internal/opencodeinstall"
 	"github.com/777genius/agent-notifications/internal/webhook"
 )
+
+// NewCursorDesktop enters the existing single-lease Linux desktop owner.
+func NewCursorDesktop(g CursorGate, b cursorevent.Binding, backend notification.DeliveryPort) notification.DeliveryPort {
+	if g.gate.Binding.Integration != portable.Cursor || g.gate.Proof == nil || runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		return localDesktop{}
+	}
+	if _, leased := backend.(localDesktop); leased {
+		return localDesktop{}
+	}
+	return NewDesktop(g.gate, localCursorBinding(b), "", backend)
+}
+
+// NewCursorWebhookSender converts only the consumer's typed handoff. The
+// existing sender owns its one lease and no-redirect completion semantics.
+func NewCursorWebhookSender(g CursorGate, b cursorevent.Binding, send cursorevent.WebhookSender) cursorevent.WebhookSender {
+	if g.gate.Binding.Integration != portable.Cursor || g.gate.Proof == nil {
+		send = nil
+	}
+	return cursorevent.WebhookSender(NewWebhookSender(g.gate, localCursorBinding(b), copilotvscodeevent.WebhookSender(send)))
+}
 
 const CopilotVSCodeToastAppID = opencodeinstall.CopilotVSCodeToastAppID
 
@@ -54,6 +78,17 @@ func NewWebhookSender(g Gate, b copilotvscodeevent.Binding, send copilotvscodeev
 		}()
 		if err := lease.BeforeHandoff(ctx); err != nil {
 			return err
+		}
+		if g.Binding.Integration == portable.Cursor {
+			fresh, identity, err := readCursorConfig(g.Binding)
+			if err != nil || identity != lease.initial.configObservation {
+				return ErrDenied
+			}
+			// Consumer content remains private and fixed; the endpoint comes from
+			// this lease's admitted config, never a stale caller Config pointer.
+			copy := *c
+			copy.Notifications.Webhook = config.WebhookConfig{Enabled: true, URL: fresh.Notifications.Webhook.URL, Preset: "custom", Format: "json"}
+			c = &copy
 		}
 		return send(webhook.WithNoRedirects(ctx), c, request)
 	}
