@@ -46,7 +46,33 @@ def main():
     expected = 'notification-navigation-test:' + spec['nonce']
     if spec['helperSHA256'] != identity()['helperSHA256']:
         raise RuntimeError('helper_snapshot_changed')
-    app = Gio.Application(application_id=spec['appID'], flags=Gio.ApplicationFlags.IS_SERVICE if sys.argv[1] == '--service' else Gio.ApplicationFlags.FLAGS_NONE)
+    class TokenObservedApplication(Gio.Application):
+        def do_before_emit(self, platform_data):
+            previous = getattr(self, 'test_observation', None)
+            self.test_observation = dict(status='failed')
+            try:
+                if previous is not None:
+                    raise RuntimeError('extra_platform_data_invocation')
+                if platform_data.get_type_string() != 'a{sv}':
+                    raise RuntimeError('unexpected_platform_data_type')
+                token = platform_data.lookup_value('activation-token', None)
+                if token is not None and token.get_type_string() != 's':
+                    raise RuntimeError('invalid_activation_token_type')
+                text = token.unpack() if token is not None else None
+                if text is not None and (not text or len(text.encode()) > 4096):
+                    raise RuntimeError('invalid_activation_token')
+                Gio.Application.do_before_emit(self, platform_data)
+                observed = dict(identity(), observedBoot=now(),
+                    activationTokenSHA256=hashlib.sha256(text.encode()).hexdigest() if text is not None else None)
+                save(root, 'platform-data.json', observed)
+                self.test_observation = dict(status='success', value=observed)
+            except Exception:
+                # PyGObject clears vfunc exceptions; the action must inspect this state.
+                self.test_observation = dict(status='failed')
+                raise
+
+    application = TokenObservedApplication if os.environ.get('NAVIGATION_WAYLAND_TEST') == '1' else Gio.Application
+    app = application(application_id=spec['appID'], flags=Gio.ApplicationFlags.IS_SERVICE if sys.argv[1] == '--service' else Gio.ApplicationFlags.FLAGS_NONE)
     if sys.argv[1] in ('--sender', '--remove'):
         removing = sys.argv[1] == '--remove'
         save(root, 'remove-start.json' if removing else 'sender-start.json', identity())
@@ -82,9 +108,19 @@ def main():
     def opened(action, parameter):
         actual = parameter.unpack() if parameter is not None else None
         event = dict(identity(), enteredBoot=now(), targetMatches=actual == expected)
+        observation_valid = True
+        if os.environ.get('NAVIGATION_WAYLAND_TEST') == '1':
+            current = getattr(app, 'test_observation', dict(status='failed'))
+            app.test_observation = dict(status='consumed')
+            event['platformDataStatus'] = current['status']
+            observation_valid = current['status'] == 'success'
+            if observation_valid:
+                observed = current['value']
+                observation_valid = observed['pid'] == event['pid'] and observed['startTicks'] == event['startTicks'] and observed['observedBoot'] <= event['enteredBoot']
+                event['activationTokenSHA256'] = observed['activationTokenSHA256']
         with (root / 'action-events.jsonl').open('a') as stream:
             stream.write(json.dumps(event) + '\n'); stream.flush(); os.fsync(stream.fileno())
-        if not isinstance(actual, str) or len(actual.encode()) > 128 or actual != expected or now() >= budget:
+        if not observation_valid or not isinstance(actual, str) or len(actual.encode()) > 128 or actual != expected or now() >= budget:
             save(root, 'callback-rejected.json', event); app.quit(); return
         try:
             save(root, 'effect.json', dict(event, nonce=spec['nonce']))  # exclusive, exactly one TEST effect
