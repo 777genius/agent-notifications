@@ -24,3 +24,15 @@ NOTIFIER_TEST_INSTALLED_PREFLIGHT=1 NOTIFIER_TEST_INSTALLED_APP=/Applications/Ch
 Native notification clicks require user interaction and a separately registered unique test notifier. They are not automatically replayed by either command. The user explicitly authorized this Mac and provided the target test-chat URI. No agent/runtime commands were performed in real user projects.
 
 `managed-cli-permission-rejection.json` records a negative isolated full-CLI precondition experiment. The fixed product signing identifier and unique TEST bundle identifier were rejected by macOS notification authorization. No notification was submitted, and this is not full CLI E2E acceptance. The experimental harness is not shipped because this OS identity composition is unsupported.
+
+`native-sender-death-callback.json` correlates a submitted macOS TEST notification, an exact executable/structured-send PID observed running then absent before the click request, and a different callback PID 768.5s after launch. The user confirmed the test chat opened. This proves the observed callback can run after the sender disappears and the old 14s submission budget elapses; it does not collect the helper's exit status or physical-click/render/startup timing.
+
+`native-linux-connection-callback.json` retains both the initial version-format failure and the successful pinned Ubuntu24.04 dunst run. A private D-Bus monitor recorded actual daemon emissions, including a callback addressed to the disconnected sender's unique name. A replacement received no old callback and received its own new callback. Only the connection lifecycle is covered; no sender subprocess death, GUI, Wayland, server restart, Codex or latest dunst qualification is claimed. All owned daemon/display/bus PIDs were observed absent after cleanup.
+
+Linux reproduction: extract Ubuntu24.04 packages `dunst=1.9.2-1build2` and `libxss1=1:1.2.3-1build3` into a new private `navigation-dbus-test-*` root. Do not install a global daemon. Start an authenticated owned Xvfb with TCP disabled and a fresh `dbus-run-session`; start only the extracted daemon with an explicit TEST config and its private library path. Write `.owned-test-root.json` containing `purpose="TEST navigation Linux callback"`, the exact private `busAddress`, exact `display`, and `xvfb=true`. Pass absolute paths belonging to that root:
+
+```sh
+AGENT_NOTIFY_NAVIGATION_LINUX_E2E=1 /usr/bin/python3 scripts/navigation-linux-callback-probe.py --root "$TASK_PROBE_ROOT" --dunst "$TASK_PROBE_ROOT/package/usr/bin/dunst" --dunstctl "$TASK_PROBE_ROOT/package/usr/bin/dunstctl"
+```
+
+The probe requires system Python dbus/GLib modules, validates daemon identity/version through its real bus owner and `/proc`, emits JSON evidence with explicit qualification limits, and refuses to overwrite an existing report. The caller owns private daemon/Xvfb/bus cleanup. Do not point this fixture at a user session bus or display.
