@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "macOS": "15.6.1",
+  "architecture": "arm64",
+  "sourceSHA256": {
+    "AppleEventEndpointProbe.swift": "7d3c8b8ac8351e87869653b4df9fa6b795d6031019ae03b7ab830d6617c3733d",
+    "ProcessSerialBridge.c": "f8b2e464465b7d1f3835dfb1aa3040715940f109b3f733e700f7caed9c132ab1",
+    "ProcessSerialBridge.h": "5065d4b90bca9305c9c6709db0b5f0a6d9f1fda3a66948efb032fec0bdc1cec3",
+    "ProcessSerialRoutingProbe.swift": "a68c6ce17ce29854e0f452dbe9559e6a4aaf7464b71fdb794d260598abb1481b"
+  },
+  "runnerSHA256": "3e067b320d2ef363e87a167475b5dfd93e7ad7af0b77bb8383344268352a4202",
+  "commands": [
+    {
+      "label": "bridge",
+      "exitCode": 0,
+      "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSHA256": "42893469ab9a90cf7cd3f4581f27411a931a84b7f5104a6b4b8107fdb11cb5b1"
+    },
+    {
+      "label": "endpoint-build",
+      "exitCode": 0,
+      "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "endpoint",
+      "exitCode": 0,
+      "stdoutSHA256": "ca8519d3136f30657ae00064949d6de572e268c798b233036de3f371fed7537e",
+      "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "routing-build",
+      "exitCode": 0,
+      "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "sign",
+      "exitCode": 0,
+      "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSHA256": "d6aab730266f10e19c7a00354f74061b48168b91850bc988e12cc024efd5bdeb"
+    },
+    {
+      "label": "routing",
+      "exitCode": 0,
+      "stdoutSHA256": "bd308042a49d29be91b3c0cdbbe8aff3f29d0aaea08ba8e03e45c9c7d1d2868c",
+      "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "binaries": {
+    "endpointSHA256": "1ebc0988a4bb961e458dd5d9e669f41bd99ce4fab149f71ad706f63732679ef7",
+    "signedReceiverSHA256": "064dcc4b47f02648ddc5c30b2e973be5b6f810a3e3055fbdc8425eb230af6e65"
+  },
+  "productionClientActivated": false,
+  "passed": true,
+  "limitations": [
+    "No Developer ID or executable-resource qualification",
+    "No actual Codex GURL or visible-chat qualification",
+    "Single observed restart; PID reuse/update unqualified"
+  ],
+  "endpoint": {
+    "coerceStatus": -1700,
+    "createStatus": 0,
+    "descriptorBytes": 0,
+    "descriptorType": "6e756c6c",
+    "eventsSent": 0,
+    "ownPortRegistered": true,
+    "probe": "public_pid_to_bound_mach_port",
+    "processSerialDescriptorStatus": 0,
+    "processSerialLookupStatus": 0
+  },
+  "routing": {
+    "first": {
+      "permissionStatus": -1744,
+      "replyError": 0,
+      "sendStatus": 0
+    },
+    "observersAlive": true,
+    "otherEventsAfterRestart": [],
+    "otherEventsBeforeRestart": [],
+    "probe": "psn_selected_and_stale_receiver",
+    "productionClientActivated": false,
+    "restartedEvents": [],
+    "selectedEvents": [
+      "notification-navigation-test://selected-a"
+    ],
+    "serialChangedAfterRestart": true,
+    "stale": {
+      "permissionStatus": -600,
+      "replyError": 0,
+      "sendStatus": -600
+    },
+    "twoDistinctCopies": true
+  },
+  "snapshotUnchanged": true
+}
