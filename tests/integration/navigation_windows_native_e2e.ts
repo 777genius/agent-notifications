@@ -161,6 +161,9 @@ try {
       if (!existsSync(join(root, name))) continue;
       try { evidence[name] = read(name); } catch (error: unknown) { evidence[`${name}ReadError`] = String(error); }
     }
+    for (const name of readdirSync(root).filter(name => /^(shortcut-readback|shell-identity|shell-notify|shell-readiness-\d+)\.json$/.test(name)).slice(0, 20)) {
+      try { evidence[name] = read(name); } catch (error: unknown) { evidence[`${name}ReadError`] = String(error); }
+    }
     writeFileSync(join(root, 'evidence.json'), `${JSON.stringify(evidence, null, 2)}\n`, { flag: 'wx' });
     // A single known path is the workflow artifact handoff, including failed/unavailable reports.
     if (process.env.GITHUB_OUTPUT) writeFileSync(process.env.GITHUB_OUTPUT, `evidence_root=${root}\n`, { flag: 'a' });

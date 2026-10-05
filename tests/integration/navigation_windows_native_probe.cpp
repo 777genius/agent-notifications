@@ -17,6 +17,7 @@
 #include <cwchar>
 #include <algorithm>
 #include <cwctype>
+#include <vector>
 using Microsoft::WRL::ComPtr;
 namespace fs = std::filesystem;
 using namespace winrt::Windows::UI::Notifications;
@@ -130,18 +131,90 @@ static bool ownShortcutProof() {
     std::ifstream proof(root / ".shortcut-owned"); std::string text; std::getline(proof, text);
     return text == narrow(shortcut().wstring());
 }
-static bool shortcutMatches() {
+static bool shortcutMatches(bool emitReadback = false) {
     ComPtr<IShellLinkW> link; check(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&link)));
     ComPtr<IPersistFile> file; check(link.As(&file)); check(file->Load(shortcut().c_str(), STGM_READ));
     wchar_t target[32768]{}, args[256]{};
     check(link->GetPath(target, 32768, nullptr, SLGP_RAWPATH)); check(link->GetArguments(args, 256));
-    if (fs::path(target) != root / L"navigation-native-probe.exe" || std::wstring(args) != L"inert") return false;
+    bool targetMatches = fs::path(target) == root / L"navigation-native-probe.exe" && std::wstring(args) == L"inert";
     ComPtr<IPropertyStore> props; check(link.As(&props)); PROPVARIANT id{}, activator{};
     check(props->GetValue(PKEY_AppUserModel_ID, &id));
     check(props->GetValue(PKEY_AppUserModel_ToastActivatorCLSID, &activator));
-    bool matches = id.vt == VT_LPWSTR && id.pwszVal && id.pwszVal == aumid
+    bool matches = targetMatches && id.vt == VT_LPWSTR && id.pwszVal && id.pwszVal == aumid
         && activator.vt == VT_CLSID && activator.puuid && *activator.puuid == clsid;
+    if (emitReadback) {
+        wchar_t actualCLSID[40]{};
+        if (activator.vt == VT_CLSID && activator.puuid) StringFromGUID2(*activator.puuid, actualCLSID, 40);
+        report("shortcut-readback.json", "{\"target\":" + jsonQuote(target) + ",\"arguments\":" + jsonQuote(args)
+            + ",\"aumid\":" + jsonQuote(id.vt == VT_LPWSTR && id.pwszVal ? id.pwszVal : L"")
+            + ",\"aumidVariantType\":" + std::to_string(id.vt) + ",\"activator\":" + jsonQuote(actualCLSID)
+            + ",\"activatorVariantType\":" + std::to_string(activator.vt)
+            + ",\"matches\":" + (matches ? "true" : "false") + "}\n");
+    }
     PropVariantClear(&id); PropVariantClear(&activator); return matches;
+}
+static std::vector<BYTE> tokenUser(HANDLE process) {
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(process, TOKEN_QUERY, &token)) check(HRESULT_FROM_WIN32(GetLastError()));
+    DWORD size = 0; GetTokenInformation(token, TokenUser, nullptr, 0, &size);
+    if (!size || size > 16384) { CloseHandle(token); throw std::runtime_error("token user size unavailable"); }
+    std::vector<BYTE> user(size);
+    bool ok = GetTokenInformation(token, TokenUser, user.data(), size, &size) != FALSE;
+    DWORD error = GetLastError(); CloseHandle(token);
+    if (!ok) check(HRESULT_FROM_WIN32(error)); return user;
+}
+static void verifyShellIdentity() {
+    DWORD shellPID = 0, ownSession = 0, shellSession = 0;
+    GetWindowThreadProcessId(GetShellWindow(), &shellPID);
+    if (!shellPID || !ProcessIdToSessionId(GetCurrentProcessId(), &ownSession)
+        || !ProcessIdToSessionId(shellPID, &shellSession)) throw std::runtime_error("Shell session unavailable");
+    HANDLE shell = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, shellPID);
+    if (!shell) check(HRESULT_FROM_WIN32(GetLastError()));
+    std::vector<BYTE> shellUser;
+    try { shellUser = tokenUser(shell); } catch (...) { CloseHandle(shell); throw; }
+    CloseHandle(shell); auto ownUser = tokenUser(GetCurrentProcess());
+    bool sameUser = EqualSid(reinterpret_cast<TOKEN_USER*>(ownUser.data())->User.Sid,
+                             reinterpret_cast<TOKEN_USER*>(shellUser.data())->User.Sid) != FALSE;
+    report("shell-identity.json", "{\"shellPID\":" + std::to_string(shellPID)
+        + ",\"ownSession\":" + std::to_string(ownSession) + ",\"shellSession\":" + std::to_string(shellSession)
+        + ",\"sameUser\":" + (sameUser ? "true" : "false") + "}\n");
+    if (!sameUser || ownSession == 0 || ownSession != shellSession) throw std::runtime_error("Shell user/session mismatch");
+}
+static NotificationSetting measuredReadiness(const ToastNotifier& notifier) {
+    // Experiment: explicit shortcut notification may let Shell recognize this new TEST identity.
+    // Neither SHCNF_FLUSH nor the shortcut's existence proves AppResolver recognition.
+    ULONGLONG started = GetTickCount64(), deadline = started + 3000; unsigned attempt = 0;
+    for (;;) {
+        ComPtr<IShellItem2> item; std::wstring parsingName = L"shell:AppsFolder\\" + aumid;
+        HRESULT parseHR = SHCreateItemFromParsingName(parsingName.c_str(), nullptr, IID_PPV_ARGS(&item));
+        HRESULT appIDHR = E_PENDING; PWSTR actualID = nullptr;
+        if (SUCCEEDED(parseHR)) appIDHR = item->GetString(PKEY_AppUserModel_ID, &actualID);
+        std::wstring observedID = actualID ? actualID : L""; CoTaskMemFree(actualID);
+        bool recognized = SUCCEEDED(parseHR) && SUCCEEDED(appIDHR) && observedID == aumid;
+        HRESULT settingHR = S_OK; NotificationSetting setting = NotificationSetting::Enabled;
+        try { setting = notifier.Setting(); } catch (const winrt::hresult_error& error) { settingHR = error.code().value; }
+        ULONGLONG now = GetTickCount64();
+        std::string filename = "shell-readiness-" + std::to_string(++attempt) + ".json";
+        report(filename.c_str(), "{\"aumid\":" + jsonQuote(aumid) + ",\"observedAppID\":" + jsonQuote(observedID)
+            + ",\"parseHRESULT\":" + std::to_string(parseHR) + ",\"appIDHRESULT\":" + std::to_string(appIDHR)
+            + ",\"recognized\":" + (recognized ? "true" : "false") + ",\"settingHRESULT\":" + std::to_string(settingHR)
+            + ",\"elapsedMS\":" + std::to_string(now - started)
+            + ",\"setting\":" + std::to_string(SUCCEEDED(settingHR) ? static_cast<int>(setting) : -1) + "}\n");
+        if (FAILED(settingHR) && settingHR != HRESULT_FROM_WIN32(ERROR_NOT_FOUND)) check(settingHR);
+        if (FAILED(parseHR) && parseHR != HRESULT_FROM_WIN32(ERROR_NOT_FOUND)) check(parseHR);
+        if (now >= deadline) throw std::runtime_error("TEST Shell readiness budget expired; no Show");
+        if (SUCCEEDED(settingHR) && setting != NotificationSetting::Enabled) return setting;
+        if (recognized && SUCCEEDED(settingHR)) return setting;
+        if (attempt >= 16) throw std::runtime_error("TEST Shell AUMID/Setting readiness limit; no Show");
+        // Predicate polling with a bounded message wait, rather than a fixed startup sleep.
+        DWORD wait = static_cast<DWORD>(std::min<ULONGLONG>(200, deadline - now));
+        if (MsgWaitForMultipleObjectsEx(0, nullptr, wait, QS_ALLINPUT, MWMO_INPUTAVAILABLE) == WAIT_FAILED)
+            check(HRESULT_FROM_WIN32(GetLastError()));
+        MSG message{}; unsigned messages = 0;
+        while (messages++ < 64 && GetTickCount64() < deadline && PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&message); DispatchMessageW(&message);
+        }
+    }
 }
 static void install() {
     // Root is supplied by the CI-only controller and has a unique immutable UUID marker.
@@ -188,10 +261,19 @@ static void install() {
 }
 static int send() {
     install();
+    sendStage("shortcut_readback");
+    if (!shortcutMatches(true)) throw std::runtime_error("saved TEST shortcut binding mismatch");
+    sendStage("shell_identity"); verifyShellIdentity();
+    sendStage("shell_shortcut_notify");
+    fs::path linkPath = shortcut();
+    if (linkPath.wstring().size() >= MAX_PATH) throw std::runtime_error("Shell notification path too long");
+    SHChangeNotify(SHCNE_CREATE, SHCNF_PATHW | SHCNF_FLUSH, linkPath.c_str(), nullptr);
+    report("shell-notify.json", "{\"event\":\"SHCNE_CREATE\",\"flags\":\"SHCNF_PATHW|SHCNF_FLUSH\",\"path\":"
+        + jsonQuote(linkPath.wstring()) + ",\"returned\":true}\n");
     sendStage("notifier_create");
     auto notifier = ToastNotificationManager::CreateToastNotifier(aumid);
-    sendStage("notifier_setting");
-    auto setting = notifier.Setting();
+    sendStage("notifier_readiness");
+    auto setting = measuredReadiness(notifier);
     sendStage("sender_receipt");
     report("sender.json", "{\"pid\":" + std::to_string(GetCurrentProcessId()) + ",\"aumid\":" + jsonQuote(aumid)
         + ",\"nonce\":" + jsonQuote(uuid) + ",\"notificationSetting\":" + std::to_string(static_cast<int>(setting))
