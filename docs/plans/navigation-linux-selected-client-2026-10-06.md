@@ -124,6 +124,27 @@ outer networking and QEMU NICs; the guest receives no host shared directories,
 credentials, projects, displays or input devices. Guest sandbox and actual
 selected-client observations remain required before the notification experiment.
 
+## Provisioning fixture and first actual failure
+
+The bounded provisioning fixture received three source-review/fix rounds. The
+reviews closed a premature success frame, incomplete QMP tail acceptance,
+handshake timeout accounting, final serial-size limits and mutable input binding.
+Success requires the guest's completed installation and sync, one hash-checked
+serial result, independently observed QMP `SHUTDOWN` with `guest=true` and reason
+`guest-shutdown`, collected QEMU exit 0 and unchanged input hashes. The default
+distribution portal backend is only a provisioning dependency; the previously
+qualified GTK 1.15.3 backend is still required for the subsequent token experiment.
+
+The first actual container failed during Python imports before probe `main`:
+the staged `operator.py` shadowed the standard-library module. No VM, client or
+notification started. Exact owned-container removal and fresh ID/name absence
+checks passed. The original failure is retained independently in
+`linux-selected-client-guest-import-failed.json`; it is not relabeled as a fixed
+run. The reviewed correction uses isolated Python `-I` for the outer controller,
+container probe and guest script, and names the staged outer script
+`fixture-controller.py`. A fresh captured stage has a distinct exclusive intent
+gate; a successful guest boot still does not qualify sandbox or navigation.
+
 ## Sources
 
 - [Official Linux support and experimental Wayland flag](https://learn.chatgpt.com/docs/linux/linux-app)
