@@ -71,7 +71,7 @@ def main():
             'users': [{'name': 'navigationtest', 'uid': 1000, 'lock_passwd': True, 'shell': '/bin/bash'}],
             'runcmd': [['mkdir', '-p', '/mnt/navigation-test-seed'],
                        ['mount', '-o', 'ro', '/dev/sr0', '/mnt/navigation-test-seed'],
-                       ['/usr/bin/python3', '/mnt/navigation-test-seed/guest-provision.py']]}
+                       ['/usr/bin/python3', '-I', '/mnt/navigation-test-seed/guest-provision.py']]}
         (seed_dir / 'user-data').write_text('#cloud-config\n' + json.dumps(config) + '\n')
         command('create_seed', ['genisoimage', '-quiet', '-output', str(seed), '-volid', 'cidata',
             '-joliet', '-rock', str(seed_dir)], 90)
