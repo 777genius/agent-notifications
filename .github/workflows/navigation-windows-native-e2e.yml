@@ -1,0 +1,68 @@
+name: Navigation Windows client native TEST callback
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/navigation-windows-native-e2e.yml'
+      - 'tests/integration/navigation_windows_native_probe.cpp'
+      - 'tests/integration/navigation_windows_native_e2e.ts'
+      - 'opencode-plugin/package.json'
+      - 'opencode-plugin/package-lock.json'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-client:
+    # Official client GA: actions/runner-images#14592. Server runners cannot qualify this contract.
+    runs-on: windows-11-vs2026-arm
+    timeout-minutes: 12
+    env:
+      AGENT_NOTIFY_NAVIGATION_WINDOWS_E2E: '1'
+      NAVIGATION_WINDOWS_RUNNER: windows-11-vs2026-arm
+      NAVIGATION_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0, existing repository pin
+        with:
+          node-version: '24.21.0'
+      - name: Exact source and image evidence
+        shell: pwsh
+        run: |
+          $head = git rev-parse HEAD
+          if ($head -ne $env:NAVIGATION_SOURCE_SHA) { throw 'checkout SHA mismatch' }
+          Write-Host "Source=$head"
+          Write-Host "Image=$env:ImageVersion Node=$(node --version)"
+          if ((node --version) -notmatch '^v24\.') { throw 'Node 24 prerequisite unavailable' }
+      - name: Existing pinned TypeScript tooling
+        shell: pwsh
+        run: |
+          npm ci --prefix opencode-plugin --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'locked tooling install failed' }
+          & ./opencode-plugin/node_modules/.bin/tsc.cmd --ignoreConfig --noEmit --strict --target ES2023 --module ESNext --moduleResolution bundler --types node --typeRoots ./opencode-plugin/node_modules/@types tests/integration/navigation_windows_native_e2e.ts
+          if ($LASTEXITCODE -ne 0) { throw 'native harness typecheck failed' }
+      - name: Compile native TEST probe with image SDK
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -property installationPath
+          if (!$vs) { throw 'Visual Studio prerequisite unavailable' }
+          $out = Join-Path $env:RUNNER_TEMP 'navigation-native-probe.exe'
+          $source = Join-Path $env:GITHUB_WORKSPACE 'tests\integration\navigation_windows_native_probe.cpp'
+          $cmd = '"' + $vs + '\Common7\Tools\VsDevCmd.bat" -arch=arm64 -host_arch=arm64 && cl /nologo /std:c++17 /EHsc /W4 /DUNICODE /D_UNICODE "' + $source + '" /Fe:"' + $out + '" /Fo:"' + $env:RUNNER_TEMP + '\navigation-native-probe.obj" /link windowsapp.lib ole32.lib oleaut32.lib shell32.lib propsys.lib advapi32.lib user32.lib uuid.lib uiautomationcore.lib'
+          cmd.exe /d /s /c $cmd
+          if ($LASTEXITCODE -ne 0) { throw 'native probe compile failed' }
+      - name: Single native submission and OS cold callback
+        id: probe
+        shell: pwsh
+        run: |
+          node --experimental-strip-types tests/integration/navigation_windows_native_e2e.ts (Join-Path $env:RUNNER_TEMP 'navigation-native-probe.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'native callback unavailable or failed; inspect evidence' }
+      - name: Preserve partial native evidence
+        if: always() && steps.probe.outputs.evidence_root != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: navigation-windows-native-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.probe.outputs.evidence_root }}
+          if-no-files-found: error
+          retention-days: 14
