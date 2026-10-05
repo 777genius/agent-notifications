@@ -414,7 +414,7 @@ func TestCursorEventMainDispatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pipe.Close()
+	defer func() { _ = pipe.Close() }()
 	out.Reset()
 	stderr.Reset()
 	blocked.Stdout, blocked.Stderr = &out, &stderr
@@ -434,7 +434,7 @@ func TestCursorEventInputAndOutputFailure(t *testing.T) {
 	root := t.TempDir()
 	argv := []string{"stop", "--binding", filepath.Join(root, "TEST-missing.json")}
 	r, w := io.Pipe()
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 	var out bytes.Buffer
 	started := time.Now()
 	if code := runCursorEvent(argv, r, &out); code != 0 || out.String() != "{}\n" || time.Since(started) > 2500*time.Millisecond {
