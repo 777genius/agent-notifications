@@ -22,3 +22,5 @@ NOTIFIER_TEST_INSTALLED_PREFLIGHT=1 NOTIFIER_TEST_INSTALLED_APP=/Applications/Ch
 ```
 
 Native notification clicks require user interaction and a separately registered unique test notifier. They are not automatically replayed by either command. The user explicitly authorized this Mac and provided the target test-chat URI. No agent/runtime commands were performed in real user projects.
+
+`managed-cli-permission-rejection.json` records a negative isolated full-CLI precondition experiment. The fixed product signing identifier and unique TEST bundle identifier were rejected by macOS notification authorization. No notification was submitted, and this is not full CLI E2E acceptance. The experimental harness is not shipped because this OS identity composition is unsupported.
