@@ -201,7 +201,10 @@ static NotificationSetting measuredReadiness(const ToastNotifier& notifier) {
             + ",\"elapsedMS\":" + std::to_string(now - started)
             + ",\"setting\":" + std::to_string(SUCCEEDED(settingHR) ? static_cast<int>(setting) : -1) + "}\n");
         if (FAILED(settingHR) && settingHR != HRESULT_FROM_WIN32(ERROR_NOT_FOUND)) check(settingHR);
-        if (FAILED(parseHR) && parseHR != HRESULT_FROM_WIN32(ERROR_NOT_FOUND)) check(parseHR);
+        // A new TEST identity may be absent from this read. Bounded polling does not
+        // establish an AppsFolder recognition guarantee; Show still requires a match.
+        if (FAILED(parseHR) && parseHR != HRESULT_FROM_WIN32(ERROR_NOT_FOUND)
+            && parseHR != HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)) check(parseHR);
         if (now >= deadline) throw std::runtime_error("TEST Shell readiness budget expired; no Show");
         if (SUCCEEDED(settingHR) && setting != NotificationSetting::Enabled) return setting;
         if (recognized && SUCCEEDED(settingHR)) return setting;
