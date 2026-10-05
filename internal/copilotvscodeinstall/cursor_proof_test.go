@@ -465,6 +465,41 @@ func (g *cursorRevokingGate) Recheck(ctx context.Context, b cursorevent.Binding,
 	return g.gate.Recheck(ctx, b, ch)
 }
 
+// Regression: the fixed JSON sender silently discards a selected preset,
+// format or authentication headers. Real installed admission must reject only
+// that webhook channel while preserving independent desktop consent.
+func TestCursorWebhookConfigurationEligibility(t *testing.T) {
+	for _, tc := range []struct {
+		name, fields string
+		webhook      bool
+	}{
+		{"default-json", "", true},
+		{"custom-json", `,"preset":"custom","format":"json"`, true},
+		{"slack", `,"preset":"slack"`, false},
+		{"text", `,"preset":"custom","format":"text"`, false},
+		{"headers", `,"headers":{"Authorization":"TEST-only"}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, b, ready := installedCursorFilesystem(t)
+			body := `{"schemaVersion":2,"agents":{"cursor":{"notifications":{"desktop":{"enabled":true},"webhook":{"enabled":true,"url":"http://127.0.0.1:18181"` + tc.fields + `}}}}}`
+			cursorWrite(t, f.b.GlobalConfig, []byte(body), 0600)
+			if _, _, err := readCursorConfig(f.b); err != nil {
+				t.Fatal("invalid configuration fixture", err)
+			}
+			if !ready {
+				return
+			}
+			got := f.g.Channels(cursorContext(t), b)
+			if !got.Desktop || got.Webhook != tc.webhook {
+				t.Fatalf("channel eligibility: %+v, expected webhook=%t", got, tc.webhook)
+			}
+			if f.g.Recheck(cursorContext(t), b, cursorevent.WebhookChannel) != tc.webhook {
+				t.Fatal("effect recheck disagrees with configured webhook support")
+			}
+		})
+	}
+}
+
 // Regression: consent/config revocation after the claim is ignored, or policy
 // CAS deadlocks under a leaked claim lock. Expect a retained claim and zero
 // submissions through the actual installed owner. Consumer fake-gate tests
