@@ -793,7 +793,7 @@ func TestCursorSelectedRevisionSurvivesPublicSiblingUpdate(t *testing.T) {
 	r2 := f
 	r2.pkg = filepath.Join(filepath.Dir(f.pkg), "TEST-r2")
 	cursorPackage(t, r2)
-	cursorWrite(t, filepath.Join(r2.pkg, "plugin.json"), bytes.ReplaceAll(cursorRead(t, filepath.Join(r2.pkg, "plugin.json")), []byte("1.0.0"), []byte("2.0.0")), 0600)
+	cursorWrite(t, filepath.Join(r2.pkg, "plugin.json"), bytes.Replace(cursorRead(t, filepath.Join(r2.pkg, "plugin.json")), []byte(`"version":"1.0.0"`), []byte(`"version":"2.0.0"`), 1), 0600)
 	canonicalR2, err := producer.engine.LocalPackageTreeDigest(cursorContext(t), r2.pkg)
 	if err != nil {
 		t.Fatal(err)
