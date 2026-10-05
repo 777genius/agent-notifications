@@ -111,12 +111,20 @@ async function main(): Promise<void> {
   writeFileSync(join(root, 'submission-attempted'), nonce, { flag: 'wx' });
   const sender = run('send', 20_000);
   if (existsSync(join(root, 'sender.json'))) evidence.sender = read('sender.json');
+  if (existsSync(join(root, 'aumid-identity.json'))) evidence.aumidIdentity = read('aumid-identity.json');
   observeShow(sender);
   if (sender.status === 3) {
     evidence.status = 'unavailable';
     throw new Error('native notifier Setting is not Enabled; settings are not changed');
   }
   requireSuccess(sender);
+  const registeredIdentity = evidence.aumidIdentity as Json | undefined;
+  if (!registeredIdentity || registeredIdentity.pid !== sender.pid || registeredIdentity.nonce !== nonce
+      || registeredIdentity.aumid !== `AgentNotify.Navigation.TEST.${nonce}`
+      || registeredIdentity.newKey !== true || registeredIdentity.displayNameMatches !== true
+      || registeredIdentity.customActivatorMatches !== true) {
+    throw new Error('unique native AUMID registry identity not proved');
+  }
   evidence.submitted = read('submitted.json');
   const senderReceipt = evidence.sender as Json;
   if (senderReceipt.pid !== sender.pid || senderReceipt.nonce !== nonce || senderReceipt.showCalledAtReceipt !== false
@@ -151,13 +159,17 @@ try {
     // Only the UUID registration/shortcut/toast history. Native callback exits itself in <=30s.
     const cleanup = run('cleanup', 15_000);
     if (existsSync(join(root, 'cleanup.json'))) evidence.cleanup = read('cleanup.json');
-    if (cleanup.error || cleanup.status !== 0 || cleanup.signal) {
+    const cleanupRecord = evidence.cleanup as Json | undefined;
+    // When registration reached its complete readback, exact key absence is mandatory.
+    const identityCleanupMissing = evidence.aumidIdentity !== undefined
+      && cleanupRecord?.ownAumidIdentityRemoved !== true;
+    if (cleanup.error || cleanup.status !== 0 || cleanup.signal || identityCleanupMissing) {
       evidence.cleanupFailed = true; evidence.nativeCallbackQualified = false;
       evidence.status = 'failed'; exitCode = 1;
     }
   }
   if (root) {
-    for (const name of ['preflight.json', 'shortcut-location.json', 'sender.json', 'sender-failure.json', 'show-outcome.json', 'submitted.json', 'callback-started.json', 'callback.json', 'ui-candidate.json', 'ui-invoke.json', 'center-open.json']) {
+    for (const name of ['preflight.json', 'shortcut-location.json', 'aumid-identity.json', 'sender.json', 'sender-failure.json', 'show-outcome.json', 'submitted.json', 'callback-started.json', 'callback.json', 'ui-candidate.json', 'ui-invoke.json', 'center-open.json']) {
       if (!existsSync(join(root, name))) continue;
       try { evidence[name] = read(name); } catch (error: unknown) { evidence[`${name}ReadError`] = String(error); }
     }

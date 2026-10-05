@@ -18,6 +18,9 @@
 #include <algorithm>
 #include <cwctype>
 #include <vector>
+#include <utility>
+#include <optional>
+#include <exception>
 using Microsoft::WRL::ComPtr;
 namespace fs = std::filesystem;
 using namespace winrt::Windows::UI::Notifications;
@@ -113,6 +116,101 @@ static fs::path shortcut() {
     CoTaskMemFree(programs); return result;
 }
 static std::wstring registryKey() { return L"Software\\Classes\\CLSID\\{" + uuid + L"}"; }
+static std::wstring appIdentityKey() { return L"Software\\Classes\\AppUserModelId\\" + aumid; }
+static std::wstring appIdentityDisplayName() { return L"Navigation TEST " + uuid; }
+static bool ownAppIdentityProof() {
+    std::ifstream proof(root / ".aumid-owned"); std::string text; std::getline(proof, text);
+    return text == narrow(appIdentityKey());
+}
+static std::optional<std::wstring> appIdentityValue(const wchar_t* name) {
+    HKEY key{};
+    LSTATUS status = RegOpenKeyExW(HKEY_CURRENT_USER, appIdentityKey().c_str(), 0, KEY_QUERY_VALUE, &key);
+    if (status == ERROR_FILE_NOT_FOUND) return std::nullopt;
+    check(HRESULT_FROM_WIN32(status));
+    wchar_t value[512]{}; DWORD size = sizeof(value), type{};
+    status = RegQueryValueExW(key, name, nullptr, &type, reinterpret_cast<BYTE*>(value), &size);
+    RegCloseKey(key);
+    if (status == ERROR_FILE_NOT_FOUND) return std::nullopt;
+    check(HRESULT_FROM_WIN32(status));
+    if (type != REG_SZ || size < sizeof(wchar_t) || size > sizeof(value) || size % sizeof(wchar_t) != 0)
+        throw std::runtime_error("TEST AUMID value type/size changed; preserved");
+    size_t characters = size / sizeof(wchar_t);
+    if (value[characters - 1] != L'\0') throw std::runtime_error("unterminated TEST AUMID value; preserved");
+    std::wstring content(value, characters - 1);
+    if (content.find(L'\0') != std::wstring::npos) throw std::runtime_error("embedded NUL in TEST AUMID value; preserved");
+    return content;
+}
+static bool appIdentityMatches(bool partial = false) {
+    auto display = appIdentityValue(L"DisplayName"), activator = appIdentityValue(L"CustomActivator");
+    return ((display && *display == appIdentityDisplayName()) || (partial && !display))
+           && ((activator && *activator == L"{" + uuid + L"}") || (partial && !activator));
+}
+static bool appIdentityAbsent() {
+    HKEY key{};
+    LSTATUS status = RegOpenKeyExW(HKEY_CURRENT_USER, appIdentityKey().c_str(), 0, KEY_READ, &key);
+    if (status == ERROR_FILE_NOT_FOUND) return true;
+    check(HRESULT_FROM_WIN32(status)); RegCloseKey(key); return false;
+}
+static bool appIdentityContainsOnlyOwnValues() {
+    HKEY key{};
+    LSTATUS status = RegOpenKeyExW(HKEY_CURRENT_USER, appIdentityKey().c_str(), 0, KEY_READ, &key);
+    if (status == ERROR_FILE_NOT_FOUND) return true;
+    check(HRESULT_FROM_WIN32(status));
+    try {
+        DWORD subkeys{}, values{};
+        check(HRESULT_FROM_WIN32(RegQueryInfoKeyW(key, nullptr, nullptr, nullptr, &subkeys, nullptr, nullptr,
+                                                &values, nullptr, nullptr, nullptr, nullptr)));
+        bool own = subkeys == 0 && values <= 2;
+        for (DWORD i = 0; own && i < values; ++i) {
+            wchar_t name[128]{}; DWORD size = 128, type{};
+            check(HRESULT_FROM_WIN32(RegEnumValueW(key, i, name, &size, nullptr, &type, nullptr, nullptr)));
+            own = type == REG_SZ && (std::wstring(name, size) == L"DisplayName" || std::wstring(name, size) == L"CustomActivator");
+        }
+        RegCloseKey(key); return own;
+    } catch (...) { RegCloseKey(key); throw; }
+}
+static void installAppIdentity() {
+    // Current C++/WinRT compatibility registration uses this per-user identity,
+    // separately from the shortcut and the COM LocalServer32 registration.
+    sendStage("aumid_identity_create");
+    HKEY key{}; DWORD disposition{};
+    check(HRESULT_FROM_WIN32(RegCreateKeyExW(HKEY_CURRENT_USER, appIdentityKey().c_str(), 0, nullptr, 0,
+                                            KEY_SET_VALUE | KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS, nullptr, &key, &disposition)));
+    if (disposition != REG_CREATED_NEW_KEY) { RegCloseKey(key); throw std::runtime_error("unique TEST AUMID already exists"); }
+    bool markerPublished = false;
+    try {
+        report(".aumid-owned", narrow(appIdentityKey()) + "\n");
+        markerPublished = true;
+        for (const auto& item : {std::pair<std::wstring, std::wstring>{L"DisplayName", appIdentityDisplayName()},
+                                {L"CustomActivator", L"{" + uuid + L"}"}}) {
+            check(HRESULT_FROM_WIN32(RegSetValueExW(key, item.first.c_str(), 0, REG_SZ,
+                reinterpret_cast<const BYTE*>(item.second.c_str()), static_cast<DWORD>((item.second.size() + 1) * sizeof(wchar_t)))));
+        }
+        RegCloseKey(key); key = nullptr;
+        if (!appIdentityMatches()) throw std::runtime_error("TEST AUMID registry readback mismatch");
+        report("aumid-identity.json", "{\"pid\":" + std::to_string(GetCurrentProcessId()) + ",\"nonce\":" + jsonQuote(uuid)
+            + ",\"aumid\":" + jsonQuote(aumid) + ",\"displayNameMatches\":true,\"customActivatorMatches\":true,\"newKey\":true}\n");
+    } catch (...) {
+        if (key && !markerPublished) {
+            // Retained NEW handle, before any value write. Preserve anything unexpected.
+            DWORD subkeys{}, values{};
+            LSTATUS inspected = RegQueryInfoKeyW(key, nullptr, nullptr, nullptr, &subkeys, nullptr, nullptr,
+                                                 &values, nullptr, nullptr, nullptr, nullptr);
+            LSTATUS removed = ERROR_ACCESS_DENIED;
+            if (inspected == ERROR_SUCCESS && subkeys == 0 && values == 0)
+                removed = RegDeleteKeyW(HKEY_CURRENT_USER, appIdentityKey().c_str());
+            RegCloseKey(key); key = nullptr;
+            std::cerr << "TEST new-empty AUMID rollback query=" << inspected << " delete=" << removed << '\n';
+            try {
+                report("aumid-empty-rollback.json", "{\"newHandle\":true,\"queryStatus\":" + std::to_string(inspected)
+                    + ",\"deleteStatus\":" + std::to_string(removed)
+                    + ",\"absenceVerified\":" + (removed == ERROR_SUCCESS && appIdentityAbsent() ? "true" : "false") + "}\n");
+            } catch (...) { /* Original publication failure stays failed; never assert missing evidence. */ }
+        }
+        if (key) RegCloseKey(key);
+        throw;
+    }
+}
 static std::wstring serverCommand() {
     return L"\"" + (root / L"navigation-native-probe.exe").wstring() + L"\" callback \"" + root.wstring() + L"\" " + uuid;
 }
@@ -259,6 +357,7 @@ static void install() {
     status = RegSetValueExW(key, nullptr, 0, REG_SZ, reinterpret_cast<const BYTE*>(command.c_str()),
                            static_cast<DWORD>((command.size() + 1) * sizeof(wchar_t)));
     RegCloseKey(key); check(HRESULT_FROM_WIN32(status));
+    installAppIdentity();
     sendStage("shortcut_locate");
     fs::path linkPath = shortcut();
     report("shortcut-location.json", "{\"path\":" + jsonQuote(linkPath.wstring()) + ",\"aumid\":" + jsonQuote(aumid) + "}\n");
@@ -461,7 +560,31 @@ static int invoke() {
 }
 static void cleanup() {
     // UUID marker + exact paths constrain removal; no process killing or shared registrations.
-    bool registryOwned = ownRegistryProof(), shortcutOwned = ownShortcutProof();
+    bool registryOwned = ownRegistryProof(), shortcutOwned = ownShortcutProof(), appIdentityOwned = ownAppIdentityProof();
+    // Check every owned artifact before any cleanup side effect.
+    if (appIdentityOwned && (!appIdentityMatches(true) || !appIdentityContainsOnlyOwnValues()))
+        throw std::runtime_error("AUMID identity ownership changed; preserved");
+    if (registryOwned) {
+        std::wstring registered = registeredCommand();
+        if (!registered.empty() && registered != serverCommand()) throw std::runtime_error("COM ownership changed; preserved");
+    }
+    if (shortcutOwned && fs::exists(shortcut()) && !shortcutMatches())
+        throw std::runtime_error("shortcut ownership changed; preserved");
+    // The identity still exists while history is addressed. Retain a Clear failure,
+    // but finish proven-owned deletions so that it cannot leak TEST registrations.
+    std::exception_ptr historyFailure;
+    bool historyAttempted = registryOwned || shortcutOwned || appIdentityOwned;
+    if (historyAttempted) {
+        try { ToastNotificationManager::History().Clear(aumid); }
+        catch (...) { historyFailure = std::current_exception(); }
+    }
+    if (appIdentityOwned) {
+        if (!appIdentityMatches(true) || !appIdentityContainsOnlyOwnValues())
+            throw std::runtime_error("AUMID identity ownership changed; preserved");
+        LSTATUS status = RegDeleteTreeW(HKEY_CURRENT_USER, appIdentityKey().c_str());
+        if (status != ERROR_SUCCESS && status != ERROR_FILE_NOT_FOUND) check(HRESULT_FROM_WIN32(status));
+        if (!appIdentityAbsent()) throw std::runtime_error("owned AUMID registry key remains");
+    }
     if (registryOwned) {
         std::wstring registered = registeredCommand();
         if (!registered.empty() && registered != serverCommand()) throw std::runtime_error("COM ownership changed; preserved");
@@ -473,9 +596,12 @@ static void cleanup() {
         std::error_code ec; fs::remove(shortcut(), ec);
         if (ec) throw std::runtime_error("own shortcut cleanup failed");
     }
-    if (registryOwned || shortcutOwned) ToastNotificationManager::History().Clear(aumid);
     report("cleanup.json", "{\"ownRegistrationRemoved\":" + std::string(registryOwned ? "true" : "false")
-        + ",\"ownShortcutRemoved\":" + (shortcutOwned ? "true" : "false") + "}\n");
+        + ",\"ownShortcutRemoved\":" + (shortcutOwned ? "true" : "false")
+        + ",\"ownAumidIdentityRemoved\":" + (appIdentityOwned ? "true" : "false")
+        + ",\"historyClearAttempted\":" + (historyAttempted ? "true" : "false")
+        + ",\"historyClearReturned\":" + (historyAttempted && !historyFailure ? "true" : "false") + "}\n");
+    if (historyFailure) std::rethrow_exception(historyFailure);
 }
 int wmain(int argc, wchar_t** argv) {
     try {
@@ -498,7 +624,8 @@ int wmain(int argc, wchar_t** argv) {
             || fs::canonical(ownExe) != root / L"navigation-native-probe.exe") return 2;
         ownedRootValidated = true;
         aumid = L"AgentNotify.Navigation.TEST." + uuid; action = L"TEST open " + uuid;
-        if (mode == L"callback" && (!ownRegistryProof() || registeredCommand() != serverCommand())) return 2;
+        if (mode == L"callback" && (!ownRegistryProof() || registeredCommand() != serverCommand()
+            || !ownAppIdentityProof() || !appIdentityMatches())) return 2;
         winrt::init_apartment(winrt::apartment_type::multi_threaded);
         if (mode == L"preflight") return preflight() ? 0 : 3;
         if (mode == L"send") return send();
