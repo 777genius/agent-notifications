@@ -396,14 +396,19 @@ func TestCursorEventMainDispatch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestCursorEventMainDispatch$")
-	cmd.Env = []string{"TEST_CURSOR_MAIN_CHILD=1", "TEST_CURSOR_SELECTOR=" + filepath.Join(root, "TEST-missing.json"), "HOME=" + root, "XDG_CONFIG_HOME=" + root, "XDG_CACHE_HOME=" + root, "TMPDIR=" + root}
+	// The isolated environment also needs a private sink for instrumented child
+	// coverage, so stderr remains an assertion about the event transport.
+	cmd.Env = []string{"TEST_CURSOR_MAIN_CHILD=1", "TEST_CURSOR_SELECTOR=" + filepath.Join(root, "TEST-missing.json"), "HOME=" + root, "XDG_CONFIG_HOME=" + root, "XDG_CACHE_HOME=" + root, "TMPDIR=" + root, "GOCOVERDIR=" + t.TempDir()}
 	cmd.Stdin = bytes.NewReader(cursorSDKFrame(t))
 	var out, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &stderr
 	if err := cmd.Run(); err != nil || ctx.Err() != nil || out.String() != "{}\n" || stderr.Len() != 0 {
 		t.Fatalf("dispatch: %v stdout=%q stderr=%q", err, out.String(), stderr.String())
 	}
-	blocked := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestCursorEventMainDispatch$")
+	// Each child gets its own harness budget, including race-runtime shutdown.
+	blockedCtx, blockedCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer blockedCancel()
+	blocked := exec.CommandContext(blockedCtx, os.Args[0], "-test.run=^TestCursorEventMainDispatch$")
 	blocked.Env = cmd.Env
 	pipe, err := blocked.StdinPipe()
 	if err != nil {
@@ -414,7 +419,7 @@ func TestCursorEventMainDispatch(t *testing.T) {
 	stderr.Reset()
 	blocked.Stdout, blocked.Stderr = &out, &stderr
 	started := time.Now()
-	if err := blocked.Run(); err != nil || ctx.Err() != nil || out.String() != "{}\n" || stderr.Len() != 0 || time.Since(started) < 900*time.Millisecond || time.Since(started) > 2500*time.Millisecond {
+	if err := blocked.Run(); err != nil || blockedCtx.Err() != nil || out.String() != "{}\n" || stderr.Len() != 0 || time.Since(started) < 900*time.Millisecond || time.Since(started) > 2500*time.Millisecond {
 		t.Fatalf("inherited blocked stdin: %v stdout=%q stderr=%q elapsed=%s", err, out.String(), stderr.String(), time.Since(started))
 	}
 	entries, err := os.ReadDir(root)
