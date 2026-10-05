@@ -743,7 +743,10 @@ esac
 func cursorApplySibling(t *testing.T, f cursorFixture, operation uapinstaller.Operation, root, profile, executable string) {
 	t.Helper()
 	engine := f.g.gate.Proof.(*cursorProof).engine
-	prepared, err := engine.Prepare(cursorContext(t), uapinstaller.Request{Operation: operation,
+	// Match cursorPublicInstallInput's setup budget, separate from event deadlines.
+	installCtx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	prepared, err := engine.Prepare(installCtx, uapinstaller.Request{Operation: operation,
 		InstallationID: f.b.InstallationID, PackageRoot: root, ClientID: "codex",
 		ClientConfigRoot: profile, ClientExecutable: executable, RequiredComponents: []string{"mcp"},
 		KnownTargets: []uapinstaller.TargetFacts{{ClientID: "cursor", BindingID: f.b.BindingID,
@@ -756,7 +759,7 @@ func cursorApplySibling(t *testing.T, f cursorFixture, operation uapinstaller.Op
 			t.Error(err)
 		}
 	}()
-	if _, err := engine.Apply(cursorContext(t), prepared, uapinstaller.Decision{Confirmed: true}); err != nil {
+	if _, err := engine.Apply(installCtx, prepared, uapinstaller.Decision{Confirmed: true}); err != nil {
 		t.Fatal(err)
 	}
 }
