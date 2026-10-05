@@ -22,7 +22,7 @@ root = Path(sys.argv[1])
 loader = (root / 'bin/setup.sh').read_text(encoding='utf-8')
 public_command = next(line for line in (root / 'README.md').read_text(encoding='utf-8').splitlines()
                       if line.startswith('curl -fsSL '))
-PUBLIC_SETUP_URL = 'https://777genius.github.io/agent-notifications/install.sh'
+PUBLIC_SETUP_URL = 'https://agent-notifications.com/install.sh'
 # The public pin and main commit 9039815 reference the same setup.sh Git blob.
 pinned_loader = (root / 'bin/testdata/setup-9039815833ed8d16a11ee4a45de62bb0119c874f.sh').read_text(
     encoding='utf-8')

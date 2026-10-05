@@ -24,7 +24,7 @@ Prefer a guided setup? [Open the installation guide](https://777genius.github.io
 The short setup loader handles release lookup and validation internally, then downloads the installer from its qualified immutable source snapshot. Run it and choose Claude, Codex, Claude + Codex, or OpenCode:
 
 ```bash
-curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash
+curl -fsSL https://agent-notifications.com/install.sh | bash
 ```
 
 > Windows users: open Git Bash from the Start menu and run this command there. Do not run the `curl ... | bash` command from PowerShell or Windows Terminal if `bash` opens WSL, because that targets Linux paths and binaries instead of Windows.
@@ -32,7 +32,7 @@ curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash
 For automation or terminals without a controlling TTY, choose explicitly and preserve download failures in the exit status:
 
 ```bash
-(set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product codex)
+(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --product codex)
 ```
 
 Use `claude`, `codex`, or `both` for Claude/Codex. For OpenCode, use `--product opencode --desktop`, `--webhook`, or both channel flags (explicit consent required). The selected host CLI must already be on `PATH`; this installs notifications only.
@@ -40,7 +40,7 @@ Use `claude`, `codex`, or `both` for Claude/Codex. For OpenCode, use `--product 
 You can select any combination of the three agents in the guided setup. Mixed selections containing OpenCode use one loader command:
 
 ```bash
-(set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --products claude,codex,opencode --desktop)
+(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --products claude,codex,opencode --desktop)
 ```
 
 Use `claude,opencode` or `codex,opencode` for two agents. The loader downloads and validates one installer, then runs Claude/Codex setup followed by OpenCode setup. It stops at the first failure; an earlier successful installation remains installed. Fix the reported error and rerun the same command to complete setup.
