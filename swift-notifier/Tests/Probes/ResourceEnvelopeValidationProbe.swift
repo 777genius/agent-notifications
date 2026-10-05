@@ -1,11 +1,12 @@
 // Ad-hoc TEST fixtures only. No Codex, Developer ID or fast-path qualification.
 import Foundation
 import Security
+import Darwin
 
 private struct ReadyChild: Decodable { let pid: Int32; let serial: [UInt32] }
 private func failure(_ name: String) -> NSError { NSError(domain: name, code: 1) }
-private func waitFor(_ condition: () -> Bool) throws {
-    let until = ProcessInfo.processInfo.systemUptime + 5
+private func waitFor(timeout: TimeInterval = 5, _ condition: () -> Bool) throws {
+    let until = ProcessInfo.processInfo.systemUptime + timeout
     while !condition() {
         guard ProcessInfo.processInfo.systemUptime < until else { throw failure("child_timeout") }
         Thread.sleep(forTimeInterval: 0.02)
@@ -114,11 +115,25 @@ private func experiment(_ root: URL, _ phase: String) -> [String: Any] {
         }
     } catch { output["errorDomain"] = (error as NSError).domain; output["errorCode"] = (error as NSError).code }
     if directoryCreated {
+        var cleanupFailed = false
         do {
             try Data().write(to: directory.appendingPathComponent("stop"))
             if let child = child, child.isRunning { try waitFor { !child.isRunning } }
-            output["childStopped"] = child?.isRunning != true
-        } catch { output["cleanupFailed"] = true; output["passed"] = false }
+        } catch { cleanupFailed = true }
+        // Signal only the Process launched above. A failed graceful stop still
+        // requires bounded escalation before this finite TEST probe returns.
+        if let child = child, child.isRunning {
+            output["childTerminationRequested"] = true
+            child.terminate()
+            try? waitFor(timeout: 1) { !child.isRunning }
+            if child.isRunning {
+                output["childKillRequested"] = Darwin.kill(child.processIdentifier, SIGKILL) == 0
+                try? waitFor(timeout: 1) { !child.isRunning }
+            }
+        }
+        let childStopped = child?.isRunning != true
+        output["childStopped"] = childStopped
+        if cleanupFailed || !childStopped { output["cleanupFailed"] = true; output["passed"] = false }
     }
     return output
 }
