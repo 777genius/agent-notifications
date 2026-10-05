@@ -94,7 +94,10 @@ func (g Gate) qualify(ctx context.Context, s installruntime.PolicySnapshot, expe
 			return Consent{}, PhysicalProof{}, ErrDenied
 		}
 		consent.desktop = consent.desktop && cfg.IsStatusDesktopEnabled("agent_stopping")
-		consent.webhook = consent.webhook && cfg.IsStatusWebhookEnabled("agent_stopping")
+		consent.webhook = consent.webhook && cfg.IsStatusWebhookEnabled("agent_stopping") &&
+			cfg.Notifications.Webhook.Preset == "custom" &&
+			cfg.Notifications.Webhook.Format == "json" &&
+			len(cfg.Notifications.Webhook.Headers) == 0
 	}
 	return consent, proof, nil
 }
