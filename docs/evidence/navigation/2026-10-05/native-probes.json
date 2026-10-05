@@ -1,0 +1,148 @@
+{
+  "schemaVersion": 1,
+  "macOS": "15.6.1",
+  "architecture": "arm64",
+  "sourceSHA256": {
+    "AppleEventEndpointProbe.swift": "7d3c8b8ac8351e87869653b4df9fa6b795d6031019ae03b7ab830d6617c3733d",
+    "ProcessSerialBridge.c": "f8b2e464465b7d1f3835dfb1aa3040715940f109b3f733e700f7caed9c132ab1",
+    "ProcessSerialBridge.h": "5065d4b90bca9305c9c6709db0b5f0a6d9f1fda3a66948efb032fec0bdc1cec3",
+    "ProcessSerialRoutingProbe.swift": "a68c6ce17ce29854e0f452dbe9559e6a4aaf7464b71fdb794d260598abb1481b",
+    "ResourceValidationProbe.swift": "0709b3e3d8f7b8311a03ff741f2a1e0f04bbb6cbb955194e21791c3cb0c80cc6"
+  },
+  "runnerSHA256": "454ef7c77b84897395b82067088217a415c19c97e5514b0b80388112aa526200",
+  "commands": [
+    {
+      "label": "bridge",
+      "exitCode": 0,
+      "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSHA256": "8a94bc7f589ea33d4a0a290a5fe3d5cec3e5e6c517e2fe27c6493f48a6d73295"
+    },
+    {
+      "label": "endpoint-build",
+      "exitCode": 0,
+      "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "endpoint",
+      "exitCode": 0,
+      "stdoutSHA256": "ca8519d3136f30657ae00064949d6de572e268c798b233036de3f371fed7537e",
+      "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "routing-build",
+      "exitCode": 0,
+      "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "sign",
+      "exitCode": 0,
+      "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSHA256": "b2fba03baceb4b6325504212fb827b708ffbbba488f3f42533f76f12ab7db7ba"
+    },
+    {
+      "label": "routing",
+      "exitCode": 0,
+      "stdoutSHA256": "bd308042a49d29be91b3c0cdbbe8aff3f29d0aaea08ba8e03e45c9c7d1d2868c",
+      "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "resource-sign",
+      "exitCode": 0,
+      "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSHA256": "7911a7a90bd85a6c866493154b4475b0e526b29e18cfb01e4309bb97b3acfccb"
+    },
+    {
+      "label": "resource-build",
+      "exitCode": 0,
+      "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "resource-validation",
+      "exitCode": 0,
+      "stdoutSHA256": "3edd2e5cba127b8e0b4b4dd9d5b4b5c6d90d7b0b15992cee74c8ad542d052bda",
+      "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "binaries": {
+    "endpointSHA256": "1ebc0988a4bb961e458dd5d9e669f41bd99ce4fab149f71ad706f63732679ef7",
+    "signedReceiverSHA256": "bc31f992f9f5d00ebb2bdf95517d79f143d29c3da7b223d5bd453cb2f6248ed4",
+    "resourceProbeSHA256": "5a36bac072b940c40ad1d76942b07269cbdb643a986c31a06fb0484818880889",
+    "resourceReceiverSHA256": "26b5780e1149187e9bc38aa70ac80e07a600a5e0d744626e8e289c858000e265"
+  },
+  "productionClientActivated": false,
+  "passed": true,
+  "limitations": [
+    "No Developer ID or executable-resource qualification",
+    "No actual Codex GURL or visible-chat qualification",
+    "Single observed restart; PID reuse/update unqualified"
+  ],
+  "endpoint": {
+    "coerceStatus": -1700,
+    "createStatus": 0,
+    "descriptorBytes": 0,
+    "descriptorType": "6e756c6c",
+    "eventsSent": 0,
+    "ownPortRegistered": true,
+    "probe": "public_pid_to_bound_mach_port",
+    "processSerialDescriptorStatus": 0,
+    "processSerialLookupStatus": 0
+  },
+  "routing": {
+    "first": {
+      "permissionStatus": -1744,
+      "replyError": 0,
+      "sendStatus": 0
+    },
+    "observersAlive": true,
+    "otherEventsAfterRestart": [],
+    "otherEventsBeforeRestart": [],
+    "probe": "psn_selected_and_stale_receiver",
+    "productionClientActivated": false,
+    "restartedEvents": [],
+    "selectedEvents": [
+      "notification-navigation-test://selected-a"
+    ],
+    "serialChangedAfterRestart": true,
+    "stale": {
+      "permissionStatus": -600,
+      "replyError": 0,
+      "sendStatus": -600
+    },
+    "twoDistinctCopies": true
+  },
+  "originalResourceSHA256": "c2ecc1904374a4613628db98ecf087c2fe7f7f8142b60c7ba8e495555a713296",
+  "resourceValidation": {
+    "afterDynamicValidationStatus": 0,
+    "afterStaticCreateStatus": 0,
+    "afterStaticValidationStatus": -67054,
+    "aliveAfterDynamic": true,
+    "aliveAfterStatic": true,
+    "aliveBeforeDynamic": true,
+    "aliveBeforeFreshDynamic": true,
+    "aliveBeforeFreshGuestLookup": true,
+    "aliveBeforeMutation": true,
+    "beforeDynamicValidationStatus": 0,
+    "beforeStaticCreateStatus": 0,
+    "beforeStaticValidationStatus": 0,
+    "childStopped": true,
+    "codexQualified": false,
+    "developerIDQualified": false,
+    "eventsSent": 0,
+    "fixtureAdHoc": true,
+    "fixtureIdentifierRequirement": "com.777genius.navigation-psn-test.053a688f-fcee-46d4-ae2e-3615eff6ff1f",
+    "fixtureRequirementStatus": 0,
+    "fixtureSigningInfoStatus": 0,
+    "freshDynamicValidationStatus": 0,
+    "freshGuestLookupStatus": 0,
+    "guestLookupStatus": 0,
+    "passed": true,
+    "probe": "ad_hoc_fixture_dynamic_vs_static_resource_validation",
+    "productionClientActivated": false,
+    "resourceChanged": true,
+    "stopRequested": true
+  },
+  "snapshotUnchanged": true
+}

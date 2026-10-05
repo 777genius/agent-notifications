@@ -1,12 +1,80 @@
 package nativeprotocol
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
+
+func TestCanonicalSwiftRequestFixturesMatchProducerCopies(t *testing.T) {
+	for _, name := range []string{"native-v1.request.json", "desktop-thread-v1.actions.json"} {
+		t.Run(name, func(t *testing.T) {
+			canonical, err := os.ReadFile(filepath.Join("..", "..", "..", "swift-notifier", "Tests", "Fixtures", name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			copy, err := os.ReadFile(filepath.Join("testdata", name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(canonical, copy) {
+				t.Fatal("Go producer fixture differs from canonical Swift fixture")
+			}
+		})
+	}
+}
+
+func TestCanonicalInvalidTypedActionsCannotBeProduced(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "swift-notifier", "Tests", "Fixtures", "desktop-thread-v1.actions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixtures struct{ Invalid []json.RawMessage }
+	if err := json.Unmarshal(raw, &fixtures); err != nil {
+		t.Fatal(err)
+	}
+	if len(fixtures.Invalid) == 0 {
+		t.Fatal("missing invalid action fixtures")
+	}
+	for i, rawAction := range fixtures.Invalid {
+		t.Run(strconv.Itoa(i), func(t *testing.T) {
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(rawAction, &fields); err != nil {
+				t.Fatal(err)
+			}
+			for key := range fields {
+				switch key {
+				case "type", "schemaVersion", "threadID", "routeKind", "bundleID", "teamID", "applicationPath", "correlationID":
+				default:
+					// Unknown raw keys are a Swift decoder contract. The typed
+					// Go producer has no field that could serialize them.
+					t.Skip("raw-only fixture has no typed producer representation")
+				}
+			}
+			var action DesktopThreadAction
+			if err := json.Unmarshal(rawAction, &action); err != nil {
+				var mismatch *json.UnmarshalTypeError
+				if !errors.As(err, &mismatch) {
+					t.Fatal(err)
+				}
+				// Boolean schemaVersion, for example, cannot exist in the
+				// producer's integer field; this proves representation only.
+				return
+			}
+			r := requestFixture(t)
+			r.Action = &action
+			if _, err := EncodeRequest(r); !errors.Is(err, ErrInvalidEnvelope) {
+				t.Fatalf("invalid typed action was not rejected: %v", err)
+			}
+		})
+	}
+}
 
 func requestFixture(t *testing.T) Request {
 	t.Helper()

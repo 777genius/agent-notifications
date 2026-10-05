@@ -12,7 +12,7 @@ final class CallbackToken {
     private let deadline: Double
     private let now: () -> Double
     init(deadline: Double = .infinity,
-         now: @escaping () -> Double = { ProcessInfo.processInfo.systemUptime }) {
+         now: @escaping () -> Double = ContinuousClock.now) {
         self.deadline = deadline; self.now = now
     }
     var isActive: Bool {
@@ -26,11 +26,18 @@ enum CallbackPhase: String {
     case preflight_started, preflight_finished, open_submitted, open_completed
 }
 
+struct CallbackMeasurement {
+    enum Stage: String { case queue, discovery, verification }
+    let stage: Stage
+    let durationSeconds: Double
+}
+
 struct CallbackDiagnostic: Codable {
     let event: String
     let correlationID: UUID
     let outcome: String?
     var elapsedSeconds: Double? = nil
+    var durationSeconds: Double? = nil
     var json: String {
         // Only fixed event/outcome enums, a UUID and monotonic elapsed time enter this encoder.
         String(decoding: try! JSONEncoder().encode(self), as: UTF8.self)
@@ -43,11 +50,14 @@ final class CallbackWork {
     let token: CallbackToken
     private let acquire: (@escaping () -> Void) -> (() -> Void)
     private let phase: (CallbackPhase) -> Void
+    private let measurement: (CallbackMeasurement) -> Void
     init(token: CallbackToken, phase: @escaping (CallbackPhase) -> Void = { _ in },
+         measurement: @escaping (CallbackMeasurement) -> Void = { _ in },
          acquire: @escaping (@escaping () -> Void) -> (() -> Void)) {
-        self.token = token; self.phase = phase; self.acquire = acquire
+        self.token = token; self.phase = phase; self.measurement = measurement; self.acquire = acquire
     }
     func recordPhase(_ value: CallbackPhase) { phase(value) }
+    func recordMeasurement(_ value: CallbackMeasurement) { measurement(value) }
     func own(cancel: @escaping () -> Void) -> () -> Void { acquire(cancel) }
 }
 
@@ -84,7 +94,7 @@ final class CallbackLifecycle {
     var ownedCount: Int { owned.count }
     init(schedule: @escaping Schedule, exit: @escaping () -> Void,
          diagnostic: @escaping (String) -> Void = { _ in },
-         now: @escaping () -> Double = { ProcessInfo.processInfo.systemUptime }) {
+         now: @escaping () -> Double = ContinuousClock.now) {
         self.schedule = schedule; self.exit = exit; self.diagnostic = diagnostic; self.now = now
     }
     func start() { armIdle() }
@@ -156,6 +166,12 @@ final class CallbackLifecycle {
             guard let self = self, token.isActive, self.callbacks[id] != nil else { return }
             self.diagnostic(CallbackDiagnostic(event: phase.rawValue, correlationID: correlation,
                 outcome: nil, elapsedSeconds: max(0, self.now() - started)).json)
+        }, measurement: { [weak self] value in
+            guard let self = self, token.isActive, self.callbacks[id] != nil,
+                  value.durationSeconds.isFinite, value.durationSeconds >= 0 else { return }
+            self.diagnostic(CallbackDiagnostic(event: "preflight_" + value.stage.rawValue,
+                correlationID: correlation, outcome: nil,
+                durationSeconds: value.durationSeconds).json)
         }) { [self] cancel in
             let child = UUID()
             owned[child] = Owned(callback: id, cancel: cancel)
