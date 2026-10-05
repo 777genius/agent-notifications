@@ -1,7 +1,7 @@
 // Windows client CI only. Native source is compiled from this exact checkout.
 import { spawnSync } from 'node:child_process';
 import { randomUUID, createHash } from 'node:crypto';
-import { mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, copyFileSync, statSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, copyFileSync, statSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -11,7 +11,9 @@ type Step = { mode: string; pid: number; status: number | null; signal: string |
   stdout: string; stderr: string; error?: string; exitedAt: number };
 const evidence: Json = { status: 'failed', nativeCallbackQualified: false, navigationQualified: false,
   scope: 'Windows client native TEST cold toast COM callback only', clientRouteTested: false,
-  showAttempts: 0, steps: [], sourceSHA: process.env.NAVIGATION_SOURCE_SHA ?? null,
+  showAttempts: 0, showAttemptMeaning: 'native Show call entered, not OS acceptance', submissionIntent: false,
+  showCallOutcome: 'not_started', nativeEffectUncertain: false,
+  steps: [], sourceSHA: process.env.NAVIGATION_SOURCE_SHA ?? null,
   runnerLabel: process.env.NAVIGATION_WINDOWS_RUNNER ?? null,
   imageVersion: process.env.ImageVersion ?? null, nodeVersion: process.version };
 const steps: Step[] = [];
@@ -42,6 +44,42 @@ function run(mode: string, timeout: number): Step {
 function requireSuccess(step: Step): void {
   if (step.error || step.signal || step.status !== 0) throw new Error(`${step.mode} failed (${step.status}): ${step.error ?? step.stderr}`);
 }
+function observeShow(sender: Step): void {
+  if (!root || !nonce) throw new Error('owned fixture absent');
+  const stages = readdirSync(root).filter(name => /^sender-stage-\d+\.json$/.test(name));
+  if (stages.length > 32) throw new Error('too many native stage records');
+  evidence.senderStages = stages.sort((a, b) => Number(a.match(/\d+/)?.[0]) - Number(b.match(/\d+/)?.[0])).map(name => {
+    const stage = read(name);
+    if (stage.pid !== sender.pid || stage.nonce !== nonce || typeof stage.phase !== 'string' || stage.phase.length > 64) {
+      throw new Error('native stage correlation invalid');
+    }
+    return stage;
+  });
+  for (const name of ['show-outcome.json', 'sender-failure.json']) {
+    if (!existsSync(join(root, name))) continue;
+    const record = read(name); evidence[name] = record;
+    if (record.pid !== sender.pid || record.nonce !== nonce || typeof record.showCallEntered !== 'boolean'
+        || typeof record.showCallReturned !== 'boolean' || (record.showCallReturned && !record.showCallEntered)) {
+      throw new Error('native Show evidence correlation/state invalid');
+    }
+    evidence.showAttempts = record.showCallEntered ? 1 : 0;
+    evidence.showReturned = record.showCallReturned;
+    evidence.showCallOutcome = record.showCallEntered ? (record.showCallReturned ? 'returned' : 'entered_error') : 'not_called';
+    evidence.noShowProved = !record.showCallEntered;
+    evidence.nativeEffectUncertain = record.showCallEntered && !record.showCallReturned;
+  }
+  if (sender.status === 3 && existsSync(join(root, 'sender.json'))) {
+    const record = read('sender.json');
+    if (record.pid !== sender.pid || record.nonce !== nonce || record.showCalledAtReceipt !== false
+        || typeof record.notificationSetting !== 'number' || record.notificationSetting === 0) {
+      throw new Error('disabled native Setting evidence invalid');
+    }
+    evidence.showAttempts = 0; evidence.noShowProved = true; evidence.nativeEffectUncertain = false;
+    evidence.showCallOutcome = 'not_called';
+  }
+  // Missing terminal native evidence (crash/timeout/write failure) remains unknown.
+  if (evidence.showAttempts === null) { evidence.nativeEffectUncertain = true; evidence.showCallOutcome = 'unknown'; }
+}
 async function main(): Promise<void> {
   if (process.env.AGENT_NOTIFY_NAVIGATION_WINDOWS_E2E !== '1' || process.env.CI !== 'true'
       || process.env.GITHUB_ACTIONS !== 'true' || process.platform !== 'win32') {
@@ -67,19 +105,22 @@ async function main(): Promise<void> {
   }
   requireSuccess(preflight);
   if ((evidence.preflight as Json).ready !== true) throw new Error('preflight not ready');
-  // Mark before native send, including uncertain outcomes. Never retry Show.
-  installed = true; evidence.showAttempts = 1;
+  // This records submission intent only. Native terminal records establish the Show count.
+  installed = true; evidence.submissionIntent = true; evidence.showAttempts = null;
+  evidence.showCallOutcome = 'unknown'; evidence.nativeEffectUncertain = true;
   writeFileSync(join(root, 'submission-attempted'), nonce, { flag: 'wx' });
   const sender = run('send', 20_000);
   if (existsSync(join(root, 'sender.json'))) evidence.sender = read('sender.json');
+  observeShow(sender);
   if (sender.status === 3) {
-    evidence.status = 'unavailable'; evidence.showAttempts = 0;
+    evidence.status = 'unavailable';
     throw new Error('native notifier Setting is not Enabled; settings are not changed');
   }
   requireSuccess(sender);
   evidence.submitted = read('submitted.json');
   const senderReceipt = evidence.sender as Json;
-  if (senderReceipt.pid !== sender.pid || senderReceipt.nonce !== nonce || senderReceipt.showAttempted !== true) {
+  if (senderReceipt.pid !== sender.pid || senderReceipt.nonce !== nonce || senderReceipt.showCalledAtReceipt !== false
+      || evidence.showAttempts !== 1 || evidence.showReturned !== true) {
     throw new Error('native sender correlation mismatch');
   }
   evidence.senderExitedBeforeInvoke = true; evidence.senderExitedAt = sender.exitedAt;
@@ -116,7 +157,7 @@ try {
     }
   }
   if (root) {
-    for (const name of ['preflight.json', 'sender.json', 'submitted.json', 'callback-started.json', 'callback.json', 'ui-candidate.json', 'ui-invoke.json', 'center-open.json']) {
+    for (const name of ['preflight.json', 'shortcut-location.json', 'sender.json', 'sender-failure.json', 'show-outcome.json', 'submitted.json', 'callback-started.json', 'callback.json', 'ui-candidate.json', 'ui-invoke.json', 'center-open.json']) {
       if (!existsSync(join(root, name))) continue;
       try { evidence[name] = read(name); } catch (error: unknown) { evidence[`${name}ReadError`] = String(error); }
     }

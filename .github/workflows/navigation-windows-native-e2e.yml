@@ -65,4 +65,5 @@ jobs:
           name: navigation-windows-native-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.probe.outputs.evidence_root }}
           if-no-files-found: error
+          include-hidden-files: true
           retention-days: 14

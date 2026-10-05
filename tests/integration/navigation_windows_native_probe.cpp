@@ -24,6 +24,10 @@ static fs::path root;
 static std::wstring uuid, aumid, action;
 static GUID clsid;
 static std::atomic<bool> activated{false};
+static std::wstring activeMode;
+static bool ownedRootValidated = false, showCallEntered = false, showCallReturned = false;
+static std::string currentSendStage = "not_started";
+static unsigned sendStageIndex = 0;
 static unsigned long long processStartedAt() {
     FILETIME created{}, exited{}, kernel{}, user{};
     if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user))
@@ -55,6 +59,21 @@ static void report(const char* name, const std::string& content) {
     if (!ok || !MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_WRITE_THROUGH)) {
         DeleteFileW(temporary.c_str()); throw std::runtime_error("atomic exclusive report write failed");
     }
+}
+static void sendStage(const char* phase) {
+    currentSendStage = phase;
+    std::string filename = "sender-stage-" + std::to_string(++sendStageIndex) + ".json";
+    report(filename.c_str(), "{\"phase\":" + jsonQuote(winrt::to_hstring(phase).c_str())
+        + ",\"pid\":" + std::to_string(GetCurrentProcessId()) + ",\"nonce\":" + jsonQuote(uuid) + "}\n");
+}
+static void sendFailure(HRESULT hr) noexcept {
+    if (!ownedRootValidated || activeMode != L"send") return;
+    try {
+        report("sender-failure.json", "{\"phase\":" + jsonQuote(winrt::to_hstring(currentSendStage).c_str())
+            + ",\"hresult\":" + std::to_string(hr) + ",\"pid\":" + std::to_string(GetCurrentProcessId())
+            + ",\"nonce\":" + jsonQuote(uuid) + ",\"showCallEntered\":" + (showCallEntered ? "true" : "false")
+            + ",\"showCallReturned\":" + (showCallReturned ? "true" : "false") + "}\n");
+    } catch (...) { /* Controller retains partial stages and treats missing final evidence as uncertain. */ }
 }
 static std::wstring objectName(HANDLE h) {
     wchar_t name[256]{}; DWORD needed = 0;
@@ -130,6 +149,7 @@ static void install() {
     DWORD exeLength = GetModuleFileNameW(nullptr, exe, MAX_PATH);
     if (!exeLength || exeLength >= MAX_PATH) throw std::runtime_error("executable path unavailable or too long");
     HKEY key = nullptr; DWORD disposition = 0;
+    sendStage("registry_create");
     LSTATUS status = RegCreateKeyExW(HKEY_CURRENT_USER, registryKey().c_str(), 0, nullptr, 0,
                                      KEY_WRITE, nullptr, &key, &disposition);
     if (status != ERROR_SUCCESS) throw std::runtime_error("COM registration failed");
@@ -137,37 +157,62 @@ static void install() {
     if (disposition != REG_CREATED_NEW_KEY) throw std::runtime_error("unique COM key already exists");
     std::wstring command = serverCommand();
     report(".registry-owned", narrow(command) + "\n");
+    sendStage("registry_local_server_create");
     check(HRESULT_FROM_WIN32(RegCreateKeyExW(HKEY_CURRENT_USER, (registryKey() + L"\\LocalServer32").c_str(),
         0, nullptr, 0, KEY_SET_VALUE, nullptr, &key, nullptr)));
+    sendStage("registry_local_server_value");
     status = RegSetValueExW(key, nullptr, 0, REG_SZ, reinterpret_cast<const BYTE*>(command.c_str()),
                            static_cast<DWORD>((command.size() + 1) * sizeof(wchar_t)));
     RegCloseKey(key); check(HRESULT_FROM_WIN32(status));
-    if (fs::exists(shortcut())) throw std::runtime_error("unique shortcut already exists");
+    sendStage("shortcut_locate");
+    fs::path linkPath = shortcut();
+    report("shortcut-location.json", "{\"path\":" + jsonQuote(linkPath.wstring()) + ",\"aumid\":" + jsonQuote(aumid) + "}\n");
+    if (fs::exists(linkPath)) throw std::runtime_error("unique shortcut already exists");
+    sendStage("shortcut_create");
     ComPtr<IShellLinkW> link; check(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&link)));
+    sendStage("shortcut_target");
     check(link->SetPath(exe)); check(link->SetArguments(L"inert"));
     ComPtr<IPropertyStore> props; check(link.As(&props));
+    sendStage("shortcut_aumid");
     PROPVARIANT value{}; check(InitPropVariantFromString(aumid.c_str(), &value));
     check(props->SetValue(PKEY_AppUserModel_ID, value)); PropVariantClear(&value);
+    sendStage("shortcut_activator");
     check(InitPropVariantFromCLSID(clsid, &value));
     check(props->SetValue(PKEY_AppUserModel_ToastActivatorCLSID, value)); PropVariantClear(&value);
+    sendStage("shortcut_commit");
     check(props->Commit()); ComPtr<IPersistFile> file; check(link.As(&file));
-    check(file->Save(shortcut().c_str(), TRUE));
-    report(".shortcut-owned", narrow(shortcut().wstring()) + "\n");
+    sendStage("shortcut_save");
+    check(file->Save(linkPath.c_str(), TRUE));
+    report(".shortcut-owned", narrow(linkPath.wstring()) + "\n");
+    sendStage("install_complete");
 }
 static int send() {
     install();
+    sendStage("notifier_create");
     auto notifier = ToastNotificationManager::CreateToastNotifier(aumid);
+    sendStage("notifier_setting");
     auto setting = notifier.Setting();
+    sendStage("sender_receipt");
     report("sender.json", "{\"pid\":" + std::to_string(GetCurrentProcessId()) + ",\"aumid\":" + jsonQuote(aumid)
         + ",\"nonce\":" + jsonQuote(uuid) + ",\"notificationSetting\":" + std::to_string(static_cast<int>(setting))
-        + ",\"showAttempted\":" + (setting == NotificationSetting::Enabled ? "true" : "false") + "}\n");
+        + ",\"showCalledAtReceipt\":false}\n");
     if (setting != NotificationSetting::Enabled) return 3;
     std::wstring xml = L"<toast launch='" + uuid + L"'><visual><binding template='ToastGeneric'><text>Navigation TEST "
         + uuid + L"</text><text>Synthetic CI lifecycle probe</text></binding></visual><actions><action content='"
         + action + L"' arguments='" + uuid + L"' activationType='foreground'/></actions><audio silent='true'/></toast>";
+    sendStage("xml_load");
     winrt::Windows::Data::Xml::Dom::XmlDocument document; document.LoadXml(xml);
-    ToastNotification toast(document); toast.Tag(uuid.substr(0, 16)); toast.Group(L"NavigationTEST");
+    sendStage("toast_create");
+    ToastNotification toast(document);
+    sendStage("toast_tag"); toast.Tag(uuid.substr(0, 16));
+    sendStage("toast_group"); toast.Group(L"NavigationTEST");
+    sendStage("show_boundary"); // Durable intent is not proof the following call was reached.
+    showCallEntered = true;
     notifier.Show(toast); // Exactly one native Show; no resubmission on uncertainty.
+    showCallReturned = true;
+    report("show-outcome.json", "{\"pid\":" + std::to_string(GetCurrentProcessId()) + ",\"nonce\":" + jsonQuote(uuid)
+        + ",\"showCallEntered\":true,\"showCallReturned\":true}\n");
+    sendStage("show_returned");
     report("submitted.json", "{\"showReturned\":true,\"pid\":" + std::to_string(GetCurrentProcessId()) + "}\n");
     return 0;
 }
@@ -331,7 +376,7 @@ static void cleanup() {
 int wmain(int argc, wchar_t** argv) {
     try {
         if (argc < 4) return 2;
-        std::wstring mode = argv[1];
+        std::wstring mode = argv[1]; activeMode = mode;
         wchar_t gate[8]{}, ci[8]{}, actions[8]{};
         // The OS-created COM process need not inherit the runner's environment.
         // Its authority is the exact owned root/binary/UUID installed by the opt-in controller.
@@ -347,6 +392,7 @@ int wmain(int argc, wchar_t** argv) {
         wchar_t ownExe[32768]{};
         if (!GetModuleFileNameW(nullptr, ownExe, 32768)
             || fs::canonical(ownExe) != root / L"navigation-native-probe.exe") return 2;
+        ownedRootValidated = true;
         aumid = L"AgentNotify.Navigation.TEST." + uuid; action = L"TEST open " + uuid;
         if (mode == L"callback" && (!ownRegistryProof() || registeredCommand() != serverCommand())) return 2;
         winrt::init_apartment(winrt::apartment_type::multi_threaded);
@@ -357,6 +403,7 @@ int wmain(int argc, wchar_t** argv) {
         if (mode == L"cleanup") { cleanup(); return 0; }
         return 2;
     } catch (const winrt::hresult_error& e) {
+        sendFailure(e.code().value);
         std::cerr << "HRESULT " << e.code().value << ": " << winrt::to_string(e.message()) << '\n'; return 1;
-    } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
+    } catch (const std::exception& e) { sendFailure(E_FAIL); std::cerr << e.what() << '\n'; return 1; }
 }
