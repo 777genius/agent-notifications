@@ -180,10 +180,11 @@ static void verifyShellIdentity() {
         + ",\"sameUser\":" + (sameUser ? "true" : "false") + "}\n");
     if (!sameUser || ownSession == 0 || ownSession != shellSession) throw std::runtime_error("Shell user/session mismatch");
 }
-static NotificationSetting measuredReadiness(const ToastNotifier& notifier) {
+static NotificationSetting measuredReadiness(ToastNotifier& notifier) {
     // Experiment: explicit shortcut notification may let Shell recognize this new TEST identity.
     // Neither SHCNF_FLUSH nor the shortcut's existence proves AppResolver recognition.
     ULONGLONG started = GetTickCount64(), deadline = started + 3000; unsigned attempt = 0;
+    ToastNotifier fresh{nullptr}; bool freshAttempted = false; HRESULT freshCreateHR = E_PENDING;
     for (;;) {
         ComPtr<IShellItem2> item; std::wstring parsingName = L"shell:AppsFolder\\" + aumid;
         HRESULT parseHR = SHCreateItemFromParsingName(parsingName.c_str(), nullptr, IID_PPV_ARGS(&item));
@@ -193,21 +194,39 @@ static NotificationSetting measuredReadiness(const ToastNotifier& notifier) {
         bool recognized = SUCCEEDED(parseHR) && SUCCEEDED(appIDHR) && observedID == aumid;
         HRESULT settingHR = S_OK; NotificationSetting setting = NotificationSetting::Enabled;
         try { setting = notifier.Setting(); } catch (const winrt::hresult_error& error) { settingHR = error.code().value; }
+        if (recognized && !freshAttempted) {
+            freshAttempted = true;
+            try { fresh = ToastNotificationManager::CreateToastNotifier(aumid); freshCreateHR = S_OK; }
+            catch (const winrt::hresult_error& error) { freshCreateHR = error.code().value; }
+        }
+        HRESULT freshSettingHR = E_PENDING; NotificationSetting freshSetting = NotificationSetting::Enabled;
+        if (fresh) {
+            try { freshSetting = fresh.Setting(); freshSettingHR = S_OK; }
+            catch (const winrt::hresult_error& error) { freshSettingHR = error.code().value; }
+        }
         ULONGLONG now = GetTickCount64();
         std::string filename = "shell-readiness-" + std::to_string(++attempt) + ".json";
         report(filename.c_str(), "{\"aumid\":" + jsonQuote(aumid) + ",\"observedAppID\":" + jsonQuote(observedID)
             + ",\"parseHRESULT\":" + std::to_string(parseHR) + ",\"appIDHRESULT\":" + std::to_string(appIDHR)
             + ",\"recognized\":" + (recognized ? "true" : "false") + ",\"settingHRESULT\":" + std::to_string(settingHR)
+            + ",\"freshAttempted\":" + (freshAttempted ? "true" : "false")
+            + ",\"freshCreateHRESULT\":" + std::to_string(freshCreateHR)
+            + ",\"freshSettingHRESULT\":" + std::to_string(freshSettingHR)
+            + ",\"freshSetting\":" + std::to_string(SUCCEEDED(freshSettingHR) ? static_cast<int>(freshSetting) : -1)
             + ",\"elapsedMS\":" + std::to_string(now - started)
             + ",\"setting\":" + std::to_string(SUCCEEDED(settingHR) ? static_cast<int>(setting) : -1) + "}\n");
         if (FAILED(settingHR) && settingHR != HRESULT_FROM_WIN32(ERROR_NOT_FOUND)) check(settingHR);
+        if (freshAttempted && FAILED(freshCreateHR)) check(freshCreateHR);
+        if (fresh && FAILED(freshSettingHR) && freshSettingHR != HRESULT_FROM_WIN32(ERROR_NOT_FOUND)) check(freshSettingHR);
         // A new TEST identity may be absent from this read. Bounded polling does not
         // establish an AppsFolder recognition guarantee; Show still requires a match.
         if (FAILED(parseHR) && parseHR != HRESULT_FROM_WIN32(ERROR_NOT_FOUND)
             && parseHR != HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)) check(parseHR);
         if (now >= deadline) throw std::runtime_error("TEST Shell readiness budget expired; no Show");
         if (SUCCEEDED(settingHR) && setting != NotificationSetting::Enabled) return setting;
-        if (recognized && SUCCEEDED(settingHR)) return setting;
+        // One new public-API instance after exact recognition tests a stale-object
+        // hypothesis. Neither recognition nor the old instance permits Show.
+        if (recognized && fresh && SUCCEEDED(freshSettingHR)) { notifier = fresh; return freshSetting; }
         if (attempt >= 16) throw std::runtime_error("TEST Shell AUMID/Setting readiness limit; no Show");
         // Predicate polling with a bounded message wait, rather than a fixed startup sleep.
         DWORD wait = static_cast<DWORD>(std::min<ULONGLONG>(200, deadline - now));

@@ -1,0 +1,292 @@
+{
+  "schemaVersion": 1,
+  "scope": "Failed disposable Windows client TEST readiness; no native Show or cold callback",
+  "run": {
+    "repository": "777genius/agent-notifications",
+    "id": 37371493533,
+    "attempt": 1,
+    "jobID": 111969479963,
+    "headSHA": "4eae8ea11cee1321dadc6a0c7bb229082b68f0ed",
+    "url": "https://github.com/777genius/agent-notifications/actions/runs/37371493533",
+    "status": "completed",
+    "conclusion": "failure",
+    "completedAt": "2026-10-05T20:59:35Z"
+  },
+  "sourceFileSHA256": {
+    "tests/integration/navigation_windows_native_probe.cpp": "0bc2324f558900d4725f166edf67153725e1b2fd6f92f3ea6177b2f25e9db2cc",
+    "tests/integration/navigation_windows_native_e2e.ts": "b7934cfaffdfe3a24d704105cef87c3db426ff4796730ad32e5eecdfdbffe9e6",
+    ".github/workflows/navigation-windows-native-e2e.yml": "e739edffbf81106f529f53a07b448bb2457a8b7192e5820f1aa95bdee8727141"
+  },
+  "artifact": {
+    "id": 11370843320,
+    "name": "navigation-windows-native-37371493533-1",
+    "archiveSHA256": "17688c874015dd4777b723970358181f299830840b3ac4adb691df1f1088cc5c",
+    "publisherDigest": "sha256:17688c874015dd4777b723970358181f299830840b3ac4adb691df1f1088cc5c",
+    "publisherDigestMatches": true,
+    "archiveFileSHA256": {
+      "sender-stage-9.json": "65cdc99798d42578b120882a561ab2a4bce211b1c3543d71dc67d90ebddb5cfe",
+      "sender-stage-12.json": "12cb3dd3e1b4f26922118538ac73ec954056871c09e196592705d53ced85fb35",
+      "evidence.json": "7b7e49814845272c8fb1da69ef180853daed668e50d91378aa96384e99781ddc",
+      "shortcut-readback.json": "15abacb744ab0d16ae45cad0d0c3e9b9470338c770a2303aff0a266af4e3cda4",
+      "shell-readiness-3.json": "cf7e851a55d531f173916dfde079fa295197a0966ff689f98552d9a32909c645",
+      "shell-notify.json": "f6abc10feaa4838e109371e28d3aa1befe1ca8d3ef7c442735326c90192f6f4e",
+      "sender-failure.json": "f74fe900ca4a787b3937d559903167a2648ebb7e198b5486b2a0d4460a803ec5",
+      "sender-stage-5.json": "12a5dc8a7d3dfd6c5fd6d3f22414219025bd935a67e75d2e4f4821b89762de7c",
+      "shell-readiness-10.json": "bbe2f584eee9425e237001b963ced1c7a92b5cf2b385e60d35df9b9394f2c045",
+      ".shortcut-owned": "c7a959241d1b4dd164f6db5967b7bd5762c03d29e5fb263b50000d02c05d4391",
+      "shell-readiness-11.json": "f89f9edf1a476ddbf9bd7cdb5293c23f3a609e5702def51bc4575c2943f849c8",
+      "sender-stage-4.json": "49d7f2d1eababdc5d85eafcdeb5a7e06d8a712ea6513b9afe0daff3a0aef07fa",
+      "shell-readiness-2.json": "a8f543c0e2abf7372c09839a9bfc3bdb67fb6f42496d86c4ecb61c27f9e034df",
+      ".registry-owned": "0707e6cb78b777decc58f4d7a7d81218c58ef8d8430f5908bc5b1c23992d84a5",
+      "sender-stage-13.json": "02069b6a27f3c6605322227ca5c518be73f65509c1563fb46765bca4f840f9b5",
+      "sender-stage-8.json": "f059586259121ef6ad2345f4931fab4d439d7d86890b95f6cb7e1a1d10e1a6ca",
+      ".owned-test-root": "92eb57ae5d59250279e669bec6b88269ada33f18408693aeb862e8c80d1b056b",
+      "sender-stage-3.json": "5be029a99120c84ef3cd1e9a18b776954c2e27ce6daaf126e3f100068d47542d",
+      "shell-readiness-9.json": "dc21366e78d9751fc9315ef60d9cac7447ff11885c470c162047fe5a0ef1c5ae",
+      "sender-stage-14.json": "5c217bec97011b07305206be2c7b0e188604c99a2b85421d1337ebbecac7e01f",
+      "shell-identity.json": "6ad1f723628ff3b3e0eb02854545a15b91495a7febb381c2ca585cf1c0ebf56c",
+      "shell-readiness-5.json": "1eae477d53d314a3916bcede1461f638ceb7bb8a76d9bb0f540b92b4eb6d5cb8",
+      "shell-readiness-4.json": "05ab12a7994c6a6eb617462bad53188f5be0a03346c7a045e1833026fad4ba4a",
+      "sender-stage-15.json": "7ca3032b0ef3e1164d8a6fd0109c5e79fb522f1fba893bf79246df3cfdd005a5",
+      "shell-readiness-8.json": "a09e20b45ad2fc0a4ed3f45755aba96bd44661ec60ed3320cb29142830588971",
+      "sender-stage-2.json": "78aaf0e3198ddb3bc9acc282b450eef52095d26361e7b4023b566c734fb6df5a",
+      "cleanup.json": "effe3fe70d14d704047b3f70f0aee44e767fae4bf974c13f48c407e90832efb9",
+      "submission-attempted": "534a19dcdc15eff9c88dae9236c2815f040e8078e2ce0a01c76fbd16355217aa",
+      "shell-readiness-14.json": "75171eed6a8b6e73e4401cce351be1fc4ed7176182474315d6cad992d18d5f41",
+      "sender-stage-1.json": "9de2d2be06ae2c6f77b8ddf8edfd221bfa43b67cd255b52c3a26162668e7cb66",
+      "shell-readiness-7.json": "ab3e61a87f471c43b46c726294d11aaf5aed62d7e8b6ef42a3c9a11ff9b0401b",
+      "sender-stage-16.json": "d0f5476db1602d13fa6174a64821b6d5283cc2f0a50488b4dceb89808a33ec20",
+      "shell-readiness-6.json": "5976c8d08d88ec7d8a93af265c6c77e3a96b167ff94795c717092ccde95082dd",
+      "navigation-native-probe.exe": "7e25b53c9b2c74e7e4ceacf7932906218e093d342bc7b6b962b4339943fe8558",
+      "shell-readiness-1.json": "0f56b5f057ed318d6ba5ada94a61d4d1e2d3772afa80a20f67659fe45b5e07f7",
+      "sender-stage-10.json": "cd325d407a6c6a17704a8a6471aa2e0d4700f44e1a0fdd924b8fece0e319d27d",
+      "shell-readiness-12.json": "cecdde5a6eb1d83722e0d3463ff7c70f80539d3e17dd5856f3803e3b56597c78",
+      "preflight.json": "054f037deea8ffafb907159698cb4167d5a034832ed72cd432def316a80f9232",
+      "sender-stage-7.json": "051379cc670197158e44adb8fc60375a7bcb806db52814889eecc1bf8e8c973d",
+      "sender-stage-6.json": "01316f642a2fb0137c898da8d972b7edb24255149952a770f087bbf015d637d9",
+      "shell-readiness-13.json": "612fb181032057cf6c7969b1473aed5fa9f27e7796392edbbcdcab7d46a023c0",
+      "shortcut-location.json": "c71197041c4c566042e29e8d895da38cd83af98d1ec63b2369a1fa69da804251",
+      "sender-stage-11.json": "9414bd8b237a186134f8e454e1071d58973fa1c4aaf723e3815a1af787d0bfb5"
+    },
+    "archiveFilesMatchDownloadedProjection": true,
+    "fileCount": 43,
+    "binarySHA256": "7e25b53c9b2c74e7e4ceacf7932906218e093d342bc7b6b962b4339943fe8558"
+  },
+  "ciLogSHA256": "12d4af646cf44ed7f6f2aee3d9dcfdb64d0c7ff95d4b9d343e47efff01dd7c31",
+  "environment": {
+    "runnerLabel": "windows-11-vs2026-arm",
+    "imageVersion": "20260924.168.1",
+    "nodeVersion": "v24.21.0",
+    "windowsBuild": 26200,
+    "client": true,
+    "inputDesktop": "Default",
+    "visibleStation": true,
+    "shellSameUser": true,
+    "shellSessionMatches": true
+  },
+  "shortcutReadback": {
+    "matches": true,
+    "aumidVariantType": 31,
+    "activatorVariantType": 72,
+    "arguments": "inert",
+    "targetInOwnedTestRoot": true
+  },
+  "shellNotification": {
+    "event": "SHCNE_CREATE",
+    "flags": "SHCNF_PATHW|SHCNF_FLUSH",
+    "returned": true
+  },
+  "readiness": {
+    "deadlineBudgetMS": 3000,
+    "readLimit": 16,
+    "actualReadCount": 14,
+    "lastElapsedMS": 3000,
+    "firstExactRecognitionAttempt": 10,
+    "firstExactRecognitionElapsedMS": 2094,
+    "exactRecognitionAttempts": [
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "allSettingReadsElementNotFound": true,
+    "notifierLifetime": "One notifier created before first AppsFolder read and retained across all 14 reads",
+    "reads": [
+      {
+        "attempt": 1,
+        "elapsedMS": 31,
+        "parseHRESULT": -2147024894,
+        "appIDHRESULT": -2147483638,
+        "appIDReadAttempted": false,
+        "exactAppIDRecognized": false,
+        "settingHRESULT": -2147023728,
+        "setting": -1
+      },
+      {
+        "attempt": 2,
+        "elapsedMS": 250,
+        "parseHRESULT": -2147024894,
+        "appIDHRESULT": -2147483638,
+        "appIDReadAttempted": false,
+        "exactAppIDRecognized": false,
+        "settingHRESULT": -2147023728,
+        "setting": -1
+      },
+      {
+        "attempt": 3,
+        "elapsedMS": 484,
+        "parseHRESULT": -2147024894,
+        "appIDHRESULT": -2147483638,
+        "appIDReadAttempted": false,
+        "exactAppIDRecognized": false,
+        "settingHRESULT": -2147023728,
+        "setting": -1
+      },
+      {
+        "attempt": 4,
+        "elapsedMS": 703,
+        "parseHRESULT": -2147024894,
+        "appIDHRESULT": -2147483638,
+        "appIDReadAttempted": false,
+        "exactAppIDRecognized": false,
+        "settingHRESULT": -2147023728,
+        "setting": -1
+      },
+      {
+        "attempt": 5,
+        "elapsedMS": 922,
+        "parseHRESULT": -2147024894,
+        "appIDHRESULT": -2147483638,
+        "appIDReadAttempted": false,
+        "exactAppIDRecognized": false,
+        "settingHRESULT": -2147023728,
+        "setting": -1
+      },
+      {
+        "attempt": 6,
+        "elapsedMS": 1156,
+        "parseHRESULT": -2147024894,
+        "appIDHRESULT": -2147483638,
+        "appIDReadAttempted": false,
+        "exactAppIDRecognized": false,
+        "settingHRESULT": -2147023728,
+        "setting": -1
+      },
+      {
+        "attempt": 7,
+        "elapsedMS": 1375,
+        "parseHRESULT": -2147024894,
+        "appIDHRESULT": -2147483638,
+        "appIDReadAttempted": false,
+        "exactAppIDRecognized": false,
+        "settingHRESULT": -2147023728,
+        "setting": -1
+      },
+      {
+        "attempt": 8,
+        "elapsedMS": 1609,
+        "parseHRESULT": -2147024894,
+        "appIDHRESULT": -2147483638,
+        "appIDReadAttempted": false,
+        "exactAppIDRecognized": false,
+        "settingHRESULT": -2147023728,
+        "setting": -1
+      },
+      {
+        "attempt": 9,
+        "elapsedMS": 1828,
+        "parseHRESULT": -2147024894,
+        "appIDHRESULT": -2147483638,
+        "appIDReadAttempted": false,
+        "exactAppIDRecognized": false,
+        "settingHRESULT": -2147023728,
+        "setting": -1
+      },
+      {
+        "attempt": 10,
+        "elapsedMS": 2094,
+        "parseHRESULT": 0,
+        "appIDHRESULT": 0,
+        "appIDReadAttempted": true,
+        "exactAppIDRecognized": true,
+        "settingHRESULT": -2147023728,
+        "setting": -1
+      },
+      {
+        "attempt": 11,
+        "elapsedMS": 2313,
+        "parseHRESULT": 0,
+        "appIDHRESULT": 0,
+        "appIDReadAttempted": true,
+        "exactAppIDRecognized": true,
+        "settingHRESULT": -2147023728,
+        "setting": -1
+      },
+      {
+        "attempt": 12,
+        "elapsedMS": 2531,
+        "parseHRESULT": 0,
+        "appIDHRESULT": 0,
+        "appIDReadAttempted": true,
+        "exactAppIDRecognized": true,
+        "settingHRESULT": -2147023728,
+        "setting": -1
+      },
+      {
+        "attempt": 13,
+        "elapsedMS": 2766,
+        "parseHRESULT": 0,
+        "appIDHRESULT": 0,
+        "appIDReadAttempted": true,
+        "exactAppIDRecognized": true,
+        "settingHRESULT": -2147023728,
+        "setting": -1
+      },
+      {
+        "attempt": 14,
+        "elapsedMS": 3000,
+        "parseHRESULT": 0,
+        "appIDHRESULT": 0,
+        "appIDReadAttempted": true,
+        "exactAppIDRecognized": true,
+        "settingHRESULT": -2147023728,
+        "setting": -1
+      }
+    ]
+  },
+  "terminalFailure": {
+    "phase": "notifier_readiness",
+    "hresult": -2147467259,
+    "hresultMeaning": "E_FAIL emitted by std::exception wrapper; not the Setting API HRESULT",
+    "reason": "TEST Shell readiness budget expired; no Show"
+  },
+  "effects": {
+    "showAttempts": 0,
+    "showCallOutcome": "not_called",
+    "noShowProved": true,
+    "nativeEffectUncertain": false,
+    "uiInvokeAttempted": false,
+    "callbackReceiptPresent": false,
+    "nativeCallbackQualified": false,
+    "navigationQualified": false
+  },
+  "cleanup": {
+    "ownRegistrationRemoved": true,
+    "ownShortcutRemoved": true
+  },
+  "nextDiagnostic": {
+    "status": "hypothesis_not_executed_in_this_run",
+    "action": "One fresh ToastNotifier(exact AUMID) after actual exact AppsFolder recognition",
+    "maximumFreshFactoryCalls": 1,
+    "preserveOriginalDeadlineAndReadBudget": true,
+    "gateShowOnFreshActualEnabled": true,
+    "unknownDoesNotPermitShow": true,
+    "staleNotifierCauseProven": false,
+    "platformUnsupportedProven": false
+  },
+  "sanitization": {
+    "policy": "User and owned-root paths, nonce, opaque AUMID/CLSID and process identifiers omitted; exact raw bytes retained only as SHA256 hashes",
+    "rawArtifactPreserved": true
+  }
+}
