@@ -33,7 +33,7 @@ static unsigned long long processStartedAt() {
 }
 static void check(HRESULT hr) { winrt::check_hresult(hr); }
 static std::string narrow(const std::wstring& s) { return winrt::to_string(s); }
-static std::string quoted(const std::wstring& s) {
+static std::string jsonQuote(const std::wstring& s) {
     std::string out = "\"";
     for (char c : narrow(s)) {
         if (c == '\\' || c == '"') out += '\\';
@@ -82,8 +82,8 @@ static bool preflight() {
     report("preflight.json", "{\"client\":" + std::string(client ? "true" : "false")
         + ",\"build\":" + std::to_string(v.dwBuildNumber) + ",\"productType\":" + std::to_string(v.wProductType)
         + ",\"sessionKnown\":" + (sessionKnown ? "true" : "false") + ",\"session\":" + std::to_string(session)
-        + ",\"station\":" + quoted(stationName) + ",\"stationVisible\":" + ((flags.dwFlags & WSF_VISIBLE) ? "true" : "false")
-        + ",\"inputDesktop\":" + quoted(inputName) + ",\"threadDesktop\":" + quoted(threadName)
+        + ",\"station\":" + jsonQuote(stationName) + ",\"stationVisible\":" + ((flags.dwFlags & WSF_VISIBLE) ? "true" : "false")
+        + ",\"inputDesktop\":" + jsonQuote(inputName) + ",\"threadDesktop\":" + jsonQuote(threadName)
         + ",\"shellPID\":" + std::to_string(shellPid) + ",\"ready\":" + (ready ? "true" : "false") + "}\n");
     return ready;
 }
@@ -158,8 +158,8 @@ static int send() {
     install();
     auto notifier = ToastNotificationManager::CreateToastNotifier(aumid);
     auto setting = notifier.Setting();
-    report("sender.json", "{\"pid\":" + std::to_string(GetCurrentProcessId()) + ",\"aumid\":" + quoted(aumid)
-        + ",\"nonce\":" + quoted(uuid) + ",\"notificationSetting\":" + std::to_string(static_cast<int>(setting))
+    report("sender.json", "{\"pid\":" + std::to_string(GetCurrentProcessId()) + ",\"aumid\":" + jsonQuote(aumid)
+        + ",\"nonce\":" + jsonQuote(uuid) + ",\"notificationSetting\":" + std::to_string(static_cast<int>(setting))
         + ",\"showAttempted\":" + (setting == NotificationSetting::Enabled ? "true" : "false") + "}\n");
     if (setting != NotificationSetting::Enabled) return 3;
     std::wstring xml = L"<toast launch='" + uuid + L"'><visual><binding template='ToastGeneric'><text>Navigation TEST "
@@ -189,7 +189,7 @@ public:
             if (!app || !args || wcsnlen_s(app, 129) > 128 || wcsnlen_s(args, 37) > 36) return E_INVALIDARG;
             bool matches = app && args && app == aumid && args == uuid && count == 0;
             report("callback.json", "{\"pid\":" + std::to_string(GetCurrentProcessId()) + ",\"aumid\":"
-                + quoted(app ? app : L"") + ",\"nonce\":" + quoted(args ? args : L"")
+                + jsonQuote(app ? app : L"") + ",\"nonce\":" + jsonQuote(args ? args : L"")
                 + ",\"startedAt\":" + std::to_string(processStartedAt())
                 + ",\"inputCount\":" + std::to_string(count) + ",\"matches\":" + (matches ? "true" : "false") + "}\n");
             activated = true; return matches ? S_OK : E_INVALIDARG;
@@ -214,7 +214,7 @@ public:
 };
 static int callback() {
     report("callback-started.json", "{\"pid\":" + std::to_string(GetCurrentProcessId())
-        + ",\"nonce\":" + quoted(uuid) + ",\"startedAt\":" + std::to_string(processStartedAt()) + "}\n");
+        + ",\"nonce\":" + jsonQuote(uuid) + ",\"startedAt\":" + std::to_string(processStartedAt()) + "}\n");
     Factory* factory = new Factory; DWORD cookie = 0;
     HRESULT hr = CoRegisterClassObject(clsid, factory, CLSCTX_LOCAL_SERVER, REGCLS_MULTIPLEUSE, &cookie);
     factory->Release(); check(hr);
@@ -250,8 +250,8 @@ static int invoke() {
             std::wstring imageLower = image, windowsLower = std::wstring(windows) + L"\\";
             std::transform(imageLower.begin(), imageLower.end(), imageLower.begin(), towlower);
             std::transform(windowsLower.begin(), windowsLower.end(), windowsLower.begin(), towlower);
-            report("ui-candidate.json", "{\"actionName\":" + quoted(action) + ",\"providerPID\":" + std::to_string(providerPid)
-                + ",\"providerImage\":" + quoted(image) + ",\"offscreen\":" + (offscreen ? "true" : "false") + "}\n");
+            report("ui-candidate.json", "{\"actionName\":" + jsonQuote(action) + ",\"providerPID\":" + std::to_string(providerPid)
+                + ",\"providerImage\":" + jsonQuote(image) + ",\"offscreen\":" + (offscreen ? "true" : "false") + "}\n");
             if (!imageKnown || imageLower.compare(0, windowsLower.size(), windowsLower) != 0
                 || (base != L"ShellExperienceHost.exe" && base != L"ShellHost.exe" && base != L"explorer.exe"))
                 throw std::runtime_error("action provider is not Windows Shell");
@@ -289,8 +289,8 @@ static int invoke() {
             if (runtimeId) SafeArrayDestroy(runtimeId); runtime += ']';
             // This invokes the Shell UI provider, never INotificationActivationCallback directly.
             HRESULT result = pattern->Invoke();
-            report("ui-invoke.json", "{\"actionName\":" + quoted(action) + ",\"providerPID\":" + std::to_string(providerPid)
-                + ",\"providerImage\":" + quoted(image) + ",\"toastTitle\":" + quoted(title)
+            report("ui-invoke.json", "{\"actionName\":" + jsonQuote(action) + ",\"providerPID\":" + std::to_string(providerPid)
+                + ",\"providerImage\":" + jsonQuote(image) + ",\"toastTitle\":" + jsonQuote(title)
                 + ",\"runtimeID\":" + runtime
                 + ",\"exactTitleVerified\":true,\"controlType\":50000,\"offscreen\":false,\"invokeHRESULT\":" + std::to_string(result) + "}\n");
             check(result); return 0;
@@ -307,7 +307,7 @@ static int invoke() {
         }
         Sleep(250);
     }
-    report("ui-invoke.json", "{\"actionName\":" + quoted(action) + ",\"found\":false}\n");
+    report("ui-invoke.json", "{\"actionName\":" + jsonQuote(action) + ",\"found\":false}\n");
     return 5;
 }
 static void cleanup() {
