@@ -63,3 +63,11 @@ Additional primary sources:
 - [Electron 42.3.0 unpacked filesystem reads](https://github.com/electron/electron/blob/e0127e99aeaa66bb580538fc7409831b5248cccb/lib/node/asar-fs-wrapper.ts)
 
 The actual typed native notification callback took 4.34218s until opener completion/terminal success: 4.25546s in static signature verification and 86.213ms in the opener. The user confirmed the specified test chat opened with delay. These boundaries exclude helper startup before callback and visible rendering after opener completion; the selected endpoint fast path remains unqualified.
+
+## Observed resource postcondition difference
+
+A new disposable ad-hoc signed receiver fixture includes a signed text resource. Both static and dynamic validation initially return 0 under the same explicit test-identifier requirement. After changing only that resource, a fresh static object returns `-67054` (resource invalid), while a fresh guest lookup and dynamic validation still return 0. The owned child remains alive through both observations and stops through its own stopfile. Snapshot and binary hashes are retained by the opt-in runner.
+
+This reproduces the API guarantee difference without relying on a cached dynamic guest verdict. It is an ad-hoc test fixture, not a tampered Codex execution or Developer ID distribution qualification. Together with the observed unpacked runtime JavaScript in the installed client, it prevents treating process identity alone as equivalent to current full static validation.
+
+P2 decision for the inspected distribution: dynamic-only resource validation is **not qualified**. Therefore P3 running fast path remains disabled as required by the plan. PSN endpoint signing binding and update/reused-PID scenarios remain unproven, not silently passed. This negative decision stops only that candidate lane; platform qualification and required ingress/native evidence remain part of the original objective.

@@ -25,12 +25,12 @@ git diff --check
 | Phase | State | Missing acceptance evidence |
 | --- | --- | --- |
 | P0 measurement | Instrumentation implemented and checked | 50 read-only verifier samples and native action-none callback captured; targeted callback, fresh-helper/cold/error and helper-start timings remain |
-| P1 contracts | Existing boundaries preserved; suspend clock shared | Remaining contracts depend on qualified transport requirements |
+| P1 contracts | Existing boundaries audited; suspend clock shared; lifecycle docs corrected and canonical fixture checks added | Independent review accepted P1 corrections; any running transport contracts still depend on qualification |
 | P2 macOS transport | Native two-copy/stale-PSN fixture passed; PID-to-port route rejected; unpacked executable resources prevent assuming dynamic-only integrity | Authenticated destination binding, resource guarantees, bounded TCC behavior, race fixture and actual client qualification |
 | P3 macOS fast path | Not implemented | P2 qualification, implementation, before/after performance, adversarial and native E2E |
-| P4 sources | No migration yet | Current-source capability audit and conditional integration tests |
-| P5w Windows | Not qualified | Durable installed toast callback and supported selected-client activation |
-| P5l Linux | Not qualified | Durable callback, destination identity and activation/restart tests |
+| P4 sources | Existing ingress audit: no migration needed | P4 requires no source change; existing native typed callback does not by itself prove full MCP/CLI ingress |
+| P5w Windows | Not qualified | Durable installed toast callback and selected package activation; current official distribution recorded in platform qualification note |
+| P5l Linux | Not qualified | Durable callback, destination identity and activation/restart tests; Linux preview/Wayland limitations verified in official docs |
 
 The user authorized native testing on their Mac in this turn. Tests must still use synthetic chats/notifications; no agent/runtime actions in real user projects. Current permission does not establish Windows/Linux availability or any native test result.
 
@@ -49,3 +49,9 @@ The 50-sample static-verifier baseline shows p50 339ms, p95 479ms, first/max 2.8
 The PSN harness's initial review found three evidence risks: swallowed observer errors, discarded failure output, and source hashes collected after compilation. All were fixed; independent follow-up review is clean. The rerun confirms live observers, selected-only delivery, stale receiver failure and unchanged compiled snapshot. Actual authenticated Codex PSN transport remains unqualified, so production dispatch still uses full static validation and the existing opener.
 
 Actual typed notification E2E: callback correlation matches the submitted receipt. Static verification took **4.25546s**, native opener completion took **86.213ms**, and callback terminal `open_requested` arrived at **4.34218s**. The user confirmed the specified chat was visible with delay. One installed native sample proves this path; it does not establish physical-click-to-render latency or the required sample distribution. This confirms a material delay in static verification; queue/discovery are negligible. Full Swift suite with all native/child opt-ins: 116 passed, 0 failures, 0 skips.
+
+P1/P4 audit: MCP transport metadata and CLI caller-asserted provenance remain distinct. `none` skips target resolution, observer consumers explicitly request no navigation, and hooks retain legacy terminal/grouping behavior. Immutable typed action is serialized into OS userInfo and decoded without producer config. No new source hierarchy or migration is required. Canonical fixture-copy parity and representable invalid producer actions now have focused tests; lifecycle documentation reflects actual 30s desktop/10s other-route budgets and ingress/finite-send drain. Independent review is clean.
+
+Resource-contract native experiment: a signed resource change in a live disposable ad-hoc test app made fresh static verification fail `-67054`; fresh dynamic guest verification still returned 0 under the same identifier requirement. All liveness/cleanup and captured-source checks passed. This provides direct negative P2 evidence for replacing full validation with dynamic identity alone. The inspected installed Codex distribution remains unqualified for that fast path; P3 is gated, not marked implemented. Windows is available only in CI/CD per the user's answer; interactive native toast qualification is pending. Current Linux preview availability was verified, but its callback/Wayland lane is also pending.
+
+Independent resource-probe review found two evidence defects, both fixed: a later phase exception must reset overall `passed`, and static failure must be specifically `errSecCSBadResource`. A real invalid-source injection after successful routing reproduced false exit0/passed=true before the fix; the same input now produces exit1/passed=false with failure output retained. Positive native rerun on final sources passed with fresh static -67054/fresh dynamic0 and owned child cleanup. Focused Go checks passed for origin/nativeprotocol/notifier. Windows/Linux availability and current implementation limits are recorded in the platform qualification note, without claiming native E2E.

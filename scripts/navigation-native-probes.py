@@ -35,7 +35,8 @@ def main():
     snapshot.mkdir(mode=0o700)
     # Compile only captured source bytes; later repository edits cannot change binding.
     for name in ('ProcessSerialBridge.c', 'ProcessSerialBridge.h',
-                 'AppleEventEndpointProbe.swift', 'ProcessSerialRoutingProbe.swift'):
+                 'AppleEventEndpointProbe.swift', 'ProcessSerialRoutingProbe.swift',
+                 'ResourceValidationProbe.swift'):
         (snapshot / name).write_bytes((repo / 'swift-notifier/Tests/Probes' / name).read_bytes())
     report = dict(schemaVersion=1, macOS=platform.mac_ver()[0], architecture=platform.machine(),
                   sourceSHA256={p.name: digest(p) for p in sorted(snapshot.iterdir())},
@@ -97,10 +98,27 @@ def main():
         if raw.strip():
             report['routing'] = json.loads(raw)
         report['passed'] = code == 0 and report.get('routing', {}).get('observersAlive') is True
+        resource_app = root / 'ResourceReceiver.app'
+        shutil.copytree(app, resource_app)
+        resources = resource_app / 'Contents' / 'Resources'
+        resources.mkdir()
+        resource = resources / 'validation-resource.txt'
+        resource.write_text('original signed synthetic resource\n')
+        report['originalResourceSHA256'] = digest(resource)
+        require_run('resource-sign', ['codesign', '--force', '--sign', '-', '--timestamp=none', resource_app])
+        resource_probe = root / 'resource-probe'
+        require_run('resource-build', ['swiftc', snapshot / 'ResourceValidationProbe.swift', '-o', resource_probe])
+        report['binaries']['resourceProbeSHA256'] = digest(resource_probe)
+        report['binaries']['resourceReceiverSHA256'] = digest(resource_app / 'Contents/MacOS/ProcessSerialRoutingProbe')
+        code, raw = run('resource-validation', [resource_probe, root], timeout=20)
+        if raw.strip():
+            report['resourceValidation'] = json.loads(raw)
+        report['passed'] = report['passed'] and code == 0
     except (RuntimeError, ValueError, OSError) as error:
+        report['passed'] = False
         report['error'] = str(error)
     finally:
-        for name in ('a', 'b', 'a-restarted'):
+        for name in ('a', 'b', 'a-restarted', 'resource-receiver'):
             directory = root / name
             if directory.is_dir():
                 (directory / 'stop').write_bytes(b'')
