@@ -145,6 +145,22 @@ container probe and guest script, and names the staged outer script
 `fixture-controller.py`. A fresh captured stage has a distinct exclusive intent
 gate; a successful guest boot still does not qualify sandbox or navigation.
 
+The distinct fixed attempt passed provisioning. Seven guest commands completed
+with exit 0; the exact selected package was installed, the vendor profile was
+loaded and sync completed. The owned QMP peer reported actual KVM and one
+guest-initiated shutdown with reason `guest-shutdown`; QEMU was collected with
+exit 0. Base, package, seed and both captured sources remained unchanged. Exact
+owned-container removal and fresh ID/name absence checks passed. Its private
+overlay was frozen read-only after cleanup for a subsequent separate TEST phase.
+
+`linux-selected-client-guest-provisioned.json` records this provisioning scope and
+the retained source/raw hashes. Original guest command logs remain in the guest
+overlay; their completion-record hashes have not been independently recomputed
+from transferred bytes. The overlay hash is a retained host measurement, not a
+local image rehash. No client, notification, renderer sandbox, activation token,
+focus or chat route was exercised. The next native boot must have both outer
+networking and the QEMU NIC disabled, and must not rerun provisioning.
+
 ## Sources
 
 - [Official Linux support and experimental Wayland flag](https://learn.chatgpt.com/docs/linux/linux-app)
