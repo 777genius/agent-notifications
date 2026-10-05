@@ -36,3 +36,11 @@ AGENT_NOTIFY_NAVIGATION_LINUX_E2E=1 /usr/bin/python3 scripts/navigation-linux-ca
 ```
 
 The probe requires system Python dbus/GLib modules, validates daemon identity/version through its real bus owner and `/proc`, emits JSON evidence with explicit qualification limits, and refuses to overwrite an existing report. The caller owns private daemon/Xvfb/bus cleanup. Do not point this fixture at a user session bus or display.
+
+`native-resource-envelope.json` records the separate resource-aware candidate experiment, including the original run and the replay after independent review tightened assertions and outcome labels. All fixtures are newly signed ad-hoc TEST applications. Text-resource and CodeResources changes are mandatory integrity controls; executable-byte mutation is an optional observation, not fast-path qualification. Fresh full validation rejected the in-place signed executable change with -67061 while fresh dynamic validation and resource-aware validation succeeded with the child alive. This is a concrete non-equivalence observation, not a latency improvement or a production change.
+
+```sh
+python3 scripts/navigation-resource-envelope-probe.py --execute-test-fixtures
+```
+
+The runner retains its captured source, build/command output hashes and evidence in a new private root, including failures. It does not send notifications, open Codex or mutate installed applications. The optional executable observation may be unavailable if the OS refuses modification or kills the fixture. A successful mandatory control run does not imply that this weaker validation can replace the product's strict/all-architecture verifier.
