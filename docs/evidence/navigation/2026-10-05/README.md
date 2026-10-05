@@ -46,3 +46,11 @@ python3 scripts/navigation-resource-envelope-probe.py --execute-test-fixtures
 The runner retains its captured source, build/command output hashes and evidence in a new private root, including failures. It does not send notifications, open Codex or mutate installed applications. The optional executable observation may be unavailable if the OS refuses modification or kills the fixture. A successful mandatory control run does not imply that this weaker validation can replace the product's strict/all-architecture verifier.
 
 `installed-addressed-transport.json` records one reviewed, explicitly approved public PSN GURL request to the already-running installed Codex. Full Developer ID validation and guest/path/PSN checks succeeded before the sole send; the OS accepted it and the user separately confirmed the intended chat opened or became active. Full verification still took 3.359s. The fixed-route operator harness and captured sources are retained privately rather than publishing the private test route or adding an automatic replay command. This does not prove atomic exec binding, deadline enforcement inside the existing bridge, races, cold launch or latency improvement.
+
+`native-same-pid-exec.json` records one source-bound, disposable ad-hoc A-to-B exec experiment. The PID and PSN remained unchanged. A fresh guest check authenticated B and rejected A, while the cached guest still authenticated A. The sole GURL event addressed to the old PSN was received by B. All owned children were stopped and reaped; no installed client was activated. This is a counterexample to treating PSN as a code-identity-bound endpoint across same-PID exec, not a production qualification or a fix.
+
+```sh
+python3 scripts/navigation-exec-binding-probe.py --execute-test-fixtures
+```
+
+The fixture retains captured sources, hashes, build output and event records in a new private TEST root. Its `passed` result means the experiment and observation completed, including cleanup; `atomicBindingQualified` remains false. The production verifier and opener are unchanged.
