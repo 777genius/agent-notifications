@@ -85,7 +85,11 @@ func cursorPublicInstallInput(t *testing.T, f cursorFixture, registry *clients.R
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := engine.Prepare(cursorContext(t), uapinstaller.Request{Operation: uapinstaller.OpInstall,
+	// This filesystem fixture includes directory verification on Windows under
+	// race/coverage. Its setup budget is separate from event admission deadlines.
+	installCtx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	p, err := engine.Prepare(installCtx, uapinstaller.Request{Operation: uapinstaller.OpInstall,
 		PackageRoot: f.pkg, ClientID: "cursor", ClientConfigRoot: f.b.ScopeRoot,
 		ClientExecutable: f.fixed.Executable, InstallationID: f.b.InstallationID, RequiredComponents: []string{"mcp"}})
 	if err != nil {
@@ -96,7 +100,7 @@ func cursorPublicInstallInput(t *testing.T, f cursorFixture, registry *clients.R
 			t.Error(err)
 		}
 	}()
-	result, err := engine.Apply(cursorContext(t), p, uapinstaller.Decision{Confirmed: true})
+	result, err := engine.Apply(installCtx, p, uapinstaller.Decision{Confirmed: true})
 	if err != nil || result.Binding.BindingID != f.b.BindingID || result.Binding.DataRoot != f.b.DataRoot {
 		t.Fatalf("public TEST filesystem install: %+v %v", result, err)
 	}
