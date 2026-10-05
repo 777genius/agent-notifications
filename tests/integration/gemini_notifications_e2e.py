@@ -20,6 +20,7 @@ import threading
 import tempfile
 import time
 import unittest
+from unittest.mock import Mock, patch
 
 MARKER = ".an-gemini-TEST"
 CONSUMER = "gemini-notifications"
@@ -224,24 +225,58 @@ def delivery_counts(rows):
                         and not row.get("stop_hook_active", False) for row in rows) for status in COPY}
 
 
-def settle(g0, lab, fixture, terminal, expected, seconds=6):
-    end = time.monotonic() + seconds
-    stable = None
-    while time.monotonic() < end:
-        terminal.drain()
-        require(terminal.exit is None and fixture.error is None, fixture.error or ("native_child_exited" if terminal.exit is not None else "native_or_provider_failure"))
-        native_rows(g0, lab)
-        with fixture.lock:
-            actual = {status: fixture.deliveries.count(status) for status in COPY}
-        require(all(actual[k] <= expected[k] for k in COPY), "unexpected_or_duplicate_delivery")
-        if actual == expected:
-            stable = stable or time.monotonic()
-            if time.monotonic() - stable >= 0.5:
-                return actual
-        else:
-            stable = None
-        time.sleep(0.05)
-    raise Red("production_webhook_missing")
+def settle(g0, lab, fixture, terminal, expected, seconds=6, phase="exercise_settle"):
+    started = time.monotonic()
+    try:
+        end = started + seconds
+        stable = None
+        while time.monotonic() < end:
+            terminal.drain()
+            require(terminal.exit is None and fixture.error is None, fixture.error or ("native_child_exited" if terminal.exit is not None else "native_or_provider_failure"))
+            native_rows(g0, lab)
+            with fixture.lock:
+                actual = {status: fixture.deliveries.count(status) for status in COPY}
+            require(all(actual[k] <= expected[k] for k in COPY), "unexpected_or_duplicate_delivery")
+            if actual == expected:
+                stable = stable or time.monotonic()
+                if time.monotonic() - stable >= 0.5:
+                    return actual
+            else:
+                stable = None
+            time.sleep(0.05)
+        raise Red("production_webhook_missing")
+    except Exception as exc:
+        # One bounded failure snapshot, before any forced close or consent revoke.
+        # Diagnostic faults must never replace the original gate failure.
+        try:
+            require(phase in ("exercise_settle", "update_settle", "suppression_settle",
+                              "remove_settle", "reinstall_settle", "damaged_settle"), "settle_phase")
+            require(set(expected) == set(COPY) and all(type(v) is int and 0 <= v <= 65535
+                    for v in expected.values()), "settle_count_bound")
+            with fixture.lock:
+                actual = {status: fixture.deliveries.count(status) for status in COPY}
+            require(all(v <= 65535 for v in actual.values()), "settle_count_bound")
+            elapsed = time.monotonic() - started
+            require(math.isfinite(elapsed) and 0 <= elapsed <= 86400
+                    and math.isfinite(seconds) and 0 < seconds <= 6, "settle_time_bound")
+            kind = ("native_or_provider_error" if terminal.exit is not None or fixture.error is not None
+                    else "overshoot" if any(actual[k] > expected[k] for k in COPY)
+                    else "deficit" if actual != expected else "settle_guard_error")
+            rows, total = [], None
+            try:
+                validated = native_rows(g0, lab)
+                total = min(len(validated), 65535)
+                fields = {"event", "valid", "neutral", "session_sha256", "timestamp_sha256",
+                          "case", "stop_hook_active", "subtype"}
+                rows = [{k: v for k, v in row.items() if k in fields} for row in validated[:64]]
+            except Exception:
+                pass
+            exc.settle_failure = {"phase": phase, "class": kind, "expected": dict(expected),
+                                  "actual": actual, "elapsed_seconds": elapsed, "limit_seconds": seconds,
+                                  "native_rows": rows, "native_rows_total": total}
+        except Exception:
+            pass
+        raise
 
 
 def another_turn(g0, lab, fixture, terminal, case="equal"):
@@ -593,7 +628,7 @@ def run(args):
                 args.binary = args.update_binary
                 another_turn(g0, lab, fixture, terminal)
                 before_remove_counts["task_complete"] += 1
-                settle(g0, lab, fixture, terminal, before_remove_counts)
+                settle(g0, lab, fixture, terminal, before_remove_counts, phase="update_settle")
                 evidence["changed_artifact_update"] = "binding_preserved_generation_incremented_live_native_delivery"
             # One further native turn checks per-channel suppression without
             # replaying every UI/tool case. Desktop consent remains independent.
@@ -603,7 +638,7 @@ def run(args):
             desktop_before = len(spool["receipts"])
             write_json(config_path, suppressed)  # Hard link keeps the selected inode.
             another_turn(g0, lab, fixture, terminal)
-            settle(g0, lab, fixture, terminal, before_remove_counts)
+            settle(g0, lab, fixture, terminal, before_remove_counts, phase="suppression_settle")
             evidence["webhook_channel_suppression"] = "observed_native_turn_no_new_capture"
             evidence["desktop_channel_independence"] = "unverified"
             if args.desktop and any(r["class"] == "task_complete" and r["fixed_copy_observed"] and r["status"] == "submitted"
@@ -619,11 +654,11 @@ def run(args):
             ledger = read_json(lab / "an-control/ownership.json")
             require(CONSUMER not in ledger.get("Consumers", {}) and not (lab / "an-control/gemini-receipt.json").exists(), "remove_registration_retained")
             rows = another_turn(g0, lab, fixture, terminal)
-            settle(g0, lab, fixture, terminal, before_remove_counts)
+            settle(g0, lab, fixture, terminal, before_remove_counts, phase="remove_settle")
             # Full native absence window; no hypothetical cached-hook claim.
             end = time.monotonic() + 5
             while time.monotonic() < end:
-                settle(g0, lab, fixture, terminal, before_remove_counts, 1)
+                settle(g0, lab, fixture, terminal, before_remove_counts, 1, phase="remove_settle")
             terminal.close()
             evidence.update(cases=cases, native_observations=rows, delivery_counts=before_remove_counts,
                             PTY=terminal.identity, own_child_exit=terminal.exit,
@@ -650,7 +685,7 @@ def run(args):
                 raise Red("reinstall_native_completion_missing")
             expected = dict(before_remove_counts)
             expected["task_complete"] += 1
-            settle(g0, lab, fixture, terminal, expected)
+            settle(g0, lab, fixture, terminal, expected, phase="reinstall_settle")
             damaged = lab / "an-control/gemini-receipt.json"
             require(str(damaged) in second["ledger"]["Files"], "damage_target_not_owned")
             intact = bounded_read(damaged, 16384)
@@ -666,10 +701,10 @@ def run(args):
             require(snapshot_settings_equal(settings_path, second), "conflict_changed_owned_hooks")
             require(physical(second["ledger"]["Consumers"][CONSUMER]["Commands"][0]).is_file(), "conflict_removed_loaded_binary")
             another_turn(g0, lab, fixture, terminal, "recovery")
-            settle(g0, lab, fixture, terminal, expected)
+            settle(g0, lab, fixture, terminal, expected, phase="damaged_settle")
             end = time.monotonic() + 5
             while time.monotonic() < end:
-                settle(g0, lab, fixture, terminal, expected, 1)
+                settle(g0, lab, fixture, terminal, expected, 1, phase="damaged_settle")
             terminal.close()
             evidence["damaged_receipt"] = "cleanup_conflict_channels_revoked_native_turn_suppressed"
             evidence["old_loaded_command_gate"] = "native_turn_with_retained_installed_groups_and_binary_no_new_webhook_5s"
@@ -691,6 +726,8 @@ def run(args):
         levels[platform]["native_cli/provider_substitute"] = "passed_implemented_scenarios"
     except Exception as exc:
         evidence["classification"] = str(exc) if isinstance(exc, (Red, g0.Red)) else "production_harness_error"
+        if hasattr(exc, "settle_failure"):
+            evidence["settle_failure"] = exc.settle_failure
         if hasattr(exc, "setup_diagnostic"):
             evidence["setup_failure"] = exc.setup_diagnostic
         if hasattr(exc, "bridge_diagnostic"):
@@ -755,6 +792,113 @@ def snapshot_settings_equal(path, state):
 
 
 class PureChecks(unittest.TestCase):
+    # Regression: settle failures lose safe counts/rows despite run's finally writer.
+    def settle_ports(self, deliveries=(), error=None, exit_code=None, rows=None):
+        row = {"event": "AfterAgent", "valid": True, "neutral": True,
+               "session_sha256": "a" * 64, "timestamp_sha256": "b" * 64,
+               "shell": "bash", "shell_version": "5.2", "case": "plain", "stop_hook_active": False}
+        g0, _ = load_g0()
+        g0.observations = Mock(return_value=[row] if rows is None else rows)
+        fixture = Mock(deliveries=list(deliveries), error=error, lock=threading.Lock())
+        terminal = Mock(exit=exit_code)
+        return g0, fixture, terminal
+
+    def settle_clock(self):
+        clock = Mock()
+        clock.monotonic.side_effect = lambda: clock.elapsed
+        clock.elapsed = 0.0
+        clock.sleep.side_effect = lambda seconds: setattr(clock, "elapsed", clock.elapsed + seconds)
+        return patch(__name__ + ".time", clock), clock
+
+    def test_settle_failure_counts_and_guards(self):
+        expected = {"task_complete": 1, "permission_request": 0}
+        for deliveries, error, exit_code, code, kind in (
+                ([], None, None, "production_webhook_missing", "deficit"),
+                (["task_complete"] * 2, None, None, "unexpected_or_duplicate_delivery", "overshoot"),
+                ([], "PRIVATE provider body", None, "PRIVATE provider body", "native_or_provider_error"),
+                ([], None, 1, "native_child_exited", "native_or_provider_error")):
+            with self.subTest(kind=kind, exit_code=exit_code):
+                g0, fixture, terminal = self.settle_ports(deliveries, error, exit_code)
+                timer, clock = self.settle_clock()
+                with timer, self.assertRaises(Red) as caught:
+                    settle(g0, None, fixture, terminal, expected)
+                self.assertEqual(str(caught.exception), code)
+                facts = caught.exception.settle_failure
+                self.assertEqual(facts["class"], kind)
+                self.assertEqual(facts["expected"], expected)
+                self.assertEqual(facts["actual"], {"task_complete": len(deliveries), "permission_request": 0})
+                fixture.deliveries.append("permission_request")
+                self.assertEqual(facts["actual"]["permission_request"], 0)
+                self.assertEqual(facts["phase"], "exercise_settle")
+                self.assertEqual(facts["limit_seconds"], 6)
+                self.assertGreaterEqual(facts["elapsed_seconds"], 6 if kind == "deficit" else 0)
+                self.assertEqual(facts["native_rows"][0]["session_sha256"], "a" * 64)
+                self.assertNotIn("PRIVATE", json.dumps(facts))
+        g0, fixture, terminal = self.settle_ports(["task_complete"])
+        timer, clock = self.settle_clock()
+        with timer:
+            self.assertEqual(settle(g0, None, fixture, terminal, expected), expected)
+        self.assertGreaterEqual(clock.elapsed, 0.5)
+        g0, fixture, terminal = self.settle_ports(error="PRIVATE original error")
+        fixture.lock = None  # Failure in diagnostics must preserve this gate error.
+        timer, _ = self.settle_clock()
+        with timer, self.assertRaisesRegex(Red, "PRIVATE original error") as caught:
+            settle(g0, None, fixture, terminal, expected)
+        self.assertFalse(hasattr(caught.exception, "settle_failure"))
+
+    def test_settle_failure_privacy_bounds(self):
+        g0, fixture, terminal = self.settle_ports()
+        row = g0.observations(None)[0]
+        for rows, expected, phase, retained in (
+                ([row] * 100, {"task_complete": 100, "permission_request": 0}, "exercise_settle", True),
+                ([dict(row, prompt="PRIVATE")], delivery_counts([row]), "exercise_settle", True),
+                ([dict(row, session_sha256="PRIVATE")], delivery_counts([row]), "exercise_settle", True),
+                ([row], dict(delivery_counts([row]), PRIVATE=1), "exercise_settle", False),
+                ([row], {"task_complete": 65536, "permission_request": 0}, "exercise_settle", False),
+                ([row], delivery_counts([row]), "PRIVATE", False)):
+            g0.observations.return_value = rows
+            timer, _ = self.settle_clock()
+            with timer, self.assertRaises(Red) as caught:
+                settle(g0, None, fixture, terminal, expected, **({} if phase == "exercise_settle" else {"phase": phase}))
+            facts = getattr(caught.exception, "settle_failure", None)
+            self.assertEqual(facts is not None, retained)
+            if retained:
+                self.assertEqual(len(facts["native_rows"]), 64 if len(rows) == 100 else 0)
+                self.assertNotIn("PRIVATE", json.dumps(facts))
+                self.assertEqual(facts["native_rows_total"], 100 if len(rows) == 100 else None)
+
+    def test_run_retains_settle_failure_in_finally(self):
+        # Stop at the existing environment port: no native/process/network authority.
+        g0, fixture, terminal = self.settle_ports()
+        timer, _ = self.settle_clock()
+        with tempfile.TemporaryDirectory(prefix="TEST-g5-retention-") as root:
+            lab = Path(root).resolve()
+            artifact = lab / "artifact"
+            artifact.write_bytes(b"TEST")
+            (lab / "go.mod").write_bytes(b"TEST")
+            g0.cli_identity = Mock(return_value={"installed_package_tree_sha256": "a" * 64})
+            g0.package_digest = Mock(return_value="b" * 64)
+            g0.new_lab = Mock(return_value=lab)
+            def fail_at_boundary(*args):
+                return settle(g0, lab, fixture, terminal, delivery_counts(g0.observations(lab)))
+            g0.minimal_env = Mock(side_effect=fail_at_boundary)
+            args = argparse.Namespace(trusted_orchestrator=True, timeout=60, g0_driver=None,
+                binary=str(artifact), update_binary=None, desktop=False, native_app=None,
+                cli_install_root=root, gemini_executable=str(artifact), node_executable=str(artifact),
+                hook_shell=str(artifact), ui_contract=None, sdk_module_root=root,
+                installer_module_root=root, lab_root=root, system_root=None)
+            _, g0path = load_g0()
+            with timer, patch(__name__ + ".load_g0", return_value=(g0, g0path)), \
+                    patch(__name__ + ".test_artifact", side_effect=Path), \
+                    patch(__name__ + ".ui_contract", return_value={}), self.assertRaises(Red) as caught:
+                run(args)
+            manifest = read_json(lab / "production-evidence.json")
+            self.assertEqual(str(caught.exception), "production_webhook_missing")
+            self.assertEqual(manifest["classification"], str(caught.exception))
+            self.assertEqual(manifest["driver"], "failed")
+            self.assertEqual(manifest["settle_failure"], caught.exception.settle_failure)
+            self.assertEqual(manifest["settle_failure"]["actual"], dict.fromkeys(COPY, 0))
+
     def test_setup_failure_fixed_diagnostics(self):
         # Observable break: Windows install exit 1 previously lost its cause;
         # the public installer header can contain private path/error suffixes.
