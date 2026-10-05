@@ -1,0 +1,59 @@
+{
+  "scope": "paused_TEST_KVM_access_only",
+  "nativeExitCode": 0,
+  "pausedKVMAccessObserved": true,
+  "kvm": {
+    "enabled": true,
+    "present": true
+  },
+  "vmStatus": {
+    "status": "prelaunch",
+    "singlestep": false,
+    "running": false
+  },
+  "nativeSourceSHA256": "30033b6d2dd7aa5efcd69fad8842e8fb83dca60988e13fc40091417ebc7be391",
+  "qemuSHA256": "8a35ccba41582fc6c38b9df85fc9e35fa1d42f414d2d7d8090ee9b2f5e7c0854",
+  "toolingImageSHA256": "3d6d8f7204a993dd58b7a2aa02312fbf4190cfecfe5c539d65d0a0eda3a0725c",
+  "dockerfileSHA256": "4be5d1481f684a891df96e6c6e69a51037f20350afc682c689cb70b3096f1be3",
+  "sourceUnchanged": true,
+  "childCollected": true,
+  "childExitCode": 0,
+  "ownContainerRemoved": true,
+  "freshAbsenceByIDAndName": true,
+  "rawOperatorSHA256": "c3573f31bbfdcf0d46a48ca3b05e5c05581c5dad707d8b9a7b205dc765d6adf9",
+  "rawNativeSHA256": "ca84cbb99c8838b6ff54534935755ab1e7c6fdaab2482ea789ae8c022ecab0e5",
+  "archiveSHA256": "7bb4ca5c8cd31c4ee68343b79861273b94375984b1a3a1e69d337dd22cb9779b",
+  "runtimeBoundary": {
+    "uid": 1000,
+    "supplementaryGroup": 994,
+    "device": "/dev/kvm:rw",
+    "otherDevicesPassed": false,
+    "capDrop": [
+      "ALL"
+    ],
+    "noNewPrivileges": true,
+    "seccompOverride": false,
+    "privileged": false,
+    "network": "none",
+    "hostProfilesMounted": false,
+    "hostGroupsChanged": false,
+    "hostPackagesInstalled": false,
+    "mountScope": "new_owned_TEST_evidence_only"
+  },
+  "qemuVersion": "8.2.2",
+  "qemuPackageVersion": "1:8.2.2+ds-0ubuntu1.18",
+  "catalogEvidence": {
+    "historicalEntries": 17,
+    "matchingFinalArtifacts": 16,
+    "mutableHistoricalMismatch": "operator-result.json",
+    "allHistoricalHashesQualified": false,
+    "catalogOnlySourceFixReviewed": true,
+    "fixedSourceSHA256": "29d89202d8ba196e150506c50d1183ecd51332d31e7ddd12c64044e0f9a42ffa",
+    "fixedSourceNativeExecuted": false
+  },
+  "guestBootAttempted": false,
+  "clientLaunchAttempted": false,
+  "notificationAttempted": false,
+  "clientSandboxQualified": false,
+  "navigationQualified": false
+}

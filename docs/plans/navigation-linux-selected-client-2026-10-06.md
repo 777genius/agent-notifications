@@ -69,11 +69,64 @@ rounds before execution; the negative raw evidence received independent review.
 Facts and source/binary/raw hashes are retained in
 `docs/evidence/navigation/2026-10-06/linux-selected-client-namespace-prerequisite.json`.
 A separate disposable guest kernel is the next environment candidate. Its KVM
-access, boot, isolation and client sandbox remain unqualified. No sandbox-disable
-flag or unconfined host policy is introduced to bypass this prerequisite.
+access is observed in the subsequent paused test below; guest boot, guest
+isolation and client sandbox remain unqualified. No sandbox-disable flag or
+unconfined host policy is introduced to bypass this prerequisite.
+
+The exact archive also ships `etc/apparmor.d/chatgpt`, SHA256
+`05be1a8336a80236f4b56798ea7a75accb55f51438afa1e7cb5e94bfa326b1b7`.
+Its named profile attaches to `/usr/lib/chatgpt/ChatGPT`, uses vendor-provided
+`flags=(unconfined)` and grants `userns`. The generic namespace probe does not
+execute that path and cannot predict the client under this profile. Installing
+and loading this shipped policy inside the disposable guest is distinct from
+weakening Docker or the worker host's policy.
+
+Guest qualification must first retain the active profile and absence of
+unexpected `local/chatgpt` overrides. Cold-launch the selected client without a
+thread URI, using a private fresh profile; retain its executable incarnation
+and `/proc/PID/attr/current`. Observe actual renderer descendants, their ancestry,
+namespace IDs, UID mappings, seccomp state and sandbox errors against the guest
+and browser-process baseline. A generic `clone` result, a visible window or the
+absence of `--no-sandbox` cannot alone qualify Chromium's sandbox. The subsequent
+notification experiment uses another fresh profile after this preflight is
+stopped and its owned children collected.
+
+## Paused KVM and authenticated guest image
+
+A TEST-only tooling image installs the fresh official Noble package candidates,
+records policy/version inventories and runs QEMU as UID 1000. The one native
+probe used default Docker security, supplementary group 994 and only `/dev/kvm`
+device access, with no host package/group changes. Its private QMP peer matched
+the owned QEMU PID. `query-kvm` returned strict `enabled=true, present=true`;
+`query-status` returned `prelaunch, running=false`. QEMU quit with collected exit
+0; exact container removal and fresh ID/name absence checks passed. No guest
+boot, client or notification occurred.
+
+This runtime evidence is bound to source SHA `30033b6d...be391`, not the later
+catalog-only fix. The old inner catalog has 17 entries: 16 match final bytes;
+the mutable outer controller record contains a historical intermediate hash.
+It is not an entirely qualified final artifact catalog. The reviewed source fix
+hashes only the probe's closed outputs and explicit immutable inputs; that fixed
+source has not been executed natively. The full hashes and limits are retained
+in `linux-selected-client-paused-kvm.json` beside the other evidence.
+
+The dated official Ubuntu Noble cloud image was downloaded once into a new TEST
+root and verified against its actual detached checksum signature and the
+documented full signing fingerprint. The exact filename entry and whole-image
+SHA256 matched before inspection. Metadata hashes and the raw evidence binding
+are in `linux-selected-client-ubuntu-image-auth.json`. Download/signature success
+does not qualify boot or client behavior.
+
+The next bounded phase uses a read-only authenticated base plus a disposable
+overlay and seed ISO. Provisioning installs dependencies inside the guest and
+shuts down without launching the client. A separate native boot disables both
+outer networking and QEMU NICs; the guest receives no host shared directories,
+credentials, projects, displays or input devices. Guest sandbox and actual
+selected-client observations remain required before the notification experiment.
 
 ## Sources
 
 - [Official Linux support and experimental Wayland flag](https://learn.chatgpt.com/docs/linux/linux-app)
 - [D-Bus application activation](https://specifications.freedesktop.org/desktop-entry/latest/dbus.html)
 - [Existing chat links](https://learn.chatgpt.com/docs/reference/commands)
+- [Official Ubuntu image verification](https://ubuntu.com/docs/public-images/public-images-how-to/verify-image-checksum/)
