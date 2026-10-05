@@ -36,7 +36,7 @@ Do not install Linux/Windows assets on macOS.
 On Linux or Windows, use:
 
 ```bash
-curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product gemini --desktop
+curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --product gemini --desktop
 ```
 
 For webhook-only delivery, replace `--desktop` with `--webhook`; for both, specify both.
@@ -45,7 +45,7 @@ Choose at least one channel. Webhook URLs must be configured separately.
 The combined selector is one pipeline, in canonical product order:
 
 ```bash
-(set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --products claude,codex,opencode,gemini --desktop --webhook)
+(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --products claude,codex,opencode,gemini --desktop --webhook)
 ```
 
 Desktop/webhook choices apply to **each selected observer agent**, Gemini and

@@ -63,7 +63,7 @@ Install OpenCode first. In the [guided installer](https://777genius.github.io/ag
 select **OpenCode**. The guided command enables desktop notifications; webhook destinations and delivery can be configured later. You can also select Claude or Codex CLI in the same setup. The copied command uses one loader, for example:
 
 ```bash
-(set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --products claude,opencode --desktop)
+(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --products claude,opencode --desktop)
 ```
 
 Channel flags grant consent only for OpenCode; webhook URLs still need separate configuration. Claude/Codex setup runs first. If a later setup fails, earlier successful installations remain installed; fix the error and rerun the command.
@@ -74,7 +74,7 @@ from the same release. The loader pins installer source to the release's exact
 commit.
 
 ```bash
-(set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product opencode --desktop)
+(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --product opencode --desktop)
 ```
 
 Use `--webhook` instead of `--desktop` for webhook-only consent, or supply both.

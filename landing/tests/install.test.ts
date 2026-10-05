@@ -6,8 +6,8 @@ test("one-line setup contract for each product and supported target", () => {
   for (const product of ["claude", "codex", "both"] as const)
     for (const target of ["macos", "linux", "windows"] as const) {
       const expected = product === "both"
-        ? "(set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --products claude,codex)"
-        : "curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product " + product;
+        ? "(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --products claude,codex)"
+        : "curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --product " + product;
       assert.equal(command(product, target, "install"), expected);
       assert.equal(command(product, target, "update"), expected);
       assert.equal(
@@ -56,7 +56,7 @@ test("Bowser OS suggestions and mobile exclusions", () => {
 
 test("OpenCode command requires explicit selected channels and omits MCP flags", () => {
   for (const target of ["macos", "linux", "windows"] as const) {
-    const prefix = "curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product opencode";
+    const prefix = "curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --product opencode";
     assert.equal(command("opencode", target, "install"), prefix + " --desktop");
     assert.equal(command("opencode", target, "update", false, { desktop: false, webhook: true }), prefix + " --webhook");
     assert.equal(command("opencode", target, "install", true, { desktop: true, webhook: true }), prefix + " --desktop --webhook");
@@ -96,7 +96,7 @@ test("all seven selections produce one loader command with host-scoped consent",
             const product = multiple
               ? `--products ${selected.join(",")}`
               : `--product ${openCode ? "opencode" : legacy}`;
-            const pipeline = "curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- " + product
+            const pipeline = "curl -fsSL https://agent-notifications.com/install.sh | bash -s -- " + product
               + (legacy && !agentNotify ? " --skip-agent-notify" : "")
               + (openCode && channels.desktop ? " --desktop" : "")
               + (openCode && channels.webhook ? " --webhook" : "");
@@ -117,7 +117,7 @@ test("all seven selections produce one loader command with host-scoped consent",
 test("mixed loader uses a canonical product list", () => {
   assert.equal(
     command(["opencode", "claude", "opencode", "codex"], "linux", "install"),
-    "(set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --products claude,codex,opencode --desktop)",
+    "(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --products claude,codex,opencode --desktop)",
   );
 });
 
@@ -141,7 +141,7 @@ exit "$install_status"`,
 
 // The released selector must include every chosen observer and scope portable flags.
 test("Gemini released commands preserve canonical selectors and shared observer consent", () => {
-  const prefix = "curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- ";
+  const prefix = "curl -fsSL https://agent-notifications.com/install.sh | bash -s -- ";
   const cases = [
     { products: ["gemini"], expected: prefix + "--product gemini --webhook" },
     { products: ["gemini", "gemini"], expected: prefix + "--product gemini --webhook" },
