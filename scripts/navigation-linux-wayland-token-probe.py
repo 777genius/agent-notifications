@@ -186,7 +186,13 @@ def main():
         wait(surface_ready)
         surface = layers[0][1]
         if 'new id wl_surface@' + surface + ')' not in trace() or 'wl_surface@' + surface + '.commit()' not in trace(): raise RuntimeError('owned_surface_lifecycle_incomplete')
-        pointer = start('pointer', ['/fixture/navigation-wayland-pointer-test'], True)
+        configured = re.findall(r'zwlr_layer_surface_v1@' + layers[0][0] + r'\.configure\(\d+, (\d+), (\d+)\)', trace())
+        if not configured or not (0 < int(configured[-1][0]) <= 1280 and 0 < int(configured[-1][1]) <= 720):
+            raise RuntimeError('surface_dimensions_unproved')
+        y = int(configured[-1][1]) // 2
+        report['pointerCoordinates'] = dict(x=640, y=y, outputWidth=1280, outputHeight=720,
+            configuredWidth=int(configured[-1][0]), configuredHeight=int(configured[-1][1]), evidenceClass='owned_protocol_configure')
+        pointer = start('pointer', ['/fixture/navigation-wayland-pointer-test', str(y)], True)
         entry_pattern = r'wl_pointer@(\d+)\.enter\(\d+, wl_surface@' + surface + r','
         wait(lambda: re.search(entry_pattern, trace()) is not None)
         entered = list(re.finditer(entry_pattern, trace()))
@@ -284,9 +290,14 @@ def main():
                 try: child.wait(timeout=2)
                 except subprocess.TimeoutExpired: child.kill(); child.wait(timeout=2)
             report['processes'][next(i for i, p in enumerate(report['processes']) if p['pid'] == child.pid)]['reapedExitCode'] = child.returncode
+            if label == 'pointer':
+                # Retain the actual motion/click acknowledgement even on pre-click failure.
+                with (root / 'pointer.stdout').open('ab') as output: output.write(child.stdout.read())
         for stream in streams: stream.close()
         report['immutableUnchanged'] = all(sha(root / name) == digest for name, digest in immutable.items())
         report['helperUnchanged'] = sha(helper) == spec['helperSHA256']
+        report['showAttempted'] = (root / 'show-attempt.json').exists()
+        report['addReturned'] = (root / 'submitted.json').exists()
         report['passed'] = report['passed'] and report['immutableUnchanged'] and report['helperUnchanged']
         report['tokenForwardingQualified'] = report['passed'] and report.get('tokenEqualityObserved', False)
         for name in ('wayland-packages.txt', 'packages.txt', 'portal-version.txt', 'gtk-portal-build-binding.txt'):

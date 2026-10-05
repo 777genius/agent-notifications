@@ -1,5 +1,6 @@
 /* TEST-only: one private Wayland pointer motion and one explicitly gated click. */
 #define _POSIX_C_SOURCE 200809L
+#include <errno.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdint.h>
@@ -36,12 +37,15 @@ static uint32_t millis(void) {
     return (uint32_t)((uint64_t)value.tv_sec * 1000 + value.tv_nsec / 1000000);
 }
 
-int main(void) {
+int main(int argc, char **argv) {
     if (!getenv("NAVIGATION_TEST_CONTAINER") ||
         strcmp(getenv("NAVIGATION_TEST_CONTAINER"), "1") ||
         !getenv("NAVIGATION_WAYLAND_TEST") ||
         strcmp(getenv("NAVIGATION_WAYLAND_TEST"), "1") ||
-        access("/.dockerenv", F_OK)) return 2;
+        access("/.dockerenv", F_OK) || argc != 2) return 2;
+    char *end = NULL; errno = 0;
+    unsigned long y = strtoul(argv[1], &end, 10);
+    if (errno || argv[1][0] < '0' || argv[1][0] > '9' || *end || y >= 720) return 2;
     alarm(20); /* Bounds even a hung compositor roundtrip; no global process control. */
     struct wl_display *display = wl_display_connect(NULL);
     if (!display) return 3;
@@ -52,7 +56,7 @@ int main(void) {
     struct zwlr_virtual_pointer_v1 *pointer =
         zwlr_virtual_pointer_manager_v1_create_virtual_pointer_with_output(manager, NULL, output);
     if (!pointer) return 3;
-    zwlr_virtual_pointer_v1_motion_absolute(pointer, millis(), 640, 60, 1280, 720);
+    zwlr_virtual_pointer_v1_motion_absolute(pointer, millis(), 640, (uint32_t)y, 1280, 720);
     zwlr_virtual_pointer_v1_frame(pointer);
     if (wl_display_roundtrip(display) < 0) return 3;
     puts("MOVED"); fflush(stdout);

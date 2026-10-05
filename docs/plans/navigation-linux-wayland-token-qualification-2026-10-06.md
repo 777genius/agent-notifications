@@ -2,6 +2,10 @@
 
 This fixture implements the plan's click-time activation-token checkpoint. Native execution is pending; source review and syntax checks do not qualify the platform.
 
+The first native execution at source 0b965fb6261e768e8f08e0af12fd4cf3a939f1a4 compiled GTK and the strict C driver, started the private 1280x720 compositor and submitted one notification after registering the TEST sender. The sender's exit was collected. Mako configured a 600x52 surface, while the original fixed pointer coordinate used y=60. The pointer-enter gate timed out before CLICK authorization; the captured trace has no button events, the bus has no ActivateAction, and no callback/effect files exist. Passed remained false and exact owned-container removal/absence checks succeeded. Its pointer pipe acknowledgement was not retained, so no MOVED-output claim is made for this run.
+
+The corrected fixture derives Y from the actual configured height, still requiring the same-pointer enter before authorizing a press. Failure cleanup also retains remaining pointer-pipe output. This correction awaits a separate fresh native experiment; the failed evidence is not relabeled.
+
 Each run owns a private headless Sway compositor, Mako notification server, D-Bus session, immutable TEST application files and container. It collects the finite sender's exit before one virtual-pointer click. Direct Mako protocol tracing ties the entered surface/pointer, pressed serial, token setup and compositor response. Actual D-Bus signals and typed ActivateAction arguments are compared with the cold helper's before_emit observation and exactly one TEST effect.
 
 The evidence class is owned_process_protocol_trace. The compositor socket peer and notification D-Bus owner are checked, but Sway does not expose a public server-derived layer-surface PID contract. No surface-identity, token acceptance, focus, installed Codex client or visible chat claim follows from this fixture.
