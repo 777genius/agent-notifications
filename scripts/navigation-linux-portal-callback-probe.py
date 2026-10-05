@@ -97,7 +97,7 @@ class XResWindowOwner:
             self.x.XCloseDisplay(self.display); self.display = None
 
 
-def inside():
+def inside(restart=False, recovery=False):
     if os.environ.get('NAVIGATION_TEST_CONTAINER') != '1' or not Path('/.dockerenv').exists():
         raise RuntimeError('owned_container_required')
     evidence = Path('/evidence')
@@ -108,7 +108,7 @@ def inside():
     (root / 'fixture.marker').write_text('Linux portal TEST only\n')
     for name in ('home', 'data', 'config', 'cache', 'run'):
         (root / name).mkdir(mode=0o700)
-    env = dict(NAVIGATION_TEST_CONTAINER='1', PATH='/usr/bin:/bin:/opt/portal/libexec', HOME=str(root / 'home'), DISPLAY=':99',
+    env = dict(NAVIGATION_TEST_CONTAINER='1', NAVIGATION_RESTART_TEST='1' if restart else '0', PATH='/usr/bin:/bin:/opt/portal/libexec', HOME=str(root / 'home'), DISPLAY=':99',
                XDG_RUNTIME_DIR=str(root / 'run'), XDG_DATA_HOME=str(root / 'data'),
                XDG_CONFIG_HOME=str(root / 'config'), XDG_CACHE_HOME=str(root / 'cache'),
                XDG_DATA_DIRS='/opt/portal/share:/usr/share', XDG_CURRENT_DESKTOP='TEST', LANG='C.UTF-8')
@@ -125,6 +125,24 @@ def inside():
     desktop.write_text('[Desktop Entry]\nType=Application\nName=Navigation TEST\nDBusActivatable=true\nExec=' + execute + '\n')
     service = servicedir / (spec['appID'] + '.service')
     service.write_text('[D-BUS Service]\nName=' + spec['appID'] + '\nExec=' + execute + '\n')
+    fixtures, immutable = {}, {}
+    if restart:
+        # Independent A/B files remain readable; never replace A's spec with B's identity.
+        (root / 'fixtures').mkdir(mode=0o700)
+        for label in ('A', 'B'):
+            fixture = root / 'fixtures' / label; fixture.mkdir(mode=0o700)
+            (fixture / 'fixture.marker').write_text('Linux portal TEST only\n')
+            token = uuid.uuid4().hex
+            item = dict(appID='org.notification.NavigationTest' + token, nonce=token,
+                        title='Navigation TEST ' + token, helperSHA256=sha(helper))
+            dump(fixture / 'spec.json', item)
+            command = '/usr/bin/python3 ' + str(helper) + ' --service ' + str(fixture)
+            files = [fixture / 'spec.json', appdir / (item['appID'] + '.desktop'), servicedir / (item['appID'] + '.service')]
+            files[1].write_text('[Desktop Entry]\nType=Application\nName=Navigation TEST\nDBusActivatable=true\nExec=' + command + '\n')
+            files[2].write_text('[D-BUS Service]\nName=' + item['appID'] + '\nExec=' + command + '\n')
+            for file in files:
+                file.chmod(0o400); immutable[str(file.relative_to(root))] = sha(file)
+            fixtures[label] = (fixture, item)
     portalconfig = root / 'config/xdg-desktop-portal'
     portalconfig.mkdir()
     (portalconfig / 'portals.conf').write_text('[preferred]\ndefault=gtk\norg.freedesktop.impl.portal.Notification=gtk\n')
@@ -135,6 +153,13 @@ def inside():
                   'runner': sha(Path(__file__)), 'desktop': sha(desktop), 'service': sha(service)},
                   limitations=['Owned Xvfb/XTest click only; no human rendering acknowledgement',
                                'Backend/dunst restart, Wayland and actual client routes unqualified'])
+    report['scenario'] = 'daemon_restart_recovery_control' if recovery else ('daemon_restart_owner_invalidation' if restart else 'sender_death')
+    report['restartOwnerBindingQualified'] = False
+    report['immutableFixtureSHA256'] = immutable
+    if restart:
+        report['fixtures'] = {label: dict(path=str(fixture.relative_to(root)), appID=item['appID'], nonce=item['nonce']) for label, (fixture, item) in fixtures.items()}
+        report.pop('appID')
+        report['limitations'][1] = 'GTK/frontend restart, Wayland and actual client routes unqualified; owned dunst restart TEST only'
     children, streams = [], []
     window_owner = None
 
@@ -193,6 +218,197 @@ def inside():
             time.sleep(min(0.05, max(0, end - now())))
         raise RuntimeError(label + '_name_readiness_timeout_before_show')
 
+    def unique_owner(label, name, process):
+        wait_owned_name(label, name, process)
+        value = bus(label + '_unique', 'org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus.GetNameOwner', name)
+        match = re.fullmatch(r"\('(:[0-9]+\.[0-9]+)',\)\s*", value.stdout.decode())
+        if not match or process.poll() is not None:
+            raise RuntimeError(label + '_unique_owner_not_proven')
+        return match[1]
+
+    def start_ticks(process):
+        if process.poll() is not None:
+            raise RuntimeError('owned_process_exited')
+        return int(Path('/proc/' + str(process.pid) + '/stat').read_text().rsplit(')', 1)[1].split()[19])
+
+    def messages():
+        text = (root / 'monitor.stdout').read_text(errors='strict')
+        return [part for part in re.split(r'(?m)(?=^(?:method call|method return|signal|error) time=)', text) if part.strip()]
+
+    def notify_reply(label, item, owner, gtk_owner):
+        found = []
+        def lookup():
+            nonlocal found
+            calls = [part for part in messages() if part.startswith('method call ') and
+                     'interface=org.freedesktop.Notifications; member=Notify\n' in part and
+                     'sender=' + gtk_owner + ' ' in part.splitlines()[0] and
+                     'string "' + item['title'] + '"' in part and 'string "' + item['appID'] + '"' in part]
+            if len(calls) > 1:
+                raise RuntimeError('duplicate_native_Notify_no_retry')
+            if not calls: return False
+            serial = re.search(r' serial=([0-9]+) ', calls[0].splitlines()[0])
+            if not serial: raise RuntimeError('Notify_serial_missing')
+            replies = [part for part in messages() if part.startswith('method return ') and
+                       'sender=' + owner + ' ' in part.splitlines()[0] and
+                       'destination=' + gtk_owner + ' ' in part.splitlines()[0] and
+                       re.search(r'\breply_serial=' + serial[1] + r'(?:\s|$)', part.splitlines()[0])]
+            if len(replies) > 1: raise RuntimeError('ambiguous_Notify_reply')
+            if not replies: return False
+            value = re.fullmatch(r'\s+uint32 ([0-9]+)\s*', '\n'.join(replies[0].splitlines()[1:]))
+            if not value or int(value[1]) <= 0: raise RuntimeError('Notify_ID_reply_invalid')
+            found = dict(id=int(value[1]), requestSerial=int(serial[1]), requestSender=gtk_owner, replySender=owner,
+                         requestSHA256=hashlib.sha256(calls[0].encode()).hexdigest(), replySHA256=hashlib.sha256(replies[0].encode()).hexdigest())
+            return True
+        wait(lookup)
+        report[label + 'NativeNotification'] = found
+        dump(root / 'progress.json', report)
+        return found['id']
+
+    def send_fixture(label, fixture, item):
+        process = start(label, ['/usr/bin/python3', str(helper), '--sender', str(fixture)])
+        code = process.wait(timeout=15); exited = now()
+        report[label + 'Exit'] = dict(pid=process.pid, exitCode=code, collected=True, exitedBoot=exited)
+        dump(root / 'progress.json', report)
+        if code != 0 or not (fixture / 'submitted.json').exists() or not (fixture / 'registry-registered.json').exists():
+            raise RuntimeError(label + '_failed_no_retry')
+        value = bus(label + '_cold_owner', 'org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus.GetNameOwner', item['appID'], allow_failure=True)
+        if value.returncode == 0 or 'NameHasNoOwner' not in value.stderr.decode() or Path('/proc/' + str(process.pid)).exists():
+            raise RuntimeError(label + '_death_not_proven')
+        return process, exited
+
+    def restart_window(label, owned):
+        value = run(label + '_window', ['xdotool', 'search', '--sync', '--onlyvisible', '--class', '^Dunst$']).stdout.decode().split()
+        if len(value) != 1 or not value[0].isdigit() or window_owner.pid(value[0]) != owned.pid or owned.poll() is not None:
+            raise RuntimeError(label + '_window_owner_not_proven')
+        run(label + '_screenshot', ['import', '-window', value[0], str(root / (label + '.png'))])
+        report[label + 'Window'] = dict(windowID=value[0], serverDerivedPID=owned.pid, screenshotSHA256=sha(root / (label + '.png')))
+        return value[0]
+
+    def restart_scenario(dunst, backend, frontend):
+        first_owner = unique_owner('daemon_A', 'org.freedesktop.Notifications', dunst)
+        gtk_owner = unique_owner('gtk_restart', 'org.freedesktop.impl.portal.desktop.gtk', backend)
+        retained = {label: dict(pid=process.pid, startTicks=start_ticks(process)) for label, process in [('gtk', backend), ('frontend', frontend)]}
+        a_root, a_spec = fixtures['A']; b_root, b_spec = fixtures['B']
+        send_fixture('senderA', a_root, a_spec)
+        first_id = notify_reply('A', a_spec, first_owner, gtk_owner)
+        restart_window('A', dunst)
+        # Crash only this exact live Popen child; graceful close would erase GTK's old map.
+        if unique_owner('daemon_A_precrash', 'org.freedesktop.Notifications', dunst) != first_owner:
+            raise RuntimeError('daemon_A_owner_changed_before_crash')
+        dunst.kill(); code = dunst.wait(timeout=3)
+        report['daemonACrash'] = dict(pid=dunst.pid, collected=True, exitCode=code, exitedBoot=now())
+        if code != -9 or Path('/proc/' + str(dunst.pid)).exists(): raise RuntimeError('own_crash_not_proven')
+        second = start('dunst_B', ['dunst', '-config', str(dunstconfig)])
+        second_owner = unique_owner('daemon_B', 'org.freedesktop.Notifications', second)
+        if second_owner == first_owner: raise RuntimeError('daemon_owner_change_not_proven')
+        report['daemonOwners'] = dict(before=first_owner, after=second_owner, beforePID=dunst.pid, afterPID=second.pid)
+        sender_b, exited_b = send_fixture('senderB', b_root, b_spec)
+        second_id = notify_reply('B', b_spec, second_owner, gtk_owner)
+        report['numericIDReused'] = second_id == first_id
+        if not recovery and second_id != first_id: raise RuntimeError('inconclusive_numeric_ID_not_reused')
+        window = restart_window('B', second)
+        for label, process in [('gtk', backend), ('frontend', frontend)]:
+            if retained[label] != dict(pid=process.pid, startTicks=start_ticks(process)):
+                raise RuntimeError('backend_or_frontend_restarted')
+        if unique_owner('gtk_retained', 'org.freedesktop.impl.portal.desktop.gtk', backend) != gtk_owner:
+            raise RuntimeError('gtk_owner_changed')
+        report['retainedProcesses'] = retained
+        if recovery:
+            report['outcome'] = 'restart_recovery_pending_B_click'
+            return second, b_root, b_spec, sender_b, exited_b, False
+        if window_owner.pid(window) != second.pid or unique_owner('daemon_B_preremove', 'org.freedesktop.Notifications', second) != second_owner:
+            raise RuntimeError('daemon_B_identity_changed_before_remove')
+        remover = start('removeA', ['/usr/bin/python3', str(helper), '--remove', str(a_root)])
+        remove_code = remover.wait(timeout=10)
+        report['removeAExit'] = dict(pid=remover.pid, exitCode=remove_code, collected=True)
+        if remove_code != 0 or not (a_root / 'removed.json').exists(): raise RuntimeError('remove_A_failed_no_retry')
+        wait(lambda: any(part.startswith('method call ') and
+             'interface=org.freedesktop.portal.Notification; member=RemoveNotification\n' in part and
+             re.fullmatch(r'\s+string "' + a_spec['nonce'] + r'"\s*', '\n'.join(part.splitlines()[1:])) for part in messages()))
+        removal = [part for part in messages() if part.startswith('method call ') and
+                   'interface=org.freedesktop.portal.Notification; member=RemoveNotification\n' in part and
+                   re.fullmatch(r'\s+string "' + a_spec['nonce'] + r'"\s*', '\n'.join(part.splitlines()[1:]))]
+        if len(removal) != 1: raise RuntimeError('official_remove_A_not_unique')
+        remove_peer = re.search(r' sender=(:[0-9]+\.[0-9]+) ', removal[0].splitlines()[0])
+        registration = [part for part in messages() if remove_peer and part.startswith('method call ') and
+                        'sender=' + remove_peer[1] + ' ' in part.splitlines()[0] and
+                        'interface=org.freedesktop.host.portal.Registry; member=Register\n' in part and
+                        'string "' + a_spec['appID'] + '"' in part]
+        if len(registration) != 1: raise RuntimeError('remove_A_registered_peer_not_proven')
+        report['officialRemoveA'] = dict(peer=remove_peer[1], appID=a_spec['appID'], nonce=a_spec['nonce'])
+        close, close_serial = [], None
+        def close_request():
+            nonlocal close, close_serial
+            close = [part for part in messages() if part.startswith('method call ') and
+                     'interface=org.freedesktop.Notifications; member=CloseNotification\n' in part]
+            if len(close) > 1: raise RuntimeError('duplicate_CloseNotification')
+            if not close: return False
+            header = close[0].splitlines()[0]
+            if 'sender=' + gtk_owner + ' ' not in header or not ('destination=' + second_owner + ' ' in header or 'destination=org.freedesktop.Notifications ' in header) or not re.fullmatch(r'\s+uint32 ' + str(second_id) + r'\s*', '\n'.join(close[0].splitlines()[1:])):
+                raise RuntimeError('observed_CloseNotification_identity_or_ID_mismatch')
+            serial = re.search(r' serial=([0-9]+) ', close[0].splitlines()[0])
+            if not serial: raise RuntimeError('CloseNotification_serial_missing')
+            close_serial = int(serial[1])
+            return True
+
+        def optional_close_replies():
+            replies = [part for part in messages() if close_serial is not None and part.startswith('method return ') and
+                       'sender=' + second_owner + ' ' in part.splitlines()[0] and
+                       'destination=' + gtk_owner + ' ' in part.splitlines()[0] and
+                       re.search(r'\breply_serial=' + str(close_serial) + r'(?:\s|$)', part.splitlines()[0])]
+            if len(replies) > 1 or any('\n'.join(part.splitlines()[1:]).strip() for part in replies):
+                raise RuntimeError('CloseNotification_optional_reply_invalid')
+            return replies
+        close_observation_started = now()
+        try:
+            wait(close_request, seconds=2)
+        except RuntimeError as error:
+            # Correct suppression can produce no native Close. GTK's callback=NULL
+            # uses NO_REPLY_EXPECTED; actual close effects are observed separately.
+            if str(error) != 'bounded_wait_failed' or close:
+                raise
+        report['nativeCloseA'] = dict(observed=bool(close), newOwner=second_owner, numericID=second_id,
+                                     closeRequestSerial=close_serial,
+                                     requestSHA256=hashlib.sha256(close[0].encode()).hexdigest() if close else None,
+                                     observationStartedBoot=close_observation_started, observationEndedBoot=now(),
+                                     replyExpectedFromSource=False,
+                                     replyPolicyEvidence='GTK1.15.1 call_close callback=NULL; GLib2.80 public call uses NO_REPLY_EXPECTED',
+                                     absenceScope='bounded_monitor_observation_only; future_effects_unqualified')
+        observation_started, end, attempt = now(), now() + 2, 0
+        while True:
+            attempt += 1
+            visible = run('B_after_remove_window_' + str(attempt), ['xdotool', 'search', '--onlyvisible', '--class', '^Dunst$'], allow_failure=True, timeout=1)
+            closed = [part for part in messages() if part.startswith('signal ') and 'sender=' + second_owner + ' ' in part.splitlines()[0] and
+                      'destination=' + gtk_owner + ' ' in part.splitlines()[0] and
+                      'interface=org.freedesktop.Notifications; member=NotificationClosed\n' in part and
+                      re.fullmatch(r'\s+uint32 ' + str(second_id) + r'\s+uint32 3\s*', '\n'.join(part.splitlines()[1:]))]
+            if second.poll() is not None: raise RuntimeError('daemon_B_exited_during_remove')
+            if (visible.returncode == 1 and not visible.stdout.strip() and len(closed) == 1) or now() >= end: break
+            if visible.returncode not in (0, 1): raise RuntimeError('B_window_query_unknown')
+            time.sleep(min(0.05, max(0, end - now())))
+        replies = optional_close_replies()
+        report['nativeCloseA'].update(optionalReplyCount=len(replies), optionalReplySHA256=hashlib.sha256(replies[0].encode()).hexdigest() if replies else None)
+        report['removeObservation'] = dict(startedBoot=observation_started, endedBoot=now(), closedSignals=len(closed),
+                                          closedSignalSHA256=hashlib.sha256(closed[0].encode()).hexdigest() if len(closed) == 1 else None,
+                                          closedSignalDestination=gtk_owner if len(closed) == 1 else None, visibleWindows=visible.stdout.decode().split())
+        for label, process in [('gtk', backend), ('frontend', frontend)]:
+            if retained[label] != dict(pid=process.pid, startTicks=start_ticks(process)):
+                raise RuntimeError('backend_or_frontend_changed_after_remove')
+        if unique_owner('daemon_B_postremove', 'org.freedesktop.Notifications', second) != second_owner:
+            raise RuntimeError('daemon_B_owner_changed_after_remove')
+        if visible.returncode == 1 and not visible.stdout.strip() and len(closed) == 1 and close:
+            if any((fixture / name).exists() for fixture, _ in fixtures.values() for name in ('service-start.json', 'effect.json', 'receipt.json', 'action-events.jsonl')):
+                raise RuntimeError('unexpected_callback_during_remove')
+            report.update(outcome='incorrect_close_B_counterexample', passedScope='owned_restart_counterexample', passed=True)
+            return second, b_root, b_spec, sender_b, exited_b, True
+        if visible.returncode != 0 or visible.stdout.decode().split() != [window] or closed:
+            raise RuntimeError('B_visibility_after_remove_inconclusive')
+        if close and not replies:
+            report['outcome'] = 'observed_Close_B_survived_effect_unknown'
+            raise RuntimeError('observed_Close_without_reply_or_close_effect_no_click')
+        report['outcome'] = 'B_survived_remove_A_pending_click'
+        return second, b_root, b_spec, sender_b, exited_b, False
+
     try:
         for file in Path('/fixture-build').glob('*version.txt'):
             report[file.stem] = file.read_text().strip()
@@ -211,7 +427,7 @@ def inside():
         if not address.startswith('unix:'):
             raise RuntimeError('private_bus_unavailable_before_show')
         env['DBUS_SESSION_BUS_ADDRESS'] = address
-        monitor = start('monitor', ['dbus-monitor', '--session', "type='method_call',interface='org.freedesktop.Application'", "interface='org.freedesktop.Notifications'", "interface='org.freedesktop.host.portal.Registry'"])
+        monitor = start('monitor', ['dbus-monitor', '--session', "type='method_call',interface='org.freedesktop.Application'", "interface='org.freedesktop.Notifications'", "interface='org.freedesktop.host.portal.Registry'"] + (["type='method_return'", "type='method_call',interface='org.freedesktop.portal.Notification'"] if restart else []))
         dunst = start('dunst', ['dunst', '-config', str(dunstconfig)])
         wait_owned_name('dunst', 'org.freedesktop.Notifications', dunst)
         backend = start('gtk_backend', ['/usr/libexec/xdg-desktop-portal-gtk'])
@@ -236,88 +452,100 @@ def inside():
                 raise RuntimeError(label + '_not_owned_live_before_show')
         if any(process.poll() is not None for _, process in children):
             raise RuntimeError('owned_background_exited_before_show')
-        sender = start('sender', ['/usr/bin/python3', str(helper), '--sender', str(root)])
-        sender_code = sender.wait(timeout=15)  # Collected waitpid precedes the native click.
-        sender_exited = now()
-        report['senderExit'] = dict(pid=sender.pid, exitCode=sender_code, collected=True, exitedBoot=sender_exited)
-        dump(root / 'progress.json', report)
-        if sender_code != 0 or not (root / 'submitted.json').exists() or not (root / 'registry-registered.json').exists():
-            raise RuntimeError('sender_failed_no_retry')
-        owner = bus('cold_owner_before_click', 'org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus.GetNameOwner', spec['appID'], allow_failure=True)
-        if owner.returncode == 0 or 'NameHasNoOwner' not in owner.stderr.decode() or Path('/proc/' + str(sender.pid)).exists():
-            raise RuntimeError('sender_death_not_proven_no_click')
-        window = run('owned_window', ['xdotool', 'search', '--sync', '--onlyvisible', '--class', '^Dunst$'], timeout=5).stdout.decode().split()
-        if len(window) != 1 or not window[0].isdigit():
-            raise RuntimeError('owned_notification_window_not_unique_no_retry')
-        window = window[0]
-        properties = run('window_properties', ['xprop', '-id', window, '_NET_WM_PID', 'WM_CLASS'])
-        # Class is discovery only; identity comes from the private X server, not WM properties.
-        owner_pid = window_owner.pid(window)
-        report['windowOwnership'] = dict(windowID=window, serverDerivedPID=owner_pid, method='XRes_LOCAL_CLIENT_PID')
-        dump(root / 'progress.json', report)
-        if owner_pid != dunst.pid or dunst.poll() is not None:
-            raise RuntimeError('window_owner_not_proven_no_click')
-        geometry = run('window_geometry', ['xdotool', 'getwindowgeometry', '--shell', window]).stdout.decode()
-        dimensions = dict(re.findall(r'^(WIDTH|HEIGHT)=([0-9]+)$', geometry, re.MULTILINE))
-        width, height = int(dimensions.get('WIDTH', 0)), int(dimensions.get('HEIGHT', 0))
-        if not (20 <= width <= 1024 and 20 <= height <= 768):
-            raise RuntimeError('owned_window_geometry_invalid_no_click')
-        run('screenshot', ['import', '-window', window, str(root / 'pre-click.png')])
-        report['nativeClick'] = dict(windowID=window, ownerPID=dunst.pid, afterSenderExit=True, screenshotSHA256=sha(root / 'pre-click.png'))
-        dump(root / 'progress.json', report)
-        if window_owner.pid(window) != dunst.pid or dunst.poll() is not None:
-            raise RuntimeError('window_owner_changed_before_click')
-        # Exactly one XTest click through the owned GUI window; no action/signal synthesis.
-        run('one_native_click', ['xdotool', 'mousemove', '--window', window, str(width // 2), str(height // 2), 'click', '1'])
-        wait(lambda: (root / 'receipt.json').exists(), seconds=10)
-        receipt = json.loads((root / 'receipt.json').read_text())
-        callback = json.loads((root / 'service-start.json').read_text())
-        live_pid = bus('callback_owner_pid', 'org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus.GetConnectionUnixProcessID', spec['appID'])
-        owner_pid = re.search(r'uint32 ([0-9]+)', live_pid.stdout.decode())
-        current_ticks = int(Path('/proc/' + str(receipt['pid']) + '/stat').read_text().rsplit(')', 1)[1].split()[19])
-        if not owner_pid or int(owner_pid[1]) != receipt['pid'] or receipt['pid'] == sender.pid or callback['entryBoot'] <= sender_exited or callback['pid'] != receipt['pid'] or callback['startTicks'] != current_ticks or receipt['startTicks'] != current_ticks:
-            raise RuntimeError('cold_service_identity_not_proven')
-        # /proc starttime is a kernel BOOTTIME birth timestamp, quantized to clock ticks.
-        # Its lower bound must follow collected waitpid; overlapping ticks are inconclusive.
-        hz = os.sysconf('SC_CLK_TCK')
-        if hz <= 0:
-            raise RuntimeError('kernel_tick_frequency_invalid')
-        birth_lower = current_ticks / hz
-        report['kernelBirthProof'] = dict(startTicks=current_ticks, clockTicksPerSecond=hz,
-            lowerBoundBoot=birth_lower, upperBoundBoot=(current_ticks + 1) / hz,
-            senderExitedBoot=sender_exited, afterCollectedSenderExit=birth_lower >= sender_exited,
-            clockScope='kernel_proc_starttime_and_CLOCK_BOOTTIME; code_entry_is_not_birth')
-        dump(root / 'progress.json', report)
-        if birth_lower < sender_exited:
-            raise RuntimeError('kernel_birth_not_proven_after_sender_exit_tick_ambiguous')
-        if receipt['helperSHA256'] != spec['helperSHA256'] or not receipt['targetMatches'] or receipt['effectCount'] != 1 or receipt['enteredBoot'] - callback['entryBoot'] >= 15:
-            raise RuntimeError('callback_contract_rejected')
-        report['callback'] = receipt
-        try:
-            wait(lambda: not Path('/proc/' + str(receipt['pid'])).exists(), seconds=6)
-        except RuntimeError:
-            observation = dict(pid=receipt['pid'], expectedStartTicks=current_ticks, observedBoot=now())
-            try:
-                fields = Path('/proc/' + str(receipt['pid']) + '/stat').read_text().rsplit(')', 1)[1].split()
-                observation['observedStartTicks'] = int(fields[19])
-                observation['identityMatches'] = observation['observedStartTicks'] == current_ticks
-                if observation['identityMatches']:
-                    observation.update(state=fields[0], parentPID=int(fields[1]))
-            except (OSError, ValueError, IndexError) as error:
-                observation['readFailure'] = type(error).__name__
-            report['callbackExitObservation'] = observation
+        callback_root, closed = root, False
+        if restart:
+            dunst, callback_root, spec, sender, sender_exited, closed = restart_scenario(dunst, backend, frontend)
+        else:
+            sender, sender_exited = send_fixture('sender', root, spec)
+        if not closed:
+            window = run('owned_window', ['xdotool', 'search', '--sync', '--onlyvisible', '--class', '^Dunst$'], timeout=5).stdout.decode().split()
+            if len(window) != 1 or not window[0].isdigit():
+                raise RuntimeError('owned_notification_window_not_unique_no_retry')
+            window = window[0]
+            properties = run('window_properties', ['xprop', '-id', window, '_NET_WM_PID', 'WM_CLASS'])
+            # Class is discovery only; identity comes from the private X server, not WM properties.
+            owner_pid = window_owner.pid(window)
+            report['windowOwnership'] = dict(windowID=window, serverDerivedPID=owner_pid, method='XRes_LOCAL_CLIENT_PID')
             dump(root / 'progress.json', report)
-            raise
-        effect = json.loads((root / 'effect.json').read_text())
-        if effect['nonce'] != spec['nonce'] or effect['pid'] != receipt['pid'] or not effect['targetMatches']:
-            raise RuntimeError('effect_identity_mismatch')
-        actions = [json.loads(line) for line in (root / 'action-events.jsonl').read_text().splitlines()]
-        if len(actions) != 1 or (root / 'duplicate-rejected.json').exists():
-            raise RuntimeError('exact_one_effect_not_proven')
-        report['callback'] = receipt
-        report['callbackExited'] = True
-        report['passed'] = True
+            if owner_pid != dunst.pid or dunst.poll() is not None:
+                raise RuntimeError('window_owner_not_proven_no_click')
+            geometry = run('window_geometry', ['xdotool', 'getwindowgeometry', '--shell', window]).stdout.decode()
+            dimensions = dict(re.findall(r'^(WIDTH|HEIGHT)=([0-9]+)$', geometry, re.MULTILINE))
+            width, height = int(dimensions.get('WIDTH', 0)), int(dimensions.get('HEIGHT', 0))
+            if not (20 <= width <= 1024 and 20 <= height <= 768):
+                raise RuntimeError('owned_window_geometry_invalid_no_click')
+            run('screenshot', ['import', '-window', window, str(root / 'pre-click.png')])
+            report['nativeClick'] = dict(windowID=window, ownerPID=dunst.pid, afterSenderExit=True, screenshotSHA256=sha(root / 'pre-click.png'))
+            dump(root / 'progress.json', report)
+            if window_owner.pid(window) != dunst.pid or dunst.poll() is not None:
+                raise RuntimeError('window_owner_changed_before_click')
+            if restart and not recovery and not report['nativeCloseA']['observed'] and any(part.startswith('method call ') and 'interface=org.freedesktop.Notifications; member=CloseNotification\n' in part for part in messages()):
+                raise RuntimeError('late_CloseNotification_after_absence_observation_no_click')
+            # Exactly one XTest click through the owned GUI window; no action/signal synthesis.
+            run('one_native_click', ['xdotool', 'mousemove', '--window', window, str(width // 2), str(height // 2), 'click', '1'])
+            wait(lambda: (callback_root / 'receipt.json').exists(), seconds=10)
+            receipt = json.loads((callback_root / 'receipt.json').read_text())
+            callback = json.loads((callback_root / 'service-start.json').read_text())
+            live_pid = bus('callback_owner_pid', 'org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus.GetConnectionUnixProcessID', spec['appID'])
+            owner_pid = re.search(r'uint32 ([0-9]+)', live_pid.stdout.decode())
+            current_ticks = int(Path('/proc/' + str(receipt['pid']) + '/stat').read_text().rsplit(')', 1)[1].split()[19])
+            if not owner_pid or int(owner_pid[1]) != receipt['pid'] or receipt['pid'] == sender.pid or callback['entryBoot'] <= sender_exited or callback['pid'] != receipt['pid'] or callback['startTicks'] != current_ticks or receipt['startTicks'] != current_ticks:
+                raise RuntimeError('cold_service_identity_not_proven')
+            # /proc starttime is a kernel BOOTTIME birth timestamp, quantized to clock ticks.
+            # Its lower bound must follow collected waitpid; overlapping ticks are inconclusive.
+            hz = os.sysconf('SC_CLK_TCK')
+            if hz <= 0:
+                raise RuntimeError('kernel_tick_frequency_invalid')
+            birth_lower = current_ticks / hz
+            report['kernelBirthProof'] = dict(startTicks=current_ticks, clockTicksPerSecond=hz,
+                lowerBoundBoot=birth_lower, upperBoundBoot=(current_ticks + 1) / hz,
+                senderExitedBoot=sender_exited, afterCollectedSenderExit=birth_lower >= sender_exited,
+                clockScope='kernel_proc_starttime_and_CLOCK_BOOTTIME; code_entry_is_not_birth')
+            dump(root / 'progress.json', report)
+            if birth_lower < sender_exited:
+                raise RuntimeError('kernel_birth_not_proven_after_sender_exit_tick_ambiguous')
+            if receipt['helperSHA256'] != spec['helperSHA256'] or not receipt['targetMatches'] or receipt['effectCount'] != 1 or receipt['enteredBoot'] - callback['entryBoot'] >= 15:
+                raise RuntimeError('callback_contract_rejected')
+            report['callback'] = receipt
+            try:
+                wait(lambda: not Path('/proc/' + str(receipt['pid'])).exists(), seconds=6)
+            except RuntimeError:
+                observation = dict(pid=receipt['pid'], expectedStartTicks=current_ticks, observedBoot=now())
+                try:
+                    fields = Path('/proc/' + str(receipt['pid']) + '/stat').read_text().rsplit(')', 1)[1].split()
+                    observation['observedStartTicks'] = int(fields[19])
+                    observation['identityMatches'] = observation['observedStartTicks'] == current_ticks
+                    if observation['identityMatches']:
+                        observation.update(state=fields[0], parentPID=int(fields[1]))
+                except (OSError, ValueError, IndexError) as error:
+                    observation['readFailure'] = type(error).__name__
+                report['callbackExitObservation'] = observation
+                dump(root / 'progress.json', report)
+                raise
+            effect = json.loads((callback_root / 'effect.json').read_text())
+            if effect['nonce'] != spec['nonce'] or effect['pid'] != receipt['pid'] or not effect['targetMatches']:
+                raise RuntimeError('effect_identity_mismatch')
+            actions = [json.loads(line) for line in (callback_root / 'action-events.jsonl').read_text().splitlines()]
+            if len(actions) != 1 or (callback_root / 'duplicate-rejected.json').exists():
+                raise RuntimeError('exact_one_effect_not_proven')
+            report['callback'] = receipt
+            report['callbackExited'] = True
+            report['passed'] = True
+        if restart and not closed:
+            if any((fixtures['A'][0] / name).exists() for name in ('service-start.json', 'effect.json', 'receipt.json', 'action-events.jsonl')):
+                raise RuntimeError('A_callback_after_restart')
+            report['outcome'] = 'restart_recovery_one_B_callback' if recovery else 'B_survived_remove_A_and_one_B_callback'
+            report['passedScope'] = 'owned_restart_recovery_control' if recovery else 'owned_restart_and_recovery_control'
+            report['restartRecoveryControlPassed'] = True
+        if restart:
+            notify_count = sum(part.startswith('method call ') and 'interface=org.freedesktop.Notifications; member=Notify\n' in part for part in messages())
+            remove_count = sum(part.startswith('method call ') and 'interface=org.freedesktop.portal.Notification; member=RemoveNotification\n' in part for part in messages())
+            report['counts'] = dict(nativeNotify=notify_count, officialRemove=remove_count,
+                                   nativeClick=0 if closed else 1, expectedNotify=2, expectedRemove=0 if recovery else 1)
+            if notify_count != 2 or remove_count != (0 if recovery else 1):
+                raise RuntimeError('restart_transport_count_mismatch')
     except Exception as error:
+        report['passed'] = False
         report['failure'] = str(error)
         report['retryAllowed'] = False
     finally:
@@ -333,11 +561,12 @@ def inside():
             report['processes'][next(i for i, p in enumerate(report['processes']) if p['pid'] == process.pid)]['reapedExitCode'] = process.returncode
         for stream in streams:
             stream.close()
-        report['showAttempted'] = (root / 'show-attempt.json').exists()
-        report['addReturned'] = (root / 'submitted.json').exists()
+        report['showAttempted'] = any(path.exists() for path in ([fixture / 'show-attempt.json' for fixture, _ in fixtures.values()] if restart else [root / 'show-attempt.json']))
+        report['addReturned'] = any(path.exists() for path in ([fixture / 'submitted.json' for fixture, _ in fixtures.values()] if restart else [root / 'submitted.json']))
         report['artifactSHA256'] = {str(path.relative_to(root)): sha(path) for path in root.rglob('*') if path.is_file()}
         report['helperUnchanged'] = sha(helper) == spec['helperSHA256']
-        report['passed'] = report['passed'] and report['helperUnchanged']
+        report['immutableFixturesUnchanged'] = all(sha(root / name) == digest for name, digest in immutable.items())
+        report['passed'] = report['passed'] and report['helperUnchanged'] and report['immutableFixturesUnchanged']
         dump(evidence / 'native-evidence.json', report)
     return 0 if report['passed'] else 1
 
@@ -346,13 +575,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--inside-test-container', action='store_true')
     parser.add_argument('--build-and-execute-test', action='store_true')
+    restart_modes = parser.add_mutually_exclusive_group()
+    restart_modes.add_argument('--restart-owner-invalidation-test', action='store_true')
+    restart_modes.add_argument('--restart-recovery-control-test', action='store_true')
     parser.add_argument('--portal-source-archive', type=Path)
     parser.add_argument('--portal-source-sha256')
     parser.add_argument('--portal-source-provenance', type=Path)
     parser.add_argument('--docker-via-sudo', action='store_true')
     args = parser.parse_args()
     if args.inside_test_container:
-        return inside()
+        return inside(restart=os.environ.get('NAVIGATION_RESTART_TEST') == '1', recovery=os.environ.get('NAVIGATION_RESTART_RECOVERY') == '1')
     if not args.build_and_execute_test or not args.portal_source_archive or not args.portal_source_provenance or not re.fullmatch(r'[0-9a-f]{64}', args.portal_source_sha256 or ''):
         parser.error('explicit TEST opt-in and primary-verified portal1.22.1 archive/checksum required')
     if sha(args.portal_source_archive) != args.portal_source_sha256:
@@ -378,7 +610,8 @@ def main():
     container_user = str(os.getuid()) + ':' + str(os.getgid())
     report = dict(sourceSHA256={name: sha(context / name) for name in names}, portalSourceSHA256=args.portal_source_sha256,
                   portalSourceDeclaredCommit=COMMIT, sourceProvenance=provenance,
-                  ownerToken=token, image=image, container=container, containerUser=container_user, containerInit=True, commands=[], passed=False)
+                  ownerToken=token, image=image, container=container, containerUser=container_user, containerInit=True,
+                  scenario='daemon_restart_recovery_control' if args.restart_recovery_control_test else ('daemon_restart_owner_invalidation' if args.restart_owner_invalidation_test else 'sender_death'), commands=[], passed=False)
 
     def command(label, argv, timeout):
         try:
@@ -400,7 +633,8 @@ def main():
         report['imageID'] = command('image_identity', docker + ['image', 'inspect', image, '--format', '{{.Id}}'], 10).stdout.decode().strip()
         result = command('run', docker + ['run', '--init', '--name', container, '--user', container_user, '--label', 'navigation.test=true', '--label', 'navigation.owner=' + token,
             '--network=none', '--cap-drop=ALL', '--security-opt=no-new-privileges', '--pids-limit=128', '--memory=2g', '--cpus=2',
-            '-e', 'NAVIGATION_TEST_CONTAINER=1', '-v', str(root) + ':/evidence:rw', image], 60)
+            '-e', 'NAVIGATION_TEST_CONTAINER=1', '-e', 'NAVIGATION_RESTART_TEST=' + ('1' if args.restart_owner_invalidation_test or args.restart_recovery_control_test else '0'),
+            '-e', 'NAVIGATION_RESTART_RECOVERY=' + ('1' if args.restart_recovery_control_test else '0'), '-v', str(root) + ':/evidence:rw', image], 60)
         report['passed'] = result.returncode == 0 and json.loads((root / 'native-evidence.json').read_text()).get('passed') is True
     except Exception as error:
         report['failure'] = str(error); report['retryAllowed'] = False
