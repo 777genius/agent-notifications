@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import tempfile
 import time
 import gi
 
@@ -23,10 +24,12 @@ def identity():
 
 
 def save(root, name, value):
-    with (root / name).open('x') as stream:
+    # Publish complete JSON atomically while preserving exclusive creation.
+    with tempfile.NamedTemporaryFile(mode='w', dir=root, prefix='.' + name + '.', suffix='.tmp') as stream:
         json.dump(value, stream)
         stream.flush()
         os.fsync(stream.fileno())
+        os.link(stream.name, root / name)
 
 
 def main():

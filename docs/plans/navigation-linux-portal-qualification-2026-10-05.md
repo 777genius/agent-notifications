@@ -32,3 +32,9 @@ The final runner hash is `a535859f375a3ecd5cd1e32e469fcbfb489b944c409a93bdacf2dd
 Prepare the official archive and source provenance with `gh`, then run `scripts/navigation-linux-portal-callback-probe.py --build-and-execute-test --portal-source-archive ARCHIVE --portal-source-sha256 SHA256 --portal-source-provenance MANIFEST`. Use `--docker-via-sudo` only when required by the isolated host's Docker configuration. The manifest requires the exact commit, version, archive hash and preparation command; the runner preserves captured source, commands, logs and failed outcomes in a fresh TEST evidence directory.
 
 This result qualifies only the owned X11 callback and cold TEST activation. It does not establish human-visible chat navigation, selected installed client identity, Wayland activation, backend or notification-server restart, nor the complete P5l adapter. The production Linux route remains unchanged until those contracts are demonstrated.
+
+## Atomic evidence publication review fix
+
+The callback helper now writes and fsyncs JSON in a same-directory temporary file, then publishes it with exclusive `os.link`. Polling readers cannot observe an empty or partial receipt, and duplicate effect publication still raises `FileExistsError` without replacing existing bytes. A source-captured deterministic filesystem experiment paused serialization: the old helper exposed a partial target, while the revised helper hid the target until complete JSON was available. Duplicate, serialization-failure and fsync-failure cases preserved the target and removed temporary files. This verifies atomic visibility, not power-loss durability.
+
+The revised helper hash is `aa6bf02da8203abc13cee890c869cbd44392986e261f76a2271e20e170015199`; operator hash is `d195171e5397f91a4542928a3b9e75b5c2ec9bf3494a6a40837fc62ffd581764`. The native result above remains bound to its original helper snapshot; it is not relabeled as a run of the revised helper.
