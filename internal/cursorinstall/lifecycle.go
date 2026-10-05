@@ -38,20 +38,32 @@ func (a *Adapter) PreflightActivation(env clients.Env, req domain.ActivationRequ
 	if err := a.verifyInvocation(); err != nil {
 		return err
 	}
-	original, err := env.NativeConfig.ReadExactFile(f.HooksPath)
+	return a.preflightRecorded(env.NativeConfig, req, f)
+}
+
+// preflightRecorded checks vendor mechanics after physical admission and plan
+// validation. It reads only; it neither captures authority nor begins an effect.
+func (a *Adapter) preflightRecorded(kernel nativeconfig.Kernel, req domain.ActivationRequest, f domain.CursorDeliveryFacts) error {
+	original, err := kernel.ReadExactFile(f.HooksPath)
 	if err != nil {
 		return err
 	}
 	objects := req.Plan.PreviousNativeObjects
+	if req.VerifyOnly && req.Replacing {
+		objects = req.PreviousNativeObjects
+	}
 	previous, err := predecessor(f, objects)
 	if err != nil {
 		return err
 	}
-	// UAP dry-run preflight also sets VerifyOnly, including before first install.
-	// A read-only retry consumes acknowledged ownership; a new plan still needs
-	// the frozen exact basis and complete pure receipt before intent is granted.
-	if req.VerifyOnly && previous != nil && cursorhooks.VerifyOwned(original.Body, previous) == nil {
-		return nil
+	// Public new-plan dry-run preflight sets only VerifyOnly. Acknowledged
+	// read-only activation also sets Replacing and supplies request ownership.
+	// Its historical pre-effect basis differs from the installed bytes.
+	if req.VerifyOnly && req.Replacing {
+		if previous == nil {
+			return fmt.Errorf("cursor verification requires acknowledged ownership")
+		}
+		return cursorhooks.VerifyOwned(original.Body, previous)
 	}
 	_, err = a.validateFrozen(original, f, objects)
 	return err
