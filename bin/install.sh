@@ -558,7 +558,7 @@ start_lock_heartbeat() {
             # its orphaned child could keep a demonstrably dead owner's lock
             # fresh forever.
             lock_owner_alive "$owner_dir" || exit 0
-            touch "$owner_dir/heartbeat" 2>/dev/null || exit 0
+            touch -c "$owner_dir/heartbeat" 2>/dev/null || exit 0
             sleep "$interval" || exit 0
         done
     ) </dev/null >/dev/null 2>&1 &
