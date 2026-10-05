@@ -23,7 +23,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/directoryidentity"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/dirswap"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/profileauthority"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/codex"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/ports"
 
@@ -35,6 +39,7 @@ import (
 	"github.com/777genius/agent-notifications/internal/agentnotify/registration"
 	"github.com/777genius/agent-notifications/internal/codexsetup"
 	"github.com/777genius/agent-notifications/internal/config"
+	"github.com/777genius/agent-notifications/internal/cursorinstall"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/testenv"
 )
@@ -8198,5 +8203,291 @@ func TestCodexHooksTargetPreservesMaintenanceWarning(t *testing.T) {
 	target, err := codexHooksTarget(codexsetup.Result{HooksPath: "/TEST/codex/hooks.json", Warnings: []string{warning}}, nil)
 	if err != nil || target.Outcome != "completed" || target.Reason != "/TEST/codex/hooks.json" || len(target.Warnings) != 1 || target.Warnings[0] != warning {
 		t.Fatalf("committed hooks lost maintenance diagnostics: %+v %v", target, err)
+	}
+}
+
+// Regression: explicit Cursor was rejected, lost its profile on intent retry,
+// and inherited the unsupported standalone hooks unit. Omitted selection must
+// continue to mean the original Claude/Codex pair at the existing picker.
+func TestCursorExplicitSelectionAndIntent(t *testing.T) {
+	defaults, err := normalizeAgents([]string{"claude", "codex"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaultHooks, defaultNotify := selectedUnits(Request{Action: ActionInstall}, defaults)
+	if fmt.Sprint(defaultHooks) != "[claude codex]" || fmt.Sprint(defaultNotify) != "[claude codex]" {
+		t.Fatal("original default units changed")
+	}
+	if omitted, err := normalizeAgents(nil); err != nil || len(omitted) != 0 {
+		t.Fatal("omitted selection discovered a client")
+	}
+	agents, err := normalizeAgents([]string{"cursor", "codex", "cursor"})
+	if err != nil || fmt.Sprint(agents) != "[cursor codex]" {
+		t.Fatalf("selection: %v %v", agents, err)
+	}
+	if _, err := normalizeAgents([]string{"local"}); err == nil {
+		t.Fatal("Local admitted")
+	}
+	root := t.TempDir()
+	req := Request{Action: ActionInstall, Agents: []string{"cursor", "codex"}, CursorConfig: filepath.Join(root, "TEST-cursor"), CodexHome: filepath.Join(root, "TEST-codex"), InstallationID: "TEST-install", BindingIDs: map[string]string{"cursor": "TEST-binding"}}
+	hooks, notify := selectedUnits(req, agents)
+	if fmt.Sprint(hooks) != "[codex]" || fmt.Sprint(notify) != "[cursor codex]" {
+		t.Fatalf("units: %v %v", hooks, notify)
+	}
+	targets := wizardIntentTargets(req, hooks, notify)
+	if len(targets) != 2 {
+		t.Fatalf("targets: %+v", targets)
+	}
+	var cursorTarget portablesetup.IntentTarget
+	for _, target := range targets {
+		if target.Client == "cursor" {
+			cursorTarget = target
+		}
+	}
+	if cursorTarget.Profile != req.CursorConfig || cursorTarget.BindingID != "TEST-binding" || fmt.Sprint(cursorTarget.Units) != "[agent-notify]" {
+		t.Fatalf("Cursor target: %+v", cursorTarget)
+	}
+	intent := portablesetup.Intent{Action: "install", Targets: targets}
+	restored, restoredAgents, err := restoreOmittedFromIntent(Request{Action: ActionInstall}, nil, intent)
+	if err != nil || restored.CursorConfig != req.CursorConfig || restored.BindingIDs["cursor"] != "TEST-binding" || !sameClientUnits(requestClientUnits(req, agents), requestClientUnits(restored, restoredAgents)) {
+		t.Fatalf("restore: %+v %v %v", restored, restoredAgents, err)
+	}
+	conflicting := Request{Action: ActionInstall, CursorConfig: filepath.Join(root, "TEST-other")}
+	if _, _, err := restoreOmittedFromIntent(conflicting, nil, intent); !errors.Is(err, portablesetup.ErrIntentConflict) {
+		t.Fatalf("changed profile accepted: %v", err)
+	}
+	retry := retryRequestFromIntent(req, intent)
+	if retry.CursorConfig != req.CursorConfig {
+		t.Fatal("retry lost explicit profile")
+	}
+	req.CursorAgentNotify = boolPtr(false)
+	_, notify = selectedUnits(req, agents)
+	if fmt.Sprint(notify) != "[codex]" || unitFlagsOmitted(req) {
+		t.Fatal("Cursor optout lost")
+	}
+	restored = applyIntentUnits(Request{}, map[string]unitSelection{"cursor": {}, "codex": {hooks: true, notify: true}})
+	if restored.CursorAgentNotify == nil || *restored.CursorAgentNotify {
+		t.Fatal("mixed retry broadened Cursor optout")
+	}
+}
+
+// This fixture supplies inert TEST files, not a native installation, physical
+// token or affirmative qualification. No file is executed and no store is seeded.
+func cursorWizardRequest(t *testing.T) (Request, string) {
+	t.Helper()
+	root := t.TempDir()
+	profile := filepath.Join(root, "TEST-cursor")
+	pkg := filepath.Join(root, "TEST-package")
+	for _, dir := range []string{profile, pkg} {
+		if err := os.Mkdir(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"name":"agent-notify","version":"1.0.0"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	helper := filepath.Join(root, "TEST-observer")
+	body := []byte("inert TEST observer bytes; never execute")
+	if err := os.WriteFile(helper, body, 0700); err != nil {
+		t.Fatal(err)
+	}
+	req := Request{Action: ActionInstall, Agents: []string{"cursor"}, CursorConfig: profile, PackageRoot: pkg,
+		Helper: helper, ClientExecutables: map[string]string{"cursor": helper},
+		ControlRoot: filepath.Join(root, "control"), RuntimeRoot: filepath.Join(root, "runtime"),
+		GlobalConfig: filepath.Join(root, "config.json"), InstallationID: "TEST-install", Primary: "primary"}
+	req.CursorAuthority = &cursorinstall.Authority{ProfileRoot: profile, CursorVersion: "2026.09.28-64d2043", QualificationID: "TEST-negative-only-NOT-qualified", Executable: helper, ExecutableDigest: fmt.Sprintf("sha256:%x", sha256.Sum256(body)), Selector: filepath.Join(root, "TEST-unpublished-selector.json"), ObjectID: "TEST-stop"}
+	return req, root
+}
+
+// Regression: raw agent selection required Cursor authority even when its only
+// unit was off, preventing the enabled Codex unit's real public reservation.
+func TestCursorWizardOptOutAllowsCodexReservation(t *testing.T) {
+	req, root := cursorWizardRequest(t)
+	req.Agents = []string{"cursor", "codex"}
+	req.Hooks = boolPtr(false)
+	req.CursorAgentNotify, req.CodexAgentNotify = boolPtr(false), boolPtr(true)
+	req.CursorAuthority = nil
+	req.CodexHome = filepath.Join(root, "TEST-codex")
+	if err := os.Mkdir(req.CodexHome, 0700); err != nil {
+		t.Fatal(err)
+	}
+	agents, err := normalizeAgents(req.Agents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hooks, notify := selectedUnits(req, agents)
+	if len(hooks) != 0 || fmt.Sprint(notify) != "[codex]" {
+		t.Fatalf("mixed optout units: %v %v", hooks, notify)
+	}
+	mat, err := materializer(req, installruntime.InstalledSnapshot{}, req.RuntimeRoot)
+	if err != nil {
+		t.Fatalf("disabled Cursor blocked Codex composition: %v", err)
+	}
+	eng, err := installerEngine(mat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eng.SupportsClient("cursor") || !eng.SupportsClient("codex") || !eng.SupportsClient("claude") || eng.SupportsClient("local") {
+		t.Fatal("disabled Cursor changed default registry")
+	}
+	if err := reserveClientBindings(&req, mat, notify); err != nil {
+		t.Fatal(err)
+	}
+	reserved, err := eng.ReserveIdentity(uapinstaller.IdentityRequest{ClientID: "codex", InstallationID: req.InstallationID, DeclaredName: "agent-notify", ClientConfigRoot: req.CodexHome})
+	if err != nil || reserved.TargetPath == "" || reserved.InstallationID != req.InstallationID || reserved.BindingID == "" || len(req.BindingIDs) != 1 || req.BindingIDs["codex"] != reserved.BindingID || reserved.BindingID != domain.ComputeClientBindingID(req.InstallationID, "codex", reserved.Scope, reserved.TargetPath) {
+		t.Fatalf("Codex reservation lost: %+v bindings=%v %v", reserved, req.BindingIDs, err)
+	}
+	for _, profile := range []string{req.CursorConfig, req.CodexHome} {
+		entries, err := os.ReadDir(profile)
+		if err != nil || len(entries) != 0 {
+			t.Fatalf("reservation mutated TEST profile %s: %v %v", profile, entries, err)
+		}
+	}
+	for _, path := range []string{req.ControlRoot, req.RuntimeRoot, req.GlobalConfig, filepath.Join(root, "uap"), filepath.Join(root, "TEST-unpublished-selector.json")} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("optout reservation mutated %s: %v", path, err)
+		}
+	}
+}
+
+// Regression: installerEngine discarded Materializer.Registry and silently
+// restored defaults. Real public reservation must use the same selected adapter
+// and target as the materializer, without staging or granting installed authority.
+func TestCursorWizardSharedRegistryAndDeniedInstall(t *testing.T) {
+	req, root := cursorWizardRequest(t)
+	snap := installruntime.InstalledSnapshot{Ledger: installruntime.Ledger{ID: "TEST-component", Owner: "existing-installer"}}
+	mat, err := materializer(req, snap, req.RuntimeRoot)
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		if err == nil || err.Error() != "cursor selected tuple is unqualified" {
+			t.Fatalf("unsupported tuple admitted or wrong refusal: %v", err)
+		}
+		for _, path := range []string{req.ControlRoot, req.RuntimeRoot, req.GlobalConfig, filepath.Join(root, "uap"), filepath.Join(req.CursorConfig, "hooks.json"), filepath.Join(req.CursorConfig, "plugins"), req.CursorAuthority.Selector} {
+			if _, err := os.Lstat(path); !os.IsNotExist(err) {
+				t.Fatalf("unsupported tuple mutated %s: %v", path, err)
+			}
+		}
+		t.Log("unsupported tuple refusal/no effects PASS; Linux reservation/installed/native NOT_RUN")
+		return
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := mat.Registry.Lookup(domain.ClientCursor)
+	if !ok {
+		t.Fatal("selected adapter absent")
+	}
+	if _, ok := adapter.(*cursorinstall.Adapter); !ok {
+		t.Fatalf("historical adapter substituted: %T", adapter)
+	}
+	eng, err := installerEngine(mat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !eng.SupportsClient("cursor") || !eng.SupportsClient("codex") || !eng.SupportsClient("claude") || eng.SupportsClient("local") {
+		t.Fatal("registry composition changed")
+	}
+	id, err := identity(req, snap, req.RuntimeRoot, mat, false)
+	if err != nil || id.InstallationID != req.InstallationID {
+		t.Fatalf("identity: %+v %v", id, err)
+	}
+	if err := reserveClientBindings(&req, mat, []portable.Integration{portable.Cursor}); err != nil {
+		t.Fatal(err)
+	}
+	reserved, err := eng.ReserveIdentity(uapinstaller.IdentityRequest{ClientID: "cursor", InstallationID: req.InstallationID, DeclaredName: "agent-notify", ClientConfigRoot: req.CursorConfig})
+	wantPath := filepath.Join(req.CursorConfig, "plugins", "local", domain.ComputePhysicalArtifactID("agent-notify", req.InstallationID))
+	if err != nil || reserved.TargetPath != wantPath || reserved.BindingID == "" || req.BindingIDs["cursor"] != reserved.BindingID || reserved.BindingID != domain.ComputeClientBindingID(req.InstallationID, "cursor", reserved.Scope, wantPath) {
+		t.Fatalf("reservation differs: %+v %v", reserved, err)
+	}
+	materializeReq := portablesetup.MaterializeRequest{Integration: portable.Cursor, Identity: id, ClientConfigRoot: req.CursorConfig, ClientExecutable: clientExecutable(req, portable.Cursor), PackageRoot: req.PackageRoot}
+	if _, err := mat.Install(testCtx(t), materializeReq); !errors.Is(err, portablesetup.ErrPreflight) {
+		t.Fatalf("pending public ProjectArgs link bypassed: %v", err)
+	}
+	if _, err := mat.PreviewPlan(testCtx(t), materializeReq); !errors.Is(err, portablesetup.ErrPreflight) {
+		t.Fatalf("preview half-enabled: %v", err)
+	}
+	for _, path := range []string{req.ControlRoot, req.RuntimeRoot, filepath.Join(root, "uap"), filepath.Join(req.CursorConfig, "hooks.json"), filepath.Join(req.CursorConfig, "plugins")} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("denied route mutated %s: %v", path, err)
+		}
+	}
+	token, captureErr := profileauthority.Capture(testCtx(t), req.CursorConfig)
+	if errors.Is(captureErr, directoryidentity.ErrUnsupported) {
+		if !token.IsZero() {
+			t.Fatal("unsupported root granted physical token")
+		}
+		prepared, err := eng.Prepare(testCtx(t), uapinstaller.Request{Operation: uapinstaller.OpInstall, ClientID: "cursor", InstallationID: req.InstallationID, PackageRoot: req.PackageRoot, ClientConfigRoot: req.CursorConfig, ClientExecutable: clientExecutable(req, portable.Cursor)})
+		if prepared != nil {
+			_ = prepared.Close()
+			t.Fatal("unsupported original root prepared")
+		}
+		if !errors.Is(err, directoryidentity.ErrUnsupported) {
+			t.Fatalf("public Prepare lost physical refusal: %v", err)
+		}
+		for _, path := range []string{req.ControlRoot, req.RuntimeRoot, filepath.Join(root, "uap"), filepath.Join(req.CursorConfig, "hooks.json"), filepath.Join(req.CursorConfig, "plugins")} {
+			if _, err := os.Lstat(path); !os.IsNotExist(err) {
+				t.Fatalf("unsupported Prepare mutated %s: %v", path, err)
+			}
+		}
+		t.Log("physical positive/installed/native NOT_RUN: unsupported original TEST ancestry")
+	} else if captureErr != nil {
+		t.Fatal(captureErr)
+	} else {
+		t.Log("installed/native NOT_RUN: pending public ProjectArgs link; capture alone is not installation authority")
+	}
+}
+
+// Regression: a supplied empty or reduced registry must not fall back to
+// Claude/Codex; only nil retains that original default composition.
+func TestWizardInstallerExplicitRegistry(t *testing.T) {
+	req, _ := cursorWizardRequest(t)
+	req.Agents = []string{"codex"}
+	mat, err := materializer(req, installruntime.InstalledSnapshot{}, req.RuntimeRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"nil", "empty", "codex"} {
+		mat.Registry = nil
+		if kind == "empty" {
+			mat.Registry, err = clients.NewRegistry()
+		}
+		if kind == "codex" {
+			mat.Registry, err = clients.NewRegistry(codex.New())
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		eng, err := installerEngine(mat)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if eng.SupportsClient("codex") != (kind != "empty") || eng.SupportsClient("claude") != (kind == "nil") || eng.SupportsClient("cursor") || eng.SupportsClient("local") {
+			t.Fatalf("%s registry broadened", kind)
+		}
+	}
+}
+
+func TestCursorWizardMissingOrChangedFactsDenied(t *testing.T) {
+	for _, kind := range []string{"missing", "profile", "observer", "digest", "version"} {
+		t.Run(kind, func(t *testing.T) {
+			req, root := cursorWizardRequest(t)
+			switch kind {
+			case "missing":
+				req.CursorAuthority = nil
+			case "profile":
+				req.CursorConfig = root
+			case "observer":
+				req.CursorAuthority.Executable = filepath.Join(root, "TEST-other")
+			case "digest":
+				req.CursorAuthority.ExecutableDigest = "sha256:wrong"
+			case "version":
+				req.CursorAuthority.CursorVersion = "2026.10.01"
+			}
+			if _, err := materializer(req, installruntime.InstalledSnapshot{}, req.RuntimeRoot); err == nil {
+				t.Fatal("missing or changed fixed facts admitted")
+			}
+			if _, err := os.Lstat(filepath.Join(root, "uap")); !os.IsNotExist(err) {
+				t.Fatalf("denied facts wrote store: %v", err)
+			}
+		})
 	}
 }
