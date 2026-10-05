@@ -292,7 +292,22 @@ def inside():
             raise RuntimeError('kernel_birth_not_proven_after_sender_exit_tick_ambiguous')
         if receipt['helperSHA256'] != spec['helperSHA256'] or not receipt['targetMatches'] or receipt['effectCount'] != 1 or receipt['enteredBoot'] - callback['entryBoot'] >= 15:
             raise RuntimeError('callback_contract_rejected')
-        wait(lambda: not Path('/proc/' + str(receipt['pid'])).exists(), seconds=6)
+        report['callback'] = receipt
+        try:
+            wait(lambda: not Path('/proc/' + str(receipt['pid'])).exists(), seconds=6)
+        except RuntimeError:
+            observation = dict(pid=receipt['pid'], expectedStartTicks=current_ticks, observedBoot=now())
+            try:
+                fields = Path('/proc/' + str(receipt['pid']) + '/stat').read_text().rsplit(')', 1)[1].split()
+                observation['observedStartTicks'] = int(fields[19])
+                observation['identityMatches'] = observation['observedStartTicks'] == current_ticks
+                if observation['identityMatches']:
+                    observation.update(state=fields[0], parentPID=int(fields[1]))
+            except (OSError, ValueError, IndexError) as error:
+                observation['readFailure'] = type(error).__name__
+            report['callbackExitObservation'] = observation
+            dump(root / 'progress.json', report)
+            raise
         effect = json.loads((root / 'effect.json').read_text())
         if effect['nonce'] != spec['nonce'] or effect['pid'] != receipt['pid'] or not effect['targetMatches']:
             raise RuntimeError('effect_identity_mismatch')
@@ -363,7 +378,7 @@ def main():
     container_user = str(os.getuid()) + ':' + str(os.getgid())
     report = dict(sourceSHA256={name: sha(context / name) for name in names}, portalSourceSHA256=args.portal_source_sha256,
                   portalSourceDeclaredCommit=COMMIT, sourceProvenance=provenance,
-                  ownerToken=token, image=image, container=container, containerUser=container_user, commands=[], passed=False)
+                  ownerToken=token, image=image, container=container, containerUser=container_user, containerInit=True, commands=[], passed=False)
 
     def command(label, argv, timeout):
         try:
@@ -383,7 +398,7 @@ def main():
         if build.returncode != 0:
             raise RuntimeError('image_build_failed_before_show')
         report['imageID'] = command('image_identity', docker + ['image', 'inspect', image, '--format', '{{.Id}}'], 10).stdout.decode().strip()
-        result = command('run', docker + ['run', '--name', container, '--user', container_user, '--label', 'navigation.test=true', '--label', 'navigation.owner=' + token,
+        result = command('run', docker + ['run', '--init', '--name', container, '--user', container_user, '--label', 'navigation.test=true', '--label', 'navigation.owner=' + token,
             '--network=none', '--cap-drop=ALL', '--security-opt=no-new-privileges', '--pids-limit=128', '--memory=2g', '--cpus=2',
             '-e', 'NAVIGATION_TEST_CONTAINER=1', '-v', str(root) + ':/evidence:rw', image], 60)
         report['passed'] = result.returncode == 0 and json.loads((root / 'native-evidence.json').read_text()).get('passed') is True

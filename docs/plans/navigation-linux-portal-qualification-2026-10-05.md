@@ -1,6 +1,6 @@
 # Linux portal callback qualification
 
-Status: native callback experiment pending; production navigation remains unqualified.
+Status: owned X11 callback and cold TEST activation passed; production navigation remains unqualified.
 
 This fixture tests the public notification portal using a finite sender and a cold D-Bus-activated TEST application. It does not open Codex or another installed client. The frontend is xdg-desktop-portal 1.22.1 at commit `1d20fadc304f6601452b5db65ed91197dba77041`, built from the publisher archive with SHA256 `d4879ddb3d65ff1a8f19187497e6f13dc5d267bcac404a5d501218be355753d3`. The archive's 198 relevant tracked files were compared to the commit without differences. Meson 1.12.1 is pinned; the image records the actual Ubuntu package candidates and installed package versions.
 
@@ -19,8 +19,16 @@ The first private run built the frontend successfully but could not read the 070
 
 The subsequent run sent a genuine Notify through GTK, collected sender exit 0 and received AddNotification success, but did not click: searching by `_NET_WM_PID` timed out. Dunst 1.9.2 does not set that property. The XRes check replaces that unsupported property assumption while retaining window ownership. Old evidence remains failed and unchanged; the revised scenario uses a fresh container and nonce.
 
+The XRes scenario then produced actual ActionInvoked and ActivateAction, but its cold helper rejected a redundant `--gapplication-service` argument. Explicit Gio `IS_SERVICE` already selects service mode; removing that argument fixed the helper. A further run obtained one matching callback and effect but failed the process-disappearance assertion. Its orphan/zombie cause was not recorded and remains a hypothesis. Docker `--init` supplies an orphan reaper; the mandatory exit assertion was retained, with identity-checked failure diagnostics.
+
+## Successful source-bound result
+
+[Sanitized evidence](../evidence/navigation/2026-10-05/native-linux-portal-callback.json) records the final separate scenario. Sender PID 93 was collected with exit 0 before the single click. XRes bound the visible window to owned dunst PID 16. The portal cold-activated callback PID 109; its kernel birth lower bound followed collected sender exit. The callback received the matching bounded target, created one effect, exited, and its process disappeared. The native monitor recorded exactly one Notify, ActionInvoked and ActivateAction. Tracked processes were reaped and exact container ID/name absence was verified. Both native and outer reports passed; source snapshots remained unchanged.
+
+The final runner hash is `a535859f375a3ecd5cd1e32e469fcbfb489b944c409a93bdacf2ddaf9f98ddae`; helper hash is `1de7a028a31a193b34a3095f8f9de9ea4cb23714b5399446f0e7c2b129ad1269`. Evidence includes the Dockerfile hash, actual GTK 1.15.1/dunst 1.9.2/libXres 1.2.1 package versions, raw artifact hashes and the previous failed execution without init. Inspected libXres 1.2.3 headers describe the 1.2 API; the native run records its actual installed library and extension version. Failed runs were not relabeled as passed.
+
 ## Reproduction and remaining qualification
 
 Prepare the official archive and source provenance with `gh`, then run `scripts/navigation-linux-portal-callback-probe.py --build-and-execute-test --portal-source-archive ARCHIVE --portal-source-sha256 SHA256 --portal-source-provenance MANIFEST`. Use `--docker-via-sudo` only when required by the isolated host's Docker configuration. The manifest requires the exact commit, version, archive hash and preparation command; the runner preserves captured source, commands, logs and failed outcomes in a fresh TEST evidence directory.
 
-A successful result would qualify only this owned X11 callback and cold TEST activation. It would not establish human-visible chat navigation, selected installed client identity, Wayland activation, backend or notification-server restart, nor the complete P5l adapter. The production Linux route remains unchanged until those contracts are demonstrated.
+This result qualifies only the owned X11 callback and cold TEST activation. It does not establish human-visible chat navigation, selected installed client identity, Wayland activation, backend or notification-server restart, nor the complete P5l adapter. The production Linux route remains unchanged until those contracts are demonstrated.

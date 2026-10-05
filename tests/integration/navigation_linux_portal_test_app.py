@@ -83,7 +83,7 @@ def main():
     action.connect('activate', opened); app.add_action(action)
     app.connect('startup', lambda application: application.hold())
     GLib.timeout_add(15000, lambda: (app.quit(), False)[1])
-    return app.run([spec['appID'], '--gapplication-service'])
+    return app.run([spec['appID']])
 
 
 if __name__ == '__main__':
