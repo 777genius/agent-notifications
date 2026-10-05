@@ -21,9 +21,9 @@ jobs:
       matrix:
         include:
           - go: '1.25'
-            os: macos-15
+            os: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && 'macos-15' || vars.CI_MACOS_15_RUNNER || 'macos-15' }}
           - go: '1.26'
-            os: macos-26
+            os: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && 'macos-26' || vars.CI_MACOS_26_RUNNER || 'macos-26' }}
 
     steps:
       - name: Checkout code
@@ -112,7 +112,7 @@ jobs:
 
   swift-test:
     name: Swift notifier tests
-    runs-on: macos-15
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && 'macos-15' || vars.CI_MACOS_15_RUNNER || 'macos-15' }}
     timeout-minutes: 30
 
     steps:
