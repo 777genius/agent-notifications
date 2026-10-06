@@ -486,7 +486,12 @@ func TestCursorCallerAcknowledgedTokenAndMatchingPendingRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stagedDelivery, err := (providers.Stager{Registry: selectedRegistry, Paths: pathpolicy.Policy{}, SnapshotBuilder: packagesnapshot.Builder{TempRoot: filepath.Join(root, "TEST-stager")}}).StageWithPluginData(ctx, envelope, delivery, "TEST-public-pre-native", domain.CompatibilityHints{}, dataReceipt.Locator)
+	// SnapshotBuilder creates a temporary child; its TempRoot must already exist.
+	stagerRoot := filepath.Join(root, "TEST-stager")
+	if err := os.Mkdir(stagerRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	stagedDelivery, err := (providers.Stager{Registry: selectedRegistry, Paths: pathpolicy.Policy{}, SnapshotBuilder: packagesnapshot.Builder{TempRoot: stagerRoot}}).StageWithPluginData(ctx, envelope, delivery, "TEST-public-pre-native", domain.CompatibilityHints{}, dataReceipt.Locator)
 	if err != nil {
 		t.Fatal(err)
 	}
