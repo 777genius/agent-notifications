@@ -98,13 +98,44 @@ async function main(): Promise<void> {
   binary = join(root, 'navigation-native-probe.exe'); copyFileSync(built, binary);
   evidence.root = root; evidence.nonce = nonce;
   evidence.binarySHA256 = createHash('sha256').update(readFileSync(binary)).digest('hex');
+  const diagnosticFlag = process.env.NAVIGATION_WINDOWS_PREFLIGHT_ONLY;
+  if (diagnosticFlag !== undefined && diagnosticFlag !== '0' && diagnosticFlag !== '1') {
+    throw new Error('invalid preflight-only flag');
+  }
+  // Missing flag stays read-only; native submission requires the explicit '0' mode.
+  const diagnosticOnly = diagnosticFlag !== '0';
+  evidence.diagnosticOnly = diagnosticOnly;
+  if (diagnosticOnly) {
+    evidence.scope = 'Windows TEST read-only Center policy and input desktop preflight';
+    evidence.noShowProved = true;
+  }
+  const policyStep = run('center-policy', 10_000);
+  if (existsSync(join(root, 'center-policy.json'))) evidence.centerPolicy = read('center-policy.json');
+  requireSuccess(policyStep);
+  const policy = evidence.centerPolicy as Json | undefined;
+  if (!policy || policy.pid !== policyStep.pid || policy.nonce !== nonce || policy.lookupComplete !== true
+      || policy.registryView !== 'native64' || policy.effectiveShellPolicyProved !== false
+      || typeof policy.configuredDisabled !== 'boolean') throw new Error('Center policy evidence invalid');
   const preflight = run('preflight', 15_000);
   if (existsSync(join(root, 'preflight.json'))) evidence.preflight = read('preflight.json');
+  const desktop = evidence.preflight as Json | undefined;
+  if (!desktop || desktop.pid !== preflight.pid || desktop.nonce !== nonce) throw new Error('desktop preflight correlation invalid');
   if (preflight.status === 3) {
     evidence.status = 'unavailable'; throw new Error('Windows client/input desktop/Shell prerequisite unavailable');
   }
   requireSuccess(preflight);
-  if ((evidence.preflight as Json).ready !== true) throw new Error('preflight not ready');
+  if (desktop.ready !== true || desktop.connectionStateKnown !== true || desktop.connectionState !== 0
+      || desktop.connectionStateQuerySucceeded !== true || desktop.connectionStateError !== 0) {
+    throw new Error('active connected desktop preflight not ready');
+  }
+  if (diagnosticOnly) {
+    evidence.status = 'diagnostic_complete'; evidence.noShowProved = true; exitCode = 0;
+    return;
+  }
+  if (policy.configuredDisabled) {
+    evidence.status = 'unavailable'; evidence.noShowProved = true;
+    throw new Error('Center disable policy configured; no settings changed or submission attempted');
+  }
   // This records submission intent only. Native terminal records establish the Show count.
   installed = true; evidence.submissionIntent = true; evidence.showAttempts = null;
   evidence.showCallOutcome = 'unknown'; evidence.nativeEffectUncertain = true;
@@ -169,7 +200,7 @@ try {
     }
   }
   if (root) {
-    for (const name of ['preflight.json', 'shortcut-location.json', 'aumid-identity.json', 'sender.json', 'sender-failure.json', 'show-outcome.json', 'submitted.json', 'callback-started.json', 'callback.json', 'ui-candidate.json', 'ui-invoke.json', 'center-open.json']) {
+    for (const name of ['center-policy.json', 'preflight.json', 'shortcut-location.json', 'aumid-identity.json', 'sender.json', 'sender-failure.json', 'show-outcome.json', 'submitted.json', 'callback-started.json', 'callback.json', 'ui-candidate.json', 'ui-invoke.json', 'center-open.json']) {
       if (!existsSync(join(root, name))) continue;
       try { evidence[name] = read(name); } catch (error: unknown) { evidence[`${name}ReadError`] = String(error); }
     }
