@@ -225,3 +225,26 @@ Read-only hardlinks preserve storage but are not an adversarial immutability
 boundary against the owner UID; before/after hash gates qualify this controlled
 TEST fixture only. Source reviews and Python syntax checks do not prove native
 boot or client behavior. A distinct captured one-shot native stage follows.
+
+
+## Actual offline native attempt: failed
+
+One captured attempt used the reviewed probe `95502e...` and guest `e3003f...`.
+KVM was enabled; the guest powered off itself and QEMU was collected with exit 0.
+The operator reports exact-container removal and unchanged controlled inputs.
+These facts do not qualify application behavior. The original probe failed its
+line-start frame parser because getty placed its prompt before the completion
+frame on the same line. A read-only replay recovered one complete SHA-matching
+frame, without booting the guest again or changing the original failed record.
+
+The recovered guest result also fails: `actual_renderer_evidence_absent`. Client
+launch was attempted, but renderer restrictions, full client sandbox, rendered
+window, focus and navigation remain unqualified. Guest cleanup reports the owned
+cgroup empty and kernel exit for all 11 tracked processes. The independent raw
+review accepted publication as negative evidence, with operator-reported input
+and container facts distinguished from locally replayed serial/QMP facts.
+
+The public projection is `linux-selected-client-offline-negative.json`. The parser
+fix retains the negative guest payload before semantic validation, preserves
+unique-frame/size/base64/hash gates, and passes three wire regression tests plus
+independent source review. No second native attempt has been made.
