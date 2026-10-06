@@ -42,7 +42,35 @@ $securityModule = Import-Module Microsoft.PowerShell.Security -PassThru -ErrorAc
 PreparationPhase 'security_after'
 PreparationPhase 'context_before'
 PreparationPhase 'context_read_before'
-$contextText = Get-Content -LiteralPath $ContextFile -Raw -Encoding UTF8
+# Owned context IO bypasses provider-based reads, not later certificate/SDK providers.
+# This is a bounded input contract; any cold-module cost in later phases remains measured.
+function ReadOwnedUtf8([string]$Path, [int]$Limit) {
+  $file = [IO.FileInfo]::new($Path)
+  if (!$file.Exists -or ($file.Attributes -band ([IO.FileAttributes]::ReparsePoint -bor [IO.FileAttributes]::Directory)) -or
+      $file.Length -le 0 -or $file.Length -gt $Limit) { throw 'invalid bounded owned input' }
+  $stream = [IO.FileStream]::new($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+  try {
+    $length = $stream.Length
+    if ($length -ne $file.Length -or $length -le 0 -or $length -gt $Limit) { throw 'owned input length changed' }
+    $bytes = [byte[]]::new([int]$length)
+    $offset = 0
+    while ($offset -lt $bytes.Length) {
+      $read = $stream.Read($bytes, $offset, $bytes.Length - $offset)
+      if ($read -le 0) { throw 'truncated owned input' }
+      $offset += $read
+    }
+    if ($stream.ReadByte() -ne -1 -or $stream.Length -ne $length) { throw 'owned input grew' }
+    $file.Refresh()
+    if (!$file.Exists -or $file.Length -ne $length -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'owned input changed' }
+    return [Text.UTF8Encoding]::new($false, $true).GetString($bytes)
+  } finally { $stream.Dispose() }
+}
+$contextPath = [IO.Path]::GetFullPath($ContextFile)
+$contextRoot = [IO.Path]::GetDirectoryName($contextPath)
+$contextDirectory = [IO.DirectoryInfo]::new($contextRoot)
+if ([IO.Path]::GetFileName($contextPath) -cne 'operator-context.json' -or !$contextDirectory.Exists -or
+    ($contextDirectory.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'invalid owned context path' }
+$contextText = ReadOwnedUtf8 $contextPath 65536
 PreparationPhase 'context_read_after'
 PreparationPhase 'context_decode_before'
 $c = $contextText | ConvertFrom-Json
@@ -50,11 +78,13 @@ PreparationPhase 'context_decode_after'
 PreparationPhase 'context_path_before'
 $r = [IO.Path]::GetFullPath($c.root)
 if ($c.nonce -notmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' -or
-    (Split-Path -Leaf $r) -cne ('navigation-windows-test-' + $c.nonce)) { throw 'invalid TEST context' }
-if ((Get-Item -LiteralPath $r).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'reparsed TEST root' }
+    [IO.Path]::GetFileName($r) -cne ('navigation-windows-test-' + $c.nonce) -or
+    $r -cne $contextRoot) { throw 'invalid TEST context' }
+$rootDirectory = [IO.DirectoryInfo]::new($r)
+if (!$rootDirectory.Exists -or ($rootDirectory.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'reparsed TEST root' }
 PreparationPhase 'context_path_after'
 PreparationPhase 'context_marker_before'
-if ((Get-Content -LiteralPath (Join-Path $r '.owned-test-root') -Raw).TrimEnd() -cne ('TEST navigation Windows ' + $c.nonce)) { throw 'TEST marker mismatch' }
+if ((ReadOwnedUtf8 ([IO.Path]::Combine($r, '.owned-test-root')) 256).TrimEnd() -cne ('TEST navigation Windows ' + $c.nonce)) { throw 'TEST marker mismatch' }
 PreparationPhase 'context_marker_after'
 PreparationPhase 'context_identity_before'
 $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -63,7 +93,7 @@ PreparationPhase 'context_identity_after'
 PreparationPhase 'context_state_path_before'
 $subject = 'CN=NavigationTest-' + $c.nonce
 $name = 'NavigationTest.' + $c.nonce.Replace('-', '')
-$stateFile = Join-Path $r 'package-operator-state.json'
+$stateFile = [IO.Path]::Combine($r, 'package-operator-state.json')
 PreparationPhase 'context_state_path_after'
 PreparationPhase 'context_after'
 function HashFile($p) { return (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLowerInvariant() }
