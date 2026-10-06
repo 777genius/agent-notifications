@@ -27,5 +27,31 @@ class DiagnosticBudgetTest(unittest.TestCase):
         self.assertEqual(omitted, 1)
 
 
+class RendererRoleHintTest(unittest.TestCase):
+    def test_real_argv_and_padded_process_title(self):
+        self.assertEqual(guest.renderer_role_hint(
+            [b'/usr/lib/chatgpt/ChatGPT', b'--type=renderer', b'--other']), 'argv')
+        self.assertEqual(guest.renderer_role_hint(
+            [b'/usr/lib/chatgpt/ChatGPT --type=renderer --other', b'', b'']), 'process_title')
+
+    def test_ambiguous_or_embedded_roles_are_rejected(self):
+        cases = [
+            [], [b'/another/ChatGPT', b'--type=renderer'],
+            [b'/usr/lib/chatgpt/ChatGPT', b'--type=renderer', b'--type=utility'],
+            [b'/usr/lib/chatgpt/ChatGPT', b'--type=renderer', b'--type=renderer'],
+            [b'/usr/lib/chatgpt/ChatGPT --type=rendererX'],
+            [b'/usr/lib/chatgpt/ChatGPT --type=utility --type=renderer'],
+            [b'/usr/lib/chatgpt/ChatGPT --type=renderer --type=utility'],
+            [b'/another/ChatGPT --type=renderer'],
+            [b'/usr/lib/chatgpt/ChatGPT --type=renderer --other\t--type=utility'],
+            [b'/usr/lib/chatgpt/ChatGPT --type=renderer --other\n--type=utility'],
+            [b'/usr/lib/chatgpt/ChatGPT --type=renderer --embedded=--type=utility'],
+            [b'/usr/lib/chatgpt/ChatGPT --type=renderer', b'--extra'],
+        ]
+        for command in cases:
+            with self.subTest(command=command):
+                self.assertIsNone(guest.renderer_role_hint(command))
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -314,3 +314,24 @@ serialized-budget correction. Guest SHA256
 probe `4c3c088cc970398f610ccdd12e37fbd1ec213a4ee1c9e13c547948b7f7d8075f`;
 operator `5ecf205bd5b492ce4d5bfe82aec21fae6c50e226700271ba73eed55c501f4743`.
 Both fixed guest guards agree. These are source/test facts, not native acceptance.
+
+## Process-title diagnostic and bounded role correction
+
+The distinct diagnostic-source native run completed with the original negative
+verdict retained in `linux-selected-client-role-diagnostic-negative.json`.
+Three held executable incarnations had renderer-prefixed command strings,
+seccomp mode 2, one filter, NoNewPrivs 1, zero effective capabilities and separate
+PID/user namespaces. Exact standalone renderer argv flags were absent. These
+failure observations are diagnostic only and do not retrospectively qualify the
+client or navigation. The owned container was removed and frozen inputs unchanged.
+
+Role discovery now accepts exact executable argv with a unique renderer flag,
+or a single nonempty, padded title beginning with the exact executable and
+renderer role at a space/end boundary. Any additional role substring is rejected.
+Mutable argv/title remains only a role hint; kernel incarnation, executable
+identity/hash, repeated observations and restriction checks stay mandatory.
+The regression suite covers the observed padded representation and ambiguous
+roles, including tab/newline/embedded variants. Four role/budget and three frame
+tests pass. Three independent source reviews accepted guest SHA256
+`dd5c4b86cebe8acf56028381acac2fe823b1f1fe7b4870ab26dcf1a7378fedc4`
+after fixing one extra-role parsing defect. A fresh native attempt is required.

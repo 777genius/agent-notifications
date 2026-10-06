@@ -53,6 +53,20 @@ def public_snapshot(item):
     return dict(item, command=[part.decode('utf-8', errors='replace') for part in item['command']])
 
 
+def renderer_role_hint(command):
+    """Mutable argv is a role hint only; kernel identity/restrictions remain mandatory."""
+    parts = [part for part in command if part]
+    roles = [part for part in parts[1:] if part.startswith(b'--type=')]
+    if len(parts) > 1:
+        return 'argv' if parts[0] == bytes(EXE) and roles == [b'--type=renderer'] else None
+    # Electron can overwrite argv memory with one padded process-title string.
+    prefix = bytes(EXE) + b' --type=renderer'
+    if len(parts) == 1 and (parts[0] == prefix or parts[0].startswith(prefix + b' ')):
+        if b'--type=' not in parts[0][len(prefix):]:
+            return 'process_title'
+    return None
+
+
 def bounded_diagnostics(observations):
     """Keep optional JSON observations within 16 KiB, including escaping."""
     selected, omitted, used = [], 0, 2
@@ -226,7 +240,7 @@ def main():
                 for pid, (_, saved) in list(handles.items()):
                     try:
                         current = snapshot(pid)
-                        if current['startTicks'] == saved['startTicks'] and b'--type=renderer' in current['command']:
+                        if current['startTicks'] == saved['startTicks'] and renderer_role_hint(current['command']):
                             renderers.append(current)
                     except (FileNotFoundError, ProcessLookupError): pass
                 if renderers: break
@@ -254,6 +268,8 @@ def main():
                         commandPrefixBase64=base64.b64encode(command[:256]).decode(),
                         commandBytes=len(command), commandSHA256=hashlib.sha256(command).hexdigest(),
                         exactRendererArgumentPresent=b'--type=renderer' in current['command'],
+                        nonemptyCommandArgumentCount=sum(bool(part) for part in current['command']),
+                        rendererRoleHint=renderer_role_hint(current['command']),
                         status=current['status'], namespaces=current['namespaces'],
                         appArmor=current['appArmor'][:256])
                 except (OSError, RuntimeError) as error:
