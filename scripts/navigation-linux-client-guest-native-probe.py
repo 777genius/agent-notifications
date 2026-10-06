@@ -25,6 +25,23 @@ def sha(path):
     return digest.hexdigest()
 
 
+def decode_guest_frame(serial_bytes):
+    """One bounded complete hash-checked frame, even after a serial getty prompt."""
+    marker = b'NAVIGATION_TEST_CLIENT_V1 '
+    if len(serial_bytes) > 16 * 1024 * 1024 or serial_bytes.count(marker) != 1:
+        raise RuntimeError('unique_bounded_guest_completion_required')
+    start = serial_bytes.index(marker)
+    frame, terminator, _ = serial_bytes[start:].partition(b'\n')
+    frame = frame.rstrip(b'\r')
+    if not terminator or len(frame) > 128 * 1024:
+        raise RuntimeError('complete_bounded_guest_frame_required')
+    _, claimed, encoded = frame.split(b' ', 2)
+    payload = base64.b64decode(encoded, validate=True)
+    if hashlib.sha256(payload).hexdigest().encode() != claimed:
+        raise RuntimeError('guest_completion_hash_mismatch')
+    return payload
+
+
 def main():
     if os.environ.get('NAVIGATION_GUEST_NATIVE_TEST') != '1' or os.getuid() != 1000 or not Path('/.dockerenv').exists():
         raise RuntimeError('explicit_owned_nonroot_container_required')
@@ -196,20 +213,13 @@ def main():
             serial_bytes = serial.read(16 * 1024 * 1024 + 1)
         if len(serial_bytes) > 16 * 1024 * 1024:
             raise RuntimeError('serial_read_budget_exceeded')
-        frames = [line for line in serial_bytes.splitlines()
-                  if line.startswith(b'NAVIGATION_TEST_CLIENT_V1 ')]
-        if len(frames) != 1 or len(frames[0]) > 128 * 1024:
-            raise RuntimeError('unique_bounded_guest_completion_required')
-        _, claimed, encoded = frames[0].split(b' ', 2)
-        payload = base64.b64decode(encoded, validate=True)
-        if hashlib.sha256(payload).hexdigest().encode() != claimed:
-            raise RuntimeError('guest_completion_hash_mismatch')
+        payload = decode_guest_frame(serial_bytes)
         guest = json.loads(payload)
         report['guestResult'] = guest
+        (ROOT / 'guest-result.json').write_bytes(payload)
         if not isinstance(guest, dict) or guest.get('passed') is not True or guest.get('scope') != report['scope'] or guest.get('sourceSHA256') != report['guestSourceSHA256'] or guest.get('clientLaunchAttempted') is not True or guest.get('notificationAttempted') is not False or guest.get('observedRendererRestrictionsQualified') is not True or guest.get('cleanupPassed') is not True or any(guest.get(key) is not False for key in ('clientSandboxQualified', 'renderedClientQualified', 'navigationQualified', 'focusQualified')):
             raise RuntimeError('guest_native_contract_failed')
         report['guestClientLaunchOutcome'] = 'observed_once'
-        (ROOT / 'guest-result.json').write_bytes(payload)
         report['passed'] = True
     except Exception as error:
         report['failure'] = type(error).__name__ + ': ' + str(error)
