@@ -27,7 +27,8 @@ const setupRecords: Record<string, Json> = {};
 const setupNames = ['oobe-setup-intent.json', 'oobe-setup-result.json', 'oobe-setup-after-preflight.json',
   ...Array.from({ length: 5 }, (_, index) => [
     ...['armed', 'returned', 'progress'].map(phase => `oobe-setup-${index}-${phase}.json`),
-    ...['before', 'after'].flatMap(phase => ['preflight', 'after-preflight', 'intent', 'uia']
+    ...['before', ...Array.from({ length: 8 }, (_, observation) => `after-${observation}`)]
+      .flatMap(phase => ['preflight', 'after-preflight', 'intent', 'uia']
       .map(kind => `oobe-setup-${index}-${phase}-${kind}.json`)),
   ]).flat()];
 function read(name: string): Json {
@@ -118,13 +119,14 @@ function setupRecord(name: string): Json {
       || record.architecture !== 'ARM64') throw new Error(`missing/source-mismatched setup ${name}`);
   return record;
 }
-function setupSnapshot(prefix: string, entered: number): Json {
+function setupSnapshot(prefix: string, entered: number, allowDisabled = false): Json {
   const census = setupRecord(`${prefix}-uia.json`), intent = setupRecord(`${prefix}-intent.json`);
   if (census.snapshotReadOnly !== true || census.readOnly !== false || census.diagnosticOnly !== false
       || census.actorInvocationsBeforeSnapshot !== entered || census.invokeAttempted !== (entered > 0)
       || census.available !== true || census.rootStable !== true || census.walkCompleted !== true
       || census.truncated !== false || census.deadlineExpired !== false || census.errors !== 0 || census.providerSkips !== 0
-      || census.verifiedOwners !== 1 || census.privacyPanes !== 1 || census.eligiblePrivacyButtons !== 1
+      || census.verifiedOwners !== 1 || census.privacyPanes !== 1 || census.matchingPrivacyButtons !== 1
+      || ![0, 1].includes(Number(census.eligiblePrivacyButtons)) || !allowDisabled && census.eligiblePrivacyButtons !== 1
       || census.sameUserSession !== true || census.verifiedImageLeaf !== 'wwahost.exe'
       || census.windowClass !== 'Windows.UI.Core.CoreWindow' || census.censusAttempts !== 1
       || census.showAttempts !== 0 || census.inputAttempted !== false || census.installAttempted !== false
@@ -179,14 +181,15 @@ function setupSnapshot(prefix: string, entered: number): Json {
     semantic.push([privateParent, row.elementName, row.automationId, row.className, row.controlType,
       row.enabled, row.offscreen, row.rectangle, row.nameTruncated, row.automationIdTruncated,
       row.classNameTruncated, row.invokePatternAvailable]);
-    if (row.automationId === 'OobeSettingsAcceptButton' && row.controlType === 50000 && row.enabled === true
+    if (row.automationId === 'OobeSettingsAcceptButton' && row.controlType === 50000
         && row.offscreen === false && row.invokePatternAvailable === true && row.nameTruncated === false
         && row.automationIdTruncated === false && Number(row.rectangle[0]) < Number(row.rectangle[2])
         && Number(row.rectangle[1]) < Number(row.rectangle[3])
         && ['Next, tab through all privacy settings to continue', 'Accept'].includes(String(row.elementName))) buttons.push(row);
   }
   const digest = createHash('sha256').update(JSON.stringify(semantic)).digest('hex');
-  if (panes !== 1 || buttons.length !== 1 || digest !== census.semanticStateSHA256) {
+  if (panes !== 1 || buttons.length !== 1 || digest !== census.semanticStateSHA256
+      || census.eligiblePrivacyButtons !== Number(buttons[0]?.enabled)) {
     throw new Error('independent privacy state/unique button binding failed');
   }
   return { ...census, selectedButton: buttons[0] };
@@ -206,7 +209,8 @@ function verifySetup(step: Step): void {
   evidence.invokeEffectUncertain = result.invokeEffectUncertain;
   evidence.invokeCallsEntered = result.invokeCallsEntered;
   if (intent.maxNextCalls !== 4 || intent.maxAcceptCalls !== 1 || intent.helperBudgetMs !== 60000
-      || intent.cooperativeUIBudgetMs !== 5000 || intent.retryAllowed !== false) throw new Error('finite setup intent invalid');
+      || intent.cooperativeUIBudgetMs !== 5000 || intent.maxAfterObservations !== 8
+      || intent.afterObservationBudgetMs !== 5000 || intent.retryAllowed !== false) throw new Error('finite setup intent invalid');
   requireSuccess(step);
   if (result.setupQualified !== true || result.phase !== 'complete' || result.readOnly !== false
       || !Number.isInteger(next) || next < 0 || next > 4 || result.acceptCallsEntered !== 1 || count !== next + 1
@@ -219,7 +223,7 @@ function verifySetup(step: Step): void {
       || result.nativeCallbackQualified !== false || result.navigationQualified !== false || result.processQuiescenceQualified !== false) {
     throw new Error('known finite setup completion required');
   }
-  let previous: Json | undefined;
+  let previous: Json | undefined; let afterCensuses = 0;
   for (let index = 0; index < count; index++) {
     const prefix = `oobe-setup-${index}`, before = setupSnapshot(`${prefix}-before`, index);
     const armed = setupRecord(`${prefix}-armed.json`), returned = setupRecord(`${prefix}-returned.json`);
@@ -239,16 +243,38 @@ function verifySetup(step: Step): void {
       throw new Error('setup intent/return/fresh progression chain invalid');
     }
     if (accept) {
-      if (progress.afterStateSHA256 !== null) throw new Error('Accept requires window disappearance, not guessed subtree');
-    } else {
-      const after = setupSnapshot(`${prefix}-after`, index + 1);
-      if (after.semanticStateSHA256 === before.semanticStateSHA256 || progress.afterStateSHA256 !== after.semanticStateSHA256
-          || ['foregroundPID', 'foregroundCreatedUtcTicks', 'foregroundHWND'].some(key => after[key] !== before[key])) {
-        throw new Error('distinct fresh same-owner OOBE progression unproved');
+      if (progress.afterStateSHA256 !== null || progress.afterSnapshotPrefix !== null
+          || progress.afterObservationCount !== 0 || progress.afterObservationElapsedMs !== 0) {
+        throw new Error('Accept requires window disappearance, not guessed subtree');
       }
-      previous = after;
+    } else {
+      const observations = Number(progress.afterObservationCount);
+      if (!Number.isInteger(observations) || observations < 1 || observations > 8
+          || !Number.isInteger(progress.afterObservationElapsedMs) || Number(progress.afterObservationElapsedMs) < 0
+          || Number(progress.afterObservationElapsedMs) >= 5000
+          || progress.afterSnapshotPrefix !== `${prefix}-after-${observations - 1}`) throw new Error('finite observation bounds invalid');
+      let deadline: number | undefined;
+      for (let observation = 0; observation < observations; observation++) {
+        const after = setupSnapshot(`${prefix}-after-${observation}`, index + 1, true), button = after.selectedButton as Json;
+        if (!Number.isSafeInteger(after.startedBootMs) || !Number.isSafeInteger(after.observationDeadlineBootMs)
+            || Number(after.observationDeadlineBootMs) <= Number(after.startedBootMs)
+            || Number(after.observationDeadlineBootMs) - Number(after.startedBootMs) > 5000
+            || Number(after.elapsedMs) >= Number(after.observationDeadlineBootMs) - Number(after.startedBootMs)
+            || deadline !== undefined && after.observationDeadlineBootMs !== deadline
+            || after.semanticStateSHA256 === before.semanticStateSHA256
+            || ['foregroundPID', 'foregroundCreatedUtcTicks', 'foregroundHWND'].some(key => after[key] !== before[key])
+            || button.enabled !== (observation === observations - 1)) {
+          throw new Error('same-owner changed disabled transition/absolute deadline unproved');
+        }
+        deadline = Number(after.observationDeadlineBootMs); afterCensuses++;
+        if (observation === observations - 1) {
+          if (progress.afterStateSHA256 !== after.semanticStateSHA256) throw new Error('fresh eligible progression hash mismatch');
+          previous = after;
+        }
+      }
     }
   }
+  if (result.afterCensusesAttempted !== afterCensuses) throw new Error('actual indexed observation count mismatch');
   const finalGuard = setupRecords['oobe-setup-after-preflight.json'];
   if (!finalGuard || finalGuard.ready !== true || finalGuard.connectionStateKnown !== true || finalGuard.connectionState !== 0
       || createHash('sha256').update(readFileSync(binary!)).digest('hex') !== evidence.binarySHA256) {
@@ -630,7 +656,7 @@ try {
     if (setupActor) {
       collectSetupRecords();
       const packet = `${JSON.stringify({ nonce, actorPID: setupActor.pid, records: setupRecords })}\n`;
-      if (Buffer.byteLength(packet) <= 2_097_152) {
+      if (Buffer.byteLength(packet) <= 6_291_456) {
         try {
           writeFileSync(join(root, 'oobe-setup-records.json'), packet, { flag: 'wx' });
           evidence.setupRecordCount = Object.keys(setupRecords).length;

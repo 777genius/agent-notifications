@@ -1273,7 +1273,7 @@ struct OOBESelection {
     ComPtr<IUIAutomationElement> element, pane, button;
     ComPtr<IUIAutomation> automation; ComPtr<IUIAutomationTreeWalker> walker;
     std::wstring buttonName, exactSystemImage;
-    bool eligible = false;
+    bool eligible = false, unambiguous = false;
     bool stable() const {
         auto found = owners.owners.find(pid); DWORD current{}; wchar_t name[121]{};
         if (found == owners.owners.end() || !oobeExactSystemImage(found->second.get(), exactSystemImage)
@@ -1326,9 +1326,10 @@ static std::wstring oobeAuthority(bool setup) {
     return source;
 }
 // One selected foreground subtree, property reads only; never Invoke or UI input.
-static bool oobePreflight(const std::string& prefix = "oobe", OOBESelection* selection = nullptr) {
+static bool oobePreflight(const std::string& prefix = "oobe", OOBESelection* selection = nullptr, ULONGLONG observationDeadline = 0) {
     const auto source = oobeAuthority(selection != nullptr);
-    const ULONGLONG started = GetTickCount64(), deadline = std::min(started + 5000, oobeSetupDeadline ? oobeSetupDeadline : started + 5000);
+    const ULONGLONG started = GetTickCount64(), deadline = std::min(std::min(started + 5000,
+        oobeSetupDeadline ? oobeSetupDeadline : started + 5000), observationDeadline ? observationDeadline : started + 5000);
     vendorDeadline = deadline; VendorHashFile executable(root / L"navigation-native-probe.exe", 67108864);
     if (!preflight((prefix + "-preflight.json").c_str())) return false;
     SurfaceScan owners; owners.allowAnyWindowsImage = true; wchar_t windows[32768]{};
@@ -1370,7 +1371,7 @@ static bool oobePreflight(const std::string& prefix = "oobe", OOBESelection* sel
         + ",\"foregroundPID\":" + std::to_string(pid)
         + ",\"foregroundCreatedUtcTicks\":\"" + created + "\",\"censusAttempts\":1,\"showAttempts\":0,\"inputAttempted\":false}\n");
     unsigned visited{}, count{}, errors{}, providerSkips{}; bool truncated{}, available{}, rootStable{}, completed{};
-    HRESULT lastError = S_OK; std::string rows, semanticRows; unsigned panes{}, buttons{}, semanticCount{}; bool rootRole{};
+    HRESULT lastError = S_OK; std::string rows, semanticRows; unsigned panes{}, buttons{}, matchingButtons{}, semanticCount{}; bool rootRole{};
     ComPtr<IUIAutomationElement> rootElement, privacyPane, actionButton;
     ComPtr<IUIAutomation> rootAutomation; ComPtr<IUIAutomationTreeWalker> rootWalker; std::wstring buttonName;
     auto budget = [&]() { return GetTickCount64() < deadline; };
@@ -1468,10 +1469,11 @@ static bool oobePreflight(const std::string& prefix = "oobe", OOBESelection* sel
                     + (nameClipped ? "true" : "false") + ',' + (idClipped ? "true" : "false") + ',' + (classClipped ? "true" : "false")
                     + ',' + (invokeAvailable ? "true" : "false") + "]";
                 if (!nameClipped && !idClipped && idJSON == jsonQuote(L"OobeSettingsAcceptButton") && type == UIA_ButtonControlTypeId
-                    && enabled && !offscreen && patternValid && invokeAvailable && rectValid && rectangle.left < rectangle.right
+                    && !offscreen && patternValid && invokeAvailable && rectValid && rectangle.left < rectangle.right
                     && rectangle.top < rectangle.bottom && (nameJSON == jsonQuote(L"Next, tab through all privacy settings to continue")
                         || nameJSON == jsonQuote(L"Accept"))) {
-                    ++buttons; actionButton = node.element; buttonName = nameJSON == jsonQuote(L"Accept") ? L"Accept" : L"Next, tab through all privacy settings to continue";
+                    ++matchingButtons; if (enabled) ++buttons;
+                    actionButton = node.element; buttonName = nameJSON == jsonQuote(L"Accept") ? L"Accept" : L"Next, tab through all privacy settings to continue";
                 }
             }
             ComPtr<IUIAutomationElement> child;
@@ -1507,10 +1509,12 @@ static bool oobePreflight(const std::string& prefix = "oobe", OOBESelection* sel
         + ",\"available\":" + (available ? "true" : "false") + ",\"rootStable\":" + (rootStable ? "true" : "false")
         + ",\"walkCompleted\":" + (completed ? "true" : "false") + ",\"truncated\":" + (truncated ? "true" : "false")
         + ",\"deadlineExpired\":" + (expired ? "true" : "false") + ",\"elapsedMs\":" + std::to_string(GetTickCount64() - started)
+        + ",\"startedBootMs\":" + std::to_string(started) + ",\"observationDeadlineBootMs\":" + std::to_string(observationDeadline)
         + ",\"visited\":" + std::to_string(visited) + ",\"count\":" + std::to_string(count) + ",\"providerSkips\":" + std::to_string(providerSkips)
         + ",\"verifiedOwners\":" + std::to_string(owners.owners.size()) + ",\"errors\":" + std::to_string(errors + owners.errors)
         + ",\"semanticStateSHA256\":\"" + semanticSHA + "\",\"privacyPanes\":" + std::to_string(panes)
         + ",\"eligiblePrivacyButtons\":" + std::to_string(buttons)
+        + ",\"matchingPrivacyButtons\":" + std::to_string(matchingButtons)
         + ",\"lastErrorHRESULT\":" + std::to_string(lastError) + ",\"rows\":[" + rows + "]}\n";
     if (result.size() > 65536) throw std::runtime_error("OOBE serialized report exceeds 64KiB");
     report((prefix + "-uia.json").c_str(), result);
@@ -1520,7 +1524,8 @@ static bool oobePreflight(const std::string& prefix = "oobe", OOBESelection* sel
         selection->automation = rootAutomation; selection->walker = rootWalker;
         selection->buttonName = buttonName; selection->exactSystemImage = exactSystemImage;
         selection->state = semanticState; selection->stateSHA = semanticSHA;
-        selection->eligible = completed && rootRole && panes == 1 && buttons == 1 && owners.owners.size() == 1;
+        selection->unambiguous = completed && rootRole && panes == 1 && matchingButtons == 1 && owners.owners.size() == 1;
+        selection->eligible = selection->unambiguous && buttons == 1;
         selection->owners = std::move(owners);
     }
     return available && rootStable;
@@ -1530,13 +1535,14 @@ static bool oobeSetup() {
     const auto source = oobeAuthority(true); const ULONGLONG started = GetTickCount64();
     oobeSetupDeadline = started + 60000; vendorDeadline = oobeSetupDeadline;
     VendorHashFile executable(root / L"navigation-native-probe.exe", 67108864);
-    unsigned nextCalls{}, acceptCalls{}, returned{}, progressed{}; bool armed{}, uncertain{}, accepted{}, windowGone{};
+    unsigned nextCalls{}, acceptCalls{}, returned{}, progressed{}, afterCensuses{}; bool armed{}, uncertain{}, accepted{}, windowGone{};
     HRESULT lastError = S_OK; std::string phase = "initial", previousState, previousBirth;
     HWND previousWindow{}; DWORD previousPID{};
     const auto header = "{\"pid\":" + std::to_string(GetCurrentProcessId()) + ",\"nonce\":" + jsonQuote(uuid)
         + ",\"sourceSHA\":" + jsonQuote(source) + ",\"binarySHA256\":\"" + executable.digest + "\",\"architecture\":\"ARM64\"";
     oobeDurableIntent("oobe-setup-intent.json", header + ",\"scope\":\"disposable_guest_privacy_OOBE_setup_only\",\"readOnly\":false"
         + ",\"maxNextCalls\":4,\"maxAcceptCalls\":1,\"helperBudgetMs\":60000,\"cooperativeUIBudgetMs\":5000"
+        + ",\"maxAfterObservations\":8,\"afterObservationBudgetMs\":5000"
         + ",\"showAttempts\":0,\"keyboardOrPointerInputAttempted\":false,\"registryWriteAPIAttempted\":false,\"retryAllowed\":false}\n");
     try {
         for (unsigned step = 0; step < 5; ++step) {
@@ -1617,7 +1623,7 @@ static bool oobeSetup() {
             // S_OK is API acceptance only. A late/error/same-state result never permits another action.
             if (hr != S_OK || GetTickCount64() >= invokeDeadline) { lastError = hr == S_OK ? E_ABORT : hr;
                 throw std::runtime_error("OOBE Invoke failed or exceeded cooperative budget"); }
-            std::string afterSHA;
+            std::string afterSHA, afterPrefix; unsigned afterObservations{}; ULONGLONG afterElapsed{};
             if (accept) {
                 phase = prefix + "-window-disappearance";
                 const ULONGLONG afterDeadline = std::min(oobeSetupDeadline, GetTickCount64() + 5000);
@@ -1627,17 +1633,30 @@ static bool oobeSetup() {
                     throw std::runtime_error("accepted OOBE window disappearance unproved");
                 windowGone = true; accepted = true;
             } else {
-                phase = prefix + "-after"; OOBESelection after;
-                if (!oobePreflight(phase, &after) || !after.eligible || !after.stable()
-                    || after.state == selected.state || after.pid != selected.pid
-                    || after.created != selected.created || after.window != selected.window)
-                    throw std::runtime_error("fresh OOBE progression unproved; no repeat");
-                afterSHA = after.stateSHA; previousState = after.state; previousPID = after.pid;
-                previousBirth = after.created; previousWindow = after.window;
+                // Read-only observations of a changed, sole disabled button, never another Invoke.
+                // One absolute post-Invoke deadline covers every census; it never resets.
+                const ULONGLONG afterStarted = GetTickCount64(), afterDeadline = std::min(oobeSetupDeadline, afterStarted + 5000);
+                for (unsigned observation = 0; observation < 8 && GetTickCount64() < afterDeadline; ++observation) {
+                    phase = prefix + "-after-" + std::to_string(observation); OOBESelection after;
+                    ++afterObservations; ++afterCensuses;
+                    if (!oobePreflight(phase, &after, afterDeadline) || !after.unambiguous || !after.stable()
+                        || GetTickCount64() >= afterDeadline || after.state == selected.state || after.pid != selected.pid
+                        || after.created != selected.created || after.window != selected.window)
+                        throw std::runtime_error("fresh OOBE transition observation unproved; no repeat");
+                    if (!after.eligible) continue; // Complete sole exact button, temporarily disabled.
+                    afterSHA = after.stateSHA; afterPrefix = phase; previousState = after.state; previousPID = after.pid;
+                    previousBirth = after.created; previousWindow = after.window; break;
+                }
+                if (afterSHA.empty() || GetTickCount64() >= afterDeadline)
+                    throw std::runtime_error("bounded OOBE transition not ready; no repeat");
+                afterElapsed = GetTickCount64() - afterStarted;
             }
             report((prefix + "-progress.json").c_str(), header + ",\"step\":" + std::to_string(step)
                 + ",\"action\":" + jsonQuote(action) + ",\"beforeStateSHA256\":\"" + selected.stateSHA
                 + "\",\"afterStateSHA256\":" + (accept ? "null" : "\"" + afterSHA + "\"")
+                + ",\"afterObservationCount\":" + std::to_string(afterObservations)
+                + ",\"afterObservationElapsedMs\":" + std::to_string(afterElapsed)
+                + ",\"afterSnapshotPrefix\":" + (accept ? "null" : jsonQuote(winrt::to_hstring(afterPrefix).c_str()))
                 + ",\"progressionObserved\":true,\"ownedOOBEWindowGone\":" + (windowGone ? "true" : "false") + "}\n");
             ++progressed; uncertain = false; if (accepted) break;
         }
@@ -1650,6 +1669,7 @@ static bool oobeSetup() {
         + ",\"nextCallsEntered\":" + std::to_string(nextCalls) + ",\"acceptCallsEntered\":" + std::to_string(acceptCalls)
         + ",\"invokeCallsEntered\":" + std::to_string(oobeSetupInvokeEntered) + ",\"invokeCallsReturned\":" + std::to_string(returned)
         + ",\"progressionsObserved\":" + std::to_string(progressed) + ",\"invokeBoundaryArmed\":" + (armed ? "true" : "false")
+        + ",\"afterCensusesAttempted\":" + std::to_string(afterCensuses)
         + ",\"invokeEffectUncertain\":" + (uncertain ? "true" : "false") + ",\"ownedOOBEWindowGone\":" + (windowGone ? "true" : "false")
         + ",\"elapsedMs\":" + std::to_string(GetTickCount64() - started) + ",\"lastErrorHRESULT\":" + std::to_string(lastError)
         + ",\"showAttempts\":0,\"keyboardOrPointerInputAttempted\":false,\"registryWriteAPIAttempted\":false"
