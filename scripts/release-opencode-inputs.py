@@ -91,13 +91,27 @@ def seal_archive(root, archive):
     return r.digest(archive)
 
 
-def prepare(rebuilt, commit):
+def release_manifest(scope):
+    manifest = json.loads((FIXTURES / 'manifest.template.json').read_text())
+    r.require(scope in ('all', 'linux-windows'), 'unsupported_release_scope')
+    if scope == 'linux-windows':
+        manifest['releaseScope'] = scope
+        manifest['cells'] = [cell for cell in manifest['cells'] if cell['os'] != 'darwin']
+    r.custody_cells(manifest, ('linux', 'amd64', '1.18.33'))
+    # Check every requested binary before downloading hosts or sealing any bytes.
+    for cell in manifest['cells']:
+        name = f"claude-notifications-{cell['os']}-{cell['arch']}" + ('.exe' if cell['os'] == 'windows' else '')
+        cell['candidate'] = record(REPO / 'dist' / name)
+    return manifest
+
+
+def prepare(rebuilt, commit, scope='all'):
+    manifest = release_manifest(scope)
     root = inputs.artifacts / 'release-parent'
     root.mkdir(mode=0o700)
     embedded = REPO / 'internal/opencodeplugin/dist/agent-notifications.js'
     r.require(rebuilt.read_bytes() == embedded.read_bytes(), 'rebuilt_bundle_differs')
     shutil.copyfile(rebuilt, root / 'rebuilt-agent-notifications.js')
-    manifest = json.loads((FIXTURES / 'manifest.template.json').read_text())
     manifest['candidateCommit'] = manifest['buildRevision'] = commit
     manifest['assets'] = {
         'embedded': record(embedded),
@@ -121,9 +135,7 @@ def prepare(rebuilt, commit):
             r.require(identity == ('linux', 'amd64', '1.18.34'), 'unknown_host_source_identity')
             cell['hostSourceCommit'] = LINUX_CURRENT_HOST_SOURCE
         r.require(re.fullmatch('[0-9a-f]{40}', str(cell['hostSourceCommit'])), 'host_source_missing')
-        name = f"claude-notifications-{cell['os']}-{cell['arch']}" + ('.exe' if cell['os'] == 'windows' else '')
-        binary = REPO / 'dist' / name
-        cell['candidate'] = record(binary)
+        binary = r.checked_file(REPO, cell['candidate'])
         build = subprocess.check_output(['go', 'version', '-m', str(binary)], text=True)
         r.verify_source_binding(manifest, commit, build, '')
         directory = root / 'inputs' / '-'.join(identity)
@@ -135,14 +147,16 @@ def prepare(rebuilt, commit):
         r.extract_opencode(archive, image, cell['os'])
         r.require(r.digest(image) == cell['executableSHA256'], 'host_executable_hash_mismatch')
         image.unlink()
-        # macOS binaries and the signed helper ship and pass normal artifact
-        # canaries; this Linux/Windows OpenCode proof does not qualify Mac desktop.
+        # Custody supplies no desktop qualification, including skipped macOS.
         cell['nativeApp'] = None
     helper = REPO / '.task-tools/artifacts/release-helper/ClaudeNotifier.app.zip'
     receipt = {'purpose': 'same-run release input custody, no qualification grant',
                'candidateCommit': commit, 'runId': os.environ['GITHUB_RUN_ID'],
                'runAttempt': os.environ['GITHUB_RUN_ATTEMPT'],
-               'signedHelperArchive': record(helper),
+               'releaseScope': scope,
+               'includedPlatforms': sorted({cell['os'] + '/' + cell['arch'] for cell in manifest['cells']}),
+               'skippedPlatforms': ['darwin/amd64', 'darwin/arm64'] if scope == 'linux-windows' else [],
+               'signedHelperArchive': None if scope == 'linux-windows' else record(helper),
                'macOSOpenCodeDesktopQualified': False}
     (root / 'release-inputs-receipt.json').write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
     (root / 'manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n')
@@ -152,6 +166,8 @@ def prepare(rebuilt, commit):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--rebuilt', type=Path, required=True)
+    parser.add_argument('--scope', choices=('all', 'linux-windows'), default='all',
+                        help='Explicit partial custody; default retains all eleven cells')
     args = parser.parse_args()
     inputs.artifacts.mkdir(parents=True, exist_ok=True)
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=REPO, text=True).strip()
@@ -160,7 +176,7 @@ def main():
     dirty += subprocess.check_output(['git', 'ls-files', '--others', '--exclude-standard', '--', '.',
                                      ':(exclude).task-tools/artifacts'], cwd=REPO, text=True)
     r.require(not dirty, 'clean_release_checkout_required')
-    sha = prepare(args.rebuilt, commit)
+    sha = prepare(args.rebuilt, commit, args.scope)
     with Path(os.environ['GITHUB_OUTPUT']).open('a') as out:
         out.write('sha256=' + sha + '\n')
 
