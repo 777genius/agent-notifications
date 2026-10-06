@@ -2133,10 +2133,11 @@ func TestMaterializerSelectedCursorPublicProjectionAndAcknowledgement(t *testing
 	i := state.Installations[0]
 	c := i.Clients[expected.BindingID]
 	facts, selected := c.SelectedDelivery.CursorFacts()
+	// Source registration prepares Cursor; native activation is not run here.
 	if !selected || c.ProfileAuthority == nil || !c.ProfileAuthority.Equal(token) || c.ProfileNamespace != filepath.Dir(mat.Roots.StateFile) ||
 		i.Source.TreeDigest != canonical || c.PackageRevision == nil || c.PackageRevision.TreeDigest != canonical ||
 		facts.CanonicalDigest != canonical || facts.ProjectionDigest == "" || facts.ProjectionDigest == canonical ||
-		c.PendingNativeIntent != nil || c.NativeActivationAttempt != "" || c.Activation != domain.ActivationActive || c.Verification != domain.VerificationInstalled {
+		c.PendingNativeIntent != nil || c.NativeActivationAttempt != "" || c.Activation != domain.ActivationPrepared || c.Verification != domain.VerificationPackageValid {
 		t.Fatalf("selected installed source/token/ack differs: %+v %+v", c, facts)
 	}
 	ack := false
@@ -2196,7 +2197,7 @@ func TestMaterializerSelectedCursorPublicProjectionAndAcknowledgement(t *testing
 		t.Fatal("original physical token no longer validates", err)
 	}
 	view, err := eng.Inspect(ctx)
-	if err != nil || view.Recovery.Required || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 1 || view.Installations[0].Bindings[0].Verification != string(domain.VerificationInstalled) {
+	if err != nil || view.Recovery.Required || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 1 || view.Installations[0].Bindings[0].Verification != string(domain.VerificationPackageValid) {
 		t.Fatalf("public installed readback: %+v %v", view, err)
 	}
 	t.Log("QUALIFIED_TEST_MATERIALIZER_SELECTED_PROJECTION_ACK_DATA_ORIGINAL_TOKEN=true; TEST filesystem source proof; installed/native E NOT_RUN")
