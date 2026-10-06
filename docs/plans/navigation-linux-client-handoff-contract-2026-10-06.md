@@ -74,3 +74,46 @@ publication gaps, premature qualification, missing main-process AppArmor attachm
 and callback/native-action ordering. The remaining missing join caused the explicit
 early refusal. Removing that refusal requires renewed review of the complete assembly
 and server connection/toplevel proof; this acceptance cannot authorize native execution.
+
+## TEST compositor observer preparation
+
+The proposed observer attaches the public Wayland protocol logger only to owned TEST
+Sway. It must never be preloaded into the selected client. Its private append-only log
+fd is passed explicitly to that compositor, validated as an empty root-owned 0600
+regular file, then marked CLOEXEC. A read-only ISO TEST marker and UID 1000 are required.
+The surrounding guest authority still owns the offline/cgroup/session checks.
+
+For each relevant connection, the observer obtains `SO_PEERPIDFD` from the actual
+Wayland socket, checks its fdinfo PID against socket credentials and retains its live
+incarnation. There is no numeric `pidfd_open` fallback. Missing kernel support rejects
+the fixture. The identity belongs to the connector; it does not identify every possible
+writer through an inherited socket. The root controller must independently bind this
+handle and birth to the selected launched client through the still-live compositor.
+
+Requests and actual server resource creation/destruction are separate records. The
+decoder requires both, preserves resource generations, and rejects closed/recycled
+surface IDs, duplicate activation and multiple live selected toplevels. Its returned
+`kernelBound` and `focusQualified` remain false. Bounds are cumulative: 128 connections,
+256 resource generations and 512 records. Observer errors, lost logging or a second
+display terminate only the owned TEST Sway with exit 74; a valid truncated prefix
+cannot leave a healthy compositor. The consumer must verify compositor liveness
+through the final observation window.
+
+Seven pure decoder tests pass. A new resource-bound regression test failed on the
+previous decoder for both 257 live resources and reuse after 256 creations, then passed
+after the cumulative check. Strict server compilation passed for the frozen C source;
+`linux-server-observer-compile.json` retains source/output/raw hashes and collected
+container exit/cleanup. The resulting library was never loaded.
+
+Three independent source reviews accepted this checkpoint after fixing logging failure
+handling, second-display admission, output-fd inheritance and the cumulative decoder
+bound. Independent compiler evidence review passed 50 source/archive/binary/operator
+and lifecycle binding assertions. Neither acceptance qualifies native integration.
+
+This remains preparation: no manifest staging, Sway loading, retained-handle validation,
+before/after stable focus-node join or native attempt has occurred. Resource allocation
+does not prove completed mapping, token acceptance, focus or chat navigation. The early
+guest refusal remains in place until the complete integration passes renewed review.
+
+Public API references: [Wayland server API](https://wayland.freedesktop.org/docs/html/apc.html)
+and [Linux SO_PEERPIDFD introduction](https://github.com/torvalds/linux/commit/7b26952a91cf65ff1cc867a2382a8964d8c0ee7d).
