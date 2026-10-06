@@ -19,8 +19,10 @@ without extending the four-second limit; qualification must use the new binary.
 
 Run these checks for releases that touch the hook pipeline.
 
-1. **Assets before the bump.** Follow the release-branch order in steps 4-5: tag and publish
-   assets first, land the bump on `main` last. Rationale in the callout under step 4.
+1. **Assets before promotion.** Follow the release-branch order in steps 4-5: tag and publish
+   qualified assets first. Fully qualified all-platform releases land the version bump
+   on `main` last. Partial releases follow the platform-channel procedure; v1.48.1
+   keeps all five legacy versions on `main` at 1.46.1. See the callout under step 4.
 2. **Canary the draft binary** (step 5): `version` must print the new version, and synthetic
    Claude and Codex `Stop` payloads must reach local recording sinks. A binary that cannot report its version
    is the one failure the auto-updater cannot recover from.
@@ -171,8 +173,9 @@ If only Windows fails, use `windows-two` to repeat those two cells. The Windows
 recovery verifies the original executable's unique canonical LF bundle, then
 uses the unchanged registration oracle to check installed raw bytes and the
 real ownership hash after setup, update and reinstall. The original Windows
-ACL helper uses verified prefetched modules with a private offline environment;
-it must successfully set the protected DACL. These preparation receipts do not
+ACL helper uses verified prefetched modules in a private environment with external
+Go module fetching disabled; this does not claim general outbound network isolation.
+It must successfully set the protected DACL. These preparation receipts do not
 qualify the full native gate.
 
 The v1.48.1 package qualification helper accepts lightweight release tags only;
