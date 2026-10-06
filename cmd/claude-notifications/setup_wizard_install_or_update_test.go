@@ -456,7 +456,11 @@ func TestCursorCallerAcknowledgedTokenAndMatchingPendingRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := domain.SourceIdentity{RequestedSource: pkg, CanonicalSource: pkg, SourceBindingHint: "direct-local"}
-	packageSnapshot, err := (packagedigest.Builder{TempRoot: filepath.Join(root, "TEST-snapshot")}).SnapshotWithExecutables(ctx, pkg, source, []string{"bin/probe"})
+	snapshotRoot := filepath.Join(root, "TEST-snapshot")
+	if err := os.Mkdir(snapshotRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	packageSnapshot, err := (packagedigest.Builder{TempRoot: snapshotRoot}).SnapshotWithExecutables(ctx, pkg, source, []string{"bin/probe"})
 	if err != nil {
 		t.Fatal(err)
 	}
