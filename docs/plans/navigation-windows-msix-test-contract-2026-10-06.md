@@ -1,0 +1,125 @@
+Initial Windows MSIX TEST source-preparation checkpoint, 2026-10-06. At that checkpoint, source was prepared and under review; no package, certificate, deployment, launch, Show or native execution had occurred. The fresh-factory run remains failed. Package identity is a different registration contract, not a proved fix for the unpackaged fixture.
+
+1. Scope and ownership
+
+Implement only new `tests/integration/navigation_windows_msix_probe.cpp`, `tests/integration/navigation_windows_msix_e2e.ts`, and `.github/workflows/navigation-windows-msix-native-e2e.yml`. Production and the existing unpackaged lane remain unchanged. One explicitly opted-in fresh GitHub Windows client job on `windows-11-vs2026-arm`; no real client, project, profile or runtime. Reuse installed Windows SDK/C++20 and existing pinned TypeScript tooling; add no Windows App SDK, NuGet, framework dependency or host installer. Capture resolved compiler/SDK/tool versions and source hashes. Missing prerequisites are red before Show.
+
+The typed controller creates one unique `navigation-windows-test-<UUID>` root under RUNNER_TEMP, restricts writes to the current job identity plus system administrators, and publishes immutable marker/spec atomically and exclusively. Record job SID/session privately; require the existing same-user interactive Shell/client/input-desktop preflight. The existing C++ helper can be compiled unchanged into this root as `navigation-native-probe.exe` for ONLY `preflight` and `invoke`: its exact marker, filename and UUID checks remain mandatory. Never use its unpackaged send/callback/registration/cleanup modes. The new package contains a separate MSIX probe executable with fixed sender/callback roles and bounded TEST nonce; no arbitrary URL or command input.
+
+2. Signed package and exact installation
+
+Generate one unique package Name, version `1.0.0.0`, architecture `arm64`, Publisher `CN=NavigationTest-<nonce>`, and Application Id `TestSender`. Include valid logo assets, Windows.Desktop target family, `uap10:RuntimeBehavior="packagedClassicApp"`, `uap10:TrustLevel="mediumIL"`, and `rescap:Capability Name="runFullTrust"`. Declare `desktop:Extension Category="windows.toastNotificationActivation"` with its fresh ToastActivatorCLSID; declare `com:Extension Category="windows.comServer"` / ComServer / ExeServer / Class using the same CLSID and included executable. ExeServer Arguments are a fixed callback mode plus exact owned root/nonce, correctly Windows-quoted. Do not manufacture HKCU LocalServer32, shortcuts or package identity. These are public [desktop packaging](https://learn.microsoft.com/en-us/windows/msix/desktop/desktop-to-uwp-manual-conversion), [toast activation](https://learn.microsoft.com/en-us/uwp/schemas/appxpackage/uapmanifestschema/element-desktop-toastnotificationactivation), and [packaged COM](https://learn.microsoft.com/en-us/uwp/schemas/appxpackage/uapmanifestschema/element-com-exeserver) declarations.
+
+Use the preinstalled SDK architecture-matched MakeAppx and SignTool, retaining absolute tool paths, file hashes, versions and command results. Compile with static CRT where compatible; inspect imports and require no additional package framework. `MakeAppx pack /h SHA256 /d <owned-layout> /p <new-msix>` keeps semantic validation enabled; no `/nv`. Sign once with `/fd SHA256 /sha1 <exact-created-thumbprint> /s My`; no automatic certificate selection or timestamp service. Verify signature, signer and manifest Publisher, plus signed package hash. MakeAppx validation alone is not install proof. See [MakeAppx](https://learn.microsoft.com/en-us/windows/msix/package/create-app-package-with-makeappx-tool) and [SignTool](https://learn.microsoft.com/en-us/windows/msix/package/sign-app-package-using-signtool).
+
+Create one end-entity self-signed code-signing certificate in `Cert:\CurrentUser\My`: DigitalSignature, code-signing EKU, Publisher-matching Subject. Record exact thumbprint and DER SHA256; assert the unique identity was absent before creation. Export only its public CER with Export-Certificate, then import that exact CER into `Cert:\LocalMachine\TrustedPeople` in the already disposable CI administrator context. Assert absence there before import and exact DER/Subject equality after import. The private key remains in the job's Personal store until exact cleanup; never export/upload PFX or credentials. CurrentUser\My alone is signing material, not package installation trust. Microsoft explicitly documents machine TrustedPeople trust and its all-user effect: [package certificate](https://learn.microsoft.com/en-us/windows/msix/package/create-certificate-package-signing), [public-only export](https://learn.microsoft.com/en-us/powershell/module/pki/export-certificate), [certificate import](https://learn.microsoft.com/en-us/powershell/module/pki/import-certificate).
+
+Call `Add-AppxPackage -Path <exact-signed-owned-msix>` for the same current user. Read back exactly one matching Name/Publisher/version/architecture, PackageFullName, PackageFamilyName and InstallLocation; match installed manifest/executable hashes. Require absence of this unique package before install. Unknown deployment result has no automatic retry. [Add-AppxPackage](https://learn.microsoft.com/en-us/powershell/module/appx/add-appxpackage) installs a signed package for the current user.
+
+3. Identity-bound sender, single Show and cold callback
+
+Launch the sender once through public `IApplicationActivationManager::ActivateApplication` with installed PackageFamilyName + `!TestSender`, fixed TEST arguments and AO_NOERRORUI. Capture HRESULT/returned PID and promptly retain a process handle, creation time and executable path/hash. API success alone is insufficient: before Show the sender must report exact installed package identity via [GetCurrentPackageFullName](https://learn.microsoft.com/en-us/windows/win32/api/appmodel/nf-appmodel-getcurrentpackagefullname), exact runtime AUMID via [GetCurrentApplicationUserModelId](https://learn.microsoft.com/en-us/windows/win32/api/appmodel/nf-appmodel-getcurrentapplicationusermodelid), and the same job user/session. The sender atomically publishes identity-ready evidence and waits at most 15 s for one owned-root Show permit; the controller releases it only after retaining and validating that exact process handle/creation time and identity. Missing permission expires without Show. Any missing/mismatched identity fails; no direct executable-launch fallback or package debug mode. [ActivateApplication](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-iapplicationactivationmanager-activateapplication) is the candidate public launch API; actual full-trust launch/identity must be proved by this checkpoint.
+
+Create one ToastNotifier with that exact runtime AUMID, preserving the desktop API's explicit-ID contract. Require actual successful `Setting == Enabled` within the existing 3000 ms/16-read monotonic budget, checking elapsed time after each API return. No repeated factory creation, longer wait, force-enable or HRESULT ignore. Only then enter at most one Show. Flush entered/returned/failed checkpoints; any uncertain Show result stops without resend. Use the existing synthetic action name `TEST open <UUID>`, an opaque fixed nonce target, and a unique tag/group. [CreateToastNotifier](https://learn.microsoft.com/en-us/uwp/api/windows.ui.notifications.toastnotificationmanager.createtoastnotifier) does not itself prove Enabled or delivery.
+
+Finite WaitForSingleObject on the retained sender handle plus GetExitCodeProcess must collect successful exit before the existing observer's sole genuine Shell UI Invoke. No manual INotificationActivationCallback call, COM activation by the controller, or callback process launch. The OS-created manifest COM server verifies immutable root/spec, installed executable hash/package identity, exact AUMID/nonce and current-job user/session, then serves the real activation callback. Do not rely on inherited CI environment in OS-created processes. Prove callback process creation after collected sender exit, distinct PID/creation-time identity, exact one atomic exclusive receipt/effect, and target decoding. Callback self-expires within 30 s; verify its actual termination. UI acceptance alone, a live sender callback, or receipt-only without identity/lifetime proof cannot qualify cold activation.
+
+4. Cleanup, prerequisites and evidence
+
+Finally remove only the exact owned notification tag/group/AUMID using the public [history Remove](https://learn.microsoft.com/en-us/uwp/api/windows.ui.notifications.toastnotificationhistory.remove) contract; retain the result. Stop/wait only process handles proved to belong to this root/package. Remove-AppxPackage only the captured exact PackageFullName for this current user, then verify exact absence. Remove only this run's exact newly created thumbprint from CurrentUser\My and newly imported identical certificate from LocalMachine\TrustedPeople, after ownership/DER recheck; verify absence in both stores. Capture only the owned CNG key name/provider metadata, validate it against the exact signer before `Remove-Item -DeleteKey` in CurrentUser\My, and require `CngKey.Exists` to report absence. The public TrustedPeople certificate is deleted without `-DeleteKey`. Independent sender, callback and history cleanup branches all run even if another branch fails; Show-evidence interpretation cannot skip cleanup. A missing process record remains unknown process scope, separately from successful exact package removal. Never use wildcard package/certificate removal, Root trust, unrelated process killing or global cleanup. Cleanup unknown/failure keeps overall pass false; preserve all partial evidence.
+
+Admin capability for the narrow machine TrustedPeople import, existing signed-package sideload policy, full-trust package support, SDK/PKI cmdlets and an interactive client are prerequisites. If policy denies one, record the exact denial and stop: do not enable global Developer Mode, modify GPO/registry policy, use loose-package `-Register`, `-AllowUnsigned`, bypass trust, alter notification settings, skip CI or weaken Enabled. A denied prerequisite requires a separate explicit policy decision; this contract authorizes none. The only trust change is the owned certificate in an ephemeral CI job, with exact verified removal.
+
+Acceptance binds exact source/observer binary/SDK/manifest/package/signer hashes to every command, identity, monotonic phase, Show count, UI Invoke, cold callback and cleanup result. Preserve raw private evidence separately; public projection omits paths, SID, nonce and test AUMID/CLSID. Native success would qualify only this packaged TEST cold-COM transport on the measured client, not the failed unpackaged lane, real-client navigation or a production adapter. Compile/typecheck and independent source review precede a separately planned one-shot fresh native job; this document is not execution permission or native evidence.
+
+
+5. Review/fix record (source only)
+
+Round 1 found three substantive cleanup failures: Personal certificate removal retained its private key; failed Show-evidence interpretation skipped native cleanup; sender cleanup failure skipped callback/history cleanup. The activation API return diagnostic could also be lost before process ownership validation. Fixed with exact CNG key deletion/absence checks, independent cleanup phases, explicit unknown-process scope, and a flushed non-authoritative HRESULT/PID checkpoint. A raw PID never authorizes termination.
+
+Round 2 lifecycle and Windows API/manifest/workflow reviewers accepted the updated source snapshots. C++ SHA256 `9f92af5e5d22f325a16282fcc2630a9f1966e881ab4bb7b0b5f16249423d4727`, TS SHA256 `e0cbc8355349bc9e1f9aa777e38c979ad5403a831dd4df466de6b618060e0900`, workflow SHA256 `996e9e380c7d6a6f9272e9afa05e111dbe3742d96f8d6c13065c3d831535502b`. Strict TypeScript preflight passes. The subsequent third round is recorded below. These reviews do not prove target compilation, Windows PowerShell execution, package deployment or native callback.
+
+Round 2 resource review additionally found that missing process records must block aggregate cleanup success, and interrupted package operators can leave mutation outcome unknown even after an absence query. Fixed both conservatively: retain the separate unknown flags, always attempt exact-owned cleanup, and never promote either unknown to aggregate PASS.
+
+Round 3 resource review accepted final TS SHA256 `36d3086b7e15c3fcde2c569564b225320b56d89ecd3f8311c081ead57a83b2f7` with unchanged C++/workflow hashes above. Native lifecycle review accepted its final cleanup-gating scope. All three review/fix rounds are complete; strict TypeScript preflight remains green. A separately identified fresh CI job is the next verification boundary; no native execution has occurred at this checkpoint.
+
+
+First CI submission on source `b1e8f3adfdcb7973ed15e0cd38b8520620649255`, [run 37392788950](https://github.com/777genius/agent-notifications/actions/runs/37392788950), failed before native execution. Pinned TypeScript passed; the existing observer compiled. The packaged probe failed with C3779 at JsonArray.Append because the Windows.Foundation.Collections projection definitions were not included. The SDK was 10.0.26100.0, Visual Studio developer prompt 18.10.2. Package operator parsing, deployment, sender activation, Show and callback steps were skipped. This failure is not native qualification. The correction adds the explicit projection header; only a changed-source CI submission may test the previously unexecuted native phase.
+
+
+The corrected-source [run 37393625456](https://github.com/777genius/agent-notifications/actions/runs/37393625456), source `ca68e7a837248d4f4c15e5e617e27afa82bc5c44`, passed both ARM64 C++ compilations, static CRT import checks, pinned TypeScript and target PowerShell syntax parsing. Execution then failed in package preparation: Set-Acl could not autoload Microsoft.PowerShell.Security. Only the package-prepare command ran; no package/certificate creation, deployment, activation, Show or UI Invoke occurred. Its partial artifact `navigation-windows-msix-37393625456-1` is retained (GitHub artifact 11381934306).
+
+The documented cause candidate is Windows PowerShell launched from a PowerShell 7 intermediate Node process inheriting incompatible PS7 module paths. [Microsoft documents this exact intermediate-process failure](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_psmodulepath?view=powershell-7.5#starting-windows-powershell-from-powershell-7). The correction removes every case variant of PSModulePath only from the child environment, allowing Windows PowerShell to construct its normal module path; no machine/user setting is changed. Explicit target-version and Security-module import checks retain early failure diagnostics and the resolved module/version after preparation. This candidate requires a changed-source native run; the first failed execution is not reclassified as success.
+
+
+The changed-source [run 37394320962](https://github.com/777genius/agent-notifications/actions/runs/37394320962), source `94a7da956c49c2561e3a0e870eaa341e64882bf7`, passed target compilation, package preparation, signing, deployment and sender activation. Windows PowerShell 5.1.26100.9457 imported its system Security module; SDK 10.0.26100.0 tools returned success. Readiness was Enabled; exactly one Show returned and the sender was collected with exit 0.
+
+The bounded UI observer then exited 5: the exact TEST action was not found. Win+N submission does not establish that Notification Center opened. No UI Invoke or callback qualification was observed. Exact package, certificate and CNG private-key cleanup succeeded, but the missing callback process record conservatively leaves aggregate native process cleanup unknown and the overall run failed. The public projection `windows-msix-show-ui-negative.json` preserves these separate results. This is transport diagnostic progress, not successful callback or client-navigation E2E. No unchanged-source resend was performed.
+
+The next changed-source diagnostic adds one read-only GetHistory query for the
+owned TEST AUMID after sender collection and before the existing UI Invoke.
+It retains only entry count, exact owned Tag/Group match count and HRESULT,
+with at most 64 entries inspected and a 15-second controller timeout. It reads
+no toast XML and performs no Show or callback activation. Query failures remain
+diagnostic and do not gate or promote native callback qualification. Strict
+TypeScript preflight passes using the existing TEST tooling capsule. Native C++
+compilation and history behavior remain for the changed-source CI attempt.
+
+Three independent source reviews accepted this diagnostic delta: C++ SHA256
+`dd6a5a244cf46d796aafb4848f6cb14da31ed2305f3a3032439d18fcd5b58b9f`,
+TS `6ba0edce321e13f6142c62cb8cc62ac273ffbdc36510af62dd7ea215fa0f2531`.
+Empty/error history remains an observation, never proof of delivery absence or UI.
+
+The changed-source [run 37400224978](https://github.com/777genius/agent-notifications/actions/runs/37400224978),
+source `920212665e7130bafa592e110038b5e802b3e214`, passed target compilation,
+typecheck, preparation, signing, deployment and sender collection. Exactly one
+Show returned. The read-only history query returned HRESULT 0, one entry and one
+exact owned Tag/Group match. This proves presence in the queried TEST history,
+not a visible toast, Shell action or cold callback. The observer still returned
+5 with `found=false`. Exact package/certificate/CNG cleanup succeeded; aggregate
+process cleanup remains unknown. The independently verified public projection
+is `windows-msix-history-ui-negative.json`; all 39 official ZIP members and its
+10 projected raw hashes match the retained artifact. No unchanged-source retry.
+
+Source `4c8fcfc46e1cd4ce3d83c571f934988f9eac0c8f` makes packaged native submission
+explicit `workflow_dispatch` only. Its PR [run 37402733791](https://github.com/777genius/agent-notifications/actions/runs/37402733791)
+passed exact-head checkout, pinned typecheck, both native compilations/import
+checks and target PowerShell parse; submission and evidence upload were skipped.
+PR green is source/build validation, never native callback qualification.
+
+The next bounded diagnostic changes the shared observer intentionally, superseding
+the initial unchanged-observer scope above. After its existing action search
+fails, it reads desktop children and only verified, same-session live Windows
+Shell subtrees. It records metadata solely for elements containing the exact
+TEST UUID, without exporting unrelated UI text. Bounds are 64 desktop children,
+16 Shell containers, 512 visited/queued nodes globally and 128 per container,
+depth 16 and a cooperative 2-second
+deadline within the unchanged controller process timeout. A blocked COM read can
+still hit that outer timeout; a truncated, empty or failed snapshot is never
+absence proof. No additional Show, input, Invoke or manual callback activation
+is added. The unpackaged workflow's native effect also requires explicit dispatch;
+both PR lanes retain compiler/typecheck checks. Native compilation and the new
+snapshot remain unproven until separately captured changed-source CI evidence.
+This follows [Microsoft's UI Automation search guidance](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-obtainingelements).
+
+Snapshot review/fix rounds: R1 found a PID/session check before process-handle
+retention; fixed by retaining the handle first and bracketing the session query
+with liveness checks. R2 accepted ownership/privacy/bounds and recommended the
+128-node per-container cap, which was added alongside the global 512 cap. R3
+accepted the final source and conservative documentation. Final observer C++
+SHA256 `681ed35f504efd9c982cbbc1085657b6e24512f1f58034317756881308b9d866`.
+These are source reviews; target compilation and native snapshot remain pending.
+
+The explicit [run 37403823367](https://github.com/777genius/agent-notifications/actions/runs/37403823367),
+source `ea0eab9f6c1bb7e6ed38543808aab3a9b93199cf`, is now terminal and failed.
+Native compilation/typecheck/operator parsing passed. Exactly one Show returned;
+the sender exited 0 and owned history still contained one exact Tag/Group match.
+The action finder returned 5. The snapshot read seven desktop children, four
+verified same-session Shell containers and 13 nodes, with no errors, truncation
+or TEST UUID matches. This proves the diagnostic executed within its bounds,
+not global toast absence or the cause of the missing action. No genuine Invoke,
+cold callback or real-client navigation is qualified. Package/certificate/key
+cleanup succeeded; aggregate process cleanup remains unknown. Official artifact
+`11386063902` ZIP SHA256 `0510be6ba7183efa59472dbd64db8db869ca6d3182613db5978e8bea870c0d58`
+contains 40 safely validated members. The separate PR build run `37403435929`
+passed on the same exact source with its native submission skipped. No resend.

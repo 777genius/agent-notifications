@@ -4,6 +4,7 @@ package portablesetup
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"github.com/777genius/agent-notifications/internal/agentnotify/clientsetup"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
 	"github.com/777genius/agent-notifications/internal/agentnotify/registration"
+	"github.com/777genius/agent-notifications/internal/copilotvscodeinstall"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 )
 
@@ -246,19 +248,58 @@ func (s Service) CommitBinding(ctx context.Context, req Request) (portable.Bindi
 	req.Reservation = res
 	_, existed := snap.Ledger.Consumers[key]
 	gen := req.ExpectedGeneration
+	var fields map[string]json.RawMessage
+	policy := s.ExpectedPolicy
+	var after installruntime.Identity
+	if req.Binding.Integration == portable.Cursor {
+		// A new identity cannot inherit native leaves from a removed registration.
+		// This false pair shares the registration transaction, before publication.
+		if policy == nil {
+			observed, e := installruntime.ReadRevocationSnapshot(ctx, req.Binding.ControlRoot)
+			if e != nil {
+				return portable.Binding{}, e
+			}
+			policy = &observed.Preimage
+		}
+		off := false
+		var e error
+		fields, e = copilotvscodeinstall.CursorPolicyPatch(req.Binding, copilotvscodeinstall.CursorChoices{Desktop: &off, Webhook: &off}, nil)
+		if e != nil {
+			return portable.Binding{}, e
+		}
+		after, e = installruntime.PredictPolicyIdentity(req.Binding.ControlRoot, *policy, fields)
+		if e != nil {
+			return portable.Binding{}, policyConflict(e)
+		}
+	}
 	ledger, err := installruntime.Commit(ctx, installruntime.Request{
 		ControlRoot: req.Binding.ControlRoot, Owner: req.Binding.Owner, RuntimeRoot: req.Binding.RuntimeRoot,
-		ConsumerID: key, Consumer: consumer, ExpectedGeneration: &gen, ExpectedPolicy: s.ExpectedPolicy, RefreshOnly: false, Reservation: res,
+		ConsumerID: key, Consumer: consumer, ExpectedGeneration: &gen, ExpectedPolicy: policy, PolicyFields: fields, RefreshOnly: false, Reservation: res,
 	})
 	if err != nil {
 		return portable.Binding{}, policyConflict(err)
+	}
+	if req.Binding.Integration == portable.Cursor {
+		// Advance only the request-local atom through this successful, frozen
+		// false patch. Later observations may verify it, never replace it.
+		policy = &after
+		if s.ExpectedPolicy != nil {
+			*s.ExpectedPolicy = after
+		}
+		verified, e := installruntime.ReadPolicySnapshot(ctx, req.Binding.ControlRoot)
+		if e != nil {
+			return portable.Binding{}, e
+		}
+		if verified.Installation.Recovery || !reflect.DeepEqual(verified.Installation.Ledger, ledger) || verified.Preimage != after || !portable.ExactCommittedBinding(verified.Installation.Ledger, req.Binding) {
+			return portable.Binding{}, ErrConcurrentChange
+		}
 	}
 	if _, err = portable.Publish(req.Binding); err != nil {
 		if !existed {
 			next := ledger.Generation
 			_, _ = installruntime.Commit(ctx, installruntime.Request{
 				ControlRoot: req.Binding.ControlRoot, Owner: req.Binding.Owner, RuntimeRoot: req.Binding.RuntimeRoot,
-				ConsumerID: key, RemoveConsumer: true, ExpectedGeneration: &next, ExpectedPolicy: s.ExpectedPolicy, Reservation: res,
+				ConsumerID: key, RemoveConsumer: true, ExpectedGeneration: &next, ExpectedPolicy: policy, Reservation: res,
 			})
 		}
 		return portable.Binding{}, err

@@ -3,6 +3,40 @@ import Darwin
 @testable import terminal_notifier_modern
 
 final class CallbackWorkTests: XCTestCase {
+    func testNoneCallbackCompletesWithoutNavigationOrOwnedWork() throws {
+        var lines: [String] = []
+        var completions = 0
+        let owner = CallbackLifecycle(schedule: { _, _ in }, exit: {},
+            diagnostic: { lines.append($0) }, now: { 0 })
+        let opener = Opener()
+        let forbiddenWork: (@escaping () -> Void) -> Void = { _ in XCTFail("none scheduled navigation work") }
+        let desktop = DesktopThreadExecutor(
+            discovery: Discovery(check: { XCTFail("none discovered desktop target") }),
+            verifier: Verifier(check: { XCTFail("none verified desktop target"); return false }),
+            opener: opener, verificationWork: forbiddenWork, deliverResult: forbiddenWork,
+            admission: PreflightAdmission(limit: 1))
+        let child = Child()
+        let legacy = ActionExecutor(makeCommand: { _ in XCTFail("none created command"); return child },
+            activation: { _, _ in XCTFail("none activated application") },
+            activationSystem: ActionExecutor.ActivationSystem(
+                running: { _ in XCTFail("none probed running application"); return nil },
+                lookup: { _ in XCTFail("none discovered legacy target"); return nil },
+                open: { _, _ in XCTFail("none opened legacy target") }),
+            discoveryWork: forbiddenWork, deliverResult: forbiddenWork,
+            admission: PreflightAdmission(limit: 1))
+        CallbackHandler(lifecycle: owner, desktop: desktop, legacy: legacy).receive(
+            identifier: "OPEN", defaultIdentifier: "default", notificationID: UUID().uuidString,
+            userInfo: ["action": try XCTUnwrap(ClickAction.none.toJSON())]) { completions += 1 }
+        XCTAssertEqual(completions, 1)
+        XCTAssertEqual(owner.inFlight, 0)
+        XCTAssertEqual(owner.ownedCount, 0)
+        XCTAssertEqual(child.started, 0)
+        XCTAssertTrue(opener.completions.isEmpty)
+        let events = try lines.map { try JSONDecoder().decode(CallbackDiagnostic.self, from: Data($0.utf8)) }
+        XCTAssertEqual(events.filter { $0.event == "callback_terminal" }.compactMap { $0.outcome }, ["legacy_completed"])
+        XCTAssertFalse(events.contains { $0.event == "preflight_started" || $0.event == "open_submitted" })
+    }
+
     private func action(_ n: Int = 1) -> DesktopThreadAction {
         DesktopThreadAction(type: "desktop_thread_v1", schemaVersion: 1, threadID: "private-thread",
             routeKind: "codex_thread", bundleID: "com.openai.codex", teamID: "TESTTEAM01",
@@ -105,15 +139,70 @@ final class CallbackWorkTests: XCTestCase {
         time = 111
         opener.completions[0](true); opener.completions[0](false)
         let events = try lines.map { try JSONDecoder().decode(CallbackDiagnostic.self, from: Data($0.utf8)) }
-        XCTAssertEqual(events.map { $0.event }, ["callback_received", "preflight_started", "preflight_finished",
+        XCTAssertEqual(events.map { $0.event }, ["callback_received", "preflight_started",
+            "preflight_queue", "preflight_discovery", "preflight_verification", "preflight_finished",
             "open_submitted", "open_completed", "callback_terminal"])
         XCTAssertEqual(events.compactMap { $0.elapsedSeconds }, [0, 0, 9.5, 9.5, 11, 11])
         XCTAssertTrue(events.allSatisfy { $0.correlationID == UUID(uuidString: action().correlationID)! })
         for line in lines {
             let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
-            XCTAssertTrue(Set(object.keys).isSubset(of: ["event", "correlationID", "outcome", "elapsedSeconds"]))
+            XCTAssertTrue(Set(object.keys).isSubset(of: ["event", "correlationID", "outcome", "elapsedSeconds", "durationSeconds"]))
             XCTAssertFalse(line.contains("private-thread") || line.contains("disposable") || line.contains("codex://"))
         }
+    }
+
+    // Queueing and delayed main delivery must not inflate measured Security work.
+    // Runs the actual handler/lifecycle/executor pipeline with a controlled clock.
+    func testPreflightMeasurementsCaptureWorkerBoundariesAndPublishOnMain() throws {
+        var time = 100.0
+        var lines: [String] = []
+        var worker: (() -> Void)?
+        var delivery: (() -> Void)?
+        let owner = CallbackLifecycle(schedule: { _, _ in }, exit: {},
+            diagnostic: { XCTAssertTrue(Thread.isMainThread); lines.append($0) }, now: { time })
+        let opener = Opener()
+        let executor = DesktopThreadExecutor(discovery: Discovery(check: { time += 3 }),
+            verifier: Verifier(check: { time += 4; return true }), opener: opener,
+            verificationWork: { worker = $0 }, deliverResult: { delivery = $0 },
+            admission: PreflightAdmission(limit: 1), now: { time })
+        try receive(CallbackHandler(lifecycle: owner, desktop: executor), action())
+        time += 2
+        try XCTUnwrap(worker)()
+        XCTAssertEqual(lines.count, 2) // No lifecycle/diagnostic mutation by worker.
+        XCTAssertEqual(opener.completions.count, 0)
+        time += 6
+        try XCTUnwrap(delivery)()
+        let events = try lines.map { try JSONDecoder().decode(CallbackDiagnostic.self, from: Data($0.utf8)) }
+        let measurements = events.filter { $0.durationSeconds != nil }
+        XCTAssertEqual(measurements.map { $0.event },
+            ["preflight_queue", "preflight_discovery", "preflight_verification"])
+        XCTAssertEqual(measurements.compactMap { $0.durationSeconds }, [2, 3, 4])
+        XCTAssertEqual(events.first { $0.event == "preflight_finished" }?.elapsedSeconds, 15)
+        XCTAssertEqual(opener.completions.count, 1)
+        opener.completions[0](true)
+    }
+
+    // Successful real background preflight must publish diagnostics on main.
+    func testAsyncMeasurementPublicationStaysOnCallbackQueue() throws {
+        let submitted = expectation(description: "handoff on callback queue")
+        var lines: [String] = []
+        let owner = CallbackLifecycle(schedule: { _, _ in }, exit: {}, diagnostic: {
+            XCTAssertTrue(Thread.isMainThread)
+            lines.append($0)
+            if $0.contains("open_submitted") { submitted.fulfill() }
+        })
+        let opener = Opener()
+        let executor = DesktopThreadExecutor(
+            discovery: Discovery(check: { XCTAssertFalse(Thread.isMainThread) }),
+            verifier: Verifier(check: { XCTAssertFalse(Thread.isMainThread); return true }),
+            opener: opener, admission: PreflightAdmission(limit: 1))
+        try receive(CallbackHandler(lifecycle: owner, desktop: executor), action())
+        wait(for: [submitted], timeout: 5)
+        let events = try lines.map { try JSONDecoder().decode(CallbackDiagnostic.self, from: Data($0.utf8)) }
+        XCTAssertEqual(events.filter { $0.durationSeconds != nil }.map { $0.event },
+            ["preflight_queue", "preflight_discovery", "preflight_verification"])
+        XCTAssertEqual(opener.completions.count, 1)
+        opener.completions.first?(true)
     }
 
     func testHeldSecurityKeepsSlotsAfterTimeoutAndOtherCallbacksProgress() throws {

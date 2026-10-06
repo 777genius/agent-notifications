@@ -138,6 +138,10 @@ func main() {
 
 // dispatchEarlyCommand preserves the observation routes before global logging.
 func dispatchEarlyCommand() bool {
+	if len(os.Args) > 1 && os.Args[1] == "cursor-event" {
+		os.Exit(runCursorEvent(os.Args[2:], os.Stdin, os.Stdout))
+	}
+
 	if len(os.Args) > 1 && os.Args[1] == "copilot-vscode-event" {
 		os.Exit(runCopilotVSCodeEvent(os.Args[2:], os.Stdin, os.Stdout))
 	}

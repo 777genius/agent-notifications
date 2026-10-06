@@ -1,0 +1,139 @@
+{
+  "schemaVersion": 1,
+  "helperSHA256": "9038bc83055751931073608425e1b174668e2693c4f23c9b120ba48b698882a0",
+  "probeScriptSHA256": "3bdb239b2f9da7710f1f15ac34682156cc6d10bde9d24aca961e5f93ed506095",
+  "notificationReceipt": {
+    "retrySafe": false,
+    "notificationID": "c67296c8-5752-474d-8d91-ad133fd8ca81",
+    "schemaVersion": 1,
+    "correlationID": "c67296c8-5752-474d-8d91-ad133fd8ca81",
+    "reason": "os_accepted",
+    "nonce": "4e49dbd5-ed1a-4512-b443-0afad1502674",
+    "status": "submitted"
+  },
+  "senderObservations": [
+    {
+      "wallSeconds": 1791217926.718764,
+      "pids": []
+    },
+    {
+      "wallSeconds": 1791217926.7835672,
+      "pids": [
+        33185
+      ]
+    },
+    {
+      "wallSeconds": 1791217926.889782,
+      "pids": [
+        33185
+      ]
+    },
+    {
+      "wallSeconds": 1791217926.9500532,
+      "pids": []
+    }
+  ],
+  "observedSenderPIDs": [
+    33185
+  ],
+  "senderObservationFinishedWallSeconds": 1791217926.951508,
+  "observationMethod": "pgrep -f anchored exact executable path and --send-json, 20ms pause between samples; command-line absence, no collected helper exit status",
+  "senderCommandLineAbsentBeforeClickRequest": true,
+  "callbackProcessID": 53286,
+  "submissionBudgetSeconds": 14,
+  "userVisualConfirmation": "\u043d\u0430\u0436\u0430\u043b - \u043e\u043a\u0442\u0440\u044b\u043b\u043e \u0447\u0430\u0442",
+  "verificationSeconds": 4.17940137500409,
+  "handoffSeconds": 0.02869795821607113,
+  "callbackTotalSeconds": 4.20900108339265,
+  "events": [
+    {
+      "timestamp": "2026-10-05 19:44:55.136444+0300",
+      "processID": 53286,
+      "diagnostic": {
+        "elapsedSeconds": 0,
+        "event": "callback_received",
+        "correlationID": "C67296C8-5752-474D-8D91-AD133FD8CA81"
+      }
+    },
+    {
+      "timestamp": "2026-10-05 19:44:55.136552+0300",
+      "processID": 53286,
+      "diagnostic": {
+        "elapsedSeconds": 0.00018783332780003548,
+        "event": "preflight_started",
+        "correlationID": "C67296C8-5752-474D-8D91-AD133FD8CA81"
+      }
+    },
+    {
+      "timestamp": "2026-10-05 19:44:59.316407+0300",
+      "processID": 53286,
+      "diagnostic": {
+        "event": "preflight_queue",
+        "correlationID": "C67296C8-5752-474D-8D91-AD133FD8CA81",
+        "durationSeconds": 4.2625004425644875e-05
+      }
+    },
+    {
+      "timestamp": "2026-10-05 19:44:59.316430+0300",
+      "processID": 53286,
+      "diagnostic": {
+        "event": "preflight_discovery",
+        "correlationID": "C67296C8-5752-474D-8D91-AD133FD8CA81",
+        "durationSeconds": 0.00010787497740238905
+      }
+    },
+    {
+      "timestamp": "2026-10-05 19:44:59.316447+0300",
+      "processID": 53286,
+      "diagnostic": {
+        "event": "preflight_verification",
+        "correlationID": "C67296C8-5752-474D-8D91-AD133FD8CA81",
+        "durationSeconds": 4.17940137500409
+      }
+    },
+    {
+      "timestamp": "2026-10-05 19:44:59.316464+0300",
+      "processID": 53286,
+      "diagnostic": {
+        "event": "preflight_finished",
+        "correlationID": "C67296C8-5752-474D-8D91-AD133FD8CA81",
+        "elapsedSeconds": 4.180101458332501
+      }
+    },
+    {
+      "timestamp": "2026-10-05 19:44:59.316479+0300",
+      "processID": 53286,
+      "diagnostic": {
+        "event": "open_submitted",
+        "correlationID": "C67296C8-5752-474D-8D91-AD133FD8CA81",
+        "elapsedSeconds": 4.180117583367974
+      }
+    },
+    {
+      "timestamp": "2026-10-05 19:44:59.345254+0300",
+      "processID": 53286,
+      "diagnostic": {
+        "event": "open_completed",
+        "correlationID": "C67296C8-5752-474D-8D91-AD133FD8CA81",
+        "elapsedSeconds": 4.208815541584045
+      }
+    },
+    {
+      "timestamp": "2026-10-05 19:44:59.345370+0300",
+      "processID": 53286,
+      "diagnostic": {
+        "event": "callback_terminal",
+        "correlationID": "C67296C8-5752-474D-8D91-AD133FD8CA81",
+        "outcome": "open_requested",
+        "elapsedSeconds": 4.20900108339265
+      }
+    }
+  ],
+  "limitations": [
+    "Independent command-line running-to-absent observation, not collected helper exit status",
+    "Single native callback; no physical click or render timestamp",
+    "No full managed CLI ingress acceptance or fast path qualification",
+    "Observed delay before callback is user wait, not helper startup latency"
+  ],
+  "launchToCallbackWallSeconds": 768.465695142746
+}

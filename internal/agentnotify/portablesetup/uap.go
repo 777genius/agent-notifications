@@ -22,6 +22,7 @@ import (
 
 	"github.com/777genius/agent-notifications/install/uapinstaller"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
+	"github.com/777genius/agent-notifications/internal/cursorinstall"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/strictjson"
 )
@@ -88,6 +89,9 @@ type Materializer struct {
 	Kernel Service
 	Store  statev2.Store
 	Roots  UAPRoots
+	// Registry is the explicit composition for this materializer and every
+	// engine it constructs. Nil retains the Claude/Codex composition.
+	Registry *clients.Registry
 }
 
 type clientFact struct {
@@ -204,6 +208,44 @@ func (m Materializer) RecoverJournals(ctx context.Context, req MaterializeReques
 // recoverOwnedJournals restores a pending Notifications kernel journal, then
 // releases the coordinator lease before UAP Recover (§7.4.2).
 func (m Materializer) recoverOwnedJournals(ctx context.Context, req MaterializeRequest) error {
+	if req.Integration == portable.Cursor {
+		if err := m.validate(req, false); err != nil {
+			return err
+		}
+		// Refuse original physical authority before AN recovery/lease effects.
+		// Existing owners must revalidate their recorded token, never recapture.
+		eng, err := m.engine(req, new(uint64), nil)
+		if err != nil {
+			return err
+		}
+		state, err := m.Store.Load()
+		if err != nil {
+			return err
+		}
+		recorded := false
+		for _, installation := range state.Installations {
+			for _, binding := range installation.Clients {
+				if binding.ClientID == "cursor" {
+					recorded = true
+					if err := eng.VerifyProfileAuthority(ctx, installation.InstallationID, binding.ClientBindingID); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		if !recorded {
+			selected, _ := clients.As[*cursorinstall.Adapter](m.Registry, domain.ClientID("cursor"))
+			profile, err := selected.ResolveProfileRoot(req.ClientConfigRoot)
+			if err != nil {
+				return err
+			}
+			// A fresh profile check grants no authority: discard its token.
+			// Public Prepare still captures and freezes the actual new owner.
+			if _, err := selected.CaptureProfileAuthority(ctx, domain.DetectedClient{ClientID: domain.ClientCursor, ConfigRoot: profile}); err != nil {
+				return err
+			}
+		}
+	}
 	release, err := installruntime.AcquireCoordinatorLease(ctx, req.Identity.ControlRoot)
 	if err != nil {
 		return err
@@ -809,11 +851,23 @@ func explicitAbs(p string) bool {
 func (m Materializer) validate(req MaterializeRequest, install bool) error {
 	switch req.Integration {
 	case portable.Codex, portable.Claude:
+	case portable.Cursor:
+		// Public UAP098 composes selected ProjectArgs. Only the explicitly
+		// selected vendor adapter may enter; Prepare validates original ancestry.
+		if selected, ok := clients.As[*cursorinstall.Adapter](m.Registry, domain.ClientID("cursor")); !ok || selected == nil {
+			return fmt.Errorf("%w: selected Cursor adapter required", ErrPreflight)
+		}
 	default:
 		return ErrPreflight
 	}
 	if !explicitAbs(req.ClientConfigRoot) {
 		return fmt.Errorf("%w: client config root must be explicit", ErrPreflight)
+	}
+	if req.Integration == portable.Cursor {
+		selected, _ := clients.As[*cursorinstall.Adapter](m.Registry, domain.ClientID("cursor"))
+		if _, err := selected.ResolveProfileRoot(req.ClientConfigRoot); err != nil {
+			return err
+		}
 	}
 	if req.ClientExecutable == "" || !filepath.IsAbs(req.ClientExecutable) {
 		return fmt.Errorf("%w: client executable must be explicit", ErrPreflight)
@@ -858,9 +912,13 @@ func (m Materializer) engineWithIdentities(req MaterializeRequest, generation *u
 	if req.Integration == portable.Codex {
 		runner = m.Roots.CodexRunner
 	}
-	registry, err := NewRegistry()
-	if err != nil {
-		return nil, err
+	registry := m.Registry
+	if registry == nil {
+		var err error
+		registry, err = NewRegistry()
+		if err != nil {
+			return nil, err
+		}
 	}
 	return uapinstaller.New(uapinstaller.Config{
 		StateRoot:            filepath.Dir(m.Roots.StateFile),
@@ -1490,6 +1548,11 @@ func (m Materializer) SwitchRetained(ctx context.Context, req MaterializeRequest
 	if ctx == nil {
 		return uapinstaller.Result{}, ErrPreflight
 	}
+	if req.Integration == portable.Cursor {
+		if err := m.validate(req, true); err != nil {
+			return uapinstaller.Result{}, err
+		}
+	}
 	if !explicitAbs(req.PackageRoot) {
 		return uapinstaller.Result{}, fmt.Errorf("%w: package root must be an explicit absolute path", ErrPreflight)
 	}
@@ -1679,6 +1742,11 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 	if ctx == nil {
 		return ErrPreflight
 	}
+	if req.Integration == portable.Cursor {
+		if err := m.validate(req, false); err != nil {
+			return err
+		}
+	}
 	state, err := m.Store.Load()
 	if err != nil {
 		return err
@@ -1716,6 +1784,15 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 	}
 	if found == nil {
 		return ErrAlreadyAbsent
+	}
+	if req.Integration == portable.Cursor {
+		eng, err := m.engine(req, new(uint64), nil)
+		if err != nil {
+			return err
+		}
+		if err := eng.VerifyProfileAuthority(ctx, installation.InstallationID, found.ClientBindingID); err != nil {
+			return err
+		}
 	}
 	release, err := m.beginMutation(ctx, &req)
 	if err != nil {

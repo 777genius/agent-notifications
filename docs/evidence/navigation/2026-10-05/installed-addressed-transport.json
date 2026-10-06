@@ -1,0 +1,144 @@
+{
+  "schemaVersion": 1,
+  "rawEvidenceSHA256": "261f4b83b59ac96df437b85d2d1d5fb57cb23ad33c0efdaf0ee3cbe9b806e01f",
+  "result": {
+    "schemaVersion": 1,
+    "macOS": "15.6.1",
+    "architecture": "arm64",
+    "sourceSHA256": {
+      "ProcessSerialBridge.c": "f8b2e464465b7d1f3835dfb1aa3040715940f109b3f733e700f7caed9c132ab1",
+      "ProcessSerialBridge.h": "5065d4b90bca9305c9c6709db0b5f0a6d9f1fda3a66948efb032fec0bdc1cec3",
+      "InstalledProcessSerialProbe.swift": "772b43680744edb000581785bd461ecb67402086b543e24f79bc7cc527e8ca8c",
+      "ContinuousClock.swift": "418b61752619080601afec4b267370639d5347c0d442342f5ed41c51340dacac"
+    },
+    "runnerSHA256": "a3465581631cc41d66d1aab8f8e5de5c9495a98c8b827325a9a7dd8f716ba119",
+    "commands": [
+      {
+        "label": "bridge-build",
+        "argv": [
+          "cc",
+          "-c",
+          "$TEST_ROOT/source/ProcessSerialBridge.c",
+          "-o",
+          "$TEST_ROOT/bridge.o"
+        ],
+        "exitCode": 0,
+        "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderrSHA256": "4def149c53723cf9bef260228ba127cd930f455e8b5c97a6c3326a3279aca9ea"
+      },
+      {
+        "label": "probe-build",
+        "argv": [
+          "swiftc",
+          "-import-objc-header",
+          "$TEST_ROOT/source/ProcessSerialBridge.h",
+          "$TEST_ROOT/source/InstalledProcessSerialProbe.swift",
+          "$TEST_ROOT/source/ContinuousClock.swift",
+          "$TEST_ROOT/bridge.o",
+          "-o",
+          "$TEST_ROOT/installed-probe"
+        ],
+        "exitCode": 0,
+        "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "label": "one-native-attempt",
+        "argv": [
+          "$TEST_ROOT/installed-probe",
+          "--send-approved-synthetic-route"
+        ],
+        "exitCode": 0,
+        "stdoutSHA256": "917a39666a83e63596552c99db4b32b7555cb14c30defa60861ae5bc67715e1a",
+        "stderrSHA256": "15444752653bbcf427bbfef4bf11ad93593d41f688ec7f62ef4252808d5e7edb"
+      }
+    ],
+    "completed": true,
+    "route": "approved_synthetic_thread",
+    "coldLaunch": false,
+    "retries": 0,
+    "fastPathQualified": false,
+    "visibleChatAcknowledged": false,
+    "budgetScope": "before_handoff",
+    "outerTimeoutEffects": "unknown_no_retry",
+    "binarySHA256": "1b2e2d639b5820308e7d7b209357f7514bb72618f257a164232ff035aea7b081",
+    "native": {
+      "aliveAfterSend": true,
+      "aliveBeforeHandoff": true,
+      "atomicExecBindingProven": false,
+      "budgetScope": "before_handoff",
+      "completed": true,
+      "currentSelectedPathMatches": true,
+      "deadlineExceededOnReturn": false,
+      "dynamicStatus": 0,
+      "effectUnknown": false,
+      "elapsedBeforeHandoffMS": 3428.7431666161865,
+      "fastPathQualified": false,
+      "fullStaticStatus": 0,
+      "guestLookupStatus": 0,
+      "guestPathMatchesSelected": true,
+      "guestPathStatus": 0,
+      "guestStaticCopyStatus": 0,
+      "handoffBudgetMS": 20000,
+      "handoffPSN": [
+        0,
+        94259679
+      ],
+      "handoffPSNStatus": 0,
+      "initialPSNStatus": 0,
+      "limitations": [
+        "Public PID/PSN/path checks do not provide an atomic exec binding",
+        "AESend OSStatus is not acknowledgement of visible chat selection",
+        "Bridge disables consent prompts; denial is final and receives no retry",
+        "Bridge preflight/send has no internal deadline recheck; outer timeout leaves effects unknown with no retry",
+        "Dynamic validity does not validate all on-disk resources; full static validation is retained"
+      ],
+      "osRequestAccepted": true,
+      "permissionMayPrompt": false,
+      "permissionPreflightStatus": 0,
+      "phaseTimingsMS": {
+        "addressedSendIncludingPermissionPreflight": 161.58345830626786,
+        "discovery": 5.6367916986346245,
+        "dynamic": 2.154958201572299,
+        "fullStatic": 3358.7789584416896,
+        "guestLookup": 1.8673749873414636,
+        "guestPath": 0.05216652061790228,
+        "guestStaticCopy": 0.05466665606945753,
+        "handoffPSN": 0.07366680074483156,
+        "initialPSN": 50.5531249800697,
+        "requirement": 4.090624977834523,
+        "staticCreate": 0.8910000324249268
+      },
+      "pid": 36820,
+      "pinnedPSN": [
+        0,
+        94259679
+      ],
+      "probe": "installed_client_psn_transport",
+      "replyErrorBestEffort": 0,
+      "requirementStatus": 0,
+      "route": "approved_synthetic_thread",
+      "selectedProcessCount": 1,
+      "selectionUnchangedBeforeHandoff": true,
+      "sendBridgeInvocations": 1,
+      "sendStatus": 0,
+      "staticCreateStatus": 0,
+      "totalMS": 3630.277583375573,
+      "visibleChatAcknowledged": false
+    },
+    "snapshotUnchanged": true
+  },
+  "humanVisualConfirmation": {
+    "confirmed": true,
+    "text": "\u0414\u0430, \u0447\u0430\u0442 \u043e\u0442\u043a\u0440\u044b\u043b\u0441\u044f \u0438\u043b\u0438 \u0441\u0442\u0430\u043b \u0430\u043a\u0442\u0438\u0432\u043d\u044b\u043c"
+  },
+  "operatorHarnessPublished": false,
+  "operatorSourcePreservedPrivately": true,
+  "limitations": [
+    "One already-running installed client and explicitly approved synthetic route",
+    "No cold launch, automatic retry, process exit/update/PID reuse or atomic exec binding qualification",
+    "Human visual confirmation is separate from the native OS acceptance result",
+    "Before-handoff continuous deadline only; inner bridge dispatch deadline remains unqualified",
+    "Fixed private operator route is not published or automatically replayed"
+  ]
+}

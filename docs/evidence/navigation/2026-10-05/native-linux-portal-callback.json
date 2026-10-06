@@ -1,0 +1,197 @@
+{
+  "schemaVersion": 1,
+  "passed": true,
+  "passedScope": "owned_X11_portal_callback_cold_TEST_activation_and_cleanup",
+  "navigationQualified": false,
+  "installedClientQualified": false,
+  "productionClientActivated": false,
+  "humanRenderQualified": false,
+  "sourceSHA256": {
+    "navigation-linux-portal-callback-probe.py": "a535859f375a3ecd5cd1e32e469fcbfb489b944c409a93bdacf2ddaf9f98ddae",
+    "navigation_linux_portal_test_app.py": "1de7a028a31a193b34a3095f8f9de9ea4cb23714b5399446f0e7c2b129ad1269",
+    "Dockerfile": "06a5f0456d83f87a3e6e4b9553eec707c9de590dc1e4f87714eada0fc0dd1e9a"
+  },
+  "sourceProvenance": {
+    "sourceCommit": "1d20fadc304f6601452b5db65ed91197dba77041",
+    "releaseTag": "1.22.1",
+    "archiveSHA256": "d4879ddb3d65ff1a8f19187497e6f13dc5d267bcac404a5d501218be355753d3",
+    "scope": "all tracked src/document-portal/data/subprojects files and root Meson build files",
+    "matchedFiles": 198,
+    "missing": [],
+    "different": [],
+    "gitTreeTruncated": false,
+    "commit": "1d20fadc304f6601452b5db65ed91197dba77041",
+    "version": "1.22.1",
+    "ghCommand": "gh release download 1.22.1 --repo flatpak/xdg-desktop-portal --pattern xdg-desktop-portal-1.22.1.tar.xz*",
+    "publisherAssetSHA256": "d4879ddb3d65ff1a8f19187497e6f13dc5d267bcac404a5d501218be355753d3"
+  },
+  "versions": {
+    "portal-version": "xdg-desktop-portal 1.22.1",
+    "meson-version": "1.12.1",
+    "aptCandidates": "GTK=1.15.1-1build2\nDUNST=1.9.2-1build2\nXRES=2:1.2.1-1build1\n"
+  },
+  "containerInit": true,
+  "successfulExecution": {
+    "showAttempted": true,
+    "addReturned": true,
+    "senderExit": {
+      "pid": 93,
+      "exitCode": 0,
+      "collected": true,
+      "exitedBoot": 1315827.52160415
+    },
+    "XResPreflight": {
+      "version": [
+        1,
+        2
+      ],
+      "abi": {
+        "long": 8,
+        "xid": 8,
+        "spec": 16,
+        "value": 32,
+        "maskOffset": 8,
+        "lengthOffset": 16,
+        "valueOffset": 24
+      },
+      "ownPIDVerified": 7
+    },
+    "windowOwnership": {
+      "windowID": "4194306",
+      "serverDerivedPID": 16,
+      "method": "XRes_LOCAL_CLIENT_PID"
+    },
+    "nativeClick": {
+      "windowID": "4194306",
+      "ownerPID": 16,
+      "afterSenderExit": true,
+      "screenshotSHA256": "0da92c9095df233afc7988387b965af1a03d70d89a29d7a65af7cda8f192eb3d"
+    },
+    "kernelBirthProof": {
+      "startTicks": 131582754,
+      "clockTicksPerSecond": 100,
+      "lowerBoundBoot": 1315827.54,
+      "upperBoundBoot": 1315827.55,
+      "senderExitedBoot": 1315827.52160415,
+      "afterCollectedSenderExit": true,
+      "clockScope": "kernel_proc_starttime_and_CLOCK_BOOTTIME; code_entry_is_not_birth"
+    },
+    "callback": {
+      "pid": 109,
+      "startTicks": 131582754,
+      "entryBoot": 1315827.591970713,
+      "helperSHA256": "1de7a028a31a193b34a3095f8f9de9ea4cb23714b5399446f0e7c2b129ad1269",
+      "enteredBoot": 1315827.592041334,
+      "targetMatches": true,
+      "effectCount": 1
+    },
+    "callbackExited": true
+  },
+  "nativeEventCounts": {
+    "Notify": 1,
+    "ActionInvoked": 1,
+    "ActivateAction": 1
+  },
+  "clickCommandCount": 1,
+  "actionEventCount": 1,
+  "effect": {
+    "pid": 109,
+    "startTicks": 131582754,
+    "entryBoot": 1315827.591970713,
+    "helperSHA256": "1de7a028a31a193b34a3095f8f9de9ea4cb23714b5399446f0e7c2b129ad1269",
+    "enteredBoot": 1315827.592041334,
+    "targetMatches": true,
+    "nonce": "7ce435964a1449729def04bdd344bdf5"
+  },
+  "ownedProcessReapResults": [
+    {
+      "label": "xvfb",
+      "pid": 8,
+      "reapedExitCode": 0
+    },
+    {
+      "label": "bus",
+      "pid": 14,
+      "reapedExitCode": 0
+    },
+    {
+      "label": "monitor",
+      "pid": 15,
+      "reapedExitCode": -15
+    },
+    {
+      "label": "dunst",
+      "pid": 16,
+      "reapedExitCode": 0
+    },
+    {
+      "label": "gtk_backend",
+      "pid": 29,
+      "reapedExitCode": -15
+    },
+    {
+      "label": "frontend",
+      "pid": 43,
+      "reapedExitCode": -15
+    },
+    {
+      "label": "sender",
+      "pid": 93,
+      "reapedExitCode": 0
+    }
+  ],
+  "containerCleanup": {
+    "verified": true,
+    "ownedContainerID": "317c8099598f82b9c50ce66c5c478066e91ff340edc11ba30d5fa095d6188327",
+    "status": "owned_id_removed_and_exact_name_absent"
+  },
+  "snapshotUnchanged": true,
+  "helperUnchanged": true,
+  "rawEvidenceSHA256": {
+    "evidence.json": "a1ee4c40faf97b3e0093b676c182b3139fa3f378a74b048ac6fb9ea0758fa7c8",
+    "native-evidence.json": "546e32e1501a52a9fcd1c1a7e7dc64e4c638775b191be098c22e5dae61c14764",
+    "runtime/monitor.stdout": "1fc03685c14dc52bac99d51704405d9adef43e95f80dfc9c195742d46b2cdda7",
+    "runtime/bus.stderr": "1c92fb833e4a93f9541ff0f7f45a5700f7c8f38cfa29c843e6c9dd70176a370e",
+    "runtime/receipt.json": "eb4956182b27b8b050fecf1762a629e4e6a81f3fc2efba55b72ba0d784aaa17b",
+    "runtime/effect.json": "ff63d2c55e3fe86f9857e8926c792ab640600e6bff1d25d0bfcd04b025c8beae",
+    "runtime/service-start.json": "cb8140e12f526f47e90dc8d4110e66d2aef232494a0e9858911e738b0720ced4",
+    "runtime/action-events.jsonl": "9095adae8260a56eae4ea7b875c885379777a89d4dc1be64c8d760f5a7673c13",
+    "runtime/pre-click.png": "0da92c9095df233afc7988387b965af1a03d70d89a29d7a65af7cda8f192eb3d"
+  },
+  "previousExecutionWithoutInit": {
+    "passed": false,
+    "failure": "bounded_wait_failed",
+    "sourceSHA256": {
+      "navigation-linux-portal-callback-probe.py": "1bdb24ff153a30582abe6003d6b71af09a9610bb128321f46e78019671357e1c",
+      "navigation_linux_portal_test_app.py": "1de7a028a31a193b34a3095f8f9de9ea4cb23714b5399446f0e7c2b129ad1269",
+      "Dockerfile": "06a5f0456d83f87a3e6e4b9553eec707c9de590dc1e4f87714eada0fc0dd1e9a"
+    },
+    "callbackObserved": {
+      "pid": 108,
+      "startTicks": 131546317,
+      "entryBoot": 1315463.232839535,
+      "helperSHA256": "1de7a028a31a193b34a3095f8f9de9ea4cb23714b5399446f0e7c2b129ad1269",
+      "enteredBoot": 1315463.232884093,
+      "targetMatches": true,
+      "effectCount": 1
+    },
+    "actionEventCount": 1,
+    "containerCleanup": {
+      "verified": true,
+      "ownedContainerID": "bd9913d69a282c7d7610a1f99720363299fba1ce7949ffdd0d47ab04efe419ae",
+      "status": "owned_id_removed_and_exact_name_absent"
+    },
+    "zombieCauseProved": false,
+    "rawEvidenceSHA256": {
+      "evidence.json": "ea2f896a8af054e982fa7f7d1f20bb7418de77ce57bd0ad4fb6f1d6c10de572b",
+      "native-evidence.json": "6f2552af2075ed004351afe8259e7985a86870216c7258e240109b650f46becf",
+      "runtime/receipt.json": "fca879570c39731ee0d300a1258dbcee009b4192a61385bf1d419f4dc604f3dd",
+      "runtime/effect.json": "993af89b7e20d7547abb192675be8915dde884cfbff2ddbdb09c275ee37eb163",
+      "runtime/action-events.jsonl": "38137db57e19b70abf4f30eb59ebc6647834bfa3247b3c1639faaba21e638c32"
+    }
+  },
+  "limitations": [
+    "Owned Xvfb/XTest click only; no human rendering acknowledgement",
+    "Backend/dunst restart, Wayland and actual client routes unqualified"
+  ]
+}

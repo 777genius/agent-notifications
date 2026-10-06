@@ -12,7 +12,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/pathpolicy"
 	processadapter "github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/process"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/nativeconfig"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/shared"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/ports"
@@ -23,6 +26,7 @@ import (
 	"github.com/777genius/agent-notifications/internal/agentnotify/portablesetup"
 	"github.com/777genius/agent-notifications/internal/agentnotify/registration"
 	"github.com/777genius/agent-notifications/internal/config"
+	"github.com/777genius/agent-notifications/internal/cursorinstall"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 )
 
@@ -59,10 +63,16 @@ type Request struct {
 	// profiles first; remaining empty roots take this snapshot. Run and
 	// Plan do not reread the process environment.
 	GlobalConfig, CodexHome, ClaudeConfig string
-	EnvCodexHome, EnvClaudeConfig         string
-	ClientExecutable, ScopeRoot, Helper   string
-	ClientExecutables                     map[string]string
-	PackageSHA256                         string
+	// Cursor selection is explicit, never filled from discovery or environment.
+	// Fixed authority is provided by the qualified composition owner; it does
+	// not replace physical capture, installed receipts, or channel consent.
+	CursorConfig                        string
+	CursorAuthority                     *cursorinstall.Authority
+	CursorAgentNotify                   *bool
+	EnvCodexHome, EnvClaudeConfig       string
+	ClientExecutable, ScopeRoot, Helper string
+	ClientExecutables                   map[string]string
+	PackageSHA256                       string
 	// TreeDigest is the canonical package-tree digest from Prepare. It is
 	// distinct from PackageSHA256 (archive bytes).
 	TreeDigest, HelperDigest, HelperVersion string
@@ -581,7 +591,7 @@ func evaluate(ctx context.Context, req *Request, requireYes bool) evaluated {
 	if req.Action != ActionInspect && req.BootstrapMCP != nil {
 		observation := *req
 		observation.Agents = nil
-		for _, id := range []string{"claude", "codex"} {
+		for _, id := range []string{"claude", "codex", "cursor"} {
 			if _, ok := req.BootstrapMCP.Projection.Profiles[id]; ok {
 				observation.Agents = append(observation.Agents, id)
 			}
@@ -1219,6 +1229,12 @@ func restoreOmittedFromIntent(req Request, agents []portable.Integration, intent
 			} else if req.CodexHome != target.Profile {
 				return req, agents, portablesetup.ErrIntentConflict
 			}
+		case "cursor":
+			if req.CursorConfig == "" {
+				req.CursorConfig = target.Profile
+			} else if req.CursorConfig != target.Profile {
+				return req, agents, portablesetup.ErrIntentConflict
+			}
 		case "claude":
 			if req.ClaudeConfig == "" {
 				req.ClaudeConfig = target.Profile
@@ -1330,12 +1346,12 @@ func applyIntentUnits(req Request, want map[string]unitSelection) Request {
 		req.Hooks = boolPtr(uniform.hooks)
 		req.AgentNotify = boolPtr(uniform.notify)
 		req.ClaudeHooks, req.CodexHooks = nil, nil
-		req.ClaudeAgentNotify, req.CodexAgentNotify = nil, nil
+		req.ClaudeAgentNotify, req.CodexAgentNotify, req.CursorAgentNotify = nil, nil, nil
 		return req
 	}
 	req.Hooks, req.AgentNotify = nil, nil
 	req.ClaudeHooks, req.CodexHooks = nil, nil
-	req.ClaudeAgentNotify, req.CodexAgentNotify = nil, nil
+	req.ClaudeAgentNotify, req.CodexAgentNotify, req.CursorAgentNotify = nil, nil, nil
 	for client, sel := range want {
 		hooks, notify := boolPtr(sel.hooks), boolPtr(sel.notify)
 		switch client {
@@ -1343,6 +1359,8 @@ func applyIntentUnits(req Request, want map[string]unitSelection) Request {
 			req.ClaudeHooks, req.ClaudeAgentNotify = hooks, notify
 		case "codex":
 			req.CodexHooks, req.CodexAgentNotify = hooks, notify
+		case "cursor":
+			req.CursorAgentNotify = notify
 		}
 	}
 	return req
@@ -1362,7 +1380,7 @@ func intentClients(intent portablesetup.Intent) []string {
 }
 
 func unitFlagsOmitted(req Request) bool {
-	return req.Hooks == nil && req.AgentNotify == nil && req.ClaudeHooks == nil && req.CodexHooks == nil && req.ClaudeAgentNotify == nil && req.CodexAgentNotify == nil
+	return req.Hooks == nil && req.AgentNotify == nil && req.ClaudeHooks == nil && req.CodexHooks == nil && req.ClaudeAgentNotify == nil && req.CodexAgentNotify == nil && req.CursorAgentNotify == nil
 }
 
 func sameStringSet(a, b []string) bool {
@@ -2583,6 +2601,11 @@ func retryRequestFromIntent(req Request, intent portablesetup.Intent) Request {
 			if target.Profile != "" {
 				retry.CodexHome = target.Profile
 			}
+		case "cursor":
+			if target.Profile != "" {
+				retry.CursorConfig = target.Profile
+				retry.ScopeRoot = target.Profile
+			}
 		case "claude":
 			if target.Profile != "" {
 				retry.ClaudeConfig = target.Profile
@@ -2797,7 +2820,38 @@ func materializer(req Request, snap installruntime.InstalledSnapshot, runtimeRoo
 		RequireLiveProfiles: true,
 	})
 	mat.Kernel.ExpectedPolicy = req.BootstrapExpectedPolicy
-	return mat, err
+	if err != nil {
+		return mat, err
+	}
+	agents, err := normalizeAgents(req.Agents)
+	if err != nil {
+		return mat, err
+	}
+	_, notify := selectedUnits(req, agents)
+	for _, agent := range notify {
+		if agent != portable.Cursor {
+			continue
+		}
+		if req.CursorAuthority == nil || !explicitAbs(req.CursorConfig) || req.CursorAuthority.Executable != helper {
+			return mat, fmt.Errorf("%w: explicit qualified Cursor composition required", portablesetup.ErrPreflight)
+		}
+		adapter, err := cursorinstall.New(nativeconfig.New(), pathpolicy.Policy{}, req.CursorAuthority)
+		if err != nil {
+			return mat, err
+		}
+		if _, err := adapter.ResolveProfileRoot(req.CursorConfig); err != nil {
+			return mat, err
+		}
+		registry, err := portablesetup.NewRegistry()
+		if err != nil {
+			return mat, err
+		}
+		mat.Registry, err = clients.NewRegistry(append(registry.All(), adapter)...)
+		if err != nil {
+			return mat, err
+		}
+	}
+	return mat, nil
 }
 
 func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot string, mat portablesetup.Materializer, generate bool) (portablesetup.Identity, error) {
@@ -2809,7 +2863,7 @@ func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot st
 	configRoot := ""
 	if len(req.Agents) == 1 {
 		switch req.Agents[0] {
-		case string(portable.Codex), string(portable.Claude):
+		case string(portable.Codex), string(portable.Claude), string(portable.Cursor):
 			clientID = req.Agents[0]
 			configRoot = clientConfig(req, portable.Integration(req.Agents[0]))
 		}
@@ -2847,7 +2901,7 @@ func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot st
 		var candidates []portablesetup.Identity
 		for _, name := range req.Agents {
 			agent := portable.Integration(name)
-			if agent != portable.Claude && agent != portable.Codex {
+			if agent != portable.Claude && agent != portable.Codex && agent != portable.Cursor {
 				continue
 			}
 			if migration, ok := req.MigrationBindings[name]; ok {
@@ -2936,9 +2990,13 @@ func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot st
 }
 
 func installerEngine(mat portablesetup.Materializer) (*uapinstaller.Engine, error) {
-	registry, err := portablesetup.NewRegistry()
-	if err != nil {
-		return nil, err
+	registry := mat.Registry
+	if registry == nil {
+		var err error
+		registry, err = portablesetup.NewRegistry()
+		if err != nil {
+			return nil, err
+		}
 	}
 	return uapinstaller.New(uapinstaller.Config{
 		StateRoot:            filepath.Dir(mat.Roots.StateFile),
@@ -3479,6 +3537,8 @@ func clientConfig(req Request, agent portable.Integration) string {
 		return req.CodexHome
 	case portable.Claude:
 		return req.ClaudeConfig
+	case portable.Cursor:
+		return req.CursorConfig
 	default:
 		return ""
 	}
@@ -3744,6 +3804,8 @@ func normalizeAgents(agents []string) ([]portable.Integration, error) {
 			id = portable.Claude
 		case "codex":
 			id = portable.Codex
+		case "cursor":
+			id = portable.Cursor
 		default:
 			return nil, errors.New("invalid_agents")
 		}
@@ -3759,7 +3821,7 @@ func normalizeAgents(agents []string) ([]portable.Integration, error) {
 func selectedUnits(req Request, agents []portable.Integration) (hooks, notify []portable.Integration) {
 	defaultOn := req.Action != ActionInspect
 	for _, agent := range agents {
-		if agentUnit(req.Hooks, perClientHooks(req, agent), defaultOn) {
+		if agent != portable.Cursor && agentUnit(req.Hooks, perClientHooks(req, agent), defaultOn) {
 			hooks = append(hooks, agent)
 		}
 		if agentUnit(req.AgentNotify, perClientNotify(req, agent), defaultOn) {
@@ -3810,6 +3872,8 @@ func preserveLiveUnits(ctx context.Context, req Request, agents []portable.Integ
 			req.ClaudeHooks, req.ClaudeAgentNotify = hooks, notify
 		case portable.Codex:
 			req.CodexHooks, req.CodexAgentNotify = hooks, notify
+		case portable.Cursor:
+			req.CursorAgentNotify = notify
 		}
 	}
 	return req
@@ -3832,6 +3896,8 @@ func perClientNotify(req Request, agent portable.Integration) *bool {
 		return req.ClaudeAgentNotify
 	case portable.Codex:
 		return req.CodexAgentNotify
+	case portable.Cursor:
+		return req.CursorAgentNotify
 	default:
 		return nil
 	}

@@ -3715,3 +3715,29 @@ func wizardCLINotifyDigest(got setupwizard.Result, client string) string {
 	}
 	return ""
 }
+
+func TestCursorQualifiedMountsRefusesStackedAncestors(t *testing.T) {
+	root := "10 1 8:1 / / rw - ext4 /dev/TEST rw\n"
+	profile := "20 10 8:2 / /TEST/profile rw - ext4 /dev/TEST2 rw\n"
+	for _, tc := range []struct {
+		name, mounts string
+		refuse       bool
+	}{
+		{"unique-ext4", root + profile, false},
+		{"non-ext4", root + strings.Replace(profile, "ext4", "tmpfs", 1), true},
+		{"profile-ext4-first", root + profile + "21 20 0:1 / /TEST/profile rw - tmpfs tmpfs rw\n", true},
+		{"profile-tmpfs-first", root + "21 20 0:1 / /TEST/profile rw - tmpfs tmpfs rw\n" + profile, true},
+		{"root-ext4-first", root + "11 10 0:1 / / rw - tmpfs tmpfs rw\n" + profile, true},
+		{"root-tmpfs-first", "11 10 0:1 / / rw - tmpfs tmpfs rw\n" + root + profile, true},
+		{"same-kind-stacked", root + profile + "21 20 8:3 / /TEST/profile rw - ext4 /dev/TEST3 rw\n", true},
+		{"ambiguous-parent-with-unique-deeper", root + "30 10 8:2 / /TEST rw - ext4 /dev/TEST2 rw\n31 30 0:1 / /TEST rw - tmpfs tmpfs rw\n" + profile, true},
+		{"unrelated-stacked", root + profile + "30 10 8:2 / /other rw - ext4 /dev/TEST2 rw\n31 30 0:1 / /other rw - tmpfs tmpfs rw\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := cursorQualifiedMounts("/TEST/profile/child", tc.mounts)
+			if tc.refuse && !errors.Is(err, setupwizard.ErrRefused) || !tc.refuse && err != nil {
+				t.Fatalf("mount metadata decision: %v; refuse=%v", err, tc.refuse)
+			}
+		})
+	}
+}
