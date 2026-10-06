@@ -404,7 +404,9 @@ static bool centerSurface() {
     auto shell = shellPid ? scan.owner(shellPid) : nullptr;
     const bool shellLive = shell && shell->live(), scanComplete = scan.enumerationCompleted && !scan.truncated;
     const bool desktopReady = preflight("surface-preflight.json");
-    if (!shellLive || !scanComplete || !desktopReady) {
+    // Metadata completeness limits the observations, not input authority. The
+    // independently held Shell identity and fresh desktop remain mandatory.
+    if (!shellLive || !desktopReady) {
         report("center-surface-rejected.json", "{\"pid\":" + std::to_string(GetCurrentProcessId())
             + ",\"nonce\":" + jsonQuote(uuid) + ",\"showAttempts\":0,\"inputAttempted\":false"
             + ",\"shellLive\":" + (shellLive ? "true" : "false") + ",\"scanComplete\":" + (scanComplete ? "true" : "false")
@@ -444,7 +446,9 @@ static bool centerSurface() {
         + ",\"chordAccepted\":" + (chord ? "true" : "false") + ",\"acceptedKeyEvents\":" + std::to_string(keys.accepted)
         + ",\"releaseAttempts\":" + std::to_string(keys.releaseAttempts) + ",\"keyReleaseUnknown\":" + (keys.releaseUnknown ? "true" : "false")
         + ",\"inputError\":" + std::to_string(keys.error) + ",\"shellStillLive\":" + (shell->live() ? "true" : "false")
-        + ",\"surfaceChangeObserved\":" + (beforeRows != scan.rows ? "true" : "false") + ",\"before\":" + before + ",\"after\":" + after + "}\n");
+        + ",\"surfaceChangeObserved\":" + (beforeRows != scan.rows ? "true" : "false")
+        + ",\"surfaceChangeMeaning\":\"sampled metadata rows differ; completeness and Center visibility unproved\""
+        + ",\"before\":" + before + ",\"after\":" + after + "}\n");
     return chord && !keys.releaseUnknown;
 }
 static void verifyShellIdentity() {
