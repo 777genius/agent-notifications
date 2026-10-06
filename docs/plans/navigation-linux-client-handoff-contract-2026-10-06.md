@@ -1,0 +1,35 @@
+# Linux selected-client notification handoff TEST contract
+
+Status: source preparation only. No notification, client launch or native callback has been performed for this slice. The existing renderer preflight does not qualify this handoff.
+
+## Selected entry point
+
+The frozen TEST package declares `Exec=chatgpt %U`, `StartupNotify=true` and the Codex URI handler. `/usr/bin/chatgpt` selects the vendor launcher under `/usr/lib/chatgpt`. It does not declare `DBusActivatable`; that omission does not prove absence of a runtime D-Bus interface. The adjacent desktop-declaration evidence retains the package, entry and launcher hashes.
+
+Use the exact vendor launcher with one canonical synthetic `codex://threads/<TEST UUID>` argument and the explicit Wayland switch. Do not consult a default URL handler or copy an authenticated user profile. A signed-out guest can establish handoff and activation, but cannot establish visible selection of an authenticated chat.
+
+## Callback authority and effects
+
+`navigation_linux_client_callback_test.py` runs only as UID 1000 in a fresh offline guest with a read-only ISO TEST seed, root-owned callback specification, private session directories, owned cgroup and live private bus/compositor peers. Its source and selected installation must match the frozen hashes. It reconstructs the child environment rather than inheriting the operator environment.
+
+One genuine Gio action supplies one matching TEST target and a nonempty bounded activation token. The callback publishes an exclusive handoff intent before launching. Any missing result after that intent remains unknown and must never trigger a retry. The token is consumed before the attempt; public records contain only its hash. The deadline is checked immediately before launch, after persistence and log creation.
+
+The callback intentionally records `activationQualified=false` and `navigationQualified=false`. Its return code, a launcher PID, mutable argv or its own JSON record cannot establish client execution, URI consumption, focus or chat selection. Private Wayland traces can contain the opaque token; retain them as private raw evidence and publish a bounded redacted projection.
+
+## Required guest-controller proof before a native attempt
+
+1. Create one new offline TEST overlay, fixed read-only seed and fresh private session. Keep the shipped client sandbox and AppArmor profile enabled. Bound the entire VM attempt externally.
+2. Start a private bus, owned Sway compositor, notification daemon and qualified portal frontend/backend. Record kernel process identity and retain pidfds; establish each bus owner and socket peer. Plain distro GTK is an already observed token-omission negative control, not the qualified backend.
+3. Install the exact callback source in the ISO and root-owned specification after the private peer identities are known. D-Bus service activation must inherit the TEST cgroup and private environment. Prove the callback is absent before the sole click.
+4. Send exactly one native notification, collect the sender exit and prove it is gone before clicking. Resolve the notification ID from the owned provider's matching request/reply. Use one owned Wayland pointer action; never call the callback action directly to substitute for a click.
+5. Observe exactly one provider action and its typed platform data. Prove the cold callback birth follows collected sender exit and that its token hash equals the native token hash. Then corroborate the client handoff with kernel identity for the selected executable and observed protocol behavior.
+6. Treat client activation separately: correlate the actual client connection, `xdg_activation_v1.activate` token, owned toplevel and compositor focus evidence. A request to activate is not proof of focus. Leave exact-chat qualification false in the signed-out guest.
+7. Preserve partial failure evidence. Kill only the inherited owned cgroup, collect every tracked incarnation, prove the cgroup is empty, shut down the guest and collect QEMU. Cleanup uncertainty prevents a pass. Never replay an uncertain attempt.
+
+This is a checklist for the next controller implementation, not a claim that these steps already passed. The current source checkpoint contains the callback and pure invocation tests; sender, controller and native qualification remain outstanding.
+
+## Review and tests
+
+The pure invocation contract independently expects the fixed vendor argv and canonical synthetic URI, and rejects substituted targets and invalid environment tokens. It imports no Gio and performs no native effects. Run `PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-navigation-linux-client-callback.py`.
+
+Round 1 identified a deadline gap after intent persistence and log creation; the callback now rechecks immediately before `Popen`. Round 2 identified that a bus-address prefix check admitted a fallback transport. The callback now requires exactly the fixed private socket and a 32-hex GUID; pure negative cases reject fallback transports, additional options and different paths. Round 3 independently reviewed the callback authority and effects. Rounds 2 and 3 accepted the corrected callback source. Any subsequent sender/controller changes require their own review before native execution.
