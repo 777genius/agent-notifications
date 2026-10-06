@@ -15,8 +15,9 @@ import (
 	"syscall"
 )
 
-// This catalog must be generated from the authenticated official package. An
-// empty catalog intentionally keeps production unavailable before acquisition.
+// Generated from the authenticated official package by TEST run 37544121731.
+// Manifest SHA256: 0d90a150c5066973b5884e2086b632737536bcbf362404ed81bb284d3b37f326.
+// Catalog acquisition does not qualify native callback or navigation behavior.
 //
 //go:embed vendor-chatgpt-26.930.51102-amd64.json
 var catalog []byte
