@@ -1,8 +1,8 @@
 // One disposable Windows CI package. No real client route or private-key export.
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 type Json = Record<string, unknown>;
@@ -10,6 +10,7 @@ type Step = { mode: string; pid: number; status: number | null; signal: string |
   stdout: string; stderr: string; collectedAt: number };
 const evidence: Json = { status: 'failed', scope: 'packaged TEST cold toast COM callback only',
   nativeCallbackQualified: false, navigationQualified: false, clientRouteTested: false,
+  vendorCompositionQualified: false, processQuiescenceQualified: false,
   showAttempts: null, showCallOutcome: 'not_started', nativeEffectUncertain: false,
   sourceSHA: process.env.NAVIGATION_SOURCE_SHA, runnerLabel: process.env.NAVIGATION_WINDOWS_RUNNER,
   imageVersion: process.env.ImageVersion, nodeVersion: process.version, steps: [] };
@@ -20,6 +21,7 @@ let binary: string | undefined;
 let exitCode = 1;
 let packageIntent = false;
 let activationIntent = false;
+let bootstrap: { handoff: Json; paths: Map<string, string>; hashes: Map<string, string> } | undefined;
 
 // Fixed source, saved verbatim in the owned root. Data arrives only in JSON.
 // Mutation intents survive failures; cleanup reconciles exact owned identities.
@@ -222,6 +224,82 @@ if (!$s.cleanupPassed) { throw 'exact owned package/certificate cleanup failed' 
 `;
 
 function hash(path: string): string { return createHash('sha256').update(readFileSync(path)).digest('hex'); }
+function bindBootstrap(): void {
+  if (process.env.NAVIGATION_WINDOWS_MSIX_MODE !== 'oobe_then_msix_callback') return;
+  const supplied = resolve(process.env.NAVIGATION_WINDOWS_OOBE_BOOTSTRAP_ROOT ?? '');
+  const path = realpathSync(supplied);
+  const st = lstatSync(supplied), name = basename(path), id = name.slice('navigation-windows-test-'.length);
+  if (!st.isDirectory() || st.isSymbolicLink() || dirname(path) !== realpathSync(process.env.RUNNER_TEMP!)
+      || !/^navigation-windows-test-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(name)
+      || path === root || id === nonce) {
+    throw new Error('fresh sibling bootstrap TEST root required');
+  }
+  const paths = new Map<string, string>(), hashes = new Map<string, string>();
+  function bytes(name: string, limit: number): Buffer {
+    const file = join(path, name), fs = lstatSync(file);
+    if (!fs.isFile() || fs.isSymbolicLink() || fs.nlink !== 1 || realpathSync(file) !== file
+        || fs.size < 1 || fs.size > limit) throw new Error('bounded immutable bootstrap member required');
+    const data = readFileSync(file); if (data.length !== fs.size) throw new Error('bootstrap member changed');
+    paths.set(name, file); hashes.set(name, createHash('sha256').update(data).digest('hex')); return data;
+  }
+  const marker = bytes('.owned-test-root', 256).toString('utf8');
+  const handoff = JSON.parse(bytes('same-job-bootstrap.json', 65_536).toString('utf8')) as Json;
+  const result = JSON.parse(bytes('evidence.json', 131_072).toString('utf8')) as Json;
+  const packet = bytes('oobe-setup-records.json', 6_291_456);
+  if (marker !== 'TEST navigation Windows ' + id + '\n' || handoff.root !== path || handoff.nonce !== id
+      || handoff.runID !== process.env.GITHUB_RUN_ID || handoff.job !== process.env.GITHUB_JOB
+      || handoff.attempt !== '1' || handoff.sourceSHA !== evidence.sourceSHA
+      || handoff.observerSHA256 !== evidence.observerSHA256 || handoff.evidenceSHA256 !== hashes.get('evidence.json')
+      || handoff.recordsSHA256 !== hashes.get('oobe-setup-records.json')
+      || typeof handoff.userSid !== 'string' || !/^S-1-5-[0-9-]{1,160}$/.test(handoff.userSid)
+      || !Number.isInteger(handoff.session) || Number(handoff.session) <= 0
+      || result.status !== 'guest_setup_complete' || result.root !== path || result.nonce !== id
+      || result.sourceSHA !== evidence.sourceSHA || result.binarySHA256 !== evidence.observerSHA256
+      || result.imageVersion !== evidence.imageVersion || result.runnerLabel !== evidence.runnerLabel
+      || result.oobeSetupQualified !== true || result.captureQualified !== true
+      || result.oobeSetupActorCollected !== true || result.captureActorCollected !== true
+      || result.invokeEffectUncertain !== false || result.nativeEffectUncertain !== false
+      || result.showAttempts !== 0 || result.noKeyboardOrPointerInputProved !== true
+      || result.setupRecordErrors || result.setupRecordPublicationError
+      || result.setupRecordsSHA256 !== hashes.get('oobe-setup-records.json')) throw new Error('bootstrap custody/terminal proof absent');
+  const terminal = result.oobeSetupResult as Json, capture = result['desktop-capture.json'] as Json;
+  if (!terminal || terminal.setupQualified !== true || terminal.ownedOOBEWindowGone !== true
+      || terminal.invokeEffectUncertain !== false || terminal.acceptCallsEntered !== 1
+      || terminal.invokeCallsEntered !== terminal.invokeCallsReturned
+      || terminal.progressionsObserved !== terminal.invokeCallsReturned
+      || !capture || capture.session !== handoff.session || capture.sourceSHA !== evidence.sourceSHA
+      || capture.binarySHA256 !== evidence.observerSHA256 || !Array.isArray(result.steps)
+      || result.steps.length !== 4 || result.steps.some((s: Json, index: number) =>
+        s.mode !== ['center-policy', 'preflight', 'oobe-setup', 'desktop-capture'][index]
+        || s.status !== 0 || s.signal !== null || s.error || !Number.isInteger(s.pid) || Number(s.pid) <= 0)) {
+    throw new Error('known collected bootstrap actors required');
+  }
+  const records = JSON.parse(packet.toString('utf8')) as Json;
+  if (records.nonce !== id || records.actorPID !== (result.steps[2] as Json).pid
+      || !records.records || typeof records.records !== 'object' || Array.isArray(records.records)
+      || Object.keys(records.records).length !== result.setupRecordCount || Number(result.setupRecordCount) > 198
+      || Object.entries(records.records).some(([key, value]: [string, Json]) =>
+        !/^oobe-setup-(intent|result|after-preflight|[0-4]-(armed|returned|progress|(before|after-[0-7])-(preflight|after-preflight|intent|uia)))\.json$/.test(key)
+        || !value || value.pid !== records.actorPID || value.nonce !== id
+        || Buffer.byteLength(JSON.stringify(value)) > (key.endsWith('-uia.json') ? 65_536 : 16_384))) {
+    throw new Error('bounded bootstrap packet binding absent');
+  }
+  bootstrap = { handoff, paths, hashes };
+  evidence.bootstrap = { nonce: id, session: handoff.session, sourceSHA: handoff.sourceSHA,
+    handoffSHA256: hashes.get('same-job-bootstrap.json'), evidenceSHA256: hashes.get('evidence.json'),
+    recordsSHA256: hashes.get('oobe-setup-records.json'), observerSHA256: handoff.observerSHA256 };
+}
+function revalidateBootstrap(): void {
+  if (!bootstrap) return;
+  for (const [name, path] of bootstrap.paths) {
+    const st = lstatSync(path);
+    const limit = name === 'oobe-setup-records.json' ? 6_291_456 : name === 'evidence.json' ? 131_072 : 65_536;
+    if (!st.isFile() || st.isSymbolicLink() || st.nlink !== 1 || realpathSync(path) !== path
+        || st.size < 1 || st.size > limit
+        || hash(path) !== bootstrap.hashes.get(name)) throw new Error('bootstrap custody changed before package effects');
+  }
+  if (hash(observer!) !== evidence.observerSHA256) throw new Error('observer changed before package effects');
+}
 function read(name: string): Json {
   if (!root) throw new Error('owned root absent');
   const path = join(root, name);
@@ -274,6 +352,15 @@ async function main(): Promise<void> {
       || process.env.AGENT_NOTIFY_NAVIGATION_WINDOWS_E2E !== '1'
       || process.env.NAVIGATION_WINDOWS_RUNNER !== 'windows-11-vs2026-arm'
       || Number(process.versions.node.split('.')[0]) !== 24) throw new Error('explicit disposable Windows client CI required');
+  const mode = process.env.NAVIGATION_WINDOWS_MSIX_MODE;
+  if (!['native_callback', 'oobe_then_msix_callback'].includes(mode ?? '')
+      || process.env.GITHUB_REPOSITORY !== '777genius/agent-notifications'
+      || process.env.GITHUB_EVENT_NAME !== 'workflow_dispatch' || process.env.GITHUB_RUN_ATTEMPT !== '1'
+      || process.arch !== 'arm64' || !/^[0-9a-f]{40}$/.test(process.env.NAVIGATION_SOURCE_SHA ?? '')) {
+    throw new Error('first explicit manual packaged TEST mode and exact source required');
+  }
+  if (mode === 'native_callback' && process.env.NAVIGATION_WINDOWS_OOBE_BOOTSTRAP_ROOT) throw new Error('unexpected bootstrap in standalone mode');
+  evidence.mode = mode;
   if (!process.env.RUNNER_TEMP) throw new Error('owned CI temp absent');
   nonce = randomUUID(); root = join(realpathSync(process.env.RUNNER_TEMP), 'navigation-windows-test-' + nonce);
   mkdirSync(root); writeFileSync(join(root, '.owned-test-root'), 'TEST navigation Windows ' + nonce + '\n', { flag: 'wx' });
@@ -290,9 +377,17 @@ async function main(): Promise<void> {
     copyFileSync(imports, join(root, 'navigation-' + kind + '-imports.log'));
     evidence[kind + 'ImportEvidenceSHA256'] = hash(imports);
   }
-  success(powershell('prepare', 30_000));
-  success(native('preflight', 15_000, true));
-  if (read('preflight.json').ready !== true) throw new Error('interactive client prerequisite unavailable');
+  bindBootstrap();
+  success(powershell('prepare', 30_000)); // Read-only identity/SDK checks and ACL for this new root only.
+  const fresh = native('preflight', 15_000, true); success(fresh);
+  const desktop = read('preflight.json'), prepared = read('package-operator-state.json');
+  if (desktop.ready !== true || desktop.pid !== fresh.pid || desktop.nonce !== nonce
+      || bootstrap && (desktop.session !== bootstrap.handoff.session
+        || prepared.session !== bootstrap.handoff.session || prepared.userSid !== bootstrap.handoff.userSid)) {
+    throw new Error('fresh interactive user/session bootstrap binding unavailable');
+  }
+  revalidateBootstrap();
+  evidence.sameJobBootstrapQualified = bootstrap !== undefined;
   packageIntent = true; evidence.packageMutationOutcomeUnknown = true;
   const packaged = powershell('package', 150_000);
   evidence.packageMutationOutcomeUnknown = !!packaged.error || !!packaged.signal || packaged.status === null;
