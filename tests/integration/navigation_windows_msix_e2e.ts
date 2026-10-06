@@ -41,17 +41,30 @@ PreparationPhase 'security_before'
 $securityModule = Import-Module Microsoft.PowerShell.Security -PassThru -ErrorAction Stop
 PreparationPhase 'security_after'
 PreparationPhase 'context_before'
-$c = Get-Content -LiteralPath $ContextFile -Raw -Encoding UTF8 | ConvertFrom-Json
+PreparationPhase 'context_read_before'
+$contextText = Get-Content -LiteralPath $ContextFile -Raw -Encoding UTF8
+PreparationPhase 'context_read_after'
+PreparationPhase 'context_decode_before'
+$c = $contextText | ConvertFrom-Json
+PreparationPhase 'context_decode_after'
+PreparationPhase 'context_path_before'
 $r = [IO.Path]::GetFullPath($c.root)
 if ($c.nonce -notmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' -or
     (Split-Path -Leaf $r) -cne ('navigation-windows-test-' + $c.nonce)) { throw 'invalid TEST context' }
 if ((Get-Item -LiteralPath $r).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'reparsed TEST root' }
+PreparationPhase 'context_path_after'
+PreparationPhase 'context_marker_before'
 if ((Get-Content -LiteralPath (Join-Path $r '.owned-test-root') -Raw).TrimEnd() -cne ('TEST navigation Windows ' + $c.nonce)) { throw 'TEST marker mismatch' }
+PreparationPhase 'context_marker_after'
+PreparationPhase 'context_identity_before'
 $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $session = [Diagnostics.Process]::GetCurrentProcess().SessionId
+PreparationPhase 'context_identity_after'
+PreparationPhase 'context_state_path_before'
 $subject = 'CN=NavigationTest-' + $c.nonce
 $name = 'NavigationTest.' + $c.nonce.Replace('-', '')
 $stateFile = Join-Path $r 'package-operator-state.json'
+PreparationPhase 'context_state_path_after'
 PreparationPhase 'context_after'
 function HashFile($p) { return (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLowerInvariant() }
 function CertHash($cert) {
@@ -352,8 +365,11 @@ function success(step: Step): void {
 function preparationTrace(step: Step): void {
   evidence.prepareActorCollected = !step.error && !step.signal && step.status !== null;
   evidence.prepareCollectionUnknown = evidence.prepareActorCollected !== true;
+  const contextPhases = ['read', 'decode', 'path', 'marker', 'identity', 'state_path']
+    .flatMap(phase => [`context_${phase}_before`, `context_${phase}_after`]);
   const phases = ['entry', ...['security', 'context', 'acl', 'commands', 'package_absence',
     'certificate_absence', 'sdk', 'hash', 'state'].flatMap(phase => [phase + '_before', phase + '_after'])];
+  phases.splice(phases.indexOf('context_after'), 0, ...contextPhases);
   const lines = step.stderr.split(/\r?\n/).filter(line => line.startsWith('{"preparePhase":'));
   if (lines.length > phases.length || Buffer.byteLength(lines.join('\n')) > 16_384) throw new Error('bounded preparation trace required');
   const trace = lines.map(line => JSON.parse(line) as Json);
