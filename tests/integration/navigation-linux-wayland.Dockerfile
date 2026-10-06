@@ -6,7 +6,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends sway=1.9-1build2 mako-notifier=1.8.0-2build2 \
       libgtk-3-dev libwayland-dev wayland-protocols && \
     dpkg-query -W > /fixture-build/wayland-packages.txt
-COPY gtk-source.tar.xz wlr-virtual-pointer-unstable-v1.xml navigation_wayland_pointer_test.c /fixture-build/
+COPY gtk-source.tar.xz wlr-virtual-pointer-unstable-v1.xml navigation_wayland_pointer_test.c navigation_wayland_pointer_core.h /fixture-build/
 RUN test "$GTK_SOURCE_SHA256" = 47a3743d2419a8601e691db37e85bb5fac5ae4b26842177065cd5f22ada23b37 && \
     echo "$GTK_SOURCE_SHA256  /fixture-build/gtk-source.tar.xz" | sha256sum -c - && \
     echo '3ff6d540be0bc5228195bf072bde42117ea17945a5c2061add5d3cf97d6bb524  /fixture-build/wlr-virtual-pointer-unstable-v1.xml' | sha256sum -c - && \

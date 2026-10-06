@@ -35,3 +35,13 @@ The pure invocation contract independently expects the fixed vendor argv and can
 Round 1 identified a deadline gap after intent persistence and log creation; the callback now rechecks immediately before `Popen`. Round 2 identified that a bus-address prefix check admitted a fallback transport. The callback now requires exactly the fixed private socket and a 32-hex GUID; pure negative cases reject fallback transports, additional options and different paths. Round 3 independently reviewed the callback authority and effects. Rounds 2 and 3 accepted the corrected callback source. Any subsequent sender/controller changes require their own review before native execution.
 
 Sender review: round 1 removed an unbounded flush after the typed AddNotification reply. Rounds 2 and 3 checked authority reuse, singleton ownership, publication-before-effect and unknown/no-retry outcomes. Final-source verification follows the flush removal.
+
+## Guest pointer entry
+
+The container pointer entry retains its original TEST-container guard. Both entries use `navigation_wayland_pointer_core.h` for the same one-motion, gated CLICK press/release and DONE protocol. Docker build context staging includes that header.
+
+The guest Python entry validates the same offline seed/cgroup/private-session authority as the callback, then a root-owned 0444 `pointer-spec.json` with exactly `nonce`, `y`, `entrySHA256` and `librarySHA256`. The nonce must match the session; integer `y` must fit the fixed 1280x720 output. The entry source and shared library reside in the read-only ISO and must match their frozen hashes.
+
+The entry retains the compositor pidfd and validates the peer of the actual connected Wayland socket before loading the library. It publishes an exclusive pointer intent, then transfers that fd directly to the shared native effect. The library does not resolve an ambient/default display. Its return code cannot qualify a notification click; the future controller must bind pointer enter/button/serial/token protocol evidence and collect the process. The native effect has a 20-second alarm; error, alarm or missing acknowledgement remains unknown and must not be replayed.
+
+All three independent source reviews accepted the pointer authority boundary and unchanged container effect. Both native entries compiled on the TEST Linux server with `-std=c11 -Wall -Wextra -Werror`; the guest library also used `-shared -fPIC`. The exact owned compiler container exited 0 and was removed, and source before/after hashes matched. The adjacent `linux-guest-pointer-compile.json` retains that evidence and the preceding no-effect preflight failure. No pointer function was invoked during the compiler check. The full guest controller/native attempt remains outstanding.

@@ -619,6 +619,7 @@ def main():
     if wayland:
         names.update({'navigation-linux-wayland-token-probe.py': repo / 'scripts/navigation-linux-wayland-token-probe.py',
             'navigation_wayland_pointer_test.c': repo / 'tests/integration/navigation_wayland_pointer_test.c',
+            'navigation_wayland_pointer_core.h': repo / 'tests/integration/navigation_wayland_pointer_core.h',
             'Wayland.Dockerfile': repo / 'tests/integration/navigation-linux-wayland.Dockerfile',
             'gtk-source.tar.xz': args.gtk_source_archive,
             'wlr-virtual-pointer-unstable-v1.xml': args.virtual_pointer_protocol,

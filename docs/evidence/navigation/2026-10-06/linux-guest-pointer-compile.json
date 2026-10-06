@@ -1,0 +1,36 @@
+{
+  "scope": "isolated_TEST_native_pointer_compile_only",
+  "sourceSHA256": {
+    "navigation_wayland_guest_pointer_test.c": "42b1e71f3a757240fd90a40ee43fabcc196907708a8271d43b53ec126688e8c3",
+    "navigation_linux_guest_pointer_entry_test.py": "77836e7ba090c68771dc62db67fd75d17b233b7b5700e6413c7547a3b39629d9",
+    "navigation_wayland_pointer_test.c": "7f5e5f12fbce85d37dae6de0dba34f53cc38bc8f28859fb17ca1434f69d06479",
+    "navigation_wayland_pointer_core.h": "e5194f3bb23c9eb404afafaed12c79449aa4854f5dfd46678819cb4d6ca9d8b6"
+  },
+  "image": "sha256:aa794f6187eca154b32f6c74a382d394734e0f4cd44bd2bee260597f80c07b29",
+  "nativePointerEffectAttempted": false,
+  "passed": true,
+  "cleanupPassed": true,
+  "cleanupUnknown": false,
+  "createOutcomeUnknown": false,
+  "containerID": "e78f3281816dc6311e2066a43035f05d39f458a401acdba3490d8961feb8d6e7",
+  "exitCode": 0,
+  "containerExitCode": 0,
+  "containerCollected": true,
+  "outputSHA256": {
+    "guest-pointer.so": "56557d0038d46bce28d24bfea98438406dc5e81d01d833d763765112a2af8648",
+    "container-pointer": "5a51948836366b780574daa772454d7ad4ca98d1c17794ff1ea2b438542c0510"
+  },
+  "sourceUnchanged": true,
+  "operatorSHA256": "13676092e30e6778fe2464340263565b147b40c9c0a197fb9958a92c2d6fd55a",
+  "rawResultSHA256": "c5790930142db5434b4b72a4ec7c5387051b147244ece178dfe2846cc7b3cf73",
+  "limitations": [
+    "Compiler and source-identity evidence only; no pointer movement, notification click, callback, activation or chat selection was performed.",
+    "Controlled private TEST source paths and before/after hashes do not imply adversarial same-UID immutability."
+  ],
+  "priorPreCreateFailure": {
+    "rawResultSHA256": "101c035441d73efbf35c53126946a77d8bd436e8c12c4f7cdbf16fdc4b028fe7",
+    "observedFailure": "Docker absence diagnostic case mismatch",
+    "createIntentAbsentIndependentlyObserved": true,
+    "noCompileOrNativeEffect": true
+  }
+}
