@@ -88,6 +88,9 @@ type Materializer struct {
 	Kernel Service
 	Store  statev2.Store
 	Roots  UAPRoots
+	// Registry is the explicit composition for this materializer and every
+	// engine it constructs. Nil retains the Claude/Codex composition.
+	Registry *clients.Registry
 }
 
 type clientFact struct {
@@ -204,6 +207,11 @@ func (m Materializer) RecoverJournals(ctx context.Context, req MaterializeReques
 // recoverOwnedJournals restores a pending Notifications kernel journal, then
 // releases the coordinator lease before UAP Recover (§7.4.2).
 func (m Materializer) recoverOwnedJournals(ctx context.Context, req MaterializeRequest) error {
+	if req.Integration == portable.Cursor {
+		if err := m.validate(req, false); err != nil {
+			return err
+		}
+	}
 	release, err := installruntime.AcquireCoordinatorLease(ctx, req.Identity.ControlRoot)
 	if err != nil {
 		return err
@@ -809,6 +817,13 @@ func explicitAbs(p string) bool {
 func (m Materializer) validate(req MaterializeRequest, install bool) error {
 	switch req.Integration {
 	case portable.Codex, portable.Claude:
+	case portable.Cursor:
+		// Public UAP143c treats selected Cursor as native-only and bypasses
+		// Config.ProjectArgs. The existing portable MCP selector cannot be
+		// composed through that API. Keep this route denied until its public
+		// owner supports projection; registering the historical adapter or a
+		// selected vendor adapter alone cannot authorize a partial install.
+		return fmt.Errorf("%w: selected Cursor portable ProjectArgs composition is unavailable", ErrPreflight)
 	default:
 		return ErrPreflight
 	}
@@ -858,9 +873,13 @@ func (m Materializer) engineWithIdentities(req MaterializeRequest, generation *u
 	if req.Integration == portable.Codex {
 		runner = m.Roots.CodexRunner
 	}
-	registry, err := NewRegistry()
-	if err != nil {
-		return nil, err
+	registry := m.Registry
+	if registry == nil {
+		var err error
+		registry, err = NewRegistry()
+		if err != nil {
+			return nil, err
+		}
 	}
 	return uapinstaller.New(uapinstaller.Config{
 		StateRoot:            filepath.Dir(m.Roots.StateFile),
@@ -1490,6 +1509,11 @@ func (m Materializer) SwitchRetained(ctx context.Context, req MaterializeRequest
 	if ctx == nil {
 		return uapinstaller.Result{}, ErrPreflight
 	}
+	if req.Integration == portable.Cursor {
+		if err := m.validate(req, true); err != nil {
+			return uapinstaller.Result{}, err
+		}
+	}
 	if !explicitAbs(req.PackageRoot) {
 		return uapinstaller.Result{}, fmt.Errorf("%w: package root must be an explicit absolute path", ErrPreflight)
 	}
@@ -1678,6 +1702,11 @@ func (m Materializer) GuardSecondClient(ctx context.Context, req MaterializeRequ
 func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error {
 	if ctx == nil {
 		return ErrPreflight
+	}
+	if req.Integration == portable.Cursor {
+		if err := m.validate(req, false); err != nil {
+			return err
+		}
 	}
 	state, err := m.Store.Load()
 	if err != nil {

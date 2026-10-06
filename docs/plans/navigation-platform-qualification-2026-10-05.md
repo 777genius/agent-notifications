@@ -23,7 +23,7 @@ A desktop notifier cannot assume it is still running at toast click time. Micros
 - [Microsoft URI launcher](https://learn.microsoft.com/en-us/uwp/api/windows.system.launcher.launchuriasync)
 - [Microsoft COM toast activation](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/win32_tile_badge_notif/respond-to-toast-activations)
 
-Required native evidence: unique installed TEST notifier identity, sender exited before click, callback relaunch, immutable action decode with fresh budget, explicit selected package handoff, wrong/default handler exclusion, unknown-effect no retry and old-action/update compatibility. The user confirmed Windows is available only in CI/CD. No separate interactive Windows test desktop is available; CI compile/unit tests do not supply this evidence.
+Required native evidence: unique installed TEST notifier identity, sender exited before click, callback relaunch, immutable action decode with fresh budget, explicit selected package handoff, wrong/default handler exclusion, unknown-effect no retry and old-action/update compatibility. The user confirmed Windows is available only in CI/CD. A separate personal Windows desktop is unavailable, but GitHub now provides the GA Windows11 ARM64 client runner `windows-11-vs2026-arm` ([official runner announcement](https://github.com/actions/runner-images/issues/14592)). PR #352 uses that client image for one real native TEST toast and Shell UI callback after sender exit. The first run failed during compilation, before any submission; the narrow SDK repair is awaiting CI. A runner label or successful compilation alone does not prove interactive readiness, callback delivery or selected-client navigation.
 
 ## Linux candidate and current gap
 
@@ -33,6 +33,6 @@ Current `delivery_linux.go` submits Notify without navigation actions, then clos
 
 - [Freedesktop notification protocol, actions and activation tokens](https://specifications.freedesktop.org/notification/latest/protocol.html)
 
-The freshly inspected hosted machine is Ubuntu 24.04.5 LTS, with Xvfb and dbus-run-session present, but no discovered weston or dunst executable. This establishes potential infrastructure for isolated transport tests, not a supported interactive desktop, live Wayland activation or real client qualification. Hosted producer admission separately remains blocked by two stopped jobs sharing a workspace; no registry was manually edited.
+The freshly inspected hosted machine is Ubuntu 24.04.5 LTS, with Xvfb and dbus-run-session present. A separately extracted pinned dunst package subsequently supplied a real isolated connection-lifetime experiment; its evidence is recorded in `native-linux-connection-callback.json`. No durable callback, Wayland or installed-client qualification follows from that result. This establishes potential infrastructure for isolated transport tests, not a supported interactive desktop, live Wayland activation or real client qualification. Hosted producer admission separately remains blocked by two stopped jobs sharing a workspace; no registry was manually edited.
 
 Next qualification must use a new disposable test desktop/session with synthetic data, selected installed client distribution and a real callback/lifetime observation. Until then the Windows/Linux implementation lanes remain pending under the plan's qualification gate.
