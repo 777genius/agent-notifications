@@ -97,7 +97,9 @@ class XResWindowOwner:
             self.x.XCloseDisplay(self.display); self.display = None
 
 
-def inside(restart=False, recovery=False):
+def inside(restart=False, recovery=False, owner_fence=False):
+    if owner_fence and (not restart or recovery):
+        raise RuntimeError('exclusive_restart_owner_fence_required')
     if os.environ.get('NAVIGATION_TEST_CONTAINER') != '1' or not Path('/.dockerenv').exists():
         raise RuntimeError('owned_container_required')
     evidence = Path('/evidence')
@@ -135,6 +137,7 @@ def inside(restart=False, recovery=False):
             token = uuid.uuid4().hex
             item = dict(appID='org.notification.NavigationTest' + token, nonce=token,
                         title='Navigation TEST ' + token, helperSHA256=sha(helper))
+            if owner_fence: item['ownerFence'] = True
             dump(fixture / 'spec.json', item)
             command = '/usr/bin/python3 ' + str(helper) + ' --service ' + str(fixture)
             files = [fixture / 'spec.json', appdir / (item['appID'] + '.desktop'), servicedir / (item['appID'] + '.service')]
@@ -154,7 +157,10 @@ def inside(restart=False, recovery=False):
                   limitations=['Owned Xvfb/XTest click only; no human rendering acknowledgement',
                                'Backend/dunst restart, Wayland and actual client routes unqualified'])
     report['scenario'] = 'daemon_restart_recovery_control' if recovery else ('daemon_restart_owner_invalidation' if restart else 'sender_death')
+    if owner_fence: report['scenario'] = 'daemon_restart_TEST_owner_fence'
     report['restartOwnerBindingQualified'] = False
+    report['ownerFenceQualified'] = False
+    report['atomicProviderBindingQualified'] = False
     report['immutableFixtureSHA256'] = immutable
     if restart:
         report['fixtures'] = {label: dict(path=str(fixture.relative_to(root)), appID=item['appID'], nonce=item['nonce']) for label, (fixture, item) in fixtures.items()}
@@ -271,6 +277,11 @@ def inside(restart=False, recovery=False):
         dump(root / 'progress.json', report)
         if code != 0 or not (fixture / 'submitted.json').exists() or not (fixture / 'registry-registered.json').exists():
             raise RuntimeError(label + '_failed_no_retry')
+        if owner_fence:
+            binding_path = fixture / 'provider-binding.json'
+            immutable[str(binding_path.relative_to(root))] = sha(binding_path)
+            if json.loads((fixture / 'provider-after-add.json').read_text())['matchesOriginal'] is not True:
+                raise RuntimeError('provider_changed_after_add_no_retry')
         value = bus(label + '_cold_owner', 'org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus.GetNameOwner', item['appID'], allow_failure=True)
         if value.returncode == 0 or 'NameHasNoOwner' not in value.stderr.decode() or Path('/proc/' + str(process.pid)).exists():
             raise RuntimeError(label + '_death_not_proven')
@@ -287,10 +298,18 @@ def inside(restart=False, recovery=False):
     def restart_scenario(dunst, backend, frontend):
         first_owner = unique_owner('daemon_A', 'org.freedesktop.Notifications', dunst)
         gtk_owner = unique_owner('gtk_restart', 'org.freedesktop.impl.portal.desktop.gtk', backend)
+        if owner_fence:
+            frontend_owner = unique_owner('frontend_fence', 'org.freedesktop.portal.Desktop', frontend)
+            guid_reply = bus('private_bus_GUID', 'org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus.GetId')
+            guid_match = re.fullmatch(r"\('([0-9a-f]{32})',\)\s*", guid_reply.stdout.decode())
+            if not guid_match: raise RuntimeError('private_bus_GUID_unproved')
+            bus_guid = guid_match[1]
         retained = {label: dict(pid=process.pid, startTicks=start_ticks(process)) for label, process in [('gtk', backend), ('frontend', frontend)]}
         a_root, a_spec = fixtures['A']; b_root, b_spec = fixtures['B']
-        send_fixture('senderA', a_root, a_spec)
+        sender_a, exited_a = send_fixture('senderA', a_root, a_spec)
         first_id = notify_reply('A', a_spec, first_owner, gtk_owner)
+        if owner_fence and json.loads((a_root / 'provider-binding.json').read_text())['binding'] != dict(busGUID=bus_guid, notificationOwner=first_owner, frontendOwner=frontend_owner):
+            raise RuntimeError('A_binding_not_selected_provider_no_restart')
         restart_window('A', dunst)
         # Crash only this exact live Popen child; graceful close would erase GTK's old map.
         if unique_owner('daemon_A_precrash', 'org.freedesktop.Notifications', dunst) != first_owner:
@@ -304,6 +323,11 @@ def inside(restart=False, recovery=False):
         report['daemonOwners'] = dict(before=first_owner, after=second_owner, beforePID=dunst.pid, afterPID=second.pid)
         sender_b, exited_b = send_fixture('senderB', b_root, b_spec)
         second_id = notify_reply('B', b_spec, second_owner, gtk_owner)
+        if owner_fence:
+            binding_b = json.loads((b_root / 'provider-binding.json').read_text())['binding']
+            binding_a = json.loads((a_root / 'provider-binding.json').read_text())['binding']
+            if binding_b != dict(busGUID=binding_a['busGUID'], notificationOwner=second_owner, frontendOwner=frontend_owner):
+                raise RuntimeError('B_binding_not_selected_provider_no_click')
         report['numericIDReused'] = second_id == first_id
         if not recovery and second_id != first_id: raise RuntimeError('inconclusive_numeric_ID_not_reused')
         window = restart_window('B', second)
@@ -313,6 +337,42 @@ def inside(restart=False, recovery=False):
         if unique_owner('gtk_retained', 'org.freedesktop.impl.portal.desktop.gtk', backend) != gtk_owner:
             raise RuntimeError('gtk_owner_changed')
         report['retainedProcesses'] = retained
+        if owner_fence:
+            refusal = start('refuse_removeA', ['/usr/bin/python3', str(helper), '--remove', str(a_root)])
+            refusal_code = refusal.wait(timeout=10)
+            report['refusedRemovalExit'] = dict(pid=refusal.pid, collected=True, exitCode=refusal_code)
+            if refusal_code != 0 or not (a_root / 'removal-refused.json').exists():
+                raise RuntimeError('removal_refusal_unknown_no_click')
+            refused = json.loads((a_root / 'removal-refused.json').read_text())
+            if refused['removeAttempted'] is not False or refused['original']['notificationOwner'] != first_owner or refused['current']['notificationOwner'] != second_owner:
+                raise RuntimeError('stale_removal_not_refused_no_click')
+            report['refusedOldRemoval'] = refused
+            # Explicit TEST injection, not a daemon signal or genuine notification click.
+            bus('direct_TEST_A_action', a_spec['appID'], '/' + a_spec['appID'].replace('.', '/'),
+                'org.freedesktop.Application.ActivateAction', 'open',
+                "[<'notification-navigation-test:" + a_spec['nonce'] + "'>]", '{}')
+            wait(lambda: (a_root / 'callback-rejected.json').exists())
+            rejected = json.loads((a_root / 'callback-rejected.json').read_text())
+            started = json.loads((a_root / 'service-start.json').read_text())
+            if rejected.get('providerMatches') is not False or rejected.get('originalBinding', {}).get('notificationOwner') != first_owner or rejected.get('currentBinding', {}).get('notificationOwner') != second_owner or rejected['pid'] != started['pid'] or rejected['startTicks'] != started['startTicks']:
+                raise RuntimeError('old_cold_provider_rejection_unproved_no_click')
+            hz = os.sysconf('SC_CLK_TCK')
+            if hz <= 0 or started['pid'] == sender_a.pid or started['entryBoot'] <= exited_a or started['startTicks'] / hz < exited_a:
+                raise RuntimeError('rejected_A_cold_birth_unproved_no_click')
+            wait(lambda: not Path('/proc/' + str(started['pid'])).exists())
+            absent = bus('rejected_A_owner_absent', 'org.freedesktop.DBus', '/org/freedesktop/DBus',
+                'org.freedesktop.DBus.GetNameOwner', a_spec['appID'], allow_failure=True)
+            if absent.returncode == 0 or 'NameHasNoOwner' not in absent.stderr.decode():
+                raise RuntimeError('rejected_A_lifetime_unknown_no_click')
+            if any((a_root / name).exists() for name in ('effect.json', 'receipt.json', 'duplicate-rejected.json')):
+                raise RuntimeError('old_A_effect_no_click')
+            if restart_window('B_after_refusal', second) != window:
+                raise RuntimeError('B_window_not_retained_no_click')
+            actions = [json.loads(line) for line in (a_root / 'action-events.jsonl').read_text().splitlines()]
+            if len(actions) != 1: raise RuntimeError('exact_one_rejected_A_action_unproved_no_click')
+            report['directTESTActionA'] = dict(genuineClick=False, rejected=rejected, callbackExited=True,
+                kernelBirthAfterSenderExit=True, effectCount=0)
+            return second, b_root, b_spec, sender_b, exited_b, False
         if recovery:
             report['outcome'] = 'restart_recovery_pending_B_click'
             return second, b_root, b_spec, sender_b, exited_b, False
@@ -479,7 +539,11 @@ def inside(restart=False, recovery=False):
             dump(root / 'progress.json', report)
             if window_owner.pid(window) != dunst.pid or dunst.poll() is not None:
                 raise RuntimeError('window_owner_changed_before_click')
-            if restart and not recovery and not report['nativeCloseA']['observed'] and any(part.startswith('method call ') and 'interface=org.freedesktop.Notifications; member=CloseNotification\n' in part for part in messages()):
+            if owner_fence and (unique_owner('daemon_B_preclick_fence', 'org.freedesktop.Notifications', dunst) != report['daemonOwners']['after'] or unique_owner('frontend_preclick_fence', 'org.freedesktop.portal.Desktop', frontend) != json.loads((callback_root / 'provider-binding.json').read_text())['binding']['frontendOwner']):
+                raise RuntimeError('provider_changed_before_B_click')
+            if owner_fence and any(part.startswith('method call ') and ('interface=org.freedesktop.portal.Notification; member=RemoveNotification\n' in part or 'interface=org.freedesktop.Notifications; member=CloseNotification\n' in part) for part in messages()):
+                raise RuntimeError('unexpected_remove_or_Close_no_click')
+            if restart and not recovery and not owner_fence and not report['nativeCloseA']['observed'] and any(part.startswith('method call ') and 'interface=org.freedesktop.Notifications; member=CloseNotification\n' in part for part in messages()):
                 raise RuntimeError('late_CloseNotification_after_absence_observation_no_click')
             # Exactly one XTest click through the owned GUI window; no action/signal synthesis.
             run('one_native_click', ['xdotool', 'mousemove', '--window', window, str(width // 2), str(height // 2), 'click', '1'])
@@ -506,6 +570,10 @@ def inside(restart=False, recovery=False):
                 raise RuntimeError('kernel_birth_not_proven_after_sender_exit_tick_ambiguous')
             if receipt['helperSHA256'] != spec['helperSHA256'] or not receipt['targetMatches'] or receipt['effectCount'] != 1 or receipt['enteredBoot'] - callback['entryBoot'] >= 15:
                 raise RuntimeError('callback_contract_rejected')
+            if owner_fence:
+                original_b = json.loads((callback_root / 'provider-binding.json').read_text())['binding']
+                if receipt.get('providerMatches') is not True or receipt.get('originalBinding') != original_b or receipt.get('currentBinding') != original_b or (callback_root / 'callback-rejected.json').exists():
+                    raise RuntimeError('B_provider_binding_not_proven')
             report['callback'] = receipt
             try:
                 wait(lambda: not Path('/proc/' + str(receipt['pid'])).exists(), seconds=6)
@@ -532,18 +600,25 @@ def inside(restart=False, recovery=False):
             report['callbackExited'] = True
             report['passed'] = True
         if restart and not closed:
-            if any((fixtures['A'][0] / name).exists() for name in ('service-start.json', 'effect.json', 'receipt.json', 'action-events.jsonl')):
+            if any((fixtures['A'][0] / name).exists() for name in (('effect.json', 'receipt.json') if owner_fence else ('service-start.json', 'effect.json', 'receipt.json', 'action-events.jsonl'))):
                 raise RuntimeError('A_callback_after_restart')
             report['outcome'] = 'restart_recovery_one_B_callback' if recovery else 'B_survived_remove_A_and_one_B_callback'
             report['passedScope'] = 'owned_restart_recovery_control' if recovery else 'owned_restart_and_recovery_control'
             report['restartRecoveryControlPassed'] = True
+            if owner_fence:
+                report.update(outcome='TEST_owner_fence_A_rejected_one_genuine_B_callback',
+                    passedScope='owned_TEST_owner_fence_and_B_cold_recovery')
         if restart:
             notify_count = sum(part.startswith('method call ') and 'interface=org.freedesktop.Notifications; member=Notify\n' in part for part in messages())
             remove_count = sum(part.startswith('method call ') and 'interface=org.freedesktop.portal.Notification; member=RemoveNotification\n' in part for part in messages())
             report['counts'] = dict(nativeNotify=notify_count, officialRemove=remove_count,
-                                   nativeClick=0 if closed else 1, expectedNotify=2, expectedRemove=0 if recovery else 1)
-            if notify_count != 2 or remove_count != (0 if recovery else 1):
+                                   nativeClick=0 if closed else 1, expectedNotify=2, expectedRemove=0 if recovery or owner_fence else 1)
+            if notify_count != 2 or remove_count != (0 if recovery or owner_fence else 1):
                 raise RuntimeError('restart_transport_count_mismatch')
+            if owner_fence:
+                close_count = sum(part.startswith('method call ') and 'interface=org.freedesktop.Notifications; member=CloseNotification\n' in part for part in messages())
+                report['counts']['nativeClose'] = close_count
+                if close_count != 0: raise RuntimeError('unexpected_Close_in_no_remove_lane')
     except Exception as error:
         report['passed'] = False
         report['failure'] = str(error)
@@ -567,6 +642,7 @@ def inside(restart=False, recovery=False):
         report['helperUnchanged'] = sha(helper) == spec['helperSHA256']
         report['immutableFixturesUnchanged'] = all(sha(root / name) == digest for name, digest in immutable.items())
         report['passed'] = report['passed'] and report['helperUnchanged'] and report['immutableFixturesUnchanged']
+        report['ownerFenceQualified'] = owner_fence and report['passed'] and all(process.poll() is not None for _, process in children)
         dump(evidence / 'native-evidence.json', report)
     return 0 if report['passed'] else 1
 
@@ -578,6 +654,7 @@ def main():
     restart_modes = parser.add_mutually_exclusive_group()
     restart_modes.add_argument('--restart-owner-invalidation-test', action='store_true')
     restart_modes.add_argument('--restart-recovery-control-test', action='store_true')
+    restart_modes.add_argument('--restart-owner-fence-test', action='store_true')
     restart_modes.add_argument('--wayland-token-test', action='store_true')
     restart_modes.add_argument('--wayland-token-negative-test', action='store_true')
     parser.add_argument('--gtk-source-archive', type=Path)
@@ -589,7 +666,7 @@ def main():
     parser.add_argument('--docker-via-sudo', action='store_true')
     args = parser.parse_args()
     if args.inside_test_container:
-        return inside(restart=os.environ.get('NAVIGATION_RESTART_TEST') == '1', recovery=os.environ.get('NAVIGATION_RESTART_RECOVERY') == '1')
+        return inside(restart=os.environ.get('NAVIGATION_RESTART_TEST') == '1', recovery=os.environ.get('NAVIGATION_RESTART_RECOVERY') == '1', owner_fence=os.environ.get('NAVIGATION_OWNER_FENCE_TEST') == '1')
     if not args.build_and_execute_test or not args.portal_source_archive or not args.portal_source_provenance or not re.fullmatch(r'[0-9a-f]{64}', args.portal_source_sha256 or ''):
         parser.error('explicit TEST opt-in and primary-verified portal1.22.1 archive/checksum required')
     if sha(args.portal_source_archive) != args.portal_source_sha256:
@@ -637,6 +714,7 @@ def main():
                   portalSourceDeclaredCommit=COMMIT, sourceProvenance=provenance,
                   ownerToken=token, image=image, container=container, containerUser=container_user, containerInit=True,
                   scenario='daemon_restart_recovery_control' if args.restart_recovery_control_test else ('daemon_restart_owner_invalidation' if args.restart_owner_invalidation_test else 'sender_death'), commands=[], passed=False)
+    if args.restart_owner_fence_test: report['scenario'] = 'daemon_restart_TEST_owner_fence'
     if wayland:
         report.update(scenario='wayland_old_GTK_negative' if args.wayland_token_negative_test else 'wayland_click_token',
             waylandSourceProvenance=wayland_provenance)
@@ -665,7 +743,8 @@ def main():
         report['imageID'] = command('image_identity', docker + ['image', 'inspect', image, '--format', '{{.Id}}'], 10).stdout.decode().strip()
         result = command('run', docker + ['run', '--init', '--name', container, '--user', container_user, '--label', 'navigation.test=true', '--label', 'navigation.owner=' + token,
             '--network=none', '--cap-drop=ALL', '--security-opt=no-new-privileges', '--pids-limit=128', '--memory=2g', '--cpus=2',
-            '-e', 'NAVIGATION_TEST_CONTAINER=1', '-e', 'NAVIGATION_RESTART_TEST=' + ('1' if args.restart_owner_invalidation_test or args.restart_recovery_control_test else '0'),
+            '-e', 'NAVIGATION_TEST_CONTAINER=1', '-e', 'NAVIGATION_RESTART_TEST=' + ('1' if args.restart_owner_invalidation_test or args.restart_recovery_control_test or args.restart_owner_fence_test else '0'),
+            '-e', 'NAVIGATION_OWNER_FENCE_TEST=' + ('1' if args.restart_owner_fence_test else '0'),
             '-e', 'NAVIGATION_RESTART_RECOVERY=' + ('1' if args.restart_recovery_control_test else '0'),
             '-e', 'NAVIGATION_WAYLAND_TEST=' + ('1' if wayland else '0'),
             '-e', 'NAVIGATION_GTK_TOKEN_NEGATIVE=' + ('1' if args.wayland_token_negative_test else '0'),
@@ -710,6 +789,16 @@ def main():
         report['passed'] = report['passed'] and cleanup['verified']
         report['snapshotUnchanged'] = all(sha(context / name) == digest for name, digest in report['sourceSHA256'].items())
         report['passed'] = report['passed'] and report['snapshotUnchanged']
+        report['ownerFenceQualified'] = False
+        if args.restart_owner_fence_test and report['passed']:
+            try:
+                native_path = root / 'native-evidence.json'
+                if not native_path.is_file() or native_path.stat().st_size > 1048576:
+                    raise RuntimeError('bounded_native_report_required')
+                report['ownerFenceQualified'] = json.loads(native_path.read_text()).get('ownerFenceQualified') is True
+                report['passed'] = report['passed'] and report['ownerFenceQualified']
+            except Exception as error:
+                report.update(passed=False, qualificationFailure=str(error), retryAllowed=False)
         dump(root / 'evidence.json', report)
         print(json.dumps({'evidence': str(root / 'evidence.json'), 'passed': report['passed']}))
     return 0 if report['passed'] else 1
