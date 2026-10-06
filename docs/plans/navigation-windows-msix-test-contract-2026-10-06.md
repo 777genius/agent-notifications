@@ -55,3 +55,17 @@ The documented cause candidate is Windows PowerShell launched from a PowerShell 
 The changed-source [run 37394320962](https://github.com/777genius/agent-notifications/actions/runs/37394320962), source `94a7da956c49c2561e3a0e870eaa341e64882bf7`, passed target compilation, package preparation, signing, deployment and sender activation. Windows PowerShell 5.1.26100.9457 imported its system Security module; SDK 10.0.26100.0 tools returned success. Readiness was Enabled; exactly one Show returned and the sender was collected with exit 0.
 
 The bounded UI observer then exited 5: the exact TEST action was not found. Win+N submission does not establish that Notification Center opened. No UI Invoke or callback qualification was observed. Exact package, certificate and CNG private-key cleanup succeeded, but the missing callback process record conservatively leaves aggregate native process cleanup unknown and the overall run failed. The public projection `windows-msix-show-ui-negative.json` preserves these separate results. This is transport diagnostic progress, not successful callback or client-navigation E2E. No unchanged-source resend was performed.
+
+The next changed-source diagnostic adds one read-only GetHistory query for the
+owned TEST AUMID after sender collection and before the existing UI Invoke.
+It retains only entry count, exact owned Tag/Group match count and HRESULT,
+with at most 64 entries inspected and a 15-second controller timeout. It reads
+no toast XML and performs no Show or callback activation. Query failures remain
+diagnostic and do not gate or promote native callback qualification. Strict
+TypeScript preflight passes using the existing TEST tooling capsule. Native C++
+compilation and history behavior remain for the changed-source CI attempt.
+
+Three independent source reviews accepted this diagnostic delta: C++ SHA256
+`dd6a5a244cf46d796aafb4848f6cb14da31ed2305f3a3032439d18fcd5b58b9f`,
+TS `6ba0edce321e13f6142c62cb8cc62ac273ffbdc36510af62dd7ea215fa0f2531`.
+Empty/error history remains an observation, never proof of delivery absence or UI.

@@ -419,7 +419,7 @@ int wmain(int argc, wchar_t** argv) {
     std::wstring mode;
     try {
         require(argc == 4 || (argc == 5 && std::wstring(argv[4]) == L"-Embedding"), "invalid bounded TEST arguments");
-        mode = argv[1]; require(mode == L"send" || mode == L"callback" || mode == L"activate" || mode == L"cleanup" || mode == L"collect",
+        mode = argv[1]; require(mode == L"send" || mode == L"callback" || mode == L"activate" || mode == L"cleanup" || mode == L"collect" || mode == L"history",
                                "unknown TEST mode");
         // OS-created packaged processes need not inherit the CI controller's environment.
         // Sender authority comes from package identity and the retained-process Show permit.
@@ -452,6 +452,26 @@ int wmain(int argc, wchar_t** argv) {
         if (mode == L"activate") return activateSender();
         if (mode == L"callback") return callbackServer();
         if (mode == L"collect") return collectCallback();
+        if (mode == L"history") {
+            JsonObject observation; put(observation, L"diagnosticOnly", true);
+            try {
+                auto entries = ToastNotificationManager::History().GetHistory(aumid);
+                number(observation, L"entryCount", entries.Size());
+                require(entries.Size() <= 64, "bounded owned notification history exceeded");
+                unsigned matches = 0;
+                for (const auto& toast : entries) {
+                    if (toast.Tag() == nonce.substr(0, 16) && toast.Group() == L"NavigationTEST") ++matches;
+                }
+                number(observation, L"ownedTagGroupMatches", matches);
+                number(observation, L"HRESULT", 0);
+            } catch (const winrt::hresult_error& error) {
+                number(observation, L"HRESULT", error.code().value);
+            } catch (const std::exception&) {
+                put(observation, L"boundedObservationFailed", true);
+            }
+            publish("notification-history.json", observation);
+            return 0;
+        }
         bool failed = false;
         // Cleanup branches are independent. A failure never skips another owned branch.
         try { stopOwned("sender-retained.json", "sender-cleanup.json"); }

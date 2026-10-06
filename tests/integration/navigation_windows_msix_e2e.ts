@@ -309,6 +309,8 @@ async function main(): Promise<void> {
   const sender = native('activate', 45_000); observeShow(); success(sender);
   const exited = read('sender-exit.json');
   if (exited.collected !== true || exited.exitCode !== 0 || evidence.showAttempts !== 1 || evidence.showCallOutcome !== 'returned') throw new Error('collected sender/Show proof absent');
+  // Read-only diagnostics do not establish visible UI or a native callback.
+  native('history', 15_000);
   const invoke = native('invoke', 30_000, true); success(invoke);
   if (read('ui-invoke.json').invokeHRESULT !== 0) throw new Error('real Shell Invoke failed');
   for (let i = 0; i < 100 && !existsSync(join(root, 'effect.json')); i++) await delay(100);
