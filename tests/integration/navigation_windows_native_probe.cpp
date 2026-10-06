@@ -26,6 +26,9 @@
 #include <memory>
 #include <cstring>
 #include <map>
+#include <appxpackaging.h>
+#include <shlwapi.h>
+#pragma comment(lib, "Shlwapi.lib")
 using Microsoft::WRL::ComPtr;
 namespace fs = std::filesystem;
 using namespace winrt::Windows::UI::Notifications;
@@ -1002,6 +1005,48 @@ static void cleanup() {
         + ",\"historyClearReturned\":" + (historyAttempted && !historyFailure ? "true" : "false") + "}\n");
     if (historyFailure) std::rethrow_exception(historyFailure);
 }
+// Store-signed vendor bytes are checked by the controller first. This inspects
+// package identity through the public SDK, without installation or activation.
+static void packageMetadata() {
+    const fs::path package = root / L"client.msix";
+    if (!fs::is_regular_file(package) || fs::canonical(package) != package || fs::file_size(package) > 1024ULL * 1024 * 1024)
+        throw std::runtime_error("package input unavailable or outside bound");
+    ComPtr<IStream> stream;
+    check(SHCreateStreamOnFileEx(package.c_str(), STGM_READ | STGM_SHARE_DENY_WRITE, 0, FALSE, nullptr, &stream));
+    ComPtr<IAppxFactory> factory;
+    check(CoCreateInstance(CLSID_AppxFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory)));
+    ComPtr<IAppxPackageReader> reader; check(factory->CreatePackageReader(stream.Get(), &reader));
+    ComPtr<IAppxManifestReader> manifest; check(reader->GetManifest(&manifest));
+    ComPtr<IAppxManifestPackageId> identity; check(manifest->GetPackageId(&identity));
+    auto stringValue = [&](auto operation) {
+        LPWSTR value = nullptr; const HRESULT result = operation(&value);
+        std::unique_ptr<wchar_t, decltype(&CoTaskMemFree)> owned(value, &CoTaskMemFree);
+        check(result);
+        if (!value || wcsnlen_s(value, 513) > 512) throw std::runtime_error("package string unavailable or oversized");
+        return jsonQuote(value);
+    };
+    const auto name = stringValue([&](LPWSTR* p) { return identity->GetName(p); });
+    const auto publisher = stringValue([&](LPWSTR* p) { return identity->GetPublisher(p); });
+    const auto family = stringValue([&](LPWSTR* p) { return identity->GetPackageFamilyName(p); });
+    const auto full = stringValue([&](LPWSTR* p) { return identity->GetPackageFullName(p); });
+    UINT64 version = 0; APPX_PACKAGE_ARCHITECTURE architecture{};
+    check(identity->GetVersion(&version)); check(identity->GetArchitecture(&architecture));
+    ComPtr<IStream> xml; check(manifest->GetStream(&xml));
+    STATSTG info{}; check(xml->Stat(&info, STATFLAG_NONAME));
+    if (!info.cbSize.QuadPart || info.cbSize.QuadPart > 2 * 1024 * 1024) throw std::runtime_error("manifest size outside bound");
+    std::string bytes(static_cast<size_t>(info.cbSize.QuadPart), '\0');
+    LARGE_INTEGER start{}; check(xml->Seek(start, STREAM_SEEK_SET, nullptr));
+    ULONG read = 0; check(xml->Read(bytes.data(), static_cast<ULONG>(bytes.size()), &read));
+    if (read != bytes.size()) throw std::runtime_error("manifest read incomplete");
+    report("vendor-manifest.xml", bytes);
+    const auto versionText = std::to_string((version >> 48) & 65535) + '.' + std::to_string((version >> 32) & 65535)
+        + '.' + std::to_string((version >> 16) & 65535) + '.' + std::to_string(version & 65535);
+    report("package-metadata.json", "{\"pid\":" + std::to_string(GetCurrentProcessId()) + ",\"nonce\":" + jsonQuote(uuid)
+        + ",\"readOnly\":true,\"installed\":false,\"launchAttempted\":false,\"showAttempts\":0"
+        + ",\"name\":" + name + ",\"publisher\":" + publisher + ",\"familyName\":" + family
+        + ",\"fullName\":" + full + ",\"architecture\":" + std::to_string(architecture)
+        + ",\"version\":" + jsonQuote(winrt::to_hstring(versionText).c_str()) + "}\n");
+}
 int wmain(int argc, wchar_t** argv) {
     try {
         if (argc < 4) return 2;
@@ -1026,6 +1071,7 @@ int wmain(int argc, wchar_t** argv) {
         if (mode == L"callback" && (!ownRegistryProof() || registeredCommand() != serverCommand()
             || !ownAppIdentityProof() || !appIdentityMatches())) return 2;
         winrt::init_apartment(winrt::apartment_type::multi_threaded);
+        if (mode == L"package-metadata") { packageMetadata(); return 0; }
         if (mode == L"center-policy") return centerPolicy() ? 0 : 3;
         if (mode == L"preflight") return preflight() ? 0 : 3;
         if (mode == L"center-surface") return centerSurface() ? 0 : 3;
