@@ -61,18 +61,6 @@ jobs:
     strategy:
       matrix:
         include:
-          # macOS builds - use native runners (CGO required for malgo)
-          - os: macos-15-intel
-            platform: darwin
-            arch: amd64
-            binary: claude-notifications-darwin-amd64
-            macos_deployment_target: '12.0'
-          - os: macos-15
-            platform: darwin
-            arch: arm64
-            binary: claude-notifications-darwin-arm64
-            macos_deployment_target: '12.0'
-
           # Linux builds - use native runners
           - os: ubuntu-22.04
             platform: linux
@@ -90,6 +78,12 @@ jobs:
             binary: claude-notifications-windows-amd64.exe
 
     steps:
+      - name: Preserve canonical source bytes on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
       - name: Checkout code
         uses: actions/checkout@v7
         with:
@@ -110,7 +104,6 @@ jobs:
       - name: Build binaries
         env:
           CGO_ENABLED: '1'
-          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_deployment_target }}
         shell: bash
         run: |
           mkdir -p dist
@@ -135,20 +128,6 @@ jobs:
             go build -ldflags="-s -w -H=windowsgui" -trimpath -o "dist/$FOCUS_BINARY" ./cmd/claude-notifications
           fi
 
-      - name: Verify macOS deployment target
-        if: matrix.platform == 'darwin'
-        run: |
-          for binary in dist/*; do
-            minos="$(otool -l "$binary" | awk '$1 == "minos" { print $2; exit }')"
-            case "$minos" in
-              12|12.*) ;;
-              *)
-                echo "$binary has unexpected minimum macOS version: ${minos:-missing}"
-                exit 1
-                ;;
-            esac
-          done
-
       - name: Build version-bound portable package
         env:
           RELEASE_TAG: ${{ github.ref_name }}
@@ -169,81 +148,11 @@ jobs:
         with:
           name: binaries-${{ matrix.platform }}-${{ matrix.arch }}
           path: dist/*
-          retention-days: 1
-
-  build-notifier:
-    name: Build ClaudeNotifier.app (macOS)
-    needs: verify-version
-    runs-on: macos-15
-    timeout-minutes: 60
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      - name: Import Apple certificate
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-        run: |
-          CERTIFICATE_PATH="$RUNNER_TEMP/certificate.p12"
-          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
-          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
-
-          if ! echo -n "$APPLE_CERTIFICATE" | base64 --decode > "$CERTIFICATE_PATH" 2>/dev/null; then
-            echo -n "$APPLE_CERTIFICATE" | base64 -D > "$CERTIFICATE_PATH"
-          fi
-
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
-          security import "$CERTIFICATE_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" \
-            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          security set-key-partition-list -S apple-tool:,apple: \
-            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
-          EXISTING_KEYCHAINS=()
-          while IFS= read -r keychain; do
-            keychain="${keychain//\"/}"
-            if [ -n "$keychain" ]; then
-              EXISTING_KEYCHAINS+=("$keychain")
-            fi
-          done < <(security list-keychains -d user)
-
-          security list-keychains -d user -s "$KEYCHAIN_PATH" "${EXISTING_KEYCHAINS[@]}"
-
-      - name: Build, sign, and notarize ClaudeNotifier.app
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          cd swift-notifier
-          bash scripts/build-app.sh --ci
-
-      - name: Create zip artifact
-        run: |
-          cd swift-notifier
-          if [ ! -f ClaudeNotifier.app.managed-runtime.json ]; then
-            echo "missing managed runtime attestation sidecar" >&2
-            exit 1
-          fi
-          ditto -c -k --keepParent ClaudeNotifier.app ClaudeNotifier.app.zip
-          zip -u ClaudeNotifier.app.zip ClaudeNotifier.app.managed-runtime.json
-          unzip -l ClaudeNotifier.app.zip | grep -F ClaudeNotifier.app.managed-runtime.json
-          ls -lh ClaudeNotifier.app.zip
-
-      - name: Upload notifier artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: ClaudeNotifier
-          path: swift-notifier/ClaudeNotifier.app.zip
-          retention-days: 1
+          retention-days: 14
 
   create-release:
     name: Prepare draft GitHub Release
-    needs: [build-matrix, build-notifier, test-binaries, qualify-opencode]
+    needs: [build-matrix, test-binaries, qualify-opencode]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -258,12 +167,6 @@ jobs:
         with:
           pattern: binaries-*
           path: dist-artifacts
-
-      - name: Download notifier artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: ClaudeNotifier
-          path: dist-artifacts/ClaudeNotifier
 
       - name: Organize binaries
         run: |
@@ -285,6 +188,7 @@ jobs:
           files: dist/*
           draft: true
           prerelease: false
+          make_latest: false
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -307,20 +211,18 @@ jobs:
             platform: linux
             arch: arm64
             binary: claude-notifications-linux-arm64
-          - os: macos-15-intel
-            platform: darwin
-            arch: amd64
-            binary: claude-notifications-darwin-amd64
-          - os: macos-26
-            platform: darwin
-            arch: arm64
-            binary: claude-notifications-darwin-arm64
           - os: windows-latest
             platform: windows
             arch: amd64
             binary: claude-notifications-windows-amd64.exe
 
     steps:
+      - name: Preserve canonical source bytes on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
       - name: Checkout artifact qualification tests
         uses: actions/checkout@v7
         with:
@@ -400,9 +302,53 @@ jobs:
         shell: bash
 
 
+  prepare-opencode-inputs:
+    name: Seal same-run OpenCode release inputs
+    needs: build-matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      sha256: ${{ steps.seal.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with: {go-version: '1.27.1', cache: false}
+      - uses: actions/setup-node@v6
+        with: {node-version: '24.21.0', package-manager-cache: false}
+      - uses: actions/setup-python@v7
+        with: {python-version: '3.12'}
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: binaries-*
+          merge-multiple: true
+          path: dist
+      - name: Rebuild and verify the exact self-contained observer
+        working-directory: opencode-plugin
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ../.task-tools/artifacts
+          cp ../internal/opencodeplugin/dist/agent-notifications.js ../.task-tools/artifacts/original-observer.js
+          npm ci --ignore-scripts
+          npm run check:candidate
+          npm run build
+          cmp ../.task-tools/artifacts/original-observer.js ../internal/opencodeplugin/dist/agent-notifications.js
+          cp ../internal/opencodeplugin/dist/agent-notifications.js ../.task-tools/artifacts/rebuilt-observer.js
+      - name: Seal actual reviewed source bytes and exact release binary custody
+        id: seal
+        run: python -B scripts/release-opencode-inputs.py --scope linux-windows --rebuilt .task-tools/artifacts/rebuilt-observer.js
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-opencode-inputs-${{ github.sha }}
+          path: .task-tools/artifacts/release-opencode-inputs.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
   qualify-opencode:
     name: Qualify release OpenCode ${{ matrix.target.platform }}/${{ matrix.target.arch }} ${{ matrix.version }}
-    needs: [build-matrix, build-notifier]
+    needs: [build-matrix, prepare-opencode-inputs]
     runs-on: ${{ matrix.target.runner }}
     timeout-minutes: 20
     strategy:
@@ -412,28 +358,31 @@ jobs:
         target:
           - {runner: ubuntu-22.04, platform: linux, arch: amd64, binary: claude-notifications-linux-amd64}
           - {runner: ubuntu-22.04-arm, platform: linux, arch: arm64, binary: claude-notifications-linux-arm64}
-          - {runner: macos-15, platform: darwin, arch: arm64, binary: claude-notifications-darwin-arm64}
-          - {runner: macos-15-intel, platform: darwin, arch: amd64, binary: claude-notifications-darwin-amd64}
           - {runner: windows-latest, platform: windows, arch: amd64, binary: claude-notifications-windows-amd64.exe}
         include:
           - version: '1.18.34'
             target: {runner: ubuntu-22.04, platform: linux, arch: amd64, binary: claude-notifications-linux-amd64}
     env:
-      # These are reviewed immutable inputs for this exact tag/build, never grants.
-      AN_EVIDENCE_URL: ${{ vars.OPENCODE_RELEASE_EVIDENCE_URL }}
-      AN_EVIDENCE_SHA256: ${{ vars.OPENCODE_RELEASE_EVIDENCE_SHA256 }}
+      AN_EVIDENCE_ARCHIVE: .task-tools/artifacts/custody/release-opencode-inputs.tar.gz
+      AN_EVIDENCE_SHA256: ${{ needs.prepare-opencode-inputs.outputs.sha256 }}
       AN_OS: ${{ matrix.target.platform }}
       AN_ARCH: ${{ matrix.target.arch }}
       AN_VERSION: ${{ matrix.version }}
       MAIN_BINARY: ${{ matrix.target.binary }}
     steps:
+      - name: Preserve canonical source bytes on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: actions/setup-go@v7
         with: {go-version: '1.27.1', cache: false}
       - uses: actions/setup-node@v6
-        with: {node-version: '24.21.0'}
+        with: {node-version: '24.21.0', package-manager-cache: false}
       - uses: actions/setup-python@v7
         with: {python-version: '3.12'}
       - name: Initialize unqualified report
@@ -445,16 +394,11 @@ jobs:
         with:
           name: binaries-${{ matrix.target.platform }}-${{ matrix.target.arch }}
           path: dist
-      - name: Download actual signed release helper
-        if: matrix.target.platform == 'darwin'
+      - name: Download same-run sealed release custody
         uses: actions/download-artifact@v8
         with:
-          name: ClaudeNotifier
-          path: .task-tools/artifacts/release-native-app
-      - name: Extract actual signed release helper
-        if: matrix.target.platform == 'darwin'
-        shell: bash
-        run: ditto -x -k .task-tools/artifacts/release-native-app/ClaudeNotifier.app.zip .task-tools/artifacts/release-native-app
+          name: release-opencode-inputs-${{ github.sha }}
+          path: .task-tools/artifacts/custody
       - name: Make normal release binary executable
         if: runner.os != 'Windows'
         shell: bash
@@ -462,7 +406,7 @@ jobs:
       - name: Linux private bus prerequisites
         if: matrix.target.platform == 'linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev dbus iproute2
-      - name: Stage immutable external parent artifacts
+      - name: Verify and stage same-run parent archive
         id: parent
         shell: bash
         run: python -B scripts/testdata/opencode-native-e2e/ci_inputs.py --stage-evidence
@@ -485,12 +429,6 @@ jobs:
                   os.environ['AN_ARCH'], os.environ['AN_VERSION'], os.environ['AN_MANIFEST_SHA256'])
               expected = (inputs.repo / 'dist' / os.environ['MAIN_BINARY']).resolve(strict=True)
               r.require(binary == expected, 'normal_release_binary_required')
-              if cell['os'] == 'darwin':
-                  app = r.native_app(cell['nativeApp'])
-                  expected_app = inputs.artifacts / 'release-native-app/ClaudeNotifier.app'
-                  r.require(app == expected_app.resolve(strict=True), 'signed_release_native_app_required')
-                  sidecar = r.checked_file(inputs.repo, cell['nativeApp']['sidecar'])
-                  r.require(sidecar == expected_app.with_name(expected_app.name + '.managed-runtime.json').resolve(strict=True), 'release_native_app_sidecar_required')
           except Exception as error:
               r.write_json(inputs.artifacts / 'native-report.json', {
                   'status': 'unqualified', 'businessPhasesStarted': False,
@@ -513,7 +451,14 @@ jobs:
           export AN_SUITE=smoke
           if [ "$AN_OS/$AN_ARCH" = linux/amd64 ]; then export AN_SUITE=full; fi
           if [ "$AN_OS" = linux ]; then
-            sudo --preserve-env=PATH,AN_MANIFEST,AN_MANIFEST_SHA256,AN_OS,AN_ARCH,AN_VERSION,AN_SUITE unshare --net -- bash -c 'ip link set lo up; python -B scripts/testdata/opencode-native-e2e/ci_inputs.py --execute'
+            # Create the private network as root, then keep checkout/artifact
+            # ownership and Git source verification under the runner identity.
+            export AN_HOST_NETNS="$(readlink /proc/self/ns/net)"
+            sudo --preserve-env=PATH,AN_MANIFEST,AN_MANIFEST_SHA256,AN_OS,AN_ARCH,AN_VERSION,AN_SUITE,AN_HOST_NETNS unshare --net -- bash -c '
+              set -euo pipefail
+              ip link set lo up
+              exec setpriv --reuid "$1" --regid "$2" --init-groups -- env HOME="$3" USER="$4" LOGNAME="$4" python -B scripts/testdata/opencode-native-e2e/ci_inputs.py --execute
+            ' bash "$(id -u)" "$(id -g)" "$HOME" "$(id -un)"
           else
             python -B scripts/testdata/opencode-native-e2e/ci_inputs.py --execute
           fi

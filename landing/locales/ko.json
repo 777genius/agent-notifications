@@ -28,7 +28,7 @@
       "gemini": "Gemini CLI (Linux / Windows): 턴 완료와 도구 권한 요청을 무음으로 알립니다. 턴 완료는 성공이나 최종 답변을 뜻하지 않습니다. 소리, 클릭 포커스, 질문, 오류, 계획, 검토 알림 및 중첩 에이전트 기능 동등성은 지원하지 않습니다."
     },
     "gemini": {
-      "version": "Linux / Windows: 1.47.1 (Gemini CLI 0.62.0). macOS: 1.46.1 (Claude, Codex CLI, OpenCode; Gemini 사용 불가)",
+      "version": "Linux / Windows: 1.48.1 (Gemini CLI 0.62.0). macOS: 1.46.1 (Claude, Codex CLI, OpenCode; Gemini 사용 불가)",
       "guide": "Gemini 설정 및 제한",
       "configure": "채널 동의와 공유 설정은 Gemini 안내를 참고하세요. MCP 도구나 스킬을 설치하지 않습니다. 내장 알림과 중복될 수 있습니다. 데스크톱 알림 소스 하나 또는 webhook 전용을 선택하세요. 내장 설정은 변경하지 않습니다."
     },

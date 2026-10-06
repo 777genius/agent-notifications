@@ -321,7 +321,7 @@
       "gemini": "Gemini CLI (Linux / Windows)：静默提示回合结束和工具权限请求。回合结束不代表成功或最终答复。不支持声音、点击聚焦、问题、错误、计划、审查通知或嵌套代理功能对等。"
     },
     "gemini": {
-      "version": "Linux / Windows: 1.47.1 (Gemini CLI 0.62.0). macOS: 1.46.1 (Claude, Codex CLI, OpenCode; Gemini 不可用。)",
+      "version": "Linux / Windows: 1.48.1 (Gemini CLI 0.62.0). macOS: 1.46.1 (Claude, Codex CLI, OpenCode; Gemini 不可用。)",
       "guide": "Gemini 设置与限制",
       "configure": "渠道授权和共享设置请参阅 Gemini 指南；不安装 MCP 工具或技能。内置通知可能重复。请选择一个桌面通知来源或仅使用 webhook；不会修改内置设置。"
     },
