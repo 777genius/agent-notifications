@@ -10,6 +10,11 @@ on:
         description: 'Exact reviewed base85/gzip/xz lossless carrier; name retained from original input'
         type: string
         required: true
+      mkdir_diagnostic:
+        description: 'R576 filesystem-only diagnostic; excludes all preparation/build/native effects'
+        type: boolean
+        required: false
+        default: false
       consume_cursor_e:
         description: 'Root authorizes the original ONE E budget after complete qualification'
         type: boolean
@@ -22,8 +27,403 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  cursor-mkdir-diagnostic:
+    if: github.event_name == 'workflow_dispatch' && inputs.mkdir_diagnostic
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        timeout-minutes: 2
+        with:
+          ref: aa171b20e3e87477f19cb205ee960bc7eab1b73f
+          persist-credentials: false
+      - name: Verify fixed carrier transport without executing its payload
+        timeout-minutes: 1
+        env:
+          CURSOR_CARRIER_B64: ${{ inputs.cursor_carrier_b64 }}
+        run: |
+          python3 -B -S - <<'PY_VERIFY'
+          import base64, hashlib, lzma, struct, zlib, os, pathlib, tempfile
+          MAGIC = b'R363T2\0'
+          MAX_SOURCE = 1 << 20
+          MAX_FRAME = 1 << 20
+          MAX_XZ = 1 << 17
+          MAX_ENCODED = 65535
+          MAX_RECORDS = 1024
+
+          def decode_frame(frame):
+              assert len(frame) <= MAX_FRAME and frame.startswith(MAGIC), 'frame magic/bound'
+              at = len(MAGIC)
+              assert at+2 <= len(frame), 'partial record count'
+              count = struct.unpack_from('>H',frame,at)[0];at += 2
+              assert 0 < count <= MAX_RECORDS
+              descriptors = []
+              for _ in range(count):
+                  assert at < len(frame), 'partial segment kind'
+                  kind = frame[at];at += 1
+                  assert kind in (0,1,2), 'unknown lossless segment'
+                  if kind == 1:
+                      size = 32
+                  else:
+                      assert at+2 <= len(frame), 'partial segment header'
+                      size = struct.unpack_from('>H',frame,at)[0];at += 2
+                  descriptors.append((kind,size))
+              assert sum(size for _,size in descriptors) == len(frame)-at, 'segment total/trailing bytes'
+              pieces = [None]*count
+              for grouped_kind in (0,1,2):
+                  for index,(kind,size) in enumerate(descriptors):
+                      if kind != grouped_kind: continue
+                      raw = frame[at:at+size];at += size
+                      pieces[index] = raw.hex().encode('ascii') if kind == 1 else base64.b64encode(raw) if kind == 2 else raw
+              assert at == len(frame) and sum(len(piece) for piece in pieces) <= MAX_SOURCE, 'decoded source bound'
+              source = b''.join(pieces)
+              assert source, 'empty source'
+              return source
+
+          def decode(encoded, pins):
+              assert type(encoded) is str and len(encoded) == pins['encodedBytes'] <= MAX_ENCODED
+              compressed = base64.b85decode(encoded.encode('ascii'))
+              assert base64.b85encode(compressed).decode('ascii') == encoded, 'noncanonical base85'
+              assert len(compressed) == pins['transportBytes'] and hashlib.sha256(compressed).hexdigest() == pins['transportSHA256']
+              gz = zlib.decompressobj(16+zlib.MAX_WBITS)
+              xz = gz.decompress(compressed,MAX_XZ+1)
+              assert len(xz) == pins['xzBytes'] <= MAX_XZ and gz.eof and not gz.unused_data and not gz.unconsumed_tail, 'gzip length/EOF/trailing data'
+              stream = lzma.LZMADecompressor(format=lzma.FORMAT_XZ,memlimit=64<<20)
+              frame = stream.decompress(xz,max_length=MAX_FRAME+1)
+              assert len(frame) == pins['frameBytes'] <= MAX_FRAME and stream.eof and not stream.unused_data, 'xz length/EOF/trailing data'
+              source = decode_frame(frame)
+              assert len(source) == pins['sourceBytes'] and hashlib.sha256(source).hexdigest() == pins['sourceSHA256'], 'exact source length/hash'
+              return source
+
+          pins = {'encodedBytes': 65218, 'frameBytes': 206502, 'xzBytes': 52136, 'transportBytes': 52174, 'transportSHA256': '4534ed0dfb364ed3df56e37d648eebb5ac7e721b222cad59c33fee67dfd62802', 'sourceBytes': 214773, 'sourceSHA256': '805e171a4f06c27041d0dab8afc692fa0b1b81de4e389dc945a2df5708059749'}
+          candidate = decode(os.environ['CURSOR_CARRIER_B64'],pins)
+          compile(candidate,'native_case.py','exec')
+          target = pathlib.Path(tempfile.mkdtemp(prefix='TEST-cursor-carrier-',dir=os.environ['RUNNER_TEMP']))
+          (target/'native_case.py').write_bytes(candidate)
+          with open(os.environ['GITHUB_ENV'],'a') as environment:
+              environment.write('CURSOR_CARRIER='+str(target/'native_case.py')+'\n')
+          PY_VERIFY
+      - name: Only exact TEST mkdir and no-follow ancestor diagnostics
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = aa171b20e3e87477f19cb205ee960bc7eab1b73f
+          export_dir=$(mktemp -d "$RUNNER_TEMP/TEST-r576-mkdir-export-XXXXXX")
+          printf 'R576_MKDIR_EXPORT_DIR=%s\n' "$export_dir" >> "$GITHUB_ENV"
+          cat > "$export_dir/r576_mkdir_diagnostic.py" <<'PY_R576'
+          """R576 pure TEST mkdir diagnostic. Proposed CI use only; never imports a carrier."""
+          import ast
+          import base64
+          import errno
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import platform
+          import resource
+          import secrets
+          import select
+          import signal
+          import stat
+          import sys
+          import time
+
+          SOURCE_SHA = '805e171a4f06c27041d0dab8afc692fa0b1b81de4e389dc945a2df5708059749'
+          LIMIT = 1 << 20
+          DEADLINE = time.monotonic() + 30
+
+
+          def remaining(cap):
+              value = min(cap, DEADLINE - time.monotonic())
+              assert value > 0, 'diagnostic absolute deadline'
+              return value
+
+
+          def facts(info):
+              return {'dev': info.st_dev, 'ino': info.st_ino, 'mode': info.st_mode,
+                      'uid': info.st_uid, 'gid': info.st_gid, 'nlink': info.st_nlink,
+                      'size': info.st_size, 'mtime_ns': info.st_mtime_ns, 'ctime_ns': info.st_ctime_ns}
+
+
+          def emit(event, record):
+              raw = (json.dumps({'event': event, 'record': record})+'\n').encode()
+              assert len(raw) <= LIMIT
+              sys.stdout.buffer.write(raw)
+              sys.stdout.buffer.flush()
+
+
+          def open_path(path):
+              """Refuse links in every component, including ancestors; no resolve substitution."""
+              assert path.is_absolute() and '..' not in path.parts and len(path.parts) <= 64
+              fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+              try:
+                  for part in path.parts[1:]:
+                      before = os.stat(part, dir_fd=fd, follow_symlinks=False)
+                      child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                      try:
+                          assert facts(before) == facts(os.fstat(child)), 'path component changed'
+                      except BaseException:
+                          os.close(child)
+                          raise
+                      os.close(fd)
+                      fd = child
+                  return fd
+              except BaseException:
+                  os.close(fd)
+                  raise
+
+
+          def acl(fd):
+              result = {}
+              for name in ('system.posix_acl_access', 'system.posix_acl_default'):
+                  try:
+                      raw = os.getxattr(fd, name)
+                      assert len(raw) <= 65536, 'ACL byte bound'
+                      result[name] = {'state': 'present', 'base64': base64.b64encode(raw).decode()}
+                  except OSError as error:
+                      assert error.errno == errno.ENODATA, 'ACL unreadable/unsupported is unknown'
+                      result[name] = {'state': 'absent', 'errno': error.errno}
+              return result
+
+
+          def chain(target):
+              result = []
+              for path in reversed([target, *target.parents]):
+                  remaining(1)
+                  try:
+                      fd = open_path(path)
+                  except FileNotFoundError:
+                      result.append({'path': str(path), 'state': 'absent', 'errno': errno.ENOENT})
+                      emit('ancestor', result[-1])
+                      continue
+                  try:
+                      before = facts(os.fstat(fd))
+                      result.append({'path': str(path), 'state': 'directory', 'identity': before, 'acl': acl(fd)})
+                      assert facts(os.fstat(fd)) == before, 'ancestor changed during snapshot'
+                  finally:
+                      os.close(fd)
+                  emit('ancestor', result[-1])
+              return result
+
+
+          def membership(root):
+              rows = []
+              for path in (root, root/'home', root/'home/.local', root/'home/.local/bin'):
+                  try:
+                      fd = open_path(path)
+                  except FileNotFoundError:
+                      rows.append({'path': str(path), 'state': 'absent'})
+                      continue
+                  try:
+                      before = facts(os.fstat(fd))
+                      names = sorted(os.listdir(fd))
+                      assert len(names) <= 16 and sum(len(os.fsencode(n)) for n in names) <= 8192
+                      members = [{'name': name, 'identity': facts(os.stat(name, dir_fd=fd, follow_symlinks=False))}
+                                 for name in names]
+                      assert sorted(os.listdir(fd)) == names, 'membership names changed'
+                      for member in members:
+                          assert facts(os.stat(member['name'], dir_fd=fd, follow_symlinks=False)) == member['identity'], 'member changed'
+                      assert facts(os.fstat(fd)) == before, 'membership directory changed'
+                      anchored = open_path(path)
+                      try:
+                          assert facts(os.fstat(anchored)) == before, 'membership path replaced'
+                      finally:
+                          os.close(anchored)
+                      rows.append({'path': str(path), 'identity': before, 'members': members})
+                  finally:
+                      os.close(fd)
+              return rows
+
+
+          def mkdir_child(root, operation):
+              child_deadline = time.monotonic() + remaining(5)  # Refuse before pipe/fork effects.
+              reader, writer = os.pipe()
+              pid = os.fork()
+              if pid == 0:
+                  os.close(reader)
+                  report = {'mkdirExecuted': False}
+                  code = 2
+                  try:
+                      os.setgroups([])
+                      os.setgid(1000)
+                      os.setuid(1000)
+                      os.umask(0o077)
+                      report['identity'] = {'pid': os.getpid(), 'ppid': os.getppid(), 'uid': os.getresuid(),
+                                            'gid': os.getresgid(), 'groups': os.getgroups(),
+                                            'stat': pathlib.Path('/proc/self/stat').read_text(),
+                                            'uidMap': pathlib.Path('/proc/self/uid_map').read_text(),
+                                            'gidMap': pathlib.Path('/proc/self/gid_map').read_text(),
+                                            'namespaces': {n: os.readlink('/proc/self/ns/'+n) for n in ('pid', 'net', 'user')}}
+                      assert os.getresuid() == (1000, 1000, 1000) and os.getresgid() == (1000, 1000, 1000) and os.getgroups() == []
+                      report['mkdirExecuted'] = True
+                      try:
+                          # Only the two exact AST statements from install_and_confirm.
+                          exec(operation, {'root': root})
+                          report.update(result='CREATED', errno=None)
+                      except OSError as error:
+                          report.update(result='DENIED' if error.errno == errno.EACCES else 'UNKNOWN',
+                                        errno=error.errno, error=str(error), filename=error.filename)
+                      code = 0
+                  except BaseException as error:
+                      report.update(result='UNKNOWN', error=type(error).__name__+':'+str(error)[:240])
+                  raw = (json.dumps(report)+'\n').encode()
+                  if len(raw) <= 65536:
+                      os.write(writer, raw)
+                  os.close(writer)
+                  os._exit(code)
+              os.close(writer)
+              raw = bytearray()
+              joined = False
+              try:
+                  while True:
+                      wait = min(remaining(5), child_deadline-time.monotonic())
+                      assert wait > 0 and select.select([reader], [], [], wait)[0], 'child observation timeout'
+                      chunk = os.read(reader, 8192)
+                      if not chunk:
+                          break
+                      raw.extend(chunk)
+                      assert len(raw) <= 65536, 'child record bound'
+                  while True:
+                      actual, status = os.waitpid(pid, os.WNOHANG)
+                      if actual == pid:
+                          joined = True
+                          break
+                      assert time.monotonic() < child_deadline, 'child exit timeout'
+                      time.sleep(min(remaining(.01), .01))
+                  report = json.loads(raw.decode('utf-8'))
+                  report['waitStatus'] = status
+                  emit('child-result', report)
+                  assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0, report
+                  assert report['mkdirExecuted'] and report['result'] in ('CREATED', 'DENIED'), report
+                  return report
+              finally:
+                  os.close(reader)
+                  if not joined:
+                      # The exact direct owned child is not reused before its waitpid.
+                      try:
+                          os.kill(pid, signal.SIGKILL)
+                      except ProcessLookupError:
+                          pass
+                      cleanup_deadline = min(DEADLINE, child_deadline)
+                      while True:
+                          actual, status = os.waitpid(pid, os.WNOHANG)
+                          if actual == pid:
+                              joined = True
+                              break
+                          left = cleanup_deadline-time.monotonic()
+                          if left <= 0:
+                              break
+                          time.sleep(min(.01, left))
+                      emit('child-cleanup', {'pid': pid, 'SIGKILLRequested': True, 'joined': joined,
+                                             'deadline': cleanup_deadline,
+                                             'disposition': 'terminal' if joined else 'UNKNOWN_UNJOINED'})
+                      assert joined, 'unknown child cleanup; no successful diagnostic receipt'
+
+
+          def fixture(parent, name, operation, qualifier):
+              root = parent/name
+              qualifier(root/'home/.cursor', pathlib.Path('/etc/machine-id').read_text().strip())
+              parent_fd = open_path(parent)
+              try:
+                  os.mkdir(name, 0o700, dir_fd=parent_fd)  # EEXIST refuses; no reuse.
+              finally:
+                  os.close(parent_fd)
+              root_fd = open_path(root)
+              try:
+                  os.fchown(root_fd, 1000, 1000)  # Only this newly created TEST directory.
+                  os.mkdir('home', 0o700, dir_fd=root_fd)
+              finally:
+                  os.close(root_fd)
+              home_fd = open_path(root/'home')
+              try:
+                  os.fchown(home_fd, 1000, 1000)  # Only this newly created TEST home.
+              finally:
+                  os.close(home_fd)
+              before = {'ancestors': chain(root/'home/.local/bin'), 'membership': membership(root)}
+              emit('before', {'root': str(root), **before})
+              child = mkdir_child(root, operation)
+              after = {'ancestors': chain(root/'home/.local/bin'), 'membership': membership(root)}
+              emit('after', {'root': str(root), **after})
+              return {'root': str(root), 'before': before, 'child': child, 'after': after,
+                      'retained': 'owned TEST filesystem diagnostic fixture; no installer/native state'}
+
+
+          def main(carrier, runner_temp):
+              assert os.geteuid() == 0 and os.getegid() == 0, 'trusted root entry required'
+              os.umask(0o077)
+              resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+              resource.setrlimit(resource.RLIMIT_FSIZE, (LIMIT, LIMIT))
+              parent_fd = open_path(carrier.parent)
+              try:
+                  fd = os.open(carrier.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
+                  with os.fdopen(fd, 'rb') as stream:
+                      before = facts(os.fstat(stream.fileno()))
+                      assert stat.S_ISREG(before['mode']) and before['nlink'] == 1 and before['size'] <= LIMIT
+                      source = stream.read(LIMIT+1)
+                      assert facts(os.fstat(stream.fileno())) == before
+              finally:
+                  os.close(parent_fd)
+              assert hashlib.sha256(source).hexdigest() == SOURCE_SHA
+              tree = ast.parse(source)
+              install = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'install_and_confirm')
+              target, mkdir = install.body[2:4]
+              assert ast.get_source_segment(source.decode(), target) == "target = root/'home/.local/bin'"
+              assert ast.get_source_segment(source.decode(), mkdir) == 'target.mkdir(mode=0o700, parents=True)'
+              operation = compile(ast.Module(body=[target, mkdir], type_ignores=[]), '805e-exact-target-mkdir', 'exec')
+              qualified = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'qualified_runner')
+              scope = {'pathlib': pathlib, 'platform': platform, 'LIMIT': LIMIT}
+              exec(compile(ast.Module(body=[qualified], type_ignores=[]), '805e-pure-qualified-runner', 'exec'), scope)
+              qualifier = scope['qualified_runner']
+              report = {'diagnostic': 'R576_ONLY_TEST_MKDIR', 'sourceSHA256': SOURCE_SHA,
+                        'runnerTemp': str(runner_temp), 'originalE': 'FAILED_NO_RESET', 'retest': 'CONDITIONAL_UNSPENT',
+                        'native': 'NOT_RUN', 'installer': 'NOT_RUN', 'preparation': 'NOT_RUN',
+                        'qualification': 'exact source pure runner filter; no full authority/installation claim',
+                        'operation': ast.get_source_segment(source.decode(), mkdir), 'fixtures': []}
+              original = fixture(runner_temp, 'TEST-cursor-installed-one', operation, qualifier)
+              report['fixtures'].append(original)
+              if original['child']['result'] == 'DENIED':
+                  # A separate fresh contrast exists only after the original denial.
+                  # No runtime root relocation is proposed or applied.
+                  parent = pathlib.Path('/tmp')
+                  fd = open_path(parent)
+                  os.close(fd)
+                  name = 'TEST-r576-mkdir-contrast-'+secrets.token_hex(8)
+                  report['fixtures'].append(fixture(parent, name, operation, qualifier))
+              report['status'] = 'DIAGNOSTIC_RECEIPT_ONLY_NO_CAUSAL_FIX_OR_E_PASS'
+              return report
+
+
+          if __name__ == '__main__':
+              try:
+                  assert len(sys.argv) == 3
+                  report = main(pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]))
+                  emit('result', report)
+              except BaseException as error:
+                  print(json.dumps({'status': 'UNKNOWN_DIAGNOSTIC_FAILED', 'error': type(error).__name__+':'+str(error)[:240]}), file=sys.stderr)
+                  sys.exit(1)
+          PY_R576
+          test "$(sha256sum "$export_dir/r576_mkdir_diagnostic.py" | cut -d ' ' -f 1)" = b13f81ad9131ea75836fbc76932d76f76e68aa12d87565bbb5ee5516c7a1212b
+          # Runner-owned exact files retain partial root/child output on failure.
+          # RLIMIT_FSIZE bounds each diagnostic stream; timeout is never success.
+          set +e
+          sudo -n /usr/bin/timeout --signal=TERM --kill-after=2s 35s /usr/bin/python3 -B -S "$export_dir/r576_mkdir_diagnostic.py" "$CURSOR_CARRIER" "$RUNNER_TEMP" > "$export_dir/stdout.jsonl" 2> "$export_dir/stderr.jsonl"
+          code=$?
+          set -e
+          printf '%s\n' "$code" > "$export_dir/exit-code.txt"
+          test "$code" -eq 0
+      - name: Always retain exact R576 diagnostic records only
+        if: always()
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: r576-mkdir-diagnostic
+          path: ${{ env.R576_MKDIR_EXPORT_DIR }}
+          if-no-files-found: error
+          retention-days: 7
   cursor-installed-e:
-    if: github.event_name == 'workflow_dispatch' && inputs.consume_cursor_e
+    if: github.event_name == 'workflow_dispatch' && inputs.consume_cursor_e && !inputs.mkdir_diagnostic
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     permissions:

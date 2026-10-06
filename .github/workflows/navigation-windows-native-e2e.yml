@@ -10,11 +10,13 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'Read-only preflight or separately opted-in native callback attempt'
+        description: 'Read-only preflight/taskbar UIA, single Win+N diagnostic, or native callback'
         type: choice
         default: policy_preflight
         options:
           - policy_preflight
+          - center_surface
+          - taskbar_uia
           - native_callback
 permissions:
   contents: read
@@ -28,6 +30,8 @@ jobs:
       NAVIGATION_WINDOWS_RUNNER: windows-11-vs2026-arm
       NAVIGATION_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       NAVIGATION_WINDOWS_PREFLIGHT_ONLY: ${{ inputs.mode == 'native_callback' && '0' || '1' }}
+      NAVIGATION_WINDOWS_CENTER_SURFACE: ${{ inputs.mode == 'center_surface' && '1' || '0' }}
+      NAVIGATION_WINDOWS_TASKBAR_UIA: ${{ inputs.mode == 'taskbar_uia' && '1' || '0' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:

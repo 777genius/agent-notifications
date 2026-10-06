@@ -104,6 +104,15 @@ async function main(): Promise<void> {
   }
   // Missing flag stays read-only; native submission requires the explicit '0' mode.
   const diagnosticOnly = diagnosticFlag !== '0';
+  const surfaceFlag = process.env.NAVIGATION_WINDOWS_CENTER_SURFACE;
+  if (surfaceFlag !== undefined && surfaceFlag !== '0' && surfaceFlag !== '1') throw new Error('invalid surface flag');
+  const surfaceOnly = surfaceFlag === '1';
+  const taskbarFlag = process.env.NAVIGATION_WINDOWS_TASKBAR_UIA;
+  if (taskbarFlag !== undefined && taskbarFlag !== '0' && taskbarFlag !== '1') throw new Error('invalid taskbar flag');
+  const taskbarOnly = taskbarFlag === '1';
+  if ((surfaceOnly || taskbarOnly) && !diagnosticOnly || surfaceOnly && taskbarOnly) {
+    throw new Error('taskbar, surface and native callback modes are exclusive');
+  }
   evidence.diagnosticOnly = diagnosticOnly;
   if (diagnosticOnly) {
     evidence.scope = 'Windows TEST read-only Center policy and input desktop preflight';
@@ -129,6 +138,83 @@ async function main(): Promise<void> {
     throw new Error('active connected desktop preflight not ready');
   }
   if (diagnosticOnly) {
+    if (taskbarOnly) {
+      evidence.scope = 'Windows TEST read-only owned taskbar UIA identifier projection';
+      const step = run('taskbar-uia', 15_000);
+      for (const name of ['taskbar-preflight.json', 'taskbar-uia.json']) {
+        if (!existsSync(join(root, name))) continue;
+        const record = read(name); evidence[name] = record;
+        if (record.pid !== step.pid || record.nonce !== nonce) throw new Error('taskbar report correlation invalid');
+      }
+      const taskbar = evidence['taskbar-uia.json'] as Json | undefined;
+      if (!taskbar || taskbar.diagnosticOnly !== true || taskbar.readOnly !== true || taskbar.inputAttempted !== false || taskbar.showAttempts !== 0
+          || taskbar.centerActionQualified !== false || taskbar.negativeIsAbsenceProof !== false
+          || taskbar.projection !== 'owned_taskbar_identifiers' || !Array.isArray(taskbar.rows)
+          || taskbar.rows.length !== taskbar.count || taskbar.rows.length > 128
+          || Buffer.byteLength(JSON.stringify(taskbar.rows).slice(1, -1)) > 10000) throw new Error('taskbar projection invalid');
+      for (const key of ['available', 'rootStable', 'walkCompleted', 'truncated', 'deadlineExpired']) {
+        if (typeof taskbar[key] !== 'boolean') throw new Error('taskbar observation state invalid');
+      }
+      for (const [key, max] of [['visited', 128], ['verifiedOwners', 16], ['providerSkips', 128], ['errors', 1024]] as const) {
+        if (!Number.isInteger(taskbar[key]) || Number(taskbar[key]) < 0 || Number(taskbar[key]) > max) {
+          throw new Error('taskbar observation bounds invalid');
+        }
+      }
+      if (Number(taskbar.visited) < taskbar.rows.length || taskbar.walkCompleted && (taskbar.available !== true
+          || taskbar.rootStable !== true || taskbar.truncated !== false || taskbar.deadlineExpired !== false
+          || taskbar.errors !== 0 || taskbar.providerSkips !== 0 || taskbar.rows.length === 0)) {
+        throw new Error('taskbar completeness claim invalid');
+      }
+      evidence.noInputProved = true; evidence.inputEffectUncertain = false;
+      if (step.status === 3 && !step.error && !step.signal) evidence.status = 'unavailable';
+      requireSuccess(step);
+      const fresh = evidence['taskbar-preflight.json'] as Json | undefined;
+      if (!fresh || fresh.ready !== true || fresh.connectionState !== 0 || fresh.connectionStateKnown !== true
+          || taskbar.available !== true) throw new Error('taskbar prerequisite evidence invalid');
+      const rows = taskbar.rows as Json[];
+      for (const [index, row] of rows.entries()) {
+        const parent = row.parentIndex;
+        if (row.index !== index || !Number.isInteger(parent) || typeof parent !== 'number' || parent < -1 || parent >= index
+            || !Number.isInteger(row.depth) || typeof row.depth !== 'number' || row.depth < 0 || row.depth > 16
+            || (parent === -1 ? index !== 0 || row.depth !== 0 : row.depth !== Number(rows[parent]?.depth) + 1)
+            || !Number.isInteger(row.providerPID) || Number(row.providerPID) <= 0
+            || !Array.isArray(row.propertyHRESULTs) || row.propertyHRESULTs.length !== 6
+            || row.propertyHRESULTs.some(hr => !Number.isInteger(hr) || hr < -2147483648 || hr > 2147483647)
+            || [row.automationId, row.className].some(value => value !== null && (typeof value !== 'string' || value.length > 128))
+            || row.controlType !== null && !Number.isInteger(row.controlType)
+            || row.offscreen !== null && typeof row.offscreen !== 'boolean'
+            || Object.keys(row).some(key => !['index', 'parentIndex', 'depth', 'providerPID', 'automationId', 'className',
+              'controlType', 'offscreen', 'propertyHRESULTs'].includes(key))) throw new Error('taskbar row contract invalid');
+      }
+    }
+    if (surfaceOnly) {
+      if (policy.configuredDisabled) throw new Error('Center disable policy configured; no input attempted');
+      evidence.scope = 'Windows TEST single Win+N Shell surface diagnostic, no native Show';
+      evidence.inputEffectUncertain = true;
+      const surfaceStep = run('center-surface', 15_000);
+      for (const name of ['surface-preflight.json', 'center-surface-before.json', 'center-surface-rejected.json', 'center-surface-intent.json', 'center-surface.json']) {
+        if (existsSync(join(root, name))) {
+          const record = read(name); evidence[name] = record;
+          if (record.pid !== surfaceStep.pid || record.nonce !== nonce) throw new Error('surface report correlation invalid');
+        }
+      }
+      const surface = evidence['center-surface.json'] as Json | undefined;
+      const rejected = evidence['center-surface-rejected.json'] as Json | undefined;
+      if (surfaceStep.status === 3 && !surfaceStep.error && !surfaceStep.signal && rejected?.inputAttempted === false
+          && rejected.showAttempts === 0 && !evidence['center-surface-intent.json'] && !surface) {
+        evidence.inputEffectUncertain = false; evidence.noInputProved = true; evidence.status = 'unavailable';
+      }
+      if (surface && surface.pid === surfaceStep.pid && surface.nonce === nonce
+          && typeof surface.keyReleaseUnknown === 'boolean') evidence.inputEffectUncertain = surface.keyReleaseUnknown;
+      requireSuccess(surfaceStep);
+      const fresh = evidence['surface-preflight.json'] as Json | undefined;
+      const intent = evidence['center-surface-intent.json'] as Json | undefined;
+      if (!fresh || fresh.ready !== true || fresh.connectionState !== 0 || fresh.connectionStateKnown !== true
+          || !intent || intent.chordIntent !== 1 || intent.showAttempts !== 0) throw new Error('surface prerequisite evidence invalid');
+      if (!surface || surface.pid !== surfaceStep.pid || surface.nonce !== nonce || surface.chordAttempts !== 1
+          || surface.chordAccepted !== true || surface.keyReleaseUnknown !== false || surface.showAttempts !== 0
+          || surface.centerOpenedProved !== false || surface.diagnosticOnly !== true) throw new Error('surface evidence invalid');
+    }
     evidence.status = 'diagnostic_complete'; evidence.noShowProved = true; exitCode = 0;
     return;
   }
