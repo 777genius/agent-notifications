@@ -25,6 +25,7 @@
 #include <exception>
 #include <memory>
 #include <cstring>
+#include <map>
 using Microsoft::WRL::ComPtr;
 namespace fs = std::filesystem;
 using namespace winrt::Windows::UI::Notifications;
@@ -118,7 +119,7 @@ static bool centerPolicy() {
         + ",\"configuredDisabled\":" + (user.enabled || machine.enabled ? "true" : "false") + "}\n");
     return complete;
 }
-static bool preflight() {
+static bool preflight(const char* reportName = "preflight.json") {
     OSVERSIONINFOEXW v{}; v.dwOSVersionInfoSize = sizeof(v);
     auto rtl = reinterpret_cast<LONG(WINAPI*)(OSVERSIONINFOEXW*)>(
         GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlGetVersion"));
@@ -148,7 +149,7 @@ static bool preflight() {
     bool ready = client && sessionKnown && session != 0 && flagsKnown && (flags.dwFlags & WSF_VISIBLE)
         && stationName == L"WinSta0" && !inputName.empty() && inputName == threadName && shellPid != 0
         && stateKnown && state == WTSActive;
-    report("preflight.json", "{\"pid\":" + std::to_string(GetCurrentProcessId()) + ",\"nonce\":" + jsonQuote(uuid)
+    report(reportName, "{\"pid\":" + std::to_string(GetCurrentProcessId()) + ",\"nonce\":" + jsonQuote(uuid)
         + ",\"client\":" + std::string(client ? "true" : "false")
         + ",\"build\":" + std::to_string(v.dwBuildNumber) + ",\"productType\":" + std::to_string(v.wProductType)
         + ",\"sessionKnown\":" + (sessionKnown ? "true" : "false") + ",\"session\":" + std::to_string(session)
@@ -316,6 +317,121 @@ static std::vector<BYTE> tokenUser(HANDLE process) {
     bool ok = GetTokenInformation(token, TokenUser, user.data(), size, &size) != FALSE;
     DWORD error = GetLastError(); CloseHandle(token);
     if (!ok) check(HRESULT_FROM_WIN32(error)); return user;
+}
+// Diagnostic metadata only. Held kernel handles bracket HWND/PID observations;
+// these checks do not qualify a signed client or prove Center visibility.
+struct SurfaceOwner {
+    HANDLE process;
+    explicit SurfaceOwner(HANDLE value) : process(value) {}
+    ~SurfaceOwner() { CloseHandle(process); }
+    bool live() const { return WaitForSingleObject(process, 0) == WAIT_TIMEOUT; }
+};
+struct SurfaceScan {
+    std::map<DWORD, std::unique_ptr<SurfaceOwner>> owners;
+    DWORD session = 0;
+    std::vector<BYTE> user;
+    std::wstring windows;
+    unsigned visited = 0, errors = 0, count = 0;
+    bool truncated = false;
+    ULONGLONG deadline = 0;
+    std::string rows;
+    SurfaceOwner* owner(DWORD pid) {
+        auto found = owners.find(pid);
+        if (found != owners.end()) return found->second->live() ? found->second.get() : nullptr;
+        if (owners.size() >= 16) { truncated = true; return nullptr; }
+        HANDLE handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid);
+        if (!handle) { ++errors; return nullptr; }
+        auto held = std::make_unique<SurfaceOwner>(handle);
+        wchar_t image[32768]{}; DWORD size = 32768, observedSession = 0;
+        if (!held->live() || !QueryFullProcessImageNameW(handle, 0, image, &size)
+            || !ProcessIdToSessionId(pid, &observedSession) || observedSession != session) return nullptr;
+        std::wstring path(image, size);
+        std::transform(path.begin(), path.end(), path.begin(), [](wchar_t c) { return std::towlower(c); });
+        const auto leaf = fs::path(path).filename().wstring();
+        if (path.rfind(windows + L"\\", 0) != 0
+            || (leaf != L"explorer.exe" && leaf != L"shellhost.exe" && leaf != L"shellexperiencehost.exe")) return nullptr;
+        const auto candidate = tokenUser(handle);
+        if (!EqualSid(reinterpret_cast<TOKEN_USER*>(user.data())->User.Sid,
+            reinterpret_cast<const TOKEN_USER*>(candidate.data())->User.Sid) || !held->live()) return nullptr;
+        auto result = held.get(); owners.emplace(pid, std::move(held)); return result;
+    }
+    static BOOL CALLBACK visit(HWND window, LPARAM context) noexcept {
+        auto& scan = *reinterpret_cast<SurfaceScan*>(context);
+        if (++scan.visited > 128 || scan.count >= 16 || GetTickCount64() >= scan.deadline) {
+            scan.truncated = true; return FALSE;
+        }
+        try {
+            DWORD pid = 0; GetWindowThreadProcessId(window, &pid);
+            auto held = pid ? scan.owner(pid) : nullptr;
+            if (!held || !held->live()) return TRUE;
+            wchar_t name[64]{}; int length = GetClassNameW(window, name, 64);
+            if (length <= 0 || length >= 63) { ++scan.errors; return TRUE; }
+            const bool visible = IsWindowVisible(window) != FALSE, foreground = GetForegroundWindow() == window;
+            DWORD after = 0; GetWindowThreadProcessId(window, &after);
+            if (after != pid || !IsWindow(window) || !held->live()) { ++scan.errors; return TRUE; }
+            if (scan.count++) scan.rows += ',';
+            scan.rows += "{\"hwnd\":" + std::to_string(reinterpret_cast<uintptr_t>(window))
+                + ",\"pid\":" + std::to_string(pid) + ",\"class\":" + jsonQuote(name)
+                + ",\"visible\":" + (visible ? "true" : "false")
+                + ",\"foreground\":" + (foreground ? "true" : "false") + "}";
+        } catch (...) { ++scan.errors; }
+        return TRUE;
+    }
+    std::string snapshot() {
+        visited = errors = count = 0; truncated = false; rows.clear(); deadline = GetTickCount64() + 2000;
+        BOOL completed = EnumWindows(visit, reinterpret_cast<LPARAM>(this));
+        return "{\"enumerationCompleted\":" + std::string(completed ? "true" : "false")
+            + ",\"truncated\":" + (truncated ? "true" : "false") + ",\"errors\":" + std::to_string(errors)
+            + ",\"visited\":" + std::to_string(visited) + ",\"windows\":[" + rows + "]}";
+    }
+};
+static bool centerSurface() {
+    SurfaceScan scan;
+    wchar_t windows[32768]{}; UINT size = GetWindowsDirectoryW(windows, 32768);
+    if (!size || size >= 32768 || !ProcessIdToSessionId(GetCurrentProcessId(), &scan.session))
+        throw std::runtime_error("surface prerequisites unavailable");
+    scan.windows.assign(windows, size); scan.user = tokenUser(GetCurrentProcess());
+    std::transform(scan.windows.begin(), scan.windows.end(), scan.windows.begin(), [](wchar_t c) { return std::towlower(c); });
+    const auto before = scan.snapshot(), beforeRows = scan.rows;
+    DWORD shellPid = 0; GetWindowThreadProcessId(GetShellWindow(), &shellPid);
+    auto shell = shellPid ? scan.owner(shellPid) : nullptr;
+    if (!shell || !shell->live() || scan.truncated || !preflight("surface-preflight.json"))
+        throw std::runtime_error("fresh owned Shell/input desktop prerequisite unavailable");
+    for (int key : {VK_LWIN, VK_RWIN, static_cast<int>('N'), VK_SHIFT, VK_CONTROL, VK_MENU}) {
+        if (GetAsyncKeyState(key) & 0x8000) throw std::runtime_error("existing key press; no input injected");
+    }
+    report("center-surface-intent.json", "{\"pid\":" + std::to_string(GetCurrentProcessId())
+        + ",\"nonce\":" + jsonQuote(uuid) + ",\"showAttempts\":0,\"chordIntent\":1}\n");
+    // Each successful down is owned by this attempt. Cleanup only releases owned
+    // unreleased keys, and failed release stays unknown rather than claiming safety.
+    struct Keys {
+        bool win = false, n = false, releaseUnknown = false;
+        unsigned accepted = 0, releaseAttempts = 0;
+        DWORD error = 0;
+        bool send(WORD key, bool up) {
+            INPUT event{}; event.type = INPUT_KEYBOARD; event.ki.wVk = key;
+            event.ki.dwFlags = up ? KEYEVENTF_KEYUP : 0;
+            SetLastError(ERROR_SUCCESS); UINT sent = SendInput(1, &event, sizeof(event));
+            if (sent != 1) { error = GetLastError(); return false; }
+            ++accepted; (key == VK_LWIN ? win : n) = !up; return true;
+        }
+        void release() noexcept {
+            if (n) { ++releaseAttempts; if (!send('N', true)) releaseUnknown = true; n = false; }
+            if (win) { ++releaseAttempts; if (!send(VK_LWIN, true)) releaseUnknown = true; win = false; }
+        }
+        ~Keys() { release(); }
+    } keys;
+    bool chord = shell->live() && keys.send(VK_LWIN, false) && keys.send('N', false)
+        && keys.send('N', true) && keys.send(VK_LWIN, true);
+    keys.release(); Sleep(500);
+    const auto after = scan.snapshot();
+    report("center-surface.json", "{\"pid\":" + std::to_string(GetCurrentProcessId()) + ",\"nonce\":" + jsonQuote(uuid)
+        + ",\"diagnosticOnly\":true,\"showAttempts\":0,\"centerOpenedProved\":false,\"chordAttempts\":1"
+        + ",\"chordAccepted\":" + (chord ? "true" : "false") + ",\"acceptedKeyEvents\":" + std::to_string(keys.accepted)
+        + ",\"releaseAttempts\":" + std::to_string(keys.releaseAttempts) + ",\"keyReleaseUnknown\":" + (keys.releaseUnknown ? "true" : "false")
+        + ",\"inputError\":" + std::to_string(keys.error) + ",\"shellStillLive\":" + (shell->live() ? "true" : "false")
+        + ",\"surfaceChangeObserved\":" + (beforeRows != scan.rows ? "true" : "false") + ",\"before\":" + before + ",\"after\":" + after + "}\n");
+    return chord && !keys.releaseUnknown;
 }
 static void verifyShellIdentity() {
     DWORD shellPID = 0, ownSession = 0, shellSession = 0;
@@ -779,6 +895,7 @@ int wmain(int argc, wchar_t** argv) {
         winrt::init_apartment(winrt::apartment_type::multi_threaded);
         if (mode == L"center-policy") return centerPolicy() ? 0 : 3;
         if (mode == L"preflight") return preflight() ? 0 : 3;
+        if (mode == L"center-surface") return centerSurface() ? 0 : 3;
         if (mode == L"send") return send();
         if (mode == L"callback") return callback();
         if (mode == L"invoke") return invoke();
