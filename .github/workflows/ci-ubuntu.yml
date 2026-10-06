@@ -65,6 +65,8 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-navigation-linux-native-chain.py
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-navigation-linux-server-surface.py
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-navigation-linux-runtime-stage.py
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-navigation-linux-handoff-frame.py
+          python3 -c "from pathlib import Path; [compile(p.read_text(), str(p), 'exec') for p in (Path('scripts/navigation-linux-handoff-host-controller.py'), Path('tests/integration/navigation_linux_handoff_bootstrap_test.py'))]"
           python3 -c "from pathlib import Path; [compile(p.read_text(), str(p), 'exec') for p in (Path('tests/integration/navigation_linux_client_sender_test.py'), Path('tests/integration/navigation_linux_guest_pointer_entry_test.py'), Path('tests/integration/navigation_linux_client_handoff_guest_test.py'))]"
 
       - name: Download dependencies

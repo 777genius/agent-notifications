@@ -75,7 +75,7 @@ def main():
     env = dict(PATH='/usr/bin:/bin', LANG='C.UTF-8', HOME=str(work / 'home'),
         XDG_CONFIG_HOME=str(work / 'config'), XDG_DATA_HOME=str(work / 'data'),
         XDG_CACHE_HOME=str(work / 'cache'), XDG_RUNTIME_DIR=str(work / 'runtime'),
-        XDG_DATA_DIRS='/opt/portal/share:/usr/share', XDG_SESSION_TYPE='wayland',
+        XDG_DATA_DIRS='/opt/portal/share:/opt/gtk/share:/usr/share', XDG_SESSION_TYPE='wayland',
         XDG_CURRENT_DESKTOP='TEST', WLR_BACKENDS='headless', WLR_RENDERER='pixman',
         WLR_HEADLESS_OUTPUTS='1', WLR_LIBINPUT_NO_DEVICES='1', GDK_BACKEND='wayland')
 
@@ -282,9 +282,7 @@ def main():
 
     try:
         ROOT.mkdir(mode=0o700); os.chown(ROOT, 0, 1000); ROOT.chmod(0o710)
-        # Source checkpoint only: refuse before creating any native child or notification.
-        # Remove only after complete host/seed assembly and this join pass renewed review.
-        raise RuntimeError('native_attempt_not_ready_complete_assembly_review_missing')
+        # One explicitly frozen offline TEST assembly; no automatic attempt/retry.
         work.mkdir(mode=0o700); os.chown(work, 1000, 1000)
         group.mkdir(mode=0o700); group_created = True
         if not (group / 'cgroup.kill').is_file(): raise RuntimeError('owned_cgroup_kill_required')
