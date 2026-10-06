@@ -158,6 +158,62 @@ func setupProductsDiscoveryFixture(t *testing.T) (productEnvironment, setupProdu
 	return e, a
 }
 
+func TestCursorDiscoveryPlatformReasonPreservesPresence(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		selected, present bool
+	}{
+		{"selected-agent", true, true},
+		{"missing-flags-present-agent", false, true},
+		{"missing-flags-missing-agent", false, false},
+		{"selected-profile-missing-agent", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e, a := setupProductsDiscoveryFixture(t)
+			executable := ""
+			if tc.present {
+				executable = filepath.Join(e.PATH, fixtureProductName("cursor-agent"))
+				if err := os.WriteFile(executable, []byte("inert TEST bytes; never execute"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				var err error
+				executable, err = normalizeProductExecutable(executable)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.selected {
+				a.Scopes = map[string]string{"scope-root": filepath.Join(e.Home, "TEST profile"), "client-executable": executable}
+			}
+			facts, scopes, err := discoverProducts(context.Background(), a, e)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantReason := ""
+			if !tc.selected {
+				wantReason = "explicit --scope-root and --client-executable required"
+			}
+			if !tc.present {
+				wantReason = "Cursor agent not found in selected PATH"
+			}
+			supported := runtime.GOOS == "linux" && runtime.GOARCH == "amd64"
+			if !supported {
+				wantReason = "unsupported release platform"
+			}
+			found := false
+			for _, f := range facts {
+				found = found || f.ID == "cursor"
+				if f.ID == "cursor" && (f.Reason != wantReason || f.Present != tc.present || f.Executable != executable || f.Profile != scopes["scope-root"] || f.Selectable != (supported && tc.selected && tc.present)) {
+					t.Fatalf("actual %s/%s discovery: %+v; reason=%q", runtime.GOOS, runtime.GOARCH, f, wantReason)
+				}
+			}
+			if !found {
+				t.Fatal("Cursor fact omitted")
+			}
+		})
+	}
+}
+
 // Red regression: a per-client DetectionError returned beside top-level nil
 // is offered as a normal absent/default target rather than an unavailable fact.
 func TestSetupProductsPerClientDetectionError(t *testing.T) {

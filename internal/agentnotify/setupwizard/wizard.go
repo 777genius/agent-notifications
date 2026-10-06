@@ -2604,6 +2604,7 @@ func retryRequestFromIntent(req Request, intent portablesetup.Intent) Request {
 		case "cursor":
 			if target.Profile != "" {
 				retry.CursorConfig = target.Profile
+				retry.ScopeRoot = target.Profile
 			}
 		case "claude":
 			if target.Profile != "" {

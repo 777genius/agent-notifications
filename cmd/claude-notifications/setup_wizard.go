@@ -1429,21 +1429,33 @@ func cursorQualifiedNamespace(profile string) error {
 	if err != nil || len(mounts) > 1<<20 {
 		return setupwizard.ErrRefused
 	}
+	return cursorQualifiedMounts(profile, string(mounts))
+}
+
+func cursorQualifiedMounts(profile, mounts string) error {
 	decode := strings.NewReplacer(`\040`, " ", `\011`, "\t", `\012`, "\n", `\134`, `\`)
 	for path := profile; ; path = filepath.Dir(path) {
 		longest, fs := -1, ""
-		for _, row := range strings.Split(string(mounts), "\n") {
+		ambiguous := false
+		for _, row := range strings.Split(mounts, "\n") {
 			left, right, ok := strings.Cut(row, " - ")
 			fields, kind := strings.Fields(left), strings.Fields(right)
 			if !ok || len(fields) < 6 || len(kind) < 3 {
 				continue
 			}
 			mount := decode.Replace(fields[4])
-			if (mount == "/" || path == mount || strings.HasPrefix(path, mount+"/")) && len(mount) > longest {
+			if mount != "/" && path != mount && !strings.HasPrefix(path, mount+"/") {
+				continue
+			}
+			if len(mount) > longest {
 				longest, fs = len(mount), kind[0]
+				ambiguous = false
+			} else if len(mount) == longest {
+				// Row order does not establish which stacked mount is visible.
+				ambiguous = true
 			}
 		}
-		if fs != "ext4" {
+		if ambiguous || fs != "ext4" {
 			return setupwizard.ErrRefused
 		}
 		if path == "/" {

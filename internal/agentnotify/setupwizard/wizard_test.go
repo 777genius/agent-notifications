@@ -8271,6 +8271,40 @@ func TestCursorExplicitSelectionAndIntent(t *testing.T) {
 	}
 }
 
+func TestCursorRetryArgvRestoresRecordedScope(t *testing.T) {
+	root := t.TempDir()
+	recorded := filepath.Join(root, "TEST recorded profile with spaces")
+	stale := filepath.Join(root, "TEST stale incoming profile")
+	for _, tc := range []struct{ client, profile string }{
+		{"cursor", recorded}, {"cursor", ""}, {"claude", recorded}, {"codex", recorded},
+	} {
+		t.Run(tc.client+"/"+filepath.Base(tc.profile), func(t *testing.T) {
+			req := Request{Action: ActionInstall, CursorConfig: stale, ScopeRoot: stale, ClientExecutable: filepath.Join(root, "TEST executable")}
+			intent := portablesetup.Intent{Action: "update", Targets: []portablesetup.IntentTarget{{Client: tc.client, Profile: tc.profile}}}
+			before := fmt.Sprintf("%#v", intent)
+			retry := retryRequestFromIntent(req, intent)
+			want := stale
+			if tc.client == "cursor" && tc.profile != "" {
+				want = recorded
+			}
+			argv := RetryCommand(retry)
+			t.Logf("retry argv=%q", argv)
+			found := false
+			for i, arg := range argv {
+				if arg == "--scope-root" && i+1 < len(argv) {
+					found = true
+					if argv[i+1] != want {
+						t.Fatalf("retry scope=%q want=%q; argv=%q", argv[i+1], want, argv)
+					}
+				}
+			}
+			if !found || retry.CursorConfig != want || retry.ScopeRoot != want || retry.ClientExecutable != req.ClientExecutable || fmt.Sprintf("%#v", intent) != before {
+				t.Fatalf("retry changed authority or intent: %+v; argv=%q", retry, argv)
+			}
+		})
+	}
+}
+
 // This fixture supplies inert TEST files, not a native installation, physical
 // token or affirmative qualification. No file is executed and no store is seeded.
 func cursorWizardRequest(t *testing.T) (Request, string) {
