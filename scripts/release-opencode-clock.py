@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CI-only fresh finite clock observations of immutable v1.48.0 artifacts.
+"""CI-only fresh finite clock observations of immutable v1.48.1 artifacts.
 
 The exact candidate's stage_case/run_case and native predicates are unchanged.
 Only external orchestration, original archive reuse and helper artifact reuse
@@ -20,9 +20,9 @@ import threading
 import time
 import types
 
-CANDIDATE = '2692f443a3834c6e4090176d478e69faa684bca0'
-ORIGINAL_RUN_ID = '37490304469'
-ORIGINAL_ARCHIVE_SHA256 = '1bcaf1704a8ee7b5bf6d4cd2fc301a74cfdc0a8711340977e650661640d21411'
+CANDIDATE = 'e86149a724f9b96cb5ee193d63dbc5a533c61e7e'
+ORIGINAL_RUN_ID = '37519336110'
+ORIGINAL_ARCHIVE_SHA256 = 'ea156e1978d5acad56ff6cfbebc8cb20ba646b55a271e137dc696e6646bc64d9'
 HARNESS_SHA256 = '1c30c5e625ef4b59435a4231ef9bc45882ceacb6dcb16fa0419ccffada6c72e0'
 HARNESS = 'scripts/opencode-platform-clock-prequalification.py'
 RELEASE_CELLS = {(o, a, v) for o, a in (('linux', 'amd64'), ('linux', 'arm64'), ('windows', 'amd64'))

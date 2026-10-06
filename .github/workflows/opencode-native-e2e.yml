@@ -17,7 +17,7 @@ on:
         type: string
         required: true
       recovery_run_id:
-        description: 'Original completed v1.48.0 release workflow run with successful builds and canaries'
+        description: 'Original completed v1.48.1 release workflow run with successful builds and canaries'
         type: string
         required: false
       candidate_sha:
@@ -269,13 +269,40 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - uses: actions/upload-artifact@v7
-        if: always() && runner.os == 'Windows'
+        if: always()
         with:
           name: opencode-release-recovery-summary-${{ matrix.target.platform }}-${{ matrix.target.arch }}-${{ matrix.version }}
           path: |
             source/.task-tools/artifacts/native-report.json
             source/.task-tools/artifacts/primitives/clock-report.json
             source/.task-tools/artifacts/primitives/reader-report.json
+            source/.task-tools/artifacts/parent-inputs/manifest.json
+            source/.task-tools/artifacts/parent-inputs/release-inputs-receipt.json
             source/.task-tools/artifacts/primitives/sealed/
+            source/.task-tools/artifacts/windows-acl-preparation.json
+            source/.task-tools/artifacts/primitives/TEST-reader-native/reader-private.jsonl
+            source/.task-tools/artifacts/primitives/TEST-reader-native/result.json
+            source/.task-tools/artifacts/primitives/TEST-reader-build/build-receipt.json
+            source/.task-tools/artifacts/primitives/TEST-reader-build/build-metafile.json
+            source/.task-tools/artifacts/native/**/native-private.jsonl
+            source/.task-tools/artifacts/native/**/provider-redacted.jsonl
+            source/.task-tools/artifacts/native/**/desktop-private.jsonl
+            source/.task-tools/artifacts/native/**/host-private.log
+            source/.task-tools/artifacts/native/**/updated-host-private.log
+            source/.task-tools/artifacts/native/**/reinstalled-host-private.log
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v7
+        if: always() && steps.primitives.outputs.clock_temp_base != ''
+        with:
+          name: opencode-release-clock-summary-${{ matrix.target.platform }}-${{ matrix.target.arch }}-${{ matrix.version }}
+          path: |
+            ${{ steps.primitives.outputs.clock_temp_base }}/**/metadata.json
+            ${{ steps.primitives.outputs.clock_temp_base }}/**/samples.private.json
+            ${{ steps.primitives.outputs.clock_temp_base }}/**/module-stream-*.private
+            ${{ steps.primitives.outputs.clock_temp_base }}/**/helper-*.private
+            ${{ steps.primitives.outputs.clock_temp_base }}/**/os-loader-files.private.json
+            ${{ steps.primitives.outputs.clock_temp_base }}/**/loader.private.json
+            ${{ steps.primitives.outputs.clock_temp_base }}/**/helper-lifecycle.private.json
           if-no-files-found: error
           retention-days: 14

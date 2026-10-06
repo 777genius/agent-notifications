@@ -14,10 +14,10 @@ import tarfile
 import types
 import unittest
 
-CANDIDATE = '2692f443a3834c6e4090176d478e69faa684bca0'
+CANDIDATE = 'e86149a724f9b96cb5ee193d63dbc5a533c61e7e'
 CLOCK_VALIDATOR_SHA = '1c30c5e625ef4b59435a4231ef9bc45882ceacb6dcb16fa0419ccffada6c72e0'
-ORIGINAL_RUN = '37490304469'
-ORIGINAL_ARCHIVE = '1bcaf1704a8ee7b5bf6d4cd2fc301a74cfdc0a8711340977e650661640d21411'
+ORIGINAL_RUN = '37519336110'
+ORIGINAL_ARCHIVE = 'ea156e1978d5acad56ff6cfbebc8cb20ba646b55a271e137dc696e6646bc64d9'
 CELLS = {(os_name, arch, version) for os_name, arch in
          [('linux', 'amd64'), ('linux', 'arm64'), ('windows', 'amd64')]
          for version in ['1.18.33', '2.0.21']} | {('linux', 'amd64', '1.18.34')}

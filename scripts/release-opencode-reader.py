@@ -11,7 +11,7 @@ import argparse,importlib.util,re,zipfile,base64,hashlib,hmac,http.client,json,o
 from http.server import BaseHTTPRequestHandler
 P=pathlib.Path;HERE=P(__file__).resolve().parent
 REPO=HERE.parent
-CANDIDATE='2692f443a3834c6e4090176d478e69faa684bca0'
+CANDIDATE='e86149a724f9b96cb5ee193d63dbc5a533c61e7e'
 SDK_SHA256='c3d5aaaf6ecc3116b48ab1ae3f0e00b47720f239df9938f0c499d03f2c21a752'
 CELLS={(o,a,v) for o,a in [('linux','amd64'),('linux','arm64'),('windows','amd64')] for v in ['1.18.33','2.0.21']}|{('linux','amd64','1.18.34')}
 HTTP_DIAGNOSTICS={};CURRENT_STAGE='not_started'
