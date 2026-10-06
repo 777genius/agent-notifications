@@ -1,6 +1,6 @@
 # Linux selected-client qualification
 
-Status: launcher source inspected; native client qualification pending.
+Status: one offline TEST renderer-restriction preflight passed; UI, focus and navigation remain unqualified.
 
 ## Verified package checkpoint
 
@@ -346,3 +346,20 @@ cap from 64 to 128, with matching pre-boot readback and all security controls
 unchanged. Three independent source reviews accepted controller SHA256
 `f8dfe3a1446a6b468bbf25b8b3527dfe26abe012c830d95f17ac8b33e9f9d276`.
 The prior cap's causal role and the new runtime behavior remain unproven.
+
+## First native renderer-restriction checkpoint
+
+The separately identified changed-runtime attempt on source
+`f1e5f214ae32d543c25e1ff3220a1292bfc4450d` passed. Two actual selected-executable
+renderers had a single nonempty flattened command argument, repeated consistent
+snapshots, seccomp 2/filter 1, NoNewPrivs 1, zero capabilities and isolated
+PID/user namespaces. Main executable hash/inode and vendor profile checks passed.
+All 16 tracked kernel exits, guest cleanup, QMP guest poweroff, QEMU collected
+exit 0, exact owned-container removal and frozen-input integrity were retained.
+The resulting stopped native image is retained read-only on the TEST host.
+
+`linux-selected-client-renderer-positive.json` records only this narrow boundary.
+Visible UI, whole-client sandbox, focus, chat navigation and notifications remain
+unqualified. Prior failures are preserved; success with the larger thread budget
+is not by itself proof of the earlier failure's exact cause. No further launch is
+required to repeat this already-proven checkpoint.
