@@ -122,49 +122,53 @@ func TestExtractSessionInfo(t *testing.T) {
 }
 
 func TestSendDesktopRestoresAppName(t *testing.T) {
-	// This test verifies that SendDesktop properly restores beeep.AppName
-	// after sending a notification, even if the notification fails.
-
-	// Save original AppName
 	originalAppName := beeep.AppName
-	defer func() {
-		beeep.AppName = originalAppName
-	}()
-
-	// Set a test value
-	testAppName := "test-app-name"
+	t.Cleanup(func() { beeep.AppName = originalAppName })
+	const testAppName = "test-app-name"
 	beeep.AppName = testAppName
-
-	// Create notifier with desktop notifications disabled to skip actual notification
 	cfg := config.DefaultConfig()
 	cfg.Notifications.Desktop.Enabled = false
+	cfg.Notifications.Desktop.Sound = false
 	n := New(cfg)
-
-	// Call SendDesktop - should not change AppName since notifications are disabled
-	_ = n.SendDesktop(analyzer.StatusTaskComplete, "test message", "", "")
-
-	// Verify AppName is unchanged (because we skipped notification)
+	if err := n.SendDesktop(analyzer.StatusTaskComplete, "test message", "", ""); err != nil {
+		t.Fatal(err)
+	}
 	if beeep.AppName != testAppName {
-		t.Errorf("AppName changed unexpectedly: got %q, want %q", beeep.AppName, testAppName)
+		t.Fatalf("disabled delivery changed AppName: %q", beeep.AppName)
 	}
 
-	// Now test with enabled notifications (will attempt real notification)
-	cfg.Notifications.Desktop.Enabled = true
-	beeep.AppName = testAppName
-
-	// This will attempt to send a real notification and may fail in CI,
-	// but the important thing is that AppName is restored afterward
-	_ = n.SendDesktop(analyzer.StatusTaskComplete, "test message", "", "")
-
-	// Verify AppName is restored to testAppName after the defer runs
-	if beeep.AppName != testAppName {
-		t.Errorf("AppName not restored after SendDesktop: got %q, want %q", beeep.AppName, testAppName)
+	// Exercise the backend that temporarily changes AppName, without desktop effects.
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{{"success", nil}, {"failure", errors.New("inert delivery failed")}} {
+		t.Run(tc.name, func(t *testing.T) {
+			called := false
+			withBeeepNotify(t, func(title, message string, icon any) error {
+				called = true
+				if beeep.AppName == testAppName || beeep.AppName == "" {
+					t.Errorf("delivery did not set its own AppName: %q", beeep.AppName)
+				}
+				if title != "Test Title" || message != "test message" || icon != "" {
+					t.Errorf("unexpected delivery: %q %q %v", title, message, icon)
+				}
+				return tc.err
+			})
+			err := n.sendWithBeeep("Test Title", "test message", "", "", sendOptions{})
+			if !called || !errors.Is(err, tc.err) {
+				t.Fatalf("delivery result: called=%v err=%v, want %v", called, err, tc.err)
+			}
+			if beeep.AppName != testAppName {
+				t.Errorf("AppName not restored after delivery: %q", beeep.AppName)
+			}
+		})
 	}
 }
 
 // === Tests for Click-to-Focus functionality ===
 
 func TestSendDesktop_ClickToFocusDisabled(t *testing.T) {
+	isolateDesktopDelivery(t)
 	// When ClickToFocus is disabled, should use beeep even on macOS
 	cfg := config.DefaultConfig()
 	cfg.Notifications.Desktop.Enabled = true
@@ -182,6 +186,7 @@ func TestSendDesktop_ClickToFocusDisabled(t *testing.T) {
 }
 
 func TestSendDesktop_WithTerminalBundleIDOverride(t *testing.T) {
+	isolateDesktopDelivery(t)
 	cfg := config.DefaultConfig()
 	cfg.Notifications.Desktop.Enabled = true
 	cfg.Notifications.Desktop.ClickToFocus = true
@@ -234,6 +239,7 @@ func TestPlaySoundAsync_EmptyPath(t *testing.T) {
 }
 
 func TestSendWithBeeep_RestoresAppName(t *testing.T) {
+	withBeeepNotify(t, func(string, string, any) error { return nil })
 	cfg := config.DefaultConfig()
 	cfg.Notifications.Desktop.Sound = false
 
@@ -379,6 +385,26 @@ func withBeeepNotify(t *testing.T, fn func(title, message string, icon any) erro
 	})
 }
 
+// General delivery unit tests must not discover installed GUI helpers or send
+// notifications. Explicit native integration tests keep their own environments.
+func isolateDesktopDelivery(t *testing.T) string {
+	t.Helper()
+	withBeeepNotify(t, func(string, string, any) error { return nil })
+	if runtime.GOOS != "darwin" {
+		return ""
+	}
+	root := t.TempDir()
+	helper := filepath.Join(root, "bin", "AgentNotifications.app", "Contents", "MacOS", "terminal-notifier")
+	if err := os.MkdirAll(filepath.Dir(helper), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(helper, []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_PLUGIN_ROOT", root)
+	return helper
+}
+
 func TestNotifier_NewWithClickToFocusConfig(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -409,6 +435,7 @@ func TestNotifier_NewWithClickToFocusConfig(t *testing.T) {
 }
 
 func TestSendDesktop_AllStatuses(t *testing.T) {
+	isolateDesktopDelivery(t)
 	// Test that all status types work with click-to-focus config
 	statuses := []analyzer.Status{
 		analyzer.StatusTaskComplete,
@@ -437,6 +464,7 @@ func TestSendDesktop_AllStatuses(t *testing.T) {
 }
 
 func TestSendDesktop_Disabled(t *testing.T) {
+	isolateDesktopDelivery(t)
 	cfg := config.DefaultConfig()
 	cfg.Notifications.Desktop.Enabled = false
 
@@ -450,6 +478,7 @@ func TestSendDesktop_Disabled(t *testing.T) {
 }
 
 func TestSendDesktop_UnknownStatus(t *testing.T) {
+	isolateDesktopDelivery(t)
 	cfg := config.DefaultConfig()
 	cfg.Notifications.Desktop.Enabled = true
 
@@ -463,6 +492,7 @@ func TestSendDesktop_UnknownStatus(t *testing.T) {
 }
 
 func TestSendDesktop_WithSessionName(t *testing.T) {
+	isolateDesktopDelivery(t)
 	cfg := config.DefaultConfig()
 	cfg.Notifications.Desktop.Enabled = true
 	cfg.Notifications.Desktop.Sound = false
@@ -477,6 +507,7 @@ func TestSendDesktop_WithSessionName(t *testing.T) {
 }
 
 func TestSendDesktop_WithoutSessionName(t *testing.T) {
+	isolateDesktopDelivery(t)
 	cfg := config.DefaultConfig()
 	cfg.Notifications.Desktop.Enabled = true
 	cfg.Notifications.Desktop.Sound = false
@@ -625,6 +656,7 @@ func TestPlaySoundAsync_WithSoundFile(t *testing.T) {
 }
 
 func TestSendDesktop_ClickToFocusWithBeeepFallback(t *testing.T) {
+	isolateDesktopDelivery(t)
 	cfg := config.DefaultConfig()
 	cfg.Notifications.Desktop.Enabled = true
 	cfg.Notifications.Desktop.ClickToFocus = true
@@ -763,23 +795,30 @@ func TestSendDesktop_FallbackWhenTerminalNotifierFails(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("Skipping macOS-only test")
 	}
+	helper := isolateDesktopDelivery(t)
+	if err := os.WriteFile(helper, []byte("#!/bin/sh\nexit 1\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	withBeeepNotify(t, func(string, string, any) error {
+		called = true
+		return nil
+	})
 
 	cfg := config.DefaultConfig()
 	cfg.Notifications.Desktop.Enabled = true
 	cfg.Notifications.Desktop.ClickToFocus = true
 	cfg.Notifications.Desktop.Sound = false
-	// Use invalid bundle ID to test error handling
 	cfg.Notifications.Desktop.TerminalBundleID = "com.nonexistent.app.12345"
-
 	n := New(cfg)
 
-	// Should not panic. On macOS we no longer fall back to beeep/osascript.
-	err := n.SendDesktop(analyzer.StatusTaskComplete, "[test] Fallback test", "", "")
-	// Error is acceptable in CI, but should not panic
-	_ = err
+	if err := n.SendDesktop(analyzer.StatusTaskComplete, "[test] Fallback test", "", ""); err != nil || !called {
+		t.Fatalf("failed native helper did not use beeep fallback: called=%v err=%v", called, err)
+	}
 }
 
 func TestSendDesktop_ClickToFocusDisabledStillDoesNotPanic(t *testing.T) {
+	isolateDesktopDelivery(t)
 	cfg := config.DefaultConfig()
 	cfg.Notifications.Desktop.Enabled = true
 	cfg.Notifications.Desktop.ClickToFocus = false // Disabled
@@ -1080,6 +1119,7 @@ func TestSendWithTerminalNotifier_PathNotFound(t *testing.T) {
 }
 
 func TestSendDesktop_AppIconNotFound(t *testing.T) {
+	isolateDesktopDelivery(t)
 	cfg := config.DefaultConfig()
 	cfg.Notifications.Desktop.Enabled = true
 	cfg.Notifications.Desktop.Sound = false
@@ -1095,6 +1135,7 @@ func TestSendDesktop_AppIconNotFound(t *testing.T) {
 }
 
 func TestSendDesktop_EmptyMessage(t *testing.T) {
+	isolateDesktopDelivery(t)
 	cfg := config.DefaultConfig()
 	cfg.Notifications.Desktop.Enabled = true
 	cfg.Notifications.Desktop.Sound = false
@@ -1109,6 +1150,7 @@ func TestSendDesktop_EmptyMessage(t *testing.T) {
 }
 
 func TestSendDesktop_VeryLongMessage(t *testing.T) {
+	isolateDesktopDelivery(t)
 	cfg := config.DefaultConfig()
 	cfg.Notifications.Desktop.Enabled = true
 	cfg.Notifications.Desktop.Sound = false
@@ -1124,6 +1166,7 @@ func TestSendDesktop_VeryLongMessage(t *testing.T) {
 }
 
 func TestSendDesktop_SpecialCharactersInMessage(t *testing.T) {
+	isolateDesktopDelivery(t)
 	cfg := config.DefaultConfig()
 	cfg.Notifications.Desktop.Enabled = true
 	cfg.Notifications.Desktop.Sound = false
@@ -1139,6 +1182,7 @@ func TestSendDesktop_SpecialCharactersInMessage(t *testing.T) {
 }
 
 func TestSendDesktop_UnicodeMessage(t *testing.T) {
+	isolateDesktopDelivery(t)
 	cfg := config.DefaultConfig()
 	cfg.Notifications.Desktop.Enabled = true
 	cfg.Notifications.Desktop.Sound = false
@@ -1203,6 +1247,7 @@ func TestSendTerminalBell_DoesNotPanic(t *testing.T) {
 }
 
 func TestSendDesktop_CallsBell(t *testing.T) {
+	isolateDesktopDelivery(t)
 	// Verify SendDesktop does not panic when bell is enabled (default)
 	// and desktop notifications are disabled.
 	cfg := config.DefaultConfig()
@@ -1218,6 +1263,7 @@ func TestSendDesktop_CallsBell(t *testing.T) {
 }
 
 func TestSendDesktop_BellDisabledByConfig(t *testing.T) {
+	isolateDesktopDelivery(t)
 	// Verify SendDesktop respects terminalBell=false config.
 	cfg := config.DefaultConfig()
 	cfg.Notifications.Desktop.Enabled = false
