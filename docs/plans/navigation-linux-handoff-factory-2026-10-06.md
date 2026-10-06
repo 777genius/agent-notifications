@@ -81,3 +81,28 @@ and direct readonly ISO parsing of the manifest and nine guest payloads. The
 zero-SDK-call conclusion uses actual ISO and frozen source control flow, without
 a captured sender traceback. This accepts the negative checkpoint, not native
 qualification.
+
+
+## Corrected actual assembly: FAILED, contained
+
+Exact source `1511cb4adb6b5293cf32f7569c70219c5831db5d` used a new frozen
+capsule and fresh offline VM/root. The sender exited 0, the native Notify/reply
+assigned ID1 and the controller reached callback launch publication after its sole
+CLICK command. The next owned-group enumeration failed `selected_peer_uid_not_1000`.
+This precedes selected callback/client admission; the recorded error identifies no
+PID and cannot distinguish an unrelated descendant from the selected peer.
+Typed receiver identity, final pointer/token checks, activation and navigation were
+not qualified. The semantic handoff outcome remains unknown and is not replayable.
+
+Independent raw review passed 413 assertions, including 61 retained files, actual
+ISO and source/command/frame bindings. Cleanup passed: all 13 retained incarnations
+exited, the owned cgroup was empty, guest shutdown and collected QEMU exit0 were
+observed, and the exact terminal host container was removed. These facts contain
+the experiment without turning the negative semantic outcome positive.
+
+The next source correction separates UID-independent owned-group retention from
+unconditional current UID1000 admission for selected callback and client, even if
+the group sweep already populated their handles. Selected failures record phase,
+PID, birth, UID fields and cgroup without argv. Incarnation/pidfd/membership guards
+remain mandatory. Any further experiment requires a newly reviewed source/capsule
+and fresh owned VM/root/nonce; it must not replay this unknown semantic attempt.

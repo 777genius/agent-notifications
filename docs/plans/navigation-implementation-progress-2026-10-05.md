@@ -26,11 +26,11 @@ git diff --check
 | --- | --- | --- |
 | P0 measurement | Instrumentation implemented and checked | 50 read-only verifier samples, native action-none and targeted callback captured; fresh-helper/cold/error and helper-start timings remain |
 | P1 contracts | Existing boundaries audited; suspend clock shared; lifecycle docs corrected and canonical fixture checks added | Independent review accepted P1 corrections; any running transport contracts still depend on qualification |
-| P2 macOS transport | Native two-copy/stale-PSN fixture passed; PID-to-port route rejected; unpacked executable resources prevent assuming dynamic-only integrity | Authenticated destination binding, resource guarantees, bounded TCC behavior, race fixture and actual client qualification |
-| P3 macOS fast path | Not implemented | P2 qualification, implementation, before/after performance, adversarial and native E2E |
-| P4 sources | Existing ingress audit: no migration needed | P4 requires no source change; existing native typed callback does not by itself prove full MCP/CLI ingress |
-| P5w Windows | Not qualified | Durable installed toast callback and selected package activation; current official distribution recorded in platform qualification note |
-| P5l Linux | Not qualified | Durable callback, destination identity and activation/restart tests; Linux preview/Wayland limitations verified in official docs |
+| P2 macOS transport | Current PSN fast-path candidate rejected by same-PID exec counterexample and bounded public-API audit | Full static verifier remains; separate direct PSN synthetic-chat observation is positive but does not repair atomic receiver binding |
+| P3 macOS fast path | Disabled after negative P2 decision | Before/after fast-path latency testing is inapplicable to this rejected candidate; no acceleration claim |
+| P4 sources | Existing ingress boundaries audited; no shared source migration required | Authentic MCP submission accepted, exact MCP notification click still awaits human confirmation; managed CLI TEST bundle/signing precondition rejected |
+| P5w Windows | Reviewed qualification harness merged via #352; native lane unqualified | Show/history observed, actual Shell UI click and cold callback/focus/package navigation not proved on CI; no interactive Windows machine available |
+| P5l Linux | Durable private-bus callback/token fixture qualified; dormant preparation #360 merged | First #361 assembly failed before SDK/click, containment retained separately; corrected attempt reached sender exit0/click, then failed UID admission; cleanup passed. Selected-client activation/token consumption/navigation remain unproved |
 
 The user authorized native testing on their Mac in this turn. Tests must still use synthetic chats/notifications; no agent/runtime actions in real user projects. Current permission does not establish Windows/Linux availability or any native test result.
 
@@ -90,3 +90,25 @@ The bounded public-API audit found no documented per-event receiver code require
 ## Resource probe cleanup review fix
 
 A disposable receiver that ignores stop and SIGTERM reproduced the cleanup defect: the old controller returned with three directly observed exact owned children still alive. The revised probe keeps the timeout failure, uses bounded TERM/SIGKILL escalation and reports all children stopped; every captured child PID was subsequently absent. A separate cooperative run passed without escalation. Controllers were collected and reaped; orphan exit statuses from the old controller were not available to the operator. Source-bound sanitized evidence is retained in `native-resource-cleanup-regression.json`. These results qualify TEST cleanup only, not a production fast path.
+
+
+## Delivery ledger update, 2026-10-06
+
+PR #353 retains full verification and rejects the unsafe running fast-path candidate.
+PR #352 and dependent #358 preserve the Windows native harness and negative
+Show/history/UI evidence, without claiming callback or client navigation. PR #360
+preserves dormant Linux handoff preparation and source-bound runtime export/replay.
+All three checkpoints were merged after independent technical review and successful
+exact-head checks, with meaningful commit ancestry retained.
+
+PR #361 holds the complete offline TEST assembly. Its first actual source 0d194f48
+failed before SDK entry: the mandatory sender sidecar was absent from the actual
+readonly ISO. Independent raw review passed 412 assertions; zero SDK/send calls are
+established by frozen source and actual ISO control flow. Guest cleanup observation
+remains FAILED; cgroup empty, retained kernel exits, guest poweroff, collected QEMU
+and exact host removal are separate containment evidence. Corrected sender/cleanup
+source has independent review. Its distinct corrected attempt reached sender exit0
+and click, then failed the UID guard before selected-receiver qualification. Cleanup,
+poweroff and host removal passed. The guard does not distinguish owned-group sweep
+from selected-peer admission; no UID cause is asserted. The latest human direct-PSN confirmation cannot be
+reused as confirmation of the separately submitted authentic MCP notification.

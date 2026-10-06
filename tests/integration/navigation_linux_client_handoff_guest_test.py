@@ -138,7 +138,7 @@ def main():
         for value in values:
             pid = int(value)
             if pid in handles: continue
-            try: retain(pid, require_uid1000=not cleanup)
+            try: retain(pid, require_uid1000=False)
             except (FileNotFoundError, ProcessLookupError): pass
             except Exception as error:
                 if not cleanup: raise
@@ -147,6 +147,22 @@ def main():
         if observation_errors:
             report['cleanupObservationErrors'] = observation_errors
             raise RuntimeError('owned_group_observation_failed')
+
+    def selected_peer(pid, phase):
+        # Group retention is cleanup authority, never selected-peer admission.
+        if pid not in handles: retain(pid, require_uid1000=False)
+        alive(pid)
+        observed = kernel.snapshot(pid)
+        alive(pid)
+        uids = observed['status']['Uid'].split()
+        membership = Path('/proc', str(pid), 'cgroup').read_text().strip()
+        alive(pid)
+        if uids != ['1000'] * 4 or membership != '0::/' + group.name:
+            report['selectedPeerAdmissionFailure'] = dict(phase=phase, pid=pid,
+                retainedBirth=handles[pid][1]['startTicks'], observedBirth=observed['startTicks'],
+                uidFields=uids, cgroup=membership)
+            raise RuntimeError('selected_peer_uid_or_cgroup_unproved')
+        return observed
 
     def start(label, argv, pipe=False, input_pipe=False, extra=None, passed_fds=()):
         if passed_fds and label != 'sway': raise RuntimeError('observer_fd_only_for_TEST_sway')
@@ -402,14 +418,11 @@ def main():
         hz = os.sysconf('SC_CLK_TCK')
         if hz <= 0 or started['pid'] != launched['pid'] or started['startTicks'] != launched['startTicks'] or started['startTicks'] / hz < exited:
             raise RuntimeError('cold_callback_kernel_birth_unproved')
-        if started['pid'] not in handles: retain(started['pid'])
-        alive(started['pid'])
+        selected_peer(started['pid'], 'callback_admission')
         if int(handles[started['pid']][1]['startTicks']) != started['startTicks'] or bus('GetConnectionUnixProcessID', app_id) != '(uint32 ' + str(started['pid']) + ',)':
             raise RuntimeError('cold_callback_owner_unbound')
         client_pid = launched['clientPID']
-        if client_pid not in handles: retain(client_pid)
-        alive(client_pid)
-        client = kernel.snapshot(client_pid)
+        client = selected_peer(client_pid, 'client_admission')
         if int(client['startTicks']) != launched['clientBirth'] or client['executable'] != str(kernel.EXE) or sha(Path('/proc', str(client_pid), 'exe')) != kernel.EXE_SHA:
             raise RuntimeError('selected_live_client_identity_unproved')
         if client['appArmor'].split(' (', 1)[0] != 'chatgpt':
