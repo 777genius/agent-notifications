@@ -38,6 +38,47 @@ def activate_arguments(message):
     return json.loads(match[1]), json.loads(match[2]), entries
 
 
+def native_click_chain(full_trace, pre_click_characters, events, mako_owner, gtk_owner, app_id, nonce, native_id, surface, entered_pointer):
+    entry_pattern = r'wl_pointer@(\d+)\.enter\(\d+, wl_surface@' + surface + r','
+    token_requests = re.findall(r'xdg_activation_token_v1@(\d+)\.set_serial\((\d+), wl_seat@(\d+)\)', full_trace)
+    if len(token_requests) != 1: raise RuntimeError('single_click_token_request_unproved')
+    token_object, click_serial, seat = token_requests[0]
+    new_trace = full_trace[pre_click_characters:]
+    buttons = re.findall(r'wl_pointer@(\d+)\.button\(' + click_serial + r', \d+, 272, 1\)', new_trace)
+    if buttons != [entered_pointer] or 'wl_seat@' + seat + '.get_pointer(new id wl_pointer@' + entered_pointer + ')' not in full_trace: raise RuntimeError('click_serial_surface_token_unbound')
+    done = re.findall(r'xdg_activation_token_v1@' + token_object + r'\.done\("([^"\n]+)"\)', new_trace)
+    if len(done) != 1 or len(done[0].encode()) > 4096: raise RuntimeError('compositor_token_missing')
+    ordered_patterns = [entry_pattern, r'wl_pointer@' + entered_pointer + r'\.button\(' + click_serial + r', \d+, 272, 1\)',
+        r'get_activation_token\(new id xdg_activation_token_v1@' + token_object + r'\)',
+        r'xdg_activation_token_v1@' + token_object + r'\.set_serial\(' + click_serial + r', wl_seat@' + seat + r'\)',
+        r'xdg_activation_token_v1@' + token_object + r'\.set_surface\(wl_surface@' + surface + r'\)',
+        r'xdg_activation_token_v1@' + token_object + r'\.commit\(\)',
+        r'xdg_activation_token_v1@' + token_object + r'\.done\("' + re.escape(done[0]) + r'"\)']
+    cursor = 0; offsets = []
+    for pattern in ordered_patterns:
+        event = re.search(pattern, full_trace[cursor:])
+        if not event: raise RuntimeError('native_protocol_order_unproved')
+        offsets.append(cursor + event.start()); cursor += event.end()
+    interval = full_trace[offsets[0]:cursor]
+    if re.search(r'wl_pointer@' + entered_pointer + r'\.leave\(', interval) or 'wl_surface@' + surface + '.destroy()' in interval:
+        raise RuntimeError('surface_pointer_binding_lost_before_token')
+
+    token_hash = hashlib.sha256(done[0].encode()).hexdigest()
+    signals = [part for part in events if part.startswith('signal ') and 'sender=' + mako_owner + ' ' in part.splitlines()[0] and 'path=/org/freedesktop/Notifications;' in part.splitlines()[0] and '\n   uint32 ' + str(native_id) + '\n' in part]
+    tokens = [part for part in signals if 'interface=org.freedesktop.Notifications; member=ActivationToken\n' in part and '\n   string "' + done[0] + '"\n' in part]
+    actions = [part for part in signals if 'interface=org.freedesktop.Notifications; member=ActionInvoked\n' in part and '\n   string "default"\n' in part]
+    activates = [part for part in events if part.startswith('method call ') and 'interface=org.freedesktop.Application; member=ActivateAction\n' in part and 'destination=' + app_id + ' ' in part.splitlines()[0]]
+    if len(tokens) != 1 or len(actions) != 1 or len(activates) != 1 or not events.index(tokens[0]) < events.index(actions[0]) < events.index(activates[0]): raise RuntimeError('native_token_action_chain_unproved')
+    expected_path = '/' + app_id.replace('.', '/').replace('-', '_')
+    if 'sender=' + gtk_owner + ' ' not in activates[0].splitlines()[0] or 'path=' + expected_path + ';' not in activates[0].splitlines()[0]:
+        raise RuntimeError('ActivateAction_sender_path_unbound')
+    action_name, target, platform = activate_arguments(activates[0])
+    if action_name != 'open' or target != 'notification-navigation-test:' + nonce: raise RuntimeError('ActivateAction_target_mismatch')
+    if set(platform) - {'activation-token', 'desktop-startup-id'}: raise RuntimeError('unexpected_platform_key')
+    forwarded = platform == {'activation-token': done[0], 'desktop-startup-id': done[0]}
+    return dict(token=done[0], tokenSHA256=token_hash, forwarded=forwarded, platform=platform, offsets=offsets, activateSender=activates[0].splitlines()[0])
+
+
 def main():
     evidence = Path('/evidence')
     if os.getuid() == 0 or os.environ.get('NAVIGATION_TEST_CONTAINER') != '1' or os.environ.get('NAVIGATION_WAYLAND_TEST') != '1' or not Path('/.dockerenv').exists() or not (evidence / 'container.marker').read_text().startswith('Linux portal container TEST '):
@@ -199,6 +240,7 @@ def main():
         if len(entered) != 1: raise RuntimeError('ambiguous_pointer_enter')
         entered_pointer = entered[0][1]
         report['preClickTraceBytes'] = (root / 'mako.stderr').stat().st_size
+        report['preClickTraceCharacters'] = len(trace())
         if any(p.poll() is not None for label, p in children if label != 'sender'): raise RuntimeError('background_exited_before_click')
         report['clickAttemptedBoot'] = now(); persist()
         pointer.stdin.write(b'CLICK\n'); pointer.stdin.flush()
@@ -223,48 +265,16 @@ def main():
             raise RuntimeError('cold_callback_bus_owner_unproved')
         report['callbackBusOwner'] = callback_owner.stdout.decode().strip()
         report['callback'] = receipt; report['kernelBirthLowerBoundBoot'] = ticks / hz
-        token_requests = re.findall(r'xdg_activation_token_v1@(\d+)\.set_serial\((\d+), wl_seat@(\d+)\)', trace())
-        if len(token_requests) != 1: raise RuntimeError('single_click_token_request_unproved')
-        token_object, click_serial, seat = token_requests[0]
-        new_trace = (root / 'mako.stderr').read_bytes()[report['preClickTraceBytes']:].decode()
-        buttons = re.findall(r'wl_pointer@(\d+)\.button\(' + click_serial + r', \d+, 272, 1\)', new_trace)
-        if buttons != [entered_pointer] or 'wl_seat@' + seat + '.get_pointer(new id wl_pointer@' + entered_pointer + ')' not in trace(): raise RuntimeError('click_serial_surface_token_unbound')
-        done = re.findall(r'xdg_activation_token_v1@' + token_object + r'\.done\("([^"\n]+)"\)', new_trace)
-        if len(done) != 1 or len(done[0].encode()) > 4096: raise RuntimeError('compositor_token_missing')
-        ordered_patterns = [entry_pattern, r'wl_pointer@' + entered_pointer + r'\.button\(' + click_serial + r', \d+, 272, 1\)',
-            r'get_activation_token\(new id xdg_activation_token_v1@' + token_object + r'\)',
-            r'xdg_activation_token_v1@' + token_object + r'\.set_serial\(' + click_serial + r', wl_seat@' + seat + r'\)',
-            r'xdg_activation_token_v1@' + token_object + r'\.set_surface\(wl_surface@' + surface + r'\)',
-            r'xdg_activation_token_v1@' + token_object + r'\.commit\(\)',
-            r'xdg_activation_token_v1@' + token_object + r'\.done\("' + re.escape(done[0]) + r'"\)']
-        cursor = 0; full_trace = trace(); offsets = []
-        for pattern in ordered_patterns:
-            event = re.search(pattern, full_trace[cursor:])
-            if not event: raise RuntimeError('native_protocol_order_unproved')
-            offsets.append(cursor + event.start()); cursor += event.end()
-        interval = full_trace[offsets[0]:cursor]
-        if re.search(r'wl_pointer@' + entered_pointer + r'\.leave\(', interval) or 'wl_surface@' + surface + '.destroy()' in interval:
-            raise RuntimeError('surface_pointer_binding_lost_before_token')
-        report['protocolOffsets'] = offsets
+        chain = native_click_chain(trace(), report['preClickTraceCharacters'], messages(), mako_owner, gtk_owner,
+            spec['appID'], nonce, int(native_id[1]), surface, entered_pointer)
+        report['protocolOffsets'] = chain['offsets']
         pointer.stdin.write(b'DONE\n'); pointer.stdin.flush(); pointer.stdin.close()
         if pointer.wait(timeout=3): raise RuntimeError('pointer_cleanup_or_release_unknown')
         with (root / 'pointer.stdout').open('ab') as output: output.write(pointer.stdout.read())
-        token_hash = hashlib.sha256(done[0].encode()).hexdigest()
-        signals = [part for part in messages() if part.startswith('signal ') and 'sender=' + mako_owner + ' ' in part.splitlines()[0] and 'path=/org/freedesktop/Notifications;' in part.splitlines()[0] and '\n   uint32 ' + native_id[1] + '\n' in part]
-        tokens = [part for part in signals if 'interface=org.freedesktop.Notifications; member=ActivationToken\n' in part and '\n   string "' + done[0] + '"\n' in part]
-        actions = [part for part in signals if 'interface=org.freedesktop.Notifications; member=ActionInvoked\n' in part and '\n   string "default"\n' in part]
-        activates = [part for part in messages() if part.startswith('method call ') and 'interface=org.freedesktop.Application; member=ActivateAction\n' in part and 'destination=' + spec['appID'] + ' ' in part.splitlines()[0]]
-        if len(tokens) != 1 or len(actions) != 1 or len(activates) != 1 or messages().index(tokens[0]) >= messages().index(actions[0]): raise RuntimeError('native_token_action_chain_unproved')
-        expected_path = '/' + spec['appID'].replace('.', '/').replace('-', '_')
-        if 'sender=' + gtk_owner + ' ' not in activates[0].splitlines()[0] or 'path=' + expected_path + ';' not in activates[0].splitlines()[0]:
-            raise RuntimeError('ActivateAction_sender_path_unbound')
-        action_name, target, platform = activate_arguments(activates[0])
-        if action_name != 'open' or target != 'notification-navigation-test:' + nonce: raise RuntimeError('ActivateAction_target_mismatch')
-        if set(platform) - {'activation-token', 'desktop-startup-id'}: raise RuntimeError('unexpected_platform_key')
-        forwarded = platform == {'activation-token': done[0], 'desktop-startup-id': done[0]}
+        token_hash, platform, forwarded = chain['tokenSHA256'], chain['platform'], chain['forwarded']
         report.update(compositorTokenSHA256=token_hash, tokenForwarded=forwarded,
             tokenEqualityObserved=forwarded and receipt.get('activationTokenSHA256') == token_hash,
-            activateSender=activates[0].splitlines()[0], frontendOwner=frontend_owner)
+            activateSender=chain['activateSender'], frontendOwner=frontend_owner)
         if negative:
             if platform or receipt.get('activationTokenSHA256') is not None: raise RuntimeError('old_GTK_expected_omission_not_observed')
             report['outcome'] = 'old_GTK_drops_native_click_token'
@@ -275,7 +285,7 @@ def main():
         for process in (gtk, frontend, mako, monitor):
             process.terminate(); process.wait(timeout=2)
         final_calls = [part for part in messages() if part.startswith('method call ') and 'interface=org.freedesktop.Application; member=ActivateAction\n' in part and 'destination=' + spec['appID'] + ' ' in part.splitlines()[0]]
-        if final_calls != activates: raise RuntimeError('additional_addressed_ActivateAction')
+        if len(final_calls) != 1 or final_calls[0].splitlines()[0] != chain['activateSender']: raise RuntimeError('additional_addressed_ActivateAction')
         final_buttons = re.findall(r'wl_pointer@' + entered_pointer + r'\.button\(\d+, \d+, 272, ([01])\)', trace())
         if final_buttons != ['1', '0']: raise RuntimeError('single_native_press_release_unproved')
         events = (root / 'action-events.jsonl').read_text().splitlines()

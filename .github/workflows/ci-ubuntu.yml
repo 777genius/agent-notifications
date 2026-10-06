@@ -58,6 +58,14 @@ jobs:
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
 
+      - name: Check Linux handoff pure contracts (no native effects)
+        if: matrix.go == '1.26'
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-navigation-linux-client-callback.py
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-navigation-linux-native-chain.py
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-navigation-linux-server-surface.py
+          python3 -c "from pathlib import Path; [compile(p.read_text(), str(p), 'exec') for p in (Path('tests/integration/navigation_linux_client_sender_test.py'), Path('tests/integration/navigation_linux_guest_pointer_entry_test.py'), Path('tests/integration/navigation_linux_client_handoff_guest_test.py'))]"
+
       - name: Download dependencies
         run: go mod download
 
