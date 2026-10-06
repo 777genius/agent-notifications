@@ -357,7 +357,7 @@ struct SurfaceScan {
     }
     static BOOL CALLBACK visit(HWND window, LPARAM context) noexcept {
         auto& scan = *reinterpret_cast<SurfaceScan*>(context);
-        if (scan.visited >= 128 || scan.count >= 32 || GetTickCount64() >= scan.deadline) {
+        if (scan.visited >= 128 || GetTickCount64() >= scan.deadline) {
             scan.truncated = true; return FALSE;
         }
         ++scan.visited;
@@ -365,16 +365,17 @@ struct SurfaceScan {
             DWORD pid = 0; GetWindowThreadProcessId(window, &pid);
             auto held = pid ? scan.owner(pid) : nullptr;
             if (!held || !held->live()) return TRUE;
+            const bool visible = IsWindowVisible(window) != FALSE, foreground = GetForegroundWindow() == window;
+            if (!visible && !foreground) return TRUE;
             wchar_t name[64]{}; int length = GetClassNameW(window, name, 64);
             if (length <= 0 || length >= 63) { ++scan.errors; return TRUE; }
-            const bool visible = IsWindowVisible(window) != FALSE, foreground = GetForegroundWindow() == window;
             DWORD after = 0; GetWindowThreadProcessId(window, &after);
             if (after != pid || !IsWindow(window) || !held->live()) { ++scan.errors; return TRUE; }
             const auto row = "{\"hwnd\":" + std::to_string(reinterpret_cast<uintptr_t>(window))
                 + ",\"pid\":" + std::to_string(pid) + ",\"class\":" + jsonQuote(name)
                 + ",\"visible\":" + (visible ? "true" : "false")
                 + ",\"foreground\":" + (foreground ? "true" : "false") + "}";
-            if (scan.rows.size() + (scan.count ? 1 : 0) + row.size() > 6000) {
+            if (scan.count >= 32 || scan.rows.size() + (scan.count ? 1 : 0) + row.size() > 6000) {
                 scan.truncated = true; return FALSE;
             }
             if (scan.count++) scan.rows += ',';
@@ -385,7 +386,7 @@ struct SurfaceScan {
     std::string snapshot() {
         visited = errors = count = 0; truncated = false; rows.clear(); deadline = GetTickCount64() + 2000;
         enumerationCompleted = EnumWindows(visit, reinterpret_cast<LPARAM>(this)) != FALSE;
-        return "{\"enumerationCompleted\":" + std::string(enumerationCompleted ? "true" : "false")
+        return "{\"projection\":\"visible_or_foreground_owned_shell\",\"enumerationCompleted\":" + std::string(enumerationCompleted ? "true" : "false")
             + ",\"truncated\":" + (truncated ? "true" : "false") + ",\"errors\":" + std::to_string(errors)
             + ",\"visited\":" + std::to_string(visited) + ",\"windows\":[" + rows + "]}";
     }
