@@ -264,7 +264,7 @@ func launch(ctx context.Context, s Snapshot, uri, token string) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	cmd := exec.Command(s.Launcher, uri)
+	cmd := exec.Command(s.Launcher, "--ozone-platform=wayland", uri)
 	allowed := map[string]bool{"DISPLAY": true, "WAYLAND_DISPLAY": true, "XDG_RUNTIME_DIR": true, "DBUS_SESSION_BUS_ADDRESS": true, "HOME": true, "USER": true, "LOGNAME": true, "XDG_CONFIG_HOME": true, "XDG_DATA_HOME": true, "XDG_CACHE_HOME": true, "XAUTHORITY": true, "LANG": true, "LC_ALL": true, "LC_CTYPE": true}
 	for _, v := range os.Environ() {
 		name, _, ok := strings.Cut(v, "=")
@@ -280,7 +280,9 @@ func launch(ctx context.Context, s Snapshot, uri, token string) error {
 	}
 	// Reap without killing the selected client when the callback budget finishes.
 	go func() { _ = cmd.Wait() }()
-	return nil
+	// Start succeeded, so expiry is an unknown possible effect. Keep the reaper
+	// and leave the selected client alive; no caller may retry this invocation.
+	return ctx.Err()
 }
 
 type application struct {
