@@ -167,3 +167,39 @@ networking and the QEMU NIC disabled, and must not rerun provisioning.
 - [D-Bus application activation](https://specifications.freedesktop.org/desktop-entry/latest/dbus.html)
 - [Existing chat links](https://learn.chatgpt.com/docs/reference/commands)
 - [Official Ubuntu image verification](https://ubuntu.com/docs/public-images/public-images-how-to/verify-image-checksum/)
+
+
+## Read-only executable binding and guest preflight source
+
+A subsequent read-only `dpkg-deb --fsys-tarfile` / `tar -xOf` inspection measured
+the original executable member in the retained official archive: 319425760 bytes,
+SHA256 `207c4fbff7e2fcc1b0789448351ac6eed206206d94c5a0835e5f07c7cd73d6e3`.
+Both archive-reader commands exited 0; the value matches the actual provisioned
+executable measurement. This is a member-byte comparison, not a fresh whole
+archive or repository signature verification. No package code was executed.
+The public facts are retained in `linux-selected-client-executable-member.json`.
+
+The new guest-only preflight received three independent source review/fix rounds.
+Final source SHA256 `e3003f0746b59add941a0e0930ea57acea6879370f68befbaa8701aae4186a31`.
+It creates a new private profile and one no-URI vendor-launcher process as UID
+1000. Root remains only the isolated guest supervisor. Exact executable/profile
+checks, private Sway/D-Bus socket peer identities, retained pidfds, two consistent
+renderer kernel snapshots and final main-process liveness gate the observation.
+A fresh root-owned guest cgroup is joined before dropping privileges; exact
+cgroup kill, populated=0, pidfd exit and direct-child collection bound teardown.
+The [kernel cgroup contract](https://docs.kernel.org/admin-guide/cgroup-v2.html)
+defines inheritance and recursive populated state; no host cgroups are changed.
+
+Review fixes closed missing peer/liveness checks, fork-cleanup races, setup errors
+outside finalization and errors skipping remaining cleanup or guest poweroff.
+The accepted source qualifies only observed renderer restrictions if actually
+run successfully. Full client sandbox, rendered window, focus and navigation
+fields remain false; `/proc` indicators do not prove every renderer's content
+isolation. Python syntax passes. No native client run has occurred.
+
+The next outer controller must use a distinct offline seed and fresh child COW
+overlay of the frozen provisioned image, preserving its backing chain. It must
+bind source/seed/image hashes and its exclusive one-attempt intent, disable both
+outer networking and the QEMU NIC, verify the guest frame, independently observe
+QMP guest shutdown and collect VM exit, and retain exact-container cleanup.
+A serial completion frame alone cannot qualify VM shutdown.
