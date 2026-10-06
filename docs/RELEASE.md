@@ -117,9 +117,11 @@ and their evidence on the release PR; the selector itself does not run or prove 
 >
 > Prepare the bump on a release branch, tag that exact commit (`release.yml` triggers on the
 > tag, not on `main`), qualify the draft, follow the owner request scope below,
-> publish its assets when authorized, and only then fast-forward
-> `main` to the same SHA. The tag stays valid because the SHA is unchanged, and the
-> asset-missing window is zero.
+> publish its assets when authorized. Only a release qualified for every supported
+> platform may fast-forward `main` to that same SHA. For partial v1.48.1, do not
+> fast-forward the version bump to `main`: promote the Linux/Windows source and
+> channel controller as described below, retaining all five legacy macOS versions.
+> The native tag stays immutable and the asset-missing window is zero.
 
 ```bash
 git switch -c release/vX.Y.Z

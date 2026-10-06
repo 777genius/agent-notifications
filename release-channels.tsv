@@ -2,6 +2,6 @@
 # os	arch	tag	release_commit	source_commit	source_ref
 darwin	amd64	v1.46.1	01c836354f55f7e741ca1bd1702da8d7e049f0ea	aca63ba577d19835f1c68d0af4fba0c6e573696a	release/platform-macos
 darwin	arm64	v1.46.1	01c836354f55f7e741ca1bd1702da8d7e049f0ea	aca63ba577d19835f1c68d0af4fba0c6e573696a	release/platform-macos
-linux	amd64	v1.48.1	8a649a9c711a608d8016e7f753516f83dcc6cf4b	7418fa5cfca9e7f200e87631bb453030ef5d743c	release/platform-linux-windows
-linux	arm64	v1.48.1	8a649a9c711a608d8016e7f753516f83dcc6cf4b	7418fa5cfca9e7f200e87631bb453030ef5d743c	release/platform-linux-windows
-windows	amd64	v1.48.1	8a649a9c711a608d8016e7f753516f83dcc6cf4b	7418fa5cfca9e7f200e87631bb453030ef5d743c	release/platform-linux-windows
+linux	amd64	v1.48.1	e86149a724f9b96cb5ee193d63dbc5a533c61e7e	65a28229e223437a12bb3afd8497a90700744847	release/platform-linux-windows
+linux	arm64	v1.48.1	e86149a724f9b96cb5ee193d63dbc5a533c61e7e	65a28229e223437a12bb3afd8497a90700744847	release/platform-linux-windows
+windows	amd64	v1.48.1	e86149a724f9b96cb5ee193d63dbc5a533c61e7e	65a28229e223437a12bb3afd8497a90700744847	release/platform-linux-windows
