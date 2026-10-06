@@ -3,11 +3,33 @@
 package agentnotify
 
 import (
+	"context"
 	"github.com/777genius/agent-notifications/internal/agentnotify/journal"
 	"github.com/777genius/agent-notifications/internal/agentnotify/origin"
 	"github.com/777genius/agent-notifications/internal/notification"
 	"testing"
 )
+
+func TestNoneNeverResolvesTarget(t *testing.T) {
+	f := setup(t, journal.Limits{})
+	resolves := 0
+	f.s.deps.Target = TargetFunc(func(context.Context, origin.Context, origin.RoutePolicy) (origin.Target, error) {
+		resolves++
+		t.Error("none invoked target resolution")
+		return origin.Target{}, nil
+	})
+	p := payload("none-no-resolution")
+	p.Navigation = notification.None
+	got := f.notify(p, caller())
+	if got.Status != "submitted" || got.Navigation.Precision != "none" || resolves != 0 {
+		t.Fatalf("receipt=%+v resolves=%d", got, resolves)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.requests) != 1 || f.requests[0].Navigation != notification.None || f.requests[0].Target != (notification.DesktopTarget{}) {
+		t.Fatalf("none delivery snapshot=%+v", f.requests)
+	}
+}
 
 func TestNoneCallerConsent(t *testing.T) {
 	for _, kind := range []string{"unknown", "asserted", "remote", "headless", "required", "best_effort"} {

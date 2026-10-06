@@ -3,6 +3,40 @@ import Darwin
 @testable import terminal_notifier_modern
 
 final class CallbackWorkTests: XCTestCase {
+    func testNoneCallbackCompletesWithoutNavigationOrOwnedWork() throws {
+        var lines: [String] = []
+        var completions = 0
+        let owner = CallbackLifecycle(schedule: { _, _ in }, exit: {},
+            diagnostic: { lines.append($0) }, now: { 0 })
+        let opener = Opener()
+        let forbiddenWork: (@escaping () -> Void) -> Void = { _ in XCTFail("none scheduled navigation work") }
+        let desktop = DesktopThreadExecutor(
+            discovery: Discovery(check: { XCTFail("none discovered desktop target") }),
+            verifier: Verifier(check: { XCTFail("none verified desktop target"); return false }),
+            opener: opener, verificationWork: forbiddenWork, deliverResult: forbiddenWork,
+            admission: PreflightAdmission(limit: 1))
+        let child = Child()
+        let legacy = ActionExecutor(makeCommand: { _ in XCTFail("none created command"); return child },
+            activation: { _, _ in XCTFail("none activated application") },
+            activationSystem: ActionExecutor.ActivationSystem(
+                running: { _ in XCTFail("none probed running application"); return nil },
+                lookup: { _ in XCTFail("none discovered legacy target"); return nil },
+                open: { _, _ in XCTFail("none opened legacy target") }),
+            discoveryWork: forbiddenWork, deliverResult: forbiddenWork,
+            admission: PreflightAdmission(limit: 1))
+        CallbackHandler(lifecycle: owner, desktop: desktop, legacy: legacy).receive(
+            identifier: "OPEN", defaultIdentifier: "default", notificationID: UUID().uuidString,
+            userInfo: ["action": try XCTUnwrap(ClickAction.none.toJSON())]) { completions += 1 }
+        XCTAssertEqual(completions, 1)
+        XCTAssertEqual(owner.inFlight, 0)
+        XCTAssertEqual(owner.ownedCount, 0)
+        XCTAssertEqual(child.started, 0)
+        XCTAssertTrue(opener.completions.isEmpty)
+        let events = try lines.map { try JSONDecoder().decode(CallbackDiagnostic.self, from: Data($0.utf8)) }
+        XCTAssertEqual(events.filter { $0.event == "callback_terminal" }.compactMap { $0.outcome }, ["legacy_completed"])
+        XCTAssertFalse(events.contains { $0.event == "preflight_started" || $0.event == "open_submitted" })
+    }
+
     private func action(_ n: Int = 1) -> DesktopThreadAction {
         DesktopThreadAction(type: "desktop_thread_v1", schemaVersion: 1, threadID: "private-thread",
             routeKind: "codex_thread", bundleID: "com.openai.codex", teamID: "TESTTEAM01",
