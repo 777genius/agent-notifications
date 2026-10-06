@@ -16,6 +16,8 @@ import uuid
 
 PACKAGE_SHA = '637c3c94bc50f8ee33a15e2e28ec7f92a787f0943e700efe111bc0bf0d4813b4'
 PACKAGE_SIZE = 476322694
+# Largest file (resources/app.asar) in the SHA256-pinned 26.930.51102 package.
+PACKAGE_MAX_FILE_SIZE = 543408877
 URL = 'https://persistent.oaistatic.com/codex-app-prod/linux/deb/pool/main/c/chatgpt/chatgpt_26.930.51102_amd64.deb'
 ROOT = '/usr/lib/chatgpt'
 PINS = {ROOT + '/codex-launcher': '8f983245c6c07070e2cdc480be50ec239e0f18ee36069126649d0692595c86ad',
@@ -105,7 +107,7 @@ class BoundedTarXZ(io.RawIOBase):
             kind = header[156:157]
             require(kind in (b'0', b'\0', b'5', b'2', b'x', b'g', b'L', b'K'), 'unsupported_tar_type')
             metadata = kind in (b'x', b'g', b'L', b'K')
-            require(size <= (65536 if metadata else 512 * 1024**2), 'tar_declared_size_bound')
+            require(size <= (65536 if metadata else PACKAGE_MAX_FILE_SIZE), 'tar_declared_size_bound')
             self.body = (size + 511) // 512 * 512
             if kind in (b'x', b'g') and size:
                 self.metadata, self.metadata_left = bytearray(), size
@@ -199,7 +201,7 @@ def generate(stream):
             require(path not in seen and len(seen) < 20000, 'duplicate_or_entry_bound')
             seen[path] = item.isdir()
             require(item.isfile() or item.isdir() or item.issym(), 'unsafe_archive_type')
-            require(0 <= item.size <= 512 * 1024 * 1024, 'entry_size_bound')
+            require(0 <= item.size <= PACKAGE_MAX_FILE_SIZE, 'entry_size_bound')
             aggregate += item.size
             require(aggregate <= 4 * 1024**3, 'aggregate_bound')
             selected = path == ROOT or path.startswith(ROOT + '/') or path == '/usr/bin/chatgpt'
@@ -292,6 +294,20 @@ def self_test():
         def test_metadata_declaration_rejected_without_payload(self):
             info = tarfile.TarInfo('metadata')
             info.type, info.size = tarfile.XHDTYPE, 65537
+            with self.assertRaisesRegex(ValueError, 'tar_declared_size_bound'):
+                self.decode(info.tobuf())
+
+        def test_pinned_largest_file_declaration_supported_without_payload(self):
+            info = tarfile.TarInfo('usr/lib/chatgpt/resources/app.asar')
+            info.size = 543408877
+            packed = lzma.compress(info.tobuf(), preset=0)
+            decoder = BoundedTarXZ(Slice(io.BytesIO(packed), len(packed)))
+            with tarfile.open(fileobj=decoder, mode='r|') as archive:
+                self.assertEqual(next(iter(archive)).size, 543408877)
+
+        def test_file_declaration_above_pinned_maximum_rejected_without_payload(self):
+            info = tarfile.TarInfo('oversized')
+            info.size = 543408878
             with self.assertRaisesRegex(ValueError, 'tar_declared_size_bound'):
                 self.decode(info.tobuf())
 
