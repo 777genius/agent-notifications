@@ -25,6 +25,8 @@ WINDOWS_BINARY_SHA = '0e58577e9b85a90a318eb617efaf3dd9a652e31f077ab53ec7a7041cbc
 WINDOWS_SOURCE_SHA = '671fea533825aa6fe0f55299871dafbbbcd61cb3f2b88ab783c4274d986e8774'
 WINDOWS_EMBEDDED_SHA = '331e553109046ef935a9eff031073171587efe6ea837f7b846d5847d5f7a16c1'
 WINDOWS_EMBEDDED_OFFSET = 14257777
+WINDOWS_ACL_HELPER_SHA = 'd0995c320cb3b03a287a43915d2319a1b71f93b1d112c1f60ecc61cb276c15bd'
+WINDOWS_ACL_HELPER = 'scripts/opencode-private-root-windows.go'
 
 
 def windows_release_bindings(candidate, manifest, parent, binary):
@@ -77,6 +79,94 @@ def windows_registration_oracle(original, embedded, receipts):
         return result
 
     return registration
+
+
+def windows_acl_source_binding(head, git_body, actual_body, dirty):
+    require(head == WINDOWS_CANDIDATE and not dirty.strip() and
+            hashlib.sha256(git_body).hexdigest() == WINDOWS_ACL_HELPER_SHA and
+            actual_body == git_body, 'immutable_windows_acl_helper_required')
+
+
+def windows_acl_cache(value):
+    require(isinstance(value, str) and value and pathlib.Path(value).is_absolute(),
+            'absolute_prefetched_module_cache_required')
+    path = pathlib.Path(value)
+    require(not any(p.is_symlink() or (hasattr(p, 'is_junction') and p.is_junction())
+                    for p in (path, *path.parents)), 'plain_prefetched_module_cache_required')
+    path = path.resolve(strict=True)
+    require(path.is_dir(), 'existing_prefetched_module_cache_required')
+    return path
+
+
+def windows_acl_environment(root, cache, inherited):
+    # Keep the original disposable private directories and system whitelist.
+    # Only the trusted prefetched module cache escapes this fresh TEST root.
+    env = {key: inherited[key] for key in ('PATH', 'SystemRoot', 'WINDIR', 'COMSPEC', 'PATHEXT')
+           if key in inherited}
+    for key in ('HOME', 'USERPROFILE', 'GOCACHE', 'TEMP', 'TMP'):
+        child = root / ('private-' + key.lower())
+        child.mkdir(mode=0o700)
+        env[key] = str(child)
+    env.update(GOMODCACHE=str(cache), GOFLAGS='-mod=readonly', GOPROXY='off', GOSUMDB='off',
+               GOTOOLCHAIN='local', GOENV='off', GOWORK='off')
+    require(env.get('GOMODCACHE') == str(cache), 'explicit_prefetched_module_cache_required')
+    return env
+
+
+def bounded_acl_output(body):
+    body = body or b''
+    require(isinstance(body, bytes), 'binary_acl_diagnostics_required')
+    return {'bytes': len(body), 'sha256': hashlib.sha256(body).hexdigest(),
+            'truncated': len(body) > 16384,
+            'prefix': body[:16384].decode('utf8', errors='replace')}
+
+
+def windows_acl_preparer(repo, cache_value, receipts, receipt_path):
+    cache = windows_acl_cache(cache_value)
+    helper = repo / WINDOWS_ACL_HELPER
+
+    def source_binding():
+        head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=repo, text=True).strip()
+        dirty = subprocess.check_output(['git', 'status', '--porcelain', '--untracked-files=no'],
+                                        cwd=repo, text=True)
+        body = subprocess.check_output(['git', 'show', WINDOWS_CANDIDATE + ':' + WINDOWS_ACL_HELPER], cwd=repo)
+        windows_acl_source_binding(head, body, helper.read_bytes(), dirty)
+
+    def prepare(root, os_name):
+        require(sys.platform == 'win32' and os_name == 'windows', 'actual_windows_acl_preparation_only')
+        require(re.fullmatch('TEST-installed-[a-f0-9]{24}', root.name) and root.is_dir() and
+                root.resolve(strict=True).is_relative_to(repo / '.task-tools/artifacts') and
+                not any(p.is_symlink() or (hasattr(p, 'is_junction') and p.is_junction())
+                        for p in (root, *root.parents)), 'fresh_owned_windows_acl_root_required')
+        require(not receipts, 'one_windows_acl_preparation_only')
+        source_binding()
+        env = windows_acl_environment(root, cache, os.environ)
+        record = {'helperPath': WINDOWS_ACL_HELPER, 'helperSHA256': WINDOWS_ACL_HELPER_SHA,
+                  'candidateCommit': WINDOWS_CANDIDATE, 'prefetchedModuleCache': str(cache),
+                  'cwd': str(repo), 'privateEnvironmentKeys': sorted(env), 'moduleMode': 'readonly',
+                  'externalModuleFetchAllowed': False, 'timeoutSeconds': 90,
+                  'aclReadbackClaimed': False, 'productBinaryRebuilt': False,
+                  'helperReturncode': None, 'timedOut': False}
+        try:
+            result = subprocess.run(['go', 'run', str(helper), str(root)], cwd=repo, env=env,
+                                    capture_output=True, timeout=90)
+            record.update(helperReturncode=result.returncode,
+                          stdout=bounded_acl_output(result.stdout), stderr=bounded_acl_output(result.stderr))
+        except subprocess.TimeoutExpired as error:
+            record.update(timedOut=True, stdout=bounded_acl_output(error.stdout),
+                          stderr=bounded_acl_output(error.stderr))
+        # Preserve the genuine command result before any acceptance assertion.
+        receipts.append(record)
+        with receipt_path.open('x', encoding='utf8', newline='\n') as output:
+            json.dump({'schema': 1, 'purpose': 'TEST original Windows ACL helper preparation',
+                       'receipts': receipts}, output, sort_keys=True, indent=2)
+            output.write('\n')
+        receipt_path.chmod(0o600)
+        source_binding()
+        require(not record['timedOut'] and record['helperReturncode'] == 0,
+                'windows_private_dacl_failed')
+
+    return prepare
 
 
 def require(ok, code):
@@ -157,6 +247,7 @@ def self_test():
     else:
         raise AssertionError('unknown recovery scope accepted')
     windows_adapter_self_test()
+    windows_acl_self_test()
     print('PASS fresh namespace, valid identities and loopback-only boundary')
 
 
@@ -214,6 +305,47 @@ def windows_adapter_self_test():
             rejected(lambda: oracle(root, plugin, managed, source))
         require(len(receipts) == 1, 'failed_render_must_not_emit_positive_receipt')
     print('PASS pinned LF/CRLF bytes, unique embed and raw origin-bound registration mutations')
+
+
+def windows_acl_self_test():
+    # No Windows helper or Go compiler execution. These assertions turn red if
+    # the external cache is omitted, credentials leak or source pins are relaxed.
+    source = pathlib.Path(__file__).resolve().parents[1] / WINDOWS_ACL_HELPER
+    body = source.read_bytes()
+    windows_acl_source_binding(WINDOWS_CANDIDATE, body, body, '')
+    for values in [('0' * 40, body, body, ''), (WINDOWS_CANDIDATE, body + b'x', body, ''),
+                   (WINDOWS_CANDIDATE, body, body + b'x', ''),
+                   (WINDOWS_CANDIDATE, body, body, ' M scripts/opencode-private-root-windows.go')]:
+        try:
+            windows_acl_source_binding(*values)
+        except ValueError:
+            continue
+        raise AssertionError('changed_acl_source_accepted')
+    with tempfile.TemporaryDirectory(prefix='TEST-recovery-acl-env-') as temporary:
+        base = pathlib.Path(temporary).resolve()
+        cache = base / 'prefetched-modules'; cache.mkdir()
+        root = base / 'TEST-private-environment'; root.mkdir()
+        env = windows_acl_environment(root, windows_acl_cache(str(cache)),
+                                      {'PATH': 'system-tools', 'SystemRoot': 'system-root',
+                                       'HOME': 'ambient-home', 'GH_TOKEN': 'TEST-auth-sentinel',
+                                       'OPENAI_API_KEY': 'TEST-auth-sentinel'})
+        require(env['GOMODCACHE'] == str(cache) and pathlib.Path(env['GOCACHE']).is_relative_to(root) and
+                env['HOME'] != 'ambient-home' and 'TEST-auth-sentinel' not in env.values(),
+                'private_acl_env_explicit_external_cache_no_auth')
+        require(all(env[k] == v for k, v in {'GOFLAGS': '-mod=readonly', 'GOPROXY': 'off',
+                'GOSUMDB': 'off', 'GOTOOLCHAIN': 'local', 'GOENV': 'off', 'GOWORK': 'off'}.items()),
+                'offline_readonly_acl_go_contract')
+        file = base / 'not-a-cache'; file.write_bytes(b'TEST')
+        for value in ['', 'relative/cache', str(file)]:
+            try:
+                windows_acl_cache(value)
+            except ValueError:
+                continue
+            raise AssertionError('invalid_module_cache_accepted')
+    output = bounded_acl_output(b'x' * 16385)
+    require(len(output['prefix']) == 16384 and output['bytes'] == 16385 and output['truncated'] and
+            output['sha256'] == hashlib.sha256(b'x' * 16385).hexdigest(), 'bounded_acl_diagnostic_receipt')
+    print('PASS immutable ACL source, explicit offline module cache, private env and bounded diagnostics')
 
 
 def github_json(endpoint, paginate=False):
@@ -374,6 +506,10 @@ def qualify(execute_native, prepare=False):
         receipts = metadata['recoveryWindowsRenderCustody'] = []
         metadata.update(canonicalGitAssetSHA256=WINDOWS_SOURCE_SHA, platformEmbeddedSHA256=WINDOWS_EMBEDDED_SHA)
         r.registration = windows_registration_oracle(r.registration, embedded, receipts)
+        acl_receipts = metadata['recoveryWindowsACLPreparation'] = []
+        acl_report = inputs.artifacts / 'windows-acl-preparation.json'
+        r.prepare_sandbox_root = windows_acl_preparer(repo, os.environ.get('AN_GO_MODULE_CACHE', ''),
+                                                    acl_receipts, acl_report)
     proof, proof_sha = fresh_business_proof(repo, manifest, manifest_sha, run,
                                           parent_sha, (os_name, arch, version), r)
     metadata.update(recoveryObservationScope='installed_business_only',
