@@ -2,10 +2,12 @@
 """TEST-only portal sender-death experiment, isolated in an owned Docker container."""
 import argparse
 import ctypes as ct
+import grp
 import hashlib
 import json
 import os
 from pathlib import Path
+import pwd
 import re
 import shutil
 import subprocess
@@ -470,6 +472,23 @@ def inside(restart=False, recovery=False, owner_fence=False):
         return second, b_root, b_spec, sender_b, exited_b, False
 
     try:
+        identity = dict(uid=os.getuid(), gid=os.getgid(), passed=False)
+        report['containerIdentityPreflight'] = identity
+        if not all(1 <= value <= 2147483647 for value in (identity['uid'], identity['gid'])):
+            raise RuntimeError('bounded_nonroot_container_identity_required_before_daemons')
+        try:
+            user = pwd.getpwuid(identity['uid'])
+        except KeyError:
+            raise RuntimeError('container_passwd_UID_missing_before_daemons')
+        identity.update(passwdUID=user.pw_uid, passwdPrimaryGID=user.pw_gid)
+        try:
+            group = grp.getgrgid(identity['gid'])
+        except KeyError:
+            raise RuntimeError('container_group_GID_missing_before_daemons')
+        identity.update(groupGID=group.gr_gid,
+                        passed=user.pw_uid == identity['uid'] and group.gr_gid == identity['gid'])
+        if not identity['passed']:
+            raise RuntimeError('container_NSS_identity_mismatch_before_daemons')
         for file in Path('/fixture-build').glob('*version.txt'):
             report[file.stem] = file.read_text().strip()
         report['aptCandidates'] = Path('/fixture-build/apt-candidates.txt').read_text()
@@ -676,8 +695,9 @@ def main():
         parser.error('primary gh source provenance/checksum binding required')
     repo = Path(__file__).resolve().parents[1]
     wayland = args.wayland_token_test or args.wayland_token_negative_test
-    if wayland and os.getuid() == 0:
-        parser.error('Wayland TEST requires an explicit nonroot operator identity')
+    host_uid, host_gid = os.getuid(), os.getgid()
+    if not all(1 <= value <= 2147483647 for value in (host_uid, host_gid)):
+        parser.error('TEST requires bounded nonroot operator UID and GID')
     wayland_provenance = None
     if wayland:
         if not args.gtk_source_archive or not args.wayland_source_provenance or not args.virtual_pointer_protocol:
@@ -709,7 +729,7 @@ def main():
     (root / 'container.marker').write_text('Linux portal container TEST ' + token + '\n')
     docker = ['sudo', '-n', 'docker'] if args.docker_via_sudo else ['docker']
     image, container = 'navigation-portal-test:' + token, 'navigation-portal-test-' + token
-    container_user = str(os.getuid()) + ':' + str(os.getgid())
+    container_user = str(host_uid) + ':' + str(host_gid)
     report = dict(sourceSHA256={name: sha(context / name) for name in names}, portalSourceSHA256=args.portal_source_sha256,
                   portalSourceDeclaredCommit=COMMIT, sourceProvenance=provenance,
                   ownerToken=token, image=image, container=container, containerUser=container_user, containerInit=True,
@@ -733,6 +753,7 @@ def main():
     try:
         build = command('build', docker + ['build', '--label', 'navigation.test=true', '--label', 'navigation.owner=' + token,
             '--build-arg', 'PORTAL_SOURCE_SHA256=' + args.portal_source_sha256, '--build-arg', 'PORTAL_SOURCE_COMMIT=' + COMMIT,
+            '--build-arg', 'TEST_HOST_UID=' + str(host_uid), '--build-arg', 'TEST_HOST_GID=' + str(host_gid),
             '-t', image + '-portal' if wayland else image, str(context)], 1800)
         if build.returncode != 0:
             raise RuntimeError('image_build_failed_before_show')

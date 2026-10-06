@@ -1,6 +1,7 @@
 # Linux portal TEST owner fence
 
-Status: source-only, not executed or natively qualified. Host bootstrap remains
+Status: initial CI execution failed before notifications. The current UID/GID
+repair is source-only, not executed or natively qualified. Host bootstrap remains
 unqualified. This does not change a production adapter or dependency.
 
 The opt-in `--restart-owner-fence-test` is exclusive with the existing restart
@@ -33,7 +34,7 @@ observations and source/artifact hashes remain available for independent review.
 Validation here is Python AST parsing and git diff checks only. Native execution
 requires a separately admitted isolated TEST host and reviewed exact source.
 
-The new PR CI lane is source-only until actual execution is retained. It uses a
+The PR CI lane uses a
 fresh Ubuntu 24.04 GitHub runner and invokes the existing outer native probe once
 with `--restart-owner-fence-test`, without retries. The controller verifies fixed
 publisher asset/checksum digests and the annotated 1.22.1 tag commit through `gh`;
@@ -51,3 +52,22 @@ Artifacts are limited to owned reports/logs/TEST receipts and frozen public sour
 inputs. Backend generic restart, Wayland, atomic binding and client navigation
 remain unqualified. Local validation of this CI patch is strict TypeScript only;
 no local image build, notification or native fixture execution is claimed.
+
+The retained first CI attempt, run `37516822119` at source `0d01ac4`, built the
+image successfully but failed native daemon readiness before notification or
+click. The outer receipt records `containerUser=1001:1001`; the source did not
+create image-local passwd/group entries for that host identity. `bus.stderr`
+records dbus-daemon's password-database lookup error for its current UID. Native
+`showAttempted`, `addReturned` and `ownerFenceQualified` are false. Exact owned
+container removal and fresh ID/name absence were verified. Artifact `11440635436`
+has ZIP SHA256 `0dbe2e92be794b304861f7c46efc7976549644641bc1a631a90134f099ba2b4b`.
+This failed receipt remains negative; it proves no callback or owner-fence success.
+
+The repair passes the actual bounded nonroot host UID/GID as late image build
+arguments and creates each passwd/group entry only when its numeric identity is
+absent, preserving existing accounts. Runtime still uses exactly that numeric
+`--user`, the owned 0700 root and the same container restrictions. A recorded
+NSS UID/GID preflight fails before any native child if resolution is unavailable.
+There is no host passwd mount, host chown, root runtime or sandbox relaxation.
+Local validation is Python AST parsing and diff checking only; actual repair
+success requires a separately reviewed fresh native CI attempt.
