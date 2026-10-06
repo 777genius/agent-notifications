@@ -287,6 +287,33 @@ func ExactLocator(b Binding) (bool, error) {
 	return true, nil
 }
 
+// ReadCursorBinding reads only the exact identity from an explicit private
+// locator. It grants no installed authorization or runtime preparation. Callers
+// must still check Binding.CheckSnapshot and the qualified CursorGate later.
+func ReadCursorBinding(selector string) (Binding, error) {
+	if !filepath.IsAbs(selector) || filepath.Clean(selector) != selector {
+		return Binding{}, ErrInvalid
+	}
+	dataRoot, name := filepath.Dir(selector), filepath.Base(selector)
+	raw, err := readPrivate(dataRoot, name)
+	if err != nil {
+		return Binding{}, ErrInvalid
+	}
+	b, err := decode(raw)
+	if err != nil || b.Integration != Cursor || b.DataRoot != dataRoot {
+		return Binding{}, ErrInvalid
+	}
+	wantName, err := b.Filename()
+	if err != nil || wantName != name {
+		return Binding{}, ErrInvalid
+	}
+	_, _, canonical, err := b.Registration()
+	if err != nil || !bytes.Equal(raw, canonical) {
+		return Binding{}, ErrInvalid
+	}
+	return b, nil
+}
+
 // ReadLocatorForRecovery reads a private locator without requiring its kernel
 // consumer. Only setup may use this after a confirmed uninstall revoked that
 // consumer. The selector must still name the canonical binding bytes.

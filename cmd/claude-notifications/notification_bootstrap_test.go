@@ -28,6 +28,18 @@ func notificationRepoRoot(t *testing.T) string {
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "../.."))
 }
 
+// bootstrapFixtureCommand transports the full script outside Linux's per-argument
+// limit while retaining bash -c's $0, positional arguments and untouched stdin.
+func bootstrapFixtureCommand(t *testing.T, script string, argv ...string) *exec.Cmd {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "TEST-bootstrap.sh")
+	if err := os.WriteFile(path, []byte(script), 0600); err != nil {
+		t.Fatal(err)
+	}
+	quoted := "'" + strings.ReplaceAll(path, "'", "'\"'\"'") + "'"
+	return exec.Command("bash", append([]string{"-c", `eval -- "$(< ` + quoted + `)"`}, argv...)...)
+}
+
 var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 func retryArgv(t *testing.T, output, needle string) []string {
@@ -132,7 +144,7 @@ install_codex() { echo codex >> "$HOME/installs"; CONFIGURE_BINARY="$HOME/fake-b
 				args = "--product both --codex-home " + home
 			}
 			script += "; }\nmain " + args + "\n"
-			command := exec.Command("bash", "-c", script)
+			command := bootstrapFixtureCommand(t, script)
 			command.Dir = home
 			output, err := command.CombinedOutput()
 			if (test.fail || test.name == "configure_failed" || strings.HasPrefix(test.name, "bad_")) != (err != nil) {
@@ -226,7 +238,7 @@ install_claude() {
 install_codex() { echo codex >> "$HOME/installs"; CONFIGURE_BINARY="$HOME/fake-binary"; return 0; }
 main --product both
 `
-	command := exec.Command("bash", "-c", script)
+	command := bootstrapFixtureCommand(t, script)
 	command.Dir = home
 	output, err := command.CombinedOutput()
 	if err != nil {
@@ -269,7 +281,7 @@ main --product both
 		t.Fatal(err)
 	}
 	explicitScript := strings.Replace(script, "main --product both\n", "main --product both --navigation none --allow-unknown-caller false --allow-caller-asserted false\n", 1)
-	command = exec.Command("bash", "-c", explicitScript)
+	command = bootstrapFixtureCommand(t, explicitScript)
 	command.Dir = home
 	if output, err = command.CombinedOutput(); err != nil {
 		t.Fatalf("explicit consent: %v: %s", err, output)
@@ -288,7 +300,7 @@ main --product both
 		t.Fatal(err)
 	}
 	windowsScript := strings.Replace(script, "main --product both\n", "uname() { echo MINGW64_NT-10.0; }\nmain --product both\n", 1)
-	command = exec.Command("bash", "-c", windowsScript)
+	command = bootstrapFixtureCommand(t, windowsScript)
 	command.Dir = home
 	if output, err = command.CombinedOutput(); err != nil {
 		t.Fatalf("Git Bash dispatch: %v: %s", err, output)
@@ -313,7 +325,7 @@ main --product both
 		if err := os.Remove(filepath.Join(home, "calls")); err != nil && !os.IsNotExist(err) {
 			t.Fatal(err)
 		}
-		command = exec.Command("bash", "-c", oldScript)
+		command = bootstrapFixtureCommand(t, oldScript)
 		command.Dir = home
 		output, err = command.CombinedOutput()
 		if (name == "explicit") != (err != nil) || !strings.Contains(string(output), "Update to a matching release") {
@@ -379,7 +391,7 @@ install_claude() { echo claude >> "$HOME/installs"; PLUGIN_ROOT="$HOME/bundle sp
 install_codex() { echo codex >> "$HOME/installs"; CONFIGURE_BINARY="$HOME/fake binary"; return 0; }
 main --product both --agent-notify --navigation none --allow-unknown-caller true --allow-caller-asserted false --codex-home "$HOME/codex home"
 `
-	command := exec.Command("bash", "-c", script)
+	command := bootstrapFixtureCommand(t, script)
 	command.Dir = home
 	output, err := command.CombinedOutput()
 	if err == nil {
@@ -431,7 +443,7 @@ install_claude() { echo claude >> "$HOME/installs"; PLUGIN_ROOT="$HOME/bundle sp
 install_codex() { echo codex >> "$HOME/installs"; CONFIGURE_BINARY="$HOME/fake binary"; return 0; }
 main --product both --codex-home "$HOME/codex home"
 `
-	command := exec.Command("bash", "-c", script)
+	command := bootstrapFixtureCommand(t, script)
 	command.Dir = home
 	output, err := command.CombinedOutput()
 	if err == nil {
@@ -511,7 +523,7 @@ install_claude() { echo claude >> "$HOME/installs"; PLUGIN_ROOT="$HOME/bundle"; 
 install_codex() { echo codex >> "$HOME/installs"; CONFIGURE_BINARY="$HOME/fake-binary"; return 0; }
 main --product both
 `
-	command := exec.Command("bash", "-c", script)
+	command := bootstrapFixtureCommand(t, script)
 	command.Dir = home
 	output, err := command.CombinedOutput()
 	if err != nil {
@@ -576,7 +588,7 @@ install_claude() { echo claude >> "$HOME/installs"; PLUGIN_ROOT="$HOME/bundle"; 
 install_codex() { echo codex >> "$HOME/installs"; CONFIGURE_BINARY="$HOME/fake-binary"; return 0; }
 main ` + test.args + `
 `
-			command := exec.Command("bash", "-c", script)
+			command := bootstrapFixtureCommand(t, script)
 			command.Dir = home
 			output, err := command.CombinedOutput()
 			if test.wantErr != (err != nil) {
@@ -1145,7 +1157,7 @@ main "$@"
 		t.Fatal(err)
 	}
 	prefix := strings.TrimSuffix(strings.TrimSpace(string(bootstrap)), `main "$@"`)
-	cmd = exec.Command("bash", "-c", prefix+`
+	cmd = bootstrapFixtureCommand(t, prefix+`
 _CONFIG_STAGE="$NOTIFICATION_TEST_CONFIG_STAGE"
 _CONFIG_HELPER="$NOTIFICATION_TEST_ASSET"
 chmod +x "$_CONFIG_HELPER"
@@ -1248,7 +1260,7 @@ func TestNotificationAcquisitionRefusesExistingOutput(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Setenv("TEST_ACQUIRE_OUTPUT", output)
-			cmd := exec.Command("bash", "-c", prefix+`
+			cmd := bootstrapFixtureCommand(t, prefix+`
 ACQUIRE_ONLY=true
 ACQUIRE_OUTPUT="$TEST_ACQUIRE_OUTPUT"
 CN_PRODUCT=codex
@@ -1320,7 +1332,7 @@ PLUGIN_ROOT="$FIXTURE_ROOT"
 install_claude || exit 1
 "$CONFIGURE_BINARY" claude-launch || exit 1
 `
-			cmd := exec.Command("bash", "-c", script)
+			cmd := bootstrapFixtureCommand(t, script)
 			cmd.Env = append(os.Environ(), "HOME="+home, "FIXTURE_HOME="+home, "FIXTURE_ROOT="+root, "FIXTURE_ARCH="+arch)
 			out, err := cmd.CombinedOutput()
 			if err != nil || !strings.Contains(string(out), "codex-launch") || !strings.Contains(string(out), "claude-launch") {
@@ -1348,7 +1360,7 @@ PRODUCT=both
 CONFIGURE_ARGS=()
 configure_agent_policy
 `
-	command := exec.Command("bash", "-c", script)
+	command := bootstrapFixtureCommand(t, script)
 	command.Env = append(os.Environ(), "HOME="+home)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("Linux policy gate: %v\n%s", err, output)

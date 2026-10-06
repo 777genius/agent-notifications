@@ -108,13 +108,29 @@ jobs:
           source scripts/windows-observation-profile.sh
           trap observation_profile_stop EXIT
           qualification_status=0
+          command_status=0
           observation_profile_start geminievent
-          go test -p 1 -v -race -coverprofile=coverage-gemini-event.txt -covermode=atomic -trace=observation-evidence/geminievent.trace ./internal/geminievent || qualification_status=$?
+          go test -p 1 -v -race -coverprofile=coverage-gemini-event.txt -covermode=atomic -trace=observation-evidence/geminievent.trace ./internal/geminievent || command_status=$?
+          if (( qualification_status == 0 )); then qualification_status=$command_status; fi
+          printf '%s\n' "$command_status" > observation-evidence/geminievent.exit || { if (( qualification_status == 0 )); then qualification_status=1; fi; }
           # Stop immediately after this package so unrelated tests cannot evict
           # the failing syscall from the bounded OS recording.
           observation_profile_stop
-          go test -p 1 -v -race -coverprofile=coverage-observation.txt -covermode=atomic ./internal/notification/observation ./internal/copilotvscodeevent ./cmd/claude-notifications || qualification_status=$?
-          { head -n 1 coverage-gemini-event.txt; tail -n +2 coverage-gemini-event.txt; tail -n +2 coverage-observation.txt; } > coverage-gemini.txt
+          command_status=0
+          set -o pipefail
+          pipeline_status=(0 0)
+          observation_profile_start cursorevent
+          go test -p 1 -v -race -coverprofile=coverage-cursor-event.txt -covermode=atomic -trace=observation-evidence/cursorevent.trace ./internal/cursorevent 2>&1 | tee observation-evidence/cursorevent.log || pipeline_status=("${PIPESTATUS[@]}")
+          command_status=${pipeline_status[0]}
+          observation_profile_stop
+          if (( command_status == 0 )); then command_status=${pipeline_status[1]}; fi
+          if (( qualification_status == 0 )); then qualification_status=$command_status; fi
+          printf '%s\n' "${pipeline_status[0]}" > observation-evidence/cursorevent.exit || { if (( qualification_status == 0 )); then qualification_status=1; fi; }
+          command_status=0
+          go test -p 1 -v -race -coverprofile=coverage-observation.txt -covermode=atomic ./internal/notification/observation ./internal/copilotvscodeevent ./cmd/claude-notifications || command_status=$?
+          if (( qualification_status == 0 )); then qualification_status=$command_status; fi
+          printf '%s\n' "$command_status" > observation-evidence/observation.exit || { if (( qualification_status == 0 )); then qualification_status=1; fi; }
+          { head -n 1 coverage-gemini-event.txt && tail -n +2 coverage-gemini-event.txt && tail -n +2 coverage-cursor-event.txt && tail -n +2 coverage-observation.txt; } > coverage-gemini.txt || { if (( qualification_status == 0 )); then qualification_status=1; fi; }
           exit "$qualification_status"
 
       - name: Repeat Gemini channel consent and failed-marker suppression
@@ -141,7 +157,7 @@ jobs:
         run: |
           set -euo pipefail
           packages=$(go list ./...)
-          remaining_packages=$(printf '%s\n' "$packages" | grep -Fvx -e 'github.com/777genius/agent-notifications/internal/geminievent' -e 'github.com/777genius/agent-notifications/internal/notification/observation' -e 'github.com/777genius/agent-notifications/internal/copilotvscodeevent' -e 'github.com/777genius/agent-notifications/cmd/claude-notifications')
+          remaining_packages=$(printf '%s\n' "$packages" | grep -Fvx -e 'github.com/777genius/agent-notifications/internal/geminievent' -e 'github.com/777genius/agent-notifications/internal/cursorevent' -e 'github.com/777genius/agent-notifications/internal/notification/observation' -e 'github.com/777genius/agent-notifications/internal/copilotvscodeevent' -e 'github.com/777genius/agent-notifications/cmd/claude-notifications')
           mapfile -t remaining <<< "$remaining_packages"
           go test -v -race -coverprofile=coverage-rest.txt -covermode=atomic "${remaining[@]}"
           { head -n 1 coverage-rest.txt; tail -n +2 coverage-rest.txt; tail -n +2 coverage-gemini.txt; } > coverage.txt

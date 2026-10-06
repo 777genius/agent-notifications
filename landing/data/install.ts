@@ -20,7 +20,7 @@ export const targets = [
 export const intents = ["install", "update", "configure"] as const;
 export const repo = "https://github.com/777genius/agent-notifications";
 export const installerUrl =
-  "https://777genius.github.io/agent-notifications/install.sh";
+  "https://agent-notifications.com/install.sh";
 export function platformReleaseVersion(snapshot: string, target: Target): string | null {
   const os = target === "macos" ? "darwin" : target;
   if (!["darwin", "linux", "windows"].includes(os)) return null;

@@ -1,0 +1,38 @@
+{
+  "scope": "disposable_guest_provisioning_prerequisite_failure",
+  "passed": false,
+  "nativeExitCode": 1,
+  "failure": "Python script directory shadowed the standard-library operator module during imports",
+  "failureBeforeProbeMain": true,
+  "guestBootAttempted": false,
+  "clientLaunchAttempted": false,
+  "notificationAttempted": false,
+  "clientSandboxQualified": false,
+  "navigationQualified": false,
+  "nativeReportCreated": false,
+  "measuredSourceHashes": {
+    "operator": "d6e35118e79a7b6caa277f117c5bfae159d25aa58e526045424419d8c25e36e8",
+    "probe": "a56f913efbf728d3c04ef2a0d3395a960bb0c3c10929c9def41e3ca7c6d7d950",
+    "guest": "0f0b04ae6b76c1f8710ad928a1ac44ba36e4be5a1359bc8a75d69374bdc9d517"
+  },
+  "retainedRawHashes": {
+    "collection": "d95138f047ae957b4a1b4c45e279a95b0f376fcfd49bca60228dd6573308218a",
+    "operatorResult": "1dbd4838057de3595c2cd545c22acb5a69274d79cba0227e57052b54e5449f4a",
+    "runStderr": "d7c12ac87c7de1b2f5b8e96ce218906cd2d5dccb457fa9faf75e90222198dbfa"
+  },
+  "retainedFileCount": 21,
+  "runtime": {
+    "uid": 1000,
+    "supplementaryGroups": [994],
+    "network": "bridge_for_provisioning_only",
+    "capabilitiesDropped": ["ALL"],
+    "noNewPrivileges": true,
+    "deviceAccess": "only_dev_kvm_rw",
+    "mounts": "one_owned_TEST_evidence_directory"
+  },
+  "ownedContainerRemoved": true,
+  "freshContainerIDAbsent": true,
+  "freshContainerNameAbsent": true,
+  "laterSourceFix": "Isolated Python imports with -I and renamed the staged outer script",
+  "laterFixAppliedToThisRun": false
+}
