@@ -104,6 +104,10 @@ async function main(): Promise<void> {
   }
   // Missing flag stays read-only; native submission requires the explicit '0' mode.
   const diagnosticOnly = diagnosticFlag !== '0';
+  const surfaceFlag = process.env.NAVIGATION_WINDOWS_CENTER_SURFACE;
+  if (surfaceFlag !== undefined && surfaceFlag !== '0' && surfaceFlag !== '1') throw new Error('invalid surface flag');
+  const surfaceOnly = surfaceFlag === '1';
+  if (surfaceOnly && !diagnosticOnly) throw new Error('surface and native callback modes are exclusive');
   evidence.diagnosticOnly = diagnosticOnly;
   if (diagnosticOnly) {
     evidence.scope = 'Windows TEST read-only Center policy and input desktop preflight';
@@ -129,6 +133,34 @@ async function main(): Promise<void> {
     throw new Error('active connected desktop preflight not ready');
   }
   if (diagnosticOnly) {
+    if (surfaceOnly) {
+      if (policy.configuredDisabled) throw new Error('Center disable policy configured; no input attempted');
+      evidence.scope = 'Windows TEST single Win+N Shell surface diagnostic, no native Show';
+      evidence.inputEffectUncertain = true;
+      const surfaceStep = run('center-surface', 15_000);
+      for (const name of ['surface-preflight.json', 'center-surface-before.json', 'center-surface-rejected.json', 'center-surface-intent.json', 'center-surface.json']) {
+        if (existsSync(join(root, name))) {
+          const record = read(name); evidence[name] = record;
+          if (record.pid !== surfaceStep.pid || record.nonce !== nonce) throw new Error('surface report correlation invalid');
+        }
+      }
+      const surface = evidence['center-surface.json'] as Json | undefined;
+      const rejected = evidence['center-surface-rejected.json'] as Json | undefined;
+      if (surfaceStep.status === 3 && !surfaceStep.error && !surfaceStep.signal && rejected?.inputAttempted === false
+          && rejected.showAttempts === 0 && !evidence['center-surface-intent.json'] && !surface) {
+        evidence.inputEffectUncertain = false; evidence.noInputProved = true; evidence.status = 'unavailable';
+      }
+      if (surface && surface.pid === surfaceStep.pid && surface.nonce === nonce
+          && typeof surface.keyReleaseUnknown === 'boolean') evidence.inputEffectUncertain = surface.keyReleaseUnknown;
+      requireSuccess(surfaceStep);
+      const fresh = evidence['surface-preflight.json'] as Json | undefined;
+      const intent = evidence['center-surface-intent.json'] as Json | undefined;
+      if (!fresh || fresh.ready !== true || fresh.connectionState !== 0 || fresh.connectionStateKnown !== true
+          || !intent || intent.chordIntent !== 1 || intent.showAttempts !== 0) throw new Error('surface prerequisite evidence invalid');
+      if (!surface || surface.pid !== surfaceStep.pid || surface.nonce !== nonce || surface.chordAttempts !== 1
+          || surface.chordAccepted !== true || surface.keyReleaseUnknown !== false || surface.showAttempts !== 0
+          || surface.centerOpenedProved !== false || surface.diagnosticOnly !== true) throw new Error('surface evidence invalid');
+    }
     evidence.status = 'diagnostic_complete'; evidence.noShowProved = true; exitCode = 0;
     return;
   }
