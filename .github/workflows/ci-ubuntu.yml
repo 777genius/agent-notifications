@@ -124,6 +124,27 @@ jobs:
           grep -F 'ACTUAL_TEST_PHYSICAL_HOST: tuple=linux/amd64' "$evidence/cursor.log"
           grep -F 'P1_ORIGINAL_TOKEN_REVALIDATED=true; PUBLIC_SELECTED_ACK_PROJECTION_DATA_ADMISSION=true' "$evidence/cursor.log"
           grep -F 'SIBLING_R2_SELECTED_R1_POSITIVE=true' "$evidence/cursor.log"
+          go test -count=1 -timeout=3m -v ./internal/agentnotify/portablesetup \
+            -run '^TestMaterializerSelectedCursorPublicProjectionAndAcknowledgement$' 2>&1 | tee "$evidence/materializer.log"
+          if grep -F 'NOT_RUN positive materializer' "$evidence/materializer.log"; then
+            exit 1
+          fi
+          grep -F 'QUALIFIED_TEST_MATERIALIZER_SELECTED_PROJECTION_ACK_DATA_ORIGINAL_TOKEN=true' "$evidence/materializer.log"
+          grep -F -- '--- PASS: TestMaterializerSelectedCursorPublicProjectionAndAcknowledgement ' "$evidence/materializer.log"
+          go test -count=1 -timeout=3m -v ./cmd/claude-notifications \
+            -run '^(TestCursorCallerAcknowledgedTokenAndMatchingPendingRetry|TestCursorCallerFirstHandoffMissingToken|TestCursorCallerMissingPackageRefusalAndOwnedCleanup|TestCursorConfirmationReachesWizardAdmissionWithFrozenOptOut)$' 2>&1 | tee "$evidence/caller.log"
+          if grep -F 'NOT_RUN positive caller/P1/resume' "$evidence/caller.log"; then
+            exit 1
+          fi
+          grep -F 'QUALIFIED_TEST_CALLER_ORIGINAL_TOKEN_AND_MATCHING_RESUME=true' "$evidence/caller.log"
+          grep -F 'QUALIFIED_TEST_FIRST_HANDOFF=true' "$evidence/caller.log"
+          grep -F 'QUALIFIED_TEST_PENDING_A_TO_B=true' "$evidence/caller.log"
+          grep -F -- '--- PASS: TestCursorCallerFirstHandoffMissingToken ' "$evidence/caller.log"
+          grep -F -- '--- PASS: TestCursorCallerMissingPackageRefusalAndOwnedCleanup ' "$evidence/caller.log"
+          grep -F -- '--- PASS: TestCursorConfirmationReachesWizardAdmissionWithFrozenOptOut ' "$evidence/caller.log"
+          go test -count=1 -timeout=3m -v ./internal/agentnotify/setupwizard \
+            -run '^TestPackageCompositionCleanupPreservesSharedAndPendingSource$' 2>&1 | tee "$evidence/caller-package.log"
+          grep -F -- '--- PASS: TestPackageCompositionCleanupPreservesSharedAndPendingSource ' "$evidence/caller-package.log"
 
       - name: Preserve Cursor physical qualification
         if: always() && matrix.go == '1.26'

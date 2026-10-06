@@ -3,6 +3,7 @@ package cursorevent_test
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -617,16 +618,40 @@ func TestUncertainEffectsKeepClaimsWithoutRetryOrFallback(t *testing.T) {
 			if r.Status != "unknown" || r.Reason != "delivery_uncertain" {
 				t.Fatal("uncertain effect reported success", r)
 			}
-			if r := consume(t, c, f); r.Reason != "duplicate" || r.Status != "suppressed" {
-				t.Fatal("uncertain effect replayed", r)
+			t.Logf("first effects: desktop=%d webhook=%d", desktop, webhooks)
+			if (isDesktop && (desktop != 1 || webhooks != 0)) || (!isDesktop && (webhooks != 1 || desktop != 0)) {
+				t.Fatal("wrong first uncertain effect", desktop, webhooks)
 			}
+			before, original := cacheState(t, c.Cache.Root)
+			bit := uint8(2)
+			if isDesktop {
+				bit = 1
+			}
+			if len(before.Entries) != 1 || before.Entries[0].Bits != bit || before.Entries[0].Until != 160 {
+				t.Fatal("invalid retained uncertain claim", before)
+			}
+			key, err := hex.DecodeString(before.Entries[0].Key)
+			if err != nil || len(key) != 32 {
+				t.Fatal("uncertain marker is not a privacy hash")
+			}
+			t.Logf("first retained claim: key=%s bit=%d expiry=%g", before.Entries[0].Key, bit, before.Entries[0].Until)
+			second := consume(t, c, f)
+			t.Logf("second effects: desktop=%d webhook=%d receipt=%+v", desktop, webhooks, second)
 			if (isDesktop && (desktop != 1 || webhooks != 0)) || (!isDesktop && (webhooks != 1 || desktop != 0)) {
 				t.Fatal("retried or fallback effect", desktop, webhooks)
 			}
-			_, cache := cacheState(t, c.Cache.Root)
+			after, cache := cacheState(t, c.Cache.Root)
+			if !reflect.DeepEqual(before, after) || !bytes.Equal(original, cache) {
+				t.Fatal("uncertain claim history changed")
+			}
 			b, _ := json.Marshal(r)
-			if bytes.Contains(b, []byte("TEST-private")) || bytes.Contains(cache, []byte("TEST-private")) {
+			secondReceipt, _ := json.Marshal(second)
+			if bytes.Contains(b, []byte("TEST-private")) || bytes.Contains(secondReceipt, []byte("TEST-private")) || bytes.Contains(original, []byte("TEST-private")) || bytes.Contains(cache, []byte("TEST-private")) {
 				t.Fatal("private uncertainty escaped")
+			}
+			t.Log("retained key/bit/expiry/document unchanged; no private payload leakage")
+			if second.Reason != "duplicate" || second.Status != "suppressed" {
+				t.Fatal("uncertain effect replayed", second)
 			}
 		})
 	}
