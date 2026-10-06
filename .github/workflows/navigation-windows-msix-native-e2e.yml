@@ -4,6 +4,7 @@ on:
     paths:
       - '.github/workflows/navigation-windows-msix-native-e2e.yml'
       - 'tests/integration/navigation_windows_msix_probe.cpp'
+      - 'tests/integration/navigation_windows_native_probe.cpp'
       - 'tests/integration/navigation_windows_msix_e2e.ts'
   workflow_dispatch:
 permissions:

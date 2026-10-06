@@ -69,3 +69,43 @@ Three independent source reviews accepted this diagnostic delta: C++ SHA256
 `dd6a5a244cf46d796aafb4848f6cb14da31ed2305f3a3032439d18fcd5b58b9f`,
 TS `6ba0edce321e13f6142c62cb8cc62ac273ffbdc36510af62dd7ea215fa0f2531`.
 Empty/error history remains an observation, never proof of delivery absence or UI.
+
+The changed-source [run 37400224978](https://github.com/777genius/agent-notifications/actions/runs/37400224978),
+source `920212665e7130bafa592e110038b5e802b3e214`, passed target compilation,
+typecheck, preparation, signing, deployment and sender collection. Exactly one
+Show returned. The read-only history query returned HRESULT 0, one entry and one
+exact owned Tag/Group match. This proves presence in the queried TEST history,
+not a visible toast, Shell action or cold callback. The observer still returned
+5 with `found=false`. Exact package/certificate/CNG cleanup succeeded; aggregate
+process cleanup remains unknown. The independently verified public projection
+is `windows-msix-history-ui-negative.json`; all 39 official ZIP members and its
+10 projected raw hashes match the retained artifact. No unchanged-source retry.
+
+Source `4c8fcfc46e1cd4ce3d83c571f934988f9eac0c8f` makes packaged native submission
+explicit `workflow_dispatch` only. Its PR [run 37402733791](https://github.com/777genius/agent-notifications/actions/runs/37402733791)
+passed exact-head checkout, pinned typecheck, both native compilations/import
+checks and target PowerShell parse; submission and evidence upload were skipped.
+PR green is source/build validation, never native callback qualification.
+
+The next bounded diagnostic changes the shared observer intentionally, superseding
+the initial unchanged-observer scope above. After its existing action search
+fails, it reads desktop children and only verified, same-session live Windows
+Shell subtrees. It records metadata solely for elements containing the exact
+TEST UUID, without exporting unrelated UI text. Bounds are 64 desktop children,
+16 Shell containers, 512 visited/queued nodes globally and 128 per container,
+depth 16 and a cooperative 2-second
+deadline within the unchanged controller process timeout. A blocked COM read can
+still hit that outer timeout; a truncated, empty or failed snapshot is never
+absence proof. No additional Show, input, Invoke or manual callback activation
+is added. The unpackaged workflow's native effect also requires explicit dispatch;
+both PR lanes retain compiler/typecheck checks. Native compilation and the new
+snapshot remain unproven until separately captured changed-source CI evidence.
+This follows [Microsoft's UI Automation search guidance](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-obtainingelements).
+
+Snapshot review/fix rounds: R1 found a PID/session check before process-handle
+retention; fixed by retaining the handle first and bracketing the session query
+with liveness checks. R2 accepted ownership/privacy/bounds and recommended the
+128-node per-container cap, which was added alongside the global 512 cap. R3
+accepted the final source and conservative documentation. Final observer C++
+SHA256 `681ed35f504efd9c982cbbc1085657b6e24512f1f58034317756881308b9d866`.
+These are source reviews; target compilation and native snapshot remain pending.
