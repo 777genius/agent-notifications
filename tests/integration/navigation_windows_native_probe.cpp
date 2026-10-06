@@ -85,6 +85,36 @@ static std::wstring objectName(HANDLE h) {
     if (!GetUserObjectInformationW(h, UOI_NAME, name, sizeof(name), &needed)) return L"";
     return name;
 }
+struct CenterPolicyObservation { std::string json; bool inspected; bool enabled; };
+static CenterPolicyObservation centerPolicyValue(HKEY hive) {
+    constexpr auto keyPath = L"Software\\Policies\\Microsoft\\Windows\\Explorer";
+    HKEY key{};
+    LSTATUS status = RegOpenKeyExW(hive, keyPath, 0, KEY_QUERY_VALUE | KEY_WOW64_64KEY, &key);
+    if (status == ERROR_FILE_NOT_FOUND) return {"{\"state\":\"not_present\"}", true, false};
+    if (status != ERROR_SUCCESS) return {"{\"state\":\"error\",\"status\":" + std::to_string(status) + "}", false, false};
+    DWORD type = 0, value = 0, bytes = sizeof(value);
+    status = RegQueryValueExW(key, L"DisableNotificationCenter", nullptr, &type,
+        reinterpret_cast<BYTE*>(&value), &bytes);
+    RegCloseKey(key);
+    if (status == ERROR_FILE_NOT_FOUND) return {"{\"state\":\"not_present\"}", true, false};
+    const auto metadata = ",\"type\":" + std::to_string(type) + ",\"bytes\":" + std::to_string(bytes);
+    if (status != ERROR_SUCCESS || type != REG_DWORD || bytes != sizeof(value) || value > 1) {
+        if (status == ERROR_SUCCESS) status = ERROR_INVALID_DATA;
+        return {"{\"state\":\"error\",\"status\":" + std::to_string(status) + metadata + "}", false, false};
+    }
+    return {"{\"state\":\"present\",\"enabled\":" + std::string(value == 1 ? "true" : "false")
+        + metadata + "}", true, value == 1};
+}
+static bool centerPolicy() {
+    const auto user = centerPolicyValue(HKEY_CURRENT_USER), machine = centerPolicyValue(HKEY_LOCAL_MACHINE);
+    const bool complete = user.inspected && machine.inspected;
+    report("center-policy.json", "{\"pid\":" + std::to_string(GetCurrentProcessId()) + ",\"nonce\":" + jsonQuote(uuid)
+        + ",\"diagnosticOnly\":true,\"registryView\":\"native64\",\"effectiveShellPolicyProved\":false"
+        + ",\"hkcu\":" + user.json + ",\"hklm\":" + machine.json
+        + ",\"lookupComplete\":" + (complete ? "true" : "false")
+        + ",\"configuredDisabled\":" + (user.enabled || machine.enabled ? "true" : "false") + "}\n");
+    return complete;
+}
 static bool preflight() {
     OSVERSIONINFOEXW v{}; v.dwOSVersionInfoSize = sizeof(v);
     auto rtl = reinterpret_cast<LONG(WINAPI*)(OSVERSIONINFOEXW*)>(
@@ -722,6 +752,7 @@ int wmain(int argc, wchar_t** argv) {
         if (mode == L"callback" && (!ownRegistryProof() || registeredCommand() != serverCommand()
             || !ownAppIdentityProof() || !appIdentityMatches())) return 2;
         winrt::init_apartment(winrt::apartment_type::multi_threaded);
+        if (mode == L"center-policy") return centerPolicy() ? 0 : 3;
         if (mode == L"preflight") return preflight() ? 0 : 3;
         if (mode == L"send") return send();
         if (mode == L"callback") return callback();
