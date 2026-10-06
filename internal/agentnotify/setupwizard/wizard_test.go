@@ -8317,14 +8317,12 @@ func cursorWizardRequest(t *testing.T) (Request, string) {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(pkg, "plugin.json"), []byte(`{"name":"agent-notify","version":"1.0.0"}`), 0600); err != nil {
-		t.Fatal(err)
-	}
 	helper := filepath.Join(root, "TEST-observer")
 	body := []byte("inert TEST observer bytes; never execute")
 	if err := os.WriteFile(helper, body, 0700); err != nil {
 		t.Fatal(err)
 	}
+	writePackage(t, pkg, helper)
 	req := Request{Action: ActionInstall, Agents: []string{"cursor"}, CursorConfig: profile, PackageRoot: pkg,
 		Helper: helper, ClientExecutables: map[string]string{"cursor": helper},
 		ControlRoot: filepath.Join(root, "control"), RuntimeRoot: filepath.Join(root, "runtime"),
@@ -8433,13 +8431,15 @@ func TestCursorWizardSharedRegistryAndDeniedInstall(t *testing.T) {
 		t.Fatalf("reservation differs: %+v %v", reserved, err)
 	}
 	materializeReq := portablesetup.MaterializeRequest{Integration: portable.Cursor, Identity: id, ClientConfigRoot: req.CursorConfig, ClientExecutable: clientExecutable(req, portable.Cursor), PackageRoot: req.PackageRoot}
-	if _, err := mat.Install(testCtx(t), materializeReq); !errors.Is(err, portablesetup.ErrPreflight) {
-		t.Fatalf("pending public ProjectArgs link bypassed: %v", err)
+	deniedReq := materializeReq
+	deniedReq.ClientConfigRoot = root
+	if _, err := mat.Install(testCtx(t), deniedReq); err == nil || err.Error() != "cursor profile differs from original canonical root" {
+		t.Fatalf("different selected profile installed: %v", err)
 	}
-	if _, err := mat.PreviewPlan(testCtx(t), materializeReq); !errors.Is(err, portablesetup.ErrPreflight) {
-		t.Fatalf("preview half-enabled: %v", err)
+	if _, err := mat.PreviewPlan(testCtx(t), deniedReq); err == nil || err.Error() != "cursor profile differs from original canonical root" {
+		t.Fatalf("different selected profile previewed: %v", err)
 	}
-	for _, path := range []string{req.ControlRoot, req.RuntimeRoot, filepath.Join(root, "uap"), filepath.Join(req.CursorConfig, "hooks.json"), filepath.Join(req.CursorConfig, "plugins")} {
+	for _, path := range []string{req.ControlRoot, req.RuntimeRoot, req.GlobalConfig, req.CursorAuthority.Selector, filepath.Join(root, "uap"), filepath.Join(root, "hooks.json"), filepath.Join(root, "plugins"), filepath.Join(req.CursorConfig, "hooks.json"), filepath.Join(req.CursorConfig, "plugins")} {
 		if _, err := os.Lstat(path); !os.IsNotExist(err) {
 			t.Fatalf("denied route mutated %s: %v", path, err)
 		}
@@ -8457,7 +8457,7 @@ func TestCursorWizardSharedRegistryAndDeniedInstall(t *testing.T) {
 		if !errors.Is(err, directoryidentity.ErrUnsupported) {
 			t.Fatalf("public Prepare lost physical refusal: %v", err)
 		}
-		for _, path := range []string{req.ControlRoot, req.RuntimeRoot, filepath.Join(root, "uap"), filepath.Join(req.CursorConfig, "hooks.json"), filepath.Join(req.CursorConfig, "plugins")} {
+		for _, path := range []string{req.ControlRoot, req.RuntimeRoot, req.GlobalConfig, req.CursorAuthority.Selector, filepath.Join(root, "uap"), filepath.Join(req.CursorConfig, "hooks.json"), filepath.Join(req.CursorConfig, "plugins")} {
 			if _, err := os.Lstat(path); !os.IsNotExist(err) {
 				t.Fatalf("unsupported Prepare mutated %s: %v", path, err)
 			}
@@ -8466,7 +8466,14 @@ func TestCursorWizardSharedRegistryAndDeniedInstall(t *testing.T) {
 	} else if captureErr != nil {
 		t.Fatal(captureErr)
 	} else {
-		t.Log("installed/native NOT_RUN: pending public ProjectArgs link; capture alone is not installation authority")
+		canonicalRoot, err := filepath.EvalSymlinks(req.CursorConfig)
+		if err != nil || token.IsZero() || token.Facts().CanonicalRoot != canonicalRoot {
+			t.Fatalf("original profile capture lost selected root: %v", err)
+		}
+		if err := profileauthority.Revalidate(testCtx(t), token); err != nil {
+			t.Fatalf("original profile authority no longer validates: %v", err)
+		}
+		t.Log("selected profile mismatch refused without effects; physical capture alone grants no installed/native authority: NOT_RUN")
 	}
 }
 
