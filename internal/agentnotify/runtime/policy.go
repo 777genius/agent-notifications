@@ -77,7 +77,6 @@ func field(m map[string]json.RawMessage, k string, v any, required bool) error {
 }
 func (b *Backend) policy(s installruntime.PolicySnapshot) (agentnotify.Policy, error) {
 	var p agentnotify.Policy
-	p.Route.Platform = runtime.GOOS
 	p.Rates = journal.RatePolicy{SessionPerMinute: 6, RuntimePerMinute: 30, Burst: 3}
 	p.Delivery.Valid = true
 	if len(s.Fields) == 0 {
@@ -100,6 +99,9 @@ func (b *Backend) policy(s installruntime.PolicySnapshot) (agentnotify.Policy, e
 				return p, errConfig
 			}
 		}
+	}
+	if p.Route.LocalRouting {
+		p.Route.Platform = runtime.GOOS
 	}
 	if raw, ok := s.Fields["rates"]; ok {
 		m, e := object(raw)
