@@ -444,7 +444,7 @@ jobs:
           CURSOR_CARRIER_B64: ${{ inputs.cursor_carrier_b64 }}
         run: |
           python3 -B -S - <<'PY_VERIFY'
-          import base64, hashlib, lzma, struct, zlib, os, pathlib, tempfile
+          import base64, hashlib, lzma, struct, zlib, os, pathlib, tempfile, subprocess
           MAGIC = b'R363T2\0'
           MAX_SOURCE = 1 << 20
           MAX_FRAME = 1 << 20
@@ -499,8 +499,13 @@ jobs:
           pins = {'encodedBytes': 65318, 'frameBytes': 206744, 'xzBytes': 52216, 'transportBytes': 52254, 'transportSHA256': 'ae66ccc33c1e87b4e1da5b8424d6d383c0f5594934990779ea4e446cbdc44455', 'sourceBytes': 215015, 'sourceSHA256': '67d921d830327a05e44fd22693f18259e1b6fcacfcba056f8f4e154f2b6f84a2'}
           candidate = decode(os.environ['CURSOR_CARRIER_B64'],pins)
           compile(candidate,'native_case.py','exec')
-          parent = pathlib.Path(tempfile.mkdtemp(prefix='TEST-cursor-installed-packet-',dir='/tmp'))
-          parent.chmod(0o755)  # Only this newly owned TEST directory.
+          parent = pathlib.Path(subprocess.check_output(
+              ['/usr/bin/sudo', '-n', '/usr/bin/python3', '-B', '-S', '-c',
+               "import os,tempfile; p=tempfile.mkdtemp(prefix='TEST-cursor-installed-packet-',dir='/tmp'); os.chmod(p,0o1777); print(p)"],
+              text=True, timeout=5).strip())
+          assert parent.parent == pathlib.Path('/tmp') and parent.name.startswith('TEST-cursor-installed-packet-')
+          assert parent.resolve(strict=True) == parent and parent.stat().st_uid == 0 and parent.stat().st_gid == 0
+          assert (parent.stat().st_mode & 0o7777) == 0o1777
           target = parent/'carrier';target.mkdir(mode=0o755)
           target.chmod(0o755)
           (target/'native_case.py').write_bytes(candidate)
@@ -665,8 +670,8 @@ jobs:
               assert tracked() == before and run(['git','status','--porcelain=v1']) == b''
               parent = pathlib.Path(os.environ['CURSOR_CASE_PARENT'])
               assert parent.parent == pathlib.Path('/tmp') and parent.name.startswith('TEST-cursor-installed-packet-')
-              assert parent.resolve(strict=True) == parent and stat.S_IMODE(parent.stat().st_mode) == 0o755
-              assert parent.stat().st_uid == os.getuid() and parent.stat().st_gid == os.getgid()
+              assert parent.resolve(strict=True) == parent and stat.S_IMODE(parent.stat().st_mode) == 0o1777
+              assert parent.stat().st_uid == 0 and parent.stat().st_gid == 0
               uid1000_readable(parent)
               base = parent/'TEST-cursor-installed-preparation'
               assert not os.path.lexists(base)
