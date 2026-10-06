@@ -109,3 +109,17 @@ with liveness checks. R2 accepted ownership/privacy/bounds and recommended the
 accepted the final source and conservative documentation. Final observer C++
 SHA256 `681ed35f504efd9c982cbbc1085657b6e24512f1f58034317756881308b9d866`.
 These are source reviews; target compilation and native snapshot remain pending.
+
+The explicit [run 37403823367](https://github.com/777genius/agent-notifications/actions/runs/37403823367),
+source `ea0eab9f6c1bb7e6ed38543808aab3a9b93199cf`, is now terminal and failed.
+Native compilation/typecheck/operator parsing passed. Exactly one Show returned;
+the sender exited 0 and owned history still contained one exact Tag/Group match.
+The action finder returned 5. The snapshot read seven desktop children, four
+verified same-session Shell containers and 13 nodes, with no errors, truncation
+or TEST UUID matches. This proves the diagnostic executed within its bounds,
+not global toast absence or the cause of the missing action. No genuine Invoke,
+cold callback or real-client navigation is qualified. Package/certificate/key
+cleanup succeeded; aggregate process cleanup remains unknown. Official artifact
+`11386063902` ZIP SHA256 `0510be6ba7183efa59472dbd64db8db869ca6d3182613db5978e8bea870c0d58`
+contains 40 safely validated members. The separate PR build run `37403435929`
+passed on the same exact source with its native submission skipped. No resend.
