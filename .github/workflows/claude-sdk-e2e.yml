@@ -20,13 +20,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: claude-sdk-e2e-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   sdk-blackbox:
     name: Claude SDK ${{ matrix.os }}
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.runner || matrix.runner == 'ubuntu-24.04' && (vars.CI_LINUX_RUNNER || 'ubuntu-24.04') || matrix.runner == 'macos-15' && (vars.CI_MACOS_15_RUNNER || 'macos-15') || matrix.runner }}
     timeout-minutes: 20
     strategy:
       fail-fast: false

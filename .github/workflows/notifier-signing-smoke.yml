@@ -18,7 +18,7 @@ permissions:
 jobs:
   smoke-notifier:
     name: Build, Sign, Optionally Notarize ClaudeNotifier.app
-    runs-on: macos-15
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'macos-15' || vars.CI_MACOS_15_RUNNER || 'macos-15' }}
     timeout-minutes: 60
 
     steps:

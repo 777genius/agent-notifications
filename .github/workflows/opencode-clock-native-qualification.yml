@@ -19,6 +19,11 @@ on:
 permissions:
   contents: read
 
+# Supersede only older checks for this PR; dispatch runs remain independent.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   clock-api:
     name: Clock API ${{ matrix.platform }} ${{ matrix.arch }}
