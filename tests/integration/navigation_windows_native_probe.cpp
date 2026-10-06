@@ -1,6 +1,8 @@
 // Disposable CI-only Windows client toast lifecycle probe. No production adapter.
 #define NOMINMAX
 #include <windows.h>
+#include <wtsapi32.h>
+#pragma comment(lib, "Wtsapi32.lib")
 #include <shlobj.h>
 #include <propkey.h>
 #include <propvarutil.h>
@@ -22,6 +24,7 @@
 #include <optional>
 #include <exception>
 #include <memory>
+#include <cstring>
 using Microsoft::WRL::ComPtr;
 namespace fs = std::filesystem;
 using namespace winrt::Windows::UI::Notifications;
@@ -85,6 +88,36 @@ static std::wstring objectName(HANDLE h) {
     if (!GetUserObjectInformationW(h, UOI_NAME, name, sizeof(name), &needed)) return L"";
     return name;
 }
+struct CenterPolicyObservation { std::string json; bool inspected; bool enabled; };
+static CenterPolicyObservation centerPolicyValue(HKEY hive) {
+    constexpr auto keyPath = L"Software\\Policies\\Microsoft\\Windows\\Explorer";
+    HKEY key{};
+    LSTATUS status = RegOpenKeyExW(hive, keyPath, 0, KEY_QUERY_VALUE | KEY_WOW64_64KEY, &key);
+    if (status == ERROR_FILE_NOT_FOUND) return {"{\"state\":\"not_present\"}", true, false};
+    if (status != ERROR_SUCCESS) return {"{\"state\":\"error\",\"status\":" + std::to_string(status) + "}", false, false};
+    DWORD type = 0, value = 0, bytes = sizeof(value);
+    status = RegQueryValueExW(key, L"DisableNotificationCenter", nullptr, &type,
+        reinterpret_cast<BYTE*>(&value), &bytes);
+    RegCloseKey(key);
+    if (status == ERROR_FILE_NOT_FOUND) return {"{\"state\":\"not_present\"}", true, false};
+    const auto metadata = ",\"type\":" + std::to_string(type) + ",\"bytes\":" + std::to_string(bytes);
+    if (status != ERROR_SUCCESS || type != REG_DWORD || bytes != sizeof(value) || value > 1) {
+        if (status == ERROR_SUCCESS) status = ERROR_INVALID_DATA;
+        return {"{\"state\":\"error\",\"status\":" + std::to_string(status) + metadata + "}", false, false};
+    }
+    return {"{\"state\":\"present\",\"enabled\":" + std::string(value == 1 ? "true" : "false")
+        + metadata + "}", true, value == 1};
+}
+static bool centerPolicy() {
+    const auto user = centerPolicyValue(HKEY_CURRENT_USER), machine = centerPolicyValue(HKEY_LOCAL_MACHINE);
+    const bool complete = user.inspected && machine.inspected;
+    report("center-policy.json", "{\"pid\":" + std::to_string(GetCurrentProcessId()) + ",\"nonce\":" + jsonQuote(uuid)
+        + ",\"diagnosticOnly\":true,\"registryView\":\"native64\",\"effectiveShellPolicyProved\":false"
+        + ",\"hkcu\":" + user.json + ",\"hklm\":" + machine.json
+        + ",\"lookupComplete\":" + (complete ? "true" : "false")
+        + ",\"configuredDisabled\":" + (user.enabled || machine.enabled ? "true" : "false") + "}\n");
+    return complete;
+}
 static bool preflight() {
     OSVERSIONINFOEXW v{}; v.dwOSVersionInfoSize = sizeof(v);
     auto rtl = reinterpret_cast<LONG(WINAPI*)(OSVERSIONINFOEXW*)>(
@@ -92,6 +125,17 @@ static bool preflight() {
     if (!rtl || rtl(&v) != 0) throw std::runtime_error("OS version unavailable");
     DWORD session = 0;
     bool sessionKnown = ProcessIdToSessionId(GetCurrentProcessId(), &session) != FALSE;
+    LPWSTR stateBuffer = nullptr; DWORD stateBytes = 0;
+    BOOL stateQuery = sessionKnown && WTSQuerySessionInformationW(WTS_CURRENT_SERVER_HANDLE, session,
+        WTSConnectState, &stateBuffer, &stateBytes);
+    DWORD stateError = stateQuery ? ERROR_SUCCESS : sessionKnown ? GetLastError() : ERROR_INVALID_PARAMETER;
+    int state = -1;
+    static_assert(sizeof(state) == sizeof(WTS_CONNECTSTATE_CLASS));
+    bool stateShape = stateQuery && stateBuffer && stateBytes == sizeof(state);
+    if (stateShape) std::memcpy(&state, stateBuffer, sizeof(state));
+    if (stateBuffer) WTSFreeMemory(stateBuffer);
+    bool stateKnown = stateShape && state >= WTSActive && state <= WTSInit;
+    if (stateQuery && !stateKnown) stateError = ERROR_INVALID_DATA;
     HWINSTA station = GetProcessWindowStation(); USEROBJECTFLAGS flags{}; DWORD needed = 0;
     bool flagsKnown = GetUserObjectInformationW(station, UOI_FLAGS, &flags, sizeof(flags), &needed) != FALSE;
     HDESK input = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS);
@@ -102,10 +146,21 @@ static bool preflight() {
     if (shell) GetWindowThreadProcessId(shell, &shellPid);
     bool client = v.wProductType == VER_NT_WORKSTATION && v.dwMajorVersion == 10 && v.dwBuildNumber >= 22000;
     bool ready = client && sessionKnown && session != 0 && flagsKnown && (flags.dwFlags & WSF_VISIBLE)
-        && stationName == L"WinSta0" && !inputName.empty() && inputName == threadName && shellPid != 0;
-    report("preflight.json", "{\"client\":" + std::string(client ? "true" : "false")
+        && stationName == L"WinSta0" && !inputName.empty() && inputName == threadName && shellPid != 0
+        && stateKnown && state == WTSActive;
+    report("preflight.json", "{\"pid\":" + std::to_string(GetCurrentProcessId()) + ",\"nonce\":" + jsonQuote(uuid)
+        + ",\"client\":" + std::string(client ? "true" : "false")
         + ",\"build\":" + std::to_string(v.dwBuildNumber) + ",\"productType\":" + std::to_string(v.wProductType)
         + ",\"sessionKnown\":" + (sessionKnown ? "true" : "false") + ",\"session\":" + std::to_string(session)
+        + ",\"connectionStateQuerySucceeded\":" + (stateQuery ? "true" : "false")
+        + ",\"connectionStateKnown\":" + (stateKnown ? "true" : "false")
+        + ",\"connectionStateBytes\":" + std::to_string(stateBytes)
+        + ",\"connectionState\":" + (stateShape ? std::to_string(static_cast<int>(state)) : "null")
+        + ",\"connectionStateError\":" + std::to_string(stateError)
+        + ",\"remoteSession\":" + (GetSystemMetrics(SM_REMOTESESSION) ? "true" : "false")
+        + ",\"screenWidth\":" + std::to_string(GetSystemMetrics(SM_CXSCREEN))
+        + ",\"screenHeight\":" + std::to_string(GetSystemMetrics(SM_CYSCREEN))
+        + ",\"foregroundPresent\":" + (GetForegroundWindow() ? "true" : "false")
         + ",\"station\":" + jsonQuote(stationName) + ",\"stationVisible\":" + ((flags.dwFlags & WSF_VISIBLE) ? "true" : "false")
         + ",\"inputDesktop\":" + jsonQuote(inputName) + ",\"threadDesktop\":" + jsonQuote(threadName)
         + ",\"shellPID\":" + std::to_string(shellPid) + ",\"ready\":" + (ready ? "true" : "false") + "}\n");
@@ -722,6 +777,7 @@ int wmain(int argc, wchar_t** argv) {
         if (mode == L"callback" && (!ownRegistryProof() || registeredCommand() != serverCommand()
             || !ownAppIdentityProof() || !appIdentityMatches())) return 2;
         winrt::init_apartment(winrt::apartment_type::multi_threaded);
+        if (mode == L"center-policy") return centerPolicy() ? 0 : 3;
         if (mode == L"preflight") return preflight() ? 0 : 3;
         if (mode == L"send") return send();
         if (mode == L"callback") return callback();
