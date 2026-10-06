@@ -1270,7 +1270,7 @@ static bool oobeExactSystemImage(SurfaceOwner* peer, const std::wstring& expecte
 struct OOBESelection {
     SurfaceScan owners;
     HWND window{}; DWORD pid{}; std::string created, state, stateSHA;
-    ComPtr<IUIAutomationElement> element, document, button;
+    ComPtr<IUIAutomationElement> element, pane, button;
     ComPtr<IUIAutomation> automation; ComPtr<IUIAutomationTreeWalker> walker;
     std::wstring buttonName, exactSystemImage;
     bool eligible = false;
@@ -1370,8 +1370,8 @@ static bool oobePreflight(const std::string& prefix = "oobe", OOBESelection* sel
         + ",\"foregroundPID\":" + std::to_string(pid)
         + ",\"foregroundCreatedUtcTicks\":\"" + created + "\",\"censusAttempts\":1,\"showAttempts\":0,\"inputAttempted\":false}\n");
     unsigned visited{}, count{}, errors{}, providerSkips{}; bool truncated{}, available{}, rootStable{}, completed{};
-    HRESULT lastError = S_OK; std::string rows, semanticRows; unsigned documents{}, buttons{}, semanticCount{}; bool rootRole{};
-    ComPtr<IUIAutomationElement> rootElement, privacyDocument, actionButton;
+    HRESULT lastError = S_OK; std::string rows, semanticRows; unsigned panes{}, buttons{}, semanticCount{}; bool rootRole{};
+    ComPtr<IUIAutomationElement> rootElement, privacyPane, actionButton;
     ComPtr<IUIAutomation> rootAutomation; ComPtr<IUIAutomationTreeWalker> rootWalker; std::wstring buttonName;
     auto budget = [&]() { return GetTickCount64() < deadline; };
     auto call = [&](auto operation) {
@@ -1454,14 +1454,14 @@ static bool oobePreflight(const std::string& prefix = "oobe", OOBESelection* sel
             const int index = static_cast<int>(count++); if (index) rows += ','; rows += row;
             if (index == 0) rootRole = nameJSON == jsonQuote(L"Microsoft account") && type == UIA_WindowControlTypeId
                 && !nameClipped && held->imageLeaf == L"wwahost.exe" && selectedClass == L"Windows.UI.Core.CoreWindow";
-            const bool isDocument = nameJSON == jsonQuote(L"Choose privacy settings for your device")
-                && classJSON == jsonQuote(L"Internet Explorer_Server") && type == UIA_DocumentControlTypeId
+            const bool isPrivacyPane = nameJSON == jsonQuote(L"Choose privacy settings for your device")
+                && classJSON == jsonQuote(L"Internet Explorer_Server") && type == UIA_PaneControlTypeId
                 && !nameClipped && !classClipped && enabled && !offscreen;
-            if (isDocument) { ++documents; privacyDocument = node.element; }
+            if (isPrivacyPane) { ++panes; privacyPane = node.element; }
             int privacyIndex = node.privacyParent;
-            if (node.privacy || isDocument) {
+            if (node.privacy || isPrivacyPane) {
                 privacyIndex = static_cast<int>(semanticCount++); if (privacyIndex) semanticRows += ',';
-                semanticRows += "[" + std::to_string(isDocument ? -1 : node.privacyParent) + ',' + nameJSON + ',' + idJSON + ',' + classJSON
+                semanticRows += "[" + std::to_string(isPrivacyPane ? -1 : node.privacyParent) + ',' + nameJSON + ',' + idJSON + ',' + classJSON
                     + ',' + std::to_string(type) + ',' + (enabled ? "true" : "false") + ',' + (offscreen ? "true" : "false")
                     + ",[" + std::to_string(rectangle.left) + ',' + std::to_string(rectangle.top) + ','
                     + std::to_string(rectangle.right) + ',' + std::to_string(rectangle.bottom) + "],"
@@ -1479,7 +1479,7 @@ static bool oobePreflight(const std::string& prefix = "oobe", OOBESelection* sel
             if (child && node.depth >= 12) { truncated = true; continue; }
             while (child && budget()) {
                 if (pending.size() + visited >= 512) { truncated = true; break; }
-                pending.push_back({child, node.depth + 1, index, node.privacy || isDocument, privacyIndex}); ComPtr<IUIAutomationElement> next;
+                pending.push_back({child, node.depth + 1, index, node.privacy || isPrivacyPane, privacyIndex}); ComPtr<IUIAutomationElement> next;
                 if (!observed(call([&]() { return walker->GetNextSiblingElement(child.Get(), &next); }))) break;
                 child = next;
             }
@@ -1509,18 +1509,18 @@ static bool oobePreflight(const std::string& prefix = "oobe", OOBESelection* sel
         + ",\"deadlineExpired\":" + (expired ? "true" : "false") + ",\"elapsedMs\":" + std::to_string(GetTickCount64() - started)
         + ",\"visited\":" + std::to_string(visited) + ",\"count\":" + std::to_string(count) + ",\"providerSkips\":" + std::to_string(providerSkips)
         + ",\"verifiedOwners\":" + std::to_string(owners.owners.size()) + ",\"errors\":" + std::to_string(errors + owners.errors)
-        + ",\"semanticStateSHA256\":\"" + semanticSHA + "\",\"privacyDocuments\":" + std::to_string(documents)
+        + ",\"semanticStateSHA256\":\"" + semanticSHA + "\",\"privacyPanes\":" + std::to_string(panes)
         + ",\"eligiblePrivacyButtons\":" + std::to_string(buttons)
         + ",\"lastErrorHRESULT\":" + std::to_string(lastError) + ",\"rows\":[" + rows + "]}\n";
     if (result.size() > 65536) throw std::runtime_error("OOBE serialized report exceeds 64KiB");
     report((prefix + "-uia.json").c_str(), result);
     if (selection) {
         selection->window = window; selection->pid = pid; selection->created = created;
-        selection->element = rootElement; selection->document = privacyDocument; selection->button = actionButton;
+        selection->element = rootElement; selection->pane = privacyPane; selection->button = actionButton;
         selection->automation = rootAutomation; selection->walker = rootWalker;
         selection->buttonName = buttonName; selection->exactSystemImage = exactSystemImage;
         selection->state = semanticState; selection->stateSHA = semanticSHA;
-        selection->eligible = completed && rootRole && documents == 1 && buttons == 1 && owners.owners.size() == 1;
+        selection->eligible = completed && rootRole && panes == 1 && buttons == 1 && owners.owners.size() == 1;
         selection->owners = std::move(owners);
     }
     return available && rootStable;
@@ -1567,16 +1567,16 @@ static bool oobeSetup() {
             if (rootPID != static_cast<int>(selected.pid) || reinterpret_cast<HWND>(hwnd) != selected.window)
                 throw std::runtime_error("OOBE UIA root changed before effect");
             exactText(selected.element.Get(), 0, L"Microsoft account");
-            exactText(selected.document.Get(), 0, L"Choose privacy settings for your device");
-            exactText(selected.document.Get(), 2, L"Internet Explorer_Server");
+            exactText(selected.pane.Get(), 0, L"Choose privacy settings for your device");
+            exactText(selected.pane.Get(), 2, L"Internet Explorer_Server");
             exactText(selected.button.Get(), 1, L"OobeSettingsAcceptButton");
             exactText(selected.button.Get(), 0, selected.buttonName.c_str());
-            CONTROLTYPEID type{}; BOOL enabled{}, offscreen{}; int buttonPID{}, documentPID{};
-            call([&]() { return selected.document->get_CurrentProcessId(&documentPID); });
-            call([&]() { return selected.document->get_CurrentControlType(&type); });
-            call([&]() { return selected.document->get_CurrentIsOffscreen(&offscreen); });
-            if (documentPID != rootPID || type != UIA_DocumentControlTypeId || offscreen)
-                throw std::runtime_error("OOBE privacy document changed before effect");
+            CONTROLTYPEID type{}; BOOL enabled{}, offscreen{}; int buttonPID{}, panePID{};
+            call([&]() { return selected.pane->get_CurrentProcessId(&panePID); });
+            call([&]() { return selected.pane->get_CurrentControlType(&type); });
+            call([&]() { return selected.pane->get_CurrentIsOffscreen(&offscreen); });
+            if (panePID != rootPID || type != UIA_PaneControlTypeId || offscreen)
+                throw std::runtime_error("OOBE privacy pane changed before effect");
             call([&]() { return selected.button->get_CurrentProcessId(&buttonPID); });
             call([&]() { return selected.button->get_CurrentControlType(&type); });
             call([&]() { return selected.button->get_CurrentIsEnabled(&enabled); });
@@ -1584,17 +1584,17 @@ static bool oobeSetup() {
             if (buttonPID != rootPID || type != UIA_ButtonControlTypeId || !enabled || offscreen)
                 throw std::runtime_error("OOBE button no longer eligible");
             // Fresh ancestry read of this exact element, not a desktop-wide selector/action.
-            ComPtr<IUIAutomationElement> cursor = selected.button; bool documentSeen{}, rootSeen{};
+            ComPtr<IUIAutomationElement> cursor = selected.button; bool paneSeen{}, rootSeen{};
             for (unsigned depth = 0; cursor && depth <= 12; ++depth) {
-                BOOL same{}; call([&]() { return selected.automation->CompareElements(cursor.Get(), selected.document.Get(), &same); });
-                if (same) documentSeen = true;
+                BOOL same{}; call([&]() { return selected.automation->CompareElements(cursor.Get(), selected.pane.Get(), &same); });
+                if (same) paneSeen = true;
                 same = FALSE;
                 call([&]() { return selected.automation->CompareElements(cursor.Get(), selected.element.Get(), &same); });
                 if (same) { rootSeen = true; break; }
                 ComPtr<IUIAutomationElement> parent;
                 call([&]() { return selected.walker->GetParentElement(cursor.Get(), &parent); }); cursor = parent;
             }
-            if (!documentSeen || !rootSeen) throw std::runtime_error("OOBE button left the bound privacy subtree");
+            if (!paneSeen || !rootSeen) throw std::runtime_error("OOBE button left the bound privacy subtree");
             ComPtr<IUIAutomationInvokePattern> pattern;
             call([&]() { return selected.button->GetCurrentPatternAs(UIA_InvokePatternId, IID_PPV_ARGS(&pattern)); });
             if (!pattern) throw std::runtime_error("OOBE Invoke pattern unavailable");

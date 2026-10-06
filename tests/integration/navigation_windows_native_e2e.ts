@@ -124,7 +124,7 @@ function setupSnapshot(prefix: string, entered: number): Json {
       || census.actorInvocationsBeforeSnapshot !== entered || census.invokeAttempted !== (entered > 0)
       || census.available !== true || census.rootStable !== true || census.walkCompleted !== true
       || census.truncated !== false || census.deadlineExpired !== false || census.errors !== 0 || census.providerSkips !== 0
-      || census.verifiedOwners !== 1 || census.privacyDocuments !== 1 || census.eligiblePrivacyButtons !== 1
+      || census.verifiedOwners !== 1 || census.privacyPanes !== 1 || census.eligiblePrivacyButtons !== 1
       || census.sameUserSession !== true || census.verifiedImageLeaf !== 'wwahost.exe'
       || census.windowClass !== 'Windows.UI.Core.CoreWindow' || census.censusAttempts !== 1
       || census.showAttempts !== 0 || census.inputAttempted !== false || census.installAttempted !== false
@@ -148,7 +148,7 @@ function setupSnapshot(prefix: string, entered: number): Json {
         || guard.session !== census.session) throw new Error('fresh setup desktop guard invalid');
   }
   const rows = census.rows as Json[], privateIndices = new Map<number, number>(), semantic: unknown[][] = [];
-  const buttons: Json[] = []; let documents = 0;
+  const buttons: Json[] = []; let panes = 0;
   for (const [index, row] of rows.entries()) {
     const parent = Number(row.parentIndex);
     if (row.index !== index || !Number.isInteger(row.parentIndex) || parent < -1 || parent >= index
@@ -169,12 +169,12 @@ function setupSnapshot(prefix: string, entered: number): Json {
     if (index === 0 && (row.elementName !== 'Microsoft account' || row.controlType !== 50032 || row.nameTruncated !== false)) {
       throw new Error('actual OOBE root role missing');
     }
-    const document = row.elementName === 'Choose privacy settings for your device'
+    const pane = row.elementName === 'Choose privacy settings for your device'
       && row.className === 'Internet Explorer_Server' && row.controlType === 50033
       && row.nameTruncated === false && row.classNameTruncated === false && row.enabled === true && row.offscreen === false;
-    if (document) documents++;
-    if (!document && !privateIndices.has(parent)) continue;
-    const privateParent = document ? -1 : privateIndices.get(parent)!;
+    if (pane) panes++;
+    if (!pane && !privateIndices.has(parent)) continue;
+    const privateParent = pane ? -1 : privateIndices.get(parent)!;
     privateIndices.set(index, semantic.length);
     semantic.push([privateParent, row.elementName, row.automationId, row.className, row.controlType,
       row.enabled, row.offscreen, row.rectangle, row.nameTruncated, row.automationIdTruncated,
@@ -186,7 +186,7 @@ function setupSnapshot(prefix: string, entered: number): Json {
         && ['Next, tab through all privacy settings to continue', 'Accept'].includes(String(row.elementName))) buttons.push(row);
   }
   const digest = createHash('sha256').update(JSON.stringify(semantic)).digest('hex');
-  if (documents !== 1 || buttons.length !== 1 || digest !== census.semanticStateSHA256) {
+  if (panes !== 1 || buttons.length !== 1 || digest !== census.semanticStateSHA256) {
     throw new Error('independent privacy state/unique button binding failed');
   }
   return { ...census, selectedButton: buttons[0] };
