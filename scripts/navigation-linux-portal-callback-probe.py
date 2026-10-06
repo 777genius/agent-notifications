@@ -578,6 +578,11 @@ def main():
     restart_modes = parser.add_mutually_exclusive_group()
     restart_modes.add_argument('--restart-owner-invalidation-test', action='store_true')
     restart_modes.add_argument('--restart-recovery-control-test', action='store_true')
+    restart_modes.add_argument('--wayland-token-test', action='store_true')
+    restart_modes.add_argument('--wayland-token-negative-test', action='store_true')
+    parser.add_argument('--gtk-source-archive', type=Path)
+    parser.add_argument('--wayland-source-provenance', type=Path)
+    parser.add_argument('--virtual-pointer-protocol', type=Path)
     parser.add_argument('--portal-source-archive', type=Path)
     parser.add_argument('--portal-source-sha256')
     parser.add_argument('--portal-source-provenance', type=Path)
@@ -593,12 +598,31 @@ def main():
     if provenance.get('commit') != COMMIT or provenance.get('archiveSHA256') != args.portal_source_sha256 or provenance.get('version') != '1.22.1' or not str(provenance.get('ghCommand', '')).startswith('gh '):
         parser.error('primary gh source provenance/checksum binding required')
     repo = Path(__file__).resolve().parents[1]
+    wayland = args.wayland_token_test or args.wayland_token_negative_test
+    if wayland and os.getuid() == 0:
+        parser.error('Wayland TEST requires an explicit nonroot operator identity')
+    wayland_provenance = None
+    if wayland:
+        if not args.gtk_source_archive or not args.wayland_source_provenance or not args.virtual_pointer_protocol:
+            parser.error('verified GTK archive/provenance and public pointer XML required')
+        wayland_provenance = json.loads(args.wayland_source_provenance.read_text())
+        if (sha(args.gtk_source_archive) != '47a3743d2419a8601e691db37e85bb5fac5ae4b26842177065cd5f22ada23b37'
+            or sha(args.virtual_pointer_protocol) != '3ff6d540be0bc5228195bf072bde42117ea17945a5c2061add5d3cf97d6bb524'
+            or sha(args.wayland_source_provenance) != '3ef298b77b9051c9c7de92628bb3ac35c5cb77d773e4cb62725a69a59ba264c2'):
+            parser.error('primary-reviewed Wayland source snapshot mismatch')
     root = Path(tempfile.mkdtemp(prefix='navigation-linux-portal-test-')).resolve()
     os.chmod(root, 0o700)
     context = root / 'context'; context.mkdir(mode=0o700)
     names = {'navigation-linux-portal-callback-probe.py': Path(__file__),
              'navigation_linux_portal_test_app.py': repo / 'tests/integration/navigation_linux_portal_test_app.py',
              'Dockerfile': repo / 'tests/integration/navigation-linux-portal.Dockerfile'}
+    if wayland:
+        names.update({'navigation-linux-wayland-token-probe.py': repo / 'scripts/navigation-linux-wayland-token-probe.py',
+            'navigation_wayland_pointer_test.c': repo / 'tests/integration/navigation_wayland_pointer_test.c',
+            'Wayland.Dockerfile': repo / 'tests/integration/navigation-linux-wayland.Dockerfile',
+            'gtk-source.tar.xz': args.gtk_source_archive,
+            'wlr-virtual-pointer-unstable-v1.xml': args.virtual_pointer_protocol,
+            'wayland-source-provenance.json': args.wayland_source_provenance})
     for name, path in names.items():
         shutil.copyfile(path, context / name)
     shutil.copyfile(args.portal_source_archive, context / 'portal-source.tar.xz')
@@ -612,6 +636,9 @@ def main():
                   portalSourceDeclaredCommit=COMMIT, sourceProvenance=provenance,
                   ownerToken=token, image=image, container=container, containerUser=container_user, containerInit=True,
                   scenario='daemon_restart_recovery_control' if args.restart_recovery_control_test else ('daemon_restart_owner_invalidation' if args.restart_owner_invalidation_test else 'sender_death'), commands=[], passed=False)
+    if wayland:
+        report.update(scenario='wayland_old_GTK_negative' if args.wayland_token_negative_test else 'wayland_click_token',
+            waylandSourceProvenance=wayland_provenance)
 
     def command(label, argv, timeout):
         try:
@@ -627,14 +654,21 @@ def main():
     try:
         build = command('build', docker + ['build', '--label', 'navigation.test=true', '--label', 'navigation.owner=' + token,
             '--build-arg', 'PORTAL_SOURCE_SHA256=' + args.portal_source_sha256, '--build-arg', 'PORTAL_SOURCE_COMMIT=' + COMMIT,
-            '-t', image, str(context)], 1800)
+            '-t', image + '-portal' if wayland else image, str(context)], 1800)
         if build.returncode != 0:
             raise RuntimeError('image_build_failed_before_show')
+        if wayland:
+            extended = command('wayland_build', docker + ['build', '--label', 'navigation.test=true', '--label', 'navigation.owner=' + token,
+                '--build-arg', 'PORTAL_TEST_IMAGE=' + image + '-portal', '-f', str(context / 'Wayland.Dockerfile'), '-t', image, str(context)], 1800)
+            if extended.returncode != 0: raise RuntimeError('wayland_image_build_failed_before_show')
         report['imageID'] = command('image_identity', docker + ['image', 'inspect', image, '--format', '{{.Id}}'], 10).stdout.decode().strip()
         result = command('run', docker + ['run', '--init', '--name', container, '--user', container_user, '--label', 'navigation.test=true', '--label', 'navigation.owner=' + token,
             '--network=none', '--cap-drop=ALL', '--security-opt=no-new-privileges', '--pids-limit=128', '--memory=2g', '--cpus=2',
             '-e', 'NAVIGATION_TEST_CONTAINER=1', '-e', 'NAVIGATION_RESTART_TEST=' + ('1' if args.restart_owner_invalidation_test or args.restart_recovery_control_test else '0'),
-            '-e', 'NAVIGATION_RESTART_RECOVERY=' + ('1' if args.restart_recovery_control_test else '0'), '-v', str(root) + ':/evidence:rw', image], 60)
+            '-e', 'NAVIGATION_RESTART_RECOVERY=' + ('1' if args.restart_recovery_control_test else '0'),
+            '-e', 'NAVIGATION_WAYLAND_TEST=' + ('1' if wayland else '0'),
+            '-e', 'NAVIGATION_GTK_TOKEN_NEGATIVE=' + ('1' if args.wayland_token_negative_test else '0'),
+            '-v', str(root) + ':/evidence:rw', image], 60)
         report['passed'] = result.returncode == 0 and json.loads((root / 'native-evidence.json').read_text()).get('passed') is True
     except Exception as error:
         report['failure'] = str(error); report['retryAllowed'] = False
