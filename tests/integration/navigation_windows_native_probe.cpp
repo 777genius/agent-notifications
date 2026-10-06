@@ -1254,14 +1254,66 @@ static bool desktopCapture() {
         + ",\"captureScope\":\"primary_monitor_physical_GDI_pixels_non_atomic_metadata\",\"metadata\":" + metadata + "}\n");
     return true;
 }
-// One selected foreground subtree, property reads only; never Invoke or UI input.
-static bool oobePreflight() {
+// Source-bound disposable guest setup state; never used by default diagnostic modes.
+static ULONGLONG oobeSetupDeadline = 0;
+static unsigned oobeSetupInvokeEntered = 0;
+static bool oobeExactSystemImage(SurfaceOwner* peer, const std::wstring& expected) {
+    if (!peer || !peer->live() || expected.empty()) return false;
+    wchar_t image[32768]{}; DWORD size = 32768;
+    if (!QueryFullProcessImageNameW(peer->process, 0, image, &size) || !size || size >= 32768) return false;
+    try {
+        auto actual = fs::canonical(fs::path(std::wstring(image, size))).wstring();
+        std::transform(actual.begin(), actual.end(), actual.begin(), [](wchar_t c) { return std::towlower(c); });
+        return actual == expected && peer->live();
+    } catch (...) { return false; }
+}
+struct OOBESelection {
+    SurfaceScan owners;
+    HWND window{}; DWORD pid{}; std::string created, state, stateSHA;
+    ComPtr<IUIAutomationElement> element, document, button;
+    ComPtr<IUIAutomation> automation; ComPtr<IUIAutomationTreeWalker> walker;
+    std::wstring buttonName, exactSystemImage;
+    bool eligible = false;
+    bool stable() const {
+        auto found = owners.owners.find(pid); DWORD current{}; wchar_t name[121]{};
+        if (found == owners.owners.end() || !oobeExactSystemImage(found->second.get(), exactSystemImage)
+            || GetProcessId(found->second->process) != pid
+            || GetForegroundWindow() != window || !IsWindowVisible(window)
+            || !GetWindowThreadProcessId(window, &current) || current != pid
+            || GetClassNameW(window, name, 121) != 26 || std::wstring(name) != L"Windows.UI.Core.CoreWindow") return false;
+        FILETIME birth{}, exit{}, kernel{}, user{}; ULARGE_INTEGER ticks{};
+        if (!GetProcessTimes(found->second->process, &birth, &exit, &kernel, &user)) return false;
+        ticks.LowPart = birth.dwLowDateTime; ticks.HighPart = birth.dwHighDateTime;
+        return std::to_string(ticks.QuadPart) == created;
+    }
+};
+static std::string oobeStateHash(const std::string& state) {
+    BCRYPT_ALG_HANDLE algorithm{}; BCRYPT_HASH_HANDLE hash{}; BYTE result[32]{}; std::string digest;
+    auto ok = [](NTSTATUS status) { if (status < 0) throw std::runtime_error("OOBE state SHA256 failed"); };
+    try {
+        ok(BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0));
+        ok(BCryptCreateHash(algorithm, &hash, nullptr, 0, nullptr, 0, 0));
+        ok(BCryptHashData(hash, reinterpret_cast<PUCHAR>(const_cast<char*>(state.data())), static_cast<ULONG>(state.size()), 0));
+        ok(BCryptFinishHash(hash, result, sizeof(result), 0));
+        for (BYTE byte : result) { constexpr char hex[] = "0123456789abcdef"; digest += hex[byte >> 4]; digest += hex[byte & 15]; }
+        BCryptDestroyHash(hash); BCryptCloseAlgorithmProvider(algorithm, 0); return digest;
+    } catch (...) { if (hash) BCryptDestroyHash(hash); if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0); throw; }
+}
+static void oobeDurableIntent(const char* name, const std::string& content) {
+    report(name, content);
+    HANDLE file = CreateFileW((root / name).c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (file == INVALID_HANDLE_VALUE) throw std::runtime_error("OOBE intent flush open failed");
+    const BOOL flushed = FlushFileBuffers(file); CloseHandle(file);
+    if (!flushed) throw std::runtime_error("OOBE intent flush failed; no action");
+}
+static std::wstring oobeAuthority(bool setup) {
     auto env = [](const wchar_t* name) {
         wchar_t value[128]{}; DWORD length = GetEnvironmentVariableW(name, value, 128);
         if (!length || length >= 128) throw std::runtime_error("OOBE TEST authority absent");
         return std::wstring(value, length);
     };
-    if (env(L"NAVIGATION_WINDOWS_OOBE_PREFLIGHT_TEST") != L"1"
+    if (env(setup ? L"NAVIGATION_WINDOWS_OOBE_SETUP_TEST" : L"NAVIGATION_WINDOWS_OOBE_PREFLIGHT_TEST") != L"1"
         || env(L"GITHUB_REPOSITORY") != L"777genius/agent-notifications"
         || env(L"GITHUB_EVENT_NAME") != L"workflow_dispatch" || env(L"GITHUB_RUN_ATTEMPT") != L"1"
         || env(L"NAVIGATION_WINDOWS_RUNNER") != L"windows-11-vs2026-arm")
@@ -1271,9 +1323,14 @@ static bool oobePreflight() {
         || !IsWow64Process2(GetCurrentProcess(), &processMachine, &nativeMachine)
         || processMachine != IMAGE_FILE_MACHINE_UNKNOWN || nativeMachine != IMAGE_FILE_MACHINE_ARM64)
         throw std::runtime_error("OOBE exact source/native ARM64 required");
-    const ULONGLONG started = GetTickCount64(), deadline = started + 5000;
+    return source;
+}
+// One selected foreground subtree, property reads only; never Invoke or UI input.
+static bool oobePreflight(const std::string& prefix = "oobe", OOBESelection* selection = nullptr) {
+    const auto source = oobeAuthority(selection != nullptr);
+    const ULONGLONG started = GetTickCount64(), deadline = std::min(started + 5000, oobeSetupDeadline ? oobeSetupDeadline : started + 5000);
     vendorDeadline = deadline; VendorHashFile executable(root / L"navigation-native-probe.exe", 67108864);
-    if (!preflight("oobe-preflight.json")) return false;
+    if (!preflight((prefix + "-preflight.json").c_str())) return false;
     SurfaceScan owners; owners.allowAnyWindowsImage = true; wchar_t windows[32768]{};
     UINT length = GetWindowsDirectoryW(windows, 32768);
     if (!length || length >= 32768 || !ProcessIdToSessionId(GetCurrentProcessId(), &owners.session))
@@ -1293,26 +1350,37 @@ static bool oobePreflight() {
     if (!held || !held->live() || held->imageLeaf.empty() || held->imageLeaf.size() > 120 || classLength <= 0 || classLength >= 120)
         throw std::runtime_error("OOBE selected Windows foreground unavailable");
     const auto created = birth(held); const std::wstring selectedClass(windowClass, classLength);
+    std::wstring exactSystemImage;
+    if (selection) {
+        exactSystemImage = fs::canonical(fs::path(owners.windows) / L"System32" / L"WWAHost.exe").wstring();
+        std::transform(exactSystemImage.begin(), exactSystemImage.end(), exactSystemImage.begin(), [](wchar_t c) { return std::towlower(c); });
+        if (!oobeExactSystemImage(held, exactSystemImage)) throw std::runtime_error("setup requires exact System32 WWAHost kernel image");
+    }
     auto stable = [&]() {
         DWORD current{}; wchar_t name[121]{};
         return held->live() && GetProcessId(held->process) == pid && GetForegroundWindow() == window
             && IsWindow(window) && IsWindowVisible(window) && GetWindowThreadProcessId(window, &current)
             && current == pid && GetClassNameW(window, name, 121) == classLength
-            && std::wstring(name) == selectedClass && birth(held) == created;
+            && std::wstring(name) == selectedClass && birth(held) == created
+            && (!selection || oobeExactSystemImage(held, exactSystemImage));
     };
     if (!stable()) throw std::runtime_error("OOBE foreground changed before census");
-    report("oobe-intent.json", "{\"pid\":" + std::to_string(GetCurrentProcessId()) + ",\"nonce\":" + jsonQuote(uuid)
-        + ",\"sourceSHA\":" + jsonQuote(source) + ",\"foregroundPID\":" + std::to_string(pid)
+    report((prefix + "-intent.json").c_str(), "{\"pid\":" + std::to_string(GetCurrentProcessId()) + ",\"nonce\":" + jsonQuote(uuid)
+        + ",\"sourceSHA\":" + jsonQuote(source) + ",\"binarySHA256\":\"" + executable.digest + "\",\"architecture\":\"ARM64\""
+        + ",\"foregroundPID\":" + std::to_string(pid)
         + ",\"foregroundCreatedUtcTicks\":\"" + created + "\",\"censusAttempts\":1,\"showAttempts\":0,\"inputAttempted\":false}\n");
     unsigned visited{}, count{}, errors{}, providerSkips{}; bool truncated{}, available{}, rootStable{}, completed{};
-    HRESULT lastError = S_OK; std::string rows;
+    HRESULT lastError = S_OK; std::string rows, semanticRows; unsigned documents{}, buttons{}, semanticCount{}; bool rootRole{};
+    ComPtr<IUIAutomationElement> rootElement, privacyDocument, actionButton;
+    ComPtr<IUIAutomation> rootAutomation; ComPtr<IUIAutomationTreeWalker> rootWalker; std::wstring buttonName;
     auto budget = [&]() { return GetTickCount64() < deadline; };
     auto call = [&](auto operation) {
         if (!budget()) { truncated = true; winrt::throw_hresult(E_ABORT); }
         HRESULT hr = operation(); if (!budget()) truncated = true;
         return hr;
     };
-    auto observed = [&](HRESULT hr) { if (FAILED(hr)) { ++errors; lastError = hr; } return SUCCEEDED(hr); };
+    auto observed = [&](HRESULT hr) { const bool valid = selection ? hr == S_OK : SUCCEEDED(hr);
+        if (!valid) { ++errors; lastError = hr; } return valid; };
     auto text = [&](HRESULT hr, BSTR value, bool& clipped) {
         std::unique_ptr<OLECHAR, decltype(&SysFreeString)> owned(value, &SysFreeString);
         if (!observed(hr)) return std::string("null");
@@ -1335,8 +1403,8 @@ static bool oobePreflight() {
                 && reinterpret_cast<HWND>(hwnd) == window && stable() && budget();
         };
         if (!rootBound()) throw std::runtime_error("OOBE UIA foreground binding unavailable");
-        available = true;
-        struct Node { ComPtr<IUIAutomationElement> element; unsigned depth; int parent; };
+        available = true; rootElement = element; rootAutomation = automation; rootWalker = walker;
+        struct Node { ComPtr<IUIAutomationElement> element; unsigned depth; int parent; bool privacy = false; int privacyParent = -1; };
         std::vector<Node> pending{{element, 0, -1}};
         while (!pending.empty() && budget() && visited < 512 && stable()) {
             Node node = std::move(pending.back()); pending.pop_back(); ++visited;
@@ -1384,29 +1452,55 @@ static bool oobePreflight() {
                     + std::to_string(offscreenHR) + ',' + std::to_string(rectHR) + ',' + std::to_string(patternHR) + ',' + std::to_string(afterHR) + "]}";
             if (rows.size() + row.size() + (count ? 1 : 0) > 60000) { truncated = true; break; }
             const int index = static_cast<int>(count++); if (index) rows += ','; rows += row;
+            if (index == 0) rootRole = nameJSON == jsonQuote(L"Microsoft account") && type == UIA_WindowControlTypeId
+                && !nameClipped && held->imageLeaf == L"wwahost.exe" && selectedClass == L"Windows.UI.Core.CoreWindow";
+            const bool isDocument = nameJSON == jsonQuote(L"Choose privacy settings for your device")
+                && classJSON == jsonQuote(L"Internet Explorer_Server") && type == UIA_DocumentControlTypeId
+                && !nameClipped && !classClipped && enabled && !offscreen;
+            if (isDocument) { ++documents; privacyDocument = node.element; }
+            int privacyIndex = node.privacyParent;
+            if (node.privacy || isDocument) {
+                privacyIndex = static_cast<int>(semanticCount++); if (privacyIndex) semanticRows += ',';
+                semanticRows += "[" + std::to_string(isDocument ? -1 : node.privacyParent) + ',' + nameJSON + ',' + idJSON + ',' + classJSON
+                    + ',' + std::to_string(type) + ',' + (enabled ? "true" : "false") + ',' + (offscreen ? "true" : "false")
+                    + ",[" + std::to_string(rectangle.left) + ',' + std::to_string(rectangle.top) + ','
+                    + std::to_string(rectangle.right) + ',' + std::to_string(rectangle.bottom) + "],"
+                    + (nameClipped ? "true" : "false") + ',' + (idClipped ? "true" : "false") + ',' + (classClipped ? "true" : "false")
+                    + ',' + (invokeAvailable ? "true" : "false") + "]";
+                if (!nameClipped && !idClipped && idJSON == jsonQuote(L"OobeSettingsAcceptButton") && type == UIA_ButtonControlTypeId
+                    && enabled && !offscreen && patternValid && invokeAvailable && rectValid && rectangle.left < rectangle.right
+                    && rectangle.top < rectangle.bottom && (nameJSON == jsonQuote(L"Next, tab through all privacy settings to continue")
+                        || nameJSON == jsonQuote(L"Accept"))) {
+                    ++buttons; actionButton = node.element; buttonName = nameJSON == jsonQuote(L"Accept") ? L"Accept" : L"Next, tab through all privacy settings to continue";
+                }
+            }
             ComPtr<IUIAutomationElement> child;
             if (!observed(call([&]() { return walker->GetFirstChildElement(node.element.Get(), &child); }))) continue;
             if (child && node.depth >= 12) { truncated = true; continue; }
             while (child && budget()) {
                 if (pending.size() + visited >= 512) { truncated = true; break; }
-                pending.push_back({child, node.depth + 1, index}); ComPtr<IUIAutomationElement> next;
+                pending.push_back({child, node.depth + 1, index, node.privacy || isDocument, privacyIndex}); ComPtr<IUIAutomationElement> next;
                 if (!observed(call([&]() { return walker->GetNextSiblingElement(child.Get(), &next); }))) break;
                 child = next;
             }
         }
         if (!pending.empty() || !budget() || owners.truncated) truncated = true;
-        rootStable = rootBound() && preflight("oobe-after-preflight.json") && stable();
+        rootStable = rootBound() && preflight((prefix + "-after-preflight.json").c_str()) && stable();
         completed = rootStable && budget() && count && !truncated && !errors && !owners.errors && !providerSkips;
     } catch (const winrt::hresult_error& error) { ++errors; lastError = error.code().value; }
       catch (...) { ++errors; lastError = E_FAIL; }
     const bool expired = !budget(); if (expired) { truncated = true; completed = false; }
+    const auto semanticState = "[" + semanticRows + "]", semanticSHA = oobeStateHash(semanticState);
     const auto result = "{\"pid\":" + std::to_string(GetCurrentProcessId()) + ",\"nonce\":" + jsonQuote(uuid)
         + ",\"sourceSHA\":" + jsonQuote(source) + ",\"binarySHA256\":\"" + executable.digest + "\",\"architecture\":\"ARM64\""
-        + ",\"diagnosticOnly\":true,\"readOnly\":true,\"censusAttempts\":1,\"showAttempts\":0,\"inputAttempted\":false"
-        + ",\"invokeAttempted\":false,\"launchAttempted\":false,\"installAttempted\":false,\"retryAllowed\":false"
+        + ",\"diagnosticOnly\":" + (selection ? "false" : "true") + ",\"readOnly\":" + (selection ? "false" : "true")
+        + ",\"snapshotReadOnly\":true,\"actorInvocationsBeforeSnapshot\":" + std::to_string(oobeSetupInvokeEntered)
+        + ",\"censusAttempts\":1,\"showAttempts\":0,\"inputAttempted\":false"
+        + ",\"invokeAttempted\":" + (oobeSetupInvokeEntered ? "true" : "false") + ",\"launchAttempted\":false,\"installAttempted\":false,\"retryAllowed\":false"
         + ",\"selectorActionQualified\":false,\"negativeIsAbsenceProof\":false,\"sameUserSession\":true"
         + ",\"centerOpenedProved\":false,\"nativeCallbackQualified\":false,\"navigationQualified\":false"
         + ",\"projection\":\"selected_foreground_UIA_properties\",\"imageAuthority\":\"kernel_image_under_Windows_not_signature_qualification\""
+        + ",\"setupImagePathKind\":" + (selection ? "\"exact_Windows_System32_WWAHost_kernel_image\"" : "null")
         + ",\"foregroundHWND\":" + std::to_string(reinterpret_cast<uintptr_t>(window)) + ",\"foregroundPID\":" + std::to_string(pid)
         + ",\"foregroundCreatedUtcTicks\":\"" + created + "\",\"verifiedImageLeaf\":" + jsonQuote(held->imageLeaf)
         + ",\"windowClass\":" + jsonQuote(selectedClass) + ",\"session\":" + std::to_string(owners.session)
@@ -1415,9 +1509,153 @@ static bool oobePreflight() {
         + ",\"deadlineExpired\":" + (expired ? "true" : "false") + ",\"elapsedMs\":" + std::to_string(GetTickCount64() - started)
         + ",\"visited\":" + std::to_string(visited) + ",\"count\":" + std::to_string(count) + ",\"providerSkips\":" + std::to_string(providerSkips)
         + ",\"verifiedOwners\":" + std::to_string(owners.owners.size()) + ",\"errors\":" + std::to_string(errors + owners.errors)
+        + ",\"semanticStateSHA256\":\"" + semanticSHA + "\",\"privacyDocuments\":" + std::to_string(documents)
+        + ",\"eligiblePrivacyButtons\":" + std::to_string(buttons)
         + ",\"lastErrorHRESULT\":" + std::to_string(lastError) + ",\"rows\":[" + rows + "]}\n";
     if (result.size() > 65536) throw std::runtime_error("OOBE serialized report exceeds 64KiB");
-    report("oobe-uia.json", result); return available && rootStable;
+    report((prefix + "-uia.json").c_str(), result);
+    if (selection) {
+        selection->window = window; selection->pid = pid; selection->created = created;
+        selection->element = rootElement; selection->document = privacyDocument; selection->button = actionButton;
+        selection->automation = rootAutomation; selection->walker = rootWalker;
+        selection->buttonName = buttonName; selection->exactSystemImage = exactSystemImage;
+        selection->state = semanticState; selection->stateSHA = semanticSHA;
+        selection->eligible = completed && rootRole && documents == 1 && buttons == 1 && owners.owners.size() == 1;
+        selection->owners = std::move(owners);
+    }
+    return available && rootStable;
+}
+// Exactly one finite fresh-guest flow. Armed boundary without a terminal receipt is unknown.
+static bool oobeSetup() {
+    const auto source = oobeAuthority(true); const ULONGLONG started = GetTickCount64();
+    oobeSetupDeadline = started + 60000; vendorDeadline = oobeSetupDeadline;
+    VendorHashFile executable(root / L"navigation-native-probe.exe", 67108864);
+    unsigned nextCalls{}, acceptCalls{}, returned{}, progressed{}; bool armed{}, uncertain{}, accepted{}, windowGone{};
+    HRESULT lastError = S_OK; std::string phase = "initial", previousState, previousBirth;
+    HWND previousWindow{}; DWORD previousPID{};
+    const auto header = "{\"pid\":" + std::to_string(GetCurrentProcessId()) + ",\"nonce\":" + jsonQuote(uuid)
+        + ",\"sourceSHA\":" + jsonQuote(source) + ",\"binarySHA256\":\"" + executable.digest + "\",\"architecture\":\"ARM64\"";
+    oobeDurableIntent("oobe-setup-intent.json", header + ",\"scope\":\"disposable_guest_privacy_OOBE_setup_only\",\"readOnly\":false"
+        + ",\"maxNextCalls\":4,\"maxAcceptCalls\":1,\"helperBudgetMs\":60000,\"cooperativeUIBudgetMs\":5000"
+        + ",\"showAttempts\":0,\"keyboardOrPointerInputAttempted\":false,\"registryWriteAPIAttempted\":false,\"retryAllowed\":false}\n");
+    try {
+        for (unsigned step = 0; step < 5; ++step) {
+            const auto prefix = "oobe-setup-" + std::to_string(step);
+            phase = prefix + "-before"; OOBESelection selected;
+            if (!oobePreflight(phase, &selected) || !selected.eligible || !selected.stable())
+                throw std::runtime_error("fresh exact OOBE privacy selection unavailable");
+            if (!previousState.empty() && (selected.state != previousState || selected.pid != previousPID
+                || selected.created != previousBirth || selected.window != previousWindow))
+                throw std::runtime_error("OOBE state changed outside confirmed progression");
+            const bool accept = selected.buttonName == L"Accept";
+            if (accept ? acceptCalls >= 1 : nextCalls >= 4) throw std::runtime_error("finite OOBE action limit reached");
+            const ULONGLONG invokeDeadline = std::min(oobeSetupDeadline, GetTickCount64() + 5000);
+            auto budget = [&]() { if (GetTickCount64() >= invokeDeadline || !selected.stable())
+                throw std::runtime_error("OOBE immediate binding/deadline unavailable"); };
+            auto call = [&](auto operation) { budget(); HRESULT hr = operation();
+                if (hr != S_OK) winrt::throw_hresult(FAILED(hr) ? hr : E_FAIL); };
+            auto exactText = [&](IUIAutomationElement* element, unsigned property, const wchar_t* expected) {
+                BSTR value{}; budget(); HRESULT hr = property == 1 ? element->get_CurrentAutomationId(&value)
+                    : property == 2 ? element->get_CurrentClassName(&value) : element->get_CurrentName(&value);
+                std::unique_ptr<OLECHAR, decltype(&SysFreeString)> owned(value, &SysFreeString); if (hr != S_OK) winrt::throw_hresult(FAILED(hr) ? hr : E_FAIL);
+                if (!value || SysStringLen(value) > 120 || std::wstring(value, SysStringLen(value)) != expected)
+                    throw std::runtime_error("OOBE selector changed before effect");
+            };
+            int rootPID{}; UIA_HWND hwnd{};
+            call([&]() { return selected.element->get_CurrentProcessId(&rootPID); });
+            call([&]() { return selected.element->get_CurrentNativeWindowHandle(&hwnd); });
+            if (rootPID != static_cast<int>(selected.pid) || reinterpret_cast<HWND>(hwnd) != selected.window)
+                throw std::runtime_error("OOBE UIA root changed before effect");
+            exactText(selected.element.Get(), 0, L"Microsoft account");
+            exactText(selected.document.Get(), 0, L"Choose privacy settings for your device");
+            exactText(selected.document.Get(), 2, L"Internet Explorer_Server");
+            exactText(selected.button.Get(), 1, L"OobeSettingsAcceptButton");
+            exactText(selected.button.Get(), 0, selected.buttonName.c_str());
+            CONTROLTYPEID type{}; BOOL enabled{}, offscreen{}; int buttonPID{}, documentPID{};
+            call([&]() { return selected.document->get_CurrentProcessId(&documentPID); });
+            call([&]() { return selected.document->get_CurrentControlType(&type); });
+            call([&]() { return selected.document->get_CurrentIsOffscreen(&offscreen); });
+            if (documentPID != rootPID || type != UIA_DocumentControlTypeId || offscreen)
+                throw std::runtime_error("OOBE privacy document changed before effect");
+            call([&]() { return selected.button->get_CurrentProcessId(&buttonPID); });
+            call([&]() { return selected.button->get_CurrentControlType(&type); });
+            call([&]() { return selected.button->get_CurrentIsEnabled(&enabled); });
+            call([&]() { return selected.button->get_CurrentIsOffscreen(&offscreen); });
+            if (buttonPID != rootPID || type != UIA_ButtonControlTypeId || !enabled || offscreen)
+                throw std::runtime_error("OOBE button no longer eligible");
+            // Fresh ancestry read of this exact element, not a desktop-wide selector/action.
+            ComPtr<IUIAutomationElement> cursor = selected.button; bool documentSeen{}, rootSeen{};
+            for (unsigned depth = 0; cursor && depth <= 12; ++depth) {
+                BOOL same{}; call([&]() { return selected.automation->CompareElements(cursor.Get(), selected.document.Get(), &same); });
+                if (same) documentSeen = true;
+                same = FALSE;
+                call([&]() { return selected.automation->CompareElements(cursor.Get(), selected.element.Get(), &same); });
+                if (same) { rootSeen = true; break; }
+                ComPtr<IUIAutomationElement> parent;
+                call([&]() { return selected.walker->GetParentElement(cursor.Get(), &parent); }); cursor = parent;
+            }
+            if (!documentSeen || !rootSeen) throw std::runtime_error("OOBE button left the bound privacy subtree");
+            ComPtr<IUIAutomationInvokePattern> pattern;
+            call([&]() { return selected.button->GetCurrentPatternAs(UIA_InvokePatternId, IID_PPV_ARGS(&pattern)); });
+            if (!pattern) throw std::runtime_error("OOBE Invoke pattern unavailable");
+            budget(); phase = prefix + "-invoke";
+            const auto action = accept ? L"Accept" : L"Next";
+            oobeDurableIntent((prefix + "-armed.json").c_str(), header + ",\"step\":" + std::to_string(step)
+                + ",\"action\":" + jsonQuote(action) + ",\"invokeBoundaryArmed\":true,\"invokeCallEntered\":false"
+                + ",\"foregroundPID\":" + std::to_string(selected.pid) + ",\"foregroundCreatedUtcTicks\":\"" + selected.created
+                + "\",\"foregroundHWND\":" + std::to_string(reinterpret_cast<uintptr_t>(selected.window))
+                + ",\"beforeStateSHA256\":\"" + selected.stateSHA + "\",\"targetAutomationId\":\"OobeSettingsAcceptButton\""
+                + ",\"targetName\":" + jsonQuote(selected.buttonName)
+                + ",\"setupImagePathKind\":\"exact_Windows_System32_WWAHost_kernel_image\""
+                + ",\"atomicUIBindingQualified\":false,\"retryAllowed\":false}\n");
+            armed = true; budget(); uncertain = true; ++oobeSetupInvokeEntered;
+            if (accept) ++acceptCalls; else ++nextCalls;
+            const HRESULT hr = pattern->Invoke(); ++returned;
+            report((prefix + "-returned.json").c_str(), header + ",\"step\":" + std::to_string(step)
+                + ",\"action\":" + jsonQuote(action) + ",\"invokeCallEntered\":true,\"invokeCallReturned\":true,\"hresult\":"
+                + std::to_string(hr) + ",\"progressionObserved\":false}\n");
+            // S_OK is API acceptance only. A late/error/same-state result never permits another action.
+            if (hr != S_OK || GetTickCount64() >= invokeDeadline) { lastError = hr == S_OK ? E_ABORT : hr;
+                throw std::runtime_error("OOBE Invoke failed or exceeded cooperative budget"); }
+            std::string afterSHA;
+            if (accept) {
+                phase = prefix + "-window-disappearance";
+                const ULONGLONG afterDeadline = std::min(oobeSetupDeadline, GetTickCount64() + 5000);
+                while (IsWindow(selected.window) && GetTickCount64() < afterDeadline) Sleep(20);
+                if (IsWindow(selected.window) || GetTickCount64() >= afterDeadline
+                    || !preflight("oobe-setup-after-preflight.json") || GetTickCount64() >= oobeSetupDeadline)
+                    throw std::runtime_error("accepted OOBE window disappearance unproved");
+                windowGone = true; accepted = true;
+            } else {
+                phase = prefix + "-after"; OOBESelection after;
+                if (!oobePreflight(phase, &after) || !after.eligible || !after.stable()
+                    || after.state == selected.state || after.pid != selected.pid
+                    || after.created != selected.created || after.window != selected.window)
+                    throw std::runtime_error("fresh OOBE progression unproved; no repeat");
+                afterSHA = after.stateSHA; previousState = after.state; previousPID = after.pid;
+                previousBirth = after.created; previousWindow = after.window;
+            }
+            report((prefix + "-progress.json").c_str(), header + ",\"step\":" + std::to_string(step)
+                + ",\"action\":" + jsonQuote(action) + ",\"beforeStateSHA256\":\"" + selected.stateSHA
+                + "\",\"afterStateSHA256\":" + (accept ? "null" : "\"" + afterSHA + "\"")
+                + ",\"progressionObserved\":true,\"ownedOOBEWindowGone\":" + (windowGone ? "true" : "false") + "}\n");
+            ++progressed; uncertain = false; if (accepted) break;
+        }
+        if (!accepted || GetTickCount64() >= oobeSetupDeadline) throw std::runtime_error("OOBE Accept not reached within finite budget");
+        phase = "complete";
+    } catch (const winrt::hresult_error& error) { lastError = error.code().value; accepted = false; }
+      catch (const std::exception& error) { if (lastError == S_OK) lastError = E_FAIL; accepted = false; std::cerr << error.what() << '\n'; }
+    report("oobe-setup-result.json", header + ",\"scope\":\"disposable_guest_privacy_OOBE_setup_only\",\"readOnly\":false"
+        + ",\"setupQualified\":" + (accepted ? "true" : "false") + ",\"phase\":" + jsonQuote(winrt::to_hstring(phase).c_str())
+        + ",\"nextCallsEntered\":" + std::to_string(nextCalls) + ",\"acceptCallsEntered\":" + std::to_string(acceptCalls)
+        + ",\"invokeCallsEntered\":" + std::to_string(oobeSetupInvokeEntered) + ",\"invokeCallsReturned\":" + std::to_string(returned)
+        + ",\"progressionsObserved\":" + std::to_string(progressed) + ",\"invokeBoundaryArmed\":" + (armed ? "true" : "false")
+        + ",\"invokeEffectUncertain\":" + (uncertain ? "true" : "false") + ",\"ownedOOBEWindowGone\":" + (windowGone ? "true" : "false")
+        + ",\"elapsedMs\":" + std::to_string(GetTickCount64() - started) + ",\"lastErrorHRESULT\":" + std::to_string(lastError)
+        + ",\"showAttempts\":0,\"keyboardOrPointerInputAttempted\":false,\"registryWriteAPIAttempted\":false"
+        + ",\"installAttempted\":false,\"launchAttempted\":false,\"retryAllowed\":false,\"atomicUIBindingQualified\":false"
+        + ",\"centerOpenedProved\":false,\"nativeCallbackQualified\":false,\"navigationQualified\":false,\"processQuiescenceQualified\":false}\n");
+    return accepted;
 }
 static void vendorArchiveIdentity() {
     ComPtr<IStream> stream;
@@ -1596,6 +1834,7 @@ int wmain(int argc, wchar_t** argv) {
         if (mode == L"preflight") return preflight() ? 0 : 3;
         if (mode == L"desktop-capture") { if (argc != 4) return 2; return desktopCapture() ? 0 : 3; }
         if (mode == L"oobe-preflight") { if (argc != 4) return 2; return oobePreflight() ? 0 : 3; }
+        if (mode == L"oobe-setup") { if (argc != 4) return 2; return oobeSetup() ? 0 : 1; }
         if (mode == L"center-surface") return centerSurface() ? 0 : 3;
         if (mode == L"taskbar-uia") return taskbarUI() ? 0 : 3;
         if (mode == L"send") return send();

@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'Read-only preflight/taskbar/desktop/OOBE census, single Win+N diagnostic, or native callback'
+        description: 'Read-only census/capture, finite disposable guest OOBE setup, or native callback'
         type: choice
         default: policy_preflight
         options:
@@ -19,6 +19,7 @@ on:
           - taskbar_uia
           - desktop_capture
           - oobe_preflight
+          - oobe_setup
           - native_callback
 permissions:
   contents: read
@@ -36,6 +37,7 @@ jobs:
       NAVIGATION_WINDOWS_TASKBAR_UIA: ${{ inputs.mode == 'taskbar_uia' && '1' || '0' }}
       NAVIGATION_WINDOWS_DESKTOP_CAPTURE_TEST: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'desktop_capture' && '1' || '0' }}
       NAVIGATION_WINDOWS_OOBE_PREFLIGHT_TEST: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'oobe_preflight' && '1' || '0' }}
+      NAVIGATION_WINDOWS_OOBE_SETUP_TEST: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'oobe_setup' && '1' || '0' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -77,11 +79,30 @@ jobs:
           node --experimental-strip-types tests/integration/navigation_windows_native_e2e.ts (Join-Path $env:RUNNER_TEMP 'navigation-native-probe.exe')
           if ($LASTEXITCODE -ne 0) { throw 'native callback unavailable or failed; inspect evidence' }
       - name: Preserve partial native evidence
-        if: always() && steps.probe.outputs.evidence_root != '' && inputs.mode != 'desktop_capture' && inputs.mode != 'oobe_preflight'
+        if: always() && steps.probe.outputs.evidence_root != '' && inputs.mode != 'desktop_capture' && inputs.mode != 'oobe_preflight' && inputs.mode != 'oobe_setup'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: navigation-windows-native-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.probe.outputs.evidence_root }}
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14
+      - name: Preserve only finite disposable guest OOBE setup evidence
+        if: always() && steps.probe.outputs.evidence_root != '' && github.event_name == 'workflow_dispatch' && inputs.mode == 'oobe_setup'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: navigation-windows-oobe-setup-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.probe.outputs.evidence_root }}/.owned-test-root
+            ${{ steps.probe.outputs.evidence_root }}/evidence.json
+            ${{ steps.probe.outputs.evidence_root }}/oobe-setup-records.json
+            ${{ steps.probe.outputs.evidence_root }}/center-policy.json
+            ${{ steps.probe.outputs.evidence_root }}/preflight.json
+            ${{ steps.probe.outputs.evidence_root }}/capture-preflight.json
+            ${{ steps.probe.outputs.evidence_root }}/capture-after-preflight.json
+            ${{ steps.probe.outputs.evidence_root }}/desktop-capture-intent.json
+            ${{ steps.probe.outputs.evidence_root }}/desktop-capture.json
+            ${{ steps.probe.outputs.evidence_root }}/desktop-capture.png
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 14

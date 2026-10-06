@@ -22,23 +22,35 @@ let binary: string | undefined;
 let nonce: string | undefined;
 let installed = false;
 let exitCode = 1;
+let setupActor: Step | undefined;
+const setupRecords: Record<string, Json> = {};
+const setupNames = ['oobe-setup-intent.json', 'oobe-setup-result.json', 'oobe-setup-after-preflight.json',
+  ...Array.from({ length: 5 }, (_, index) => [
+    ...['armed', 'returned', 'progress'].map(phase => `oobe-setup-${index}-${phase}.json`),
+    ...['before', 'after'].flatMap(phase => ['preflight', 'after-preflight', 'intent', 'uia']
+      .map(kind => `oobe-setup-${index}-${phase}-${kind}.json`)),
+  ]).flat()];
 function read(name: string): Json {
   if (!root) throw new Error('owned root absent');
   const path = join(root, name);
-  if (statSync(path).size > (name === 'oobe-uia.json' ? 65_536 : 16_384)) throw new Error(`oversized ${name}`);
+  const st = lstatSync(path);
+  if (!st.isFile() || st.isSymbolicLink() || st.nlink !== 1 || realpathSync(path) !== path
+      || st.size > (name.endsWith('-uia.json') ? 65_536 : 16_384)) throw new Error(`invalid bounded ${name}`);
   const value: unknown = JSON.parse(readFileSync(path, 'utf8'));
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`invalid ${name}`);
   return value as Json;
 }
 function run(mode: string, timeout: number): Step {
   if (!root || !binary || !nonce) throw new Error('owned fixture absent');
-  const selectedDiagnostic = mode === 'desktop-capture' || mode === 'oobe-preflight';
+  const selectedDiagnostic = mode === 'desktop-capture' || mode === 'oobe-preflight' || mode === 'oobe-setup';
   const env: NodeJS.ProcessEnv = selectedDiagnostic ? Object.fromEntries([
     'SystemRoot', 'WINDIR', 'PATH', 'TEMP', 'TMP', 'CI', 'GITHUB_ACTIONS', 'GITHUB_REPOSITORY',
     'GITHUB_EVENT_NAME', 'GITHUB_RUN_ATTEMPT', 'NAVIGATION_SOURCE_SHA', 'NAVIGATION_WINDOWS_RUNNER',
-    'NAVIGATION_WINDOWS_DESKTOP_CAPTURE_TEST', 'NAVIGATION_WINDOWS_OOBE_PREFLIGHT_TEST',
+    'NAVIGATION_WINDOWS_DESKTOP_CAPTURE_TEST', 'NAVIGATION_WINDOWS_OOBE_PREFLIGHT_TEST', 'NAVIGATION_WINDOWS_OOBE_SETUP_TEST',
   ].filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]])) : { ...process.env };
   env.AGENT_NOTIFY_NAVIGATION_WINDOWS_E2E = '1';
+  // The follow-up is read-only and only runs after the setup actor was collected/qualified.
+  if (mode === 'desktop-capture' && evidence.oobeSetupQualified === true) env.NAVIGATION_WINDOWS_DESKTOP_CAPTURE_TEST = '1';
   const result = spawnSync(binary, [mode, root, nonce], { cwd: root, encoding: 'utf8',
     env, timeout, maxBuffer: 65_536, windowsHide: selectedDiagnostic });
   const step: Step = { mode, pid: result.pid, status: result.status, signal: result.signal,
@@ -86,6 +98,164 @@ function observeShow(sender: Step): void {
   // Missing terminal native evidence (crash/timeout/write failure) remains unknown.
   if (evidence.showAttempts === null) { evidence.nativeEffectUncertain = true; evidence.showCallOutcome = 'unknown'; }
 }
+function collectSetupRecords(): void {
+  if (!root || !setupActor) return;
+  for (const name of setupNames) {
+    if (!existsSync(join(root, name))) continue;
+    try {
+      const record = read(name);
+      if (record.pid !== setupActor.pid || record.nonce !== nonce) throw new Error('setup actor correlation invalid');
+      setupRecords[name] = record;
+    } catch (error: unknown) {
+      evidence.setupRecordErrors = [...(evidence.setupRecordErrors as string[] ?? []), `${name}: ${String(error)}`];
+      evidence.oobeSetupQualified = false; evidence.invokeEffectUncertain = true;
+    }
+  }
+}
+function setupRecord(name: string): Json {
+  const record = setupRecords[name];
+  if (!record || record.sourceSHA !== evidence.sourceSHA || record.binarySHA256 !== evidence.binarySHA256
+      || record.architecture !== 'ARM64') throw new Error(`missing/source-mismatched setup ${name}`);
+  return record;
+}
+function setupSnapshot(prefix: string, entered: number): Json {
+  const census = setupRecord(`${prefix}-uia.json`), intent = setupRecord(`${prefix}-intent.json`);
+  if (census.snapshotReadOnly !== true || census.readOnly !== false || census.diagnosticOnly !== false
+      || census.actorInvocationsBeforeSnapshot !== entered || census.invokeAttempted !== (entered > 0)
+      || census.available !== true || census.rootStable !== true || census.walkCompleted !== true
+      || census.truncated !== false || census.deadlineExpired !== false || census.errors !== 0 || census.providerSkips !== 0
+      || census.verifiedOwners !== 1 || census.privacyDocuments !== 1 || census.eligiblePrivacyButtons !== 1
+      || census.sameUserSession !== true || census.verifiedImageLeaf !== 'wwahost.exe'
+      || census.windowClass !== 'Windows.UI.Core.CoreWindow' || census.censusAttempts !== 1
+      || census.showAttempts !== 0 || census.inputAttempted !== false || census.installAttempted !== false
+      || census.launchAttempted !== false || census.retryAllowed !== false
+      || census.projection !== 'selected_foreground_UIA_properties'
+      || census.imageAuthority !== 'kernel_image_under_Windows_not_signature_qualification'
+      || census.setupImagePathKind !== 'exact_Windows_System32_WWAHost_kernel_image'
+      || !Number.isInteger(census.foregroundPID) || Number(census.foregroundPID) <= 0 || Number(census.foregroundPID) > 0xffffffff
+      || !Number.isInteger(census.foregroundHWND) || Number(census.foregroundHWND) <= 0
+      || typeof census.foregroundCreatedUtcTicks !== 'string' || !/^[1-9][0-9]{0,19}$/.test(census.foregroundCreatedUtcTicks)
+      || !Number.isInteger(census.session) || Number(census.session) <= 0
+      || !Number.isInteger(census.elapsedMs) || Number(census.elapsedMs) < 0 || Number(census.elapsedMs) >= 5000
+      || !Array.isArray(census.rows) || census.rows.length < 1 || census.rows.length > 512
+      || census.rows.length !== census.count || census.visited !== census.count
+      || intent.foregroundPID !== census.foregroundPID || intent.foregroundCreatedUtcTicks !== census.foregroundCreatedUtcTicks) {
+    throw new Error('complete bound OOBE setup census required');
+  }
+  for (const kind of ['preflight', 'after-preflight']) {
+    const guard = setupRecords[`${prefix}-${kind}.json`];
+    if (!guard || guard.ready !== true || guard.connectionState !== 0 || guard.connectionStateKnown !== true
+        || guard.session !== census.session) throw new Error('fresh setup desktop guard invalid');
+  }
+  const rows = census.rows as Json[], privateIndices = new Map<number, number>(), semantic: unknown[][] = [];
+  const buttons: Json[] = []; let documents = 0;
+  for (const [index, row] of rows.entries()) {
+    const parent = Number(row.parentIndex);
+    if (row.index !== index || !Number.isInteger(row.parentIndex) || parent < -1 || parent >= index
+        || !Number.isInteger(row.depth) || Number(row.depth) > 12 || Number(row.depth) < 0
+        || (parent === -1 ? index !== 0 || row.depth !== 0 : row.depth !== Number(rows[parent]?.depth) + 1)
+        || row.providerPID !== census.foregroundPID || row.providerCreatedUtcTicks !== census.foregroundCreatedUtcTicks
+        || row.verifiedImageLeaf !== 'wwahost.exe'
+        || [row.elementName, row.automationId, row.className].some(value => typeof value !== 'string' || value.length > 120)
+        || [row.nameTruncated, row.automationIdTruncated, row.classNameTruncated,
+          row.enabled, row.offscreen, row.invokePatternAvailable].some(value => typeof value !== 'boolean')
+        || !Number.isInteger(row.controlType) || !Array.isArray(row.propertyHRESULTs)
+        || row.propertyHRESULTs.length !== 10 || row.propertyHRESULTs.some(value => value !== 0)
+        || !Array.isArray(row.rectangle) || row.rectangle.length !== 4
+        || row.rectangle.some(value => !Number.isInteger(value) || Math.abs(Number(value)) > 1048576)
+        || Number(row.rectangle[0]) > Number(row.rectangle[2]) || Number(row.rectangle[1]) > Number(row.rectangle[3])) {
+      throw new Error('setup census row not fully verified');
+    }
+    if (index === 0 && (row.elementName !== 'Microsoft account' || row.controlType !== 50032 || row.nameTruncated !== false)) {
+      throw new Error('actual OOBE root role missing');
+    }
+    const document = row.elementName === 'Choose privacy settings for your device'
+      && row.className === 'Internet Explorer_Server' && row.controlType === 50033
+      && row.nameTruncated === false && row.classNameTruncated === false && row.enabled === true && row.offscreen === false;
+    if (document) documents++;
+    if (!document && !privateIndices.has(parent)) continue;
+    const privateParent = document ? -1 : privateIndices.get(parent)!;
+    privateIndices.set(index, semantic.length);
+    semantic.push([privateParent, row.elementName, row.automationId, row.className, row.controlType,
+      row.enabled, row.offscreen, row.rectangle, row.nameTruncated, row.automationIdTruncated,
+      row.classNameTruncated, row.invokePatternAvailable]);
+    if (row.automationId === 'OobeSettingsAcceptButton' && row.controlType === 50000 && row.enabled === true
+        && row.offscreen === false && row.invokePatternAvailable === true && row.nameTruncated === false
+        && row.automationIdTruncated === false && Number(row.rectangle[0]) < Number(row.rectangle[2])
+        && Number(row.rectangle[1]) < Number(row.rectangle[3])
+        && ['Next, tab through all privacy settings to continue', 'Accept'].includes(String(row.elementName))) buttons.push(row);
+  }
+  const digest = createHash('sha256').update(JSON.stringify(semantic)).digest('hex');
+  if (documents !== 1 || buttons.length !== 1 || digest !== census.semanticStateSHA256) {
+    throw new Error('independent privacy state/unique button binding failed');
+  }
+  return { ...census, selectedButton: buttons[0] };
+}
+function verifySetup(step: Step): void {
+  collectSetupRecords();
+  if (evidence.setupRecordErrors) throw new Error('partial setup evidence invalid');
+  const result = setupRecord('oobe-setup-result.json'), intent = setupRecord('oobe-setup-intent.json');
+  evidence.oobeSetupResult = result;
+  const count = Number(result.invokeCallsEntered), next = Number(result.nextCallsEntered);
+  if (!Number.isInteger(count) || count < 0 || count > 5 || !Number.isInteger(next) || next < 0 || next > 4
+      || !Number.isInteger(result.acceptCallsEntered) || Number(result.acceptCallsEntered) < 0 || Number(result.acceptCallsEntered) > 1
+      || count !== next + Number(result.acceptCallsEntered) || typeof result.invokeEffectUncertain !== 'boolean'
+      || !Number.isInteger(result.invokeCallsReturned) || Number(result.invokeCallsReturned) < 0 || Number(result.invokeCallsReturned) > count
+      || !Number.isInteger(result.progressionsObserved) || Number(result.progressionsObserved) < 0
+      || Number(result.progressionsObserved) > Number(result.invokeCallsReturned)) throw new Error('terminal setup state invalid');
+  evidence.invokeEffectUncertain = result.invokeEffectUncertain;
+  evidence.invokeCallsEntered = result.invokeCallsEntered;
+  if (intent.maxNextCalls !== 4 || intent.maxAcceptCalls !== 1 || intent.helperBudgetMs !== 60000
+      || intent.cooperativeUIBudgetMs !== 5000 || intent.retryAllowed !== false) throw new Error('finite setup intent invalid');
+  requireSuccess(step);
+  if (result.setupQualified !== true || result.phase !== 'complete' || result.readOnly !== false
+      || !Number.isInteger(next) || next < 0 || next > 4 || result.acceptCallsEntered !== 1 || count !== next + 1
+      || result.invokeCallsReturned !== count || result.progressionsObserved !== count || result.invokeBoundaryArmed !== true
+      || result.invokeEffectUncertain !== false || result.ownedOOBEWindowGone !== true || result.lastErrorHRESULT !== 0
+      || !Number.isInteger(result.elapsedMs) || Number(result.elapsedMs) < 0 || Number(result.elapsedMs) >= 60000
+      || result.showAttempts !== 0 || result.keyboardOrPointerInputAttempted !== false || result.registryWriteAPIAttempted !== false
+      || result.installAttempted !== false || result.launchAttempted !== false || result.retryAllowed !== false
+      || result.atomicUIBindingQualified !== false || result.centerOpenedProved !== false
+      || result.nativeCallbackQualified !== false || result.navigationQualified !== false || result.processQuiescenceQualified !== false) {
+    throw new Error('known finite setup completion required');
+  }
+  let previous: Json | undefined;
+  for (let index = 0; index < count; index++) {
+    const prefix = `oobe-setup-${index}`, before = setupSnapshot(`${prefix}-before`, index);
+    const armed = setupRecord(`${prefix}-armed.json`), returned = setupRecord(`${prefix}-returned.json`);
+    const progress = setupRecord(`${prefix}-progress.json`), accept = index === next, action = accept ? 'Accept' : 'Next';
+    const button = before.selectedButton as Json;
+    if ([armed, returned, progress].some(record => record.step !== index || record.action !== action)
+        || armed.invokeBoundaryArmed !== true || armed.invokeCallEntered !== false || armed.retryAllowed !== false
+        || armed.setupImagePathKind !== 'exact_Windows_System32_WWAHost_kernel_image'
+        || armed.targetAutomationId !== button.automationId || armed.targetName !== button.elementName
+        || button.elementName !== (accept ? 'Accept' : 'Next, tab through all privacy settings to continue')
+        || armed.beforeStateSHA256 !== before.semanticStateSHA256 || progress.beforeStateSHA256 !== before.semanticStateSHA256
+        || ['foregroundPID', 'foregroundCreatedUtcTicks', 'foregroundHWND'].some(key => armed[key] !== before[key])
+        || returned.invokeCallEntered !== true || returned.invokeCallReturned !== true || returned.hresult !== 0
+        || progress.progressionObserved !== true || progress.ownedOOBEWindowGone !== accept
+        || previous && (previous.semanticStateSHA256 !== before.semanticStateSHA256
+          || ['foregroundPID', 'foregroundCreatedUtcTicks', 'foregroundHWND'].some(key => previous![key] !== before[key]))) {
+      throw new Error('setup intent/return/fresh progression chain invalid');
+    }
+    if (accept) {
+      if (progress.afterStateSHA256 !== null) throw new Error('Accept requires window disappearance, not guessed subtree');
+    } else {
+      const after = setupSnapshot(`${prefix}-after`, index + 1);
+      if (after.semanticStateSHA256 === before.semanticStateSHA256 || progress.afterStateSHA256 !== after.semanticStateSHA256
+          || ['foregroundPID', 'foregroundCreatedUtcTicks', 'foregroundHWND'].some(key => after[key] !== before[key])) {
+        throw new Error('distinct fresh same-owner OOBE progression unproved');
+      }
+      previous = after;
+    }
+  }
+  const finalGuard = setupRecords['oobe-setup-after-preflight.json'];
+  if (!finalGuard || finalGuard.ready !== true || finalGuard.connectionStateKnown !== true || finalGuard.connectionState !== 0
+      || createHash('sha256').update(readFileSync(binary!)).digest('hex') !== evidence.binarySHA256) {
+    throw new Error('final fresh desktop/binary guard unproved');
+  }
+  evidence.oobeSetupQualified = true; evidence.invokeEffectUncertain = false;
+}
 async function main(): Promise<void> {
   if (process.env.AGENT_NOTIFY_NAVIGATION_WINDOWS_E2E !== '1' || process.env.CI !== 'true'
       || process.env.GITHUB_ACTIONS !== 'true' || process.platform !== 'win32') {
@@ -122,17 +292,20 @@ async function main(): Promise<void> {
   const oobeFlag = process.env.NAVIGATION_WINDOWS_OOBE_PREFLIGHT_TEST;
   if (oobeFlag !== undefined && oobeFlag !== '0' && oobeFlag !== '1') throw new Error('invalid OOBE preflight flag');
   const oobeOnly = oobeFlag === '1';
-  if ((surfaceOnly || taskbarOnly || captureOnly || oobeOnly) && !diagnosticOnly
-      || Number(surfaceOnly) + Number(taskbarOnly) + Number(captureOnly) + Number(oobeOnly) > 1) {
-    throw new Error('taskbar, surface, desktop capture, OOBE census and native callback modes are exclusive');
+  const setupFlag = process.env.NAVIGATION_WINDOWS_OOBE_SETUP_TEST;
+  if (setupFlag !== undefined && setupFlag !== '0' && setupFlag !== '1') throw new Error('invalid OOBE setup flag');
+  const setupOnly = setupFlag === '1';
+  if ((surfaceOnly || taskbarOnly || captureOnly || oobeOnly || setupOnly) && !diagnosticOnly
+      || Number(surfaceOnly) + Number(taskbarOnly) + Number(captureOnly) + Number(oobeOnly) + Number(setupOnly) > 1) {
+    throw new Error('selected TEST modes are exclusive');
   }
-  if ((captureOnly || oobeOnly) && (process.env.GITHUB_REPOSITORY !== '777genius/agent-notifications'
+  if ((captureOnly || oobeOnly || setupOnly) && (process.env.GITHUB_REPOSITORY !== '777genius/agent-notifications'
       || process.env.GITHUB_EVENT_NAME !== 'workflow_dispatch' || process.env.GITHUB_RUN_ATTEMPT !== '1'
       || process.arch !== 'arm64'
       || !/^[0-9a-f]{40}$/.test(process.env.NAVIGATION_SOURCE_SHA ?? ''))) {
     throw new Error('selected foreground/capture requires first explicit manual TEST job and exact source');
   }
-  evidence.diagnosticOnly = diagnosticOnly;
+  evidence.diagnosticOnly = diagnosticOnly && !setupOnly; evidence.readOnly = diagnosticOnly && !setupOnly;
   if (diagnosticOnly) {
     evidence.scope = 'Windows TEST read-only Center policy and input desktop preflight';
     evidence.noShowProved = true;
@@ -157,8 +330,17 @@ async function main(): Promise<void> {
     throw new Error('active connected desktop preflight not ready');
   }
   if (diagnosticOnly) {
-    if (captureOnly) {
-      evidence.scope = 'Windows disposable TEST primary-desktop pixels and bounded Windows-owner metadata only';
+    if (setupOnly) {
+      evidence.scope = 'Windows disposable TEST finite privacy OOBE guest setup only';
+      evidence.oobeSetupModeAttempted = true; evidence.oobeSetupQualified = false;
+      evidence.invokeEffectUncertain = true; evidence.invokeCallsEntered = null;
+      evidence.centerOpenedProved = false; evidence.processQuiescenceQualified = false;
+      setupActor = run('oobe-setup', 75_000);
+      evidence.oobeSetupActorCollected = !setupActor.error && !setupActor.signal && setupActor.status !== null;
+      verifySetup(setupActor);
+    }
+    if (captureOnly || setupOnly) {
+      if (captureOnly) evidence.scope = 'Windows disposable TEST primary-desktop pixels and bounded Windows-owner metadata only';
       evidence.captureModeAttempted = true; evidence.captureQualified = false;
       const step = run('desktop-capture', 15_000);
       evidence.captureActorCollected = !step.error && !step.signal && step.status !== null;
@@ -210,7 +392,8 @@ async function main(): Promise<void> {
       if (createHash('sha256').update(readFileSync(binary)).digest('hex') !== evidence.binarySHA256) {
         throw new Error('capture executable changed across snapshot');
       }
-      evidence.captureQualified = true; evidence.noInputProved = true; evidence.inputEffectUncertain = false;
+      evidence.captureQualified = true; evidence.noKeyboardOrPointerInputProved = true;
+      if (captureOnly) { evidence.noInputProved = true; evidence.inputEffectUncertain = false; }
     }
     if (oobeOnly) {
       evidence.scope = 'Windows disposable TEST selected foreground UIA property census only';
@@ -373,7 +556,7 @@ async function main(): Promise<void> {
           || surface.chordAccepted !== true || surface.keyReleaseUnknown !== false || surface.showAttempts !== 0
           || surface.centerOpenedProved !== false || surface.diagnosticOnly !== true) throw new Error('surface evidence invalid');
     }
-    evidence.status = 'diagnostic_complete'; evidence.noShowProved = true; exitCode = 0;
+    evidence.status = setupOnly ? 'guest_setup_complete' : 'diagnostic_complete'; evidence.noShowProved = true; exitCode = 0;
     return;
   }
   if (policy.configuredDisabled) {
@@ -444,6 +627,18 @@ try {
     }
   }
   if (root) {
+    if (setupActor) {
+      collectSetupRecords();
+      const packet = `${JSON.stringify({ nonce, actorPID: setupActor.pid, records: setupRecords })}\n`;
+      if (Buffer.byteLength(packet) <= 2_097_152) {
+        try {
+          writeFileSync(join(root, 'oobe-setup-records.json'), packet, { flag: 'wx' });
+          evidence.setupRecordCount = Object.keys(setupRecords).length;
+          evidence.setupRecordsSHA256 = createHash('sha256').update(packet).digest('hex');
+        } catch (error: unknown) { evidence.setupRecordPublicationError = String(error); evidence.oobeSetupQualified = false; exitCode = 1; }
+      } else { evidence.setupRecordPublicationError = 'bounded packet overflow'; evidence.oobeSetupQualified = false; exitCode = 1; }
+      if (evidence.setupRecordErrors || evidence.oobeSetupQualified !== true) { evidence.status = 'failed'; exitCode = 1; }
+    }
     for (const name of ['center-policy.json', 'preflight.json', 'capture-preflight.json', 'capture-after-preflight.json', 'desktop-capture-intent.json', 'desktop-capture.json', 'oobe-preflight.json', 'oobe-after-preflight.json', 'oobe-intent.json', 'oobe-uia.json', 'shortcut-location.json', 'aumid-identity.json', 'sender.json', 'sender-failure.json', 'show-outcome.json', 'submitted.json', 'callback-started.json', 'callback.json', 'ui-candidate.json', 'ui-invoke.json', 'center-open.json']) {
       if (!existsSync(join(root, name))) continue;
       try { evidence[name] = read(name); } catch (error: unknown) { evidence[`${name}ReadError`] = String(error); }
