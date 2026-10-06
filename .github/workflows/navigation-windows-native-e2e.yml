@@ -23,6 +23,11 @@ on:
           - native_callback
 permissions:
   contents: read
+# Supersede only older checks for this PR; dispatch runs remain independent.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   native-client:
     # Official client GA: actions/runner-images#14592. Server runners cannot qualify this contract.

@@ -398,14 +398,15 @@ func TestCursorEventMainDispatch(t *testing.T) {
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestCursorEventMainDispatch$")
 	// The isolated environment also needs a private sink for instrumented child
 	// coverage, so stderr remains an assertion about the event transport.
-	cmd.Env = []string{"TEST_CURSOR_MAIN_CHILD=1", "TEST_CURSOR_SELECTOR=" + filepath.Join(root, "TEST-missing.json"), "HOME=" + root, "XDG_CONFIG_HOME=" + root, "XDG_CACHE_HOME=" + root, "TMPDIR=" + root, "GOCOVERDIR=" + t.TempDir()}
+	// Measure the transport deadline without the race runtime's one-second exit sleep.
+	cmd.Env = []string{"GORACE=atexit_sleep_ms=0", "TEST_CURSOR_MAIN_CHILD=1", "TEST_CURSOR_SELECTOR=" + filepath.Join(root, "TEST-missing.json"), "HOME=" + root, "XDG_CONFIG_HOME=" + root, "XDG_CACHE_HOME=" + root, "TMPDIR=" + root, "GOCOVERDIR=" + t.TempDir()}
 	cmd.Stdin = bytes.NewReader(cursorSDKFrame(t))
 	var out, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &stderr
 	if err := cmd.Run(); err != nil || ctx.Err() != nil || out.String() != "{}\n" || stderr.Len() != 0 {
 		t.Fatalf("dispatch: %v stdout=%q stderr=%q", err, out.String(), stderr.String())
 	}
-	// Each child gets its own harness budget, including race-runtime shutdown.
+	// Each child gets its own harness budget for startup and the stdin deadline.
 	blockedCtx, blockedCancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer blockedCancel()
 	blocked := exec.CommandContext(blockedCtx, os.Args[0], "-test.run=^TestCursorEventMainDispatch$")

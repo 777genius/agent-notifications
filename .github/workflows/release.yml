@@ -11,7 +11,7 @@ permissions:
 jobs:
   verify-version:
     name: Verify release version
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
 
     steps:
@@ -55,7 +55,7 @@ jobs:
   build-matrix:
     name: Build ${{ matrix.platform }} ${{ matrix.arch }}
     needs: verify-version
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.os || matrix.os == 'ubuntu-22.04' && (vars.CI_LINUX_2204_RUNNER || 'ubuntu-22.04') || matrix.os == 'ubuntu-22.04-arm' && (vars.CI_LINUX_ARM_2204_RUNNER || 'ubuntu-22.04-arm') || matrix.os == 'macos-15' && (vars.CI_MACOS_15_RUNNER || 'macos-15') || matrix.os }}
     timeout-minutes: 30
 
     strategy:
@@ -174,7 +174,7 @@ jobs:
   build-notifier:
     name: Build ClaudeNotifier.app (macOS)
     needs: verify-version
-    runs-on: macos-15
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'macos-15' || vars.CI_MACOS_15_RUNNER || 'macos-15' }}
     timeout-minutes: 60
 
     steps:
@@ -244,7 +244,7 @@ jobs:
   create-release:
     name: Prepare draft GitHub Release
     needs: [build-matrix, build-notifier, test-binaries, qualify-opencode]
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 15
     permissions:
       contents: write
@@ -292,7 +292,7 @@ jobs:
   test-binaries:
     name: Test ${{ matrix.platform }} ${{ matrix.arch }} binary
     needs: build-matrix
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.os || matrix.os == 'ubuntu-latest' && (vars.CI_LINUX_RUNNER || 'ubuntu-latest') || matrix.os == 'ubuntu-24.04-arm' && (vars.CI_LINUX_ARM_RUNNER || 'ubuntu-24.04-arm') || matrix.os == 'macos-26' && (vars.CI_MACOS_26_RUNNER || 'macos-26') || matrix.os }}
     timeout-minutes: 15
 
     strategy:
