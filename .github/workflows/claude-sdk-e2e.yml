@@ -49,10 +49,28 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Isolate Darwin Python toolcache
+        if: matrix.os == 'darwin'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Cached macOS tool entries link to frameworks outside the toolcache.
+          $cache = Join-Path $env:RUNNER_TEMP ("NEWTEST-claude-sdk-python-" + [guid]::NewGuid())
+          New-Item -ItemType Directory $cache | Out-Null
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value @("RUNNER_TOOL_CACHE=$cache", "AGENT_TOOLSDIRECTORY=$cache")
       - uses: actions/setup-python@v7
         id: python
         with:
           python-version: '3.12'
+      - name: Verify setup Python executable before build
+        shell: pwsh
+        env:
+          PYTHON_EXECUTABLE: ${{ steps.python.outputs.python-path }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:PYTHON_EXECUTABLE -or -not (Test-Path -LiteralPath $env:PYTHON_EXECUTABLE -PathType Leaf)) { throw 'Missing setup-python executable' }
+          & $env:PYTHON_EXECUTABLE -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version; print(sys.version)'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Linux ALSA build prerequisite
         if: matrix.os == 'linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev

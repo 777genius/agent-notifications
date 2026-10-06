@@ -1098,12 +1098,10 @@ func TestSendWithTerminalNotifier_PathNotFound(t *testing.T) {
 		t.Skip("Skipping macOS-only test")
 	}
 
-	// Save and restore CLAUDE_PLUGIN_ROOT
-	originalPluginRoot := os.Getenv("CLAUDE_PLUGIN_ROOT")
-	defer os.Setenv("CLAUDE_PLUGIN_ROOT", originalPluginRoot)
-
-	// Set invalid plugin root to force path lookup to fail (if system doesn't have it)
-	os.Setenv("CLAUDE_PLUGIN_ROOT", "/nonexistent/path/12345")
+	// Exclude both embedded and system helpers so lookup cannot launch a desktop app.
+	root := t.TempDir()
+	t.Setenv("CLAUDE_PLUGIN_ROOT", root)
+	t.Setenv("PATH", root)
 
 	cfg := config.DefaultConfig()
 	cfg.Notifications.Desktop.Enabled = true
@@ -1112,10 +1110,10 @@ func TestSendWithTerminalNotifier_PathNotFound(t *testing.T) {
 
 	n := New(cfg)
 
-	// This may succeed if terminal-notifier is installed system-wide
-	// or fail if not - both are valid outcomes
 	err := n.sendWithTerminalNotifier("Test", "Message", "", "", false, "", true)
-	_ = err // We just want to exercise the code path
+	if err == nil || !strings.Contains(err.Error(), "terminal-notifier not found") {
+		t.Fatalf("missing helper lookup returned %v, want not-found error", err)
+	}
 }
 
 func TestSendDesktop_AppIconNotFound(t *testing.T) {
@@ -1685,23 +1683,32 @@ func TestBuildTerminalNotifierArgs_Iterm2SessionIDUsesExecuteWithoutCWD(t *testi
 // === Tests for SendQuickNotification ===
 
 func TestSendQuickNotification_DoesNotPanic(t *testing.T) {
-	// SendQuickNotification should never panic regardless of environment.
-	// In CI where neither terminal-notifier nor osascript may work,
-	// an error is acceptable.
-	err := SendQuickNotification("Test Title", "Test message", "")
-	_ = err
+	assertInertQuickNotification(t, "Test Title", "Test message", "")
 }
 
 func TestSendQuickNotification_WithExecuteCmd(t *testing.T) {
-	// Should not panic when executeCmd is provided
-	err := SendQuickNotification("Title", "Message", "echo hello")
-	_ = err
+	assertInertQuickNotification(t, "Title", "Message", "echo hello")
 }
 
 func TestSendQuickNotification_EmptyFields(t *testing.T) {
-	// Edge case: all empty strings
-	err := SendQuickNotification("", "", "")
-	_ = err
+	assertInertQuickNotification(t, "", "", "")
+}
+
+func assertInertQuickNotification(t *testing.T, title, message, executeCmd string) {
+	t.Helper()
+	isolateDesktopDelivery(t)
+	if runtime.GOOS != "darwin" {
+		// Other platforms cannot select a terminal-notifier; exclude ambient osascript.
+		t.Setenv("PATH", t.TempDir())
+	}
+	err := SendQuickNotification(title, message, executeCmd)
+	if runtime.GOOS == "darwin" {
+		if err != nil {
+			t.Fatalf("inert native helper failed: %v", err)
+		}
+	} else if err == nil || !strings.Contains(err.Error(), "all notification methods failed") {
+		t.Fatalf("unavailable notification methods returned %v, want delivery error", err)
+	}
 }
 
 func TestBuildFocusScript_RegularTerminal_InvalidCWD_FallbackToActivate(t *testing.T) {
