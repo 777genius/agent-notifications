@@ -1,7 +1,7 @@
 // Windows client CI only. Native source is compiled from this exact checkout.
 import { spawnSync } from 'node:child_process';
 import { randomUUID, createHash } from 'node:crypto';
-import { mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, copyFileSync, statSync, readdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, copyFileSync, statSync, lstatSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -32,9 +32,15 @@ function read(name: string): Json {
 }
 function run(mode: string, timeout: number): Step {
   if (!root || !binary || !nonce) throw new Error('owned fixture absent');
+  const capture = mode === 'desktop-capture';
+  const env: NodeJS.ProcessEnv = capture ? Object.fromEntries([
+    'SystemRoot', 'WINDIR', 'PATH', 'TEMP', 'TMP', 'CI', 'GITHUB_ACTIONS', 'GITHUB_REPOSITORY',
+    'GITHUB_EVENT_NAME', 'GITHUB_RUN_ATTEMPT', 'NAVIGATION_SOURCE_SHA', 'NAVIGATION_WINDOWS_RUNNER',
+    'NAVIGATION_WINDOWS_DESKTOP_CAPTURE_TEST',
+  ].filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]])) : { ...process.env };
+  env.AGENT_NOTIFY_NAVIGATION_WINDOWS_E2E = '1';
   const result = spawnSync(binary, [mode, root, nonce], { cwd: root, encoding: 'utf8',
-    env: { ...process.env, AGENT_NOTIFY_NAVIGATION_WINDOWS_E2E: '1' }, timeout, maxBuffer: 65_536,
-    windowsHide: false });
+    env, timeout, maxBuffer: 65_536, windowsHide: capture });
   const step: Step = { mode, pid: result.pid, status: result.status, signal: result.signal,
     stdout: result.stdout ?? '', stderr: result.stderr ?? '', exitedAt: Date.now(),
     ...(result.error ? { error: result.error.message } : {}) };
@@ -110,8 +116,17 @@ async function main(): Promise<void> {
   const taskbarFlag = process.env.NAVIGATION_WINDOWS_TASKBAR_UIA;
   if (taskbarFlag !== undefined && taskbarFlag !== '0' && taskbarFlag !== '1') throw new Error('invalid taskbar flag');
   const taskbarOnly = taskbarFlag === '1';
-  if ((surfaceOnly || taskbarOnly) && !diagnosticOnly || surfaceOnly && taskbarOnly) {
-    throw new Error('taskbar, surface and native callback modes are exclusive');
+  const captureFlag = process.env.NAVIGATION_WINDOWS_DESKTOP_CAPTURE_TEST;
+  if (captureFlag !== undefined && captureFlag !== '0' && captureFlag !== '1') throw new Error('invalid desktop capture flag');
+  const captureOnly = captureFlag === '1';
+  if ((surfaceOnly || taskbarOnly || captureOnly) && !diagnosticOnly || Number(surfaceOnly) + Number(taskbarOnly) + Number(captureOnly) > 1) {
+    throw new Error('taskbar, surface, desktop capture and native callback modes are exclusive');
+  }
+  if (captureOnly && (process.env.GITHUB_REPOSITORY !== '777genius/agent-notifications'
+      || process.env.GITHUB_EVENT_NAME !== 'workflow_dispatch' || process.env.GITHUB_RUN_ATTEMPT !== '1'
+      || process.arch !== 'arm64'
+      || !/^[0-9a-f]{40}$/.test(process.env.NAVIGATION_SOURCE_SHA ?? ''))) {
+    throw new Error('capture requires first explicit manual TEST job and exact source');
   }
   evidence.diagnosticOnly = diagnosticOnly;
   if (diagnosticOnly) {
@@ -138,6 +153,61 @@ async function main(): Promise<void> {
     throw new Error('active connected desktop preflight not ready');
   }
   if (diagnosticOnly) {
+    if (captureOnly) {
+      evidence.scope = 'Windows disposable TEST primary-desktop pixels and bounded Windows-owner metadata only';
+      evidence.captureModeAttempted = true; evidence.captureQualified = false;
+      const step = run('desktop-capture', 15_000);
+      evidence.captureActorCollected = !step.error && !step.signal && step.status !== null;
+      for (const name of ['capture-preflight.json', 'capture-after-preflight.json', 'desktop-capture-intent.json', 'desktop-capture.json']) {
+        if (!existsSync(join(root, name))) continue;
+        const record = read(name); evidence[name] = record;
+        if (record.pid !== step.pid || record.nonce !== nonce) throw new Error('capture report correlation invalid');
+      }
+      requireSuccess(step);
+      const capture = evidence['desktop-capture.json'] as Json | undefined;
+      const intent = evidence['desktop-capture-intent.json'] as Json | undefined;
+      for (const name of ['capture-preflight.json', 'capture-after-preflight.json']) {
+        const record = evidence[name] as Json | undefined;
+        if (!record || record.ready !== true || record.connectionState !== 0 || record.connectionStateKnown !== true
+            || record.session !== capture?.session) throw new Error('capture fresh desktop guards unproved');
+      }
+      if (!capture || !intent || intent.captureAttempts !== 1 || intent.sourceSHA !== evidence.sourceSHA
+          || capture.sourceSHA !== evidence.sourceSHA || capture.captureAttempts !== 1 || capture.pixelFile !== 'desktop-capture.png'
+          || capture.binarySHA256 !== evidence.binarySHA256 || capture.architecture !== 'ARM64'
+          || capture.captureScope !== 'primary_monitor_physical_GDI_pixels_non_atomic_metadata'
+          || capture.coordinateContract !== 'per_monitor_aware_v2_MM_TEXT' || capture.primaryMonitorStable !== true
+          || !Number.isInteger(capture.originX) || !Number.isInteger(capture.originY)
+          || Number(capture.originX) < -2147483648 || Number(capture.originX) > 2147483647
+          || Number(capture.originY) < -2147483648 || Number(capture.originY) > 2147483647 || capture.shellStillLive !== true
+          || capture.diagnosticOnly !== true || capture.readOnly !== true || capture.showAttempts !== 0 || capture.inputAttempted !== false
+          || capture.launchAttempted !== false || capture.installAttempted !== false || capture.retryAllowed !== false
+          || capture.centerOpenedProved !== false || capture.navigationQualified !== false || capture.nativeCallbackQualified !== false
+          || !Number.isInteger(capture.elapsedMs) || Number(capture.elapsedMs) < 0 || Number(capture.elapsedMs) >= 5000
+          || !Number.isInteger(capture.width) || !Number.isInteger(capture.height)
+          || Number(capture.width) < 1 || Number(capture.width) > 2048 || Number(capture.height) < 1 || Number(capture.height) > 2048) {
+        throw new Error('capture terminal scope or bounds unproved');
+      }
+      const path = join(root, 'desktop-capture.png'), st = lstatSync(path);
+      if (!st.isFile() || st.isSymbolicLink() || st.nlink !== 1 || realpathSync(path) !== path || st.size < 33 || st.size > 8_388_608) {
+        throw new Error('bounded regular owned PNG required');
+      }
+      const pixels = readFileSync(path), pixelSHA256 = createHash('sha256').update(pixels).digest('hex');
+      if (pixels.length !== st.size || pixels.length !== capture.pixelBytes || pixelSHA256 !== capture.pixelSHA256
+          || !pixels.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+          || pixels.readUInt32BE(8) !== 13 || pixels.toString('ascii', 12, 16) !== 'IHDR'
+          || pixels.readUInt32BE(16) !== capture.width || pixels.readUInt32BE(20) !== capture.height) {
+        throw new Error('PNG bytes/dimensions do not bind native receipt');
+      }
+      const metadata = capture.metadata as Json | undefined;
+      if (!metadata || metadata.projection !== 'visible_or_foreground_same_user_windows_oobe_or_shell'
+          || !Array.isArray(metadata.windows) || metadata.windows.length > 32 || Number(metadata.visited) > 128
+          || Buffer.byteLength(JSON.stringify(metadata)) > 7000) throw new Error('capture metadata outside bound');
+      evidence.capturePixelSHA256 = pixelSHA256; evidence.capturePixelBytes = pixels.length;
+      if (createHash('sha256').update(readFileSync(binary)).digest('hex') !== evidence.binarySHA256) {
+        throw new Error('capture executable changed across snapshot');
+      }
+      evidence.captureQualified = true; evidence.noInputProved = true; evidence.inputEffectUncertain = false;
+    }
     if (taskbarOnly) {
       evidence.scope = 'Windows TEST read-only owned taskbar UIA identifier projection';
       const step = run('taskbar-uia', 15_000);
@@ -286,7 +356,7 @@ try {
     }
   }
   if (root) {
-    for (const name of ['center-policy.json', 'preflight.json', 'shortcut-location.json', 'aumid-identity.json', 'sender.json', 'sender-failure.json', 'show-outcome.json', 'submitted.json', 'callback-started.json', 'callback.json', 'ui-candidate.json', 'ui-invoke.json', 'center-open.json']) {
+    for (const name of ['center-policy.json', 'preflight.json', 'capture-preflight.json', 'capture-after-preflight.json', 'desktop-capture-intent.json', 'desktop-capture.json', 'shortcut-location.json', 'aumid-identity.json', 'sender.json', 'sender-failure.json', 'show-outcome.json', 'submitted.json', 'callback-started.json', 'callback.json', 'ui-candidate.json', 'ui-invoke.json', 'center-open.json']) {
       if (!existsSync(join(root, name))) continue;
       try { evidence[name] = read(name); } catch (error: unknown) { evidence[`${name}ReadError`] = String(error); }
     }

@@ -18,6 +18,9 @@
 #include <winrt/Windows.System.h>
 #include <bcrypt.h>
 #pragma comment(lib, "Bcrypt.lib")
+#include <wincodec.h>
+#pragma comment(lib, "Windowscodecs.lib")
+#pragma comment(lib, "Gdi32.lib")
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -32,6 +35,7 @@
 #include <exception>
 #include <memory>
 #include <cstring>
+#include <cstdint>
 #include <map>
 #include <appxpackaging.h>
 #include <shlwapi.h>
@@ -332,6 +336,7 @@ static std::vector<BYTE> tokenUser(HANDLE process) {
 // these checks do not qualify a signed client or prove Center visibility.
 struct SurfaceOwner {
     HANDLE process;
+    std::wstring imageLeaf;
     explicit SurfaceOwner(HANDLE value) : process(value) {}
     ~SurfaceOwner() { CloseHandle(process); }
     bool live() const { return WaitForSingleObject(process, 0) == WAIT_TIMEOUT; }
@@ -341,6 +346,9 @@ struct SurfaceScan {
     DWORD session = 0;
     std::vector<BYTE> user;
     std::wstring windows;
+    std::vector<std::wstring> imageNames{L"explorer.exe", L"shellhost.exe", L"shellexperiencehost.exe"};
+    bool exportImageLeaf = false;
+    std::string projection = "visible_or_foreground_owned_shell";
     unsigned visited = 0, errors = 0, count = 0;
     bool truncated = false, enumerationCompleted = false;
     ULONGLONG deadline = 0;
@@ -359,10 +367,11 @@ struct SurfaceScan {
         std::transform(path.begin(), path.end(), path.begin(), [](wchar_t c) { return std::towlower(c); });
         const auto leaf = fs::path(path).filename().wstring();
         if (path.rfind(windows + L"\\", 0) != 0
-            || (leaf != L"explorer.exe" && leaf != L"shellhost.exe" && leaf != L"shellexperiencehost.exe")) return nullptr;
+            || std::find(imageNames.begin(), imageNames.end(), leaf) == imageNames.end()) return nullptr;
         const auto candidate = tokenUser(handle);
         if (!EqualSid(reinterpret_cast<TOKEN_USER*>(user.data())->User.Sid,
             reinterpret_cast<const TOKEN_USER*>(candidate.data())->User.Sid) || !held->live()) return nullptr;
+        held->imageLeaf = leaf;
         auto result = held.get(); owners.emplace(pid, std::move(held)); return result;
     }
     static BOOL CALLBACK visit(HWND window, LPARAM context) noexcept {
@@ -383,6 +392,7 @@ struct SurfaceScan {
             if (after != pid || !IsWindow(window) || !held->live()) { ++scan.errors; return TRUE; }
             const auto row = "{\"hwnd\":" + std::to_string(reinterpret_cast<uintptr_t>(window))
                 + ",\"pid\":" + std::to_string(pid) + ",\"class\":" + jsonQuote(name)
+                + (scan.exportImageLeaf ? ",\"verifiedImageLeaf\":" + jsonQuote(held->imageLeaf) : "")
                 + ",\"visible\":" + (visible ? "true" : "false")
                 + ",\"foreground\":" + (foreground ? "true" : "false") + "}";
             if (scan.count >= 32 || scan.rows.size() + (scan.count ? 1 : 0) + row.size() > 6000) {
@@ -396,7 +406,7 @@ struct SurfaceScan {
     std::string snapshot() {
         visited = errors = count = 0; truncated = false; rows.clear(); deadline = GetTickCount64() + 2000;
         enumerationCompleted = EnumWindows(visit, reinterpret_cast<LPARAM>(this)) != FALSE;
-        return "{\"projection\":\"visible_or_foreground_owned_shell\",\"enumerationCompleted\":" + std::string(enumerationCompleted ? "true" : "false")
+        return "{\"projection\":" + jsonQuote(winrt::to_hstring(projection).c_str()) + ",\"enumerationCompleted\":" + std::string(enumerationCompleted ? "true" : "false")
             + ",\"truncated\":" + (truncated ? "true" : "false") + ",\"errors\":" + std::to_string(errors)
             + ",\"visited\":" + std::to_string(visited) + ",\"windows\":[" + rows + "]}";
     }
@@ -1118,6 +1128,132 @@ struct VendorHashFile {
     ~VendorHashFile() { if (file != INVALID_HANDLE_VALUE) CloseHandle(file); }
     VendorHashFile(const VendorHashFile&) = delete;
 };
+// Public GDI/WIC only, one read-only primary-desktop snapshot in a fresh CI job.
+static bool desktopCapture() {
+    auto env = [](const wchar_t* name) {
+        wchar_t value[128]{}; DWORD size = GetEnvironmentVariableW(name, value, 128);
+        if (!size || size >= 128) throw std::runtime_error("capture authority absent");
+        return std::wstring(value, size);
+    };
+    if (env(L"NAVIGATION_WINDOWS_DESKTOP_CAPTURE_TEST") != L"1"
+        || env(L"GITHUB_REPOSITORY") != L"777genius/agent-notifications"
+        || env(L"GITHUB_EVENT_NAME") != L"workflow_dispatch" || env(L"GITHUB_RUN_ATTEMPT") != L"1"
+        || env(L"NAVIGATION_WINDOWS_RUNNER") != L"windows-11-vs2026-arm")
+        throw std::runtime_error("fresh manual CI capture required");
+    const auto source = env(L"NAVIGATION_SOURCE_SHA");
+    if (source.size() != 40 || source.find_first_not_of(L"0123456789abcdef") != std::wstring::npos)
+        throw std::runtime_error("capture source SHA required");
+    const ULONGLONG started = GetTickCount64(), deadline = started + 5000;
+    auto budget = [&]() { if (GetTickCount64() >= deadline) throw std::runtime_error("capture cooperative deadline"); };
+    USHORT processMachine = 0, nativeMachine = 0;
+    if (!IsWow64Process2(GetCurrentProcess(), &processMachine, &nativeMachine)
+        || processMachine != IMAGE_FILE_MACHINE_UNKNOWN || nativeMachine != IMAGE_FILE_MACHINE_ARM64)
+        throw std::runtime_error("capture requires native ARM64 process");
+    vendorDeadline = deadline; VendorHashFile executable(root / L"navigation-native-probe.exe", 67108864);
+    struct DPIContext {
+        DPI_AWARENESS_CONTEXT previous = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        ~DPIContext() { if (previous) SetThreadDpiAwarenessContext(previous); }
+    } dpi;
+    auto dpiAware = []() { return AreDpiAwarenessContextsEqual(GetThreadDpiAwarenessContext(),
+        DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) != FALSE; };
+    if (!dpi.previous || !dpiAware()) throw std::runtime_error("capture physical coordinate context unavailable");
+    auto primaryRect = []() {
+        const HMONITOR monitor = MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
+        MONITORINFO info{}; info.cbSize = sizeof(info);
+        if (!monitor || !GetMonitorInfoW(monitor, &info) || !(info.dwFlags & MONITORINFOF_PRIMARY))
+            throw std::runtime_error("capture primary monitor unavailable");
+        return std::pair<HMONITOR, RECT>{monitor, info.rcMonitor};
+    };
+    const auto primary = primaryRect(); const RECT rectangle = primary.second;
+    if (!preflight("capture-preflight.json")) return false;
+    SurfaceScan scan; wchar_t windows[32768]{}; UINT length = GetWindowsDirectoryW(windows, 32768);
+    if (!length || length >= 32768 || !ProcessIdToSessionId(GetCurrentProcessId(), &scan.session))
+        throw std::runtime_error("capture desktop identity unavailable");
+    scan.windows.assign(windows, length); scan.user = tokenUser(GetCurrentProcess());
+    std::transform(scan.windows.begin(), scan.windows.end(), scan.windows.begin(), [](wchar_t c) { return std::towlower(c); });
+    scan.imageNames.insert(scan.imageNames.end(), {L"wwahost.exe", L"startmenuexperiencehost.exe",
+        L"systempropertiesperformance.exe", L"systempropertiesadvanced.exe", L"useroobebroker.exe",
+        L"cloudexperiencehost.exe", L"applicationframehost.exe"});
+    scan.exportImageLeaf = true; scan.projection = "visible_or_foreground_same_user_windows_oobe_or_shell";
+    DWORD shellPID = 0; const HWND shellWindow = GetShellWindow(); GetWindowThreadProcessId(shellWindow, &shellPID);
+    auto shell = shellPID ? scan.owner(shellPID) : nullptr;
+    if (!shell || !shell->live()) throw std::runtime_error("capture held Shell unavailable");
+    const auto metadata = scan.snapshot(); budget();
+    const std::int64_t wide = static_cast<std::int64_t>(rectangle.right) - rectangle.left;
+    const std::int64_t high = static_cast<std::int64_t>(rectangle.bottom) - rectangle.top;
+    if (wide <= 0 || high <= 0 || wide > 2048 || high > 2048)
+        throw std::runtime_error("capture primary screen dimension outside bound");
+    const int width = static_cast<int>(wide), height = static_cast<int>(high);
+    report("desktop-capture-intent.json", "{\"pid\":" + std::to_string(GetCurrentProcessId()) + ",\"nonce\":" + jsonQuote(uuid)
+        + ",\"sourceSHA\":" + jsonQuote(source) + ",\"captureAttempts\":1,\"showAttempts\":0,\"inputAttempted\":false}\n");
+    struct GDI {
+        HDC screen = nullptr, memory = nullptr; HBITMAP bitmap = nullptr; HGDIOBJ old = nullptr;
+        ~GDI() { if (old && old != HGDI_ERROR) SelectObject(memory, old); if (bitmap) DeleteObject(bitmap);
+            if (memory) DeleteDC(memory); if (screen) ReleaseDC(nullptr, screen); }
+    } gdi;
+    gdi.screen = GetDC(nullptr); if (!gdi.screen) throw std::runtime_error("screen DC unavailable");
+    gdi.memory = CreateCompatibleDC(gdi.screen); if (!gdi.memory) throw std::runtime_error("capture DC unavailable");
+    for (HDC dc : {gdi.screen, gdi.memory}) {
+        POINT window{}, viewport{};
+        if (GetMapMode(dc) != MM_TEXT || !GetWindowOrgEx(dc, &window) || !GetViewportOrgEx(dc, &viewport)
+            || window.x || window.y || viewport.x || viewport.y || GetGraphicsMode(dc) != GM_COMPATIBLE)
+            throw std::runtime_error("capture pixel DC mapping unavailable");
+    }
+    gdi.bitmap = CreateCompatibleBitmap(gdi.screen, width, height); if (!gdi.bitmap) throw std::runtime_error("capture bitmap unavailable");
+    gdi.old = SelectObject(gdi.memory, gdi.bitmap); if (!gdi.old || gdi.old == HGDI_ERROR) throw std::runtime_error("capture bitmap selection failed");
+    budget();
+    if (!BitBlt(gdi.memory, 0, 0, width, height, gdi.screen, rectangle.left, rectangle.top, SRCCOPY | CAPTUREBLT))
+        throw std::runtime_error("capture BitBlt failed");
+    if (!GdiFlush()) throw std::runtime_error("capture GDI flush failed");
+    if (SelectObject(gdi.memory, gdi.old) != gdi.bitmap) throw std::runtime_error("capture bitmap deselection failed");
+    gdi.old = nullptr; budget();
+    ComPtr<IWICImagingFactory> factory; check(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory)));
+    ComPtr<IWICBitmap> bitmap; check(factory->CreateBitmapFromHBITMAP(gdi.bitmap, nullptr, WICBitmapIgnoreAlpha, &bitmap));
+    ComPtr<IWICFormatConverter> converter; check(factory->CreateFormatConverter(&converter));
+    check(converter->Initialize(bitmap.Get(), GUID_WICPixelFormat24bppBGR, WICBitmapDitherTypeNone, nullptr, 0, WICBitmapPaletteTypeCustom));
+    ComPtr<IStream> stream; check(CreateStreamOnHGlobal(nullptr, TRUE, &stream));
+    ComPtr<IWICBitmapEncoder> encoder; check(factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder));
+    check(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache));
+    ComPtr<IWICBitmapFrameEncode> frame; check(encoder->CreateNewFrame(&frame, nullptr)); check(frame->Initialize(nullptr));
+    check(frame->SetSize(width, height)); WICPixelFormatGUID format = GUID_WICPixelFormat24bppBGR;
+    check(frame->SetPixelFormat(&format)); if (!IsEqualGUID(format, GUID_WICPixelFormat24bppBGR)) throw std::runtime_error("capture PNG pixel format mismatch");
+    check(frame->WriteSource(converter.Get(), nullptr)); check(frame->Commit()); check(encoder->Commit()); budget();
+    STATSTG st{}; check(stream->Stat(&st, STATFLAG_NONAME));
+    if (st.cbSize.QuadPart < 33 || st.cbSize.QuadPart > 8388608) throw std::runtime_error("capture encoded PNG outside 8MiB bound");
+    LARGE_INTEGER zero{}; check(stream->Seek(zero, STREAM_SEEK_SET, nullptr));
+    std::string png(static_cast<size_t>(st.cbSize.QuadPart), '\0'); ULONG read = 0;
+    check(stream->Read(png.data(), static_cast<ULONG>(png.size()), &read));
+    if (read != png.size()) throw std::runtime_error("capture PNG incomplete");
+    const auto afterPrimary = primaryRect(); const RECT afterRect = afterPrimary.second;
+    if (!shell->live() || GetShellWindow() != shellWindow || !dpiAware() || afterPrimary.first != primary.first
+        || afterRect.left != rectangle.left || afterRect.top != rectangle.top
+        || afterRect.right != rectangle.right || afterRect.bottom != rectangle.bottom
+        || !preflight("capture-after-preflight.json"))
+        throw std::runtime_error("capture desktop changed across snapshot");
+    budget();
+    // Final filename is published only after complete bounded bytes and disk flush.
+    const auto temporary = root / L"desktop-capture.png.tmp", final = root / L"desktop-capture.png";
+    HANDLE file = CreateFileW(temporary.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) throw std::runtime_error("exclusive PNG creation failed");
+    DWORD written = 0; bool saved = WriteFile(file, png.data(), static_cast<DWORD>(png.size()), &written, nullptr) && written == png.size();
+    const bool flushed = FlushFileBuffers(file) != FALSE; CloseHandle(file);
+    if (!saved || !flushed || !MoveFileExW(temporary.c_str(), final.c_str(), MOVEFILE_WRITE_THROUGH)) {
+        DeleteFileW(temporary.c_str()); throw std::runtime_error("atomic PNG publication failed");
+    }
+    vendorDeadline = deadline; VendorHashFile image(final, 8388608); budget();
+    report("desktop-capture.json", "{\"pid\":" + std::to_string(GetCurrentProcessId()) + ",\"nonce\":" + jsonQuote(uuid)
+        + ",\"sourceSHA\":" + jsonQuote(source) + ",\"diagnosticOnly\":true,\"readOnly\":true,\"captureAttempts\":1"
+        + ",\"binarySHA256\":\"" + executable.digest + "\",\"architecture\":\"ARM64\""
+        + ",\"showAttempts\":0,\"inputAttempted\":false,\"launchAttempted\":false,\"installAttempted\":false"
+        + ",\"centerOpenedProved\":false,\"navigationQualified\":false,\"nativeCallbackQualified\":false,\"retryAllowed\":false"
+        + ",\"pixelFile\":\"desktop-capture.png\",\"pixelSHA256\":\"" + image.digest + "\",\"pixelBytes\":" + std::to_string(png.size())
+        + ",\"width\":" + std::to_string(width) + ",\"height\":" + std::to_string(height) + ",\"session\":" + std::to_string(scan.session)
+        + ",\"elapsedMs\":" + std::to_string(GetTickCount64() - started) + ",\"shellStillLive\":true"
+        + ",\"originX\":" + std::to_string(rectangle.left) + ",\"originY\":" + std::to_string(rectangle.top)
+        + ",\"coordinateContract\":\"per_monitor_aware_v2_MM_TEXT\",\"primaryMonitorStable\":true"
+        + ",\"captureScope\":\"primary_monitor_physical_GDI_pixels_non_atomic_metadata\",\"metadata\":" + metadata + "}\n");
+    return true;
+}
 static void vendorArchiveIdentity() {
     ComPtr<IStream> stream;
     check(SHCreateStreamOnFileEx((root / L"client.msix").c_str(), STGM_READ | STGM_SHARE_DENY_WRITE, FILE_ATTRIBUTE_NORMAL, FALSE, nullptr, &stream));
@@ -1293,6 +1429,7 @@ int wmain(int argc, wchar_t** argv) {
         if (mode == L"package-metadata") { packageMetadata(); return 0; }
         if (mode == L"center-policy") return centerPolicy() ? 0 : 3;
         if (mode == L"preflight") return preflight() ? 0 : 3;
+        if (mode == L"desktop-capture") { if (argc != 4) return 2; return desktopCapture() ? 0 : 3; }
         if (mode == L"center-surface") return centerSurface() ? 0 : 3;
         if (mode == L"taskbar-uia") return taskbarUI() ? 0 : 3;
         if (mode == L"send") return send();
