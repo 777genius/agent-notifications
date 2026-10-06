@@ -1,0 +1,113 @@
+{
+  "scope": "offline_selected_client_renderer_preflight",
+  "status": "failed",
+  "sourceCommit": "d1a4fc4a3e09d2391d862114979c6a189028f873",
+  "nativeSourceSHA256": "4c3c088cc970398f610ccdd12e37fbd1ec213a4ee1c9e13c547948b7f7d8075f",
+  "guestSourceSHA256": "19c8a05a08db74b16859dc44464e5b60aa589f3b41aff3589e60f50b99aa2f1c",
+  "operatorSourceSHA256": "5ecf205bd5b492ce4d5bfe82aec21fae6c50e226700271ba73eed55c501f4743",
+  "guestFailure": "RuntimeError: actual_renderer_evidence_absent",
+  "diagnosticRendererCandidates": [
+    {
+      "pid": 1338,
+      "startTicks": "13358",
+      "executable": "/usr/lib/chatgpt/ChatGPT",
+      "executableDevice": 64769,
+      "executableInode": "277352",
+      "status": {
+        "CapEff": "0000000000000000",
+        "Gid": "1000\t1000\t1000\t1000",
+        "NSpid": "1338\t13\t1",
+        "NoNewPrivs": "1",
+        "Seccomp": "2",
+        "Seccomp_filters": "1",
+        "Uid": "1000\t1000\t1000\t1000"
+      },
+      "namespaces": {
+        "mnt": "mnt:[4026531841]",
+        "net": "net:[4026532207]",
+        "pid": "pid:[4026532267]",
+        "user": "user:[4026532198]"
+      },
+      "appArmor": "chatgpt (unconfined)",
+      "exactRendererArgumentPresent": false,
+      "commandSHA256": "064f307d29a891e558ce79af12ebb68de32a8230c0312daf17df8cb0f4d7ac50",
+      "commandBytes": 962
+    },
+    {
+      "pid": 1560,
+      "startTicks": "14928",
+      "executable": "/usr/lib/chatgpt/ChatGPT",
+      "executableDevice": 64769,
+      "executableInode": "277352",
+      "status": {
+        "CapEff": "0000000000000000",
+        "Gid": "1000\t1000\t1000\t1000",
+        "NSpid": "1560\t115\t1",
+        "NoNewPrivs": "1",
+        "Seccomp": "2",
+        "Seccomp_filters": "1",
+        "Uid": "1000\t1000\t1000\t1000"
+      },
+      "namespaces": {
+        "mnt": "mnt:[4026531841]",
+        "net": "net:[4026532207]",
+        "pid": "pid:[4026532269]",
+        "user": "user:[4026532198]"
+      },
+      "appArmor": "chatgpt (unconfined)",
+      "exactRendererArgumentPresent": false,
+      "commandSHA256": "230a4c32df81ffa5897c9474c255f09825bb51b49a8798cd25e2377f3bc3d6b6",
+      "commandBytes": 962
+    },
+    {
+      "pid": 1686,
+      "startTicks": "15029",
+      "executable": "/usr/lib/chatgpt/ChatGPT",
+      "executableDevice": 64769,
+      "executableInode": "277352",
+      "status": {
+        "CapEff": "0000000000000000",
+        "Gid": "1000\t1000\t1000\t1000",
+        "NSpid": "1686\t240\t1",
+        "NoNewPrivs": "1",
+        "Seccomp": "2",
+        "Seccomp_filters": "1",
+        "Uid": "1000\t1000\t1000\t1000"
+      },
+      "namespaces": {
+        "mnt": "mnt:[4026531841]",
+        "net": "net:[4026532207]",
+        "pid": "pid:[4026532270]",
+        "user": "user:[4026532198]"
+      },
+      "appArmor": "chatgpt (unconfined)",
+      "exactRendererArgumentPresent": false,
+      "commandSHA256": "025a04ace2410b4562509b682ad0a7ef87c1c7c09fa1cbdf64139eaef10a39d5",
+      "commandBytes": 962
+    }
+  ],
+  "trackedProcessCount": 25,
+  "allTrackedKernelExitsObserved": true,
+  "operatorReportedContainerRemoved": true,
+  "operatorReportedIntegrityErrors": [],
+  "qualification": {
+    "observedRendererRestrictionsQualified": false,
+    "clientSandboxQualified": false,
+    "renderedClientQualified": false,
+    "focusQualified": false,
+    "navigationQualified": false,
+    "notificationAttempted": false
+  },
+  "rawArtifactHashes": {
+    "qmp-wire.jsonl": "74a6b91bbd17278a1e61a993fe09c9fa3ac26240cbaf24386e187114cea2ffa0",
+    "operator-result.json": "d9ef95ae8dc221aacaa031e0e1732fbc4483deceafc0b2ea69b98e24e4c61d64",
+    "native-evidence.json": "14e1efb20998a3779d192c685b7c8a1343e0ff6b51fa61828ab029f2aaf4117e",
+    "serial.log": "44a8e7b8bdcdada25a5287226839f6cca0ea0a634f45b97fd7c11d3a3ace3d14",
+    "guest-result.json": "e72bdf88ac8374b61570cad8bbb9283d4790aa8f4e4cecff3b419eb71b09feda"
+  },
+  "limitations": [
+    "Original result remains failed; role inference from diagnostic prefixes does not retrospectively qualify restrictions.",
+    "Only command prefix retained; number of nonempty argv segments was not recorded.",
+    "No UI, focus, chat navigation or notification effect attempted."
+  ]
+}
