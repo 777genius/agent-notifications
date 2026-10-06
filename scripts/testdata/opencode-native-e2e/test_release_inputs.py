@@ -2,10 +2,12 @@
 import hashlib
 import importlib.util
 import io
+import json
 from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
 
 REPO = Path(__file__).resolve().parents[3]
 SPEC = importlib.util.spec_from_file_location('release_inputs', REPO / 'scripts/release-opencode-inputs.py')
@@ -14,6 +16,42 @@ SPEC.loader.exec_module(release)
 
 
 class ReleaseInputsTests(unittest.TestCase):
+    def test_partial_custody_requires_explicit_scope_and_exact_seven_cells(self):
+        # RED if a missing platform silently weakens the eleven-cell default.
+        template = json.loads((release.FIXTURES / 'manifest.template.json').read_text())
+        release.r.custody_cells(template, ('darwin', 'arm64', '2.0.21'))
+        partial = {**template, 'cells': [cell for cell in template['cells'] if cell['os'] != 'darwin']}
+        with self.assertRaisesRegex(release.r.Unqualified, 'eleven_native_cells_required'):
+            release.r.custody_cells(partial, ('linux', 'amd64', '1.18.33'))
+        partial['releaseScope'] = 'linux-windows'
+        release.r.custody_cells(partial, ('windows', 'amd64', '2.0.21'))
+        with self.assertRaisesRegex(release.r.Unqualified, 'requested_cell_outside_custody_scope'):
+            release.r.custody_cells(partial, ('darwin', 'arm64', '2.0.21'))
+        partial['cells'][-1] = partial['cells'][0]
+        with self.assertRaisesRegex(release.r.Unqualified, 'matrix_incomplete'):
+            release.r.custody_cells(partial, ('linux', 'amd64', '1.18.33'))
+
+    def test_partial_release_requires_all_requested_binaries_and_omits_skipped_platforms(self):
+        # RED if Windows absence is ignored or Mac artifacts enter partial custody.
+        with tempfile.TemporaryDirectory(prefix='TEST-partial-release-') as directory:
+            root = Path(directory).resolve()
+            (root / 'dist').mkdir()
+            for name in ('claude-notifications-linux-amd64', 'claude-notifications-linux-arm64'):
+                (root / 'dist' / name).write_bytes(b'TEST custody bytes')
+            with patch.object(release, 'REPO', root):
+                with self.assertRaisesRegex(release.r.Unqualified, 'release_input_not_regular'):
+                    release.release_manifest('linux-windows')
+                (root / 'dist/claude-notifications-windows-amd64.exe').write_bytes(b'TEST Windows custody bytes')
+                manifest = release.release_manifest('linux-windows')
+                self.assertEqual(manifest['releaseScope'], 'linux-windows')
+                self.assertEqual(len(manifest['cells']), 7)
+                self.assertEqual({cell['os'] for cell in manifest['cells']}, {'linux', 'windows'})
+                for cell in manifest['cells']:
+                    binary = release.r.checked_file(root, cell['candidate'])
+                    self.assertTrue(binary.read_bytes().startswith(b'TEST'))
+                with self.assertRaisesRegex(release.r.Unqualified, 'release_input_not_regular'):
+                    release.release_manifest('all')
+
     def test_reviewed_sdk_index_retains_actual_original_bytes(self):
         archive = REPO / 'opencode-plugin/vendor/universal-agent-plugins-opencode-events-0.3.0.tgz'
         with tempfile.TemporaryDirectory(prefix='TEST-release-inputs-') as directory:

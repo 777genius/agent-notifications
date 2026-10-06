@@ -33,6 +33,7 @@ PLATFORMS = (("linux", "amd64"), ("linux", "arm64"), ("darwin", "amd64"),
              ("darwin", "arm64"), ("windows", "amd64"))
 CELLS = tuple((o, a, v) for o, a in PLATFORMS for v in VERSIONS
               if v != "1.18.34" or (o, a) == ("linux", "amd64"))
+RELEASE_CELLS = tuple(cell for cell in CELLS if cell[0] != 'darwin')
 COPY = {"completion": ("Task completed", "task_complete"),
         "form": ("OpenCode asked a question", "question"),
         "permission": ("OpenCode requested permission", "permission_request"),
@@ -180,6 +181,22 @@ def verify_source_binding(m, checkout, build, dirty):
             and re.search(r'(?m)^\s*build\s+vcs.modified=false\s*$', build), 'exact_clean_candidate_build_required')
 
 
+def custody_cells(manifest, requested):
+    """A partial release is explicit custody scope, never a qualification grant."""
+    if 'releaseScope' in manifest:
+        require(manifest['releaseScope'] == 'linux-windows', 'unsupported_release_scope')
+        expected = RELEASE_CELLS
+    else:
+        expected = CELLS
+    require(isinstance(manifest['cells'], list) and len(manifest['cells']) == len(expected),
+            'seven_release_cells_required' if 'releaseScope' in manifest else 'eleven_native_cells_required')
+    require(all(isinstance(cell, dict) for cell in manifest['cells']), 'cell_schema')
+    identities = [(cell.get('os'), cell.get('arch'), cell.get('version')) for cell in manifest['cells']]
+    require(len(set(identities)) == len(identities) and set(identities) == set(expected), 'matrix_incomplete')
+    require(requested in expected, 'requested_cell_outside_custody_scope')
+    return expected
+
+
 def load_manifest(path, os_name, arch, version, expected_sha256=None):
     input_path = path.absolute()
     path = path.resolve(strict=True)
@@ -191,7 +208,8 @@ def load_manifest(path, os_name, arch, version, expected_sha256=None):
             out[key] = value
         return out
     m = json.loads(path.read_text(), object_pairs_hook=pairs)
-    closed(m, ('schema', 'purpose', 'candidateCommit', 'buildRevision', 'assets', 'sdk', 'cells'), 'manifest_schema')
+    keys = ('schema', 'purpose', 'candidateCommit', 'buildRevision', 'assets', 'sdk', 'cells')
+    closed(m, keys + (('releaseScope',) if 'releaseScope' in m else ()), 'manifest_schema')
     require(m['schema'] == 1 and m['purpose'] == 'TEST installed AN dual native', 'manifest_purpose')
     require(re.fullmatch('[0-9a-f]{40}', str(m['candidateCommit'])) is not None and
             m['candidateCommit'] == m['buildRevision'], 'candidate_revision_missing')
@@ -223,7 +241,7 @@ def load_manifest(path, os_name, arch, version, expected_sha256=None):
         require(lock.get('integrity') in (None, sdk['sri']), 'file_tar_integrity_mismatch')
     else:
         require(lock.get('integrity') == sdk['sri'], 'registry_integrity_mismatch')
-    require(isinstance(m['cells'], list) and len(m['cells']) == 11, 'eleven_native_cells_required')
+    expected_cells = custody_cells(m, (os_name, arch, version))
     pins = json.loads((FIXTURES/'host-pins.json').read_text())
     require(pins.get('runtimeQualified') is False, 'fixture_pin_cannot_grant_runtime')
     pinned = {(p['os'],p['arch'],p['version']):p for p in pins['cells']}
@@ -233,7 +251,7 @@ def load_manifest(path, os_name, arch, version, expected_sha256=None):
         closed(c, ('os', 'arch', 'version', 'hostSourceCommit', 'hostURL', 'archiveName', 'archive',
                    'archiveSRI', 'executableSHA256', 'candidate', 'nativeApp'), 'cell_schema')
         ident = (c['os'], c['arch'], c['version'])
-        require(ident in CELLS and ident not in seen, 'unsupported_or_duplicate_cell')
+        require(ident in expected_cells and ident not in seen, 'unsupported_or_duplicate_cell')
         seen.add(ident)
         pin = pinned[ident]
         require(c['hostURL']==pin['hostURL'] and c['archive']['sha256']==pin['archiveSHA256']
@@ -246,7 +264,7 @@ def load_manifest(path, os_name, arch, version, expected_sha256=None):
                 not url.username and not url.password and not url.query and not url.fragment, 'official_archive_url_required')
         if ident == (os_name, arch, version):
             selected = c
-    require(seen == set(CELLS) and selected is not None, 'matrix_incomplete')
+    require(seen == set(expected_cells) and selected is not None, 'matrix_incomplete')
     host_archive = checked_file(base, selected['archive'])
     require(host_archive.name == selected['archiveName'] and sri(host_archive) == selected['archiveSRI'], 'host_archive_identity')
     candidate = checked_file(base, selected['candidate'])
