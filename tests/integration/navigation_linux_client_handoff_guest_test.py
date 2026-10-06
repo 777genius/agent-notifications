@@ -49,7 +49,8 @@ def main():
         raise RuntimeError('offline_TEST_marker_and_no_NIC_required')
     manifest = json.loads((SEED / 'manifest.json').read_text())
     files = {'client-callback.py', 'client-sender.py', 'guest-pointer-entry.py', 'guest-pointer.so',
-             'kernel-observer.py', 'protocol-observer.py', 'client-controller.py'}
+             'kernel-observer.py', 'protocol-observer.py', 'client-controller.py',
+             'server-observer.so', 'server-observer.py'}
     if set(manifest) != {'files', 'frontendSHA256', 'backendSHA256'} or set(manifest['files']) != files:
         raise RuntimeError('fixed_TEST_seed_manifest_required')
     for name, digest in manifest['files'].items():
@@ -60,6 +61,7 @@ def main():
     kernel = load('TEST_kernel', SEED / 'kernel-observer.py')
     protocol = load('TEST_protocol', SEED / 'protocol-observer.py')
     callback = load('TEST_callback', SEED / 'client-callback.py')
+    server_decoder = load('TEST_server_decoder', SEED / 'server-observer.py')
     nonce = uuid.uuid4().hex
     group = Path('/sys/fs/cgroup') / ('navigation-handoff-TEST-' + nonce)
     work = ROOT / 'session'
@@ -136,14 +138,15 @@ def main():
             try: retain(pid)
             except (FileNotFoundError, ProcessLookupError): pass
 
-    def start(label, argv, pipe=False, input_pipe=False, extra=None):
+    def start(label, argv, pipe=False, input_pipe=False, extra=None, passed_fds=()):
+        if passed_fds and label != 'sway': raise RuntimeError('observer_fd_only_for_TEST_sway')
         out, err = (ROOT / (label + '.stdout')).open('xb'), (ROOT / (label + '.stderr')).open('xb')
         streams.extend([out, err])
         if now() >= deadline: raise RuntimeError('deadline_before_owned_process_start')
         child = subprocess.Popen(argv, cwd=work, env=dict(env, **(extra or {})), preexec_fn=drop,
             stdin=subprocess.PIPE if input_pipe else subprocess.DEVNULL,
             stdout=subprocess.PIPE if pipe else out, stderr=err, bufsize=0 if pipe else -1,
-            start_new_session=True)
+            start_new_session=True, pass_fds=passed_fds)
         children.append(child); retain(child.pid)
         return child
 
@@ -176,6 +179,50 @@ def main():
         with path.open('x') as stream:
             json.dump(data, stream); stream.flush(); os.fsync(stream.fileno())
         path.chmod(0o444)
+
+    def server_records():
+        alive(sway.pid)
+        data = read(ROOT / 'server-protocol.jsonl')
+        if not data or not data.endswith('\n'): return None
+        def closed_pairs(pairs):
+            value = {}
+            for key, item in pairs:
+                if key in value: raise RuntimeError('duplicate_server_record_field')
+                value[key] = item
+            return value
+        rows = [json.loads(line, object_pairs_hook=closed_pairs) for line in data.splitlines()]
+        if not 0 < len(rows) <= 512 or rows[0] != dict(kind='ready', compositorPID=sway.pid):
+            raise RuntimeError('owned_server_observer_readiness_unproved')
+        if any(row.get('kind') == 'fault' for row in rows): raise RuntimeError('server_observer_fault')
+        alive(sway.pid)
+        return rows
+
+    def bound_server_surface(pid, token_hash):
+        alive(sway.pid); alive(pid)
+        rows = server_records()
+        if rows is None: return None
+        matching_request = False
+        for row in rows:
+            if row.get('kind') != 'activate': continue
+            token = row.get('tokenHex')
+            if not isinstance(token, str) or not re.fullmatch('[0-9a-f]{2,8192}', token) or len(token) % 2:
+                raise RuntimeError('server_activation_token_encoding_invalid')
+            if hashlib.sha256(bytes.fromhex(token)).hexdigest() == token_hash: matching_request = True
+        if not matching_request: return None
+        value = server_decoder.selected_server_surface(rows, sway.pid, pid,
+            int(handles[pid][1]['startTicks']), token_hash)
+        fd = value['observerPidfd']
+        path = Path('/proc', str(sway.pid), 'fd', str(fd))
+        if os.readlink(path) != 'anon_inode:[pidfd]': raise RuntimeError('observer_handle_not_kernel_pidfd')
+        info = Path('/proc', str(sway.pid), 'fdinfo', str(fd)).read_text()
+        observed = re.findall(r'(?m)^Pid:\s+([0-9]+)$', info)
+        if observed != [str(pid)]: raise RuntimeError('actual_server_connection_pidfd_unbound')
+        alive(sway.pid); alive(pid)
+        current = kernel.snapshot(pid)
+        if int(current['startTicks']) != value['birth'] or current['executable'] != str(kernel.EXE):
+            raise RuntimeError('observed_server_peer_incarnation_changed')
+        value['kernelBound'] = True
+        return value
 
     def server_focus(pid):
         # Query the retained compositor over this peer-verified connection, not swaymsg's lookup.
@@ -215,11 +262,14 @@ def main():
                 if not isinstance(values, list): raise RuntimeError('sway_child_nodes_invalid')
                 pending.extend(values)
         if len(focused) != 1 or focused[0]['pid'] != pid: return False
+        if focused[0].get('type') != 'con' or focused[0].get('shell') != 'xdg_shell' or focused[0].get('window') is not None or type(focused[0].get('id')) is not int or focused[0]['id'] <= 0:
+            raise RuntimeError('focused_node_not_native_xdg_toplevel_view')
         alive(pid)
         current = kernel.snapshot(pid)
         if current['executable'] != str(kernel.EXE): raise RuntimeError('focused_client_kernel_identity_changed')
         report['serverFocus'] = dict(peerPID=peer[0], peerUID=peer[1], clientPID=pid,
             clientBirth=current['startTicks'], containerID=focused[0].get('id'),
+            shell=focused[0]['shell'],
             evidenceClass='peer_verified_compositor_tree_and_selected_kernel_incarnation')
         return True
 
@@ -233,8 +283,8 @@ def main():
     try:
         ROOT.mkdir(mode=0o700); os.chown(ROOT, 0, 1000); ROOT.chmod(0o710)
         # Source checkpoint only: refuse before creating any native child or notification.
-        # Remove this refusal only with the reviewed server connection/toplevel join.
-        raise RuntimeError('native_attempt_not_ready_server_surface_join_missing')
+        # Remove only after complete host/seed assembly and this join pass renewed review.
+        raise RuntimeError('native_attempt_not_ready_complete_assembly_review_missing')
         work.mkdir(mode=0o700); os.chown(work, 1000, 1000)
         group.mkdir(mode=0o700); group_created = True
         if not (group / 'cgroup.kill').is_file(): raise RuntimeError('owned_cgroup_kill_required')
@@ -258,7 +308,12 @@ def main():
         (portal_config / 'portals.conf').write_text('[preferred]\ndefault=gtk\norg.freedesktop.impl.portal.Notification=gtk\n')
         sway_config = work / 'sway.conf'; sway_config.write_text('xwayland disable\nseat seat0 fallback true\noutput * resolution 1280x720\nfocus_follows_mouse no\n')
         mako_config = work / 'mako.conf'; mako_config.write_text('anchor=top-center\nwidth=600\nheight=120\nmargin=0\ndefault-timeout=0\nmax-visible=1\nfont=DejaVu Sans 12\non-button-left=invoke-default-action\n')
-        sway = start('sway', ['/usr/bin/sway', '-c', str(sway_config), '-d'])
+        observer_fd = os.open(ROOT / 'server-protocol.jsonl', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_APPEND | os.O_CLOEXEC, 0o600)
+        streams.append(os.fdopen(observer_fd, 'wb', buffering=0))
+        sway = start('sway', ['/usr/bin/sway', '-c', str(sway_config), '-d'],
+            extra={'LD_PRELOAD': str(SEED / 'server-observer.so'),
+                'NAVIGATION_TEST_SERVER_PROTOCOL_FD': str(observer_fd)}, passed_fds=(observer_fd,))
+        wait(lambda: server_records() is not None)
         sockets = []
         def display_ready():
             nonlocal sockets
@@ -376,15 +431,29 @@ def main():
         requests = re.findall(r'xdg_activation_v1@\d+\.activate\(\"' + re.escape(chain['token']) + r'\", wl_surface@(\d+)\)', read(client_trace))
         if len(requests) != 1: raise RuntimeError('single_client_activation_surface_unproved')
         report['clientActivationSurfaceID'] = requests[0]
-        wait(lambda: server_focus(client_pid), 12)
+        joined = None
+        def joined_focus():
+            nonlocal joined
+            before = bound_server_surface(client_pid, token_hash)
+            if before is None or not server_focus(client_pid): return False
+            after = bound_server_surface(client_pid, token_hash)
+            if after is None or before != after:
+                raise RuntimeError('selected_server_surface_changed_during_focus_observation')
+            if after['surface'] != int(requests[0]): raise RuntimeError('client_and_server_activation_surface_mismatch')
+            joined = after
+            return True
+        wait(joined_focus, 12)
+        report['serverSurface'] = joined
         report['serverFocusObserved'] = True
         report['activationRequestAndFocusObserved'] = True
-        # A server-side connection/surface join is still required before activation qualification.
-        # This proves an observed native request and server focus, not counterfactual causation.
-        report['activationEvidenceClass'] = 'selected_client_token_request_and_server_focus'
+        report['serverSurfaceFocusJoinObserved'] = True
+        # Native request + live unique toplevel + focus, not counterfactual token causation.
+        report['activationEvidenceClass'] = 'peer_bound_selected_connection_unique_live_toplevel_and_compositor_focus'
         for child in (gtk, frontend, mako, monitor):
             signal.pidfd_send_signal(handles[child.pid][0], signal.SIGTERM)
-            child.wait(timeout=2)
+            remaining = deadline - now()
+            if remaining <= 0: raise RuntimeError('qualification_deadline_before_final_provider_collection')
+            child.wait(timeout=min(2, remaining))
         final_calls = [m for m in messages() if m.startswith('method call ') and 'interface=org.freedesktop.Application; member=ActivateAction\n' in m and 'destination=' + app_id + ' ' in m.splitlines()[0]]
         if len(final_calls) != 1 or final_calls[0].splitlines()[0] != chain['activateSender']:
             raise RuntimeError('additional_addressed_native_action')
@@ -394,7 +463,12 @@ def main():
             raise RuntimeError('callback_rejection_observed')
         if any(sha(SEED / name) != digest for name, digest in manifest['files'].items()):
             raise RuntimeError('TEST_seed_source_changed')
-        raise RuntimeError('server_activation_surface_join_not_implemented')
+        if now() >= deadline: raise RuntimeError('qualification_deadline_before_final_surface')
+        alive(sway.pid); alive(client_pid)
+        final_surface = bound_server_surface(client_pid, token_hash)
+        if final_surface != joined: raise RuntimeError('selected_server_surface_changed_before_collection')
+        if now() >= deadline: raise RuntimeError('qualification_deadline_before_PASS')
+        report['passed'] = True
     except Exception as error:
         report['failure'] = type(error).__name__ + ': ' + str(error)
     finally:
@@ -443,7 +517,7 @@ def main():
         def qualify():
             for qualified, observed in (('handoffQualified', 'handoffObserved'), ('tokenForwardingQualified', 'tokenEqualityObserved'), ('focusQualified', 'serverFocusObserved')):
                 report[qualified] = report['passed'] and report.get(observed, False)
-            report['activationQualified'] = False  # Requires the actual server connection/surface join.
+            report['activationQualified'] = report['passed'] and report.get('serverSurfaceFocusJoinObserved', False)
         try:
             qualify()
             try:

@@ -54,9 +54,10 @@ focus observation. It retains partial evidence and collects the owned cgroup and
 before publishing a result. This source has not run in a guest.
 
 The controller refuses inside its result/cleanup/shutdown boundary before creating a
-native child or sending a notification. The refusal remains until a reviewed server-side
-join binds the client's actual Wayland connection and live toplevel to the activation
-surface and focused Sway node. Client stderr plus matching PID/focus is insufficient.
+native child or sending a notification. Its server-side join now binds the observed
+connection handle and live toplevel to the selected client and focused Sway view in
+source. The refusal remains until complete host/seed assembly and the join pass renewed
+integration review. Client stderr plus matching PID/focus alone is insufficient.
 The host factory, seed assembly and host reader for `NAVIGATION_TEST_HANDOFF_V1` also
 remain outstanding. Never run the dormant scaffold as a native qualification attempt.
 
@@ -111,9 +112,28 @@ bound. Independent compiler evidence review passed 50 source/archive/binary/oper
 and lifecycle binding assertions. Neither acceptance qualifies native integration.
 
 This remains preparation: no manifest staging, Sway loading, retained-handle validation,
-before/after stable focus-node join or native attempt has occurred. Resource allocation
+before/after stable focus-node observation or native attempt has occurred. Resource allocation
 does not prove completed mapping, token acceptance, focus or chat navigation. The early
 guest refusal remains in place until the complete integration passes renewed review.
 
 Public API references: [Wayland server API](https://wayland.freedesktop.org/docs/html/apc.html)
 and [Linux SO_PEERPIDFD introduction](https://github.com/torvalds/linux/commit/7b26952a91cf65ff1cc867a2382a8964d8c0ee7d).
+
+## Dormant observer integration
+
+The guest manifest now freezes the observer library and decoder as two additional
+seed entries. Only the Sway process receives the preload and explicitly passed private
+log fd. The root controller checks the observer's socket-derived pidfd through the live
+compositor against its own retained selected-client incarnation and executable.
+
+The decoded unique live role, resource generations and selected-record fingerprint must
+remain identical before and after the peer-verified IPC focus query. The focused node
+must be a native `con`/`xdg_shell` view; XWayland nodes are rejected. The same surface
+snapshot is checked again before final collection. Matching activation is selected by
+the expected token hash. Final provider waits use the remaining deadline, and expiry
+is checked before the final surface snapshot and immediately before PASS.
+
+Three independent source reviews accepted this integration after closing the late-PASS
+deadline gap. The early refusal still precedes cgroup/native child creation. This is
+source preparation, not observed kernel/focus qualification, token causation or chat
+selection. Complete host factory, runtime staging and frame-reader review remain next.
