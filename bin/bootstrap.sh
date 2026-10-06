@@ -1483,10 +1483,10 @@ select_product() {
             --scope-root|--scope-root=*|--client-executable|--client-executable=*)
                 case "$1" in
                     *=*) value=${1#*=}; shift ;;
-                    *) [ "$#" -ge 2 ] || return 1; value=$2; shift 2 ;;
+                    *) [ "$#" -ge 2 ] || { echo "Missing value for $key" >&2; return 1; }; value=$2; shift 2 ;;
                 esac
-                [ "${#value}" -le 4096 ] || return 1
-                case "$value" in /*|[A-Za-z]:/*|[A-Za-z]:\\*) ;; *) return 1 ;; esac
+                [ "${#value}" -le 4096 ] || { echo "$key must be at most 4096 characters." >&2; return 1; }
+                case "$value" in /*|[A-Za-z]:/*|[A-Za-z]:\\*) ;; *) echo "$key must be absolute." >&2; return 1 ;; esac
                 case "$key" in --scope-root) scope_root=$value ;; *) client_exec=$value ;; esac
                 CONFIGURE_ARGS+=("$key" "$value") ;;
             --navigation=*|--app=*|--team-id=*|--allow-unknown-caller=*|--allow-caller-asserted=*|--codex-home=*)
