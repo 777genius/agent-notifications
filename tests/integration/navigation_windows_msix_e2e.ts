@@ -26,6 +26,8 @@ let activationIntent = false;
 const operator = String.raw`
 param([string]$Mode, [string]$ContextFile)
 $ErrorActionPreference = 'Stop'
+if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) { throw 'target Windows PowerShell 5.1 required' }
+$securityModule = Import-Module Microsoft.PowerShell.Security -PassThru -ErrorAction Stop
 $c = Get-Content -LiteralPath $ContextFile -Raw -Encoding UTF8 | ConvertFrom-Json
 $r = [IO.Path]::GetFullPath($c.root)
 if ($c.nonce -notmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' -or
@@ -89,7 +91,8 @@ if ($Mode -eq 'prepare') {
   $s = [ordered]@{ nonce=$c.nonce; userSid=$sid; session=$session; name=$name; publisher=$subject;
     executableSHA256=(HashFile $c.binary); makeappx=(Join-Path $sdk.FullName 'arm64\makeappx.exe');
     signtool=(Join-Path $sdk.FullName 'arm64\signtool.exe'); sdkVersion=$sdk.Name;
-    uniquePackageAbsent=$true; uniqueSignerAbsent=$true; uniqueTrustAbsent=$true }
+    uniquePackageAbsent=$true; uniqueSignerAbsent=$true; uniqueTrustAbsent=$true;
+    powershellVersion=$PSVersionTable.PSVersion.ToString(); securityModulePath=$securityModule.Path }
   $s.makeappxSHA256 = HashFile $s.makeappx; $s.signtoolSHA256 = HashFile $s.signtool
   Save $s; exit 0
 }
@@ -227,9 +230,9 @@ function read(name: string): Json {
   if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('invalid record: ' + name);
   return result as Json;
 }
-function execute(mode: string, exe: string, args: string[], timeout: number): Step {
+function execute(mode: string, exe: string, args: string[], timeout: number, env = process.env): Step {
   if (!root) throw new Error('owned root absent');
-  const result = spawnSync(exe, args, { cwd: root, env: process.env, encoding: 'utf8', timeout,
+  const result = spawnSync(exe, args, { cwd: root, env, encoding: 'utf8', timeout,
     maxBuffer: 65_536, windowsHide: false });
   const step: Step = { mode, pid: result.pid, status: result.status, signal: result.signal,
     stdout: result.stdout ?? '', stderr: result.stderr ?? '', collectedAt: Date.now(),
@@ -249,7 +252,8 @@ function powershell(mode: string, timeout: number): Step {
   if (!root || !process.env.SystemRoot) throw new Error('PowerShell prerequisite absent');
   return execute('package-' + mode,
     join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
-    ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', join(root, 'package-operator.ps1'), mode, join(root, 'operator-context.json')], timeout);
+    ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', join(root, 'package-operator.ps1'), mode, join(root, 'operator-context.json')], timeout,
+    Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toUpperCase() !== 'PSMODULEPATH')));
 }
 function observeShow(): void {
   if (!root || !nonce) return;
