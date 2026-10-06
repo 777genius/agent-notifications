@@ -137,3 +137,24 @@ Three independent source reviews accepted this integration after closing the lat
 deadline gap. The early refusal still precedes cgroup/native child creation. This is
 source preparation, not observed kernel/focus qualification, token causation or chat
 selection. Complete host factory, runtime staging and frame-reader review remain next.
+
+## Qualified runtime acquisition and compatibility replay
+
+The retained successful portal callback archive binds the modern runtime to image
+`sha256:3bdd7af82838b41198d1286cce85ed6ca0fc13721609feef70513404c29fd271`.
+It is distinct from the image used for the compiler-only checks. A never-started owned
+TEST container exported the portal and GTK trees as bounded TAR files. Their embedded
+frontend/backend executable hashes match the prior qualified native evidence exactly.
+The export projection retains archive/raw hashes and the expected/actual comparison.
+The temporary container was removed. Never-started and cleanup are bound to the retained
+operator/report; separate raw Docker inspect output was not saved.
+
+Both archives contain only regular files/directories. Future seed staging must still
+reject path aliases and links before extraction. Acquisition did not load either runtime
+or qualify a new native attempt.
+
+An independent pure replay of the shared native-chain decoder accepted the retained
+actual positive trace with strict token/action/callback ordering. The token hash and
+protocol offsets match the prior evidence; the pre-click prefix was decoded as strict
+UTF-8. This verifies compatibility of the existing container consumer without another
+notification or click. It does not qualify selected-client activation, focus or chat.
