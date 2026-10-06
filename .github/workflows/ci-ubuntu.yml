@@ -502,6 +502,7 @@ jobs:
           parent = pathlib.Path(tempfile.mkdtemp(prefix='TEST-cursor-installed-packet-',dir='/tmp'))
           parent.chmod(0o755)  # Only this newly owned TEST directory.
           target = parent/'carrier';target.mkdir(mode=0o755)
+          target.chmod(0o755)
           (target/'native_case.py').write_bytes(candidate)
           (target/'native_case.py').chmod(0o644)
           with open(os.environ['GITHUB_ENV'],'a') as environment:
@@ -670,8 +671,10 @@ jobs:
               base = parent/'TEST-cursor-installed-preparation'
               assert not os.path.lexists(base)
               base.mkdir(mode=0o755)
+              base.chmod(0o755)
               (base/'tracked-protection-before.json').write_text(json.dumps(before,indent=2)+'\n')
               stage = base/'stage';stage.mkdir(mode=0o755)
+              stage.chmod(0o755)
               primary = stage/'claude-notifications-linux-amd64'
               helper = base/'authoritative-readback'
               builder = base/'build-portable-package'
@@ -708,6 +711,7 @@ jobs:
               archive.chmod(0o644)
               assert total == ARCHIVE_SIZE and digest(archive) == ARCHIVE_SHA
               dist = base/'cursor-dist';dist.mkdir(mode=0o755)
+              dist.chmod(0o755)
               with tarfile.open(archive) as opened:
                   members = opened.getmembers()
                   assert len(members) == 580 and len({m.name for m in members}) == 580
@@ -720,7 +724,12 @@ jobs:
                   total = 0
                   for m in files:
                       target = dist.joinpath(*pathlib.PurePosixPath(m.name).parts[strip:])
-                      target.parent.mkdir(mode=0o755,parents=True,exist_ok=True)
+                      directory = dist
+                      for part in target.relative_to(dist).parts[:-1]:
+                          directory = directory/part
+                          if not directory.exists():
+                              directory.mkdir(mode=0o755)
+                              directory.chmod(0o755)
                       assert not target.exists() and 0 <= m.size <= 256<<20
                       stream = opened.extractfile(m)
                       body = stream.read(m.size+1)
