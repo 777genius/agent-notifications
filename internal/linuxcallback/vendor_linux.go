@@ -15,13 +15,18 @@ import (
 	"syscall"
 )
 
-// This catalog must be generated from the authenticated official package. An
-// empty catalog intentionally keeps production unavailable before acquisition.
+// Generated from the authenticated official package by TEST run 37544121731.
+// Manifest SHA256: 0d90a150c5066973b5884e2086b632737536bcbf362404ed81bb284d3b37f326.
+// Catalog acquisition does not qualify native callback or navigation behavior.
 //
 //go:embed vendor-chatgpt-26.930.51102-amd64.json
 var catalog []byte
 
 const packageSHA256 = "637c3c94bc50f8ee33a15e2e28ec7f92a787f0943e700efe111bc0bf0d4813b4"
+
+// resources/app.asar is the largest regular file in this pinned package.
+// Another release requires its own authenticated profile, not an unbounded cap.
+const maxVendorRegularFileBytes = 543408877
 
 type VendorEntry struct {
 	Path   string `json:"path"`
@@ -155,7 +160,7 @@ func verifyTree(ctx context.Context, m VendorManifest) error {
 				return ErrUnavailable
 			}
 		case "file":
-			if !info.Mode().IsRegular() || info.Mode().Perm()&0022 != 0 || !validKey(entry.SHA256) || info.Size() < 0 || info.Size() > 512<<20 {
+			if !info.Mode().IsRegular() || info.Mode().Perm()&0022 != 0 || !validKey(entry.SHA256) || info.Size() < 0 || info.Size() > maxVendorRegularFileBytes {
 				return ErrUnavailable
 			}
 			total += info.Size()
@@ -183,7 +188,7 @@ func verifyTree(ctx context.Context, m VendorManifest) error {
 				n, re := f.Read(buffer)
 				if n > 0 {
 					readBytes += int64(n)
-					if readBytes > 512<<20 || readBytes > info.Size() {
+					if readBytes > maxVendorRegularFileBytes || readBytes > info.Size() {
 						_ = f.Close()
 						return ErrUnavailable
 					}
