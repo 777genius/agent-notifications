@@ -106,3 +106,27 @@ the group sweep already populated their handles. Selected failures record phase,
 PID, birth, UID fields and cgroup without argv. Incarnation/pidfd/membership guards
 remain mandatory. Any further experiment requires a newly reviewed source/capsule
 and fresh owned VM/root/nonce; it must not replay this unknown semantic attempt.
+
+
+## Selected-admission assembly: activation request unproved
+
+Exact source `59bb25b8efdceb6a438bdb0de7329c31882ab014` ran once with a new
+reviewed capsule, VM/root and nonce. Sender exit0, cold callback owner, selected
+client incarnation/UID1000/executable/vendor profile, pointer CLICKED acknowledgement
+and native token equality were observed. The first 12-second observation of the
+selected client's matching `xdg_activation_v1.activate` expired. Server focus,
+activation/token consumption and selected chat remain unqualified. The raw main
+profile is `chatgpt (unconfined)`, Seccomp0/NoNewPrivs0; no full-client sandbox
+qualification is inferred from the selected vendor profile name.
+
+Independent raw review passed 412 assertions over all 61 retained files, actual
+ISO, source/capsule, command outputs and native completion frame. All 24 retained
+incarnations exited, the cgroup was empty, guest shutdown/QEMU exit0 and owned host
+removal were observed. The semantic activation outcome remains unknown. The
+bounded observation failure does not prove permanent platform unsupportedness.
+
+The useful next step is offline readonly forensic acquisition of the fixed TEST
+`client.stderr` from the retained immutable QCOW2 chain. Never boot the original
+guest or replay its native action. Any derived image belongs to a fresh owned TEST
+scratch, with bounded resources, source/range hashes and read-only log extraction.
+No additional native experiment is justified merely by this timeout.

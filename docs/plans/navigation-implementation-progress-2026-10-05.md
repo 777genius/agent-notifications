@@ -2,7 +2,7 @@
 
 Objective remains the complete implementation and E2E of the navigation adapters plan. This checkpoint is not completion.
 
-## Current checkpoint
+## Initial P0 checkpoint
 
 Base: `cccc0208358763c4a2650ed84e51145ec3d5a4f1`.
 
@@ -30,7 +30,7 @@ git diff --check
 | P3 macOS fast path | Disabled after negative P2 decision | Before/after fast-path latency testing is inapplicable to this rejected candidate; no acceleration claim |
 | P4 sources | Existing ingress boundaries audited; no shared source migration required | Authentic MCP submission accepted, exact MCP notification click still awaits human confirmation; managed CLI TEST bundle/signing precondition rejected |
 | P5w Windows | Reviewed qualification harness merged via #352; native lane unqualified | Show/history observed, actual Shell UI click and cold callback/focus/package navigation not proved on CI; no interactive Windows machine available |
-| P5l Linux | Durable private-bus callback/token fixture qualified; dormant preparation #360 merged | First #361 assembly failed before SDK/click, containment retained separately; corrected attempt reached sender exit0/click, then failed UID admission; cleanup passed. Selected-client activation/token consumption/navigation remain unproved |
+| P5l Linux | Durable private-bus callback/token fixture qualified; dormant preparation #360 merged | First #361 assembly failed before SDK/click, containment retained separately; later reviewed attempt passed selected admission/click/token equality, then activation-request observation expired; cleanup passed. Client activation/token consumption/navigation remain unproved |
 
 The user authorized native testing on their Mac in this turn. Tests must still use synthetic chats/notifications; no agent/runtime actions in real user projects. Current permission does not establish Windows/Linux availability or any native test result.
 
@@ -38,7 +38,7 @@ The user authorized native testing on their Mac in this turn. Tests must still u
 
 Host `workers-fsn1-01`, verified machine ID `d856d40da5ad4e23b4f67773e5942842`; runtime `2763cd951bdbb0bd4722836309da16f3f2f5fe95`. Dedicated source clone is clean at base SHA. Broker launch for `an-navigation-measurement-20261005` was rejected before a worker started. Read-only admission snapshot attributes the debt to stopped jobs `an-301302-identity-20261002` and `an-301302-identity-20261002-v2` sharing one workspace. No prior job, result or registry was deleted or manually rewritten. This does not demonstrate pool exhaustion; eligible accounts exist.
 
-Next steps: safely resolve broker admission through supported controls, build fresh-helper/cold callback sample collection using synthetic targets on the authorized Mac, and finish P2 qualification before enabling fast path. Keep full objective active until all applicable plan acceptance has evidence.
+This is historical broker admission evidence, not a current pool-exhaustion claim. The current PSN fast-path candidate is rejected, so it must not be enabled or retested for acceleration. Remaining evidence is scoped platform/client qualification and the pending authentic MCP observation; keep the full objective active until applicable acceptance is resolved.
 
 ## Native evidence checkpoint
 
@@ -112,3 +112,10 @@ and click, then failed the UID guard before selected-receiver qualification. Cle
 poweroff and host removal passed. The guard does not distinguish owned-group sweep
 from selected-peer admission; no UID cause is asserted. The latest human direct-PSN confirmation cannot be
 reused as confirmation of the separately submitted authentic MCP notification.
+
+A further distinct source-bound TEST at 59bb25b passed selected client admission,
+click acknowledgement and token equality, then expired while observing a matching
+client activation request. All 24 tracked incarnations and the owned VM/container
+were collected. Activation/focus/chat remain unqualified; this is a scoped negative,
+not a declaration that Linux is globally unsupported. Offline retained client-log
+inspection is the next evidence step, without reboot or native replay.
