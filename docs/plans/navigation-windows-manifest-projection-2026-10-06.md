@@ -34,3 +34,7 @@ or a repaired timeout cause. No native diagnostic execution is claimed here.
 Microsoft documents [module autoloading](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_modules)
 and [bounded XML reader settings](https://learn.microsoft.com/en-us/dotnet/api/system.xml.xmlreadersettings).
 Module lookup is a possible execution boundary, not a cause inferred from this run.
+
+Retained-fixture run37510580732 on e092bdd timed out after entry27ms/path_start64ms, before xml_load_start. Artifact11436295990 SHA2564e8900f1c66b30c57e7f951065ce24268689b02efc3dd232f7c8e49552cd6563 was independently verified. This isolates the gap to path lookup/file length/reader construction, not XML parsing or the official package download. It does not prove the cmdlet autoload mechanism.
+
+The next bounded repair uses native cwd plus an explicit equality check against the controller-owned expected cwd, .NET Path/FileInfo APIs and individual checkpoints. Provider cmdlets are no longer required for these operations. The 15s bound, 2MiB guard, DTD rejection control, PID/nonce correlation and no-effect fixture mode stay intact. Windows execution remains pending.

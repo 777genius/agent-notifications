@@ -17,7 +17,8 @@ function execute(phase: string, executable: string, args: string[], timeout: num
     options: { cwd?: string; expectedRejection?: boolean; allowCollectedFailure?: boolean } = {}) {
   if (!root) throw new Error('owned root absent');
   const env: NodeJS.ProcessEnv = { ...process.env, AGENT_NOTIFY_NAVIGATION_WINDOWS_E2E: '1',
-    NAVIGATION_MANIFEST_NONCE: typeof evidence.nonce === 'string' ? evidence.nonce : '' };
+    NAVIGATION_MANIFEST_NONCE: typeof evidence.nonce === 'string' ? evidence.nonce : '',
+    NAVIGATION_MANIFEST_CWD: options.cwd ?? root };
   if (!phase.startsWith('fixture-artifact')) { delete env.GH_TOKEN; delete env.GITHUB_TOKEN; }
   if (phase.startsWith('manifest')) for (const key of Object.keys(env)) {
     if (key.toLowerCase() === 'psmodulepath') delete env[key];
@@ -238,9 +239,17 @@ $settings.DtdProcessing=[System.Xml.DtdProcessing]::Prohibit
 $settings.XmlResolver=$null
 $settings.MaxCharactersInDocument=2097152
 Checkpoint 'path_start'
-$path=Join-Path (Get-Location) 'vendor-manifest.xml'
-if ((Get-Item -LiteralPath $path).Length -gt 2097152) { throw 'manifest too large' }
+$cwd=[IO.Path]::GetFullPath($env:NAVIGATION_MANIFEST_CWD)
+if (![String]::Equals($cwd,[Environment]::CurrentDirectory,[StringComparison]::OrdinalIgnoreCase)) { throw 'owned cwd mismatch' }
+$path=[IO.Path]::Combine($cwd,'vendor-manifest.xml')
+Checkpoint 'path_ready'
+Checkpoint 'length_start'
+$length=[IO.FileInfo]::new($path).Length
+if ($length -gt 2097152) { throw 'manifest too large' }
+Checkpoint 'length_ready'
+Checkpoint 'reader_create_start'
 $reader=[System.Xml.XmlReader]::Create($path,$settings)
+Checkpoint 'reader_create_ready'
 Checkpoint 'xml_load_start'
 try { $doc=[System.Xml.XmlDocument]::new(); $doc.XmlResolver=$null; $doc.Load($reader) } finally { $reader.Dispose() }
 Checkpoint 'xml_loaded'
