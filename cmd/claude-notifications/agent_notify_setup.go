@@ -52,6 +52,8 @@ Enable optionally replaces the route using ALL FOUR explicit choices:
   --app /physical/path/Codex.app --team-id ABCDE12345
   --allow-unknown-caller true|false --allow-caller-asserted true|false
   Or use --navigation none without --app/--team-id; both consent flags are required.
+  Linux may use --navigation desktop_thread after setup-linux-callback; both
+  consent flags are required, without --app/--team-id. Other bindings fail closed.
   This clears app identity. The parser does not imply consent.
   Omit all route choices to preserve the selected route and consent. Rates are preserved.
   Unknown-caller consent extends the local route to indistinguishable callers.
@@ -221,7 +223,7 @@ func parseAgentNotifySetup(args []string) (a agentNotifySetupArgs, help bool, er
 		}
 	}
 	if navigation, present := a.values["navigation"]; present {
-		if navigation != "none" || a.values["app"] != "" || a.values["team-id"] != "" || count != 2 {
+		if (navigation != "none" && navigation != "desktop_thread") || a.values["app"] != "" || a.values["team-id"] != "" || count != 2 {
 			return bad()
 		}
 		for _, k := range []string{"allow-unknown-caller", "allow-caller-asserted"} {
@@ -229,7 +231,7 @@ func parseAgentNotifySetup(args []string) (a agentNotifySetupArgs, help bool, er
 				return bad()
 			}
 		}
-		a.route = &notifysetup.Route{AllowUnknownCaller: a.values["allow-unknown-caller"] == "true", AllowCallerAsserted: a.values["allow-caller-asserted"] == "true"}
+		a.route = &notifysetup.Route{LocalRouting: navigation == "desktop_thread", AllowUnknownCaller: a.values["allow-unknown-caller"] == "true", AllowCallerAsserted: a.values["allow-caller-asserted"] == "true"}
 	} else if count != 0 {
 		if count != 4 || filepath.Ext(a.values["app"]) != ".app" || len(a.values["app"]) > 1024 || len(a.values["team-id"]) != 10 {
 			return bad()
@@ -577,7 +579,7 @@ func agentNotifySetupExecute(ctx context.Context, args []string, out io.Writer, 
 		r.Reason = "registered_runtime_required"
 		return emit(r, 1)
 	}
-	o := notifysetup.Options{ControlRoot: root, RuntimeRoot: runtimeRoot, Owner: clientsetup.Managed, ConsumerID: ids[0], GlobalConfig: a.values["global-config"], VerifyApplication: verifyAgentNotifyApplication}
+	o := notifysetup.Options{ControlRoot: root, RuntimeRoot: runtimeRoot, Owner: clientsetup.Managed, ConsumerID: ids[0], GlobalConfig: a.values["global-config"], VerifyApplication: verifyAgentNotifyApplication, VerifyLinuxBinding: verifyAgentNotifyLinuxBinding}
 	if composition.setup != nil {
 		composition.setup(&o)
 	}
