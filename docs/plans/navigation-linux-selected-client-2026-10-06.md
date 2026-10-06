@@ -335,3 +335,14 @@ roles, including tab/newline/embedded variants. Four role/budget and three frame
 tests pass. Three independent source reviews accepted guest SHA256
 `dd5c4b86cebe8acf56028381acac2fe823b1f1fe7b4870ab26dcf1a7378fedc4`
 after fixing one extra-role parsing defect. A fresh native attempt is required.
+
+The changed role-source native attempt ended with QEMU exit -6 and
+`qemu_thread_create: Resource temporarily unavailable`, before any guest
+completion frame. The negative projection retains this separate runtime failure;
+client outcome remains unknown. Container absence and source/input integrity
+were confirmed by the operator. This does not qualify or invalidate the role
+classifier. A bounded runtime candidate increases the container process/thread
+cap from 64 to 128, with matching pre-boot readback and all security controls
+unchanged. Three independent source reviews accepted controller SHA256
+`f8dfe3a1446a6b468bbf25b8b3527dfe26abe012c830d95f17ac8b33e9f9d276`.
+The prior cap's causal role and the new runtime behavior remain unproven.

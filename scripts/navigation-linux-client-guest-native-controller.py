@@ -77,7 +77,7 @@ def owned_container(label, security):
         assert config['NetworkMode'] == 'none' and config['CapDrop'] == ['ALL'] and config['Privileged'] is False
         assert config['SecurityOpt'] == ['no-new-privileges'] and obj['Config']['User'] == '1000:1000'
         assert config['GroupAdd'] == ['994'] and config['Devices'] == [{'PathOnHost': '/dev/kvm', 'PathInContainer': '/dev/kvm', 'CgroupPermissions': 'rw'}]
-        assert config['Memory'] == 6 * 1024**3 and config['PidsLimit'] == 64 and config['NanoCpus'] == 2 * 10**9
+        assert config['Memory'] == 6 * 1024**3 and config['PidsLimit'] == 128 and config['NanoCpus'] == 2 * 10**9
         assert len(obj['Mounts']) == 1 and obj['Mounts'][0]['Source'] == str(ROOT) and obj['Mounts'][0]['Destination'] == '/evidence'
         assert obj['Mounts'][0]['Type'] == 'bind' and obj['Mounts'][0]['RW'] is True
         assert obj['Config']['Entrypoint'] == ['/usr/bin/python3'] and obj['Config']['Cmd'] == ['-I', '/evidence/probe.py']
@@ -115,7 +115,7 @@ try:
     rc, raw = command('create', docker + ['create', '--init', '--name', name, '--user', '1000:1000',
         '--group-add', '994', '--device', '/dev/kvm:/dev/kvm:rw', '--label', 'navigation.test=true',
         '--label', 'navigation.owner=' + nonce, '--network=none', '--cap-drop=ALL',
-        '--security-opt=no-new-privileges', '--pids-limit=64', '--memory=6g', '--cpus=2',
+        '--security-opt=no-new-privileges', '--pids-limit=128', '--memory=6g', '--cpus=2',
         '-e', 'NAVIGATION_GUEST_NATIVE_TEST=1', '-v', str(ROOT) + ':/evidence:rw',
         '--entrypoint', '/usr/bin/python3', IMAGE, '-I', '/evidence/probe.py'])
     assert rc == 0
