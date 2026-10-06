@@ -52,20 +52,20 @@ func retainedKeys(t *testing.T, raw []byte) []string {
 // Red on the exact reviewed source: complete T used to hide 1s native drift.
 // Legal T=1.2s still permits normal consecutive claims; native R+R does not.
 func TestAdmissionNativeReadDrift(t *testing.T) {
-	ctx, a, r, c := admissionFixture(t)
+	ctx, a, r, c := admissionStoreFixture(t)
 	qualifiedFixture(&a, &r, c)
-	tryAdmission(t, ctx, a, r, Admitted)
+	tryAdmissionCommand(t, ctx, a, r, Admitted)
 	c.sample.TickNS += int64(time.Second)
 	c.sample.WallNS += int64(time.Second)
 	r.Provenance = freshProvenance(c.sample)
 	r.Fact.Request = "second-normal"
-	tryAdmission(t, ctx, a, r, Admitted)
+	tryAdmissionCommand(t, ctx, a, r, Admitted)
 	keys := retainedKeys(t, readClaimFixture(t, ctx, a, r))
 	c.sample.TickNS += int64(time.Second)
 	c.sample.WallNS += int64(2 * time.Second)
 	r.Provenance = freshProvenance(c.sample)
 	r.Fact.Request = "native-drift-trigger"
-	tryAdmission(t, ctx, a, r, TimeUnverified)
+	tryAdmissionCommand(t, ctx, a, r, TimeUnverified)
 	after := retainedKeys(t, readClaimFixture(t, ctx, a, r))
 	if len(after) != 2 || after[0] != keys[0] || after[1] != keys[1] {
 		t.Fatal("drift changed business claims")
@@ -75,28 +75,28 @@ func TestAdmissionNativeReadDrift(t *testing.T) {
 // Independent fence digest and exact native tolerance catch changes to the
 // E2 byte contract, max(Rprev,Rnow), or hidden total-T progress tolerance.
 func TestAdmissionNativePolicyGoldenAndProgressBoundary(t *testing.T) {
-	ctx, a, r, c := admissionFixture(t)
+	ctx, a, r, c := admissionStoreFixture(t)
 	qualifiedFixture(&a, &r, c)
 	if c.sample.Fence != "cdd5dadec803fe5c5779886f4ef964085e5d5878e75b3418e40cfefc13c9b648" {
 		t.Fatal("qualified policy fence differs from external golden")
 	}
-	tryAdmission(t, ctx, a, r, Admitted)
+	tryAdmissionCommand(t, ctx, a, r, Admitted)
 	c.sample.TickNS += 1_000_000_000
 	c.sample.WallNS += 1_206_000_000
 	r.Provenance = freshProvenance(c.sample)
 	r.Fact.Request = "at-native-bound"
-	tryAdmission(t, ctx, a, r, Admitted)
+	tryAdmissionCommand(t, ctx, a, r, Admitted)
 	c.sample.TickNS += 1_000_000_000
 	c.sample.WallNS += 1_206_000_001
 	r.Provenance = freshProvenance(c.sample)
 	r.Fact.Request = "over-native-bound"
-	tryAdmission(t, ctx, a, r, TimeUnverified)
+	tryAdmissionCommand(t, ctx, a, r, TimeUnverified)
 }
 
 // Native retention is 24h+103ms+103ms, independent of total T=1.2s.
 // External full-capacity rows catch premature eviction and overlong retention.
 func TestAdmissionNativeRetentionBoundary(t *testing.T) {
-	ctx, a, r, c := admissionFixture(t)
+	ctx, a, r, c := admissionStoreFixture(t)
 	qualifiedFixture(&a, &r, c)
 	rows := make([]map[string]any, 4096)
 	for i := range rows {
@@ -116,14 +116,14 @@ func TestAdmissionNativeRetentionBoundary(t *testing.T) {
 	c.sample.TickNS += int64(24*time.Hour) + 205_999_999
 	c.sample.WallNS += int64(24*time.Hour) + 205_999_999
 	r.Provenance = freshProvenance(c.sample)
-	tryAdmission(t, ctx, a, r, Capacity)
+	tryAdmissionCommand(t, ctx, a, r, Capacity)
 	if len(retainedKeys(t, readClaimFixture(t, ctx, a, r))) != 4096 {
 		t.Fatal("early native pruning")
 	}
 	c.sample.TickNS++
 	c.sample.WallNS++
 	r.Provenance = freshProvenance(c.sample)
-	tryAdmission(t, ctx, a, r, Admitted)
+	tryAdmissionCommand(t, ctx, a, r, Admitted)
 	if len(retainedKeys(t, readClaimFixture(t, ctx, a, r))) != 1 {
 		t.Fatal("verified native capacity did not recover")
 	}
@@ -133,9 +133,9 @@ func TestAdmissionNativeRetentionBoundary(t *testing.T) {
 // forever. Reopen the durable store, reject the old epoch, preserve dedup, and
 // retain old claims for a full native 24h+206ms after the conservative baseline.
 func TestAdmissionPersistentWallRecovery(t *testing.T) {
-	ctx, a, r, c := admissionFixture(t)
+	ctx, a, r, c := admissionStoreFixture(t)
 	qualifiedFixture(&a, &r, c)
-	tryAdmission(t, ctx, a, r, Admitted)
+	tryAdmissionCommand(t, ctx, a, r, Admitted)
 	initial := r.Fact
 	initialKey := retainedKeys(t, readClaimFixture(t, ctx, a, r))[0]
 	c.sample.TickNS += int64(time.Second)
@@ -143,7 +143,7 @@ func TestAdmissionPersistentWallRecovery(t *testing.T) {
 	baseline := c.sample.TickNS
 	r.Provenance = freshProvenance(c.sample)
 	r.Fact.Request = "wall-jump-trigger"
-	tryAdmission(t, ctx, a, r, TimeUnverified)
+	tryAdmissionCommand(t, ctx, a, r, TimeUnverified)
 	triggerEpoch := r.Provenance.SourceEpoch
 	if keys := retainedKeys(t, readClaimFixture(t, ctx, a, r)); len(keys) != 1 || keys[0] != initialKey {
 		t.Fatal("wall jump pruned or claimed")
@@ -157,27 +157,27 @@ func TestAdmissionPersistentWallRecovery(t *testing.T) {
 	freshEpoch := r.Provenance.SourceEpoch
 	r.Provenance.SourceEpoch = triggerEpoch
 	before := string(readClaimFixture(t, ctx, a, r))
-	tryAdmission(t, ctx, a, r, TimeUnverified)
+	tryAdmissionCommand(t, ctx, a, r, TimeUnverified)
 	if string(readClaimFixture(t, ctx, a, r)) != before {
 		t.Fatal("old epoch repaired itself")
 	}
 	r.Provenance.SourceEpoch = freshEpoch
 	r.Provenance.EpochStartedTickNS = baseline
-	tryAdmission(t, ctx, a, r, TimeUnverified)
+	tryAdmissionCommand(t, ctx, a, r, TimeUnverified)
 	r.Provenance = freshProvenance(c.sample)
 	r.Fact.Request = "fresh-new-source"
-	tryAdmission(t, ctx, a, r, Admitted)
+	tryAdmissionCommand(t, ctx, a, r, Admitted)
 	r.Fact = initial
-	tryAdmission(t, ctx, a, r, Duplicate)
+	tryAdmissionCommand(t, ctx, a, r, Duplicate)
 	remaining := baseline + int64(24*time.Hour) + 205_999_999 - c.sample.TickNS
 	c.sample.TickNS += remaining
 	c.sample.WallNS += remaining
 	r.Provenance = freshProvenance(c.sample)
-	tryAdmission(t, ctx, a, r, Duplicate)
+	tryAdmissionCommand(t, ctx, a, r, Duplicate)
 	c.sample.TickNS++
 	c.sample.WallNS++
 	r.Provenance = freshProvenance(c.sample)
-	tryAdmission(t, ctx, a, r, Admitted)
+	tryAdmissionCommand(t, ctx, a, r, Admitted)
 }
 
 type unavailableAuthority struct{}
@@ -191,9 +191,9 @@ func (unavailableAuthority) Snapshot(context.Context) (ClockSample, error) {
 func TestAdmissionNoRepairWithoutPositiveAuthority(t *testing.T) {
 	for _, mode := range []string{"regression", "unavailable", "unqualified", "senderEpochFence"} {
 		t.Run(mode, func(t *testing.T) {
-			ctx, a, r, c := admissionFixture(t)
+			ctx, a, r, c := admissionStoreFixture(t)
 			qualifiedFixture(&a, &r, c)
-			tryAdmission(t, ctx, a, r, Admitted)
+			tryAdmissionCommand(t, ctx, a, r, Admitted)
 			before := string(readClaimFixture(t, ctx, a, r))
 			switch mode {
 			case "regression":
@@ -208,7 +208,7 @@ func TestAdmissionNoRepairWithoutPositiveAuthority(t *testing.T) {
 			}
 			r.Provenance = freshProvenance(c.sample)
 			r.Fact.Request = "no-repair"
-			tryAdmission(t, ctx, a, r, TimeUnverified)
+			tryAdmissionCommand(t, ctx, a, r, TimeUnverified)
 			if string(readClaimFixture(t, ctx, a, r)) != before {
 				t.Fatal("unverified authority repaired durable state")
 			}
@@ -221,9 +221,9 @@ func TestAdmissionNoRepairWithoutPositiveAuthority(t *testing.T) {
 func TestAdmissionMissingNativeStoreAuthority(t *testing.T) {
 	for _, field := range []string{"checkpointR", "claimR", "legacyPayload"} {
 		t.Run(field, func(t *testing.T) {
-			ctx, a, r, c := admissionFixture(t)
+			ctx, a, r, c := admissionStoreFixture(t)
 			qualifiedFixture(&a, &r, c)
-			tryAdmission(t, ctx, a, r, Admitted)
+			tryAdmissionCommand(t, ctx, a, r, Admitted)
 			var state map[string]any
 			if err := json.Unmarshal(readClaimFixture(t, ctx, a, r), &state); err != nil {
 				t.Fatal(err)
@@ -249,7 +249,7 @@ func TestAdmissionMissingNativeStoreAuthority(t *testing.T) {
 			c.sample.BootID = "TEST-next-qualified-boot"
 			c.sample.Fence = a.TimePolicy.Fence(c.sample.BootID, c.sample.Domain)
 			r.Provenance = freshProvenance(c.sample)
-			tryAdmission(t, ctx, a, r, StoreUnavailable)
+			tryAdmissionCommand(t, ctx, a, r, StoreUnavailable)
 			if string(readClaimFixture(t, ctx, a, r)) != string(raw) {
 				t.Fatal("missing native authority repaired itself")
 			}
@@ -262,20 +262,20 @@ func TestAdmissionMissingNativeStoreAuthority(t *testing.T) {
 func TestAdmissionRealTerminalError(t *testing.T) {
 	for _, kind := range []TerminalIdentityKind{V1FinalMessage, V2TerminalEvent} {
 		t.Run(string(kind), func(t *testing.T) {
-			ctx, a, r, _ := admissionFixture(t)
+			ctx, a, r, _ := admissionStoreFixture(t)
 			r.Fact.Kind, r.Fact.Request, r.Fact.Terminal = "terminal_error", "", "actual-final-native-message"
 			r.Provenance.TerminalBinding = NativeTerminalIdentity{Kind: kind, ID: r.Fact.Terminal}
 			valid := r.Provenance.TerminalBinding
 			for _, invalid := range []NativeTerminalIdentity{{}, {Kind: kind, ID: "different-native-binding"}, {Kind: "unverified", ID: r.Fact.Terminal}} {
 				r.Provenance.TerminalBinding = invalid
-				tryAdmission(t, ctx, a, r, InvalidFact)
+				tryAdmissionCommand(t, ctx, a, r, InvalidFact)
 				if string(readClaimFixture(t, ctx, a, r)) != "{}" {
 					t.Fatal("invalid terminal binding wrote claim")
 				}
 			}
 			r.Provenance.TerminalBinding = valid
-			tryAdmission(t, ctx, a, r, Admitted)
-			tryAdmission(t, ctx, a, r, Duplicate)
+			tryAdmissionCommand(t, ctx, a, r, Admitted)
+			tryAdmissionCommand(t, ctx, a, r, Duplicate)
 			keys := retainedKeys(t, readClaimFixture(t, ctx, a, r))
 			// Golden from independent Python hmac/struct, including real terminal type.
 			want := map[TerminalIdentityKind]string{V1FinalMessage: "034d91dab0e74ebcc49e087e3359d716d37355a27f19e85cf996cc3ed399c949", V2TerminalEvent: "0dcee2987093b7b8e9858b0f92dd5a1006c93f2e15bbce306471e9b19d7b88c0"}[kind]
@@ -284,7 +284,7 @@ func TestAdmissionRealTerminalError(t *testing.T) {
 			}
 			r.Fact.Terminal = "another-real-terminal"
 			r.Provenance.TerminalBinding.ID = r.Fact.Terminal
-			tryAdmission(t, ctx, a, r, Admitted)
+			tryAdmissionCommand(t, ctx, a, r, Admitted)
 		})
 	}
 }
