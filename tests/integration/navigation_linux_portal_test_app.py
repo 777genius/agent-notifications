@@ -33,10 +33,12 @@ def save(root, name, value):
 
 
 def main():
-    if len(sys.argv) != 3 or sys.argv[1] not in ('--sender', '--service'):
+    if len(sys.argv) != 3 or sys.argv[1] not in ('--sender', '--service', '--remove'):
         raise RuntimeError('explicit_TEST_mode_required')
     root = Path(sys.argv[2]).resolve()
-    if root != Path('/evidence/runtime') or os.environ.get('NAVIGATION_TEST_CONTAINER') != '1' or not Path('/.dockerenv').exists() or root.stat().st_mode & 0o777 != 0o700 or (root / 'fixture.marker').read_text() != 'Linux portal TEST only\n':
+    base = Path('/evidence/runtime')
+    allowed = root == base or (os.environ.get('NAVIGATION_RESTART_TEST') == '1' and root in (base / 'fixtures/A', base / 'fixtures/B'))
+    if not allowed or os.environ.get('NAVIGATION_TEST_CONTAINER') != '1' or not Path('/.dockerenv').exists() or base.stat().st_mode & 0o777 != 0o700 or root.stat().st_mode & 0o777 != 0o700 or (base / 'fixture.marker').read_text() != 'Linux portal TEST only\n' or (root / 'fixture.marker').read_text() != 'Linux portal TEST only\n':
         raise RuntimeError('owned_TEST_root_required')
     spec = json.loads((root / 'spec.json').read_text())
     if not re.fullmatch(r'org\.notification\.NavigationTest[0-9a-f]{32}', spec['appID']) or not re.fullmatch(r'[0-9a-f]{32}', spec['nonce']):
@@ -45,8 +47,9 @@ def main():
     if spec['helperSHA256'] != identity()['helperSHA256']:
         raise RuntimeError('helper_snapshot_changed')
     app = Gio.Application(application_id=spec['appID'], flags=Gio.ApplicationFlags.IS_SERVICE if sys.argv[1] == '--service' else Gio.ApplicationFlags.FLAGS_NONE)
-    if sys.argv[1] == '--sender':
-        save(root, 'sender-start.json', identity())
+    if sys.argv[1] in ('--sender', '--remove'):
+        removing = sys.argv[1] == '--remove'
+        save(root, 'remove-start.json' if removing else 'sender-start.json', identity())
         if not app.register(None) or app.get_is_remote():
             raise RuntimeError('sender_not_unique')
         connection = app.get_dbus_connection()
@@ -54,7 +57,15 @@ def main():
         connection.call_sync('org.freedesktop.portal.Desktop', '/org/freedesktop/portal/desktop',
             'org.freedesktop.host.portal.Registry', 'Register', GLib.Variant('(sa{sv})', (spec['appID'], {})),
             GLib.VariantType.new('()'), Gio.DBusCallFlags.NONE, 5000, None)
-        save(root, 'registry-registered.json', dict(identity(), appID=spec['appID']))
+        save(root, 'remove-registered.json' if removing else 'registry-registered.json', dict(identity(), appID=spec['appID']))
+        if removing:
+            save(root, 'remove-attempt.json', dict(identity(), count=1))
+            connection.call_sync('org.freedesktop.portal.Desktop', '/org/freedesktop/portal/desktop',
+                'org.freedesktop.portal.Notification', 'RemoveNotification', GLib.Variant('(s)', (spec['nonce'],)),
+                GLib.VariantType.new('()'), Gio.DBusCallFlags.NONE, 5000, None)
+            connection.flush_sync(None)
+            save(root, 'removed.json', dict(identity(), removeReturned=True))
+            return 0
         notification = {'title': GLib.Variant('s', spec['title']), 'body': GLib.Variant('s', 'Owned sender-death TEST'),
                         'default-action': GLib.Variant('s', 'app.open'), 'default-action-target': GLib.Variant('s', expected)}
         save(root, 'show-attempt.json', dict(identity(), count=1))
