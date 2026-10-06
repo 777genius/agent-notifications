@@ -25,18 +25,21 @@ jobs:
   cursor-installed-e:
     if: github.event_name == 'workflow_dispatch' && inputs.consume_cursor_e
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 40
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v7
+        timeout-minutes: 2
         with:
           ref: aa171b20e3e87477f19cb205ee960bc7eab1b73f
           persist-credentials: false
       - uses: actions/setup-go@v7
+        timeout-minutes: 3
         with:
           go-version: '1.25.8'
       - name: Verify fixed carrier transport without executing its payload
+        timeout-minutes: 1
         env:
           CURSOR_CARRIER_B64: ${{ inputs.cursor_carrier_b64 }}
         run: |
@@ -102,6 +105,7 @@ jobs:
               environment.write('CURSOR_CARRIER='+str(target/'native_case.py')+'\n')
           PY_VERIFY
       - name: Check SAME actual runner before preparation or fixed archive acquisition
+        timeout-minutes: 1
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = aa171b20e3e87477f19cb205ee960bc7eab1b73f
@@ -117,6 +121,7 @@ jobs:
           module.qualified_runner(pathlib.Path(os.environ['RUNNER_TEMP']).resolve()/'TEST-cursor-installed-one/home/.cursor',pathlib.Path('/etc/machine-id').read_text().strip())
           PY_HOST
       - name: Prepare only official standard userspace prerequisites without upgrade
+        timeout-minutes: 5
         run: |
           set -euo pipefail
           sudo apt-get update
@@ -125,6 +130,7 @@ jobs:
           # No kernel/CAP/LSM/sysctl changes or attach probing; actual permission
           # and session readiness remain fail-closed gates in the ONE carrier.
       - name: Build exact source package and bridge and produce real thirteen-key inputs
+        timeout-minutes: 15
         run: |
           python3 -B -S - <<'PY_PREPARE'
           """Proposed SAME-runner build/acquisition preparation. Not run in this job.
@@ -294,11 +300,13 @@ jobs:
               environment.write('CURSOR_EXECUTION_INPUTS='+str(output)+'\n')
           PY_PREPARE
       - name: Root ONE installed case entry after exact inputs and qualification
+        timeout-minutes: 3
         run: |
           set -euo pipefail
           sudo /usr/bin/python3 -B -S "$CURSOR_CARRIER" --execute --inputs "$CURSOR_EXECUTION_INPUTS" --consent TEST-only-public-sdk-stop-and-workspace-trust
       - name: Require authoritative SAME-case PASS and always copy existing evidence
         if: always()
+        timeout-minutes: 3
         run: |
           set -euo pipefail
           export_dir=$(mktemp -d "$RUNNER_TEMP/TEST-cursor-evidence-export-XXXXXX")
@@ -588,6 +596,7 @@ jobs:
           sudo /usr/bin/python3 -B -S "$export_dir/case_evidence.py" --runner-temp "$RUNNER_TEMP" --source-sha 805e171a4f06c27041d0dab8afc692fa0b1b81de4e389dc945a2df5708059749 --destination "$export_dir" --uid "$(id -u)" --gid "$(id -g)"
       - name: Always retain SAME-case TEST evidence and bounded preparation records
         if: always()
+        timeout-minutes: 3
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: cursor-installed-one-evidence
