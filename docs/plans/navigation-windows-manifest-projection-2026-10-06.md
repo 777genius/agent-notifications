@@ -19,9 +19,9 @@ is scoped to the job; its token reaches only the explicit fixture step and is
 removed from parser/extractor child environments. Default PR syntax checks and
 the explicit `inspect_metadata` mode retain their existing behavior.
 
-The same production TEST manifest script now flushes fixed elapsed-time phase
-checkpoints to stderr. The diagnostic projects the hash-bound XML with the same
-PowerShell 5.1 executable and 15-second budget, verifies its known two applications
+The original retained-fixture TEST manifest script flushed fixed elapsed-time phase
+checkpoints to stderr and used PowerShell 5.1. The diagnostic projects the hash-bound
+XML with a 15-second budget, verifies its known two applications
 and identity against retained SDK metadata, then requires a well-formed internal
 DTD fixture to fail at XML load. This control catches enabling DTD processing.
 Timeouts and partial checkpoints remain failed evidence, with no automatic retry.
@@ -29,7 +29,7 @@ Timeouts and partial checkpoints remain failed evidence, with no automatic retry
 Existing signature and SDK checks are preserved for future official inspections.
 The diagnostic records prior signature evidence as retained, not reverified. It
 does not establish package installation, protocol dispatch, callbacks, navigation
-or a repaired timeout cause. No native diagnostic execution is claimed here.
+or a repaired timeout cause. Historical failed executions remain failed.
 
 Microsoft documents [module autoloading](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_modules)
 and [bounded XML reader settings](https://learn.microsoft.com/en-us/dotnet/api/system.xml.xmlreadersettings).
@@ -37,4 +37,18 @@ Module lookup is a possible execution boundary, not a cause inferred from this r
 
 Retained-fixture run37510580732 on e092bdd timed out after entry27ms/path_start64ms, before xml_load_start. Artifact11436295990 SHA2564e8900f1c66b30c57e7f951065ce24268689b02efc3dd232f7c8e49552cd6563 was independently verified. This isolates the gap to path lookup/file length/reader construction, not XML parsing or the official package download. It does not prove the cmdlet autoload mechanism.
 
-The next bounded repair uses native cwd plus an explicit equality check against the controller-owned expected cwd, .NET Path/FileInfo APIs and individual checkpoints. Provider cmdlets are no longer required for these operations. The 15s bound, 2MiB guard, DTD rejection control, PID/nonce correlation and no-effect fixture mode stay intact. Windows execution remains pending.
+The bounded path repair uses native cwd plus an explicit equality check against the controller-owned expected cwd, .NET Path/FileInfo APIs and individual checkpoints. Provider cmdlets are no longer required for these operations. The 15s bound, 2MiB guard, DTD rejection control, PID/nonce correlation and no-effect fixture mode stay intact.
+
+Retained-fixture run37514297570 at 0b0968 reached XML-ready92ms, then timed out at
+15 seconds after serialize_start173ms. This isolates the new failure to the
+serialization boundary without making the prior path failure successful.
+
+The current source-only repair deliberately changes the TEST interpreter to the
+installed PowerShell7 selected by the workflow's exact `Get-Command pwsh` result.
+There is no PowerShell5 fallback, automatic retry, dependency install or deadline
+increase. A bounded child reports its PID/nonce, Core edition, version and actual
+executable path; the controller correlates these and records the executable SHA256.
+The positive manifest and negative DTD control use that same interpreter. DTD
+Prohibit, null resolver, 2MiB document/file bounds, owned cwd and the 15-second
+phase limit remain unchanged. PowerShell7 execution of this repair is pending;
+it does not establish package installation, client handoff or navigation.

@@ -72,6 +72,7 @@ jobs:
             if (Test-Path -LiteralPath $candidate -PathType Leaf) { $signtool = $candidate; break }
           }
           if (!$signtool) { throw 'image ARM64 SDK signature tool unavailable' }
+          $env:NAVIGATION_DIAGNOSTIC_PWSH = (Get-Command pwsh -CommandType Application -ErrorAction Stop).Source
           $args = @('--experimental-strip-types', 'tests/integration/navigation_windows_vendor_metadata.ts', (Join-Path $env:RUNNER_TEMP 'navigation-native-probe.exe'), $signtool)
           if ($env:NAVIGATION_VENDOR_INSPECT -ne '1') { $args += '--syntax-only' }
           & node @args
