@@ -45,3 +45,32 @@ The guest Python entry validates the same offline seed/cgroup/private-session au
 The entry retains the compositor pidfd and validates the peer of the actual connected Wayland socket before loading the library. It publishes an exclusive pointer intent, then transfers that fd directly to the shared native effect. The library does not resolve an ambient/default display. Its return code cannot qualify a notification click; the future controller must bind pointer enter/button/serial/token protocol evidence and collect the process. The native effect has a 20-second alarm; error, alarm or missing acknowledgement remains unknown and must not be replayed.
 
 All three independent source reviews accepted the pointer authority boundary and unchanged container effect. Both native entries compiled on the TEST Linux server with `-std=c11 -Wall -Wextra -Werror`; the guest library also used `-shared -fPIC`. The exact owned compiler container exited 0 and was removed, and source before/after hashes matched. The adjacent `linux-guest-pointer-compile.json` retains that evidence and the preceding no-effect preflight failure. No pointer function was invoked during the compiler check. The full guest controller/native attempt remains outstanding.
+
+## Dormant guest-controller checkpoint
+
+The controller source now composes the guarded sender/callback/pointer, private bus owners,
+kernel incarnations, shipped AppArmor profile, native token chain and peer-verified Sway
+focus observation. It retains partial evidence and collects the owned cgroup and pidfds
+before publishing a result. This source has not run in a guest.
+
+The controller refuses inside its result/cleanup/shutdown boundary before creating a
+native child or sending a notification. The refusal remains until a reviewed server-side
+join binds the client's actual Wayland connection and live toplevel to the activation
+surface and focused Sway node. Client stderr plus matching PID/focus is insufficient.
+The host factory, seed assembly and host reader for `NAVIGATION_TEST_HANDOFF_V1` also
+remain outstanding. Never run the dormant scaffold as a native qualification attempt.
+
+The existing container lane and the dormant guest controller share one native-chain
+decoder. Six pure tests use independent wire fixtures and reject foreign providers,
+notification IDs, button serials, seat/surface mismatches, lost surfaces, duplicate actions
+and a callback before the native action. The reordered-action case failed on the previous
+decoder and passed after enforcing token event < native action < typed callback. These
+fixtures do not qualify a native click. Final qualification flags derive from successful
+collection/publication and observed evidence; the missing join keeps activation false.
+
+Three independent controller reviews accepted only this dormant source checkpoint.
+Their fixes closed expired-predicate admission, late start/click deadlines, cleanup and
+publication gaps, premature qualification, missing main-process AppArmor attachment
+and callback/native-action ordering. The remaining missing join caused the explicit
+early refusal. Removing that refusal requires renewed review of the complete assembly
+and server connection/toplevel proof; this acceptance cannot authorize native execution.
