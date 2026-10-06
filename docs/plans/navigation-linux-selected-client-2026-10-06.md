@@ -265,3 +265,20 @@ Three focused independent source reviews accepted guest source `7fe15e0ba4dcf313
 outer source guards now require these changed guest bytes. Syntax and frame
 regressions pass; no new native client attempt has occurred. Before any new VM
 attempt, use a separately captured TEST stage and complete focused qualification.
+
+
+## Actual corrected-source offline attempt: failed
+
+A distinct one-shot TEST stage executed commit `157f449`, guest `7fe15e...`,
+probe `4509a0...`, operator `5147c7...`. The frame was captured during execution;
+the original parser failure no longer hides the result. The guest still reports
+`actual_renderer_evidence_absent`. It tracked 21 processes, but the report does
+not retain their command roles, so this count does not qualify a renderer.
+Guest cgroup cleanup and all tracked kernel exits are reported successful; QMP
+observed guest shutdown and QEMU was collected with exit 0. The operator reports
+exact container removal and unchanged controlled inputs. Overall native and
+operator results remain failed. No notification or client navigation occurred.
+
+Public projection: `linux-selected-client-corrected-negative.json`. Further
+diagnosis should read the retained stopped image's TEST logs without a third
+unchanged native attempt. The first failed record remains preserved separately.
