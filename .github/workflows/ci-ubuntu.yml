@@ -1105,7 +1105,8 @@ jobs:
   test:
     if: github.event_name != 'workflow_dispatch'
     name: Test on Ubuntu
-    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}
+    # Go 1.26 runs the frozen Cursor physical Ubuntu/kernel qualification.
+    runs-on: ${{ matrix.go == '1.26' && 'ubuntu-24.04' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 40
 
     strategy:
