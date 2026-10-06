@@ -357,7 +357,7 @@ struct SurfaceScan {
     }
     static BOOL CALLBACK visit(HWND window, LPARAM context) noexcept {
         auto& scan = *reinterpret_cast<SurfaceScan*>(context);
-        if (scan.visited >= 128 || scan.count >= 16 || GetTickCount64() >= scan.deadline) {
+        if (scan.visited >= 128 || scan.count >= 32 || GetTickCount64() >= scan.deadline) {
             scan.truncated = true; return FALSE;
         }
         ++scan.visited;
@@ -370,11 +370,15 @@ struct SurfaceScan {
             const bool visible = IsWindowVisible(window) != FALSE, foreground = GetForegroundWindow() == window;
             DWORD after = 0; GetWindowThreadProcessId(window, &after);
             if (after != pid || !IsWindow(window) || !held->live()) { ++scan.errors; return TRUE; }
-            if (scan.count++) scan.rows += ',';
-            scan.rows += "{\"hwnd\":" + std::to_string(reinterpret_cast<uintptr_t>(window))
+            const auto row = "{\"hwnd\":" + std::to_string(reinterpret_cast<uintptr_t>(window))
                 + ",\"pid\":" + std::to_string(pid) + ",\"class\":" + jsonQuote(name)
                 + ",\"visible\":" + (visible ? "true" : "false")
                 + ",\"foreground\":" + (foreground ? "true" : "false") + "}";
+            if (scan.rows.size() + (scan.count ? 1 : 0) + row.size() > 6000) {
+                scan.truncated = true; return FALSE;
+            }
+            if (scan.count++) scan.rows += ',';
+            scan.rows += row;
         } catch (...) { ++scan.errors; }
         return TRUE;
     }
