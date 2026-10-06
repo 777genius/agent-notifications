@@ -207,6 +207,9 @@ func TestConfigurationAndRates(t *testing.T) {
 	if p.Route.AllowCallerAsserted || p.Route.AllowUnknownCaller {
 		t.Fatal("implicit opt-in")
 	}
+	if !p.Route.LocalRouting || p.Route.Platform != goruntime.GOOS {
+		t.Fatal("enabled route lost platform binding", p.Route)
+	}
 	s.Fields["rates"] = json.RawMessage(`{"burst":0}`)
 	if _, e = b.policy(s); e == nil {
 		t.Fatal("zero rate accepted")
@@ -214,7 +217,7 @@ func TestConfigurationAndRates(t *testing.T) {
 	s.Fields = map[string]json.RawMessage{}
 	b.opts.ReadGlobal = func(string) ([]byte, error) { t.Fatal("disabled global read"); return nil, nil }
 	p, e = b.policy(s)
-	if e != nil || p.Delivery.ExplicitEnabled {
+	if e != nil || p.Delivery.ExplicitEnabled || p.Route != (origin.RoutePolicy{}) {
 		t.Fatal(p, e)
 	}
 }

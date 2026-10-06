@@ -10,13 +10,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: qualification-candidate-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   portable-candidate:
     name: Candidate ${{ matrix.platform }} ${{ matrix.arch }}
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.os || matrix.os == 'ubuntu-22.04' && (vars.CI_LINUX_2204_RUNNER || 'ubuntu-22.04') || matrix.os == 'ubuntu-22.04-arm' && (vars.CI_LINUX_ARM_2204_RUNNER || 'ubuntu-22.04-arm') || matrix.os == 'macos-15' && (vars.CI_MACOS_15_RUNNER || 'macos-15') || matrix.os }}
     timeout-minutes: 35
     strategy:
       fail-fast: false
