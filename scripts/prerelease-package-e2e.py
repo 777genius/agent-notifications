@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Qualify downloaded partial prerelease bytes in new disposable profiles only."""
+"""Qualify downloaded partial release bytes in new disposable profiles only."""
 import argparse
 import functools
 import hashlib
@@ -59,9 +59,16 @@ def main():
         report['stable_before'] = latest()
         pages = json.loads(run(['gh', 'api', '--paginate', '--slurp', f'repos/{REPO}/releases']))
         release = next(r for page in pages for r in page if r['tag_name'] == tag)
-        assert release['prerelease'] and release['draft'] == (phase == 'draft')
-        assert not any('darwin' in a['name'].lower() or 'claudenotifier' in a['name'].lower()
-                       for a in release['assets']), 'unexpected macOS asset'
+        assert not release['prerelease'] and release['draft'] == (phase == 'draft')
+        expected_assets = {'checksums.txt', 'THIRD_PARTY_NOTICES.txt',
+                           'claude-notifications-windows-amd64-focus.exe'}
+        for platform, architecture in (('linux', 'amd64'), ('linux', 'arm64'), ('windows', 'amd64')):
+            suffix = '.exe' if platform == 'windows' else ''
+            expected_assets.add(f'agent-notify-portable-{platform}-{architecture}.zip')
+            for tool in ('claude-notifications', 'sound-preview', 'list-devices', 'list-sounds'):
+                expected_assets.add(f'{tool}-{platform}-{architecture}{suffix}')
+        actual_assets = [asset['name'] for asset in release['assets']]
+        assert len(actual_assets) == len(expected_assets) and set(actual_assets) == expected_assets, 'unexpected or missing partial-release asset'
         report['release_id'] = release['id']
         with tempfile.TemporaryDirectory(prefix='TEST-prerelease-package-') as scratch:
             root = Path(scratch).resolve()
@@ -230,7 +237,7 @@ def main():
                             # NotificationPayload intentionally projects Question + session,
                             # whereas Codex Stop projects last_assistant_message.
                             if product == 'claude':
-                                assert attachment['footer'] == f'Session: {marker} | Claude Code', body
+                                assert attachment['footer'] == f'Session: {marker} | Claude', body
                                 assert 'Question' in attachment['text'], body
                             else:
                                 assert marker in attachment['text'], body

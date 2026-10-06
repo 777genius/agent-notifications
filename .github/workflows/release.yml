@@ -78,6 +78,12 @@ jobs:
             binary: claude-notifications-windows-amd64.exe
 
     steps:
+      - name: Preserve canonical source bytes on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
       - name: Checkout code
         uses: actions/checkout@v7
         with:
@@ -86,7 +92,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26'
+          go-version: '1.27.1'
 
       - name: Install Linux dependencies
         if: matrix.platform == 'linux'
@@ -98,7 +104,6 @@ jobs:
       - name: Build binaries
         env:
           CGO_ENABLED: '1'
-          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_deployment_target }}
         shell: bash
         run: |
           mkdir -p dist
@@ -123,20 +128,6 @@ jobs:
             go build -ldflags="-s -w -H=windowsgui" -trimpath -o "dist/$FOCUS_BINARY" ./cmd/claude-notifications
           fi
 
-      - name: Verify macOS deployment target
-        if: matrix.platform == 'darwin'
-        run: |
-          for binary in dist/*; do
-            minos="$(otool -l "$binary" | awk '$1 == "minos" { print $2; exit }')"
-            case "$minos" in
-              12|12.*) ;;
-              *)
-                echo "$binary has unexpected minimum macOS version: ${minos:-missing}"
-                exit 1
-                ;;
-            esac
-          done
-
       - name: Build version-bound portable package
         env:
           RELEASE_TAG: ${{ github.ref_name }}
@@ -157,11 +148,11 @@ jobs:
         with:
           name: binaries-${{ matrix.platform }}-${{ matrix.arch }}
           path: dist/*
-          retention-days: 1
+          retention-days: 14
 
   create-release:
     name: Prepare draft GitHub Release
-    needs: [build-matrix, test-binaries]
+    needs: [build-matrix, test-binaries, qualify-opencode]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -196,7 +187,8 @@ jobs:
         with:
           files: dist/*
           draft: true
-          prerelease: true
+          prerelease: false
+          make_latest: false
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -215,19 +207,22 @@ jobs:
             platform: linux
             arch: amd64
             binary: claude-notifications-linux-amd64
-            opencode_archive: opencode-linux-x64.tar.gz
           - os: ubuntu-24.04-arm
             platform: linux
             arch: arm64
             binary: claude-notifications-linux-arm64
-            opencode_archive: opencode-linux-arm64.tar.gz
           - os: windows-latest
             platform: windows
             arch: amd64
             binary: claude-notifications-windows-amd64.exe
-            opencode_archive: opencode-windows-x64.zip
 
     steps:
+      - name: Preserve canonical source bytes on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
       - name: Checkout artifact qualification tests
         uses: actions/checkout@v7
         with:
@@ -236,7 +231,7 @@ jobs:
       - name: Set up Go for artifact identity and private Windows roots
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26'
+          go-version: '1.27.1'
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -306,37 +301,172 @@ jobs:
         run: python scripts/release-artifact-e2e.py --binary "dist/${{ matrix.binary }}" --version "$RELEASE_TAG"
         shell: bash
 
-      - name: Fetch pinned OpenCode CLI
+
+  prepare-opencode-inputs:
+    name: Seal same-run OpenCode release inputs
+    needs: build-matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      sha256: ${{ steps.seal.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with: {go-version: '1.27.1', cache: false}
+      - uses: actions/setup-node@v6
+        with: {node-version: '24.21.0', package-manager-cache: false}
+      - uses: actions/setup-python@v7
+        with: {python-version: '3.12'}
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: binaries-*
+          merge-multiple: true
+          path: dist
+      - name: Rebuild and verify the exact self-contained observer
+        working-directory: opencode-plugin
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          OPENCODE_ARCHIVE: ${{ matrix.opencode_archive }}
         run: |
           set -euo pipefail
-          mkdir -p opencode-qualification
-          gh release download v1.18.33 --repo anomalyco/opencode \
-            --pattern "$OPENCODE_ARCHIVE" --dir opencode-qualification
+          mkdir -p ../.task-tools/artifacts
+          cp ../internal/opencodeplugin/dist/agent-notifications.js ../.task-tools/artifacts/original-observer.js
+          npm ci --ignore-scripts
+          npm run check:candidate
+          npm run build
+          cmp ../.task-tools/artifacts/original-observer.js ../internal/opencodeplugin/dist/agent-notifications.js
+          cp ../internal/opencodeplugin/dist/agent-notifications.js ../.task-tools/artifacts/rebuilt-observer.js
+      - name: Seal actual reviewed source bytes and exact release binary custody
+        id: seal
+        run: python -B scripts/release-opencode-inputs.py --scope linux-windows --rebuilt .task-tools/artifacts/rebuilt-observer.js
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-opencode-inputs-${{ github.sha }}
+          path: .task-tools/artifacts/release-opencode-inputs.tar.gz
+          if-no-files-found: error
+          retention-days: 14
 
-      - name: Qualify OpenCode lifecycle with release artifact
+  qualify-opencode:
+    name: Qualify release OpenCode ${{ matrix.target.platform }}/${{ matrix.target.arch }} ${{ matrix.version }}
+    needs: [build-matrix, prepare-opencode-inputs]
+    runs-on: ${{ matrix.target.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ['1.18.33', '2.0.21']
+        target:
+          - {runner: ubuntu-22.04, platform: linux, arch: amd64, binary: claude-notifications-linux-amd64}
+          - {runner: ubuntu-22.04-arm, platform: linux, arch: arm64, binary: claude-notifications-linux-arm64}
+          - {runner: windows-latest, platform: windows, arch: amd64, binary: claude-notifications-windows-amd64.exe}
+        include:
+          - version: '1.18.34'
+            target: {runner: ubuntu-22.04, platform: linux, arch: amd64, binary: claude-notifications-linux-amd64}
+    env:
+      AN_EVIDENCE_ARCHIVE: .task-tools/artifacts/custody/release-opencode-inputs.tar.gz
+      AN_EVIDENCE_SHA256: ${{ needs.prepare-opencode-inputs.outputs.sha256 }}
+      AN_OS: ${{ matrix.target.platform }}
+      AN_ARCH: ${{ matrix.target.arch }}
+      AN_VERSION: ${{ matrix.version }}
+      MAIN_BINARY: ${{ matrix.target.binary }}
+    steps:
+      - name: Preserve canonical source bytes on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with: {go-version: '1.27.1', cache: false}
+      - uses: actions/setup-node@v6
+        with: {node-version: '24.21.0', package-manager-cache: false}
+      - uses: actions/setup-python@v7
+        with: {python-version: '3.12'}
+      - name: Initialize unqualified report
+        shell: bash
+        run: |
+          mkdir -p .task-tools/artifacts
+          python -c 'import json,pathlib; p=pathlib.Path(".task-tools/artifacts/native-report.json"); p.write_text(json.dumps({"status":"unqualified","businessPhasesStarted":False,"firstFailedPrerequisite":"release_inputs_not_verified"})+"\n"); p.chmod(0o600)'
+      - uses: actions/download-artifact@v8
+        with:
+          name: binaries-${{ matrix.target.platform }}-${{ matrix.target.arch }}
+          path: dist
+      - name: Download same-run sealed release custody
+        uses: actions/download-artifact@v8
+        with:
+          name: release-opencode-inputs-${{ github.sha }}
+          path: .task-tools/artifacts/custody
+      - name: Make normal release binary executable
+        if: runner.os != 'Windows'
+        shell: bash
+        run: chmod +x "dist/$MAIN_BINARY"
+      - name: Linux private bus prerequisites
+        if: matrix.target.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev dbus iproute2
+      - name: Verify and stage same-run parent archive
+        id: parent
+        shell: bash
+        run: python -B scripts/testdata/opencode-native-e2e/ci_inputs.py --stage-evidence
+      - name: Bind parent manifest to the normal release artifacts
         shell: bash
         env:
-          MAIN_BINARY: ${{ matrix.binary }}
-          OPENCODE_ARCHIVE: ${{ matrix.opencode_archive }}
-          CANDIDATE_OS: ${{ matrix.platform }}
-          CANDIDATE_ARCH: ${{ matrix.arch }}
+          AN_MANIFEST: ${{ steps.parent.outputs.manifest }}
+          AN_MANIFEST_SHA256: ${{ steps.parent.outputs.sha256 }}
+        run: |
+          python -B - <<'PY'
+          import importlib.util, os, pathlib
+          path = pathlib.Path('scripts/testdata/opencode-native-e2e/ci_inputs.py').resolve()
+          spec = importlib.util.spec_from_file_location('release_inputs', path)
+          inputs = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(inputs)
+          r = inputs.r
+          try:
+              m, cell, files, binary, archive = r.load_manifest(
+                  pathlib.Path(os.environ['AN_MANIFEST']), os.environ['AN_OS'],
+                  os.environ['AN_ARCH'], os.environ['AN_VERSION'], os.environ['AN_MANIFEST_SHA256'])
+              expected = (inputs.repo / 'dist' / os.environ['MAIN_BINARY']).resolve(strict=True)
+              r.require(binary == expected, 'normal_release_binary_required')
+          except Exception as error:
+              r.write_json(inputs.artifacts / 'native-report.json', {
+                  'status': 'unqualified', 'businessPhasesStarted': False,
+                  'firstFailedPrerequisite': str(error) if isinstance(error, r.Unqualified) else type(error).__name__})
+              raise
+          PY
+      - name: Verify exact source/build custody and build the private receiver
+        shell: bash
+        env:
+          AN_MANIFEST: ${{ steps.parent.outputs.manifest }}
+          AN_MANIFEST_SHA256: ${{ steps.parent.outputs.sha256 }}
+        run: python -B scripts/testdata/opencode-native-e2e/ci_inputs.py
+      - name: Execute reviewed installed lifecycle fixture
+        shell: bash
+        env:
+          AN_MANIFEST: ${{ steps.parent.outputs.manifest }}
+          AN_MANIFEST_SHA256: ${{ steps.parent.outputs.sha256 }}
         run: |
           set -euo pipefail
-          python scripts/opencode-native-e2e.py \
-            --binary "dist/$MAIN_BINARY" \
-            --archive "opencode-qualification/$OPENCODE_ARCHIVE" \
-            --os "$CANDIDATE_OS" --arch "$CANDIDATE_ARCH" \
-            --report opencode-qualification/opencode-release-e2e.json
-
-      - name: Upload OpenCode release artifact evidence
+          export AN_SUITE=smoke
+          if [ "$AN_OS/$AN_ARCH" = linux/amd64 ]; then export AN_SUITE=full; fi
+          if [ "$AN_OS" = linux ]; then
+            # Create the private network as root, then keep checkout/artifact
+            # ownership and Git source verification under the runner identity.
+            export AN_HOST_NETNS="$(readlink /proc/self/ns/net)"
+            sudo --preserve-env=PATH,AN_MANIFEST,AN_MANIFEST_SHA256,AN_OS,AN_ARCH,AN_VERSION,AN_SUITE,AN_HOST_NETNS unshare --net -- bash -c '
+              set -euo pipefail
+              ip link set lo up
+              exec setpriv --reuid "$1" --regid "$2" --init-groups -- env HOME="$3" USER="$4" LOGNAME="$4" python -B scripts/testdata/opencode-native-e2e/ci_inputs.py --execute
+            ' bash "$(id -u)" "$(id -g)" "$HOME" "$(id -un)"
+          else
+            python -B scripts/testdata/opencode-native-e2e/ci_inputs.py --execute
+          fi
+      - name: Upload safe OpenCode release qualification report
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: opencode-release-e2e-${{ matrix.platform }}-${{ matrix.arch }}
-          path: opencode-qualification/opencode-release-e2e.json
+          name: opencode-release-e2e-${{ matrix.target.platform }}-${{ matrix.target.arch }}-${{ matrix.version }}
+          path: .task-tools/artifacts/native-report.json
           if-no-files-found: error
           retention-days: 14

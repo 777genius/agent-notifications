@@ -20,9 +20,9 @@ import (
 // ErrPolicyRecovery leaves pending installer work untouched for its owner.
 var ErrPolicyRecovery = errors.New("pending installation transaction requires installer recovery")
 
-// ErrPolicyConflict refuses a stale ExpectedPolicy under the commit locks,
-// before publishing any transaction or product mutation.
-var ErrPolicyConflict = errors.New("stale explicit policy bytes")
+// ErrPolicyConflict refuses a stale ExpectedPolicy or invalid raw-policy
+// observation under the commit locks, before any journal or product mutation.
+var ErrPolicyConflict = errors.New("managed policy observation changed or invalid")
 
 // Identity includes existence: an empty file is not an absent file.
 type Identity struct {
@@ -49,6 +49,7 @@ type Consumer struct {
 	RuntimeRoot  string
 	Registration string
 	Commands     []string
+	OpenCode     *OpenCodeRegistration `json:",omitempty"`
 }
 type Ledger struct {
 	WriterFloor      int
@@ -66,12 +67,14 @@ type Ledger struct {
 	PendingMutation  *PendingMutation `json:",omitempty"`
 }
 type transaction struct {
-	ConfigPaths []string
-	Native      *NativeChange
-	Schema      int
-	Before      Ledger
-	After       Ledger
-	Files       []File
+	OpenCodeInit  *File      `json:",omitempty"`
+	OpenCodePurge *PurgeTree `json:",omitempty"`
+	ConfigPaths   []string
+	Native        *NativeChange
+	Schema        int
+	Before        Ledger
+	After         Ledger
+	Files         []File
 	// Rollback marks a durable reverse decision. Retry must resume it instead
 	// of reversing the reverse and republishing the interrupted upgrade.
 	Rollback bool `json:",omitempty"`
@@ -90,10 +93,16 @@ type Request struct {
 	// RevokeCopilotVSCode is the exact false-only portable Local specialization.
 	// It skips delivery readiness, never written-file anchors, ownership or CAS.
 	RevokeCopilotVSCode bool
+	// RevokeCursor permits only the exact recorded portable Cursor false pair.
+	RevokeCursor bool
 	// PolicyOnly requires an already-managed runtime and existing kernel locks.
 	// It refuses recovery and asset/consumer mutations; setup cannot accidentally
 	// promote native or rewrite hooks from an unrelated pending transaction.
 	PolicyOnly bool
+	// PolicyDocument is an exact raw config edit for the existing OpenCode
+	// policy. Nil preserves it. Prepare must only fence the observed full ledger
+	// and return no files; the kernel alone derives the publication path.
+	PolicyDocument []byte
 	// PolicyEnabled changes explicit intent; nil preserves it. Mutations require
 	// an expected generation and share component/config locking and recovery.
 	PolicyEnabled *bool
@@ -171,6 +180,9 @@ func readLedger(root string) (Ledger, error) {
 	err = json.Unmarshal(data, &l)
 	if err == nil && (!acceptedLedgerSchema(l.Schema) || l.ID == "" || l.Generation == 0 || l.Consumers == nil || l.Files == nil) {
 		err = fmt.Errorf("invalid ownership ledger")
+	}
+	if err == nil && l.Consumers[openCodeConsumer].OpenCode != nil && (l.Schema != 4 || l.WriterFloor < OpenCodeWriterFloor) {
+		err = fmt.Errorf("private registration requires compatible persisted protocol")
 	}
 	return l, err
 }
@@ -269,7 +281,27 @@ func retainedPortablePrimaryFiles(l Ledger, oldRoot, newRoot, movingID string, s
 // Commit serializes all component decisions, then config locks in canonical
 // order. The durable redo record precedes every live mutation. Recovery checks
 // every identity before changing anything and refuses ambiguous foreign edits.
-func Commit(ctx context.Context, r Request) (Ledger, error) {
+func Commit(ctx context.Context, r Request) (result Ledger, resultErr error) {
+	journalAttempted := false
+	if r.PolicyDocument != nil {
+		defer func() {
+			if resultErr != nil && !journalAttempted && !errors.Is(resultErr, ErrPolicyRecovery) {
+				resultErr = ErrPolicyConflict
+			}
+		}()
+	}
+	if r.PolicyDocument != nil {
+		if !rawPolicyRequest(r) {
+			return Ledger{}, fmt.Errorf("invalid raw OpenCode policy request")
+		}
+		r.PolicyDocument = append([]byte{}, r.PolicyDocument...)
+		generation, policy := *r.ExpectedGeneration, *r.ExpectedPolicy
+		r.ExpectedGeneration, r.ExpectedPolicy = &generation, &policy
+	}
+
+	if r.RevokeCursor && !cursorRevokeOnly(r) {
+		return Ledger{}, fmt.Errorf("invalid Cursor channel revocation")
+	}
 	if r.RevokeCopilotVSCode && !copilotRevokeOnly(r) {
 		return Ledger{}, fmt.Errorf("invalid Copilot VS Code channel revocation")
 	}
@@ -296,9 +328,9 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 			return Ledger{}, err
 		}
 	}
-	// Only the already-validated exact Gemini false patch may use a recorded
+	// Only already-validated bounded channel revocations may use a recorded
 	// runtime name without resolving damaged assets. Compare it under both locks.
-	if filepath.IsAbs(r.RuntimeRoot) && !r.RevokeGemini && !r.RevokeCopilotVSCode {
+	if filepath.IsAbs(r.RuntimeRoot) && !r.RevokeGemini && !r.RevokeCopilotVSCode && !r.RevokeCursor {
 		r.RuntimeRoot, err = CanonicalPath(r.RuntimeRoot)
 		if err != nil {
 			return Ledger{}, err
@@ -455,7 +487,7 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 		return l, err
 	}
 
-	if l.Native != nil && !policyDisableOnly(r) && !r.RevokeOpenCode && !r.RevokeGemini && !r.RevokeCopilotVSCode {
+	if l.Native != nil && !policyDisableOnly(r) && !r.RevokeOpenCode && !r.RevokeGemini && !r.RevokeCopilotVSCode && !r.RevokeCursor {
 		if err := validateNativeRecord(l.Native); err != nil {
 			return l, err
 		}
@@ -477,15 +509,23 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 		return l, fmt.Errorf("component owned by %s at %s; explicit takeover required", l.Owner, l.RuntimeRoot)
 	}
 	previous, registered := l.Consumers[r.ConsumerID]
-	if r.RevokeCopilotVSCode {
+	if r.PolicyDocument != nil && (!registered || previous.RuntimeRoot != r.RuntimeRoot ||
+		l.ID == "" || l.Schema != 4 || l.WriterFloor != OpenCodeWriterFloor || l.PolicyGeneration == 0 ||
+		!validRawPolicyRegistration(l, previous)) {
+		return l, fmt.Errorf("raw policy requires an existing origin-bound OpenCode registration")
+	}
+	if r.RevokeCopilotVSCode || r.RevokeCursor {
 		// Structural ledger validity is required even when its delivery tree is damaged.
 		if err := validateNativeRecord(l.Native); err != nil {
 			return l, err
 		}
 		var binding struct{ ComponentID, ControlRoot string }
 		if json.Unmarshal([]byte(previous.Registration), &binding) != nil || binding.ComponentID != l.ID || binding.ControlRoot != r.ControlRoot {
-			return l, fmt.Errorf("local revocation binding/owner mismatch")
+			return l, fmt.Errorf("portable revocation binding/owner mismatch")
 		}
+	}
+	if r.RevokeCursor && (!registered || !reflect.DeepEqual(previous, r.Consumer) || !cursorPortableConsumer(r.ConsumerID, previous)) {
+		return l, fmt.Errorf("cursor revocation requires its exact recorded portable consumer")
 	}
 	if r.RevokeCopilotVSCode && (!registered || !reflect.DeepEqual(previous, r.Consumer) || !localPortableConsumer(r.ConsumerID, previous)) {
 		return l, fmt.Errorf("local revocation requires its exact recorded portable consumer")
@@ -553,8 +593,13 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 		if _, exists := l.Consumers[r.ConsumerID]; !exists && !r.PurgeNative {
 			return l, nil
 		}
-		if len(r.Files) != 0 {
-			return l, fmt.Errorf("consumer removal cannot install files")
+		for _, f := range r.Files {
+			if r.ConsumerID != openCodeConsumer || !f.Remove || len(l.Consumers) <= 1 {
+				return l, fmt.Errorf("consumer removal cannot install files")
+			}
+		}
+		if previous.OpenCode != nil && r.ExpectedGeneration == nil {
+			return l, fmt.Errorf("private removal requires expected generation")
 		}
 	}
 	if r.ExpectedGeneration != nil && *r.ExpectedGeneration != l.Generation {
@@ -571,7 +616,7 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 		}
 	}
 	for path, want := range l.Files {
-		if r.RevokeOpenCode || r.RevokeGemini || r.RevokeCopilotVSCode {
+		if r.RevokeOpenCode || r.RevokeGemini || r.RevokeCopilotVSCode || r.RevokeCursor {
 			break
 		}
 		// Claude owns the previous versioned cache: it may prune files or
@@ -620,6 +665,14 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 	}
 	if r.ExpectedPolicy != nil && *r.ExpectedPolicy != policyBefore {
 		return l, ErrPolicyConflict
+	}
+	if r.PolicyDocument != nil {
+		if !policyBefore.Exists || policyBefore.Link != "" || l.Enabled != policy.Enabled {
+			return l, fmt.Errorf("raw policy requires unchanged existing intent")
+		}
+		if err := validateRawPolicyDocument(policyFields, r.PolicyDocument); err != nil {
+			return l, err
+		}
 	}
 	next.Enabled = policy.Enabled
 	if r.PolicyEnabled != nil || len(r.PolicyFields) != 0 {
@@ -742,6 +795,9 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 		return l, err
 	}
 	files := append([]File(nil), r.Files...)
+	if r.PolicyDocument != nil {
+		files = append(files, File{Path: policyPath, Before: policyBefore, Data: r.PolicyDocument, Mode: policyBefore.Mode})
+	}
 	if r.PolicyEnabled != nil || len(r.PolicyFields) != 0 || (r.RemoveConsumer && len(next.Consumers) == 0) {
 		f, e := policyFile(policyRoot, next.Enabled, policyFields, policyBefore)
 		if e != nil {
@@ -784,6 +840,9 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 	seen := map[string]bool{}
 	for i := range files {
 		f := files[i]
+		if f.Path == filepath.Join(root, "opencode-admission") || pathWithinRoot(filepath.Join(root, "opencode-admission"), f.Path) || f.Path == filepath.Join(root, OpenCodeStoreLock) {
+			return l, fmt.Errorf("private admission state requires kernel decision")
+		}
 		if !filepath.IsAbs(f.Path) || seen[f.Path] {
 			return l, fmt.Errorf("invalid or duplicate mutation path")
 		}
@@ -831,7 +890,28 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 			}
 		}
 	}
-	tx := transaction{Schema: transactionSchemaFor(next, r), Before: l, After: next, Files: files, Native: native, ConfigPaths: r.ConfigPaths}
+	if !r.PolicyOnly && !policyDisableOnly(r) {
+		if err := protectOpenCodeProtocol(l, next); err != nil {
+			return l, err
+		}
+	}
+	var init *File
+	var purge *PurgeTree
+	if !r.PolicyOnly && !policyDisableOnly(r) {
+		init, purge, err = prepareOpenCodeState(ctx, root, l, next, policyFields)
+		if err != nil {
+			return l, err
+		}
+	}
+	if err := validateWriterFilesAtFloor(files, next.WriterFloor); err != nil {
+		return l, err
+	}
+	tx := transaction{Schema: transactionSchemaFor(next, r), Before: l, After: next, Files: files, Native: native, ConfigPaths: r.ConfigPaths, OpenCodeInit: init, OpenCodePurge: purge}
+	// Global disable is also reconstructible, but an explicit Cursor request
+	// must preserve the ledger's global intent even when its leaves were already false.
+	if r.RevokeCursor && (tx.Before.Enabled != tx.After.Enabled || !boundedPolicyRevocation(root, tx)) {
+		return l, fmt.Errorf("cursor revocation journal cannot reconstruct exact false-only operation")
+	}
 	if !boundedPolicyRevocation(root, tx) {
 		tx.After, err = refreshLedgerIdentities(next)
 		if err != nil {
@@ -845,6 +925,7 @@ func Commit(ctx context.Context, r Request) (Ledger, error) {
 			return l, err
 		}
 	}
+	journalAttempted = true
 	if err := writeTransaction(marker, tx); err != nil {
 		return l, err
 	}
@@ -883,6 +964,9 @@ func recoverTransaction(ctx context.Context, root string, current Ledger, tx tra
 	if current.WriterFloor > SupportedWriterFloor || tx.Before.WriterFloor > SupportedWriterFloor || tx.After.WriterFloor > SupportedWriterFloor {
 		return fmt.Errorf("installed writer floor requires a newer compatible kernel")
 	}
+	if err := validateOpenCodeDecision(root, tx); err != nil {
+		return err
+	}
 	if !ledgerMatchesJournal(current, tx.Before, tx.Native) && !ledgerMatchesJournal(current, tx.After, tx.Native) {
 		return fmt.Errorf("transaction ledger snapshot mismatch")
 	}
@@ -892,7 +976,13 @@ func recoverTransaction(ctx context.Context, root string, current Ledger, tx tra
 	if current.ID != "" && current.ID != tx.After.ID {
 		return fmt.Errorf("transaction owner mismatch")
 	}
-	if err := preflightTransactionAnchors(tx); err != nil {
+	// Private Init is observation-only here: its parents participate in the
+	// same device bijection, while publication remains at the private seam.
+	observation := tx
+	if tx.OpenCodeInit != nil {
+		observation.Files = append(append([]File(nil), tx.Files...), *tx.OpenCodeInit)
+	}
+	if err := preflightTransactionAnchors(observation); err != nil {
 		return err
 	}
 	tx.Files = append([]File(nil), tx.Files...)
@@ -912,6 +1002,19 @@ func recoverTransaction(ctx context.Context, root string, current Ledger, tx tra
 		if got != f.Before && got != desired(f) {
 			return fmt.Errorf("recovery conflict; preserving foreign edit: %s", f.Path)
 		}
+	}
+	if tx.OpenCodeInit != nil {
+		init := *tx.OpenCodeInit
+		anchors, err := pathAnchors(init.Path, false)
+		if err != nil {
+			return err
+		}
+		if err := checkPersistedAnchors(init.Parents, anchors); err != nil {
+			return err
+		}
+		// Reobserve only the replay copy, never the durable private decision.
+		init.Parents = anchors
+		tx.OpenCodeInit = &init
 	}
 	// Without a native promotion, replay must still prove the active callback
 	// before publishing policy. Identity refresh permits missing paths and does
@@ -989,6 +1092,9 @@ func recoverTransaction(ctx context.Context, root string, current Ledger, tx tra
 	if err := cleanupPurgedNative(tx.Native, fault); err != nil {
 		return err
 	}
+	if err := recoverOpenCodeState(ctx, root, tx, fault); err != nil {
+		return err
+	}
 	// Publish the final policy only after all assets and the ledger are durable.
 	if err := writeJSON(filepath.Join(root, "policy-generation.json"), runtimePolicy{tx.After.PolicyGeneration, tx.After.Enabled}); err != nil {
 		return err
@@ -1038,7 +1144,7 @@ func boundedPolicyRevocation(root string, tx transaction) bool {
 	}
 	// Global disable keeps every other policy member unchanged. Channel
 	// revocations keep global intent and require that consumer's registration.
-	patches := []string{"", "geminiNotifications", "openCodeNotifications", "copilot-native", "copilot-manual", "copilot-all"}
+	patches := []string{"", "geminiNotifications", "openCodeNotifications", "copilot-native", "copilot-manual", "copilot-all", "cursorNotifications"}
 	for _, channel := range patches {
 		if channel == "" && newPolicy.Enabled || channel != "" && (before.Enabled != oldPolicy.Enabled || newPolicy.Enabled != oldPolicy.Enabled || before.PendingMutation != nil) {
 			continue
@@ -1046,7 +1152,7 @@ func boundedPolicyRevocation(root string, tx transaction) bool {
 		local := channel == "copilot-native" || channel == "copilot-manual" || channel == "copilot-all"
 		expected := before
 		// Preserve the exact monotonic migration used by the admitted request.
-		applyReservationProtocol(&expected, Request{RevokeCopilotVSCode: local}, before)
+		applyReservationProtocol(&expected, Request{RevokeCopilotVSCode: local, RevokeCursor: channel == "cursorNotifications"}, before)
 		expected.Generation, expected.PolicyGeneration, expected.Enabled = after.Generation, after.PolicyGeneration, after.Enabled
 		if !reflect.DeepEqual(expected, after) {
 			continue
@@ -1056,7 +1162,7 @@ func boundedPolicyRevocation(root string, tx transaction) bool {
 			if !filepath.IsAbs(consumer.RuntimeRoot) || filepath.Clean(consumer.RuntimeRoot) != consumer.RuntimeRoot {
 				continue
 			}
-			if local && before.Owner == "existing-installer" && localPortableConsumer(id, consumer) {
+			if before.Owner == "existing-installer" && (local && localPortableConsumer(id, consumer) || channel == "cursorNotifications" && cursorPortableConsumer(id, consumer)) {
 				var binding struct{ ComponentID, ControlRoot string }
 				if json.Unmarshal([]byte(consumer.Registration), &binding) == nil && binding.ComponentID == before.ID {
 					// Admission requires the exact recorded spelling. A durable

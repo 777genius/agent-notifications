@@ -43,7 +43,7 @@ func explicitTrue(raw json.RawMessage) bool { return bytes.Equal(bytes.TrimSpace
 // borrowed for native channels nor changed by a Local selection.
 func ReadConsent(s installruntime.PolicySnapshot, b portable.Binding) (Consent, error) {
 	var out Consent
-	if !recorded(s, b) {
+	if b.Integration != portable.CopilotVSCode || !recorded(s, b) {
 		return out, ErrDenied
 	}
 	route, err := policyObject(s.Fields["route"], true)
@@ -59,6 +59,56 @@ func ReadConsent(s installruntime.PolicySnapshot, b portable.Binding) (Consent, 
 		return out, err
 	}
 	return Consent{binding: b, recorded: true, desktop: explicitTrue(local["desktop"]), webhook: explicitTrue(local["webhook"]), manual: explicitTrue(manual["enabled"])}, nil
+}
+
+// CursorChoices owns only the two native Stop channel leaves.
+type CursorChoices struct{ Desktop, Webhook *bool }
+
+// ReadCursorConsent observes this exact registration's explicit native intent.
+// Unknown, missing, null and nonboolean leaves cannot enable a channel.
+func ReadCursorConsent(s installruntime.PolicySnapshot, b portable.Binding) (Consent, error) {
+	if b.Integration != portable.Cursor || !recorded(s, b) {
+		return Consent{}, ErrDenied
+	}
+	route, err := policyObject(s.Fields["route"], true)
+	if err != nil {
+		return Consent{}, err
+	}
+	cursor, err := policyObject(route["cursorNotifications"], true)
+	if err != nil {
+		return Consent{}, err
+	}
+	return Consent{binding: b, recorded: true, desktop: explicitTrue(cursor["desktop"]), webhook: explicitTrue(cursor["webhook"])}, nil
+}
+
+// CursorPolicyPatch computes just desired consent. Existing caller generation
+// and policy CAS, followed by the existing leaf merger, own mutation.
+func CursorPolicyPatch(b portable.Binding, choices CursorChoices, previous *Consent) (map[string]json.RawMessage, error) {
+	if b.Integration != portable.Cursor {
+		return nil, ErrDenied
+	}
+	if _, _, _, err := b.Registration(); err != nil {
+		return nil, err
+	}
+	saved := Consent{}
+	if previous != nil {
+		if !previous.recorded || previous.binding != b {
+			return nil, ErrDenied
+		}
+		saved = *previous
+	}
+	desktop, webhook := saved.desktop, saved.webhook
+	if choices.Desktop != nil {
+		desktop = *choices.Desktop
+	}
+	if choices.Webhook != nil {
+		webhook = *choices.Webhook
+	}
+	raw, err := json.Marshal(map[string]any{"cursorNotifications": struct {
+		Desktop bool `json:"desktop"`
+		Webhook bool `json:"webhook"`
+	}{desktop, webhook}})
+	return map[string]json.RawMessage{"route": raw}, err
 }
 
 // PolicyPatch computes desired intent only. It cannot produce physical proof or

@@ -16,7 +16,7 @@ const LocalWriterProtocolMarker = "agent-notifications-managed-writer-protocol-v
 
 // SupportedWriterFloor is the kernel/reader ceiling, not a replacement for the
 // historical v1 marker or reservation-v2 declaration.
-const SupportedWriterFloor = LocalPolicyWriterFloor
+const SupportedWriterFloor = OpenCodeWriterFloor
 
 func managedWriter(path string) bool {
 	name := filepath.Base(path)
@@ -76,6 +76,9 @@ func WriterCompatible(data []byte) bool { return strings.Contains(string(data), 
 func WriterCompatibleAtFloor(data []byte, floor int) bool {
 	if floor > SupportedWriterFloor {
 		return false
+	}
+	if floor >= OpenCodeWriterFloor {
+		return bytes.Contains(data, []byte(OpenCodeWriterProtocolMarker))
 	}
 	if floor >= LocalPolicyWriterFloor {
 		return bytes.Contains(data, []byte(LocalWriterProtocolMarker))

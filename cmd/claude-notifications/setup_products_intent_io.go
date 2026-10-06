@@ -204,7 +204,10 @@ func validateBootstrapIntent(i confirmedBootstrapIntent) error {
 		if id == "codex" {
 			key = "codex-home"
 		}
-		if id != "claude" && id != "codex" || !containsProduct(products, id) || !bytes.Equal(profile, i.Scopes[key]) {
+		if id == "cursor" {
+			key = "scope-root"
+		}
+		if id != "claude" && id != "codex" && id != "cursor" || !containsProduct(products, id) || !bytes.Equal(profile, i.Scopes[key]) {
 			return invalid()
 		}
 	}
@@ -229,7 +232,7 @@ func validateBootstrapIntent(i confirmedBootstrapIntent) error {
 	}
 	for _, ids := range [][]string{i.MCP.Selected, i.MCP.Skipped} {
 		for _, id := range ids {
-			if id != "claude" && id != "codex" || !containsProduct(products, id) || seen[id] {
+			if id != "claude" && id != "codex" && id != "cursor" || !containsProduct(products, id) || seen[id] {
 				return invalid()
 			}
 			seen[id] = true
@@ -244,13 +247,19 @@ func validateBootstrapIntent(i confirmedBootstrapIntent) error {
 			key = "codex-home"
 		case "gemini":
 			key = "gemini-config-root"
+		case "cursor":
+			key = "scope-root"
 		}
-		if len(i.Scopes[key]) == 0 || len(i.Scopes[id+"-executable"]) == 0 {
+		executable := id + "-executable"
+		if id == "cursor" {
+			executable = "client-executable"
+		}
+		if len(i.Scopes[key]) == 0 || len(i.Scopes[executable]) == 0 {
 			return invalid()
 		}
 		u := i.Units[n]
-		portable := id == "claude" || id == "codex"
-		if u.Product != id || u.Hooks != portable || u.Native == portable || u.MCP != containsProduct(i.MCP.Selected, id) || u.Skill != u.MCP || u.PreservedOff != containsProduct(i.MCP.Skipped, id) || u.Desktop != (!portable && i.Request.Desktop) || u.Webhook != (!portable && i.Request.Webhook) {
+		portable := id == "claude" || id == "codex" || id == "cursor"
+		if u.Product != id || u.Hooks != (portable && id != "cursor") || u.Native == portable || u.MCP != containsProduct(i.MCP.Selected, id) || u.Skill != u.MCP || u.PreservedOff != containsProduct(i.MCP.Skipped, id) || u.Desktop != ((!portable || id == "cursor") && i.Request.Desktop) || u.Webhook != ((!portable || id == "cursor") && i.Request.Webhook) {
 			return invalid()
 		}
 	}
@@ -291,6 +300,11 @@ func writeIntentScalars(out io.Writer, i confirmedBootstrapIntent) error {
 
 func validateBootstrapEffectRequest(r setupProductsArgs) error {
 	args := []string{"confirm", "--products", strings.Join(r.Products, ",")}
+	// Frozen scope bytes are validated separately; reparse only effect grammar.
+	if containsProduct(r.Products, "cursor") {
+		args[0] = "preflight"
+		args = append(args, "--intent-file", filepath.Join(os.TempDir(), "TEST-intent"))
+	}
 	if r.AgentNotify {
 		args = append(args, "--agent-notify")
 	}

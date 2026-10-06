@@ -22,7 +22,7 @@ root = Path(sys.argv[1])
 loader = (root / 'bin/setup.sh').read_text(encoding='utf-8')
 public_command = next(line for line in (root / 'README.md').read_text(encoding='utf-8').splitlines()
                       if line.startswith('curl -fsSL '))
-PUBLIC_SETUP_URL = 'https://777genius.github.io/agent-notifications/install.sh'
+PUBLIC_SETUP_URL = 'https://agent-notifications.com/install.sh'
 # The public pin and main commit 9039815 reference the same setup.sh Git blob.
 pinned_loader = (root / 'bin/testdata/setup-9039815833ed8d16a11ee4a45de62bb0119c874f.sh').read_text(
     encoding='utf-8')
@@ -41,7 +41,7 @@ exit 9009
 sha = '0123456789abcdef0123456789abcdef01234567'
 raw = 'https://raw.githubusercontent.com/777genius/agent-notifications/' + sha + '/bin'
 assert 'python3' not in loader and 'node' not in loader
-assert 'application/vnd.github.sha' in loader and 'url_effective' in loader
+assert 'application/vnd.github.sha' in loader
 curl_stub = '''#!/usr/bin/env bash
 set -eu
 output=""; url=""; format=""; accept=""
@@ -59,7 +59,10 @@ case "$url" in
     ''' + PUBLIC_SETUP_URL + ''') kind=setup ;;
     https://github.com/777genius/agent-notifications/releases/latest) kind=latest ;;
     https://api.github.com/repos/777genius/agent-notifications/releases/latest) kind=latest_json ;;
+    https://api.github.com/repos/777genius/agent-notifications/commits/main) kind=controller ;;
     https://api.github.com/repos/777genius/agent-notifications/commits/v*) kind=commit ;;
+    https://raw.githubusercontent.com/777genius/agent-notifications/*/bin/release-channel.sh) kind=channel_module ;;
+    https://raw.githubusercontent.com/777genius/agent-notifications/*/release-channels.tsv) kind=latest ;;
     https://raw.githubusercontent.com/777genius/agent-notifications/*/bin/bootstrap.sh) kind=bootstrap ;;
     *) echo "Unexpected URL: $url" >&2; exit 99 ;;
 esac
@@ -71,6 +74,7 @@ fi
 # Simulate an initial fetch failing before it produces script bytes.
 if [ "$kind" = setup ] && [ "${FAIL_DOWNLOAD:-}" = setup ]; then exit 22; fi
 source="$kind"
+if [ "$kind" = latest ]; then source=channels; fi
 if [ "$kind" = commit ] && [ "$accept" != 'Accept: application/vnd.github.sha' ]; then
     source=commit_json
 fi
@@ -169,6 +173,21 @@ def run_loader(args, env, piped=False, documented=False, bash_executable=None):
     return subprocess.run(command, input=stdin, text=True, capture_output=True, env=env, timeout=20)
 
 
+def channel_fixture(case, tag, release_commit=sha):
+    (case / 'controller').write_text(sha)
+    (case / 'channel_module').write_text((root / 'bin/release-channel.sh').read_text())
+    rows = ['# agent-notifications-platform-channels-v1']
+    for os_name, arch in [('darwin','amd64'),('darwin','arm64'),('linux','amd64'),('linux','arm64'),('windows','amd64')]:
+        ref = 'release/platform-macos' if os_name == 'darwin' else 'release/platform-linux-windows'
+        rows.append('\t'.join(map(str, [os_name, arch, tag, release_commit, sha, ref])))
+    (case / 'channels').write_text('\n'.join(rows) + '\n')
+
+
+def channel_requests():
+    return ['https://api.github.com/repos/777genius/agent-notifications/commits/main',
+            raw + '/release-channel.sh', raw.removesuffix('/bin') + '/release-channels.tsv']
+
+
 def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, piped=False,
              documented=False, expect_run=True, args=None, calls=None, no_network=False,
              legacy_status=None, opencode_status=None, message=None, help_only=False,
@@ -192,6 +211,7 @@ def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, pipe
                 latest_value = tag
         (case / 'latest_url').write_text(
             'https://github.com/777genius/agent-notifications/releases/tag/' + str(latest_value))
+        channel_fixture(case, latest_value)
         (case / 'latest_json').write_text(
             json.dumps({'tag_name': 'v1.43.0'}) if tag is None else tag)
         if commit is None:
@@ -227,9 +247,7 @@ def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, pipe
         elif release_only:
             assert result.returncode == 1, (name, result.returncode, result.stderr)
             assert not (case / 'ran.json').exists(), name + ': installer ran on unsupported release'
-            assert (case / 'requests').read_text().splitlines() == [
-                'https://github.com/777genius/agent-notifications/releases/latest'
-            ], name + ': unsupported release fetched bootstrap'
+            assert (case / 'requests').read_text().splitlines() == channel_requests(), name + ': unsupported release fetched bootstrap'
             assert 'No products were installed.' in result.stderr, (name, result.stderr)
         elif calls is not None:
             assert result.returncode == expected, (name, result.returncode, result.stderr)
@@ -239,8 +257,7 @@ def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, pipe
                 'tag': release, 'sha': sha, 'install': raw + '/install.sh'
             } for r in got), (name, got)
             assert len({r['script'] for r in got}) == 1, name + ': different staged bootstrap'
-            assert (case / 'requests').read_text().splitlines() == [
-                'https://github.com/777genius/agent-notifications/releases/latest',
+            assert (case / 'requests').read_text().splitlines() == channel_requests() + [
                 'https://api.github.com/repos/777genius/agent-notifications/commits/' + release,
                 raw + '/bootstrap.sh',
             ], name + ': expected one release resolution and bootstrap download'
@@ -275,8 +292,7 @@ def run_case(name, tag=None, commit=None, fail='', status=0, expected=None, pipe
             requests = (case / 'requests').read_text(encoding='utf-8').splitlines()
             if documented:
                 assert requests.pop(0) == PUBLIC_SETUP_URL
-            assert requests == [
-                'https://github.com/777genius/agent-notifications/releases/latest',
+            assert requests == channel_requests() + [
                 'https://api.github.com/repos/777genius/agent-notifications/commits/' + release,
                 raw + '/bootstrap.sh',
             ], name
@@ -362,7 +378,7 @@ def runtime_path(case, python=False, node=False, bash_executable=None):
     bin_dir.mkdir()
     names = ['bash', 'sh', 'mktemp', 'rm', 'cat', 'chmod', 'mkdir', 'ln', 'uname',
              'tr', 'wc', 'cmp', 'grep', 'head', 'cp', 'mv', 'env', 'true', 'false', 'dirname', 'basename',
-             'printf', 'pwd', 'cygpath']
+             'printf', 'pwd', 'cygpath', 'awk']
     if python:
         names.append('python3')
     if node:
@@ -384,6 +400,7 @@ def run_runtime_case(name, python=False, node=False, expected=0, stub_python=Fal
             (case / 'bin/python3').chmod(0o755)
         (case / 'latest_url').write_text(
             'https://github.com/777genius/agent-notifications/releases/tag/v1.43.0')
+        channel_fixture(case, 'v1.43.0')
         (case / 'commit').write_text(sha)
         (case / 'bootstrap').write_text(bootstrap_stub)
         env = dict(os.environ, PATH=runtime_path(case, python=python, node=node),
@@ -594,6 +611,7 @@ if host_cmd('python3') and host_cmd('node'):
         (case / 'bin/node').chmod(0o755)
         (case / 'latest_url').write_text(
             'https://github.com/777genius/agent-notifications/releases/tag/v1.43.0')
+        channel_fixture(case, 'v1.43.0')
         (case / 'commit').write_text(sha)
         (case / 'bootstrap').write_text(bootstrap_stub)
         env = dict(os.environ, PATH=bash_path(case / 'bin') + ':' + runtime_path(case, python=True, node=True),

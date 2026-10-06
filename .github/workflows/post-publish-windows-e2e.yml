@@ -3,9 +3,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Exact partial prerelease tag
+        description: Exact partial release tag
         required: true
-        default: v1.47.1
+        default: v1.48.0
       source_sha:
         description: Exact product source SHA
         required: true

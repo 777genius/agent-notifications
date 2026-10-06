@@ -5,8 +5,9 @@ Compatible with other Claude plugins that spawn background Claude instances.
 ## OpenCode
 
 OpenCode integration is a self-contained global plugin, separate from Claude
-marketplace plugins and Codex hooks. The tested host is 1.18.33; V2 is not
-supported. Only generic root-session completion, question, permission and error
+marketplace plugins and Codex hooks. Published support is tested with 1.18.33. The dual-API candidate is tested
+with 1.18.33, 2.0.0 and 2.0.21; SDK 0.2.0 publication and registry qualification
+are pending. Only generic root-session completion, question, permission and error
 notifications are covered. It does not inherit portable MCP consent, sound or
 click-to-focus behavior. Other global/project notification plugins and OpenCode's
 native desktop alerts can cause duplicates. Disable overlapping sources in the

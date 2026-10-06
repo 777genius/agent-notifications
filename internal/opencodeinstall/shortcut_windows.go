@@ -53,7 +53,7 @@ func windowsShortcutPathFor(home string, id desktopIdentity) (string, error) {
 	}
 	programs := filepath.Join(home, "AppData", "Roaming", "Microsoft", "Windows", "Start Menu", "Programs")
 	if currentHome, err := os.UserHomeDir(); err == nil && filepath.Clean(currentHome) == filepath.Clean(home) {
-		actual, err := windows.KnownFolderPath(windows.FOLDERID_Programs, 0)
+		actual, err := windows.KnownFolderPath(windows.FOLDERID_Programs, windows.KF_FLAG_DONT_VERIFY)
 		if err != nil {
 			return "", err
 		}

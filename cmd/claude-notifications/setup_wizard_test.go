@@ -6,6 +6,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -3304,21 +3305,24 @@ func TestSetupWizardResumeOmittedUninstallFromPendingE2E(t *testing.T) {
 	}
 }
 
-// Cache only immutable executable bytes. Every fixture gets its own path and
-// inode; per-test HOME and client state remain isolated at execution time.
-var wizardProbeBuild struct {
-	once sync.Once
-	body []byte
-	err  error
+// Cache only immutable fixture bytes; every test still owns a distinct executable.
+type wizardProbeImage struct {
+	data   string
+	sha256 [32]byte
 }
 
-func buildWizardProbe(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	out := filepath.Join(dir, "probe")
-	wizardProbeBuild.once.Do(func() {
-		src := filepath.Join(dir, "probe.go")
-		if err := os.WriteFile(src, []byte(`package main
+func compileWizardProbe(t *testing.T) (image wizardProbeImage, err error) {
+	dir, err := os.MkdirTemp("", "TEST-wizard-probe-build-")
+	if err != nil {
+		return image, err
+	}
+	defer func() {
+		if cleanupErr := os.RemoveAll(dir); err == nil && cleanupErr != nil {
+			image, err = wizardProbeImage{}, cleanupErr
+		}
+	}()
+	src := filepath.Join(dir, "probe.go")
+	if err := os.WriteFile(src, []byte(`package main
 import (
 	"encoding/json"
 	"os"
@@ -3359,24 +3363,45 @@ func main() {
 	json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true})
 }
 `), 0600); err != nil {
-			wizardProbeBuild.err = err
-			return
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, "go", "build", "-p", "2", "-buildvcs=false", "-o", out, src)
-		cmd.Env = append(testenv.Build(t, filepath.Join(dir, "build-home")), "GOTOOLCHAIN=local")
-		if body, err := cmd.CombinedOutput(); err != nil {
-			wizardProbeBuild.err = fmt.Errorf("build probe: %s: %w", body, err)
-			return
-		}
-		wizardProbeBuild.body, wizardProbeBuild.err = os.ReadFile(out)
-	})
-	if wizardProbeBuild.err != nil {
-		t.Fatal(wizardProbeBuild.err)
+		return image, err
 	}
-	if err := os.WriteFile(out, wizardProbeBuild.body, 0700); err != nil {
+	out := filepath.Join(dir, "probe")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "build", "-p", "2", "-buildvcs=false", "-o", out, src)
+	cmd.Env = append(testenv.Build(t, filepath.Join(dir, "build-home")), "GOTOOLCHAIN=local")
+	if body, err := cmd.CombinedOutput(); err != nil {
+		return image, fmt.Errorf("build probe: %s: %w", body, err)
+	}
+	body, err := os.ReadFile(out)
+	if err != nil {
+		return image, err
+	}
+	return wizardProbeImage{data: string(body), sha256: sha256.Sum256(body)}, nil
+}
+
+var wizardProbeBuild struct {
+	once  sync.Once
+	image wizardProbeImage
+	err   error
+}
+
+func buildWizardProbe(t *testing.T) string {
+	t.Helper()
+	wizardProbeBuild.once.Do(func() {
+		wizardProbeBuild.image, wizardProbeBuild.err = compileWizardProbe(t)
+	})
+	image, err := wizardProbeBuild.image, wizardProbeBuild.err
+	if err != nil {
 		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "probe")
+	if err := os.WriteFile(out, []byte(image.data), 0700); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(out)
+	if err != nil || sha256.Sum256(body) != image.sha256 {
+		t.Fatal("materialized wizard probe differs from immutable fixture", err)
 	}
 	return out
 }
@@ -3689,4 +3714,30 @@ func wizardCLINotifyDigest(got setupwizard.Result, client string) string {
 		}
 	}
 	return ""
+}
+
+func TestCursorQualifiedMountsRefusesStackedAncestors(t *testing.T) {
+	root := "10 1 8:1 / / rw - ext4 /dev/TEST rw\n"
+	profile := "20 10 8:2 / /TEST/profile rw - ext4 /dev/TEST2 rw\n"
+	for _, tc := range []struct {
+		name, mounts string
+		refuse       bool
+	}{
+		{"unique-ext4", root + profile, false},
+		{"non-ext4", root + strings.Replace(profile, "ext4", "tmpfs", 1), true},
+		{"profile-ext4-first", root + profile + "21 20 0:1 / /TEST/profile rw - tmpfs tmpfs rw\n", true},
+		{"profile-tmpfs-first", root + "21 20 0:1 / /TEST/profile rw - tmpfs tmpfs rw\n" + profile, true},
+		{"root-ext4-first", root + "11 10 0:1 / / rw - tmpfs tmpfs rw\n" + profile, true},
+		{"root-tmpfs-first", "11 10 0:1 / / rw - tmpfs tmpfs rw\n" + root + profile, true},
+		{"same-kind-stacked", root + profile + "21 20 8:3 / /TEST/profile rw - ext4 /dev/TEST3 rw\n", true},
+		{"ambiguous-parent-with-unique-deeper", root + "30 10 8:2 / /TEST rw - ext4 /dev/TEST2 rw\n31 30 0:1 / /TEST rw - tmpfs tmpfs rw\n" + profile, true},
+		{"unrelated-stacked", root + profile + "30 10 8:2 / /other rw - ext4 /dev/TEST2 rw\n31 30 0:1 / /other rw - tmpfs tmpfs rw\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := cursorQualifiedMounts("/TEST/profile/child", tc.mounts)
+			if tc.refuse && !errors.Is(err, setupwizard.ErrRefused) || !tc.refuse && err != nil {
+				t.Fatalf("mount metadata decision: %v; refuse=%v", err, tc.refuse)
+			}
+		})
+	}
 }

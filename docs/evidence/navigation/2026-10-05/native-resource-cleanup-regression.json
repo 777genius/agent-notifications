@@ -1,0 +1,200 @@
+{
+  "schemaVersion": 1,
+  "scope": "owned_macOS_resource_probe_cleanup_regression",
+  "passed": true,
+  "productionClientActivated": false,
+  "fastPathQualified": false,
+  "rawSHA256": {
+    "regression": "a6bab7a83ef8e73ffb521f8d7b374d53bb0e1152a2c7d9ca208044c4287f8d3a",
+    "cooperative": "e464396f899dc30d6ec8bdeade35ae50c84e6443081b0637734e80dc1b181f2f"
+  },
+  "sourceSHA256": {
+    "ProcessSerialBridge.c": "f8b2e464465b7d1f3835dfb1aa3040715940f109b3f733e700f7caed9c132ab1",
+    "old.swift": "ffc0f3e28975aa4b5fabb6f4d3a5f747023a31133542feb4e5296e28e8628a2b",
+    "new.swift": "13748ac1f8069630d535c1bbc82a2b32f6ed3bca8dae3c12bf50c8194f400263",
+    "ProcessSerialBridge.h": "5065d4b90bca9305c9c6709db0b5f0a6d9f1fda3a66948efb032fec0bdc1cec3",
+    "stubborn.swift": "e5888ace1a0abf68c414ad728aa6c33b68b5819833e904eed9ea328208b2fa60",
+    "ProcessSerialRoutingProbe.swift": "a68c6ce17ce29854e0f452dbe9559e6a4aaf7464b71fdb794d260598abb1481b"
+  },
+  "operatorSHA256": "542428f9d53f69ebec6f23f33a6828d0c42549c218921aebaa1cb003c1dced1d",
+  "baseSHA": "dd636a99e25c51030a3c6f41046356f37db04586",
+  "snapshotUnchanged": true,
+  "cases": {
+    "old": {
+      "controllerExit": 1,
+      "controllerReaped": true,
+      "elapsedSeconds": 24.869096167036332,
+      "reportedPassed": false,
+      "controls": [
+        {
+          "control": "untouched",
+          "cleanupFailed": true,
+          "passed": false
+        },
+        {
+          "control": "resource",
+          "cleanupFailed": true,
+          "passed": false
+        },
+        {
+          "control": "envelope",
+          "cleanupFailed": true,
+          "passed": false
+        },
+        {
+          "control": "executable",
+          "cleanupFailed": true,
+          "passed": false
+        }
+      ]
+    },
+    "new": {
+      "controllerExit": 1,
+      "controllerReaped": true,
+      "elapsedSeconds": 27.895012499997392,
+      "reportedPassed": false,
+      "controls": [
+        {
+          "control": "untouched",
+          "cleanupFailed": true,
+          "passed": false,
+          "childTerminationRequested": true,
+          "childKillRequested": true,
+          "childStopped": true
+        },
+        {
+          "control": "resource",
+          "cleanupFailed": true,
+          "passed": false,
+          "childTerminationRequested": true,
+          "childKillRequested": true,
+          "childStopped": true
+        },
+        {
+          "control": "envelope",
+          "cleanupFailed": true,
+          "passed": false,
+          "childTerminationRequested": true,
+          "childKillRequested": true,
+          "childStopped": true
+        },
+        {
+          "control": "executable",
+          "cleanupFailed": true,
+          "passed": false,
+          "childTerminationRequested": true,
+          "childKillRequested": true,
+          "childStopped": true
+        }
+      ]
+    }
+  },
+  "ownedChildAbsence": [
+    {
+      "version": "old",
+      "phase": "untouched",
+      "pid": 92938,
+      "absentAfterCleanup": true,
+      "aliveAtControllerReturn": true
+    },
+    {
+      "version": "old",
+      "phase": "resource",
+      "pid": 93082,
+      "absentAfterCleanup": true,
+      "aliveAtControllerReturn": true
+    },
+    {
+      "version": "old",
+      "phase": "envelope",
+      "pid": 93204,
+      "absentAfterCleanup": true,
+      "aliveAtControllerReturn": true
+    },
+    {
+      "version": "old",
+      "phase": "executable",
+      "pid": 93373,
+      "absentAfterCleanup": true,
+      "aliveAtControllerReturn": null
+    },
+    {
+      "version": "new",
+      "phase": "untouched",
+      "pid": 93533,
+      "absentAfterCleanup": true,
+      "aliveAtControllerReturn": false
+    },
+    {
+      "version": "new",
+      "phase": "resource",
+      "pid": 93718,
+      "absentAfterCleanup": true,
+      "aliveAtControllerReturn": false
+    },
+    {
+      "version": "new",
+      "phase": "envelope",
+      "pid": 93835,
+      "absentAfterCleanup": true,
+      "aliveAtControllerReturn": false
+    },
+    {
+      "version": "new",
+      "phase": "executable",
+      "pid": 94075,
+      "absentAfterCleanup": true,
+      "aliveAtControllerReturn": null
+    }
+  ],
+  "cooperative": {
+    "exitCode": 0,
+    "passed": true,
+    "snapshotUnchanged": true,
+    "controls": [
+      {
+        "control": "untouched",
+        "childStopped": true
+      },
+      {
+        "control": "resource",
+        "childStopped": true
+      },
+      {
+        "control": "envelope",
+        "childStopped": true
+      },
+      {
+        "control": "executable",
+        "childStopped": true
+      }
+    ],
+    "childAbsence": [
+      {
+        "phase": "envelope-child-executable",
+        "pid": 94928,
+        "absent": true
+      },
+      {
+        "phase": "envelope-child-untouched",
+        "pid": 94900,
+        "absent": true
+      },
+      {
+        "phase": "envelope-child-envelope",
+        "pid": 94922,
+        "absent": true
+      },
+      {
+        "phase": "envelope-child-resource",
+        "pid": 94905,
+        "absent": true
+      }
+    ]
+  },
+  "limitations": [
+    "Private ad-hoc TEST apps only",
+    "Old orphan child exit statuses cannot be waitpid-collected by operator; exact PIDs absent after cleanup, controllers reaped",
+    "Two unsuccessful observer attempts retained separately; acceptance uses canonical full argv observer"
+  ]
+}

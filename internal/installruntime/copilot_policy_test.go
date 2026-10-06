@@ -11,6 +11,7 @@ import (
 	"github.com/777genius/agent-notifications/internal/copilotvscodeevent"
 	"github.com/777genius/agent-notifications/internal/copilotvscodeinstall"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -664,6 +665,295 @@ func TestCopilotRevocationRecoveryControlRoot(t *testing.T) {
 			}
 			if !policy.Enabled || policy.Route.Local.Desktop || policy.Route.Local.Webhook || !policy.Route.Local.Manual.Enabled {
 				t.Fatal("recovery failed to persist only native false policy")
+			}
+		})
+	}
+}
+
+func registeredCursorFixture(t *testing.T) (string, string, portable.Binding, installruntime.Ledger) {
+	t.Helper()
+	root, runtime, b, l := registeredLocalFixture(t)
+	b.Integration, b.BindingID = portable.Cursor, "TEST-cursor"
+	key, consumer, _, err := b.Registration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, err = installruntime.Commit(localTestContext(t), installruntime.Request{ControlRoot: root, RuntimeRoot: runtime, Owner: b.Owner, ConsumerID: key, Consumer: consumer, ExpectedGeneration: &l.Generation,
+		PolicyFields: map[string]json.RawMessage{"route": json.RawMessage(`{"cursorNotifications":{"desktop":true,"webhook":true,"manual":"foreign-container","future":{"keep":7}}}`)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return root, runtime, b, l
+}
+
+// Regression: damaged assets block consent revocation, or merging erases foreign
+// leaves. A child death must replay the journal without a request selector.
+func TestCursorRevokeCommitAndRecovery(t *testing.T) {
+	if root := os.Getenv("TEST_CURSOR_REVOKE_ROOT"); root != "" {
+		l, _, err := installruntime.ReadOwnership(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := installruntime.ReadRevocationSnapshot(localTestContext(t), root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for key, c := range l.Consumers {
+			var b portable.Binding
+			if json.Unmarshal([]byte(c.Registration), &b) == nil && b.Integration == portable.Cursor {
+				_, err = installruntime.Commit(localTestContext(t), installruntime.Request{ControlRoot: root, RuntimeRoot: c.RuntimeRoot, Owner: l.Owner, ConsumerID: key, Consumer: c, RevokeCursor: true, PolicyOnly: true, RefreshOnly: true, ExpectedGeneration: &s.Generation, ExpectedPolicy: &s.Preimage,
+					PolicyFields: map[string]json.RawMessage{"route": json.RawMessage(`{"cursorNotifications":{"desktop":false,"webhook":false}}`)}, Fault: func(phase string) error {
+						if phase == "transaction" {
+							os.Exit(73)
+						}
+						return nil
+					}})
+				t.Fatalf("child never reached durable crash: %v", err)
+			}
+		}
+		t.Fatal("recorded Cursor missing")
+	}
+	retainedNative := runtime.GOOS != "windows"
+	for _, damage := range []string{"healthy", "missing", "replaced", "runtime", "child-replay"} {
+		t.Run(damage, func(t *testing.T) {
+			root, runtime, b, before := registeredCursorFixture(t)
+			key, c, _, err := b.Registration()
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Retained inert tree exercises native ownership on supported hosts.
+			if retainedNative {
+				source := filepath.Join(filepath.Dir(root), "TEST-retained-tree")
+				if err := os.Mkdir(source, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(source, "inert"), []byte("never executed"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				candidate, stageErr := installruntime.StageRetainedNative(localTestContext(t), root, source)
+				if stageErr != nil {
+					t.Fatal(stageErr)
+				}
+				before, err = installruntime.Commit(localTestContext(t), installruntime.Request{ControlRoot: root, RuntimeRoot: runtime, Owner: b.Owner, ConsumerID: key, RefreshOnly: true, ExpectedGeneration: &before.Generation, Native: candidate})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			policyPath := filepath.Join(root, "agent-notifications.json")
+			raw, err := os.ReadFile(policyPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var want any
+			if err := json.Unmarshal(raw, &want); err != nil {
+				t.Fatal(err)
+			}
+			cursor := want.(map[string]any)["route"].(map[string]any)["cursorNotifications"].(map[string]any)
+			cursor["desktop"], cursor["webhook"] = false, false
+			switch damage {
+			case "missing", "child-replay":
+				err = os.Remove(filepath.Join(runtime, "shared"))
+			case "replaced":
+				err = os.WriteFile(filepath.Join(runtime, "shared"), []byte("foreign"), 0600)
+			case "runtime":
+				err = os.Rename(runtime, runtime+"-retained")
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if damage == "child-replay" && before.Native != nil {
+				if err := os.Rename(before.Native.Path, before.Native.Path+"-retained"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			assets := treeBytes(t, filepath.Dir(root))
+			var after installruntime.Ledger
+			if damage == "child-replay" {
+				child := exec.CommandContext(localTestContext(t), os.Args[0], "-test.run=^TestCursorRevokeCommitAndRecovery$")
+				child.Env = append(os.Environ(), "TEST_CURSOR_REVOKE_ROOT="+root)
+				output, childErr := child.CombinedOutput()
+				status, ok := childErr.(*exec.ExitError)
+				if !ok || status.ExitCode() != 73 {
+					t.Fatalf("child crash: %v %s", childErr, output)
+				}
+				if _, err := os.Lstat(filepath.Join(root, "transaction.json")); err != nil {
+					t.Fatal("no durable journal", err)
+				}
+				s := installruntime.Request{ControlRoot: root, RuntimeRoot: runtime, Owner: b.Owner, ConsumerID: key, Consumer: c, RevokeCursor: true, PolicyOnly: true, RefreshOnly: true, ExpectedGeneration: &before.Generation, ExpectedPolicy: &installruntime.Identity{}, PolicyFields: map[string]json.RawMessage{"route": json.RawMessage(`{"cursorNotifications":{"desktop":false,"webhook":false}}`)}}
+				if _, err := installruntime.Commit(localTestContext(t), s); err != installruntime.ErrPolicyRecovery {
+					t.Fatalf("policy-only request replayed pending journal: %v", err)
+				}
+				after, err = installruntime.Recover(localTestContext(t), root+string(filepath.Separator))
+			} else {
+				s, readErr := installruntime.ReadRevocationSnapshot(localTestContext(t), root)
+				if readErr != nil {
+					t.Fatal(readErr)
+				}
+				after, err = installruntime.Commit(localTestContext(t), installruntime.Request{ControlRoot: root, RuntimeRoot: runtime, Owner: b.Owner, ConsumerID: key, Consumer: c, RevokeCursor: true, PolicyOnly: true, RefreshOnly: true, ExpectedGeneration: &s.Generation, ExpectedPolicy: &s.Preimage, PolicyFields: map[string]json.RawMessage{"route": json.RawMessage(`{ "cursorNotifications": {"webhook": false, "desktop": false} }`)}})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			expected := before
+			expected.Generation++
+			expected.PolicyGeneration++
+			if !reflect.DeepEqual(expected, after) {
+				t.Fatalf("revoke changed unrelated ownership: want %+v got %+v", expected, after)
+			}
+			if _, err := os.Lstat(filepath.Join(root, "transaction.json")); !os.IsNotExist(err) {
+				t.Fatal("journal retained", err)
+			}
+			raw, err = os.ReadFile(policyPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got any
+			if err := json.Unmarshal(raw, &got); err != nil || !reflect.DeepEqual(want, got) {
+				t.Fatalf("foreign policy lost or false pair missing: %s %v", raw, err)
+			}
+			current := treeBytes(t, filepath.Dir(root))
+			for path, value := range assets {
+				if !strings.HasPrefix(path, "control"+string(filepath.Separator)) && current[path] != value {
+					t.Fatalf("revoke repaired or mutated asset %s", path)
+				}
+			}
+			if damage == "runtime" {
+				err = os.Rename(runtime+"-retained", runtime)
+			} else {
+				err = os.WriteFile(filepath.Join(runtime, "shared"), []byte("original"), 0700)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if damage == "child-replay" && before.Native != nil {
+				if err := os.Rename(before.Native.Path+"-retained", before.Native.Path); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s, err := installruntime.ReadRevocationSnapshot(localTestContext(t), root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := installruntime.Commit(localTestContext(t), installruntime.Request{ControlRoot: root, RuntimeRoot: runtime, Owner: b.Owner, ConsumerID: key, RefreshOnly: true, PolicyOnly: true, ExpectedGeneration: &s.Generation, ExpectedPolicy: &s.Preimage}); err != nil {
+				t.Fatal(err)
+			}
+			restored, err := os.ReadFile(policyPath)
+			if err != nil || !bytes.Equal(raw, restored) {
+				t.Fatal("repair/omitted choice resurrected consent", err)
+			}
+		})
+	}
+}
+
+// Regression: a broad selector, identity substitution or stale CAS could bypass
+// readiness and write consent/ownership or invoke preparation before refusal.
+func TestCursorInvalidRevokeHasNoEffects(t *testing.T) {
+	root, runtime, b, _ := registeredCursorFixture(t)
+	key, c, _, err := b.Registration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := installruntime.ReadRevocationSnapshot(localTestContext(t), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := installruntime.Request{ControlRoot: root, RuntimeRoot: runtime, Owner: b.Owner, ConsumerID: key, Consumer: c, RevokeCursor: true, PolicyOnly: true, RefreshOnly: true, ExpectedGeneration: &s.Generation, ExpectedPolicy: &s.Preimage, PolicyFields: map[string]json.RawMessage{"route": json.RawMessage(`{"cursorNotifications":{"desktop":false,"webhook":false}}`)}}
+	mutations := map[string]func(*installruntime.Request){
+		"true": func(r *installruntime.Request) {
+			r.PolicyFields["route"] = json.RawMessage(`{"cursorNotifications":{"desktop":true,"webhook":false}}`)
+		},
+		"null": func(r *installruntime.Request) {
+			r.PolicyFields["route"] = json.RawMessage(`{"cursorNotifications":{"desktop":null,"webhook":false}}`)
+		},
+		"string": func(r *installruntime.Request) {
+			r.PolicyFields["route"] = json.RawMessage(`{"cursorNotifications":{"desktop":"false","webhook":false}}`)
+		},
+		"extra": func(r *installruntime.Request) {
+			r.PolicyFields["route"] = json.RawMessage(`{"cursorNotifications":{"desktop":false,"webhook":false,"manual":false}}`)
+		},
+		"missing": func(r *installruntime.Request) {
+			r.PolicyFields["route"] = json.RawMessage(`{"cursorNotifications":{"desktop":false}}`)
+		},
+		"duplicate": func(r *installruntime.Request) {
+			r.PolicyFields["route"] = json.RawMessage(`{"cursorNotifications":{"desktop":false,"desktop":false,"webhook":false}}`)
+		},
+		"duplicate-route": func(r *installruntime.Request) {
+			r.PolicyFields["route"] = json.RawMessage(`{"cursorNotifications":{"desktop":false,"webhook":false},"cursorNotifications":{"desktop":false,"webhook":false}}`)
+		},
+		"sibling-route": func(r *installruntime.Request) {
+			r.PolicyFields["route"] = json.RawMessage(`{"cursorNotifications":{"desktop":false,"webhook":false},"sibling":{}}`)
+		},
+		"rates":        func(r *installruntime.Request) { r.PolicyFields["rates"] = json.RawMessage(`{}`) },
+		"setup":        func(r *installruntime.Request) { r.PolicyFields["setupState"] = json.RawMessage(`{}`) },
+		"copilot":      func(r *installruntime.Request) { r.RevokeCopilotVSCode = true },
+		"gemini":       func(r *installruntime.Request) { r.RevokeGemini = true },
+		"opencode":     func(r *installruntime.Request) { r.RevokeOpenCode = true },
+		"policy-mode":  func(r *installruntime.Request) { r.PolicyOnly = false },
+		"refresh-mode": func(r *installruntime.Request) { r.RefreshOnly = false },
+		"remove":       func(r *installruntime.Request) { r.RemoveConsumer = true },
+		"purge":        func(r *installruntime.Request) { r.PurgeNative = true },
+		"retire":       func(r *installruntime.Request) { r.RetireNative = true },
+		"rollback":     func(r *installruntime.Request) { r.RollbackPending = true },
+		"recover":      func(r *installruntime.Request) { r.RecoverOnly = true },
+		"clear":        func(r *installruntime.Request) { r.ClearReservation = true },
+		"relocate":     func(r *installruntime.Request) { r.RelocateVersionedCache = true },
+		"native":       func(r *installruntime.Request) { r.Native = &installruntime.NativeChange{} },
+		"reservation":  func(r *installruntime.Request) { r.Reservation = &installruntime.PendingMutation{} },
+		"files": func(r *installruntime.Request) {
+			r.Files = []installruntime.File{{Path: filepath.Join(runtime, "TEST-new"), Data: []byte("new"), Mode: 0600}}
+		},
+		"config": func(r *installruntime.Request) { r.ConfigPaths = []string{filepath.Join(root, "TEST-config")} },
+		"prepare": func(r *installruntime.Request) {
+			r.Prepare = func() ([]installruntime.File, error) { t.Error("invalid request invoked Prepare"); return nil, nil }
+		},
+		"global":             func(r *installruntime.Request) { off := false; r.PolicyEnabled = &off },
+		"owner":              func(r *installruntime.Request) { r.Owner = "foreign" },
+		"key":                func(r *installruntime.Request) { r.ConsumerID += "foreign" },
+		"command":            func(r *installruntime.Request) { r.Consumer.Commands = []string{filepath.Join(runtime, "different")} },
+		"registration":       func(r *installruntime.Request) { r.Consumer.Registration += " " },
+		"runtime":            func(r *installruntime.Request) { r.RuntimeRoot += "/.." },
+		"control-spelling":   func(r *installruntime.Request) { r.ControlRoot += "/" },
+		"generation":         func(r *installruntime.Request) { gen := s.Generation - 1; r.ExpectedGeneration = &gen },
+		"preimage":           func(r *installruntime.Request) { pre := s.Preimage; pre.SHA256 = "stale"; r.ExpectedPolicy = &pre },
+		"missing-generation": func(r *installruntime.Request) { r.ExpectedGeneration = nil },
+		"missing-preimage":   func(r *installruntime.Request) { r.ExpectedPolicy = nil },
+	}
+	for _, field := range []string{"ComponentID", "ControlRoot", "Owner", "Primary", "Integration"} {
+		mutations["binding-"+field] = func(r *installruntime.Request) {
+			changed := b
+			switch field {
+			case "ComponentID":
+				changed.ComponentID = "foreign"
+			case "ControlRoot":
+				changed.ControlRoot = filepath.Join(root, "foreign")
+			case "Owner":
+				changed.Owner = "foreign"
+			case "Primary":
+				changed.Primary = "different"
+			case "Integration":
+				changed.Integration = portable.Codex
+			}
+			raw, err := json.Marshal(changed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sum := sha256.Sum256(raw)
+			r.ConsumerID = "portable:" + hex.EncodeToString(sum[:])
+			r.Consumer.Registration = string(raw)
+			r.Consumer.Commands = []string{filepath.Join(runtime, changed.Primary)}
+		}
+	}
+	for name, change := range mutations {
+		t.Run(name, func(t *testing.T) {
+			r := valid
+			r.PolicyFields = map[string]json.RawMessage{"route": valid.PolicyFields["route"]}
+			change(&r)
+			before := treeBytes(t, filepath.Dir(root))
+			if _, err := installruntime.Commit(localTestContext(t), r); err == nil {
+				t.Fatal("invalid request accepted")
+			}
+			if !reflect.DeepEqual(before, treeBytes(t, filepath.Dir(root))) {
+				t.Fatal("refused request changed filesystem/journal")
 			}
 		})
 	}

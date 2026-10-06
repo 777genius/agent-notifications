@@ -21,7 +21,7 @@ const (
 // consumer and all Files/Native records; cleanup/removal belongs to N2b.
 func RevokeChannels(ctx context.Context, b portable.Binding, selection RevokeSelection) (installruntime.Ledger, error) {
 	key, consumer, _, err := b.Registration()
-	if err != nil || b.Integration != portable.CopilotVSCode {
+	if err != nil || (b.Integration != portable.CopilotVSCode && b.Integration != portable.Cursor) {
 		return installruntime.Ledger{}, ErrDenied
 	}
 	l, recovery, err := installruntime.ReadOwnership(b.ControlRoot)
@@ -45,13 +45,19 @@ func RevokeChannels(ctx context.Context, b portable.Binding, selection RevokeSel
 	default:
 		return l, ErrDenied
 	}
+	if b.Integration == portable.Cursor {
+		if selection == RevokeManual {
+			return l, ErrDenied
+		}
+		patch = `{"cursorNotifications":{"desktop":false,"webhook":false}}`
+	}
 	s, err := installruntime.ReadRevocationSnapshot(ctx, b.ControlRoot)
 	if err != nil {
 		return l, err
 	}
 	return installruntime.Commit(ctx, installruntime.Request{
 		ControlRoot: b.ControlRoot, Owner: b.Owner, RuntimeRoot: b.RuntimeRoot, ConsumerID: key, Consumer: consumer,
-		PolicyOnly: true, RefreshOnly: true, RevokeCopilotVSCode: true,
+		PolicyOnly: true, RefreshOnly: true, RevokeCopilotVSCode: b.Integration == portable.CopilotVSCode, RevokeCursor: b.Integration == portable.Cursor,
 		ExpectedGeneration: &s.Generation, ExpectedPolicy: &s.Preimage,
 		PolicyFields: map[string]json.RawMessage{"route": json.RawMessage(patch)},
 	})

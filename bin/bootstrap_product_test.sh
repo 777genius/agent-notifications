@@ -202,11 +202,11 @@ HOST_VERSION
     export PATH="$SANDBOX/version-cli:$PATH"
     PRODUCT=opencode
     OPENCODE_ARGS=(--webhook)
-    for version in '1.18.33' 'v1.18.33' 'OpenCode version: v1.18.33'; do
+    for version in '1.18.29' '1.18.33' 'v1.18.33' 'OpenCode version: v1.18.33' '1.19.0' '2.0.0' 'v2.0.21'; do
         printf '%s\n' "$version" > "$SANDBOX/version-cli/version"
         check_prerequisites
     done
-    for version in '2.0.0' 'OpenCode v2.0.0 (compatibility 1.18.33)' 'unknown'; do
+    for version in '1.18.28' '1.17.99' '3.0.0' '2.0.0-beta.1' '2.0.0+build' '02.0.0' '2.00.0' '2.0.000' '2.9999999.0' 'OpenCode v2.0.0 (compatibility 1.18.33)' 'unknown' $'2.0.0\n1.18.33'; do
         printf '%s\n' "$version" > "$SANDBOX/version-cli/version"
         if ( check_prerequisites ); then
             echo "accepted unsupported host output: $version" >&2
@@ -686,6 +686,156 @@ EARLY_CANARY
     [ "${CONFIGURE_ARGS[*]}" = '--preserve-policy --navigation none --allow-unknown-caller true --allow-caller-asserted false' ]
 )
 
+# Cursor used to fail product parsing or lose its two frozen scalar arguments.
+# Drive the real main/selector/wizard composition through disposable argv peers;
+# no installer, vendor, provider, delivery or materializer executes here.
+(
+    export TEST_CORE="$SANDBOX/TEST core caller" TEST_FUNCTIONS="$SANDBOX/functions.sh"
+    export TEST_RUNNER="$SANDBOX/TEST cursor main" TEST_ATOMS="$SANDBOX/TEST frozen atoms"
+    export TEST_TRACE="$SANDBOX/TEST cursor trace"
+    mkdir -p "$TEST_TRACE"
+    cat > "$TEST_CORE" <<'CURSOR_PEER'
+#!/bin/bash
+set -euo pipefail
+trace_name="${1#--}-${2:-none}"
+[ "${2:-}" != wizard ] || trace_name="$trace_name-$4"
+printf '%s\0' "$@" > "$TEST_TRACE/$trace_name"
+case "$1 ${2:-}" in
+    'setup-products capabilities') printf 'setup-products-v1 claude codex opencode gemini\n' ;;
+    'setup-products features') printf 'terminal-selector-v1\n' ;;
+    'setup-products select') printf '%s\n' "${TEST_SELECTION:-cursor}" ;;
+    'setup-products channels') [ "${TEST_CANCEL:-}" = channels ] || printf '%s\n' "$TEST_CHANNELS" ;;
+    'setup-products confirm')
+        [ "${TEST_CANCEL:-}" != confirm ] || exit 0
+        while [ "$#" -gt 0 ]; do
+            if [ "$1" = --intent-file ]; then printf 'TEST immutable checkpoint' > "$2"; break; fi
+            shift
+        done
+        printf 'approved\n' ;;
+    'setup-products intent-args') cat "$TEST_ATOMS" ;;
+    'setup-products preflight') exit "${TEST_PREFLIGHT_EXIT:-0}" ;;
+    'setup-notifications --help') printf '%s\n' '--policy-only --preserve-enabled' ;;
+    'setup-notifications wizard')
+        if [ "$4" = inspect ]; then printf '{"targets":[]}\n'; else exit "${TEST_WIZARD_EXIT:-0}"; fi ;;
+    *) exit 97 ;;
+esac
+CURSOR_PEER
+    cat > "$TEST_RUNNER" <<'CURSOR_MAIN'
+#!/bin/bash
+source "$TEST_FUNCTIONS"
+abort_if_wsl_environment() { :; }; detect_platform() { :; }; print_header() { :; }
+check_prerequisites() { :; }
+resolve_bootstrap_release() { BOOTSTRAP_TAG=v2.0.0; }
+stage_config_helper() { _CONFIG_STAGE=$(mktemp -d); _CONFIG_HELPER=$TEST_CORE; }
+acquire_wizard_portable_asset() { WIZARD_PACKAGE_ROOT="$TEST_TRACE/TEST package with spaces.zip"; }
+bootstrap_abs_command() { printf unexpected-discovery >> "$TEST_TRACE/mutation"; return 1; }
+install_legacy_products() { printf legacy >> "$TEST_TRACE/mutation"; return 99; }
+install_opencode() { printf opencode >> "$TEST_TRACE/mutation"; return 99; }
+install_gemini() { printf gemini >> "$TEST_TRACE/mutation"; return 99; }
+initialize_config() { printf config >> "$TEST_TRACE/mutation"; return 99; }
+main "$@"
+CURSOR_MAIN
+    chmod +x "$TEST_CORE"
+    python3 - "$SANDBOX" <<'PY_CURSOR'
+import os, pathlib, subprocess, sys
+if os.name == 'nt':
+    print('Cursor controlling-TTY fixtures require POSIX PTY; other unit fixtures still run')
+    sys.exit(0)
+import fcntl, termios
+sandbox = pathlib.Path(sys.argv[1]); trace = pathlib.Path(os.environ['TEST_TRACE'])
+# Quotes, dollar signs and spaces must remain scalar bytes, never shell code.
+profile = str(sandbox / "TEST frozen cursor ' $literal")
+vendor = str(sandbox / 'TEST frozen vendor with spaces')
+control = str(sandbox / 'TEST control space' / 'agent-notifications')
+runtime = str(sandbox / 'TEST installed core space')
+global_config = str(sandbox / 'TEST policy space.json')
+atoms = [('home', str(sandbox / 'TEST frozen home')), ('control-root', control),
+         ('runtime-root', runtime), ('global-config', global_config),
+         ('scope-root', profile), ('client-executable', vendor)]
+requested = ['--scope-root', str(sandbox / 'TEST requested cursor'),
+             '--client-executable', str(sandbox / 'TEST requested vendor')]
+def run(args, changes=None, raw=None):
+    for file in trace.iterdir(): file.unlink()
+    pathlib.Path(os.environ['TEST_ATOMS']).write_bytes(raw if raw is not None else
+        b''.join(k.encode()+b'\0'+v.encode()+b'\0' for k,v in atoms))
+    master, slave = os.openpty()
+    def terminal():
+        os.setsid(); fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+    env = dict(os.environ, TEST_CHANNELS='desktop,webhook', **(changes or {}))
+    process = subprocess.Popen([os.environ['TEST_BOOTSTRAP_BASH'], os.environ['TEST_RUNNER']]+args,
+        env=env, stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, preexec_fn=terminal)
+    os.close(slave)
+    try: output, _ = process.communicate(timeout=20)
+    finally:
+        if process.poll() is None: process.kill(); process.communicate()
+        os.close(master)
+    calls = [p.read_bytes().split(b'\0')[:-1] for p in trace.iterdir() if p.name != 'mutation']
+    return process.returncode, calls, output.decode(errors='replace')
+def call(calls, prefix):
+    return next(c for c in calls if c[:len(prefix)] == [s.encode() for s in prefix])
+def value(args, key): return args[args.index(key.encode())+1]
+for selection in (['--product', 'cursor'], ['--products', 'cursor'], []):
+    for channels in (['--desktop'], ['--webhook'], ['--desktop', '--webhook'], []):
+        code, calls, output = run(selection+requested+['--agent-notify']+channels)
+        # Old parsing rejected Cursor; dropped CSV/selector IDs prevented dispatch.
+        assert code == 0, output
+        confirm = call(calls, ['setup-products', 'confirm'])
+        # Original explicit scope must reach confirmation before frozen argv replaces it.
+        assert value(confirm, '--scope-root') == requested[1].encode()
+        assert value(confirm, '--client-executable') == requested[3].encode()
+        # Desktop-only/webhook-only must not broaden to the absent sibling channel.
+        for flag in ('--desktop', '--webhook'):
+            assert (flag.encode() in confirm) == (not channels or flag in channels)
+        preflight = call(calls, ['setup-products', 'preflight'])
+        install = call(calls, ['setup-notifications', 'wizard', '--action', 'install'])
+        inspect = call(calls, ['setup-notifications', 'wizard', '--action', 'inspect'])
+        # Writers must use the original immutable checkpoint and selected authorities.
+        assert value(install, '--bootstrap-intent-file') == value(confirm, '--intent-file') == value(preflight, '--intent-file')
+        for args in (install, inspect):
+            for key, expected in (('--scope-root', profile), ('--client-executable', vendor),
+                    ('--control-root', control), ('--runtime-root', runtime), ('--global-config', global_config), ('--agents', 'cursor')):
+                assert value(args, key) == expected.encode(), (key, args)
+            # Vendor must never become observer; the caller derives installed primary.
+            assert not any(key.encode() in args for key in ('--helper', '--claude-config', '--codex-home', '--claude-mcp-config', '--mcp-config', '--plugin-root'))
+        # Only the approved notify unit grammar may enter the caller; no legacy hooks.
+        assert value(install, '--hooks') == b'false' and value(install, '--agent-notify') == b'true'
+        assert '--install-or-update'.encode() in install and not (trace/'mutation').exists()
+# Cancellation at either question must finish without writing or granting consent.
+for cancel in ('channels', 'confirm'):
+    code, calls, output = run(['--product', 'cursor']+requested, {'TEST_CANCEL': cancel})
+    assert code == 0 and not any(c[:1] == [b'setup-notifications'] for c in calls), output
+    # Cancellation must also stop legacy/observer/config writes and discovery.
+    assert not (trace/'mutation').exists(), output
+# A skipped MCP request must not be converted to native consent or a wizard write.
+code, calls, output = run(['--product', 'cursor']+requested+['--skip-agent-notify', '--desktop'])
+assert code == 0 and not any(c[:1] == [b'setup-notifications'] for c in calls), output
+# A skipped unit must not run another installer/config writer before returning.
+assert not (trace/'mutation').exists(), output
+valid = b''.join(k.encode()+b'\0'+v.encode()+b'\0' for k,v in atoms)
+# Duplicate, unknown, relative, missing or truncated frozen scalars must stop before writers.
+for raw in (valid+b'scope-root\0'+profile.encode()+b'\0', valid+b'invented-key\0/TEST\0',
+        valid.replace(vendor.encode(), b'relative vendor'), valid.rsplit(b'client-executable\0',1)[0],
+        valid.replace(b'scope-root\0'+profile.encode()+b'\0', b''), valid[:-1]):
+    code, calls, output = run(['--product', 'cursor']+requested+['--desktop'], raw=raw)
+    assert code != 0 and not any(c[:1] == [b'setup-notifications'] for c in calls), output
+    # A writer followed by failure could otherwise pass the malformed refusal.
+    assert not (trace/'mutation').exists(), output
+# A changed checkpoint or denied materializer must retain failure, never report success.
+for changes in ({'TEST_PREFLIGHT_EXIT':'73'}, {'TEST_WIZARD_EXIT':'77'}):
+    code, calls, output = run(['--product', 'cursor']+requested+['--webhook'], changes)
+    assert code in (73,1) and not any(c[:4] == [b'setup-notifications',b'wizard',b'--action',b'inspect'] for c in calls), output
+    # Checkpoint/caller refusal must not enter unrelated installers/config writes.
+    assert not (trace/'mutation').exists(), output
+# Missing/duplicate selected scope, mixed products and navigation must fail before acquisition.
+for args in (['--product','cursor'], ['--product','cursor']+requested[:2],
+        ['--product','cursor']+requested+requested[:2], ['--products','claude,cursor']+requested,
+        ['--product','claude']+requested, ['--product','cursor']+requested+['--navigation','none']):
+    code, calls, output = run(args)
+    assert code != 0 and not calls and not (trace/'mutation').exists(), output
+print('Cursor frozen bootstrap argv and refusal fixtures passed (composition only)')
+PY_CURSOR
+)
+
 printf 'bootstrap product unit fixtures passed\n'
 [ "$_PRODUCT_TEST_UNIT_ONLY" != true ] || exit 0
 # Local HTTP and controlling-PTY integration. Installer/registration are explicit
@@ -909,7 +1059,7 @@ env_keys = (
     'CLAUDE_CONFIG_DIR', 'TMP', 'TEMP', 'TMPDIR',
 )
 env = {key: os.environ[key] for key in env_keys if key in os.environ}
-env.update(BOOTSTRAP_LATEST_RELEASE_API_URL=base+'/latest', BOOTSTRAP_COMMIT_API_BASE_URL=base+'/commits', BOOTSTRAP_RAW_BASE_URL=base+'/raw', BOOTSTRAP_RAW_CONTENT_URL=base+'/raw', BOOTSTRAP_SOURCE_BASE_URL=base, BOOTSTRAP_RELEASES_BASE_URL=base)
+env.update(BOOTSTRAP_RELEASE_TAG='v1.42.0', BOOTSTRAP_LATEST_RELEASE_API_URL=base+'/latest', BOOTSTRAP_COMMIT_API_BASE_URL=base+'/commits', BOOTSTRAP_RAW_BASE_URL=base+'/raw', BOOTSTRAP_RAW_CONTENT_URL=base+'/raw', BOOTSTRAP_SOURCE_BASE_URL=base, BOOTSTRAP_RELEASES_BASE_URL=base)
 cli = sandbox / 'clis'; cli.mkdir()
 (cli / 'codex').write_bytes(b'#!/bin/sh\nexit 99\n'); (cli / 'codex').chmod(0o755)
 assert pathlib.Path(bash).is_file(), 'fixture controller Bash must exist'

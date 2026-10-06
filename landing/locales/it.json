@@ -1,11 +1,11 @@
 {
-  "seo": { "title": "Agent Notifications - Mantieni la concentrazione", "description": "Notifiche desktop e webhook per Claude, Codex CLI e OpenCode. L’integrazione Gemini CLI non è ancora pubblicata." },
+  "seo": { "title": "Agent Notifications - Mantieni la concentrazione", "description": "Notifiche desktop e webhook per Claude, Codex CLI e OpenCode. Gemini CLI: Linux / Windows." },
   "language": { "label": "Lingua", "current": "Lingua attuale: {language}", "search": "Cerca lingue", "noResults": "Nessuna lingua trovata", "switchError": "Impossibile cambiare lingua. Riprova." },
   "accessibility": { "skip": "Vai al contenuto", "platforms": "Sistemi operativi supportati",
     "agents": "Integrazioni degli agenti supportate" },
   "brand": { "tagline": "PER I TUOI AGENTI DI PROGRAMMAZIONE" },
   "nav": { "ariaLabel": "Principale", "features": "Funzionalità", "install": "Installa", "faq": "Domande frequenti" },
-  "hero": { "eyebrow": "MENO CONTROLLI. PIÙ SVILUPPO.", "title": "Mantieni la concentrazione", "emphasis": "Ti avvisiamo noi", "leadFirst": "Lascia lavorare il tuo agente. Scopri quando ha finito.", "leadSecond": "Notifiche desktop e webhook per Claude, Codex CLI e OpenCode. L’integrazione Gemini CLI non è ancora pubblicata.", "primary": "Configura le notifiche", "secondary": "Esplora su GitHub", "note": "Open source · Esecuzione locale" },
+  "hero": { "eyebrow": "MENO CONTROLLI. PIÙ SVILUPPO.", "title": "Mantieni la concentrazione", "emphasis": "Ti avvisiamo noi", "leadFirst": "Lascia lavorare il tuo agente. Scopri quando ha finito.", "leadSecond": "Notifiche desktop e webhook per Claude, Codex CLI e OpenCode. Gemini CLI: Linux / Windows.", "primary": "Configura le notifiche", "secondary": "Esplora su GitHub", "note": "Open source · Esecuzione locale" },
   "common": { "now": "ora", "beta": "beta" },
   "features": {
     "eyebrow": "IL SEGNALE GIUSTO. AL MOMENTO GIUSTO.", "titleFirst": "Resta concentrato", "titleSecond": "Smetti di controllare di continuo",
@@ -122,6 +122,7 @@
   },
   "select": { "scrollUp": "Scorri le opzioni verso l'alto", "scrollDown": "Scorri le opzioni verso il basso" },
   "install": {
+    "platformRelease": "Versione verificata per {os}: {version}.",
     "agentNotify": {"label": "Consenti agli agenti di inviarti notifiche quando serve la tua attenzione", "hint": "Aggiunge uno strumento di notifica per Claude e Codex CLI durante un’attività, non solo alla fine."},
     "title": "Configura le notifiche", "intro": "Segui i passaggi per aggiungere notifiche a {agent}.", "chooseAgent": "Scegli i tuoi agenti", "requires": "Richiede {agent}", "bothAgents": "Entrambi gli agenti", "bothSelected": "✓ Entrambi gli agenti selezionati", "installBoth": "Installa per entrambi gli agenti", "chooseComputer": "Scegli il computer su cui è in esecuzione il tuo agente", "selected": "Selezionato", "detected": "Rilevato automaticamente", "change": "Cambia", "targetOs": "Sistema operativo di destinazione",
     "products": { "claude": "Claude", "codex": "Codex CLI", "both": "Claude + Codex CLI",
@@ -141,11 +142,11 @@
       "claude": "Avvisi di completamento, revisione, domande, piani, limiti di sessione ed errori API. Suoni e ritorno con un clic dove supportati.",
       "codex": "Avvisi di completamento e permessi. Suoni e ritorno con un clic dove supportati. Verifica e autorizza gli hook installati in /hooks.",
       "opencode": "Avvisi silenziosi di completamento, domande, permessi ed errori nelle sessioni principali. Nessun suono o ritorno con un clic.",
-      "gemini": "Candidato Gemini CLI: avvisi silenziosi di turno concluso e permesso per strumenti. Un turno concluso non implica successo né risposta finale. Nessun suono, focus al clic, domanda, errore, piano, revisione o parità per agenti annidati."
+      "gemini": "Gemini CLI (Linux / Windows): avvisi silenziosi di turno concluso e permesso per strumenti. Un turno concluso non implica successo né risposta finale. Nessun suono, focus al clic, domanda, errore, piano, revisione o parità per agenti annidati."
     },
     "gemini": {
-      "version": "Integrazione non pubblicata. La versione pubblica 1.46.1 non include Gemini. Destinazione: Gemini CLI 0.62.0; consulta la guida per la verifica nativa per sistema operativo. Serve una versione compatibile.",
-      "guide": "Configurazione e limiti del candidato Gemini",
+      "version": "Linux / Windows: 1.47.1 (Gemini CLI 0.62.0). macOS: 1.46.1 (Claude, Codex CLI, OpenCode; Gemini non disponibile)",
+      "guide": "Configurazione e limiti di Gemini",
       "configure": "Consulta la guida Gemini per consenso ai canali e impostazioni condivise; nessun MCP o skill installato. Gli avvisi integrati possono duplicarsi. Scegli una fonte desktop o solo webhook; le impostazioni integrate non vengono modificate."
     },
     "observer": {
@@ -166,7 +167,7 @@
     }
   },
   "agentSupport": {
-    "unreleased": "Non pubblicato",
+    "platforms": "Linux / Windows",
     "title": "Confronta le funzioni degli agenti",
     "feature": "Funzione",
     "yes": "Supportata",

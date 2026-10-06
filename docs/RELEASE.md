@@ -2,6 +2,19 @@
 
 Step-by-step guide for publishing a new version.
 
+For a release that skips a platform, promote only its qualified
+[platform release channels](PLATFORM_RELEASE_CHANNELS.md). Keep skipped-platform
+rows and global Latest on the previously qualified version. Publish source
+branches before activating the immutable source SHAs in the channel index.
+
+v1.48.1 is a Linux amd64/arm64 and Windows amd64 partial release. macOS stays
+on v1.46.1, and GitHub global Latest stays v1.46.1. There are no Darwin binaries,
+portable packages or ClaudeNotifier.app assets in v1.48.1.
+
+The earlier v1.48.0 draft and tag are retained unpublished: a repeated Windows
+clock tick exposed a floating-point admission-budget bug. v1.48.1 fixes it
+without extending the four-second limit; qualification must use the new binary.
+
 ## 0. Pre-release risk checklist
 
 Run these checks for releases that touch the hook pipeline.
@@ -104,9 +117,11 @@ and their evidence on the release PR; the selector itself does not run or prove 
 >
 > Prepare the bump on a release branch, tag that exact commit (`release.yml` triggers on the
 > tag, not on `main`), qualify the draft, follow the owner request scope below,
-> publish its assets when authorized, and only then fast-forward
-> `main` to the same SHA. The tag stays valid because the SHA is unchanged, and the
-> asset-missing window is zero.
+> publish its assets when authorized. Only a release qualified for every supported
+> platform may fast-forward `main` to that same SHA. For partial v1.48.1, do not
+> fast-forward the version bump to `main`: promote the Linux/Windows source and
+> channel controller as described below, retaining all five legacy macOS versions.
+> The native tag stays immutable and the asset-missing window is zero.
 
 ```bash
 git switch -c release/vX.Y.Z
@@ -132,12 +147,50 @@ git push origin vX.Y.Z
 gh run watch                   # wait for release.yml to finish
 ```
 
-Before creating the draft, `release.yml` qualifies the actual downloaded binary artifacts
-on all five native targets with `scripts/opencode-native-e2e.py` and the SHA-256-pinned
-OpenCode 1.18.33 CLI. This checks completion webhook delivery, managed update and
-revocation after removal in disposable projects and profiles. The uploaded
-`opencode-release-e2e-<platform>-<arch>` reports bind the evidence to the release commit
-and binary SHA-256. These checks do not prove desktop banner delivery.
+Before creating the v1.48.1 draft, `release.yml` checks the downloaded artifacts
+on three native targets with `scripts/release-artifact-e2e.py`: Linux amd64/arm64
+and Windows amd64. The workflow has no macOS build, signing or helper upload jobs.
+Artifact checks do not establish visible desktop banners.
+
+OpenCode qualification uses the same-run binaries in seven Linux/Windows cells:
+V1 1.18.33 and V2 2.0.21 on Linux amd64/arm64 and Windows amd64, plus V1 1.18.34
+on Linux amd64. SHA-256-pinned host archives, native executable hashes, exact
+release source and binary hashes bind the reports to the candidate. The checks
+cover completion delivery, managed update and revocation in disposable projects.
+They do not replace the broader semantic matrix or desktop delivery evidence.
+
+For immutable v1.48.1 artifacts, the `release-recovery` plan in
+`opencode-native-e2e.yml` reuses the original release run rather than rebuilding.
+Run `first-linux-amd64-v2` before `all-seven`. Fresh finite clock and packaged
+reader observations must pass semantic validation before the unchanged installed
+`business` suite runs. Publication requires successful reports for all seven
+cells. This path does not qualify the full native clock, source epoch, time
+policy, platform lifetime or visible desktop delivery; the full/smoke denial
+gate remains unchanged. Retain the original failure and all raw recovery reports.
+If only Windows fails, use `windows-two` to repeat those two cells. The Windows
+recovery verifies the original executable's unique canonical LF bundle, then
+uses the unchanged registration oracle to check installed raw bytes and the
+real ownership hash after setup, update and reinstall. The original Windows
+ACL helper uses verified prefetched modules with a private offline environment;
+it must successfully set the protected DACL. These preparation receipts do not
+qualify the full native gate.
+
+The v1.48.1 package qualification helper accepts lightweight release tags only;
+annotated tags fail closed before any package execution.
+
+Same-run custody explicitly selects `--scope linux-windows` and seals only those
+seven cells. The general fixture still requires all eleven cells by default;
+partial custody rejects skipped-platform requests and missing requested binaries.
+Neither this archive nor earlier macOS evidence qualifies a skipped platform.
+Selected installed-client navigation and Windows interactive toast/cold callback
+qualification remain incomplete; protocol and artifact checks do not close those gaps.
+
+The self-contained bundle incorporates UAP SDK 0.3.0 built from the reviewed
+vendored tarball. Preparation verifies
+its lockfile integrity and an identical rebuild of the tracked embedded bundle.
+Publishing that separate SDK requires separate owner authorization; it is not a
+prerequisite for this self-contained consumer release. Adding CI lanes does not
+establish that they have passed.
 
 The workflow creates a **draft**, never an automatically published release. Inspect it with
 `gh release view vX.Y.Z --json isDraft,assets` and download the assets into a disposable
@@ -157,8 +210,8 @@ both versions, so a binary that fails `version` leaves users stuck on it.
 After qualification, follow the owner's request for this release:
 
 - A request to **make a release** authorizes publishing the qualified version prepared for
-  that request. Publish the draft with `gh release edit vX.Y.Z --draft=false` without asking
-  for a second approval. State the candidate version in a progress update so the owner can
+  that request. Publish the draft with `gh release edit vX.Y.Z --draft=false --latest=false`
+  for a partial release without asking for a second approval. State the candidate version in a progress update so the owner can
   correct it before publication.
 - A request to **make a draft release** authorizes only the draft. Leave it unpublished
   until the owner asks to publish it.
@@ -166,19 +219,52 @@ After qualification, follow the owner's request for this release:
   materially changed after the request, obtain explicit owner approval for the final version
   before publishing. Approval for an earlier release does not carry forward.
 
-Verify the public assets and checksums, then land the exact same commit on `main`:
+For v1.48.1, publish the qualified partial draft with:
+
+```bash
+gh release edit v1.48.1 --draft=false --prerelease=false --latest=false
+gh release view v1.48.1 --json isDraft,isPrerelease,assets
+gh api repos/777genius/agent-notifications/releases/latest --jq .tag_name
+# Latest must still be v1.46.1.
+```
+
+Verify public assets and checksums, then promote only the Linux/Windows platform
+source branch and its immutable channel-index SHAs in the order documented in
+[platform release channels](PLATFORM_RELEASE_CHANNELS.md). Preserve both macOS
+rows and global Latest at v1.46.1. Do not use the general `main` promotion below
+as a substitute for the partial platform promotion.
+
+For a fully qualified release across all published platforms, land the exact
+same release commit on `main`:
 
 ```bash
 git switch main && git merge --ff-only release/vX.Y.Z && git push origin main
 ```
 
+## Partial releases without macOS
+
+When macOS signing is unavailable, qualify and publish only the Linux/Windows
+assets with `--latest=false`. Keep the macOS channel and GitHub Latest at their
+previous qualified version. Promote Linux/Windows source branches and immutable
+source tags, then activate only their index rows as described in
+[platform channels](PLATFORM_RELEASE_CHANNELS.md).
+
+Keep all five native version occurrences on `main` at the legacy macOS version.
+Existing Claude marketplace users on `main` download the version in its manifest;
+a newer version without Darwin assets would stall their updater. Integrate the
+release and channel PR histories together with the main-version restoration in
+one reviewed promotion, so no intermediate bump is published on `main`. The
+release tag and Linux/Windows source retain their new version and exact source SHA.
+The assets-before-main bump instructions above apply to a full-platform release.
+
 ## ClaudeNotifier.app (macOS)
 
-ClaudeNotifier.app is **automatically built, signed, and notarized** by the `release.yml`
-workflow as a `build-notifier` job. It runs in parallel with Go binary builds and the
-resulting `ClaudeNotifier.app.zip` is included in the same GitHub Release.
+v1.48.1 does not build or publish ClaudeNotifier.app. macOS consumers retain the
+signed and notarized helper from their qualified v1.46.1 channel.
 
-The CI workflow:
+A future macOS release must restore and qualify its signing/notarization job;
+the prior full-release workflow:
+
 1. Imports the Apple Developer certificate from GitHub Secrets
 2. Builds a universal binary (arm64 + x86_64)
 3. Signs with **Developer ID Application** + hardened runtime

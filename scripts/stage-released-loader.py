@@ -1,32 +1,26 @@
 #!/usr/bin/env python3
-"""Stage the public installer from one exact published stable release."""
+"""Stage the public installer from an exact reviewed channel controller commit."""
 import argparse
-import base64
-import json
 import os
 from pathlib import Path
 import re
 import subprocess
 import tempfile
 
-REPOSITORY = "777genius/agent-notifications"
-
-
-def api(path):
-    return json.loads(subprocess.check_output(["gh", "api", path]))
-
 
 def stage(destination):
-    tag = api(f"repos/{REPOSITORY}/releases/latest")["tag_name"]
-    if not re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", tag):
-        raise ValueError("latest release must have a stable version tag")
-    commit = api(f"repos/{REPOSITORY}/commits/{tag}")["sha"]
+    root = Path(__file__).resolve().parent.parent
+    commit = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"]).decode().strip()
     if not re.fullmatch(r"[0-9a-f]{40}", commit):
-        raise ValueError("invalid release commit")
-    entry = api(f"repos/{REPOSITORY}/contents/bin/setup.sh?ref={commit}")
-    if entry.get("encoding") != "base64" or entry.get("type") != "file":
-        raise ValueError("invalid release loader entry")
-    body = base64.b64decode("".join(entry["content"].splitlines()), validate=True)
+        raise ValueError("invalid controller commit")
+    subprocess.run(["git", "-C", str(root), "diff", "--exit-code", "HEAD", "--",
+                    "bin/setup.sh", "bin/bootstrap.sh", "bin/release-channel.sh", "release-channels.tsv"], check=True)
+    body = subprocess.check_output(["git", "-C", str(root), "show", f"{commit}:bin/setup.sh"])
+    # Publishing always pins the controller and its index to one snapshot.
+    marker = b'controller="${BOOTSTRAP_CONTROLLER_COMMIT:-}"'
+    if body.count(marker) != 1:
+        raise ValueError("loader must expose exactly one controller pin")
+    body = body.replace(marker, b'controller="${BOOTSTRAP_CONTROLLER_COMMIT:-' + commit.encode() + b'}"')
     if not body.startswith(b"#!/usr/bin/env bash\n") or b"\0" in body or len(body) > 262144:
         raise ValueError("invalid release loader")
     subprocess.run(["bash", "-n"], input=body, check=True)
@@ -40,7 +34,7 @@ def stage(destination):
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
-    print(f"Public installer staged from {tag} at {commit}")
+    print(f"Public platform installer staged from controller {commit}")
 
 
 if __name__ == "__main__":

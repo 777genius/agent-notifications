@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "scope": "owned_TEST_portal_runtime_export_no_start",
+  "qualifiedImage": "sha256:3bdd7af82838b41198d1286cce85ed6ca0fc13721609feef70513404c29fd271",
+  "qualifiedNativeEvidenceSHA256": "b15831b1faf244bbab1eb771cf79eba9b65dcb2347d13f5e734e173938124536",
+  "containerID": "76bcd43c4ebe343b7790ac37a58ce2b35cafe16b043a426f1f917cbc370b4bbf",
+  "archives": {
+    "portal": {
+      "sha256": "3a80227876fc6426bcf64658a18e0235f970daadc6c13923d4f7a6e78c00bc2c",
+      "bytes": 6858240,
+      "members": 196,
+      "fileBytes": 6730927,
+      "executableSHA256": "7fe62c1a938985b8ca4ec335a768ad36f1d17abe027098624fa4f5989c0b4594",
+      "expectedExecutableSHA256": "7fe62c1a938985b8ca4ec335a768ad36f1d17abe027098624fa4f5989c0b4594",
+      "copyExitCode": 0
+    },
+    "gtk": {
+      "sha256": "68e165b67639cf8c77ed7edda63210c5ebfd0aa532f52e8e56d8fc21d1d5b35e",
+      "bytes": 1440256,
+      "members": 119,
+      "fileBytes": 1369989,
+      "executableSHA256": "b95c473ae8fe4e3b51e7ca4bf27d4f4719786d552524443e246d1b40468d40af",
+      "expectedExecutableSHA256": "b95c473ae8fe4e3b51e7ca4bf27d4f4719786d552524443e246d1b40468d40af",
+      "copyExitCode": 0
+    }
+  },
+  "rawSHA256": {
+    "result.json": "0787b4b5e6e03d26d81e7fbbc91927369eb905e3084ba06b2e63932decac1c7a",
+    "operator.py": "6b4ce41799e30c3be9bbd1921016040aa37853d5b2d45b4d906fd27fabd0ee38",
+    "create-intent.json": "0635fdc92f329418280647514926a2b4c11ad52d0a7a769e780306d5bbe970bf",
+    "create.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "portal.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "gtk.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "containerNeverStarted": true,
+  "cleanupPassed": true,
+  "cleanupUnknown": false,
+  "createOutcomeUnknown": false,
+  "runtimeExecuted": false,
+  "notificationAttempted": false,
+  "clientLaunchAttempted": false,
+  "nativeQualification": false
+}

@@ -86,6 +86,8 @@ _FROZEN_CLAUDE_MCP=""
 _FROZEN_CODEX_MCP=""
 _FROZEN_OPENCODE=""
 _FROZEN_GEMINI=""
+_FROZEN_SCOPE_ROOT=""
+_FROZEN_CLIENT_EXEC=""
 _CLAUDE_EXEC=claude
 _CODEX_EXEC=codex
 _OPENCODE_EXEC=opencode
@@ -213,10 +215,19 @@ check_prerequisites() {
             "$opencode_cli" --version </dev/null) || probe_status=$?
         rm -rf "$probe"
         [ "$probe_status" -eq 0 ] || { echo "Cannot determine OpenCode version." >&2; return 1; }
-        if [[ "$host_version" =~ (^|[^0-9])v?([0-9]+)\.([0-9]+)\.([0-9]+)($|[^0-9]) ]] && [ "${BASH_REMATCH[2]}" = 1 ]; then
-            echo "OpenCode notifications were tested with 1.18.33; detected $host_version."
+        # Accept one complete stable version, never an embedded compatibility
+        # number, prerelease or an unknown future API generation.
+        local host_supported=false
+        if [[ "$host_version" =~ ^(OpenCode\ version:\ )?v?(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$ ]]; then
+            if (( BASH_REMATCH[2] == 2 || (BASH_REMATCH[2] == 1 &&
+                (BASH_REMATCH[3] > 18 || (BASH_REMATCH[3] == 18 && BASH_REMATCH[4] >= 29))) )); then
+                host_supported=true
+            fi
+        fi
+        if [ "$host_supported" = true ]; then
+            echo "OpenCode notifications were tested with 1.18.33, 2.0.0 and 2.0.21; detected $host_version."
         else
-            echo "Unsupported OpenCode version. Tested host: 1.18.33; V2 is not supported. Detected: $host_version" >&2
+            echo "Unsupported OpenCode version. Requires stable V1 >= 1.18.29 or V2 >= 2.0.0; tested: 1.18.33, 2.0.0 and 2.0.21." >&2
             exit 1
         fi
         [ "$(bootstrap_release_os_arch)" != "windows arm64" ] || { echo "Windows arm64 is not supported." >&2; exit 1; }
@@ -1419,6 +1430,7 @@ complete_configure_route() {
 # Product selection must precede any filesystem or host CLI mutation.
 select_product() {
     local seen_agent_notify=false seen_skip_agent_notify=false seen_flags="" key value
+    local scope_root="" client_exec=""
     while [ "$#" -gt 0 ]; do
         key=${1%%=*}
         case "$key" in
@@ -1468,6 +1480,15 @@ select_product() {
                 AGENT_NOTIFY_REQUEST=skip
                 CONFIGURE_NOTIFICATIONS=false
                 shift ;;
+            --scope-root|--scope-root=*|--client-executable|--client-executable=*)
+                case "$1" in
+                    *=*) value=${1#*=}; shift ;;
+                    *) [ "$#" -ge 2 ] || { echo "Missing value for $key" >&2; return 1; }; value=$2; shift 2 ;;
+                esac
+                [ "${#value}" -le 4096 ] || { echo "$key must be at most 4096 characters." >&2; return 1; }
+                case "$value" in /*|[A-Za-z]:/*|[A-Za-z]:\\*) ;; *) echo "$key must be absolute." >&2; return 1 ;; esac
+                case "$key" in --scope-root) scope_root=$value ;; *) client_exec=$value ;; esac
+                CONFIGURE_ARGS+=("$key" "$value") ;;
             --navigation=*|--app=*|--team-id=*|--allow-unknown-caller=*|--allow-caller-asserted=*|--codex-home=*)
                 value=${1#*=}; shift; set -- "$key" "$value" "$@"
                 # Already recorded this key; the value branch below consumes it.
@@ -1502,7 +1523,7 @@ select_product() {
                 CONFIGURE_ARGS+=("$1")
                 shift ;;
             --help|-h)
-                echo "Usage: bash bootstrap.sh [--product claude|codex|both|opencode|gemini | --products claude,codex,opencode,gemini] [--desktop] [--webhook] [--agent-notify|--skip-agent-notify] [--navigation none]"
+                echo "Usage: bash bootstrap.sh [--product claude|codex|both|opencode|gemini|cursor | --products claude,codex,opencode,gemini] [--desktop] [--webhook] [--agent-notify|--skip-agent-notify] [--navigation none] [--scope-root PATH --client-executable PATH (Cursor only)]"
                 exit 0 ;;
             *) echo "Unknown option: $1" >&2; return 1 ;;
         esac
@@ -1510,6 +1531,9 @@ select_product() {
     if [ "$seen_agent_notify" = true ] && [ "$seen_skip_agent_notify" = true ]; then
         echo "--agent-notify and --skip-agent-notify are mutually exclusive." >&2
         return 1
+    fi
+    if { [ -n "$scope_root" ] && [ -z "$client_exec" ]; } || { [ -z "$scope_root" ] && [ -n "$client_exec" ]; }; then
+        echo "--scope-root and --client-executable are required together." >&2; return 1
     fi
     if [ -z "$PRODUCT" ]; then
         # Selection runs later through the release-verified public UAP UI. No
@@ -1519,20 +1543,33 @@ select_product() {
         _INTERACTIVE_INTENT=true
         case " ${CONFIGURE_ARGS[*]-} " in *" --json "*) echo "Pending questions require complete explicit product/route/channel input with --json." >&2; return 1 ;; esac
         # Pure syntax only; applicability is checked after product selection.
-        if [ "$AGENT_NOTIFY_REQUEST" = skip ] && [ "${#CONFIGURE_ARGS[@]}" -gt 0 ]; then
+        local selected_scope_count=0
+        [ -z "$scope_root" ] || selected_scope_count=4
+        if [ "$AGENT_NOTIFY_REQUEST" = skip ] && [ "${#CONFIGURE_ARGS[@]}" -gt "$selected_scope_count" ]; then
             echo "Route flags require --agent-notify." >&2; return 1
         fi
-        [ "${#CONFIGURE_ARGS[@]}" -eq 0 ] || complete_configure_route
+        [ "${#CONFIGURE_ARGS[@]}" -eq "$selected_scope_count" ] || complete_configure_route
         return $?
     fi
     local csv remaining selected seen="" observers=0
     case "$PRODUCT" in
         bundle:*) csv=${PRODUCT#bundle:} ;;
         both) csv=claude,codex ;;
-        claude|codex|opencode|gemini) csv=$PRODUCT ;;
-        *) echo "Invalid product: $PRODUCT; use claude, codex, both, opencode or gemini." >&2; return 1 ;;
+        claude|codex|opencode|gemini|cursor) csv=$PRODUCT ;;
+        *) echo "Invalid product: $PRODUCT; use claude, codex, both, opencode, gemini or cursor." >&2; return 1 ;;
     esac
     case "$csv" in ''|,*|*,|*,,*) echo "Product selection contains an empty product." >&2; return 1 ;; esac
+    if [ "$csv" = cursor ]; then
+        [ -n "$scope_root" ] && [ -n "$client_exec" ] || { echo "Cursor requires explicit scope-root and client-executable." >&2; return 1; }
+        [ "${#CONFIGURE_ARGS[@]}" -eq 4 ] || { echo "Cursor does not accept navigation or legacy profile flags." >&2; return 1; }
+        SELECTED_PRODUCTS=(cursor); LEGACY_PRODUCT=""; CONFIGURE_NOTIFICATIONS=false
+        # Native channel choices remain separate from MCP units in the frozen
+        # confirmation. Never dispatch Cursor without that confirmed intent.
+        _INTERACTIVE_INTENT=true
+        [ "${#OPENCODE_ARGS[@]}" -gt 0 ] || _CHANNEL_PENDING=true
+        return 0
+    fi
+    [ -z "$scope_root$client_exec" ] || { echo "Selected scope/client arguments require Cursor alone." >&2; return 1; }
     SELECTED_PRODUCTS=()
     LEGACY_PRODUCT=""
     remaining=$csv
@@ -2301,7 +2338,7 @@ selector_record() {
     local item remaining=$_SELECTOR_RECORD seen=""
     while :; do
         item=${remaining%%,*}
-        case "$1:$item" in products:claude|products:codex|products:opencode|products:gemini|channels:desktop|channels:webhook) ;; *) echo "Invalid selector ID." >&2; return 1 ;; esac
+        case "$1:$item" in products:claude|products:codex|products:opencode|products:gemini|products:cursor|channels:desktop|channels:webhook) ;; *) echo "Invalid selector ID." >&2; return 1 ;; esac
         case ",$seen," in *",$item,"*) echo "Duplicate selector ID." >&2; return 1 ;; esac
         seen=${seen:+$seen,}$item
         case "$remaining" in *,*) remaining=${remaining#*,} ;; *) break ;; esac
@@ -2339,6 +2376,8 @@ load_frozen_dispatch() {
             codex-executable) _CODEX_EXEC=$value ;;
             opencode-executable) _OPENCODE_EXEC=$value ;;
             gemini-executable) _GEMINI_EXEC=$value ;;
+            scope-root) _FROZEN_SCOPE_ROOT=$value ;;
+            client-executable) _FROZEN_CLIENT_EXEC=$value ;;
             *) return 1 ;;
         esac
     done <"$result"
@@ -2352,6 +2391,7 @@ load_frozen_dispatch() {
             codex) required="$required codex-home codex-mcp-config codex-executable" ;;
             opencode) required="$required opencode-config-dir opencode-executable" ;;
             gemini) required="$required gemini-config-root gemini-executable" ;;
+            cursor) required="$required scope-root client-executable runtime-root" ;;
         esac
     done
     for key in $required; do case ",$seen," in *",$key,"*) ;; *) echo "Missing frozen authority: $key" >&2; return 1 ;; esac; done
@@ -2384,21 +2424,22 @@ selector_scope_args() {
     _SCOPE_ARGS=()
     local i=0
     while [ "$i" -lt "${#CONFIGURE_ARGS[@]}" ]; do
-        if [ "${CONFIGURE_ARGS[$i]}" = --codex-home ]; then
-            _SCOPE_ARGS+=(--codex-home "${CONFIGURE_ARGS[$((i + 1))]}")
-        fi
+        case "${CONFIGURE_ARGS[$i]}" in
+            --codex-home|--scope-root|--client-executable)
+                _SCOPE_ARGS+=("${CONFIGURE_ARGS[$i]}" "${CONFIGURE_ARGS[$((i + 1))]}") ;;
+        esac
         i=$((i + 1))
     done
 }
 
 selector_effect_args() {
     _EFFECT_ARGS=(--products "$_PRODUCT_CSV")
-    if [ -n "$LEGACY_PRODUCT" ]; then
+    if [ -n "$LEGACY_PRODUCT" ] || [ "$_PRODUCT_CSV" = cursor ]; then
         case "$AGENT_NOTIFY_REQUEST" in explicit) _EFFECT_ARGS+=(--agent-notify) ;; skip) _EFFECT_ARGS+=(--skip-agent-notify) ;; esac
         local i=0
         while [ "$i" -lt "${#CONFIGURE_ARGS[@]}" ]; do
             case "${CONFIGURE_ARGS[$i]}" in
-                --codex-home) i=$((i + 2)); continue ;;
+                --codex-home|--scope-root|--client-executable) i=$((i + 2)); continue ;;
                 --json) i=$((i + 1)); continue ;;
             esac
             _EFFECT_ARGS+=("${CONFIGURE_ARGS[$i]}"); i=$((i + 1))
@@ -2457,7 +2498,7 @@ main() {
     fi
     _PRODUCT_CSV=""
     # Canonical product order remains the existing command order.
-    for selected in claude codex opencode gemini; do
+    for selected in claude codex opencode gemini cursor; do
         case " ${SELECTED_PRODUCTS[*]} " in *" $selected "*) _PRODUCT_CSV=${_PRODUCT_CSV:+$_PRODUCT_CSV,}$selected ;; esac
     done
     if [ "$_CHANNEL_PENDING" = true ]; then
@@ -2506,6 +2547,12 @@ main() {
         install_legacy_products || status=$?
     fi
     if [ "$status" -eq 0 ]; then
+        if [ "$_PRODUCT_CSV" = cursor ] && [ "$AGENT_NOTIFY_REQUEST" != skip ]; then
+            PRODUCT=cursor; CONFIGURE_BINARY=$_CONFIG_HELPER; PLUGIN_ROOT=""
+            progress_phase cursor portable state_requires_inspection
+            setup_agent_notify_wizard || status=$?
+            [ "$status" -ne 0 ] || progress_phase cursor complete completed
+        fi
         for selected in opencode gemini; do
             case ",$_PRODUCT_CSV," in *",$selected,"*) ;; *) continue ;; esac
             PRODUCT=$selected
@@ -2607,7 +2654,11 @@ configure_agent_policy() {
 report_wizard_portable_missing() {
     local reason="$1"
     echo -e "${YELLOW}⚠ Agent-notify wizard skipped; ${reason}.${NC}" >&2
-    echo -e "${YELLOW}  Plugin/hooks registration completed. Inspect the selected clients and owned registration before resuming the portable phase with the verified package for this release.${NC}" >&2
+    if [ "$PRODUCT" = cursor ]; then
+        echo "Cursor setup is incomplete; inspect the selected profile and owned state before retrying." >&2
+    else
+        echo -e "${YELLOW}  Plugin/hooks registration completed. Inspect the selected clients and owned registration before resuming the portable phase with the verified package for this release.${NC}" >&2
+    fi
     [ -z "${BOOTSTRAP_TAG:-}" ] || printf '  Release: %s\n' "$BOOTSTRAP_TAG" >&2
     if [ "$AGENT_NOTIFY_REQUEST" = explicit ] || [ -n "$_SELECTOR_INTENT" ]; then
         return 1
@@ -2656,7 +2707,11 @@ setup_agent_notify_wizard() {
     local policy_help
     policy_help=$("$CONFIGURE_BINARY" setup-notifications --help </dev/null 2>/dev/null) || policy_help=""
     if [[ "$policy_help" != *--policy-only* || "$policy_help" != *--preserve-enabled* ]]; then
-        echo "agent-notify setup skipped; installed binary predates portable setup. Plugin/hooks install succeeded. Update to a matching release before enabling MCP." >&2
+        if [ "$PRODUCT" = cursor ]; then
+            echo "Cursor setup is incomplete; the matching portable setup caller is required." >&2
+        else
+            echo "agent-notify setup skipped; installed binary predates portable setup. Plugin/hooks install succeeded. Update to a matching release before enabling MCP." >&2
+        fi
         if [ "$AGENT_NOTIFY_REQUEST" = explicit ] || [ -n "$_SELECTOR_INTENT" ]; then return 1; fi
         return 0
     fi
@@ -2667,6 +2722,7 @@ setup_agent_notify_wizard() {
         claude) agents=claude ;;
         codex) agents=codex ;;
         both) agents=claude,codex ;;
+        cursor) agents=cursor ;;
         *) echo "invalid product for wizard: $PRODUCT" >&2; return 1 ;;
     esac
     while [ "$i" -lt "${#CONFIGURE_ARGS[@]}" ]; do
@@ -2676,7 +2732,7 @@ setup_agent_notify_wizard() {
         fi
         i=$((i + 1))
     done
-    if [ "$PRODUCT" != claude ] && [ -z "$wizard_codex_home" ]; then
+    if { [ "$PRODUCT" = codex ] || [ "$PRODUCT" = both ]; } && [ -z "$wizard_codex_home" ]; then
         echo "HOME, USERPROFILE, CODEX_HOME, or --codex-home is required for Codex setup." >&2
         return 1
     fi
@@ -2705,39 +2761,51 @@ setup_agent_notify_wizard() {
     fi
     # Preserve policy enablement and accepted route/consent before the wizard
     # migrates client registration to the portable package.
-    configure_agent_policy portable || return 1
-    if [ -n "$_SELECTOR_INTENT" ]; then
+    if [ "$PRODUCT" = cursor ]; then
+        [ -n "$_SELECTOR_INTENT" ] && [ -n "$_FROZEN_SCOPE_ROOT" ] && [ -n "$_FROZEN_CLIENT_EXEC" ] || return 1
+        # The approved caller derives its observer from the installed primary;
+        # the selected vendor executable is only client authority.
+    elif [ -n "$_SELECTOR_INTENT" ]; then
+        configure_agent_policy portable || return 1
         [ "$PRODUCT" = codex ] || claude_exec=$_CLAUDE_EXEC
         [ "$PRODUCT" = claude ] || codex_exec=$_CODEX_EXEC
     else
+        configure_agent_policy portable || return 1
         if [ "$PRODUCT" != codex ]; then claude_exec=$(bootstrap_abs_command "$_CLAUDE_EXEC") || true; fi
         if [ "$PRODUCT" != claude ]; then codex_exec=$(bootstrap_abs_command "$_CODEX_EXEC") || true; fi
     fi
     set -- setup-notifications wizard --action install --install-or-update --agents "$agents" --hooks false --agent-notify true --yes \
-        --package "$package_root" --plugin-root "$plugin_root"
+        --package "$package_root"
+    [ "$PRODUCT" = cursor ] || set -- "$@" --plugin-root "$plugin_root"
     if [ -n "$_SELECTOR_INTENT" ]; then
         set -- "$@" --bootstrap-intent-file "$_SELECTOR_INTENT" --control-root "$_FROZEN_CONTROL" --global-config "$AGENT_NOTIFICATIONS_CONFIG"
         [ -z "$_FROZEN_RUNTIME" ] || set -- "$@" --runtime-root "$_FROZEN_RUNTIME"
-        [ -z "$_FROZEN_CODEX_MCP" ] || set -- "$@" --mcp-config "$_FROZEN_CODEX_MCP"
+        if [ "$PRODUCT" != cursor ]; then
+            [ -z "$_FROZEN_CODEX_MCP" ] || set -- "$@" --mcp-config "$_FROZEN_CODEX_MCP"
+        fi
     else
         [ "$AGENT_NOTIFY_REQUEST" != auto ] || set -- "$@" --preserve-existing-units
     fi
-    case "$(uname -s 2>/dev/null)" in
-        MINGW*|MSYS*|CYGWIN*) ;; # Go resolves the native managed .exe from the installed primary.
-        *) set -- "$@" --helper "$CONFIGURE_BINARY" ;;
-    esac
-    set -- "$@" --codex-home "$wizard_codex_home" --claude-config "$CLAUDE_HOME"
-    if [ "$PRODUCT" != codex ]; then
-        set -- "$@" --claude-mcp-config "${_FROZEN_CLAUDE_MCP:-${CLAUDE_CONFIG_DIR:-$INSTALLER_HOME}/.claude.json}"
-    fi
-    [ -z "$claude_exec" ] || set -- "$@" --claude-executable "$claude_exec"
-    [ -z "$codex_exec" ] || set -- "$@" --codex-executable "$codex_exec"
-    if [ "$PRODUCT" != both ] && [ -n "$claude_exec$codex_exec" ]; then
-        if [ -n "$claude_exec" ]; then
-            set -- "$@" --client-executable "$claude_exec"
-        else
-            set -- "$@" --client-executable "$codex_exec"
+    if [ "$PRODUCT" != cursor ]; then
+        case "$(uname -s 2>/dev/null)" in
+            MINGW*|MSYS*|CYGWIN*) ;; # Go resolves the native managed .exe from the installed primary.
+            *) set -- "$@" --helper "$CONFIGURE_BINARY" ;;
+        esac
+        set -- "$@" --codex-home "$wizard_codex_home" --claude-config "$CLAUDE_HOME"
+        if [ "$PRODUCT" != codex ]; then
+            set -- "$@" --claude-mcp-config "${_FROZEN_CLAUDE_MCP:-${CLAUDE_CONFIG_DIR:-$INSTALLER_HOME}/.claude.json}"
         fi
+        [ -z "$claude_exec" ] || set -- "$@" --claude-executable "$claude_exec"
+        [ -z "$codex_exec" ] || set -- "$@" --codex-executable "$codex_exec"
+        if [ "$PRODUCT" != both ] && [ -n "$claude_exec$codex_exec" ]; then
+            if [ -n "$claude_exec" ]; then
+                set -- "$@" --client-executable "$claude_exec"
+            else
+                set -- "$@" --client-executable "$codex_exec"
+            fi
+        fi
+    else
+        set -- "$@" --scope-root "$_FROZEN_SCOPE_ROOT" --client-executable "$_FROZEN_CLIENT_EXEC"
     fi
     local wizard_result wizard_status=0
     wizard_result=$(mktemp "${TMPDIR:-/tmp}/bootstrap-wizard-XXXXXX") || return 1
@@ -2750,7 +2818,11 @@ setup_agent_notify_wizard() {
         if [ -n "$_PORTABLE_STAGE" ] && [[ "$package_root" = "$_PORTABLE_STAGE/"* ]]; then
             _KEEP_PORTABLE_STAGE=true
         fi
-        echo -e "${YELLOW}⚠ Agent-notify setup failed; plugin/hooks install succeeded.${NC}" >&2
+        if [ "$PRODUCT" = cursor ]; then
+            echo "Cursor setup is incomplete; the selected caller refused or failed." >&2
+        else
+            echo -e "${YELLOW}⚠ Agent-notify setup failed; plugin/hooks install succeeded.${NC}" >&2
+        fi
         echo -e "${YELLOW}  Inspect the selected clients and owned registration before resuming the failed MCP phase; notification delivery is unverified.${NC}" >&2
         [ "$_KEEP_PORTABLE_STAGE" != true ] || printf '  Verified package retained: %s\n' "$package_root" >&2
         echo "  Use the wizard's retry or next resume command above; it retains the selected clients and owned identity." >&2
@@ -2762,13 +2834,19 @@ setup_agent_notify_wizard() {
         cat "$wizard_result"
     fi
     # Keep failure output human and runnable; only the post-commit read uses JSON.
-    set -- setup-notifications wizard --action inspect --agents "$agents" --json \
-        --codex-home "$wizard_codex_home" --claude-config "$CLAUDE_HOME"
-    [ "$PRODUCT" = codex ] || set -- "$@" --claude-mcp-config "${_FROZEN_CLAUDE_MCP:-${CLAUDE_CONFIG_DIR:-$INSTALLER_HOME}/.claude.json}"
+    set -- setup-notifications wizard --action inspect --agents "$agents" --json
+    if [ "$PRODUCT" = cursor ]; then
+        set -- "$@" --scope-root "$_FROZEN_SCOPE_ROOT" --client-executable "$_FROZEN_CLIENT_EXEC"
+    else
+        set -- "$@" --codex-home "$wizard_codex_home" --claude-config "$CLAUDE_HOME"
+        [ "$PRODUCT" = codex ] || set -- "$@" --claude-mcp-config "${_FROZEN_CLAUDE_MCP:-${CLAUDE_CONFIG_DIR:-$INSTALLER_HOME}/.claude.json}"
+    fi
     if [ -n "$_SELECTOR_INTENT" ]; then
         set -- "$@" --control-root "$_FROZEN_CONTROL" --global-config "$AGENT_NOTIFICATIONS_CONFIG"
         [ -z "$_FROZEN_RUNTIME" ] || set -- "$@" --runtime-root "$_FROZEN_RUNTIME"
-        [ -z "$_FROZEN_CODEX_MCP" ] || set -- "$@" --mcp-config "$_FROZEN_CODEX_MCP"
+        if [ "$PRODUCT" != cursor ]; then
+            [ -z "$_FROZEN_CODEX_MCP" ] || set -- "$@" --mcp-config "$_FROZEN_CODEX_MCP"
+        fi
     fi
     if ! "$CONFIGURE_BINARY" "$@" > "$wizard_result" 2>/dev/null; then
         : > "$wizard_result"

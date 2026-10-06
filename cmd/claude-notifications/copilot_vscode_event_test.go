@@ -124,12 +124,17 @@ func checkLocalMainProcess(t *testing.T, bin string, tc localMainCase) {
 	if err = cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	started := time.Now()
+	startExpired := ctx.Err() != nil
+	var written int
+	var writeErr, closeErr error
 	if !tc.stalled {
-		_, _ = io.WriteString(in, tc.input)
-		_ = in.Close()
+		written, writeErr = io.WriteString(in, tc.input)
+		closeErr = in.Close()
 	}
+	waitStarted := time.Now()
 	err = cmd.Wait()
-	t.Logf("argv=%q inputSHA256=%x elapsed=%s exit=%d deadline=%v stdoutSHA256=%x stderrSHA256=%x", cmd.Args, sha256.Sum256([]byte(tc.input)), time.Since(start), cmd.ProcessState.ExitCode(), ctx.Err(), sha256.Sum256(stdout.Bytes()), sha256.Sum256(stderr.Bytes()))
+	t.Logf("argv=%q inputSHA256=%x elapsed=%s exit=%d deadline=%v stdoutSHA256=%x stderrSHA256=%x startElapsed=%s startExpired=%t stdinElapsed=%s stdinAttempted=%t stdinWritten=%d stdinWriteOK=%t stdinCloseOK=%t waitElapsed=%s", cmd.Args, sha256.Sum256([]byte(tc.input)), time.Since(start), cmd.ProcessState.ExitCode(), ctx.Err(), sha256.Sum256(stdout.Bytes()), sha256.Sum256(stderr.Bytes()), started.Sub(start), startExpired, waitStarted.Sub(started), !tc.stalled, written, !tc.stalled && writeErr == nil, !tc.stalled && closeErr == nil, time.Since(waitStarted))
 	if tc.closed {
 		if cmd.ProcessState.ExitCode() != 1 {
 			t.Fatal("closed output did not fail", err)

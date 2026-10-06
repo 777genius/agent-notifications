@@ -34,7 +34,7 @@ type PendingMutation struct {
 }
 
 func acceptedLedgerSchema(schema int) bool {
-	return schema == ledgerSchemaV1 || schema == ledgerSchemaV2 || schema == ledgerSchemaV3
+	return schema == ledgerSchemaV1 || schema == ledgerSchemaV2 || schema == ledgerSchemaV3 || schema == 4
 }
 
 func acceptedTransactionSchema(schema int) bool {
@@ -101,6 +101,14 @@ func reservationMutation(r Request) bool {
 }
 
 func applyReservationProtocol(next *Ledger, r Request, current Ledger) {
+	if current.Schema == 4 || current.WriterFloor >= OpenCodeWriterFloor || r.Consumer.OpenCode != nil {
+		next.Schema = 4
+		next.WriterFloor = OpenCodeWriterFloor
+		if current.WriterFloor > next.WriterFloor {
+			next.WriterFloor = current.WriterFloor
+		}
+		return
+	}
 	if next.WriterFloor < current.WriterFloor {
 		next.WriterFloor = current.WriterFloor
 	}
@@ -123,7 +131,7 @@ func applyReservationProtocol(next *Ledger, r Request, current Ledger) {
 }
 
 func transactionSchemaFor(next Ledger, r Request) int {
-	if localPolicyMutation(r) || next.WriterFloor >= LocalPolicyWriterFloor {
+	if next.Schema == 4 || localPolicyMutation(r) || next.WriterFloor >= LocalPolicyWriterFloor {
 		return transactionSchemaV4
 	}
 	if reservationMutation(r) || next.Schema == ledgerSchemaV3 || next.WriterFloor >= ReservationWriterFloor {

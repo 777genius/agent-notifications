@@ -5,6 +5,7 @@ package setupwizard
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -156,7 +157,7 @@ func TestBootstrapFinalGuardPolicyHandoff(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, _, err = publishWizardIntent(ctx, r, ev.snap, runtimeRoot, ev.hookAgents, ev.notifyAgents, true)
-	if err == nil || !strings.Contains(err.Error(), "stale explicit policy bytes") {
+	if !errors.Is(err, installruntime.ErrPolicyConflict) {
 		t.Fatalf("post-guard edit admitted: %v", err)
 	}
 	after, err := os.ReadFile(filepath.Join(control, "ownership.json"))

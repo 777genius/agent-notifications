@@ -1,7 +1,7 @@
 {
   "seo": {
     "title": "Agent Notifications - Stay in flow",
-    "description": "Desktop notifications and webhooks for Claude, Codex CLI and OpenCode. Gemini CLI integration is unreleased."
+    "description": "Desktop notifications and webhooks for Claude, Codex CLI and OpenCode. Gemini CLI: Linux / Windows."
   },
   "language": {
     "label": "Language",
@@ -27,7 +27,7 @@
     "title": "Stay in flow",
     "emphasis": "We'll get your attention",
     "leadFirst": "Let your agent work. Know when it's done.",
-    "leadSecond": "Desktop notifications and webhooks for Claude, Codex CLI and OpenCode. Gemini CLI integration is unreleased.",
+    "leadSecond": "Desktop notifications and webhooks for Claude, Codex CLI and OpenCode. Gemini CLI: Linux / Windows.",
     "primary": "Set up notifications",
     "secondary": "Explore on GitHub",
     "note": "Open source · Runs locally"
@@ -209,6 +209,7 @@
     "scrollDown": "Scroll options down"
   },
   "install": {
+    "platformRelease": "Qualified release for {os}: {version}.",
     "title": "Set up notifications",
     "intro": "Follow the steps below to add notifications to {agent}.",
     "chooseAgent": "Choose your agents",
@@ -288,11 +289,11 @@
       "claude": "Completion, review, question, plan, session limit and API error alerts, with sounds and click-to-focus where supported.",
       "codex": "Completion and permission alerts, with sounds and click-to-focus where supported. Review and trust installed hooks in /hooks.",
       "opencode": "Silent completion, question, permission and error alerts for root sessions. No sound or click-to-focus.",
-      "gemini": "Gemini CLI candidate: silent turn-completed and tool-permission alerts. A completed turn does not imply success or a final answer. No sound, click-to-focus, question, error, plan, review or nested-agent parity."
+      "gemini": "Gemini CLI (Linux / Windows): silent turn-completed and tool-permission alerts. A completed turn does not imply success or a final answer. No sound, click-to-focus, question, error, plan, review or nested-agent parity."
     },
     "gemini": {
-      "version": "Unreleased integration. Public release 1.46.1 does not include Gemini. Target Gemini CLI 0.62.0; see the guide for native qualification by OS. A compatible release is required.",
-      "guide": "Gemini candidate setup and limits",
+      "version": "Linux / Windows: 1.47.1 (Gemini CLI 0.62.0). macOS: 1.46.1 (Claude, Codex CLI, OpenCode; Gemini unavailable)",
+      "guide": "Gemini setup and limits",
       "configure": "Use the Gemini guide for channel consent and shared settings; no MCP tool or skill is installed. Built-in Gemini notifications can duplicate desktop alerts. Choose one desktop source or webhook-only; built-in settings are not changed."
     },
     "observer": {
@@ -313,7 +314,7 @@
     }
   },
   "agentSupport": {
-    "unreleased": "Unreleased",
+    "platforms": "Linux / Windows",
     "title": "Compare agent features",
     "feature": "Feature",
     "yes": "Supported",

@@ -433,7 +433,7 @@ func TestSchema4PublicRecoveryIntegrity(t *testing.T) {
 					if err := json.Unmarshal(tx["After"], &after); err != nil {
 						t.Fatal(err)
 					}
-					after["WriterFloor"] = json.RawMessage("4")
+					after["WriterFloor"] = json.RawMessage(fmt.Sprintf("%d", SupportedWriterFloor+1))
 					tx["After"], err = json.Marshal(after)
 					if err != nil {
 						t.Fatal(err)
