@@ -2,11 +2,29 @@
 """One native portal submission in the same offline TEST guest as the cold callback."""
 import hashlib
 import importlib.util
+import json
 import os
 from pathlib import Path
 import sys
 
 SEED = Path('/mnt/navigation-handoff-test-seed')
+
+
+def validate_source_snapshot(source_bytes, manifest_bytes):
+    """Authenticate the sender using the same immutable manifest as the guest."""
+    if len(manifest_bytes) > 8192:
+        raise RuntimeError('bounded_seed_manifest_required')
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result: raise RuntimeError('ambiguous_seed_manifest')
+            result[key] = value
+        return result
+    snapshot = json.loads(manifest_bytes, object_pairs_hook=unique)
+    if not isinstance(snapshot, dict) or set(snapshot) != {'files', 'frontendSHA256', 'backendSHA256'} or not isinstance(snapshot['files'], dict):
+        raise RuntimeError('canonical_seed_manifest_required')
+    if snapshot['files'].get('client-sender.py') != hashlib.sha256(source_bytes).hexdigest():
+        raise RuntimeError('sender_source_snapshot_changed')
 
 
 def main():
@@ -19,8 +37,10 @@ def main():
     if (SEED / 'navigation.marker').read_text() != 'Linux selected-client handoff TEST only\n':
         raise RuntimeError('TEST_seed_marker_required')
     source = Path(__file__).resolve()
-    if source != SEED / 'client-sender.py' or hashlib.sha256(source.read_bytes()).hexdigest() != (SEED / 'sender.sha256').read_text().strip():
+    if source != SEED / 'client-sender.py':
         raise RuntimeError('sender_source_snapshot_changed')
+    with (SEED / 'manifest.json').open('rb') as manifest:
+        validate_source_snapshot(source.read_bytes(), manifest.read(8193))
     module_spec = importlib.util.spec_from_file_location('owned_TEST_callback', SEED / 'client-callback.py')
     callback = importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(callback)

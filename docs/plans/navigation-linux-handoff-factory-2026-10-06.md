@@ -46,6 +46,38 @@ accepted, the controller's temporary refusal was removed for renewed R2/R3 revie
 R2 and R3 accepted the repaired complete source. A final archive listing confirmed
 that `gtk.portal` is present in the GTK tree, so its pinned share directory now
 precedes the distro share directory in discovery; the final R3 accepted this delta.
-No assembly execution has occurred. Do not run it until the full frozen execution
-capsule is accepted. A failure/unknown outcome never authorizes
+The first execution followed acceptance of the full frozen capsule; its negative
+result is retained below. Every new execution requires its own reviewed capsule. A failure/unknown outcome never authorizes
 an automatic second notification, click or client launch.
+
+
+## First actual assembly: FAILED, retained
+
+Source `0d194f48cbf2618e0792ed8e464f45e45f3c9223` ran once in a fresh,
+offline TEST VM. The sender exited 1 before click. Its mandatory `sender.sha256`
+file was absent from the actual readonly ISO; this guard precedes callback and SDK
+imports. The private archive and its ISO-listing audit retain the source/seed/frame
+bindings. `notificationAttempted=true` records producer intent, not proof that
+AddNotification ran. No click, selected-client handoff or navigation was qualified.
+
+The guest cleanup observation also failed with a combined incarnation/UID error.
+That message does not establish which condition failed. Nine retained kernel exits,
+empty owned cgroup, guest poweroff, collected QEMU and terminal/removed host
+container were observed. Those containment facts do not repair the FAILED result.
+The readonly ISO-audit container's original absence parser rejected the CLI text;
+its failed receipt is preserved alongside a separate exact ID/name reconciliation.
+
+The sender now authenticates itself with the existing bounded canonical manifest,
+avoiding an independently maintained sidecar. Two pure tests reject changed source,
+missing/ambiguous authority and oversized manifests. Final cleanup may retain any
+UID in the exact root-owned cgroup while preserving birth/pidfd/membership guards;
+selected-peer admission stays UID1000. Per-PID observation failures continue the
+sweep and still fail the cleanup verdict. Independent focused reviews accepted
+both corrections. The negative evidence must be bound and a fresh final capsule
+reviewed before a distinct planned attempt; no automatic retry is authorized.
+
+Independent raw review passed 412 assertions, including all 78 archive members
+and direct readonly ISO parsing of the manifest and nine guest payloads. The
+zero-SDK-call conclusion uses actual ISO and frozen source control flow, without
+a captured sender traceback. This accepts the negative checkpoint, not native
+qualification.
