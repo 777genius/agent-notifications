@@ -60,6 +60,8 @@ jobs:
           $null = [Management.Automation.Language.Parser]::ParseInput($match.Groups['script'].Value, [ref]$tokens, [ref]$errors)
           if ($errors.Count) { $errors | Format-List; throw 'target operator parse failed' }
       - name: Single packaged submission and genuine cold COM callback
+        # PR checks compile the fixtures; each native submission needs an explicit run.
+        if: github.event_name == 'workflow_dispatch'
         id: probe
         shell: pwsh
         run: |
