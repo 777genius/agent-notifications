@@ -21,6 +21,7 @@ let binary: string | undefined;
 let exitCode = 1;
 let packageIntent = false;
 let activationIntent = false;
+let prepareOnly = false;
 let bootstrap: { handoff: Json; paths: Map<string, string>; hashes: Map<string, string> } | undefined;
 
 // Fixed source, saved verbatim in the owned root. Data arrives only in JSON.
@@ -28,8 +29,18 @@ let bootstrap: { handoff: Json; paths: Map<string, string>; hashes: Map<string, 
 const operator = String.raw`
 param([string]$Mode, [string]$ContextFile)
 $ErrorActionPreference = 'Stop'
+if ($Mode -eq 'prepare') { $prepareClock = [Diagnostics.Stopwatch]::StartNew() }
+function PreparationPhase([string]$Phase) {
+  if ($Mode -ne 'prepare') { return }
+  [Console]::Error.WriteLine('{"preparePhase":"' + $Phase + '","pid":' + $PID + ',"elapsedMs":' + $prepareClock.ElapsedMilliseconds + '}')
+  [Console]::Error.Flush()
+}
+PreparationPhase 'entry'
 if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) { throw 'target Windows PowerShell 5.1 required' }
+PreparationPhase 'security_before'
 $securityModule = Import-Module Microsoft.PowerShell.Security -PassThru -ErrorAction Stop
+PreparationPhase 'security_after'
+PreparationPhase 'context_before'
 $c = Get-Content -LiteralPath $ContextFile -Raw -Encoding UTF8 | ConvertFrom-Json
 $r = [IO.Path]::GetFullPath($c.root)
 if ($c.nonce -notmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' -or
@@ -41,6 +52,7 @@ $session = [Diagnostics.Process]::GetCurrentProcess().SessionId
 $subject = 'CN=NavigationTest-' + $c.nonce
 $name = 'NavigationTest.' + $c.nonce.Replace('-', '')
 $stateFile = Join-Path $r 'package-operator-state.json'
+PreparationPhase 'context_after'
 function HashFile($p) { return (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLowerInvariant() }
 function CertHash($cert) {
   $h = [Security.Cryptography.SHA256]::Create()
@@ -63,6 +75,7 @@ function CheckPackage($p, $s) {
   return $exe
 }
 if ($Mode -eq 'prepare') {
+  PreparationPhase 'acl_before'
   $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
   if (!$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'ephemeral CI admin prerequisite absent' }
   $acl = [Security.AccessControl.DirectorySecurity]::new()
@@ -80,23 +93,37 @@ if ($Mode -eq 'prepare') {
     $id = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
     if ($id -notin @($sid, 'S-1-5-18', 'S-1-5-32-544') -or $rule.IsInherited -or $rule.AccessControlType -ne 'Allow') { throw 'unexpected root ACL grant' }
   }
+  PreparationPhase 'acl_after'
+  PreparationPhase 'commands_before'
   foreach ($cmd in @('New-SelfSignedCertificate', 'Export-Certificate', 'Import-Certificate', 'Add-AppxPackage', 'Remove-AppxPackage', 'Get-AppxPackage')) { Get-Command $cmd -ErrorAction Stop | Out-Null }
+  PreparationPhase 'commands_after'
+  PreparationPhase 'package_absence_before'
   if (@(Get-AppxPackage -Name $name -ErrorAction Stop).Count -ne 0) { throw 'TEST package already exists' }
+  PreparationPhase 'package_absence_after'
+  PreparationPhase 'certificate_absence_before'
   if (@(Get-ChildItem Cert:\CurrentUser\My | Where-Object Subject -CEQ $subject).Count -ne 0) { throw 'TEST signer already exists' }
   if (@(Get-ChildItem Cert:\LocalMachine\TrustedPeople | Where-Object Subject -CEQ $subject).Count -ne 0) { throw 'TEST trust already exists' }
+  PreparationPhase 'certificate_absence_after'
+  PreparationPhase 'sdk_before'
   $sdk = Get-ChildItem -LiteralPath (Join-Path ([Environment]::GetEnvironmentVariable('ProgramFiles(x86)')) 'Windows Kits\10\bin') -Directory |
     Where-Object { $_.Name -match '^10\.0\.\d+\.\d+$' -and
       (Test-Path -LiteralPath (Join-Path $_.FullName 'arm64\makeappx.exe')) -and
       (Test-Path -LiteralPath (Join-Path $_.FullName 'arm64\signtool.exe')) } |
     Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1
   if (!$sdk) { throw 'architecture-matched SDK tools absent' }
+  PreparationPhase 'sdk_after'
+  PreparationPhase 'hash_before'
   $s = [ordered]@{ nonce=$c.nonce; userSid=$sid; session=$session; name=$name; publisher=$subject;
     executableSHA256=(HashFile $c.binary); makeappx=(Join-Path $sdk.FullName 'arm64\makeappx.exe');
     signtool=(Join-Path $sdk.FullName 'arm64\signtool.exe'); sdkVersion=$sdk.Name;
     uniquePackageAbsent=$true; uniqueSignerAbsent=$true; uniqueTrustAbsent=$true;
     powershellVersion=$PSVersionTable.PSVersion.ToString(); securityModulePath=$securityModule.Path }
   $s.makeappxSHA256 = HashFile $s.makeappx; $s.signtoolSHA256 = HashFile $s.signtool
-  Save $s; exit 0
+  PreparationPhase 'hash_after'
+  PreparationPhase 'state_before'
+  Save $s
+  PreparationPhase 'state_after'
+  exit 0
 }
 if (!(Test-Path -LiteralPath $stateFile)) { throw 'owned operator state absent' }
 $loaded = Get-Content -LiteralPath $stateFile -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -322,6 +349,26 @@ function execute(mode: string, exe: string, args: string[], timeout: number, env
 function success(step: Step): void {
   if (step.error || step.signal || step.status !== 0) throw new Error(step.mode + ' failed: ' + (step.error ?? step.stderr));
 }
+function preparationTrace(step: Step): void {
+  evidence.prepareActorCollected = !step.error && !step.signal && step.status !== null;
+  evidence.prepareCollectionUnknown = evidence.prepareActorCollected !== true;
+  const phases = ['entry', ...['security', 'context', 'acl', 'commands', 'package_absence',
+    'certificate_absence', 'sdk', 'hash', 'state'].flatMap(phase => [phase + '_before', phase + '_after'])];
+  const lines = step.stderr.split(/\r?\n/).filter(line => line.startsWith('{"preparePhase":'));
+  if (lines.length > phases.length || Buffer.byteLength(lines.join('\n')) > 16_384) throw new Error('bounded preparation trace required');
+  const trace = lines.map(line => JSON.parse(line) as Json);
+  for (const [index, row] of trace.entries()) {
+    if (Object.keys(row).sort().join(',') !== 'elapsedMs,pid,preparePhase' || row.pid !== step.pid
+        || row.preparePhase !== phases[index] || !Number.isInteger(row.elapsedMs) || Number(row.elapsedMs) < 0
+        || Number(row.elapsedMs) >= 30_000 || index > 0 && Number(row.elapsedMs) < Number(trace[index - 1].elapsedMs)) {
+      throw new Error('preparation checkpoint identity/order/budget invalid');
+    }
+  }
+  evidence.prepareTrace = trace; evidence.prepareLastPhase = trace.at(-1)?.preparePhase ?? 'no_entry_observed';
+  writeFileSync(join(root!, 'prepare-trace.json'), JSON.stringify({ pid: step.pid, trace,
+    collected: evidence.prepareActorCollected, collectionUnknown: evidence.prepareCollectionUnknown }), { flag: 'wx' });
+  if (step.status === 0 && trace.length !== phases.length) throw new Error('complete preparation trace absent');
+}
 function native(mode: string, timeout: number, useObserver = false): Step {
   if (!root || !nonce || !binary || !observer) throw new Error('native fixture absent');
   return execute(mode, useObserver ? observer : binary, [mode, root, nonce], timeout);
@@ -353,13 +400,15 @@ async function main(): Promise<void> {
       || process.env.NAVIGATION_WINDOWS_RUNNER !== 'windows-11-vs2026-arm'
       || Number(process.versions.node.split('.')[0]) !== 24) throw new Error('explicit disposable Windows client CI required');
   const mode = process.env.NAVIGATION_WINDOWS_MSIX_MODE;
-  if (!['native_callback', 'oobe_then_msix_callback'].includes(mode ?? '')
+  if (!['native_callback', 'oobe_then_msix_callback', 'prepare_only'].includes(mode ?? '')
       || process.env.GITHUB_REPOSITORY !== '777genius/agent-notifications'
       || process.env.GITHUB_EVENT_NAME !== 'workflow_dispatch' || process.env.GITHUB_RUN_ATTEMPT !== '1'
       || process.arch !== 'arm64' || !/^[0-9a-f]{40}$/.test(process.env.NAVIGATION_SOURCE_SHA ?? '')) {
     throw new Error('first explicit manual packaged TEST mode and exact source required');
   }
-  if (mode === 'native_callback' && process.env.NAVIGATION_WINDOWS_OOBE_BOOTSTRAP_ROOT) throw new Error('unexpected bootstrap in standalone mode');
+  if (mode !== 'oobe_then_msix_callback' && process.env.NAVIGATION_WINDOWS_OOBE_BOOTSTRAP_ROOT) throw new Error('unexpected bootstrap in standalone mode');
+  prepareOnly = mode === 'prepare_only';
+  if (prepareOnly) { evidence.scope = 'TEST new-root ACL and read-only package/SDK prerequisites only'; evidence.prepareComplete = false; }
   evidence.mode = mode;
   if (!process.env.RUNNER_TEMP) throw new Error('owned CI temp absent');
   nonce = randomUUID(); root = join(realpathSync(process.env.RUNNER_TEMP), 'navigation-windows-test-' + nonce);
@@ -378,7 +427,14 @@ async function main(): Promise<void> {
     evidence[kind + 'ImportEvidenceSHA256'] = hash(imports);
   }
   bindBootstrap();
-  success(powershell('prepare', 30_000)); // Read-only identity/SDK checks and ACL for this new root only.
+  const preparation = powershell('prepare', 30_000); // New-root ACL + read-only queries, no certificate/package mutation.
+  preparationTrace(preparation); success(preparation);
+  if (prepareOnly) {
+    const state = read('package-operator-state.json');
+    if (state.nonce !== nonce || state.executableSHA256 !== evidence.binarySHA256 || state.uniquePackageAbsent !== true
+        || state.uniqueSignerAbsent !== true || state.uniqueTrustAbsent !== true) throw new Error('preparation state binding absent');
+    evidence.prepareComplete = true; exitCode = 0; return;
+  }
   const fresh = native('preflight', 15_000, true); success(fresh);
   const desktop = read('preflight.json'), prepared = read('package-operator-state.json');
   if (desktop.ready !== true || desktop.pid !== fresh.pid || desktop.nonce !== nonce
@@ -437,11 +493,12 @@ finally {
       try { success(powershell('cleanup', 90_000)); if (read('package-operator-state.json').cleanupPassed !== true) throw new Error('cleanup proof absent'); }
       catch (error: unknown) { evidence.packageCleanupError = String(error); cleaned = false; }
     }
-    if (evidence.packageMutationOutcomeUnknown === true) cleaned = false;
+    if (evidence.packageMutationOutcomeUnknown === true || evidence.prepareCollectionUnknown === true) cleaned = false;
     evidence.cleanupPassed = cleaned;
-    evidence.nativeCallbackQualified = exitCode === 0 && cleaned;
-    evidence.status = evidence.nativeCallbackQualified ? 'qualified' : 'failed';
-    if (!evidence.nativeCallbackQualified) exitCode = 1;
+    evidence.nativeCallbackQualified = !prepareOnly && exitCode === 0 && cleaned;
+    const preparationPassed = prepareOnly && evidence.prepareComplete === true && exitCode === 0 && cleaned;
+    evidence.status = preparationPassed ? 'prepare_complete' : evidence.nativeCallbackQualified ? 'qualified' : 'failed';
+    if (!evidence.nativeCallbackQualified && !preparationPassed) exitCode = 1;
     writeFileSync(join(root, 'evidence.json'), JSON.stringify(evidence, null, 2) + '\n', { flag: 'wx' });
     if (process.env.GITHUB_OUTPUT) writeFileSync(process.env.GITHUB_OUTPUT, 'evidence_root=' + root + '\n', { flag: 'a' });
   }

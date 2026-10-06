@@ -13,7 +13,7 @@ on:
         description: 'One fresh disposable TEST job; unknown effects are never replayed'
         type: choice
         default: compile_only
-        options: [compile_only, native_callback, oobe_then_msix_callback]
+        options: [compile_only, prepare_only, native_callback, oobe_then_msix_callback]
 permissions:
   contents: read
 # Supersede only older checks for this PR; dispatch runs remain independent.
@@ -113,16 +113,16 @@ jobs:
           if ($bytes.Length -gt 65536) { throw 'handoff exceeds bound' }
           $file = [IO.File]::Open((Join-Path $root 'same-job-bootstrap.json'), [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
           try { $file.Write($bytes, 0, $bytes.Length); $file.Flush($true) } finally { $file.Dispose() }
-      - name: Single packaged submission and genuine cold COM callback
+      - name: Explicit preparation diagnostic or single packaged cold COM callback
         # PR checks compile the fixtures; each native submission needs an explicit run.
-        if: github.event_name == 'workflow_dispatch' && (inputs.mode == 'native_callback' || (inputs.mode == 'oobe_then_msix_callback' && steps.bootstrap.outcome == 'success'))
+        if: github.event_name == 'workflow_dispatch' && (inputs.mode == 'prepare_only' || inputs.mode == 'native_callback' || (inputs.mode == 'oobe_then_msix_callback' && steps.bootstrap.outcome == 'success'))
         id: probe
         shell: pwsh
         env:
           NAVIGATION_WINDOWS_OOBE_BOOTSTRAP_ROOT: ${{ steps.bootstrap.outputs.evidence_root }}
         run: |
           node --experimental-strip-types tests/integration/navigation_windows_msix_e2e.ts (Join-Path $env:RUNNER_TEMP 'navigation-msix-probe.exe') (Join-Path $env:RUNNER_TEMP 'navigation-native-probe.exe')
-          if ($LASTEXITCODE -ne 0) { throw 'packaged callback failed or prerequisite unavailable; inspect retained evidence' }
+          if ($LASTEXITCODE -ne 0) { throw 'selected TEST phase failed or prerequisite unavailable; inspect retained evidence' }
       - name: Preserve bounded bootstrap evidence independently of callback
         if: always() && steps.bootstrap.outputs.evidence_root != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -148,7 +148,15 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # existing v7.0.1 pin
         with:
           name: navigation-windows-msix-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ steps.probe.outputs.evidence_root }}
+          path: |
+            ${{ inputs.mode == 'prepare_only' && format('{0}/.owned-test-root', steps.probe.outputs.evidence_root) || steps.probe.outputs.evidence_root }}
+            ${{ inputs.mode == 'prepare_only' && format('{0}/evidence.json', steps.probe.outputs.evidence_root) || '' }}
+            ${{ inputs.mode == 'prepare_only' && format('{0}/controller-progress.json', steps.probe.outputs.evidence_root) || '' }}
+            ${{ inputs.mode == 'prepare_only' && format('{0}/prepare-trace.json', steps.probe.outputs.evidence_root) || '' }}
+            ${{ inputs.mode == 'prepare_only' && format('{0}/package-operator-state.json', steps.probe.outputs.evidence_root) || '' }}
+            ${{ inputs.mode == 'prepare_only' && format('{0}/operator-context.json', steps.probe.outputs.evidence_root) || '' }}
+            ${{ inputs.mode == 'prepare_only' && format('{0}/navigation-native-imports.log', steps.probe.outputs.evidence_root) || '' }}
+            ${{ inputs.mode == 'prepare_only' && format('{0}/navigation-msix-imports.log', steps.probe.outputs.evidence_root) || '' }}
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 14
