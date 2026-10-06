@@ -1619,14 +1619,31 @@ func TestBuildFocusScript_Iterm2HealthcheckConnectFailureFallsBackToActivateAndP
 }
 
 func TestBuildTmuxCCNotifierArgs_DisabledAPIErrors(t *testing.T) {
+	withIsolatedEnv(t)
 	setupFakeiTerm2Env(t)
 
 	restoreExecCommand := installFakeOpen(t, "", iTerm2HealthcheckExitDisabled)
 	defer restoreExecCommand()
 
+	originalSendQuickNotification := sendQuickNotification
+	t.Cleanup(func() { sendQuickNotification = originalSendQuickNotification })
+	promptCount := 0
+	sendQuickNotification = func(title, message, executeCmd string) error {
+		promptCount++
+		if title != "iTerm2 Python API Disabled" ||
+			!strings.Contains(message, "Settings > General > Magic > Enable Python API") ||
+			executeCmd != "open -a iTerm" {
+			t.Errorf("unexpected disabled-api prompt: %q %q %q", title, message, executeCmd)
+		}
+		return nil
+	}
+
 	_, err := buildTmuxCCNotifierArgs("Title", "Msg", "%42", iTerm2BundleID)
-	if err == nil {
-		t.Fatal("expected error when iTerm2 Python API is disabled")
+	if err == nil || !strings.Contains(err.Error(), "iterm2 python api unavailable") {
+		t.Fatalf("disabled iTerm2 Python API returned %v, want unavailable error", err)
+	}
+	if promptCount != 1 {
+		t.Fatalf("expected one disabled-api prompt, got %d", promptCount)
 	}
 }
 
