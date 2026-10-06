@@ -10,12 +10,13 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'Read-only syntax check or official package signature/metadata inspection; no installation'
+        description: 'Read-only syntax, official package metadata, or retained manifest fixture; no installation'
         type: choice
         default: syntax_only
         options:
           - syntax_only
           - inspect_metadata
+          - manifest_fixture
 permissions:
   contents: read
 # Supersede only older checks for this PR; dispatch runs remain independent.
@@ -25,12 +26,16 @@ concurrency:
 
 jobs:
   vendor-metadata:
+    permissions:
+      contents: read
+      actions: read
     runs-on: windows-11-vs2026-arm
     timeout-minutes: 10
     env:
       NAVIGATION_WINDOWS_VENDOR_METADATA_E2E: '1'
       NAVIGATION_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       NAVIGATION_VENDOR_INSPECT: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'inspect_metadata' && '1' || '0' }}
+      NAVIGATION_MANIFEST_FIXTURE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'manifest_fixture' && '1' || '0' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -49,6 +54,7 @@ jobs:
           & ./opencode-plugin/node_modules/.bin/tsc.cmd --ignoreConfig --noEmit --strict --target ES2023 --module ESNext --moduleResolution bundler --types node --typeRoots ./opencode-plugin/node_modules/@types tests/integration/navigation_windows_vendor_metadata.ts tests/integration/navigation_windows_native_e2e.ts
           if ($LASTEXITCODE -ne 0) { throw 'harness typecheck failed' }
       - name: Compile native TEST probe with image SDK
+        if: env.NAVIGATION_MANIFEST_FIXTURE != '1'
         shell: pwsh
         run: |
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -property installationPath
@@ -60,6 +66,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'native probe compile failed' }
       - name: Inspect only selected explicit metadata mode
         id: probe
+        if: env.NAVIGATION_MANIFEST_FIXTURE != '1'
         shell: pwsh
         run: |
           $sdk = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
@@ -70,10 +77,22 @@ jobs:
             if (Test-Path -LiteralPath $candidate -PathType Leaf) { $signtool = $candidate; break }
           }
           if (!$signtool) { throw 'image ARM64 SDK signature tool unavailable' }
+          $env:NAVIGATION_DIAGNOSTIC_PWSH = (Get-Command pwsh -CommandType Application -ErrorAction Stop).Source
           $args = @('--experimental-strip-types', 'tests/integration/navigation_windows_vendor_metadata.ts', (Join-Path $env:RUNNER_TEMP 'navigation-native-probe.exe'), $signtool)
           if ($env:NAVIGATION_VENDOR_INSPECT -ne '1') { $args += '--syntax-only' }
           & node @args
           if ($LASTEXITCODE -ne 0) { throw 'metadata inspection failed; inspect bounded evidence' }
+      - name: Project only the retained failed manifest fixture
+        id: fixture
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'manifest_fixture'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NAVIGATION_WINDOWS_MANIFEST_DIAGNOSTIC: '1'
+        run: |
+          $env:NAVIGATION_DIAGNOSTIC_PWSH = (Get-Command pwsh -CommandType Application -ErrorAction Stop).Source
+          & node --experimental-strip-types tests/integration/navigation_windows_vendor_metadata.ts --manifest-fixture-only
+          if ($LASTEXITCODE -ne 0) { throw 'retained manifest diagnostic failed; inspect bounded evidence' }
       - name: Preserve bounded diagnostic evidence without package bytes
         if: always() && steps.probe.outputs.evidence_root != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -85,6 +104,19 @@ jobs:
             ${{ steps.probe.outputs.evidence_root }}/vendor-evidence.json
             ${{ steps.probe.outputs.evidence_root }}/package-metadata.json
             ${{ steps.probe.outputs.evidence_root }}/vendor-manifest.xml
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14
+      - name: Preserve only the small retained fixture diagnostic
+        if: always() && steps.fixture.outputs.evidence_root != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: navigation-windows-manifest-fixture-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.fixture.outputs.evidence_root }}/.owned-test-root
+            ${{ steps.fixture.outputs.evidence_root }}/vendor-evidence.json
+            ${{ steps.fixture.outputs.evidence_root }}/vendor-manifest.xml
+            ${{ steps.fixture.outputs.evidence_root }}/dtd-negative-TEST/vendor-manifest.xml
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 14
