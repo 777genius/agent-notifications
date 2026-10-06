@@ -1052,9 +1052,10 @@ func stripWizardUIMode(args []string) ([]string, string, error) {
 	return remaining, parsed.Mode, err
 }
 
-// This immutable reference covers P1 only. The source-selected Engine phase in
-// the same run failed; it grants neither materializer admission nor consent.
-const cursorP1Qualification = "uap406:run37359957633:job111931783352:public143c:P1:sha256:f083bc8768df3e8a7180c2697f366930cf810e6eab3196b85609692a02bc6d40"
+// Immutable accepted source proof: public selected projection/ack/data, eight
+// refusals and sibling/recovery on Ubuntu24.04, 6.17.0-1022-azure, ext4. This
+// qualifies no other host/profile and supplies no installed native E or consent.
+const cursorP1Qualification = "uap406:run37381034498:job112002773007:public098:commit0983418ab0c2724b5cf648512e0a26baafaad546:sha256:7d305d6cabe775e12083c5c4f49fe9246eb1cb8244d596d03c50aa1e7de670b5"
 const selectedCursorVersion = "2026.09.28-64d2043"
 
 func composeCursorWizard(ctx context.Context, req setupwizard.Request) (_ setupwizard.Request, err error) {
@@ -1118,7 +1119,7 @@ func composeCursorWizard(ctx context.Context, req setupwizard.Request) (_ setupw
 		version, e := clientdetect.NewOS(filepath.Dir(req.CursorConfig)).ProbeVersionWithEnvironment(probe, agent, []string{"HOME=" + filepath.Dir(req.CursorConfig), "PATH=" + os.Getenv("PATH")})
 		cancel()
 		if e != nil || strings.TrimSpace(version) != selectedCursorVersion {
-			return req, fmt.Errorf("Cursor agent version is outside the fixed tuple: %w", e)
+			return req, fmt.Errorf("cursor agent version is outside the fixed tuple: %w", e)
 		}
 		req.ClientExecutables = map[string]string{"cursor": agent}
 		if filepath.Base(req.CursorConfig) != ".cursor" {

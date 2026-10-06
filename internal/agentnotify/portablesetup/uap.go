@@ -22,6 +22,7 @@ import (
 
 	"github.com/777genius/agent-notifications/install/uapinstaller"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
+	"github.com/777genius/agent-notifications/internal/cursorinstall"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/strictjson"
 )
@@ -210,6 +211,39 @@ func (m Materializer) recoverOwnedJournals(ctx context.Context, req MaterializeR
 	if req.Integration == portable.Cursor {
 		if err := m.validate(req, false); err != nil {
 			return err
+		}
+		// Refuse original physical authority before AN recovery/lease effects.
+		// Existing owners must revalidate their recorded token, never recapture.
+		eng, err := m.engine(req, new(uint64), nil)
+		if err != nil {
+			return err
+		}
+		state, err := m.Store.Load()
+		if err != nil {
+			return err
+		}
+		recorded := false
+		for _, installation := range state.Installations {
+			for _, binding := range installation.Clients {
+				if binding.ClientID == "cursor" {
+					recorded = true
+					if err := eng.VerifyProfileAuthority(ctx, installation.InstallationID, binding.ClientBindingID); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		if !recorded {
+			selected, _ := clients.As[*cursorinstall.Adapter](m.Registry, domain.ClientID("cursor"))
+			profile, err := selected.ResolveProfileRoot(req.ClientConfigRoot)
+			if err != nil {
+				return err
+			}
+			// A fresh profile check grants no authority: discard its token.
+			// Public Prepare still captures and freezes the actual new owner.
+			if _, err := selected.CaptureProfileAuthority(ctx, domain.DetectedClient{ClientID: domain.ClientCursor, ConfigRoot: profile}); err != nil {
+				return err
+			}
 		}
 	}
 	release, err := installruntime.AcquireCoordinatorLease(ctx, req.Identity.ControlRoot)
@@ -818,17 +852,22 @@ func (m Materializer) validate(req MaterializeRequest, install bool) error {
 	switch req.Integration {
 	case portable.Codex, portable.Claude:
 	case portable.Cursor:
-		// Public UAP143c treats selected Cursor as native-only and bypasses
-		// Config.ProjectArgs. The existing portable MCP selector cannot be
-		// composed through that API. Keep this route denied until its public
-		// owner supports projection; registering the historical adapter or a
-		// selected vendor adapter alone cannot authorize a partial install.
-		return fmt.Errorf("%w: selected Cursor portable ProjectArgs composition is unavailable", ErrPreflight)
+		// Public UAP098 composes selected ProjectArgs. Only the explicitly
+		// selected vendor adapter may enter; Prepare validates original ancestry.
+		if selected, ok := clients.As[*cursorinstall.Adapter](m.Registry, domain.ClientID("cursor")); !ok || selected == nil {
+			return fmt.Errorf("%w: selected Cursor adapter required", ErrPreflight)
+		}
 	default:
 		return ErrPreflight
 	}
 	if !explicitAbs(req.ClientConfigRoot) {
 		return fmt.Errorf("%w: client config root must be explicit", ErrPreflight)
+	}
+	if req.Integration == portable.Cursor {
+		selected, _ := clients.As[*cursorinstall.Adapter](m.Registry, domain.ClientID("cursor"))
+		if _, err := selected.ResolveProfileRoot(req.ClientConfigRoot); err != nil {
+			return err
+		}
 	}
 	if req.ClientExecutable == "" || !filepath.IsAbs(req.ClientExecutable) {
 		return fmt.Errorf("%w: client executable must be explicit", ErrPreflight)
@@ -1745,6 +1784,15 @@ func (m Materializer) Remove(ctx context.Context, req MaterializeRequest) error 
 	}
 	if found == nil {
 		return ErrAlreadyAbsent
+	}
+	if req.Integration == portable.Cursor {
+		eng, err := m.engine(req, new(uint64), nil)
+		if err != nil {
+			return err
+		}
+		if err := eng.VerifyProfileAuthority(ctx, installation.InstallationID, found.ClientBindingID); err != nil {
+			return err
+		}
 	}
 	release, err := m.beginMutation(ctx, &req)
 	if err != nil {

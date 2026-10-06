@@ -36,14 +36,14 @@ func pendingAcquireParent(req Request) (string, error) {
 // Capture only bounded package bytes for public143c's existing digest framing.
 // This preflight neither snapshots nor creates, publishes or cleans a path.
 func pendingPackageEntries(ctx context.Context, req Request) ([]packagedigest.CapturedEntry, error) {
-	var source fs.FS = os.DirFS(req.PackageRoot)
+	source := os.DirFS(req.PackageRoot)
 	archive := strings.EqualFold(filepath.Ext(req.PackageRoot), ".zip")
 	if archive {
 		reader, err := zip.OpenReader(req.PackageRoot)
 		if err != nil {
 			return nil, err
 		}
-		defer reader.Close()
+		defer func() { _ = reader.Close() }()
 		seen := map[string]bool{}
 		for _, file := range reader.File {
 			name := strings.TrimSuffix(file.Name, "/")

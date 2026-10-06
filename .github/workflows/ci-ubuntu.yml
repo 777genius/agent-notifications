@@ -112,6 +112,13 @@ jobs:
           grep -F 'ACTUAL_TEST_PHYSICAL_HOST: tuple=linux/amd64' "$evidence/cursor.log"
           grep -F 'P1_ORIGINAL_TOKEN_REVALIDATED=true; PUBLIC_SELECTED_ACK_PROJECTION_DATA_ADMISSION=true' "$evidence/cursor.log"
           grep -F 'SIBLING_R2_SELECTED_R1_POSITIVE=true' "$evidence/cursor.log"
+          go test -count=1 -timeout=3m -v ./internal/agentnotify/portablesetup \
+            -run '^TestMaterializerSelectedCursorPublicProjectionAndAcknowledgement$' 2>&1 | tee "$evidence/materializer.log"
+          if grep -F 'NOT_RUN positive materializer' "$evidence/materializer.log"; then
+            exit 1
+          fi
+          grep -F 'QUALIFIED_TEST_MATERIALIZER_SELECTED_PROJECTION_ACK_DATA_ORIGINAL_TOKEN=true' "$evidence/materializer.log"
+          grep -F -- '--- PASS: TestMaterializerSelectedCursorPublicProjectionAndAcknowledgement ' "$evidence/materializer.log"
           go test -count=1 -timeout=3m -v ./cmd/claude-notifications \
             -run '^(TestCursorCallerAcknowledgedTokenAndMatchingPendingRetry|TestCursorCallerFirstHandoffMissingToken|TestCursorCallerMissingPackageRefusalAndOwnedCleanup|TestCursorConfirmationReachesWizardAdmissionWithFrozenOptOut)$' 2>&1 | tee "$evidence/caller.log"
           if grep -F 'NOT_RUN positive caller/P1/resume' "$evidence/caller.log"; then

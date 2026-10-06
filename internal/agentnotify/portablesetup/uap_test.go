@@ -22,10 +22,14 @@ import (
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/pathpolicy"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/nativeconfig"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/profileauthority"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/statev2"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/codex"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/cursor"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/cursorhooks"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/providers"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/packagesnapshot"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/ports"
 
 	"github.com/777genius/agent-notifications/install/uapinstaller"
@@ -2005,13 +2009,197 @@ func TestMaterializerSelectedCursorUnsupportedPrepareBeforeMutation(t *testing.T
 	if !errors.Is(err, directoryidentity.ErrUnsupported) {
 		t.Fatalf("public Prepare bypassed unsupported original ancestry: %v", err)
 	}
-	if _, err := mat.Install(testCtx(t), req); !errors.Is(err, ErrPreflight) {
-		t.Fatalf("partial selected Cursor composition admitted: %v", err)
+	if _, err := mat.PreviewPlan(testCtx(t), req); !errors.Is(err, directoryidentity.ErrUnsupported) {
+		t.Fatalf("selected preview bypassed unsupported original ancestry: %v", err)
+	}
+	if _, err := mat.PreviewInstall(testCtx(t), req); !errors.Is(err, directoryidentity.ErrUnsupported) {
+		t.Fatalf("recovering preview bypassed unsupported original ancestry: %v", err)
+	}
+	if err := mat.RecoverJournals(testCtx(t), req); !errors.Is(err, directoryidentity.ErrUnsupported) {
+		t.Fatalf("recovery bypassed unsupported original ancestry: %v", err)
+	}
+	if _, err := mat.Install(testCtx(t), req); !errors.Is(err, directoryidentity.ErrUnsupported) {
+		t.Fatalf("selected Cursor did not reach public unsupported refusal: %v", err)
 	}
 	if after := registryFixtureFiles(t, root); !reflect.DeepEqual(before, after) {
 		t.Fatal("unsupported physical Prepare changed TEST files or directories")
 	}
 	t.Log("negative refusal verified; positive physical/installed/native Cursor NOT_RUN")
+}
+
+// Regression: admission alone can leave selected ProjectArgs bypassed, so an
+// acknowledged binding has empty MCP argv or a source digest used as projection
+// ownership. Exercise actual Materializer/public Engine and TEST file readback.
+func TestMaterializerSelectedCursorPublicProjectionAndAcknowledgement(t *testing.T) {
+	mat, req, _ := registryMaterializerFixture(t)
+	ctx := testCtx(t)
+	req.Integration = portable.Cursor
+	token, err := profileauthority.Capture(ctx, req.ClientConfigRoot)
+	if errors.Is(err, directoryidentity.ErrUnsupported) {
+		if !token.IsZero() {
+			t.Fatal("unsupported original ancestry supplied authority")
+		}
+		t.Logf("NOT_RUN positive materializer: original full ancestry unsupported: %v; installed/native E NOT_RUN", err)
+		return
+	}
+	if err != nil || token.IsZero() {
+		t.Fatalf("actual original profile Capture: %v", err)
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Log("NOT_RUN positive materializer: selected Linux amd64 tuple required; installed/native E NOT_RUN")
+		return
+	}
+	// Accepted source tuple is an additional fixture bound, never physical proof.
+	osRelease, err := os.ReadFile("/etc/os-release")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kernel, err := os.ReadFile("/proc/sys/kernel/osrelease")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains("\n"+string(osRelease), "\nID=ubuntu\n") ||
+		!strings.Contains(string(osRelease), `VERSION="24.04.5 LTS`) || strings.TrimSpace(string(kernel)) != "6.17.0-1022-azure" {
+		t.Log("NOT_RUN positive materializer: accepted Ubuntu24.04/kernel tuple required; installed/native E NOT_RUN")
+		return
+	}
+	// ReserveIdentity resolves the real target without granting historical Cursor.
+	mat.Registry, err = clients.NewRegistry(cursor.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng, err := mat.engine(req, new(uint64), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reserved, err := eng.ReserveIdentity(uapinstaller.IdentityRequest{
+		ClientID: "cursor", InstallationID: req.Identity.InstallationID,
+		DeclaredName: "agent-notify", ClientConfigRoot: req.ClientConfigRoot,
+	})
+	if err != nil || reserved.BindingID == "" {
+		t.Fatalf("reserve real target: %+v %v", reserved, err)
+	}
+	data := filepath.Join(mat.Roots.PluginDataBase, domain.ComputePhysicalArtifactID("agent-notify", reserved.InstallationID))
+	expected, err := Complete(req.Identity, portable.Cursor, "cursor", reserved.Scope, reserved.TargetPath, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name, err := expected.Filename()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(req.ClientExecutable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := cursorinstall.New(nativeconfig.New(), pathpolicy.Policy{}, &cursorinstall.Authority{
+		ProfileRoot: req.ClientConfigRoot, CursorVersion: "2026.09.28-64d2043",
+		QualificationID: "TEST-materializer-source-only-public098",
+		Executable:      req.ClientExecutable, ExecutableDigest: fmt.Sprintf("sha256:%x", sha256.Sum256(body)),
+		Selector: filepath.Join(expected.DataRoot, name), ObjectID: "TEST-materializer-stop",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mat.Registry, err = clients.NewRegistry(adapter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng, err = mat.engine(req, new(uint64), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := eng.LocalPackageTreeDigest(ctx, req.PackageRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeSource := registryFixtureFiles(t, req.PackageRoot)
+	before, err := installruntime.ReadInstalledSnapshot(req.Identity.ControlRoot)
+	if err != nil || portable.ExactCommittedBinding(before.Ledger, expected) {
+		t.Fatal("fresh TEST fixture already acknowledged", err)
+	}
+	preview, err := mat.PreviewPlan(ctx, req)
+	if err != nil || preview.ProfileAuthority == nil || !preview.ProfileAuthority.Equal(token) || preview.SelectedDelivery.IsZero() || preview.TreeDigest != canonical {
+		t.Fatalf("actual selected public preview: %+v %v", preview, err)
+	}
+	binding, err := mat.Install(ctx, req)
+	if err != nil || binding != expected {
+		t.Fatalf("actual selected Materializer install: %+v %v", binding, err)
+	}
+	state, err := (statev2.Store{Path: mat.Roots.StateFile}).Load()
+	if err != nil || len(state.Installations) != 1 {
+		t.Fatal("public committed TEST state missing", err)
+	}
+	i := state.Installations[0]
+	c := i.Clients[expected.BindingID]
+	facts, selected := c.SelectedDelivery.CursorFacts()
+	if !selected || c.ProfileAuthority == nil || !c.ProfileAuthority.Equal(token) || c.ProfileNamespace != filepath.Dir(mat.Roots.StateFile) ||
+		i.Source.TreeDigest != canonical || c.PackageRevision == nil || c.PackageRevision.TreeDigest != canonical ||
+		facts.CanonicalDigest != canonical || facts.ProjectionDigest == "" || facts.ProjectionDigest == canonical ||
+		c.PendingNativeIntent != nil || c.NativeActivationAttempt != "" || c.Activation != domain.ActivationActive || c.Verification != domain.VerificationInstalled {
+		t.Fatalf("selected installed source/token/ack differs: %+v %+v", c, facts)
+	}
+	ack := false
+	for _, object := range c.NativeObjects {
+		if object.Kind == "cursor_user_stop" {
+			ack = object.CursorReceipt == facts.PlannedReceipt
+		}
+	}
+	if !ack || c.SelectedDelivery.ValidateCursorObjects(c.NativeObjects) != nil {
+		t.Fatal("real selected native object acknowledgement absent")
+	}
+	// Read actual no-follow hook bytes; a repair-capable Prepare is not proof
+	// that the acknowledged entry is still installed. No Run/Stop is invoked.
+	hooks, err := nativeconfig.New().ReadExactFile(facts.HooksPath)
+	if err != nil || !hooks.Exists {
+		t.Fatal("actual selected hook bytes missing", err)
+	}
+	r := facts.PlannedReceipt
+	if err := cursorhooks.VerifyOwned(hooks.Body, &cursorhooks.Receipt{
+		Version: r.Version, Event: r.Event, Shell: cursorhooks.ShellContract(r.Shell),
+		Spec:        cursorhooks.HookSpec{Executable: r.Executable, Selector: r.Selector},
+		EntryDigest: r.EntryDigest, RemainderDigest: r.RemainderDigest,
+	}); err != nil {
+		t.Fatal("actual selected native object readback", err)
+	}
+	receipt, ok := i.DataReceipts[c.DataReceiptID]
+	if !ok || receipt.DataReceiptID == "" || receipt.State != domain.DataReceiptOwned || receipt.Locator != expected.DataRoot || receipt.OwnershipDigest == "" {
+		t.Fatalf("real data receipt not bound: %+v", receipt)
+	}
+	if err := (providers.PluginDataManager{Base: mat.Roots.PluginDataBase}).ValidateData(ctx, receipt); err != nil {
+		t.Fatal("actual data ownership readback", err)
+	}
+	var mcp struct {
+		Servers map[string]struct {
+			Args []string `json:"args"`
+		} `json:"mcpServers"`
+	}
+	projected, err := os.ReadFile(filepath.Join(c.TargetLocator, "mcp.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(projected, &mcp); err != nil || !reflect.DeepEqual(mcp.Servers[portableServerName].Args, []string{"portable-launch", "--locator", name}) {
+		t.Fatalf("actual ProjectArgs locator argv absent: %s %v", projected, err)
+	}
+	stager := providers.Stager{SnapshotBuilder: packagesnapshot.Builder{TempRoot: filepath.Join(filepath.Dir(mat.Roots.StateFile), "tmp")}}
+	if err := stager.Verify(ctx, c.TargetLocator, facts.ProjectionDigest); err != nil {
+		t.Fatal("projected byte digest readback", err)
+	}
+	if !reflect.DeepEqual(beforeSource, registryFixtureFiles(t, req.PackageRoot)) {
+		t.Fatal("projection changed canonical source bytes or modes")
+	}
+	installed, err := installruntime.ReadInstalledSnapshot(req.Identity.ControlRoot)
+	if err != nil || !portable.ExactCommittedBinding(installed.Ledger, binding) || installed.Ledger.PendingMutation != nil {
+		t.Fatal("real AN binding not acknowledged or pending survived", err)
+	}
+	if err := eng.VerifyProfileAuthority(ctx, i.InstallationID, c.ClientBindingID); err != nil {
+		t.Fatal("original physical token no longer validates", err)
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil || view.Recovery.Required || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 1 || view.Installations[0].Bindings[0].Verification != string(domain.VerificationInstalled) {
+		t.Fatalf("public installed readback: %+v %v", view, err)
+	}
+	t.Log("QUALIFIED_TEST_MATERIALIZER_SELECTED_PROJECTION_ACK_DATA_ORIGINAL_TOKEN=true; TEST filesystem source proof; installed/native E NOT_RUN")
 }
 
 func registryMaterializerFixture(t *testing.T) (Materializer, MaterializeRequest, string) {

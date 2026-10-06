@@ -728,8 +728,18 @@ func TestCursorCallerAcknowledgedTokenAndMatchingPendingRetry(t *testing.T) {
 		}
 	}
 	plan, err := setupwizard.Plan(ctx, got)
-	if err == nil || !strings.Contains(err.Error(), "selected Cursor portable ProjectArgs composition is unavailable") || plan.Request.DataReceiptIDs["cursor"] != dataReceipt.DataReceiptID {
-		t.Fatalf("owner did not resume through unchanged materializer denial: %+v %v", plan, err)
+	if err != nil || !plan.Ready || plan.Request.Action != setupwizard.ActionUpdate ||
+		plan.Request.InstallationID != b.InstallationID || plan.Request.BindingIDs["cursor"] != b.BindingID ||
+		plan.Request.DataReceiptIDs["cursor"] != dataReceipt.DataReceiptID ||
+		plan.Request.PackageRoot != candidate.PackageRoot || plan.Request.TreeDigest != candidate.TreeDigest ||
+		plan.Request.HelperDigest != candidate.HelperDigest || plan.Request.HelperVersion != candidate.HelperVersion ||
+		plan.Request.ReleaseVersion != candidate.ReleaseVersion || plan.Request.CursorAuthority == nil ||
+		!reflect.DeepEqual(plan.Request.CursorAuthority, got.CursorAuthority) ||
+		!reflect.DeepEqual(plan.Request.BootstrapExpectedGeneration, got.BootstrapExpectedGeneration) {
+		t.Fatalf("owner did not plan frozen pending B with original authority: %+v %v", plan, err)
+	}
+	if err := profileauthority.Revalidate(ctx, token); err != nil {
+		t.Fatal("plan lost original pending profile authority", err)
 	}
 	bad := r
 	bad.Action = setupwizard.ActionRepair
