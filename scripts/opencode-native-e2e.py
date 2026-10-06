@@ -285,7 +285,11 @@ def fresh_root(artifacts):
 
 def network_guard():
     if sys.platform == 'linux':
-        require(os.readlink('/proc/self/ns/net') != os.readlink('/proc/1/ns/net'), 'new_private_netns_required')
+        host = os.environ.get('AN_HOST_NETNS')
+        if host is None:
+            host = os.readlink('/proc/1/ns/net')
+        require(re.fullmatch(r'net:\[[1-9][0-9]*\]', host) is not None, 'host_network_namespace_invalid')
+        require(os.readlink('/proc/self/ns/net') != host, 'new_private_netns_required')
         require({n for _, n in socket.if_nameindex()} == {'lo'}, 'loopback_only_required')
 
 

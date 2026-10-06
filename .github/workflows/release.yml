@@ -435,7 +435,8 @@ jobs:
           if [ "$AN_OS" = linux ]; then
             # Create the private network as root, then keep checkout/artifact
             # ownership and Git source verification under the runner identity.
-            sudo --preserve-env=PATH,AN_MANIFEST,AN_MANIFEST_SHA256,AN_OS,AN_ARCH,AN_VERSION,AN_SUITE unshare --net -- bash -c '
+            export AN_HOST_NETNS="$(readlink /proc/self/ns/net)"
+            sudo --preserve-env=PATH,AN_MANIFEST,AN_MANIFEST_SHA256,AN_OS,AN_ARCH,AN_VERSION,AN_SUITE,AN_HOST_NETNS unshare --net -- bash -c '
               set -euo pipefail
               ip link set lo up
               exec setpriv --reuid "$1" --regid "$2" --init-groups -- env HOME="$3" USER="$4" LOGNAME="$4" python -B scripts/testdata/opencode-native-e2e/ci_inputs.py --execute

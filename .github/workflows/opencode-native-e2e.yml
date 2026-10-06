@@ -3,18 +3,32 @@ on:
   workflow_dispatch:
     inputs:
       plan:
-        description: Eight portable business cells or original eleven-cell matrix
+        description: Original qualification plans or seven immutable release recovery cells
         type: choice
-        options: [all-eleven, portable-eight]
+        options: [all-eleven, portable-eight, release-recovery]
         default: all-eleven
         required: true
       evidence_url:
         description: 'HTTPS parent evidence tar sealed after exact clean source checkout/build; no SDK copies or grants'
         type: string
-        required: true
+        required: false
       evidence_sha256:
         description: 'Reviewed SHA256 of that immutable external evidence tar'
         type: string
+        required: true
+      recovery_run_id:
+        description: 'Original completed v1.48.0 release workflow run with successful builds and canaries'
+        type: string
+        required: false
+      candidate_sha:
+        description: 'Exact immutable release source SHA, required only for release-recovery'
+        type: string
+        required: false
+      recovery_cells:
+        description: 'Fresh primitive and business evidence scope, only for release-recovery'
+        type: choice
+        options: [first-linux-amd64-v2, all-seven]
+        default: first-linux-amd64-v2
         required: true
 # Only a newer run for the same PR supersedes its checks.
 concurrency:
@@ -25,6 +39,7 @@ permissions:
   contents: read
 jobs:
   native:
+    if: inputs.plan != 'release-recovery'
     name: '${{ matrix.target.platform }}/${{ matrix.target.arch }} ${{ matrix.version }}'
     runs-on: ${{ matrix.target.runner }}
     timeout-minutes: 20
@@ -95,5 +110,159 @@ jobs:
         with:
           name: opencode-native-${{ matrix.target.platform }}-${{ matrix.target.arch }}-${{ matrix.version }}
           path: .task-tools/artifacts/native-report.json
+          if-no-files-found: error
+          retention-days: 14
+  recovery-inputs:
+    if: inputs.plan == 'release-recovery'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      run_id: ${{ steps.origin.outputs.run_id }}
+      candidate_sha: ${{ steps.origin.outputs.candidate_sha }}
+      evidence_sha256: ${{ steps.origin.outputs.evidence_sha256 }}
+      matrix: ${{ steps.origin.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify original release source, builds, canaries and artifact identities
+        id: origin
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AN_RECOVERY_RUN_ID: ${{ inputs.recovery_run_id }}
+          AN_RECOVERY_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          AN_EVIDENCE_SHA256: ${{ inputs.evidence_sha256 }}
+          AN_RECOVERY_CELLS: ${{ inputs.recovery_cells }}
+        run: python -B scripts/release-opencode-recovery.py --verify-origin
+  release-recovery:
+    if: inputs.plan == 'release-recovery'
+    needs: recovery-inputs
+    name: 'Recover release ${{ matrix.target.platform }}/${{ matrix.target.arch }} ${{ matrix.version }}'
+    runs-on: ${{ matrix.target.runner }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.recovery-inputs.outputs.matrix) }}
+    defaults:
+      run:
+        working-directory: source
+        shell: bash
+    env:
+      AN_RECOVERY_RUN_ID: ${{ needs.recovery-inputs.outputs.run_id }}
+      AN_RECOVERY_CANDIDATE_SHA: ${{ needs.recovery-inputs.outputs.candidate_sha }}
+      SOURCE_COMMIT: ${{ needs.recovery-inputs.outputs.candidate_sha }}
+      AN_EVIDENCE_SHA256: ${{ needs.recovery-inputs.outputs.evidence_sha256 }}
+      AN_EVIDENCE_ARCHIVE: .task-tools/artifacts/custody/release-opencode-inputs.tar.gz
+      AN_OS: ${{ matrix.target.platform }}
+      AN_ARCH: ${{ matrix.target.arch }}
+      AN_VERSION: ${{ matrix.version }}
+    steps:
+      - name: Preserve exact Git bytes before Windows source checkout
+        if: runner.os == 'Windows'
+        working-directory: ${{ github.workspace }}
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.recovery-inputs.outputs.candidate_sha }}
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: recovery-tools
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with: {go-version: '1.27.1', cache: false}
+      - uses: actions/setup-node@v6
+        with: {node-version: '24.21.0'}
+      - uses: actions/setup-python@v7
+        with: {python-version: '3.12'}
+      - name: Initialize unqualified recovery report
+        run: |
+          mkdir -p .task-tools/artifacts
+          python -c 'import json,pathlib; pathlib.Path(".task-tools/artifacts/native-report.json").write_text(json.dumps({"status":"unqualified","businessPhasesStarted":False,"firstFailedPrerequisite":"recovery_inputs_not_verified"})+"\n")'
+      - uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.recovery-inputs.outputs.run_id }}
+          name: binaries-${{ matrix.target.platform }}-${{ matrix.target.arch }}
+          path: source/dist
+      - uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.recovery-inputs.outputs.run_id }}
+          name: release-opencode-inputs-${{ needs.recovery-inputs.outputs.candidate_sha }}
+          path: source/.task-tools/artifacts/custody
+      - name: Restore executable mode without changing release binary bytes
+        if: runner.os != 'Windows'
+        env:
+          MAIN_BINARY: ${{ matrix.target.binary }}
+        run: chmod +x "dist/$MAIN_BINARY"
+      - name: Linux private bus prerequisites
+        if: matrix.target.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev dbus iproute2
+      - name: Verify and stage original sealed parent archive
+        id: parent
+        run: python -B scripts/testdata/opencode-native-e2e/ci_inputs.py --stage-evidence
+      - name: Verify unchanged source and Go identity, and build original private receiver
+        env:
+          AN_MANIFEST: ${{ steps.parent.outputs.manifest }}
+          AN_MANIFEST_SHA256: ${{ steps.parent.outputs.sha256 }}
+        run: |
+          python -B ../recovery-tools/scripts/release-opencode-recovery.py --verify-inputs
+          python -B scripts/testdata/opencode-native-e2e/ci_inputs.py
+      - name: Prefetch pinned tooling and Go dependencies before native isolation
+        run: |
+          set -euo pipefail
+          npm ci --prefix opencode-plugin
+          go mod download
+      - name: Compile exact-source reader witness offline without any native host
+        id: primitives
+        env:
+          AN_MANIFEST: ${{ steps.parent.outputs.manifest }}
+          AN_MANIFEST_SHA256: ${{ steps.parent.outputs.sha256 }}
+        run: python -B ../recovery-tools/scripts/release-opencode-recovery.py --prepare-primitives
+      - name: Observe fresh primitives and business scenarios with no qualification grants
+        env:
+          AN_MANIFEST: ${{ steps.parent.outputs.manifest }}
+          AN_MANIFEST_SHA256: ${{ steps.parent.outputs.sha256 }}
+          AN_CLOCK_TEMP_BASE: ${{ steps.primitives.outputs.clock_temp_base }}
+          AN_GO_MODULE_CACHE: ${{ steps.primitives.outputs.go_module_cache }}
+        run: |
+          set -euo pipefail
+          if [ "$AN_OS" = linux ]; then
+            export AN_HOST_NETNS="$(readlink /proc/self/ns/net)"
+            sudo --preserve-env=PATH,AN_MANIFEST,AN_MANIFEST_SHA256,AN_OS,AN_ARCH,AN_VERSION,AN_RECOVERY_RUN_ID,AN_RECOVERY_CANDIDATE_SHA,AN_EVIDENCE_SHA256,AN_HOST_NETNS,AN_CLOCK_TEMP_BASE,AN_GO_MODULE_CACHE,SOURCE_COMMIT,GITHUB_ACTIONS unshare --net -- bash -c '
+              set -euo pipefail
+              ip link set lo up
+              exec setpriv --reuid "$1" --regid "$2" --init-groups -- env HOME="$3" USER="$4" LOGNAME="$4" python -B ../recovery-tools/scripts/release-opencode-recovery.py --execute
+            ' bash "$(id -u)" "$(id -g)" "$HOME" "$(id -un)"
+          else
+            python -B ../recovery-tools/scripts/release-opencode-recovery.py --execute
+          fi
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: opencode-release-recovery-${{ matrix.target.platform }}-${{ matrix.target.arch }}-${{ matrix.version }}
+          path: |
+            source/.task-tools/artifacts/native-report.json
+            source/.task-tools/artifacts/native/
+            source/.task-tools/artifacts/primitives/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v7
+        if: always() && steps.primitives.outputs.clock_temp_base != ''
+        with:
+          name: opencode-release-clock-raw-${{ matrix.target.platform }}-${{ matrix.target.arch }}-${{ matrix.version }}
+          path: ${{ steps.primitives.outputs.clock_temp_base }}/
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 14

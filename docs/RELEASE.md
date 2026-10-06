@@ -153,6 +153,15 @@ release source and binary hashes bind the reports to the candidate. The checks
 cover completion delivery, managed update and revocation in disposable projects.
 They do not replace the broader semantic matrix or desktop delivery evidence.
 
+For immutable v1.48.0 artifacts, the `release-recovery` plan in
+`opencode-native-e2e.yml` reuses the original release run rather than rebuilding.
+Run `first-linux-amd64-v2` before `all-seven`. Fresh finite clock and packaged
+reader observations must pass semantic validation before the unchanged installed
+`business` suite runs. Publication requires successful reports for all seven
+cells. This path does not qualify the full native clock, source epoch, time
+policy, platform lifetime or visible desktop delivery; the full/smoke denial
+gate remains unchanged. Retain the original failure and all raw recovery reports.
+
 Same-run custody explicitly selects `--scope linux-windows` and seals only those
 seven cells. The general fixture still requires all eleven cells by default;
 partial custody rejects skipped-platform requests and missing requested binaries.
