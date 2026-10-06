@@ -391,6 +391,120 @@ struct SurfaceScan {
             + ",\"visited\":" + std::to_string(visited) + ",\"windows\":[" + rows + "]}";
     }
 };
+// Read-only discriminator: identifiers of a held Shell taskbar subtree, never UI text.
+// Completing this bounded projection does not identify or authorize a Center action.
+static bool taskbarUI() {
+    SurfaceScan owners;
+    unsigned visited = 0, count = 0, errors = 0, providerSkips = 0;
+    bool truncated = false, available = false, rootStable = false, completed = false;
+    HRESULT lastError = S_OK;
+    std::string rows;
+    const ULONGLONG deadline = GetTickCount64() + 2000;
+    auto budget = [&]() { return GetTickCount64() < deadline; };
+    auto call = [&](auto operation) {
+        if (!budget()) { truncated = true; winrt::throw_hresult(E_ABORT); }
+        const HRESULT hr = operation(); if (!budget()) truncated = true;
+        return hr;
+    };
+    auto observed = [&](HRESULT hr) { if (FAILED(hr)) { ++errors; lastError = hr; } return SUCCEEDED(hr); };
+    auto identifier = [&](HRESULT hr, BSTR value) {
+        std::unique_ptr<OLECHAR, decltype(&SysFreeString)> owned(value, &SysFreeString);
+        std::wstring text;
+        bool valid = SUCCEEDED(hr) && (!value || SysStringLen(value) <= 128);
+        if (valid && value) text.assign(value, SysStringLen(value));
+        if (!observed(hr) || !valid) { if (SUCCEEDED(hr)) ++errors; return std::string("null"); }
+        try { return jsonQuote(text); } catch (...) { ++errors; return std::string("null"); }
+    };
+    try {
+        wchar_t windows[32768]{}; const UINT length = GetWindowsDirectoryW(windows, 32768);
+        if (!length || length >= 32768 || !ProcessIdToSessionId(GetCurrentProcessId(), &owners.session))
+            throw std::runtime_error("taskbar prerequisites unavailable");
+        owners.windows.assign(windows, length); owners.user = tokenUser(GetCurrentProcess());
+        std::transform(owners.windows.begin(), owners.windows.end(), owners.windows.begin(), [](wchar_t c) { return std::towlower(c); });
+        const HWND window = FindWindowExW(nullptr, nullptr, L"Shell_TrayWnd", nullptr);
+        DWORD pid = 0; if (window) GetWindowThreadProcessId(window, &pid);
+        auto held = pid ? owners.owner(pid) : nullptr;
+        auto stable = [&]() {
+            DWORD current = 0; wchar_t name[64]{};
+            return window && held && held->live() && IsWindow(window)
+                && GetWindowThreadProcessId(window, &current) && current == pid
+                && GetClassNameW(window, name, 64) == 13 && std::wstring(name) == L"Shell_TrayWnd"
+                && FindWindowExW(nullptr, nullptr, L"Shell_TrayWnd", nullptr) == window
+                && ([&]() { SetLastError(ERROR_SUCCESS);
+                    return !FindWindowExW(nullptr, window, L"Shell_TrayWnd", nullptr) && GetLastError() == ERROR_SUCCESS; })()
+                && held->live();
+        };
+        if (stable() && preflight("taskbar-preflight.json") && budget()) {
+            ComPtr<IUIAutomation> automation;
+            check(call([&]() { return CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&automation)); }));
+            ComPtr<IUIAutomationElement> element; check(call([&]() { return automation->ElementFromHandle(window, &element); }));
+            ComPtr<IUIAutomationTreeWalker> walker; check(call([&]() { return automation->get_RawViewWalker(&walker); }));
+            int rootPid = 0; UIA_HWND rootWindow{};
+            if (!element || !observed(call([&]() { return element->get_CurrentProcessId(&rootPid); })) || rootPid != static_cast<int>(pid)
+                || !observed(call([&]() { return element->get_CurrentNativeWindowHandle(&rootWindow); }))
+                || reinterpret_cast<HWND>(rootWindow) != window || !stable())
+                throw std::runtime_error("taskbar UIA root binding unavailable");
+            available = true;
+            struct Node { ComPtr<IUIAutomationElement> element; unsigned depth; int parent; };
+            std::vector<Node> pending{{element, 0, -1}};
+            while (!pending.empty() && budget() && visited < 128 && stable()) {
+                Node node = std::move(pending.back()); pending.pop_back(); ++visited;
+                int providerPid = 0; const HRESULT pidHR = call([&]() { return node.element->get_CurrentProcessId(&providerPid); });
+                if (!observed(pidHR) || providerPid <= 0) { ++providerSkips; continue; }
+                auto peer = owners.owner(static_cast<DWORD>(providerPid));
+                if (!peer || !peer->live()) { ++providerSkips; continue; }
+                BSTR id = nullptr, className = nullptr;
+                const HRESULT idHR = call([&]() { return node.element->get_CurrentAutomationId(&id); });
+                const auto idJSON = identifier(idHR, id);
+                const HRESULT classHR = call([&]() { return node.element->get_CurrentClassName(&className); });
+                const auto classJSON = identifier(classHR, className);
+                CONTROLTYPEID type = 0; BOOL offscreen = TRUE;
+                const HRESULT typeHR = call([&]() { return node.element->get_CurrentControlType(&type); });
+                const HRESULT offscreenHR = call([&]() { return node.element->get_CurrentIsOffscreen(&offscreen); });
+                observed(typeHR); observed(offscreenHR);
+                int afterPid = 0; const HRESULT afterHR = call([&]() { return node.element->get_CurrentProcessId(&afterPid); });
+                if (!observed(afterHR) || afterPid != providerPid || !peer->live() || !stable() || !budget()) { ++errors; continue; }
+                const auto row = "{\"index\":" + std::to_string(count) + ",\"parentIndex\":" + std::to_string(node.parent)
+                    + ",\"depth\":" + std::to_string(node.depth) + ",\"providerPID\":" + std::to_string(providerPid)
+                    + ",\"automationId\":" + idJSON + ",\"className\":" + classJSON
+                    + ",\"controlType\":" + (SUCCEEDED(typeHR) ? std::to_string(type) : "null")
+                    + ",\"offscreen\":" + (FAILED(offscreenHR) ? "null" : offscreen ? "true" : "false")
+                    + ",\"propertyHRESULTs\":[" + std::to_string(pidHR) + ',' + std::to_string(idHR) + ','
+                    + std::to_string(classHR) + ',' + std::to_string(typeHR) + ',' + std::to_string(offscreenHR) + ',' + std::to_string(afterHR) + "]}";
+                if (rows.size() + (count ? 1 : 0) + row.size() > 10000) { truncated = true; break; }
+                const int index = static_cast<int>(count++); if (index) rows += ','; rows += row;
+                ComPtr<IUIAutomationElement> child;
+                if (!observed(call([&]() { return walker->GetFirstChildElement(node.element.Get(), &child); }))) continue;
+                if (child && node.depth >= 16) { truncated = true; continue; }
+                while (child && budget()) {
+                    if (pending.size() + visited >= 128) { truncated = true; break; }
+                    pending.push_back({child, node.depth + 1, index});
+                    ComPtr<IUIAutomationElement> next;
+                    if (!observed(call([&]() { return walker->GetNextSiblingElement(child.Get(), &next); }))) break;
+                    child = next;
+                }
+                if (child && !budget()) truncated = true;
+            }
+            rootStable = stable();
+            if (!pending.empty() || !budget() || owners.truncated) truncated = true;
+            completed = rootStable && !truncated && !errors && !owners.errors && !providerSkips;
+        }
+    } catch (const winrt::hresult_error& e) { ++errors; lastError = e.code().value; }
+      catch (...) { ++errors; lastError = E_FAIL; }
+    const bool expired = !budget();
+    if (expired) { truncated = true; completed = false; }
+    report("taskbar-uia.json", "{\"pid\":" + std::to_string(GetCurrentProcessId()) + ",\"nonce\":" + jsonQuote(uuid)
+        + ",\"diagnosticOnly\":true,\"readOnly\":true,\"showAttempts\":0,\"inputAttempted\":false"
+        + ",\"centerActionQualified\":false,\"negativeIsAbsenceProof\":false,\"projection\":\"owned_taskbar_identifiers\""
+        + ",\"available\":" + (available ? "true" : "false") + ",\"rootStable\":" + (rootStable ? "true" : "false")
+        + ",\"walkCompleted\":" + (completed ? "true" : "false") + ",\"truncated\":" + (truncated ? "true" : "false")
+        + ",\"deadlineExpired\":" + (expired ? "true" : "false")
+        + ",\"visited\":" + std::to_string(visited) + ",\"count\":" + std::to_string(count)
+        + ",\"verifiedOwners\":" + std::to_string(owners.owners.size()) + ",\"providerSkips\":" + std::to_string(providerSkips)
+        + ",\"errors\":" + std::to_string(errors + owners.errors) + ",\"lastErrorHRESULT\":" + std::to_string(lastError)
+        + ",\"rows\":[" + rows + "]}\n");
+    return available;
+}
 static bool centerSurface() {
     SurfaceScan scan;
     wchar_t windows[32768]{}; UINT size = GetWindowsDirectoryW(windows, 32768);
@@ -915,6 +1029,7 @@ int wmain(int argc, wchar_t** argv) {
         if (mode == L"center-policy") return centerPolicy() ? 0 : 3;
         if (mode == L"preflight") return preflight() ? 0 : 3;
         if (mode == L"center-surface") return centerSurface() ? 0 : 3;
+        if (mode == L"taskbar-uia") return taskbarUI() ? 0 : 3;
         if (mode == L"send") return send();
         if (mode == L"callback") return callback();
         if (mode == L"invoke") return invoke();
