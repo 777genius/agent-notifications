@@ -50,6 +50,7 @@ jobs:
           go-version-file: go.mod
           cache: false
       - uses: actions/setup-python@v7
+        id: python
         with:
           python-version: '3.12'
       - name: Linux ALSA build prerequisite
@@ -109,14 +110,17 @@ jobs:
         shell: pwsh
         env:
           CANDIDATE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          PYTHON_EXECUTABLE: ${{ steps.python.outputs.python-path }}
         run: |
+          $ErrorActionPreference = 'Stop'
           $actual = git rev-parse HEAD
           if ($actual -ne $env:CANDIDATE_COMMIT) { throw 'Candidate commit mismatch' }
           $testRoot = $env:CLAUDE_SDK_TEST_ROOT
           if (-not $testRoot -or -not (Test-Path -LiteralPath $testRoot)) { throw 'Missing private TEST root' }
           $binary = Join-Path $testRoot $(if ($IsWindows) { 'claude-sdk.exe' } else { 'claude-sdk' })
           $report = Join-Path $env:RUNNER_TEMP 'claude-sdk-evidence/receipt.json'
-          python -B scripts/claude_sdk_e2e.py --binary $binary --temp-root $testRoot --report $report
+          if (-not $env:PYTHON_EXECUTABLE -or -not (Test-Path -LiteralPath $env:PYTHON_EXECUTABLE -PathType Leaf)) { throw 'Missing setup-python executable' }
+          & $env:PYTHON_EXECUTABLE -B scripts/claude_sdk_e2e.py --binary $binary --temp-root $testRoot --report $report
           exit $LASTEXITCODE
       - name: Upload exact-commit native receipt on pass or failure
         if: always()
