@@ -53,6 +53,19 @@ def public_snapshot(item):
     return dict(item, command=[part.decode('utf-8', errors='replace') for part in item['command']])
 
 
+def bounded_diagnostics(observations):
+    """Keep optional JSON observations within 16 KiB, including escaping."""
+    selected, omitted, used = [], 0, 2
+    for observation in observations:
+        size = len(json.dumps(observation, sort_keys=True).encode()) + (2 if selected else 0)
+        if used + size > 16 * 1024:
+            omitted += 1
+        else:
+            selected.append(observation)
+            used += size
+    return selected, omitted
+
+
 def main():
     if os.getuid() != 0 or Path('/.dockerenv').exists():
         raise RuntimeError('guest_root_only')
@@ -218,7 +231,38 @@ def main():
                     except (FileNotFoundError, ProcessLookupError): pass
                 if renderers: break
             time.sleep(0.1)
-        if not renderers: raise RuntimeError('actual_renderer_evidence_absent')
+        if not renderers:
+            # Bounded failure diagnostics are observations, never qualification.
+            candidates = sorted({client.pid} | client_descendants)
+            report['failureProcessCandidateCount'] = len(candidates)
+            report['failureProcessObservations'] = []
+            for pid in candidates[:64]:
+                observation = dict(pid=pid, diagnosticOnly=True)
+                try:
+                    fd, saved = handles[pid]
+                    with selectors.DefaultSelector() as selector:
+                        selector.register(fd, selectors.EVENT_READ)
+                        if selector.select(0): raise RuntimeError('owned_process_exited')
+                    current = snapshot(pid)
+                    if current['startTicks'] != saved['startTicks']:
+                        raise RuntimeError('owned_incarnation_changed')
+                    command = b'\0'.join(current['command'])
+                    observation.update(startTicks=current['startTicks'], parent=current['parent'],
+                        executable=current['executable'][:512],
+                        executablePathTruncated=len(current['executable']) > 512,
+                        executableDevice=current['executableDevice'], executableInode=current['executableInode'],
+                        commandPrefixBase64=base64.b64encode(command[:256]).decode(),
+                        commandBytes=len(command), commandSHA256=hashlib.sha256(command).hexdigest(),
+                        exactRendererArgumentPresent=b'--type=renderer' in current['command'],
+                        status=current['status'], namespaces=current['namespaces'],
+                        appArmor=current['appArmor'][:256])
+                except (OSError, RuntimeError) as error:
+                    observation['observationError'] = str(error)[:256]
+                report['failureProcessObservations'].append(observation)
+            kept, omitted = bounded_diagnostics(report['failureProcessObservations'])
+            report['failureProcessObservations'] = kept
+            report['failureProcessObservationOmittedCount'] = omitted + max(0, len(candidates) - 64)
+            raise RuntimeError('actual_renderer_evidence_absent')
         if main_state['appArmor'].split(' (', 1)[0] != 'chatgpt':
             raise RuntimeError('main_vendor_profile_not_attached')
         time.sleep(0.1)

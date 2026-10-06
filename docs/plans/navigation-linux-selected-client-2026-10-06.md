@@ -282,3 +282,35 @@ operator results remain failed. No notification or client navigation occurred.
 Public projection: `linux-selected-client-corrected-negative.json`. Further
 diagnosis should read the retained stopped image's TEST logs without a third
 unchanged native attempt. The first failed record remains preserved separately.
+
+
+## Offline postmortem and bounded failure diagnostics
+
+Logs were read from the stopped corrected-source overlay without another VM,
+client launch or notification. GPT header/table CRC and the root-partition range
+were checked; read-only qemu-img input produced a sparse root-filesystem subset
+in private temporary memory storage. The first converter exhausted its thread
+limit; an adjusted one-CPU/one-coroutine container completed the read operation.
+Read-only debugfs checked each fixed TEST log as a regular file below 1 MiB and
+read exactly its recorded size. Original input after-hashes match, converter
+containers are absent, and the successful temporary filesystem copy was removed.
+
+The client logs self-report window readiness and renderer code activity, alongside
+signed-out/offline errors. These are useful diagnostic hints, not kernel identity,
+sandbox, visible UI or navigation proof. The failed native result is unchanged.
+The public projection `linux-selected-client-postmortem.json` retains hashes and
+limits; full extraction replay is not claimed from the local evidence capsule.
+
+The next TEST source adds failure-only kernel observations of held client
+incarnations. Optional JSON diagnostics have a 16 KiB serialized byte budget,
+including Unicode escaping, with omitted counts. Argv prefixes are bounded;
+`commandSHA256` covers normalized NUL-joined argv without a terminal NUL. These
+non-atomic observations do not alter qualification. Two meaningful JSON-budget
+regressions and three frame regressions pass; native execution is still pending.
+
+Final diagnostic source received three independent focused reviews after the
+serialized-budget correction. Guest SHA256
+`19c8a05a08db74b16859dc44464e5b60aa589f3b41aff3589e60f50b99aa2f1c`;
+probe `4c3c088cc970398f610ccdd12e37fbd1ec213a4ee1c9e13c547948b7f7d8075f`;
+operator `5ecf205bd5b492ce4d5bfe82aec21fae6c50e226700271ba73eed55c501f4743`.
+Both fixed guest guards agree. These are source/test facts, not native acceptance.
