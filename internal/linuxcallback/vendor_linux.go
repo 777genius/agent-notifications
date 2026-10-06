@@ -23,6 +23,10 @@ var catalog []byte
 
 const packageSHA256 = "637c3c94bc50f8ee33a15e2e28ec7f92a787f0943e700efe111bc0bf0d4813b4"
 
+// resources/app.asar is the largest regular file in this pinned package.
+// Another release requires its own authenticated profile, not an unbounded cap.
+const maxVendorRegularFileBytes = 543408877
+
 type VendorEntry struct {
 	Path   string `json:"path"`
 	Type   string `json:"type"`
@@ -155,7 +159,7 @@ func verifyTree(ctx context.Context, m VendorManifest) error {
 				return ErrUnavailable
 			}
 		case "file":
-			if !info.Mode().IsRegular() || info.Mode().Perm()&0022 != 0 || !validKey(entry.SHA256) || info.Size() < 0 || info.Size() > 512<<20 {
+			if !info.Mode().IsRegular() || info.Mode().Perm()&0022 != 0 || !validKey(entry.SHA256) || info.Size() < 0 || info.Size() > maxVendorRegularFileBytes {
 				return ErrUnavailable
 			}
 			total += info.Size()
@@ -183,7 +187,7 @@ func verifyTree(ctx context.Context, m VendorManifest) error {
 				n, re := f.Read(buffer)
 				if n > 0 {
 					readBytes += int64(n)
-					if readBytes > 512<<20 || readBytes > info.Size() {
+					if readBytes > maxVendorRegularFileBytes || readBytes > info.Size() {
 						_ = f.Close()
 						return ErrUnavailable
 					}
