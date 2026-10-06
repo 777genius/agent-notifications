@@ -75,7 +75,7 @@ def main():
     env = dict(PATH='/usr/bin:/bin', LANG='C.UTF-8', HOME=str(work / 'home'),
         XDG_CONFIG_HOME=str(work / 'config'), XDG_DATA_HOME=str(work / 'data'),
         XDG_CACHE_HOME=str(work / 'cache'), XDG_RUNTIME_DIR=str(work / 'runtime'),
-        XDG_DATA_DIRS='/opt/portal/share:/usr/share', XDG_SESSION_TYPE='wayland',
+        XDG_DATA_DIRS='/opt/portal/share:/opt/gtk/share:/usr/share', XDG_SESSION_TYPE='wayland',
         XDG_CURRENT_DESKTOP='TEST', WLR_BACKENDS='headless', WLR_RENDERER='pixman',
         WLR_HEADLESS_OUTPUTS='1', WLR_LIBINPUT_NO_DEVICES='1', GDK_BACKEND='wayland')
 
@@ -102,13 +102,15 @@ def main():
         (group / 'cgroup.procs').write_text(str(os.getpid()))
         os.setgroups([]); os.setgid(1000); os.setuid(1000); os.umask(0o077)
 
-    def retain(pid):
+    def retain(pid, require_uid1000=True):
         before = kernel.snapshot(pid)
         fd = os.pidfd_open(pid, 0)
         try:
             after = kernel.snapshot(pid)
-            if before['startTicks'] != after['startTicks'] or after['status']['Uid'].split() != ['1000'] * 4:
-                raise RuntimeError('owned_incarnation_or_uid_changed')
+            if before['startTicks'] != after['startTicks']:
+                raise RuntimeError('owned_incarnation_changed')
+            if require_uid1000 and after['status']['Uid'].split() != ['1000'] * 4:
+                raise RuntimeError('selected_peer_uid_not_1000')
             if Path('/proc', str(pid), 'cgroup').read_text().strip() != '0::/' + group.name:
                 raise RuntimeError('process_outside_owned_TEST_cgroup')
             with selectors.DefaultSelector() as selector:
@@ -129,14 +131,38 @@ def main():
         if kernel.snapshot(pid)['startTicks'] != saved['startTicks']:
             raise RuntimeError('owned_incarnation_changed')
 
-    def capture_group():
+    def capture_group(cleanup=False):
         values = (group / 'cgroup.procs').read_text().split()
         if len(values) > 128: raise RuntimeError('owned_process_observation_bound_exceeded')
+        observation_errors = []
         for value in values:
             pid = int(value)
             if pid in handles: continue
-            try: retain(pid)
+            try: retain(pid, require_uid1000=False)
             except (FileNotFoundError, ProcessLookupError): pass
+            except Exception as error:
+                if not cleanup: raise
+                # A failed observation must not prevent collecting other owned descendants.
+                observation_errors.append(dict(pid=pid, reason=str(error)))
+        if observation_errors:
+            report['cleanupObservationErrors'] = observation_errors
+            raise RuntimeError('owned_group_observation_failed')
+
+    def selected_peer(pid, phase):
+        # Group retention is cleanup authority, never selected-peer admission.
+        if pid not in handles: retain(pid, require_uid1000=False)
+        alive(pid)
+        observed = kernel.snapshot(pid)
+        alive(pid)
+        uids = observed['status']['Uid'].split()
+        membership = Path('/proc', str(pid), 'cgroup').read_text().strip()
+        alive(pid)
+        if uids != ['1000'] * 4 or membership != '0::/' + group.name:
+            report['selectedPeerAdmissionFailure'] = dict(phase=phase, pid=pid,
+                retainedBirth=handles[pid][1]['startTicks'], observedBirth=observed['startTicks'],
+                uidFields=uids, cgroup=membership)
+            raise RuntimeError('selected_peer_uid_or_cgroup_unproved')
+        return observed
 
     def start(label, argv, pipe=False, input_pipe=False, extra=None, passed_fds=()):
         if passed_fds and label != 'sway': raise RuntimeError('observer_fd_only_for_TEST_sway')
@@ -282,9 +308,7 @@ def main():
 
     try:
         ROOT.mkdir(mode=0o700); os.chown(ROOT, 0, 1000); ROOT.chmod(0o710)
-        # Source checkpoint only: refuse before creating any native child or notification.
-        # Remove only after complete host/seed assembly and this join pass renewed review.
-        raise RuntimeError('native_attempt_not_ready_complete_assembly_review_missing')
+        # One explicitly frozen offline TEST assembly; no automatic attempt/retry.
         work.mkdir(mode=0o700); os.chown(work, 1000, 1000)
         group.mkdir(mode=0o700); group_created = True
         if not (group / 'cgroup.kill').is_file(): raise RuntimeError('owned_cgroup_kill_required')
@@ -394,14 +418,11 @@ def main():
         hz = os.sysconf('SC_CLK_TCK')
         if hz <= 0 or started['pid'] != launched['pid'] or started['startTicks'] != launched['startTicks'] or started['startTicks'] / hz < exited:
             raise RuntimeError('cold_callback_kernel_birth_unproved')
-        if started['pid'] not in handles: retain(started['pid'])
-        alive(started['pid'])
+        selected_peer(started['pid'], 'callback_admission')
         if int(handles[started['pid']][1]['startTicks']) != started['startTicks'] or bus('GetConnectionUnixProcessID', app_id) != '(uint32 ' + str(started['pid']) + ',)':
             raise RuntimeError('cold_callback_owner_unbound')
         client_pid = launched['clientPID']
-        if client_pid not in handles: retain(client_pid)
-        alive(client_pid)
-        client = kernel.snapshot(client_pid)
+        client = selected_peer(client_pid, 'client_admission')
         if int(client['startTicks']) != launched['clientBirth'] or client['executable'] != str(kernel.EXE) or sha(Path('/proc', str(client_pid), 'exe')) != kernel.EXE_SHA:
             raise RuntimeError('selected_live_client_identity_unproved')
         if client['appArmor'].split(' (', 1)[0] != 'chatgpt':
@@ -474,7 +495,7 @@ def main():
     finally:
         failures = []
         if group_created:
-            try: capture_group()
+            try: capture_group(cleanup=True)
             except Exception as error: failures.append('group_observation: ' + str(error))
             try:
                 if str(os.getpid()) in (group / 'cgroup.procs').read_text().split(): raise RuntimeError('supervisor_in_owned_cgroup')
