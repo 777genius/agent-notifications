@@ -118,11 +118,16 @@ async function main(): Promise<void> {
       || typeof policy.configuredDisabled !== 'boolean') throw new Error('Center policy evidence invalid');
   const preflight = run('preflight', 15_000);
   if (existsSync(join(root, 'preflight.json'))) evidence.preflight = read('preflight.json');
+  const desktop = evidence.preflight as Json | undefined;
+  if (!desktop || desktop.pid !== preflight.pid || desktop.nonce !== nonce) throw new Error('desktop preflight correlation invalid');
   if (preflight.status === 3) {
     evidence.status = 'unavailable'; throw new Error('Windows client/input desktop/Shell prerequisite unavailable');
   }
   requireSuccess(preflight);
-  if ((evidence.preflight as Json).ready !== true) throw new Error('preflight not ready');
+  if (desktop.ready !== true || desktop.connectionStateKnown !== true || desktop.connectionState !== 0
+      || desktop.connectionStateQuerySucceeded !== true || desktop.connectionStateError !== 0) {
+    throw new Error('active connected desktop preflight not ready');
+  }
   if (diagnosticOnly) {
     evidence.status = 'diagnostic_complete'; evidence.noShowProved = true; exitCode = 0;
     return;

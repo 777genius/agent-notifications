@@ -1,6 +1,8 @@
 // Disposable CI-only Windows client toast lifecycle probe. No production adapter.
 #define NOMINMAX
 #include <windows.h>
+#include <wtsapi32.h>
+#pragma comment(lib, "Wtsapi32.lib")
 #include <shlobj.h>
 #include <propkey.h>
 #include <propvarutil.h>
@@ -22,6 +24,7 @@
 #include <optional>
 #include <exception>
 #include <memory>
+#include <cstring>
 using Microsoft::WRL::ComPtr;
 namespace fs = std::filesystem;
 using namespace winrt::Windows::UI::Notifications;
@@ -122,6 +125,17 @@ static bool preflight() {
     if (!rtl || rtl(&v) != 0) throw std::runtime_error("OS version unavailable");
     DWORD session = 0;
     bool sessionKnown = ProcessIdToSessionId(GetCurrentProcessId(), &session) != FALSE;
+    LPWSTR stateBuffer = nullptr; DWORD stateBytes = 0;
+    BOOL stateQuery = sessionKnown && WTSQuerySessionInformationW(WTS_CURRENT_SERVER_HANDLE, session,
+        WTSConnectState, &stateBuffer, &stateBytes);
+    DWORD stateError = stateQuery ? ERROR_SUCCESS : sessionKnown ? GetLastError() : ERROR_INVALID_PARAMETER;
+    int state = -1;
+    static_assert(sizeof(state) == sizeof(WTS_CONNECTSTATE_CLASS));
+    bool stateShape = stateQuery && stateBuffer && stateBytes == sizeof(state);
+    if (stateShape) std::memcpy(&state, stateBuffer, sizeof(state));
+    if (stateBuffer) WTSFreeMemory(stateBuffer);
+    bool stateKnown = stateShape && state >= WTSActive && state <= WTSInit;
+    if (stateQuery && !stateKnown) stateError = ERROR_INVALID_DATA;
     HWINSTA station = GetProcessWindowStation(); USEROBJECTFLAGS flags{}; DWORD needed = 0;
     bool flagsKnown = GetUserObjectInformationW(station, UOI_FLAGS, &flags, sizeof(flags), &needed) != FALSE;
     HDESK input = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS);
@@ -132,10 +146,21 @@ static bool preflight() {
     if (shell) GetWindowThreadProcessId(shell, &shellPid);
     bool client = v.wProductType == VER_NT_WORKSTATION && v.dwMajorVersion == 10 && v.dwBuildNumber >= 22000;
     bool ready = client && sessionKnown && session != 0 && flagsKnown && (flags.dwFlags & WSF_VISIBLE)
-        && stationName == L"WinSta0" && !inputName.empty() && inputName == threadName && shellPid != 0;
-    report("preflight.json", "{\"client\":" + std::string(client ? "true" : "false")
+        && stationName == L"WinSta0" && !inputName.empty() && inputName == threadName && shellPid != 0
+        && stateKnown && state == WTSActive;
+    report("preflight.json", "{\"pid\":" + std::to_string(GetCurrentProcessId()) + ",\"nonce\":" + jsonQuote(uuid)
+        + ",\"client\":" + std::string(client ? "true" : "false")
         + ",\"build\":" + std::to_string(v.dwBuildNumber) + ",\"productType\":" + std::to_string(v.wProductType)
         + ",\"sessionKnown\":" + (sessionKnown ? "true" : "false") + ",\"session\":" + std::to_string(session)
+        + ",\"connectionStateQuerySucceeded\":" + (stateQuery ? "true" : "false")
+        + ",\"connectionStateKnown\":" + (stateKnown ? "true" : "false")
+        + ",\"connectionStateBytes\":" + std::to_string(stateBytes)
+        + ",\"connectionState\":" + (stateShape ? std::to_string(static_cast<int>(state)) : "null")
+        + ",\"connectionStateError\":" + std::to_string(stateError)
+        + ",\"remoteSession\":" + (GetSystemMetrics(SM_REMOTESESSION) ? "true" : "false")
+        + ",\"screenWidth\":" + std::to_string(GetSystemMetrics(SM_CXSCREEN))
+        + ",\"screenHeight\":" + std::to_string(GetSystemMetrics(SM_CYSCREEN))
+        + ",\"foregroundPresent\":" + (GetForegroundWindow() ? "true" : "false")
         + ",\"station\":" + jsonQuote(stationName) + ",\"stationVisible\":" + ((flags.dwFlags & WSF_VISIBLE) ? "true" : "false")
         + ",\"inputDesktop\":" + jsonQuote(inputName) + ",\"threadDesktop\":" + jsonQuote(threadName)
         + ",\"shellPID\":" + std::to_string(shellPid) + ",\"ready\":" + (ready ? "true" : "false") + "}\n");
