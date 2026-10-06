@@ -11,6 +11,13 @@
 #include <wrl/client.h>
 #include <winrt/Windows.Data.Xml.Dom.h>
 #include <winrt/Windows.UI.Notifications.h>
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Windows.Management.Deployment.h>
+#include <winrt/Windows.ApplicationModel.h>
+#include <winrt/Windows.System.h>
+#include <bcrypt.h>
+#pragma comment(lib, "Bcrypt.lib")
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -1047,6 +1054,217 @@ static void packageMetadata() {
         + ",\"fullName\":" + full + ",\"architecture\":" + std::to_string(architecture)
         + ",\"version\":" + jsonQuote(winrt::to_hstring(versionText).c_str()) + "}\n");
 }
+// Separate disposable vendor lane; no toast/UI/COM callback composition.
+static constexpr auto vendorName = L"OpenAI.Codex";
+static constexpr auto vendorPublisher = L"CN=50BDFD77-8903-4850-9FFE-6E8522F64D5B";
+static constexpr auto vendorFamily = L"OpenAI.Codex_2p2nqsd0c76g0";
+static constexpr auto vendorFull = L"OpenAI.Codex_26.930.7945.0_arm64__2p2nqsd0c76g0";
+static bool vendorAPIEntered = false;
+static ULONGLONG vendorDeadline = 0;
+static void vendorRemaining() { if (GetTickCount64() >= vendorDeadline) throw std::runtime_error("vendor overall deadline"); }
+static std::string vendorPhase = "guard";
+static std::string vendorRecord(const std::string& fields) {
+    return "{\"pid\":" + std::to_string(GetCurrentProcessId()) + ",\"nonce\":" + jsonQuote(uuid)
+        + ",\"familyName\":" + jsonQuote(vendorFamily) + ",\"fullName\":" + jsonQuote(vendorFull)
+        + ",\"toastCallbackQualified\":false,\"targetConfirmed\":false,\"showAttempts\":0," + fields + "}\n";
+}
+static std::string vendorProof(const char* name) {
+    const fs::path path = root / name;
+    if (!fs::is_regular_file(path) || fs::canonical(path) != path || fs::file_size(path) > 1024)
+        throw std::runtime_error("bounded owned vendor proof required");
+    std::ifstream stream(path, std::ios::binary);
+    std::string text((std::istreambuf_iterator<char>(stream)), {});
+    if (!stream.eof() && stream.fail()) throw std::runtime_error("vendor proof unreadable");
+    return text;
+}
+struct VendorHashFile {
+    HANDLE file = INVALID_HANDLE_VALUE;
+    std::string digest;
+    explicit VendorHashFile(const fs::path& path, ULONGLONG cap) {
+        if (fs::canonical(path) != path) throw std::runtime_error("vendor input link refused");
+        file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+            FILE_FLAG_SEQUENTIAL_SCAN | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+        if (file == INVALID_HANDLE_VALUE) throw std::runtime_error("vendor custody open failed");
+        BCRYPT_ALG_HANDLE algorithm{}; BCRYPT_HASH_HANDLE hash{};
+        try {
+            FILE_ATTRIBUTE_TAG_INFO attributes{}; LARGE_INTEGER size{};
+            if (!GetFileInformationByHandleEx(file, FileAttributeTagInfo, &attributes, sizeof(attributes))
+                || (attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) || !GetFileSizeEx(file, &size)
+                || size.QuadPart <= 0 || static_cast<ULONGLONG>(size.QuadPart) > cap)
+                throw std::runtime_error("vendor custody input invalid");
+            auto ok = [](NTSTATUS status) { if (status < 0) throw std::runtime_error("vendor SHA256 failed"); };
+            ok(BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0));
+            ok(BCryptCreateHash(algorithm, &hash, nullptr, 0, nullptr, 0, 0));
+            BYTE buffer[65536]{}, result[32]{}; DWORD count{}; ULONGLONG total = 0;
+            const ULONGLONG deadline = std::min(vendorDeadline, GetTickCount64() + 120000);
+            while (true) {
+                if (GetTickCount64() >= deadline) throw std::runtime_error("vendor hash deadline");
+                if (!ReadFile(file, buffer, sizeof(buffer), &count, nullptr)) throw std::runtime_error("vendor hash read failed");
+                if (!count) break;
+                total += count; if (total > cap) throw std::runtime_error("vendor hash bound exceeded");
+                ok(BCryptHashData(hash, buffer, count, 0));
+            }
+            if (total != static_cast<ULONGLONG>(size.QuadPart)) throw std::runtime_error("vendor hash size changed");
+            ok(BCryptFinishHash(hash, result, sizeof(result), 0));
+            constexpr char hex[] = "0123456789abcdef";
+            for (BYTE byte : result) { digest += hex[byte >> 4]; digest += hex[byte & 15]; }
+            BCryptDestroyHash(hash); BCryptCloseAlgorithmProvider(algorithm, 0);
+        } catch (...) {
+            if (hash) BCryptDestroyHash(hash);
+            if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0);
+            CloseHandle(file); file = INVALID_HANDLE_VALUE; throw;
+        }
+    }
+    ~VendorHashFile() { if (file != INVALID_HANDLE_VALUE) CloseHandle(file); }
+    VendorHashFile(const VendorHashFile&) = delete;
+};
+static void vendorArchiveIdentity() {
+    ComPtr<IStream> stream;
+    check(SHCreateStreamOnFileEx((root / L"client.msix").c_str(), STGM_READ | STGM_SHARE_DENY_WRITE, FILE_ATTRIBUTE_NORMAL, FALSE, nullptr, &stream));
+    ComPtr<IAppxFactory> factory; check(CoCreateInstance(CLSID_AppxFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory)));
+    ComPtr<IAppxPackageReader> reader; check(factory->CreatePackageReader(stream.Get(), &reader));
+    ComPtr<IAppxManifestReader> manifest; check(reader->GetManifest(&manifest));
+    ComPtr<IAppxManifestPackageDependenciesEnumerator> dependencies;
+    check(manifest->GetPackageDependencies(&dependencies));
+    BOOL hasDependency = FALSE; check(dependencies->GetHasCurrent(&hasDependency));
+    if (hasDependency) throw std::runtime_error("pinned vendor manifest dependencies forbidden");
+    ComPtr<IAppxManifestPackageId> id; check(manifest->GetPackageId(&id));
+    auto equal = [](auto get, const wchar_t* expected) {
+        LPWSTR value{}; check(get(&value)); std::unique_ptr<wchar_t, decltype(&CoTaskMemFree)> owned(value, &CoTaskMemFree);
+        return value && wcsnlen_s(value, 513) <= 512 && std::wstring(value) == expected;
+    };
+    if (!equal([&](LPWSTR* p) { return id->GetName(p); }, vendorName)
+        || !equal([&](LPWSTR* p) { return id->GetPublisher(p); }, vendorPublisher)
+        || !equal([&](LPWSTR* p) { return id->GetPackageFamilyName(p); }, vendorFamily)
+        || !equal([&](LPWSTR* p) { return id->GetPackageFullName(p); }, vendorFull))
+        throw std::runtime_error("vendor archive SDK identity mismatch");
+}
+static std::vector<winrt::Windows::ApplicationModel::Package> vendorInstalled() {
+    winrt::Windows::Management::Deployment::PackageManager manager;
+    std::vector<winrt::Windows::ApplicationModel::Package> packages;
+    // Empty SID means current user, not all users. Export no unrelated package inventory.
+    for (const auto& package : manager.FindPackagesForUser(L"", vendorFamily)) {
+        if (packages.size() == 8) throw std::runtime_error("vendor family enumeration bound");
+        const auto id = package.Id();
+        if (id.Name() != vendorName || id.Publisher() != vendorPublisher || id.FamilyName() != vendorFamily)
+            throw std::runtime_error("vendor installed identity mismatch");
+        packages.push_back(package);
+    }
+    return packages;
+}
+template<typename Operation> static auto vendorAwait(const Operation& operation, DWORD milliseconds) {
+    const ULONGLONG deadline = std::min(vendorDeadline, GetTickCount64() + milliseconds);
+    while (operation.Status() == winrt::Windows::Foundation::AsyncStatus::Started) {
+        if (GetTickCount64() >= deadline) {
+            operation.Cancel(); // Cancellation does not prove external no-effect or quiescence.
+            throw std::runtime_error("vendor async deadline; outcome unknown after effect intent");
+        }
+        Sleep(10);
+    }
+    const auto status = operation.Status();
+    const auto primaryError = operation.ErrorCode();
+    if (status != winrt::Windows::Foundation::AsyncStatus::Completed || primaryError.value != S_OK) {
+        check(primaryError);
+        throw std::runtime_error("vendor async not successfully completed; outcome uncertain");
+    }
+    auto result = operation.GetResults();
+    vendorRemaining();
+    return result;
+}
+static bool vendorMode(const std::wstring& mode) {
+    return mode == L"vendor-state-before" || mode == L"vendor-state-after" || mode == L"vendor-install"
+        || mode == L"vendor-query-settings" || mode == L"vendor-query-thread"
+        || mode == L"vendor-launch-settings" || mode == L"vendor-launch-thread" || mode == L"vendor-remove";
+}
+static int vendorNative(const std::wstring& mode) {
+    using namespace winrt::Windows::Management::Deployment;
+    using namespace winrt::Windows::System;
+    vendorDeadline = GetTickCount64() + 150000;
+    vendorPhase = "current_user_query";
+    auto installed = vendorInstalled();
+    auto user = tokenUser(GetCurrentProcess());
+    PSID sid = reinterpret_cast<TOKEN_USER*>(user.data())->User.Sid;
+    if (!IsValidSid(sid) || GetLengthSid(sid) > SECURITY_MAX_SID_SIZE) throw std::runtime_error("current user SID unavailable");
+    std::string userBinding;
+    constexpr char hex[] = "0123456789abcdef";
+    const BYTE* sidBytes = static_cast<const BYTE*>(sid);
+    for (DWORD i = 0; i < GetLengthSid(sid); ++i) { userBinding += hex[sidBytes[i] >> 4]; userBinding += hex[sidBytes[i] & 15]; }
+    const std::string absence = narrow(uuid) + "\n" + userBinding + "\n";
+    vendorRemaining();
+    if (mode == L"vendor-state-before" || mode == L"vendor-state-after") {
+        report((mode == L"vendor-state-before" ? "vendor-before.json" : "vendor-after.json"),
+            vendorRecord("\"readOnly\":true,\"installedCount\":" + std::to_string(installed.size())
+                + ",\"exactFullName\":" + (installed.size() == 1 && installed[0].Id().FullName() == vendorFull ? "true" : "false")));
+        if (mode == L"vendor-state-before" && installed.empty()) report("vendor-absent.proof", absence);
+        return 0;
+    }
+    // The future controller writes this only after actual signtool /pa /all success
+    // and full streaming hashes. No arbitrary package/PFN/URI arguments are accepted.
+    vendorPhase = "custody";
+    VendorHashFile archive(root / L"client.msix", 1073741824ULL);
+    VendorHashFile executable(root / L"navigation-native-probe.exe", 67108864ULL);
+    const std::string custody = "TEST vendor custody " + narrow(uuid) + "\nsigntool-pa-all-success\n"
+        + archive.digest + "\n" + executable.digest + "\n";
+    if (vendorProof("vendor-custody.proof") != custody) throw std::runtime_error("controller custody binding mismatch");
+    vendorArchiveIdentity();
+    const std::string intent = custody + "absent-before-install\n" + userBinding + "\n";
+    if (vendorProof("vendor-absent.proof") != absence) throw std::runtime_error("fresh current-user absence proof required");
+    PackageManager manager;
+    installed = vendorInstalled(); vendorRemaining(); // Fresh read after custody hashing, before any mutation.
+    if (mode == L"vendor-install") {
+        if (!installed.empty()) throw std::runtime_error("preexisting vendor family; install refused");
+        report("vendor-install-intent.proof", intent); // Exclusive before Add, never retry this attempt.
+        wchar_t url[32768]{}; DWORD length = 32768;
+        check(UrlCreateFromPathW((root / L"client.msix").c_str(), url, &length, 0));
+        vendorRemaining(); vendorPhase = "add_package"; vendorAPIEntered = true;
+        auto result = vendorAwait(manager.AddPackageAsync(winrt::Windows::Foundation::Uri(url), nullptr, DeploymentOptions::None), 120000);
+        report("vendor-install-result.json", vendorRecord("\"operationCompleted\":true,\"extendedError\":" + std::to_string(result.ExtendedErrorCode().value)));
+        check(result.ExtendedErrorCode());
+        report("vendor-install-completed.proof", intent);
+        return 0;
+    }
+    if (vendorProof("vendor-install-intent.proof") != intent || vendorProof("vendor-install-completed.proof") != intent
+        || installed.size() != 1 || installed[0].Id().FullName() != vendorFull)
+        throw std::runtime_error("exact owned installed vendor package required");
+    if (mode == L"vendor-remove") {
+        report("vendor-remove-intent.proof", intent);
+        vendorRemaining(); vendorPhase = "remove_package"; vendorAPIEntered = true;
+        auto result = vendorAwait(manager.RemovePackageAsync(vendorFull), 120000);
+        report("vendor-remove-result.json", vendorRecord("\"operationCompleted\":true,\"extendedError\":" + std::to_string(result.ExtendedErrorCode().value)));
+        check(result.ExtendedErrorCode());
+        if (!vendorInstalled().empty()) throw std::runtime_error("vendor family remains after removal");
+        report("vendor-removed.json", vendorRecord("\"currentUserFamilyAbsent\":true")); return 0;
+    }
+    const bool thread = mode == L"vendor-query-thread" || mode == L"vendor-launch-thread";
+    const bool launching = mode == L"vendor-launch-thread" || mode == L"vendor-launch-settings";
+    const winrt::Windows::Foundation::Uri uri(thread ? L"codex://threads/" + uuid : L"codex://settings");
+    vendorRemaining(); vendorPhase = "targeted_uri_query";
+    const auto support = vendorAwait(Launcher::QueryUriSupportAsync(uri, LaunchQuerySupportType::Uri, vendorFamily), 10000);
+    const std::string suffix = thread ? "thread" : "settings";
+    report(("vendor-query-" + suffix + (launching ? "-prelaunch.json" : ".json")).c_str(),
+        vendorRecord("\"readOnly\":true,\"uriSupport\":" + std::to_string(static_cast<int>(support))));
+    if (!launching) return support == LaunchQuerySupportStatus::Available ? 0 : 3;
+    if (support != LaunchQuerySupportStatus::Available) throw std::runtime_error("targeted URI support unavailable; no launch");
+    // One launch total, including across settings/thread modes. No default or fallback route.
+    installed = vendorInstalled(); vendorRemaining();
+    if (installed.size() != 1 || installed[0].Id().FullName() != vendorFull) throw std::runtime_error("selected package changed before launch");
+    report("vendor-launch-intent.proof", intent + suffix + "\n");
+    LauncherOptions options; options.TargetApplicationPackageFamilyName(vendorFamily); options.FallbackUri(nullptr);
+    vendorRemaining(); vendorPhase = "launch_uri"; vendorAPIEntered = true;
+    const bool accepted = vendorAwait(Launcher::LaunchUriAsync(uri, options), 15000);
+    report("vendor-launch.json", vendorRecord("\"launchReturned\":true,\"handoffAccepted\":" + std::string(accepted ? "true" : "false")
+        + ",\"launchAttempts\":1,\"retryAllowed\":false"));
+    return accepted ? 0 : 3;
+}
+static void vendorFailure(HRESULT hr) noexcept {
+    if (!ownedRootValidated || !vendorMode(activeMode)) return;
+    try {
+        report(("vendor-failure-" + narrow(activeMode) + ".json").c_str(), vendorRecord("\"phase\":"
+            + jsonQuote(winrt::to_hstring(vendorPhase).c_str()) + ",\"hresult\":" + std::to_string(hr)
+            + ",\"effectAPIEntered\":" + (vendorAPIEntered ? "true" : "false") + ",\"outcomeUnknown\":"
+            + (vendorAPIEntered ? "true" : "false") + ",\"retryAllowed\":false"));
+    } catch (...) { /* Outer controller retains partial reports and must not infer clean/no-effect. */ }
+}
 int wmain(int argc, wchar_t** argv) {
     try {
         if (argc < 4) return 2;
@@ -1054,7 +1272,7 @@ int wmain(int argc, wchar_t** argv) {
         wchar_t gate[8]{}, ci[8]{}, actions[8]{};
         // The OS-created COM process need not inherit the runner's environment.
         // Its authority is the exact owned root/binary/UUID installed by the opt-in controller.
-        if (mode != L"callback" && (!GetEnvironmentVariableW(L"AGENT_NOTIFY_NAVIGATION_WINDOWS_E2E", gate, 8)
+        if (mode != L"callback" && (!GetEnvironmentVariableW(vendorMode(mode) ? L"NAVIGATION_WINDOWS_VENDOR_NATIVE_TEST" : L"AGENT_NOTIFY_NAVIGATION_WINDOWS_E2E", gate, 8)
             || std::wstring(gate) != L"1" || !GetEnvironmentVariableW(L"CI", ci, 8) || std::wstring(ci) != L"true"
             || !GetEnvironmentVariableW(L"GITHUB_ACTIONS", actions, 8) || std::wstring(actions) != L"true")) return 2;
         root = fs::canonical(argv[2]); uuid = argv[3];
@@ -1071,6 +1289,7 @@ int wmain(int argc, wchar_t** argv) {
         if (mode == L"callback" && (!ownRegistryProof() || registeredCommand() != serverCommand()
             || !ownAppIdentityProof() || !appIdentityMatches())) return 2;
         winrt::init_apartment(winrt::apartment_type::multi_threaded);
+        if (vendorMode(mode)) { if (argc != 4) return 2; return vendorNative(mode); }
         if (mode == L"package-metadata") { packageMetadata(); return 0; }
         if (mode == L"center-policy") return centerPolicy() ? 0 : 3;
         if (mode == L"preflight") return preflight() ? 0 : 3;
@@ -1082,7 +1301,7 @@ int wmain(int argc, wchar_t** argv) {
         if (mode == L"cleanup") { cleanup(); return 0; }
         return 2;
     } catch (const winrt::hresult_error& e) {
-        sendFailure(e.code().value);
+        vendorFailure(e.code().value); sendFailure(e.code().value);
         std::cerr << "HRESULT " << e.code().value << ": " << winrt::to_string(e.message()) << '\n'; return 1;
-    } catch (const std::exception& e) { sendFailure(E_FAIL); std::cerr << e.what() << '\n'; return 1; }
+    } catch (const std::exception& e) { vendorFailure(E_FAIL); sendFailure(E_FAIL); std::cerr << e.what() << '\n'; return 1; }
 }
