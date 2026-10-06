@@ -7,9 +7,9 @@ import (
 	"strings"
 )
 
-var productOrder = []string{"claude", "codex", "opencode", "gemini"}
-var productLabels = map[string]string{"claude": "Claude", "codex": "Codex", "opencode": "OpenCode", "gemini": "Gemini CLI"}
-var scopeKeys = []string{"claude-config", "codex-home", "opencode-config-dir", "gemini-home", "gemini-config-root", "claude-executable", "codex-executable", "opencode-executable", "gemini-executable", "control-root"}
+var productOrder = []string{"claude", "codex", "opencode", "gemini", "cursor"}
+var productLabels = map[string]string{"claude": "Claude", "codex": "Codex", "opencode": "OpenCode", "gemini": "Gemini CLI", "cursor": "Cursor CLI (explicit profile)"}
+var scopeKeys = []string{"claude-config", "codex-home", "opencode-config-dir", "gemini-home", "gemini-config-root", "claude-executable", "codex-executable", "opencode-executable", "gemini-executable", "control-root", "scope-root", "client-executable"}
 
 type setupProductsArgs struct {
 	Operation, Mode, IntentFile                    string
@@ -113,7 +113,7 @@ func parseSetupProducts(args []string) (r setupProductsArgs, err error) {
 			r.Scopes[key] = value
 		}
 	}
-	if r.AgentNotify && r.SkipAgentNotify {
+	if r.AgentNotify && r.SkipAgentNotify || (r.Scopes["scope-root"] == "") != (r.Scopes["client-executable"] == "") {
 		return invalid()
 	}
 	if r.Operation == "select" {
@@ -129,6 +129,21 @@ func parseSetupProducts(args []string) (r setupProductsArgs, err error) {
 		return r, nil
 	}
 	if len(r.Products) == 0 {
+		return invalid()
+	}
+	if containsProduct(r.Products, "cursor") {
+		// Cursor is one existing selected wizard operation; the two-client
+		// Claude/Codex group and their policy configuration keep their meaning.
+		if len(r.Products) != 1 || routePresent || r.Desktop || r.Webhook || r.Operation == "channels" ||
+			(r.Operation == "confirm" && (r.Scopes["scope-root"] == "" || r.Scopes["client-executable"] == "")) {
+			return invalid()
+		}
+		if r.Operation == "preflight" && (r.IntentFile == "" || len(r.Scopes) > 0 || modeSeen) {
+			return invalid()
+		}
+		return r, nil
+	}
+	if r.Scopes["scope-root"] != "" || r.Scopes["client-executable"] != "" {
 		return invalid()
 	}
 	portable, observer := false, false

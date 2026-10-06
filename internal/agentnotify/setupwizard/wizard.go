@@ -591,7 +591,7 @@ func evaluate(ctx context.Context, req *Request, requireYes bool) evaluated {
 	if req.Action != ActionInspect && req.BootstrapMCP != nil {
 		observation := *req
 		observation.Agents = nil
-		for _, id := range []string{"claude", "codex"} {
+		for _, id := range []string{"claude", "codex", "cursor"} {
 			if _, ok := req.BootstrapMCP.Projection.Profiles[id]; ok {
 				observation.Agents = append(observation.Agents, id)
 			}

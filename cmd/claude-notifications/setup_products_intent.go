@@ -35,13 +35,13 @@ type bootstrapInitialObservation struct {
 	Policy          installruntime.Identity
 }
 
-var intentScalarKeys = []string{"home", "claude-config", "claude-mcp-config", "codex-home", "codex-mcp-config", "opencode-config-dir", "gemini-config-root", "control-root", "runtime-root", "global-config", "claude-executable", "codex-executable", "opencode-executable", "gemini-executable"}
+var intentScalarKeys = []string{"home", "claude-config", "claude-mcp-config", "codex-home", "codex-mcp-config", "opencode-config-dir", "gemini-config-root", "control-root", "runtime-root", "global-config", "claude-executable", "codex-executable", "opencode-executable", "gemini-executable", "scope-root", "client-executable"}
 
 func intentWizardRequest(i confirmedBootstrapIntent) setupwizard.Request {
 	scopes := i.Scopes
 	ids := []string{}
 	for _, id := range i.Request.Products {
-		if id == "claude" || id == "codex" {
+		if id == "claude" || id == "codex" || id == "cursor" {
 			ids = append(ids, id)
 		}
 	}
@@ -49,8 +49,9 @@ func intentWizardRequest(i confirmedBootstrapIntent) setupwizard.Request {
 	return setupwizard.Request{Action: setupwizard.ActionInstall, Agents: ids, Hooks: &off, AgentNotify: &on, Yes: true,
 		ControlRoot: string(scopes["control-root"]), RuntimeRoot: string(scopes["runtime-root"]), GlobalConfig: string(scopes["global-config"]),
 		ClaudeConfig: string(scopes["claude-config"]), CodexHome: string(scopes["codex-home"]),
+		CursorConfig: string(scopes["scope-root"]), ScopeRoot: string(scopes["scope-root"]),
 		MCPConfig:         map[string]string{"claude": string(scopes["claude-mcp-config"]), "codex": string(scopes["codex-mcp-config"])},
-		ClientExecutables: map[string]string{"claude": string(scopes["claude-executable"]), "codex": string(scopes["codex-executable"])},
+		ClientExecutables: map[string]string{"claude": string(scopes["claude-executable"]), "codex": string(scopes["codex-executable"]), "cursor": string(scopes["client-executable"])},
 	}
 }
 
@@ -99,6 +100,13 @@ func buildConfirmedBootstrapIntent(ctx context.Context, a setupProductsArgs, e p
 	i.Request.Mode = ""
 	i.Request.ConfigureArgs = nil
 	r := intentWizardRequest(i)
+	// Confirmation observes stored units without granting the selected route.
+	// The direct caller constructs fresh authority before Plan/Run, after the
+	// frozen selection has preserved absent siblings and explicit opt-outs.
+	if containsProduct(r.Agents, "cursor") {
+		r.CursorAgentNotify = r.Hooks
+	}
+
 	if len(r.Agents) > 0 && !a.SkipAgentNotify {
 		projection, generation, err := setupwizard.ObserveBootstrapMCP(ctx, r)
 		if err != nil {
@@ -141,8 +149,8 @@ func buildConfirmedBootstrapIntent(ctx context.Context, a setupProductsArgs, e p
 		}
 	}
 	for _, id := range a.Products {
-		portable := id == "claude" || id == "codex"
-		u := bootstrapProductUnits{Product: id, Hooks: portable, Native: !portable, MCP: containsProduct(i.MCP.Selected, id), Skill: containsProduct(i.MCP.Selected, id), PreservedOff: containsProduct(i.MCP.Skipped, id)}
+		portable := id == "claude" || id == "codex" || id == "cursor"
+		u := bootstrapProductUnits{Product: id, Hooks: portable && id != "cursor", Native: !portable, MCP: containsProduct(i.MCP.Selected, id), Skill: containsProduct(i.MCP.Selected, id), PreservedOff: containsProduct(i.MCP.Skipped, id)}
 		if !portable {
 			u.Desktop = a.Desktop
 			u.Webhook = a.Webhook
@@ -182,14 +190,18 @@ func preflightBootstrapIntent(ctx context.Context, i confirmedBootstrapIntent, a
 		return errors.New("concurrent_change: confirmed ownership/policy changed")
 	}
 	for _, id := range i.Request.Products {
-		path := string(i.Scopes[id+"-executable"])
+		key := id + "-executable"
+		if id == "cursor" {
+			key = "client-executable"
+		}
+		path := string(i.Scopes[key])
 		got, err := normalizeProductExecutable(path)
 		if err != nil || got != path {
 			return fmt.Errorf("%s selected executable changed", id)
 		}
 	}
 	for _, key := range intentScalarKeys {
-		if key == "home" || key == "global-config" || key == "claude-mcp-config" || key == "codex-mcp-config" || containsProduct([]string{"claude-executable", "codex-executable", "opencode-executable", "gemini-executable"}, key) {
+		if key == "home" || key == "global-config" || key == "claude-mcp-config" || key == "codex-mcp-config" || containsProduct([]string{"claude-executable", "codex-executable", "opencode-executable", "gemini-executable", "client-executable"}, key) {
 			continue
 		}
 		if path := string(i.Scopes[key]); path != "" {
@@ -200,7 +212,11 @@ func preflightBootstrapIntent(ctx context.Context, i confirmedBootstrapIntent, a
 		}
 	}
 	if len(i.MCP.Selected)+len(i.MCP.Skipped) > 0 {
-		current, _, err := setupwizard.ObserveBootstrapMCP(ctx, intentWizardRequest(i))
+		r := intentWizardRequest(i)
+		if containsProduct(r.Agents, "cursor") {
+			r.CursorAgentNotify = r.Hooks
+		}
+		current, _, err := setupwizard.ObserveBootstrapMCP(ctx, r)
 		if err != nil {
 			return err
 		}

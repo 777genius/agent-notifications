@@ -32,6 +32,41 @@ func bootstrapCodecFixture(t *testing.T) (confirmedBootstrapIntent, string) {
 	return i, filepath.Join(physical, "selector-intent.json")
 }
 
+// Regression: confirmed Cursor profile/agent is lost in the real immutable
+// codec, or a caller substitutes a different profile at wizard admission.
+func TestSetupProductsCursorIntentRoundTrip(t *testing.T) {
+	i, path := bootstrapCodecFixture(t)
+	r, err := parseSetupProducts([]string{"confirm", "--products", "cursor", "--agent-notify", "--scope-root", string(i.Provenance.Stage), "--client-executable", filepath.Join(string(i.Provenance.Stage), "TEST-agent")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Mode, r.Scopes, r.ConfigureArgs = "", nil, nil
+	i.Request = r
+	delete(i.Scopes, "gemini-config-root")
+	delete(i.Scopes, "gemini-executable")
+	i.Scopes["scope-root"] = i.Provenance.Stage
+	i.Scopes["client-executable"] = []byte(filepath.Join(string(i.Provenance.Stage), "TEST-agent"))
+	i.MCP.Selected = []string{"cursor"}
+	i.MCP.Projection.Profiles = map[string][]byte{"cursor": i.Provenance.Stage}
+	i.Units = []bootstrapProductUnits{{Product: "cursor", MCP: true, Skill: true}}
+	if err := writeBootstrapIntent(path, i); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadBootstrapIntent(path, i.Provenance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := intentWizardRequest(loaded)
+	if strings.Join(want.Agents, ",") != "cursor" || want.CursorConfig != string(i.Provenance.Stage) || want.ScopeRoot != want.CursorConfig || want.ClientExecutables["cursor"] != string(i.Scopes["client-executable"]) || want.CursorAuthority != nil {
+		t.Fatalf("frozen request: %+v", want)
+	}
+	actual := want
+	actual.CursorConfig = filepath.Join(want.CursorConfig, "replacement")
+	if sameWizardBootstrapScope(actual, want) {
+		t.Fatal("profile substitution admitted")
+	}
+}
+
 // Red regression: an accepted record overwrites another journey or loses raw
 // authority bytes; the getter observes a different destination on a later run.
 func TestSetupProductsImmutableIntentCodec(t *testing.T) {

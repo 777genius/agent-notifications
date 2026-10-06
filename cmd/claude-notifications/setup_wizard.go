@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/zip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,14 +11,26 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portableasset"
+	"github.com/777genius/agent-notifications/internal/agentnotify/portablesetup"
 	"github.com/777genius/agent-notifications/internal/agentnotify/setupwizard"
 	"github.com/777genius/agent-notifications/internal/config"
+	"github.com/777genius/agent-notifications/internal/cursorinstall"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/plugin-kit-ai/cli/installerui"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/pathpolicy"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/clientdetect"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/nativeconfig"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/statev2"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/cursor"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
+	uapinstaller "github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/installer"
 )
 
 const setupWizardHelp = `Usage: claude-notifications setup-notifications wizard [OPTIONS]
@@ -31,7 +44,8 @@ installation is offered inspect, add/reinstall, uninstall, update, or repair.
   --action install|uninstall|inspect|update|repair
   --install-or-update       Bootstrap-only: install selected clients or update owned bindings first
   --preserve-existing-units Bootstrap auto mode: leave absent MCP units off when another binding already exists
-  --agents claude,codex   Omit on inspect to report both clients
+  --agents claude,codex|cursor   Cursor requires explicit --scope-root and --client-executable; select separately
+  Omit on inspect to report both clients
   --hooks true|false          Omit on install of new targets to include hooks; omit on update/repair to keep live units; omit on uninstall to select all units
   --agent-notify true|false   Omit on install of new targets to include portable MCP+skill; omit on update/repair to keep live units
   --claude-hooks true|false   Per-client override; mixed Claude/Codex opt-outs are not collapsed
@@ -163,6 +177,10 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 		}
 		req = filled
 	}
+	req, err = composeCursorWizard(ctx, req)
+	if err != nil {
+		return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "cursor_composition_required"}, err)
+	}
 	if req.Action != setupwizard.ActionInspect && !req.Yes && tty && !jsonOut {
 		plan, e := setupwizard.Plan(ctx, req)
 		req = plan.Request
@@ -233,7 +251,7 @@ func validInstallOrUpdateRequest(req setupwizard.Request) bool {
 	}
 	seen := map[string]bool{}
 	for _, agent := range req.Agents {
-		if (agent != "claude" && agent != "codex") || seen[agent] {
+		if (agent != "claude" && agent != "codex" && (agent != "cursor" || len(req.Agents) != 1)) || seen[agent] {
 			return false
 		}
 		seen[agent] = true
@@ -620,6 +638,13 @@ func parseSetupWizard(args []string) (setupwizard.Request, bool, error) {
 	}
 	req.Helper = values["helper"]
 	req.ScopeRoot = values["scope-root"]
+	if containsProduct(req.Agents, "cursor") {
+		if len(req.Agents) != 1 || req.ScopeRoot == "" || req.ClientExecutable == "" {
+			return req, jsonOut, errors.New("invalid_arguments")
+		}
+		req.CursorConfig = req.ScopeRoot
+		req.ClientExecutables = map[string]string{"cursor": req.ClientExecutable}
+	}
 	req.InstallationID = values["installation-id"]
 	if values["mcp-config"] != "" || values["claude-mcp-config"] != "" {
 		req.MCPConfig = map[string]string{}
@@ -738,7 +763,7 @@ func admitBootstrapWizardRequest(path string, r setupwizard.Request) (setupwizar
 	return r, nil
 }
 func sameWizardBootstrapScope(actual, expected setupwizard.Request) bool {
-	if strings.Join(actual.Agents, ",") != strings.Join(expected.Agents, ",") || actual.ControlRoot != expected.ControlRoot || actual.ClaudeConfig != expected.ClaudeConfig || actual.CodexHome != expected.CodexHome || actual.GlobalConfig != expected.GlobalConfig {
+	if strings.Join(actual.Agents, ",") != strings.Join(expected.Agents, ",") || actual.ControlRoot != expected.ControlRoot || actual.ClaudeConfig != expected.ClaudeConfig || actual.CodexHome != expected.CodexHome || actual.CursorConfig != expected.CursorConfig || (containsProduct(expected.Agents, "cursor") && actual.ScopeRoot != expected.ScopeRoot) || actual.GlobalConfig != expected.GlobalConfig {
 		return false
 	}
 	// A fresh legacy phase chooses its existing managed runtime during hooks
@@ -780,4 +805,431 @@ func stripWizardUIMode(args []string) ([]string, string, error) {
 	}
 	parsed, err := parseSetupProducts(uiArgs)
 	return remaining, parsed.Mode, err
+}
+
+// This immutable reference covers P1 only. The source-selected Engine phase in
+// the same run failed; it grants neither materializer admission nor consent.
+const cursorP1Qualification = "uap406:run37359957633:job111931783352:public143c:P1:sha256:f083bc8768df3e8a7180c2697f366930cf810e6eab3196b85609692a02bc6d40"
+const selectedCursorVersion = "2026.09.28-64d2043"
+
+func composeCursorWizard(ctx context.Context, req setupwizard.Request) (_ setupwizard.Request, err error) {
+	if !containsProduct(req.Agents, "cursor") {
+		return req, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return req, err
+	}
+	if len(req.Agents) != 1 || req.CursorConfig != req.ScopeRoot || !validProductPath(req.ScopeRoot) {
+		return req, portable.ErrInvalid
+	}
+	profile, err := cursor.New().ResolveProfileRoot(req.CursorConfig)
+	if err != nil {
+		return req, err
+	}
+	req.ScopeRoot, req.CursorConfig = profile, profile
+	if req.BootstrapMCP != nil && !containsProduct(req.BootstrapMCP.Selected, "cursor") {
+		off := false
+		req.CursorAgentNotify = &off
+	}
+	if req.CursorAgentNotify != nil && !*req.CursorAgentNotify || req.AgentNotify != nil && !*req.AgentNotify || req.Action == setupwizard.ActionInspect && req.AgentNotify == nil {
+		return req, nil
+	}
+	snapshot, err := installruntime.ReadInstalledSnapshot(req.ControlRoot)
+	if err != nil {
+		return req, err
+	}
+	if snapshot.Recovery || snapshot.Ledger.ID == "" || snapshot.Ledger.Owner != "existing-installer" {
+		return req, setupwizard.ErrRefused
+	}
+	if req.AgentNotify == nil && (req.Action == setupwizard.ActionUpdate || req.Action == setupwizard.ActionRepair) {
+		state, e := (statev2.Store{Path: filepath.Join(filepath.Dir(req.ControlRoot), "uap", "state", "state-v2.json")}).Load()
+		if e != nil {
+			return req, e
+		}
+		live := false
+		for _, installation := range state.Installations {
+			for _, binding := range installation.Clients {
+				live = live || binding.ClientID == "cursor"
+			}
+		}
+		if !live {
+			off := false
+			req.CursorAgentNotify = &off
+			return req, nil
+		}
+	}
+	if req.Action != setupwizard.ActionUninstall {
+		// Fresh Capture belongs to public Prepare. Its frozen original token is
+		// retained/revalidated by Apply and lifecycle, never recaptured here.
+		agent := req.ClientExecutables["cursor"]
+		if agent == "" {
+			agent = req.ClientExecutable
+		}
+		agent, err = normalizeProductExecutable(agent)
+		if err != nil {
+			return req, err
+		}
+		probe, cancel := context.WithTimeout(ctx, 2*time.Second)
+		version, e := clientdetect.NewOS(filepath.Dir(req.CursorConfig)).ProbeVersionWithEnvironment(probe, agent, []string{"HOME=" + filepath.Dir(req.CursorConfig), "PATH=" + os.Getenv("PATH")})
+		cancel()
+		if e != nil || strings.TrimSpace(version) != selectedCursorVersion {
+			return req, fmt.Errorf("Cursor agent version is outside the fixed tuple: %w", e)
+		}
+		req.ClientExecutables = map[string]string{"cursor": agent}
+		if filepath.Base(req.CursorConfig) != ".cursor" {
+			return req, setupwizard.ErrRefused
+		}
+		if err := cursorQualifiedNamespace(req.CursorConfig); err != nil {
+			return req, err
+		}
+	}
+	acquiring := req.PackageRoot == "" && snapshot.Ledger.PendingMutation == nil
+	req, cfg, previous, cleanup, err := reserveCursorCaller(ctx, req, snapshot)
+	if err != nil {
+		return req, err
+	}
+	defer func() {
+		if err != nil {
+			cleanup() // Composition is still read-only; Plan/Run has not begun.
+		}
+	}()
+	adapter, err := cursorinstall.New(nativeconfig.New(), pathpolicy.Policy{}, req.CursorAuthority)
+	if err != nil {
+		return req, err
+	}
+	base, err := portablesetup.NewRegistry()
+	if err != nil {
+		return req, err
+	}
+	cfg.Registry, err = clients.NewRegistry(append(base.All(), adapter)...)
+	if err != nil {
+		return req, err
+	}
+	eng, err := uapinstaller.New(cfg)
+	if err != nil {
+		return req, err
+	}
+	// The selected registry, constructed from acknowledged facts, verifies the
+	// original token. Historical Cursor is used only for inert reservation.
+	if previous && req.Action != setupwizard.ActionUninstall {
+		if err := eng.VerifyProfileAuthority(ctx, req.InstallationID, req.BindingIDs["cursor"]); err != nil {
+			return req, err
+		}
+	}
+	// Retained identity and Authority above are inert. Package admission starts
+	// only after the selected registry verifies the original physical token.
+	if previous && req.Action != setupwizard.ActionUninstall {
+		if snapshot.Ledger.PendingMutation != nil {
+			intent, e := portablesetup.ReadIntent(req.ControlRoot)
+			if e != nil {
+				return req, e
+			}
+			req, err = setupwizard.ResolvePendingPackage(ctx, req, intent)
+		} else if req.Action == setupwizard.ActionUpdate && req.PackageRoot == "" {
+			req, cleanup, err = setupwizard.StageCurrentReleasePackage(ctx, req)
+		}
+		if err != nil {
+			return req, err
+		}
+	}
+	reserved, err := eng.ReserveIdentity(uapinstaller.IdentityRequest{ClientID: "cursor", InstallationID: req.InstallationID, ClientConfigRoot: req.CursorConfig, DeclaredName: cursorCallerDeclaredName(req.PackageRoot)})
+	if err != nil || reserved.InstallationID != req.InstallationID || reserved.BindingID != req.BindingIDs["cursor"] {
+		return req, portable.ErrInvalid
+	}
+	if err := ctx.Err(); err != nil {
+		return req, err
+	}
+	if acquiring {
+		req, err = setupwizard.RetainCurrentReleasePackage(ctx, req)
+	}
+	return req, err
+}
+
+// Inert reservation is independent of physical identity and channel consent.
+// It binds the real managed observer, never a future helper or the vendor agent.
+func reserveCursorCaller(ctx context.Context, req setupwizard.Request, snapshot installruntime.InstalledSnapshot) (_ setupwizard.Request, _ uapinstaller.Config, _ bool, cleanup func(), err error) {
+	cleanup = func() {}
+	defer func() {
+		if err != nil {
+			cleanup()
+		}
+	}()
+	uapRoot := filepath.Join(filepath.Dir(req.ControlRoot), "uap")
+	cfg := uapinstaller.Config{StateRoot: filepath.Join(uapRoot, "state"), PluginDataBase: filepath.Join(uapRoot, "plugin-data"), ManagedRoot: filepath.Join(uapRoot, "managed")}
+	deny := func(err error) (setupwizard.Request, uapinstaller.Config, bool, func(), error) {
+		return req, cfg, false, cleanup, err
+	}
+	if snapshot.Recovery || snapshot.Ledger.ID == "" || snapshot.Ledger.Owner != "existing-installer" || req.RuntimeRoot != "" && req.RuntimeRoot != snapshot.Ledger.RuntimeRoot {
+		return deny(setupwizard.ErrRefused)
+	}
+	// Pending identity is selected before reservation; the wizard remains the
+	// owner of retry unit/digest validation and uncertain recovery.
+	var pendingIntent *portablesetup.Intent
+	if pending := snapshot.Ledger.PendingMutation; pending != nil {
+		intent, e := portablesetup.ReadIntent(req.ControlRoot)
+		if e != nil || pending.Owner != "existing-installer" || pending.IntentRef != portablesetup.IntentPath(req.ControlRoot) || intent.SetupIntentID != pending.ID || intent.Action != string(req.Action) || len(intent.Targets) != 1 {
+			return deny(setupwizard.ErrRefused)
+		}
+		target := intent.Targets[0]
+		if target.Client != "cursor" || target.InstallationID == "" || target.BindingID == "" || target.Profile != req.CursorConfig || req.InstallationID != "" && req.InstallationID != target.InstallationID || req.BindingIDs["cursor"] != "" && req.BindingIDs["cursor"] != target.BindingID {
+			return deny(portablesetup.ErrIntentConflict)
+		}
+		req.InstallationID = target.InstallationID
+		req.BindingIDs = map[string]string{"cursor": target.BindingID}
+		pendingIntent = &intent
+	}
+	req.RuntimeRoot = snapshot.Ledger.RuntimeRoot
+	generation := snapshot.Ledger.Generation
+	if req.BootstrapExpectedGeneration != nil && *req.BootstrapExpectedGeneration != generation {
+		return deny(portablesetup.ErrConcurrentChange)
+	}
+	req.BootstrapExpectedGeneration = &generation
+	base, err := portablesetup.NewRegistry()
+	if err != nil {
+		return deny(err)
+	}
+	cfg.Registry, err = clients.NewRegistry(append(base.All(), cursor.New())...)
+	if err != nil {
+		return deny(err)
+	}
+	eng, err := uapinstaller.New(cfg)
+	if err != nil {
+		return deny(err)
+	}
+	reserved, err := eng.ReserveIdentity(uapinstaller.IdentityRequest{ClientID: "cursor", InstallationID: req.InstallationID, Allocate: req.Action == setupwizard.ActionInstall && snapshot.Ledger.PendingMutation == nil, ClientConfigRoot: req.CursorConfig})
+	if err != nil {
+		return deny(err)
+	}
+	req.InstallationID = reserved.InstallationID
+	primary, found, err := portable.InstalledPrimary(snapshot.Ledger, req.InstallationID, req.ControlRoot)
+	if err != nil {
+		return deny(err)
+	}
+	if !found {
+		primary = portable.PlatformPrimary()
+	}
+	if req.Primary != "" && req.Primary != primary {
+		return deny(portable.ErrInvalid)
+	}
+	req.Primary = primary
+	observer, err := portable.ResolvePrimaryExecutable(snapshot.Ledger, primary)
+	if err != nil || req.Helper != "" && req.Helper != observer {
+		return deny(portable.ErrInvalid)
+	}
+	req.Helper = observer
+	global, found, err := portable.InstalledGlobalConfig(snapshot.Ledger, req.InstallationID, req.ControlRoot)
+	if err != nil {
+		return deny(err)
+	}
+	if found && req.GlobalConfig != "" && req.GlobalConfig != global {
+		return deny(portable.ErrInvalid)
+	}
+	if found {
+		req.GlobalConfig = global
+	}
+	if req.GlobalConfig == "" {
+		selection, e := config.Resolve(config.SnapshotEnv())
+		if e != nil {
+			return deny(e)
+		}
+		req.GlobalConfig = selection.Path
+	}
+	if pendingIntent != nil {
+		if pendingIntent.Primary != "" && pendingIntent.Primary != req.Primary || pendingIntent.GlobalConfig != "" && pendingIntent.GlobalConfig != req.GlobalConfig {
+			return deny(portablesetup.ErrIntentConflict)
+		}
+		view, e := eng.Inspect(ctx)
+		if e != nil || view.Recovery.Required {
+			return deny(setupwizard.ErrRefused)
+		}
+	}
+	if reserved.BindingID == "" {
+		if snapshot.Ledger.PendingMutation != nil || req.Action != setupwizard.ActionInstall {
+			return deny(uapinstaller.ErrNotInstalled)
+		}
+		if req.PackageRoot == "" {
+			req, cleanup, err = setupwizard.StageCurrentReleasePackage(ctx, req)
+			if err != nil {
+				return deny(err)
+			}
+		}
+		name := cursorCallerDeclaredName(req.PackageRoot)
+		if name == "" {
+			return deny(portable.ErrInvalid)
+		}
+		reserved, err = eng.ReserveIdentity(uapinstaller.IdentityRequest{ClientID: "cursor", InstallationID: reserved.InstallationID, DeclaredName: name, ClientConfigRoot: req.CursorConfig})
+		if err != nil || reserved.BindingID == "" || reserved.TargetPath == "" {
+			return deny(portable.ErrInvalid)
+		}
+		req.CursorAuthority = &cursorinstall.Authority{ObjectID: "cursor-user-stop-v1", CursorVersion: selectedCursorVersion, QualificationID: cursorP1Qualification}
+		req.CursorAuthority.Selector = filepath.Join(cfg.PluginDataBase, domain.ComputePhysicalArtifactID(name, reserved.InstallationID)) // completed below
+	}
+	if reserved.InstallationID == "" || reserved.Scope != string(domain.ScopeUser) || reserved.BindingID != domain.ComputeClientBindingID(reserved.InstallationID, "cursor", reserved.Scope, reserved.TargetPath) {
+		return deny(portable.ErrInvalid)
+	}
+	req.InstallationID = reserved.InstallationID
+	if req.BindingIDs != nil && req.BindingIDs["cursor"] != "" && req.BindingIDs["cursor"] != reserved.BindingID {
+		return deny(portable.ErrInvalid)
+	}
+	req.BindingIDs = map[string]string{"cursor": reserved.BindingID}
+	state, err := (statev2.Store{Path: filepath.Join(cfg.StateRoot, "state-v2.json")}).Load()
+	if err != nil {
+		return deny(err)
+	}
+	dataRoot := ""
+	previous := false
+	var installed domain.Installation
+	var client domain.ClientBinding
+	for _, installation := range state.Installations {
+		if installation.InstallationID != req.InstallationID {
+			continue
+		}
+		if c, ok := installation.Clients[reserved.BindingID]; ok {
+			data, ok := installation.DataReceipts[c.DataReceiptID]
+			if !ok || c.PendingNativeIntent != nil || c.NativeActivationAttempt != "" {
+				return deny(portable.ErrInvalid)
+			}
+			dataRoot, previous = data.Locator, true
+			installed, client = installation, c
+		}
+	}
+	if !previous {
+		if req.CursorAuthority == nil {
+			return deny(portable.ErrInvalid)
+		}
+		dataRoot = req.CursorAuthority.Selector
+	}
+	id := portablesetup.Identity{InstallationID: req.InstallationID, ComponentID: snapshot.Ledger.ID, Owner: snapshot.Ledger.Owner, ScopeRoot: req.CursorConfig, ControlRoot: req.ControlRoot, GlobalConfig: req.GlobalConfig, RuntimeRoot: req.RuntimeRoot, Primary: primary}
+	binding, err := portablesetup.Complete(id, portable.Cursor, "cursor", reserved.Scope, reserved.TargetPath, dataRoot)
+	if err != nil || binding.BindingID != reserved.BindingID {
+		return deny(portable.ErrInvalid)
+	}
+	if previous {
+		committed, found, e := portable.ResolveCommittedBinding(snapshot.Ledger, binding)
+		if e != nil {
+			return deny(portable.ErrInvalid)
+		}
+		var fixed cursorinstall.Authority
+		if found {
+			_, fixed, e = cursorInstalledInputs(ctx, committed, snapshot, cfg.StateRoot)
+		} else {
+			fixed, e = cursorPendingHandoff(binding, snapshot, cfg, installed, client, pendingIntent)
+		}
+		if e != nil || fixed.QualificationID != cursorP1Qualification {
+			return deny(portable.ErrInvalid)
+		}
+		req.CursorAuthority = &fixed
+		if pendingIntent != nil && req.Action != setupwizard.ActionUninstall {
+			// The committed source is usable only if it is this exact candidate;
+			// an acknowledged A cannot stand in for a frozen update B.
+			if req.PackageRoot == "" && pendingIntent.TreeDigest != "" && installed.Source.TreeDigest == pendingIntent.TreeDigest {
+				req.PackageRoot = installed.Source.CanonicalSource
+			}
+		}
+	} else {
+		name, e := binding.Filename()
+		if e != nil {
+			return deny(e)
+		}
+		req.CursorAuthority.ProfileRoot, req.CursorAuthority.Executable = req.CursorConfig, observer
+		req.CursorAuthority.ExecutableDigest = "sha256:" + snapshot.Ledger.Files[observer].SHA256
+		req.CursorAuthority.Selector = filepath.Join(binding.DataRoot, name)
+	}
+	return req, cfg, previous, cleanup, nil
+}
+
+// This admits only the public pre-native first handoff. It does not grant
+// installed delivery eligibility or synthesize a runtime consumer.
+func cursorPendingHandoff(b portable.Binding, snap installruntime.InstalledSnapshot, cfg uapinstaller.Config, installation domain.Installation, c domain.ClientBinding, intent *portablesetup.Intent) (cursorinstall.Authority, error) {
+	deny := func() (cursorinstall.Authority, error) { return cursorinstall.Authority{}, portable.ErrInvalid }
+	if intent == nil || intent.Action != "install" || intent.Stage != "confirmed" || intent.ExpectedGeneration+1 != snap.Ledger.Generation || len(intent.Targets) != 1 || b.CheckPrimaryFile(snap) != nil || installation.NeedsRebind ||
+		c.ClientBindingID != b.BindingID || c.ClientBindingID != domain.ComputeClientBindingID(b.InstallationID, c.ClientID, c.Scope, c.TargetLocator) || c.ClientID != "cursor" || c.Scope != b.ScopeID || c.NativeProfileRoot != b.ScopeRoot || c.ProfileNamespace != cfg.StateRoot || c.ProfileAuthority == nil || c.ProfileAuthority.IsZero() || c.ProfileAuthority.Facts().CanonicalRoot != b.ScopeRoot ||
+		c.PendingNativeIntent != nil || c.NativeActivationAttempt != "" || c.Activation != domain.ActivationPrepared || c.Verification != domain.VerificationPackageValid || c.Materialization != domain.MaterializationMaterialized || c.SelectedDelivery.ValidateClient(domain.ClientCursor) != nil {
+		return deny()
+	}
+	target, data := intent.Targets[0], installation.DataReceipts[c.DataReceiptID]
+	if target.OldBinding != nil || target.NewBinding != nil || target.OldConsumerKey != "" || target.NewConsumerKey != "" || target.DataReceiptID != "" && target.DataReceiptID != c.DataReceiptID || data.DataReceiptID != c.DataReceiptID || data.PhysicalBackend != c.PhysicalArtifact || data.State != domain.DataReceiptOwned || data.Locator != b.DataRoot || intent.Primary != b.Primary || intent.GlobalConfig != b.GlobalConfig || intent.TreeDigest != installation.Source.TreeDigest {
+		return deny()
+	}
+	for _, object := range c.NativeObjects {
+		if object.Kind != "managed_package_directory" || object.CursorReceipt != (domain.CursorHookReceipt{}) {
+			return deny()
+		}
+	}
+	facts, ok := c.SelectedDelivery.CursorFacts()
+	name, err := b.Filename()
+	observer, e := portable.ResolvePrimaryExecutable(snap.Ledger, b.Primary)
+	if !ok || err != nil || e != nil || c.SelectedDelivery.Validate() != nil || facts.CanonicalDigest != intent.TreeDigest || facts.ProfileRoot != b.ScopeRoot || facts.Selector != filepath.Join(b.DataRoot, name) || facts.Executable != observer {
+		return deny()
+	}
+	return cursorinstall.Authority{ProfileRoot: facts.ProfileRoot, CursorVersion: facts.CursorVersion, QualificationID: facts.QualificationID, Executable: observer, ExecutableDigest: "sha256:" + snap.Ledger.Files[observer].SHA256, Selector: facts.Selector, ObjectID: facts.ObjectID}, nil
+}
+
+// A narrow filter for the supplied Ubuntu24.04.5/6.17.0-1022-azure/ext4 P1
+// observation. Mount metadata only limits evidence scope; UUID/inode authority
+// comes exclusively from public complete-ancestry Capture/Revalidate.
+func cursorQualifiedNamespace(profile string) error {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		return setupwizard.ErrRefused
+	}
+	kernel, err := os.ReadFile("/proc/sys/kernel/osrelease")
+	if err != nil || strings.TrimSpace(string(kernel)) != "6.17.0-1022-azure" {
+		return setupwizard.ErrRefused
+	}
+	osRelease, err := os.ReadFile("/etc/os-release")
+	if err != nil || !strings.Contains("\n"+string(osRelease), "\nID=ubuntu\n") || !strings.Contains(string(osRelease), `VERSION="24.04.5 LTS`) {
+		return setupwizard.ErrRefused
+	}
+	mounts, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil || len(mounts) > 1<<20 {
+		return setupwizard.ErrRefused
+	}
+	decode := strings.NewReplacer(`\040`, " ", `\011`, "\t", `\012`, "\n", `\134`, `\`)
+	for path := profile; ; path = filepath.Dir(path) {
+		longest, fs := -1, ""
+		for _, row := range strings.Split(string(mounts), "\n") {
+			left, right, ok := strings.Cut(row, " - ")
+			fields, kind := strings.Fields(left), strings.Fields(right)
+			if !ok || len(fields) < 6 || len(kind) < 3 {
+				continue
+			}
+			mount := decode.Replace(fields[4])
+			if (mount == "/" || path == mount || strings.HasPrefix(path, mount+"/")) && len(mount) > longest {
+				longest, fs = len(mount), kind[0]
+			}
+		}
+		if fs != "ext4" {
+			return setupwizard.ErrRefused
+		}
+		if path == "/" {
+			return nil
+		}
+	}
+}
+
+func cursorCallerDeclaredName(root string) string {
+	var body []byte
+	var err error
+	if strings.EqualFold(filepath.Ext(root), ".zip") {
+		archive, e := zip.OpenReader(root)
+		if e != nil {
+			return ""
+		}
+		defer func() { _ = archive.Close() }()
+		file, e := archive.Open("plugin.json")
+		if e != nil {
+			return ""
+		}
+		defer func() { _ = file.Close() }()
+		body, err = io.ReadAll(io.LimitReader(file, (1<<20)+1))
+	} else {
+		body, err = os.ReadFile(filepath.Join(root, "plugin.json"))
+	}
+	var manifest struct {
+		Name string `json:"name"`
+	}
+	if err != nil || len(body) > 1<<20 || json.Unmarshal(body, &manifest) != nil {
+		return ""
+	}
+	return manifest.Name
 }

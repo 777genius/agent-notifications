@@ -17,6 +17,7 @@ import (
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/claude"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/codex"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/cursor"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/gemini"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/opencode"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/opencodeplugin"
@@ -113,6 +114,18 @@ func productScopes(a setupProductsArgs, e productEnvironment) (map[string]string
 	scopes["gemini-config-root"], err = geminiinstall.ResolveConfigRoot(geminiinstall.Request{HomeDir: e.Home, GeminiHome: parent, ConfigRoot: a.Scopes["gemini-config-root"]})
 	if err != nil {
 		return nil, err
+	}
+	if profile := a.Scopes["scope-root"]; profile != "" {
+		scopes["scope-root"], err = cursor.New().ResolveProfileRoot(profile)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if agent := a.Scopes["client-executable"]; agent != "" {
+		scopes["client-executable"], err = normalizeProductExecutable(agent)
+		if err != nil {
+			return nil, err
+		}
 	}
 	for _, id := range productOrder {
 		if p := a.Scopes[id+"-executable"]; p != "" {
@@ -215,6 +228,27 @@ func discoverProductsWithDetector(ctx context.Context, a setupProductsArgs, e pr
 	for _, id := range productOrder {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
+		}
+		if id == "cursor" {
+			// Editor detection/version cannot describe the separate agent CLI.
+			f := productFact{ID: id, Label: productLabels[id], Profile: scopes["scope-root"], Selectable: runtime.GOOS == "linux" && runtime.GOARCH == "amd64"}
+			if scopes["scope-root"] == "" || scopes["client-executable"] == "" {
+				f.Selectable, f.Reason = false, "explicit --scope-root and --client-executable required"
+			}
+			p := scopes["client-executable"]
+			if p == "" {
+				p, err = lookupProductExecutable("cursor-agent", e)
+			}
+			if err == nil {
+				p, err = normalizeProductExecutable(p)
+			}
+			if err == nil {
+				f.Present, f.Executable = true, p
+			} else {
+				f.Reason = "Cursor agent not found in selected PATH"
+			}
+			facts = append(facts, f)
+			continue
 		}
 		key := id + "-config-dir"
 		switch id {

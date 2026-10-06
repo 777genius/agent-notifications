@@ -31,7 +31,7 @@ func TestSetupProductsSelect(t *testing.T) {
 		{"empty", "\n", "", 0},
 		{"closed", "", "", 1},
 		{"duplicate", "1,claude\n", "", 1},
-		{"unknown", "5\n", "", 1},
+		{"unknown", "6\n", "", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var selected, prompts bytes.Buffer
@@ -88,7 +88,11 @@ func TestSetupProductsAllSubsets(t *testing.T) {
 func TestSetupProductsDiscoveryIsReadOnly(t *testing.T) {
 	e, a := setupProductsDiscoveryFixture(t)
 	for _, id := range productOrder {
-		path := filepath.Join(e.PATH, fixtureProductName(id))
+		name := id
+		if id == "cursor" {
+			name = "cursor-agent"
+		}
+		path := filepath.Join(e.PATH, fixtureProductName(name))
 		if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf executed > \""+filepath.Join(e.Home, "EXECUTED")+"\"\n"), 0700); err != nil {
 			t.Fatal(err)
 		}
@@ -105,7 +109,7 @@ func TestSetupProductsDiscoveryIsReadOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, f := range facts {
-		if !f.Present || !f.Selectable {
+		if !f.Present || f.ID != "cursor" && !f.Selectable {
 			t.Fatalf("usable TEST CLI excluded: %+v", f)
 		}
 	}

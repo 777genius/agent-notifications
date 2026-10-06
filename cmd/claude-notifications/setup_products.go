@@ -94,7 +94,9 @@ func runSetupProductsContext(ctx context.Context, args []string, input io.Reader
 				label := f.Label
 				if f.Present {
 					label += " (CLI present)"
-					defaults = append(defaults, f.ID)
+					if f.ID != "cursor" {
+						defaults = append(defaults, f.ID)
+					}
 				} else {
 					label += " (CLI not found in selected PATH)"
 				}
