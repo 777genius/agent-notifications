@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { randomUUID, createHash } from 'node:crypto';
 import { mkdirSync, copyFileSync, realpathSync, writeFileSync, readFileSync, statSync, createReadStream } from 'node:fs';
 import { open } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 type Json = Record<string, unknown>;
 const sourceURL = 'https://persistent.oaistatic.com/codex-app-prod/ChatGPT-arm64.msix';
@@ -309,7 +309,7 @@ async function manifestFixture(powershell: string): Promise<void> {
     stdoutSHA256: createHash('sha256').update(bytes).digest('hex') });
   if (downloaded.error || downloaded.signal || downloaded.status !== 0 || bytes.length !== 232904
       || createHash('sha256').update(bytes).digest('hex') !== archiveSHA) throw new Error('fixed artifact download incomplete');
-  const pwsh = realpathSync(process.env.NAVIGATION_DIAGNOSTIC_PWSH ?? '');
+  const pwsh = powershell;
   evidence.fixtureExtractorSHA256 = await hash(pwsh);
   // Exact five-member digest-bound ZIP. Extract only three inert inputs, never its executable.
   execute('fixture-extract', pwsh, ['-NoProfile', '-NonInteractive', '-Command', String.raw`
@@ -382,7 +382,20 @@ async function main(): Promise<void> {
   mkdirSync(root, { recursive: false });
   writeFileSync(join(root, '.owned-test-root'), `TEST navigation Windows ${nonce}\n`, { flag: 'wx' });
   evidence.nonce = nonce;
-  const powershell = join(process.env.SystemRoot ?? '', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const powershell = native ? '' : realpathSync(process.env.NAVIGATION_DIAGNOSTIC_PWSH ?? '');
+  if (!native) {
+    if (basename(powershell).toLowerCase() !== 'pwsh.exe' || !statSync(powershell).isFile()) throw new Error('explicit installed PowerShell7 executable required');
+    evidence.manifestRuntime = { kind: 'installed PowerShell7 TEST interpreter', executable: powershell, sha256: await hash(powershell) };
+    const runtimeStep = execute('manifest-runtime', powershell, ['-NoProfile', '-NonInteractive', '-Command',
+      `$ErrorActionPreference='Stop';[ordered]@{pid=$PID;nonce=$env:NAVIGATION_MANIFEST_NONCE;`
+      + `edition=$PSVersionTable.PSEdition;version=$PSVersionTable.PSVersion.ToString();`
+      + `executable=[Diagnostics.Process]::GetCurrentProcess().MainModule.FileName}|ConvertTo-Json -Compress`], 15000);
+    const runtime = JSON.parse(runtimeStep.stdout.replace(/^\uFEFF/, '').trim()) as Json;
+    if (runtime.pid !== runtimeStep.pid || runtime.nonce !== nonce || runtime.edition !== 'Core'
+        || typeof runtime.version !== 'string' || !/^7\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(runtime.version)
+        || typeof runtime.executable !== 'string' || realpathSync(runtime.executable) !== powershell) throw new Error('actual PowerShell7 runtime correlation failed');
+    (evidence.manifestRuntime as Json).observed = runtime;
+  }
   if (fixture) { await manifestFixture(powershell); return; }
   const binary = join(root, 'navigation-native-probe.exe'); copyFileSync(realpathSync(args[native ? 1 : 0] ?? ''), binary);
   const signtool = realpathSync(args[native ? 2 : 1] ?? '');
