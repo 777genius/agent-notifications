@@ -332,7 +332,7 @@ struct SurfaceScan {
     std::vector<BYTE> user;
     std::wstring windows;
     unsigned visited = 0, errors = 0, count = 0;
-    bool truncated = false;
+    bool truncated = false, enumerationCompleted = false;
     ULONGLONG deadline = 0;
     std::string rows;
     SurfaceOwner* owner(DWORD pid) {
@@ -357,9 +357,10 @@ struct SurfaceScan {
     }
     static BOOL CALLBACK visit(HWND window, LPARAM context) noexcept {
         auto& scan = *reinterpret_cast<SurfaceScan*>(context);
-        if (++scan.visited > 128 || scan.count >= 16 || GetTickCount64() >= scan.deadline) {
+        if (scan.visited >= 128 || scan.count >= 16 || GetTickCount64() >= scan.deadline) {
             scan.truncated = true; return FALSE;
         }
+        ++scan.visited;
         try {
             DWORD pid = 0; GetWindowThreadProcessId(window, &pid);
             auto held = pid ? scan.owner(pid) : nullptr;
@@ -379,8 +380,8 @@ struct SurfaceScan {
     }
     std::string snapshot() {
         visited = errors = count = 0; truncated = false; rows.clear(); deadline = GetTickCount64() + 2000;
-        BOOL completed = EnumWindows(visit, reinterpret_cast<LPARAM>(this));
-        return "{\"enumerationCompleted\":" + std::string(completed ? "true" : "false")
+        enumerationCompleted = EnumWindows(visit, reinterpret_cast<LPARAM>(this)) != FALSE;
+        return "{\"enumerationCompleted\":" + std::string(enumerationCompleted ? "true" : "false")
             + ",\"truncated\":" + (truncated ? "true" : "false") + ",\"errors\":" + std::to_string(errors)
             + ",\"visited\":" + std::to_string(visited) + ",\"windows\":[" + rows + "]}";
     }
@@ -393,10 +394,19 @@ static bool centerSurface() {
     scan.windows.assign(windows, size); scan.user = tokenUser(GetCurrentProcess());
     std::transform(scan.windows.begin(), scan.windows.end(), scan.windows.begin(), [](wchar_t c) { return std::towlower(c); });
     const auto before = scan.snapshot(), beforeRows = scan.rows;
+    report("center-surface-before.json", "{\"pid\":" + std::to_string(GetCurrentProcessId())
+        + ",\"nonce\":" + jsonQuote(uuid) + ",\"showAttempts\":0,\"snapshot\":" + before + "}\n");
     DWORD shellPid = 0; GetWindowThreadProcessId(GetShellWindow(), &shellPid);
     auto shell = shellPid ? scan.owner(shellPid) : nullptr;
-    if (!shell || !shell->live() || scan.truncated || !preflight("surface-preflight.json"))
-        throw std::runtime_error("fresh owned Shell/input desktop prerequisite unavailable");
+    const bool shellLive = shell && shell->live(), scanComplete = scan.enumerationCompleted && !scan.truncated;
+    const bool desktopReady = preflight("surface-preflight.json");
+    if (!shellLive || !scanComplete || !desktopReady) {
+        report("center-surface-rejected.json", "{\"pid\":" + std::to_string(GetCurrentProcessId())
+            + ",\"nonce\":" + jsonQuote(uuid) + ",\"showAttempts\":0,\"inputAttempted\":false"
+            + ",\"shellLive\":" + (shellLive ? "true" : "false") + ",\"scanComplete\":" + (scanComplete ? "true" : "false")
+            + ",\"desktopReady\":" + (desktopReady ? "true" : "false") + "}\n");
+        return false;
+    }
     for (int key : {VK_LWIN, VK_RWIN, static_cast<int>('N'), VK_SHIFT, VK_CONTROL, VK_MENU}) {
         if (GetAsyncKeyState(key) & 0x8000) throw std::runtime_error("existing key press; no input injected");
     }

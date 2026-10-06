@@ -138,13 +138,18 @@ async function main(): Promise<void> {
       evidence.scope = 'Windows TEST single Win+N Shell surface diagnostic, no native Show';
       evidence.inputEffectUncertain = true;
       const surfaceStep = run('center-surface', 15_000);
-      for (const name of ['surface-preflight.json', 'center-surface-intent.json', 'center-surface.json']) {
+      for (const name of ['surface-preflight.json', 'center-surface-before.json', 'center-surface-rejected.json', 'center-surface-intent.json', 'center-surface.json']) {
         if (existsSync(join(root, name))) {
           const record = read(name); evidence[name] = record;
           if (record.pid !== surfaceStep.pid || record.nonce !== nonce) throw new Error('surface report correlation invalid');
         }
       }
       const surface = evidence['center-surface.json'] as Json | undefined;
+      const rejected = evidence['center-surface-rejected.json'] as Json | undefined;
+      if (surfaceStep.status === 3 && !surfaceStep.error && !surfaceStep.signal && rejected?.inputAttempted === false
+          && rejected.showAttempts === 0 && !evidence['center-surface-intent.json'] && !surface) {
+        evidence.inputEffectUncertain = false; evidence.noInputProved = true; evidence.status = 'unavailable';
+      }
       if (surface && surface.pid === surfaceStep.pid && surface.nonce === nonce
           && typeof surface.keyReleaseUnknown === 'boolean') evidence.inputEffectUncertain = surface.keyReleaseUnknown;
       requireSuccess(surfaceStep);
