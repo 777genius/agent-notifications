@@ -142,7 +142,7 @@ jobs:
         with:
           name: binaries-${{ matrix.platform }}-${{ matrix.arch }}
           path: dist/*
-          retention-days: 1
+          retention-days: 14
 
   create-release:
     name: Prepare draft GitHub Release

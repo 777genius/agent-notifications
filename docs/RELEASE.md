@@ -161,6 +161,15 @@ reader observations must pass semantic validation before the unchanged installed
 cells. This path does not qualify the full native clock, source epoch, time
 policy, platform lifetime or visible desktop delivery; the full/smoke denial
 gate remains unchanged. Retain the original failure and all raw recovery reports.
+If only Windows fails, use `windows-two` to repeat those two cells. The Windows
+recovery checks the original executable's uniquely embedded CRLF bundle against
+the canonical LF Git asset through an exact, pinned LF-to-CRLF transform, then
+checks installed raw bytes and the real ownership hash after setup, update and
+reinstall. This separate platform render receipt does not change the sealed
+canonical source hashes or qualify the full native gate.
+
+The v1.48.0 package qualification helper accepts lightweight release tags only;
+annotated tags fail closed before any package execution.
 
 Same-run custody explicitly selects `--scope linux-windows` and seals only those
 seven cells. The general fixture still requires all eleven cells by default;

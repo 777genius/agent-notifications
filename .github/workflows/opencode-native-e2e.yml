@@ -27,7 +27,7 @@ on:
       recovery_cells:
         description: 'Fresh primitive and business evidence scope, only for release-recovery'
         type: choice
-        options: [first-linux-amd64-v2, all-seven]
+        options: [first-linux-amd64-v2, windows-two, all-seven]
         default: first-linux-amd64-v2
         required: true
 # Only a newer run for the same PR supersedes its checks.
@@ -163,10 +163,12 @@ jobs:
       AN_ARCH: ${{ matrix.target.arch }}
       AN_VERSION: ${{ matrix.version }}
     steps:
-      - name: Preserve exact Git bytes before Windows source checkout
+      - name: Preserve canonical LF Git bytes before both Windows checkouts
         if: runner.os == 'Windows'
         working-directory: ${{ github.workspace }}
-        run: git config --global core.autocrlf false
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.recovery-inputs.outputs.candidate_sha }}
@@ -264,5 +266,16 @@ jobs:
           name: opencode-release-clock-raw-${{ matrix.target.platform }}-${{ matrix.target.arch }}-${{ matrix.version }}
           path: ${{ steps.primitives.outputs.clock_temp_base }}/
           include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v7
+        if: always() && runner.os == 'Windows'
+        with:
+          name: opencode-release-recovery-summary-${{ matrix.target.platform }}-${{ matrix.target.arch }}-${{ matrix.version }}
+          path: |
+            source/.task-tools/artifacts/native-report.json
+            source/.task-tools/artifacts/primitives/clock-report.json
+            source/.task-tools/artifacts/primitives/reader-report.json
+            source/.task-tools/artifacts/primitives/sealed/
           if-no-files-found: error
           retention-days: 14

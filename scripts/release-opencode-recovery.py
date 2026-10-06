@@ -18,6 +18,66 @@ import subprocess
 import sys
 import tempfile
 
+WINDOWS_CANDIDATE = '2692f443a3834c6e4090176d478e69faa684bca0'
+WINDOWS_MANIFEST_SHA = '9d7b0d19674838433118f74d6bf2f234af6ef70a17bb6e1c8126798a35a6ce09'
+WINDOWS_PARENT_SHA = '1bcaf1704a8ee7b5bf6d4cd2fc301a74cfdc0a8711340977e650661640d21411'
+WINDOWS_BINARY_SHA = '0e58577e9b85a90a318eb617efaf3dd9a652e31f077ab53ec7a7041cbc88fe62'
+WINDOWS_SOURCE_SHA = '671fea533825aa6fe0f55299871dafbbbcd61cb3f2b88ab783c4274d986e8774'
+WINDOWS_EMBEDDED_SHA = '331e553109046ef935a9eff031073171587efe6ea837f7b846d5847d5f7a16c1'
+WINDOWS_EMBEDDED_OFFSET = 14257777
+
+
+def windows_release_bindings(candidate, manifest, parent, binary):
+    require((candidate, manifest, parent, binary) ==
+            (WINDOWS_CANDIDATE, WINDOWS_MANIFEST_SHA, WINDOWS_PARENT_SHA, WINDOWS_BINARY_SHA),
+            'original_windows_release_custody_required')
+
+
+def windows_embedded_asset(canonical, image):
+    require(len(canonical) == 176304 and canonical.count(b'\r') == 0 and
+            canonical.count(b'\n') == 4206 and hashlib.sha256(canonical).hexdigest() == WINDOWS_SOURCE_SHA,
+            'pinned_canonical_lf_asset_required')
+    embedded = canonical.replace(b'\n', b'\r\n')
+    require(len(embedded) == 180510 and hashlib.sha256(embedded).hexdigest() == WINDOWS_EMBEDDED_SHA and
+            embedded.replace(b'\r\n', b'\n') == canonical, 'pinned_windows_crlf_transform_required')
+    require(image.count(embedded) == 1 and image.find(embedded) == WINDOWS_EMBEDDED_OFFSET and
+            canonical not in image, 'unique_original_windows_embed_required')
+    return embedded
+
+
+def windows_registration_oracle(original, embedded, receipts):
+    class OriginalEmbeddedAsset:
+        def read_text(self):
+            return embedded.decode('utf8')  # Raw CRLF; no universal newline decoding.
+
+    def registration(root, plugin, managed, _canonical_asset):
+        require(hashlib.sha256(_canonical_asset.read_bytes()).hexdigest() == WINDOWS_SOURCE_SHA,
+                'canonical_asset_changed_before_registration')
+        require(re.fullmatch('TEST-installed-[a-f0-9]{24}', root.name), 'owned_TEST_registration_required')
+        for path in (managed, root / 'control'):
+            value = str(path)
+            require(path.is_absolute() and 0 < len(value) <= 512 and
+                    all(32 <= ord(c) <= 126 for c in value) and '"__AGENT_NOTIFICATIONS_' not in value,
+                    'bounded_ascii_go_quote_paths_required')
+        ledger = json.loads((root / 'control/ownership.json').read_text())
+        actual = ledger['Consumers']['opencode-notifications']['OpenCode']
+        require(actual['OriginBound'] is True and all(re.fullmatch('[a-f0-9]{64}', actual[k])
+                for k in ('Origin', 'Salt', 'Namespace', 'BundleSHA256')), 'actual_origin_bound_registration_required')
+        result = original(root, plugin, managed, OriginalEmbeddedAsset())
+        require(result == actual, 'registration_changed_during_render_check')
+        require(len(receipts) < 3, 'extra_registration_observation')
+        receipts.append({'phase': ('install', 'update', 'reinstall')[len(receipts)],
+                         'canonicalGitAssetSHA256': WINDOWS_SOURCE_SHA,
+                         'platformEmbeddedSHA256': WINDOWS_EMBEDDED_SHA,
+                         'binarySHA256': WINDOWS_BINARY_SHA, 'embeddedOffset': WINDOWS_EMBEDDED_OFFSET,
+                         'embeddedBytes': len(embedded), 'transform': 'exact LF to CRLF',
+                         'renderedInstalledSHA256': result['BundleSHA256'],
+                         'actualLedgerBundleSHA256': result['BundleSHA256'],
+                         'origin': result['Origin'], 'originBound': True, 'rawInstalledEquality': True})
+        return result
+
+    return registration
+
 
 def require(ok, code):
     if not ok:
@@ -36,7 +96,7 @@ def bindings():
 
 def recovery_matrix(scope=None):
     scope = os.environ.get('AN_RECOVERY_CELLS', '') if scope is None else scope
-    require(scope in ('first-linux-amd64-v2', 'all-seven'), 'explicit_recovery_cells_required')
+    require(scope in ('first-linux-amd64-v2', 'windows-two', 'all-seven'), 'explicit_recovery_cells_required')
     targets = [
         {'runner': 'ubuntu-22.04', 'platform': 'linux', 'arch': 'amd64',
          'binary': 'claude-notifications-linux-amd64'},
@@ -49,6 +109,8 @@ def recovery_matrix(scope=None):
     cells.append({'version': '1.18.34', 'target': targets[0]})
     if scope == 'first-linux-amd64-v2':
         cells = [cell for cell in cells if cell['target'] == targets[0] and cell['version'] == '2.0.21']
+    elif scope == 'windows-two':
+        cells = [cell for cell in cells if cell['target'] == targets[2]]
     return {'include': cells}
 
 
@@ -83,13 +145,75 @@ def self_test():
     expected = {(o, a, v) for o, a in (('linux', 'amd64'), ('linux', 'arm64'), ('windows', 'amd64'))
                 for v in ('1.18.33', '2.0.21')} | {('linux', 'amd64', '1.18.34')}
     require(len(all_cells) == 7 and actual == expected, 'all_seven_recovery_cell_scope')
+    windows = recovery_matrix('windows-two')['include']
+    expected_windows = [{'version': version, 'target': {
+        'runner': 'windows-latest', 'platform': 'windows', 'arch': 'amd64',
+        'binary': 'claude-notifications-windows-amd64.exe'}} for version in ('1.18.33', '2.0.21')]
+    require(windows == expected_windows, 'exact_two_windows_recovery_cell_scope')
     try:
         recovery_matrix('all-eleven')
     except ValueError:
         pass
     else:
         raise AssertionError('unknown recovery scope accepted')
+    windows_adapter_self_test()
     print('PASS fresh namespace, valid identities and loopback-only boundary')
+
+
+def windows_adapter_self_test():
+    # Inert byte/ledger fixtures only: no Go binary, installer or native host.
+    source = pathlib.Path(__file__).resolve().parents[1] / 'internal/opencodeplugin/dist/agent-notifications.js'
+    canonical = source.read_bytes()
+    embedded = canonical.replace(b'\n', b'\r\n')
+    prefix = b'\x00' * WINDOWS_EMBEDDED_OFFSET
+    image = prefix + embedded + b'\x00'
+    require(windows_embedded_asset(canonical, image) == embedded, 'actual_crlf_fixture')
+
+    def rejected(operation):
+        try:
+            operation()
+        except (ValueError, fixture.Unqualified):
+            return
+        raise AssertionError('unsafe_windows_render_custody_accepted')
+
+    spec = importlib.util.spec_from_file_location('inert_registration_oracle', source.parents[3] / 'scripts/opencode-native-e2e.py')
+    fixture = importlib.util.module_from_spec(spec); spec.loader.exec_module(fixture)
+    for bad_source, bad_image in ((embedded, image), (canonical + b'x', image),
+                                  (canonical, prefix + canonical), (canonical, image + embedded),
+                                  (canonical, b'\x00' + image),
+                                  (canonical, prefix + b'x' + embedded[1:])):
+        rejected(lambda: windows_embedded_asset(bad_source, bad_image))
+    pins = [WINDOWS_CANDIDATE, WINDOWS_MANIFEST_SHA, WINDOWS_PARENT_SHA, WINDOWS_BINARY_SHA]
+    for index in range(4):
+        altered_pins = list(pins); altered_pins[index] = '0' * len(pins[index])
+        rejected(lambda: windows_release_bindings(*altered_pins))
+    with tempfile.TemporaryDirectory(prefix='TEST-recovery-render-') as temp:
+        root = pathlib.Path(temp) / ('TEST-installed-' + 'a' * 24)
+        (root / 'control').mkdir(parents=True)
+        plugin, managed = root / 'installed.js', root / 'runtime/claude-notifications-windows-amd64.exe'
+        record = dict(Origin='1' * 64, Salt='2' * 64, Namespace='3' * 64, OriginBound=True)
+        rendered = embedded.decode()
+        for key, value in {'EXECUTABLE': str(managed), 'CONTROL_ROOT': str(root / 'control'), 'ORIGIN': record['Origin']}.items():
+            rendered = rendered.replace('"__AGENT_NOTIFICATIONS_' + key + '__"', json.dumps(value, ensure_ascii=False))
+        actual = rendered.encode(); record['BundleSHA256'] = hashlib.sha256(actual).hexdigest()
+        ledger = root / 'control/ownership.json'
+
+        def stage(registration, installed):
+            ledger.write_text(json.dumps({'Consumers': {'opencode-notifications': {'OpenCode': registration}}}))
+            plugin.write_bytes(installed)
+
+        receipts = []; oracle = windows_registration_oracle(fixture.registration, embedded, receipts)
+        stage(record, actual)
+        require(oracle(root, plugin, managed, source) == record and len(receipts) == 1, 'raw_crlf_registration_oracle')
+        for altered, installed in ((dict(record, Origin='f' * 64), actual),
+                                   (dict(record, Origin='bad'), actual),
+                                   (dict(record, BundleSHA256='0' * 64), actual),
+                                   (dict(record, BundleSHA256=hashlib.sha256(actual.replace(b'\r\n', b'\n')).hexdigest()),
+                                    actual.replace(b'\r\n', b'\n'))):
+            stage(altered, installed)
+            rejected(lambda: oracle(root, plugin, managed, source))
+        require(len(receipts) == 1, 'failed_render_must_not_emit_positive_receipt')
+    print('PASS pinned LF/CRLF bytes, unique embed and raw origin-bound registration mutations')
 
 
 def github_json(endpoint, paginate=False):
@@ -243,6 +367,13 @@ def qualify(execute_native, prepare=False):
     else:
         require(sys.platform == 'win32', 'actual_windows_fixture_required')
         metadata['recoveryNetworkIsolation'] = False
+        image = binary.read_bytes()
+        windows_release_bindings(candidate_sha, manifest_sha, parent_sha, hashlib.sha256(image).hexdigest())
+        embedded = windows_embedded_asset(files['embedded'].read_bytes(), image)
+        del image
+        receipts = metadata['recoveryWindowsRenderCustody'] = []
+        metadata.update(canonicalGitAssetSHA256=WINDOWS_SOURCE_SHA, platformEmbeddedSHA256=WINDOWS_EMBEDDED_SHA)
+        r.registration = windows_registration_oracle(r.registration, embedded, receipts)
     proof, proof_sha = fresh_business_proof(repo, manifest, manifest_sha, run,
                                           parent_sha, (os_name, arch, version), r)
     metadata.update(recoveryObservationScope='installed_business_only',
@@ -260,6 +391,8 @@ def qualify(execute_native, prepare=False):
         sys.argv += ['--receiver-record', str(inputs.artifacts / 'receiver-record.json')]
     code = r.main()
     result = json.loads(report.read_text())
+    if os_name == 'windows' and code == 0:
+        require(len(metadata['recoveryWindowsRenderCustody']) == 3, 'three_actual_registration_receipts_required')
     result.update(metadata)
     r.write_json(report, result)
     return code
