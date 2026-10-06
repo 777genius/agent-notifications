@@ -78,6 +78,12 @@ jobs:
             binary: claude-notifications-windows-amd64.exe
 
     steps:
+      - name: Preserve canonical source bytes on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
       - name: Checkout code
         uses: actions/checkout@v7
         with:
@@ -211,6 +217,12 @@ jobs:
             binary: claude-notifications-windows-amd64.exe
 
     steps:
+      - name: Preserve canonical source bytes on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
       - name: Checkout artifact qualification tests
         uses: actions/checkout@v7
         with:
@@ -358,6 +370,12 @@ jobs:
       AN_VERSION: ${{ matrix.version }}
       MAIN_BINARY: ${{ matrix.target.binary }}
     steps:
+      - name: Preserve canonical source bytes on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
       - uses: actions/checkout@v7
         with:
           persist-credentials: false

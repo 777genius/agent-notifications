@@ -7,9 +7,13 @@ For a release that skips a platform, promote only its qualified
 rows and global Latest on the previously qualified version. Publish source
 branches before activating the immutable source SHAs in the channel index.
 
-v1.48.0 is a Linux amd64/arm64 and Windows amd64 partial release. macOS stays
+v1.48.1 is a Linux amd64/arm64 and Windows amd64 partial release. macOS stays
 on v1.46.1, and GitHub global Latest stays v1.46.1. There are no Darwin binaries,
-portable packages or ClaudeNotifier.app assets in v1.48.0.
+portable packages or ClaudeNotifier.app assets in v1.48.1.
+
+The earlier v1.48.0 draft and tag are retained unpublished: a repeated Windows
+clock tick exposed a floating-point admission-budget bug. v1.48.1 fixes it
+without extending the four-second limit; qualification must use the new binary.
 
 ## 0. Pre-release risk checklist
 
@@ -141,7 +145,7 @@ git push origin vX.Y.Z
 gh run watch                   # wait for release.yml to finish
 ```
 
-Before creating the v1.48.0 draft, `release.yml` checks the downloaded artifacts
+Before creating the v1.48.1 draft, `release.yml` checks the downloaded artifacts
 on three native targets with `scripts/release-artifact-e2e.py`: Linux amd64/arm64
 and Windows amd64. The workflow has no macOS build, signing or helper upload jobs.
 Artifact checks do not establish visible desktop banners.
@@ -153,7 +157,7 @@ release source and binary hashes bind the reports to the candidate. The checks
 cover completion delivery, managed update and revocation in disposable projects.
 They do not replace the broader semantic matrix or desktop delivery evidence.
 
-For immutable v1.48.0 artifacts, the `release-recovery` plan in
+For immutable v1.48.1 artifacts, the `release-recovery` plan in
 `opencode-native-e2e.yml` reuses the original release run rather than rebuilding.
 Run `first-linux-amd64-v2` before `all-seven`. Fresh finite clock and packaged
 reader observations must pass semantic validation before the unchanged installed
@@ -162,13 +166,14 @@ cells. This path does not qualify the full native clock, source epoch, time
 policy, platform lifetime or visible desktop delivery; the full/smoke denial
 gate remains unchanged. Retain the original failure and all raw recovery reports.
 If only Windows fails, use `windows-two` to repeat those two cells. The Windows
-recovery checks the original executable's uniquely embedded CRLF bundle against
-the canonical LF Git asset through an exact, pinned LF-to-CRLF transform, then
-checks installed raw bytes and the real ownership hash after setup, update and
-reinstall. This separate platform render receipt does not change the sealed
-canonical source hashes or qualify the full native gate.
+recovery verifies the original executable's unique canonical LF bundle, then
+uses the unchanged registration oracle to check installed raw bytes and the
+real ownership hash after setup, update and reinstall. The original Windows
+ACL helper uses verified prefetched modules with a private offline environment;
+it must successfully set the protected DACL. These preparation receipts do not
+qualify the full native gate.
 
-The v1.48.0 package qualification helper accepts lightweight release tags only;
+The v1.48.1 package qualification helper accepts lightweight release tags only;
 annotated tags fail closed before any package execution.
 
 Same-run custody explicitly selects `--scope linux-windows` and seals only those
@@ -212,11 +217,11 @@ After qualification, follow the owner's request for this release:
   materially changed after the request, obtain explicit owner approval for the final version
   before publishing. Approval for an earlier release does not carry forward.
 
-For v1.48.0, publish the qualified partial draft with:
+For v1.48.1, publish the qualified partial draft with:
 
 ```bash
-gh release edit v1.48.0 --draft=false --prerelease=false --latest=false
-gh release view v1.48.0 --json isDraft,isPrerelease,assets
+gh release edit v1.48.1 --draft=false --prerelease=false --latest=false
+gh release view v1.48.1 --json isDraft,isPrerelease,assets
 gh api repos/777genius/agent-notifications/releases/latest --jq .tag_name
 # Latest must still be v1.46.1.
 ```
@@ -252,7 +257,7 @@ The assets-before-main bump instructions above apply to a full-platform release.
 
 ## ClaudeNotifier.app (macOS)
 
-v1.48.0 does not build or publish ClaudeNotifier.app. macOS consumers retain the
+v1.48.1 does not build or publish ClaudeNotifier.app. macOS consumers retain the
 signed and notarized helper from their qualified v1.46.1 channel.
 
 A future macOS release must restore and qualify its signing/notarization job;
