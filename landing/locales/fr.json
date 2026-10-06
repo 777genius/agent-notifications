@@ -28,7 +28,7 @@
       "gemini": "Gemini CLI (Linux / Windows) : alertes silencieuses de tour terminé et de permission d’outil. Un tour terminé ne signifie ni réussite ni réponse finale. Sans son, focus au clic, questions, erreurs, plans, revues ni parité pour les agents imbriqués."
     },
     "gemini": {
-      "version": "Linux / Windows: 1.48.0 (Gemini CLI 0.62.0). macOS: 1.46.1 (Claude, Codex CLI, OpenCode; Gemini indisponible)",
+      "version": "Linux / Windows: 1.48.1 (Gemini CLI 0.62.0). macOS: 1.46.1 (Claude, Codex CLI, OpenCode; Gemini indisponible)",
       "guide": "Configuration et limites de Gemini",
       "configure": "Consultez le guide Gemini pour le consentement aux canaux et les réglages partagés ; aucun outil MCP ni skill installé. Les alertes intégrées peuvent faire doublon. Choisissez une source bureau ou uniquement les webhooks ; les réglages intégrés restent inchangés."
     },

@@ -646,7 +646,7 @@ test("manual instructions preserve legacy links and offer Gemini guidance", asyn
     await expect(page.getByRole("button", { name: "Gemini CLI", exact: true })).toBeEnabled();
     await chooseAgents(page, ["gemini"]);
     await expect(manual.getByRole("link", { name: "Gemini setup and limits", exact: true })).toBeVisible();
-    await expect(manual).toContainText("Linux / Windows: 1.48.0");
+    await expect(manual).toContainText("Linux / Windows: 1.48.1");
     await expect(page.getByLabel(intent + " command", { exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Copy command" })).toHaveCount(0);
   }
@@ -685,7 +685,7 @@ test("platform channels enable Gemini and reset unsupported selections", async (
   await page.goto("");
   for (const os of ["linux", "windows"] as const) {
     await chooseOS(page, os);
-    await expect(page.locator(".install-release-version")).toContainText("1.48.0");
+    await expect(page.locator(".install-release-version")).toContainText("1.48.1");
     await expect(page.getByRole("button", { name: "Gemini CLI", exact: true })).toBeEnabled();
     await chooseAgents(page, ["gemini"]);
     await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--product gemini --desktop$/);

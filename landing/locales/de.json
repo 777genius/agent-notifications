@@ -28,7 +28,7 @@
       "gemini": "Gemini CLI (Linux / Windows): lautlose Meldungen bei abgeschlossenem Dialogschritt und Werkzeugfreigabe. Ein abgeschlossener Schritt bedeutet weder Erfolg noch endgültige Antwort. Kein Ton, Klickfokus, Fragen-, Fehler-, Plan-, Review- oder gleichwertiger Unteragenten-Support."
     },
     "gemini": {
-      "version": "Linux / Windows: 1.48.0 (Gemini CLI 0.62.0). macOS: 1.46.1 (Claude, Codex CLI, OpenCode; Gemini nicht verfügbar)",
+      "version": "Linux / Windows: 1.48.1 (Gemini CLI 0.62.0). macOS: 1.46.1 (Claude, Codex CLI, OpenCode; Gemini nicht verfügbar)",
       "guide": "Gemini: Einrichtung und Grenzen",
       "configure": "Kanalzustimmung und gemeinsame Einstellungen stehen im Gemini-Leitfaden; kein MCP-Werkzeug oder Skill. Integrierte Meldungen können doppelt erscheinen. Eine Desktop-Quelle oder nur Webhooks wählen; integrierte Einstellungen bleiben erhalten."
     },
