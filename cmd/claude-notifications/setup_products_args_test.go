@@ -45,3 +45,47 @@ func TestSetupProductsNormalizedArguments(t *testing.T) {
 		})
 	}
 }
+
+// Regression: explicit Cursor selection is rejected, or its observer consent is
+// mistaken for Claude/Codex routing and silently expands a group apply.
+func TestSetupProductsCursorSelection(t *testing.T) {
+	root := t.TempDir()
+	for _, tc := range []struct {
+		products string
+		extra    []string
+		valid    bool
+	}{
+		{"cursor", nil, true}, {"cursor", []string{"--agent-notify"}, true},
+		{"cursor", []string{"--skip-agent-notify"}, true},
+		{"cursor", []string{"--desktop"}, true},
+		{"cursor", []string{"--webhook"}, true},
+		{"cursor", []string{"--desktop", "--webhook"}, true},
+		{"cursor", []string{"--navigation", "none"}, false},
+		{"claude,cursor", nil, false}, {"claude,codex", nil, true},
+	} {
+		args := append([]string{"confirm", "--products", tc.products}, tc.extra...)
+		if tc.products == "cursor" {
+			args = append(args, "--scope-root", root, "--client-executable", filepath.Join(root, "TEST-agent"))
+		}
+		r, err := parseSetupProducts(args)
+		if (err == nil) != tc.valid {
+			t.Fatalf("%v: %+v %v", args, r, err)
+		}
+		if tc.valid && tc.products == "cursor" && r.Configure.Route != nil {
+			t.Fatal("Cursor selection granted portable routing")
+		}
+	}
+}
+
+func TestCursorChannelQuestionRequiresOnlySingleSelection(t *testing.T) {
+	for _, extra := range [][]string{nil, {"--desktop"}, {"--agent-notify"}, {"--scope-root", t.TempDir(), "--client-executable", filepath.Join(t.TempDir(), "TEST-agent")}} {
+		args := append([]string{"channels", "--products", "cursor"}, extra...)
+		_, err := parseSetupProducts(args)
+		if (err == nil) != (extra == nil) {
+			t.Fatalf("%v: %v", args, err)
+		}
+	}
+	if _, err := parseSetupProducts([]string{"confirm", "--products", "cursor", "--desktop"}); err == nil {
+		t.Fatal("native choice bypassed explicit profile/executable")
+	}
+}

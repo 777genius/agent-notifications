@@ -1,7 +1,7 @@
 <p align="center">
-  <a href="https://777genius.github.io/agent-notifications/"><img src="brand/agent-notifications-logo-transparent.png" width="148" alt="Agent Notifications logo" /></a>
+  <a href="https://agent-notifications.com/"><img src="brand/agent-notifications-logo-transparent.png" width="148" alt="Agent Notifications logo" /></a>
 </p>
-<h1 align="center"><a href="https://777genius.github.io/agent-notifications/">Agent Notifications</a></h1>
+<h1 align="center"><a href="https://agent-notifications.com/">Agent Notifications</a></h1>
 
 <p align="center">
   <a href="#install-or-update"><img src="landing/public/agents/claude.png" width="64" height="64" alt="Claude" title="Claude" /></a>
@@ -30,10 +30,10 @@ Desktop notifications for **Claude, Codex CLI and OpenCode**, plus **Gemini CLI 
 
 ## Install Or Update
 
-**[Guided installer](https://777genius.github.io/agent-notifications/#install)** or run:
+**[Guided installer](https://agent-notifications.com/#install)** or run:
 
 ```bash
-curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash
+curl -fsSL https://agent-notifications.com/install.sh | bash
 ```
 
 Choose **Claude**, **Codex CLI**, **OpenCode**, **Gemini CLI** (Linux/Windows), or a combination. Install the selected agent CLIs first. Run the same command to update.
@@ -63,13 +63,13 @@ Run the command once to migrate a normal Claude marketplace installation to its 
 For Codex only:
 
 ```bash
-(set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product codex)
+(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --product codex)
 ```
 
 Use `--product claude` or `--product both` for Claude or Claude + Codex. For Claude, Codex and OpenCode on any supported platform:
 
 ```bash
-(set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --products claude,codex,opencode --desktop)
+(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --products claude,codex,opencode --desktop)
 ```
 
 On Linux/Windows, add `,gemini` to `--products` for all four agents, or use `--product gemini` for Gemini only. For OpenCode/Gemini, choose `--desktop`, `--webhook`, or both; webhook destinations need separate configuration. These flags do not change Claude/Codex channels.

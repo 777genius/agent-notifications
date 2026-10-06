@@ -55,8 +55,8 @@ test("production command matrix, aftercare, clipboard and configuration", async 
         const value = await page.getByLabel(intent + " command").inputValue();
         expect(value).toBe(
           product === "both"
-            ? "(set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --products claude,codex)"
-            : `curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product ${product}`,
+            ? "(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --products claude,codex)"
+            : `curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --product ${product}`,
         );
       }
       if (os === "windows")
@@ -505,7 +505,7 @@ test("released agents toggle independently, copied commands and configuration co
   await page.goto("");
   await chooseOS(page, "macos");
   const labels = { claude: "Claude", codex: "Codex CLI", opencode: "OpenCode", gemini: "Gemini CLI" };
-  const prefix = "curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product ";
+  const prefix = "curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --product ";
   const cases = [
     { selected: ["claude"], expected: prefix + "claude" },
     { selected: ["claude", "opencode"], expected: "(set -o pipefail; " + prefix.replace("--product ", "--products ") + "claude,opencode --desktop)" },

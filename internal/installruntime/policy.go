@@ -193,6 +193,33 @@ func readPolicyForUpdate(root string) (UserPolicy, map[string]json.RawMessage, I
 	return policy, fields, before, err
 }
 
+// PredictPolicyIdentity computes only the existing field writer's output from
+// an exact observed preimage. It grants no authority: Commit must still enforce
+// the original generation and policy CAS. Neither disk nor changes are mutated.
+func PredictPolicyIdentity(root string, expected Identity, changes map[string]json.RawMessage) (Identity, error) {
+	if root == "" {
+		return Identity{}, fmt.Errorf("managed control root required")
+	}
+	policy, fields, before, err := readPolicyForUpdate(root)
+	if err != nil {
+		return Identity{}, err
+	}
+	if before != expected {
+		return Identity{}, ErrPolicyConflict
+	}
+	if len(changes) == 0 {
+		return before, nil
+	}
+	if err := mergePolicyFields(fields, changes); err != nil {
+		return Identity{}, err
+	}
+	file, err := policyFile(root, policy.Enabled, fields, before)
+	if err != nil {
+		return Identity{}, err
+	}
+	return desired(file), nil
+}
+
 // mergePolicyFields retains foreign top-level and nested policy members. The
 // setup adapter validates domain semantics; the kernel bounds the writable seam.
 func mergePolicyFields(fields, changes map[string]json.RawMessage) error {

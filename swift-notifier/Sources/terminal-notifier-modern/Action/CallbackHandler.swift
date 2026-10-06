@@ -21,7 +21,7 @@ final class CallbackHandler {
         if case .desktop = route { budget = 30 } else { budget = 10 }
         lifecycle.acceptOwned(correlation: validated.correlation, budget: budget, completion: completion) { [self] done, work in
             switch route {
-            case .desktop(let action): desktop.execute(action, token: work.token, phase: work.recordPhase, completion: done)
+            case .desktop(let action): desktop.execute(action, token: work.token, phase: work.recordPhase, measurement: work.recordMeasurement, completion: done)
             case .legacy(let action): legacy.execute(action, work: work) { done(.legacy_completed) }
             case .malformed: done(.malformed_action)
             case .ignored: done(.ignored)

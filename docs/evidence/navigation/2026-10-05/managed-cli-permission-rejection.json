@@ -1,0 +1,103 @@
+{
+  "schemaVersion": 1,
+  "experiment": "isolated full managed CLI native precondition",
+  "outcome": "permission_unavailable_before_submission",
+  "submitted": false,
+  "signingIdentifier": "com.777genius.agent-notifications",
+  "testBundleIdentifier": "com.777genius.agent-notifications.navigation-test.navigation-ingress-test-2929059188",
+  "permissionRead": "undetermined",
+  "permissionRequest": "unavailable",
+  "qualification": "negative fixture evidence only; full managed CLI ingress and callback not demonstrated",
+  "events": [
+    {
+      "timestamp": "2026-10-05 19:19:24.071163+0300",
+      "subsystem": "com.apple.UserNotifications",
+      "eventMessage": "[com.777genius.agent-notifications.navigation-test.navigation-ingress-test-2929059188] Creating a user notification center"
+    },
+    {
+      "timestamp": "2026-10-05 19:19:24.071193+0300",
+      "subsystem": "com.apple.UserNotifications",
+      "eventMessage": "[com.777genius.agent-notifications.navigation-test.navigation-ingress-test-2929059188] Getting notification settings (async)"
+    },
+    {
+      "timestamp": "2026-10-05 19:19:24.081189+0300",
+      "subsystem": "com.apple.usernotificationsd",
+      "eventMessage": "[com.777genius.agent-notifications] setObservingUserNotifications not allowed: com.777genius.agent-notifications.navigation-test.navigation-ingress-test-2929059188"
+    },
+    {
+      "timestamp": "2026-10-05 19:19:24.081329+0300",
+      "subsystem": "com.apple.usernotificationsd",
+      "eventMessage": "[com.777genius.agent-notifications] getNotificationSettings not allowed: com.777genius.agent-notifications.navigation-test.navigation-ingress-test-2929059188"
+    },
+    {
+      "timestamp": "2026-10-05 19:19:24.081476+0300",
+      "subsystem": "com.apple.UserNotifications",
+      "eventMessage": "[com.777genius.agent-notifications.navigation-test.navigation-ingress-test-2929059188] Got notification settings [ hasResult: 1 hasCompletionHandler: 1 ]"
+    },
+    {
+      "timestamp": "2026-10-05 19:20:28.306764+0300",
+      "subsystem": "com.apple.UserNotifications",
+      "eventMessage": "[com.777genius.agent-notifications.navigation-test.navigation-ingress-test-2929059188] Creating a user notification center"
+    },
+    {
+      "timestamp": "2026-10-05 19:20:28.306775+0300",
+      "subsystem": "com.apple.UserNotifications",
+      "eventMessage": "[com.777genius.agent-notifications.navigation-test.navigation-ingress-test-2929059188] Getting notification settings (async)"
+    },
+    {
+      "timestamp": "2026-10-05 19:20:28.309162+0300",
+      "subsystem": "com.apple.usernotificationsd",
+      "eventMessage": "[com.777genius.agent-notifications] setObservingUserNotifications not allowed: com.777genius.agent-notifications.navigation-test.navigation-ingress-test-2929059188"
+    },
+    {
+      "timestamp": "2026-10-05 19:20:28.309231+0300",
+      "subsystem": "com.apple.usernotificationsd",
+      "eventMessage": "[com.777genius.agent-notifications] getNotificationSettings not allowed: com.777genius.agent-notifications.navigation-test.navigation-ingress-test-2929059188"
+    },
+    {
+      "timestamp": "2026-10-05 19:20:28.309298+0300",
+      "subsystem": "com.apple.UserNotifications",
+      "eventMessage": "[com.777genius.agent-notifications.navigation-test.navigation-ingress-test-2929059188] Got notification settings [ hasResult: 1 hasCompletionHandler: 1 ]"
+    },
+    {
+      "timestamp": "2026-10-05 19:20:28.459301+0300",
+      "subsystem": "com.apple.UserNotifications",
+      "eventMessage": "[com.777genius.agent-notifications.navigation-test.navigation-ingress-test-2929059188] Creating a user notification center"
+    },
+    {
+      "timestamp": "2026-10-05 19:20:28.459311+0300",
+      "subsystem": "com.apple.UserNotifications",
+      "eventMessage": "[com.777genius.agent-notifications.navigation-test.navigation-ingress-test-2929059188] Getting notification settings (async)"
+    },
+    {
+      "timestamp": "2026-10-05 19:20:28.460509+0300",
+      "subsystem": "com.apple.usernotificationsd",
+      "eventMessage": "[com.777genius.agent-notifications] setObservingUserNotifications not allowed: com.777genius.agent-notifications.navigation-test.navigation-ingress-test-2929059188"
+    },
+    {
+      "timestamp": "2026-10-05 19:20:28.460576+0300",
+      "subsystem": "com.apple.usernotificationsd",
+      "eventMessage": "[com.777genius.agent-notifications] getNotificationSettings not allowed: com.777genius.agent-notifications.navigation-test.navigation-ingress-test-2929059188"
+    },
+    {
+      "timestamp": "2026-10-05 19:20:28.460749+0300",
+      "subsystem": "com.apple.UserNotifications",
+      "eventMessage": "[com.777genius.agent-notifications.navigation-test.navigation-ingress-test-2929059188] Got notification settings [ hasResult: 1 hasCompletionHandler: 1 ]"
+    },
+    {
+      "timestamp": "2026-10-05 19:20:28.460845+0300",
+      "subsystem": "com.apple.UserNotifications",
+      "eventMessage": "[com.777genius.agent-notifications.navigation-test.navigation-ingress-test-2929059188] Requesting authorization with options 7"
+    },
+    {
+      "timestamp": "2026-10-05 19:20:28.461050+0300",
+      "subsystem": "com.apple.usernotificationsd",
+      "eventMessage": "[com.777genius.agent-notifications] requestAuthorization not allowed: com.777genius.agent-notifications.navigation-test.navigation-ingress-test-2929059188"
+    },
+    {
+      "timestamp": "2026-10-05 19:20:28.461142+0300",
+      "subsystem": "com.apple.UserNotifications",
+      "eventMessage": "[com.777genius.agent-notifications.navigation-test.navigation-ingress-test-2929059188] Requested authorization [ didGrant: 0 hasError: 1 hasCompletionHandler: 1 ]"
+    }
+  ]
+}

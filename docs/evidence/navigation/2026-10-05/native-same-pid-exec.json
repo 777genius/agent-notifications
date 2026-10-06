@@ -1,0 +1,153 @@
+{
+  "schemaVersion": 1,
+  "macOS": "15.6.1",
+  "architecture": "arm64",
+  "sourceSHA256": {
+    "ProcessSerialBridge.c": "f8b2e464465b7d1f3835dfb1aa3040715940f109b3f733e700f7caed9c132ab1",
+    "ProcessSerialExecProbe.swift": "c46d8fc50dad8291e3daffb8adc91c30c445e1e97bd5e57c4c4bb56d0687627c",
+    "ProcessSerialBridge.h": "5065d4b90bca9305c9c6709db0b5f0a6d9f1fda3a66948efb032fec0bdc1cec3",
+    "ContinuousClock.swift": "418b61752619080601afec4b267370639d5347c0d442342f5ed41c51340dacac"
+  },
+  "runnerSHA256": "84d621c0819f57e814b3e5644aa6dc759d0ff6497bcca654bb037cfa8b8fb0c0",
+  "commands": [
+    {
+      "label": "bridge-build",
+      "argv": [
+        "cc",
+        "-c",
+        "$TEST_ROOT/source/ProcessSerialBridge.c",
+        "-o",
+        "$TEST_ROOT/bridge.o"
+      ],
+      "exitCode": 0,
+      "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSHA256": "35ba438a1d8e7a36b7385b9c4a0d51bfc4e58baebdb1905ae4b632d8afe9f617"
+    },
+    {
+      "label": "probe-build",
+      "argv": [
+        "swiftc",
+        "-import-objc-header",
+        "$TEST_ROOT/source/ProcessSerialBridge.h",
+        "$TEST_ROOT/source/ProcessSerialExecProbe.swift",
+        "$TEST_ROOT/source/ContinuousClock.swift",
+        "$TEST_ROOT/bridge.o",
+        "-o",
+        "$TEST_ROOT/probe"
+      ],
+      "exitCode": 0,
+      "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "A-sign",
+      "argv": [
+        "codesign",
+        "--force",
+        "--sign",
+        "-",
+        "--timestamp=none",
+        "$TEST_ROOT/A.app"
+      ],
+      "exitCode": 0,
+      "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSHA256": "2532ea9bd561a8e1165dbda2a83ef65f33263110fbae20bf55eed1cbe14957ae"
+    },
+    {
+      "label": "B-sign",
+      "argv": [
+        "codesign",
+        "--force",
+        "--sign",
+        "-",
+        "--timestamp=none",
+        "$TEST_ROOT/B.app"
+      ],
+      "exitCode": 0,
+      "stdoutSHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSHA256": "3705f1ce530b296d1747fb9715200cbe9dc7c69d5333ba9a6ce21d712a03c4e6"
+    },
+    {
+      "label": "experiment",
+      "argv": [
+        "$TEST_ROOT/probe",
+        "--controller",
+        "$TEST_ROOT"
+      ],
+      "exitCode": 0,
+      "stdoutSHA256": "7fd64f8601a2d5b0672e85b930b9c0e32843d9cf2e1e69edd06c5c88b6423620",
+      "stderrSHA256": "8abe967e79b91d6dee5c54d8e9de0c03aca41bf3947c7f43c90abcaffbd692c0"
+    }
+  ],
+  "binarySHA256": {
+    "controller": "d11a25256aec9f26bea8fca4efa31d6c1686b61bfc16a67455dabc8bf544828e",
+    "A": "e4245a42a776d579bdf4dcbeb0b19532e8accb61a1ee1ffd6662adff9269abd7",
+    "B": "6b72b5c9bdc15b0bb5ba7c620a095525deb135be2f2025cab04cd03218474a2b"
+  },
+  "passed": true,
+  "productionClientActivated": false,
+  "limitations": [
+    "Ad-hoc same-PID exec fixture only; no Developer ID/Codex qualification",
+    "Public checks are observations, not an atomic production binding",
+    "Bridge suppresses consent prompts; no retry or fallback",
+    "No visible-application acknowledgement; receiver records exact TEST event"
+  ],
+  "experiment": {
+    "afterExec": {
+      "freshDynamicA": -67050,
+      "freshDynamicB": 0,
+      "guestLookup": 0,
+      "oldGuestDynamicA": 0,
+      "oldGuestDynamicB": -67050,
+      "pid": 86379,
+      "PSN": [
+        0,
+        96377828
+      ],
+      "PSNStatus": 0,
+      "PSNUnchanged": true,
+      "samePID": true
+    },
+    "aliveAfterSend": true,
+    "aliveBeforeSend": true,
+    "atomicBindingQualified": false,
+    "beforeExec": {
+      "dynamicA": 0,
+      "guestLookup": 0,
+      "pid": 86379,
+      "PSN": [
+        0,
+        96377828
+      ],
+      "PSNStatus": 0
+    },
+    "childStopped": true,
+    "observationCompleted": true,
+    "outcome": "stale_psn_delivered_to_new_identity",
+    "ownChildReaped": true,
+    "passed": true,
+    "passedScope": "same_pid_exec_fixture_and_observation",
+    "productionClientActivated": false,
+    "receivedByB": true,
+    "send": {
+      "permissionPreflight": -1744,
+      "replyErrorBestEffort": 0,
+      "status": 0
+    },
+    "sendBridgeInvocations": 1,
+    "staticA": {
+      "create": 0,
+      "validity": 0
+    },
+    "staticB": {
+      "create": 0,
+      "validity": 0
+    },
+    "totalMS": 2903.911458211951
+  },
+  "snapshotUnchanged": true,
+  "childOutputSHA256": {
+    "child.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "child.stderr": "58e9262d52542fc6fd2d2475cc5a8951d6bf287ae932a29b015d6c92da5d4e36"
+  }
+}

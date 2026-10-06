@@ -1,0 +1,53 @@
+{
+  "scope": "offline_selected_client_activation_request_TEST_negative",
+  "sourceCommit": "59bb25b8efdceb6a438bdb0de7329c31882ab014",
+  "passed": false,
+  "retryAllowed": false,
+  "archiveSHA256": "6d96f5d1cead3f44fa2f191702bc957501664f65aee0a6eeef9b2e5ef27bf978",
+  "executionManifestSHA256": "6bbaaf5bd9ba10d57007f6cabf51153c32108fddfc7a6708189d1a4ec16937f1",
+  "independentRawBindingAssertionsPassed": 412,
+  "senderExit": {
+    "collected": true,
+    "exitCode": 0,
+    "exitedBoot": 130.842168029,
+    "pid": 1071
+  },
+  "nativeNotificationID": 1,
+  "clickAcknowledgementReachedBySourceBoundProgress": true,
+  "handoffObserved": true,
+  "tokenEqualityObserved": true,
+  "compositorTokenSHA256": "77ccddac38bc2a3e3ef6d2dff7415ed3a838ce4f1b3ec675e1e567c87efdf8ef",
+  "clientUIDFields": [
+    "1000",
+    "1000",
+    "1000",
+    "1000"
+  ],
+  "clientAppArmor": "chatgpt (unconfined)",
+  "clientSeccomp": "0",
+  "clientNoNewPrivs": "0",
+  "clientSandboxQualified": false,
+  "clientActivationRequestObserved": false,
+  "failure": "RuntimeError: bounded_observation_expired_no_retry",
+  "failureStage": "12-second observation of matching selected-client xdg_activation_v1.activate",
+  "runtimeCause": "unproved: detailed client.stderr not separately exported in the guest frame",
+  "handoffQualified": false,
+  "activationQualified": false,
+  "navigationQualified": false,
+  "semanticActivationOutcome": "unknown",
+  "guestCleanupPassed": true,
+  "guestCgroupEmptyObserved": true,
+  "retainedKernelExitsObserved": 24,
+  "guestPoweroffObserved": true,
+  "hostContainerRemoved": true,
+  "hostCleanupUnknown": false,
+  "rawSHA256": {
+    "operator-result.json": "d36745d76992406a827adf25efea7a8863c14b08ac93420132d4147ffd2de18c",
+    "native-evidence.json": "52bb725d19e32d171ce0ee079d37dfa178a33f95c9b3075f5e4efadf4aa60080",
+    "guest-result.json": "7d215d835d719761058b8168c5bacc81375417b18f51b5c21d7d5cfac4dd73a8",
+    "execution-manifest.json": "6bbaaf5bd9ba10d57007f6cabf51153c32108fddfc7a6708189d1a4ec16937f1",
+    "native-seed.iso": "d7468b4f1086c7aca4d0284982caa2d2f08622b48a1c3f5dc0fa309157cc676b",
+    "native-overlay.qcow2": "f6f23a0224ea457804aed815fbb17f30cd1b8cf65ba4f17b57087fb962e49314"
+  },
+  "limitation": "The bounded absence of an observed activation request does not prove permanent platform unsupportedness. Original unknown semantic outcome is retained; no replay is permitted. Any forensic inspection must not boot the original guest."
+}

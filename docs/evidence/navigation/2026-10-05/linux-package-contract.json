@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "passed": true,
+  "passedScope": "authenticated_public_package_manifest_inspection",
+  "navigationQualified": false,
+  "nativeActivationAttempted": false,
+  "installedClientInspected": false,
+  "package": {
+    "Package": "chatgpt",
+    "Version": "26.930.51102",
+    "Architecture": "amd64",
+    "Filename": "pool/main/c/chatgpt/chatgpt_26.930.51102_amd64.deb",
+    "Size": "476322694",
+    "SHA256": "637c3c94bc50f8ee33a15e2e28ec7f92a787f0943e700efe111bc0bf0d4813b4"
+  },
+  "signingFingerprint": "3BFA0E4AE8B8CC16A2D9BA684A3B4A566C4660E4",
+  "signatureVerification": "host gpgv exit 0 with exact pinned VALIDSIG; reviewer checked retained status and metadata hashes",
+  "artifacts": {
+    "key.gpg": {
+      "url": "https://persistent.oaistatic.com/codex-app-prod/linux/arch/26.930.51102/repository-signing-key.gpg",
+      "size": 1148,
+      "sha256": "23e2cfbdef6afe95505f9e95a2cb63585da7ffe9b06a51ec08a32407c847d596"
+    },
+    "InRelease": {
+      "url": "https://persistent.oaistatic.com/codex-app-prod/linux/deb/dists/stable/InRelease",
+      "size": 2797,
+      "sha256": "9541eac2d25a7f98a79b66e12c0d288663a34def039c83e2e0213a672a61bd4c"
+    },
+    "Packages": {
+      "url": "https://persistent.oaistatic.com/codex-app-prod/linux/deb/dists/stable/main/binary-amd64/Packages",
+      "size": 1651,
+      "sha256": "1d5d8822a16622e50d46ff334769b30252673f0b3ea58b8f19067cc27ee57b52"
+    },
+    "chatgpt.deb": {
+      "url": "https://persistent.oaistatic.com/codex-app-prod/linux/deb/pool/main/c/chatgpt/chatgpt_26.930.51102_amd64.deb",
+      "size": 476322694,
+      "sha256": "637c3c94bc50f8ee33a15e2e28ec7f92a787f0943e700efe111bc0bf0d4813b4"
+    }
+  },
+  "provenance": {
+    "operatorScriptSha256": "3cb21a09089d8eed0eefc28f8b5a3da4aff087522023227eb208968f83eef56b",
+    "rawEvidenceSha256": "5e9f08d64287cbfb1f43283c3c656c3b0e7cb90976fb38ccd011a24ec99d69ba",
+    "completeManifestSha256": "ac045381db1ca866df8a5c2e3f5014a8c955061d54575f7983586baa42854a44"
+  },
+  "completeArchiveWalk": {
+    "entryCount": 4504,
+    "allCaseInsensitiveServiceSuffixPaths": [],
+    "allDbusOrDdashBusPathMatches": [],
+    "desktopEntryPaths": [
+      "usr/share/applications/chatgpt.desktop"
+    ]
+  },
+  "desktopEntry": {
+    "path": "usr/share/applications/chatgpt.desktop",
+    "content": "[Desktop Entry]\nName=ChatGPT\nComment=ChatGPT by OpenAI\nGenericName=AI assistant\nExec=chatgpt %U\nIcon=chatgpt\nType=Application\nStartupNotify=true\nCategories=Utility;Development;\nMimeType=x-scheme-handler/codex;x-scheme-handler/http;x-scheme-handler/https;text/csv;application/vnd.openxmlformats-officedocument.wordprocessingml.document;application/vnd.openxmlformats-officedocument.presentationml.presentation;text/tab-separated-values;application/vnd.ms-excel;application/vnd.ms-excel.sheet.macroEnabled.12;application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;\n\n"
+  },
+  "launcherEntry": {
+    "path": "usr/bin/chatgpt",
+    "size": 0,
+    "type": "2",
+    "link": "../lib/chatgpt/codex-launcher"
+  },
+  "launcherTargetMetadata": {
+    "path": "usr/lib/chatgpt/codex-launcher",
+    "size": 63,
+    "type": "0",
+    "link": ""
+  },
+  "qualification": {
+    "packageDBusActivationDeclared": false,
+    "selectedColdLauncher": "candidate only: exact verified launcher and observed %U argument contract; not executed",
+    "runningOwnerBindingQualified": false,
+    "chatRoutingQualified": false,
+    "waylandActivationQualified": false,
+    "notificationBackendRestartQualified": false
+  },
+  "limitations": [
+    "No DBusActivatable key in the sole desktop entry; no .service file anywhere in all 4504 paths",
+    "Absence of a packaged DBus manifest does not prove the binary has no private DBus implementation",
+    "Whole archive identity was verified by the host operator before parsing; retained review subset excludes the large archive and key",
+    "No installation, profile/login access, package script execution, or application/native launch in this inspection"
+  ]
+}
