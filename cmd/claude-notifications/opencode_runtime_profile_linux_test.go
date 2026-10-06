@@ -36,25 +36,34 @@ func(w *profileDiagnosticWriter) Write(p []byte)(int,error){
  n:=len(p);if n>w.remaining {n=w.remaining}
  if _,e:=w.file.Write(p[:n]);e!=nil {return 0,e};w.remaining-=n;return len(p),nil
 }
+func publish(name string, body []byte) error {
+ f,e:=os.CreateTemp(filepath.Dir(name),"TEST-profile-publication-");if e!=nil{return e};defer os.Remove(f.Name())
+ if _,e=f.Write(body);e!=nil{f.Close();return e};if e=f.Close();e!=nil{return e};return os.Rename(f.Name(),name)
+}
 func main(){
  image,_:=os.Executable();base:=filepath.Base(image);dir:=filepath.Dir(image)
  if len(os.Args)==2&&os.Args[1]=="serve" {
   prefix:=image+"."+strconv.Itoa(os.Getpid())
-  os.WriteFile(prefix+".host",[]byte("ready"),0600)
+  stage:=func(value string){_ = publish(prefix+".parent-stage",[]byte(value))}
+  stage("await_launch")
+  if publish(prefix+".host",[]byte("ready"))!=nil{os.Exit(2)}
   var raw []byte
   for {var err error;raw,err=os.ReadFile(prefix+".launch");if err==nil {break};time.Sleep(5*time.Millisecond)}
   var launch struct {Helper,Input string;Environment []string}
-  if json.Unmarshal(raw,&launch)!=nil {os.Exit(3)}
+  if json.Unmarshal(raw,&launch)!=nil {stage("launch_decode_error");os.Exit(3)}
+  stage("launch_received")
   output,err:=os.OpenFile(prefix+".receipt",os.O_CREATE|os.O_WRONLY,0600);if err!=nil {os.Exit(4)}
   diagnostics,err:=os.OpenFile(prefix+".stderr",os.O_CREATE|os.O_WRONLY,0600);if err!=nil {os.Exit(5)}
   child:=exec.Command(launch.Helper,"-test.run=^TestRuntimeProfileHelperProcess$")
   child.Env=launch.Environment;child.Stdin=strings.NewReader(launch.Input);child.Stdout=output;child.Stderr=&profileDiagnosticWriter{diagnostics,4096}
   status:="ok"
-  if child.Start()!=nil {status="failed"} else {
-   os.WriteFile(prefix+".helper",[]byte(strconv.Itoa(child.Process.Pid)),0600)
-   if child.Wait()!=nil {status="failed"}
+  if child.Start()!=nil {stage("helper_start_error");status="failed"} else {
+   if publish(prefix+".helper",[]byte(strconv.Itoa(child.Process.Pid)))!=nil{status="failed"}
+   stage("helper_wait")
+   if child.Wait()!=nil {stage("helper_wait_error");status="failed"}
   }
-  output.Close();diagnostics.Close();os.WriteFile(prefix+".done",[]byte(status),0600)
+  output.Close();diagnostics.Close()
+  if publish(prefix+".done",[]byte(status))!=nil{stage("done_publish_error");os.Exit(6)}
   for {time.Sleep(time.Second)}
  }
  cwd,_:=os.Getwd();proof,_:=json.Marshal(map[string]any{"pid":os.Getpid(),"argv":os.Args[1:],"env":os.Environ(),"cwd":cwd})
@@ -93,7 +102,20 @@ func awaitProfileFile(t *testing.T, path string) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatal("TEST child barrier missing", filepath.Base(path))
+	t.Fatalf("TEST child barrier missing %s; parent stage=%s", filepath.Base(path), profileParentStage(path))
+}
+func profileParentStage(barrier string) string {
+	prefix := strings.TrimSuffix(barrier, filepath.Ext(barrier))
+	f, err := os.Open(prefix + ".parent-stage")
+	if err != nil {
+		return "unavailable"
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, 65))
+	if err != nil || len(data) > 64 {
+		return "invalid"
+	}
+	return string(data)
 }
 func profilePrefix(in runtimeProfileInput) string {
 	return in.HostExecutable + "." + strconv.Itoa(in.NativePID)
@@ -156,7 +178,21 @@ func launchProfileHelper(t *testing.T, host, in runtimeProfileInput, raw, qualif
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = os.WriteFile(profilePrefix(host)+".launch", data, 0600); err != nil {
+	// The polling parent must observe the complete descriptor, never a newly
+	// created but still empty/partial launch file.
+	launchFile, err := os.CreateTemp(host.ControlRoot, "TEST-profile-launch-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(launchFile.Name())
+	if _, err = launchFile.Write(data); err != nil {
+		_ = launchFile.Close()
+		t.Fatal(err)
+	}
+	if err = launchFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Rename(launchFile.Name(), profilePrefix(host)+".launch"); err != nil {
 		t.Fatal(err)
 	}
 }
