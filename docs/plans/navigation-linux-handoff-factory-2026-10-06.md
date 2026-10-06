@@ -154,3 +154,32 @@ The useful next step is offline readonly forensic acquisition of the fixed TEST
 guest or replay its native action. Any derived image belongs to a fresh owned TEST
 scratch, with bounded resources, source/range hashes and read-only log extraction.
 No additional native experiment is justified merely by this timeout.
+
+
+## Trace-corrected actual assembly: selected-client activation and focus passed
+
+Exact source `d125933bd2d5899d70d35308e394db896bef36fd` ran once after
+three independent source reviews and a fresh frozen-capsule review. The only guest
+behavior change accepts both consistent libwayland object-ID delimiters; identity,
+unique surface, compositor focus, deadline and cleanup gates remain mandatory.
+This distinct planned experiment used a new owned offline TEST VM/root/nonce.
+None of the three earlier FAILED attempts was replayed or reclassified.
+
+Sender exit0 and collection precede the sole native click. The cold callback
+forwards the matching token to the selected UID1000 vendor-client incarnation.
+Its native activation request joins a unique kernel-bound live server toplevel
+and a separate peer-verified compositor focus observation. All 25 retained
+incarnations exited, the owned cgroup was empty, guest poweroff and collected QEMU
+exit0 were observed, and the exact terminal host container was removed.
+
+Independent raw audit passed 1368 assertions plus three earlier-negative
+preservation checks, including all 224 regular archive members and 164 actual ISO
+seed files. The public projection is
+[`linux-handoff-selected-client-positive.json`](../evidence/navigation/2026-10-06/linux-handoff-selected-client-positive.json).
+The archive includes frozen sources, seed and actual completion frame, but no
+detailed guest callback/client/server session logs. Live qualification therefore
+uses source-bound executed fixture observations, not independently replayable
+kernel captures. The decoder's local `serverSurface.focusQualified=false` is
+separate from the successful live focus join. Token causation/consumption,
+authenticated chat selection, human render and full-client sandbox remain
+unqualified. This evidence does not enable a production Linux navigation adapter.

@@ -122,5 +122,24 @@ inspection recovered exactly one owned-token request using `#` rather than the
 observer's expected `@`. A server-log replay identifies the same selected peer and
 surface, with kernel binding/focus explicitly false. A focused parser correction
 accepts both consistent formats; the original frame is unchanged. No guest boot or
-native replay occurred during recovery. A fresh reviewed experiment is still needed
-for the live focus join and final collection gates.
+native replay occurred during recovery. A separately planned, source-reviewed experiment now passes
+the live focus join and final collection gates, as recorded below.
+
+
+## Linux selected-client native positive checkpoint
+
+PR #362 merged the independently reviewed trace-format correction with all 11
+current-head checks successful. A distinct frozen-source `d125933b` TEST experiment
+observed durable cold callback after sender exit, matching token forwarding,
+selected vendor-client incarnation, unique kernel-bound live server toplevel and
+peer-verified compositor focus. All 25 tracked incarnations and the owned VM/host
+container were collected. Independent raw audit passed 1368 assertions and
+preserved all three prior negatives. The source-bound frame and seed are retained;
+detailed guest session logs are not part of this archive.
+
+This closes the selected-client callback/activation/focus qualification slice.
+It does not prove an authenticated chat, human render, full-client sandbox,
+server-restart behavior or a shipping Linux adapter. P3 remains gated by the
+macOS receiver-binding counterexample, authentic MCP click confirmation remains
+pending, and Windows CI Show/history evidence still lacks a real callback.
+Full plan completion is not claimed.
