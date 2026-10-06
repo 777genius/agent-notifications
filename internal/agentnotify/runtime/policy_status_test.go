@@ -83,7 +83,10 @@ func TestStatusNavigationEligibility(t *testing.T) {
 			}
 		})
 	}
-	for _, platform := range []string{"linux", "windows", "freebsd"} {
+	if got := navigationStatus(base, policy, &caller, "linux"); got != (agentnotify.NavigationStatus{Capability: "unavailable", Precision: "none", Reason: "application_unavailable"}) {
+		t.Fatalf("Linux without explicit binding: %+v", got)
+	}
+	for _, platform := range []string{"windows", "freebsd"} {
 		if got := navigationStatus(base, policy, &caller, platform); got != (agentnotify.NavigationStatus{Capability: "unavailable", Precision: "none", Reason: "unsupported_platform"}) {
 			t.Fatalf("%s navigation: %+v", platform, got)
 		}

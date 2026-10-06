@@ -77,6 +77,7 @@ func field(m map[string]json.RawMessage, k string, v any, required bool) error {
 }
 func (b *Backend) policy(s installruntime.PolicySnapshot) (agentnotify.Policy, error) {
 	var p agentnotify.Policy
+	p.Route.Platform = runtime.GOOS
 	p.Rates = journal.RatePolicy{SessionPerMinute: 6, RuntimePerMinute: 30, Burst: 3}
 	p.Delivery.Valid = true
 	if len(s.Fields) == 0 {
@@ -94,7 +95,7 @@ func (b *Backend) policy(s installruntime.PolicySnapshot) (agentnotify.Policy, e
 		if e != nil {
 			return p, e
 		}
-		for k, v := range map[string]any{"localRouting": &p.Route.LocalRouting, "allowUnknownCaller": &p.Route.AllowUnknownCaller, "allowCallerAsserted": &p.Route.AllowCallerAsserted, "applicationPath": &p.Route.ApplicationPath, "teamID": &p.Route.TeamID} {
+		for k, v := range map[string]any{"localRouting": &p.Route.LocalRouting, "allowUnknownCaller": &p.Route.AllowUnknownCaller, "allowCallerAsserted": &p.Route.AllowCallerAsserted, "applicationPath": &p.Route.ApplicationPath, "teamID": &p.Route.TeamID, "linuxCallbackSnapshot": &p.Route.Linux} {
 			if field(m, k, v, false) != nil {
 				return p, errConfig
 			}
@@ -202,7 +203,7 @@ func navigationStatus(s Status, p agentnotify.Policy, o *origin.Context, platfor
 	if !p.Delivery.ClickToFocus {
 		return no("disabled", "click_to_focus_disabled")
 	}
-	if platform != "darwin" || s.OfflineCapability == "unsupported_platform" {
+	if (platform != "darwin" && platform != "linux") || s.OfflineCapability == "unsupported_platform" {
 		return no("unavailable", "unsupported_platform")
 	}
 	if s.OfflineCapability != "eligible" || !p.Delivery.ExplicitEnabled {
@@ -211,10 +212,17 @@ func navigationStatus(s Status, p agentnotify.Policy, o *origin.Context, platfor
 	if o == nil {
 		return no("unavailable", "context_unavailable")
 	}
+	p.Route.Platform = platform
 	target := origin.ResolveCodex(*o, p.Route)
 	n := target.Navigation
 	if n.Capability != "available" {
 		return no(n.Capability, n.Reason)
+	}
+	if platform == "linux" {
+		if target.Desktop.Linux.SnapshotPath == "" {
+			return no("unavailable", "navigation_unavailable")
+		}
+		return agentnotify.NavigationStatus{Capability: "eligible", Precision: n.Precision, Scope: n.Scope, Reason: n.Reason}
 	}
 	if !nativeprotocol.ValidDesktopThreadTarget(target.Desktop.ThreadID, target.Desktop.ApplicationPath, target.Desktop.TeamID) {
 		return no("unavailable", "invalid_target")
