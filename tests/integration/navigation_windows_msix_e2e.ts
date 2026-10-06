@@ -40,6 +40,16 @@ if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -n
 PreparationPhase 'security_before'
 $securityModule = Import-Module Microsoft.PowerShell.Security -PassThru -ErrorAction Stop
 PreparationPhase 'security_after'
+PreparationPhase 'utility_before'
+# One actual dependency, imported from this fixed Windows PowerShell distribution.
+# All import time remains inside prepare's unchanged budget; no speed is presumed.
+$expectedPSHome = [IO.Path]::Combine([Environment]::GetEnvironmentVariable('SystemRoot'), 'System32\WindowsPowerShell\v1.0')
+if (![StringComparer]::OrdinalIgnoreCase.Equals([IO.Path]::GetFullPath($PSHOME), [IO.Path]::GetFullPath($expectedPSHome))) { throw 'unexpected PowerShell distribution path' }
+$utilityManifest = [IO.Path]::Combine($PSHOME, 'Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1')
+$utilityFile = [IO.FileInfo]::new($utilityManifest)
+if (!$utilityFile.Exists -or $utilityFile.Length -le 0 -or ($utilityFile.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'fixed Utility manifest absent or reparsed' }
+Import-Module -Name $utilityManifest -ErrorAction Stop
+PreparationPhase 'utility_after'
 PreparationPhase 'context_before'
 PreparationPhase 'context_read_before'
 # Owned context IO bypasses provider-based reads, not later certificate/SDK providers.
@@ -397,7 +407,7 @@ function preparationTrace(step: Step): void {
   evidence.prepareCollectionUnknown = evidence.prepareActorCollected !== true;
   const contextPhases = ['read', 'decode', 'path', 'marker', 'identity', 'state_path']
     .flatMap(phase => [`context_${phase}_before`, `context_${phase}_after`]);
-  const phases = ['entry', ...['security', 'context', 'acl', 'commands', 'package_absence',
+  const phases = ['entry', ...['security', 'utility', 'context', 'acl', 'commands', 'package_absence',
     'certificate_absence', 'sdk', 'hash', 'state'].flatMap(phase => [phase + '_before', phase + '_after'])];
   phases.splice(phases.indexOf('context_after'), 0, ...contextPhases);
   const lines = step.stderr.split(/\r?\n/).filter(line => line.startsWith('{"preparePhase":'));
