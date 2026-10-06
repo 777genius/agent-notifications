@@ -248,3 +248,20 @@ The public projection is `linux-selected-client-offline-negative.json`. The pars
 fix retains the negative guest payload before semantic validation, preserves
 unique-frame/size/base64/hash gates, and passes three wire regression tests plus
 independent source review. No second native attempt has been made.
+
+
+## Discovery correction after the failed attempt
+
+Independent source audit found a possible false-negative in the original scan:
+previously retained client descendants were skipped and not reintroduced as
+parents on subsequent scans. A renderer created later by a retained zygote
+could therefore be missed. This does not prove that a renderer existed in the
+failed run; its process roles were not captured.
+
+The correction keeps a separate set containing only proven client descendants
+and seeds later scans from it. Sway and bus are excluded. Existing live pidfd,
+start-tick, parent, UID, exact executable and sandbox checks remain unchanged.
+Three focused independent source reviews accepted guest source `7fe15e0ba4dcf3133086091f9bc3a9e61c190f1bc75262fe725e5a713afc659b`. Both
+outer source guards now require these changed guest bytes. Syntax and frame
+regressions pass; no new native client attempt has occurred. Before any new VM
+attempt, use a separately captured TEST stage and complete focused qualification.

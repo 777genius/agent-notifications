@@ -105,7 +105,7 @@ try:
     for filename in ('probe.py', 'guest-native.py'):
         data = base64.b64decode(sources[filename]['base64'], validate=True)
         assert hashlib.sha256(data).hexdigest() == sources[filename]['sha256']
-        expected = context['expectedProbeSourceSHA256'] if filename == 'probe.py' else 'e3003f0746b59add941a0e0930ea57acea6879370f68befbaa8701aae4186a31'
+        expected = context['expectedProbeSourceSHA256'] if filename == 'probe.py' else '7fe15e0ba4dcf3133086091f9bc3a9e61c190f1bc75262fe725e5a713afc659b'
         assert hashlib.sha256(data).hexdigest() == expected
         (ROOT / filename).write_bytes(data); (ROOT / filename).chmod(0o444)
     report['sourceSHA256'] = sha(ROOT / 'probe.py')

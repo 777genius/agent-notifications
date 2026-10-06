@@ -71,6 +71,7 @@ def main():
         renderedClientQualified=False, clientLaunchAttempted=False, retryAllowed=False,
         sourceSHA256=sha(Path(__file__)), trackedProcesses=[])
     children, handles = [], {}
+    client_descendants = set()
     group = Path('/sys/fs/cgroup') / ('navigation-native-TEST-' + uuid.uuid4().hex)
     group_created = False
 
@@ -119,7 +120,7 @@ def main():
 
     def capture_descendants(main_pid):
         # Read-only /proc discovery; ancestry must lead to an owned live incarnation.
-        pending = {main_pid}
+        pending = {main_pid} | client_descendants
         for _ in range(8):
             added = set()
             for p in Path('/proc').iterdir():
@@ -141,6 +142,7 @@ def main():
                     continue
             if not added: break
             pending |= added
+            client_descendants.update(added)
 
     try:
         ROOT.mkdir(mode=0o700, exist_ok=False)
