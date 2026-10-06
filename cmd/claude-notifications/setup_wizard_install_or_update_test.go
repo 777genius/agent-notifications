@@ -509,7 +509,10 @@ func TestCursorCallerAcknowledgedTokenAndMatchingPendingRetry(t *testing.T) {
 		SelectedDelivery: selected, NativeObjects: append(stagedDelivery.NativeObjects, selected.CursorOwnership(facts.PlannedReceipt))}
 	store := statev2.Store{Path: filepath.Join(cfg.StateRoot, "state-v2.json")}
 	if err := store.Save(domain.StateFileV2{SchemaVersion: domain.StateSchemaVersion, Installations: []domain.Installation{{InstallationID: r.InstallationID, DeclaredName: "agent-notify",
-		Source: domain.SourceBinding{SourceBindingID: domain.ComputeSourceBindingID(packageSnapshot.Source), RequestedSource: pkg, CanonicalSource: pkg, TreeDigest: digest}, Package: domain.PackageBinding{DeclaredName: "agent-notify", LoaderKind: envelope.LoaderKind, FormatID: envelope.FormatID, Version: envelope.Manifest.Version, ManifestDigest: envelope.ManifestDigest},
+		Source: domain.SourceBinding{SourceBindingID: domain.ComputeSourceBindingID(packageSnapshot.Source), RequestedSource: pkg, CanonicalSource: pkg, TreeDigest: digest},
+		Package: domain.PackageBinding{DeclaredName: "agent-notify", LoaderKind: envelope.LoaderKind, FormatID: envelope.FormatID,
+			SchemaURI: envelope.SchemaURI, Version: envelope.Manifest.Version, ManifestDigest: envelope.ManifestDigest,
+			Inventory: envelope.Inventory},
 		Clients:      map[string]domain.ClientBinding{b.BindingID: client},
 		DataReceipts: map[string]domain.DataReceipt{dataReceipt.DataReceiptID: dataReceipt}}}}); err != nil {
 		t.Fatal(err)
