@@ -71,7 +71,7 @@ func TestCopilotVSCodeBuiltMainProcess(t *testing.T) {
 // causing fallthrough into global handling or observation-neutral output.
 func checkLocalEarlyExit(t *testing.T, bin string, invalid bool) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	args := []string{"licenses"}
 	wantExit := 0
@@ -84,7 +84,10 @@ func checkLocalEarlyExit(t *testing.T, bin string, invalid bool) {
 	cmd.Env = []string{"HOME=" + home, "USERPROFILE=" + home, "XDG_CONFIG_HOME=" + home, "XDG_CACHE_HOME=" + home, "TMPDIR=" + home}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	err := cmd.Run()
+	_, stopBudget := startLocalProcess(t, cmd, ctx, cancel, 2*time.Second)
+	defer stopBudget()
+	err := cmd.Wait()
+	stopBudget()
 	if ctx.Err() != nil || cmd.ProcessState == nil || cmd.ProcessState.ExitCode() != wantExit || (wantExit == 0 && err != nil) {
 		t.Fatalf("early exit changed: %v", err)
 	}
@@ -104,7 +107,7 @@ func checkLocalEarlyExit(t *testing.T, bin string, invalid bool) {
 
 func checkLocalMainProcess(t *testing.T, bin string, tc localMainCase) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, tc.args...)
 	home := t.TempDir()
@@ -121,10 +124,8 @@ func checkLocalMainProcess(t *testing.T, bin string, tc localMainCase) {
 		setClosedLocalOutput(t, cmd)
 	}
 	start := time.Now()
-	if err = cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	started := time.Now()
+	started, stopBudget := startLocalProcess(t, cmd, ctx, cancel, 3*time.Second)
+	defer stopBudget()
 	startExpired := ctx.Err() != nil
 	var written int
 	var writeErr, closeErr error
@@ -134,6 +135,8 @@ func checkLocalMainProcess(t *testing.T, bin string, tc localMainCase) {
 	}
 	waitStarted := time.Now()
 	err = cmd.Wait()
+	executionElapsed := time.Since(started)
+	stopBudget()
 	t.Logf("argv=%q inputSHA256=%x elapsed=%s exit=%d deadline=%v stdoutSHA256=%x stderrSHA256=%x startElapsed=%s startExpired=%t stdinElapsed=%s stdinAttempted=%t stdinWritten=%d stdinWriteOK=%t stdinCloseOK=%t waitElapsed=%s", cmd.Args, sha256.Sum256([]byte(tc.input)), time.Since(start), cmd.ProcessState.ExitCode(), ctx.Err(), sha256.Sum256(stdout.Bytes()), sha256.Sum256(stderr.Bytes()), started.Sub(start), startExpired, waitStarted.Sub(started), !tc.stalled, written, !tc.stalled && writeErr == nil, !tc.stalled && closeErr == nil, time.Since(waitStarted))
 	if tc.closed {
 		if cmd.ProcessState.ExitCode() != 1 {
@@ -142,13 +145,13 @@ func checkLocalMainProcess(t *testing.T, bin string, tc localMainCase) {
 	} else if err != nil {
 		t.Fatal("non-neutral exit", err)
 	}
-	if ctx.Err() != nil || time.Since(start) > 2500*time.Millisecond || stderr.Len() != 0 || (!tc.closed && stdout.String() != "{}\n") {
+	if ctx.Err() != nil || executionElapsed > 2500*time.Millisecond || stderr.Len() != 0 || (!tc.closed && stdout.String() != "{}\n") {
 		t.Fatalf("process contract failed: %q %q", stdout.String(), stderr.String())
 	}
-	if tc.stalled && tc.name != "stalled" && time.Since(start) > 600*time.Millisecond {
+	if tc.stalled && tc.name != "stalled" && executionElapsed > 600*time.Millisecond {
 		t.Fatal("invalid argv read stdin")
 	}
-	if tc.name == "stalled" && time.Since(start) < 900*time.Millisecond {
+	if tc.name == "stalled" && executionElapsed < 900*time.Millisecond {
 		t.Fatal("stdin was never observed")
 	}
 	entries, err := os.ReadDir(home)
@@ -157,6 +160,32 @@ func checkLocalMainProcess(t *testing.T, bin string, tc localMainCase) {
 	}
 	if len(entries) != 0 {
 		t.Fatal("public denied entry wrote effects/config/logs")
+	}
+}
+
+// Cold Windows image admission can block Start before the child can execute.
+// Bound that phase separately without spending the command's execution budget.
+func startLocalProcess(t *testing.T, cmd *exec.Cmd, ctx context.Context, cancel context.CancelFunc, budget time.Duration) (time.Time, func()) {
+	t.Helper()
+	startup := time.AfterFunc(15*time.Second, cancel)
+	err := cmd.Start()
+	startupStopped := startup.Stop()
+	started := time.Now()
+	if !startupStopped || ctx.Err() != nil {
+		cancel()
+		if err == nil {
+			_ = cmd.Wait()
+		}
+		t.Fatal("process startup exceeded its separate admission budget", err)
+	}
+	if err != nil {
+		t.Fatal("process startup failed", err)
+	}
+	execution := time.AfterFunc(budget, cancel)
+	return started, func() {
+		if !execution.Stop() {
+			cancel()
+		}
 	}
 }
 
@@ -171,17 +200,20 @@ func TestCopilotVSCodeTransportPanicAndJoinedReader(t *testing.T) {
 	if os.Getenv("TEST_LOCAL_PANIC_CHILD") == "1" {
 		os.Exit(runCopilotVSCodeEvent([]string{"--event", "Stop", "--control-root", os.Getenv("TEST_LOCAL_PANIC_ROOT"), "--binding", "TEST"}, panicLocalInput{}, os.Stdout))
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestCopilotVSCodeTransportPanicAndJoinedReader$")
 	cmd.Env = append(os.Environ(), "TEST_LOCAL_PANIC_CHILD=1", "TEST_LOCAL_PANIC_ROOT="+t.TempDir())
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	_, stopBudget := startLocalProcess(t, cmd, ctx, cancel, 2*time.Second)
+	defer stopBudget()
+	if err := cmd.Wait(); err != nil {
 		t.Fatal(err)
 	}
-	if stdout.String() != "{}\n" || stderr.Len() != 0 {
+	stopBudget()
+	if ctx.Err() != nil || stdout.String() != "{}\n" || stderr.Len() != 0 {
 		t.Fatal("panic leaked")
 	}
 }
