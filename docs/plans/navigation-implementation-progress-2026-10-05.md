@@ -30,7 +30,7 @@ git diff --check
 | P3 macOS fast path | Disabled after negative P2 decision | Before/after fast-path latency testing is inapplicable to this rejected candidate; no acceleration claim |
 | P4 sources | Existing ingress boundaries audited; no shared source migration required | Authentic MCP submission accepted, exact MCP notification click still awaits human confirmation; managed CLI TEST bundle/signing precondition rejected |
 | P5w Windows | Reviewed qualification harness merged via #352; native lane unqualified | Show/history observed, actual Shell UI click and cold callback/focus/package navigation not proved on CI; no interactive Windows machine available |
-| P5l Linux | Durable private-bus callback/token fixture qualified; dormant preparation #360 merged | First #361 assembly failed before SDK/click, containment retained separately; later reviewed attempt passed selected admission/click/token equality, then activation-request observation expired; cleanup passed. Client activation/token consumption/navigation remain unproved |
+| P5l Linux | Durable private-bus callback/token fixture qualified; preparation #360 and full TEST assembly #361 merged | Later attempt passed selected admission/click/token equality but its activation observer expired. Offline logs recover the owned request and server surface; the observer missed the client's `#` delimiter. Original FAILED verdict stays; live focus and navigation remain unqualified |
 
 The user authorized native testing on their Mac in this turn. Tests must still use synthetic chats/notifications; no agent/runtime actions in real user projects. Current permission does not establish Windows/Linux availability or any native test result.
 
@@ -101,7 +101,7 @@ preserves dormant Linux handoff preparation and source-bound runtime export/repl
 All three checkpoints were merged after independent technical review and successful
 exact-head checks, with meaningful commit ancestry retained.
 
-PR #361 holds the complete offline TEST assembly. Its first actual source 0d194f48
+Merged PR #361 holds the complete offline TEST assembly. Its first actual source 0d194f48
 failed before SDK entry: the mandatory sender sidecar was absent from the actual
 readonly ISO. Independent raw review passed 412 assertions; zero SDK/send calls are
 established by frozen source and actual ISO control flow. Guest cleanup observation
@@ -118,4 +118,9 @@ click acknowledgement and token equality, then expired while observing a matchin
 client activation request. All 24 tracked incarnations and the owned VM/container
 were collected. Activation/focus/chat remain unqualified; this is a scoped negative,
 not a declaration that Linux is globally unsupported. Offline retained client-log
-inspection is the next evidence step, without reboot or native replay.
+inspection recovered exactly one owned-token request using `#` rather than the
+observer's expected `@`. A server-log replay identifies the same selected peer and
+surface, with kernel binding/focus explicitly false. A focused parser correction
+accepts both consistent formats; the original frame is unchanged. No guest boot or
+native replay occurred during recovery. A fresh reviewed experiment is still needed
+for the live focus join and final collection gates.

@@ -1,5 +1,29 @@
 # Offline TEST handoff factory checkpoint
 
+## Readonly follow-up: client trace format
+
+After PR #361 merged, the retained third guest image was inspected offline without
+a guest boot, notification or client launch. A separate derived image passed
+partition-before/after hashing; unprivileged read-only debugfs recovered four fixed
+TEST logs. Original backing-chain hashes remained unchanged. The first conversion
+stopped at its 4GiB allocation threshold and was contained; a retained full-chain
+block map justified a distinct conversion with a 5GiB threshold and 512MiB reserve.
+
+The client log contains exactly one activation request with the owned click token,
+using `xdg_activation_v1#22` and `wl_surface#36`. The observer expected only `@`, so
+its wait missed that request. The independent server log records the same selected
+PID/birth, token and surface; a pure replay identifies its live unique toplevel.
+The replay explicitly leaves kernel binding and focus unqualified. The original
+FAILED frame is unchanged; these recovered facts do not establish the live focus
+join, final native collection gates or authenticated chat navigation.
+
+The observer now accepts either consistent object-ID delimiter through one shared
+parser. Three pure tests cover both formats, exact token matching, malformed or
+unrelated records and duplicate retention. The raw recovery archive remains private;
+[the bounded projection](../evidence/navigation/2026-10-06/linux-handoff-client-trace-forensic.json)
+contains hashes and observed metadata, without raw tokens. Any new native experiment
+still requires its own reviewed frozen capsule and complete prior containment.
+
 The guest controller preparation remains in PR #360. This dependent scope owns
 the host assembly, explicit single attempt, completion frame and host cleanup.
 It must not remove the guest's early refusal until the complete assembly passes

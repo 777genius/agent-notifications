@@ -39,6 +39,13 @@ def load(name, path):
     return module
 
 
+def client_activation_surfaces(trace, token):
+    # Client and system libwayland can use different object-ID delimiters.
+    pattern = (r'xdg_activation_v1(?P<separator>[@#])\d+\.activate\("' +
+               re.escape(token) + r'", wl_surface(?P=separator)(?P<surface>\d+)\)')
+    return [match.group('surface') for match in re.finditer(pattern, trace)]
+
+
 def main():
     if os.getuid() != 0 or Path('/.dockerenv').exists() or ROOT.exists():
         raise RuntimeError('fresh_offline_TEST_guest_root_only')
@@ -447,9 +454,9 @@ def main():
         report['tokenEqualityObserved'] = True
         # Request evidence is separate from server focus; neither implies chat selection.
         client_trace = work / 'callback/client.stderr'
-        wait(lambda: re.search(r'xdg_activation_v1@\d+\.activate\("' + re.escape(chain['token']) + r'", wl_surface@\d+\)', read(client_trace)) is not None, 12)
+        wait(lambda: bool(client_activation_surfaces(read(client_trace), chain['token'])), 12)
         report['clientActivationRequestObserved'] = True
-        requests = re.findall(r'xdg_activation_v1@\d+\.activate\(\"' + re.escape(chain['token']) + r'\", wl_surface@(\d+)\)', read(client_trace))
+        requests = client_activation_surfaces(read(client_trace), chain['token'])
         if len(requests) != 1: raise RuntimeError('single_client_activation_surface_unproved')
         report['clientActivationSurfaceID'] = requests[0]
         joined = None
