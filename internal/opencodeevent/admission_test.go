@@ -39,7 +39,17 @@ func freshProvenance(now ClockSample) Provenance {
 }
 func admissionFixture(t *testing.T) (context.Context, Admission, AdmissionRequest, *fixtureAuthority) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	fixtureCtx, a, r, clock := admissionStoreFixture(t)
+	ctx, cancel := context.WithTimeout(fixtureCtx, 10*time.Second)
+	t.Cleanup(cancel)
+	return ctx, a, r, clock
+}
+
+// Setup and durable-store inspection are not part of an admission command.
+// Keep them bounded separately from the original command deadline.
+func admissionStoreFixture(t *testing.T) (context.Context, Admission, AdmissionRequest, *fixtureAuthority) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	t.Cleanup(cancel)
 	base, err := installruntime.CanonicalPath(t.TempDir())
 	if err != nil {
@@ -73,6 +83,17 @@ func admissionFixture(t *testing.T) (context.Context, Admission, AdmissionReques
 		Provenance: freshProvenance(clock.sample), Expected: s, Executable: binary, GOOS: "linux", GOARCH: "amd64", CommandStarted: time.Now()}
 	return ctx, Admission{ControlRoot: root, Clock: clock, TimePolicy: fixtureTimePolicy()}, r, clock
 }
+
+// Semantic scenarios model separate commands. Budget/expiry tests use
+// tryAdmission directly so their original command allowance is never refreshed.
+func tryAdmissionCommand(t *testing.T, fixtureCtx context.Context, a Admission, r AdmissionRequest, want AdmissionStatus) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(fixtureCtx, 10*time.Second)
+	defer cancel()
+	r.CommandStarted = time.Now()
+	tryAdmission(t, ctx, a, r, want)
+}
+
 func tryAdmission(t *testing.T, ctx context.Context, a Admission, r AdmissionRequest, want AdmissionStatus) {
 	t.Helper()
 	h, status := a.Admit(ctx, r)
