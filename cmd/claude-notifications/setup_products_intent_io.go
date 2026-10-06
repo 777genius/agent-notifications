@@ -259,7 +259,7 @@ func validateBootstrapIntent(i confirmedBootstrapIntent) error {
 		}
 		u := i.Units[n]
 		portable := id == "claude" || id == "codex" || id == "cursor"
-		if u.Product != id || u.Hooks != (portable && id != "cursor") || u.Native == portable || u.MCP != containsProduct(i.MCP.Selected, id) || u.Skill != u.MCP || u.PreservedOff != containsProduct(i.MCP.Skipped, id) || u.Desktop != (!portable && i.Request.Desktop) || u.Webhook != (!portable && i.Request.Webhook) {
+		if u.Product != id || u.Hooks != (portable && id != "cursor") || u.Native == portable || u.MCP != containsProduct(i.MCP.Selected, id) || u.Skill != u.MCP || u.PreservedOff != containsProduct(i.MCP.Skipped, id) || u.Desktop != ((!portable || id == "cursor") && i.Request.Desktop) || u.Webhook != ((!portable || id == "cursor") && i.Request.Webhook) {
 			return invalid()
 		}
 	}

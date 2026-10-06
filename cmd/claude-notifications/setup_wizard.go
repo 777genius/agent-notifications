@@ -20,6 +20,7 @@ import (
 	"github.com/777genius/agent-notifications/internal/agentnotify/portablesetup"
 	"github.com/777genius/agent-notifications/internal/agentnotify/setupwizard"
 	"github.com/777genius/agent-notifications/internal/config"
+	"github.com/777genius/agent-notifications/internal/copilotvscodeinstall"
 	"github.com/777genius/agent-notifications/internal/cursorinstall"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/plugin-kit-ai/cli/installerui"
@@ -70,6 +71,8 @@ installation is offered inspect, add/reinstall, uninstall, update, or repair.
   --installation-id ID
   --mcp-config PATH           Owned Codex MCP config to hand off; omit to use an existing config.toml in the selected Codex profile
   --claude-mcp-config PATH    Owned Claude MCP config to hand off; omit to use an existing .claude.json in the selected Claude profile
+Cursor native desktop/webhook consent requires confirmed setup-products channel choices; --yes and MCP selection do not grant it.
+Cursor --agent-notify false and uninstall revoke the recorded native pair before physical cleanup.
 Update and repair require an existing owned binding; missing files remain repairable. Two Claude+Codex notify installs when both are unbound, and update/repair of two live same-revision bindings, use one group apply. Install onto mixed live revisions requires Update of the behind sibling, not group Add. Install of both when one client is already live on an older revision is Update of that client then Add of the missing one. Mixed Codex uninstall still needs --external-uninstalled before Claude is removed with it.
 `
 
@@ -130,11 +133,12 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 	if (preserveExistingUnits && !installOrUpdate) || (installOrUpdate && !validInstallOrUpdateRequest(req)) {
 		return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "invalid", Reason: "invalid_arguments"}, nil)
 	}
+	var confirmed *confirmedBootstrapIntent
 	if bootstrapIntentFile != "" {
 		if !installOrUpdate || !req.Yes || jsonOut && needsWizardInteraction(req) {
 			return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "invalid", Reason: "invalid_arguments"}, nil)
 		}
-		req, err = admitBootstrapWizardRequest(bootstrapIntentFile, req)
+		req, confirmed, err = admitBootstrapWizardIntent(bootstrapIntentFile, req)
 		if err != nil {
 			return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "conflict", Reason: "concurrent_change"}, err)
 		}
@@ -177,9 +181,94 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 		}
 		req = filled
 	}
+	// Pending original-token recovery remains owned by composition. No early
+	// revocation or affirmative consent can enter that reservation.
+	ownership, recovering, ownershipErr := installruntime.ReadOwnership(req.ControlRoot)
+	pendingCursor := ownershipErr != nil || recovering || ownership.PendingMutation != nil
+	if containsProduct(req.Agents, "cursor") && pendingCursor && (confirmed != nil || req.AgentNotify != nil && !*req.AgentNotify) {
+		return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "pending_setup_required"}, setupwizard.ErrRefused)
+	}
+	if containsProduct(req.Agents, "cursor") && pendingCursor && req.Action == setupwizard.ActionUninstall {
+		// A matching removal retry can continue after its earlier revocation;
+		// it cannot perform another false-only commit inside the reservation.
+		s, e := installruntime.ReadPolicySnapshot(ctx, req.ControlRoot)
+		var route struct {
+			Cursor struct{ Desktop, Webhook *bool } `json:"cursorNotifications"`
+		}
+		if e != nil || json.Unmarshal(s.Fields["route"], &route) != nil || route.Cursor.Desktop == nil || route.Cursor.Webhook == nil || *route.Cursor.Desktop || *route.Cursor.Webhook {
+			return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "pending_setup_required"}, setupwizard.ErrRefused)
+		}
+		generation, policy := s.Installation.Ledger.Generation, s.Preimage
+		req.BootstrapExpectedGeneration, req.BootstrapExpectedPolicy = &generation, &policy
+	}
+	if containsProduct(req.Agents, "cursor") && !pendingCursor && req.Action != setupwizard.ActionInspect {
+		if confirmed != nil {
+			if err = fenceCursorIntent(ctx, req, *confirmed); err != nil {
+				return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "conflict", Reason: "concurrent_change"}, err)
+			}
+			if !containsProduct(confirmed.MCP.Selected, "cursor") {
+				return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "unchanged", Reason: "existing_opt_out", Targets: preservedUnitTargets(confirmed.MCP.Skipped)}, nil)
+			}
+		}
+		recorded, found, e := recordedCursorRequest(req)
+		if e != nil {
+			return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "conflict", Reason: "cursor_identity_unavailable"}, e)
+		}
+		disable := req.AgentNotify != nil && !*req.AgentNotify || req.CursorAgentNotify != nil && !*req.CursorAgentNotify
+		revoke := req.Action == setupwizard.ActionUninstall || disable
+		if found && !revoke {
+			// A superseded or unverified registration cannot lend consent to repair.
+			snapshot, e := installruntime.ReadInstalledSnapshot(req.ControlRoot)
+			if e == nil {
+				cfg, fixed, inputErr := cursorInstalledInputs(ctx, recorded, snapshot, filepath.Join(filepath.Dir(req.ControlRoot), "uap", "state"))
+				if inputErr == nil {
+					gate, gateErr := copilotvscodeinstall.NewCursorGate(recorded, cfg, fixed)
+					if gateErr == nil {
+						_, gateErr = gate.ConsumerBinding(ctx)
+					}
+					inputErr = gateErr
+				}
+				e = inputErr
+			}
+			revoke = e != nil || req.Helper != "" && req.Helper != filepath.Join(recorded.RuntimeRoot, filepath.FromSlash(recorded.Primary)) || req.GlobalConfig != "" && req.GlobalConfig != recorded.GlobalConfig || req.RuntimeRoot != "" && req.RuntimeRoot != recorded.RuntimeRoot
+		}
+		if revoke && found {
+			if !req.Yes && tty && !jsonOut {
+				ok, e := prompt.Confirm(ctx, "Cursor action="+string(req.Action)+" installation="+recorded.InstallationID+" binding="+recorded.BindingID+" profile="+recorded.ScopeRoot+" global-config="+recorded.GlobalConfig+" helper="+filepath.Join(recorded.RuntimeRoot, filepath.FromSlash(recorded.Primary))+": revoke desktop and webhook, then attempt the selected owned lifecycle action; cleanup may fail while revocation remains. Apply this plan?")
+				if e != nil {
+					return writeSetupWizardPromptError(out, jsonOut, req, e)
+				}
+				if !ok {
+					return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "cancelled", Reason: "prompt_canceled"}, nil)
+				}
+				req.Yes = true
+			}
+			if !req.Yes {
+				return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "invalid", Reason: "invalid_arguments"}, setupwizard.ErrRefused)
+			}
+			ledger, after, e := revokeRecordedCursor(ctx, recorded, req.BootstrapExpectedGeneration, req.BootstrapExpectedPolicy)
+			if e != nil {
+				return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "cursor_revocation_failed"}, e)
+			}
+			if disable {
+				return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "completed", InstallationID: recorded.InstallationID, Generation: ledger.Generation}, nil)
+			}
+			generation := ledger.Generation
+			req.BootstrapExpectedGeneration, req.BootstrapExpectedPolicy = &generation, &after
+		}
+		if disable && !found {
+			return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "cursor_identity_unavailable"}, setupwizard.ErrRefused)
+		}
+	}
 	req, err = composeCursorWizard(ctx, req)
 	if err != nil {
 		return writeSetupWizardResult(out, jsonOut, setupwizard.Result{Action: string(req.Action), Outcome: "incomplete", Reason: "cursor_composition_required"}, err)
+	}
+	if confirmed != nil && containsProduct(confirmed.Request.Products, "cursor") {
+		// The command already fenced and consumed the one immutable selection.
+		// Legacy BootstrapMCP evaluation captures a new policy observation; retain
+		// our original CAS instead of allowing that path to adopt an opt-out.
+		req.BootstrapMCP = nil
 	}
 	if req.Action != setupwizard.ActionInspect && !req.Yes && tty && !jsonOut {
 		plan, e := setupwizard.Plan(ctx, req)
@@ -212,6 +301,9 @@ func executeSetupWizardWith(ctx context.Context, args []string, out, errOut io.W
 		result, err = runInstallOrUpdate(ctx, req, preserveExistingUnits)
 	} else {
 		result, err = setupwizard.Run(ctx, req)
+	}
+	if err == nil && result.ExitCode() == 0 && confirmed != nil && containsProduct(confirmed.MCP.Selected, "cursor") {
+		result, err = commitConfirmedCursorConsent(ctx, req, result, *confirmed)
 	}
 	return writeSetupWizardResult(out, jsonOut, result, err)
 }
@@ -282,6 +374,9 @@ func runInstallOrUpdate(ctx context.Context, req setupwizard.Request, preserveEx
 	var preserved []string
 	if req.BootstrapMCP != nil {
 		current, generation, policy, e := setupwizard.ObserveBootstrapMCPWithPolicy(ctx, req)
+		if e == nil && (req.BootstrapExpectedGeneration != nil && generation != *req.BootstrapExpectedGeneration || req.BootstrapExpectedPolicy != nil && policy != *req.BootstrapExpectedPolicy) {
+			e = portablesetup.ErrConcurrentChange
+		}
 		if e == nil {
 			e = setupwizard.CheckBootstrapMCP(*req.BootstrapMCP, current)
 		}
@@ -742,28 +837,178 @@ func stripBootstrapIntentFile(args []string) ([]string, string, error) {
 }
 func needsWizardInteraction(r setupwizard.Request) bool { return !r.Yes || len(r.Agents) == 0 }
 func admitBootstrapWizardRequest(path string, r setupwizard.Request) (setupwizard.Request, error) {
+	r, _, err := admitBootstrapWizardIntent(path, r)
+	return r, err
+}
+func admitBootstrapWizardIntent(path string, r setupwizard.Request) (setupwizard.Request, *confirmedBootstrapIntent, error) {
 	provenance, err := currentSelectorProvenance()
 	if err != nil {
-		return r, err
+		return r, nil, err
 	}
 	provenance.Stage = []byte(filepath.Dir(path))
 	intent, err := loadBootstrapIntent(path, provenance)
 	if err != nil {
-		return r, err
+		return r, nil, err
 	}
 	expected := intentWizardRequest(intent)
 	if !sameWizardBootstrapScope(r, expected) || intent.Request.SkipAgentNotify {
-		return r, errors.New("bootstrap request differs from confirmed intent")
+		return r, nil, errors.New("bootstrap request differs from confirmed intent")
 	}
 	r.BootstrapMCP = &intent.MCP
-	// Observe all confirmed portable profiles, including kept/off siblings, before
-	// narrowing the mutation set. No auto defaults are recalculated at admission.
-	r.EnvClaudeConfig = ""
-	r.EnvCodexHome = ""
-	return r, nil
+	if containsProduct(intent.Request.Products, "cursor") {
+		generation, policy := intent.Initial.Generation, intent.Initial.Policy
+		r.BootstrapExpectedGeneration, r.BootstrapExpectedPolicy = &generation, &policy
+	}
+	r.EnvClaudeConfig, r.EnvCodexHome = "", ""
+	return r, &intent, nil
+}
+
+// Record selection uses immutable registration bytes, even when physical assets
+// are replaced. It neither allocates a binding nor chooses a sorted consumer.
+func recordedCursorRequest(r setupwizard.Request) (portable.Binding, bool, error) {
+	ledger, recovery, err := installruntime.ReadOwnership(r.ControlRoot)
+	if err != nil || recovery || ledger.PendingMutation != nil {
+		return portable.Binding{}, false, setupwizard.ErrRefused
+	}
+	var selected portable.Binding
+	found := false
+	for key, consumer := range ledger.Consumers {
+		if !strings.HasPrefix(key, "portable:") {
+			continue
+		}
+		var b portable.Binding
+		if json.Unmarshal([]byte(consumer.Registration), &b) != nil {
+			return selected, false, portable.ErrInvalid
+		}
+		if b.Integration != portable.Cursor || b.ScopeRoot != r.ScopeRoot || r.InstallationID != "" && b.InstallationID != r.InstallationID {
+			continue
+		}
+		if found || b.ControlRoot != r.ControlRoot || b.ComponentID != ledger.ID || b.Owner != ledger.Owner || b.RuntimeRoot != ledger.RuntimeRoot || !portable.ExactCommittedBinding(ledger, b) || r.BindingIDs["cursor"] != "" && b.BindingID != r.BindingIDs["cursor"] {
+			return selected, false, portable.ErrInvalid
+		}
+		selected, found = b, true
+	}
+	return selected, found, nil
+}
+
+func fenceCursorIntent(ctx context.Context, r setupwizard.Request, i confirmedBootstrapIntent) error {
+	policy, err := installruntime.ReadPolicySnapshot(ctx, r.ControlRoot)
+	if err != nil {
+		return err
+	}
+	l := policy.Installation.Ledger
+	if policy.Installation.Recovery || l.PendingMutation != nil || l.ID != i.Initial.LedgerID || l.Owner != i.Initial.Owner || l.Generation != i.Initial.Generation || policy.Preimage != i.Initial.Policy {
+		return portablesetup.ErrConcurrentChange
+	}
+	observation := r
+	off := false
+	observation.CursorAgentNotify = &off
+	current, generation, err := setupwizard.ObserveBootstrapMCP(ctx, observation)
+	if err != nil {
+		return err
+	}
+	if generation != i.Initial.Generation {
+		return portablesetup.ErrConcurrentChange
+	}
+	return setupwizard.CheckBootstrapMCP(i.MCP, current)
+}
+
+// Use policy-only observation before physical cleanup, retaining any admitted
+// original CAS. The predicted output is meaningful only after successful Commit.
+func revokeRecordedCursor(ctx context.Context, b portable.Binding, generation *uint64, policy *installruntime.Identity) (installruntime.Ledger, installruntime.Identity, error) {
+	s, err := installruntime.ReadRevocationSnapshot(ctx, b.ControlRoot)
+	if err != nil {
+		return installruntime.Ledger{}, installruntime.Identity{}, err
+	}
+	if generation != nil && *generation != s.Generation || policy != nil && *policy != s.Preimage {
+		return installruntime.Ledger{}, installruntime.Identity{}, portablesetup.ErrConcurrentChange
+	}
+	off := false
+	patch, err := copilotvscodeinstall.CursorPolicyPatch(b, copilotvscodeinstall.CursorChoices{Desktop: &off, Webhook: &off}, nil)
+	if err != nil {
+		return installruntime.Ledger{}, installruntime.Identity{}, err
+	}
+	after, err := installruntime.PredictPolicyIdentity(b.ControlRoot, s.Preimage, patch)
+	if err != nil {
+		return installruntime.Ledger{}, installruntime.Identity{}, err
+	}
+	key, consumer, _, err := b.Registration()
+	if err != nil {
+		return installruntime.Ledger{}, installruntime.Identity{}, err
+	}
+	ledger, err := installruntime.Commit(ctx, installruntime.Request{ControlRoot: b.ControlRoot, Owner: b.Owner, RuntimeRoot: b.RuntimeRoot, ConsumerID: key, Consumer: consumer, PolicyOnly: true, RefreshOnly: true, RevokeCursor: true, ExpectedGeneration: &s.Generation, ExpectedPolicy: &s.Preimage, PolicyFields: patch})
+	if err != nil {
+		return ledger, installruntime.Identity{}, err
+	}
+	return ledger, after, nil
+}
+
+func commitConfirmedCursorConsent(ctx context.Context, r setupwizard.Request, result setupwizard.Result, i confirmedBootstrapIntent) (setupwizard.Result, error) {
+	deny := func(err error) (setupwizard.Result, error) {
+		result.Outcome, result.Reason = "incomplete", "cursor_consent_unavailable"
+		return result, err
+	}
+	if result.Outcome == "cancelled" || result.InstallationID == "" || len(result.NextActions) != 0 {
+		return deny(setupwizard.ErrRefused)
+	}
+	r.InstallationID = result.InstallationID
+	b, found, err := recordedCursorRequest(r)
+	if err != nil || !found {
+		return deny(setupwizard.ErrRefused)
+	}
+	acknowledged := false
+	for _, target := range result.Targets {
+		if target.Client == "cursor" && target.Unit == "agent-notify" && target.Outcome == "completed" && target.Reason == b.BindingID {
+			acknowledged = true
+		}
+	}
+	if !acknowledged {
+		return deny(setupwizard.ErrRefused)
+	}
+	s, err := installruntime.ReadPolicySnapshot(ctx, r.ControlRoot)
+	if err != nil {
+		return deny(err)
+	}
+	policy := i.Initial.Policy
+	if r.BootstrapExpectedPolicy != nil {
+		policy = *r.BootstrapExpectedPolicy
+	}
+	if s.Installation.Recovery || s.Installation.Ledger.PendingMutation != nil || s.Installation.Ledger.ID != i.Initial.LedgerID || s.Installation.Ledger.Owner != i.Initial.Owner || s.Installation.Ledger.Generation != result.Generation || s.Preimage != policy {
+		return deny(portablesetup.ErrConcurrentChange)
+	}
+	cfg, fixed, err := cursorInstalledInputs(ctx, b, s.Installation, filepath.Join(filepath.Dir(b.ControlRoot), "uap", "state"))
+	if err != nil {
+		return deny(err)
+	}
+	gate, err := copilotvscodeinstall.NewCursorGate(b, cfg, fixed)
+	if err != nil {
+		return deny(err)
+	}
+	binding, err := gate.ConsumerBinding(ctx)
+	if err != nil || binding.Generation != result.Generation {
+		return deny(setupwizard.ErrRefused)
+	}
+	previous, err := copilotvscodeinstall.ReadCursorConsent(s, b)
+	if err != nil {
+		return deny(err)
+	}
+	patch, err := copilotvscodeinstall.CursorPolicyPatch(b, copilotvscodeinstall.CursorChoices{Desktop: &i.Request.Desktop, Webhook: &i.Request.Webhook}, &previous)
+	if err != nil {
+		return deny(err)
+	}
+	key, consumer, _, err := b.Registration()
+	if err != nil {
+		return deny(err)
+	}
+	ledger, err := installruntime.Commit(ctx, installruntime.Request{ControlRoot: b.ControlRoot, Owner: b.Owner, RuntimeRoot: b.RuntimeRoot, ConsumerID: key, Consumer: consumer, PolicyOnly: true, RefreshOnly: true, ExpectedGeneration: &result.Generation, ExpectedPolicy: &policy, PolicyFields: patch})
+	if err != nil {
+		return deny(err)
+	}
+	result.Generation = ledger.Generation
+	return result, nil
 }
 func sameWizardBootstrapScope(actual, expected setupwizard.Request) bool {
-	if strings.Join(actual.Agents, ",") != strings.Join(expected.Agents, ",") || actual.ControlRoot != expected.ControlRoot || actual.ClaudeConfig != expected.ClaudeConfig || actual.CodexHome != expected.CodexHome || actual.CursorConfig != expected.CursorConfig || (containsProduct(expected.Agents, "cursor") && actual.ScopeRoot != expected.ScopeRoot) || actual.GlobalConfig != expected.GlobalConfig {
+	if strings.Join(actual.Agents, ",") != strings.Join(expected.Agents, ",") || actual.ControlRoot != expected.ControlRoot || (!containsProduct(expected.Agents, "cursor") && (actual.ClaudeConfig != expected.ClaudeConfig || actual.CodexHome != expected.CodexHome)) || actual.CursorConfig != expected.CursorConfig || (containsProduct(expected.Agents, "cursor") && actual.ScopeRoot != expected.ScopeRoot) || actual.GlobalConfig != expected.GlobalConfig {
 		return false
 	}
 	// A fresh legacy phase chooses its existing managed runtime during hooks

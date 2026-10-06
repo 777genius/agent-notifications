@@ -36,7 +36,7 @@ func bootstrapCodecFixture(t *testing.T) (confirmedBootstrapIntent, string) {
 // codec, or a caller substitutes a different profile at wizard admission.
 func TestSetupProductsCursorIntentRoundTrip(t *testing.T) {
 	i, path := bootstrapCodecFixture(t)
-	r, err := parseSetupProducts([]string{"confirm", "--products", "cursor", "--agent-notify", "--scope-root", string(i.Provenance.Stage), "--client-executable", filepath.Join(string(i.Provenance.Stage), "TEST-agent")})
+	r, err := parseSetupProducts([]string{"confirm", "--products", "cursor", "--agent-notify", "--desktop", "--scope-root", string(i.Provenance.Stage), "--client-executable", filepath.Join(string(i.Provenance.Stage), "TEST-agent")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,13 +48,28 @@ func TestSetupProductsCursorIntentRoundTrip(t *testing.T) {
 	i.Scopes["client-executable"] = []byte(filepath.Join(string(i.Provenance.Stage), "TEST-agent"))
 	i.MCP.Selected = []string{"cursor"}
 	i.MCP.Projection.Profiles = map[string][]byte{"cursor": i.Provenance.Stage}
-	i.Units = []bootstrapProductUnits{{Product: "cursor", MCP: true, Skill: true}}
+	i.Units = []bootstrapProductUnits{{Product: "cursor", MCP: true, Skill: true, Desktop: true}}
 	if err := writeBootstrapIntent(path, i); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := loadBootstrapIntent(path, i.Provenance)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !loaded.Request.Desktop || loaded.Request.Webhook || !loaded.Units[0].Desktop || loaded.Units[0].Webhook {
+		t.Fatal("desktop-only frozen choice broadened or lost")
+	}
+	for _, mutate := range []func(*confirmedBootstrapIntent){
+		func(b *confirmedBootstrapIntent) { b.Request.Webhook = true },
+		func(b *confirmedBootstrapIntent) { b.Units[0].Desktop = false },
+		func(b *confirmedBootstrapIntent) { b.Units[0].Webhook = true },
+	} {
+		bad := loaded
+		bad.Units = append([]bootstrapProductUnits(nil), loaded.Units...)
+		mutate(&bad)
+		if validateBootstrapIntent(bad) == nil {
+			t.Fatal("channel tamper admitted")
+		}
 	}
 	want := intentWizardRequest(loaded)
 	if strings.Join(want.Agents, ",") != "cursor" || want.CursorConfig != string(i.Provenance.Stage) || want.ScopeRoot != want.CursorConfig || want.ClientExecutables["cursor"] != string(i.Scopes["client-executable"]) || want.CursorAuthority != nil {

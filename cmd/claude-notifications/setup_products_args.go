@@ -134,7 +134,7 @@ func parseSetupProducts(args []string) (r setupProductsArgs, err error) {
 	if containsProduct(r.Products, "cursor") {
 		// Cursor is one existing selected wizard operation; the two-client
 		// Claude/Codex group and their policy configuration keep their meaning.
-		if len(r.Products) != 1 || routePresent || r.Desktop || r.Webhook || r.Operation == "channels" ||
+		if len(r.Products) != 1 || routePresent || (r.Operation == "channels" && (len(seen) != 1 || r.IntentFile != "")) ||
 			(r.Operation == "confirm" && (r.Scopes["scope-root"] == "" || r.Scopes["client-executable"] == "")) {
 			return invalid()
 		}

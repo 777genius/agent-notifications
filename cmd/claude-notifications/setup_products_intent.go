@@ -151,7 +151,7 @@ func buildConfirmedBootstrapIntent(ctx context.Context, a setupProductsArgs, e p
 	for _, id := range a.Products {
 		portable := id == "claude" || id == "codex" || id == "cursor"
 		u := bootstrapProductUnits{Product: id, Hooks: portable && id != "cursor", Native: !portable, MCP: containsProduct(i.MCP.Selected, id), Skill: containsProduct(i.MCP.Selected, id), PreservedOff: containsProduct(i.MCP.Skipped, id)}
-		if !portable {
+		if !portable || id == "cursor" {
 			u.Desktop = a.Desktop
 			u.Webhook = a.Webhook
 		}
