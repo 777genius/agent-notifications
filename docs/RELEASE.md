@@ -216,6 +216,22 @@ same release commit on `main`:
 git switch main && git merge --ff-only release/vX.Y.Z && git push origin main
 ```
 
+## Partial releases without macOS
+
+When macOS signing is unavailable, qualify and publish only the Linux/Windows
+assets with `--latest=false`. Keep the macOS channel and GitHub Latest at their
+previous qualified version. Promote Linux/Windows source branches and immutable
+source tags, then activate only their index rows as described in
+[platform channels](PLATFORM_RELEASE_CHANNELS.md).
+
+Keep all five native version occurrences on `main` at the legacy macOS version.
+Existing Claude marketplace users on `main` download the version in its manifest;
+a newer version without Darwin assets would stall their updater. Integrate the
+release and channel PR histories together with the main-version restoration in
+one reviewed promotion, so no intermediate bump is published on `main`. The
+release tag and Linux/Windows source retain their new version and exact source SHA.
+The assets-before-main bump instructions above apply to a full-platform release.
+
 ## ClaudeNotifier.app (macOS)
 
 v1.48.0 does not build or publish ClaudeNotifier.app. macOS consumers retain the

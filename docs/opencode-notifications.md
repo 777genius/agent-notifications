@@ -36,13 +36,12 @@ service or Windows toasts. Linux needs an available desktop session/D-Bus servic
 - Historical V1 lifecycle/webhook checks covered all five targets; retained V2
   native completion observations provide corroboration. They do not qualify new
   release bytes by themselves.
-- The 1.48.0 release gate covers seven native Linux/Windows cells and all five
+- The 1.48.0 release gate covers seven native Linux/Windows cells and three
   artifact canaries, as detailed below. Exact release reports establish which checks
   passed; configured workflow lanes alone are not evidence.
-- Intel macOS desktop delivery remains unqualified. Its native build and artifact
-  canary are included under the owner's accepted release scope. Historical macOS
-  ARM business evidence is separate from fresh release artifact checks. Neither
-  establishes visible Intel banners, every desktop environment or V2 visible banners.
+- macOS binaries and the helper are excluded from 1.48.0; macOS retains 1.46.1.
+  Historical macOS ARM business evidence is separate from this release. Intel
+  desktop delivery and macOS V2 visible banners remain unqualified.
 
 **Windows V1 limitation:** stock OpenCode V1 events do not always allow the
 original event age to be verified independently. A delayed completion can notify
@@ -59,8 +58,8 @@ The installed fixture in `scripts/opencode-native-e2e.py` retains eleven custody
 cells: V1 1.18.33 and V2 2.0.21 on all five platform pairs, plus Linux amd64 V1
 1.18.34. The 1.48.0 tag workflow runs seven Linux/Windows cells: both API versions
 on Linux amd64/arm64 and Windows amd64, plus Linux amd64 V1 1.18.34. It separately
-runs artifact canaries on all five native targets, with a signed and notarized
-macOS helper. These checks cover managed lifecycle, completion delivery and
+runs artifact canaries on the three Linux/Windows native targets. No macOS
+binaries or helper ship in 1.48.0; macOS retains its 1.46.1 channel. These checks cover managed lifecycle, completion delivery and
 revocation; they do not prove every desktop effect or replace the broader semantic
 matrix. See the exact-source reports linked from the release and
 [release procedure](RELEASE.md).

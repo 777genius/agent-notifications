@@ -7,11 +7,10 @@ release commit, an immutable source commit, and its platform branch.
 | Platform | Qualified version | Source branch |
 | --- | --- | --- |
 | Linux amd64 / arm64, Windows amd64 | 1.48.0 | `release/platform-linux-windows` |
-| macOS amd64 / arm64 | 1.48.0 | `release/platform-macos` |
+| macOS amd64 / arm64 | 1.46.1 | `release/platform-macos` |
 
-GitHub Latest is 1.48.0 for legacy installers, with all five native targets.
-Intel macOS desktop delivery remains unqualified; the binary and artifact canary
-are included under the owner's accepted release scope. A platform channel can select
+GitHub Latest stays 1.46.1 for legacy installers. Release 1.48.0 contains only
+Linux and Windows artifacts; macOS retains its qualified 1.46.1 channel. A platform channel can select
 an explicitly qualified partial release even when GitHub labels it Pre-release.
 No scan for the newest tag or fallback to Latest is used. Invalid/missing rows,
 unsupported architectures and failed downloads stop selection before installation.

@@ -7,9 +7,8 @@ Compatible with other Claude plugins that spawn background Claude instances.
 OpenCode integration is a self-contained global plugin, separate from Claude
 marketplace plugins and Codex hooks. Agent Notifications 1.48.0 supports V1
 1.18.33 and V2 2.0.21 on Linux amd64/arm64 and Windows amd64, with V1 1.18.34
-also qualified on Linux amd64. All five native artifacts have release canaries;
-Intel macOS desktop delivery remains unqualified and historical macOS ARM desktop
-evidence is separate. The self-contained bundle uses reviewed vendored SDK 0.3.0;
+also qualified on Linux amd64. The three Linux/Windows native artifacts have release canaries.
+macOS retains 1.46.1 and its earlier OpenCode support. The self-contained bundle uses reviewed vendored SDK 0.3.0;
 its separate npm publication is not a consumer release gate. Root-session completion,
 question, permission and error notifications are covered; desktop alerts can use
 bounded native session titles and current question text, while webhooks stay generic.

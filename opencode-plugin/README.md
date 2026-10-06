@@ -77,8 +77,8 @@ business phases. Inert fixture checks establish source/parser contracts only.
 
 The 1.48.0 tag release gate runs seven Linux/Windows cells: V1 1.18.33 and V2
 2.0.21 on Linux amd64/arm64 and Windows amd64, plus Linux amd64 V1 1.18.34.
-All five native artifacts retain canaries, including both macOS architectures and
-the signed/notarized helper. Exact release reports, rather than configured lanes,
+The three Linux/Windows native artifacts retain canaries. macOS artifacts and
+the signed/notarized helper are excluded from 1.48.0. Exact release reports, rather than configured lanes,
 establish successful qualification. Intel macOS desktop delivery remains
 unqualified; historical macOS ARM business evidence is separate. One-shot host
 shutdown remains best effort. Stock Windows V1 may notify a delayed completion
