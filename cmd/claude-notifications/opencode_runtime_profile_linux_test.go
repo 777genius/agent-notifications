@@ -110,7 +110,7 @@ func profileParentStage(barrier string) string {
 	if err != nil {
 		return "unavailable"
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	data, err := io.ReadAll(io.LimitReader(f, 65))
 	if err != nil || len(data) > 64 {
 		return "invalid"
@@ -184,7 +184,7 @@ func launchProfileHelper(t *testing.T, host, in runtimeProfileInput, raw, qualif
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(launchFile.Name())
+	defer func() { _ = os.Remove(launchFile.Name()) }()
 	if _, err = launchFile.Write(data); err != nil {
 		_ = launchFile.Close()
 		t.Fatal(err)
