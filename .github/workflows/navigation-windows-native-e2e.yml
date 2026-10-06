@@ -53,6 +53,7 @@ jobs:
           cmd.exe /d /s /c $cmd
           if ($LASTEXITCODE -ne 0) { throw 'native probe compile failed' }
       - name: Single native submission and OS cold callback
+        if: github.event_name == 'workflow_dispatch'
         id: probe
         shell: pwsh
         run: |

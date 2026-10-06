@@ -21,6 +21,7 @@
 #include <utility>
 #include <optional>
 #include <exception>
+#include <memory>
 using Microsoft::WRL::ComPtr;
 namespace fs = std::filesystem;
 using namespace winrt::Windows::UI::Notifications;
@@ -470,6 +471,99 @@ static int callback() {
     for (int i = 0; i < 300 && !activated; ++i) Sleep(100);
     CoRevokeClassObject(cookie); return activated ? 0 : 4;
 }
+// Failure diagnostics only. Never exports unrelated UI text or performs an action.
+// Child walking keeps this independent of the action finder's exact Name + Button predicate.
+static void snapshotOwnedShellUI(IUIAutomation* automation) noexcept {
+    unsigned rootsRead = 0, shellRoots = 0, nodesRead = 0, errors = 0, providerSkips = 0;
+    bool capped = false; std::string matches = "[";
+    const ULONGLONG deadline = GetTickCount64() + 2000;
+    auto budget = [&]() { return GetTickCount64() < deadline && nodesRead < 512; };
+    try {
+        DWORD session = 0; if (!ProcessIdToSessionId(GetCurrentProcessId(), &session)) throw std::runtime_error("session unavailable");
+        wchar_t windows[32768]{}; if (!GetWindowsDirectoryW(windows, 32768)) throw std::runtime_error("Windows directory unavailable");
+        std::wstring windowsPrefix = std::wstring(windows) + L"\\";
+        std::transform(windowsPrefix.begin(), windowsPrefix.end(), windowsPrefix.begin(), towlower);
+        ComPtr<IUIAutomationTreeWalker> walker; check(automation->get_RawViewWalker(&walker));
+        ComPtr<IUIAutomationElement> desktop, child;
+        check(automation->GetRootElement(&desktop)); check(walker->GetFirstChildElement(desktop.Get(), &child));
+        while (child && rootsRead < 64 && shellRoots < 16 && budget()) {
+            ++rootsRead;
+            int pid = 0; HRESULT pidResult = child->get_CurrentProcessId(&pid);
+            DWORD peerSession = 0;
+            std::unique_ptr<void, decltype(&CloseHandle)> peer(SUCCEEDED(pidResult) && pid > 0 && pid != static_cast<int>(GetCurrentProcessId())
+                ? OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, static_cast<DWORD>(pid)) : nullptr, &CloseHandle);
+            wchar_t image[32768]{}; DWORD length = 32768;
+            bool verified = peer && WaitForSingleObject(peer.get(), 0) == WAIT_TIMEOUT
+                && ProcessIdToSessionId(static_cast<DWORD>(pid), &peerSession) && peerSession == session
+                && WaitForSingleObject(peer.get(), 0) == WAIT_TIMEOUT
+                && QueryFullProcessImageNameW(peer.get(), 0, image, &length);
+            std::wstring imageLower = image;
+            std::transform(imageLower.begin(), imageLower.end(), imageLower.begin(), towlower);
+            std::wstring base = fs::path(imageLower).filename().wstring();
+            verified = verified && imageLower.compare(0, windowsPrefix.size(), windowsPrefix) == 0
+                && (base == L"shellexperiencehost.exe" || base == L"shellhost.exe" || base == L"explorer.exe");
+            // Retain the kernel process handle while reading that provider's subtree.
+            if (verified) {
+                ++shellRoots;
+                struct Node { ComPtr<IUIAutomationElement> element; unsigned depth; };
+                std::vector<Node> pending{{child, 0}};
+                unsigned containerNodes = 0;
+                while (!pending.empty() && containerNodes < 128 && budget() && WaitForSingleObject(peer.get(), 0) == WAIT_TIMEOUT) {
+                    Node node = std::move(pending.back()); pending.pop_back(); ++nodesRead; ++containerNodes;
+                    int nodePid = 0;
+                    if (FAILED(node.element->get_CurrentProcessId(&nodePid)) || nodePid != pid) { ++providerSkips; continue; }
+                    BSTR name = nullptr;
+                    HRESULT nameResult = node.element->get_CurrentName(&name);
+                    bool exactTitle = false, exactAction = false, ownNonce = false;
+                    if (SUCCEEDED(nameResult) && name && SysStringLen(name) <= 4096) {
+                        std::wstring text(name, SysStringLen(name));
+                        exactTitle = text == L"Navigation TEST " + uuid; exactAction = text == action;
+                        ownNonce = text.find(uuid) != std::wstring::npos;
+                    } else if (FAILED(nameResult)) ++errors;
+                    SysFreeString(name);
+                    if (ownNonce) {
+                        CONTROLTYPEID type = 0; BOOL offscreen = TRUE, enabled = FALSE;
+                        HRESULT typeResult = node.element->get_CurrentControlType(&type);
+                        HRESULT offscreenResult = node.element->get_CurrentIsOffscreen(&offscreen);
+                        HRESULT enabledResult = node.element->get_CurrentIsEnabled(&enabled);
+                        VARIANT available{};
+                        HRESULT patternResult = node.element->GetCurrentPropertyValue(UIA_IsInvokePatternAvailablePropertyId, &available);
+                        bool invokable = SUCCEEDED(patternResult) && available.vt == VT_BOOL && available.boolVal == VARIANT_TRUE;
+                        VariantClear(&available);
+                        if (matches.size() > 1) matches += ',';
+                        matches += "{\"depth\":" + std::to_string(node.depth) + ",\"providerPID\":" + std::to_string(pid)
+                            + ",\"exactTitle\":" + (exactTitle ? "true" : "false") + ",\"exactAction\":" + (exactAction ? "true" : "false")
+                            + ",\"controlType\":" + (SUCCEEDED(typeResult) ? std::to_string(type) : "null")
+                            + ",\"offscreen\":" + (FAILED(offscreenResult) ? "null" : offscreen ? "true" : "false")
+                            + ",\"enabled\":" + (FAILED(enabledResult) ? "null" : enabled ? "true" : "false")
+                            + ",\"invokePatternAvailable\":" + (FAILED(patternResult) ? "null" : invokable ? "true" : "false") + '}';
+                    }
+                    if (node.depth >= 16) { capped = true; continue; }
+                    ComPtr<IUIAutomationElement> descendant;
+                    if (FAILED(walker->GetFirstChildElement(node.element.Get(), &descendant))) { ++errors; continue; }
+                    while (descendant && budget()) {
+                        if (pending.size() + nodesRead >= 512 || pending.size() + containerNodes >= 128) { capped = true; break; }
+                        pending.push_back({descendant, node.depth + 1});
+                        ComPtr<IUIAutomationElement> next;
+                        if (FAILED(walker->GetNextSiblingElement(descendant.Get(), &next))) { ++errors; break; }
+                        descendant = next;
+                    }
+                }
+                if (!pending.empty()) capped = true;
+            }
+            ComPtr<IUIAutomationElement> next;
+            check(walker->GetNextSiblingElement(child.Get(), &next)); child = next;
+        }
+        if (child) capped = true;
+    } catch (...) { ++errors; }
+    matches += ']';
+    try {
+        report("ui-owned-snapshot.json", "{\"diagnosticOnly\":true,\"negativeIsAbsenceProof\":false,\"desktopChildrenRead\":" + std::to_string(rootsRead)
+            + ",\"verifiedShellContainers\":" + std::to_string(shellRoots) + ",\"nodesRead\":" + std::to_string(nodesRead)
+            + ",\"providerSkips\":" + std::to_string(providerSkips) + ",\"errors\":" + std::to_string(errors)
+            + ",\"truncated\":" + (capped || !budget() ? "true" : "false") + ",\"ownedNonceMatches\":" + matches + "}\n");
+    } catch (...) { /* Diagnostic failure never qualifies a callback or changes the failed Invoke. */ }
+}
 static int invoke() {
     ComPtr<IUIAutomation> automation;
     check(CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&automation)));
@@ -556,6 +650,7 @@ static int invoke() {
         Sleep(250);
     }
     report("ui-invoke.json", "{\"actionName\":" + jsonQuote(action) + ",\"found\":false}\n");
+    snapshotOwnedShellUI(automation.Get());
     return 5;
 }
 static void cleanup() {
