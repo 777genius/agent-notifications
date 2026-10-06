@@ -347,7 +347,7 @@ struct SurfaceScan {
     std::vector<BYTE> user;
     std::wstring windows;
     std::vector<std::wstring> imageNames{L"explorer.exe", L"shellhost.exe", L"shellexperiencehost.exe"};
-    bool exportImageLeaf = false;
+    bool exportImageLeaf = false, allowAnyWindowsImage = false;
     std::string projection = "visible_or_foreground_owned_shell";
     unsigned visited = 0, errors = 0, count = 0;
     bool truncated = false, enumerationCompleted = false;
@@ -367,7 +367,7 @@ struct SurfaceScan {
         std::transform(path.begin(), path.end(), path.begin(), [](wchar_t c) { return std::towlower(c); });
         const auto leaf = fs::path(path).filename().wstring();
         if (path.rfind(windows + L"\\", 0) != 0
-            || std::find(imageNames.begin(), imageNames.end(), leaf) == imageNames.end()) return nullptr;
+            || (!allowAnyWindowsImage && std::find(imageNames.begin(), imageNames.end(), leaf) == imageNames.end())) return nullptr;
         const auto candidate = tokenUser(handle);
         if (!EqualSid(reinterpret_cast<TOKEN_USER*>(user.data())->User.Sid,
             reinterpret_cast<const TOKEN_USER*>(candidate.data())->User.Sid) || !held->live()) return nullptr;
@@ -1254,6 +1254,171 @@ static bool desktopCapture() {
         + ",\"captureScope\":\"primary_monitor_physical_GDI_pixels_non_atomic_metadata\",\"metadata\":" + metadata + "}\n");
     return true;
 }
+// One selected foreground subtree, property reads only; never Invoke or UI input.
+static bool oobePreflight() {
+    auto env = [](const wchar_t* name) {
+        wchar_t value[128]{}; DWORD length = GetEnvironmentVariableW(name, value, 128);
+        if (!length || length >= 128) throw std::runtime_error("OOBE TEST authority absent");
+        return std::wstring(value, length);
+    };
+    if (env(L"NAVIGATION_WINDOWS_OOBE_PREFLIGHT_TEST") != L"1"
+        || env(L"GITHUB_REPOSITORY") != L"777genius/agent-notifications"
+        || env(L"GITHUB_EVENT_NAME") != L"workflow_dispatch" || env(L"GITHUB_RUN_ATTEMPT") != L"1"
+        || env(L"NAVIGATION_WINDOWS_RUNNER") != L"windows-11-vs2026-arm")
+        throw std::runtime_error("fresh manual OOBE TEST required");
+    const auto source = env(L"NAVIGATION_SOURCE_SHA"); USHORT processMachine{}, nativeMachine{};
+    if (source.size() != 40 || source.find_first_not_of(L"0123456789abcdef") != std::wstring::npos
+        || !IsWow64Process2(GetCurrentProcess(), &processMachine, &nativeMachine)
+        || processMachine != IMAGE_FILE_MACHINE_UNKNOWN || nativeMachine != IMAGE_FILE_MACHINE_ARM64)
+        throw std::runtime_error("OOBE exact source/native ARM64 required");
+    const ULONGLONG started = GetTickCount64(), deadline = started + 5000;
+    vendorDeadline = deadline; VendorHashFile executable(root / L"navigation-native-probe.exe", 67108864);
+    if (!preflight("oobe-preflight.json")) return false;
+    SurfaceScan owners; owners.allowAnyWindowsImage = true; wchar_t windows[32768]{};
+    UINT length = GetWindowsDirectoryW(windows, 32768);
+    if (!length || length >= 32768 || !ProcessIdToSessionId(GetCurrentProcessId(), &owners.session))
+        throw std::runtime_error("OOBE desktop identity unavailable");
+    owners.windows.assign(windows, length); owners.user = tokenUser(GetCurrentProcess());
+    std::transform(owners.windows.begin(), owners.windows.end(), owners.windows.begin(), [](wchar_t c) { return std::towlower(c); });
+    const HWND window = GetForegroundWindow(); DWORD pid{}; GetWindowThreadProcessId(window, &pid);
+    auto held = pid ? owners.owner(pid) : nullptr; wchar_t windowClass[121]{};
+    const int classLength = window ? GetClassNameW(window, windowClass, 121) : 0;
+    auto birth = [](SurfaceOwner* peer) {
+        FILETIME created{}, exited{}, kernel{}, user{}; ULARGE_INTEGER ticks{};
+        if (!peer || !peer->live() || !GetProcessTimes(peer->process, &created, &exited, &kernel, &user))
+            throw std::runtime_error("OOBE kernel incarnation unavailable");
+        ticks.LowPart = created.dwLowDateTime; ticks.HighPart = created.dwHighDateTime;
+        return std::to_string(ticks.QuadPart);
+    };
+    if (!held || !held->live() || held->imageLeaf.empty() || held->imageLeaf.size() > 120 || classLength <= 0 || classLength >= 120)
+        throw std::runtime_error("OOBE selected Windows foreground unavailable");
+    const auto created = birth(held); const std::wstring selectedClass(windowClass, classLength);
+    auto stable = [&]() {
+        DWORD current{}; wchar_t name[121]{};
+        return held->live() && GetProcessId(held->process) == pid && GetForegroundWindow() == window
+            && IsWindow(window) && IsWindowVisible(window) && GetWindowThreadProcessId(window, &current)
+            && current == pid && GetClassNameW(window, name, 121) == classLength
+            && std::wstring(name) == selectedClass && birth(held) == created;
+    };
+    if (!stable()) throw std::runtime_error("OOBE foreground changed before census");
+    report("oobe-intent.json", "{\"pid\":" + std::to_string(GetCurrentProcessId()) + ",\"nonce\":" + jsonQuote(uuid)
+        + ",\"sourceSHA\":" + jsonQuote(source) + ",\"foregroundPID\":" + std::to_string(pid)
+        + ",\"foregroundCreatedUtcTicks\":\"" + created + "\",\"censusAttempts\":1,\"showAttempts\":0,\"inputAttempted\":false}\n");
+    unsigned visited{}, count{}, errors{}, providerSkips{}; bool truncated{}, available{}, rootStable{}, completed{};
+    HRESULT lastError = S_OK; std::string rows;
+    auto budget = [&]() { return GetTickCount64() < deadline; };
+    auto call = [&](auto operation) {
+        if (!budget()) { truncated = true; winrt::throw_hresult(E_ABORT); }
+        HRESULT hr = operation(); if (!budget()) truncated = true;
+        return hr;
+    };
+    auto observed = [&](HRESULT hr) { if (FAILED(hr)) { ++errors; lastError = hr; } return SUCCEEDED(hr); };
+    auto text = [&](HRESULT hr, BSTR value, bool& clipped) {
+        std::unique_ptr<OLECHAR, decltype(&SysFreeString)> owned(value, &SysFreeString);
+        if (!observed(hr)) return std::string("null");
+        const UINT size = value ? SysStringLen(value) : 0; UINT take = (std::min)(size, 120U); clipped = size > take;
+        if (take && value[take - 1] >= 0xd800 && value[take - 1] <= 0xdbff) { --take; clipped = true; }
+        try { return jsonQuote(value ? std::wstring(value, take) : L""); }
+        catch (...) { ++errors; return std::string("null"); }
+    };
+    try {
+        ComPtr<IUIAutomation> automation;
+        check(call([&]() { return CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&automation)); }));
+        ComPtr<IUIAutomationElement> element;
+        check(call([&]() { return automation->ElementFromHandle(window, &element); }));
+        ComPtr<IUIAutomationTreeWalker> walker; check(call([&]() { return automation->get_RawViewWalker(&walker); }));
+        auto rootBound = [&]() {
+            int provider{}; UIA_HWND hwnd{};
+            return element && observed(call([&]() { return element->get_CurrentProcessId(&provider); }))
+                && provider == static_cast<int>(pid)
+                && observed(call([&]() { return element->get_CurrentNativeWindowHandle(&hwnd); }))
+                && reinterpret_cast<HWND>(hwnd) == window && stable() && budget();
+        };
+        if (!rootBound()) throw std::runtime_error("OOBE UIA foreground binding unavailable");
+        available = true;
+        struct Node { ComPtr<IUIAutomationElement> element; unsigned depth; int parent; };
+        std::vector<Node> pending{{element, 0, -1}};
+        while (!pending.empty() && budget() && visited < 512 && stable()) {
+            Node node = std::move(pending.back()); pending.pop_back(); ++visited;
+            int provider{}; const HRESULT pidHR = call([&]() { return node.element->get_CurrentProcessId(&provider); });
+            if (!observed(pidHR) || provider <= 0) { ++providerSkips; continue; }
+            auto peer = owners.owner(static_cast<DWORD>(provider));
+            if (!peer || !peer->live() || peer->imageLeaf.empty() || peer->imageLeaf.size() > 120) { ++providerSkips; continue; }
+            const auto providerBirth = birth(peer);
+            BSTR name{}, id{}, cls{}; bool nameClipped{}, idClipped{}, classClipped{};
+            const HRESULT nameHR = call([&]() { return node.element->get_CurrentName(&name); }); const auto nameJSON = text(nameHR, name, nameClipped);
+            const HRESULT idHR = call([&]() { return node.element->get_CurrentAutomationId(&id); }); const auto idJSON = text(idHR, id, idClipped);
+            const HRESULT clsHR = call([&]() { return node.element->get_CurrentClassName(&cls); }); const auto classJSON = text(clsHR, cls, classClipped);
+            CONTROLTYPEID type{}; BOOL enabled{}, offscreen{}; RECT rectangle{};
+            const HRESULT typeHR = call([&]() { return node.element->get_CurrentControlType(&type); }); observed(typeHR);
+            const HRESULT enabledHR = call([&]() { return node.element->get_CurrentIsEnabled(&enabled); }); observed(enabledHR);
+            const HRESULT offscreenHR = call([&]() { return node.element->get_CurrentIsOffscreen(&offscreen); }); observed(offscreenHR);
+            const HRESULT rectHR = call([&]() { return node.element->get_CurrentBoundingRectangle(&rectangle); });
+            bool rectValid = observed(rectHR) && rectangle.left <= rectangle.right && rectangle.top <= rectangle.bottom;
+            for (LONG coordinate : {rectangle.left, rectangle.top, rectangle.right, rectangle.bottom})
+                if (coordinate < -1048576 || coordinate > 1048576) rectValid = false;
+            if (SUCCEEDED(rectHR) && !rectValid) ++errors;
+            VARIANT pattern{}; const HRESULT patternHR = call([&]() {
+                return node.element->GetCurrentPropertyValue(UIA_IsInvokePatternAvailablePropertyId, &pattern); });
+            const bool patternValid = observed(patternHR) && pattern.vt == VT_BOOL;
+            const bool invokeAvailable = patternValid && pattern.boolVal != VARIANT_FALSE; VariantClear(&pattern);
+            if (SUCCEEDED(patternHR) && !patternValid) ++errors;
+            int after{}; const HRESULT afterHR = call([&]() { return node.element->get_CurrentProcessId(&after); });
+            if (!observed(afterHR) || after != provider || !peer->live() || birth(peer) != providerBirth || !stable() || !budget()) {
+                ++errors; continue;
+            }
+            const auto row = "{\"index\":" + std::to_string(count) + ",\"parentIndex\":" + std::to_string(node.parent)
+                + ",\"depth\":" + std::to_string(node.depth) + ",\"providerPID\":" + std::to_string(provider)
+                + ",\"providerCreatedUtcTicks\":\"" + providerBirth + "\",\"verifiedImageLeaf\":" + jsonQuote(peer->imageLeaf)
+                + ",\"elementName\":" + nameJSON + ",\"automationId\":" + idJSON + ",\"className\":" + classJSON
+                + ",\"nameTruncated\":" + (nameClipped ? "true" : "false") + ",\"automationIdTruncated\":" + (idClipped ? "true" : "false")
+                + ",\"classNameTruncated\":" + (classClipped ? "true" : "false")
+                + ",\"controlType\":" + (SUCCEEDED(typeHR) ? std::to_string(type) : "null")
+                + ",\"enabled\":" + (FAILED(enabledHR) ? "null" : enabled ? "true" : "false")
+                + ",\"offscreen\":" + (FAILED(offscreenHR) ? "null" : offscreen ? "true" : "false")
+                + ",\"invokePatternAvailable\":" + (!patternValid ? "null" : invokeAvailable ? "true" : "false")
+                + ",\"rectangle\":" + (!rectValid ? "null" : "[" + std::to_string(rectangle.left) + ',' + std::to_string(rectangle.top)
+                    + ',' + std::to_string(rectangle.right) + ',' + std::to_string(rectangle.bottom) + ']')
+                + ",\"propertyHRESULTs\":[" + std::to_string(pidHR) + ',' + std::to_string(nameHR) + ',' + std::to_string(idHR)
+                    + ',' + std::to_string(clsHR) + ',' + std::to_string(typeHR) + ',' + std::to_string(enabledHR) + ','
+                    + std::to_string(offscreenHR) + ',' + std::to_string(rectHR) + ',' + std::to_string(patternHR) + ',' + std::to_string(afterHR) + "]}";
+            if (rows.size() + row.size() + (count ? 1 : 0) > 60000) { truncated = true; break; }
+            const int index = static_cast<int>(count++); if (index) rows += ','; rows += row;
+            ComPtr<IUIAutomationElement> child;
+            if (!observed(call([&]() { return walker->GetFirstChildElement(node.element.Get(), &child); }))) continue;
+            if (child && node.depth >= 12) { truncated = true; continue; }
+            while (child && budget()) {
+                if (pending.size() + visited >= 512) { truncated = true; break; }
+                pending.push_back({child, node.depth + 1, index}); ComPtr<IUIAutomationElement> next;
+                if (!observed(call([&]() { return walker->GetNextSiblingElement(child.Get(), &next); }))) break;
+                child = next;
+            }
+        }
+        if (!pending.empty() || !budget() || owners.truncated) truncated = true;
+        rootStable = rootBound() && preflight("oobe-after-preflight.json") && stable();
+        completed = rootStable && budget() && count && !truncated && !errors && !owners.errors && !providerSkips;
+    } catch (const winrt::hresult_error& error) { ++errors; lastError = error.code().value; }
+      catch (...) { ++errors; lastError = E_FAIL; }
+    const bool expired = !budget(); if (expired) { truncated = true; completed = false; }
+    const auto result = "{\"pid\":" + std::to_string(GetCurrentProcessId()) + ",\"nonce\":" + jsonQuote(uuid)
+        + ",\"sourceSHA\":" + jsonQuote(source) + ",\"binarySHA256\":\"" + executable.digest + "\",\"architecture\":\"ARM64\""
+        + ",\"diagnosticOnly\":true,\"readOnly\":true,\"censusAttempts\":1,\"showAttempts\":0,\"inputAttempted\":false"
+        + ",\"invokeAttempted\":false,\"launchAttempted\":false,\"installAttempted\":false,\"retryAllowed\":false"
+        + ",\"selectorActionQualified\":false,\"negativeIsAbsenceProof\":false,\"sameUserSession\":true"
+        + ",\"centerOpenedProved\":false,\"nativeCallbackQualified\":false,\"navigationQualified\":false"
+        + ",\"projection\":\"selected_foreground_UIA_properties\",\"imageAuthority\":\"kernel_image_under_Windows_not_signature_qualification\""
+        + ",\"foregroundHWND\":" + std::to_string(reinterpret_cast<uintptr_t>(window)) + ",\"foregroundPID\":" + std::to_string(pid)
+        + ",\"foregroundCreatedUtcTicks\":\"" + created + "\",\"verifiedImageLeaf\":" + jsonQuote(held->imageLeaf)
+        + ",\"windowClass\":" + jsonQuote(selectedClass) + ",\"session\":" + std::to_string(owners.session)
+        + ",\"available\":" + (available ? "true" : "false") + ",\"rootStable\":" + (rootStable ? "true" : "false")
+        + ",\"walkCompleted\":" + (completed ? "true" : "false") + ",\"truncated\":" + (truncated ? "true" : "false")
+        + ",\"deadlineExpired\":" + (expired ? "true" : "false") + ",\"elapsedMs\":" + std::to_string(GetTickCount64() - started)
+        + ",\"visited\":" + std::to_string(visited) + ",\"count\":" + std::to_string(count) + ",\"providerSkips\":" + std::to_string(providerSkips)
+        + ",\"verifiedOwners\":" + std::to_string(owners.owners.size()) + ",\"errors\":" + std::to_string(errors + owners.errors)
+        + ",\"lastErrorHRESULT\":" + std::to_string(lastError) + ",\"rows\":[" + rows + "]}\n";
+    if (result.size() > 65536) throw std::runtime_error("OOBE serialized report exceeds 64KiB");
+    report("oobe-uia.json", result); return available && rootStable;
+}
 static void vendorArchiveIdentity() {
     ComPtr<IStream> stream;
     check(SHCreateStreamOnFileEx((root / L"client.msix").c_str(), STGM_READ | STGM_SHARE_DENY_WRITE, FILE_ATTRIBUTE_NORMAL, FALSE, nullptr, &stream));
@@ -1430,6 +1595,7 @@ int wmain(int argc, wchar_t** argv) {
         if (mode == L"center-policy") return centerPolicy() ? 0 : 3;
         if (mode == L"preflight") return preflight() ? 0 : 3;
         if (mode == L"desktop-capture") { if (argc != 4) return 2; return desktopCapture() ? 0 : 3; }
+        if (mode == L"oobe-preflight") { if (argc != 4) return 2; return oobePreflight() ? 0 : 3; }
         if (mode == L"center-surface") return centerSurface() ? 0 : 3;
         if (mode == L"taskbar-uia") return taskbarUI() ? 0 : 3;
         if (mode == L"send") return send();

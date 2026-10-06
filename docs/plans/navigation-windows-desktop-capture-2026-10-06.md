@@ -40,3 +40,10 @@ Public SDK references: [GDI capture](https://learn.microsoft.com/en-us/windows/w
 
 [DPI thread context](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setthreaddpiawarenesscontext)
 and [monitor rectangle](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmonitorinfow).
+
+
+## Actual first-logon diagnostic and next bounded census
+
+Run 37522160148 on source ce26fb7bf97d5c92c5cc42c132781a789b808f95 passed actual SDK capture. Independent audit accepted141 assertions. Official artifact11441305747 ZIP SHA2568d0c2a13326ac99cea12a26e4e4918f59fe9f6c6d0eac3ed8730dc076766b627 contains nine inert members. The1024x768 PNG visibly shows Choose privacy settings for your device, with a Next button. Capture took94ms; three helpers exited and were collected. No Show/input/install/launch occurred. This proves first-logon OOBE obstruction, not causation of every earlier failure or any Center/callback/navigation qualification.
+
+The new manual-only `oobe_preflight` obtains bounded properties from the actual foreground UIA subtree, with held kernel process identity and same-user/session guards. It invokes no UI action. The purpose is to identify exact OOBE selectors before a separately reviewed finite setup flow. Partial/error snapshots do not prove absence or action readiness; Windows-directory admission is not signer qualification. Native census execution remains pending.
