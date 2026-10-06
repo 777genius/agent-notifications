@@ -203,3 +203,25 @@ bind source/seed/image hashes and its exclusive one-attempt intent, disable both
 outer networking and the QEMU NIC, verify the guest frame, independently observe
 QMP guest shutdown and collect VM exit, and retain exact-container cleanup.
 A serial completion frame alone cannot qualify VM shutdown.
+
+
+## Offline VM controller checkpoint
+
+The separate native probe and host TEST operator received three source review/fix
+rounds before execution. Probe SHA256
+`95502e4482dd5bf226e9f838d60387baea5bc90aa1a00406b24b74e574432d20`;
+operator SHA256 `3301aa78e5778a29534c8f16ffdaf783df2994090089527fc6dd29007340fc5b`.
+The original accepted provisioning fixture remains unchanged. New code requires
+the accepted guest-source hash, frozen provisioned-image/base hashes, exact
+three-file backing chain and a fresh NoCloud seed. No APT or package install is
+performed. Both Docker networking and QEMU NICs are disabled.
+
+Review fixes added fixed guest-source enforcement, independent error-aware
+teardown/integrity checks, source-bound partial timeout logs, operator integrity
+and pre-start readback of actual Docker isolation. The outer operator uses one
+exclusive intent, validates resources and the owned image, and removes only its
+exact container by verified name/ID/owner/image followed by fresh absence checks.
+Read-only hardlinks preserve storage but are not an adversarial immutability
+boundary against the owner UID; before/after hash gates qualify this controlled
+TEST fixture only. Source reviews and Python syntax checks do not prove native
+boot or client behavior. A distinct captured one-shot native stage follows.
