@@ -21,7 +21,7 @@ type testClock struct{ bits atomic.Uint64 }
 func (c *testClock) Now() (string, float64, error) {
 	return "test-boot", math.Float64frombits(c.bits.Load()), nil
 }
-func callbackFixture(t *testing.T) (*Handler, string, *testClock, *int) {
+func callbackFixture(t *testing.T) (*Handler, string, *testClock, *atomic.Int64) {
 	t.Helper()
 	dir := t.TempDir()
 	if e := os.Chmod(dir, 0700); e != nil {
@@ -40,12 +40,12 @@ func callbackFixture(t *testing.T) (*Handler, string, *testClock, *int) {
 	}
 	clock := &testClock{}
 	clock.bits.Store(math.Float64bits(100))
-	launches := new(int)
+	launches := new(atomic.Int64)
 	h := &Handler{Snapshot: s, Binding: binding, Clock: clock, ReadOwners: func(context.Context) (Owners, error) { return owner, nil }, Verify: func(context.Context, Snapshot) error { return nil }, Launch: func(_ context.Context, selected Snapshot, uri, token string) error {
 		if selected != s || uri != "codex://threads/opaque%2Fid%25%3F%23" || token != "native-token" {
 			t.Fatalf("wrong selected handoff: %+v %q %q", selected, uri, token)
 		}
-		*launches++
+		launches.Add(1)
 		return nil
 	}}
 	return h, key, clock, launches
@@ -61,8 +61,8 @@ func TestForgedCallerAndUnknownKeyHaveZeroEffects(t *testing.T) {
 			return Owners{}, nil
 		}
 		h.Verify = func(context.Context, Snapshot) error { t.Fatal("forged callback reached verifier"); return nil }
-		if e := h.Handle(context.Background(), tc.sender, tc.key, "native-token"); e == nil || *effects != 0 {
-			t.Fatal(e, *effects)
+		if e := h.Handle(context.Background(), tc.sender, tc.key, "native-token"); e == nil || effects.Load() != 0 {
+			t.Fatal(e, effects.Load())
 		}
 	}
 }
@@ -93,8 +93,8 @@ func TestEveryOwnerGenerationIsRecheckedBeforeEffect(t *testing.T) {
 					return o, e
 				}
 				h.Verify = func(context.Context, Snapshot) error { changed = true; return nil }
-				if e := h.Handle(context.Background(), ":1.2", key, "native-token"); e == nil || *effects != 0 {
-					t.Fatal(e, *effects)
+				if e := h.Handle(context.Background(), ":1.2", key, "native-token"); e == nil || effects.Load() != 0 {
+					t.Fatal(e, effects.Load())
 				}
 			})
 		}
@@ -106,13 +106,13 @@ func TestEveryOwnerGenerationIsRecheckedBeforeEffect(t *testing.T) {
 func TestLateClickGetsFreshContinuousBudget(t *testing.T) {
 	h, key, clock, effects := callbackFixture(t)
 	clock.bits.Store(math.Float64bits(1000000))
-	if e := h.Handle(context.Background(), ":1.2", key, "native-token"); e != nil || *effects != 1 {
-		t.Fatal(e, *effects)
+	if e := h.Handle(context.Background(), ":1.2", key, "native-token"); e != nil || effects.Load() != 1 {
+		t.Fatal(e, effects.Load())
 	}
 	h, key, clock, effects = callbackFixture(t)
 	h.Verify = func(context.Context, Snapshot) error { clock.bits.Store(math.Float64bits(104)); return nil }
-	if e := h.Handle(context.Background(), ":1.2", key, "native-token"); e == nil || *effects != 0 {
-		t.Fatal(e, *effects)
+	if e := h.Handle(context.Background(), ":1.2", key, "native-token"); e == nil || effects.Load() != 0 {
+		t.Fatal(e, effects.Load())
 	}
 }
 
@@ -120,11 +120,11 @@ func TestLateClickGetsFreshContinuousBudget(t *testing.T) {
 func TestUnknownLaunchIsInvokedOnce(t *testing.T) {
 	h, key, _, effects := callbackFixture(t)
 	h.Launch = func(context.Context, Snapshot, string, string) error {
-		*effects++
+		effects.Add(1)
 		return errors.New("unknown after handoff")
 	}
-	if e := h.Handle(context.Background(), ":1.2", key, "native-token"); e == nil || *effects != 1 {
-		t.Fatal(e, *effects)
+	if e := h.Handle(context.Background(), ":1.2", key, "native-token"); e == nil || effects.Load() != 1 {
+		t.Fatal(e, effects.Load())
 	}
 }
 
@@ -144,8 +144,8 @@ func TestSnapshotASurvivesSetupBAndReaderRollback(t *testing.T) {
 		t.Fatal(loaded, e)
 	}
 	h.Snapshot = loaded
-	if e = h.Handle(context.Background(), ":1.2", key, "native-token"); e != nil || *effects != 1 {
-		t.Fatal(e, *effects)
+	if e = h.Handle(context.Background(), ":1.2", key, "native-token"); e != nil || effects.Load() != 1 {
+		t.Fatal(e, effects.Load())
 	}
 	// The compatible v1 decoder reads the immutable A bytes, not current policy.
 	var rollback Snapshot

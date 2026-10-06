@@ -82,19 +82,19 @@ func TestActivateActionAuthenticatesActualWireSender(t *testing.T) {
 		return c.Object(server.Names()[0], path).CallWithContext(ctx, "org.freedesktop.Application.ActivateAction", 0, parameters...)
 	}
 	data := map[string]dbus.Variant{"activation-token": dbus.MakeVariant("native-token")}
-	if c := call(forged, "open", []dbus.Variant{dbus.MakeVariant(key)}, data); c.Err == nil || *effects != 0 {
-		t.Fatal("forged wire sender launched", c.Err, *effects)
+	if c := call(forged, "open", []dbus.Variant{dbus.MakeVariant(key)}, data); c.Err == nil || effects.Load() != 0 {
+		t.Fatal("forged wire sender launched", c.Err, effects.Load())
 	}
 	// Adding a caller-controlled Sender argument changes the wire signature,
 	// rather than supplying godbus's actual injected Sender parameter.
-	if c := call(forged, trusted.Names()[0], "open", []dbus.Variant{dbus.MakeVariant(key)}, data); c.Err == nil || *effects != 0 {
-		t.Fatal("wire supplied sender accepted", c.Err, *effects)
+	if c := call(forged, trusted.Names()[0], "open", []dbus.Variant{dbus.MakeVariant(key)}, data); c.Err == nil || effects.Load() != 0 {
+		t.Fatal("wire supplied sender accepted", c.Err, effects.Load())
 	}
-	if c := call(trusted, "open", []dbus.Variant{dbus.MakeVariant(key)}, data); c.Err != nil || *effects != 1 {
-		t.Fatal("trusted actual sender rejected", c.Err, *effects)
+	if c := call(trusted, "open", []dbus.Variant{dbus.MakeVariant(key)}, data); c.Err != nil || effects.Load() != 1 {
+		t.Fatal("trusted actual sender rejected", c.Err, effects.Load())
 	}
 	cancel()
-	if e := a.ActivateAction(dbus.Sender(trusted.Names()[0]), "open", []dbus.Variant{dbus.MakeVariant(key)}, data); e == nil || *effects != 1 {
-		t.Fatal("shutdown admitted a late callback", e, *effects)
+	if e := a.ActivateAction(dbus.Sender(trusted.Names()[0]), "open", []dbus.Variant{dbus.MakeVariant(key)}, data); e == nil || effects.Load() != 1 {
+		t.Fatal("shutdown admitted a late callback", e, effects.Load())
 	}
 }
