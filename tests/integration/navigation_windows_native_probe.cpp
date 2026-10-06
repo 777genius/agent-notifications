@@ -1471,9 +1471,11 @@ static bool oobePreflight(const std::string& prefix = "oobe", OOBESelection* sel
                 if (!nameClipped && !idClipped && idJSON == jsonQuote(L"OobeSettingsAcceptButton") && type == UIA_ButtonControlTypeId
                     && !offscreen && patternValid && invokeAvailable && rectValid && rectangle.left < rectangle.right
                     && rectangle.top < rectangle.bottom && (nameJSON == jsonQuote(L"Next, tab through all privacy settings to continue")
-                        || nameJSON == jsonQuote(L"Accept"))) {
+                        || nameJSON == jsonQuote(L"Accept") || nameJSON == jsonQuote(L"Accept these privacy settings"))) {
                     ++matchingButtons; if (enabled) ++buttons;
-                    actionButton = node.element; buttonName = nameJSON == jsonQuote(L"Accept") ? L"Accept" : L"Next, tab through all privacy settings to continue";
+                    actionButton = node.element; buttonName = nameJSON == jsonQuote(L"Accept") ? L"Accept"
+                        : nameJSON == jsonQuote(L"Accept these privacy settings") ? L"Accept these privacy settings"
+                        : L"Next, tab through all privacy settings to continue";
                 }
             }
             ComPtr<IUIAutomationElement> child;
@@ -1553,7 +1555,7 @@ static bool oobeSetup() {
             if (!previousState.empty() && (selected.state != previousState || selected.pid != previousPID
                 || selected.created != previousBirth || selected.window != previousWindow))
                 throw std::runtime_error("OOBE state changed outside confirmed progression");
-            const bool accept = selected.buttonName == L"Accept";
+            const bool accept = selected.buttonName == L"Accept" || selected.buttonName == L"Accept these privacy settings";
             if (accept ? acceptCalls >= 1 : nextCalls >= 4) throw std::runtime_error("finite OOBE action limit reached");
             const ULONGLONG invokeDeadline = std::min(oobeSetupDeadline, GetTickCount64() + 5000);
             auto budget = [&]() { if (GetTickCount64() >= invokeDeadline || !selected.stable())

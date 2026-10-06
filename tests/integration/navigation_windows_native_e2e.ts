@@ -185,7 +185,8 @@ function setupSnapshot(prefix: string, entered: number, allowDisabled = false): 
         && row.offscreen === false && row.invokePatternAvailable === true && row.nameTruncated === false
         && row.automationIdTruncated === false && Number(row.rectangle[0]) < Number(row.rectangle[2])
         && Number(row.rectangle[1]) < Number(row.rectangle[3])
-        && ['Next, tab through all privacy settings to continue', 'Accept'].includes(String(row.elementName))) buttons.push(row);
+        && ['Next, tab through all privacy settings to continue', 'Accept', 'Accept these privacy settings']
+          .includes(String(row.elementName))) buttons.push(row);
   }
   const digest = createHash('sha256').update(JSON.stringify(semantic)).digest('hex');
   if (panes !== 1 || buttons.length !== 1 || digest !== census.semanticStateSHA256
@@ -233,7 +234,8 @@ function verifySetup(step: Step): void {
         || armed.invokeBoundaryArmed !== true || armed.invokeCallEntered !== false || armed.retryAllowed !== false
         || armed.setupImagePathKind !== 'exact_Windows_System32_WWAHost_kernel_image'
         || armed.targetAutomationId !== button.automationId || armed.targetName !== button.elementName
-        || button.elementName !== (accept ? 'Accept' : 'Next, tab through all privacy settings to continue')
+        || (accept ? !['Accept', 'Accept these privacy settings'].includes(String(button.elementName))
+          : button.elementName !== 'Next, tab through all privacy settings to continue')
         || armed.beforeStateSHA256 !== before.semanticStateSHA256 || progress.beforeStateSHA256 !== before.semanticStateSHA256
         || ['foregroundPID', 'foregroundCreatedUtcTicks', 'foregroundHWND'].some(key => armed[key] !== before[key])
         || returned.invokeCallEntered !== true || returned.invokeCallReturned !== true || returned.hresult !== 0
