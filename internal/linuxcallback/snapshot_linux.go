@@ -94,7 +94,7 @@ func ReadOwned(path string, limit int64) ([]byte, error) {
 	if e != nil {
 		return nil, e
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // Read-only handle, with no buffered writes.
 	got, e := f.Stat()
 	if e != nil || !os.SameFile(info, got) {
 		return nil, ErrUnavailable

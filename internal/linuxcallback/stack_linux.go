@@ -63,7 +63,7 @@ func qualifiedStack(ctx context.Context, c *dbus.Conn, o Owners) error {
 			return ErrUnavailable
 		}
 		check := func() error {
-			defer unix.Close(fd)
+			defer func() { _ = unix.Close(fd) }() // Held identity observation is complete before cleanup.
 			procPath := "/proc/" + strconv.FormatUint(uint64(pid), 10) + "/exe"
 			selected, e := os.Readlink(procPath)
 			if e != nil || !canonical(selected) {
@@ -84,7 +84,7 @@ func qualifiedStack(ctx context.Context, c *dbus.Conn, o Owners) error {
 			if e != nil {
 				return e
 			}
-			defer f.Close()
+			defer func() { _ = f.Close() }() // Read-only executable observation.
 			opened, e := f.Stat()
 			if e != nil || !os.SameFile(info, opened) {
 				return ErrUnavailable

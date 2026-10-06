@@ -166,9 +166,10 @@ func verifyTree(ctx context.Context, m VendorManifest) error {
 			if e != nil {
 				return e
 			}
+			// Failed reads close this read-only handle best-effort; success checks Close below.
 			opened, e := f.Stat()
 			if e != nil || !os.SameFile(info, opened) {
-				f.Close()
+				_ = f.Close()
 				return ErrUnavailable
 			}
 			h := sha256.New()
@@ -176,14 +177,14 @@ func verifyTree(ctx context.Context, m VendorManifest) error {
 			var readBytes int64
 			for {
 				if ctx.Err() != nil {
-					f.Close()
+					_ = f.Close()
 					return ctx.Err()
 				}
 				n, re := f.Read(buffer)
 				if n > 0 {
 					readBytes += int64(n)
 					if readBytes > 512<<20 || readBytes > info.Size() {
-						f.Close()
+						_ = f.Close()
 						return ErrUnavailable
 					}
 					_, _ = h.Write(buffer[:n])
@@ -192,7 +193,7 @@ func verifyTree(ctx context.Context, m VendorManifest) error {
 					break
 				}
 				if re != nil {
-					f.Close()
+					_ = f.Close()
 					return re
 				}
 			}

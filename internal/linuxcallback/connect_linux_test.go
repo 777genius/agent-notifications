@@ -18,7 +18,7 @@ func TestHungBusAuthenticationIsCanceledAndPeerCloses(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }() // Best-effort private TEST fixture cleanup.
 	t.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path="+path)
 	accepted := make(chan net.Conn, 1)
 	go func() {
@@ -36,7 +36,7 @@ func TestHungBusAuthenticationIsCanceledAndPeerCloses(t *testing.T) {
 	}
 	select {
 	case peer := <-accepted:
-		defer peer.Close()
+		defer func() { _ = peer.Close() }() // Best-effort private TEST fixture cleanup.
 		_ = peer.SetReadDeadline(time.Now().Add(time.Second))
 		b := make([]byte, 4096)
 		for {

@@ -87,6 +87,8 @@ func linuxCallbackMain(command string, args []string) int {
 		fmt.Fprintln(os.Stderr, e)
 		return 1
 	}
-	fmt.Fprintln(os.Stdout, "Linux callback installed; local routing policy remains explicit")
+	if _, e = fmt.Fprintln(os.Stdout, "Linux callback installed; local routing policy remains explicit"); e != nil {
+		return 1
+	}
 	return 0
 }

@@ -43,17 +43,17 @@ func TestActivateActionAuthenticatesActualWireSender(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer server.Close()
+	defer func() { _ = server.Close() }() // Best-effort private TEST fixture cleanup.
 	trusted, e := dbus.ConnectSessionBus()
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer trusted.Close()
+	defer func() { _ = trusted.Close() }() // Best-effort private TEST fixture cleanup.
 	forged, e := dbus.ConnectSessionBus()
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer forged.Close()
+	defer func() { _ = forged.Close() }() // Best-effort private TEST fixture cleanup.
 	h, key, _, effects := callbackFixture(t)
 	var r Record
 	b, e := ReadOwned(filepath.Join(h.Snapshot.Records, key+".json"), 16384)

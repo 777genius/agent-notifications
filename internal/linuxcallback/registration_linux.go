@@ -17,7 +17,7 @@ import (
 func RegistrationBytes(s Snapshot, b notification.LinuxBinding) ([]byte, []byte, error) {
 	safe := func(p string) bool {
 		for _, r := range p {
-			if !(r == '/' || r == '-' || r == '_' || r == '.' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z') {
+			if r != '/' && r != '-' && r != '_' && r != '.' && (r < '0' || r > '9') && (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') {
 				return false
 			}
 		}
@@ -66,11 +66,11 @@ func CheckInstallation(b notification.LinuxBinding, s Snapshot) error {
 		}
 		actual, e := f.Stat()
 		if e != nil || !os.SameFile(info, actual) {
-			f.Close()
+			_ = f.Close() // Read-only cleanup cannot change the failed identity check.
 			return ErrUnavailable
 		}
 		got, e := io.ReadAll(io.LimitReader(f, int64(len(want))+1))
-		f.Close()
+		_ = f.Close() // Read-only handle; verification depends on the read bytes.
 		if e != nil || !bytes.Equal(got, want) {
 			return ErrUnavailable
 		}

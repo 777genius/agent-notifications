@@ -49,14 +49,15 @@ func connect(ctx context.Context) (*dbus.Conn, error) {
 	if e != nil {
 		return nil, e
 	}
+	// Error paths close owned transports best-effort, preserving the rejection.
 	peer, ok := raw.(*net.UnixConn)
 	if !ok {
-		raw.Close()
+		_ = raw.Close()
 		return nil, ErrUnavailable
 	}
 	syscall, e := peer.SyscallConn()
 	if e != nil {
-		raw.Close()
+		_ = raw.Close()
 		return nil, e
 	}
 	owned := false
@@ -64,22 +65,22 @@ func connect(ctx context.Context) (*dbus.Conn, error) {
 		credential, err := unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED)
 		owned = err == nil && int(credential.Uid) == os.Getuid()
 	}); e != nil || !owned {
-		raw.Close()
+		_ = raw.Close()
 		return nil, ErrUnavailable
 	}
 	// This transport needs no file descriptors. NewConn is the supported generic
 	// transport constructor; WithContext closes Auth/Hello on lifetime cancellation.
 	conn, e := dbus.NewConn(raw, dbus.WithContext(ctx))
 	if e != nil {
-		raw.Close()
+		_ = raw.Close()
 		return nil, e
 	}
 	if e = conn.Auth(nil); e != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, e
 	}
 	if e = conn.Hello(); e != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, e
 	}
 	return conn, nil

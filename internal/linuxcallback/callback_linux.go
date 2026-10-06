@@ -88,8 +88,8 @@ func writeRecord(s Snapshot, r Record) error {
 	if e != nil {
 		return e
 	}
-	defer d.Close()
-	return d.Sync()
+	e = d.Sync()
+	return errors.Join(e, d.Close())
 }
 
 // Portal is opened only for an explicitly selected navigation target. Ordinary
@@ -116,7 +116,7 @@ func Open(ctx context.Context, binding notification.LinuxBinding) (*Portal, erro
 		return nil, e
 	}
 	if ctx.Err() != nil {
-		c.Close()
+		_ = c.Close() // Best-effort cleanup; cancellation remains the failure.
 		return nil, ctx.Err()
 	}
 	return &Portal{c, s, binding}, nil
@@ -337,7 +337,7 @@ func Serve(ctx context.Context, binding notification.LinuxBinding) error {
 	if e != nil {
 		return e
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }() // Best-effort service transport cleanup after shutdown or failure.
 	a := &application{lifetime: ctx, handler: &Handler{Snapshot: s, Binding: binding, Clock: continuousClock{}, ReadOwners: func(ctx context.Context) (Owners, error) { return owners(ctx, c) }, Verify: func(ctx context.Context, s Snapshot) error {
 		if e := CheckInstallation(binding, s); e != nil {
 			return e
