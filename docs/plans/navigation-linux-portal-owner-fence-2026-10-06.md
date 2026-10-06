@@ -32,3 +32,22 @@ observations and source/artifact hashes remain available for independent review.
 
 Validation here is Python AST parsing and git diff checks only. Native execution
 requires a separately admitted isolated TEST host and reviewed exact source.
+
+The new PR CI lane is source-only until actual execution is retained. It uses a
+fresh Ubuntu 24.04 GitHub runner and invokes the existing outer native probe once
+with `--restart-owner-fence-test`, without retries. The controller verifies fixed
+publisher asset/checksum digests and the annotated 1.22.1 tag commit through `gh`;
+per-file Git blob comparison is not repeated. Only those public source acquisitions
+receive the job token. Python/Docker/native children receive a minimal private
+environment, owned HOME/TMPDIR and no GitHub/auth command-file variables.
+
+The 1950-second outer deadline covers the existing 1800-second build, 60-second
+native scenario and bounded cleanup. Timeout preserves partial streams, fails and
+marks actor outcome unknown; the controller neither retries nor guesses external
+cleanup/quiescence. A passing result requires the runner's source/immutable checks,
+known collection, native stale-A refusal with no Remove/Close/effect, exactly one
+genuine XTest B click/cold effect, and verified exact-container removal/absence.
+Artifacts are limited to owned reports/logs/TEST receipts and frozen public source
+inputs. Backend generic restart, Wayland, atomic binding and client navigation
+remain unqualified. Local validation of this CI patch is strict TypeScript only;
+no local image build, notification or native fixture execution is claimed.
