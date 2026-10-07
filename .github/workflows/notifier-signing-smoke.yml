@@ -172,6 +172,23 @@ jobs:
               stream.write('\n')
           PYTHON
 
+      - name: Verify transported notifier app
+        run: |
+          set -euo pipefail
+          extract_root="$(mktemp -d "$RUNNER_TEMP/notifier-archive.XXXXXX")"
+          trap 'rm -rf "$extract_root"' EXIT
+          ditto -x -k swift-notifier/ClaudeNotifier-smoke.app.zip "$extract_root"
+          shopt -s nullglob
+          bundles=("$extract_root"/*.app)
+          test "${#bundles[@]}" -eq 1
+          test "${bundles[0]}" = "$extract_root/ClaudeNotifier.app"
+          test -d "${bundles[0]}" && test ! -L "${bundles[0]}"
+          if [ "${{ inputs.skip_notarize }}" = "true" ]; then
+            bash swift-notifier/scripts/verify-signing.sh "${bundles[0]}"
+          else
+            bash swift-notifier/scripts/verify-signing.sh "${bundles[0]}" --notarized
+          fi
+
       - name: Upload smoke artifact
         uses: actions/upload-artifact@v7
         with:

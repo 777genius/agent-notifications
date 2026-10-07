@@ -32,6 +32,8 @@ jobs:
       CANDIDATE_VERSION: ${{ inputs.candidate_version }}
       CANDIDATE_ARCH: ${{ matrix.arch }}
       CGO_ENABLED: '1'
+      MACOSX_DEPLOYMENT_TARGET: '12.0'
+      GOTOOLCHAIN: local
 
     steps:
       - name: Checkout candidate
@@ -55,7 +57,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.27.1'
+          go-version: '1.26'
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -76,6 +78,19 @@ jobs:
             -executable "dist/claude-notifications-darwin-$CANDIDATE_ARCH" \
             -output "dist/agent-notify-portable-darwin-$CANDIDATE_ARCH.zip" \
             -workdir "$RUNNER_TEMP/portable-darwin-$CANDIDATE_ARCH"
+
+      - name: Verify every native binary supports macOS 12
+        shell: bash
+        run: |
+          set -euo pipefail
+          for command in claude-notifications sound-preview list-devices list-sounds; do
+            binary="dist/$command-darwin-$CANDIDATE_ARCH"
+            minos="$(otool -l "$binary" | awk '$1 == "minos" { print $2; exit }')"
+            case "$minos" in
+              12|12.*) ;;
+              *) echo "unexpected minimum macOS version for $binary: ${minos:-missing}" >&2; exit 1 ;;
+            esac
+          done
 
       - name: Qualify candidate executable in disposable profiles
         shell: bash
