@@ -70,6 +70,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       - name: Pure runner checks
         run: python -B scripts/gemini-native-ci.py --self-test
+      - name: Pure native-driver evidence guards
+        run: python -B tests/integration/gemini_notifications_e2e.py --self-test
       - name: Pure private capture custody checks
         if: matrix.platform == 'linux'
         run: python -B tests/integration/gemini_frame_capture_test.py -v

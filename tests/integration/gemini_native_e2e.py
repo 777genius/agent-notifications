@@ -590,6 +590,42 @@ def install_test_hooks(lab, commands, shell, node, system_root=None, capture_fra
     return path
 
 
+class CaseObservation:
+    """Controller observations, not native event order or key-receipt evidence.
+
+    Provider deltas belong to the controller's case window, not authenticated
+    per-turn requests. Snapshot while driving; failure projection performs no IO.
+    """
+    METHODS = ("streamGenerateContent", "generateContent", "countTokens")
+
+    def __init__(self, fixture):
+        self.fixture, self.started = fixture, time.monotonic()
+        with fixture.lock:
+            self.baseline = {key: fixture.counts.get(key, 0) for key in self.METHODS}
+        self.flags = dict(permission_hook_seen=False, permission_UI_seen=False,
+                          acted=False, AfterAgent_seen=False)
+        self.counts = {key: 0 for key in self.METHODS}
+        self.milestones = []
+        self.mark("case_entered")
+
+    def mark(self, event):
+        if len(self.milestones) < 12 and not any(row["event"] == event for row in self.milestones):
+            self.milestones.append(dict(event=event, observed_ms=round((time.monotonic() - self.started) * 1000)))
+
+    def observe(self, permission, rendered, completion, acted):
+        for key, value in zip(self.flags, (permission, rendered, acted, completion)):
+            if value and not self.flags[key]:
+                self.mark(key)
+            self.flags[key] = value
+        with self.fixture.lock:
+            self.counts = {key: self.fixture.counts.get(key, 0) - self.baseline[key] for key in self.METHODS}
+
+    def facts(self):
+        return {"clock": "controller_monotonic", **self.flags,
+                "provider_calls_since_case_entry": dict(self.counts),
+                "milestones": [dict(row) for row in self.milestones]}
+
+
 class Terminal:
     """Node bridge emits classifications only; native PTY text stays in bounded RAM."""
     def __init__(self, node, executable, install_root, lab, env, ui, timeout):
@@ -598,6 +634,7 @@ class Terminal:
         self.stage, self.case, self.completed_cases = "starting", "plain", 0
         self.bridge_errors, self.cleanup_errors, self.diagnostics = [], [], set()
         self.graceful_requested = self.forced_requested = False
+        self.case_observation, self.previous_case_observation = None, None
         bridge = Path(__file__).with_name("gemini_native_pty.cjs")
         self.p = subprocess.Popen([str(node), str(bridge)], cwd=lab / "profile", env=env,
                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -629,7 +666,9 @@ class Terminal:
                 "native_child_started": self.child_started, "own_child_exit": self.exit,
                 "bridge_exit_code": self.p.poll(), "errors": self.bridge_errors,
                 "graceful_requested": self.graceful_requested, "forced_requested": self.forced_requested,
-                "cleanup_classifications": self.cleanup_errors[:4], "native_diagnostics": sorted(self.diagnostics)}
+                "cleanup_classifications": self.cleanup_errors[:4], "native_diagnostics": sorted(self.diagnostics),
+                "case_observation": self.case_observation.facts() if self.case_observation else None,
+                "previous_case_observation": self.previous_case_observation}
 
     def receive(self, item):
         if item.get("diagnostic") in ("auth_error", "startup_welcome", "startup_theme", "startup_trust",
@@ -751,11 +790,15 @@ def exercise(lab, fixture, terminal, ui, observer=observations):
     """G5 reuses this agent/UI/tool driver; observer must inspect native evidence."""
     results = []
     for case in CASES:
+        terminal.previous_case_observation = terminal.case_observation.facts() if terminal.case_observation else None
+        state = terminal.case_observation = CaseObservation(fixture)
         terminal.case = case
         if case != "plain":
             fixture.arm(case)
             terminal.send({"op": "watch", "case": case})
+            state.mark("watch_write_returned")
             terminal.write_line("AN_TEST_" + ("PLAIN" if case in ("equal", "recovery") else case.upper()))
+            state.mark("prompt_write_returned")
         end, acted, completion, permission = time.monotonic() + 25, False, False, False
         cancelled_at = None
         while time.monotonic() < end:
@@ -764,17 +807,22 @@ def exercise(lab, fixture, terminal, ui, observer=observations):
             require(fixture.error is None, fixture.error or "provider_error")
             rows = [x for x in observer(lab) if x.get("case") == case]
             permission = any(x["event"] == "Notification" for x in rows)
+            completion = any(x["event"] == "AfterAgent" for x in rows)
+            state.observe(permission, case in terminal.seen, completion, acted)
             if case in ("approve", "deny", "cancel") and permission and case in terminal.seen and not acted:
+                state.mark("menu_write_requested")
                 terminal.menu_choice(ui[case])
+                state.mark("menu_write_returned")
                 acted = True
+                state.observe(permission, case in terminal.seen, completion, acted)
                 if case in ("deny", "cancel"):
                     cancelled_at = time.monotonic()
-            completion = any(x["event"] == "AfterAgent" for x in rows)
             if completion and (case not in ("approve", "deny", "cancel") or acted):
                 break
             if cancelled_at and time.monotonic() - cancelled_at >= 4:
                 break  # Absence is observed for this bounded window, never synthesized.
             time.sleep(0.05)
+        state.mark("case_observation_finished")
         require(completion or case in ("deny", "cancel") and acted, "AfterAgent_missing_or_timeout")
         if case in ("approve", "deny", "cancel"):
             require(permission and case in terminal.seen and acted, "actual_permission_UI_missing")

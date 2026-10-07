@@ -1209,6 +1209,34 @@ class PureChecks(unittest.TestCase):
         unknown = g0.bridge_event_facts({"error": "private", "stage": "private", "node_error_code": "PRIVATE"})
         self.assertEqual(unknown, {"error": "bridge_protocol_error"})
 
+    def test_case_failure_distinguishes_hook_from_rendered_ui(self):
+        # A cancel timeout before key submission must retain which prerequisite
+        # was missing, rather than looking like failure after cancellation.
+        for hook, rendered in ((True, False), (False, True)):
+            with self.subTest(hook=hook, rendered=rendered):
+                g0, _ = load_g0()
+                clock = Mock()
+                clock.elapsed = 0.0
+                clock.monotonic.side_effect = lambda: clock.elapsed
+                clock.sleep.side_effect = lambda seconds: setattr(clock, "elapsed", clock.elapsed + seconds)
+                fixture = Mock(lock=threading.Lock(), counts={}, error=None)
+                fixture.arm.side_effect = lambda _: fixture.counts.update(streamGenerateContent=1)
+                terminal = Mock(exit=None, seen={"cancel"} if rendered else set())
+                terminal.case_observation = None
+                rows = [{"case": "cancel", "event": "Notification", "private": "not for diagnostics"}] if hook else []
+                with patch.object(g0, "time", clock), patch.object(g0, "CASES", ("cancel",)):
+                    with self.assertRaisesRegex(g0.Red, "AfterAgent_missing_or_timeout"):
+                        g0.exercise(Path("/TEST-unused"), fixture, terminal, {"cancel": "\x1b"}, lambda _: rows)
+                terminal.menu_choice.assert_not_called()
+                facts = terminal.case_observation.facts()
+                self.assertEqual(facts["permission_hook_seen"], hook)
+                self.assertEqual(facts["permission_UI_seen"], rendered)
+                self.assertFalse(facts["acted"])
+                self.assertFalse(facts["AfterAgent_seen"])
+                self.assertEqual(facts["provider_calls_since_case_entry"]["streamGenerateContent"], 1)
+                self.assertNotIn("menu_write_requested", [x["event"] for x in facts["milestones"]])
+                self.assertNotIn("not for diagnostics", json.dumps(facts))
+
     def test_bounded_read_preserves_binary_bytes(self):
         with tempfile.TemporaryDirectory(prefix="TEST-gemini-binary-read-") as root:
             path = Path(root).resolve() / "candidate.bin"
