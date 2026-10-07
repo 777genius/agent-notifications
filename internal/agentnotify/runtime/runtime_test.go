@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	goruntime "runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -41,7 +42,11 @@ func (f fakeDelivery) CheckReadiness(_ context.Context, r notification.Request) 
 }
 func nav(r notification.Request) notification.NavigationResult {
 	if r.Target.ThreadID != "" {
-		return notification.NavigationResult{Capability: "available", Precision: "chat_id", Scope: "local_current_profile"}
+		scope := "local_current_profile"
+		if r.Target.Linux.SnapshotPath != "" {
+			scope = "selected_linux_installation"
+		}
+		return notification.NavigationResult{Capability: "available", Precision: "chat_id", Scope: scope}
 	}
 	return notification.NavigationResult{Capability: "disabled", Precision: "none"}
 }
@@ -53,7 +58,17 @@ func (f fakeDelivery) Deliver(_ context.Context, r notification.Request) notific
 	return notification.Receipt{CorrelationID: r.CorrelationID, Status: s, Reason: "test_outcome", Navigation: nav(r)}
 }
 func snapshot(route string) installruntime.PolicySnapshot {
-	return installruntime.PolicySnapshot{Installation: installruntime.InstalledSnapshot{Enabled: true, Ledger: installruntime.Ledger{ID: route}}, Fields: map[string]json.RawMessage{"schemaVersion": json.RawMessage(`1`), "enabled": json.RawMessage(`true`), "route": json.RawMessage(fmt.Sprintf(`{"localRouting":true,"applicationPath":%q,"teamID":"TEAM"}`, route))}}
+	routing := map[string]any{"localRouting": true, "applicationPath": route, "teamID": "TEAM"}
+	if goruntime.GOOS == "linux" {
+		delete(routing, "applicationPath")
+		delete(routing, "teamID")
+		routing["linuxCallbackSnapshot"] = notification.LinuxBinding{SnapshotPath: route, SHA256: strings.Repeat("a", 64)}
+	}
+	raw, err := json.Marshal(routing)
+	if err != nil {
+		panic(err)
+	}
+	return installruntime.PolicySnapshot{Installation: installruntime.InstalledSnapshot{Enabled: true, Ledger: installruntime.Ledger{ID: route}}, Fields: map[string]json.RawMessage{"schemaVersion": json.RawMessage(`1`), "enabled": json.RawMessage(`true`), "route": raw}}
 }
 
 const global = `{"foreign":{"keep":true},"notifications":{"desktop":{"enabled":true,"sound":true,"clickToFocus":true}}}`
@@ -100,13 +115,20 @@ func TestRequestSnapshotsSharedLimiterReplayAndClose(t *testing.T) {
 	}
 	entered := make(chan string, 2)
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
 	var mu sync.Mutex
 	seen := map[string]string{}
 	o.DeliveryFactory = func(m notifier.ManagedInstallation, _ string, _ notifier.BootClock) Delivery {
 		return fakeDelivery{ready: func(r notification.Request) { entered <- m.Expected.Ledger.ID; <-release }, send: func(r notification.Request) string {
 			mu.Lock()
 			defer mu.Unlock()
-			seen[m.Expected.Ledger.ID] = r.Target.ApplicationPath
+			path := r.Target.ApplicationPath
+			if goruntime.GOOS == "linux" {
+				path = r.Target.Linux.SnapshotPath
+			}
+			seen[m.Expected.Ledger.ID] = path
 			return "submitted"
 		}}
 	}
@@ -114,12 +136,21 @@ func TestRequestSnapshotsSharedLimiterReplayAndClose(t *testing.T) {
 	results := make(chan agentnotify.Receipt, 2)
 	go func() { results <- notify(b, "A") }()
 	go func() { results <- notify(b, "B") }()
-	<-entered
-	<-entered
+	admissionDeadline := time.NewTimer(5 * time.Second)
+	defer admissionDeadline.Stop()
+	for range 2 {
+		select {
+		case <-entered:
+		case r := <-results:
+			t.Fatalf("request completed before readiness: %+v", r)
+		case <-admissionDeadline.C:
+			t.Fatal("requests did not reach readiness")
+		}
+	}
 	if r := notify(b, "C"); r.Reason != "busy" {
 		t.Fatalf("third: %+v", r)
 	}
-	close(release)
+	unblock()
 	for range 2 {
 		if r := <-results; r.Status != "submitted" {
 			t.Fatalf("send: %+v", r)
