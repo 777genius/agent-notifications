@@ -634,7 +634,11 @@ def capture_sdk_hook_outcomes(lab):
         facts["capture"] = "bounded_capture_or_parse_failed"
     # Only this closed projection is copied to CI; the SDK outfile remains private.
     encoded = json.dumps(facts, sort_keys=True) + "\n"
-    require(len(encoded.encode()) <= 65536, "SDK_hook_projection_bound")
+    if len(encoded.encode()) > 65536:
+        encoded = json.dumps(dict(capture="projection_bound_exceeded", identity_checked=False,
+            snapshot_stable=False, parse_complete=False, SDK_flush_complete=False,
+            absence_means="unknown", records=0, owned_calls=0, unjoined_owned_calls=0,
+            outcomes=[]), sort_keys=True) + "\n"
     (lab / "sdk-hook-outcomes.json").write_text(encoded)
 
 

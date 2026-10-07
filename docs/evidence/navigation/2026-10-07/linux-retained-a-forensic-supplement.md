@@ -4,4 +4,4 @@ The 13 bounded exports contain one genuine Mako press/release and ActionInvoked,
 
 The 12-second shipping_started predicate did not publish a successful reader/selected-process match. Its exact failing conjunct is unknown: argv snapshots stay local until the whole predicate succeeds, cleanup exports only process birth/exit facts, and post-click failure has no per-poll argv record. No hash-cost cause, incorrect URI or absence of launch is proved. The original unknown effect remains non-replayable.
 
-The read-only forensic operation finished with exit0, unchanged inputs and exact container removal; no guest boot or native effects occurred. Public exports retain only labels, bounds and digests, excluding payload identifiers, tokens, argv, private environment and host identity.
+The read-only forensic operation finished with exit 0, unchanged inputs and exact container removal; no guest boot or native effects occurred. Public exports retain only labels, bounds and digests, excluding payload identifiers, tokens, argv, private environment and host identity.
