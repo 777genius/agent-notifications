@@ -102,11 +102,33 @@ def check_run():
         need(binary in checked and {'source-sha.txt','candidate-version.txt'}<=checked
              and sha(repo/'dist'/binary)==sha(root/binary),'signed_native_bytes_changed')
     return custody
+def check_prior_custody():
+    value=json.loads((art/'custody-run.json').read_text())
+    need(value['id']==37645007119 and value['run_attempt']==1 and value['status']=='completed'
+         and value['head_sha']=='23786c97ea926b4dfea5faf8780ccf519b4c09c2'
+         and value['event']=='workflow_dispatch' and value['actor']['login']=='777genius'
+         and value['triggering_actor']['login']=='777genius','owner_exact_prior_custody_run')
+    jobs=json.loads((art/'custody-jobs.json').read_text())
+    need(jobs['total_count']==len(jobs['jobs']),'complete_prior_custody_jobs')
+    selected=[]
+    for platform,arch,job_id in (('linux','amd64',112873389471),('linux','arm64',112873389132),('windows','amd64',112873388956)):
+        name='Build additional custody only '+platform+'/'+arch
+        matching=[job for job in jobs['jobs'] if job['name']==name]
+        need(len(matching)==1 and matching[0]['id']==job_id and matching[0]['run_id']==value['id']
+             and matching[0]['head_sha']==value['head_sha']
+             and matching[0]['status']=='completed' and matching[0]['conclusion']=='success',
+             'successful_exact_prior_custody_job')
+        binary=repo/'dist'/('claude-notifications-'+platform+'-'+arch+('.exe' if platform=='windows' else ''))
+        need(binary.is_file() and not binary.is_symlink(),'prior_custody_binary_missing')
+        selected.append({'jobID':matching[0]['id'],'name':name,'binary':record(binary)})
+    return {'runID':value['id'],'runAttempt':value['run_attempt'],'operatorSHA':value['head_sha'],
+            'overallConclusion':value['conclusion'],'jobs':selected,'qualificationGranted':False}
 r=load('opencode-native-e2e.py')
 h=load('opencode-platform-clock-prequalification.py')
 need(all(v is False for v in h.QUALIFICATIONS.values()),'clock_grants_must_remain_false')
 if c['mode']=='prepare':
     custody=check_run()
+    prior_custody=check_prior_custody()
     inputs=load('release-opencode-inputs.py'); inputs.FIXTURES=repo/'scripts/testdata/opencode-native-e2e'
     helper=art/'release-helper/ClaudeNotifier.app.zip'; helper.parent.mkdir(mode=0o700)
     shutil.copyfile(art/'signed/ClaudeNotifier-smoke.app.zip',helper)
@@ -137,9 +159,11 @@ if c['mode']=='prepare':
                 'sidecar':{'path':prefix+'ClaudeNotifier.app.managed-runtime.json','sha256':sha(sidecar)}}
     (parent/'manifest.json').write_text(json.dumps(manifest,sort_keys=True)+'\n')
     receipt=json.loads((parent/'release-inputs-receipt.json').read_text())
-    receipt.update(runId=run,operatorRunID=c['currentRun'],operatorSHA=c['operatorSHA'],
+    receipt.update(purpose='exact-source signed macOS and prior operator binary custody, no qualification grant',
+                   runId=run,operatorRunID=c['currentRun'],operatorSHA=c['operatorSHA'],
                    signingCustody=custody,adapterSHA256=c['adapterSHA256'],consumerSHA256=c['consumerSHA256'],
-                   otherNativeBinaries='same_operator_run_custody_only_no_platform_promotion')
+                   priorOperatorCustody=prior_custody,
+                   otherNativeBinaries='prior_operator_run_custody_only_no_platform_promotion')
     (parent/'release-inputs-receipt.json').write_text(json.dumps(receipt,sort_keys=True)+'\n')
     archive.unlink(); digest=inputs.seal_archive(parent,archive)
     with open(os.environ['GITHUB_OUTPUT'],'a') as out: out.write('parent_sha256='+digest+'\n')
@@ -234,7 +258,105 @@ sys.argv=['sealer','--manifest',str(manifest_path),'--manifest-sha256',manifest_
     '--output',str(art/'sealed-business'),'--os','darwin','--arch',c['arch'],'--version',c['version']]
 sealer.main()
 proof=art/'sealed-business/business-proof.json'
-subprocess.run([sys.executable,'-B',str(repo/'scripts/opencode-native-e2e.py'),'--manifest',str(manifest_path),
+# Observe exceptions and content-free diagnostics without changing runner predicates.
+# Load the exact candidate inertly, then call its original main/global namespace.
+# Setup delegates unchanged before the explicit public OS permission operation.
+diagnostic_driver=tools/'business-diagnostic.py'
+diagnostic_driver.write_text('''import json,os,pathlib,re,runpy,signal,subprocess,sys
+repo=pathlib.Path(sys.argv.pop(1)); output=repo/'.task-tools/artifacts/business-diagnostic.json'
+sys.argv=sys.argv[1:]
+sys.path[0]=str(repo/'scripts')
+allowed={'duplicate_diagnostic_key','diagnostic_line_bound','diagnostic_schema','diagnostic_actual_closed_dual_submission_required','native_test_permission_not_allowed','native_test_permission_custody','native_test_permission_command_failed'}
+events=[]; permissions=[]
+def permission_operation(binary,action,root,env,require):
+    row={'operation':action,'permission':'unavailable','outcome':'unavailable'}
+    permissions.append(row)
+    proc=subprocess.Popen([str(binary),'setup-opencode',action,'--control-root',str(root/'control')],
+                          cwd=root,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
+    try:
+        stdout,stderr=proc.communicate(timeout=28)
+    except subprocess.TimeoutExpired:
+        row['outcome']='timeout'
+        for sig in (signal.SIGTERM,signal.SIGKILL):
+            try: os.killpg(proc.pid,sig)
+            except ProcessLookupError: pass
+            try:
+                proc.communicate(timeout=1)
+                break
+            except subprocess.TimeoutExpired: pass
+        row['reaped']=proc.poll() is not None
+        require(False,'native_test_permission_command_failed')
+    row['reaped']=proc.poll() is not None
+    match=re.fullmatch(rb'OpenCode notification permission: (allowed|undetermined|denied|unavailable)\\n',stderr) if len(stderr)<=4096 else None
+    require(proc.returncode==0 and not stdout and match is not None,'native_test_permission_command_failed')
+    row.update(permission=match[1].decode('ascii'),outcome='observed')
+    return row['permission']
+def install_with_permission(candidate,action,root,env,args,native_app=None):
+    original_setup(candidate,action,root,env,args,native_app)
+    if action!='install': return
+    require=runner['require']
+    require(os.environ.get('GITHUB_ACTIONS')=='true' and sys.platform=='darwin' and args.os=='darwin',
+            'native_test_permission_custody')
+    require(root.parent==repo/'.task-tools/artifacts/native' and re.fullmatch('TEST-installed-[a-f0-9]{24}',root.name)
+            and root.resolve(strict=True)==root,'native_test_permission_custody')
+    marker=json.loads((root/'.owned-test-root.json').read_text())
+    require(marker.get('purpose')=='TEST installed AN dual native' and env.get('AN_TEST_ROOT')==str(root)
+            and env.get('HOME')==str(root/'home'),'native_test_permission_custody')
+    ledger=json.loads((root/'control/ownership.json').read_text())
+    helper=pathlib.Path(ledger['Native']['Path'])/'Contents/MacOS/terminal-notifier-modern'
+    binary=root/'runtime'/('claude-notifications-darwin-'+args.arch)
+    require(helper.is_file() and helper.resolve(strict=True).is_relative_to(root) and binary.is_file()
+            and not any(p.is_symlink() for p in (helper,*helper.parents,binary,*binary.parents)),
+            'native_test_permission_custody')
+    require(runner['digest'](binary)==runner['digest'](candidate) and native_app is not None
+            and runner['digest'](helper)==runner['digest'](native_app/'Contents/MacOS/terminal-notifier-modern'),
+            'native_test_permission_custody')
+    permission=permission_operation(binary,'permission-status',root,env,require)
+    if permission=='undetermined':
+        # One explicit request on this disposable VM; uncertain outcomes are never retried.
+        permission=permission_operation(binary,'request-permission',root,env,require)
+    require(permission=='allowed','native_test_permission_not_allowed')
+def observe(frame,event,arg):
+    if event=='call' and not frame.f_code.co_filename.startswith(str(repo/'scripts')+'/'): return None
+    if event=='exception':
+        try: relative=pathlib.Path(frame.f_code.co_filename).relative_to(repo/'scripts')
+        except ValueError: return None
+        kind,value,_=arg
+        label=str(value)
+        if kind.__name__ in ('ValueError','Unqualified'):
+            row={'file':str(relative),'line':frame.f_lineno,'class':kind.__name__}
+            if label in allowed: row['reason']=label
+            events.append(row)
+            del events[:-64]
+    return observe
+sys.settrace(observe)
+try:
+    namespace=runpy.run_path(sys.argv[0],run_name='TEST_native_diagnostic')
+    runner=namespace['main'].__globals__
+    original_setup=runner['setup']
+    runner['setup']=install_with_permission
+    sys.exit(runner['main']())
+finally:
+    sys.settrace(None)
+    rows=[]
+    for log in (repo/'.task-tools/artifacts/native').glob('TEST-installed*/*host-private.log'):
+        for line in log.read_text(errors='replace').splitlines():
+            marker='[agent-notifications] '
+            if marker not in line or len(line)>4096: continue
+            try: value=json.loads(line.split(marker,1)[1])
+            except ValueError: continue
+            if not isinstance(value,dict): continue
+            row={}
+            for key in ('ipc','childClosure','exitCode','forcedKill'):
+                item=value.get(key)
+                if isinstance(item,(bool,int)) or item in ('ok','invalidated','closed','unproved','spawn_failed','aborted','deadline','ipc_termination_unproved','exited','stream_error','output_limit'): row[key]=item
+            receipt=value.get('receipt',{})
+            if isinstance(receipt,dict):
+                row['receipt']={key:item for key,item in receipt.items() if key in ('status','desktop','webhook') and item in ('submitted','unknown','unavailable','rejected','suppressed')}
+            rows.append(row)
+    output.write_text(json.dumps({'exceptions':events,'diagnostics':rows[:32],'permissionOperations':permissions}))
+''')
+subprocess.run([sys.executable,'-B',str(diagnostic_driver),str(repo),str(repo/'scripts/opencode-native-e2e.py'),'--manifest',str(manifest_path),
     '--manifest-sha256',manifest_sha,'--binary',str(binary),'--archive',str(host),'--os','darwin',
     '--arch',c['arch'],'--version',c['version'],'--suite','business','--business-proof',str(proof),
     '--business-proof-sha256',sha(proof),'--report',str(art/'native-report.json')],check=True,cwd=repo)
