@@ -1,0 +1,46 @@
+name: Navigation Windows App SDK compile prerequisite
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/navigation-windows-appsdk-build.yml'
+      - 'tests/integration/windows_appsdk_build/**'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-only:
+    runs-on: windows-11-vs2026-arm
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7, repository pin
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Restore graph and compile only
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if ((git rev-parse HEAD) -cne $env:SOURCE_SHA) { throw 'source mismatch' }
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -property installationPath
+          if (!$vs) { throw 'Visual Studio absent' }
+          $msbuild = Join-Path $vs 'MSBuild\Current\Bin\MSBuild.exe'
+          $project = 'tests\integration\windows_appsdk_build\SDKContract.vcxproj'
+          $out = Join-Path $env:RUNNER_TEMP 'TEST-windows-appsdk-build'
+          New-Item -ItemType Directory -Path $out -ErrorAction Stop | Out-Null
+          & $msbuild $project /restore /t:Build /p:Configuration=Release /p:Platform=ARM64 "/p:OutDir=$out\" "/p:IntDir=$out\obj\" /verbosity:minimal "/bl:$out\build.binlog"
+          if ($LASTEXITCODE -ne 0) { throw 'SDK build prerequisite failed' }
+          $lock = 'tests\integration\windows_appsdk_build\packages.lock.json'
+          if (!(Test-Path -LiteralPath $lock)) { throw 'resolved dependency lock missing' }
+          Copy-Item -LiteralPath $lock -Destination (Join-Path $out 'packages.lock.json')
+          $evidence = @{sourceSHA=$env:SOURCE_SHA; image=$env:ImageVersion; executedBinary=$false;
+            packageLockSHA256=(Get-FileHash -LiteralPath $lock -Algorithm SHA256).Hash.ToLowerInvariant()}
+          $evidence | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $out 'build-evidence.json') -Encoding utf8
+      - name: Preserve build graph and diagnostic log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1, repository pin
+        with:
+          name: windows-appsdk-build-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/TEST-windows-appsdk-build
+          if-no-files-found: error
+          retention-days: 14
