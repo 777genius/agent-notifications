@@ -2,25 +2,57 @@ name: Install reboot recovery E2E
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review, edited]
   workflow_dispatch:
+    inputs:
+      use_github_runner:
+        description: Use GitHub-hosted runners for native macOS checks
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 # Supersede only older checks for this PR; dispatch runs remain independent.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && github.run_id || github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) }}
 
 jobs:
+  # Body/title edits create no canonical check names and cannot cancel full CI.
+  scope:
+    if: ${{ !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) }}
+    name: ${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && 'Metadata edit ignored (scope)' || 'Classify macOS CI scope' }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+    outputs:
+      mode: ${{ steps.classify.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Test conservative classification and installer mode contracts
+        run: |
+          python3 scripts/ci_macos_scope_test.py
+          bash bin/install_e2e_mode_test.sh
+      - name: Classify exact PR revision (errors retain full CI)
+        id: classify
+        run: python3 scripts/ci_macos_scope.py classify
+
   recovery:
-    name: Offline recovery (${{ matrix.os }}, native Go 1.26)
-    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.os || matrix.os == 'ubuntu-latest' && (vars.CI_LINUX_RUNNER || 'ubuntu-latest') || matrix.os == 'macos-15' && (vars.CI_MACOS_15_RUNNER || 'macos-15') || matrix.os }}
+    needs: scope
+    if: ${{ !cancelled() && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) }}
+    name: ${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && format('Metadata edit ignored (recovery {0})', matrix.os) || format('Offline recovery ({0}, native Go 1.26)', matrix.os) }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.use_github_runner && matrix.os == 'macos-15' && matrix.os || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.os || matrix.os == 'ubuntu-latest' && (vars.CI_LINUX_RUNNER || 'ubuntu-latest') || matrix.os == 'macos-15' && (vars.CI_MACOS_15_RUNNER || 'macos-15') || matrix.os }}
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-15]
+        # Keep Linux recovery coverage even for cheap intermediate prose heads.
+        os: ${{ fromJSON(needs.scope.outputs.mode == 'docs' && '["ubuntu-latest"]' || '["ubuntu-latest","macos-15"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -133,3 +165,20 @@ jobs:
             fi
             rm -rf "$RECOVERY_SANDBOX"
           ;; esac
+
+  full-ci:
+    name: ${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && 'Metadata edit ignored (full recovery gate)' || 'Full install recovery required' }}
+    needs: [scope, recovery]
+    if: ${{ always() && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Require actual full native success on this revision
+        env:
+          CI_MODE: ${{ needs.scope.outputs.mode }}
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: python3 scripts/ci_macos_scope.py gate recovery

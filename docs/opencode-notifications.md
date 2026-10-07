@@ -9,17 +9,19 @@ falls back to generic OpenCode copy. Alerts remain silent and do not navigate to
 a terminal or session when clicked. Plan/review events and sound controls are
 outside this integration.
 
-The dual-API release candidate uses **one installed plugin** for OpenCode V1 and
-[V2](https://opencode.ai/v2/docs): V1 calls `server`, V2 calls `setup`. Native
-qualification targets are **1.18.33, 1.18.34 and 2.0.21**. The candidate installer
+Agent Notifications **1.48.0** uses **one installed plugin** for OpenCode V1 and
+[V2](https://opencode.ai/v2/docs): V1 calls `server`, V2 calls `setup`. Release
+qualification targets are **V1 1.18.33, V1 1.18.34 and V2 2.0.21**. The installer
 accepts stable V1 >= 1.18.29 and V2 >= 2.0.0; this range does not qualify every
 release. Prereleases and unknown future API generations are rejected.
 Setup installs notifications, never OpenCode itself, and does not start an agent session.
 
-**Publication pending:** this candidate requires the separately reviewed
-`universal-agent-plugins-opencode-events@0.3.0` package. Qualification consumes its
-exact local tarball; publishing that package and validating a clean registry install
-are separate release steps. These changes do not upgrade an existing installation.
+The self-contained plugin incorporates
+`universal-agent-plugins-opencode-events@0.3.0` from the reviewed vendored tarball.
+Release preparation verifies its exact archive, lock integrity and an identical
+rebuild of the embedded bundle. The SDK is separately unpublished; publishing it
+or installing it from the registry is not a gate for this consumer release.
+Existing installations must run update and restart OpenCode to load the new bundle.
 
 ## Platforms and observed delivery
 
@@ -28,34 +30,45 @@ For native Windows shell installation use **Git Bash**, not WSL or PowerShell.
 Desktop delivery uses the signed macOS helper, the Linux desktop notification
 service or Windows toasts. Linux needs an available desktop session/D-Bus service.
 
-- The user confirmed a visible completion banner on macOS arm64.
-- Linux amd64 X11/dunst rendered all four real OpenCode events; see the
-  [captured banners](evidence/opencode-1.18.33-x11-notifications.png).
-- V1 native lifecycle/webhook checks passed on all five targets. Headless CI does
-  not establish visible macOS Intel, Linux ARM64 or Windows banners, or universal
-  compatibility with every desktop environment.
-- Retained V2 native completion observations provide corroboration, but full
-  current-candidate qualification remains pending. Installed lifecycle and delivery
-  qualification are still owed on the native targets; workflow lanes alone do not
-  establish that they passed. V2 visible banners are not claimed.
+- Historical macOS arm64 evidence includes a user-confirmed visible completion banner.
+- Historical Linux amd64 X11/dunst evidence rendered all four real OpenCode events;
+  see the [captured banners](evidence/opencode-1.18.33-x11-notifications.png).
+- Historical V1 lifecycle/webhook checks covered all five targets; retained V2
+  native completion observations provide corroboration. They do not qualify new
+  release bytes by themselves.
+- The 1.48.0 release gate covers seven native Linux/Windows cells and three
+  artifact canaries, as detailed below. Exact release reports establish which checks
+  passed; configured workflow lanes alone are not evidence.
+- macOS binaries and the helper are excluded from 1.48.0; macOS retains 1.46.1.
+  Historical macOS ARM business evidence is separate from this release. Intel
+  desktop delivery and macOS V2 visible banners remain unqualified.
 
 **Windows V1 limitation:** stock OpenCode V1 events do not always allow the
 original event age to be verified independently. A delayed completion can notify
 once, and the same completion can notify again after its 24-hour deduplication
 claim expires. Root-session and workspace filters, origin-bound provenance,
 deduplication within that claim lifetime, and lookup and IPC limits still apply.
-This accepted limitation does not qualify every Windows V1 version or establish
-that the current candidate has completed native qualification.
+This accepted limitation does not qualify every Windows V1 version.
 
-## Dual candidate evidence boundary
+<a id="dual-candidate-evidence-boundary"></a>
 
-The installed dual candidate fixture in `scripts/opencode-native-e2e.py` is source
-preparation only. Its eleven native cells cover V1 1.18.33 and V2 2.0.21 on all
-five platform pairs, plus Linux amd64 V1 1.18.34. No cell has been executed or
-qualified by this preparation. Exact bundle/SDK/image custody, authoritative
-managed configuration, production parent/profile and complete clock qualification
-must precede delivery cases. Historical V1 evidence below does not qualify this
-candidate or V2. Missing prerequisites report unqualified and stop business phases.
+## Release qualification boundary
+
+The installed fixture in `scripts/opencode-native-e2e.py` retains eleven custody
+cells: V1 1.18.33 and V2 2.0.21 on all five platform pairs, plus Linux amd64 V1
+1.18.34. The 1.48.0 tag workflow runs seven Linux/Windows cells: both API versions
+on Linux amd64/arm64 and Windows amd64, plus Linux amd64 V1 1.18.34. It separately
+runs artifact canaries on the three Linux/Windows native targets. No macOS
+binaries or helper ship in 1.48.0; macOS retains its 1.46.1 channel. These checks cover managed lifecycle, completion delivery and
+revocation; they do not prove every desktop effect or replace the broader semantic
+matrix. See the exact-source reports linked from the release and
+[release procedure](RELEASE.md).
+
+Exact bundle/SDK/image custody, authoritative managed configuration, production
+parent/profile and compiled clock qualification precede delivery cases. Missing
+prerequisites report unqualified and stop business phases. Historical observations
+below retain their original source and scope; they do not qualify a newer binary
+or V2 by themselves.
 
 ## Install or update
 

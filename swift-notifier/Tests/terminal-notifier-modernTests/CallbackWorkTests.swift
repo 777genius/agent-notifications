@@ -37,8 +37,8 @@ final class CallbackWorkTests: XCTestCase {
         XCTAssertFalse(events.contains { $0.event == "preflight_started" || $0.event == "open_submitted" })
     }
 
-    private func action(_ n: Int = 1) -> DesktopThreadAction {
-        DesktopThreadAction(type: "desktop_thread_v1", schemaVersion: 1, threadID: "private-thread",
+    private func action(_ n: Int = 1, threadID: String = "private-thread") -> DesktopThreadAction {
+        DesktopThreadAction(type: "desktop_thread_v1", schemaVersion: 1, threadID: threadID,
             routeKind: "codex_thread", bundleID: "com.openai.codex", teamID: "TESTTEAM01",
             applicationPath: "/disposable/Codex.app",
             correlationID: String(format: "00000000-0000-4000-8000-%012d", n))
@@ -61,9 +61,11 @@ final class CallbackWorkTests: XCTestCase {
         func verify(_ url: URL, bundleID: String, teamID: String) -> Bool { check() }
     }
     private final class Opener: DesktopURLOpening {
+        var requests: [(url: URL, application: URL)] = []
         var completions: [(Bool) -> Void] = []
         func open(_ url: URL, application: URL, completion: @escaping (Bool) -> Void) {
             XCTAssertTrue(Thread.isMainThread)
+            requests.append((url: url, application: application))
             completions.append(completion)
         }
     }
@@ -326,20 +328,63 @@ final class CallbackWorkTests: XCTestCase {
     }
     func testReversedCompletionRetainsCorrelationAndEmitsOneTerminal() throws {
         var lines: [String] = []
+        var completions = [0, 0]
         let owner = CallbackLifecycle(schedule: { _, _ in }, exit: {}, diagnostic: { lines.append($0) })
         let opener = Opener()
         let executor = DesktopThreadExecutor(discovery: Discovery(), verifier: Verifier(), opener: opener,
             verificationWork: { $0() }, deliverResult: { $0() }, admission: PreflightAdmission(limit: 2))
         let handler = CallbackHandler(lifecycle: owner, desktop: executor)
-        try receive(handler, action(1)); try receive(handler, action(2))
-        opener.completions[1](false); opener.completions[0](true)
+        try receive(handler, action(1, threadID: "private-thread-one")) { completions[0] += 1 }
+        try receive(handler, action(2, threadID: "private-thread-two")) { completions[1] += 1 }
+        XCTAssertEqual(opener.requests.map { $0.url.absoluteString },
+                       ["codex://threads/private-thread-one", "codex://threads/private-thread-two"])
+        XCTAssertEqual(opener.requests.map { $0.application.path },
+                       ["/disposable/Codex.app", "/disposable/Codex.app"])
+        XCTAssertEqual(opener.completions.count, 2)
+        opener.completions[1](false)
+        XCTAssertEqual(completions, [0, 1])
+        opener.completions[0](true)
+        XCTAssertEqual(completions, [1, 1])
         opener.completions[1](true); opener.completions[0](false)
+        XCTAssertEqual(completions, [1, 1])
         let events = try lines.map { try JSONDecoder().decode(CallbackDiagnostic.self, from: Data($0.utf8)) }
             .filter { $0.event.hasPrefix("callback_") }
         XCTAssertEqual(events.map { $0.event }, ["callback_received", "callback_received", "callback_terminal", "callback_terminal"])
         XCTAssertEqual(events.map { $0.correlationID }, [1, 2, 2, 1].map { UUID(uuidString: action($0).correlationID)! })
         XCTAssertEqual(events.compactMap { $0.outcome }, ["open_failed", "open_requested"])
-        XCTAssertTrue(lines.allSatisfy { $0.utf8.count < 200 && !$0.contains("private-thread") && !$0.contains("disposable") })
+        XCTAssertTrue(lines.allSatisfy { $0.utf8.count < 200 && !$0.contains("private-thread")
+            && !$0.contains("disposable") && !$0.contains("codex://") })
+    }
+    func testSeparateReceivesWithSameCorrelationRemainIndependentAttempts() throws {
+        var lines: [String] = []
+        var completions = [0, 0]
+        let owner = CallbackLifecycle(schedule: { _, _ in }, exit: {}, diagnostic: { lines.append($0) })
+        let opener = Opener()
+        let executor = DesktopThreadExecutor(discovery: Discovery(), verifier: Verifier(), opener: opener,
+            verificationWork: { $0() }, deliverResult: { $0() }, admission: PreflightAdmission(limit: 2))
+        let handler = CallbackHandler(lifecycle: owner, desktop: executor)
+        let repeated = action()
+        try receive(handler, repeated) { completions[0] += 1 }
+        try receive(handler, repeated) { completions[1] += 1 }
+        XCTAssertEqual(opener.requests.map { $0.url.absoluteString },
+                       ["codex://threads/private-thread", "codex://threads/private-thread"])
+        XCTAssertEqual(opener.requests.map { $0.application.path },
+                       ["/disposable/Codex.app", "/disposable/Codex.app"])
+        XCTAssertEqual(opener.completions.count, 2)
+        XCTAssertEqual(owner.inFlight, 2) // Same correlation still owns two distinct attempts.
+        opener.completions.first?(true)
+        XCTAssertEqual(completions, [1, 0])
+        XCTAssertEqual(owner.inFlight, 1)
+        opener.completions.last?(true)
+        XCTAssertEqual(completions, [1, 1])
+        XCTAssertEqual(owner.inFlight, 0)
+        let events = try lines.map { try JSONDecoder().decode(CallbackDiagnostic.self, from: Data($0.utf8)) }
+            .filter { $0.event.hasPrefix("callback_") }
+        XCTAssertEqual(events.map { $0.event }, ["callback_received", "callback_received", "callback_terminal", "callback_terminal"])
+        XCTAssertTrue(events.allSatisfy { $0.correlationID == UUID(uuidString: repeated.correlationID)! })
+        XCTAssertEqual(events.compactMap { $0.outcome }, ["open_requested", "open_requested"])
+        XCTAssertTrue(lines.allSatisfy { $0.utf8.count < 200 && !$0.contains("private-thread")
+            && !$0.contains("disposable") && !$0.contains("codex://") })
     }
     func testMalformedCorrelationIsGeneratedAndNeverLogsInput() throws {
         var lines: [String] = []

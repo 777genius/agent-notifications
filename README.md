@@ -19,7 +19,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/777genius/agent-notifications.svg)](https://pkg.go.dev/github.com/777genius/agent-notifications)
 [![codecov](https://codecov.io/gh/777genius/agent-notifications/graph/badge.svg?branch=main)](https://codecov.io/gh/777genius/agent-notifications)
 
-Desktop notifications for **Claude, Codex CLI and OpenCode**, plus **Gemini CLI on Linux/Windows (v1.47.1)**. Know when a task finishes, an agent needs input, or a tool needs approval. Claude and Codex also support sounds and click-to-focus.
+Desktop notifications for **Claude, Codex CLI and OpenCode**, plus **Gemini CLI on Linux/Windows**. Know when a task finishes, an agent needs input, or a tool needs approval. Claude and Codex also support sounds and click-to-focus.
 
 <p align="center">
   <img width="100%" alt="macOS, Windows, Linux (left to right)" src="docs/images/notification-platform-labels.svg" />
@@ -51,11 +51,11 @@ The installer selects a verified complete release for your platform:
 
 | Platform | Version | Agents |
 | --- | --- | --- |
-| Linux amd64 / arm64 | 1.47.1 | Claude, Codex, OpenCode, Gemini |
-| Windows amd64 | 1.47.1 | Claude, Codex, OpenCode, Gemini |
+| Linux amd64 / arm64 | 1.48.0 | Claude, Codex, OpenCode, Gemini |
+| Windows amd64 | 1.48.0 | Claude, Codex, OpenCode, Gemini |
 | macOS amd64 / arm64 | 1.46.1 | Claude, Codex, OpenCode |
 
-Run the command once to migrate a normal Claude marketplace installation to its platform channel. Claude's plugin updater then follows that channel; rerun setup to update a standalone Codex bundle. Explicitly pinned/custom marketplace sources are retained. GitHub's global Latest remains 1.46.1 for older installers. See [platform channels](docs/PLATFORM_RELEASE_CHANNELS.md).
+Run the command once to migrate a normal Claude marketplace installation to its platform channel. Claude's plugin updater then follows that channel; rerun setup to update a standalone Codex bundle. Explicitly pinned/custom marketplace sources are retained. GitHub's global Latest stays 1.46.1 for older installers. This release excludes macOS binaries and ClaudeNotifier.app; macOS retains its existing channel. See [platform channels](docs/PLATFORM_RELEASE_CHANNELS.md).
 
 <details>
 <summary>Non-interactive installation and optional notification tools</summary>
@@ -98,9 +98,9 @@ Claude/Codex setup also installs the `agent-notify` MCP server and `agent-notifi
 | **OpenCode** | Root-session completion, questions, permissions and errors | No | [Setup and limits](docs/opencode-notifications.md) |
 | **Gemini CLI** | Turn completion and tool permissions | No | [Linux/Windows setup and qualification](docs/gemini-notifications.md) |
 
-Published OpenCode support is tested with **1.18.33**; published V2 support is not declared. The dual-API candidate targets **1.18.33, 2.0.0 and 2.0.21** with one installed plugin; final platform qualification, SDK publication and a clean registry install remain pending. [Candidate setup and qualification limits](docs/opencode-notifications.md). Gemini is tested with **0.62.0**; a completed turn does not necessarily mean task success or a final answer. OpenCode/Gemini alerts require explicit desktop/webhook consent. Gemini alerts and OpenCode webhooks use generic text. OpenCode desktop alerts may include bounded native session titles and current question text.
+Agent Notifications **1.48.0** supports OpenCode V1 and V2 with one installed plugin. Release qualification covers **V1 1.18.33 and V2 2.0.21** on Linux amd64/arm64 and Windows amd64, plus **V1 1.18.34 on Linux amd64**. The three Linux/Windows native artifacts have release canaries. macOS retains 1.46.1 and does not receive this dual-API update. The self-contained bundle incorporates SDK **0.3.0** from its reviewed vendored tarball; separate SDK publication is not required. [Setup, release reports and delivery limits](docs/opencode-notifications.md). Gemini is tested with **0.62.0**; a completed turn does not necessarily mean task success or a final answer. OpenCode/Gemini alerts require explicit desktop/webhook consent. Gemini alerts and OpenCode webhooks use generic text. OpenCode desktop alerts may include bounded native session titles and current question text.
 
-For the OpenCode candidate on stock Windows V1, the original event age is not always independently verifiable. A delayed completion may notify once and recur after the 24-hour claim lifetime; filters, provenance, deduplication and limits still apply.
+For OpenCode on stock Windows V1, the original event age is not always independently verifiable. A delayed completion may notify once and recur after the 24-hour claim lifetime; filters, provenance, deduplication and limits still apply. One-shot `opencode run` delivery at host shutdown is best effort; use a persistent host for sustained delivery.
 
 ## Settings
 

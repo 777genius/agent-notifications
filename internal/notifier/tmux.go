@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"time"
 )
 
 // IsTmux returns true if the current process is running inside a tmux session.
@@ -136,15 +135,10 @@ func buildTmuxNotifierArgs(title, message, paneTarget, bundleID string) []string
 		)
 	}
 
-	args := []string{
+	return []string{
 		"-title", title,
 		"-message", message,
 		"-activate", bundleID,
 		"-execute", tmuxCmd,
 	}
-
-	// Add group ID to prevent notification stacking issues
-	args = append(args, "-group", fmt.Sprintf("claude-notif-%d", time.Now().UnixNano()))
-
-	return args
 }

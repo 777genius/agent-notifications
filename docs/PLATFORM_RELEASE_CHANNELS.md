@@ -6,10 +6,11 @@ release commit, an immutable source commit, and its platform branch.
 
 | Platform | Qualified version | Source branch |
 | --- | --- | --- |
-| Linux amd64 / arm64, Windows amd64 | 1.47.1 | `release/platform-linux-windows` |
+| Linux amd64 / arm64, Windows amd64 | 1.48.0 | `release/platform-linux-windows` |
 | macOS amd64 / arm64 | 1.46.1 | `release/platform-macos` |
 
-GitHub Latest stays 1.46.1 for legacy installers. A platform channel can select
+GitHub Latest stays 1.46.1 for legacy installers. Release 1.48.0 contains only
+Linux and Windows artifacts; macOS retains its qualified 1.46.1 channel. A platform channel can select
 an explicitly qualified partial release even when GitHub labels it Pre-release.
 No scan for the newest tag or fallback to Latest is used. Invalid/missing rows,
 unsupported architectures and failed downloads stop selection before installation.
@@ -60,3 +61,17 @@ Branches may advance after index selection: installation still uses the indexed
 SHA, while subsequent Claude updates follow only qualified branch promotions.
 Rollback the index/branch to a qualified snapshot; do not rewrite release tags or
 silently downgrade users with a newer installed version.
+
+## Future macOS candidates
+
+`macos-qualification.yml` is a manual, artifact-only preparation workflow. It
+builds and checks native Darwin amd64/arm64 packages and the signed, notarized
+universal notifier from one selected source ref. It never updates this index,
+platform branches, existing release assets or GitHub Latest. Its scoped checks
+must be supplemented by the macOS desktop and installed-lifecycle qualification
+listed in [the release checklist](RELEASE.md#claudenotifierapp-macos).
+
+After an authorized candidate publication, follow the promotion order above for
+both macOS rows only. Retain the currently qualified macOS version until that
+candidate's public assets and source provenance are verified; preserve unrelated
+Linux/Windows rows and global Latest.

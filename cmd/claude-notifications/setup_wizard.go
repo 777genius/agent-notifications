@@ -948,8 +948,15 @@ func commitConfirmedCursorConsent(ctx context.Context, r setupwizard.Request, re
 		result.Outcome, result.Reason = "incomplete", "cursor_consent_unavailable"
 		return result, err
 	}
-	if result.Outcome == "cancelled" || result.InstallationID == "" || len(result.NextActions) != 0 {
+	if result.Outcome == "cancelled" || result.InstallationID == "" {
 		return deny(setupwizard.ErrRefused)
+	}
+	for _, next := range result.NextActions {
+		switch next.Kind {
+		case "restart-client", "request-permission", "test-notification":
+		default:
+			return deny(setupwizard.ErrRefused)
+		}
 	}
 	r.InstallationID = result.InstallationID
 	b, found, err := recordedCursorRequest(r)
@@ -1005,6 +1012,11 @@ func commitConfirmedCursorConsent(ctx context.Context, r setupwizard.Request, re
 		return deny(err)
 	}
 	result.Generation = ledger.Generation
+	for n := range result.NextActions {
+		if result.NextActions[n].Kind == "request-permission" {
+			result.NextActions[n].Command = []string{"setup-notifications", "request-permission", "--control-root", r.ControlRoot, "--expected-generation", fmt.Sprintf("%d", ledger.Generation)}
+		}
+	}
 	return result, nil
 }
 func sameWizardBootstrapScope(actual, expected setupwizard.Request) bool {
