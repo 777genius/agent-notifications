@@ -1,8 +1,9 @@
 // One disposable Windows CI package. No real client route or private-key export.
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
+import { download, hash as streamedHash } from './navigation_windows_vendor_acquisition.ts';
 import { setTimeout as delay } from 'node:timers/promises';
 
 type Json = Record<string, unknown>;
@@ -24,7 +25,13 @@ let binary: string | undefined;
 let exitCode = 1;
 let packageIntent = false;
 let activationIntent = false;
-let prepareOnly = false;
+let prepareOnly = false, composed = false, vendorKnown = false, vendorEffectsKnown = true;
+const vendorPin = { name: 'OpenAI.Codex', publisher: 'CN=50BDFD77-8903-4850-9FFE-6E8522F64D5B',
+  familyName: 'OpenAI.Codex_2p2nqsd0c76g0', fullName: 'OpenAI.Codex_26.930.7945.0_arm64__2p2nqsd0c76g0',
+  version: '26.930.7945.0', architecture: 12 };
+const vendorArchiveHash = 'a208d373c7c84aa3e0452cd3dd8406a6794d8139ec1260c64a770c2a00fbeeb8';
+let vendorIntent = '';
+
 let bootstrap: { handoff: Json; paths: Map<string, string>; hashes: Map<string, string> } | undefined;
 
 // Fixed source, saved verbatim in the owned root. Data arrives only in JSON.
@@ -308,7 +315,7 @@ if (!$s.cleanupPassed) { throw 'exact owned package/certificate cleanup failed' 
 
 function hash(path: string): string { return createHash('sha256').update(readFileSync(path)).digest('hex'); }
 function bindBootstrap(): void {
-  if (process.env.NAVIGATION_WINDOWS_MSIX_MODE !== 'oobe_then_msix_callback') return;
+  if (!['oobe_then_msix_callback', 'oobe_then_msix_vendor_callback'].includes(process.env.NAVIGATION_WINDOWS_MSIX_MODE ?? '')) return;
   const supplied = resolve(process.env.NAVIGATION_WINDOWS_OOBE_BOOTSTRAP_ROOT ?? '');
   const path = realpathSync(supplied);
   const st = lstatSync(supplied), name = basename(path), id = name.slice('navigation-windows-test-'.length);
@@ -439,6 +446,137 @@ function powershell(mode: string, timeout: number): Step {
     ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', join(root, 'package-operator.ps1'), mode, join(root, 'operator-context.json')], timeout,
     Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toUpperCase() !== 'PSMODULEPATH')));
 }
+function vendorRecord(name: string, step: Step): Json {
+  const result = read(name);
+  if (result.pid !== step.pid || result.nonce !== nonce || result.familyName !== vendorPin.familyName
+      || result.fullName !== vendorPin.fullName || result.showAttempts !== 0
+      || result.toastCallbackQualified !== false || result.targetConfirmed !== false) throw new Error('vendor record custody mismatch');
+  return result;
+}
+async function installVendor(prepared: Json): Promise<void> {
+  const archive = join(root!, 'client.msix');
+  const acquired: Json = {}; const digest = await download(archive, acquired);
+  evidence.vendorAcquisition = acquired;
+  if (digest !== vendorArchiveHash) throw new Error('official vendor bytes changed before Add');
+  evidence.vendorPackageSHA256 = digest;
+  if (prepared.nonce !== nonce || typeof prepared.userSid !== 'string' || !Number.isInteger(prepared.session)) throw new Error('vendor owner context missing');
+  if (typeof prepared.signtool !== 'string' || hash(prepared.signtool) !== prepared.signtoolSHA256) throw new Error('captured signer tool changed');
+  success(execute('vendor-signature', prepared.signtool, ['verify', '/pa', '/all', '/v', archive], 60_000));
+  const metadataStep = native('package-metadata', 15_000, true); success(metadataStep);
+  const metadata = read('package-metadata.json');
+  if (metadata.pid !== metadataStep.pid || metadata.nonce !== nonce
+      || Object.entries(vendorPin).some(([key, value]) => metadata[key] !== value)) throw new Error('pinned SDK archive identity mismatch');
+  if (await streamedHash(archive) !== digest || hash(observer!) !== evidence.observerSHA256) throw new Error('vendor custody changed');
+  const custody = `TEST vendor custody ${nonce}\nsigntool-pa-all-success\n${digest}\n${evidence.observerSHA256}\n`;
+  writeFileSync(join(root!, 'vendor-custody.proof'), custody, { flag: 'wx', flush: true });
+  const before = native('vendor-state-before', 15_000, true); success(before);
+  const absent = vendorRecord('vendor-before.json', before);
+  if (absent.readOnly !== true || absent.installedCount !== 0 || absent.exactFullName !== false) throw new Error('vendor family preexists');
+  const proof = readFileSync(join(root!, 'vendor-absent.proof'), 'utf8').split('\n');
+  if (proof.length !== 3 || proof[0] !== nonce || !/^(?:[0-9a-f]{2}){8,68}$/.test(proof[1] ?? '') || proof[2] !== '') throw new Error('vendor absence proof invalid');
+  vendorIntent = custody + `absent-before-install\n${proof[1]}\n`;
+  vendorEffectsKnown = false; evidence.vendorInstallOutcomeUnknown = true;
+  const add = native('vendor-install', 165_000, true); success(add);
+  const added = vendorRecord('vendor-install-result.json', add);
+  if (added.operationCompleted !== true || added.extendedError !== 0
+      || readFileSync(join(root!, 'vendor-install-intent.proof'), 'utf8') !== vendorIntent
+      || readFileSync(join(root!, 'vendor-install-completed.proof'), 'utf8') !== vendorIntent) throw new Error('vendor Add known success absent');
+  vendorKnown = true; vendorEffectsKnown = true; evidence.vendorInstallOutcomeUnknown = false;
+  const after = native('vendor-state-after', 15_000, true); success(after);
+  const installed = vendorRecord('vendor-after.json', after);
+  if (installed.readOnly !== true || installed.installedCount !== 1 || installed.exactFullName !== true) throw new Error('selected vendor installed readback absent');
+  const sources = ['navigation_windows_vendor_sdk_test.h', 'navigation_windows_vendor_acquisition.ts',
+    'navigation_windows_msix_probe.cpp', 'navigation_windows_msix_e2e.ts', 'navigation_windows_native_probe.cpp'];
+  evidence.compositionSourceSHA256 = Object.fromEntries(sources.map(name => {
+    const source = resolve('tests/integration', name); const captured = join(root!, name);
+    copyFileSync(source, captured); return [name, hash(captured)];
+  }));
+  const binding = { schema: 1, nonce, threadID: nonce, ...vendorPin, archiveSHA256: digest,
+    callbackBinarySHA256: evidence.binarySHA256, observerSHA256: evidence.observerSHA256,
+    addProofSHA256: hash(join(root!, 'vendor-install-completed.proof')), userSid: prepared.userSid, session: prepared.session };
+  writeFileSync(join(root!, 'vendor-callback-spec.json'), JSON.stringify(binding), { flag: 'wx', flush: true });
+  evidence.vendorSpecSHA256 = hash(join(root!, 'vendor-callback-spec.json'));
+}
+// Sole owned child handle; deadlines apply to both actors concurrently, not a fresh wait after Invoke.
+function asyncActor(mode: string, useObserver: boolean, deadline: number) {
+  const env = { ...process.env }; delete env.GH_TOKEN; delete env.GITHUB_TOKEN;
+  const child = spawn(useObserver ? observer! : binary!, [mode, root!, nonce!], { cwd: root, env, windowsHide: false });
+  let stdout = '', stderr = '', overflow = false, error: string | undefined, timedOut = false;
+  let done = false; const stop = () => { if (!done) child.kill('SIGKILL'); };
+  const timer = setTimeout(() => { timedOut = true; stop(); }, Math.max(1, deadline - performance.now()));
+  const result = new Promise<Step>(resolveStep => {
+    child.on('error', value => { error = value.message; });
+    const append = (kind: 'stdout' | 'stderr', data: Buffer) => {
+      if (Buffer.byteLength(stdout) + Buffer.byteLength(stderr) + data.length > 65_536) { overflow = true; stop(); return; }
+      if (kind === 'stdout') stdout += data.toString('utf8'); else stderr += data.toString('utf8');
+    };
+    child.stdout.on('data', data => append('stdout', data)); child.stderr.on('data', data => append('stderr', data));
+    const finish = (status: number | null, signal: string | null) => {
+      if (done) return; done = true; clearTimeout(timer); clearTimeout(collection);
+      if (status === null && signal === null) { child.unref(); child.stdout.destroy(); child.stderr.destroy(); }
+      const step: Step = { mode, pid: child.pid ?? 0, status, signal, stdout, stderr, collectedAt: Date.now(),
+        ...(error || overflow || timedOut ? { error: error ?? (overflow ? 'bounded output exceeded' : 'absolute UI deadline exceeded') } : {}) };
+      (evidence.steps as Step[]).push(step); resolveStep(step);
+    };
+    child.on('close', finish);
+    const collection = setTimeout(() => { error = 'owned child collection unknown'; finish(null, null); }, Math.max(1, deadline - performance.now()) + 3000);
+  });
+  return { result, stop };
+}
+async function composedInvoke(): Promise<Step> {
+  const deadline = performance.now() + 30_000;
+  const invoker = asyncActor('invoke', true, deadline); let collector: ReturnType<typeof asyncActor> | undefined;
+  vendorEffectsKnown = false; // Missing terminal after possible callback entry never permits guessed Remove.
+  try {
+    while (!existsSync(join(root!, 'vendor-callback-published.json')) && performance.now() < deadline) await delay(20);
+    if (performance.now() >= deadline) throw new Error('action terminal missing inside original UI budget');
+    const action = read('vendor-callback-published.json'), callback = read('callback.json');
+    if (action.nonce !== nonce || action.pid !== callback.pid || action.creationTicks !== callback.creationTicks
+        || action.vendorSpecSHA256 !== evidence.vendorSpecSHA256 || typeof action.outcome !== 'string'
+        || !['handoff_accepted', 'declined', 'unavailable', 'unknown'].includes(action.outcome)
+        || typeof action.launchCallEntered !== 'boolean' || typeof action.launchCallReturned !== 'boolean') throw new Error('action terminal binding invalid');
+    collector = asyncActor('collect', false, Math.min(deadline, performance.now() + 5000));
+    const [invoke, collect] = await Promise.all([invoker.result, collector.result]);
+    evidence.composedOwnedActorsCollected = !invoke.error && !invoke.signal && invoke.status !== null
+      && !collect.error && !collect.signal && collect.status !== null;
+    success(collect); success(invoke);
+    const effect = read('effect.json');
+    for (const key of ['nonce', 'pid', 'creationTicks', 'vendorSpecSHA256', 'entryBootMs', 'actionDeadlineBootMs',
+      'leaseDeadlineBootMs', 'outcome', 'hresult', 'queryCallEntered', 'queryCallReturned', 'launchCallEntered', 'launchCallReturned', 'uriSupport']) {
+      if (JSON.stringify(effect[key]) !== JSON.stringify(action[key])) throw new Error('published action differs from effect');
+    }
+    const lease = read('callback-lease.json');
+    const times = ['entryBootMs', 'actionDeadlineBootMs', 'leaseDeadlineBootMs', 'publishedBootMs'];
+    if (times.some(key => !Number.isSafeInteger(action[key]) || Number(action[key]) <= 0)
+        || action.actionDeadlineBootMs !== Math.min(Number(action.entryBootMs) + 30000, Number(action.leaseDeadlineBootMs) - 5000)
+        || Number(action.publishedBootMs) >= Number(action.actionDeadlineBootMs)
+        || lease.leaseDeadlineBootMs !== action.leaseDeadlineBootMs || lease.pid !== action.pid
+        || lease.creationTicks !== action.creationTicks || action.queryCallEntered !== true || action.queryCallReturned !== true) {
+      throw new Error('absolute action/lease receipt invalid');
+    }
+    if (performance.now() >= deadline) throw new Error('both actors not joined within original UI budget');
+    if (action.timely !== true || existsSync(join(root!, 'vendor-callback-late.json'))
+        || action.outcome === 'unknown' || action.hresult !== 0) throw new Error('SDK action unknown/late');
+    const sender = read('sender-exit.json');
+    const intents = ['vendor-callback-query-intent.json', ...(action.launchCallEntered ? ['vendor-callback-launch-intent.json'] : [])];
+    for (const name of intents) {
+      const intent = read(name);
+      for (const key of ['nonce', 'pid', 'creationTicks', 'vendorSpecSHA256', 'entryBootMs', 'actionDeadlineBootMs', 'leaseDeadlineBootMs']) {
+        if (intent[key] !== action[key]) throw new Error('inline SDK intent custody mismatch');
+      }
+      if (intent.queryBoundaryArmed !== true || intent.familyName !== vendorPin.familyName || intent.fullName !== vendorPin.fullName
+          || intent.uri !== 'codex://threads/' + nonce || intent.senderCreationTicks !== sender.creationTicks
+          || name.includes('launch') && intent.launchBoundaryArmed !== true) throw new Error('inline SDK target/intent mismatch');
+    }
+    if (action.outcome === 'unavailable' && (action.launchCallEntered !== false || action.launchCallReturned !== false
+        || !Number.isInteger(action.uriSupport) || action.uriSupport === 0)) throw new Error('unavailable action shape invalid');
+    vendorEffectsKnown = true;
+    evidence.vendorHandoffAccepted = action.outcome === 'handoff_accepted'; evidence.vendorAction = action;
+    if (!evidence.vendorHandoffAccepted || action.uriSupport !== 0 || action.launchCallEntered !== true
+        || action.launchCallReturned !== true) throw new Error('composed handoff not accepted');
+    return invoke;
+  } finally { invoker.stop(); collector?.stop(); await Promise.all([invoker.result, ...(collector ? [collector.result] : [])]); }
+}
 function observeShow(): void {
   if (!root || !nonce) return;
   for (const name of ['show-outcome.json', 'sender-failure.json']) {
@@ -459,14 +597,15 @@ async function main(): Promise<void> {
       || process.env.NAVIGATION_WINDOWS_RUNNER !== 'windows-11-vs2026-arm'
       || Number(process.versions.node.split('.')[0]) !== 24) throw new Error('explicit disposable Windows client CI required');
   const mode = process.env.NAVIGATION_WINDOWS_MSIX_MODE;
-  if (!['native_callback', 'oobe_then_msix_callback', 'prepare_only'].includes(mode ?? '')
+  if (!['native_callback', 'oobe_then_msix_callback', 'oobe_then_msix_vendor_callback', 'prepare_only'].includes(mode ?? '')
       || process.env.GITHUB_REPOSITORY !== '777genius/agent-notifications'
       || process.env.GITHUB_EVENT_NAME !== 'workflow_dispatch' || process.env.GITHUB_RUN_ATTEMPT !== '1'
       || process.arch !== 'arm64' || !/^[0-9a-f]{40}$/.test(process.env.NAVIGATION_SOURCE_SHA ?? '')) {
     throw new Error('first explicit manual packaged TEST mode and exact source required');
   }
-  if (mode !== 'oobe_then_msix_callback' && process.env.NAVIGATION_WINDOWS_OOBE_BOOTSTRAP_ROOT) throw new Error('unexpected bootstrap in standalone mode');
-  prepareOnly = mode === 'prepare_only';
+  if (!['oobe_then_msix_callback', 'oobe_then_msix_vendor_callback'].includes(mode ?? '') && process.env.NAVIGATION_WINDOWS_OOBE_BOOTSTRAP_ROOT) throw new Error('unexpected bootstrap in standalone mode');
+  prepareOnly = mode === 'prepare_only'; composed = mode === 'oobe_then_msix_vendor_callback';
+  if (composed) evidence.scope = 'packaged TEST cold COM selected vendor SDK handoff';
   if (prepareOnly) { evidence.scope = 'TEST new-root ACL and read-only package/SDK prerequisites only'; evidence.prepareComplete = false; }
   evidence.mode = mode;
   if (!process.env.RUNNER_TEMP) throw new Error('owned CI temp absent');
@@ -503,6 +642,7 @@ async function main(): Promise<void> {
   }
   revalidateBootstrap();
   evidence.sameJobBootstrapQualified = bootstrap !== undefined;
+  if (composed) await installVendor(prepared);
   packageIntent = true; evidence.packageMutationOutcomeUnknown = true;
   const packaged = powershell('package', 150_000);
   evidence.packageMutationOutcomeUnknown = !!packaged.error || !!packaged.signal || packaged.status === null;
@@ -514,7 +654,9 @@ async function main(): Promise<void> {
   if (state.deployed !== true || state.executableSHA256 !== evidence.binarySHA256 || typeof state.session !== 'number') throw new Error('deployed identity mismatch');
   writeFileSync(join(root, 'msix-spec.json'), JSON.stringify({ nonce, packageFullName: state.packageFullName,
     aumid: state.packageFamilyName + '!TestSender', installedExecutable: state.installedExecutable,
-    userSid: state.userSid, session: state.session, executableSHA256: state.executableSHA256 }), { flag: 'wx' });
+    userSid: state.userSid, session: state.session, executableSHA256: state.executableSHA256,
+    ...(composed ? { vendorComposition: true, vendorSpecSHA256: evidence.vendorSpecSHA256 } : {}) }), { flag: 'wx' });
+  if (composed) vendorEffectsKnown = false; // Show can already create a callback; missing terminal is unknown.
   activationIntent = true; evidence.nativeEffectUncertain = true; evidence.showCallOutcome = 'unknown';
   const sender = native('activate', 45_000); observeShow(); success(sender);
   const exited = read('sender-exit.json');
@@ -522,7 +664,7 @@ async function main(): Promise<void> {
   // Read-only diagnostics do not establish visible UI or a native callback.
   native('history', 15_000);
   evidence.uiActivationOutcome = 'unknown';
-  const invoke = native('invoke', 30_000, true);
+  const invoke = composed ? await composedInvoke() : native('invoke', 30_000, true);
   if (existsSync(join(root, 'ui-invoke-intent.json'))) {
     evidence.uiActivationBoundaryArmed = true; // Missing terminal is unknown, never an action retry.
     const intent = read('ui-invoke-intent.json');
@@ -555,8 +697,10 @@ async function main(): Promise<void> {
   }
   success(invoke);
   if (evidence.uiActivationOutcome !== 'returned') throw new Error('default Shell Invoke terminal proof absent');
-  for (let i = 0; i < 100 && !existsSync(join(root, 'effect.json')); i++) await delay(100);
-  success(native('collect', 12_000));
+  if (!composed) {
+    for (let i = 0; i < 100 && !existsSync(join(root, 'effect.json')); i++) await delay(100);
+    success(native('collect', 12_000));
+  }
   if (read('callback-exit.json').collected !== true || read('callback-exit.json').exitCode !== 0
       || read('callback-terminal.json').valid !== true) throw new Error('cold callback exit proof absent');
   evidence.coldNativeCallbackObserved = true; evidence.nativeEffectUncertain = false; exitCode = 0;
@@ -584,9 +728,33 @@ finally {
       try { success(powershell('cleanup', 90_000)); if (read('package-operator-state.json').cleanupPassed !== true) throw new Error('cleanup proof absent'); }
       catch (error: unknown) { evidence.packageCleanupError = String(error); cleaned = false; }
     }
+    if (composed) {
+      const actorsCollected = (evidence.steps as Step[]).every(step => !step.error && !step.signal && step.status !== null);
+      evidence.composedAllActorsCollected = actorsCollected;
+      if (vendorKnown && vendorEffectsKnown && actorsCollected) {
+        try {
+          const remove = native('vendor-remove', 165_000, true); success(remove);
+          const removed = vendorRecord('vendor-remove-result.json', remove), absent = vendorRecord('vendor-removed.json', remove);
+          if (removed.operationCompleted !== true || removed.extendedError !== 0 || absent.currentUserFamilyAbsent !== true
+              || readFileSync(join(root, 'vendor-remove-intent.proof'), 'utf8') !== vendorIntent) throw new Error('vendor exact Remove absent');
+          evidence.vendorCleanupPassed = true;
+        } catch (error) { evidence.vendorCleanupError = String(error); cleaned = false; }
+      } else { evidence.vendorCleanupUnknown = true; cleaned = false; }
+      try {
+        if (await streamedHash(join(root, 'client.msix')) !== vendorArchiveHash || hash(observer!) !== evidence.observerSHA256
+            || hash(binary!) !== evidence.binarySHA256 || hash(join(root, 'vendor-callback-spec.json')) !== evidence.vendorSpecSHA256) throw new Error('composition input changed');
+        const sources = evidence.compositionSourceSHA256 as Record<string, string>;
+        for (const [name, digest] of Object.entries(sources)) {
+          if (hash(join(root, name)) !== digest || hash(resolve('tests/integration', name)) !== digest) throw new Error('composition source changed');
+        }
+        evidence.compositionInputsUnchanged = true;
+      } catch (error) { evidence.compositionCustodyError = String(error); cleaned = false; }
+    }
     if (evidence.packageMutationOutcomeUnknown === true || evidence.prepareCollectionUnknown === true) cleaned = false;
     evidence.cleanupPassed = cleaned;
     evidence.nativeCallbackQualified = !prepareOnly && exitCode === 0 && cleaned;
+    evidence.vendorCompositionQualified = composed && evidence.nativeCallbackQualified === true
+      && evidence.vendorHandoffAccepted === true && evidence.vendorCleanupPassed === true;
     const preparationPassed = prepareOnly && evidence.prepareComplete === true && exitCode === 0 && cleaned;
     evidence.status = preparationPassed ? 'prepare_complete' : evidence.nativeCallbackQualified ? 'qualified' : 'failed';
     if (!evidence.nativeCallbackQualified && !preparationPassed) exitCode = 1;

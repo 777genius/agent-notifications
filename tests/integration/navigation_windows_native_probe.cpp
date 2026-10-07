@@ -18,6 +18,7 @@
 #include <winrt/Windows.Management.Deployment.h>
 #include <winrt/Windows.ApplicationModel.h>
 #include <winrt/Windows.System.h>
+#include "navigation_windows_vendor_sdk_test.h"
 #include <bcrypt.h>
 #pragma comment(lib, "Bcrypt.lib")
 #include <wincodec.h>
@@ -1921,37 +1922,9 @@ static void vendorArchiveIdentity() {
         || !equal([&](LPWSTR* p) { return id->GetPackageFullName(p); }, vendorFull))
         throw std::runtime_error("vendor archive SDK identity mismatch");
 }
-static std::vector<winrt::Windows::ApplicationModel::Package> vendorInstalled() {
-    winrt::Windows::Management::Deployment::PackageManager manager;
-    std::vector<winrt::Windows::ApplicationModel::Package> packages;
-    // Empty SID means current user, not all users. Export no unrelated package inventory.
-    for (const auto& package : manager.FindPackagesForUser(L"", vendorFamily)) {
-        if (packages.size() == 8) throw std::runtime_error("vendor family enumeration bound");
-        const auto id = package.Id();
-        if (id.Name() != vendorName || id.Publisher() != vendorPublisher || id.FamilyName() != vendorFamily)
-            throw std::runtime_error("vendor installed identity mismatch");
-        packages.push_back(package);
-    }
-    return packages;
-}
+static auto vendorInstalled() { return NavigationVendorTEST::installed(); }
 template<typename Operation> static auto vendorAwait(const Operation& operation, DWORD milliseconds) {
-    const ULONGLONG deadline = std::min(vendorDeadline, GetTickCount64() + milliseconds);
-    while (operation.Status() == winrt::Windows::Foundation::AsyncStatus::Started) {
-        if (GetTickCount64() >= deadline) {
-            operation.Cancel(); // Cancellation does not prove external no-effect or quiescence.
-            throw std::runtime_error("vendor async deadline; outcome unknown after effect intent");
-        }
-        Sleep(10);
-    }
-    const auto status = operation.Status();
-    const auto primaryError = operation.ErrorCode();
-    if (status != winrt::Windows::Foundation::AsyncStatus::Completed || primaryError.value != S_OK) {
-        check(primaryError);
-        throw std::runtime_error("vendor async not successfully completed; outcome uncertain");
-    }
-    auto result = operation.GetResults();
-    vendorRemaining();
-    return result;
+    return NavigationVendorTEST::await(operation, milliseconds, vendorDeadline);
 }
 static bool vendorMode(const std::wstring& mode) {
     return mode == L"vendor-state-before" || mode == L"vendor-state-after" || mode == L"vendor-install"
