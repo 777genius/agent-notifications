@@ -396,7 +396,7 @@ static void centerInput(const Binding& binding, JsonObject& proof, ULONGLONG dea
             if (own) { own->live(); demand(foreground == own->window && pid == GetCurrentProcessId(), "OwnActualForeground"); }
             else owner = std::make_unique<ShellOwner>(pid);
             num(input, L"foregroundPID", pid); put(input, L"foregroundBirth", own ? birth(GetCurrentProcess()) : owner->born); }
-        auto immediate = [&] { interactive(); binding.stable(); if (globalScenario) { demand(winrt::to_hstring(globalInputAuthority()) == input.GetNamedString(L"globalSourceSHA"), "GlobalAuthorityChanged"); sameIdentity(ownToken(), binding.value.GetNamedObject(L"identity")); budget(deadline); return; } if (own) { own->live(); demand(ownToken().Stringify() == own->token.Stringify(), "OwnForegroundTokenChanged"); } else owner->live(); DWORD actual = 0;
+        auto immediate = [&] { interactive(); binding.stable(); if (globalScenario) { demand(winrt::hstring{globalInputAuthority()} == input.GetNamedString(L"globalSourceSHA"), "GlobalAuthorityChanged"); sameIdentity(ownToken(), binding.value.GetNamedObject(L"identity")); budget(deadline); return; } if (own) { own->live(); demand(ownToken().Stringify() == own->token.Stringify(), "OwnForegroundTokenChanged"); } else owner->live(); DWORD actual = 0;
             demand(GetForegroundWindow() == foreground && GetWindowThreadProcessId(foreground, &actual) != 0 && actual == pid, "RetainedForegroundShell"); budget(deadline); };
         auto released = [&] { for (int key : {VK_LWIN, VK_RWIN, static_cast<int>('N'), VK_SHIFT, VK_LSHIFT, VK_RSHIFT, VK_CONTROL, VK_LCONTROL, VK_RCONTROL, VK_MENU, VK_LMENU, VK_RMENU})
             demand(!(GetAsyncKeyState(key) & 0x8000), "InitiallyReleasedKeys"); };
