@@ -79,3 +79,31 @@ Remove the applicable repository variable to restore the original GitHub runner
 without editing semantic matrices. Workflow changes affect future runs only;
 existing frozen tags and the already-created `v1.48.1` release run 37519336110 are
 not restarted, cancelled or republished by this migration.
+
+## Intermediate prose revisions and final CI
+
+Core macOS and install recovery classify every revision on Linux. Only modified
+`README.md`, `docs/DO_NOT_DISTURB.md`, and `docs/NOTIFICATION_TYPES.md` are eligible
+for a cheap intermediate PR run. Mixed changes, additions, deletions, renames,
+unknown paths, qualification/evidence documents, or unavailable Git metadata
+retain full native coverage. Linux recovery continues in prose mode. Pushes and
+manual runs always use full mode; becoming ready for review also requests full CI.
+
+**A prose-mode run deliberately fails `Full macOS CI required` and `Full install
+recovery required`.** It saves intermediate Mac capacity but is not merge evidence.
+Add the `ci:full` PR label before final review/merge and wait for both full gates,
+the Go 1.25/macOS 15 and Go 1.26/macOS 26 jobs, Swift tests, and both recovery cells
+on the current PR head. Keep the label while editing to validate subsequent heads.
+Removing it recomputes eligibility; a previous SHA's success cannot qualify a new
+head. These always-present gates also reject failed, skipped or cancelled native
+jobs. Repository merge policy must require the full gates; without protection,
+the merge operator must verify them and the exact current SHA explicitly.
+
+The loader and offline/mock installer suites share a native `parallel` step after
+the binary build. Each uses private fixture state, and only the installer binds
+its mock HTTP port. The group completion barrier propagates failures before real
+network diagnostics. Diagnostics use `--real-network-only` to avoid repeating the
+mandatory offline suite; `--real-network` continues to run the combined suite.
+Actual provider overlap/barrier and failure propagation were verified in disposable
+TEST workflows [37583868400](https://github.com/777genius/ci-runner-sandbox-20261005/actions/runs/37583868400)
+and [37584064041](https://github.com/777genius/ci-runner-sandbox-20261005/actions/runs/37584064041).

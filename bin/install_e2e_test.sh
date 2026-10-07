@@ -11,6 +11,7 @@ test_env_enter "$0" "$@"
 # Usage:
 #   bash bin/install_e2e_test.sh                # Run offline tests only
 #   bash bin/install_e2e_test.sh --real-network # Include real network tests
+#   bash bin/install_e2e_test.sh --real-network-only # Only real network diagnostics
 #   bash bin/install_e2e_test.sh --verbose      # Verbose output
 #   bash bin/install_e2e_test.sh --mock-only    # Only mock server tests
 
@@ -37,6 +38,7 @@ TESTS_SKIPPED=0
 
 # Flags
 RUN_REAL_NETWORK=false
+RUN_REAL_NETWORK_ONLY=false
 RUN_MOCK_ONLY=false
 VERBOSE=false
 ALLOW_WINDOWS_REAL_NETWORK_TESTS="${ALLOW_WINDOWS_REAL_NETWORK_TESTS:-false}"
@@ -49,18 +51,25 @@ MOCK_PORT=18888
 for arg in "$@"; do
     case $arg in
         --real-network) RUN_REAL_NETWORK=true ;;
+        --real-network-only) RUN_REAL_NETWORK=true; RUN_REAL_NETWORK_ONLY=true ;;
         --mock-only) RUN_MOCK_ONLY=true ;;
         --verbose|-v) VERBOSE=true ;;
         --help|-h)
             echo "Usage: $0 [options]"
             echo "Options:"
             echo "  --real-network  Include tests that make real network requests"
+            echo "  --real-network-only  Only real network diagnostics (categories C/F)"
             echo "  --mock-only     Only run mock server tests"
             echo "  --verbose, -v   Verbose output"
             exit 0
             ;;
     esac
 done
+
+if [ "$RUN_REAL_NETWORK_ONLY" = true ] && [ "$RUN_MOCK_ONLY" = true ]; then
+    echo "--real-network-only cannot be combined with --mock-only" >&2
+    exit 2
+fi
 
 # All generated fixtures and user state belong to this disposable suite run.
 SUITE_DIR=$(mktemp -d)
@@ -2989,10 +2998,11 @@ main() {
     echo ""
     echo "Options:"
     echo "  Real network tests: $RUN_REAL_NETWORK"
+    echo "  Real network only: $RUN_REAL_NETWORK_ONLY"
     echo "  Mock only: $RUN_MOCK_ONLY"
     echo "  Verbose: $VERBOSE"
 
-    if [ "$RUN_MOCK_ONLY" != true ]; then
+    if [ "$RUN_MOCK_ONLY" != true ] && [ "$RUN_REAL_NETWORK_ONLY" != true ]; then
         # Category A: Offline Tests
         echo ""
         echo -e "${BOLD}Category A: Offline Tests${NC}"
@@ -3027,18 +3037,21 @@ main() {
         test_force_preserves_apps_macos
     fi
 
-    # Category B: Mock Server Tests
-    echo ""
-    echo -e "${BOLD}Category B: Mock Server Tests${NC}"
-    test_mock_download_success
-    test_mock_download_404
-    test_mock_download_500
-    test_mock_file_too_small
-    test_mock_checksum_mismatch
-    test_mock_partial_download_reports_transport_error
-    test_mock_wrong_payload_recovers_after_retry
-    test_mock_pin_bundle_to_exact_tag
-    test_mock_zip_corrupted
+    if [ "$RUN_REAL_NETWORK_ONLY" != true ]; then
+        # Category B: Mock Server Tests
+        echo ""
+        echo -e "${BOLD}Category B: Mock Server Tests${NC}"
+        test_mock_download_success
+        test_mock_download_404
+        test_mock_download_500
+        test_mock_file_too_small
+        test_mock_checksum_mismatch
+        test_mock_partial_download_reports_transport_error
+        test_mock_wrong_payload_recovers_after_retry
+        test_mock_pin_bundle_to_exact_tag
+        test_mock_zip_corrupted
+
+    fi
 
     if [ "$RUN_MOCK_ONLY" != true ]; then
         # Pre-check: is the latest release binary actually available AND matches our version?
@@ -3094,7 +3107,7 @@ main() {
         test_real_terminal_notifier_macos
     fi
 
-    if [ "$RUN_MOCK_ONLY" != true ]; then
+    if [ "$RUN_MOCK_ONLY" != true ] && [ "$RUN_REAL_NETWORK_ONLY" != true ]; then
         # Category D: Hook Wrapper Tests (Offline)
         echo ""
         echo -e "${BOLD}Category D: Hook Wrapper Tests (Offline)${NC}"
@@ -3117,10 +3130,13 @@ main() {
         test_hook_wrapper_outputs_system_message
     fi
 
-    # Category E: Hook Wrapper Tests (Mock Server)
-    echo ""
-    echo -e "${BOLD}Category E: Hook Wrapper Tests (Mock Server)${NC}"
-    test_hook_wrapper_mock_download
+    if [ "$RUN_REAL_NETWORK_ONLY" != true ]; then
+        # Category E: Hook Wrapper Tests (Mock Server)
+        echo ""
+        echo -e "${BOLD}Category E: Hook Wrapper Tests (Mock Server)${NC}"
+        test_hook_wrapper_mock_download
+
+    fi
 
     if [ "$RUN_MOCK_ONLY" != true ]; then
         # Category F: Hook Wrapper Tests (Real Network)

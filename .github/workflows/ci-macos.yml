@@ -3,7 +3,9 @@ name: macOS CI
 on:
   push:
     branches: [ main, develop ]
+  workflow_dispatch:
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
 
 # Only a newer run for the same PR supersedes its checks.
 concurrency:
@@ -11,7 +13,29 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  scope:
+    name: Classify macOS CI scope
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+    outputs:
+      mode: ${{ steps.classify.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Test conservative classification and installer mode contracts
+        run: |
+          python3 scripts/ci_macos_scope_test.py
+          bash bin/install_e2e_mode_test.sh
+      - name: Classify exact PR revision (errors retain full CI)
+        id: classify
+        run: python3 scripts/ci_macos_scope.py classify
+
   test:
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.mode != 'docs' }}
     name: Test on macOS (${{ matrix.go }})
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.os || matrix.os == 'macos-15' && (vars.CI_MACOS_15_RUNNER || 'macos-15') || matrix.os == 'macos-26' && (vars.CI_MACOS_26_RUNNER || 'macos-26') || matrix.os }}
     timeout-minutes: 30
@@ -77,9 +101,6 @@ jobs:
           path: ${{ runner.temp }}/TEST-selector-e2e
           if-no-files-found: error
 
-      - name: Test one-line setup loader (isolated, offline)
-        run: bash bin/setup_test.sh
-
       - name: Test python/node installer runtime fallback (isolated, offline)
         run: bash bin/installer_runtime_fallback_e2e_test.sh
 
@@ -101,16 +122,24 @@ jobs:
       - name: Run install.sh unit tests
         run: bash bin/install_test.sh
 
-      - name: Run install.sh E2E tests (offline + mock)
-        run: bash bin/install_e2e_test.sh
+      # Both suites re-enter env -i with private HOME/XDG/TMPDIR. Only the
+      # installer binds 18888; the loader uses curl stubs and no network port.
+      # Native parallel waits for both children and propagates either failure.
+      - parallel:
+          - name: Test one-line setup loader (isolated, offline)
+            run: bash bin/setup_test.sh
+          - name: Run install.sh E2E tests (offline + mock)
+            run: bash bin/install_e2e_test.sh
 
       - name: Run install.sh E2E diagnostics (real network)
         if: matrix.go == '1.26'
-        run: bash bin/install_e2e_test.sh --real-network
+        run: bash bin/install_e2e_test.sh --real-network-only
         timeout-minutes: 5
         continue-on-error: true
 
   swift-test:
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.mode != 'docs' }}
     name: Swift notifier tests
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'macos-15' || vars.CI_MACOS_15_RUNNER || 'macos-15' }}
     timeout-minutes: 30
@@ -121,3 +150,20 @@ jobs:
 
       - name: Run Swift tests
         run: swift test --package-path swift-notifier
+
+  full-ci:
+    name: Full macOS CI required
+    needs: [scope, test, swift-test]
+    if: ${{ always() }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Require actual full native success on this revision
+        env:
+          CI_MODE: ${{ needs.scope.outputs.mode }}
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: python3 scripts/ci_macos_scope.py gate test swift-test
