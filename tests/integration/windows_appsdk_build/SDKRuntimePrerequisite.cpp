@@ -87,8 +87,8 @@ static void signature(const std::wstring& path) {
     WINTRUST_DATA data{}; data.cbStruct = sizeof(data); data.dwUIChoice = WTD_UI_NONE;
     data.dwUnionChoice = WTD_CHOICE_FILE; data.pFile = &file; data.dwStateAction = WTD_STATEACTION_VERIFY;
     GUID action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
-    const LONG result = WinVerifyTrust(INVALID_HANDLE_VALUE, &action, &data);
-    data.dwStateAction = WTD_STATEACTION_CLOSE; WinVerifyTrust(INVALID_HANDLE_VALUE, &action, &data);
+    const LONG result = WinVerifyTrust(reinterpret_cast<HWND>(INVALID_HANDLE_VALUE), &action, &data);
+    data.dwStateAction = WTD_STATEACTION_CLOSE; WinVerifyTrust(reinterpret_cast<HWND>(INVALID_HANDLE_VALUE), &action, &data);
     if (result != ERROR_SUCCESS) throw Failure{"RawMSIXWinVerifyTrust", static_cast<DWORD>(result)};
 }
 static void frozenPackage(const std::wstring& root, const PackagePin& p) {
