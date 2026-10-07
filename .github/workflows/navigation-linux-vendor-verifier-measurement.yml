@@ -16,7 +16,6 @@ jobs:
       CGO_ENABLED: '0'
       GOOS: linux
       GOARCH: amd64
-      PROBE_DIR: ${{ runner.temp }}/navigation-vendor-verifier-artifact
     steps:
       - uses: actions/checkout@v7
         with:
@@ -26,6 +25,8 @@ jobs:
           go-version-file: go.mod
       - name: Compile and record source-bound artifact without running it
         shell: bash
+        env:
+          PROBE_DIR: ${{ runner.temp }}/navigation-vendor-verifier-artifact
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
@@ -85,10 +86,10 @@ jobs:
         with:
           name: linux-vendor-verifier-measurement-${{ github.sha }}
           path: |
-            ${{ env.PROBE_DIR }}/vendor-verify-probe
-            ${{ env.PROBE_DIR }}/probe-build-info.txt
-            ${{ env.PROBE_DIR }}/probe-source.go
-            ${{ env.PROBE_DIR }}/vendor-manifest.json
-            ${{ env.PROBE_DIR }}/artifact-inputs.json
+            ${{ runner.temp }}/navigation-vendor-verifier-artifact/vendor-verify-probe
+            ${{ runner.temp }}/navigation-vendor-verifier-artifact/probe-build-info.txt
+            ${{ runner.temp }}/navigation-vendor-verifier-artifact/probe-source.go
+            ${{ runner.temp }}/navigation-vendor-verifier-artifact/vendor-manifest.json
+            ${{ runner.temp }}/navigation-vendor-verifier-artifact/artifact-inputs.json
           if-no-files-found: error
           retention-days: 7
