@@ -4,20 +4,142 @@ test_env_enter "$0" "$@"
 # Disposable offline wrapper + installer regression, also called by install_test.sh.
 set -eu
 src=$(cd "$(dirname "$0")" && pwd)
-bash "$src/hook-wrapper-logs_test.sh"
 root=$(mktemp -d)
 trap 'rm -rf "$root"' EXIT
 test_env_setup "$root"
 mkdir -p "$root/stubs"
 # The suite already entered an allowlist environment above.
-ROOT="$root" SRC="$src" bash <<'RUN'
-set -eu
+CLAIM_ONLY="${1:-}" CLAIM_SOURCE="${2:-$src/hook-wrapper.sh}" ROOT="$root" SRC="$src" bash <<'RUN'
+set -Eeu
+trap 'echo "FAIL: wrapper fixture line $LINENO" >&2' ERR
+# Release and join only our fixture hooks before the outer sandbox cleanup.
+trap ': > "$ROOT/release-install"; for pid in ${pids:-}; do wait "$pid" || true; done' EXIT
 cd "$ROOT"
+# Git Bash defaults to copying ln -s targets; this POSIX claim fixture
+# requires real links. Scope native symlink mode to the disposable child.
+case "$(uname -s)" in
+ MINGW*|MSYS*|CYGWIN*) export MSYS="${MSYS:+$MSYS }winsymlinks:nativestrict" ;;
+esac
 # This fixture exercises the POSIX shared wrapper on every CI host. Native
 # commandWindows execution is covered by the Go setup E2E separately.
 printf '#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo x86_64;; esac\n' > stubs/uname
 chmod +x stubs/uname
 export PATH="$ROOT/stubs:/usr/bin:/bin"
+# A lookup found no owner, then its publication mkdir pauses. B publishes a
+# genuine live owner before A resumes; A must dispatch with an empty claim.
+sed -n '/^backoff_path()/,/^# === Main Logic ===/p' "$CLAIM_SOURCE" > claim-functions.sh
+mkdir claim-tools
+export REAL_MKDIR=$(command -v mkdir)
+cat > claim-tools/mkdir <<'CLAIM_MKDIR'
+#!/bin/sh
+if [ "${DELAY_MISSING:-0}" = 1 ] && [ "$1" = "$BACKOFF/active" ] &&
+   "$REAL_MKDIR" "$CASE_DIR/read-paused" 2>/dev/null; then
+ n=0
+ while [ ! -e "$CASE_DIR/resume-read" ]; do
+  n=$((n + 1)); [ "$n" -lt 500 ] || exit 98
+  sleep 0.02
+ done
+fi
+exec "$REAL_MKDIR" "$@"
+CLAIM_MKDIR
+cat > claimant.sh <<'CLAIMANT'
+#!/bin/sh
+. "$ROOT/claim-functions.sh"
+SCRIPT_DIR="$CASE_DIR/plugin/bin"
+STAMP_DIR="$CASE_DIR/cache"
+TARGET_VER=1.42.0
+backoff_path "$TARGET_VER"
+export BACKOFF
+if claim_install; then status=0; else status=$?; fi
+printf '%s\n%s\n' "$status" "$INSTALL_CLAIM" > "$CASE_DIR/result-$ROLE"
+if [ "$ROLE" = B ]; then
+ n=0
+ while [ ! -e "$CASE_DIR/release-B" ]; do
+  n=$((n + 1)); [ "$n" -lt 500 ] || exit 98
+  sleep 0.02
+ done
+fi
+CLAIMANT
+chmod +x claim-tools/mkdir
+claim_barrier() {
+ local n=0
+ while [ ! -e "$1" ]; do
+  n=$((n + 1)); [ "$n" -lt 500 ] || { echo "claim barrier timeout: $1" >&2; return 1; }
+  sleep 0.02
+ done
+}
+failed_lookup_race() (
+ export CASE_DIR="$ROOT/lookup-$1"
+ mkdir -p "$CASE_DIR/plugin/bin" "$CASE_DIR/cache"
+ trap ': > "$CASE_DIR/resume-read"; : > "$CASE_DIR/release-B"; wait "${a_pid:-}" 2>/dev/null || true; wait "${b_pid:-}" 2>/dev/null || true' EXIT
+ # Seed/retire a failed claim for the expired case, using real functions.
+ . "$ROOT/claim-functions.sh"
+ SCRIPT_DIR="$CASE_DIR/plugin/bin" STAMP_DIR="$CASE_DIR/cache" TARGET_VER=1.42.0
+ backoff_path "$TARGET_VER"
+ if [ "$1" = expired ]; then
+  claim_install
+  : > "$BACKOFF/active/failed"
+  touch -t 200001010000 "$BACKOFF/active"
+  retire_backoff "$INSTALL_CLAIM"
+ fi
+ DELAY_MISSING=1 ROLE=A PATH="$ROOT/claim-tools:$PATH" sh claimant.sh &
+ a_pid=$!
+ claim_barrier "$CASE_DIR/read-paused"
+ # A observed no owner. Publish B while A's unsuccessful read is suspended.
+ ROLE=B sh claimant.sh &
+ b_pid=$!
+ claim_barrier "$CASE_DIR/result-B"
+ [ "$(sed -n '1p' "$CASE_DIR/result-B")" = 0 ]
+ b=$(tail -n +2 "$CASE_DIR/result-B")
+ [ -n "$b" ] && [ -d "$BACKOFF/active" ]
+ [ "$(head -n 1 "$BACKOFF/active/owner")" = "$b_pid" ] && kill -0 "$b_pid"
+ # An aged live owner must still win over the cooldown timestamp.
+ touch -t 200001010000 "$BACKOFF/active"
+ : > "$CASE_DIR/resume-read"
+ wait "$a_pid"
+ [ "$(sed -n '1p' "$CASE_DIR/result-A")" = 1 ] || {
+  echo "FAIL: $1 failed lookup allowed duplicate installer; A status/claim:" >&2
+  cat "$CASE_DIR/result-A" >&2
+  return 1
+ }
+ [ -z "$(sed -n '2p' "$CASE_DIR/result-A")" ]
+ [ "$(cat "$BACKOFF/active/owner")" = "$b" ]
+ [ -d "$BACKOFF/active" ] && kill -0 "$b_pid"
+ : > "$CASE_DIR/release-B"
+ wait "$b_pid"
+ echo "PASS: $1 failed lookup suppresses A; live B survives"
+)
+lookup_failures=0
+for lookup_case in fresh expired; do
+ failed_lookup_race "$lookup_case" &
+ lookup_pid=$!
+ if wait "$lookup_pid"; then :; else lookup_failures=$((lookup_failures + 1)); fi
+done
+[ "$lookup_failures" = 0 ]
+# Invalid/legacy active entries suppress mutation and survive unchanged.
+(
+ . "$ROOT/claim-functions.sh"
+ SCRIPT_DIR="$ROOT/foreign-plugin/bin" STAMP_DIR="$ROOT/foreign-cache" TARGET_VER=1.42.0
+ backoff_path "$TARGET_VER"
+ mkdir -p "$BACKOFF" "$ROOT/foreign-directory"
+ echo keep > "$ROOT/foreign-directory/canary"
+ ln -s "$ROOT/foreign-directory" "$BACKOFF/attempt.foreign"
+ for invalid in ../foreign-directory attempt.missing attempt.foreign; do
+  ln -sn "$invalid" "$BACKOFF/active"
+  # Windows native links can canonicalize the supplied target spelling.
+  # Compare the real preimage so this asserts preservation on every host.
+  original_link=$(readlink "$BACKOFF/active")
+  [ -L "$BACKOFF/active" ]
+  if claim_install; then echo "unknown claim admitted installer" >&2; exit 1; fi
+  [ -z "$INSTALL_CLAIM" ]
+  [ "$(readlink "$BACKOFF/active")" = "$original_link" ]
+  [ "$(cat "$ROOT/foreign-directory/canary")" = keep ]
+  [ -L "$BACKOFF/attempt.foreign" ]
+  rm "$BACKOFF/active"
+ done
+)
+echo 'PASS: invalid/foreign links remain intact without installer admission'
+[ "$CLAIM_ONLY" != claim-race ] || exit 0
 for product in claude codex; do
  mkdir -p "$product/bin" "$product/.claude-plugin"
  cp "$SRC/hook-wrapper.sh" "$product/bin/"
@@ -45,6 +167,7 @@ sh codex/bin/codex-hook-wrapper.sh handle-hook Stop --product codex
 sh claude/bin/hook-wrapper.sh handle-hook Stop
 [ "$(cat installs)" = install ]
 [ "$(cat claude/bin/version)" = 1.42.0 ]
+[ -z "$(find "$XDG_CACHE_HOME/claude-notifications-go" -name active -type l -print)" ]
 # Exercise post-install Codex cache writes too.
 echo 1.41.0 > codex/bin/version
 echo legacy-canary > "$XDG_CACHE_HOME/claude-notifications-go/verified-version"
@@ -74,6 +197,7 @@ printf '%s\n' "$$" > failed/bin/.install.lock/.owner.test/pid
 : > failed/bin/.install.lock/.owner.test/heartbeat
 contended=$(OS=Windows_NT XDG_CACHE_HOME="$ROOT/failed-cache" sh failed/bin/hook-wrapper.sh handle-hook Stop)
 [ -z "$contended" ]
+[ -z "$(find "$ROOT/failed-cache" -name active -type l -print)" ]
 rm failed/bin/.install.lock/.owner.test/pid failed/bin/.install.lock/.owner.test/heartbeat
 rmdir failed/bin/.install.lock/.owner.test failed/bin/.install.lock
 # A competing installer can publish the lock directory before its owner.
@@ -88,6 +212,7 @@ publishing_pid=$!
 publishing=$(OS=Windows_NT XDG_CACHE_HOME="$ROOT/failed-cache" sh failed/bin/hook-wrapper.sh handle-hook Stop)
 wait "$publishing_pid"
 [ -z "$publishing" ]
+[ -z "$(find "$ROOT/failed-cache" -name active -type l -print)" ]
 rm failed/bin/.install.lock/.owner.publishing/pid failed/bin/.install.lock/.owner.publishing/heartbeat
 rmdir failed/bin/.install.lock/.owner.publishing failed/bin/.install.lock
 first=$(OS=Windows_NT XDG_CACHE_HOME="$ROOT/failed-cache" sh failed/bin/hook-wrapper.sh handle-hook Stop)
@@ -177,9 +302,12 @@ cat > upgrade/bin/install.sh <<'REPAIRED_UPGRADE'
 # agent-notifications-managed-writer-protocol-v1
 echo 1.42.0 > "$INSTALL_TARGET_DIR/version"
 REPAIRED_UPGRADE
+# Manual repair bypasses hook cooldown; the next hook verifies and clears it.
+INSTALL_TARGET_DIR="$ROOT/upgrade/bin" sh upgrade/bin/install.sh
 XDG_CACHE_HOME="$ROOT/upgrade-cache" sh upgrade/bin/hook-wrapper.sh handle-hook Stop > upgrade-repaired.stdout 2> upgrade-repaired.stderr
 [ ! -s upgrade-repaired.stdout ]
 [ ! -s upgrade-repaired.stderr ]
+[ -z "$(find "$ROOT/upgrade-cache" -path "*install-backoff-1.42.0-*/active" -type d -print)" ]
 [ "$(cat "$ROOT/upgrade-cache/claude-notifications-go/verified-version")" = 1.42.0 ]
 [ ! -d "$ROOT/upgrade-cache/claude-notifications-go/install-failed-1.42.0" ]
 [ -d "$ROOT/upgrade-cache/claude-notifications-go/install-failed-1.42.1" ]
@@ -238,6 +366,153 @@ XDG_CACHE_HOME="$ROOT/race-cache" sh racing/bin/hook-wrapper.sh handle-hook Stop
 [ "$(cat race-delivered)" = published ]
 [ "$(cat "$ROOT/race-cache/claude-notifications-go/verified-version")" = 1.42.0 ]
 [ ! -d "$ROOT/race-cache/claude-notifications-go/install-failed-1.42.0" ]
+# Behavioral backoff regression: actual wrappers, real filesystem and clock.
+# The installer barrier holds the winner until all seven other hooks dispatch.
+# Plain ln -s follows active and makes these counts exceed one.
+mkdir -p cooldown/bin cooldown/.claude-plugin
+cp "$SRC/hook-wrapper.sh" cooldown/bin/
+cp upgrade/bin/claude-notifications cooldown/bin/
+echo 1.41.0 > cooldown/bin/version
+echo '{"version":"1.42.0"}' > cooldown/.claude-plugin/plugin.json
+cat > cooldown/bin/install.sh <<'COOLDOWN_INSTALL'
+#!/bin/sh
+# agent-notifications-managed-writer-protocol-v1
+echo attempt >> "$ROOT/cooldown-attempts"
+if [ -e "$ROOT/hold-install" ]; then
+ : > "$ROOT/installer-entered"
+ while [ ! -e "$ROOT/release-install" ]; do sleep 0.02; done
+fi
+exit 7
+COOLDOWN_INSTALL
+chmod +x cooldown/bin/install.sh
+cool_hook() {
+ XDG_CACHE_HOME="$ROOT/cooldown-cache" sh cooldown/bin/hook-wrapper.sh handle-hook Stop
+}
+cool_claim="$ROOT/cooldown-cache/claude-notifications-go/install-backoff-1.42.0-$(printf %s "$ROOT/cooldown/bin" | cksum | cut -d' ' -f1)"
+wait_file() {
+ n=0
+ while [ ! -e "$1" ]; do
+  n=$((n + 1)); [ "$n" -lt 3000 ] || { echo "barrier timeout: $1" >&2; exit 1; }
+  sleep 0.02
+ done
+}
+parallel_claim() {
+ rm -f installer-entered release-install
+ rm -rf cooldown-done
+ mkdir cooldown-done
+ : > hold-install
+ pids=''
+ for i in 1 2 3 4 5 6 7 8; do
+  (cool_hook > "cooldown-$i.out" 2> "cooldown-$i.err"; : > "cooldown-done/$i") &
+  pids="$pids $!"
+ done
+ wait_file installer-entered
+ # Force a running install's cache mtime beyond the cooldown: PID ownership
+ # must protect it even while a second wave arrives.
+ owner=active
+ [ -d "$cool_claim/$owner" ]
+ touch -t 200001010000 "$cool_claim/$owner"
+ n=0
+ while [ "$(find cooldown-done -type f | wc -l)" -lt 7 ]; do
+  n=$((n + 1)); [ "$n" -lt 3000 ] || { echo 'concurrent claim failed' >&2; cat cooldown-attempts >&2; ls -la "$cool_claim" "$cool_claim/"* >&2; cat cooldown-*.err >&2; : > release-install; exit 1; }
+  sleep 0.02
+ done
+ [ "$(wc -l < cooldown-attempts)" -eq "$expected_attempts" ]
+ cool_hook > cooldown-long.out 2> cooldown-long.err
+ [ "$(wc -l < cooldown-attempts)" -eq "$expected_attempts" ]
+ : > release-install
+ for pid in $pids; do wait "$pid"; done
+ rm hold-install
+ [ "$(wc -l < cooldown-attempts)" -eq "$expected_attempts" ]
+ # No nested links may have been created inside the active attempt.
+ [ "$(find "$cool_claim" -type l | wc -l)" -eq 0 ] || { echo "active link was dereferenced: nested claims created" >&2; exit 1; }
+}
+before=$(wc -l < delivered)
+expected_attempts=1
+parallel_claim
+for i in 1 2 3 4 5 6 7 8 9 10; do cool_hook > "cooldown-seq-$i.out" 2> "cooldown-seq-$i.err"; done
+[ "$(wc -l < cooldown-attempts)" -eq 1 ]
+[ "$(wc -l < delivered)" -eq "$((before + 19))" ]
+[ "$(cat cooldown-*.err | grep -c 'Installation of v1.42.0 failed')" -eq 1 ]
+# Eight simultaneous expired claim takeovers must still elect only one winner.
+owner=active
+touch -t 200001010000 "$cool_claim/$owner"
+expected_attempts=2
+parallel_claim
+# Future mtime is invalid, so it permits exactly one immediate retry.
+owner=active
+touch -t 209901010000 "$cool_claim/$owner"
+cool_hook > cooldown-future.out 2> cooldown-future.err
+[ "$(wc -l < cooldown-attempts)" -eq 3 ]
+# Corrupt namespaces and foreign entries preserve retained sender dispatch.
+rm -rf "$cool_claim"
+printf corrupt > "$cool_claim"
+cool_hook > cooldown-corrupt.out 2> cooldown-corrupt.err
+[ "$(cat "$cool_claim")" = corrupt ]
+[ "$(wc -l < cooldown-attempts)" -eq 3 ]
+rm "$cool_claim"
+mkdir "$cool_claim"
+printf foreign > "$cool_claim/active"
+cool_hook > cooldown-foreign.out 2> cooldown-foreign.err
+[ "$(cat "$cool_claim/active")" = foreign ]
+[ "$(wc -l < cooldown-attempts)" -eq 3 ]
+rm -rf "$cool_claim"
+# An unavailable cache (regular file ancestor, independent of root privileges)
+# suppresses installation while preserving old-binary dispatch.
+printf blocked > blocked-cache
+XDG_CACHE_HOME="$ROOT/blocked-cache" sh cooldown/bin/hook-wrapper.sh handle-hook Stop > cooldown-blocked.out 2> cooldown-blocked.err
+[ "$(wc -l < cooldown-attempts)" -eq 3 ]
+# Version and install root changes each permit an immediate attempt.
+cool_hook > cooldown-new.out 2> cooldown-new.err
+[ "$(wc -l < cooldown-attempts)" -eq 4 ]
+echo '{"version":"1.42.1"}' > cooldown/.claude-plugin/plugin.json
+cool_hook > cooldown-version.out 2> cooldown-version.err
+[ "$(wc -l < cooldown-attempts)" -eq 5 ]
+cp -R cooldown other-root
+XDG_CACHE_HOME="$ROOT/cooldown-cache" sh other-root/bin/hook-wrapper.sh handle-hook Stop > cooldown-root.out 2> cooldown-root.err
+[ "$(wc -l < cooldown-attempts)" -eq 6 ]
+# Product isolation retains the Codex minimum-version guard and quiet output.
+CN_PRODUCT=codex XDG_CACHE_HOME="$ROOT/cooldown-cache" sh cooldown/bin/hook-wrapper.sh handle-hook Stop > cooldown-codex.out 2> cooldown-codex.err
+[ "$(wc -l < cooldown-attempts)" -eq 7 ]
+[ ! -s cooldown-codex.out ] && [ ! -s cooldown-codex.err ]
+# A nominal zero exit without the promised version is still a failed attempt.
+echo '{"version":"1.42.2"}' > cooldown/.claude-plugin/plugin.json
+cat > cooldown/bin/install.sh <<'EMPTY_SUCCESS'
+#!/bin/sh
+# agent-notifications-managed-writer-protocol-v1
+echo attempt >> "$ROOT/cooldown-attempts"
+exit 0
+EMPTY_SUCCESS
+cool_hook > cooldown-empty-success.out 2> cooldown-empty-success.err
+cool_hook > cooldown-empty-repeat.out 2> cooldown-empty-repeat.err
+[ "$(wc -l < cooldown-attempts)" -eq 8 ]
+grep -q 'Installation of v1.42.2 failed' cooldown-empty-success.err
+[ ! -s cooldown-empty-repeat.err ]
+# Deterministic delayed-reader regression for the expired-takeover ABA race:
+# capture A, retire A, install B, then let A's delayed retirement resume.
+# Source only the actual production function boundary, with real namespaces.
+(
+ sed -n '/^backoff_path()/,/^# === Main Logic ===/p' "$SRC/hook-wrapper.sh" > "$ROOT/claim-functions.sh"
+ . "$ROOT/claim-functions.sh"
+ BACKOFF="$ROOT/delayed-claim"
+ mkdir "$BACKOFF"
+ mkdir "$BACKOFF/active"
+ printf '0\n\nattempt.A\n' > "$BACKOFF/active/owner"
+ backoff_owner
+ observed="$BACKOFF_OWNER"
+ retire_backoff "$observed"
+ mkdir "$BACKOFF/active"
+ printf '0\n\nattempt.B\n' > "$BACKOFF/active/owner"
+ b=$(cat "$BACKOFF/active/owner")
+ if retire_backoff "$observed"; then echo 'delayed expiry stole successor claim' >&2; exit 1; fi
+ [ "$(cat "$BACKOFF/active/owner")" = "$b" ]
+ # Likewise a delayed installer completion cannot retire the new owner.
+ INSTALL_CLAIM="$observed"
+ finish_install_claim
+ [ "$(cat "$BACKOFF/active/owner")" = "$b" ]
+)
+echo 'PASS: fresh/expired concurrent claims, live owner, cooldown, corruption, isolation and retained dispatch'
+
 # Source actual installer functions, substituting local download/OS integration
 # seams; execute the real main flow and real venv setup on both main branches.
 sed '$d' "$SRC/install.sh" > installer-functions.sh
@@ -297,3 +572,11 @@ main >/dev/null
 [ "$(cat "$venv/canary")" = keep ]
 echo 'PASS: isolated Codex cache and installer regressions'
 RUN
+
+# Focused runs leave the independently owned diagnostics to integration.
+case "${1:-}" in claim-race|wrapper-only) exit 0 ;; esac
+
+# Keep the independent diagnostics suite, after the owned behavioral cases so
+# any legacy diagnostics expectation cannot prevent concurrency validation.
+bash "$src/hook-wrapper-logs_test.sh"
+bash "$src/hook-claim-lifecycle_test.sh"

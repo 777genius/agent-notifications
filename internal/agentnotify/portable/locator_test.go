@@ -4,9 +4,14 @@ package portable
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -344,4 +349,164 @@ func testContext(t *testing.T) context.Context {
 	c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	t.Cleanup(cancel)
 	return c
+}
+
+// Regression: Cursor cannot produce its recorded key/command while unknown
+// integrations must continue to refuse registration.
+func TestCursorRegistration(t *testing.T) {
+	b, _, _ := fixture(t)
+	b.Integration = Cursor
+	key, c, raw, err := b.Registration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(raw)
+	if key != "portable:"+hex.EncodeToString(sum[:]) || c.Registration != string(raw) || c.RuntimeRoot != b.RuntimeRoot || len(c.Commands) != 1 || c.Commands[0] != primaryPath(b.RuntimeRoot, b.Primary) {
+		t.Fatal("Cursor registration identity differs")
+	}
+	decoded, err := decode(raw)
+	if err != nil || decoded != b {
+		t.Fatal("Cursor binding did not round trip", err)
+	}
+	b.Integration = Integration("unknown")
+	if _, _, _, err := b.Registration(); err != ErrInvalid {
+		t.Fatal("unknown integration admitted", err)
+	}
+}
+
+func publishedCursorFixture(t *testing.T) (Binding, string) {
+	t.Helper()
+	b, _, _ := fixture(t)
+	b.Integration = Cursor
+	name, err := Publish(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b, filepath.Join(b.DataRoot, name)
+}
+
+// Regression: an identity reader takes a setup lease, requires installed
+// authority, or writes runtime state instead of only returning published bytes.
+func TestReadCursorBindingIdentityOnly(t *testing.T) {
+	b, path := publishedCursorFixture(t)
+	root := filepath.Dir(b.DataRoot)
+	snapshot := func() map[string]string {
+		t.Helper()
+		state := map[string]string{}
+		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			var raw []byte
+			if !entry.IsDir() {
+				raw, err = os.ReadFile(path)
+				if err != nil {
+					return err
+				}
+			}
+			state[path] = fmt.Sprintf("%v %v %x", info.Mode(), info.ModTime(), sha256.Sum256(raw))
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return state
+	}
+	installed, err := installruntime.ReadInstalledSnapshot(b.ControlRoot)
+	if err != nil || b.CheckSnapshot(installed) == nil {
+		t.Fatal("TEST Cursor identity unexpectedly has installed authorization", err)
+	}
+	for _, absentRuntime := range []bool{false, true} {
+		if absentRuntime {
+			for _, p := range []string{b.ScopeRoot, b.ControlRoot, b.RuntimeRoot, filepath.Dir(b.GlobalConfig)} {
+				if err := os.RemoveAll(p); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		before := snapshot()
+		got, err := ReadCursorBinding(path)
+		if err != nil || got != b {
+			t.Fatalf("published identity differs: %+v %v", got, err)
+		}
+		if !reflect.DeepEqual(before, snapshot()) {
+			t.Fatal("identity read changed files, locks, or runtime state")
+		}
+	}
+}
+
+// Regression: a reader normalizes selectors, accepts a foreign hashed identity
+// or directory, ignores Cursor integration/canonical JSON, or bypasses readPrivate.
+func TestReadCursorBindingRefusals(t *testing.T) {
+	for _, scenario := range []string{"relative", "unclean", "filename", "data-root", "codex", "claude", "copilot", "noncanonical", "duplicate", "missing", "mode", "symlink", "hardlink", "parent-link"} {
+		t.Run(scenario, func(t *testing.T) {
+			b, path := publishedCursorFixture(t)
+			_, _, raw, err := b.Registration()
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch scenario {
+			case "relative":
+				cwd, e := os.Getwd()
+				if e != nil {
+					t.Fatal(e)
+				}
+				path, err = filepath.Rel(cwd, path)
+				if err == nil {
+					var selected []byte
+					selected, err = os.ReadFile(path)
+					if err == nil && string(selected) != string(raw) {
+						t.Fatal("relative selector does not reach the published fixture")
+					}
+				}
+			case "unclean":
+				path = b.DataRoot + string(os.PathSeparator) + "." + string(os.PathSeparator) + filepath.Base(path)
+			case "filename":
+				path = filepath.Join(b.DataRoot, "agent-notify-"+strings.Repeat("a", 64)+".json")
+				err = os.WriteFile(path, raw, 0600)
+			case "data-root":
+				other := filepath.Join(filepath.Dir(b.DataRoot), "other data")
+				err = os.Mkdir(other, 0700)
+				if err == nil {
+					path = filepath.Join(other, filepath.Base(path))
+					err = os.WriteFile(path, raw, 0600)
+				}
+			case "codex", "claude", "copilot":
+				b.Integration = map[string]Integration{"codex": Codex, "claude": Claude, "copilot": CopilotVSCode}[scenario]
+				var name string
+				name, err = Publish(b)
+				path = filepath.Join(b.DataRoot, name)
+			case "noncanonical":
+				err = os.WriteFile(path, append(raw, '\n'), 0600)
+			case "duplicate":
+				err = os.WriteFile(path, append([]byte(`{"version":1,`), raw[1:]...), 0600)
+			case "missing":
+				err = os.Remove(path)
+			case "mode":
+				err = os.Chmod(path, 0644)
+			case "symlink":
+				err = os.Rename(path, path+".real")
+				if err == nil {
+					err = os.Symlink(path+".real", path)
+				}
+			case "hardlink":
+				err = os.Link(path, path+".alias")
+			case "parent-link":
+				err = os.Rename(b.DataRoot, b.DataRoot+".real")
+				if err == nil {
+					err = os.Symlink(b.DataRoot+".real", b.DataRoot)
+				}
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, err := ReadCursorBinding(path); err != ErrInvalid || got != (Binding{}) {
+				t.Fatalf("%s accepted or leaked identity: %+v %v", scenario, got, err)
+			}
+		})
+	}
 }

@@ -8,6 +8,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+
+	"github.com/777genius/agent-notifications/internal/strictjson"
 )
 
 // A checksum detects valid-JSON corruption of the recovery record. It is not
@@ -36,7 +39,7 @@ func writeTransaction(path string, tx transaction) error {
 		tx.Files[i].BeforeData = before
 		tx.Files[i].BeforeDataSHA256 = beforeRef
 	}
-	data, err := json.Marshal(tx)
+	data, err := marshalTransaction(tx)
 	if err != nil {
 		return err
 	}
@@ -147,6 +150,11 @@ func decodeTransaction(data []byte) (transaction, error) {
 
 func decodeTransactionBlobs(data []byte, blobDir string) (transaction, error) {
 	var tx transaction
+	// A valid checksum can still bind ambiguous JSON. Validate the entire
+	// envelope, including its transaction, before interpreting either or reading blobs.
+	if strictjson.Validate(data, strictjson.Budget{Bytes: maxManagedFile, Depth: 32, Entries: 100000}) != nil {
+		return tx, fmt.Errorf("invalid transaction journal JSON")
+	}
 	var envelope transactionEnvelope
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return tx, err
@@ -160,8 +168,15 @@ func decodeTransactionBlobs(data []byte, blobDir string) (transaction, error) {
 	if envelope.SHA256 != hex.EncodeToString(digest[:]) {
 		return tx, fmt.Errorf("transaction checksum mismatch")
 	}
-	if err := json.Unmarshal(envelope.Transaction, &tx); err != nil {
+	var header struct{ Schema int }
+	if json.Unmarshal(envelope.Transaction, &header) != nil || !acceptedTransactionSchema(header.Schema) {
+		return tx, fmt.Errorf("unsupported transaction schema")
+	}
+	if err := unmarshalTransaction(envelope.Transaction, header.Schema, &tx); err != nil {
 		return tx, err
+	}
+	if tx.Before.WriterFloor > SupportedWriterFloor || tx.After.WriterFloor > SupportedWriterFloor {
+		return tx, fmt.Errorf("unsupported transaction writer floor")
 	}
 	if blobDir != "" {
 		if err := attachTransactionBlobs(&tx, blobDir); err != nil {
@@ -217,6 +232,36 @@ func checkPolicyGeneration(root string, l Ledger) error {
 // snapshots. It never restores an entire directory and never downgrades an
 // already promoted callback reader. A foreign edit makes rollback refuse.
 func reverseTransaction(current Ledger, tx transaction) (transaction, error) {
+	if tx.OpenCodeInit != nil || tx.OpenCodePurge != nil {
+		return transaction{}, fmt.Errorf("private registration/removal requires forward recovery")
+	}
+	// Prove the original journal's common volume mapping before capturing a
+	// new reverse decision. Never normalize a contradictory source journal.
+	if err := preflightTransactionAnchors(tx); err != nil {
+		return transaction{}, err
+	}
+	if tx.Native != nil && len(tx.Native.Parents) != 0 {
+		anchors, err := pathAnchors(tx.Native.After.Path, false)
+		if err != nil {
+			return transaction{}, err
+		}
+		if err := checkPersistedAnchors(tx.Native.Parents, anchors); err != nil {
+			return transaction{}, err
+		}
+	}
+	fileParents := make([][]PathAnchor, len(tx.Files))
+	for i, f := range tx.Files {
+		anchors, err := pathAnchors(f.Path, false)
+		if err != nil {
+			return transaction{}, err
+		}
+		if err := checkPersistedAnchors(f.Parents, anchors); err != nil {
+			return transaction{}, err
+		}
+		// Native.Parents is freshly captured below. File chains in the new
+		// decision must use the same observation epoch, while tx stays intact.
+		fileParents[i] = anchors
+	}
 	if tx.Native != nil && tx.Native.Retire {
 		return transaction{}, fmt.Errorf("retirement deletion must finish forward recovery before rollback")
 	}
@@ -231,7 +276,7 @@ func reverseTransaction(current Ledger, tx transaction) (transaction, error) {
 	if after.Schema < tx.After.Schema {
 		after.Schema = tx.After.Schema
 	}
-	if after.PendingMutation != nil || tx.After.PendingMutation != nil || after.WriterFloor >= ReservationWriterFloor {
+	if after.Schema < 4 && (after.PendingMutation != nil || tx.After.PendingMutation != nil || after.WriterFloor >= ReservationWriterFloor) {
 		after.Schema = ledgerSchemaV3
 		if after.WriterFloor < ReservationWriterFloor {
 			after.WriterFloor = ReservationWriterFloor
@@ -291,7 +336,7 @@ func reverseTransaction(current Ledger, tx transaction) (transaction, error) {
 			After:    *after.Native,
 		}
 	}
-	for _, f := range tx.Files {
+	for i, f := range tx.Files {
 		if err := checkReplacementRollback(f); err != nil {
 			return transaction{}, err
 		}
@@ -302,7 +347,7 @@ func reverseTransaction(current Ledger, tx transaction) (transaction, error) {
 		if actual != f.Before && actual != desired(f) {
 			return transaction{}, fmt.Errorf("rollback conflict; preserving foreign edit: %s", f.Path)
 		}
-		undo := File{Parents: f.Parents, Path: f.Path, Before: actual, Data: f.BeforeData, Mode: f.Before.Mode, Link: f.Before.Link, Remove: !f.Before.Exists}
+		undo := File{Parents: fileParents[i], Path: f.Path, Before: actual, Data: f.BeforeData, Mode: f.Before.Mode, Link: f.Before.Link, Remove: !f.Before.Exists}
 		if actual.Exists && actual.Link == "" {
 			undo.WindowsReplacementID, err = windowsReplacementIdentity(f.Path)
 			if err != nil {
@@ -321,8 +366,73 @@ func reverseTransaction(current Ledger, tx transaction) (transaction, error) {
 		}
 		reverse.Files = append(reverse.Files, undo)
 	}
-	if err := validateWriterFiles(reverse.Files); err != nil {
+	if err := validateWriterFilesAtFloor(reverse.Files, after.WriterFloor); err != nil {
+		return transaction{}, err
+	}
+	if err := preflightTransactionAnchors(reverse); err != nil {
 		return transaction{}, err
 	}
 	return reverse, nil
+}
+
+// Schema4 uses a versioned Files container. A retained floor2 decoder refuses
+// its type during unmarshal, BEFORE attaching any out-of-band blobs. Merely
+// increasing Schema would let that old decoder read blobs before its schema gate.
+// The checksum still binds exactly the compact transaction, and v1/v2/v3 keep
+// their original wire representation.
+type transactionV4 struct {
+	*transaction
+	Files struct{ Changes []File }
+}
+
+func marshalTransaction(tx transaction) ([]byte, error) {
+	if tx.Schema != transactionSchemaV4 {
+		return json.Marshal(tx)
+	}
+	wire := transactionV4{transaction: &tx}
+	wire.Files.Changes = tx.Files
+	return json.Marshal(wire)
+}
+
+func unmarshalTransaction(data []byte, schema int, tx *transaction) error {
+	if schema != transactionSchemaV4 {
+		return json.Unmarshal(data, tx)
+	}
+	if err := validateTransactionV4Files(data); err != nil {
+		return err
+	}
+	wire := transactionV4{transaction: tx}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	tx.Files = wire.Files.Changes
+	if tx.After.WriterFloor < LocalPolicyWriterFloor {
+		return fmt.Errorf("schema4 requires retained Local writer floor")
+	}
+	return nil
+}
+
+// Only the exact versioned carrier may supply the write set. Typed JSON
+// decoding otherwise accepts case-folded aliases and ignores unknown carriers.
+func validateTransactionV4Files(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	for name := range fields {
+		if name != "Files" && strings.EqualFold(name, "Files") {
+			return fmt.Errorf("invalid schema4 Files carrier")
+		}
+	}
+	var files map[string]json.RawMessage
+	if json.Unmarshal(fields["Files"], &files) != nil || len(files) != 1 || files["Changes"] == nil {
+		return fmt.Errorf("invalid schema4 Files container")
+	}
+	// writeTransaction always emits an array, including for an empty write set.
+	// Null would silently discard changes just like an omitted carrier.
+	changes := bytes.TrimSpace(files["Changes"])
+	if len(changes) == 0 || changes[0] != '[' {
+		return fmt.Errorf("invalid schema4 Changes shape")
+	}
+	return nil
 }

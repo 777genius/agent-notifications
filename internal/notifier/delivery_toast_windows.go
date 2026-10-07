@@ -20,9 +20,10 @@ import (
 type windowsPowerShellToastSession struct {
 	appID, controlRoot, executable string
 	requireOpenCodeShortcut        bool
+	trustedReady                   func(context.Context) error
 }
 
-const windowsToastPowerShell = `$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Runtime.WindowsRuntime; $xmlBytes=[Convert]::FromBase64String($env:AGENT_NOTIFICATIONS_TOAST_XML); $xmlText=[Text.Encoding]::UTF8.GetString($xmlBytes); $doc=[Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom.XmlDocument,ContentType=WindowsRuntime]::New(); $doc.LoadXml($xmlText); $toast=[Windows.UI.Notifications.ToastNotification,Windows.UI.Notifications,ContentType=WindowsRuntime]::New($doc); [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($env:AGENT_NOTIFICATIONS_TOAST_APP_ID).Show($toast)`
+const windowsToastPowerShell = `$ErrorActionPreference='Stop'; [Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime] | Out-Null; $xmlBytes=[Convert]::FromBase64String($env:AGENT_NOTIFICATIONS_TOAST_XML); $xmlText=[Text.Encoding]::UTF8.GetString($xmlBytes); $doc=[Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom.XmlDocument,ContentType=WindowsRuntime]::New(); $doc.LoadXml($xmlText); $toast=[Windows.UI.Notifications.ToastNotification,Windows.UI.Notifications,ContentType=WindowsRuntime]::New($doc); [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($env:AGENT_NOTIFICATIONS_TOAST_APP_ID).Show($toast)`
 
 var submitWindowsToast = runWindowsToast
 var resolveWindowsPowerShell = systemWindowsPowerShell
@@ -52,16 +53,22 @@ func runWindowsToast(ctx context.Context, p windowsToastPayload) error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", windowsToastPowerShell)
-	cmd.Env = append(os.Environ(),
-		"AGENT_NOTIFICATIONS_TOAST_XML="+base64.StdEncoding.EncodeToString(data),
-		"AGENT_NOTIFICATIONS_TOAST_APP_ID="+p.AppID,
-	)
+	cmd := windowsToastCommand(ctx, powershell, data, p.AppID)
 	err = cmd.Run()
 	if ctx.Err() != nil {
 		return errors.Join(ctx.Err(), err)
 	}
 	return err
+}
+
+// Construction shares the native child privacy boundary without launching it.
+func windowsToastCommand(ctx context.Context, powershell string, data []byte, appID string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", windowsToastPowerShell)
+	cmd.Env = append(nativeNotificationEnvironment(),
+		"AGENT_NOTIFICATIONS_TOAST_XML="+base64.StdEncoding.EncodeToString(data),
+		"AGENT_NOTIFICATIONS_TOAST_APP_ID="+appID,
+	)
+	return cmd
 }
 
 func openWindowsToast(ctx context.Context) (windowsToastSession, error) {
@@ -76,6 +83,24 @@ func openWindowsToast(ctx context.Context) (windowsToastSession, error) {
 
 func NewOpenCodeWindowsToastDelivery(clock BootClock) *WindowsToastDelivery {
 	return &WindowsToastDelivery{Clock: clock, Open: openOpenCodeWindowsToast}
+}
+
+// NewTrustedWindowsToastDelivery receives identity and shortcut verification
+// only from trusted host composition. Native event/config text must never supply
+// appID. A missing identity or verifier denies delivery; no legacy fallback.
+func NewTrustedWindowsToastDelivery(clock BootClock, appID string, ready func(context.Context) error) *WindowsToastDelivery {
+	return &WindowsToastDelivery{Clock: clock, Open: func(ctx context.Context) (windowsToastSession, error) {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if appID == "" || ready == nil {
+			return nil, errors.New("trusted toast identity unavailable")
+		}
+		if _, err := resolveWindowsPowerShell(); err != nil {
+			return nil, err
+		}
+		return windowsPowerShellToastSession{appID: appID, trustedReady: ready}, nil
+	}}
 }
 
 func openOpenCodeWindowsToast(ctx context.Context) (windowsToastSession, error) {
@@ -105,6 +130,9 @@ func (s windowsPowerShellToastSession) Ready(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if s.trustedReady != nil {
+		return s.trustedReady(ctx)
+	}
 	if s.requireOpenCodeShortcut {
 		return opencodeinstall.WindowsShortcutReady(s.controlRoot, s.executable)
 	}
@@ -122,7 +150,7 @@ func (s windowsPowerShellToastSession) Submit(ctx context.Context, r notificatio
 	return submitWindowsToast(ctx, windowsToastPayload{
 		AppID:  appID,
 		Title:  r.Content.Title,
-		Body:   r.Content.Body,
+		Body:   desktopBodyWithSubtitle(r.Content),
 		Silent: r.Silent || !r.Policy.SoundEnabled,
 	})
 }

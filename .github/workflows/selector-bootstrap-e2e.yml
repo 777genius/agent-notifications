@@ -1,0 +1,81 @@
+name: Selector bootstrap E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      use_github_runner:
+        description: Use GitHub-hosted runners for native macOS checks
+        required: false
+        default: false
+        type: boolean
+  pull_request:
+    paths:
+      - '.github/workflows/selector-bootstrap-e2e.yml'
+      - 'cmd/claude-notifications/setup_products*'
+      - 'internal/agentnotify/setupwizard/**'
+      - 'internal/opencodeinstall/**'
+      - 'scripts/selector*'
+      - 'bin/bootstrap.sh'
+      - 'bin/setup.sh'
+      - 'bin/bootstrap_opencode_test.sh'
+      - 'bin/bootstrap_product_test.sh'
+      - 'bin/test-env.sh'
+      - 'go.mod'
+      - 'go.sum'
+
+permissions:
+  contents: read
+
+# Supersede only older checks for this PR; dispatch runs remain independent.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  selector:
+    name: Selector on ${{ matrix.os }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.use_github_runner && matrix.os || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.os || matrix.os == 'macos-15' && (vars.CI_MACOS_15_RUNNER || 'macos-15') || matrix.os == 'macos-26' && (vars.CI_MACOS_26_RUNNER || 'macos-26') || matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.26'
+      - name: Qualify native bootstrap in disposable profiles
+        run: bash scripts/selector_e2e.sh "$RUNNER_TEMP/TEST-selector-e2e"
+      - name: Qualify native owned path aliases
+        if: ${{ !cancelled() }}
+        run: go test -json -race -count=1 -timeout=2m -run '^TestDarwinPlacementPreservesOwnedSystemAlias$' ./internal/opencodeinstall > "$RUNNER_TEMP/TEST-selector-e2e/placement.jsonl"
+      - name: Qualify public loader and observer lifecycle
+        if: ${{ !cancelled() }}
+        run: |
+          test -x "$RUNNER_TEMP/TEST-selector-e2e/claude-notifications"
+          native_target=$(readlink bin/claude-notifications)
+          case "$native_target" in claude-notifications-darwin-arm64|claude-notifications-darwin-amd64) ;; *) exit 1 ;; esac
+          cp "$RUNNER_TEMP/TEST-selector-e2e/claude-notifications" "bin/$native_target"
+          bash bin/setup_test.sh
+      - name: Preserve native evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: selector-e2e-${{ matrix.os }}
+          path: ${{ runner.temp }}/TEST-selector-e2e
+          if-no-files-found: error
+
+  windows-shell:
+    name: Bootstrap shell on Windows
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Qualify disposable Git Bash and HTTP fixtures
+        shell: bash
+        run: bash bin/bootstrap_product_test.sh

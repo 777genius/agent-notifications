@@ -1,0 +1,378 @@
+{
+  "schemaVersion": 1,
+  "status": "accepted_bounded_test_composition",
+  "scope": "disposable packaged TEST genuine Shell default-toast activation -> cold COM callback -> selected vendor public SDK handoff",
+  "sourceSHA": "42059697370290ba422ce98cbe7a10cb228dc1b5",
+  "runID": 37565742949,
+  "jobID": 112612921765,
+  "attempt": 1,
+  "event": "workflow_dispatch",
+  "mode": "oobe_then_msix_vendor_callback",
+  "runURL": "https://github.com/777genius/agent-notifications/actions/runs/37565742949",
+  "jobURL": "https://github.com/777genius/agent-notifications/actions/runs/37565742949/job/112612921765",
+  "officialArtifact": {
+    "id": 11458990746,
+    "url": "https://github.com/777genius/agent-notifications/actions/runs/37565742949/artifacts/11458990746",
+    "bytes": 1006583,
+    "sha256": "c6c789dcf8be94cd478959f489c8dc5a45dc3504fe12d5188f7eb81f4ed30691",
+    "regularMembers": 91,
+    "uncompressedBytes": 2516436,
+    "allMemberCRCAndHashesChecked": true,
+    "vendorArchiveRetained": false
+  },
+  "independentAudit": {
+    "assertions": 770,
+    "failures": 0
+  },
+  "runner": {
+    "label": "windows-11-vs2026-arm",
+    "imageVersion": "20260924.168.1",
+    "session": 2,
+    "freshDisposableJob": true
+  },
+  "sourceBinding": {
+    "archivedSources": [
+      {
+        "file": "tests/integration/navigation_windows_msix_probe.cpp",
+        "archivedSHA256": "d954c1868f322dd82ada2821580e5bc7f437f0ef1984bfbcffd341d594863640",
+        "gitBlobLF_SHA256": "8607f2daea0a74995af6388cd977ed44f57827923ecf739d0462ffef01944a34",
+        "normalizedBytesEqual": true,
+        "difference": "LF_to_CRLF_only"
+      },
+      {
+        "file": "tests/integration/navigation_windows_msix_e2e.ts",
+        "archivedSHA256": "898e1cc2f40b02f00e5496ecf15f1e5c4f65f6e22855480246a5da1f7cc61cf1",
+        "gitBlobLF_SHA256": "11a700d99a8e747f8011b91f89b18c82b9b3155703b98d400907317cbc4b1272",
+        "normalizedBytesEqual": true,
+        "difference": "LF_to_CRLF_only"
+      },
+      {
+        "file": "tests/integration/navigation_windows_vendor_sdk_test.h",
+        "archivedSHA256": "a08f84868c165c689be66081c0e1b83163e1a7210f69638228a1208e8b241bcf",
+        "gitBlobLF_SHA256": "57260bcae8ce30eb2fa306e1e25c6e0d59c223ec516eb0d968a84584accade04",
+        "normalizedBytesEqual": true,
+        "difference": "LF_to_CRLF_only"
+      },
+      {
+        "file": "tests/integration/navigation_windows_vendor_acquisition.ts",
+        "archivedSHA256": "e4bb9b42e1c611a4734c3274cda6d4870c23c92c01d38b0f755a75ed907e60bb",
+        "gitBlobLF_SHA256": "6b3f82c558baacc926f64cff6efa8f5f64497662f17e450ebc7c9a004fdcc134",
+        "normalizedBytesEqual": true,
+        "difference": "LF_to_CRLF_only"
+      },
+      {
+        "file": "tests/integration/navigation_windows_native_probe.cpp",
+        "archivedSHA256": "aff2c3e3eb2d83235d46ad0a16b9d53d2f6856531a706790369bc5792e7dac72",
+        "gitBlobLF_SHA256": "0460fdd3b26f1948391774756cd5a37e62b470e9064012eff4fea7d90925de00",
+        "normalizedBytesEqual": true,
+        "difference": "LF_to_CRLF_only"
+      }
+    ],
+    "gitSourcePins": {
+      "tests/integration/navigation_windows_msix_probe.cpp": "8607f2daea0a74995af6388cd977ed44f57827923ecf739d0462ffef01944a34",
+      "tests/integration/navigation_windows_msix_e2e.ts": "11a700d99a8e747f8011b91f89b18c82b9b3155703b98d400907317cbc4b1272",
+      "tests/integration/navigation_windows_vendor_sdk_test.h": "57260bcae8ce30eb2fa306e1e25c6e0d59c223ec516eb0d968a84584accade04",
+      "tests/integration/navigation_windows_vendor_acquisition.ts": "6b3f82c558baacc926f64cff6efa8f5f64497662f17e450ebc7c9a004fdcc134",
+      "tests/integration/navigation_windows_native_probe.cpp": "0460fdd3b26f1948391774756cd5a37e62b470e9064012eff4fea7d90925de00",
+      "tests/integration/navigation_windows_vendor_metadata.ts": "cb81a97c6b5d4cc272dfe1f645d2224348bda9c464674b1af09a40c67bf6cdd3",
+      ".github/workflows/navigation-windows-msix-native-e2e.yml": "c8dc7f74320a6b5dad7857233316f7c0118b69c71711fa5595befec9d156b7bd",
+      ".github/workflows/navigation-windows-vendor-metadata.yml": "00296d41e0af496178294790e85ef91ed8041c45a8f3a77040e7d2c571faf75b"
+    },
+    "unarchivedGitSourceCount": 3,
+    "normalizedArchivedBytesEqualGit": true,
+    "differenceObserved": "only LF to CRLF conversion; Git configuration cause not inferred",
+    "sdkCompilerBeforeEffects": true
+  },
+  "binaries": {
+    "callbackSHA256": "a5cf60333002b010d34b429c09689daf53ac6cc30ef5b1f0a0075b3e529ae533",
+    "observerSHA256": "a961eb8434cc75fe26d70a71e213d0d3f681ad4742dcb8d2276d0a5ad5eb7e3c",
+    "layoutCallbackCopyEqual": true,
+    "neverExecutedByAuditor": true
+  },
+  "prepare": {
+    "budgetMS": 90000,
+    "completedFrames": 33,
+    "elapsedMS": 40194,
+    "actorPID": 11248,
+    "collected": true,
+    "collectionUnknown": false
+  },
+  "bootstrap": {
+    "sameJobControllerQualified": true,
+    "authenticatedJobStepSuccess": true,
+    "sourceAndObserverBindingChecked": true,
+    "handoffSHA256": "76676a412af1f1514ea0af197c673956ae501cb93ef75ebdb46076e4bc048113",
+    "evidenceSHA256": "ec1f3512b3f9e6bc7c031463a688b13d51708456957658420bbfa07f874af10b",
+    "recordsSHA256": "ad01c79c7e955e375c5ac20060018755a47ad9f91a7bd1bf106243021f304fac",
+    "separateRawPacketIndependentlyReauditedHere": false
+  },
+  "toast": {
+    "showAttempts": 1,
+    "showCallOutcome": "returned",
+    "showHRESULT": 0,
+    "enabledSettingObserved": true,
+    "senderPID": 8436,
+    "senderExitCode": 0,
+    "senderCollected": true,
+    "senderCollectedUtcTicks": "134358166912345446",
+    "senderCollectedBootMS": 1416968,
+    "uiActorPID": 8260,
+    "selectionKind": "toast_default",
+    "controlType": 50007,
+    "providerPID": 3296,
+    "providerImagePathKind": "systemapps_shellexperiencehost",
+    "exactOwnedTitleAndUniqueNearestRowBound": true,
+    "freshCensusComplete": true,
+    "freshCensusNodes": 111,
+    "freshCensusRoots": 6,
+    "invokeEntered": true,
+    "invokeReturned": true,
+    "invokeHRESULT": 0,
+    "sourceBoundSingleInvoke": true
+  },
+  "coldCallback": {
+    "pid": 8500,
+    "creationUtcTicks": "134358167000833053",
+    "observedEntryBootMS": 1426343,
+    "kernelBirthAfterSenderCollectedUTC": true,
+    "observedBootEntryAfterSenderCollection": true,
+    "sameOwnedPackageUserSessionBinaryBound": true,
+    "targetMatches": true,
+    "duplicate": false,
+    "exitPermitValidated": true,
+    "exitCode": 0,
+    "collected": true,
+    "leaseDeadlineBootMS": 1456359
+  },
+  "selectedVendor": {
+    "name": "OpenAI.Codex",
+    "familyName": "OpenAI.Codex_2p2nqsd0c76g0",
+    "fullName": "OpenAI.Codex_26.930.7945.0_arm64__2p2nqsd0c76g0",
+    "version": "26.930.7945.0",
+    "architecture": "arm64",
+    "archiveSHA256": "a208d373c7c84aa3e0452cd3dd8406a6794d8139ec1260c64a770c2a00fbeeb8",
+    "archiveSHAEvidenceScope": "controller acquisition/custody before and after; package bytes excluded from official artifact",
+    "signatureEvidenceScope": "controller collected signtool /pa /all success plus pinned public SDK metadata and readbacks",
+    "currentUserFamilyAbsentBeforeInstall": true,
+    "beforeInstalledCount": 0,
+    "installActorPID": 3416,
+    "installKnownCompleted": true,
+    "afterInstalledCount": 1,
+    "exactFullNameAfterInstall": true,
+    "removeActorPID": 2664,
+    "removeKnownCompleted": true,
+    "currentUserFamilyAbsentAfterRemove": true
+  },
+  "inlineCallbackHandoff": {
+    "context": "actual cold packaged TEST COM callback",
+    "entryBootMS": 1426406,
+    "actionDeadlineBootMS": 1451359,
+    "deadlineFormula": "min(entryBootMS + 30000, leaseDeadlineBootMS - 5000)",
+    "queryDeadlineBootMS": 1436437,
+    "queryCallEntered": true,
+    "queryCallReturned": true,
+    "uriSupport": 0,
+    "launchDeadlineBootMS": 1441515,
+    "launchCallEntered": true,
+    "launchCallReturned": true,
+    "hresult": 0,
+    "outcome": "handoff_accepted",
+    "publishedBootMS": 1426812,
+    "entryToPublishedMS": 406,
+    "timely": true,
+    "queryPhaseMaximumMS": 10000,
+    "launchPhaseMaximumMS": 15000,
+    "noFallbackOrAutomaticRetry": true,
+    "sourceBoundAtMostOneQueryAndLaunch": true,
+    "targetConfirmed": false
+  },
+  "controlledCleanup": {
+    "directControllerActors": 15,
+    "actors": [
+      {
+        "mode": "package-prepare",
+        "pid": 11248,
+        "exitCode": 0,
+        "signal": null,
+        "collected": true
+      },
+      {
+        "mode": "preflight",
+        "pid": 7256,
+        "exitCode": 0,
+        "signal": null,
+        "collected": true
+      },
+      {
+        "mode": "vendor-signature",
+        "pid": 10284,
+        "exitCode": 0,
+        "signal": null,
+        "collected": true
+      },
+      {
+        "mode": "package-metadata",
+        "pid": 3396,
+        "exitCode": 0,
+        "signal": null,
+        "collected": true
+      },
+      {
+        "mode": "vendor-state-before",
+        "pid": 1092,
+        "exitCode": 0,
+        "signal": null,
+        "collected": true
+      },
+      {
+        "mode": "vendor-install",
+        "pid": 3416,
+        "exitCode": 0,
+        "signal": null,
+        "collected": true
+      },
+      {
+        "mode": "vendor-state-after",
+        "pid": 8008,
+        "exitCode": 0,
+        "signal": null,
+        "collected": true
+      },
+      {
+        "mode": "package-package",
+        "pid": 10184,
+        "exitCode": 0,
+        "signal": null,
+        "collected": true
+      },
+      {
+        "mode": "activate",
+        "pid": 4256,
+        "exitCode": 0,
+        "signal": null,
+        "collected": true
+      },
+      {
+        "mode": "history",
+        "pid": 4452,
+        "exitCode": 0,
+        "signal": null,
+        "collected": true
+      },
+      {
+        "mode": "invoke",
+        "pid": 8260,
+        "exitCode": 0,
+        "signal": null,
+        "collected": true
+      },
+      {
+        "mode": "collect",
+        "pid": 6420,
+        "exitCode": 0,
+        "signal": null,
+        "collected": true
+      },
+      {
+        "mode": "cleanup",
+        "pid": 3976,
+        "exitCode": 0,
+        "signal": null,
+        "collected": true
+      },
+      {
+        "mode": "package-cleanup",
+        "pid": 2376,
+        "exitCode": 0,
+        "signal": null,
+        "collected": true
+      },
+      {
+        "mode": "vendor-remove",
+        "pid": 2664,
+        "exitCode": 0,
+        "signal": null,
+        "collected": true
+      }
+    ],
+    "senderAndCallbackRetainedHandlesCollected": true,
+    "nativeProcessCleanupQualified": true,
+    "nativeProcessCleanupUnknown": false,
+    "testPackageAbsent": true,
+    "testCertificateAbsent": true,
+    "ownedCNGKeyAbsent": true,
+    "ownedNotificationHistoryRemovalReturned": true,
+    "vendorExactRemovalKnown": true,
+    "inputsUnchangedControllerObserved": true,
+    "cleanupPassed": true,
+    "globalProcessQuiescenceQualified": false
+  },
+  "recordSHA256": {
+    "activation-api.json": "1d489a3e2fbaf2fa7c58fd27f34ea5967c220326692ff51d37d04b5b276a0687",
+    "identity-ready.json": "8274025f23e1f485dd2b7d7c0655e7f2a88f6ea5de258cbd397d1bb55037e273",
+    "show-permit.json": "8274025f23e1f485dd2b7d7c0655e7f2a88f6ea5de258cbd397d1bb55037e273",
+    "show-boundary.json": "3a6a78ef641101c81f5cd67f66dd255e27b5466163b91403ee00de165036d179",
+    "show-outcome.json": "0758094b63e3595d4e26644055c81677dd35855b5f1f2a7a5f5b08a87f0bdd29",
+    "sender-retained.json": "8274025f23e1f485dd2b7d7c0655e7f2a88f6ea5de258cbd397d1bb55037e273",
+    "sender-exit.json": "6a941033b4dc34c4bf1ca42bc0ff88031c16eada7797005d230a6a0d535224e5",
+    "callback-started.json": "3bf2bc16e71d418b2c13d94f75e5b4c386a702d866304e6e5652d38d68dcd761",
+    "callback-lease.json": "9c54492d4561656dad9ff501a9e57316b94604ef660de6c4004a70b11893d260",
+    "callback.json": "81c2a767c38f0d44f3a89091473b49ea92c79cde7eb445974ab76c16d24c7e01",
+    "callback-retained.json": "3817ff9dd61058e213637090ca832af4f48243cc76a1c591c72fda3532b889ab",
+    "callback-exit-permit.json": "3817ff9dd61058e213637090ca832af4f48243cc76a1c591c72fda3532b889ab",
+    "callback-exit.json": "cc13b2a538850544d240c2f5b3ae1128c7b7504911a667412484dd50260d16a7",
+    "callback-terminal.json": "05b82c13a073b07337aec0b055c79706b708fe2bf5b07d3ea058dba78531dde7",
+    "effect.json": "8d58d74d031be5c194daba1874d78ee0902569318504e682de9b3c9baff3e7e9",
+    "ui-invoke-intent.json": "1b463d89bd6f3daf92c5ced861849ca507b62d7d29dbd418084d6dfe110695be",
+    "ui-invoke.json": "b91e1dbb2c340111eb7f8d393b54a8af9e4dbf85da4da7603b68515075af2303",
+    "toast-census-40.json": "df1ca30ee427f6fadc7af6d42e0c31859bc0c08c089b579b79e242498d78f1a7",
+    "toast-default-preflight.json": "896ba41a3423471680296f5633b8c3793c1f14f3bb17c9d0aaee5b7aa49b8983",
+    "toast-default-immediate-preflight.json": "896ba41a3423471680296f5633b8c3793c1f14f3bb17c9d0aaee5b7aa49b8983",
+    "vendor-callback-spec.json": "fa427abb948859722c18facbea45f170c84f1bd01ce862375c75a2a5aeef4225",
+    "vendor-callback-query-intent.json": "b23866a863707a7aeb8d6de545bf10e7b0589ad5df76d455a243fbc8c1442935",
+    "vendor-callback-launch-intent.json": "d999bac657dd3ea69707ffeb68d1e17606f62409d133973e1d906eb03692c77a",
+    "vendor-callback-published.json": "43d78706b1ce847483def4fff53ab9e3717c6979ddc92eaa7465678b21091c4b",
+    "vendor-before.json": "d2d5753b6b71b915ae0ee2803e4f2fc5f6e2dce05cc98c102c858ee7f534fb94",
+    "vendor-after.json": "60572700176288e49df0528639edefc99b1e4d03f03a2016e58a91e3c63927e6",
+    "vendor-install-result.json": "10253fd7b46b12d3ee9cd97db1b754ccf4f56eb1922fb0f7a3953979efc83f2b",
+    "vendor-remove-result.json": "fa682a2e079161fc43dae58c8d2a8d37af835cd9882261a801ea6023c33a5dac",
+    "vendor-removed.json": "03b2124b5817d847ce9e3d9eb821d1e2c8788db5657bab7425cf4171d3a13011",
+    "vendor-install-completed.proof": "c331d46c7826fe2bb369542b4d0f3da8c2a34df0ac48654816133ee7b4192ec3",
+    "vendor-custody.proof": "6f326d42a0bbeddcbf19690d6c89d234f93d2ea546f61a5b16883bb23ff4ccbf",
+    "vendor-remove-intent.proof": "c331d46c7826fe2bb369542b4d0f3da8c2a34df0ac48654816133ee7b4192ec3",
+    "sender-cleanup.json": "25d8371b98585ded2b1b04854864ab5003a911ae1a26e01d3b26ad648ad98b8c",
+    "callback-cleanup.json": "25d8371b98585ded2b1b04854864ab5003a911ae1a26e01d3b26ad648ad98b8c",
+    "notification-cleanup.json": "77dbfab5d9855648a82982fad9be607125a0cfc47556df6059975d8e593d4d84",
+    "package-operator-state.json": "c0e4aa0df32c98eae3f1d3c90f3bb3b226e8d962ee6709971541615da34570b4",
+    "prepare-trace.json": "852bb3c4b5b74bffa1e7f9b6b087258b75317ebf4b486b42808289fdbc08d7be",
+    "evidence.json": "6fdc5dcc6e3aaa76781969f26b042540b87a02999aeb9fefa13e5997151c4e67",
+    "controller-progress.json": "25276edf77dfedf8b4e560f12a6329abfbfc16a6fc50dfd00d7acf922e623c2e"
+  },
+  "qualified": {
+    "packagedTestColdCOMCallback": true,
+    "selectedVendorPublicSDKHandoffInThatCallback": true,
+    "shippingGoCLI": false,
+    "unpackagedProductionAdapter": false,
+    "callerAttestation": false,
+    "authenticatedChatNavigation": false,
+    "visibleTarget": false,
+    "focus": false,
+    "globalProcessQuiescence": false,
+    "updateOrReboot": false,
+    "latencyDistribution": false
+  },
+  "previousNegativePreserved": {
+    "runID": 37556658574,
+    "status": "failed_or_unknown_cleanup",
+    "newSuccessDoesNotChangeOldCleanupState": true
+  },
+  "limitations": [
+    "Vendor MSIX is excluded; its SHA/custody/signature are controller observations, not independently rehashed package bytes in this audit.",
+    "Separate bootstrap member packet was not acquired here; same-job bootstrap is bound by this controller receipt and successful authenticated job step.",
+    "Five archived sources are byte-bound to Git after LF normalization; three other frozen sources are Git/HEAD-bound, not archived raw-source rechecks.",
+    "Public SDK exactly-once and actor collection are source-bound exclusive records and readbacks, not independent tracing of broker processes or proof of global quiescence.",
+    "No shipping Go CLI/unpackaged production adapter, authenticated chat, visible target, focus, caller attestation, update/reboot, or latency distribution qualification.",
+    "Cold kernel birth uses Windows FILETIME plus separate observed boot-clock ordering; no assertion that wall clock is monotonic.",
+    "Old failed/unknown runs remain unchanged; this is a new disposable-runner case."
+  ]
+}

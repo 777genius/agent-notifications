@@ -15,6 +15,7 @@ import (
 
 	notifyruntime "github.com/777genius/agent-notifications/internal/agentnotify/runtime"
 	"github.com/777genius/agent-notifications/internal/audio"
+	"github.com/777genius/agent-notifications/internal/claudesource"
 	"github.com/777genius/agent-notifications/internal/codexsource"
 	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/errorhandler"
@@ -22,6 +23,7 @@ import (
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/logging"
 	"github.com/777genius/agent-notifications/internal/notifier"
+	"github.com/777genius/agent-notifications/internal/thirdpartynotices"
 	"github.com/777genius/agent-notifications/internal/winfocus"
 )
 
@@ -35,18 +37,17 @@ var (
 )
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "opencode-event" {
-		os.Exit(runOpenCodeEvent(os.Args[2:], os.Stdin, os.Stdout))
+	if len(os.Args) > 1 && (os.Args[1] == "internal-linux-callback" || os.Args[1] == "setup-linux-callback") {
+		os.Exit(linuxCallbackMain(os.Args[1], os.Args[2:]))
 	}
-	if len(os.Args) > 1 && os.Args[1] == "setup-opencode" {
-		os.Exit(openCodeSetupMain(os.Args[2:]))
+	if len(os.Args) > 1 && os.Args[1] == "opencode-runtime-profile" {
+		os.Exit(runOpenCodeRuntimeProfile(os.Args[2:], os.Stdin, os.Stdout))
 	}
-	if handled, code := dispatchManagedStdio(os.Args[1:], os.Stderr); handled {
-		os.Exit(code)
+	if len(os.Args) > 1 && os.Args[1] == "opencode-clock" {
+		os.Exit(runOpenCodeClock(os.Args[2:], os.Stdout))
 	}
-
-	if len(os.Args) > 1 && (os.Args[1] == "portable-launch" || os.Args[1] == "portable-primary") {
-		os.Exit(agentPortableMain(os.Args[1], os.Args[2:]))
+	if dispatchEarlyCommand() {
+		return
 	}
 
 	if len(os.Args) > 1 && (os.Args[1] == "portable-install" || os.Args[1] == "portable-remove") {
@@ -86,6 +87,11 @@ func main() {
 		os.Exit(configCommand(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
 	case "internal-writer-protocol":
 		fmt.Println(installruntime.WriterProtocolMarker)
+		// Keep legacy output and retain every supported declaration in packaged bytes.
+		if len(os.Args) == 3 && os.Args[2] == "--all" {
+			fmt.Println(installruntime.LocalWriterProtocolMarker)
+			fmt.Println(installruntime.OpenCodeWriterProtocolMarker)
+		}
 	case "internal-install-runtime":
 		if err := installRuntime(os.Args[2:], os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -131,6 +137,50 @@ func main() {
 		printUsage()
 		os.Exit(1)
 	}
+}
+
+// dispatchEarlyCommand preserves the observation routes before global logging.
+func dispatchEarlyCommand() bool {
+	if len(os.Args) > 1 && os.Args[1] == "cursor-event" {
+		os.Exit(runCursorEvent(os.Args[2:], os.Stdin, os.Stdout))
+	}
+
+	if len(os.Args) > 1 && os.Args[1] == "copilot-vscode-event" {
+		os.Exit(runCopilotVSCodeEvent(os.Args[2:], os.Stdin, os.Stdout))
+	}
+
+	if len(os.Args) > 1 && os.Args[1] == "licenses" {
+		if len(os.Args) != 2 {
+			fmt.Fprintln(os.Stderr, "Usage: claude-notifications licenses")
+			os.Exit(2)
+		}
+		fmt.Print(thirdpartynotices.Text())
+		return true
+	}
+	if len(os.Args) > 1 && os.Args[1] == "gemini-event" {
+		os.Exit(runGeminiEvent(os.Args[2:], os.Stdin, os.Stdout))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "setup-gemini" {
+		os.Exit(geminiSetupMain(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "setup-products" {
+		os.Exit(setupProductsMain(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "opencode-event" {
+		os.Exit(runOpenCodeEvent(os.Args[2:], os.Stdin, os.Stdout))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "setup-opencode" {
+		os.Exit(openCodeSetupMain(os.Args[2:]))
+	}
+	if handled, code := dispatchManagedStdio(os.Args[1:], os.Stderr); handled {
+		os.Exit(code)
+	}
+
+	if len(os.Args) > 1 && (os.Args[1] == "portable-launch" || os.Args[1] == "portable-primary") {
+		os.Exit(agentPortableMain(os.Args[1], os.Args[2:]))
+	}
+
+	return false
 }
 
 type hookSettings struct {
@@ -448,7 +498,7 @@ func handleHook(hookEvent string) {
 	defer func() { _ = logging.Close() }()
 
 	// Create handler
-	handler, err := hooks.NewHandler(pluginRoot)
+	handler, err := hooks.NewHandlerWithClaudeSource(pluginRoot, claudesource.Source{})
 	if err != nil {
 		errorhandler.HandleCriticalError(err, "Failed to create handler")
 		os.Exit(1)
@@ -778,7 +828,7 @@ func parseFocusWindowOptions(args []string) (notifier.FocusWindowOptions, error)
 }
 
 func printUsage() {
-	fmt.Println("agent-notifications - Smart notifications for Claude Code and Codex")
+	fmt.Println("agent-notifications - Smart notifications for Claude and Codex")
 	fmt.Println()
 	fmt.Printf("Version: %s\n", version)
 	fmt.Println()
@@ -798,7 +848,7 @@ func printUsage() {
 	fmt.Println("  agent-notifications help")
 	fmt.Println()
 	fmt.Println("Commands:")
-	fmt.Println("  handle-hook <HookName>  Handle a Claude Code hook event")
+	fmt.Println("  handle-hook <HookName>  Handle a Claude hook event")
 	fmt.Println("                          HookName: PreToolUse, Stop, SubagentStop, Notification")
 	fmt.Println("  daemon                  Run the notification daemon (Linux only)")
 	fmt.Println("                          For click-to-focus support on desktop notifications")
@@ -812,9 +862,12 @@ func printUsage() {
 	fmt.Println("                          [--print] [--dry-run] [--codex-home <dir>] [--plugin-root <dir>]")
 	fmt.Println("                          [--agent-notify|--skip-agent-notify] [--navigation none]")
 	fmt.Println("                          [--allow-unknown-caller true|false --allow-caller-asserted true|false]")
+	fmt.Println("  setup-gemini            Install/update/remove/inspect/recover Gemini user hooks and channel consent")
+	fmt.Println("  setup-products          Select Claude/Codex/OpenCode/Gemini through the setup terminal")
 	fmt.Println("  setup-notifications     Direct MCP configure/status and setup-notifications wizard")
 	fmt.Println("  config                  Shared configuration path/inspect/init/edit/preflight-update")
 	fmt.Println("  version                 Show version information")
+	fmt.Println("  licenses                Print terminal dependency copyright and license notices")
 	fmt.Println("  help                    Show this help message")
 	fmt.Println()
 	fmt.Println("Examples:")

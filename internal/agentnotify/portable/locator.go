@@ -29,8 +29,10 @@ var errExists = errors.New("portable_locator_exists")
 type Integration string
 
 const (
-	Codex  Integration = "codex"
-	Claude Integration = "claude"
+	Cursor        Integration = "cursor"
+	Codex         Integration = "codex"
+	Claude        Integration = "claude"
+	CopilotVSCode Integration = "copilot-vscode"
 )
 
 // Binding is immutable consumer identity. Generation is deliberately excluded:
@@ -85,7 +87,7 @@ func primaryPath(root, primary string) string {
 // commit under the component lock/CAS before publishing locator bytes. Calling
 // this pure function does not establish UAP receipt ownership or authorize setup.
 func (b Binding) Registration() (string, installruntime.Consumer, []byte, error) {
-	if b.Version != 1 || (b.Integration != Codex && b.Integration != Claude) || b.Owner != "existing-installer" {
+	if b.Version != 1 || (b.Integration != Codex && b.Integration != Claude && b.Integration != CopilotVSCode && b.Integration != Cursor) || b.Owner != "existing-installer" {
 		return "", installruntime.Consumer{}, nil, ErrInvalid
 	}
 	for _, s := range []string{b.InstallationID, b.BindingID, b.ScopeID, b.ComponentID} {
@@ -285,6 +287,33 @@ func ExactLocator(b Binding) (bool, error) {
 	return true, nil
 }
 
+// ReadCursorBinding reads only the exact identity from an explicit private
+// locator. It grants no installed authorization or runtime preparation. Callers
+// must still check Binding.CheckSnapshot and the qualified CursorGate later.
+func ReadCursorBinding(selector string) (Binding, error) {
+	if !filepath.IsAbs(selector) || filepath.Clean(selector) != selector {
+		return Binding{}, ErrInvalid
+	}
+	dataRoot, name := filepath.Dir(selector), filepath.Base(selector)
+	raw, err := readPrivate(dataRoot, name)
+	if err != nil {
+		return Binding{}, ErrInvalid
+	}
+	b, err := decode(raw)
+	if err != nil || b.Integration != Cursor || b.DataRoot != dataRoot {
+		return Binding{}, ErrInvalid
+	}
+	wantName, err := b.Filename()
+	if err != nil || wantName != name {
+		return Binding{}, ErrInvalid
+	}
+	_, _, canonical, err := b.Registration()
+	if err != nil || !bytes.Equal(raw, canonical) {
+		return Binding{}, ErrInvalid
+	}
+	return b, nil
+}
+
 // ReadLocatorForRecovery reads a private locator without requiring its kernel
 // consumer. Only setup may use this after a confirmed uninstall revoked that
 // consumer. The selector must still name the canonical binding bytes.
@@ -413,7 +442,7 @@ func Acquire(ctx context.Context, data, name string) (*Lease, error) {
 // consumer on every policy read. Revocation does not require deleting shared data.
 func (b Binding) CheckSnapshot(snapshot installruntime.InstalledSnapshot) error {
 	ledger := snapshot.Ledger
-	if snapshot.Recovery || ledger.ID != b.ComponentID || ledger.Owner != b.Owner || !samePhysicalPath(ledger.RuntimeRoot, b.RuntimeRoot) || ledger.WriterFloor > installruntime.ReservationWriterFloor || ledger.DecoderFloor > 1 {
+	if snapshot.Recovery || ledger.ID != b.ComponentID || ledger.Owner != b.Owner || !samePhysicalPath(ledger.RuntimeRoot, b.RuntimeRoot) || ledger.WriterFloor > installruntime.SupportedWriterFloor || ledger.DecoderFloor > 1 {
 		return ErrInvalid
 	}
 	key, want, _, err := b.Registration()

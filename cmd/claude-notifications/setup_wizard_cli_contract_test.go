@@ -185,7 +185,7 @@ func TestSetupWizardInspectReportsDiscoveredMCP(t *testing.T) {
 	if code := executeSetupWizardWith(ctx, flags, &out, io.Discard, strings.NewReader(""), false); code != 0 {
 		t.Fatalf("inspect text: %d %s", code, out.String())
 	}
-	if !strings.Contains(out.String(), "mcp="+mcp) {
+	if !strings.Contains(out.String(), "MCP config: "+mcp) {
 		t.Fatalf("inspect text omitted mcp: %s", out.String())
 	}
 }
@@ -197,7 +197,7 @@ func TestSetupWizardReportsDataRetained(t *testing.T) {
 		InstallationID: "00000000-0000-4000-8000-000000000099",
 		Targets:        []setupwizard.TargetResult{{Client: "codex", Unit: "agent-notify", Outcome: "absent"}},
 	}
-	if code := writeSetupWizardResult(&out, false, result, nil); code != 0 || !strings.Contains(out.String(), "data_retained=true") || !strings.Contains(out.String(), "installation-id=00000000-0000-4000-8000-000000000099") {
+	if code := writeSetupWizardResult(&out, false, result, nil); code != 0 || !strings.Contains(out.String(), "Settings and notification data were retained.") || strings.Contains(out.String(), "installation-id=") {
 		t.Fatalf("text: %d %s", code, out.String())
 	}
 	out.Reset()
@@ -270,7 +270,7 @@ func TestSetupWizardTTYShowsDiscoverCapabilities(t *testing.T) {
 	if code := executeSetupWizardWith(ctx, []string{"--control-root", root}, &out, io.Discard, strings.NewReader("\n"), true); code != 0 {
 		t.Fatalf("tty discover cancel: %d %s", code, out.String())
 	}
-	if !strings.Contains(out.String(), "Claude Code (executable not found)") || !strings.Contains(out.String(), "Codex (executable present)") {
+	if !strings.Contains(out.String(), "Claude (executable not found)") || !strings.Contains(out.String(), "Codex (executable present)") {
 		t.Fatalf("discover labels: %s", out.String())
 	}
 }

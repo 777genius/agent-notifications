@@ -59,6 +59,7 @@ const (
 )
 
 type Request struct {
+	Renderer                                  BundleRenderer
 	Action                                    Action
 	ControlRoot, RuntimeRoot, BinarySource    string
 	NativeSource                              string
@@ -132,14 +133,27 @@ func Apply(ctx context.Context, r Request) error {
 	}
 	binary := filepath.Join(r.RuntimeRoot, p.binary)
 	var bundle []byte
+	var registration installruntime.OpenCodeRegistration
 	if r.Action != Remove {
 		if r.BinarySource == "" || !filepath.IsAbs(r.BinarySource) {
 			return errors.New("absolute --binary source required")
 		}
-		bundle, err = opencodeplugin.Render(binary, root)
+		registration, err = preparedRegistration(previous.OpenCode)
 		if err != nil {
 			return err
 		}
+		if r.Renderer != nil {
+			bundle, err = r.Renderer.RenderRegistration(binary, root, registration.Origin)
+			registration.OriginBound = true
+		} else {
+			bundle, err = opencodeplugin.Render(binary, root)
+			registration.OriginBound = false
+		}
+		if err != nil {
+			return err
+		}
+		sum := sha256.Sum256(bundle)
+		registration.BundleSHA256 = hex.EncodeToString(sum[:])
 	} else {
 		// The stored registration remains authoritative when the caller's XDG
 		// environment changed since setup. It is never guessed for removal.
@@ -153,7 +167,7 @@ func Apply(ctx context.Context, r Request) error {
 		return errors.New("OpenCode config root changed; use the original setup environment")
 	}
 	if r.Action == Remove {
-		return remove(ctx, r, ledger, plugin.Target)
+		return remove(ctx, r, plugin.Target)
 	}
 	if plugin.Action == uap.Conflict {
 		return fmt.Errorf("OpenCode plugin conflict: %s", plugin.ConflictReason)
@@ -235,7 +249,7 @@ func Apply(ctx context.Context, r Request) error {
 	gen := ledger.Generation
 	_, err = installruntime.Commit(ctx, installruntime.Request{
 		ControlRoot: root, Owner: "existing-installer", RuntimeRoot: r.RuntimeRoot,
-		ConsumerID: consumerID, Consumer: installruntime.Consumer{Registration: plugin.Target, Commands: []string{binary, "opencode-event", "--protocol", "1"}},
+		ConsumerID: consumerID, Consumer: installruntime.Consumer{Registration: plugin.Target, Commands: []string{binary, "opencode-event", "--protocol", "1"}, OpenCode: &registration},
 		ExpectedGeneration: &gen, ExpectedPolicy: expectedPolicy, Files: files, Native: native,
 	})
 	if err != nil {
@@ -251,8 +265,11 @@ func Apply(ctx context.Context, r Request) error {
 
 func plan(r Request, ledger installruntime.Ledger, desired []byte) (uap.Placement, installruntime.Identity, error) {
 	digest := sha256.Sum256(desired)
-	base, err := uap.Plan(uap.Input{HomeDir: r.HomeDir, XDGConfigHome: r.XDGConfigHome, Override: r.OpenCodeConfigDir,
-		FileName: pluginName, DesiredSHA256: hex.EncodeToString(digest[:])})
+	input, err := placementInput(r, ledger, hex.EncodeToString(digest[:]))
+	if err != nil {
+		return uap.Placement{}, installruntime.Identity{}, err
+	}
+	base, err := uap.Plan(input)
 	if err != nil {
 		return base, installruntime.Identity{}, err
 	}
@@ -274,8 +291,8 @@ func plan(r Request, ledger installruntime.Ledger, desired []byte) (uap.Placemen
 	if claim, ok := installruntime.OwnedFile(ledger, base.Target); ok {
 		owned = claim.SHA256
 	}
-	placement, err := uap.Plan(uap.Input{HomeDir: r.HomeDir, XDGConfigHome: r.XDGConfigHome, Override: r.OpenCodeConfigDir,
-		FileName: pluginName, DesiredSHA256: hex.EncodeToString(digest[:]), OwnedSHA256: owned, Existing: existing})
+	input.OwnedSHA256, input.Existing = owned, existing
+	placement, err := uap.Plan(input)
 	return placement, id, err
 }
 
@@ -345,19 +362,18 @@ func setChannels(ctx context.Context, root, runtimeRoot string, desktop, webhook
 	return err
 }
 
-func remove(ctx context.Context, r Request, ledger installruntime.Ledger, target string) error {
+func remove(ctx context.Context, r Request, target string) error {
 	if err := RevokeChannels(ctx, r.ControlRoot, r.RuntimeRoot); err != nil {
 		return err
 	}
-	// A shared runtime retains other consumers. Remove this plugin under CAS
-	// before deleting its registration; the last consumer is cleaned by kernel.
-	if len(ledger.Consumers) > 1 {
-		l, _, err := installruntime.ReadOwnership(r.ControlRoot)
-		if err != nil {
-			return err
-		}
+	// One teardown decision under the same kernel fence includes private purge.
+	files := []installruntime.File{}
+	l, _, err := installruntime.ReadOwnership(r.ControlRoot)
+	if err != nil {
+		return err
+	}
+	if len(l.Consumers) > 1 {
 		before, ok := installruntime.OwnedFile(l, target)
-		files := []installruntime.File{}
 		if ok {
 			files = append(files, installruntime.File{Path: target, Before: before, Remove: true})
 		} else if observed, err := installruntime.Fingerprint(target); err != nil || observed.Exists {
@@ -372,23 +388,10 @@ func remove(ctx context.Context, r Request, ledger installruntime.Ledger, target
 				files = append(files, *shortcut)
 			}
 		}
-		if len(files) != 0 {
-			gen := l.Generation
-			_, err = installruntime.Commit(ctx, installruntime.Request{ControlRoot: r.ControlRoot, RuntimeRoot: r.RuntimeRoot,
-				Owner: "existing-installer", ConsumerID: consumerID, RefreshOnly: true, ExpectedGeneration: &gen,
-				Files: files})
-			if err != nil {
-				return err
-			}
-		}
-	}
-	l, _, err := installruntime.ReadOwnership(r.ControlRoot)
-	if err != nil {
-		return err
 	}
 	gen := l.Generation
 	_, err = installruntime.Commit(ctx, installruntime.Request{ControlRoot: r.ControlRoot, RuntimeRoot: r.RuntimeRoot,
-		Owner: "existing-installer", ConsumerID: consumerID, RemoveConsumer: true, ExpectedGeneration: &gen})
+		Owner: "existing-installer", ConsumerID: consumerID, RemoveConsumer: true, ExpectedGeneration: &gen, Files: files})
 	return err
 }
 
@@ -445,6 +448,11 @@ func (g CurrentGate) Channels(ctx context.Context) (bool, bool) {
 // callback after the caller revalidates that snapshot under the component lock.
 func ChannelsFromSnapshot(s installruntime.PolicySnapshot, executable, goos, goarch string) (bool, bool) {
 	if !RegisteredFromSnapshot(s, executable, goos, goarch) {
+		return false, false
+	}
+	c := s.Installation.Ledger.Consumers[consumerID]
+	id, owned := installruntime.OwnedFile(s.Installation.Ledger, c.Registration)
+	if c.OpenCode == nil || !c.OpenCode.Valid() || !c.OpenCode.OriginBound || !owned || id.SHA256 != c.OpenCode.BundleSHA256 {
 		return false, false
 	}
 	return policyChannels(s.Fields)

@@ -27,7 +27,7 @@ func TestFillInteractiveSelectsBothAndConfirms(t *testing.T) {
 	if got.Hooks == nil || !*got.Hooks || got.AgentNotify == nil || !*got.AgentNotify {
 		t.Fatalf("units: hooks=%v notify=%v", got.Hooks, got.AgentNotify)
 	}
-	if !strings.Contains(out.String(), "Claude Code") || strings.Contains(out.String(), "[y/N]") {
+	if !strings.Contains(out.String(), "Claude") || strings.Contains(out.String(), "[y/N]") {
 		t.Fatalf("prompt text: %s", out.String())
 	}
 	if !strings.Contains(out.String(), "Units:") || !strings.Contains(out.String(), "Agent-initiated notify") {
@@ -454,7 +454,7 @@ func TestFillInteractiveShowsDiscoverCapabilities(t *testing.T) {
 	if err != nil || strings.Join(got.Agents, ",") != "claude" {
 		t.Fatalf("discover picker: %+v %v", got, err)
 	}
-	if !strings.Contains(out.String(), "Claude Code (executable present, installed)") || !strings.Contains(out.String(), "Codex (executable not found)") {
+	if !strings.Contains(out.String(), "Claude (executable present, installed)") || !strings.Contains(out.String(), "Codex (executable not found)") {
 		t.Fatalf("capability labels: %s", out.String())
 	}
 }
@@ -480,5 +480,58 @@ func TestFillInteractiveSanitizesDiscoverProfile(t *testing.T) {
 	}
 	if !strings.Contains(got, "profile=/tmp/claude 2) Injected choice") {
 		t.Fatalf("sanitized profile: %s", got)
+	}
+}
+
+// Red regression: the ready plan puts two long authority paths in a clipped
+// Title, loses the differing suffix/identity, or hides a preserved client unit.
+func TestWizardConfirmationRowsKeepFinalScopes(t *testing.T) {
+	prefix := "/TEST/" + strings.Repeat("long-segment/", 270)
+	off, on := false, true
+	plan := SetupPlan{Ready: true, Request: Request{Action: ActionRepair, Agents: []string{"claude", "codex"},
+		ClaudeConfig: prefix + "CLAUDE-END", CodexHome: prefix + "CODEX-END", ClaudeHooks: &off, CodexHooks: &on,
+		ClaudeAgentNotify: &on, CodexAgentNotify: &off, BindingIDs: map[string]string{"claude": "FINAL-BINDING"}, InstallationID: "FINAL-INSTALLATION",
+		MCPConfig: map[string]string{"claude": "/TEST/control/\x1b]0;hostile\a\u202e/authority"}},
+		Result: Result{NextActions: []NextAction{{Kind: "data_compatibility", Reason: "retained data warning"}}}}
+	rows, err := ConfirmationRows(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := strings.Join(rows, "\n")
+	for _, want := range []string{"CLAUDE-END", "CODEX-END", "FINAL-BINDING", "FINAL-INSTALLATION", "claude: hooks=false MCP+skill=true", "codex: hooks=true MCP+skill=false", "retained data warning", `\x1b`, `\u202e`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("summary omitted %q", want)
+		}
+	}
+	if strings.ContainsAny(text, "\x1b\a\u202e") {
+		t.Fatal("summary emitted raw terminal control authority")
+	}
+	for _, row := range rows {
+		if len(row) > 4096 {
+			t.Fatal("row exceeds shared summary budget")
+		}
+	}
+	plan.Ready = false
+	if _, err := ConfirmationRows(plan); err == nil {
+		t.Fatal("nonready plan could ask for consent")
+	}
+}
+
+// Red regression: oversized authority is silently truncated, enabling consent
+// to a displayed prefix that names a different destination from the writer.
+func TestWizardConfirmationRowsRefuseOversizedAuthority(t *testing.T) {
+	if _, err := EscapeConfirmationRows([]string{strings.Repeat("x", 65536)}); err == nil {
+		t.Fatal("aggregate budget ignored")
+	}
+	rows := make([]string, 129)
+	if _, err := EscapeConfirmationRows(rows); err == nil {
+		t.Fatal("row budget ignored")
+	}
+	got, err := EscapeConfirmationRows([]string{"/TEST/invalid-\xff-\x00-end"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(got, ""), `\xff-\x00-end`) {
+		t.Fatalf("Unix path bytes lost: %q", got)
 	}
 }

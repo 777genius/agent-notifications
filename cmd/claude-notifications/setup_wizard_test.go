@@ -6,14 +6,17 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -613,7 +616,7 @@ func TestSetupWizardTTYMixedAddKeepsPerClientUnits(t *testing.T) {
 		t.Fatalf("uninstall keep mutated mixed units: %+v", view.Targets)
 	}
 	out.Reset()
-	if code := executeSetupWizardWith(ctx, shared, &out, io.Discard, strings.NewReader("2\n1\ny\n"), true); code != 0 || !strings.Contains(out.String(), "completed") {
+	if code := executeSetupWizardWith(ctx, shared, &out, io.Discard, strings.NewReader("2\n1\ny\n"), true); code != 0 || !strings.Contains(out.String(), "Installation complete") {
 		t.Fatalf("mixed tty keep run: %d %s", code, out.String())
 	}
 	out.Reset()
@@ -682,7 +685,7 @@ func TestSetupWizardTTYAddSecondClientKeepProposesDefaultsE2E(t *testing.T) {
 		t.Fatalf("add keep still planned bound claude: %s", out.String())
 	}
 	out.Reset()
-	if code := executeSetupWizardWith(ctx, both, &out, io.Discard, strings.NewReader("2\n1\ny\n"), true); code != 0 || !strings.Contains(out.String(), "completed") {
+	if code := executeSetupWizardWith(ctx, both, &out, io.Discard, strings.NewReader("2\n1\ny\n"), true); code != 0 || !strings.Contains(out.String(), "Installation complete") {
 		t.Fatalf("add keep run: %d %s", code, out.String())
 	}
 	out.Reset()
@@ -811,7 +814,7 @@ func TestSetupWizardTTYUpdateRepairOmittedKeepsMixedE2E(t *testing.T) {
 		t.Fatalf("mixed install result: %+v", got)
 	}
 	out.Reset()
-	if code := executeSetupWizardWith(ctx, shared, &out, io.Discard, strings.NewReader("4\ny\n"), true); code != 0 || !strings.Contains(out.String(), "completed") {
+	if code := executeSetupWizardWith(ctx, shared, &out, io.Discard, strings.NewReader("4\ny\n"), true); code != 0 || !strings.Contains(out.String(), "Update complete") {
 		t.Fatalf("tty omitted update: %d %s", code, out.String())
 	}
 	if strings.Contains(out.String(), "Units: 1) Hooks") || strings.Contains(out.String(), "differ per client") {
@@ -827,7 +830,7 @@ func TestSetupWizardTTYUpdateRepairOmittedKeepsMixedE2E(t *testing.T) {
 	}
 	assertMixed("tty update", decodeWizardJSON(t, out))
 	out.Reset()
-	if code := executeSetupWizardWith(ctx, shared, &out, io.Discard, strings.NewReader("5\ny\n"), true); code != 0 || !strings.Contains(out.String(), "completed") {
+	if code := executeSetupWizardWith(ctx, shared, &out, io.Discard, strings.NewReader("5\ny\n"), true); code != 0 || !strings.Contains(out.String(), "Repair complete") {
 		t.Fatalf("tty omitted repair: %d %s", code, out.String())
 	}
 	if strings.Contains(out.String(), "Units: 1) Hooks") || strings.Contains(out.String(), "differ per client") {
@@ -1187,7 +1190,7 @@ func TestSetupWizardTTYExistingOmitsActionE2E(t *testing.T) {
 	if !strings.Contains(out.String(), "Existing agent-notify") {
 		t.Fatalf("existing action not offered: %s", out.String())
 	}
-	if !strings.Contains(out.String(), "codex agent-notify: installed") {
+	if !strings.Contains(out.String(), "Codex - notification tool and skill: installed") {
 		t.Fatalf("existing inspect missed notify: %s", out.String())
 	}
 	out.Reset()
@@ -1324,7 +1327,7 @@ func TestSetupWizardSecondClientDifferentDigestE2E(t *testing.T) {
 	}
 	other := filepath.Join(env.root, "other-package")
 	writeWizardPackage(t, other, env.probe)
-	if err := os.WriteFile(filepath.Join(other, "skills", "agent-notify", "SKILL.md"), []byte("---\nname: agent-notify\ndescription: Revised\n---\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(other, "skills", "agent-notifications", "SKILL.md"), []byte("---\nname: agent-notifications\ndescription: Revised\n---\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()
@@ -1428,7 +1431,7 @@ func TestSetupWizardTwoPhaseUpdateThenAddE2E(t *testing.T) {
 	}
 	other := filepath.Join(env.root, "other-package")
 	writeWizardPackage(t, other, env.probe)
-	if err := os.WriteFile(filepath.Join(other, "skills", "agent-notify", "SKILL.md"), []byte("---\nname: agent-notify\ndescription: Revised\n---\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(other, "skills", "agent-notifications", "SKILL.md"), []byte("---\nname: agent-notifications\ndescription: Revised\n---\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()
@@ -2697,7 +2700,7 @@ func TestSetupWizardAmbiguousInstallationsConflictE2E(t *testing.T) {
 	}
 	other := filepath.Join(env.root, "other-package")
 	writeWizardPackage(t, other, env.probe)
-	if err := os.WriteFile(filepath.Join(other, "skills", "agent-notify", "SKILL.md"), []byte("---\nname: agent-notify\ndescription: Other installation\n---\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(other, "skills", "agent-notifications", "SKILL.md"), []byte("---\nname: agent-notifications\ndescription: Other installation\n---\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()
@@ -3302,9 +3305,22 @@ func TestSetupWizardResumeOmittedUninstallFromPendingE2E(t *testing.T) {
 	}
 }
 
-func buildWizardProbe(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
+// Cache only immutable fixture bytes; every test still owns a distinct executable.
+type wizardProbeImage struct {
+	data   string
+	sha256 [32]byte
+}
+
+func compileWizardProbe(t *testing.T) (image wizardProbeImage, err error) {
+	dir, err := os.MkdirTemp("", "TEST-wizard-probe-build-")
+	if err != nil {
+		return image, err
+	}
+	defer func() {
+		if cleanupErr := os.RemoveAll(dir); err == nil && cleanupErr != nil {
+			image, err = wizardProbeImage{}, cleanupErr
+		}
+	}()
 	src := filepath.Join(dir, "probe.go")
 	if err := os.WriteFile(src, []byte(`package main
 import (
@@ -3347,13 +3363,45 @@ func main() {
 	json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true})
 }
 `), 0600); err != nil {
-		t.Fatal(err)
+		return image, err
 	}
 	out := filepath.Join(dir, "probe")
-	cmd := exec.Command("go", "build", "-o", out, src)
-	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "build", "-p", "2", "-buildvcs=false", "-o", out, src)
+	cmd.Env = append(testenv.Build(t, filepath.Join(dir, "build-home")), "GOTOOLCHAIN=local")
 	if body, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build probe: %s %v", body, err)
+		return image, fmt.Errorf("build probe: %s: %w", body, err)
+	}
+	body, err := os.ReadFile(out)
+	if err != nil {
+		return image, err
+	}
+	return wizardProbeImage{data: string(body), sha256: sha256.Sum256(body)}, nil
+}
+
+var wizardProbeBuild struct {
+	once  sync.Once
+	image wizardProbeImage
+	err   error
+}
+
+func buildWizardProbe(t *testing.T) string {
+	t.Helper()
+	wizardProbeBuild.once.Do(func() {
+		wizardProbeBuild.image, wizardProbeBuild.err = compileWizardProbe(t)
+	})
+	image, err := wizardProbeBuild.image, wizardProbeBuild.err
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "probe")
+	if err := os.WriteFile(out, []byte(image.data), 0700); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(out)
+	if err != nil || sha256.Sum256(body) != image.sha256 {
+		t.Fatal("materialized wizard probe differs from immutable fixture", err)
 	}
 	return out
 }
@@ -3365,10 +3413,10 @@ func writeWizardPackage(t *testing.T, root, probe string) {
 		t.Fatal(err)
 	}
 	files := map[string][]byte{
-		"plugin.json":                  []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.0"}`),
-		"mcp.json":                     []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"agent-notify":{"type":"stdio","command":"./bin/probe","args":[],"env":{}}}}`),
-		"skills/agent-notify/SKILL.md": []byte("---\nname: agent-notify\ndescription: Wizard CLI e2e\n---\n"),
-		"bin/probe":                    body,
+		"plugin.json":                         []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.0"}`),
+		"mcp.json":                            []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"agent-notify":{"type":"stdio","command":"./bin/probe","args":[],"env":{}}}}`),
+		"skills/agent-notifications/SKILL.md": []byte("---\nname: agent-notifications\ndescription: Wizard CLI e2e\n---\n"),
+		"bin/probe":                           body,
 	}
 	for rel, data := range files {
 		path := filepath.Join(root, rel)
@@ -3666,4 +3714,30 @@ func wizardCLINotifyDigest(got setupwizard.Result, client string) string {
 		}
 	}
 	return ""
+}
+
+func TestCursorQualifiedMountsRefusesStackedAncestors(t *testing.T) {
+	root := "10 1 8:1 / / rw - ext4 /dev/TEST rw\n"
+	profile := "20 10 8:2 / /TEST/profile rw - ext4 /dev/TEST2 rw\n"
+	for _, tc := range []struct {
+		name, mounts string
+		refuse       bool
+	}{
+		{"unique-ext4", root + profile, false},
+		{"non-ext4", root + strings.Replace(profile, "ext4", "tmpfs", 1), true},
+		{"profile-ext4-first", root + profile + "21 20 0:1 / /TEST/profile rw - tmpfs tmpfs rw\n", true},
+		{"profile-tmpfs-first", root + "21 20 0:1 / /TEST/profile rw - tmpfs tmpfs rw\n" + profile, true},
+		{"root-ext4-first", root + "11 10 0:1 / / rw - tmpfs tmpfs rw\n" + profile, true},
+		{"root-tmpfs-first", "11 10 0:1 / / rw - tmpfs tmpfs rw\n" + root + profile, true},
+		{"same-kind-stacked", root + profile + "21 20 8:3 / /TEST/profile rw - ext4 /dev/TEST3 rw\n", true},
+		{"ambiguous-parent-with-unique-deeper", root + "30 10 8:2 / /TEST rw - ext4 /dev/TEST2 rw\n31 30 0:1 / /TEST rw - tmpfs tmpfs rw\n" + profile, true},
+		{"unrelated-stacked", root + profile + "30 10 8:2 / /other rw - ext4 /dev/TEST2 rw\n31 30 0:1 / /other rw - tmpfs tmpfs rw\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := cursorQualifiedMounts("/TEST/profile/child", tc.mounts)
+			if tc.refuse && !errors.Is(err, setupwizard.ErrRefused) || !tc.refuse && err != nil {
+				t.Fatalf("mount metadata decision: %v; refuse=%v", err, tc.refuse)
+			}
+		})
+	}
 }

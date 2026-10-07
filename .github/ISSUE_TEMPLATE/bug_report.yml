@@ -47,7 +47,7 @@ body:
     id: terminal
     attributes:
       label: Terminal
-      description: What terminal are you using Claude Code in?
+      description: What terminal are you using Claude in?
       options:
         - VS Code (integrated terminal)
         - iTerm2
@@ -138,7 +138,7 @@ body:
       label: Steps to reproduce
       description: How can we reproduce this issue?
       placeholder: |
-        1. Open terminal and start Claude Code
+        1. Open terminal and start Claude
         2. Ask Claude to do something that takes a while
         3. Wait for task to complete
         4. No notification appears

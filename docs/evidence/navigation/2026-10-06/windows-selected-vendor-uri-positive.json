@@ -1,0 +1,219 @@
+{
+  "status": "accepted_bounded_package_selected_handoff",
+  "scope": "One disposable Windows CI current-user pinned vendor package installation, targeted synthetic URI handoff and package removal",
+  "officialEvidence": {
+    "repository": "777genius/agent-notifications",
+    "runId": 37517490407,
+    "runAttempt": 1,
+    "runURL": "https://github.com/777genius/agent-notifications/actions/runs/37517490407",
+    "jobId": 112454056504,
+    "jobURL": "https://github.com/777genius/agent-notifications/actions/runs/37517490407/job/112454056504",
+    "runConclusion": "success",
+    "event": "workflow_dispatch",
+    "sourceSHA": "48198af256ebd4bfcf152ce8ec22d625f87a5a4b",
+    "artifactId": 11438022894,
+    "artifactName": "navigation-windows-vendor-metadata-37517490407-1",
+    "artifactAPIURL": "https://api.github.com/repos/777genius/agent-notifications/actions/artifacts/11438022894",
+    "artifactZIPBytes": 257312,
+    "artifactZIPSHA256": "80c5db92b7ee07632d332d6a72ca56a8b5c547f2a7b9592d041976207226ee99",
+    "validatedFixedMemberCount": 19,
+    "imageVersion": "20261004.176.1",
+    "nonce": "cd32083b-5318-4b0f-9809-8ef537eadb70"
+  },
+  "sourceSHA256": {
+    "tests/integration/navigation_windows_vendor_metadata.ts": "df49e192d21ade73d09897572ee373248bfd493a6cd23eaf468bf5319fa2c3ef",
+    "tests/integration/navigation_windows_native_probe.cpp": "96b1945f139b84866007d2abd0457e33f31f8c07ddcec53c6b20f9e04b0fe56c"
+  },
+  "nativeSDKCompilation": {
+    "officialExactSourceStepSucceeded": true,
+    "targetArchitecture": "ARM64",
+    "languageStandard": "C++20",
+    "localCompilationPerformed": false
+  },
+  "selectedPackage": {
+    "name": "OpenAI.Codex",
+    "publisher": "CN=50BDFD77-8903-4850-9FFE-6E8522F64D5B",
+    "familyName": "OpenAI.Codex_2p2nqsd0c76g0",
+    "fullName": "OpenAI.Codex_26.930.7945.0_arm64__2p2nqsd0c76g0",
+    "version": "26.930.7945.0",
+    "architecture": 12
+  },
+  "signature": {
+    "signtoolPaAllSucceeded": true,
+    "collectedExitCode": 0,
+    "signtoolSHA256": "a97d9284634d5b8a10765f46a2e7085f23c7ceb4bc29181a956c3aa45d520e23",
+    "warnings": 0,
+    "errors": 0,
+    "scope": "Actual CI signtool /pa /all observation bound to controller archive custody; not independently reverified from retained MSIX"
+  },
+  "inputIntegrity": {
+    "packageBytes": 909238426,
+    "packageSHA256": "a208d373c7c84aa3e0452cd3dd8406a6794d8139ec1260c64a770c2a00fbeeb8",
+    "packageSHA256BeforeEffects": "a208d373c7c84aa3e0452cd3dd8406a6794d8139ec1260c64a770c2a00fbeeb8",
+    "packageSHA256AfterEffects": "a208d373c7c84aa3e0452cd3dd8406a6794d8139ec1260c64a770c2a00fbeeb8",
+    "packageHashAuthority": "Source-bound controller streaming-hash observations; MSIX not retained in artifact and not independently rehashed by reviewer",
+    "packageRetained": false,
+    "packageIndependentlyRehashed": false,
+    "probeSHA256": "fb21e686e3cc1a3c90ab37b41cbf1b98cc2074ada6bb8bfc8db8dcea13083f55",
+    "probeSHA256BeforeEffects": "fb21e686e3cc1a3c90ab37b41cbf1b98cc2074ada6bb8bfc8db8dcea13083f55",
+    "probeSHA256AfterEffects": "fb21e686e3cc1a3c90ab37b41cbf1b98cc2074ada6bb8bfc8db8dcea13083f55",
+    "probeArtifactSHA256IndependentlyVerified": true,
+    "probeExtractedOrExecutedByReviewer": false
+  },
+  "collectedActors": [
+    {
+      "phase": "signature",
+      "pid": 3624,
+      "exitCode": 0,
+      "signal": null,
+      "spawnError": null
+    },
+    {
+      "phase": "package-metadata",
+      "pid": 10360,
+      "exitCode": 0,
+      "signal": null,
+      "spawnError": null
+    },
+    {
+      "phase": "vendor-state-before",
+      "pid": 152,
+      "exitCode": 0,
+      "signal": null,
+      "spawnError": null
+    },
+    {
+      "phase": "vendor-install",
+      "pid": 9496,
+      "exitCode": 0,
+      "signal": null,
+      "spawnError": null
+    },
+    {
+      "phase": "vendor-state-after",
+      "pid": 8344,
+      "exitCode": 0,
+      "signal": null,
+      "spawnError": null
+    },
+    {
+      "phase": "vendor-query-thread",
+      "pid": 7404,
+      "exitCode": 0,
+      "signal": null,
+      "spawnError": null
+    },
+    {
+      "phase": "vendor-launch-thread",
+      "pid": 7600,
+      "exitCode": 0,
+      "signal": null,
+      "spawnError": null
+    },
+    {
+      "phase": "vendor-remove",
+      "pid": 7132,
+      "exitCode": 0,
+      "signal": null,
+      "spawnError": null
+    }
+  ],
+  "observedChain": {
+    "before": {
+      "pid": 152,
+      "currentUserFamilyCount": 0,
+      "exactFullName": false
+    },
+    "add": {
+      "pid": 9496,
+      "attempts": 1,
+      "operationCompleted": true,
+      "extendedError": 0,
+      "knownCompletionProofMatched": true
+    },
+    "after": {
+      "pid": 8344,
+      "currentUserFamilyCount": 1,
+      "exactFullName": true
+    },
+    "query": {
+      "pid": 7404,
+      "uriSupport": 0,
+      "available": true
+    },
+    "launch": {
+      "pid": 7600,
+      "prelaunchUriSupport": 0,
+      "attempts": 1,
+      "returned": true,
+      "handoffAccepted": true,
+      "targetApplicationPackageFamilyName": "OpenAI.Codex_2p2nqsd0c76g0",
+      "routeKind": "codex synthetic thread using fresh TEST nonce",
+      "launchIntentNonceAndThreadModeMatched": true,
+      "fallbackAllowed": false,
+      "retryAllowed": false
+    },
+    "remove": {
+      "pid": 7132,
+      "attempts": 1,
+      "operationCompleted": true,
+      "extendedError": 0,
+      "currentUserFamilyAbsent": true,
+      "cleanupVerified": true
+    }
+  },
+  "proofBinding": {
+    "custodyArchiveAndProbeHashesMatched": true,
+    "currentUserAbsenceBindingValidatedWithoutPublishingSID": true,
+    "installIntentCompletionAndRemoveIntentMatched": true,
+    "launchIntentMatchedSameCustodyAndThreadMode": true,
+    "allReportPIDNonceFamilyFullNameBindingsMatched": true
+  },
+  "rawArtifactSHA256": {
+    "vendor-evidence.json": "5c97dfb1c6fe0d951b3dc34c725ad977e7a9b4d7de13272e344bae00aa33eae2",
+    "package-metadata.json": "f7e14ada0418ff61ccc002275866dd08e48ed58b945b9774812d37a00c511209",
+    "vendor-manifest.xml": "6324900851e14fadc1e1168368d5203cbe0c6b222e472491977899016a045e6c",
+    "vendor-custody.proof": "2489a38ae30c73e3f959ff36ef67650c3dad93f4cfcb89d9739e72901f6b9492",
+    "vendor-before.json": "c9ee1d7a8fca0cc8c8189010aa4465e164c5597cbb8958616028b907f4f330a0",
+    "vendor-absent.proof": "8983444e307f242976b7c550ddda294695a3a355edee252aa139a80988cda5ad",
+    "vendor-install-result.json": "10cb073fb6400808c6433e0eb8ffb4a911d212783466d0c2e95372508d5f5181",
+    "vendor-install-intent.proof": "02cf6790954417750598a66c41656989194a7abea5ab32f7582ace8a1382b5f2",
+    "vendor-install-completed.proof": "02cf6790954417750598a66c41656989194a7abea5ab32f7582ace8a1382b5f2",
+    "vendor-after.json": "e037da874b7332a45492a86f1e90414706d29ac14c2e6e7eecc7551a1cb1c5cc",
+    "vendor-query-thread.json": "f90bb0450397eefeea33ffb8c4f67b6e4e103d7fd2ccb159b2fc50840f504811",
+    "vendor-query-thread-prelaunch.json": "0e3445f20dcaa75df2c73b15b9667dfc0b7d0929d716f158557a154a052009c9",
+    "vendor-launch.json": "bed30ef47447b3828a82106a9f092d9dfe717f40a596e63b40de54544b123d60",
+    "vendor-launch-intent.proof": "b051ea1f6467050cadd0bb1491757fd6d17229d7ba57ae8c6aee0e0f2de026d4",
+    "vendor-remove-result.json": "7f93a957fae7307f8b0c5b67500bf963392d52e610c1e5e8af75a3b6bcdddceb",
+    "vendor-removed.json": "491cfc6e304994523bb87ae4a12c4ac770478b180295e72efcea63dd860648ce",
+    "vendor-remove-intent.proof": "02cf6790954417750598a66c41656989194a7abea5ab32f7582ace8a1382b5f2"
+  },
+  "independentReview": {
+    "assertionsPassed": 259,
+    "failures": 0,
+    "reviewScope": "Official GH identity/digest, closed ZIP members, source bytes, raw projections, PID/nonce, proofs, single-effect sequence and qualification limits"
+  },
+  "qualification": {
+    "packageSelectedSyntheticHandoffAccepted": true,
+    "currentUserPackageRemovalVerified": true,
+    "allInvokedEffectActorsCollected": true,
+    "installOutcomeUnknown": false,
+    "launchOutcomeUnknown": false,
+    "removeOutcomeUnknown": false,
+    "showAttempts": 0,
+    "inputAttempted": false,
+    "nativeCallbackQualified": false,
+    "toastCallbackQualified": false,
+    "targetConfirmed": false,
+    "navigationQualified": false,
+    "selectedProcessOrWindowQualified": false,
+    "processQuiescenceQualified": false,
+    "fullP5Qualified": false
+  },
+  "limits": [
+    "LaunchUriAsync accepted the package-selected synthetic handoff; no visible window, authenticated chat or route completion was observed.",
+    "Current-user package absence after known terminal Remove does not establish all-process or OS quiescence.",
+    "Package hashes are controller observations; the public artifact excludes the MSIX. The probe binary was hashed only in ZIP memory by the reviewer.",
+    "Earlier metadata timeout and notification callback/UI-negative evidence remain negative and are not replayed or superseded by this handoff result."
+  ]
+}

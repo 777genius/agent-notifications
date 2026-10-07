@@ -1,0 +1,92 @@
+name: Gemini native G0 and production G5
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/gemini-native-e2e.yml'
+      - 'scripts/gemini-native-ci.py'
+      - 'tests/integration/gemini_native_e2e.py'
+      - 'tests/integration/gemini_native_pty.cjs'
+      - 'tests/integration/gemini_notifications_e2e.py'
+      - 'tests/integration/gemini-ui-contract.json'
+      - 'cmd/claude-notifications/**'
+      - 'internal/**'
+      - 'go.mod'
+      - 'go.sum'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  native-webhook:
+    name: Gemini ${{ matrix.platform }} ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+          - runner: windows-2025
+            platform: windows
+            arch: amd64
+          - runner: macos-15
+            platform: darwin
+            arch: arm64
+          - runner: macos-15-intel
+            platform: darwin
+            arch: amd64
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install Linux build dependency
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Pure runner checks
+        run: python -B scripts/gemini-native-ci.py --self-test
+      - name: Build actual artifacts and qualify native webhook events
+        # pwsh is also an explicit physical hook-shell input on Windows.
+        # Native child environments are constructed by G0, never inherited here.
+        shell: pwsh
+        env:
+          CANDIDATE_PLATFORM: ${{ matrix.platform }}
+          CANDIDATE_ARCH: ${{ matrix.arch }}
+          CANDIDATE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $hookShell = if ($IsWindows) { (Get-Command pwsh -CommandType Application | Select-Object -First 1).Source } else { (Get-Command bash -CommandType Application | Select-Object -First 1).Source }
+          $argsForCI = @('--trusted-github-runner', '--platform', $env:CANDIDATE_PLATFORM, '--arch', $env:CANDIDATE_ARCH, '--commit', $env:CANDIDATE_COMMIT, '--hook-shell', $hookShell)
+          if ($IsWindows) { $argsForCI += @('--system-root', $env:SystemRoot) }
+          python -B scripts/gemini-native-ci.py @argsForCI
+          exit $LASTEXITCODE
+      - name: Attach bounded evidence on pass or failure
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gemini-native-${{ matrix.platform }}-${{ matrix.arch }}
+          # Only the explicit evidence directory is uploaded, never the TEST lab.
+          path: ${{ runner.temp }}/gemini-native-ci-evidence/*
+          if-no-files-found: warn
+          retention-days: 14

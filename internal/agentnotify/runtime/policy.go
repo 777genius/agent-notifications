@@ -7,12 +7,15 @@ import (
 	"errors"
 	"io"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/777genius/agent-notifications/internal/agentnotify"
 	"github.com/777genius/agent-notifications/internal/agentnotify/journal"
+	"github.com/777genius/agent-notifications/internal/agentnotify/origin"
 	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/installruntime"
+	"github.com/777genius/agent-notifications/internal/notifier/nativeprotocol"
 	"github.com/777genius/agent-notifications/internal/strictjson"
 )
 
@@ -91,11 +94,14 @@ func (b *Backend) policy(s installruntime.PolicySnapshot) (agentnotify.Policy, e
 		if e != nil {
 			return p, e
 		}
-		for k, v := range map[string]any{"localRouting": &p.Route.LocalRouting, "allowUnknownCaller": &p.Route.AllowUnknownCaller, "allowCallerAsserted": &p.Route.AllowCallerAsserted, "applicationPath": &p.Route.ApplicationPath, "teamID": &p.Route.TeamID} {
+		for k, v := range map[string]any{"localRouting": &p.Route.LocalRouting, "allowUnknownCaller": &p.Route.AllowUnknownCaller, "allowCallerAsserted": &p.Route.AllowCallerAsserted, "applicationPath": &p.Route.ApplicationPath, "teamID": &p.Route.TeamID, "linuxCallbackSnapshot": &p.Route.Linux} {
 			if field(m, k, v, false) != nil {
 				return p, errConfig
 			}
 		}
+	}
+	if p.Route.LocalRouting {
+		p.Route.Platform = runtime.GOOS
 	}
 	if raw, ok := s.Fields["rates"]; ok {
 		m, e := object(raw)
@@ -133,15 +139,25 @@ func (b *Backend) policy(s installruntime.PolicySnapshot) (agentnotify.Policy, e
 // Status separates operator configuration from offline installed eligibility.
 // It never opens the journal/spool or invokes native capability/permission probes.
 type Status struct {
-	Configuration     string `json:"configuration"`
-	ExplicitIntent    bool   `json:"explicitIntent"`
-	DesktopEnabled    bool   `json:"desktopEnabled"`
-	OfflineCapability string `json:"offlineCapability"`
-	Permission        string `json:"permission"`
+	Configuration     string                       `json:"configuration"`
+	ExplicitIntent    bool                         `json:"explicitIntent"`
+	DesktopEnabled    bool                         `json:"desktopEnabled"`
+	OfflineCapability string                       `json:"offlineCapability"`
+	Permission        string                       `json:"permission"`
+	Navigation        agentnotify.NavigationStatus `json:"navigation"`
 }
 
 func (b *Backend) Status(ctx context.Context) Status {
-	out := Status{Configuration: "configuration_invalid", OfflineCapability: "unavailable", Permission: "not_checked"}
+	return b.readStatus(ctx, nil)
+}
+
+// StatusForOrigin resolves only the transport context of the current call.
+func (b *Backend) StatusForOrigin(ctx context.Context, o origin.Context) Status {
+	return b.readStatus(ctx, &o)
+}
+
+func (b *Backend) readStatus(ctx context.Context, o *origin.Context) Status {
+	out := Status{Configuration: "configuration_invalid", OfflineCapability: "unavailable", Permission: "not_checked", Navigation: agentnotify.NavigationStatus{Capability: "unavailable", Precision: "none", Reason: "configuration_invalid"}}
 	if ctx == nil {
 		return out
 	}
@@ -158,6 +174,7 @@ func (b *Backend) Status(ctx context.Context) Status {
 	if e != nil {
 		if errors.Is(e, agentnotify.ErrConfigurationRequired) {
 			out.Configuration = "configuration_required"
+			out.Navigation.Reason = out.Configuration
 		}
 		return out
 	}
@@ -171,5 +188,46 @@ func (b *Backend) Status(ctx context.Context) Status {
 	} else if s.Installation.Enabled && !s.Installation.Recovery && sessionDeliveryEligible(s.Installation.Ledger) {
 		out.OfflineCapability = "eligible"
 	}
+	out.Navigation = navigationStatus(out, p, o, runtime.GOOS)
 	return out
+}
+
+func navigationStatus(s Status, p agentnotify.Policy, o *origin.Context, platform string) agentnotify.NavigationStatus {
+	no := func(capability, reason string) agentnotify.NavigationStatus {
+		return agentnotify.NavigationStatus{Capability: capability, Precision: "none", Reason: reason}
+	}
+	if !s.ExplicitIntent {
+		return no("disabled", "notifications_disabled")
+	}
+	if !p.Delivery.DesktopEnabled {
+		return no("disabled", "desktop_disabled")
+	}
+	if !p.Delivery.ClickToFocus {
+		return no("disabled", "click_to_focus_disabled")
+	}
+	if (platform != "darwin" && platform != "linux") || s.OfflineCapability == "unsupported_platform" {
+		return no("unavailable", "unsupported_platform")
+	}
+	if s.OfflineCapability != "eligible" || !p.Delivery.ExplicitEnabled {
+		return no("unavailable", "installation_unavailable")
+	}
+	if o == nil {
+		return no("unavailable", "context_unavailable")
+	}
+	p.Route.Platform = platform
+	target := origin.ResolveCodex(*o, p.Route)
+	n := target.Navigation
+	if n.Capability != "available" {
+		return no(n.Capability, n.Reason)
+	}
+	if platform == "linux" {
+		if target.Desktop.Linux.SnapshotPath == "" {
+			return no("unavailable", "navigation_unavailable")
+		}
+		return agentnotify.NavigationStatus{Capability: "eligible", Precision: n.Precision, Scope: n.Scope, Reason: n.Reason}
+	}
+	if !nativeprotocol.ValidDesktopThreadTarget(target.Desktop.ThreadID, target.Desktop.ApplicationPath, target.Desktop.TeamID) {
+		return no("unavailable", "invalid_target")
+	}
+	return agentnotify.NavigationStatus{Capability: "eligible", Precision: n.Precision, Scope: n.Scope, Reason: n.Reason}
 }

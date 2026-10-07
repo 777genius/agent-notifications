@@ -5,6 +5,7 @@ package portablesetup
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,14 +13,28 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/directoryidentity"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/dirswap"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/pathpolicy"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/nativeconfig"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/profileauthority"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/statev2"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/codex"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/cursor"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/cursorhooks"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/providers"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/packagesnapshot"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/ports"
 
 	"github.com/777genius/agent-notifications/install/uapinstaller"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
+	"github.com/777genius/agent-notifications/internal/cursorinstall"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 )
 
@@ -88,10 +103,10 @@ func writePackage(t *testing.T, root, probe string) {
 		t.Fatal(err)
 	}
 	files := map[string][]byte{
-		"plugin.json":                  []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.0"}`),
-		"mcp.json":                     []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"agent-notify":{"type":"stdio","command":"./bin/probe","args":[],"env":{}}}}`),
-		"skills/agent-notify/SKILL.md": []byte("---\nname: agent-notify\ndescription: Isolated portable setup fixture\n---\nFixture only.\n"),
-		"bin/probe":                    body,
+		"plugin.json":                         []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent-notify","version":"1.0.0"}`),
+		"mcp.json":                            []byte(`{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"agent-notify":{"type":"stdio","command":"./bin/probe","args":[],"env":{}}}}`),
+		"skills/agent-notifications/SKILL.md": []byte("---\nname: agent-notifications\ndescription: Isolated portable setup fixture\n---\nFixture only.\n"),
+		"bin/probe":                           body,
 	}
 	for rel, data := range files {
 		path := filepath.Join(root, rel)
@@ -1795,4 +1810,455 @@ func TestUAPMaterializerRemoveGroupBothAndAlreadyAbsent(t *testing.T) {
 	if len(got) != 2 || !got[0].AlreadyAbsent || got[1].AlreadyAbsent {
 		t.Fatalf("mixed group remove: %+v", got)
 	}
+}
+
+// Regression: replacing the caller's registry with NewRegistry in either
+// single or group engine construction silently re-enables an omitted client.
+func TestMaterializerExplicitRegistryReachesPublicPrepare(t *testing.T) {
+	mat, req, _ := registryMaterializerFixture(t)
+	registry, err := clients.NewRegistry(codex.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	mat.Registry = registry
+	for _, group := range []bool{false, true} {
+		t.Run(fmt.Sprintf("group=%v", group), func(t *testing.T) {
+			var ids map[string]Identity
+			if group {
+				ids = map[string]Identity{"claude": req.Identity, "codex": req.Identity}
+			}
+			eng, err := mat.engineWithIdentities(req, new(uint64), nil, ids)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !eng.SupportsClient("codex") || eng.SupportsClient("claude") || eng.SupportsClient("cursor") || eng.SupportsClient("local") {
+				t.Fatal("engine did not retain the explicit registry")
+			}
+			prepared, err := eng.Prepare(testCtx(t), uapinstaller.Request{
+				Operation: uapinstaller.OpInstall, ClientID: "claude",
+				ClientConfigRoot: req.ClientConfigRoot, ClientExecutable: req.ClientExecutable,
+				PackageRoot: req.PackageRoot, InstallationID: req.Identity.InstallationID,
+			})
+			if prepared != nil {
+				_ = prepared.Close()
+			}
+			if !errors.Is(err, uapinstaller.ErrUnsupported) {
+				t.Fatalf("real Prepare admitted unregistered Claude: %v", err)
+			}
+		})
+	}
+}
+
+// Regression: adding selected Cursor to composition must not change a nil
+// caller's Claude/Codex preparation or admit historical Cursor/Local by default.
+func TestMaterializerNilRegistryPublicPrepareDefaults(t *testing.T) {
+	mat, req, root := registryMaterializerFixture(t)
+	eng, err := mat.engine(req, new(uint64), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, client := range []string{"claude", "codex", "cursor", "local"} {
+		t.Run(client, func(t *testing.T) {
+			config := filepath.Join(root, "profiles", client)
+			if err := os.MkdirAll(config, 0700); err != nil {
+				t.Fatal(err)
+			}
+			prepared, err := eng.Prepare(testCtx(t), uapinstaller.Request{
+				Operation: uapinstaller.OpInstall, ClientID: client,
+				ClientConfigRoot: config, ClientExecutable: req.ClientExecutable,
+				PackageRoot: req.PackageRoot, InstallationID: req.Identity.InstallationID,
+				RequiredComponents: []string{"mcp", "skills"},
+			})
+			if client == "cursor" || client == "local" {
+				if prepared != nil {
+					_ = prepared.Close()
+				}
+				if !errors.Is(err, uapinstaller.ErrUnsupported) {
+					t.Fatalf("default Prepare admitted %s: %v", client, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = prepared.Close() }()
+			plan := prepared.Plan()
+			if plan.ClientID != client || plan.Delivery.Status == string(domain.PlanUnsupported) || !plan.SelectedDelivery.IsZero() {
+				t.Fatalf("default %s plan changed: %+v", client, plan)
+			}
+		})
+	}
+}
+
+// Regression: lookup by Cursor ID alone can admit its historical MCP adapter,
+// or an empty registry can fall back to defaults and mutate recovery/discovery.
+func TestMaterializerCursorInvalidRegistryHasNoMutations(t *testing.T) {
+	for _, kind := range []string{"nil", "empty", "zero", "codex-only", "historical-cursor"} {
+		t.Run(kind, func(t *testing.T) {
+			mat, req, root := registryMaterializerFixture(t)
+			req.Integration = portable.Cursor
+			var err error
+			switch kind {
+			case "empty":
+				mat.Registry, err = clients.NewRegistry()
+			case "zero":
+				mat.Registry = new(clients.Registry)
+			case "codex-only":
+				mat.Registry, err = clients.NewRegistry(codex.New())
+			case "historical-cursor":
+				mat.Registry, err = clients.NewRegistry(cursor.New())
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := registryFixtureFiles(t, root)
+			if _, err := mat.Install(testCtx(t), req); !errors.Is(err, ErrPreflight) {
+				t.Fatalf("invalid Cursor registry install: %v", err)
+			}
+			if _, err := mat.PreviewPlan(testCtx(t), req); !errors.Is(err, ErrPreflight) {
+				t.Fatalf("invalid Cursor registry preview: %v", err)
+			}
+			if err := mat.Remove(testCtx(t), req); !errors.Is(err, ErrPreflight) {
+				t.Fatalf("invalid Cursor registry remove: %v", err)
+			}
+			if err := mat.RecoverJournals(testCtx(t), req); !errors.Is(err, ErrPreflight) {
+				t.Fatalf("invalid Cursor registry recovery: %v", err)
+			}
+			if _, err := mat.SwitchRetained(testCtx(t), req); !errors.Is(err, ErrPreflight) {
+				t.Fatalf("invalid Cursor registry retained switch: %v", err)
+			}
+			if after := registryFixtureFiles(t, root); !reflect.DeepEqual(before, after) {
+				t.Fatal("rejected Cursor request changed TEST files or directories")
+			}
+		})
+	}
+}
+
+// Regression: the frozen selected vendor adapter can be replaced by defaults,
+// or unsupported full ancestry can be bypassed by its QualificationID text.
+// This is a real public Prepare refusal, never a physical positive or native run.
+func TestMaterializerSelectedCursorUnsupportedPrepareBeforeMutation(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("NOT_RUN: frozen Cursor tuple requires Linux amd64")
+	}
+	mat, req, root := registryMaterializerFixture(t)
+	req.Integration = portable.Cursor
+	if _, err := profileauthority.Capture(testCtx(t), req.ClientConfigRoot); !errors.Is(err, directoryidentity.ErrUnsupported) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Skip("NOT_RUN: this negative regression requires unsupported full ancestry; no native attempt authorized")
+	}
+	// ReserveIdentity is inert and uses the actual public Cursor target resolver.
+	var err error
+	mat.Registry, err = clients.NewRegistry(cursor.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng, err := mat.engine(req, new(uint64), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reserved, err := eng.ReserveIdentity(uapinstaller.IdentityRequest{
+		ClientID: "cursor", InstallationID: req.Identity.InstallationID,
+		DeclaredName: "agent-notify", ClientConfigRoot: req.ClientConfigRoot,
+	})
+	if err != nil || reserved.BindingID == "" {
+		t.Fatalf("reserve actual Cursor target: %+v %v", reserved, err)
+	}
+	data := filepath.Join(mat.Roots.PluginDataBase, domain.ComputePhysicalArtifactID("agent-notify", reserved.InstallationID))
+	b, err := Complete(req.Identity, portable.Cursor, "cursor", reserved.Scope, reserved.TargetPath, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name, err := b.Filename()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(req.ClientExecutable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := cursorinstall.New(nativeconfig.New(), pathpolicy.Policy{}, &cursorinstall.Authority{
+		ProfileRoot: req.ClientConfigRoot, CursorVersion: "2026.09.28-64d2043",
+		// Deliberately no affirmative evidence: this label must never grant.
+		QualificationID: "TEST-unsupported-ancestry-NOT-qualified",
+		Executable:      req.ClientExecutable, ExecutableDigest: fmt.Sprintf("sha256:%x", sha256.Sum256(body)),
+		Selector: filepath.Join(b.DataRoot, name), ObjectID: "TEST-selected-cursor-stop",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mat.Registry, err = clients.NewRegistry(adapter, codex.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := registryFixtureFiles(t, root)
+	eng, err = mat.engine(req, new(uint64), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := eng.Prepare(testCtx(t), uapinstaller.Request{
+		Operation: uapinstaller.OpInstall, ClientID: "cursor", InstallationID: req.Identity.InstallationID,
+		PackageRoot: req.PackageRoot, ClientConfigRoot: req.ClientConfigRoot, ClientExecutable: req.ClientExecutable,
+		RequiredComponents: []string{"mcp", "skills"},
+	})
+	if prepared != nil {
+		_ = prepared.Close()
+	}
+	if !errors.Is(err, directoryidentity.ErrUnsupported) {
+		t.Fatalf("public Prepare bypassed unsupported original ancestry: %v", err)
+	}
+	if _, err := mat.PreviewPlan(testCtx(t), req); !errors.Is(err, directoryidentity.ErrUnsupported) {
+		t.Fatalf("selected preview bypassed unsupported original ancestry: %v", err)
+	}
+	if _, err := mat.PreviewInstall(testCtx(t), req); !errors.Is(err, directoryidentity.ErrUnsupported) {
+		t.Fatalf("recovering preview bypassed unsupported original ancestry: %v", err)
+	}
+	if err := mat.RecoverJournals(testCtx(t), req); !errors.Is(err, directoryidentity.ErrUnsupported) {
+		t.Fatalf("recovery bypassed unsupported original ancestry: %v", err)
+	}
+	if _, err := mat.Install(testCtx(t), req); !errors.Is(err, directoryidentity.ErrUnsupported) {
+		t.Fatalf("selected Cursor did not reach public unsupported refusal: %v", err)
+	}
+	if after := registryFixtureFiles(t, root); !reflect.DeepEqual(before, after) {
+		t.Fatal("unsupported physical Prepare changed TEST files or directories")
+	}
+	t.Log("negative refusal verified; positive physical/installed/native Cursor NOT_RUN")
+}
+
+// Regression: admission alone can leave selected ProjectArgs bypassed, so an
+// acknowledged binding has empty MCP argv or a source digest used as projection
+// ownership. Exercise actual Materializer/public Engine and TEST file readback.
+func TestMaterializerSelectedCursorPublicProjectionAndAcknowledgement(t *testing.T) {
+	mat, req, _ := registryMaterializerFixture(t)
+	ctx := testCtx(t)
+	req.Integration = portable.Cursor
+	token, err := profileauthority.Capture(ctx, req.ClientConfigRoot)
+	if errors.Is(err, directoryidentity.ErrUnsupported) {
+		if !token.IsZero() {
+			t.Fatal("unsupported original ancestry supplied authority")
+		}
+		t.Logf("NOT_RUN positive materializer: original full ancestry unsupported: %v; installed/native E NOT_RUN", err)
+		return
+	}
+	if err != nil || token.IsZero() {
+		t.Fatalf("actual original profile Capture: %v", err)
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Log("NOT_RUN positive materializer: selected Linux amd64 tuple required; installed/native E NOT_RUN")
+		return
+	}
+	// Accepted source tuple is an additional fixture bound, never physical proof.
+	osRelease, err := os.ReadFile("/etc/os-release")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kernel, err := os.ReadFile("/proc/sys/kernel/osrelease")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains("\n"+string(osRelease), "\nID=ubuntu\n") ||
+		!strings.Contains(string(osRelease), `VERSION="24.04.5 LTS`) || strings.TrimSpace(string(kernel)) != "6.17.0-1022-azure" {
+		t.Log("NOT_RUN positive materializer: accepted Ubuntu24.04/kernel tuple required; installed/native E NOT_RUN")
+		return
+	}
+	// ReserveIdentity resolves the real target without granting historical Cursor.
+	mat.Registry, err = clients.NewRegistry(cursor.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng, err := mat.engine(req, new(uint64), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reserved, err := eng.ReserveIdentity(uapinstaller.IdentityRequest{
+		ClientID: "cursor", InstallationID: req.Identity.InstallationID,
+		DeclaredName: "agent-notify", ClientConfigRoot: req.ClientConfigRoot,
+	})
+	if err != nil || reserved.BindingID == "" {
+		t.Fatalf("reserve real target: %+v %v", reserved, err)
+	}
+	data := filepath.Join(mat.Roots.PluginDataBase, domain.ComputePhysicalArtifactID("agent-notify", reserved.InstallationID))
+	expected, err := Complete(req.Identity, portable.Cursor, "cursor", reserved.Scope, reserved.TargetPath, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name, err := expected.Filename()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(req.ClientExecutable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := cursorinstall.New(nativeconfig.New(), pathpolicy.Policy{}, &cursorinstall.Authority{
+		ProfileRoot: req.ClientConfigRoot, CursorVersion: "2026.09.28-64d2043",
+		QualificationID: "TEST-materializer-source-only-public098",
+		Executable:      req.ClientExecutable, ExecutableDigest: fmt.Sprintf("sha256:%x", sha256.Sum256(body)),
+		Selector: filepath.Join(expected.DataRoot, name), ObjectID: "TEST-materializer-stop",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mat.Registry, err = clients.NewRegistry(adapter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng, err = mat.engine(req, new(uint64), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := eng.LocalPackageTreeDigest(ctx, req.PackageRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeSource := registryFixtureFiles(t, req.PackageRoot)
+	before, err := installruntime.ReadInstalledSnapshot(req.Identity.ControlRoot)
+	if err != nil || portable.ExactCommittedBinding(before.Ledger, expected) {
+		t.Fatal("fresh TEST fixture already acknowledged", err)
+	}
+	preview, err := mat.PreviewPlan(ctx, req)
+	if err != nil || preview.ProfileAuthority == nil || !preview.ProfileAuthority.Equal(token) || preview.SelectedDelivery.IsZero() || preview.TreeDigest != canonical {
+		t.Fatalf("actual selected public preview: %+v %v", preview, err)
+	}
+	binding, err := mat.Install(ctx, req)
+	if err != nil || binding != expected {
+		t.Fatalf("actual selected Materializer install: %+v %v", binding, err)
+	}
+	state, err := (statev2.Store{Path: mat.Roots.StateFile}).Load()
+	if err != nil || len(state.Installations) != 1 {
+		t.Fatal("public committed TEST state missing", err)
+	}
+	i := state.Installations[0]
+	c := i.Clients[expected.BindingID]
+	facts, selected := c.SelectedDelivery.CursorFacts()
+	// Source registration prepares Cursor; native activation is not run here.
+	if !selected || c.ProfileAuthority == nil || !c.ProfileAuthority.Equal(token) || c.ProfileNamespace != filepath.Dir(mat.Roots.StateFile) ||
+		i.Source.TreeDigest != canonical || c.PackageRevision == nil || c.PackageRevision.TreeDigest != canonical ||
+		facts.CanonicalDigest != canonical || facts.ProjectionDigest == "" || facts.ProjectionDigest == canonical ||
+		c.PendingNativeIntent != nil || c.NativeActivationAttempt != "" || c.Activation != domain.ActivationPrepared || c.Verification != domain.VerificationPackageValid {
+		t.Fatalf("selected installed source/token/ack differs: %+v %+v", c, facts)
+	}
+	ack := false
+	for _, object := range c.NativeObjects {
+		if object.Kind == "cursor_user_stop" {
+			ack = object.CursorReceipt == facts.PlannedReceipt
+		}
+	}
+	if !ack || c.SelectedDelivery.ValidateCursorObjects(c.NativeObjects) != nil {
+		t.Fatal("real selected native object acknowledgement absent")
+	}
+	// Read actual no-follow hook bytes; a repair-capable Prepare is not proof
+	// that the acknowledged entry is still installed. No Run/Stop is invoked.
+	hooks, err := nativeconfig.New().ReadExactFile(facts.HooksPath)
+	if err != nil || !hooks.Exists {
+		t.Fatal("actual selected hook bytes missing", err)
+	}
+	r := facts.PlannedReceipt
+	if err := cursorhooks.VerifyOwned(hooks.Body, &cursorhooks.Receipt{
+		Version: r.Version, Event: r.Event, Shell: cursorhooks.ShellContract(r.Shell),
+		Spec:        cursorhooks.HookSpec{Executable: r.Executable, Selector: r.Selector},
+		EntryDigest: r.EntryDigest, RemainderDigest: r.RemainderDigest,
+	}); err != nil {
+		t.Fatal("actual selected native object readback", err)
+	}
+	receipt, ok := i.DataReceipts[c.DataReceiptID]
+	if !ok || receipt.DataReceiptID == "" || receipt.State != domain.DataReceiptOwned || receipt.Locator != expected.DataRoot || receipt.OwnershipDigest == "" {
+		t.Fatalf("real data receipt not bound: %+v", receipt)
+	}
+	if err := (providers.PluginDataManager{Base: mat.Roots.PluginDataBase}).ValidateData(ctx, receipt); err != nil {
+		t.Fatal("actual data ownership readback", err)
+	}
+	var mcp struct {
+		Servers map[string]struct {
+			Args []string `json:"args"`
+		} `json:"mcpServers"`
+	}
+	projected, err := os.ReadFile(filepath.Join(c.TargetLocator, "mcp.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(projected, &mcp); err != nil || !reflect.DeepEqual(mcp.Servers[portableServerName].Args, []string{"portable-launch", "--locator", name}) {
+		t.Fatalf("actual ProjectArgs locator argv absent: %s %v", projected, err)
+	}
+	stager := providers.Stager{SnapshotBuilder: packagesnapshot.Builder{TempRoot: filepath.Join(filepath.Dir(mat.Roots.StateFile), "tmp")}}
+	if err := stager.Verify(ctx, c.TargetLocator, facts.ProjectionDigest); err != nil {
+		t.Fatal("projected byte digest readback", err)
+	}
+	if !reflect.DeepEqual(beforeSource, registryFixtureFiles(t, req.PackageRoot)) {
+		t.Fatal("projection changed canonical source bytes or modes")
+	}
+	installed, err := installruntime.ReadInstalledSnapshot(req.Identity.ControlRoot)
+	if err != nil || !portable.ExactCommittedBinding(installed.Ledger, binding) || installed.Ledger.PendingMutation != nil {
+		t.Fatal("real AN binding not acknowledged or pending survived", err)
+	}
+	if err := eng.VerifyProfileAuthority(ctx, i.InstallationID, c.ClientBindingID); err != nil {
+		t.Fatal("original physical token no longer validates", err)
+	}
+	view, err := eng.Inspect(ctx)
+	if err != nil || view.Recovery.Required || len(view.Installations) != 1 || len(view.Installations[0].Bindings) != 1 || view.Installations[0].Bindings[0].Verification != string(domain.VerificationPackageValid) {
+		t.Fatalf("public installed readback: %+v %v", view, err)
+	}
+	t.Log("QUALIFIED_TEST_MATERIALIZER_SELECTED_PROJECTION_ACK_DATA_ORIGINAL_TOKEN=true; TEST filesystem source proof; installed/native E NOT_RUN")
+}
+
+func registryMaterializerFixture(t *testing.T) (Materializer, MaterializeRequest, string) {
+	t.Helper()
+	b, ledger := bindingFixture(t)
+	root := filepath.Dir(b.ControlRoot)
+	probe := filepath.Join(b.RuntimeRoot, b.Primary)
+	pkg := filepath.Join(root, "TEST-package")
+	writePackage(t, pkg, probe)
+	config := filepath.Join(root, "TEST-profile")
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	uapRoot := filepath.Join(root, "TEST-uap")
+	mat, err := NewMaterializer(UAPRoots{
+		StateFile:      filepath.Join(uapRoot, "state", "state-v2.json"),
+		LockFile:       filepath.Join(uapRoot, "state", "mutation.lock"),
+		OperationsDir:  filepath.Join(uapRoot, "state", "operations"),
+		PluginDataBase: filepath.Join(uapRoot, "plugin-data"), ManagedRoot: filepath.Join(uapRoot, "managed"),
+		HelperExecutable: probe,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return mat, MaterializeRequest{
+		Identity: Identity{InstallationID: "00000000-0000-4000-8000-000000000239",
+			ComponentID: b.ComponentID, Owner: b.Owner, ScopeRoot: b.ScopeRoot,
+			ControlRoot: b.ControlRoot, GlobalConfig: b.GlobalConfig, RuntimeRoot: b.RuntimeRoot, Primary: b.Primary},
+		Integration: portable.Codex, ExpectedGeneration: ledger.Generation,
+		PackageRoot: pkg, ClientConfigRoot: config, ClientExecutable: probe, OperationID: "TEST-registry",
+	}, root
+}
+
+// Snapshot the fresh TEST fixture, including directory creation and file modes.
+func registryFixtureFiles(t *testing.T, root string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		value := info.Mode().String()
+		if !entry.IsDir() {
+			body, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			value += fmt.Sprintf(" sha256:%x", sha256.Sum256(body))
+		}
+		out[path] = value
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
 }

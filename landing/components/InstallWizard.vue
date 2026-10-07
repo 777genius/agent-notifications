@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {
   command,
+  platformReleaseVersion,
   detectTarget,
   products,
   targets,
@@ -9,6 +10,7 @@ import {
   type Target,
   type Intent,
 } from "~/data/install";
+import channelSnapshot from "../../release-channels.tsv?raw";
 const { t } = useI18n();
 const installTitle = ref<HTMLHeadingElement>();
 async function changeIntent(value: Intent) {
@@ -16,9 +18,9 @@ async function changeIntent(value: Intent) {
   await nextTick();
   installTitle.value?.focus({ preventScroll: true });
 }
-const selectedProducts = reactive({ claude: true, codex: false, opencode: false });
+const selectedProducts = reactive({ claude: true, codex: false, opencode: false, gemini: false });
 const selection = computed<AgentProduct[]>(() =>
-  (["claude", "codex", "opencode"] as const).filter((value) => selectedProducts[value]),
+  (["claude", "codex", "opencode", "gemini"] as const).filter((value) => selectedProducts[value]),
 );
 const hasLegacy = computed(() => selectedProducts.claude || selectedProducts.codex);
 function toggleProduct(value: AgentProduct) {
@@ -53,17 +55,23 @@ const osLabel = computed(
 const copyStatus = ref("");
 const commandField = ref<HTMLTextAreaElement>();
 const agentNotify = ref(true);
-const openCodeChannels = reactive({ desktop: true, webhook: false });
 const snippet = computed(() =>
-  command(selection.value, target.value, intent.value, agentNotify.value, openCodeChannels),
+  command(selection.value, target.value, intent.value, agentNotify.value),
 );
+const qualifiedVersion = computed(() => platformReleaseVersion(channelSnapshot, target.value));
+watch(target, (value) => {
+  if ((value === "macos" || value === "unknown") && selectedProducts.gemini) {
+    selectedProducts.gemini = false;
+    if (!selection.value.length) selectedProducts.claude = true;
+  }
+});
 const displaySnippet = computed(() => snippet.value);
 onMounted(() => {
   detected.value = detectTarget(navigator.userAgent, navigator.maxTouchPoints);
   if (!manualOverride.value) target.value = detected.value;
   showOSPicker.value = target.value === "unknown";
 });
-watch([selection, target, intent, agentNotify, () => openCodeChannels.desktop, () => openCodeChannels.webhook], () => {
+watch([selection, target, intent, agentNotify], () => {
   copyStatus.value = "";
 });
 async function copy() {
@@ -93,6 +101,7 @@ async function copy() {
       <p>{{ t("install.intro", { agent: agentName }) }}</p>
     </header>
 
+    <p v-if="qualifiedVersion" class="install-release-version">{{ t("install.platformRelease", { version: qualifiedVersion, os: osLabel }) }}</p>
     <div
       class="agent-cards"
       role="group"
@@ -105,10 +114,11 @@ async function copy() {
         :key="item.value"
         class="agent-card"
         :aria-label="item.label"
+        :disabled="item.value === 'gemini' && (target === 'macos' || target === 'unknown')"
         :aria-pressed="selectedProducts[item.value as AgentProduct]"
         @click="toggleProduct(item.value as AgentProduct)"
       >
-        <AgentLogo :agent="item.value as 'claude' | 'codex' | 'opencode'" />
+        <AgentLogo :agent="item.value as AgentProduct" />
         <span class="agent-card-copy"
           ><strong>{{
             item.label
@@ -154,37 +164,6 @@ async function copy() {
       />
     </div>
 
-    <div class="selected-agent-info" role="group" :aria-label="t('install.capabilities.title')">
-      <article v-for="agent in selection" :key="agent" class="selected-agent-details">
-        <h3>{{ t(`install.products.${agent}`) }}</h3>
-        <p>{{ t(`install.capabilities.${agent}`) }}</p>
-        <details v-if="agent === 'codex' || agent === 'opencode'">
-          <summary>{{ t('install.capabilities.details') }}</summary>
-          <p>{{ agent === 'codex' ? t('install.prerequisiteText') : t('install.opencode.version') }}</p>
-          <a :href="repo + (agent === 'codex' ? '/releases' : '/blob/main/docs/opencode-notifications.md')">
-            {{ agent === 'codex' ? t('install.checkReleases') : t('install.opencode.guide') }}
-          </a>
-        </details>
-      </article>
-    </div>
-    <fieldset
-      v-if="selectedProducts.opencode && intent !== 'configure' && target !== 'manual'"
-      class="opencode-channels"
-      aria-describedby="opencode-channels-hint"
-    >
-      <legend>{{ t('install.opencode.channelsTitle') }}</legend>
-      <p id="opencode-channels-hint">{{ t('install.opencode.channelsHint') }}</p>
-      <div class="channel-options">
-        <label class="agent-notify-option">
-          <input v-model="openCodeChannels.desktop" type="checkbox" />
-          <span>{{ t('install.opencode.desktop') }}</span>
-        </label>
-        <label class="agent-notify-option">
-          <input v-model="openCodeChannels.webhook" type="checkbox" />
-          <span>{{ t('install.opencode.webhook') }}</span>
-        </label>
-      </div>
-    </fieldset>
     <label
       v-if="hasLegacy && intent !== 'configure' && target !== 'manual' && target !== 'unknown'"
       class="agent-notify-option"
@@ -204,7 +183,7 @@ async function copy() {
       v-if="intent === 'configure'"
       class="setup-panel configuration instructions"
     >
-      <h3>{{ hasLegacy ? t("install.configure.title") : t("install.opencode.guide") }}</h3>
+      <h3>{{ hasLegacy ? t("install.configure.title") : t("install.capabilities.title") }}</h3>
       <p v-if="selectedProducts.claude">
         {{ t("install.configure.claudeBefore") }}
         <code>/claude-notifications-go:settings</code>.
@@ -220,7 +199,12 @@ async function copy() {
         >. {{ t("install.configure.codexAfter") }}
       </p>
       <p v-if="selectedProducts.opencode">{{ t("install.opencode.configure") }}</p>
+      <p v-if="selectedProducts.gemini"><a :href="repo + '/blob/main/docs/gemini-notifications.md'">{{ t("install.gemini.guide") }}</a>. {{ t("install.gemini.configure") }}</p>
       <p v-if="hasLegacy">{{ t("install.configure.shared") }}</p>
+    </div>
+    <div v-else-if="selectedProducts.gemini && target !== 'linux' && target !== 'windows' && target !== 'manual'" class="setup-panel instructions" role="status">
+      <p>{{ t("install.gemini.version") }}</p>
+      <a :href="repo + '/blob/main/docs/gemini-notifications.md'">{{ t("install.gemini.guide") }}</a>
     </div>
     <div v-else-if="target === 'manual'" class="setup-panel instructions">
       <h3>{{ t("install.manual.title") }}</h3>
@@ -235,8 +219,8 @@ async function copy() {
           >{{ t("install.manual.codex") }}</a
         >
       </p>
+      <p v-if="selectedProducts.gemini">{{ t("install.gemini.version") }} <a :href="repo + '/blob/main/docs/gemini-notifications.md'">{{ t("install.gemini.guide") }}</a></p>
     </div>
-    <div v-else-if="!snippet && selectedProducts.opencode && !openCodeChannels.desktop && !openCodeChannels.webhook" class="setup-panel instructions"><p>{{ t("install.opencode.chooseChannel") }}</p></div>
     <div v-else-if="!snippet" class="setup-panel instructions">
       <p>{{ t("install.chooseTarget") }}</p>
     </div>
@@ -355,7 +339,9 @@ async function copy() {
         </article>
       </div>
     </template>
+    <AgentSupportTable />
     <footer class="install-footer">
+      <a v-if="selectedProducts.gemini" :href="repo + '/blob/main/docs/gemini-notifications.md'">{{ t("install.gemini.guide") }} ↗</a>
       <a
         v-if="hasLegacy"
         :href="repo + (selectedProducts.codex
@@ -392,32 +378,3 @@ async function copy() {
     </footer>
   </section>
 </template>
-
-<style scoped>
-.selected-agent-info, .opencode-channels {
-  margin: 0 40px 22px;
-  padding: 18px;
-  border: 1px solid #293648;
-  border-radius: 10px;
-}
-.selected-agent-info { display: grid; gap: 16px; }
-.selected-agent-details h3 { margin: 0 0 6px; font-size: 15px; }
-.selected-agent-details p, .opencode-channels p {
-  margin: 0 0 8px;
-  color: #9eafc9;
-  font-size: 13px;
-  line-height: 1.6;
-}
-.selected-agent-details summary { cursor: pointer; font-size: 13px; }
-.selected-agent-details details p { margin-top: 8px; }
-.selected-agent-details a { font-size: 13px; text-decoration: underline; }
-.opencode-channels legend { padding: 0 6px; font-weight: 650; font-size: 15px; }
-.channel-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.channel-options .agent-notify-option { margin: 0; padding: 12px; align-items: center; }
-.channel-options .agent-notify-option input { margin-top: 0; }
-.channel-options .agent-notify-option span { font-size: 14px; line-height: 1.5; }
-@media (max-width: 700px) {
-  .selected-agent-info, .opencode-channels { margin-inline: 0; }
-  .channel-options { grid-template-columns: 1fr; }
-}
-</style>

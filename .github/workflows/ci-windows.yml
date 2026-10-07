@@ -5,6 +5,11 @@ on:
     branches: [ main, develop ]
   pull_request:
 
+# Only a newer run for the same PR supersedes its checks.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     name: Test on Windows
@@ -60,8 +65,102 @@ jobs:
           }
         shell: pwsh
 
-      - name: Run tests
-        run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+      - name: Compare cold and warm Windows lock preparation
+        if: matrix.go == '1.26'
+        shell: pwsh
+        env:
+          LOCK_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          $baseline = Join-Path $env:RUNNER_TEMP 'TEST-windows-lock-baseline'
+          git fetch --no-tags --depth=1 origin $env:LOCK_BASE_SHA
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git worktree add --detach $baseline $env:LOCK_BASE_SHA
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item internal/installruntime/lock_bench_windows_test.go "$baseline/internal/installruntime/lock_bench_windows_test.go"
+          Write-Host "Baseline lock preparation at $env:LOCK_BASE_SHA"
+          Push-Location $baseline
+          try {
+            go test -run '^$' -bench '^BenchmarkWindowsPrivateLock$' -benchtime=100x -count=5 -benchmem ./internal/installruntime
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            Pop-Location
+          }
+          Write-Host 'Current lock preparation'
+          go test -run '^$' -bench '^BenchmarkWindowsPrivateLock$' -benchtime=100x -count=5 -benchmem ./internal/installruntime
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Compare Windows cache root traversal
+        if: matrix.go == '1.26'
+        run: go test -run '^$' -bench '^BenchmarkWindowsPrivateCacheRoot$' -benchtime=100x -count=3 -benchmem ./internal/installruntime
+        shell: bash
+
+      - name: Qualify observation caches without cross-package contention
+        id: observation
+        # Preserve the first strict failure and its trace. There is no automatic
+        # retry: publication may have committed before a deadline/close error.
+        env:
+          AGENT_NOTIFICATIONS_OBSERVATION_DIAGNOSTICS: '1'
+        shell: bash
+        run: |
+          mkdir -p observation-evidence
+          git rev-parse HEAD > observation-evidence/source.txt
+          go version > observation-evidence/go.txt
+          source scripts/windows-observation-profile.sh
+          trap observation_profile_stop EXIT
+          qualification_status=0
+          command_status=0
+          observation_profile_start geminievent
+          go test -p 1 -v -race -coverprofile=coverage-gemini-event.txt -covermode=atomic -trace=observation-evidence/geminievent.trace ./internal/geminievent || command_status=$?
+          if (( qualification_status == 0 )); then qualification_status=$command_status; fi
+          printf '%s\n' "$command_status" > observation-evidence/geminievent.exit || { if (( qualification_status == 0 )); then qualification_status=1; fi; }
+          # Stop immediately after this package so unrelated tests cannot evict
+          # the failing syscall from the bounded OS recording.
+          observation_profile_stop
+          command_status=0
+          set -o pipefail
+          pipeline_status=(0 0)
+          observation_profile_start cursorevent
+          go test -p 1 -v -race -coverprofile=coverage-cursor-event.txt -covermode=atomic -trace=observation-evidence/cursorevent.trace ./internal/cursorevent 2>&1 | tee observation-evidence/cursorevent.log || pipeline_status=("${PIPESTATUS[@]}")
+          command_status=${pipeline_status[0]}
+          observation_profile_stop
+          if (( command_status == 0 )); then command_status=${pipeline_status[1]}; fi
+          if (( qualification_status == 0 )); then qualification_status=$command_status; fi
+          printf '%s\n' "${pipeline_status[0]}" > observation-evidence/cursorevent.exit || { if (( qualification_status == 0 )); then qualification_status=1; fi; }
+          command_status=0
+          go test -p 1 -v -race -coverprofile=coverage-observation.txt -covermode=atomic ./internal/notification/observation ./internal/copilotvscodeevent ./cmd/claude-notifications || command_status=$?
+          if (( qualification_status == 0 )); then qualification_status=$command_status; fi
+          printf '%s\n' "$command_status" > observation-evidence/observation.exit || { if (( qualification_status == 0 )); then qualification_status=1; fi; }
+          { head -n 1 coverage-gemini-event.txt && tail -n +2 coverage-gemini-event.txt && tail -n +2 coverage-cursor-event.txt && tail -n +2 coverage-observation.txt; } > coverage-gemini.txt || { if (( qualification_status == 0 )); then qualification_status=1; fi; }
+          exit "$qualification_status"
+
+      - name: Repeat Gemini channel consent and failed-marker suppression
+        id: observation_repeat
+        env:
+          AGENT_NOTIFICATIONS_OBSERVATION_DIAGNOSTICS: '1'
+        run: |
+          source scripts/windows-observation-profile.sh
+          trap observation_profile_stop EXIT
+          observation_profile_start geminievent-repeat
+          go test -race -count=20 -run '^TestChannelConsentIndependentAndNoRetry$' -trace=observation-evidence/geminievent-repeat.trace ./internal/geminievent
+        shell: bash
+
+      - name: Preserve failed observation attempt
+        if: ${{ failure() && (steps.observation.outcome == 'failure' || steps.observation_repeat.outcome == 'failure') }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-observation-failure-go-${{ matrix.go }}
+          path: observation-evidence/
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Run remaining tests
+        run: |
+          set -euo pipefail
+          packages=$(go list ./...)
+          remaining_packages=$(printf '%s\n' "$packages" | grep -Fvx -e 'github.com/777genius/agent-notifications/internal/geminievent' -e 'github.com/777genius/agent-notifications/internal/cursorevent' -e 'github.com/777genius/agent-notifications/internal/notification/observation' -e 'github.com/777genius/agent-notifications/internal/copilotvscodeevent' -e 'github.com/777genius/agent-notifications/cmd/claude-notifications')
+          mapfile -t remaining <<< "$remaining_packages"
+          go test -v -race -coverprofile=coverage-rest.txt -covermode=atomic "${remaining[@]}"
+          { head -n 1 coverage-rest.txt; tail -n +2 coverage-rest.txt; tail -n +2 coverage-gemini.txt; } > coverage.txt
         shell: bash
 
       - name: Repeat config crash recovery
@@ -78,6 +177,10 @@ jobs:
       - name: Test one-line setup loader (isolated, offline)
         run: bash bin/setup_test.sh
         shell: bash
+
+      - name: Test platform channels and cache recovery (isolated)
+        shell: bash
+        run: bash bin/release_channel_test.sh
 
       - name: Test python/node installer runtime fallback (isolated, offline)
         run: bash bin/installer_runtime_fallback_e2e_test.sh

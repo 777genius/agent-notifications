@@ -169,7 +169,9 @@ done
 printf '%s\n' "$url" >> "$CASE_DIR/requests"
 case "$url" in
     https://github.com/777genius/agent-notifications/releases/latest) kind=latest ;;
-    https://api.github.com/repos/777genius/agent-notifications/commits/v1.43.0) kind=commit ;;
+    https://api.github.com/repos/777genius/agent-notifications/commits/main|https://api.github.com/repos/777genius/agent-notifications/commits/v1.43.0) kind=commit ;;
+    https://raw.githubusercontent.com/777genius/agent-notifications/*/bin/release-channel.sh) kind=module ;;
+    https://raw.githubusercontent.com/777genius/agent-notifications/*/release-channels.tsv) kind=channels ;;
     https://raw.githubusercontent.com/777genius/agent-notifications/*/bin/bootstrap.sh) kind=bootstrap ;;
     *) echo "Unexpected URL: $url" >&2; exit 99 ;;
 esac
@@ -200,6 +202,12 @@ def setup_case(name, python=False, node=False, expected=0, preferred=False, stub
             'https://github.com/777genius/agent-notifications/releases/tag/v1.43.0',
             encoding='utf-8')
         (case / 'commit').write_text(sha, encoding='utf-8')
+        (case / 'module').write_text((root / 'bin/release-channel.sh').read_text(), encoding='utf-8')
+        rows = ['# agent-notifications-platform-channels-v1']
+        for channel_os, channel_arch in [('darwin','amd64'),('darwin','arm64'),('linux','amd64'),('linux','arm64'),('windows','amd64')]:
+            ref = 'release/platform-macos' if channel_os == 'darwin' else 'release/platform-linux-windows'
+            rows.append('\t'.join([channel_os, channel_arch, 'v1.43.0', sha, sha, ref]))
+        (case / 'channels').write_text('\n'.join(rows) + '\n', encoding='utf-8')
         (case / 'bootstrap').write_text(bootstrap_stub, encoding='utf-8')
         path = bash_path(case / 'bin') + ':' + runtime_path(case, python=python, node=node)
         if preferred:
@@ -305,7 +313,9 @@ then echo 'checksum mismatch accepted' >&2; exit 1; fi
         env = dict(os.environ, PATH=path, FUNCTIONS=bash_path(functions), RUNTIME_PATH=path,
                    TMPDIR=bash_path(case), HOME=bash_path(case / 'home'))
         (case / 'home').mkdir()
-        result = subprocess.run([HOST_BASH, '-c', script], env=env, text=True, capture_output=True, timeout=20)
+        # Aggregate watchdog for several real Node/Bash launches, release/SHA
+        # checks and both checksum outcomes; this is not a runtime latency test.
+        result = subprocess.run([HOST_BASH, '-c', script], env=env, text=True, capture_output=True, timeout=60)
         if result.returncode != 0:
             fail('bootstrap node-only commit+checksum', result.stderr + result.stdout)
         pass_name('bootstrap.sh raw commit SHA and node checksum verify')

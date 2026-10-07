@@ -207,7 +207,7 @@ python3 -m venv ~/.claude/claude-notifications-go/iterm2-venv
 
 **Diagnostics:**
 ```bash
-# Show the plugin root path (run inside Claude Code hook context)
+# Show the plugin root path (run inside Claude hook context)
 echo "$CLAUDE_PLUGIN_ROOT"
 
 # List all iTerm2 tabs with tmux pane mappings
@@ -237,7 +237,7 @@ Focus is **window-level**. Windows Terminal runs every tab and split pane inside
 
 ### Terminal bell (tab indicator)
 
-Separately from click-to-focus, the `terminalBell` option (on by default) now works on Windows. A Claude Code hook is spawned with its *own* hidden console (`CREATE_NO_WINDOW`), so writing to its own `CONOUT$` would ring a private, invisible console. Instead the plugin detaches that console and attaches to an ancestor's (`AttachConsole`) — the Claude session's console, which is the visible pane's ConPTY — then writes a BEL byte there. The BEL reaches the **originating** Windows Terminal pane and WT flags that tab's bell indicator.
+Separately from click-to-focus, the `terminalBell` option (on by default) now works on Windows. A Claude hook is spawned with its *own* hidden console (`CREATE_NO_WINDOW`), so writing to its own `CONOUT$` would ring a private, invisible console. Instead the plugin detaches that console and attaches to an ancestor's (`AttachConsole`) — the Claude session's console, which is the visible pane's ConPTY — then writes a BEL byte there. The BEL reaches the **originating** Windows Terminal pane and WT flags that tab's bell indicator.
 
 Unlike click-to-focus, the bell **is** tab-accurate: because the BEL is written into that specific pane's console, Windows Terminal knows exactly which tab to flag — even with multiple tabs or split panes in one window. It's the one reliable per-tab "this session finished" signal.
 

@@ -3,10 +3,10 @@ module github.com/777genius/agent-notifications
 go 1.25.8
 
 require (
-	github.com/777genius/plugin-kit-ai/cli v0.0.0-20260930053012-236889b1c082
-	github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.0
-	github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20260930053012-236889b1c082
-	github.com/777genius/plugin-kit-ai/sdk v1.2.0
+	github.com/777genius/plugin-kit-ai/cli v0.0.0-20261001223030-8064798523dc
+	github.com/777genius/plugin-kit-ai/install/integrationctl v0.1.1-0.20261006012445-0983418ab0c2
+	github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins v0.0.0-20261007205908-29f0b7dec6f3
+	github.com/777genius/plugin-kit-ai/sdk v1.2.1-0.20261002230153-01f7fced8098
 	github.com/creack/pty v1.1.24
 	github.com/esiqveland/notify v0.14.0
 	github.com/gen2brain/beeep v0.11.2
@@ -19,13 +19,30 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/stretchr/testify v1.11.1
-	golang.org/x/sys v0.42.0
+	golang.org/x/sys v0.44.0
 )
 
 require (
+	charm.land/bubbles/v2 v2.0.0 // indirect
+	charm.land/bubbletea/v2 v2.0.2 // indirect
+	charm.land/huh/v2 v2.0.3 // indirect
+	charm.land/lipgloss/v2 v2.0.1 // indirect
 	git.sr.ht/~jackmordaunt/go-toast v1.1.2 // indirect
+	github.com/atotto/clipboard v0.1.4 // indirect
+	github.com/catppuccin/go v0.2.0 // indirect
+	github.com/charmbracelet/colorprofile v0.4.2 // indirect
+	github.com/charmbracelet/ultraviolet v0.0.0-20260205113103-524a6607adb8 // indirect
+	github.com/charmbracelet/x/ansi v0.11.6 // indirect
+	github.com/charmbracelet/x/exp/ordered v0.1.0 // indirect
+	github.com/charmbracelet/x/exp/strings v0.0.0-20240722160745-212f7b056ed0 // indirect
+	github.com/charmbracelet/x/term v0.2.2 // indirect
+	github.com/charmbracelet/x/termios v0.1.1 // indirect
+	github.com/charmbracelet/x/windows v0.2.2 // indirect
+	github.com/clipperhouse/displaywidth v0.11.0 // indirect
+	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dlclark/regexp2 v1.12.0 // indirect
+	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/hajimehoshi/go-mp3 v0.3.4 // indirect
@@ -33,11 +50,16 @@ require (
 	github.com/jackmordaunt/icns/v3 v3.0.1 // indirect
 	github.com/jfreymuth/oggvorbis v1.0.5 // indirect
 	github.com/jfreymuth/vorbis v1.0.2 // indirect
+	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
+	github.com/mattn/go-runewidth v0.0.20 // indirect
 	github.com/mewkiz/flac v1.0.8 // indirect
 	github.com/mewkiz/pkg v0.0.0-20230226050401-4010bf0fec14 // indirect
+	github.com/mitchellh/hashstructure/v2 v2.0.2 // indirect
+	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
+	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3 // indirect
 	github.com/segmentio/asm v1.1.3 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect
@@ -45,10 +67,12 @@ require (
 	github.com/sergeymakinen/go-ico v1.0.0-beta.0 // indirect
 	github.com/tadvi/systray v0.0.0-20190226123456-11a2b8fa57af // indirect
 	github.com/tailscale/hujson v0.0.0-20260302212456-ecc657c15afd // indirect
+	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
-	golang.org/x/mod v0.37.0 // indirect
+	golang.org/x/mod v0.40.0 // indirect
 	golang.org/x/oauth2 v0.35.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
+	golang.org/x/term v0.34.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

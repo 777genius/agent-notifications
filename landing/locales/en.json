@@ -1,7 +1,7 @@
 {
   "seo": {
     "title": "Agent Notifications - Stay in flow",
-    "description": "Desktop notifications and webhooks for Claude Code, Codex CLI and OpenCode."
+    "description": "Desktop notifications and webhooks for Claude, Codex CLI and OpenCode. Gemini CLI: Linux / Windows."
   },
   "language": {
     "label": "Language",
@@ -12,7 +12,8 @@
   },
   "accessibility": {
     "skip": "Skip to content",
-    "platforms": "Supported operating systems"
+    "platforms": "Supported operating systems",
+    "agents": "Supported agent integrations"
   },
   "brand": { "tagline": "FOR YOUR CODING AGENTS" },
   "nav": {
@@ -26,7 +27,7 @@
     "title": "Stay in flow",
     "emphasis": "We'll get your attention",
     "leadFirst": "Let your agent work. Know when it's done.",
-    "leadSecond": "Desktop notifications and webhooks for Claude Code, Codex CLI and OpenCode.",
+    "leadSecond": "Desktop notifications and webhooks for Claude, Codex CLI and OpenCode. Gemini CLI: Linux / Windows.",
     "primary": "Set up notifications",
     "secondary": "Explore on GitHub",
     "note": "Open source · Runs locally"
@@ -40,12 +41,12 @@
       "1": {
         "label": "CLICK TO FOCUS",
         "title": "Return with one click",
-        "text": "Click a notification to return to its terminal, editor or tab where supported. Claude Code and Codex CLI only; support depends on your terminal and OS."
+        "text": "Click a notification to return to its terminal, editor or tab where supported. Claude and Codex CLI only; support depends on your terminal and OS."
       },
       "2": {
         "label": "SOUND CONTROLS",
         "title": "A sound for every moment",
-        "text": "Pick sounds, set the volume, and choose an audio device. Keep the signals you want and quiet the rest. Claude Code and Codex CLI only."
+        "text": "Pick sounds, set the volume, and choose an audio device. Keep the signals you want and quiet the rest. Claude and Codex CLI only."
       },
       "3": {
         "label": "WEBHOOK INTEGRATIONS",
@@ -68,7 +69,7 @@
     "eyebrow": "ONE CLICK. THE RIGHT WINDOW.",
     "titleFirst": "Built for your setup",
     "titleSecond": "Not just one terminal",
-    "intro": "Claude Code and Codex CLI only. Click-to-focus adapts to what you already run. Here is exactly how precise the click gets on each platform.",
+    "intro": "Claude and Codex CLI only. Click-to-focus adapts to what you already run. Here is exactly how precise the click gets on each platform.",
     "columns": {
       "app": "Terminal / IDE",
       "macos": "macOS",
@@ -133,7 +134,7 @@
     "items": {
       "1": {
         "question": "Do I need every agent installed?",
-        "answer": "Select any combination of Claude Code, Codex CLI and OpenCode. Install the selected agents first; the commands below install notifications."
+        "answer": "Select any combination of Claude, Codex CLI and OpenCode. Install the selected agents first; the commands below install notifications."
       },
       "2": {
         "question": "Are Codex hooks installed automatically?",
@@ -145,7 +146,7 @@
       },
       "4": {
         "question": "Can I choose what makes a sound?",
-        "answer": "Yes. Configure sounds, volume, audio device and notification channels. Choose Configure in the guide for the steps specific to your agent. Claude Code and Codex CLI only."
+        "answer": "Yes. Configure sounds, volume, audio device and notification channels. Choose Configure in the guide for the steps specific to your agent. Claude and Codex CLI only."
       },
       "5": {
         "question": "Does click-to-focus work everywhere?",
@@ -208,6 +209,7 @@
     "scrollDown": "Scroll options down"
   },
   "install": {
+    "platformRelease": "Qualified release for {os}: {version}.",
     "title": "Set up notifications",
     "intro": "Follow the steps below to add notifications to {agent}.",
     "chooseAgent": "Choose your agents",
@@ -221,10 +223,11 @@
     "change": "Change",
     "targetOs": "Target operating system",
     "products": {
-      "claude": "Claude Code",
+      "claude": "Claude",
       "codex": "Codex CLI",
-      "both": "Claude Code + Codex CLI",
-      "opencode": "OpenCode"
+      "both": "Claude + Codex CLI",
+      "opencode": "OpenCode",
+      "gemini": "Gemini CLI"
     },
     "targets": {
       "unknown": "Choose target OS",
@@ -238,12 +241,12 @@
     "checkReleases": "Check releases",
     "configure": {
       "title": "Make it sound like you",
-      "claudeBefore": "Inside Claude Code chat, run",
+      "claudeBefore": "Inside Claude chat, run",
       "claudeAfter": "This is a Claude slash command, not a shell command.",
       "codexBefore": "For Codex, locate the shared settings file with",
       "codexMiddle": "and apply edits using the",
       "codexLink": "documented manual configuration",
-      "codexAfter": "Claude Code is not required for Codex-only setup.",
+      "codexAfter": "Claude is not required for Codex-only setup.",
       "shared": "Shared settings are preserved when updating."
     },
     "manual": {
@@ -269,7 +272,7 @@
       "terminalText": "Open your terminal and run the command above.",
       "restart": "Restart {agent}",
       "bothAgents": "both agents",
-      "restartClaude": "Close and reopen Claude Code for notifications to be active.",
+      "restartClaude": "Close and reopen Claude for notifications to be active.",
       "restartCodex": "Restart Codex, open /hooks, then review and trust the installed hooks. Changed definitions need review again; trust is never automatic."
     },
     "help": "Installation help",
@@ -278,14 +281,24 @@
     "configureSettings": "⚙ Configure settings",
     "agentNotify": {
       "label": "Let agents send you notifications when they need your attention",
-      "hint": "Adds a notification tool for Claude Code and Codex CLI during a task, not only when work stops."
+      "hint": "Adds a notification tool for Claude and Codex CLI during a task, not only when work stops."
     },
     "capabilities": {
       "title": "Selected agent capabilities",
       "details": "Compatibility details",
       "claude": "Completion, review, question, plan, session limit and API error alerts, with sounds and click-to-focus where supported.",
       "codex": "Completion and permission alerts, with sounds and click-to-focus where supported. Review and trust installed hooks in /hooks.",
-      "opencode": "Silent completion, question, permission and error alerts for root sessions. No sound or click-to-focus."
+      "opencode": "Silent completion, question, permission and error alerts for root sessions. No sound or click-to-focus.",
+      "gemini": "Gemini CLI (Linux / Windows): silent turn-completed and tool-permission alerts. A completed turn does not imply success or a final answer. No sound, click-to-focus, question, error, plan, review or nested-agent parity."
+    },
+    "gemini": {
+      "version": "Linux / Windows: 1.48.1 (Gemini CLI 0.62.0). macOS: 1.46.1 (Claude, Codex CLI, OpenCode; Gemini unavailable)",
+      "guide": "Gemini setup and limits",
+      "configure": "Use the Gemini guide for channel consent and shared settings; no MCP tool or skill is installed. Built-in Gemini notifications can duplicate desktop alerts. Choose one desktop source or webhook-only; built-in settings are not changed."
+    },
+    "observer": {
+      "channelsTitle": "Observer notification channels",
+      "channelsHint": "These choices apply to each selected OpenCode/Gemini agent, with consent saved separately. Choose at least one channel; configure webhook URLs separately."
     },
     "opencode": {
       "channelsTitle": "OpenCode notification channels",
@@ -298,6 +311,30 @@
       "guide": "OpenCode setup and limitations",
       "restart": "Restart OpenCode to load the global plugin. On macOS, grant notification permission using the setup guide.",
       "configure": "Use config path for shared settings. Enable desktop/webhook consent with setup-opencode; configure webhook endpoints separately."
+    }
+  },
+  "agentSupport": {
+    "platforms": "Linux / Windows",
+    "title": "Compare agent features",
+    "feature": "Feature",
+    "yes": "Supported",
+    "no": "Not supported",
+    "conditional": "Supported with limitations",
+    "legend": "✓ Supported · ✕ Not supported · ✓* Supported with limitations",
+    "conditions": "* Codex questions depend on the active mode; errors and limits are detected from the final message. Click-to-focus depends on your OS and terminal.",
+    "qualification": "Codex: Windows hook delivery and the question tool hook are not yet qualified in live sessions.",
+    "v2Link": "What is OpenCode V2?",
+    "rows": {
+      "completion": "Completed",
+      "question": "Question",
+      "permission": "Permission Request",
+      "review": "Review",
+      "plan": "Plan",
+      "limit": "Session Limit Reached",
+      "sound": "Sounds",
+      "focus": "Click-to-focus",
+      "webhook": "Webhooks",
+      "error": "Errors"
     }
   }
 }

@@ -12,7 +12,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/pathpolicy"
 	processadapter "github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/process"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/adapters/nativeconfig"
+	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/shared"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/ports"
@@ -23,6 +26,7 @@ import (
 	"github.com/777genius/agent-notifications/internal/agentnotify/portablesetup"
 	"github.com/777genius/agent-notifications/internal/agentnotify/registration"
 	"github.com/777genius/agent-notifications/internal/config"
+	"github.com/777genius/agent-notifications/internal/cursorinstall"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 )
 
@@ -59,10 +63,16 @@ type Request struct {
 	// profiles first; remaining empty roots take this snapshot. Run and
 	// Plan do not reread the process environment.
 	GlobalConfig, CodexHome, ClaudeConfig string
-	EnvCodexHome, EnvClaudeConfig         string
-	ClientExecutable, ScopeRoot, Helper   string
-	ClientExecutables                     map[string]string
-	PackageSHA256                         string
+	// Cursor selection is explicit, never filled from discovery or environment.
+	// Fixed authority is provided by the qualified composition owner; it does
+	// not replace physical capture, installed receipts, or channel consent.
+	CursorConfig                        string
+	CursorAuthority                     *cursorinstall.Authority
+	CursorAgentNotify                   *bool
+	EnvCodexHome, EnvClaudeConfig       string
+	ClientExecutable, ScopeRoot, Helper string
+	ClientExecutables                   map[string]string
+	PackageSHA256                       string
 	// TreeDigest is the canonical package-tree digest from Prepare. It is
 	// distinct from PackageSHA256 (archive bytes).
 	TreeDigest, HelperDigest, HelperVersion string
@@ -90,6 +100,11 @@ type Request struct {
 	// before release acquisition. It is internal to the bootstrap orchestrator:
 	// an intervening opt-out must not become an implicit Add.
 	BootstrapExpectedGeneration *uint64
+	// BootstrapExpectedPolicy is captured after the last relevant projection check.
+	BootstrapExpectedPolicy *installruntime.Identity
+	// BootstrapMCP is consumed by the command admission boundary. Plan/Run use
+	// the verified generation, then existing reservation/config CAS protects apply.
+	BootstrapMCP *BootstrapMCPSelection
 	// ClaudeRunner overrides Claude activation probing. Production leaves it
 	// nil so the OS process runner is used. Isolated tests inject a listing
 	// fixture; the field is never parsed from CLI flags.
@@ -127,6 +142,8 @@ type TargetResult struct {
 	// ConfigPath is the owned MCP file inspect used for a direct-mcp
 	// target. Empty on hooks/notify rows so JSON omits it.
 	ConfigPath string `json:"configPath,omitempty"`
+	// Warnings are post-commit maintenance diagnostics, not installation failure.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // ReadinessFact is independent of binary download. Inspect and mutation both
@@ -186,6 +203,16 @@ func (r Result) ExitCode() int {
 
 func Run(ctx context.Context, req Request) (Result, error) {
 	out, err := run(ctx, &req)
+	// Hooks can return the kernel conflict directly; portable boundaries wrap
+	// it as ErrConcurrentChange. Keep completed targets, but require new consent.
+	if errors.Is(err, installruntime.ErrPolicyConflict) && !errors.Is(err, portablesetup.ErrConcurrentChange) {
+		err = fmt.Errorf("%w: %w", portablesetup.ErrConcurrentChange, err)
+	}
+	if errors.Is(err, portablesetup.ErrConcurrentChange) || out.Reason == "concurrent_change" {
+		out.Outcome, out.Reason = "conflict", "concurrent_change"
+		out.Command, out.NextActions = nil, nil
+		return out, err
+	}
 	return attachCommand(req, out), err
 }
 
@@ -193,10 +220,13 @@ func Run(ctx context.Context, req Request) (Result, error) {
 // Ready means the application service can mutate after --yes; it is not a
 // committed installation result.
 type SetupPlan struct {
-	Text    string
-	Ready   bool
-	Request Request
-	Result  Result
+	// annotations contain full preflight destinations/identities that otherwise
+	// exist only in legacy Text. They are never reconstructed by parsing prose.
+	annotations []string
+	Text        string
+	Ready       bool
+	Request     Request
+	Result      Result
 }
 
 // Plan preflights without publishing intent or applying hooks/MCP.
@@ -248,6 +278,7 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 				plan.Result = attachCommand(req, ev.out)
 				return plan, err
 			}
+			plan.annotations = append(plan.annotations, "helper destination="+mat.Roots.HelperExecutable)
 			explicitGlobal, explicitPrimary := req.GlobalConfig, req.Primary
 			id, err := identity(acquired, ev.snap, ev.runtimeRoot, mat, req.Action == ActionInstall)
 			if err != nil {
@@ -342,6 +373,7 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 				for _, agent := range ev.notifyAgents {
 					if digest := liveBindingTreeDigest(mat, id.InstallationID, string(agent)); digest != "" {
 						text += " " + string(agent) + "-source-digest=" + digest
+						plan.annotations = append(plan.annotations, string(agent)+" current-source-digest="+digest)
 					}
 				}
 			}
@@ -387,6 +419,7 @@ func Plan(ctx context.Context, req Request) (SetupPlan, error) {
 	ev.out.Outcome, ev.out.Reason = "ready", ""
 	ev.out.InstallationID = req.InstallationID
 	plan.Ready = true
+	req.RuntimeRoot = ev.runtimeRoot
 	plan.Text = text
 	plan.Request = req
 	plan.Result = ev.out
@@ -554,6 +587,27 @@ func evaluate(ctx context.Context, req *Request, requireYes bool) evaluated {
 	if !haveSnap {
 		out.Outcome, out.Reason = "incomplete", "managed_runtime_required"
 		return evaluated{out: out, err: err, stop: true}
+	}
+	if req.Action != ActionInspect && req.BootstrapMCP != nil {
+		observation := *req
+		observation.Agents = nil
+		for _, id := range []string{"claude", "codex", "cursor"} {
+			if _, ok := req.BootstrapMCP.Projection.Profiles[id]; ok {
+				observation.Agents = append(observation.Agents, id)
+			}
+		}
+		current, generation, policy, observeErr := ObserveBootstrapMCPWithPolicy(ctx, observation)
+		if observeErr == nil && generation != snap.Ledger.Generation {
+			observeErr = ErrRefused
+		}
+		if observeErr == nil {
+			observeErr = CheckBootstrapMCP(*req.BootstrapMCP, current)
+		}
+		if observeErr != nil {
+			out.Outcome, out.Reason = "conflict", "concurrent_change"
+			return evaluated{out: out, err: observeErr, stop: true}
+		}
+		req.BootstrapExpectedPolicy = &policy
 	}
 	runtimeRoot := req.RuntimeRoot
 	if runtimeRoot == "" {
@@ -1175,6 +1229,12 @@ func restoreOmittedFromIntent(req Request, agents []portable.Integration, intent
 			} else if req.CodexHome != target.Profile {
 				return req, agents, portablesetup.ErrIntentConflict
 			}
+		case "cursor":
+			if req.CursorConfig == "" {
+				req.CursorConfig = target.Profile
+			} else if req.CursorConfig != target.Profile {
+				return req, agents, portablesetup.ErrIntentConflict
+			}
 		case "claude":
 			if req.ClaudeConfig == "" {
 				req.ClaudeConfig = target.Profile
@@ -1286,12 +1346,12 @@ func applyIntentUnits(req Request, want map[string]unitSelection) Request {
 		req.Hooks = boolPtr(uniform.hooks)
 		req.AgentNotify = boolPtr(uniform.notify)
 		req.ClaudeHooks, req.CodexHooks = nil, nil
-		req.ClaudeAgentNotify, req.CodexAgentNotify = nil, nil
+		req.ClaudeAgentNotify, req.CodexAgentNotify, req.CursorAgentNotify = nil, nil, nil
 		return req
 	}
 	req.Hooks, req.AgentNotify = nil, nil
 	req.ClaudeHooks, req.CodexHooks = nil, nil
-	req.ClaudeAgentNotify, req.CodexAgentNotify = nil, nil
+	req.ClaudeAgentNotify, req.CodexAgentNotify, req.CursorAgentNotify = nil, nil, nil
 	for client, sel := range want {
 		hooks, notify := boolPtr(sel.hooks), boolPtr(sel.notify)
 		switch client {
@@ -1299,6 +1359,8 @@ func applyIntentUnits(req Request, want map[string]unitSelection) Request {
 			req.ClaudeHooks, req.ClaudeAgentNotify = hooks, notify
 		case "codex":
 			req.CodexHooks, req.CodexAgentNotify = hooks, notify
+		case "cursor":
+			req.CursorAgentNotify = notify
 		}
 	}
 	return req
@@ -1318,7 +1380,7 @@ func intentClients(intent portablesetup.Intent) []string {
 }
 
 func unitFlagsOmitted(req Request) bool {
-	return req.Hooks == nil && req.AgentNotify == nil && req.ClaudeHooks == nil && req.CodexHooks == nil && req.ClaudeAgentNotify == nil && req.CodexAgentNotify == nil
+	return req.Hooks == nil && req.AgentNotify == nil && req.ClaudeHooks == nil && req.CodexHooks == nil && req.ClaudeAgentNotify == nil && req.CodexAgentNotify == nil && req.CursorAgentNotify == nil
 }
 
 func sameStringSet(a, b []string) bool {
@@ -1652,7 +1714,7 @@ func install(ctx context.Context, req Request, snap installruntime.InstalledSnap
 				return out, err
 			}
 			if intent.GlobalConfig == "" {
-				if err := (portablesetup.Service{}).PatchIntentGlobalConfig(ctx, req.ControlRoot, runtimeRoot, snap.Ledger.Owner, id.InstallationID, id.GlobalConfig, out.reservation); err != nil {
+				if err := (portablesetup.Service{ExpectedPolicy: req.BootstrapExpectedPolicy}).PatchIntentGlobalConfig(ctx, req.ControlRoot, runtimeRoot, snap.Ledger.Owner, id.InstallationID, id.GlobalConfig, out.reservation); err != nil {
 					out.Outcome, out.Reason = "incomplete", "pending_intent_patch_failed"
 					if errors.Is(err, portablesetup.ErrIntentConflict) {
 						out.Outcome, out.Reason = "conflict", "pending_intent_conflict"
@@ -2539,6 +2601,11 @@ func retryRequestFromIntent(req Request, intent portablesetup.Intent) Request {
 			if target.Profile != "" {
 				retry.CodexHome = target.Profile
 			}
+		case "cursor":
+			if target.Profile != "" {
+				retry.CursorConfig = target.Profile
+				retry.ScopeRoot = target.Profile
+			}
 		case "claude":
 			if target.Profile != "" {
 				retry.ClaudeConfig = target.Profile
@@ -2741,7 +2808,7 @@ func materializer(req Request, snap installruntime.InstalledSnapshot, runtimeRoo
 		runner = processadapter.OS{}
 	}
 	uapRoot := filepath.Join(filepath.Dir(req.ControlRoot), "uap")
-	return portablesetup.NewMaterializer(portablesetup.UAPRoots{
+	mat, err := portablesetup.NewMaterializer(portablesetup.UAPRoots{
 		StateFile:           filepath.Join(uapRoot, "state", "state-v2.json"),
 		LockFile:            filepath.Join(uapRoot, "state", "mutation.lock"),
 		OperationsDir:       filepath.Join(uapRoot, "state", "operations"),
@@ -2752,6 +2819,39 @@ func materializer(req Request, snap installruntime.InstalledSnapshot, runtimeRoo
 		CodexRunner:         processadapter.OS{},
 		RequireLiveProfiles: true,
 	})
+	mat.Kernel.ExpectedPolicy = req.BootstrapExpectedPolicy
+	if err != nil {
+		return mat, err
+	}
+	agents, err := normalizeAgents(req.Agents)
+	if err != nil {
+		return mat, err
+	}
+	_, notify := selectedUnits(req, agents)
+	for _, agent := range notify {
+		if agent != portable.Cursor {
+			continue
+		}
+		if req.CursorAuthority == nil || !explicitAbs(req.CursorConfig) || req.CursorAuthority.Executable != helper {
+			return mat, fmt.Errorf("%w: explicit qualified Cursor composition required", portablesetup.ErrPreflight)
+		}
+		adapter, err := cursorinstall.New(nativeconfig.New(), pathpolicy.Policy{}, req.CursorAuthority)
+		if err != nil {
+			return mat, err
+		}
+		if _, err := adapter.ResolveProfileRoot(req.CursorConfig); err != nil {
+			return mat, err
+		}
+		registry, err := portablesetup.NewRegistry()
+		if err != nil {
+			return mat, err
+		}
+		mat.Registry, err = clients.NewRegistry(append(registry.All(), adapter)...)
+		if err != nil {
+			return mat, err
+		}
+	}
+	return mat, nil
 }
 
 func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot string, mat portablesetup.Materializer, generate bool) (portablesetup.Identity, error) {
@@ -2763,7 +2863,7 @@ func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot st
 	configRoot := ""
 	if len(req.Agents) == 1 {
 		switch req.Agents[0] {
-		case string(portable.Codex), string(portable.Claude):
+		case string(portable.Codex), string(portable.Claude), string(portable.Cursor):
 			clientID = req.Agents[0]
 			configRoot = clientConfig(req, portable.Integration(req.Agents[0]))
 		}
@@ -2801,7 +2901,7 @@ func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot st
 		var candidates []portablesetup.Identity
 		for _, name := range req.Agents {
 			agent := portable.Integration(name)
-			if agent != portable.Claude && agent != portable.Codex {
+			if agent != portable.Claude && agent != portable.Codex && agent != portable.Cursor {
 				continue
 			}
 			if migration, ok := req.MigrationBindings[name]; ok {
@@ -2890,9 +2990,13 @@ func identity(req Request, snap installruntime.InstalledSnapshot, runtimeRoot st
 }
 
 func installerEngine(mat portablesetup.Materializer) (*uapinstaller.Engine, error) {
-	registry, err := portablesetup.NewRegistry()
-	if err != nil {
-		return nil, err
+	registry := mat.Registry
+	if registry == nil {
+		var err error
+		registry, err = portablesetup.NewRegistry()
+		if err != nil {
+			return nil, err
+		}
 	}
 	return uapinstaller.New(uapinstaller.Config{
 		StateRoot:            filepath.Dir(mat.Roots.StateFile),
@@ -3433,6 +3537,8 @@ func clientConfig(req Request, agent portable.Integration) string {
 		return req.CodexHome
 	case portable.Claude:
 		return req.ClaudeConfig
+	case portable.Cursor:
+		return req.CursorConfig
 	default:
 		return ""
 	}
@@ -3566,7 +3672,7 @@ func persistExternalUninstalled(ctx context.Context, req Request, runtimeRoot st
 	if !req.ExternalUninstalled {
 		return nil
 	}
-	return (portablesetup.Service{}).PatchIntentExternalUninstalled(ctx, req.ControlRoot, runtimeRoot, "", reservation)
+	return (portablesetup.Service{ExpectedPolicy: req.BootstrapExpectedPolicy}).PatchIntentExternalUninstalled(ctx, req.ControlRoot, runtimeRoot, "", reservation)
 }
 
 func persistKnownReceipt(ctx context.Context, req Request, runtimeRoot string, mat portablesetup.Materializer, installationID, client string, reservation *installruntime.PendingMutation) error {
@@ -3574,7 +3680,7 @@ func persistKnownReceipt(ctx context.Context, req Request, runtimeRoot string, m
 	if receipt == "" {
 		return nil
 	}
-	return (portablesetup.Service{}).PatchIntentReceipt(ctx, req.ControlRoot, runtimeRoot, "", client, receipt, reservation)
+	return (portablesetup.Service{ExpectedPolicy: req.BootstrapExpectedPolicy}).PatchIntentReceipt(ctx, req.ControlRoot, runtimeRoot, "", client, receipt, reservation)
 }
 
 func knownReceiptID(mat portablesetup.Materializer, installationID, clientID string) string {
@@ -3611,9 +3717,9 @@ func publishWizardIntent(ctx context.Context, req Request, snap installruntime.I
 	if len(targets) == 0 {
 		return snap, nil, nil
 	}
-	_, reservation, err := (portablesetup.Service{}).PublishConfirmedIntent(ctx, portablesetup.ConfirmedIntent{
+	_, reservation, err := (portablesetup.Service{ExpectedPolicy: req.BootstrapExpectedPolicy}).PublishConfirmedIntent(ctx, portablesetup.ConfirmedIntent{
 		ControlRoot: req.ControlRoot, RuntimeRoot: runtimeRoot, Owner: snap.Ledger.Owner,
-		ExpectedGeneration: snap.Ledger.Generation, Action: string(req.Action), Stage: "confirmed",
+		ExpectedGeneration: snap.Ledger.Generation, ExpectedPolicy: req.BootstrapExpectedPolicy, Action: string(req.Action), Stage: "confirmed",
 		SourceRevision: req.ReleaseVersion, SourceDigest: req.PackageSHA256,
 		TreeDigest: req.TreeDigest, HelperDigest: req.HelperDigest, HelperVersion: req.HelperVersion,
 		Primary:             req.Primary,
@@ -3673,7 +3779,7 @@ func finishWizardIntent(ctx context.Context, req Request, runtimeRoot string, ou
 		return out, ErrRefused
 	}
 	cp := *out.reservation
-	gen, finished, finishErr := (portablesetup.Service{}).FinishConfirmedIntent(ctx, portablesetup.ConfirmedIntent{
+	gen, finished, finishErr := (portablesetup.Service{ExpectedPolicy: req.BootstrapExpectedPolicy}).FinishConfirmedIntent(ctx, portablesetup.ConfirmedIntent{
 		ControlRoot: req.ControlRoot, RuntimeRoot: runtimeRoot, Owner: snap.Ledger.Owner,
 	}, &cp)
 	if finishErr != nil {
@@ -3698,6 +3804,8 @@ func normalizeAgents(agents []string) ([]portable.Integration, error) {
 			id = portable.Claude
 		case "codex":
 			id = portable.Codex
+		case "cursor":
+			id = portable.Cursor
 		default:
 			return nil, errors.New("invalid_agents")
 		}
@@ -3713,7 +3821,7 @@ func normalizeAgents(agents []string) ([]portable.Integration, error) {
 func selectedUnits(req Request, agents []portable.Integration) (hooks, notify []portable.Integration) {
 	defaultOn := req.Action != ActionInspect
 	for _, agent := range agents {
-		if agentUnit(req.Hooks, perClientHooks(req, agent), defaultOn) {
+		if agent != portable.Cursor && agentUnit(req.Hooks, perClientHooks(req, agent), defaultOn) {
 			hooks = append(hooks, agent)
 		}
 		if agentUnit(req.AgentNotify, perClientNotify(req, agent), defaultOn) {
@@ -3764,6 +3872,8 @@ func preserveLiveUnits(ctx context.Context, req Request, agents []portable.Integ
 			req.ClaudeHooks, req.ClaudeAgentNotify = hooks, notify
 		case portable.Codex:
 			req.CodexHooks, req.CodexAgentNotify = hooks, notify
+		case portable.Cursor:
+			req.CursorAgentNotify = notify
 		}
 	}
 	return req
@@ -3786,6 +3896,8 @@ func perClientNotify(req Request, agent portable.Integration) *bool {
 		return req.ClaudeAgentNotify
 	case portable.Codex:
 		return req.CodexAgentNotify
+	case portable.Cursor:
+		return req.CursorAgentNotify
 	default:
 		return nil
 	}

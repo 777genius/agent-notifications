@@ -337,7 +337,8 @@ func TestStoreProcessCrashReleasesLock(t *testing.T) {
 					t.Fatalf("fresh target unexpectedly exists: err=%v bytes=%q", readErr, got)
 				}
 
-				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				// Recovery performs a complete mutation, not a one-second lock-release probe.
+				ctx, cancel := context.WithTimeout(context.Background(), MutationTimeout)
 				defer cancel()
 				_, e = EnsureInitialized(ctx, InitRequest{Env: env})
 				wantRecovery := !existing && (mode == "crash-temp" || mode == "crash-temp-write" || mode == "crash-temp-sync" || mode == "crash-before-replace")

@@ -1,14 +1,18 @@
 # Plugin Compatibility
 
-Compatible with other Claude Code plugins that spawn background Claude instances.
+Compatible with other Claude plugins that spawn background Claude instances.
 
 ## OpenCode
 
 OpenCode integration is a self-contained global plugin, separate from Claude
-marketplace plugins and Codex hooks. The tested host is 1.18.33; V2 is not
-supported. Only generic root-session completion, question, permission and error
-notifications are covered. It does not inherit portable MCP consent, sound or
-click-to-focus behavior. Other global/project notification plugins and OpenCode's
+marketplace plugins and Codex hooks. Agent Notifications 1.48.0 supports V1
+1.18.33 and V2 2.0.21 on Linux amd64/arm64 and Windows amd64, with V1 1.18.34
+also qualified on Linux amd64. The three Linux/Windows native artifacts have release canaries.
+macOS retains 1.46.1 and its earlier OpenCode support. The self-contained bundle uses reviewed vendored SDK 0.3.0;
+its separate npm publication is not a consumer release gate. Root-session completion,
+question, permission and error notifications are covered; desktop alerts can use
+bounded native session titles and current question text, while webhooks stay generic.
+It does not inherit portable MCP consent, sound or click-to-focus behavior. Other global/project notification plugins and OpenCode's
 native desktop alerts can cause duplicates. Disable overlapping sources in the
 profile rather than installing this plugin twice. Owned or foreign plugin
 conflicts are preserved and reported. [Setup and compatibility limits](opencode-notifications.md).

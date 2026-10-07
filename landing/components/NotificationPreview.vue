@@ -98,7 +98,7 @@ onUnmounted(() => {
             <span>{{ t("common.now") }}</span>
           </div>
           <strong v-if="item.agent === 'opencode'">OpenCode</strong>
-          <strong v-else>{{ item.agent === 'claude' ? 'Claude Code' : 'Codex CLI' }} · main · {{ workspace }}</strong>
+          <strong v-else>{{ item.agent === 'claude' ? 'Claude' : 'Codex CLI' }} · main · {{ workspace }}</strong>
           <p>{{ item.body }}</p>
           <span v-if="'detail' in item" class="notification-detail">{{
             item.detail

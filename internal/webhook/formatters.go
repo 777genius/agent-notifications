@@ -42,8 +42,10 @@ func agentDisplayName(source string) string {
 		return "Codex"
 	case config.AgentOpenCode:
 		return "OpenCode"
+	case config.AgentGemini:
+		return "Gemini CLI"
 	case config.AgentClaude:
-		return "Claude Code"
+		return "Claude"
 	default:
 		return normalized
 	}

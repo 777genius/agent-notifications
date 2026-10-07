@@ -1,7 +1,7 @@
 {
   "seo": {
     "title": "Agent Notifications - 专注工作，及时获知进展",
-    "description": "适用于 Claude Code、Codex CLI 和 OpenCode 的桌面通知与 Webhook。"
+    "description": "适用于 Claude、Codex CLI 和 OpenCode 的桌面通知与 Webhook。 Gemini CLI: Linux / Windows."
   },
   "language": {
     "label": "语言",
@@ -12,7 +12,8 @@
   },
   "accessibility": {
     "skip": "跳到主要内容",
-    "platforms": "支持的操作系统"
+    "platforms": "支持的操作系统",
+    "agents": "支持的代理集成"
   },
   "brand": {
     "tagline": "为你的编程智能体而生"
@@ -28,7 +29,7 @@
     "title": "保持专注",
     "emphasis": "需要你时，我们会提醒",
     "leadFirst": "让智能体安心工作，完成时你自然会知道。",
-    "leadSecond": "适用于 Claude Code、Codex CLI 和 OpenCode 的桌面通知与 Webhook。",
+    "leadSecond": "适用于 Claude、Codex CLI 和 OpenCode 的桌面通知与 Webhook。 Gemini CLI: Linux / Windows.",
     "primary": "设置通知",
     "secondary": "在 GitHub 上查看",
     "note": "开源 · 本地运行"
@@ -45,12 +46,12 @@
       "1": {
         "label": "点击返回",
         "title": "一键回到工作现场",
-        "text": "点击通知，在支持的环境中返回对应的终端、编辑器或标签页。仅适用于 Claude Code 和 Codex CLI；支持情况取决于终端和操作系统。"
+        "text": "点击通知，在支持的环境中返回对应的终端、编辑器或标签页。仅适用于 Claude 和 Codex CLI；支持情况取决于终端和操作系统。"
       },
       "2": {
         "label": "声音控制",
         "title": "每种时刻都有专属提示音",
-        "text": "选择声音、调节音量并指定音频设备。保留重要信号，其余保持安静。 仅适用于 Claude Code 和 Codex CLI。"
+        "text": "选择声音、调节音量并指定音频设备。保留重要信号，其余保持安静。 仅适用于 Claude 和 Codex CLI。"
       },
       "3": {
         "label": "WEBHOOK 集成",
@@ -71,7 +72,7 @@
     "eyebrow": "一次点击，精准定位窗口。",
     "titleFirst": "适配你的工作方式",
     "titleSecond": "不止支持一种终端",
-    "intro": "仅适用于 Claude Code 和 Codex CLI。 点击返回终端功能会自动适配你正在使用的环境。以下是各平台上定位精度的详细说明。",
+    "intro": "仅适用于 Claude 和 Codex CLI。 点击返回终端功能会自动适配你正在使用的环境。以下是各平台上定位精度的详细说明。",
     "columns": {
       "app": "终端 / IDE",
       "macos": "macOS",
@@ -136,7 +137,7 @@
     "items": {
       "1": {
         "question": "必须安装所有智能体吗？",
-        "answer": "可任意组合选择 Claude Code、Codex CLI 和 OpenCode。请先安装所选智能体；以下命令用于安装通知。"
+        "answer": "可任意组合选择 Claude、Codex CLI 和 OpenCode。请先安装所选智能体；以下命令用于安装通知。"
       },
       "2": {
         "question": "Codex hooks 会自动安装吗？",
@@ -148,7 +149,7 @@
       },
       "4": {
         "question": "可以选择哪些事件播放声音吗？",
-        "answer": "可以。你可以配置声音、音量、音频设备和通知渠道。在指南中选择“配置”，即可查看适用于所选智能体的步骤。 仅适用于 Claude Code 和 Codex CLI。"
+        "answer": "可以。你可以配置声音、音量、音频设备和通知渠道。在指南中选择“配置”，即可查看适用于所选智能体的步骤。 仅适用于 Claude 和 Codex CLI。"
       },
       "5": {
         "question": "点击通知返回终端在所有环境都可用吗？",
@@ -233,6 +234,7 @@
     "scrollDown": "向下滚动选项"
   },
   "install": {
+    "platformRelease": "{os} 的已验证版本：{version}。",
     "title": "设置通知",
     "intro": "按照以下步骤为 {agent} 添加通知。",
     "chooseAgent": "选择智能体",
@@ -246,10 +248,11 @@
     "change": "更改",
     "targetOs": "目标操作系统",
     "products": {
-      "claude": "Claude Code",
+      "claude": "Claude",
       "codex": "Codex CLI",
-      "both": "Claude Code + Codex CLI",
-      "opencode": "OpenCode"
+      "both": "Claude + Codex CLI",
+      "opencode": "OpenCode",
+      "gemini": "Gemini CLI"
     },
     "targets": {
       "unknown": "选择目标操作系统",
@@ -263,12 +266,12 @@
     "checkReleases": "查看发布版本",
     "configure": {
       "title": "打造适合你的提示方式",
-      "claudeBefore": "在 Claude Code 对话中运行",
+      "claudeBefore": "在 Claude 对话中运行",
       "claudeAfter": "这是 Claude 斜杠命令，不是 shell 命令。",
       "codexBefore": "对于 Codex，请使用以下命令查找共享设置文件：",
       "codexMiddle": "然后按照以下文档修改：",
       "codexLink": "手动配置文档",
-      "codexAfter": "仅配置 Codex 时不需要 Claude Code。",
+      "codexAfter": "仅配置 Codex 时不需要 Claude。",
       "shared": "更新时会保留共享设置。"
     },
     "manual": {
@@ -298,7 +301,7 @@
       "terminalText": "打开终端并运行上面的命令。",
       "restart": "重启{agent}",
       "bothAgents": "两个智能体",
-      "restartClaude": "关闭并重新打开 Claude Code，通知即可生效。",
+      "restartClaude": "关闭并重新打开 Claude，通知即可生效。",
       "restartCodex": "重启 Codex，打开 /hooks，然后检查并信任已安装的 hooks。定义发生变化后需要重新检查；系统绝不会自动信任。"
     },
     "help": "安装帮助",
@@ -307,14 +310,24 @@
     "configureSettings": "⚙ 配置设置",
     "agentNotify": {
       "label": "允许智能体在需要你关注时发送通知",
-      "hint": "为 Claude Code 和 Codex CLI 添加通知工具，可在任务进行中提醒你，而不只是结束时。"
+      "hint": "为 Claude 和 Codex CLI 添加通知工具，可在任务进行中提醒你，而不只是结束时。"
     },
     "capabilities": {
       "title": "所选代理的功能",
       "details": "兼容性详情",
       "claude": "提供完成、审查、提问、计划、会话限制和 API 错误通知。在支持的环境中提供声音和点击返回功能。",
       "codex": "提供完成和权限通知。在支持的环境中提供声音和点击返回功能。请在 /hooks 中审查并信任已安装的钩子。",
-      "opencode": "仅为根会话提供静音的完成、提问、权限和错误通知。不支持声音或点击返回。"
+      "opencode": "仅为根会话提供静音的完成、提问、权限和错误通知。不支持声音或点击返回。",
+      "gemini": "Gemini CLI (Linux / Windows)：静默提示回合结束和工具权限请求。回合结束不代表成功或最终答复。不支持声音、点击聚焦、问题、错误、计划、审查通知或嵌套代理功能对等。"
+    },
+    "gemini": {
+      "version": "Linux / Windows: 1.48.1 (Gemini CLI 0.62.0). macOS: 1.46.1 (Claude, Codex CLI, OpenCode; Gemini 不可用。)",
+      "guide": "Gemini 设置与限制",
+      "configure": "渠道授权和共享设置请参阅 Gemini 指南；不安装 MCP 工具或技能。内置通知可能重复。请选择一个桌面通知来源或仅使用 webhook；不会修改内置设置。"
+    },
+    "observer": {
+      "channelsTitle": "观察型代理通知渠道",
+      "channelsHint": "这些选择适用于每个选中的 OpenCode/Gemini 代理，授权分别保存。请至少选择一个渠道；webhook URL 单独配置。"
     },
     "opencode": {
       "channelsTitle": "OpenCode 通知渠道",
@@ -327,6 +340,30 @@
       "guide": "OpenCode 设置与限制",
       "restart": "重启 OpenCode 以加载全局插件。在 macOS 上，请按指南授予通知权限。",
       "configure": "使用 config path 查找共享设置。通过 setup-opencode 授予 desktop/webhook 权限；Webhook 地址需另行配置。"
+    }
+  },
+  "agentSupport": {
+    "platforms": "Linux / Windows",
+    "title": "比较代理功能",
+    "feature": "功能",
+    "yes": "支持",
+    "no": "不支持",
+    "conditional": "支持，但有限制",
+    "legend": "✓ 支持 · ✕ 不支持 · ✓* 有限制",
+    "conditions": "* Codex 的提问取决于当前模式；错误和限额通过最终消息识别。点击聚焦取决于操作系统和终端。",
+    "qualification": "Codex：Windows 钩子通知和提问工具钩子尚未在实际会话中验证。",
+    "v2Link": "什么是 OpenCode V2？",
+    "rows": {
+      "completion": "已完成",
+      "question": "问题",
+      "permission": "权限请求",
+      "review": "审查",
+      "plan": "计划",
+      "limit": "已达到会话限制",
+      "sound": "声音",
+      "focus": "点击聚焦",
+      "webhook": "Webhook",
+      "error": "错误"
     }
   }
 }

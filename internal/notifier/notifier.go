@@ -98,6 +98,9 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 	}
 
 	presentation := legacyPresentation(status, message, statusInfo.Title, n.cfg.IsSessionLabelEnabled())
+	if sendOpts.hookPresentation != nil {
+		presentation = hookPresentation(status, *sendOpts.hookPresentation, statusInfo.Title, n.cfg.IsSessionLabelEnabled())
+	}
 	title, cleanMessage, subtitle := presentation.Title, presentation.Body, presentation.Subtitle
 	timeSensitive := presentation.TimeSensitive
 
@@ -136,6 +139,13 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 		} else {
 			logging.Warn("ClaudeNotifier not available on macOS, falling back to beeep (run /claude-notifications-go:init to install it)")
 		}
+	}
+
+	// The remaining backends only display title and body. Structured hooks
+	// carry question identity in the subtitle, so preserve that literal context
+	// here after the native macOS path has had its clean three-field layout.
+	if sendOpts.hookPresentation != nil && subtitle != "" {
+		cleanMessage = subtitle + "\n" + cleanMessage
 	}
 
 	// Linux: Try daemon for click-to-focus support
@@ -282,8 +292,8 @@ func buildNotifierCommand(notifierPath string, args []string) *exec.Cmd {
 	return exec.Command(notifierPath, args...)
 }
 
-// claudeNotifierAppPath extracts ClaudeNotifier.app from the embedded
-// terminal-notifier-modern executable path.
+// claudeNotifierAppPath recognizes modern helpers in conventional bundles, the
+// product-owned alias, and durable managed generation bundles.
 func claudeNotifierAppPath(notifierPath string) (string, bool) {
 	cleanPath := filepath.Clean(notifierPath)
 	suffix := filepath.Join("Contents", "MacOS", "terminal-notifier-modern")
@@ -293,7 +303,9 @@ func claudeNotifierAppPath(notifierPath string) (string, bool) {
 
 	bundlePath := strings.TrimSuffix(cleanPath, suffix)
 	bundlePath = strings.TrimSuffix(bundlePath, string(filepath.Separator))
-	if !strings.HasSuffix(bundlePath, "ClaudeNotifier.app") {
+	name := filepath.Base(bundlePath)
+	if name != "ClaudeNotifier.app" && name != "AgentNotifications.app" &&
+		(!strings.HasPrefix(name, "generation-") || !strings.HasSuffix(name, ".app")) {
 		return "", false
 	}
 

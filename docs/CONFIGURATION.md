@@ -131,14 +131,32 @@ The following JSON illustrates the schema. Do not replace your existing document
 }
 ```
 
+## Session context
+
+Claude/Codex hook notifications prefer the native session name over the generated
+word/id label. Claude uses an optional `session_title` hook field, then exact-session
+`custom-title`/`ai-title` transcript records. Codex reads the latest exact-session
+`thread_name` from `$CODEX_HOME/session_index.jsonl` (default `~/.codex`). These are
+bounded, read-only, best-effort native file formats, not a public live Desktop API.
+Missing, unsupported, or out-of-window metadata keeps the generated label. Each
+hook rereads supported metadata; Claude renames outside the bounded transcript
+head/tail windows can be missed. No session is resumed or model called to name it.
+
+Claude `AskUserQuestion` uses the current `tool_input`, rather than a previous
+question in the transcript. Codex question hooks use the question text supplied
+by the host. Questions appear in the headline; the session and project appear in
+the native macOS subtitle or the body on backends without subtitles. Missing
+question text keeps the ordinary question fallback. `desktop.showSessionLabel`
+hides native and generated names without hiding the question or project.
+
 | Option | Default | Description |
 |--------|---------|-------------|
 | `notifyOnSubagentStop` | `false` | Send notifications when subagents (Task tool) complete. Has no effect unless `suppressForSubagents` is also set to `false`. |
-| `suppressForSubagents` | `true` | Suppress subagent (`SubagentStop`) notifications, plus any `Stop` notification whose transcript is a subagent/teammate transcript. Detection uses the hook event for `SubagentStop` (Claude Code passes the parent session `transcript_path` to that hook, so a path check alone can't identify it). Set to `false` together with `notifyOnSubagentStop: true` to get a notification each time a subagent finishes. |
+| `suppressForSubagents` | `true` | Suppress subagent (`SubagentStop`) notifications, plus any `Stop` notification whose transcript is a subagent/teammate transcript. Detection uses the hook event for `SubagentStop` (Claude passes the parent session `transcript_path` to that hook, so a path check alone can't identify it). Set to `false` together with `notifyOnSubagentStop: true` to get a notification each time a subagent finishes. |
 | `notifyOnTextResponse` | `true` | Send notifications for text-only responses (no tool usage) |
-| `desktop.showSessionLabel` | `true` | Append the `[name id]` session label to the notification title. |
+| `desktop.showSessionLabel` | `true` | Show the native session name, with `[name id]` as fallback. Questions identify the session in the native macOS subtitle or the body on backends without subtitles. `false` hides both kinds of session label without hiding the actual question. |
 | `respectJudgeMode` | `true` | Honor `CLAUDE_HOOK_JUDGE_MODE=true` env var to suppress notifications |
-| `notifyOnlyWhenUnfocused` | `false` | Skip the desktop notification only when the focused terminal window can be matched to the current Claude Code session. Best-effort per platform; if focus can't be determined the notification is still shown. |
+| `notifyOnlyWhenUnfocused` | `false` | Skip the desktop notification only when the focused terminal window can be matched to the current Claude session. Best-effort per platform; if focus can't be determined the notification is still shown. |
 | `notifyDelaySeconds` | `0` | Wait N seconds before delivering a desktop notification (capped at 25s by the hook timeout). With `notifyOnlyWhenUnfocused`, focus is re-checked after the wait. Webhooks are unaffected. |
 | `respectDoNotDisturb` | `"off"` | Honour the desktop's Do Not Disturb state. `"silent"` still delivers the banner (so it reaches the notification centre) but skips the plugin's sound; `"suppress"` skips the notification entirely. Linux only for now (KDE Plasma, GNOME, XFCE, dunst); other platforms always report "not in DND". Webhooks are unaffected. See [Do Not Disturb](DO_NOT_DISTURB.md). |
 | `respectDisplaySleep` | `false` | Skip the plugin's own sound while every display is asleep; the banner is still delivered. macOS only for now; other platforms always report "not asleep". Independent of `respectDoNotDisturb`. Webhooks are unaffected. |
@@ -171,7 +189,7 @@ other off for the same status.
 
 Two independent options cut notification noise when you're already watching the terminal:
 
-- **`notifyOnlyWhenUnfocused`** - skip the desktop notification only when the focused terminal window can be matched to the current Claude Code session. On Linux this works on X11 terminals that export `$WINDOWID`, and in [JetBrains IDE terminals](CLICK_TO_FOCUS.md#jetbrains-ides).
+- **`notifyOnlyWhenUnfocused`** - skip the desktop notification only when the focused terminal window can be matched to the current Claude session. On Linux this works on X11 terminals that export `$WINDOWID`, and in [JetBrains IDE terminals](CLICK_TO_FOCUS.md#jetbrains-ides).
 - **`notifyDelaySeconds`** - wait N seconds before delivering, so a quick task can finish before any banner appears (capped at 25s to stay within the hook timeout).
 
 They compose: with both set, the plugin waits, then notifies only if the terminal still isn't focused - "tell me once I've looked away."

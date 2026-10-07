@@ -2,39 +2,51 @@ name: Landing
 
 on:
   pull_request:
-    paths: ['landing/**', '.github/workflows/landing.yml']
+    paths: ['landing/**', '.github/workflows/landing.yml', 'scripts/stage-released-loader*', 'release-channels.tsv', 'bin/setup.sh', 'bin/release-channel.sh']
   push:
     branches: [main]
-    paths: ['landing/**', '.github/workflows/landing.yml']
+    paths: ['landing/**', '.github/workflows/landing.yml', 'scripts/stage-released-loader*', 'release-channels.tsv', 'bin/setup.sh', 'bin/release-channel.sh']
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: landing-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    if: github.event_name != 'release' || !github.event.release.prerelease
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 20
     defaults:
       run:
         working-directory: landing
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'release' && 'main' || '' }}
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
       - run: npm ci
       - run: npm run typecheck
       - run: npm run test
+      - name: Verify release loader staging contract
+        run: python3 ../scripts/stage-released-loader-test.py
       - run: npm run generate
         env:
-          NUXT_APP_BASE_URL: /agent-notifications/
+          NUXT_APP_BASE_URL: /
       - run: npx playwright install --with-deps chromium
       - run: npm run test:browser
+      - name: Keep public installer compatible with the published release
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 ../scripts/stage-released-loader.py .output/public/install.sh
       - uses: actions/upload-artifact@v7
         with:
           name: notification-landing
@@ -47,9 +59,10 @@ jobs:
           path: landing/test-results
 
   deploy:
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    if: github.event_name == 'release' || (github.ref == 'refs/heads/main' && github.event_name != 'pull_request')
     needs: verify
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 20
     permissions:
       contents: read
       pages: write

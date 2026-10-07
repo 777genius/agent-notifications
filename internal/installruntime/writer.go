@@ -12,6 +12,11 @@ import (
 // discover its capabilities. Increment the floor for destructive protocol changes.
 const WriterProtocolMarker = "agent-notifications-managed-writer-protocol-v1"
 const WriterFloor = 1
+const LocalWriterProtocolMarker = "agent-notifications-managed-writer-protocol-v3"
+
+// SupportedWriterFloor is the kernel/reader ceiling, not a replacement for the
+// historical v1 marker or reservation-v2 declaration.
+const SupportedWriterFloor = OpenCodeWriterFloor
 
 func managedWriter(path string) bool {
 	name := filepath.Base(path)
@@ -29,7 +34,9 @@ func managedWriter(path string) bool {
 	return false
 }
 
-func validateWriterFiles(files []File) error {
+func validateWriterFiles(files []File) error { return validateWriterFilesAtFloor(files, WriterFloor) }
+
+func validateWriterFilesAtFloor(files []File, floor int) error {
 	for _, file := range files {
 		if file.Remove || !managedWriter(file.Path) {
 			continue
@@ -44,7 +51,7 @@ func validateWriterFiles(files []File) error {
 			target = filepath.Clean(target)
 			validated := false
 			for _, candidate := range files {
-				if filepath.Clean(candidate.Path) == target && !candidate.Remove && candidate.Link == "" && managedWriter(candidate.Path) && bytes.Contains(candidate.Data, []byte(WriterProtocolMarker)) {
+				if filepath.Clean(candidate.Path) == target && !candidate.Remove && candidate.Link == "" && managedWriter(candidate.Path) && WriterCompatibleAtFloor(candidate.Data, floor) {
 					validated = true
 				}
 			}
@@ -53,8 +60,8 @@ func validateWriterFiles(files []File) error {
 			}
 			return fmt.Errorf("managed writer alias %s requires a validated regular managed target in the transaction", file.Path)
 		}
-		if !bytes.Contains(file.Data, []byte(WriterProtocolMarker)) {
-			return fmt.Errorf("managed writer %s is below protocol floor %d; use a compatible install kernel/package for rollback", filepath.Base(file.Path), WriterFloor)
+		if !WriterCompatibleAtFloor(file.Data, floor) {
+			return fmt.Errorf("managed writer %s is below protocol floor %d; use a compatible install kernel/package for rollback", filepath.Base(file.Path), floor)
 		}
 	}
 	return nil
@@ -63,6 +70,21 @@ func validateWriterFiles(files []File) error {
 // WriterCompatible is available to package adapters before any candidate exec.
 // Source authentication remains the adapter's prerequisite.
 func WriterCompatible(data []byte) bool { return strings.Contains(string(data), WriterProtocolMarker) }
+
+// Candidate bytes are inspected before exec; no environment or installed marker
+// is changed by this compatibility wrapper. Floors 1/2 keep their old meaning.
+func WriterCompatibleAtFloor(data []byte, floor int) bool {
+	if floor > SupportedWriterFloor {
+		return false
+	}
+	if floor >= OpenCodeWriterFloor {
+		return bytes.Contains(data, []byte(OpenCodeWriterProtocolMarker))
+	}
+	if floor >= LocalPolicyWriterFloor {
+		return bytes.Contains(data, []byte(LocalWriterProtocolMarker))
+	}
+	return WriterCompatible(data)
+}
 
 // WindowsLauncherScript is the transaction-owned BAT wrapper. The shell installer
 // must emit the same bytes and must not rewrite a committed launcher.

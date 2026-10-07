@@ -1,16 +1,17 @@
 {
-  "seo": { "title": "Agent Notifications - Mantieni la concentrazione", "description": "Notifiche desktop e webhook per Claude Code, Codex CLI e OpenCode." },
+  "seo": { "title": "Agent Notifications - Mantieni la concentrazione", "description": "Notifiche desktop e webhook per Claude, Codex CLI e OpenCode. Gemini CLI: Linux / Windows." },
   "language": { "label": "Lingua", "current": "Lingua attuale: {language}", "search": "Cerca lingue", "noResults": "Nessuna lingua trovata", "switchError": "Impossibile cambiare lingua. Riprova." },
-  "accessibility": { "skip": "Vai al contenuto", "platforms": "Sistemi operativi supportati" },
+  "accessibility": { "skip": "Vai al contenuto", "platforms": "Sistemi operativi supportati",
+    "agents": "Integrazioni degli agenti supportate" },
   "brand": { "tagline": "PER I TUOI AGENTI DI PROGRAMMAZIONE" },
   "nav": { "ariaLabel": "Principale", "features": "Funzionalità", "install": "Installa", "faq": "Domande frequenti" },
-  "hero": { "eyebrow": "MENO CONTROLLI. PIÙ SVILUPPO.", "title": "Mantieni la concentrazione", "emphasis": "Ti avvisiamo noi", "leadFirst": "Lascia lavorare il tuo agente. Scopri quando ha finito.", "leadSecond": "Notifiche desktop e webhook per Claude Code, Codex CLI e OpenCode.", "primary": "Configura le notifiche", "secondary": "Esplora su GitHub", "note": "Open source · Esecuzione locale" },
+  "hero": { "eyebrow": "MENO CONTROLLI. PIÙ SVILUPPO.", "title": "Mantieni la concentrazione", "emphasis": "Ti avvisiamo noi", "leadFirst": "Lascia lavorare il tuo agente. Scopri quando ha finito.", "leadSecond": "Notifiche desktop e webhook per Claude, Codex CLI e OpenCode. Gemini CLI: Linux / Windows.", "primary": "Configura le notifiche", "secondary": "Esplora su GitHub", "note": "Open source · Esecuzione locale" },
   "common": { "now": "ora", "beta": "beta" },
   "features": {
     "eyebrow": "IL SEGNALE GIUSTO. AL MOMENTO GIUSTO.", "titleFirst": "Resta concentrato", "titleSecond": "Smetti di controllare di continuo",
     "items": {
-      "1": { "label": "TORNA CON UN CLIC", "title": "Torna con un clic", "text": "Fai clic su una notifica per tornare al suo terminale, editor o scheda, dove supportato. Solo Claude Code e Codex CLI; dipende dal terminale e dal sistema operativo." },
-      "2": { "label": "CONTROLLI AUDIO", "title": "Un suono per ogni momento", "text": "Scegli i suoni, regola il volume e seleziona un dispositivo audio. Mantieni gli avvisi che vuoi e silenzia gli altri. Solo Claude Code e Codex CLI." },
+      "1": { "label": "TORNA CON UN CLIC", "title": "Torna con un clic", "text": "Fai clic su una notifica per tornare al suo terminale, editor o scheda, dove supportato. Solo Claude e Codex CLI; dipende dal terminale e dal sistema operativo." },
+      "2": { "label": "CONTROLLI AUDIO", "title": "Un suono per ogni momento", "text": "Scegli i suoni, regola il volume e seleziona un dispositivo audio. Mantieni gli avvisi che vuoi e silenzia gli altri. Solo Claude e Codex CLI." },
       "3": { "label": "INTEGRAZIONI WEBHOOK", "title": "Il tuo flusso di lavoro, connesso", "text": "Invia aggiornamenti a Slack, Discord, Telegram, Teams e altri servizi. Configura i webhook per gli strumenti che usi." }
     },
     "preview": { "focus":"Fai clic per tornare","return":"Torna al terminale","done": "Il tuo agente ha finito", "ready": "Pronto quando vuoi.", "sound": "Il tuo suono. Il tuo volume.", "event": "Evento dell'agente" },
@@ -20,7 +21,7 @@
     "eyebrow": "UN CLIC. LA FINESTRA GIUSTA.",
     "titleFirst": "Pensato per la tua configurazione",
     "titleSecond": "Non solo un terminale",
-    "intro": "Solo Claude Code e Codex CLI. Il click-to-focus si adatta a ciò che usi già. Ecco esattamente quanto è preciso il clic su ogni piattaforma.",
+    "intro": "Solo Claude e Codex CLI. Il click-to-focus si adatta a ciò che usi già. Ecco esattamente quanto è preciso il clic su ogni piattaforma.",
     "columns": {
       "app": "Terminal / IDE",
       "macos": "macOS",
@@ -81,10 +82,10 @@
   "faq": {
     "eyebrow": "QUALCHE COSA DA SAPERE", "title": "Domande frequenti", "subtitle": "Tutto ciò che serve per tornare al lavoro.",
     "items": {
-      "1": { "question": "Devo installare tutti gli agenti?", "answer": "Scegli qualsiasi combinazione di Claude Code, Codex CLI e OpenCode. Installa prima gli agenti scelti; i comandi seguenti installano le notifiche." },
+      "1": { "question": "Devo installare tutti gli agenti?", "answer": "Scegli qualsiasi combinazione di Claude, Codex CLI e OpenCode. Installa prima gli agenti scelti; i comandi seguenti installano le notifiche." },
       "2": { "question": "Gli hook di Codex vengono installati automaticamente?", "answer": "Sì. Il programma di installazione registra gli hook e salva una copia stabile del runtime. Apri /hooks in Codex per verificarli e autorizzarli. Le definizioni modificate richiedono una nuova verifica." },
       "3": { "question": "Un aggiornamento azzera le mie impostazioni?", "answer": "Il programma di installazione conserva la configurazione condivisa e gli hook di Codex di terze parti. Installazione e aggiornamento usano lo stesso comando. Riavvia l'agente selezionato dopo l'aggiornamento." },
-      "4": { "question": "Posso scegliere quali eventi emettono un suono?", "answer": "Sì. Configura suoni, volume, dispositivo audio e canali di notifica. Scegli Configura nella guida per i passaggi specifici del tuo agente. Solo Claude Code e Codex CLI." },
+      "4": { "question": "Posso scegliere quali eventi emettono un suono?", "answer": "Sì. Configura suoni, volume, dispositivo audio e canali di notifica. Scegli Configura nella guida per i passaggi specifici del tuo agente. Solo Claude e Codex CLI." },
       "5": { "question": "La messa a fuoco con un clic funziona ovunque?", "answer": "Il supporto varia in base al sistema operativo e al terminale. iTerm2 richiede la sua API Python per selezionare la scheda esatta. Windows porta in primo piano una finestra, non una scheda specifica. OpenCode: avvisi silenziosi di completamento, domande, permessi ed errori per la sessione principale. Senza suoni né attivazione della finestra al clic.", "link": "Consulta gli ambienti supportati." },
       "6": { "question": "E se non ricevo una notifica?", "answer": "Controlla le autorizzazioni delle notifiche del sistema operativo e i canali scelti. Per Codex, verifica che gli hook siano autorizzati.", "link": "Segui la risoluzione dei problemi per i controlli specifici della piattaforma." }
     }
@@ -121,24 +122,36 @@
   },
   "select": { "scrollUp": "Scorri le opzioni verso l'alto", "scrollDown": "Scorri le opzioni verso il basso" },
   "install": {
-    "agentNotify": {"label": "Consenti agli agenti di inviarti notifiche quando serve la tua attenzione", "hint": "Aggiunge uno strumento di notifica per Claude Code e Codex CLI durante un’attività, non solo alla fine."},
+    "platformRelease": "Versione verificata per {os}: {version}.",
+    "agentNotify": {"label": "Consenti agli agenti di inviarti notifiche quando serve la tua attenzione", "hint": "Aggiunge uno strumento di notifica per Claude e Codex CLI durante un’attività, non solo alla fine."},
     "title": "Configura le notifiche", "intro": "Segui i passaggi per aggiungere notifiche a {agent}.", "chooseAgent": "Scegli i tuoi agenti", "requires": "Richiede {agent}", "bothAgents": "Entrambi gli agenti", "bothSelected": "✓ Entrambi gli agenti selezionati", "installBoth": "Installa per entrambi gli agenti", "chooseComputer": "Scegli il computer su cui è in esecuzione il tuo agente", "selected": "Selezionato", "detected": "Rilevato automaticamente", "change": "Cambia", "targetOs": "Sistema operativo di destinazione",
-    "products": { "claude": "Claude Code", "codex": "Codex CLI", "both": "Claude Code + Codex CLI",
-      "opencode": "OpenCode" },
+    "products": { "claude": "Claude", "codex": "Codex CLI", "both": "Claude + Codex CLI",
+      "opencode": "OpenCode",
+      "gemini": "Gemini CLI" },
     "targets": { "unknown": "Scegli il sistema operativo", "macos": "macOS", "linux": "Linux", "windows": "Windows · Git Bash", "manual": "Istruzioni manuali" },
     "prerequisiteTitle": "Codex CLI", "prerequisiteText": "Richiede una versione stabile pubblicata del plugin ≥1.42.0.", "checkReleases": "Controlla le versioni",
-    "configure": { "title": "Scegli il tuo stile sonoro", "claudeBefore": "Nella chat di Claude Code, esegui", "claudeAfter": "Questo è un comando slash di Claude, non un comando della shell.", "codexBefore": "Per Codex, modifica il file delle impostazioni condivise", "codexMiddle": "seguendo la", "codexLink": "configurazione manuale documentata", "codexAfter": "Claude Code non è necessario per una configurazione solo Codex.", "shared": "Le impostazioni condivise vengono conservate durante gli aggiornamenti." },
+    "configure": { "title": "Scegli il tuo stile sonoro", "claudeBefore": "Nella chat di Claude, esegui", "claudeAfter": "Questo è un comando slash di Claude, non un comando della shell.", "codexBefore": "Per Codex, modifica il file delle impostazioni condivise", "codexMiddle": "seguendo la", "codexLink": "configurazione manuale documentata", "codexAfter": "Claude non è necessario per una configurazione solo Codex.", "shared": "Le impostazioni condivise vengono conservate durante gli aggiornamenti." },
     "manual": { "title": "Segui la procedura manuale", "claude": "Installazione manuale di Claude", "codex": "Registrazione manuale di Codex" },
     "chooseTarget": "Scegli un sistema operativo di destinazione per visualizzare il comando. Sui dispositivi mobili e nei browser non riconosciuti è necessaria una scelta esplicita.", "commandLabel": "Comando: {intent}", "copyCommand": "Copia comando", "updatingInstead": "Vuoi invece aggiornare?", "copied": "Copiato. Incolla nel terminale di destinazione quando vuoi.", "copyUnavailable": "Copia non disponibile. Seleziona il comando e copialo manualmente.", "updateNote": "Installazione e aggiornamento usano lo stesso comando. Le impostazioni esistenti vengono conservate.",
     "intents": { "install": "Installa", "update": "Aggiorna", "configure": "Configura" },
-    "steps": { "label1": "PASSAGGIO SUCCESSIVO 1", "label2": "PASSAGGIO SUCCESSIVO 2", "runBash": "Esegui in Git Bash", "runTerminal": "Esegui nel terminale", "windowsTitle": "Esegui in Git Bash su Windows.", "windowsText": "Non usare WSL e non incollare questa pipeline in PowerShell.", "terminalText": "Apri il terminale ed esegui il comando qui sopra.", "restart": "Riavvia {agent}", "bothAgents": "entrambi gli agenti", "restartClaude": "Chiudi e riapri Claude Code per attivare le notifiche.", "restartCodex": "Riavvia Codex, apri /hooks, quindi verifica e autorizza gli hook installati. Le definizioni modificate richiedono una nuova verifica; l'autorizzazione non è mai automatica." },
+    "steps": { "label1": "PASSAGGIO SUCCESSIVO 1", "label2": "PASSAGGIO SUCCESSIVO 2", "runBash": "Esegui in Git Bash", "runTerminal": "Esegui nel terminale", "windowsTitle": "Esegui in Git Bash su Windows.", "windowsText": "Non usare WSL e non incollare questa pipeline in PowerShell.", "terminalText": "Apri il terminale ed esegui il comando qui sopra.", "restart": "Riavvia {agent}", "bothAgents": "entrambi gli agenti", "restartClaude": "Chiudi e riapri Claude per attivare le notifiche.", "restartCodex": "Riavvia Codex, apri /hooks, quindi verifica e autorizza gli hook installati. Le definizioni modificate richiedono una nuova verifica; l'autorizzazione non è mai automatica." },
     "help": "Aiuto per l'installazione", "claudeHelp": "Aiuto per l'installazione di Claude", "installationInstructions": "Istruzioni di installazione", "configureSettings": "⚙ Configura impostazioni",
     "capabilities": {
       "title": "Funzioni degli agenti selezionati",
       "details": "Compatibilità",
       "claude": "Avvisi di completamento, revisione, domande, piani, limiti di sessione ed errori API. Suoni e ritorno con un clic dove supportati.",
       "codex": "Avvisi di completamento e permessi. Suoni e ritorno con un clic dove supportati. Verifica e autorizza gli hook installati in /hooks.",
-      "opencode": "Avvisi silenziosi di completamento, domande, permessi ed errori nelle sessioni principali. Nessun suono o ritorno con un clic."
+      "opencode": "Avvisi silenziosi di completamento, domande, permessi ed errori nelle sessioni principali. Nessun suono o ritorno con un clic.",
+      "gemini": "Gemini CLI (Linux / Windows): avvisi silenziosi di turno concluso e permesso per strumenti. Un turno concluso non implica successo né risposta finale. Nessun suono, focus al clic, domanda, errore, piano, revisione o parità per agenti annidati."
+    },
+    "gemini": {
+      "version": "Linux / Windows: 1.48.1 (Gemini CLI 0.62.0). macOS: 1.46.1 (Claude, Codex CLI, OpenCode; Gemini non disponibile)",
+      "guide": "Configurazione e limiti di Gemini",
+      "configure": "Consulta la guida Gemini per consenso ai canali e impostazioni condivise; nessun MCP o skill installato. Gli avvisi integrati possono duplicarsi. Scegli una fonte desktop o solo webhook; le impostazioni integrate non vengono modificate."
+    },
+    "observer": {
+      "channelsTitle": "Canali di notifica degli osservatori",
+      "channelsHint": "Le scelte si applicano a ogni agente OpenCode/Gemini selezionato; il consenso viene salvato separatamente. Scegli almeno un canale; configura separatamente gli URL dei webhook."
     },
     "opencode": {
       "channelsTitle": "Canali di notifica OpenCode",
@@ -151,6 +164,30 @@
       "guide": "Configurazione e limiti di OpenCode",
       "restart": "Riavvia OpenCode per caricare il plugin globale. Su macOS, autorizza le notifiche seguendo la guida.",
       "configure": "Usa config path per le impostazioni condivise. Autorizza desktop/webhook con setup-opencode; configura separatamente le destinazioni webhook."
+    }
+  },
+  "agentSupport": {
+    "platforms": "Linux / Windows",
+    "title": "Confronta le funzioni degli agenti",
+    "feature": "Funzione",
+    "yes": "Supportata",
+    "no": "Non supportata",
+    "conditional": "Supportata con limiti",
+    "legend": "✓ Supportata · ✕ Non supportata · ✓* Con limiti",
+    "conditions": "* Le domande di Codex dipendono dalla modalità; errori e limiti vengono rilevati dal messaggio finale. Il focus al clic dipende dal sistema e dal terminale.",
+    "qualification": "Codex: la consegna tramite hook su Windows e l'hook delle domande non sono ancora verificati in sessioni reali.",
+    "v2Link": "Cos'è OpenCode V2?",
+    "rows": {
+      "completion": "Completato",
+      "question": "Domanda",
+      "permission": "Richiesta di autorizzazione",
+      "review": "Revisione",
+      "plan": "Piano",
+      "limit": "Limite di sessione raggiunto",
+      "sound": "Suoni",
+      "focus": "Focus al clic",
+      "webhook": "Webhook",
+      "error": "Errori"
     }
   }
 }

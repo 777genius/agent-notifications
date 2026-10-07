@@ -294,7 +294,9 @@ func TestClaudeNoNavigationConsumerChain(t *testing.T) {
 
 type noneStatus struct{}
 
-func (noneStatus) Status(context.Context) (transport.Status, error) { return transport.Status{}, nil }
+func (noneStatus) Status(context.Context, origin.Context) (transport.Status, error) {
+	return transport.Status{Configuration: "disabled", Capability: "unavailable", Navigation: agentnotify.NavigationStatus{Capability: "disabled", Precision: "none", Reason: "notifications_disabled"}}, nil
+}
 
 func TestNoneConsentPersistence(t *testing.T) {
 	for _, unknown := range []bool{false, true} {

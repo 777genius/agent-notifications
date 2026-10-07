@@ -16,6 +16,8 @@ import (
 	"github.com/777genius/agent-notifications/skills"
 )
 
+var reconcileRuntimeNativeRegistration = installruntime.ReconcileNativeRegistration
+
 // The verified staged executable is the sole shell installer mutation adapter.
 // There is no notification delivery, application launch or feature activation.
 func installRuntime(args []string, output io.Writer) error {
@@ -30,6 +32,7 @@ func installRuntime(args []string, output io.Writer) error {
 	refresh := flags.Bool("refresh", false, "refresh files for existing consumers without adding a registration")
 	relocateCache := flags.Bool("relocate-versioned-cache", false, "move Claude hooks between versioned plugin caches")
 	purge := flags.Bool("purge-native", false, "explicitly remove retained callback on final uninstall")
+	printNativePath := flags.Bool("print-native-path", false, "print only the committed durable native generation path")
 	consumer := flags.String("consumer", "claude-hooks", "managed consumer identity")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -116,6 +119,37 @@ func installRuntime(args []string, output io.Writer) error {
 		}
 		files = changed
 		if len(files) == 0 {
+			if *printNativePath {
+				root := *control
+				if root == "" {
+					root, err = installruntime.ControlRoot()
+					if err != nil {
+						return err
+					}
+				}
+				// Observe retained ownership without committing or adopting utilities.
+				snapshot, err := installruntime.ReadInstalledSnapshot(root)
+				if err != nil {
+					return err
+				}
+				if snapshot.Recovery {
+					return installruntime.ErrPolicyRecovery
+				}
+				ledger := snapshot.Ledger
+				if ledger.ID != "" && ledger.Owner != "existing-installer" {
+					return fmt.Errorf("component owned by %s at %s; explicit takeover required", ledger.Owner, ledger.RuntimeRoot)
+				}
+				if ledger.Native != nil {
+					root, err = installruntime.CanonicalPath(root)
+					if err != nil {
+						return err
+					}
+					if ledger.Native.Path != filepath.Clean(ledger.Native.Path) || filepath.Dir(ledger.Native.Path) != filepath.Join(root, "native") {
+						return fmt.Errorf("native owner outside persistent directory")
+					}
+				}
+				return printRuntimeNativePath(output, ledger)
+			}
 			return nil
 		}
 	}
@@ -201,27 +235,32 @@ func installRuntime(args []string, output io.Writer) error {
 		*requireNative = true
 	}
 	if !*remove && hasSender {
-		for _, name := range []string{"ClaudeNotifier.app", "terminal-notifier.app"} {
-			candidate := filepath.Join(stage, name)
-			retained := inPlace
-			if _, e := os.Stat(candidate); os.IsNotExist(e) {
-				candidate = filepath.Join(destination, name)
-				retained = true
+		// Exhaust the supplied release before considering any retained helper.
+		// A managed alias in destination must not pin subsequent updates to A.
+		for _, location := range []struct {
+			root     string
+			retained bool
+		}{{stage, inPlace}, {destination, true}} {
+			for _, name := range []string{"AgentNotifications.app", "ClaudeNotifier.app", "terminal-notifier.app"} {
+				candidate := filepath.Join(location.root, name)
+				if _, e := os.Stat(candidate); os.IsNotExist(e) {
+					continue
+				} else if e != nil {
+					return e
+				}
+				if location.retained {
+					native, err = installruntime.StageRetainedNative(ctx, *control, candidate)
+				} else {
+					native, err = installruntime.StageNative(ctx, *control, candidate)
+				}
+				if err != nil {
+					return fmt.Errorf("native package verification failed; obtain the current authenticated release and external attestation before retrying: %w", err)
+				}
+				break
 			}
-			if _, e := os.Stat(candidate); os.IsNotExist(e) {
-				continue
-			} else if e != nil {
-				return e
+			if native != nil {
+				break
 			}
-			if retained {
-				native, err = installruntime.StageRetainedNative(ctx, *control, candidate)
-			} else {
-				native, err = installruntime.StageNative(ctx, *control, candidate)
-			}
-			if err != nil {
-				return fmt.Errorf("native package verification failed; obtain the current authenticated release and external attestation before retrying: %w", err)
-			}
-			break
 		}
 		if native != nil {
 			defer func() {
@@ -251,7 +290,7 @@ func installRuntime(args []string, output io.Writer) error {
 		prepare := req.Prepare
 		req.Prepare = func() ([]installruntime.File, error) {
 			// Recheck ownership under the component lock before any promotion.
-			path := filepath.Join(req.RuntimeRoot, "skills", "agent-notify", "SKILL.md")
+			path := filepath.Join(req.RuntimeRoot, "skills", "agent-notifications", "SKILL.md")
 			before, err := installruntime.Fingerprint(path)
 			if err != nil {
 				return nil, err
@@ -289,15 +328,57 @@ func installRuntime(args []string, output io.Writer) error {
 					return nil, err
 				}
 			}
+			legacy := filepath.Join(req.RuntimeRoot, "skills", "agent-notify", "SKILL.md")
+			legacyBefore, err := installruntime.Fingerprint(legacy)
+			if err != nil {
+				return nil, err
+			}
+			if legacyBefore.Exists {
+				ledger, recovery, err := installruntime.ReadOwnership(req.ControlRoot)
+				if err != nil {
+					return nil, err
+				}
+				owned, ok := installruntime.OwnedFile(ledger, legacy)
+				if recovery || !ok || legacyBefore.Link != "" || owned != legacyBefore {
+					return nil, fmt.Errorf("legacy skill is not an unchanged owned regular file: %s", legacy)
+				}
+				extra = append(extra, installruntime.File{Path: legacy, Before: legacyBefore, Remove: true})
+			}
 			return append(extra, installruntime.File{Path: path, Before: before, Data: skills.AgentNotify(), Mode: 0600}), nil
 		}
 	}
 	ledger, err := installruntime.Commit(ctx, req)
 	if err == nil {
-		_, _ = fmt.Fprintf(output, "managed-runtime committed generation=%d\n", ledger.Generation)
+		if !*printNativePath {
+			_, _ = fmt.Fprintf(output, "managed-runtime committed generation=%d\n", ledger.Generation)
+		}
+		if !*remove {
+			regCtx, regCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			warning := reconcileRuntimeNativeRegistration(regCtx, *control)
+			regCancel()
+			if warning != nil {
+				warningOutput := output
+				if *printNativePath {
+					warningOutput = os.Stderr
+				}
+				_, _ = fmt.Fprintf(warningOutput, "warning: runtime committed; native registration reconciliation incomplete: %v\n", warning)
+			}
+		}
+		if *printNativePath {
+			return printRuntimeNativePath(output, ledger)
+		}
 		if *purge {
 			_, _ = fmt.Fprintln(output, "Callback entrypoint purge completed; pending notifications may no longer open targets. Running callbacks are not stopped.")
 		}
 	}
+	return err
+}
+
+func printRuntimeNativePath(output io.Writer, ledger installruntime.Ledger) error {
+	path := ""
+	if ledger.Native != nil {
+		path = ledger.Native.Path
+	}
+	_, err := fmt.Fprintln(output, path)
 	return err
 }

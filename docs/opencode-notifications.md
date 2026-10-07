@@ -1,14 +1,27 @@
 # OpenCode notifications
 
 Agent Notifications adds a global OpenCode plugin for **root-session completion,
-questions, permission requests and terminal errors**. Alerts contain generic text;
-they are silent and do not navigate to a terminal or session when clicked. It does
-not provide Claude's plan/review events, contextual messages or sound controls.
+questions, permission requests and terminal errors**. Desktop completion uses
+`✅ [Native session title]` when available, and questions show their actual text
+as `❓ Actual question?` with the session title as context. macOS uses a native
+subtitle; Linux and Windows include that context above the body. Missing context
+falls back to generic OpenCode copy. Alerts remain silent and do not navigate to
+a terminal or session when clicked. Plan/review events and sound controls are
+outside this integration.
 
-The tested host is **OpenCode 1.18.33**. OpenCode V2 is not supported. The public
-installer rejects V2 and reports the detected V1 version; that diagnostic does not
-qualify every V1 release. Setup installs notifications, never OpenCode itself, and
-does not start an agent session.
+Agent Notifications **1.48.0** uses **one installed plugin** for OpenCode V1 and
+[V2](https://opencode.ai/v2/docs): V1 calls `server`, V2 calls `setup`. Release
+qualification targets are **V1 1.18.33, V1 1.18.34 and V2 2.0.21**. The installer
+accepts stable V1 >= 1.18.29 and V2 >= 2.0.0; this range does not qualify every
+release. Prereleases and unknown future API generations are rejected.
+Setup installs notifications, never OpenCode itself, and does not start an agent session.
+
+The self-contained plugin incorporates
+`universal-agent-plugins-opencode-events@0.3.0` from the reviewed vendored tarball.
+Release preparation verifies its exact archive, lock integrity and an identical
+rebuild of the embedded bundle. The SDK is separately unpublished; publishing it
+or installing it from the registry is not a gate for this consumer release.
+Existing installations must run update and restart OpenCode to load the new bundle.
 
 ## Platforms and observed delivery
 
@@ -17,20 +30,53 @@ For native Windows shell installation use **Git Bash**, not WSL or PowerShell.
 Desktop delivery uses the signed macOS helper, the Linux desktop notification
 service or Windows toasts. Linux needs an available desktop session/D-Bus service.
 
-- The user confirmed a visible completion banner on macOS arm64.
-- Linux amd64 X11/dunst rendered all four real OpenCode events; see the
-  [captured banners](evidence/opencode-1.18.33-x11-notifications.png).
-- Native lifecycle/webhook checks passed on all five targets. Headless CI does
-  not establish visible macOS Intel, Linux ARM64 or Windows banners, or universal
-  compatibility with every desktop environment.
+- Historical macOS arm64 evidence includes a user-confirmed visible completion banner.
+- Historical Linux amd64 X11/dunst evidence rendered all four real OpenCode events;
+  see the [captured banners](evidence/opencode-1.18.33-x11-notifications.png).
+- Historical V1 lifecycle/webhook checks covered all five targets; retained V2
+  native completion observations provide corroboration. They do not qualify new
+  release bytes by themselves.
+- The 1.48.0 release gate covers seven native Linux/Windows cells and three
+  artifact canaries, as detailed below. Exact release reports establish which checks
+  passed; configured workflow lanes alone are not evidence.
+- macOS binaries and the helper are excluded from 1.48.0; macOS retains 1.46.1.
+  Historical macOS ARM business evidence is separate from this release. Intel
+  desktop delivery and macOS V2 visible banners remain unqualified.
+
+**Windows V1 limitation:** stock OpenCode V1 events do not always allow the
+original event age to be verified independently. A delayed completion can notify
+once, and the same completion can notify again after its 24-hour deduplication
+claim expires. Root-session and workspace filters, origin-bound provenance,
+deduplication within that claim lifetime, and lookup and IPC limits still apply.
+This accepted limitation does not qualify every Windows V1 version.
+
+<a id="dual-candidate-evidence-boundary"></a>
+
+## Release qualification boundary
+
+The installed fixture in `scripts/opencode-native-e2e.py` retains eleven custody
+cells: V1 1.18.33 and V2 2.0.21 on all five platform pairs, plus Linux amd64 V1
+1.18.34. The 1.48.0 tag workflow runs seven Linux/Windows cells: both API versions
+on Linux amd64/arm64 and Windows amd64, plus Linux amd64 V1 1.18.34. It separately
+runs artifact canaries on the three Linux/Windows native targets. No macOS
+binaries or helper ship in 1.48.0; macOS retains its 1.46.1 channel. These checks cover managed lifecycle, completion delivery and
+revocation; they do not prove every desktop effect or replace the broader semantic
+matrix. See the exact-source reports linked from the release and
+[release procedure](RELEASE.md).
+
+Exact bundle/SDK/image custody, authoritative managed configuration, production
+parent/profile and compiled clock qualification precede delivery cases. Missing
+prerequisites report unqualified and stop business phases. Historical observations
+below retain their original source and scope; they do not qualify a newer binary
+or V2 by themselves.
 
 ## Install or update
 
 Install OpenCode first. In the [guided installer](https://777genius.github.io/agent-notifications/#install),
-select **OpenCode** and explicitly allow desktop notifications, webhooks or both. You can also select Claude Code or Codex CLI in the same setup. The copied command uses one loader, for example:
+select **OpenCode**. The guided command enables desktop notifications; webhook destinations and delivery can be configured later. You can also select Claude or Codex CLI in the same setup. The copied command uses one loader, for example:
 
 ```bash
-(set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --products claude,opencode --desktop)
+(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --products claude,opencode --desktop)
 ```
 
 Channel flags grant consent only for OpenCode; webhook URLs still need separate configuration. Claude/Codex setup runs first. If a later setup fails, earlier successful installations remain installed; fix the error and rerun the command.
@@ -41,12 +87,12 @@ from the same release. The loader pins installer source to the release's exact
 commit.
 
 ```bash
-(set -o pipefail; curl -fsSL https://777genius.github.io/agent-notifications/install.sh | bash -s -- --product opencode --desktop)
+(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --product opencode --desktop)
 ```
 
 Use `--webhook` instead of `--desktop` for webhook-only consent, or supply both.
 Webhook consent alone does not configure a destination: add your endpoint to the
-[shared settings](CONFIGURATION.md#manual-configuration), enable the desired
+[installed OpenCode settings](#edit-installed-opencode-settings), enable the desired
 webhook and status channel, and restart OpenCode. Saved settings can further
 restrict authorized delivery; setup does not enable portable MCP notifications.
 The OpenCode installer does not register Claude marketplace plugins or Codex hooks.
@@ -100,6 +146,67 @@ and pass `--native-app /absolute/path/ClaudeNotifier.app`. Keep the adjacent
 sealed protocol, attestation and code signature before enabling desktop consent.
 Webhook-only setup does not require the native helper. Existing installations
 may omit `--runtime-root` to use their authoritative recorded location.
+
+## Edit installed OpenCode settings
+
+Use the executable from the managed runtime to select OpenCode explicitly:
+
+```bash
+"$NOTIFICATIONS_BIN" config path --target opencode --json
+"$NOTIFICATIONS_BIN" config inspect --target opencode --json
+```
+
+This selects `agent-notifications.json` in the managed control directory, the
+same file the installed event consumer reads. Selection verifies the existing
+ownership ledger, platform command, origin-bound plugin and its control-root
+binding. The default control location follows the platform paths above. If setup
+used `--control-root`, pass that same existing directory to **every** config
+command, for example `config inspect --target opencode --control-root
+/absolute/path/to/control --json`. A control root is accepted only with matching
+installed metadata; it is not an arbitrary config-file path.
+
+Copy the opaque `revision` from that inspection. Submit only supported config
+leaf edits through private stdin. For example, configure the webhook destination
+without persisting an expanded secret:
+
+```bash
+printf '%s\n' '{"set":{"/notifications/webhook/enabled":true,"/notifications/webhook/url":"${AGENT_NOTIFICATIONS_WEBHOOK_URL}"}}' |
+  "$NOTIFICATIONS_BIN" config edit --target opencode --stdin --expect-revision 'REVISION_FROM_INSPECT'
+```
+
+Replace `REVISION_FROM_INSPECT` with the inspected revision and make
+`AGENT_NOTIFICATIONS_WEBHOOK_URL` available to OpenCode's environment before
+starting it. Managed OpenCode webhook URLs support only this environment token
+(or a literal URL); other URL tokens are rejected with
+`ConfigOpenCodeWebhookEnvUnsupported`. The value is passed only to event delivery,
+never clock or profile helpers, and the saved document retains the token. Keep any saved patch and
+inspection private. For a custom control root, include `--control-root` on the
+edit as well. Inspect again after success. Settings are read on subsequent events;
+a settings-only edit does not replace the loaded plugin or require a restart.
+
+The editor uses the existing config leaf validation and raw-value preservation,
+then the managed transaction's policy CAS, component/config locks and generation
+publication. Unedited policy fields, other agents' route settings, setup channel
+consent and the OpenCode origin remain intact. No-op edits retain the generation.
+A setup/update/removal or byte change invalidates the revision; inspect again and
+review the intended edit after `ConfigConflict`. If a commit is uncertain, inspect
+and resolve any reported recovery before retrying. Interrupted managed transactions
+use the existing `setup-opencode recover` lifecycle.
+
+OpenCode channel consent still comes from the explicit setup `--desktop` and
+`--webhook` flags. Config edits can restrict delivery and configure endpoints;
+they do not grant setup consent or change registrations. Missing, corrupt,
+unrecognized, recovery-pending or differently bound installations fail instead
+of creating a policy or falling back to shared settings. Use the matching installed
+executable; a plugin from a different embedded release must be updated through
+setup first. Managed config `init`, imports and `preflight-update` are unsupported.
+The managed policy retains its existing schema 1; schema 2 agent-profile migration
+is outside this command.
+
+Omitting `--target`, or using `--target shared`, preserves ordinary config
+selection and its `AGENT_NOTIFICATIONS_CONFIG` override. The OpenCode target
+ignores that override and `AGENT_NOTIFICATIONS_CONTROL_ROOT`; use the verified
+control-root selection above.
 
 ## macOS notification permission
 
@@ -157,10 +264,15 @@ resolve the reported ownership conflict explicitly rather than deleting blindly.
 
 ## Privacy, duplicate notifications and limits
 
-The observer sends content-free facts to the local owned executable. It does not
-forward prompts, question text, native error bodies or project metadata. Desktop
-and webhook messages use generic copy; configuring a webhook intentionally sends
-those generic events to your selected endpoint. Each request rechecks current
+The shared observer sends content-free facts. The product plugin adds an optional
+bounded desktop display envelope with a freshly verified native session title
+and an immutable snapshot of the exact request's question text. Multiple questions
+appear in their original order. Headers, answer options, prompts, paths and native
+error bodies are excluded. Invalid or oversized metadata falls back to generic
+copy. Turning off `notifications.desktop.showSessionLabel` hides session names
+while keeping concrete question text. Webhook messages and receipts remain
+generic; configuring a webhook intentionally sends those generic events to your
+selected endpoint. Each request rechecks current
 consent, registration and owned plugin/executable identities. See
 [configuration](CONFIGURATION.md) for channel and status restrictions.
 
@@ -173,7 +285,19 @@ check other plugins in your OpenCode profile.
 One-shot `opencode run` may exit before asynchronous delivery completes. Delivery
 at host shutdown is best effort; notification delivery after process exit is not
 guaranteed. Root-session events only are covered; nested subagent events, audio,
-click-to-focus, plan/review alerts and OpenCode V2 are outside this integration.
+click-to-focus and plan/review alerts are outside this integration.
+
+V2 completion means one positively verified final answer per native busy period.
+Queued or steered inputs can share that period. A tool step, retry, compaction
+summary or interrupted execution does not itself produce completion. The observer
+checks the root session and its owning directory/workspace before delivery, since
+V2 plugin event subscriptions also receive events from other locations.
+
+Lookup and IPC limits apply per plugin instance. Soft lookup timeouts retain their
+capacity until the native promise settles, including on 2.0.0 where abort signals
+are ignored. Cleanup suppresses late verification without waiting indefinitely;
+there is no delivery replay after an uncertain result. V2 2.0.0 needs a server
+restart to reload the plugin; 2.0.21 supports location reload.
 
 ## Linux amd64 qualification
 

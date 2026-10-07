@@ -11,6 +11,7 @@ test_env_enter "$0" "$@"
 # Usage:
 #   bash bin/install_e2e_test.sh                # Run offline tests only
 #   bash bin/install_e2e_test.sh --real-network # Include real network tests
+#   bash bin/install_e2e_test.sh --real-network-only # Only real network diagnostics
 #   bash bin/install_e2e_test.sh --verbose      # Verbose output
 #   bash bin/install_e2e_test.sh --mock-only    # Only mock server tests
 
@@ -37,6 +38,7 @@ TESTS_SKIPPED=0
 
 # Flags
 RUN_REAL_NETWORK=false
+RUN_REAL_NETWORK_ONLY=false
 RUN_MOCK_ONLY=false
 VERBOSE=false
 ALLOW_WINDOWS_REAL_NETWORK_TESTS="${ALLOW_WINDOWS_REAL_NETWORK_TESTS:-false}"
@@ -49,18 +51,25 @@ MOCK_PORT=18888
 for arg in "$@"; do
     case $arg in
         --real-network) RUN_REAL_NETWORK=true ;;
+        --real-network-only) RUN_REAL_NETWORK=true; RUN_REAL_NETWORK_ONLY=true ;;
         --mock-only) RUN_MOCK_ONLY=true ;;
         --verbose|-v) VERBOSE=true ;;
         --help|-h)
             echo "Usage: $0 [options]"
             echo "Options:"
             echo "  --real-network  Include tests that make real network requests"
+            echo "  --real-network-only  Only real network diagnostics (categories C/F)"
             echo "  --mock-only     Only run mock server tests"
             echo "  --verbose, -v   Verbose output"
             exit 0
             ;;
     esac
 done
+
+if [ "$RUN_REAL_NETWORK_ONLY" = true ] && [ "$RUN_MOCK_ONLY" = true ]; then
+    echo "--real-network-only cannot be combined with --mock-only" >&2
+    exit 2
+fi
 
 # All generated fixtures and user state belong to this disposable suite run.
 SUITE_DIR=$(mktemp -d)
@@ -498,7 +507,8 @@ assert_eq() {
 assert_contains() {
     local haystack="$1" needle="$2" msg="$3"
     TESTS_RUN=$((TESTS_RUN + 1))
-    if echo "$haystack" | grep -qE "$needle"; then
+    # grep -q may close early; avoid producer SIGPIPE under pipefail.
+    if grep -qE "$needle" <<< "$haystack"; then
         echo -e "  ${GREEN}✓${NC} $msg"
         TESTS_PASSED=$((TESTS_PASSED + 1))
         return 0
@@ -515,7 +525,7 @@ assert_contains() {
 assert_not_contains() {
     local haystack="$1" needle="$2" msg="$3"
     TESTS_RUN=$((TESTS_RUN + 1))
-    if ! echo "$haystack" | grep -qE "$needle"; then
+    if ! grep -qE "$needle" <<< "$haystack"; then
         echo -e "  ${GREEN}✓${NC} $msg"
         TESTS_PASSED=$((TESTS_PASSED + 1))
         return 0
@@ -931,7 +941,7 @@ test_lock_stale_removal() {
     touch -t 200001010000 "$TEST_DIR/.install.lock/.owner.dead/heartbeat"
     set +e
     local dead_output
-    dead_output=$(INSTALL_TARGET_DIR="$TEST_DIR" bash -c 'source "$1"; acquire_lock; release_lock' _ "$sourceable_install" 2>&1)
+    dead_output=$(INSTALL_TARGET_DIR="$TEST_DIR" bash -c 'source "$1"; acquire_lock && release_lock' _ "$sourceable_install" 2>&1)
     local dead_exit=$?
     set -e
     assert_exit_code 0 "$dead_exit" "Dead stale owner lock is reclaimed"
@@ -1306,7 +1316,7 @@ test_windows_native_hooks_configured_existing_binary() {
     local fake_path="$TEST_DIR/fakebin"
 
     mkdir -p "$bin_dir" "$hooks_dir" "$fake_path"
-    printf '{"hooks":{}}\n' > "$hooks_dir/hooks.json"
+    printf '{"foreign":"keep","hooks":{}}\n' > "$hooks_dir/hooks.json"
 
     cat > "$fake_path/uname" <<'UNAME_EOF'
 #!/bin/sh
@@ -1369,6 +1379,9 @@ set AGENT_NOTIFICATIONS_LAUNCHER=${launcher}
 EOF
         [ -f "$target/${launcher}.bat" ] || exit 1
     done
+    # Model the managed runtime as the sole hooks writer. The legacy
+    # windows-hooks response above deliberately omits the foreign field.
+    printf '{"foreign":"keep","hooks":{"Stop":[{"hooks":[{"type":"command","command":"%s/%s","args":["handle-hook","Stop"],"timeout":30}]}]}}\n' "$target" "$entry" > "$target/../hooks/hooks.json"
     exit 0
 fi
 exit 0
@@ -1388,10 +1401,11 @@ FAKE_EXE_EOF
 
     assert_exit_code 0 $exit_code "Installer succeeds with existing Windows binary"
     assert_executable "$bin_dir/claude-notifications-windows-amd64-focus.exe" "Existing focus handler preserved"
-    assert_contains "$output" "Windows exec-form hooks configured" "Windows hooks configuration message shown"
+    assert_not_contains "$output" "Windows exec-form hooks configured" "Shell installer leaves managed hooks untouched"
 
     local hooks_json
     hooks_json=$(cat "$hooks_dir/hooks.json")
+    assert_contains "$hooks_json" '"foreign":"keep"' "Foreign hook metadata preserved"
     assert_contains "$hooks_json" '"args"[[:space:]]*:[[:space:]]*\[' "hooks.json uses exec-form args"
     assert_not_contains "$hooks_json" '"shell"[[:space:]]*:' "hooks.json does not force a shell"
     assert_not_contains "$hooks_json" '\$input' "hooks.json does not pipe stdin through a shell"
@@ -1590,7 +1604,7 @@ test_windows_native_hooks_real_exec_launch() {
     local stage_dir="$TEST_DIR/stage"
     local hooks_dir="$plugin_root/hooks"
     mkdir -p "$bin_dir" "$stage_dir" "$hooks_dir"
-    printf '{"hooks":{}}\n' > "$hooks_dir/hooks.json"
+    printf '{"foreign":"keep","hooks":{}}\n' > "$hooks_dir/hooks.json"
 
     local exe_path="$stage_dir/claude-notifications-windows-amd64.exe"
     if [ "$(go env GOPROXY)" != "off" ]; then
@@ -1666,10 +1680,11 @@ test_windows_native_hooks_real_exec_launch() {
     exit_code=$?
 
     assert_exit_code 0 $exit_code "Installer succeeds with real Windows binary"
-    assert_contains "$output" "Windows exec-form hooks configured" "Installer rewrites hooks for exec form"
+    assert_not_contains "$output" "Windows exec-form hooks configured" "Installer does not replace managed hooks"
 
     local hooks_json
     hooks_json=$(cat "$hooks_dir/hooks.json")
+    assert_contains "$hooks_json" '"foreign"' "Real managed writer preserves foreign hook metadata"
     assert_contains "$hooks_json" '"args"[[:space:]]*:[[:space:]]*\[' "real hooks.json uses exec-form args"
     assert_not_contains "$hooks_json" '"shell"[[:space:]]*:' "real hooks.json does not force a shell"
     assert_not_contains "$hooks_json" '\$input' "real hooks.json does not pipe stdin through a shell"
@@ -2146,8 +2161,8 @@ test_mock_wrong_payload_recovers_after_retry() {
     cleanup_test_dir
 }
 
-test_mock_pin_latest_to_exact_tag() {
-    echo -e "\n${CYAN}▶ test_mock_pin_latest_to_exact_tag${NC}"
+test_mock_pin_bundle_to_exact_tag() {
+    echo -e "\n${CYAN}▶ test_mock_pin_bundle_to_exact_tag${NC}"
 
     if ! command -v python3 &>/dev/null; then
         skip_test "Pin latest release" "python3 not available"
@@ -2155,11 +2170,14 @@ test_mock_pin_latest_to_exact_tag() {
     fi
 
     setup_test_dir
-    export MOCK_LATEST_TAG="v-test.1"
+    export MOCK_LATEST_TAG="v0.0.1"
+    local bundle_tag=v1.47.1 target="$TEST_DIR/bundle/bin"
+    mkdir -p "$target" "$TEST_DIR/bundle/.claude-plugin"
+    printf '{"version":"1.47.1"}\n' > "$TEST_DIR/bundle/.claude-plugin/plugin.json"
     start_mock_server $MOCK_PORT || { unset MOCK_LATEST_TAG; skip_test "Pin latest release" "mock server failed"; return; }
 
     local binary_name=$(get_binary_name)
-    local pinned_dir="$FIXTURES_DIR/download/$MOCK_LATEST_TAG"
+    local pinned_dir="$FIXTURES_DIR/download/$bundle_tag"
     mkdir -p "$pinned_dir"
     cp "$FIXTURES_DIR/mock_binary" "$pinned_dir/$binary_name"
 
@@ -2177,16 +2195,16 @@ test_mock_pin_latest_to_exact_tag() {
     output=$(unset RELEASE_URL CHECKSUMS_URL MODERN_NOTIFIER_URL; SKIP_CONNECTIVITY_CHECK=true \
              RELEASES_BASE_URL="http://localhost:$MOCK_PORT" \
              LATEST_RELEASE_API_URL="http://localhost:$MOCK_PORT/api/latest" \
-             INSTALL_TARGET_DIR="$TEST_DIR" \
+             INSTALL_TARGET_DIR="$target" \
              run_with_timeout 60 bash "$INSTALL_SCRIPT" 2>&1)
     exit_code=$?
     set -e
 
-    assert_contains "$output" "Release:.*$MOCK_LATEST_TAG" "Installer resolves latest to a concrete tag"
-    assert_contains "$output" "From: http://localhost:$MOCK_PORT/download/$MOCK_LATEST_TAG/$binary_name" "Pinned download URL is used"
+    assert_contains "$output" "Release:.*$bundle_tag" "Installer pins its bundle version despite an older global Latest"
+    assert_contains "$output" "From: http://localhost:$MOCK_PORT/download/$bundle_tag/$binary_name" "Pinned download URL is used"
     assert_exit_code 0 $exit_code "Install succeeds with pinned release tag"
-    assert_file_exists "$TEST_DIR/$binary_name" "Pinned release binary downloaded"
-    assert_desktop_runtime "$TEST_DIR"
+    assert_file_exists "$target/$binary_name" "Pinned release binary downloaded"
+    assert_desktop_runtime "$target"
 
     rm -rf "$FIXTURES_DIR/download"
     unset MOCK_LATEST_TAG
@@ -2980,10 +2998,11 @@ main() {
     echo ""
     echo "Options:"
     echo "  Real network tests: $RUN_REAL_NETWORK"
+    echo "  Real network only: $RUN_REAL_NETWORK_ONLY"
     echo "  Mock only: $RUN_MOCK_ONLY"
     echo "  Verbose: $VERBOSE"
 
-    if [ "$RUN_MOCK_ONLY" != true ]; then
+    if [ "$RUN_MOCK_ONLY" != true ] && [ "$RUN_REAL_NETWORK_ONLY" != true ]; then
         # Category A: Offline Tests
         echo ""
         echo -e "${BOLD}Category A: Offline Tests${NC}"
@@ -3018,18 +3037,21 @@ main() {
         test_force_preserves_apps_macos
     fi
 
-    # Category B: Mock Server Tests
-    echo ""
-    echo -e "${BOLD}Category B: Mock Server Tests${NC}"
-    test_mock_download_success
-    test_mock_download_404
-    test_mock_download_500
-    test_mock_file_too_small
-    test_mock_checksum_mismatch
-    test_mock_partial_download_reports_transport_error
-    test_mock_wrong_payload_recovers_after_retry
-    test_mock_pin_latest_to_exact_tag
-    test_mock_zip_corrupted
+    if [ "$RUN_REAL_NETWORK_ONLY" != true ]; then
+        # Category B: Mock Server Tests
+        echo ""
+        echo -e "${BOLD}Category B: Mock Server Tests${NC}"
+        test_mock_download_success
+        test_mock_download_404
+        test_mock_download_500
+        test_mock_file_too_small
+        test_mock_checksum_mismatch
+        test_mock_partial_download_reports_transport_error
+        test_mock_wrong_payload_recovers_after_retry
+        test_mock_pin_bundle_to_exact_tag
+        test_mock_zip_corrupted
+
+    fi
 
     if [ "$RUN_MOCK_ONLY" != true ]; then
         # Pre-check: is the latest release binary actually available AND matches our version?
@@ -3085,7 +3107,7 @@ main() {
         test_real_terminal_notifier_macos
     fi
 
-    if [ "$RUN_MOCK_ONLY" != true ]; then
+    if [ "$RUN_MOCK_ONLY" != true ] && [ "$RUN_REAL_NETWORK_ONLY" != true ]; then
         # Category D: Hook Wrapper Tests (Offline)
         echo ""
         echo -e "${BOLD}Category D: Hook Wrapper Tests (Offline)${NC}"
@@ -3108,10 +3130,13 @@ main() {
         test_hook_wrapper_outputs_system_message
     fi
 
-    # Category E: Hook Wrapper Tests (Mock Server)
-    echo ""
-    echo -e "${BOLD}Category E: Hook Wrapper Tests (Mock Server)${NC}"
-    test_hook_wrapper_mock_download
+    if [ "$RUN_REAL_NETWORK_ONLY" != true ]; then
+        # Category E: Hook Wrapper Tests (Mock Server)
+        echo ""
+        echo -e "${BOLD}Category E: Hook Wrapper Tests (Mock Server)${NC}"
+        test_hook_wrapper_mock_download
+
+    fi
 
     if [ "$RUN_MOCK_ONLY" != true ]; then
         # Category F: Hook Wrapper Tests (Real Network)
