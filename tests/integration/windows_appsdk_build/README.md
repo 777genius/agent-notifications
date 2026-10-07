@@ -18,6 +18,13 @@ Restore uses locked mode, and the workflow exports the lock hash, exact source S
 runner image, and diagnostic logs. A changed dependency graph must fail restore;
 update the reviewed lock before adding any native execution.
 
+CI also verifies the already restored Runtime 2.5.1 nupkg using installed .NET
+SDK 10+ `nuget verify --all`, matching its signature-neutral content hash to the
+lock and checking unchanged raw SHA256. Its exclusive cache stays outside the
+artifact directory. Missing tooling, timeout or incomplete proof fails closed;
+there is no tool installation, second package download or native execution.
+This qualifies CI-restored bytes only, not a separately downloaded local archive.
+
 The raw XML activation nonce comes from `AppNotificationActivatedEventArgs.Argument()`.
 `Arguments()` is a distinct map for builder arguments. Both types are checked
 against the SDK-generated projection to catch that contract mismatch before E2E.
