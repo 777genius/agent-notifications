@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.48.3] - 2026-10-08
+
+### Fixed
+- Accept the stock OpenCode V2 Intel Mach-O LIB64 capability while preserving closed architecture checks and raw executable identity.
+- Isolate OpenCode version profiling in private home, XDG, config and temporary directories; allow bounded cold startup without extending notification or lifecycle deadlines.
+
+### Platform notes
+- macOS-only candidate with signed and notarized Intel/Apple Silicon artifacts. Linux/Windows channels and GitHub global Latest remain unchanged.
+- The earlier v1.48.2 candidate remains unpublished after its Intel OpenCode V2 qualification failed.
+
 ## [1.48.2] - 2026-10-07
 
 ### Changed
