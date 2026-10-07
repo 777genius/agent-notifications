@@ -221,7 +221,7 @@ func TestCopilotVSCodeTransportPanicAndJoinedReader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer stderr.Close()
+	defer func() { _ = stderr.Close() }()
 	admission := time.AfterFunc(15*time.Second, cancel)
 	if err := cmd.Start(); err != nil {
 		admission.Stop()
