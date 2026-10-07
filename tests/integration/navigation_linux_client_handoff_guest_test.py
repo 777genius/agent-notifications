@@ -100,6 +100,8 @@ def completion_data(report, shipping):
         clickAttempted=bool(report.get('clickAttempted')),
         cleanupPassed=bool(report.get('cleanupPassed')),
         cgroupEmptyObserved=bool(report.get('cgroupEmptyObserved')),
+        shippingPredicateCapture=report.get('shippingPredicateCapture'),
+        shippingPredicatePrivateTransport='omitted_for_complete_frame_bound' if report.get('shippingPredicatePrivateBase64') else 'not_captured',
         privateDiagnosticsBytes=len(diagnostics),
         privateDiagnosticsSHA256=hashlib.sha256(diagnostics).hexdigest())
     return json.dumps(failure, sort_keys=True).encode()
@@ -555,23 +557,94 @@ raise SystemExit(0 if result['passed'] else 1)
         report['plannedNativeEffects'] = dict(notifications=2 if shipping['scenario'] == 'restart_b' else 1, genuineClicks=1, selectedVendorHandoffs=1, retryAllowed=False)
         return selected
 
+    predicate_capture = dict(scope='shipping_predicate_private_TEST', polls=0,
+        lastStep=None, steps={}, lastAdmittedReader=None, candidates=[], omittedCandidates=0)
+
+    def predicate_begin(name):
+        predicate_capture['lastStep'] = dict(name=name, beginBoot=now(), endBoot=None,
+            elapsedSeconds=None, outcome='in_progress')
+
+    def predicate_end(outcome='completed'):
+        step = predicate_capture['lastStep']
+        step['endBoot'] = now(); step['elapsedSeconds'] = step['endBoot'] - step['beginBoot']
+        step['outcome'] = outcome
+        predicate_capture['steps'][step['name']] = dict(step)
+
+    def predicate_argv(command, cap):
+        size = sum(len(part) + 1 for part in command)
+        if size > cap: return dict(bytes=size, outcome='over_capture_bound', argvBase64=None)
+        raw = b'\0'.join(command) + b'\0' if command else b''
+        return dict(bytes=size, outcome='complete', argvBase64=base64.b64encode(raw).decode('ascii'))
+
+    def capture_predicate_before_cleanup():
+        if not shipping or not predicate_capture['polls']: return
+        step = predicate_capture['lastStep']
+        if step and step['endBoot'] is None: predicate_end('interrupted')
+        data = json.dumps(predicate_capture, sort_keys=True).encode()
+        capture_outcome = 'complete'
+        if len(data) > 8192:
+            # Omission is explicit and never substitutes redacted argv for proof.
+            data = json.dumps(dict(scope=predicate_capture['scope'],
+                outcome='private_capture_exceeds_bound', polls=predicate_capture['polls'],
+                lastStep=step), sort_keys=True).encode()
+            capture_outcome = 'private_capture_exceeds_bound'
+        if len(data) > 8192: raise RuntimeError('bounded_predicate_capture_unavailable')
+        with (ROOT / 'shipping-predicate-private.json').open('xb') as stream:
+            os.fchmod(stream.fileno(), 0o600); stream.write(data); stream.flush(); os.fsync(stream.fileno())
+        report['shippingPredicateCapture'] = dict(bytes=len(data), sha256=hashlib.sha256(data).hexdigest(),
+            capturedBeforeCleanup=True, outcome=capture_outcome,
+            polls=predicate_capture['polls'], lastStep=step)
+        report['shippingPredicateCapture']['steps'] = dict(predicate_capture['steps'])
+        report['shippingPredicateCapture']['lastAdmittedReader'] = {key: value for key, value in
+            (predicate_capture['lastAdmittedReader'] or {}).items() if key != 'argv'}
+        report['shippingPredicateCapture']['candidates'] = [{key: value for key, value in item.items()
+            if key != 'argv'} for item in predicate_capture['candidates']]
+        report['shippingPredicateCapture']['omittedCandidates'] = predicate_capture['omittedCandidates']
+        # The outer probe extracts this private artifact before projecting its report.
+        report['shippingPredicatePrivateBase64'] = base64.b64encode(data).decode('ascii')
+
     def observe_shipping(selected):
-        if bus('NameHasOwner', selected['app']) != '(true,)': return None
+        predicate_capture['polls'] += 1
+        predicate_capture['steps'] = {}
+        predicate_capture['candidates'] = []; predicate_capture['omittedCandidates'] = 0
+        predicate_begin('reader_name_owner')
+        owned = bus('NameHasOwner', selected['app']) == '(true,)'
+        predicate_end('owner_present' if owned else 'owner_absent')
+        if not owned: return None
+        predicate_begin('reader_owner_pid')
         match = re.fullmatch(r'\(uint32 (\d+),\)', bus('GetConnectionUnixProcessID', selected['app']))
         if not match: raise RuntimeError('cold_Go_callback_owner_PID_unproved')
+        predicate_end()
+        predicate_begin('reader_peer_and_hash')
         pid = int(match[1]); reader = selected_peer(pid, 'cold-Go-reader')
         expected = [selected['snapshot']['Reader'], 'internal-linux-callback', '--snapshot', selected['binding']['snapshotPath'], '--sha256', selected['binding']['sha256']]
         if reader['command'] != [s.encode() for s in expected] or sha(Path('/proc', str(pid), 'exe')) != shipping['files']['shipping-client'] or int(reader['startTicks']) / os.sysconf('SC_CLK_TCK') < selected['exited']:
             raise RuntimeError('actual_cold_retained_Go_reader_unbound')
+        predicate_capture['lastAdmittedReader'] = dict(pid=pid, startTicks=reader['startTicks'],
+            admittedAtBoot=now(), observedPoll=predicate_capture['polls'],
+            scope='historical_admission_not_current_owner',
+            exactArgvMatch=True, executableHashMatch=True, birthAfterSender=True,
+            argv=predicate_argv(reader['command'], 2048))
+        predicate_end()
+        predicate_begin('selected_process_scan')
         uri = 'codex://threads/' + selected['thread']
         found = []
         for value in (group / 'cgroup.procs').read_text().split():
             try:
                 client = kernel.snapshot(int(value))
-                if client['executable'] == str(kernel.EXE) and client['command'] == [bytes(kernel.EXE), b'--ozone-platform=wayland', uri.encode()]: found.append(client)
+                if client['executable'] == str(kernel.EXE):
+                    exact = client['command'] == [bytes(kernel.EXE), b'--ozone-platform=wayland', uri.encode()]
+                    if len(predicate_capture['candidates']) < 3:
+                        predicate_capture['candidates'].append(dict(pid=client['pid'], startTicks=client['startTicks'],
+                            observedAtBoot=now(), observedPoll=predicate_capture['polls'],
+                            exactURIArgvMatch=exact, argv=predicate_argv(client['command'], 1024)))
+                    else: predicate_capture['omittedCandidates'] += 1
+                    if exact: found.append(client)
             except (FileNotFoundError, ProcessLookupError): pass
+        predicate_end('exact_candidate_present' if found else 'exact_candidate_absent')
         if not found: return None
         if len(found) != 1: raise RuntimeError('sole_selected_exact_URI_process_unproved')
+        predicate_begin('selected_peer_and_environment')
         client_pid = found[0]['pid']; selected_peer(client_pid, 'selected-launch')
         with Path('/proc', str(client_pid), 'environ').open('rb') as stream: environment = stream.read(65537)
         if len(environment) > 65536 or not environment.endswith(b'\0'): raise RuntimeError('bounded_selected_environment_required')
@@ -581,6 +654,7 @@ raise SystemExit(0 if result['passed'] else 1)
         alive(client_pid)
         report['coldGoReader'] = kernel.public_snapshot(reader); report['coldGoReaderObserved'] = True
         report['exactURI'] = uri; report['exactURIObserved'] = True
+        predicate_end('fully_admitted')
         return found[0]['pid']
 
     try:
@@ -842,6 +916,10 @@ raise SystemExit(0 if result['passed'] else 1)
                     diagnostics['traces'][name] = dict(readFailure=type(trace_error).__name__)
     finally:
         failures = []
+        # Save the last actual predicate observations before killing owned actors,
+        # including after a failed/late predicate; capture never admits an effect.
+        try: capture_predicate_before_cleanup()
+        except Exception as error: failures.append('predicate_capture: ' + type(error).__name__)
         if group_created:
             try: capture_group(cleanup=True)
             except Exception as error: failures.append('group_observation: ' + str(error))

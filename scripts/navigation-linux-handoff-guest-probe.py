@@ -289,8 +289,28 @@ def main():
             raise RuntimeError('serial_read_budget_exceeded')
         payload = decode_guest_frame(serial_bytes, 'shipping' in manifest)
         guest = json.loads(payload)
+        # Keep raw argv in owned private evidence, including for negative guests.
+        # The public result projection contains only bounded metadata/booleans.
+        private = guest.pop('shippingPredicatePrivateBase64', None)
         report['guestResult'] = guest
         (ROOT / 'guest-result.json').write_bytes(payload)
+        if private is not None:
+            capture = guest.get('shippingPredicateCapture', {})
+            if 'shipping' not in manifest or not isinstance(private, str) or len(private) > 10924:
+                raise RuntimeError('bounded_shipping_predicate_payload_required')
+            raw = base64.b64decode(private, validate=True)
+            if not 0 < len(raw) <= 8192 or capture.get('bytes') != len(raw) or capture.get('sha256') != hashlib.sha256(raw).hexdigest() or capture.get('capturedBeforeCleanup') is not True:
+                raise RuntimeError('shipping_predicate_payload_binding_failed')
+            observed = json.loads(raw)
+            if not isinstance(observed, dict) or observed.get('scope') != 'shipping_predicate_private_TEST':
+                raise RuntimeError('shipping_predicate_private_scope_required')
+            with (ROOT / 'shipping-predicate-private.json').open('xb') as stream:
+                os.fchmod(stream.fileno(), 0o600); stream.write(raw); stream.flush(); os.fsync(stream.fileno())
+            report['shippingPredicatePrivateArtifact'] = dict(bytes=len(raw), sha256=capture['sha256'],
+                saved=True, outcome='hash_bound_private_capture')
+        elif guest.get('shippingPredicateCapture') is not None:
+            report['shippingPredicatePrivateArtifact'] = dict(saved=False,
+                outcome=guest.get('shippingPredicatePrivateTransport', 'payload_not_in_serial_frame'))
         if isinstance(guest, dict):
             for key in ('notificationAttempted', 'clickAttempted'):
                 value = guest.get(key)
