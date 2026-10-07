@@ -4,6 +4,12 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review, edited]
   workflow_dispatch:
+    inputs:
+      use_github_runner:
+        description: Use GitHub-hosted runners for native macOS checks
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -40,7 +46,7 @@ jobs:
     needs: scope
     if: ${{ !cancelled() && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) }}
     name: ${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && format('Metadata edit ignored (recovery {0})', matrix.os) || format('Offline recovery ({0}, native Go 1.26)', matrix.os) }}
-    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.os || matrix.os == 'ubuntu-latest' && (vars.CI_LINUX_RUNNER || 'ubuntu-latest') || matrix.os == 'macos-15' && (vars.CI_MACOS_15_RUNNER || 'macos-15') || matrix.os }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.use_github_runner && matrix.os == 'macos-15' && matrix.os || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.os || matrix.os == 'ubuntu-latest' && (vars.CI_LINUX_RUNNER || 'ubuntu-latest') || matrix.os == 'macos-15' && (vars.CI_MACOS_15_RUNNER || 'macos-15') || matrix.os }}
     timeout-minutes: 25
     strategy:
       fail-fast: false
