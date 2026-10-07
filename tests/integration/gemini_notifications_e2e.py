@@ -99,6 +99,121 @@ def write_json(path, value):
     path.chmod(0o600)
 
 
+def attempt_cache_snapshot(lab, baseline=None):
+    """Return public aggregates and private (boot, clock, zero) context separately."""
+    if sys.platform != "linux":
+        return {"class": "unsupported_platform"}, None
+    started, fds, directories = time.monotonic(), [], []
+    def boot_sample():
+        raw = bounded_read(Path("/proc/sys/kernel/random/boot_id"), 258)
+        require(0 < len(raw) <= 257, "cache_observer_boot")
+        raw = raw[:-1] if raw.endswith(b"\n") else raw
+        require(UUID.fullmatch(raw.decode("ascii")), "cache_observer_boot")
+        clock = time.clock_gettime(time.CLOCK_BOOTTIME)
+        require(math.isfinite(clock) and clock >= 0, "cache_observer_clock")
+        return sha(raw), clock
+    def directory_stamp(s):
+        return s.st_dev, s.st_ino, s.st_mode, s.st_uid, s.st_gid
+    def file_stamp(s):
+        return (*directory_stamp(s), s.st_nlink, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+    try:
+        initial_boot, initial_clock = boot_sample()
+        flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
+        parent = None
+        for name in (str(physical(str(lab))), "an-control", "gemini-observations"):
+            root = os.open(name, flags | os.O_DIRECTORY, dir_fd=parent)
+            fds.append(root)
+            info = os.fstat(root)
+            require(info.st_uid == os.geteuid() and stat.S_IMODE(info.st_mode) == 0o700,
+                    "cache_observer_private_directory")
+            directories.append((parent, name, root, directory_stamp(info)))
+            parent = root
+        before = None
+        try:
+            fd = os.open("observations.json", flags, dir_fd=root)
+        except FileNotFoundError:
+            state = None
+        else:
+            fds.append(fd)
+            before = os.fstat(fd)
+            require(stat.S_ISREG(before.st_mode) and stat.S_IMODE(before.st_mode) == 0o600
+                    and before.st_uid == os.geteuid() and before.st_nlink == 1
+                    and 0 <= before.st_size <= 48 * 1024, "cache_observer_private_document")
+            data = bytearray()
+            while len(data) <= 48 * 1024:
+                block = os.read(fd, min(4096, 48 * 1024 + 1 - len(data)))
+                if not block:
+                    break
+                data.extend(block)
+            require(file_stamp(before) == file_stamp(os.fstat(fd)) and len(data) == before.st_size,
+                    "cache_observer_unstable_document")
+            def unique(pairs):
+                result = {}
+                for key, value in pairs:
+                    require(key not in result, "cache_observer_duplicate_field")
+                    result[key] = value
+                return result
+            state = json.loads(data, object_pairs_hook=unique)
+            require(type(state) is dict and set(state) == {"boot", "entries"}
+                    and type(state["boot"]) is str and HEX.fullmatch(state["boot"])
+                    and (state["entries"] is None or type(state["entries"]) is list)
+                    and len(state["entries"] or []) <= 256, "cache_observer_schema")
+        physical(str(lab))
+        for parent, name, directory, identity in directories:
+            require(directory_stamp(os.fstat(directory)) == identity
+                    and directory_stamp(os.stat(name, dir_fd=parent, follow_symlinks=False)) == identity,
+                    "cache_observer_replaced_directory")
+        try:
+            named = os.stat("observations.json", dir_fd=root, follow_symlinks=False)
+        except FileNotFoundError:
+            require(before is None, "cache_observer_removed_document")
+        else:
+            require(before is not None and file_stamp(named) == file_stamp(before),
+                    "cache_observer_replaced_document")
+        boot, now = boot_sample()
+        require(boot == initial_boot and now >= initial_clock, "cache_observer_clock_changed")
+        elapsed = time.monotonic() - started
+        require(math.isfinite(elapsed) and 0 <= elapsed <= 86400, "cache_observer_time")
+        if state is None:
+            return {"class": "absent", "snapshot_elapsed_seconds": elapsed}, (boot, now, True)
+        seen = set()
+        histograms = {group: {"desktop_only": 0, "webhook_only": 0, "both": 0}
+                      for group in ("total", "live", "expired", "outside_window")}
+        for entry in state["entries"] or []:
+            require(type(entry) is dict and set(entry) == {"key", "until", "bits"}
+                    and type(entry["key"]) is str and HEX.fullmatch(entry["key"])
+                    and entry["key"] not in seen and type(entry["bits"]) is int
+                    and entry["bits"] in (1, 2, 3) and type(entry["until"]) in (int, float)
+                    and math.isfinite(entry["until"]) and entry["until"] >= 0,
+                    "cache_observer_entry")
+            seen.add(entry["key"])
+            channel = {1: "desktop_only", 2: "webhook_only", 3: "both"}[entry["bits"]]
+            histograms["total"][channel] += 1
+            if entry["until"] <= now:
+                histograms["expired"][channel] += 1
+            elif entry["until"] > now + 60:
+                histograms["outside_window"][channel] += 1
+            elif state["boot"] == boot:
+                histograms["live"][channel] += 1
+        live = sum(histograms["live"].values())
+        complete = (baseline is not None and baseline[2] and baseline[0] == boot
+                    and 0 <= now - baseline[1] < 60 and state["boot"] == boot
+                    and live == len(seen) and len(seen) < 256)
+        return {"class": "observed_complete_window" if complete else "observed_unqualified",
+                "keys": len(seen), "attempted_bits": histograms, "boot_matches": state["boot"] == boot,
+                "live_keys": live, "expired_keys": sum(histograms["expired"].values()),
+                "outside_window_keys": sum(histograms["outside_window"].values()),
+                "snapshot_elapsed_seconds": elapsed}, (boot, now, not seen)
+    except Exception:
+        return {"class": "unavailable"}, None
+    finally:
+        for fd in reversed(fds):
+            try:
+                os.close(fd)
+            except OSError:
+                pass  # Diagnostics must never replace the original qualification failure.
+
+
 def capture(body):
     """Exact existing generic JSON formatter contract; return fixed classes only."""
     require(isinstance(body, dict) and set(body) == {
@@ -225,7 +340,7 @@ def delivery_counts(rows):
                         and not row.get("stop_hook_active", False) for row in rows) for status in COPY}
 
 
-def settle(g0, lab, fixture, terminal, expected, seconds=6, phase="exercise_settle"):
+def settle(g0, lab, fixture, terminal, expected, seconds=6, phase="exercise_settle", cache_baseline=None):
     started = time.monotonic()
     try:
         end = started + seconds
@@ -273,7 +388,8 @@ def settle(g0, lab, fixture, terminal, expected, seconds=6, phase="exercise_sett
                 pass
             exc.settle_failure = {"phase": phase, "class": kind, "expected": dict(expected),
                                   "actual": actual, "elapsed_seconds": elapsed, "limit_seconds": seconds,
-                                  "native_rows": rows, "native_rows_total": total}
+                                  "native_rows": rows, "native_rows_total": total,
+                                  "attempt_cache": attempt_cache_snapshot(lab, cache_baseline)[0]}
         except Exception:
             pass
         raise
@@ -611,9 +727,10 @@ def run(args):
                 watcher = threading.Thread(target=watch_spool, args=(lab, stop, spool), daemon=True)
                 watcher.start()
             fixture.arm("plain")
+            evidence["attempt_cache_baseline"], cache_baseline = attempt_cache_snapshot(lab)
             terminal = g0.Terminal(node, executable, install, lab, env, ui, args.timeout)
             cases, rows = g0.exercise(lab, fixture, terminal, ui, observer=lambda p: native_rows(g0, p))
-            before_remove_counts = settle(g0, lab, fixture, terminal, delivery_counts(rows))
+            before_remove_counts = settle(g0, lab, fixture, terminal, delivery_counts(rows), cache_baseline=cache_baseline)
             require(snapshot(lab, active_hash)[0] == first, "live_session_installation_mutation")
             if args.update_binary:
                 # Keep this same native CLI and its loaded command binding alive
@@ -728,6 +845,8 @@ def run(args):
         evidence["classification"] = str(exc) if isinstance(exc, (Red, g0.Red)) else "production_harness_error"
         if hasattr(exc, "settle_failure"):
             evidence["settle_failure"] = exc.settle_failure
+            if "attempt_cache_baseline" in evidence:
+                evidence["settle_failure"]["attempt_cache_baseline"] = evidence["attempt_cache_baseline"]
         if hasattr(exc, "setup_diagnostic"):
             evidence["setup_failure"] = exc.setup_diagnostic
         if hasattr(exc, "bridge_diagnostic"):
@@ -792,6 +911,122 @@ def snapshot_settings_equal(path, state):
 
 
 class PureChecks(unittest.TestCase):
+    def cache_view(self, lab, baseline=None):
+        return attempt_cache_snapshot(lab, baseline)[0]
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux cache window observation")
+    def test_attempt_cache_complete_window_requires_private_fresh_baseline(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-gemini-cache-") as tmp:
+            lab = Path(tmp)
+            (lab / "an-control").mkdir(mode=0o700)
+            root = lab / "an-control/gemini-observations"
+            root.mkdir(mode=0o700)
+            public, baseline = attempt_cache_snapshot(lab)
+            self.assertEqual(public["class"], "absent")
+            boot = sha(Path("/proc/sys/kernel/random/boot_id").read_bytes().removesuffix(b"\n"))
+            now = time.clock_gettime(time.CLOCK_BOOTTIME)
+            write_json(root / "observations.json", {"boot": boot, "entries": [
+                {"key": "1" * 64, "until": now + 30, "bits": 2}]})
+            complete = self.cache_view(lab, baseline)
+            self.assertEqual(complete["class"], "observed_complete_window")
+            self.assertEqual(complete["attempted_bits"]["live"]["webhook_only"], 1)
+            self.assertNotIn(boot, json.dumps(complete))
+            _, nonzero = attempt_cache_snapshot(lab)
+            for unqualified in (None, nonzero, (boot, now - 61, True), ("0" * 64, now, True)):
+                self.assertEqual(self.cache_view(lab, unqualified)["class"], "observed_unqualified")
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux atomic cache replacement")
+    def test_attempt_cache_detects_replacement_after_held_file_stat(self):
+        for replacement in ("file", "directory"):
+            with self.subTest(replacement=replacement), tempfile.TemporaryDirectory(prefix="TEST-gemini-cache-") as tmp:
+                lab = Path(tmp)
+                (lab / "an-control").mkdir(mode=0o700)
+                root = lab / "an-control/gemini-observations"
+                root.mkdir(mode=0o700)
+                path = root / "observations.json"
+                write_json(path, {"boot": "0" * 64, "entries": []})
+                original, real_fstat, calls = path.stat(), os.fstat, []
+                def replace_after_stat(fd):
+                    observed = real_fstat(fd)
+                    if (observed.st_dev, observed.st_ino) == (original.st_dev, original.st_ino):
+                        calls.append(fd)
+                        if len(calls) == 2:
+                            # Real filesystem mutation after the final held-file sample.
+                            if replacement == "file":
+                                other = root / "replacement"
+                                write_json(other, {"boot": "1" * 64, "entries": []})
+                                other.replace(path)
+                            else:
+                                root.rename(lab / "an-control/old-cache")
+                                root.mkdir(mode=0o700)
+                    return observed
+                with patch(__name__ + ".os.fstat", side_effect=replace_after_stat):
+                    self.assertEqual(self.cache_view(lab), {"class": "unavailable"})
+                self.assertEqual(len(calls), 2)
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux persisted-cache observation")
+    def test_attempt_cache_projection_and_privacy(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-gemini-cache-") as tmp:
+            lab = Path(tmp)
+            (lab / "an-control").mkdir(mode=0o700)
+            self.assertEqual(self.cache_view(lab), {"class": "unavailable"})
+            root = lab / "an-control/gemini-observations"
+            root.mkdir(mode=0o700)
+            boot = sha(Path("/proc/sys/kernel/random/boot_id").read_bytes().strip())
+            now = time.clock_gettime(time.CLOCK_BOOTTIME)
+            keys = [str(i) * 64 for i in (1, 2, 3)]
+            state = {"boot": boot, "entries": [
+                {"key": keys[0], "until": now + 30, "bits": 2},
+                {"key": keys[1], "until": now - 1, "bits": 1},
+                {"key": keys[2], "until": now + 120, "bits": 3}]}
+            write_json(root / "observations.json", state)
+            observed = self.cache_view(lab)
+            self.assertEqual(observed["class"], "observed_unqualified")
+            self.assertEqual(observed["keys"], 3)
+            self.assertEqual(observed["attempted_bits"]["total"], {"desktop_only": 1, "webhook_only": 1, "both": 1})
+            self.assertEqual((observed["boot_matches"], observed["live_keys"],
+                              observed["expired_keys"], observed["outside_window_keys"]), (True, 1, 1, 1))
+            serialized = json.dumps(observed)
+            for secret in (boot, *keys, str(lab)):
+                self.assertNotIn(secret, serialized)
+            state["boot"] = "0" * 64
+            write_json(root / "observations.json", state)
+            stale = self.cache_view(lab)
+            self.assertFalse(stale["boot_matches"])
+            self.assertEqual(stale["live_keys"], 0)
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux private-file observation")
+    def test_attempt_cache_rejects_unsafe_files_and_documents(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-gemini-cache-") as tmp:
+            lab = Path(tmp)
+            (lab / "an-control").mkdir(mode=0o700)
+            root = lab / "an-control/gemini-observations"
+            root.mkdir(mode=0o700)
+            path = root / "observations.json"
+            state = {"boot": "0" * 64, "entries": []}
+            write_json(path, state)
+            path.chmod(0o644)
+            self.assertEqual(self.cache_view(lab), {"class": "unavailable"})
+            path.chmod(0o600)
+            os.link(path, root / "hardlink")
+            self.assertEqual(self.cache_view(lab), {"class": "unavailable"})
+            (root / "hardlink").unlink()
+            path.rename(root / "original")
+            path.symlink_to(root / "original")
+            self.assertEqual(self.cache_view(lab), {"class": "unavailable"})
+            path.unlink()
+            for document in (b"x" * (48 * 1024 + 1),
+                             b'{"boot":"private-TEST-data","entries":[]}',
+                             b'{"boot":"' + b"0" * 64 + b'","entries":[],"entries":[]}'):
+                path.write_bytes(document)
+                path.chmod(0o600)
+                self.assertEqual(self.cache_view(lab), {"class": "unavailable"})
+            entry = {"key": "1" * 64, "until": 1, "bits": 2}
+            for entries in ([entry] * 2, [entry] * 257,
+                            [{**entry, "until": float("inf")}], [{**entry, "bits": True}]):
+                write_json(path, {"boot": "0" * 64, "entries": entries})
+                self.assertEqual(self.cache_view(lab), {"class": "unavailable"})
+
     # Regression: settle failures lose safe counts/rows despite run's finally writer.
     def settle_ports(self, deliveries=(), error=None, exit_code=None, rows=None):
         row = {"event": "AfterAgent", "valid": True, "neutral": True,
@@ -873,6 +1108,7 @@ class PureChecks(unittest.TestCase):
         timer, _ = self.settle_clock()
         with tempfile.TemporaryDirectory(prefix="TEST-g5-retention-") as root:
             lab = Path(root).resolve()
+            root = str(lab)
             artifact = lab / "artifact"
             artifact.write_bytes(b"TEST")
             (lab / "go.mod").write_bytes(b"TEST")
