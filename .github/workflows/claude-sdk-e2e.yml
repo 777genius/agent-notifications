@@ -20,13 +20,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: claude-sdk-e2e-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   sdk-blackbox:
     name: Claude SDK ${{ matrix.os }}
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.runner || matrix.runner == 'ubuntu-24.04' && (vars.CI_LINUX_RUNNER || 'ubuntu-24.04') || matrix.runner == 'macos-15' && (vars.CI_MACOS_15_RUNNER || 'macos-15') || matrix.runner }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -49,9 +49,28 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Isolate Darwin Python toolcache
+        if: matrix.os == 'darwin'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Cached macOS tool entries link to frameworks outside the toolcache.
+          $cache = Join-Path $env:RUNNER_TEMP ("NEWTEST-claude-sdk-python-" + [guid]::NewGuid())
+          New-Item -ItemType Directory $cache | Out-Null
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value @("RUNNER_TOOL_CACHE=$cache", "AGENT_TOOLSDIRECTORY=$cache")
       - uses: actions/setup-python@v7
+        id: python
         with:
           python-version: '3.12'
+      - name: Verify setup Python executable before build
+        shell: pwsh
+        env:
+          PYTHON_EXECUTABLE: ${{ steps.python.outputs.python-path }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:PYTHON_EXECUTABLE -or -not (Test-Path -LiteralPath $env:PYTHON_EXECUTABLE -PathType Leaf)) { throw 'Missing setup-python executable' }
+          & $env:PYTHON_EXECUTABLE -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version; print(sys.version)'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Linux ALSA build prerequisite
         if: matrix.os == 'linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
@@ -109,14 +128,17 @@ jobs:
         shell: pwsh
         env:
           CANDIDATE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          PYTHON_EXECUTABLE: ${{ steps.python.outputs.python-path }}
         run: |
+          $ErrorActionPreference = 'Stop'
           $actual = git rev-parse HEAD
           if ($actual -ne $env:CANDIDATE_COMMIT) { throw 'Candidate commit mismatch' }
           $testRoot = $env:CLAUDE_SDK_TEST_ROOT
           if (-not $testRoot -or -not (Test-Path -LiteralPath $testRoot)) { throw 'Missing private TEST root' }
           $binary = Join-Path $testRoot $(if ($IsWindows) { 'claude-sdk.exe' } else { 'claude-sdk' })
           $report = Join-Path $env:RUNNER_TEMP 'claude-sdk-evidence/receipt.json'
-          python -B scripts/claude_sdk_e2e.py --binary $binary --temp-root $testRoot --report $report
+          if (-not $env:PYTHON_EXECUTABLE -or -not (Test-Path -LiteralPath $env:PYTHON_EXECUTABLE -PathType Leaf)) { throw 'Missing setup-python executable' }
+          & $env:PYTHON_EXECUTABLE -B scripts/claude_sdk_e2e.py --binary $binary --temp-root $testRoot --report $report
           exit $LASTEXITCODE
       - name: Upload exact-commit native receipt on pass or failure
         if: always()
