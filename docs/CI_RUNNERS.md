@@ -80,16 +80,25 @@ without editing semantic matrices. Workflow changes affect future runs only;
 existing frozen tags and the already-created `v1.48.1` release run 37519336110 are
 not restarted, cancelled or republished by this migration.
 
-## Intermediate prose revisions and final CI
+## Intermediate prose/Windows revisions and final CI
 
 Core macOS and install recovery classify every revision on Linux. Only modified
 `README.md`, `docs/DO_NOT_DISTURB.md`, and `docs/NOTIFICATION_TYPES.md` are eligible
 for a cheap intermediate PR run. Mixed changes, additions, deletions, renames,
 unknown paths, qualification/evidence documents, or unavailable Git metadata
-retain full native coverage. Linux recovery continues in prose mode. Pushes and
-manual runs always use full mode; becoming ready for review also requests full CI.
+retain full native coverage. A draft PR can also use `windows-only` mode when its
+entire merge-base diff contains only these Windows App SDK contract paths:
+`.github/workflows/navigation-windows-appsdk-build.yml` and
+`tests/integration/windows_appsdk_build/{README.md,SDKContract.cpp,SDKContract.vcxproj}`.
+Regular-file additions, modifications, deletions and renames within that exact
+set are eligible; both rename paths must qualify. Symlinks, gitlinks, mixed or
+unknown paths and malformed/unavailable Git or PR metadata retain full coverage.
+This does not treat arbitrary C++ or Visual Studio projects as Windows-only.
+Linux recovery continues in both intermediate modes; all four Mac jobs are
+omitted. Ready Windows PRs, pushes and manual runs use full mode; becoming ready
+for review also requests full CI. Existing prose eligibility is unchanged.
 
-**A prose-mode run deliberately fails `Full macOS CI required` and `Full install
+**A prose- or Windows-only run deliberately fails `Full macOS CI required` and `Full install
 recovery required`.** It saves intermediate Mac capacity but is not merge evidence.
 Add the `ci:full` PR label before final review/merge and wait for both full gates,
 the Go 1.25/macOS 15 and Go 1.26/macOS 26 jobs, Swift tests, and both recovery cells
@@ -109,3 +118,16 @@ mandatory offline suite; `--real-network` continues to run the combined suite.
 Actual provider overlap/barrier and failure propagation were verified in disposable
 TEST workflows [37583868400](https://github.com/777genius/ci-runner-sandbox-20261005/actions/runs/37583868400)
 and [37584064041](https://github.com/777genius/ci-runner-sandbox-20261005/actions/runs/37584064041).
+
+The Go 1.25 cell uses one race-enabled `go test ./...` invocation and omits only
+six audited portable tests by exact, anchored name: `TestWizardInstallOrUpdateBootstrapE2E`,
+`TestSetupWizardRepairMixedRevisionsKeepsSiblingE2E`,
+`TestSetupWizardTTYMixedRepairPlanShowsPerBindingDigestsE2E`,
+`TestGeminiEventTransportTotalBudget`, `TestWizardTTYAddSecondClientKeepProposesNewDefaults`,
+and `TestWizardTTYKeepBoundMixedCancels`. Every package and test file still compiles;
+unknown/new tests remain enabled. Go 1.26 retains the full suite, including all six.
+The selection follows the native Go 1.25 baseline audit whose Go sources match
+main `54c24f71e9b4d3af47a3cd2f0da0574b442089ac`; the six test durations totalled
+33.80 seconds (the command took 29.08 seconds). This is measured overlap, not a
+guaranteed wall-time reduction. Platform-specific/native tests, installer units,
+Swift and recovery coverage remain, as do separate opt-in qualification recipes.
