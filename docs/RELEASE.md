@@ -266,7 +266,8 @@ v1.48.1 does not build or publish ClaudeNotifier.app. macOS consumers retain the
 signed and notarized helper from their qualified v1.46.1 channel.
 
 Future macOS candidates use the manual `macos-qualification.yml` workflow.
-Signing runs only when the repository owner dispatches from
+Signing runs only when both the original actor and the current triggering actor
+(the rerun initiator) are the repository owner, dispatching from
 `release/macos-signing`, inside the `macos-signing` GitHub environment. PR and
 `smoke-notary-*` tag events do not sign. The qualification caller fails before
 building artifacts when the actor or ref is untrusted.
@@ -280,10 +281,19 @@ input. For example, replace `REVIEWED_MAIN_SHA` and `vX.Y.Z` with verified value
 git fetch origin main
 git merge-base --is-ancestor REVIEWED_MAIN_SHA origin/main
 git push origin REVIEWED_MAIN_SHA:refs/heads/release/macos-signing
+test "$(git ls-remote origin refs/heads/release/macos-signing | cut -f1)" = "$(git rev-parse REVIEWED_MAIN_SHA^{commit})"
 gh workflow run macos-qualification.yml --ref release/macos-signing -f candidate_version=vX.Y.Z
 # Notifier-only verification uses the same trusted branch and environment:
 gh workflow run notifier-signing-smoke.yml --ref release/macos-signing -f skip_notarize=false
 ```
+
+For artifact-only pre-merge qualification, the owner may instead fast-forward
+the signing branch to an independently reviewed candidate SHA and verify that
+remote SHA before dispatch. Full current-head CI must pass before merging.
+Use a merge commit to preserve the qualified candidate in ancestry, then compare
+its complete Git tree with the merged tree. Reuse artifact evidence only when
+the tree hashes match; receipts retain the actual candidate SHA. This path does
+not authorize release publication.
 
 `use_github_runner=true` may be supplied to either workflow when the configured
 runner is unavailable. These commands qualify artifacts only; they do not
