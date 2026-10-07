@@ -1,0 +1,95 @@
+name: Linux vendor verifier measurement artifact
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile-probe:
+    name: Compile read-only TEST probe, never execute
+    runs-on: ${{ vars.CI_LINUX_2204_RUNNER || 'ubuntu-22.04' }}
+    timeout-minutes: 15
+    env:
+      GOTOOLCHAIN: local
+      CGO_ENABLED: '0'
+      GOOS: linux
+      GOARCH: amd64
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Compile and record source-bound artifact without running it
+        shell: bash
+        env:
+          PROBE_DIR: ${{ runner.temp }}/navigation-vendor-verifier-artifact
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$GITHUB_WORKFLOW_SHA" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+          mkdir "$PROBE_DIR"
+          go build -trimpath -ldflags='-s -w' -o "$PROBE_DIR/vendor-verify-probe" ./tests/integration/navigation_linux_vendor_verify_probe
+          test ! -L "$PROBE_DIR/vendor-verify-probe"
+          test -f "$PROBE_DIR/vendor-verify-probe"
+          test -s "$PROBE_DIR/vendor-verify-probe"
+          test "$(stat -c %s "$PROBE_DIR/vendor-verify-probe")" -le "$((32 * 1024 * 1024))"
+          GOTOOLCHAIN=local go version -m "$PROBE_DIR/vendor-verify-probe" > "$PROBE_DIR/probe-build-info.txt"
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, stat
+          out = pathlib.Path(os.environ['PROBE_DIR'])
+          def bounded_read(path, cap):
+              before = path.lstat()
+              assert stat.S_ISREG(before.st_mode) and 0 < before.st_size <= cap, str(path)
+              identity = lambda s: (s.st_dev, s.st_ino, s.st_mode, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+              fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+              with os.fdopen(fd, 'rb') as stream:
+                  assert identity(os.fstat(stream.fileno())) == identity(before)
+                  data = stream.read(cap + 1)
+                  assert identity(os.fstat(stream.fileno())) == identity(before)
+              assert len(data) == before.st_size and identity(path.lstat()) == identity(before)
+              return data
+          assert os.environ['GITHUB_WORKFLOW_SHA'] == os.environ['GITHUB_SHA']
+          caps = {'vendor-verify-probe': 32 << 20, 'probe-build-info.txt': 64 << 10, 'probe-source.go': 64 << 10, 'vendor-manifest.json': 8 << 20}
+          raw = bounded_read(out / 'vendor-verify-probe', caps['vendor-verify-probe'])
+          assert raw[:5] == b'\x7fELF\x02'
+          assert int.from_bytes(raw[18:20], 'little') == 62
+          info = bounded_read(out / 'probe-build-info.txt', caps['probe-build-info.txt']).decode()
+          for field in ('GOOS=linux', 'GOARCH=amd64', 'vcs.revision=' + os.environ['GITHUB_SHA'], 'vcs.modified=false'):
+              assert field in info, field
+          sources = ['tests/integration/navigation_linux_vendor_verify_probe/main.go', 'internal/linuxcallback/vendor_linux.go', 'internal/linuxcallback/vendor-chatgpt-26.930.51102-amd64.json', 'go.mod', 'go.sum', '.github/workflows/navigation-linux-vendor-verifier-measurement.yml']
+          source_bytes = {p: bounded_read(pathlib.Path(p), 8 << 20 if p == sources[2] else 64 << 10) for p in sources}
+          source_pins = {p: hashlib.sha256(b).hexdigest() for p, b in source_bytes.items()}
+          catalog = source_bytes[sources[2]]
+          assert hashlib.sha256(catalog).hexdigest() == '0d90a150c5066973b5884e2086b632737536bcbf362404ed81bb284d3b37f326'
+          manifest = json.loads(catalog)
+          assert manifest['packageSHA256'] == '637c3c94bc50f8ee33a15e2e28ec7f92a787f0943e700efe111bc0bf0d4813b4'
+          files = [e for e in manifest['entries'] if e['type'] == 'file']
+          assert (len(manifest['entries']), len(files), sum(e['size'] for e in files)) == (4481, 3858, 1625716257)
+          for name, data in [('probe-source.go', source_bytes[sources[0]]), ('vendor-manifest.json', catalog)]:
+              with (out / name).open('xb') as stream: stream.write(data)
+          assert {p.name for p in out.iterdir()} == set(caps)
+          members = {name: bounded_read(out / name, cap) for name, cap in caps.items()}
+          pins = {name: {'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()} for name, data in members.items()}
+          record = dict(schemaVersion=1, scope='compile_only_TEST_verifier_artifact', sourceSHA=os.environ['GITHUB_SHA'], workflowSHA=os.environ['GITHUB_WORKFLOW_SHA'], runID=int(os.environ['GITHUB_RUN_ID']), runAttempt=int(os.environ['GITHUB_RUN_ATTEMPT']), jobName=os.environ['GITHUB_JOB'], workflowRef=os.environ['GITHUB_WORKFLOW_REF'], sourcePins=source_pins, files=pins, probeExecuted=False, nativeQualification=False, operatorMustVerifyActualArtifactIDZIPAndELF=True)
+          report = (json.dumps(record, indent=2, sort_keys=True) + '\n').encode()
+          assert len(report) <= 64 << 10
+          with (out / 'artifact-inputs.json').open('xb') as stream: stream.write(report)
+          assert {p.name for p in out.iterdir()} == set(caps) | {'artifact-inputs.json'}
+          PY
+      - name: Upload compilation custody only
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-vendor-verifier-measurement-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/navigation-vendor-verifier-artifact/vendor-verify-probe
+            ${{ runner.temp }}/navigation-vendor-verifier-artifact/probe-build-info.txt
+            ${{ runner.temp }}/navigation-vendor-verifier-artifact/probe-source.go
+            ${{ runner.temp }}/navigation-vendor-verifier-artifact/vendor-manifest.json
+            ${{ runner.temp }}/navigation-vendor-verifier-artifact/artifact-inputs.json
+          if-no-files-found: error
+          retention-days: 7
