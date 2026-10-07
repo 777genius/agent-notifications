@@ -84,7 +84,7 @@ func runOpenCodeRuntimeProfile(args []string, input io.ReadCloser, output io.Wri
 	started := time.Now()
 	signals, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	ctx, cancel := context.WithDeadline(signals, started.Add(10*time.Second))
+	ctx, cancel := context.WithDeadline(signals, started.Add(35*time.Second))
 	defer cancel()
 	return runtimeProfileOperation(ctx, args, input, output, ownedRuntimeDescriptor(), qualifyRuntimeObserver)
 }
@@ -111,7 +111,7 @@ func runtimeProfileOperation(ctx context.Context, args []string, input io.ReadCl
 			before := held.image
 			// Source-backed settlement contract: this exact pinned API runs/waits
 			// synchronously, even on startup, output, identity or cancellation error.
-			evidence, probeErr := clientdetect.ProbeOpenCodeTarget(ctx, clientdetect.ProbeTarget{Executable: in.HostExecutable, Environment: []string{"PATH="}, Timeout: 10 * time.Second})
+			evidence, probeErr := clientdetect.ProbeIsolatedOpenCodeTarget(ctx, clientdetect.ProbeTarget{Executable: in.HostExecutable, Environment: []string{"PATH="}, Timeout: 30 * time.Second})
 			profile := opencodehost.Resolve(evidence.VersionEvidence)
 			after, afterErr := held.Revalidate(ctx)
 			if probeErr == nil && evidence.ProbeStatus == "ok" && afterErr == nil && before == after && ctx.Err() == nil && qualify != nil {
