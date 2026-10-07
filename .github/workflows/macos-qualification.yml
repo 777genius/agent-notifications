@@ -3,6 +3,11 @@ name: macOS Candidate Qualification
 on:
   workflow_dispatch:
     inputs:
+      use_github_runner:
+        description: Use GitHub-hosted macOS runners instead of configured runners
+        required: false
+        default: false
+        type: boolean
       candidate_version:
         description: Candidate version matching this ref, for example v1.49.0
         required: true
@@ -25,7 +30,7 @@ jobs:
       matrix:
         include:
           - arch: arm64
-            runner: ${{ vars.CI_MACOS_15_RUNNER || 'macos-15' }}
+            runner: ${{ inputs.use_github_runner && 'macos-15' || vars.CI_MACOS_15_RUNNER || 'macos-15' }}
           - arch: amd64
             runner: macos-15-intel
     env:
@@ -116,4 +121,5 @@ jobs:
     uses: ./.github/workflows/notifier-signing-smoke.yml
     with:
       skip_notarize: false
+      use_github_runner: ${{ inputs.use_github_runner }}
     secrets: inherit
