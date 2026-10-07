@@ -48,7 +48,9 @@ function archiveHash(handle: number): string {
 function run(dotnet: string, phase: string, args: string[], timeout: number): string {
   const env = Object.fromEntries(['SystemRoot', 'WINDIR', 'PATH', 'TEMP', 'TMP', 'ProgramFiles', 'ProgramFiles(x86)']
     .filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]]));
-  Object.assign(env, { DOTNET_CLI_UI_LANGUAGE: 'en-US', DOTNET_CLI_HOME: out, DOTNET_SKIP_FIRST_TIME_EXPERIENCE: '1' });
+  Object.assign(env, { DOTNET_CLI_UI_LANGUAGE: 'en-US', DOTNET_CLI_HOME: out,
+    DOTNET_GENERATE_ASPNET_CERTIFICATE: 'false', DOTNET_CLI_TELEMETRY_OPTOUT: '1',
+    DOTNET_ADD_GLOBAL_TOOLS_TO_PATH: 'false', DOTNET_NOLOGO: '1' });
   const child = spawnSync(dotnet, args, { cwd: out, env, timeout, maxBuffer: 65_536, windowsHide: true });
   const stdout = child.stdout ?? Buffer.alloc(0), stderr = child.stderr ?? Buffer.alloc(0);
   for (const [label, data] of [['stdout', stdout], ['stderr', stderr]] as const) {
