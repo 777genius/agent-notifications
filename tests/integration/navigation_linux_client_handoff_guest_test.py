@@ -373,6 +373,38 @@ def main():
             if result.returncode not in allowed: raise RuntimeError('shipping_normal_CLI_failed_' + label)
             return result.stdout.decode()
 
+        # The real installer holds O_RDONLY directory descriptors for ancestors.
+        # Observe admission as its actual UID before invoking the unchanged CLI.
+        admission_code = """import json,os,stat,sys
+from pathlib import Path
+result=dict(uid=os.getuid(),gid=os.getgid(),groups=os.getgroups(),ancestors=[],passed=False)
+paths=set()
+for argument in sys.argv[1:]:
+ p=Path(argument)
+ paths.update([p,*p.parents])
+for p in sorted(paths,key=lambda p:(len(p.parts),str(p))):
+ try:fd=os.open(p,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+ except OSError as error:
+  result['failure']=dict(path=str(p),errno=error.errno,error=str(error));break
+ try:
+  s=os.fstat(fd)
+  result['ancestors'].append(dict(path=str(p),uid=s.st_uid,gid=s.st_gid,mode=stat.S_IMODE(s.st_mode),device=s.st_dev,inode=s.st_ino))
+ finally:os.close(fd)
+else:result['passed']=True
+print(json.dumps(result,sort_keys=True),flush=True)
+raise SystemExit(0 if result['passed'] else 1)
+"""
+        remaining = deadline - now()
+        if remaining <= 0: raise RuntimeError('shipping_ancestor_admission_budget_expired')
+        admission = subprocess.run(['/usr/bin/python3', '-I', '-c', admission_code,
+            str(stage), str(managed / 'bin'), str(control.parent)],
+            cwd=work, env=env, preexec_fn=drop, capture_output=True, timeout=min(3, remaining))
+        if len(admission.stdout) + len(admission.stderr) > 8192: raise RuntimeError('shipping_ancestor_admission_output_bound')
+        report['managedAncestorAdmission'] = dict(collected=True, exitCode=admission.returncode,
+            collectedBoot=now(), stdout=admission.stdout.decode(), stderr=admission.stderr.decode())
+        observation = json.loads(admission.stdout)
+        if admission.returncode or observation.get('passed') is not True or observation.get('uid') != 1000 or observation.get('gid') != 1000 or observation.get('groups') != []:
+            raise RuntimeError('shipping_real_UID_directory_admission_failed')
         command('managed-install', ['internal-install-runtime', '--stage', str(stage), '--entry', staged.name,
             '--target', str(managed / 'bin'), '--control-root', str(control), '--consumer', 'claude-hooks'])
         def generation(label):
@@ -519,7 +551,10 @@ def main():
         return found[0]['pid']
 
     try:
-        ROOT.mkdir(mode=0o700); os.chown(ROOT, 0, 1000); ROOT.chmod(0o710)
+        ROOT.mkdir(mode=0o700); os.chown(ROOT, 0, 1000)
+        # Shipping directory anchors need group read as well as traversal. The
+        # root stays root-owned, group non-writable, and inaccessible to others.
+        ROOT.chmod(0o750 if shipping else 0o710)
         # One explicitly frozen offline TEST assembly; no automatic attempt/retry.
         work.mkdir(mode=0o700); os.chown(work, 1000, 1000)
         group.mkdir(mode=0o700); group_created = True
