@@ -189,6 +189,7 @@ async function main(): Promise<void> {
       const w = object(windowRecord), intent = object((evidence.receipts as Json)['TEST-owned-foreground-intent.json']); correlation(w, 'owned_foreground'); correlation(intent, 'owned_foreground');
       check(scenario === 'owned_test_foreground' && w.scenario === scenario && w.pid === ui.pid && w.birth === ui.birth && w.physicalImage === exe && w.exeSHA256 === pins.get(exe) && w.deadlineBootMs === ui.deadlineBootMs && w.className === `NavigationColdForegroundTEST-${nonce}`, 'owned generation/window lifecycle');
       sameIdentity(token(w.token, true), baseline); sameFacts(token(intent.token, true), token(w.token, true));
+      check((ui.completedCensusAttempts as number) >= 1 && Number.isSafeInteger(ui.firstCompletedCensusBootMs) && (w.createIntentBootMs as number) >= (ui.firstCompletedCensusBootMs as number), 'own window only after first complete census');
       for (const k of ['nonce', 'pid', 'birth', 'bootMs', 'scenario', 'creatorTID', 'className', 'physicalImage', 'exeSHA256', 'deadlineBootMs', 'createIntentBootMs']) check(intent[k] === w[k], 'immutable lifecycle create/show intent');
       check(Number.isInteger(w.creatorTID) && (w.creatorTID as number) > 0 && (w.creatorTID as number) <= 0xffffffff && intent.windowCreated === false && intent.foregroundAttempts === 0 && [0, 1].includes(w.foregroundAttempts as number) && typeof w.windowCreated === 'boolean' && typeof w.destroyed === 'boolean' && typeof w.windowCustodyKnown === 'boolean' && typeof w.ownerLifetimeRetained === 'boolean' && w.ownerLifetimeRetained === !w.windowCustodyKnown, 'one creator/foreground attempt');
       if (w.windowCreated === true) check(Number.isInteger(w.startupFlags) && (w.startupFlags as number) >= 0 && (w.startupFlags as number) <= 0xffffffff && Number.isInteger(w.startupShowWindow) && (w.startupShowWindow as number) >= 0 && (w.startupShowWindow as number) <= 0xffff && typeof w.visible === 'boolean', 'actual startup/visibility observations');
@@ -196,7 +197,13 @@ async function main(): Promise<void> {
       check(clocks.every(n => Number.isSafeInteger(n) && (n as number) >= (w.bootMs as number)) && clocks.every((n, i) => i === 0 || (n as number) >= (clocks[i - 1] as number)) && (w.createIntentBootMs as number) >= collectedBoot, 'finite owned lifecycle order');
       if (ui.inputEffectUnknown === false && ui.centerAttempted === true) check(w.windowCreated === true && w.visible === true && w.setForegroundReturned === true && w.actualForeground === true && w.foregroundAttempts === 1 && w.destroyed === true && w.windowCustodyKnown === true, 'actual owned foreground and destruction custody');
       if (ui.invokeReturned === true) check(w.destroyed === true && w.windowCustodyKnown === true && (w.destroyCallBootMs as number) >= (ui.invokeReturnedBootMs as number), 'window held through Invoke return');
-    } else check(scenario === 'shell_foreground' ? !(evidence.receipts as Json)['TEST-owned-foreground-intent.json'] : ui.centerAttempted === false && ui.invokeReturned !== true && !(evidence.receipts as Json)['TEST-owned-foreground-intent.json'], 'GUI terminal required after lifecycle intent/effects');
+    } else {
+      check(!(evidence.receipts as Json)['TEST-owned-foreground-intent.json'], 'GUI terminal required after lifecycle intent');
+      if (scenario === 'owned_test_foreground') {
+        check(ui.centerAttempted === false && ui.inputEffectUnknown === false && !(evidence.receipts as Json)['TEST-center-input-intent.json'] && !(evidence.receipts as Json)['TEST-center-input.json'], 'direct banner lane has no window/input effects');
+        if (ui.invokeReturned === true) check((ui.completedCensusAttempts as number) >= 2 && ui.maxOwnedTitleMatches === 1, 'fresh complete double census before direct banner Invoke');
+      }
+    }
     check(typeof ui.centerAttempted === 'boolean' && typeof ui.inputEffectUnknown === 'boolean', 'actual center discriminator flags');
     if (ui.centerAttempted === true) {
       const input = object((evidence.receipts as Json)['TEST-center-input.json']); correlation(input, 'center_input');

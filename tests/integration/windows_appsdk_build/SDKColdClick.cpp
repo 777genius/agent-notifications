@@ -416,7 +416,6 @@ static int invoke(bool ownScenario = false) {
     try {
         interactive();
         const auto sender = read(L"TEST-sender-collected.json"); demand(sender.GetNamedString(L"nonce") == nonce && sender.GetNamedBoolean(L"collected") && sender.GetNamedNumber(L"exitCode") == 0, "CollectedSenderBeforeClick");
-        if (ownScenario) { owned.reset(new OwnedForeground()); owned->create(binding, deadline); }
         ComPtr<IUIAutomation> automation; winrt::check_hresult(CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&automation)));
         ComPtr<IUIAutomationTreeWalker> walker; winrt::check_hresult(automation->get_RawViewWalker(&walker));
         struct Selection { ComPtr<IUIAutomationElement> row, title; DWORD pid = 0; std::vector<int> rowID, titleID; };
@@ -455,7 +454,12 @@ static int invoke(bool ownScenario = false) {
         };
         while (GetTickCount64() < deadline) {
             auto selected = census(); if (!selected.row) {
-                if (completed == 1 && maxTitles == 0) centerInput(binding, proof, deadline, owned.get());
+                if (completed == 1 && maxTitles == 0) {
+                    // A visible owned banner needs no foreground/window/input dependency.
+                    // Only this completed zero-title observation admits the separate GUI scenario.
+                    if (ownScenario) { owned.reset(new OwnedForeground()); owned->create(binding, deadline); }
+                    centerInput(binding, proof, deadline, owned.get());
+                }
                 Sleep(250); continue;
             }
             auto fresh = census(); demand(fresh.row && fresh.pid == selected.pid && fresh.rowID == selected.rowID && fresh.titleID == selected.titleID, "FreshOwnedRow");
