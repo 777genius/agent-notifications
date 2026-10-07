@@ -4,6 +4,12 @@ on:
   push:
     branches: [ main, develop ]
   workflow_dispatch:
+    inputs:
+      use_github_runner:
+        description: Use GitHub-hosted runners for native macOS checks
+        required: false
+        default: false
+        type: boolean
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review, edited]
 
@@ -39,7 +45,7 @@ jobs:
     needs: scope
     if: ${{ !cancelled() && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) && needs.scope.outputs.mode != 'docs' }}
     name: ${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && format('Metadata edit ignored (macOS {0})', matrix.go) || format('Test on macOS ({0})', matrix.go) }}
-    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.os || matrix.os == 'macos-15' && (vars.CI_MACOS_15_RUNNER || 'macos-15') || matrix.os == 'macos-26' && (vars.CI_MACOS_26_RUNNER || 'macos-26') || matrix.os }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.use_github_runner && matrix.os || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.os || matrix.os == 'macos-15' && (vars.CI_MACOS_15_RUNNER || 'macos-15') || matrix.os == 'macos-26' && (vars.CI_MACOS_26_RUNNER || 'macos-26') || matrix.os }}
     timeout-minutes: 30
 
     strategy:
@@ -143,7 +149,7 @@ jobs:
     needs: scope
     if: ${{ !cancelled() && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) && needs.scope.outputs.mode != 'docs' }}
     name: ${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && 'Metadata edit ignored (Swift)' || 'Swift notifier tests' }}
-    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'macos-15' || vars.CI_MACOS_15_RUNNER || 'macos-15' }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.use_github_runner && 'macos-15' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'macos-15' || vars.CI_MACOS_15_RUNNER || 'macos-15' }}
     timeout-minutes: 30
 
     steps:
