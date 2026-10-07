@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -901,6 +902,50 @@ func TestAppendSharedNotifierOptions_ReplacePerSessionStaysUniqueForUnknownSessi
 	}
 	if group1 == group2 {
 		t.Errorf("unknown/empty sessions must keep unique groups, got %q twice", group1)
+	}
+}
+
+func TestAppendSharedNotifierOptions_FlagLikeValuesStayIntact(t *testing.T) {
+	// A notification title of "-group" must not be treated as the flag: doing so
+	// would replace the following token and drop the -message argument.
+	sessionID := "session-abc-123"
+	args := appendSharedNotifierOptions(
+		[]string{"-title", "-group", "-message", "-nosound"},
+		"",
+		sessionID,
+		false,
+		true,
+	)
+
+	want := []string{
+		"-title", "-group",
+		"-message", "-nosound",
+		"-threadID", sessionID,
+		"-group", notificationGroupPrefix + sessionID,
+		"-nosound",
+	}
+	if !slices.Equal(args, want) {
+		t.Fatalf("args = %v, want %v", args, want)
+	}
+	if countFlag(args, "-message") != 1 {
+		t.Errorf("expected exactly one -message flag, got %v", args)
+	}
+	if countFlag(args, "-group") != 2 {
+		t.Errorf("expected the title and the flag, got %v", args)
+	}
+}
+
+func TestSetNotifierFlag_ReplacesFlagAtValuePair(t *testing.T) {
+	// The stale -group added by the multiplexer builders is replaced in place,
+	// and every other argument keeps its position.
+	args := setNotifierFlag(
+		[]string{"-title", "T", "-message", "M", "-execute", "echo -group", "-group", "stale"},
+		"-group",
+		"fresh",
+	)
+	want := []string{"-title", "T", "-message", "M", "-execute", "echo -group", "-group", "fresh"}
+	if !slices.Equal(args, want) {
+		t.Fatalf("args = %v, want %v", args, want)
 	}
 }
 

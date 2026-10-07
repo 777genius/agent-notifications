@@ -359,17 +359,48 @@ func uniqueNotificationGroupID() string {
 	return fmt.Sprintf("%s%d-%d", notificationGroupPrefix, time.Now().UnixNano(), seq)
 }
 
-// setNotifierFlag replaces flag's value if present, otherwise appends the pair.
+// booleanNotifierFlags are notifier flags that consume no value, so the token
+// that follows them is not one of their arguments. Every other token that
+// begins with "-" is treated as a flag whose next token is its value.
+var booleanNotifierFlags = map[string]struct{}{
+	"-timeSensitive": {},
+	"-nosound":       {},
+	"-ignoreDnD":     {},
+}
+
+// setNotifierFlag replaces flag's value when flag appears at a flag position,
+// otherwise appends the flag/value pair. Matching only flag positions keeps an
+// argument value that equals flag (for example a notification title of
+// "-group") from being mistaken for the flag and corrupting the argument that
+// follows it.
 func setNotifierFlag(args []string, flag, value string) []string {
-	for i := 0; i < len(args)-1; i++ {
-		if args[i] == flag {
-			out := make([]string, len(args))
-			copy(out, args)
-			out[i+1] = value
-			return out
+	rewritten := make([]string, 0, len(args)+2)
+	replaced := false
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if !replaced && arg == flag {
+			rewritten = append(rewritten, flag, value)
+			replaced = true
+			// Drop the stale value that followed the original flag.
+			if i+1 < len(args) {
+				i++
+			}
+			continue
+		}
+		rewritten = append(rewritten, arg)
+		// A non-boolean flag consumes the next token as its value; skip it so a
+		// value that looks like a flag is never matched as one.
+		if strings.HasPrefix(arg, "-") {
+			if _, isBoolean := booleanNotifierFlags[arg]; !isBoolean && i+1 < len(args) {
+				i++
+				rewritten = append(rewritten, args[i])
+			}
 		}
 	}
-	return append(args, flag, value)
+	if !replaced {
+		rewritten = append(rewritten, flag, value)
+	}
+	return rewritten
 }
 
 // appendSharedNotifierOptions adds subtitle, session thread, replacement group,
