@@ -29,6 +29,8 @@ function facts(v: unknown): Record<string, unknown> {
   return f;
 }
 async function run(): Promise<void> {
+  const variant = process.env.LUA_VARIANT ?? 'lua-only'; evidence.variant = variant;
+  check(variant === 'lua-only' || variant === 'lua-medium', 'strict Lua variant required');
   check(process.platform === 'win32' && process.arch === 'arm64' && /^[a-f0-9]{40}$/.test(process.env.SOURCE_SHA ?? ''), 'trusted Windows ARM64 source required');
   const pins = [
     { original: process.env.LUA_LAUNCHER_EXE, pin: process.env.LUA_LAUNCHER_SHA256, copy: join(root, `TEST-lua-${nonce}.exe`) },
@@ -44,7 +46,8 @@ async function run(): Promise<void> {
   evidence.binaryPins = pins.map((p) => ({ sha256: p.pin, basename: p.copy.slice(root.length + 1) }));
   let stdout = '', stderr = '', bytes = 0, overflow = false, timedOut = false, collected = false;
   let spawnError: string | undefined;
-  const child = spawn(pins[0]!.copy, ['--TEST-lua-token-preflight', nonce, root, pins[1]!.copy],
+  const mode = variant === 'lua-medium' ? '--TEST-lua-medium-token-preflight' : '--TEST-lua-token-preflight';
+  const child = spawn(pins[0]!.copy, [mode, nonce, root, pins[1]!.copy],
     { cwd: root, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   evidence.executedLauncher = child.pid !== undefined;
   evidence.launcherPid = child.pid;
@@ -70,9 +73,9 @@ async function run(): Promise<void> {
   check(collected && !overflow && !timedOut && !spawnError && stderr === '' && performance.now() - started < 30000, 'launcher collection failed; no retry');
   check(stdout.trim().split(/\r?\n/).length === 1, 'one launcher JSON record required');
   const r = object(JSON.parse(stdout)); evidence.record = r;
-  schema(r, ['nonce', 'pid', 'baseline', 'held', 'childPid', 'childBirth', 'enabledAdmins', 'sameIdentitySession',
+  schema(r, ['nonce', 'pid', 'variant', 'restrictedBefore', 'restrictedAfter', 'parentAfter', 'loweringAttempted', 'integrityLowered', 'baseline', 'held', 'childPid', 'childBirth', 'enabledAdmins', 'sameIdentitySession',
     'collected', 'timedOut', 'childExit', 'childTerminated', 'cleanupError', 'childRecord', 'childStderr', 'queriesComplete', 'query', 'error', 'sdkNativeCallback', 'notificationEffects']);
-  check(r.nonce === nonce && r.pid === child.pid && integer(r.pid) && r.pid > 0 &&
+  check(r.variant === variant && r.nonce === nonce && r.pid === child.pid && integer(r.pid) && r.pid > 0 &&
     typeof r.queriesComplete === 'boolean' && r.sdkNativeCallback === false && r.notificationEffects === 0, 'invalid launcher identity/schema');
   if (!r.queriesComplete) {
     check(exit.code !== 0 && typeof r.query === 'string' && integer(r.error), 'invalid launcher failure');
@@ -84,6 +87,15 @@ async function run(): Promise<void> {
     r.sameIdentitySession === true && typeof r.childRecord === 'string' && Buffer.byteLength(r.childRecord) <= 8192 &&
     r.childStderr === '', 'incomplete held-child collection');
   const baseline = facts(r.baseline), held = facts(r.held);
+  if (variant === 'lua-medium') {
+    const initial = facts(r.restrictedBefore), final = facts(r.restrictedAfter), parentAfter = facts(r.parentAfter);
+    for (const key of Object.keys(baseline)) check(parentAfter[key] === baseline[key], 'parent token mutated');
+    for (const key of Object.keys(final)) check(final[key] === held[key], 'restricted/held token mismatch');
+    check((initial.integrityRID as number) >= 0x2000 && r.loweringAttempted === (initial.integrityRID !== 0x2000) &&
+      r.integrityLowered === r.loweringAttempted && held.integrityRID === 0x2000 && held.elevated === false &&
+      r.enabledAdmins === false, 'medium admission or lowering observation failed');
+  } else check(r.restrictedBefore === null && r.restrictedAfter === null && r.parentAfter === null &&
+    r.loweringAttempted === false && r.integrityLowered === false, 'lua-only must not lower integrity');
   for (const key of ['sidSHA256', 'authLUIDSHA256', 'session']) check(baseline[key] === held[key], 'identity/session drift');
   check(r.childRecord.trim().split(/\r?\n/).length === 1, 'one child JSON record required');
   const c = object(JSON.parse(r.childRecord)); evidence.child = c;

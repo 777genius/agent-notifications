@@ -1,6 +1,7 @@
 // Own TEST child only. No SDK, UI, impersonation or explicit privilege changes.
 #include "navigation_windows_token_queries.h"
 #include <cstdio>
+#include <cstddef>
 #include <memory>
 
 struct Handle {
@@ -95,10 +96,14 @@ static bool enabledAdmins(HANDLE token) {
     return member != FALSE;
 }
 int wmain(int argc, wchar_t** argv) {
-    if (argc != 5 || wcscmp(argv[1], L"--TEST-lua-token-preflight") || !validNonce(argv[2])) return 64;
+    if (argc != 5 || !validNonce(argv[2])) return 64;
+    const bool medium = wcscmp(argv[1], L"--TEST-lua-medium-token-preflight") == 0;
+    if (!medium && wcscmp(argv[1], L"--TEST-lua-token-preflight")) return 64;
     const std::wstring wideNonce(argv[2]), root(argv[3]), probe(argv[4]);
     const std::string nonce(wideNonce.begin(), wideNonce.end());
     std::string baseline = "null", held = "null", output, stderrText, birth = "null";
+    std::string restrictedBefore = "null", restrictedAfter = "null", parentAfter = "null";
+    bool loweringAttempted = false, integrityLowered = false;
     DWORD childPid = 0, exitCode = 0;
     bool collected = false, timedOut = false, terminated = false, admin = false, adminQueried = false, exitKnown = false, identity = false, complete = false;
     const char* errorQuery = nullptr;
@@ -118,7 +123,8 @@ int wmain(int argc, wchar_t** argv) {
         if (probeAttrs == INVALID_FILE_ATTRIBUTES || (probeAttrs & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)))
             throw Failure{"OwnProbePath", ERROR_INVALID_PARAMETER};
         Token parent, restricted;
-        require(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY,
+        require(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY |
+                                 (medium ? TOKEN_ADJUST_DEFAULT : 0),
                                  &parent.handle) != FALSE, "OwnPrimaryToken");
         const auto before = facts(parent.handle);
         DWORD ownSession = 0;
@@ -127,6 +133,32 @@ int wmain(int argc, wchar_t** argv) {
         baseline = factsJson(before);
         require(CreateRestrictedToken(parent.handle, LUA_TOKEN, 0, nullptr, 0, nullptr, 0, nullptr,
                                       &restricted.handle) != FALSE, "CreateRestrictedTokenLUA");
+        if (medium) {
+            const auto initial = facts(restricted.handle); restrictedBefore = factsJson(initial);
+            if (initial.rid < SECURITY_MANDATORY_MEDIUM_RID)
+                throw Failure{"RestrictedBelowMediumNoRaise", ERROR_INVALID_DATA};
+            if (initial.rid > SECURITY_MANDATORY_MEDIUM_RID) {
+                struct MediumLabel { TOKEN_MANDATORY_LABEL label{}; alignas(DWORD) BYTE sid[SECURITY_MAX_SID_SIZE]{}; } buffer;
+                static_assert(offsetof(MediumLabel, sid) == sizeof(TOKEN_MANDATORY_LABEL));
+                DWORD sidBytes = sizeof(buffer.sid);
+                require(CreateWellKnownSid(WinMediumLabelSid, nullptr, buffer.sid, &sidBytes) != FALSE, "MediumLabelSID");
+                if (sidBytes < 8 || sidBytes > sizeof(buffer.sid) || !IsValidSid(buffer.sid) ||
+                    GetLengthSid(buffer.sid) != sidBytes || !IsWellKnownSid(buffer.sid, WinMediumLabelSid))
+                    throw Failure{"MediumLabelBound", ERROR_INVALID_SID};
+                buffer.label.Label.Sid = buffer.sid; buffer.label.Label.Attributes = SE_GROUP_INTEGRITY;
+                loweringAttempted = true;
+                require(SetTokenInformation(restricted.handle, TokenIntegrityLevel, &buffer.label,
+                    static_cast<DWORD>(sizeof(buffer.label)) + sidBytes) != FALSE, "LowerOwnRestrictedIntegrity");
+            }
+            const auto final = facts(restricted.handle); restrictedAfter = factsJson(final);
+            integrityLowered = loweringAttempted && final.rid == SECURITY_MANDATORY_MEDIUM_RID;
+            const bool restrictedAdmin = enabledAdmins(restricted.handle);
+            parentAfter = factsJson(facts(parent.handle));
+            if (parentAfter != baseline) throw Failure{"ParentTokenChanged", ERROR_INVALID_DATA};
+            if (final.rid != SECURITY_MANDATORY_MEDIUM_RID || final.elevated || restrictedAdmin ||
+                final.sid != before.sid || final.auth != before.auth || final.session != before.session)
+                throw Failure{"RestrictedMediumAdmission", ERROR_INVALID_DATA};
+        }
         job.value = CreateJobObjectW(nullptr, nullptr);
         require(job.value != nullptr, "OwnJob");
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
@@ -220,6 +252,9 @@ int wmain(int argc, wchar_t** argv) {
         }
     }
     const std::string record = "{\"nonce\":" + quoted(nonce) + ",\"pid\":" + std::to_string(GetCurrentProcessId()) +
+        ",\"variant\":" + quoted(medium ? "lua-medium" : "lua-only") + ",\"restrictedBefore\":" + restrictedBefore +
+        ",\"restrictedAfter\":" + restrictedAfter + ",\"parentAfter\":" + parentAfter +
+        ",\"loweringAttempted\":" + (loweringAttempted ? "true" : "false") + ",\"integrityLowered\":" + (integrityLowered ? "true" : "false") +
         ",\"baseline\":" + baseline + ",\"held\":" + held + ",\"childPid\":" + std::to_string(childPid) +
         ",\"childBirth\":" + birth + ",\"enabledAdmins\":" + (!adminQueried ? "null" : (admin ? "true" : "false")) +
         ",\"sameIdentitySession\":" + (identity ? "true" : "false") + ",\"collected\":" + (collected ? "true" : "false") +

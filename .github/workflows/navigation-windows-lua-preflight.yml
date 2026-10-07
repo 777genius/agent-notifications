@@ -8,6 +8,15 @@ on:
       - 'tests/integration/navigation_windows_token_queries.h'
       - 'tests/integration/navigation_windows_token_probe.cpp'
   workflow_dispatch:
+    inputs:
+      variant:
+        description: Own TEST child token variant (never SDK qualification)
+        type: choice
+        required: true
+        default: lua-only
+        options:
+          - lua-only
+          - lua-medium
 permissions:
   contents: read
 concurrency:
@@ -61,6 +70,7 @@ jobs:
         shell: pwsh
         env:
           SOURCE_SHA: ${{ github.sha }}
+          LUA_VARIANT: ${{ inputs.variant }}
           TOKEN_PROBE_EXE: ${{ steps.compile.outputs['token-exe'] }}
           TOKEN_PROBE_SHA256: ${{ steps.compile.outputs['token-sha256'] }}
           LUA_LAUNCHER_EXE: ${{ steps.compile.outputs['lua-exe'] }}
