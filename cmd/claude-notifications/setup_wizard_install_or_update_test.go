@@ -637,7 +637,7 @@ func TestCursorCallerAcknowledgedTokenAndMatchingPendingRetry(t *testing.T) {
 	if err != nil || acknowledgedRetry.PackageRoot != pkg || acknowledgedRetry.CursorAuthority.ObjectID != facts.ObjectID {
 		t.Fatalf("same-source acknowledged handoff retry: %+v %v", acknowledgedRetry, err)
 	}
-	// Resume the public install instead of manufacturing an installed acknowledgment.
+	// Repair the missing native registration through the public installed lifecycle.
 	resumeCfg := cfg
 	resumeCfg.OnCommittedBinding = func(ctx context.Context, f uapinstaller.BindingFacts) error {
 		if f.BindingID != b.BindingID || f.ProfileAuthority == nil || !reflect.DeepEqual(*f.ProfileAuthority, token) {
@@ -651,7 +651,7 @@ func TestCursorCallerAcknowledgedTokenAndMatchingPendingRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	func() {
-		p, err := resumeEngine.Prepare(ctx, uapinstaller.Request{Operation: uapinstaller.OpInstall, ClientID: "cursor", InstallationID: b.InstallationID, ClientConfigRoot: profile, ClientExecutable: agent, PackageRoot: pkg})
+		p, err := resumeEngine.Prepare(ctx, uapinstaller.Request{Operation: uapinstaller.OpRepair, ClientID: "cursor", InstallationID: b.InstallationID, ClientConfigRoot: profile, ClientExecutable: agent, PackageRoot: pkg})
 		if err != nil {
 			t.Fatal(err)
 		}
