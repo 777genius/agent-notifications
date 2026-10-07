@@ -115,8 +115,13 @@ finally {
   } catch { report.integrityUnknown = true; exitCode = 1; }
   if (fd !== undefined) { try { closeSync(fd); } catch { report.closeUnknown = true; exitCode = 1; } }
   report.packageVerified = exitCode === 0; report.status = exitCode === 0 ? 'verified' : 'failed';
-  const data = JSON.stringify(report, null, 2) + '\n';
-  if (Buffer.byteLength(data) > 16_384) throw new Error('verification evidence exceeds bound');
+  let data = JSON.stringify(report, null, 2) + '\n';
+  if (Buffer.byteLength(data) > 16_384) {
+    exitCode = 1;
+    data = JSON.stringify({ status: 'failed', packageVerified: false, failure: 'verification evidence exceeds bound',
+      originalEvidenceSHA256: createHash('sha256').update(data).digest('hex'), runtimeCodeExecuted: false,
+      localArchiveQualified: false, automaticRetry: false }) + '\n';
+  }
   if (admitted) { physical(out, true); writeFileSync(join(out, 'runtime-verification.json'), data, { flag: 'wx' }); }
   process.exitCode = exitCode;
 }
