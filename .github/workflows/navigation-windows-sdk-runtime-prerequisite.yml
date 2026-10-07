@@ -135,6 +135,24 @@ jobs:
           if ((git rev-parse HEAD) -cne $env:SOURCE_SHA) { throw 'source mismatch' }
           node tests/integration/windows_appsdk_build/runtime-prerequisite.ts
           if ($LASTEXITCODE -ne 0) { throw 'runtime prerequisite unknown; preserve intent; no retry/cleanup' }
+      - name: Preserve bounded public NuGet verification diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: TEST-sdk-package-verification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/TEST-windows-appsdk-build/runtime-verification.json
+            ${{ runner.temp }}/TEST-windows-appsdk-build/foundation-verification.json
+            ${{ runner.temp }}/TEST-windows-appsdk-build/runtime-version.stdout
+            ${{ runner.temp }}/TEST-windows-appsdk-build/runtime-version.stderr
+            ${{ runner.temp }}/TEST-windows-appsdk-build/runtime-verify.stdout
+            ${{ runner.temp }}/TEST-windows-appsdk-build/runtime-verify.stderr
+            ${{ runner.temp }}/TEST-windows-appsdk-build/foundation-version.stdout
+            ${{ runner.temp }}/TEST-windows-appsdk-build/foundation-version.stderr
+            ${{ runner.temp }}/TEST-windows-appsdk-build/foundation-verify.stdout
+            ${{ runner.temp }}/TEST-windows-appsdk-build/foundation-verify.stderr
+          if-no-files-found: warn
+          retention-days: 14
       - name: Preserve bounded own TEST evidence
         if: always() && github.event_name == 'workflow_dispatch' && steps.execute.outputs.evidence_root != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
