@@ -108,3 +108,17 @@ func TestFreedesktopMissingSessionDoesNotCallBeeep(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+// A target can be present in trusted configuration while a caller requests
+// None. Red if the adapter reads that snapshot or probes its selected app.
+func TestFreedesktopNoneDoesNotProbeConfiguredLinuxTarget(t *testing.T) {
+	session := &fakeSession{}
+	delivery, clock := linuxDelivery(t, session)
+	request := linuxNoneRequest(clock)
+	request.Policy.ClickToFocus = true
+	request.Target = notification.DesktopTarget{Provider: "codex", ThreadID: "opaque", Linux: notification.LinuxBinding{SnapshotPath: "/does-not-exist/must-not-probe.json", SHA256: "bad"}}
+	receipt := delivery.Deliver(context.Background(), request)
+	if receipt.Status != "submitted" || receipt.Navigation.Capability != "disabled" || session.opens.Load() != 1 || session.submits.Load() != 1 {
+		t.Fatal(receipt)
+	}
+}
