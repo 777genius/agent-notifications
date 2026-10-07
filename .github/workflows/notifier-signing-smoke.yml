@@ -25,6 +25,25 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
+      - name: Verify Apple signing credentials
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test "${APPLE_TEAM_ID:-}" = "86399583GS" || { echo "Unexpected APPLE_TEAM_ID" >&2; exit 1; }
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD; do
+            test -n "${!name:-}" || { echo "Missing $name" >&2; exit 1; }
+          done
+          if [ "${{ inputs.skip_notarize }}" != "true" ]; then
+            for name in APPLE_ID APPLE_PASSWORD; do
+              test -n "${!name:-}" || { echo "Missing $name" >&2; exit 1; }
+            done
+          fi
+
       - name: Import Apple certificate
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -72,6 +91,7 @@ jobs:
 
       - name: Verify signature metadata
         run: |
+          bash swift-notifier/scripts/verify-signing.sh swift-notifier/ClaudeNotifier.app
           codesign --verify --deep --strict -R '=identifier "com.777genius.agent-notifications"' swift-notifier/ClaudeNotifier.app
           codesign --display --entitlements :- swift-notifier/ClaudeNotifier.app
 
@@ -98,7 +118,7 @@ jobs:
           metadata = subprocess.run(['codesign', '-dv', '--verbose=4', str(app)], check=True, capture_output=True, text=True).stderr
           fields = dict(line.split('=', 1) for line in metadata.splitlines() if '=' in line)
           team = fields.get('TeamIdentifier', '')
-          assert team and team != 'not set', 'Developer ID team missing'
+          assert team == '86399583GS', 'unexpected Developer ID team'
           with (app / 'Contents/Info.plist').open('rb') as stream:
               bundle_id = plistlib.load(stream)['CFBundleIdentifier']
           assert fields.get('Identifier') == bundle_id == 'com.777genius.agent-notifications'

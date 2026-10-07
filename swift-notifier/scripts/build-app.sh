@@ -28,6 +28,20 @@ for arg in "$@"; do
     esac
 done
 
+# CI requires the selected publisher before compiling or contacting Apple.
+SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:-DBF74EF5BF85404EE5355248F22C883027857C94}"
+if [ "$CI_MODE" = true ]; then
+    if [ "${APPLE_TEAM_ID:-}" != "86399583GS" ]; then
+        echo "Error: APPLE_TEAM_ID must be 86399583GS" >&2
+        exit 1
+    fi
+    if [ "$SKIP_NOTARIZE" != true ]; then
+        for name in APPLE_ID APPLE_PASSWORD; do
+            test -n "${!name:-}" || { echo "Error: missing $name" >&2; exit 1; }
+        done
+    fi
+fi
+
 echo "Building ${BINARY_NAME}..."
 if [ "$CI_MODE" = true ]; then
     echo "  Mode: CI (Developer ID + hardened runtime + notarization)"
@@ -117,8 +131,10 @@ sign_with_entitlements() {
     fi
 
     echo "Code signing with: Developer ID Application (hardened runtime) [${label}]"
-    codesign "${flags[@]}" --sign "Developer ID Application" "${APP_BUNDLE}"
-    codesign --verify --verbose "${APP_BUNDLE}"
+    codesign "${flags[@]}" --sign "$SIGNING_IDENTITY" "${APP_BUNDLE}" || return 1
+    codesign --verify --deep --strict --verbose "${APP_BUNDLE}" || return 1
+    # A publisher mismatch must abort, never retry with different entitlements.
+    bash "$SCRIPT_DIR/verify-signing.sh" "$APP_BUNDLE" || return 2
     echo "Signature verified"
 
     if ! open -W -n "${APP_BUNDLE}" --args -launchedViaLaunchServices -help >/dev/null 2>&1; then
@@ -142,7 +158,11 @@ if [ "$CI_MODE" = true ]; then
     EFFECTIVE_ENTITLEMENTS="$FULL_ENTITLEMENTS"
     EFFECTIVE_LABEL="full"
 
-    if ! sign_with_entitlements "$EFFECTIVE_ENTITLEMENTS" "$EFFECTIVE_LABEL"; then
+    if sign_with_entitlements "$EFFECTIVE_ENTITLEMENTS" "$EFFECTIVE_LABEL"; then
+        :
+    else
+        signing_status=$?
+        [ "$signing_status" -eq 1 ] || exit "$signing_status"
         if [ -n "$SAFE_ENTITLEMENTS" ] && [ "$SAFE_ENTITLEMENTS" != "$FULL_ENTITLEMENTS" ]; then
             echo "Warning: full entitlements failed runtime smoke check, retrying with CI-safe entitlements"
             EFFECTIVE_ENTITLEMENTS="$SAFE_ENTITLEMENTS"
@@ -183,8 +203,7 @@ if [ "$CI_MODE" = true ] && [ "$SKIP_NOTARIZE" != true ]; then
     xcrun stapler staple "${APP_BUNDLE}"
 
     echo "Verifying notarized bundle..."
-    codesign --verify --verbose "${APP_BUNDLE}"
-    spctl --assess --type execute --verbose "${APP_BUNDLE}"
+    bash "$SCRIPT_DIR/verify-signing.sh" "$APP_BUNDLE" --notarized
     echo "Notarization complete!"
 fi
 
