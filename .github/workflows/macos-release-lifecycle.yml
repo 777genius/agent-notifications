@@ -14,55 +14,11 @@ concurrency:
 env:
   CANDIDATE_SHA: 1f5cf76a6cd3468fb23ef88d762cfb0f6d691820
   SIGNING_RUN: '37632615999'
+  CUSTODY_RUN: '37645007119'
 
 jobs:
-  custody-binaries:
-    name: Build additional custody only ${{ matrix.platform }}/${{ matrix.arch }}
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - {runner: ubuntu-22.04, platform: linux, arch: amd64}
-          - {runner: ubuntu-22.04-arm, platform: linux, arch: arm64}
-          - {runner: windows-latest, platform: windows, arch: amd64}
-    steps:
-      - name: Preserve canonical Git bytes
-        if: runner.os == 'Windows'
-        shell: bash
-        run: git config --global core.autocrlf false
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ env.CANDIDATE_SHA }}
-          persist-credentials: false
-      - uses: actions/setup-go@v7
-        with: {go-version: '1.26'}
-      - name: Install native Linux build prerequisite
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
-      - name: Build exact source without launching candidate
-        shell: bash
-        env:
-          CGO_ENABLED: '1'
-          GOTOOLCHAIN: local
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-          test "$(go env GOOS)/$(go env GOARCH)" = '${{ matrix.platform }}/${{ matrix.arch }}'
-          mkdir dist
-          suffix=''
-          if [ '${{ matrix.platform }}' = windows ]; then suffix='.exe'; fi
-          go build -trimpath -ldflags='-s -w' -o "dist/claude-notifications-${{ matrix.platform }}-${{ matrix.arch }}$suffix" ./cmd/claude-notifications
-      - uses: actions/upload-artifact@v7
-        with:
-          name: macos-custody-${{ matrix.platform }}-${{ matrix.arch }}
-          path: dist/*
-          retention-days: 14
-
   seal-inputs:
-    needs: custody-binaries
-    runs-on: ubuntu-22.04
+    runs-on: ${{ vars.CI_LINUX_RUNNER || 'ubuntu-22.04' }}
     timeout-minutes: 30
     outputs:
       parent_sha256: ${{ steps.seal.outputs.parent_sha256 }}
@@ -78,7 +34,12 @@ jobs:
       - uses: actions/setup-python@v7
         with: {python-version: '3.12'}
       - uses: actions/download-artifact@v8
-        with: {pattern: macos-custody-*, merge-multiple: true, path: source/dist}
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.CUSTODY_RUN }}
+          pattern: macos-custody-*
+          merge-multiple: true
+          path: source/dist
       - uses: actions/download-artifact@v8
         with:
           github-token: ${{ github.token }}
@@ -100,6 +61,12 @@ jobs:
       - name: Record completed owner signing run provenance
         env: {GH_TOKEN: '${{ github.token }}'}
         run: gh api repos/777genius/agent-notifications/actions/runs/$SIGNING_RUN > source/.task-tools/artifacts/signing-run.json
+      - name: Record prior successful custody jobs without promoting their failed business run
+        env: {GH_TOKEN: '${{ github.token }}'}
+        run: |
+          set -euo pipefail
+          gh api repos/777genius/agent-notifications/actions/runs/$CUSTODY_RUN > source/.task-tools/artifacts/custody-run.json
+          gh api "repos/777genius/agent-notifications/actions/runs/$CUSTODY_RUN/attempts/1/jobs?per_page=100" > source/.task-tools/artifacts/custody-jobs.json
       - name: Rebuild exact self-contained bundle without replacing embedded bytes
         working-directory: source/opencode-plugin
         run: |
