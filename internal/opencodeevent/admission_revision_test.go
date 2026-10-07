@@ -98,20 +98,6 @@ func TestAdmissionNativePolicyGoldenAndProgressBoundary(t *testing.T) {
 func TestAdmissionNativeRetentionBoundary(t *testing.T) {
 	ctx, a, r, c := admissionStoreFixture(t)
 	qualifiedFixture(&a, &r, c)
-	// Each admission is a separate command; setup and prior assertions must
-	// not consume its budget. Snapshot reads also have their own live context.
-	admit := func(want AdmissionStatus) {
-		commandCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		request := r
-		request.CommandStarted = time.Now()
-		tryAdmission(t, commandCtx, a, request, want)
-	}
-	keys := func() []string {
-		readCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		return retainedKeys(t, readClaimFixture(t, readCtx, a, r))
-	}
 	rows := make([]map[string]any, 4096)
 	for i := range rows {
 		key := sha256.Sum256([]byte{byte(i >> 8), byte(i)})
@@ -130,15 +116,15 @@ func TestAdmissionNativeRetentionBoundary(t *testing.T) {
 	c.sample.TickNS += int64(24*time.Hour) + 205_999_999
 	c.sample.WallNS += int64(24*time.Hour) + 205_999_999
 	r.Provenance = freshProvenance(c.sample)
-	admit(Capacity)
-	if len(keys()) != 4096 {
+	tryAdmissionCommand(t, ctx, a, r, Capacity)
+	if len(retainedKeys(t, readClaimFixture(t, ctx, a, r))) != 4096 {
 		t.Fatal("early native pruning")
 	}
 	c.sample.TickNS++
 	c.sample.WallNS++
 	r.Provenance = freshProvenance(c.sample)
-	admit(Admitted)
-	if len(keys()) != 1 {
+	tryAdmissionCommand(t, ctx, a, r, Admitted)
+	if len(retainedKeys(t, readClaimFixture(t, ctx, a, r))) != 1 {
 		t.Fatal("verified native capacity did not recover")
 	}
 }
