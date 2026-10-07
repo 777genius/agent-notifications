@@ -68,7 +68,7 @@ jobs:
       parent_sha256: ${{ steps.seal.outputs.parent_sha256 }}
     steps:
       - uses: actions/checkout@v7
-        with: {ref: '${{ env.CANDIDATE_SHA }}', path: source, persist-credentials: false}
+        with: {ref: '${{ env.CANDIDATE_SHA }}', path: source, fetch-depth: 0, persist-credentials: false}
       - uses: actions/checkout@v7
         with: {ref: '${{ github.sha }}', path: operator, persist-credentials: false}
       - uses: actions/setup-go@v7
@@ -148,7 +148,7 @@ jobs:
           - {arch: arm64, runner: macos-15}
     steps:
       - uses: actions/checkout@v7
-        with: {ref: '${{ env.CANDIDATE_SHA }}', path: source, persist-credentials: false}
+        with: {ref: '${{ env.CANDIDATE_SHA }}', path: source, fetch-depth: 0, persist-credentials: false}
       - uses: actions/checkout@v7
         with: {ref: '${{ github.sha }}', path: operator, persist-credentials: false}
       - uses: actions/setup-go@v7
