@@ -99,6 +99,27 @@ func TestSetupNoneConsentPairs(t *testing.T) {
 	}
 }
 
+func TestSetupDesktopThreadConsentPairs(t *testing.T) {
+	for _, unknown := range []string{"true", "false"} {
+		for _, asserted := range []string{"true", "false"} {
+			a, _, e := parseAgentNotifySetup([]string{"enable", "--expected-generation", "1", "--navigation", "desktop_thread", "--allow-unknown-caller", unknown, "--allow-caller-asserted", asserted})
+			if e != nil || a.route == nil || !a.route.LocalRouting || a.route.ApplicationPath != "" || a.route.TeamID != "" || a.route.AllowUnknownCaller != (unknown == "true") || a.route.AllowCallerAsserted != (asserted == "true") {
+				t.Fatal(a, e)
+			}
+		}
+	}
+	for _, suffix := range [][]string{
+		{"--navigation", "desktop_thread"},
+		{"--navigation", "desktop_thread", "--allow-unknown-caller", "false"},
+		{"--navigation", "desktop_thread", "--allow-unknown-caller", "false", "--allow-caller-asserted", "true", "--app", "/A.app"},
+		{"--navigation", "desktop_thread", "--allow-unknown-caller", "false", "--allow-caller-asserted", "true", "--team-id", "TEAM123456"},
+	} {
+		if _, _, e := parseAgentNotifySetup(append([]string{"enable", "--expected-generation", "1"}, suffix...)); e == nil {
+			t.Fatal("accepted ambiguous Linux route", suffix)
+		}
+	}
+}
+
 func TestSetupNoneConsentCommand(t *testing.T) {
 	f := newSetupCommandFixture(t)
 	ctx := setupCommandContext(t)

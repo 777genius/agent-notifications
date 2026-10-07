@@ -1250,7 +1250,7 @@ jobs:
           fail_ci_if_error: false
 
       - name: Build binary
-        run: go build -o bin/claude-notifications ./cmd/claude-notifications
+        run: go build -ldflags="-s -w" -trimpath -o bin/claude-notifications ./cmd/claude-notifications
 
       - name: Test binary execution (help)
         run: ./bin/claude-notifications help

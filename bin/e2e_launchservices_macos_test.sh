@@ -62,7 +62,7 @@ release="$root/release"
 mkdir -p "$release/ClaudeNotifier.app/Contents/MacOS" "$release/ClaudeNotifier.app/Contents/Resources" "$root/live"
 arch=$(uname -m); [ "$arch" != x86_64 ] || arch=amd64
 entry="claude-notifications-darwin-$arch"
-(cd "$repo"; go build -o "$release/$entry" ./cmd/claude-notifications)
+(cd "$repo"; go build -trimpath -ldflags="-s -w" -o "$release/$entry" ./cmd/claude-notifications)
 id="com.777genius.agent-notifications.e2e.$(basename "$root")"
 cat > "$root/native.c" <<'C'
 #include <stdio.h>
