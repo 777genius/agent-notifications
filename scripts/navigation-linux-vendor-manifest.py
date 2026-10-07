@@ -16,6 +16,8 @@ import uuid
 
 PACKAGE_SHA = '637c3c94bc50f8ee33a15e2e28ec7f92a787f0943e700efe111bc0bf0d4813b4'
 PACKAGE_SIZE = 476322694
+# Largest file (resources/app.asar) in the SHA256-pinned 26.930.51102 package.
+PACKAGE_MAX_FILE_SIZE = 543408877
 URL = 'https://persistent.oaistatic.com/codex-app-prod/linux/deb/pool/main/c/chatgpt/chatgpt_26.930.51102_amd64.deb'
 ROOT = '/usr/lib/chatgpt'
 PINS = {ROOT + '/codex-launcher': '8f983245c6c07070e2cdc480be50ec239e0f18ee36069126649d0692595c86ad',
@@ -105,7 +107,7 @@ class BoundedTarXZ(io.RawIOBase):
             kind = header[156:157]
             require(kind in (b'0', b'\0', b'5', b'2', b'x', b'g', b'L', b'K'), 'unsupported_tar_type')
             metadata = kind in (b'x', b'g', b'L', b'K')
-            require(size <= (65536 if metadata else 512 * 1024**2), 'tar_declared_size_bound')
+            require(size <= (65536 if metadata else PACKAGE_MAX_FILE_SIZE), 'tar_declared_size_bound')
             self.body = (size + 511) // 512 * 512
             if kind in (b'x', b'g') and size:
                 self.metadata, self.metadata_left = bytearray(), size
@@ -148,21 +150,25 @@ class BoundedTarXZ(io.RawIOBase):
 def members(stream):
     require(stream.read(8) == b'!<arch>\n', 'ar_magic')
     result = {}
+    order = (('debian-binary',), ('control.tar.xz', 'control.tar.gz'), ('data.tar.xz',), ('_gpgorigin',))
     while stream.tell() < PACKAGE_SIZE:
         header = stream.read(60)
         require(len(header) == 60 and header[58:] == b'`\n', 'ar_header')
         name = header[:16].decode('ascii').strip().removesuffix('/')
-        require(name in ('debian-binary', 'control.tar.xz', 'control.tar.gz', 'data.tar.xz')
+        require(name in ('debian-binary', 'control.tar.xz', 'control.tar.gz', 'data.tar.xz', '_gpgorigin')
                 and name not in result, 'unknown_or_duplicate_ar_member')
+        require(len(result) < len(order) and name in order[len(result)], 'ar_member_order')
         require(re.fullmatch(rb' *[0-9]+ *', header[48:58]) is not None, 'ar_size')
         size = int(header[48:58])
         start = stream.tell()
         require(size > 0 and start + size <= PACKAGE_SIZE, 'ar_member_bound')
+        # Opaque publisher metadata; authentication remains the full-package SHA256 pin.
+        require(name != '_gpgorigin' or size <= 65536, 'ar_signature_bound')
         result[name] = (start, size)
         stream.seek(size, 1)
         if size % 2:
             require(stream.read(1) == b'\n', 'ar_padding')
-    require(stream.tell() == PACKAGE_SIZE and len(result) == 3
+    require(stream.tell() == PACKAGE_SIZE and len(result) in (3, 4)
             and 'debian-binary' in result and 'data.tar.xz' in result, 'ar_layout')
     start, size = result['debian-binary']
     stream.seek(start)
@@ -195,7 +201,7 @@ def generate(stream):
             require(path not in seen and len(seen) < 20000, 'duplicate_or_entry_bound')
             seen[path] = item.isdir()
             require(item.isfile() or item.isdir() or item.issym(), 'unsafe_archive_type')
-            require(0 <= item.size <= 512 * 1024 * 1024, 'entry_size_bound')
+            require(0 <= item.size <= PACKAGE_MAX_FILE_SIZE, 'entry_size_bound')
             aggregate += item.size
             require(aggregate <= 4 * 1024**3, 'aggregate_bound')
             selected = path == ROOT or path.startswith(ROOT + '/') or path == '/usr/bin/chatgpt'
@@ -244,6 +250,42 @@ def self_test():
     import unittest
 
     class DecoderBounds(unittest.TestCase):
+        def test_ar_optional_signature_layout(self):
+            def member(name, body):
+                header = f'{name + "/":<16}{0:<12}{0:<6}{0:<6}{644:<8}{len(body):<10}`\n'.encode()
+                return header + body + (b'\n' if len(body) % 2 else b'')
+
+            required = [('debian-binary', b'2.0\n'), ('control.tar.xz', b'x'), ('data.tar.xz', b'x')]
+            signature = [('_gpgorigin', b'opaque')]
+            valid = b'!<arch>\n' + b''.join(member(*entry) for entry in required + signature)
+            cases = [(valid, None),
+                     (b'!<arch>\n' + b''.join(member(*entry) for entry in required), None),
+                     (valid + member(*signature[0]), 'unknown_or_duplicate_ar_member'),
+                     (valid + member(*required[2]), 'unknown_or_duplicate_ar_member'),
+                     (b'!<arch>\n' + b''.join(member(*entry) for entry in required[:1] + signature + required[1:]), 'ar_member_order'),
+                     (b'!<arch>\n' + b''.join(member(*entry) for entry in required[1:2] + required[:1] + required[2:]), 'ar_member_order'),
+                     (valid + member('unknown', b'x'), 'unknown_or_duplicate_ar_member'),
+                     (valid[:-1], 'ar_member_bound'),
+                     (valid + member('control.tar.gz', b'x'), 'ar_member_order'),
+                     (b'!<arch>\n' + b''.join(member(*entry) for entry in required + [('_gpgorigin', bytes(65537))]), 'ar_signature_bound'),
+                     (valid[:-8] + b'x' + valid[-7:], 'ar_header'),
+                     (valid.replace(b'x\n', b'x!', 1), 'ar_padding')]
+            global PACKAGE_SIZE
+            original_size = PACKAGE_SIZE
+            try:
+                for raw, error in cases:
+                    with self.subTest(error=error, size=len(raw)):
+                        PACKAGE_SIZE = len(raw)
+                        if error:
+                            with self.assertRaisesRegex(ValueError, error):
+                                members(io.BytesIO(raw))
+                        else:
+                            parsed = members(io.BytesIO(raw))
+                            self.assertEqual(list(parsed), [entry[0] for entry in required]
+                                             + (['_gpgorigin'] if raw == valid else []))
+            finally:
+                PACKAGE_SIZE = original_size
+
         def decode(self, raw, **limits):
             packed = lzma.compress(raw, preset=0)
             decoder = BoundedTarXZ(Slice(io.BytesIO(packed), len(packed)), **limits)
@@ -252,6 +294,20 @@ def self_test():
         def test_metadata_declaration_rejected_without_payload(self):
             info = tarfile.TarInfo('metadata')
             info.type, info.size = tarfile.XHDTYPE, 65537
+            with self.assertRaisesRegex(ValueError, 'tar_declared_size_bound'):
+                self.decode(info.tobuf())
+
+        def test_pinned_largest_file_declaration_supported_without_payload(self):
+            info = tarfile.TarInfo('usr/lib/chatgpt/resources/app.asar')
+            info.size = 543408877
+            packed = lzma.compress(info.tobuf(), preset=0)
+            decoder = BoundedTarXZ(Slice(io.BytesIO(packed), len(packed)))
+            with tarfile.open(fileobj=decoder, mode='r|') as archive:
+                self.assertEqual(next(iter(archive)).size, 543408877)
+
+        def test_file_declaration_above_pinned_maximum_rejected_without_payload(self):
+            info = tarfile.TarInfo('oversized')
+            info.size = 543408878
             with self.assertRaisesRegex(ValueError, 'tar_declared_size_bound'):
                 self.decode(info.tobuf())
 
