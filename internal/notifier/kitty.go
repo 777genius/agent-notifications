@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"time"
 )
 
 // IsKitty returns true if the current process is running inside Kitty
@@ -47,14 +46,10 @@ func buildKittyNotifierArgs(title, message, windowID, listenOn, bundleID string)
 		kittyPath, listenOn, windowID,
 	)
 
-	args := []string{
+	return []string{
 		"-title", title,
 		"-message", message,
 		"-activate", bundleID,
 		"-execute", executeCmd,
 	}
-
-	args = append(args, "-group", fmt.Sprintf("claude-notif-%d", time.Now().UnixNano()))
-
-	return args
 }

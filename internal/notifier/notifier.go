@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gen2brain/beeep"
@@ -27,6 +28,9 @@ const macOSPermissionDeniedMessage = "Notification permission denied. Enable in 
 var execCommand = exec.Command
 var beeepNotify = beeep.Notify
 var notifierGOOS = runtime.GOOS
+var uniqueNotificationGroupSeq atomic.Uint64
+
+const notificationGroupPrefix = "claude-notif-"
 
 // NotificationPermissionDeniedError indicates macOS rejected the native
 // ClaudeNotifier path because notification permission is denied for the app.
@@ -201,18 +205,7 @@ func (n *Notifier) sendWithTerminalNotifier(title, message, subtitle, sessionID 
 		args = buildTerminalNotifierArgsWithOptions(title, message, bundleID, cwd, ghosttyTerminalID, clickToFocus)
 	}
 
-	// Append shared options: subtitle, threadID, timeSensitive, nosound
-	if subtitle != "" {
-		args = append(args, "-subtitle", subtitle)
-	}
-	if sessionID != "" {
-		args = append(args, "-threadID", sessionID)
-	}
-	if timeSensitive {
-		args = append(args, "-timeSensitive")
-	}
-	// Always suppress sound in Swift — Go manages sound via audio player
-	args = append(args, "-nosound")
+	args = appendSharedNotifierOptions(args, subtitle, sessionID, timeSensitive, n.cfg.ShouldReplaceNotificationsPerSession())
 
 	if appPath, ok := claudeNotifierAppPath(notifierPath); ok {
 		if err := runClaudeNotifierApp(appPath, args); err != nil {
@@ -335,9 +328,98 @@ func buildTerminalNotifierArgsWithOptions(title, message, bundleID, cwd, ghostty
 		}
 	}
 
-	// Add group ID to prevent notification stacking issues
-	args = append(args, "-group", fmt.Sprintf("claude-notif-%d", time.Now().UnixNano()))
+	return args
+}
 
+// notificationGroupID is the terminal-notifier -group value, which is the
+// UNNotificationRequest.identifier: delivering a request that reuses an
+// identifier replaces the previous banner in place.
+//
+// By default the identifier is unique per notification, so nothing is ever
+// replaced: a shared -group would collapse every ClaudeNotifier toast into one
+// slot, letting a Question from chat B hide a Completed from chat A.
+//
+// When replacePerSession is set, the identifier is keyed on the Claude/Codex
+// session instead, so a session's own newer notification replaces its previous
+// banner while other sessions stay untouched. Empty/"unknown" ids always stay
+// unique so unrelated notifications are never collapsed. Conversation grouping
+// in Notification Center is -threadID, independent of this switch.
+func notificationGroupID(sessionID string, replacePerSession bool) string {
+	if replacePerSession {
+		if id := strings.TrimSpace(sessionID); id != "" && !strings.EqualFold(id, "unknown") {
+			return notificationGroupPrefix + id
+		}
+	}
+	return uniqueNotificationGroupID()
+}
+
+// uniqueNotificationGroupID returns a never-reused -group value.
+func uniqueNotificationGroupID() string {
+	seq := uniqueNotificationGroupSeq.Add(1)
+	return fmt.Sprintf("%s%d-%d", notificationGroupPrefix, time.Now().UnixNano(), seq)
+}
+
+// booleanNotifierFlags are notifier flags that consume no value, so the token
+// that follows them is not one of their arguments. Every other token that
+// begins with "-" is treated as a flag whose next token is its value.
+var booleanNotifierFlags = map[string]struct{}{
+	"-timeSensitive": {},
+	"-nosound":       {},
+	"-ignoreDnD":     {},
+}
+
+// setNotifierFlag replaces flag's value when flag appears at a flag position,
+// otherwise appends the flag/value pair. Matching only flag positions keeps an
+// argument value that equals flag (for example a notification title of
+// "-group") from being mistaken for the flag and corrupting the argument that
+// follows it.
+func setNotifierFlag(args []string, flag, value string) []string {
+	rewritten := make([]string, 0, len(args)+2)
+	replaced := false
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if !replaced && arg == flag {
+			rewritten = append(rewritten, flag, value)
+			replaced = true
+			// Drop the stale value that followed the original flag.
+			if i+1 < len(args) {
+				i++
+			}
+			continue
+		}
+		rewritten = append(rewritten, arg)
+		// A non-boolean flag consumes the next token as its value; skip it so a
+		// value that looks like a flag is never matched as one.
+		if strings.HasPrefix(arg, "-") {
+			if _, isBoolean := booleanNotifierFlags[arg]; !isBoolean && i+1 < len(args) {
+				i++
+				rewritten = append(rewritten, args[i])
+			}
+		}
+	}
+	if !replaced {
+		rewritten = append(rewritten, flag, value)
+	}
+	return rewritten
+}
+
+// appendSharedNotifierOptions adds subtitle, session thread, replacement group,
+// and Swift-only flags that every macOS delivery path (plain and multiplexer)
+// shares.
+func appendSharedNotifierOptions(args []string, subtitle, sessionID string, timeSensitive, replacePerSession bool) []string {
+	if subtitle != "" {
+		args = append(args, "-subtitle", subtitle)
+	}
+	if id := strings.TrimSpace(sessionID); id != "" && !strings.EqualFold(id, "unknown") {
+		// Group in Notification Center by Claude/Codex session without replacing banners.
+		args = append(args, "-threadID", id)
+	}
+	args = setNotifierFlag(args, "-group", notificationGroupID(sessionID, replacePerSession))
+	if timeSensitive {
+		args = append(args, "-timeSensitive")
+	}
+	// Always suppress sound in Swift — Go manages sound via audio player
+	args = append(args, "-nosound")
 	return args
 }
 

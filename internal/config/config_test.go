@@ -1678,6 +1678,23 @@ func TestShouldRespectDisplaySleep_Explicit(t *testing.T) {
 	assert.False(t, cfgOff.ShouldRespectDisplaySleep())
 }
 
+func TestShouldReplaceNotificationsPerSession_DefaultsFalse(t *testing.T) {
+	// nil (not set) keeps the historical behavior: banners never replace each other.
+	cfg := &Config{}
+	assert.False(t, cfg.ShouldReplaceNotificationsPerSession())
+}
+
+func TestShouldReplaceNotificationsPerSession_Explicit(t *testing.T) {
+	enabled := true
+	disabled := false
+
+	cfgOn := &Config{Notifications: NotificationsConfig{ReplaceNotificationsPerSession: &enabled}}
+	assert.True(t, cfgOn.ShouldReplaceNotificationsPerSession())
+
+	cfgOff := &Config{Notifications: NotificationsConfig{ReplaceNotificationsPerSession: &disabled}}
+	assert.False(t, cfgOff.ShouldReplaceNotificationsPerSession())
+}
+
 func TestGetNotifyDelaySeconds_DefaultsZero(t *testing.T) {
 	cfg := &Config{}
 	assert.Equal(t, 0, cfg.GetNotifyDelaySeconds())
