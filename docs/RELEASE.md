@@ -265,31 +265,50 @@ The assets-before-main bump instructions above apply to a full-platform release.
 v1.48.1 does not build or publish ClaudeNotifier.app. macOS consumers retain the
 signed and notarized helper from their qualified v1.46.1 channel.
 
-A future macOS release must restore and qualify its signing/notarization job;
-the prior full-release workflow:
+Future macOS candidates use the manual `macos-qualification.yml` workflow. Run
+it on the reviewed candidate ref whose five version values match the input:
 
-1. Imports the Apple Developer certificate from GitHub Secrets
-2. Builds a universal binary (arm64 + x86_64)
-3. Signs with **Developer ID Application** + hardened runtime
-4. Notarizes via `xcrun notarytool` and staples the ticket
-5. Uploads `ClaudeNotifier.app.zip` as a release asset
+```bash
+gh workflow run macos-qualification.yml --ref release/vX.Y.Z -f candidate_version=vX.Y.Z
+```
+
+The workflow builds the four native Go executables and portable package on each
+Darwin architecture, then runs the existing CLI/config/local-webhook artifact
+checks in disposable profiles. It also calls the canonical notifier signing
+workflow with notarization required: universal Swift build, Developer ID team
+`86399583GS`, hardened runtime, API-key notarization and stapled-ticket validation.
+Each Mach-O slice must belong to that team. The notifier archive includes its
+managed-runtime sidecar and same-run custody report. Uploaded Go artifacts include
+source/version records and SHA-256 checksums. These are Actions artifacts only;
+this workflow does not create or publish a release or promote any channel.
+
+A green run proves those scoped artifact/signature checks. It does not prove
+visible notifications, cold callbacks or the complete macOS OpenCode installed
+lifecycle. Complete those candidate-specific checks on disposable test identities
+before declaring macOS ready. Then, with publication authorization, download the
+same-run artifacts, verify their checksums/custody, upload the Darwin binaries,
+portable archives and notifier archive (as `ClaudeNotifier.app.zip`) to the
+candidate draft, and publish with `--latest=false` for a macOS-only release.
+Promote both macOS source/index rows using the platform-channel procedure only
+after public assets are verified. Linux/Windows rows, legacy `main` versions and
+global Latest remain unchanged unless a separately qualified release includes them.
 
 ### Required GitHub Secrets
 
 | Secret | Description |
 |--------|-------------|
-| `APPLE_CERTIFICATE` | Base64-encoded .p12 export of Developer ID Application cert |
+| `APPLE_CERTIFICATE` | Base64-encoded .p12 export of the new Developer ID Application certificate |
 | `APPLE_CERTIFICATE_PASSWORD` | Password for the .p12 file |
-| `APPLE_ID` | Apple ID email for notarization |
-| `APPLE_PASSWORD` | App-specific password for notarization |
-| `APPLE_TEAM_ID` | Apple Developer Team ID |
+| `APPLE_TEAM_ID` | Must equal `86399583GS` |
+| `APPLE_API_KEY_BASE64` | Base64-encoded team App Store Connect API .p8 key |
+| `APPLE_API_KEY_ID` | API key ID |
+| `APPLE_API_ISSUER` | Team API issuer UUID |
 
-### Local build (optional)
-
-```bash
-make build-notifier                                      # ad-hoc or local cert signing
-cd swift-notifier && bash scripts/build-app.sh --ci      # Developer ID + notarization (needs env vars)
-```
+Apple ID/password credentials are not used. CI decodes the API key to a private
+mode-600 file under `RUNNER_TEMP`, exports only its path, and requires the API key
+ID and issuer. Local `build-app.sh --ci --no-register` uses an absolute
+`APPLE_API_KEY` path plus `APPLE_API_KEY_ID`, `APPLE_API_ISSUER` and the pinned team.
+`APPLE_SIGNING_KEYCHAIN` optionally selects a dedicated certificate keychain.
 
 ## 6. Update release description
 

@@ -1,0 +1,125 @@
+name: macOS Candidate Qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      use_github_runner:
+        description: Use GitHub-hosted macOS runners instead of configured runners
+        required: false
+        default: false
+        type: boolean
+      candidate_version:
+        description: Candidate version matching this ref, for example v1.49.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-qualification-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  qualify-darwin:
+    name: Build and qualify Darwin ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: ${{ inputs.use_github_runner && 'macos-15' || vars.CI_MACOS_15_RUNNER || 'macos-15' }}
+          - arch: amd64
+            runner: macos-15-intel
+    env:
+      CANDIDATE_VERSION: ${{ inputs.candidate_version }}
+      CANDIDATE_ARCH: ${{ matrix.arch }}
+      CGO_ENABLED: '1'
+      MACOSX_DEPLOYMENT_TARGET: '12.0'
+      GOTOOLCHAIN: local
+
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Validate candidate identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          version="${CANDIDATE_VERSION#v}"
+          test "$(sed -n 's/^var ConsumerVersion = "\([^"]*\)"$/\1/p' internal/config/runtime.go)" = "$version"
+          test "$(jq -er '.version' .claude-plugin/plugin.json)" = "$version"
+          test "$(jq -er '.version' .codex-plugin/plugin.json)" = "$version"
+          test "$(jq -er '.metadata.version' .claude-plugin/marketplace.json)" = "$version"
+          test "$(jq -er '.plugins[] | select(.name == "claude-notifications-go") | .version' .claude-plugin/marketplace.json)" = "$version"
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Build native binaries and portable package
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(go env GOOS)/$(go env GOARCH)" = "darwin/$CANDIDATE_ARCH"
+          mkdir -p dist
+          for command in claude-notifications sound-preview list-devices list-sounds; do
+            go build -ldflags='-s -w' -trimpath -o "dist/$command-darwin-$CANDIDATE_ARCH" "./cmd/$command"
+          done
+          go run ./cmd/build-portable-package \
+            -version "${CANDIDATE_VERSION#v}" -os darwin -arch "$CANDIDATE_ARCH" \
+            -executable "dist/claude-notifications-darwin-$CANDIDATE_ARCH" \
+            -output "dist/agent-notify-portable-darwin-$CANDIDATE_ARCH.zip" \
+            -workdir "$RUNNER_TEMP/portable-darwin-$CANDIDATE_ARCH"
+
+      - name: Verify every native binary supports macOS 12
+        shell: bash
+        run: |
+          set -euo pipefail
+          for command in claude-notifications sound-preview list-devices list-sounds; do
+            binary="dist/$command-darwin-$CANDIDATE_ARCH"
+            minos="$(otool -l "$binary" | awk '$1 == "minos" { print $2; exit }')"
+            case "$minos" in
+              12|12.*) ;;
+              *) echo "unexpected minimum macOS version for $binary: ${minos:-missing}" >&2; exit 1 ;;
+            esac
+          done
+
+      - name: Qualify candidate executable in disposable profiles
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/release-artifact-e2e.py \
+            --binary "dist/claude-notifications-darwin-$CANDIDATE_ARCH" \
+            --version "$CANDIDATE_VERSION" > dist/artifact-e2e.json
+          git rev-parse HEAD > dist/source-sha.txt
+          printf '%s\n' "$CANDIDATE_VERSION" > dist/candidate-version.txt
+          (cd dist && shasum -a 256 * > SHA256SUMS)
+
+      - name: Upload qualified Darwin artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-candidate-${{ matrix.arch }}-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  qualify-notifier:
+    name: Sign and notarize universal notifier
+    uses: ./.github/workflows/notifier-signing-smoke.yml
+    with:
+      skip_notarize: false
+      use_github_runner: ${{ inputs.use_github_runner }}
+    secrets: inherit
