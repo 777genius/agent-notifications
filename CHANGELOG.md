@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Replace per-session desktop banners (macOS, opt-in)** — `notifications.replaceNotificationsPerSession` (default `false`) keys `terminal-notifier -group` on the Claude/Codex session id so a session's newest notification replaces its previous banner in place instead of stacking, while other sessions stay separate. Sessions with no id (or `unknown`) stay unique. Conversation grouping in Notification Center is unchanged and still uses the session thread. Useful for hosts that emit many attention events per session, such as Codex "Approve for me" auto-review.
 
 ## [1.43.1] - 2026-09-16
 

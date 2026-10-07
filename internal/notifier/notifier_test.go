@@ -759,11 +759,13 @@ func TestAppendSharedNotifierOptions_UniqueGroupAndSessionThread(t *testing.T) {
 		"main · project",
 		sessionID,
 		true,
+		false,
 	)
 	args2 := appendSharedNotifierOptions(
 		[]string{"-title", "Title", "-message", "Later"},
 		"main · project",
 		sessionID,
+		false,
 		false,
 	)
 
@@ -799,13 +801,74 @@ func TestAppendSharedNotifierOptions_UniqueGroupAndSessionThread(t *testing.T) {
 }
 
 func TestAppendSharedNotifierOptions_SkipsThreadForUnknownSession(t *testing.T) {
-	args := appendSharedNotifierOptions([]string{"-title", "T", "-message", "M"}, "", "unknown", false)
+	args := appendSharedNotifierOptions([]string{"-title", "T", "-message", "M"}, "", "unknown", false, false)
 	if getArgValue(args, "-threadID") != "" {
 		t.Errorf("unknown session should not set -threadID, got %v", args)
 	}
 	group := getArgValue(args, "-group")
 	if group == "" || group == notificationGroupPrefix+"unknown" {
 		t.Errorf("unknown session should use a unique group, got %q", group)
+	}
+}
+
+func TestAppendSharedNotifierOptions_ReplacePerSessionReusesSessionGroup(t *testing.T) {
+	sessionID := "session-abc-123"
+	earlier := appendSharedNotifierOptions(
+		[]string{"-title", "Title", "-message", "Earlier", "-group", "claude-notif-stale"},
+		"main · project",
+		sessionID,
+		false,
+		true,
+	)
+	later := appendSharedNotifierOptions(
+		[]string{"-title", "Title", "-message", "Later"},
+		"main · project",
+		sessionID,
+		false,
+		true,
+	)
+
+	// The same session must reuse one -group so the newer banner replaces the
+	// earlier one in place; the multiplexer's stale -group must be overridden.
+	if got := getArgValue(earlier, "-group"); got != notificationGroupPrefix+sessionID {
+		t.Errorf("earlier -group = %q, want session key %q", got, notificationGroupPrefix+sessionID)
+	}
+	if got := getArgValue(later, "-group"); got != notificationGroupPrefix+sessionID {
+		t.Errorf("later -group = %q, want session key %q", got, notificationGroupPrefix+sessionID)
+	}
+	if countFlag(earlier, "-group") != 1 {
+		t.Errorf("expected exactly one -group, got %v", earlier)
+	}
+	if got := getArgValue(later, "-threadID"); got != sessionID {
+		t.Errorf("-threadID = %q, want session %q", got, sessionID)
+	}
+}
+
+func TestAppendSharedNotifierOptions_ReplacePerSessionKeepsOtherSessionsSeparate(t *testing.T) {
+	argsA := appendSharedNotifierOptions([]string{"-title", "T", "-message", "A"}, "", "session-a", false, true)
+	argsB := appendSharedNotifierOptions([]string{"-title", "T", "-message", "B"}, "", "session-b", false, true)
+
+	groupA := getArgValue(argsA, "-group")
+	groupB := getArgValue(argsB, "-group")
+	if groupA == groupB {
+		t.Fatalf("different sessions must not share a -group: %q", groupA)
+	}
+	if groupA != notificationGroupPrefix+"session-a" || groupB != notificationGroupPrefix+"session-b" {
+		t.Errorf("groups must be keyed on each session: %q / %q", groupA, groupB)
+	}
+}
+
+func TestAppendSharedNotifierOptions_ReplacePerSessionStaysUniqueForUnknownSession(t *testing.T) {
+	first := appendSharedNotifierOptions([]string{"-title", "T", "-message", "1"}, "", "unknown", false, true)
+	second := appendSharedNotifierOptions([]string{"-title", "T", "-message", "2"}, "", "", false, true)
+
+	group1 := getArgValue(first, "-group")
+	group2 := getArgValue(second, "-group")
+	if group1 == notificationGroupPrefix+"unknown" || group2 == notificationGroupPrefix {
+		t.Errorf("unknown/empty session must not key the group: %q / %q", group1, group2)
+	}
+	if group1 == group2 {
+		t.Errorf("unknown/empty sessions must keep unique groups, got %q twice", group1)
 	}
 }
 

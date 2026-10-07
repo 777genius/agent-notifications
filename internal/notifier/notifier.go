@@ -212,7 +212,7 @@ func (n *Notifier) sendWithTerminalNotifier(title, message, subtitle, sessionID 
 		args = buildTerminalNotifierArgsWithOptions(title, message, bundleID, cwd, ghosttyTerminalID, clickToFocus)
 	}
 
-	args = appendSharedNotifierOptions(args, subtitle, sessionID, timeSensitive)
+	args = appendSharedNotifierOptions(args, subtitle, sessionID, timeSensitive, n.cfg.ShouldReplaceNotificationsPerSession())
 
 	if appPath, ok := claudeNotifierAppPath(notifierPath); ok {
 		if err := runClaudeNotifierApp(appPath, args); err != nil {
@@ -336,11 +336,29 @@ func buildTerminalNotifierArgsWithOptions(title, message, bundleID, cwd, ghostty
 	return args
 }
 
-// uniqueNotificationGroupID is terminal-notifier -group / UNNotificationRequest.identifier.
-// The same identifier replaces the previous banner. IDs are unique on purpose:
-// a shared -group collapses every ClaudeNotifier toast into one slot, so a
-// Question from chat B would hide a Completed from chat A. Conversation stacking
-// in Notification Center is -threadID (Claude or Codex session ID), not -group.
+// notificationGroupID is the terminal-notifier -group value, which is the
+// UNNotificationRequest.identifier: delivering a request that reuses an
+// identifier replaces the previous banner in place.
+//
+// By default the identifier is unique per notification, so nothing is ever
+// replaced: a shared -group would collapse every ClaudeNotifier toast into one
+// slot, letting a Question from chat B hide a Completed from chat A.
+//
+// When replacePerSession is set, the identifier is keyed on the Claude/Codex
+// session instead, so a session's own newer notification replaces its previous
+// banner while other sessions stay untouched. Empty/"unknown" ids always stay
+// unique so unrelated notifications are never collapsed. Conversation grouping
+// in Notification Center is -threadID, independent of this switch.
+func notificationGroupID(sessionID string, replacePerSession bool) string {
+	if replacePerSession {
+		if id := strings.TrimSpace(sessionID); id != "" && !strings.EqualFold(id, "unknown") {
+			return notificationGroupPrefix + id
+		}
+	}
+	return uniqueNotificationGroupID()
+}
+
+// uniqueNotificationGroupID returns a never-reused -group value.
 func uniqueNotificationGroupID() string {
 	seq := uniqueNotificationGroupSeq.Add(1)
 	return fmt.Sprintf("%s%d-%d", notificationGroupPrefix, time.Now().UnixNano(), seq)
@@ -359,9 +377,10 @@ func setNotifierFlag(args []string, flag, value string) []string {
 	return append(args, flag, value)
 }
 
-// appendSharedNotifierOptions adds subtitle, session thread, unique group, and
-// Swift-only flags that every macOS delivery path (plain and multiplexer) shares.
-func appendSharedNotifierOptions(args []string, subtitle, sessionID string, timeSensitive bool) []string {
+// appendSharedNotifierOptions adds subtitle, session thread, replacement group,
+// and Swift-only flags that every macOS delivery path (plain and multiplexer)
+// shares.
+func appendSharedNotifierOptions(args []string, subtitle, sessionID string, timeSensitive, replacePerSession bool) []string {
 	if subtitle != "" {
 		args = append(args, "-subtitle", subtitle)
 	}
@@ -369,7 +388,7 @@ func appendSharedNotifierOptions(args []string, subtitle, sessionID string, time
 		// Group in Notification Center by Claude/Codex session without replacing banners.
 		args = append(args, "-threadID", id)
 	}
-	args = setNotifierFlag(args, "-group", uniqueNotificationGroupID())
+	args = setNotifierFlag(args, "-group", notificationGroupID(sessionID, replacePerSession))
 	if timeSensitive {
 		args = append(args, "-timeSensitive")
 	}

@@ -28,14 +28,15 @@ type NotificationsConfig struct {
 	Webhook                                     WebhookConfig    `json:"webhook"`
 	SuppressQuestionAfterTaskCompleteSeconds    *int             `json:"suppressQuestionAfterTaskCompleteSeconds"`
 	SuppressQuestionAfterAnyNotificationSeconds *int             `json:"suppressQuestionAfterAnyNotificationSeconds"`
-	NotifyOnSubagentStop                        bool             `json:"notifyOnSubagentStop"`      // Send notifications when subagents (Task tool) complete, default: false. Requires suppressForSubagents=false to take effect.
-	SuppressForSubagents                        *bool            `json:"suppressForSubagents"`      // Suppress subagent (SubagentStop) notifications, and Stop notifications whose transcript_path is a subagent/teammate transcript; default: true. Overrides notifyOnSubagentStop.
-	NotifyOnTextResponse                        *bool            `json:"notifyOnTextResponse"`      // Send notifications for text-only responses (no tools), default: true
-	RespectJudgeMode                            *bool            `json:"respectJudgeMode"`          // Honor CLAUDE_HOOK_JUDGE_MODE=true env var to suppress notifications, default: true
-	SuppressFilters                             []SuppressFilter `json:"suppressFilters,omitempty"` // Rules for suppressing notifications by status/branch/folder
-	TeamMode                                    string           `json:"teamMode,omitempty"`        // Team mode: "always" (no suppression, default), "wait-all" (suppress lead, notify when all idle), "never" (silent in team mode)
-	NotifyOnlyWhenUnfocused                     *bool            `json:"notifyOnlyWhenUnfocused"`   // Suppress desktop notifications while the terminal window running Claude Code has OS focus, default: false
-	NotifyDelaySeconds                          *int             `json:"notifyDelaySeconds"`        // Wait N seconds before delivering a desktop notification (paired with notifyOnlyWhenUnfocused, it re-checks focus after the wait), default: 0
+	NotifyOnSubagentStop                        bool             `json:"notifyOnSubagentStop"`           // Send notifications when subagents (Task tool) complete, default: false. Requires suppressForSubagents=false to take effect.
+	SuppressForSubagents                        *bool            `json:"suppressForSubagents"`           // Suppress subagent (SubagentStop) notifications, and Stop notifications whose transcript_path is a subagent/teammate transcript; default: true. Overrides notifyOnSubagentStop.
+	NotifyOnTextResponse                        *bool            `json:"notifyOnTextResponse"`           // Send notifications for text-only responses (no tools), default: true
+	RespectJudgeMode                            *bool            `json:"respectJudgeMode"`               // Honor CLAUDE_HOOK_JUDGE_MODE=true env var to suppress notifications, default: true
+	SuppressFilters                             []SuppressFilter `json:"suppressFilters,omitempty"`      // Rules for suppressing notifications by status/branch/folder
+	TeamMode                                    string           `json:"teamMode,omitempty"`             // Team mode: "always" (no suppression, default), "wait-all" (suppress lead, notify when all idle), "never" (silent in team mode)
+	NotifyOnlyWhenUnfocused                     *bool            `json:"notifyOnlyWhenUnfocused"`        // Suppress desktop notifications while the terminal window running Claude Code has OS focus, default: false
+	NotifyDelaySeconds                          *int             `json:"notifyDelaySeconds"`             // Wait N seconds before delivering a desktop notification (paired with notifyOnlyWhenUnfocused, it re-checks focus after the wait), default: 0
+	ReplaceNotificationsPerSession              *bool            `json:"replaceNotificationsPerSession"` // macOS: replace a session's previous banner with its newest desktop notification instead of stacking, default: false
 }
 
 // DesktopConfig represents desktop notification settings
@@ -623,6 +624,17 @@ func (c *Config) GetNotifyDelaySeconds() int {
 		return 0
 	}
 	return *c.Notifications.NotifyDelaySeconds
+}
+
+// ShouldReplaceNotificationsPerSession returns true if a newer desktop
+// notification from the same session should replace that session's previous
+// banner instead of stacking a new one (default: false). macOS only; other
+// delivery paths always stack.
+func (c *Config) ShouldReplaceNotificationsPerSession() bool {
+	if c.Notifications.ReplaceNotificationsPerSession == nil {
+		return false // Default: stack, never replace
+	}
+	return *c.Notifications.ReplaceNotificationsPerSession
 }
 
 // GetTeamMode returns the team notification mode: "always" (default), "wait-all", or "never"
