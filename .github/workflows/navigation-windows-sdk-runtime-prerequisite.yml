@@ -1,0 +1,145 @@
+name: Navigation Windows SDK runtime prerequisite (no notifications)
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/navigation-windows-sdk-runtime-prerequisite.yml'
+      - 'tests/integration/windows_appsdk_build/**'
+      - 'tests/integration/navigation_windows_lua_launcher.cpp'
+      - 'tests/integration/navigation_windows_token_queries.h'
+      - 'opencode-plugin/package.json'
+      - 'opencode-plugin/package-lock.json'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: sdk-prerequisite-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  sdk-prerequisite:
+    if: github.repository == '777genius/agent-notifications' && github.run_attempt == 1
+    runs-on: windows-11-vs2026-arm
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24.21.0'
+      - name: Locked tooling and strict source typecheck
+        shell: pwsh
+        run: |
+          npm ci --prefix opencode-plugin --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'locked tooling unavailable' }
+          & ./opencode-plugin/node_modules/.bin/tsc.cmd --ignoreConfig --noEmit --allowImportingTsExtensions --strict --target ES2023 --module ESNext --moduleResolution bundler --types node --typeRoots ./opencode-plugin/node_modules/@types tests/integration/windows_appsdk_build/runtime-prerequisite.ts tests/integration/windows_appsdk_build/verify-runtime-package.ts tests/integration/navigation_windows_lua_preflight.ts
+          if ($LASTEXITCODE -ne 0) { throw 'focused typecheck failed' }
+      - name: Restore, verify bytes and compile (no SDK execution)
+        id: build
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if ((git rev-parse HEAD) -cne $env:SOURCE_SHA) { throw 'source mismatch' }
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -property installationPath
+          if (!$vs) { throw 'Visual Studio missing' }
+          $msbuild = Join-Path $vs 'MSBuild\Current\Bin\MSBuild.exe'
+          $project = 'tests\integration\windows_appsdk_build\SDKRuntimePrerequisite.vcxproj'
+          $out = Join-Path $env:RUNNER_TEMP 'TEST-windows-appsdk-build'
+          $packages = Join-Path $env:RUNNER_TEMP 'TEST-windows-appsdk-packages'
+          New-Item -ItemType Directory -Path $out,$packages -ErrorAction Stop | Out-Null
+          $env:NUGET_PACKAGES = $packages
+          & $msbuild $project /t:Restore /p:Configuration=Release /p:Platform=ARM64 "/p:RestorePackagesPath=$packages" "/p:OutDir=$out\" "/p:IntDir=$out\runtime-obj\" /verbosity:minimal
+          if ($LASTEXITCODE -ne 0) { throw 'locked restore failed' }
+          $lock = 'tests\integration\windows_appsdk_build\packages.lock.json'
+          $dotnet = (Get-Command dotnet -CommandType Application -ErrorAction Stop).Source
+          node tests/integration/windows_appsdk_build/verify-runtime-package.ts $out $packages $lock $dotnet
+          if ($LASTEXITCODE -ne 0) { throw 'same restored runtime verification failed' }
+          & $msbuild $project /t:Build /p:Configuration=Release /p:Platform=ARM64 "/p:RestorePackagesPath=$packages" "/p:OutDir=$out\" "/p:IntDir=$out\runtime-obj\" /verbosity:minimal
+          if ($LASTEXITCODE -ne 0) { throw 'SDK prerequisite compile failed' }
+          $launcher = Join-Path $out 'TEST-sdk-launcher.exe'
+          $source = Join-Path $env:GITHUB_WORKSPACE 'tests\integration\navigation_windows_lua_launcher.cpp'
+          $cmd = '"' + $vs + '\Common7\Tools\VsDevCmd.bat" -arch=arm64 -host_arch=arm64 && cl /nologo /EHsc /W4 /std:c++20 /DUNICODE /D_UNICODE "' + $source + '" /Fe:"' + $launcher + '" /Fo:"' + $out + '\TEST-sdk-launcher.obj" /link advapi32.lib bcrypt.lib user32.lib wtsapi32.lib'
+          & cmd /d /s /c $cmd
+          if ($LASTEXITCODE -ne 0) { throw 'guarded launcher compile failed' }
+          $exe = Join-Path $out 'SDKRuntimePrerequisite.exe'
+          "exe=$exe" >> $env:GITHUB_OUTPUT
+          "exe_sha256=$((Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          "launcher=$launcher" >> $env:GITHUB_OUTPUT
+          "launcher_sha256=$((Get-FileHash -LiteralPath $launcher -Algorithm SHA256).Hash.ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+      - name: Derive closed payload catalog from the SAME verified restored archives
+        id: inputs
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'TEST-windows-appsdk-build'
+          $packages = Join-Path $env:RUNNER_TEMP 'TEST-windows-appsdk-packages'
+          $verified = Get-Content -LiteralPath (Join-Path $out 'runtime-verification.json') -Raw | ConvertFrom-Json
+          if (!$verified.packageVerified) { throw 'runtime verification evidence absent' }
+          $foundationVerified = Get-Content -LiteralPath (Join-Path $out 'foundation-verification.json') -Raw | ConvertFrom-Json
+          if (!$foundationVerified.packageVerified) { throw 'Foundation crypto verification evidence absent' }
+          $archive = Join-Path $packages 'microsoft.windowsappsdk.runtime\2.5.1\microsoft.windowsappsdk.runtime.2.5.1.nupkg'
+          $outerHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($outerHash -cne '2fbd27012291be50cafed6942306964281d37167af6a6af3887e1163ec5cf063' -or $verified.archiveSHA256After -cne $outerHash) { throw 'frozen runtime archive mismatch' }
+          $dir = Join-Path $env:RUNNER_TEMP ('TEST-sdk-inputs-' + [guid]::NewGuid().ToString())
+          New-Item -ItemType Directory -Path $dir -ErrorAction Stop | Out-Null
+          function Copy-ClosedEntry($zip, [string]$name, [string]$target, [long]$cap) {
+            $entries = @($zip.Entries | Where-Object { $_.FullName -ceq $name })
+            if ($entries.Count -ne 1 -or $entries[0].Length -le 0 -or $entries[0].Length -gt $cap) { throw 'missing/duplicate/oversized payload entry' }
+            $input = $entries[0].Open()
+            $output = [IO.File]::Open($target, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+            try { $input.CopyTo($output); if ($output.Length -ne $entries[0].Length) { throw 'payload length changed' }; $output.Flush($true) } finally { $output.Dispose(); $input.Dispose() }
+          }
+          $runtime = [IO.Compression.ZipFile]::OpenRead($archive)
+          $files = @('Microsoft.WindowsAppRuntime.2.msix','Microsoft.WindowsAppRuntime.DDLM.2.msix','Microsoft.WindowsAppRuntime.Main.2.msix','Microsoft.WindowsAppRuntime.Singleton.2.msix')
+          try { foreach ($leaf in $files) { Copy-ClosedEntry $runtime ('tools/MSIX/win10-arm64/' + $leaf) (Join-Path $dir $leaf) 67108864 } } finally { $runtime.Dispose() }
+          foreach ($leaf in $files) {
+            $msix = [IO.Compression.ZipFile]::OpenRead((Join-Path $dir $leaf))
+            try {
+              Copy-ClosedEntry $msix 'AppxManifest.xml' (Join-Path $dir ($leaf + '.manifest.xml')) 262144
+              if ($leaf -ceq $files[0]) { Copy-ClosedEntry $msix 'Microsoft.WindowsAppRuntime.dll' (Join-Path $dir 'Microsoft.WindowsAppRuntime.dll') 67108864 }
+            } finally { $msix.Dispose() }
+          }
+          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -cne $outerHash) { throw 'archive custody changed' }
+          $foundationRoot = Join-Path $packages 'microsoft.windowsappsdk.foundation\2.3.12'
+          $foundationArchive = Join-Path $foundationRoot 'microsoft.windowsappsdk.foundation.2.3.12.nupkg'
+          $foundationHash = (Get-FileHash -LiteralPath $foundationArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($foundationVerified.archiveSHA256After -cne $foundationHash) { throw 'verified Foundation custody mismatch' }
+          $foundation = [IO.Compression.ZipFile]::OpenRead($foundationArchive)
+          $bootstrap = Join-Path $dir 'Microsoft.WindowsAppRuntime.Bootstrap.dll'
+          try { Copy-ClosedEntry $foundation 'runtimes/win-arm64/native/Microsoft.WindowsAppRuntime.Bootstrap.dll' $bootstrap 16777216 } finally { $foundation.Dispose() }
+          if ((Get-FileHash -LiteralPath $foundationArchive -Algorithm SHA256).Hash.ToLowerInvariant() -cne $foundationHash) { throw 'Foundation archive changed' }
+          $bootstrapHash = (Get-FileHash -LiteralPath $bootstrap -Algorithm SHA256).Hash.ToLowerInvariant()
+          $builtBootstrap = Join-Path $out 'Microsoft.WindowsAppRuntime.Bootstrap.dll'
+          if ((Get-FileHash -LiteralPath $builtBootstrap -Algorithm SHA256).Hash.ToLowerInvariant() -cne $bootstrapHash) { throw 'import DLL differs from exact restored Foundation source' }
+          $provenance = @{runtimeVerified=$true; outerSHA256=$outerHash; foundationVersion='2.3.12'; foundationVerified=$true;
+            foundationArchiveSHA256=$foundationHash; foundationContentHash=$foundationVerified.actualContentHash;
+            bootstrapSourceEntry='runtimes/win-arm64/native/Microsoft.WindowsAppRuntime.Bootstrap.dll'; bootstrapSHA256=$bootstrapHash;
+            runtimeModuleSourceMSIXSHA256=(Get-FileHash -LiteralPath (Join-Path $dir $files[0]) -Algorithm SHA256).Hash.ToLowerInvariant();
+            runtimeModuleSourceEntry='Microsoft.WindowsAppRuntime.dll'; runtimeModuleSHA256=(Get-FileHash -LiteralPath (Join-Path $dir 'Microsoft.WindowsAppRuntime.dll') -Algorithm SHA256).Hash.ToLowerInvariant()}
+          $provenance | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $dir 'provenance.json') -Encoding utf8NoBOM
+          "root=$dir" >> $env:GITHUB_OUTPUT
+          "bootstrap=$bootstrap" >> $env:GITHUB_OUTPUT
+      - name: Explicit ONE disposable-CI deployment/bootstrap experiment
+        if: github.event_name == 'workflow_dispatch'
+        id: execute
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          SDK_INPUTS: ${{ steps.inputs.outputs.root }}
+          BOOTSTRAP_DLL: ${{ steps.inputs.outputs.bootstrap }}
+          SDK_EXE: ${{ steps.build.outputs.exe }}
+          SDK_EXE_SHA256: ${{ steps.build.outputs.exe_sha256 }}
+          LUA_LAUNCHER_EXE: ${{ steps.build.outputs.launcher }}
+          LUA_LAUNCHER_SHA256: ${{ steps.build.outputs.launcher_sha256 }}
+        run: |
+          if ((git rev-parse HEAD) -cne $env:SOURCE_SHA) { throw 'source mismatch' }
+          node tests/integration/windows_appsdk_build/runtime-prerequisite.ts
+          if ($LASTEXITCODE -ne 0) { throw 'runtime prerequisite unknown; preserve intent; no retry/cleanup' }
+      - name: Preserve bounded own TEST evidence
+        if: always() && github.event_name == 'workflow_dispatch' && steps.execute.outputs.evidence_root != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: TEST-sdk-runtime-prerequisite-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.execute.outputs.evidence_root }}/*.json
+          if-no-files-found: error
+          retention-days: 14

@@ -72,3 +72,55 @@ static bool validNonce(const wchar_t* value) {
     }
     return true;
 }
+
+struct Facts {
+    std::string sid, auth;
+    DWORD session = 0, rid = 0;
+    DWORD elevated = 0;
+    TOKEN_ELEVATION_TYPE type{};
+};
+static Facts facts(HANDLE token) {
+    Facts f;
+    auto user = queryToken(token, TokenUser, "TokenUser", sizeof(TOKEN_USER));
+    const auto sid = reinterpret_cast<TOKEN_USER*>(user.data())->User.Sid;
+    f.sid = digest(reinterpret_cast<const BYTE*>(sid), boundedSidSize(user, sid, "TokenUserSID"));
+    const auto statistics = queryFixedToken<TOKEN_STATISTICS>(token, TokenStatistics, "TokenStatistics");
+    f.auth = digest(reinterpret_cast<const BYTE*>(&statistics.AuthenticationId), sizeof(LUID));
+    f.session = queryFixedToken<DWORD>(token, TokenSessionId, "TokenSessionId");
+    f.elevated = queryFixedToken<TOKEN_ELEVATION>(token, TokenElevation, "TokenElevation").TokenIsElevated;
+    f.type = queryFixedToken<TOKEN_ELEVATION_TYPE>(token, TokenElevationType, "TokenElevationType");
+    auto integrity = queryToken(token, TokenIntegrityLevel, "TokenIntegrityLevel", sizeof(TOKEN_MANDATORY_LABEL));
+    const auto level = reinterpret_cast<TOKEN_MANDATORY_LABEL*>(integrity.data())->Label.Sid;
+    boundedSidSize(integrity, level, "IntegritySID");
+    const BYTE count = *GetSidSubAuthorityCount(level);
+    if (!count || f.elevated > 1 || f.type < TokenElevationTypeDefault || f.type > TokenElevationTypeLimited)
+        throw Failure{"TokenValue", ERROR_INVALID_DATA};
+    f.rid = *GetSidSubAuthority(level, count - 1);
+    return f;
+}
+static std::string factsJson(const Facts& f) {
+    return "{\"sidSHA256\":\"" + f.sid + "\",\"authLUIDSHA256\":\"" + f.auth +
+        "\",\"session\":" + std::to_string(f.session) + ",\"elevated\":" + (f.elevated ? "true" : "false") +
+        ",\"elevationType\":" + std::to_string(f.type) + ",\"integrityRID\":" + std::to_string(f.rid) + "}";
+}
+static std::string quoted(const std::string& input) {
+    std::string out = "\"";
+    for (unsigned char c : input) {
+        if (c == '"' || c == '\\') { out += '\\'; out += static_cast<char>(c); }
+        else if (c < 32) {
+            out += "\\u00"; out += "0123456789abcdef"[c >> 4]; out += "0123456789abcdef"[c & 15];
+        } else out += static_cast<char>(c);
+    }
+    return out + "\"";
+}
+static bool enabledAdmins(HANDLE token) {
+    Token duplicate;
+    require(DuplicateTokenEx(token, TOKEN_QUERY, nullptr, SecurityIdentification, TokenImpersonation,
+                             &duplicate.handle) != FALSE, "QueryOnlyDuplicate");
+    BYTE sid[SECURITY_MAX_SID_SIZE]{};
+    DWORD bytes = sizeof(sid);
+    require(CreateWellKnownSid(WinBuiltinAdministratorsSid, nullptr, sid, &bytes) != FALSE, "AdministratorsSID");
+    BOOL member = FALSE;
+    require(CheckTokenMembership(duplicate.handle, sid, &member) != FALSE, "CheckTokenMembership");
+    return member != FALSE;
+}
