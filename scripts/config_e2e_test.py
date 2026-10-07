@@ -15,6 +15,7 @@ from pathlib import Path
 import platform
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -536,7 +537,10 @@ def main():
             assert go, 'Go toolchain required or set CONFIG_E2E_BINARY'
             env.update(GOCACHE=str(base / 'gocache'), GOMODCACHE=os.environ.get('CONFIG_E2E_MODCACHE', str(Path.home() / 'go/pkg/mod')),
                        GOPROXY='off', GOSUMDB='off', GOFLAGS='-p=2', PATH=str(Path(go).parent)+':/usr/bin:/bin')
-            subprocess.run([go, 'build', '-p', '2', '-ldflags', '-X github.com/777genius/agent-notifications/internal/config.ConsumerVersion=9.9.9', '-o', str(binary), './cmd/claude-notifications'], cwd=ROOT, env=env, check=True)
+            subprocess.run([go, 'build', '-p', '2', '-trimpath', '-ldflags', '-s -w -X github.com/777genius/agent-notifications/internal/config.ConsumerVersion=9.9.9', '-o', str(binary), './cmd/claude-notifications'], cwd=ROOT, env=env, check=True)
+        info = binary.lstat()
+        assert stat.S_ISREG(info.st_mode) and info.st_mode & 0o111 and 0 < info.st_size <= 32 << 20, 'Fixture requires a bounded executable release-sized binary'
+        print(f'Config fixture native source: {info.st_size} bytes', flush=True)
         suite = Suite(base, binary)
         failures = []
         cases = [(f'fresh-{p}-and-repair', lambda p=p: suite.fresh(p)) for p in ('claude', 'codex', 'both')]
