@@ -89,7 +89,86 @@ static void bootstrap(Bootstrap& state, JsonObject& j, const Binding& binding) {
     j.Insert(L"runtimeModule", JsonObject::Parse(winrt::to_hstring(module(GetModuleHandleW(L"Microsoft.WindowsAppRuntime.dll"), framework + L"\\Microsoft.WindowsAppRuntime.dll", pins[1]))));
     demand(supported, "SDKIsSupportedFalse"); budget(lease);
 }
-static int sender() {
+// Audit reference: SDK source 13160d..., not a source-to-loaded-DLL attestation.
+// Only read the existing SDK path identity; Default() itself is not a zero-effects API.
+static void registryCheck(LSTATUS status, const char* name) { if (status != ERROR_SUCCESS) throw Failure{name, static_cast<DWORD>(status)}; }
+static JsonObject registryIdentity() {
+    std::wstring key = image; std::replace(key.begin(), key.end(), L'\\', L'.');
+    key = L"Software\\Classes\\AppUserModelId\\" + key;
+    HKEY handle = nullptr; registryCheck(RegOpenKeyExW(HKEY_CURRENT_USER, key.c_str(), 0, KEY_READ, &handle), "ExistingSDKPathKey");
+    struct CloseKey { HKEY h; ~CloseKey() { RegCloseKey(h); } } close{handle};
+    DWORD children = 0, values = 0; FILETIME before{}, after{};
+    registryCheck(RegQueryInfoKeyW(handle, nullptr, nullptr, nullptr, &children, nullptr, nullptr, &values, nullptr, nullptr, nullptr, &before), "SDKPathKeyMetadata");
+    demand(children == 0 && values == 1, "BoundedSDKPathIdentity");
+    wchar_t value[40]{}; DWORD type = 0, bytes = sizeof(value);
+    registryCheck(RegQueryValueExW(handle, L"NotificationGUID", nullptr, &type, reinterpret_cast<BYTE*>(value), &bytes), "ExistingNotificationGUID");
+    demand(type == REG_SZ && (bytes == 76 || bytes == 78) && value[38] == 0, "NotificationGUIDShape");
+    GUID guid{}; require(CLSIDFromString(value, &guid) == S_OK, "NotificationGUIDParse");
+    registryCheck(RegQueryInfoKeyW(handle, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, &after), "SDKPathKeyReadback");
+    demand(before.dwLowDateTime == after.dwLowDateTime && before.dwHighDateTime == after.dwHighDateTime, "SDKPathIdentityChangedDuringRead");
+    JsonObject result; put(result, L"pathKey", key); put(result, L"notificationGUID", value);
+    ULARGE_INTEGER tick{}; tick.LowPart = after.dwLowDateTime; tick.HighPart = after.dwHighDateTime;
+    put(result, L"lastWrite", std::to_wstring(tick.QuadPart)); num(result, L"valueBytes", bytes); num(result, L"values", values); num(result, L"subkeys", children);
+    put(result, L"guidBytesSHA256", winrt::to_hstring(digest(reinterpret_cast<BYTE*>(value), bytes)).c_str()); return result;
+}
+static std::wstring payloadDigest(const winrt::hstring& payload) {
+    demand(payload.size() <= 8192, "HistoryPayloadProjectionBound");
+    const auto utf8 = winrt::to_string(payload); demand(utf8.size() <= 8192, "HistoryPayloadUTF8Bound");
+    return std::wstring(winrt::to_hstring(digest(reinterpret_cast<const BYTE*>(utf8.data()), static_cast<DWORD>(utf8.size()))));
+}
+static ULONGLONG historyDeadline() {
+    const auto request = read(L"TEST-history-request.json"), sender = read(L"TEST-sender-collected.json");
+    demand(request.Size() == 3 && request.GetNamedString(L"nonce") == nonce && sender.GetNamedString(L"nonce") == nonce &&
+        sender.GetNamedBoolean(L"collected") && sender.GetNamedNumber(L"exitCode") == 0, "HistoryCollectedSender");
+    const double deadline = request.GetNamedNumber(L"deadlineBootMs");
+    demand(deadline == sender.GetNamedNumber(L"collectedBootMs") + 30000 && deadline > GetTickCount64() && deadline <= GetTickCount64() + 30000 &&
+        request.GetNamedBoolean(L"enabled"), "SharedHistoryUIBudget");
+    return static_cast<ULONGLONG>(deadline);
+}
+static int history() {
+    lease = historyDeadline(); Binding binding; auto result = record(L"history"); num(result, L"deadlineBootMs", static_cast<double>(lease));
+    result.Insert(L"token", ownToken()); put(result, L"physicalImage", image); put(result, L"exeSHA256", binding.value.GetNamedString(L"exeSHA256").c_str());
+    bool shutdown = false; Bootstrap state(shutdown);
+    winrt::Microsoft::Windows::AppNotifications::AppNotificationManager manager{nullptr};
+    winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Foundation::Collections::IVector<winrt::Microsoft::Windows::AppNotifications::AppNotification>> operation{nullptr};
+    struct NoUnwind { bool completedPublication = false; ~NoUnwind() noexcept { if (!completedPublication) ExitProcess(1); } } noUnwind;
+    bool pending = false;
+    // The TEST actor self-exits if synchronous SDK entry or cleanup exceeds the immutable lease.
+    std::thread([deadline = lease] { while (GetTickCount64() < deadline) Sleep(10); TerminateProcess(GetCurrentProcess(), 124); }).detach();
+    try {
+        const auto sender = read(L"TEST-sender.json"); demand(sender.GetNamedString(L"nonce") == nonce && sender.GetNamedBoolean(L"unregisterReturned"), "HistorySenderIdentity");
+        demand(medium(result.GetNamedObject(L"token")), "HistoryMediumRequired"); sameIdentity(result.GetNamedObject(L"token"), sender.GetNamedObject(L"token"));
+        num(result, L"senderID", sender.GetNamedNumber(L"nativeID")); put(result, L"expectedPayloadSHA256", sender.GetNamedString(L"payloadSHA256").c_str());
+        const auto before = registryIdentity(); result.Insert(L"registryBefore", before);
+        demand(before.Stringify() == sender.GetNamedObject(L"registryIdentity").Stringify(), "HistoryExistingSenderGUID");
+        publish(L"TEST-history-intent.json", result); budget(lease); bootstrap(state, result, binding); budget(lease);
+        manager = winrt::Microsoft::Windows::AppNotifications::AppNotificationManager::Default(); budget(lease);
+        num(result, L"queryCallBootMs", static_cast<double>(GetTickCount64())); pending = true; operation = manager.GetAllAsync();
+        while (operation.Status() == winrt::Windows::Foundation::AsyncStatus::Started && GetTickCount64() < lease) Sleep(10);
+        budget(lease); num(result, L"asyncStatus", static_cast<int>(operation.Status()));
+        demand(operation.Status() == winrt::Windows::Foundation::AsyncStatus::Completed, "HistoryAsyncNotCompleted");
+        const auto notifications = operation.GetResults(); pending = false; num(result, L"queryReturnedBootMs", static_cast<double>(GetTickCount64())); budget(lease);
+        demand(notifications != nullptr, "HistoryNullVectorUnknown"); const auto count = notifications.Size(); demand(count <= 32, "HistoryLocalIterationBound"); num(result, L"count", count);
+        unsigned matchingID = 0; bool matched = false;
+        for (unsigned i = 0; i < count; ++i) { budget(lease); const auto item = notifications.GetAt(i);
+            if (item.Id() == sender.GetNamedNumber(L"nativeID")) { ++matchingID; const auto hash = payloadDigest(item.Payload()); put(result, L"observedPayloadSHA256", hash); matched = winrt::hstring{hash} == sender.GetNamedString(L"payloadSHA256"); } }
+        num(result, L"matchingIDCount", matchingID); put(result, L"exactPayloadMatch", matchingID == 1 && matched);
+        const auto after = registryIdentity(); result.Insert(L"registryAfter", after); demand(after.Stringify() == before.Stringify(), "HistoryRegistryChanged");
+        demand(ownToken().Stringify() == result.GetNamedObject(L"token").Stringify(), "HistoryTokenChanged"); binding.stable(); budget(lease);
+        state.shutdown(); put(result, L"bootstrapShutdown", shutdown); budget(lease);
+        put(result, L"outcome", count == 0 ? L"completed_empty" : matchingID == 1 && matched ? L"completed_exact" : L"completed_mismatch");
+        num(result, L"endBootMs", static_cast<double>(GetTickCount64())); publish(L"TEST-history.json", result); std::puts(winrt::to_string(result.Stringify()).c_str()); noUnwind.completedPublication = true; return 0;
+    } catch (const Failure& e) { put(result, L"query", winrt::to_hstring(e.query).c_str()); num(result, L"error", e.error); }
+      catch (const winrt::hresult_error& e) { num(result, L"error", static_cast<DWORD>(e.code().value)); }
+      catch (...) { put(result, L"query", L"HistoryException"); }
+    num(result, L"failureBootMs", static_cast<double>(GetTickCount64()));
+    try { result.Insert(L"registryAfter", registryIdentity()); } catch (const Failure& e) { num(result, L"registryReadbackError", e.error); } catch (...) { num(result, L"registryReadbackError", ERROR_INVALID_DATA); }
+    if (pending && operation) { try { operation.Cancel(); put(result, L"cancelRequested", true); } catch (...) { put(result, L"cancelRequested", false); } }
+    // Cancel does not prove RPC completion. Retain manager/op until this process exits; no UI admission.
+    put(result, L"rpcCompletionQualified", false); put(result, L"outcome", L"unknown"); num(result, L"endBootMs", static_cast<double>(GetTickCount64()));
+    publish(L"TEST-history.json", result); std::puts(winrt::to_string(result.Stringify()).c_str()); std::fflush(stdout); ExitProcess(1);
+}
+static int sender(bool historyDiagnostic = false) {
     lease = GetTickCount64() + 30000; Binding binding; auto result = record(L"sender"); num(result, L"deadlineBootMs", static_cast<double>(lease)); const auto token = ownToken(); result.Insert(L"token", token);
     bool shutdown = false; Bootstrap state(shutdown); bool registered = false;
     winrt::Microsoft::Windows::AppNotifications::AppNotificationManager manager{nullptr};
@@ -99,8 +178,10 @@ static int sender() {
         const auto event = manager.NotificationInvoked([](auto const&, auto const&) { /* Sender must die before any click. */ });
         put(result, L"handlerBeforeRegister", true); publish(L"TEST-register-intent.json", result); budget(lease);
         manager.Register(); registered = true; put(result, L"registered", true); budget(lease); binding.stable();
+        if (historyDiagnostic) result.Insert(L"registryIdentity", registryIdentity());
         const std::wstring xml = L"<toast launch=\"TEST-cold-" + nonce + L"\"><visual><binding template=\"ToastGeneric\"><text>Navigation TEST " + nonce + L"</text><text>SDK cold activation TEST</text></binding></visual></toast>";
         winrt::Microsoft::Windows::AppNotifications::AppNotification toast(xml);
+        if (historyDiagnostic) put(result, L"payloadSHA256", payloadDigest(toast.Payload()));
         publish(L"TEST-show-intent.json", result); num(result, L"showCallBootMs", static_cast<double>(GetTickCount64())); budget(lease); manager.Show(toast); num(result, L"showReturnedBootMs", static_cast<double>(GetTickCount64())); num(result, L"nativeID", toast.Id());
         demand(toast.Id() != 0, "NativeIDZero"); put(result, L"showReturned", true);
         num(result, L"unregisterCallBootMs", static_cast<double>(GetTickCount64())); manager.Unregister(); num(result, L"unregisterReturnedBootMs", static_cast<double>(GetTickCount64())); registered = false; put(result, L"unregisterReturned", true); manager.NotificationInvoked(event);
@@ -204,11 +285,11 @@ static int receiver() {
     ExitProcess(terminal.GetNamedString(L"outcome") == L"callback_observed" ? 0 : 1);
 }
 static int collect() {
-    const ULONGLONG deadline = GetTickCount64() + 100000; Binding binding; auto j = record(L"collector"); File process;
-    num(j, L"deadlineBootMs", static_cast<double>(deadline)); num(j, L"readyWaitDeadlineBootMs", static_cast<double>(deadline - 70000));
+    const ULONGLONG deadline = GetTickCount64() + 100000; const ULONGLONG readyDeadline = exists(L"TEST-history-request.json") ? historyDeadline() : deadline - 70000; Binding binding; auto j = record(L"collector"); File process;
+    num(j, L"deadlineBootMs", static_cast<double>(deadline)); num(j, L"readyWaitDeadlineBootMs", static_cast<double>(readyDeadline));
     put(j, L"readyObserved", false); put(j, L"ackPublished", false); put(j, L"stage", L"ready_wait");
     try {
-        while (!exists(L"TEST-receiver-ready.json")) { budget(deadline - 70000); Sleep(10); }
+        while (!exists(L"TEST-receiver-ready.json")) { budget(readyDeadline); Sleep(10); }
         put(j, L"readyObserved", true); num(j, L"readyObservedBootMs", static_cast<double>(GetTickCount64())); put(j, L"stage", L"ready_validate");
         const auto ready = read(L"TEST-receiver-ready.json");
         demand(ready.GetNamedString(L"nonce") == nonce && ready.GetNamedString(L"phase") == L"receiver_ready" &&
@@ -420,7 +501,7 @@ static void centerInput(const Binding& binding, JsonObject& proof, ULONGLONG dea
     demand(accepted, "CenterInputUnknown"); budget(deadline);
 }
 static int invoke(bool ownScenario = false, bool globalScenario = false) {
-    const ULONGLONG deadline = GetTickCount64() + 30000; Binding binding; auto proof = record(L"shell_invoke");
+    const ULONGLONG deadline = exists(L"TEST-history-request.json") ? historyDeadline() : GetTickCount64() + 30000; Binding binding; auto proof = record(L"shell_invoke");
     num(proof, L"deadlineBootMs", static_cast<double>(deadline)); put(proof, L"stage", L"interactive");
     put(proof, L"scenario", globalScenario ? L"disposable_global_shortcut" : ownScenario ? L"owned_test_foreground" : L"shell_foreground"); std::unique_ptr<OwnedForeground, void(*)(OwnedForeground*)> owned(nullptr, [](OwnedForeground* p) {
         if (!p->finished) { try { p->close(); } catch (...) {} }
@@ -432,6 +513,7 @@ static int invoke(bool ownScenario = false, bool globalScenario = false) {
     for (auto key : {L"censusAttempts", L"completedCensusAttempts", L"maxRoots", L"maxNodes", L"maxAdmittedProviderRoots", L"maxOwnedTitleMatches"}) num(proof, key, 0);
     try {
         interactive();
+        if (exists(L"TEST-history-request.json")) { const auto observed = read(L"TEST-history.json"); demand(observed.GetNamedString(L"nonce") == nonce && observed.GetNamedString(L"outcome") == L"completed_exact" && observed.GetNamedNumber(L"deadlineBootMs") == deadline, "HistoryRequiredBeforeUI"); }
         const auto sender = read(L"TEST-sender-collected.json"); demand(sender.GetNamedString(L"nonce") == nonce && sender.GetNamedBoolean(L"collected") && sender.GetNamedNumber(L"exitCode") == 0, "CollectedSenderBeforeClick");
         ComPtr<IUIAutomation> automation; winrt::check_hresult(CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&automation)));
         ComPtr<IUIAutomationTreeWalker> walker; winrt::check_hresult(automation->get_RawViewWalker(&walker));
@@ -517,6 +599,8 @@ int wmain(int argc, wchar_t** argv) {
         const auto leaf = fs::path(image).filename().wstring(); demand(leaf.size() == 49 && leaf.substr(0, 9) == L"TEST-sdk-" && leaf.substr(45) == L".exe", "PermanentGenerationEXE");
         nonce = leaf.substr(9, 36); demand(validNonce(nonce.c_str()) && fs::path(root).filename() == L"TEST-lua-preflight-" + nonce, "OwnGenerationNonce");
         Apartment apartment; winrt::init_apartment(winrt::apartment_type::multi_threaded); apartment.initialized = true;
+        if (argc == 7 && !wcscmp(argv[1], L"--TEST-sdk-cold-history") && nonce == argv[2] && root == argv[3]) return history();
+        if (argc == 7 && !wcscmp(argv[1], L"--TEST-sdk-cold-sender-history") && nonce == argv[2] && root == argv[3]) return sender(true);
         if (argc == 7 && !wcscmp(argv[1], L"--TEST-sdk-cold-sender") && nonce == argv[2] && root == argv[3]) return sender();
         if (argc == 3 && nonce == argv[2] && !wcscmp(argv[1], L"--TEST-sdk-cold-collect")) return collect();
         if (argc == 3 && nonce == argv[2] && !wcscmp(argv[1], L"--TEST-sdk-cold-invoke")) return invoke();

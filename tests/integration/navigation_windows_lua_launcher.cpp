@@ -194,7 +194,9 @@ int wmain(int argc, wchar_t** argv) {
     if (argc >= 2 && !wcscmp(argv[1], L"--TEST-seal-sdk-root")) return sealRoot(argc, argv);
     if (argc != 5 || !validNonce(argv[2])) return 64;
     const bool deploy = wcscmp(argv[1], L"--TEST-sdk-deployment") == 0;
-    const bool cold = wcscmp(argv[1], L"--TEST-sdk-cold-sender") == 0;
+    const bool history = wcscmp(argv[1], L"--TEST-sdk-cold-history") == 0;
+    const bool senderHistory = wcscmp(argv[1], L"--TEST-sdk-cold-sender-history") == 0;
+    const bool cold = history || senderHistory || wcscmp(argv[1], L"--TEST-sdk-cold-sender") == 0;
     const bool sdk = deploy || cold || wcscmp(argv[1], L"--TEST-sdk-bootstrap") == 0;
     const bool medium = !deploy && (sdk || wcscmp(argv[1], L"--TEST-lua-medium-token-preflight") == 0);
     if (!sdk && !medium && wcscmp(argv[1], L"--TEST-lua-token-preflight")) return 64;
@@ -289,7 +291,7 @@ int wmain(int argc, wchar_t** argv) {
         if (!windowsLength || windowsLength >= 32768) throw Failure{"SystemRoot", ERROR_INVALID_DATA};
         std::wstring environment = L"SystemRoot=" + std::wstring(windows) + L'\0' + L"TEMP=" + root + L'\0' + L"TMP=" + root;
         environment.push_back(L'\0'); environment.push_back(L'\0');
-        std::wstring command = L"\"" + probe + L"\" " + (sdk ? (deploy ? L"--TEST-sdk-deploy " : (cold ? L"--TEST-sdk-cold-sender " : L"--TEST-sdk-bootstrap ")) : L"--read-only-TEST-token-preflight ") + wideNonce;
+        std::wstring command = L"\"" + probe + L"\" " + (sdk ? (deploy ? L"--TEST-sdk-deploy " : (history ? L"--TEST-sdk-cold-history " : senderHistory ? L"--TEST-sdk-cold-sender-history " : cold ? L"--TEST-sdk-cold-sender " : L"--TEST-sdk-bootstrap ")) : L"--read-only-TEST-token-preflight ") + wideNonce;
         if (sdk) command += L" \"" + root + L"\" " + std::wstring(before.sid.begin(), before.sid.end()) + L" " +
             std::wstring(before.auth.begin(), before.auth.end()) + L" " + std::to_wstring(before.session);
         const ULONGLONG sdkDeadline = GetTickCount64() + (deploy ? 90000 : 30000);
@@ -358,7 +360,7 @@ int wmain(int argc, wchar_t** argv) {
     }
     if (cold && collected) collectionBootMs = GetTickCount64();
     const std::string record = "{\"nonce\":" + quoted(nonce) + ",\"pid\":" + std::to_string(GetCurrentProcessId()) +
-        ",\"variant\":" + quoted(sdk ? (deploy ? "sdk-deploy" : (cold ? "sdk-cold-sender" : "sdk-bootstrap")) : (medium ? "lua-medium" : "lua-only")) + ",\"restrictedBefore\":" + restrictedBefore +
+        ",\"variant\":" + quoted(sdk ? (deploy ? "sdk-deploy" : (history ? "sdk-cold-history" : senderHistory ? "sdk-cold-sender-history" : cold ? "sdk-cold-sender" : "sdk-bootstrap")) : (medium ? "lua-medium" : "lua-only")) + ",\"restrictedBefore\":" + restrictedBefore +
         ",\"restrictedAfter\":" + restrictedAfter + ",\"parentAfter\":" + parentAfter +
         ",\"loweringAttempted\":" + (loweringAttempted ? "true" : "false") + ",\"integrityLowered\":" + (integrityLowered ? "true" : "false") +
         ",\"baseline\":" + baseline + ",\"held\":" + held + ",\"childPid\":" + std::to_string(childPid) +

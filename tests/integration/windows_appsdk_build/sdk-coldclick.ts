@@ -11,9 +11,11 @@ if (process.platform !== 'win32' || process.env.GITHUB_REPOSITORY !== '777genius
 const scenario = process.env.SDK_COLDCLICK_SCENARIO ?? 'shell_foreground';
 if (!['shell_foreground', 'owned_test_foreground', 'disposable_global_shortcut'].includes(scenario)) throw new Error('fixed foreground scenario required');
 if (scenario === 'disposable_global_shortcut' && (process.env.GITHUB_ACTIONS !== 'true' || process.env.RUNNER_OS !== 'Windows' || process.env.SDK_COLDCLICK_DISPOSABLE_CLIENT !== 'windows-11-vs2026-arm')) throw new Error('fixed disposable Windows client dispatch authority required');
+const historyEnabled = process.env.SDK_COLDCLICK_HISTORY === 'true';
+if (process.env.SDK_COLDCLICK_HISTORY && !['true', 'false'].includes(process.env.SDK_COLDCLICK_HISTORY)) throw new Error('explicit fixed history diagnostic choice');
 const start = performance.now(), nonce = randomUUID();
 const output = mkdtempSync(join(process.env.RUNNER_TEMP ?? '', 'TEST-sdk-coldclick-evidence-'));
-const evidence: Json = { nonce, scenario, sourceSHA: process.env.SOURCE_SHA, outcome: 'unknown', actors: [], receipts: {},
+const evidence: Json = { nonce, scenario, historyEnabled, sourceSHA: process.env.SOURCE_SHA, outcome: 'unknown', actors: [], receipts: {},
   sdkColdActivationQualified: false, targetVisibleQualified: false, registrationCleanupQualified: false,
   globalBrokerQuiescenceQualified: false, automaticRetry: false };
 const actors = evidence.actors as Actor[];
@@ -58,7 +60,8 @@ function sameFacts(a: Json, b: Json): void { check(Object.keys(a).length === Obj
 function sameIdentity(a: Json, b: Json): void { for (const k of ['sidSHA256', 'authLUIDSHA256', 'session']) check(a[k] === b[k], 'same current-user identity/session'); }
 function medium(t: Json): void { check(t.elevated === false && t.integrityRID === 0x2000 && t.enabledAdmins === false, 'actual Medium/nonadmin required'); }
 const phaseFields: Record<string, string[]> = {
-  sender: ['token', 'bootstrapModule', 'bootstrapCallBootMs', 'bootstrapHRESULT', 'selectedFramework', 'isSupported', 'runtimeModule', 'handlerBeforeRegister', 'registered', 'nativeID', 'showReturned', 'unregisterReturned', 'bootstrapShutdown', 'outcome', 'error', 'query', 'showCallBootMs', 'showReturnedBootMs', 'unregisterCallBootMs', 'unregisterReturnedBootMs'],
+  sender: ['token', 'bootstrapModule', 'bootstrapCallBootMs', 'bootstrapHRESULT', 'selectedFramework', 'isSupported', 'runtimeModule', 'handlerBeforeRegister', 'registered', 'nativeID', 'showReturned', 'unregisterReturned', 'bootstrapShutdown', 'outcome', 'error', 'query', 'showCallBootMs', 'showReturnedBootMs', 'unregisterCallBootMs', 'unregisterReturnedBootMs', 'registryIdentity', 'payloadSHA256'],
+  history: ['token', 'physicalImage', 'exeSHA256', 'bootstrapModule', 'bootstrapCallBootMs', 'bootstrapHRESULT', 'selectedFramework', 'isSupported', 'runtimeModule', 'senderID', 'expectedPayloadSHA256', 'registryBefore', 'registryAfter', 'registryReadbackError', 'queryCallBootMs', 'queryReturnedBootMs', 'asyncStatus', 'count', 'matchingIDCount', 'exactPayloadMatch', 'observedPayloadSHA256', 'bootstrapShutdown', 'cancelRequested', 'rpcCompletionQualified', 'outcome', 'query', 'error'],
   receiver_ready: ['token', 'bindingSHA256', 'leaseDeadlineBootMs'],
   receiver_terminal: ['token', 'bootstrapModule', 'bootstrapCallBootMs', 'bootstrapHRESULT', 'selectedFramework', 'isSupported', 'runtimeModule', 'handlerBeforeRegister', 'activationKind', 'bootstrapShutdown', 'unregisterReturned', 'outcome', 'registrationStillOwned', 'error', 'query'],
   collector: ['readyWaitDeadlineBootMs', 'readyObserved', 'readyObservedBootMs', 'ackPublishedBootMs', 'stage', 'ready', 'heldToken', 'heldPhysicalImage', 'ackPublished', 'waitResult', 'collected', 'exitCode', 'outcome', 'query', 'error'],
@@ -70,12 +73,12 @@ const phaseFields: Record<string, string[]> = {
 phaseFields.query_intent = [...phaseFields.callback!, 'queryBoundaryArmed'];
 phaseFields.launch_intent = [...phaseFields.callback!, 'launchBoundaryArmed'];
 function correlation(r: Json, phase: string): void {
-  const allowed = ['nonce', 'phase', 'pid', 'birth', 'bootMs', ...(['sender', 'collector', 'shell_invoke'].includes(phase) ? ['deadlineBootMs', 'endBootMs', 'failureBootMs'] : []), ...phaseFields[phase]!];
+  const allowed = ['nonce', 'phase', 'pid', 'birth', 'bootMs', ...(['sender', 'history', 'collector', 'shell_invoke'].includes(phase) ? ['deadlineBootMs', 'endBootMs', 'failureBootMs'] : []), ...phaseFields[phase]!];
   check(Object.keys(r).every(k => allowed.includes(k)), 'closed native phase schema');
   check(r.nonce === nonce && r.phase === phase && Number.isInteger(r.pid) && (r.pid as number) > 0 &&
     typeof r.birth === 'string' && /^[1-9][0-9]{1,19}$/.test(r.birth) && typeof r.bootMs === 'number' && Number.isSafeInteger(r.bootMs), 'actor incarnation schema');
 }
-function diagnostic(r: Json, phase: 'sender' | 'collector' | 'shell_invoke'): void {
+function diagnostic(r: Json, phase: 'sender' | 'history' | 'collector' | 'shell_invoke'): void {
   correlation(r, phase);
   const clock = (key: string): number => { const value = r[key]; check(Number.isSafeInteger(value) && (value as number) >= (r.bootMs as number), `finite diagnostic ${key}`); return value as number; };
   const end = clock('endBootMs'), deadline = clock('deadlineBootMs'); check(end >= (r.bootMs as number) && deadline > (r.bootMs as number), 'original actor diagnostic clocks');
@@ -84,7 +87,7 @@ function diagnostic(r: Json, phase: 'sender' | 'collector' | 'shell_invoke'): vo
   const ordered = (a: string, b: string): void => { check(clock(a) <= clock(b) && clock(b) <= end, 'observed phase return clocks'); };
   if (phase === 'sender' && r.showReturned === true) { ordered('showCallBootMs', 'showReturnedBootMs'); if (r.unregisterReturned === true) { ordered('unregisterCallBootMs', 'unregisterReturnedBootMs'); check(clock('showReturnedBootMs') <= clock('unregisterCallBootMs'), 'Show before Unregister'); } }
   if (phase === 'collector') {
-    check(['ready_wait', 'ready_validate', 'receiver_collect'].includes(r.stage as string) && typeof r.readyObserved === 'boolean' && typeof r.ackPublished === 'boolean' && clock('readyWaitDeadlineBootMs') === deadline - 70000, 'fixed collector ready admission');
+    check(['ready_wait', 'ready_validate', 'receiver_collect'].includes(r.stage as string) && typeof r.readyObserved === 'boolean' && typeof r.ackPublished === 'boolean' && clock('readyWaitDeadlineBootMs') === (historyEnabled ? object((evidence.receipts as Json)['TEST-history-request.json']).deadlineBootMs : deadline - 70000), 'fixed collector ready admission');
     if (r.readyObserved === true) check(clock('readyObservedBootMs') <= end, 'ready observation retained'); else check(r.ackPublished === false && !('readyObservedBootMs' in r), 'no ack without actual ready');
     if (r.query === 'AbsoluteDeadline' && r.stage === 'ready_wait') check(r.readyObserved === false && clock('failureBootMs') >= clock('readyWaitDeadlineBootMs'), 'actual missing-ready admission deadline');
     if (r.ackPublished === true) { ordered('readyObservedBootMs', 'ackPublishedBootMs'); check(r.stage === 'receiver_collect', 'ack after ready validation'); }
@@ -117,7 +120,7 @@ async function run(mode: string, exe: string, args: string[], cwd: string, limit
   return result;
 }
 function completed(r: Actor): void { check(r.collected && !r.timedOut && !r.overflow && !r.error && r.code === 0 && r.signal === null && r.stderr === '', `actor unknown: ${r.mode}`); }
-const receipts = ['TEST-register-intent.json', 'TEST-show-intent.json', 'TEST-sender.json', 'TEST-sender-collected.json',
+const receipts = ['TEST-history-request.json', 'TEST-history-intent.json', 'TEST-history.json', 'TEST-register-intent.json', 'TEST-show-intent.json', 'TEST-sender.json', 'TEST-sender-collected.json',
   'TEST-owned-foreground-intent.json', 'TEST-owned-foreground.json', 'TEST-center-input-intent.json', 'TEST-center-input.json', 'TEST-ui-invoke-intent.json', 'TEST-ui-invoke.json', 'TEST-receiver-ready.json', 'TEST-receiver-ack.json', 'TEST-receiver-lease-intent.json',
   'TEST-second-receiver.json', 'TEST-second-callback.json', 'TEST-query-intent.json', 'TEST-launch-intent.json', 'TEST-callback.json', 'TEST-receiver-terminal.json', 'TEST-collector.json'];
 let generation = '';
@@ -163,8 +166,8 @@ async function main(): Promise<void> {
     const seal = await run('private-seal', launcher, ['--TEST-seal-sdk-root', nonce, generation, 'coldclick'], generation, 10000, true);
     completed(seal); check(seal.record?.nonce === nonce && seal.record.pid === seal.pid && seal.record.sealed === true && seal.record.protectedDACL === true && seal.record.files === 5, 'sealed private generation');
     for (const [p, pin] of pins) check(hash(p) === pin && lstatSync(p).ino === held.get(p)!.ino, 'sealed held pins'); evidence.pins = Object.fromEntries(pins);
-    const sender = await run('medium-sender', launcher, ['--TEST-sdk-cold-sender', nonce, generation, exe], generation, 35000); retain(); completed(sender);
-    const l = object(sender.record); check(l.nonce === nonce && l.pid === sender.pid && l.variant === 'sdk-cold-sender' && l.collected === true && l.childExit === 0 &&
+    const sender = await run('medium-sender', launcher, [historyEnabled ? '--TEST-sdk-cold-sender-history' : '--TEST-sdk-cold-sender', nonce, generation, exe], generation, 35000); retain(); completed(sender);
+    const l = object(sender.record); check(l.nonce === nonce && l.pid === sender.pid && l.variant === (historyEnabled ? 'sdk-cold-sender-history' : 'sdk-cold-sender') && l.collected === true && l.childExit === 0 &&
       l.childTerminated === false && l.timedOut === false && l.cleanupError === null && l.queriesComplete === true && l.sameIdentitySession === true && l.enabledAdmins === false, 'actual contained sender exit');
     const s = object(JSON.parse(l.childRecord as string)); diagnostic(s, 'sender'); check(s.pid === l.childPid && s.birth === l.childBirth && s.showReturned === true && s.unregisterReturned === true &&
       s.handlerBeforeRegister === true && s.bootstrapHRESULT === 0 && s.isSupported === true && Number.isInteger(s.nativeID) && (s.nativeID as number) > 0, 'one actual native Show before death');
@@ -173,6 +176,37 @@ async function main(): Promise<void> {
     // Native boot-clock correlation comes from the collected launcher's actual child report, not Date.now.
     const collectedBoot = l.collectionBootMs as number; check(Number.isSafeInteger(collectedBoot) && collectedBoot >= (s.bootMs as number), 'actual post-wait boot clock');
     durable(join(generation, 'TEST-sender-collected.json'), { nonce, pid: s.pid, birth: s.birth, collected: true, exitCode: 0, collectedBootMs: collectedBoot });
+    if (historyEnabled) {
+      check(performance.now() - start + 35000 + 110000 < 170000, 'history and joint UI reserve fit original global budget');
+      const deadline = collectedBoot + 30000;
+      durable(join(generation, 'TEST-history-request.json'), { nonce, enabled: true, deadlineBootMs: deadline });
+      const historyActor = await run('medium-history', launcher, ['--TEST-sdk-cold-history', nonce, generation, exe], generation, 35000); retain();
+      const launch = object(historyActor.record), observed = object((evidence.receipts as Json)['TEST-history.json']); diagnostic(observed, 'history');
+      evidence.historyDiagnosticsRetained = true; completed(historyActor);
+      check(launch.variant === 'sdk-cold-history' && launch.nonce === nonce && launch.pid === historyActor.pid && launch.collected === true && launch.childExit === 0 && launch.childTerminated === false && launch.timedOut === false && launch.cleanupError === null && launch.queriesComplete === true && launch.sameIdentitySession === true && launch.enabledAdmins === false && launch.childStderr === '', 'collected contained history actor before UI');
+      const wire = object(JSON.parse(launch.childRecord as string)); check(JSON.stringify(wire) === JSON.stringify(observed) && observed.pid === launch.childPid && observed.birth === launch.childBirth && observed.physicalImage === exe && observed.exeSHA256 === pins.get(exe) && observed.deadlineBootMs === deadline, 'same pinned history executable/receipt/held incarnation');
+      const ht = token(observed.token, true); medium(ht); sameFacts(ht, st); sameIdentity(ht, baseline);
+      for (const k of Object.keys(token(launch.held))) check(ht[k] === object(launch.held)[k], 'held and own history token');
+      check(observed.bootstrapHRESULT === 0 && observed.isSupported === true && observed.selectedFramework === s.selectedFramework && object(observed.bootstrapModule).sha256 === provenance.bootstrapSHA256 && object(observed.bootstrapModule).path === object(s.bootstrapModule).path && object(observed.runtimeModule).sha256 === provenance.runtimeModuleSHA256 && object(observed.runtimeModule).path === object(s.runtimeModule).path && observed.bootstrapShutdown === true && observed.asyncStatus === 1 && !('cancelRequested' in observed), 'completed supported SDK history with shutdown');
+      const digest = (x: unknown): boolean => typeof x === 'string' && /^[a-f0-9]{64}$/.test(x);
+      const registry = (value: unknown): Json => {
+        const r = object(value); exact(r, ['pathKey', 'notificationGUID', 'lastWrite', 'valueBytes', 'values', 'subkeys', 'guidBytesSHA256']);
+        check(r.pathKey === `Software\\Classes\\AppUserModelId\\${exe.replaceAll('\\', '.')}` && typeof r.notificationGUID === 'string' && /^[{][a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}[}]$/.test(r.notificationGUID) && typeof r.lastWrite === 'string' && /^[0-9]{1,20}$/.test(r.lastWrite) && [76, 78].includes(r.valueBytes as number) && r.values === 1 && r.subkeys === 0 && digest(r.guidBytesSHA256), 'bounded existing own SDK path/GUID snapshot'); return r;
+      };
+      const registered = registry(s.registryIdentity), before = registry(observed.registryBefore), after = registry(observed.registryAfter);
+      for (const k of Object.keys(registered)) check(registered[k] === before[k] && before[k] === after[k], 'existing sender registry identity unchanged before/after Default/query');
+      check(digest(s.payloadSHA256) && observed.expectedPayloadSHA256 === s.payloadSHA256 && observed.senderID === s.nativeID && Number.isInteger(observed.count) && (observed.count as number) >= 0 && (observed.count as number) <= 32 && Number.isInteger(observed.matchingIDCount) && (observed.matchingIDCount as number) >= 0 && (observed.matchingIDCount as number) <= (observed.count as number) && typeof observed.exactPayloadMatch === 'boolean', 'bounded actual history ID and exact UTF8 Payload digest');
+      if ((observed.matchingIDCount as number) > 0) check(digest(observed.observedPayloadSHA256), 'bounded matching-ID payload digest');
+      else check(!('observedPayloadSHA256' in observed), 'no invented payload digest');
+      const intent = object((evidence.receipts as Json)['TEST-history-intent.json']); correlation(intent, 'history');
+      for (const k of ['nonce', 'pid', 'birth', 'bootMs', 'deadlineBootMs', 'physicalImage', 'exeSHA256', 'senderID', 'expectedPayloadSHA256']) check(intent[k] === observed[k], 'immutable pre-SDK history intent');
+      sameFacts(token(intent.token, true), ht); for (const k of Object.keys(before)) check(registry(intent.registryBefore)[k] === before[k], 'intent preconstructor registry identity');
+      check([observed.bootMs, observed.bootstrapCallBootMs, observed.queryCallBootMs, observed.queryReturnedBootMs, observed.endBootMs, launch.collectionBootMs].every(x => Number.isSafeInteger(x)) && collectedBoot <= (observed.bootMs as number) && (observed.bootMs as number) <= (observed.bootstrapCallBootMs as number) && (observed.bootstrapCallBootMs as number) <= (observed.queryCallBootMs as number) && (observed.queryCallBootMs as number) <= (observed.queryReturnedBootMs as number) && (observed.queryReturnedBootMs as number) <= (observed.endBootMs as number) && (observed.endBootMs as number) < deadline && (observed.endBootMs as number) <= (launch.collectionBootMs as number) && (launch.collectionBootMs as number) < deadline, 'shared absolute budget and actual collection before UI');
+      const exactMatch = observed.count !== 0 && observed.matchingIDCount === 1 && observed.observedPayloadSHA256 === s.payloadSHA256;
+      check(observed.exactPayloadMatch === exactMatch && ['completed_empty', 'completed_mismatch', 'completed_exact'].includes(observed.outcome as string) && (observed.outcome === 'completed_empty') === (observed.count === 0) && (observed.outcome === 'completed_exact') === exactMatch, 'completed non-null history classification');
+      if (!exactMatch) { for (const [p, pin] of pins) check(hash(p) === pin && lstatSync(p).ino === held.get(p)!.ino, 'negative history post-run generation custody'); evidence.outcome = observed.outcome; evidence.historyDiagnosticsValidated = true; return; }
+      evidence.historyDiagnosticsValidated = true;
+    }
     // Start collector first but do not await it: synchronous Shell Invoke can wait for receiver registration.
     check(performance.now() - start + 110000 < 170000, 'joint collector/Invoke admission reserve');
     const collectorPromise = run('cold-collector', exe, ['--TEST-sdk-cold-collect', nonce], generation, 105000);
@@ -186,6 +220,7 @@ async function main(): Promise<void> {
     }
     const ui = object((evidence.receipts as Json)['TEST-ui-invoke.json']);
     check(ui.scenario === scenario, 'fixed CLI foreground scenario');
+    if (historyEnabled) check(ui.deadlineBootMs === collectedBoot + 30000 && (ui.bootMs as number) >= (object((evidence.receipts as Json)['TEST-history.json']).endBootMs as number), 'UI consumes original history deadline without reset');
     const windowRecord = (evidence.receipts as Json)['TEST-owned-foreground.json'];
     if (windowRecord) {
       const w = object(windowRecord), intent = object((evidence.receipts as Json)['TEST-owned-foreground-intent.json']); correlation(w, 'owned_foreground'); correlation(intent, 'owned_foreground');

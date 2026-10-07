@@ -23,6 +23,11 @@ on:
           - shell_foreground
           - owned_test_foreground
           - disposable_global_shortcut
+      history_diagnostic:
+        description: 'Observe SDK history before UI within the SAME 30s budget'
+        required: true
+        default: false
+        type: boolean
 permissions:
   contents: read
 concurrency:
@@ -200,6 +205,7 @@ jobs:
           SDK_PREREQUISITE_EVIDENCE: ${{ steps.execute.outputs.evidence_root }}
           SDK_VENDOR_EVIDENCE: ${{ steps.vendor.outputs.evidence_file }}
           SDK_COLDCLICK_DISPOSABLE_CLIENT: windows-11-vs2026-arm
+          SDK_COLDCLICK_HISTORY: ${{ inputs.history_diagnostic }}
           SDK_COLDCLICK_SCENARIO: ${{ inputs.foreground_scenario }}
           SDK_COLD_EXE: ${{ steps.build.outputs.cold_exe }}
           SDK_COLD_EXE_SHA256: ${{ steps.build.outputs.cold_exe_sha256 }}
