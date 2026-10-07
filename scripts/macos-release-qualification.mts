@@ -234,7 +234,51 @@ sys.argv=['sealer','--manifest',str(manifest_path),'--manifest-sha256',manifest_
     '--output',str(art/'sealed-business'),'--os','darwin','--arch',c['arch'],'--version',c['version']]
 sealer.main()
 proof=art/'sealed-business/business-proof.json'
-subprocess.run([sys.executable,'-B',str(repo/'scripts/opencode-native-e2e.py'),'--manifest',str(manifest_path),
+# Observe exceptions and content-free diagnostics without changing runner predicates.
+# runpy executes the exact candidate file; only fixed identifiers reach the report.
+diagnostic_driver=tools/'business-diagnostic.py'
+diagnostic_driver.write_text('''import json,pathlib,re,runpy,sys
+repo=pathlib.Path(sys.argv.pop(1)); output=repo/'.task-tools/artifacts/business-diagnostic.json'
+sys.argv=sys.argv[1:]
+sys.path[0]=str(repo/'scripts')
+allowed={'duplicate_diagnostic_key','diagnostic_line_bound','diagnostic_schema','diagnostic_actual_closed_dual_submission_required'}
+events=[]
+def observe(frame,event,arg):
+    if event=='call' and not frame.f_code.co_filename.startswith(str(repo/'scripts')+'/'): return None
+    if event=='exception':
+        try: relative=pathlib.Path(frame.f_code.co_filename).relative_to(repo/'scripts')
+        except ValueError: return None
+        kind,value,_=arg
+        label=str(value)
+        if kind.__name__ in ('ValueError','Unqualified'):
+            row={'file':str(relative),'line':frame.f_lineno,'class':kind.__name__}
+            if label in allowed: row['reason']=label
+            events.append(row)
+            del events[:-64]
+    return observe
+sys.settrace(observe)
+try: runpy.run_path(sys.argv[0],run_name='__main__')
+finally:
+    sys.settrace(None)
+    rows=[]
+    for log in (repo/'.task-tools/artifacts/native').glob('TEST-installed*/*host-private.log'):
+        for line in log.read_text(errors='replace').splitlines():
+            marker='[agent-notifications] '
+            if marker not in line or len(line)>4096: continue
+            try: value=json.loads(line.split(marker,1)[1])
+            except ValueError: continue
+            if not isinstance(value,dict): continue
+            row={}
+            for key in ('ipc','childClosure','exitCode','forcedKill'):
+                item=value.get(key)
+                if isinstance(item,(bool,int)) or item in ('ok','invalidated','closed','unproved','spawn_failed','timeout','aborted','deadline','invalid_output'): row[key]=item
+            receipt=value.get('receipt',{})
+            if isinstance(receipt,dict):
+                row['receipt']={key:item for key,item in receipt.items() if key in ('status','desktop','webhook') and item in ('submitted','unknown','unavailable','rejected','suppressed')}
+            rows.append(row)
+    output.write_text(json.dumps({'exceptions':events,'diagnostics':rows[:32]}))
+''')
+subprocess.run([sys.executable,'-B',str(diagnostic_driver),str(repo),str(repo/'scripts/opencode-native-e2e.py'),'--manifest',str(manifest_path),
     '--manifest-sha256',manifest_sha,'--binary',str(binary),'--archive',str(host),'--os','darwin',
     '--arch',c['arch'],'--version',c['version'],'--suite','business','--business-proof',str(proof),
     '--business-proof-sha256',sha(proof),'--report',str(art/'native-report.json')],check=True,cwd=repo)

@@ -187,6 +187,7 @@ jobs:
             source/.task-tools/artifacts/clock.json
             source/.task-tools/artifacts/reader.json
             source/.task-tools/artifacts/native-report.json
+            source/.task-tools/artifacts/business-diagnostic.json
             source/.task-tools/artifacts/sealed-business/**
             source/.task-tools/artifacts/macos-tools/configuration.json
           if-no-files-found: error
