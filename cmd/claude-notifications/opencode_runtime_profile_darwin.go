@@ -29,6 +29,8 @@ type runtimeDarwinProcess struct {
 }
 type runtimeDarwinSnapshot struct {
 	Process       runtimeDarwinProcess
+	FileCPU       uint32
+	FileSubtype   uint32
 	SHA           string
 	Device, Inode uint64
 	Size          int64
@@ -145,7 +147,7 @@ func holdRuntimeLiveImage(ctx context.Context, in runtimeProfileInput) (*runtime
 		if !headerOK {
 			return fail()
 		}
-		if !runtimeDarwinMachine(cpu, subtype, runtime.GOARCH) || cpu != live.CPU || subtype != live.Subtype || !runtimeDarwinMapped(ctx, in.NativePID, device, inode) {
+		if !runtimeDarwinMachinesMatch(cpu, subtype, live.CPU, live.Subtype, runtime.GOARCH) || !runtimeDarwinMapped(ctx, in.NativePID, device, inode) {
 			return fail()
 		}
 		ha, e := runtimeFileHash(ctx, image)
@@ -156,7 +158,8 @@ func holdRuntimeLiveImage(ctx context.Context, in runtimeProfileInput) (*runtime
 		if e != nil || e1 != nil || e2 != nil || e3 != nil || e4 != nil || ha != hb || end != live || !runtimeSameMetadata(a, na) || !runtimeSameMetadata(b, nb) || os.Getppid() != in.NativePID || runtimeDarwinNativeEntry(in.NativePID) != entry || !runtimeDarwinMapped(ctx, in.NativePID, device, inode) || ctx.Err() != nil || !runtimeDarwinUnchanged(watch) {
 			return fail()
 		}
-		encoded, _ := json.Marshal(runtimeDarwinSnapshot{live, ha, device, inode, a.Size(), a.ModTime().UTC().Format(time.RFC3339Nano), uint32(a.Mode())})
+		// Compatibility normalization must never normalize continuity evidence.
+		encoded, _ := json.Marshal(runtimeDarwinSnapshot{Process: live, FileCPU: cpu, FileSubtype: subtype, SHA: ha, Device: device, Inode: inode, Size: a.Size(), Modified: a.ModTime().UTC().Format(time.RFC3339Nano), Mode: uint32(a.Mode())})
 		return runtimeLiveImage{GOOS: "darwin", GOARCH: runtime.GOARCH, Entry: entry, SHA256: ha, NativePID: in.NativePID, fingerprint: sha256.Sum256(encoded)}, nil
 	}
 	first, err := read(ctx)
