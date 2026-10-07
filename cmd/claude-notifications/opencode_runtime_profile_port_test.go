@@ -238,6 +238,72 @@ func TestRuntimeNativeArchitectureClosed(t *testing.T) {
 		t.Fatal("helper/parent architecture mismatch accepted")
 	}
 }
+
+// TEST-only Mach64 executable header: 32 bytes plus one bounded UUID command.
+// LIB64|ALL occurs in the shipped Intel image; this fixture is never launched.
+func testRuntimeMach64Header(cpu, subtype uint32) []byte {
+	mach := make([]byte, 56)
+	binary.LittleEndian.PutUint32(mach, 0xfeedfacf)
+	binary.LittleEndian.PutUint32(mach[4:], cpu)
+	binary.LittleEndian.PutUint32(mach[8:], subtype)
+	binary.LittleEndian.PutUint32(mach[12:], 2)
+	binary.LittleEndian.PutUint32(mach[16:], 1)
+	binary.LittleEndian.PutUint32(mach[20:], 24)
+	binary.LittleEndian.PutUint32(mach[32:], 0x1b)
+	binary.LittleEndian.PutUint32(mach[36:], 24)
+	copy(mach[40:], "TESTfixedimageid")
+	return mach
+}
+
+// Red on the original code: the raw LIB64|ALL subtype was rejected before
+// an otherwise supported native Intel image could reach the bounded probe.
+func TestRuntimeDarwinLIB64MachHeaderMatchesKernel(t *testing.T) {
+	for _, fileSubtype := range []uint32{3, 0x80000003} {
+		mach := testRuntimeMach64Header(0x01000007, fileSubtype)
+		cpu, subtype, ok := runtimeMachHeader(bytes.NewReader(mach), int64(len(mach)))
+		if !ok || cpu != 0x01000007 || subtype != fileSubtype {
+			t.Fatal("Mach64 reader lost the raw executable subtype")
+		}
+		if !runtimeDarwinMachine(cpu, subtype, "amd64") {
+			t.Fatalf("supported Intel executable subtype %#x rejected", subtype)
+		}
+		for _, kernelSubtype := range []uint32{3, 0x80000003} {
+			if !runtimeDarwinMachinesMatch(cpu, subtype, cpu, kernelSubtype, "amd64") {
+				t.Fatalf("supported file/kernel subtype pair %#x/%#x rejected", subtype, kernelSubtype)
+			}
+		}
+	}
+	if !runtimeDarwinMachinesMatch(0x0100000c, 0, 0x0100000c, 0, "arm64") {
+		t.Fatal("unchanged native ARM64 pair rejected")
+	}
+}
+
+func TestRuntimeDarwinSubtypeCompatibilityRemainsClosed(t *testing.T) {
+	for _, unsupported := range []uint32{0, 8, 0x80000008, 0x40000003, 0xc0000003, 0x01000003, ^uint32(0)} {
+		if runtimeDarwinMachine(0x01000007, unsupported, "amd64") ||
+			runtimeDarwinMachinesMatch(0x01000007, unsupported, 0x01000007, 3, "amd64") ||
+			runtimeDarwinMachinesMatch(0x01000007, 3, 0x01000007, unsupported, "amd64") {
+			t.Fatalf("unsupported Intel subtype %#x accepted as file or kernel authority", unsupported)
+		}
+	}
+	for _, unsupported := range []uint32{1, 2, 0x80000000, 0x40000000, 0xc0000000} {
+		if runtimeDarwinMachine(0x0100000c, unsupported, "arm64") ||
+			runtimeDarwinMachinesMatch(0x0100000c, unsupported, 0x0100000c, 0, "arm64") ||
+			runtimeDarwinMachinesMatch(0x0100000c, 0, 0x0100000c, unsupported, "arm64") {
+			t.Fatalf("unsupported ARM subtype %#x accepted as file or kernel authority", unsupported)
+		}
+	}
+	for _, arch := range []string{"amd64", "arm64", "386", ""} {
+		if runtimeDarwinMachinesMatch(0x01000007, 3, 0x0100000c, 0, arch) ||
+			runtimeDarwinMachinesMatch(0x0100000c, 0, 0x01000007, 0x80000003, arch) {
+			t.Fatalf("mixed CPU pair accepted for helper architecture %q", arch)
+		}
+	}
+	if runtimeDarwinMachinesMatch(0x01000007, 3, 0x01000007, 0x80000003, "arm64") ||
+		runtimeDarwinMachinesMatch(0x0100000c, 0, 0x0100000c, 0, "amd64") {
+		t.Fatal("helper/native CPU mismatch accepted")
+	}
+}
 func TestRuntimeUTF16RejectsLossyDecoding(t *testing.T) {
 	for _, raw := range [][]byte{{0}, {0, 0}, {0, 0xd8}, {0, 0xdc}, {0, 0xd8, 65, 0}} {
 		if _, ok := runtimeStrictUTF16(raw); ok {
