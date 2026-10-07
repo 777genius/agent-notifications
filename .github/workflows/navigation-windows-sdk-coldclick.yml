@@ -33,6 +33,11 @@ on:
         required: true
         default: false
         type: boolean
+      prepareDesktop:
+        description: 'Run existing finite TEST OOBE setup before SDK effects (unknown stops chain)'
+        required: true
+        default: false
+        type: boolean
 permissions:
   contents: read
 concurrency:
@@ -56,7 +61,7 @@ jobs:
         run: |
           npm ci --prefix opencode-plugin --ignore-scripts --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { throw 'locked tooling unavailable' }
-          & ./opencode-plugin/node_modules/.bin/tsc.cmd --ignoreConfig --noEmit --allowImportingTsExtensions --strict --target ES2023 --module ESNext --moduleResolution bundler --types node --typeRoots ./opencode-plugin/node_modules/@types tests/integration/windows_appsdk_build/runtime-prerequisite.ts tests/integration/windows_appsdk_build/verify-runtime-package.ts tests/integration/navigation_windows_lua_preflight.ts tests/integration/windows_appsdk_build/sdk-coldclick.ts tests/integration/windows_appsdk_build/sdk-coldclick-vendor.ts tests/integration/navigation_windows_vendor_metadata.ts
+          & ./opencode-plugin/node_modules/.bin/tsc.cmd --ignoreConfig --noEmit --allowImportingTsExtensions --strict --target ES2023 --module ESNext --moduleResolution bundler --types node --typeRoots ./opencode-plugin/node_modules/@types tests/integration/windows_appsdk_build/runtime-prerequisite.ts tests/integration/windows_appsdk_build/verify-runtime-package.ts tests/integration/navigation_windows_lua_preflight.ts tests/integration/windows_appsdk_build/sdk-coldclick.ts tests/integration/windows_appsdk_build/sdk-coldclick-vendor.ts tests/integration/navigation_windows_vendor_metadata.ts tests/integration/navigation_windows_native_e2e.ts
           if ($LASTEXITCODE -ne 0) { throw 'focused typecheck failed' }
       - name: Restore, verify bytes and compile (no SDK execution)
         id: build
@@ -157,8 +162,53 @@ jobs:
           $provenance | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $dir 'provenance.json') -Encoding utf8NoBOM
           "root=$dir" >> $env:GITHUB_OUTPUT
           "bootstrap=$bootstrap" >> $env:GITHUB_OUTPUT
+      - name: Explicit existing finite TEST desktop preparation before SDK effects
+        if: github.event_name == 'workflow_dispatch' && inputs.prepareDesktop
+        id: desktop
+        shell: pwsh
+        env:
+          CI: 'true'
+          AGENT_NOTIFY_NAVIGATION_WINDOWS_E2E: '1'
+          NAVIGATION_SOURCE_SHA: ${{ github.sha }}
+          NAVIGATION_WINDOWS_RUNNER: windows-11-vs2026-arm
+          NAVIGATION_WINDOWS_PREFLIGHT_ONLY: '1'
+          NAVIGATION_WINDOWS_OOBE_SETUP_TEST: '1'
+          NAVIGATION_WINDOWS_CENTER_SURFACE: '0'
+          NAVIGATION_WINDOWS_TASKBAR_UIA: '0'
+          NAVIGATION_WINDOWS_DESKTOP_CAPTURE_TEST: '0'
+          NAVIGATION_WINDOWS_OOBE_PREFLIGHT_TEST: '0'
+          SDK_OBSERVER: ${{ steps.build.outputs.observer }}
+          SDK_OBSERVER_SHA256: ${{ steps.build.outputs.observer_sha256 }}
+        run: |
+          if ($env:GITHUB_RUN_ATTEMPT -ne '1' -or $env:GITHUB_EVENT_NAME -cne 'workflow_dispatch' -or $env:GITHUB_REPOSITORY -cne '777genius/agent-notifications' -or (git rev-parse HEAD) -cne $env:NAVIGATION_SOURCE_SHA) { throw 'first exact-source manual TEST attempt required' }
+          $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+          $sidBytes = [byte[]]::new($sid.BinaryLength); $sid.GetBinaryForm($sidBytes, 0)
+          $sidHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($sidBytes)).ToLowerInvariant()
+          $session = [Diagnostics.Process]::GetCurrentProcess().SessionId
+          $before = (Get-FileHash -LiteralPath $env:SDK_OBSERVER -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($before -cne $env:SDK_OBSERVER_SHA256) { throw 'compiled observer pin mismatch' }
+          node tests/integration/navigation_windows_native_e2e.ts $env:SDK_OBSERVER
+          $actorExit = $LASTEXITCODE
+          if ((Get-Item -LiteralPath $env:GITHUB_OUTPUT).Length -gt 4096) { throw 'bounded preparation output required' }
+          $lines = [IO.File]::ReadAllLines($env:GITHUB_OUTPUT)
+          if ($lines.Count -ne 1 -or !$lines[0].StartsWith('evidence_root=')) { throw 'single preparation handoff required' }
+          $root = $lines[0].Substring('evidence_root='.Length)
+          $evidencePath = Join-Path $root 'evidence.json'; $records = Join-Path $root 'oobe-setup-records.json'
+          if ((Get-Item -LiteralPath $evidencePath).Length -gt 131072 -or (Get-Item -LiteralPath $records).Length -gt 6291456) { throw 'preparation evidence exceeds fixed bounds' }
+          $e = [IO.File]::ReadAllText($evidencePath) | ConvertFrom-Json
+          if ($actorExit -ne 0 -or $e.status -cne 'guest_setup_complete' -or $e.oobeSetupQualified -ne $true -or $e.captureQualified -ne $true -or $e.oobeSetupActorCollected -ne $true -or $e.captureActorCollected -ne $true -or $e.invokeEffectUncertain -ne $false -or $e.sourceSHA -cne $env:NAVIGATION_SOURCE_SHA -or $e.binarySHA256 -cne $before) { throw 'existing verifySetup/capture contract failed; no SDK effects or replay' }
+          if (@($e.steps).Count -ne 4 -or (@($e.steps.mode) -join ',') -cne 'center-policy,preflight,oobe-setup,desktop-capture' -or @($e.steps | Where-Object { $_.status -ne 0 -or $_.signal -or $_.error -or $_.pid -le 0 }).Count -ne 0 -or (Get-FileHash -LiteralPath $records -Algorithm SHA256).Hash.ToLowerInvariant() -cne $e.setupRecordsSHA256) { throw 'actual collected preparation actors/packet required' }
+          $capture = $e.'desktop-capture.json'
+          foreach ($t in @($capture.tokenBefore, $capture.tokenAfter)) {
+            if (!$t -or @($t.PSObject.Properties).Count -ne 6 -or $t.sidSHA256 -cnotmatch '^[a-f0-9]{64}$' -or $t.authLUIDSHA256 -cnotmatch '^[a-f0-9]{64}$' -or $t.elevated -isnot [bool] -or $t.elevationType -notin @(1, 2, 3)) { throw 'actual AUX token shape required' }
+            foreach ($key in @('session', 'integrityRID')) { if (($t.$key -isnot [long] -and $t.$key -isnot [int]) -or $t.$key -lt 0 -or $t.$key -gt 4294967295) { throw 'bounded actual token integer required' } }
+            if (($t.elevationType -eq 2 -and !$t.elevated) -or ($t.elevationType -eq 3 -and $t.elevated)) { throw 'inconsistent actual token type' }
+          }
+          foreach ($key in @('sidSHA256', 'authLUIDSHA256', 'session', 'elevated', 'elevationType', 'integrityRID')) { if ($capture.tokenBefore.$key -cne $capture.tokenAfter.$key) { throw 'actual AUX capture role changed' } }
+          if ($capture.tokenBefore.sidSHA256 -cne $sidHash -or $capture.tokenBefore.session -ne $session -or $capture.session -ne $session -or $capture.binarySHA256 -cne $before -or $e.'capture-after-preflight.json'.session -ne $session -or [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -cne $sid.Value -or [Diagnostics.Process]::GetCurrentProcess().SessionId -ne $session -or (Get-FileHash -LiteralPath $env:SDK_OBSERVER -Algorithm SHA256).Hash.ToLowerInvariant() -cne $before -or (git rev-parse HEAD) -cne $env:NAVIGATION_SOURCE_SHA) { throw 'same-job observer/SID/session custody changed' }
+          # Capture AUX role is observed, possibly High. Pre-OOBE authLUID/full-token continuity is not qualified.
       - name: Explicit ONE disposable-CI deployment/bootstrap experiment
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && (!inputs.prepareDesktop || steps.desktop.outcome == 'success')
         id: execute
         shell: pwsh
         env:
@@ -174,7 +224,7 @@ jobs:
           node tests/integration/windows_appsdk_build/runtime-prerequisite.ts
           if ($LASTEXITCODE -ne 0) { throw 'runtime prerequisite unknown; preserve intent; no retry/cleanup' }
       - name: Reuse fixed official vendor metadata and signature fixture (no registration/launch)
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && (!inputs.prepareDesktop || steps.desktop.outcome == 'success')
         id: vendor_metadata
         shell: pwsh
         env:
@@ -193,7 +243,7 @@ jobs:
           node tests/integration/navigation_windows_vendor_metadata.ts '${{ steps.build.outputs.observer }}' $signtool
           if ($LASTEXITCODE -ne 0) { throw 'fixed vendor signature/metadata unknown' }
       - name: Install only absent exact TEST vendor through existing fixed actor
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && (!inputs.prepareDesktop || steps.desktop.outcome == 'success')
         id: vendor
         shell: pwsh
         env:
@@ -203,7 +253,7 @@ jobs:
           node tests/integration/windows_appsdk_build/sdk-coldclick-vendor.ts
           if ($LASTEXITCODE -ne 0) { throw 'vendor deployment unknown; no retry/remove' }
       - name: ONE SDK sender death then genuine Shell cold click
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && (!inputs.prepareDesktop || steps.desktop.outcome == 'success')
         id: coldclick
         shell: pwsh
         env:
@@ -279,4 +329,14 @@ jobs:
             ${{ steps.coldclick.outputs.capture_root }}/desktop-capture.json
             ${{ steps.coldclick.outputs.capture_root }}/desktop-capture.png
           if-no-files-found: error
+          retention-days: 14
+      - name: Preserve bounded TEST preparation records even on failure (no raw pixels)
+        if: always() && steps.desktop.outputs.evidence_root != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: TEST-sdk-desktop-preparation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.desktop.outputs.evidence_root }}/evidence.json
+            ${{ steps.desktop.outputs.evidence_root }}/oobe-setup-records.json
+          if-no-files-found: warn
           retention-days: 14
