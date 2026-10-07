@@ -2,6 +2,12 @@ name: Selector bootstrap E2E
 
 on:
   workflow_dispatch:
+    inputs:
+      use_github_runner:
+        description: Use GitHub-hosted runners for native macOS checks
+        required: false
+        default: false
+        type: boolean
   pull_request:
     paths:
       - '.github/workflows/selector-bootstrap-e2e.yml'
@@ -28,7 +34,7 @@ concurrency:
 jobs:
   selector:
     name: Selector on ${{ matrix.os }}
-    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.os || matrix.os == 'macos-15' && (vars.CI_MACOS_15_RUNNER || 'macos-15') || matrix.os == 'macos-26' && (vars.CI_MACOS_26_RUNNER || 'macos-26') || matrix.os }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.use_github_runner && matrix.os || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.os || matrix.os == 'macos-15' && (vars.CI_MACOS_15_RUNNER || 'macos-15') || matrix.os == 'macos-26' && (vars.CI_MACOS_26_RUNNER || 'macos-26') || matrix.os }}
     timeout-minutes: 15
     strategy:
       fail-fast: false

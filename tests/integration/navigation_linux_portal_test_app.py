@@ -33,7 +33,7 @@ def save(root, name, value):
 
 
 def main():
-    if len(sys.argv) != 3 or sys.argv[1] not in ('--sender', '--service', '--remove'):
+    if len(sys.argv) != 3 or sys.argv[1] not in ('--sender', '--service', '--remove', '--refuse-stale'):
         raise RuntimeError('explicit_TEST_mode_required')
     root = Path(sys.argv[2]).resolve()
     base = Path('/evidence/runtime')
@@ -46,6 +46,46 @@ def main():
     expected = 'notification-navigation-test:' + spec['nonce']
     if spec['helperSHA256'] != identity()['helperSHA256']:
         raise RuntimeError('helper_snapshot_changed')
+    fence = spec.get('ownerFence') is True
+    if sys.argv[1] == '--refuse-stale' and not fence:
+        raise RuntimeError('owner_fence_required')
+
+    def provider_binding(connection, deadline):
+        values = {}
+        for key, method, arguments in (
+                ('busGUID', 'GetId', ()),
+                ('notificationOwner', 'GetNameOwner', ('org.freedesktop.Notifications',)),
+                ('frontendOwner', 'GetNameOwner', ('org.freedesktop.portal.Desktop',))):
+            remaining = deadline - now()
+            if remaining <= 0: raise RuntimeError('provider_binding_expired')
+            reply = connection.call_sync('org.freedesktop.DBus', '/org/freedesktop/DBus',
+                'org.freedesktop.DBus', method,
+                GLib.Variant('(s)', arguments) if arguments else None,
+                GLib.VariantType.new('(s)'), Gio.DBusCallFlags.NONE,
+                max(1, min(750, int(remaining * 1000))), None).unpack()[0]
+            pattern = r'[0-9a-f]{32}' if key == 'busGUID' else r':[0-9]+\.[0-9]+'
+            if not isinstance(reply, str) or len(reply) > 128 or not re.fullmatch(pattern, reply):
+                raise RuntimeError('invalid_provider_binding')
+            values[key] = reply
+        return values
+
+    def original_binding():
+        path = root / 'provider-binding.json'
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 2048 or path.stat().st_mode & 0o777 != 0o400:
+            raise RuntimeError('immutable_binding_required')
+        def unique(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result: raise RuntimeError('duplicate_binding_key')
+                result[key] = value
+            return result
+        value = json.loads(path.read_text(), object_pairs_hook=unique)
+        if set(value) != {'binding', 'appID', 'nonce', 'specSHA256'} or value['appID'] != spec['appID'] or value['nonce'] != spec['nonce'] or value['specSHA256'] != hashlib.sha256((root / 'spec.json').read_bytes()).hexdigest():
+            raise RuntimeError('binding_snapshot_mismatch')
+        if set(value['binding']) != {'busGUID', 'notificationOwner', 'frontendOwner'}:
+            raise RuntimeError('invalid_original_binding')
+        return value['binding']
+
     class TokenObservedApplication(Gio.Application):
         def do_before_emit(self, platform_data):
             previous = getattr(self, 'test_observation', None)
@@ -73,12 +113,19 @@ def main():
 
     application = TokenObservedApplication if os.environ.get('NAVIGATION_WAYLAND_TEST') == '1' else Gio.Application
     app = application(application_id=spec['appID'], flags=Gio.ApplicationFlags.IS_SERVICE if sys.argv[1] == '--service' else Gio.ApplicationFlags.FLAGS_NONE)
-    if sys.argv[1] in ('--sender', '--remove'):
+    if sys.argv[1] in ('--sender', '--remove', '--refuse-stale'):
         removing = sys.argv[1] == '--remove'
-        save(root, 'remove-start.json' if removing else 'sender-start.json', identity())
+        save(root, 'refusal-start.json' if sys.argv[1] == '--refuse-stale' or (fence and removing) else ('remove-start.json' if removing else 'sender-start.json'), identity())
         if not app.register(None) or app.get_is_remote():
             raise RuntimeError('sender_not_unique')
         connection = app.get_dbus_connection()
+        if sys.argv[1] == '--refuse-stale' or (fence and removing):
+            original = original_binding()
+            current = provider_binding(connection, now() + 3)
+            if original == current: raise RuntimeError('stale_provider_mismatch_not_proven')
+            save(root, 'removal-refused.json', dict(identity(), original=original, current=current,
+                reason='provider_changed', removeAttempted=False))
+            return 0  # Never call RemoveNotification, including on the matching-owner path.
         # Registry must precede all portal methods on this sender's connection.
         connection.call_sync('org.freedesktop.portal.Desktop', '/org/freedesktop/portal/desktop',
             'org.freedesktop.host.portal.Registry', 'Register', GLib.Variant('(sa{sv})', (spec['appID'], {})),
@@ -94,21 +141,46 @@ def main():
             return 0
         notification = {'title': GLib.Variant('s', spec['title']), 'body': GLib.Variant('s', 'Owned sender-death TEST'),
                         'default-action': GLib.Variant('s', 'app.open'), 'default-action-target': GLib.Variant('s', expected)}
+        if fence:
+            before = provider_binding(connection, now() + 3)
+            save(root, 'provider-binding.json', dict(binding=before, appID=spec['appID'], nonce=spec['nonce'],
+                specSHA256=hashlib.sha256((root / 'spec.json').read_bytes()).hexdigest()))
+            (root / 'provider-binding.json').chmod(0o400)
         save(root, 'show-attempt.json', dict(identity(), count=1))
         connection.call_sync('org.freedesktop.portal.Desktop', '/org/freedesktop/portal/desktop',
             'org.freedesktop.portal.Notification', 'AddNotification', GLib.Variant('(sa{sv})', (spec['nonce'], notification)),
             GLib.VariantType.new('()'), Gio.DBusCallFlags.NONE, 5000, None)
+        if fence:
+            after = provider_binding(connection, now() + 3)
+            save(root, 'provider-after-add.json', dict(binding=after, matchesOriginal=after == before,
+                atomicBindingQualified=False))
+            if after != before: raise RuntimeError('provider_changed_during_submission_no_retry')
         save(root, 'submitted.json', dict(identity(), addReturned=True))
-        connection.flush_sync(None)
+        if not fence: connection.flush_sync(None)
         return 0
     started = identity()
     save(root, 'service-start.json', started)
     budget = now() + 15
 
     def opened(action, parameter):
+        if fence and getattr(app, 'fence_action_seen', False):
+            save(root, 'duplicate-rejected.json', dict(identity(), reason='extra_action'))
+            app.quit(); return
+        app.fence_action_seen = True
         actual = parameter.unpack() if parameter is not None else None
         event = dict(identity(), enteredBoot=now(), targetMatches=actual == expected)
         observation_valid = True
+        if fence:
+            try:
+                original = original_binding()
+                current = provider_binding(app.get_dbus_connection(), budget)
+                observation_valid = current == original and now() < budget
+                event.update(providerMatches=observation_valid, originalBinding=original, currentBinding=current,
+                    atomicBindingQualified=False)
+            except Exception as error:
+                observation_valid = False
+                event.update(providerMatches=False, providerFailure=type(error).__name__)
+
         if os.environ.get('NAVIGATION_WAYLAND_TEST') == '1':
             current = getattr(app, 'test_observation', dict(status='failed'))
             app.test_observation = dict(status='consumed')

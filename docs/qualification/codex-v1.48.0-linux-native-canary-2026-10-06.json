@@ -1,0 +1,76 @@
+{
+  "schema": 1,
+  "purpose": "TEST D offline native Codex lifecycle evidence review",
+  "status": "native_stop_and_webhook_observed_offline",
+  "nativeRuntimeVersion": "codex-cli 0.159.2",
+  "sourceCommit": "2692f443a3834c6e4090176d478e69faa684bca0",
+  "sourceArchiveSHA256": "cd6c61c718de90534ea97d249f2eb9e8c430e17821c126c0d9e9cd9ab16a34af",
+  "binarySHA256": "e05c07918b7b92fda7c71a081893274eab50c100323fc2d64cfe844a19482db1",
+  "installedBinarySHA256": "e05c07918b7b92fda7c71a081893274eab50c100323fc2d64cfe844a19482db1",
+  "executedHarnessSHA256": "649ca105c10900d6bc7b197c8d22d9907b7a8ffc2956d650591bb832e24f18e3",
+  "wrapperSHA256": "b7eca82e28ec9baefa62a2ecd8c6b6883ca5fa1587f296d150ac43c1e2ffae9e",
+  "custodyBasis": "trusted operator SHA256 capture; local archive hash and Git archive commit independently checked",
+  "nativeThread": "01a1121d-43b4-7343-9c52-fc722f43cf4e",
+  "nativeProject": "/tmp/TEST-an-v1480-codex-native-20261006-D/TEST-project",
+  "nonce": "TEST_AN_NATIVE_STOP_e715b9e83bc33494d347",
+  "nativeStopCount": 1,
+  "correlatedWebhookCount": 1,
+  "completedNativeTurns": 1,
+  "loopbackModelRequests": 1,
+  "actualToolCalls": 0,
+  "advertisedHarmlessBuiltins": [
+    "create_goal",
+    "get_goal",
+    "request_user_input",
+    "update_goal"
+  ],
+  "nativeHookTrustObserved": true,
+  "diagnosticWarnings": {
+    "ignoredSettings": [
+      "model_max_output_tokens",
+      "tools.view_image"
+    ],
+    "duplicateConfigWarningCount": 2,
+    "fallbackModelMetadataWarningCount": 1
+  },
+  "originalHarnessResult": {
+    "status": "unqualified",
+    "reason": "AssertionError [ERR_ASSERTION]: native_tool_execution_item_forbidden",
+    "sha256": "f688fd1e8e3139e91972886374b4b0a2b4a7e462f97e0bdb834787c447b6f026",
+    "unchanged": true
+  },
+  "harnessFalseNegative": "error items are known configuration warnings, not tool executions; webhook sanitizes underscores",
+  "retainedClaudeConfigObserved": true,
+  "repeatedSetupOutcome": "preceding harness assertions passed; no separate before/after receipt retained",
+  "allProcessCleanupQualified": false,
+  "nativeSessionTranscriptIndependentlyChecked": false,
+  "liveProviderQualified": false,
+  "visibleDesktopQualified": false,
+  "fullReleaseQualified": false,
+  "limitations": [
+    "Offline review of one completed turn, not a successful harness rerun.",
+    "Installed binary and wrapper hashes rely on the trusted operator capture, not downloaded executable bytes.",
+    "No independent process tree closure, quiet-tail duplicate observation, native session transcript or desktop result proof."
+  ],
+  "rawEvidenceSHA256": {
+    "phase.json": "0380e25d51fa21aa30785cd1796a4d09c9e8a137f373b907c658053275fd1cb1",
+    "result.json": "f688fd1e8e3139e91972886374b4b0a2b4a7e462f97e0bdb834787c447b6f026",
+    "network-custody.json": "4d55b87f978360dedb1bbfa98acd7c38f6fcfb05afc1abbb8a001bcebfc5baf4",
+    "native-turn.jsonl": "068e75b56c5e1c1aa3a780fbc01b22dccf56676f3a6a18742bef6033c78cda0a",
+    "native-stop.jsonl": "4654998f09ebbdcbe913d8754f856cf9fb96ccc98908b4d9f5bb64c31cac34cf",
+    "webhooks.json": "8d35902d1450861ec668e6fcd9aea330796dcb44d6b876239e469a4b9f44f185",
+    "responses-request.json": "8195175b7cba4db88ccf18566f99bc4d22092cf942359aea9df6556a65a78be5",
+    "native-hook-trust.json": "30799e12a9eb9b0359278473f746c463c54c083071eda9392fbf9aabc03e3a97",
+    "native-codex-version.txt": "48784a39efd6841c30aff4c70ab315bea1dccee48519515cb308652cdef3ea57",
+    "trust-pty.raw": "82a8b05705e8baa06449aac738f2f43a45fbbe52c78776847a60eab11326d764",
+    "trust-screen.txt": "e3b28671d76fbc6eb4879bab2a8a34dd0f0b98906d784741e3542b63a09532f8",
+    "codex-home/hooks.json": "081c470309ed62a981abc1b765cc493e3aeaefb6500f42f7f4a2131e520c485e",
+    "codex-home/config.toml": "54f92beb8b4c0615916031817ff994e0222574c9e2066f073e6e3add8ddd0f92",
+    "claude_config_dir/settings.json": "5be4259cc90d302881cdfdc5bf36144e6c4a95af2729e295d6dd1db967c4a0e3",
+    "an-config.json": "d97ba911daa05598b4df2790add0ae930651c1bc3324c54fda5c15d503e66d49",
+    "operator-sha256.txt": "e33fe44a9b062565ef73d21be21697257280d26f2c4e0804fe0c631cb7cd85e2",
+    "evidence.tar": "3a249610c5435542ed8e4e68c031e4906cb57b85234ee9529f74c7aba1753084",
+    "config-evidence.tar": "f148e831b9d38c4dfcd44dd1c1f0e33871922fa73695bc8c0e106d7b3a26b6a2"
+  },
+  "verifierSHA256": "233a6aab76c5cd7b189b18af10ff4d78df19d276098cb424dc5782b33048c2ed"
+}
