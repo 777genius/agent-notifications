@@ -2470,7 +2470,7 @@ function createProcessRegistry(configuration) {
       let child, afterSpawn, forcedKill = false, proofOutput = true, closed2 = false, failure, output = Buffer.alloc(0), stderrBytes = 0;
       let deadlineTimer, escalationTimer, proofTimer;
       const spawnedAt = performance2.now();
-      const stopAt = Math.min(spawnedAt + (kind === "clock" ? 2e3 : kind === "profile" ? 1e4 : 22e3), deadline ?? Infinity);
+      const stopAt = Math.min(spawnedAt + (kind === "clock" ? 2e3 : kind === "profile" ? 38e3 : 22e3), deadline ?? Infinity);
       const closeBy = stopAt + 3e3;
       const delay = (at) => Math.max(0, at - performance2.now());
       const kill = (signalName) => {
