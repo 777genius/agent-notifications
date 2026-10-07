@@ -19,6 +19,7 @@ WINDOWS = [
     'tests/integration/windows_appsdk_build/README.md',
     'tests/integration/windows_appsdk_build/SDKContract.cpp',
     'tests/integration/windows_appsdk_build/SDKContract.vcxproj',
+    'tests/integration/windows_appsdk_build/packages.lock.json',
 ]
 EVENT = {'action': 'synchronize', 'number': 402, 'repository': {'full_name': '777genius/agent-notifications'},
          'pull_request': {'number': 402, 'draft': True, 'labels': [],

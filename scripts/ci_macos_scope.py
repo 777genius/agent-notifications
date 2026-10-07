@@ -14,6 +14,7 @@ WINDOWS = frozenset({
     'tests/integration/windows_appsdk_build/README.md',
     'tests/integration/windows_appsdk_build/SDKContract.cpp',
     'tests/integration/windows_appsdk_build/SDKContract.vcxproj',
+    'tests/integration/windows_appsdk_build/packages.lock.json',
 })
 SHA = re.compile(r'^[0-9a-f]{40}$')
 REPOSITORY = re.compile(r'^[A-Za-z0-9_-][A-Za-z0-9_.-]*/[A-Za-z0-9_-][A-Za-z0-9_.-]*$')

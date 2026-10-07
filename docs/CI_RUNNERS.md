@@ -89,7 +89,7 @@ unknown paths, qualification/evidence documents, or unavailable Git metadata
 retain full native coverage. A draft PR can also use `windows-only` mode when its
 entire merge-base diff contains only these Windows App SDK contract paths:
 `.github/workflows/navigation-windows-appsdk-build.yml` and
-`tests/integration/windows_appsdk_build/{README.md,SDKContract.cpp,SDKContract.vcxproj}`.
+`tests/integration/windows_appsdk_build/{README.md,SDKContract.cpp,SDKContract.vcxproj,packages.lock.json}`.
 Regular-file additions, modifications, deletions and renames within that exact
 set are eligible; both rename paths must qualify. Symlinks, gitlinks, mixed or
 unknown paths and malformed/unavailable Git or PR metadata retain full coverage.
