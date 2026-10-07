@@ -8,10 +8,13 @@ import { setTimeout as delay } from 'node:timers/promises';
 type Json = Record<string, unknown>;
 type Step = { mode: string; pid: number; status: number | null; signal: string | null; error?: string;
   stdout: string; stderr: string; collectedAt: number };
+// CI-only ACL/read-only setup cap; native callback and click budgets stay separate.
+const PREPARE_BUDGET_MS = 90_000;
 const evidence: Json = { status: 'failed', scope: 'packaged TEST cold toast COM callback only',
   nativeCallbackQualified: false, navigationQualified: false, clientRouteTested: false,
   vendorCompositionQualified: false, processQuiescenceQualified: false,
   showAttempts: null, showCallOutcome: 'not_started', nativeEffectUncertain: false,
+  prepareBudgetMS: PREPARE_BUDGET_MS,
   sourceSHA: process.env.NAVIGATION_SOURCE_SHA, runnerLabel: process.env.NAVIGATION_WINDOWS_RUNNER,
   imageVersion: process.env.ImageVersion, nodeVersion: process.version, steps: [] };
 let root: string | undefined;
@@ -416,7 +419,7 @@ function preparationTrace(step: Step): void {
   for (const [index, row] of trace.entries()) {
     if (Object.keys(row).sort().join(',') !== 'elapsedMs,pid,preparePhase' || row.pid !== step.pid
         || row.preparePhase !== phases[index] || !Number.isInteger(row.elapsedMs) || Number(row.elapsedMs) < 0
-        || Number(row.elapsedMs) >= 30_000 || index > 0 && Number(row.elapsedMs) < Number(trace[index - 1].elapsedMs)) {
+        || Number(row.elapsedMs) >= PREPARE_BUDGET_MS || index > 0 && Number(row.elapsedMs) < Number(trace[index - 1].elapsedMs)) {
       throw new Error('preparation checkpoint identity/order/budget invalid');
     }
   }
@@ -483,7 +486,7 @@ async function main(): Promise<void> {
     evidence[kind + 'ImportEvidenceSHA256'] = hash(imports);
   }
   bindBootstrap();
-  const preparation = powershell('prepare', 30_000); // New-root ACL + read-only queries, no certificate/package mutation.
+  const preparation = powershell('prepare', PREPARE_BUDGET_MS); // New-root ACL + read-only queries, no certificate/package mutation.
   preparationTrace(preparation); success(preparation);
   if (prepareOnly) {
     const state = read('package-operator-state.json');
