@@ -89,6 +89,7 @@ The following JSON illustrates the schema. Do not replace your existing document
     "notifyOnlyWhenUnfocused": false,
     "notifyDelaySeconds": 0,
     "respectDoNotDisturb": "off",
+    "replaceNotificationsPerSession": false,
     "suppressFilters": [
       {
         "name": "Suppress ClaudeProbe completions (remote-control)",
@@ -160,6 +161,7 @@ hides native and generated names without hiding the question or project.
 | `notifyDelaySeconds` | `0` | Wait N seconds before delivering a desktop notification (capped at 25s by the hook timeout). With `notifyOnlyWhenUnfocused`, focus is re-checked after the wait. Webhooks are unaffected. |
 | `respectDoNotDisturb` | `"off"` | Honour the desktop's Do Not Disturb state. `"silent"` still delivers the banner (so it reaches the notification centre) but skips the plugin's sound; `"suppress"` skips the notification entirely. Linux only for now (KDE Plasma, GNOME, XFCE, dunst); other platforms always report "not in DND". Webhooks are unaffected. See [Do Not Disturb](DO_NOT_DISTURB.md). |
 | `respectDisplaySleep` | `false` | Skip the plugin's own sound while every display is asleep; the banner is still delivered. macOS only for now; other platforms always report "not asleep". Independent of `respectDoNotDisturb`. Webhooks are unaffected. |
+| `replaceNotificationsPerSession` | `false` | macOS only. Let a session's newest desktop notification **replace** its previous banner in place instead of stacking a new one. Different sessions never collide. Default `false` keeps every banner so unread alerts are never silently dropped. |
 | `suppressQuestionAfterTaskCompleteSeconds` | `12` | Suppress question notifications for N seconds after task complete |
 | `suppressQuestionAfterAnyNotificationSeconds` | `7` | Suppress question notifications for N seconds after any notification |
 | `suppressFilters` | `[]` | Array of rules to suppress notifications by status, git branch, and/or folder. Each rule is an AND of its fields; omitted fields match any value. Set `gitBranch` to `""` to match sessions outside git repos. |
@@ -273,6 +275,24 @@ asleep" and the notification keeps its sound.
 This is a different signal from Do Not Disturb - a display can go to sleep
 without Focus/DND being on, and DND can be on with the display wide awake - so
 the two options are independent and compose freely.
+
+### Replace Per-Session Banners (macOS)
+
+By default every desktop notification carries a unique identifier, so banners stack and nothing is ever lost - a session that finishes several tasks (or, for Codex, crosses the sandbox boundary repeatedly in "Approve for me" mode) produces one banner per event.
+
+On macOS `terminal-notifier -group` is the `UNNotificationRequest.identifier`: delivering a request that reuses a value replaces the previous banner in place. Setting `replaceNotificationsPerSession: true` keys that identifier on the Claude/Codex session id, so a session's newest banner replaces its own previous banner while other sessions stay untouched.
+
+```json
+{
+  "notifications": {
+    "replaceNotificationsPerSession": true
+  }
+}
+```
+
+- Conversation grouping in Notification Center is unchanged - it stays on the session thread (`-threadID`).
+- Notifications with no session id (or `unknown`) always stay unique, so unrelated alerts are never collapsed.
+- Trade-off: a replaced banner disappears from Notification Center, so earlier alerts from that session are no longer visible. Leave it off (the default) if you step away and need to catch up on every alert.
 
 ### Sound Options
 
