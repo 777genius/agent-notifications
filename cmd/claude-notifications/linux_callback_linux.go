@@ -77,14 +77,14 @@ func linuxCallbackMain(command string, args []string) int {
 	}
 	files, binding, e := installruntime.StageLinuxCallback(ctx, root, data, reader, s)
 	if e != nil {
-		fmt.Fprintln(os.Stderr, e)
+		fmt.Fprintln(os.Stderr, fmt.Errorf("linux callback stage: %w", e))
 		return 1
 	}
 	patch, _ := json.Marshal(map[string]any{"linuxCallbackSnapshot": binding})
 	l := observed.Installation.Ledger
 	_, e = installruntime.Commit(ctx, installruntime.Request{ControlRoot: root, Owner: l.Owner, RuntimeRoot: l.RuntimeRoot, ConsumerID: "linux-callback-setup", RefreshOnly: true, ExpectedGeneration: &l.Generation, ExpectedPolicy: &observed.Preimage, Files: files, PolicyFields: map[string]json.RawMessage{"route": patch}})
 	if e != nil {
-		fmt.Fprintln(os.Stderr, e)
+		fmt.Fprintln(os.Stderr, fmt.Errorf("linux callback commit: %w", e))
 		return 1
 	}
 	if _, e = fmt.Fprintln(os.Stdout, "Linux callback installed; local routing policy remains explicit"); e != nil {
