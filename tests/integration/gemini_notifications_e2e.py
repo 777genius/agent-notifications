@@ -267,7 +267,7 @@ def native_rows(g0, lab):
     rows = g0.observations(lab)
     for row in rows:
         fields = {"event", "valid", "neutral", "session_sha256", "timestamp_sha256",
-                  "shell", "shell_version", "case", "stop_hook_active", "subtype"}
+                  "shell", "shell_version", "case", "stop_hook_active", "subtype", "frame_capture", "frame_capture_ms"}
         require(set(row) <= fields and row["event"] in OWN and row["case"] in g0.CASES,
                 "observer_field_whitelist")
         require(row["valid"] is True and row["neutral"] is True, "foreign_observer_invalid")
@@ -279,6 +279,11 @@ def native_rows(g0, lab):
             require(type(row.get("stop_hook_active")) is bool and "subtype" not in row, "observer_stop_flag")
         else:
             require(row.get("subtype") == "ToolPermission" and "stop_hook_active" not in row, "observer_subtype")
+        if "frame_capture" in row:
+            require(row["frame_capture"] in ("recorded", "unavailable", "full", "sealed")
+                    and type(row.get("frame_capture_ms")) in (int, float)
+                    and math.isfinite(row["frame_capture_ms"]) and 0 <= row["frame_capture_ms"] <= 86400000,
+                    "TEST_frame_capture_projection")
     # neutral refers exclusively to the foreign recorder's stdout.
     return rows
 
@@ -382,7 +387,7 @@ def settle(g0, lab, fixture, terminal, expected, seconds=6, phase="exercise_sett
                 validated = native_rows(g0, lab)
                 total = min(len(validated), 65535)
                 fields = {"event", "valid", "neutral", "session_sha256", "timestamp_sha256",
-                          "case", "stop_hook_active", "subtype"}
+                          "case", "stop_hook_active", "subtype", "frame_capture", "frame_capture_ms"}
                 rows = [{k: v for k, v in row.items() if k in fields} for row in validated[:64]]
             except Exception:
                 pass
@@ -619,6 +624,29 @@ def configure(lab, url, desktop):
     return path
 
 
+def classify_captured_frame(g0, args, lab, env, event, raw):
+    # Pure helper only; captured frames never reach an installed consumer.
+    unavailable = {"classification": "analyzer_unavailable", "event": event}
+    code, out, _ = g0.bounded_process([args.frame_classifier, event], raw, lab / "profile", env, 3)
+    try:
+        require(code == 0 and len(out) <= 2048, "TEST_classifier_result")
+        value = json.loads(out)
+        fields = {"version", "classification", "eligible", "timestamp_present", "session_sha256", "timestamp_sha256"}
+        require(type(value) is dict and set(value) <= fields and type(value.get("version")) is int and value["version"] == 1
+                and value.get("classification") in ("decoded", "invalid")
+                and type(value.get("eligible")) is bool and type(value.get("timestamp_present")) is bool,
+                "TEST_classifier_protocol")
+        if value["classification"] == "decoded":
+            require(all(type(value.get(k)) is str and HEX.fullmatch(value[k]) for k in ("session_sha256", "timestamp_sha256")),
+                    "TEST_classifier_digest")
+        else:
+            require(not value["eligible"] and not value["timestamp_present"] and not (set(value) & {"session_sha256", "timestamp_sha256"}),
+                    "TEST_classifier_invalid_projection")
+        return dict(value, event=event, payload_sha256=sha(raw), bytes=len(raw))
+    except Exception:
+        return unavailable  # Never publish helper stderr, arbitrary fields or errors.
+
+
 def run(args):
     require(args.trusted_orchestrator, "native_execution_requires_trusted_orchestrator")
     require(60 <= args.timeout <= 240, "native_watchdog_bounds")
@@ -646,6 +674,10 @@ def run(args):
     update_hash = sha(bounded_read(Path(args.update_binary), 32 * 1024 * 1024)) if args.update_binary else None
     require(not update_hash or update_hash != artifact_hash, "changed_update_requires_distinct_actual_artifact")
     active_hash = artifact_hash
+    capture_frames = sys.platform == "linux" and bool(getattr(args, "frame_classifier", None))
+    if capture_frames:
+        args.frame_classifier = str(test_artifact(args.frame_classifier))
+        classifier_hash = sha(bounded_read(Path(args.frame_classifier), 32 * 1024 * 1024))
     lab = g0.new_lab(args.lab_root)
     levels = {osname: {"build/contracts": "unverified_external_evidence_required", "native_cli/provider_substitute": "unverified",
                        "OS_API": "unverified", "visual": "unverified"} for osname in ("darwin", "linux", "windows")}
@@ -668,9 +700,15 @@ def run(args):
     evidence["update_candidate_sha256"] = update_hash
     stop, spool = threading.Event(), {"receipts": [], "error": None}
     watcher, terminal, env, damaged_preimage = None, None, None, None
+    capture_collection_known = True
+    if capture_frames:
+        from gemini_frame_capture import prepare
+        prepare(lab)
+        evidence["frame_classifier_sha256"] = classifier_hash
+    evidence["sdk_frame_analysis"] = {"class": "pending" if capture_frames else "unsupported", "cleanup": "unverified" if capture_frames else "not_applicable"}
     try:
         env = g0.minimal_env(lab, node, shell, args.system_root)
-        settings_path = g0.install_test_hooks(lab, {}, shell, node, args.system_root)
+        settings_path = g0.install_test_hooks(lab, {}, shell, node, args.system_root, capture_frames=capture_frames)
         foreign = read_json(settings_path, 1024 * 1024)
         for event in OWN:
             foreign["hooks"][event][0]["hooks"][0]["name"] = "foreign-an-TEST-" + event
@@ -728,6 +766,7 @@ def run(args):
                 watcher.start()
             fixture.arm("plain")
             evidence["attempt_cache_baseline"], cache_baseline = attempt_cache_snapshot(lab)
+            capture_collection_known = False
             terminal = g0.Terminal(node, executable, install, lab, env, ui, args.timeout)
             cases, rows = g0.exercise(lab, fixture, terminal, ui, observer=lambda p: native_rows(g0, p))
             before_remove_counts = settle(g0, lab, fixture, terminal, delivery_counts(rows), cache_baseline=cache_baseline)
@@ -777,6 +816,7 @@ def run(args):
             while time.monotonic() < end:
                 settle(g0, lab, fixture, terminal, before_remove_counts, 1, phase="remove_settle")
             terminal.close()
+            capture_collection_known = True
             evidence.update(cases=cases, native_observations=rows, delivery_counts=before_remove_counts,
                             PTY=terminal.identity, own_child_exit=terminal.exit,
                             provider_endpoints=fixture.counts, foreign_recorder_neutral_stdout="observed",
@@ -789,6 +829,7 @@ def run(args):
             require(second["receipt"]["binding"] != first["receipt"]["binding"], "reinstall_nonce_reused")
             fixture.arm("plain")
             previous = native_rows(g0, lab)
+            capture_collection_known = False
             terminal = g0.Terminal(node, executable, install, lab, env, ui, args.timeout)
             end = time.monotonic() + 25
             while time.monotonic() < end:
@@ -823,6 +864,7 @@ def run(args):
             while time.monotonic() < end:
                 settle(g0, lab, fixture, terminal, expected, 1, phase="damaged_settle")
             terminal.close()
+            capture_collection_known = True
             evidence["damaged_receipt"] = "cleanup_conflict_channels_revoked_native_turn_suppressed"
             evidence["old_loaded_command_gate"] = "native_turn_with_retained_installed_groups_and_binary_no_new_webhook_5s"
             evidence["damaged_native_observations"] = native_rows(g0, lab)[len(previous):]
@@ -862,11 +904,15 @@ def run(args):
         if terminal is not None:
             try:
                 terminal.close(graceful=False)
+                capture_collection_known = True
             except Exception as cleanup:
                 evidence["shutdown"] = "unconfirmed"
                 evidence["driver"] = "failed"
                 evidence["cleanup_classification"] = str(cleanup) if isinstance(cleanup, g0.Red) else "bridge_cleanup_error"
             evidence["bridge_failure"] = terminal.failure_facts()
+        if capture_frames:
+            from gemini_frame_capture import finish
+            evidence["sdk_frame_analysis"] = finish(lab, lambda event, raw: classify_captured_frame(g0, args, lab, env, event, raw), capture_collection_known)
         if env is not None:
             try:
                 if damaged_preimage:
@@ -1287,7 +1333,7 @@ def main():
     parser.add_argument("--desktop", action="store_true")
     parser.add_argument("--timeout", type=int, default=240)
     for flag in ("binary", "update-binary", "native-app", "gemini-executable", "node-executable", "cli-install-root", "lab-root", "hook-shell", "system-root",
-                 "ui-contract", "g0-driver", "sdk-module-root", "installer-module-root"):
+                 "ui-contract", "g0-driver", "sdk-module-root", "installer-module-root", "frame-classifier"):
         parser.add_argument("--" + flag)
     args = parser.parse_args()
     if args.self_test:

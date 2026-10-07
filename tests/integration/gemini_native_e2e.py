@@ -507,6 +507,16 @@ def record_hook(args):
                 incoming.put(b"")
         threading.Thread(target=read_payload, daemon=True).start()
         raw = incoming.get(timeout=1)
+        if getattr(args, "capture_frames", False):
+            # Only the foreign G5 TEST recorder captures synthetic raw frames.
+            # Additional I/O changes its duration; no managed command changes.
+            started = time.monotonic()
+            try:
+                from gemini_frame_capture import capture
+                result["frame_capture"] = capture(lab, args.event, raw)
+            except Exception:
+                result["frame_capture"] = "unavailable"
+            result["frame_capture_ms"] = (time.monotonic() - started) * 1000
         require(len(raw) <= LIMIT, "hook_payload_limit")
         value = json.loads(raw)
         require(isinstance(value, dict) and value.get("hook_event_name") == args.event, "hook_event_mismatch")
@@ -548,12 +558,14 @@ def record_hook(args):
     print("{}", flush=True)  # Advisory even when a red classification was recorded.
 
 
-def install_test_hooks(lab, commands, shell, node, system_root=None):
+def install_test_hooks(lab, commands, shell, node, system_root=None, capture_frames=False):
     (lab / "probe.json").write_text(json.dumps(commands))
     hooks = {}
     for event in ("AfterAgent", "Notification"):
         argv = [str(Path(sys.executable).resolve()), str(Path(__file__).resolve()), "--record-root", str(lab), "--event", event,
                 "--node-executable", str(node), "--hook-shell", str(shell)]
+        if capture_frames:
+            argv += ["--capture-frames"]
         if system_root:
             argv += ["--system-root", str(physical(system_root))]
         if os.name == "nt":
@@ -789,6 +801,7 @@ def main():
     for flag in ("gemini-executable", "node-executable", "cli-install-root", "lab-root", "hook-shell", "system-root", "ui-contract", "probe-command", "record-root", "event", "native-shell"):
         parser.add_argument("--" + flag)
     parser.add_argument("--timeout", type=int, default=180)
+    parser.add_argument("--capture-frames", action="store_true")
     args = parser.parse_args()
     if args.record_root:
         require(args.event in ("AfterAgent", "Notification"), "unknown_hook_selector")
