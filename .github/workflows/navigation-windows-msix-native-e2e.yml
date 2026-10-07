@@ -153,7 +153,6 @@ jobs:
         with:
           name: navigation-windows-msix-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            !${{ steps.probe.outputs.evidence_root }}/client.msix
             ${{ inputs.mode == 'prepare_only' && format('{0}/.owned-test-root', steps.probe.outputs.evidence_root) || steps.probe.outputs.evidence_root }}
             ${{ inputs.mode == 'prepare_only' && format('{0}/evidence.json', steps.probe.outputs.evidence_root) || '' }}
             ${{ inputs.mode == 'prepare_only' && format('{0}/controller-progress.json', steps.probe.outputs.evidence_root) || '' }}
@@ -162,6 +161,7 @@ jobs:
             ${{ inputs.mode == 'prepare_only' && format('{0}/operator-context.json', steps.probe.outputs.evidence_root) || '' }}
             ${{ inputs.mode == 'prepare_only' && format('{0}/navigation-native-imports.log', steps.probe.outputs.evidence_root) || '' }}
             ${{ inputs.mode == 'prepare_only' && format('{0}/navigation-msix-imports.log', steps.probe.outputs.evidence_root) || '' }}
+            !${{ steps.probe.outputs.evidence_root }}/client.msix
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 14
