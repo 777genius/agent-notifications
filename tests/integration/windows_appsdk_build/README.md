@@ -8,10 +8,13 @@ or submits a notification. Green compilation does not qualify native navigation.
 Dependencies are exact stable package versions, checked on 2026-10-07:
 [Windows App SDK 2.5.1](https://www.nuget.org/packages/Microsoft.WindowsAppSDK/2.5.1)
 and [CppWinRT 3.0.260818.1](https://www.nuget.org/packages/Microsoft.Windows.CppWinRT/3.0.260818.1).
-The first successful restore exports `packages.lock.json`, its SHA256, the exact
-source SHA, runner image, and build log. Review and commit that resolved lock
-before adding any native execution; this initial graph-discovery job is not a
-locked native canary. Subsequent native builds must use locked restore.
+The committed `packages.lock.json` comes from successful Windows build run
+`37616367344` on source `5f9edea4e1d2587e32495bda1cbcab1955f19a1c`, runner image
+`20260924.168.1`. Its SHA256 is
+`c0e64fe63a6dd7d4daf56ba387cfbc65d27cbd057b6f02a0e276c89864818a2b`.
+Restore uses locked mode, and the workflow exports the lock hash, exact source SHA,
+runner image, and diagnostic logs. A changed dependency graph must fail restore;
+update the reviewed lock before adding any native execution.
 
 The raw XML activation nonce comes from `AppNotificationActivatedEventArgs.Argument()`.
 `Arguments()` is a distinct map for builder arguments. Both types are checked
