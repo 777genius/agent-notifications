@@ -1,0 +1,129 @@
+{
+  "scope": "actual_retained_A_shipping_go_telemetry_TEST",
+  "binarySource": "9b2e5ca9bb21d61bf1f345905c1abcf2c27b0187",
+  "harnessSource": "cdd23030d053b50e82150333970bbe744c4068e7",
+  "executedGuestControllerSHA256": "a7897b0a93754d93368c1e57c5dc5e0d42ec55653180de08c32e7b61578d473e",
+  "custodySHA256": {
+    "sourceFreeze": "3a9159f76c6ab5871920b7299f126953a675bf2d41e69deef036fb69f68e76be",
+    "gateFreeze": "4479dd6130d8b870aa10f809a07dbd04b7728b6bf133557dfccb17a354b28c8f",
+    "transport": "fe4dacfcf5c02206cfe556a4d0384dc8d0a5a946759c26893dddd27e4493b384",
+    "outerStdout": "ae0db1a0e5344b06fc0ab6d5f82b30b9cf7624a24143c8ba63e9b422f3a6c312",
+    "privatePredicate": "66cfc82454a304dfa24e96cd1ce70d1ec21d21871e7dafe0f65a95fb8fcfe0f3",
+    "telemetrySourceFreeze": "1d02e1edb6c7f1efa7d7a978c2742a6911792ef0e45f225dec462e600e2d1a3a",
+    "candidateInterpretation": "8cc478974e1e9ee58d2ad5e47dbf3024414f210221937625bd35cf2aff24ded1"
+  },
+  "observations": {
+    "nativeReportPassed": true,
+    "outerPassed": true,
+    "coldReaderExactArgvAndExecutableHash": true,
+    "coldReaderBirthAfterCollectedSenderExit": true,
+    "selectedExactURIArgv": true,
+    "selectedParentMatchesAdmittedReader": true,
+    "admittedPoll": 16,
+    "matchingCandidates": 1,
+    "omittedCandidates": 0,
+    "readerArgvSHA256": "488cc623abb460f740b46ccf3be6d5b2f744e3379256157b76925474eb830427",
+    "selectedArgvSHA256": "176cec166254ac660128c03eb4282b689af335b8dba5406dc8f535550fcef3fd",
+    "retainedAUsedAfterSetupB": true,
+    "tokenEquality": true,
+    "selectedSurfaceAndFocusJoined": true
+  },
+  "timingMilliseconds": {
+    "senderExitToClickIntent": 16162.786,
+    "clickIntentToHistoricalReaderAdmission": 1636.063,
+    "clickIntentToExactSelectedCandidateObservation": 1645.845,
+    "clickIntentToFullyAdmittedPredicate": 1652.221,
+    "lastPollSteps": {
+      "reader_name_owner": 13.201,
+      "reader_owner_pid": 26.748,
+      "reader_peer_and_hash": 44.851,
+      "selected_peer_and_environment": 6.353,
+      "selected_process_scan": 9.746
+    }
+  },
+  "timingLimits": [
+    "Click timestamp is controller intent before CLICK write, not exact OS press receipt.",
+    "Predicate admission timestamps are observer measurements, not callback Handle entry or Launch syscall completion.",
+    "Last-poll peer-and-hash timing does not attribute whole cold verification cost or explain old negative.",
+    "No complete focus/handoff-terminal elapsed time recorded here."
+  ],
+  "qualificationScope": {
+    "nativeRetainedACallbackAndSelectedHandoffObserved": true,
+    "oldNegativeCauseKnown": false,
+    "globalCold3Seconds": false,
+    "visibleChat": false,
+    "fullClientSandbox": false,
+    "concurrency": false,
+    "updateOrReboot": false,
+    "currentPublicationCommitExecuted": false,
+    "replayAllowed": false
+  },
+  "schemaVersion": 1,
+  "publicationCommitExecuted": false,
+  "executedTelemetryOverlaysSHA256": {
+    "guestController": "a7897b0a93754d93368c1e57c5dc5e0d42ec55653180de08c32e7b61578d473e",
+    "outerNativeProbe": "ed9f5f458f68da5ba64b328cee7cf1a0f9a8756c87acc0b2d29b91fc6efbba16"
+  },
+  "actualRecordedCleanup": {
+    "guestUniqueKernelIncarnations": 25,
+    "all25GuestIncarnationsKernelExitObserved": true,
+    "guestCgroupEmpty": true,
+    "guestCleanupPassed": true,
+    "guestCleanupErrors": [],
+    "finiteSenderCollectedExitCode": 0,
+    "QEMUChildCollected": true,
+    "QEMUChildExitCode": 0,
+    "guestPoweroffObserved": true,
+    "outerContainerRemoved": true,
+    "outerCleanupUnknown": false,
+    "outerIntegrityErrors": [],
+    "outerNativeRunCommandExitCode": 0,
+    "outerCollectedCommandCount": 9,
+    "outerCommandExitCodes": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      1
+    ],
+    "lastTwoCommands": "expected_exact_container_absence",
+    "containerTerminalExitCode": 0,
+    "containerOOMKilled": false
+  },
+  "independentActualResourceReview": {
+    "status": "accepted",
+    "accepted": true,
+    "scope": "owned_TEST_retained_A_after_setup_B_handoff_activation_and_focus_observation",
+    "reviewEvidenceSHA256": "8e95e56a1839b04b61147039977f38db84f8091b10a7147b9074b0cf3a946348"
+  },
+  "scenario": {
+    "newNotificationAttempts": 1,
+    "genuineClicks": 1,
+    "oldNotificationReplayed": false,
+    "retainedASelectedAfterNormalSetupB": true,
+    "mutableProducerConfigurationRemoved": true,
+    "actualScopedURIObserved": true,
+    "tokenForwardingQualified": true,
+    "selectedIncarnationSurfaceFocusJoined": true,
+    "rawExportedNativePressCount": 1,
+    "rawExportedNativeReleaseWirePresent": false,
+    "pointerReleaseAndCLICKEDAcknowledgement": "source_enforced_pinned_fixture_collection"
+  },
+  "preservedNegativeEvidence": {
+    "originalRetainedANativeCellStillFailed": true,
+    "originalNegativeCause": "unknown",
+    "coldThreeSecondAvailability": "unqualified",
+    "originalPairNotReclassified": true
+  },
+  "limitations": [
+    "Independent acceptance applies only to this owned TEST retained-A record; source-bound live-kernel/command observations are not independently retained complete streams.",
+    "25 guest kernel incarnations are counted separately from sender/QEMU/controller collection facts, not summed into28.",
+    "Source and telemetry changes belong to TEST harness; production binary remains the authenticated9b2 source artifact.",
+    "No raw URI, token, argv, environment or private identity is published.",
+    "New raw clickTrace contains one press and ends at token.done; release/CLICKED is source-bound collection, not exported release wire proof. Old forensic release bytes belong only to the old negative case."
+  ]
+}
