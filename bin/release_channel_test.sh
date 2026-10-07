@@ -13,7 +13,7 @@ mkdir -p "$HOME"
 source "$ROOT/bin/release-channel.sh"
 for platform in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64; do
     selected=$(release_channel_select "$ROOT/release-channels.tsv" "${platform%/*}" "${platform#*/}")
-    case "$platform" in darwin/*) expected=v1.46.1 ;; *) expected=v1.47.1 ;; esac
+    case "$platform" in darwin/*) expected=v1.46.1 ;; *) expected=v1.48.1 ;; esac
     [ "${selected%%$'\t'*}" = "$expected" ]
 done
 for fault in duplicate missing invalid_sha invalid_tag ref schema unknown; do
@@ -21,8 +21,8 @@ for fault in duplicate missing invalid_sha invalid_tag ref schema unknown; do
     case "$fault" in
         duplicate) tail -1 "$TEST_ROOT/index" >> "$TEST_ROOT/index" ;;
         missing) sed '$d' "$TEST_ROOT/index" > "$TEST_ROOT/new"; mv "$TEST_ROOT/new" "$TEST_ROOT/index" ;;
-        invalid_sha) sed 's/493d1a01a52761ddbc4bd3d712455767057dcf8d/main/g' "$TEST_ROOT/index" > "$TEST_ROOT/new"; mv "$TEST_ROOT/new" "$TEST_ROOT/index" ;;
-        invalid_tag) sed 's/v1.47.1/v01.47.1/g' "$TEST_ROOT/index" > "$TEST_ROOT/new"; mv "$TEST_ROOT/new" "$TEST_ROOT/index" ;;
+        invalid_sha) awk 'BEGIN { FS=OFS="\t" } NR==3 { $4="main" } { print }' "$TEST_ROOT/index" > "$TEST_ROOT/new"; mv "$TEST_ROOT/new" "$TEST_ROOT/index" ;;
+        invalid_tag) awk 'BEGIN { FS=OFS="\t" } NR==3 { $3="v01.48.0" } { print }' "$TEST_ROOT/index" > "$TEST_ROOT/new"; mv "$TEST_ROOT/new" "$TEST_ROOT/index" ;;
         ref) sed 's|release/platform-linux-windows|main|g' "$TEST_ROOT/index" > "$TEST_ROOT/new"; mv "$TEST_ROOT/new" "$TEST_ROOT/index" ;;
         schema) sed 's/channels-v1/channels-v2/' "$TEST_ROOT/index" > "$TEST_ROOT/new"; mv "$TEST_ROOT/new" "$TEST_ROOT/index" ;;
         unknown) printf 'linux\tppc64\tv1.47.1\tx\tx\tmain\n' >> "$TEST_ROOT/index" ;;

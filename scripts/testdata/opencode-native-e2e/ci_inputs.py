@@ -63,17 +63,24 @@ def main():
     artifacts.mkdir(parents=True, exist_ok=True)
     try:
         if '--stage-evidence' in sys.argv:
-            url = urllib.parse.urlsplit(os.environ.get('AN_EVIDENCE_URL', ''))
             sha = os.environ.get('AN_EVIDENCE_SHA256', '')
-            r.require(url.scheme == 'https' and url.hostname and not url.username and not url.password
-                      and not url.query and not url.fragment and re.fullmatch('[0-9a-f]{64}', sha), 'external_parent_evidence_required')
-            archive = artifacts / 'parent-inputs.tar.gz'
-            with urllib.request.urlopen(url.geturl(), timeout=30) as source, archive.open('xb') as out:
-                total = 0
-                while block := source.read(1024 * 1024):
-                    total += len(block)
-                    r.require(total <= 2 * 1024**3, 'parent_archive_size')
-                    out.write(block)
+            local = os.environ.get('AN_EVIDENCE_ARCHIVE', '')
+            if local:
+                archive = pathlib.Path(local).absolute()
+                r.require(archive.is_file() and not archive.is_symlink()
+                          and archive.resolve().is_relative_to(artifacts)
+                          and not any(p.is_symlink() for p in archive.parents), 'local_parent_archive_invalid')
+            else:
+                url = urllib.parse.urlsplit(os.environ.get('AN_EVIDENCE_URL', ''))
+                r.require(url.scheme == 'https' and url.hostname and not url.username and not url.password
+                          and not url.query and not url.fragment and re.fullmatch('[0-9a-f]{64}', sha), 'external_parent_evidence_required')
+                archive = artifacts / 'parent-inputs.tar.gz'
+                with urllib.request.urlopen(url.geturl(), timeout=30) as source, archive.open('xb') as out:
+                    total = 0
+                    while block := source.read(1024 * 1024):
+                        total += len(block)
+                        r.require(total <= 2 * 1024**3, 'parent_archive_size')
+                        out.write(block)
             manifest, manifest_sha = stage_parent_archive(archive, sha, artifacts/'parent-inputs')
             # Outputs contain only fixed repository path/hex digest, never source URL.
             with pathlib.Path(os.environ['GITHUB_OUTPUT']).open('a') as outputs:
