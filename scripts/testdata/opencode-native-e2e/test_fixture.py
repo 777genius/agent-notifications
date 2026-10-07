@@ -27,6 +27,31 @@ def wire(kind, seq, session='root', **data):
 
 
 class FixtureTests(unittest.TestCase):
+    def test_captured_host_namespace_preserves_isolation_without_proc1_access(self):
+        from unittest.mock import patch
+
+        def read_namespace(path):
+            if path == '/proc/self/ns/net':
+                return 'net:[11]'
+            raise PermissionError('root-owned namespace')
+
+        with patch.object(r.sys, 'platform', 'linux'), \
+             patch.object(r.os, 'readlink', side_effect=read_namespace) as readlink, \
+             patch.object(r.socket, 'if_nameindex', return_value=[(1, 'lo')]), \
+             patch.dict(r.os.environ, {'AN_HOST_NETNS': 'net:[10]'}):
+            r.network_guard()
+            readlink.assert_called_once_with('/proc/self/ns/net')
+            for host, interfaces, failure in (
+                    ('net:[11]', [(1, 'lo')], 'new_private_netns_required'),
+                    ('', [(1, 'lo')], 'host_network_namespace_invalid'),
+                    ('not-a-namespace', [(1, 'lo')], 'host_network_namespace_invalid'),
+                    ('net:[10]', [(1, 'lo'), (2, 'eth0')], 'loopback_only_required')):
+                with self.subTest(host=host, interfaces=interfaces), \
+                     patch.dict(r.os.environ, {'AN_HOST_NETNS': host}), \
+                     patch.object(r.socket, 'if_nameindex', return_value=interfaces), \
+                     self.assertRaisesRegex(r.Unqualified, failure):
+                    r.network_guard()
+
     def test_duplicate_manifest_key_fails_before_any_launch(self):
         with tempfile.TemporaryDirectory(prefix='TEST-parser-',dir=artifacts) as d:
             path=pathlib.Path(d)/'manifest.json'

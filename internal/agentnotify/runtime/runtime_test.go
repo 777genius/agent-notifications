@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	goruntime "runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -57,7 +58,17 @@ func (f fakeDelivery) Deliver(_ context.Context, r notification.Request) notific
 	return notification.Receipt{CorrelationID: r.CorrelationID, Status: s, Reason: "test_outcome", Navigation: nav(r)}
 }
 func snapshot(route string) installruntime.PolicySnapshot {
-	return installruntime.PolicySnapshot{Installation: installruntime.InstalledSnapshot{Enabled: true, Ledger: installruntime.Ledger{ID: route}}, Fields: map[string]json.RawMessage{"schemaVersion": json.RawMessage(`1`), "enabled": json.RawMessage(`true`), "route": json.RawMessage(fmt.Sprintf(`{"localRouting":true,"applicationPath":%q,"teamID":"TEAM","linuxCallbackSnapshot":{"snapshotPath":%q,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}`, route, route))}}
+	routing := map[string]any{"localRouting": true, "applicationPath": route, "teamID": "TEAM"}
+	if goruntime.GOOS == "linux" {
+		delete(routing, "applicationPath")
+		delete(routing, "teamID")
+		routing["linuxCallbackSnapshot"] = notification.LinuxBinding{SnapshotPath: route, SHA256: strings.Repeat("a", 64)}
+	}
+	raw, err := json.Marshal(routing)
+	if err != nil {
+		panic(err)
+	}
+	return installruntime.PolicySnapshot{Installation: installruntime.InstalledSnapshot{Enabled: true, Ledger: installruntime.Ledger{ID: route}}, Fields: map[string]json.RawMessage{"schemaVersion": json.RawMessage(`1`), "enabled": json.RawMessage(`true`), "route": raw}}
 }
 
 const global = `{"foreign":{"keep":true},"notifications":{"desktop":{"enabled":true,"sound":true,"clickToFocus":true}}}`

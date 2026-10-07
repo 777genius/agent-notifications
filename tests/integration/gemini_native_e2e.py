@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import http.server
 import json
+import math
 import os
 from pathlib import Path
 import queue
@@ -17,6 +18,7 @@ import re
 import shlex
 import socket
 import signal
+import stat
 import subprocess
 import sys
 import threading
@@ -558,6 +560,94 @@ def record_hook(args):
     print("{}", flush=True)  # Advisory even when a red classification was recorded.
 
 
+def capture_sdk_hook_outcomes(lab):
+    """Pre-teardown prefix only: SDK flush is unknown; absence is not non-invocation."""
+    facts = dict(capture="unavailable", identity_checked=False, snapshot_stable=False,
+                 parse_complete=False, SDK_flush_complete=False, absence_means="unknown",
+                 records=0, owned_calls=0, unjoined_owned_calls=0, outcomes=[])
+    try:
+        path = lab / "sdk-private/telemetry.json"
+        before = path.lstat()
+        require(path.resolve() == path and stat.S_ISREG(before.st_mode) and before.st_nlink == 1
+                and (os.name == "nt" or before.st_uid == os.getuid() and not before.st_mode & 0o077)
+                and before.st_size <= 8 * LIMIT, "SDK_telemetry_identity_or_bound")
+        stamp = lambda st: (st.st_dev, st.st_ino, st.st_mode, st.st_nlink, st.st_uid)
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(fd, "rb") as stream:
+            require(stamp(os.fstat(stream.fileno())) == stamp(before), "SDK_telemetry_open_changed")
+            raw = stream.read(8 * LIMIT + 1); after = os.fstat(stream.fileno())
+        require(len(raw) <= 8 * LIMIT and stamp(after) == stamp(before)
+                and stamp(path.lstat()) == stamp(before), "SDK_telemetry_read_changed")
+        facts.update(capture="bounded_prefix", identity_checked=True,
+                     snapshot_stable=(before.st_size, before.st_mtime_ns) == (after.st_size, after.st_mtime_ns),
+                     bytes=len(raw))
+        # Retain the actual prefix privately even if later SDK writes/teardown append.
+        snapshot = path.parent / ("pre-teardown-" + str(time.monotonic_ns()) + ".json")
+        with snapshot.open("xb") as stream:
+            os.chmod(snapshot, 0o600); stream.write(raw)
+        rows = observations(lab)
+        joined = {}
+        for row in rows:
+            key = (row.get("event"), row.get("session_sha256"), row.get("timestamp_sha256"))
+            joined.setdefault(key, []).append(row.get("case"))
+        roles = {"agent-notifications-gemini-after-agent": "AfterAgent",
+                 "agent-notifications-gemini-notification": "Notification"}
+        decoder, text, offset = json.JSONDecoder(), raw.decode("utf-8"), 0
+        while True:
+            offset = re.compile(r"\s*").match(text, offset).end()
+            if offset == len(text):
+                facts["parse_complete"] = True
+                break
+            require(facts["records"] < 2048, "SDK_telemetry_record_bound")
+            try:
+                item, end = decoder.raw_decode(text, offset)
+            except ValueError:
+                facts["capture"] = "incomplete_or_invalid_JSON_prefix"
+                break
+            require(end - offset <= LIMIT and isinstance(item, dict), "SDK_telemetry_record_shape")
+            facts["records"] += 1; offset = end
+            attr = item.get("attributes", {})
+            if not isinstance(attr, dict) or attr.get("event.name") != "gemini_cli.hook_call": continue
+            role = roles.get(attr.get("hook_name"))
+            if not role or attr.get("hook_type") != "command" or attr.get("hook_event_name") != role: continue
+            facts["owned_calls"] += 1
+            incoming = json.loads(attr.get("hook_input", "null"))
+            require(isinstance(incoming, dict), "SDK_hook_input_unavailable")
+            ids = [incoming.get(k) for k in ("session_id", "timestamp")]
+            require(all(isinstance(v, str) and 0 < len(v) <= 4096 for v in ids), "SDK_hook_join_unavailable")
+            cases = joined.get((role, *(digest(v.encode()) for v in ids)), [])
+            if incoming.get("cwd") != str(lab / "profile") or incoming.get("hook_event_name") != role or len(cases) != 1 or cases[0] not in CASES:
+                facts["unjoined_owned_calls"] += 1
+                continue
+            require(len(facts["outcomes"]) < 64, "SDK_hook_outcome_bound")
+            outcome = dict(role=role, case=cases[0], claim_failures=[])
+            code, duration = attr.get("exit_code"), attr.get("duration_ms")
+            if type(code) is int and -256 <= code <= 65535: outcome["SDK_exit_code"] = code
+            if type(duration) in (int, float) and math.isfinite(duration) and 0 <= duration <= 86400000:
+                outcome["SDK_duration_ms"] = duration
+            if type(attr.get("success")) is bool: outcome["SDK_success"] = attr["success"]
+            stderr = attr.get("stderr", "")
+            require(isinstance(stderr, str) and len(stderr) <= 65536, "SDK_hook_stderr_bound")
+            pattern = (r"observation\.claim\.failure phase=(validate|path|root|prepare|lock|clock|read|decode|record|encode|publish|published) "
+                       r"class=(invalid_request|invalid_path|validation|invalid_clock|none|invalid_document|deadline|canceled|os_error|sharing_violation|lock_violation|permission|not_found) "
+                       r"code=(\d{1,10}) elapsed_ns=(\d{1,18}) stage_ns=(\d{1,18}) budget_ns=(\d{1,18}) "
+                       r"budget=(not_started|active|deadline|canceled) publication_possible=(true|false)")
+            for line in stderr.splitlines():
+                match = re.fullmatch(pattern, line)
+                if match and len(outcome["claim_failures"]) < 4:
+                    phase, classification, oscode, elapsed, stage, budget, state, possible = match.groups()
+                    outcome["claim_failures"].append(dict(phase=phase, classification=classification,
+                        code=int(oscode), elapsed_ns=int(elapsed), stage_ns=int(stage), budget_ns=int(budget),
+                        budget_state=state, publication_possible=possible == "true"))
+            facts["outcomes"].append(outcome)
+    except Exception:
+        facts["capture"] = "bounded_capture_or_parse_failed"
+    # Only this closed projection is copied to CI; the SDK outfile remains private.
+    encoded = json.dumps(facts, sort_keys=True) + "\n"
+    require(len(encoded.encode()) <= 65536, "SDK_hook_projection_bound")
+    (lab / "sdk-hook-outcomes.json").write_text(encoded)
+
+
 def install_test_hooks(lab, commands, shell, node, system_root=None, capture_frames=False):
     (lab / "probe.json").write_text(json.dumps(commands))
     hooks = {}
@@ -577,10 +667,14 @@ def install_test_hooks(lab, commands, shell, node, system_root=None, capture_fra
         if event == "Notification":
             group["matcher"] = "ToolPermission"
         hooks[event] = [group]
+    private = lab / "sdk-private"
+    private.mkdir(mode=0o700)
+    outfile = private / "telemetry.json"
+    fd = os.open(outfile, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600); os.close(fd)
     settings = {"hooks": hooks, "hooksConfig": {"enabled": True, "disabled": [], "notifications": False},
                 "general": {"enableAutoUpdate": False, "enableAutoUpdateNotification": False, "enableNotifications": False},
                 "privacy": {"usageStatisticsEnabled": False},
-                "telemetry": {"enabled": False, "logPrompts": False, "useCollector": False, "useCliAuth": False},
+                "telemetry": {"enabled": True, "target": "local", "outfile": str(outfile), "logPrompts": True, "useCollector": False, "useCliAuth": False},
                 "advanced": {"ignoreLocalEnv": True}, "security": {"auth": {"selectedType": "gateway", "useExternal": True}, "disableYoloMode": True, "disableAlwaysAllow": True},
                 "context": {"includeDirectoryTree": False, "memoryBoundaryMarkers": [], "includeDirectories": []},
                 "model": {"name": "gemini-2.5-flash"}, "tools": {"useRipgrep": False, "core": ["write_file"], "confirmationRequired": ["write_file"], "allowed": [], "disableLLMCorrection": True},
@@ -629,6 +723,8 @@ class CaseObservation:
 class Terminal:
     """Node bridge emits classifications only; native PTY text stays in bounded RAM."""
     def __init__(self, node, executable, install_root, lab, env, ui, timeout):
+        env = dict(env, AGENT_NOTIFICATIONS_OBSERVATION_DIAGNOSTICS="1")
+        self.telemetry_lab, self.telemetry_captured = lab, False
         self.events, self.seen, self.exit = queue.Queue(), set(), None
         self.child_started = None
         self.stage, self.case, self.completed_cases = "starting", "plain", 0
@@ -733,6 +829,12 @@ class Terminal:
         raise Red("bridge_" + key + "_timeout")
 
     def close(self, graceful=True):
+        if not self.telemetry_captured:
+            self.telemetry_captured = True
+            try:
+                capture_sdk_hook_outcomes(self.telemetry_lab)
+            except Exception:
+                pass  # Diagnostic publication must never prevent SDK teardown.
         failure = None
         try:
             if graceful and self.exit is None:

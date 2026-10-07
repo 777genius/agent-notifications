@@ -367,7 +367,7 @@ backoff_record_live() {
     [ -f "$1" ] && [ ! -L "$1" ] || return 1
     _pid=''
     _birth=''
-    { IFS= read -r _pid; IFS= read -r _birth; } < "$1" 2>/dev/null || return 1
+    { IFS= read -r _pid; IFS= read -r _birth; } 2>/dev/null < "$1" || return 1
     case "$_pid" in ''|*[!0-9]*) return 1 ;; esac
     [ "$_pid" -gt 0 ] && kill -0 "$_pid" 2>/dev/null || return 1
     [ -n "$_birth" ] || return 0
