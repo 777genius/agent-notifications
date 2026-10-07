@@ -126,12 +126,24 @@ func TestConcurrentConsumerClaimsEachChannelOnce(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if result := c.Consume(context.Background(), facts, deadline); result.Desktop != "duplicate" || result.Webhook != "duplicate" {
+			result := c.Consume(context.Background(), facts, deadline)
+			// Contended claims may exhaust the unchanged bounded lock allowance;
+			// only duplicate or fail-closed cache rejection may avoid an attempt.
+			wantReason := "no_attempt"
+			if result.Desktop == "cache_unavailable" || result.Webhook == "cache_unavailable" {
+				wantReason = "cache_unavailable"
+			}
+			if result.Status != "suppressed" || result.Reason != wantReason ||
+				(result.Desktop != "duplicate" && result.Desktop != "cache_unavailable") ||
+				(result.Webhook != "duplicate" && result.Webhook != "cache_unavailable") {
 				t.Errorf("parallel duplicate classification: %+v", result)
 			}
 		}()
 	}
 	wg.Wait()
+	if result := c.Consume(context.Background(), facts, deadline); result.Status != "suppressed" || result.Reason != "no_attempt" || result.Desktop != "duplicate" || result.Webhook != "duplicate" {
+		t.Fatalf("uncontended duplicate classification: %+v", result)
+	}
 	if desktops.Load() != 1 || hooks.Load() != 1 || rechecks.Load() != 2 {
 		t.Fatalf("same-marker attempts %d/%d, rechecks %d", desktops.Load(), hooks.Load(), rechecks.Load())
 	}
