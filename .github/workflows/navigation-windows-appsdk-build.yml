@@ -4,6 +4,8 @@ on:
     paths:
       - '.github/workflows/navigation-windows-appsdk-build.yml'
       - 'tests/integration/windows_appsdk_build/**'
+      - 'opencode-plugin/package.json'
+      - 'opencode-plugin/package-lock.json'
   workflow_dispatch:
 permissions:
   contents: read
@@ -16,6 +18,16 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0, repository pin
+        with:
+          node-version: '24.21.0'
+      - name: Locked verification tooling
+        shell: pwsh
+        run: |
+          npm ci --prefix opencode-plugin --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'locked tooling install failed' }
+          & ./opencode-plugin/node_modules/.bin/tsc.cmd --ignoreConfig --noEmit --strict --target ES2023 --module ESNext --moduleResolution bundler --types node --typeRoots ./opencode-plugin/node_modules/@types tests/integration/windows_appsdk_build/verify-runtime-package.ts
+          if ($LASTEXITCODE -ne 0) { throw 'package verification typecheck failed' }
       - name: Restore graph and compile only
         shell: pwsh
         env:
@@ -28,7 +40,10 @@ jobs:
           $project = 'tests\integration\windows_appsdk_build\SDKContract.vcxproj'
           $out = Join-Path $env:RUNNER_TEMP 'TEST-windows-appsdk-build'
           New-Item -ItemType Directory -Path $out -ErrorAction Stop | Out-Null
-          & $msbuild $project /t:Restore /p:Configuration=Release /p:Platform=ARM64 "/p:OutDir=$out\" "/p:IntDir=$out\obj\" /verbosity:minimal "/bl:$out\restore.binlog"
+          $packages = Join-Path $env:RUNNER_TEMP 'TEST-windows-appsdk-packages'
+          New-Item -ItemType Directory -Path $packages -ErrorAction Stop | Out-Null
+          $env:NUGET_PACKAGES = $packages
+          & $msbuild $project /t:Restore /p:Configuration=Release /p:Platform=ARM64 "/p:RestorePackagesPath=$packages" "/p:OutDir=$out\" "/p:IntDir=$out\obj\" /verbosity:minimal "/bl:$out\restore.binlog"
           if ($LASTEXITCODE -ne 0) { throw 'SDK restore prerequisite failed' }
           $lock = 'tests\integration\windows_appsdk_build\packages.lock.json'
           if (!(Test-Path -LiteralPath $lock)) { throw 'resolved dependency lock missing' }
@@ -36,7 +51,12 @@ jobs:
           $evidence = @{sourceSHA=$env:SOURCE_SHA; image=$env:ImageVersion; executedBinary=$false;
             packageLockSHA256=(Get-FileHash -LiteralPath $lock -Algorithm SHA256).Hash.ToLowerInvariant()}
           $evidence | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $out 'build-evidence.json') -Encoding utf8
-          & $msbuild $project /t:Build /p:Configuration=Release /p:Platform=ARM64 "/p:OutDir=$out\" "/p:IntDir=$out\obj\" /verbosity:minimal "/bl:$out\build.binlog"
+          $dotnet = ''
+          $found = Get-Command dotnet -CommandType Application -ErrorAction SilentlyContinue
+          if ($found) { $dotnet = $found.Source }
+          node --experimental-strip-types tests/integration/windows_appsdk_build/verify-runtime-package.ts $out $packages $lock $dotnet
+          if ($LASTEXITCODE -ne 0) { throw 'restored runtime content/signature verification failed or unavailable' }
+          & $msbuild $project /t:Build /p:Configuration=Release /p:Platform=ARM64 "/p:RestorePackagesPath=$packages" "/p:OutDir=$out\" "/p:IntDir=$out\obj\" /verbosity:minimal "/bl:$out\build.binlog"
           if ($LASTEXITCODE -ne 0) { throw 'SDK build prerequisite failed; restored lock retained' }
       - name: Preserve build graph and diagnostic log
         if: always()
