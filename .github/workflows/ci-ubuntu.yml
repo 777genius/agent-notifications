@@ -37,14 +37,14 @@ jobs:
       - uses: actions/checkout@v7
         timeout-minutes: 2
         with:
-          ref: 4a637df47a4a4903e18eb466162d485b09885e1f
+          ref: 9f014e72af510783d58d00ad3d2db455a2f8117b
           persist-credentials: false
       - name: Require source checkpoint merged into main
         timeout-minutes: 1
         run: |
           set -euo pipefail
           git fetch --no-tags origin main
-          git merge-base --is-ancestor 4a637df47a4a4903e18eb466162d485b09885e1f FETCH_HEAD
+          git merge-base --is-ancestor 9f014e72af510783d58d00ad3d2db455a2f8117b FETCH_HEAD
       - name: Verify fixed carrier transport without executing its payload
         timeout-minutes: 1
         env:
@@ -103,7 +103,7 @@ jobs:
               assert len(source) == pins['sourceBytes'] and hashlib.sha256(source).hexdigest() == pins['sourceSHA256'], 'exact source length/hash'
               return source
 
-          pins = {'encodedBytes': 65383, 'frameBytes': 207118, 'xzBytes': 52268, 'transportBytes': 52306, 'transportSHA256': 'e615a8b30158d748c51833a16e5af43f03b26fd40fa7c01361f9d6f2d6268f6f', 'sourceBytes': 215389, 'sourceSHA256': 'd3e7aae1dad8d429a8a40c05a679251fc442d77004892bb44d7fd0dbab9b1cd8'}
+          pins = {'encodedBytes': 65353, 'frameBytes': 207118, 'xzBytes': 52244, 'transportBytes': 52282, 'transportSHA256': '960591825a8d85b613af8667d2c5ea3263b3706513c8ee951ce1a5fb33fb16f0', 'sourceBytes': 215389, 'sourceSHA256': '692960d50c9f8ce0307b2f21b16f24c765379e812be770fa849c840cce38b498'}
           candidate = decode(os.environ['CURSOR_CARRIER_B64'],pins)
           compile(candidate,'native_case.py','exec')
           target = pathlib.Path(tempfile.mkdtemp(prefix='TEST-cursor-carrier-',dir=os.environ['RUNNER_TEMP']))
@@ -115,7 +115,7 @@ jobs:
         timeout-minutes: 2
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = 4a637df47a4a4903e18eb466162d485b09885e1f
+          test "$(git rev-parse HEAD)" = 9f014e72af510783d58d00ad3d2db455a2f8117b
           export_dir=$(mktemp -d "$RUNNER_TEMP/TEST-r576-mkdir-export-XXXXXX")
           printf 'R576_MKDIR_EXPORT_DIR=%s\n' "$export_dir" >> "$GITHUB_ENV"
           cat > "$export_dir/r576_mkdir_diagnostic.py" <<'PY_R576'
@@ -136,7 +136,7 @@ jobs:
           import sys
           import time
 
-          SOURCE_SHA = 'd3e7aae1dad8d429a8a40c05a679251fc442d77004892bb44d7fd0dbab9b1cd8'
+          SOURCE_SHA = '692960d50c9f8ce0307b2f21b16f24c765379e812be770fa849c840cce38b498'
           LIMIT = 1 << 20
           DEADLINE = time.monotonic() + 30
 
@@ -438,14 +438,14 @@ jobs:
       - uses: actions/checkout@v7
         timeout-minutes: 2
         with:
-          ref: 4a637df47a4a4903e18eb466162d485b09885e1f
+          ref: 9f014e72af510783d58d00ad3d2db455a2f8117b
           persist-credentials: false
       - name: Require source checkpoint merged into main
         timeout-minutes: 1
         run: |
           set -euo pipefail
           git fetch --no-tags origin main
-          git merge-base --is-ancestor 4a637df47a4a4903e18eb466162d485b09885e1f FETCH_HEAD
+          git merge-base --is-ancestor 9f014e72af510783d58d00ad3d2db455a2f8117b FETCH_HEAD
       - uses: actions/setup-go@v7
         timeout-minutes: 3
         with:
@@ -508,7 +508,7 @@ jobs:
               assert len(source) == pins['sourceBytes'] and hashlib.sha256(source).hexdigest() == pins['sourceSHA256'], 'exact source length/hash'
               return source
 
-          pins = {'encodedBytes': 65383, 'frameBytes': 207118, 'xzBytes': 52268, 'transportBytes': 52306, 'transportSHA256': 'e615a8b30158d748c51833a16e5af43f03b26fd40fa7c01361f9d6f2d6268f6f', 'sourceBytes': 215389, 'sourceSHA256': 'd3e7aae1dad8d429a8a40c05a679251fc442d77004892bb44d7fd0dbab9b1cd8'}
+          pins = {'encodedBytes': 65353, 'frameBytes': 207118, 'xzBytes': 52244, 'transportBytes': 52282, 'transportSHA256': '960591825a8d85b613af8667d2c5ea3263b3706513c8ee951ce1a5fb33fb16f0', 'sourceBytes': 215389, 'sourceSHA256': '692960d50c9f8ce0307b2f21b16f24c765379e812be770fa849c840cce38b498'}
           candidate = decode(os.environ['CURSOR_CARRIER_B64'],pins)
           compile(candidate,'native_case.py','exec')
           parent = pathlib.Path(subprocess.check_output(
@@ -530,7 +530,7 @@ jobs:
         timeout-minutes: 1
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = 4a637df47a4a4903e18eb466162d485b09885e1f
+          test "$(git rev-parse HEAD)" = 9f014e72af510783d58d00ad3d2db455a2f8117b
           test "$(uname -m)" = x86_64
           test "$(uname -r)" = 6.17.0-1022-azure
           grep -Fx 'ID=ubuntu' /etc/os-release
@@ -571,7 +571,7 @@ jobs:
           import tarfile
           import urllib.request
 
-          SOURCE = '4a637df47a4a4903e18eb466162d485b09885e1f'
+          SOURCE = '9f014e72af510783d58d00ad3d2db455a2f8117b'
           ARCHIVE_URL = 'https://downloads.cursor.com/lab/2026.09.28-64d2043/linux/x64/agent-cli-package.tar.gz'
           ARCHIVE_SHA = '6e4cd936a4866b8a77c50ff51a564460d715772fabc477a01aa0f0455d9559f0'
           ARCHIVE_SIZE = 182618248
@@ -788,7 +788,7 @@ jobs:
               return output
 
 
-          output = prepare(os.environ['CURSOR_CARRIER'],'e4307bfbf49aa3f5d38e44686d75e045e871387e26fcc7d686c70cde24489091')
+          output = prepare(os.environ['CURSOR_CARRIER'],'77030250348f8af0ee99878627b59c39cc7d658974c11adca67f7d98a4d4c8fc')
           with open(os.environ['GITHUB_ENV'],'a') as environment:
               environment.write('CURSOR_EXECUTION_INPUTS='+str(output)+'\n')
           PY_PREPARE
@@ -820,8 +820,8 @@ jobs:
           import stat
           import tarfile
 
-          SOURCE = '4a637df47a4a4903e18eb466162d485b09885e1f'
-          BRIDGE = 'e4307bfbf49aa3f5d38e44686d75e045e871387e26fcc7d686c70cde24489091'
+          SOURCE = '9f014e72af510783d58d00ad3d2db455a2f8117b'
+          BRIDGE = '77030250348f8af0ee99878627b59c39cc7d658974c11adca67f7d98a4d4c8fc'
           FILE_LIMIT = 16 << 20
           TOTAL_LIMIT = 1 << 30
           ENTRY_LIMIT = 16384
@@ -1086,7 +1086,7 @@ jobs:
               parser.add_argument('--gid', type=int)
               raise SystemExit(main(parser.parse_args()))
           PY_EVIDENCE
-          sudo /usr/bin/python3 -B -S "$export_dir/case_evidence.py" --runner-temp "$CURSOR_CASE_PARENT" --source-sha d3e7aae1dad8d429a8a40c05a679251fc442d77004892bb44d7fd0dbab9b1cd8 --destination "$export_dir" --uid "$(id -u)" --gid "$(id -g)"
+          sudo /usr/bin/python3 -B -S "$export_dir/case_evidence.py" --runner-temp "$CURSOR_CASE_PARENT" --source-sha 692960d50c9f8ce0307b2f21b16f24c765379e812be770fa849c840cce38b498 --destination "$export_dir" --uid "$(id -u)" --gid "$(id -g)"
       - name: Always retain SAME-case TEST evidence and bounded preparation records
         if: always()
         timeout-minutes: 3
