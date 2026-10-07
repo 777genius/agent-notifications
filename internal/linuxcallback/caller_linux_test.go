@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,12 +19,13 @@ import (
 
 // This is a private TEST bus, never the user's actual desktop session. Red if
 // godbus stops injecting HeaderFieldSender or action data can forge authority.
-func TestActivateActionAuthenticatesActualWireSender(t *testing.T) {
+func privateCallerFixture(t *testing.T, configure func(*Handler), startup ...<-chan struct{}) (context.Context, *dbus.Conn, *dbus.Conn, *application, string, dbus.ObjectPath) {
+	t.Helper()
 	if _, e := exec.LookPath("dbus-daemon"); e != nil {
 		t.Skip("private test bus unavailable")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer cancel()
+	t.Cleanup(cancel)
 	bus := exec.CommandContext(ctx, "dbus-daemon", "--session", "--nofork", "--print-address=1")
 	out, e := bus.StdoutPipe()
 	if e != nil {
@@ -43,18 +45,13 @@ func TestActivateActionAuthenticatesActualWireSender(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer func() { _ = server.Close() }() // Best-effort private TEST fixture cleanup.
+	t.Cleanup(func() { _ = server.Close() }) // Best-effort private TEST fixture cleanup.
 	trusted, e := dbus.ConnectSessionBus()
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer func() { _ = trusted.Close() }() // Best-effort private TEST fixture cleanup.
-	forged, e := dbus.ConnectSessionBus()
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer func() { _ = forged.Close() }() // Best-effort private TEST fixture cleanup.
-	h, key, _, effects := callbackFixture(t)
+	t.Cleanup(func() { _ = trusted.Close() }) // Best-effort private TEST fixture cleanup.
+	h, key, _, _ := callbackFixture(t)
 	var r Record
 	b, e := ReadOwned(filepath.Join(h.Snapshot.Records, key+".json"), 16384)
 	if e != nil || decode(b, &r) != nil {
@@ -73,11 +70,31 @@ func TestActivateActionAuthenticatesActualWireSender(t *testing.T) {
 		t.Fatal(e)
 	}
 	h.ReadOwners = func(context.Context) (Owners, error) { return r.Owners, nil }
-	a := &application{handler: h, lifetime: ctx}
+	configure(h)
+	service, stop := context.WithCancel(ctx)
+	a := &application{handler: h, lifetime: service, cancel: stop, ready: true}
+	if len(startup) > 0 {
+		a.startup = startup[0]
+		a.ready = false
+	}
+	t.Cleanup(a.stop)
 	path := dbus.ObjectPath("/org/agentnotifications/TEST")
 	if e = server.Export(a, path, "org.freedesktop.Application"); e != nil {
 		t.Fatal(e)
 	}
+	return ctx, server, trusted, a, key, path
+}
+
+func TestActivateActionAuthenticatesActualWireSender(t *testing.T) {
+	var effects atomic.Int64
+	ctx, server, trusted, a, key, path := privateCallerFixture(t, func(h *Handler) {
+		h.Launch = func(context.Context, Snapshot, string, string) error { effects.Add(1); return nil }
+	})
+	forged, e := dbus.ConnectSessionBus()
+	if e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() { _ = forged.Close() })
 	call := func(c *dbus.Conn, parameters ...any) *dbus.Call {
 		return c.Object(server.Names()[0], path).CallWithContext(ctx, "org.freedesktop.Application.ActivateAction", 0, parameters...)
 	}
@@ -93,7 +110,7 @@ func TestActivateActionAuthenticatesActualWireSender(t *testing.T) {
 	if c := call(trusted, "open", []dbus.Variant{dbus.MakeVariant(key)}, data); c.Err != nil || effects.Load() != 1 {
 		t.Fatal("trusted actual sender rejected", c.Err, effects.Load())
 	}
-	cancel()
+	a.cancel()
 	if e := a.ActivateAction(dbus.Sender(trusted.Names()[0]), "open", []dbus.Variant{dbus.MakeVariant(key)}, data); e == nil || effects.Load() != 1 {
 		t.Fatal("shutdown admitted a late callback", e, effects.Load())
 	}
