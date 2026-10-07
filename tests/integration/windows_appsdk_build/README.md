@@ -10,8 +10,10 @@ Dependencies are exact stable package versions, checked on 2026-10-07:
 and [CppWinRT 3.0.260818.1](https://www.nuget.org/packages/Microsoft.Windows.CppWinRT/3.0.260818.1).
 The committed `packages.lock.json` comes from successful Windows build run
 `37616367344` on source `5f9edea4e1d2587e32495bda1cbcab1955f19a1c`, runner image
-`20260924.168.1`. Its SHA256 is
+`20260924.168.1`. The original CRLF artifact has SHA256
 `c0e64fe63a6dd7d4daf56ba387cfbc65d27cbd057b6f02a0e276c89864818a2b`.
+The repository normalizes JSON to LF; the committed lock has SHA256
+`a934c725e24227fbce8ec55b5fb338d18b4dd2731661fe3c426af893f177525c`.
 Restore uses locked mode, and the workflow exports the lock hash, exact source SHA,
 runner image, and diagnostic logs. A changed dependency graph must fail restore;
 update the reviewed lock before adding any native execution.
