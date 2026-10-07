@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.48.2] - 2026-10-07
+
+### Changed
+- macOS release candidate uses Developer ID team `86399583GS`, hardened runtime, API-key notarization and stapled-ticket verification.
+- Includes the macOS source improvements retained from the Linux/Windows 1.48.1 release: managed installation recovery, durable helper registration, Codex callback routing and OpenCode V1/V2 support.
+
+### Platform notes
+- Prepared as a macOS-only candidate for Intel and Apple Silicon. Publication and macOS channel promotion require candidate-specific native and installed-lifecycle qualification. Linux/Windows channels and GitHub global Latest remain unchanged.
+
 ## [1.48.1] - 2026-10-06
 
 ### Added
