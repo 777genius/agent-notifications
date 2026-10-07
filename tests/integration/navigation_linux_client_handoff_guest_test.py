@@ -39,6 +39,38 @@ def load(name, path):
     return module
 
 
+def parse_guest_cpu(raw):
+    if not 0 < len(raw) <= 32768:
+        raise RuntimeError('bounded_guest_CPUinfo_required')
+    processors = []
+    for block in raw.decode('ascii').strip().split('\n\n'):
+        fields = {}
+        for row in block.splitlines():
+            key, separator, value = row.partition(':')
+            if separator and key.strip() in ('processor', 'model name', 'flags'):
+                key = key.strip()
+                if key in fields: raise RuntimeError('duplicate_guest_CPU_field')
+                fields[key] = value.strip()
+        if set(fields) != {'processor', 'model name', 'flags'}:
+            raise RuntimeError('complete_guest_CPU_observation_required')
+        identifier, model, flags = fields['processor'], fields['model name'], fields['flags'].split()
+        if not identifier.isdigit() or not 0 < len(model) <= 512 or any(ord(c) < 32 or ord(c) > 126 for c in model) or not 0 < len(flags) <= 256 or len(flags) != len(set(flags)) or any(re.fullmatch('[a-z0-9_]{1,64}', flag) is None for flag in flags):
+            raise RuntimeError('bounded_guest_CPU_fields_required')
+        if 'vmx' in flags or 'svm' in flags:
+            raise RuntimeError('nested_virtualization_flags_must_be_off')
+        processors.append(dict(processor=int(identifier), modelName=model, flags=flags))
+    if [p['processor'] for p in processors] != [0, 1]:
+        raise RuntimeError('exact_two_guest_processors_required')
+    return dict(source='/proc/cpuinfo', rawBytes=len(raw), rawSHA256=hashlib.sha256(raw).hexdigest(), processors=processors)
+
+def observe_guest_cpu():
+    begin = now()
+    with Path('/proc/cpuinfo').open('rb') as stream: raw = stream.read(32769)
+    observation = parse_guest_cpu(raw)
+    observation.update(beginBoot=begin, endBoot=now(), beforeSelectedTreeRead=True)
+    return observation
+
+
 def client_activation_surfaces(trace, token):
     # Client and system libwayland can use different object-ID delimiters.
     pattern = (r'xdg_activation_v1(?P<separator>[@#])\d+\.activate\("' +
@@ -126,7 +158,8 @@ def main():
             raise RuntimeError('private_trace_exceeds_bound')
         return data.decode()
 
-    def wait(predicate, seconds=5):
+    def wait(predicate, seconds=5, *, phase='observation'):
+        report['observationPhase'] = phase
         end = min(deadline, now() + seconds)
         while True:
             if now() >= end: raise RuntimeError('bounded_observation_expired_no_retry')
@@ -551,6 +584,9 @@ raise SystemExit(0 if result['passed'] else 1)
         return found[0]['pid']
 
     try:
+        if shipping:
+            report['cpuProfileRequested'] = 'host,vmx=off,svm=off'
+            report['guestCPUObservation'] = observe_guest_cpu()
         ROOT.mkdir(mode=0o700); os.chown(ROOT, 0, 1000)
         # Shipping directory anchors need group read as well as traversal. The
         # root stays root-owned, group non-writable, and inaccessible to others.
@@ -562,6 +598,7 @@ raise SystemExit(0 if result['passed'] else 1)
         report['ownedCgroup'] = str(group)
         for name in ('home', 'config', 'data', 'cache', 'runtime', 'callback'):
             path = work / name; path.mkdir(mode=0o700); os.chown(path, 1000, 1000)
+        if shipping: report['firstSelectedVendorReadBeginBoot'] = now()
         if sha(kernel.EXE) != kernel.EXE_SHA or sha(kernel.LAUNCHER) != kernel.LAUNCHER_SHA or sha(Path('/etc/apparmor.d/chatgpt')) != kernel.PROFILE_SHA:
             raise RuntimeError('selected_vendor_installation_changed')
         if Path('/etc/apparmor.d/local/chatgpt').exists() or not any(row.split(' (', 1)[0] == 'chatgpt' for row in Path('/sys/kernel/security/apparmor/profiles').read_text().splitlines()):
@@ -648,17 +685,20 @@ raise SystemExit(0 if result['passed'] else 1)
             nonlocal layers
             layers = re.findall(r'get_layer_surface\(new id zwlr_layer_surface_v1@(\d+), wl_surface@(\d+), [^\n]*"notifications"\)', trace())
             return len(layers) == 1 and re.search(r'zwlr_layer_surface_v1@' + layers[0][0] + r'\.configure\(', trace()) is not None
-        wait(surface_ready)
+        wait(surface_ready, phase='native_surface_ready')
         surface = layers[0][1]
         configured = re.findall(r'zwlr_layer_surface_v1@' + layers[0][0] + r'\.configure\(\d+, (\d+), (\d+)\)', trace())
         if not configured or not (0 < int(configured[-1][0]) <= 1280 and 0 < int(configured[-1][1]) <= 720):
             raise RuntimeError('native_surface_dimensions_unproved')
         y = int(configured[-1][1]) // 2
-        root_spec(ROOT / 'pointer-spec.json', dict(nonce=nonce, y=y,
+        root_spec(ROOT / 'pointer-spec.json', dict(nonce=nonce, y=y, shipping=bool(shipping),
             entrySHA256=manifest['files']['guest-pointer-entry.py'], librarySHA256=manifest['files']['guest-pointer.so']))
         pointer = start('pointer', ['/usr/bin/python3', str(SEED / 'guest-pointer-entry.py')], True, True)
         entry_pattern = r'wl_pointer@(\d+)\.enter\(\d+, wl_surface@' + surface + r','
-        wait(lambda: re.search(entry_pattern, trace()) is not None)
+        def pointer_entered():
+            alive(pointer.pid)
+            return re.search(entry_pattern, trace()) is not None
+        wait(pointer_entered, phase='pointer_enter')
         enters = list(re.finditer(entry_pattern, trace()))
         if len(enters) != 1: raise RuntimeError('ambiguous_pointer_enter')
         for child in (sway, daemon, mako, gtk, frontend, pointer): alive(child.pid)
@@ -779,6 +819,27 @@ raise SystemExit(0 if result['passed'] else 1)
         report['passed'] = True
     except Exception as error:
         report['failure'] = type(error).__name__ + ': ' + str(error)
+        if not report['clickAttempted'] and report.get('observationPhase') in ('native_surface_ready', 'pointer_enter'):
+            diagnostics = dict(phase=report['observationPhase'], traces={})
+            report['preClickFailure'] = diagnostics
+            for name in ('pointer.stderr', mako_label + '.stderr'):
+                try:
+                    fd = os.open(ROOT / name, os.O_RDONLY | os.O_NOFOLLOW)
+                    with os.fdopen(fd, 'rb') as stream:
+                        before = os.fstat(stream.fileno())
+                        if not stat.S_ISREG(before.st_mode) or before.st_uid != 0:
+                            raise RuntimeError('owned_TEST_trace_required')
+                        offset = max(0, before.st_size - 4096)
+                        stream.seek(offset); captured = stream.read(4096)
+                        after = os.fstat(stream.fileno())
+                    diagnostics['traces'][name] = dict(observedFileBytes=before.st_size,
+                        capturedOffset=offset, capturedBytes=len(captured),
+                        capturedSHA256=hashlib.sha256(captured).hexdigest(),
+                        capturedBase64=base64.b64encode(captured).decode(),
+                        wholeFileCaptured=offset == 0 and len(captured) == before.st_size,
+                        sampledSizeUnchanged=before.st_size == after.st_size)
+                except Exception as trace_error:
+                    diagnostics['traces'][name] = dict(readFailure=type(trace_error).__name__)
     finally:
         failures = []
         if group_created:

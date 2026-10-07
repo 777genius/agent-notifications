@@ -52,6 +52,18 @@ def qualified_guest_result(guest, sources, shipping=None):
     scope = 'offline_shipping_go_native_handoff_TEST' if shipping else 'offline_selected_client_native_handoff_TEST'
     if not isinstance(guest, dict) or guest.get('scope') != scope:
         return False
+    if shipping:
+        cpu = guest.get('guestCPUObservation', {})
+        processors = cpu.get('processors', [])
+        if guest.get('cpuProfileRequested') != 'host,vmx=off,svm=off' or cpu.get('source') != '/proc/cpuinfo' or cpu.get('beforeSelectedTreeRead') is not True or type(cpu.get('rawBytes')) is not int or not 0 < cpu['rawBytes'] <= 32768 or len(cpu.get('rawSHA256', '')) != 64 or [p.get('processor') for p in processors] != [0, 1]:
+            return False
+        for processor in processors:
+            flags = processor.get('flags', [])
+            if not isinstance(processor.get('modelName'), str) or not 0 < len(processor['modelName']) <= 512 or not isinstance(flags, list) or not 0 < len(flags) <= 256 or any(not isinstance(flag, str) or len(flag) > 64 for flag in flags) or 'vmx' in flags or 'svm' in flags:
+                return False
+        times = (cpu.get('beginBoot'), cpu.get('endBoot'), guest.get('firstSelectedVendorReadBeginBoot'))
+        if any(type(value) not in (int, float) for value in times) or not 0 <= times[0] <= times[1] <= times[2]:
+            return False
     if shipping and (guest.get('shipping') != shipping or any(guest.get(key) is not True for key in ('normalSetupObserved', 'producerRemoved', 'mutableProducerStateRemoved', 'lateClickObserved', 'coldGoReaderObserved', 'exactURIObserved'))):
         return False
     if guest.get('sourceSHA256') != sources:
@@ -101,7 +113,7 @@ def main():
         bootstrapSHA256=sha(ROOT / 'guest-bootstrap.py'), manifestSHA256=sha(ROOT / 'manifest.json'),
         runtimeStageSHA256=STAGE_SHA)
     if 'shipping' in manifest:
-        report.update(scope='offline_shipping_go_native_handoff_TEST', shipping=manifest['shipping'])
+        report.update(scope='offline_shipping_go_native_handoff_TEST', shipping=manifest['shipping'], cpuProfileRequested='host,vmx=off,svm=off')
     child = None
     connection = None
 
@@ -152,6 +164,7 @@ def main():
         report['launchIntentBoot'] = time.clock_gettime(time.CLOCK_BOOTTIME); persist()
         with (ROOT / 'qemu.stdout').open('xb') as out, (ROOT / 'qemu.stderr').open('xb') as err:
             child = subprocess.Popen(['/usr/bin/qemu-system-x86_64', '-machine', 'q35,accel=kvm',
+                '-cpu', 'host,vmx=off,svm=off',
                 '-S', '-m', '4096M', '-smp', '2', '-nographic', '-display', 'none', '-monitor', 'none',
                 '-qmp', 'unix:' + str(endpoint) + ',server=on,wait=off',
                 '-serial', 'file:' + str(ROOT / 'serial.log'), '-no-reboot',
