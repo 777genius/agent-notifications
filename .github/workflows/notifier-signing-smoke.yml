@@ -1,6 +1,13 @@
 name: Notifier Signing Smoke Test
 
 on:
+  workflow_call:
+    inputs:
+      skip_notarize:
+        description: Skip notarization and only validate Developer ID signing
+        required: false
+        default: false
+        type: boolean
   push:
     tags:
       - "smoke-notary-*"
