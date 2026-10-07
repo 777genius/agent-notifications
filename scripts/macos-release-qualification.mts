@@ -235,14 +235,63 @@ sys.argv=['sealer','--manifest',str(manifest_path),'--manifest-sha256',manifest_
 sealer.main()
 proof=art/'sealed-business/business-proof.json'
 # Observe exceptions and content-free diagnostics without changing runner predicates.
-# runpy executes the exact candidate file; only fixed identifiers reach the report.
+# Load the exact candidate inertly, then call its original main/global namespace.
+# Setup delegates unchanged before the explicit public OS permission operation.
 diagnostic_driver=tools/'business-diagnostic.py'
-diagnostic_driver.write_text('''import json,pathlib,re,runpy,sys
+diagnostic_driver.write_text('''import json,os,pathlib,re,runpy,signal,subprocess,sys
 repo=pathlib.Path(sys.argv.pop(1)); output=repo/'.task-tools/artifacts/business-diagnostic.json'
 sys.argv=sys.argv[1:]
 sys.path[0]=str(repo/'scripts')
-allowed={'duplicate_diagnostic_key','diagnostic_line_bound','diagnostic_schema','diagnostic_actual_closed_dual_submission_required'}
-events=[]
+allowed={'duplicate_diagnostic_key','diagnostic_line_bound','diagnostic_schema','diagnostic_actual_closed_dual_submission_required','native_test_permission_not_allowed','native_test_permission_custody','native_test_permission_command_failed'}
+events=[]; permissions=[]
+def permission_operation(binary,action,root,env,require):
+    row={'operation':action,'permission':'unavailable','outcome':'unavailable'}
+    permissions.append(row)
+    proc=subprocess.Popen([str(binary),'setup-opencode',action,'--control-root',str(root/'control')],
+                          cwd=root,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
+    try:
+        stdout,stderr=proc.communicate(timeout=28)
+    except subprocess.TimeoutExpired:
+        row['outcome']='timeout'
+        for sig in (signal.SIGTERM,signal.SIGKILL):
+            try: os.killpg(proc.pid,sig)
+            except ProcessLookupError: pass
+            try:
+                proc.communicate(timeout=1)
+                break
+            except subprocess.TimeoutExpired: pass
+        row['reaped']=proc.poll() is not None
+        require(False,'native_test_permission_command_failed')
+    row['reaped']=proc.poll() is not None
+    match=re.fullmatch(rb'OpenCode notification permission: (allowed|undetermined|denied|unavailable)\\n',stderr) if len(stderr)<=4096 else None
+    require(proc.returncode==0 and not stdout and match is not None,'native_test_permission_command_failed')
+    row.update(permission=match[1].decode('ascii'),outcome='observed')
+    return row['permission']
+def install_with_permission(candidate,action,root,env,args,native_app=None):
+    original_setup(candidate,action,root,env,args,native_app)
+    if action!='install': return
+    require=runner['require']
+    require(os.environ.get('GITHUB_ACTIONS')=='true' and sys.platform=='darwin' and args.os=='darwin',
+            'native_test_permission_custody')
+    require(root.parent==repo/'.task-tools/artifacts/native' and re.fullmatch('TEST-installed-[a-f0-9]{24}',root.name)
+            and root.resolve(strict=True)==root,'native_test_permission_custody')
+    marker=json.loads((root/'.owned-test-root.json').read_text())
+    require(marker.get('purpose')=='TEST installed AN dual native' and env.get('AN_TEST_ROOT')==str(root)
+            and env.get('HOME')==str(root/'home'),'native_test_permission_custody')
+    ledger=json.loads((root/'control/ownership.json').read_text())
+    helper=pathlib.Path(ledger['Native']['Path'])/'Contents/MacOS/terminal-notifier-modern'
+    binary=root/'runtime'/('claude-notifications-darwin-'+args.arch)
+    require(helper.is_file() and helper.resolve(strict=True).is_relative_to(root) and binary.is_file()
+            and not any(p.is_symlink() for p in (helper,*helper.parents,binary,*binary.parents)),
+            'native_test_permission_custody')
+    require(runner['digest'](binary)==runner['digest'](candidate) and native_app is not None
+            and runner['digest'](helper)==runner['digest'](native_app/'Contents/MacOS/terminal-notifier-modern'),
+            'native_test_permission_custody')
+    permission=permission_operation(binary,'permission-status',root,env,require)
+    if permission=='undetermined':
+        # One explicit request on this disposable VM; uncertain outcomes are never retried.
+        permission=permission_operation(binary,'request-permission',root,env,require)
+    require(permission=='allowed','native_test_permission_not_allowed')
 def observe(frame,event,arg):
     if event=='call' and not frame.f_code.co_filename.startswith(str(repo/'scripts')+'/'): return None
     if event=='exception':
@@ -257,7 +306,12 @@ def observe(frame,event,arg):
             del events[:-64]
     return observe
 sys.settrace(observe)
-try: runpy.run_path(sys.argv[0],run_name='__main__')
+try:
+    namespace=runpy.run_path(sys.argv[0],run_name='TEST_native_diagnostic')
+    runner=namespace['main'].__globals__
+    original_setup=runner['setup']
+    runner['setup']=install_with_permission
+    sys.exit(runner['main']())
 finally:
     sys.settrace(None)
     rows=[]
@@ -276,7 +330,7 @@ finally:
             if isinstance(receipt,dict):
                 row['receipt']={key:item for key,item in receipt.items() if key in ('status','desktop','webhook') and item in ('submitted','unknown','unavailable','rejected','suppressed')}
             rows.append(row)
-    output.write_text(json.dumps({'exceptions':events,'diagnostics':rows[:32]}))
+    output.write_text(json.dumps({'exceptions':events,'diagnostics':rows[:32],'permissionOperations':permissions}))
 ''')
 subprocess.run([sys.executable,'-B',str(diagnostic_driver),str(repo),str(repo/'scripts/opencode-native-e2e.py'),'--manifest',str(manifest_path),
     '--manifest-sha256',manifest_sha,'--binary',str(binary),'--archive',str(host),'--os','darwin',
