@@ -22,6 +22,7 @@ on:
         options:
           - shell_foreground
           - owned_test_foreground
+          - disposable_global_shortcut
 permissions:
   contents: read
 concurrency:
@@ -198,6 +199,7 @@ jobs:
           SOURCE_SHA: ${{ github.sha }}
           SDK_PREREQUISITE_EVIDENCE: ${{ steps.execute.outputs.evidence_root }}
           SDK_VENDOR_EVIDENCE: ${{ steps.vendor.outputs.evidence_file }}
+          SDK_COLDCLICK_DISPOSABLE_CLIENT: windows-11-vs2026-arm
           SDK_COLDCLICK_SCENARIO: ${{ inputs.foreground_scenario }}
           SDK_COLD_EXE: ${{ steps.build.outputs.cold_exe }}
           SDK_COLD_EXE_SHA256: ${{ steps.build.outputs.cold_exe_sha256 }}

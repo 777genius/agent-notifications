@@ -291,6 +291,21 @@ static void inputAuthority() {
     wchar_t authority[64]{}; const DWORD length = GetEnvironmentVariableW(L"SDK_COLDCLICK_DISPOSABLE_TEST", authority, 64);
     demand(length == nonce.size() && std::wstring(authority, length) == nonce, "DisposableInputAuthority");
 }
+// Explicit disposable CI shortcut authority; not a production foreground capability.
+static std::wstring globalInputAuthority() {
+    inputAuthority(); wchar_t authority[160]{}, runner[64]{};
+    const DWORD n = GetEnvironmentVariableW(L"SDK_COLDCLICK_GLOBAL_AUTHORITY", authority, 160);
+    const DWORD r = GetEnvironmentVariableW(L"SDK_COLDCLICK_DISPOSABLE_CLIENT", runner, 64);
+    const std::wstring prefix = L"dispatch-attempt1:";
+    demand(r == std::wstring(L"windows-11-vs2026-arm").size() && std::wstring(runner, r) == L"windows-11-vs2026-arm", "DisposableClientRunnerAuthority");
+    demand(n == prefix.size() + 40 + 1 + nonce.size() && std::wstring(authority, prefix.size()) == prefix &&
+        std::wstring(authority + prefix.size() + 40, 1 + nonce.size()) == L":" + nonce, "GlobalShortcutSourceNonceAuthority");
+    const std::wstring source(authority + prefix.size(), 40);
+    demand(source.find_first_not_of(L"0123456789abcdef") == std::wstring::npos, "GlobalShortcutSourceSHA");
+    OSVERSIONINFOEXW client{}; client.dwOSVersionInfoSize = sizeof(client); client.wProductType = VER_NT_WORKSTATION;
+    require(VerifyVersionInfoW(&client, VER_PRODUCT_TYPE, VerSetConditionMask(0, VER_PRODUCT_TYPE, VER_EQUAL)) != FALSE, "WindowsClientProductType");
+    return source;
+}
 // Separate TEST GUI scenario; never an extension of the closed Shell provider list.
 struct OwnedForeground {
     HWND window = nullptr; DWORD thread = GetCurrentThreadId(); bool alive = false, finished = false, mayFree = false; ATOM atom = 0;
@@ -352,7 +367,7 @@ struct OwnedForeground {
     ~OwnedForeground() { if (!finished) { try { close(); } catch (...) {} } }
 };
 // One owned chord: the Shell scenario changes no focus; the separate TEST GUI owns its HWND.
-static void centerInput(const Binding& binding, JsonObject& proof, ULONGLONG deadline, OwnedForeground* own = nullptr) {
+static void centerInput(const Binding& binding, JsonObject& proof, ULONGLONG deadline, OwnedForeground* own = nullptr, bool globalScenario = false) {
     inputAuthority();
     put(proof, L"centerAttempted", true); put(proof, L"inputEffectUnknown", true); put(proof, L"stage", L"center_input");
     auto input = record(L"center_input"); num(input, L"deadlineBootMs", static_cast<double>(deadline));
@@ -374,12 +389,14 @@ static void centerInput(const Binding& binding, JsonObject& proof, ULONGLONG dea
     try {
         const auto sender = read(L"TEST-sender-collected.json");
         demand(sender.GetNamedString(L"nonce") == nonce && sender.GetNamedBoolean(L"collected") && sender.GetNamedNumber(L"exitCode") == 0, "CollectedSenderBeforeInput");
-        input.Insert(L"sender", sender); put(input, L"scenario", own ? L"owned_test_foreground" : L"shell_foreground"); const HWND foreground = GetForegroundWindow(); DWORD pid = 0;
-        demand(foreground != nullptr && GetWindowThreadProcessId(foreground, &pid) != 0, "ForegroundShellWindow"); std::unique_ptr<ShellOwner> owner;
-        if (own) { own->live(); demand(foreground == own->window && pid == GetCurrentProcessId(), "OwnActualForeground"); }
-        else owner = std::make_unique<ShellOwner>(pid);
-        num(input, L"foregroundPID", pid); put(input, L"foregroundBirth", own ? birth(GetCurrentProcess()) : owner->born);
-        auto immediate = [&] { interactive(); binding.stable(); if (own) { own->live(); demand(ownToken().Stringify() == own->token.Stringify(), "OwnForegroundTokenChanged"); } else owner->live(); DWORD actual = 0;
+        input.Insert(L"sender", sender); put(input, L"scenario", globalScenario ? L"disposable_global_shortcut" : own ? L"owned_test_foreground" : L"shell_foreground"); const HWND foreground = globalScenario ? nullptr : GetForegroundWindow(); DWORD pid = 0;
+        std::unique_ptr<ShellOwner> owner;
+        if (globalScenario) { put(input, L"globalSourceSHA", globalInputAuthority()); put(input, L"windowsClient", true); sameIdentity(ownToken(), binding.value.GetNamedObject(L"identity")); }
+        else { demand(foreground != nullptr && GetWindowThreadProcessId(foreground, &pid) != 0, "ForegroundShellWindow");
+            if (own) { own->live(); demand(foreground == own->window && pid == GetCurrentProcessId(), "OwnActualForeground"); }
+            else owner = std::make_unique<ShellOwner>(pid);
+            num(input, L"foregroundPID", pid); put(input, L"foregroundBirth", own ? birth(GetCurrentProcess()) : owner->born); }
+        auto immediate = [&] { interactive(); binding.stable(); if (globalScenario) { demand(winrt::to_hstring(globalInputAuthority()) == input.GetNamedString(L"globalSourceSHA"), "GlobalAuthorityChanged"); sameIdentity(ownToken(), binding.value.GetNamedObject(L"identity")); budget(deadline); return; } if (own) { own->live(); demand(ownToken().Stringify() == own->token.Stringify(), "OwnForegroundTokenChanged"); } else owner->live(); DWORD actual = 0;
             demand(GetForegroundWindow() == foreground && GetWindowThreadProcessId(foreground, &actual) != 0 && actual == pid, "RetainedForegroundShell"); budget(deadline); };
         auto released = [&] { for (int key : {VK_LWIN, VK_RWIN, static_cast<int>('N'), VK_SHIFT, VK_LSHIFT, VK_RSHIFT, VK_CONTROL, VK_LCONTROL, VK_RCONTROL, VK_MENU, VK_LMENU, VK_RMENU})
             demand(!(GetAsyncKeyState(key) & 0x8000), "InitiallyReleasedKeys"); };
@@ -402,10 +419,10 @@ static void centerInput(const Binding& binding, JsonObject& proof, ULONGLONG dea
     publish(L"TEST-center-input.json", input); put(proof, L"inputEffectUnknown", !accepted);
     demand(accepted, "CenterInputUnknown"); budget(deadline);
 }
-static int invoke(bool ownScenario = false) {
+static int invoke(bool ownScenario = false, bool globalScenario = false) {
     const ULONGLONG deadline = GetTickCount64() + 30000; Binding binding; auto proof = record(L"shell_invoke");
     num(proof, L"deadlineBootMs", static_cast<double>(deadline)); put(proof, L"stage", L"interactive");
-    put(proof, L"scenario", ownScenario ? L"owned_test_foreground" : L"shell_foreground"); std::unique_ptr<OwnedForeground, void(*)(OwnedForeground*)> owned(nullptr, [](OwnedForeground* p) {
+    put(proof, L"scenario", globalScenario ? L"disposable_global_shortcut" : ownScenario ? L"owned_test_foreground" : L"shell_foreground"); std::unique_ptr<OwnedForeground, void(*)(OwnedForeground*)> owned(nullptr, [](OwnedForeground* p) {
         if (!p->finished) { try { p->close(); } catch (...) {} }
         if (p->mayFree) delete p;
         // Unknown HWND custody retains exactly this one owner until own process exit.
@@ -458,7 +475,7 @@ static int invoke(bool ownScenario = false) {
                     // A visible owned banner needs no foreground/window/input dependency.
                     // Only this completed zero-title observation admits the separate GUI scenario.
                     if (ownScenario) { owned.reset(new OwnedForeground()); owned->create(binding, deadline); }
-                    centerInput(binding, proof, deadline, owned.get());
+                    centerInput(binding, proof, deadline, owned.get(), globalScenario);
                 }
                 Sleep(250); continue;
             }
@@ -504,6 +521,7 @@ int wmain(int argc, wchar_t** argv) {
         if (argc == 3 && nonce == argv[2] && !wcscmp(argv[1], L"--TEST-sdk-cold-collect")) return collect();
         if (argc == 3 && nonce == argv[2] && !wcscmp(argv[1], L"--TEST-sdk-cold-invoke")) return invoke();
         if (argc == 3 && nonce == argv[2] && !wcscmp(argv[1], L"--TEST-sdk-cold-invoke-own-foreground")) return invoke(true);
+        if (argc == 3 && nonce == argv[2] && !wcscmp(argv[1], L"--TEST-sdk-cold-invoke-global-shortcut")) return invoke(false, true);
         // SDK 2.5.1 registers this exact activation command. It selects the receiver, never admits an effect.
         if (argc == 2 && !wcscmp(argv[1], L"----AppNotificationActivated:")) return receiver();
         return 64;
