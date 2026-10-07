@@ -7,17 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.48.1] - 2026-10-06
+
 ### Added
-- One OpenCode plugin supports V1 `server` and V2 `setup`, with native qualification targeting 1.18.33, 1.18.34 and 2.0.21; final candidate qualification remains pending. V2 notifications verify native ownership and settled execution, suppress child sessions, and recover after temporary ownership failures ([#294](https://github.com/777genius/agent-notifications/pull/294)). SDK 0.3.0 publication and registry qualification remain pending.
+- One OpenCode plugin supports V1 `server` and V2 `setup`, with compatibility targeting 1.18.33, 1.18.34 and 2.0.21. V2 notifications verify native ownership and settled execution, suppress child sessions, and recover after temporary ownership failures ([#294](https://github.com/777genius/agent-notifications/pull/294)). The self-contained bundle incorporates SDK 0.3.0 built from the reviewed vendored tarball; separate SDK publication remains pending.
 - Interactive agent selection in the public installer, with separate installation scope and notification consent for each selected product. Cancellation performs no installation; partial failures retain completed installations and show recovery guidance ([#296](https://github.com/777genius/agent-notifications/pull/296)).
 - The `licenses` command and third-party license notices in portable packages and release assets.
+- Explicit Cursor setup selection, per-channel consent and managed installed Stop-event delivery, with selected-profile checks, repeat setup, revocation and recovery contracts ([#342](https://github.com/777genius/agent-notifications/pull/342), [#344](https://github.com/777genius/agent-notifications/pull/344), [#356](https://github.com/777genius/agent-notifications/pull/356), [#364](https://github.com/777genius/agent-notifications/pull/364)). Desktop delivery and exact-chat navigation require separate qualification.
 
 ### Changed
 - OpenCode V1 now consumes the 0.3.0 observer instead of 0.1.0: failed assistant steps produce terminal errors at idle, context overflow waits for recovery, and observed user association filters replayed completions. The V1 entry point remains supported.
+- OpenCode notifications include session titles and the current question or permission context ([#326](https://github.com/777genius/agent-notifications/pull/326)).
 - Claude CLI hooks now use the SDK-backed event source while preserving command invocation and notification handling ([#264](https://github.com/777genius/agent-notifications/pull/264), [#266](https://github.com/777genius/agent-notifications/pull/266)).
-- Fresh macOS Codex and combined bootstrap installs enable chat navigation by default when the registered official Codex Desktop app passes signature verification. Existing navigation policy and explicit choices remain preserved. If the verified app is unavailable, bootstrap reports its fallback to informational notifications without navigation.
+- The source includes fresh macOS Codex and combined bootstrap installs that enable chat navigation by default when the registered official Codex Desktop app passes signature verification. Existing navigation policy and explicit choices remain preserved. If the verified app is unavailable, bootstrap reports its fallback to informational notifications without navigation.
 
 ### Fixed
+- Preserve valid four-second notification budgets when repeated Windows clock readings cross a floating-point boundary.
 - Managed macOS installations recover after APFS device numbers change across a reboot, while preserving inode, physical parent, content and volume ownership checks. Install, update, reselection, purge and interrupted recovery accept valid persisted identities without adopting replacement assets ([#301](https://github.com/777genius/agent-notifications/issues/301)).
 - Failed lazy hook installations wait 300 seconds before retrying the same product, release and runtime root, prevent concurrent duplicate attempts, and continue dispatching an available previous binary. Manual repair and a different release bypass the matching cooldown ([#302](https://github.com/777genius/agent-notifications/issues/302)).
 - macOS LaunchServices registration uses committed durable native generations instead of temporary downloaded apps. Failed and disposable acquisitions do not register; successful commits reconcile obsolete conventional registrations owned by this product while retaining active, previous and published native generations. Foreign registrations remain untouched ([#302](https://github.com/777genius/agent-notifications/issues/302)).
@@ -29,6 +34,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Codex setup safely adopts owner-owned legacy locks with read-only group/world permissions, preserving inode and contents while keeping foreign files and unsafe permissions rejected ([#290](https://github.com/777genius/agent-notifications/pull/290)).
 - Installation preserves existing merged Claude hooks instead of applying legacy cleanup to user settings ([#265](https://github.com/777genius/agent-notifications/pull/265)).
 - Unchanged managed legacy skills migrate to the canonical `agent-notifications` skill without replacing user edits ([#306](https://github.com/777genius/agent-notifications/pull/306)).
+
+### Platform notes
+- v1.48.1 publishes only Linux amd64/arm64 and Windows amd64 artifacts. macOS source changes listed above are not shipped to the macOS channel, which remains at v1.46.1; GitHub global Latest also remains v1.46.1.
+- Navigation callback lifetime, resource ownership, Linux portal restart and Wayland token-forwarding contracts have new source-bound checks ([#345](https://github.com/777genius/agent-notifications/pull/345), [#349](https://github.com/777genius/agent-notifications/pull/349), [#354](https://github.com/777genius/agent-notifications/pull/354), [#355](https://github.com/777genius/agent-notifications/pull/355), [#357](https://github.com/777genius/agent-notifications/pull/357)). Selected installed-client focus/chat navigation and Windows interactive toast/cold callback qualification remain incomplete. Artifact and protocol checks do not establish visible desktop delivery.
+- Persistent OpenCode TUI/serve hosts are supported; one-shot `opencode run` delivery remains best effort during host shutdown.
+- Stock Windows OpenCode V1 1.18.33 retains the accepted delayed-event limitation: a delayed completion can notify once and recur after the 24-hour claim lifetime.
+- Gemini availability remains qualified on Linux amd64/arm64 and Windows amd64.
 
 ## [1.46.1] - 2026-10-01
 

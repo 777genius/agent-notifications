@@ -33,5 +33,35 @@ RUN apt-get update && xres=$(apt-cache policy libxres1 | awk '/Candidate:/ {prin
     apt-get install -y --no-install-recommends "libxres1=$xres" && \
     printf 'XRES=%s\n' "$xres" >> /fixture-build/apt-candidates.txt && \
     dpkg-query -W > /fixture-build/packages.txt
+# Resolve the same nonroot numeric identity used for the owned bind mount.
+# Existing accounts are preserved; no host passwd/group files are mounted.
+ARG TEST_HOST_UID
+ARG TEST_HOST_GID
+RUN python3 - "$TEST_HOST_UID" "$TEST_HOST_GID" <<'PY'
+import grp, pwd, re, sys
+if len(sys.argv) != 3 or any(not re.fullmatch(r'[1-9][0-9]{0,9}', raw) for raw in sys.argv[1:]):
+    raise SystemExit('bounded nonroot TEST UID/GID required')
+uid, gid = map(int, sys.argv[1:])
+if max(uid, gid) > 2147483647:
+    raise SystemExit('TEST UID/GID out of range')
+try:
+    grp.getgrgid(gid)
+except KeyError:
+    name = 'navigation-test-' + str(gid)
+    if any(group.gr_name == name for group in grp.getgrall()):
+        raise SystemExit('TEST group name already belongs to another GID')
+    with open('/etc/group', 'a') as output:
+        output.write(name + ':x:' + str(gid) + ':\n')
+try:
+    pwd.getpwuid(uid)
+except KeyError:
+    name = 'navigation-test-' + str(uid)
+    if any(user.pw_name == name for user in pwd.getpwall()):
+        raise SystemExit('TEST user name already belongs to another UID')
+    with open('/etc/passwd', 'a') as output:
+        output.write(name + ':x:' + str(uid) + ':' + str(gid) + ':TEST fixture:/nonexistent:/usr/sbin/nologin\n')
+if pwd.getpwuid(uid).pw_uid != uid or grp.getgrgid(gid).gr_gid != gid:
+    raise SystemExit('TEST passwd/group identity readback mismatch')
+PY
 COPY navigation-linux-portal-callback-probe.py navigation_linux_portal_test_app.py /fixture/
 ENTRYPOINT ["/usr/bin/python3", "/fixture/navigation-linux-portal-callback-probe.py", "--inside-test-container"]

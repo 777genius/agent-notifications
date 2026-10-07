@@ -6,6 +6,7 @@
 #include <sddl.h>
 #include <wincrypt.h>
 #include <notificationactivationcallback.h>
+#include "navigation_windows_vendor_sdk_test.h"
 #include <wrl/client.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Data.Json.h>
@@ -17,6 +18,7 @@
 #include <vector>
 #include <atomic>
 #include <algorithm>
+#include <cmath>
 #include <iostream>
 
 namespace fs = std::filesystem;
@@ -28,6 +30,8 @@ static std::wstring nonce, aumid, packageName, sid, executableHash;
 static JsonObject spec{nullptr};
 static GUID clsid{};
 static std::atomic<bool> callbackSeen{false}, callbackDone{false}, callbackValid{false}, duplicateCallback{false};
+static bool composed = false, composedLaunchEntered = false;
+static ULONGLONG callbackLeaseDeadline = 0;
 static bool authorityReady = false, showArmed = false, showEntered = false, showReturned = false;
 
 struct Handle {
@@ -272,6 +276,92 @@ static int activateSender() {
     put(retained, L"collected", true); publish("sender-exit.json", retained);
     require(code == 0, "activated sender failed"); cleanup.complete = true; return 0;
 }
+// Retained deny-write/delete input. ACL/path checks are not adversarial caller attestation.
+struct VendorInput {
+    Handle file;
+    JsonObject value{nullptr};
+    explicit VendorInput() : file(CreateFileW((root / "vendor-callback-spec.json").c_str(), GENERIC_READ,
+            FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr)) {
+        require(file.value != INVALID_HANDLE_VALUE, "vendor input unavailable");
+        BY_HANDLE_FILE_INFORMATION info{}; LARGE_INTEGER size{};
+        require(GetFileInformationByHandle(file.value, &info) && info.nNumberOfLinks == 1
+                && !(info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY))
+                && GetFileSizeEx(file.value, &size) && size.QuadPart > 0 && size.QuadPart <= 16384,
+                "bounded regular vendor input required");
+        require(hashFile(root / "vendor-callback-spec.json") == text(spec, L"vendorSpecSHA256"),
+                "vendor input digest changed");
+        std::string bytes(static_cast<size_t>(size.QuadPart), '\0'); DWORD read{};
+        require(ReadFile(file.value, bytes.data(), static_cast<DWORD>(bytes.size()), &read, nullptr)
+                && read == bytes.size(), "vendor input truncated");
+        value = JsonObject::Parse(winrt::to_hstring(bytes));
+        using namespace NavigationVendorTEST;
+        require(value.GetNamedNumber(L"schema") == 1 && text(value, L"nonce") == nonce
+                && text(value, L"threadID") == nonce && text(value, L"userSid") == sid
+                && value.GetNamedNumber(L"session") == spec.GetNamedNumber(L"session")
+                && text(value, L"callbackBinarySHA256") == executableHash
+                && text(value, L"name") == vendorName && text(value, L"publisher") == vendorPublisher
+                && text(value, L"familyName") == vendorFamily && text(value, L"fullName") == vendorFull
+                && text(value, L"version") == L"26.930.7945.0" && value.GetNamedNumber(L"architecture") == 12
+                && text(value, L"archiveSHA256") == L"a208d373c7c84aa3e0452cd3dd8406a6794d8139ec1260c64a770c2a00fbeeb8"
+                && text(value, L"observerSHA256").size() == 64
+                && text(value, L"addProofSHA256") == hashFile(root / "vendor-install-completed.proof")
+                && text(value, L"observerSHA256") == hashFile(root / "navigation-native-probe.exe"), "fixed vendor binding invalid");
+    }
+};
+static void composedAction(const JsonObject& callback, ULONGLONG entry, const VendorInput&) {
+    using namespace NavigationVendorTEST;
+    using namespace winrt::Windows::System;
+    const auto deadline = std::min(entry + 30000, callbackLeaseDeadline - 5000);
+    JsonObject result = JsonObject::Parse(callback.Stringify());
+    put(result, L"vendorSpecSHA256", text(spec, L"vendorSpecSHA256"));
+    number(result, L"entryBootMs", static_cast<double>(entry));
+    number(result, L"actionDeadlineBootMs", static_cast<double>(deadline));
+    number(result, L"leaseDeadlineBootMs", static_cast<double>(callbackLeaseDeadline));
+    bool queryEntered = false, queryReturned = false, launchEntered = false, launchReturned = false; HRESULT hr = S_OK;
+    std::wstring outcome = L"unknown";
+    try {
+        require(GetTickCount64() < deadline, "action admission expired"); exactInstalled();
+        auto sender = load("sender-exit.json");
+        require(sender.GetNamedBoolean(L"collected") && sender.GetNamedNumber(L"exitCode") == 0,
+                "collected sender required before SDK action");
+        winrt::Windows::Foundation::Uri uri(L"codex://threads/" + nonce);
+        JsonObject intent = JsonObject::Parse(result.Stringify()); put(intent, L"queryBoundaryArmed", true);
+        put(intent, L"familyName", std::wstring(vendorFamily)); put(intent, L"fullName", std::wstring(vendorFull));
+        put(intent, L"senderCreationTicks", text(sender, L"creationTicks")); put(intent, L"uri", std::wstring(uri.RawUri()));
+        publish("vendor-callback-query-intent.json", intent);
+        require(GetTickCount64() < deadline, "query admission expired");
+        const auto queryDeadline = std::min(deadline, GetTickCount64() + 10000);
+        number(result, L"queryDeadlineBootMs", static_cast<double>(queryDeadline));
+        require(GetTickCount64() < queryDeadline, "query phase admission expired");
+        queryEntered = true; auto support = await(Launcher::QueryUriSupportAsync(uri, LaunchQuerySupportType::Uri, vendorFamily), 10000, queryDeadline);
+        queryReturned = true; number(result, L"uriSupport", static_cast<int>(support));
+        if (support != LaunchQuerySupportStatus::Available) outcome = L"unavailable";
+        else {
+            exactInstalled(); require(GetTickCount64() < deadline, "launch admission expired");
+            put(intent, L"launchBoundaryArmed", true);
+            publish("vendor-callback-launch-intent.json", intent);
+            LauncherOptions options; options.TargetApplicationPackageFamilyName(vendorFamily); options.FallbackUri(nullptr);
+            require(GetTickCount64() < deadline, "launch boundary expired");
+            const auto launchDeadline = std::min(deadline, GetTickCount64() + 15000);
+            number(result, L"launchDeadlineBootMs", static_cast<double>(launchDeadline));
+            require(GetTickCount64() < launchDeadline, "launch phase admission expired");
+            launchEntered = true; composedLaunchEntered = true;
+            bool accepted = await(Launcher::LaunchUriAsync(uri, options), 15000, launchDeadline); launchReturned = true;
+            outcome = accepted ? L"handoff_accepted" : L"declined";
+        }
+    } catch (const winrt::hresult_error& error) { hr = error.code(); }
+      catch (...) { hr = E_FAIL; }
+    put(result, L"outcome", outcome); number(result, L"hresult", hr);
+    put(result, L"queryCallEntered", queryEntered); put(result, L"queryCallReturned", queryReturned);
+    put(result, L"launchCallEntered", launchEntered); put(result, L"launchCallReturned", launchReturned);
+    put(result, L"retryAllowed", false); put(result, L"targetConfirmed", false);
+    publish("effect.json", result);
+    JsonObject published = JsonObject::Parse(result.Stringify());
+    number(published, L"publishedBootMs", static_cast<double>(GetTickCount64()));
+    put(published, L"timely", GetTickCount64() < deadline);
+    publish("vendor-callback-published.json", published);
+    if (GetTickCount64() >= deadline) { JsonObject late; put(late, L"late", true); publish("vendor-callback-late.json", late); }
+}
 class Callback final : public INotificationActivationCallback {
     std::atomic<ULONG> refs{1};
 public:
@@ -284,6 +374,7 @@ public:
     ULONG STDMETHODCALLTYPE AddRef() override { return ++refs; }
     ULONG STDMETHODCALLTYPE Release() override { ULONG n = --refs; if (!n) delete this; return n; }
     HRESULT STDMETHODCALLTYPE Activate(LPCWSTR app, LPCWSTR args, const NOTIFICATION_USER_INPUT_DATA*, ULONG count) override {
+        const auto entry = GetTickCount64();
         if (callbackSeen.exchange(true)) {
             duplicateCallback = true;
             try { JsonObject rejection; put(rejection, L"duplicate", true); publish("callback-duplicate.json", rejection); } catch (...) {}
@@ -293,9 +384,12 @@ public:
             require(app && args && wcsnlen_s(app, 1024) < 1024 && wcsnlen_s(args, 37) == 36
                     && app == aumid && args == nonce && count == 0, "native callback target mismatch");
             auto record = ownIdentity(); put(record, L"targetMatches", true);
-            publish("callback.json", record); publish("effect.json", record);
+            if (composed) {
+                VendorInput binding; // Validation remains pre-effect and held through inline SDK calls.
+                publish("callback.json", record); composedAction(record, entry, binding);
+            } else { publish("callback.json", record); publish("effect.json", record); }
             callbackValid = true; callbackDone = true; return S_OK;
-        } catch (...) { callbackDone = true; return E_FAIL; }
+        } catch (...) { callbackDone = true; return composed && composedLaunchEntered ? S_OK : E_FAIL; }
     }
 };
 class Factory final : public IClassFactory {
@@ -318,10 +412,14 @@ public:
 static int callbackServer() {
     auto started = ownIdentity(); number(started, L"observedBootMs", static_cast<double>(GetTickCount64()));
     publish("callback-started.json", started);
+    const auto serverStart = GetTickCount64();
+    if (composed) callbackLeaseDeadline = serverStart + 30000;
+    if (composed) { number(started, L"leaseDeadlineBootMs", static_cast<double>(callbackLeaseDeadline));
+        publish("callback-lease.json", started); }
     Factory* factory = new Factory; DWORD cookie{};
     HRESULT hr = CoRegisterClassObject(clsid, factory, CLSCTX_LOCAL_SERVER, REGCLS_MULTIPLEUSE, &cookie);
     factory->Release(); check(hr);
-    auto end = GetTickCount64() + 30000;
+    auto end = composed ? callbackLeaseDeadline : GetTickCount64() + 30000;
     while (!callbackDone && GetTickCount64() < end) Sleep(25);
     // Keep the genuine OS-created process available for the controller to retain its exact handle.
     while (callbackValid && !fs::exists(root / "callback-exit-permit.json") && GetTickCount64() < end) Sleep(25);
@@ -370,9 +468,31 @@ static int collectCallback() {
         require(text(callback, key) == text(retained, key) && text(effect, key) == text(retained, key),
                 "callback effect disagrees with retained process");
     }
+    DWORD waitMs = 5000;
+    if (composed) {
+        auto terminal = load("vendor-callback-published.json"), lease = load("callback-lease.json");
+        require(text(terminal, L"vendorSpecSHA256") == text(spec, L"vendorSpecSHA256")
+                && terminal.GetNamedNumber(L"pid") == pid
+                && text(terminal, L"creationTicks") == text(retained, L"creationTicks"), "action terminal custody mismatch");
+        auto deadline = lease.GetNamedNumber(L"leaseDeadlineBootMs");
+        require(std::isfinite(deadline) && deadline == static_cast<ULONGLONG>(deadline)
+                && lease.GetNamedNumber(L"pid") == pid
+                && text(lease, L"nonce") == nonce
+                && text(lease, L"creationTicks") == text(retained, L"creationTicks")
+                && terminal.GetNamedNumber(L"leaseDeadlineBootMs") == deadline
+                && deadline > GetTickCount64() && deadline <= GetTickCount64() + 30000, "callback lease expired");
+        waitMs = static_cast<DWORD>(std::min(5000.0, deadline - GetTickCount64()));
+        require(waitMs > 0, "collection reserve expired");
+    }
     require(WaitForSingleObject(process.value, 0) == WAIT_TIMEOUT, "callback exited before handle retention");
     publish("callback-exit-permit.json", retained);
-    require(WaitForSingleObject(process.value, 5000) == WAIT_OBJECT_0, "callback exit not collected");
+    if (composed) {
+        auto deadline = load("callback-lease.json").GetNamedNumber(L"leaseDeadlineBootMs");
+        require(deadline > GetTickCount64(), "lease expired during permit publication");
+        waitMs = static_cast<DWORD>(std::min(5000.0, deadline - GetTickCount64()));
+        require(waitMs > 0, "callback wait reserve expired");
+    }
+    require(WaitForSingleObject(process.value, waitMs) == WAIT_OBJECT_0, "callback exit not collected");
     DWORD code{}; require(GetExitCodeProcess(process.value, &code) != FALSE, "callback exit code unavailable");
     number(retained, L"exitCode", code); put(retained, L"collected", true); publish("callback-exit.json", retained);
     auto terminal = load("callback-terminal.json");
@@ -442,6 +562,7 @@ int wmain(int argc, wchar_t** argv) {
         spec = load("msix-spec.json"); require(text(spec, L"nonce") == nonce, "immutable spec mismatch");
         aumid = text(spec, L"aumid"); packageName = text(spec, L"packageFullName"); sid = text(spec, L"userSid");
         executableHash = text(spec, L"executableSHA256");
+        composed = spec.GetNamedBoolean(L"vendorComposition", false);
         require(userSid(GetCurrentProcess()) == sid && session(GetCurrentProcessId()) == spec.GetNamedNumber(L"session"),
                 "controller user/session mismatch");
         if (mode == L"send" || mode == L"callback") ownIdentity();

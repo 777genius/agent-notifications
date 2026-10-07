@@ -1,0 +1,58 @@
+{
+  "status": "accepted_fragment_diagnosis_not_native_qualification",
+  "run": 37556658574,
+  "source": "ae86c732118099bf965073afcd285abf5bb76abc",
+  "artifact": {
+    "id": 11455403286,
+    "officialZIPBytes": 907501960,
+    "officialZIPDigest": "8190a480233ec101d3c73c7d870485d7dbc31e2ab02ffaab8976ad913953dff2",
+    "completeArchiveReceived": false
+  },
+  "diagnosticRange": {
+    "start": 906973211,
+    "end": 906979040,
+    "bytes": 5830,
+    "SHA256": "58d5a0ab929b098adfc35e2477597d9ee7192e18dfd3bb1483e5fdbcc1a1f206",
+    "exact206Observed": true,
+    "collected": true,
+    "localHeaderDescriptorCRCBothMembersChecked": true
+  },
+  "members": {
+    "controller-progress.json": "78a14149547bd588efbf01bfbff25b1812d3658c2ccc4ae4558fee4ff7ec5920",
+    "evidence.json": "305a00803990f99597def4d4da582caf6c4e31974e8a6eadab85e9719a177f46"
+  },
+  "failedStep": {
+    "mode": "vendor-state-before",
+    "PID": 4052,
+    "exitStatus": 2,
+    "signal": null,
+    "stdoutEmpty": true,
+    "stderrEmpty": true
+  },
+  "diagnosis": {
+    "sourceDefect": "composition child environment omits separate vendor opt-in required by native wmain",
+    "silentEarlyReturnCondition": "NAVIGATION_WINDOWS_VENDOR_NATIVE_TEST not exactly1",
+    "perChildEnvironmentRecorded": false,
+    "unsupportedModeOrArgCount": false,
+    "missingCallbackSpecIsDownstream": true
+  },
+  "observedQualification": {
+    "cleanupPassed": false,
+    "vendorCleanupUnknown": true,
+    "showAttempts": null,
+    "nativeEffectUncertain": false,
+    "nativeCallbackQualified": false,
+    "vendorCompositionQualified": false,
+    "navigationQualified": false,
+    "processQuiescenceQualified": false,
+    "wholeArchiveAccepted": false
+  },
+  "proposedSourceFix": {
+    "baseHEAD": "db8bfcf240884486706b8ad3e4edb0834080fbba",
+    "controllerSHA256": "11a700d99a8e747f8011b91f89b18c82b9b3155703b98d400907317cbc4b1272",
+    "scope": "child env only when composed AND observer AND exact4mode allowlist",
+    "newNativeEffects": false,
+    "futureNativeSuccessClaimed": false,
+    "strictPinnedTS7Passed": true
+  }
+}

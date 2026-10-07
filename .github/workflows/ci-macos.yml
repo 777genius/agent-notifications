@@ -3,16 +3,42 @@ name: macOS CI
 on:
   push:
     branches: [ main, develop ]
+  workflow_dispatch:
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review, edited]
 
 # Only a newer run for the same PR supersedes its checks.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && github.run_id || github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) }}
 
 jobs:
+  # Body/title edits create no canonical check names and cannot cancel full CI.
+  scope:
+    if: ${{ !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) }}
+    name: ${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && 'Metadata edit ignored (scope)' || 'Classify macOS CI scope' }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+    outputs:
+      mode: ${{ steps.classify.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Test conservative classification and installer mode contracts
+        run: |
+          python3 scripts/ci_macos_scope_test.py
+          bash bin/install_e2e_mode_test.sh
+      - name: Classify exact PR revision (errors retain full CI)
+        id: classify
+        run: python3 scripts/ci_macos_scope.py classify
+
   test:
-    name: Test on macOS (${{ matrix.go }})
+    needs: scope
+    if: ${{ !cancelled() && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) && needs.scope.outputs.mode != 'docs' }}
+    name: ${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && format('Metadata edit ignored (macOS {0})', matrix.go) || format('Test on macOS ({0})', matrix.go) }}
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.os || matrix.os == 'macos-15' && (vars.CI_MACOS_15_RUNNER || 'macos-15') || matrix.os == 'macos-26' && (vars.CI_MACOS_26_RUNNER || 'macos-26') || matrix.os }}
     timeout-minutes: 30
 
@@ -77,9 +103,6 @@ jobs:
           path: ${{ runner.temp }}/TEST-selector-e2e
           if-no-files-found: error
 
-      - name: Test one-line setup loader (isolated, offline)
-        run: bash bin/setup_test.sh
-
       - name: Test python/node installer runtime fallback (isolated, offline)
         run: bash bin/installer_runtime_fallback_e2e_test.sh
 
@@ -101,17 +124,25 @@ jobs:
       - name: Run install.sh unit tests
         run: bash bin/install_test.sh
 
-      - name: Run install.sh E2E tests (offline + mock)
-        run: bash bin/install_e2e_test.sh
+      # Both suites re-enter env -i with private HOME/XDG/TMPDIR. Only the
+      # installer binds 18888; the loader uses curl stubs and no network port.
+      # Native parallel waits for both children and propagates either failure.
+      - parallel:
+          - name: Test one-line setup loader (isolated, offline)
+            run: bash bin/setup_test.sh
+          - name: Run install.sh E2E tests (offline + mock)
+            run: bash bin/install_e2e_test.sh
 
       - name: Run install.sh E2E diagnostics (real network)
         if: matrix.go == '1.26'
-        run: bash bin/install_e2e_test.sh --real-network
+        run: bash bin/install_e2e_test.sh --real-network-only
         timeout-minutes: 5
         continue-on-error: true
 
   swift-test:
-    name: Swift notifier tests
+    needs: scope
+    if: ${{ !cancelled() && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) && needs.scope.outputs.mode != 'docs' }}
+    name: ${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && 'Metadata edit ignored (Swift)' || 'Swift notifier tests' }}
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'macos-15' || vars.CI_MACOS_15_RUNNER || 'macos-15' }}
     timeout-minutes: 30
 
@@ -121,3 +152,20 @@ jobs:
 
       - name: Run Swift tests
         run: swift test --package-path swift-notifier
+
+  full-ci:
+    name: ${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && 'Metadata edit ignored (full macOS gate)' || 'Full macOS CI required' }}
+    needs: [scope, test, swift-test]
+    if: ${{ always() && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Require actual full native success on this revision
+        env:
+          CI_MODE: ${{ needs.scope.outputs.mode }}
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: python3 scripts/ci_macos_scope.py gate test swift-test

@@ -26,7 +26,7 @@ concurrency:
 jobs:
   sdk-blackbox:
     name: Claude SDK ${{ matrix.os }}
-    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.runner || matrix.runner == 'ubuntu-24.04' && (vars.CI_LINUX_RUNNER || 'ubuntu-24.04') || matrix.runner == 'macos-15' && (vars.CI_MACOS_15_RUNNER || 'macos-15') || matrix.runner }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.runner || matrix.runner == 'ubuntu-24.04' && (vars.CI_LINUX_RUNNER || 'ubuntu-24.04') || matrix.runner }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -49,15 +49,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Isolate Darwin Python toolcache
-        if: matrix.os == 'darwin'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          # Cached macOS tool entries link to frameworks outside the toolcache.
-          $cache = Join-Path $env:RUNNER_TEMP ("NEWTEST-claude-sdk-python-" + [guid]::NewGuid())
-          New-Item -ItemType Directory $cache | Out-Null
-          Add-Content -LiteralPath $env:GITHUB_ENV -Value @("RUNNER_TOOL_CACHE=$cache", "AGENT_TOOLSDIRECTORY=$cache")
       - uses: actions/setup-python@v7
         id: python
         with:

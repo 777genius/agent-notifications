@@ -44,10 +44,12 @@ func Remaining(clock Clock, deadline notification.Deadline) (time.Duration, bool
 	}
 	boot, now, err := clock.Now()
 	seconds := deadline.NotAfter - now
-	if !validTime(boot, now, err) || boot != deadline.BootID || math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds <= 0 || seconds > TotalBudget.Seconds() {
+	// Use the same absolute bound as Admission: subtracting across a float64
+	// precision boundary can round a freshly admitted four seconds upward.
+	if !validTime(boot, now, err) || boot != deadline.BootID || math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds <= 0 || deadline.NotAfter > now+TotalBudget.Seconds() {
 		return 0, false
 	}
-	return time.Duration(seconds * float64(time.Second)), true
+	return time.Duration(math.Min(seconds, TotalBudget.Seconds()) * float64(time.Second)), true
 }
 
 // WatchBudget cancels on parent timeout or continuous-clock expiry/failure.
