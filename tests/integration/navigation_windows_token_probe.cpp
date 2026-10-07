@@ -16,6 +16,14 @@ struct Token {
 static void require(bool ok, const char* query) {
     if (!ok) throw Failure{query, GetLastError()};
 }
+template<typename T>
+static T queryFixedToken(HANDLE token, TOKEN_INFORMATION_CLASS kind, const char* name) {
+    T value{};
+    DWORD returned = 0;
+    require(GetTokenInformation(token, kind, &value, sizeof(value), &returned) != FALSE, name);
+    if (returned != sizeof(value)) throw Failure{name, ERROR_INVALID_DATA};
+    return value;
+}
 static std::vector<BYTE> queryToken(HANDLE token, TOKEN_INFORMATION_CLASS kind,
                                     const char* name, DWORD minimum) {
     DWORD needed = 0;
@@ -74,11 +82,11 @@ int wmain(int argc, wchar_t** argv) {
     try {
         Token token;
         require(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token.handle) != FALSE, "OpenProcessToken");
-        auto elevation = queryToken(token.handle, TokenElevation, "TokenElevation", sizeof(TOKEN_ELEVATION));
-        auto type = queryToken(token.handle, TokenElevationType, "TokenElevationType", sizeof(TOKEN_ELEVATION_TYPE));
+        const auto elevation = queryFixedToken<TOKEN_ELEVATION>(token.handle, TokenElevation, "TokenElevation");
+        const auto type = queryFixedToken<TOKEN_ELEVATION_TYPE>(token.handle, TokenElevationType, "TokenElevationType");
         auto integrity = queryToken(token.handle, TokenIntegrityLevel, "TokenIntegrityLevel", sizeof(TOKEN_MANDATORY_LABEL));
         auto user = queryToken(token.handle, TokenUser, "TokenUser", sizeof(TOKEN_USER));
-        auto statistics = queryToken(token.handle, TokenStatistics, "TokenStatistics", sizeof(TOKEN_STATISTICS));
+        const auto statistics = queryFixedToken<TOKEN_STATISTICS>(token.handle, TokenStatistics, "TokenStatistics");
         const auto levelSid = reinterpret_cast<TOKEN_MANDATORY_LABEL*>(integrity.data())->Label.Sid;
         boundedSidSize(integrity, levelSid, "IntegritySID");
         const BYTE subCount = *GetSidSubAuthorityCount(levelSid);
@@ -87,10 +95,10 @@ int wmain(int argc, wchar_t** argv) {
         const auto userSid = reinterpret_cast<TOKEN_USER*>(user.data())->User.Sid;
         const DWORD userSize = boundedSidSize(user, userSid, "TokenUserSID");
         const std::string sidHash = digest(reinterpret_cast<const BYTE*>(userSid), userSize);
-        const auto& luid = reinterpret_cast<TOKEN_STATISTICS*>(statistics.data())->AuthenticationId;
+        const auto& luid = statistics.AuthenticationId;
         const std::string authHash = digest(reinterpret_cast<const BYTE*>(&luid), sizeof(luid));
-        const DWORD elevated = reinterpret_cast<TOKEN_ELEVATION*>(elevation.data())->TokenIsElevated;
-        const auto elevationType = *reinterpret_cast<TOKEN_ELEVATION_TYPE*>(type.data());
+        const DWORD elevated = elevation.TokenIsElevated;
+        const auto elevationType = type;
         if (elevated > 1 || elevationType < TokenElevationTypeDefault || elevationType > TokenElevationTypeLimited)
             throw Failure{"TokenValue", ERROR_INVALID_DATA};
         DWORD session = 0;
