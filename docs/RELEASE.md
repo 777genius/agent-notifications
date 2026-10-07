@@ -265,12 +265,29 @@ The assets-before-main bump instructions above apply to a full-platform release.
 v1.48.1 does not build or publish ClaudeNotifier.app. macOS consumers retain the
 signed and notarized helper from their qualified v1.46.1 channel.
 
-Future macOS candidates use the manual `macos-qualification.yml` workflow. Run
-it on the reviewed candidate ref whose five version values match the input:
+Future macOS candidates use the manual `macos-qualification.yml` workflow.
+Signing runs only when the repository owner dispatches from
+`release/macos-signing`, inside the `macos-signing` GitHub environment. PR and
+`smoke-notary-*` tag events do not sign. The qualification caller fails before
+building artifacts when the actor or ref is untrusted.
+
+After review and merge, the owner fast-forwards the trusted signing branch to
+the exact reviewed `main` SHA. Never force-push this branch or dispatch signing
+from an implementation branch. All five candidate version values must match the
+input. For example, replace `REVIEWED_MAIN_SHA` and `vX.Y.Z` with verified values:
 
 ```bash
-gh workflow run macos-qualification.yml --ref release/vX.Y.Z -f candidate_version=vX.Y.Z
+git fetch origin main
+git merge-base --is-ancestor REVIEWED_MAIN_SHA origin/main
+git push origin REVIEWED_MAIN_SHA:refs/heads/release/macos-signing
+gh workflow run macos-qualification.yml --ref release/macos-signing -f candidate_version=vX.Y.Z
+# Notifier-only verification uses the same trusted branch and environment:
+gh workflow run notifier-signing-smoke.yml --ref release/macos-signing -f skip_notarize=false
 ```
+
+`use_github_runner=true` may be supplied to either workflow when the configured
+runner is unavailable. These commands qualify artifacts only; they do not
+publish a release or promote platform channels.
 
 The workflow builds the four native Go executables and portable package on each
 Darwin architecture, then runs the existing CLI/config/local-webhook artifact
@@ -293,7 +310,7 @@ Promote both macOS source/index rows using the platform-channel procedure only
 after public assets are verified. Linux/Windows rows, legacy `main` versions and
 global Latest remain unchanged unless a separately qualified release includes them.
 
-### Required GitHub Secrets
+### Required macos-signing environment secrets
 
 | Secret | Description |
 |--------|-------------|

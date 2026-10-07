@@ -21,7 +21,22 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  signing-custody:
+    name: Require owner dispatch from the trusted signing branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Reject untrusted signing dispatch
+        env:
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_ACTOR" = "$REPOSITORY_OWNER"
+          test "$GITHUB_REF" = refs/heads/release/macos-signing
+
   qualify-darwin:
+    needs: signing-custody
     name: Build and qualify Darwin ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
@@ -117,6 +132,7 @@ jobs:
           retention-days: 14
 
   qualify-notifier:
+    needs: signing-custody
     name: Sign and notarize universal notifier
     uses: ./.github/workflows/notifier-signing-smoke.yml
     with:
