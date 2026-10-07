@@ -121,10 +121,17 @@ static std::array<std::string, 2> modulePins(const std::wstring& root) {
     return pins;
 }
 static bool installed(winrt::Windows::Management::Deployment::PackageManager const& manager, const PackagePin& expected) {
-    unsigned count = 0;
+    using Architecture = winrt::Windows::System::ProcessorArchitecture;
+    const bool framework = !wcscmp(expected.name, packages[0].name);
+    unsigned enumerated = 0, count = 0;
     for (const auto& p : manager.FindPackagesForUser(L"", expected.name, publisher)) {
-        if (++count > 1 || p.Id().FullName() != fullName(expected) || p.Id().Publisher() != publisher ||
-            p.Id().Architecture() != winrt::Windows::System::ProcessorArchitecture::Arm64)
+        if (++enumerated > 8) throw Failure{"CurrentUserAdmissionCountBound", ERROR_MORE_DATA};
+        const auto id = p.Id();
+        if (id.Name() != expected.name || id.Publisher() != publisher || (framework && !p.IsFramework()))
+            throw Failure{"ConflictingCurrentUserPackage", ERROR_INVALID_DATA};
+        // ARM64 supports coexisting Microsoft x86/x64 Frameworks; they never prove ARM64 presence.
+        if (framework && (id.Architecture() == Architecture::X86 || id.Architecture() == Architecture::X64)) continue;
+        if (++count > 1 || id.FullName() != fullName(expected) || id.Architecture() != Architecture::Arm64)
             throw Failure{"ConflictingCurrentUserPackage", ERROR_INVALID_DATA};
     }
     return count == 1;
