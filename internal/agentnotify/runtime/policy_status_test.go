@@ -83,7 +83,10 @@ func TestStatusNavigationEligibility(t *testing.T) {
 			}
 		})
 	}
-	for _, platform := range []string{"linux", "windows", "freebsd"} {
+	if got := navigationStatus(base, policy, &caller, "linux"); got != (agentnotify.NavigationStatus{Capability: "unavailable", Precision: "none", Reason: "application_unavailable"}) {
+		t.Fatalf("Linux without explicit binding: %+v", got)
+	}
+	for _, platform := range []string{"windows", "freebsd"} {
 		if got := navigationStatus(base, policy, &caller, platform); got != (agentnotify.NavigationStatus{Capability: "unavailable", Precision: "none", Reason: "unsupported_platform"}) {
 			t.Fatalf("%s navigation: %+v", platform, got)
 		}
@@ -122,7 +125,9 @@ func TestContextualStatusReadsOnceWithoutEffectsOrIdentityDisclosure(t *testing.
 	o := origin.Context{Provider: "codex", Namespace: "mcp", SessionID: "private-thread", Provenance: origin.ClientMetadata, Locality: origin.LocalityUnknown, Interface: origin.InterfaceUnknown}
 	got := b.StatusForOrigin(context.Background(), o)
 	wantNavigation := agentnotify.NavigationStatus{Capability: "eligible", Precision: "chat_id", Scope: "local_current_profile", Reason: "configured_codex_desktop"}
-	if runtime.GOOS != "darwin" {
+	if runtime.GOOS == "linux" {
+		wantNavigation = agentnotify.NavigationStatus{Capability: "unavailable", Precision: "none", Reason: "application_unavailable"}
+	} else if runtime.GOOS != "darwin" {
 		wantNavigation = agentnotify.NavigationStatus{Capability: "unavailable", Precision: "none", Reason: "unsupported_platform"}
 	}
 	want := Status{Configuration: "configured", ExplicitIntent: true, DesktopEnabled: true, OfflineCapability: "eligible", Permission: "not_checked", Navigation: wantNavigation}
