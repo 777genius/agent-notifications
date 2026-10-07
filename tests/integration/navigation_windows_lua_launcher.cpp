@@ -90,7 +90,9 @@ static void boundOwned(Handle& handle, const std::wstring& path, PSID user, bool
     if (error) throw Failure{"OwnObjectOwner", error};
     if (!owner || !EqualSid(owner, user)) throw Failure{"ForeignObjectOwner", ERROR_ACCESS_DENIED};
 }
-static std::vector<std::wstring> closedLeaves(const std::wstring& nonce) {
+static std::vector<std::wstring> closedLeaves(const std::wstring& nonce, bool cold = false) {
+    if (cold) return {L"TEST-launcher-" + nonce + L".exe", L"TEST-sdk-" + nonce + L".exe",
+        L"Microsoft.WindowsAppRuntime.Bootstrap.dll", L"TEST-module-pins.txt", L"TEST-cold-binding.json"};
     return {L"TEST-launcher-" + nonce + L".exe", L"TEST-sdk-" + nonce + L".exe",
         L"Microsoft.WindowsAppRuntime.Bootstrap.dll", L"TEST-module-pins.txt", L"Microsoft.WindowsAppRuntime.2.msix",
         L"Microsoft.WindowsAppRuntime.DDLM.2.msix", L"Microsoft.WindowsAppRuntime.Main.2.msix", L"Microsoft.WindowsAppRuntime.Singleton.2.msix",
@@ -108,8 +110,8 @@ static void freshRootPath(const std::wstring& root, const std::wstring& nonce) {
 }
 static int createPrivateRoot(int argc, wchar_t** argv) {
     if (argc != 5 || !validNonce(argv[2])) return 64;
-    const bool deployment = !wcscmp(argv[4], L"deploy");
-    if (!deployment && wcscmp(argv[4], L"bootstrap")) return 64;
+    const bool deployment = !wcscmp(argv[4], L"deploy"), cold = !wcscmp(argv[4], L"coldclick");
+    if (!deployment && !cold && wcscmp(argv[4], L"bootstrap")) return 64;
     const std::wstring root(argv[3]), wideNonce(argv[2]); const std::string nonce(wideNonce.begin(), wideNonce.end());
     try {
         freshRootPath(root, wideNonce);
@@ -123,7 +125,7 @@ static int createPrivateRoot(int argc, wchar_t** argv) {
         SECURITY_ATTRIBUTES rootSA{sizeof(rootSA), &rootSD, FALSE}, fileSA{sizeof(fileSA), &fileSD, FALSE};
         require(CreateDirectoryW(root.c_str(), &rootSA) != FALSE, "CreateFreshPrivateRoot");
         Handle directory; boundOwned(directory, root, user, true); privateAcl(directory.value, user, system, true);
-        const auto leaves = closedLeaves(wideNonce); const unsigned count = deployment ? 12 : 4;
+        const auto leaves = closedLeaves(wideNonce, cold); const unsigned count = cold ? 5 : (deployment ? 12 : 4);
         for (unsigned i = 0; i < count; ++i) {
             const auto path = root + L"\\" + leaves[i]; Handle created;
             created.value = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE | READ_CONTROL | WRITE_DAC,
@@ -139,7 +141,8 @@ static int createPrivateRoot(int argc, wchar_t** argv) {
     } catch (...) { return 1; }
 }
 static int sealRoot(int argc, wchar_t** argv) {
-    if (argc != 4 || !validNonce(argv[2])) return 64;
+    if ((argc != 4 && argc != 5) || !validNonce(argv[2]) || (argc == 5 && wcscmp(argv[4], L"coldclick"))) return 64;
+    const bool cold = argc == 5;
     const std::wstring root(argv[3]), nonceWide(argv[2]); const std::string nonce(nonceWide.begin(), nonceWide.end());
     try {
         freshRootPath(root, nonceWide);
@@ -149,7 +152,7 @@ static int sealRoot(int argc, wchar_t** argv) {
         BYTE system[SECURITY_MAX_SID_SIZE]{}; DWORD bytes = sizeof(system);
         require(CreateWellKnownSid(WinLocalSystemSid, nullptr, system, &bytes) != FALSE, "SealSystemSID");
         Handle heldRoot; boundOwned(heldRoot, root, user, true); privateAcl(heldRoot.value, user, system, true);
-        const auto allowed = closedLeaves(nonceWide);
+        const auto allowed = closedLeaves(nonceWide, cold);
         WIN32_FIND_DATAW entry{}; HANDLE enumeration = FindFirstFileW((root + L"\\*").c_str(), &entry);
         require(enumeration != INVALID_HANDLE_VALUE, "SealClosedFiles"); unsigned count = 0;
         try {
@@ -158,7 +161,7 @@ static int sealRoot(int argc, wchar_t** argv) {
                 if (std::find(allowed.begin(), allowed.end(), leaf) == allowed.end()) throw Failure{"SealForeignLeaf", ERROR_INVALID_DATA};
                 Handle file; boundOwned(file, root + L"\\" + leaf, user, false); privateAcl(file.value, user, system, false); ++count;
             } while (FindNextFileW(enumeration, &entry));
-            if (GetLastError() != ERROR_NO_MORE_FILES || (count != 4 && count != 12)) throw Failure{"SealClosedSetCount", ERROR_INVALID_DATA};
+            if (GetLastError() != ERROR_NO_MORE_FILES || (cold ? count != 5 : (count != 4 && count != 12))) throw Failure{"SealClosedSetCount", ERROR_INVALID_DATA};
         } catch (...) { FindClose(enumeration); throw; }
         FindClose(enumeration);
         std::printf("{\"nonce\":\"%s\",\"pid\":%lu,\"sealed\":true,\"protectedDACL\":true,\"files\":%u}\n", nonce.c_str(), GetCurrentProcessId(), count);
@@ -191,7 +194,8 @@ int wmain(int argc, wchar_t** argv) {
     if (argc >= 2 && !wcscmp(argv[1], L"--TEST-seal-sdk-root")) return sealRoot(argc, argv);
     if (argc != 5 || !validNonce(argv[2])) return 64;
     const bool deploy = wcscmp(argv[1], L"--TEST-sdk-deployment") == 0;
-    const bool sdk = deploy || wcscmp(argv[1], L"--TEST-sdk-bootstrap") == 0;
+    const bool cold = wcscmp(argv[1], L"--TEST-sdk-cold-sender") == 0;
+    const bool sdk = deploy || cold || wcscmp(argv[1], L"--TEST-sdk-bootstrap") == 0;
     const bool medium = !deploy && (sdk || wcscmp(argv[1], L"--TEST-lua-medium-token-preflight") == 0);
     if (!sdk && !medium && wcscmp(argv[1], L"--TEST-lua-token-preflight")) return 64;
     const std::wstring wideNonce(argv[2]), root(argv[3]), probe(argv[4]);
@@ -199,7 +203,7 @@ int wmain(int argc, wchar_t** argv) {
     std::string baseline = "null", held = "null", output, stderrText, birth = "null";
     std::string restrictedBefore = "null", restrictedAfter = "null", parentAfter = "null";
     bool loweringAttempted = false, integrityLowered = false;
-    DWORD childPid = 0, exitCode = 0;
+    DWORD childPid = 0, exitCode = 0; ULONGLONG collectionBootMs = 0;
     bool collected = false, timedOut = false, terminated = false, admin = false, adminQueried = false, exitKnown = false, identity = false, complete = false;
     const char* errorQuery = nullptr;
     DWORD errorCode = 0, cleanupError = 0;
@@ -285,7 +289,7 @@ int wmain(int argc, wchar_t** argv) {
         if (!windowsLength || windowsLength >= 32768) throw Failure{"SystemRoot", ERROR_INVALID_DATA};
         std::wstring environment = L"SystemRoot=" + std::wstring(windows) + L'\0' + L"TEMP=" + root + L'\0' + L"TMP=" + root;
         environment.push_back(L'\0'); environment.push_back(L'\0');
-        std::wstring command = L"\"" + probe + L"\" " + (sdk ? (deploy ? L"--TEST-sdk-deploy " : L"--TEST-sdk-bootstrap ") : L"--read-only-TEST-token-preflight ") + wideNonce;
+        std::wstring command = L"\"" + probe + L"\" " + (sdk ? (deploy ? L"--TEST-sdk-deploy " : (cold ? L"--TEST-sdk-cold-sender " : L"--TEST-sdk-bootstrap ")) : L"--read-only-TEST-token-preflight ") + wideNonce;
         if (sdk) command += L" \"" + root + L"\" " + std::wstring(before.sid.begin(), before.sid.end()) + L" " +
             std::wstring(before.auth.begin(), before.auth.end()) + L" " + std::to_wstring(before.session);
         const ULONGLONG sdkDeadline = GetTickCount64() + (deploy ? 90000 : 30000);
@@ -352,8 +356,9 @@ int wmain(int argc, wchar_t** argv) {
             } catch (...) { if (!errorQuery) { errorQuery = "collection_exception"; errorCode = ERROR_NOT_ENOUGH_MEMORY; } }
         }
     }
+    if (cold && collected) collectionBootMs = GetTickCount64();
     const std::string record = "{\"nonce\":" + quoted(nonce) + ",\"pid\":" + std::to_string(GetCurrentProcessId()) +
-        ",\"variant\":" + quoted(sdk ? (deploy ? "sdk-deploy" : "sdk-bootstrap") : (medium ? "lua-medium" : "lua-only")) + ",\"restrictedBefore\":" + restrictedBefore +
+        ",\"variant\":" + quoted(sdk ? (deploy ? "sdk-deploy" : (cold ? "sdk-cold-sender" : "sdk-bootstrap")) : (medium ? "lua-medium" : "lua-only")) + ",\"restrictedBefore\":" + restrictedBefore +
         ",\"restrictedAfter\":" + restrictedAfter + ",\"parentAfter\":" + parentAfter +
         ",\"loweringAttempted\":" + (loweringAttempted ? "true" : "false") + ",\"integrityLowered\":" + (integrityLowered ? "true" : "false") +
         ",\"baseline\":" + baseline + ",\"held\":" + held + ",\"childPid\":" + std::to_string(childPid) +
@@ -363,7 +368,8 @@ int wmain(int argc, wchar_t** argv) {
         ",\"childTerminated\":" + (terminated ? "true" : "false") + ",\"cleanupError\":" + (cleanupError ? std::to_string(cleanupError) : "null") +
         ",\"childRecord\":" + quoted(output) + ",\"childStderr\":" + quoted(stderrText) +
         ",\"queriesComplete\":" + (complete ? "true" : "false") + ",\"query\":" + (errorQuery ? quoted(errorQuery) : "null") +
-        ",\"error\":" + (errorQuery ? std::to_string(errorCode) : "null") + ",\"sdkNativeCallback\":false,\"notificationEffects\":0}";
+        ",\"error\":" + (errorQuery ? std::to_string(errorCode) : "null") + ",\"sdkNativeCallback\":false,\"notificationEffects\":" + (cold ? "null" : "0") +
+        (cold ? ",\"collectionBootMs\":" + (collected ? std::to_string(collectionBootMs) : "null") : "") + "}";
     if (record.size() > 16384) return 65;
     std::puts(record.c_str());
     return complete ? 0 : 1;
