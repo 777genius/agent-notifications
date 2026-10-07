@@ -41,7 +41,11 @@ func (f fakeDelivery) CheckReadiness(_ context.Context, r notification.Request) 
 }
 func nav(r notification.Request) notification.NavigationResult {
 	if r.Target.ThreadID != "" {
-		return notification.NavigationResult{Capability: "available", Precision: "chat_id", Scope: "local_current_profile"}
+		scope := "local_current_profile"
+		if r.Target.Linux.SnapshotPath != "" {
+			scope = "selected_linux_installation"
+		}
+		return notification.NavigationResult{Capability: "available", Precision: "chat_id", Scope: scope}
 	}
 	return notification.NavigationResult{Capability: "disabled", Precision: "none"}
 }
