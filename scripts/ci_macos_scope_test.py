@@ -49,6 +49,8 @@ class ScopeTests(unittest.TestCase):
             for status in ['A', 'M', 'D']:
                 self.assertEqual(classify('pull_request', EVENT, raw(status, path)), 'windows-only')
         self.assertEqual(classify('pull_request', EVENT, raw('R100', WINDOWS[2], WINDOWS[3])), 'windows-only')
+        for score in ['R000', 'R001', 'R050', 'R085', 'R099', 'R100']:
+            self.assertEqual(classify('pull_request', EVENT, raw(score, WINDOWS[2], WINDOWS[3])), 'windows-only')
         for old, new in [('other.cpp', WINDOWS[2]), (WINDOWS[2], 'other.vcxproj')]:
             self.assertEqual(classify('pull_request', EVENT, raw('R100', old, new)), 'full')
         self.assertEqual(classify('pull_request', EVENT, raw('M', 'README.md') + raw('M', WINDOWS[1])), 'full')
@@ -63,6 +65,8 @@ class ScopeTests(unittest.TestCase):
                 self.assertEqual(classify('pull_request', EVENT, raw('M', path)), 'full')
         for status in ['T', 'U', 'C100', 'R101', 'unknown']:
             self.assertEqual(classify('pull_request', EVENT, raw(status, WINDOWS[2])), 'full')
+        for score in ['R101', 'R85', 'R0', 'R00', 'R0100', 'R-01', 'R100x', 'R00101']:
+            self.assertEqual(classify('pull_request', EVENT, raw(score, WINDOWS[2], WINDOWS[3])), 'full')
         for mode in ['120000', '160000', '040000']:
             for status in ['M', 'A', 'D']:
                 self.assertEqual(classify('pull_request', EVENT, raw(status, WINDOWS[2], old_mode=mode, new_mode=mode)), 'full')
@@ -213,6 +217,18 @@ class GitScopeTests(unittest.TestCase):
                     self.write({'source': 'source.go', 'config': '.github/workflows/ci-macos.yml', 'mixed': 'README.md'}[kind], 'unsafe change\n')
                 self.commit()
                 self.invoke('full')
+
+    def test_partial_rename_edit_is_windows_only(self):
+        self.git('mv', WINDOWS[2], WINDOWS[3])
+        with (self.root / WINDOWS[3]).open('a') as stream:
+            stream.write('x\n')
+        head = self.commit()
+        diff = subprocess.check_output(['git', '-C', str(self.root), 'diff', '--raw',
+                                        '-z', '--no-abbrev', '--find-renames',
+                                        self.base, head, '--'])
+        # Prove an actual partial rename record, rather than eligible A/D records.
+        self.assertEqual(diff.split(b'\0', 1)[0].split(b' ')[4], b'R085')
+        self.invoke('windows-only')
 
     def test_symlink_and_gitlink_endpoints_require_full(self):
         for kind in ['symlink-add', 'symlink-type', 'gitlink-add', 'symlink-delete', 'gitlink-delete']:

@@ -71,7 +71,7 @@ def raw_changes(diff):
         old_mode = old_mode[1:]
         if not SHA.fullmatch(old_oid) or not SHA.fullmatch(new_oid):
             return None
-        renamed = re.fullmatch(r'R(100|[1-9]?[0-9])', status)
+        renamed = re.fullmatch(r'R(100|0[0-9]{2})', status)
         if status not in {'A', 'M', 'D'} and not renamed:
             return None
         count = 2 if renamed else 1
