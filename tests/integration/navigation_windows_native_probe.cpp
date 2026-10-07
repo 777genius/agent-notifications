@@ -19,6 +19,7 @@
 #include <winrt/Windows.ApplicationModel.h>
 #include <winrt/Windows.System.h>
 #include "navigation_windows_vendor_sdk_test.h"
+#include "navigation_windows_token_queries.h"
 #include <bcrypt.h>
 #pragma comment(lib, "Bcrypt.lib")
 #include <wincodec.h>
@@ -1366,6 +1367,18 @@ static bool desktopCapture() {
     if (source.size() != 40 || source.find_first_not_of(L"0123456789abcdef") != std::wstring::npos)
         throw std::runtime_error("capture source SHA required");
     const ULONGLONG started = GetTickCount64(), deadline = started + 5000;
+    Token captureToken; require(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &captureToken.handle) != FALSE, "CaptureOwnToken");
+    const auto tokenBefore = facts(captureToken.handle);
+    FILETIME created{}, exited{}, kernel{}, user{};
+    require(GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user) != FALSE, "CaptureOwnBirth");
+    ULARGE_INTEGER birth{}; birth.LowPart = created.dwLowDateTime; birth.HighPart = created.dwHighDateTime;
+    auto defaultDesktop = []() {
+        HDESK input = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS);
+        const bool valid = input && objectName(input) == L"Default" && objectName(GetThreadDesktop(GetCurrentThreadId())) == L"Default";
+        if (input) CloseDesktop(input);
+        if (!valid) throw std::runtime_error("capture requires current Default input desktop");
+    };
+    defaultDesktop();
     auto budget = [&]() { if (GetTickCount64() >= deadline) throw std::runtime_error("capture cooperative deadline"); };
     USHORT processMachine = 0, nativeMachine = 0;
     if (!IsWow64Process2(GetCurrentProcess(), &processMachine, &nativeMachine)
@@ -1463,7 +1476,11 @@ static bool desktopCapture() {
         DeleteFileW(temporary.c_str()); throw std::runtime_error("atomic PNG publication failed");
     }
     vendorDeadline = deadline; VendorHashFile image(final, 8388608); budget();
+    defaultDesktop(); const auto tokenAfter = facts(captureToken.handle);
+    if (factsJson(tokenBefore) != factsJson(tokenAfter)) throw std::runtime_error("capture token changed");
     report("desktop-capture.json", "{\"pid\":" + std::to_string(GetCurrentProcessId()) + ",\"nonce\":" + jsonQuote(uuid)
+        + ",\"birth\":\"" + std::to_string(birth.QuadPart) + "\",\"startedBootMs\":" + std::to_string(started)
+        + ",\"endBootMs\":" + std::to_string(GetTickCount64()) + ",\"tokenBefore\":" + factsJson(tokenBefore) + ",\"tokenAfter\":" + factsJson(tokenAfter)
         + ",\"sourceSHA\":" + jsonQuote(source) + ",\"diagnosticOnly\":true,\"readOnly\":true,\"captureAttempts\":1"
         + ",\"binarySHA256\":\"" + executable.digest + "\",\"architecture\":\"ARM64\""
         + ",\"showAttempts\":0,\"inputAttempted\":false,\"launchAttempted\":false,\"installAttempted\":false"
@@ -2061,5 +2078,7 @@ int wmain(int argc, wchar_t** argv) {
     } catch (const winrt::hresult_error& e) {
         vendorFailure(e.code().value); sendFailure(e.code().value);
         std::cerr << "HRESULT " << e.code().value << ": " << winrt::to_string(e.message()) << '\n'; return 1;
+    } catch (const Failure& e) {
+        std::cerr << "capture token query " << e.query << ": " << e.error << '\n'; return 1;
     } catch (const std::exception& e) { vendorFailure(E_FAIL); sendFailure(E_FAIL); std::cerr << e.what() << '\n'; return 1; }
 }

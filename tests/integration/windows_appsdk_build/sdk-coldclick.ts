@@ -1,7 +1,7 @@
 // Exactly one disposable SDK cold click. A receiver receipt never proves process collection.
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdtempSync, openSync, readSync,
+import { closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readSync,
   readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 type Json = Record<string, unknown>;
@@ -13,9 +13,11 @@ if (!['shell_foreground', 'owned_test_foreground', 'disposable_global_shortcut']
 if (scenario === 'disposable_global_shortcut' && (process.env.GITHUB_ACTIONS !== 'true' || process.env.RUNNER_OS !== 'Windows' || process.env.SDK_COLDCLICK_DISPOSABLE_CLIENT !== 'windows-11-vs2026-arm')) throw new Error('fixed disposable Windows client dispatch authority required');
 const historyEnabled = process.env.SDK_COLDCLICK_HISTORY === 'true';
 if (process.env.SDK_COLDCLICK_HISTORY && !['true', 'false'].includes(process.env.SDK_COLDCLICK_HISTORY)) throw new Error('explicit fixed history diagnostic choice');
+const captureEnabled = process.env.SDK_COLDCLICK_CAPTURE === 'true';
+if (process.env.SDK_COLDCLICK_CAPTURE && !['true', 'false'].includes(process.env.SDK_COLDCLICK_CAPTURE)) throw new Error('explicit capture choice');
 const start = performance.now(), nonce = randomUUID();
 const output = mkdtempSync(join(process.env.RUNNER_TEMP ?? '', 'TEST-sdk-coldclick-evidence-'));
-const evidence: Json = { nonce, scenario, historyEnabled, sourceSHA: process.env.SOURCE_SHA, outcome: 'unknown', actors: [], receipts: {},
+const evidence: Json = { nonce, scenario, historyEnabled, captureEnabled, sourceSHA: process.env.SOURCE_SHA, outcome: 'unknown', actors: [], receipts: {},
   sdkColdActivationQualified: false, targetVisibleQualified: false, registrationCleanupQualified: false,
   globalBrokerQuiescenceQualified: false, automaticRetry: false };
 const actors = evidence.actors as Actor[];
@@ -102,10 +104,13 @@ function diagnostic(r: Json, phase: 'sender' | 'history' | 'collector' | 'shell_
   }
 }
 const minimalEnv = (root: string): NodeJS.ProcessEnv => ({ SystemRoot: process.env.SystemRoot, TEMP: root, TMP: root });
+const captureEnv = (): NodeJS.ProcessEnv => ({ CI: 'true', GITHUB_ACTIONS: 'true', AGENT_NOTIFY_NAVIGATION_WINDOWS_E2E: '1',
+  GITHUB_REPOSITORY: '777genius/agent-notifications', GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_RUN_ATTEMPT: '1',
+  NAVIGATION_WINDOWS_DESKTOP_CAPTURE_TEST: '1', NAVIGATION_WINDOWS_RUNNER: 'windows-11-vs2026-arm', NAVIGATION_SOURCE_SHA: process.env.SOURCE_SHA });
 async function run(mode: string, exe: string, args: string[], cwd: string, limit: number, nativeCustody = false): Promise<Actor> {
   check(performance.now() - start + limit + 5000 < 170000, 'global deadline insufficient; actor refused');
   const result: Actor = { mode, code: null, signal: null, collected: false, timedOut: false, overflow: false, stdout: '', stderr: '' }; actors.push(result);
-  const child = spawn(exe, args, { cwd, windowsHide: mode !== 'owned-test-foreground-invoke', env: nativeCustody ? { ...minimalEnv(cwd), RUNNER_TEMP: process.env.RUNNER_TEMP } : { ...minimalEnv(cwd), ...(['owned-shell-invoke', 'owned-test-foreground-invoke', 'disposable-global-shortcut-invoke'].includes(mode) ? { SDK_COLDCLICK_DISPOSABLE_TEST: nonce, ...(mode === 'disposable-global-shortcut-invoke' ? { SDK_COLDCLICK_GLOBAL_AUTHORITY: `dispatch-attempt1:${process.env.SOURCE_SHA}:${nonce}`, SDK_COLDCLICK_DISPOSABLE_CLIENT: process.env.SDK_COLDCLICK_DISPOSABLE_CLIENT } : {}) } : {}) }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(exe, args, { cwd, windowsHide: mode !== 'owned-test-foreground-invoke', env: nativeCustody ? { ...minimalEnv(cwd), RUNNER_TEMP: process.env.RUNNER_TEMP } : { ...minimalEnv(cwd), ...(mode === 'desktop-capture' ? captureEnv() : {}), ...(['owned-shell-invoke', 'owned-test-foreground-invoke', 'disposable-global-shortcut-invoke'].includes(mode) ? { SDK_COLDCLICK_DISPOSABLE_TEST: nonce, ...(mode === 'disposable-global-shortcut-invoke' ? { SDK_COLDCLICK_GLOBAL_AUTHORITY: `dispatch-attempt1:${process.env.SOURCE_SHA}:${nonce}`, SDK_COLDCLICK_DISPOSABLE_CLIENT: process.env.SDK_COLDCLICK_DISPOSABLE_CLIENT } : {}) } : {}) }, stdio: ['ignore', 'pipe', 'pipe'] });
   result.pid = child.pid; let total = 0;
   const capture = (b: Buffer, err: boolean): void => { const saved = b.subarray(0, Math.max(0, 16384 - total)).toString('utf8'); total += b.length;
     if (err) result.stderr += saved; else result.stdout += saved; if (total > 16384) { result.overflow = true; child.kill(); } };
@@ -131,6 +136,61 @@ function retain(): void {
     const raw = bytes(join(generation, leaf), 8192).toString('utf8');
     try { found[leaf] = object(JSON.parse(raw)); } catch { found[leaf] = { raw, parseError: true }; }
   }
+}
+// Auxiliary snapshot after failure; neither pixels nor capture success qualify a callback.
+let captureRoot = '';
+async function captureNegative(ui: Json, invoked: Actor, collector: Actor, baseline: Json, sender: Json, pins: Map<string, string>): Promise<void> {
+  if (!captureEnabled) return;
+  try {
+    const r = evidence.receipts as Json, input = object(r['TEST-center-input.json']);
+    check(historyEnabled && evidence.historyDiagnosticsValidated === true && object(r['TEST-history.json']).outcome === 'completed_exact' &&
+      [invoked, collector].every(a => a.collected && Number.isInteger(a.code) && !a.timedOut && !a.overflow && !a.error && a.signal === null) &&
+      ui.query === 'OwnedToastUnavailable' && ui.error === 1168 && ui.outcome === 'unknown' && ui.invokeReturned !== true && !('invokeCallBootMs' in ui) &&
+      ui.centerAttempted === true && ui.inputEffectUnknown === false && input.acceptedEvents === 4 && input.ownedKeysReleased === true &&
+      input.releaseUnknown === false && input.inputEffectUnknown === false && input.cleanupReleaseAttempts === 0 &&
+      ['TEST-ui-invoke-intent.json', 'TEST-receiver-ready.json', 'TEST-receiver-ack.json', 'TEST-receiver-terminal.json', 'TEST-callback.json',
+        'TEST-second-receiver.json', 'TEST-second-callback.json', 'TEST-query-intent.json', 'TEST-launch-intent.json'].every(k => !r[k]), 'capture negative admission refused');
+    check(performance.now() - start + 15000 + 5000 < 170000, 'original global budget refuses capture');
+    check(process.env.GITHUB_ACTIONS === 'true' && process.env.RUNNER_OS === 'Windows' && process.env.SDK_COLDCLICK_DISPOSABLE_CLIENT === 'windows-11-vs2026-arm', 'capture disposable authority');
+    const source = resolve(process.env.SDK_CAPTURE_EXE!), pin = process.env.SDK_CAPTURE_EXE_SHA256;
+    check(typeof pin === 'string' && /^[a-f0-9]{64}$/.test(pin) && hash(source) === pin, 'compiled observer pin'); const sourceIdentity = lstatSync(source);
+    for (const [path, digest] of pins) check(hash(path) === digest, 'pre-capture SDK pins');
+    const capsule = join(generation, `navigation-windows-test-${nonce}`); mkdirSync(capsule); physical(capsule, true);
+    const capsuleIdentity = lstatSync(capsule), observer = join(capsule, 'navigation-native-probe.exe');
+    const marker = join(capsule, '.owned-test-root'); const markerFd = openSync(marker, 'wx');
+    try { writeFileSync(markerFd, `TEST navigation Windows ${nonce}\n`); fsyncSync(markerFd); } finally { closeSync(markerFd); }
+    const fd = openSync(observer, 'wx'); try { writeFileSync(fd, bytes(source, 64 << 20)); fsyncSync(fd); } finally { closeSync(fd); }
+    check(hash(observer) === pin && hash(source) === pin, 'exclusive capture copy pin'); const held = lstatSync(observer);
+    const actor = await run('desktop-capture', observer, ['desktop-capture', capsule, nonce], capsule, 15000); completed(actor);
+    const receipt = json(join(capsule, 'desktop-capture.json'), 16384);
+    exact(receipt, ['pid', 'nonce', 'birth', 'startedBootMs', 'endBootMs', 'tokenBefore', 'tokenAfter', 'sourceSHA', 'diagnosticOnly', 'readOnly', 'captureAttempts',
+      'binarySHA256', 'architecture', 'showAttempts', 'inputAttempted', 'launchAttempted', 'installAttempted', 'centerOpenedProved', 'navigationQualified',
+      'nativeCallbackQualified', 'retryAllowed', 'pixelFile', 'pixelSHA256', 'pixelBytes', 'width', 'height', 'session', 'elapsedMs', 'shellStillLive', 'originX', 'originY',
+      'coordinateContract', 'primaryMonitorStable', 'captureScope', 'metadata']);
+    check(receipt.pid === actor.pid && receipt.nonce === nonce && /^[1-9][0-9]{1,19}$/.test(receipt.birth as string) && receipt.sourceSHA === process.env.SOURCE_SHA &&
+      receipt.binarySHA256 === pin && receipt.architecture === 'ARM64' && receipt.captureAttempts === 1 && receipt.showAttempts === 0 && receipt.readOnly === true && receipt.diagnosticOnly === true &&
+      ['inputAttempted', 'launchAttempted', 'installAttempted', 'centerOpenedProved', 'navigationQualified', 'nativeCallbackQualified', 'retryAllowed'].every(k => receipt[k] === false), 'capture incarnation/diagnostic contract');
+    const before = token(receipt.tokenBefore), after = token(receipt.tokenAfter); sameFacts(before, baseline); sameFacts(after, baseline); sameIdentity(before, token(sender.token, true));
+    check(receipt.session === baseline.session && Number.isSafeInteger(receipt.startedBootMs) && Number.isSafeInteger(receipt.endBootMs) &&
+      (receipt.startedBootMs as number) >= Math.max(ui.endBootMs as number, object(r['TEST-collector.json']).endBootMs as number) &&
+      (receipt.endBootMs as number) >= (receipt.startedBootMs as number) && (receipt.endBootMs as number) - (receipt.startedBootMs as number) < 5000 &&
+      Number.isSafeInteger(receipt.elapsedMs) && (receipt.elapsedMs as number) < 5000, 'capture strictly after collected actors within native budget');
+    for (const leaf of ['capture-preflight.json', 'capture-after-preflight.json']) {
+      const desktop = json(join(capsule, leaf)); check(desktop.pid === actor.pid && desktop.nonce === nonce && desktop.ready === true && desktop.session === baseline.session &&
+        desktop.connectionState === 0 && desktop.stationVisible === true && desktop.station === 'WinSta0' && desktop.inputDesktop === 'Default' && desktop.threadDesktop === 'Default', 'fresh capture input desktop');
+    }
+    const image = bytes(join(capsule, 'desktop-capture.png'), 8 << 20);
+    check(receipt.pixelFile === 'desktop-capture.png' && receipt.pixelBytes === image.length && image.length >= 33 &&
+      createHash('sha256').update(image).digest('hex') === receipt.pixelSHA256 && image.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10])) &&
+      image.readUInt32BE(8) === 13 && image.toString('ascii', 12, 16) === 'IHDR' && ['width', 'height'].every(k => Number.isInteger(receipt[k]) && (receipt[k] as number) > 0 && (receipt[k] as number) <= 2048) &&
+      image.readUInt32BE(16) === receipt.width && image.readUInt32BE(20) === receipt.height && receipt.shellStillLive === true && receipt.primaryMonitorStable === true &&
+      receipt.coordinateContract === 'per_monitor_aware_v2_MM_TEXT' && receipt.captureScope === 'primary_monitor_physical_GDI_pixels_non_atomic_metadata', 'bounded primary PNG/hash contract');
+    const metadata = object(receipt.metadata); exact(metadata, ['projection', 'enumerationCompleted', 'truncated', 'errors', 'visited', 'windows']);
+    check(metadata.projection === 'visible_or_foreground_same_user_windows_oobe_or_shell' && typeof metadata.enumerationCompleted === 'boolean' && typeof metadata.truncated === 'boolean' && Number.isInteger(metadata.errors) && (metadata.errors as number) >= 0 && Number.isInteger(metadata.visited) && (metadata.visited as number) >= 0 && (metadata.visited as number) <= 128 && Buffer.byteLength(JSON.stringify(metadata)) <= 7000 && Array.isArray(metadata.windows) && metadata.windows.length <= 32 && ['originX', 'originY'].every(k => Number.isInteger(receipt[k])), 'bounded non-atomic capture metadata');
+    physical(capsule, true); check(lstatSync(capsule).ino === capsuleIdentity.ino && hash(observer) === pin && lstatSync(observer).ino === held.ino && hash(source) === pin && lstatSync(source).ino === sourceIdentity.ino, 'post-capture physical pins');
+    for (const [path, digest] of pins) check(hash(path) === digest, 'post-capture SDK pins');
+    evidence.capture = { outcome: 'validated_post_failure_snapshot', receipt }; captureRoot = capsule;
+  } catch (error) { evidence.capture = { outcome: 'refused_or_unknown', error: String(error).slice(0, 1024) }; }
 }
 async function main(): Promise<void> {
   try {
@@ -262,7 +322,7 @@ async function main(): Promise<void> {
         const inputSender = object(input.sender); check(inputSender.nonce === nonce && inputSender.pid === s.pid && inputSender.birth === s.birth && inputSender.collected === true && inputSender.exitCode === 0 && inputSender.collectedBootMs === collectedBoot && (input.intentBootMs as number) >= collectedBoot, 'collected sender before one input');
       } else check(!('invokeCallBootMs' in ui) && ui.outcome === 'unknown' && input.outcome === 'unknown' && Number.isSafeInteger(input.failureBootMs) && (input.failureBootMs as number) <= (input.endBootMs as number), 'uncertain input forbids Invoke');
     } else check(ui.inputEffectUnknown === false && !(evidence.receipts as Json)['TEST-center-input-intent.json'] && !(evidence.receipts as Json)['TEST-center-input.json'], 'zero input attempt');
-    evidence.actorDiagnosticsValidated = true; completed(collector);
+    evidence.actorDiagnosticsValidated = true; await captureNegative(ui, invoked, collector, baseline, s, pins); completed(collector);
     const r = evidence.receipts as Json, c = object(r['TEST-collector.json']), ready = object(r['TEST-receiver-ready.json']), terminal = object(r['TEST-receiver-terminal.json']);
     correlation(c, 'collector'); correlation(ready, 'receiver_ready'); correlation(terminal, 'receiver_terminal');
     check(c.pid === collector.pid && c.collected === true && c.exitCode === 0 && c.ackPublished === true && c.heldPhysicalImage === exe &&
@@ -319,7 +379,7 @@ async function main(): Promise<void> {
   } catch (e) { evidence.sdkColdActivationQualified = false; evidence.outcome = 'unknown'; evidence.error = String(e).slice(0, 2048); try { retain(); } catch (readError) { evidence.receiptReadError = String(readError).slice(0, 512); } }
   finally {
     durable(join(output, 'sdk-coldclick-evidence.json'), evidence);
-    if (process.env.GITHUB_OUTPUT) writeFileSync(process.env.GITHUB_OUTPUT, `evidence_root=${output}\n`, { flag: 'a', flush: true });
+    if (process.env.GITHUB_OUTPUT) writeFileSync(process.env.GITHUB_OUTPUT, `evidence_root=${output}\n${captureRoot ? `capture_root=${captureRoot}\n` : ''}`, { flag: 'a', flush: true });
     process.exitCode = evidence.sdkColdActivationQualified === true ? 0 : 1;
   }
 }

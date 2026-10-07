@@ -28,6 +28,11 @@ on:
         required: true
         default: false
         type: boolean
+      captureAfterFailure:
+        description: 'ONE public TEST desktop snapshot after collected matched-history UI failure'
+        required: true
+        default: false
+        type: boolean
 permissions:
   contents: read
 concurrency:
@@ -89,6 +94,7 @@ jobs:
           & cmd /d /s /c $observerCmd
           if ($LASTEXITCODE -ne 0) { throw 'fixed vendor metadata/install observer compile failed' }
           "observer=$observer" >> $env:GITHUB_OUTPUT
+          "observer_sha256=$((Get-FileHash -Algorithm SHA256 $observer).Hash.ToLowerInvariant())" >> $env:GITHUB_OUTPUT
           $launcher = Join-Path $out 'TEST-sdk-launcher.exe'
           $source = Join-Path $env:GITHUB_WORKSPACE 'tests\integration\navigation_windows_lua_launcher.cpp'
           $cmd = '"' + $vs + '\Common7\Tools\VsDevCmd.bat" -arch=arm64 -host_arch=arm64 && cl /nologo /EHsc /W4 /std:c++20 /DUNICODE /D_UNICODE "' + $source + '" /Fe:"' + $launcher + '" /Fo:"' + $out + '\TEST-sdk-launcher.obj" /link advapi32.lib bcrypt.lib user32.lib wtsapi32.lib'
@@ -206,6 +212,9 @@ jobs:
           SDK_VENDOR_EVIDENCE: ${{ steps.vendor.outputs.evidence_file }}
           SDK_COLDCLICK_DISPOSABLE_CLIENT: windows-11-vs2026-arm
           SDK_COLDCLICK_HISTORY: ${{ inputs.history_diagnostic }}
+          SDK_COLDCLICK_CAPTURE: ${{ inputs.captureAfterFailure }}
+          SDK_CAPTURE_EXE: ${{ steps.build.outputs.observer }}
+          SDK_CAPTURE_EXE_SHA256: ${{ steps.build.outputs.observer_sha256 }}
           SDK_COLDCLICK_SCENARIO: ${{ inputs.foreground_scenario }}
           SDK_COLD_EXE: ${{ steps.build.outputs.cold_exe }}
           SDK_COLD_EXE_SHA256: ${{ steps.build.outputs.cold_exe_sha256 }}
@@ -260,4 +269,14 @@ jobs:
             ${{ steps.vendor_metadata.outputs.evidence_root }}/package-metadata.json
             ${{ steps.vendor_metadata.outputs.evidence_root }}/sdk-coldclick-vendor.json
           if-no-files-found: warn
+          retention-days: 14
+      - name: Preserve validated public TEST post-failure desktop snapshot
+        if: always() && github.event_name == 'workflow_dispatch' && steps.coldclick.outputs.capture_root != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: TEST-sdk-post-failure-capture-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.coldclick.outputs.capture_root }}/desktop-capture.json
+            ${{ steps.coldclick.outputs.capture_root }}/desktop-capture.png
+          if-no-files-found: error
           retention-days: 14
