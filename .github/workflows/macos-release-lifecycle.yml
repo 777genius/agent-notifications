@@ -1,23 +1,73 @@
-name: macOS v1.48.2 installed lifecycle
+name: macOS v1.48.3 installed lifecycle
 
 on:
   workflow_dispatch:
+    inputs:
+      seal_only:
+        description: Prepare custody inputs only; skip macOS business qualification
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
   actions: read
 
 concurrency:
-  group: macos-v1482-lifecycle-${{ github.sha }}
+  group: macos-v1483-lifecycle-${{ github.sha }}
   cancel-in-progress: false
 
 env:
-  CANDIDATE_SHA: 1f5cf76a6cd3468fb23ef88d762cfb0f6d691820
-  SIGNING_RUN: '37632615999'
-  CUSTODY_RUN: '37645007119'
+  CANDIDATE_SHA: 016707404d4e47af77937e6d7ad26828e874c110
+  SIGNING_RUN: '37687161334'
 
 jobs:
+  custody-binaries:
+    name: Build additional custody only ${{ matrix.platform }}/${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: ubuntu-22.04, platform: linux, arch: amd64}
+          - {runner: ubuntu-22.04-arm, platform: linux, arch: arm64}
+          - {runner: windows-latest, platform: windows, arch: amd64}
+    steps:
+      - name: Preserve canonical Git bytes
+        if: runner.os == 'Windows'
+        shell: bash
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with: {go-version: '1.26'}
+      - name: Install native Linux build prerequisite
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Build exact source without launching candidate
+        shell: bash
+        env:
+          CGO_ENABLED: '1'
+          GOTOOLCHAIN: local
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(go env GOOS)/$(go env GOARCH)" = '${{ matrix.platform }}/${{ matrix.arch }}'
+          mkdir dist
+          suffix=''
+          if [ '${{ matrix.platform }}' = windows ]; then suffix='.exe'; fi
+          go build -trimpath -ldflags='-s -w' -o "dist/claude-notifications-${{ matrix.platform }}-${{ matrix.arch }}$suffix" ./cmd/claude-notifications
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos-custody-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist/*
+          retention-days: 14
+
   seal-inputs:
+    needs: custody-binaries
     runs-on: ${{ vars.CI_LINUX_RUNNER || 'ubuntu-22.04' }}
     timeout-minutes: 30
     outputs:
@@ -36,7 +86,7 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           github-token: ${{ github.token }}
-          run-id: ${{ env.CUSTODY_RUN }}
+          run-id: ${{ github.run_id }}
           pattern: macos-custody-*
           merge-multiple: true
           path: source/dist
@@ -44,13 +94,13 @@ jobs:
         with:
           github-token: ${{ github.token }}
           run-id: ${{ env.SIGNING_RUN }}
-          name: macos-candidate-amd64-1f5cf76a6cd3468fb23ef88d762cfb0f6d691820
+          name: macos-candidate-amd64-016707404d4e47af77937e6d7ad26828e874c110
           path: source/.task-tools/artifacts/signed-amd64
       - uses: actions/download-artifact@v8
         with:
           github-token: ${{ github.token }}
           run-id: ${{ env.SIGNING_RUN }}
-          name: macos-candidate-arm64-1f5cf76a6cd3468fb23ef88d762cfb0f6d691820
+          name: macos-candidate-arm64-016707404d4e47af77937e6d7ad26828e874c110
           path: source/.task-tools/artifacts/signed-arm64
       - uses: actions/download-artifact@v8
         with:
@@ -61,12 +111,12 @@ jobs:
       - name: Record completed owner signing run provenance
         env: {GH_TOKEN: '${{ github.token }}'}
         run: gh api repos/777genius/agent-notifications/actions/runs/$SIGNING_RUN > source/.task-tools/artifacts/signing-run.json
-      - name: Record prior successful custody jobs without promoting their failed business run
+      - name: Record current owner custody run and completed build jobs
         env: {GH_TOKEN: '${{ github.token }}'}
         run: |
           set -euo pipefail
-          gh api repos/777genius/agent-notifications/actions/runs/$CUSTODY_RUN > source/.task-tools/artifacts/custody-run.json
-          gh api "repos/777genius/agent-notifications/actions/runs/$CUSTODY_RUN/attempts/1/jobs?per_page=100" > source/.task-tools/artifacts/custody-jobs.json
+          gh api repos/777genius/agent-notifications/actions/runs/$GITHUB_RUN_ID > source/.task-tools/artifacts/custody-run.json
+          gh api "repos/777genius/agent-notifications/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" > source/.task-tools/artifacts/custody-jobs.json
       - name: Rebuild exact self-contained bundle without replacing embedded bytes
         working-directory: source/opencode-plugin
         run: |
@@ -102,6 +152,7 @@ jobs:
           retention-days: 14
 
   macos-business:
+    if: ${{ !inputs.seal_only }}
     needs: seal-inputs
     name: TEST installed Darwin ${{ matrix.target.arch }} OpenCode ${{ matrix.version }}
     runs-on: ${{ matrix.target.runner }}
