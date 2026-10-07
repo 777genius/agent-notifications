@@ -266,8 +266,9 @@ int wmain(int argc, wchar_t** argv) {
         limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
         limits.BasicLimitInformation.ActiveProcessLimit = 1;
         require(SetInformationJobObject(job.value, JobObjectExtendedLimitInformation, &limits, sizeof(limits)) != FALSE, "OwnJobLimits");
-        file(out, root + L"\\TEST-child-stdout.txt"); file(err, root + L"\\TEST-child-stderr.txt");
-        file(input, root + L"\\TEST-child-stdin.txt");
+        file(out, root + (history ? L"\\TEST-history-child-stdout.txt" : L"\\TEST-child-stdout.txt"));
+        file(err, root + (history ? L"\\TEST-history-child-stderr.txt" : L"\\TEST-child-stderr.txt"));
+        file(input, root + (history ? L"\\TEST-history-child-stdin.txt" : L"\\TEST-child-stdin.txt"));
         Attributes attributes;
         SIZE_T size = 0;
         InitializeProcThreadAttributeList(nullptr, 2, 0, &size);

@@ -181,9 +181,11 @@ async function main(): Promise<void> {
       const deadline = collectedBoot + 30000;
       durable(join(generation, 'TEST-history-request.json'), { nonce, enabled: true, deadlineBootMs: deadline });
       const historyActor = await run('medium-history', launcher, ['--TEST-sdk-cold-history', nonce, generation, exe], generation, 35000); retain();
-      const launch = object(historyActor.record), observed = object((evidence.receipts as Json)['TEST-history.json']); diagnostic(observed, 'history');
-      evidence.historyDiagnosticsRetained = true; completed(historyActor);
+      const launch = object(historyActor.record);
       check(launch.variant === 'sdk-cold-history' && launch.nonce === nonce && launch.pid === historyActor.pid && launch.collected === true && launch.childExit === 0 && launch.childTerminated === false && launch.timedOut === false && launch.cleanupError === null && launch.queriesComplete === true && launch.sameIdentitySession === true && launch.enabledAdmins === false && launch.childStderr === '', 'collected contained history actor before UI');
+      completed(historyActor);
+      const observed = object((evidence.receipts as Json)['TEST-history.json']); diagnostic(observed, 'history');
+      evidence.historyDiagnosticsRetained = true;
       const wire = object(JSON.parse(launch.childRecord as string)); check(JSON.stringify(wire) === JSON.stringify(observed) && observed.pid === launch.childPid && observed.birth === launch.childBirth && observed.physicalImage === exe && observed.exeSHA256 === pins.get(exe) && observed.deadlineBootMs === deadline, 'same pinned history executable/receipt/held incarnation');
       const ht = token(observed.token, true); medium(ht); sameFacts(ht, st); sameIdentity(ht, baseline);
       for (const k of Object.keys(token(launch.held))) check(ht[k] === object(launch.held)[k], 'held and own history token');
