@@ -437,7 +437,11 @@ function preparationTrace(step: Step): void {
 }
 function native(mode: string, timeout: number, useObserver = false): Step {
   if (!root || !nonce || !binary || !observer) throw new Error('native fixture absent');
-  return execute(mode, useObserver ? observer : binary, [mode, root, nonce], timeout);
+  // The composed lane grants the observer's separate vendor opt-in only to these fixed operations.
+  const vendorObserver = composed && useObserver && ['vendor-state-before', 'vendor-state-after',
+    'vendor-install', 'vendor-remove'].includes(mode);
+  const env = vendorObserver ? { ...process.env, NAVIGATION_WINDOWS_VENDOR_NATIVE_TEST: '1' } : process.env;
+  return execute(mode, useObserver ? observer : binary, [mode, root, nonce], timeout, env);
 }
 function powershell(mode: string, timeout: number): Step {
   if (!root || !process.env.SystemRoot) throw new Error('PowerShell prerequisite absent');
