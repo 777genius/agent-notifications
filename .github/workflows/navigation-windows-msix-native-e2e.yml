@@ -7,13 +7,15 @@ on:
       - 'tests/integration/navigation_windows_native_probe.cpp'
       - 'tests/integration/navigation_windows_native_e2e.ts'
       - 'tests/integration/navigation_windows_msix_e2e.ts'
+      - 'tests/integration/navigation_windows_vendor_sdk_test.h'
+      - 'tests/integration/navigation_windows_vendor_acquisition.ts'
   workflow_dispatch:
     inputs:
       mode:
         description: 'One fresh disposable TEST job; unknown effects are never replayed'
         type: choice
         default: compile_only
-        options: [compile_only, prepare_only, native_callback, oobe_then_msix_callback]
+        options: [compile_only, prepare_only, native_callback, oobe_then_msix_callback, oobe_then_msix_vendor_callback]
 permissions:
   contents: read
 # Supersede only older checks for this PR; dispatch runs remain independent.
@@ -24,7 +26,8 @@ concurrency:
 jobs:
   packaged-client:
     runs-on: windows-11-vs2026-arm
-    timeout-minutes: 18
+    # New manual composition adds bounded acquisition/signature/Add/Remove outside the UI lease.
+    timeout-minutes: 25
     env:
       AGENT_NOTIFY_NAVIGATION_WINDOWS_E2E: '1'
       NAVIGATION_WINDOWS_RUNNER: windows-11-vs2026-arm
@@ -45,7 +48,7 @@ jobs:
           Write-Host "Source=$env:NAVIGATION_SOURCE_SHA Image=$env:ImageVersion Node=$(node --version)"
           npm ci --prefix opencode-plugin --ignore-scripts --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { throw 'locked tooling install failed' }
-          & ./opencode-plugin/node_modules/.bin/tsc.cmd --ignoreConfig --noEmit --strict --target ES2023 --module ESNext --moduleResolution bundler --types node --typeRoots ./opencode-plugin/node_modules/@types tests/integration/navigation_windows_msix_e2e.ts tests/integration/navigation_windows_native_e2e.ts
+          & ./opencode-plugin/node_modules/.bin/tsc.cmd --ignoreConfig --noEmit --allowImportingTsExtensions --strict --target ES2023 --module ESNext --moduleResolution bundler --types node --typeRoots ./opencode-plugin/node_modules/@types tests/integration/navigation_windows_msix_e2e.ts tests/integration/navigation_windows_native_e2e.ts
           if ($LASTEXITCODE -ne 0) { throw 'packaged harness typecheck failed' }
       - name: Compile both native fixtures with static CRT
         shell: pwsh
@@ -61,6 +64,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'native compile/import inspection failed' }
             $imports = Get-Content -LiteralPath $log -Raw
             if ($imports -notmatch 'AA64 machine' -or $imports -match '(?i)(VCRUNTIME|MSVCP|Microsoft\.WindowsAppRuntime).*\.dll') { throw 'unsupported architecture/framework dependency' }
+            Get-FileHash -LiteralPath tests/integration/navigation_windows_vendor_sdk_test.h, tests/integration/navigation_windows_vendor_acquisition.ts -Algorithm SHA256 | Format-Table
             Write-Host "$kind SHA256=$((Get-FileHash -LiteralPath $out -Algorithm SHA256).Hash)"
           }
       - name: Parse the fixed operator with target Windows PowerShell
@@ -74,7 +78,7 @@ jobs:
           $null = [Management.Automation.Language.Parser]::ParseInput($match.Groups['script'].Value, [ref]$tokens, [ref]$errors)
           if ($errors.Count) { $errors | Format-List; throw 'target operator parse failed' }
       - name: One finite OOBE setup on this same disposable desktop
-        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'oobe_then_msix_callback'
+        if: github.event_name == 'workflow_dispatch' && (inputs.mode == 'oobe_then_msix_callback' || inputs.mode == 'oobe_then_msix_vendor_callback')
         id: bootstrap
         shell: pwsh
         env:
@@ -115,7 +119,7 @@ jobs:
           try { $file.Write($bytes, 0, $bytes.Length); $file.Flush($true) } finally { $file.Dispose() }
       - name: Explicit preparation diagnostic or single packaged cold COM callback
         # PR checks compile the fixtures; each native submission needs an explicit run.
-        if: github.event_name == 'workflow_dispatch' && (inputs.mode == 'prepare_only' || inputs.mode == 'native_callback' || (inputs.mode == 'oobe_then_msix_callback' && steps.bootstrap.outcome == 'success'))
+        if: github.event_name == 'workflow_dispatch' && (inputs.mode == 'prepare_only' || inputs.mode == 'native_callback' || ((inputs.mode == 'oobe_then_msix_callback' || inputs.mode == 'oobe_then_msix_vendor_callback') && steps.bootstrap.outcome == 'success'))
         id: probe
         shell: pwsh
         env:
@@ -157,6 +161,7 @@ jobs:
             ${{ inputs.mode == 'prepare_only' && format('{0}/operator-context.json', steps.probe.outputs.evidence_root) || '' }}
             ${{ inputs.mode == 'prepare_only' && format('{0}/navigation-native-imports.log', steps.probe.outputs.evidence_root) || '' }}
             ${{ inputs.mode == 'prepare_only' && format('{0}/navigation-msix-imports.log', steps.probe.outputs.evidence_root) || '' }}
+            !${{ steps.probe.outputs.evidence_root }}/client.msix
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 14

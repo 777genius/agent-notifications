@@ -52,7 +52,7 @@ jobs:
           Write-Host "Source=$env:NAVIGATION_SOURCE_SHA Image=$env:ImageVersion"
           npm ci --prefix opencode-plugin --ignore-scripts --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { throw 'locked tooling install failed' }
-          & ./opencode-plugin/node_modules/.bin/tsc.cmd --ignoreConfig --noEmit --strict --target ES2023 --module ESNext --moduleResolution bundler --types node --typeRoots ./opencode-plugin/node_modules/@types tests/integration/navigation_windows_vendor_metadata.ts tests/integration/navigation_windows_native_e2e.ts
+          & ./opencode-plugin/node_modules/.bin/tsc.cmd --ignoreConfig --noEmit --allowImportingTsExtensions --strict --target ES2023 --module ESNext --moduleResolution bundler --types node --typeRoots ./opencode-plugin/node_modules/@types tests/integration/navigation_windows_vendor_metadata.ts tests/integration/navigation_windows_native_e2e.ts
           if ($LASTEXITCODE -ne 0) { throw 'harness typecheck failed' }
       - name: Compile native TEST probe with image SDK
         if: env.NAVIGATION_MANIFEST_FIXTURE != '1'
