@@ -9,7 +9,8 @@ falls back to generic OpenCode copy. Alerts remain silent and do not navigate to
 a terminal or session when clicked. Plan/review events and sound controls are
 outside this integration.
 
-Agent Notifications **1.48.0** uses **one installed plugin** for OpenCode V1 and
+Agent Notifications **1.48.1 on Linux/Windows and 1.48.3 on macOS** uses
+**one installed plugin** for OpenCode V1 and
 [V2](https://opencode.ai/v2/docs): V1 calls `server`, V2 calls `setup`. Release
 qualification targets are **V1 1.18.33, V1 1.18.34 and V2 2.0.21**. The installer
 accepts stable V1 >= 1.18.29 and V2 >= 2.0.0; this range does not qualify every
@@ -25,7 +26,10 @@ Existing installations must run update and restart OpenCode to load the new bund
 
 ## Platforms and observed delivery
 
-Native release targets: macOS arm64/amd64, Linux arm64/amd64 and Windows amd64.
+The [platform channels](PLATFORM_RELEASE_CHANNELS.md) select macOS arm64/amd64
+**1.48.3** and Linux arm64/amd64 / Windows amd64 **1.48.1**. GitHub global
+Latest remains **1.46.1** for legacy installers. macOS 1.48.3 includes a signed,
+notarized helper and native/portable packages.
 For native Windows shell installation use **Git Bash**, not WSL or PowerShell.
 Desktop delivery uses the signed macOS helper, the Linux desktop notification
 service or Windows toasts. Linux needs an available desktop session/D-Bus service.
@@ -36,12 +40,14 @@ service or Windows toasts. Linux needs an available desktop session/D-Bus servic
 - Historical V1 lifecycle/webhook checks covered all five targets; retained V2
   native completion observations provide corroboration. They do not qualify new
   release bytes by themselves.
-- The 1.48.0 release gate covers seven native Linux/Windows cells and three
+- The 1.48.1 release gate covers seven native Linux/Windows cells and three
   artifact canaries, as detailed below. Exact release reports establish which checks
   passed; configured workflow lanes alone are not evidence.
-- macOS binaries and the helper are excluded from 1.48.0; macOS retains 1.46.1.
-  Historical macOS ARM business evidence is separate from this release. Intel
-  desktop delivery and macOS V2 visible banners remain unqualified.
+- macOS 1.48.3 has four installed basic-business/lifecycle checks: V1 1.18.33
+  and V2 2.0.21 with Apple Silicon binaries run natively and Intel binaries run
+  under Rosetta. Physical Intel execution, full native E2E and visible OpenCode
+  banners are not proved for this release. Historical desktop observations do
+  not extend that scope.
 
 **Windows V1 limitation:** stock OpenCode V1 events do not always allow the
 original event age to be verified independently. A delayed completion can notify
@@ -56,13 +62,18 @@ This accepted limitation does not qualify every Windows V1 version.
 
 The installed fixture in `scripts/opencode-native-e2e.py` retains eleven custody
 cells: V1 1.18.33 and V2 2.0.21 on all five platform pairs, plus Linux amd64 V1
-1.18.34. The 1.48.0 tag workflow runs seven Linux/Windows cells: both API versions
-on Linux amd64/arm64 and Windows amd64, plus Linux amd64 V1 1.18.34. It separately
-runs artifact canaries on the three Linux/Windows native targets. No macOS
-binaries or helper ship in 1.48.0; macOS retains its 1.46.1 channel. These checks cover managed lifecycle, completion delivery and
-revocation; they do not prove every desktop effect or replace the broader semantic
-matrix. See the exact-source reports linked from the release and
-[release procedure](RELEASE.md).
+1.18.34. Linux/Windows 1.48.1 release checks cover seven native cells: both API
+versions on Linux amd64/arm64 and Windows amd64, plus Linux amd64 V1 1.18.34.
+Artifact canaries cover the three Linux/Windows native targets.
+
+macOS 1.48.3 separately checks four installed basic-business/lifecycle cells,
+using V1 1.18.33 and V2 2.0.21 on native Apple Silicon and Intel binaries under
+Rosetta. That scope does not prove execution on physical Intel hardware, full
+native E2E or visible OpenCode banners. Custody of eleven cells is not evidence
+that all eleven passed the same business suite. These checks cover managed
+lifecycle, completion delivery and revocation; they do not replace the broader
+semantic matrix. See the exact-source reports linked from each platform release
+and the [release procedure](RELEASE.md).
 
 Exact bundle/SDK/image custody, authoritative managed configuration, production
 parent/profile and compiled clock qualification precede delivery cases. Missing
