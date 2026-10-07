@@ -59,7 +59,8 @@ const phaseFields: Record<string, string[]> = {
   receiver_ready: ['token', 'bindingSHA256', 'leaseDeadlineBootMs'],
   receiver_terminal: ['token', 'bootstrapModule', 'bootstrapCallBootMs', 'bootstrapHRESULT', 'selectedFramework', 'isSupported', 'runtimeModule', 'handlerBeforeRegister', 'activationKind', 'bootstrapShutdown', 'unregisterReturned', 'outcome', 'registrationStillOwned', 'error', 'query'],
   collector: ['readyWaitDeadlineBootMs', 'readyObserved', 'readyObservedBootMs', 'ackPublishedBootMs', 'stage', 'ready', 'heldToken', 'heldPhysicalImage', 'ackPublished', 'waitResult', 'collected', 'exitCode', 'outcome', 'query', 'error'],
-  shell_invoke: ['stage', 'censusAttempts', 'completedCensusAttempts', 'maxRoots', 'maxNodes', 'maxAdmittedProviderRoots', 'maxOwnedTitleMatches', 'firstCompletedCensusBootMs', 'lastCompletedCensusBootMs', 'invokeCallBootMs', 'invokeReturnedBootMs', 'providerPID', 'providerBirth', 'providerImage', 'exactOwnedTitle', 'invokeHRESULT', 'invokeReturned', 'query', 'error', 'outcome'],
+  shell_invoke: ['centerAttempted', 'inputEffectUnknown', 'stage', 'censusAttempts', 'completedCensusAttempts', 'maxRoots', 'maxNodes', 'maxAdmittedProviderRoots', 'maxOwnedTitleMatches', 'firstCompletedCensusBootMs', 'lastCompletedCensusBootMs', 'invokeCallBootMs', 'invokeReturnedBootMs', 'providerPID', 'providerBirth', 'providerImage', 'exactOwnedTitle', 'invokeHRESULT', 'invokeReturned', 'query', 'error', 'outcome'],
+  center_input: ['deadlineBootMs', 'endBootMs', 'failureBootMs', 'firstCompletedCensusBootMs', 'completedCensusAttempts', 'inputEffectUnknown', 'sender', 'foregroundPID', 'foregroundBirth', 'initialKeysReleased', 'disposableAuthority', 'intentBootMs', 'inputCallBootMs', 'inputReturnedBootMs', 'outcome', 'query', 'error', 'acceptedEvents', 'cleanupReleaseAttempts', 'releaseUnknown', 'ownedKeysReleased', 'sendError', 'centerOpenedProved'],
   callback: ['eventKind', 'token', 'argument', 'entryBootMs', 'deadlineBootMs', 'sender', 'uri', 'familyName', 'uriSupport', 'launchReturned', 'accepted', 'outcome', 'error', 'query', 'launchEntered', 'targetVisibleQualified', 'timely', 'queryAdmissionBootMs', 'queryDeadlineBootMs', 'queryCallBootMs', 'queryReturnedBootMs', 'queryEntered', 'queryReturned', 'launchAdmissionBootMs', 'launchDeadlineBootMs', 'launchCallBootMs', 'launchReturnedBootMs'],
 };
 phaseFields.query_intent = [...phaseFields.callback!, 'queryBoundaryArmed'];
@@ -85,7 +86,7 @@ function diagnostic(r: Json, phase: 'sender' | 'collector' | 'shell_invoke'): vo
     if (r.ackPublished === true) { ordered('readyObservedBootMs', 'ackPublishedBootMs'); check(r.stage === 'receiver_collect', 'ack after ready validation'); }
   }
   if (phase === 'shell_invoke') {
-    check(['interactive', 'census', 'invoke_admission', 'invoke'].includes(r.stage as string), 'closed finder phase');
+    check(['interactive', 'census', 'center_input', 'invoke_admission', 'invoke'].includes(r.stage as string), 'closed finder phase');
     for (const key of ['censusAttempts', 'completedCensusAttempts', 'maxRoots', 'maxNodes', 'maxAdmittedProviderRoots', 'maxOwnedTitleMatches']) check(Number.isInteger(r[key]) && (r[key] as number) >= 0 && (r[key] as number) <= 0xffffffff, 'bounded aggregate census count');
     check((r.completedCensusAttempts as number) <= (r.censusAttempts as number) && (r.maxRoots as number) <= 64 && (r.maxNodes as number) <= 512 && (r.maxAdmittedProviderRoots as number) <= (r.maxRoots as number) && (r.maxOwnedTitleMatches as number) <= 2, 'observed finder bounds');
     if ((r.completedCensusAttempts as number) > 0) ordered('firstCompletedCensusBootMs', 'lastCompletedCensusBootMs');
@@ -97,7 +98,7 @@ const minimalEnv = (root: string): NodeJS.ProcessEnv => ({ SystemRoot: process.e
 async function run(mode: string, exe: string, args: string[], cwd: string, limit: number, nativeCustody = false): Promise<Actor> {
   check(performance.now() - start + limit + 5000 < 170000, 'global deadline insufficient; actor refused');
   const result: Actor = { mode, code: null, signal: null, collected: false, timedOut: false, overflow: false, stdout: '', stderr: '' }; actors.push(result);
-  const child = spawn(exe, args, { cwd, windowsHide: true, env: nativeCustody ? { ...minimalEnv(cwd), RUNNER_TEMP: process.env.RUNNER_TEMP } : minimalEnv(cwd), stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(exe, args, { cwd, windowsHide: true, env: nativeCustody ? { ...minimalEnv(cwd), RUNNER_TEMP: process.env.RUNNER_TEMP } : { ...minimalEnv(cwd), ...(mode === 'owned-shell-invoke' ? { SDK_COLDCLICK_DISPOSABLE_TEST: nonce } : {}) }, stdio: ['ignore', 'pipe', 'pipe'] });
   result.pid = child.pid; let total = 0;
   const capture = (b: Buffer, err: boolean): void => { const saved = b.subarray(0, Math.max(0, 16384 - total)).toString('utf8'); total += b.length;
     if (err) result.stderr += saved; else result.stdout += saved; if (total > 16384) { result.overflow = true; child.kill(); } };
@@ -113,7 +114,7 @@ async function run(mode: string, exe: string, args: string[], cwd: string, limit
 }
 function completed(r: Actor): void { check(r.collected && !r.timedOut && !r.overflow && !r.error && r.code === 0 && r.signal === null && r.stderr === '', `actor unknown: ${r.mode}`); }
 const receipts = ['TEST-register-intent.json', 'TEST-show-intent.json', 'TEST-sender.json', 'TEST-sender-collected.json',
-  'TEST-ui-invoke-intent.json', 'TEST-ui-invoke.json', 'TEST-receiver-ready.json', 'TEST-receiver-ack.json', 'TEST-receiver-lease-intent.json',
+  'TEST-center-input-intent.json', 'TEST-center-input.json', 'TEST-ui-invoke-intent.json', 'TEST-ui-invoke.json', 'TEST-receiver-ready.json', 'TEST-receiver-ack.json', 'TEST-receiver-lease-intent.json',
   'TEST-second-receiver.json', 'TEST-second-callback.json', 'TEST-query-intent.json', 'TEST-launch-intent.json', 'TEST-callback.json', 'TEST-receiver-terminal.json', 'TEST-collector.json'];
 let generation = '';
 function retain(): void {
@@ -178,6 +179,23 @@ async function main(): Promise<void> {
     for (const [leaf, phase, actor] of [['TEST-collector.json', 'collector', collector], ['TEST-ui-invoke.json', 'shell_invoke', invoked]] as const) {
       const observed = object((evidence.receipts as Json)[leaf]); diagnostic(observed, phase); check(observed.pid === actor.pid, 'diagnostic actor incarnation');
     }
+    const ui = object((evidence.receipts as Json)['TEST-ui-invoke.json']);
+    check(typeof ui.centerAttempted === 'boolean' && typeof ui.inputEffectUnknown === 'boolean', 'actual center discriminator flags');
+    if (ui.centerAttempted === true) {
+      const input = object((evidence.receipts as Json)['TEST-center-input.json']); correlation(input, 'center_input');
+      check(input.pid === ui.pid && input.birth === ui.birth && input.deadlineBootMs === ui.deadlineBootMs && input.centerOpenedProved === false && input.completedCensusAttempts === 1 && input.firstCompletedCensusBootMs === ui.firstCompletedCensusBootMs && typeof input.inputEffectUnknown === 'boolean', 'single correlated center discriminator');
+      for (const k of ['endBootMs', 'acceptedEvents', 'cleanupReleaseAttempts', 'sendError']) check(Number.isSafeInteger(input[k]) && (input[k] as number) >= 0, 'bounded actual input custody');
+      check((input.sendError as number) <= 0xffffffff && (input.acceptedEvents as number) <= 6 && (input.cleanupReleaseAttempts as number) <= 2 && typeof input.releaseUnknown === 'boolean' && typeof input.ownedKeysReleased === 'boolean' && ui.inputEffectUnknown === input.inputEffectUnknown, 'own down/release observations');
+      if (input.inputEffectUnknown === false) {
+        const intent = object((evidence.receipts as Json)['TEST-center-input-intent.json']); correlation(intent, 'center_input');
+        for (const k of ['nonce', 'pid', 'birth', 'bootMs', 'deadlineBootMs', 'firstCompletedCensusBootMs', 'completedCensusAttempts', 'foregroundPID', 'foregroundBirth', 'intentBootMs', 'disposableAuthority', 'initialKeysReleased']) check(intent[k] === input[k], 'immutable input intent');
+        const clocks = ['firstCompletedCensusBootMs', 'intentBootMs', 'inputCallBootMs', 'inputReturnedBootMs', 'endBootMs'].map(k => input[k]);
+        check(clocks.every(n => Number.isSafeInteger(n) && (n as number) >= 0) && clocks.every((n, i) => i === 0 || (n as number) >= (clocks[i - 1] as number)) && (input.inputCallBootMs as number) < (ui.deadlineBootMs as number), 'original input admission/order clocks');
+        check(input.initialKeysReleased === true && input.disposableAuthority === true && input.outcome === 'input_accepted' && input.acceptedEvents === 4 && input.cleanupReleaseAttempts === 0 && input.releaseUnknown === false && input.ownedKeysReleased === true && input.sendError === 0 && Number.isInteger(input.foregroundPID) && (input.foregroundPID as number) > 0 && (input.foregroundPID as number) <= 0xffffffff && /^[1-9][0-9]{1,19}$/.test(input.foregroundBirth as string), 'four accepted own events require released custody');
+        if (ui.invokeReturned === true) check((ui.completedCensusAttempts as number) >= 3 && (ui.lastCompletedCensusBootMs as number) >= (input.inputReturnedBootMs as number) && (ui.invokeCallBootMs as number) >= (input.inputReturnedBootMs as number), 'fresh complete post-input censuses before Invoke');
+        const inputSender = object(input.sender); check(inputSender.nonce === nonce && inputSender.pid === s.pid && inputSender.birth === s.birth && inputSender.collected === true && inputSender.exitCode === 0 && inputSender.collectedBootMs === collectedBoot && (input.intentBootMs as number) >= collectedBoot, 'collected sender before one input');
+      } else check(!('invokeCallBootMs' in ui) && ui.outcome === 'unknown' && input.outcome === 'unknown' && Number.isSafeInteger(input.failureBootMs) && (input.failureBootMs as number) <= (input.endBootMs as number), 'uncertain input forbids Invoke');
+    } else check(ui.inputEffectUnknown === false && !(evidence.receipts as Json)['TEST-center-input-intent.json'] && !(evidence.receipts as Json)['TEST-center-input.json'], 'zero input attempt');
     evidence.actorDiagnosticsValidated = true; completed(collector);
     const r = evidence.receipts as Json, c = object(r['TEST-collector.json']), ready = object(r['TEST-receiver-ready.json']), terminal = object(r['TEST-receiver-terminal.json']);
     correlation(c, 'collector'); correlation(ready, 'receiver_ready'); correlation(terminal, 'receiver_terminal');

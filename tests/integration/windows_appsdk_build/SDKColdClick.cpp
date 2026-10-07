@@ -287,9 +287,60 @@ static void interactive() {
     catch (...) { CloseDesktop(desktop); throw; }
     require(CloseDesktop(desktop) != FALSE, "CloseHeldInputDesktop");
 }
+// One owned chord, admitted only on a retained Shell foreground; no focus changes.
+static void centerInput(const Binding& binding, JsonObject& proof, ULONGLONG deadline) {
+    wchar_t authority[64]{}; const DWORD length = GetEnvironmentVariableW(L"SDK_COLDCLICK_DISPOSABLE_TEST", authority, 64);
+    demand(length == nonce.size() && std::wstring(authority, length) == nonce, "DisposableInputAuthority");
+    put(proof, L"centerAttempted", true); put(proof, L"inputEffectUnknown", true); put(proof, L"stage", L"center_input");
+    auto input = record(L"center_input"); num(input, L"deadlineBootMs", static_cast<double>(deadline));
+    num(input, L"firstCompletedCensusBootMs", proof.GetNamedNumber(L"firstCompletedCensusBootMs"));
+    num(input, L"completedCensusAttempts", proof.GetNamedNumber(L"completedCensusAttempts")); put(input, L"inputEffectUnknown", true);
+    struct Keys {
+        bool win = false, n = false, releaseUnknown = false; unsigned accepted = 0, releaseAttempts = 0; DWORD error = 0;
+        bool send(WORD key, bool up) {
+            INPUT event{}; event.type = INPUT_KEYBOARD; event.ki.wVk = key; event.ki.dwFlags = up ? KEYEVENTF_KEYUP : 0;
+            SetLastError(ERROR_SUCCESS); if (SendInput(1, &event, sizeof(event)) != 1) { error = GetLastError(); return false; }
+            ++accepted; (key == VK_LWIN ? win : n) = !up; return true;
+        }
+        void release() noexcept {
+            if (n) { ++releaseAttempts; if (!send('N', true)) releaseUnknown = true; n = false; }
+            if (win) { ++releaseAttempts; if (!send(VK_LWIN, true)) releaseUnknown = true; win = false; }
+        }
+        ~Keys() { release(); }
+    } keys;
+    try {
+        const auto sender = read(L"TEST-sender-collected.json");
+        demand(sender.GetNamedString(L"nonce") == nonce && sender.GetNamedBoolean(L"collected") && sender.GetNamedNumber(L"exitCode") == 0, "CollectedSenderBeforeInput");
+        input.Insert(L"sender", sender); const HWND foreground = GetForegroundWindow(); DWORD pid = 0;
+        demand(foreground != nullptr && GetWindowThreadProcessId(foreground, &pid) != 0, "ForegroundShellWindow"); ShellOwner owner(pid);
+        num(input, L"foregroundPID", pid); put(input, L"foregroundBirth", owner.born);
+        auto immediate = [&] { interactive(); binding.stable(); owner.live(); DWORD actual = 0;
+            demand(GetForegroundWindow() == foreground && GetWindowThreadProcessId(foreground, &actual) != 0 && actual == pid, "RetainedForegroundShell"); budget(deadline); };
+        auto released = [&] { for (int key : {VK_LWIN, VK_RWIN, static_cast<int>('N'), VK_SHIFT, VK_LSHIFT, VK_RSHIFT, VK_CONTROL, VK_LCONTROL, VK_RCONTROL, VK_MENU, VK_LMENU, VK_RMENU})
+            demand(!(GetAsyncKeyState(key) & 0x8000), "InitiallyReleasedKeys"); };
+        immediate(); released(); put(input, L"initialKeysReleased", true); put(input, L"disposableAuthority", true);
+        num(input, L"intentBootMs", static_cast<double>(GetTickCount64())); publish(L"TEST-center-input-intent.json", input);
+        immediate(); released(); num(input, L"inputCallBootMs", static_cast<double>(GetTickCount64())); budget(deadline);
+        demand(keys.send(VK_LWIN, false), "OwnedWinDown"); immediate(); demand(keys.send('N', false), "OwnedNDown");
+        // Releases of successfully owned downs are allowed even after admission expires.
+        demand(keys.send('N', true), "OwnedNUp"); demand(keys.send(VK_LWIN, true), "OwnedWinUp");
+        num(input, L"inputReturnedBootMs", static_cast<double>(GetTickCount64())); put(input, L"outcome", L"input_accepted");
+    } catch (const Failure& e) { put(input, L"query", winrt::to_hstring(e.query).c_str()); num(input, L"error", e.error); }
+      catch (const winrt::hresult_error& e) { num(input, L"error", static_cast<DWORD>(e.code().value)); }
+      catch (...) { put(input, L"query", L"exception"); }
+    keys.release(); const bool accepted = input.HasKey(L"outcome") && keys.accepted == 4 && !keys.releaseUnknown && keys.releaseAttempts == 0;
+    num(input, L"acceptedEvents", keys.accepted); num(input, L"cleanupReleaseAttempts", keys.releaseAttempts); put(input, L"releaseUnknown", keys.releaseUnknown);
+    put(input, L"ownedKeysReleased", !keys.win && !keys.n && !keys.releaseUnknown); num(input, L"sendError", keys.error);
+    put(input, L"inputEffectUnknown", !accepted); put(input, L"centerOpenedProved", false);
+    if (!accepted) { put(input, L"outcome", L"unknown"); num(input, L"failureBootMs", static_cast<double>(GetTickCount64())); }
+    num(input, L"endBootMs", static_cast<double>(GetTickCount64()));
+    publish(L"TEST-center-input.json", input); put(proof, L"inputEffectUnknown", !accepted);
+    demand(accepted, "CenterInputUnknown"); budget(deadline);
+}
 static int invoke() {
     const ULONGLONG deadline = GetTickCount64() + 30000; Binding binding; auto proof = record(L"shell_invoke");
     num(proof, L"deadlineBootMs", static_cast<double>(deadline)); put(proof, L"stage", L"interactive");
+    put(proof, L"centerAttempted", false); put(proof, L"inputEffectUnknown", false);
     unsigned attempts = 0, completed = 0, maxRoots = 0, maxNodes = 0, maxProviders = 0, maxTitles = 0;
     for (auto key : {L"censusAttempts", L"completedCensusAttempts", L"maxRoots", L"maxNodes", L"maxAdmittedProviderRoots", L"maxOwnedTitleMatches"}) num(proof, key, 0);
     try {
@@ -332,7 +383,10 @@ static int invoke() {
             num(proof, L"lastCompletedCensusBootMs", static_cast<double>(GetTickCount64())); return found;
         };
         while (GetTickCount64() < deadline) {
-            auto selected = census(); if (!selected.row) { Sleep(250); continue; }
+            auto selected = census(); if (!selected.row) {
+                if (completed == 1 && maxTitles == 0) centerInput(binding, proof, deadline);
+                Sleep(250); continue;
+            }
             auto fresh = census(); demand(fresh.row && fresh.pid == selected.pid && fresh.rowID == selected.rowID && fresh.titleID == selected.titleID, "FreshOwnedRow");
             BOOL same = FALSE; winrt::check_hresult(automation->CompareElements(selected.row.Get(), fresh.row.Get(), &same)); demand(same, "UIASameElement");
             ShellOwner owner(fresh.pid); BOOL offscreen = TRUE, enabled = FALSE;
