@@ -81,11 +81,17 @@ jobs:
             exit 1
           fi
 
-      - name: Run tests
-        run: go test -timeout 20m -v -race -coverprofile=coverage.txt -covermode=atomic ./...
-
       - name: Build binary
         run: go build -o bin/claude-notifications ./cmd/claude-notifications
+
+      # Build first so installer units retain their wrapper presence assertion.
+      # Their helpers use private sandboxes and ephemeral HTTP ports, while
+      # test-env.sh preserves prepared Go caches. Wait for both suites before help.
+      - parallel:
+          - name: Run tests
+            run: go test -timeout 20m -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+          - name: Run install.sh unit tests
+            run: bash bin/install_test.sh
 
       - name: Test binary execution (help)
         run: ./bin/claude-notifications help
@@ -120,9 +126,6 @@ jobs:
           else
             echo "⚠ System sounds directory not found (expected on macOS)"
           fi
-
-      - name: Run install.sh unit tests
-        run: bash bin/install_test.sh
 
       # Both suites re-enter env -i with private HOME/XDG/TMPDIR. Only the
       # installer binds 18888; the loader uses curl stubs and no network port.
