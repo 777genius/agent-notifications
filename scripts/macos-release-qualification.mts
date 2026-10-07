@@ -159,7 +159,8 @@ if c['mode']=='prepare':
                 'sidecar':{'path':prefix+'ClaudeNotifier.app.managed-runtime.json','sha256':sha(sidecar)}}
     (parent/'manifest.json').write_text(json.dumps(manifest,sort_keys=True)+'\n')
     receipt=json.loads((parent/'release-inputs-receipt.json').read_text())
-    receipt.update(runId=run,operatorRunID=c['currentRun'],operatorSHA=c['operatorSHA'],
+    receipt.update(purpose='exact-source signed macOS and prior operator binary custody, no qualification grant',
+                   runId=run,operatorRunID=c['currentRun'],operatorSHA=c['operatorSHA'],
                    signingCustody=custody,adapterSHA256=c['adapterSHA256'],consumerSHA256=c['consumerSHA256'],
                    priorOperatorCustody=prior_custody,
                    otherNativeBinaries='prior_operator_run_custody_only_no_platform_promotion')
