@@ -521,8 +521,40 @@ async function main(): Promise<void> {
   if (exited.collected !== true || exited.exitCode !== 0 || evidence.showAttempts !== 1 || evidence.showCallOutcome !== 'returned') throw new Error('collected sender/Show proof absent');
   // Read-only diagnostics do not establish visible UI or a native callback.
   native('history', 15_000);
-  const invoke = native('invoke', 30_000, true); success(invoke);
-  if (read('ui-invoke.json').invokeHRESULT !== 0) throw new Error('real Shell Invoke failed');
+  evidence.uiActivationOutcome = 'unknown';
+  const invoke = native('invoke', 30_000, true);
+  if (existsSync(join(root, 'ui-invoke-intent.json'))) {
+    evidence.uiActivationBoundaryArmed = true; // Missing terminal is unknown, never an action retry.
+    const intent = read('ui-invoke-intent.json');
+    if (intent.nonce !== nonce || intent.pid !== invoke.pid || intent.selectionKind !== 'toast_default'
+        || intent.controlType !== 50007 || intent.invokeBoundaryArmed !== true || intent.invokeCallEntered !== false
+        || intent.specSHA256 !== hash(join(root, 'msix-spec.json')) || intent.exactTitleVerified !== true
+        || intent.offscreen !== false || intent.enabled !== true || !Number.isInteger(intent.providerPID)
+        || Number(intent.providerPID) <= 0 || !['windows_explorer', 'system32_shellhost',
+          'systemapps_shellexperiencehost', 'systemapps_cbs_shellhost'].includes(String(intent.providerImagePathKind))
+        || typeof intent.providerCreationTicks !== 'string'
+        || !/^[0-9]{15,20}$/.test(intent.providerCreationTicks)) throw new Error('default toast intent binding invalid');
+    for (const key of ['runtimeID', 'titleRuntimeID', 'containerRuntimeID']) {
+      const id = intent[key];
+      if (!Array.isArray(id) || id.length < 1 || id.length > 64 || id.some(part => !Number.isInteger(part))) {
+        throw new Error('bounded default toast runtime identity absent');
+      }
+    }
+    if (existsSync(join(root, 'ui-invoke.json'))) {
+      const returned = read('ui-invoke.json');
+      for (const key of ['nonce', 'pid', 'selectionKind', 'controlType', 'providerPID', 'providerCreationTicks',
+        'runtimeID', 'titleRuntimeID', 'containerRuntimeID', 'providerImagePathKind', 'exactTitleVerified', 'offscreen', 'enabled', 'specSHA256']) {
+        if (JSON.stringify(returned[key]) !== JSON.stringify(intent[key])) throw new Error('default toast return binding changed');
+      }
+      if (returned.invokeCallEntered !== true || returned.invokeCallReturned !== true || returned.invokeHRESULT !== 0) {
+        throw new Error('real default Shell Invoke not confirmed');
+      }
+      evidence.uiActivationOutcome = 'returned'; evidence.uiActivationKind = 'toast_default';
+      evidence.uiActivationControlType = 50007;
+    }
+  }
+  success(invoke);
+  if (evidence.uiActivationOutcome !== 'returned') throw new Error('default Shell Invoke terminal proof absent');
   for (let i = 0; i < 100 && !existsSync(join(root, 'effect.json')); i++) await delay(100);
   success(native('collect', 12_000));
   if (read('callback-exit.json').collected !== true || read('callback-exit.json').exitCode !== 0
