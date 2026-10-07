@@ -53,7 +53,7 @@ func (f fakeDelivery) Deliver(_ context.Context, r notification.Request) notific
 	return notification.Receipt{CorrelationID: r.CorrelationID, Status: s, Reason: "test_outcome", Navigation: nav(r)}
 }
 func snapshot(route string) installruntime.PolicySnapshot {
-	return installruntime.PolicySnapshot{Installation: installruntime.InstalledSnapshot{Enabled: true, Ledger: installruntime.Ledger{ID: route}}, Fields: map[string]json.RawMessage{"schemaVersion": json.RawMessage(`1`), "enabled": json.RawMessage(`true`), "route": json.RawMessage(fmt.Sprintf(`{"localRouting":true,"applicationPath":%q,"teamID":"TEAM"}`, route))}}
+	return installruntime.PolicySnapshot{Installation: installruntime.InstalledSnapshot{Enabled: true, Ledger: installruntime.Ledger{ID: route}}, Fields: map[string]json.RawMessage{"schemaVersion": json.RawMessage(`1`), "enabled": json.RawMessage(`true`), "route": json.RawMessage(fmt.Sprintf(`{"localRouting":true,"applicationPath":%q,"teamID":"TEAM","linuxCallbackSnapshot":{"snapshotPath":%q,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}`, route, route))}}
 }
 
 const global = `{"foreign":{"keep":true},"notifications":{"desktop":{"enabled":true,"sound":true,"clickToFocus":true}}}`
@@ -100,13 +100,20 @@ func TestRequestSnapshotsSharedLimiterReplayAndClose(t *testing.T) {
 	}
 	entered := make(chan string, 2)
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	closeRelease := func() { releaseOnce.Do(func() { close(release) }) }
+	defer closeRelease()
 	var mu sync.Mutex
 	seen := map[string]string{}
 	o.DeliveryFactory = func(m notifier.ManagedInstallation, _ string, _ notifier.BootClock) Delivery {
 		return fakeDelivery{ready: func(r notification.Request) { entered <- m.Expected.Ledger.ID; <-release }, send: func(r notification.Request) string {
 			mu.Lock()
 			defer mu.Unlock()
-			seen[m.Expected.Ledger.ID] = r.Target.ApplicationPath
+			target := r.Target.ApplicationPath
+			if goruntime.GOOS == "linux" {
+				target = r.Target.Linux.SnapshotPath
+			}
+			seen[m.Expected.Ledger.ID] = target
 			return "submitted"
 		}}
 	}
@@ -114,15 +121,29 @@ func TestRequestSnapshotsSharedLimiterReplayAndClose(t *testing.T) {
 	results := make(chan agentnotify.Receipt, 2)
 	go func() { results <- notify(b, "A") }()
 	go func() { results <- notify(b, "B") }()
-	<-entered
-	<-entered
+	entryTimer := time.NewTimer(10 * time.Second)
+	defer entryTimer.Stop()
+	for range 2 {
+		select {
+		case <-entered:
+		case early := <-results:
+			t.Fatalf("Notify returned before readiness: %+v", early)
+		case <-entryTimer.C:
+			t.Fatal("Notify did not reach readiness within fixture budget")
+		}
+	}
 	if r := notify(b, "C"); r.Reason != "busy" {
 		t.Fatalf("third: %+v", r)
 	}
-	close(release)
+	closeRelease()
 	for range 2 {
-		if r := <-results; r.Status != "submitted" {
-			t.Fatalf("send: %+v", r)
+		select {
+		case r := <-results:
+			if r.Status != "submitted" {
+				t.Fatalf("send: %+v", r)
+			}
+		case <-entryTimer.C:
+			t.Fatal("Notify did not complete within fixture budget")
 		}
 	}
 	if loads.Load() != 2 || len(seen) != 2 {

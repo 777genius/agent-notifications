@@ -104,7 +104,7 @@ func TestContextualStatusReadsOnceWithoutEffectsOrIdentityDisclosure(t *testing.
 		ControlRoot: filepath.Join(root, "control"), JournalRoot: filepath.Join(root, "journal"), SpoolRoot: filepath.Join(root, "spool"), GlobalConfig: filepath.Join(root, "global"), BootClock: statusBoot{},
 		ReadSnapshot: func(context.Context, string) (installruntime.PolicySnapshot, error) {
 			reads++
-			return installruntime.PolicySnapshot{Installation: installruntime.InstalledSnapshot{Enabled: true, Ledger: installruntime.Ledger{Native: &installruntime.NativeRecord{DecoderFloor: 1}}}, Fields: map[string]json.RawMessage{"schemaVersion": json.RawMessage(`1`), "enabled": json.RawMessage(`true`), "route": json.RawMessage(`{"localRouting":true,"allowUnknownCaller":true,"applicationPath":"/private/Codex.app","teamID":"A1B2C3D4E5"}`)}}, nil
+			return installruntime.PolicySnapshot{Installation: installruntime.InstalledSnapshot{Enabled: true, Ledger: installruntime.Ledger{Native: &installruntime.NativeRecord{DecoderFloor: 1}}}, Fields: map[string]json.RawMessage{"schemaVersion": json.RawMessage(`1`), "enabled": json.RawMessage(`true`), "route": json.RawMessage(`{"localRouting":true,"allowUnknownCaller":true,"applicationPath":"/private/Codex.app","teamID":"A1B2C3D4E5","linuxCallbackSnapshot":{"snapshotPath":"/private/callback.snapshot","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}`)}}, nil
 		},
 		ReadGlobal: func(string) ([]byte, error) {
 			globals++
@@ -125,7 +125,9 @@ func TestContextualStatusReadsOnceWithoutEffectsOrIdentityDisclosure(t *testing.
 	o := origin.Context{Provider: "codex", Namespace: "mcp", SessionID: "private-thread", Provenance: origin.ClientMetadata, Locality: origin.LocalityUnknown, Interface: origin.InterfaceUnknown}
 	got := b.StatusForOrigin(context.Background(), o)
 	wantNavigation := agentnotify.NavigationStatus{Capability: "eligible", Precision: "chat_id", Scope: "local_current_profile", Reason: "configured_codex_desktop"}
-	if runtime.GOOS != "darwin" {
+	if runtime.GOOS == "linux" {
+		wantNavigation.Scope = "selected_linux_installation"
+	} else if runtime.GOOS != "darwin" {
 		wantNavigation = agentnotify.NavigationStatus{Capability: "unavailable", Precision: "none", Reason: "unsupported_platform"}
 	}
 	want := Status{Configuration: "configured", ExplicitIntent: true, DesktopEnabled: true, OfflineCapability: "eligible", Permission: "not_checked", Navigation: wantNavigation}
@@ -137,7 +139,7 @@ func TestContextualStatusReadsOnceWithoutEffectsOrIdentityDisclosure(t *testing.
 	o.SessionID = ""
 	missing := b.StatusForOrigin(context.Background(), o)
 	generic := b.Status(context.Background())
-	if runtime.GOOS == "darwin" && (missing.Navigation.Reason != "invalid_origin" || generic.Navigation.Reason != "context_unavailable") {
+	if (runtime.GOOS == "darwin" || runtime.GOOS == "linux") && (missing.Navigation.Reason != "invalid_origin" || generic.Navigation.Reason != "context_unavailable") {
 		t.Fatalf("missing context: %+v %+v", missing, generic)
 	}
 	if reads != 3 || globals != 3 {
