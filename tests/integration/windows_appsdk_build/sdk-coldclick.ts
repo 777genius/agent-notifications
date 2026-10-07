@@ -55,20 +55,43 @@ function sameFacts(a: Json, b: Json): void { check(Object.keys(a).length === Obj
 function sameIdentity(a: Json, b: Json): void { for (const k of ['sidSHA256', 'authLUIDSHA256', 'session']) check(a[k] === b[k], 'same current-user identity/session'); }
 function medium(t: Json): void { check(t.elevated === false && t.integrityRID === 0x2000 && t.enabledAdmins === false, 'actual Medium/nonadmin required'); }
 const phaseFields: Record<string, string[]> = {
-  sender: ['token', 'bootstrapModule', 'bootstrapCallBootMs', 'bootstrapHRESULT', 'selectedFramework', 'isSupported', 'runtimeModule', 'handlerBeforeRegister', 'registered', 'nativeID', 'showReturned', 'unregisterReturned', 'bootstrapShutdown', 'outcome', 'error', 'query'],
+  sender: ['token', 'bootstrapModule', 'bootstrapCallBootMs', 'bootstrapHRESULT', 'selectedFramework', 'isSupported', 'runtimeModule', 'handlerBeforeRegister', 'registered', 'nativeID', 'showReturned', 'unregisterReturned', 'bootstrapShutdown', 'outcome', 'error', 'query', 'showCallBootMs', 'showReturnedBootMs', 'unregisterCallBootMs', 'unregisterReturnedBootMs'],
   receiver_ready: ['token', 'bindingSHA256', 'leaseDeadlineBootMs'],
   receiver_terminal: ['token', 'bootstrapModule', 'bootstrapCallBootMs', 'bootstrapHRESULT', 'selectedFramework', 'isSupported', 'runtimeModule', 'handlerBeforeRegister', 'activationKind', 'bootstrapShutdown', 'unregisterReturned', 'outcome', 'registrationStillOwned', 'error', 'query'],
-  collector: ['ready', 'heldToken', 'heldPhysicalImage', 'ackPublished', 'waitResult', 'collected', 'exitCode', 'outcome', 'query', 'error'],
-  shell_invoke: ['providerPID', 'providerBirth', 'providerImage', 'exactOwnedTitle', 'invokeHRESULT', 'invokeReturned', 'query', 'error', 'outcome'],
+  collector: ['readyWaitDeadlineBootMs', 'readyObserved', 'readyObservedBootMs', 'ackPublishedBootMs', 'stage', 'ready', 'heldToken', 'heldPhysicalImage', 'ackPublished', 'waitResult', 'collected', 'exitCode', 'outcome', 'query', 'error'],
+  shell_invoke: ['stage', 'censusAttempts', 'completedCensusAttempts', 'maxRoots', 'maxNodes', 'maxAdmittedProviderRoots', 'maxOwnedTitleMatches', 'firstCompletedCensusBootMs', 'lastCompletedCensusBootMs', 'invokeCallBootMs', 'invokeReturnedBootMs', 'providerPID', 'providerBirth', 'providerImage', 'exactOwnedTitle', 'invokeHRESULT', 'invokeReturned', 'query', 'error', 'outcome'],
   callback: ['eventKind', 'token', 'argument', 'entryBootMs', 'deadlineBootMs', 'sender', 'uri', 'familyName', 'uriSupport', 'launchReturned', 'accepted', 'outcome', 'error', 'query', 'launchEntered', 'targetVisibleQualified', 'timely', 'queryAdmissionBootMs', 'queryDeadlineBootMs', 'queryCallBootMs', 'queryReturnedBootMs', 'queryEntered', 'queryReturned', 'launchAdmissionBootMs', 'launchDeadlineBootMs', 'launchCallBootMs', 'launchReturnedBootMs'],
 };
 phaseFields.query_intent = [...phaseFields.callback!, 'queryBoundaryArmed'];
 phaseFields.launch_intent = [...phaseFields.callback!, 'launchBoundaryArmed'];
 function correlation(r: Json, phase: string): void {
-  const allowed = ['nonce', 'phase', 'pid', 'birth', 'bootMs', ...phaseFields[phase]!];
+  const allowed = ['nonce', 'phase', 'pid', 'birth', 'bootMs', ...(['sender', 'collector', 'shell_invoke'].includes(phase) ? ['deadlineBootMs', 'endBootMs', 'failureBootMs'] : []), ...phaseFields[phase]!];
   check(Object.keys(r).every(k => allowed.includes(k)), 'closed native phase schema');
   check(r.nonce === nonce && r.phase === phase && Number.isInteger(r.pid) && (r.pid as number) > 0 &&
     typeof r.birth === 'string' && /^[1-9][0-9]{1,19}$/.test(r.birth) && typeof r.bootMs === 'number' && Number.isSafeInteger(r.bootMs), 'actor incarnation schema');
+}
+function diagnostic(r: Json, phase: 'sender' | 'collector' | 'shell_invoke'): void {
+  correlation(r, phase);
+  const clock = (key: string): number => { const value = r[key]; check(Number.isSafeInteger(value) && (value as number) >= (r.bootMs as number), `finite diagnostic ${key}`); return value as number; };
+  const end = clock('endBootMs'), deadline = clock('deadlineBootMs'); check(end >= (r.bootMs as number) && deadline > (r.bootMs as number), 'original actor diagnostic clocks');
+  if (r.outcome === 'unknown') check('failureBootMs' in r, 'actual negative failure clock required');
+  if ('failureBootMs' in r) check(clock('failureBootMs') <= end, 'failure observed before terminal publication');
+  const ordered = (a: string, b: string): void => { check(clock(a) <= clock(b) && clock(b) <= end, 'observed phase return clocks'); };
+  if (phase === 'sender' && r.showReturned === true) { ordered('showCallBootMs', 'showReturnedBootMs'); if (r.unregisterReturned === true) { ordered('unregisterCallBootMs', 'unregisterReturnedBootMs'); check(clock('showReturnedBootMs') <= clock('unregisterCallBootMs'), 'Show before Unregister'); } }
+  if (phase === 'collector') {
+    check(['ready_wait', 'ready_validate', 'receiver_collect'].includes(r.stage as string) && typeof r.readyObserved === 'boolean' && typeof r.ackPublished === 'boolean' && clock('readyWaitDeadlineBootMs') === deadline - 70000, 'fixed collector ready admission');
+    if (r.readyObserved === true) check(clock('readyObservedBootMs') <= end, 'ready observation retained'); else check(r.ackPublished === false && !('readyObservedBootMs' in r), 'no ack without actual ready');
+    if (r.query === 'AbsoluteDeadline' && r.stage === 'ready_wait') check(r.readyObserved === false && clock('failureBootMs') >= clock('readyWaitDeadlineBootMs'), 'actual missing-ready admission deadline');
+    if (r.ackPublished === true) { ordered('readyObservedBootMs', 'ackPublishedBootMs'); check(r.stage === 'receiver_collect', 'ack after ready validation'); }
+  }
+  if (phase === 'shell_invoke') {
+    check(['interactive', 'census', 'invoke_admission', 'invoke'].includes(r.stage as string), 'closed finder phase');
+    for (const key of ['censusAttempts', 'completedCensusAttempts', 'maxRoots', 'maxNodes', 'maxAdmittedProviderRoots', 'maxOwnedTitleMatches']) check(Number.isInteger(r[key]) && (r[key] as number) >= 0 && (r[key] as number) <= 0xffffffff, 'bounded aggregate census count');
+    check((r.completedCensusAttempts as number) <= (r.censusAttempts as number) && (r.maxRoots as number) <= 64 && (r.maxNodes as number) <= 512 && (r.maxAdmittedProviderRoots as number) <= (r.maxRoots as number) && (r.maxOwnedTitleMatches as number) <= 2, 'observed finder bounds');
+    if ((r.completedCensusAttempts as number) > 0) ordered('firstCompletedCensusBootMs', 'lastCompletedCensusBootMs');
+    if (r.query === 'OwnedToastUnavailable') check((r.completedCensusAttempts as number) > 0 && r.maxOwnedTitleMatches === 0 && clock('failureBootMs') >= deadline && !('invokeCallBootMs' in r), 'owned finder unavailable after measured census deadline without Invoke');
+    if (r.invokeReturned === true) ordered('invokeCallBootMs', 'invokeReturnedBootMs');
+  }
 }
 const minimalEnv = (root: string): NodeJS.ProcessEnv => ({ SystemRoot: process.env.SystemRoot, TEMP: root, TMP: root });
 async function run(mode: string, exe: string, args: string[], cwd: string, limit: number, nativeCustody = false): Promise<Actor> {
@@ -138,7 +161,7 @@ async function main(): Promise<void> {
     const sender = await run('medium-sender', launcher, ['--TEST-sdk-cold-sender', nonce, generation, exe], generation, 35000); retain(); completed(sender);
     const l = object(sender.record); check(l.nonce === nonce && l.pid === sender.pid && l.variant === 'sdk-cold-sender' && l.collected === true && l.childExit === 0 &&
       l.childTerminated === false && l.timedOut === false && l.cleanupError === null && l.queriesComplete === true && l.sameIdentitySession === true && l.enabledAdmins === false, 'actual contained sender exit');
-    const s = object(JSON.parse(l.childRecord as string)); correlation(s, 'sender'); check(s.pid === l.childPid && s.birth === l.childBirth && s.showReturned === true && s.unregisterReturned === true &&
+    const s = object(JSON.parse(l.childRecord as string)); diagnostic(s, 'sender'); check(s.pid === l.childPid && s.birth === l.childBirth && s.showReturned === true && s.unregisterReturned === true &&
       s.handlerBeforeRegister === true && s.bootstrapHRESULT === 0 && s.isSupported === true && Number.isInteger(s.nativeID) && (s.nativeID as number) > 0, 'one actual native Show before death');
     check(s.selectedFramework === 'Microsoft.WindowsAppRuntime.2_2.5.1.0_arm64__8wekyb3d8bbwe' && object(s.bootstrapModule).sha256 === provenance.bootstrapSHA256 && object(s.runtimeModule).sha256 === provenance.runtimeModuleSHA256, 'actual sender pinned SDK graph/modules');
     const st = token(s.token, true); medium(st); sameIdentity(st, baseline); for (const k of Object.keys(token(l.held))) check(st[k] === object(l.held)[k], 'held/own sender token');
@@ -152,7 +175,10 @@ async function main(): Promise<void> {
     const settled = await Promise.allSettled([collectorPromise, invokePromise]); retain();
     check(settled.every(r => r.status === 'fulfilled'), 'all started own actors collected or explicitly unknown');
     const collector = (settled[0] as PromiseFulfilledResult<Actor>).value, invoked = (settled[1] as PromiseFulfilledResult<Actor>).value;
-    completed(collector);
+    for (const [leaf, phase, actor] of [['TEST-collector.json', 'collector', collector], ['TEST-ui-invoke.json', 'shell_invoke', invoked]] as const) {
+      const observed = object((evidence.receipts as Json)[leaf]); diagnostic(observed, phase); check(observed.pid === actor.pid, 'diagnostic actor incarnation');
+    }
+    evidence.actorDiagnosticsValidated = true; completed(collector);
     const r = evidence.receipts as Json, c = object(r['TEST-collector.json']), ready = object(r['TEST-receiver-ready.json']), terminal = object(r['TEST-receiver-terminal.json']);
     correlation(c, 'collector'); correlation(ready, 'receiver_ready'); correlation(terminal, 'receiver_terminal');
     check(c.pid === collector.pid && c.collected === true && c.exitCode === 0 && c.ackPublished === true && c.heldPhysicalImage === exe &&

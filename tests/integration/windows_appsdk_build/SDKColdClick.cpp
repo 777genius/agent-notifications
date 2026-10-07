@@ -90,7 +90,7 @@ static void bootstrap(Bootstrap& state, JsonObject& j, const Binding& binding) {
     demand(supported, "SDKIsSupportedFalse"); budget(lease);
 }
 static int sender() {
-    lease = GetTickCount64() + 30000; Binding binding; auto result = record(L"sender"); const auto token = ownToken(); result.Insert(L"token", token);
+    lease = GetTickCount64() + 30000; Binding binding; auto result = record(L"sender"); num(result, L"deadlineBootMs", static_cast<double>(lease)); const auto token = ownToken(); result.Insert(L"token", token);
     bool shutdown = false; Bootstrap state(shutdown); bool registered = false;
     winrt::Microsoft::Windows::AppNotifications::AppNotificationManager manager{nullptr};
     try {
@@ -101,16 +101,17 @@ static int sender() {
         manager.Register(); registered = true; put(result, L"registered", true); budget(lease); binding.stable();
         const std::wstring xml = L"<toast launch=\"TEST-cold-" + nonce + L"\"><visual><binding template=\"ToastGeneric\"><text>Navigation TEST " + nonce + L"</text><text>SDK cold activation TEST</text></binding></visual></toast>";
         winrt::Microsoft::Windows::AppNotifications::AppNotification toast(xml);
-        publish(L"TEST-show-intent.json", result); budget(lease); manager.Show(toast); num(result, L"nativeID", toast.Id());
+        publish(L"TEST-show-intent.json", result); num(result, L"showCallBootMs", static_cast<double>(GetTickCount64())); budget(lease); manager.Show(toast); num(result, L"showReturnedBootMs", static_cast<double>(GetTickCount64())); num(result, L"nativeID", toast.Id());
         demand(toast.Id() != 0, "NativeIDZero"); put(result, L"showReturned", true);
-        manager.Unregister(); registered = false; put(result, L"unregisterReturned", true); manager.NotificationInvoked(event);
+        num(result, L"unregisterCallBootMs", static_cast<double>(GetTickCount64())); manager.Unregister(); num(result, L"unregisterReturnedBootMs", static_cast<double>(GetTickCount64())); registered = false; put(result, L"unregisterReturned", true); manager.NotificationInvoked(event);
         state.shutdown(); put(result, L"bootstrapShutdown", shutdown); put(result, L"outcome", std::wstring(L"shown_sender_finished"));
-        demand(ownToken().Stringify() == token.Stringify(), "SenderTokenChanged"); publish(L"TEST-sender.json", result);
+        demand(ownToken().Stringify() == token.Stringify(), "SenderTokenChanged"); num(result, L"endBootMs", static_cast<double>(GetTickCount64())); publish(L"TEST-sender.json", result);
         std::puts(winrt::to_string(result.Stringify()).c_str()); return 0;
     } catch (const winrt::hresult_error& e) { num(result, L"error", static_cast<DWORD>(e.code().value)); }
       catch (const Failure& e) { put(result, L"query", winrt::to_hstring(e.query).c_str()); num(result, L"error", e.error); }
+    num(result, L"failureBootMs", static_cast<double>(GetTickCount64()));
     if (registered) { try { manager.Unregister(); put(result, L"unregisterReturned", true); } catch (...) { put(result, L"unregisterReturned", false); } }
-    put(result, L"outcome", std::wstring(L"unknown")); publish(L"TEST-sender.json", result); std::puts(winrt::to_string(result.Stringify()).c_str()); return 1;
+    num(result, L"endBootMs", static_cast<double>(GetTickCount64())); put(result, L"outcome", std::wstring(L"unknown")); publish(L"TEST-sender.json", result); std::puts(winrt::to_string(result.Stringify()).c_str()); return 1;
 }
 static int receiver() {
     const ULONGLONG entered = GetTickCount64(); lease = entered + 65000;
@@ -204,8 +205,11 @@ static int receiver() {
 }
 static int collect() {
     const ULONGLONG deadline = GetTickCount64() + 100000; Binding binding; auto j = record(L"collector"); File process;
+    num(j, L"deadlineBootMs", static_cast<double>(deadline)); num(j, L"readyWaitDeadlineBootMs", static_cast<double>(deadline - 70000));
+    put(j, L"readyObserved", false); put(j, L"ackPublished", false); put(j, L"stage", L"ready_wait");
     try {
         while (!exists(L"TEST-receiver-ready.json")) { budget(deadline - 70000); Sleep(10); }
+        put(j, L"readyObserved", true); num(j, L"readyObservedBootMs", static_cast<double>(GetTickCount64())); put(j, L"stage", L"ready_validate");
         const auto ready = read(L"TEST-receiver-ready.json");
         demand(ready.GetNamedString(L"nonce") == nonce && ready.GetNamedString(L"phase") == L"receiver_ready" &&
             ready.GetNamedString(L"bindingSHA256") == winrt::to_hstring(binding.sha), "ReadyBinding");
@@ -222,7 +226,7 @@ static int collect() {
         demand(ready.Size() == 8 && end > GetTickCount64() && end < deadline && end - ready.GetNamedNumber(L"bootMs") <= 65000, "ReceiverLease");
         auto ack = record(L"collector_ack"); num(ack, L"receiverPID", pid); put(ack, L"receiverBirth", std::wstring(ready.GetNamedString(L"birth")));
         put(ack, L"bindingSHA256", winrt::to_hstring(binding.sha).c_str()); publish(L"TEST-receiver-ack.json", ack);
-        j.Insert(L"ready", ready); j.Insert(L"heldToken", actual); put(j, L"heldPhysicalImage", image); put(j, L"ackPublished", true);
+        j.Insert(L"ready", ready); j.Insert(L"heldToken", actual); put(j, L"heldPhysicalImage", image); put(j, L"ackPublished", true); num(j, L"ackPublishedBootMs", static_cast<double>(GetTickCount64())); put(j, L"stage", L"receiver_collect");
         const ULONGLONG now = GetTickCount64();
         demand(now < static_cast<ULONGLONG>(end) + 3000, "ReceiverCollectionLeaseElapsed");
         const ULONGLONG remaining = static_cast<ULONGLONG>(end) + 3000 - now;
@@ -232,10 +236,10 @@ static int collect() {
         if (wait != WAIT_OBJECT_0) throw Failure{"ReceiverCollectionUnknown", wait == WAIT_FAILED ? GetLastError() : WAIT_TIMEOUT};
         DWORD exit = 0; require(GetExitCodeProcess(process.h, &exit) != FALSE, "CollectedReceiverExit"); num(j, L"exitCode", exit);
         demand(birth(process.h) == ready.GetNamedString(L"birth"), "CollectedReceiverBirth");
-        put(j, L"outcome", std::wstring(L"collected")); publish(L"TEST-collector.json", j); return 0;
+        num(j, L"endBootMs", static_cast<double>(GetTickCount64())); put(j, L"outcome", std::wstring(L"collected")); publish(L"TEST-collector.json", j); return 0;
     } catch (const Failure& e) { put(j, L"query", winrt::to_hstring(e.query).c_str()); num(j, L"error", e.error); }
       catch (...) { put(j, L"query", std::wstring(L"exception")); }
-    put(j, L"outcome", std::wstring(L"unknown")); publish(L"TEST-collector.json", j); return 1;
+    num(j, L"failureBootMs", static_cast<double>(GetTickCount64())); num(j, L"endBootMs", static_cast<double>(GetTickCount64())); put(j, L"outcome", std::wstring(L"unknown")); publish(L"TEST-collector.json", j); return 1;
 }
 struct ShellOwner {
     File process; DWORD pid = 0; std::wstring born, path; JsonObject token;
@@ -285,6 +289,9 @@ static void interactive() {
 }
 static int invoke() {
     const ULONGLONG deadline = GetTickCount64() + 30000; Binding binding; auto proof = record(L"shell_invoke");
+    num(proof, L"deadlineBootMs", static_cast<double>(deadline)); put(proof, L"stage", L"interactive");
+    unsigned attempts = 0, completed = 0, maxRoots = 0, maxNodes = 0, maxProviders = 0, maxTitles = 0;
+    for (auto key : {L"censusAttempts", L"completedCensusAttempts", L"maxRoots", L"maxNodes", L"maxAdmittedProviderRoots", L"maxOwnedTitleMatches"}) num(proof, key, 0);
     try {
         interactive();
         const auto sender = read(L"TEST-sender-collected.json"); demand(sender.GetNamedString(L"nonce") == nonce && sender.GetNamedBoolean(L"collected") && sender.GetNamedNumber(L"exitCode") == 0, "CollectedSenderBeforeClick");
@@ -292,20 +299,21 @@ static int invoke() {
         ComPtr<IUIAutomationTreeWalker> walker; winrt::check_hresult(automation->get_RawViewWalker(&walker));
         struct Selection { ComPtr<IUIAutomationElement> row, title; DWORD pid = 0; std::vector<int> rowID, titleID; };
         auto census = [&]() {
-            Selection found; unsigned roots = 0, nodes = 0, titles = 0;
+            put(proof, L"stage", L"census"); num(proof, L"censusAttempts", ++attempts);
+            Selection found; unsigned roots = 0, nodes = 0, titles = 0, providers = 0;
             ComPtr<IUIAutomationElement> desktop, first; winrt::check_hresult(automation->GetRootElement(&desktop)); winrt::check_hresult(walker->GetFirstChildElement(desktop.Get(), &first));
             while (first) {
-                budget(deadline); demand(++roots <= 64, "UIARootBound"); int pid = 0; winrt::check_hresult(first->get_CurrentProcessId(&pid));
+                budget(deadline); demand(++roots <= 64, "UIARootBound"); num(proof, L"maxRoots", maxRoots = std::max(maxRoots, roots)); int pid = 0; winrt::check_hresult(first->get_CurrentProcessId(&pid));
                 std::unique_ptr<ShellOwner> owner;
                 // Unrelated top-level providers are not traversed or invoked.
                 try { if (pid > 0) owner = std::make_unique<ShellOwner>(static_cast<DWORD>(pid)); } catch (const Failure& e) { if (std::string(e.query) != "ClosedShellProvider") throw; }
-                if (owner) {
+                if (owner) { num(proof, L"maxAdmittedProviderRoots", maxProviders = std::max(maxProviders, ++providers));
                     struct Node { ComPtr<IUIAutomationElement> element; unsigned depth; }; std::vector<Node> pending{{first, 0}};
                     while (!pending.empty()) {
-                        auto node = std::move(pending.back()); pending.pop_back(); budget(deadline); demand(++nodes <= 512 && node.depth <= 16, "UIANodeBound"); owner->live();
+                        auto node = std::move(pending.back()); pending.pop_back(); budget(deadline); demand(++nodes <= 512 && node.depth <= 16, "UIANodeBound"); owner->live(); num(proof, L"maxNodes", maxNodes = std::max(maxNodes, nodes));
                         int provider = 0; winrt::check_hresult(node.element->get_CurrentProcessId(&provider)); demand(provider == pid, "UIAProviderChanged");
                         if (name(node.element.Get()) == L"Navigation TEST " + nonce) {
-                            demand(++titles == 1, "UniqueOwnedToastTitle"); CONTROLTYPEID type = 0; winrt::check_hresult(node.element->get_CurrentControlType(&type)); demand(type == UIA_TextControlTypeId, "OwnedTitleControl");
+                            num(proof, L"maxOwnedTitleMatches", maxTitles = std::max(maxTitles, ++titles)); demand(titles == 1, "UniqueOwnedToastTitle"); CONTROLTYPEID type = 0; winrt::check_hresult(node.element->get_CurrentControlType(&type)); demand(type == UIA_TextControlTypeId, "OwnedTitleControl");
                             found.title = node.element; auto parent = node.element;
                             for (unsigned depth = 0; depth < 8; ++depth) { ComPtr<IUIAutomationElement> next; winrt::check_hresult(walker->GetParentElement(parent.Get(), &next)); demand(next != nullptr, "OwnedToastAncestor");
                                 winrt::check_hresult(next->get_CurrentProcessId(&provider)); demand(provider == pid, "OwnedAncestorProvider"); winrt::check_hresult(next->get_CurrentControlType(&type)); parent = next;
@@ -319,7 +327,9 @@ static int invoke() {
                 }
                 ComPtr<IUIAutomationElement> next; winrt::check_hresult(walker->GetNextSiblingElement(first.Get(), &next)); first = next;
             }
-            return found;
+            num(proof, L"completedCensusAttempts", ++completed);
+            if (completed == 1) num(proof, L"firstCompletedCensusBootMs", static_cast<double>(GetTickCount64()));
+            num(proof, L"lastCompletedCensusBootMs", static_cast<double>(GetTickCount64())); return found;
         };
         while (GetTickCount64() < deadline) {
             auto selected = census(); if (!selected.row) { Sleep(250); continue; }
@@ -340,16 +350,18 @@ static int invoke() {
                 demand(nearest, "FreshNearestOwnedToastRow");
                 winrt::check_hresult(fresh.title->get_CurrentIsOffscreen(&offscreen)); demand(!offscreen, "VisibleOwnedTitle");
                 winrt::check_hresult(fresh.row->get_CurrentIsOffscreen(&offscreen)); winrt::check_hresult(fresh.row->get_CurrentIsEnabled(&enabled)); demand(!offscreen && enabled, "VisibleOwnedRow"); owner.live(); budget(deadline); };
-            immediate(); ComPtr<IUIAutomationInvokePattern> pattern; winrt::check_hresult(fresh.row->GetCurrentPatternAs(UIA_InvokePatternId, IID_PPV_ARGS(&pattern)));
+            put(proof, L"stage", L"invoke_admission"); immediate(); ComPtr<IUIAutomationInvokePattern> pattern; winrt::check_hresult(fresh.row->GetCurrentPatternAs(UIA_InvokePatternId, IID_PPV_ARGS(&pattern)));
             num(proof, L"providerPID", fresh.pid); put(proof, L"providerBirth", owner.born); put(proof, L"providerImage", owner.path); put(proof, L"exactOwnedTitle", true);
-            publish(L"TEST-ui-invoke-intent.json", proof); immediate(); const HRESULT hr = pattern->Invoke();
-            num(proof, L"invokeHRESULT", static_cast<DWORD>(hr)); put(proof, L"invokeReturned", true); publish(L"TEST-ui-invoke.json", proof); winrt::check_hresult(hr); return 0;
+            publish(L"TEST-ui-invoke-intent.json", proof); immediate(); put(proof, L"stage", L"invoke"); num(proof, L"invokeCallBootMs", static_cast<double>(GetTickCount64())); budget(deadline); const HRESULT hr = pattern->Invoke();
+            num(proof, L"invokeReturnedBootMs", static_cast<double>(GetTickCount64()));
+            num(proof, L"invokeHRESULT", static_cast<DWORD>(hr)); put(proof, L"invokeReturned", true); winrt::check_hresult(hr);
+            num(proof, L"endBootMs", static_cast<double>(GetTickCount64())); publish(L"TEST-ui-invoke.json", proof); return 0;
         }
         throw Failure{"OwnedToastUnavailable", ERROR_NOT_FOUND};
     } catch (const winrt::hresult_error& e) { num(proof, L"error", static_cast<DWORD>(e.code().value)); }
       catch (const Failure& e) { put(proof, L"query", winrt::to_hstring(e.query).c_str()); num(proof, L"error", e.error); }
       catch (...) { put(proof, L"query", std::wstring(L"exception")); }
-    put(proof, L"outcome", std::wstring(L"unknown")); publish(L"TEST-ui-invoke.json", proof); return 1;
+    num(proof, L"failureBootMs", static_cast<double>(GetTickCount64())); num(proof, L"endBootMs", static_cast<double>(GetTickCount64())); put(proof, L"outcome", std::wstring(L"unknown")); publish(L"TEST-ui-invoke.json", proof); return 1;
 }
 int wmain(int argc, wchar_t** argv) {
     try {
