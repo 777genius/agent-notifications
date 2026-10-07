@@ -463,6 +463,20 @@ func TestCursorCallerAcknowledgedTokenAndMatchingPendingRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Selected native-only staging preserves the canonical portable selector.
+	nativeSelectorName, err := b.Filename()
+	if err != nil {
+		t.Fatal(err)
+	}
+	portableMCP, err := json.Marshal(map[string]any{"$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json", "mcpServers": map[string]any{
+		"agent-notify": map[string]any{"type": "stdio", "command": "./bin/probe", "args": []string{"portable-launch", "--locator", nativeSelectorName}, "env": map[string]string{}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkg, "mcp.json"), portableMCP, 0600); err != nil {
+		t.Fatal(err)
+	}
 	r.CursorAuthority.ObjectID = "TEST-retained-stop"
 	adapter, err := cursorinstall.New(nativeconfig.New(), pathpolicy.Policy{}, r.CursorAuthority)
 	if err != nil {
