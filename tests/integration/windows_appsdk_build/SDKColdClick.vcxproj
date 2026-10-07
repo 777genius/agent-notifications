@@ -5,7 +5,7 @@
   <PropertyGroup><ProjectGuid>{A92B240A-FBA0-4A65-B4C7-99EE1825D054}</ProjectGuid><TargetName>SDKColdClick</TargetName></PropertyGroup>
   <ItemGroup><ClCompile Remove="SDKContract.cpp" /><ClCompile Include="SDKColdClick.cpp" /></ItemGroup>
   <ItemDefinitionGroup>
-    <ClCompile><RuntimeLibrary>MultiThreaded</RuntimeLibrary></ClCompile>
+    <ClCompile><RuntimeLibrary>MultiThreaded</RuntimeLibrary><PreprocessorDefinitions>NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile>
     <Link><AdditionalDependencies>advapi32.lib;bcrypt.lib;version.lib;psapi.lib;ole32.lib;oleaut32.lib;uiautomationcore.lib;wtsapi32.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
   </ItemDefinitionGroup>
 </Project>
