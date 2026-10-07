@@ -287,10 +287,73 @@ static void interactive() {
     catch (...) { CloseDesktop(desktop); throw; }
     require(CloseDesktop(desktop) != FALSE, "CloseHeldInputDesktop");
 }
-// One owned chord, admitted only on a retained Shell foreground; no focus changes.
-static void centerInput(const Binding& binding, JsonObject& proof, ULONGLONG deadline) {
+static void inputAuthority() {
     wchar_t authority[64]{}; const DWORD length = GetEnvironmentVariableW(L"SDK_COLDCLICK_DISPOSABLE_TEST", authority, 64);
     demand(length == nonce.size() && std::wstring(authority, length) == nonce, "DisposableInputAuthority");
+}
+// Separate TEST GUI scenario; never an extension of the closed Shell provider list.
+struct OwnedForeground {
+    HWND window = nullptr; DWORD thread = GetCurrentThreadId(); bool alive = false, finished = false, mayFree = false; ATOM atom = 0;
+    std::wstring className = L"NavigationColdForegroundTEST-" + nonce; JsonObject j = record(L"owned_foreground"); JsonObject token = ownToken();
+    static LRESULT CALLBACK procedure(HWND w, UINT msg, WPARAM a, LPARAM b) {
+        auto self = reinterpret_cast<OwnedForeground*>(GetWindowLongPtrW(w, GWLP_USERDATA));
+        if (msg == WM_NCCREATE) { self = static_cast<OwnedForeground*>(reinterpret_cast<CREATESTRUCTW*>(b)->lpCreateParams);
+            self->window = w; SetLastError(ERROR_SUCCESS);
+            const LONG_PTR prior = SetWindowLongPtrW(w, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+            if (prior != 0 || GetLastError() != ERROR_SUCCESS || GetWindowLongPtrW(w, GWLP_USERDATA) != reinterpret_cast<LONG_PTR>(self)) return FALSE;
+            self->alive = true; }
+        if (msg == WM_CLOSE) return 0; // The creator owns destruction, never a foreign foreground restore.
+        if (msg == WM_NCDESTROY && self) { self->alive = false; SetWindowLongPtrW(w, GWLP_USERDATA, 0); }
+        return DefWindowProcW(w, msg, a, b);
+    }
+    void live() const {
+        DWORD pid = 0; wchar_t cls[128]{};
+        demand(window && alive && IsWindow(window) && GetCurrentThreadId() == thread &&
+            GetWindowThreadProcessId(window, &pid) == thread && pid == GetCurrentProcessId() &&
+            GetClassNameW(window, cls, 128) == static_cast<int>(className.size()) && cls == className &&
+            GetWindowLongPtrW(window, GWLP_USERDATA) == reinterpret_cast<LONG_PTR>(this), "OwnedForegroundCustody");
+    }
+    void pump() { live(); MSG msg{}; unsigned count = 0;
+        while (PeekMessageW(&msg, window, 0, 0, PM_REMOVE)) { demand(++count <= 64, "OwnWindowMessageBound"); DispatchMessageW(&msg); live(); } }
+    void create(const Binding& binding, ULONGLONG deadline) {
+        inputAuthority(); interactive(); binding.stable(); sameIdentity(token, binding.value.GetNamedObject(L"identity"));
+        num(j, L"creatorTID", thread); put(j, L"className", className); put(j, L"scenario", L"owned_test_foreground");
+        put(j, L"physicalImage", image); put(j, L"exeSHA256", binding.value.GetNamedString(L"exeSHA256").c_str()); j.Insert(L"token", token);
+        put(j, L"windowCreated", false); num(j, L"foregroundAttempts", 0);
+        num(j, L"deadlineBootMs", static_cast<double>(deadline)); num(j, L"createIntentBootMs", static_cast<double>(GetTickCount64()));
+        publish(L"TEST-owned-foreground-intent.json", j); budget(deadline);
+        WNDCLASSW cls{}; cls.lpfnWndProc = procedure; cls.hInstance = GetModuleHandleW(nullptr); cls.lpszClassName = className.c_str();
+        atom = RegisterClassW(&cls); require(atom != 0, "OwnWindowClass");
+        const HWND created = CreateWindowExW(0, className.c_str(), className.c_str(), WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 320, 120,
+            nullptr, nullptr, cls.hInstance, this); require(created != nullptr, "CreateOwnWindow");
+        put(j, L"windowCreated", true); num(j, L"createdBootMs", static_cast<double>(GetTickCount64()));
+        demand(window == created, "OwnCreatedWindowIdentity"); live();
+        STARTUPINFOW startup{}; startup.cb = sizeof(startup); GetStartupInfoW(&startup);
+        num(j, L"startupFlags", startup.dwFlags); num(j, L"startupShowWindow", startup.wShowWindow);
+        budget(deadline); ShowWindow(window, SW_SHOWNOACTIVATE); put(j, L"visible", IsWindowVisible(window) != FALSE); live();
+        demand(IsWindowVisible(window) != FALSE, "OwnWindowNotVisible"); binding.stable(); interactive(); budget(deadline);
+        num(j, L"foregroundAttempts", 1); num(j, L"foregroundCallBootMs", static_cast<double>(GetTickCount64()));
+        put(j, L"setForegroundReturned", SetForegroundWindow(window) != FALSE);
+        num(j, L"foregroundReturnedBootMs", static_cast<double>(GetTickCount64())); pump();
+        put(j, L"actualForeground", GetForegroundWindow() == window); demand(j.GetNamedBoolean(L"setForegroundReturned") && GetForegroundWindow() == window, "OwnForegroundRefused");
+        demand(ownToken().Stringify() == token.Stringify(), "OwnForegroundTokenChanged");
+    }
+    bool close() {
+        if (finished) return j.GetNamedBoolean(L"windowCustodyKnown", false); finished = true;
+        bool known = true, destroyed = window == nullptr;
+        try { if (window) { live(); num(j, L"destroyCallBootMs", static_cast<double>(GetTickCount64()));
+            destroyed = DestroyWindow(window) != FALSE && !alive && !IsWindow(window); } }
+        catch (...) { known = false; }
+        if (atom && !UnregisterClassW(className.c_str(), GetModuleHandleW(nullptr))) known = false;
+        known = known && destroyed; put(j, L"destroyed", destroyed); put(j, L"windowCustodyKnown", known);
+        put(j, L"ownerLifetimeRetained", !known); num(j, L"endBootMs", static_cast<double>(GetTickCount64())); mayFree = known; return known;
+    }
+    void finish() { const bool known = close(); publish(L"TEST-owned-foreground.json", j); demand(known, "OwnWindowDestructionUnknown"); }
+    ~OwnedForeground() { if (!finished) { try { close(); } catch (...) {} } }
+};
+// One owned chord: the Shell scenario changes no focus; the separate TEST GUI owns its HWND.
+static void centerInput(const Binding& binding, JsonObject& proof, ULONGLONG deadline, OwnedForeground* own = nullptr) {
+    inputAuthority();
     put(proof, L"centerAttempted", true); put(proof, L"inputEffectUnknown", true); put(proof, L"stage", L"center_input");
     auto input = record(L"center_input"); num(input, L"deadlineBootMs", static_cast<double>(deadline));
     num(input, L"firstCompletedCensusBootMs", proof.GetNamedNumber(L"firstCompletedCensusBootMs"));
@@ -311,10 +374,12 @@ static void centerInput(const Binding& binding, JsonObject& proof, ULONGLONG dea
     try {
         const auto sender = read(L"TEST-sender-collected.json");
         demand(sender.GetNamedString(L"nonce") == nonce && sender.GetNamedBoolean(L"collected") && sender.GetNamedNumber(L"exitCode") == 0, "CollectedSenderBeforeInput");
-        input.Insert(L"sender", sender); const HWND foreground = GetForegroundWindow(); DWORD pid = 0;
-        demand(foreground != nullptr && GetWindowThreadProcessId(foreground, &pid) != 0, "ForegroundShellWindow"); ShellOwner owner(pid);
-        num(input, L"foregroundPID", pid); put(input, L"foregroundBirth", owner.born);
-        auto immediate = [&] { interactive(); binding.stable(); owner.live(); DWORD actual = 0;
+        input.Insert(L"sender", sender); put(input, L"scenario", own ? L"owned_test_foreground" : L"shell_foreground"); const HWND foreground = GetForegroundWindow(); DWORD pid = 0;
+        demand(foreground != nullptr && GetWindowThreadProcessId(foreground, &pid) != 0, "ForegroundShellWindow"); std::unique_ptr<ShellOwner> owner;
+        if (own) { own->live(); demand(foreground == own->window && pid == GetCurrentProcessId(), "OwnActualForeground"); }
+        else owner = std::make_unique<ShellOwner>(pid);
+        num(input, L"foregroundPID", pid); put(input, L"foregroundBirth", own ? birth(GetCurrentProcess()) : owner->born);
+        auto immediate = [&] { interactive(); binding.stable(); if (own) { own->live(); demand(ownToken().Stringify() == own->token.Stringify(), "OwnForegroundTokenChanged"); } else owner->live(); DWORD actual = 0;
             demand(GetForegroundWindow() == foreground && GetWindowThreadProcessId(foreground, &actual) != 0 && actual == pid, "RetainedForegroundShell"); budget(deadline); };
         auto released = [&] { for (int key : {VK_LWIN, VK_RWIN, static_cast<int>('N'), VK_SHIFT, VK_LSHIFT, VK_RSHIFT, VK_CONTROL, VK_LCONTROL, VK_RCONTROL, VK_MENU, VK_LMENU, VK_RMENU})
             demand(!(GetAsyncKeyState(key) & 0x8000), "InitiallyReleasedKeys"); };
@@ -337,20 +402,26 @@ static void centerInput(const Binding& binding, JsonObject& proof, ULONGLONG dea
     publish(L"TEST-center-input.json", input); put(proof, L"inputEffectUnknown", !accepted);
     demand(accepted, "CenterInputUnknown"); budget(deadline);
 }
-static int invoke() {
+static int invoke(bool ownScenario = false) {
     const ULONGLONG deadline = GetTickCount64() + 30000; Binding binding; auto proof = record(L"shell_invoke");
     num(proof, L"deadlineBootMs", static_cast<double>(deadline)); put(proof, L"stage", L"interactive");
+    put(proof, L"scenario", ownScenario ? L"owned_test_foreground" : L"shell_foreground"); std::unique_ptr<OwnedForeground, void(*)(OwnedForeground*)> owned(nullptr, [](OwnedForeground* p) {
+        if (!p->finished) { try { p->close(); } catch (...) {} }
+        if (p->mayFree) delete p;
+        // Unknown HWND custody retains exactly this one owner until own process exit.
+    });
     put(proof, L"centerAttempted", false); put(proof, L"inputEffectUnknown", false);
     unsigned attempts = 0, completed = 0, maxRoots = 0, maxNodes = 0, maxProviders = 0, maxTitles = 0;
     for (auto key : {L"censusAttempts", L"completedCensusAttempts", L"maxRoots", L"maxNodes", L"maxAdmittedProviderRoots", L"maxOwnedTitleMatches"}) num(proof, key, 0);
     try {
         interactive();
         const auto sender = read(L"TEST-sender-collected.json"); demand(sender.GetNamedString(L"nonce") == nonce && sender.GetNamedBoolean(L"collected") && sender.GetNamedNumber(L"exitCode") == 0, "CollectedSenderBeforeClick");
+        if (ownScenario) { owned.reset(new OwnedForeground()); owned->create(binding, deadline); }
         ComPtr<IUIAutomation> automation; winrt::check_hresult(CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&automation)));
         ComPtr<IUIAutomationTreeWalker> walker; winrt::check_hresult(automation->get_RawViewWalker(&walker));
         struct Selection { ComPtr<IUIAutomationElement> row, title; DWORD pid = 0; std::vector<int> rowID, titleID; };
         auto census = [&]() {
-            put(proof, L"stage", L"census"); num(proof, L"censusAttempts", ++attempts);
+            if (owned) owned->pump(); put(proof, L"stage", L"census"); num(proof, L"censusAttempts", ++attempts);
             Selection found; unsigned roots = 0, nodes = 0, titles = 0, providers = 0;
             ComPtr<IUIAutomationElement> desktop, first; winrt::check_hresult(automation->GetRootElement(&desktop)); winrt::check_hresult(walker->GetFirstChildElement(desktop.Get(), &first));
             while (first) {
@@ -384,13 +455,13 @@ static int invoke() {
         };
         while (GetTickCount64() < deadline) {
             auto selected = census(); if (!selected.row) {
-                if (completed == 1 && maxTitles == 0) centerInput(binding, proof, deadline);
+                if (completed == 1 && maxTitles == 0) centerInput(binding, proof, deadline, owned.get());
                 Sleep(250); continue;
             }
             auto fresh = census(); demand(fresh.row && fresh.pid == selected.pid && fresh.rowID == selected.rowID && fresh.titleID == selected.titleID, "FreshOwnedRow");
             BOOL same = FALSE; winrt::check_hresult(automation->CompareElements(selected.row.Get(), fresh.row.Get(), &same)); demand(same, "UIASameElement");
             ShellOwner owner(fresh.pid); BOOL offscreen = TRUE, enabled = FALSE;
-            auto immediate = [&] { budget(deadline); interactive(); owner.live(); binding.stable(); demand(name(fresh.title.Get()) == L"Navigation TEST " + nonce && runtime(fresh.row.Get()) == selected.rowID && runtime(fresh.title.Get()) == selected.titleID, "UIAFreshBinding");
+            auto immediate = [&] { budget(deadline); if (owned) owned->live(); interactive(); owner.live(); binding.stable(); demand(name(fresh.title.Get()) == L"Navigation TEST " + nonce && runtime(fresh.row.Get()) == selected.rowID && runtime(fresh.title.Get()) == selected.titleID, "UIAFreshBinding");
                 int titleProvider = 0; CONTROLTYPEID titleType = 0;
                 winrt::check_hresult(fresh.title->get_CurrentProcessId(&titleProvider)); winrt::check_hresult(fresh.title->get_CurrentControlType(&titleType));
                 demand(titleProvider == static_cast<int>(selected.pid) && titleType == UIA_TextControlTypeId, "FreshOwnedTitleProviderType");
@@ -409,12 +480,13 @@ static int invoke() {
             publish(L"TEST-ui-invoke-intent.json", proof); immediate(); put(proof, L"stage", L"invoke"); num(proof, L"invokeCallBootMs", static_cast<double>(GetTickCount64())); budget(deadline); const HRESULT hr = pattern->Invoke();
             num(proof, L"invokeReturnedBootMs", static_cast<double>(GetTickCount64()));
             num(proof, L"invokeHRESULT", static_cast<DWORD>(hr)); put(proof, L"invokeReturned", true); winrt::check_hresult(hr);
-            num(proof, L"endBootMs", static_cast<double>(GetTickCount64())); publish(L"TEST-ui-invoke.json", proof); return 0;
+            if (owned) owned->finish(); num(proof, L"endBootMs", static_cast<double>(GetTickCount64())); publish(L"TEST-ui-invoke.json", proof); return 0;
         }
         throw Failure{"OwnedToastUnavailable", ERROR_NOT_FOUND};
     } catch (const winrt::hresult_error& e) { num(proof, L"error", static_cast<DWORD>(e.code().value)); }
       catch (const Failure& e) { put(proof, L"query", winrt::to_hstring(e.query).c_str()); num(proof, L"error", e.error); }
       catch (...) { put(proof, L"query", std::wstring(L"exception")); }
+    if (owned && !owned->finished) { try { owned->finish(); } catch (...) { put(proof, L"query", L"OwnWindowDestructionUnknown"); } }
     num(proof, L"failureBootMs", static_cast<double>(GetTickCount64())); num(proof, L"endBootMs", static_cast<double>(GetTickCount64())); put(proof, L"outcome", std::wstring(L"unknown")); publish(L"TEST-ui-invoke.json", proof); return 1;
 }
 int wmain(int argc, wchar_t** argv) {
@@ -427,6 +499,7 @@ int wmain(int argc, wchar_t** argv) {
         if (argc == 7 && !wcscmp(argv[1], L"--TEST-sdk-cold-sender") && nonce == argv[2] && root == argv[3]) return sender();
         if (argc == 3 && nonce == argv[2] && !wcscmp(argv[1], L"--TEST-sdk-cold-collect")) return collect();
         if (argc == 3 && nonce == argv[2] && !wcscmp(argv[1], L"--TEST-sdk-cold-invoke")) return invoke();
+        if (argc == 3 && nonce == argv[2] && !wcscmp(argv[1], L"--TEST-sdk-cold-invoke-own-foreground")) return invoke(true);
         // SDK 2.5.1 registers this exact activation command. It selects the receiver, never admits an effect.
         if (argc == 2 && !wcscmp(argv[1], L"----AppNotificationActivated:")) return receiver();
         return 64;

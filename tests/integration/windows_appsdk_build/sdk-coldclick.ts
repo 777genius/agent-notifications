@@ -8,9 +8,11 @@ type Json = Record<string, unknown>;
 type Actor = { mode: string; pid?: number; code: number | null; signal: string | null; collected: boolean;
   timedOut: boolean; overflow: boolean; stdout: string; stderr: string; error?: string; record?: Json };
 if (process.platform !== 'win32' || process.env.GITHUB_REPOSITORY !== '777genius/agent-notifications' || process.env.GITHUB_EVENT_NAME !== 'workflow_dispatch' || process.env.GITHUB_RUN_ATTEMPT !== '1' || !process.env.RUNNER_TEMP) throw new Error('explicit own disposable CI only');
+const scenario = process.env.SDK_COLDCLICK_SCENARIO ?? 'shell_foreground';
+if (!['shell_foreground', 'owned_test_foreground'].includes(scenario)) throw new Error('fixed foreground scenario required');
 const start = performance.now(), nonce = randomUUID();
 const output = mkdtempSync(join(process.env.RUNNER_TEMP ?? '', 'TEST-sdk-coldclick-evidence-'));
-const evidence: Json = { nonce, sourceSHA: process.env.SOURCE_SHA, outcome: 'unknown', actors: [], receipts: {},
+const evidence: Json = { nonce, scenario, sourceSHA: process.env.SOURCE_SHA, outcome: 'unknown', actors: [], receipts: {},
   sdkColdActivationQualified: false, targetVisibleQualified: false, registrationCleanupQualified: false,
   globalBrokerQuiescenceQualified: false, automaticRetry: false };
 const actors = evidence.actors as Actor[];
@@ -59,8 +61,9 @@ const phaseFields: Record<string, string[]> = {
   receiver_ready: ['token', 'bindingSHA256', 'leaseDeadlineBootMs'],
   receiver_terminal: ['token', 'bootstrapModule', 'bootstrapCallBootMs', 'bootstrapHRESULT', 'selectedFramework', 'isSupported', 'runtimeModule', 'handlerBeforeRegister', 'activationKind', 'bootstrapShutdown', 'unregisterReturned', 'outcome', 'registrationStillOwned', 'error', 'query'],
   collector: ['readyWaitDeadlineBootMs', 'readyObserved', 'readyObservedBootMs', 'ackPublishedBootMs', 'stage', 'ready', 'heldToken', 'heldPhysicalImage', 'ackPublished', 'waitResult', 'collected', 'exitCode', 'outcome', 'query', 'error'],
-  shell_invoke: ['centerAttempted', 'inputEffectUnknown', 'stage', 'censusAttempts', 'completedCensusAttempts', 'maxRoots', 'maxNodes', 'maxAdmittedProviderRoots', 'maxOwnedTitleMatches', 'firstCompletedCensusBootMs', 'lastCompletedCensusBootMs', 'invokeCallBootMs', 'invokeReturnedBootMs', 'providerPID', 'providerBirth', 'providerImage', 'exactOwnedTitle', 'invokeHRESULT', 'invokeReturned', 'query', 'error', 'outcome'],
-  center_input: ['deadlineBootMs', 'endBootMs', 'failureBootMs', 'firstCompletedCensusBootMs', 'completedCensusAttempts', 'inputEffectUnknown', 'sender', 'foregroundPID', 'foregroundBirth', 'initialKeysReleased', 'disposableAuthority', 'intentBootMs', 'inputCallBootMs', 'inputReturnedBootMs', 'outcome', 'query', 'error', 'acceptedEvents', 'cleanupReleaseAttempts', 'releaseUnknown', 'ownedKeysReleased', 'sendError', 'centerOpenedProved'],
+  shell_invoke: ['scenario', 'centerAttempted', 'inputEffectUnknown', 'stage', 'censusAttempts', 'completedCensusAttempts', 'maxRoots', 'maxNodes', 'maxAdmittedProviderRoots', 'maxOwnedTitleMatches', 'firstCompletedCensusBootMs', 'lastCompletedCensusBootMs', 'invokeCallBootMs', 'invokeReturnedBootMs', 'providerPID', 'providerBirth', 'providerImage', 'exactOwnedTitle', 'invokeHRESULT', 'invokeReturned', 'query', 'error', 'outcome'],
+  center_input: ['scenario', 'deadlineBootMs', 'endBootMs', 'failureBootMs', 'firstCompletedCensusBootMs', 'completedCensusAttempts', 'inputEffectUnknown', 'sender', 'foregroundPID', 'foregroundBirth', 'initialKeysReleased', 'disposableAuthority', 'intentBootMs', 'inputCallBootMs', 'inputReturnedBootMs', 'outcome', 'query', 'error', 'acceptedEvents', 'cleanupReleaseAttempts', 'releaseUnknown', 'ownedKeysReleased', 'sendError', 'centerOpenedProved'],
+  owned_foreground: ['scenario', 'creatorTID', 'className', 'physicalImage', 'exeSHA256', 'token', 'deadlineBootMs', 'createIntentBootMs', 'windowCreated', 'createdBootMs', 'startupFlags', 'startupShowWindow', 'visible', 'foregroundAttempts', 'foregroundCallBootMs', 'foregroundReturnedBootMs', 'setForegroundReturned', 'actualForeground', 'destroyCallBootMs', 'destroyed', 'windowCustodyKnown', 'ownerLifetimeRetained', 'endBootMs'],
   callback: ['eventKind', 'token', 'argument', 'entryBootMs', 'deadlineBootMs', 'sender', 'uri', 'familyName', 'uriSupport', 'launchReturned', 'accepted', 'outcome', 'error', 'query', 'launchEntered', 'targetVisibleQualified', 'timely', 'queryAdmissionBootMs', 'queryDeadlineBootMs', 'queryCallBootMs', 'queryReturnedBootMs', 'queryEntered', 'queryReturned', 'launchAdmissionBootMs', 'launchDeadlineBootMs', 'launchCallBootMs', 'launchReturnedBootMs'],
 };
 phaseFields.query_intent = [...phaseFields.callback!, 'queryBoundaryArmed'];
@@ -98,7 +101,7 @@ const minimalEnv = (root: string): NodeJS.ProcessEnv => ({ SystemRoot: process.e
 async function run(mode: string, exe: string, args: string[], cwd: string, limit: number, nativeCustody = false): Promise<Actor> {
   check(performance.now() - start + limit + 5000 < 170000, 'global deadline insufficient; actor refused');
   const result: Actor = { mode, code: null, signal: null, collected: false, timedOut: false, overflow: false, stdout: '', stderr: '' }; actors.push(result);
-  const child = spawn(exe, args, { cwd, windowsHide: true, env: nativeCustody ? { ...minimalEnv(cwd), RUNNER_TEMP: process.env.RUNNER_TEMP } : { ...minimalEnv(cwd), ...(mode === 'owned-shell-invoke' ? { SDK_COLDCLICK_DISPOSABLE_TEST: nonce } : {}) }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(exe, args, { cwd, windowsHide: mode !== 'owned-test-foreground-invoke', env: nativeCustody ? { ...minimalEnv(cwd), RUNNER_TEMP: process.env.RUNNER_TEMP } : { ...minimalEnv(cwd), ...(['owned-shell-invoke', 'owned-test-foreground-invoke'].includes(mode) ? { SDK_COLDCLICK_DISPOSABLE_TEST: nonce } : {}) }, stdio: ['ignore', 'pipe', 'pipe'] });
   result.pid = child.pid; let total = 0;
   const capture = (b: Buffer, err: boolean): void => { const saved = b.subarray(0, Math.max(0, 16384 - total)).toString('utf8'); total += b.length;
     if (err) result.stderr += saved; else result.stdout += saved; if (total > 16384) { result.overflow = true; child.kill(); } };
@@ -114,7 +117,7 @@ async function run(mode: string, exe: string, args: string[], cwd: string, limit
 }
 function completed(r: Actor): void { check(r.collected && !r.timedOut && !r.overflow && !r.error && r.code === 0 && r.signal === null && r.stderr === '', `actor unknown: ${r.mode}`); }
 const receipts = ['TEST-register-intent.json', 'TEST-show-intent.json', 'TEST-sender.json', 'TEST-sender-collected.json',
-  'TEST-center-input-intent.json', 'TEST-center-input.json', 'TEST-ui-invoke-intent.json', 'TEST-ui-invoke.json', 'TEST-receiver-ready.json', 'TEST-receiver-ack.json', 'TEST-receiver-lease-intent.json',
+  'TEST-owned-foreground-intent.json', 'TEST-owned-foreground.json', 'TEST-center-input-intent.json', 'TEST-center-input.json', 'TEST-ui-invoke-intent.json', 'TEST-ui-invoke.json', 'TEST-receiver-ready.json', 'TEST-receiver-ack.json', 'TEST-receiver-lease-intent.json',
   'TEST-second-receiver.json', 'TEST-second-callback.json', 'TEST-query-intent.json', 'TEST-launch-intent.json', 'TEST-callback.json', 'TEST-receiver-terminal.json', 'TEST-collector.json'];
 let generation = '';
 function retain(): void {
@@ -172,7 +175,7 @@ async function main(): Promise<void> {
     // Start collector first but do not await it: synchronous Shell Invoke can wait for receiver registration.
     check(performance.now() - start + 110000 < 170000, 'joint collector/Invoke admission reserve');
     const collectorPromise = run('cold-collector', exe, ['--TEST-sdk-cold-collect', nonce], generation, 105000);
-    const invokePromise = run('owned-shell-invoke', exe, ['--TEST-sdk-cold-invoke', nonce], generation, 35000);
+    const invokePromise = run(scenario === 'shell_foreground' ? 'owned-shell-invoke' : 'owned-test-foreground-invoke', exe, [scenario === 'shell_foreground' ? '--TEST-sdk-cold-invoke' : '--TEST-sdk-cold-invoke-own-foreground', nonce], generation, 35000);
     const settled = await Promise.allSettled([collectorPromise, invokePromise]); retain();
     check(settled.every(r => r.status === 'fulfilled'), 'all started own actors collected or explicitly unknown');
     const collector = (settled[0] as PromiseFulfilledResult<Actor>).value, invoked = (settled[1] as PromiseFulfilledResult<Actor>).value;
@@ -180,18 +183,33 @@ async function main(): Promise<void> {
       const observed = object((evidence.receipts as Json)[leaf]); diagnostic(observed, phase); check(observed.pid === actor.pid, 'diagnostic actor incarnation');
     }
     const ui = object((evidence.receipts as Json)['TEST-ui-invoke.json']);
+    check(ui.scenario === scenario, 'fixed CLI foreground scenario');
+    const windowRecord = (evidence.receipts as Json)['TEST-owned-foreground.json'];
+    if (windowRecord) {
+      const w = object(windowRecord), intent = object((evidence.receipts as Json)['TEST-owned-foreground-intent.json']); correlation(w, 'owned_foreground'); correlation(intent, 'owned_foreground');
+      check(scenario === 'owned_test_foreground' && w.scenario === scenario && w.pid === ui.pid && w.birth === ui.birth && w.physicalImage === exe && w.exeSHA256 === pins.get(exe) && w.deadlineBootMs === ui.deadlineBootMs && w.className === `NavigationColdForegroundTEST-${nonce}`, 'owned generation/window lifecycle');
+      sameIdentity(token(w.token, true), baseline); sameFacts(token(intent.token, true), token(w.token, true));
+      for (const k of ['nonce', 'pid', 'birth', 'bootMs', 'scenario', 'creatorTID', 'className', 'physicalImage', 'exeSHA256', 'deadlineBootMs', 'createIntentBootMs']) check(intent[k] === w[k], 'immutable lifecycle create/show intent');
+      check(Number.isInteger(w.creatorTID) && (w.creatorTID as number) > 0 && (w.creatorTID as number) <= 0xffffffff && intent.windowCreated === false && intent.foregroundAttempts === 0 && [0, 1].includes(w.foregroundAttempts as number) && typeof w.windowCreated === 'boolean' && typeof w.destroyed === 'boolean' && typeof w.windowCustodyKnown === 'boolean' && typeof w.ownerLifetimeRetained === 'boolean' && w.ownerLifetimeRetained === !w.windowCustodyKnown, 'one creator/foreground attempt');
+      if (w.windowCreated === true) check(Number.isInteger(w.startupFlags) && (w.startupFlags as number) >= 0 && (w.startupFlags as number) <= 0xffffffff && Number.isInteger(w.startupShowWindow) && (w.startupShowWindow as number) >= 0 && (w.startupShowWindow as number) <= 0xffff && typeof w.visible === 'boolean', 'actual startup/visibility observations');
+      const clocks = ['createIntentBootMs', ...(w.windowCreated ? ['createdBootMs'] : []), ...(w.foregroundAttempts === 1 ? ['foregroundCallBootMs', 'foregroundReturnedBootMs'] : []), ...('destroyCallBootMs' in w ? ['destroyCallBootMs'] : []), 'endBootMs'].map(k => w[k]);
+      check(clocks.every(n => Number.isSafeInteger(n) && (n as number) >= (w.bootMs as number)) && clocks.every((n, i) => i === 0 || (n as number) >= (clocks[i - 1] as number)) && (w.createIntentBootMs as number) >= collectedBoot, 'finite owned lifecycle order');
+      if (ui.inputEffectUnknown === false && ui.centerAttempted === true) check(w.windowCreated === true && w.visible === true && w.setForegroundReturned === true && w.actualForeground === true && w.foregroundAttempts === 1 && w.destroyed === true && w.windowCustodyKnown === true, 'actual owned foreground and destruction custody');
+      if (ui.invokeReturned === true) check(w.destroyed === true && w.windowCustodyKnown === true && (w.destroyCallBootMs as number) >= (ui.invokeReturnedBootMs as number), 'window held through Invoke return');
+    } else check(scenario === 'shell_foreground' ? !(evidence.receipts as Json)['TEST-owned-foreground-intent.json'] : ui.centerAttempted === false && ui.invokeReturned !== true && !(evidence.receipts as Json)['TEST-owned-foreground-intent.json'], 'GUI terminal required after lifecycle intent/effects');
     check(typeof ui.centerAttempted === 'boolean' && typeof ui.inputEffectUnknown === 'boolean', 'actual center discriminator flags');
     if (ui.centerAttempted === true) {
       const input = object((evidence.receipts as Json)['TEST-center-input.json']); correlation(input, 'center_input');
-      check(input.pid === ui.pid && input.birth === ui.birth && input.deadlineBootMs === ui.deadlineBootMs && input.centerOpenedProved === false && input.completedCensusAttempts === 1 && input.firstCompletedCensusBootMs === ui.firstCompletedCensusBootMs && typeof input.inputEffectUnknown === 'boolean', 'single correlated center discriminator');
+      check(input.scenario === scenario && input.pid === ui.pid && input.birth === ui.birth && input.deadlineBootMs === ui.deadlineBootMs && input.centerOpenedProved === false && input.completedCensusAttempts === 1 && input.firstCompletedCensusBootMs === ui.firstCompletedCensusBootMs && typeof input.inputEffectUnknown === 'boolean', 'single correlated center discriminator');
       for (const k of ['endBootMs', 'acceptedEvents', 'cleanupReleaseAttempts', 'sendError']) check(Number.isSafeInteger(input[k]) && (input[k] as number) >= 0, 'bounded actual input custody');
       check((input.sendError as number) <= 0xffffffff && (input.acceptedEvents as number) <= 6 && (input.cleanupReleaseAttempts as number) <= 2 && typeof input.releaseUnknown === 'boolean' && typeof input.ownedKeysReleased === 'boolean' && ui.inputEffectUnknown === input.inputEffectUnknown, 'own down/release observations');
       if (input.inputEffectUnknown === false) {
         const intent = object((evidence.receipts as Json)['TEST-center-input-intent.json']); correlation(intent, 'center_input');
-        for (const k of ['nonce', 'pid', 'birth', 'bootMs', 'deadlineBootMs', 'firstCompletedCensusBootMs', 'completedCensusAttempts', 'foregroundPID', 'foregroundBirth', 'intentBootMs', 'disposableAuthority', 'initialKeysReleased']) check(intent[k] === input[k], 'immutable input intent');
+        for (const k of ['nonce', 'scenario', 'pid', 'birth', 'bootMs', 'deadlineBootMs', 'firstCompletedCensusBootMs', 'completedCensusAttempts', 'foregroundPID', 'foregroundBirth', 'intentBootMs', 'disposableAuthority', 'initialKeysReleased']) check(intent[k] === input[k], 'immutable input intent');
         const clocks = ['firstCompletedCensusBootMs', 'intentBootMs', 'inputCallBootMs', 'inputReturnedBootMs', 'endBootMs'].map(k => input[k]);
         check(clocks.every(n => Number.isSafeInteger(n) && (n as number) >= 0) && clocks.every((n, i) => i === 0 || (n as number) >= (clocks[i - 1] as number)) && (input.inputCallBootMs as number) < (ui.deadlineBootMs as number), 'original input admission/order clocks');
         check(input.initialKeysReleased === true && input.disposableAuthority === true && input.outcome === 'input_accepted' && input.acceptedEvents === 4 && input.cleanupReleaseAttempts === 0 && input.releaseUnknown === false && input.ownedKeysReleased === true && input.sendError === 0 && Number.isInteger(input.foregroundPID) && (input.foregroundPID as number) > 0 && (input.foregroundPID as number) <= 0xffffffff && /^[1-9][0-9]{1,19}$/.test(input.foregroundBirth as string), 'four accepted own events require released custody');
+        if (scenario === 'owned_test_foreground') check(input.foregroundPID === ui.pid && input.foregroundBirth === ui.birth, 'own foreground incarnation before chord');
         if (ui.invokeReturned === true) check((ui.completedCensusAttempts as number) >= 3 && (ui.lastCompletedCensusBootMs as number) >= (input.inputReturnedBootMs as number) && (ui.invokeCallBootMs as number) >= (input.inputReturnedBootMs as number), 'fresh complete post-input censuses before Invoke');
         const inputSender = object(input.sender); check(inputSender.nonce === nonce && inputSender.pid === s.pid && inputSender.birth === s.birth && inputSender.collected === true && inputSender.exitCode === 0 && inputSender.collectedBootMs === collectedBoot && (input.intentBootMs as number) >= collectedBoot, 'collected sender before one input');
       } else check(!('invokeCallBootMs' in ui) && ui.outcome === 'unknown' && input.outcome === 'unknown' && Number.isSafeInteger(input.failureBootMs) && (input.failureBootMs as number) <= (input.endBootMs as number), 'uncertain input forbids Invoke');
