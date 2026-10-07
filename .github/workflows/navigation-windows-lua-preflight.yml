@@ -1,0 +1,79 @@
+name: Navigation Windows own Lua token prerequisite
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/navigation-windows-lua-preflight.yml'
+      - 'tests/integration/navigation_windows_lua_launcher.cpp'
+      - 'tests/integration/navigation_windows_lua_preflight.ts'
+      - 'tests/integration/navigation_windows_token_queries.h'
+      - 'tests/integration/navigation_windows_token_probe.cpp'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: lua-token-preflight-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  lua-token-prerequisite:
+    if: github.repository == '777genius/agent-notifications' && github.run_attempt == 1
+    runs-on: windows-11-vs2026-arm
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # repository pin
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # repository pin
+        with:
+          node-version: '24.21.0'
+      - name: Locked tooling and strict fixture typecheck
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if ((git rev-parse HEAD) -cne $env:SOURCE_SHA) { throw 'source mismatch' }
+          npm ci --prefix opencode-plugin --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'locked tooling install failed' }
+          & ./opencode-plugin/node_modules/.bin/tsc.cmd --ignoreConfig --noEmit --strict --target ES2023 --module ESNext --moduleResolution bundler --types node --typeRoots ./opencode-plugin/node_modules/@types tests/integration/navigation_windows_lua_preflight.ts
+          if ($LASTEXITCODE -ne 0) { throw 'fixture typecheck failed' }
+      - name: Compile Win32-only ARM64 TEST probe
+        id: compile
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP ('TEST-token-compile-' + [guid]::NewGuid().ToString())
+          New-Item -ItemType Directory -Path $dir -ErrorAction Stop | Out-Null
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -property installationPath
+          if (!$vs) { throw 'Visual Studio absent' }
+          foreach ($kind in @('token', 'lua')) {
+            $leaf = if ($kind -eq 'token') { 'navigation_windows_token_probe.cpp' } else { 'navigation_windows_lua_launcher.cpp' }
+            $source = Join-Path $env:GITHUB_WORKSPACE ('tests\integration\' + $leaf)
+            $exe = Join-Path $dir ('TEST-' + $kind + '.exe')
+            $obj = Join-Path $dir ('TEST-' + $kind + '.obj')
+            $cmd = '"' + $vs + '\Common7\Tools\VsDevCmd.bat" -arch=arm64 -host_arch=arm64 && cl /nologo /EHsc /W4 /std:c++20 /DUNICODE /D_UNICODE "' + $source + '" /Fe:"' + $exe + '" /Fo:"' + $obj + '" /link advapi32.lib bcrypt.lib user32.lib wtsapi32.lib'
+            & cmd /d /s /c $cmd
+            if ($LASTEXITCODE -ne 0) { throw 'Win32 TEST fixture compile failed' }
+            "$kind-exe=$exe" >> $env:GITHUB_OUTPUT
+            "$kind-sha256=$((Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          }
+      - name: Measure own restricted TEST child once (explicit dispatch only)
+        if: github.event_name == 'workflow_dispatch'
+        id: measure
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          TOKEN_PROBE_EXE: ${{ steps.compile.outputs['token-exe'] }}
+          TOKEN_PROBE_SHA256: ${{ steps.compile.outputs['token-sha256'] }}
+          LUA_LAUNCHER_EXE: ${{ steps.compile.outputs['lua-exe'] }}
+          LUA_LAUNCHER_SHA256: ${{ steps.compile.outputs['lua-sha256'] }}
+        run: |
+          if ((git rev-parse HEAD) -cne $env:SOURCE_SHA) { throw 'source mismatch' }
+          node tests/integration/navigation_windows_lua_preflight.ts
+          if ($LASTEXITCODE -ne 0) { throw 'token prerequisite unknown; retained evidence; no retry' }
+      - name: Preserve own TEST evidence only
+        if: always() && github.event_name == 'workflow_dispatch' && steps.measure.outputs.evidence_root != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # repository pin
+        with:
+          name: TEST-lua-token-preflight-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.measure.outputs.evidence_root }}/lua-token-evidence.json
+          if-no-files-found: error
+          retention-days: 14
