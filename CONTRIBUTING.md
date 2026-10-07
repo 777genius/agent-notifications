@@ -6,7 +6,7 @@ Thank you for your interest in contributing to Agent Notifications!
 
 You keep copyright in what you write.
 
-By opening a pull request (or pushing commits to one) you agree to [.github/CLA.md](.github/CLA.md). You do not add your name to a table. Do not open a PR if you do not agree.
+By opening a pull request (or pushing commits to one) you agree to [.github/CLA.md](.github/CLA.md). Do not open a PR if you do not agree.
 
 GitHub's Terms of Service already license that PR under GPL-3.0-or-later. The CLA is the extra grant so the project owner can also sublicense your work (for example commercially or under Apache-2.0) while keeping the GPL-3.0-or-later grant from the submission date.
 
@@ -14,9 +14,9 @@ If the work belongs to your employer, say so in the PR. Do not include someone e
 
 ## Prerequisites
 
-- **Go 1.21+** (tested with 1.25)
+- **Go 1.25.0+** (CI covers the minimum Go 1.25 and Go 1.26; automatic toolchain switching is disabled)
 - **Make** (for build commands)
-- **Claude Code** (tested on v2.0.15)
+- **Claude** (tested on v2.0.15)
 
 ## Getting Started
 
@@ -37,7 +37,7 @@ make build
 # Install plugin
 /plugin install claude-notifications-go@claude-notifications-go
 
-# Restart Claude Code for hooks to take effect
+# Restart Claude for hooks to take effect
 
 # Download binary and configure settings
 /claude-notifications-go:init

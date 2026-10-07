@@ -15,10 +15,12 @@ CI_ENTITLEMENTS="${PROJECT_DIR}/entitlements-ci.plist"
 
 CI_MODE=false
 SKIP_NOTARIZE=false
+REGISTER_APP=true
 for arg in "$@"; do
     case "$arg" in
         --ci) CI_MODE=true ;;
         --skip-notarize) SKIP_NOTARIZE=true ;;
+        --no-register) REGISTER_APP=false ;;
         *)
             echo "Unknown argument: $arg"
             exit 1
@@ -95,6 +97,12 @@ if [ -f "$ICON_SRC" ]; then
 else
     echo "Warning: icon source not found at ${ICON_SRC}, skipping icon generation"
 fi
+
+# Covered by the bundle resource seal. Old bundles lack this marker and must
+# never be invoked with a capability flag by the managed installer.
+cat > "${APP_BUNDLE}/Contents/Resources/managed-runtime.json" <<'MANIFEST'
+{"SchemaVersion":1,"ProtocolVersion":1,"DecoderFloor":1}
+MANIFEST
 
 sign_with_entitlements() {
     local entitlements_path="$1"
@@ -180,8 +188,17 @@ if [ "$CI_MODE" = true ] && [ "$SKIP_NOTARIZE" != true ]; then
     echo "Notarization complete!"
 fi
 
+# Hash final signed bytes outside the bundle's own resource seal. The release
+# archive transports this attestation alongside the app; it is not a publisher
+# certificate, and unmanaged existing bundles are never probed on its authority.
+cat > "${APP_BUNDLE}.managed-runtime.json" <<MANIFEST
+{"SchemaVersion":1,"ProtocolVersion":1,"DecoderFloor":1,"ExecutableSHA256":"$(shasum -a 256 "${APP_BUNDLE}/Contents/MacOS/${BINARY_NAME}" | awk '{print $1}')"}
+MANIFEST
+
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
-if [ -x "$LSREGISTER" ]; then
+# Packaging and isolated qualification must not register a temporary bundle as
+# the user's callback handler. Registration belongs to the stable installed path.
+if [ "$REGISTER_APP" = true ] && [ -x "$LSREGISTER" ]; then
     "$LSREGISTER" -f "$APP_BUNDLE" 2>/dev/null || true
     echo "Registered with Launch Services"
 fi
@@ -198,4 +215,4 @@ if [ "$CI_MODE" = true ]; then
 fi
 echo ""
 echo "To install into plugin bin/:"
-echo "  cp -R ${APP_BUNDLE} ${REPO_ROOT}/bin/"
+echo "  cp -R ${APP_BUNDLE} ${APP_BUNDLE}.managed-runtime.json ${REPO_ROOT}/bin/"

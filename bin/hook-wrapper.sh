@@ -135,10 +135,416 @@ get_plugin_version() {
     [ -f "$PLUGIN_JSON" ] && grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' "$PLUGIN_JSON" | head -n 1 || true
 }
 
-# Run install.sh (silent, never fails the script)
+install_attempt() {
+    if [ ! -f "$INSTALL_SCRIPT" ]; then
+        INSTALL_REASON='Installer script is missing.'
+        printf '%s\n' "$INSTALL_REASON"
+        return 1
+    fi
+    # A package rollback must not delegate mutation to a historical writer.
+    # This compatibility declaration does not authenticate the package origin.
+    if ! LC_ALL=C grep -aqF 'agent-notifications-managed-writer-protocol-v1' "$INSTALL_SCRIPT"; then
+        INSTALL_REASON='Installer does not support the managed writer protocol.'
+        printf '%s\n' "$INSTALL_REASON"
+        return 1
+    fi
+    if [ -n "${INSTALL_CLAIM:-}" ]; then
+        # The wrapper can die while its child survives. The actual process that
+        # execs the installer publishes a separate immutable lifetime witness.
+        INSTALL_TARGET_DIR="$SCRIPT_DIR" sh -c '
+            expected=$1; backoff=$2; installer=$3; shift 3
+            cd "$backoff/active" 2>/dev/null || exit 1
+            [ ! -L owner ] && [ "$(cat owner 2>/dev/null)" = "$expected" ] || exit 1
+            candidate=$(umask 077; mktemp "$backoff/installer.XXXXXXXXXX") || exit 1
+            birth=$(TZ=UTC0 LC_ALL=C ps -o lstart= -p "$$" 2>/dev/null |
+                LC_ALL=C awk "NF { \$1=\$1; print; exit }")
+            nonce=$(printf "%s\n" "$expected" | tail -n 1)
+            (umask 077; printf "%s\n%s\n%s\n" "$$" "$birth" "$nonce" > "$candidate") ||
+                { rm -f "$candidate"; exit 1; }
+            witness=$(cat "$candidate")
+            [ ! -e installer ] && [ ! -L installer ] &&
+                ln "$candidate" installer 2>/dev/null &&
+                [ -f installer ] && [ ! -L installer ] &&
+                [ "$(cat installer 2>/dev/null)" = "$witness" ] ||
+                { rm -f "$candidate"; exit 1; }
+            rm -f "$candidate"
+            # If cleanup won before publication, abort before any mutation.
+            [ ! -L owner ] && [ "$(cat owner 2>/dev/null)" = "$expected" ] ||
+                { rm -f installer; exit 1; }
+            exec "$installer" "$@"
+        ' install-claim "$INSTALL_CLAIM" "$BACKOFF" "$INSTALL_SCRIPT" "$@"
+    else
+        INSTALL_REASON='Installer ownership could not be established.'
+        return 1
+    fi
+}
+
+# Each attempt owns a private log. Failure to open it must still run the installer.
 run_install() {
-    [ -f "$INSTALL_SCRIPT" ] || return 0
-    INSTALL_TARGET_DIR="$SCRIPT_DIR" "$INSTALL_SCRIPT" "$@" >/dev/null 2>&1 || true
+    INSTALL_LOG=''
+    INSTALL_REASON=''
+    _log_ver=$(get_plugin_version)
+    _log_ver=${_log_ver:-unknown}
+    if (umask 077; mkdir -p "$STAMP_DIR") 2>/dev/null; then
+        INSTALL_LOG=$(umask 077; mktemp "$STAMP_DIR/install-$_log_ver-XXXXXX" 2>/dev/null) || INSTALL_LOG=''
+    fi
+    _install_ran=0
+    if [ -n "$INSTALL_LOG" ]; then
+        # The outer redirect also silences a failed log open. The flag
+        # distinguishes that from an installer failure, without retrying it.
+        { {
+            _install_ran=1
+            install_attempt "$@"
+            _install_status=$?
+        } >"$INSTALL_LOG" 2>&1; } 2>/dev/null
+    fi
+    if [ "$_install_ran" = 0 ]; then
+        [ -z "$INSTALL_LOG" ] || rm -f "$INSTALL_LOG" 2>/dev/null || true
+        INSTALL_LOG=''
+        install_attempt "$@" >/dev/null 2>&1
+        _install_status=$?
+    fi
+    # The installer can return zero for an offline upgrade while retaining
+    # the old binary. Keep its explanation until the target is verified.
+    if [ "$_install_status" = 0 ] && target_binary_ok; then
+        [ -z "$INSTALL_LOG" ] || rm -f "$INSTALL_LOG" 2>/dev/null || true
+        INSTALL_LOG=''
+    elif [ -z "$INSTALL_REASON" ]; then
+        if [ "$_install_status" = 0 ]; then
+            INSTALL_REASON='Installer did not publish the target binary.'
+        else
+            INSTALL_REASON="Installer exited with status $_install_status."
+        fi
+    fi
+    return "$_install_status"
+}
+
+install_error_excerpt() {
+    [ -n "$INSTALL_LOG" ] || return 0
+    # Prefer the last substantive error over progress/cleanup lines. Parse
+    # from the start: an OSC string can span more than a tail window.
+    LC_ALL=C awk '
+        BEGIN { for (i = 0; i < 32; i++) if (i != 9) control[sprintf("%c", i)] = 1 }
+        {
+            clean = ""
+            for (i = 1; i <= length($0); i++) {
+                c = substr($0, i, 1)
+                if (state == "osc") { if (c == "\007") state = ""; else if (c == "\033") state = "osc-esc"; continue }
+                if (state == "osc-esc") { if (c == "\\") state = ""; else if (c != "\033") state = "osc"; continue }
+                if (state == "string") { if (c == "\033") state = "string-esc"; continue }
+                if (state == "string-esc") { if (c == "\\") state = ""; else if (c != "\033") state = "string"; continue }
+                if (state == "csi") { if (c ~ /[@-~]/) state = ""; continue }
+                if (state == "esc") { state = c == "[" ? "csi" : c == "]" ? "osc" : c ~ /^[PX^_]$/ ? "string" : ""; continue }
+                if (c == "\033") { state = "esc"; continue }
+                if (c in control || c == "\177") continue
+                # Keep enough bytes for the excerpt and its last UTF-8 character.
+                if (length(clean) < 304) clean = clean c
+            }
+            if (clean ~ /[^ \t]/) last = clean
+            if (tolower(clean) ~ /error|failed|fatal|refus|fingerprint|denied/) reason = clean
+        }
+        END {
+            text = reason != "" ? reason : last
+            # A byte budget also bounds characters. Never split a UTF-8 codepoint.
+            for (i = 1; i <= length(text) && i <= 300; i += width) {
+                c = substr(text, i, 1)
+                width = c ~ /[\300-\337]/ ? 2 : c ~ /[\340-\357]/ ? 3 : c ~ /[\360-\364]/ ? 4 : 1
+                if (i + width - 1 > 300) break
+                printf "%s", substr(text, i, width)
+            }
+        }' "$INSTALL_LOG" 2>/dev/null
+}
+
+json_system_message() {
+    LC_ALL=C awk '
+        BEGIN {
+            printf "{\"systemMessage\":\""
+            for (i = 0; i < 256; i++) byte[sprintf("%c", i)] = i
+        }
+        NR > 1 { printf "\\n" }
+        { for (i = 1; i <= length($0); i++) {
+            c = substr($0, i, 1)
+            b = byte[c]
+            if (c == "\\" || c == "\"") printf "\\%s", c
+            else if (b < 32) printf "\\u%04x", b
+            else if (b < 128) printf "%s", c
+            else {
+                # Preserve valid UTF-8; replace malformed bytes so paths and
+                # diagnostics cannot make the entire JSON response unreadable.
+                width = b >= 194 && b <= 223 ? 2 : b >= 224 && b <= 239 ? 3 : b >= 240 && b <= 244 ? 4 : 0
+                valid = width > 0 && i + width - 1 <= length($0)
+                for (j = 1; valid && j < width; j++) {
+                    nextbyte = byte[substr($0, i + j, 1)]
+                    if (nextbyte < 128 || nextbyte > 191) valid = 0
+                    if (j == 1 && ((b == 224 && nextbyte < 160) || (b == 237 && nextbyte >= 160) ||
+                                  (b == 240 && nextbyte < 144) || (b == 244 && nextbyte >= 144))) valid = 0
+                }
+                if (valid) { printf "%s", substr($0, i, width); i += width - 1 }
+                else printf "\\ufffd"
+            }
+        } }
+        END { print "\"}" }'
+}
+
+report_install_failure() {
+    # Codex observation hooks must leave both output streams empty.
+    [ "${CN_PRODUCT:-claude}" = "claude" ] || return 0
+    _failed_ver=$(get_plugin_version)
+    [ -n "$_failed_ver" ] || _failed_ver=unknown
+    _failure_stamp="$STAMP_DIR/install-failed-$_failed_ver"
+    mkdir -p "$STAMP_DIR" >/dev/null 2>&1 || true
+    # mkdir is atomic across concurrent hooks. If cache writes fail, still
+    # report the failure rather than hiding a missing runtime indefinitely.
+    if mkdir "$_failure_stamp" 2>/dev/null || [ ! -d "$_failure_stamp" ]; then
+        _reason=$(install_error_excerpt)
+        _reason=${_reason:-${INSTALL_REASON:-Installation could not be completed.}}
+        _message="[claude-notifications] Installation of v$_failed_ver failed:
+$_reason"
+        if [ -n "$INSTALL_LOG" ]; then
+            _message="$_message
+Details: $INSTALL_LOG"
+        else
+            _message="$_message
+Run bin/install.sh manually for details."
+        fi
+        if ! binary_ok; then
+            printf '%s' "$_message" | json_system_message
+        else
+            printf '%s\n' "$_message" >&2
+        fi
+    fi
+}
+
+# Once the wrapper has established that a version's binary is in place, that
+# version's failure stamp is retired, so a later failure of the version is
+# reported again instead of staying silent. The stamp is usually absent, and
+# cache housekeeping never fails the hook.
+clear_install_failure() {
+    [ -n "$1" ] || return 0
+    backoff_path "$1"
+    retire_backoff || true
+    if [ "${CN_PRODUCT:-claude}" = "claude" ]; then
+        rmdir "$STAMP_DIR/install-failed-$1" 2>/dev/null || true
+    fi
+}
+
+# The active directory is published empty, then populated atomically while cd
+# holds that exact inode. A reaper may remove empty initialization; in that case
+# publishing into the unlinked inode fails before the installer can start.
+# Published owners are nonempty, so delayed rmdir cannot delete a successor.
+backoff_path() {
+    _rootkey=$(printf '%s' "$SCRIPT_DIR" | cksum | cut -d' ' -f1)
+    BACKOFF="$STAMP_DIR/install-backoff-${1:-unknown}-$_rootkey"
+}
+
+process_birth() {
+    TZ=UTC0 LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null | LC_ALL=C awk '
+        NF { $1=$1; print; exit }'
+}
+
+# Records are immutable within an active inode. An installer witness can
+# survive removal of the wrapper record during a parent-death handoff race.
+backoff_record() {
+    for _record in owner installer; do
+        if [ -f "$_record" ] && [ ! -L "$_record" ]; then
+            cat "$_record" 2>/dev/null
+            return $?
+        fi
+    done
+    return 1
+}
+
+backoff_owner() {
+    [ -d "$BACKOFF" ] && [ ! -L "$BACKOFF" ] || return 1
+    [ -d "$BACKOFF/active" ] && [ ! -L "$BACKOFF/active" ] || return 1
+    BACKOFF_OWNER=$(cd "$BACKOFF/active" 2>/dev/null && backoff_record) || return 1
+    [ -n "$BACKOFF_OWNER" ]
+}
+
+# Missing birth capability cannot prove that a live PID belongs to somebody
+# else, so it conservatively remains busy, without an arbitrary lifetime limit.
+backoff_record_live() {
+    [ -f "$1" ] && [ ! -L "$1" ] || return 1
+    _pid=''
+    _birth=''
+    { IFS= read -r _pid; IFS= read -r _birth; } < "$1" 2>/dev/null || return 1
+    case "$_pid" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$_pid" -gt 0 ] && kill -0 "$_pid" 2>/dev/null || return 1
+    [ -n "$_birth" ] || return 0
+    _current_birth=$(process_birth "$_pid")
+    [ -z "$_current_birth" ] || [ "$_birth" = "$_current_birth" ]
+}
+
+backoff_owner_live() {
+    [ ! -e failed ] || return 1
+    backoff_record_live owner || backoff_record_live installer
+}
+
+# Delete only a witness observed before checking liveness. A child publishing
+# afterward leaves a nonempty inode, protecting it from rmdir and new claims.
+cleanup_backoff_records() {
+    rm -f failed 2>/dev/null || return 1
+    if [ -n "$1" ] && [ ! -L installer ] &&
+        [ "$(cat installer 2>/dev/null)" = "$1" ]; then
+        rm -f installer 2>/dev/null || return 1
+    fi
+    rm -f owner 2>/dev/null || return 1
+    rmdir "$BACKOFF/active" 2>/dev/null || true
+}
+
+retire_backoff() {
+    backoff_owner || return 1
+    _retiring="$BACKOFF_OWNER"
+    [ -z "${1:-}" ] || [ "$_retiring" = "$1" ] || return 1
+    (
+        cd "$BACKOFF/active" 2>/dev/null || exit 1
+        [ "$(backoff_record)" = "$_retiring" ] || exit 1
+        _installer=$(cat installer 2>/dev/null) || _installer=''
+        # Only the finishing hook can retire its still-live ownership. Other
+        # callers, including manual repair, must leave a genuine installer alone.
+        [ -n "${1:-}" ] || ! backoff_owner_live || exit 1
+        cleanup_backoff_records "$_installer"
+    )
+}
+
+# Return 0 only for a published claim, 1 to dispatch the retained binary.
+# Cache failures never authorize an unclaimed installer.
+claim_install() {
+    INSTALL_CLAIM=''
+    backoff_path "$TARGET_VER"
+    (umask 077; mkdir -p "$STAMP_DIR" && mkdir -p "$BACKOFF") 2>/dev/null || return 1
+    [ -d "$BACKOFF" ] && [ ! -L "$BACKOFF" ] || return 1
+    _round=0
+    while [ "$_round" -lt 3 ]; do
+        _round=$((_round + 1))
+        if backoff_owner; then
+            _observed="$BACKOFF_OWNER"
+            (
+                cd "$BACKOFF/active" 2>/dev/null || exit 2
+                [ "$(backoff_record)" = "$_observed" ] || exit 2
+                _installer=$(cat installer 2>/dev/null) || _installer=''
+                backoff_owner_live && exit 1
+                path_recent . 300 && exit 1
+                # Removal operates only in the observed inode. Another reaper
+                # can already have removed it; no retirement mutex can get stuck.
+                cleanup_backoff_records "$_installer" || exit 1
+            )
+            _retired=$?
+            [ "$_retired" = 1 ] && return 1
+        elif [ -d "$BACKOFF/active" ] && [ ! -L "$BACKOFF/active" ]; then
+            # Empty initialization (or interrupted cleanup) has no claim. rmdir
+            # refuses a populated publication or any unknown cache contents.
+            rmdir "$BACKOFF/active" 2>/dev/null || continue
+        elif [ -e "$BACKOFF/active" ] || [ -L "$BACKOFF/active" ]; then
+            # The unpublished legacy symlink format and unknown entries cannot
+            # authorize unclaimed mutation. A fresh read handles lookup races.
+            backoff_owner && continue
+            return 1
+        fi
+        _mine=$(umask 077; mktemp -d "$BACKOFF/attempt.XXXXXXXXXX" 2>/dev/null) || return 1
+        case "$_mine" in "$BACKOFF"/attempt.*) ;; *) return 1 ;; esac
+        [ -d "$_mine" ] && [ ! -L "$_mine" ] || return 1
+        _birth=$(process_birth "$$")
+        if ! (umask 077; printf '%s\n%s\n%s\n' "$$" "$_birth" "${_mine##*/}" > "$_mine/owner"); then
+            rm -f "$_mine/owner" 2>/dev/null || true
+            rmdir "$_mine" 2>/dev/null || true
+            return 1
+        fi
+        _claim=$(cat "$_mine/owner")
+        if (umask 077; mkdir "$BACKOFF/active") 2>/dev/null &&
+            (cd "$BACKOFF/active" 2>/dev/null &&
+                [ ! -e owner ] && [ ! -L owner ] &&
+                ln "$_mine/owner" owner 2>/dev/null &&
+                [ -f owner ] && [ ! -L owner ] &&
+                [ "$(cat owner 2>/dev/null)" = "$_claim" ]); then
+            INSTALL_CLAIM="$_claim"
+            rm -f "$_mine/owner" 2>/dev/null || true
+            rmdir "$_mine" 2>/dev/null || true
+            return 0
+        fi
+        rm -f "$_mine/owner" 2>/dev/null || true
+        rmdir "$_mine" 2>/dev/null || true
+        # Retry an initialization removed before publication. A published
+        # concurrent winner is recognized at the next iteration.
+    done
+    return 1
+}
+
+finish_install_claim() {
+    [ -n "$INSTALL_CLAIM" ] || return 0
+    backoff_owner && [ "$BACKOFF_OWNER" = "$INSTALL_CLAIM" ] || return 0
+    if target_binary_ok || wait_for_install_publication; then
+        retire_backoff "$INSTALL_CLAIM" || true
+    else
+        (
+            cd "$BACKOFF/active" 2>/dev/null || exit 0
+            [ ! -L owner ] && [ "$(cat owner 2>/dev/null)" = "$INSTALL_CLAIM" ] || exit 0
+            : > failed 2>/dev/null || true
+            touch . 2>/dev/null || true
+        )
+    fi
+}
+
+path_recent() {
+    _mtime=$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null) || return 1
+    _now=$(date +%s) || return 1
+    case "$_mtime" in ''|*[!0-9]*) return 1 ;; esac
+    case "$_now" in ''|*[!0-9]*) return 1 ;; esac
+    _age=$((_now - _mtime))
+    [ "$_age" -ge 0 ] && [ "$_age" -le "$2" ]
+}
+
+install_in_progress() {
+    _lock="$SCRIPT_DIR/.install.lock"
+    [ -d "$_lock" ] && [ ! -L "$_lock" ] || return 1
+    _owner=""
+    for _entry in "$_lock"/* "$_lock"/.[!.]* "$_lock"/..?*; do
+        [ -e "$_entry" ] || [ -L "$_entry" ] || continue
+        case "$_entry" in
+            "$_lock"/.owner.*)
+                [ -d "$_entry" ] && [ ! -L "$_entry" ] && [ -z "$_owner" ] || return 1
+                _owner="$_entry"
+                ;;
+            *) return 1 ;;
+        esac
+    done
+    [ -n "$_owner" ] || return 1
+    _metadata_count=0
+    for _entry in "$_owner"/* "$_owner"/.[!.]* "$_owner"/..?*; do
+        [ -e "$_entry" ] || [ -L "$_entry" ] || continue
+        case "$_entry" in
+            "$_owner/pid"|"$_owner/heartbeat")
+                [ -f "$_entry" ] && [ ! -L "$_entry" ] || return 1
+                _metadata_count=$((_metadata_count + 1))
+                ;;
+            *) return 1 ;;
+        esac
+    done
+    [ "$_metadata_count" = 2 ] || return 1
+    IFS= read -r _owner_pid < "$_owner/pid" || return 1
+    case "$_owner_pid" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$_owner_pid" -gt 0 ] 2>/dev/null &&
+        path_recent "$_owner/heartbeat" 120 &&
+        kill -0 "$_owner_pid" 2>/dev/null
+}
+
+target_binary_ok() {
+    [ "$IS_WINDOWS" = 1 ] && detect_windows_binary
+    binary_ok || return 1
+    [ -z "$TARGET_VER" ] || [ "$(get_binary_version)" = "$TARGET_VER" ]
+}
+
+wait_for_install_publication() {
+    # The caller already checked the target binary. Give a recent lock-free
+    # publication gap one bounded chance, but never wait for an old failure.
+    install_in_progress && return 0
+    if [ -d "$SCRIPT_DIR/.install.lock" ] && [ ! -L "$SCRIPT_DIR/.install.lock" ]; then
+        path_recent "$SCRIPT_DIR/.install.lock" 2 || return 1
+    else
+        path_recent "$SCRIPT_DIR" 2 || return 1
+    fi
+    sleep 1
+    target_binary_ok || install_in_progress
 }
 
 # === Main Logic ===
@@ -180,19 +586,38 @@ else
     if [ -n "$BIN_VER" ] && [ -n "$PLG_VER" ] && [ "$BIN_VER" != "$PLG_VER" ]; then
         NEED_INSTALL=1
         NEED_FORCE=1
-    elif [ -n "$BIN_VER" ] && [ -n "$PLG_VER" ] && [ "$CACHED_VER" != "$PLG_VER" ]; then
-        # Versions match but cache is stale — update cache
-        mkdir -p "$STAMP_DIR" >/dev/null 2>&1 || true
-        printf '%s\n' "$PLG_VER" > "$VERSION_CACHE" 2>/dev/null || true
+    elif [ -n "$BIN_VER" ] && [ -n "$PLG_VER" ]; then
+        if [ "$CACHED_VER" != "$PLG_VER" ]; then
+            # Versions match but cache is stale — update cache
+            mkdir -p "$STAMP_DIR" >/dev/null 2>&1 || true
+            printf '%s\n' "$PLG_VER" 2>/dev/null > "$VERSION_CACHE" || true
+        fi
+        clear_install_failure "$PLG_VER"
     fi
 fi
 
 # Install if needed and notify user
 if [ "$NEED_INSTALL" = 1 ]; then
-    if [ "$NEED_FORCE" = 1 ]; then
-        run_install --force
-    else
-        run_install
+    TARGET_VER=$(get_plugin_version)
+    INSTALL_RAN=0
+    INSTALL_LOG=''
+    INSTALL_REASON=''
+    if claim_install; then
+        INSTALL_RAN=1
+        if [ "$NEED_FORCE" = 1 ]; then
+            run_install --force || true
+        else
+            run_install || true
+        fi
+        finish_install_claim
+    fi
+
+    REPORT_FAILURE=0
+    if [ "$INSTALL_RAN" = 1 ] && [ "${CN_PRODUCT:-claude}" = "claude" ] && ! target_binary_ok; then
+        _target_failure_stamp="$STAMP_DIR/install-failed-${TARGET_VER:-unknown}"
+        if [ ! -d "$_target_failure_stamp" ] && ! wait_for_install_publication; then
+            REPORT_FAILURE=1
+        fi
     fi
 
     # On Windows, re-detect binary after install to prefer .exe over .bat
@@ -205,7 +630,10 @@ if [ "$NEED_INSTALL" = 1 ]; then
         # Update version cache after successful install
         if [ -n "$NEW_VER" ]; then
             mkdir -p "$STAMP_DIR" >/dev/null 2>&1 || true
-            printf '%s\n' "$NEW_VER" > "$VERSION_CACHE" 2>/dev/null || true
+            printf '%s\n' "$NEW_VER" 2>/dev/null > "$VERSION_CACHE" || true
+            if [ "$NEW_VER" = "$TARGET_VER" ]; then
+                clear_install_failure "$NEW_VER"
+            fi
         fi
         # Avoid repeating the same install/update message more than once per version.
         if [ -n "$NEW_VER" ]; then
@@ -219,7 +647,7 @@ if [ "$NEED_INSTALL" = 1 ]; then
             fi
 
             if [ "$PREV_KEY" != "$STAMP_KEY" ]; then
-                printf '%s\n' "$STAMP_KEY" > "$STAMP_FILE" 2>/dev/null || true
+                printf '%s\n' "$STAMP_KEY" 2>/dev/null > "$STAMP_FILE" || true
                 # Disabled: the system message was shown too frequently despite the stamp file.
                 # if [ "$NEED_FORCE" = 1 ]; then
                 #     printf '{"systemMessage":"[claude-notifications] Updated to v%s"}\n' "$NEW_VER"
@@ -228,6 +656,10 @@ if [ "$NEED_INSTALL" = 1 ]; then
                 # fi
             fi
         fi
+    fi
+    # A winner may publish after the bounded wait's last check.
+    if [ "$REPORT_FAILURE" = 1 ] && ! target_binary_ok && ! install_in_progress; then
+        report_install_failure
     fi
 fi
 

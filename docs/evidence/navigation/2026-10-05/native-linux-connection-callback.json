@@ -1,0 +1,349 @@
+{
+  "schemaVersion": 1,
+  "scope": "native pinned dunst callback connection lifecycle, private D-Bus/Xvfb TEST only",
+  "probeSourceSHA256": "9c0b6a894e63290ec7de342fb86095884319c77d12380ddb5cafbb40aeab4f44",
+  "dunstPackage": {
+    "version": "1.9.2-1build2",
+    "sha256": "6aa563292406af21360d591e1bfa12f1ae887278194ac8431b4b7a2fc2fb8d49",
+    "latestUpstreamInspected": "1.13.2",
+    "latestUpstreamTested": false
+  },
+  "libXssPackage": {
+    "version": "1:1.2.3-1build3",
+    "sha256": "0ac60a2cc034ccc4bf4e2f846f38110469d7ae43b47e808d67aafc538bc3695e"
+  },
+  "firstFailedExecution": {
+    "passed": false,
+    "passedScope": "probe_execution_and_positive_controls",
+    "navigationQualified": false,
+    "connectionLifecycleOnly": true,
+    "nativeUIVisualConfirmed": false,
+    "observations": [
+      {
+        "kind": "connection",
+        "monotonic": 1306149.067355222,
+        "role": "observer",
+        "uniqueName": ":1.2"
+      },
+      {
+        "kind": "daemon",
+        "monotonic": 1306149.06874042,
+        "owner": ":1.1",
+        "information": [
+          "dunst",
+          "knopwob",
+          "1.9.2 (2023-04-20)",
+          "1.2"
+        ]
+      }
+    ],
+    "package": "dunst 1.9.2-1build2",
+    "sourceSHA": "12e8b6bf5740c49bfe6c7cb497c3fcefad3811df",
+    "senderProcessDeathProved": false,
+    "lifetimeBoundary": "connection_disconnect",
+    "daemonPID": 354202,
+    "daemonSHA256": "e24b2fda20fcaf5f2b4596279e5568c10851f5929ef2f818755811aa4b4a9a3e",
+    "error": {
+      "type": "RuntimeError",
+      "message": "pinned daemon version required"
+    }
+  },
+  "successfulExecution": {
+    "passed": true,
+    "passedScope": "probe_execution_and_positive_controls",
+    "navigationQualified": false,
+    "connectionLifecycleOnly": true,
+    "nativeUIVisualConfirmed": false,
+    "observations": [
+      {
+        "kind": "connection",
+        "monotonic": 1306253.812047825,
+        "role": "observer",
+        "uniqueName": ":1.2"
+      },
+      {
+        "kind": "daemon",
+        "monotonic": 1306253.813839536,
+        "owner": ":1.1",
+        "information": [
+          "dunst",
+          "knopwob",
+          "1.9.2 (2023-04-20)",
+          "1.2"
+        ]
+      },
+      {
+        "kind": "connection",
+        "monotonic": 1306253.814124492,
+        "role": "private-monitor",
+        "uniqueName": ":1.3"
+      },
+      {
+        "kind": "dunstctl",
+        "monotonic": 1306253.818406277,
+        "arguments": [
+          "close-all"
+        ],
+        "exitCode": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      {
+        "kind": "dunstctl",
+        "monotonic": 1306253.821547742,
+        "arguments": [
+          "count",
+          "displayed"
+        ],
+        "exitCode": 0,
+        "stdout": "0\n",
+        "stderr": ""
+      },
+      {
+        "kind": "connection",
+        "monotonic": 1306253.82186939,
+        "role": "live-sender",
+        "uniqueName": ":1.6"
+      },
+      {
+        "kind": "Notify",
+        "monotonic": 1306253.82339578,
+        "uniqueName": ":1.6",
+        "id": 2,
+        "actions": [
+          "default",
+          "TEST"
+        ]
+      },
+      {
+        "kind": "dunstctl",
+        "monotonic": 1306253.847358543,
+        "arguments": [
+          "count",
+          "displayed"
+        ],
+        "exitCode": 0,
+        "stdout": "1\n",
+        "stderr": ""
+      },
+      {
+        "kind": "dunstctl",
+        "monotonic": 1306253.850328236,
+        "arguments": [
+          "action",
+          "0"
+        ],
+        "exitCode": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      {
+        "kind": "monitor-ActionInvoked",
+        "monotonic": 1306253.850408434,
+        "id": 2,
+        "action": "default",
+        "sender": ":1.1",
+        "destination": ":1.6"
+      },
+      {
+        "kind": "ActionInvoked",
+        "monotonic": 1306253.850426135,
+        "role": "live-sender",
+        "id": 2,
+        "action": "default",
+        "sender": ":1.1",
+        "destination": ":1.6"
+      },
+      {
+        "kind": "dunstctl",
+        "monotonic": 1306253.852534929,
+        "arguments": [
+          "close-all"
+        ],
+        "exitCode": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      {
+        "kind": "dunstctl",
+        "monotonic": 1306253.855452123,
+        "arguments": [
+          "count",
+          "displayed"
+        ],
+        "exitCode": 0,
+        "stdout": "0\n",
+        "stderr": ""
+      },
+      {
+        "kind": "connection",
+        "monotonic": 1306253.855743249,
+        "role": "doomed-sender",
+        "uniqueName": ":1.11"
+      },
+      {
+        "kind": "Notify",
+        "monotonic": 1306253.856474624,
+        "uniqueName": ":1.11",
+        "id": 3,
+        "actions": [
+          "default",
+          "TEST"
+        ]
+      },
+      {
+        "kind": "dunstctl",
+        "monotonic": 1306253.859975365,
+        "arguments": [
+          "count",
+          "displayed"
+        ],
+        "exitCode": 0,
+        "stdout": "1\n",
+        "stderr": ""
+      },
+      {
+        "kind": "sender-disconnected",
+        "monotonic": 1306253.860114954,
+        "uniqueName": ":1.11",
+        "nameHasOwner": false
+      },
+      {
+        "kind": "connection",
+        "monotonic": 1306253.860270051,
+        "role": "replacement",
+        "uniqueName": ":1.13"
+      },
+      {
+        "kind": "dunstctl",
+        "monotonic": 1306253.862397786,
+        "arguments": [
+          "action",
+          "0"
+        ],
+        "exitCode": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      {
+        "kind": "monitor-ActionInvoked",
+        "monotonic": 1306253.862449137,
+        "id": 3,
+        "action": "default",
+        "sender": ":1.1",
+        "destination": ":1.11"
+      },
+      {
+        "kind": "disconnected-sender-observation",
+        "monotonic": 1306254.866649659,
+        "originalUniqueName": ":1.11",
+        "replacementUniqueName": ":1.13",
+        "id": 3,
+        "replacementReceived": false,
+        "callbacks": [],
+        "nativeEmissions": [
+          {
+            "id": 3,
+            "action": "default",
+            "sender": ":1.1",
+            "destination": ":1.11"
+          }
+        ],
+        "observationWindowSeconds": 1
+      },
+      {
+        "kind": "dunstctl",
+        "monotonic": 1306254.869902571,
+        "arguments": [
+          "close-all"
+        ],
+        "exitCode": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      {
+        "kind": "Notify",
+        "monotonic": 1306254.870781498,
+        "uniqueName": ":1.13",
+        "id": 4,
+        "actions": [
+          "default",
+          "TEST"
+        ]
+      },
+      {
+        "kind": "dunstctl",
+        "monotonic": 1306254.874894651,
+        "arguments": [
+          "count",
+          "displayed"
+        ],
+        "exitCode": 0,
+        "stdout": "1\n",
+        "stderr": ""
+      },
+      {
+        "kind": "dunstctl",
+        "monotonic": 1306254.878017247,
+        "arguments": [
+          "action",
+          "0"
+        ],
+        "exitCode": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      {
+        "kind": "monitor-ActionInvoked",
+        "monotonic": 1306254.878131794,
+        "id": 4,
+        "action": "default",
+        "sender": ":1.1",
+        "destination": ":1.13"
+      },
+      {
+        "kind": "ActionInvoked",
+        "monotonic": 1306254.878160027,
+        "role": "replacement",
+        "id": 4,
+        "action": "default",
+        "sender": ":1.1",
+        "destination": ":1.13"
+      },
+      {
+        "kind": "dunstctl",
+        "monotonic": 1306254.881144819,
+        "arguments": [
+          "close-all"
+        ],
+        "exitCode": 0,
+        "stdout": "",
+        "stderr": ""
+      }
+    ],
+    "package": "dunst 1.9.2-1build2",
+    "sourceSHA": "12e8b6bf5740c49bfe6c7cb497c3fcefad3811df",
+    "senderProcessDeathProved": false,
+    "lifetimeBoundary": "connection_disconnect",
+    "daemonPID": 459706,
+    "daemonSHA256": "e24b2fda20fcaf5f2b4596279e5568c10851f5929ef2f818755811aa4b4a9a3e",
+    "disconnectedCallbackNotInherited": true
+  },
+  "cleanup": {
+    "observedAbsentPIDs": [
+      354070,
+      354202,
+      459617,
+      459706,
+      459677
+    ]
+  },
+  "limitations": [
+    "Connection disconnect, not death of a sender subprocess",
+    "Real daemon ActionInvoked invoked by dunstctl, no physical click/UI verification",
+    "No client/Wayland/server restart or other daemon qualification",
+    "Pinned Ubuntu24.04 package, not latest upstream release",
+    "No production Linux navigation capability enabled"
+  ],
+  "firstFailedProbeSourceSHA256": "677528573340ad63323c2a7e07850391bc8d55cd2c63f4ef62163ee40df24ec8"
+}

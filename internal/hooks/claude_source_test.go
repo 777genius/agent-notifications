@@ -3,6 +3,7 @@ package hooks
 import (
 	"context"
 	"io"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -57,6 +58,30 @@ func TestClaudeSourceDecodeTeammateIdle(t *testing.T) {
 	p, ok := ev.Payload.(TeammateIdlePayload)
 	if !ok || p.TeamName != "alpha" || p.TeammateName != "bob" {
 		t.Fatalf("Payload = %#v", ev.Payload)
+	}
+}
+
+func TestClaudeSourceDecodeFinalAssistantMessage(t *testing.T) {
+	for _, event := range []string{"Stop", "SubagentStop"} {
+		t.Run(event, func(t *testing.T) {
+			ev, err := ClaudeSource{}.Decode(context.Background(), event,
+				strings.NewReader(`{"session_id":"s","last_assistant_message":"Done."}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var message string
+			switch p := ev.Payload.(type) {
+			case StopPayload:
+				message = p.AssistantMessage
+			case SubagentStopPayload:
+				message = p.Stop.AssistantMessage
+			default:
+				t.Fatalf("Payload = %#v", ev.Payload)
+			}
+			if message != "Done." {
+				t.Fatalf("AssistantMessage = %q", message)
+			}
+		})
 	}
 }
 
@@ -120,3 +145,69 @@ func TestClaudeSourceMalformedInput(t *testing.T) {
 }
 
 var _ io.Reader = (*neverEOFReader)(nil)
+
+// TestClaudeSourceDecodeShortObjectWithOpenWriter preserves the legacy open-pipe contract.
+func TestClaudeSourceDecodeShortObjectWithOpenWriter(t *testing.T) {
+	reader, writer := io.Pipe()
+	done := make(chan struct{})
+	written := make(chan error, 1)
+	var event Event
+	var decodeErr error
+	go func() {
+		defer close(done)
+		event, decodeErr = ClaudeSource{}.Decode(context.Background(), "Stop", reader)
+	}()
+	go func() {
+		_, err := writer.Write([]byte("{}"))
+		written <- err
+	}()
+	t.Cleanup(func() {
+		_ = reader.Close()
+		_ = writer.Close()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Error("Decode() did not exit after pipe cleanup")
+		}
+	})
+
+	select {
+	case err := <-written:
+		if err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Write() did not deliver the short object")
+	}
+	// Keep the writer open: decoding the complete object must not need a third byte.
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Decode() waited for a third byte of complete {} with writer open")
+	}
+	if decodeErr != nil {
+		t.Fatalf("Decode() error = %v", decodeErr)
+	}
+	if event.Product != ProductClaude || event.Session.SessionID != "unknown" || string(event.Raw) != "{}" {
+		t.Fatalf("event = %+v", event)
+	}
+	if stop, ok := event.Payload.(StopPayload); !ok || stop.AssistantMessage != "" {
+		t.Fatalf("Payload = %#v", event.Payload)
+	}
+}
+
+// TestSkipUTF8BOMPreservesPartialPrefixes guards against discarding incomplete BOM bytes.
+func TestSkipUTF8BOMPreservesPartialPrefixes(t *testing.T) {
+	for _, input := range []string{"", "\xEF", "\xEF\xBB", "\xEFx", "\xEF\xBBx", "\xBB\xBF{}", "{}", "\xEF\xBB\xBF{}"} {
+		t.Run(strconv.Quote(input), func(t *testing.T) {
+			got, err := io.ReadAll(skipUTF8BOM(strings.NewReader(input)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := strings.TrimPrefix(input, "\xEF\xBB\xBF")
+			if string(got) != want {
+				t.Fatalf("skipUTF8BOM(%q) = %q, want %q", input, got, want)
+			}
+		})
+	}
+}

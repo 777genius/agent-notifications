@@ -85,6 +85,7 @@ func TestCodexFlowStopNotifies(t *testing.T) {
 	call := mockNotif.lastCall()
 	if call == nil {
 		t.Fatal("expected notification")
+		return
 	}
 	if call.status != analyzer.StatusTaskComplete {
 		t.Errorf("status = %v, want task_complete", call.status)
@@ -106,6 +107,7 @@ func TestCodexFlowStopQuestion(t *testing.T) {
 	call := mockNotif.lastCall()
 	if call == nil {
 		t.Fatal("expected notification")
+		return
 	}
 	if call.status != analyzer.StatusQuestion {
 		t.Errorf("status = %v, want question", call.status)
@@ -162,6 +164,7 @@ func TestCodexFlowPermissionRequest(t *testing.T) {
 	call := mockNotif.lastCall()
 	if call == nil {
 		t.Fatal("expected notification")
+		return
 	}
 	if call.status != analyzer.StatusPermissionRequest {
 		t.Errorf("status = %v, want permission_request", call.status)

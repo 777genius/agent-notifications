@@ -1,34 +1,38 @@
 #!/bin/bash
+TEST_ENV_HANDOFF_GOMODCACHE=1
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-env.sh"
 test_env_enter "$0" "$@"
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+(cd "$ROOT" && GOWORK=off go build -o "$TMPDIR/config-helper" ./cmd/claude-notifications)
 python3 -I - "$ROOT" "$TMPDIR" <<'PY'
-import copy, json, ntpath, os, pathlib, subprocess, sys, types
+import copy, json, os, pathlib, subprocess, sys
 root, temp = map(pathlib.Path, sys.argv[1:])
-# Execute the production containment predicate with a lexical Windows adapter.
-source=(root/'bin/bootstrap.sh').read_text()
-predicate=source.split('def within(base, root):',1)[1].split('\nif any(within',1)[0]
-scope={'os':types.SimpleNamespace(path=ntpath)}
-exec('def within(base, root):'+predicate,scope)
-within=scope['within']
-for base, parent, expected in [
-    (r'C:\Temp',r'D:\bundle',False),
-    (r'\\server\one\Temp',r'\\server\two\bundle',False),
-    (r'\\one\share\Temp',r'\\two\share\bundle',False),
-    (r'C:\BUNDLE\temp',r'c:\bundle',True),
-    (r'C:\bundle',r'c:\BUNDLE',True),
-    (r'C:\bundle-other',r'C:\bundle',False),
-    (r'C:\bundle\..\safe',r'C:\bundle',False),
-    (r'\\server\share\BUNDLE\temp',r'\\SERVER\SHARE\bundle',True),
-]:
-    assert within(base,parent)==expected,(base,parent)
-scope={'os':os}; exec('def within(base, root):'+predicate,scope)
+# Containment now lives in the native installer protocol, not bootstrap Python.
+# Exercise that production boundary with real canonical paths in this sandbox.
 bundle=temp/'bundle'; bundle.mkdir()
+stage=bundle/'stage'; stage.mkdir()
+safe=temp/'bundle-other'; safe.mkdir()
 alias=temp/'alias'; alias.symlink_to(bundle,target_is_directory=True)
-assert scope['within'](str(alias/'new'),str(bundle))
-assert not scope['within'](str(temp/'safe'),str(bundle))
-print('stage containment: 8 Windows lexical cases + 2 POSIX canonical cases passed')
+registry=temp/'registry.json'; registry.write_text('{"plugins":{}}')
+for candidate, refresh, allowed in [
+    (safe, bundle, True),
+    (bundle, bundle, False),
+    (stage, bundle, False),
+    (alias/'stage', bundle, False),
+    (stage, alias, False),
+    (safe, alias/'missing', True),
+    (bundle/'..'/'bundle-other', bundle, True),
+    (safe/'..'/'bundle'/'stage', bundle, False),
+]:
+    args=[registry,'test',temp/'claude',refresh,temp/'market',temp/'codex',
+          'both',candidate,registry,'']
+    run=subprocess.run([str(temp/'config-helper'),'config','installer','bootstrap',
+                        *map(str,args)],text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    assert (run.returncode==0)==allowed,(candidate,refresh,run.stdout,run.stderr)
+    if not allowed:
+        assert run.stderr.strip()=='ConfigInvalid',(run.stdout,run.stderr)
+print('stage containment: 8 native protocol canonical/alias cases passed')
 
 # Full debug script with a closed command PATH: all host/desktop probes are fake.
 cwd=temp/'hostile'; cwd.mkdir()

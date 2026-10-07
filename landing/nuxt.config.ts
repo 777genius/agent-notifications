@@ -1,9 +1,9 @@
 import { supportedLocales } from "./data/i18n";
 
-const baseURL = process.env.NUXT_APP_BASE_URL || "/agent-notifications/";
+const baseURL = process.env.NUXT_APP_BASE_URL || "/";
 const siteUrl =
   process.env.NUXT_PUBLIC_SITE_URL ||
-  "https://777genius.github.io/agent-notifications";
+  "https://agent-notifications.com";
 const siteOrigin = new URL(siteUrl).origin;
 
 export default defineNuxtConfig({

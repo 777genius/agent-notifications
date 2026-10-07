@@ -64,3 +64,54 @@ func TestPowerShellRetryCommandEscapesLiteralPath(t *testing.T) {
 		t.Fatalf("PowerShell retry = %q, want %q", got, want)
 	}
 }
+
+func TestSetupPublishesConventionalNotifierAliases(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("native bundle promotion requires a supported native platform")
+	}
+	for _, tc := range []struct {
+		name, bundle, helper string
+	}{
+		{"modern", "ClaudeNotifier.app", "terminal-notifier-modern"},
+		{"legacy", "terminal-notifier.app", "terminal-notifier"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := fakeBundle(t)
+			helper := filepath.Join(source, "bin", tc.bundle, "Contents", "MacOS", tc.helper)
+			if err := os.MkdirAll(filepath.Dir(helper), 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(helper, []byte("#!/bin/sh\n"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			root := t.TempDir()
+			home := filepath.Join(root, "codex")
+			if err := os.Mkdir(home, 0700); err != nil {
+				t.Fatal(err)
+			}
+			res, err := Run(Options{ControlRoot: filepath.Join(root, "control"), CodexHome: home, PluginRoot: source})
+			if err != nil {
+				t.Fatal(err)
+			}
+			bin := filepath.Join(res.InstallDir, "bin")
+			var target string
+			for _, name := range []string{"ClaudeNotifier.app", "terminal-notifier.app"} {
+				got, err := os.Readlink(filepath.Join(bin, name))
+				if err != nil {
+					t.Fatalf("%s: %v", name, err)
+				}
+				if !strings.HasPrefix(filepath.Base(got), "generation-") || !strings.HasSuffix(got, ".app") {
+					t.Fatalf("%s -> %s", name, got)
+				}
+				if target == "" {
+					target = got
+				} else if got != target {
+					t.Fatalf("aliases diverged: %s vs %s", target, got)
+				}
+			}
+			if _, err := os.Stat(filepath.Join(bin, tc.bundle, "Contents", "MacOS", tc.helper)); err != nil {
+				t.Fatalf("conventional helper missing: %v", err)
+			}
+		})
+	}
+}

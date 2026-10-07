@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestDetectTeamLead(t *testing.T) {
@@ -35,6 +37,7 @@ func TestDetectTeamLead(t *testing.T) {
 		info := mgr.DetectTeamLead("session-123")
 		if info == nil {
 			t.Fatal("expected team info, got nil")
+			return
 		}
 		if info.TeamName != "test-team" {
 			t.Errorf("expected team name 'test-team', got %q", info.TeamName)
@@ -114,6 +117,7 @@ func TestDetectTeamByName(t *testing.T) {
 	info := mgr.DetectTeamByName("my-team")
 	if info == nil {
 		t.Fatal("expected team info")
+		return
 	}
 	if len(info.Members) != 1 || info.Members[0] != "worker" {
 		t.Errorf("expected members [worker], got %v", info.Members)
@@ -262,5 +266,105 @@ func TestCorruptedStateFile(t *testing.T) {
 	}
 	if s.LeadStopped {
 		t.Error("corrupted state should return fresh state with LeadStopped=false")
+	}
+}
+
+// Regression: competing hooks can both observe a ready team before either
+// records the notification. Exactly one may claim it, and the reset must let
+// a later completed cycle claim again.
+func TestClaimAllIdleConcurrentAndNextCycle(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	const teamName = "concurrent-claim"
+	mgr := NewManager("")
+	if err := mgr.RecordLeadStopped(teamName); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.RecordTeammateIdle(teamName, "alice"); err != nil {
+		t.Fatal(err)
+	}
+
+	const contenders = 32
+	start := make(chan struct{})
+	results := make(chan bool, contenders)
+	errors := make(chan error, contenders)
+	var wg sync.WaitGroup
+	for i := 0; i < contenders; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			claimed, err := NewManager("").ClaimAllIdle(teamName, []string{"alice"})
+			results <- claimed
+			errors <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	close(errors)
+	claims := 0
+	for claimed := range results {
+		if claimed {
+			claims++
+		}
+	}
+	for err := range errors {
+		if err != nil {
+			t.Fatalf("claim failed: %v", err)
+		}
+	}
+	if claims != 1 {
+		t.Fatalf("claims = %d, want exactly one", claims)
+	}
+
+	s, err := mgr.LoadState(teamName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.LeadStopped || len(s.IdleMembers) != 0 || s.NotifiedAt == 0 {
+		t.Fatalf("claimed state did not reset: %+v", s)
+	}
+	// The existing second-resolution notified_at fence intentionally prevents
+	// a duplicate event in the same second from starting another completion.
+	for time.Now().Unix() <= s.NotifiedAt {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := mgr.RecordLeadStopped(teamName); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.RecordTeammateIdle(teamName, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := mgr.ClaimAllIdle(teamName, []string{"alice"})
+	if err != nil || !claimed {
+		t.Fatalf("next cycle claim = %t, err = %v; want true", claimed, err)
+	}
+}
+
+// Regression: a failed persistence must never be reported as a successful
+// claim, since that would send a notification without excluding another hook.
+func TestClaimAllIdleSaveFailure(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	const teamName = "claim-save-failure"
+	mgr := NewManager("")
+	if err := mgr.RecordLeadStopped(teamName); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.RecordTeammateIdle(teamName, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(statePath(teamName)+".tmp", 0700); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := mgr.ClaimAllIdle(teamName, []string{"alice"})
+	if err == nil || claimed {
+		t.Fatalf("failed save returned claim = %t, err = %v", claimed, err)
+	}
+	s, err := mgr.LoadState(teamName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.LeadStopped || len(s.IdleMembers) != 1 || s.NotifiedAt != 0 {
+		t.Fatalf("failed claim changed persisted state: %+v", s)
 	}
 }

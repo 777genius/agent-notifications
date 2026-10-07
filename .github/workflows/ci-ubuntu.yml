@@ -4,17 +4,1120 @@ on:
   push:
     branches: [ main, develop ]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      cursor_carrier_b64:
+        description: 'Exact reviewed base85/gzip/xz lossless carrier; name retained from original input'
+        type: string
+        required: true
+      mkdir_diagnostic:
+        description: 'R576 filesystem-only diagnostic; excludes all preparation/build/native effects'
+        type: boolean
+        required: false
+        default: false
+      consume_cursor_e:
+        description: 'Root authorizes the original ONE E budget after complete qualification'
+        type: boolean
+        required: true
+        default: false
+
+# Only a newer run for the same PR supersedes its checks.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  cursor-mkdir-diagnostic:
+    if: github.event_name == 'workflow_dispatch' && inputs.mkdir_diagnostic
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        timeout-minutes: 2
+        with:
+          ref: aa171b20e3e87477f19cb205ee960bc7eab1b73f
+          persist-credentials: false
+      - name: Verify fixed carrier transport without executing its payload
+        timeout-minutes: 1
+        env:
+          CURSOR_CARRIER_B64: ${{ inputs.cursor_carrier_b64 }}
+        run: |
+          python3 -B -S - <<'PY_VERIFY'
+          import base64, hashlib, lzma, struct, zlib, os, pathlib, tempfile
+          MAGIC = b'R363T2\0'
+          MAX_SOURCE = 1 << 20
+          MAX_FRAME = 1 << 20
+          MAX_XZ = 1 << 17
+          MAX_ENCODED = 65535
+          MAX_RECORDS = 1024
+
+          def decode_frame(frame):
+              assert len(frame) <= MAX_FRAME and frame.startswith(MAGIC), 'frame magic/bound'
+              at = len(MAGIC)
+              assert at+2 <= len(frame), 'partial record count'
+              count = struct.unpack_from('>H',frame,at)[0];at += 2
+              assert 0 < count <= MAX_RECORDS
+              descriptors = []
+              for _ in range(count):
+                  assert at < len(frame), 'partial segment kind'
+                  kind = frame[at];at += 1
+                  assert kind in (0,1,2), 'unknown lossless segment'
+                  if kind == 1:
+                      size = 32
+                  else:
+                      assert at+2 <= len(frame), 'partial segment header'
+                      size = struct.unpack_from('>H',frame,at)[0];at += 2
+                  descriptors.append((kind,size))
+              assert sum(size for _,size in descriptors) == len(frame)-at, 'segment total/trailing bytes'
+              pieces = [None]*count
+              for grouped_kind in (0,1,2):
+                  for index,(kind,size) in enumerate(descriptors):
+                      if kind != grouped_kind: continue
+                      raw = frame[at:at+size];at += size
+                      pieces[index] = raw.hex().encode('ascii') if kind == 1 else base64.b64encode(raw) if kind == 2 else raw
+              assert at == len(frame) and sum(len(piece) for piece in pieces) <= MAX_SOURCE, 'decoded source bound'
+              source = b''.join(pieces)
+              assert source, 'empty source'
+              return source
+
+          def decode(encoded, pins):
+              assert type(encoded) is str and len(encoded) == pins['encodedBytes'] <= MAX_ENCODED
+              compressed = base64.b85decode(encoded.encode('ascii'))
+              assert base64.b85encode(compressed).decode('ascii') == encoded, 'noncanonical base85'
+              assert len(compressed) == pins['transportBytes'] and hashlib.sha256(compressed).hexdigest() == pins['transportSHA256']
+              gz = zlib.decompressobj(16+zlib.MAX_WBITS)
+              xz = gz.decompress(compressed,MAX_XZ+1)
+              assert len(xz) == pins['xzBytes'] <= MAX_XZ and gz.eof and not gz.unused_data and not gz.unconsumed_tail, 'gzip length/EOF/trailing data'
+              stream = lzma.LZMADecompressor(format=lzma.FORMAT_XZ,memlimit=64<<20)
+              frame = stream.decompress(xz,max_length=MAX_FRAME+1)
+              assert len(frame) == pins['frameBytes'] <= MAX_FRAME and stream.eof and not stream.unused_data, 'xz length/EOF/trailing data'
+              source = decode_frame(frame)
+              assert len(source) == pins['sourceBytes'] and hashlib.sha256(source).hexdigest() == pins['sourceSHA256'], 'exact source length/hash'
+              return source
+
+          pins = {'encodedBytes': 65523, 'frameBytes': 207433, 'xzBytes': 52380, 'transportBytes': 52418, 'transportSHA256': '7d1069b8d5c9f0e3ffd6b49ef568ad711cdfa2fc38073f265a5bbbf78d8c9264', 'sourceBytes': 215704, 'sourceSHA256': 'bc363dfc318eec1d4ad3f3afc0f252e7fe32b76a94bc4e193a9e50487623f1f5'}
+          candidate = decode(os.environ['CURSOR_CARRIER_B64'],pins)
+          compile(candidate,'native_case.py','exec')
+          target = pathlib.Path(tempfile.mkdtemp(prefix='TEST-cursor-carrier-',dir=os.environ['RUNNER_TEMP']))
+          (target/'native_case.py').write_bytes(candidate)
+          with open(os.environ['GITHUB_ENV'],'a') as environment:
+              environment.write('CURSOR_CARRIER='+str(target/'native_case.py')+'\n')
+          PY_VERIFY
+      - name: Only exact TEST mkdir and no-follow ancestor diagnostics
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = aa171b20e3e87477f19cb205ee960bc7eab1b73f
+          export_dir=$(mktemp -d "$RUNNER_TEMP/TEST-r576-mkdir-export-XXXXXX")
+          printf 'R576_MKDIR_EXPORT_DIR=%s\n' "$export_dir" >> "$GITHUB_ENV"
+          cat > "$export_dir/r576_mkdir_diagnostic.py" <<'PY_R576'
+          """R576 pure TEST mkdir diagnostic. Proposed CI use only; never imports a carrier."""
+          import ast
+          import base64
+          import errno
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import platform
+          import resource
+          import secrets
+          import select
+          import signal
+          import stat
+          import sys
+          import time
+
+          SOURCE_SHA = 'bc363dfc318eec1d4ad3f3afc0f252e7fe32b76a94bc4e193a9e50487623f1f5'
+          LIMIT = 1 << 20
+          DEADLINE = time.monotonic() + 30
+
+
+          def remaining(cap):
+              value = min(cap, DEADLINE - time.monotonic())
+              assert value > 0, 'diagnostic absolute deadline'
+              return value
+
+
+          def facts(info):
+              return {'dev': info.st_dev, 'ino': info.st_ino, 'mode': info.st_mode,
+                      'uid': info.st_uid, 'gid': info.st_gid, 'nlink': info.st_nlink,
+                      'size': info.st_size, 'mtime_ns': info.st_mtime_ns, 'ctime_ns': info.st_ctime_ns}
+
+
+          def emit(event, record):
+              raw = (json.dumps({'event': event, 'record': record})+'\n').encode()
+              assert len(raw) <= LIMIT
+              sys.stdout.buffer.write(raw)
+              sys.stdout.buffer.flush()
+
+
+          def open_path(path):
+              """Refuse links in every component, including ancestors; no resolve substitution."""
+              assert path.is_absolute() and '..' not in path.parts and len(path.parts) <= 64
+              fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+              try:
+                  for part in path.parts[1:]:
+                      before = os.stat(part, dir_fd=fd, follow_symlinks=False)
+                      child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                      try:
+                          assert facts(before) == facts(os.fstat(child)), 'path component changed'
+                      except BaseException:
+                          os.close(child)
+                          raise
+                      os.close(fd)
+                      fd = child
+                  return fd
+              except BaseException:
+                  os.close(fd)
+                  raise
+
+
+          def acl(fd):
+              result = {}
+              for name in ('system.posix_acl_access', 'system.posix_acl_default'):
+                  try:
+                      raw = os.getxattr(fd, name)
+                      assert len(raw) <= 65536, 'ACL byte bound'
+                      result[name] = {'state': 'present', 'base64': base64.b64encode(raw).decode()}
+                  except OSError as error:
+                      assert error.errno == errno.ENODATA, 'ACL unreadable/unsupported is unknown'
+                      result[name] = {'state': 'absent', 'errno': error.errno}
+              return result
+
+
+          def chain(target):
+              result = []
+              for path in reversed([target, *target.parents]):
+                  remaining(1)
+                  try:
+                      fd = open_path(path)
+                  except FileNotFoundError:
+                      result.append({'path': str(path), 'state': 'absent', 'errno': errno.ENOENT})
+                      emit('ancestor', result[-1])
+                      continue
+                  try:
+                      before = facts(os.fstat(fd))
+                      result.append({'path': str(path), 'state': 'directory', 'identity': before, 'acl': acl(fd)})
+                      assert facts(os.fstat(fd)) == before, 'ancestor changed during snapshot'
+                  finally:
+                      os.close(fd)
+                  emit('ancestor', result[-1])
+              return result
+
+
+          def membership(root):
+              rows = []
+              for path in (root, root/'home', root/'home/.local', root/'home/.local/bin'):
+                  try:
+                      fd = open_path(path)
+                  except FileNotFoundError:
+                      rows.append({'path': str(path), 'state': 'absent'})
+                      continue
+                  try:
+                      before = facts(os.fstat(fd))
+                      names = sorted(os.listdir(fd))
+                      assert len(names) <= 16 and sum(len(os.fsencode(n)) for n in names) <= 8192
+                      members = [{'name': name, 'identity': facts(os.stat(name, dir_fd=fd, follow_symlinks=False))}
+                                 for name in names]
+                      assert sorted(os.listdir(fd)) == names, 'membership names changed'
+                      for member in members:
+                          assert facts(os.stat(member['name'], dir_fd=fd, follow_symlinks=False)) == member['identity'], 'member changed'
+                      assert facts(os.fstat(fd)) == before, 'membership directory changed'
+                      anchored = open_path(path)
+                      try:
+                          assert facts(os.fstat(anchored)) == before, 'membership path replaced'
+                      finally:
+                          os.close(anchored)
+                      rows.append({'path': str(path), 'identity': before, 'members': members})
+                  finally:
+                      os.close(fd)
+              return rows
+
+
+          def mkdir_child(root, operation):
+              child_deadline = time.monotonic() + remaining(5)  # Refuse before pipe/fork effects.
+              reader, writer = os.pipe()
+              pid = os.fork()
+              if pid == 0:
+                  os.close(reader)
+                  report = {'mkdirExecuted': False}
+                  code = 2
+                  try:
+                      os.setgroups([])
+                      os.setgid(1000)
+                      os.setuid(1000)
+                      os.umask(0o077)
+                      report['identity'] = {'pid': os.getpid(), 'ppid': os.getppid(), 'uid': os.getresuid(),
+                                            'gid': os.getresgid(), 'groups': os.getgroups(),
+                                            'stat': pathlib.Path('/proc/self/stat').read_text(),
+                                            'uidMap': pathlib.Path('/proc/self/uid_map').read_text(),
+                                            'gidMap': pathlib.Path('/proc/self/gid_map').read_text(),
+                                            'namespaces': {n: os.readlink('/proc/self/ns/'+n) for n in ('pid', 'net', 'user')}}
+                      assert os.getresuid() == (1000, 1000, 1000) and os.getresgid() == (1000, 1000, 1000) and os.getgroups() == []
+                      report['mkdirExecuted'] = True
+                      try:
+                          # Only the two exact AST statements from install_and_confirm.
+                          exec(operation, {'root': root})
+                          report.update(result='CREATED', errno=None)
+                      except OSError as error:
+                          report.update(result='DENIED' if error.errno == errno.EACCES else 'UNKNOWN',
+                                        errno=error.errno, error=str(error), filename=error.filename)
+                      code = 0
+                  except BaseException as error:
+                      report.update(result='UNKNOWN', error=type(error).__name__+':'+str(error)[:240])
+                  raw = (json.dumps(report)+'\n').encode()
+                  if len(raw) <= 65536:
+                      os.write(writer, raw)
+                  os.close(writer)
+                  os._exit(code)
+              os.close(writer)
+              raw = bytearray()
+              joined = False
+              try:
+                  while True:
+                      wait = min(remaining(5), child_deadline-time.monotonic())
+                      assert wait > 0 and select.select([reader], [], [], wait)[0], 'child observation timeout'
+                      chunk = os.read(reader, 8192)
+                      if not chunk:
+                          break
+                      raw.extend(chunk)
+                      assert len(raw) <= 65536, 'child record bound'
+                  while True:
+                      actual, status = os.waitpid(pid, os.WNOHANG)
+                      if actual == pid:
+                          joined = True
+                          break
+                      assert time.monotonic() < child_deadline, 'child exit timeout'
+                      time.sleep(min(remaining(.01), .01))
+                  report = json.loads(raw.decode('utf-8'))
+                  report['waitStatus'] = status
+                  emit('child-result', report)
+                  assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0, report
+                  assert report['mkdirExecuted'] and report['result'] in ('CREATED', 'DENIED'), report
+                  return report
+              finally:
+                  os.close(reader)
+                  if not joined:
+                      # The exact direct owned child is not reused before its waitpid.
+                      try:
+                          os.kill(pid, signal.SIGKILL)
+                      except ProcessLookupError:
+                          pass
+                      cleanup_deadline = min(DEADLINE, child_deadline)
+                      while True:
+                          actual, status = os.waitpid(pid, os.WNOHANG)
+                          if actual == pid:
+                              joined = True
+                              break
+                          left = cleanup_deadline-time.monotonic()
+                          if left <= 0:
+                              break
+                          time.sleep(min(.01, left))
+                      emit('child-cleanup', {'pid': pid, 'SIGKILLRequested': True, 'joined': joined,
+                                             'deadline': cleanup_deadline,
+                                             'disposition': 'terminal' if joined else 'UNKNOWN_UNJOINED'})
+                      assert joined, 'unknown child cleanup; no successful diagnostic receipt'
+
+
+          def fixture(parent, name, operation, qualifier):
+              root = parent/name
+              qualifier(root/'home/.cursor', pathlib.Path('/etc/machine-id').read_text().strip())
+              parent_fd = open_path(parent)
+              try:
+                  os.mkdir(name, 0o700, dir_fd=parent_fd)  # EEXIST refuses; no reuse.
+              finally:
+                  os.close(parent_fd)
+              root_fd = open_path(root)
+              try:
+                  os.fchown(root_fd, 1000, 1000)  # Only this newly created TEST directory.
+                  os.mkdir('home', 0o700, dir_fd=root_fd)
+              finally:
+                  os.close(root_fd)
+              home_fd = open_path(root/'home')
+              try:
+                  os.fchown(home_fd, 1000, 1000)  # Only this newly created TEST home.
+              finally:
+                  os.close(home_fd)
+              before = {'ancestors': chain(root/'home/.local/bin'), 'membership': membership(root)}
+              emit('before', {'root': str(root), **before})
+              child = mkdir_child(root, operation)
+              after = {'ancestors': chain(root/'home/.local/bin'), 'membership': membership(root)}
+              emit('after', {'root': str(root), **after})
+              return {'root': str(root), 'before': before, 'child': child, 'after': after,
+                      'retained': 'owned TEST filesystem diagnostic fixture; no installer/native state'}
+
+
+          def main(carrier, runner_temp):
+              assert os.geteuid() == 0 and os.getegid() == 0, 'trusted root entry required'
+              os.umask(0o077)
+              resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+              resource.setrlimit(resource.RLIMIT_FSIZE, (LIMIT, LIMIT))
+              parent_fd = open_path(carrier.parent)
+              try:
+                  fd = os.open(carrier.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
+                  with os.fdopen(fd, 'rb') as stream:
+                      before = facts(os.fstat(stream.fileno()))
+                      assert stat.S_ISREG(before['mode']) and before['nlink'] == 1 and before['size'] <= LIMIT
+                      source = stream.read(LIMIT+1)
+                      assert facts(os.fstat(stream.fileno())) == before
+              finally:
+                  os.close(parent_fd)
+              assert hashlib.sha256(source).hexdigest() == SOURCE_SHA
+              tree = ast.parse(source)
+              install = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'install_and_confirm')
+              target, mkdir = install.body[2:4]
+              assert ast.get_source_segment(source.decode(), target) == "target = root/'home/.local/bin'"
+              assert ast.get_source_segment(source.decode(), mkdir) == 'target.mkdir(mode=0o700, parents=True)'
+              operation = compile(ast.Module(body=[target, mkdir], type_ignores=[]), '805e-exact-target-mkdir', 'exec')
+              qualified = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'qualified_runner')
+              scope = {'pathlib': pathlib, 'platform': platform, 'LIMIT': LIMIT}
+              exec(compile(ast.Module(body=[qualified], type_ignores=[]), '805e-pure-qualified-runner', 'exec'), scope)
+              qualifier = scope['qualified_runner']
+              report = {'diagnostic': 'R576_ONLY_TEST_MKDIR', 'sourceSHA256': SOURCE_SHA,
+                        'runnerTemp': str(runner_temp), 'originalE': 'FAILED_NO_RESET', 'retest': 'CONDITIONAL_UNSPENT',
+                        'native': 'NOT_RUN', 'installer': 'NOT_RUN', 'preparation': 'NOT_RUN',
+                        'qualification': 'exact source pure runner filter; no full authority/installation claim',
+                        'operation': ast.get_source_segment(source.decode(), mkdir), 'fixtures': []}
+              original = fixture(runner_temp, 'TEST-cursor-installed-one', operation, qualifier)
+              report['fixtures'].append(original)
+              if original['child']['result'] == 'DENIED':
+                  # A separate fresh contrast exists only after the original denial.
+                  # No runtime root relocation is proposed or applied.
+                  parent = pathlib.Path('/tmp')
+                  fd = open_path(parent)
+                  os.close(fd)
+                  name = 'TEST-r576-mkdir-contrast-'+secrets.token_hex(8)
+                  report['fixtures'].append(fixture(parent, name, operation, qualifier))
+              report['status'] = 'DIAGNOSTIC_RECEIPT_ONLY_NO_CAUSAL_FIX_OR_E_PASS'
+              return report
+
+
+          if __name__ == '__main__':
+              try:
+                  assert len(sys.argv) == 3
+                  report = main(pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]))
+                  emit('result', report)
+              except BaseException as error:
+                  print(json.dumps({'status': 'UNKNOWN_DIAGNOSTIC_FAILED', 'error': type(error).__name__+':'+str(error)[:240]}), file=sys.stderr)
+                  sys.exit(1)
+          PY_R576
+          test "$(sha256sum "$export_dir/r576_mkdir_diagnostic.py" | cut -d ' ' -f 1)" = b13f81ad9131ea75836fbc76932d76f76e68aa12d87565bbb5ee5516c7a1212b
+          # Runner-owned exact files retain partial root/child output on failure.
+          # RLIMIT_FSIZE bounds each diagnostic stream; timeout is never success.
+          set +e
+          sudo -n /usr/bin/timeout --signal=TERM --kill-after=2s 35s /usr/bin/python3 -B -S "$export_dir/r576_mkdir_diagnostic.py" "$CURSOR_CARRIER" "$RUNNER_TEMP" > "$export_dir/stdout.jsonl" 2> "$export_dir/stderr.jsonl"
+          code=$?
+          set -e
+          printf '%s\n' "$code" > "$export_dir/exit-code.txt"
+          test "$code" -eq 0
+      - name: Always retain exact R576 diagnostic records only
+        if: always()
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: r576-mkdir-diagnostic
+          path: ${{ env.R576_MKDIR_EXPORT_DIR }}
+          if-no-files-found: error
+          retention-days: 7
+  cursor-installed-e:
+    if: github.event_name == 'workflow_dispatch' && inputs.consume_cursor_e && !inputs.mkdir_diagnostic
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        timeout-minutes: 2
+        with:
+          ref: aa171b20e3e87477f19cb205ee960bc7eab1b73f
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        timeout-minutes: 3
+        with:
+          go-version: '1.25.8'
+      - name: Verify fixed carrier transport without executing its payload
+        timeout-minutes: 1
+        env:
+          CURSOR_CARRIER_B64: ${{ inputs.cursor_carrier_b64 }}
+        run: |
+          python3 -B -S - <<'PY_VERIFY'
+          import base64, hashlib, lzma, struct, zlib, os, pathlib, tempfile, subprocess
+          MAGIC = b'R363T2\0'
+          MAX_SOURCE = 1 << 20
+          MAX_FRAME = 1 << 20
+          MAX_XZ = 1 << 17
+          MAX_ENCODED = 65535
+          MAX_RECORDS = 1024
+
+          def decode_frame(frame):
+              assert len(frame) <= MAX_FRAME and frame.startswith(MAGIC), 'frame magic/bound'
+              at = len(MAGIC)
+              assert at+2 <= len(frame), 'partial record count'
+              count = struct.unpack_from('>H',frame,at)[0];at += 2
+              assert 0 < count <= MAX_RECORDS
+              descriptors = []
+              for _ in range(count):
+                  assert at < len(frame), 'partial segment kind'
+                  kind = frame[at];at += 1
+                  assert kind in (0,1,2), 'unknown lossless segment'
+                  if kind == 1:
+                      size = 32
+                  else:
+                      assert at+2 <= len(frame), 'partial segment header'
+                      size = struct.unpack_from('>H',frame,at)[0];at += 2
+                  descriptors.append((kind,size))
+              assert sum(size for _,size in descriptors) == len(frame)-at, 'segment total/trailing bytes'
+              pieces = [None]*count
+              for grouped_kind in (0,1,2):
+                  for index,(kind,size) in enumerate(descriptors):
+                      if kind != grouped_kind: continue
+                      raw = frame[at:at+size];at += size
+                      pieces[index] = raw.hex().encode('ascii') if kind == 1 else base64.b64encode(raw) if kind == 2 else raw
+              assert at == len(frame) and sum(len(piece) for piece in pieces) <= MAX_SOURCE, 'decoded source bound'
+              source = b''.join(pieces)
+              assert source, 'empty source'
+              return source
+
+          def decode(encoded, pins):
+              assert type(encoded) is str and len(encoded) == pins['encodedBytes'] <= MAX_ENCODED
+              compressed = base64.b85decode(encoded.encode('ascii'))
+              assert base64.b85encode(compressed).decode('ascii') == encoded, 'noncanonical base85'
+              assert len(compressed) == pins['transportBytes'] and hashlib.sha256(compressed).hexdigest() == pins['transportSHA256']
+              gz = zlib.decompressobj(16+zlib.MAX_WBITS)
+              xz = gz.decompress(compressed,MAX_XZ+1)
+              assert len(xz) == pins['xzBytes'] <= MAX_XZ and gz.eof and not gz.unused_data and not gz.unconsumed_tail, 'gzip length/EOF/trailing data'
+              stream = lzma.LZMADecompressor(format=lzma.FORMAT_XZ,memlimit=64<<20)
+              frame = stream.decompress(xz,max_length=MAX_FRAME+1)
+              assert len(frame) == pins['frameBytes'] <= MAX_FRAME and stream.eof and not stream.unused_data, 'xz length/EOF/trailing data'
+              source = decode_frame(frame)
+              assert len(source) == pins['sourceBytes'] and hashlib.sha256(source).hexdigest() == pins['sourceSHA256'], 'exact source length/hash'
+              return source
+
+          pins = {'encodedBytes': 65523, 'frameBytes': 207433, 'xzBytes': 52380, 'transportBytes': 52418, 'transportSHA256': '7d1069b8d5c9f0e3ffd6b49ef568ad711cdfa2fc38073f265a5bbbf78d8c9264', 'sourceBytes': 215704, 'sourceSHA256': 'bc363dfc318eec1d4ad3f3afc0f252e7fe32b76a94bc4e193a9e50487623f1f5'}
+          candidate = decode(os.environ['CURSOR_CARRIER_B64'],pins)
+          compile(candidate,'native_case.py','exec')
+          parent = pathlib.Path(subprocess.check_output(
+              ['/usr/bin/sudo', '-n', '/usr/bin/python3', '-B', '-S', '-c',
+               "import os,tempfile; p=tempfile.mkdtemp(prefix='TEST-cursor-installed-packet-',dir='/tmp'); os.chmod(p,0o1777); print(p)"],
+              text=True, timeout=5).strip())
+          assert parent.parent == pathlib.Path('/tmp') and parent.name.startswith('TEST-cursor-installed-packet-')
+          assert parent.resolve(strict=True) == parent and parent.stat().st_uid == 0 and parent.stat().st_gid == 0
+          assert (parent.stat().st_mode & 0o7777) == 0o1777
+          target = parent/'carrier';target.mkdir(mode=0o755)
+          target.chmod(0o755)
+          (target/'native_case.py').write_bytes(candidate)
+          (target/'native_case.py').chmod(0o644)
+          with open(os.environ['GITHUB_ENV'],'a') as environment:
+              environment.write('CURSOR_CARRIER='+str(target/'native_case.py')+'\n')
+              environment.write('CURSOR_CASE_PARENT='+str(parent)+'\n')
+          PY_VERIFY
+      - name: Check SAME actual runner before preparation or fixed archive acquisition
+        timeout-minutes: 1
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = aa171b20e3e87477f19cb205ee960bc7eab1b73f
+          test "$(uname -m)" = x86_64
+          test "$(uname -r)" = 6.17.0-1022-azure
+          grep -Fx 'ID=ubuntu' /etc/os-release
+          grep -F 'VERSION="24.04.5 LTS' /etc/os-release
+          python3 -B -S "$CURSOR_CARRIER" --validate
+          python3 -B -S - <<'PY_HOST'
+          import importlib.util, os, pathlib
+          spec = importlib.util.spec_from_file_location('exact_host_filter',os.environ['CURSOR_CARRIER'])
+          module = importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+          module.qualified_runner(pathlib.Path(os.environ['CURSOR_CASE_PARENT']).resolve()/'TEST-cursor-installed-one/home/.cursor',pathlib.Path('/etc/machine-id').read_text().strip())
+          PY_HOST
+      - name: Prepare only official standard userspace prerequisites without upgrade
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --no-upgrade -y strace=6.8-0ubuntu2 dbus-daemon dbus-bin dunst xvfb xauth libasound2-dev
+          for tool in strace dbus-daemon dbus-monitor dbus-send dunst Xvfb xauth nsenter setpriv; do test -x "/usr/bin/$tool"; done
+          # No kernel/CAP/LSM/sysctl changes or attach probing; actual permission
+          # and session readiness remain fail-closed gates in the ONE carrier.
+      - name: Build exact source package and bridge and produce real thirteen-key inputs
+        timeout-minutes: 15
+        run: |
+          python3 -B -S - <<'PY_PREPARE'
+          """Proposed SAME-runner build/acquisition preparation. Not run in this job.
+
+          Never starts Cursor, a notification/session service, the product CLI or the case.
+          The only executed source-built helper is the existing package archive builder.
+          """
+          import ast
+          import errno
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import stat
+          import subprocess
+          import tarfile
+          import urllib.request
+
+          SOURCE = 'aa171b20e3e87477f19cb205ee960bc7eab1b73f'
+          ARCHIVE_URL = 'https://downloads.cursor.com/lab/2026.09.28-64d2043/linux/x64/agent-cli-package.tar.gz'
+          ARCHIVE_SHA = '6e4cd936a4866b8a77c50ff51a564460d715772fabc477a01aa0f0455d9559f0'
+          ARCHIVE_SIZE = 182618248
+
+
+          def run(argv, **kwargs):
+              return subprocess.check_output(argv,timeout=300,**kwargs)
+
+
+          def digest(path):
+              h = hashlib.sha256()
+              with path.open('rb') as stream:
+                  for chunk in iter(lambda:stream.read(1<<20),b''): h.update(chunk)
+              return h.hexdigest()
+
+
+          def tracked():
+              result = []
+              for raw in run(['git','ls-files','-z']).split(b'\0'):
+                  if not raw: continue
+                  p = pathlib.Path(os.fsdecode(raw)); f = p.lstat()
+                  link = os.readlink(p) if p.is_symlink() else None
+                  result.append({'path':str(p),'mode':f.st_mode,'link':link,
+                                 'sha256':hashlib.sha256(os.fsencode(link)).hexdigest() if link is not None else digest(p)})
+              return result
+
+
+          def uid1000_access(member, needed):
+              facts = member.lstat()
+              assert stat.S_ISDIR(facts.st_mode) or stat.S_ISREG(facts.st_mode), 'unknown prerequisite object'
+              try:
+                  os.getxattr(member, 'system.posix_acl_access', follow_symlinks=False)
+              except OSError as error:
+                  assert error.errno == errno.ENODATA, 'unknown prerequisite ACL'
+              else:
+                  raise AssertionError('non-mode prerequisite ACL requires qualification')
+              shift = 6 if facts.st_uid == 1000 else 3 if facts.st_gid == 1000 else 0
+              assert ((facts.st_mode >> shift) & needed) == needed, 'UID1000 emptygroups cannot read/search: '+str(member)
+              identity = (facts.st_dev, facts.st_ino, facts.st_mode, facts.st_uid, facts.st_gid,
+                          facts.st_nlink, facts.st_size, facts.st_mtime_ns, facts.st_ctime_ns)
+              again = member.lstat()
+              assert identity == (again.st_dev, again.st_ino, again.st_mode, again.st_uid, again.st_gid,
+                                  again.st_nlink, again.st_size, again.st_mtime_ns, again.st_ctime_ns), 'prerequisite changed'
+              return {'path':str(member), 'identity':identity}
+
+
+          def uid1000_readable(path, executable=False):
+              """Conservative DAC prerequisite, not a privilege/namespace/exec probe."""
+              path = pathlib.Path(path)
+              assert path.is_absolute() and path.resolve(strict=True) == path, 'nonphysical prerequisite'
+              rows = []
+              for member in [*reversed(path.parents), path]:
+                  directory = stat.S_ISDIR(member.lstat().st_mode)
+                  assert directory or member == path, 'nondirectory prerequisite ancestor'
+                  needed = 5 if directory or executable and member == path else 4
+                  rows.append(uid1000_access(member, needed))
+              return rows
+
+
+          def readable_inputs(data, output, carrier):
+              """All thirteen inputs retain their source/hash/authority contracts."""
+              paths = {pathlib.Path(output):False, pathlib.Path(carrier):False,
+                       pathlib.Path(data['root']).parent:False}
+              for key in ('package','cursorArchive','buildInfo','readbackHelper','readbackBuildInfo'):
+                  paths[pathlib.Path(data[key])] = key == 'readbackHelper'
+              for key in ('artifact', 'stage'):
+                  root = pathlib.Path(data[key])
+                  members = [root, *root.rglob('*')]
+                  assert len(members) <= 2048, 'bounded prerequisite tree'
+                  for path in members:
+                      paths[path] = path.is_file() and bool(path.lstat().st_mode & 0o111)
+              for tool in data['tools'].values():
+                  paths[pathlib.Path(tool['path'])] = True
+              for binary in ('python3','bash','unshare','chown','dpkg-query'):
+                  paths[(pathlib.Path('/usr/bin')/binary).resolve(strict=True)] = True
+              # Native/session services also depend on standard dynamic libraries and
+              # Python stdlib. Their runtime availability remains an actual launch gate.
+              rows = {str(path):uid1000_readable(path, execute) for path,execute in sorted(paths.items())}
+              assert not os.path.lexists(data['root']), 'fresh execution leaf required'
+              return {'uid':1000, 'gid':1000, 'groups':[], 'paths':rows,
+                      'claim':'current DAC metadata only; no execution, full authority or E proof'}
+
+
+          def prepare(carrier, bridge_sha):
+              assert run(['git','rev-parse','HEAD']).decode().strip() == SOURCE
+              assert run(['git','status','--porcelain=v1']) == b''
+              before = tracked()
+              carrier = pathlib.Path(carrier).resolve(strict=True)
+              tree = ast.parse(carrier.read_bytes())
+              literal = next(n.value.args[0].value for n in tree.body if isinstance(n,ast.Assign) and isinstance(n.targets[0],ast.Name) and n.targets[0].id == 'READBACK_SOURCE_BYTES')
+              import base64
+              bridge = base64.b64decode(literal,validate=True)
+              assert hashlib.sha256(bridge).hexdigest() == bridge_sha
+              relative = '.research/tmp/TEST-cursor-readback-build'
+              source_dir = pathlib.Path(relative)
+              assert not os.path.lexists(source_dir)
+              assert run(['git','ls-files','--',relative]) == b''
+              # The only local exclusion is the exact authenticated operator build path.
+              # Output and inputs live outside checkout. Preserve actual Go VCS stamping.
+              exclude = pathlib.Path(run(['git','rev-parse','--git-path','info/exclude']).decode().strip())
+              old = exclude.read_bytes() if exclude.exists() else b''
+              assert b'\0' not in old
+              marker = b'/'+relative.encode()+b'/\n'
+              if marker not in old.splitlines(keepends=True):
+                  exclude.write_bytes(old+(b'\n' if old and not old.endswith(b'\n') else b'')+marker)
+              source_dir.mkdir(mode=0o700,parents=True)
+              (source_dir/'authoritative_readback.go').write_bytes(bridge)
+              assert tracked() == before and run(['git','status','--porcelain=v1']) == b''
+              parent = pathlib.Path(os.environ['CURSOR_CASE_PARENT'])
+              assert parent.parent == pathlib.Path('/tmp') and parent.name.startswith('TEST-cursor-installed-packet-')
+              assert parent.resolve(strict=True) == parent and stat.S_IMODE(parent.stat().st_mode) == 0o1777
+              assert parent.stat().st_uid == 0 and parent.stat().st_gid == 0
+              uid1000_readable(parent)
+              base = parent/'TEST-cursor-installed-preparation'
+              assert not os.path.lexists(base)
+              base.mkdir(mode=0o755)
+              base.chmod(0o755)
+              (base/'tracked-protection-before.json').write_text(json.dumps(before,indent=2)+'\n')
+              stage = base/'stage';stage.mkdir(mode=0o755)
+              stage.chmod(0o755)
+              primary = stage/'claude-notifications-linux-amd64'
+              helper = base/'authoritative-readback'
+              builder = base/'build-portable-package'
+              build_info = base/'primary-build-info.txt'
+              bridge_info = base/'readback-build-info.txt'
+              env = {**os.environ,'GOWORK':'off','CGO_ENABLED':'1'}
+              for output,package,extra in ((primary,'./cmd/claude-notifications',[]),
+                                         (helper,'./'+relative,['-ldflags','-X main.packetSourceSHA256='+bridge_sha]),
+                                         (builder,'./cmd/build-portable-package',[])):
+                  run(['go','build','-mod=readonly',*extra,'-o',str(output),package],env=env)
+                  output.chmod(0o755)
+                  if output in (primary,helper):
+                      info = build_info if output == primary else bridge_info
+                      info.write_bytes(run(['go','version','-m',str(output)]))
+                      info.chmod(0o644)
+              for p in (build_info,bridge_info):
+                  p.chmod(0o644)
+                  data = p.read_bytes()
+                  assert len(data) <= 65536 and ('vcs.revision='+SOURCE).encode() in data and b'vcs.modified=false' in data and b'=>\t' not in data
+              package = base/'agent-notify-portable-linux-amd64.zip'
+              run([str(builder),'-os','linux','-arch','amd64','-executable',str(primary),'-output',str(package),'-workdir',str(base/'portable-package')])
+              package.chmod(0o644)
+              archive = base/'agent-cli-package.tar.gz'
+              request = urllib.request.Request(ARCHIVE_URL,headers={'User-Agent':'R363-exact-public-input-preparation'})
+              with urllib.request.urlopen(request,timeout=30) as response, archive.open('xb') as output:
+                  assert response.status == 200 and response.geturl() == ARCHIVE_URL, 'unexpected fixed archive redirect/status'
+                  total = 0
+                  while True:
+                      chunk = response.read(1<<20)
+                      if not chunk: break
+                      total += len(chunk)
+                      assert total <= ARCHIVE_SIZE, 'fixed archive stream bound'
+                      output.write(chunk)
+              archive.chmod(0o644)
+              assert total == ARCHIVE_SIZE and digest(archive) == ARCHIVE_SHA
+              dist = base/'cursor-dist';dist.mkdir(mode=0o755)
+              dist.chmod(0o755)
+              with tarfile.open(archive) as opened:
+                  members = opened.getmembers()
+                  assert len(members) == 580 and len({m.name for m in members}) == 580
+                  for m in members:
+                      parts = pathlib.PurePosixPath(m.name).parts
+                      assert parts and not m.name.startswith('/') and '..' not in parts and '\\' not in m.name and (m.isfile() or m.isdir())
+                  files = [m for m in members if m.isfile()]
+                  paths = [pathlib.PurePosixPath(m.name).parts for m in files]
+                  strip = 1 if len({p[0] for p in paths}) == 1 and all(len(p)>1 for p in paths) else 0
+                  total = 0
+                  for m in files:
+                      target = dist.joinpath(*pathlib.PurePosixPath(m.name).parts[strip:])
+                      directory = dist
+                      for part in target.relative_to(dist).parts[:-1]:
+                          directory = directory/part
+                          if not directory.exists():
+                              directory.mkdir(mode=0o755)
+                              directory.chmod(0o755)
+                      assert not target.exists() and 0 <= m.size <= 256<<20
+                      stream = opened.extractfile(m)
+                      body = stream.read(m.size+1)
+                      assert len(body) == m.size
+                      total += m.size;assert total <= 1<<30
+                      target.write_bytes(body);target.chmod(m.mode & 0o777)
+              tools = {}
+              packages = {'strace':'strace','dbus-daemon':'dbus-daemon','dbus-monitor':'dbus-bin','dbus-send':'dbus-bin',
+                          'dunst':'dunst','Xvfb':'xvfb','xauth':'xauth','nsenter':'util-linux','setpriv':'util-linux'}
+              for name,package_name in packages.items():
+                  path = pathlib.Path('/usr/bin')/name
+                  assert path.resolve(strict=True) == path and stat.S_ISREG(path.stat().st_mode) and os.access(path,os.X_OK)
+                  owner = run(['/usr/bin/dpkg-query','--search',str(path)]).decode().splitlines()
+                  assert owner == [package_name+': '+str(path)], 'official standard package ownership'
+                  metadata = run(['/usr/bin/dpkg-query','--show','--showformat=${binary:Package}\t${Version}\t${db:Status-Status}\n',package_name])
+                  fields = metadata.decode().strip().split('\t')
+                  assert len(fields) == 3 and fields[0] == package_name and fields[2] == 'installed'
+                  tools[name] = {'path':str(path),'sha256':digest(path),'package':package_name,'version':fields[1],
+                                 'installedMetadataSHA256':hashlib.sha256(metadata).hexdigest()}
+              assert tools['strace']['version'] == '6.8-0ubuntu2'
+              data = {'sourceSHA':SOURCE,'root':str(base.parent/'TEST-cursor-installed-one'),'artifact':str(dist),'stage':str(stage),
+                      'package':str(package),'cursorArchive':str(archive),'buildInfo':str(build_info),
+                      'machineID':pathlib.Path('/etc/machine-id').read_text().strip(),
+                      'sha256':{name:digest(path) for name,path in (('primary',primary),('package',package),('buildInfo',build_info),('readbackHelper',helper),('readbackBuildInfo',bridge_info))},
+                      'tools':tools,'displayNumber':99,'readbackHelper':str(helper),'readbackBuildInfo':str(bridge_info)}
+              assert len(data) == 13 and not pathlib.Path(data['root']).exists()
+              output = base/'execution-inputs.json';output.write_text(json.dumps(data,indent=2)+'\n');output.chmod(0o644)
+              assert tracked() == before and run(['git','status','--porcelain=v1']) == b''
+              (base/'tracked-protection.json').write_text(json.dumps(before,indent=2)+'\n')
+              # Import only authenticated inert definitions. This calls input/source/FS
+              # checks; it never calls main, native_run, CLI, a provider, or a session.
+              import importlib.util
+              spec = importlib.util.spec_from_file_location('exact_input_contract',carrier)
+              module = importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+              module.execution_inputs(str(output))
+              module.qualified_runner(pathlib.Path(data['root'])/'home/.cursor',data['machineID'])
+              readability = readable_inputs(data, output, carrier)
+              (base/'uid1000-readability.json').write_text(json.dumps(readability,indent=2)+'\n')
+              return output
+
+
+          output = prepare(os.environ['CURSOR_CARRIER'],'d3683e030d70e7361708d5ed86a9f75a99b5007c84fb2a68be43bb65c50ea5b7')
+          with open(os.environ['GITHUB_ENV'],'a') as environment:
+              environment.write('CURSOR_EXECUTION_INPUTS='+str(output)+'\n')
+          PY_PREPARE
+      - name: Root ONE installed case entry after exact inputs and qualification
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          sudo /usr/bin/python3 -B -S "$CURSOR_CARRIER" --execute --inputs "$CURSOR_EXECUTION_INPUTS" --consent TEST-only-public-sdk-stop-and-workspace-trust
+      - name: Require authoritative SAME-case PASS and always copy existing evidence
+        if: always()
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          export_dir=$(mktemp -d "$CURSOR_CASE_PARENT/TEST-cursor-evidence-export-XXXXXX")
+          printf 'CURSOR_EVIDENCE_EXPORT_DIR=%s\n' "$export_dir" >> "$GITHUB_ENV"
+          cat > "$export_dir/case_evidence.py" <<'PY_EVIDENCE'
+          """Exact SAME-case post-exit result gate and bounded, no-follow evidence export.
+
+          This helper never starts a case or repairs a receipt. Synthetic fixtures prove
+          refusal contracts only. CI invokes it after the single authorized carrier exit.
+          """
+          import argparse
+          import base64
+          import hashlib
+          import io
+          import json
+          import os
+          import pathlib
+          import stat
+          import tarfile
+
+          SOURCE = 'aa171b20e3e87477f19cb205ee960bc7eab1b73f'
+          BRIDGE = 'd3683e030d70e7361708d5ed86a9f75a99b5007c84fb2a68be43bb65c50ea5b7'
+          FILE_LIMIT = 16 << 20
+          TOTAL_LIMIT = 1 << 30
+          ENTRY_LIMIT = 16384
+          PREPARATION = ('execution-inputs.json', 'primary-build-info.txt',
+                         'readback-build-info.txt', 'tracked-protection-before.json',
+                         'tracked-protection.json', 'uid1000-readability.json')
+
+
+          def strict_json(raw):
+              def pairs(values):
+                  value = dict(values)
+                  assert len(value) == len(values), 'duplicate evidence JSON key'
+                  return value
+              return json.loads(raw.decode('utf-8'), object_pairs_hook=pairs,
+                                parse_constant=lambda _: (_ for _ in ()).throw(ValueError('nonfinite evidence JSON')))
+
+
+          def identity(facts):
+              return (facts.st_dev, facts.st_ino, facts.st_mode, facts.st_uid, facts.st_gid,
+                      facts.st_nlink, facts.st_size, facts.st_mtime_ns, facts.st_ctime_ns)
+
+
+          def open_directory(parent, name):
+              assert name and '/' not in name and name not in ('.', '..')
+              before = os.stat(name, dir_fd=parent, follow_symlinks=False)
+              fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+              try:
+                  assert identity(before) == identity(os.fstat(fd)), 'directory changed during open'
+              except BaseException:
+                  os.close(fd)
+                  raise
+              return fd
+
+
+          def read_at(parent, name):
+              before = os.stat(name, dir_fd=parent, follow_symlinks=False)
+              assert stat.S_ISREG(before.st_mode) and before.st_nlink == 1, 'nonregular/linked evidence'
+              assert 0 <= before.st_size <= FILE_LIMIT, 'evidence file bound'
+              fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+              with os.fdopen(fd, 'rb') as stream:
+                  assert identity(before) == identity(os.fstat(stream.fileno())), 'evidence replacement'
+                  raw = stream.read(before.st_size + 1)
+                  assert len(raw) == before.st_size
+                  assert identity(before) == identity(os.fstat(stream.fileno())), 'evidence changed during read'
+              assert identity(before) == identity(os.stat(name, dir_fd=parent, follow_symlinks=False))
+              return raw
+
+
+          def read_path(parent, path):
+              parts = pathlib.PurePosixPath(path).parts
+              assert parts and not path.startswith('/') and all(p not in ('.', '..') for p in parts)
+              fd = os.dup(parent)
+              try:
+                  for part in parts[:-1]:
+                      child = open_directory(fd, part)
+                      os.close(fd)
+                      fd = child
+                  return read_at(fd, parts[-1])
+              finally:
+                  os.close(fd)
+
+
+          def result_gate(temp_fd, source_sha, runner_temp):
+              """Require the existing actual final result, both phases, and readbacks."""
+              inputs = strict_json(read_path(temp_fd, 'TEST-cursor-installed-preparation/execution-inputs.json'))
+              assert inputs['sourceSHA'] == SOURCE
+              case = open_directory(temp_fd, 'TEST-cursor-installed-one')
+              try:
+                  assert inputs['root'] == str(pathlib.Path(runner_temp) / 'TEST-cursor-installed-one')
+                  assert hashlib.sha256(read_path(case, 'recipe/native_case.py')).hexdigest() == source_sha
+                  assert hashlib.sha256(read_path(case, 'recipe/authoritative_readback.go')).hexdigest() == BRIDGE
+                  load = lambda path: strict_json(read_path(case, 'evidence/' + path))
+                  joined = load('namespace-join.json')
+                  assert type(joined['outerExit']) is int and joined['outerExit'] == 0, 'outer exit failure'
+                  assert joined['namespaceJoined'] is True and joined['forcedContainment'] is False, 'non-natural namespace join'
+                  result = load('result.json')
+                  assert result['status'] == 'PASS' and result.get('failure') is None
+                  assert result['entry'] == 'installed-USER' and len(result['phases']) == 2
+                  native_ids = []
+                  for index, phase in enumerate(('enabled-native', 'disabled-restart')):
+                      observed = load(phase + '/result.json')
+                      assert observed == result['phases'][index] and observed['status'] == 'PASS' and observed['failure'] is None
+                      assert type(observed['nativeExit']) is int and observed['nativeExit'] == 0
+                      for field in ('parentNaturalExit', 'ownedNamespaceDescendantsJoined', 'nativeStopAck', 'nativeExecClose', 'terminalSent'):
+                          assert observed[field] is True, 'missing native phase completion: ' + field
+                      run = observed['actualNativeRun']
+                      native_ids.append((run['conversation'], run['generation']))
+                      assert all(type(v) is str and v for v in native_ids[-1])
+                      raw = read_path(case, 'evidence/' + phase + '/native-consumed-stdin.json')
+                      assert 0 < len(raw) <= 1 << 20
+                      assert raw == read_path(case, 'evidence/' + phase + '/native-outer-consumed-stdin.bin')
+                      hashed = hashlib.sha256(raw).hexdigest().encode() + b'\n'
+                      for name in ('native-consumed-stdin.sha256', 'native-outer-consumed-stdin.sha256'):
+                          assert read_path(case, 'evidence/' + phase + '/' + name) == hashed
+                      stop = strict_json(raw)
+                      assert (stop['conversation_id'], stop['generation_id']) == native_ids[-1]
+                      for name in ('stdin-alias-trace.json', 'cleanup-process-snapshot.json', 'native-retained-object-boundaries.json', 'protocol.json', 'command.json'):
+                          assert load(phase + '/' + name) is not None, 'missing phase evidence'
+                  assert native_ids[0][0] != native_ids[1][0] and native_ids[0][1] != native_ids[1][1]
+                  frozen = load('original-profile-authority.json')
+                  authority = frozen['originalAuthority']
+                  assert set(authority) == {'version', 'canonical_root', 'ancestry'} and authority['version'] == 1
+                  assert authority['ancestry'] and all(set(a) == {'canonical_path', 'scheme', 'volume_id', 'object_id'} for a in authority['ancestry'])
+                  binding = None
+                  for phase in ('enabled', 'native-enabled', 'duplicate', 'disabled', 'updated', 'restarted', 'pre-remove', 'removed'):
+                      observed = load(phase + '-authoritative-readback.json')
+                      assert observed['bridgeSourceSHA256'] == BRIDGE
+                      if binding is None: binding = observed['binding']
+                      assert observed['binding'] == binding and observed['fixed'] == frozen['fixed']
+                      recovery = observed['inspection']['Recovery']
+                      assert recovery['Required'] is False and not recovery['Reason']
+                      assert all(not recovery[k] for k in ('Journals', 'Receipts', 'NativeIntents'))
+                      if phase == 'removed':
+                          assert observed['mode'] == 'absent' and 'selected' not in observed
+                          continue
+                      assert observed['mode'] == ('remove-plan' if phase == 'pre-remove' else 'live')
+                      assert observed['originalAuthority'] == authority and observed['originalNamespace'] == frozen['originalNamespace']
+                      selected = observed['selected']
+                      assert selected['profile_authority'] == authority and selected['profile_namespace'] == frozen['originalNamespace']
+                      assert not selected.get('pending_native_intent') and not selected.get('native_activation_attempt')
+                      expected = phase in ('enabled', 'native-enabled', 'duplicate')
+                      assert observed['channels'] == {'Desktop': expected, 'Webhook': expected}
+                      raw = load(phase + '-readback.json')
+                      ledger_key = 'home/.config/agent-notifications/ownership.json'
+                      ledger = strict_json(base64.b64decode(raw[ledger_key], validate=True))
+                      assert not ledger.get('PendingMutation') and ledger['Generation'] == observed['consumerBinding']['Generation']
+                  removal = load('removal-full-membership.json')
+                  assert removal['unknownRemainders'] == [] and removal['objects'] and removal['stateMembership']
+                  membership = removal['consumerMembership']
+                  assert membership['selectedRemoved'] in membership['before'] and membership['selectedRemoved'] not in membership['after']
+                  remove = load('remove.stdout')
+                  inspect = load('removed-inspect.stdout')
+                  assert remove['action'] == 'uninstall' and remove['outcome'] == 'completed' and not remove.get('nextActions')
+                  selected = [r for r in inspect['targets'] if r['client'] == 'cursor' and r['unit'] == 'agent-notify']
+                  assert inspect['outcome'] == 'completed' and len(selected) == 1 and selected[0]['outcome'] == 'absent' and not inspect.get('nextActions')
+                  assert load('trace-readiness.json') and load('session-readiness.json') and load('session-controls.json')
+                  notifications = load('notifications-actual.json')
+                  assert notifications['busGUID'] and notifications['owner'] and len(notifications['receipts']) == 1
+                  receipt = notifications['receipts'][0]
+                  reply = receipt['reply']
+                  assert reply['type'] == 2 and reply['signature'] == 'u' and reply['body'] == [receipt['notificationID']]
+                  assert type(receipt['notificationID']) is int and 0 <= receipt['notificationID'] <= 4294967295
+                  assert reply['header']['5'] == receipt['callSerial'] and reply['header']['6'] == receipt['sender']
+                  assert reply['header']['7'] == notifications['owner']
+                  webhook = load('webhook-actual.json')
+                  assert len(webhook) == 1 and webhook[0]['responseAccepted'] is True
+                  try:
+                      failures = load('webhook-failures.json')
+                  except FileNotFoundError:
+                      failures = []
+                  assert failures == [], 'webhook handler uncertainty'
+                  return {'status': 'PASS', 'sourceSHA256': source_sha, 'namespaceJoin': joined, 'phases': native_ids}
+              finally:
+                  os.close(case)
+
+
+          def export_evidence(temp_fd, destination_fd, uid, gid, report):
+              """Copy existing evidence only; links are inventory metadata, never followed."""
+              inventory, errors = [], []
+              totals = {'bytes': 0, 'entries': 0}
+              fd = os.open('case-evidence.tar.gz', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                           0o600, dir_fd=destination_fd)
+              os.fchown(fd, uid, gid)  # The new owned copy, never any source object.
+              with os.fdopen(fd, 'wb') as output, tarfile.open(fileobj=output, mode='w|gz') as archive:
+                  def add(path, raw, facts=None):
+                      assert totals['entries'] < ENTRY_LIMIT and len(raw) <= FILE_LIMIT and totals['bytes'] + len(raw) <= TOTAL_LIMIT
+                      totals['entries'] += 1
+                      totals['bytes'] += len(raw)
+                      info = tarfile.TarInfo(path)
+                      info.size = len(raw)
+                      info.mode = stat.S_IMODE(facts.st_mode) if facts else 0o600
+                      info.uid, info.gid = (facts.st_uid, facts.st_gid) if facts else (uid, gid)
+                      archive.addfile(info, io.BytesIO(raw))
+                  def copy(parent, name, path, depth):
+                      assert depth <= 64 and len(inventory) < ENTRY_LIMIT, 'export tree bound'
+                      facts = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                      item = {'path': path, 'identity': identity(facts)}
+                      inventory.append(item)
+                      if stat.S_ISLNK(facts.st_mode):
+                          item['rawLink'] = os.readlink(name, dir_fd=parent)
+                          assert identity(facts) == identity(os.stat(name, dir_fd=parent, follow_symlinks=False))
+                          item['disposition'] = 'link metadata only; target never read or archived'
+                      elif stat.S_ISDIR(facts.st_mode):
+                          child = open_directory(parent, name)
+                          try:
+                              entries = os.listdir(child)
+                              assert len(entries) <= ENTRY_LIMIT, 'export directory entry bound'
+                              for entry in sorted(entries):
+                                  if len(inventory) >= ENTRY_LIMIT:
+                                      errors.append({'path': path, 'error': 'export total entry bound'})
+                                      break
+                                  try:
+                                      copy(child, entry, path + '/' + entry, depth + 1)
+                                  except (OSError, AssertionError) as error:
+                                      errors.append({'path': path + '/' + entry, 'error': type(error).__name__ + ':' + str(error)[:240]})
+                              assert identity(facts) == identity(os.fstat(child)), 'export directory mutated'
+                          finally:
+                              os.close(child)
+                      else:
+                          assert totals['bytes'] + facts.st_size <= TOTAL_LIMIT - FILE_LIMIT, 'export aggregate bound'
+                          raw = read_at(parent, name)
+                          item['sha256'] = hashlib.sha256(raw).hexdigest()
+                          add(path, raw, facts)
+                  for root, names in (('TEST-cursor-installed-one', ('evidence', 'recipe')),
+                                      ('TEST-cursor-installed-preparation', PREPARATION)):
+                      try:
+                          parent = open_directory(temp_fd, root)
+                      except (OSError, AssertionError) as error:
+                          errors.append({'path': root, 'error': type(error).__name__ + ':' + str(error)[:240]})
+                          continue
+                      try:
+                          for name in names:
+                              try:
+                                  copy(parent, name, root + '/' + name, 0)
+                              except (OSError, AssertionError) as error:
+                                  errors.append({'path': root + '/' + name, 'error': type(error).__name__ + ':' + str(error)[:240]})
+                      finally:
+                          os.close(parent)
+                  if report['status'] == 'PASS' and errors:
+                      report.update(status='FAIL', reason='incomplete evidence export')
+                  manifest = {'inventory': inventory, 'errors': errors, 'totals': totals.copy(),
+                              'resultGate': report, 'linksDereferenced': False}
+                  add('export-manifest.json', (json.dumps(manifest, indent=2) + '\n').encode())
+              return manifest
+
+
+          def main(args):
+              runner_temp = pathlib.Path(args.runner_temp)
+              assert runner_temp.is_absolute() and runner_temp.resolve(strict=True) == runner_temp
+              temp_fd = os.open(runner_temp, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+              try:
+                  try:
+                      report = result_gate(temp_fd, args.source_sha, runner_temp)
+                  except Exception as error:  # Any failed/unknown gate still exports existing evidence.
+                      report = {'status': 'FAIL', 'sourceSHA256': args.source_sha,
+                                'reason': type(error).__name__ + ':' + str(error)[:240]}
+                  if args.destination:
+                      destination = pathlib.Path(args.destination)
+                      assert destination.parent == runner_temp and destination.name.startswith('TEST-cursor-evidence-export-')
+                      dest_fd = open_directory(temp_fd, destination.name)
+                      try:
+                          assert os.fstat(dest_fd).st_uid == args.uid and os.fstat(dest_fd).st_gid == args.gid
+                          exported = export_evidence(temp_fd, dest_fd, args.uid, args.gid, report)
+                          # Missing partial preparation files are explicitly retained in
+                          # the export manifest; failure cannot erase available evidence.
+                          if report['status'] == 'PASS' and exported['errors']:
+                              report = {**report, 'status': 'FAIL', 'reason': 'incomplete evidence export'}
+                      finally:
+                          os.close(dest_fd)
+                  print(json.dumps(report, indent=2))
+                  return 0 if report['status'] == 'PASS' else 1
+              finally:
+                  os.close(temp_fd)
+
+
+          if __name__ == '__main__':
+              parser = argparse.ArgumentParser()
+              parser.add_argument('--runner-temp', required=True)
+              parser.add_argument('--source-sha', required=True)
+              parser.add_argument('--destination')
+              parser.add_argument('--uid', type=int)
+              parser.add_argument('--gid', type=int)
+              raise SystemExit(main(parser.parse_args()))
+          PY_EVIDENCE
+          sudo /usr/bin/python3 -B -S "$export_dir/case_evidence.py" --runner-temp "$CURSOR_CASE_PARENT" --source-sha bc363dfc318eec1d4ad3f3afc0f252e7fe32b76a94bc4e193a9e50487623f1f5 --destination "$export_dir" --uid "$(id -u)" --gid "$(id -g)"
+      - name: Always retain SAME-case TEST evidence and bounded preparation records
+        if: always()
+        timeout-minutes: 3
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cursor-installed-one-evidence
+          path: ${{ env.CURSOR_EVIDENCE_EXPORT_DIR }}
+          if-no-files-found: error
+          retention-days: 7
+  opencode-plugin:
+    if: github.event_name != 'workflow_dispatch'
+    name: OpenCode plugin bundle
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: TEST-opencode-plugin-ci
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: TEST-opencode-plugin-ci
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: TEST-opencode-plugin-ci/opencode-plugin/package-lock.json
+      - run: npm ci
+        working-directory: TEST-opencode-plugin-ci/opencode-plugin
+      - run: npm run check
+        working-directory: TEST-opencode-plugin-ci/opencode-plugin
+      - run: git diff --exit-code -- internal/opencodeplugin/dist/agent-notifications.js
+
   test:
+    if: github.event_name != 'workflow_dispatch'
     name: Test on Ubuntu
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Go 1.26 runs the frozen Cursor physical Ubuntu/kernel qualification.
+    runs-on: ${{ matrix.go == '1.26' && 'ubuntu-24.04' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04' || vars.CI_LINUX_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 40
 
     strategy:
       fail-fast: false
       matrix:
-        go: ['1.22', '1.26']
+        go: ['1.25', '1.26']
 
     steps:
       - name: Checkout code
@@ -30,6 +1133,19 @@ jobs:
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+
+      - name: Check Linux handoff pure contracts (no native effects)
+        if: matrix.go == '1.26'
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-navigation-linux-client-callback.py
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-navigation-linux-native-chain.py
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-navigation-linux-server-surface.py
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-navigation-linux-runtime-stage.py
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-navigation-linux-handoff-frame.py
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-navigation-linux-client-activation-trace.py
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-navigation-linux-sender-manifest.py
+          python3 -c "from pathlib import Path; [compile(p.read_text(), str(p), 'exec') for p in (Path('scripts/navigation-linux-handoff-host-controller.py'), Path('tests/integration/navigation_linux_handoff_bootstrap_test.py'))]"
+          python3 -c "from pathlib import Path; [compile(p.read_text(), str(p), 'exec') for p in (Path('tests/integration/navigation_linux_client_sender_test.py'), Path('tests/integration/navigation_linux_guest_pointer_entry_test.py'), Path('tests/integration/navigation_linux_client_handoff_guest_test.py'))]"
 
       - name: Download dependencies
         run: go mod download
@@ -49,8 +1165,81 @@ jobs:
             exit 1
           fi
 
+      - name: Require qualified Cursor installed physical contracts
+        if: matrix.go == '1.26'
+        env:
+          GOWORK: 'off'
+          GOTOOLCHAIN: local
+        run: |
+          set -euo pipefail
+          umask 077
+          evidence=$(mktemp -d "$RUNNER_TEMP/TEST-cursor-physical-XXXXXX")
+          printf 'CURSOR_PHYSICAL_EVIDENCE=%s\n' "$evidence" >> "$GITHUB_ENV"
+          mkdir "$evidence/tmp"
+          export TMPDIR="$evidence/tmp"
+          {
+            uname -r
+            cat /etc/os-release
+            stat -f -c '%T' / "$PWD" "$TMPDIR"
+          } | tee "$evidence/host.log"
+          go test -count=1 -timeout=3m -v \
+            github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/directoryidentity \
+            github.com/777genius/plugin-kit-ai/install/integrationctl/adapters/dirswap \
+            2>&1 | tee "$evidence/native.log"
+          for marker in \
+            'ACTUAL_IOCTL=SUCCESS; fd_tuple=SUPPORTED;' \
+            'QUALIFICATION=SUPPORTED; same-byte replacement denied' \
+            'QUALIFICATION=SUPPORTED; substituted ancestor denied with unchanged child' \
+            'FRESH_PROCESS_REVALIDATED'; do
+            grep -F "$marker" "$evidence/native.log"
+          done
+          go test -count=1 -timeout=3m -v ./internal/copilotvscodeinstall \
+            -run '^TestCursor' 2>&1 | tee "$evidence/cursor.log"
+          if grep -F 'NOT_RUN positive' "$evidence/cursor.log"; then
+            exit 1
+          fi
+          grep -F 'ACTUAL_TEST_PHYSICAL_HOST: tuple=linux/amd64' "$evidence/cursor.log"
+          grep -F 'P1_ORIGINAL_TOKEN_REVALIDATED=true; PUBLIC_SELECTED_ACK_PROJECTION_DATA_ADMISSION=true' "$evidence/cursor.log"
+          grep -F 'SIBLING_R2_SELECTED_R1_POSITIVE=true' "$evidence/cursor.log"
+          go test -count=1 -timeout=3m -v ./internal/agentnotify/portablesetup \
+            -run '^TestMaterializerSelectedCursorPublicProjectionAndAcknowledgement$' 2>&1 | tee "$evidence/materializer.log"
+          if grep -F 'NOT_RUN positive materializer' "$evidence/materializer.log"; then
+            exit 1
+          fi
+          grep -F 'QUALIFIED_TEST_MATERIALIZER_SELECTED_PROJECTION_ACK_DATA_ORIGINAL_TOKEN=true' "$evidence/materializer.log"
+          grep -F -- '--- PASS: TestMaterializerSelectedCursorPublicProjectionAndAcknowledgement ' "$evidence/materializer.log"
+          go test -count=1 -timeout=3m -v ./cmd/claude-notifications \
+            -run '^(TestCursorCallerAcknowledgedTokenAndMatchingPendingRetry|TestCursorCallerFirstHandoffMissingToken|TestCursorCallerMissingPackageRefusalAndOwnedCleanup|TestCursorConfirmationReachesWizardAdmissionWithFrozenOptOut)$' 2>&1 | tee "$evidence/caller.log"
+          if grep -F 'NOT_RUN positive caller/P1/resume' "$evidence/caller.log"; then
+            exit 1
+          fi
+          grep -F 'QUALIFIED_TEST_CALLER_ORIGINAL_TOKEN_AND_MATCHING_RESUME=true' "$evidence/caller.log"
+          grep -F 'QUALIFIED_TEST_FIRST_HANDOFF=true' "$evidence/caller.log"
+          grep -F 'QUALIFIED_TEST_PENDING_A_TO_B=true' "$evidence/caller.log"
+          grep -F -- '--- PASS: TestCursorCallerFirstHandoffMissingToken ' "$evidence/caller.log"
+          grep -F -- '--- PASS: TestCursorCallerMissingPackageRefusalAndOwnedCleanup ' "$evidence/caller.log"
+          grep -F -- '--- PASS: TestCursorConfirmationReachesWizardAdmissionWithFrozenOptOut ' "$evidence/caller.log"
+          go test -count=1 -timeout=3m -v ./internal/agentnotify/setupwizard \
+            -run '^TestPackageCompositionCleanupPreservesSharedAndPendingSource$' 2>&1 | tee "$evidence/caller-package.log"
+          grep -F -- '--- PASS: TestPackageCompositionCleanupPreservesSharedAndPendingSource ' "$evidence/caller-package.log"
+
+      - name: Preserve Cursor physical qualification
+        if: always() && matrix.go == '1.26'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cursor-installed-physical-go-${{ matrix.go }}
+          path: ${{ env.CURSOR_PHYSICAL_EVIDENCE }}/*.log
+          if-no-files-found: warn
+
       - name: Run tests
-        run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+        run: |
+          set -euo pipefail
+          go test -timeout 20m -v -race -coverprofile=coverage-cmd.txt -covermode=atomic ./cmd/claude-notifications
+          packages=$(go list ./...)
+          remaining_packages=$(printf '%s\n' "$packages" | grep -Fvx 'github.com/777genius/agent-notifications/cmd/claude-notifications')
+          mapfile -t remaining <<< "$remaining_packages"
+          go test -timeout 20m -v -race -coverprofile=coverage-ubuntu-rest.txt -covermode=atomic "${remaining[@]}"
+          { head -n 1 coverage-ubuntu-rest.txt; tail -n +2 coverage-ubuntu-rest.txt; tail -n +2 coverage-cmd.txt; } > coverage.txt
 
       - name: Upload coverage to Codecov
         if: matrix.go == '1.26'
@@ -66,11 +1255,35 @@ jobs:
       - name: Test binary execution (help)
         run: ./bin/claude-notifications help
 
+      - name: Qualify native selector bootstrap E2E (isolated, offline)
+        id: selector-e2e
+        if: matrix.go == '1.26'
+        run: bash scripts/selector_e2e.sh "$RUNNER_TEMP/TEST-selector-e2e"
+
+      - name: Upload selector bootstrap evidence
+        if: always() && matrix.go == '1.26' && steps.selector-e2e.outcome != 'skipped'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: selector-e2e-${{ runner.os }}
+          path: ${{ runner.temp }}/TEST-selector-e2e
+          if-no-files-found: error
+
       - name: Test one-line setup loader (isolated, offline)
         run: bash bin/setup_test.sh
 
+      - name: Test platform channels and cache recovery (isolated)
+        run: |
+          bash bin/release_channel_test.sh
+          bash bin/release_channel_native_test.sh
+
       - name: Test python/node installer runtime fallback (isolated, offline)
         run: bash bin/installer_runtime_fallback_e2e_test.sh
+
+      - name: Qualify interpreter-free artifact lifecycle
+        if: matrix.go == '1.26'
+        run: |
+          bash bin/install_no_interpreters_test.sh "$PWD/bin/claude-notifications"
+          bash bin/install_no_interpreters_lifecycle_test.sh "$PWD/bin/claude-notifications"
 
       - name: Run install.sh unit tests
         run: bash bin/install_test.sh
@@ -94,8 +1307,9 @@ jobs:
         continue-on-error: true
 
   lint:
+    if: github.event_name != 'workflow_dispatch'
     name: Lint
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 15
 
     steps:
@@ -117,4 +1331,4 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
-          args: --timeout=5m
+          args: --timeout=5m --max-same-issues=0

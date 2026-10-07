@@ -10,6 +10,150 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Replace per-session desktop banners (macOS, opt-in)** — `notifications.replaceNotificationsPerSession` (default `false`) keys `terminal-notifier -group` on the Claude/Codex session id so a session's newest notification replaces its previous banner in place instead of stacking, while other sessions stay separate. Sessions with no id (or `unknown`) stay unique. Conversation grouping in Notification Center is unchanged and still uses the session thread. Useful for hosts that emit many attention events per session, such as Codex "Approve for me" auto-review.
 
+## [1.48.1] - 2026-10-06
+
+### Added
+- One OpenCode plugin supports V1 `server` and V2 `setup`, with compatibility targeting 1.18.33, 1.18.34 and 2.0.21. V2 notifications verify native ownership and settled execution, suppress child sessions, and recover after temporary ownership failures ([#294](https://github.com/777genius/agent-notifications/pull/294)). The self-contained bundle incorporates SDK 0.3.0 built from the reviewed vendored tarball; separate SDK publication remains pending.
+- Interactive agent selection in the public installer, with separate installation scope and notification consent for each selected product. Cancellation performs no installation; partial failures retain completed installations and show recovery guidance ([#296](https://github.com/777genius/agent-notifications/pull/296)).
+- The `licenses` command and third-party license notices in portable packages and release assets.
+- Explicit Cursor setup selection, per-channel consent and managed installed Stop-event delivery, with selected-profile checks, repeat setup, revocation and recovery contracts ([#342](https://github.com/777genius/agent-notifications/pull/342), [#344](https://github.com/777genius/agent-notifications/pull/344), [#356](https://github.com/777genius/agent-notifications/pull/356), [#364](https://github.com/777genius/agent-notifications/pull/364)). Desktop delivery and exact-chat navigation require separate qualification.
+
+### Changed
+- OpenCode V1 now consumes the 0.3.0 observer instead of 0.1.0: failed assistant steps produce terminal errors at idle, context overflow waits for recovery, and observed user association filters replayed completions. The V1 entry point remains supported.
+- OpenCode notifications include session titles and the current question or permission context ([#326](https://github.com/777genius/agent-notifications/pull/326)).
+- Claude CLI hooks now use the SDK-backed event source while preserving command invocation and notification handling ([#264](https://github.com/777genius/agent-notifications/pull/264), [#266](https://github.com/777genius/agent-notifications/pull/266)).
+- The source includes fresh macOS Codex and combined bootstrap installs that enable chat navigation by default when the registered official Codex Desktop app passes signature verification. Existing navigation policy and explicit choices remain preserved. If the verified app is unavailable, bootstrap reports its fallback to informational notifications without navigation.
+
+### Fixed
+- Preserve valid four-second notification budgets when repeated Windows clock readings cross a floating-point boundary.
+- Managed macOS installations recover after APFS device numbers change across a reboot, while preserving inode, physical parent, content and volume ownership checks. Install, update, reselection, purge and interrupted recovery accept valid persisted identities without adopting replacement assets ([#301](https://github.com/777genius/agent-notifications/issues/301)).
+- Failed lazy hook installations wait 300 seconds before retrying the same product, release and runtime root, prevent concurrent duplicate attempts, and continue dispatching an available previous binary. Manual repair and a different release bypass the matching cooldown ([#302](https://github.com/777genius/agent-notifications/issues/302)).
+- macOS LaunchServices registration uses committed durable native generations instead of temporary downloaded apps. Failed and disposable acquisitions do not register; successful commits reconcile obsolete conventional registrations owned by this product while retaining active, previous and published native generations. Foreign registrations remain untouched ([#302](https://github.com/777genius/agent-notifications/issues/302)).
+- Interrupted policy enable/admission refuses changed or missing active native assets before publication, while explicit notification revocation remains possible with damaged assets. No-op native refresh reports the verified retained generation when path output is requested.
+- Managed notification helpers take priority over old concrete helper bundles, so notification clicks reach the originating Codex chat instead of being handled by an obsolete helper. Installation reconciles known obsolete macOS registrations while retaining bundle files and published callback generations, and warns if macOS still selects a different helper.
+- The setup wizard displays nonfatal Codex native registration warnings in its summary and JSON output without failing successfully committed hooks.
+- Native helper updates select the supplied release before falling back to an installed helper.
+- Codex desktop callbacks allow a bounded 30 seconds for application verification and opening, while legacy callbacks retain their 10-second budget. Safe system-log phase diagnostics make failed clicks traceable after the helper is relaunched by macOS.
+- Codex setup safely adopts owner-owned legacy locks with read-only group/world permissions, preserving inode and contents while keeping foreign files and unsafe permissions rejected ([#290](https://github.com/777genius/agent-notifications/pull/290)).
+- Installation preserves existing merged Claude hooks instead of applying legacy cleanup to user settings ([#265](https://github.com/777genius/agent-notifications/pull/265)).
+- Unchanged managed legacy skills migrate to the canonical `agent-notifications` skill without replacing user edits ([#306](https://github.com/777genius/agent-notifications/pull/306)).
+
+### Platform notes
+- v1.48.1 publishes only Linux amd64/arm64 and Windows amd64 artifacts. macOS source changes listed above are not shipped to the macOS channel, which remains at v1.46.1; GitHub global Latest also remains v1.46.1.
+- Navigation callback lifetime, resource ownership, Linux portal restart and Wayland token-forwarding contracts have new source-bound checks ([#345](https://github.com/777genius/agent-notifications/pull/345), [#349](https://github.com/777genius/agent-notifications/pull/349), [#354](https://github.com/777genius/agent-notifications/pull/354), [#355](https://github.com/777genius/agent-notifications/pull/355), [#357](https://github.com/777genius/agent-notifications/pull/357)). Selected installed-client focus/chat navigation and Windows interactive toast/cold callback qualification remain incomplete. Artifact and protocol checks do not establish visible desktop delivery.
+- Persistent OpenCode TUI/serve hosts are supported; one-shot `opencode run` delivery remains best effort during host shutdown.
+- Stock Windows OpenCode V1 1.18.33 retains the accepted delayed-event limitation: a delayed completion can notify once and recur after the 24-hour claim lifetime.
+- Gemini availability remains qualified on Linux amd64/arm64 and Windows amd64.
+
+## [1.46.1] - 2026-10-01
+
+### Changed
+- Public bootstrap and Claude `/init` now use the portable UAP installer wizard, preserving selected profiles, explicit channel consent, opt-outs and recovery ([#270](https://github.com/777genius/agent-notifications/pull/270), [#105](https://github.com/777genius/agent-notifications/issues/105)).
+
+### Fixed
+- Failed hook installations keep a private log for each attempt and show Claude a short, ANSI-free error with the log path. Codex hooks remain silent, successful attempts delete their own logs, and unavailable logging does not prevent installation.
+- Updating between versioned Claude plugin caches no longer fails with `managed fingerprint changed without transaction` when the retired cache has been restored to the marketplace checkout's contents, whose skill file mode and launcher link differ from what the installer wrote. Files under the cache being retired are de-owned whatever changed in them; a cache still shared with a portable binding keeps the strict check ([#278](https://github.com/777genius/agent-notifications/issues/278)).
+- The hook wrapper retires a version's `install-failed` stamp once it has established that the version's binary is in place (after a successful install, a version probe, or a version-cache hit), so a later failure of the same version is reported again instead of staying silent ([#278](https://github.com/777genius/agent-notifications/issues/278)).
+
+## [1.46.0] - 2026-09-30
+
+### Added
+- **OpenCode notifications** for root-session completion, questions, permission requests and terminal errors through the published, pinned UAP OpenCode events adapter 0.1.0 ([#267](https://github.com/777genius/agent-notifications/pull/267)).
+- Managed OpenCode install, update and removal with explicit desktop and webhook consent. Removal revokes delivery even from an already-loaded plugin ([#268](https://github.com/777genius/agent-notifications/pull/268), [#269](https://github.com/777genius/agent-notifications/pull/269)).
+- OpenCode selection and channel consent in the guided installer, official OpenCode branding, and setup guidance across the landing's 12 languages, README and documentation.
+- OpenCode support on macOS arm64/amd64, Linux arm64/amd64 and Windows amd64, qualified with OpenCode 1.18.33. Native lifecycle checks cover completion webhook delivery, update and revocation on all five targets.
+
+### Platform notes
+- OpenCode sends generic notifications. Plan and review events, sound and click-to-focus/navigation are not part of this integration; delivery when the OpenCode process exits is best effort.
+- Desktop banners were observed on macOS arm64 and Linux X11 with dunst. Visual delivery on the remaining native CI targets has not been observed.
+
+## [1.45.18] - 2026-09-27
+
+### Added
+- Linux: `notifyOnlyWhenUnfocused` works in JetBrains IDE terminals. The notification is skipped while this session's project window is active (KDE Plasma with `kdotool`, X11 with `xdotool`).
+- Linux: JetBrains notifications show the IDE's name and icon, including Toolbox installs.
+
+### Fixed
+- Linux JetBrains click-to-focus: with several open projects of the same name, raise this session's window. Within one IDE process JetBrains adds each project's path to its title, which the plugin matches; across processes of the same IDE (titles without a path), the IDE's process ID decides.
+- Linux: click-to-focus notifications show the configured `appIcon`. Only the fallback path without click-to-focus used it.
+
+## [1.45.17] - 2026-09-26
+
+### Added
+- Linux click-to-focus for JetBrains IDE terminals (IntelliJ IDEA, PhpStorm, WebStorm, PyCharm, GoLand, …). A click raises the IDE, and on KDE and X11 the window of the session's project. KDE Plasma needs `kdotool`.
+- **Mute sound while the display is asleep (macOS)** - `respectDisplaySleep` skips the plugin's own sound while every attached display is asleep, detected via the public Quartz Display Services API. The banner is still delivered. Independent of `respectDoNotDisturb`; Linux and Windows are not detected yet. See [docs/CONFIGURATION.md](docs/CONFIGURATION.md#mute-sound-while-display-is-asleep).
+
+### Fixed
+- Linux X11: when several windows of the terminal are open, activate the top-most one whose title names the project, not a non-matching window.
+
+## [1.45.16] - 2026-09-24
+
+### Added
+- **Do Not Disturb aware notifications on Linux** - `respectDoNotDisturb` supports `off`, `silent`, and `suppress` modes using the desktop's available DND state. When state cannot be read, notifications fail open as before. macOS Focus modes and Windows Focus Assist are not detected. Webhooks are unaffected. See [docs/DO_NOT_DISTURB.md](docs/DO_NOT_DISTURB.md) ([#248](https://github.com/777genius/agent-notifications/pull/248)).
+
+### Fixed
+- Recover portable bindings left behind by an interrupted legacy uninstall without changing unrelated or foreign registrations ([#215](https://github.com/777genius/agent-notifications/issues/215), [#246](https://github.com/777genius/agent-notifications/pull/246)).
+- Deliver Claude Stop notifications from the host's final assistant message before transcript flush, while keeping a bounded transcript fallback for older hosts. Same-turn replays and duplicate hooks are suppressed, and identical answers from separate turns remain distinct ([#111](https://github.com/777genius/agent-notifications/issues/111), [#249](https://github.com/777genius/agent-notifications/pull/249)).
+
+## [1.45.15] - 2026-09-24
+
+### Fixed
+- Allow a macOS installer retry after a temporarily unavailable notifier asset to recognize an untouched cache template from the same release. Edited and older configurations still require explicit import. Installer errors no longer claim a legacy fallback that cannot complete ([#243](https://github.com/777genius/agent-notifications/issues/243), [#244](https://github.com/777genius/agent-notifications/pull/244)).
+
+## [1.45.14] - 2026-09-24
+
+### Fixed
+- Start the Codex portable MCP server from its UAP-owned locator even when Codex CLI replaces `PLUGIN_DATA` with its own plugin-data directory. Claude MCP and notification hooks keep their existing launch paths ([#225](https://github.com/777genius/agent-notifications/issues/225), [#226](https://github.com/777genius/agent-notifications/pull/226)).
+- Make the short bootstrap installer update owned agent-notify bindings before adding missing selected clients, including retained-data reinstalls. Pending recovery and unselected siblings remain manual rather than being mutated implicitly ([#228](https://github.com/777genius/agent-notifications/issues/228), [#229](https://github.com/777genius/agent-notifications/pull/229)).
+- Preflight the extracted portable release zip and recheck both selected clients after each upgrade phase, preventing partial two-client upgrades from reporting success ([#228](https://github.com/777genius/agent-notifications/issues/228), [#231](https://github.com/777genius/agent-notifications/pull/231)).
+- Read the same selected global configuration in setup status, prepare, and enable that configure writes. A fresh two-client installation no longer reports `configuration_required` immediately after successful configuration ([#234](https://github.com/777genius/agent-notifications/pull/234)).
+- Relocate Claude hook ownership between sibling versioned plugin caches during updates. When existing portable bindings still point to the old cache, atomically refresh their primary binary with the verified new release so MCP does not remain on the old runtime. Other consumers never move implicitly ([#228](https://github.com/777genius/agent-notifications/issues/228), [#236](https://github.com/777genius/agent-notifications/pull/236), [#238](https://github.com/777genius/agent-notifications/pull/238)).
+- Clear and republish confirmed setup intents after the last portable binding leaves an older cache, while preserving the relocated Claude hook consumer and retained installation data ([#228](https://github.com/777genius/agent-notifications/issues/228), [#240](https://github.com/777genius/agent-notifications/pull/240)).
+- Allow read-only discovery inspection after the sole Claude hook consumer moves to a newer versioned cache, so retained-data reinstall can safely rebind both clients without relaxing mutation ownership ([#228](https://github.com/777genius/agent-notifications/issues/228), [#242](https://github.com/777genius/agent-notifications/pull/242)).
+
+## [1.45.7] - 2026-09-23
+
+### Added
+- The guided installer lets users select Claude Code, Codex CLI, or both directly. The README and website share one short install command ([#204](https://github.com/777genius/agent-notifications/pull/204), [#205](https://github.com/777genius/agent-notifications/pull/205)).
+
+### Fixed
+- Normalize managed bundle file modes during staging, so a cooperative `umask 002` cannot produce a group-writable runtime that portable setup rejects.
+- Qualify Codex CLI 0.155.1 installed-plugin inventory for repeat setup and updates. Unsupported client versions still fail closed.
+- Activate the native Codex plugin through the full installer lifecycle, finish combined removal safely, and launch MCP through the exact managed binary ([#207](https://github.com/777genius/agent-notifications/pull/207), [#209](https://github.com/777genius/agent-notifications/pull/209), [#211](https://github.com/777genius/agent-notifications/pull/211)).
+- Resolve the canonical configuration path before publishing a fresh portable binding. Repair and update migrate historical bindings and retire old locator identities without changing intentional custom paths ([#213](https://github.com/777genius/agent-notifications/pull/213), [#214](https://github.com/777genius/agent-notifications/pull/214)).
+- Include the iTerm2 exact-focus helper in the Codex runtime bundle ([#206](https://github.com/777genius/agent-notifications/pull/206)).
+- Allow a bounded cold start of the signed macOS native helper during Codex setup and report probe deadlines explicitly ([#217](https://github.com/777genius/agent-notifications/issues/217)).
+- Restore retained-data reinstall after the final runtime consumer is removed, with a narrowly scoped private handoff intent ([#218](https://github.com/777genius/agent-notifications/pull/218)).
+- Allow repeated setup after a completed portable reservation. The current installer understands writer floor 2; older writers still fail closed instead of mutating newer state.
+- Resolve the release commit through GitHub's raw SHA response when `bootstrap.sh` is run directly without a supplied SHA. The short website loader already used this interpreter-free response.
+
+### Platform notes
+- An uninstall interrupted on an older release after its portable consumer was removed can require manual recovery; the installer fails closed rather than guessing its historical path ([#215](https://github.com/777genius/agent-notifications/issues/215)).
+- Python remains optional only for exact iTerm2 tab and pane targeting. Windows uses Git Bash for installation; Windows arm64 and a standalone PowerShell installer are not included.
+
+## [1.44.1] - 2026-09-22
+
+### Fixed
+- **macOS installs and updates accept the signed Agent Notifications helper again** - native verification now matches the rebranded `com.777genius.agent-notifications` bundle identity, so v1.44.0 no longer rejects the notarized helper and rolls back the candidate. Existing working installations remained intact because the failed candidate was never committed ([#201](https://github.com/777genius/agent-notifications/issues/201), [#202](https://github.com/777genius/agent-notifications/pull/202)).
+
+## [1.44.0] - 2026-09-21
+
+### Added
+- **Standalone universal installer and guided setup** - install, update, repair, remove and inspect Claude Code, Codex CLI or both through one recoverable wizard. The base installer no longer requires Python, Node.js or Go; Python remains optional only for exact iTerm2 tab and pane targeting ([#182](https://github.com/777genius/agent-notifications/pull/182), [UAP #328](https://github.com/777genius/universal-agent-plugins/pull/328)).
+- **Managed agent notification runtime** - durable Claude and Codex registration, version-bound portable packages, generation fencing, recovery, rollback and native notification delivery on the qualified macOS, Linux and Windows targets ([#177](https://github.com/777genius/agent-notifications/pull/177), [#182](https://github.com/777genius/agent-notifications/pull/182)).
+
+### Changed
+- Claude Code and Codex CLI now share the selected Agent Notifications configuration. Existing webhook settings therefore also receive Codex notifications unless an agent-specific override disables them.
+- Setup reports permission, restart and desktop-banner readiness separately from an installation commit, and emits shell-specific recovery commands for Bash and PowerShell.
+
+### Fixed
+- Preserve existing configuration during bootstrap and migration, including custom Claude profiles and Windows `USERPROFILE` discovery.
+- Harden installer acquisition, lock ownership, stale recovery, Windows Git Bash quoting, native asset promotion and macOS deployment-target verification ([#182](https://github.com/777genius/agent-notifications/pull/182)).
+
+### Platform notes
+- Release artifacts cover macOS amd64/arm64, Linux amd64/arm64 and Windows amd64. Windows arm64 and a separate PowerShell installer are not included.
+- Exact-chat navigation remains separately qualified; navigation-none desktop delivery is the portable baseline.
+
 ## [1.43.1] - 2026-09-16
 
 ### Changed
@@ -197,7 +341,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `wait-all` — suppresses lead's Stop notification, waits until all teammates go idle, then sends a single consolidated notification
   - `never` — completely silent in team mode
 - **TeammateIdle hook** — new hook event for tracking when team members finish their work
-- **Install script promo** — shows link to [claude_agent_teams_ui](https://github.com/777genius/claude_agent_teams_ui) after installation
+- **Install script promo** — shows link to [Agent Teams AI](https://github.com/777genius/agent-teams-ai) after installation
 
 ### Removed
 - **OSC terminal notifications** — removed the `internal/osc` package (OSC escape sequences for SSH/tmux). Feature proved unreliable across terminal emulators

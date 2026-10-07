@@ -321,7 +321,7 @@ func TestGhosttyFocusAppleScript_RequiresUniqueCWDMatch(t *testing.T) {
 	if countMatch < 0 || uniqueGuard < 0 || focusMatch < 0 || ambiguousGuard < 0 {
 		t.Fatalf("Ghostty cwd focus script must count matches and reject ambiguity:\n%s", ghosttyFocusAppleScript)
 	}
-	if !(countMatch < uniqueGuard && uniqueGuard < focusMatch && focusMatch < ambiguousGuard) {
+	if countMatch >= uniqueGuard || uniqueGuard >= focusMatch || focusMatch >= ambiguousGuard {
 		t.Fatalf("Ghostty cwd focus script must count all matches before focusing:\n%s", ghosttyFocusAppleScript)
 	}
 	if strings.Contains(ghosttyFocusAppleScript, "focus t") {

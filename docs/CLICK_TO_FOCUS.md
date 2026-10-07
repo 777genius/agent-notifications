@@ -4,6 +4,39 @@ Use [shared OS path selection](CONFIGURATION.md#manual-configuration) and the [r
 
 Clicking a notification activates your terminal window — no more hunting for the right window.
 
+## Supported Terminals & IDEs
+
+Quick reference before the platform-by-platform detail below. Precision levels: **pane/tab** targets the exact split or tab; **window** raises the whole app window (may land on the wrong tab if several are open); **best-effort** falls back to a generic name/title match that can pick the wrong window.
+
+| App | <img src="assets/platforms/apple.svg" width="14" height="14" alt=""/> macOS | <img src="assets/platforms/linux.svg" width="14" height="14" alt=""/> Linux | <img src="assets/platforms/windows.svg" width="14" height="14" alt=""/> Windows | Notes |
+|---|---|---|---|---|
+| <img src="assets/terminals/ghostty.svg" width="16" height="16" alt=""/> **Ghostty** | ✅ Tab (AppleScript), window via AXDocument fallback | ⚠️ Window (mapped in the daemon, not listed in the compositor table above) | ❌ | |
+| <img src="assets/terminals/iterm2.svg" width="16" height="16" alt=""/> **iTerm2** | ✅ Tab/pane (Python API), otherwise app-level activation | ❌ | ❌ | Requires enabling iTerm2's Python API, then a restart |
+| <img src="assets/terminals/warp.svg" width="16" height="16" alt=""/> **Warp** | ✅ Window/tab/pane via `WARP_FOCUS_URL` | ✅ Pane via `WARP_FOCUS_URL` | ✅ Pane via `WARP_FOCUS_URL` | No Accessibility/Screen Recording needed — Warp resolves its own window, tab, and pane |
+| <img src="assets/terminals/kitty.svg" width="16" height="16" alt=""/> **kitty** | ✅ Pane with remote control (`KITTY_LISTEN_ON`), window otherwise | ✅ Window | ❌ | Exact pane targeting needs kitty's remote control enabled |
+| <img src="assets/terminals/wezterm.svg" width="16" height="16" alt=""/> **WezTerm** | ✅ Pane via `WEZTERM_PANE` | ✅ Pane via `WEZTERM_PANE` | ❌ | |
+| <img src="assets/terminals/vscode.svg" width="16" height="16" alt=""/> **VS Code** / Insiders | ✅ Window | ✅ Window | ✅ Window | |
+| <img src="assets/terminals/cursor.svg" width="16" height="16" alt=""/> **Cursor** | ✅ Window | ⚠️ Falls back to generic window matching | ✅ Window | |
+| <img src="assets/terminals/jetbrains.svg" width="16" height="16" alt=""/> **JetBrains IDEs** (IntelliJ IDEA, PhpStorm, WebStorm, PyCharm, GoLand, etc.) | ✅ Window | ✅ Window (the IDE window, not the terminal tab) | ✅ Window | Linux: detected via the IDE's process tree and `product-info.json` window class — see [JetBrains IDEs](#jetbrains-ides) below |
+| <img src="assets/terminals/generic-terminal.svg" width="16" height="16" alt=""/> **Apple Terminal** | ✅ Window | — | — | Also the macOS fallback when no other terminal is detected |
+| <img src="assets/terminals/alacritty.svg" width="16" height="16" alt=""/> **Alacritty** | ✅ Window | ✅ Window | ❌ | |
+| <img src="assets/terminals/hyper.svg" width="16" height="16" alt=""/> **Hyper** | ✅ Window | ⚠️ Falls back to generic window matching | ❌ | |
+| <img src="assets/terminals/gnome-terminal.svg" width="16" height="16" alt=""/> **GNOME Terminal** | — | ✅ Window | — | |
+| <img src="assets/terminals/konsole.svg" width="16" height="16" alt=""/> **Konsole** | — | ✅ Window | — | |
+| <img src="assets/terminals/tilix.svg" width="16" height="16" alt=""/> **Tilix** | — | ✅ Window | — | |
+| <img src="assets/terminals/terminator.svg" width="16" height="16" alt=""/> **Terminator** | — | ✅ Window (exact title via `remotinator`) | — | |
+| <img src="assets/terminals/xfce4-terminal.svg" width="16" height="16" alt=""/> **XFCE4 Terminal** | — | ✅ Window | — | |
+| <img src="assets/terminals/mate-terminal.png" width="16" height="16" alt=""/> **MATE Terminal** | — | ✅ Window | — | |
+| <img src="assets/terminals/windows-terminal.png" width="16" height="16" alt=""/> **Windows Terminal** | — | — | ✅ Window | Tab/split-pane targeting isn't possible — there is no public Windows API for it |
+| <img src="assets/terminals/powershell.svg" width="16" height="16" alt=""/> **conhost** (cmd.exe, PowerShell, legacy Git Bash) | — | — | ✅ Window | |
+| <img src="assets/terminals/conemu.png" width="16" height="16" alt=""/> **ConEmu** | — | — | ✅ Window | |
+| <img src="assets/terminals/tmux.svg" width="16" height="16" alt=""/> **tmux** | ✅ Pane/window | ❌ | ❌ | Also works inside iTerm2 `-CC` control mode via the Python API |
+| <img src="assets/terminals/zellij.svg" width="16" height="16" alt=""/> **zellij** | ✅ Tab | ✅ Pane (exact, via `$ZELLIJ_PANE_ID`) | ❌ | See [Multiplexers](#multiplexers) for `zellijFocus` tuning |
+| Any other app | ✅ Window, via custom `terminalBundleId` | Fallback by name | ✅ Window | |
+
+Legend: ✅ supported · ⚠️ best-effort / not officially documented · ❌ not supported · — not applicable on this OS.
+Logo sources and licenses are listed in [`assets/terminals/NOTICE`](assets/terminals/NOTICE).
+
 ## Configuration
 
 In the shared file selected by `config path`:
@@ -63,6 +96,7 @@ Uses a background D-Bus daemon. Auto-detects terminal and compositor.
 | VS Code | GNOME, KDE, Sway, X11 |
 | Warp | GNOME, KDE, Sway, X11 — exact pane via `WARP_FOCUS_URL` |
 | GNOME Terminal, Konsole, Alacritty, kitty, WezTerm, Tilix, Terminator, XFCE4 Terminal, MATE Terminal | GNOME, KDE, Sway, X11 |
+| JetBrains IDEs (IntelliJ IDEA, PhpStorm, WebStorm, PyCharm, GoLand, …) | GNOME, KDE, Sway, X11 — the IDE window, not the terminal tab |
 | Any other | Fallback by name |
 
 Focus methods (tried in order):
@@ -74,6 +108,17 @@ Focus methods (tried in order):
 5. **X11** (XFCE, MATE, Cinnamon, i3, bspwm): `xdotool`
 
 Falls back to standard notifications if no focus tool is available.
+
+### JetBrains IDEs
+
+Works in the built-in terminal of JetBrains IDEs. The plugin finds the IDE in the process tree and reads its window class from the IDE's `product-info.json`.
+
+- A click raises the window of the project the session runs in. The project name is `.idea/.name` if set, else the name of the folder that holds `.idea/`.
+- The terminal tab inside the IDE isn't selected: JetBrains has no external API for it.
+- KDE Plasma (`kdotool`) and X11 (`xdotool`) raise the window whose title starts with the project name. If none matches, they raise another window of the IDE.
+- Two open projects with the same name: in one IDE process, JetBrains adds each project's path to its title and the plugin picks the window with this session's path. In two processes of the same IDE the titles have no path, and the plugin picks the window of this session's IDE process.
+- With `notifyOnlyWhenUnfocused`, the notification is skipped while this project's IDE window is active (KDE Plasma: `kdotool`, X11: `xdotool`). It can't tell whether the IDE's terminal panel is open.
+- GNOME (`activate-window-by-title` extension) matches the project name anywhere in a window title. Sway (`wlrctl`) raises a window of the IDE, not always the project's.
 
 ### Diagnostics
 
@@ -162,7 +207,7 @@ python3 -m venv ~/.claude/claude-notifications-go/iterm2-venv
 
 **Diagnostics:**
 ```bash
-# Show the plugin root path (run inside Claude Code hook context)
+# Show the plugin root path (run inside Claude hook context)
 echo "$CLAUDE_PLUGIN_ROOT"
 
 # List all iTerm2 tabs with tmux pane mappings
@@ -192,7 +237,7 @@ Focus is **window-level**. Windows Terminal runs every tab and split pane inside
 
 ### Terminal bell (tab indicator)
 
-Separately from click-to-focus, the `terminalBell` option (on by default) now works on Windows. A Claude Code hook is spawned with its *own* hidden console (`CREATE_NO_WINDOW`), so writing to its own `CONOUT$` would ring a private, invisible console. Instead the plugin detaches that console and attaches to an ancestor's (`AttachConsole`) — the Claude session's console, which is the visible pane's ConPTY — then writes a BEL byte there. The BEL reaches the **originating** Windows Terminal pane and WT flags that tab's bell indicator.
+Separately from click-to-focus, the `terminalBell` option (on by default) now works on Windows. A Claude hook is spawned with its *own* hidden console (`CREATE_NO_WINDOW`), so writing to its own `CONOUT$` would ring a private, invisible console. Instead the plugin detaches that console and attaches to an ancestor's (`AttachConsole`) — the Claude session's console, which is the visible pane's ConPTY — then writes a BEL byte there. The BEL reaches the **originating** Windows Terminal pane and WT flags that tab's bell indicator.
 
 Unlike click-to-focus, the bell **is** tab-accurate: because the BEL is written into that specific pane's console, Windows Terminal knows exactly which tab to flag — even with multiple tabs or split panes in one window. It's the one reliable per-tab "this session finished" signal.
 

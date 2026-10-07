@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 async function chooseOS(page: Page, value: string) {
   const labels: Record<string, string> = {
+    unknown: "Choose target OS",
     macos: "macOS",
     linux: "Linux",
     windows: "Windows · Git Bash",
@@ -15,6 +16,20 @@ async function chooseOS(page: Page, value: string) {
   await page.getByRole("combobox", { name: "Target operating system" }).click();
   await page.getByRole("option", { name: labels[value], exact: true }).click();
 }
+async function chooseAgents(page: Page, selected: readonly ("claude" | "codex" | "opencode" | "gemini")[]) {
+  const labels = { claude: "Claude", codex: "Codex CLI", opencode: "OpenCode", gemini: "Gemini CLI" };
+  // Select desired cards first so switching hosts never needs an empty selection.
+  for (const wanted of [true, false])
+    for (const value of ["claude", "codex", "opencode", "gemini"] as const) {
+      const card = page.getByRole("button", { name: labels[value], exact: true });
+      if (selected.includes(value) === wanted &&
+          (await card.getAttribute("aria-pressed")) !== String(wanted))
+        await card.click();
+    }
+}
+async function chooseProduct(page: Page, product: "claude" | "codex" | "both") {
+  await chooseAgents(page, product === "both" ? ["claude", "codex"] : [product]);
+}
 async function chooseLanguage(page: Page, current: RegExp, language: string) {
   await page.getByRole("button", { name: current }).click();
   await page.getByRole("option", { name: language, exact: true }).click();
@@ -28,12 +43,8 @@ test("production command matrix, aftercare, clipboard and configuration", async 
   await expect(page.getByRole("heading", { level: 1 })).toContainText(
     "Stay in flow",
   );
-  for (const [name, product] of [
-    ["Claude Code", "claude"],
-    ["Codex CLI", "codex"],
-    ["Both agents", "both"],
-  ]) {
-    await page.getByRole("button", { name, exact: true }).click();
+  for (const product of ["claude", "codex", "both"] as const) {
+    await chooseProduct(page, product);
     for (const os of ["macos", "linux", "windows"]) {
       await chooseOS(page, os);
       for (const intent of ["Install", "Update"]) {
@@ -43,7 +54,9 @@ test("production command matrix, aftercare, clipboard and configuration", async 
           await page.getByRole("button", { name: intent, exact: true }).click();
         const value = await page.getByLabel(intent + " command").inputValue();
         expect(value).toBe(
-          `(set -o pipefail; curl -fsSL https://raw.githubusercontent.com/777genius/agent-notifications/a512deb5819c3f8c7c3be8335f713cc8bb734fc3/bin/setup.sh | bash -s -- --product ${product})`,
+          product === "both"
+            ? "(set -o pipefail; curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --products claude,codex)"
+            : `curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --product ${product}`,
         );
       }
       if (os === "windows")
@@ -61,11 +74,24 @@ test("production command matrix, aftercare, clipboard and configuration", async 
       ).toHaveCount(0);
   }
   await page.getByRole("button", { name: "Install", exact: true }).click();
+  await chooseOS(page, "linux");
+  const agentNotify = page.getByRole("checkbox", {
+    name: /Let agents send you notifications when they need your attention/,
+  });
+  await expect(agentNotify).toBeChecked();
+  await expect(page.getByLabel("Install command")).toHaveValue(
+    /--products claude,codex\)$/,
+  );
+  await agentNotify.uncheck();
+  await expect(page.getByLabel("Install command")).toHaveValue(
+    /--skip-agent-notify\)$/,
+  );
+  await agentNotify.check();
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.getByRole("button", { name: "Copy command" }).click();
   await expect(page.getByRole("status")).toContainText("Copied");
   expect(await page.evaluate(() => navigator.clipboard.readText())).toContain(
-    "--product both",
+    "--products claude,codex",
   );
   await page.evaluate(() => {
     Object.defineProperty(navigator, "clipboard", {
@@ -89,7 +115,7 @@ test("unknown target, manual route and mobile layout", async ({ browser }) => {
     reducedMotion: "reduce",
   });
   const page = await context.newPage();
-  await page.goto("http://127.0.0.1:4173/agent-notifications/");
+  await page.goto("http://127.0.0.1:4173/");
   await expect(page.getByRole("button", { name: "Copy command" })).toHaveCount(
     0,
   );
@@ -110,7 +136,7 @@ test("unknown target, manual route and mobile layout", async ({ browser }) => {
   await page.screenshot({ path: "test-results/mobile.png", fullPage: true });
   await context.close();
 });
-test("keyboard navigation, base-path reload and desktop screenshot", async ({
+test("keyboard navigation, root-path reload and desktop screenshot", async ({
   page,
 }) => {
   await page.goto("");
@@ -121,10 +147,18 @@ test("keyboard navigation, base-path reload and desktop screenshot", async ({
   await page.keyboard.press("Enter");
   await page.reload();
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+    "href",
+    /^https:\/\/agent-notifications\.com\/?$/,
+  );
+  await expect(page.locator('meta[property="og:image"]')).toHaveAttribute(
+    "content",
+    "https://agent-notifications.com/agent-notifications-logo.png",
+  );
   for (const asset of await page
     .locator("script[src]")
     .evaluateAll((nodes) => nodes.map((n) => (n as HTMLScriptElement).src)))
-    expect(asset).toContain("/agent-notifications/");
+    expect(new URL(asset).pathname).toMatch(/^\/_nuxt\//);
   await page.screenshot({ path: "test-results/desktop.png", fullPage: true });
 });
 test("pending clipboard completion cannot claim a different command was copied", async ({
@@ -144,11 +178,11 @@ test("pending clipboard completion cannot claim a different command was copied",
   await page.goto("");
   await chooseOS(page, "linux");
   await page.getByRole("button", { name: "Copy command" }).click();
-  await page.getByRole("button", { name: "Both agents", exact: true }).click();
+  await chooseProduct(page, "both");
   await page.evaluate(() => (window as any).finishCopy());
   await expect(page.getByRole("status")).not.toContainText("Copied");
   await expect(page.getByLabel("Install command")).toHaveValue(
-    /--product both\)$/,
+    /--products claude,codex\)$/,
   );
 });
 test("assets load, hydration is clean and reduced motion disables background animation", async ({
@@ -166,6 +200,11 @@ test("assets load, hydration is clean and reduced motion disables background ani
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("");
   await page.waitForLoadState("networkidle");
+  const geminiLogo = page.locator(".supported-agents").getByRole("img", { name: "Gemini CLI", exact: true });
+  await expect(geminiLogo).toBeVisible();
+  await expect.poll(() => geminiLogo.evaluate((image) =>
+    image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0 && image.naturalHeight > 0,
+  )).toBe(true);
   expect(
     await page
       .locator(".page-bg__orb")
@@ -181,23 +220,65 @@ test("assets load, hydration is clean and reduced motion disables background ani
   );
   expect(errors).toEqual([]);
 });
+test("background follows the pointer and scroll, sections reveal and motion preference resets them", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.goto("");
+  const orb = page.locator(".page-bg__orb--1");
+  const feature = page.locator(".feature").first();
+  const translation = () => orb.evaluate((node) => {
+    // CSS serializes a zero Y component as a single value.
+    const [x = "0", y = "0"] = getComputedStyle(node).translate.split(" ");
+    return [Number.parseFloat(x), Number.parseFloat(y)];
+  });
+  await expect(feature).toHaveCSS("opacity", "0");
+  const viewport = page.viewportSize()!;
+  await page.mouse.move(20, 200);
+  await expect.poll(async () => (await translation())[0]).toBeLessThan(-40);
+  await page.mouse.move(viewport.width - 20, 200);
+  await expect.poll(async () => (await translation())[0]).toBeGreaterThan(40);
+
+  await page.mouse.move(viewport.width / 2, viewport.height / 2);
+  await expect.poll(async () => Math.abs((await translation())[1])).toBeLessThan(1);
+  await page.evaluate(() => window.scrollTo({ top: 700, behavior: "instant" }));
+  await expect.poll(async () => (await translation())[1]).toBeGreaterThan(60);
+  await feature.scrollIntoViewIfNeeded();
+  await expect(feature).toHaveCSS("opacity", "1");
+  await expect(feature).toHaveCSS("translate", "none");
+
+  // A live accessibility preference change stops motion and reveals remaining content.
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect(orb).toHaveCSS("translate", "none");
+  await expect(orb).toHaveCSS("animation-name", "none");
+  await expect(page.locator(".page-bg__grid")).toHaveCSS("background-position", /^0px 0px(?:, 0px 0px)*$/);
+  await expect(page.locator(".closing")).toHaveCSS("opacity", "1");
+  await page.mouse.move(20, 200);
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+  await expect(page.locator(".page-bg__grid")).toHaveCSS("background-position", /^0px 0px(?:, 0px 0px)*$/);
+});
+
 test("language switch localizes content, URL, metadata and persists the choice", async ({
   page,
 }) => {
   await page.goto("?source=i18n#features");
-  await page.getByRole("button", { name: "Codex CLI", exact: true }).click();
+  await chooseProduct(page, "codex");
   await chooseOS(page, "windows");
   await expect(page.getByLabel("Install command")).toHaveValue(
-    /--product codex\)$/,
+    /--product codex$/,
   );
   await chooseLanguage(page, /Current language/, "简体中文");
   await expect(page).toHaveURL(
-    /\/agent-notifications\/zh\/?\?source=i18n#features$/,
+    /\/zh\/?\?source=i18n#features$/,
   );
   await expect(page.getByRole("heading", { level: 1 })).toContainText(
     "保持专注",
   );
   await expect(page.locator("html")).toHaveAttribute("lang", "zh-CN");
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+    "href",
+    /^https:\/\/agent-notifications\.com\/zh\/?$/,
+  );
   await expect(page).toHaveTitle(
     "Agent Notifications - 专注工作，及时获知进展",
   );
@@ -212,7 +293,7 @@ test("language switch localizes content, URL, metadata and persists the choice",
   expect(
     await page.locator('script[type="application/ld+json"]').textContent(),
   ).toContain("SoftwareApplication");
-  await expect(page.getByLabel("安装命令")).toHaveValue(/--product codex\)$/);
+  await expect(page.getByLabel("安装命令")).toHaveValue(/--product codex$/);
   await expect(
     page.getByText("请在 Windows 的 Git Bash 中运行。", { exact: true }),
   ).toBeVisible();
@@ -228,7 +309,7 @@ test("language switch localizes content, URL, metadata and persists the choice",
   );
   await chooseLanguage(page, /当前语言/, "English");
   await expect(page).toHaveURL(
-    /\/agent-notifications\/?\?source=i18n#features$/,
+    /\/\?source=i18n#features$/,
   );
   await expect(page.getByRole("heading", { level: 1 })).toContainText(
     "Stay in flow",
@@ -246,7 +327,7 @@ test("failed locale payload keeps the working language and reports the error", a
   await expect(page.getByRole("heading", { level: 1 })).toContainText(
     "Stay in flow",
   );
-  await expect(page).toHaveURL(/\/agent-notifications\/?$/);
+  await expect(page).toHaveURL(/^http:\/\/127\.0\.0\.1:4173\/$/);
 });
 test("language menu is searchable, keyboard accessible and closes outside", async ({
   page,
@@ -283,7 +364,7 @@ test("notification sequence covers statuses and agents, pause and reduced motion
   expect(await cards.allTextContents()).toEqual(initial);
   await page.getByRole("button", { name: "Resume", exact: true }).click();
   const seen = new Set<string>();
-  for (let i = 0; i < 7; i++) {
+  for (let i = 0; i < 11; i++) {
     for (const title of await cards.locator("h3").allTextContents())
       seen.add(title);
     await page.clock.fastForward(3400);
@@ -291,6 +372,7 @@ test("notification sequence covers statuses and agents, pause and reduced motion
   }
   expect([...seen].sort()).toEqual(
     [
+      "OpenCode",
       "❓ Question",
       "📋 Plan",
       "✅ Completed",
@@ -316,7 +398,7 @@ test("installation order, sticky header and custom select keyboard behavior", as
   await page.goto("");
   expect(
     await page
-      .locator("main > *")
+      .locator('main > :not([aria-hidden="true"])')
       .evaluateAll((nodes) =>
         nodes.map((n) => n.id || n.className).slice(0, 3),
       ),
@@ -387,7 +469,7 @@ test("guided reference layout, detected OS and mode focus", async ({
     reducedMotion: "reduce",
   });
   const page = await context.newPage();
-  await page.goto("http://127.0.0.1:4173/agent-notifications/");
+  await page.goto("http://127.0.0.1:4173/");
   await expect(page.locator(".os-summary")).toContainText("macOS");
   await expect(page.locator(".os-summary")).toContainText(
     "Detected automatically",
@@ -412,9 +494,218 @@ test("guided reference layout, detected OS and mode focus", async ({
   await expect(
     page.getByRole("heading", { name: "Run in Git Bash", exact: true }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Both agents", exact: true }).click();
+  await chooseProduct(page, "both");
   await expect(
     page.getByRole("link", { name: "Claude installation help ↗" }),
   ).toBeVisible();
   await context.close();
+});
+
+test("released agents toggle independently, copied commands and configuration cover the selection", async ({ page }) => {
+  await page.goto("");
+  await chooseOS(page, "macos");
+  const labels = { claude: "Claude", codex: "Codex CLI", opencode: "OpenCode", gemini: "Gemini CLI" };
+  const prefix = "curl -fsSL https://agent-notifications.com/install.sh | bash -s -- --product ";
+  const cases = [
+    { selected: ["claude"], expected: prefix + "claude" },
+    { selected: ["claude", "opencode"], expected: "(set -o pipefail; " + prefix.replace("--product ", "--products ") + "claude,opencode --desktop)" },
+    { selected: ["claude", "codex", "opencode"], expected: "(set -o pipefail; " + prefix.replace("--product ", "--products ") + "claude,codex,opencode --desktop)" },
+    { selected: ["codex", "opencode"], expected: "(set -o pipefail; " + prefix.replace("--product ", "--products ") + "codex,opencode --desktop)" },
+    { selected: ["opencode"], expected: prefix + "opencode --desktop" },
+    { selected: ["codex"], expected: prefix + "codex" },
+    { selected: ["claude", "codex"], expected: "(set -o pipefail; " + prefix.replace("--product ", "--products ") + "claude,codex)" },
+  ] as const;
+  for (const { selected, expected } of cases) {
+    await chooseAgents(page, selected);
+    for (const value of ["claude", "codex", "opencode", "gemini"] as const)
+      await expect(page.getByRole("button", { name: labels[value], exact: true }))
+        .toHaveAttribute("aria-pressed", String((selected as readonly string[]).includes(value)));
+    await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(expected);
+    if (selected.length === 1) {
+      await page.getByRole("button", { name: labels[selected[0]], exact: true }).click();
+      await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(expected);
+    }
+  }
+  await chooseAgents(page, ["claude", "codex", "opencode"]);
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.getByRole("button", { name: "Copy command" }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("(set -o pipefail; " + prefix.replace("--product ", "--products ") + "claude,codex,opencode --desktop)");
+  const table = page.getByRole("table", { name: "Compare agent features" });
+  await expect(table.getByRole("columnheader")).toHaveText(["Feature", "Claude", "Codex CLI", "OpenCode", /Gemini CLI\s*Linux \/ Windows/]);
+  await expect(table.getByRole("row", { name: /^Completed/ }).getByRole("cell")).toHaveText(["✓Supported", "✓Supported", "✓Supported", "✓Supported"]);
+  await expect(table.getByRole("row", { name: /^Review/ }).getByRole("cell")).toHaveText(["✓Supported", "✕Not supported", "✕Not supported", "✕Not supported"]);
+  await expect(table.getByRole("row", { name: /^Sounds/ }).getByRole("cell")).toHaveText(["✓Supported", "✓Supported", "✕Not supported", "✕Not supported"]);
+  await expect(table.getByRole("row", { name: /^Question/ }).getByRole("cell")).toHaveText(["✓Supported", "✓*Supported with limitations", "✓Supported", "✕Not supported"]);
+  await expect(table.getByRole("row", { name: /^Errors/ }).getByRole("cell")).toHaveText(["✓Supported", "✓*Supported with limitations", "✓Supported", "✕Not supported"]);
+  const compatibility = page.locator(".agent-support details");
+  const qualification = compatibility.getByText("Codex: Windows hook delivery and the question tool hook are not yet qualified in live sessions.", { exact: true });
+  await expect(qualification).not.toBeVisible();
+  await expect(compatibility.getByText(/^\* Codex questions depend/)).not.toBeVisible();
+  await expect(compatibility.getByText(/^OpenCode: silent completion/)).not.toBeVisible();
+  await expect(page.getByText(/Tested with OpenCode 1.18.33/)).not.toBeVisible();
+  await page.locator(".agent-support summary").click();
+  await expect(qualification).toBeVisible();
+  await expect(compatibility.getByText(/^\* Codex questions depend/)).toBeVisible();
+  await expect(compatibility.getByText(/^OpenCode: silent completion/)).toBeVisible();
+  await expect(page.getByText(/Tested with OpenCode 1.18.33/)).toBeVisible();
+  await expect(page.getByRole("link", { name: "What is OpenCode V2? ↗" })).toHaveAttribute("href", "https://opencode.ai/v2/docs");
+  await expect(page.getByRole("group", { name: "OpenCode notification channels" })).toHaveCount(0);
+  const agentNotify = page.getByRole("checkbox", { name: /Let agents send/ });
+  await agentNotify.uncheck();
+  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue("(set -o pipefail; " + prefix.replace("--product ", "--products ") + "claude,codex,opencode --skip-agent-notify --desktop)");
+  await page.getByRole("button", { name: "Configure", exact: true }).click();
+  const configuration = page.locator(".configuration");
+  await expect(configuration.getByText("/claude-notifications-go:settings", { exact: true })).toBeVisible();
+  await expect(configuration.getByText("config path", { exact: true })).toBeVisible();
+  await expect(configuration.getByText(/Use config path for shared settings/)).toBeVisible();
+  await page.getByRole("button", { name: "Install", exact: true }).click();
+  await expect(page.getByText(/Restart OpenCode to load the global plugin/)).toBeVisible();
+  await chooseAgents(page, ["opencode"]);
+  await expect(agentNotify).toHaveCount(0);
+  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(prefix + "opencode --desktop");
+});
+
+test("first feature explains supported click-to-focus and its agent scope", async ({ page }) => {
+  await page.goto("");
+  const feature = page.locator("#features article").first();
+  await expect(feature.getByRole("heading", { name: "Return with one click" })).toBeVisible();
+  await expect(feature).toContainText("CLICK TO FOCUS");
+  await expect(feature).toContainText("terminal, editor or tab where supported");
+  await expect(feature).toContainText("Claude and Codex CLI only");
+  await expect(feature).toContainText("terminal and OS");
+});
+
+// Revealed sections must still be reachable through a direct URL and navigation.
+test("installation deep link and navigation expose the comparison and four agent logos", async ({ page }) => {
+  await page.goto("#install");
+  await expect(page).toHaveURL(/#install$/);
+  await expect(page.locator("#install")).toBeInViewport();
+  await expect(page.getByRole("table", { name: "Compare agent features" })).toBeVisible();
+  await expect(page.locator(".supported-agents").getByRole("img")).toHaveCount(4);
+  const nav = page.getByRole("navigation");
+  await nav.getByRole("link", { name: "Features", exact: true }).click();
+  await expect(page).toHaveURL(/#features$/);
+  await nav.getByRole("link", { name: "Install", exact: true }).click();
+  await expect(page).toHaveURL(/#install$/);
+  await expect(page.locator("#install")).toBeInViewport();
+});
+
+// Unsupported platform selection must keep the active installation valid.
+test("Gemini selection stays disabled on macOS while capabilities remain visible", async ({ page }) => {
+  await page.goto("");
+  await chooseOS(page, "macos");
+  const table = page.getByRole("table", { name: "Compare agent features" });
+  await expect(table.getByRole("columnheader").last()).toContainText("Linux / Windows");
+  for (const [feature, supported] of [
+    [/^Completed/, true], [/^Permission Request/, true], [/^Webhooks/, true],
+    [/^Question/, false], [/^Errors/, false], [/^Sounds/, false],
+    [/^Click-to-focus/, false], [/^Plan/, false], [/^Review/, false], [/^Session Limit/, false],
+  ] as const) {
+    await expect(table.getByRole("row", { name: feature }).getByRole("cell").last())
+      .toHaveText(supported ? "✓Supported" : "✕Not supported");
+  }
+  const details = page.locator(".agent-support details");
+  await expect(details.getByText(/A completed turn does not imply success or a final answer/)).not.toBeVisible();
+  await page.locator(".agent-support summary").click();
+  await expect(details).toContainText("A completed turn does not imply success or a final answer");
+  await expect(details).toContainText("silent turn-completed and tool-permission alerts");
+  const gemini = page.getByRole("button", { name: "Gemini CLI", exact: true });
+  await expect(gemini).toBeVisible();
+  await expect(gemini).toBeDisabled();
+  await expect(gemini).toHaveAttribute("aria-pressed", "false");
+  // Native activation is ignored, and keyboard traversal skips disabled controls.
+  await gemini.evaluate((button) => (button as HTMLButtonElement).click());
+  const openCode = page.getByRole("button", { name: "OpenCode", exact: true });
+  await openCode.focus();
+  await page.keyboard.press("Tab");
+  await expect(page.getByRole("button", { name: "Change", exact: true })).toBeFocused();
+  await expect(gemini).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--product claude$/);
+  await chooseAgents(page, ["claude", "codex", "opencode"]);
+  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--products claude,codex,opencode --desktop/);
+  await page.getByRole("button", { name: "Configure", exact: true }).click();
+  await expect(page.locator(".configuration")).toContainText("/claude-notifications-go:settings");
+  await expect(page.locator(".configuration")).toContainText("config path");
+  await expect(gemini).toBeDisabled();
+  await page.getByRole("button", { name: "Install", exact: true }).click();
+  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--products claude,codex,opencode --desktop/);
+});
+
+// Manual instructions must remain available for the released agents in both intents.
+test("manual instructions preserve legacy links and offer Gemini guidance", async ({ page }) => {
+  for (const intent of ["Install", "Update"]) {
+    await page.goto("");
+    await chooseOS(page, "macos");
+    await chooseAgents(page, ["claude", "codex"]);
+    if (intent === "Update")
+      await page.getByRole("button", { name: "Update", exact: true }).click();
+    await chooseOS(page, "manual");
+    const manual = page.locator(".setup-panel.instructions");
+    await expect(manual.locator('a[href$="docs/INSTALLATION.md#manual-install"]')).toBeVisible();
+    await expect(manual.locator('a[href$="docs/CODEX.md#manual-codex-registration"]')).toBeVisible();
+    await expect(page.getByRole("button", { name: "Gemini CLI", exact: true })).toBeEnabled();
+    await chooseAgents(page, ["gemini"]);
+    await expect(manual.getByRole("link", { name: "Gemini setup and limits", exact: true })).toBeVisible();
+    await expect(manual).toContainText("Linux / Windows: 1.48.1");
+    await expect(page.getByLabel(intent + " command", { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Copy command" })).toHaveCount(0);
+  }
+});
+
+// A regression here would clip feature comparisons or restore channel setup friction.
+test("agent comparison stays readable on mobile and keeps all agents visible", async ({ page }) => {
+  for (const width of [320, 390, 1088]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("");
+    await chooseOS(page, "linux");
+    await chooseAgents(page, ["opencode"]);
+    const table = page.getByRole("table", { name: "Compare agent features" });
+    await expect(table.getByRole("columnheader")).toHaveCount(5);
+    await expect(table.getByRole("row")).toHaveCount(11);
+    // The comparison belongs below the command and both next-step cards at every width.
+    const comparison = await table.boundingBox();
+    expect(comparison).not.toBeNull();
+    await expect(page.locator(".next-step")).toHaveCount(2);
+    for (const preceding of [page.locator(".installation-command"), ...await page.locator(".next-step").all()]) {
+      const bounds = await preceding.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(comparison!.y).toBeGreaterThanOrEqual(bounds!.y + bounds!.height);
+    }
+    await expect(page.getByRole("checkbox")).toHaveCount(0);
+    await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--product opencode --desktop$/);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    for (const logo of await table.locator("img").evaluateAll((nodes) => nodes.map((node) => (node as HTMLImageElement).naturalWidth)))
+      expect(logo).toBeGreaterThan(0);
+    await page.locator(".agent-support").screenshot({ path: `test-results/agent-support-${width}.png` });
+  }
+});
+
+// The site must expose a usable Gemini command only for qualified platforms.
+test("platform channels enable Gemini and reset unsupported selections", async ({ page }) => {
+  await page.goto("");
+  for (const os of ["linux", "windows"] as const) {
+    await chooseOS(page, os);
+    await expect(page.locator(".install-release-version")).toContainText("1.48.1");
+    await expect(page.getByRole("button", { name: "Gemini CLI", exact: true })).toBeEnabled();
+    await chooseAgents(page, ["gemini"]);
+    await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--product gemini --desktop$/);
+    await page.getByRole("button", { name: "Update", exact: true }).click();
+    await expect(page.getByLabel("Update command", { exact: true })).toHaveValue(/--product gemini --desktop$/);
+    await page.getByRole("button", { name: "Install", exact: true }).click();
+    await chooseOS(page, "manual");
+    await expect(page.getByRole("button", { name: "Gemini CLI", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator(".setup-panel.instructions").getByRole("link", { name: "Gemini setup and limits", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Copy command" })).toHaveCount(0);
+  }
+  await chooseOS(page, "macos");
+  await expect(page.locator(".install-release-version")).toContainText("1.46.1");
+  await expect(page.getByRole("button", { name: "Gemini CLI", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Gemini CLI", exact: true })).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByLabel("Install command", { exact: true })).toHaveValue(/--product claude$/);
+  await chooseOS(page, "linux");
+  await chooseAgents(page, ["gemini"]);
+  await chooseOS(page, "unknown");
+  await expect(page.getByRole("button", { name: "Gemini CLI", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Gemini CLI", exact: true })).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByRole("button", { name: "Copy command" })).toHaveCount(0);
 });

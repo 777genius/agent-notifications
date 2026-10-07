@@ -19,8 +19,8 @@ check required --paths 'internal/hooks/name with spaces.go'
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 cd "$tmp"
 git init -q
-git config user.name sandbox-test
-git config user.email sandbox@example.invalid
+git config user.name iliya
+git config user.email iliyazelenkog@gmail.com
 printf 'base\n' > README.md
 git add README.md; git commit -qm base
 base=$(git rev-parse HEAD)

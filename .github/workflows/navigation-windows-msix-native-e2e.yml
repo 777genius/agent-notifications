@@ -1,0 +1,84 @@
+name: Navigation Windows packaged native TEST callback
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/navigation-windows-msix-native-e2e.yml'
+      - 'tests/integration/navigation_windows_msix_probe.cpp'
+      - 'tests/integration/navigation_windows_native_probe.cpp'
+      - 'tests/integration/navigation_windows_msix_e2e.ts'
+  workflow_dispatch:
+permissions:
+  contents: read
+# Supersede only older checks for this PR; dispatch runs remain independent.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  packaged-client:
+    runs-on: windows-11-vs2026-arm
+    timeout-minutes: 18
+    env:
+      AGENT_NOTIFY_NAVIGATION_WINDOWS_E2E: '1'
+      NAVIGATION_WINDOWS_RUNNER: windows-11-vs2026-arm
+      NAVIGATION_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # existing v7 pin
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # existing v6.5.0 pin
+        with:
+          node-version: '24.21.0'
+      - name: Exact source and pinned TypeScript
+        shell: pwsh
+        run: |
+          if ((git rev-parse HEAD) -ne $env:NAVIGATION_SOURCE_SHA) { throw 'checkout SHA mismatch' }
+          Write-Host "Source=$env:NAVIGATION_SOURCE_SHA Image=$env:ImageVersion Node=$(node --version)"
+          npm ci --prefix opencode-plugin --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'locked tooling install failed' }
+          & ./opencode-plugin/node_modules/.bin/tsc.cmd --ignoreConfig --noEmit --strict --target ES2023 --module ESNext --moduleResolution bundler --types node --typeRoots ./opencode-plugin/node_modules/@types tests/integration/navigation_windows_msix_e2e.ts
+          if ($LASTEXITCODE -ne 0) { throw 'packaged harness typecheck failed' }
+      - name: Compile both native fixtures with static CRT
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -property installationPath
+          if (!$vs) { throw 'installed Visual Studio prerequisite unavailable' }
+          foreach ($kind in @('native', 'msix')) {
+            $out = Join-Path $env:RUNNER_TEMP "navigation-$kind-probe.exe"
+            $source = Join-Path $env:GITHUB_WORKSPACE "tests\integration\navigation_windows_${kind}_probe.cpp"
+            $log = Join-Path $env:RUNNER_TEMP "navigation-$kind-imports.log"
+            $cmd = '"' + $vs + '\Common7\Tools\VsDevCmd.bat" -arch=arm64 -host_arch=arm64 && cl /nologo /std:c++20 /MT /EHsc /W4 /DUNICODE /D_UNICODE "' + $source + '" /Fe:"' + $out + '" /Fo:"' + $env:RUNNER_TEMP + '\navigation-' + $kind + '-probe.obj" /link windowsapp.lib ole32.lib oleaut32.lib shell32.lib propsys.lib advapi32.lib user32.lib uuid.lib uiautomationcore.lib && dumpbin /headers /dependents "' + $out + '" > "' + $log + '"'
+            cmd.exe /d /s /c $cmd
+            if ($LASTEXITCODE -ne 0) { throw 'native compile/import inspection failed' }
+            $imports = Get-Content -LiteralPath $log -Raw
+            if ($imports -notmatch 'AA64 machine' -or $imports -match '(?i)(VCRUNTIME|MSVCP|Microsoft\.WindowsAppRuntime).*\.dll') { throw 'unsupported architecture/framework dependency' }
+            Write-Host "$kind SHA256=$((Get-FileHash -LiteralPath $out -Algorithm SHA256).Hash)"
+          }
+      - name: Parse the fixed operator with target Windows PowerShell
+        shell: powershell
+        run: |
+          $text = Get-Content -LiteralPath tests/integration/navigation_windows_msix_e2e.ts -Raw
+          $match = [regex]::Match($text, '(?s)const operator = String\.raw`(?<script>.*?)`;')
+          if (!$match.Success) { throw 'embedded fixed operator absent' }
+          $tokens = $null
+          $errors = $null
+          $null = [Management.Automation.Language.Parser]::ParseInput($match.Groups['script'].Value, [ref]$tokens, [ref]$errors)
+          if ($errors.Count) { $errors | Format-List; throw 'target operator parse failed' }
+      - name: Single packaged submission and genuine cold COM callback
+        # PR checks compile the fixtures; each native submission needs an explicit run.
+        if: github.event_name == 'workflow_dispatch'
+        id: probe
+        shell: pwsh
+        run: |
+          node --experimental-strip-types tests/integration/navigation_windows_msix_e2e.ts (Join-Path $env:RUNNER_TEMP 'navigation-msix-probe.exe') (Join-Path $env:RUNNER_TEMP 'navigation-native-probe.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'packaged callback failed or prerequisite unavailable; inspect retained evidence' }
+      - name: Preserve partial owned TEST evidence
+        if: always() && steps.probe.outputs.evidence_root != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # existing v7.0.1 pin
+        with:
+          name: navigation-windows-msix-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.probe.outputs.evidence_root }}
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14

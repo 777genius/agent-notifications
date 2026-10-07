@@ -238,9 +238,6 @@ final class ArgumentParserTests: XCTestCase {
     }
 
     func testIsHelpRequestFalseWhenHelpIsTitleValue() {
-        // "-title -help -message World" is a complete, legitimate send
-        // invocation where the title text happens to be "-help". It must
-        // not be misdetected as a help request.
         let arguments = ["-title", "-help", "-message", "World"]
         XCTAssertFalse(ArgumentParser.isHelpRequest(arguments))
         XCTAssertTrue(ArgumentParser.isSendMode(arguments))
@@ -251,8 +248,6 @@ final class ArgumentParserTests: XCTestCase {
     }
 
     func testIsHelpRequestFalseWhenHelpIsMessageValue() {
-        // "-title Hello -message --help" likewise must be parsed as a
-        // legitimate send invocation, not swallowed by the help path.
         let arguments = ["-title", "Hello", "-message", "--help"]
         XCTAssertFalse(ArgumentParser.isHelpRequest(arguments))
         XCTAssertTrue(ArgumentParser.isSendMode(arguments))
@@ -269,9 +264,27 @@ final class ArgumentParserTests: XCTestCase {
     }
 
     func testIsHelpRequestFalseForNoArgsCallbackMode() {
-        // No-args invocation (callback mode) must not be treated as a
-        // help request and must not be treated as send mode either.
         XCTAssertFalse(ArgumentParser.isHelpRequest([]))
         XCTAssertFalse(ArgumentParser.isSendMode([]))
+    }
+}
+
+
+extension ArgumentParserTests {
+    func testOptionLookingValuesNeverSelectModes() throws {
+        let fields = ["-title", "-message", "-subtitle", "-activate", "-execute", "-group", "-threadID"]
+        for field in fields {
+            for literal in ["--help", "-help", "-title", "-launchedViaLaunchServices", "--capabilities-json", "--send-json"] {
+                let args = [field, literal]
+                XCTAssertEqual(ArgumentParser.optionPositions(args), [field])
+                XCTAssertEqual(ArgumentParser.isSendMode(args), field == "-title")
+                let config = try ArgumentParser.parse(["-title", "title", "-message", "body"] + args)
+                if field == "-title" { XCTAssertEqual(config.title, literal) }
+                if field == "-message" { XCTAssertEqual(config.message, literal) }
+                if field == "-subtitle" { XCTAssertEqual(config.subtitle, literal) }
+            }
+        }
+        XCTAssertEqual(ArgumentParser.optionPositions(["-title", "--help", "--help"]), ["-title", "--help"])
+        XCTAssertEqual(ArgumentParser.optionPositions(["--request-file", "--capabilities-json", "--send-json"]), ["--request-file", "--send-json"])
     }
 }

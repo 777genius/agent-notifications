@@ -3,11 +3,21 @@ import UserNotifications
 
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
 
+    let lifecycle = ProcessCallbackLifecycle.shared
     private let actionExecutor: ActionExecuting
 
     init(actionExecutor: ActionExecuting = ActionExecutor()) {
         self.actionExecutor = actionExecutor
         super.init()
+    }
+
+    // Both delegate properties are weak. The app.run owner must retain the
+    // returned delegate, and install it before AppKit finishes launching.
+    static func install(on app: NSApplication) -> AppDelegate {
+        let delegate = AppDelegate()
+        app.delegate = delegate
+        UNUserNotificationCenter.current().delegate = delegate
+        return delegate
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -19,27 +29,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
-        switch response.actionIdentifier {
-        case "DISMISS", UNNotificationDismissActionIdentifier:
-            break
-        case "OPEN", UNNotificationDefaultActionIdentifier:
-            let userInfo = response.notification.request.content.userInfo
-            if let actionJSON = userInfo["action"] as? String,
-               let action = ClickAction.fromJSON(actionJSON) {
-                actionExecutor.execute(action)
-            }
-        default:
-            let userInfo = response.notification.request.content.userInfo
-            if let actionJSON = userInfo["action"] as? String,
-               let action = ClickAction.fromJSON(actionJSON) {
-                actionExecutor.execute(action)
-            }
-        }
-
-        completionHandler()
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            NSApplication.shared.terminate(nil)
+        lifecycle.dispatchIngress(completion: completionHandler) { [self] in
+            CallbackHandler(lifecycle: lifecycle, legacy: actionExecutor).receive(
+                identifier: response.actionIdentifier,
+                defaultIdentifier: UNNotificationDefaultActionIdentifier,
+                notificationID: response.notification.request.identifier,
+                userInfo: response.notification.request.content.userInfo,
+                completion: completionHandler)
         }
     }
 

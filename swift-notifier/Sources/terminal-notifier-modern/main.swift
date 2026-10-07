@@ -7,7 +7,17 @@ private let notificationTimeoutSeconds = 10.0
 
 let arguments = Array(CommandLine.arguments.dropFirst())
 
-if ArgumentParser.isHelpRequest(arguments) {
+let options = PermissionSetupRequest.optionPositions(arguments)
+
+if options.contains("--request-permission-json") {
+    StructuredRuntime.requestPermission(arguments: arguments)
+} else if options.contains("--capabilities-json") {
+    StructuredRuntime.capabilities(arguments: arguments)
+} else if options.contains("--setup") || options.contains("--correlation-id") || options.contains("--nonce") {
+    exit(1)
+} else if options.contains("--send-json") {
+    StructuredRuntime.send(arguments: arguments)
+} else if ArgumentParser.isHelpRequest(arguments) {
     print("Usage: terminal-notifier-modern -title <title> -message <message> [options]")
     print("")
     print("  -title          Notification title (required)")
@@ -37,7 +47,7 @@ func runSendMode(arguments: [String]) {
         return
     }
 
-    guard arguments.contains(launchServicesMarker) else {
+    guard ArgumentParser.optionPositions(arguments).contains(launchServicesMarker) else {
         failAndExit("ClaudeNotifier must be launched via LaunchServices (use 'open -W -n ClaudeNotifier.app --args ...')")
         return
     }
@@ -56,13 +66,15 @@ func runSendMode(arguments: [String]) {
 
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
+    let appDelegate = AppDelegate.install(on: app)
+    let finish = appDelegate.lifecycle.beginOperation()
 
     DispatchQueue.main.async {
         NotificationCategory.register()
-        checkAuthAndSend(config: config)
+        checkAuthAndSend(config: config, completion: finish)
     }
 
-    app.run()
+    withExtendedLifetime(appDelegate) { app.run() }
 }
 
 func failAndExit(_ error: Error) {
@@ -78,24 +90,27 @@ func failAndExit(_ message: String) {
     exit(ExitCode.failed)
 }
 
-func checkAuthAndSend(config: NotificationConfig) {
+func checkAuthAndSend(config: NotificationConfig, completion: @escaping (Int32) -> Void) {
     PermissionManager.ensurePermission { result in
         DispatchQueue.main.async {
             switch result {
             case .success:
-                sendNotification(config: config)
+                sendNotification(config: config, completion: completion)
             case .failure(let error):
-                failAndExit(error)
+                fputs("Error: \(error)\n", stderr)
+                if case PermissionError.denied = error { completion(ExitCode.permissionDenied) }
+                else { completion(ExitCode.failed) }
             }
         }
     }
 }
 
-func sendNotification(config: NotificationConfig) {
+func sendNotification(config: NotificationConfig, completion: @escaping (Int32) -> Void) {
     let service = UNNotificationService()
 
     let timeoutWorkItem = DispatchWorkItem {
-        failAndExit("UNUserNotificationCenter timed out after \(Int(notificationTimeoutSeconds)) seconds")
+        fputs("Error: UNUserNotificationCenter timed out after \(Int(notificationTimeoutSeconds)) seconds\n", stderr)
+        completion(ExitCode.failed)
     }
 
     DispatchQueue.main.asyncAfter(deadline: .now() + notificationTimeoutSeconds, execute: timeoutWorkItem)
@@ -107,10 +122,11 @@ func sendNotification(config: NotificationConfig) {
             switch result {
             case .success:
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    exit(ExitCode.success)
+                    completion(ExitCode.success)
                 }
             case .failure(let error):
-                failAndExit(error)
+                fputs("Error: \(error)\n", stderr)
+                completion(ExitCode.failed)
             }
         }
     }
@@ -122,13 +138,9 @@ func runCallbackMode() {
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
 
-    let appDelegate = AppDelegate()
-    app.delegate = appDelegate
-    UNUserNotificationCenter.current().delegate = appDelegate
+    let appDelegate = AppDelegate.install(on: app)
 
-    DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
-        NSApplication.shared.terminate(nil)
-    }
+    appDelegate.lifecycle.start()
 
     withExtendedLifetime(appDelegate) {
         app.run()

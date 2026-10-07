@@ -1,15 +1,13 @@
 //go:build windows
 
-// ABOUTME: Windows notification path — go-toast with protocol activation so a
+// ABOUTME: Windows notification path with protocol activation so a
 // ABOUTME: notification click relaunches the binary and raises the terminal window.
 package notifier
 
 import (
+	"context"
 	"fmt"
-	"runtime"
-	"strings"
-
-	toast "git.sr.ht/~jackmordaunt/go-toast"
+	"time"
 
 	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/logging"
@@ -63,47 +61,24 @@ func sendWindowsNotification(title, body, appIcon string, cfg *config.Config, cw
 		logging.Debug("focus protocol registration failed: %v", err)
 	}
 
-	n := toast.Notification{
+	n := windowsToastPayload{
 		AppID: windowsToastAppID,
 		Title: title,
 		Body:  body,
-	}
-	if appIcon != "" {
-		n.Icon = appIcon
+		Icon:  appIcon,
 	}
 
 	if ctx, ok := winfocus.CaptureFocusContext(cwd); ok && ctx.HasTarget() {
-		n.ActivationType = toast.Protocol
+		n.ActivationType = "protocol"
 		n.ActivationArguments = ctx.EncodeURI()
 		logging.Debug("Windows toast click-to-focus target: %+v", ctx)
 	} else {
 		logging.Debug("Windows toast: no focus target captured, sending plain toast")
 	}
 
-	// go-toast initializes WinRT COM on the current OS thread; pin the call so
-	// the COM init and Show run on the same apartment (mirrors the beeep path).
-	runtime.LockOSThread()
-	err := n.Push()
-	runtime.UnlockOSThread()
-
-	if toastDeliveredDespiteError(err) {
-		if err != nil {
-			logging.Debug("Windows toast delivered via go-toast PowerShell fallback (benign error: %v)", err)
-		}
-		return nil
-	}
-	return err
-}
-
-// toastDeliveredDespiteError reports whether a non-nil go-toast error still
-// corresponds to a delivered notification. go-toast attempts the WinRT COM path
-// first and silently falls back to a PowerShell script; when COM fails it still
-// delivers via PowerShell but returns the COM error (commonly "doc.LoadXml(tmpl)").
-// Treating that as delivered avoids a duplicate beeep toast. See the same
-// documented false-positive handling in notifier.go / docs/troubleshooting.md.
-func toastDeliveredDespiteError(err error) bool {
-	if err == nil {
-		return true
-	}
-	return strings.Contains(err.Error(), "doc.LoadXml(tmpl)")
+	// Bound the PowerShell WinRT handoff so a broken desktop session cannot
+	// block the caller indefinitely.
+	operation, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return submitWindowsToast(operation, n)
 }

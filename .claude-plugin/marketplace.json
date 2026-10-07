@@ -1,27 +1,27 @@
 {
     "name": "claude-notifications-go",
-    "description": "Agent Notifications marketplace; the legacy Claude Code ID is retained for compatibility",
+    "description": "Agent Notifications marketplace; the legacy Claude ID is retained for compatibility",
     "owner": {
         "name": "777genius",
         "email": "iliyazelenkog@gmail.com"
     },
     "metadata": {
         "description": "Agent Notifications marketplace for coding agents (Go implementation)",
-        "version": "1.43.1"
+        "version": "1.46.1"
     },
     "plugins": [{
         "name": "claude-notifications-go",
         "displayName": "Agent Notifications",
         "source": "./",
-        "description": "Agent Notifications for Claude Code and Codex CLI (Go implementation)",
-        "version": "1.43.1",
+        "description": "Agent Notifications for Claude and Codex CLI (Go implementation)",
+        "version": "1.46.1",
         "author": {
             "name": "777genius",
             "email": "iliyazelenkog@gmail.com"
         },
         "repository": "https://github.com/777genius/agent-notifications",
         "metadata": {
-            "renamePolicy": "Legacy Claude Code install identity. Do not rename; see docs/CLAUDE_PLUGIN_IDENTITY.md."
+            "renamePolicy": "Legacy Claude install identity. Do not rename; see docs/CLAUDE_PLUGIN_IDENTITY.md."
         },
         "license": "GPL-3.0",
         "keywords": [

@@ -157,6 +157,7 @@ func TestE2E_FullNotificationCycle(t *testing.T) {
 	lastCall := mockNotif.lastCall()
 	if lastCall == nil {
 		t.Fatal("No notifications sent")
+		return
 	}
 	if lastCall.status != analyzer.StatusTaskComplete {
 		t.Errorf("Last notification: expected StatusTaskComplete, got %v", lastCall.status)

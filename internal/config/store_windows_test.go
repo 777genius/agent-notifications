@@ -635,7 +635,9 @@ func TestWindowsImportReusesSelectionGuard(t *testing.T) {
 	}
 	defer p.close()
 	for _, name := range []string{filepath.Base(source) + ".lock", "imported.json.lock"} {
-		release, err := p.lock(ctx, name, false, false)
+		lockCtx, lockCancel := context.WithTimeout(context.Background(), time.Second)
+		release, err := p.lock(lockCtx, name, false, false)
+		lockCancel()
 		if err != nil {
 			t.Fatal(err)
 		}

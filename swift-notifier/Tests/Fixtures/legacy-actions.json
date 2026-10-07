@@ -1,0 +1,10 @@
+[
+  {"json":"{\"type\":\"none\"}","valid":true},
+  {"json":"{\"type\":\"activate\",\"value\":\"com.apple.Terminal\"}","valid":true},
+  {"json":"{\"type\":\"execute\",\"value\":\"echo '--help'\"}","valid":true},
+  {"json":"{\"type\":\"executeAndActivate\",\"value\":\"echo test\",\"bundleID\":\"com.apple.Terminal\"}","valid":true},
+  {"json":"{\"type\":\"unknown\"}","valid":false},
+  {"json":"{\"type\":\"activate\"}","valid":false},
+  {"json":"{\"type\":\"executeAndActivate\",\"value\":\"echo test\"}","valid":false},
+  {"json":"{\"schemaVersion\":999,\"type\":\"none\"}","valid":true}
+]

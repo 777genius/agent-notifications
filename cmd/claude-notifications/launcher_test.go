@@ -1,9 +1,33 @@
 package main
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"testing"
 )
+
+func TestPrintUsageAdvertisesWizard(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout := os.Stdout
+	os.Stdout = w
+	printUsage()
+	os.Stdout = stdout
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(r)
+	_ = r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(body, []byte("setup-notifications wizard")) {
+		t.Fatalf("top-level help must advertise wizard for bootstrap: %s", body)
+	}
+}
 
 func TestInvocationName(t *testing.T) {
 	old := os.Args

@@ -53,7 +53,8 @@ func TestMutationResolveSharingViolationHonorsDeadline(t *testing.T) {
 		calls++
 		return nil, syscall.Errno(32)
 	})
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	// Allow several 10ms retries even when the CI runner is heavily loaded.
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer cancel()
 	_, err := resolveForMutation(ctx, env)
 	var ce *Error

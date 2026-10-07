@@ -18,7 +18,7 @@ permissions:
 jobs:
   smoke-notifier:
     name: Build, Sign, Optionally Notarize ClaudeNotifier.app
-    runs-on: macos-15
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'macos-15' || vars.CI_MACOS_15_RUNNER || 'macos-15' }}
     timeout-minutes: 60
 
     steps:
@@ -65,25 +65,63 @@ jobs:
         run: |
           cd swift-notifier
           if [ "${{ inputs.skip_notarize }}" = "true" ]; then
-            bash scripts/build-app.sh --ci --skip-notarize
+            bash scripts/build-app.sh --ci --skip-notarize --no-register
           else
-            bash scripts/build-app.sh --ci
+            bash scripts/build-app.sh --ci --no-register
           fi
 
       - name: Verify signature metadata
         run: |
-          codesign -dv --verbose=4 swift-notifier/ClaudeNotifier.app || true
-          codesign --display --entitlements :- swift-notifier/ClaudeNotifier.app || true
+          codesign --verify --deep --strict -R '=identifier "com.777genius.agent-notifications"' swift-notifier/ClaudeNotifier.app
+          codesign --display --entitlements :- swift-notifier/ClaudeNotifier.app
 
       - name: Create zip artifact
         run: |
           cd swift-notifier
+          test -f ClaudeNotifier.app.managed-runtime.json
           ditto -c -k --keepParent ClaudeNotifier.app ClaudeNotifier-smoke.app.zip
-          ls -lh ClaudeNotifier-smoke.app.zip
+          zip -u ClaudeNotifier-smoke.app.zip ClaudeNotifier.app.managed-runtime.json
+          python3 - <<'PYTHON'
+          import hashlib, json, os, pathlib, plistlib, subprocess, zipfile
+          app = pathlib.Path('ClaudeNotifier.app')
+          executable = app / 'Contents/MacOS/terminal-notifier-modern'
+          archive = pathlib.Path('ClaudeNotifier-smoke.app.zip')
+          def digest(path):
+              value = hashlib.sha256()
+              with path.open('rb') as stream:
+                  for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                      value.update(chunk)
+              return value.hexdigest()
+          source = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          assert source == os.environ['GITHUB_SHA'], 'checkout source mismatch'
+          assert source == os.environ['GITHUB_WORKFLOW_SHA'], 'workflow source mismatch'
+          metadata = subprocess.run(['codesign', '-dv', '--verbose=4', str(app)], check=True, capture_output=True, text=True).stderr
+          fields = dict(line.split('=', 1) for line in metadata.splitlines() if '=' in line)
+          team = fields.get('TeamIdentifier', '')
+          assert team and team != 'not set', 'Developer ID team missing'
+          with (app / 'Contents/Info.plist').open('rb') as stream:
+              bundle_id = plistlib.load(stream)['CFBundleIdentifier']
+          assert fields.get('Identifier') == bundle_id == 'com.777genius.agent-notifications'
+          executable_sha = digest(executable)
+          sidecar = pathlib.Path('ClaudeNotifier.app.managed-runtime.json')
+          assert json.loads(sidecar.read_text()) == dict(SchemaVersion=1, ProtocolVersion=1, DecoderFloor=1, ExecutableSHA256=executable_sha)
+          with zipfile.ZipFile(archive) as packaged:
+              assert packaged.read(sidecar.name) == sidecar.read_bytes(), 'packaged attestation mismatch'
+              assert hashlib.sha256(packaged.read(str(executable))).hexdigest() == executable_sha, 'packaged executable mismatch'
+          report = dict(schemaVersion=1, sourceSHA=source, workflowRef=os.environ['GITHUB_WORKFLOW_REF'], workflowSHA=os.environ['GITHUB_WORKFLOW_SHA'],
+                        runID=os.environ['GITHUB_RUN_ID'], runAttempt=os.environ['GITHUB_RUN_ATTEMPT'],
+                        archiveSHA256=digest(archive), executableSHA256=executable_sha, attestationSHA256=digest(sidecar),
+                        bundleID=bundle_id, signingTeam=team, signatureVerified=True)
+          with pathlib.Path('ClaudeNotifier-smoke.custody.json').open('x') as stream:
+              json.dump(report, stream, sort_keys=True, separators=(',', ':'))
+              stream.write('\n')
+          PYTHON
 
       - name: Upload smoke artifact
         uses: actions/upload-artifact@v7
         with:
           name: ClaudeNotifier-smoke
-          path: swift-notifier/ClaudeNotifier-smoke.app.zip
+          path: |
+            swift-notifier/ClaudeNotifier-smoke.app.zip
+            swift-notifier/ClaudeNotifier-smoke.custody.json
           retention-days: 3

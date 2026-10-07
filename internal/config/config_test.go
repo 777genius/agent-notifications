@@ -1661,6 +1661,23 @@ func TestShouldNotifyOnlyWhenUnfocused_Explicit(t *testing.T) {
 	assert.False(t, cfgOff.ShouldNotifyOnlyWhenUnfocused())
 }
 
+func TestShouldRespectDisplaySleep_DefaultsFalse(t *testing.T) {
+	// nil (not set) means play the sound regardless of display sleep state
+	cfg := &Config{}
+	assert.False(t, cfg.ShouldRespectDisplaySleep())
+}
+
+func TestShouldRespectDisplaySleep_Explicit(t *testing.T) {
+	enabled := true
+	disabled := false
+
+	cfgOn := &Config{Notifications: NotificationsConfig{RespectDisplaySleep: &enabled}}
+	assert.True(t, cfgOn.ShouldRespectDisplaySleep())
+
+	cfgOff := &Config{Notifications: NotificationsConfig{RespectDisplaySleep: &disabled}}
+	assert.False(t, cfgOff.ShouldRespectDisplaySleep())
+}
+
 func TestShouldReplaceNotificationsPerSession_DefaultsFalse(t *testing.T) {
 	// nil (not set) keeps the historical behavior: banners never replace each other.
 	cfg := &Config{}

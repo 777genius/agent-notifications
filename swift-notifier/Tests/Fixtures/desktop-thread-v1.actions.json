@@ -1,0 +1,130 @@
+{
+  "valid": [
+    {
+      "action": {
+        "type": "desktop_thread_v1",
+        "schemaVersion": 1,
+        "threadID": "thread/other?#%👩‍💻",
+        "routeKind": "codex_thread",
+        "bundleID": "com.openai.codex",
+        "teamID": "TESTTEAM01",
+        "applicationPath": "/disposable/Codex.app",
+        "correlationID": "00000000-0000-4000-8000-000000000001"
+      },
+      "uri": "codex://threads/thread%2Fother%3F%23%25%F0%9F%91%A9%E2%80%8D%F0%9F%92%BB"
+    }
+  ],
+  "invalid": [
+    {
+      "type": "desktop_thread_v1",
+      "schemaVersion": 2,
+      "threadID": "thread/other?#%👩‍💻",
+      "routeKind": "codex_thread",
+      "bundleID": "com.openai.codex",
+      "teamID": "TESTTEAM01",
+      "applicationPath": "/disposable/Codex.app",
+      "correlationID": "00000000-0000-4000-8000-000000000001"
+    },
+    {
+      "type": "desktop_thread_v1",
+      "schemaVersion": true,
+      "threadID": "thread/other?#%👩‍💻",
+      "routeKind": "codex_thread",
+      "bundleID": "com.openai.codex",
+      "teamID": "TESTTEAM01",
+      "applicationPath": "/disposable/Codex.app",
+      "correlationID": "00000000-0000-4000-8000-000000000001"
+    },
+    {
+      "type": "execute",
+      "schemaVersion": 1,
+      "threadID": "thread/other?#%👩‍💻",
+      "routeKind": "codex_thread",
+      "bundleID": "com.openai.codex",
+      "teamID": "TESTTEAM01",
+      "applicationPath": "/disposable/Codex.app",
+      "correlationID": "00000000-0000-4000-8000-000000000001"
+    },
+    {
+      "type": "desktop_thread_v1",
+      "schemaVersion": 1,
+      "threadID": "thread/other?#%👩‍💻",
+      "routeKind": "codex_thread",
+      "bundleID": "com.openai.codex",
+      "teamID": "TESTTEAM01",
+      "applicationPath": "/disposable/Codex.app",
+      "correlationID": "00000000-0000-4000-8000-000000000001",
+      "url": "https://example.com"
+    },
+    {
+      "type": "desktop_thread_v1",
+      "schemaVersion": 1,
+      "threadID": "..",
+      "routeKind": "codex_thread",
+      "bundleID": "com.openai.codex",
+      "teamID": "TESTTEAM01",
+      "applicationPath": "/disposable/Codex.app",
+      "correlationID": "00000000-0000-4000-8000-000000000001"
+    },
+    {
+      "type": "desktop_thread_v1",
+      "schemaVersion": 1,
+      "threadID": "bad",
+      "routeKind": "codex_thread",
+      "bundleID": "com.openai.codex",
+      "teamID": "TESTTEAM01",
+      "applicationPath": "/disposable/Codex.app",
+      "correlationID": "00000000-0000-4000-8000-000000000001"
+    },
+    {
+      "type": "desktop_thread_v1",
+      "schemaVersion": 1,
+      "threadID": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "routeKind": "codex_thread",
+      "bundleID": "com.openai.codex",
+      "teamID": "TESTTEAM01",
+      "applicationPath": "/disposable/Codex.app",
+      "correlationID": "00000000-0000-4000-8000-000000000001"
+    },
+    {
+      "type": "desktop_thread_v1",
+      "schemaVersion": 1,
+      "threadID": "thread/other?#%👩‍💻",
+      "routeKind": "codex_thread",
+      "bundleID": "com.openai.codex",
+      "teamID": "evil",
+      "applicationPath": "/disposable/Codex.app",
+      "correlationID": "00000000-0000-4000-8000-000000000001"
+    },
+    {
+      "type": "desktop_thread_v1",
+      "schemaVersion": 1,
+      "threadID": "thread/other?#%👩‍💻",
+      "routeKind": "codex_thread",
+      "bundleID": "com.other.app",
+      "teamID": "TESTTEAM01",
+      "applicationPath": "/disposable/Codex.app",
+      "correlationID": "00000000-0000-4000-8000-000000000001"
+    },
+    {
+      "type": "desktop_thread_v1",
+      "schemaVersion": 1,
+      "threadID": "thread/other?#%👩‍💻",
+      "routeKind": "codex_thread",
+      "bundleID": "com.openai.codex",
+      "teamID": "TESTTEAM01",
+      "applicationPath": "/a/../Codex.app",
+      "correlationID": "00000000-0000-4000-8000-000000000001"
+    },
+    {
+      "type": "desktop_thread_v1",
+      "schemaVersion": 1,
+      "threadID": "thread/other?#%👩‍💻",
+      "routeKind": "codex_thread",
+      "bundleID": "com.openai.codex",
+      "teamID": "TESTTEAM01",
+      "applicationPath": "/disposable/Codex.app",
+      "correlationID": "bad"
+    }
+  ]
+}

@@ -79,7 +79,12 @@ func isTimeSensitiveStatus(status analyzer.Status) bool {
 // Script Editor attribution and optionally enables click-to-focus.
 // On Linux with clickToFocus enabled, it uses the background daemon.
 // cwd is the working directory of the project; used for window-specific focus. May be empty.
-func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd string) error {
+//
+// Passing WithoutSound() delivers the banner without the plugin's own audio cue
+// (used when the desktop is in Do Not Disturb).
+func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd string, opts ...SendOption) error {
+	sendOpts := resolveSendOptions(opts)
+
 	// Send terminal bell for terminal tab indicators (e.g. Ghostty, tmux,
 	// Windows Terminal). Platform-specific; see bell_other.go / bell_windows.go.
 	if n.cfg.IsTerminalBellEnabled() {
@@ -96,31 +101,12 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 		return fmt.Errorf("unknown status: %s", status)
 	}
 
-	// Extract session name, git branch and folder name from message
-	// Format: "[session-name|branch folder] actual message" or "[session-name folder] actual message"
-	sessionName, gitBranch, cleanMessage := extractSessionInfo(message)
-
-	// Build clean title (status only + session name)
-	// Format: "✅ Completed [peak]" or "✅ Completed"
-	title := statusInfo.Title
-	if sessionName != "" && n.cfg.IsSessionLabelEnabled() {
-		title = fmt.Sprintf("%s [%s]", title, sessionName)
+	presentation := legacyPresentation(status, message, statusInfo.Title, n.cfg.IsSessionLabelEnabled())
+	if sendOpts.hookPresentation != nil {
+		presentation = hookPresentation(status, *sendOpts.hookPresentation, statusInfo.Title, n.cfg.IsSessionLabelEnabled())
 	}
-
-	// Build subtitle from branch and folder name
-	// Format: "main · notification_plugin_go" or just folder name
-	var subtitle string
-	if gitBranch != "" {
-		// gitBranch may contain "branch folder" (space-separated from hooks.go format)
-		parts := strings.SplitN(gitBranch, " ", 2)
-		if len(parts) == 2 {
-			subtitle = fmt.Sprintf("%s \u00B7 %s", parts[0], parts[1])
-		} else {
-			subtitle = gitBranch
-		}
-	}
-
-	timeSensitive := isTimeSensitiveStatus(status)
+	title, cleanMessage, subtitle := presentation.Title, presentation.Body, presentation.Subtitle
+	timeSensitive := presentation.TimeSensitive
 
 	// Get app icon path if configured
 	appIcon := n.cfg.Notifications.Desktop.AppIcon
@@ -151,12 +137,19 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 				logging.Warn("ClaudeNotifier failed on macOS, falling back to beeep: %v", err)
 			} else {
 				logging.Debug("Desktop notification sent via ClaudeNotifier/terminal-notifier: title=%s", title)
-				n.playSoundDetached(statusInfo.Sound)
+				n.playSoundUnlessMuted(statusInfo.Sound, sendOpts)
 				return nil
 			}
 		} else {
 			logging.Warn("ClaudeNotifier not available on macOS, falling back to beeep (run /claude-notifications-go:init to install it)")
 		}
+	}
+
+	// The remaining backends only display title and body. Structured hooks
+	// carry question identity in the subtitle, so preserve that literal context
+	// here after the native macOS path has had its clean three-field layout.
+	if sendOpts.hookPresentation != nil && subtitle != "" {
+		cleanMessage = subtitle + "\n" + cleanMessage
 	}
 
 	// Linux: Try daemon for click-to-focus support
@@ -166,25 +159,25 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 			// Fall through to beeep
 		} else {
 			logging.Debug("Desktop notification sent via Linux daemon: title=%s", title)
-			n.playSoundDetached(statusInfo.Sound)
+			n.playSoundUnlessMuted(statusInfo.Sound, sendOpts)
 			return nil
 		}
 	}
 
-	// Windows: use go-toast with protocol activation for click-to-focus support
+	// Windows: use a bounded WinRT toast with protocol activation for click-to-focus support.
 	if platform.IsWindows() && n.cfg.Notifications.Desktop.ClickToFocus {
 		if err := sendWindowsNotification(title, cleanMessage, appIcon, n.cfg, cwd); err != nil {
 			logging.Warn("Windows click-to-focus notification failed, falling back to beeep: %v", err)
 			// Fall through to beeep
 		} else {
 			logging.Debug("Desktop notification sent via Windows click-to-focus: title=%s", title)
-			n.playSoundDetached(statusInfo.Sound)
+			n.playSoundUnlessMuted(statusInfo.Sound, sendOpts)
 			return nil
 		}
 	}
 
 	// Standard path: beeep (Windows, Linux fallback)
-	return n.sendWithBeeep(title, cleanMessage, appIcon, statusInfo.Sound)
+	return n.sendWithBeeep(title, cleanMessage, appIcon, statusInfo.Sound, sendOpts)
 }
 
 // sendWithTerminalNotifier sends notification via terminal-notifier on macOS
@@ -292,8 +285,8 @@ func buildNotifierCommand(notifierPath string, args []string) *exec.Cmd {
 	return exec.Command(notifierPath, args...)
 }
 
-// claudeNotifierAppPath extracts ClaudeNotifier.app from the embedded
-// terminal-notifier-modern executable path.
+// claudeNotifierAppPath recognizes modern helpers in conventional bundles, the
+// product-owned alias, and durable managed generation bundles.
 func claudeNotifierAppPath(notifierPath string) (string, bool) {
 	cleanPath := filepath.Clean(notifierPath)
 	suffix := filepath.Join("Contents", "MacOS", "terminal-notifier-modern")
@@ -303,7 +296,9 @@ func claudeNotifierAppPath(notifierPath string) (string, bool) {
 
 	bundlePath := strings.TrimSuffix(cleanPath, suffix)
 	bundlePath = strings.TrimSuffix(bundlePath, string(filepath.Separator))
-	if !strings.HasSuffix(bundlePath, "ClaudeNotifier.app") {
+	name := filepath.Base(bundlePath)
+	if name != "ClaudeNotifier.app" && name != "AgentNotifications.app" &&
+		(!strings.HasPrefix(name, "generation-") || !strings.HasSuffix(name, ".app")) {
 		return "", false
 	}
 
@@ -544,7 +539,7 @@ func SendQuickNotification(title, message, executeCmd string) error {
 }
 
 // sendWithBeeep sends notification via beeep (cross-platform)
-func (n *Notifier) sendWithBeeep(title, message, appIcon, sound string) error {
+func (n *Notifier) sendWithBeeep(title, message, appIcon, sound string, opts sendOptions) error {
 	// Platform-specific AppName handling:
 	// - Windows: Use fixed AppName to prevent registry pollution. Each unique AppName
 	//   creates a persistent entry in HKEY_CURRENT_USER\SOFTWARE\Microsoft\Windows\
@@ -581,7 +576,7 @@ func (n *Notifier) sendWithBeeep(title, message, appIcon, sound string) error {
 	// returns the (joined) COM error. Gating the sound on that error therefore
 	// drops the audio cue spuriously. See docs/troubleshooting.md, which already
 	// documents the "doc.LoadXml(tmpl)" error as a harmless false positive.
-	n.playSoundDetached(sound)
+	n.playSoundUnlessMuted(sound, opts)
 
 	return err
 }
@@ -613,6 +608,16 @@ func isWindowsToastFallbackSuccess(err error) bool {
 
 	parts := joined.Unwrap()
 	return len(parts) == 1 && strings.Contains(parts[0].Error(), "doc.LoadXml(tmpl)")
+}
+
+// playSoundUnlessMuted routes every sound-playing path through one decision
+// point, so a muted delivery cannot leak audio via a branch that was missed.
+func (n *Notifier) playSoundUnlessMuted(sound string, opts sendOptions) {
+	if opts.muteSound {
+		logging.Debug("Sound suppressed for this notification (muted delivery)")
+		return
+	}
+	n.playSoundDetached(sound)
 }
 
 // playSoundDetached spawns a detached child process to play the sound.

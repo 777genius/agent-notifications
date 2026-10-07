@@ -6,7 +6,19 @@ Use the current installer and runtime for the configuration commands below. Upda
 
 Run `/claude-notifications-go:settings` to configure sounds, volume, webhooks, and other options via an interactive wizard. You can re-run it anytime to reconfigure.
 
-### Manual Configuration
+## OpenCode channels and settings
+
+OpenCode uses the shared resolver below and supports `agents.opencode` overrides.
+It sends silent generic messages for `task_complete`, `question`,
+`permission_request` and `opencode_error`; sound, click-to-focus and contentful
+Claude status templates do not apply. Channel settings can restrict delivery,
+but they do not grant consent: use `setup-opencode install|update` with explicit
+`--desktop`, `--webhook` or both. This changes only OpenCode channel consent and
+does not enable portable MCP notifications. Webhooks also need a configured,
+enabled destination and an enabled status channel. Restart OpenCode after setup
+or update. [Full setup and limits](opencode-notifications.md).
+
+## Manual Configuration
 
 Use the installed config-capable executable (shown as `$NOTIFICATIONS_BIN` in recipes):
 
@@ -76,6 +88,7 @@ The following JSON illustrates the schema. Do not replace your existing document
     "respectJudgeMode": true,
     "notifyOnlyWhenUnfocused": false,
     "notifyDelaySeconds": 0,
+    "respectDoNotDisturb": "off",
     "replaceNotificationsPerSession": false,
     "suppressFilters": [
       {
@@ -119,15 +132,35 @@ The following JSON illustrates the schema. Do not replace your existing document
 }
 ```
 
+## Session context
+
+Claude/Codex hook notifications prefer the native session name over the generated
+word/id label. Claude uses an optional `session_title` hook field, then exact-session
+`custom-title`/`ai-title` transcript records. Codex reads the latest exact-session
+`thread_name` from `$CODEX_HOME/session_index.jsonl` (default `~/.codex`). These are
+bounded, read-only, best-effort native file formats, not a public live Desktop API.
+Missing, unsupported, or out-of-window metadata keeps the generated label. Each
+hook rereads supported metadata; Claude renames outside the bounded transcript
+head/tail windows can be missed. No session is resumed or model called to name it.
+
+Claude `AskUserQuestion` uses the current `tool_input`, rather than a previous
+question in the transcript. Codex question hooks use the question text supplied
+by the host. Questions appear in the headline; the session and project appear in
+the native macOS subtitle or the body on backends without subtitles. Missing
+question text keeps the ordinary question fallback. `desktop.showSessionLabel`
+hides native and generated names without hiding the question or project.
+
 | Option | Default | Description |
 |--------|---------|-------------|
 | `notifyOnSubagentStop` | `false` | Send notifications when subagents (Task tool) complete. Has no effect unless `suppressForSubagents` is also set to `false`. |
-| `suppressForSubagents` | `true` | Suppress subagent (`SubagentStop`) notifications, plus any `Stop` notification whose transcript is a subagent/teammate transcript. Detection uses the hook event for `SubagentStop` (Claude Code passes the parent session `transcript_path` to that hook, so a path check alone can't identify it). Set to `false` together with `notifyOnSubagentStop: true` to get a notification each time a subagent finishes. |
+| `suppressForSubagents` | `true` | Suppress subagent (`SubagentStop`) notifications, plus any `Stop` notification whose transcript is a subagent/teammate transcript. Detection uses the hook event for `SubagentStop` (Claude passes the parent session `transcript_path` to that hook, so a path check alone can't identify it). Set to `false` together with `notifyOnSubagentStop: true` to get a notification each time a subagent finishes. |
 | `notifyOnTextResponse` | `true` | Send notifications for text-only responses (no tool usage) |
-| `desktop.showSessionLabel` | `true` | Append the `[name id]` session label to the notification title. |
+| `desktop.showSessionLabel` | `true` | Show the native session name, with `[name id]` as fallback. Questions identify the session in the native macOS subtitle or the body on backends without subtitles. `false` hides both kinds of session label without hiding the actual question. |
 | `respectJudgeMode` | `true` | Honor `CLAUDE_HOOK_JUDGE_MODE=true` env var to suppress notifications |
-| `notifyOnlyWhenUnfocused` | `false` | Skip the desktop notification only when the focused terminal window can be matched to the current Claude Code session. Best-effort per platform; if focus can't be determined the notification is still shown. |
+| `notifyOnlyWhenUnfocused` | `false` | Skip the desktop notification only when the focused terminal window can be matched to the current Claude session. Best-effort per platform; if focus can't be determined the notification is still shown. |
 | `notifyDelaySeconds` | `0` | Wait N seconds before delivering a desktop notification (capped at 25s by the hook timeout). With `notifyOnlyWhenUnfocused`, focus is re-checked after the wait. Webhooks are unaffected. |
+| `respectDoNotDisturb` | `"off"` | Honour the desktop's Do Not Disturb state. `"silent"` still delivers the banner (so it reaches the notification centre) but skips the plugin's sound; `"suppress"` skips the notification entirely. Linux only for now (KDE Plasma, GNOME, XFCE, dunst); other platforms always report "not in DND". Webhooks are unaffected. See [Do Not Disturb](DO_NOT_DISTURB.md). |
+| `respectDisplaySleep` | `false` | Skip the plugin's own sound while every display is asleep; the banner is still delivered. macOS only for now; other platforms always report "not asleep". Independent of `respectDoNotDisturb`. Webhooks are unaffected. |
 | `replaceNotificationsPerSession` | `false` | macOS only. Let a session's newest desktop notification **replace** its previous banner in place instead of stacking a new one. Different sessions never collide. Default `false` keeps every banner so unread alerts are never silently dropped. |
 | `suppressQuestionAfterTaskCompleteSeconds` | `12` | Suppress question notifications for N seconds after task complete |
 | `suppressQuestionAfterAnyNotificationSeconds` | `7` | Suppress question notifications for N seconds after any notification |
@@ -158,7 +191,7 @@ other off for the same status.
 
 Two independent options cut notification noise when you're already watching the terminal:
 
-- **`notifyOnlyWhenUnfocused`** - skip the desktop notification only when the focused terminal window can be matched to the current Claude Code session.
+- **`notifyOnlyWhenUnfocused`** - skip the desktop notification only when the focused terminal window can be matched to the current Claude session. On Linux this works on X11 terminals that export `$WINDOWID`, and in [JetBrains IDE terminals](CLICK_TO_FOCUS.md#jetbrains-ides).
 - **`notifyDelaySeconds`** - wait N seconds before delivering, so a quick task can finish before any banner appears (capped at 25s to stay within the hook timeout).
 
 They compose: with both set, the plugin waits, then notifies only if the terminal still isn't focused - "tell me once I've looked away."
@@ -175,10 +208,73 @@ They compose: with both set, the plugin waits, then notifies only if the termina
 Both apply to **desktop notifications only** - webhook delivery is never delayed or suppressed. Focus detection is best-effort and degrades safely by notifying when unsure:
 
 - macOS: Ghostty can be matched by exact terminal/session metadata; other terminal apps require the frontmost window title to match the project folder and existing Screen Recording access.
-- Linux: X11 sessions compare `$WINDOWID` to the active window. Wayland or terminals without `$WINDOWID` are treated as unknown.
+- Linux: X11 sessions compare `$WINDOWID` to the active window. In JetBrains IDE terminals the active window must belong to the IDE process and its title must name the project (KDE Plasma: `kdotool`, X11: `xdotool`); an inherited `$WINDOWID` is ignored there. Other Wayland sessions and terminals without `$WINDOWID` are treated as unknown.
 - Windows: the foreground window must belong to the hook process ancestry and its title must contain the project folder. Ambiguous multi-window or multi-tab terminal hosts are treated as unknown.
 
 Unknown means "show the notification", not "suppress it".
+
+### Do Not Disturb
+
+The plugin plays its notification sound itself, in its own process, which is why
+the sound used to come through at full volume while the desktop was in Do Not
+Disturb: the banner was correctly silenced by the desktop, but nothing had any
+say over a separate process's audio.
+
+`respectDoNotDisturb` fixes that. It is `"off"` by default, so nothing changes
+until you opt in:
+
+```json
+{
+  "notifications": {
+    "respectDoNotDisturb": "silent"
+  }
+}
+```
+
+- **`"off"`** (default) - DND state is never queried.
+- **`"silent"`** - the banner is still delivered, so it lands in the notification centre and shows when DND lifts, but the plugin's sound is skipped.
+- **`"suppress"`** - nothing is delivered.
+
+Detection is Linux-only for now - KDE Plasma and other daemons exposing
+`org.freedesktop.Notifications.Inhibited`, dunst, XFCE and GNOME. macOS Focus
+modes and Windows Focus Assist are not detected yet, so `respectDoNotDisturb`
+has no effect there. Like focus detection, it fails open: anything it cannot read
+counts as "not in DND" and the notification is delivered with its sound.
+
+Webhooks are unaffected in every mode. See [Do Not Disturb](DO_NOT_DISTURB.md)
+for the exact sources per desktop, the latency budget, and how to verify which
+one fired.
+
+### Mute Sound While Display Is Asleep
+
+A machine can be fully awake and still have nobody in front of it - the display
+timed out and went to sleep. `respectDisplaySleep` skips the plugin's own sound
+in that case, the same way `respectDoNotDisturb` does for Do Not Disturb; the
+banner is still delivered so it is waiting in the notification centre when the
+display wakes up.
+
+It is `false` by default, so nothing changes until you opt in:
+
+```json
+{
+  "notifications": {
+    "respectDisplaySleep": true
+  }
+}
+```
+
+Detection is macOS-only for now, via the same public Quartz Display Services
+API used by other window-management tools, and considers every attached
+display: on a laptop in clamshell mode with an external monitor still on, the
+built-in display reports asleep while you are actively working, so the sound is
+muted only when no attached display is awake. Linux and Windows are not
+detected yet, so the option has no effect there. Detection fails open the same
+way Do Not Disturb detection does: anything it cannot read counts as "not
+asleep" and the notification keeps its sound.
+
+This is a different signal from Do Not Disturb - a display can go to sleep
+without Focus/DND being on, and DND can be on with the display wide awake - so
+the two options are independent and compose freely.
 
 ### Replace Per-Session Banners (macOS)
 

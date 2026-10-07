@@ -97,3 +97,20 @@ final class ClickActionTests: XCTestCase {
         XCTAssertEqual(decoded, action)
     }
 }
+
+extension ClickActionTests {
+    func testLegacyCompatibilityFixtures() throws {
+        struct Fixture: Decodable { let json: String; let valid: Bool }
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Fixtures/legacy-actions.json")
+        let fixtures = try JSONDecoder().decode([Fixture].self, from: Data(contentsOf: url))
+        XCTAssertEqual(fixtures.count, 8)
+        for fixture in fixtures {
+            let action = ClickAction.fromJSON(fixture.json)
+            XCTAssertEqual(action != nil, fixture.valid)
+            if let action = action {
+                XCTAssertEqual(ClickAction.fromJSON(try XCTUnwrap(action.toJSON())), action)
+            }
+        }
+    }
+}

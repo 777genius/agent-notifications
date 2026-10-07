@@ -22,6 +22,7 @@ func saveTerminalEnv(t *testing.T) func() {
 		"TERMINATOR_UUID",
 		"KONSOLE_VERSION",
 		"KONSOLE_DBUS_SESSION",
+		"TERMINAL_EMULATOR",
 		"WINDOWID",
 		"XDG_SESSION_TYPE",
 		"XDG_CURRENT_DESKTOP",
@@ -441,6 +442,44 @@ func TestGetXdotoolClass_UnknownFallback(t *testing.T) {
 	}
 }
 
+// JetBrains focus targets are already window classes; every mapper must pass
+// them through unchanged.
+func TestWindowClassMappers_JetBrains(t *testing.T) {
+	mappers := map[string]func(string) string{
+		"GetKdotoolClass": GetKdotoolClass,
+		"GetXdotoolClass": GetXdotoolClass,
+		"GetGnomeWmClass": GetGnomeWmClass,
+		"GetWlrctlAppID":  GetWlrctlAppID,
+	}
+
+	for name, mapper := range mappers {
+		for _, class := range []string{"jetbrains-phpstorm", "jetbrains-idea-ce"} {
+			if got := mapper(class); got != class {
+				t.Errorf("%s(%q) = %q, want %q", name, class, got, class)
+			}
+		}
+	}
+}
+
+func TestGetSearchTermWithFolder(t *testing.T) {
+	tests := []struct {
+		terminal string
+		folder   string
+		want     string
+	}{
+		{"jetbrains-phpstorm", "agent-notifications", "agent-notifications"},
+		{"jetbrains-phpstorm", "", "jetbrains-phpstorm"},
+		{"code", "agent-notifications", "agent-notifications"},
+		{"konsole", "agent-notifications", "konsole"},
+	}
+
+	for _, tt := range tests {
+		if got := GetSearchTermWithFolder(tt.terminal, tt.folder); got != tt.want {
+			t.Errorf("GetSearchTermWithFolder(%q, %q) = %q, want %q", tt.terminal, tt.folder, got, tt.want)
+		}
+	}
+}
+
 // --- GetSearchTerm tests ---
 
 func TestGetSearchTerm_VSCode(t *testing.T) {
@@ -685,8 +724,21 @@ func TestGetX11WindowID(t *testing.T) {
 
 	t.Setenv("WINDOWID", "12345")
 
-	if got := GetX11WindowID(); got != "12345" {
+	if got := GetX11WindowID("konsole"); got != "12345" {
 		t.Errorf("GetX11WindowID() = %q, want %q", got, "12345")
+	}
+}
+
+// A JetBrains terminal has no X11 window of its own: a $WINDOWID there was
+// inherited from whatever launched the IDE and would raise that window.
+func TestGetX11WindowID_IgnoresInheritedIDInJetBrains(t *testing.T) {
+	restore := saveTerminalEnv(t)
+	defer restore()
+
+	t.Setenv("WINDOWID", "12345")
+
+	if got := GetX11WindowID("jetbrains-phpstorm"); got != "" {
+		t.Errorf("GetX11WindowID(jetbrains-phpstorm) = %q, want empty", got)
 	}
 }
 
@@ -696,7 +748,7 @@ func TestGetX11WindowID_TrimsWhitespace(t *testing.T) {
 
 	t.Setenv("WINDOWID", "  0x123  ")
 
-	if got := GetX11WindowID(); got != "0x123" {
+	if got := GetX11WindowID("konsole"); got != "0x123" {
 		t.Errorf("GetX11WindowID() = %q, want %q", got, "0x123")
 	}
 }

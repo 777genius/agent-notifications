@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { resolve, extname, sep } from "node:path";
 const root = resolve(".output/public");
-const base = "/agent-notifications/";
+const base = "/";
 const types = {
   ".html": "text/html",
   ".js": "text/javascript",

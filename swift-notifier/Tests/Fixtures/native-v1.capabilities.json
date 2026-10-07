@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "protocolVersions": [
+    1
+  ],
+  "actionKinds": [
+    "none",
+    "desktop_thread_v1"
+  ],
+  "receiptSupport": true,
+  "backend": "macos.usernotifications",
+  "explicitFeatureEnabledByDefault": false
+}

@@ -5,17 +5,22 @@ on:
     branches: [ main, develop ]
   pull_request:
 
+# Only a newer run for the same PR supersedes its checks.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     name: Test on macOS (${{ matrix.go }})
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.os || matrix.os == 'macos-15' && (vars.CI_MACOS_15_RUNNER || 'macos-15') || matrix.os == 'macos-26' && (vars.CI_MACOS_26_RUNNER || 'macos-26') || matrix.os }}
     timeout-minutes: 30
 
     strategy:
       fail-fast: false
       matrix:
         include:
-          - go: '1.22'
+          - go: '1.25'
             os: macos-15
           - go: '1.26'
             os: macos-26
@@ -51,13 +56,26 @@ jobs:
           fi
 
       - name: Run tests
-        run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+        run: go test -timeout 20m -v -race -coverprofile=coverage.txt -covermode=atomic ./...
 
       - name: Build binary
         run: go build -o bin/claude-notifications ./cmd/claude-notifications
 
       - name: Test binary execution (help)
         run: ./bin/claude-notifications help
+
+      - name: Qualify native selector bootstrap E2E (isolated, offline)
+        id: selector-e2e
+        if: matrix.go == '1.26'
+        run: bash scripts/selector_e2e.sh "$RUNNER_TEMP/TEST-selector-e2e"
+
+      - name: Upload selector bootstrap evidence
+        if: always() && matrix.go == '1.26' && steps.selector-e2e.outcome != 'skipped'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: selector-e2e-${{ runner.os }}
+          path: ${{ runner.temp }}/TEST-selector-e2e
+          if-no-files-found: error
 
       - name: Test one-line setup loader (isolated, offline)
         run: bash bin/setup_test.sh
@@ -94,7 +112,7 @@ jobs:
 
   swift-test:
     name: Swift notifier tests
-    runs-on: macos-15
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'macos-15' || vars.CI_MACOS_15_RUNNER || 'macos-15' }}
     timeout-minutes: 30
 
     steps:

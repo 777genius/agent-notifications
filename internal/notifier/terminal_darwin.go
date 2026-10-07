@@ -94,34 +94,38 @@ func getBundleIDFromTmuxEnv() string {
 
 // GetTerminalNotifierPath returns the path to terminal-notifier binary.
 // Priority:
-// 1. terminal-notifier-modern (embedded in plugin): uses UNUserNotificationCenter, works on macOS 10.14+
-// 2. terminal-notifier (embedded in plugin): legacy NSUserNotificationCenter
+// 1. Product-owned AgentNotifications.app alias
+// 2. Conventional embedded modern/legacy helpers
 // 3. System-installed (via brew): $(which terminal-notifier)
 func GetTerminalNotifierPath() (string, error) {
 	pluginRoot := os.Getenv("CLAUDE_PLUGIN_ROOT")
 
 	if pluginRoot != "" {
-		// 1. Check ClaudeNotifier (preferred — modern UNUserNotificationCenter with the Agent Notifications icon)
-		modernPath := filepath.Join(pluginRoot, "bin",
-			"ClaudeNotifier.app", "Contents", "MacOS", "terminal-notifier-modern")
-		if platform.FileExists(modernPath) {
-			return modernPath, nil
+		managed := filepath.Join(pluginRoot, "bin", "AgentNotifications.app")
+		if _, err := os.Lstat(managed); err == nil {
+			for _, name := range []string{"terminal-notifier-modern", "terminal-notifier"} {
+				path := filepath.Join(managed, "Contents", "MacOS", name)
+				if platform.FileExists(path) {
+					return path, nil
+				}
+			}
+			return "", fmt.Errorf("managed native alias has no notification helper: %s", managed)
+		} else if !os.IsNotExist(err) {
+			return "", err
 		}
-
-		// Development checkout fallback: make build-notifier writes the bundle to
-		// swift-notifier/ClaudeNotifier.app, while plugin-dir runs set
-		// CLAUDE_PLUGIN_ROOT to the repo root.
-		devPath := filepath.Join(pluginRoot, "swift-notifier",
-			"ClaudeNotifier.app", "Contents", "MacOS", "terminal-notifier-modern")
-		if platform.FileExists(devPath) {
-			return devPath, nil
-		}
-
-		// 2. Check legacy terminal-notifier
-		legacyPath := filepath.Join(pluginRoot, "bin",
-			"terminal-notifier.app", "Contents", "MacOS", "terminal-notifier")
-		if platform.FileExists(legacyPath) {
-			return legacyPath, nil
+		// Conventional hook names may alias the same managed generation, which
+		// can contain either the modern or the legacy helper.
+		for _, parts := range [][]string{
+			{"bin", "ClaudeNotifier.app", "Contents", "MacOS", "terminal-notifier-modern"},
+			{"swift-notifier", "ClaudeNotifier.app", "Contents", "MacOS", "terminal-notifier-modern"},
+			{"bin", "ClaudeNotifier.app", "Contents", "MacOS", "terminal-notifier"},
+			{"bin", "terminal-notifier.app", "Contents", "MacOS", "terminal-notifier-modern"},
+			{"bin", "terminal-notifier.app", "Contents", "MacOS", "terminal-notifier"},
+		} {
+			path := filepath.Join(append([]string{pluginRoot}, parts...)...)
+			if platform.FileExists(path) {
+				return path, nil
+			}
 		}
 	}
 
