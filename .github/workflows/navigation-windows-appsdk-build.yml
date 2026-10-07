@@ -28,14 +28,16 @@ jobs:
           $project = 'tests\integration\windows_appsdk_build\SDKContract.vcxproj'
           $out = Join-Path $env:RUNNER_TEMP 'TEST-windows-appsdk-build'
           New-Item -ItemType Directory -Path $out -ErrorAction Stop | Out-Null
-          & $msbuild $project /restore /t:Build /p:Configuration=Release /p:Platform=ARM64 "/p:OutDir=$out\" "/p:IntDir=$out\obj\" /verbosity:minimal "/bl:$out\build.binlog"
-          if ($LASTEXITCODE -ne 0) { throw 'SDK build prerequisite failed' }
+          & $msbuild $project /t:Restore /p:Configuration=Release /p:Platform=ARM64 "/p:OutDir=$out\" "/p:IntDir=$out\obj\" /verbosity:minimal "/bl:$out\restore.binlog"
+          if ($LASTEXITCODE -ne 0) { throw 'SDK restore prerequisite failed' }
           $lock = 'tests\integration\windows_appsdk_build\packages.lock.json'
           if (!(Test-Path -LiteralPath $lock)) { throw 'resolved dependency lock missing' }
           Copy-Item -LiteralPath $lock -Destination (Join-Path $out 'packages.lock.json')
           $evidence = @{sourceSHA=$env:SOURCE_SHA; image=$env:ImageVersion; executedBinary=$false;
             packageLockSHA256=(Get-FileHash -LiteralPath $lock -Algorithm SHA256).Hash.ToLowerInvariant()}
           $evidence | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $out 'build-evidence.json') -Encoding utf8
+          & $msbuild $project /t:Build /p:Configuration=Release /p:Platform=ARM64 "/p:OutDir=$out\" "/p:IntDir=$out\obj\" /verbosity:minimal "/bl:$out\build.binlog"
+          if ($LASTEXITCODE -ne 0) { throw 'SDK build prerequisite failed; restored lock retained' }
       - name: Preserve build graph and diagnostic log
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1, repository pin
