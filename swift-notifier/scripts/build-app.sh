@@ -36,9 +36,13 @@ if [ "$CI_MODE" = true ]; then
         exit 1
     fi
     if [ "$SKIP_NOTARIZE" != true ]; then
-        for name in APPLE_ID APPLE_PASSWORD; do
+        for name in APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER; do
             test -n "${!name:-}" || { echo "Error: missing $name" >&2; exit 1; }
         done
+        [[ "$APPLE_API_KEY" = /* ]] && [ -f "$APPLE_API_KEY" ] || {
+            echo "Error: APPLE_API_KEY must point to an existing absolute .p8 path" >&2
+            exit 1
+        }
     fi
 fi
 
@@ -123,6 +127,9 @@ sign_with_entitlements() {
     local label="$2"
 
     local flags=(--force --timestamp --options runtime)
+    if [ -n "${APPLE_SIGNING_KEYCHAIN:-}" ]; then
+        flags+=(--keychain "$APPLE_SIGNING_KEYCHAIN")
+    fi
     if [ -n "$entitlements_path" ]; then
         flags+=(--entitlements "$entitlements_path")
         echo "Using entitlements: ${entitlements_path}"
@@ -183,18 +190,13 @@ if [ "$CI_MODE" = true ] && [ "$SKIP_NOTARIZE" != true ]; then
     echo ""
     echo "Notarizing ${APP_BUNDLE_NAME}.app..."
 
-    if [ -z "${APPLE_ID:-}" ] || [ -z "${APPLE_PASSWORD:-}" ] || [ -z "${APPLE_TEAM_ID:-}" ]; then
-        echo "Error: APPLE_ID, APPLE_PASSWORD, and APPLE_TEAM_ID must be set for notarization"
-        exit 1
-    fi
-
     NOTARIZE_ZIP="${BUILD_DIR}/${APP_BUNDLE_NAME}-notarize.zip"
     ditto -c -k --keepParent "${APP_BUNDLE}" "${NOTARIZE_ZIP}"
 
     xcrun notarytool submit "${NOTARIZE_ZIP}" \
-        --apple-id "${APPLE_ID}" \
-        --password "${APPLE_PASSWORD}" \
-        --team-id "${APPLE_TEAM_ID}" \
+        --key "${APPLE_API_KEY}" \
+        --key-id "${APPLE_API_KEY_ID}" \
+        --issuer "${APPLE_API_ISSUER}" \
         --wait
 
     rm -f "${NOTARIZE_ZIP}"
