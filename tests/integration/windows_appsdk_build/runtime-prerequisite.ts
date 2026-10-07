@@ -164,6 +164,24 @@ async function actor(stage: 'deploy' | 'bootstrap', inputs: string, bootstrap: s
   keys(r, ['nonce', 'pid', 'variant', 'restrictedBefore', 'restrictedAfter', 'parentAfter', 'loweringAttempted', 'integrityLowered',
     'baseline', 'held', 'childPid', 'childBirth', 'enabledAdmins', 'sameIdentitySession', 'collected', 'timedOut', 'childExit',
     'childTerminated', 'cleanupError', 'childRecord', 'childStderr', 'queriesComplete', 'query', 'error', 'sdkNativeCallback', 'notificationEffects']);
+  check(typeof r.childRecord === 'string' && Buffer.byteLength(r.childRecord) <= 8192 && r.childRecord.trim().split(/\r?\n/).length === 1,
+    'bounded single child record required');
+  const c = obj(JSON.parse(r.childRecord)); record.child = c;
+  keys(c, ['nonce', 'pid', 'stage', 'before', 'after', 'bootstrapModule', 'runtimeModule', 'selectedFramework', 'phases', 'packageInventory',
+    'bootstrapCalled', 'bootstrapHRESULT', 'bootstrapShutdown', 'isSupported', 'queriesComplete', 'query', 'error', 'sdkNativeCallback', 'notificationEffects']);
+  check(c.nonce === nonce && c.pid === r.childPid && c.stage === stage && Array.isArray(c.packageInventory) && c.packageInventory.length <= 4,
+    'child correlation/inventory schema');
+  for (let i = 0; i < c.packageInventory.length; i++) {
+    const group = obj(c.packageInventory[i]); keys(group, ['requestedName', 'count', 'packages']);
+    check(group.requestedName === catalog[i]!.name && typeof group.count === 'number' && Number.isInteger(group.count) &&
+      group.count >= 0 && group.count <= 8 && Array.isArray(group.packages) && group.packages.length === group.count, 'bounded fixed-name inventory');
+    for (const value of group.packages) {
+      const p = obj(value); keys(p, ['name', 'fullName', 'publisher', 'architecture', 'version']);
+      check(p.name === group.requestedName && typeof p.fullName === 'string' && typeof p.publisher === 'string' &&
+        typeof p.version === 'string' && /^\d+\.\d+\.\d+\.\d+$/.test(p.version) &&
+        typeof p.architecture === 'number' && [0, 5, 9, 11, 12, 14, 0xffff].includes(p.architecture), 'actual package identity/architecture schema');
+    }
+  }
   check(r.pid === child.pid && r.nonce === nonce && r.variant === `sdk-${stage}` && r.queriesComplete === true &&
     r.collected === true && r.timedOut === false && r.childTerminated === false && r.cleanupError === null && r.childExit === 0 &&
     result.code === 0 && result.signal === null && typeof r.childBirth === 'string' && /^[1-9][0-9]{1,19}$/.test(r.childBirth) &&
@@ -172,9 +190,6 @@ async function actor(stage: 'deploy' | 'bootstrap', inputs: string, bootstrap: s
     'launcher/query incomplete; stop without retry');
   check(r.sameIdentitySession === true && typeof r.enabledAdmins === 'boolean' && r.query === null && r.error === null,
     'launcher observation incomplete');
-  const c = obj(JSON.parse(r.childRecord)); record.child = c;
-  keys(c, ['nonce', 'pid', 'stage', 'before', 'after', 'bootstrapModule', 'runtimeModule', 'selectedFramework', 'phases',
-    'bootstrapCalled', 'bootstrapHRESULT', 'bootstrapShutdown', 'isSupported', 'queriesComplete', 'query', 'error', 'sdkNativeCallback', 'notificationEffects']);
   check(c.nonce === nonce && c.pid === r.childPid && c.stage === stage && c.queriesComplete === true && c.query === null &&
     c.error === null && c.sdkNativeCallback === false && c.notificationEffects === 0, 'actor record incomplete');
   const baseline = token(r.baseline), held = token(r.held), before = token(c.before), after = token(c.after);

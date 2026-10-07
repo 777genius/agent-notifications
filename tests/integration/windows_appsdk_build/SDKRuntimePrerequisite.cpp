@@ -129,6 +129,24 @@ static bool installed(winrt::Windows::Management::Deployment::PackageManager con
     }
     return count == 1;
 }
+static void inventory(winrt::Windows::Management::Deployment::PackageManager const& manager, std::string& observed) {
+    for (const auto& expected : packages) {
+        unsigned count = 0; std::string rows = "[";
+        for (const auto& p : manager.FindPackagesForUser(L"", expected.name, publisher)) {
+            if (++count > 8) throw Failure{"CurrentUserInventoryCountBound", ERROR_MORE_DATA};
+            const auto id = p.Id(); const auto version = id.Version();
+            const std::string v = std::to_string(version.Major) + "." + std::to_string(version.Minor) + "." +
+                std::to_string(version.Build) + "." + std::to_string(version.Revision);
+            const std::string row = "{\"name\":" + quoted(winrt::to_string(id.Name())) + ",\"fullName\":" +
+                quoted(winrt::to_string(id.FullName())) + ",\"publisher\":" + quoted(winrt::to_string(id.Publisher())) +
+                ",\"architecture\":" + std::to_string(static_cast<int>(id.Architecture())) + ",\"version\":" + quoted(v) + "}";
+            if (observed.size() + rows.size() + row.size() + 256 > 4096) throw Failure{"CurrentUserInventoryByteBound", ERROR_MORE_DATA};
+            if (count > 1) rows += ","; rows += row;
+        }
+        if (observed.size() > 1) observed += ",";
+        observed += "{\"requestedName\":" + quoted(winrt::to_string(expected.name)) + ",\"count\":" + std::to_string(count) + ",\"packages\":" + rows + "]}";
+    }
+}
 static std::wstring selectedFramework() {
     UINT32 bytes = 0, count = 0; const UINT32 flags = PACKAGE_FILTER_HEAD | PACKAGE_FILTER_DIRECT | PACKAGE_FILTER_DYNAMIC;
     LONG error = GetCurrentPackageInfo(flags, &bytes, nullptr, &count);
@@ -152,6 +170,7 @@ int wmain(int argc, wchar_t** argv) {
     const std::string nonce(wideNonce.begin(), wideNonce.end());
     // Only baseline identity digests and session number are passed, never raw SID/LUID values.
     std::string current = "null", after = "null", bootstrapModule = "null", runtimeModule = "null", selected = "null", phases = "[";
+    std::string observedPackages = "[";
     bool complete = false, isSupported = false, bootstrapCalled = false, bootstrapShutdown = false;
     const char* query = nullptr; DWORD error = 0; HRESULT bootstrapHR = E_PENDING;
     try {
@@ -171,6 +190,7 @@ int wmain(int argc, wchar_t** argv) {
         if (deploy) {
             for (const auto& p : packages) { frozenPackage(root, p); signature(root + L"\\" + p.file); }
             winrt::Windows::Management::Deployment::PackageManager manager;
+            inventory(manager, observedPackages); // Retain actual public identities before the unchanged conflict gate.
             for (const auto& p : packages) installed(manager, p); // Conflicts stop before the first Add.
             unsigned index = 0;
             for (const auto& p : packages) {
@@ -224,9 +244,10 @@ int wmain(int argc, wchar_t** argv) {
       catch (const winrt::hresult_error& e) { query = "HRESULT"; error = static_cast<DWORD>(e.code().value); }
       catch (...) { query = "exception"; error = ERROR_NOT_ENOUGH_MEMORY; }
     phases += "]";
+    observedPackages += "]";
     const std::string json = "{\"nonce\":" + quoted(nonce) + ",\"pid\":" + std::to_string(GetCurrentProcessId()) +
         ",\"stage\":" + quoted(deploy ? "deploy" : "bootstrap") + ",\"before\":" + current + ",\"after\":" + after +
-        ",\"bootstrapModule\":" + bootstrapModule + ",\"runtimeModule\":" + runtimeModule + ",\"selectedFramework\":" + selected + ",\"phases\":" + phases +
+        ",\"bootstrapModule\":" + bootstrapModule + ",\"runtimeModule\":" + runtimeModule + ",\"selectedFramework\":" + selected + ",\"phases\":" + phases + ",\"packageInventory\":" + observedPackages +
         ",\"bootstrapCalled\":" + (bootstrapCalled ? "true" : "false") + ",\"bootstrapHRESULT\":" + std::to_string(static_cast<DWORD>(bootstrapHR)) +
         ",\"bootstrapShutdown\":" + (bootstrapShutdown ? "true" : "false") + ",\"isSupported\":" + (complete && !deploy ? (isSupported ? "true" : "false") : "null") +
         ",\"queriesComplete\":" + (complete ? "true" : "false") + ",\"query\":" + (query ? quoted(query) : "null") +
