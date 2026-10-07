@@ -2,7 +2,7 @@ name: Install reboot recovery E2E
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review, edited]
   workflow_dispatch:
 
 permissions:
@@ -10,12 +10,14 @@ permissions:
 
 # Supersede only older checks for this PR; dispatch runs remain independent.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && github.run_id || github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) }}
 
 jobs:
+  # Body/title edits create no canonical check names and cannot cancel full CI.
   scope:
-    name: Classify macOS CI scope
+    if: ${{ !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) }}
+    name: ${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && 'Metadata edit ignored (scope)' || 'Classify macOS CI scope' }}
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     permissions:
       contents: read
@@ -36,8 +38,8 @@ jobs:
 
   recovery:
     needs: scope
-    if: ${{ !cancelled() }}
-    name: Offline recovery (${{ matrix.os }}, native Go 1.26)
+    if: ${{ !cancelled() && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) }}
+    name: ${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && format('Metadata edit ignored (recovery {0})', matrix.os) || format('Offline recovery ({0}, native Go 1.26)', matrix.os) }}
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.os || matrix.os == 'ubuntu-latest' && (vars.CI_LINUX_RUNNER || 'ubuntu-latest') || matrix.os == 'macos-15' && (vars.CI_MACOS_15_RUNNER || 'macos-15') || matrix.os }}
     timeout-minutes: 25
     strategy:
@@ -159,9 +161,9 @@ jobs:
           ;; esac
 
   full-ci:
-    name: Full install recovery required
+    name: ${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && 'Metadata edit ignored (full recovery gate)' || 'Full install recovery required' }}
     needs: [scope, recovery]
-    if: ${{ always() }}
+    if: ${{ always() && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) }}
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     permissions:
       contents: read

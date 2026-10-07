@@ -5,16 +5,18 @@ on:
     branches: [ main, develop ]
   workflow_dispatch:
   pull_request:
-    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review, edited]
 
 # Only a newer run for the same PR supersedes its checks.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && github.run_id || github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) }}
 
 jobs:
+  # Body/title edits create no canonical check names and cannot cancel full CI.
   scope:
-    name: Classify macOS CI scope
+    if: ${{ !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) }}
+    name: ${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && 'Metadata edit ignored (scope)' || 'Classify macOS CI scope' }}
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     permissions:
       contents: read
@@ -35,8 +37,8 @@ jobs:
 
   test:
     needs: scope
-    if: ${{ !cancelled() && needs.scope.outputs.mode != 'docs' }}
-    name: Test on macOS (${{ matrix.go }})
+    if: ${{ !cancelled() && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) && needs.scope.outputs.mode != 'docs' }}
+    name: ${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && format('Metadata edit ignored (macOS {0})', matrix.go) || format('Test on macOS ({0})', matrix.go) }}
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.os || matrix.os == 'macos-15' && (vars.CI_MACOS_15_RUNNER || 'macos-15') || matrix.os == 'macos-26' && (vars.CI_MACOS_26_RUNNER || 'macos-26') || matrix.os }}
     timeout-minutes: 30
 
@@ -139,8 +141,8 @@ jobs:
 
   swift-test:
     needs: scope
-    if: ${{ !cancelled() && needs.scope.outputs.mode != 'docs' }}
-    name: Swift notifier tests
+    if: ${{ !cancelled() && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) && needs.scope.outputs.mode != 'docs' }}
+    name: ${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && 'Metadata edit ignored (Swift)' || 'Swift notifier tests' }}
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'macos-15' || vars.CI_MACOS_15_RUNNER || 'macos-15' }}
     timeout-minutes: 30
 
@@ -152,9 +154,9 @@ jobs:
         run: swift test --package-path swift-notifier
 
   full-ci:
-    name: Full macOS CI required
+    name: ${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && 'Metadata edit ignored (full macOS gate)' || 'Full macOS CI required' }}
     needs: [scope, test, swift-test]
-    if: ${{ always() }}
+    if: ${{ always() && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) }}
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     permissions:
       contents: read

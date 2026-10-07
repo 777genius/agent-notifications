@@ -95,8 +95,10 @@ Add the `ci:full` PR label before final review/merge and wait for both full gate
 the Go 1.25/macOS 15 and Go 1.26/macOS 26 jobs, Swift tests, and both recovery cells
 on the current PR head. Keep the label while editing to validate subsequent heads.
 Removing it recomputes eligibility; a previous SHA's success cannot qualify a new
-head. These always-present gates also reject failed, skipped or cancelled native
-jobs. Repository merge policy must require the full gates; without protection,
+head. Changing the PR base recomputes the comparison. Title/body-only edits create
+no canonical checks or native jobs and use independent concurrency, so they cannot
+cancel an active full run or replace its gates with skipped results. These
+always-present gates also reject failed, skipped or cancelled native jobs. Repository merge policy must require the full gates; without protection,
 the merge operator must verify them and the exact current SHA explicitly.
 
 The loader and offline/mock installer suites share a native `parallel` step after
