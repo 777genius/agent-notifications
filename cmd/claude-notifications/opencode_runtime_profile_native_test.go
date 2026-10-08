@@ -175,7 +175,7 @@ func portLaunch(t *testing.T, host, in runtimeProfileInput, raw, mode string) {
 }
 func portOutput(t *testing.T, in runtimeProfileInput) []byte {
 	t.Helper()
-	status, e := portReadDone(portPrefix(in)+".done", nil)
+	status, e := portReadDone(portPrefix(in) + ".done")
 	if e != nil || string(status) != "ok" {
 		t.Fatalf("helper not waited successfully: %v; first status=%q; %s", e, status, portFailureDiagnostics(portPrefix(in)))
 	}
@@ -187,14 +187,11 @@ func portOutput(t *testing.T, in runtimeProfileInput) []byte {
 	return data
 }
 
-// Wait for readable publication; afterRead observes actual IO without replacing it.
-func portReadDone(path string, afterRead func(error)) (status []byte, e error) {
+// Wait for readable publication within the existing receipt budget.
+func portReadDone(path string) (status []byte, e error) {
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		status, e = os.ReadFile(path)
-		if afterRead != nil {
-			afterRead(e)
-		}
 		if e == nil || (!errors.Is(e, os.ErrNotExist) && !(runtime.GOOS == "windows" && errors.Is(e, syscall.Errno(32)))) {
 			break
 		}

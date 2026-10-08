@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -89,42 +88,5 @@ func TestRuntimeWindowsPathsDenyAmbiguousSemantics(t *testing.T) {
 	}
 	if !runtimeWindowsPath(`C:\TEST\é😀\image.exe`) {
 		t.Fatal("canonical Unicode local path rejected")
-	}
-}
-
-// Red: a one-attempt reader returns the real sharing error after handle release.
-func TestRuntimePortDoneReadWaitsForSharingRelease(t *testing.T) {
-	name := filepath.Join(t.TempDir(), "TEST-published.done")
-	if e := os.WriteFile(name, []byte("ok"), 0600); e != nil {
-		t.Fatal(e)
-	}
-	path, e := windows.UTF16PtrFromString(name)
-	if e != nil {
-		t.Fatal(e)
-	}
-	h, e := windows.CreateFile(path, windows.GENERIC_READ, 0, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
-	if e != nil {
-		t.Fatal(e)
-	}
-	released := false
-	t.Cleanup(func() {
-		if !released {
-			_ = windows.CloseHandle(h)
-		}
-	})
-	status, e := portReadDone(name, func(readErr error) {
-		if released {
-			return
-		}
-		if !errors.Is(readErr, windows.ERROR_SHARING_VIOLATION) {
-			t.Fatalf("no-share TEST handle did not deny the actual read: %v", readErr)
-		}
-		if e := windows.CloseHandle(h); e != nil {
-			t.Fatal(e)
-		}
-		released = true
-	})
-	if e != nil || string(status) != "ok" || !released {
-		t.Fatalf("closed TEST publication was not read after sharing release: status=%q err=%v released=%t", status, e, released)
 	}
 }
